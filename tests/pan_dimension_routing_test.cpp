@@ -63,7 +63,7 @@
 // analyser is a pure function run first against SYNTHETIC sources. Those runs
 // are the POSITIVE CONTROLS: they prove it can reject each mutation rather than
 // reporting health because it never matches anything. Same spirit, and the same
-// stated limitation, as wdsp_nb_hold_invariant_test and meter_surfaces_test.
+// stated limitation, as meter_surfaces_test.
 //
 // MUTATION RUNS BEHIND PART A. Part B's controls are in this file and run on
 // every invocation; Part A's assertions were earned against real production

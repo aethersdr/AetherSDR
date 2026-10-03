@@ -1,16 +1,7 @@
-// MainWindow_Callsign.cpp — QRZ callsign-lookup wiring for MainWindow.
-//
-// Connects the pieces of the callsign-lookup subsystem:
-//
-//   • CwCallsignSpotter — fed by the CW decode panel's RX text stream
-//     (routeCwDecoderOutput() re-targets the feed on slice change) — fires
-//     when a station identifies itself ("DE KI6BCJ KI6BCJ")
-//   • CallsignLookupService — QRZ.com XML client + 7-day on-disk cache
-//   • CallsignCard on the CW decode panel — the screen-pop
-//   • CallsignLookupDialog — Tools → Callsign Lookup manual lookups
-//
-// The service is surface-agnostic: the future SSB voice-callsign decoder
-// pops the same card from its own detection path.
+// MainWindow_Callsign.cpp — QRZ callsign-lookup wiring: CwCallsignSpotter (fed
+// by the CW decode text; fires on "DE <call>"), CallsignLookupService (QRZ XML
+// + 7-day disk cache), CallsignCard screen-pop, and the Tools → Callsign Lookup
+// dialog. The service is surface-agnostic.
 
 #include "MainWindow.h"
 

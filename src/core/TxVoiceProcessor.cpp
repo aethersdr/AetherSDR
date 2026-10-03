@@ -246,21 +246,11 @@ bool TxVoiceProcessor::processCapturedFloat32(QByteArray& canonicalInputOutput)
         return false;
     }
 
-    // No scaling and no rounding: the device already handed us the engine's
-    // float mix. This is the single line the whole change exists for — the
-    // Int16 route reaches the same place via /32768.0f, having first been
-    // quantized on the way out of the host audio engine.
-    //
-    // Scrub non-finite samples HERE rather than relying on processWorkBuffer()'s
-    // scrub at the egress SRC. This is the one place the float entry point is
-    // structurally weaker than the Int16 one: processCapturedInt16() cannot
-    // produce NaN/Inf, this can, and processCapturedMono() runs the stateful
-    // INGRESS resampler before that scrub is reached — so a single NaN from a
-    // misbehaving driver would poison the ingress SRC permanently. Same failure
-    // mode testNonFiniteSamplesCannotPoisonEgressSrc guards on the egress side.
-    // The engine path is already safe because canonicalizeFloat32ToMonoStereo()
-    // applies finiteOrZero(), but this is a public method and must not depend on
-    // an invariant asserted in another file.
+    // Float input is used as-is (no scaling or rounding); the Int16 route gets
+    // here via /32768.0f. Scrub non-finite samples here: unlike Int16 input this
+    // can carry NaN/Inf, and processCapturedMono() runs the stateful ingress
+    // resampler before processWorkBuffer()'s egress scrub, so one NaN would poison
+    // it permanently. Public method, so don't rely on the engine's finiteOrZero().
     const auto* input = reinterpret_cast<const float*>(
         canonicalInputOutput.constData());
     m_inputMono.resize(static_cast<size_t>(inputFrames));

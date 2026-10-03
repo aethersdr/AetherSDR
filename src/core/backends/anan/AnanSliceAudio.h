@@ -4,39 +4,19 @@
 #include <cstddef>
 
 // The ANAN receiver's own audio stage: mute, AF gain and left/right balance,
-// applied to demodulated stereo before it leaves the backend.
-//
-// WHY IT IS HERE AND NOT IN THE ENGINE. docs/architecture/audio-pipeline.md
-// states the contract the other end relies on: "Radio speaker audio enters as
-// stereo with the radio's per-slice pan already applied", and the only
-// client-side pan stage runs for virtual KiwiSDR profiles alone. AudioEngine's
-// setRxVolume()/setMuted() are the MASTER controls -- one sink volume for
-// everything the operator is listening to -- so a per-receiver control cannot
-// live there without the two meanings colliding. IRadioBackend says the same
-// thing from the other direction: a backend that demodulates on this host has to
-// apply these itself, and until it does, the operator's mute moves the fader
-// while the audio keeps playing. That was ANAN's behaviour.
-//
-// Socket-free, Qt-free and DSP-free on purpose, so the law below is checked by
-// arithmetic rather than by listening.
+// applied to demodulated stereo before it leaves the backend. It lives here, not
+// in AudioEngine: the engine expects radio audio with per-slice pan already
+// applied (docs/architecture/audio-pipeline.md), and its setRxVolume()/setMuted()
+// are master controls. Socket-, Qt- and DSP-free so the law is testable.
 namespace AetherSDR::anan {
 
-// Silence, and the gain range in dB either side of it.
-//
-// A dB law, not a linear one, because a fader is a perceptual control: ear
-// response to amplitude is roughly logarithmic, so a linear 0..100 -> 0.0..1.0
-// scale spends most of its travel in changes that are barely audible and then
-// collapses the useful range into the bottom few percent. 40 dB is the span that
-// leaves usable resolution at every position while still reaching "audibly off"
-// at the bottom.
+// Silence, and the gain range in dB below unity. A dB law because a fader is a
+// perceptual control; 40 dB keeps usable resolution at every position while
+// still reaching "audibly off" at the bottom.
 inline constexpr double kSliceAudioRangeDb = 40.0;
 
-// 0 -> silence, 100 -> unity, and 50 -> -20 dB by construction.
-//
-// EXACTLY ZERO AT ZERO, not the -40 dB the curve would otherwise give. A fader
-// at its bottom stop has to be silent: 10^-2 is 1% amplitude, which is quiet but
-// plainly audible on a strong signal, and a control the operator has set to
-// nothing that still makes noise reads as a broken control.
+// 0 -> silence, 100 -> unity, 50 -> -20 dB. Exactly zero at 0 (not -40 dB,
+// which is still audible on a strong signal): a fader at its stop is silent.
 [[nodiscard]] inline float sliceAudioAmplitude(int gainPercent) noexcept
 {
     if (gainPercent <= 0) {
@@ -49,11 +29,9 @@ inline constexpr double kSliceAudioRangeDb = 40.0;
     return static_cast<float>(std::pow(10.0, 0.05 * db));
 }
 
-// Balance, on the 0 left / 50 centre / 100 right scale the slice model already
-// uses. ATTENUATES THE OPPOSITE CHANNEL AND NEVER BOOSTS EITHER: panning must not
-// be able to clip a signal that was within range before it, and the client's own
-// pan stage uses this same law, so a panned ANAN slice and a panned virtual
-// receiver do not end up at different loudnesses at the same setting.
+// Balance on the slice model's 0 left / 50 centre / 100 right scale. Attenuates
+// the opposite channel and never boosts, so panning cannot clip; same law as the
+// client's own pan stage so loudness matches across receiver types.
 [[nodiscard]] inline float sliceAudioLeftPanGain(int panPercent) noexcept
 {
     return panPercent >= 50 ? static_cast<float>(100 - panPercent) / 50.0f : 1.0f;
@@ -64,14 +42,8 @@ inline constexpr double kSliceAudioRangeDb = 40.0;
     return panPercent <= 50 ? static_cast<float>(panPercent) / 50.0f : 1.0f;
 }
 
-// Apply all three to interleaved L,R float32 in place.
-//
-// MUTE WINS OUTRIGHT and is not folded into the gain, so that unmuting restores
-// the level the operator had set rather than whatever the gain happened to be
-// left at. Gain before balance: balance only ever attenuates, so the order is
-// not observable in the output, but it is observable in intent -- gain is "how
-// loud is this receiver", balance is "where is it", and reading them in that
-// order is what makes a muted slice with a live gain setting coherent.
+// Apply all three to interleaved L,R float32 in place. Mute zeroes the output
+// without touching gain, so unmuting restores the operator's level.
 inline void applySliceAudioInPlace(float* stereo, std::size_t frames, bool muted,
                                   int gainPercent, int panPercent) noexcept
 {

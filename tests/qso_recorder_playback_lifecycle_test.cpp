@@ -573,6 +573,31 @@ void testMuteCallbackCanDestroy()
     }
 }
 
+// A client playback started under the Radio-Side fallback keeps PLAY routed
+// to this recorder until it stops, even when a radio that records attaches.
+void testPlaybackKeepsRoutingLatched()
+{
+    QTemporaryDir directory;
+    CHECK(directory.isValid());
+    AppSettings::instance().setValue(QStringLiteral("RecordingMode"), QStringLiteral("Radio"));
+    bool radioCanRecord = false;
+    SinkObservation observation;
+    QsoRecorder recorder;
+    observePlayback(recorder, observation);
+    recorder.setRadioSideRecordingReachableProvider([&]() { return radioCanRecord; });
+    QsoRecorderPlaybackTestAccess::setPath(recorder, writeFixture(directory.path()));
+
+    CHECK(recorder.recordsOnClientNow());
+    QsoRecorderPlaybackTestAccess::start(recorder, sinkFormat(48000, 2, QAudioFormat::Int16));
+    CHECK(recorder.isPlaying());
+    radioCanRecord = true;
+    CHECK(recorder.recordsOnClientNow());
+    recorder.stopPlayback();
+    CHECK(!recorder.isPlaying());
+    CHECK(!recorder.recordsOnClientNow());
+    AppSettings::instance().setValue(QStringLiteral("RecordingMode"), QStringLiteral("Client"));
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -596,6 +621,7 @@ int main(int argc, char** argv)
     testFailedRecordingRetiresPlayback();
     testDestructionStopsBeforeBufferTeardown();
     testMuteCallbackCanDestroy();
+    testPlaybackKeepsRoutingLatched();
     std::printf("qso_recorder_playback_lifecycle_test: %d failure(s)\n", g_failures);
     return g_failures == 0 ? 0 : 1;
 }

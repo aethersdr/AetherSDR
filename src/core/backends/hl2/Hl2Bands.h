@@ -5,19 +5,11 @@
 namespace AetherSDR {
 namespace hl2 {
 
-// Frequency -> stable band key for the HL2's per-band maps (RFC #4603 PR 3:
-// per-band TX drive and LNA gain, nigelfenton's review — the PA gain that
-// makes 5 W on 80 m makes considerably more on 10 m, so drive is remembered
-// per band).
-//
-// DELIBERATELY a fixed table, not BandPlanManager: these strings are
-// PERSISTENCE KEYS inside the radio's OperatingState document, so they must
-// be stable across releases, regions, and the operator's band-plan choice.
-// Edges are generous (they cover the gaps between ham allocations) so every
-// frequency in the HL2's 0.1–38.4 MHz range maps to exactly one key and a
-// slightly out-of-band tune stays in its neighborhood's bucket. UI banding
-// keeps using the region-aware BandPlanManager; this table never surfaces in
-// the UI.
+// Frequency -> stable band key for the HL2's per-band maps (TX drive and LNA
+// gain; RFC #4603). A fixed table, not BandPlanManager: these strings are
+// persistence keys in the OperatingState document and must be stable across
+// releases, regions and band-plan choice. Edges are generous so every frequency
+// in 0.1-38.4 MHz maps to exactly one key. Never surfaces in the UI.
 inline QString bandKeyForHz(double hz)
 {
     const double mhz = hz / 1.0e6;

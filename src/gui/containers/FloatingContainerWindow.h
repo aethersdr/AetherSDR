@@ -10,16 +10,10 @@ namespace AetherSDR {
 
 class ContainerWidget;
 
-// Top-level window that hosts a ContainerWidget in floating mode.
-// One FloatingContainerWindow per floating container.  The window's
-// layout is a single-slot QVBoxLayout holding the container; the
-// container's own titlebar serves as the drag handle and close/dock
-// affordance so the window's native title bar can be bare.
-//
-// Geometry is saved to AppSettings under `geometryKey()` whenever the
-// window moves or resizes; ContainerManager assigns that key from the
-// container's ID once Phase 2 lands.  For Phase 1 tests the caller
-// passes the key directly.
+// Top-level window hosting one floating ContainerWidget in a single-slot
+// layout; the container's own titlebar is the drag handle and close/dock
+// affordance. Geometry is saved to AppSettings under geometryKey() on every
+// move/resize (ContainerManager assigns it from the container id).
 class FloatingContainerWindow : public QWidget {
     Q_OBJECT
 

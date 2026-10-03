@@ -163,16 +163,11 @@ private:
     void updateLowBandwidthVisibility();
     void updateManualAdvancedVisibility();
     void refreshManualSourceOptions(const RadioBindSettings* selected = nullptr);
-    // `restoreFamily` decides whether the per-address profile is allowed to move
-    // the Radio type selector. FALSE on the keystroke path, and that is the
-    // whole point: the recent-IP combo is editable, so Qt gives it an INLINE
-    // completer, and typing one character can complete the field to a whole
-    // saved address. textChanged then fired with an address the operator never
-    // finished typing, this restored that address's family, and the Radio type
-    // selector changed under them mid-keystroke (the operator picks Icom, types
-    // "1", the field completes to a saved Flex address, and the selector jumps
-    // back to FlexRadio). The restore is still right when the operator PICKS an
-    // address — that is the `activated` path — and at startup.
+    // `restoreFamily` lets the per-address profile move the Radio type selector.
+    // False on the keystroke path: the editable combo's inline completer can
+    // complete one typed character to a saved address, and the selector must
+    // not jump mid-typing. True when the operator picks an address (`activated`)
+    // and at startup.
     void applySavedSourceSelection(const QString& ip, bool restoreFamily = true);
     RadioBindSettings currentManualBindSettings(bool* staleSelection = nullptr) const;
     void loadRecentManualIps();

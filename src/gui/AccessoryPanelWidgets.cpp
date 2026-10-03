@@ -547,17 +547,9 @@ void AccessoryPortRow::updateAccessibleText()
     const QString source = !m_sourceLabel->isHidden()
                                ? tr("%1, ").arg(m_sourceLabel->text())
                                : QString();
-    // One multi-argument arg(), not a chain of them. The source and band cells
-    // carry device text verbatim (flexA / bandA off the wire), and a chain
-    // substitutes left to right: a source name containing "%4" would land in
-    // the string and then be replaced by the next .arg() in the chain. The
-    // multi-argument form substitutes every placeholder in one pass, so text
-    // that arrives from the device cannot reach into the format string
-    // (Principle VII).
-    // The state carries its own separator, the way the bias and frequency
-    // pieces do. On the amplifier's strips the cell is deliberately empty
-    // whenever there is nothing to act on, which is most of the time — a
-    // separator left standing around it speaks as ", ,".
+    // One multi-argument arg(), not a chain: source/band cells carry device text
+    // verbatim, and a chained arg() would substitute a "%4" inside that text.
+    // The state carries its own ", " separator because it is usually empty.
     const QString statePart = state.isEmpty() ? QString()
                                               : QStringLiteral("%1, ").arg(state);
     setAccessibleDescription(

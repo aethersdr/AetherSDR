@@ -19,15 +19,9 @@ namespace AetherSDR::hl2 {
 // discovery: it emits RadioInfo with family="hl2" so ConnectionPanel's existing
 // onRadioDiscovered/onRadioUpdated/onRadioLost slots consume it unchanged.
 //
-// Asynchronous by construction. MetisClient::discover() blocks for its whole
-// timeout, which is fine for a one-shot probe but would stall the UI on a
-// periodic sweep, so this class drives the same exchange off the socket's
-// readyRead signal instead: broadcast one discovery datagram per sweep, collect
-// replies until the next sweep, and age out radios that stop answering.
-//
-// A radio that is streaming to somebody else answers with status byte 0x03; that
-// surfaces as RadioInfo::status "In_Use" rather than being hidden, so the
-// operator can see the radio exists but is taken.
+// Asynchronous (MetisClient::discover() blocks): one broadcast per sweep,
+// replies collected off readyRead, silent radios aged out. Status byte 0x03
+// (streaming to another host) surfaces as RadioInfo::status "In_Use".
 class Hl2Discovery : public QObject {
     Q_OBJECT
 

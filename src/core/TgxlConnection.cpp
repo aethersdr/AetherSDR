@@ -62,8 +62,11 @@ void TgxlConnection::setAuthCodeForAttempt(quint64 attempt, const QString& code,
 {
     if (m_waitingForAuthCode && attempt == m_authAttempt) {
         if (code.isEmpty()) {
+            // A keychain outage says nothing about the saved code, so
+            // auto-reconnect stays available once the keychain returns.
             failAuthentication(credentialStoreUnavailable
-                ? "Stored authorization code unavailable" : "Authorization code required");
+                ? "Stored authorization code unavailable" : "Authorization code required",
+                !credentialStoreUnavailable);
             return;
         }
         // Restoring the same saved code on a reconnect must not replenish the
@@ -198,6 +201,9 @@ void TgxlConnection::onError(QAbstractSocket::SocketError error)
                         << m_socket.errorString();
     if (!m_authPending && !m_authCloseReported) {
         emit connectionFailed(m_socket.errorString());
+    }
+    if (!m_connected && !m_authPending && !m_authCloseReported && !m_authBlocked) {
+        emit unreachable(m_attemptHost);
     }
     // A failed reconnect attempt arrives here (not via onDisconnected) because
     // the socket never reached ConnectedState. Re-arm so we keep retrying until

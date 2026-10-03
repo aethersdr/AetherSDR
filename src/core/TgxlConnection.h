@@ -9,18 +9,14 @@
 
 namespace AetherSDR {
 
-// Direct TCP connection to a 4O3A Tuner Genius XL on port 9010.
-// Provides manual relay control (C1/L/C2) via the TGXL's native protocol,
-// which is independent of the FlexRadio on port 4992.
-//
-// Protocol format (same style as SmartSDR):
+// Direct TCP to a 4O3A Tuner Genius XL on port 9010 for manual relay control
+// (C1/L/C2), independent of the Flex on 4992. Reverse-engineered from the TGXL
+// management app (#469):
 //   C<seq>|<command>\n          — client command
 //   R<seq>|<code>|<body>\n      — TGXL response
 //   S0|state key=val ...\n      — unsolicited state push
 //   M|<text>\n                  — alert text; empty body clears it
 //   V<version>\n                — version line on connect
-//
-// Reverse-engineered from 4O3A TGXL management app pcap (#469).
 class TgxlConnection : public QObject {
     Q_OBJECT
 
@@ -57,18 +53,10 @@ public:
     // Send an arbitrary command to the TGXL (e.g. "activate ant=2")
     quint32 sendCommand(const QString& cmd);
 
-    // Poll fast only while the transmitter is keyed.
-    //
-    // Rates measured against a live TGXL on 1.2.17: the transport sustains
-    // 129 Hz request-response (7 ms median round trip), and the reported
-    // value changes every 17 ms median (~59 Hz), so ~60 Hz is the point
-    // past which polling returns duplicate frames. Receiving needs none of
-    // that -- nothing is moving -- so it drops to 4 Hz.
-    //
-    // Driven from the ptt fields in the device's own status frames, so it
-    // needs no wiring to the radio. The cost is that a transmission is
-    // noticed up to one RX poll late (250 ms); setTransmitting() lets a
-    // caller that already knows switch the rate up with no delay.
+    // Poll fast only while keyed. Measured on TGXL 1.2.17: 7 ms median round
+    // trip, value changes every ~17 ms (~59 Hz), so ~60 Hz while TX; 4 Hz on RX.
+    // Driven by the device's own ptt status fields (noticed up to 250 ms late);
+    // setTransmitting() lets a caller that knows switch immediately.
     void setTransmitting(bool tx);
     bool isTransmitting() const { return m_transmitting; }
     // For tests: the interval currently in force.
@@ -81,6 +69,9 @@ signals:
     void connected();
     void disconnected();
     void connectionFailed(const QString& errorString);
+    // The socket never reached the device (not an auth failure); carries the
+    // host the attempt asked for.
+    void unreachable(const QString& attemptedHost);
     void authCodeRequired(quint64 attempt);
     void authCodeAccepted(const QString& code);
     void enteredAuthCodeDiscarded();

@@ -1,23 +1,11 @@
 #pragma once
 
-// Undo Qt's caption-reserving restore clamp for a window that has no caption.
-//
-// QWidget::saveGeometry() writes a versioned blob; QWidget::restoreGeometry()
-// runs it back through QWidgetPrivate::checkRestoredGeometry()
-// (qtbase src/widgets/kernel/qwidget.cpp), which assumes a native title bar
-// sits above the client rect.  It therefore
-//   * reserves PM_TitleBarHeight above the top edge, and
-//   * shrinks a window that would otherwise fill the work area by
-//     2 + PM_TitleBarHeight.
-// AetherSDR's Windows custom frame takes the caption away through
-// WM_NCCALCSIZE (MainWindow::nativeEvent), so neither adjustment pays for
-// anything real: the first shows up as a title-bar-sized gap above the window
-// (#4328), the second as one below it.
-//
-// These two functions are the pure half of the correction — no widget, no
-// platform, no Qt GUI — so the blob layout and the clamp arithmetic are unit
-// tested on every platform even though only Windows calls them.
-// See tests/window_geometry_restore_test.cpp.
+// Undo Qt's caption-reserving restore clamp for a captionless window.
+// QWidgetPrivate::checkRestoredGeometry() assumes a native title bar: it reserves
+// PM_TitleBarHeight above the top and shrinks a work-area-filling window by
+// 2 + PM_TitleBarHeight. The Windows custom frame removes the caption via
+// WM_NCCALCSIZE, so both leave gaps (#4328). Pure (blob layout + clamp math) so
+// tests/window_geometry_restore_test.cpp runs everywhere; only Windows calls it.
 
 #include <QByteArray>
 #include <QRect>

@@ -19,32 +19,17 @@
 
 namespace AetherSDR::anan {
 
-// IRadioBackend implementor for the ANAN-G2 (openHPSDR Protocol 2). Owns one
-// P2Client (the UDP session) and one AnanRxDsp (the WDSP demod + spectrum
-// chain) on a dedicated I/O thread, mirroring how Hl2Backend owns MetisClient
-// + Hl2RxDsp. Below the seam; RadioModel sees only this class.
-//
-// SCOPED TO aetherd ANAN P2 Phase 1b (02-working-plan.md Step 2): one DDC,
-// RX only. Several things Hl2Backend's current (evolved) implementation does
-// are deliberately absent here, not forgotten — see the design plan this was
-// built from for the reasoning:
-//   - No "keep the DDC fixed, move a WDSP shift" optimization. This backend
-//     retunes DDC0 directly on every setSliceFrequency()/setPanCenter() call.
-//     A direct consequence: the shift this class pushes to AnanRxDsp is
-//     ALWAYS exactly -cwBfoHz(mode) -- there is no NCO-vs-slice offset term,
-//     because the NCO IS the slice frequency, always.
-//   - No live discovery read in connectRadio() -- capabilities() reports
-//     hardcoded identity strings, matching Hl2Backend's own capabilities()
-//     (its model string is hardcoded too).
-//   - setKeying() is a guarded no-op. canTransmit is false and P2Client has
-//     no PTT capability to call even if this method wanted to -- TX is a
-//     separate, later addition (RFC §2.11 Phase 3), not a flag flip here.
-//
-// Receive handedness correctness is NOT this class's concern -- it lives
-// entirely in AnanRxDsp's own conjugate split, unaffected by anything here.
-// As of 2026-08-21 it's CONFIRMED, not just structurally borrowed from the
-// HL2: `radiocert rx` plus an independent RSP1B/SDR++ receiver both agree.
-// See AnanRxDsp.h and HERMES.md §16 for the full account.
+// IRadioBackend for the ANAN-G2 (openHPSDR Protocol 2). Owns one P2Client and
+// one AnanRxDsp on a dedicated I/O thread, like Hl2Backend with MetisClient +
+// Hl2RxDsp. Scope: one DDC, RX only.
+//   - No NCO/WDSP-shift split: DDC0 retunes on every setSliceFrequency()/
+//     setPanCenter(), so "the shift is ALWAYS exactly -cwBfoHz(mode), because
+//     the NCO IS the slice frequency".
+//   - capabilities()' identity strings are fixed; gateware, DDC count and board
+//     id come from this session's Discovery reply once it lands.
+//   - setKeying() is a no-op: canTransmit is false and P2Client has no PTT
+//     (TX is RFC §2.11 Phase 3).
+// Receive handedness lives entirely in AnanRxDsp (see docs/HERMES.md §16).
 class AnanBackend : public IRadioBackend {
     Q_OBJECT
 
@@ -280,87 +265,34 @@ private:
     int m_attenuationDb = 0;
     bool m_tunePendingApply = false;
 
-    // setPanBandwidth() serialization: only one rate-change reconfigure runs
-    // at a time, gated on m_rateChanging actually clearing (linkUp success,
-    // or either failure path in finishDspSetup()) -- NOT a fixed-interval
-    // throttle. A rate change is a full P2Client stop/reconfigure/restart
-    // (beginRateChange()'s comment has the detail), and its duration is not
-    // bounded: cold FFTW planning for a rate never used before in this
-    // process can take seconds. An earlier fixed 250ms cooldown let a fast
-    // zoom sweep queue up a second reconfigure before the first had
-    // actually finished -- overlapping stop()/start() pairs on the same I/O
-    // thread compounded into a delay long enough to trip P2Client's own
-    // 2-second connect watchdog (measured on the bench). At most one
-    // request is remembered while busy; a newer one supersedes an older.
+    // setPanBandwidth() serialization: one rate change at a time, gated on
+    // m_rateChanging clearing (linkUp, or a finishDspSetup() failure), not a fixed
+    // cooldown -- cold FFTW planning can take seconds, and overlapping restarts trip
+    // P2Client's 2 s connect watchdog. At most one request is remembered while busy;
+    // a newer one supersedes it.
     int m_pendingBandwidthKsps = 0;   // 0 = none pending
-    // Set for the duration of a live rate-change reconfigure (beginRateChange()
-    // through the next linkUp, or either finishDspSetup() failure path).
-    // Doubles as setPanBandwidth()'s busy gate (above) and as the
-    // connected()/disconnected() churn suppressor: from the operator's
-    // perspective a zoom is not a disconnect, even though it is implemented
-    // as one under the hood.
+    // Set from beginRateChange() through the next linkUp (or a failure path). Also
+    // suppresses connected()/disconnected() churn: a zoom is not a disconnect.
     bool m_rateChanging = false;
-    // How long to hold audio muted after a rate-change linkUp before
-    // unmuting -- see the linkUp handler's own comment for why a fresh
-    // WdspChannel needs this. Spectrum/waterfall are untouched by the mute
-    // (AnanRxDsp::setAudioMuted() only zeroes the audio-path input, per its
-    // own header comment), so this does not affect how quickly the display
-    // recovers, only when sound resumes.
+    // Audio mute after a rate-change linkUp so a fresh WdspChannel settles before
+    // live RF (see the linkUp handler). Display is unaffected by the mute.
     static constexpr int kRateChangeAudioSettleMs = 300;
-    // P2Client::kConnectTimeoutMs (2000ms) is tuned for a first-ever connect.
-    // A rate-change restart is different: the radio was just told to stop,
-    // possibly after sitting idle for the seconds beginDspSetup()'s
-    // configure() held the shared I/O thread (see beginRateChange()'s own
-    // comment), and needs real settle time to re-arm its DDC pipeline before
-    // streaming again. Bench testing showed the SHORT default firing a
-    // "connection error" during a rate change that was already about to
-    // recover on its own (P2Client keeps listening past its own timeout --
-    // the message was spurious, not a real failure). Passed to
-    // P2Client::start() only on the rate-change path; a genuine first
-    // connect keeps the shorter, tighter default.
+    // Connect timeout for the rate-change restart path only: the just-stopped radio
+    // needs settle time to re-arm its DDC pipeline, and the 2 s first-connect
+    // default fires spurious connection errors on it.
     static constexpr int kRateChangeConnectTimeoutMs = 6000;
-    // Minimum idle time between stop() and start() on a rate-change restart.
-    // Settle window after a LIVE rate change, covering only the handoff:
-    // the new WdspChannel is already installed when the radio is told to
-    // switch, so for a moment it is fed samples still arriving at the old
-    // rate, until p2app's register write takes effect. Audio is muted across
-    // this window (finishRateChange()).
-    //
-    // Supersedes kRateChangeRestartSettleMs (2000ms), which existed for a
-    // problem that no longer occurs and whose history is worth keeping:
-    // bench-discovered 2026-08-19, once the DSP rebuild moved off the
-    // stop/start path, the radio stopped responding to a restart fired only
-    // ~100ms after stop() -- "no DDC0 IQ within 6000ms", then a full
-    // disconnect/reconnect to recover. The old synchronous-rebuild
-    // architecture never hit it only because the slow rebuild sat BETWEEN
-    // stop() and start(), giving the radio idle time by accident. 500ms was
-    // tried and was not reliably enough; 2000ms was the working value. A
-    // live rate change never stops the session at all, so none of that
-    // applies -- there is no restart for the radio to be unready for.
-    //
-    // 250ms is a starting value for the handoff itself, not a confirmed
-    // minimum; it is a fraction of the ~2s the restart path cost per zoom
-    // step. Worth revisiting on the bench if a rate change still audibly
-    // glitches, or shortening if it proves conservative.
-    //
-    // It also SUPERSEDES kRateChangeAudioSettleMs (300ms) on this path, and
-    // that is a deliberate judgement rather than an oversight. That 300ms
-    // exists so a freshly built WdspChannel gets a beat of quiet before its
-    // AGC, filters and DC-blocker are unmuted against live RF -- under the
-    // restart path its clock started at linkUp, i.e. at the first new-rate
-    // frame. Here the clock starts at the channel swap, so WDSP gets
-    // 250ms minus the handoff latency: strictly less, by an amount that has
-    // not been measured. Bench-tested at 48 and 1536 ksps without an audible
-    // artifact, which is the evidence for calling it sufficient -- but if a
-    // rate change ever thumps on unmute, split the two settles before
-    // reaching for a larger number. (aethersdr-agent, #5547 review.)
+    // Settle window after a LIVE rate change: the new WdspChannel is installed
+    // before the radio switches, so it briefly sees old-rate samples until p2app's
+    // register write lands; audio stays muted across it (finishRateChange()). The
+    // session never stops, so no restart settle is needed. 250 ms is a starting
+    // value, bench-clean at 48 and 1536 ksps. It also replaces
+    // kRateChangeAudioSettleMs here, but measured from the swap, so WDSP gets 250 ms
+    // minus the handoff latency; if a rate change thumps on unmute, split the two
+    // settles before raising this (#5547).
     static constexpr int kRateChangeLiveSettleMs = 250;
 
-    // The DDC-Specific packet is resent at these offsets (ms) inside the
-    // settle window above, on top of the immediate send. Three copies over
-    // ~140 ms, all well inside the 250 ms mute, so a lost datagram costs
-    // nothing audible. See finishRateChange()'s own comment for why one
-    // fire-and-forget send was not enough and why repeating is safe.
+    // DDC-Specific resend offsets (ms) inside the settle window, on top of the
+    // immediate send: a lost datagram costs nothing audible (see finishRateChange()).
     static constexpr int kRateChangeResendMs[] = {60, 140};
 
     QString m_mode = QStringLiteral("USB");
@@ -368,12 +300,8 @@ private:
     int m_filterHighHz = 2900;
     int m_cwPitchHz = 600;
     double m_sliceFreqHz = 0.0;
-    // Live operator AGC state -- setSliceAgc() had no backing member before
-    // this; needed so beginRateChange() can refresh m_pendingDspConfig from
-    // CURRENT state instead of connectRadio()'s connect-time snapshot (a
-    // rate change used to silently revert AGC to whatever it was at connect,
-    // same bug class as the mode/filter staleness this fixes alongside it).
-    // Defaults match connectRadio()'s own connect-time defaults.
+    // Live AGC state, so beginRateChange() rebuilds the DSP config from CURRENT
+    // state rather than connect-time defaults (which these match).
     int m_agcMode = 3;
     double m_agcCeilingDb = 60.0;
     // Noise blanker as setSliceNoiseBlanker() last stored it. Both
@@ -386,17 +314,9 @@ private:
     bool m_nbOn = false;
     int m_nbLevel = 50;
 
-    // The receiver's audio stage as the three setters last left it, and the
-    // values emitSliceState() publishes so the controls can show what is
-    // actually applied rather than what they last sent.
-    //
-    // Retained across a rate change and a reconnect, like the blanker and unlike
-    // AGC: a rate change is not an instruction to unmute or to move the fader,
-    // and having audio come back at a different level than the operator set it
-    // to is the kind of surprise that reads as a fault in the radio.
-    //
-    // 100 and 50 are unity and centred, so a backend nobody has touched sounds
-    // exactly as it did before these existed.
+    // The receiver audio stage as last set; emitSliceState() publishes these.
+    // Retained across rate changes and reconnects (like the blanker, unlike AGC).
+    // 100/50 = unity, centred.
     bool m_sliceAudioMuted = false;
     int m_sliceAudioGainPercent = 100;
     int m_sliceAudioPanPercent = 50;
@@ -406,22 +326,13 @@ private:
     // Live copy of the connect-time parameter, so the audio path tests one bool
     // rather than reaching into m_pendingParams on every block.
     bool m_speakerAudioEnabled = false;
-    // The radio's own output level/mute, as setLineoutGain()/setLineoutMute()
-    // last left them.
-    //
-    // 50 MATCHES RadioModel's OWN DEFAULT for the same value, deliberately: the
-    // model resets to 50 on every radio change, and a backend that started at 100
-    // instead would put the radio at full scale for as long as it took the
-    // operator to touch the slider. They are two halves of one setting and a
-    // disagreement between them is audible.
+    // The radio's own output level/mute. 50 matches RadioModel's default, which it
+    // resets to on every radio change; the two halves must agree.
     int m_lineoutGainPercent = 50;
     bool m_lineoutMuted = false;
-    // TWO resamplers, one per channel, and NEVER Resampler's stereo helper:
-    // processStereoToStereo() averages L and R to mono and duplicates the result
-    // back, which would silently undo the balance applied a few lines earlier and
-    // collapse a diversity pair to one ear's worth of information. The engine's
-    // own output resampler is built the same way for the same reason
-    // (docs/architecture/audio-pipeline.md, "24 kHz to 48 kHz upsampling").
+    // One resampler PER CHANNEL, never processStereoToStereo(), which averages to
+    // mono and would undo the balance (as the engine's own output resampler,
+    // docs/architecture/audio-pipeline.md).
     std::unique_ptr<Resampler> m_speakerResampleL;
     std::unique_ptr<Resampler> m_speakerResampleR;
     // Deinterleave/convert scratch, retained so a steady stream does not
@@ -436,17 +347,11 @@ private:
     static constexpr int kSliceId = 0;
     static const QString kPanId;
 
-    // This radio's identity for per-radio settings (RadioSettingsScope,
-    // "anan" family) -- the droop-calibration table, currently the only
-    // per-radio ANAN state. Set from RadioConnectRequest::serial (populated
-    // by ConnectionPanel from AnanDiscovery::macToSerial()) at the top of
-    // connectRadio(), matching Hl2Backend's own m_radioSerial precedent.
-    // Empty before the first connect. RadioSettingsScope::isValid() only
-    // requires a non-empty FAMILY, not radioId, so a still-empty serial does
-    // not make reads/writes fail -- it silently targets the family-wide
-    // default row instead of one specific radio's, which is why droopcal's
-    // `start` action guards on settingsScope().radioId().isEmpty()
-    // explicitly, matching freqcal's own guard, rather than trusting isValid().
+    // Per-radio settings identity ("anan" family): RadioConnectRequest::serial
+    // (AnanDiscovery::macToSerial()), set at the top of connectRadio(); empty before
+    // the first connect. isValid() needs only the family, so an empty serial would
+    // silently target the family-wide row -- droopcal's `start` guards on an empty
+    // radioId explicitly.
     QString m_radioSerial;
     AnanDroopCalibrator m_droopCalibrator;
     QString m_droopMessage;

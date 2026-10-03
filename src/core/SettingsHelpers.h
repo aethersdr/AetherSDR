@@ -6,24 +6,11 @@ class QSlider;
 
 namespace AetherSDR {
 
-// Wires a slider so that:
-//   * `live(v)` fires on every `QSlider::valueChanged` tick (immediate
-//     visual / DSP / radio feedback as the user drags — must not regress).
-//   * `persist(v)` fires once per gesture, whichever of these happens first:
-//       - `QSlider::sliderReleased` (mouse drag finished)
-//       - 500 ms debounce after the last `valueChanged` (keyboard arrows,
-//         mouse wheel, programmatic changes — none of which emit
-//         `sliderReleased`)
-//
-// The debounce timer is parented to `slider`, so it is destroyed with the
-// slider. If the application exits mid-debounce the most recent value is
-// not persisted — acceptable for non-critical UI state; do not use this
-// helper for state that must round-trip a crash.
-//
-// Centralizes the connect+save boilerplate that previously called
-// `AppSettings::save()` on every tick — see issue #3032. The atomic XML
-// rewrite cost meant a 2-second drag at 60 Hz triggered ~120× full
-// sort+serialize+reparse+rename of the settings file.
+// `live(v)` fires on every valueChanged tick; `persist(v)` fires once per
+// gesture, on sliderReleased or 500 ms after the last change (keyboard, wheel
+// and programmatic changes don't emit sliderReleased) (#3032). The debounce
+// timer is parented to `slider`; a value pending at exit is lost, so don't use
+// this for state that must survive a crash.
 void connectSliderSetting(QSlider* slider,
                           std::function<void(int)> live,
                           std::function<void(int)> persist);
