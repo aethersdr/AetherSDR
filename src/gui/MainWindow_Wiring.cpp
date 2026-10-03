@@ -6526,19 +6526,11 @@ void MainWindow::wireMeters()
     // the Harmonic Load heatsink temperature, fan mode and MEffA are
     // available only over the direct connection. See
     // docs/pgxl-telemetry-source-evidence.md.
-    // Fan mode cycle button → direct PGXL command (fan control is not in the
-    // radio API).
-    //
-    // Routed through AmpModel rather than sent straight down the socket. A
-    // `setup` write carries the whole configuration group — the vendor utility
-    // was captured sending `setup nickname=… meffa=… ledintens=… fanmode=…
-    // authcode=` as one line — and the single-key form this used to send names
-    // only fanmode, leaving the amplifier's nickname, LED intensity, MEffA
-    // state and auth code out of a write to the group that holds them.
-    // Both directions are wired in AmpApplet::setAmpModel, against the model
-    // that owns the configuration group. Nothing to do here.
-    // OPERATE button → PGXL standby/operate command (relayed via the radio's
-    // amplifier API by AmpModel::setOperate; no-op if no amp handle). #4094.
+    // Fan mode is sent via AmpModel (wired in AmpApplet::setAmpModel), because
+    // a `setup` write carries the whole group (see AmpModel::writeSetupGroup)
+    // and a fanmode-only write would drop the rest.
+    // OPERATE button → standby/operate via the radio's amplifier API
+    // (AmpModel::setOperate; no-op without an amp handle) (#4094).
     connect(m_appletPanel->ampApplet(), &AmpApplet::operateToggled, this, [this](bool on) {
         m_radioModel.amplifier().setOperate(on);
     });

@@ -27,6 +27,11 @@ public:
     // Set the TGXL amplifier handle so AMP meters can be routed correctly
     // (TGXL FWD/RL → TunerApplet, PGXL FWD/RL → AmpApplet)
     void setTgxlHandle(quint32 handle);
+    // Set the power amplifier's handle. Once known, an AMP meter reaches the
+    // amplifier only when its source index matches it, as FlexLib's
+    // Radio.FindMetersByAmplifier matches; 0 means not yet known, and any AMP
+    // meter that is not the tuner's goes to the amplifier.
+    void setAmpHandle(quint32 handle);
 
     // Register or update a meter definition from a TCP status message.
     void defineMeter(const MeterDef& def);
@@ -402,6 +407,10 @@ private:
     void applyValues(const QVector<quint16>& ids, const QVector<Value>& vals);
     void clearCompressionState();
     void recomputeSourceIndexMins();
+    // Re-route existing AMP meter definitions after a handle changes.
+    void rescanAmpMeters();
+    bool isTgxlMeter(int sourceIndex) const;
+    bool isAmpMeter(int sourceIndex) const;
     // Map a radio-side ALC reading onto the dBFS range the gauges are built
     // for. Identity when the backend already declares dBFS.
     // Mirrors the Phone/CW gauge's floor without introducing a gui dependency.
@@ -489,6 +498,7 @@ private:
     int m_tgxlFwdIdx{-1};   // "AMP" / "FWD" (TGXL — matched by handle)
     int m_tgxlSwrIdx{-1};   // "AMP" / "RL" (TGXL — matched by handle)
     quint32 m_tgxlHandle{0}; // TGXL amplifier handle for meter disambiguation
+    quint32 m_ampHandle{0};  // power amplifier handle; 0 = not yet known
     float m_tgxlFwdPwr{0.0f};
     float m_tgxlSwr{1.0f};
     qint64 m_lastTgxlFwdPowerUpdateMs{0};
