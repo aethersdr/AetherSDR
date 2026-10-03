@@ -3,7 +3,7 @@
 #include <QString>
 #include <QVector>
 
-namespace AetherSDR { struct ReceiveFilterControl; }
+namespace AetherSDR { struct ReceiveFilterControl; struct ReceiveSquelchModel; }
 
 namespace AetherSDR::ModeFilters {
 
@@ -40,6 +40,17 @@ bool isFmMode(const QString& mode);
 // The passband a labelled width means in this mode.
 Edges edgesForWidth(const QString& mode, int widthHz, const SliceContext& ctx);
 bool acceptsFmEdges(const QString& mode, const ReceiveFilterControl* control, Edges edges);
+
+// Whether an FM-family passband is operator-adjustable: a declared row for the
+// mode (range checked per edit); not if other FM rows are declared or the radio
+// owns the filter; otherwise as before.
+bool fmFilterAdjustable(const QString& mode, const ReceiveFilterControl* control,
+                        bool radioPublishesWidths);
+bool acceptsFilterEdges(const QString& mode, const ReceiveFilterControl* control,
+                        bool radioPublishesWidths, Edges edges);
+// The receive-mode squelch rule shared by the RX applet and VFO.
+bool squelchAvailableInMode(const QString& mode, const ReceiveSquelchModel* model,
+                            bool modeIndependentSquelch, bool externalReplacement);
 
 // A passband's labelled width, for matching a ladder entry against what the
 // slice is actually running. The inverse of edgesForWidth for every mode whose

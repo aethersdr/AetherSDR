@@ -550,6 +550,7 @@ public:
 
 private:
     friend class RadioModel;
+    bool refuseOffThread(const char* setter) const;
     void setControlPolicy(ReceiveControlPolicy policy) { m_controlPolicy = policy; }
     bool confirmsControls() const { return m_controlPolicy == ReceiveControlPolicy::Confirmed; }
     ReceiveControlPolicy m_controlPolicy = ReceiveControlPolicy::Optimistic;

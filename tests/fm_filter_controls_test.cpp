@@ -164,6 +164,91 @@ private slots:
             .value(QStringLiteral("autoEnabled")).toBool());
     }
 
+    void squelchFollowsModeRuleWithoutDeclaredModel()
+    {
+        // No receiveSquelchModel, no all-mode squelch: the #2504 mode rule owns
+        // SQL availability, and a capability refresh must not re-enable it.
+        RadioModel model;
+        auto backend = std::make_unique<FilterBackend>();
+        FilterBackend* source = backend.get();
+        model.setBackendForTest(std::move(backend), QStringLiteral("test"));
+        SliceModel slice(0);
+        setMode(slice, QStringLiteral("USB"));
+        RxApplet rx;
+        VfoWidget vfo;
+        rx.setSlice(&slice);
+        vfo.setSlice(&slice);
+        rx.setRadioModel(&model);
+        vfo.setRadioModel(&model);
+        QPushButton* rxSql = button(rx, QStringLiteral("SQL"));
+        QPushButton* vfoSql = button(vfo, QStringLiteral("SQL"));
+        QVERIFY(rxSql && vfoSql);
+        QVERIFY(rxSql->isEnabled() && vfoSql->isEnabled());
+        for (const char* mode : {"DIGU", "DIGL", "RTTY", "CW"}) {
+            setMode(slice, QString::fromLatin1(mode));
+            QVERIFY2(!rxSql->isEnabled(), mode);
+            QVERIFY2(!vfoSql->isEnabled(), mode);
+            emit model.capabilitiesChanged(true, source->caps);
+            QVERIFY2(!rxSql->isEnabled(), mode);
+            QVERIFY2(!vfoSql->isEnabled(), mode);
+        }
+        setMode(slice, QStringLiteral("USB"));
+        QVERIFY(rxSql->isEnabled() && vfoSql->isEnabled());
+        source->caps.hasModeIndependentSquelch = true;
+        emit model.capabilitiesChanged(true, source->caps);
+        setMode(slice, QStringLiteral("DIGU"));
+        QVERIFY(rxSql->isEnabled() && vfoSql->isEnabled());
+    }
+
+    void undeclaredFmPassbandFollowsFilterAuthority_data()
+    {
+        QTest::addColumn<int>("control");   // 0 absent, 1 engine without FM, 2 radio without FM
+        QTest::addColumn<QString>("mode");
+        QTest::addColumn<bool>("adjustable");
+        for (const char* mode : {"FM", "NFM", "WBFM"}) {
+            const QString m = QString::fromLatin1(mode);
+            QTest::newRow(qPrintable(QStringLiteral("absent-%1").arg(m))) << 0 << m << true;
+            QTest::newRow(qPrintable(QStringLiteral("engine-%1").arg(m))) << 1 << m << true;
+            QTest::newRow(qPrintable(QStringLiteral("radio-%1").arg(m))) << 2 << m << false;
+        }
+    }
+
+    void undeclaredFmPassbandFollowsFilterAuthority()
+    {
+        // Host-DSP receivers (HL2's engine record, ANAN/Icom/Demo with none) keep
+        // the FM passband they had; a radio-owned filter refuses FM edits
+        // (FlexLib Slice.cs "Cannot change RX filter width when in FM mode").
+        QFETCH(int, control);
+        QFETCH(QString, mode);
+        QFETCH(bool, adjustable);
+        RadioModel model;
+        auto backend = std::make_unique<FilterBackend>();
+        if (control > 0) {
+            backend->caps.receiveFilterControl = ReceiveFilterControl{
+                control == 1 ? SliceFrequencyControl::Authority::Engine
+                             : SliceFrequencyControl::Authority::Radio,
+                {{QStringLiteral("USB"), 0, 11990, 10, 12000, 10, 12000}}};
+        }
+        model.setBackendForTest(std::move(backend), QStringLiteral("test"));
+        SliceModel slice(0);
+        setMode(slice, mode);
+        RxApplet rx;
+        VfoWidget vfo;
+        rx.setSlice(&slice);
+        vfo.setSlice(&slice);
+        rx.setRadioModel(&model);
+        vfo.setRadioModel(&model);
+        FilterPassbandWidget* passband = rx.findChild<FilterPassbandWidget*>();
+        QVERIFY(passband);
+        QCOMPARE(passband->isEnabled(), adjustable);
+        for (QWidget* surface : {static_cast<QWidget*>(&rx), static_cast<QWidget*>(&vfo)}) {
+            QCOMPARE(button(*surface, QStringLiteral("Filter unavailable")) != nullptr, !adjustable);
+        }
+        QSignalSpy intents(&slice, &SliceModel::filterCommandIssued);
+        emit passband->filterChanged(-6000, 6000);
+        QCOMPARE(intents.count(), adjustable ? 1 : 0);
+    }
+
     void declaredFmFiltersReachBothWidgets_data()
     {
         QTest::addColumn<QString>("mode");

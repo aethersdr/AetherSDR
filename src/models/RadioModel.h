@@ -1440,8 +1440,8 @@ private:
     bool profileLoadRadioStateWritesHeld() const;
     // Raw senders (#4142): the single pan touchpoint for wire-string building.
     // dispatchPanCenterBandwidth re-clamps against the pan's current geometry,
-    // writes the wire FIRST and advances the model only if the send happened,
-    // so re-entrant requests converge. bandwidthMhz <= 0 = center-only; NaN
+    // writes the wire FIRST and, for an optimistic backend, advances the model
+    // only if the send happened, so re-entrant requests converge. bandwidthMhz <= 0 = center-only; NaN
     // centerMhz = bandwidth-only. Profile-load replays use intent Range, the
     // value that cannot move a radio. A true return means the model advanced
     // synchronously. Confirmed backends return false after accepting an intent;

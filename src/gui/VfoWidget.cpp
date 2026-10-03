@@ -3412,11 +3412,9 @@ bool VfoWidget::acceptsFilterEdges(int low, int high) const
     if (!m_slice) {
         return false;
     }
-    if (!ModeFilters::isFmMode(m_slice->mode()) || !m_radioFilterWidths.isEmpty()) {
-        return true;
-    }
-    return ModeFilters::acceptsFmEdges(m_slice->mode(),
-        m_receiveFilterControl ? &*m_receiveFilterControl : nullptr, {low, high});
+    return ModeFilters::acceptsFilterEdges(m_slice->mode(),
+        m_receiveFilterControl ? &*m_receiveFilterControl : nullptr,
+        !m_radioFilterWidths.isEmpty(), {low, high});
 }
 
 QVector<int> VfoWidget::defaultFilterWidths(const QString& mode) const
@@ -4681,13 +4679,11 @@ void VfoWidget::setSlice(SliceModel* slice)
         // Digital/RTTY: audio feeds external decoders via DAX, SQL not meaningful
         //   and gates weak FSK signals (#2504)
         // CW: radio locks squelch on at fixed level, rejects changes
-        const bool allModeSquelch = m_radioModel && m_radioModel->isConnected()
-            && m_radioModel->backendCapabilities().hasModeIndependentSquelch
-            && !(m_slice && m_slice->externalReceiveReplacementActive());
-        bool sqlDisabled = !allModeSquelch && (isDig || isCw || isRtty);
-        if (m_receiveSquelchModel && !(m_slice && m_slice->externalReceiveReplacementActive())) {
-            sqlDisabled = !m_receiveSquelchModel->modes.contains(mode);
-        }
+        const bool sqlDisabled = !ModeFilters::squelchAvailableInMode(mode,
+            m_receiveSquelchModel ? &*m_receiveSquelchModel : nullptr,
+            m_radioModel && m_radioModel->isConnected()
+                && m_radioModel->backendCapabilities().hasModeIndependentSquelch,
+            m_slice && m_slice->externalReceiveReplacementActive());
         m_sqlBtn->setEnabled(!sqlDisabled);
         m_sqlSlider->setEnabled(!sqlDisabled);
         if (m_filterAvailability) { m_filterAvailability->refreshEngaged(); }
@@ -5314,11 +5310,13 @@ void VfoWidget::syncFromSlice()
     m_fmContainer->setVisible(isFm);
     m_fmToneContainer->setVisible(hasToneControls);
     // CW: radio locks squelch on at fixed level; Digital: not meaningful
-    const bool allModeSquelch = m_radioModel && m_radioModel->isConnected()
-        && m_radioModel->backendCapabilities().hasModeIndependentSquelch
-        && !(m_slice && m_slice->externalReceiveReplacementActive());
-    m_sqlBtn->setEnabled(allModeSquelch || (!isDig && !isCw));
-    m_sqlSlider->setEnabled(allModeSquelch || (!isDig && !isCw));
+    const bool squelchAvailable = ModeFilters::squelchAvailableInMode(m_slice->mode(),
+        m_receiveSquelchModel ? &*m_receiveSquelchModel : nullptr,
+        m_radioModel && m_radioModel->isConnected()
+            && m_radioModel->backendCapabilities().hasModeIndependentSquelch,
+        m_slice->externalReceiveReplacementActive());
+    m_sqlBtn->setEnabled(squelchAvailable);
+    m_sqlSlider->setEnabled(squelchAvailable);
     if (isFm) {
         QSignalBlocker b1(m_fmToneModeCmb), b2(m_fmToneValueCmb), b3(m_fmOffsetSpin),
             toneRxBlocker(m_fmToneRxValueCmb), dtcsBlocker(m_fmDtcsCodeCmb),
@@ -5636,8 +5634,8 @@ void VfoWidget::updateModeTab()
     m_filterCustomLo.clear();
     m_filterCustomHi.clear();
     if (m_radioFilterWidths.isEmpty() && !saved.isEmpty()
-        && (!ModeFilters::isFmMode(m_slice->mode())
-            || !defaultFilterWidths(m_slice->mode()).isEmpty())) {
+        && ModeFilters::fmFilterAdjustable(m_slice->mode(),
+               m_receiveFilterControl ? &*m_receiveFilterControl : nullptr, false)) {
         for (const auto& s : saved.split(',', Qt::SkipEmptyParts)) {
             if (s.contains(':')) {
                 const auto parts = s.split(':');
@@ -5777,7 +5775,10 @@ void VfoWidget::rebuildFilterButtons()
     if (m_filterAvailability) {
         m_filterAvailability->refreshEngaged();
     }
-    if (m_slice && ModeFilters::isFmMode(m_slice->mode()) && m_filterWidths.isEmpty()) {
+    if (m_slice && m_filterWidths.isEmpty()
+        && !ModeFilters::fmFilterAdjustable(m_slice->mode(),
+               m_receiveFilterControl ? &*m_receiveFilterControl : nullptr,
+               !m_radioFilterWidths.isEmpty())) {
         m_filterUnavailable = createFilterButton(tr("Filter unavailable"));
         m_filterUnavailable->setAccessibleName(tr("Receive filter"));
         m_filterGrid->addWidget(m_filterUnavailable, 0, 0, 1, 4);
@@ -6059,8 +6060,8 @@ void VfoWidget::updateFilterHighlight()
     const QString key = QStringLiteral("FilterPresets_%1").arg(m_slice->mode());
     const QString saved = AppSettings::instance().value(key, "").toString();
     if (m_radioFilterWidths.isEmpty() && !saved.isEmpty()
-        && (!ModeFilters::isFmMode(m_slice->mode())
-            || !defaultFilterWidths(m_slice->mode()).isEmpty())) {
+        && ModeFilters::fmFilterAdjustable(m_slice->mode(),
+               m_receiveFilterControl ? &*m_receiveFilterControl : nullptr, false)) {
         QVector<int> loadedWidths;
         QVector<int> loadedLo;
         QVector<int> loadedHi;
@@ -6515,9 +6516,14 @@ void VfoWidget::setRadioModel(RadioModel* radioModel)
         ? m_radioModel->backendCapabilities().receiveSquelchModel : std::nullopt;
     if (m_radioModel) {
         m_filterAvailability = new ControlAvailabilityRegistry(*m_radioModel, this);
-        const auto supportsSquelch = [this](bool, const RadioCapabilities& caps) {
-            return !caps.receiveSquelchModel || (m_slice && (m_slice->externalReceiveReplacementActive()
-                || caps.receiveSquelchModel->modes.contains(m_slice->mode())));
+        const auto supportsSquelch = [this](bool connected, const RadioCapabilities& caps) {
+            if (!m_slice) {
+                return !caps.receiveSquelchModel;
+            }
+            return ModeFilters::squelchAvailableInMode(m_slice->mode(),
+                connected && caps.receiveSquelchModel ? &*caps.receiveSquelchModel : nullptr,
+                connected && caps.hasModeIndependentSquelch,
+                m_slice->externalReceiveReplacementActive());
         };
         m_filterAvailability->registerWidget(m_sqlBtn,
             tr("Squelch is unavailable in this receive mode"), supportsSquelch,

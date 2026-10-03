@@ -3,6 +3,7 @@
 #include "VoiceModeGate.h"   // isCwMode
 #include "core/backends/RadioCapabilities.h"
 
+#include <algorithm>
 #include <cstdlib>
 
 namespace AetherSDR::ModeFilters {
@@ -42,6 +43,45 @@ bool acceptsFmEdges(const QString& mode, const ReceiveFilterControl* control, Ed
         && edges.lo >= range->minimumLowHz && edges.lo <= range->maximumLowHz
         && edges.hi >= range->minimumHighHz && edges.hi <= range->maximumHighHz
         && width >= range->minimumWidthHz && width <= range->maximumWidthHz;
+}
+
+bool fmFilterAdjustable(const QString& mode, const ReceiveFilterControl* control,
+                        bool radioPublishesWidths)
+{
+    if (!isFmMode(mode) || radioPublishesWidths || fmControlFor(mode, control)) {
+        return true;
+    }
+    if (!control) {
+        return true;
+    }
+    // Declared FM rows enumerate the adjustable FM modes. Without any, FlexLib
+    // Slice.cs refuses FM edits on a radio-owned filter, while a host-DSP
+    // receiver keeps its existing adjustable passband.
+    const bool declaresFm = std::any_of(control->modes.cbegin(), control->modes.cend(),
+        [](const ReceiveFilterMode& row) { return isFmMode(row.mode); });
+    return !declaresFm && control->authority != SliceFrequencyControl::Authority::Radio;
+}
+
+bool acceptsFilterEdges(const QString& mode, const ReceiveFilterControl* control,
+                        bool radioPublishesWidths, Edges edges)
+{
+    if (!isFmMode(mode) || radioPublishesWidths) {
+        return true;
+    }
+    return fmControlFor(mode, control) ? acceptsFmEdges(mode, control, edges)
+                                       : fmFilterAdjustable(mode, control, false);
+}
+
+bool squelchAvailableInMode(const QString& mode, const ReceiveSquelchModel* model,
+                            bool modeIndependentSquelch, bool externalReplacement)
+{
+    if (model && !externalReplacement) {
+        return model->modes.contains(mode);
+    }
+    // Digital/RTTY feed decoders and SQL gates weak FSK (#2504); a radio holds
+    // CW squelch itself. Only an all-mode radio squelch lifts that rule.
+    return (modeIndependentSquelch && !externalReplacement)
+        || !(mode == "DIGU" || mode == "DIGL" || mode == "NT" || mode == "RTTY" || isCwMode(mode));
 }
 
 QVector<int> widthsForMode(const QString& mode, const ReceiveFilterControl* control)
