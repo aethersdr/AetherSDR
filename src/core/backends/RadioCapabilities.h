@@ -87,6 +87,10 @@ struct BroadcastFmReceive {
     QVector<int> deemphasisUs;
     bool forceMonoControl = false;
     bool receptionDiagnostics = false;
+    // Grants the full Mono/Stereo/HD cycle through atomic setSliceWfmAudioMode
+    // and discovered-service
+    // setSliceHdProgram verbs plus native observed sync/audio/metadata.
+    bool hdStereo = false;
 };
 struct ReceivePanRangeControl {
     SliceFrequencyControl::Authority authority{SliceFrequencyControl::Authority::Unknown};

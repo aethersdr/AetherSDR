@@ -1569,6 +1569,26 @@ add_executable(wdsp_allocation_scope_test tests/wdsp_allocation_scope_test.cpp)
 target_link_libraries(wdsp_allocation_scope_test PRIVATE aether_wdsp Threads::Threads)
 add_test(NAME wdsp_allocation_scope_test COMMAND wdsp_allocation_scope_test)
 
+# Exact fractional IQ conversion is socket-free and independent of decoder availability.
+add_executable(hd_fm_iq_adapter_test tests/hd_fm_iq_adapter_test.cpp)
+target_link_libraries(hd_fm_iq_adapter_test PRIVATE aethercore Qt6::Core)
+add_test(NAME hd_fm_iq_adapter_test COMMAND hd_fm_iq_adapter_test)
+set_tests_properties(hd_fm_iq_adapter_test PROPERTIES TIMEOUT 60)
+
+# Native event reduction and bounded worker lifetime via injected documented
+# callbacks, without a firmware peer or socket. This opt-in lane requires HD.
+if(ENABLE_HD_FM)
+    add_executable(nrsc5_fm_decoder_test tests/nrsc5_fm_decoder_test.cpp)
+    target_link_libraries(nrsc5_fm_decoder_test PRIVATE aethercore aether_nrsc5 Qt6::Core)
+    add_test(NAME nrsc5_fm_decoder_test COMMAND nrsc5_fm_decoder_test)
+    set_tests_properties(nrsc5_fm_decoder_test PROPERTIES TIMEOUT 30)
+
+    add_executable(hd_fm_receiver_test tests/hd_fm_receiver_test.cpp)
+    target_link_libraries(hd_fm_receiver_test PRIVATE aethercore aether_nrsc5 Qt6::Core)
+    add_test(NAME hd_fm_receiver_test COMMAND hd_fm_receiver_test)
+    set_tests_properties(hd_fm_receiver_test PROPERTIES TIMEOUT 45)
+endif()
+
 add_executable(rtl_wfm_pipeline_test tests/rtl_wfm_pipeline_test.cpp)
 target_include_directories(rtl_wfm_pipeline_test PRIVATE src)
 target_link_libraries(rtl_wfm_pipeline_test PRIVATE aethercore aether_wdsp Qt6::Core)
@@ -7207,6 +7227,7 @@ set_tests_properties(fm_filter_controls_test PROPERTIES
 add_executable(wfm_controls_test
     tests/wfm_controls_test.cpp
     src/gui/WfmApplet.cpp
+    src/gui/WfmPresentationSettings.cpp
     src/gui/WfmLockScope.cpp
     src/gui/RxApplet.cpp
     src/gui/ControlAvailabilityRegistry.cpp
@@ -7233,6 +7254,17 @@ add_test(NAME wfm_controls_test
          COMMAND wfm_controls_test)
 set_tests_properties(wfm_controls_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# Local broadcast presentation has no SpotModel, radio command or network peer.
+add_executable(broadcast_overlay_test
+    tests/broadcast_overlay_test.cpp
+    src/gui/WfmPresentationSettings.cpp
+    src/gui/WfmBroadcastOverlay.cpp
+)
+target_include_directories(broadcast_overlay_test PRIVATE src)
+target_link_libraries(broadcast_overlay_test PRIVATE aethercore Qt6::Widgets Qt6::Test)
+add_test(NAME broadcast_overlay_test COMMAND broadcast_overlay_test)
+set_tests_properties(broadcast_overlay_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # The VFO flag's AetherRX / AetherTX launchers stay the same width on every
 # mode's DSP grid. Same socket-free build as the squelch test above.
@@ -7543,6 +7575,7 @@ set(AETHER_SETTINGS_CONSUMERS
     vfo_meter_overlay_invalidation_test
     fm_filter_controls_test
     wfm_controls_test
+    broadcast_overlay_test
     spectrum_confirmed_geometry_test
     flex_slice_mode_intent_test
     rtl_slice_settings_test
@@ -8203,6 +8236,20 @@ target_include_directories(cw_rx_model_test PRIVATE src)
 target_link_libraries(cw_rx_model_test PRIVATE aethercore Qt6::Core)
 add_test(NAME cw_rx_model_test COMMAND cw_rx_model_test)
 set_tests_properties(cw_rx_model_test PROPERTIES TIMEOUT 15)
+
+# The native Windows C adapter owns no sockets or radio transport. Exercise
+# its actual complex arithmetic and mutex/condition subset with clang-cl.
+if(WIN32 AND ENABLE_HD_FM AND TARGET aether_nrsc5)
+    aether_hd_windows_c_objects(hd_compat_objects compat-test
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/nrsc5_windows_compat_test.c"
+        "${CMAKE_CURRENT_SOURCE_DIR}/third_party/nrsc5/compat/msvc" "")
+    add_executable(nrsc5_windows_compat_test ${hd_compat_objects})
+    set_target_properties(nrsc5_windows_compat_test PROPERTIES LINKER_LANGUAGE C
+        AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
+    target_link_libraries(nrsc5_windows_compat_test PRIVATE "${AETHER_HD_COMPILER_RT}")
+    add_test(NAME nrsc5_windows_compat_test COMMAND nrsc5_windows_compat_test)
+    set_tests_properties(nrsc5_windows_compat_test PROPERTIES TIMEOUT 30)
+endif()
 
 # Anonymous-pipe output injection: no sockets, audio devices or helper processes.
 if(HAVE_PIPEWIRE)

@@ -97,7 +97,7 @@ second plus actual status changes. Unknown or stale measurements are unavailable
 no quality percentage is invented. Configuration and processing-health readouts
 are distinct from reception measurements.
 
-Native Digital FM is a separate proposal in RFC #6079,
+Native NRSC-5 digital FM is the separate proposal in RFC #6079,
 not covered by the existing analog architecture approval or the qualification
 below. The analog checkpoint exposes no ineffective digital state or empty metadata
 controls. Future digital program/ID3 metadata and analog RDS have different decoder
@@ -210,7 +210,7 @@ architecture-specific and operator acceptance work remains separate.
 
 ## Future digital reception
 
-Digital FM implementation is deferred to standalone RFC #6079.
+Digital FM/nrsc5 implementation is deferred until the current RTL sprint finishes.
 Its future branch needs wide capture IQ before this analog filter, its own
 station-centered extraction and 744187.5 Hz conversion, and explicit paired
 44.1→48 kHz PCM conversion. RADE's demodulated 24 kHz speech input is unsuitable.

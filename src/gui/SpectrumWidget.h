@@ -2,6 +2,8 @@
 
 #include "AutoBlackMode.h"
 #include "RfGainPresentation.h"
+#include "WfmBroadcastOverlay.h"
+#include "WfmBroadcastTicker.h"
 
 #include <limits>
 #include <algorithm>
@@ -847,6 +849,8 @@ public:
         QString backgroundColor;
     };
     void setSpotMarkers(const QVector<SpotMarker>& markers);
+    // Passive local broadcast presentation, independent of ordinary spots.
+    void setBroadcastOverlays(const QVector<WfmBroadcastOverlayRecord>& records);
 
     struct SpotCluster {
         QRect rect;
@@ -1071,6 +1075,9 @@ private:
     void drawTnfMarkers(QPainter& p, const QRect& specRect,
                         const QRect& wfRect = QRect());
     void drawSpotMarkers(QPainter& p, const QRect& specRect);
+    int broadcastOverlayStartY(const QRect& specRect) const;
+    void drawBroadcastOverlays(QPainter& p, const QRect& specRect);
+    void updateBroadcastOverlayTicker(const QRect& specRect, bool presentPages = true);
     void drawSwrSweep(QPainter& p, const QRect& specRect);
     void drawAutoSqlFloor(QPainter& p, const QRect& specRect);
     void drawSquelchLine(QPainter& p, const QRect& specRect);
@@ -2103,6 +2110,10 @@ private:
     int  m_notchMaxWidthHz{12000};
     bool m_tnfGlobalEnabled{true};
     QVector<SpotMarker> m_spotMarkers;
+    QVector<WfmBroadcastOverlayRecord> m_broadcastOverlays;
+    QVector<WfmBroadcastTicker> m_broadcastTickers;
+    int m_broadcastStartY{-1};
+    QElapsedTimer m_broadcastClock;
     QVector<SwrSweepPoint> m_swrSweepPoints;
     bool   m_swrSweepRunning{false};
     double m_swrSweepCurrentFreqMhz{-1.0};
