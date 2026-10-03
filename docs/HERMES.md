@@ -632,6 +632,18 @@ convergence must be verified on real hardware through the automation bridge.
   meant a change on RX2 fired the capture and then persisted RX1's untouched
   value: the change that triggered the write was not the change that got
   written.
+- **The AGC-off level is remembered PER RECEIVER, unlike the pair.** It is the
+  fixed gain WDSP applies with AGC off (`Hl2RxDsp::agcFixedGainDbForOffLevel`),
+  and since DIGU/DIGL open with AGC off (§18.5) it is their operating gain.
+  `RestoredRadioState::agcOffLevels` holds one 0..100 entry per receiver index
+  (-1 = none), stored as the `agcOffLevels` array of the radio's
+  `OperatingState` document. `RadioStateMemory` reads and writes it only for a
+  backend that declares the `Agc` domain and `hasAgcThreshold`; a document
+  without it restores the default of 10. `Hl2Backend::requestSliceAgc()`
+  captures a change, `seedReceiverAgc()` seeds each receiver with its own
+  entry, `createPanadapter()` gives a receiver opened later the entry for its
+  index, and a receiver that is closed keeps its entry. An entry outside
+  0..100 is dropped, not clamped.
 - **"At the next connect" means a NEW radio, not a returning one.** The seeding
   runs from `connectRadio()` when the connect request's serial differs from the
   last one seeded, or when `buildReceivers()` had no previous state to carry —
@@ -2978,6 +2990,9 @@ RadioModel::rxAudioReady(RxAudioTap tap, int sliceId, QByteArray pcm, int rateHz
   default threshold and LNA gain. DIGU/DIGL are therefore up to 29 dB quieter
   on the speaker and on the TCI level meter (arithmetic on the two settings,
   not a measurement); #5629's AGC-off arm ran at that same 10 dB. The
+  operator raises the level with the AGC-T slider while AGC is off, and the
+  level is remembered per receiver (`RestoredRadioState::agcOffLevels`, §5 AGC),
+  so the compensation holds across launches. The
   mechanism is `wcpAGC`'s, not the HL2's, and the default is HL2-only: ANAN-G2
   runs the same AGC and keeps the operator's mode in DIGU/DIGL
   (`AnanBackend::setSliceAgc`); RTL-SDR runs it at WDSP's medium, offers no
