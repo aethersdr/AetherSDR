@@ -276,6 +276,12 @@ void testRadioNrAndAnfRefuseWithoutRadioDsp()
     check(f.backend->nr.empty(), "NR: nothing reached the seam");
     check(!f.radio.requestRadioAutoNotch(f.slice, true), "ANF: refused the same way");
     check(!f.slice->anfOn() && f.backend->anf.empty(), "ANF: no phantom, nothing sent");
+    // A momentary MIDI button sends 0 on release: OFF is already true, so it
+    // is accepted rather than announced as unsupported a second time.
+    check(f.radio.requestRadioNoiseReduction(f.slice, false) && !f.slice->nrOn(),
+          "NR: OFF is accepted (no second notice on a button release)");
+    check(f.radio.requestRadioAutoNotch(f.slice, false) && !f.slice->anfOn(),
+          "ANF: OFF is accepted the same way");
 }
 
 void testRadioNrAndAnfRouteWhereTheRadioHasThem()

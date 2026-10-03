@@ -606,6 +606,7 @@ public:
     bool radioSideAutoNotchAvailable() const;
     // These return false, leaving the model untouched, where the radio lacks
     // the control (hasRadioSideDsp, hasAmCarrierLevel); the caller says so.
+    // NR/ANF OFF is accepted there: it is already true.
     bool requestRadioNoiseReduction(SliceModel* slice, bool on);
     bool requestRadioAutoNotch(SliceModel* slice, bool on);
     bool requestAmCarrierLevel(int level);

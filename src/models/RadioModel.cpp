@@ -4141,7 +4141,8 @@ bool RadioModel::requestRadioNoiseReduction(SliceModel* slice, bool on)
     if (!slice) {
         return false;
     }
-    if (!radioSideNoiseReductionAvailable()) {
+    // OFF is already true where the radio has none, so only ON is refused.
+    if (on && !radioSideNoiseReductionAvailable()) {
         qCWarning(lcProtocol) << "RadioModel: radio noise reduction refused:"
                               << "this radio declares no radio-side DSP";
         return false;
@@ -4155,7 +4156,7 @@ bool RadioModel::requestRadioAutoNotch(SliceModel* slice, bool on)
     if (!slice) {
         return false;
     }
-    if (!radioSideAutoNotchAvailable()) {
+    if (on && !radioSideAutoNotchAvailable()) {
         qCWarning(lcProtocol) << "RadioModel: radio auto notch refused:"
                               << "this radio declares no radio-side DSP";
         return false;
