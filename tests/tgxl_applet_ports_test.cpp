@@ -12,13 +12,18 @@
 //    status exactly as reported (Principle II) — the order is what keeps the
 //    display steady, not any filtering of what the radio says.
 //
-// Relay path only: the direct port-9010 path needs a live socket, and its
-// source cell goes through the same setSourceVisible pinned in
-// tgxl_panel_widgets_test.
+//  * On a TGXL reached by manual IP only, a click that needs both verbs is
+//    ONE refusal (TunerModel::setOperateAndBypass), not one per verb. The
+//    direct link is marked up with its `connected` signal; no socket opens.
+//
+// The port strips are checked on the relay path only: the direct port-9010
+// path needs a live socket, and its source cell goes through the same
+// setSourceVisible pinned in tgxl_panel_widgets_test.
 
 #include "gui/AccessoryPanelWidgets.h"
 #include "gui/TunerApplet.h"
 #include "models/TunerModel.h"
+#include "core/TgxlConnection.h"
 #include "core/backends/TunerDelta.h"
 #include <QLabel>
 
@@ -179,6 +184,57 @@ int main(int argc, char** argv)
           && wire.value(1) == QStringLiteral("bypass=0"));
     if (wire.value(0) != QStringLiteral("operate=0")) {
         std::fprintf(stderr, "  wire: %s\n", qPrintable(wire.join(QStringLiteral(", "))));
+    }
+
+    // ── Direct-only TGXL: one press, one refusal ───────────────────────────
+    // A tuner reached by manual IP alone (no radio relays operate/bypass).
+    // STBY, BYP and the rail cycle each need both verbs for one click; they
+    // used to call the two setters and log two refusals for one action.
+    {
+        TunerModel direct;
+        TgxlConnection link;
+        direct.setDirectConnection(&link);
+        CHECK(QMetaObject::invokeMethod(&link, "connected", Qt::DirectConnection));
+        int refusals = 0;
+        int sent = 0;
+        QObject::connect(&direct, &TunerModel::relayedCommandRefused, &direct,
+                         [&refusals](const QString&) { ++refusals; });
+        QObject::connect(&direct, &TunerModel::operateRequested, &direct,
+                         [&sent](bool) { ++sent; });
+        QObject::connect(&direct, &TunerModel::bypassRequested, &direct,
+                         [&sent](bool) { ++sent; });
+
+        TunerApplet directApplet;
+        directApplet.setTunerModel(&direct);
+        directApplet.setFloating(true);
+        directApplet.resize(420, 360);
+        directApplet.show();
+        settle();
+
+        for (const char* caption : {"STBY", "BYP"}) {
+            QPushButton* key = keyReading(&directApplet, QString::fromLatin1(caption));
+            CHECK(key != nullptr);
+            if (!key) continue;
+            refusals = 0;
+            key->click();
+            CHECK(refusals == 1);
+            if (refusals != 1)
+                std::fprintf(stderr, "  %s: %d refusals\n", caption, refusals);
+        }
+
+        directApplet.setFloating(false);
+        settle();
+        QPushButton* railKey = nullptr;
+        for (const char* caption : {"STANDBY", "OPERATE", "BYPASS"}) {
+            if (!railKey) railKey = keyReading(&directApplet, QString::fromLatin1(caption));
+        }
+        CHECK(railKey != nullptr);
+        if (railKey) {
+            refusals = 0;
+            railKey->click();
+            CHECK(refusals == 1);
+        }
+        CHECK(sent == 0);   // nothing relayed on any of them
     }
 
     if (g_failures == 0) {

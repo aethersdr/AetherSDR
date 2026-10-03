@@ -1,18 +1,9 @@
 #pragma once
 
-// Merge two health snapshots. Family-neutral, because two consumers now need it
-// and one of them (`AutomationServer::doHealth`) must not include a family
-// header to get it.
-//
-// ONE RULE IS LOAD-BEARING AND EASY TO GET BACKWARDS: a key the winner declares
-// but leaves OUT of `values` means "not reported", and must not erase a value
-// the base does have. Overwriting a real reading with nothing is how a working
-// number becomes a dash — and this snapshot spells "never reported" as an
-// absent value precisely so that the difference survives to the UI.
-//
-// Moved here from `backends/hl2/Hl2TelemetrySource.h`, which keeps
-// `hl2MergeHealth` as a forwarder so the HL2 tests that pin this rule against
-// the HL2 call site continue to pin the same function rather than a copy.
+// Merge two health snapshots; family-neutral so AutomationServer::doHealth needs
+// no family header. A key the winner declares but leaves OUT of `values` means
+// "not reported" and must not erase the base's value. hl2MergeHealth in
+// Hl2TelemetrySource.h forwards here so the HL2 tests pin this function.
 
 #include "core/backends/IRadioBackend.h"   // HealthSnapshot
 

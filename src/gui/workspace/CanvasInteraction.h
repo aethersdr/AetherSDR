@@ -1,19 +1,10 @@
 #pragma once
 
-// The pure half of canvas interaction (RFC #4887 phase 5): where a press
-// lands (move strip, resize grip, nothing), and what a drag does to a rect.
-//
-// Widget-free on purpose, like the rest of the model: every rule that can be
-// got wrong — which grip a corner press selects, which edge a resize
-// anchors, how minimums fight bounds — is decided here and pinned headless.
-// WorkspaceCanvas's overlay translates real mouse events into these calls
-// and applies the answers; it adds no rules of its own.
-//
-// All rect math is in normalized canvas space.  Pixel thresholds (grip size,
-// title strip height, snap tolerance) are converted by the caller against
-// the live canvas — interactions only happen on a real, laid-out canvas, so
-// unlike stored placement this code MAY know the canvas size; it just never
-// writes anything an operator did not do.
+// Pure canvas interaction rules (RFC #4887): which zone a press hits (move strip,
+// resize grip, none) and what a drag does to a rect, pinned headless.
+// WorkspaceCanvas's overlay only translates mouse events and applies results.
+// Rect math is in normalized canvas space; the caller converts pixel thresholds
+// against the live canvas. Never writes anything the operator did not do.
 
 #include "gui/workspace/CanvasItem.h"
 #include "gui/workspace/WorkspaceGeometry.h"
@@ -79,21 +70,11 @@ struct SnapResult {
     QList<double> horizontalGuides;  // y positions
 };
 
-// Snap `moved` (the rect applyDrag produced) against `peers`.  `tolNorm*`
-// is the capture distance per axis, already converted from pixels by the
-// caller; disabled (e.g. Alt held) is expressed by calling with zero
-// tolerance or simply not calling.  Resize snaps re-apply the minimum so a
-// snap can never shrink an item below it.
-// `gridX`/`gridY` add a normalized grid (that many divisions per axis) to
-// the candidates; 0 disables it.  Two deliberate asymmetries against the
-// peer tier: the grid is consulted only when NO peer or surface edge is in
-// tolerance (aligning to a neighbour is more intentional than a grid line),
-// and for a move it courts only the item's ORIGIN — left/right/centre all
-// chasing a ~35 px grid at +/-8 px left almost nowhere free to stand.
-// `gridTolNormX/Y` give the grid tier its own capture distance (default:
-// same as the peer tier).  A dense grid with a full-strength magnet
-// quantizes nearly every position; callers pair high division counts with a
-// gentler pull.
+// Snap `moved` against `peers`; tolNorm* is the per-axis capture distance in
+// normalized units (zero or not calling = disabled, e.g. Alt held). Resize snaps
+// re-apply the minimum. gridX/gridY add a grid (0 disables) consulted only when
+// no peer/surface edge is in tolerance, and a move snaps only the item's origin
+// to it. gridTolNormX/Y default to the peer tolerance; pair dense grids with less.
 SnapResult snapRect(const NormRect& moved, HitZone zone,
                     const QList<NormRect>& peers,
                     double tolNormX, double tolNormY,

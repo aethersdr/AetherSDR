@@ -54,7 +54,7 @@ PRs for anything labelled `aetherclaude-eligible`.
 Every change passes the same gate regardless of which tool — or human — produced
 it: branch protection enforces signed commits, green CI and CODEOWNERS review,
 and nothing reaches `main` without human review. The project's
-[Constitution](CONSTITUTION.md) (14 principles, structured per [Cisco's Foundry
+[Constitution](CONSTITUTION.md) (structured per [Cisco's Foundry
 Constitution](https://github.com/CiscoDevNet/foundry-security-spec) spec)
 codifies the conventions every contributor and every AI tool follows, and
 [`AGENTS.md`](AGENTS.md) is the canonical guide each assistant reads first.

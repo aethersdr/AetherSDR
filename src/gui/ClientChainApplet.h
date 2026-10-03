@@ -12,18 +12,11 @@ namespace AetherSDR {
 class ClientChainWidget;
 class ClientRxChainWidget;
 
-// Docked chain tile — header with [TX] [RX] [BYPASS] buttons, the
-// chain strip, and an interaction hint at the bottom.
-//
-// TX and RX buttons form an exclusive pair that selects which chain
-// the widget displays.  TX is the working client-side DSP chain
-// (six stages, all implemented).  RX is reserved for the future
-// client-side RX DSP chain — until then, switching to RX shows a
-// placeholder.
-//
-// BYPASS is a one-click action that disables every stage in the
-// currently-selected chain.  Users re-enable individual stages via
-// the chain widget's right-click menu or the per-stage applet tiles.
+// Docked chain tile: [TX] [RX] [BYPASS] header, the chain strip, and a hint.
+// TX/RX are an exclusive pair selecting which chain is shown (TX:
+// ClientChainWidget, RX: ClientRxChainWidget). BYPASS disables every stage in
+// the selected chain; stages are re-enabled individually from the strip's
+// context menu or the per-stage tiles.
 class ClientChainApplet : public QWidget {
     Q_OBJECT
 

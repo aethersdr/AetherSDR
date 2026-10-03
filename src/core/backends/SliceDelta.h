@@ -8,17 +8,11 @@
 
 namespace AetherSDR {
 
-// Normalized, vendor-neutral slice-status delta (aetherd RFC 2.3 — SliceModel
-// touchpoint). A backend populates only the fields the wire reported
-// (std::optional engaged == "present"); SliceModel::applyChanges applies exactly
-// those. This is the compiler-checked replacement for the prior stringly-keyed
-// QVariantMap payload: a field-name typo between the backend decode and the model
-// apply is now a compile error instead of a silently-dropped field.
-//
-// Value types are the canonical (vendor-neutral) types; the FlexBackend decode
-// owns the SmartSDR wire→canonical translation (key names, "1"→bool, list split,
-// lowercase, ok-guarded numeric parses). Kept out of any model header so the
-// backend interface stays free of model dependencies (RFC layering).
+// Normalized slice-status delta (aetherd RFC 2.3). A backend populates only the
+// fields the wire reported (engaged optional == present); SliceModel::applyChanges
+// applies exactly those. Canonical value types; the FlexBackend decode owns the
+// SmartSDR wire→canonical translation. Kept out of model headers so the backend
+// interface has no model dependency.
 struct SliceDelta {
     // Identity / tuning
     std::optional<QString>     panId;

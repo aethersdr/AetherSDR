@@ -25,21 +25,11 @@ AnanRxDsp::AnanRxDsp(QObject* parent) : QObject(parent)
 
 AnanRxDsp::~AnanRxDsp()
 {
-    // Same shape as Hl2RxDsp's destructor, and for the same reason: a channel
-    // destroyed while WDSP still thinks it is running makes
-    // WdspChannel::close() sit out WDSP's full 100 ms stop-and-flush timeout,
-    // because behind the control fence nothing is left calling fexchange* to
-    // satisfy it. Stopping here makes that SetChannelState a no-op.
-    // docs/HERMES.md §13 item 9b.
-    //
-    // No drain: nothing feeds this object after it is destroyed, so WDSP's mute
-    // ramp does not actually run. The saving is the skipped wait.
-    //
-    // CHECKED, not discarded. setRunning() goes through beginControlOperation(),
-    // which REFUSES rather than waits when a processIq() callback is in flight.
-    // It cannot be, here: this object is destroyed on the thread that drives
-    // processIq(). A false therefore reports that that assumption has stopped
-    // holding, which is worth a line in the log rather than a silent 100 ms.
+    // Stop the channel first so WdspChannel::close() skips WDSP's 100 ms
+    // stop-and-flush timeout (docs/HERMES.md §13 item 9b); nothing feeds it after
+    // this, so no drain runs. setRunning() refuses while a processIq() callback is in
+    // flight, which cannot happen on this (the feeding) thread -- a false means that
+    // assumption broke, so log it.
     if (m_channel && !m_channel->setRunning(false)) {
         qCWarning(lcAnanRxDsp)
             << "could not stop the WDSP channel before destroying it: a "
@@ -230,20 +220,10 @@ void AnanRxDsp::installChannel(RebuildResult result)
     // change swaps the channel while audio is muted for its settle window.
     result.channel->setNoiseBlankerHold(m_audioMuted);
 
-    // Stop the OUTGOING channel before the assignment below destroys it, so
-    // close() finds the state already 0 and skips WDSP's 100 ms stop-and-flush
-    // timeout. This runs on this object's own thread, which is also the thread
-    // that calls processIq(), so no block reaches the old channel between here
-    // and its destruction: the down-slew does NOT complete and this buys the
-    // skipped wait, nothing more.
-    //
-    // NOT moved up into beginRebuild(), where a stop WOULD drain — the old
-    // channel keeps processing for the whole background build, so samples are
-    // genuinely still flowing there. Stopping that early would trade the
-    // receive audio that the asynchronous rebuild exists to preserve for
-    // 100 ms of teardown, which is the wrong way round.
-    //
-    // Checked for the same reason as the destructor's — see there.
+    // Stop the OUTGOING channel before it is destroyed so close() skips the 100 ms
+    // stop-and-flush timeout; this is the processIq() thread, so no block reaches it
+    // in between. Not in beginRebuild(): the old channel must keep producing audio
+    // through the background build. Checked as in the destructor.
     if (m_channel && !m_channel->setRunning(false)) {
         qCWarning(lcAnanRxDsp)
             << "could not stop the outgoing WDSP channel before the swap: a "
@@ -457,42 +437,13 @@ void AnanRxDsp::processIqBlock(const std::vector<std::complex<float>>& iq)
     if (!m_channel)
         return;
 
-    // *** CONFIRMED FOR PROTOCOL 2, 2026-08-21 *** -- was a starting
-    // hypothesis; is now a measured fact, both sources HERMES §16 asks for.
-    // Read HERMES.md §16 and this class's header comment for the full
-    // history if you're touching this.
-    //
-    // Two facts feed this split (HERMES.md §16.1):
-    //   1. WDSP's RXA, as configured here, selects the OPPOSITE sign to its
-    //      passband bounds. A property of THIS CODEBASE's WdspChannel
-    //      configuration, which Protocol 2 reuses unchanged. Known with full
-    //      confidence since before this backend existed.
-    //   2. "The HPSDR wire is the conjugate of the analytic convention" --
-    //      originally measured against Protocol 1 / the HL2 only, and only a
-    //      plausible starting point for Protocol 2's different wire encoding
-    //      (typed packets vs C0 register banks). Now independently confirmed
-    //      for THIS radio too: `radiocert rx` (2026-08-19, real WWV carrier)
-    //      showed the textbook USB/DIGU-recover, LSB/DIGL-don't signature,
-    //      and an RSP1B running SDR++ -- sharing zero code with this
-    //      backend -- reproduced the identical pattern at the same dial/
-    //      offset geometry and confirmed the panadapter draws the carrier on
-    //      the correct side. That is the "two-source bar" HERMES §16 sets
-    //      before a polarity claim can be trusted; both are in.
-    //
-    // Fact 1 alone already implies the demodulator and the spectrum must get
-    // OPPOSITE handling from each other. Which one gets the mirror and which
-    // gets the raw wire is fact 2's contribution -- demodulator raw, spectrum
-    // mirrored, same structure Hl2RxDsp settled on, now confirmed correct
-    // here too, not just structurally borrowed (HERMES.md §16.6 rule 2 --
-    // mirror exactly once, at one place).
-    //
-    // That one place is now INSIDE WDSP's analyzer: Spectrum0() reads each
-    // sample's Q as I and I as Q, and swapping the two mirrors the spectrum
-    // exactly as a conjugate does. So this function hands BOTH paths the raw
-    // wire and conjugates nothing; adding a conjugate here as well would
-    // mirror twice and put every signal on the wrong side of the dial.
-    // anan_rxdsp_handedness_test pins a wire-convention tone above centre
-    // landing above centre through this whole path.
+    // Handedness: read docs/HERMES.md §16 before touching this. WDSP's RXA as
+    // configured here selects the opposite sign to its passband bounds, and the HPSDR
+    // wire is the conjugate of the analytic convention (confirmed for P2 by
+    // `radiocert rx` on WWV and by SDR++ on an RSP1B). So the demodulator takes the
+    // raw wire and the spectrum is mirrored exactly once (§16.6 rule 2) -- inside
+    // WDSP's analyzer, whose Spectrum0() swaps I and Q. Conjugating here too would
+    // mirror twice. anan_rxdsp_handedness_test pins this.
 
     // Panadapter: every block goes to the analyzer, whatever the display rate
     // -- its FFTs overlap so that one completes per display frame over fresh
@@ -507,22 +458,10 @@ void AnanRxDsp::processIqBlock(const std::vector<std::complex<float>>& iq)
         const DroopCorrectionTable& droopTable =
             droopTableForRate(m_config.inputSampleRateHz / 1000);
         applyDroopCorrectionDbResampled(m_bins, droopTable);
-        // Cosmetic fade for the true edge. See applyEdgeFade()'s own
-        // comment for why this exists instead of a larger capDb.
-        //
-        // This identity test is NOT live logic on a G2 any more.
-        // connectRadio() seeds the derived defaults for all six DDC0 rates,
-        // so droopTableForRate() never hands back kDroopCorrectionZero for a
-        // rate this backend can actually run -- the fade is effectively
-        // unconditional, by design: there is always a real correction to
-        // fade FROM, and the outermost points are clamped at +90 dB, which
-        // only stays off screen because this overwrites them.
-        //
-        // What the test still does is suppress the fade while the
-        // calibrator's bypass is on, which is the one case that must not see
-        // a synthetic edge -- setDroopCorrectionBypassed() returns the
-        // kDroopCorrectionZero OBJECT for exactly this identity check, so a
-        // sweep measures the radio and not our own raised cosine.
+        // Cosmetic edge fade (see applyEdgeFade()). connectRadio() seeds defaults for
+        // all six rates, so on a G2 this always runs; the identity test only suppresses
+        // it during a calibration bypass, when droopTableForRate() returns the
+        // kDroopCorrectionZero object so a sweep measures the radio, not our fade.
         if (&droopTable != &kDroopCorrectionZero)
             applyEdgeFade(m_bins);
         emit spectrumReady(m_bins);
@@ -583,42 +522,14 @@ void AnanRxDsp::processIqBlock(const std::vector<std::complex<float>>& iq)
             emit pcmReady(*frame);
             emit audioReady(m_stereo);
         }
-        // AVERAGE, NOT PEAK. WDSP's xmeter keeps both from the same
-        // smag = I*I + Q*Q: `avg` is an EMA of power, `peak` is a peak-hold
-        // that DECAYS across blocks rather than resetting per block. Both take
-        // the log after averaging, so the domain is right either way -- the tap
-        // is the whole difference.
-        //
-        // On a steady carrier the two agree exactly, because I*I + Q*Q is
-        // constant for a complex exponential. They diverge only on noise and on
-        // modulation, so every check against a test tone passes and the error
-        // appears precisely where an operator judges a receiver: the band noise
-        // floor, which a peak-hold reads roughly 11-14 dB high.
-        //
-        // That also makes the peak tap wrong for a dBm-labelled axis. S9 is
-        // defined as -73 dBm of sine, i.e. an RMS quantity, and `avg` is the
-        // mean-square -- so the average tap is what the calibration means.
-        // Meter ballistics are not lost: the backend already applies its own
-        // attack/decay EMA to the dBm value before publishing.
-        //
-        // Not while muted, and not for the settle window after the mute lifts
-        // or a channel is installed: during a rate change's settle window the
-        // channel is fed zeros (see setAudioMuted()), the meter would read
-        // that silence as a signal level, and its average carries that
-        // silence past the unmute -- so without the second arm the needle
-        // would dive at the END of every zoom instead of during it. See
-        // WdspSMeter.h.
-        //
-        // The same gate sets the READ CADENCE: one reading per DSP-rate
-        // block's worth of input (every inputRate/48k-th block), so the
-        // backend's smoother sees ~47 readings a second at every DDC0 rate
-        // rather than ~1500 at 1536 ksps, where a per-reading EMA would
-        // otherwise lose its smoothing as the operator zooms out.
-        //
-        // The countdown sits below the underrun `continue` above, so a block
-        // that produced no output does not spend a tick. That can only make
-        // the window longer, never shorter, and a channel that is not yet
-        // producing is exactly when the tap is least worth publishing.
+        // AVERAGE, NOT PEAK: xmeter's `avg` is an EMA of I*I + Q*Q, `peak` a decaying
+        // peak-hold. They agree on a carrier but peak reads band noise ~11-14 dB high,
+        // and S9 (-73 dBm) is an RMS quantity. The backend applies its own ballistics.
+        // Gated off while muted and for the settle window after unmute or a channel
+        // install (the channel is fed zeros, and the average would carry that silence
+        // past the unmute; see WdspSMeter.h). The gate also fixes cadence at one reading
+        // per 48k-equivalent block (~47/s at every DDC0 rate). Blocks that underrun
+        // above do not tick it.
         if (!m_audioMuted && m_meterTap.tick()) {
             emit meterUpdate(static_cast<float>(
                 m_channel->meter(WdspChannel::Meter::SignalAverage)));

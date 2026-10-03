@@ -1,16 +1,9 @@
 #pragma once
 
-// The selection frame for a canvas item (RFC #4887 phase 5): a border band
-// with eight resize grips, drawn OVER the selected item by the canvas.
-//
-// The one trick that makes this workable: the widget covers the item's full
-// rect but is MASKED to the border band, so resize presses land on the frame
-// while every click inside the band passes straight through to the applet —
-// its sliders and buttons keep working with the frame up.  The containers
-// themselves are untouched; selection chrome is entirely the canvas's.
-//
-// The frame owns no policy: it classifies presses with hitZoneFor() and
-// hands the gesture to the canvas session, which does everything else.
+// Selection frame for a canvas item (RFC #4887): border band with eight resize
+// grips, drawn over the item. It covers the item's full rect but is masked to
+// the band, so clicks inside pass through to the applet. No policy: presses are
+// classified with hitZoneFor() and handed to the canvas session.
 
 #include "gui/workspace/CanvasInteraction.h"
 

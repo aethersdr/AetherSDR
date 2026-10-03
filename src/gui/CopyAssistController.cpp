@@ -603,16 +603,11 @@ void CopyAssistController::armFaultMarker(const char* stage)
             }
         }
     }
-    // updateValue() commits before returning (AppSettings::save() is a sqlite
-    // transaction on this thread), which is what lets the marker outlive a
-    // signal that kills the process a moment later. The store runs WAL with
-    // synchronous=NORMAL, so this is a guarantee against the PROCESS dying, not
-    // against power loss.
-    //
-    // The latch is read INSIDE the update, under the same lock the worker's
-    // CPU-fallback hook takes: a load queued behind one whose GPU attempt just
-    // failed will run on CPU, and re-arming with the GPU's index after the hook
-    // already wrote -1 would put the stale device back (#5190 review).
+    // updateValue() commits before returning (sqlite transaction on this
+    // thread), so the marker survives a crash a moment later; WAL with
+    // synchronous=NORMAL protects against process death, not power loss. The
+    // latch is read inside the update, under the lock the CPU-fallback hook
+    // takes, so a load that will run on CPU never re-arms the GPU index.
     const int device = a.device;
     CopyAssistSettings::updateValue(
         isLoad ? QStringLiteral("AsrInFlight") : QStringLiteral("AsrInFlightDiscovery"),
@@ -1044,16 +1039,11 @@ void CopyAssistController::buildEngine()
             }
             writeFreqMarkerIfNeeded(); // "on start": head the log with the frequency
         }
-        // The model loaded, but the backend may have got there by falling back
-        // to CPU after the chosen GPU failed. The latch is the only signal —
-        // a successful fallback still reports ready() — so ask it, then make
-        // the selectors tell the truth instead of naming a device that is not
-        // running the decode (#4502).
-        //
-        // Queued, not direct: reconciling can change the resolved device, and
-        // that rebuilds the engine — which deletes the AsrEngine whose ready()
-        // emission this lambda is running inside. Deferring to the event loop
-        // lets that emission unwind before its sender is destroyed.
+        // A successful CPU fallback after a GPU failure still reports ready();
+        // the latch is the only signal, so check it and make the selectors name
+        // the device actually decoding (#4502). Queued: reconciling can rebuild
+        // the engine and delete the AsrEngine whose ready() is running this
+        // lambda.
         if (m_backend == AsrBackendKind::Whisper && m_gpuDevice >= 0
             && asrGpuDeviceFailed(m_gpuDevice)) {
             QMetaObject::invokeMethod(

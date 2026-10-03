@@ -1,21 +1,7 @@
-// MainWindow_Wiring.cpp — per-object signal wiring for MainWindow.
-//
-// Part of the #3351 monolith decomposition (Phase 1d). Holds the wiring
-// methods that connect each dynamically-created radio-facing object to the
-// UI — the code that runs when a panadapter, slice, VFO, or DSP widget
-// comes into existence:
-//
-//   • wirePanadapter(): per-pan signal wiring (~70 connects per pan)
-//   • wireVfoWidget(): per-VFO wiring
-//   • wireAetherDspWidget(): DSP-panel wiring
-//   • onSliceAdded() / onSliceRemoved(): slice lifecycle
-//   • panFollowVfo() + revealFrequencyIfNeeded(): pan-follows-tuning policy
-//
-// This family is the most RadioSession-adjacent code in the split: when the
-// session aggregate lands (#3351 follow-up / #3445), these methods take a
-// session pointer instead of reaching for the singular m_radioModel.
-//
-// Pure code motion from MainWindow.cpp — same class, no header changes.
+// MainWindow_Wiring.cpp — wiring for dynamically created radio-facing objects:
+// wirePanadapter() (~70 connects per pan), wireVfoWidget(),
+// wireAetherDspWidget(), onSliceAdded()/onSliceRemoved(), and
+// panFollowVfo()/revealFrequencyIfNeeded().
 
 #include "MainWindow.h"
 #include "models/CwDecodeSettings.h"
@@ -754,25 +740,12 @@ bool MainWindow::snapCenterLockForSlice(SliceModel* slice, double mhz, bool send
     return changed;
 }
 
-// Re-push the pan's authoritative geometry into its spectrum view.
-//
-// SpectrumWidget suppresses inbound geometry while a local gesture owns the
-// view (drag, VFO drag, a settling zoom). That is correct — an echo arriving
-// mid-drag is stale. It was also SAFE only because Flex re-echoes pan status
-// continuously, so the next status replaced whatever was dropped within
-// milliseconds.
-//
-// A backend that emits geometry only when it CHANGES has no next status. The
-// HL2 publishes its pan centre from the RX NCO, once, on tune: if that lands
-// during a gesture hold it is gone for good, and the view stays parked at the
-// old centre while the slice, the pan model and every waterfall row have moved
-// on — measured at a permanent 6.3 kHz offset after a single drag-tune.
-//
-// So the widget reports that it suppressed something, and we re-push the model
-// value HERE rather than let it replay the value it saw. The model is the
-// authority for both families: for Flex it only advances once a command
-// actually reached the wire (#4142), and for a DSP-owning backend it mirrors
-// hardware state. Reading it now cannot resurrect a stale echo.
+// Re-push the pan model's geometry into its spectrum view. SpectrumWidget
+// drops inbound geometry during a local gesture; Flex re-echoes status
+// continuously, but HL2 publishes its centre once per tune, so a dropped
+// update would leave the view offset permanently. The widget reports the
+// suppression and we re-push the model (the authority: Flex advances it only
+// once a command hits the wire, #4142).
 void MainWindow::resyncPanGeometryToView(const QString& panId)
 {
     if (m_shuttingDown || !m_panStack)
@@ -1568,9 +1541,13 @@ void MainWindow::wireVfoTelemetry(VfoWidget* vfo, SliceModel* s)
     // shows the operator-selected meter only on its own TX slice while
     // transmitting. No amp-operate gate (unlike the analog S-Meter below): the
     // meter reports the truth of whatever the operator selected.
+    // The mic value is the same "transmit level" the S-meter's Level face
+    // shows (MeterModel::transmitLevelFaceValue): MICPEAK on a radio that
+    // publishes no MIC meter (HL2), where MIC would sit on its floor.
     connect(&m_radioModel.meterModel(), &MeterModel::micMetersChanged,
-            vfo, [vfo](float micLevel, float, float micPeak, float compPeak) {
-        vfo->setMicLevel(micLevel, micPeak);
+            vfo, [this, vfo](float micLevel, float, float micPeak, float compPeak) {
+        vfo->setMicLevel(
+            m_radioModel.meterModel().transmitLevelFaceValue(micLevel, micPeak), micPeak);
         vfo->setTxCompression(compPeak);
     });
     connect(&m_radioModel.meterModel(), &MeterModel::txMetersChanged,
@@ -1728,18 +1705,11 @@ void MainWindow::onSliceAdded(SliceModel* s)
 
     // First slice — wire everything up
     if (firstSlice) {
-        // Bootstrap only: give the UI a selection. Do NOT write active=1 during
-        // initial connect enumeration — this is the first slice ENUMERATED, not
-        // the slice that should own the UI. A FLEX does not persist the operator's
-        // active-slice choice across a restart; during connect the status burst /
-        // enumeration order may end with a different slice active (often last-created),
-        // and that slice may not exist client-side yet (it arrives in a later
-        // status frame). Asserting here would clobber that live status and
-        // make first-enumerated always win. The adoption check later in
-        // onSliceAdded() reads s->isActive() as subsequent slices arrive, so the
-        // client converges on the radio-authoritative active slice.
-        // Mid-session creation into an empty list (after initial enumeration window has passed)
-        // routes through TopologyFallback to assert the selection as needed.
+        // Bootstrap only: select for the UI but do NOT write active=1 during
+        // connect enumeration. The first ENUMERATED slice is not necessarily the
+        // radio's active one (which may not exist client-side yet); the adoption
+        // check later in onSliceAdded() converges on the radio's s->isActive().
+        // Mid-session creation into an empty list goes through TopologyFallback.
         const auto nowMs = QDateTime::currentMSecsSinceEpoch();
         if (m_connectSliceEnumeration.expiredUnused(nowMs)) {
             qCWarning(lcProtocol) << "MainWindow: connect slice enumeration window expired unused; falling back to TopologyFallback";
@@ -1784,19 +1754,11 @@ void MainWindow::onSliceAdded(SliceModel* s)
         });
     }
 
-    // Restore per-slice DAX channel from last session (#1221).
-    // Deferred so the radio's initial slice status has arrived first. Skip this
-    // during profile recall: setDaxChannel() updates local slice state before
-    // sending the radio command, and profile-created slices must keep the
-    // radio/profile DAX assignment.
-    //
-    // #4558: only within the post-connect restore window. The keys are
-    // position-based (A = index 0, ...), so a mid-session destroy/recreate —
-    // which re-enters the list at the tail — resolves to the WRONG key when
-    // other slices are open: with B alive, a recreated A reads
-    // DaxChannel_SliceB and steals B's live channel 300 ms later. Mid-session
-    // adds have current radio/TCI state; last-session keys apply only to the
-    // enumeration that follows a connect. See DaxRestorePolicy.h.
+    // Restore per-slice DAX channel from last session (#1221), deferred until
+    // the radio's initial slice status arrives, and skipped during profile
+    // recall (profile slices keep their DAX). Only inside the post-connect
+    // window (#4558): keys are list-position based, and a mid-session recreate
+    // at the tail would read another slice's key. See DaxRestorePolicy.h.
     {
         const int sliceIdx = m_radioModel.slices().indexOf(s);
         const QString key = sliceIdx >= 0
@@ -1859,19 +1821,11 @@ void MainWindow::onSliceAdded(SliceModel* s)
                 break;
             }
         }
-        // Digital modes need dax=1 for TX audio routing through DAX, but only
-        // on platforms where AetherSDR actually owns the dax_tx feed — hosted
-        // DAX (macOS / PipeWire).  Linux non-PipeWire builds have no DAX feed
-        // available, so leave the radio's dax flag alone to keep digital TX
-        // on the physical mic input. (#2273)
-        //
-        // Windows is intentionally excluded: SmartSDR DAX2 owns the radio's
-        // `transmit dax` flag and the dax_tx stream.  Toggling it from slice-
-        // mode changes (e.g. band-stack restore flipping the slice from DIGU
-        // back to USB during a band switch) sends `transmit set dax=0`, which
-        // parks DAX2's TX Stream in Busy and silently breaks digital TX until
-        // the user re-arms it from the DAX2 window.  Let the user manage that
-        // state via DAX2 — matches SmartSDR Console behavior. (#2315)
+        // Digital modes need dax=1 for TX audio only where AetherSDR owns the
+        // dax_tx feed (macOS / PipeWire); elsewhere leave the radio's flag so
+        // digital TX stays on the mic input (#2273). Not on Windows: SmartSDR
+        // DAX2 owns `transmit dax`, and a `transmit set dax=0` from a mode change
+        // parks its TX stream in Busy (#2315).
 #if defined(Q_OS_MAC) || defined(HAVE_PIPEWIRE)
         m_audio->setDaxTxMode(isDigital);
         // `transmit dax` and DAX TX streams belong to Flex's command plane.
@@ -1954,6 +1908,38 @@ void MainWindow::onSliceAdded(SliceModel* s)
         }
     });
     restoreCenterLockForPan(s->panId());
+
+    // Match radio status echoes to local tune commands so desktop tuning does
+    // not look like an external CAT-driven QSY.
+    connect(s, &SliceModel::frequencyCommandIssued, this,
+            [this, s](double mhz) {
+        m_pendingSliceFrequencyEchoes.record(
+            s->sliceId(), mhz, QDateTime::currentMSecsSinceEpoch());
+    });
+    connect(s, &SliceModel::frequencyStatusReported, this,
+            [this, s](double mhz) {
+        const bool sliceA = s->letter() == QLatin1String("A");
+        const bool splitRxSlice = s->sliceId() == m_splitRxSliceId;
+        if (m_pendingSliceFrequencyEchoes.consume(
+                s->sliceId(), mhz, QDateTime::currentMSecsSinceEpoch())) {
+            if (m_splitActive && sliceA && splitRxSlice) {
+                m_splitRxFrequencyMhz = mhz;
+            }
+            return;
+        }
+        // Slice A is the CAT FA/ZZFA target. Radio status carries no client
+        // identity, so an unmatched update from any client is indistinguishable.
+        if (!sliceA || !splitRxSlice) {
+            return;
+        }
+        if (AetherSDR::shouldCloseSplitOnQsyObservation(
+                m_splitQsySettings, m_splitActive, true, mhz,
+                m_splitRxFrequencyMhz)) {
+            qCDebug(lcDevices) << "Disabling split after RX QSY from"
+                               << m_splitRxFrequencyMhz << "to" << mhz;
+            disableSplit();
+        }
+    });
 
     // Connect slice state changes → spectrum overlay updates
     connect(s, &SliceModel::frequencyChanged, this, [this, s](double mhz) {
@@ -2119,6 +2105,8 @@ void MainWindow::onSliceAdded(SliceModel* s)
                 s->isDiversityChild(), s->diversityIndex());
         syncTxWaterfallSliceToSpectrums();
         updateSplitState();
+        // A radio-wide span control follows the TX slice's pane (#5750).
+        syncPanSpanControlPlacement();
 
         // TX flag just moved — keyer availability follows the TX slice (#4173).
         updateKeyerAvailability();
@@ -2170,18 +2158,10 @@ void MainWindow::onSliceAdded(SliceModel* s)
         // restrictive audible slice controls the global client DSP state.
         updateAetherDspModePolicy();
 
-        // CWX/DVK availability and their F1-F12 shortcuts follow the TX slice
-        // (#4173); the ASR (Copy Assist) indicator follows the ACTIVE slice,
-        // because it decodes received audio (#4825). Re-evaluate when either of
-        // those two slices changes mode — narrowing this to the TX slice would
-        // leave the ASR indicator stale after a CW→USB change on a non-TX
-        // active slice, with no other edge to correct it.
-        //
-        // Through activeSlice(), not an m_activeSliceId comparison: the gate
-        // itself calls activeSlice(), which falls back to the first isActive()
-        // slice when the cached id's slice is not active. Asking the same
-        // question the gate asks keeps the trigger and the gate from diverging
-        // inside that fallback window (PR #4932 review).
+        // CWX/DVK and their F1-F12 follow the TX slice (#4173); the ASR
+        // indicator follows the active slice (#4825), so re-evaluate when either
+        // changes mode. Compare via activeSlice(), the same call the gate makes
+        // (it falls back to the first isActive() slice).
         if (s->isTxSlice() || activeSlice() == s)
             updateKeyerAvailability();
 #ifdef HAVE_RADE
@@ -2219,6 +2199,8 @@ void MainWindow::onSliceAdded(SliceModel* s)
         // superseded by #4037's reattachSliceVisualsToPanadapter.
         clearCenterLockForSlice(s->sliceId(), /*clearPersistedIntent=*/true);
         reattachSliceVisualsToPanadapter(s);
+        // The TX slice moving pane moves a radio-wide span control (#5750).
+        syncPanSpanControlPlacement();
         updateKiwiSdrVirtualTrackingForSlice(s);
         refreshKiwiSdrWaterfallAvailability();
         syncKiwiSdrPanadapterUiStates();
@@ -2350,6 +2332,12 @@ void MainWindow::onSliceAdded(SliceModel* s)
 
     refreshSliceLinkUi();
     updateAetherDspModePolicy();
+
+    // A slice can arrive ALREADY flagged TX: RadioModel applies its fields
+    // before emitting sliceAdded, so the txSliceChanged lambda above never
+    // sees the false->true edge. Re-derive once now, or on connect the live
+    // span control stays on the fallback pane instead of the TX pane (#5750).
+    syncPanSpanControlPlacement();
 }
 
 void MainWindow::requestSliceClose(int sliceId)
@@ -2402,20 +2390,13 @@ void MainWindow::onSliceRemoved(int id)
                           " (live slice removal, id" << id << ")";
     }
 
-    // Center Lock (#3854 review): a LIVE removal normally clears the persisted
-    // letter intent too — Flex recycles letters lowest-free, so a dormant
-    // intent would silently re-lock a later, unrelated slice. A band-stack
-    // recall is the exception: band_persistence deliberately rebuilds the
-    // pan's slices, and the positive per-pan recall marker keeps intent alive
-    // until the bounded window can resolve the complete topology. Two guards
-    // ride on m_radioModel.slice(id):
-    //  - the stale-slice prune after reconnect emits sliceRemoved(oldId)
-    //    whose id collides with the NEW session's slices (slice 0 is always
-    //    0). Live removals emit AFTER the slice leaves the model, so a
-    //    non-null slice(id) means this is the prune — the active lock (and
-    //    intent) belong to the new slice; skip entirely.
-    //  - disconnect teardown never emits sliceRemoved, so reconnect/restart
-    //    intent survives — that is the restore feature.
+    // Center Lock: a live removal clears the persisted letter intent (Flex
+    // reuses letters lowest-free, so stale intent would re-lock an unrelated
+    // slice), except during a band-stack recall, whose per-pan marker keeps
+    // intent until the topology resolves. A non-null slice(id) means the
+    // post-reconnect stale prune (live removals emit after leaving the model),
+    // which belongs to the new slice: skip. Disconnect emits no sliceRemoved,
+    // so intent survives reconnect.
     if (!m_radioModel.slice(id)) {
         bool preservePersistedIntent = false;
         for (auto it = m_centerLockSliceByPan.cbegin();
@@ -2445,21 +2426,11 @@ void MainWindow::onSliceRemoved(int id)
     }
     refreshSliceLinkUi();
 
-    // A band-stack recall (band_persistence) DROPS and RE-CREATES the slice
-    // (same id, new band) instead of retuning it, which would tear down a
-    // KiwiSDR replacement on the removal. Defer that teardown across the
-    // remove->re-add so onSliceAdded can re-bind the Kiwi (retuned to the new
-    // band) instead of reverting to a plain Flex slice (#4158). m_kiwiRebind is
-    // the pure policy — see KiwiRebindTracker; identity is gated on band-recall
-    // intent and generation, not slice id + time.
-    //
-    // `live` distinguishes a genuine removal (the slice has already left the
-    // model, so slice(id) is null) from the reconnect stale-slice prune (a
-    // sliceRemoved(oldId) whose id already belongs to a live new-session slice)
-    // — same guard the center-lock logic above uses. Only a live Kiwi removal
-    // defers; the prune keeps the pre-existing immediate cleanup and never
-    // enters the grace path, so a stale prune can't later clear a live
-    // assignment.
+    // A band-stack recall drops and recreates the slice (same id), so defer a
+    // KiwiSDR replacement's teardown across remove → re-add and let
+    // onSliceAdded re-bind it (#4158; policy in KiwiRebindTracker). `live`
+    // (slice(id) null) separates a real removal from the reconnect stale prune;
+    // only live Kiwi removals defer, the prune cleans up immediately.
     const bool liveRemoval = !m_radioModel.slice(id);
     // Same reconstruction evidence as onSliceAdded, but a live removal cannot
     // name its pan — the slice has already left the model (see the comment on
@@ -2537,9 +2508,11 @@ void MainWindow::onSliceRemoved(int id)
         // the reason it is kept live for the whole split. The restore is
         // deferred past the radio's queued status burst. (#2242)
         recordSplitAudioMirror(/*deferRestore=*/true);
+        m_pendingSliceFrequencyEchoes.clear();
         m_splitActive = false;
         m_splitRxSliceId = -1;
         m_splitTxSliceId = -1;
+        m_splitRxFrequencyMhz = 0.0;
         if (auto* sw = spectrum()) sw->setSplitPair(-1, -1);
         if (auto* rx = m_radioModel.slice(rxId))
             rx->setTxSlice(true);
@@ -2598,18 +2571,10 @@ void MainWindow::onSliceRemoved(int id)
             if (m_ax25HfPacketDecodeDialog)
                 m_ax25HfPacketDecodeDialog->setAttachedSlice(nullptr);
             refreshMiniPanFollow();   // no active slice → blank the mini-pan readout/passband
-            // The last slice is gone, so every indicator's slice is gone with
-            // it. The re-select branch above reaches updateKeyerAvailability()
-            // through setActiveSliceInternal(); this branch has no such call,
-            // and without one the row keeps whatever state the departed slice
-            // left it in.
-            //
-            // Refresh only — deliberately NOT a teardown. The gate leaves an
-            // open Copy Assist panel alone on a null slice, because this branch
-            // is on the band-recall path: with band_persistence the radio drops
-            // and re-creates the slice under the same id (KiwiRebindTracker.h,
-            // #4158), and a single-slice setup passes through here on every band
-            // change (#4932 review).
+            // No slice left: refresh the indicator row
+            // (setActiveSliceInternal() does it on the re-select branch). Refresh
+            // only, never teardown: single-slice band recalls pass through here
+            // (#4158), and the gate leaves an open Copy Assist panel alone.
             updateKeyerAvailability();
         }
     }
@@ -2976,16 +2941,11 @@ void MainWindow::scheduleProfileLoadRecovery(const QString& profileType,
     });
     QTimer::singleShot(kProfileLoadDeferredPanFlushDelayMs, this, [this]() {
         flushPendingProfileLoadPanDimensions();
-        // Deferred pan WRITES (center/bandwidth/band) are NOT flushed from
-        // here. RadioModel owns that replay — hold-relative, armed by the act
-        // of deferring — because this entire recovery pass is gated on the
-        // profile-load ACK, and a large topology (8 pans / 8 slices, measured
-        // 5/5 on a 6700) can stall the radio into a force-disconnect before
-        // the ACK ever arrives; a flush scheduled here would never run. A
-        // dimensions-then-centers ordering is NOT required for correctness:
-        // every VITA-49 tile carries its own FrameLowFreq/BinBandwidth, so a
-        // recenter that lands before the pixel geometry settles is a
-        // self-correcting transient, not a scar. (#4142)
+        // Deferred pan WRITES (center/bandwidth/band) are replayed by
+        // RadioModel, not here: this pass waits for the profile-load ACK,
+        // which a large topology can stall past a force-disconnect. Ordering
+        // vs dimensions does not matter, since each VITA-49 tile carries its
+        // own FrameLowFreq/BinBandwidth (#4142).
     });
     QTimer::singleShot(kProfileLoadPostHoldRecoveryDelayMs, this, [this]() {
         m_profileLoadPendingFftYpixels.clear();
@@ -3184,17 +3144,11 @@ void MainWindow::wirePanDisplayStatus(PanadapterApplet* applet,
         }));
     m_panDisplayStatusConnections.insert(panId, connections);
 
-    // When the ENGINE shapes the frame rate, the seeding runs the other way:
-    // the radio reports no display state, so the pan model has nothing to give
-    // the widget and it is the widget's current slider values that the shaper
-    // needs. Done before the reads below so those still see a populated model.
-    // Without it the stream is shaped to the built-in defaults until the
-    // operator happens to touch a slider.
-    // Same predicate, told to the widget: it selects which rate-to-cadence law
-    // seeds the time axis, and the two disagree by more than 10x in the middle
-    // of the slider (core/WaterfallRate.h). Set unconditionally, not inside the
-    // branch below — a pan re-wired after switching from a self-shaping backend
-    // to a Flex has to be told the law changed back.
+    // When the engine shapes the frame rate, seed the shaper from the widget's
+    // current sliders (the radio reports no display state), before the reads
+    // below. Tell the widget which rate-to-cadence law applies
+    // (core/WaterfallRate.h; they differ >10x mid-slider), unconditionally so a
+    // switch back to Flex resets it.
     sw->setWfRateShapedLocally(m_radioModel.shapesDisplayRatesLocally());
     if (m_radioModel.shapesDisplayRatesLocally()) {
         if (const auto savedRate = ClientDisplaySettings::waterfallRate(
@@ -3230,28 +3184,13 @@ void MainWindow::wirePanDisplayStatus(PanadapterApplet* applet,
     }
 }
 
-// Display panel → "Clone to all Pans" (sits above Reset to Defaults).
-//
-// Every value the Display panel can change is written onto every OTHER open
-// panadapter. Three kinds of setting live in that panel and each has to travel
-// its own way — a single "copy the settings blob" pass would get two of them
-// wrong:
-//
-//   1. Client appearance (trace colours, fill, waterfall palette/blanker,
-//      background, grid, 3D view). The SpectrumWidget setters both apply and
-//      persist under the target's own per-pan settingsKey(), so calling them is
-//      the whole job.
-//   2. Client appearance whose setter does NOT persist (background image path
-//      and opacity — MainWindow has always owned those writes, see the
-//      backgroundImage* handlers). Persisted explicitly here.
-//   3. Radio-authoritative values (FFT average / FPS / weighted average,
-//      waterfall line duration, color gain, black level). Per AGENTS.md these
-//      are never persisted client-side; they are cloned by sending the same
-//      commands the live sliders send, so the radio echoes them back as status.
-//
-// Kiwi-backed pans re-use the waterfall gain/black/rate controls for a different
-// quantity (dBm range), so those three are skipped for such a target exactly as
-// the live per-control handlers skip them.
+// Display panel → "Clone to all Pans": copy every Display-panel value onto every
+// other open pan, by kind: (1) client appearance via SpectrumWidget setters,
+// which persist under the target's settingsKey(); (2) background image path and
+// opacity, whose setters do not persist, so persisted here; (3) radio-
+// authoritative values (FFT avg/FPS/weighted, line duration, color gain, black
+// level), sent as the live sliders' commands and never persisted. Kiwi targets
+// skip gain/black/rate, which mean dBm range there.
 int MainWindow::cloneDisplaySettingsToAllPans(PanadapterApplet* source)
 {
     if (!source || !m_panStack) {
@@ -3403,27 +3342,11 @@ int MainWindow::cloneDisplaySettingsToAllPans(PanadapterApplet* source)
             }
         }
 
-        // Repaint the target's own Display panel so an operator who opens it
-        // sees the cloned values rather than the pre-clone slider positions.
-        // BOTH steps run for a Kiwi target, in this order.
-        //
-        // syncKiwiSdrPanadapterUiState() alone is not enough: on a pan that is
-        // actually displaying Kiwi it falls through to the final block and
-        // calls syncKiwiWaterfallSettings() only — its internal
-        // syncFlexDisplaySettings() runs on the two EARLY-RETURN paths (no
-        // profile, or profile present but not displaying Kiwi). So a Kiwi
-        // target would get its WF Ceiling/Floor/Rate refreshed and nothing
-        // else: heat map, grid, line width/colour, fill, FFT floor, colour
-        // scheme, render mode, 3D and average would all still show the
-        // pre-clone positions, and the panel would read as if the clone had
-        // not happened.
-        //
-        // Running the Flex sync first is safe even though it opens with
-        // setKiwiWaterfallControlMode(false): syncDisplaySettings() blocks its
-        // signals, and the dBm span lives in the profile / KiwiSdrManager
-        // rather than in the menu, so syncKiwiWaterfallSettings() re-reads it
-        // (profile.waterfallMinDbm/MaxDbm) and the transient 0..100 clamp
-        // cannot destroy anything.
+        // Refresh the target's Display panel. For a Kiwi target run both steps
+        // in this order: syncKiwiSdrPanadapterUiState() alone only refreshes the
+        // WF ceiling/floor/rate on a pan displaying Kiwi. The Flex sync first is
+        // safe: syncDisplaySettings() blocks signals and the Kiwi dBm span is
+        // re-read from the profile.
         if (SpectrumOverlayMenu* dstMenu = dst->overlayMenu()) {
             dstMenu->syncDisplaySettings(
                 dst->fftAverage(), dst->fftFps(),
@@ -3454,16 +3377,10 @@ int MainWindow::cloneDisplaySettingsToAllPans(PanadapterApplet* source)
     }
 
     if (cloned > 0) {
-        // The two radio-GLOBAL auto-black flags, asserted ONCE after the loop
-        // rather than per target. The per-target block deliberately omits them
-        // because they are not per-pan — but "the source pan's own toggle
-        // already set them" only holds if the operator toggled it THIS session:
-        // on a fresh start the source restores wfAutoBlack /
-        // wfAutoBlackRadioSide from AppSettings without ever passing through
-        // wfAutoBlackChanged / wfAutoBlackSourceChanged, so the radio-side
-        // flags can still be at their defaults. Idempotent, and one write.
-        // Radio-side INTENT, not the capability-masked value, for the same
-        // reason the per-target clone uses wfAutoBlackRadioSide().
+        // The two radio-global auto-black flags, sent once after the loop: on a
+        // fresh start the source restores them from AppSettings without the
+        // change signals, so the radio may still hold defaults. Uses the
+        // radio-side intent (wfAutoBlackRadioSide()), as the per-target clone does.
         if (!srcIsKiwi) {
             m_radioModel.setWaterfallAutoBlack(src->wfAutoBlack());
             m_radioModel.setWaterfallAutoBlackSource(src->wfAutoBlackRadioSide());
@@ -3479,67 +3396,21 @@ void MainWindow::selectBand(const QString& panId, const QString& bandName, doubl
     qDebug() << "MainWindow: switching to band" << bandName
              << "freq:" << freqMhz << "mode:" << mode;
 
-    // Maintainer note: keep band changes radio-authoritative.
-    //
-    // The Flex band stack owns the state users expect to survive a band
-    // jump: frequency, mode, filters, pan center, bandwidth/zoom, and
-    // built-in antenna selection. Aether should therefore send exactly one
-    // `display pan set <panId> band=<key>` command when it can form a
-    // spec-correct key. Do not use the `freqMhz` / `mode` arguments as a
-    // local fallback; those are static UI defaults, and the old fallback
-    // reset users to band-center SSB instead of restoring their saved stack
-    // state (#1876, #1852, #1856, #1849).
-    //
-    // UI band names are not always protocol keys:
-    //   - Native bands are displayed as "20m", "630m", etc., but Flex
-    //     expects bare keys such as "20" and "630".
-    //   - XVTR names are user labels such as "2m" or "70cm"; do not strip
-    //     those into native-band keys. Flex expects `X<index>`, where
-    //     `index` is the xvtr status-object number from `xvtr <n>` messages
-    //     (0-based), not the radio's 1-based setup-order field (#2342).
-    //   - WWV / GEN use numeric band-stack slots 33 / 34 from SmartSDR
-    //     capture history (#1540/#1211).
-    //   - Built-in 4m / 2m hardware bands use bare keys "4" / "2" only
-    //     when the connected model reports those capabilities.
-    //   - Configured XVTR buttons also pass explicit X<n> keys so a
-    //     user XVTR named "4m" can still be selected on a radio that
-    //     also has native 4m hardware.
-    //
-    // If no supported mapping exists, refuse the band change and leave the
-    // current slice/pan state untouched. Guessing is worse than failing
-    // visibly because a wrong tune destroys the very band-stack state this
-    // path exists to preserve.
-    // ── Radios with no band stack of their own ────────────────────────
-    //
-    // Everything below this branch is Flex band-stack machinery: it resolves
-    // a protocol band key and sends "display pan set … band=", and the radio
-    // restores frequency, mode, filters and antenna from state IT owns. A
-    // Hermes-Lite 2 owns none of that — it has no VFO to read back and no
-    // stack to restore — so that command reached nothing and the band
-    // buttons did precisely nothing on this family.
-    //
-    // Here the APP is authoritative, so the freqMhz/mode the button carries
-    // are used directly. That is the exact opposite of the rule stated above
-    // for Flex, and deliberately so: those arguments are "static UI
-    // defaults" only when something better exists, and on this family
-    // nothing does. Tuning to band centre in the band's usual mode is what
-    // every radio without a stack does.
+    // Flex: band changes are radio-authoritative. Send exactly one
+    // `display pan set <panId> band=<key>` and let the radio restore freq, mode,
+    // filters, pan center/zoom and antenna; never fall back to freqMhz/mode
+    // (#1876, #1852). Keys: native "20m" → "20"; XVTR → `X<index>` (0-based xvtr
+    // status-object number, #2342), even for a user XVTR named like a native
+    // band; WWV / GEN → 33 / 34; built-in 4m / 2m → "4" / "2" when the model has
+    // them. No mapping → refuse and leave state untouched.
+    // Radios without a band stack (HL2): the app is authoritative, so tune to
+    // the button's freqMhz/mode directly.
     if (!m_radioModel.usesFlexCommandPlane()) {
         const RadioCapabilities caps = m_radioModel.backendCapabilities();
-        // Refuse rather than tune somewhere the receiver cannot hear. Only
-        // when the backend actually reported a range — a backend that
-        // reports none keeps the previous unconditional behaviour.
-        //
-        // Through evaluateBandTune() rather than an inline comparison, so
-        // this button and the typed-tune gate cannot drift apart in either
-        // the decision or the sentence the operator reads (#5041) — above
-        // 54 MHz, which is as far as the shared answer reaches: the typed
-        // path returns before any range check when both frequencies are
-        // below that, so a 50.150 typed on an HL2 still tunes out of range
-        // silently while this button for the same band is disabled. We are
-        // inside the non-Flex branch, so the XVTR/band-stack half of that
-        // function is unreachable from here and its Flex arguments are the
-        // empty defaults.
+        // Refuse rather than tune outside a reported receiver range (no range
+        // reported = no check). evaluateBandTune() is shared with the typed-tune
+        // gate (#5041) so decision and message match; the typed path only range-
+        // checks above 54 MHz. Flex/XVTR arguments are empty defaults here.
         const auto admissibility =
             XvtrPolicy::evaluateBandTune(false, bandName, freqMhz,
                                          caps.tuningMinHz, caps.tuningMaxHz,
@@ -3592,35 +3463,12 @@ void MainWindow::selectBand(const QString& panId, const QString& bandName, doubl
 
     if (stackKey.isEmpty()
         && m_radioModel.declaredBands().contains(bandName, Qt::CaseInsensitive)) {
-        // Radio-declared band (see RadioModel::declaredBands): the radio
-        // told us it tunes this natively, so pass the declared name
-        // through as the band-stack key — the declaring radio defines
-        // and honours these keys (e.g. band=440 on an IC-9700 gateway).
-        // Real Flex radios never declare bands, so their unsupported-band
-        // refusal below is unchanged.
-        //
-        // NB the resolveBandStackKey() attempt above runs FIRST, so a
-        // declared band that ALSO matches the impersonated model's native
-        // capability resolves natively and never reaches here — e.g. a
-        // gateway advertising FLEX-6700 (has2Meters) + bands=2m,440,23cm
-        // sends the bare native key `2` for 2m, but the declared tokens
-        // `440`/`23cm` for the bands the model has no native slot for. A
-        // declaring bridge must therefore honour both the bare Flex keys
-        // and its declared tokens, per band.
-        //
-        // The same FIRST-wins rule means a user XVTR labelled e.g. "2m"
-        // out-ranks a gateway's declared "2m": resolveBandStackKey()
-        // resolves the XVTR to its X<n> key above and this fallthrough
-        // never runs. That is intentional and consistent with the
-        // XVTR-priority precedent already codified for native bands
-        // (#2342, above) — declared tokens do not override a same-named
-        // user XVTR (#4191, follow-up #2 from the #4027 review).
-        //
-        // The contains() match is CaseInsensitive so a declared-band
-        // selection arriving from a non-UI path (memory-channel recall,
-        // CAT) with off-canonical casing like "23CM" still matches the
-        // canonical BandDefs spelling parseDeclaredBands() stored; UI band
-        // buttons already emit canonical names (#4191, follow-up #3).
+        // Radio-declared band (RadioModel::declaredBands): pass the name
+        // through as the band-stack key (e.g. band=440 on an IC-9700 gateway).
+        // resolveBandStackKey() runs first, so native slots and same-named
+        // user XVTRs win (#4191); a declaring bridge must honour both bare Flex
+        // keys and its declared tokens. CaseInsensitive so "23CM" from
+        // CAT/memory recall matches.
         stackKey = bandName;
     }
 
@@ -4148,17 +3996,10 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         if (effBw > 0.0) {
             center = std::max(center, effBw / 2.0);
         }
-        // The radio may acknowledge this command without echoing a display status
-        // to the setting client, so requestPanCenter() keeps the canonical model
-        // aligned with the wire command (TCI dds: follows this center) — and
-        // during a profile load it defers rather than letting sendCmd drop it
-        // silently (#4142).
-        //
-        // DRAG: this is the operator moving the window itself, which on a
-        // backend whose scope is slaved to the VFO is a retune and nothing
-        // else. Every other centre-only caller in this file is a follow,
-        // reveal or recentre and takes the default (Range) — see
-        // RadioModel::requestPanCenter().
+        // requestPanCenter() keeps the model aligned even if the radio sends no
+        // display status back (TCI dds follows it) and defers during profile
+        // load (#4142). Intent Drag: on a VFO-slaved scope that is a retune;
+        // other centre-only callers use the default Range.
         m_radioModel.requestPanCenter(applet->panId(), center, -1.0,
                                       IRadioBackend::PanCenterIntent::Drag);
     });
@@ -4198,34 +4039,13 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         const bool profileLoadHeld = profileLoadRadioStateWritesHeld();
         const bool autoFloorChange = sw->pendingAutoNoiseFloorDbmRange();
 
-        // A backend whose auto-floor CANNOT CONVERGE never gets to finish this
-        // handshake: the loop moves the reference level, requests the range,
-        // and waits. With nothing to confirm it reads the unchanged floor as
-        // "not there yet" and steps again — a measured 24 dB/s ratchet that
-        // walks off the bottom of the scale (-202 … -1882 dBm) and only becomes
-        // visible when dbmRangeLooksPlausible() starts rejecting it at -180.
-        // Re-seed the widget from the pan's real range instead, which is the
-        // same recovery the profile-load path above uses, and drop the request.
-        //
-        // THIS IS THE SAME QUESTION SpectrumWidget::applyNoiseFloorAutoAdjust
-        // asks, so it must ask it the same way — noiseFloorAutoAdjustAllowed,
-        // the OR of the echo and absolute bins. The three other capability
-        // gates in this file are about whether a range can be SENT, and stay on
-        // radioOwnsDbmScale alone. This one is not: it is about whether the
-        // loop terminates. Gating it on the echo alone re-seeds the widget out
-        // from under a loop that converges perfectly well without one (ANAN,
-        // whose bins are absolute), which leaves the echo pending, stalls the
-        // loop, and hands the operator a reference level that snaps back to the
-        // pan's saved range every iteration.
-        //
-        // It stays as a backstop rather than becoming dead code: a pane created
-        // before connect has not been pushed either value yet, and one pane
-        // ratcheting is enough to churn the session.
-        //
-        // Deliberately NOT setNoiseFloorEnable(false): that is the operator's
-        // own toggle, and forcing it would both fight the overlay menu and lose
-        // the setting for the next radio. The auto-floor stays enabled and
-        // simply has nothing to chase on a fixed scale.
+        // A backend whose auto-floor cannot converge would ratchet the reference
+        // level down ~24 dB/s forever, so re-seed the widget from the pan's real
+        // range and drop the request. Same predicate as
+        // SpectrumWidget::applyNoiseFloorAutoAdjust (noiseFloorAutoAdjustAllowed:
+        // echo OR absolute bins), unlike the "can a range be SENT" gates. Kept as
+        // a backstop for panes created before connect. Never forces
+        // setNoiseFloorEnable(false), the operator's toggle.
         const RadioCapabilities& dbmCaps = m_radioModel.backendCapabilities();
         if (autoFloorChange
             && !noiseFloorAutoAdjustAllowed(dbmCaps.radioOwnsDbmScale,
@@ -5273,18 +5093,10 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
 
         auto* s = preferredMemorySlice(applet->panId());
         const bool tciSpot = it->source.compare(QStringLiteral("TCI"), Qt::CaseInsensitive) == 0;
-        // The two branches gate asymmetrically on purpose (#3145, #3152):
-        //   TCI branch  — must mirror AetherSDR's own local-tune outcome, so it
-        //                 suppresses when a local tune would also be blocked
-        //                 (no slice, slice locked, or SWR sweep in progress).
-        //                 Notifying Log4OM under lock/SWR would diverge the
-        //                 client's view from the radio's actual state.
-        //   Radio branch — delegates gating to the radio firmware via the
-        //                  `spot trigger` command; the firmware applies its
-        //                  own lock/SWR/passive checks. We only suppress
-        //                  passive-local spots that have no upstream trigger.
-        // Do not "normalise" these — collapsing the guards regresses Log4OM
-        // behavior under lock or SWR sweep.
+        // Asymmetric gating on purpose (#3145, #3152). TCI: suppress whenever a
+        // local tune would be blocked (no slice, locked, SWR sweep) so Log4OM
+        // matches local state. Radio: `spot trigger` lets firmware apply its own
+        // lock/SWR/passive checks; only passive-local spots are suppressed.
         if (tciSpot) {
             if (tciServer() && s && !s->isLocked() && !m_swrSweep.running)
                 tciServer()->notifySpotClicked(spotIndex, s);
@@ -5451,6 +5263,8 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             this, &MainWindow::setKiwiSdrVirtualAntennaForSlice);
     connect(menu, &SpectrumOverlayMenu::flexRxAntennaSelected,
             this, &MainWindow::clearKiwiSdrVirtualAntennaForSlice);
+    connect(menu, &SpectrumOverlayMenu::antennaChoiceRefused,
+            this, &MainWindow::announceAntennaChoiceRefused);
 
     // ── Slice marker clicks ──────────────────────────────────────────────
     connect(sw, &SpectrumWidget::sliceClicked,
@@ -5513,22 +5327,17 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
 
     // ── WNB / RF Gain ────────────────────────────────────────────────────
     connect(menu, &SpectrumOverlayMenu::wnbToggled,
-            this, [this, sw, applet](bool on) {
+            this, [this, applet](bool on) {
         m_radioModel.sendCommand(
             QString("display pan set %1 wnb=%2").arg(applet->panId()).arg(on ? 1 : 0));
         // The radio echoes WNB state, level, and normalization progress.
         // Let PanadapterModel drive the spectrum indicator and related menus.
-        auto& s = AppSettings::instance();
-        s.setValue(sw->settingsKey("DisplayWnbEnabled"), on ? "True" : "False");
-        s.save();
+        // No client copy is saved: the radio persists WNB itself (#5111).
     });
     connect(menu, &SpectrumOverlayMenu::wnbLevelChanged,
-            this, [this, sw, applet](int level) {
+            this, [this, applet](int level) {
         m_radioModel.sendCommand(
             QString("display pan set %1 wnb_level=%2").arg(applet->panId()).arg(level));
-        auto& s = AppSettings::instance();
-        s.setValue(sw->settingsKey("DisplayWnbLevel"), QString::number(level));
-        s.save();
     });
     connect(menu, &SpectrumOverlayMenu::rfGainChanged,
             this, [this, sw, applet](int gain) {
@@ -5544,16 +5353,9 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         s.save();
     });
 
-    // AUTO RF GAIN. Through the model, for the same reason the gain itself is:
-    // a backend that owns the loop in its own state is the only thing that can
-    // arm it, and there is no wire text for this on any family.
-    //
-    // NOTHING IS PERSISTED HERE, unlike the RF Gain slider immediately above.
-    // The switch is the BACKEND's to remember, in its own operating state --
-    // docs/HERMES.md asks that a value the radio cannot store be persisted in
-    // the family's OperatingState path and "never in a flat AppSettings key",
-    // and a preference recorded per-family in shared GUI settings was exactly
-    // that. So this lambda commands and reflects, and owns no storage.
+    // Auto RF gain goes through the model (only the backend can arm its loop)
+    // and is NOT persisted here: the backend keeps it in its own operating
+    // state (docs/HERMES.md: never a flat AppSettings key).
     connect(menu, &SpectrumOverlayMenu::autoRfGainChanged,
             this, [this, sw](bool on) {
         auto* autoGain = m_radioModel.autoRfGain();
@@ -5567,10 +5369,9 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             autoGain->setArmed(on);
         }
         // READ BACK WHAT ACTUALLY HAPPENED, regardless. The backend may DECLINE
-        // to arm -- the HL2 refuses from a gain baseline inside the register
-        // region where #5354 measured +48 dB reading identically to +18 dB --
-        // and a checkbox that stayed ticked over a control that is not running
-        // would be the #5395 defect exactly: a UI reporting one state while the
+        // to arm -- the HL2 refuses from a gain baseline above its arming
+        // ceiling -- and a checkbox that stayed ticked over a control that is
+        // not running would be the #5395 defect: a UI reporting one state while the
         // radio is in another. The settled signal normally lands first, inside
         // setArmed(); this is the guard for a backend that settled silently.
         if (auto* m = sw->overlayMenu()) {
@@ -5617,34 +5418,13 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     refreshKiwiSdrWaterfallAvailability();
 }
 
-// AN ARM REQUEST SETTLED, from whichever route asked. Reflect it on every pan's
-// copy of the control, and if it was a refusal, say why.
-//
-// ONE HANDLER FOR ALL ROUTES. The Auto checkbox used to learn the outcome only
-// by reading isArmed() back after its own click. That covers the click and
-// nothing else: the HL2 arms (or refuses) from its stored preference inside its
-// own link-up handler, after it has already emitted connected(), and a bridge
-// `pan autorfgain on` arms without going near a widget. On both, the checkbox
-// reported the wrong state and a refusal was silent -- the #5817 springback,
-// just not on a click (#5395 is the same defect seen from the other side).
-//
-// WHAT GOES WHERE. The armed state and the refusal DESCRIPTION go on every
-// pan's checkbox, because the control is radio-wide and each pan carries a
-// copy: the description is state, and a copy left saying "declined" over a
-// running loop would be read out as such. setAutoRfGainEnabled(true) is what
-// clears a standing description. The card and the spoken announcement go
-// ONCE, on the active pan, where the operator is looking.
-//
-// ON THE PANADAPTER, NOT THE STATUS BAR, and not a dialog either. Not a dialog
-// because #4227 is stacked unclosable message boxes, and a refusal the
-// operator asked for by clicking does not warrant one. Not the status bar
-// because of #4649: any non-empty temporary message hides m_statusBarContainer
-// wholesale for its whole duration, taking the TX indicator, PA temperature
-// and supply voltage with it -- MainWindow.cpp and MainWindow_Controllers.cpp
-// both route away from it for the same reason. The card takes its OWN id
-// rather than riding on the interlock's "interlock.active" latest-wins: a
-// gain refusal must not evict a live "Transmit disabled" card, nor be evicted
-// by one.
+// An auto-RF-gain arm request settled, from any route (click, the HL2's stored
+// preference at link-up, bridge `pan autorfgain on`) (#5817, #5395). Armed state
+// and refusal description go on every pan's checkbox (radio-wide control);
+// setAutoRfGainEnabled(true) clears a description. The card and announcement go
+// once, on the active pan. Not a dialog (#4227) nor the status bar (temporary
+// messages hide the permanent widgets, #4649). The card has its own id so it
+// never evicts or is evicted by "interlock.active".
 void MainWindow::onAutoRfGainArmSettled(bool armed)
 {
     if (!m_panStack) {
@@ -5853,18 +5633,11 @@ void MainWindow::applyTuneCenteringWrite(PanadapterModel* pan,
 MainWindow::TuneCenteringResult MainWindow::panFollowVfo(
     SliceModel* s, double mhz, const char* source)
 {
-    // Incremental tuning uses a trigger margin and a slightly wider settle
-    // margin so the slice glides back into a comfortable visible area without
-    // dead-centering or waiting until it actually crosses the pan edge.
-    //
-    // Per #2761, when this slice has a visible VFO flag, the trigger compares
-    // against the *outer edge of the flag* rather than the slice frequency
-    // itself — so the flag panel doesn't clip the pan edge before the pan
-    // starts to scroll.  Split pairs (LockLeft + LockRight rendered on the
-    // same marker) extend the trigger on *both* sides; non-split slices extend
-    // on the side the flag placement rules predict for the new frequency.
-    // Non-flagged and compact-mode slices fall through to the original
-    // slice-frequency comparison (both offsets stay 0.0).
+    // Incremental tuning: a trigger margin plus a slightly wider settle margin,
+    // so the slice glides back into view without dead-centering. With a visible
+    // VFO flag the trigger uses the flag's outer edge (#2761): split pairs extend
+    // both sides, others the side flag placement predicts. Unflagged/compact
+    // slices keep zero offsets.
     double leftFlagOffsetMhz  = 0.0;
     double rightFlagOffsetMhz = 0.0;
     if (auto* sw = spectrumForSlice(s)) {
@@ -5917,6 +5690,8 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
             this, &MainWindow::setKiwiSdrVirtualAntennaForSlice);
     connect(w, &VfoWidget::flexRxAntennaSelected,
             this, &MainWindow::clearKiwiSdrVirtualAntennaForSlice);
+    connect(w, &VfoWidget::antennaChoiceRefused,
+            this, &MainWindow::announceAntennaChoiceRefused);
     connect(s, &SliceModel::frequencyChanged, this, [this, s](double) {
         updateKiwiSdrVirtualTrackingForSlice(s);
     });
@@ -5929,18 +5704,10 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
     connect(s, &SliceModel::panIdChanged, this, [this, s](const QString&) {
         updateKiwiSdrVirtualTrackingForSlice(s);
     });
-    // Re-send the tracked-slice command when the radio's CW pitch changes so
-    // an already-active KiwiSDR CW session's BFO offset stays in sync (#4423)
-    // instead of going stale until the next frequency/mode/filter edit.
-    // cwPitchChanged (not phoneStateChanged) so this doesn't re-run on every
-    // unrelated VOX/mic/dexp status update for every wired slice.
-    // Context is `s` (not `this`) so Qt disconnects when the slice dies —
-    // slices come and go far more often than MainWindow does (band changes,
-    // stale-slice pruning); that was a real UAF fixed earlier on this PR.
-    // But that leaves the captured `this` untracked by Qt's own lifetime
-    // handling, so guard it separately with a QPointer (same idiom as
-    // AetherDspWidget::onDspToggled) for the rare case MainWindow is torn
-    // down while the slice and TransmitModel are still alive.
+    // Re-send the tracked-slice command on CW pitch change so an active KiwiSDR
+    // CW session's BFO stays in sync (#4423); cwPitchChanged, not
+    // phoneStateChanged, to avoid unrelated status churn. Context is `s` so the
+    // connection dies with the slice; `this` is guarded by a QPointer.
     QPointer<MainWindow> self(this);
     connect(&m_radioModel.transmitModel(), &TransmitModel::cwPitchChanged,
             s, [self, s](int) {
@@ -6028,7 +5795,7 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
     });
     // Record/playback — route to radio or client-side QsoRecorder (#1297)
     connect(w, &VfoWidget::recordToggled, this, [this, w, sliceId](bool on) {
-        bool clientSide = AppSettings::instance().value("RecordingMode", "Client").toString() == "Client";
+        const bool clientSide = m_qsoRecorder->recordsOnClientNow();
         if (clientSide) {
             if (on)
                 m_qsoRecorder->startRecording();
@@ -6064,7 +5831,7 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
     });
     // Client-side playback
     connect(w, &VfoWidget::playToggled, this, [this, sliceId](bool on) {
-        bool clientSide = AppSettings::instance().value("RecordingMode", "Client").toString() == "Client";
+        const bool clientSide = m_qsoRecorder->recordsOnClientNow();
         if (clientSide) {
             if (on)
                 m_qsoRecorder->startPlayback();
@@ -6145,9 +5912,12 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
         auto* rx = m_radioModel.slice(m_splitRxSliceId);
         auto* tx = m_radioModel.slice(m_splitTxSliceId);
         if (!rx || !tx) return;
-        double rxFreq = rx->frequency();
-        double txFreq = tx->frequency();
-        applyTuneRequest(rx, txFreq, TuneIntent::IncrementalTune, "split-swap-rx");
+        const double rxFreq = rx->frequency();
+        const double txFreq = tx->frequency();
+        applyTuneRequest(rx, txFreq, TuneIntent::IncrementalTune,
+                         "split-swap-rx");
+        // Only radio observations advance the QSY reference; a queued status
+        // can still report the pre-SWAP frequency while these tunes are pending.
         applyTuneRequest(tx, rxFreq, TuneIntent::IncrementalTune, "split-swap-tx");
     });
 
@@ -6305,19 +6075,11 @@ void MainWindow::wireModemAudioCompletion()
     });
 }
 
-// One owner for the amplifier's TX meters on the SHARED readouts — the
-// S-Meter, the cross-needle and the TMate2 — matching the rule the applet
-// gauges already follow.
-//
-// The radio-relayed AMP meters and the amplifier's own port-9008 status carry
-// the same forward power and SWR; on a steady carrier they agree to within
-// 0.05 dB. What differs is rate: the relay rides the radio's meter packets,
-// the socket is polled at 5 Hz. So the relay wins while its sample is fresh,
-// and the socket takes over about a second after the relay stops — which is
-// also what gives these readouts a value when no radio is relaying at all.
-//
-// Without this the two sources simply alternated, and the S-Meter jittered
-// between two slightly different numbers at the beat rate between them.
+// One owner for amplifier TX meters on the shared readouts (S-Meter,
+// cross-needle, TMate2). The radio relay and port-9008 status agree within
+// 0.05 dB but run at different rates (meter packets vs 5 Hz poll), so the relay
+// wins while fresh and the socket takes over ~1 s after it stops; otherwise the
+// S-Meter would jitter between them.
 void MainWindow::applyAmpTxMeters(float watts, float swr, bool fromRelay)
 {
     if (fromRelay) {
@@ -6406,8 +6168,16 @@ void MainWindow::wireMeters()
         m_appletPanel->setCrossNeedleDirectionalValues(
             fwd, reflected, swrValid ? swr : 1.0f, reflectedPowerMeasured);
     });
+    // The S-meter's TX "Level" face reads the first argument: MICPEAK on a
+    // radio that publishes no MIC meter (HL2).
     connect(&m_radioModel.meterModel(), &MeterModel::micMetersChanged,
-            m_appletPanel->sMeterWidget(), &SMeterWidget::setMicMeters);
+            m_appletPanel->sMeterWidget(),
+            [this](float micLevel, float compLevel, float micPeak, float compPeak) {
+        const MeterModel& meters = m_radioModel.meterModel();
+        m_appletPanel->sMeterWidget()->setMicMeters(
+            meters.transmitLevelFaceValue(micLevel, micPeak),
+            compLevel, micPeak, compPeak);
+    });
     connect(&m_radioModel.transmitModel(), &TransmitModel::moxChanged,
             m_appletPanel, &AppletPanel::setMeterTransmitting);
 
@@ -6415,16 +6185,10 @@ void MainWindow::wireMeters()
     // Use TGXL-specific meters when available (disambiguated from PGXL by handle)
     connect(&m_radioModel.meterModel(), &MeterModel::tgxlMetersChanged,
             m_appletPanel->tunerApplet(), &TunerApplet::setRadioMeters);
-    // Note: txMetersChanged NOT connected to TunerApplet — exciter power
-    // would overwrite TGXL readings.
-    //
-    // The tuner's own port-9010 status carries the same two readings and is
-    // wired in TunerApplet::setTunerModel. BOTH feeds are live, and they are
-    // the same measurement: on a steady carrier the relayed AMP/FWD meter and
-    // the device's `fwd` field agreed to within 0.05 dB. They are no longer
-    // last-writer-wins — each arrives through a stamped entry point and the
-    // relay wins while fresh, because it runs at the radio's meter rate while
-    // the socket is polled at 1 Hz. (#625)
+    // txMetersChanged is not connected to TunerApplet (exciter power would
+    // overwrite TGXL readings). The port-9010 status (TunerApplet::setTunerModel)
+    // carries the same readings; each feed is stamped and the relay wins while
+    // fresh, since the socket is polled at 1 Hz (#625).
     m_appletPanel->tunerApplet()->setTunerModel(&m_radioModel.tunerModel());
     m_appletPanel->tunerApplet()->setMeterModel(&m_radioModel.meterModel());
 
@@ -6618,6 +6382,17 @@ void MainWindow::wireMeters()
             }
         });
     }
+    // OPERATE / STANDBY / BYPASS on a TGXL reached by manual IP only: no radio
+    // relays them, nothing was sent. Every surface (applet keys, the status-bar
+    // cycle, the SWR sweep's bypass) funnels through TunerModel, so one
+    // connection announces them all.
+    connect(&m_radioModel.tunerModel(), &TunerModel::relayedCommandRefused,
+            this, [this](const QString& command) {
+        qCWarning(lcDevices) << "TGXL" << command
+                             << "refused: operate/standby/bypass need a Flex radio"
+                             << "to relay them; this tuner is reached by IP only";
+        showUnsupportedControlNotice();
+    });
     // Same for the PGXL: the per-port block, the state word and the alert
     // channel live in the model rather than being decoded into the applet
     // here, so the applet has one source for them whichever path they arrive
@@ -6709,20 +6484,12 @@ void MainWindow::wireMeters()
         // AmpModel::ampStateChanged on both paths.
         if (kvs.contains("fanmode"))
             amp->setFanMode(kvs["fanmode"]);
-        // MEffA is NOT set from here. On this path AmpModel owns it —
-        // AmpModel::meffaChanged carries the state AND whether the `setup`
-        // group is known well enough to write it, which the raw kv-set cannot
-        // say. setMeff() below is the relay-only path, where it is read-only.
-        // Ensure the S-Meter is in TX mode when the PGXL reports transmitting.
-        // The VALUES come from AmpModel::directMetersChanged below — this is
-        // the state word, which only the raw kv-set carries.
-        //
-        // Gated on the amplifier being in circuit, for the same reason the
-        // value feed is. In STANDBY the state word is STANDBY and never
-        // TRANSMIT_*, so an ungated push would force the S-Meter and the
-        // cross-needle out of TX mode five times a second for the whole of a
-        // barefoot transmission — the authoritative edge comes from
-        // TransmitModel::moxChanged, and this must not fight it.
+        // MEffA is not set here: AmpModel::meffaChanged owns it (with whether
+        // the `setup` group is known well enough to write). The `state` word
+        // puts the S-Meter in TX mode; values come from directMetersChanged.
+        // Gated on the amp being in OPERATE, or STANDBY would force the meters
+        // out of TX mode at 5 Hz during barefoot TX (moxChanged is the
+        // authoritative edge).
         if (kvs.contains("state")
                 && m_radioModel.amplifier().present()
                 && m_radioModel.amplifier().operate()) {
@@ -6730,16 +6497,10 @@ void MainWindow::wireMeters()
                 kvs.value("state").startsWith("TRANSMIT"));
         }
     });
-    // The amplifier's own forward power and SWR, off its port-9008 status.
-    // AmpModel owns the dBm→watts and return-loss→ratio conversions so this
-    // path and the relayed meters cannot disagree about the arithmetic.
-    //
-    // This deliberately follows `fwd`, NOT `peakfwd`. peakfwd is a peak the
-    // DEVICE latches and never decays: an idle PGXL with its drain rail down
-    // (state=IDLE, vdd=0.0) was captured still reporting peakfwd=44.8 dBm —
-    // 30 W of forward power out of an amplifier that was not transmitting,
-    // pushed at the S-Meter five times a second. The gauges do their own
-    // peak-hold, with a timer that releases it.
+    // The amp's own forward power and SWR from port-9008 status; AmpModel does
+    // the dBm→W and return-loss→SWR conversions. Uses `fwd`, not `peakfwd`,
+    // which the device latches without decay (an idle PGXL reported 44.8 dBm);
+    // the gauges do their own peak-hold.
     connect(&m_radioModel.amplifier(), &AmpModel::directMetersChanged,
             this, [this](float watts, float swr) {
         m_appletPanel->ampApplet()->setDeviceMeters(watts, swr);
@@ -6785,19 +6546,11 @@ void MainWindow::wireMeters()
         if (kvs.contains("meffa"))
             amp->setMeff(kvs["meffa"]);
     });
-    // Fan mode cycle button → direct PGXL command (fan control is not in the
-    // radio API).
-    //
-    // Routed through AmpModel rather than sent straight down the socket. A
-    // `setup` write carries the whole configuration group — the vendor utility
-    // was captured sending `setup nickname=… meffa=… ledintens=… fanmode=…
-    // authcode=` as one line — and the single-key form this used to send names
-    // only fanmode, leaving the amplifier's nickname, LED intensity, MEffA
-    // state and auth code out of a write to the group that holds them.
-    // Both directions are wired in AmpApplet::setAmpModel, against the model
-    // that owns the configuration group. Nothing to do here.
-    // OPERATE button → PGXL standby/operate command (relayed via the radio's
-    // amplifier API by AmpModel::setOperate; no-op if no amp handle). #4094.
+    // Fan mode is sent via AmpModel (wired in AmpApplet::setAmpModel), because
+    // a `setup` write carries the whole group (nickname, meffa, ledintens,
+    // fanmode, authcode) and a fanmode-only write would drop the rest.
+    // OPERATE button → standby/operate via the radio's amplifier API
+    // (AmpModel::setOperate; no-op without an amp handle) (#4094).
     connect(m_appletPanel->ampApplet(), &AmpApplet::operateToggled, this, [this](bool on) {
         m_radioModel.amplifier().setOperate(on);
     });
@@ -7262,22 +7015,12 @@ void MainWindow::wireMeters()
 #endif
     }
 
-    // Switch Fwd Power gauge scale based on radio max power and amplifier presence.
-    // All three power gauges (TxApplet, TunerApplet, SMeterWidget) update together.
-    // When the PGXL is in STANDBY we fall back to the barefoot scale — only the
-    // radio's forward power is reaching the meter, so the 2kW arc would make
-    // every reading look tiny and useless.
-    // Redundant-apply skipping (#4845 review) lives in each gauge's own
-    // setPowerScale(), not here. It is worth having because infoChanged is
-    // emitted from ordinary radio status parsing (headphone/lineout gain,
-    // TNF, filter sharpness) and not just the connect-time "info" reply, so
-    // a slider drag on the radio bursts it and every burst would otherwise
-    // re-push an unchanged scale. It has to sit in the widget because a
-    // widget is not always the sole writer of its own scale:
-    // CrossNeedleMeterApplet's "Test 100 W / 4 W reflected" automation
-    // action calls setPowerScale(200, false) straight at the widget, and a
-    // cache out here would then skip the real re-apply that has to
-    // overwrite it.
+    // Fwd power gauge scale from radio max power and amp presence, applied to
+    // TxApplet, TunerApplet and SMeterWidget together; with the PGXL in STANDBY
+    // use the barefoot scale. Redundant re-applies are skipped inside each
+    // gauge's setPowerScale(), not here: infoChanged bursts on ordinary status,
+    // and an automation test action writes the widget scale directly, so a
+    // cache here could skip a needed re-apply.
     auto updatePowerScale = [this]() {
         int maxW = m_radioModel.transmitModel().maxPowerLevel();
         // Aurora (AU-) radios have an integrated 600W PA (Overlord) but
@@ -7296,18 +7039,9 @@ void MainWindow::wireMeters()
     };
     connect(&m_radioModel.amplifier(), &AmpModel::presenceChanged, this, updatePowerScale);
     connect(&m_radioModel.amplifier(), &AmpModel::stateChanged, this, updatePowerScale);
-    // Also refresh on infoChanged (#4813): maxPowerLevelChanged only fires when
-    // the numeric value actually changes, which it doesn't on connect if the
-    // radio's exciter limit matches TransmitModel's compiled-in default (100W —
-    // exactly the AU- case above). infoChanged fires once "info" comes back and
-    // model() is populated, so this is what actually catches the initial scale
-    // on connect instead of leaving it wrong until the next real power-level
-    // edge (e.g. a band change that happens to carry a different limit).
-    // infoChanged rather than connectionStateChanged: model() does happen to
-    // be seeded from the discovery packet before that one fires on a LAN
-    // connect (RadioModel.cpp, connectToRadio()), but infoChanged is the
-    // signal actually tied to the info data this branch reads, so it doesn't
-    // depend on that seeding holding for every connect path.
+    // Also refresh on infoChanged (#4813): maxPowerLevelChanged does not fire
+    // when the radio's limit equals the 100 W default (the AU- case), and
+    // infoChanged is the signal tied to the model() data this reads.
     connect(&m_radioModel, &RadioModel::infoChanged, this, updatePowerScale);
 
     // TGXL indicator: two-line rich text — label on top, state smaller below.
@@ -7429,6 +7163,8 @@ void MainWindow::wireMeters()
             this, &MainWindow::setKiwiSdrVirtualAntennaForSlice);
     connect(m_appletPanel->rxApplet(), &RxApplet::flexRxAntennaSelected,
             this, &MainWindow::clearKiwiSdrVirtualAntennaForSlice);
+    connect(m_appletPanel->rxApplet(), &RxApplet::antennaChoiceRefused,
+            this, &MainWindow::announceAntennaChoiceRefused);
 
     // Hide APD row on radios that don't support it
     connect(&m_radioModel.transmitModel(), &TransmitModel::apdStateChanged, this, [this]() {
@@ -7477,59 +7213,12 @@ void MainWindow::onSpectrumReadyForAdaptiveFilter(quint32 streamId,
 void MainWindow::enterSplit(int rxSliceId, std::optional<double> offsetMhz)
 {
     if (m_splitActive) return;
-    // Split creates its TX slice with Flex wire text, which a backend
-    // with no command plane drops before any wire write. Same gate
-    // #5266 put on the FlexControl and RC-28/HID Split actions; this
-    // on-screen badge and the split_toggle shortcut are the two
-    // primary operator paths and were not in #5263's item-3
-    // enumeration (issue 5277).
-    //
-    // It returns BEFORE the three writes below rather than merely
-    // skipping the send, because the writes are the worse half of the
-    // defect: m_splitActive is latched AHEAD of the command, so an HL2
-    // that never created the slice left the application believing
-    // split was on while the SPLIT badge — derived from model truth in
-    // updateSplitState() — correctly showed it off. From there
-    // startSwrSweep() refuses with "Disable split before running an
-    // SWR sweep" for a split the operator does not have,
-    // TxFollowsActiveSlice silently stops following, and the next
-    // slice to arrive from ANY source is adopted as the split TX
-    // slice, muted and made TX, by MainWindow::onSliceAdded.
-    //
-    // qCWarning, not the qCDebug the #5266 sites use: since #5265 an
-    // UNGATED dead control warns and shows the operator a status-bar
-    // notice, so a gate that logged at debug and said nothing would
-    // make the CONVERTED control the quieter of the two. The refusal
-    // is the drop, one layer up, and it reports the same way.
-    //
-    // This is the M0 gate, not the end state. TciServer::
-    // createTxSliceForVfoB already carries a family-blind split for
-    // exactly this radio — createPanadapter() brings up another DDC
-    // with its slice synchronously — so #5263's own "conversion beats
-    // gating where the seam verb exists" applies to these two GUI
-    // sites as an M4 item.
-    //
-    // Deliberately NOT permissive on disconnect, unlike every gate in
-    // applyCapabilitiesToUi() (which spells that rule out at the
-    // cmdPlane/`!connected ||` gate in MainWindow.cpp). Those gate
-    // ENABLEMENT of a visible control, where staying permissive with no
-    // radio attached is right. This gates an ACTION that writes
-    // m_splitActive ahead of its send, so admitting the press while
-    // disconnected would reinstate exactly the latch this guard exists
-    // to remove. The cost is that an offline press reports "this radio
-    // doesn't support that control" when there is no radio; the wording
-    // is the price of sharing one notice with the drop path.
-    //
-    // Which families this refuses is a property of the predicate, not a
-    // list kept here: hasCommandPlane() is m_wanConn || m_connection,
-    // and RadioModel::buildBackend() harvests m_connection in exactly
-    // two branches — dynamic_cast<FlexBackend*>, and the else-if
-    // dynamic_cast<SimBackend*> that vends the synthetic connection per
-    // RFC #4288 Route A. So Flex (LAN, and WAN via m_wanConn) and Sim
-    // pass unchanged, and every family that vends no RadioConnection
-    // refuses: hl2, icom, anan and rtl alike. Nothing here enumerates
-    // them, and a future backend that vends one passes with no edit to
-    // this site.
+    // Split creates its TX slice with Flex wire text, dropped without a command
+    // plane (#5277, as #5266 gated FlexControl/HID Split). Return before the
+    // writes below, since m_splitActive latches ahead of the command and would
+    // otherwise claim split is on. Warn + notice; not permissive when
+    // disconnected, because this latches state. hasCommandPlane() is
+    // m_wanConn || m_connection: Flex (LAN/WAN) and Sim pass, others refuse.
     if (!m_radioModel.hasCommandPlane()) {
         qCWarning(lcDevices)
             << "Split entry ignored: this backend takes no Flex"
@@ -7556,6 +7245,7 @@ void MainWindow::enterSplit(int rxSliceId, std::optional<double> offsetMhz)
 
     m_splitActive = true;
     m_splitRxSliceId = rxSliceId;
+    m_splitRxFrequencyMhz = rxSlice->reportedFrequency();
     m_radioModel.sendCommand(
         QString("slice create pan=%1 freq=%2")
             .arg(panId).arg(txFreq, 0, 'f', 6));
@@ -7645,17 +7335,11 @@ void MainWindow::applySplitOffsetKHz(double offsetKHz, int rxSliceId)
     enterSplit(rxSliceId >= 0 ? rxSliceId : m_activeSliceId, offsetKHz / 1000.0);
 }
 
-// The operator teaches the audio arrangement by operating: unmute the TX
-// slice, pan it right, pan the RX slice left, drop the TX gain, work the
-// station. When the split ends, what they did is what comes back next time.
-// Nothing is configured.
-//
-// Every value is learned from the *CommandIssued signals, never from the
-// *Changed ones. SliceModel.h spells out why: the Changed signals also fire
-// when radio status is applied, so learning from them would record the radio's
-// own state as the operator's preference and replay it — a client re-asserting
-// state it does not own (Principle II). It would also mean another client's
-// pan, or a profile load, silently became "what the operator likes".
+// The split audio arrangement is learned from what the operator does (TX
+// unmute, pans, TX gain) and replayed next split; nothing is configured.
+// Learned only from the *CommandIssued signals: the *Changed signals also fire
+// on radio status (see SliceModel.h), so they would record radio state, other
+// clients or profile loads as the operator's preference.
 
 AetherSDR::SplitAudioProfile MainWindow::loadSplitAudioProfile() const
 {
@@ -7788,6 +7472,16 @@ void MainWindow::recordSplitAudioMirror(bool deferRestore)
     }
 
     disarmSplitAudioMirror();
+}
+
+// The widget refused before any send, so commandDropped() never fires; this is
+// the operator's only feedback (MainWindow::showUnsupportedControlNotice()).
+void MainWindow::announceAntennaChoiceRefused(bool tx)
+{
+    qCWarning(lcDevices) << (tx ? "TX" : "RX")
+                         << "antenna choice refused: this radio publishes no"
+                         << "antenna port to choose";
+    showUnsupportedControlNotice();
 }
 
 } // namespace AetherSDR

@@ -31,17 +31,11 @@ struct AmpPortInfo {
     bool operator!=(const AmpPortInfo& o) const { return !(*this == o); }
 };
 
-// State model for a power amplifier the radio reports through its "amplifier"
-// API (today: 4O3A Power Genius XL / PGXL — any non-TGXL amp the radio proxies).
-// Extracted from RadioModel (#4094).
-//
-// Vendor-neutral: it holds the universal amp state (presence / operate /
-// telemetry) and emits a neutral operate *intent* — it builds no SmartSDR
-// strings. FlexBackend translates the intent into the radio-proxied
-// "amplifier set … operate=" relay via its invokeExtension("flex", …) path
-// (#4094); that relay is the ONLY path that works for remote/SmartLink (the
-// direct PgxlConnection on port 9008 is telemetry-only). The Flex handle is a
-// backend detail supplied by RadioModel through invokeExtension's vendor arg.
+// State model for an amplifier the radio reports via its "amplifier" API
+// (today the 4O3A PGXL; any non-TGXL amp the radio proxies) (#4094).
+// Vendor-neutral: emits an operate intent and builds no SmartSDR strings.
+// FlexBackend relays it as "amplifier set ... operate=", the only path that works
+// over SmartLink (the direct port-9008 PgxlConnection is telemetry-only).
 class AmpModel : public QObject {
     Q_OBJECT
 
@@ -70,21 +64,13 @@ public:
     // since `state` only distinguishes the two once RF is already flowing.
     QString outputForAntenna(const QString& antenna) const;
 
-    // The Maximum Efficiency Algorithm's reported state, upper-cased, or empty
-    // before the amplifier has reported one.
-    //
-    // THREE states, not two (Power Genius XL User Guide §9.4). The operator
-    // controls one bit — enabled or not — but what the amplifier reports also
-    // depends on the PA bias class, which follows the modulation mode:
-    //
-    //   OFF     — disabled.
-    //   STANDBY — enabled, but the PA is in class AAB (SSB, AM, PSK), where
-    //             MEffA does not apply. Not a fault and not a failure to
-    //             engage: §4.3.1, "MEffA is not available in this class".
-    //   ACTIVE  — enabled and optimising, in class AB.
-    //
-    // So a control that presents this as a plain on/off toggle lies whenever
-    // the operator enables it on SSB and it reports STANDBY.
+    // Maximum Efficiency Algorithm reported state, upper-cased; empty until
+    // reported. Three states (PGXL User Guide §9.4), because the PA bias class
+    // follows the mode:
+    //   OFF     - disabled.
+    //   STANDBY - enabled, PA in class AAB (SSB, AM, PSK) where MEffA does not
+    //             apply (§4.3.1). Not a fault.
+    //   ACTIVE  - enabled and optimising, class AB.
     QString meffa() const { return m_meffa; }
     bool hasMeffa() const { return !m_meffa.isEmpty(); }
     bool meffaEnabled() const { return hasMeffa() && m_meffa != QLatin1String("OFF"); }
@@ -154,16 +140,10 @@ signals:
     void alertChanged(const QString& text);
     // The antenna → output map moved (see outputForAntenna).
     void antennaMapChanged();
-    // Forward power (watts) and SWR read off the amplifier's OWN port-9008
-    // status, as opposed to the radio-relayed AMP meters. Same quantities,
-    // different transport: this one survives the radio not publishing amp
-    // meters at all, and it is the only source when no radio is relaying.
-    //
-    // Sourced from `fwd`, never `peakfwd`. `peakfwd` is a peak the DEVICE
-    // latches and does not decay -- an idle PGXL with its drain rail down
-    // (vdd=0.0, state=IDLE) was observed still reporting peakfwd=44.8 dBm,
-    // i.e. 30 W out of an amplifier that was not transmitting. Peak-hold that
-    // releases belongs to the gauge, which has a timer for it.
+    // Forward power (W) and SWR from the amplifier's own port-9008 status, which
+    // works when the radio publishes no AMP meters. Sourced from `fwd`, never
+    // `peakfwd`: the device latches peakfwd without decay (an idle PGXL reports
+    // non-zero), and peak-hold belongs to the gauge.
     void directMetersChanged(float fwdWatts, float swr);
     // The Maximum Efficiency Algorithm's reported state: ACTIVE, STANDBY or
     // OFF. Empty until the amplifier has reported one. See meffa().

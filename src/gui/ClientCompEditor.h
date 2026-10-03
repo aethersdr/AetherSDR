@@ -15,22 +15,17 @@ class ClientCompLimiterButton;
 class ClientCompMeter;
 class ClientCompThresholdFader;
 
-// Floating editor for the Pro-XL-style TX compressor.  One instance
-// lives on MainWindow; calling showForTx() raises the window and
-// binds it to AudioEngine::clientCompTx().  Geometry persists via
-// AppSettings (`ClientCompEditorGeometry` key).
-//
-// Layout (Ableton-inspired, extended for limiter + chain order):
+// Floating editor for the TX compressor. One instance on MainWindow;
+// showForTx() raises it bound to AudioEngine::clientCompTx(). Geometry
+// persists in `ClientCompEditorGeometry`.
 //   ┌─ bypass │ CMP→EQ | EQ→CMP ──────────────────── × ┐
 //   │  ratio  │  [Thresh] [transfer curve]  │GR│Out│L│M│
 //   │  attack │                             │  │  │ │a│
 //   │  rlease │                             │  │  │ │k│
 //   │  knee   │                             │  │  │ │e│
 //   └─────────────────────────────────────────────────┘
-//
-// The canvas (center column) owns the threshold slider + curve + live
-// ball.  Meter strips and limiter controls are separate child widgets
-// wired to the same ClientComp via signals.
+// The canvas owns threshold slider, curve and ball; meters and limiter are
+// separate children wired to the same ClientComp.
 class ClientCompEditor : public QWidget {
     Q_OBJECT
 

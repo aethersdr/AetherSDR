@@ -25,29 +25,16 @@ constexpr int Y            = 21;
 constexpr int Z            = 44;
 }  // namespace UlanziKey
 
-// Pure decoder for the Ulanzi Dial's key stream — no Qt object, no device, no
-// event loop, so it is unit-testable on every platform (unlike the three
-// backends that drive it, each of which only compiles on its own OS).
-//
-// The dial encodes its rotary as autorepeating volume keys, its top row and
-// dial press as bare media keys, and its side buttons as Ctrl+key chords —
-// with Mode Cycle arriving as a Ctrl+Y+KEY_PREVIOUSSONG compound.  feed()
-// turns one native key transition into zero or more semantic events.
-//
-// **Every button press must be matched by a release.**  A momentary binding
-// (PTT hold, CW keying) keys the transmitter on press and un-keys on release,
-// so a swallowed release strands TX — Constitution Principle VI.  Two rules
-// keep that invariant under adversarial event ordering:
-//
-//   - a chord key still held when the chord window closes (Ctrl up, or a
-//     second chord key pressed on top of it) is released right then;
-//   - the "trailing bare release" latch, which suppresses the physical key-up
-//     that follows a synthesised chord release, is disarmed by whichever
-//     branch actually consumes that key-up — otherwise a Ctrl bounce leaves it
-//     armed against an unrelated later press.
-//
-// The opposite error — an occasional *extra* release — is harmless: every
-// momentary consumer ignores a release it never pressed.
+// Pure decoder for the Ulanzi Dial key stream (no Qt object or device), so it
+// is testable on every platform. The rotary arrives as autorepeating volume
+// keys, top row and dial press as media keys, side buttons as Ctrl+key chords
+// (Mode Cycle = Ctrl+Y+KEY_PREVIOUSSONG). feed() maps one key transition to
+// zero or more events.
+// Every press must get a release, or a momentary binding (PTT, CW) strands TX:
+//   - a chord key still held when the chord window closes is released then;
+//   - the "trailing bare release" latch is disarmed by whichever branch
+//     consumes that key-up, so a Ctrl bounce can't leave it armed.
+// An extra release is harmless; consumers ignore unmatched releases.
 class UlanziChordDecoder {
 public:
     struct Event {
