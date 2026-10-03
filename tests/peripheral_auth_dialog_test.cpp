@@ -15,6 +15,7 @@
 
 #include <QApplication>
 #include <QByteArray>
+#include <QComboBox>
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QLabel>
@@ -71,6 +72,31 @@ int main(int argc, char** argv)
     };
     if (dialog.size() != QSize(960, 680) || !fitsViewport(clearButton) || !fitsViewport(status)) {
         std::fprintf(stderr, "Clear code or Status is clipped at the default dialog size\n");
+        // The page's width depends on the host: each serial-port combo is as
+        // wide as its longest "port — description" label. Name the widest one.
+        for (QWidget* ancestor = clearButton->parentWidget(); ancestor; ancestor = ancestor->parentWidget()) {
+            if (QScrollArea* scroll = qobject_cast<QScrollArea*>(ancestor)) {
+                std::fprintf(stderr, "  dialog %dx%d, viewport %d, page minimum %d, horizontal scroll max %d\n",
+                             dialog.width(), dialog.height(), scroll->viewport()->width(),
+                             scroll->widget()->minimumSizeHint().width(),
+                             scroll->horizontalScrollBar()->maximum());
+                break;
+            }
+        }
+        for (QComboBox* combo : dialog.findChildren<QComboBox*>()) {
+            if (combo->findData(QStringLiteral("__custom__")) < 0) {
+                continue;
+            }
+            QString widest;
+            for (int i = 0; i < combo->count(); ++i) {
+                if (combo->itemText(i).size() > widest.size()) {
+                    widest = combo->itemText(i);
+                }
+            }
+            std::fprintf(stderr, "  serial combo %s: minimum %d, widest item \"%s\"\n",
+                         combo->isVisibleTo(&dialog) ? "(shown)" : "(hidden)",
+                         combo->minimumSizeHint().width(), widest.toUtf8().constData());
+        }
         return 1;
     }
     code->setText(QStringLiteral("sample"));
