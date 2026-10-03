@@ -44,8 +44,15 @@ public:
         };
         std::vector<Token> tokens;
     };
+    // pieces, when given, receives the published text split into runs with
+    // their confidence (DeepFistCommitter::Piece); the returned text is unchanged.
     QString process(const float* samples, int count, lyra::dsp::DeepFistModel& model,
-                    std::vector<Observation>* observations = nullptr);
+                    std::vector<Observation>* observations = nullptr,
+                    std::vector<DeepFistCommitter::Piece>* pieces = nullptr);
+    // Mean posterior of class `id` over the frames from `frame` while it stays
+    // the argmax. `logProbs` is row-major [frames][classes]; each row is
+    // normalized here, so raw logits and log-probabilities give the same value.
+    static float spanConfidence(const float* logProbs, int frames, int classes, int frame, int id);
     static bool hasCompletedMark(const float* samples, int count);
     bool failed() const { return m_failed; }
 private:

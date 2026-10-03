@@ -151,11 +151,19 @@ void MainWindow::appendUnscoredCwText(const QString& text)
         m_cwDecoderApplet->appendUnscoredCwText(text);
     }
 }
+void MainWindow::appendColoredCwText(const QString& text, float cost)
+{
+    if (m_cwDecoderApplet && m_cwDecoder.isRunning()) {
+        m_cwDecoderApplet->appendColoredCwText(text, cost);
+    }
+}
 void MainWindow::refreshCwRxBackend()
 {
     m_cwDecoder.selectBackend(CwDecodeSettings::backend());
     connect(&m_cwDecoder, &CwRxModel::unscoredTextDecoded,
         this, &MainWindow::appendUnscoredCwText, Qt::UniqueConnection);
+    connect(&m_cwDecoder, &CwRxModel::coloredTextDecoded,
+        this, &MainWindow::appendColoredCwText, Qt::UniqueConnection);
     connect(&m_cwDecoder, &CwRxModel::statusChanged,
         this, &MainWindow::refreshCwRxStatus, Qt::UniqueConnection);
     if (m_cwDecoderApplet) {
