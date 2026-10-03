@@ -1860,13 +1860,10 @@ MainWindow::MainWindow(QWidget* parent)
             m_radioModel.maxSlices(), m_radioModel.slices()));
         m_appletPanel->updateSliceButtons(m_radioModel.slices(), m_activeSliceId);
     });
-    // ...and on every later edge that can move the count (#5775, #5776). A
-    // backend that declares its own capacity may only know it once the link is
-    // up, and may revise it mid-session; that arrives on capabilitiesChanged,
-    // which the edge above never sees. The CAT applet's VFO letters take the
-    // same number (ReceiverSlotCount::catLetters), so both are refreshed
-    // together. On disconnect (count 0) the CAT letters are reset by
-    // onConnectionStateChanged, through applyCatPortCount().
+    // ...and on every later edge that can move the count, including a backend's
+    // post-connect capabilitiesChanged (#5775, #5776). The CAT letters are
+    // refreshed with it; on disconnect (count 0) onConnectionStateChanged resets
+    // them through applyCatPortCount().
     auto* receiverSlots = new ReceiverSlotCount(&m_radioModel, this);
     connect(receiverSlots, &ReceiverSlotCount::countChanged, this, [this](int count) {
         if (count <= 0) {
@@ -6185,10 +6182,7 @@ void MainWindow::buildUI()
 int MainWindow::catPortTargetCount() const
 {
     if (!m_radioModel.isConnected()) return 1;
-    // The backend-aware capacity, the same number the RX applet's slice tabs
-    // take — not RadioModel::maxSlicesForModel(), a Flex model table with no
-    // row for any other family, whose 2-slice default offered only A and B on
-    // a four-receiver Hermes-Lite 2 (#5776).
+    // Backend-aware, the same number the RX applet's slice tabs take (#5776).
     return ReceiverSlotCount::forCeiling(m_radioModel.maxSlices(), m_radioModel.slices());
 }
 
@@ -6228,10 +6222,8 @@ void MainWindow::applyCatPortCount()
     auto* applet = m_appletPanel ? m_appletPanel->catControlApplet() : nullptr;
     if (applet) {
         applet->setCatEnabled(masterOn);
-        // The radio's own count while connected — one letter on a one-receiver
-        // radio — and every letter when no radio is connected. Keyed on the
-        // connection, not on the count: `count <= 1 means disconnected` stopped
-        // holding once the count came from the backend (#5776).
+        // The radio's own count while connected (one letter on a one-receiver
+        // radio), every letter when none is (#5776).
         applet->setMaxSlices(ReceiverSlotCount::catLetters(&m_radioModel));
     }
 }
@@ -6465,8 +6457,7 @@ void MainWindow::onConnectionStateChanged(bool connected)
         if (m_bsExpiryTimer && !m_bsExpiryTimer->isActive())
             m_bsExpiryTimer->start();
 
-        // Apply CAT port counts for the newly connected radio.
-        // applyCatPortCount() starts/stops ports up to maxSlicesForModel().
+        // Re-apply the CAT port states and size the VFO letters to this radio.
         applyCatPortCount();
 #ifdef HAVE_WEBSOCKETS
         // Auto-start TCI WebSocket server if enabled

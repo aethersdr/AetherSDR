@@ -227,15 +227,11 @@ QString antMaskToName(int mask, const QStringList& available)
     return (bit < available.size()) ? available[bit] : available.first();
 }
 
-// RIG_LEVEL_RF (#5774). The operator's RF Gain control — the ANT panel slider,
-// the controller wheel, the bridge's `pan rfgain` — is the PANADAPTER's, on
-// every family, in the range its backend published (PanadapterModel::
-// rfGainLow/High/Step: a Flex's rfgain_info reply, the HL2's -12..+48 dB LNA).
-// Hamlib's level is normalized 0.0-1.0, so it is spread across that range and
-// snapped to the published step; it was treated as 0-100 %, which cannot
-// express a negative gain at all.
-//
-// The pan the addressed slice sits on, or nullptr.
+// RIG_LEVEL_RF without a command plane (#5774): the slice's rfgain is wire text
+// with nowhere to go, so the level drives the pan's RF gain (the ANT slider's
+// control, e.g. the HL2's -12..+48 dB LNA). Hamlib's 0.0-1.0 is spread across
+// the range the backend published and snapped to its step. A radio with a
+// command plane keeps `slice set N rfgain=` (0-100) for its CAT clients.
 PanadapterModel* rfGainPanFor(const RadioModel* model, const SliceModel* slice)
 {
     if (!model || !slice || slice->panId().isEmpty()) {
@@ -252,11 +248,9 @@ int rfLevelToPanGain(double level, int low, int high, int step)
     return std::clamp(low + static_cast<int>(steps) * stepSize, low, high);
 }
 
-// Only a range the backend has published is a scale to map onto. Before it
-// lands the pan holds PanadapterModel's Flex-shaped defaults (-8..32 step 8),
-// and a level scaled against those would be sent to the radio as a real gain.
-// A degenerate range is refused for the same reason, and because the level
-// divides by its span.
+// Only a published range is a scale: before it lands the pan holds
+// PanadapterModel's Flex-shaped defaults (-8..32 step 8). A degenerate range is
+// refused too, since the level divides by its span.
 bool rfGainRangeKnown(const PanadapterModel& pan)
 {
     return pan.hasRfGainRange() && pan.rfGainHigh() > pan.rfGainLow();
@@ -1453,18 +1447,15 @@ QString RigctlProtocol::cmdGetLevel(const QString& arg)
         return makeResponse(formatRigLevelValue(af));
     }
     if (level == "RF") {
-        // The pan's gain, which is what the operator's slider shows (#5774).
-        // Read from the slice's own copy, `l RF` echoed the client's last
-        // write and never a gain set anywhere else.
-        if (const auto* pan = rfGainPanFor(m_model, slice)) {
-            if (!rfGainRangeKnown(*pan)) return rprt(-11);  // RIG_ENAVAIL
-            return makeResponse(formatRigLevelValue(panGainToRfLevel(
-                pan->rfGain(), pan->rfGainLow(), pan->rfGainHigh())));
+        if (m_model->hasCommandPlane()) {
+            const double rf = qBound(0.0f, slice->rfGain(), 100.0f) / 100.0;
+            return makeResponse(formatRigLevelValue(rf));
         }
-        // No pan: the slice's own rfgain, which only a command plane can carry.
-        if (!m_model->hasCommandPlane()) return rprt(-11);  // RIG_ENAVAIL
-        const double rf = qBound(0.0f, slice->rfGain(), 100.0f) / 100.0;
-        return makeResponse(formatRigLevelValue(rf));
+        // No command plane: the pan's gain, which is what the slider shows.
+        const auto* pan = rfGainPanFor(m_model, slice);
+        if (!pan || !rfGainRangeKnown(*pan)) return rprt(-11);  // RIG_ENAVAIL
+        return makeResponse(formatRigLevelValue(panGainToRfLevel(
+            pan->rfGain(), pan->rfGainLow(), pan->rfGainHigh())));
     }
     if (level == "SQL") {
         const double sql = qBound(0, slice->squelchLevel(), 100) / 100.0;
@@ -1656,28 +1647,23 @@ QString RigctlProtocol::cmdSetLevel(const QString& args)
         return rprt(0);
     }
     if (level == "RF") {
-        // Through the pan, the same route the ANT panel's slider takes on every
-        // family (#5774). RadioModel::setPanRfGainFor sends it as wire text
-        // where the radio has a command plane and through
-        // IRadioBackend::setPanRfGain where it does not — the HL2's AD9866 LNA
-        // is reachable only that way.
-        if (const auto* pan = rfGainPanFor(m_model, slice)) {
-            if (!rfGainRangeKnown(*pan)) return rprt(-11);  // RIG_ENAVAIL
-            const int gain = rfLevelToPanGain(val, pan->rfGainLow(),
-                                              pan->rfGainHigh(), pan->rfGainStep());
-            const QString panId = slice->panId();
-            QMetaObject::invokeMethod(m_model, [model = m_model, panId, gain]() {
-                model->setPanRfGainFor(panId, gain);
+        if (m_model->hasCommandPlane()) {
+            const float gain = static_cast<float>(qBound(0.0, val * 100.0, 100.0));
+            QMetaObject::invokeMethod(slice, [slice, gain]() {
+                slice->setRfGain(gain);
             }, Qt::QueuedConnection);
             return rprt(0);
         }
-        // No pan: the slice's own rfgain, as the slider itself falls back to.
-        // That setter is wire text, so without a command plane it would be
-        // dropped at the sink — refuse rather than acknowledge a no-op.
-        if (!m_model->hasCommandPlane()) return rprt(-11);  // RIG_ENAVAIL
-        const float gain = static_cast<float>(qBound(0.0, val * 100.0, 100.0));
-        QMetaObject::invokeMethod(slice, [slice, gain]() {
-            slice->setRfGain(gain);
+        // No command plane: through the pan via IRadioBackend::setPanRfGain (the
+        // HL2's LNA is reachable only that way). Nothing to address, or no
+        // published range, is refused rather than acknowledged as a no-op.
+        const auto* pan = rfGainPanFor(m_model, slice);
+        if (!pan || !rfGainRangeKnown(*pan)) return rprt(-11);  // RIG_ENAVAIL
+        const int gain = rfLevelToPanGain(val, pan->rfGainLow(),
+                                          pan->rfGainHigh(), pan->rfGainStep());
+        const QString panId = slice->panId();
+        QMetaObject::invokeMethod(m_model, [model = m_model, panId, gain]() {
+            model->setPanRfGainFor(panId, gain);
         }, Qt::QueuedConnection);
         return rprt(0);
     }

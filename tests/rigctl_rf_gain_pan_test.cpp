@@ -1,36 +1,28 @@
-// #5774 — `L RF` / `l RF` over rigctl must drive and read the operator's RF
-// Gain control, which is the PANADAPTER's.
-//
-// On every family the ANT panel's RF Gain slider, the controller wheel and the
-// automation bridge's `pan rfgain` all go through RadioModel::setPanRfGainFor()
-// and read PanadapterModel::rfGain(). rigctl alone wrote SliceModel::setRfGain,
-// whose whole body is `slice set N rfgain=X` — wire text a backend without a
-// command plane (the Hermes-Lite 2 among them) drops — and it answered RPRT 0
-// regardless. `l RF` then read the slice's local copy of that write back, so a
-// client saw its own number echoed and never the slider.
-//
-// A second defect sat in the scale: Hamlib RIG_LEVEL_RF is normalized 0.0-1.0,
-// and it was treated as 0-100 %. The HL2 publishes its LNA as -12..+48 dB in
-// 1 dB steps, so half of travel is +18 dB and the bottom is -12 dB, a value the
-// percent mapping cannot express at all.
-//
-// Socket-free: an injected stub backend that records the RF gain it is handed,
-// a panadapter materialised through the same seam signal a wire-less backend
-// uses, and a slice attached to it. Nothing is opened and nothing is keyed.
+// #5774: rigctl `L RF` / `l RF` on a radio without a command plane (the HL2)
+// drive and read the pan's RF gain, Hamlib's 0.0-1.0 spread across the range
+// the backend published, and refuse (RPRT -11) with nothing to address or no
+// published range. A radio with a command plane (Flex) keeps main's slice
+// setter and wire text. Socket-free: injected stub backend or the real Flex
+// backend built without dialling; nothing is opened and nothing is keyed.
 
 #include "TestSettingsProfile.h"
 #include "core/RigctlProtocol.h"
 #include "core/backends/IRadioBackend.h"
 #include "core/backends/SliceDelta.h"
+#include "core/backends/sim/SimBackend.h"
 #include "models/PanadapterModel.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
 #include <QCoreApplication>
+#include <QElapsedTimer>
+#include <QHostAddress>
+#include <QStringList>
 #include <QString>
 
 #include <cmath>
 #include <cstdio>
+#include <functional>
 #include <memory>
 #include <optional>
 
@@ -256,6 +248,67 @@ void testNoPublishedRangeIsNotAGuess()
     check("and l RF reads it back", after.has_value() && nearly(*after, 0.5));
 }
 
+
+// THE COMMAND-PLANE PATH (maintainer ruling on #6013): a radio WITH a command
+// plane (Flex) keeps main's `L RF` / `l RF` byte for byte, because third-party
+// CAT clients bind to it. The in-process Demo has a Flex command plane and plays
+// the radio's part with no socket dialled. Its pan is given a published Flex
+// range, so a mutation that routes this radio to the pan sends `display pan ...
+// rfgain=` instead of the slice text and fails here rather than merely refusing.
+bool waitFor(const std::function<bool()>& done, int ms = 5000)
+{
+    QElapsedTimer timer;
+    timer.start();
+    while (!done() && timer.elapsed() < ms) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+    }
+    return done();
+}
+
+void testCommandPlaneKeepsTheSliceSetter()
+{
+    RadioModel radio;
+    RadioInfo demo;
+    demo.name = QStringLiteral("FLEX-6700");
+    demo.model = SimBackend::demoModelName();
+    demo.serial = SimBackend::demoSerial();
+    demo.family = SimBackend::familyName();
+    demo.address = QHostAddress(QHostAddress::LocalHost);  // never dialled
+    demo.port = 4992;
+    radio.connectToRadio(demo);
+    const bool up = waitFor([&radio] {
+        return radio.isConnected() && radio.slice(0) && !radio.slice(0)->panId().isEmpty()
+            && radio.panadapter(radio.slice(0)->panId());
+    });
+    check("the Demo connects with a command plane and slice 0 on a pan",
+          up && radio.hasCommandPlane());
+    if (!up) {
+        return;
+    }
+    SliceModel* slice = radio.slice(0);
+    PanadapterModel* pan = radio.panadapter(slice->panId());
+    pan->setRfGainInfo(-8, 32, 8);
+    pan->setRfGain(-8);
+
+    QStringList wire;
+    QObject::connect(slice, &SliceModel::commandReady, [&wire](const QString& cmd) {
+        wire << cmd;
+    });
+    RigctlProtocol port(&radio);
+    port.setSliceIndex(0);
+
+    check("L RF 0.5 on a Flex is acknowledged as on main",
+          setRf(port, QStringLiteral("0.5")) == QLatin1String("RPRT 0"));
+    check("and sends main's wire text, `slice set 0 rfgain=50`",
+          wire == QStringList{QStringLiteral("slice set 0 rfgain=50")});
+    check("l RF on a Flex reads the slice's rfgain as on main (0.5), not the pan's",
+          port.handleLine(QStringLiteral("l RF")).trimmed() == QLatin1String("0.5"));
+    wire.clear();
+    setRf(port, QStringLiteral("7"));
+    check("an out-of-range L RF on a Flex clamps to `slice set 0 rfgain=100`",
+          wire == QStringList{QStringLiteral("slice set 0 rfgain=100")});
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -270,6 +323,7 @@ int main(int argc, char** argv)
     testReadBackIsThePansValue();
     testNothingToAddressIsNotAcknowledged();
     testNoPublishedRangeIsNotAGuess();
+    testCommandPlaneKeepsTheSliceSetter();
     std::printf("%s\n", g_failed == 0 ? "ALL PASS" : "FAILURES");
     return g_failed == 0 ? 0 : 1;
 }
