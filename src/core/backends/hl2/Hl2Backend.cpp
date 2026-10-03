@@ -1995,8 +1995,10 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.hasSupplyVoltageTelemetry = false;
     c.hasPaTemperatureTelemetry = true;
     c.hasPaCurrentTelemetry = false;
-    c.speechProcessorLevelMaximum = 2;
-    c.speechProcessorLabel = QStringLiteral("PROC");
+    // PROC runs in this host's ClientComp (hostModulates), not in the radio.
+    c.speechProcessorControl = std::nullopt;
+    c.voxControl = std::nullopt;
+    c.txMonitorControl = std::nullopt;
     c.hasMainFanTelemetry = false;
     // The HL2 persists NOTHING across power cycles — "the radio reports no
     // VFO, so the app is authoritative and must push" (pushInitialState).

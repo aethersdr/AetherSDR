@@ -490,12 +490,16 @@ struct RadioCapabilities {
     // (hasRadioSideDsp's ANF).
     bool hasManualNotch = false;
 
-    // Inclusive upper bound of the radio's speech-processor level control.
-    // Flex-shaped controls use 0..2 (NOR/DX/DX+); a model with an evidenced
-    // continuous control publishes a maximum greater than 2. The minimum is
-    // always zero. The legacy-shape default is intentional; see ADDING A FIELD.
-    int speechProcessorLevelMaximum = 2;
-    QString speechProcessorLabel = QStringLiteral("PROC");
+    // The radio's own speech processor (Flex by its command plane; otherwise
+    // IRadioBackend::setSpeechProcessor must apply it). Absent: the P/CW face
+    // keeps PROC 0..2, and a host-modulating transmitter's ClientComp is the
+    // processor instead (#6086). levelMaximum: inclusive top of the level, 2 for
+    // NOR/DX/DX+, larger for an evidenced continuous control; minimum is zero.
+    struct SpeechProcessorControl {
+        int levelMaximum = 2;
+        QString label{QStringLiteral("PROC")};
+    };
+    std::optional<SpeechProcessorControl> speechProcessorControl;
 
     // The radio can temporarily monitor the transmit frequency while the
     // operator holds a control. This is Icom's XFC (CI-V 1C 02), not a
@@ -559,7 +563,17 @@ struct RadioCapabilities {
     // The squelch level's place on the pan axis. Absent: no SQL line, no Auto SQL.
     std::optional<SquelchLevelScale> squelchLevelScale;
     bool hasAmCarrierLevel = false;
-    bool hasVoxDelay = false;
+
+    // The radio's own VOX and SSB transmit monitor (Flex by its command plane;
+    // otherwise IRadioBackend::setVox / setTxMonitor must apply them). Absent:
+    // their wire text reaches nothing, and the drop notice says so (#6086).
+    // hasDelay: the VOX hang time is applied too, not just enable and level.
+    struct VoxControl {
+        bool hasDelay = false;
+    };
+    std::optional<VoxControl> voxControl;
+    struct TxMonitorControl {};
+    std::optional<TxMonitorControl> txMonitorControl;
 
 
     // TX audio reaches this backend through IRadioBackend::submitTxAudio rather than
