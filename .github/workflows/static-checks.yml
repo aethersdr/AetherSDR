@@ -309,6 +309,15 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/check_qsettings.py --strict
 
+      # WDSP's two impulse blankers share a detector and blank the same window,
+      # so at most one may run. The shape that guarantees it — both run flags
+      # written once per call, outside the per-kind branches — is checkable;
+      # which stages are actually running is not, because the EXT API cannot
+      # read a run flag back. The checker self-tests on every scan.
+      - name: Noise-blanker exclusivity ratchet
+        if: ${{ !cancelled() }}
+        run: python tools/check_nb_exclusivity.py --strict
+
       # ── ThemeManager::seedBuiltinDefaults() compiles a copy of the default
       # theme into the binary. It is GENERATED (tools/gen_theme_seed.py emits
       # src/core/ThemeSeedGenerated.cpp from resources/themes/default-dark.json),

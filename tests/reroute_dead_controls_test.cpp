@@ -122,7 +122,15 @@ public:
     {
         agc.push_back({s, mode, threshold});
     }
-    void setSliceNoiseBlanker(int s, bool on, int level) override { nb.push_back({s, on, level}); }
+    // Records the kind as the bool every other consumer of this seam reads:
+    // anything but Off is on. These rows assert the intent reaches the backend,
+    // not which of the two blankers it picked.
+    void setSliceNoiseBlanker(int s, NoiseBlankerKind kind, int level,
+                              NoiseBlankerFill fill) override
+    {
+        Q_UNUSED(fill);
+        nb.push_back({s, kind != NoiseBlankerKind::Off, level});
+    }
     void setSliceNoiseReduction(int s, bool on, int level) override { nr.push_back({s, on, level}); }
     void setSliceAutoNotch(int s, bool on) override { anf.push_back({s, on, 0}); }
     // AGC and filter intents reach the backend as requests (#5904). The base

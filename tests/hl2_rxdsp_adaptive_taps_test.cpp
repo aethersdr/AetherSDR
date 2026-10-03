@@ -517,7 +517,9 @@ int main(int argc, char** argv)
         dsp.addNotch(0, kTuneHz + 1500.0, 50.0, true);
         const Hl2RxDsp::Config cfg = dspConfig(M::Cwu, 550.0, 850.0);
         dsp.beginRebuild(cfg);
-        check(dsp.installRebuiltChannel(Hl2RxDsp::buildChannel(cfg, false, 0)),
+        check(dsp.installRebuiltChannel(Hl2RxDsp::buildChannel(
+                  cfg, WdspChannel::NoiseBlanker::Off, 0,
+                  WdspChannel::NoiseBlankerFill::Zero)),
               "rebuild installs");
         check(dsp.rxFilterTapsInForce() == kLong && dsp.wdspNotchCount() == 1,
               "rebuild: the replayed notch set holds the long length");
@@ -536,7 +538,9 @@ int main(int argc, char** argv)
             check(dsp.configure(cwCfg, &err), "rebuild CW->USB: configures");
             dsp.beginRebuild(cwCfg);
             dsp.setMode(M::Usb);   // deferred: a rebuild is in flight
-            check(dsp.installRebuiltChannel(Hl2RxDsp::buildChannel(cwCfg, false, 0)),
+            check(dsp.installRebuiltChannel(Hl2RxDsp::buildChannel(
+                      cwCfg, WdspChannel::NoiseBlanker::Off, 0,
+                      WdspChannel::NoiseBlankerFill::Zero)),
                   "rebuild CW->USB: installs");
             check(dsp.rxFilterTapsInForce() == kLong,
                   "rebuild: built for CW (4096), USB set mid-build -> installed at 8192");
@@ -548,7 +552,9 @@ int main(int argc, char** argv)
             dsp.beginRebuild(usbCfg);
             dsp.setMode(M::Cwu);
             dsp.setFilter(550.0, 850.0);
-            check(dsp.installRebuiltChannel(Hl2RxDsp::buildChannel(usbCfg, false, 0)),
+            check(dsp.installRebuiltChannel(Hl2RxDsp::buildChannel(
+                      usbCfg, WdspChannel::NoiseBlanker::Off, 0,
+                      WdspChannel::NoiseBlankerFill::Zero)),
                   "rebuild USB->CW: installs");
             check(dsp.rxFilterTapsInForce() == kShort,
                   "rebuild: built for USB (8192), CW 300 Hz set mid-build -> installed at 4096");
@@ -567,7 +573,9 @@ int main(int argc, char** argv)
               "rebuild hysteresis: 110 Hz after 99 Hz is held long");
         const Hl2RxDsp::Config cfg = dspConfig(M::Cwu, 645.0, 755.0);
         dsp.beginRebuild(cfg);
-        check(dsp.installRebuiltChannel(Hl2RxDsp::buildChannel(cfg, false, 0)),
+        check(dsp.installRebuiltChannel(Hl2RxDsp::buildChannel(
+                  cfg, WdspChannel::NoiseBlanker::Off, 0,
+                  WdspChannel::NoiseBlankerFill::Zero)),
               "rebuild hysteresis: installs");
         check(dsp.rxFilterTapsInForce() == kLong,
               "rebuild hysteresis: the fresh chain keeps the long length the old one held");

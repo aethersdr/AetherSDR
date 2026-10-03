@@ -180,7 +180,8 @@ int main(int argc, char** argv)
         auto channel = WdspChannel::create(tx, &err);
         check(channel != nullptr, err.empty() ? "transmit channel opens" : err.c_str());
         if (channel) {
-            check(!channel->setNoiseBlanker(true, 50),
+            check(!channel->setNoiseBlanker(WdspChannel::NoiseBlanker::Impulse, 50,
+                                            WdspChannel::NoiseBlankerFill::Zero),
                   "setNoiseBlanker is refused on a transmit channel");
             check(!channel->noiseBlankerEnabled(),
                   "a refused enable does not leave the transmit channel claiming one");
@@ -222,7 +223,8 @@ int main(int argc, char** argv)
             check(dsp.configure(baseConfig(mode), &err),
                   err.empty() ? "Hl2RxDsp configures" : err.c_str());
             if (blankerOn) {
-                dsp.setNoiseBlanker(true, kNbLevel);
+                dsp.setNoiseBlanker(WdspChannel::NoiseBlanker::Impulse, kNbLevel,
+                                    WdspChannel::NoiseBlankerFill::Zero);
                 check(dsp.noiseBlankerEnabled(), "Hl2RxDsp reports the blanker enabled");
                 check(dsp.noiseBlankerLevel() == kNbLevel,
                       "Hl2RxDsp reports the level it was given");
@@ -294,6 +296,111 @@ int main(int argc, char** argv)
     std::fprintf(stdout, "  CWU peak off=%.4f on=%.4f (ratio %.3f)\n",
                  cw.peakOff, cw.peakOn, cw.peakOn / cw.peakOff);
 
+    // ── 3b. NB2, measured, and told apart from NB ─────────────────────────
+    //
+    // The second blanker (WDSP's NOB) has to clear the same bar as the first:
+    // cut the impulse peak, leave the wanted tone. What makes this more than a
+    // copy of section 3 is the DISCRIMINATION at the end — the two checks that
+    // fail if `Advanced` quietly ran the ANB, or if the fill mode never reached
+    // WDSP. Both are the plausible bug: the enum arrives, the stage does not
+    // change, and every "is it on" assertion still passes.
+    {
+        struct Run {
+            double peak = 0.0;
+            double rms = 0.0;
+        };
+        const auto runWith = [&](WdspChannel::NoiseBlanker kind,
+                                 WdspChannel::NoiseBlankerFill fill) {
+            Run out;
+            Hl2RxDsp dsp;
+            std::string err;
+            check(dsp.configure(baseConfig(WdspChannel::Mode::Cwu), &err),
+                  err.empty() ? "Hl2RxDsp configures for the NB2 case" : err.c_str());
+            if (kind != WdspChannel::NoiseBlanker::Off)
+                dsp.setNoiseBlanker(kind, kNbLevel, fill);
+
+            Capture cap;
+            QObject::connect(&dsp, &Hl2RxDsp::audioReady, &dsp,
+                             [&cap](const std::vector<float>& pcm) {
+                if (!cap.collecting)
+                    return;
+                for (float sample : pcm) {
+                    cap.peak = std::max(cap.peak, std::abs(sample));
+                    cap.sumSquares += static_cast<double>(sample) * sample;
+                    ++cap.count;
+                }
+            });
+            feed(dsp, leadIn);          // arm; nothing measured
+            cap.collecting = true;
+            cap.reset();
+            feed(dsp, impulsive);
+            out.peak = cap.peak;
+            out.rms = cap.rms();
+            return out;
+        };
+
+        const Run off = runWith(WdspChannel::NoiseBlanker::Off,
+                                WdspChannel::NoiseBlankerFill::Zero);
+        const Run nb = runWith(WdspChannel::NoiseBlanker::Impulse,
+                               WdspChannel::NoiseBlankerFill::Zero);
+        const Run nb2Zero = runWith(WdspChannel::NoiseBlanker::Advanced,
+                                    WdspChannel::NoiseBlankerFill::Zero);
+        const Run nb2Interp = runWith(WdspChannel::NoiseBlanker::Advanced,
+                                      WdspChannel::NoiseBlankerFill::Interpolate);
+        std::fprintf(stdout,
+                     "  NB2: off peak=%.4f rms=%.5f | nb peak=%.4f rms=%.5f | "
+                     "nb2/zero peak=%.4f rms=%.5f | nb2/interp peak=%.4f rms=%.5f\n",
+                     off.peak, off.rms, nb.peak, nb.rms,
+                     nb2Zero.peak, nb2Zero.rms, nb2Interp.peak, nb2Interp.rms);
+
+        check(off.peak > 0.0 && nb2Zero.peak > 0.0 && nb2Interp.peak > 0.0,
+              "every NB2 pass produced audio");
+        // Same bound section 3 pins on the linear-phase chain, for the same
+        // reason and on the same stimulus.
+        check(nb2Zero.peak < off.peak * 0.5,
+              "NB2 at least halves the impulse peak in the demodulated audio");
+        check(nb2Interp.peak < off.peak * 0.5,
+              "NB2 with an interpolated fill halves it too");
+        check(nb2Zero.rms > off.rms * 0.5 && nb2Interp.rms > off.rms * 0.5,
+              "the wanted tone survives NB2 (neither fill is a mute)");
+
+        // DISCRIMINATION 1: NB2 is not NB. If `Advanced` had been mapped onto
+        // the ANB — the obvious way to get every other assertion in this file to
+        // pass without implementing anything — these two runs would be BIT
+        // identical, because they would be the same stage fed the same samples.
+        // Two different algorithms cannot agree to the last bit, so an exact
+        // match is the signature of that bug and nothing else.
+        check(nb2Zero.peak != nb.peak || nb2Zero.rms != nb.rms,
+              "NB2 produces a different result from NB, so the second stage "
+              "really is the one running");
+        // DISCRIMINATION 2: the fill reached WDSP. Zero-filling and
+        // interpolating the same blanked windows cannot come out identical
+        // either; if SetEXTNOBMode were never pushed, they would.
+        check(nb2Zero.peak != nb2Interp.peak || nb2Zero.rms != nb2Interp.rms,
+              "the fill mode reaches WDSP, so Zero and Interpolate differ");
+
+        // NO RUNTIME EXCLUSIVITY CHECK HERE, and the reason is worth recording
+        // so it is not attempted again. Two were written and both were removed:
+        //
+        //   * Comparing a fresh NB chain against a fresh "NB with a fill set"
+        //     chain passes whatever the run flags do — a chain that has only
+        //     ever been one kind can leak nothing, so the assertion could not
+        //     fail and was measuring nothing.
+        //   * Switching one chain NB2 -> NB and comparing it against a fresh NB
+        //     chain fails even when the code is CORRECT: the switched chain sees
+        //     a second arming lead-in, and the two stages delay the stream by
+        //     different amounts, so the impulses arrive at a different phase.
+        //     Worse, with the run flags deliberately broken so BOTH stages ran,
+        //     the measured peak and RMS moved by less than the printout's four
+        //     decimals — so even a tolerance-based version could not tell the
+        //     bug from the fix.
+        //
+        // Exclusivity is therefore pinned where it can actually be seen:
+        // wdsp_nb_hold_invariant_test reads setNoiseBlanker as text and requires
+        // both run flags to be written OUTSIDE the per-kind branches. That check
+        // was mutation-proven by moving one of them inside.
+    }
+
     // ── 4. The blanker survives a rate change ─────────────────────────────
     //
     // reconfigure() destroys the WDSP channel, and the blanker lives with it.
@@ -305,7 +412,8 @@ int main(int argc, char** argv)
         std::string err;
         check(dsp.configure(baseConfig(), &err),
               err.empty() ? "Hl2RxDsp configures for the rate-change case" : err.c_str());
-        dsp.setNoiseBlanker(true, 70);
+        dsp.setNoiseBlanker(WdspChannel::NoiseBlanker::Impulse, 70,
+                            WdspChannel::NoiseBlankerFill::Zero);
         Hl2RxDsp::Config faster = baseConfig();
         faster.inputSampleRateHz = 96000;
         check(dsp.configure(faster, &err),
@@ -355,7 +463,8 @@ int main(int argc, char** argv)
             check(dsp.configure(cfg, &err),
                   err.empty() ? "Hl2RxDsp configures for the TX-edge case" : err.c_str());
             if (blankerOn)
-                dsp.setNoiseBlanker(true, kNbLevel);
+                dsp.setNoiseBlanker(WdspChannel::NoiseBlanker::Impulse, kNbLevel,
+                                    WdspChannel::NoiseBlankerFill::Zero);
 
             std::vector<double> blockRms;
             bool collecting = false;
@@ -430,7 +539,8 @@ int main(int argc, char** argv)
                   err.empty() ? "Hl2RxDsp configures for the post-TX blanking case"
                               : err.c_str());
             if (blankerOn)
-                dsp.setNoiseBlanker(true, kNbLevel);
+                dsp.setNoiseBlanker(WdspChannel::NoiseBlanker::Impulse, kNbLevel,
+                                    WdspChannel::NoiseBlankerFill::Zero);
 
             std::vector<float> audio;
             bool collecting = false;

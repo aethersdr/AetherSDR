@@ -55,8 +55,10 @@ double postEdgePeak(bool blankerOn, Release release)
         check(false, err.c_str());
         return -1.0;
     }
-    if (blankerOn && !ch->setNoiseBlanker(true, kNbLevel)) {
-        check(false, "setNoiseBlanker(true) accepted");
+    if (blankerOn
+        && !ch->setNoiseBlanker(WdspChannel::NoiseBlanker::Impulse, kNbLevel,
+                                WdspChannel::NoiseBlankerFill::Zero)) {
+        check(false, "setNoiseBlanker(Impulse) accepted");
         return -1.0;
     }
 
@@ -90,7 +92,10 @@ double postEdgePeak(bool blankerOn, Release release)
     run(kFs / 2, false, false, nullptr);         // "transmit": silence, held
     ch->setNoiseBlankerHold(false);
     if (release == Release::Reenable && blankerOn)
-        check(ch->setNoiseBlanker(false, kNbLevel) && ch->setNoiseBlanker(true, kNbLevel),
+        check(ch->setNoiseBlanker(WdspChannel::NoiseBlanker::Off, kNbLevel,
+                                  WdspChannel::NoiseBlankerFill::Zero)
+                  && ch->setNoiseBlanker(WdspChannel::NoiseBlanker::Impulse, kNbLevel,
+                                         WdspChannel::NoiseBlankerFill::Zero),
               "control arm: blanker disabled and re-enabled");
     double peak = 0.0;
     run(kFs / 5, true, true, &peak);             // receive, impulses from sample 0
