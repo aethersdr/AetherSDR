@@ -104,6 +104,78 @@ void checkReconnectSuppression(const QString& timerName, const char* greeting,
 
 // A keychain outage ("unavailable") fails the attempt without blocking, so the
 // reconnect timer is armed; an empty code with a working keychain blocks.
+// unreachable() reports only an automatic attempt whose socket never
+// connected; an alternate attempt keeps the reconnect target, and a missing
+// saved code for the alternate address does not block reconnects.
+template<typename Connection>
+void checkUnreachableAndAlternate(const QString& timerName, const char* greeting,
+                                  quint16 port)
+{
+    const QString manual = QStringLiteral("tgxl.example.net");
+    const QString reported = QStringLiteral("192.0.2.20");
+    auto attempt = [&](Connection& connection, const char* method, const QString& host) {
+        CHECK(QMetaObject::invokeMethod(&connection, method, Qt::DirectConnection,
+            Q_ARG(QString, host), Q_ARG(quint16, port)));
+    };
+    auto refuse = [](Connection& connection) {
+        CHECK(QMetaObject::invokeMethod(&connection, "onError", Qt::DirectConnection,
+            Q_ARG(QAbstractSocket::SocketError, QAbstractSocket::ConnectionRefusedError)));
+    };
+    for (const char* scenario : {"automatic", "operator", "tcpReached", "deliberate"}) {
+        Connection connection;
+        connection.setAutoReconnect(true);
+        QTimer* retry = connection.template findChild<QTimer*>(timerName);
+        CHECK(retry != nullptr);
+        QSignalSpy unreachable(&connection, &Connection::unreachable);
+        const QByteArray which(scenario);
+        attempt(connection, which == "operator" ? "beginAttemptAt" : "beginAutomaticAttemptAt",
+                manual);
+        if (which == "tcpReached") {
+            CHECK(QMetaObject::invokeMethod(&connection, "onConnected", Qt::DirectConnection));
+        } else if (which == "deliberate") {
+            connection.disconnect();
+        }
+        refuse(connection);
+        const bool expected = which == "automatic";
+        CHECK(unreachable.size() == (expected ? 1 : 0));
+        if (expected && !unreachable.isEmpty()) {
+            CHECK(unreachable.first().at(0).toString() == manual);
+        }
+        if (retry) {
+            retry->stop(); // Never allow a timer to connect to a synthetic peer.
+        }
+    }
+    {
+        Connection connection;
+        connection.setAutoReconnect(true);
+        QTimer* retry = connection.template findChild<QTimer*>(timerName);
+        CHECK(retry != nullptr);
+        if (!retry) {
+            return;
+        }
+        QSignalSpy unreachable(&connection, &Connection::unreachable);
+        QSignalSpy required(&connection, &Connection::authCodeRequired);
+        attempt(connection, "beginAutomaticAttemptAt", manual);
+        attempt(connection, "beginAlternateAttemptAt", reported);
+        CHECK(connection.attemptHost() == reported);
+        CHECK(connection.reconnectHost() == manual);
+        feed(connection, greeting);
+        CHECK(required.size() == 1);
+        if (!required.isEmpty()) {
+            connection.setAuthCodeForAttempt(required.last().at(0).toULongLong(), QString());
+        }
+        CHECK(!connection.isAuthBlocked());
+        CHECK(retry->isActive());
+        retry->stop();
+        // The alternate address failing at TCP is not itself reported.
+        attempt(connection, "beginAlternateAttemptAt", reported);
+        refuse(connection);
+        CHECK(unreachable.isEmpty());
+        CHECK(connection.reconnectHost() == manual);
+        retry->stop();
+    }
+}
+
 template<typename Connection>
 void checkKeychainOutageKeepsReconnect(const QString& timerName, const char* greeting,
                                        quint16 port)
@@ -189,6 +261,10 @@ int main(int argc, char** argv)
     checkKeychainOutageKeepsReconnect<TgxlConnection>(QStringLiteral("tgxlReconnectTimer"),
         "V1.2.17 AUTH", 9010);
     checkKeychainOutageKeepsReconnect<PgxlConnection>(QStringLiteral("pgxlReconnectTimer"),
+        "V3.9.1 AUTH", 9008);
+    checkUnreachableAndAlternate<TgxlConnection>(QStringLiteral("tgxlReconnectTimer"),
+        "V1.2.17 AUTH", 9010);
+    checkUnreachableAndAlternate<PgxlConnection>(QStringLiteral("pgxlReconnectTimer"),
         "V3.9.1 AUTH", 9008);
     // A code set on the amplifier is never sent back; an empty one is sent as
     // the vendor utility does; a reply that omits the key gets none.

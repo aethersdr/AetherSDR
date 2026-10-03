@@ -6233,7 +6233,7 @@ void MainWindow::wireMeters()
             }
             if (!ip.isEmpty() && !m_tgxlConn.isConnected()) {
                 if (!m_tgxlConn.isConnecting() && !m_tgxlConn.isAuthBlocked()) {
-                    m_tgxlConn.connectToTgxl(ip, port);
+                    m_tgxlConn.autoConnectToTgxl(ip, port);
                 }
             }
         } else if (AppSettings::instance().value("TGXL_ManualIp", "").toString().trimmed().isEmpty()) {
@@ -6348,8 +6348,10 @@ void MainWindow::wireMeters()
         m_appletPanel->tunerApplet()->setDirectFailureReason(QString());
     });
     // A saved manual address can go stale while the radio still reports the
-    // device. When a connect to it fails at the socket level, try the
-    // radio-reported address once, on the default port.
+    // device. When an automatic connect to it never reaches the device, try
+    // the radio-reported address once, on the default port, as an alternate:
+    // reconnects keep aiming at the manual address. Queued, so the failed
+    // socket finishes its error handling before the next attempt starts.
     {
         auto tgxlFallbackTried = std::make_shared<bool>(false);
         auto pgxlFallbackTried = std::make_shared<bool>(false);
@@ -6359,6 +6361,7 @@ void MainWindow::wireMeters()
                 [pgxlFallbackTried]() { *pgxlFallbackTried = false; });
         connect(&m_tgxlConn, &TgxlConnection::unreachable, this,
                 [this, tgxlFallbackTried](const QString& attemptedHost) {
+            if (m_tgxlConn.isConnected() || m_tgxlConn.isConnecting()) return;
             const QString host = peripheralFallbackHost(
                 attemptedHost,
                 AppSettings::instance().value("TGXL_ManualIp", "").toString(),
@@ -6366,11 +6369,12 @@ void MainWindow::wireMeters()
                 m_tgxlConn.isAuthBlocked(), *tgxlFallbackTried);
             if (!host.isEmpty() && m_radioModel.tunerModel().isPresent()) {
                 *tgxlFallbackTried = true;
-                m_tgxlConn.connectToTgxl(host, 9010);
+                m_tgxlConn.tryAlternateTgxl(host, 9010);
             }
-        });
+        }, Qt::QueuedConnection);
         connect(&m_pgxlConn, &PgxlConnection::unreachable, this,
                 [this, pgxlFallbackTried](const QString& attemptedHost) {
+            if (m_pgxlConn.isConnected() || m_pgxlConn.isConnecting()) return;
             const QString host = peripheralFallbackHost(
                 attemptedHost,
                 AppSettings::instance().value("PGXL_ManualIp", "").toString(),
@@ -6378,21 +6382,10 @@ void MainWindow::wireMeters()
                 m_pgxlConn.isAuthBlocked(), *pgxlFallbackTried);
             if (!host.isEmpty() && m_radioModel.amplifier().present()) {
                 *pgxlFallbackTried = true;
-                m_pgxlConn.connectToPgxl(host, 9008);
+                m_pgxlConn.tryAlternatePgxl(host, 9008);
             }
-        });
+        }, Qt::QueuedConnection);
     }
-    // OPERATE / STANDBY / BYPASS on a TGXL reached by manual IP only: no radio
-    // relays them, nothing was sent. Every surface (applet keys, the status-bar
-    // cycle, the SWR sweep's bypass) funnels through TunerModel, so one
-    // connection announces them all.
-    connect(&m_radioModel.tunerModel(), &TunerModel::relayedCommandRefused,
-            this, [this](const QString& command) {
-        qCWarning(lcDevices) << "TGXL" << command
-                             << "refused: operate/standby/bypass need a Flex radio"
-                             << "to relay them; this tuner is reached by IP only";
-        showUnsupportedControlNotice();
-    });
     // Same for the PGXL: the per-port block, the state word and the alert
     // channel live in the model rather than being decoded into the applet
     // here, so the applet has one source for them whichever path they arrive
@@ -6421,7 +6414,7 @@ void MainWindow::wireMeters()
                 ip = tuner->tgxlIp();
             }
             if (!ip.isEmpty() && !m_tgxlConn.isConnecting() && !m_tgxlConn.isAuthBlocked()) {
-                m_tgxlConn.connectToTgxl(ip, port);
+                m_tgxlConn.autoConnectToTgxl(ip, port);
             }
         }
     });
@@ -6437,7 +6430,7 @@ void MainWindow::wireMeters()
                 ip = m_radioModel.amplifier().ip();
             }
             if (!ip.isEmpty() && !m_pgxlConn.isConnecting() && !m_pgxlConn.isAuthBlocked()) {
-                m_pgxlConn.connectToPgxl(ip, port);
+                m_pgxlConn.autoConnectToPgxl(ip, port);
             }
         } else if (!present && AppSettings::instance().value("PGXL_ManualIp", "")
                                       .toString().trimmed().isEmpty()) {

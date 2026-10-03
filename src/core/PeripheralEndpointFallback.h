@@ -4,8 +4,8 @@
 
 namespace AetherSDR {
 
-// The radio-reported address to try after a presence-triggered connect to a
-// saved manual address failed at the socket level. Empty when no retry applies:
+// The radio-reported address to try after an automatic connect to a saved
+// manual address never reached the device. Empty when no retry applies:
 // no saved manual address, the failed attempt was not to that address, the
 // radio reports nothing or the same address, auth is blocked, or the one retry
 // has been spent.
