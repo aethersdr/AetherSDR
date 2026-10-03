@@ -16,7 +16,10 @@
 #include "core/backends/hl2/MetisProtocol.h"
 
 #include <QCoreApplication>
+#include <QElapsedTimer>
 #include <QEvent>
+#include <QEventLoop>
+#include <QTimer>
 #include <QLoggingCategory>
 #include <QString>
 #include <QStringList>
@@ -76,6 +79,7 @@ struct Hl2TxGateTestAccess {
         // Constructed transport only: no connectRadio(), socket, peer or DSP
         // setup. Exercise the real backend's queued CW/hang paths.
         backend.m_txAllowed = true;
+        backend.m_txTailHoldMs = 60 * 60 * 1000;   // parked; tests expire it
         QMetaObject::invokeMethod(backend.m_metis, [metis = backend.m_metis] {
             metis->enableTransmit(true);
             // A session, without a socket: MetisClient queues live-control
@@ -96,6 +100,29 @@ struct Hl2TxGateTestAccess {
     }
 
     static MetisClient* metis(Hl2Backend& backend) { return backend.m_metis; }
+    // The radio's transmit tail, driven by hand: a zero-length hold would finish
+    // it inside the unkey, so tests park it and expire it explicitly.
+    static void setTxTailHoldMs(Hl2Backend& backend, int ms) { backend.m_txTailHoldMs = ms; }
+    static bool txTailPending(const Hl2Backend& backend) { return backend.m_txTailPending; }
+    static bool txTailArmed(const Hl2Backend& backend)
+    {
+        return backend.m_txTailTimer && backend.m_txTailTimer->isActive();
+    }
+    static void expireTxTail(Hl2Backend& backend)
+    {
+        backend.m_txTailTimer->stop();
+        backend.finishTxTail();
+    }
+    static int ocFilterByte(const Hl2Backend& backend) { return backend.m_ocFilterByte; }
+    static void declareTxOnlyFilterBoard(Hl2Backend& backend)
+    {
+        Hl2HardwareOptions hw = backend.m_hw;
+        hw.filterBoard = Hl2HardwareOptions::FilterBoard::N2adrTxOnly;
+        hw.n2adrHpf = false;
+        backend.m_hw = hw;
+    }
+    static constexpr int defaultTxTailHoldMs() { return Hl2Backend::kTxTailHoldMs; }
+    static constexpr int unkeyUnmuteHoldMs() { return Hl2Backend::kUnkeyUnmuteHoldMs; }
     static const TxCoordinator::Operation& tuneOperation(const Hl2Backend& backend)
     {
         return backend.m_tuneOperation;
@@ -372,6 +399,7 @@ static void testTunePowerAppliesLiveWhileTuning(TxTestAuthority& authority)
         backend.setTune(false, 10, authority.operation, {});
         check(!Hl2TxGateTestAccess::tuneOperation(backend).permitsCleanup(),
               "TUNE release drops the TUNE operation");
+        Hl2TxGateTestAccess::expireTxTail(backend);
         const Drained released = drain(backend);
         check(driveIs(released, 102, true),
               "TUNE release restores the operator's 40% RF drive, not the live tune drive");
@@ -445,10 +473,11 @@ private:
     MetisClient* m_metis;
 };
 
-// TUNE release must take MOX off before the RF drive comes back. Restoring
-// first leaves a window where a keyed frame carries the full-scale tune tone at
-// the operator's RF drive. Walks every packet the unkey's queued calls allow.
-static void testTuneReleaseUnkeysBeforeRestoringDrive(TxTestAuthority& authority)
+// The unkey itself posts no RF-drive restore: the radio is still draining keyed
+// tune tone from its TX FIFO and holding the last sample (radio.v:934-935,
+// 1036-1047), so no host packet order can make a restore here safe. Walks every
+// packet the unkey's queued calls allow.
+static void testTuneReleasePostsNoDriveRestore(TxTestAuthority& authority)
 {
     Hl2Backend backend;
     Hl2TxGateTestAccess::prepare(backend);
@@ -470,26 +499,151 @@ static void testTuneReleaseUnkeysBeforeRestoringDrive(TxTestAuthority& authority
         probe.moveToThread(QCoreApplication::instance()->thread());
     }, Qt::BlockingQueuedConnection);
 
-    int driveOnRadio = 25;
-    bool sawRestore = false;
-    bool keyedAtRfDrive = false;
-    for (std::size_t i = 0; i < probe.packets.size(); ++i) {
-        const auto& pkt = probe.packets[i];
+    bool restoredInUnkey = false;
+    for (const auto& pkt : probe.packets) {
         if (const auto bank = driveBankIn(pkt)) {
-            driveOnRadio = bank->level;
-            sawRestore = sawRestore || bank->level == 204;
-        }
-        if (anyFrameKeyed(pkt) && payloadNonZero(pkt) && driveOnRadio == 204) {
-            keyedAtRfDrive = true;
-            std::fprintf(stderr, "  unkey packet %zu of %zu: MOX set, tune tone on, drive %d\n",
-                         i + 1, probe.packets.size(), driveOnRadio);
+            restoredInUnkey = restoredInUnkey || bank->level == 204;
         }
     }
     check(probe.packets.size() >= 2, "premise: the unkey posted queued calls to the transport");
-    check(sawRestore, "premise: the unkey restores the 80% RF drive (204)");
-    check(!keyedAtRfDrive,
-          "TUNE release: no keyed tune-tone frame is ever built at the restored RF drive");
-    check(!anyFrameKeyed(Hl2TxGateTestAccess::packet(backend)), "premise: TUNE released");
+    check(!restoredInUnkey, "TUNE release: the unkey posts no RF-drive restore");
+    const Drained after = drain(backend);
+    check(!after.anyKeyed, "premise: TUNE released");
+    check(!(after.lastDrive && after.lastDrive->level == 204),
+          "TUNE release: RF drive still withheld while the transmit tail is pending");
+    check(Hl2TxGateTestAccess::txTailPending(backend) && Hl2TxGateTestAccess::txTailArmed(backend),
+          "TUNE release arms the transmit tail");
+    Hl2TxGateTestAccess::expireTxTail(backend);
+    const Drained restored = drain(backend);
+    check(restored.lastDrive && restored.lastDrive->level == 204 && !restored.anyKeyed,
+          "the transmit tail expiring restores the 80% RF drive (204), unkeyed");
+}
+
+// The tail's edges: a re-key cancels the restore, RF power set during the tail
+// waits for it, a disconnect drops it, and the receive filter waits with it.
+static void testTransmitTailEdges(TxTestAuthority& authority)
+{
+    static_assert(Hl2TxGateTestAccess::defaultTxTailHoldMs()
+                      >= Hl2TxGateTestAccess::unkeyUnmuteHoldMs(),
+                  "the transmit tail never ends before the RX unkey hold");
+    const auto lastDriveIs = [](const Drained& d, int level) {
+        return d.lastDrive && d.lastDrive->level == level;
+    };
+    {
+        // A voice key inside the tail: the restore is cancelled and stays owed,
+        // so it is never applied over the new carrier; the next unkey pays it.
+        Hl2Backend backend;
+        Hl2TxGateTestAccess::prepare(backend);
+        backend.setSliceMode(0, QStringLiteral("USB"));
+        backend.setTxPower(80);
+        backend.setTune(true, 10, authority.operation, {});
+        backend.setTune(false, 10, authority.operation, {});
+        (void)drain(backend);
+        backend.setKeying(true, authority.operation, {});
+        check(!Hl2TxGateTestAccess::txTailPending(backend)
+                  && !Hl2TxGateTestAccess::txTailArmed(backend),
+              "a re-key inside the tail cancels it");
+        Hl2TxGateTestAccess::expireTxTail(backend);
+        const Drained rekeyed = drain(backend);
+        check(rekeyed.anyKeyed && !lastDriveIs(rekeyed, 204),
+              "re-keyed inside the tail: no RF-drive restore under the new carrier");
+        backend.setKeying(false, authority.operation, {});
+        check(!lastDriveIs(drain(backend), 204), "the next unkey withholds the drive too");
+        Hl2TxGateTestAccess::expireTxTail(backend);
+        check(lastDriveIs(drain(backend), 204), "and its tail restores the owed RF drive");
+    }
+    {
+        // TUNE re-keyed inside the tail: the tune drive owns the register.
+        Hl2Backend backend;
+        Hl2TxGateTestAccess::prepare(backend);
+        backend.setSliceMode(0, QStringLiteral("USB"));
+        backend.setTxPower(80);
+        backend.setTune(true, 10, authority.operation, {});
+        backend.setTune(false, 10, authority.operation, {});
+        backend.setTune(true, 20, authority.operation, {});
+        Hl2TxGateTestAccess::expireTxTail(backend);
+        const Drained d = drain(backend);
+        check(d.anyKeyed && lastDriveIs(d, 51), "TUNE re-keyed inside the tail keeps its 20% drive (51)");
+        backend.setTune(false, 20, authority.operation, {});
+    }
+    {
+        // RF power changed while the tail radiates: applied when the tail ends.
+        Hl2Backend backend;
+        Hl2TxGateTestAccess::prepare(backend);
+        backend.setSliceMode(0, QStringLiteral("USB"));
+        backend.setTxPower(80);
+        backend.setTune(true, 10, authority.operation, {});
+        backend.setTune(false, 10, authority.operation, {});
+        (void)drain(backend);
+        backend.setTxPower(60);
+        check(!drain(backend).lastDrive, "RF power during the tail writes no drive bank");
+        Hl2TxGateTestAccess::expireTxTail(backend);
+        check(lastDriveIs(drain(backend), 153), "the tail ends at the newest RF power (60% = 153)");
+    }
+    {
+        // TUNE keyed with no tune power of its own: a live change is still owed back.
+        Hl2Backend backend;
+        Hl2TxGateTestAccess::prepare(backend);
+        backend.setSliceMode(0, QStringLiteral("USB"));
+        backend.setTxPower(80);
+        backend.setTune(true, -1, authority.operation, {});
+        backend.setTunePower(30);
+        check(lastDriveIs(drain(backend), 76), "premise: live tune power 30% drives 76");
+        backend.setTune(false, -1, authority.operation, {});
+        Hl2TxGateTestAccess::expireTxTail(backend);
+        check(lastDriveIs(drain(backend), 204), "a live tune drive is restored to RF drive after the tail");
+    }
+    {
+        // A disconnect while the tail is pending drops it.
+        Hl2Backend backend;
+        Hl2TxGateTestAccess::prepare(backend);
+        backend.setSliceMode(0, QStringLiteral("USB"));
+        backend.setTune(true, 10, authority.operation, {});
+        backend.setTune(false, 10, authority.operation, {});
+        backend.disconnectRadio();
+        check(!Hl2TxGateTestAccess::txTailPending(backend)
+                  && !Hl2TxGateTestAccess::txTailArmed(backend),
+              "a disconnect drops the pending tail");
+    }
+    {
+        // The receive filter waits for the tail: keyed and tail use the TX byte.
+        Hl2Backend backend;
+        Hl2TxGateTestAccess::prepare(backend);
+        Hl2TxGateTestAccess::declareTxOnlyFilterBoard(backend);
+        backend.setSliceMode(0, QStringLiteral("USB"));
+        backend.setSliceFrequency(0, 7.1e6);
+        const int rxByte = Hl2TxGateTestAccess::ocFilterByte(backend);
+        backend.setKeying(true, authority.operation, {});
+        const int txByte = Hl2TxGateTestAccess::ocFilterByte(backend);
+        check(txByte != rxByte, "premise: the TX-only board switches its byte when keyed");
+        backend.setKeying(false, authority.operation, {});
+        check(Hl2TxGateTestAccess::ocFilterByte(backend) == txByte,
+              "unkey: the filter stays on the TX byte while the tail is pending");
+        backend.setSliceFrequency(0, 7.15e6);
+        check(Hl2TxGateTestAccess::ocFilterByte(backend) == txByte,
+              "a retune inside the tail does not drop to the RX byte");
+        Hl2TxGateTestAccess::expireTxTail(backend);
+        check(Hl2TxGateTestAccess::ocFilterByte(backend) == rxByte,
+              "the tail ending returns the filter to the RX byte");
+    }
+    {
+        // The timer, not the test, ends a real tail.
+        Hl2Backend backend;
+        Hl2TxGateTestAccess::prepare(backend);
+        Hl2TxGateTestAccess::setTxTailHoldMs(backend, 20);
+        backend.setSliceMode(0, QStringLiteral("USB"));
+        backend.setTxPower(80);
+        backend.setTune(true, 10, authority.operation, {});
+        backend.setTune(false, 10, authority.operation, {});
+        QElapsedTimer waited;
+        waited.start();
+        while (Hl2TxGateTestAccess::txTailPending(backend) && waited.elapsed() < 2000) {
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
+        }
+        check(!Hl2TxGateTestAccess::txTailPending(backend) && waited.elapsed() >= 15,
+              "the tail timer ends the tail after its hold");
+        check(lastDriveIs(drain(backend), 204), "and restores the RF drive");
+    }
 }
 
 int main(int argc, char** argv)
@@ -500,7 +654,8 @@ int main(int argc, char** argv)
 
     testAtuTuneHonoursTheTransmitGate(authority);
     testTunePowerAppliesLiveWhileTuning(authority);
-    testTuneReleaseUnkeysBeforeRestoringDrive(authority);
+    testTuneReleasePostsNoDriveRestore(authority);
+    testTransmitTailEdges(authority);
 
     {
         MetisClient board;
