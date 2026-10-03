@@ -30,9 +30,18 @@ public:
     // The host the operator (or discovery) asked for on the current attempt:
     // a name or a literal address. Saved codes key on it; see PeripheralAuthStore.
     QString attemptHost() const { return m_attemptHost; }
+    // The host reconnects aim at; an alternate attempt leaves it unchanged.
+    QString reconnectHost() const { return m_lastHost; }
     quint16 peerPort() const { return m_socket.peerPort(); }
 
     void connectToPgxl(const QString& host, quint16 port = 9008);
+    // A connect the app makes on its own (discovery, presence, startup) rather
+    // than one the operator asked for. Only these attempts report unreachable().
+    void autoConnectToPgxl(const QString& host, quint16 port = 9008);
+    // A one-off try at another address for the same device. Reconnects keep
+    // the previous target, and a missing saved code for this address fails
+    // the try without blocking them.
+    void tryAlternatePgxl(const QString& host, quint16 port = 9008);
     void disconnect();
 
     void setAutoReconnect(bool on) { m_autoReconnect = on; }
@@ -58,8 +67,9 @@ signals:
     void connected();
     void disconnected();
     void connectionFailed(const QString& errorString);
-    // The socket never reached the device (not an auth failure); carries the
-    // host the attempt asked for.
+    // An automatic attempt never reached the device over TCP; carries the host
+    // it asked for. Not sent after a deliberate disconnect or once auth has
+    // blocked reconnects.
     void unreachable(const QString& attemptedHost);
     void authCodeRequired(quint64 attempt);
     void authCodeAccepted(const QString& code);
@@ -100,6 +110,9 @@ private:
     Q_INVOKABLE void processBytes(const QByteArray& bytes); // injected transport test seam
     Q_INVOKABLE void beginAttempt(); // same reset used before a real TCP connect
     Q_INVOKABLE void beginAttemptAt(const QString& host, quint16 port);
+    Q_INVOKABLE void beginAutomaticAttemptAt(const QString& host, quint16 port);
+    Q_INVOKABLE void beginAlternateAttemptAt(const QString& host, quint16 port);
+    void openSocket(const QString& host, quint16 port, bool wasConnected);
     Q_INVOKABLE void onAuthTimeout();
     void finishHandshake();
     void sendAuthentication();
@@ -141,6 +154,10 @@ private:
     bool       m_authCloseReported{false};
     bool       m_autoReconnect{false};
     bool       m_deliberateDisconnect{false};
+    bool       m_tcpReached{false};       // this attempt's socket connected
+    bool       m_attemptAutomatic{false}; // see autoConnectTo…
+    bool       m_lastAutomatic{false};    // reconnects repeat the target's origin
+    bool       m_alternateAttempt{false}; // see tryAlternate…
     QString    m_version;
     QString    m_lastHost;
     quint16    m_lastPort{9008};

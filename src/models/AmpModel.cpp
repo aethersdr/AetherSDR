@@ -224,25 +224,13 @@ void AmpModel::writeSetupGroup(const QString& meffa, const QString& fanMode)
 
     // Same shape the vendor utility sends:
     //   setup nickname=PowerGeniusXL meffa=OFF ledintens=141 fanmode=STANDARD authcode=
-    //
-    // ALL FIVE KEYS, EVERY TIME, in this order. A `setup` that names only the
-    // key being changed is not how the amplifier is ever written to by its own
-    // utility, and the four omitted values are real configuration — a nickname
-    // and an LED intensity the operator set, and the auth code. Sending the
-    // group back unchanged is what makes a one-field change a one-field
-    // change.
-    //
-    // No `save` follows. That is deliberate and it is what the vendor does for
-    // the front-panel indicator: §9.4, "the change is not recorded in the
-    // amplifier's configuration memory. To make the MEffA mode change
-    // permanent, use the Save button on the Configuration screen." A panel
-    // toggle is a run-time choice, not an edit to the amplifier's stored
-    // configuration.
-    //
-    // Firmware 3.9.8 with authorization enabled refuses a `setup` that carries
-    // `authcode=<code>` (50000013); the same group without it is accepted and
-    // leaves the stored code unchanged. The key is sent, empty, only when
-    // `setup read` reported it empty.
+    // The group in this order, every time, echoing the unchanged values so a
+    // one-field change stays one field. No `save` follows: like the front-panel
+    // toggle (§9.4), this is a run-time choice, not stored configuration.
+    // Firmware 3.9.8 with authorization enabled refuses a `setup` carrying
+    // `authcode=<code>` (50000013) and accepts the group without it, leaving
+    // the stored code unchanged; `authcode=` goes out only when `setup read`
+    // reported it empty.
     QString command =
         QStringLiteral("setup nickname=%1 meffa=%2 ledintens=%3 fanmode=%4")
             .arg(m_setupNickname, meffa, m_setupLedIntens, fanMode);

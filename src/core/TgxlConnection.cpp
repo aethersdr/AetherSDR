@@ -26,7 +26,11 @@ TgxlConnection::TgxlConnection(QObject* parent)
     m_reconnectTimer.setInterval(5000);
     connect(&m_reconnectTimer, &QTimer::timeout, this, [this]() {
         if (!m_connected && !m_authBlocked && !m_lastHost.isEmpty()) {
-            connectToTgxl(m_lastHost, m_lastPort);
+            if (m_lastAutomatic) {
+                autoConnectToTgxl(m_lastHost, m_lastPort);
+            } else {
+                connectToTgxl(m_lastHost, m_lastPort);
+            }
         }
     });
     m_authTimer.setSingleShot(true);
@@ -63,10 +67,12 @@ void TgxlConnection::setAuthCodeForAttempt(quint64 attempt, const QString& code,
     if (m_waitingForAuthCode && attempt == m_authAttempt) {
         if (code.isEmpty()) {
             // A keychain outage says nothing about the saved code, so
-            // auto-reconnect stays available once the keychain returns.
+            // auto-reconnect stays available once the keychain returns. An
+            // alternate address has no saved code of its own; reconnects to
+            // the target keep theirs.
             failAuthentication(credentialStoreUnavailable
                 ? "Stored authorization code unavailable" : "Authorization code required",
-                !credentialStoreUnavailable);
+                !credentialStoreUnavailable && !m_alternateAttempt);
             return;
         }
         // Restoring the same saved code on a reconnect must not replenish the
@@ -83,6 +89,25 @@ void TgxlConnection::connectToTgxl(const QString& host, quint16 port)
 {
     const bool wasConnected = m_connected;
     beginAttemptAt(host, port);
+    openSocket(host, port, wasConnected);
+}
+
+void TgxlConnection::autoConnectToTgxl(const QString& host, quint16 port)
+{
+    const bool wasConnected = m_connected;
+    beginAutomaticAttemptAt(host, port);
+    openSocket(host, port, wasConnected);
+}
+
+void TgxlConnection::tryAlternateTgxl(const QString& host, quint16 port)
+{
+    const bool wasConnected = m_connected;
+    beginAlternateAttemptAt(host, port);
+    openSocket(host, port, wasConnected);
+}
+
+void TgxlConnection::openSocket(const QString& host, quint16 port, bool wasConnected)
+{
     if (m_socket.state() != QAbstractSocket::UnconnectedState) {
         m_deliberateDisconnect = true;
         m_socket.abort();
@@ -93,6 +118,25 @@ void TgxlConnection::connectToTgxl(const QString& host, quint16 port)
     }
     qCDebug(lcTuner) << "TgxlConnection: connecting to" << host << ":" << port;
     m_socket.connectToHost(host, port);
+}
+
+void TgxlConnection::beginAutomaticAttemptAt(const QString& host, quint16 port)
+{
+    beginAttemptAt(host, port);
+    m_attemptAutomatic = true;
+    m_lastAutomatic = true;
+}
+
+void TgxlConnection::beginAlternateAttemptAt(const QString& host, quint16 port)
+{
+    const QString target = m_lastHost;
+    const quint16 targetPort = m_lastPort;
+    const bool targetAutomatic = m_lastAutomatic;
+    beginAttemptAt(host, port);
+    m_lastHost = target;
+    m_lastPort = targetPort;
+    m_lastAutomatic = targetAutomatic;
+    m_alternateAttempt = true;
 }
 
 void TgxlConnection::beginAttemptAt(const QString& host, quint16 port)
@@ -107,6 +151,7 @@ void TgxlConnection::beginAttemptAt(const QString& host, quint16 port)
     }
     m_lastHost = host;
     m_lastPort = port;
+    m_lastAutomatic = false;
     beginAttempt();
 }
 
@@ -124,6 +169,9 @@ void TgxlConnection::beginAttempt()
     m_authPending = false;
     m_waitingForAuthCode = false;
     m_authCloseReported = false;
+    m_tcpReached = false;
+    m_attemptAutomatic = false;
+    m_alternateAttempt = false;
     m_pollTimer.stop();
     m_pollInFlight = false;
     m_connected = false;
@@ -161,6 +209,7 @@ void TgxlConnection::disconnect()
 
 void TgxlConnection::onConnected()
 {
+    m_tcpReached = true;
     qCDebug(lcTuner) << "TgxlConnection: TCP connected, waiting for version line";
     // TGXL sends V<version>\n first, then we send our init commands
 }
@@ -202,7 +251,7 @@ void TgxlConnection::onError(QAbstractSocket::SocketError error)
     if (!m_authPending && !m_authCloseReported) {
         emit connectionFailed(m_socket.errorString());
     }
-    if (!m_connected && !m_authPending && !m_authCloseReported && !m_authBlocked) {
+    if (m_attemptAutomatic && !m_tcpReached && !m_deliberateDisconnect && !m_authBlocked) {
         emit unreachable(m_attemptHost);
     }
     // A failed reconnect attempt arrives here (not via onDisconnected) because
