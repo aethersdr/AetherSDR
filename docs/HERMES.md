@@ -2217,14 +2217,15 @@ false it is the only automatic floor the operator has.
 **Off needs the row's unit, and for a while it did not have it.** The manual
 level is a threshold, `160 - level`, written for a Flex waterfall tile (intensity,
 about 96..120). The HL2 has no waterfall plane: `RadioModel::onBackendSpectrumFrame`
-hands the pan frame on as the row, so the row is dBm and every sample sits below
+hands the pan frame on as the row, so the row is the pan's dB axis (dBFS under a
+dBm label) and every sample sits below
 a threshold of +60..+160. Off drew nothing at any slider position — 12 of 12
 frames exactly black on the bench, while SW beside it worked, because SW measures
 its black point from the row and so is already in the row's unit.
 
 `WaterfallLevelMap::manualBlackThreshold` now takes the unit from
 `RadioCapabilities::panBinsAbsolute()`, the flag the auto-floor gate already
-reads: a dBm row gets `-60 dBm - level`, one dB a step, -60 down to -160 dBm.
+reads: an absolute row gets `-60 dB - level`, one dB a step, -60 down to -160 dB.
 The direction is the Flex one (a higher value draws more of the floor). The two
 end points are chosen, not derived: -160 dBm clears the lowest floor this radio
 showed (-148 dBm at 384 kHz and LNA +40 dB, 9 dB lower at 48 kHz), and -60 dBm

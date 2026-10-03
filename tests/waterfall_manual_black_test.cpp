@@ -1,7 +1,8 @@
 // Manual waterfall Black Level (WaterfallLevelMap): header-only, no Qt.
-// Pins: with rowsAreDbm false the law equals the frozen copy `mainLaw` bit for
-// bit; rowsAreDbm reaches the manual branch only; on a dBm row the slider has
-// a lit end and a dark end. The last block is a source-text pin, see there.
+// Pins: rowsAreAbsoluteDb false equals the frozen copy `mainLaw` bit for bit;
+// the flag reaches the manual branch only; an absolute row has a lit and a dark
+// end. Every absolute-row check uses floorsDbm[], one HL2's floors: ANAN and
+// RTL-SDR take this path unmeasured. The last block is a source-text pin.
 
 #include "gui/WaterfallLevelMap.h"
 
@@ -92,11 +93,11 @@ int main()
     const float kInf = std::numeric_limits<float>::infinity();
 
     // Every black-point source, both units, against the frozen law. Tile-shaped
-    // and dBm-shaped values both go through, so the comparison covers the
+    // and absolute-dB values both go through, so the comparison covers the
     // range either row can carry.
     long compared = 0;
-    long flexMismatch = 0;      // rowsAreDbm false, any mode
-    long autoDbmMismatch = 0;   // rowsAreDbm true, SW or HW
+    long flexMismatch = 0;      // rowsAreAbsoluteDb false, any mode
+    long autoDbmMismatch = 0;   // rowsAreAbsoluteDb true, SW or HW
     const float specials[] = {kNan, kInf, -kInf, 0.0f, -0.0f};
     for (int mode = 0; mode < 3; ++mode) {          // 0 manual, 1 SW, 2 HW
         for (int gain = 0; gain <= 100; gain += 5) {
@@ -118,11 +119,11 @@ int main()
                             v, p.autoBlack, p.radioSideAutoBlack,
                             p.radioAutoBlackRaw, p.autoBlackThresh,
                             p.autoBlackOffset, p.blackLevel, p.colorGain);
-                        p.rowsAreDbm = false;
+                        p.rowsAreAbsoluteDb = false;
                         if (!sameBits(WLM::level(v, p), want)) {
                             ++flexMismatch;
                         }
-                        p.rowsAreDbm = true;
+                        p.rowsAreAbsoluteDb = true;
                         if (mode != 0 && !sameBits(WLM::level(v, p), want)) {
                             ++autoDbmMismatch;
                         }
@@ -142,15 +143,16 @@ int main()
     report("the comparison ran (more than a million samples)", compared > 1000000);
     report("Flex-shaped rows: Off, SW and HW are bit-identical to the old law",
            flexMismatch == 0);
-    report("dBm rows: SW and HW are bit-identical to the old law",
+    report("absolute rows: SW and HW are bit-identical to the old law",
            autoDbmMismatch == 0);
     report("the tile black point is still 160 at slider 0 and 60 at slider 100",
            WLM::manualBlackThreshold(0, false) == 160.0f
                && WLM::manualBlackThreshold(100, false) == 60.0f);
 
-    // Floors measured on one HL2 on a dummy load at the 384 kHz span, LNA
-    // -12 / 0 / +10 / +20 / +30 / +40 dB, plus the same radio's lowest floor at
-    // the 48 kHz span (bins eight times narrower: 10*log10(8) = 9.03 dB lower).
+    // The scope of every absolute-row claim below: one HL2 on a dummy load at
+    // the 384 kHz span, LNA -12 / 0 / +10 / +20 / +30 / +40 dB, plus its lowest
+    // floor at the 48 kHz span (bins eight times narrower: 9.03 dB lower). The
+    // checks pin direction and monotonicity, not the end points.
     const float floorsDbm[] = {-111.0f, -121.7f, -128.8f, -140.1f,
                                -147.6f, -148.1f, -148.1f - 9.03f};
     bool oldLawBlanksEverything = true;
@@ -168,19 +170,19 @@ int main()
                 p.blackLevel = slider;
                 // Under the tile law even a signal 60 dB over the floor is
                 // black.
-                p.rowsAreDbm = false;
+                p.rowsAreAbsoluteDb = false;
                 if (WLM::level(floorDbm, p) != 0.0f
                         || WLM::level(floorDbm + 60.0f, p) != 0.0f) {
                     oldLawBlanksEverything = false;
                 }
-                p.rowsAreDbm = true;
+                p.rowsAreAbsoluteDb = true;
                 const float now = WLM::level(floorDbm, p);
                 if (now < previous) {
                     newLawMonotone = false;
                 }
                 previous = now;
             }
-            p.rowsAreDbm = true;
+            p.rowsAreAbsoluteDb = true;
             p.blackLevel = 100;
             if (!(WLM::level(floorDbm, p) > 0.0f)) {
                 newLawHasLitEnd = false;
@@ -204,15 +206,15 @@ int main()
             }
         }
     }
-    report("the tile law blanks a dBm row at every slider position (the defect)",
+    report("the tile law blanks an absolute row at every slider position (the defect)",
            oldLawBlanksEverything);
-    report("dBm row: slider 100 lights every measured floor",
+    report("absolute row: slider 100 lights every measured floor",
            newLawHasLitEnd);
-    report("dBm row: slider 0 puts every measured floor at black",
+    report("absolute row: slider 0 puts every measured floor at black",
            newLawHasDarkEnd);
-    report("dBm row: some position blacks the floor and keeps a +30 dB signal",
+    report("absolute row: some position blacks the floor and keeps a +30 dB signal",
            newLawSeparatesSignal);
-    report("dBm row: raising the slider never darkens (same way as a Flex)",
+    report("absolute row: raising the slider never darkens (same way as a Flex)",
            newLawMonotone);
 
     // The same direction on a tile, so the two units cannot be told apart by
@@ -220,7 +222,7 @@ int main()
     {
         WLM::Params p;
         p.autoBlack = false;
-        p.rowsAreDbm = false;
+        p.rowsAreAbsoluteDb = false;
         bool tileMonotone = true;
         float previous = -1.0f;
         for (int slider = 0; slider <= 100; ++slider) {
@@ -238,18 +240,18 @@ int main()
         report("tile row: raising the slider never darkens, and both ends differ",
                tileMonotone && lit > 0.0f && dark == 0.0f);
     }
-    report("the dBm black point spans -60 to -160 dBm, one dB a step",
+    report("the absolute black point spans -60 to -160 dB, one dB a step",
            WLM::manualBlackThreshold(0, true) == -60.0f
                && WLM::manualBlackThreshold(100, true) == -160.0f
                && WLM::manualBlackThreshold(37, true) == -97.0f);
 
-    // WtrFall Gain keeps its meaning across Off and SW on a dBm row: the same
+    // WtrFall Gain keeps its meaning across Off and SW on an absolute row: the same
     // range width, only the black point's source differs.
     {
         WLM::Params manual;
         manual.autoBlack = false;
-        manual.rowsAreDbm = true;
-        manual.blackLevel = 70;                 // black point -130 dBm
+        manual.rowsAreAbsoluteDb = true;
+        manual.blackLevel = 70;                 // black point -130 dB
         WLM::Params sw = manual;
         sw.autoBlack = true;
         sw.autoBlackThresh = -130.0f;           // the same black point, measured
@@ -264,12 +266,12 @@ int main()
                 }
             }
         }
-        report("dBm row: Off at a black point equals SW at the same black point",
+        report("absolute row: Off at a black point equals SW at the same black point",
                same);
     }
 
     // Source-text pin. The claim: SpectrumWidget passes its m_panBinsAbsolute
-    // as rowsAreDbm and keeps no second copy of the tile law. No behavioural
+    // as rowsAreAbsoluteDb and keeps no second copy of the tile law. No behavioural
     // seam reaches it, because SpectrumWidget links into no test target. It
     // shows how the call is written, not that the widget runs.
     {
@@ -277,7 +279,7 @@ int main()
             readFile(std::string(AETHER_SOURCE_DIR) + "/src/gui/SpectrumWidget.cpp");
         report("SpectrumWidget.cpp was read", !src.empty());
         report("the widget hands the law its panBinsAbsolute flag",
-               src.find("params.rowsAreDbm = m_panBinsAbsolute;")
+               src.find("params.rowsAreAbsoluteDb = m_panBinsAbsolute;")
                    != std::string::npos);
         report("the widget calls the shared law",
                src.find("return WaterfallLevelMap::level(intensity, params);")

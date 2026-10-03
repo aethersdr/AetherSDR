@@ -12244,8 +12244,8 @@ QRgb SpectrumWidget::intensityToRgb(float intensity) const
 float SpectrumWidget::intensityToWaterfallLevel(float intensity) const
 {
     // The law is WaterfallLevelMap::level, so a test can reach it; this only
-    // gathers state. With absolute bins the row is the pan frame in dBm
-    // (rowsAreDbm), so the manual black point is a dBm threshold.
+    // gathers state. With absolute bins the row is the pan frame, dBFS under
+    // a dBm label, so the manual black point is a threshold on that axis.
     WaterfallLevelMap::Params params;
     params.autoBlack = m_wfAutoBlack;
     params.radioSideAutoBlack = effectiveWfAutoBlackRadioSide();
@@ -12254,7 +12254,7 @@ float SpectrumWidget::intensityToWaterfallLevel(float intensity) const
     params.autoBlackOffset = m_wfAutoBlackOffset;
     params.blackLevel = m_wfBlackLevel;
     params.colorGain = m_wfColorGain;
-    params.rowsAreDbm = m_panBinsAbsolute;
+    params.rowsAreAbsoluteDb = m_panBinsAbsolute;
     return WaterfallLevelMap::level(intensity, params);
 }
 

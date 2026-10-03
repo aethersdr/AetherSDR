@@ -5,9 +5,9 @@
 
 // The waterfall's value-to-level law, as pure functions (SpectrumWidget links
 // into no test). A row is either Flex tile intensity (int16 raw / 128, ~96..120)
-// or, where the spectrum is computed on this host, dBm (negative); the manual
-// black point must be in the row's unit. The unit is the declared capability
-// RadioCapabilities::panBinsAbsolute(), never guessed from the data.
+// or, where the spectrum is computed on this host, the pan's absolute dB bins
+// (dBFS under a dBm label, negative); the manual black point must be in the
+// row's unit: RadioCapabilities::panBinsAbsolute(), never guessed from the data.
 
 namespace AetherSDR::WaterfallLevelMap {
 
@@ -15,11 +15,11 @@ namespace AetherSDR::WaterfallLevelMap {
 // 0..100 at one unit a step, so the black point spans 160 down to 60.
 inline constexpr float kManualBlackAtZeroTile = 160.0f;
 
-// Manual black point at slider 0 for a dBm row, one dB a step: -60 down to
-// -160 dBm. It must reach below the lowest host-computed floor (about -148 dBm
-// at 384 kHz on an HL2 at +40 dB LNA, ~9 dB lower at 48 kHz) and leave only
-// strong signals lit at slider 0, as on a Flex.
-inline constexpr float kManualBlackAtZeroDbm = -60.0f;
+// Manual black point at slider 0 for an absolute row, one dB a step: -60 down
+// to -160 dB. Chosen against one HL2 (floor about -148 dB at 384 kHz and +40 dB
+// LNA, ~9 dB lower at 48 kHz); ANAN and RTL-SDR floors are unmeasured, and no
+// RTL-SDR bin goes below -120 dBFS (the clamp in RtlSdrDdc::processSpectrum).
+inline constexpr float kManualBlackAtZeroAbsoluteDb = -60.0f;
 
 // qBound's exact comparison order, without Qt: a NaN sample comes out as `lo`
 // where std::clamp would hand the NaN through, so the tile path is unchanged
@@ -57,10 +57,10 @@ inline float highThresholdRaw(float lowRaw, int colorGain)
 // Same direction in both units: a HIGHER slider value is a LOWER black point,
 // so more of the noise floor is drawn ("Decrease to darken the noise floor",
 // the slider's own tooltip).
-inline float manualBlackThreshold(int blackLevel, bool rowsAreDbm)
+inline float manualBlackThreshold(int blackLevel, bool rowsAreAbsoluteDb)
 {
-    const float atZero = rowsAreDbm ? kManualBlackAtZeroDbm
-                                    : kManualBlackAtZeroTile;
+    const float atZero = rowsAreAbsoluteDb ? kManualBlackAtZeroAbsoluteDb
+                                           : kManualBlackAtZeroTile;
     return atZero - static_cast<float>(blackLevel);
 }
 
@@ -73,9 +73,9 @@ struct Params {
     int   autoBlackOffset{50};       // 0..100, 50 = no bias
     int   blackLevel{15};            // 0..100, manual
     int   colorGain{50};             // 0..100
-    // The row is dBm computed on this host, not Flex tile intensity
+    // The row is absolute dB computed on this host, not Flex tile intensity
     // (RadioCapabilities::panBinsAbsolute()).
-    bool  rowsAreDbm{false};
+    bool  rowsAreAbsoluteDb{false};
 };
 
 // One row sample to a 0..1 colour level.
@@ -103,7 +103,7 @@ inline float level(float value, const Params& p)
             + static_cast<float>(50 - p.autoBlackOffset) * 0.5f;
         rangeWidth  = gainRangeWidth(p.colorGain);
     } else {
-        blackThresh = manualBlackThreshold(p.blackLevel, p.rowsAreDbm);
+        blackThresh = manualBlackThreshold(p.blackLevel, p.rowsAreAbsoluteDb);
         rangeWidth  = gainRangeWidth(p.colorGain);
     }
 
