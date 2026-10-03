@@ -161,6 +161,30 @@ PhoneCwApplet::PhoneCwApplet(QWidget* parent)
 void PhoneCwApplet::setSelectableMicInputs(bool selectable)
 {
     m_selectableMicInputs = selectable;
+    // +ACC mixes the rear ACCESSORY connector in with the selected input --
+    // the same Flex connector family as the MIC/BAL/LINE/ACC entries the combo
+    // below collapses to PC, and the same `mic acc` wire text a radio without a
+    // command plane drops. It was the one control on this row left live: it
+    // toggled, lit green and stayed lit while nothing reached the radio.
+    // Unavailable, dimmed, with the reason where a screen reader hears it
+    // (theme-style-guide.md, Three-state controls); a tooltip alone is never
+    // announced.
+    if (m_accBtn) {
+        m_accBtn->setEnabled(selectable);
+        if (selectable) {
+            m_accBtn->setToolTip(QString());
+            m_accBtn->setAccessibleDescription(
+                QStringLiteral("Enable accessory microphone input"));
+        } else {
+            const QSignalBlocker blocker(m_accBtn);
+            m_accBtn->setChecked(false);
+            const QString reason = QStringLiteral(
+                "Unavailable: this radio has no accessory audio input. It takes "
+                "transmit audio from this computer.");
+            m_accBtn->setToolTip(reason);
+            m_accBtn->setAccessibleDescription(reason);
+        }
+    }
     if (!m_micSourceCombo)
         return;
     // Rebuild rather than disable: a greyed-out MIC entry still reads as "this
@@ -1231,7 +1255,10 @@ void PhoneCwApplet::syncPhoneFromModel()
         m_micLevelSlider->setValue(m_model->micLevel());
         m_micLevelLabel->setText(QString::number(m_model->micLevel()));
     }
-    m_accBtn->setChecked(m_model->micAcc());
+    // Held, not merely set once: setSelectableMicInputs(false) unlights +ACC,
+    // and a refresh must not light a dimmed control back up from a model value
+    // that belongs to a radio whose inputs this client cannot select.
+    m_accBtn->setChecked(m_selectableMicInputs && m_model->micAcc());
     m_procBtn->setChecked(m_model->speechProcessorEnable());
 
     {

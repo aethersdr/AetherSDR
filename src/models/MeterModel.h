@@ -206,6 +206,17 @@ public:
 
     // Convenience: instantaneous mic level and compression (non-peak).
     float micLevel() const { return m_micLevel; }
+    // Whether the radio defines the instantaneous "MIC" meter. A Flex does; an
+    // HL2 publishes only TX:MICPEAK (Hl2Backend's meter 6), so micLevel()
+    // there never leaves its -50 floor.
+    bool hasMicLevelMeter() const { return m_micLevelIdx >= 0; }
+    // The value a "transmit level" face shows, given a micMetersChanged pair:
+    // the MIC meter where the radio defines one, otherwise its MICPEAK, else
+    // the MIC floor.
+    float transmitLevelFaceValue(float micLevel, float micPeak) const
+    {
+        return (!hasMicLevelMeter() && hasMicPeakMeter()) ? micPeak : micLevel;
+    }
     float compLevel() const { return m_compLevel; }
 
     // Convenience: external Hardware ALC RCA jack voltage (dBFS, from TX

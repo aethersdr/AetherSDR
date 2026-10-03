@@ -31,6 +31,7 @@
 #include <limits>
 #include <memory>
 #include <utility>
+#include <optional>
 #include <vector>
 
 namespace AetherSDR::hl2 {
@@ -92,6 +93,12 @@ public:
     // Impulse noise blanker, run in host WDSP (the HL2 has no firmware DSP). NR and
     // ANF are deliberately not implemented and stay hidden.
     void setSliceNoiseBlanker(int sliceId, bool on, int level) override;
+    void setSliceSquelch(int sliceId, bool on, int level) override;
+    // Host-side CW APF and AGC-off level, per receiver; see Hl2RxDsp.
+    void setSliceApf(int sliceId, bool on, int level) override;
+    // Handles SliceAgcRequest::Field::OffLevel (the WDSP fixed gain); every
+    // other field goes to the base, i.e. setSliceAgc().
+    void requestSliceAgc(int sliceId, const SliceAgcRequest& request) override;
     void setSliceAudioMute(int sliceId, bool mute) override;
     void setSliceAudioGain(int sliceId, int gainPercent) override;
     void setSliceAudioPan(int sliceId, int panPercent) override;
@@ -110,6 +117,22 @@ private:
 
 public:
     void setPanFrameRate(const QString& panId, int fps) override;
+    // The operator's FFT AVG (0..100) and weighted toggle. This backend owns
+    // the panadapter's averaging (RFC #5782), so both land in the receiver's
+    // Hl2Spectrum; see averageTimeMsForStep() and Hl2Spectrum::setAverageTimeMs().
+    void setPanAverage(const QString& panId, int average) override;
+    void setPanWeightedAverage(const QString& panId, bool on) override;
+
+    // One FFT AVG step is 10 ms of averaging time constant, so 0..100 spans
+    // 0..1 s: the ANAN's unit (AnanBackend's kMsPerAverageStep), so one setting
+    // means one time constant on both families. A time, not a frame count: a
+    // depth in frames would move with the fps slider. It does not match a Flex,
+    // whose `average=` has no documented unit.
+    static constexpr int kMsPerAverageStep = 10;
+    [[nodiscard]] static constexpr int averageTimeMsForStep(int average) noexcept
+    {
+        return (average < 0 ? 0 : (average > 100 ? 100 : average)) * kMsPerAverageStep;
+    }
     bool createPanadapter() override;
     bool removePanadapter(const QString& panId) override;
     void createNotch(double centerHz, double widthHz) override;
@@ -129,6 +152,16 @@ public:
     void setTune(bool on, int tunePowerPercent, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {}) override;
     void setTxAudioMonitor(bool on) override;
     void setTxFrequency(double hz);
+    // RIT / XIT (#5386). The seam carries no slice id, so both are radio-wide
+    // here and follow transmit: RIT offsets the RECEIVE of the transmit-owning
+    // receiver (m_txDdc) only, XIT the TX NCO register only. Neither moves the
+    // published slice frequency — that stays the dial.
+    void setRitEnabled(bool on) override;
+    void setRitOffset(int hz) override;
+    void setXitEnabled(bool on) override;
+    // Overridden, not inherited: the base forwards to setRitOffset() for a radio
+    // with one shared register, and the HL2's RX and TX paths are independent.
+    void setXitOffset(int hz) override;
     void setTxDriveLevel(int level);
     // Baseband TX test tone, offsetHz from the carrier, amplitude 0..1.
     // Opt-in only — never enabled by a default.
@@ -151,16 +184,21 @@ public:
     [[nodiscard]] int lnaEffectiveDb() const noexcept;
     [[nodiscard]] bool autoRfGainEnabled() const noexcept { return m_autoRfGainEnabled; }
 
-    // Max attenuation the loop may apply, in dB below the operator's baseline.
-    // Default 26 dB: from the stock +20 dB baseline it reaches -6 dB, the first clean
-    // gain in #5354's sweep. Everything else in Hl2AutoGainPolicy.h is deliberately
-    // not operator-settable.
+    // Max attenuation the loop may apply, in dB below the operator's baseline. The
+    // floor belongs to the law: 24 dB for "bandscope" (what a backend starts with)
+    // and "probe", 26 for "ramp" and "binary". The 26 was sized from #5354's sweep,
+    // whose gain labels read 32 dB low (one unit's defect, #5943), so it is not a
+    // measured bound. Everything else in Hl2AutoGainPolicy.h is deliberately not
+    // operator-settable.
     void setAutoRfGainFloorDb(int floorDb);
     [[nodiscard]] int autoRfGainFloorDb() const noexcept
     {
         return m_autoGainConfig.maxOffsetDb;
     }
-    static constexpr int kAutoRfGainFloorMaxDb = 31;
+    // The deepest floor the operator may configure: the whole native span, so
+    // from any armable baseline the loop can be allowed to dig to the register
+    // floor. The default floor belongs to the installed law (above).
+    static constexpr int kAutoRfGainFloorMaxDb = hl2::kLnaGainMaxDb - hl2::kLnaGainMinDb;
 
     // Which Hl2AutoGainPolicy.h configuration the loop runs:
     // "bandscope" (default) bandscopeReleaseConfig(): probing law whose release
@@ -170,6 +208,8 @@ public:
     //             interval. What "bandscope" degenerates to without the measurement.
     // "binary"    binaryHighLowConfig(): two-state per-band switch.
     // Same state machine, different numbers; selecting a mode installs its floor.
+    // "default" names the law a backend starts with. Neither law nor floor is
+    // persisted: every connect reinstalls the default (applyRestoredState).
     // Returns false, changing nothing, on an unknown name.
     bool setAutoRfGainMode(const QString& mode);
 
@@ -195,11 +235,10 @@ public:
     }
     [[nodiscard]] QString autoRfGainMode() const { return m_autoGainMode; }
 
-    // The highest baseline from which the automatic control will arm. Above it the
-    // AD9866 gain axis is untrustworthy on this hardware (#5354: +48 dB measures
-    // like +18 dB). A refusal, not a clamp (#5395). The loop only attenuates, so from
-    // here the fold region is unreachable (Hl2GainSplit.h).
-    static constexpr int kAutoRfGainMaxBaselineDb = 19;
+    // The highest baseline from which the automatic control will arm: the top of the
+    // native range, so every baseline the slider offers can arm. Outside it the
+    // control refuses rather than clamps (#5395): it never moves the operator's number.
+    static constexpr int kAutoRfGainMaxBaselineDb = hl2::kLnaGainMaxDb;
 
     // dspChains()' gather. Static so it cannot reach m_rx: this runs on the I/O
     // thread and m_rx is GUI-thread-owned (push_back/erase reallocate under a
@@ -234,12 +273,23 @@ signals:
 
 private:
     friend struct Hl2DspReadbackTestAccess;
+    friend struct Hl2PanCreateTestAccess;
     friend struct Hl2PcmTestAccess;
     friend struct Hl2TxGateTestAccess;
     friend struct Hl2UnkeyHoldTestAccess;
+    // Hands receiver 0 a configured Hl2RxDsp so the APF and AGC-off verbs can
+    // be followed from the seam into WDSP without a socket.
+    friend struct Hl2ApfAgcOffTestAccess;
     // Delivers one bandscope block through MetisClient's signal and ages the mirror,
     // so converter-row expiry is testable without a radio.
     friend struct Hl2HealthBlockTestAccess;
+    // Reads the receive shift/NCO and adds a second receiver's state without a
+    // socket or DSP, for hl2_rit_xit_test. Reaches nothing else.
+    friend struct Hl2RitXitTestAccess;
+    friend struct Hl2Cl1ReferenceTestAccess;
+    // Fires link edges through MetisClient's signals and seeds the connect
+    // baseline, so hl2_auto_gain_law_test reads the installed law without a radio.
+    friend struct Hl2AutoGainLawTestAccess;
     void applyKeying(bool key, const TxCoordinator::Operation& operation,
                      const TxCoordinator::Completion& completion, bool cwBreakIn);
     void invalidateTxDspConfiguration();
@@ -393,6 +443,14 @@ private:
     // Clamp, persist, adopt, re-push — the single path for a calibration change
     // whoever asked for it (setup dialog, automation bridge, connect).
     void applyFreqCalPpb(int ppb, bool persist);
+    // Enforce "CL1 on means zero manual ppb" — §4 of
+    // docs/architecture/hl2-frequency-calibration.md. Returns true when it had to
+    // change something, so a live caller knows to re-push frequencies. Called
+    // from applyHardwareOptions() AND from connectRadio(), because the two
+    // documents are persisted separately and can disagree on disk.
+    bool normalizeCl1Calibration(const char* why);
+    // Read the actual pending transport snapshot without starting a socket.
+    std::optional<std::pair<bool, std::uint32_t>> pendingCl1ReferenceForTest() const;
 
     // This radio's calibration and the derived scale. 0 / 1.0 is uncalibrated.
     int m_freqCalPpb = 0;
@@ -433,6 +491,10 @@ private:
         // shift, and the NCO moves only when the target would leave the window.
         double sliceFreqHz = 10'000'000.0;   // slice
         double ncoHz       = 10'000'000.0;   // DDC / pan centre
+        // True while the NCO sits off the dial only because RIT pushed the
+        // receive frequency out of the window (the dial alone fitted), so
+        // clearing RIT re-centres it on the dial. A pan drag clears it.
+        bool ncoMovedForRit = false;
 
         QString mode = QStringLiteral("USB");
         // Overwritten from defaultPassbandForMode(mode) on the first linkUp of each
@@ -449,6 +511,26 @@ private:
         bool nbOn = false;
         int  nbLevel = 50;
 
+        // APF request and AGC-off level, held like the blanker: nothing echoes
+        // them and a fresh chain must be told again. Literal defaults match
+        // Hl2RxDsp::kDefaultApfLevel / kDefaultAgcOffLevel (the test pins it).
+        bool apfOn = false;
+        int  apfLevel = 50;
+        int  agcOffLevel = 10;
+
+        // The operator's panadapter averaging, held for the same reason: a
+        // chain built on reconnect or for an added pan starts at none.
+        // panAverage is the operator's 0..100; see averageTimeMsForStep().
+        int  panAverage = 0;
+        bool panWeightedAverage = false;
+
+        // Authoritative squelch state, for the blanker's reasons: nothing on
+        // this radio echoes it and every rebuilt chain opens with it off.
+        // Defaults mirror SliceModel's (off, level 20). The mode decides which
+        // WDSP stage carries it — WdspChannel::setSquelch() — not this struct.
+        bool squelchOn = false;
+        int  squelchLevel = 20;
+
         // Host-side per-slice audio: the HL2 mixes nothing. gain is a linear multiplier
         // from the operator's 0..100; pan is 0=left .. 50=centre .. 100=right (SliceModel).
         bool audioMuted = false;
@@ -460,8 +542,15 @@ private:
         // reconciles them on success.
         int configuredRateHz = 0;
 
+        // A pending initial build must not be synchronously reconciled by a rate crossing.
+        bool dspBuildInFlight = false;
+
+        // UI numbers are reused. Only the generation stamped for this DSP can complete it.
+        quint64 dspBuildGeneration = 0;
+
         // Per-receiver S-meter ballistics, so one receiver's signal never moves another's
         // needle.
+
         SMeterSmoother sMeter;
     };
 
@@ -479,6 +568,22 @@ private:
     // WDSP shift: the slice's offset from the NCO less the BFO, so the marker lands
     // on the pitch.
     [[nodiscard]] double rxShiftHz(const Receiver& r) const noexcept;
+    // Where a receiver actually listens: its dial, plus RIT when it owns
+    // transmit. Feeds the NCO window and the shift; sliceFreqHz stays the dial.
+    [[nodiscard]] double rxTunedHz(const Receiver& r) const noexcept;
+    // Re-run one receiver's tune after its share of RIT changed.
+    void retuneReceiver(int ddc);
+    // qCInfo naming the receiver RIT landed on: the seam is radio-wide, so the
+    // VFO turned need not be the receiver that moved.
+    void logRitScope() const;
+    // SmartCatProtocol's kRitMaxHz. Only SmartCAT clamps to it: SliceModel::
+    // setRit() and the VFO's RIT/XIT steppers do not, so an offset past it can
+    // reach the setters, and they log when this clamp bites.
+    static constexpr int kRitXitMaxHz = 9999;
+    bool m_ritOn = false;
+    int m_ritHz = 0;
+    bool m_xitOn = false;
+    int m_xitHz = 0;
 
     // The operator's CW pitch via setCwPitch(). Defaults to TransmitModel's 600.
     int m_cwPitchHz = 600;
@@ -513,6 +618,16 @@ private:
     // Push this receiver's NB state into its chain. Needed wherever a chain is
     // (re)built: a fresh Hl2RxDsp opens with the blanker off.
     void pushNoiseBlanker(const Receiver& r);
+    // Same, for the squelch, and needed at the same places for the same reason.
+    void pushSquelch(const Receiver& r);
+    // Same, for the panadapter averaging (Receiver::panAverage / weighted).
+    void pushPanAveraging(const Receiver& r);
+    // This receiver's NCO just moved: the averaged bins describe the old
+    // frequency axis. Called beside pushNotchTune() at the two retune sites.
+    void dropPanAverage(const Receiver& r);
+    // Same, for the APF (centred on the current CW pitch) and the AGC-off level.
+    void pushApf(const Receiver& r);
+    void pushAgcOffLevel(const Receiver& r);
 
     // I/O THREAD ONLY: the chains the EP6 fan-out feeds, indexed by DDC. Never m_rx,
     // whose push_back/erase can move storage under the fan-out. Rebuilt by
@@ -555,6 +670,17 @@ private:
     // Create and wire one receiver's DSP chain at `ddc`. Shared by buildReceivers()
     // and createPanadapter() so both paths wire identically.
     bool openReceiverDsp(int ddc, std::string* error);
+
+    // Snapshot on GUI, mark/swap on I/O, open on the existing DSP build thread.
+    // Carry UI number (DDC indices move) plus generation (UI numbers are reused).
+    // Derive config here for both initial setup and rate catch-up.
+    void startReceiverDspBuild(int uiNumber);
+    void finishReceiverDspBuild(int uiNumber, quint64 generation, bool ok,
+                                int channelId, int builtRateHz,
+                                const std::string& error);
+    // Backend-lifetime counter: never reset on reconnect, which also reuses UI ids.
+    // releaseReceiverDsps() clears each retiring receiver's stamp before copying it.
+    quint64 m_nextDspBuildGeneration = 0;
     // How many receivers this radio may run right now: the board's reported
     // count, capped by the link budget at the current sample rate.
     [[nodiscard]] int receiverCeiling() const;
@@ -672,11 +798,10 @@ private:
     // a chosen gain. Reset to 0 by resetPersistedState().
     int m_lnaAutoOffsetDb = 0;
     // Automatic control (Hl2AutoGainPolicy.h). This flag is "the loop is RUNNING";
-    // m_autoRfGainWanted is the operator's wish. The wish defaults OFF (no
-    // `autoEnabled` key reads false): the shipped LNA default +20 dB is above
-    // kAutoRfGainMaxBaselineDb, so arming from a fresh connect would always refuse
-    // (#5535, #5752). No timer: the policy steps on the telemetry publish, so when the
-    // stream stops the offset holds; silence is not a clean converter.
+    // m_autoRfGainWanted is the operator's wish, OFF by default (no `autoEnabled` key
+    // reads false). The shipped +20 dB LNA default is armable; default-on is a
+    // separate decision (#5535). No timer: the policy steps on the telemetry publish,
+    // so when the stream stops the offset holds; silence is not a clean converter.
     bool m_autoRfGainEnabled = false;
     // The operator's preference, persisted in currentOperatingState()'s rfGain
     // object (family state, per docs/HERMES.md). Stays true when arming is declined,
@@ -692,9 +817,19 @@ private:
     void publishFrontEndOverload();
     AetherSDR::FrontEndOverload m_lastFrontEndOverload;
     // The configuration's name, for the health row and reset path (the config struct
-    // is just numbers). Set in the constructor: bandscopeReleaseConfig() uses a
-    // logarithm and cannot be a constant initialiser.
-    QString m_autoGainMode = QStringLiteral("bandscope");
+    // is just numbers). No initialiser: installDefaultAutoGainLaw() sets name and
+    // config together, so there is one copy of the default.
+    QString m_autoGainMode;
+    // A law is a name and its numbers, kept as one value so neither is installed
+    // without the other.
+    struct AutoGainLaw {
+        QString name;
+        AetherSDR::hl2::AutoGainConfig config;
+    };
+    // The law a backend starts with: the one source for the constructor,
+    // applyRestoredState() and the name "default".
+    [[nodiscard]] static AutoGainLaw defaultAutoGainLaw();
+    void installDefaultAutoGainLaw();
     // Band and baseline as the loop last saw them, so changes reach the policy as
     // inputs.
     QString m_autoGainBandKey;
@@ -894,12 +1029,13 @@ private:
 
     // Forward-power peak hold: a PEP ESTIMATE. The HL2 has no peak detector: forward
     // power is one 12-bit slow_adc I2C conversion, round-robined with reverse power,
-    // temperature and bias (rtl/slow_adc.v, rtl/control.v ~L262), seen every
-    // kTelemetryMinIntervalMs. 10 Hz sampling misses speech peaks (SSB read 8-12 dB
-    // below PEP), so the max is held across the over: instant attack, release 0.05
-    // per 10 Hz sample (~2 s, like an outboard PEP meter), in WATTS because the
-    // calibration curve is non-linear. Raw counts are still logged and published.
-    // TxApplet's own PEP tick (#2561) therefore tracks the gauge fill on an HL2.
+    // temperature and bias (rtl/slow_adc.v, rtl/control.v ~L262), reported in RADDR 1
+    // up to ~190 times a second. Keyed, the input is each publish window's maximum
+    // (Hl2Telemetry::forwardPowerPeakRaw); the hold carries it across windows:
+    // instant attack, release 0.05 per kTelemetryMinIntervalMs window (~2 s, like an
+    // outboard PEP meter), in WATTS because the calibration curve is non-linear. Raw
+    // counts are still logged and published. TxApplet's PEP tick (#2561) therefore
+    // tracks the gauge fill on an HL2.
     static constexpr double kFwdPeakReleaseAlpha = 0.05;
     double m_fwdPeakWatts = 0.0;
 
