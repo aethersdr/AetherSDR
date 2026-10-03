@@ -230,12 +230,16 @@ static void receiverTuneKeepsDisplayAverage()
         && afterPpm.receivers == beforePpm.receivers && afterPpm.receivingIds == beforePpm.receivingIds,
           "PPM changes capture generation without changing WFM receiver or RF geometry");
     const int beforePpmFrames = frames;
-    const QByteArray obsolete(65536 * int(sizeof(float)), '\0');
+    const QByteArray obsolete(rtl::RtlSdrDdc::kSpectrumBinCount * int(sizeof(float)), '\0');
     rtl::RtlCaptureBackendTestAccess::spectrum(receiver, obsolete, beforePpm.token);
     check(frames == beforePpmFrames,
           "PPM adoption rejects queued spectrum from the old capture");
+    rtl::RtlCaptureBackendTestAccess::spectrum(receiver, obsolete, afterPpm.token);
+    check(frames == beforePpmFrames + 1,
+          "PPM adoption accepts the same spectrum payload with the current token");
+    const int afterPpmControlFrames = frames;
     for (int i = 0; i < 8; ++i) { device->block(); }
-    check(waitFor([&] { return frames > beforePpmFrames; }), "PPM change emits complete observation");
+    check(waitFor([&] { return frames > afterPpmControlFrames; }), "PPM change emits complete observation");
     const double weak = 20 * std::log10(std::sqrt(2.) * (130 - 127.5) / 127.5
                                        * .35875 * (65535. / 65536));
     check(rtl::RtlCaptureBackendTestAccess::state(receiver).hardware.ppm == 1

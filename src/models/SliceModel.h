@@ -7,6 +7,7 @@
 #include <QTimer>
 
 #include "core/backends/SliceDelta.h"
+#include "core/backends/ReceiveCommand.h"
 
 namespace AetherSDR {
 
@@ -205,8 +206,8 @@ public:
     // the two fight on reconnect. On a backend with no command plane there is no
     // radio opinion to defer to, the host bank owns the channel, and a recalled
     // step would otherwise never take because the wire command that normally
-    // round-trips it is dropped. Named for its one caller so the exception stays
-    // visible; see RadioModel::recallCachedMemory().
+    // round-trips it is dropped. Callers: RadioModel::recallCachedMemory() and
+    // RadioModel::applyClientOwnedSliceStep(), both only without a command plane.
     void    applyRecalledStepHz(int hz);
     QVector<int> stepList() const { return m_stepList; }
     int     daxChannel()  const { return m_daxChannel; }
@@ -382,13 +383,18 @@ public:
 signals:
     void letterChanged(const QString& newLetter);
     void frequencyChanged(double mhz);
+    // Emitted for every valid radio-reported frequency, including same-value
+    // reports. Unlike frequencyChanged(), this never represents an optimistic
+    // local tune request.
+    void frequencyStatusReported(double mhz);
     // Supplemental observation notification when frequencyChanged does not
     // fire (same-value reports, optimistic-value echoes, or invalidation).
     void frequencyReported();
     void receiveObservationChanged();
     void receiveModeReported(); // including same-value reports after an intent
-    // Emitted after a local setter has issued a frequency command. Unlike
-    // frequencyChanged, radio-status application does not emit this signal.
+    // Legacy local-intent notifications, not backend dispatch. In particular,
+    // linked slices consume frequencyChanged BEFORE frequencyCommandIssued
+    // arms their echo expectation. Status application emits neither request.
     void frequencyCommandIssued(double mhz);
     // Filter change originating from the OPERATOR, not from radio status.
     // filterChanged() fires for both, so it must not be used to drive a command
@@ -403,6 +409,13 @@ signals:
     // configuring a DSP AGC needs the pair to act on either.
     void agcCommandIssued(const QString& mode, int thresholdDb);
 
+    // Canonical receive dispatch. Emitted after local notifications so a
+    // synchronous backend observation cannot be overwritten by an optimistic
+    // notification. RadioModel wires these once for every slice lifecycle.
+    void receiveTuneRequested(const AetherSDR::SliceTuneRequest& request);
+    void receiveFilterRequested(const AetherSDR::SliceFilterRequest& request);
+    void receiveAgcRequested(const AetherSDR::SliceAgcRequest& request);
+
     // Receive DSP the radio runs. Emitted only by operator-facing setters, never
     // by status application, so a radio echo never returns as a command. These are
     // the seam for non-Flex backends (Flex sends wire text). Enable and level travel
@@ -414,6 +427,10 @@ signals:
     // for why turning the notch on without placing it is not enough.
     void manualNotchCommandIssued(bool on, int position);
     void squelchCommandIssued(bool on, int level);
+    // CW audio peaking filter, enable and level together (setApf/setApfLevel).
+    // Operator setters only, never status application; Flex also gets its
+    // `apf=`/`apf_level=` wire text.
+    void apfCommandIssued(bool on, int level);
     // Receive and transmit incremental tuning.
     void ritCommandIssued(bool on, int hz);
     void xitCommandIssued(bool on, int hz);
@@ -531,10 +548,8 @@ signals:
     void playOnChanged(bool on);
     void playEnabledChanged(bool enabled);
     void commandReady(const QString& cmd);  // ready to send to radio
-    // aetherd RFC 2.3 encode template: express intent instead of building the
-    // wire string. RadioModel routes this to FlexBackend::setSliceMode, whose
-    // output goes through the TX-inhibit-guarded slice sink. (The other slice
-    // commands still use commandReady until they convert.)
+    // Mode dispatch precedes polarity normalization so synchronous backend
+    // defaults win. RadioModel routes it through IRadioBackend::setSliceMode.
     void modeChangeRequested(const QString& mode);
     void digitalVoiceSliceDisplaced(int sliceId, const QString& previousMode);
 
@@ -552,6 +567,16 @@ private:
     void setControlPolicy(ReceiveControlPolicy policy) { m_controlPolicy = policy; }
     bool confirmsControls() const { return m_controlPolicy == ReceiveControlPolicy::Confirmed; }
     ReceiveControlPolicy m_controlPolicy = ReceiveControlPolicy::Optimistic;
+    // Local notifications can synchronously trigger a newer edit or reconnect.
+    // Do not dispatch the superseded intent when that notification returns.
+    // AGC fields are independent: a threshold edit must not cancel a mode edit.
+    quint64 m_tuneIntentRevision{0};
+    quint64 m_modeIntentRevision{0};
+    quint64 m_filterIntentRevision{0};
+    quint64 m_agcModeIntentRevision{0};
+    quint64 m_agcThresholdIntentRevision{0};
+    quint64 m_agcOffLevelIntentRevision{0};
+    void notifyReceiveFilterIntent(SliceFilterRequest::Origin origin);
     // Sign-guarded, idempotent (lo,hi)→(-hi,-lo) mirror of the stored filter
     // when its polarity is wrong for m_mode; true if it changed anything.
     bool normalizeFilterPolarity();

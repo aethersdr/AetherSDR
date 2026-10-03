@@ -1469,6 +1469,17 @@ void MainWindow::onDaxChannelChanged(SliceModel* slice, int newCh)
 void MainWindow::activateWFM(int sliceId)
 {
     if (m_wfmSliceId == sliceId) return;
+    // WFM demodulates the pan's DAX IQ stream, which only a radio with a DAX
+    // plane produces; on any other the demodulator starts on a stream nobody
+    // feeds and its create command is dropped. The DAX panel holding the
+    // button is hidden there, but refuse here too -- every entry point asks
+    // the same question -- and say so instead of lighting a dead button.
+    if (!m_radioModel.hasDaxStreams()) {
+        qCWarning(lcDevices) << "WFM refused: this radio has no DAX IQ stream";
+        showUnsupportedControlNotice();
+        reflectWfmButtons(false, sliceId);   // un-stick the button that triggered us
+        return;
+    }
     deactivateWFM();
 
     m_wfmCooldown = true;

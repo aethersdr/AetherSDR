@@ -5,7 +5,11 @@
 //                 of an EP2 frame's two C&C banks (aethersdr/AetherSDR#4579);
 //   section 5     the frame's audio slot stays untouched unless a codec has
 //                 been DECLARED, because on a bare HL2 that slot is the
-//                 extended address register.
+//                 extended address register;
+//   section 6     a live-control setter called while STOPPED queues nothing,
+//                 so the first frames of the next session are its own
+//                 start-up state and not a bank left over from before it
+//                 (the remainder of #4579).
 //
 // SOCKET-FREE ON PURPOSE. It drives MetisClient's own packet builder, which is
 // public for exactly this reason ("Exists so the gate can be tested on the exact
@@ -60,6 +64,17 @@ struct MetisClientTestAccess {
     // that filled by mistake must still not reach the wire". Production cannot
     // reach it — which is exactly why the gate is otherwise untestable.
     static void forgetCodecWithoutDraining(MetisClient& c) { c.m_params.hasCodec = false; }
+    // Section 6. How many one-shot banks are waiting, read directly: the bytes
+    // alone cannot tell a queued RX1 bank from the rotation's own RX1 slot.
+    static std::size_t oneShotQueued(const MetisClient& c) { return c.m_oneShot.size(); }
+    // The session boundary without a socket, as hl2_tx_gate_test does it. What
+    // start() adds beyond m_running is Params, the counters and the wire; it
+    // touches m_oneShot only to queue the CL1 sequence, which no section here
+    // configures, so for the question section 6 asks -- what is already queued
+    // when the first frame is built -- this is the same state.
+    static void setStreaming(MetisClient& c) { c.m_running = true; }
+    // Section 6: a refused ATU request is not recorded either.
+    static bool atuTune(const MetisClient& c) { return c.m_atuTune; }
 };
 }  // namespace AetherSDR::hl2
 
@@ -74,6 +89,18 @@ static bool isConfigBank(const std::uint8_t* cc)
     return static_cast<std::uint8_t>(cc[0] & ~kC0MoxBit) == kC0Config;
 }
 static int rateCodeOf(const std::uint8_t* cc) { return cc[1] & 0x03; }
+static std::uint8_t addrOf(const std::uint8_t* cc)
+{
+    return static_cast<std::uint8_t>(cc[0] & ~kC0MoxBit);
+}
+static std::uint32_t payloadOf(const std::uint8_t* cc)
+{
+    return (std::uint32_t(cc[1]) << 24) | (std::uint32_t(cc[2]) << 16)
+         | (std::uint32_t(cc[3]) << 8) | std::uint32_t(cc[4]);
+}
+// 0x09 C2: bit 3 is the PA enable (DATA[19]), bit 4 the ATU tune request (DATA[20]).
+static bool paEnabledIn(const std::uint8_t* cc) { return (cc[2] & 0x08) != 0; }
+static bool tuneRequestedIn(const std::uint8_t* cc) { return (cc[2] & 0x10) != 0; }
 // Open-collector outputs are C2[7:1] -- the one-bit shift ccConfig() applies.
 static std::uint8_t ocByteOf(const std::uint8_t* cc)
 {
@@ -141,7 +168,8 @@ int main(int argc, char** argv)
     //
     // m_oneShot is cleared nowhere -- not in start() alongside m_txSeq,
     // m_roundRobin, m_haveRxSeq, m_drops and m_linkUp -- and stop() deliberately
-    // preserves everything that is not an unfinished IO-board write. So a bank
+    // preserves everything that is not an unfinished IO-board write, a CL1
+    // sequence or a drive bank (section 6c). So a bank
     // queued by a band change while disconnected would ride the next session's
     // first frames. Queuing nothing is what closes that here.
     {
@@ -267,6 +295,174 @@ int main(int argc, char** argv)
                   "a queue that filled by mistake still does not reach the wire — "
                   "the packet builder gates on the DECLARATION, not on the queue");
         }
+    }
+
+    // ---- 6. a setter called while stopped reaches no later session ----
+    //
+    // #4579's remainder. m_oneShot is cleared by neither start() nor stop() --
+    // stop() on purpose keeps "unrelated one-shot setup" -- and four setters
+    // pushed into it with no m_running guard: setRxFrequencyHz,
+    // setTxFrequencyHz, setTxDriveLevel and setAtuTuneRequest. Whatever they
+    // queued while the radio was stopped went out in the next session's
+    // priming burst, ahead of anything that session asserted for itself. The
+    // drive bank carries the PA enable and the ATU bank the tune request, and
+    // start() clears m_atuTune precisely because "re-asserting a tune nobody
+    // asked for would start one".
+    //
+    // Guarded at the push, not cleared at start(): see
+    // MetisClient::queueOneShotIfRunning().
+    {
+        constexpr std::uint32_t kRxHz = 14'074'000;
+        constexpr std::uint32_t kTxHz = 14'076'000;
+        constexpr int kDrive = 200;
+
+        MetisClient c;                          // never started: m_running is false
+        c.enableTransmit(true);                 // so the drive is not clamped to 0
+        c.setRxFrequencyHz(kRxHz);
+        c.setTxFrequencyHz(kTxHz);
+        c.setTxDriveLevel(kDrive);
+        c.setAtuTuneRequest(true);
+        check(MetisClientTestAccess::oneShotQueued(c) == 0,
+              "stopped: the four live-control setters queue no one-shot bank");
+        check(!MetisClientTestAccess::atuTune(c),
+              "stopped: the ATU tune request is refused, not recorded");
+
+        // The next session. Its rotation is RX1 NCO, gain, ADC assignment
+        // (one receiver), so the first frames' bank B must be exactly that.
+        MetisClientTestAccess::setStreaming(c);
+        const Ep2 first = c.buildNextControlPacket();
+        const Ep2 second = c.buildNextControlPacket();
+        check(addrOf(bank(first, 1)) == kC0Rx1Freq && payloadOf(bank(first, 1)) == kRxHz,
+              "the first frame of the next session carries the new RX1 frequency");
+        check(addrOf(bank(second, 1)) == kC0AdcGain,
+              "and the second is the rotation's gain slot -- the frequency came "
+              "from the rotation, not from a one-shot queued while stopped");
+
+        bool sawTxFreq = false, sawDrive = false, sawPa = false, sawTune = false;
+        const Ep2* firstTwo[2] = {&first, &second};
+        const auto scan = [&](const Ep2& pkt) {
+            for (int w = 0; w < 2; ++w) {
+                const std::uint8_t* cc = bank(pkt, w);
+                sawTxFreq = sawTxFreq || addrOf(cc) == kC0TxFreq;
+                if (addrOf(cc) == kC0TxDrive) {
+                    sawDrive = true;
+                    sawPa = sawPa || paEnabledIn(cc);
+                    sawTune = sawTune || tuneRequestedIn(cc);
+                }
+            }
+        };
+        for (const Ep2* pkt : firstTwo)
+            scan(*pkt);
+        for (int i = 0; i < 16; ++i)            // several rotations past the priming burst
+            scan(c.buildNextControlPacket());
+        check(!sawTxFreq, "no TX frequency bank set while stopped reaches the next session");
+        check(!sawDrive, "no drive bank set while stopped reaches the next session");
+        check(!sawPa, "the PA enable asked for while stopped is not on the wire");
+        check(!sawTune, "the ATU tune request made while stopped is not on the wire");
+    }
+
+    // ---- 6b. and the guard is not wider than the stop ----
+    //
+    // The same four setters on a RUNNING client still go out on the very next
+    // frame, ahead of the rotation. Without this, a guard that refused
+    // everything would pass section 6.
+    {
+        constexpr std::uint32_t kRxHz = 7'074'000;
+        constexpr std::uint32_t kTxHz = 7'076'000;
+        constexpr int kDrive = 120;
+
+        MetisClient c;
+        c.enableTransmit(true);
+        MetisClientTestAccess::setStreaming(c);
+
+        c.setTxFrequencyHz(kTxHz);
+        const Ep2 tx = c.buildNextControlPacket();
+        check(addrOf(bank(tx, 1)) == kC0TxFreq && payloadOf(bank(tx, 1)) == kTxHz,
+              "running: a TX frequency change is on the next frame");
+
+        c.setTxDriveLevel(kDrive);
+        const Ep2 drive = c.buildNextControlPacket();
+        check(addrOf(bank(drive, 1)) == kC0TxDrive && bank(drive, 1)[1] == kDrive
+                  && paEnabledIn(bank(drive, 1)),
+              "running: a drive change is on the next frame, PA enabled");
+
+        c.setAtuTuneRequest(true);
+        const Ep2 tune = c.buildNextControlPacket();
+        check(addrOf(bank(tune, 1)) == kC0TxDrive && tuneRequestedIn(bank(tune, 1)),
+              "running: an ATU tune request is on the next frame");
+
+        // Drain what is left of the queue first, so the RX1 bank below cannot
+        // be the rotation's own slot arriving by coincidence of phase.
+        check(MetisClientTestAccess::oneShotQueued(c) == 0, "running: nothing else was queued");
+        c.setRxFrequencyHz(kRxHz);
+        check(MetisClientTestAccess::oneShotQueued(c) == 1,
+              "running: an RX frequency change queues exactly one bank");
+        const Ep2 rx = c.buildNextControlPacket();
+        check(addrOf(bank(rx, 1)) == kC0Rx1Freq && payloadOf(bank(rx, 1)) == kRxHz,
+              "running: and it is on the next frame");
+    }
+
+    // ---- 6c. an undrained drive bank does not survive stop() ----
+    //
+    // Section 6 is a setter called on a stopped client; this is the other way
+    // a bank crosses the boundary. One queued WHILE RUNNING and not yet drained
+    // when the session ends was kept by stop(), whose erase took only the IO
+    // board's I2C banks, and the next start()'s two priming bursts -- six
+    // frames, before Hl2Backend's drive-0 -- would carry it. For the 0x09 bank that is the PA enable and
+    // the ATU tune request from a session that has ended.
+    //
+    // stop() now drops the 0x09 bank beside the I2C banks. It still keeps the
+    // RX and TX NCO banks, which assert nothing on the transmit side; the
+    // second half pins that, so an erase widened into a blanket clear fails.
+    {
+        constexpr std::uint32_t kRxHz = 10'136'000;
+        constexpr std::uint32_t kTxHz = 10'138'000;
+        constexpr int kDrive = 180;
+
+        MetisClient c;
+        c.enableTransmit(true);
+        MetisClientTestAccess::setStreaming(c);
+        c.setTxFrequencyHz(kTxHz);
+        c.setRxFrequencyHz(kRxHz);
+        c.setTxDriveLevel(kDrive);              // 0x09, PA enabled
+        c.setAtuTuneRequest(true);              // 0x09 again, tune requested
+        c.setIoBoardTxFrequencyHz(kTxHz);       // five I2C banks
+        check(MetisClientTestAccess::oneShotQueued(c) == 9,
+              "running: TX NCO, RX NCO, two drive banks and five I2C banks queued");
+
+        c.stop();                               // before a single frame drained
+        check(MetisClientTestAccess::oneShotQueued(c) == 2,
+              "stopped mid-queue: only the TX and RX NCO banks survive stop()");
+        MetisClientTestAccess::setStreaming(c); // the next session, as section 6
+
+        bool sawDrive = false, sawPa = false, sawTune = false, sawI2c = false;
+        bool txFreqFirst = false, rxFreqSecond = false;
+        for (int i = 0; i < 8; ++i) {           // both priming bursts and more
+            const Ep2 pkt = c.buildNextControlPacket();
+            for (int w = 0; w < 2; ++w) {
+                const std::uint8_t* cc = bank(pkt, w);
+                if (addrOf(cc) == kC0TxDrive) {
+                    sawDrive = true;
+                    sawPa = sawPa || paEnabledIn(cc);
+                    sawTune = sawTune || tuneRequestedIn(cc);
+                }
+                sawI2c = sawI2c || addrOf(cc) == kC0I2c2;
+            }
+            // The kept banks drain in the order they were queued, ahead of
+            // the rotation (which would open on RX1, then gain).
+            if (i == 0)
+                txFreqFirst = addrOf(bank(pkt, 1)) == kC0TxFreq
+                           && payloadOf(bank(pkt, 1)) == kTxHz;
+            if (i == 1)
+                rxFreqSecond = addrOf(bank(pkt, 1)) == kC0Rx1Freq
+                            && payloadOf(bank(pkt, 1)) == kRxHz;
+        }
+        check(!sawDrive, "stopped mid-queue: no drive bank of the ended session reaches the next");
+        check(!sawPa, "stopped mid-queue: the ended session's PA enable is not on the wire");
+        check(!sawTune, "stopped mid-queue: the ended session's ATU tune request is not on the wire");
+        check(!sawI2c, "stopped mid-queue: the unfinished IO-board write is still discarded");
+        check(txFreqFirst, "stopped mid-queue: the kept TX NCO bank is the next session's first");
+        check(rxFreqSecond, "stopped mid-queue: and the kept RX NCO bank its second");
     }
 
     if (g_failures == 0)

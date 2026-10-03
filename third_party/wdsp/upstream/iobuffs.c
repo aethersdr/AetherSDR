@@ -571,6 +571,21 @@ void fexchange0 (int channel, double* in, double* out, int* error)
 	}
 }
 
+// AetherSDR patch 15: would the next fexchange* find a whole output block?
+// Read-only. A non-blocking host (bfo = 0) asks before each exchange: an
+// underrun advances r2_outidx without consuming, and the two-slot ring is read
+// out of step from then on. See AETHERSDR-PATCHES.md patch 15.
+PORT
+int GetChannelOutputReady (int channel)
+{
+	int ready;
+	IOB a = ch[channel].iob.pe;
+	EnterCriticalSection (&a->r2_ControlSection);
+	ready = a->r2_havesamps >= a->out_size;
+	LeaveCriticalSection (&a->r2_ControlSection);
+	return ready;
+}
+
 PORT	//separate I/Q buffers
 void fexchange2 (int channel, INREAL *Iin, INREAL *Qin, OUTREAL *Iout, OUTREAL *Qout, int* error)
 {
@@ -718,7 +733,7 @@ int dexchange (int channel, double* in, double* out)
 	if ((a->r1_outidx += a->r1_outsize) == a->r1_active_buffsize)
 		a->r1_outidx = 0;
 
-	// AetherSDR patch 15: publish only bytes already copied. The memcpy stays
+	// AetherSDR patches 15/17: publish only bytes already copied. The memcpy stays
 	// OUTSIDE the existing short credit lock; no longer acquisition lock span.
 	copy_output_to_ring (a, in);
 	EnterCriticalSection (&a->r2_ControlSection);

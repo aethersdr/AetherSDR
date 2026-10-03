@@ -37,6 +37,7 @@ class AcomApplet;
 class SpeApplet;
 class VkampApplet;
 class LpMeterApplet;
+class Ctr2ProxyApplet;
 class TxApplet;
 class PhoneCwApplet;
 enum class MicMeterSessionState;
@@ -109,6 +110,7 @@ public:
     SpeApplet*    speApplet()     { return m_speApplet; }
     VkampApplet*  vkampApplet()   { return m_vkampApplet; }
     LpMeterApplet* lpMeterApplet() { return m_lpMeterApplet; }
+    Ctr2ProxyApplet* ctr2ProxyApplet() { return m_ctr2ProxyApplet; }
     TxApplet*       txApplet()       { return m_txApplet; }
     PhoneCwApplet*  phoneCwApplet()  { return m_phoneCwApplet; }
     PhoneApplet*    phoneApplet()    { return m_phoneApplet; }
@@ -408,6 +410,7 @@ private:
     QPushButton* m_speBtn{nullptr};
     VkampApplet* m_vkampApplet{nullptr};
     LpMeterApplet* m_lpMeterApplet{nullptr};
+    Ctr2ProxyApplet* m_ctr2ProxyApplet{nullptr};
     QPushButton* m_vkampBtn{nullptr};
     TxApplet*      m_txApplet{nullptr};
     PhoneCwApplet* m_phoneCwApplet{nullptr};

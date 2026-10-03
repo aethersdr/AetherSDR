@@ -127,7 +127,44 @@ public:
         // 0..100, the seam's units. Mapped to WDSP's threshold by
         // noiseBlankerThresholdForLevel().
         int noiseBlankerLevel = 50;
+        // CW audio peaking filter (setApf()). In Config because reconfigure()
+        // frees the peaking stages; defaults are RXA.c's own (off, 600 Hz,
+        // 100 Hz, linear gain 2.0).
+        bool apfEnabled = false;
+        double apfCenterHz = 600.0;
+        double apfBandwidthHz = 100.0;
+        double apfGain = 2.0;   // LINEAR, not dB
+        // Receive squelch — see setSquelch() below. In Config for the same
+        // reason as the blanker and the FM deviation: reconfigure() frees all
+        // three WDSP squelch stages, so a squelch held only in a runtime setter
+        // would silently open on the next sample-rate change. The level is
+        // the seam's 0..100 (SliceModel's), and 20 is SliceModel's default.
+        bool squelchEnabled = false;
+        int squelchLevel = 20;
         bool operator==(const Config&) const = default;
+    };
+
+    // Which WDSP squelch stage a mode uses — see squelchStageFor().
+    enum class SquelchStage
+    {
+        None,   // no squelch in this mode; every stage is held off
+        Fm,     // fmsq.c — detector-noise squelch
+        Level   // amsq.c — carrier/signal-level squelch (AM and SSB families)
+    };
+
+    // What the last squelch application wrote to WDSP: one run flag per stage
+    // and the threshold handed to the mode's stage in that stage's units (linear
+    // detector noise for Fm, dBFS for Level, 0 for None). `stage` is the mode's
+    // stage even when nothing runs (squelch off, or level 0).
+    struct AppliedSquelch
+    {
+        SquelchStage stage = SquelchStage::None;
+        bool fmRun = false;
+        bool amRun = false;
+        double threshold = 0.0;
+        // How many times the run flags have been written. Lets a caller tell
+        // "re-applied, same answer" from "never applied".
+        unsigned applications = 0;
     };
 
     enum class ProcessResult
@@ -178,6 +215,12 @@ public:
                             std::span<const float> inputQ,
                             std::span<float> outputLeft,
                             std::span<float> outputRight) noexcept;
+    // True when the next processIq() would find a whole output block, i.e. not
+    // return Underrun. A non-blocking caller handed several blocks at once must
+    // ask first: an underrun leaves the two-slot output ring out of step for
+    // good. Same thread and fence as processIq(); false during a control
+    // operation. Local WDSP patch 15.
+    [[nodiscard]] bool outputReady() noexcept;
 
     // Start/stop — the T/R call, not teardown. Stop runs the mute envelope down and
     // flushes, keeping FFTW plans, masks, notches, AGC/shift and the blanker; no
@@ -231,6 +274,18 @@ public:
     // already in flight. Control-path work, guarded exactly like setMode(); it
     // must not be called from the processIq() callback.
     bool setAgc(int agcMode, double maximumGainDb) noexcept;
+    // The AGC's gain in mode 0 (off), in dB; xwcpagc() ignores it in every
+    // other mode, so it may be set any time. Receive only; refuses a
+    // non-finite value or a racing control operation.
+    bool setAgcFixedGain(double fixedGainDb) noexcept;
+    // CW audio peaking filter (WDSP SPCW, apfshadow.c): centerHz is audio (the
+    // CW pitch), gain is linear. Receive only; refuses a non-positive or
+    // non-finite parameter. While it runs both outputs come from I alone
+    // (xdoublepole mode 2 copies I into Q), so any left/right difference is
+    // lost. Stored in Config so open() re-applies it.
+    bool setApf(bool enabled, double centerHz, double bandwidthHz, double gain) noexcept;
+    [[nodiscard]] static bool apfParametersValid(double centerHz, double bandwidthHz,
+                                                 double gain) noexcept;
 
     // Runtime filter length / phase mode without reconfigure() (which would
     // destroy the notch database).
@@ -257,6 +312,24 @@ public:
     // Config::kMinFmDeviationHz..kMaxFmDeviationHz, or if a control op is in
     // flight. Guarded like setMode(); never from processIq().
     bool setFmDeviation(double deviationHz) noexcept;
+
+    // Receive squelch: the mode picks one WDSP stage, the other is forced off;
+    // level 100 is tightest, and setMode() re-applies it.
+    //   level 0                  nothing runs, in every mode ("0 = open")
+    //   FM                       fmsq, threshold 10^(-2 * level / 100)
+    //   AM, SAM, DSB, LSB, USB   amsq, threshold -140 + 0.7 * level dBFS
+    //   CW, DIG, WBFM, other     none
+    // amsq's map is fitted to HL2-measured dBFS levels, so it moves with RF gain;
+    // SSB is on amsq because ssql never opens at this chain's audio level (#5982).
+    // Receive only; false while a control operation is in flight; not from processIq().
+    bool setSquelch(bool on, int level) noexcept;
+    [[nodiscard]] static SquelchStage squelchStageFor(Mode mode) noexcept;
+    // The two maps above, each clamping level to 0..100, so tests can pin them.
+    [[nodiscard]] static double fmSquelchThresholdForLevel(int level) noexcept;
+    [[nodiscard]] static double levelSquelchThresholdDbfsForLevel(int level) noexcept;
+    // A snapshot by value, safe from any thread: guarded by its own mutex, not
+    // g_setupMutex (the FFTW planner lock, which can be held for a whole plan).
+    [[nodiscard]] AppliedSquelch appliedSquelch() const;
 
     // Impulse noise blanker: WDSP ANB (nob.c) on the RAW IQ ahead of the channel,
     // before the bandpass smears impulses. RX only; TX returns false. `level` is
@@ -373,6 +446,14 @@ public:
     // After output-count readiness, wait for the last hook and DSP body before
     // arming another hold. Test/control only; NEVER call while a hold is armed.
     void synchronizeWorkerForTest() const noexcept;
+    // Test only: the next `count` control operations on THIS channel are
+    // refused exactly as a racing processIq() callback would refuse them, so
+    // a caller's refused-then-converges path can be driven deterministically.
+    // 0 (the default) costs one relaxed load per control operation.
+    void refuseControlOperationsForTest(unsigned count) noexcept
+    {
+        m_refuseControlForTest.store(count, std::memory_order_relaxed);
+    }
 
     // Forwards to AetherSDR::fftwPlannerLock() (core/dsp/FftwPlannerLock.h), which
     // owns the mutex and lists its users. Code outside this class should call
@@ -390,6 +471,10 @@ private:
     // caller that sets one without the other gets notches that sit exactly one
     // shift away from where they were placed.
     void applyNotchShift() noexcept;
+    // Writes all three squelch run flags (and the running stage's threshold)
+    // for `mode` from m_config's squelch pair. Caller holds g_setupMutex and
+    // has checked the channel is a receive channel.
+    void applySquelchLocked(Mode mode) noexcept;
     static std::size_t computeOutputBlockSize(const Config& config) noexcept;
 
     [[nodiscard]] bool open() noexcept;
@@ -429,6 +514,11 @@ private:
     // block, the same way it consults m_nbActive — the control handshake
     // already orders the write, this keeps the read from being a data race.
     std::atomic<bool> m_running {false};
+    // Written under m_appliedSquelchMutex (with g_setupMutex already held,
+    // always in that order); read under it alone — see appliedSquelch().
+    mutable std::mutex m_appliedSquelchMutex;
+    AppliedSquelch m_appliedSquelch;
+    std::atomic<unsigned> m_refuseControlForTest {0};
 
     // ── Noise blanker state ───────────────────────────────────────────────
     //

@@ -26,6 +26,7 @@
 #include "core/backends/ProfileDelta.h"
 #include "core/backends/FrontEndOverload.h"
 #include "core/backends/RadioCapabilities.h"
+#include "core/backends/ReceiveCommand.h"
 #include "core/backends/RestoredRadioState.h"
 #include "core/backends/RadioDelta.h"
 #include "core/backends/SliceDelta.h"
@@ -113,7 +114,7 @@ struct MemoryRecallDetails {
 //     backend-owned object returns early on mismatch (RadioModel::setupBackend()).
 //  6. A BACKEND EMITS NOTHING AFTER disconnected(). Frames a worker queued before
 //     stopping are gated on the backend's own connected flag (see SimBackend's
-//     audio forwards). sim_backend_test pins this.
+//     audio and spectrum forwards). sim_backend_test pins this.
 //
 // The interface grows one method at a time per the touchpoint burndown
 // (docs/architecture/aetherd-touchpoints.md).
@@ -206,6 +207,26 @@ public:
     // including after deferred DSP adoption. Refusal/rollback leaves the last
     // observation intact. This does not grant any capability.
     virtual ReceiveControlPolicy receiveControlPolicy() const { return ReceiveControlPolicy::Optimistic; }
+    // Desktop and daemon receive callers use these intent-bearing adapters.
+    // Defaults preserve the existing family implementations below: tuning may
+    // still move a hardware receive window, all filter origins reach host DSP,
+    // and AGC off-level remains unsupported unless a backend overrides it.
+    virtual void requestSliceTune(int sliceId, const SliceTuneRequest& request)
+    {
+        setSliceFrequency(sliceId, request.frequencyHz);
+    }
+    virtual void requestSliceFilter(int sliceId, const SliceFilterRequest& request)
+    {
+        setSliceFilter(sliceId, request.lowHz, request.highHz);
+    }
+    virtual void requestSliceAgc(int sliceId, const SliceAgcRequest& request)
+    {
+        if (request.field != SliceAgcRequest::Field::OffLevel) {
+            setSliceAgc(sliceId, request.mode, request.threshold);
+        }
+    }
+    // Compatibility implementation hooks for backend-internal callers and
+    // existing paired AGC users. New receive routing uses the adapters above.
     virtual void setSliceFrequency(int sliceId, double hz) = 0;
     virtual void setSliceMode(int sliceId, const QString& mode) = 0;
     virtual void setSliceFilter(int sliceId, int lowHz, int highHz) = 0;
@@ -527,7 +548,9 @@ public:
     // Tune carrier on/off at the operator's TUNE power (percent, 0..100). Flex takes
     // "transmit tune N" as text, so FlexBackend ignores this. A backend generating
     // its own carrier needs tunePowerPercent: otherwise it can only key at the RF
-    // Power level setTxPower() last pushed.
+    // Power level setTxPower() last pushed. Without a command plane, declaring
+    // canTransmit and transmitDriveControl promises tunePowerPercent is honoured:
+    // RadioModel then withholds the "transmit set tunepower=" drop notice.
     virtual void setTune(bool on, int tunePowerPercent, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {})
     {
         Q_UNUSED(on);
@@ -540,7 +563,9 @@ public:
     //
     // Flex takes this as a text command from TransmitModel, so FlexBackend has
     // nothing to do here. A backend that owns its own drive register (HL2)
-    // implements it.
+    // implements it, and must if it has no command plane and declares
+    // canTransmit and transmitDriveControl: RadioModel then withholds the
+    // rfpower drop notice.
     virtual void setTxPower(int percent) { Q_UNUSED(percent); }
 
     // The operator's CW pitch, in Hz (TransmitModel's range: 100..6000). A
@@ -634,6 +659,15 @@ public:
     {
         Q_UNUSED(sliceId); Q_UNUSED(microseconds);
     }
+    // CW audio peaking filter (capabilities().hasAudioPeakingFilter): the slice's
+    // enable and 0..100 apf_level together; the backend owns the centre (its CW
+    // pitch) and whether it runs in the current mode. Flex does not override it
+    // (SliceModel sends `apf=`/`apf_level=`). Interim verb: it folds into
+    // #5919's SliceDspRequest::Feature::Apf when that lands.
+    virtual void setSliceApf(int sliceId, bool on, int level)
+    {
+        Q_UNUSED(sliceId); Q_UNUSED(on); Q_UNUSED(level);
+    }
 
     // FM repeater controls.  These are separate radio registers on an Icom
     // (tone enable, tone frequency, duplex direction and duplex magnitude),
@@ -713,6 +747,8 @@ public:
     // sidebands: the modulator picks the sideband, so reflecting for LSB would
     // transmit on the wrong one. Once called, the operator's passband owns the
     // modulator; a per-mode default must not overwrite it on a mode change.
+    // Without a command plane, declaring hasTxFilterControls promises this is
+    // implemented: RadioModel then withholds the filter_low/high drop notice.
     virtual void setTxFilter(int lowHz, int highHz)
     {
         Q_UNUSED(lowHz);
@@ -721,7 +757,9 @@ public:
 
     // Microphone gain, 0..100 (Phone applet MIC). Flex takes `transmit set miclevel=`
     // from TransmitModel. A host-modulating backend that takes this owns the gain:
-    // nothing else scales the mic on its behalf.
+    // nothing else scales the mic on its behalf. A backend with no command plane
+    // that declares canTransmit must implement it: RadioModel then withholds the
+    // miclevel drop notice.
     virtual void setMicGain(int level)
     {
         Q_UNUSED(level);

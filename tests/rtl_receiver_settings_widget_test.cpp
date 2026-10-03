@@ -163,8 +163,10 @@ int main(int argc, char** argv)
     source->confirm();
 
     const int beforeBurst = source->controlRequests;
-    ppm->setValue(30); pumpFor(40);
-    ppm->setValue(31); pumpFor(40);
+    // Deliver one burst without yielding to timers between edits: scheduler
+    // stalls cannot turn the intended burst into separate operator gestures.
+    ppm->setValue(30);
+    ppm->setValue(31);
     ppm->setValue(32);
     check(source->controlRequests == beforeBurst, "rapid PPM edits do not dispatch an intermediate value");
     check(waitFor([&] { return source->controlRequests > beforeBurst; })
@@ -230,6 +232,19 @@ int main(int argc, char** argv)
     check(source->controlRequests == beforeRetry + 1 && source->requested.toInt() == 21,
         "operator can explicitly retry the retained edit after refusal");
     source->confirm();
+    // Refused input is retained for an explicit retry only while the page is
+    // open. Closing it must restore confirmed state and allow later readback.
+    ppm->setValue(22); apply->click();
+    source->refuse(QStringLiteral("close-after-refusal"));
+    const int beforeRefusedHide = source->controlRequests;
+    widget.hide();
+    check(ppm->value() == 21, "hiding discards a refused PPM edit");
+    source->accepted["ppm"] = 23;
+    source->accepted["requestedPpm"] = 23;
+    emit source->extensionStatus("rtl", "settings", source->accepted);
+    widget.show(); pumpFor(260);
+    check(ppm->value() == 23 && source->controlRequests == beforeRefusedHide,
+        "readback reseeds a hidden refused edit without retrying it");
     dc->click();
     check(source->verb == QLatin1String("dc_suppression.set") && source->requested.toBool()
         && !dc->isChecked() && applied->text().endsWith("off"), "DC checkbox remains confirmed while DSP change is pending");

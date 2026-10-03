@@ -139,7 +139,7 @@ places that are not this token.
   `m_clientFftSmoothing` is off: then `m_smoothed` copies the frame straight
   through. `MainWindow` turns that flag off while connected if
   `RadioCapabilities::backendPanAveraging` is set, so the widget does not
-  average a second time. Today only ANAN sets that capability. That paint does
+  average a second time. Today ANAN and HL2 set that capability. That paint does
   not use `color.spectrum.trace` either — `SpectrumWidget` draws the trace in
   `m_fftFillColor` / `m_fftLineColor`, which are operator settings rather than
   tokens. `color.spectrum.trace` is resolved only by `BandscopeDialog` and, as
