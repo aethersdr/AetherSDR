@@ -3603,6 +3603,23 @@ RadioSetupDialog* MainWindow::openRadioSetupPage(const QString& page)
 void MainWindow::wireRadioSetupDialogSignals(RadioSetupDialog* dlg, const QString& prevComp)
 {
     if (!dlg) return;
+    // Removing a row hides its applet button immediately; otherwise the button
+    // stays until the next presence change. The AG button is kept when an AG
+    // is still connected or discovered through another path.
+    connect(dlg, &RadioSetupDialog::peripheralRemoved, this, [this](const QString& id) {
+        if (id == QLatin1String("shackswitch")) {
+            m_appletPanel->setShackSwitchVisible(false);
+        } else if (id == QLatin1String("ag")) {
+            const auto discovered = m_antennaGenius.discoveredDevices();
+            const bool agPresent = (m_antennaGenius.isConnected()
+                    && !AntennaGeniusModel::isShackSwitch(m_antennaGenius.connectedDevice()))
+                || std::any_of(discovered.begin(), discovered.end(),
+                               [](const AgDeviceInfo& d) { return !AntennaGeniusModel::isShackSwitch(d); });
+            if (!agPresent) {
+                m_appletPanel->setAgVisible(false);
+            }
+        }
+    });
     connect(dlg, &RadioSetupDialog::txBandSettingsRequested,
             m_txBandAction, &QAction::trigger);
     // Agent automation bridge toggle (#3646). The dialog persists the click as

@@ -1,3 +1,4 @@
+#include "PeripheralRemovalGuard.h"
 #include "PgxlConnection.h"
 #include "PeripheralAuthCode.h"
 #include "LogManager.h"
@@ -107,6 +108,11 @@ void PgxlConnection::tryAlternatePgxl(const QString& host, quint16 port)
 
 void PgxlConnection::openSocket(const QString& host, quint16 port, bool wasConnected)
 {
+    // Every path that opens a socket (explicit, automatic, alternate, reconnect)
+    // lands here; a pending removal must stop all of them.
+    if (PeripheralRemovalGuard::pending(PeripheralRemovalGuard::Device::Pgxl)) {
+        return;
+    }
     if (m_socket.state() != QAbstractSocket::UnconnectedState) {
         m_deliberateDisconnect = true;
         m_socket.abort();  // disconnected may be emitted synchronously
@@ -116,7 +122,11 @@ void PgxlConnection::openSocket(const QString& host, quint16 port, bool wasConne
         emit disconnected();
     }
     qCDebug(lcTuner) << "PgxlConnection: connecting to" << host << ":" << port;
-    m_socket.connectToHost(host, port);
+    if (m_connectTransport) {
+        m_connectTransport(host, port);
+    } else {
+        m_socket.connectToHost(host, port);
+    }
 }
 
 void PgxlConnection::beginAutomaticAttemptAt(const QString& host, quint16 port)

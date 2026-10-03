@@ -101,6 +101,8 @@ signals:
     // PeripheralSettings before this fires; MainWindow re-reads it and
     // pushes the new scale into VkampApplet::setVariant().
     void vkampVariantChanged();
+    // Emitted after a peripheral row has been removed and its settings cleared.
+    void peripheralRemoved(const QString& id);
 
 protected:
     void closeEvent(QCloseEvent* event) override;
@@ -177,6 +179,7 @@ private:
     // file scope above; full type comes from <QTableWidget> in the cpp.
     QTableWidget* m_pinnedCertsTable{nullptr};
 
+    bool m_peripheralRemovalPending{false};
     RadioModel*  m_model;
     AudioEngine* m_audio{nullptr};
     TgxlConnection*    m_tgxl{nullptr};

@@ -6229,7 +6229,8 @@ void MainWindow::wireMeters()
             const quint16 port = ip.isEmpty() ? 9010
                 : static_cast<quint16>(settings.value("TGXL_ManualPort", "9010").toInt());
             if (ip.isEmpty()) {
-                ip = m_radioModel.tunerModel().tgxlIp();
+                ip = PeripheralSettings::discoveredTarget(QStringLiteral("tgxl"),
+                    m_radioModel.tunerModel().tgxlIp());
             }
             if (!ip.isEmpty() && !m_tgxlConn.isConnected()) {
                 if (!m_tgxlConn.isConnecting() && !m_tgxlConn.isAuthBlocked()) {
@@ -6411,7 +6412,7 @@ void MainWindow::wireMeters()
             const quint16 port = ip.isEmpty() ? 9010
                 : static_cast<quint16>(settings.value("TGXL_ManualPort", "9010").toInt());
             if (ip.isEmpty()) {
-                ip = tuner->tgxlIp();
+                ip = PeripheralSettings::discoveredTarget(QStringLiteral("tgxl"), tuner->tgxlIp());
             }
             if (!ip.isEmpty() && !m_tgxlConn.isConnecting() && !m_tgxlConn.isAuthBlocked()) {
                 m_tgxlConn.autoConnectToTgxl(ip, port);
@@ -6427,7 +6428,8 @@ void MainWindow::wireMeters()
             const quint16 port = ip.isEmpty() ? 9008
                 : static_cast<quint16>(settings.value("PGXL_ManualPort", "9008").toInt());
             if (ip.isEmpty()) {
-                ip = m_radioModel.amplifier().ip();
+                ip = PeripheralSettings::discoveredTarget(QStringLiteral("pgxl"),
+                    m_radioModel.amplifier().ip());
             }
             if (!ip.isEmpty() && !m_pgxlConn.isConnecting() && !m_pgxlConn.isAuthBlocked()) {
                 m_pgxlConn.autoConnectToPgxl(ip, port);

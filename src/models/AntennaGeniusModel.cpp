@@ -1,3 +1,4 @@
+#include "core/PeripheralRemovalGuard.h"
 #include "AntennaGeniusModel.h"
 #include "core/PeripheralAuthCode.h"
 
@@ -48,8 +49,27 @@ AntennaGeniusModel::AntennaGeniusModel(QObject* parent)
     m_reconnectTimer->setSingleShot(true);
     m_reconnectTimer->setInterval(5000);
     connect(m_reconnectTimer, &QTimer::timeout, this, [this]() {
+        if (m_deferredShackSwitch) {
+            if (PeripheralRemovalGuard::pending(PeripheralRemovalGuard::Device::AntennaGenius)) {
+                m_reconnectTimer->start();
+                return;
+            }
+            const AgDeviceInfo target = *m_deferredShackSwitch;
+            m_deferredShackSwitch.reset();
+            if (!m_connected && !isConnecting() && !isAuthBlockedFor(target)) {
+                connectToDevice(target);
+            }
+            return;
+        }
         if (!m_connected && !isAuthBlocked() && m_device.port > 0
             && (!m_device.ip.isNull() || !m_device.host.isEmpty())) {
+            if (PeripheralRemovalGuard::pending(PeripheralRemovalGuard::Device::AntennaGenius)) {
+                // An AG removal leaves the shared model's ShackSwitch alone.
+                // Preserve its single-shot retry while the vault is busy; an
+                // explicit disconnect still cancels it by stopping this timer.
+                m_reconnectTimer->start();
+                return;
+            }
             connectToDevice(m_device);
         }
     });
@@ -296,6 +316,21 @@ void AntennaGeniusModel::onDiscoveryDatagram()
 
 void AntennaGeniusModel::connectToDevice(const AgDeviceInfo& info)
 {
+    if (PeripheralRemovalGuard::pending(PeripheralRemovalGuard::Device::AntennaGenius)) {
+        // Discovery and radio-connect requests may be one-shot. Keep the latest
+        // unrelated ShackSwitch request without changing the live device or
+        // reviving the AG being removed. Explicit Disconnect cancels it.
+        if (isShackSwitch(info) && !m_connected && !isConnecting()
+            && !isAuthBlockedFor(info) && info.port > 0
+            && (!info.ip.isNull() || !info.host.isEmpty())) {
+            m_deferredShackSwitch = info;
+            if (!m_reconnectTimer->isActive()) {
+                m_reconnectTimer->start();
+            }
+        }
+        return;
+    }
+    m_deferredShackSwitch.reset(); // A newer explicit connection supersedes the deferred request.
     const QString host = info.host.isEmpty() ? info.ip.toString() : info.host;
     beginAttemptAt(host, info.port);
     // Always clean up any existing socket — connected or still pending.
@@ -314,6 +349,10 @@ void AntennaGeniusModel::connectToDevice(const AgDeviceInfo& info)
     }
 
     m_device = info;
+    if (m_connectTransport) {
+        m_connectTransport(host, info.port);
+        return;
+    }
     m_tcpSocket = new QTcpSocket(this);
     connect(m_tcpSocket, &QTcpSocket::connected,
             this, &AntennaGeniusModel::onTcpConnected);
@@ -398,6 +437,7 @@ quint16 AntennaGeniusModel::peerPort() const
 
 void AntennaGeniusModel::disconnectFromDevice()
 {
+    m_deferredShackSwitch.reset();
     m_deliberateDisconnect = true;
     m_authTimer->stop();
     m_authPending = false;

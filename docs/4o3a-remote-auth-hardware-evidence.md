@@ -321,3 +321,6 @@ The queued MainWindow wiring between them has no injected seam. Manual check:
 3. With authorization enabled and a code saved only for the manual host, the
    alternate attempt reports "Authorization code required" and reconnects to
    the manual host continue.
+
+Peripherals removal and the Setup Peripherals list are documented in
+[`peripherals-removal-evidence.md`](peripherals-removal-evidence.md).

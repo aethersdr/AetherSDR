@@ -9,6 +9,7 @@
 #include <QByteArray>
 #include <QList>
 #include <functional>
+#include <optional>
 
 class QUdpSocket;
 class QTcpSocket;
@@ -165,6 +166,8 @@ private slots:
 
 private:
     friend struct AntennaGeniusModelTestAccess;
+    friend struct PeripheralConnectionTestAccess;
+    std::function<void(const QString&, quint16)> m_connectTransport;
     Q_INVOKABLE void processTcpBytes(const QByteArray& bytes); // injected transport test seam
     Q_INVOKABLE void beginAttempt(); // same reset used before a real TCP connect
     Q_INVOKABLE void beginAttemptAt(const QString& host, quint16 port);
@@ -256,6 +259,7 @@ private:
     bool    m_autoReconnect{false};
     bool    m_deliberateDisconnect{false};
     QTimer* m_reconnectTimer{nullptr};
+    std::optional<AgDeviceInfo> m_deferredShackSwitch;
 
     // Track init commands
     int m_seqAntennaList{0};

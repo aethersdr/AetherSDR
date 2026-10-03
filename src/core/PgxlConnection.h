@@ -1,5 +1,6 @@
 #pragma once
 
+#include <functional>
 #include <QObject>
 #include <QTcpSocket>
 #include <QElapsedTimer>
@@ -32,6 +33,7 @@ public:
     QString attemptHost() const { return m_attemptHost; }
     // The host reconnects aim at; an alternate attempt leaves it unchanged.
     QString reconnectHost() const { return m_lastHost; }
+    quint16 reconnectPort() const { return m_lastPort; }
     quint16 peerPort() const { return m_socket.peerPort(); }
 
     void connectToPgxl(const QString& host, quint16 port = 9008);
@@ -105,6 +107,9 @@ private slots:
     void pollStatus();
 
 private:
+    friend struct PeripheralConnectionTestAccess;
+    // Inject transport initiation in socket-free lifecycle tests.
+    std::function<void(const QString&, quint16)> m_connectTransport;
     void applyPollRateFor(const QMap<QString, QString>& kvs);
     Q_INVOKABLE void processLine(const QString& line); // injected-frame test seam
     Q_INVOKABLE void processBytes(const QByteArray& bytes); // injected transport test seam
