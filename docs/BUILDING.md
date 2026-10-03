@@ -5,6 +5,9 @@ The quick start — dependencies and the build itself — is in
 [`README.md`](../README.md#building-from-source). Everything here is what you
 need only on a specific platform, or when something goes wrong.
 
+Compile-time switches, defaults and prerequisites are listed in
+[BUILD-OPTIONS.md](../BUILD-OPTIONS.md).
+
 - [macOS: Qt and qtkeychain](#macos-qt-and-qtkeychain)
 - [Windows 11](#windows-11)
 - [What each dependency enables](#what-each-dependency-enables)

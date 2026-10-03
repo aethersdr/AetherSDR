@@ -162,21 +162,13 @@ Key files: `Slice.cs`, `Radio.cs`, `Panadapter.cs`, `Transmit.cs`,
 
 ### Optional Dependencies
 
-Features gated behind compile-time flags:
+See [BUILD-OPTIONS.md](../BUILD-OPTIONS.md) for the CMake switches, defaults,
+platform requirements and dependency detection that control optional features.
 
-| Flag | Package | Feature |
-|------|---------|---------|
-| `HAVE_SERIALPORT` | `Qt6::SerialPort` | FlexControl, serial PTT/CW |
-| `HAVE_WEBSOCKETS` | `Qt6::WebSockets` | FreeDV Reporter, TCI server |
-| `HAVE_KEYCHAIN` | `Qt6Keychain` | SmartLink credential persistence |
-| `HAVE_MIDI` | Bundled RtMidi | MIDI controller mapping |
-| `HAVE_RADE` | Bundled RADE/Opus | FreeDV digital voice |
-| `HAVE_SPECBLEACH` | libspecbleach (clang-cl on Win) | NR4 spectral noise reduction |
-| `HAVE_DFNR` | Bundled DeepFilterNet3 | DFNR neural noise reduction |
-| `HAVE_BNR` | NVIDIA NIM container | GPU noise removal |
-| `HAVE_MQTT` | Bundled libmosquitto | MQTT applet |
-
-Use `#ifdef HAVE_*` guards. Features must degrade gracefully when unavailable.
+CMake generates compiler definitions such as `HAVE_SERIALPORT`,
+`HAVE_WEBSOCKETS` and `HAVE_DEEPFIST` from the resulting configuration; they are
+not user-facing CMake switches. Use the corresponding `#ifdef` guards in code.
+Features must degrade gracefully when unavailable.
 
 ### Commit Messages
 
