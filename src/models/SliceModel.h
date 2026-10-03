@@ -418,13 +418,10 @@ signals:
     // for why turning the notch on without placing it is not enough.
     void manualNotchCommandIssued(bool on, int position);
     void squelchCommandIssued(bool on, int level);
-    // CW audio peaking filter, enable and level together (setApf/setApfLevel),
-    // and the AGC-off level (setAgcOffLevel). Same contract: operator setters
-    // only, never status application. A Flex keeps its `apf=`/`apf_level=`/
-    // `agc_off_level=` wire text; these carry the same intent to a backend
-    // whose receive DSP runs on this host (HL2), which never sees that text.
+    // CW audio peaking filter, enable and level together (setApf/setApfLevel).
+    // Operator setters only, never status application; Flex also gets its
+    // `apf=`/`apf_level=` wire text.
     void apfCommandIssued(bool on, int level);
-    void agcOffLevelCommandIssued(int level);
     // Receive and transmit incremental tuning.
     void ritCommandIssued(bool on, int hz);
     void xitCommandIssued(bool on, int hz);

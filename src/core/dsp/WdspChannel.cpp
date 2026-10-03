@@ -750,21 +750,11 @@ bool WdspChannel::setApf(bool enabled, double centerHz, double bandwidthHz,
         !apfParametersValid(centerHz, bandwidthHz, gain)) {
         return false;
     }
-    // ALREADY THERE: return before the control handshake and the lock, the
-    // same shape as setMinimumPhase(). Hl2RxDsp::applyApf() runs on every mode
-    // change, rebuild and pitch change, mostly to keep an off stage off.
-    //
-    // WDSP itself would not redesign for these: CalcDoublepoleFilter
-    // (doublepole.c) returns early when centre, bandwidth and gain are all
-    // unchanged, and its FIR is built analytically (build_doublepole_1eff) with
-    // no FFTW plan unless the length changes. What a no-op call still costs is
-    // g_setupMutex, which IS the process-global FFTW planner lock, taken on the
-    // I/O thread that paces EP2: behind another channel's rebuild it would
-    // wait out that rebuild's planning to change nothing. And a no-op must not
-    // be refused because a callback is in flight.
-    //
-    // Exact equality is correct here: m_config holds precisely what the last
-    // accepted setApf() or open() gave WDSP, and nothing else writes SPCW.
+    // Unchanged: return before the handshake and g_setupMutex (the global FFTW
+    // planner lock, held on the EP2-pacing I/O thread), like setMinimumPhase().
+    // applyApf() runs on every mode change, mostly to keep an off stage off.
+    // Exact equality holds: m_config is only what an accepted setApf() or
+    // open() gave WDSP, and nothing else writes SPCW.
     if (enabled == m_config.apfEnabled && centerHz == m_config.apfCenterHz
         && bandwidthHz == m_config.apfBandwidthHz && gain == m_config.apfGain) {
         return true;
@@ -1271,21 +1261,10 @@ void WdspChannel::open() noexcept
         // run = 0 and close() frees them, so a reconfigure() would otherwise
         // open the operator's squelch without anything saying so.
         applySquelchLocked(m_config.mode);
-        // The peaking stages are built by create_rxa at RXA.c's defaults and
-        // freed by close(), so the operator's APF is re-pushed on every open,
-        // for the same reason as the deviation above. validateConfig() has
-        // already refused a design WDSP could not build.
-        //
-        // The selection FIRST, and stated rather than inherited. Everything
-        // this class and Hl2RxDsp reason about is the DOUBLE-POLE:
-        // apfParametersValid() guards its divide by the centre, the level map
-        // is sized against calc_dpole_nc, and "one positive centre serves CWL
-        // and CWU" is its mode-2 I-into-Q copy. create_apfshadow (RXA.c)
-        // happens to start on 0 today; a WDSP update that started elsewhere
-        // would silently route every call below to the matched or gaussian
-        // filter, which scale the gain by sqrt(2) and size themselves
-        // differently. On today's WDSP this is a no-op (SetRXASPCWSelection
-        // returns early when the selection is unchanged), so it costs nothing.
+        // close() frees the peaking stages, so the APF is re-pushed on every
+        // open. The selection is stated, not inherited: everything here assumes
+        // the double-pole (its centre divide, calc_dpole_nc sizing, the mode-2
+        // I-into-Q copy that lets one positive centre serve CWL and CWU).
         SetRXASPCWSelection(m_channelId, kApfSelectionDoublePole);
         SetRXASPCWFreq(m_channelId, m_config.apfCenterHz);
         SetRXASPCWBandwidth(m_channelId, m_config.apfBandwidthHz);

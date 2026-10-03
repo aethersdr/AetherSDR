@@ -268,36 +268,13 @@ public:
         return m_nbAppliedLevel.load(std::memory_order_relaxed);
     }
 
-    // ── AGC-off level and the CW audio peaking filter ─────────────────────
+    // AGC-off level and CW APF: held outside Config (configure() replaces it)
+    // and re-applied by installChannel(), pushed only when canPushToChannel().
     //
-    // Both were Flex wire text only (`agc_off_level=`, `apf=`/`apf_level=`),
-    // so on this radio the AGC-T slider with AGC off, the APF button and the
-    // APF level slider moved and changed nothing. WDSP has both stages in
-    // every receive channel already; these verbs are the missing route to
-    // them. Held OUTSIDE Config for the notch/shift/blanker reason — configure()
-    // replaces m_config wholesale and four call sites in Hl2Backend assemble
-    // one — and re-applied by installChannel() so a rate change keeps them.
-    // Pushed only when canPushToChannel(), like every other verb here.
-
-    // AGC-off level, 0..100 in the slice model's units -> WDSP fixed gain in
-    // dB:
-    //
-    //     gain_dB = 10 + 0.6 * (level - 10)        level 0..100 -> 4..64 dB
-    //
-    // ANCHORED ON THE DEFAULT. Before this route existed every HL2 ran AGC Off
-    // at WDSP's channel default, WdspChannel::Config::agcFixedGainDb = 10 dB,
-    // whatever the slider said. The slice model opens at level 10, so the map
-    // gives exactly 10.0 dB there (the (level - 10) term is an exact 0.0, no
-    // rounding) and AGC Off sounds as it always did until the operator moves
-    // the slider. A plain level * 0.6 would have opened 4 dB quieter for
-    // every HL2 user.
-    //
-    // The slope is the SAME 0.6 dB/unit the AGC-T threshold uses
-    // (Hl2DbReference::kAgcCeilingDbPerUnit), so one slider has one step size
-    // in both AGC states; only the origin differs. NOT referred to the LNA
-    // gain the way the ceiling is: with AGC off the operator rides RF gain
-    // against overload, and a fixed gain that silently moved to undo their
-    // RF-gain change would defeat the reason they turned AGC off.
+    // AGC-off level 0..100 -> WDSP fixed gain: 10 + 0.6 * (level - 10) dB, so
+    // the default level 10 is exactly WDSP's 10 dB channel default, and the
+    // slope matches the AGC-T threshold's 0.6 dB/unit. Not referred to the LNA
+    // gain: with AGC off the operator rides RF gain against overload.
     static constexpr double kAgcFixedGainDbPerUnit = 0.6;
     static constexpr int kDefaultAgcOffLevel = 10;           // SliceModel::m_agcOffLevel
     static constexpr double kDefaultAgcFixedGainDb = 10.0;   // WdspChannel::Config
@@ -307,25 +284,15 @@ public:
                + static_cast<double>(std::clamp(level, 0, 100) - kDefaultAgcOffLevel)
                      * kAgcFixedGainDbPerUnit;
     }
-    // WDSP multiplies by the fixed gain ONLY while its AGC mode is 0
-    // (wcpAGC.c xwcpagc), so this is safe to apply in any mode and is audible
-    // exactly when AGC is Off.
+    // WDSP applies the fixed gain only in AGC mode 0 (wcpAGC.c xwcpagc), so
+    // this is safe in any mode and audible exactly when AGC is Off.
     Q_INVOKABLE void setAgcOffLevel(int level);
     [[nodiscard]] int agcOffLevel() const noexcept { return m_agcOffLevel; }
 
-    // APF level 0..100 -> the peak's BANDWIDTH, because that is what the
-    // control promises on screen: VfoWidget and PhoneCwApplet both label the
-    // slider "APF bandwidth", tooltip "Higher values narrow the peak". So the
-    // map is geometric and decreasing — 200 Hz at 0, 100 Hz at 50, 50 Hz at
-    // 100, halving every 50 units — and the slice model's default of 50 lands
-    // exactly on RXA.c's own construction bandwidth of 100 Hz. Gain is held at
-    // RXA.c's 2.0 (linear, +6 dB), so the default APF is the filter WDSP's
-    // author built, and moving the slider changes selectivity, not loudness.
-    //
-    // The FIR length follows the bandwidth (calc_dpole_nc: 2048 taps down to
-    // ~68 Hz, 4096 below), so the narrow third of the slider re-sizes the
-    // stage as well as re-designing it. That is WDSP's own control path, under
-    // its own csDSP lock, and it is what Thetis-style clients do on every drag.
+    // APF level 0..100 -> the peak's bandwidth (the UI labels it "APF
+    // bandwidth", higher = narrower): 200 Hz at 0 halving every 50 units, so
+    // the default 50 is RXA.c's own 100 Hz. Gain stays at RXA.c's linear 2.0,
+    // so the slider changes selectivity, not loudness.
     static constexpr double kApfWidestBandwidthHz = 200.0;
     static constexpr double kApfGain = 2.0;          // RXA.c create_apfshadow
     static constexpr int kDefaultApfLevel = 50;      // SliceModel::m_apfLevel
@@ -338,12 +305,9 @@ public:
     {
         return mode == WdspChannel::Mode::Cwl || mode == WdspChannel::Mode::Cwu;
     }
-    // on/level are the operator's; centerHz is the CW pitch in AUDIO Hz (the
-    // backend owns the pitch). The stage RUNS only while the mode is CWL/CWU:
-    // the request survives a trip through SSB and comes back with CW, and
-    // setMode() re-evaluates it on every mode change. A Flex hides the APF
-    // outside CW for the same reason — a 100 Hz peak on voice is not a filter
-    // anyone asked for.
+    // centerHz is the CW pitch in audio Hz (the backend owns it). The stage
+    // runs only in CWL/CWU; the request is held through other modes and
+    // setMode() re-evaluates it.
     Q_INVOKABLE void setApf(bool on, int level, double centerHz);
     [[nodiscard]] bool apfRequested() const noexcept { return m_apfOn; }
     [[nodiscard]] int apfLevel() const noexcept { return m_apfLevel; }
@@ -353,36 +317,6 @@ public:
         return m_apfOn && isCwMode(m_config.mode);
     }
 
-    // ── The POST-DDC half of the ADC pairing (HERMES.md §13 item 16) ──────
-    //
-    // WDSP's RXA_ADC_PK for this chain, in dB relative to WIRE full scale.
-    // RXA.c's adcmeter runs FIRST in xrxa — after the shift and the input
-    // half-band resampler, ahead of nbp0 — so it measures the IQ entering the
-    // RXA chain: this ONE slice, decimated to kWdspDspSampleRateHz, before any
-    // channel filtering, demodulation or AGC. That is a deliberately different
-    // question from the HL2's own pre-DDC overload flag, which watches the
-    // whole 0-38.4 MHz the converter sees. Hl2AdcPairing.h holds the reasoning
-    // and pairs the two; this is only the reading.
-    //
-    // NOT CALIBRATED. dBFS here is referred to the wire's full scale, not to
-    // anything at the antenna — see Hl2DbReference, whose isCalibrated() is
-    // false. Its fullScaleDbm is a DERIVED +3 dBm rather than 0.0 now, but it
-    // refers the DISPLAY path and is not applied to this reading at all.
-    //
-    // SAMPLED ON THE DSP THREAD, at the one instant the value means something:
-    // immediately after a block has been processed, in the same place the
-    // S-meter is read. A timer in the backend would call GetRXAMeter from the
-    // GUI thread against a channel another thread may be closing.
-    //
-    // ATOMIC for the same reason the applied-noise-blanker pair above is:
-    // Hl2Backend answers healthSnapshot() from the GUI thread while this object
-    // lives on the I/O thread. Relaxed is enough — nothing is ordered against
-    // them, and a torn pairing of value and timestamp costs at worst a
-    // millisecond of reported age.
-    //
-    // nullopt until a block has actually been processed. There is no number
-    // that honestly stands for "this chain's level has never been looked at",
-    // and 0.00 dBFS in particular would read as a hard clip.
     // Post-DDC half of the ADC pairing (docs/HERMES.md §13 item 16;
     // Hl2AdcPairing.h). WDSP's RXA_ADC_PK in dB re wire full scale, not
     // calibrated to the antenna. adcmeter runs first in xrxa, after the shift

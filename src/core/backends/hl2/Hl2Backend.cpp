@@ -3032,18 +3032,19 @@ void Hl2Backend::setSliceApf(int sliceId, bool on, int level)
     emitSliceState(ddc);
 }
 
-void Hl2Backend::setSliceAgcOffLevel(int sliceId, int level)
+void Hl2Backend::requestSliceAgc(int sliceId, const SliceAgcRequest& request)
 {
+    if (request.field != SliceAgcRequest::Field::OffLevel) {
+        IRadioBackend::requestSliceAgc(sliceId, request);
+        return;
+    }
     const int ddc = ddcForSlice(sliceId);
     Receiver* r = rx(ddc);
     if (!r)
         return;
-    // Stored and pushed in EVERY AGC mode, not only while AGC is Off. WDSP
-    // applies the fixed gain only in its mode 0 (wcpAGC.c xwcpagc) and
-    // setSliceAgc() maps "off" to exactly that mode, so the value lands the
-    // moment the operator switches AGC off — and a calibrator or controller
-    // that sets it first and switches second gets the level it set.
-    r->agcOffLevel = qBound(0, level, 100);
+    // Pushed in every AGC mode: WDSP applies the fixed gain only in its mode 0
+    // (wcpAGC.c xwcpagc), so a level set before AGC goes off lands when it does.
+    r->agcOffLevel = qBound(0, request.offLevel, 100);
     pushAgcOffLevel(*r);
     emitSliceState(ddc);
 }
@@ -4478,18 +4479,10 @@ void Hl2Backend::setCwPitch(int hz)
     // 500 Hz filter stays a 500 Hz filter centred on the marker whatever the
     // pitch is. That is the point of keeping the two domains apart.
     for (Receiver& r : m_rx) {
-        // The APF is centred on the pitch, so it moves with it. Otherwise the
-        // peak stays on the old tone while the signal slides off it — the
-        // filter would be attenuating the very signal it exists to lift.
-        //
-        // EVERY receiver, BEFORE the CW test below, not only the ones in CW
-        // now. Hl2RxDsp holds the centre across a trip out of CW and runs it
-        // again on the way back in (setMode -> applyApf), and setSliceMode
-        // does not re-send the APF. A pitch moved while the slice sat in USB
-        // was therefore never delivered, and re-entering CW ran the peak on
-        // the OLD pitch: at the default 100 Hz a 200 Hz error puts the tone on
-        // the skirt, so APF-on made the wanted signal quieter. pushApf() is
-        // safe in any mode by its own contract; this is where it has to be.
+        // The APF centre follows the pitch on EVERY receiver, before the CW
+        // test below: Hl2RxDsp holds the centre outside CW and setSliceMode
+        // does not re-send it, so a receiver skipped here would re-enter CW
+        // with its peak on the old pitch.
         pushApf(r);
         if (!r.dsp || cwBfoHz(r.mode) == 0.0)
             continue;

@@ -197,25 +197,10 @@ void SetRXAAGCDecay(int channel, int decayMs);
 void SetRXAAGCHang(int channel, int hangMs);
 void SetRXAAGCHangThreshold(int channel, int hangThreshold);
 
-// ── CW audio peaking filter (APF, apfshadow.c) ────────────────────────────
-//
-// NOT A NEW STAGE. RXA.c builds four peaking filters into every receive
-// channel — double-pole, matched, gaussian and bi-quad — all off, all at
-// 600 Hz / 100 Hz / gain 2.0, and apfshadow is the one front door that routes
-// run/freq/bandwidth/gain to whichever of them `selection` names (0 is the
-// double-pole, and it is what create_apfshadow starts on). They run AFTER the
-// AGC, on the demodulated audio, so the centre is an AUDIO frequency: the CW
-// pitch, not an RF offset. The double-pole is built in its CWL+CWU mode (I is
-// copied into Q before filtering), so one positive centre serves both
-// sidebands. `gain` is LINEAR, not dB (the matched and gaussian variants
-// multiply it by sqrt(2) internally; the double-pole and bi-quad do not).
-//
-// Every call takes ch[channel].csDSP through the stage it lands on, so these
-// are control-path work. The double-pole rebuilds its impulse response only
-// when centre, bandwidth or gain actually changed (CalcDoublepoleFilter's own
-// guard, doublepole.c), and plans an FFT only when its length changes.
-// WdspChannel::open() sets the selection to 0 explicitly rather than relying
-// on create_apfshadow's default.
+// CW audio peaking filter (apfshadow.c): routes to one of RXA.c's four
+// built-in peaking stages by `selection` (0 = double-pole). They run after the
+// AGC, so the centre is an audio frequency; `gain` is linear. Control-path
+// calls (csDSP); the double-pole redesigns only when a parameter changes.
 void SetRXASPCWSelection(int channel, int selection);
 void SetRXASPCWRun(int channel, int run);
 void SetRXASPCWFreq(int channel, double centerHz);

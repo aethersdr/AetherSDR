@@ -617,25 +617,14 @@ public:
     {
         Q_UNUSED(sliceId); Q_UNUSED(on); Q_UNUSED(level);
     }
-    // CW audio peaking filter — capabilities().hasAudioPeakingFilter. `level`
-    // is the slice model's 0..100 apf_level; enable and level travel together
-    // for the reason the noise verbs above give. The backend owns the centre
-    // (its CW pitch) and decides whether the filter runs in the current mode.
-    // A Flex does not implement this: its APF is the `apf=`/`apf_level=` slice
-    // wire text SliceModel already sends through the Flex command plane.
+    // CW audio peaking filter (capabilities().hasAudioPeakingFilter): the slice's
+    // enable and 0..100 apf_level together; the backend owns the centre (its CW
+    // pitch) and whether it runs in the current mode. Flex does not override it
+    // (SliceModel sends `apf=`/`apf_level=`). Interim verb: it folds into
+    // #5919's SliceDspRequest::Feature::Apf when that lands.
     virtual void setSliceApf(int sliceId, bool on, int level)
     {
         Q_UNUSED(sliceId); Q_UNUSED(on); Q_UNUSED(level);
-    }
-    // The AGC-T control's OTHER property: the fixed gain applied while the
-    // receive AGC is Off (Flex `agc_off_level`, 0..100). Separate from
-    // setSliceAgc because it is a separate property on every radio that has
-    // it — sending it as part of the mode/threshold pair would re-assert a
-    // stale threshold on every off-level drag. Flex does not implement this,
-    // for the same reason as setSliceApf.
-    virtual void setSliceAgcOffLevel(int sliceId, int level)
-    {
-        Q_UNUSED(sliceId); Q_UNUSED(level);
     }
 
     // FM repeater controls.  These are separate radio registers on an Icom

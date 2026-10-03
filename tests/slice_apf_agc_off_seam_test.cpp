@@ -1,24 +1,11 @@
-// APF and AGC-off level reach the backend seam; Flex keeps its wire text.
-//
-// SliceModel::setApf/setApfLevel/setAgcOffLevel used to emit FlexRadio wire
-// text and nothing else. A non-Flex slice never has commandReady connected,
-// so on every host-DSP radio the APF button, its level slider, the
-// ToggleApf/WheelApf controller actions, the AGC-T slider with AGC Off and the
-// AGC-T calibrator's AGC-off strategy moved the model and reached nothing.
-//
-// Socket-free: a recording IRadioBackend installed through the production
-// receiver bindings (RadioModel::setBackendForTest), no DSP, no wire.
-//
-// Pinned:
-//   1. The Flex wire text is byte-for-byte what it was.
-//   2. Operator setters emit the typed intents, enable and level together.
-//   3. RadioModel routes them to setSliceApf / setSliceAgcOffLevel for the
-//      right slice, including through the AGC-T knob and the calibrator's
-//      own setter.
-//   4. Status application (a backend's echo) never comes back as a command
-//      (Principle II), and an echo at an unchanged off level emits nothing.
-//   5. The base IRadioBackend verbs are no-ops, so every other family is
-//      unaffected.
+// APF and AGC-off level reach the backend seam. Socket-free: a recording
+// IRadioBackend installed through RadioModel's production receiver bindings.
+//   1. Flex's APF wire text from SliceModel is unchanged.
+//   2. setApf/setApfLevel emit apfCommandIssued with enable and level together.
+//   3. RadioModel routes the APF to setSliceApf and the off level (also via the
+//      AGC-T knob and the calibrator) to requestSliceAgc(Field::OffLevel).
+//   4. A backend echo never comes back as a command (Principle II).
+//   5. The base verbs emit nothing and the base drops OffLevel.
 
 #include "TestSettingsProfile.h"
 #include "core/AgcTCalibrator.h"
@@ -48,12 +35,13 @@ void check(bool condition, const char* description)
         ++failures;
 }
 
-// Implements only what the seam requires; APF and the off level fall through
-// to IRadioBackend's defaults unless Recording overrides them.
+// Implements only what the seam requires; the APF and AGC requests fall
+// through to IRadioBackend's defaults unless Recording overrides them.
 class MinimalBackend : public IRadioBackend
 {
 public:
     RadioCapabilities caps;
+    int pairedAgcCalls = 0;
     RadioCapabilities capabilities() const override { return caps; }
     void connectRadio(const RadioConnectRequest&) override {}
     void disconnectRadio() override {}
@@ -61,7 +49,7 @@ public:
     void setSliceFrequency(int, double) override {}
     void setSliceMode(int, const QString&) override {}
     void setSliceFilter(int, int, int) override {}
-    void setSliceAgc(int, const QString&, int) override {}
+    void setSliceAgc(int, const QString&, int) override { ++pairedAgcCalls; }
     void setPanCenter(const QString&, double, PanCenterIntent) override {}
     void setKeying(bool, const TxCoordinator::Operation&,
                    const TxCoordinator::Completion&) override {}   // cannot transmit
@@ -79,9 +67,10 @@ public:
     {
         apf.push_back({sliceId, on, level});
     }
-    void setSliceAgcOffLevel(int sliceId, int level) override
+    void requestSliceAgc(int sliceId, const SliceAgcRequest& request) override
     {
-        offLevel.push_back({sliceId, level});
+        if (request.field == SliceAgcRequest::Field::OffLevel)
+            offLevel.push_back({sliceId, request.offLevel});
     }
 };
 
@@ -106,13 +95,11 @@ void testFlexWireTextUnchanged()
                      [&sent](const QString& cmd) { sent << cmd; });
     s.setApf(true);
     s.setApfLevel(42);
-    s.setAgcOffLevel(31);
     s.setApf(false);
     check(sent == QStringList{QStringLiteral("slice set 3 apf=1"),
                               QStringLiteral("slice set 3 apf_level=42"),
-                              QStringLiteral("slice set 3 agc_off_level=31"),
                               QStringLiteral("slice set 3 apf=0")},
-          "apf= / apf_level= / agc_off_level= are exactly the Flex strings they were");
+          "apf= / apf_level= are exactly the Flex strings they were");
 }
 
 void testIntentsCarryBothHalves()
@@ -120,7 +107,6 @@ void testIntentsCarryBothHalves()
     std::printf("\n  2. Typed intents\n");
     SliceModel s(0);
     QSignalSpy apf(&s, &SliceModel::apfCommandIssued);
-    QSignalSpy off(&s, &SliceModel::agcOffLevelCommandIssued);
     s.setApfLevel(70);
     check(apf.size() == 1 && apf.last().at(0).toBool() == false
               && apf.last().at(1).toInt() == 70,
@@ -130,13 +116,6 @@ void testIntentsCarryBothHalves()
           "an enable carries the current level with it");
     s.setApfLevel(70);
     check(apf.size() == 2, "an unchanged level is not re-issued");
-    s.setAgcOffLevel(25);
-    check(off.size() == 1 && off.last().at(0).toInt() == 25, "off level is issued");
-    s.setAgcOffLevel(25);
-    check(off.size() == 1, "an unchanged off level is not re-issued");
-    s.setAgcOffLevel(250);
-    check(off.size() == 2 && off.last().at(0).toInt() == 100,
-          "the off level is clamped to 0..100 before it is issued");
 }
 
 void testRoutedThroughTheSeam()
@@ -174,7 +153,7 @@ void testRoutedThroughTheSeam()
     s->setAgcOffLevel(33);
     check(backend->offLevel.size() == 1 && backend->offLevel.back().slice == 1
               && backend->offLevel.back().level == 33,
-          "the AGC-off level reaches setSliceAgcOffLevel(slice, level)");
+          "the AGC-off level reaches requestSliceAgc(slice, OffLevel)");
 
     // The AGC-T knob with AGC Off, the controller surfaces' one entry point.
     s->setAgcMode(QStringLiteral("off"));
@@ -218,13 +197,9 @@ void testRoutedThroughTheSeam()
 void testBaseVerbsAreNoOps()
 {
     std::printf("\n  5. Other families\n");
-    // A backend that does not override the verbs must accept them silently —
-    // the base defaults are what every family except HL2 now inherits.
-    //
-    // A base verb has no state to read back, so what "no-op" can mean here is
-    // what an outside observer could see: it emits nothing. Every signal the
-    // backend declares is spied, so a default that published a slice change,
-    // a status line or anything else would be counted.
+    // A backend that overrides neither verb: the base must emit nothing (every
+    // signal is spied) and must not turn an OffLevel request into a paired
+    // mode/threshold write.
     MinimalBackend b;
     std::vector<std::unique_ptr<QSignalSpy>> spies;
     const QMetaObject* mo = b.metaObject();
@@ -234,13 +209,14 @@ void testBaseVerbsAreNoOps()
             spies.push_back(std::make_unique<QSignalSpy>(&b, m));
     }
     b.setSliceApf(0, true, 50);
-    b.setSliceAgcOffLevel(0, 40);
+    b.requestSliceAgc(0, {SliceAgcRequest::Field::OffLevel, QStringLiteral("off"), 65, 40});
     int emitted = 0;
     for (const auto& spy : spies)
         emitted += static_cast<int>(spy->count());
     check(spies.size() > 1, "the backend's signals are all being watched");
     check(emitted == 0,
-          "IRadioBackend's default setSliceApf / setSliceAgcOffLevel emit nothing");
+          "IRadioBackend's default setSliceApf / requestSliceAgc(OffLevel) emit nothing");
+    check(b.pairedAgcCalls == 0, "the base drops OffLevel rather than calling setSliceAgc");
 }
 
 }  // namespace

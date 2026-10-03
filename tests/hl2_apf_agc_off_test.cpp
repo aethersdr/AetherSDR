@@ -1,11 +1,7 @@
 // HL2 host-side CW audio peaking filter (APF) and AGC-off level.
 //
-// Both controls used to be Flex wire text and nothing else, so on an HL2 —
-// whose receive DSP is WDSP on this host — the APF button, the APF level
-// slider and the AGC-T slider with AGC Off moved and changed nothing. These
-// checks run a real Hl2RxDsp (a real WDSP channel) and MEASURE the audio, so a
-// verb that stores its value and never reaches WDSP fails here rather than
-// passing on a mirrored field.
+// Runs a real Hl2RxDsp (a real WDSP channel) and MEASURES the audio, so a verb
+// that stores its value and never reaches WDSP fails here.
 //
 // Pinned:
 //   1. The two level maps (AGC-off level -> fixed gain dB, APF level ->
@@ -21,7 +17,7 @@
 //      the stage does not run.
 //   5. Both survive a configure() (the rebuild a sample-rate change does),
 //      and the channel read-back reports what WDSP accepted.
-//   6. THE BACKEND HALF. Hl2Backend::setSliceApf / setSliceAgcOffLevel reach
+//   6. THE BACKEND HALF. Hl2Backend::setSliceApf / requestSliceAgc(OffLevel) reach
 //      the receiver's chain on the I/O thread, publish what the receiver
 //      holds through sliceChanged, and dspChains() reports what WDSP took; a
 //      CW pitch change moves the APF centre; leaving CW stops the stage and
@@ -424,9 +420,8 @@ int main(int argc, char** argv)
             if (d.apfLevel) pubApfLevel = *d.apfLevel;
             if (d.agcOffLevel) pubOffLevel = *d.agcOffLevel;
         });
-        // Stated rather than inherited: Hl2Backend starts at 600 Hz, and the
-        // assertions this section replaced assumed 700 -- they never ran, so
-        // nothing caught it. The centre checks below read against this value.
+        // Stated rather than inherited (Hl2Backend starts at 600 Hz); the centre
+        // checks below read against this value.
         backend.setCwPitch(700);
         backend.setSliceMode(0, QStringLiteral("CW"));
         check(pubApf == false && pubApfLevel == Hl2RxDsp::kDefaultApfLevel
@@ -439,14 +434,16 @@ int main(int argc, char** argv)
               "origin/main always ran");
         // Read HERE, before any setSliceApf: the pitch above was set while the
         // receiver was still in USB, and the next setSliceApf would push the
-        // pitch itself and hide a stale centre (PR #6050 review).
+        // pitch itself and hide a stale centre.
         check(near(c.value(QStringLiteral("apfCenterHz")), 700.0),
               "a pitch set outside CW is the APF centre on entering CW");
 
+        using AetherSDR::SliceAgcRequest;
         backend.setSliceApf(0, true, 80);
-        backend.setSliceAgcOffLevel(0, 40);
+        backend.requestSliceAgc(0, {SliceAgcRequest::Field::OffLevel,
+                                    QStringLiteral("off"), 65, 40});
         check(pubApf == true && pubApfLevel == 80 && pubOffLevel == 40,
-              "setSliceApf / setSliceAgcOffLevel publish what the receiver now holds");
+              "setSliceApf / requestSliceAgc(OffLevel) publish what the receiver now holds");
         c = rx0();
         check(c.value(QStringLiteral("apfRun")).toBool()
                   && near(c.value(QStringLiteral("apfCenterHz")), 700.0)
@@ -455,6 +452,13 @@ int main(int argc, char** argv)
               "in CW the APF runs, centred on the CW pitch, at the level's bandwidth");
         check(near(c.value(QStringLiteral("agcFixedGainDb")), 28.0),
               "the AGC-off level reached WDSP's fixed gain (40 units = 28 dB)");
+        // Every other AGC field still takes the paired path (setSliceAgc).
+        backend.requestSliceAgc(0, {SliceAgcRequest::Field::Mode,
+                                    QStringLiteral("med"), 65, 40});
+        c = rx0();
+        check(c.value(QStringLiteral("agcMode")).toString() == QLatin1String("med")
+                  && near(c.value(QStringLiteral("agcFixedGainDb")), 28.0),
+              "a Mode request reaches the chain's AGC and leaves the off level alone");
 
         backend.setCwPitch(650);
         c = rx0();
@@ -465,8 +469,8 @@ int main(int argc, char** argv)
         c = rx0();
         check(!c.value(QStringLiteral("apfRun")).toBool() && pubApf == true,
               "outside CW the stage stops while the slice keeps its APF request");
-        // The review's sequence with the APF ON: the pitch moves while the
-        // slice is out of CW, and nothing but the mode change follows.
+        // With the APF on: the pitch moves while the slice is out of CW, and
+        // nothing but the mode change follows.
         backend.setCwPitch(750);
         backend.setSliceMode(0, QStringLiteral("CW"));
         c = rx0();

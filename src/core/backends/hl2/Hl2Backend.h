@@ -96,7 +96,9 @@ public:
     void setSliceSquelch(int sliceId, bool on, int level) override;
     // Host-side CW APF and AGC-off level, per receiver; see Hl2RxDsp.
     void setSliceApf(int sliceId, bool on, int level) override;
-    void setSliceAgcOffLevel(int sliceId, int level) override;
+    // Handles SliceAgcRequest::Field::OffLevel (the WDSP fixed gain); every
+    // other field goes to the base, i.e. setSliceAgc().
+    void requestSliceAgc(int sliceId, const SliceAgcRequest& request) override;
     void setSliceAudioMute(int sliceId, bool mute) override;
     void setSliceAudioGain(int sliceId, int gainPercent) override;
     void setSliceAudioPan(int sliceId, int panPercent) override;
