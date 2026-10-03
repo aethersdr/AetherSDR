@@ -66,7 +66,7 @@ void AntennaGeniusApplet::buildUI()
     // Body
     auto* body = new QWidget;
     auto* vbox = new QVBoxLayout(body);
-    vbox->setContentsMargins(4, 4, 4, 4);
+    vbox->setContentsMargins(4, 4, 4, 2);
     vbox->setSpacing(4);
 
     // ── Device selector + connect button ────────────────────────────────────
@@ -218,6 +218,13 @@ void AntennaGeniusApplet::buildUI()
     }
     vbox->addWidget(m_portBSection);
 
+    vbox->addStretch(1);
+    m_sourceLabel = new QLabel(QStringLiteral("● OFFLINE"), this);
+    m_sourceLabel->setObjectName(QStringLiteral("agConnectionSource"));
+    m_sourceLabel->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+    vbox->addWidget(m_sourceLabel, 0, Qt::AlignRight);
+    setConnectionSource(false);
+
     outer->addWidget(body);
 
     // ── Connect button logic (wired in setModel) ────────────────────────────
@@ -229,7 +236,7 @@ void AntennaGeniusApplet::buildUI()
             int idx = m_deviceCombo->currentIndex();
             auto devices = m_model->discoveredDevices();
             if (idx >= 0 && idx < devices.size()) {
-                m_model->connectToDevice(devices[idx]);
+                attemptDirectConnection(devices[idx], true);
             } else {
                 // No discovered device selected — try manual IP.
                 tryManualConnect();
@@ -262,14 +269,43 @@ void AntennaGeniusApplet::tryManualConnect()
     if (!m_model || m_model->isConnected()) return;
     QString ip = m_manualIpEdit->text().trimmed();
     if (ip.isEmpty()) return;
-    QHostAddress addr(ip);
-    if (addr.isNull()) {
-        m_statusLabel->setText("Invalid IP address");
-        AetherSDR::ThemeManager::instance().applyStyleSheet(m_statusLabel, "QLabel { color: {{color.accent.danger}}; font-size: 10px; }");
-        return;
-    }
     AppSettings::instance().setValue("AG_ManualIp", ip);
-    m_model->connectToAddress(addr, 9007);
+    const int configuredPort = AppSettings::instance().value("AG_ManualPort", "9007").toInt();
+    AgDeviceInfo info;
+    info.host = ip;
+    info.ip = QHostAddress(ip);
+    info.port = static_cast<quint16>(configuredPort > 0 && configuredPort <= 65535
+        ? configuredPort : 9007);
+    info.name = ip;
+    info.serial = QString("manual-%1").arg(ip);
+    attemptDirectConnection(info, true);
+}
+
+void AntennaGeniusApplet::attemptDirectConnection(const AgDeviceInfo& info, bool force)
+{
+    if (m_model && (force || (!m_model->isConnected() && !m_model->isConnecting()
+                              && !m_model->isAuthBlockedFor(info)))) {
+        if (force) {
+            m_model->resetAuthBudgetFor(info);
+        }
+        m_model->connectToDevice(info);
+    }
+}
+
+void AntennaGeniusApplet::setConnectionSource(bool connected)
+{
+    m_sourceLabel->setText(connected ? QStringLiteral("● DIRECT")
+                                     : QStringLiteral("● OFFLINE"));
+    m_sourceLabel->setAccessibleName(connected
+        ? tr("Antenna Genius DIRECT connection")
+        : tr("Antenna Genius OFFLINE"));
+    m_sourceLabel->setAccessibleDescription(connected
+        ? tr("Connected directly to Antenna Genius.")
+        : tr("No direct Antenna Genius connection."));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_sourceLabel,
+        QStringLiteral("QLabel { color: %1; font-size: 9px; }")
+            .arg(connected ? QStringLiteral("{{color.accent.success}}")
+                           : QStringLiteral("{{color.text.disabled}}")));
 }
 
 void AntennaGeniusApplet::setModel(AntennaGeniusModel* model)
@@ -292,12 +328,13 @@ void AntennaGeniusApplet::setModel(AntennaGeniusModel* model)
 
         // Auto-connect to first discovered device — but not ShackSwitch (handled by SS applet).
         if (!AntennaGeniusModel::isShackSwitch(info) && !m_model->isConnected() && m_deviceCombo->count() == 1) {
-            m_model->connectToDevice(info);
+            attemptDirectConnection(info);
         }
     });
 
     // Connection state
     connect(m_model, &AntennaGeniusModel::connected, this, [this]() {
+        setConnectionSource(!AntennaGeniusModel::isShackSwitch(m_model->connectedDevice()));
         m_connectBtn->setText("Disconnect");
         m_statusLabel->setText(QString("Connected — %1 v%2")
             .arg(m_model->connectedDevice().name,
@@ -314,6 +351,7 @@ void AntennaGeniusApplet::setModel(AntennaGeniusModel* model)
     });
 
     connect(m_model, &AntennaGeniusModel::disconnected, this, [this]() {
+        setConnectionSource(false);
         m_connectBtn->setText("Connect");
         m_statusLabel->setText("Disconnected");
         m_statusLabel->setStyleSheet("color: #606878; font-size: 10px;");
@@ -334,6 +372,7 @@ void AntennaGeniusApplet::setModel(AntennaGeniusModel* model)
 
     connect(m_model, &AntennaGeniusModel::connectionError, this,
             [this](const QString& msg) {
+        setConnectionSource(false);
         m_statusLabel->setText("Error: " + msg);
         AetherSDR::ThemeManager::instance().applyStyleSheet(m_statusLabel, "color: {{color.accent.danger}}; font-size: 10px;");
     });
@@ -356,6 +395,8 @@ void AntennaGeniusApplet::setModel(AntennaGeniusModel* model)
     });
 
     // Start listening for devices.
+    setConnectionSource(m_model->isConnected()
+        && !AntennaGeniusModel::isShackSwitch(m_model->connectedDevice()));
     m_model->startDiscovery();
 }
 

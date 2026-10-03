@@ -98,6 +98,8 @@ private slots:
     void onHeartbeat();
 
 private:
+    friend class WanConnectionTestAccess;
+
     void processLine(const QString& line);
 
     QSslSocket m_socket;

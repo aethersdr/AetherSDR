@@ -1,6 +1,8 @@
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
 #include "gui/AmpApplet.h"
+#include "models/AmpModel.h"
+#include "core/backends/AmpDelta.h"
 #include <QDateTime>
 #include <QtTest>
 #include "gui/HGauge.h"
@@ -57,7 +59,7 @@ void resetSettings()
 }
 
 // Values are right-aligned in a fixed field and drawn in a fixed-width face.
-// The bottom row is four readouts abreast and they arrive five times a second,
+// The telemetry row has three readouts abreast and they arrive five times a second,
 // so a reading that changes width shuffles everything to its right and the
 // whole row twitches. The padding is part of the contract, not incidental
 // whitespace — these expectations hold it.
@@ -77,6 +79,48 @@ void testDefaultPlaceholder()
     report("placeholder is spoken as not reported",
            button->accessibleName() == QStringLiteral("PA heatsink not reported"),
            button->accessibleName());
+}
+
+void testConnectionSourceIndicator()
+{
+    AmpApplet applet;
+    QLabel* source = applet.findChild<QLabel*>(QStringLiteral("ampConnectionSource"));
+    report("PGXL source indicator exists", source != nullptr);
+    if (!source) {
+        return;
+    }
+    report("PGXL initially shows offline", source->text() == QStringLiteral("● OFFLINE")
+        && source->accessibleName().contains(QStringLiteral("OFFLINE")));
+    applet.setRadioConnected(true);
+    report("PGXL has no relay without an amp handle", source->text() == QStringLiteral("● OFFLINE"));
+    AmpModel model;
+    AmpDelta delta;
+    delta.handle = QStringLiteral("0x2000");
+    delta.detectedModel = QStringLiteral("PowerGeniusXL");
+    model.applyChanges(delta);
+    applet.setAmpModel(&model);
+    report("PGXL shows radio relay when connected", source->text() == QStringLiteral("● RADIO"));
+    applet.setDirectFailureReason(QStringLiteral("Stored authorization code unavailable"));
+    report("PGXL source exposes direct failure", source->accessibleDescription().contains(
+        QStringLiteral("Stored authorization code unavailable"))
+        && source->toolTip() == QStringLiteral("Stored authorization code unavailable"));
+    applet.setDirectConnected(true);
+    report("PGXL shows authenticated direct path", source->text() == QStringLiteral("● DIRECT")
+        && source->accessibleName().contains(QStringLiteral("DIRECT"))
+        && source->toolTip().isEmpty());
+    applet.setRadioConnected(false);
+    report("PGXL keeps direct path when radio disconnects", source->text() == QStringLiteral("● DIRECT"));
+    applet.setDirectConnected(false);
+    report("PGXL returns to offline when both paths disconnect", source->text() == QStringLiteral("● OFFLINE")
+        && source->accessibleName().contains(QStringLiteral("OFFLINE")));
+    applet.setFloating(true);
+    applet.resize(420, 360);
+    applet.show();
+    QCoreApplication::processEvents();
+    const QPoint sourceAt = source->mapTo(&applet, QPoint(0, 0));
+    const int bottomInset = applet.height() - sourceAt.y() - source->height();
+    report("PGXL floating indicator has a frame inset",
+           bottomInset >= 6 && bottomInset < 20, QString::number(bottomInset));
 }
 
 void testSingleSensorToggle()
@@ -726,6 +770,7 @@ int main(int argc, char** argv)
     std::printf("AmpApplet temperature unit test harness\n\n");
 
     testDefaultPlaceholder();
+    testConnectionSourceIndicator();
     testSingleSensorToggle();
     testDualSensorToggle();
     testRadioFallbackDropsHarmonicLoadTemp();

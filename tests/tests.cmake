@@ -1541,7 +1541,7 @@ set_tests_properties(hl2_trim_autorepeat_test PROPERTIES
 if(AETHER_BACKEND_RTL)
     # Socket-free RTL-SDR backend seam, DSP, and discovery contract.
     add_executable(rtl_backend_test tests/rtl_backend_test.cpp)
-    target_include_directories(rtl_backend_test PRIVATE src)
+    target_include_directories(rtl_backend_test PRIVATE src tests)
     target_link_libraries(rtl_backend_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
     add_test(NAME rtl_backend_test COMMAND rtl_backend_test)
 endif()
@@ -4142,6 +4142,75 @@ set_tests_properties(tgxl_panel_widgets_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
     SKIP_RETURN_CODE 77)
 
+# The automation tree must redact a credential even when the user clicks Show.
+add_executable(automation_sensitive_line_edit_test
+    tests/automation_sensitive_line_edit_test.cpp)
+target_include_directories(automation_sensitive_line_edit_test PRIVATE src)
+target_link_libraries(automation_sensitive_line_edit_test PRIVATE Qt6::Core Qt6::Widgets)
+add_test(NAME automation_sensitive_line_edit_test COMMAND automation_sensitive_line_edit_test)
+set_tests_properties(automation_sensitive_line_edit_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# Direct automation command dispatch captures a sensitive QWidget; no socket.
+add_executable(automation_sensitive_grab_command_test
+    tests/automation_sensitive_grab_command_test.cpp)
+target_include_directories(automation_sensitive_grab_command_test PRIVATE src tests)
+target_link_libraries(automation_sensitive_grab_command_test PRIVATE aethercore Qt6::Widgets)
+add_test(NAME automation_sensitive_grab_command_test COMMAND automation_sensitive_grab_command_test)
+set_tests_properties(automation_sensitive_grab_command_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# Production Peripherals dialog with an in-memory credential-store adapter.
+# Connect is clicked only for an invalid code, which returns before QTcpSocket;
+# target-switch ordering uses an injected callback and binds no socket.
+add_executable(peripheral_auth_dialog_test
+    tests/peripheral_auth_dialog_test.cpp
+    tests/fakes/PeripheralAuthStoreFake.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/RadioSetupDialog.cpp
+    src/gui/PersistentDialog.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+    src/gui/SliceColorManager.cpp
+    src/gui/KiwiPublicReceiverPicker.cpp
+    src/gui/GuardedSlider.h)
+target_include_directories(peripheral_auth_dialog_test PRIVATE tests/fakes src tests)
+target_link_libraries(peripheral_auth_dialog_test PRIVATE
+    aetherdesktop_support Qt6::Widgets Qt6::Test)
+set_target_properties(peripheral_auth_dialog_test PROPERTIES AUTOMOC ON)
+add_test(NAME peripheral_auth_dialog_test COMMAND peripheral_auth_dialog_test)
+set_tests_properties(peripheral_auth_dialog_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
+
+# Production Keychain adapter with an in-memory job double; no OS vault or socket.
+add_executable(peripheral_auth_keychain_test
+    tests/peripheral_auth_keychain_test.cpp
+    tests/fakes/qt6keychain/keychain.h
+    src/gui/PeripheralAuthStore.cpp)
+target_include_directories(peripheral_auth_keychain_test BEFORE PRIVATE tests/fakes src)
+target_compile_definitions(peripheral_auth_keychain_test PRIVATE HAVE_KEYCHAIN)
+target_link_libraries(peripheral_auth_keychain_test PRIVATE Qt6::Core Qt6::Network)
+set_target_properties(peripheral_auth_keychain_test PROPERTIES AUTOMOC ON)
+add_test(NAME peripheral_auth_keychain_test COMMAND peripheral_auth_keychain_test)
+
+# Captured TGXL/PGXL auth frames and AG protocol guards, injected without a socket.
+add_executable(peripheral_auth_handshake_test
+    tests/peripheral_auth_handshake_test.cpp
+    src/gui/PeripheralAuthStore.cpp
+    src/core/TgxlConnection.cpp
+    src/core/PgxlConnection.cpp
+    src/models/AntennaGeniusModel.cpp
+    src/models/AmpModel.cpp
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+    ${AETHER_SETTINGS_SOURCES}
+)
+target_include_directories(peripheral_auth_handshake_test PRIVATE src tests)
+target_link_libraries(peripheral_auth_handshake_test PRIVATE
+    Qt6::Core Qt6::Network Qt6::Test)
+set_target_properties(peripheral_auth_handshake_test PROPERTIES AUTOMOC ON)
+add_test(NAME peripheral_auth_handshake_test COMMAND peripheral_auth_handshake_test)
+
 # The PGXL's direct port-9008 protocol — the per-port block (band, bias
 # profile, source radio), the state word the keying lamps are derived from,
 # and the `M|<text>` alert frame — against a stub amplifier on loopback.
@@ -4162,6 +4231,7 @@ set_tests_properties(pgxl_direct_protocol_test PROPERTIES SKIP_RETURN_CODE 77)
 
 # The PGXL front-panel presentation: which controls each presentation shows,
 # what the port strips report, and that the panel's floor does not ratchet.
+# Existing loopback QTcpServer binds for the live status portion of this test.
 add_executable(pgxl_panel_test
     tests/pgxl_panel_test.cpp
     src/gui/AmpApplet.cpp
@@ -7342,6 +7412,9 @@ set(AETHER_SETTINGS_CONSUMERS
     tgxl_applet_ports_test
     pgxl_direct_protocol_test
     pgxl_panel_test
+    peripheral_auth_dialog_test
+    peripheral_auth_handshake_test
+    automation_sensitive_grab_command_test
 )
 foreach(_settings_consumer IN LISTS AETHER_SETTINGS_CONSUMERS)
     if(TARGET ${_settings_consumer})
@@ -7359,6 +7432,7 @@ set(AETHER_AUTOMATION_SERVER_TESTS
     automation_boundary_core_test
     automation_boundary_widgets_test
     automation_menu_lookup_test
+    automation_sensitive_grab_command_test
     automation_ping_build_identity_test
     automation_gauge_verb_test
     automation_persist_diagnostics_test

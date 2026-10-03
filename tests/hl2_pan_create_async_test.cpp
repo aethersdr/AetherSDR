@@ -12,18 +12,23 @@
 
 #include "TestSettingsProfile.h"
 #include "TestDspBuildWait.h"
+#include "SeamThreadAffinityProbe.h"
 
 #include <QCoreApplication>
 #include <QElapsedTimer>
 #include <QEvent>
 #include <QEventLoop>
 #include <QHash>
+#include <QList>
+#include <QPointer>
 #include <QSemaphore>
 #include <QStringList>
 #include <QThread>
 #include <QTimer>
 
 #include <atomic>
+#include <cmath>
+#include <vector>
 #include <cstdio>
 #include <tuple>
 
@@ -80,6 +85,7 @@ struct Hl2PanCreateTestAccess {
         QCoreApplication::sendPostedEvents(&backend, QEvent::MetaCall);
     }
     static QObject* wire(Hl2Backend& backend) { return backend.m_metis; }
+    static QString sliceMeterName(int uiNumber) { return Hl2Backend::sliceMeterName(uiNumber); }
     static QObject* buildContext(Hl2Backend& backend)
     {
         return backend.m_dspBuildContext;
@@ -681,6 +687,135 @@ void aFailedBuildLeavesTheRolesOnALiveReceiver()
 
 }   // namespace
 
+// Swallows the retired chain's DeferredDelete so it is still alive when its
+// queued frame is delivered: the producer-identity term, not the QPointer,
+// must then reject it. Lives on the chain's thread, as an event filter must.
+class KeepAlive : public QObject
+{
+public:
+    bool eventFilter(QObject*, QEvent* event) override
+    {
+        return event->type() == QEvent::DeferredDelete;
+    }
+};
+
+// A frame or meter sample its DSP queued before the close must not publish
+// under the recycled UI number; the reuser's own must.
+void aStaleSpectrumFrameDoesNotPublishOnTheReuser(bool retiredChainAlive)
+{
+    std::fprintf(stderr, "-- stale spectrum frame and meter sample, retired chain %s at delivery\n",
+                 retiredChainAlive ? "still alive" : "deleted");
+    Hl2Backend backend;
+    AetherSDR::test::SeamThreadAffinityProbe seam(&backend);   // after backend: torn down first
+    AetherSDR::test::attachAllSeamSignals(seam);
+    if (!bringUp(backend)) {
+        return;
+    }
+
+    int framesOnUi1 = 0;
+    QObject::connect(&backend, &IRadioBackend::spectrumFrameReady, &backend,
+                     [&framesOnUi1](int ui, const QByteArray&) {
+                         if (ui == 1)
+                             ++framesOnUi1;
+                     });
+    const QString ui1Meter = Access::sliceMeterName(1);
+    QList<double> metersOnUi1;
+    QObject::connect(&backend, &IRadioBackend::meterUpdate, &backend,
+                     [&metersOnUi1, ui1Meter](const QString& id, double value) {
+                         if (id == ui1Meter)
+                             metersOnUi1 << value;
+                     });
+
+    check(backend.createPanadapter(), "a receiver is added");
+    check(Access::lastReceiverUi(backend) == 1, "it takes UI 1");
+    AetherSDR::test::spinUntil(
+        [&] { return Access::dspChannelForUi(backend, 1) >= 0; });
+    AetherSDR::hl2::Hl2RxDsp* const oldDsp = Access::receiverDsp(backend, 1);
+    check(oldDsp != nullptr, "its chain is built");
+    if (!oldDsp) {
+        return;
+    }
+
+    const std::vector<float> bins(16, -100.0f);
+    const auto emitFrom = [&bins](AetherSDR::hl2::Hl2RxDsp* dsp) {
+        QMetaObject::invokeMethod(dsp, [dsp, &bins] { emit dsp->spectrumReady(bins); },
+                                  Qt::BlockingQueuedConnection);
+    };
+
+    // A fresh smoother publishes its first reading at once, so one sample is
+    // enough to see a meter on either side of the reopen.
+    constexpr float kOldDbfs = -50.0f;
+    constexpr float kReuserDbfs = -90.0f;
+    const auto meterFrom = [](AetherSDR::hl2::Hl2RxDsp* dsp, float dbfs) {
+        QMetaObject::invokeMethod(dsp, [dsp, dbfs] { emit dsp->meterUpdate(dbfs); },
+                                  Qt::BlockingQueuedConnection);
+    };
+
+    emitFrom(oldDsp);
+    meterFrom(oldDsp, kOldDbfs);
+    QCoreApplication::sendPostedEvents(&backend, QEvent::MetaCall);
+    check(framesOnUi1 == 1, "a frame from the current chain publishes on UI 1");
+    check(metersOnUi1.size() == 1, "a meter sample from the current chain publishes on UI 1");
+    const double oldDbm = metersOnUi1.value(0);
+
+    QPointer<AetherSDR::hl2::Hl2RxDsp> oldGuard(oldDsp);
+    KeepAlive* keepAlive = nullptr;
+    if (retiredChainAlive) {
+        keepAlive = new KeepAlive;
+        keepAlive->moveToThread(oldDsp->thread());
+        QMetaObject::invokeMethod(oldDsp, [oldDsp, keepAlive] {
+            oldDsp->installEventFilter(keepAlive);
+        }, Qt::BlockingQueuedConnection);
+    }
+
+    // Queued on the GUI thread and not delivered until after the reopen.
+    emitFrom(oldDsp);
+    meterFrom(oldDsp, kOldDbfs);
+    check(backend.removePanadapter(AetherSDR::hl2::hl2PanId(1)), "UI 1 is closed");
+    check(backend.createPanadapter(), "a receiver is added again");
+    check(Access::lastReceiverUi(backend) == 1, "the reuser is handed UI 1 again");
+    flushDeferredDeletes(Access::wire(backend));
+    check(oldGuard.isNull() != retiredChainAlive,
+          retiredChainAlive ? "the retired chain is still alive at delivery"
+                            : "the retired chain is deleted before delivery");
+    QCoreApplication::sendPostedEvents(&backend, QEvent::MetaCall);
+    check(framesOnUi1 == 1,
+          "the closed chain's queued frame does not publish on the reused UI 1");
+    check(metersOnUi1.size() == 1,
+          "the closed chain's queued meter sample does not publish on the reused UI 1");
+    if (keepAlive) {
+        QMetaObject::invokeMethod(keepAlive, [keepAlive, oldGuard] {
+            delete oldGuard.data();   // on its own thread, which owns its WDSP channel
+            delete keepAlive;
+        }, Qt::BlockingQueuedConnection);
+    }
+
+    AetherSDR::test::spinUntil(
+        [&] { return Access::dspChannelForUi(backend, 1) >= 0; });
+    AetherSDR::hl2::Hl2RxDsp* const newDsp = Access::receiverDsp(backend, 1);
+    check(newDsp != nullptr && newDsp != oldDsp, "the reuser has its own chain");
+    const int beforeReuserFrame = framesOnUi1;
+    const qsizetype beforeReuserMeter = metersOnUi1.size();
+    if (newDsp) {
+        emitFrom(newDsp);
+        meterFrom(newDsp, kReuserDbfs);
+        QCoreApplication::sendPostedEvents(&backend, QEvent::MetaCall);
+    }
+    check(framesOnUi1 == beforeReuserFrame + 1, "the reuser's own frame publishes on UI 1");
+    // Exactly its own reading: had the stale sample reached this smoother, the
+    // reading would be throttled or blended with it.
+    const double expectedDbm = oldDbm + (kReuserDbfs - kOldDbfs);
+    check(metersOnUi1.size() == beforeReuserMeter + 1
+              && std::abs(metersOnUi1.last() - expectedDbm) < 1e-6,
+          "the reuser's own meter sample publishes on UI 1, unblended with the stale one");
+
+    const QStringList violations = seam.violations();
+    for (const QString& v : violations) {
+        std::fprintf(stderr, "     %s\n", v.toUtf8().constData());
+    }
+    check(violations.isEmpty(), "every seam signal is emitted on the backend's thread");
+}
+
 int main(int argc, char** argv)
 {
     TestSettingsProfile profile(QStringLiteral("hl2-pan-create-async"));
@@ -698,6 +833,8 @@ int main(int argc, char** argv)
     aRetiredBuildDoesNotCompleteAgainstReconstructedReceivers(true);
     aFailedBuildLeavesTheRolesOnALiveReceiver();
     aFailedBuildWithdrawsItsSMeter();
+    aStaleSpectrumFrameDoesNotPublishOnTheReuser(false);
+    aStaleSpectrumFrameDoesNotPublishOnTheReuser(true);
     std::fprintf(stderr, "hl2_pan_create_async_test: %d failure(s)\n", g_failures);
     return g_failures == 0 ? 0 : 1;
 }

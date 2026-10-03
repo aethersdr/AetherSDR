@@ -513,14 +513,8 @@ int main(int argc, char** argv)
             CHECK(abreast(temp, vdd));
             CHECK(temp->x() < vdd->x());
 
-            // The source indicator is not a reading — it says which path the
-            // readings came down — so it sits at the far end of the row with
-            // the slack between, rather than trailing the measurements.
-            QLabel* source = nullptr;
-            for (QLabel* l : applet.findChildren<QLabel*>()) {
-                if (l->text().contains(QStringLiteral("DIRECT"))
-                        || l->text().contains(QStringLiteral("RADIO"))) source = l;
-            }
+            // Match the TGXL indicator: bottom-right, below the readings.
+            QLabel* source = applet.findChild<QLabel*>(QStringLiteral("ampConnectionSource"));
             QLabel* vac = nullptr;
             for (QLabel* l : applet.findChildren<QLabel*>()) {
                 if (l->text().startsWith(QStringLiteral("Vac"))) vac = l;
@@ -528,11 +522,13 @@ int main(int argc, char** argv)
             CHECK(source != nullptr);
             CHECK(vac != nullptr);
             if (source && vac) {
-                CHECK(abreast(source, vdd));
-                // The slack is BETWEEN the last reading and the indicator, not
-                // after it: a gap the width of the column's spacing would mean
-                // it is just the fourth item in the row.
-                CHECK(source->x() - (vac->x() + vac->width()) > 40);
+                const QPoint sourceAt = source->mapTo(&applet, QPoint(0, 0));
+                const QPoint vacAt = vac->mapTo(&applet, QPoint(0, 0));
+                CHECK(sourceAt.y() > vacAt.y() + vac->height());
+                CHECK(applet.width() - sourceAt.x() - source->width() < 20);
+                const int bottomInset = applet.height() - sourceAt.y() - source->height();
+                CHECK(bottomInset >= 6);
+                CHECK(bottomInset < 20);
             }
 
             applet.setFloating(false);

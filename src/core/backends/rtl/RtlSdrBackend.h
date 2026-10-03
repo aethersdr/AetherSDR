@@ -80,8 +80,12 @@ public:
     static constexpr int kDefaultRfGainDb = 24;
 
 private:
+    friend struct RtlSdrBackendTestAccess;
+
     // Emit the initial snapshot a freshly-connected device would report.
     void emitInitialState();
+    // Relay m_worker's outputs to the seam (called once per connect).
+    void wireWorker();
 
     // Parse device index or serial from connect request params.
     int deviceIndexFromParams(const QVariantMap& params) const;

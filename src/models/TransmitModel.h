@@ -479,6 +479,7 @@ signals:
     void voxCommandIssued(bool on, int level, int delayMs);
     void monitorCommandIssued(bool on, int level);
     void rfPowerCommandIssued(int percent);
+    void tunePowerCommandIssued(int percent);
     void atuCommandIssued(bool start);
     // Fires only when cwPitch actually changes. Use this instead of
     // phoneStateChanged for slot work that should NOT run on every
