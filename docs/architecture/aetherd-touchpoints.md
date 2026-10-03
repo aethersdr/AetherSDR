@@ -4,7 +4,7 @@
 
 Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine-design.md) §2, §10). One row per engine header the UI includes; converting a touchpoint means the UI reaches that surface through the versioned protocol instead of the header.
 
-**Totals:** 232 touchpoint headers (194 core, 38 models) — 232/232 tagged, 0/232 converted.
+**Totals:** 233 touchpoint headers (194 core, 39 models) — 233/233 tagged, 0/233 converted.
 
 | Header | Includers | Tag | Status |
 |---|---:|---|---|
@@ -144,7 +144,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/SystemInventory.h` | 1 | ui-support — Startup and support-bundle inventory of host CPU, SIMD and RAM capabilities. Process diagnostics, not radio state. | unconverted |
 | `core/TciServer.h` | 3 | mixed(flex) — TCI WebSocket server for WSJT-X et al: protocol surface is canonical radio state, but audio/IQ rides Flex DAX | unconverted |
 | `core/TgxlConnection.h` | 2 | peripheral(4o3a) — Direct TCP client for the 4O3A Tuner Genius XL (port 9010, relay/autotune), reverse-engineered from the 4O3A management app — a standalone accessory transport, not SmartSDR. Not radio-family wire; a peripheral accessory, NOT behind the IRadioBackend radio seam (reclassified from vendor(flex), #4087 follow-up). | unconverted |
-| `core/ThemeManager.h` | 156 | ui-support — Qt token-based theming singleton (colors/fonts/QSS, theme files, editor hooks) — pure client GUI plumbing, no radio state. | unconverted |
+| `core/ThemeManager.h` | 157 | ui-support — Qt token-based theming singleton (colors/fonts/QSS, theme files, editor hooks) — pure client GUI plumbing, no radio state. | unconverted |
 | `core/ThreadCpuRing.h` | 2 | ui-support — Short host-thread CPU history used by Runtime Monitor peak and sparkline presentation. Diagnostic UI support, not radio state. | unconverted |
 | `core/TimeFrameVoter.h` | 1 | universal — Shared AetherClock time-frame types plus confidence-weighted cross-frame bit voting over a sliding window. Map-agnostic pure DSP/logic — no Qt, no GUI, no vendor ties. | unconverted |
 | `core/TxKeyingMarker.h` | 14 | ui-support — QWidget property marker guarding TX-keying controls from the automation bridge; GUI-shell plumbing, no radio state. | unconverted |
@@ -209,6 +209,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `models/BandDefs.h` | 5 | universal — Static ARRL band plan table (edges, default freq/mode, GEN/WWV); canonical band-plan data, no vendor ties. | unconverted |
 | `models/BandPlanManager.h` | 9 | universal — Band-plan overlay data (segments/spots/license classes, region merge) from JSON; radio-agnostic canon | unconverted |
 | `models/BandSettings.h` | 6 | universal — Per-band save/restore of canonical state (freq/mode/filter/AGC/WNB/display range) — band memories, no vendor fields | unconverted |
+| `models/Ctr2ProxyModel.h` | 3 | peripheral(ctr2) — CTR2-Max controller relay: an operator-enabled opaque byte relay between the controller (TCP listener in Wi-Fi mode, USB HID link in USB mode) and a dedicated radio TCP connection. The CTR2 is an independent radio client; nothing passes RadioModel, a backend socket or IRadioBackend. A peripheral accessory transport, NOT behind the radio seam. See docs/ctr2-tcp-proxy-design.md and docs/ctr2-usb-relay-design.md (RFC #6091). | unconverted |
 | `models/CwDecodeSettings.h` | 7 | ui-support — CW receive backend selection and display preferences in the existing feature-owned settings blob; no radio state. | unconverted |
 | `models/CwRxModel.h` | 2 | universal — Receive CW backend catalog and lifecycle over typed PCM; decoder workers remain private and TX is separate. | unconverted |
 | `models/CwxModel.h` | 1 | universal — CW keyer intent: WPM/delay/QSK, 12 macros, send/erase, sent-index progress. Generic despite Flex 'CWX' name. | unconverted |

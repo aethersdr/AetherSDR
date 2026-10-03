@@ -31,6 +31,10 @@
 #include "PanadapterMessageOverlay.h"
 #include "TitleBar.h"
 #include "models/SliceModel.h"
+#include "Ctr2ProxyApplet.h"
+#include "models/Ctr2ProxyModel.h"
+
+#include <QHostAddress>
 
 #include <QColor>
 #include <QPainter>
@@ -2561,8 +2565,52 @@ void MainWindow::registerMidiParams()
 // thread (#502), FlexControl / MIDI / HID manager construction and signal
 // routing, and the RC-28 deferred press/hold logic (#3323).
 
+void MainWindow::setupCtr2Proxy()
+{
+    // The relay targets the radio AetherSDR is connected to. The model only
+    // receives this; it captures the destination at Start, so switching
+    // radios here never retargets a running relay.
+    m_ctr2ProxyModel = new Ctr2ProxyModel(this);
+    const auto pushRadio = [this] {
+        if (!m_radioModel.isConnected()) {
+            m_ctr2ProxyModel->setAetherRadio({}, 0, {}, tr("Connect AetherSDR to a radio first"));
+            return;
+        }
+        if (m_radioModel.isWan()) {
+            m_ctr2ProxyModel->setAetherRadio(
+                {}, 0, {}, tr("AetherSDR is connected through SmartLink; the CTR2 relay "
+                              "needs a direct LAN or VPN connection to the radio"));
+            return;
+        }
+        if (!m_radioModel.backendCapabilities().hasMultiClientSessions) {
+            m_ctr2ProxyModel->setAetherRadio(
+                {}, 0, {}, tr("This radio does not accept another client alongside AetherSDR"));
+            return;
+        }
+        const QHostAddress address = m_radioModel.radioAddress();
+        const quint16 port = m_radioModel.lastRadioInfo().port;
+        QString label = m_radioModel.model();
+        if (!m_radioModel.name().isEmpty() && m_radioModel.name() != label) {
+            label += QStringLiteral(" \"%1\"").arg(m_radioModel.name());
+        }
+        label += QStringLiteral("  %1").arg(address.toString());
+        m_ctr2ProxyModel->setAetherRadio(address, port, label.trimmed(), {});
+    };
+    connect(&m_radioModel, &RadioModel::connectionStateChanged, m_ctr2ProxyModel,
+            [pushRadio](bool) { pushRadio(); });
+    connect(&m_radioModel, &RadioModel::infoChanged, m_ctr2ProxyModel, pushRadio);
+    pushRadio();
+    if (m_appletPanel) {
+        if (auto* applet = m_appletPanel->ctr2ProxyApplet()) {
+            applet->setModel(m_ctr2ProxyModel);
+        }
+    }
+}
+
 void MainWindow::wireExternalControllers()
 {
+    setupCtr2Proxy();
+
     // ── External controllers run on a dedicated worker thread (#502) ────
     // FlexControl, SerialPort, and MIDI controllers are created on the
     // worker thread so their I/O (serial port, RtMidi callbacks, poll timers)
