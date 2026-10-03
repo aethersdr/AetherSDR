@@ -1,5 +1,6 @@
 #include "RigctlProtocol.h"
 #include "LogManager.h"
+#include "models/PanadapterModel.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
@@ -8,6 +9,9 @@
 #include <QMetaObject>
 #include <QStringList>
 #include <QtGlobal>
+
+#include <algorithm>
+#include <cmath>
 
 namespace AetherSDR {
 
@@ -221,6 +225,40 @@ QString antMaskToName(int mask, const QStringList& available)
     int m = mask;
     while (m > 1) { m >>= 1; bit++; }
     return (bit < available.size()) ? available[bit] : available.first();
+}
+
+// RIG_LEVEL_RF without a command plane (#5774): the slice's rfgain is wire text
+// with nowhere to go, so the level drives the pan's RF gain (the ANT slider's
+// control, e.g. the HL2's -12..+48 dB LNA). Hamlib's 0.0-1.0 is spread across
+// the range the backend published and snapped to its step. A radio with a
+// command plane keeps `slice set N rfgain=` (0-100) for its CAT clients.
+PanadapterModel* rfGainPanFor(const RadioModel* model, const SliceModel* slice)
+{
+    if (!model || !slice || slice->panId().isEmpty()) {
+        return nullptr;
+    }
+    return model->panadapter(slice->panId());
+}
+
+int rfLevelToPanGain(double level, int low, int high, int step)
+{
+    const double span = static_cast<double>(high - low);
+    const int stepSize = std::max(step, 1);
+    const long steps = std::lround(qBound(0.0, level, 1.0) * span / stepSize);
+    return std::clamp(low + static_cast<int>(steps) * stepSize, low, high);
+}
+
+// Only a published range is a scale: before it lands the pan holds
+// PanadapterModel's Flex-shaped defaults (-8..32 step 8). A degenerate range is
+// refused too, since the level divides by its span.
+bool rfGainRangeKnown(const PanadapterModel& pan)
+{
+    return pan.hasRfGainRange() && pan.rfGainHigh() > pan.rfGainLow();
+}
+
+double panGainToRfLevel(int gain, int low, int high)
+{
+    return qBound(0.0, static_cast<double>(gain - low) / (high - low), 1.0);
 }
 
 } // namespace
@@ -1409,8 +1447,15 @@ QString RigctlProtocol::cmdGetLevel(const QString& arg)
         return makeResponse(formatRigLevelValue(af));
     }
     if (level == "RF") {
-        const double rf = qBound(0.0f, slice->rfGain(), 100.0f) / 100.0;
-        return makeResponse(formatRigLevelValue(rf));
+        if (m_model->hasCommandPlane()) {
+            const double rf = qBound(0.0f, slice->rfGain(), 100.0f) / 100.0;
+            return makeResponse(formatRigLevelValue(rf));
+        }
+        // No command plane: the pan's gain, which is what the slider shows.
+        const auto* pan = rfGainPanFor(m_model, slice);
+        if (!pan || !rfGainRangeKnown(*pan)) return rprt(-11);  // RIG_ENAVAIL
+        return makeResponse(formatRigLevelValue(panGainToRfLevel(
+            pan->rfGain(), pan->rfGainLow(), pan->rfGainHigh())));
     }
     if (level == "SQL") {
         const double sql = qBound(0, slice->squelchLevel(), 100) / 100.0;
@@ -1602,9 +1647,23 @@ QString RigctlProtocol::cmdSetLevel(const QString& args)
         return rprt(0);
     }
     if (level == "RF") {
-        const float gain = static_cast<float>(qBound(0.0, val * 100.0, 100.0));
-        QMetaObject::invokeMethod(slice, [slice, gain]() {
-            slice->setRfGain(gain);
+        if (m_model->hasCommandPlane()) {
+            const float gain = static_cast<float>(qBound(0.0, val * 100.0, 100.0));
+            QMetaObject::invokeMethod(slice, [slice, gain]() {
+                slice->setRfGain(gain);
+            }, Qt::QueuedConnection);
+            return rprt(0);
+        }
+        // No command plane: through the pan via IRadioBackend::setPanRfGain (the
+        // HL2's LNA is reachable only that way). Nothing to address, or no
+        // published range, is refused rather than acknowledged as a no-op.
+        const auto* pan = rfGainPanFor(m_model, slice);
+        if (!pan || !rfGainRangeKnown(*pan)) return rprt(-11);  // RIG_ENAVAIL
+        const int gain = rfLevelToPanGain(val, pan->rfGainLow(),
+                                          pan->rfGainHigh(), pan->rfGainStep());
+        const QString panId = slice->panId();
+        QMetaObject::invokeMethod(m_model, [model = m_model, panId, gain]() {
+            model->setPanRfGainFor(panId, gain);
         }, Qt::QueuedConnection);
         return rprt(0);
     }
