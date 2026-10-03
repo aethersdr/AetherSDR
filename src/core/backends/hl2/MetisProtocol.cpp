@@ -221,6 +221,45 @@ Cc ccI2c2Write(std::uint8_t chip, std::uint8_t reg, std::uint8_t data) noexcept
             data};
 }
 
+Cc ccI2c1Write(std::uint8_t chip, std::uint8_t reg, std::uint8_t data) noexcept
+{
+    // Identical shape to ccI2c2Write, different bus byte. Written out rather
+    // than factored into a shared helper taking the C0 value, because the two
+    // buses have different consequences for a wrong write (see the header) and
+    // a single function parameterised by "which bus" is exactly the thing a
+    // caller gets wrong.
+    return {kC0I2c1,
+            kI2cCookieWrite,
+            static_cast<std::uint8_t>(kI2cStopAtEnd | (chip & 0x7F)),
+            reg,
+            data};
+}
+
+std::array<Cc, kVersaClockCl1Banks> versaClockCl1Banks(bool externalRef) noexcept
+{
+    // Register/value pairs, in send order. VERBATIM from the Hermes-Lite 2
+    // project by way of piHPSDR and deskHPSDR — see the header for why these
+    // are not derived and must not be "tidied".
+    static constexpr std::uint8_t kOn[kVersaClockCl1Banks * 2] = {
+        0x10, 0xc0, 0x13, 0x03, 0x10, 0x40, 0x2d, 0x01, 0x2e, 0x20, 0x22, 0x03,
+        0x23, 0x00, 0x24, 0x00, 0x25, 0x00, 0x19, 0x00, 0x1A, 0x00, 0x1B, 0x00,
+        0x18, 0x00, 0x17, 0x12, 0x62, 0x3b, 0x2c, 0x00, 0x31, 0x81, 0x3d, 0x09,
+        0x3e, 0x00, 0x32, 0x00, 0x33, 0x00, 0x34, 0x00, 0x35, 0x00, 0x63, 0x01,
+    };
+    static constexpr std::uint8_t kOff[kVersaClockCl1Banks * 2] = {
+        0x10, 0xc0, 0x13, 0x00, 0x10, 0x80, 0x2d, 0x01, 0x2e, 0x10, 0x22, 0x00,
+        0x23, 0x00, 0x24, 0x00, 0x25, 0x00, 0x19, 0x00, 0x1A, 0x00, 0x1B, 0x00,
+        0x18, 0x40, 0x17, 0x04, 0x62, 0x5b, 0x2c, 0x00, 0x31, 0x00, 0x3d, 0x00,
+        0x3e, 0x00, 0x32, 0x00, 0x33, 0x00, 0x34, 0x00, 0x35, 0x00, 0x63, 0x00,
+    };
+    const std::uint8_t* table = externalRef ? kOn : kOff;
+    std::array<Cc, kVersaClockCl1Banks> out{};
+    for (std::size_t i = 0; i < kVersaClockCl1Banks; ++i) {
+        out[i] = ccI2c1Write(kVersaClockI2cAddr, table[2 * i], table[2 * i + 1]);
+    }
+    return out;
+}
+
 std::array<Cc, kIoBoardTxFreqBanks> ccIoBoardTxFrequency(std::uint64_t hz) noexcept
 {
     std::array<Cc, kIoBoardTxFreqBanks> out{};
@@ -670,6 +709,29 @@ std::optional<double> Ep4Stats::crestDb() const noexcept
     if (peak <= kEp4FloorDbfs || rms <= kEp4FloorDbfs)
         return std::nullopt;
     return peak - rms;
+}
+
+double Ep4Stats::meanCodes() const noexcept
+{
+    if (samples <= 0)
+        return 0.0;
+    // `sum` and `samples` both add in merge(), so for a block this is the
+    // mean of the 2048-sample concatenation, not an average of four packets.
+    return sum / static_cast<double>(samples);
+}
+
+double Ep4Stats::dcDbfs() const noexcept
+{
+    if (samples <= 0)
+        return kEp4FloorDbfs;
+    const double mean = std::abs(meanCodes());
+    // Exactly zero is the one "no level" case, and on the production path it
+    // is exact: `sum` is an integer-valued double. A non-zero mean under half
+    // a code is NOT clamped to the floor — it computes below it, as
+    // rmsDbfs() does for a sub-half-code deviation. See the header.
+    if (mean <= 0.0)
+        return kEp4FloorDbfs;
+    return 20.0 * std::log10(mean / static_cast<double>(kEp4FullScale));
 }
 
 void Ep4Stats::merge(const Ep4Stats& other) noexcept

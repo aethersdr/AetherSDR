@@ -2,6 +2,7 @@
 
 #include <QObject>
 #include <QByteArray>
+#include <QKeyEvent>
 #include <QKeySequence>
 #include <QShortcut>
 #include <QString>
@@ -30,6 +31,21 @@ struct ShortcutExportResult {
 
     bool ok() const { return error.isEmpty(); }
 };
+
+// The key sequence a key event resolves to for binding lookup: the key plus
+// Shift/Ctrl/Alt/Meta only. Shared by every resolver so they match alike.
+inline QKeySequence shortcutSequenceFromKeyEvent(const QKeyEvent* ev)
+{
+    if (!ev || ev->key() == Qt::Key_unknown)
+        return {};
+
+    const Qt::KeyboardModifiers modifiers =
+        ev->modifiers() & (Qt::ShiftModifier
+                           | Qt::ControlModifier
+                           | Qt::AltModifier
+                           | Qt::MetaModifier);
+    return QKeySequence(static_cast<int>(modifiers) | ev->key());
+}
 
 class ShortcutManager : public QObject {
     Q_OBJECT
@@ -95,10 +111,12 @@ public:
     void rebuildShortcuts(QWidget* parent,
                           std::function<bool()> guardFn = nullptr);
 
-    // Enable or disable operating QShortcut objects. Used to yield key
-    // events to focused child widgets (e.g. sliders) that would otherwise
-    // have their arrow keys stolen by window-level shortcuts.
+    // Enable or disable the operating QShortcuts, so their keys reach the
+    // focused widget (a slider's arrows, or every bound key with keyboard
+    // shortcuts off, #5483). Remembered: rebuildShortcuts() applies it, so a
+    // rebuild cannot re-arm yielded keys.
     void setShortcutsEnabled(bool enabled);
+    bool shortcutsEnabled() const { return m_shortcutsEnabled; }
 
     // Query
     const QVector<Action>& actions() const { return m_actions; }
@@ -119,6 +137,7 @@ private:
     QVector<Action> m_actions;
     QVector<QShortcut*> m_shortcuts;
     QVector<QShortcut*> m_windowShortcuts;
+    bool m_shortcutsEnabled{true};
 };
 
 } // namespace AetherSDR

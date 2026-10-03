@@ -156,8 +156,8 @@ status and the last request outcome. This is geometry and converter-relative
 evidence, not a measurement of a physical dongle's DC bias or calibrated RF
 power.
 
-RTL zoom and in-capture pan crop contiguous original bins from the 2048-point
-capture FFT. The sixteen-bin zoom floor is 18.75 kHz at 2.4 MS/s; neither
+RTL zoom and in-capture pan crop contiguous original bins from the 65536-point
+capture FFT. The sixteen-bin zoom floor is 585.94 Hz at 2.4 MS/s; neither
 interpolation nor additional resolution is claimed. Panning past the usable
 capture moves the hardware capture across supported RF, including a drag at
 full zoom-out. It does not change the sample rate or any slice's configured RF,
@@ -196,7 +196,7 @@ display intent together. Typed entry requests centering; publication waits for
 DSP/capture adoption. An in-capture Center can move only the viewport, without
 USB writes. A distant Center follows its selected slice with a capture retune;
 other configured slices may park. The transaction fits the selected slice's
-complete guarded passband and requires its RF to center in the real 2048-bin view
+complete guarded passband and requires its RF to center in the real 65536-bin view
 within half a bin plus integer-Hz tolerance. At full width this view requirement
 can leave converter DC on the selected FM carrier when no DC-clear position also
 fits. Radio Health reports the accepted overlap. If no legal capture can satisfy
@@ -304,10 +304,12 @@ uses the real model, backend and worker with an injected USB device, without
 opening hardware or sockets. Multiple membership is admitted only by its test
 fixture; it does not raise production admission.
 
-This implementation is local to this PR and does not import PR #5919 or its
-stack. Reconciliation with that routing work remains a later integration task:
-typed dispatch alone is not acknowledgment, and every adapter must preserve
-sparse stable IDs. The publication-policy seam, RTL-owned settings hooks/domain
+The shared typed tune, filter and AGC routing on main preserves this backend's
+confirmed publication policy. Confirmed setters emit intent without changing
+observed getters, and model dispatch checks the connected backend and exact
+live slice object. Tune/filter/mode have one routing binding. PR #5919's
+remaining receive controls still need reconciliation: typed dispatch alone is
+not acknowledgment, and every adapter must preserve sparse stable IDs. The publication-policy seam, RTL-owned settings hooks/domain
 transfer and FM passband transition were ratified in the ruling linked above.
 A second backend adopting the settings takeover must justify it separately.
 The new DC placement and joint tune/view intents still need ratification. Offline

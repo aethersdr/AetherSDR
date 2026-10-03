@@ -1,5 +1,7 @@
 #pragma once
 
+#include <QRegularExpression>
+#include <QStringList>
 #include <QWidget>
 #include <QPointer>
 #include <QVariant>
@@ -11,8 +13,8 @@ namespace AetherSDR {
 // Marker for controls that key the transmitter (MOX/PTT, TUNE, ATU tune, CWX
 // send, AX.25 send, ...). The automation bridge (#3646) refuses invoke() on a
 // marked widget unless AETHER_AUTOMATION_ALLOW_TX is set. Set it at the
-// control's creation site; the bridge's name matching is only a logged
-// fallback. Usage:
+// control's creation site; name matching (transmitControlMatch() below, shared
+// by the bridge and the keyboard TX activation guard) is only a fallback. Usage:
 //     m_moxBtn = new QPushButton("MOX");
 //     markTxKeying(m_moxBtn);
 inline constexpr char kTxKeyingProperty[] = "aetherTxKeying";
@@ -120,5 +122,82 @@ private:
     TxKeyingAction::Prepared m_action;
     bool m_started{false};
 };
+
+// Lowercased words of an identifier or label, split on separators and camelCase
+// humps (aprsSvcWXBOT -> [aprs, svc, wxbot]). The TX-guard fallback matches a
+// deny-word against a WHOLE token, so "svc"+"wxbot" never reads as "cwx" (#3646).
+inline QStringList identifierTokens(const QString& s)
+{
+    QString spaced;
+    spaced.reserve(s.size() * 2);
+    for (int i = 0; i < s.size(); ++i) {
+        const QChar c = s.at(i);
+        // Break at a lower/digit -> Upper hump (tuneButton -> "tune Button") and
+        // at an acronym -> word hump (WXBot -> "WX Bot"); runs of caps stay whole
+        // (WXBOT -> "wxbot").
+        if (i > 0 && c.isUpper()
+            && (s.at(i - 1).isLower() || s.at(i - 1).isDigit()
+                || (i + 1 < s.size() && s.at(i + 1).isLower())))
+            spaced.append(QLatin1Char(' '));
+        spaced.append(c);
+    }
+    static const QRegularExpression kSeparators(QStringLiteral("[^a-z0-9]+"));
+    return spaced.toLower().split(kSeparators, Qt::SkipEmptyParts);
+}
+
+// True if any haystack contributes a whole token equal to a deny-word — the
+// anchored TX-guard fallback match.
+inline bool matchesTxDenyToken(const QStringList& haystacks, const QStringList& deny)
+{
+    for (const QString& h : haystacks) {
+        const QStringList tokens = identifierTokens(h);
+        for (const QString& d : deny)
+            if (tokens.contains(d))
+                return true;
+    }
+    return false;
+}
+
+// The fallback deny-list: only words that unambiguously mean "keys TX".
+// "tune"/"atu"/"vox" also name RX-only controls ("Tune Now", a VOX arm toggle);
+// the keying TUNE/ATU buttons carry markTxKeying() instead (#3918).
+inline const QStringList& txDenyTokens()
+{
+    static const QStringList kDeny = {
+        QStringLiteral("mox"), QStringLiteral("ptt"),
+        QStringLiteral("transmit"), QStringLiteral("cwx"),
+    };
+    return kDeny;
+}
+
+enum class TransmitControlMatch {
+    None,          // not a transmit control
+    Marker,        // carries the authoritative markTxKeying() marker
+    NameFallback,  // unmarked button whose name/label reads as a TX keyer
+};
+
+// Is this widget a transmit control? One answer for the automation bridge and
+// the keyboard activation guard. The marker is authoritative; the name match is
+// a button-only fallback, and a NameFallback control should get markTxKeying().
+inline TransmitControlMatch transmitControlMatch(const QWidget* w)
+{
+    if (!w)
+        return TransmitControlMatch::None;
+    if (w->property(kTxKeyingProperty).toBool())
+        return TransmitControlMatch::Marker;
+
+    // By meta-object name and Q_PROPERTY, not qobject_cast: this header sits in
+    // src/core and must not include a QtWidgets class header (engine boundary).
+    if (!w->inherits("QAbstractButton"))
+        return TransmitControlMatch::None;  // sliders / combos / spinboxes can't trigger TX
+
+    if (w->objectName().startsWith(QStringLiteral("panOverlayMessageClose_")))
+        return TransmitControlMatch::None;  // closes an overlay notification, never keys TX.
+
+    const QStringList hay{w->objectName(), w->accessibleName(),
+                          w->property("text").toString()};
+    return matchesTxDenyToken(hay, txDenyTokens()) ? TransmitControlMatch::NameFallback
+                                                   : TransmitControlMatch::None;
+}
 
 } // namespace AetherSDR

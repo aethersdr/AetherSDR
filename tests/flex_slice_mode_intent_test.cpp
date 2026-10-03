@@ -2,12 +2,22 @@
 // real FlexBackend seam dispatches; no radio, simulator peer or transport opens.
 #include "TestSettingsProfile.h"
 #include "core/backends/flex/FlexBackend.h"
+#include "core/backends/flex/RadioConnection.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
 #include <QCoreApplication>
 #include <cstdio>
 
+namespace AetherSDR {
+class RadioConnectionSessionTestAccess {
+public:
+    static void setConnected(RadioConnection& connection, bool connected)
+    {
+        connection.m_state.store(connected ? ConnectionState::Connected : ConnectionState::Disconnected);
+    }
+};
+}
 using namespace AetherSDR;
 
 int main(int argc, char** argv)
@@ -25,6 +35,7 @@ int main(int argc, char** argv)
     auto* flex = dynamic_cast<FlexBackend*>(model.backend());
     check(flex != nullptr, "actual FlexBackend owns dispatch");
     if (!flex) { return 1; }
+    RadioConnectionSessionTestAccess::setConnected(*flex->connection(), true);
     QStringList commands;
     flex->setSliceCommandSink([&](const QString& command) { commands << command; });
     const QMap<QString, QString> status{{"in_use", "1"}, {"RF_frequency", "14.200000"},
@@ -46,7 +57,10 @@ int main(int argc, char** argv)
     commands.clear();
     slice->setFrequency(14.210);
     slice->setFilterWidth(100, 2800);
-    check(commands.isEmpty(), "Flex frequency and filter do not duplicate their existing command route");
+    check(commands == QStringList{QStringLiteral("slice tune 0 14.210000 autopan=0"),
+                                  QStringLiteral("filt 0 100 2800")},
+          "typed frequency and filter each reach the Flex seam exactly once");
     check(qFuzzyCompare(slice->frequency(), 14.210), "Flex frequency retains optimistic publication");
+    RadioConnectionSessionTestAccess::setConnected(*flex->connection(), false);
     return failures ? 1 : 0;
 }
