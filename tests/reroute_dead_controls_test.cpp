@@ -6,8 +6,9 @@
 //
 // The Flex half of every change is pinned too, as wire text: where a caller
 // used to write `slice set ...` by hand and now calls a SliceModel setter, the
-// setter's commandReady output is compared with the exact strings the hand
-// written version produced. That is the claim "a Flex sees the same commands",
+// setter's output -- commandReady, plus the receive intents a real FlexBackend
+// encodes -- is compared with the exact strings the hand written version
+// produced. That is the claim "a Flex sees the same commands",
 // checked rather than asserted -- with one deliberate exception, pinned as
 // such: a net filter stored with positive lower-sideband edges is now mirrored
 // by setFilterWidth() before it is sent.
@@ -25,6 +26,7 @@
 #include "core/TciProtocol.h"
 #include "core/backends/IRadioBackend.h"
 #include "core/backends/MeterDef.h"
+#include "core/backends/flex/FlexBackend.h"
 #include "core/backends/flex/RadioConnection.h"
 #include "models/EqualizerModel.h"
 #include "models/MeterModel.h"
@@ -123,6 +125,20 @@ public:
     void setSliceNoiseBlanker(int s, bool on, int level) override { nb.push_back({s, on, level}); }
     void setSliceNoiseReduction(int s, bool on, int level) override { nr.push_back({s, on, level}); }
     void setSliceAutoNotch(int s, bool on) override { anf.push_back({s, on, 0}); }
+    // AGC and filter intents reach the backend as requests (#5904). The base
+    // adapters log them through setSliceAgc/setSliceFilter above; a
+    // Flex-shaped case also has a real FlexBackend encode them as wire text.
+    void requestSliceFilter(int s, const SliceFilterRequest& r) override
+    {
+        if (flex) flex->requestSliceFilter(s, r);
+        IRadioBackend::requestSliceFilter(s, r);
+    }
+    void requestSliceAgc(int s, const SliceAgcRequest& r) override
+    {
+        if (flex) flex->requestSliceAgc(s, r);
+        IRadioBackend::requestSliceAgc(s, r);
+    }
+    std::unique_ptr<FlexBackend> flex;
     void setPanCenter(const QString&, double, PanCenterIntent) override {}
     void setKeying(bool, const TxCoordinator::Operation&,
                    const TxCoordinator::Completion&) override {}
@@ -160,6 +176,20 @@ struct Fixture {
             std::fprintf(stderr, "FATAL: the non-Flex slice was not materialised\n");
             std::exit(2);
         }
+    }
+};
+
+// The Flex wire text in send order: the slice's commandReady and the receive
+// intents a real FlexBackend encodes through its slice sink.
+struct FlexWire {
+    QStringList lines;
+    explicit FlexWire(Fixture& f)
+    {
+        f.backend->flex = std::make_unique<FlexBackend>();
+        f.backend->flex->setSliceCommandSink(
+            [this](const QString& c) { lines.append(c); });
+        QObject::connect(f.slice, &SliceModel::commandReady,
+                         [this](const QString& c) { lines.append(c); });
     }
 };
 
@@ -507,11 +537,10 @@ void testBandStackRecallReachesTheSeam()
 
 void testBandStackRecallWritesTheSameFlexWireText()
 {
-    // Radio-side DSP declared, as a Flex does. The slice's commandReady is
-    // what the Flex slice sink forwards; compare it with the text the recall
-    // used to write by hand, in the order it wrote it.
+    // Radio-side DSP declared, as a Flex does. Compare what a Flex receives
+    // with the text the recall used to write by hand, in the order it wrote it.
     Fixture f([](RadioCapabilities& c) { c.hasRadioSideDsp = true; });
-    QSignalSpy wire(f.slice, &SliceModel::commandReady);
+    FlexWire wire(f);
     f.radio.recallBandStackReceiveDsp(f.slice, bookmark());
     const QStringList expected{
         QStringLiteral("slice set 0 agc_mode=fast"),
@@ -521,13 +550,13 @@ void testBandStackRecallWritesTheSameFlexWireText()
         QStringLiteral("slice set 0 nr=1"),
         QStringLiteral("slice set 0 nr_level=40"),
     };
-    check(wireOf(wire) == expected,
+    check(wire.lines == expected,
           "band stack/flex: byte-for-byte the wire text the hand-written recall sent");
 
     // And a recall that matches the slice sends nothing, as before.
-    wire.clear();
+    wire.lines.clear();
     f.radio.recallBandStackReceiveDsp(f.slice, bookmark());
-    check(wire.isEmpty(), "band stack/flex: an already-matching recall sends nothing");
+    check(wire.lines.isEmpty(), "band stack/flex: an already-matching recall sends nothing");
 }
 
 void testBandStackRecallLeavesTheKiwiAgcAlone()
@@ -541,7 +570,7 @@ void testBandStackRecallLeavesTheKiwiAgcAlone()
     const QString kiwiMode = f.slice->receiveAgcMode();
     const int kiwiThreshold = f.slice->receiveAgcThreshold();
     f.backend->agc.clear();
-    QSignalSpy wire(f.slice, &SliceModel::commandReady);
+    FlexWire wire(f);
     f.radio.recallBandStackReceiveDsp(f.slice, bookmark());
     check(f.slice->receiveAgcMode() == kiwiMode
               && f.slice->receiveAgcThreshold() == kiwiThreshold,
@@ -553,7 +582,7 @@ void testBandStackRecallLeavesTheKiwiAgcAlone()
         QStringLiteral("slice set 0 nr=1"),
         QStringLiteral("slice set 0 nr_level=40"),
     };
-    check(wireOf(wire) == expected, "band stack/kiwi: NB and NR text as before, no AGC text");
+    check(wire.lines == expected, "band stack/kiwi: NB and NR text as before, no AGC text");
 
     // ...and the caller still writes the radio's AGC as it did before.
     const QString mw = readSource(QStringLiteral("src/gui/MainWindow.cpp"));
@@ -574,12 +603,12 @@ void testNetFilterReachesTheSeam()
 {
     // tuneToNet now calls SliceModel::setFilterWidth instead of writing `filt`.
     Fixture f;
-    QSignalSpy wire(f.slice, &SliceModel::commandReady);
+    FlexWire wire(f);
     f.slice->setFilterWidth(200, 2600);
     check(!f.backend->filter.empty() && f.backend->filter.back().level == 200
               && f.backend->filterHigh.back() == 2600,
           "net Tune Now: the filter reaches setSliceFilter (was: `filt` dropped)");
-    check(wireOf(wire) == QStringList{QStringLiteral("filt 0 200 2600")},
+    check(wire.lines == QStringList{QStringLiteral("filt 0 200 2600")},
           "net Tune Now/flex: the same `filt` text a Flex received before");
 }
 
@@ -593,9 +622,9 @@ void testNetFilterIsNormalisedForLowerSideband()
     // (negative) LSB edges pass through unchanged.
     Fixture f;
     f.slice->setMode(QStringLiteral("LSB"));
-    QSignalSpy wire(f.slice, &SliceModel::commandReady);
+    FlexWire wire(f);
     f.slice->setFilterWidth(100, 2900);
-    check(wireOf(wire) == QStringList{QStringLiteral("filt 0 -2900 -100")},
+    check(wire.lines == QStringList{QStringLiteral("filt 0 -2900 -100")},
           "net Tune Now/LSB: positive stored edges are mirrored (raw text sent `filt 0 100 2900`)");
     check(f.slice->filterLow() == -2900 && f.slice->filterHigh() == -100,
           "net Tune Now/LSB: the model holds the canonical edges");
@@ -603,9 +632,9 @@ void testNetFilterIsNormalisedForLowerSideband()
               && f.backend->filterHigh.back() == -100,
           "net Tune Now/LSB: the seam receives the canonical edges");
 
-    wire.clear();
+    wire.lines.clear();
     f.slice->setFilterWidth(-2700, -300);
-    check(wireOf(wire) == QStringList{QStringLiteral("filt 0 -2700 -300")},
+    check(wire.lines == QStringList{QStringLiteral("filt 0 -2700 -300")},
           "net Tune Now/LSB: canonical edges are sent exactly as stored");
 }
 
