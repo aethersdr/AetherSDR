@@ -71,7 +71,10 @@ Antenna Genius and ShackSwitch share one credential slot. Remove checks the
 selected device's peer endpoint before deleting, and a record for the other
 endpoint is kept. If an offline host name cannot be matched to the stored peer,
 removal stops: connect the device to establish its address, then retry. Removing
-Antenna Genius leaves a ShackSwitch using the shared model alone.
+Antenna Genius leaves a ShackSwitch using the shared model alone. A row with
+no address of its own can be removed while the shared slot holds the other
+device's code. An address saved from the Antenna Genius applet while a deletion
+is pending is newer than the Remove and is kept.
 
 ### Outcomes
 
@@ -79,7 +82,7 @@ Antenna Genius leaves a ShackSwitch using the shared model alone.
 |---|---|---|---|---|
 | Success | Settings and row removed; toggle back to default | Stored code deleted | Guard released; discovery may connect the device again unless its row is kept with Connect automatically off | **Add** re-creates the row |
 | Failed (denied or error) | Kept; row stays | Saved code remains; error shown on the row | Connection stopped, guard released; normal reconnect events may connect it again | Retry **Remove** |
-| Unconfirmed (15 s timeout), then late completion | Kept; the row's pending field edits are not saved | Deletion unconfirmed | Guard held until the request returns, then released; a late completion changes no row or newer setting | Close Setup and reopen it to retry; restart the app if the backend never returns |
+| Unconfirmed (15 s timeout), then late completion | Kept; the row's pending field edits are not saved | Deletion unconfirmed | Guard held until the request returns, then released; a late completion changes no row or newer setting | The Peripherals page stays disabled in that Setup window. Close Setup and reopen it to retry; restart the app if the backend never returns |
 | No credential backend | Same as success | Session copy cleared; stored-code deletion unconfirmed, with a notice saying so | Same as success | Remove the code from the OS vault once it is available |
 | Unknown owner (Antenna Genius, ShackSwitch) | Kept | Untouched; the owning endpoint is not known | Connection stopped, guard released | **Connect** the device to establish its address, then retry **Remove** |
 | An earlier removal still pending | Unchanged | Unchanged; the earlier request owns the slot | **Remove** and **Connect** are refused with a notice | Retry after the keychain request finishes |

@@ -1317,6 +1317,94 @@ bool checkRemovalWithUnknownOwner()
     return kept;
 }
 
+// An address saved from the Antenna Genius applet while a credential deletion
+// is pending is newer than the Remove: it survives the completion.
+bool checkRemovalKeepsNewerEndpoint()
+{
+    AppSettings& settings = AppSettings::instance();
+    settings.remove("Peripherals");
+    settings.setValue("AG_ManualIp", QStringLiteral("192.0.2.120"));
+    settings.setValue("AG_ManualPort", QStringLiteral("9007"));
+    PeripheralSettings::setVisibleDeviceIds({QStringLiteral("ag")});
+    PeripheralAuthStore::save(PeripheralAuthStore::Device::AntennaGenius,
+        PeripheralAuthStore::configuredEndpoint(QStringLiteral("192.0.2.120"), 9007),
+        QStringLiteral("saved-code"), qApp);
+    QCoreApplication::processEvents();
+    RadioModel radio;
+    AntennaGeniusModel ag;
+    RadioSetupDialog dialog(&radio, nullptr, nullptr, nullptr, &ag);
+    dialog.selectTab("Peripherals");
+    auto* remove = dialog.findChild<QPushButton*>("peripheralRemoveButton");
+    auto* list = dialog.findChild<QListWidget*>("peripheralDeviceList");
+    auto* address = dialog.findChild<QLineEdit*>("peripheralAddress_ag");
+    if (!remove || !list || !address || list->count() != 1) {
+        std::fprintf(stderr, "newer-endpoint setup: list=%d\n", list ? list->count() : -1);
+        return false;
+    }
+    FakePeripheralAuthStore::deferClear(true);
+    remove->click();
+    settings.setValue("AG_ManualIp", QStringLiteral("192.0.2.121"));
+    FakePeripheralAuthStore::finishClear();
+    QCoreApplication::processEvents();
+    const bool kept = settings.value("AG_ManualIp").toString() == QStringLiteral("192.0.2.121")
+        && list->count() == 1 && address->text() == QStringLiteral("192.0.2.121");
+    FakePeripheralAuthStore::deferClear(false);
+    settings.remove("Peripherals");
+    settings.remove("AG_ManualIp");
+    settings.remove("AG_ManualPort");
+    PeripheralAuthStore::save(PeripheralAuthStore::Device::AntennaGenius, QString(), QString(), qApp);
+    QCoreApplication::processEvents();
+    if (!kept) {
+        std::fprintf(stderr, "A newer endpoint saved during Remove was erased\n");
+    }
+    return kept;
+}
+
+// A device with no address of its own can be removed when the shared slot holds
+// the other device's code; only an unknown owner stops Remove.
+bool checkRemovalOfUnconfiguredSharedRow()
+{
+    AppSettings& settings = AppSettings::instance();
+    settings.remove("Peripherals");
+    settings.remove("AG_ManualIp");
+    settings.setValue("SS_ManualIp", QStringLiteral("192.0.2.113"));
+    PeripheralSettings::setVisibleDeviceIds({QStringLiteral("ag")});
+    PeripheralAuthStore::save(PeripheralAuthStore::Device::AntennaGenius,
+        PeripheralAuthStore::configuredEndpoint(QStringLiteral("192.0.2.113"), 9007),
+        QStringLiteral("shackswitch-code"), qApp);
+    QCoreApplication::processEvents();
+    RadioModel radio;
+    AntennaGeniusModel ag;
+    RadioSetupDialog dialog(&radio, nullptr, nullptr, nullptr, &ag);
+    dialog.selectTab("Peripherals");
+    auto* remove = dialog.findChild<QPushButton*>("peripheralRemoveButton");
+    auto* list = dialog.findChild<QListWidget*>("peripheralDeviceList");
+    // The saved ShackSwitch address lists that row too; select the AG row.
+    if (!remove || !list || list->count() != 2
+        || list->item(0)->data(Qt::UserRole).toString() != QStringLiteral("ag")) {
+        return false;
+    }
+    list->setCurrentRow(0);
+    remove->click();
+    QCoreApplication::processEvents();
+    const bool removed = list->count() == 1
+        && list->item(0)->data(Qt::UserRole).toString() == QStringLiteral("shackswitch");
+    PeripheralAuthStore::LoadResult left;
+    PeripheralAuthStore::load(PeripheralAuthStore::Device::AntennaGenius,
+        PeripheralAuthStore::configuredEndpoint(QStringLiteral("192.0.2.113"), 9007), qApp,
+        [&left](const PeripheralAuthStore::LoadResult& result) { left = result; });
+    QCoreApplication::processEvents();
+    const bool otherCodeKept = left.status == PeripheralAuthStore::LoadStatus::Found;
+    settings.remove("Peripherals");
+    settings.remove("SS_ManualIp");
+    PeripheralAuthStore::save(PeripheralAuthStore::Device::AntennaGenius, QString(), QString(), qApp);
+    QCoreApplication::processEvents();
+    if (!removed || !otherCodeKept) {
+        std::fprintf(stderr, "Unconfigured AG row was not removable beside a ShackSwitch code\n");
+    }
+    return removed && otherCodeKept;
+}
+
 bool checkUnavailableKeychainRemoval()
 {
     PeripheralSettings::setVisibleDeviceIds({QStringLiteral("tgxl")});
@@ -1651,7 +1739,8 @@ int main(int argc, char** argv)
     // itself is covered by checkConnectAutomaticallyToggle.
     RadioSetupDialog::setRemovalConfirmationHookForTest(
         [](const QString&, const QString&) { return true; });
-    if (!checkRemovalWithUnknownOwner() || !checkConnectAutomaticallyToggle() || !checkConnectAutomaticallyGates()
+    if (!checkRemovalWithUnknownOwner() || !checkRemovalKeepsNewerEndpoint()
+        || !checkRemovalOfUnconfiguredSharedRow() || !checkConnectAutomaticallyToggle() || !checkConnectAutomaticallyGates()
         || !checkStatusPresentation()) {
         std::fprintf(stderr, "Connect automatically regressed\n");
         return 1;

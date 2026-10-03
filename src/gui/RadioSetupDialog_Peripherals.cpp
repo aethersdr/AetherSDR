@@ -1636,7 +1636,8 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
         "border: 1px solid {{color.background.2}}; border-radius: 3px; "
         "color: {{color.text.primary}}; font-size: 11px; font-weight: bold; "
         "padding: 5px 8px; }"
-        "QPushButton:hover { background: {{color.background.2}}; }";
+        "QPushButton:hover { background: {{color.background.2}}; }"
+        "QPushButton:disabled { color: {{color.text.disabled}}; }";
     auto* listActions = new QHBoxLayout;
     auto* addButton = new QPushButton(tr("Add"), listGroup);
     addButton->setObjectName(QStringLiteral("peripheralAddButton"));
@@ -1835,7 +1836,14 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
 
     // Remove: reset the device's fields and settings, drop the row.
     auto finishRemoval = [this, activeIds, configuredIds, deviceList, refreshList, updateAddMenu,
-                          &settings](PeripheralDeviceUi& ui) {
+                          &settings](PeripheralDeviceUi& ui,
+                                     const std::optional<QPair<QString, QString>>& savedAtClick = std::nullopt) {
+        // An address saved from elsewhere (the AG applet) while the credential
+        // deletion was pending is newer than this Remove: keep it.
+        const bool newerEndpointSaved = savedAtClick
+            && ui.kind == PeripheralDeviceUi::Kind::AuthNetwork
+            && (settings.value(ui.ipKey, QString()).toString() != savedAtClick->first
+                || settings.value(ui.portKey, QString()).toString() != savedAtClick->second);
         if (ui.kind == PeripheralDeviceUi::Kind::AuthNetwork) {
             // Remove resets the device to its defaults, "Connect automatically"
             // included; a hidden row never keeps a silent "do not connect".
@@ -1844,9 +1852,11 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
                 const QSignalBlocker blocked(ui.autoConnectCheck);
                 ui.autoConnectCheck->setChecked(true);
             }
-            settings.remove(ui.ipKey);
-            settings.remove(ui.portKey);
-            settings.save();
+            if (!newerEndpointSaved) {
+                settings.remove(ui.ipKey);
+                settings.remove(ui.portKey);
+                settings.save();
+            }
         } else {
             PeripheralSettings::clearDeviceConnection(ui.settingsGroup);
         }
@@ -1854,9 +1864,23 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
             ui.afterRemoval();
         }
         resetFields(ui);
-        activeIds->removeAll(ui.id);
-        configuredIds->removeAll(ui.id);
-        PeripheralSettings::setVisibleDeviceIds(*configuredIds);
+        if (newerEndpointSaved) {
+            // Show the newer target rather than the defaults.
+            const QString host = settings.value(ui.ipKey, QString()).toString();
+            const int port = settings.value(ui.portKey, QString()).toInt();
+            ui.addressEdit->setText(host);
+            ui.portSpin->setValue(port > 0 ? port : ui.defaultPort);
+            ui.addressEdit->setProperty("peripheralSavedHost", host.trimmed());
+            ui.addressEdit->setProperty("peripheralSavedPort",
+                settings.value(ui.portKey, QString()).toString());
+            ui.addressEdit->setProperty("peripheralPrefillPort", ui.portSpin->value());
+            ui.addressEdit->setModified(false);
+        }
+        if (!newerEndpointSaved) {
+            activeIds->removeAll(ui.id);
+            configuredIds->removeAll(ui.id);
+            PeripheralSettings::setVisibleDeviceIds(*configuredIds);
+        }
         refreshList();
         updateAddMenu();
         if (deviceList->currentRow() < 0 && deviceList->count() > 0) {
@@ -1899,6 +1923,9 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
         auto removal = std::make_shared<PeripheralRemovalGuard>(ui->authDevice);
         m_peripheralRemovalPending = true;
         QString removalEndpoint;
+        const QPair<QString, QString> savedAtClick{
+            AppSettings::instance().value(ui->ipKey, QString()).toString(),
+            AppSettings::instance().value(ui->portKey, QString()).toString()};
         const bool sharedTargetSelected = ui->sharedAgModel
             && AntennaGeniusModel::isShackSwitch(m_ag->connectedDevice()) == ui->isShackSwitch;
         if (ui->sharedAgModel) {
@@ -1953,6 +1980,7 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
         });
         deadline->start(kRemovalWaitMs);
         const auto completed = [self = QPointer<RadioSetupDialog>(this), removal, ui, finishRemoval,
+                                savedAtClick,
                                 timedOut, deadline = QPointer<QTimer>(deadline), removalNotice,
                                 content, refresh](PeripheralAuthStore::ClearResult result) {
             if (deadline) {
@@ -1967,7 +1995,7 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
             removalNotice->hide();
             if (result == PeripheralAuthStore::ClearResult::Cleared
                 || result == PeripheralAuthStore::ClearResult::SessionCleared) {
-                finishRemoval(*ui);
+                finishRemoval(*ui, savedAtClick);
                 if (result == PeripheralAuthStore::ClearResult::SessionCleared) {
                     showRemovalNotice(removalNotice, RadioSetupDialog::tr(
                         "%1 removed. Keychain unavailable; stored-code deletion unconfirmed.")
@@ -1991,7 +2019,35 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
             }
             self->m_peripheralRemovalPending = false;
         };
-        if (ui->endpointScopedCredential) {
+        if (ui->endpointScopedCredential && removalEndpoint.isEmpty()) {
+            // This device has no endpoint to match a code against. If the shared
+            // slot holds the other device's code, there is nothing of this
+            // device's to delete; only when the owner is unknown does Remove stop.
+            const QString otherEndpoint = ui->isShackSwitch
+                ? (AntennaGeniusModel::isShackSwitch(m_ag->connectedDevice())
+                       ? QString()
+                       : PeripheralAuthStore::configuredEndpoint(
+                             AppSettings::instance().value("AG_ManualIp").toString(),
+                             static_cast<quint16>(AppSettings::instance().value("AG_ManualPort", 9007).toUInt())))
+                : PeripheralAuthStore::configuredEndpoint(
+                      AppSettings::instance().value("SS_ManualIp").toString(), kShackSwitchControlPort);
+            const auto device = ui->authDevice;
+            const auto endpointScoped = [device, completed, removalEndpoint]() {
+                PeripheralAuthStore::clearForEndpoint(device, removalEndpoint, qApp, completed);
+            };
+            if (otherEndpoint.isEmpty()) {
+                endpointScoped();
+            } else {
+                PeripheralAuthStore::load(device, otherEndpoint, qApp,
+                    [completed, endpointScoped](const PeripheralAuthStore::LoadResult& result) {
+                        if (result.status == PeripheralAuthStore::LoadStatus::Found) {
+                            completed(PeripheralAuthStore::ClearResult::Cleared);
+                        } else {
+                            endpointScoped();
+                        }
+                    });
+            }
+        } else if (ui->endpointScopedCredential) {
             PeripheralAuthStore::clearForEndpoint(ui->authDevice, removalEndpoint, qApp, completed);
         } else {
             PeripheralAuthStore::clear(ui->authDevice, qApp, completed);
@@ -2054,7 +2110,9 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
                 continue;
             }
             const bool blocked = tgxl ? m_tgxl->isAuthBlocked() : m_pgxl->isAuthBlocked();
-            const QString host = tgxl ? m_tgxl->reconnectHost() : m_pgxl->reconnectHost();
+            // The endpoint that refused the code. An alternate attempt keeps the
+            // reconnect target on the manual host, so it is not that endpoint.
+            const QString host = tgxl ? m_tgxl->attemptHost() : m_pgxl->attemptHost();
             if (!blocked || host.isEmpty()) {
                 continue;
             }
@@ -2064,7 +2122,7 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
             }
             if (ui->addressEdit->text().isEmpty() && !ui->addressEdit->isModified()) {
                 ui->addressEdit->setText(host);
-                ui->portSpin->setValue(tgxl ? m_tgxl->reconnectPort() : m_pgxl->reconnectPort());
+                ui->portSpin->setValue(tgxl ? m_tgxl->attemptPort() : m_pgxl->attemptPort());
             }
             ui->addressEdit->setProperty("peripheralDiscoveredHost", ui->discoveredHost());
             ui->addressEdit->setProperty("peripheralDiscoveredPort", ui->discoveredPort);

@@ -168,6 +168,7 @@ void PgxlConnection::beginAlternateAttemptAt(const QString& host, quint16 port)
 void PgxlConnection::beginAttemptAt(const QString& host, quint16 port)
 {
     m_attemptHost = host.trimmed();
+    m_attemptPort = port;
     const QString target = host.trimmed().toLower() + QLatin1Char('|') + QString::number(port);
     if (m_userAuthCode && m_userAuthEndpoint != target) {
         m_authCode.clear();

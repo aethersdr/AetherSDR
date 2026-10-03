@@ -31,6 +31,7 @@ public:
     // The host the operator (or discovery) asked for on the current attempt:
     // a name or a literal address. Saved codes key on it; see PeripheralAuthStore.
     QString attemptHost() const { return m_attemptHost; }
+    quint16 attemptPort() const { return m_attemptPort; }
     // The host reconnects aim at; an alternate attempt leaves it unchanged.
     QString reconnectHost() const { return m_lastHost; }
     quint16 reconnectPort() const { return m_lastPort; }
@@ -156,6 +157,7 @@ private:
     bool       m_userAuthCode{false};
     QString    m_userAuthEndpoint;
     QString    m_attemptHost;
+    quint16    m_attemptPort{0};
     bool       m_authCloseReported{false};
     bool       m_autoReconnect{false};
     // Global "Reconnect automatically" and this device's "Connect automatically".
