@@ -1433,9 +1433,18 @@ bool checkConnectAutomaticallyGates()
 {
     AppSettings::instance().remove(QStringLiteral("Peripherals"));
     const QString host = QStringLiteral("192.0.2.88");
+    const QStringList allIds{QStringLiteral("tgxl"), QStringLiteral("pgxl"),
+                             QStringLiteral("ag"), QStringLiteral("shackswitch")};
+    // Every other device holds the opposite value, so a wrong key is caught.
+    const auto setOnly = [&](const QString& id, bool on) {
+        for (const QString& other : allIds) {
+            PeripheralSettings::setAutoConnect(other, !on);
+        }
+        PeripheralSettings::setAutoConnect(id, on);
+    };
     for (bool on : {false, true}) {
         for (const QString& id : {QStringLiteral("tgxl"), QStringLiteral("pgxl")}) {
-            PeripheralSettings::setAutoConnect(id, on);
+            setOnly(id, on);
             TgxlConnection tgxl;
             PgxlConnection pgxl;
             int opened = 0;
@@ -1476,7 +1485,7 @@ bool checkConnectAutomaticallyGates()
         }
         // The shared AG model follows the toggle of the device it is on.
         for (const QString& id : {QStringLiteral("ag"), QStringLiteral("shackswitch")}) {
-            PeripheralSettings::setAutoConnect(id, on);
+            setOnly(id, on);
             AntennaGeniusModel ag;
             int opened = 0;
             PeripheralConnectionTestAccess::injectConnect(ag, opened);
@@ -1501,7 +1510,7 @@ bool checkConnectAutomaticallyGates()
         // Discovery connects honour the toggle: the AG applet for an AG, the
         // ShackSwitch applet for a ShackSwitch.
         for (const QString& id : {QStringLiteral("ag"), QStringLiteral("shackswitch")}) {
-            PeripheralSettings::setAutoConnect(id, on);
+            setOnly(id, on);
             AntennaGeniusModel ag;
             int opened = 0;
             PeripheralConnectionTestAccess::injectConnect(ag, opened);
@@ -1534,7 +1543,7 @@ int main(int argc, char** argv)
     QApplication app(argc, argv);
     AppSettings::instance().load();
     // Remove asks first; the lifecycle checks below confirm it. The confirmation
-    // itself is covered by checkRemovalConfirmation.
+    // itself is covered by checkConnectAutomaticallyToggle.
     RadioSetupDialog::setRemovalConfirmationHookForTest(
         [](const QString&, const QString&) { return true; });
     if (!checkConnectAutomaticallyToggle() || !checkConnectAutomaticallyGates()) {

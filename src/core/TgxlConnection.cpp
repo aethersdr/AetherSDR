@@ -94,6 +94,9 @@ bool TgxlConnection::reconnectAllowed() const
 
 void TgxlConnection::connectToTgxl(const QString& host, quint16 port)
 {
+    if (PeripheralRemovalGuard::pending(PeripheralRemovalGuard::Device::Tgxl)) {
+        return;
+    }
     const bool wasConnected = m_connected;
     beginAttemptAt(host, port);
     openSocket(host, port, wasConnected);
@@ -101,6 +104,11 @@ void TgxlConnection::connectToTgxl(const QString& host, quint16 port)
 
 void TgxlConnection::autoConnectToTgxl(const QString& host, quint16 port)
 {
+    // Checked before any attempt state changes, so a blocked attempt leaves
+    // the retry target and timer alone.
+    if (PeripheralRemovalGuard::pending(PeripheralRemovalGuard::Device::Tgxl)) {
+        return;
+    }
     const bool wasConnected = m_connected;
     beginAutomaticAttemptAt(host, port);
     openSocket(host, port, wasConnected);
@@ -108,6 +116,9 @@ void TgxlConnection::autoConnectToTgxl(const QString& host, quint16 port)
 
 void TgxlConnection::tryAlternateTgxl(const QString& host, quint16 port)
 {
+    if (PeripheralRemovalGuard::pending(PeripheralRemovalGuard::Device::Tgxl)) {
+        return;
+    }
     const bool wasConnected = m_connected;
     beginAlternateAttemptAt(host, port);
     openSocket(host, port, wasConnected);

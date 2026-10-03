@@ -215,6 +215,9 @@ void checkRemovalGuardStopsEveryConnectPath(const QString& timerName,
         (connection.*explicitConnect)(host, port);
         CHECK(QMetaObject::invokeMethod(retry, "timeout", Qt::DirectConnection));
         CHECK(opened == 0);
+        // A blocked attempt leaves the reconnect target alone.
+        (connection.*autoConnect)(QStringLiteral("192.0.2.99"), port);
+        CHECK(connection.reconnectHost() == host);
     }
     CHECK(!PeripheralRemovalGuard::pending(device));
     (connection.*autoConnect)(host, port);
