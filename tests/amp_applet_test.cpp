@@ -469,15 +469,10 @@ void testFanModePulldown()
         }
     }
 
-    // #4731: on a large-enough default UI font, the popup's fixed pixel
-    // width (sized off the combo's own hardcoded 10px stylesheet font)
-    // couldn't fit the longest item — then "Fan: Contest" — so Qt's default
-    // ElideMiddle silently mangled it. Widths/fonts aren't trustworthy to
-    // assert on directly in this offscreen, unlaid-out harness (the combo
-    // is never shown, so its geometry never reflects a real style pass),
-    // so guard the three properties the fix actually sets instead: let the
-    // widest item drive the combo's width rather than pinning it, and fail
-    // any future overflow visibly (clipped) instead of mid-eliding it.
+    // The popup must fit its longest item at any default UI font (#4731).
+    // Geometry is not trustworthy in this offscreen, unlaid-out harness, so
+    // guard the properties that guarantee it: the widest item drives the
+    // combo's width, and any overflow clips visibly instead of mid-eliding.
     report("fan combo sizes to its widest item, not a pinned width",
            combo->sizeAdjustPolicy() == QComboBox::AdjustToMinimumContentsLengthWithIcon);
     int longestItem = 0;
@@ -951,8 +946,7 @@ void testPeakMarkerUsesTheSlidingWindow()
 }
 
 // Every caption the rail's controls can show fits the button it gets, at the
-// rail's width (AppletPanel is 260 px) and wider. #5903: MEffA, "Fan: St…" and
-// "PERAT" clipped in the 260 px rail.
+// rail's width (AppletPanel is 260 px) and wider (#5903).
 //
 // Checked against each control's own sizeHint rather than font metrics taken
 // here: the hint is computed from the fonts and style sheet this machine

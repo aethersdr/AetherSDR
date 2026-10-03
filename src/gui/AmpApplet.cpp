@@ -966,9 +966,8 @@ void AmpApplet::applyTelemetryStyles(qreal scale)
 
     // Docked, the indicator shares a row with Vdd, both centred. Its smaller
     // face makes its label a pixel shorter, and centring a box one pixel
-    // shorter needs half a pixel, which widget geometry rounds away: its text
-    // landed a pixel above Vdd's. The same height centres both identically,
-    // leaving only the faces' own fraction-of-a-pixel difference.
+    // shorter needs half a pixel, which widget geometry rounds away. The same
+    // height centres both identically.
     m_sourceLabel->setMinimumHeight(f ? 0 : m_vddLabel->sizeHint().height());
 
     theme.applyStyleSheet(m_fanCombo, QStringLiteral(
@@ -1290,8 +1289,8 @@ void AmpApplet::updateTempLabel()
     m_hlTempBtn->setToolTip(
         tr("Harmonic Load heatsink temperature\nClick to show degrees %1").arg(nextUnit));
     // Spoken in words: the visible dash becomes "not reported". The relayed
-    // sample arrives about 20 times a second, so a name is announced only
-    // when its text actually changes.
+    // sample arrives about 20 times a second; setAccessibleName announces a
+    // name only when its text changes.
     const QString paName = m_hasPaHeatsinkTemp
         ? tr("PA heatsink %1 degrees %2").arg(paText, unitName)
         : tr("PA heatsink not reported");
@@ -1301,14 +1300,7 @@ void AmpApplet::updateTempLabel()
     const std::pair<QPushButton*, QString> names[] = {{m_tempBtn, paName},
                                                       {m_hlTempBtn, hlName}};
     for (const auto& [btn, name] : names) {
-        if (btn->accessibleName() == name) {
-            continue;
-        }
         btn->setAccessibleName(name);
-        if (QAccessible::isActive()) {
-            QAccessibleEvent event(btn, QAccessible::NameChanged);
-            QAccessible::updateAccessibility(&event);
-        }
     }
 }
 
@@ -1438,9 +1430,9 @@ void AmpApplet::applyFanControls()
     // The relay never carries fanmode, so without the direct connection the
     // mode cannot become known.
     m_fanCombo->setAccessibleDescription(
-        m_haveFanMode || m_directConnected
-            ? tr("Selects STANDARD, CONTEST, or BROADCAST fan mode")
-            : tr("Fan speed needs a direct PGXL connection."));
+        m_haveFanMode       ? tr("Selects STANDARD, CONTEST, or BROADCAST fan mode")
+        : m_directConnected ? tr("The amplifier has not reported its fan mode yet.")
+                            : tr("Fan speed needs a direct PGXL connection."));
 
     m_fanKey->setText(fanModeLetter(m_fanMode));
     m_fanKey->setToolTip(tr("Fan speed: %1\nClick to cycle standard, contest, broadcast")
