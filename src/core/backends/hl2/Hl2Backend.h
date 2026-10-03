@@ -978,12 +978,13 @@ private:
 
     // Forward-power peak hold: a PEP ESTIMATE. The HL2 has no peak detector: forward
     // power is one 12-bit slow_adc I2C conversion, round-robined with reverse power,
-    // temperature and bias (rtl/slow_adc.v, rtl/control.v ~L262), seen every
-    // kTelemetryMinIntervalMs. 10 Hz sampling misses speech peaks (SSB read 8-12 dB
-    // below PEP), so the max is held across the over: instant attack, release 0.05
-    // per 10 Hz sample (~2 s, like an outboard PEP meter), in WATTS because the
-    // calibration curve is non-linear. Raw counts are still logged and published.
-    // TxApplet's own PEP tick (#2561) therefore tracks the gauge fill on an HL2.
+    // temperature and bias (rtl/slow_adc.v, rtl/control.v ~L262), reported in RADDR 1
+    // up to ~190 times a second. Keyed, the input is each publish window's maximum
+    // (Hl2Telemetry::forwardPowerPeakRaw); the hold carries it across windows:
+    // instant attack, release 0.05 per kTelemetryMinIntervalMs window (~2 s, like an
+    // outboard PEP meter), in WATTS because the calibration curve is non-linear. Raw
+    // counts are still logged and published. TxApplet's PEP tick (#2561) therefore
+    // tracks the gauge fill on an HL2.
     static constexpr double kFwdPeakReleaseAlpha = 0.05;
     double m_fwdPeakWatts = 0.0;
 

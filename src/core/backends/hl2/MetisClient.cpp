@@ -315,6 +315,9 @@ bool MetisClient::start(const Params& params)
     m_telemetry.adcSamples = 0;
     m_telemetry.adcOverloadSamples = 0;
     m_telemetry.adcWindowMs = 0;
+    m_fwdWindow.clear();
+    m_telemetry.forwardPowerPeakRaw.reset();
+    m_telemetry.forwardPowerSamples = 0;
     // This object OUTLIVES a connect: Hl2Backend builds it in its constructor
     // and deletes it in its destructor, so without this the dedupe would carry
     // a frequency across a disconnect and suppress the first push of the next
@@ -1782,6 +1785,7 @@ void MetisClient::handleDatagram(std::span<const std::uint8_t> bytes)
                 if (m_telemetry.ptt != wasRadioPtt)
                     onRadioPttEdge(m_telemetry.ptt);
                 telemetryChanged = true;
+                m_fwdWindow.observe(*resp);
                 // Read back from apply() rather than re-decoding DATA[24], so the layout has one
                 // decoder; apply() writes adcOverload only for response address 0. Non-ACK only:
                 // an ACK's raddr is a command address.
@@ -1816,6 +1820,9 @@ void MetisClient::handleDatagram(std::span<const std::uint8_t> bytes)
         m_telemetry.adcOverloadSamples = m_adcWindowOverload;
         m_adcWindowSamples = 0;
         m_adcWindowOverload = 0;
+        m_telemetry.forwardPowerPeakRaw = m_fwdWindow.peak;
+        m_telemetry.forwardPowerSamples = m_fwdWindow.samples;
+        m_fwdWindow.clear();
         emit telemetryUpdated(m_telemetry);
     }
 

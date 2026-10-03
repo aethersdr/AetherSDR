@@ -456,10 +456,39 @@ struct Hl2Telemetry {
     int adcOverloadSamples = 0;
     int adcWindowMs = 0;
 
+    // Maximum of the publish window's non-ACK RADDR-1 DATA[15:0] (the radio
+    // re-samples forward power every other EP6 response, control.v:261, so the
+    // last value alone misses speech peaks); nullopt when the window saw none.
+    // `forwardPowerSamples` counts them; the window length is `adcWindowMs`.
+    std::optional<int> forwardPowerPeakRaw;
+    int forwardPowerSamples = 0;
+
     // Merge a decoded response in, leaving untouched fields alone. ACK
     // responses contribute only PTT: their raddr is the command address and
     // data our own echo, which would otherwise decode as telemetry.
     void apply(const Ep6Response& r) noexcept;
+};
+
+// Accumulator for Hl2Telemetry::forwardPowerPeakRaw: the maximum of DATA[15:0]
+// over non-ACK RADDR-1 responses. Kept here so the rule is testable without a socket.
+struct ForwardPowerWindow {
+    std::optional<int> peak;
+    int samples = 0;
+
+    void observe(const Ep6Response& r) noexcept
+    {
+        if (r.ack || r.raddr != 0x01)
+            return;
+        const int v = static_cast<int>(r.data & 0xFFFF);
+        if (!peak || v > *peak)
+            peak = v;
+        ++samples;
+    }
+    void clear() noexcept
+    {
+        peak.reset();
+        samples = 0;
+    }
 };
 
 // Directional-coupler counts -> watts via Quisk's reference curve (see the
