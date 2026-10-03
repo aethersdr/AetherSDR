@@ -834,14 +834,18 @@ bool Hl2Backend::openReceiverDsp(int ddc, std::string* error)
     // the UI number never changes (Hl2ReceiverMap::remove).
     const int ui = ids->uiNumber;
 
-    // Rule 6 holds by ordering, not by this gate: the DSP emits on m_ioThread,
-    // the thread that emits linkDown, so no frame is delivered after disconnected().
-    // Unlike audioReady below, there is no producer check: a frame queued by a
-    // closed receiver's DSP publishes if its UI number was reopened before delivery.
+    // Rule 6 holds by ordering: the DSP emits on m_ioThread, the thread that
+    // emits linkDown, so no frame is delivered after disconnected(). A frame is
+    // published only while its producer is still the receiver behind its UI
+    // number: a queued frame outlives disconnect() and deleteLater(), and a
+    // reopened receiver can take the same number (as audioReady below).
     connect(dsp, &Hl2RxDsp::spectrumReady, this,
-            [this, ui](const std::vector<float>& bins) {
-        if (!m_ids.byUi(ui))
+            [this, ui, producer = QPointer<Hl2RxDsp>(dsp)](const std::vector<float>& bins) {
+        const auto* ids = m_ids.byUi(ui);
+        const Receiver* receiver = ids ? rx(ids->ddcIndex) : nullptr;
+        if (!producer || !receiver || receiver->dsp != producer.data()) {
             return;
+        }
         // dBFS -> dBm through the shared reference (one AD9866 behind every
         // DDC): derived full scale (+3 dB) minus LNA gain, so the trace holds
         // still across gain changes. off == 0.0 fires only when the LNA gain
