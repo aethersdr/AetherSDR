@@ -763,7 +763,11 @@ void aStaleSpectrumFrameDoesNotPublishOnTheReuser(bool retiredChainAlive)
     AetherSDR::test::spinUntil(
         [&] { return Access::dspChannelForUi(backend, 1) >= 0; });
     AetherSDR::hl2::Hl2RxDsp* const newDsp = Access::receiverDsp(backend, 1);
-    check(newDsp != nullptr && newDsp != oldDsp, "the reuser has its own chain");
+    // Compare with the QPointer, not oldDsp's raw address: the retired chain
+    // is freed by now in both runs, and an allocator may hand its block to the
+    // reuser's chain (macOS does every time), so equal addresses prove nothing.
+    check(newDsp != nullptr && newDsp != oldGuard.data(),
+          "the reuser has its own chain, and the retired one is gone");
     const int beforeReuserFrame = framesOnUi1;
     const qsizetype beforeReuserMeter = metersOnUi1.size();
     if (newDsp) {
