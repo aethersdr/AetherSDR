@@ -2378,9 +2378,7 @@ void MainWindow::registerMidiParams()
     };
 
     // ── Mode triggers (mirror Mode/* keyboard shortcuts) ───────────────
-    const QStringList modes = filterUnavailableDigitalVoiceModes(
-        {"USB", "LSB", "CW", "CWL", "AM", "SAM", "FM", "NFM",
-         "DFM", "DSTR", "DIGU", "DIGL", "RTTY"});
+    const QStringList modes = modeActionModes();
     for (const QString& m : modes) {
         const QString idShort = QString("mode_%1").arg(m.toLower());
         const QString idMidi  = QString("global.mode%1").arg(m);
@@ -2449,7 +2447,8 @@ void MainWindow::registerMidiParams()
     // ── Mode Up / Down (cycle through the mode list above) ───────────
     auto cycleMode = [this, fireShortcut, modes](int direction) {
         auto* s = activeSlice();
-        const QString next = nextCycledMode(modes, s ? s->mode() : QString(), direction);
+        const QString next = nextCycledMode(modes, s ? s->mode() : QString(), direction,
+                                            s ? s->modeList() : QStringList());
         if (next.isEmpty()) {
             return;
         }
