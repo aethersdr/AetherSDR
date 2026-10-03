@@ -2552,27 +2552,28 @@ void MainWindow::setupCtr2Proxy()
     m_ctr2ProxyModel = new Ctr2ProxyModel(this);
     const auto pushRadio = [this] {
         if (!m_radioModel.isConnected()) {
-            m_ctr2ProxyModel->setAetherRadio({}, {}, tr("Connect AetherSDR to a radio first"));
+            m_ctr2ProxyModel->setAetherRadio({}, 0, {}, tr("Connect AetherSDR to a radio first"));
             return;
         }
         if (m_radioModel.isWan()) {
             m_ctr2ProxyModel->setAetherRadio(
-                {}, {}, tr("AetherSDR is connected through SmartLink; the CTR2 relay "
-                           "needs a direct LAN or VPN connection to the radio"));
+                {}, 0, {}, tr("AetherSDR is connected through SmartLink; the CTR2 relay "
+                              "needs a direct LAN or VPN connection to the radio"));
             return;
         }
         if (!m_radioModel.backendCapabilities().hasMultiClientSessions) {
             m_ctr2ProxyModel->setAetherRadio(
-                {}, {}, tr("This radio does not accept another client alongside AetherSDR"));
+                {}, 0, {}, tr("This radio does not accept another client alongside AetherSDR"));
             return;
         }
         const QHostAddress address = m_radioModel.radioAddress();
+        const quint16 port = m_radioModel.lastRadioInfo().port;
         QString label = m_radioModel.model();
         if (!m_radioModel.name().isEmpty() && m_radioModel.name() != label) {
             label += QStringLiteral(" \"%1\"").arg(m_radioModel.name());
         }
         label += QStringLiteral("  %1").arg(address.toString());
-        m_ctr2ProxyModel->setAetherRadio(address, label.trimmed(), {});
+        m_ctr2ProxyModel->setAetherRadio(address, port, label.trimmed(), {});
     };
     connect(&m_radioModel, &RadioModel::connectionStateChanged, m_ctr2ProxyModel,
             [pushRadio](bool) { pushRadio(); });

@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: MIT
- * Copyright (c) 2026 Jeremy Fielder (KK7GWY) and AetherSDR contributors
+ * Copyright (c) 2026 Jeremy Fielder (KK7GWY)
  *
  * CTR2 USB link, wire format version 0 -- reference implementation.
  * See ctr2_link.h.

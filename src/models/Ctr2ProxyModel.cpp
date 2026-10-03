@@ -160,18 +160,18 @@ bool Ctr2ProxyModel::setUsbDevicePath(const QString& path)
     return true;
 }
 
-void Ctr2ProxyModel::setAetherRadio(const QHostAddress& address, const QString& label,
-                                    const QString& unavailableReason)
+void Ctr2ProxyModel::setAetherRadio(const QHostAddress& address, quint16 port,
+                                    const QString& label, const QString& unavailableReason)
 {
     QHostAddress ipv4;
     bool ok = false;
     const quint32 v4 = address.toIPv4Address(&ok);
-    if (ok && v4 != 0) {
+    if (ok && v4 != 0 && port != 0) {
         ipv4 = QHostAddress(v4);
     }
     const QString reason = ipv4.isNull() && unavailableReason.isEmpty()
         ? tr("Connect AetherSDR to a radio first") : unavailableReason;
-    if (isRunning() && ipv4 != m_runningRadioAddress) {
+    if (isRunning() && (ipv4 != m_runningRadioAddress || port != m_runningRadioPort)) {
         const QString was = m_runningRadioLabel.isEmpty() ? m_runningRadioAddress.toString()
                                                           : m_runningRadioLabel;
         const QString why = ipv4.isNull()
@@ -182,11 +182,12 @@ void Ctr2ProxyModel::setAetherRadio(const QHostAddress& address, const QString& 
         m_stopReason = why;
         emit lastErrorChanged();
     }
-    if (ipv4 == m_aetherRadioAddress && label == m_aetherRadioLabel
-        && reason == m_aetherRadioReason) {
+    if (ipv4 == m_aetherRadioAddress && port == m_aetherRadioPort
+        && label == m_aetherRadioLabel && reason == m_aetherRadioReason) {
         return;
     }
     m_aetherRadioAddress = ipv4;
+    m_aetherRadioPort = port;
     m_aetherRadioLabel = label;
     m_aetherRadioReason = ipv4.isNull() ? reason : QString();
     emit configurationChanged();
@@ -247,7 +248,7 @@ bool Ctr2ProxyModel::buildConfig(TcpByteProxy::Config* config, QString* problem)
         return false;
     }
     config->upstreamAddress = m_aetherRadioAddress;
-    config->upstreamPort = kDefaultPort;
+    config->upstreamPort = m_aetherRadioPort;
     const QString invalid = TcpByteProxy::validate(*config);
     if (!invalid.isEmpty()) {
         *problem = invalid;
@@ -304,6 +305,7 @@ bool Ctr2ProxyModel::start()
     m_usbStartError.clear();
     m_stopReason.clear();
     m_runningRadioAddress = m_aetherRadioAddress;
+    m_runningRadioPort = m_aetherRadioPort;
     m_runningRadioLabel = m_aetherRadioLabel;
     bool ok = false;
     if (m_transport == Transport::Usb) {
@@ -314,7 +316,7 @@ bool Ctr2ProxyModel::start()
             emit lastErrorChanged();
             emit stateChanged();
         } else {
-            ok = m_usb->start(hid, m_aetherRadioAddress, kDefaultPort);
+            ok = m_usb->start(hid, m_aetherRadioAddress, m_aetherRadioPort);
             if (!ok) {
                 delete hid;
             }

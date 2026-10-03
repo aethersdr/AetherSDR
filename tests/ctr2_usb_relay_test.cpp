@@ -16,6 +16,7 @@
 #include <QTimer>
 
 #include <cstdio>
+#include <deque>
 #include <cstdlib>
 #include <functional>
 #include <memory>
@@ -67,42 +68,61 @@ QByteArray randomBytes(int size, unsigned seed)
     return out;
 }
 
-// Scripted HID port. Reports the relay sends are decoded as the CTR2 would.
+// Scripted HID port. Reports wait in `queue` until acknowledged, then are
+// "delivered" to `sent`, which the Device decodes as the CTR2 would.
 class FakePort : public Ctr2HidPort {
 public:
     bool open{true};
     bool autoAck{true};
-    int unacked{0};
     std::vector<Report> sent;
+    std::deque<Report> queue;
     std::vector<Report> finalReports;
-    bool closedAfter{false};
+    bool shutDown{false};
+    int discards{0};
 
+    int pending() const { return static_cast<int>(queue.size()); }
     bool isOpen() const override { return open; }
     void send(const std::vector<Report>& reports) override
     {
-        sent.insert(sent.end(), reports.begin(), reports.end());
-        unacked += static_cast<int>(reports.size());
+        queue.insert(queue.end(), reports.begin(), reports.end());
         if (autoAck) {
-            ack(unacked);
+            ack(pending());
         }
     }
-    void close() override { open = false; }
-    void closeAfter(const std::vector<Report>& final) override
+    void discardQueued() override
+    {
+        queue.clear();
+        ++m_generation;
+        ++discards;
+    }
+    void shutdown(const std::vector<Report>& final) override
     {
         finalReports = final;
-        closedAfter = true;
+        sent.insert(sent.end(), final.begin(), final.end());
+        shutDown = true;
         open = false;
+        deleteLater();
     }
     QString description() const override { return QStringLiteral("Fake CTR2"); }
 
+    // Delivers up to n queued reports; the acknowledgement arrives later and
+    // is dropped if a fence happened in between, as the interface requires.
     void ack(int n)
     {
-        n = std::min(n, unacked);
+        n = std::min(n, pending());
         if (n <= 0) {
             return;
         }
-        unacked -= n;
-        QTimer::singleShot(0, this, [this, n] { emit reportsSent(n); });
+        for (int i = 0; i < n; ++i) {
+            sent.push_back(queue.front());
+            queue.pop_front();
+        }
+        const quint64 generation = m_generation;
+        QTimer::singleShot(0, this, [this, n, generation] {
+            if (generation == m_generation) {
+                emit reportsSent(n);
+            }
+        });
     }
     void deliver(const std::vector<Report>& reports)
     {
@@ -117,6 +137,9 @@ public:
         open = false;
         emit failed(msg);
     }
+
+private:
+    quint64 m_generation{0};
 };
 
 // What the CTR2 firmware would see and send.
@@ -129,12 +152,28 @@ struct Device {
     QByteArray data;
     std::vector<Message> datagrams;
     bool rxError{false};
+    bool awaitingReady{false};
+    int ignoredBeforeReady{0};
 
     void pump()
     {
         for (; decoded < port->sent.size(); ++decoded) {
+            const Report& r = port->sent[decoded];
+            // Spec: after HELLO the device skips reports until a READY or CLOSED
+            // header, and starts its receiver fresh there.
+            if (awaitingReady) {
+                const bool answer = r[0] == kMarker
+                    && (r[3] == static_cast<std::uint8_t>(MessageType::Ready)
+                        || r[3] == static_cast<std::uint8_t>(MessageType::Closed));
+                if (!answer) {
+                    ++ignoredBeforeReady;
+                    continue;
+                }
+                awaitingReady = false;
+                rx.reset();
+            }
             std::vector<Message> m;
-            if (!rx.feed(port->sent[decoded], &m)) {
+            if (!rx.feed(r, &m)) {
                 rxError = true;
                 rx.reset();
             }
@@ -164,6 +203,8 @@ struct Device {
     }
     void hello()
     {
+        pump();
+        awaitingReady = true;
         tx.reset();
         std::vector<Report> r;
         tx.encodeControl(MessageType::Hello, &r);
@@ -307,9 +348,9 @@ void testRelayBothWays()
               && s.toDownstream == static_cast<quint64>(greeting.size() + down.size()),
           "counters match the bytes relayed");
     rig.relay.stop();
-    check(rig.port->closedAfter && rig.port->finalReports.size() == 1
+    check(rig.port->shutDown && rig.port->finalReports.size() == 1
               && rig.port->finalReports[0][3] == static_cast<std::uint8_t>(MessageType::Closed),
-          "Stop sends CLOSED to the CTR2, then closes the port");
+          "Stop hands the port its final CLOSED and shuts it down without waiting");
     check(waitUntil([&] { return rig.radio.conns[0]->disconnected; }), "Stop closes the radio connection");
     check(rig.relay.state() == State::Stopped, "state is Stopped");
 }
@@ -495,7 +536,7 @@ void testBackpressureTowardDevice()
     if (rig.dev.data != flood) {
         std::fprintf(stderr, "  got %lld of %lld, unacked %d, state %d, err '%s', rxError %d\n",
                      static_cast<long long>(rig.dev.data.size()), static_cast<long long>(flood.size()),
-                     rig.port->unacked, static_cast<int>(rig.relay.state()),
+                     rig.port->pending(), static_cast<int>(rig.relay.state()),
                      qPrintable(rig.relay.lastError()), rig.dev.rxError);
     }
     check(rig.dev.data == flood, "throttled stream arrives complete and in order");
@@ -575,7 +616,7 @@ void testDatagramFloodIsDropped()
     rig.start();
     rig.dev.hello();
     check(waitUntil([&] { return rig.relay.state() == State::Relaying; }), "relaying");
-    rig.port->ack(rig.port->unacked);
+    rig.port->ack(rig.port->pending());
     rig.dev.datagram(udp.port(), QByteArray(1, '\0'));
     check(waitUntil([&] { return udp.received.size() == 1; }), "registration datagram arrives");
     const QHostAddress host = udp.received[0].senderAddress();
@@ -629,6 +670,139 @@ void testDeviceLabels()
           "a CTR2 needs both its USB IDs and its product string");
 }
 
+// Brings the link up with acknowledgements held: HELLO, then deliver READY.
+bool linkUpHeld(Rig& rig)
+{
+    rig.dev.hello();
+    if (!waitUntil([&] { return rig.relay.state() == State::Relaying; })) {
+        return false;
+    }
+    rig.port->ack(rig.port->pending());
+    return waitUntil([&] { return rig.dev.count(MessageType::Ready) >= 1; });
+}
+
+void testRestartDiscardsQueuedOutput()
+{
+    Rig rig;
+    rig.port->autoAck = false;
+    rig.start();
+    check(linkUpHeld(rig), "link up with acknowledgements held");
+    const QByteArray burst = randomBytes(6000, 31);
+    rig.radio.conns[0]->socket->write(burst);
+    check(waitUntil([&] { return rig.port->pending() > 20; }), "old radio output is queued on the port");
+    rig.port->ack(3);  // the CTR2 has received part of one DATA message
+    QCoreApplication::processEvents();
+    const int discardsBefore = rig.port->discards;
+
+    rig.dev.hello();  // the CTR2 restarts mid-message
+    check(rig.port->discards == discardsBefore + 1, "HELLO fences the port before the new link");
+    check(waitUntil([&] { return rig.radio.conns.size() == 2 && rig.port->pending() >= 1; }),
+          "a fresh radio connection opens");
+    check(rig.port->pending() == 1 && rig.port->queue.front()[0] == kMarker
+              && rig.port->queue.front()[2] == 0
+              && rig.port->queue.front()[3] == static_cast<std::uint8_t>(MessageType::Ready),
+          "only the new READY is queued; no old report precedes it");
+    check(rig.relay.stats().queuedToDownstream == 0, "the new link's budget carries no old output");
+    const QByteArray before = rig.dev.data;
+    rig.port->ack(rig.port->pending());
+    rig.radio.conns[1]->socket->write("fresh\n");
+    QElapsedTimer t;
+    t.start();
+    while (!rig.dev.data.endsWith("fresh\n") && t.elapsed() < 5000) {
+        rig.port->ack(rig.port->pending());
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
+        rig.dev.pump();
+    }
+    check(rig.dev.data == before + "fresh\n", "after READY only the new connection's bytes arrive");
+    check(!rig.dev.rxError, "the device resynchronizes on READY without a framing error");
+
+    for (int i = 0; i < 20; ++i) {
+        rig.radio.conns.back()->socket->write(randomBytes(2000, static_cast<unsigned>(i)));
+        waitUntil([&] { return rig.port->pending() > 5; }, 500);
+        rig.dev.hello();
+        waitUntil([&] { return rig.relay.state() == State::Relaying; });
+    }
+    check(rig.port->pending() <= 2, "restarts with a stalled port never accumulate output");
+}
+
+void testEachMessageGetsItsOwnDeadline()
+{
+    Ctr2UsbRelay::Tuning t;
+    t.incompleteMessageTimeoutMs = 300;
+    Rig rig({}, t);
+    rig.start();
+    check(rig.linkUp(), "link up");
+    std::vector<Report> a;
+    std::vector<Report> b;
+    rig.dev.tx.encodeData(QByteArray(14, 'A'), &a);  // header + 2 data reports
+    rig.dev.tx.encodeData(QByteArray(14, 'B'), &b);
+    rig.port->deliver({a[0], a[1]});
+    spin(200);
+    rig.port->deliver({a[2], b[0]});  // A completes and B begins in one batch
+    spin(200);                        // 400 ms after A began, 200 ms into B
+    check(rig.dev.count(MessageType::Closed) == 0, "B is not judged by A's deadline");
+    rig.port->deliver({b[1], b[2]});
+    check(waitUntil([&] { return rig.radio.conns[0]->received == QByteArray(14, 'A') + QByteArray(14, 'B'); }),
+          "both messages reach the radio");
+
+    std::vector<Report> c;
+    rig.dev.tx.encodeData(QByteArray(42, 'C'), &c);  // header + 6 data reports
+    QElapsedTimer clock;
+    clock.start();
+    for (size_t i = 0; i < c.size() && rig.dev.count(MessageType::Closed) == 0; ++i) {
+        rig.port->deliver({c[i]});
+        spin(80);
+    }
+    check(rig.dev.count(MessageType::Closed) == 1 && clock.elapsed() < 560,
+          "one message trickling in still has a single absolute deadline");
+}
+
+void testControlOutputBoundedWhileWaiting()
+{
+    Rig rig;
+    rig.port->autoAck = false;
+    rig.start();
+    std::vector<Report> ready;
+    rig.dev.tx.encodeControl(MessageType::Ready, &ready);
+    for (int i = 0; i < 1000; ++i) {
+        rig.port->deliver(ready);
+    }
+    check(rig.port->pending() == 0 && rig.relay.lastError().isEmpty(),
+          "READY from the CTR2 while no link is up is ignored, not answered");
+    check(linkUpHeld(rig), "link up");
+    const int before = rig.port->pending();
+    for (int i = 0; i < 1000; ++i) {
+        rig.port->deliver({Report{0x12, 1, 2, 3, 4, 5, 6, 7}});
+        rig.port->deliver(ready);
+    }
+    check(rig.port->pending() == before + 1, "repeated faults queue a single CLOSED");
+
+    // A refused radio sends CLOSED; a message the CTR2 already had in flight
+    // then times out half-received. That second fault must not add a CLOSED.
+    quint16 dead = 0;
+    {
+        QTcpServer probe;
+        if (!probe.listen(QHostAddress::LocalHost, 0)) {
+            std::exit(kSkip);
+        }
+        dead = probe.serverPort();
+    }
+    Ctr2UsbRelay::Tuning tuning;
+    tuning.incompleteMessageTimeoutMs = 60;
+    Ctr2UsbRelay relay;
+    relay.setTuning(tuning);
+    auto* port = new FakePort;
+    Device dev{port};
+    relay.start(port, QHostAddress::LocalHost, dead);
+    dev.hello();
+    check(waitUntil([&] { return dev.count(MessageType::Closed) == 1; }), "refused radio: one CLOSED");
+    std::vector<Report> inFlight;
+    dev.tx.encodeData(QByteArray(20, 'x'), &inFlight);
+    port->deliver({inFlight[0]});
+    spin(250);
+    check(dev.count(MessageType::Closed) == 1, "a later fault in the same episode sends no second CLOSED");
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -648,6 +822,9 @@ int main(int argc, char** argv)
     testDatagramFloodIsDropped();
     testDatagramBeforeReady();
     testDeviceLabels();
+    testRestartDiscardsQueuedOutput();
+    testEachMessageGetsItsOwnDeadline();
+    testControlOutputBoundedWhileWaiting();
     if (g_failures) {
         std::fprintf(stderr, "%d check(s) failed\n", g_failures);
         return 1;

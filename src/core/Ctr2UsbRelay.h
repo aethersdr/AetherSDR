@@ -86,7 +86,9 @@ private:
     void sessionDraining(quint64 generation);
     void sessionEnded(quint64 generation, const QString& message, bool error, bool sendClosed);
     void endSession();
-    void releasePort();
+    void releasePort(const std::vector<ctr2hid::Report>& finalReports);
+    void discardOutput();
+    void sendClosedOnce();
     void setState(State state);
     void setLastError(const QString& message);
 
@@ -107,6 +109,8 @@ private:
     Session* m_session{nullptr};
     QTimer* m_incompleteTimer{nullptr};
     bool m_awaitingHello{true};
+    bool m_closedSent{false};  // CLOSED already queued for this link
+    static constexpr int kMaxQueuedReports = 8192;
     quint64 m_generation{0};
     State m_state{State::Stopped};
     QString m_lastError;

@@ -18,6 +18,7 @@ correct as the host side changes.
 ```c
 static ctr2_tx tx;
 static ctr2_rx rx;
+static int waiting_for_host;  /* after HELLO, until READY or CLOSED */
 
 static void send_report(void *ctx, const uint8_t r[CTR2_REPORT_BYTES])
 {
@@ -26,10 +27,11 @@ static void send_report(void *ctx, const uint8_t r[CTR2_REPORT_BYTES])
     usb_hid_send(buf, sizeof buf);          /* your USB stack */
 }
 
-void link_start(void)                       /* entering USB mode */
+void link_start(void)                       /* entering USB mode, or after an error */
 {
     ctr2_rx_reset(&rx);
     ctr2_tx_reset(&tx);
+    waiting_for_host = 1;
     ctr2_tx_send(&tx, CTR2_TYPE_HELLO, NULL, 0, send_report, NULL);
 }
 
@@ -38,6 +40,15 @@ void on_hid_report(const uint8_t r[CTR2_REPORT_BYTES])  /* after report ID */
     uint8_t type;
     const uint8_t *data;
     uint16_t len;
+    if (waiting_for_host) {
+        /* Skip anything left over from before HELLO; data reports never
+         * start with 0xFF, so only a real READY/CLOSED header ends this. */
+        if (r[0] != CTR2_MARKER || (r[3] != CTR2_TYPE_READY && r[3] != CTR2_TYPE_CLOSED)) {
+            return;
+        }
+        waiting_for_host = 0;
+        ctr2_rx_reset(&rx);
+    }
     switch (ctr2_rx_feed(&rx, r, &type, &data, &len)) {
     case CTR2_RX_MESSAGE:
         if (type == CTR2_TYPE_READY)  radio_connected();       /* = Wi-Fi TCP connect */

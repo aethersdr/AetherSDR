@@ -67,7 +67,7 @@ public:
     // has no usable destination, and unavailableReason says why. A running
     // relay stops as soon as this is no longer the radio it started with:
     // AetherSDR's TX indicator is the operator's only view of that radio.
-    void setAetherRadio(const QHostAddress& address, const QString& label,
+    void setAetherRadio(const QHostAddress& address, quint16 port, const QString& label,
                         const QString& unavailableReason);
     QString aetherRadioLabel() const { return m_aetherRadioLabel; }
 
@@ -114,9 +114,11 @@ private:
     QList<Ctr2HidPort::DeviceInfo> m_usbChoices;
     QString m_usbDevicePath;
     QHostAddress m_aetherRadioAddress;
+    quint16 m_aetherRadioPort{kDefaultPort};
     QString m_aetherRadioLabel;
     QString m_aetherRadioReason;
     QHostAddress m_runningRadioAddress;  // captured at start()
+    quint16 m_runningRadioPort{0};
     QString m_runningRadioLabel;
     QString m_stopReason;                // why the relay stopped on its own
     UsbDeviceSource m_usbDevices;

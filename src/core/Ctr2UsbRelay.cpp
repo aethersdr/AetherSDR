@@ -266,8 +266,9 @@ private:
         // One UDP socket per link: the radio learns this endpoint from the
         // CTR2's own registration datagram, so its UDP never reaches
         // AetherSDR's sockets and no port needs negotiating.
+        // Bound to the interface that reaches the radio, not every interface.
         m_udp = new QUdpSocket(this);
-        if (!m_udp->bind(QHostAddress::AnyIPv4, 0)) {
+        if (!m_udp->bind(m_radio->localAddress(), 0)) {
             qCWarning(lcDevices) << "CTR2 USB: UDP socket unavailable:" << m_udp->errorString();
             delete m_udp;
             m_udp = nullptr;
@@ -341,7 +342,7 @@ void Ctr2UsbRelay::DeviceEndpoint::closeGracefully()
     }
     // The port is FIFO, so CLOSED follows every radio byte already queued.
     m_closeRequested = true;
-    m_owner->sendControl(MessageType::Closed);
+    m_owner->sendClosedOnce();
     m_session->deviceCloseSent();
 }
 
@@ -396,6 +397,7 @@ bool Ctr2UsbRelay::start(Ctr2HidPort* port, const QHostAddress& radioAddress, qu
     m_unsentPayload = 0;
     m_unsentDatagramBytes = 0;
     m_awaitingHello = true;
+    m_closedSent = false;
     m_lastSessionStats = {};
     ++m_generation;
     setLastError({});
@@ -415,13 +417,12 @@ void Ctr2UsbRelay::stop()
     endSession();
     m_incompleteTimer->stop();
     if (m_port) {
+        // Queued radio bytes are dropped; CLOSED still reaches the device.
+        std::vector<ctr2hid::Report> closed;
         if (m_port->isOpen()) {
-            // Queued radio bytes are dropped; CLOSED still reaches the device.
-            std::vector<ctr2hid::Report> closed;
             m_tx.encodeControl(MessageType::Closed, &closed);
-            m_port->closeAfter(closed);
         }
-        releasePort();
+        releasePort(closed);
         qCInfo(lcDevices) << "CTR2 USB: stopped";
     }
     ++m_generation;
@@ -430,7 +431,7 @@ void Ctr2UsbRelay::stop()
     emit statsChanged();
 }
 
-void Ctr2UsbRelay::releasePort()
+void Ctr2UsbRelay::releasePort(const std::vector<ctr2hid::Report>& finalReports)
 {
     if (!m_port) {
         return;
@@ -438,11 +439,30 @@ void Ctr2UsbRelay::releasePort()
     Ctr2HidPort* port = m_port;
     m_port = nullptr;
     QObject::disconnect(port, nullptr, this, nullptr);
-    port->close();
-    port->deleteLater();
+    // Asynchronous: the port finishes its writes on its own thread and then
+    // deletes itself, so neither Stop nor app exit waits on the device.
+    port->shutdown(finalReports);
     m_reportCosts.clear();
     m_unsentPayload = 0;
     m_unsentDatagramBytes = 0;
+}
+
+void Ctr2UsbRelay::discardOutput()
+{
+    if (m_port) {
+        m_port->discardQueued();
+    }
+    m_reportCosts.clear();
+    m_unsentPayload = 0;
+    m_unsentDatagramBytes = 0;
+}
+
+void Ctr2UsbRelay::sendClosedOnce()
+{
+    if (!m_closedSent) {
+        m_closedSent = true;
+        sendControl(MessageType::Closed);
+    }
 }
 
 void Ctr2UsbRelay::onReportsReceived(const QByteArray& reports)
@@ -463,6 +483,9 @@ void Ctr2UsbRelay::onReportsReceived(const QByteArray& reports)
             continue;
         }
         for (const Message& m : messages) {
+            // Each message gets its own deadline; the tail below starts the
+            // next one if this batch already began another message.
+            m_incompleteTimer->stop();
             onMessage(m);
             if (!m_port) {
                 return;
@@ -512,7 +535,9 @@ void Ctr2UsbRelay::onMessage(const Message& message)
         }
         return;
     case MessageType::Ready:
-        linkFault(QStringLiteral("CTR2 sent READY, which only the host sends"));
+        if (!m_awaitingHello) {
+            linkFault(QStringLiteral("CTR2 sent READY, which only the host sends"));
+        }
         return;
     }
 }
@@ -523,6 +548,9 @@ void Ctr2UsbRelay::onHello()
         m_session->terminate(QStringLiteral("CTR2 restarted the link"));
     }
     endSession();
+    // Nothing from the previous link may reach the device after it restarted.
+    discardOutput();
+    m_closedSent = false;
     m_awaitingHello = false;
     ++m_generation;
     m_lastSessionStats = {};
@@ -546,7 +574,9 @@ void Ctr2UsbRelay::linkFault(const QString& message)
     qCWarning(lcDevices) << "CTR2 USB:" << message;
     setLastError(message);
     if (m_port) {
-        sendControl(MessageType::Closed);
+        discardOutput();
+        // One CLOSED per link: further faults before the next HELLO add nothing.
+        sendClosedOnce();
         setState(State::Listening);
     }
     emit endpointsChanged();
@@ -576,7 +606,7 @@ void Ctr2UsbRelay::onPortFailed(const QString& message)
     }
     endSession();
     m_incompleteTimer->stop();
-    releasePort();
+    releasePort({});
     setLastError(message);
     setState(State::Error);
     emit endpointsChanged();
@@ -585,7 +615,9 @@ void Ctr2UsbRelay::onPortFailed(const QString& message)
 
 void Ctr2UsbRelay::sendControl(MessageType type)
 {
-    if (!m_port) {
+    // Hard cap on queued reports: data and datagrams are already budgeted,
+    // so only a stalled device plus repeated control traffic reaches it.
+    if (!m_port || m_reportCosts.size() >= static_cast<size_t>(kMaxQueuedReports)) {
         return;
     }
     std::vector<ctr2hid::Report> reports;
@@ -670,7 +702,8 @@ void Ctr2UsbRelay::sessionEnded(quint64 generation, const QString& message, bool
     session->deleteLater();
     m_awaitingHello = true;
     if (sendClosed) {
-        sendControl(MessageType::Closed);
+        discardOutput();
+        sendClosedOnce();
     }
     if (error) {
         qCWarning(lcDevices) << "CTR2 USB:" << message;

@@ -365,6 +365,14 @@ target_include_directories(ctr2_hid_reference_test PRIVATE
 target_link_libraries(ctr2_hid_reference_test PRIVATE aethercore Qt6::Core)
 add_test(NAME ctr2_hid_reference_test COMMAND ctr2_hid_reference_test)
 
+# CTR2 HID I/O thread with injected device operations (no hidapi, no device,
+# no sockets): shutdown never blocks the owner on slow writes, discardQueued()
+# fences queued output and late acknowledgements, reads and failures surface.
+add_executable(ctr2_hid_thread_port_test tests/ctr2_hid_thread_port_test.cpp)
+target_include_directories(ctr2_hid_thread_port_test PRIVATE src)
+target_link_libraries(ctr2_hid_thread_port_test PRIVATE aethercore Qt6::Core)
+add_test(NAME ctr2_hid_thread_port_test COMMAND ctr2_hid_thread_port_test)
+
 # Our TcpByteProxy server is the subject. Binds 127.0.0.1 ephemeral TCP ports
 # (proxy listener + a generic byte peer standing in for the upstream); no radio
 # protocol or firmware stand-in. Exit 77 when loopback cannot be bound.
@@ -375,9 +383,11 @@ add_test(NAME tcp_byte_proxy_test COMMAND tcp_byte_proxy_test)
 set_tests_properties(tcp_byte_proxy_test PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
 
 # Our Ctr2UsbRelay link state machine is the subject. The HID port is an
-# injected fake (no device); binds 127.0.0.1 ephemeral TCP for a generic byte
-# peer standing in for the radio endpoint. No radio protocol or firmware
-# stand-in. Exit 77 when loopback cannot be bound.
+# injected fake (no device). Binds 127.0.0.1 ephemeral TCP (a generic byte peer
+# standing in for the radio endpoint), the relay's own ephemeral UDP socket on
+# the radio-facing loopback address, and loopback UDP peers on 127.0.0.1 and
+# 127.0.0.2. No radio protocol or firmware stand-in. Exit 77 when loopback
+# cannot be bound.
 add_executable(ctr2_usb_relay_test tests/ctr2_usb_relay_test.cpp)
 target_include_directories(ctr2_usb_relay_test PRIVATE src)
 target_link_libraries(ctr2_usb_relay_test PRIVATE aethercore Qt6::Core Qt6::Network)

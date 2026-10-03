@@ -39,10 +39,14 @@ public:
     virtual bool isOpen() const = 0;
     // Queues reports for transmission in order; reportsSent() reports progress.
     virtual void send(const std::vector<ctr2hid::Report>& reports) = 0;
-    // Immediate close; anything still queued is dropped.
-    virtual void close() = 0;
-    // Drops anything still queued, sends finalReports, then closes.
-    virtual void closeAfter(const std::vector<ctr2hid::Report>& finalReports) = 0;
+    // Fence: drops every report passed to send() before this call that has
+    // not been written yet. reportsSent() afterwards counts only reports
+    // sent after the fence, never late acknowledgements from before it.
+    virtual void discardQueued() = 0;
+    // Drops anything queued, writes finalReports, closes the device and
+    // deletes this port once that has finished. Never blocks the caller,
+    // which must not use the port afterwards.
+    virtual void shutdown(const std::vector<ctr2hid::Report>& finalReports) = 0;
     virtual QString description() const = 0;
 
 signals:

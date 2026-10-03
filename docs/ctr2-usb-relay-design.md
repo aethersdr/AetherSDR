@@ -179,7 +179,8 @@ CTR2's normal registration and binding sequence runs again.
 Host behavior:
 
 - **HELLO received:** close any existing radio connection, discard all link
-  state, open a new radio connection (10 s timeout). On success send READY
+  state, including every report still queued for the device, and open a
+  new radio connection (10 s timeout). On success send READY
   and start forwarding, including any radio output that arrived first. On
   failure send CLOSED.
 - **DATA received:** forward the payload to the radio.
@@ -193,9 +194,11 @@ Host behavior:
   radio connection. No reply is sent.
 - **Radio connection closes:** forward the radio's remaining bytes, then send
   CLOSED.
-- **Framing error, a DATA message arriving with no radio connection, or an
-  incomplete message older than 1 s:** close the radio connection, send
-  CLOSED, and wait for HELLO.
+- **Framing error, DATA or DATAGRAM with no radio connection, READY from the
+  device during a link, or a message still incomplete 1 s after it began:**
+  close the radio connection, discard queued output, send CLOSED, and wait
+  for HELLO. A link gets at most one CLOSED; anything else the device sends
+  before its next HELLO, including READY, is ignored.
 - **USB device removed, or Stop pressed:** close the radio connection (and
   send CLOSED if the device is still there).
 - **AetherSDR disconnects from the radio or switches radios:** stop the
@@ -205,7 +208,11 @@ Host behavior:
 
 Device behavior:
 
-- On entering USB mode, reset the counter and send HELLO.
+- On entering USB mode, reset the counter and send HELLO. Until READY or
+  CLOSED arrives, ignore every received report that is not a header
+  (byte 0 `0xFF`) of type READY or CLOSED, then reset the receiver and
+  process that header. Data reports never start with `0xFF`, so this skips
+  the tail of anything sent before the HELLO without misreading it.
 - Send DATA only after READY, and only until CLOSED.
 - **Payload is a byte stream.** The host splits radio output at arbitrary
   points, so a DATA message may end mid-line and one line may span several
@@ -220,7 +227,8 @@ Device behavior:
   port it names would be on the PC, possibly AetherSDR's own. Datagrams
   from the radio arrive as DATAGRAM messages, one per datagram.
 - On CLOSED, behave as when the Wi-Fi socket drops; send HELLO to reconnect.
-- On a framing error in what it receives, send HELLO to restart the link.
+- On a framing error in what it receives, send HELLO to restart the link
+  (and resynchronize as above).
 
 ### Test vectors
 
@@ -292,7 +300,13 @@ USB a complete replacement for Wi-Fi.
 
 HID I/O runs on one dedicated worker thread because hidapi reads and writes
 block; a stalled controller can then never freeze the UI or other
-controllers. Everything else runs on the GUI event loop, as the TCP relay
+controllers. Nothing waits on that thread: queued output is cancelled
+between writes, a restart fences the queue (late acknowledgements from
+before the fence are ignored), and shutdown hands the port its final
+CLOSED and lets it delete itself once its writes finish. The per-link UDP
+socket is bound to the interface that reaches the radio, and only that
+radio's datagrams are relayed back. Each direction's relay budget is 16 KiB
+in USB mode (256 KiB over Wi-Fi) so a drain fits the link's ~7 KB/s. Everything else runs on the GUI event loop, as the TCP relay
 does. hidapi is an existing optional dependency; a build without it shows
 USB mode dimmed with the reason. The device list shows every HID interface
 on usage page `0xFF00`, usage `0x01`, and the operator picks one explicitly;

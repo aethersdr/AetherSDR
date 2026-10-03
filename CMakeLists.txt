@@ -942,6 +942,7 @@ set(CORE_SOURCES
     src/core/TcpByteProxy.cpp
     src/core/Ctr2HidFraming.cpp
     src/core/Ctr2HidPort.cpp
+    src/core/Ctr2HidThreadPort.cpp
     src/core/Ctr2UsbRelay.cpp
     src/core/SmartCatProtocol.cpp
     src/core/SmartCatSession.cpp

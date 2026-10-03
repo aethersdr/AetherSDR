@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: MIT
- * Copyright (c) 2026 Jeremy Fielder (KK7GWY) and AetherSDR contributors
+ * Copyright (c) 2026 Jeremy Fielder (KK7GWY)
  *
  * CTR2 USB link, wire format version 0 -- portable reference implementation
  * for the controller firmware. C99, no heap, depends only on <stdint.h> and
