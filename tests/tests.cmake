@@ -5275,13 +5275,20 @@ target_include_directories(hl2_tx_gate_test PRIVATE src)
 target_link_libraries(hl2_tx_gate_test PRIVATE aethercore Qt6::Core Qt6::Network)
 add_test(NAME hl2_tx_gate_test COMMAND hl2_tx_gate_test)
 
-# #5386: RIT shifts the transmit receiver's receive path, XIT the TX NCO register,
-# each without touching the other. Constructed backend only — no socket, no
-# DSP, nothing keyed.
+# #5386, #6105: RIT shifts its own receiver's receive path, XIT the TX NCO
+# register while its receiver transmits, each without touching the other.
+# Constructed backend only — no socket, no DSP, nothing keyed.
 add_executable(hl2_rit_xit_test tests/hl2_rit_xit_test.cpp)
 target_include_directories(hl2_rit_xit_test PRIVATE src tests)
 target_link_libraries(hl2_rit_xit_test PRIVATE aethercore Qt6::Core Qt6::Network)
 add_test(NAME hl2_rit_xit_test COMMAND hl2_rit_xit_test)
+
+# #6105: RIT/XIT cross the seam with the slice id; the Flex command text is
+# unchanged. Injected recording backend — no socket, nothing keyed.
+add_executable(slice_rit_xit_seam_test tests/slice_rit_xit_seam_test.cpp)
+target_include_directories(slice_rit_xit_seam_test PRIVATE src tests)
+target_link_libraries(slice_rit_xit_seam_test PRIVATE aethercore Qt6::Core)
+add_test(NAME slice_rit_xit_seam_test COMMAND slice_rit_xit_seam_test)
 
 # #5497: the unkey unmute waits for the radio's T/R, and the MOX-off is queued
 # ahead of it. An ordering test with a clock in it — no WDSP, no socket.
@@ -7247,6 +7254,7 @@ set(AETHER_SETTINGS_CONSUMERS
     weather_radar_loading_test
     hl2_gain_restore_test
     hl2_rit_xit_test
+    slice_rit_xit_seam_test
     hl2_tx_gate_test
     hl2_pan_limits_declaration_test
     hl2_fm_controls_declaration_test

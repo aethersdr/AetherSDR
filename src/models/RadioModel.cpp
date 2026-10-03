@@ -1644,18 +1644,17 @@ void RadioModel::wireBackendReceiverState()
             });
             // RIT / XIT. The control already existed in VfoWidget and drove
             // SliceModel; only the last hop to the seam was missing.
-            connect(s, &SliceModel::ritCommandIssued, this, [this](bool on, int hz) {
+            connect(s, &SliceModel::ritCommandIssued, this, [this, s](bool on, int hz) {
                 if (!m_backend) return;
-                m_backend->setRitEnabled(on);
-                m_backend->setRitOffset(hz);
+                m_backend->setSliceRitEnabled(s->sliceId(), on);
+                m_backend->setSliceRitOffset(s->sliceId(), hz);
             });
-            connect(s, &SliceModel::xitCommandIssued, this, [this](bool on, int hz) {
+            connect(s, &SliceModel::xitCommandIssued, this, [this, s](bool on, int hz) {
                 if (!m_backend) return;
-                m_backend->setXitEnabled(on);
+                m_backend->setSliceXitEnabled(s->sliceId(), on);
                 // The TRANSMIT offset verb, which defaults to the receive one
-                // for a radio with a single shared register (Icom) and is
-                // overridable by a radio with two (Flex).
-                m_backend->setXitOffset(hz);
+                // for a radio with a single shared register (Icom).
+                m_backend->setSliceXitOffset(s->sliceId(), hz);
             });
 
             wireSliceAudioIntentsToBackend(s);

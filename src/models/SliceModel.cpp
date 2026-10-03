@@ -749,7 +749,9 @@ void SliceModel::setRit(bool on, int hz)
     sendCommand(QString("slice set %1 rit_on=%2 rit_freq=%3")
                     .arg(m_id).arg(on ? 1 : 0).arg(hz));
     emit ritCommandIssued(on, hz);
-    emit ritChanged(on, hz);
+    // The members, not the arguments: a backend that answers synchronously
+    // (HL2's clamp) has already corrected them.
+    emit ritChanged(m_ritOn, m_ritFreq);
 }
 
 void SliceModel::setXit(bool on, int hz)
@@ -759,7 +761,7 @@ void SliceModel::setXit(bool on, int hz)
     sendCommand(QString("slice set %1 xit_on=%2 xit_freq=%3")
                     .arg(m_id).arg(on ? 1 : 0).arg(hz));
     emit xitCommandIssued(on, hz);
-    emit xitChanged(on, hz);
+    emit xitChanged(m_xitOn, m_xitFreq);
 }
 
 void SliceModel::setDaxChannel(int ch)
@@ -1644,15 +1646,24 @@ void SliceModel::applyChanges(const SliceDelta& d)
         }
         emit squelchChanged(m_squelchOn, m_squelchLevel);
     }
+    // Guarded like the AGC pair: HL2 publishes RIT/XIT on every emitSliceState().
     if (d.ritOn.has_value() || d.ritFreq.has_value()) {
-        if (d.ritOn.has_value())   m_ritOn   = *d.ritOn;
-        if (d.ritFreq.has_value()) m_ritFreq = *d.ritFreq;
-        emit ritChanged(m_ritOn, m_ritFreq);
+        const bool on = d.ritOn.value_or(m_ritOn);
+        const int hz = d.ritFreq.value_or(m_ritFreq);
+        if (on != m_ritOn || hz != m_ritFreq) {
+            m_ritOn = on;
+            m_ritFreq = hz;
+            emit ritChanged(m_ritOn, m_ritFreq);
+        }
     }
     if (d.xitOn.has_value() || d.xitFreq.has_value()) {
-        if (d.xitOn.has_value())   m_xitOn   = *d.xitOn;
-        if (d.xitFreq.has_value()) m_xitFreq = *d.xitFreq;
-        emit xitChanged(m_xitOn, m_xitFreq);
+        const bool on = d.xitOn.value_or(m_xitOn);
+        const int hz = d.xitFreq.value_or(m_xitFreq);
+        if (on != m_xitOn || hz != m_xitFreq) {
+            m_xitOn = on;
+            m_xitFreq = hz;
+            emit xitChanged(m_xitOn, m_xitFreq);
+        }
     }
     if (d.daxChannel.has_value()) {
         int ch = *d.daxChannel;

@@ -687,17 +687,18 @@ public:
     // radio-wide selected-VFO state, not a memory/slice parameter.
     virtual void setTransmitFrequencyCheck(bool on) { Q_UNUSED(on); }
 
-    // Receive and transmit incremental tuning, Hz relative to the VFO. Two enables and
-    // one offset, the IC-705's shape (21 01 RIT, 21 02 XIT, 21 00 offset). A radio
-    // without RIT does not implement these.
-    virtual void setRitEnabled(bool on) { Q_UNUSED(on); }
-    virtual void setXitEnabled(bool on) { Q_UNUSED(on); }
-    virtual void setRitOffset(int hz) { Q_UNUSED(hz); }
+    // Receive and transmit incremental tuning, Hz relative to the slice's VFO. Per
+    // slice, as FlexLib's Slice.RITOn/RITFreq/XITOn/XITFreq: each slice keeps its own
+    // pair and XIT applies when that slice transmits. A radio with one receiver may
+    // ignore the id. A radio without RIT does not implement these.
+    virtual void setSliceRitEnabled(int sliceId, bool on) { Q_UNUSED(sliceId); Q_UNUSED(on); }
+    virtual void setSliceXitEnabled(int sliceId, bool on) { Q_UNUSED(sliceId); Q_UNUSED(on); }
+    virtual void setSliceRitOffset(int sliceId, int hz) { Q_UNUSED(sliceId); Q_UNUSED(hz); }
 
-    // The TRANSMIT offset. Defaults to setRitOffset() because an IC-705 has ONE shift
-    // register (21 00; 21 01 / 21 02 choose whether it applies to RX, TX or both). A
-    // radio with two registers (Flex rit_freq / xit_freq) overrides this.
-    virtual void setXitOffset(int hz) { setRitOffset(hz); }
+    // The TRANSMIT offset. Defaults to setSliceRitOffset() because an IC-705 has ONE
+    // shift register (21 00; 21 01 / 21 02 choose whether it applies to RX, TX or
+    // both). A radio with two registers overrides this.
+    virtual void setSliceXitOffset(int sliceId, int hz) { setSliceRitOffset(sliceId, hz); }
 
     // Transmit audio passband, in Hz above the carrier (Phone applet TX low/high cut).
     // Flex takes `transmit set filter_low=/filter_high=` from TransmitModel; a backend
