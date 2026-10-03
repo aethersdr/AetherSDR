@@ -838,7 +838,8 @@ bool Hl2Backend::openReceiverDsp(int ddc, std::string* error)
     // emits linkDown, so no frame is delivered after disconnected(). A frame is
     // published only while its producer is still the receiver behind its UI
     // number: a queued frame outlives disconnect() and deleteLater(), and a
-    // reopened receiver can take the same number (as audioReady below).
+    // reopened receiver can take the same number. audioReady and meterUpdate
+    // below apply the same check.
     connect(dsp, &Hl2RxDsp::spectrumReady, this,
             [this, ui, producer = QPointer<Hl2RxDsp>(dsp)](const std::vector<float>& bins) {
         const auto* ids = m_ids.byUi(ui);
@@ -884,11 +885,12 @@ bool Hl2Backend::openReceiverDsp(int ddc, std::string* error)
     });
 
     connect(dsp, &Hl2RxDsp::meterUpdate, this,
-            [this, ui](float dbfs) {
+            [this, ui, producer = QPointer<Hl2RxDsp>(dsp)](float dbfs) {
         const auto* ids = m_ids.byUi(ui);
         Receiver* r = ids ? rx(ids->ddcIndex) : nullptr;
-        if (!r)
+        if (!producer || !r || r->dsp != producer.data()) {
             return;
+        }
         // Same reference as the spectrum -- a meter that moved on a gain
         // change while the trace stayed put would be its own kind of lie.
         const double dbm = m_dbRef.toDbm(dbfs);
