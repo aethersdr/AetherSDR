@@ -24,12 +24,21 @@ std::span<const std::uint8_t> asBytes(const QByteArray& d) noexcept
            static_cast<std::size_t>(d.size())};
 }
 
+// txAccum is REQUIRED, not defaulted: a new send site cannot compile without
+// deciding where its bytes are counted, which is what keeps the LinkStats tx
+// total from silently under-reporting as this client grows.
 template <std::size_t N>
 qint64 sendTo(QUdpSocket& s, const std::array<std::uint8_t, N>& buf,
-             const QHostAddress& host, quint16 port)
+             const QHostAddress& host, quint16 port, quint64& txAccum)
 {
-    return s.writeDatagram(reinterpret_cast<const char*>(buf.data()),
-                           static_cast<qint64>(N), host, port);
+    const qint64 sent = s.writeDatagram(reinterpret_cast<const char*>(buf.data()),
+                                        static_cast<qint64>(N), host, port);
+    // Only what the socket ACCEPTED. Counting a refused datagram would inflate
+    // the readout exactly when the link is failing, which is when an operator
+    // is most likely to be reading it.
+    if (sent > 0)
+        txAccum += static_cast<quint64>(sent);
+    return sent;
 }
 
 }  // namespace
@@ -52,6 +61,10 @@ P2Client::P2Client(QObject* parent) : QObject(parent)
     // there is no reason to hand it more than necessary.
     m_speakerDrainTimer->setTimerType(Qt::PreciseTimer);
     connect(m_speakerDrainTimer, &QTimer::timeout, this, &P2Client::onSpeakerDrainTick);
+
+    m_linkCountersTimer = new QTimer(this);
+    m_linkCountersTimer->setInterval(kLinkCountersMs);
+    connect(m_linkCountersTimer, &QTimer::timeout, this, &P2Client::publishLinkCounters);
 }
 
 P2Client::~P2Client()
@@ -88,6 +101,9 @@ bool P2Client::start(const Params& params, int connectTimeoutMs)
     m_expectedSeq.fill(std::nullopt);
     m_activeDdcCount = 1;   // real value set once the DDC list is resolved below
     m_drops = 0;
+    m_rxBytes = 0;
+    m_rxPackets = 0;
+    m_txBytes = 0;
     m_warnedUnexpectedPorts.clear();
     m_linkUp = false;
     m_discoveryInfoSent = false;
@@ -111,8 +127,8 @@ bool P2Client::start(const Params& params, int connectTimeoutMs)
     // sends DDC0 IQ, not the source port of General/DDC-Specific/High-
     // Priority below. The reply (if any arrives here) is not parsed;
     // onReadyRead() already drops anything that isn't DDC0-shaped.
-    sendTo(*m_socket, buildDiscovery(), m_host, kRadioPort);
-    sendTo(*m_socket, buildGeneral(), m_host, kRadioPort);
+    sendTo(*m_socket, buildDiscovery(), m_host, kRadioPort, m_txBytes);
+    sendTo(*m_socket, buildGeneral(), m_host, kRadioPort, m_txBytes);
 
     // Resolve the session's DDC list ONCE: either the caller's explicit
     // multi-DDC list, or a one-element list from the DDC0 shorthand. See
@@ -141,13 +157,14 @@ bool P2Client::start(const Params& params, int connectTimeoutMs)
     sendTo(*m_socket,
           buildDdcSpecific(ddcs, /*numAdcs=*/2,
                            params.ditherEnabled, params.randomEnabled),
-          m_host, kDdcSpecificPort);
+          m_host, kDdcSpecificPort, m_txBytes);
     sendTo(*m_socket,
           buildHighPriority(true, freqWords, m_bypassAdc0Filters, m_bypassAdc1Filters,
                             m_adc0AttenuationDb, m_adc1AttenuationDb),
-          m_host, kHighPriorityPort);
+          m_host, kHighPriorityPort, m_txBytes);
 
     m_keepaliveTimer->start();
+    m_linkCountersTimer->start();
     if (m_speakerAudioEnabled) {
         // Started from zero at the same moment as the drain, so the pacer's
         // first advance() measures from the first tick rather than from
@@ -163,6 +180,7 @@ bool P2Client::start(const Params& params, int connectTimeoutMs)
 void P2Client::stop()
 {
     m_keepaliveTimer->stop();
+    m_linkCountersTimer->stop();
     m_connectTimeoutTimer->stop();
     m_speakerDrainTimer->stop();
     // Dropped, not drained. These samples are older than the disconnect and the
@@ -181,7 +199,7 @@ void P2Client::stop()
         sendTo(*m_socket,
               buildHighPriority(false, 0, m_bypassAdc0Filters, m_bypassAdc1Filters,
                                 m_adc0AttenuationDb, m_adc1AttenuationDb),
-              m_host, kHighPriorityPort);
+              m_host, kHighPriorityPort, m_txBytes);
         m_socket->close();
         m_socket->deleteLater();
         m_socket = nullptr;
@@ -191,6 +209,34 @@ void P2Client::stop()
         m_linkUp = false;
         emit linkDown();
     }
+}
+
+void P2Client::publishLinkCounters()
+{
+    LinkCounters c;
+    c.rxBytes = m_rxBytes;
+    c.rxPackets = m_rxPackets;
+    c.txBytes = m_txBytes;
+    c.drops = m_drops;
+    c.localEndpoint = localEndpoint();
+    emit linkCountersUpdated(c);
+}
+
+QString P2Client::localEndpoint() const
+{
+    // Empty rather than a partial string when there is no socket or the bind
+    // did not take: LinkStats::localEndpoint is documented as empty when not
+    // bound, and the consumer falls back to its own source on empty.
+    if (!m_socket || m_socket->state() == QAbstractSocket::UnconnectedState)
+        return {};
+    const quint16 port = m_socket->localPort();
+    if (port == 0)
+        return {};
+    // AnyIPv4 prints as "0.0.0.0", which is the honest answer for a wildcard
+    // bind -- the socket genuinely is not pinned to one interface. The PORT is
+    // the load-bearing half anyway: it is what the radio streams DDC0 to.
+    return QStringLiteral("%1:%2").arg(m_socket->localAddress().toString())
+                                  .arg(port);
 }
 
 void P2Client::noteSpeakerFifoStatus(const HighPriorityStatus& status)
@@ -309,6 +355,10 @@ void P2Client::onSpeakerDrainTick()
             // stream permanently. Retried on the next tick.
             break;
         }
+        // Counted here rather than in sendTo(): this is the one send that does
+        // not go through it. Reached only on the accepted path -- the refused
+        // case broke out above.
+        m_txBytes += static_cast<quint64>(sent);
         ++m_speakerSequence;
         m_speakerPacer.onPacketSent();
         consumed += kPacketSamples;
@@ -327,7 +377,7 @@ void P2Client::setDdc0FrequencyHz(double hz)
               buildHighPriority(true, sharedFreqWords(),
                                 m_bypassAdc0Filters, m_bypassAdc1Filters,
                                 m_adc0AttenuationDb, m_adc1AttenuationDb),
-              m_host, kHighPriorityPort);
+              m_host, kHighPriorityPort, m_txBytes);
 }
 
 void P2Client::setStepAttenuationDb(int adcIndex, int db)
@@ -346,7 +396,7 @@ void P2Client::setStepAttenuationDb(int adcIndex, int db)
               buildHighPriority(true, sharedFreqWords(),
                                 m_bypassAdc0Filters, m_bypassAdc1Filters,
                                 m_adc0AttenuationDb, m_adc1AttenuationDb),
-              m_host, kHighPriorityPort);
+              m_host, kHighPriorityPort, m_txBytes);
     }
 }
 
@@ -369,7 +419,7 @@ bool P2Client::setDdcRateLive(int ddcIndex, int rateKsps)
     sendTo(*m_socket,
           buildDdcSpecific(m_activeDdcs, /*numAdcs=*/2,
                            m_ditherEnabled, m_randomEnabled),
-          m_host, kDdcSpecificPort);
+          m_host, kDdcSpecificPort, m_txBytes);
 
     // The stream's sample cadence changes underneath us from here, so the
     // sequence expectation for THIS DDC is no longer meaningful -- clear it
@@ -393,7 +443,7 @@ void P2Client::onKeepaliveTick()
           buildHighPriority(true, sharedFreqWords(),
                             m_bypassAdc0Filters, m_bypassAdc1Filters,
                             m_adc0AttenuationDb, m_adc1AttenuationDb),
-          m_host, kHighPriorityPort);
+          m_host, kHighPriorityPort, m_txBytes);
 }
 
 void P2Client::onConnectTimeout()
@@ -415,6 +465,13 @@ void P2Client::onReadyRead()
 // per-DDC sequence tracking, notification ordering and sample delivery.
 void P2Client::handleDatagram(std::span<const std::uint8_t> bytes, quint16 senderPort)
 {
+    // Before any parse decides what this datagram IS: the transport carried it
+    // either way, and a session whose IQ has stalled while Status packets still
+    // arrive must not read as a dead link. Counting after the shape checks
+    // below would make every rejected datagram invisible to the readout.
+    m_rxBytes += static_cast<quint64>(bytes.size());
+    ++m_rxPackets;
+
     const auto frame = parseDdcFrame(bytes);
     if (!frame) {
         // Not DDC0-shaped: Mic Data, High Priority Status, or this session's
