@@ -36,6 +36,10 @@ jobs:
             label: ASan + UBSan
             image: ghcr.io/aethersdr/aethersdr-ci:latest
             build_type: Debug
+            # A Debug ASan tree with the core linked statically into ~600
+            # tests outgrew the runner's disk ("No space left on device",
+            # three weeks running). One shared core keeps it near 17 GB.
+            shared_core: "ON"
             # ON here too, not only under TSan: the churn test's documented
             # failure class is a heap use-after-free on the receiver vector,
             # and a sequential UAF produces no TSan report — catching it is
@@ -63,6 +67,7 @@ jobs:
             # TSan cannot coexist with ASan, so build RelWithDebInfo and
             # inject the TSan flags ourselves.
             build_type: RelWithDebInfo
+            shared_core: "OFF"
             receiver_churn: "ON"
             extra_cxx: "-fsanitize=thread -g3 -fno-omit-frame-pointer -O1"
             extra_ld:  "-fsanitize=thread"
@@ -122,6 +127,7 @@ jobs:
           # that it is out of the default graph.
           cmake -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=${{ matrix.sanitizer.build_type }} \
+            -DAETHER_SHARED_CORE=${{ matrix.sanitizer.shared_core }} \
             -DAETHER_ENABLE_HL2_RECEIVER_CHURN_TEST=${{ matrix.sanitizer.receiver_churn }} \
             -DAETHER_ENABLE_HL2_TX_LOOPBACK_TEST=ON
 
@@ -140,7 +146,10 @@ jobs:
           CFLAGS:   ${{ matrix.sanitizer.extra_cxx }}
           CXXFLAGS: ${{ matrix.sanitizer.extra_cxx }}
           LDFLAGS:  ${{ matrix.sanitizer.extra_ld }}
-        run: cmake --build build --parallel
+        run: |
+          df -h /
+          cmake --build build --parallel
+          df -h /
 
       - name: Run tests under sanitizer
         id: ctest
