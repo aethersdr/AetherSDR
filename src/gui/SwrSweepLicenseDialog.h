@@ -6,18 +6,10 @@ class QCheckBox;
 
 namespace AetherSDR {
 
-// Modal license-confirmation dialog gating the Antenna SWR sweep.
-//
-// First time the user hits Start Sweep, this dialog appears with an
-// operator-responsibility disclaimer (mirrors the ATU Band Pre-Tune
-// disclaimer) and two buttons: "I am licensed to use this feature"
-// and "Cancel".  A "Remember my answer" checkbox persists the
-// confirmation to AppSettings under SwrSweepLicenseConfirmed so
-// subsequent presses go straight to the sweep without the popup.
-//
-// Use the static confirm() helper at the call site — it handles the
-// AppSettings short-circuit, the modal exec(), and the persistence
-// write so callers don't need to manage any of that themselves.
+// Modal operator-licence confirmation gating the Antenna SWR sweep (mirrors the
+// ATU Band Pre-Tune disclaimer). "Remember my answer" persists
+// SwrSweepLicenseConfirmed. Call the static confirm(), which handles the
+// short-circuit, exec() and persistence.
 class SwrSweepLicenseDialog : public PersistentDialog {
     Q_OBJECT
 

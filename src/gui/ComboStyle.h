@@ -1,16 +1,8 @@
 #pragma once
 
-// Shared combo box styling for consistent down-arrow appearance across all
-// QComboBox instances in AetherSDR.  Use applyComboStyle(combo) on any
-// QComboBox to get the standard themed look with painted down-arrow.
-//
-// Theme-aware (RFC #3076 Phase 2): colours come from canonical tokens
-// (color.background.1, color.text.primary, color.background.2,
-// color.accent, color.text.secondary).  The combo's stylesheet re-applies
-// automatically when the user switches themes via ThemeManager::applyStyleSheet
-// (free live-reload through the widget-tracked reverse-map).  The custom
-// down-arrow PNG is also regenerated whenever the theme changes so its
-// colour stays in sync with the rest of the combo.
+// Shared QComboBox styling with a painted down-arrow: applyComboStyle(combo).
+// Colours come from theme tokens and re-apply on theme change through
+// ThemeManager::applyStyleSheet; the arrow PNG is regenerated per theme.
 
 #include "core/ThemeManager.h"
 
@@ -91,16 +83,10 @@ inline QString comboStyleTemplate(const QString& extraRules = QString())
         + extraRules;
 }
 
-// Apply the themed style to a combo box.  Routes through
-// ThemeManager::applyStyleSheet so the combo gets free live re-theme on
-// theme changes via the widget-tracked reverse-map.
-//
-// Additionally connects themeChanged → refresh because the arrow URL
-// embedded in the template depends on the active theme.  Without the
-// extra connection, theme changes would re-resolve the {{tokens}} but
-// keep the stale arrow URL.  The double-apply is wasteful but small; a
-// Phase 5 follow-up could introduce a "computed token" mechanism to
-// avoid the duplicate apply if combos become a hot path.
+// Applies the themed style via ThemeManager::applyStyleSheet (live re-theme).
+// Also connects themeChanged → refresh, because the arrow URL in the template
+// depends on the active theme and token re-resolution alone would keep the
+// stale URL.
 inline void applyComboStyle(QComboBox* combo, const QString& extraRules = QString())
 {
     if (!combo) return;

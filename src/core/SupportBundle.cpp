@@ -159,19 +159,9 @@ QString SupportBundle::createBundle(const RadioInfo& radio)
             if (fi.isSymLink() || fi.size() < 100) continue;
             QString dest = (copied == 0) ? "aethersdr.log"
                                          : QString("aethersdr-%1.log").arg(copied);
-            // RE-SCRUB ON THE WAY IN, don't QFile::copy (#5480).
-            //
-            // Lines are redacted at capture, so a log written by THIS build is
-            // already clean. An older log on disk is not: it was written by
-            // whatever redactor shipped at the time, and a bundle generated
-            // after an upgrade would carry those pre-upgrade lines out of the
-            // machine unchanged. Redaction is idempotent, so running it again
-            // over an already-clean line is a no-op.
-            //
-            // The source log is deliberately left alone: it is the operator's
-            // own diagnostic record on their own machine, and rewriting it
-            // would destroy detail they may still need. Only the copy that
-            // leaves is scrubbed.
+            // Re-scrub on copy, don't QFile::copy (#5480): logs from older builds used
+            // older redactors. Redaction is idempotent. The source log is left untouched;
+            // only the copy that leaves the machine is scrubbed.
             if (!copyLogRedacted(fi.absoluteFilePath(), tmp + "/" + dest))
                 continue;
             ++copied;

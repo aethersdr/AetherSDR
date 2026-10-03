@@ -1145,16 +1145,10 @@ QString RigctlProtocol::cmdSetSplitVfo(const QString& args)
     auto* rxSlice = currentSlice();
     if (!rxSlice) return rprt(-8);
 
-    // Edge-only reclaim: only move TX back to our RX slice on a genuine
-    // split→non-split *transition*, never on a steady-state poll.  Hamlib
-    // loggers (VARA/VARAC/N1MM) poll `set_split_vfo 0 VFOA` every few
-    // seconds; each CAT channel binds to a fixed slice, so reassigning TX
-    // to this channel's slice on every poll (the prior !isTxSlice() guard
-    // only suppressed the already-TX case) means the moment the user moves
-    // TX to another slice, the next poll on a non-TX channel re-seizes it
-    // — TX visibly ping-pongs back to this channel's slice within ~2 s.
-    // Acting only on the 1→0 edge (or the same-pass race below) lets a
-    // logger that never toggles split leave the user's TX choice alone.
+    // Reclaim TX only on a split 1→0 transition, never a steady-state poll: Hamlib
+    // loggers (VARA/N1MM) poll `set_split_vfo 0 VFOA` every few seconds per
+    // channel, and reclaiming on each poll would yank TX back from whichever slice
+    // the user moved it to.
     const bool wasEnabled = (m_lastSplitEnable == 1);
     const bool firstReport = (m_lastSplitEnable < 0);
     // m_lastSplitEnable is set to 0 below on disable, and to 1 inside
@@ -1220,16 +1214,11 @@ void RigctlProtocol::ensureSplitTxSlice(bool recordExistingAsEnabled)
     if (!m_model) return;
     auto* rxSlice = currentSlice();
     if (!rxSlice) return;
-    // A create from a prior call is still in flight (WSJT-X "Rig" split fires
-    // set_freq/set_mode VFOB in quick succession, each routing here). Don't create
-    // a second TX slice — tryPromoteTxSlice() will promote the pending one, and
-    // apply the stashed split freq/mode, when it appears. Returning here also keeps
-    // that stash intact: the promote-existing path below clears m_pendingSplitEnable
-    // WITHOUT applying the stash, so we must not fall into it while a create is
-    // pending.
-    // Time-bounded: if the create never lands (radio NAK; or on Multi-Flex the
-    // local slice count was below maxSlices() but the radio is really full), don't
-    // wedge split "pending" forever — once the window lapses, clear and retry.
+    // A create is still in flight (WSJT-X split sends set_freq/set_mode VFOB in
+    // quick succession): don't create a second TX slice; tryPromoteTxSlice() will
+    // promote it and apply the stashed freq/mode. Returning also protects that
+    // stash, which the promote-existing path below clears unapplied. Bounded by
+    // kPendingCreateTimeoutMs in case the create never lands (NAK, radio full).
     if (m_pendingSplitEnable) {
         if (m_pendingSplitTimer.isValid()
                 && m_pendingSplitTimer.elapsed() < kPendingCreateTimeoutMs)
@@ -1323,21 +1312,11 @@ QString RigctlProtocol::cmdSetSplitFreq(const QString& args)
     double hz = parts.isEmpty() ? 0.0 : parts[0].toDouble(&ok);
     // Reject <=0 / NaN / absurdly high (same predicate as the tune seam).
     if (parts.isEmpty() || !ok || !RadioModel::isPlausibleCatTuneMhz(hz / 1e6)) return rprt(-1);
-    // A locked TX slice refuses the tune (see cmdSetFreq). Resolve it READ-ONLY:
-    // the default findTxSlice() runs tryPromoteTxSlice(), which is not a query —
-    // it promotes the pending slice and applies the stashed m_pendingSplitFreqMHz
-    // from an earlier burst. Running that here, before applySplitParam() has
-    // called ensureSplitTxSlice() to decide promotion is safe, would fire a tune
-    // the client already superseded (WSJT-X "Rig" split sends set_freq/set_mode
-    // VFOB in quick succession), and a cross-band stale value would recenter the
-    // pan on top of it.
-    //
-    // Consequence of promote=false: a TX slice not yet promoted is invisible
-    // here, so this cannot catch ensureSplitTxSlice() promoting an EXISTING slice
-    // the operator has locked. That path still answers RPRT 0 and is then dropped
-    // on the lock by the seam — the operator gets the lock feedback, the client
-    // does not. Closing it needs the promotion decision and the lock test in one
-    // place; out of scope here.
+    // Locked TX slice refuses the tune (see cmdSetFreq). Must be read-only:
+    // findTxSlice()'s default promote path would apply a stale stashed split freq
+    // before applySplitParam() decides promotion is safe. Known gap: a not-yet-
+    // promoted slice is invisible here, so ensureSplitTxSlice() promoting an
+    // existing locked slice still answers RPRT 0 and the seam drops the tune.
     if (auto* tx = findTxSlice(/*promote=*/false); tx && tx->isLocked()) {
         notifyLockBlocked(tx);
         return rprt(-1);
@@ -1504,33 +1483,11 @@ QString RigctlProtocol::cmdGetLevel(const QString& arg)
         return makeResponse(formatRigLevelValue(nb));
     }
     if (level == "STRENGTH") {
-        // S-meter in dBm; STRENGTH is dB relative to S9 (-73 dBm on HF).
-        //
-        // FROM THE ADDRESSED SLICE, out of the meter packet. This read
-        //     m_model->meterModel().sLevel() - kS9Dbm
-        // and MeterModel::m_sLevel was written in exactly one place in the
-        // tree — MeterModel::clear(), to -130.0f — so this branch answered
-        // -57.0 dB to every hamlib client on every backend and every radio
-        // family, always: WSJT-X, N1MM, gpredict, anything driving AetherSDR
-        // over rigctl. It was also the one level in this block that ignored
-        // the `slice` resolved a few lines above for exactly this purpose,
-        // even though the comment there names STRENGTH among the levels that
-        // use it (#5). Both halves are the same fix. (#5499 item 2)
-        //
-        // NO READING IS AN ERROR, NOT A NUMBER. hamlib has no "unknown" for
-        // get_level, and every number available here — bottom of scale, zero,
-        // the last value seen — is indistinguishable from a measurement to the
-        // client, which is the defect being fixed rather than a way out of it.
-        // RIG_ENAVAIL is at least legible, and this branch already returns an
-        // error for an unresolvable VFO, so a client meeting one here is not
-        // meeting something new. The alternative — answering the bottom of the
-        // declared range — is a maintainer's call, not this change's.
-        //
-        // sliceId() is the right key: sLevelForSlice() is keyed by
-        // MeterDef::sourceIndex, and every backend puts the slice id there --
-        // Flex from the manifest's `num`, HL2 and Icom by declaring one
-        // S-meter at 0. See the header; the one gap is HL2's second receiver
-        // -- see #5852 and its fix, #5866.
+        // STRENGTH = dB relative to S9 (-73 dBm on HF), from the addressed slice's
+        // meter (#5499). No reading returns RIG_ENAVAIL: hamlib has no "unknown" level
+        // and any number would look like a measurement. sLevelForSlice() is keyed by
+        // MeterDef::sourceIndex, which every backend sets to the slice id (Flex from
+        // the manifest `num`; HL2/Icom declare one S-meter at 0; HL2 RX2: #5852).
         const auto dbm = m_model->meterModel().sLevelForSlice(slice->sliceId());
         if (!dbm) {
             return rprt(-11);   // RIG_ENAVAIL: no S-meter sample for this slice

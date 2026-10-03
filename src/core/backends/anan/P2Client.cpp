@@ -129,20 +129,10 @@ bool P2Client::start(const Params& params, int connectTimeoutMs)
     m_ditherEnabled = params.ditherEnabled;
     m_randomEnabled = params.randomEnabled;
 
-    // Every DDC starts at the same frequency: m_ddc0FreqWord, which start()
-    // zeroed above, so in practice baseband. Per-DDC tuning is a seam this
-    // class does not expose yet -- setDdc0FrequencyHz() moves DDC0 only --
-    // so sending one shared word is honest about what is actually
-    // controllable rather than implying independent tuning that has no
-    // setter behind it.
-    //
-    // The two other High Priority senders (setDdc0FrequencyHz() and
-    // onKeepaliveTick()) send the SAME shared word for the same count, so
-    // they cannot disagree with this packet. That matters because the
-    // keepalive fires every 100 ms: a single-DDC overload there would pin
-    // DDC1..N-1 at word 0 forever regardless of what this line sent, and the
-    // two would diverge permanently the moment DDC0 was retuned.
-    // (aethersdr-agent, #5547 review.)
+    // Every DDC gets the shared m_ddc0FreqWord: there is no per-DDC tuning setter
+    // yet (setDdc0FrequencyHz() moves DDC0 only). The keepalive and
+    // setDdc0FrequencyHz() send the same shared word for the same count, so the
+    // three High Priority senders cannot disagree (#5547).
     std::vector<std::uint32_t> freqWords(ddcs.size(), m_ddc0FreqWord);
 
     // Destination ports below are NOT interchangeable with kRadioPort -- see
@@ -230,16 +220,10 @@ void P2Client::noteSpeakerFifoStatus(const HighPriorityStatus& status)
         return;
     }
     ++m_speakerUnderflowReports;
-    // The radio ran out of audio we were supposed to have sent, which is the one
-    // fault the send pacing exists to prevent -- so the FIRST one is a warning,
-    // loud and unconditional. The rest are counted rather than repeated: the bit
-    // latches over the ~200 ms between status packets, so a genuinely starved
-    // stream sets it on every packet and would otherwise flood the log at five
-    // lines a second for as long as the session lasts.
-    //
-    // ONLY MEANINGFUL WHEN WE ARE SENDING. p2app reports the speaker FIFO
-    // underflowing whether or not anyone ever fed it, so on a session with the
-    // stream disabled this bit says nothing about us and is not worth a warning.
+    // The first underflow warns; later ones are only counted, since a starved
+    // stream sets the latched bit on every ~200 ms status packet. p2app reports
+    // underflow even when nobody feeds the FIFO, so it only means something while
+    // we are sending.
     if (!m_speakerAudioEnabled) {
         return;
     }
@@ -433,18 +417,9 @@ void P2Client::handleDatagram(std::span<const std::uint8_t> bytes, quint16 sende
 {
     const auto frame = parseDdcFrame(bytes);
     if (!frame) {
-        // Not DDC0-shaped -- Mic Data or High Priority Status sharing
-        // this port, exactly as measured in Phase 1a, OR the reply to
-        // THIS session's own Discovery send (class comment). Try that
-        // second, cheap parse before giving up on the datagram; neither
-        // outcome is a drop or a connection attempt.
-        // The SHAPE test runs on every datagram; only the NOTIFICATION is
-        // once-per-session. Gating the parse itself on m_discoveryInfoSent would
-        // make the tie-break below true exactly once: a duplicated or
-        // retransmitted reply would fall through to the status parse and have its
-        // byte 30 bit 3 read as a speaker underflow and its bytes 37-38 as a FIFO
-        // level -- inventing a fault out of a packet that is not a status packet
-        // at all. A reply is a reply however many times it arrives.
+        // Not DDC0-shaped: Mic Data, High Priority Status, or this session's
+        // Discovery reply. Parse the reply on EVERY datagram (notify once): skipping it
+        // would let a duplicate reply fall through and decode as a phantom underflow.
         if (const auto reply = parseDiscoveryReply(bytes)) {
             if (!m_discoveryInfoSent) {
                 m_discoveryInfoSent = true;
@@ -453,15 +428,9 @@ void P2Client::handleDatagram(std::span<const std::uint8_t> bytes, quint16 sende
             }
             return;
         }
-        // High Priority Status. Tried AFTER the Discovery reply on purpose --
-        // both packets are 60 bytes and only their sequence/byte-4 pattern tells
-        // them apart, so the reply wins the one sequence number where they could
-        // collide (parseHighPriorityStatus()'s own comment). What that costs is
-        // named rather than hidden: a status packet whose sequence is 0 AND whose
-        // byte 4 happens to hold 0x02 or 0x03 -- PTT with a CW dot or dash down
-        // at the instant of the first status packet of a session -- reads as a
-        // reply and is not decoded. One packet, once, of diagnostic-only data,
-        // against never misreading a reply as a fault report.
+        // Tried after the Discovery reply (both 60 bytes): a status packet with
+        // sequence 0 and byte 4 = 0x02/0x03 reads as a reply and is skipped -- one
+        // diagnostic packet, never a fake fault.
         if (const auto status = parseHighPriorityStatus(bytes)) {
             noteSpeakerFifoStatus(*status);
         }
@@ -474,22 +443,10 @@ void P2Client::handleDatagram(std::span<const std::uint8_t> bytes, quint16 sende
     const auto ddcIndex = ddcIndexForSenderPort(
         static_cast<std::uint16_t>(senderPort), m_activeDdcCount);
     if (!ddcIndex) {
-        // DDC-shaped, but from a port this session did not enable --
-        // another client's stream to this host, or a DDC left running by
-        // a previous session. Dropping it is right: attributing it to a
-        // DDC would corrupt that receiver's audio and its sequence
-        // tracking, and counting it as a drop would blame this session
-        // for someone else's traffic.
-        //
-        // "Not a drop" must not mean "not observable", though. If the
-        // radio's source port ever differs from basePort + n -- other
-        // firmware, a NAT or relay in the path, a future negotiated-port
-        // session -- then EVERY datagram lands here and the operator sees
-        // a dead receiver whose only diagnostic is onConnectTimeout()'s
-        // "no DDC0 IQ from the radio", which reads as a radio fault. One
-        // line naming the port turns that into a diagnosis. Logged once
-        // per distinct port per session: this is in the hot receive path
-        // and a mismatch is by nature every packet.
+        // DDC-shaped but from a port this session did not enable (another client, or a
+        // DDC left running): drop it without counting a drop. Warn once per port, since
+        // a source-port mismatch (other firmware, NAT, negotiated ports) would otherwise
+        // present only as onConnectTimeout()'s "no DDC0 IQ".
         if (!m_warnedUnexpectedPorts.contains(senderPort)) {
             m_warnedUnexpectedPorts.insert(senderPort);
             qCWarning(lcAnanP2).nospace()

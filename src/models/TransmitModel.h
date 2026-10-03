@@ -47,16 +47,11 @@ public:
     // ── Transmit getters ────────────────────────────────────────────────────
     int     rfPower()       const { return m_rfPower; }
 
-    // Whether rfPower() has ever been filled from a backend TransmitDelta in
-    // THIS session, or is still the class default (#5518).
-    //
-    // m_rfPower{100} is indistinguishable from a radio that genuinely reports
-    // 100%, so a consumer acting on drive before the first transmit status has
-    // arrived would act on a phantom. resetState() clears this on every
-    // disconnect, so it answers per-session, not per-process. Distinct from
-    // RadioCapabilities::transmitDriveControl, which is per-BACKEND: that says
-    // whether this value CAN be confirmed, this says whether it HAS been
-    // reported yet.
+    // Whether rfPower() has been reported by a backend this session, or is still
+    // the class default (#5518): m_rfPower{100} is indistinguishable from a real
+    // 100%. Cleared by resetState() on every disconnect. Unlike
+    // RadioCapabilities::transmitDriveControl (can it be confirmed, per backend),
+    // this says whether it has been.
     bool    haveTransmitStatus() const { return m_haveTransmitStatus; }
 
     // The same question for maxPowerLevel(), asked SEPARATELY (#5733 review).
@@ -79,16 +74,11 @@ public:
     // false the moment we ask for something until the radio echoes it.
     bool    rfPowerIsFromRadio() const { return m_rfPowerFromRadio; }
 
-    // Forget who reported the power, WITHOUT the rest of resetState().
-    //
-    // For the backend-teardown path (#5733 review). resetState() emits six TX
-    // signals — transmittingChanged, moxChanged, tuneChanged, apdStateChanged,
-    // micStateChanged, holdBreakInDelayArmedChanged — and one of
-    // RadioModel::teardownBackend()'s three call sites is ~RadioModel(), where
-    // emitting into half-destroyed consumers is a hazard rather than a courtesy.
-    // Only the provenance needs to cross that seam: the VALUES are harmless once
-    // nothing vouches for them, because every publisher gates on these latches.
-    // Emits nothing, on purpose.
+    // Clear power provenance without the rest of resetState(), for
+    // RadioModel::teardownBackend() (#5733). resetState() emits six TX signals, and
+    // one teardown caller is ~RadioModel(), where consumers are half-destroyed.
+    // Values are harmless once unvouched, since every publisher gates on these
+    // latches. Emits nothing, on purpose.
     void    resetPowerProvenance() {
         m_haveTransmitStatus = false;
         m_haveMaxPowerLevel = false;
@@ -96,16 +86,11 @@ public:
     }
     int     tunePower()     const { return m_tunePower; }
     bool    isTuning()      const { return m_tune; }
-    // CW admission while TUNE is active (#5422). Measured on a FLEX-8400 fw
-    // 4.2.20: a `cw key 1` that arrives while the radio holds a tune carrier
-    // keys the transmitter at TUNE power (the CW RF power setting is ignored),
-    // and on key-up the radio stays in TX with no carrier and tune=1 until
-    // TUNE is pressed off. CWX text keys at TUNE power the same way. So no CW
-    // source keys while tuning: key-down is refused, key-up is never refused
-    // (a guard that flips while a key is held must not strand a keyed
-    // transmitter — fail closed is key UP). m_tune is optimistic from
-    // startTune() and reconciled from radio status, so the guard closes from
-    // the TUNE click itself, not after the round trip.
+    // CW admission while TUNE is active (#5422; FLEX-8400 fw 4.2.20): `cw key 1`
+    // during a tune carrier keys at TUNE power and on key-up the radio stays in TX
+    // with tune=1; CWX does the same. So key-down and CWX are refused while
+    // tuning; key-up is never refused (fail closed is key UP). m_tune is set
+    // optimistically by startTune(), so the guard closes on the click.
     bool    admitsCwKeyEdge(bool down) const { return !down || !m_tune; }
     bool    admitsCwxSend() const { return !m_tune; }
     bool    isMox()         const { return m_mox; }
@@ -377,16 +362,11 @@ public:
     void setSpeechProcessorEnable(bool on);
     void setSpeechProcessorLevel(int level);
     void setSpeechProcessorLevelMaximum(int maximum);
-    // Adopt speech-processor state that did NOT come from this model — the
-    // client-side compressor on a host-modulating backend, where PROC drives our
-    // own DSP and the operator can also reach that same compressor through the
-    // Aetherial strip.
-    //
-    // Updates the state and notifies the UI WITHOUT emitting commandReady, which
-    // is the whole point: the setters above are operator INTENT and must stay
-    // that way (Principle II), so an observer that mirrored engine state back
-    // through them would echo our own state as a fresh command and, with the
-    // strip on the other end, oscillate. Returns true when something changed.
+    // Adopt speech-processor state not originated here (the client-side
+    // compressor on a host-modulating backend, also reachable via the Aetherial
+    // strip). Notifies the UI without emitting commandReady: the setters above are
+    // operator intent, and mirroring engine state through them would echo and
+    // oscillate with the strip. Returns true when something changed.
     bool applySpeechProcessorState(bool on, int level);
     // Adopt a mic selection the OPERATOR did not choose — a radio whose input
     // this client cannot select forces the source, and the model must agree
@@ -625,16 +605,11 @@ private:
     int  m_cwPitch{600};      // 100–6000 Hz
     bool m_cwBreakIn{false};
     int  m_cwDelay{500};      // 0–2000 ms
-    // The break-in delay the operator explicitly set: the last value passed to
-    // setCwDelay(). Written there and nowhere else — never from a radio status,
-    // never on enabling the hold — so it cannot drift onto a WPM-derived QSK
-    // floor or hold a value the operator never picked. When m_holdBreakInDelay
-    // is set, setCwSpeed() re-asserts this after a speed change so SmartSDR's
-    // speed-linked floor walk can't hot-switch an inline amp. -1 = the operator
-    // has set no delay this session (nothing to hold). Cleared by resetState(),
-    // which RadioModel::onDisconnected() calls on EVERY disconnect — not only a
-    // radio swap — so one session's value is never re-asserted in the next
-    // (#5288). holdBreakInDelayArmed() exposes that gap to the UI.
+    // The break-in delay the operator last set via setCwDelay(); written nowhere
+    // else (never from status), so it can't drift onto a QSK floor. With
+    // m_holdBreakInDelay, setCwSpeed() re-asserts it after a speed change. -1 =
+    // nothing set this session; resetState() clears it on every disconnect
+    // (#5288). holdBreakInDelayArmed() exposes that to the UI.
     int  m_cwDelayHeld{-1};
     // Client-side opt-in, default off. Persisted by PhoneCwApplet in
     // AppSettings("CwHoldBreakInDelay"), not radio state — survives resetState().

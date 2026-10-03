@@ -16,24 +16,15 @@ namespace AetherSDR {
 class QrzClient;
 class CtyDatParser;
 
-// Application-wide callsign-lookup facade: QRZ client + lazy on-disk cache
-// + photo download.  Every consumer (CW decoder card, lookup dialog, and
-// the future SSB voice-decoder card) goes through here so a busy net never
-// hits QRZ twice for the same station.
-//
-//   lookup("KI6BCJ")  →  infoReady(info, fromCache)   [+ photoReady later]
-//                     or lookupFailed(call, message)
-//
-// Cache: one JSON file in QStandardPaths::CacheLocation, entries expire
-// after kCacheTtlSec (7 days).  A stale entry is refreshed from the
-// network but still served as a fallback when the refresh fails (offline
-// operation keeps working).  Station photos land next to it under
-// qrz-photos/ and ride the same TTL.
-//
-// Credentials: username + enable flag in the AppSettings["QrzLookup"]
-// blob (QrzLookupSettings, Principle V), password in the OS keychain
-// (key "qrz_password") — never in the settings file.  Call
-// reloadConfiguration() after the setup tab changes any of them.
+// App-wide callsign-lookup facade (QRZ client + on-disk cache + photos), so a
+// busy net never hits QRZ twice for one station.
+//   lookup("KI6BCJ") -> infoReady(info, fromCache) [+ photoReady later]
+//                    or lookupFailed(call, message)
+// Cache: one JSON file in CacheLocation, TTL kCacheTtlSec (7 days); a stale entry
+// is refreshed but still served if the refresh fails. Photos in qrz-photos/,
+// same TTL. Username + enable flag in AppSettings["QrzLookup"]
+// (QrzLookupSettings), password in the OS keychain ("qrz_password"). Call
+// reloadConfiguration() after any change.
 class CallsignLookupService : public QObject {
     Q_OBJECT
 

@@ -9,19 +9,12 @@ struct Entry {
     ModelCapabilities caps;
 };
 
-// Mirrors FlexLib/ModelInfo.cs Platform / Has4Meters / Has2Meters /
-// HasLoopA / HasLoopB columns (Principle I — FlexLib is the model
-// authority).  Keep this table in sync with FlexLib when Flex ships a
-// new model — the tests/model_capabilities_test harness will fail loudly
-// if a flag drifts away from the upstream source.
-//
-// Ordering matters: capabilitiesFor() returns the first substring match,
-// so longer/suffix variants must come before their base model — an exact
-// "FLEX-6700R" status string must not match "FLEX-6700" first, and the
-// "S" server variants ("MLS-9601", "CLS-9301") must precede the base
-// "ML-9600"/"CL-9300" families they'd otherwise be mistaken for.  Family
-// entries (ML-9600, AU-510, AU-520) intentionally catch their W/X/M
-// variants (ML-9600W, AU-510M, ...) by substring.
+// Mirrors FlexLib/ModelInfo.cs Platform / Has4Meters / Has2Meters / HasLoopA /
+// HasLoopB; keep in sync when Flex ships a model (tests/model_capabilities_test).
+// capabilitiesFor() returns the first substring match, so suffix variants
+// precede their base ("FLEX-6700R" before "FLEX-6700", "MLS-9601"/"CLS-9301"
+// before "ML-9600"/"CL-9300"). Family entries (ML-9600, AU-510, AU-520)
+// intentionally catch their W/X/M variants by substring.
 constexpr Entry kTable[] = {
     // model key      platform                   4m     2m     LoopA  LoopB  Diversity NTP    Slices
     {"FLEX-6300",  {RadioPlatform::Microburst, false, false, false, false, false,    false, 2}},

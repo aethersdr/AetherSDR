@@ -33,10 +33,12 @@
         void stop()  {}
         bool isConnected() const { return false; }
         QString deviceName() const { return {}; }
+        void reportState() { emit stateReported(false, {}); }
     signals:
         void tuneSteps(int steps);
         void buttonEvent(const QString& signature, int action);
         void connectionChanged(bool connected, const QString& name);
+        void stateReported(bool connected, const QString& name);
     };
     } // namespace AetherSDR
 #endif
