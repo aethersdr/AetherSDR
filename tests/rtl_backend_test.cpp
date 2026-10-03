@@ -59,9 +59,8 @@ struct RtlSdrBackendTestAccess {
     // The same wiring with the connected flag still false.
     static void wireOnly(RtlSdrBackend& backend, RtlSdrWorker* worker)
     {
-        backend.m_worker.reset(worker);
-        backend.wireWorker();
-        worker->start();
+        connectWith(backend, worker);
+        backend.m_connected = false;
     }
     static inline RtlCaptureTransaction::Token workerToken;
 };
@@ -72,7 +71,7 @@ namespace {
 
 // A USB reader that ignores cancellation, as a wedged libusb stack does, so
 // stopReading() gives up and disconnectRadio() strands it. It emits spectrum
-// from its own thread through the DDC, the production path.
+// from its own thread through the production worker-to-backend binding.
 class StuckWorker : public rtl::RtlSdrWorker {
 public:
     StuckWorker() : RtlSdrWorker(nullptr) {}

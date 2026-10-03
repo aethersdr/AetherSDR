@@ -78,7 +78,7 @@ retain the newest value, including the paired DSP state and squelch field mask.
 | --- | --- | --- |
 | Flex | Independent DSP enable/level fields, AF gain/mute/balance, separate squelch writes, RX port and per-slice lock through the guarded sink | Slice manual notch (TNF is separate), new daemon audio capability |
 | Icom | Paired NB/NR, ANF enable, manual-notch position, AF gain, squelch threshold, profile-supported RX port and global dial lock | AF mute/balance, Flex extended DSP |
-| HL2 | Existing RX-worker NB and receiver mixer gain/mute/balance | Radio-side NR/ANF/manual notch or squelch |
+| HL2 | Existing RX-worker NB, CW APF, mode-aware squelch and receiver mixer gain/mute/balance | Radio-side NR/ANF/manual notch |
 | RTL (optional) | Confirmed gain/mute/balance and FM/FM-N squelch for sparse configured receiver IDs | DSP or radio antenna controls; injected-USB model tests are offline |
 | Demo | NB and ANF affect the existing production signal generator | Independent AF mixer or new advertised DSP capabilities |
 | ANAN | Existing WDSP NB, slice mixer gain/mute/balance and client-only tune lock | Additional DSP or transport |
@@ -86,7 +86,11 @@ retain the newest value, including the paired DSP state and squelch field mask.
 `ReceiveDispatch` distinguishes a dispatched operation, a client-only lock, and
 an unsupported operation. It is not hardware acknowledgement. Unsupported
 requests feed the existing one-shot unsupported-control notice and log. Icom's
-global lock is distinct from Flex's slice lock; a family with neither retains
+mute/balance and Demo AF gain/mute/balance, squelch and NB level are explicitly
+refused; optimistic presentation alone is not evidence of backend dispatch.
+Changing these refusals to client-local success requires a maintainer decision
+and proof of the local effect; this migration does not invent that effect.
+Icom's global lock is distinct from Flex's slice lock; a family with neither retains
 the local tune lock. No `RadioCapabilities` fields or serialized feature records
 change. In particular, Flex and Icom desktop AF support does not authorize the
 daemon's guarded receive-audio methods.
@@ -96,10 +100,13 @@ suppression mute, band-recall release and reassertion use an explicit compatibil
 origin. NRS firmware-default profile recall likewise carries a restore origin;
 normal observations remain passive. Existing Kiwi/squelch/APF/antenna tests now
 observe the typed dispatch surface, not retired raw-command signals.
+HL2, ANAN and RTL refuse the primary-native suppression origin: they did not
+mute native audio for Kiwi before this migration either. Typed compatibility
+requests do not add that missing handoff; only the existing Flex path is retained.
 
 The extended backend contract test checks all Flex field encodings and separate
-readback, Icom scheduler output, actual HL2 worker NB configuration and mixer
-configuration, and Demo's worker blanker state and ANF effect on generated
+readback, Icom scheduler output, actual HL2 worker NB/APF/squelch configuration
+and mixer configuration, and Demo's worker blanker state and ANF effect on generated
 samples. The Demo worker is read through a test-only friend on its own thread;
 this is not a fake firmware peer. New model tests cover both construction paths,
 unique wiring, stale IDs, reconnect, off-thread refusal, nested edits, deletion,
