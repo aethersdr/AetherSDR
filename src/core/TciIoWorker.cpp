@@ -27,8 +27,11 @@ constexpr qsizetype kMailboxItems = 256;
 constexpr qsizetype kTextBytes = 64 * 1024;
 }
 
-TciIoWorker::TciIoWorker(QObject* parent) : QObject(parent), m_txChronoTimer(this)
+TciIoWorker::TciIoWorker(QObject* parent)
+    : QObject(parent), m_keepAliveTimer(this), m_txChronoTimer(this)
 {
+    m_keepAliveTimer.setInterval(int(kKeepAlivePingMs));
+    connect(&m_keepAliveTimer, &QTimer::timeout, this, &TciIoWorker::checkKeepAlive);
     m_rxSend = [this](quint64 id, const QByteArray& data) { return sendBinary(id, data); };
     m_rxBacklog = [this](quint64 id) {
         const auto client = m_clients.constFind(id);
@@ -109,6 +112,8 @@ bool TciIoWorker::start(quint16 requestedPort)
         return false;
     }
     connect(m_server, &QWebSocketServer::newConnection, this, &TciIoWorker::acceptConnections);
+    m_keepAliveClock.start();
+    m_keepAliveTimer.start();
     return true;
 }
 
@@ -124,6 +129,7 @@ void TciIoWorker::stop()
         m_mailboxBytes = 0;
         m_overloaded = false;
     }
+    m_keepAliveTimer.stop();
     stopChrono();
     for (const Client& client : std::as_const(m_clients)) {
         client.lifetime->live.store(false, std::memory_order_release);
@@ -236,6 +242,10 @@ void TciIoWorker::acceptConnections()
         connect(socket, &QWebSocket::binaryMessageReceived, this, [this, id](const QByteArray& data) {
             receiveBinary(id, data);
         });
+        connect(socket, &QWebSocket::pong, this, [this, id](quint64, const QByteArray&) {
+            const auto it = m_clients.find(id);
+            if (it != m_clients.end()) { it->awaitingPong = false; }
+        });
         connect(socket, &QWebSocket::errorOccurred, this, [this, id, socket](QAbstractSocket::SocketError error) {
             auto it = m_clients.find(id);
             if (it != m_clients.end()) { it->error = int(error); it->errorText = socket->errorString(); }
@@ -334,6 +344,42 @@ qint64 TciIoWorker::sendBinary(quint64 id, const QByteArray& message)
         return -1;
     }
     return it->socket->sendBinaryMessage(message);
+}
+
+// Probes every open socket and tears down any that stops answering.
+//
+// This is the case no application-level rule can cover: a client that loses
+// power, or whose cable is pulled, never sends a close frame and never stops
+// owning PTT. Detection otherwise falls through to TCP retransmission, which
+// on Linux defaults to roughly 13-15 minutes with the transmitter keyed for
+// all of it. A dead peer answers neither ping nor pong, so the deadline here
+// is what bounds that.
+//
+// Closing is the whole action. The disconnected handler already invalidates
+// the producer and emits clientClosed, which is what reaches abortTciPtt --
+// so this can only ever end an emission, never start or resume one.
+void TciIoWorker::checkKeepAlive()
+{
+    Q_ASSERT(QThread::currentThread() == thread());
+    const qint64 now = m_keepAliveClock.isValid() ? m_keepAliveClock.elapsed() : 0;
+    const QList<quint64> ids = m_clients.keys();
+    for (const quint64 id : ids) {
+        const auto it = m_clients.find(id);
+        if (it == m_clients.end() || !it->socket) { continue; }
+        if (!it->lifetime || !it->lifetime->live.load(std::memory_order_acquire)) { continue; }
+        if (it->awaitingPong) {
+            if (now - it->pingSentAtMs >= kKeepAliveDeadlineMs) {
+                qCWarning(lcCat) << "TciServer: client" << id
+                                 << "stopped answering keepalive; closing";
+                closeClient(id, QWebSocketProtocol::CloseCodeGoingAway,
+                            QStringLiteral("TCI keepalive timeout"));
+            }
+            continue;                      // one probe outstanding at a time
+        }
+        it->awaitingPong = true;
+        it->pingSentAtMs = now;
+        it->socket->ping();
+    }
 }
 
 void TciIoWorker::closeClient(quint64 id, QWebSocketProtocol::CloseCode code, const QString& reason)

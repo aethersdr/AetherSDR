@@ -103,6 +103,11 @@ private:
         qsizetype textBytes{0};
         int error{-1};
         QString errorText;
+        // Keepalive probe state. Deliberately two fields rather than one
+        // sentinel: the monotonic clock starts at zero, so "a long time ago"
+        // is a negative number and cannot also mean "nothing outstanding".
+        bool awaitingPong{false};
+        qint64 pingSentAtMs{0};
     };
     struct RxClient {
         TciStreamConfig config;
@@ -115,6 +120,7 @@ private:
         bool retired{false};
     };
     void acceptConnections();
+    void checkKeepAlive();
     void publishRxLevel(int channel, float rms);
     void publishTxLevel(float rms);
     void publishTelemetry();
@@ -143,6 +149,15 @@ private:
     std::function<qint64(quint64)> m_rxBacklog;
     std::function<void(quint64, QWebSocketProtocol::CloseCode, const QString&)> m_rxClose;
     static constexpr qint64 kMaxRxBacklogBytes = 256 * 1024;
+    // Liveness for TCI sockets. Nothing in this protocol requires a client to
+    // say anything while it holds PTT -- a hardware-PTT session sends no bytes
+    // at all between trx:true and trx:false -- so silence cannot be read as
+    // death, and the only honest probe is one the transport answers itself.
+    static constexpr qint64 kKeepAlivePingMs = 5000;
+    // Three missed pings. Comfortably longer than any stall a loaded client
+    // should produce, and roughly two orders of magnitude shorter than the
+    // tcp_retries2 default this otherwise falls through to.
+    static constexpr qint64 kKeepAliveDeadlineMs = 15000;
     float m_rxChannelGain[8]{1,1,1,1,1,1,1,1};
     qint64 m_rxAudioFramesSent{0};
     QMutex m_mailboxMutex;
@@ -152,6 +167,8 @@ private:
     bool m_drainScheduled{false};
     bool m_overloaded{false};
     bool m_accepting{true};
+    QTimer m_keepAliveTimer;
+    QElapsedTimer m_keepAliveClock;
     QTimer m_txChronoTimer;
     quint64 m_txClient{0};
     int m_txChronoTrx{0};
