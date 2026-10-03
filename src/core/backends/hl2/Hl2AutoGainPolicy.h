@@ -265,6 +265,13 @@ struct AutoGainConfig {
     return c;
 }
 
+// How long a bandscope-licensed release must stay clean before the probe
+// interval returns to base. One licensed block is not proof: on a busy band the
+// next clip came 0.1-35 s after a release, 8 of 10 within 30 s
+// (tests/Hl2AutoGainReplayD168.h). The release interval stays 3 s, so a quiet
+// band still gets 24 dB back in ~12 s.
+inline constexpr std::int64_t kBandscopeProbeConfirmMs = 30000;
+
 // probingReleaseConfig() with each release licensed by measured headroom
 // (requireHeadroomToRelease) and bandscope rail blocks counted as clips
 // (headroomRailAttacks; inert while the bandscope is off). headroomBiasDb has no
@@ -277,6 +284,7 @@ struct AutoGainConfig {
     double releaseHeadroomMarginDb = 2.0) noexcept
 {
     AutoGainConfig c = probingReleaseConfig();
+    c.probeConfirmMs = kBandscopeProbeConfirmMs;
     c.requireHeadroomToRelease = true;
     c.headroomBiasDb = headroomBiasDb;
     c.releaseHeadroomMarginDb = releaseHeadroomMarginDb;
@@ -527,14 +535,19 @@ constexpr int clampInt(int lo, int v, int hi) noexcept
         next.cleanMs = 0;
 
         // Record the trip: the DEEPEST attenuation at which this band has been
-        // seen to rail. A repeat within the backoff window widens both the
-        // dwell and the margin, so a band that keeps tripping is probed less
-        // often and from further away each time.
-        if (next.tripOffsetDb < 0 || next.offsetDb >= next.tripOffsetDb) {
+        // seen to rail. A repeat within the backoff window widens the dwell and
+        // the margin. A clip while a probe is unconfirmed is a failed probe
+        // wherever it lands: the probe released BELOW the remembered offset, so
+        // the offset test alone would never score it.
+        const bool probeInFlight = cfg.probeConfirmMs > 0 && next.releasedSinceTrip;
+        if (next.tripOffsetDb < 0 || next.offsetDb >= next.tripOffsetDb
+            || probeInFlight) {
             const bool repeat = next.tripOffsetDb >= 0
                              && next.releasedSinceTrip
                              && next.sinceTripMs <= cfg.tripBackoffWindowMs;
-            next.tripOffsetDb = next.offsetDb;
+            if (next.offsetDb > next.tripOffsetDb) {
+                next.tripOffsetDb = next.offsetDb;
+            }
             next.sinceTripMs = 0;
             next.releasedSinceTrip = false;
             if (repeat) {

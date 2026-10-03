@@ -284,26 +284,51 @@ void report(const char* variant, int seconds, const ModelRun& m)
                 static_cast<long long>(m.maxDwellMs / 1000));
 }
 
+// Clipping has stopped for good and every block shows ample room. Returns the
+// ms until the offset is back at 0, or -1 if it is not within `limitMs`.
+int msToFullRelease(AutoGainState st, const AutoGainConfig& cfg, int limitMs,
+                    AutoGainState* end = nullptr)
+{
+    int releasedAtMs = -1;
+    for (int nowMs = d168::kTickMs; nowMs <= limitMs; nowMs += d168::kTickMs) {
+        AutoGainObservation o;
+        o.samples = d168::kSamplesPerTick;
+        o.elapsedMs = d168::kTickMs;
+        o.availableOffsetDb = 32;
+        o.headroom = bandscopeHeadroom(blockStats(64), 500);   // 30 dB of room
+        st = autoGainStep(st, o, cfg).next;
+        if (st.offsetDb == 0 && releasedAtMs < 0) {
+            releasedAtMs = nowMs;
+        }
+    }
+    if (end != nullptr) {
+        *end = st;
+    }
+    return releasedAtMs;
+}
+
 }  // namespace
 
 int main()
 {
     const double bias = gatedPeakBiasDbForPeriod(1000);
     const AutoGainConfig law = bandscopeReleaseConfig(bias);
+    // The law the recording ran: a release believed after 3 s, 2 dB margin.
+    AutoGainConfig recorded = bandscopeReleaseConfig(bias, 2.0);
+    recorded.probeConfirmMs = 3000;
     const Plant plant = plantFrom80m();
 
-    // ---- 1. THE RECORD, REPRODUCED ----------------------------------------
+    // 1. The record, reproduced with the 3 s confirm.
     {
-        const Run r80 = replay(k80m, law);
-        const Run r30 = replay(k30m, law);
-        report("as shipped", k80m, r80);
-        report("as shipped", k30m, r30);
+        const Run r80 = replay(k80m, recorded);
+        const Run r30 = replay(k30m, recorded);
+        report("confirm 3 s", k80m, r80);
+        report("confirm 3 s", k30m, r30);
         check(r80.trace.size() == 13 && matchesRecord(k80m, r80),
-              "1.1 80 m: the law takes the 13 recorded changes, each within "
-              "one tick of the app log");
+              "1.1 80 m: believing a release after 3 s takes the 13 recorded "
+              "changes, each within one tick of the app log");
         check(r30.trace.size() == 10 && matchesRecord(k30m, r30),
-              "1.2 30 m: the law takes the 10 recorded changes, each within "
-              "one tick of the app log");
+              "1.2 30 m: and the 10 recorded changes, likewise");
         check(r80.blindMs + r80.heldMoreMs <= 13 * d168::kTickMs
               && r30.blindMs + r30.heldMoreMs <= 10 * d168::kTickMs,
               "1.3 the law's offset leaves the radio's for at most one tick "
@@ -312,20 +337,70 @@ int main()
               "1.4 the probe interval widens once, to 60 s, in each leg");
     }
 
-    // ---- 2. THE SAME BAND FOR HALF AN HOUR --------------------------------
+    // 2. The shipped law on the same inputs.
+    {
+        const Run r80 = replay(k80m, law);
+        const Run r30 = replay(k30m, law);
+        report("shipped", k80m, r80);
+        report("shipped", k30m, r30);
+        check(r80.trace.size() == 7,
+              "2.1 80 m: 7 changes where the 3 s confirm made 13");
+        check(r80.maxDwellMs == 240000,
+              "2.2 80 m: three failed probes widen the interval to 240 s");
+        check(r80.blindMs <= 5000 && r80.heldMoreMs <= 60000,
+              "2.3 80 m: under 5 s without clip evidence, under 60 s of "
+              "attenuation the radio had given back");
+        // The 30 m re-clip 35.3 s after a release is outside the 30 s confirm.
+        check(r30.trace.size() == 10 && r30.maxDwellMs == 120000,
+              "2.4 30 m: still 10 changes in the leg; the last failed probe "
+              "leaves the interval at 120 s, not 30 s");
+    }
+
+    // 3. The same band for half an hour (a model).
     {
         check(plant.timeToClipMs.size() == 7 && plant.peakAt6Db.size() >= 200,
-              "2.0 the plant has the seven recorded times-to-clip and the "
+              "3.0 the plant has the seven recorded times-to-clip and the "
               "blocks read at 6 dB");
+        const ModelRun old1800 = model(plant, recorded, 1800);
         const ModelRun m300 = model(plant, law, 300);
         const ModelRun m1800 = model(plant, law, 1800);
-        report("as shipped", 300, m300);
-        report("as shipped", 1800, m1800);
-        check(m1800.changes > 60,
-              "2.1 on the modelled band the law changes gain more than 60 "
-              "times in 30 minutes");
-        check(m1800.maxDwellMs <= 60000,
-              "2.2 and the probe interval never widens past 60 s");
+        report("confirm 3 s", 1800, old1800);
+        report("shipped", 300, m300);
+        report("shipped", 1800, m1800);
+        check(old1800.changes > 60 && old1800.maxDwellMs <= 60000,
+              "3.1 with the 3 s confirm: more than 60 changes in 30 minutes, "
+              "interval never past 60 s");
+        check(m1800.changes <= 20,
+              "3.2 shipped: at most 20 changes in 30 minutes");
+        check(m1800.maxDwellMs == law.dwellBackoffMaxMs,
+              "3.3 shipped: the interval reaches its 480 s cap while probes fail");
+        check(m1800.clippedObs < old1800.clippedObs / 2,
+              "3.4 shipped: fewer than half the clipped observations");
+    }
+
+    // 4. A band that goes quiet gets its gain back.
+    {
+        AutoGainState base;
+        base.offsetDb = 24;
+        base.sinceAttackMs = 0;
+        const int fromBase = msToFullRelease(base, law, 60000);
+        std::printf("       quiet band, 24 dB held, interval at base: full gain "
+                    "after %.1f s\n", fromBase / 1000.0);
+        check(fromBase > 0 && fromBase <= 30000 + 3 * 3000 + 4 * d168::kTickMs,
+              "4.1 from the base interval: 24 dB back within 30 s + 3 x 3 s");
+
+        AutoGainState capped = base;
+        capped.tripOffsetDb = 24;
+        capped.dwellRequiredMs = law.dwellBackoffMaxMs;
+        AutoGainState end;
+        const int fromCap = msToFullRelease(capped, law, 540000, &end);
+        std::printf("       quiet band, 24 dB held, interval at the cap: full "
+                    "gain after %.1f s\n", fromCap / 1000.0);
+        check(fromCap > 0 && fromCap <= 480000 + 3 * 3000 + 4 * d168::kTickMs,
+              "4.2 from the 480 s cap: 24 dB back within 480 s + 3 x 3 s");
+        check(end.dwellRequiredMs == 0 && !end.releasedSinceTrip,
+              "4.3 and 30 s clean after the last release the interval is back "
+              "at base");
     }
 
     if (g_failures == 0) {

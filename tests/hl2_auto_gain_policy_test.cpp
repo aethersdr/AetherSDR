@@ -1133,6 +1133,51 @@ int main()
         }
     }
 
+    // 27. A probe that fails below the trip offset is still a failure. The
+    // loop tripped at 6 dB, released to 0 dB on a licensed reading, and clips
+    // there: 0 is below the remembered 6, and the probe is unconfirmed.
+    {
+        const AutoGainConfig kBandscope =
+            bandscopeReleaseConfig(gatedPeakBiasDbForPeriod(1000));
+        AutoGainState st;
+        st.offsetDb = 6;
+        st.tripOffsetDb = 6;
+        st.cleanMs = 600000;
+        st.sinceReleaseMs = 600000;
+        st.sinceAttackMs = 600000;
+        AutoGainObservation o;
+        o.samples = 152;
+        o.elapsedMs = 123;
+        o.headroom.state = BandscopeHeadroom::Measured;
+        o.headroom.headroomDb = 30.0;
+        const AutoGainAction released = autoGainStep(st, o, kBandscope);
+        check(released.reason == AutoGainReason::Release
+              && released.next.offsetDb == 0 && released.next.releasedSinceTrip,
+              "27.0 the fixture releases to 0 dB with the probe in flight");
+        o.overloadSamples = 1;
+        const AutoGainAction failed = autoGainStep(released.next, o, kBandscope);
+        check(failed.next.dwellRequiredMs == 2 * kBandscope.releaseDwellMs,
+              "27.1 a clip below the remembered trip offset, probe unconfirmed, "
+              "doubles the probe interval");
+        check(failed.next.tripOffsetDb == 6 && !failed.next.releasedSinceTrip,
+              "27.2 it keeps the deepest trip offset and ends the probe");
+        check(failed.next.offsetDb == 6,
+              "27.3 and the attack itself is unchanged: one 6 dB step");
+
+        // No probe in flight: the same clip is an ordinary first trip there.
+        AutoGainState idle = released.next;
+        idle.releasedSinceTrip = false;
+        const AutoGainAction plain = autoGainStep(idle, o, kBandscope);
+        check(plain.next.dwellRequiredMs == 0 && plain.next.offsetDb == 6,
+              "27.4 without a probe in flight the same clip earns no backoff");
+
+        check(kBandscope.probeConfirmMs == 30000
+              && kBandscope.releaseIntervalMs == 3000
+              && kBandscope.releaseDwellMs == 30000,
+              "27.5 bandscope law: release believed after 30 s clean; release "
+              "interval 3 s and base probe interval 30 s");
+    }
+
     // WHAT NO TEST HERE SUPPLIES: the plant. Property 7 tests the controller
     // against a model of the radio, and nothing in it says the model is the
     // radio. Specifically absent — the true observation rate at each sample
