@@ -299,7 +299,8 @@ void ShackSwitchApplet::setModel(AntennaGeniusModel* model)
     connect(m_model, &AntennaGeniusModel::deviceDiscovered, this,
             [this](const AgDeviceInfo& info) {
         const bool isShackSwitch = info.name.contains("ShackSwitch", Qt::CaseInsensitive);
-        if (isShackSwitch && !m_model->isConnected() && !m_model->isConnecting())
+        if (isShackSwitch && !m_model->isConnected() && !m_model->isConnecting()
+            && !m_model->isAuthBlockedFor(info))
             m_model->connectToDevice(info);
     });
 
