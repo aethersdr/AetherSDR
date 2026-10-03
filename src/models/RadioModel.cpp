@@ -1892,8 +1892,9 @@ namespace {
 // setter is real (setters default to no-ops):
 //   rfpower, tunepower    canTransmit + transmitDriveControl (setTxPower;
 //                         tunepower rides setTune()'s tunePowerPercent at
-//                         key-down, and while TUNE is keyed it is routed only
-//                         if tunePowerAppliesLive says setTunePower() is real)
+//                         key-down; while TUNE is keyed it is routed only to a
+//                         live carrier (tuneCarrierLive()) whose backend
+//                         declares tunePowerAppliesLive)
 //   miclevel              canTransmit (setMicGain)
 //   filter_low/_high      hasTxFilterControls (setTxFilter)
 //   cw pitch N            N is the pitch last handed to THIS backend, because
@@ -1904,7 +1905,8 @@ namespace {
 bool transmitCommandDeliveredThroughSeam(const QString& command,
                                          const RadioCapabilities& caps,
                                          int cwPitchHandedToBackend,
-                                         bool tuneKeyed)
+                                         bool tuneKeyed,
+                                         bool tuneCarrierLive)
 {
     static const QString kCwPitch = QStringLiteral("cw pitch ");
     if (command.startsWith(kCwPitch)) {
@@ -1929,7 +1931,8 @@ bool transmitCommandDeliveredThroughSeam(const QString& command,
             routed = caps.canTransmit && caps.transmitDriveControl.has_value();
         } else if (key == QLatin1String("tunepower")) {
             routed = caps.canTransmit && caps.transmitDriveControl.has_value()
-                && (!tuneKeyed || caps.transmitDriveControl->tunePowerAppliesLive);
+                && (!tuneKeyed
+                    || (tuneCarrierLive && caps.transmitDriveControl->tunePowerAppliesLive));
         } else if (key == QLatin1String("miclevel")) {
             routed = caps.canTransmit;
         } else if (key == QLatin1String("filter_low")
@@ -2129,8 +2132,7 @@ RadioModel::RadioModel(QObject* parent)
     // Not keyed: setTune() carries the value at the next key-down.
     connect(&m_transmitModel, &TransmitModel::tunePowerCommandIssued, this,
             [this](int percent) {
-        if (!m_backend || !m_transmitModel.isTuning()
-            || !(activeTxActivities() & static_cast<unsigned>(TxActivity::Tune))) {
+        if (!m_backend || !tuneCarrierLive()) {
             return;
         }
         const RadioCapabilities caps = backendCapabilities();
@@ -2364,7 +2366,8 @@ RadioModel::RadioModel(QObject* parent)
         if (!hasCommandPlane() && m_backend
             && transmitCommandDeliveredThroughSeam(trimmed, m_backend->capabilities(),
                                                    m_cwPitchHandedToBackend,
-                                                   m_transmitModel.isTuning())) {
+                                                   m_transmitModel.isTuning(),
+                                                   tuneCarrierLive())) {
             qCDebug(lcProtocol).noquote()
                 << "RadioModel: no command plane; value already delivered through the seam:"
                 << cmd;

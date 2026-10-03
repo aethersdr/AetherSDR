@@ -81,7 +81,8 @@ public:
 };
 
 // The capability set of a host-modulating transmitter with no command plane —
-// the Hermes-Lite 2's answers to the questions the gate asks.
+// the Hermes-Lite 2's answers to the questions the gate asks. The parameter is
+// how a NOT-live backend is spelled: no shipped backend answers that way today.
 RadioCapabilities hostModulatingTransmitter(bool tunePowerAppliesLive = true)
 {
     RadioCapabilities c;
@@ -258,6 +259,8 @@ static void tunePowerNotForwardedWithoutTuneActivity()
     f.radio.transmitModel().setTunePower(30);
     check(f.backend->tunePowers.isEmpty(),
           "tuning without a live Tune activity: no setTunePower() reaches the backend");
+    check(f.droppedStartingWith(QStringLiteral("transmit set tunepower=")),
+          "tuning without a live Tune activity: the drop notice stands");
 }
 
 // Without tunePowerAppliesLive, a change while TUNE is keyed reaches no seam

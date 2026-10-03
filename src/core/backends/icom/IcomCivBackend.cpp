@@ -2067,6 +2067,8 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
             // During TUNE the register holds the tune drive, not the operator's
             // RF power; publishing it would make a relative step (wheel, CAT)
             // start from the tune level and become the value the unkey restores.
+            // CI-V cannot tell that confirming read from a front-panel change, so
+            // an RF-power knob turned during TUNE is not seen either.
             if (m_tuning) {
                 return;
             }
@@ -4983,8 +4985,16 @@ void IcomCivBackend::setTxPower(int percent)
 // A carrier whose admission has lapsed takes no drive change.
 void IcomCivBackend::setTunePower(int percent)
 {
-    if (!m_tuning
-        || !TxCoordinator::Command{m_tuneOperation, true}.permitsDispatch(TxCoordinator::monotonicMs())) {
+    if (!m_tuning) {
+        return;
+    }
+    // The admission setTune(true) checked: the carrier's operation and this
+    // backend's transmit context. The verb returns nothing, so a refusal is logged.
+    const qint64 now = TxCoordinator::monotonicMs();
+    if (!TxCoordinator::Command{m_tuneOperation, true}.permitsDispatch(now)
+        || !transmitContext().permitsDispatch(now)) {
+        qCWarning(lcIcomTx) << "Icom: TUNE power" << percent
+                            << "% not applied: the TUNE carrier's transmit admission has lapsed";
         return;
     }
     writeTxPowerLevel(percent);

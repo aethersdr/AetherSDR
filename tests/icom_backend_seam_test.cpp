@@ -410,6 +410,19 @@ void testTuneDriveRestore()
     }
 }
 
+QStringList g_txWarnings;
+QtMessageHandler g_txPrevious = nullptr;
+void captureTxWarning(QtMsgType type, const QMessageLogContext& ctx, const QString& msg)
+{
+    if (type == QtWarningMsg && ctx.category && std::strcmp(ctx.category, "aether.icom.tx") == 0) {
+        g_txWarnings << msg;
+        return;
+    }
+    if (g_txPrevious) {
+        g_txPrevious(type, ctx, msg);
+    }
+}
+
 // TUNE power applies live to the carrier, and RF power set during TUNE is what
 // the unkey restores, not a write over the tune drive.
 void testTunePowerAppliesLive()
@@ -524,6 +537,29 @@ void testTunePowerAppliesLive()
         stopped.setTunePower(60);
         check(powerWrites(Access::issued(stopped)).empty(),
               "tune power after the TUNE operation was stopped writes nothing");
+    }
+    {
+        // The carrier's operation still stands but this backend's transmit
+        // context has lapsed: refused like setTune(true), and logged.
+        TxTestAuthority keyedBy;
+        TxTestAuthority lapsed;
+        IcomCivBackend contextGone;
+        contextGone.setTransmitContext(keyedBy.context);
+        Access::prepare(contextGone, "IC-705");
+        contextGone.setTune(true, 10, keyedBy.operation);
+        Access::settle(contextGone);
+        Access::forget(contextGone);
+        check(Access::tuning(contextGone), "premise: TUNE keyed");
+        lapsed.coordinator.emergencyStop();
+        contextGone.setTransmitContext(lapsed.context);
+        g_txWarnings.clear();
+        g_txPrevious = qInstallMessageHandler(captureTxWarning);
+        contextGone.setTunePower(60);
+        qInstallMessageHandler(g_txPrevious);
+        check(powerWrites(Access::issued(contextGone)).empty(),
+              "tune power with the transmit context lapsed writes nothing");
+        check(g_txWarnings.size() == 1 && g_txWarnings.first().contains(QLatin1String("not applied")),
+              "a refused tune power is logged");
     }
 }
 
