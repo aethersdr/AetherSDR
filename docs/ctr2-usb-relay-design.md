@@ -221,7 +221,8 @@ Host behavior:
   gets at most one CLOSED; DATA the device sends before answering is
   ignored.
 - **USB device removed, or Stop pressed:** close the radio connection (and
-  send CLOSED if the device is still there).
+  send CLOSED if the device is still there). If Start follows at once, that
+  CLOSED reaches the device before the new link's first HELLO.
 - **AetherSDR disconnects from the radio or switches radios:** stop the
   relay as for Stop. The relay always targets the radio AetherSDR is
   connected to, and AetherSDR's transmit indicator must keep showing that
@@ -332,7 +333,9 @@ block; a stalled controller can then never freeze the UI or other
 controllers. Nothing waits on that thread: queued output is cancelled
 between writes, a restart fences the queue (late acknowledgements from
 before the fence are ignored), and shutdown hands the port its final
-CLOSED and lets it delete itself once its writes finish. The per-link UDP
+CLOSED and lets it delete itself once its writes finish. A port reopened
+on the same device waits on its own thread, up to 1 s, until the previous
+port has closed it, so the old CLOSED cannot overtake the new link. The per-link UDP
 socket is bound to the interface that reaches the radio, and only that
 radio's datagrams are relayed back. Each direction's relay budget is 16 KiB
 in USB mode (256 KiB over Wi-Fi) so a drain fits the link's ~7 KB/s. Everything else runs on the GUI event loop, as the TCP relay
