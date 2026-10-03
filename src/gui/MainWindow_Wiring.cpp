@@ -6562,37 +6562,17 @@ void MainWindow::wireMeters()
     connect(&m_pgxlConn, &PgxlConnection::disconnected, this, [this]() {
         m_appletPanel->ampApplet()->setDirectConnected(false);
     });
-    // Radio amplifier status → AmpApplet telemetry (fallback path).
-    // The radio proxies PGXL telemetry fields (id, vac, vdd, meffa, state) in its
-    // amplifier status messages, so the applet keeps updating even when the direct
-    // PGXL TCP connection isn't established.  When direct TCP IS connected, that
-    // path is faster and higher-precision (the radio rebroadcast may round/lag),
-    // so we skip the radio fallback to avoid display jitter from two paths
-    // alternately writing slightly-different values.
-    connect(&m_radioModel.amplifier(), &AmpModel::telemetryUpdated,
-            this, [this](const QMap<QString, QString>& kvs) {
-        if (m_pgxlConn.isConnected()) return;
-        auto* amp = m_appletPanel->ampApplet();
-        // A FlexRadio relays no temperature in the amplifier status at all:
-        // the PA heatsink temperature arrives as the AMP `TEMP` meter
-        // (MeterModel::ampMetersChanged, below). The Harmonic Load heatsink
-        // temperature is available only over a direct connection to the PGXL.
-        if (kvs.contains("id"))
-            amp->setDrainCurrent(kvs["id"].toFloat());
-        if (kvs.contains("vdd"))
-            amp->setDrainVoltage(kvs["vdd"].toFloat());
-        if (kvs.contains("vac"))
-            amp->setMainsVoltage(kvs["vac"].toInt());
-        // The RELAYED MEffA state. This is the only place it appears on a
-        // station with no direct port-9008 socket, so it reads out — but it
-        // stays inert, because a write needs the rest of the `setup` group and
-        // only the socket can read that. See AmpApplet::setMeff.
-        if (kvs.contains("meffa"))
-            amp->setMeff(kvs["meffa"]);
-    });
+    // No PGXL telemetry is read from the radio's amplifier status. On a
+    // FLEX-8600 (SmartSDR 4.2.20) with a PGXL on firmware 3.9.8, that status
+    // carries only ip, model, serial_num, ant and state, both idle and while
+    // transmitting. The readings the radio does relay arrive as meters: FWD,
+    // RL, DRV, ID and TEMP (see the MeterModel connections below). Vdd, Vac,
+    // the Harmonic Load heatsink temperature, fan mode and MEffA are
+    // available only over the direct connection. See
+    // docs/pgxl-telemetry-source-evidence.md.
     // Fan mode is sent via AmpModel (wired in AmpApplet::setAmpModel), because
-    // a `setup` write carries the whole group (nickname, meffa, ledintens,
-    // fanmode, authcode) and a fanmode-only write would drop the rest.
+    // a `setup` write carries the whole group (see AmpModel::writeSetupGroup)
+    // and a fanmode-only write would drop the rest.
     // OPERATE button → standby/operate via the radio's amplifier API
     // (AmpModel::setOperate; no-op without an amp handle) (#4094).
     connect(m_appletPanel->ampApplet(), &AmpApplet::operateToggled, this, [this](bool on) {
@@ -7132,17 +7112,30 @@ void MainWindow::wireMeters()
         updateStatusBarMinimumWidth();
         if (present) updatePgxlStyle();
     });
+    // Drain current and PA heatsink temperature, relayed by the radio as the
+    // PGXL's ID and TEMP meters. The applet prefers these while they are
+    // fresh and falls back to the PGXL's own values; see
+    // AmpApplet::setRadioDrainCurrent.
+    connect(&m_radioModel.meterModel(), &MeterModel::ampVitalsChanged,
+            this, [this](float drainCurrent, bool drainCurrentValid, bool drainCurrentUpdated,
+                         float paHeatsinkTemp, bool paHeatsinkTempValid,
+                         bool paHeatsinkTempUpdated) {
+        auto* amp = m_appletPanel->ampApplet();
+        // Each setter restamps its reading's freshness, so only the reading
+        // that arrived (or was withdrawn) is passed on.
+        if (drainCurrentUpdated || !drainCurrentValid)
+            amp->setRadioDrainCurrent(drainCurrent, drainCurrentValid);
+        if (paHeatsinkTempUpdated || !paHeatsinkTempValid)
+            amp->setRadioPaHeatsinkTemp(paHeatsinkTemp, paHeatsinkTempValid);
+    });
     connect(&m_radioModel.meterModel(), &MeterModel::ampMetersChanged,
-            this, [this](float fwdPwr, float swr, float temp,
+            this, [this](float fwdPwr, float swr, float /*temp*/,
                          float drivePwr, bool driveValid) {
         // hasAmpPower() says whether a forward-power or SWR sample has ever
         // landed. ampMetersChanged also fires for TEMP and DRV, and the applet
         // must not read those as the relay being the live source of power.
         m_appletPanel->ampApplet()->setRadioMeters(
             fwdPwr, swr, m_radioModel.meterModel().hasAmpPower());
-        // The radio's AMP TEMP meter is the PA heatsink temperature. It is
-        // the only temperature a FlexRadio relays.
-        m_appletPanel->ampApplet()->setPaHeatsinkTemp(temp);
         // Exciter power at the amplifier's input — the amp's own DRV meter,
         // relayed by the radio. There is no second source for it: the PGXL's
         // port-9008 status carries no drive field (probed on firmware 3.8.9;

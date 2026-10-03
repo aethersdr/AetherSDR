@@ -1199,7 +1199,11 @@ void RadioModel::setupBackend(const QString& family)
 
     // aetherd 2.4 (#4094): power-amp status decoded in the backend drives AmpModel.
     connect(m_backend.get(), &IRadioBackend::amplifierChanged, this,
-            [this](const AmpDelta& delta) { m_amplifier.applyChanges(delta); });
+            [this](const AmpDelta& delta) {
+        m_amplifier.applyChanges(delta);
+        // AMP meters reach the amplifier by matching its handle.
+        m_meterModel.setAmpHandle(m_amplifier.handle().toUInt(nullptr, 0));
+    });
 
     // aetherd 2.4 (#4092): TGXL tuner status decoded in the backend drives TunerModel.
     connect(m_backend.get(), &IRadioBackend::tunerChanged, this,
