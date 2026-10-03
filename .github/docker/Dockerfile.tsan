@@ -91,18 +91,16 @@ RUN git clone --depth 1 --branch "${QT_GIT_TAG}" "${QT_GIT}/qtbase.git" /tmp/qtb
 # configured through the installed qtbase (qt-configure-module), which
 # carries the sanitizer feature over.
 #
-# QtMultimedia runs its BUILD TOOLS from the base image's uninstrumented Qt
-# (QT_HOST_PATH + QT_FORCE_FIND_TOOLS). Its shaders are compiled with
-# `qsb -O`, which runs spirv-opt through QProcess, and the TSan-built qsb of
-# Qt 6.12 hangs there: the child exits and qsb waits on its pipe forever, so
-# the image build sat at QtMultimedia's [2/300] until the job timed out. The
-# tools need no instrumentation; the libraries still get it (checked below).
-# QT_HOST_ROOT pins the plain Qt before QT_ROOT is re-pointed further down.
-# The checks read each binary's own DT_NEEDED entries: ldd lists libtsan for
-# anything linked against the TSan QtCore, instrumented or not.
+# QtMultimedia builds with the base image's uninstrumented tools
+# (QT_HOST_PATH + QT_FORCE_FIND_TOOLS): Qt 6.12's TSan-built `qsb -O` hangs
+# waiting on its spirv-opt child. The libraries keep TSan. QT_HOST_ROOT pins
+# the plain Qt before QT_ROOT is re-pointed below. The checks read each
+# binary's own DT_NEEDED entries, because ldd also lists libtsan for anything
+# linked against the TSan QtCore; a failed read fails the build.
 ENV QT_HOST_ROOT=${QT_ROOT}
 RUN test -x "${QT_HOST_ROOT}/bin/qsb" \
-    && ! readelf -d "${QT_HOST_ROOT}/bin/qsb" | grep -q 'NEEDED.*libtsan' \
+    && host_dynamic="$(readelf -d "${QT_HOST_ROOT}/bin/qsb")" \
+    && ! printf '%s\n' "$host_dynamic" | grep -q 'NEEDED.*libtsan' \
     && for m in qtshadertools qtwebsockets qtserialport qtmultimedia; do \
         git clone --depth 1 --branch "${QT_GIT_TAG}" "${QT_GIT}/${m}.git" "/tmp/${m}-src" \
         && host_tools="" \
