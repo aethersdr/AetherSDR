@@ -213,13 +213,33 @@ static void receiverTuneKeepsDisplayAverage()
     check(waitFor([&] { return frames > beforeGainFrames; }), "new gain emits complete frame");
     check(std::abs(lastDc - raw) < .02,
           "gain transition discards incompatible amplitude history");
+    const T::State beforePpm = rtl::RtlCaptureBackendTestAccess::state(receiver);
     device->iqLevel = 130;
     receiver.invokeExtension("rtl", "ppm.set", 1, 1);
     check(waitFor([&] { return !rtl::RtlCaptureBackendTestAccess::busy(receiver); }),
           "PPM change completes its hardware readback");
+    const T::State afterPpm = rtl::RtlCaptureBackendTestAccess::state(receiver);
+    SharedCapturePolicy::CaptureDescriptor expectedCapture = beforePpm.capture;
+    expectedCapture.generation = afterPpm.capture.generation;
+    T::Hardware expectedHardware = beforePpm.hardware;
+    expectedHardware.ppm = 1;
+    check(afterPpm.token.session == beforePpm.token.session
+        && afterPpm.token.revision > beforePpm.token.revision
+        && afterPpm.capture.generation > beforePpm.capture.generation
+        && afterPpm.capture == expectedCapture && afterPpm.hardware == expectedHardware
+        && afterPpm.receivers == beforePpm.receivers && afterPpm.receivingIds == beforePpm.receivingIds,
+          "PPM changes capture generation without changing WFM receiver or RF geometry");
     const int beforePpmFrames = frames;
+    const QByteArray obsolete(rtl::RtlSdrDdc::kSpectrumBinCount * int(sizeof(float)), '\0');
+    rtl::RtlCaptureBackendTestAccess::spectrum(receiver, obsolete, beforePpm.token);
+    check(frames == beforePpmFrames,
+          "PPM adoption rejects queued spectrum from the old capture");
+    rtl::RtlCaptureBackendTestAccess::spectrum(receiver, obsolete, afterPpm.token);
+    check(frames == beforePpmFrames + 1,
+          "PPM adoption accepts the same spectrum payload with the current token");
+    const int afterPpmControlFrames = frames;
     for (int i = 0; i < 8; ++i) { device->block(); }
-    check(waitFor([&] { return frames > beforePpmFrames; }), "PPM change emits complete observation");
+    check(waitFor([&] { return frames > afterPpmControlFrames; }), "PPM change emits complete observation");
     const double weak = 20 * std::log10(std::sqrt(2.) * (130 - 127.5) / 127.5
                                        * .35875 * (65535. / 65536));
     check(rtl::RtlCaptureBackendTestAccess::state(receiver).hardware.ppm == 1
