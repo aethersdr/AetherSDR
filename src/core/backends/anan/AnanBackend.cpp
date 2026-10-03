@@ -254,12 +254,12 @@ AnanBackend::AnanBackend(QObject* parent)
     });
     connect(m_client, &P2Client::connectionError, this,
             [this](const QString& reason) { emit connectionError(reason); });
-    connect(m_client, &P2Client::dropsUpdated, this, [](quint64) {
-        // No LinkStats wiring in this phase -- see the design plan's
-        // "explicitly not in this commit" list. Connected so the signal has
-        // a receiver rather than going nowhere; a future commit can surface
-        // it through IRadioBackend::linkStats().
-    });
+    // Drops reach the readout through the counters snapshot below, which
+    // carries the same total on a fixed cadence. Not wired per-drop: the
+    // LinkStats tick is deliberately periodic rather than event-driven, so a
+    // link that has gone silent still reports.
+    connect(m_client, &P2Client::linkCountersUpdated, this,
+            &AnanBackend::onLinkCounters);
     // Only DDC0 feeds this DSP. Like ddc0IqReady above, notification and
     // processing run directly on the I/O thread, with the DSP as context.
     // Invalidate its partial FFT before the discontinuous block arrives.
@@ -405,6 +405,25 @@ RadioCapabilities AnanBackend::capabilities() const
     c.hasAgcThreshold = true; // Host receiver DSP implements threshold/off gain.
     c.manufacturer = QStringLiteral("Apache Labs");
     c.model = QStringLiteral("ANAN-G2");
+    // ---- PA telemetry ----
+    // hasSupplyVoltageTelemetry stays FALSE even though the radio does send a
+    // supply-rail reading (P2Protocol decodes it). Raw ADC counts become volts
+    // only against the RF board's ADC reference -- 5 V on one board, 3.3 V on
+    // another, a 1.5x difference that would read 21 V for a 13.8 V rail -- and
+    // NOTHING THE RADIO REPORTS IDENTIFIES WHICH. The board id cannot answer
+    // it: see DiscoveryReply::isSaturn(), which is explicitly a discovery-time
+    // picker filter and not for gating backend behaviour, because board type is
+    // a p2app launch option rather than a fact about the hardware. So the row
+    // stays withdrawn until the reference comes from somewhere load-bearing or
+    // from the operator; a confidently wrong voltage is worse than none.
+    //
+    // There is NO PA temperature in this protocol. The radio's whole analog
+    // payload is six fields and none of them is a temperature, so the readout
+    // can never resolve and is withdrawn rather than left showing a placeholder.
+    // hasPaTemperatureTelemetry stays false on its own (nothing is received);
+    // this says the stronger thing -- that nothing CAN be.
+    c.paTelemetryAudit = RadioCapabilities::PaTelemetryAudit{
+        /*temperatureAbsent=*/true};
     c.canCreateSlices = false;
     c.maxSlices = 1;
     c.maxPanadapters = 1;
@@ -730,6 +749,12 @@ void AnanBackend::disconnectRadio()
     m_tuneThrottleTimer->stop();
     m_tunePendingApply = false;
     m_pendingBandwidthKsps = 0;
+    // The next session's counters restart from zero in P2Client::start(), so a
+    // cached snapshot from this one would make the first tick of the next read
+    // as a huge backward jump in every total.
+    m_linkCounters = {};
+    m_linkCountersSeen = false;
+    m_lastSnapshotRxBytes = 0;
     // A genuine operator-initiated disconnect always fires disconnected(),
     // even one that lands mid-rate-change -- this is not the zoom case
     // m_rateChanging exists to hide.
@@ -1403,6 +1428,41 @@ void AnanBackend::defineMeters()
     d.high = 0.0;
     d.description = QStringLiteral("Receive signal level");
     emit meterDefined(d);
+}
+
+IRadioBackend::LinkStats AnanBackend::linkStats() const
+{
+    LinkStats s;
+    // Nothing measured yet: the consumer keeps whatever source it already had
+    // rather than being handed a snapshot of zeros.
+    if (!m_connected || !m_linkCountersSeen)
+        return s;
+    s.reported = true;
+    s.alive = m_linkCounters.rxBytes > m_lastSnapshotRxBytes;
+    s.rxBytes = static_cast<qint64>(m_linkCounters.rxBytes);
+    s.txBytes = static_cast<qint64>(m_linkCounters.txBytes);
+    s.rxPackets = m_linkCounters.rxPackets;
+    s.rxPacketsLost = m_linkCounters.drops;
+    s.localEndpoint = m_linkCounters.localEndpoint;
+    // LEFT AT -1, WHICH THE STRUCT DEFINES AS "NOT MEASURED" AND THE MODEL
+    // HONOURS BY IGNORING. This transport is stream-only: the radio is told
+    // where to send and then sends, with no request/response exchange to time,
+    // so there is no round trip here to measure. Reporting 0 instead would
+    // render as a perfect "< 1 ms" link -- a measurement never taken.
+    // rttMs, jitterMs, gapMs and gapMaxMs all keep their -1 defaults.
+    return s;
+}
+
+void AnanBackend::onLinkCounters(const P2Client::LinkCounters& counters)
+{
+    // First snapshot of a session compares against ZERO, not against itself:
+    // P2Client::start() resets its counters, and comparing a first snapshot to
+    // itself would report a dead link on the very tick after a connect that
+    // only happened because DDC0 frames arrived.
+    m_lastSnapshotRxBytes = m_linkCountersSeen ? m_linkCounters.rxBytes : 0;
+    m_linkCounters = counters;
+    m_linkCountersSeen = true;
+    emit linkStatsUpdated(linkStats());
 }
 
 void AnanBackend::onDspMeter(float dbfs)

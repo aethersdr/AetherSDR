@@ -1727,6 +1727,11 @@ private:
     QTimer* m_cpuTimer{nullptr};
     QLabel* m_paTempLabel{nullptr};
     QLabel* m_supplyVoltLabel{nullptr};
+    // The container holding the two labels above. Held so the whole stack can
+    // come down when BOTH its rows are withdrawn: reserveTelemetryStack() pins
+    // its minimum width, so hiding only the children would leave a reserved
+    // empty gap between two separators.
+    QWidget* m_paStack{nullptr};
     QLabel* m_networkLabel{nullptr};
     QTimer m_networkTooltipRefreshTimer;
     QTimer m_perfHeartbeatTimer;

@@ -92,6 +92,11 @@ public:
     void setKeying(bool key, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {}) override;
     void invokeExtension(const QString& ns, const QString& verb,
                          quint64 requestId, const QVariant& arg = {}) override;
+    // Transport snapshot for the status bar's Network field and Network
+    // Diagnostics. Synchronous, and reads only the cache onLinkCounters() keeps
+    // on this thread -- never the client's own counters, which belong to the
+    // I/O thread. The push half is onLinkCounters(), on the client's tick.
+    [[nodiscard]] LinkStats linkStats() const override;
 
     // ---- pure-function pieces, exposed static for testability ----
     // (matches the WdspChannel/Hl2RxDsp precedent of exposing normally-
@@ -183,6 +188,21 @@ private:
     // Declares SLC:LEVEL to the meter seam; on every connect, before the
     // first reading can arrive. See its definition.
     void defineMeters();
+    // One client snapshot -> one LinkStats push. The FIXED cadence is the
+    // client's timer, not ours: this runs on whatever the client published, and
+    // it must keep arriving after the radio goes quiet, because "nothing came
+    // this second" is the observation the heartbeat's alarm path waits for
+    // (IRadioBackend::LinkStats).
+    void onLinkCounters(const P2Client::LinkCounters& counters);
+    // The last snapshot the client published, cached on THIS thread so the
+    // synchronous linkStats() getter never reads the I/O thread's counters --
+    // see P2Client::LinkCounters for why that read would be a race.
+    P2Client::LinkCounters m_linkCounters;
+    bool m_linkCountersSeen = false;
+    // rxBytes at the previous snapshot, for LinkStats::alive -- a link that is
+    // bound and counting but has gone quiet must read as dead, which a
+    // cumulative total alone cannot say.
+    quint64 m_lastSnapshotRxBytes = 0;
     // One WDSP S-meter reading (dBFS) -> dBm, smoothed, published on a tick.
     void onDspMeter(float dbfs);
     // The same smoother Hl2Backend publishes through, so the two receivers'

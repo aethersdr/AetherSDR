@@ -121,6 +121,32 @@ public:
     [[nodiscard]] bool isRunning() const noexcept { return m_running; }
     [[nodiscard]] quint64 droppedPackets() const noexcept { return m_drops; }
 
+    // ---- transport counters, for IRadioBackend::LinkStats ----
+    //
+    // I/O-THREAD ONLY, exactly like droppedPackets() above: every one of these
+    // is written from handleDatagram()/the send paths on this object's own
+    // thread, with no lock. The backend lives on another thread and must NOT
+    // read them directly -- it consumes linkCountersUpdated() below, which is
+    // delivered to its thread by the queued connection. The LinkStats contract
+    // says the same thing: a backend with worker-side values caches them on its
+    // own thread.
+    //
+    // Session-cumulative, reset by start(). EVERY datagram the socket handed us
+    // counts, including Mic Data and Status: this measures the TRANSPORT, not
+    // the IQ stream, so a session whose DDC traffic has stalled while status
+    // packets still arrive must not read as a dead link.
+    struct LinkCounters {
+        quint64 rxBytes = 0;
+        quint64 rxPackets = 0;
+        // Only bytes the socket ACCEPTED; see sendTo() for why a refused
+        // datagram is not counted.
+        quint64 txBytes = 0;
+        quint64 drops = 0;
+        // "ip:port" of the bound local socket, empty when not bound. The port
+        // is the one the radio streams DDC0 to (see the class comment).
+        QString localEndpoint;
+    };
+
 signals:
     void linkUp();       // first valid DDC0 frame seen
     void linkDown();     // stop() called, or a link failure once that exists
@@ -140,6 +166,12 @@ signals:
     // connecting per-DDC signals.
     void ddcIqReady(int ddcIndex, const std::vector<std::complex<float>>& block);
     void dropsUpdated(quint64 totalDrops);
+    // A transport snapshot, on a FIXED cadence while running rather than when
+    // traffic arrives -- the tick has to keep coming after the radio goes
+    // quiet, because "nothing arrived this second" is what the heartbeat's
+    // alarm path is waiting for (IRadioBackend::LinkStats). Emitted from the
+    // I/O thread; cross-thread consumers get it queued.
+    void linkCountersUpdated(const P2Client::LinkCounters& counters);
     // This DDC's next IQ block is discontinuous, including accepted rewinds
     // and duplicates. Emitted before ddcIqReady/ddc0IqReady in the same
     // handleDatagram() call so direct consumers can clear partial FFTs first.
@@ -239,6 +271,16 @@ private:
     // always reported) -- an operator watching for a lossy link cares that
     // the session is dropping, not which receiver.
     quint64 m_drops = 0;
+    // What each counts, and why they are I/O-thread-only, is on LinkCounters.
+    quint64 m_rxBytes = 0;
+    quint64 m_rxPackets = 0;
+    quint64 m_txBytes = 0;
+    // Matches the status bar's own refresh rate. Faster would publish snapshots
+    // no one reads; slower would delay the heartbeat's silence verdict.
+    static constexpr int kLinkCountersMs = 1000;
+    QTimer* m_linkCountersTimer = nullptr;
+    void publishLinkCounters();
+    [[nodiscard]] QString localEndpoint() const;
 
     // How many DDCs this session enabled, so onReadyRead() knows which
     // sender ports belong to it. Kept alongside m_activeDdcs (rather than
@@ -269,3 +311,10 @@ private:
 };
 
 }  // namespace AetherSDR::anan
+
+// Not a seam payload (IRadioBackend.h rule 4 covers those): this one stays
+// inside the ANAN backend, client -> backend. Declared anyway because Qt 6's
+// function-pointer queued delivery works without it but the NAME-based paths do
+// not -- QSignalSpy in the tests being the one that would otherwise capture
+// nothing and pass vacuously.
+Q_DECLARE_METATYPE(AetherSDR::anan::P2Client::LinkCounters)

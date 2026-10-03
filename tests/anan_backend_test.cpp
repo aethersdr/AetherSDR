@@ -506,6 +506,39 @@ int main(int argc, char** argv)
         check(!last.has_value(), "balance publishes nothing, having no delta field");
     }
 
+    // ---- PA telemetry capability: the readout is withdrawn, not blanked ----
+    {
+        AnanBackend backend;
+        const auto caps = backend.capabilities();
+        check(caps.paTelemetryAudit.has_value(),
+              "ANAN declares a PA telemetry audit");
+        check(caps.paTelemetryAudit && caps.paTelemetryAudit->temperatureAbsent,
+              "the audit states PA temperature is ABSENT FROM THE PROTOCOL -- the"
+              " claim the status bar withdraws its readout on");
+        check(!caps.hasPaTemperatureTelemetry,
+              "and no temperature is claimed as received");
+        // The radio DOES send a supply reading, but raw counts become volts only
+        // against an ADC reference nothing in the protocol identifies, so the row
+        // stays withdrawn rather than showing a value at a 1.5x guess.
+        check(!caps.hasSupplyVoltageTelemetry,
+              "no supply voltage is claimed while its ADC reference is unknown");
+        check(!caps.hasPaCurrentTelemetry,
+              "no PA drain current is claimed");
+    }
+
+    // ---- LinkStats: silence before the first snapshot, never a zeroed one ----
+    {
+        AnanBackend backend;
+        const auto idle = backend.linkStats();
+        check(!idle.reported,
+              "an unconnected backend reports NO transport, so the consumer keeps"
+              " its own source instead of being handed zeros");
+        check(idle.rttMs < 0 && idle.jitterMs < 0 && idle.gapMs < 0
+                  && idle.gapMaxMs < 0,
+              "every timing field defaults to the struct's negative"
+              " \"not measured\" sentinel, which must not render as zero");
+    }
+
     if (g_failures == 0)
         std::fprintf(stderr, "anan_backend_test: all checks passed\n");
     return g_failures == 0 ? 0 : 1;
