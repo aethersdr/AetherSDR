@@ -432,8 +432,8 @@ void MeterModel::removeMeter(int index)
                               m_hasAmpDrvValue);
     }
     if (ampVitalWithdrawn) {
-        emit ampVitalsChanged(m_ampDrainCurrent, m_hasAmpDrainCurrentValue,
-                              m_ampTemp, m_hasAmpTempValue);
+        emit ampVitalsChanged(m_ampDrainCurrent, m_hasAmpDrainCurrentValue, false,
+                              m_ampTemp, m_hasAmpTempValue, false);
     }
     if (index == m_tgxlFwdIdx) {
         m_tgxlFwdIdx = -1;
@@ -1001,7 +1001,8 @@ void MeterModel::applyValues(const QVector<quint16>& ids, const QVector<Value>& 
     bool hwChanged = false;
     bool ampChanged = false;
     bool tgxlChanged = false;
-    bool ampVitalsChangedFlag = false;
+    bool ampIdUpdated = false;
+    bool ampTempUpdated = false;
 
     for (int i = 0; i < n; ++i) {
         const int idx = static_cast<int>(ids[i]);
@@ -1193,11 +1194,11 @@ void MeterModel::applyValues(const QVector<quint16>& ids, const QVector<Value>& 
             m_ampTemp = v;
             m_hasAmpTempValue = true;
             ampChanged = true;
-            ampVitalsChangedFlag = true;
+            ampTempUpdated = true;
         } else if (idx == m_ampIdIdx) {
             m_ampDrainCurrent = v;
             m_hasAmpDrainCurrentValue = true;
-            ampVitalsChangedFlag = true;
+            ampIdUpdated = true;
         }
 
         emit meterUpdated(idx, v);
@@ -1277,9 +1278,9 @@ void MeterModel::applyValues(const QVector<quint16>& ids, const QVector<Value>& 
                               m_hasAmpDrvValue);
     if (tgxlChanged)
         emit tgxlMetersChanged(m_tgxlFwdPwr, m_tgxlSwr);
-    if (ampVitalsChangedFlag)
-        emit ampVitalsChanged(m_ampDrainCurrent, m_hasAmpDrainCurrentValue,
-                              m_ampTemp, m_hasAmpTempValue);
+    if (ampIdUpdated || ampTempUpdated)
+        emit ampVitalsChanged(m_ampDrainCurrent, m_hasAmpDrainCurrentValue, ampIdUpdated,
+                              m_ampTemp, m_hasAmpTempValue, ampTempUpdated);
 }
 
 int MeterModel::resolveTxWaveformIndex(const QMap<int, int>& byTxSource,

@@ -1738,7 +1738,7 @@ void testAmplifierVitalsAreRouted()
     float amps = -1.0f, degC = -1.0f;
     bool ampsValid = false, degCValid = false;
     QObject::connect(&model, &MeterModel::ampVitalsChanged,
-                     [&](float a, bool av, float t, bool tv) {
+                     [&](float a, bool av, bool, float t, bool tv, bool) {
                          amps = a; ampsValid = av; degC = t; degCValid = tv;
                      });
 
@@ -1753,6 +1753,37 @@ void testAmplifierVitalsAreRouted()
            !ampsValid && degCValid);
 }
 
+// Each reading carries its own "arrived in this packet" flag. While only ID
+// keeps arriving, TEMP is not reported as updated, so a consumer cannot restamp
+// a stale heatsink temperature as fresh.
+void testVitalFreshnessIsPerReading()
+{
+    MeterModel model;
+    model.setTgxlHandle(kTgxlHandle);
+    defineAmpManifest(model);
+    model.defineMeter(ampMeter(15, kPgxlHandle, "ID", "Amps", 0.0, 70.0));
+
+    bool idUpdated = false, tempUpdated = false;
+    QObject::connect(&model, &MeterModel::ampVitalsChanged,
+                     [&](float, bool, bool iu, float, bool, bool tu) {
+                         idUpdated = iu; tempUpdated = tu;
+                     });
+
+    model.updateValues({15, 16}, {qint16(19.2f * 256.0f), qint16(44.1f * 64.0f)});
+    report("a packet carrying both readings marks both updated",
+           idUpdated && tempUpdated);
+
+    idUpdated = tempUpdated = false;
+    model.updateValues({15}, {qint16(20.0f * 256.0f)});
+    report("a packet carrying only ID marks ID updated and TEMP not",
+           idUpdated && !tempUpdated);
+
+    idUpdated = tempUpdated = false;
+    model.updateValues({16}, {qint16(45.0f * 64.0f)});
+    report("a packet carrying only TEMP marks TEMP updated and ID not",
+           !idUpdated && tempUpdated);
+}
+
 // A tuner's ID meter, should one ever appear, must not land on the amplifier.
 void testTunerDrainCurrentIsNotRoutedToTheAmplifier()
 {
@@ -1762,7 +1793,7 @@ void testTunerDrainCurrentIsNotRoutedToTheAmplifier()
 
     bool sawValid = false;
     QObject::connect(&model, &MeterModel::ampVitalsChanged,
-                     [&](float, bool av, float, bool) { sawValid = sawValid || av; });
+                     [&](float, bool av, bool, float, bool, bool) { sawValid = sawValid || av; });
 
     model.updateValues({19}, {qint16(3.0f * 256.0f)});
     report("a tuner's drain current meter is not routed to the amplifier", !sawValid);
@@ -1778,7 +1809,7 @@ void testTunerTemperatureIsNotRoutedToTheAmplifier()
 
     bool sawValid = false;
     QObject::connect(&model, &MeterModel::ampVitalsChanged,
-                     [&](float, bool, float, bool tv) { sawValid = sawValid || tv; });
+                     [&](float, bool, bool, float, bool tv, bool) { sawValid = sawValid || tv; });
 
     model.updateValues({20}, {qint16(40.0f * 64.0f)});
     report("a tuner's temperature meter is not routed to the amplifier", !sawValid);
@@ -1792,10 +1823,19 @@ void testAmpAndTunerMetersSplitByHandleAfterALateHandle()
 {
     MeterModel model;
     defineAmpManifest(model);          // no TGXL handle yet
+    model.defineMeter(ampMeter(15, kPgxlHandle, "ID", "Amps", 0.0, 70.0));
+    model.defineMeter(ampMeter(19, kTgxlHandle, "ID", "Amps", 0.0, 70.0));
+    model.defineMeter(ampMeter(20, kTgxlHandle, "TEMP", "degC", 0.0, 100.0));
     model.setTgxlHandle(kTgxlHandle);  // learned afterwards
 
     float ampFwd = -1.0f;
     float tunerFwd = -1.0f;
+    float ampAmps = -1.0f, ampDegC = -1.0f;
+    QObject::connect(&model, &MeterModel::ampVitalsChanged,
+                     [&](float a, bool av, bool, float t, bool tv, bool) {
+                         if (av) ampAmps = a;
+                         if (tv) ampDegC = t;
+                     });
     QObject::connect(&model, &MeterModel::ampMetersChanged,
                      [&](float f, float, float, float, bool) { ampFwd = f; });
     QObject::connect(&model, &MeterModel::tgxlMetersChanged,
@@ -1805,6 +1845,14 @@ void testAmpAndTunerMetersSplitByHandleAfterALateHandle()
     model.updateValues({12, 17}, {rawDb(60.0f), rawDb(59.0f)});
     report("amplifier and tuner forward power split by handle",
            nearlyEqual(ampFwd, 1000.0f) && nearlyEqual(tunerFwd, 794.33f));
+
+    // The same rescan covers ID and TEMP: the tuner's readings (meters 19, 20)
+    // must not displace the amplifier's.
+    model.updateValues({15, 19, 20, 16},
+                       {qint16(19.2f * 256.0f), qint16(3.0f * 256.0f),
+                        qint16(40.0f * 64.0f), qint16(44.1f * 64.0f)});
+    report("amplifier and tuner drain current / temperature split by handle",
+           nearlyEqual(ampAmps, 19.2f) && nearlyEqual(ampDegC, 44.1f));
 }
 
 // The drive meter follows the same handle rule as FWD and RL. Only the PGXL
@@ -2003,6 +2051,7 @@ int main(int argc, char** argv)
     testAmplifierDriveIsAbsentWithoutTheMeter();
     testRemovingTheDriveMeterClearsTheReading();
     testAmplifierVitalsAreRouted();
+    testVitalFreshnessIsPerReading();
     testTunerDrainCurrentIsNotRoutedToTheAmplifier();
     testTunerTemperatureIsNotRoutedToTheAmplifier();
     testAmpAndTunerMetersSplitByHandleAfterALateHandle();

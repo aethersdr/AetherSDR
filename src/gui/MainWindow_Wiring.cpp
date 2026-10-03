@@ -7299,11 +7299,16 @@ void MainWindow::wireMeters()
     // fresh and falls back to the PGXL's own values; see
     // AmpApplet::setRadioDrainCurrent.
     connect(&m_radioModel.meterModel(), &MeterModel::ampVitalsChanged,
-            this, [this](float drainCurrent, bool drainCurrentValid,
-                         float paHeatsinkTemp, bool paHeatsinkTempValid) {
+            this, [this](float drainCurrent, bool drainCurrentValid, bool drainCurrentUpdated,
+                         float paHeatsinkTemp, bool paHeatsinkTempValid,
+                         bool paHeatsinkTempUpdated) {
         auto* amp = m_appletPanel->ampApplet();
-        amp->setRadioDrainCurrent(drainCurrent, drainCurrentValid);
-        amp->setRadioPaHeatsinkTemp(paHeatsinkTemp, paHeatsinkTempValid);
+        // Each setter restamps its reading's freshness, so only the reading
+        // that arrived (or was withdrawn) is passed on.
+        if (drainCurrentUpdated || !drainCurrentValid)
+            amp->setRadioDrainCurrent(drainCurrent, drainCurrentValid);
+        if (paHeatsinkTempUpdated || !paHeatsinkTempValid)
+            amp->setRadioPaHeatsinkTemp(paHeatsinkTemp, paHeatsinkTempValid);
     });
     connect(&m_radioModel.meterModel(), &MeterModel::ampMetersChanged,
             this, [this](float fwdPwr, float swr, float /*temp*/,

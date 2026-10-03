@@ -451,9 +451,14 @@ signals:
     // The PGXL's drain current (amps, "ID") and PA heatsink temperature
     // (degrees Celsius, "TEMP"), relayed by the radio. Each valid flag is false
     // when its meter does not exist or has been withdrawn; the float alongside
-    // is 0.0f and MUST NOT be rendered. Emitted on every sample of either.
+    // is 0.0f and MUST NOT be rendered. Each *Updated flag is true only when
+    // that reading arrived in the packet that caused the emit, so a consumer
+    // stamps freshness per reading; on a withdrawal both are false and the
+    // valid flags carry the change.
     void ampVitalsChanged(float drainCurrent, bool drainCurrentValid,
-                          float paHeatsinkTemp, bool paHeatsinkTempValid);
+                          bool drainCurrentUpdated,
+                          float paHeatsinkTemp, bool paHeatsinkTempValid,
+                          bool paHeatsinkTempUpdated);
 
     // Emitted when any meter value changes (for debug/generic display).
     void meterUpdated(int index, float value);
