@@ -107,9 +107,20 @@ bool SliceModel::normalizeFilterPolarity()
     return false;
 }
 
+// Setters belong to the owner thread; a worker-thread write would race the
+// model, so it is refused, and logged so a lost write stays diagnosable.
+bool SliceModel::refuseOffThread(const char* setter) const
+{
+    if (QThread::currentThread() == thread()) {
+        return false;
+    }
+    qWarning().noquote() << "SliceModel: refused off-thread" << setter << "on slice" << m_id;
+    return true;
+}
+
 void SliceModel::setFrequency(double mhz)
 {
-    if (QThread::currentThread() != thread()) { return; }
+    if (refuseOffThread(__func__)) { return; }
     if (m_locked) {
         notifyTuneBlockedByLock();
         return;
@@ -140,7 +151,7 @@ void SliceModel::setFrequency(double mhz)
 
 void SliceModel::tuneAndRecenter(double mhz)
 {
-    if (QThread::currentThread() != thread()) { return; }
+    if (refuseOffThread(__func__)) { return; }
     if (m_locked) {
         notifyTuneBlockedByLock();
         return;
@@ -171,7 +182,7 @@ void SliceModel::tuneAndRecenter(double mhz)
 
 void SliceModel::setMode(const QString& mode)
 {
-    if (QThread::currentThread() != thread()) { return; }
+    if (refuseOffThread(__func__)) { return; }
     if (confirmsControls()) {
         emit modeChangeRequested(mode);
         return;
@@ -241,7 +252,7 @@ void SliceModel::setMode(const QString& mode)
 
 void SliceModel::setFilterWidth(int low, int high)
 {
-    if (QThread::currentThread() != thread()) { return; }
+    if (refuseOffThread(__func__)) { return; }
     if (confirmsControls()) {
         ++m_userFilterEpoch;
         const QPointer<SliceModel> alive(this);
@@ -337,7 +348,7 @@ void SliceModel::setAdaptiveActive(bool on)
 
 void SliceModel::applyAdaptiveFilter(int low, int high)
 {
-    if (QThread::currentThread() != thread()) { return; }
+    if (refuseOffThread(__func__)) { return; }
     if (confirmsControls()) {
         const QPointer<SliceModel> alive(this);
         const quint64 revision = ++m_filterIntentRevision;
@@ -1071,10 +1082,8 @@ void SliceModel::setFmDeviation(int hz)
 
 void SliceModel::setAudioGain(float gain)
 {
-    if (QThread::currentThread() != thread()) { return; }
-    if (!std::isfinite(gain)) {
-        return;
-    }
+    if (refuseOffThread(__func__)) { return; }
+    if (!std::isfinite(gain)) { return; }
     gain = qBound(0.0f, gain, 100.0f);
     if (m_externalReceiveAudioReplacement) {
         if (m_externalReceiveAudioGain == gain) {
@@ -1107,7 +1116,7 @@ void SliceModel::setRfGain(float gain)
 
 void SliceModel::setAudioMute(bool mute)
 {
-    if (QThread::currentThread() != thread()) { return; }
+    if (refuseOffThread(__func__)) { return; }
     const bool previousVisibleMute = audioMute();
     if (m_externalReceiveAudioReplacement) {
         if (m_externalReceiveAudioMute == mute) {
@@ -1285,7 +1294,7 @@ void SliceModel::setEscPhaseShift(float deg)
 
 void SliceModel::setAudioPan(int pan)
 {
-    if (QThread::currentThread() != thread()) { return; }
+    if (refuseOffThread(__func__)) { return; }
     pan = qBound(0, pan, 100);
     if (m_externalReceiveAudioReplacement) {
         if (m_externalReceiveAudioPan == pan) {
@@ -1746,9 +1755,12 @@ void SliceModel::applyChanges(const SliceDelta& d)
         const int v = *d.agcThreshold;
         if (m_agcThreshold != v) { m_agcThreshold = v; emit agcThresholdChanged(v); }
     }
+    // Guarded for the same reason as the pair above: HL2 now publishes the
+    // off-level on every emitSliceState() too, and AgcCalibrationDialog wires
+    // agcOffLevelChanged to the calibrator exactly as it wires the threshold.
     if (d.agcOffLevel.has_value()) {
-        m_agcOffLevel = *d.agcOffLevel;
-        emit agcOffLevelChanged(m_agcOffLevel);
+        const int v = *d.agcOffLevel;
+        if (m_agcOffLevel != v) { m_agcOffLevel = v; emit agcOffLevelChanged(v); }
     }
     if (d.squelchOn.has_value() || d.squelchLevel.has_value()) {
         m_squelchOnKnown |= d.squelchOn.has_value();
@@ -1902,6 +1914,9 @@ void SliceModel::applyChanges(const SliceDelta& d)
     }
     if (freqChanged)
         emit frequencyChanged(m_frequency);
+    if (d.frequency.has_value() && m_frequencyReportedKnown) {
+        emit frequencyStatusReported(m_reportedFrequency);
+    }
     if (modeChanged_)   emit modeChanged(m_mode);
     if (filterChanged_) emit filterChanged(m_filterLow, m_filterHigh);
     if (previousObservation != m_receiveObservation) {

@@ -1547,9 +1547,13 @@ void MainWindow::wireVfoTelemetry(VfoWidget* vfo, SliceModel* s)
     // shows the operator-selected meter only on its own TX slice while
     // transmitting. No amp-operate gate (unlike the analog S-Meter below): the
     // meter reports the truth of whatever the operator selected.
+    // The mic value is the same "transmit level" the S-meter's Level face
+    // shows (MeterModel::transmitLevelFaceValue): MICPEAK on a radio that
+    // publishes no MIC meter (HL2), where MIC would sit on its floor.
     connect(&m_radioModel.meterModel(), &MeterModel::micMetersChanged,
-            vfo, [vfo](float micLevel, float, float micPeak, float compPeak) {
-        vfo->setMicLevel(micLevel, micPeak);
+            vfo, [this, vfo](float micLevel, float, float micPeak, float compPeak) {
+        vfo->setMicLevel(
+            m_radioModel.meterModel().transmitLevelFaceValue(micLevel, micPeak), micPeak);
         vfo->setTxCompression(compPeak);
     });
     connect(&m_radioModel.meterModel(), &MeterModel::txMetersChanged,
@@ -1914,6 +1918,38 @@ void MainWindow::onSliceAdded(SliceModel* s)
     });
     restoreCenterLockForPan(s->panId());
 
+    // Match radio status echoes to local tune commands so desktop tuning does
+    // not look like an external CAT-driven QSY.
+    connect(s, &SliceModel::frequencyCommandIssued, this,
+            [this, s](double mhz) {
+        m_pendingSliceFrequencyEchoes.record(
+            s->sliceId(), mhz, QDateTime::currentMSecsSinceEpoch());
+    });
+    connect(s, &SliceModel::frequencyStatusReported, this,
+            [this, s](double mhz) {
+        const bool sliceA = s->letter() == QLatin1String("A");
+        const bool splitRxSlice = s->sliceId() == m_splitRxSliceId;
+        if (m_pendingSliceFrequencyEchoes.consume(
+                s->sliceId(), mhz, QDateTime::currentMSecsSinceEpoch())) {
+            if (m_splitActive && sliceA && splitRxSlice) {
+                m_splitRxFrequencyMhz = mhz;
+            }
+            return;
+        }
+        // Slice A is the CAT FA/ZZFA target. Radio status carries no client
+        // identity, so an unmatched update from any client is indistinguishable.
+        if (!sliceA || !splitRxSlice) {
+            return;
+        }
+        if (AetherSDR::shouldCloseSplitOnQsyObservation(
+                m_splitQsySettings, m_splitActive, true, mhz,
+                m_splitRxFrequencyMhz)) {
+            qCDebug(lcDevices) << "Disabling split after RX QSY from"
+                               << m_splitRxFrequencyMhz << "to" << mhz;
+            disableSplit();
+        }
+    });
+
     // Connect slice state changes → spectrum overlay updates
     connect(s, &SliceModel::frequencyChanged, this, [this, s](double mhz) {
         // Don't snap overlay back to stale radio-confirmed freq during active
@@ -2079,6 +2115,8 @@ void MainWindow::onSliceAdded(SliceModel* s)
                 s->isDiversityChild(), s->diversityIndex());
         syncTxWaterfallSliceToSpectrums();
         updateSplitState();
+        // A radio-wide span control follows the TX slice's pane (#5750).
+        syncPanSpanControlPlacement();
 
         // TX flag just moved — keyer availability follows the TX slice (#4173).
         updateKeyerAvailability();
@@ -2171,6 +2209,8 @@ void MainWindow::onSliceAdded(SliceModel* s)
         // superseded by #4037's reattachSliceVisualsToPanadapter.
         clearCenterLockForSlice(s->sliceId(), /*clearPersistedIntent=*/true);
         reattachSliceVisualsToPanadapter(s);
+        // The TX slice moving pane moves a radio-wide span control (#5750).
+        syncPanSpanControlPlacement();
         updateKiwiSdrVirtualTrackingForSlice(s);
         refreshKiwiSdrWaterfallAvailability();
         syncKiwiSdrPanadapterUiStates();
@@ -2302,6 +2342,12 @@ void MainWindow::onSliceAdded(SliceModel* s)
 
     refreshSliceLinkUi();
     updateAetherDspModePolicy();
+
+    // A slice can arrive ALREADY flagged TX: RadioModel applies its fields
+    // before emitting sliceAdded, so the txSliceChanged lambda above never
+    // sees the false->true edge. Re-derive once now, or on connect the live
+    // span control stays on the fallback pane instead of the TX pane (#5750).
+    syncPanSpanControlPlacement();
 }
 
 void MainWindow::requestSliceClose(int sliceId)
@@ -2472,9 +2518,11 @@ void MainWindow::onSliceRemoved(int id)
         // the reason it is kept live for the whole split. The restore is
         // deferred past the radio's queued status burst. (#2242)
         recordSplitAudioMirror(/*deferRestore=*/true);
+        m_pendingSliceFrequencyEchoes.clear();
         m_splitActive = false;
         m_splitRxSliceId = -1;
         m_splitTxSliceId = -1;
+        m_splitRxFrequencyMhz = 0.0;
         if (auto* sw = spectrum()) sw->setSplitPair(-1, -1);
         if (auto* rx = m_radioModel.slice(rxId))
             rx->setTxSlice(true);
@@ -5281,6 +5329,8 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             this, &MainWindow::setKiwiSdrVirtualAntennaForSlice);
     connect(menu, &SpectrumOverlayMenu::flexRxAntennaSelected,
             this, &MainWindow::clearKiwiSdrVirtualAntennaForSlice);
+    connect(menu, &SpectrumOverlayMenu::antennaChoiceRefused,
+            this, &MainWindow::announceAntennaChoiceRefused);
 
     // ── Slice marker clicks ──────────────────────────────────────────────
     connect(sw, &SpectrumWidget::sliceClicked,
@@ -5343,22 +5393,17 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
 
     // ── WNB / RF Gain ────────────────────────────────────────────────────
     connect(menu, &SpectrumOverlayMenu::wnbToggled,
-            this, [this, sw, applet](bool on) {
+            this, [this, applet](bool on) {
         m_radioModel.sendCommand(
             QString("display pan set %1 wnb=%2").arg(applet->panId()).arg(on ? 1 : 0));
         // The radio echoes WNB state, level, and normalization progress.
         // Let PanadapterModel drive the spectrum indicator and related menus.
-        auto& s = AppSettings::instance();
-        s.setValue(sw->settingsKey("DisplayWnbEnabled"), on ? "True" : "False");
-        s.save();
+        // No client copy is saved: the radio persists WNB itself (#5111).
     });
     connect(menu, &SpectrumOverlayMenu::wnbLevelChanged,
-            this, [this, sw, applet](int level) {
+            this, [this, applet](int level) {
         m_radioModel.sendCommand(
             QString("display pan set %1 wnb_level=%2").arg(applet->panId()).arg(level));
-        auto& s = AppSettings::instance();
-        s.setValue(sw->settingsKey("DisplayWnbLevel"), QString::number(level));
-        s.save();
     });
     connect(menu, &SpectrumOverlayMenu::rfGainChanged,
             this, [this, sw, applet](int gain) {
@@ -5390,10 +5435,9 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             autoGain->setArmed(on);
         }
         // READ BACK WHAT ACTUALLY HAPPENED, regardless. The backend may DECLINE
-        // to arm -- the HL2 refuses from a gain baseline inside the register
-        // region where #5354 measured +48 dB reading identically to +18 dB --
-        // and a checkbox that stayed ticked over a control that is not running
-        // would be the #5395 defect exactly: a UI reporting one state while the
+        // to arm -- the HL2 refuses from a gain baseline above its arming
+        // ceiling -- and a checkbox that stayed ticked over a control that is
+        // not running would be the #5395 defect: a UI reporting one state while the
         // radio is in another. The settled signal normally lands first, inside
         // setArmed(); this is the guard for a backend that settled silently.
         if (auto* m = sw->overlayMenu()) {
@@ -5712,6 +5756,8 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
             this, &MainWindow::setKiwiSdrVirtualAntennaForSlice);
     connect(w, &VfoWidget::flexRxAntennaSelected,
             this, &MainWindow::clearKiwiSdrVirtualAntennaForSlice);
+    connect(w, &VfoWidget::antennaChoiceRefused,
+            this, &MainWindow::announceAntennaChoiceRefused);
     connect(s, &SliceModel::frequencyChanged, this, [this, s](double) {
         updateKiwiSdrVirtualTrackingForSlice(s);
     });
@@ -5815,7 +5861,7 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
     });
     // Record/playback — route to radio or client-side QsoRecorder (#1297)
     connect(w, &VfoWidget::recordToggled, this, [this, w, sliceId](bool on) {
-        bool clientSide = AppSettings::instance().value("RecordingMode", "Client").toString() == "Client";
+        const bool clientSide = m_qsoRecorder->recordsOnClientNow();
         if (clientSide) {
             if (on)
                 m_qsoRecorder->startRecording();
@@ -5851,7 +5897,7 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
     });
     // Client-side playback
     connect(w, &VfoWidget::playToggled, this, [this, sliceId](bool on) {
-        bool clientSide = AppSettings::instance().value("RecordingMode", "Client").toString() == "Client";
+        const bool clientSide = m_qsoRecorder->recordsOnClientNow();
         if (clientSide) {
             if (on)
                 m_qsoRecorder->startPlayback();
@@ -5932,9 +5978,12 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
         auto* rx = m_radioModel.slice(m_splitRxSliceId);
         auto* tx = m_radioModel.slice(m_splitTxSliceId);
         if (!rx || !tx) return;
-        double rxFreq = rx->frequency();
-        double txFreq = tx->frequency();
-        applyTuneRequest(rx, txFreq, TuneIntent::IncrementalTune, "split-swap-rx");
+        const double rxFreq = rx->frequency();
+        const double txFreq = tx->frequency();
+        applyTuneRequest(rx, txFreq, TuneIntent::IncrementalTune,
+                         "split-swap-rx");
+        // Only radio observations advance the QSY reference; a queued status
+        // can still report the pre-SWAP frequency while these tunes are pending.
         applyTuneRequest(tx, rxFreq, TuneIntent::IncrementalTune, "split-swap-tx");
     });
 
@@ -6185,8 +6234,16 @@ void MainWindow::wireMeters()
         m_appletPanel->setCrossNeedleDirectionalValues(
             fwd, reflected, swrValid ? swr : 1.0f, reflectedPowerMeasured);
     });
+    // The S-meter's TX "Level" face reads the first argument: MICPEAK on a
+    // radio that publishes no MIC meter (HL2).
     connect(&m_radioModel.meterModel(), &MeterModel::micMetersChanged,
-            m_appletPanel->sMeterWidget(), &SMeterWidget::setMicMeters);
+            m_appletPanel->sMeterWidget(),
+            [this](float micLevel, float compLevel, float micPeak, float compPeak) {
+        const MeterModel& meters = m_radioModel.meterModel();
+        m_appletPanel->sMeterWidget()->setMicMeters(
+            meters.transmitLevelFaceValue(micLevel, micPeak),
+            compLevel, micPeak, compPeak);
+    });
     connect(&m_radioModel.transmitModel(), &TransmitModel::moxChanged,
             m_appletPanel, &AppletPanel::setMeterTransmitting);
 
@@ -6255,6 +6312,17 @@ void MainWindow::wireMeters()
 
     // Wire TgxlConnection to TunerModel
     m_radioModel.tunerModel().setDirectConnection(&m_tgxlConn);
+    // OPERATE / STANDBY / BYPASS on a TGXL reached by manual IP only: no radio
+    // relays them, nothing was sent. Every surface (applet keys, the status-bar
+    // cycle, the SWR sweep's bypass) funnels through TunerModel, so one
+    // connection announces them all.
+    connect(&m_radioModel.tunerModel(), &TunerModel::relayedCommandRefused,
+            this, [this](const QString& command) {
+        qCWarning(lcDevices) << "TGXL" << command
+                             << "refused: operate/standby/bypass need a Flex radio"
+                             << "to relay them; this tuner is reached by IP only";
+        showUnsupportedControlNotice();
+    });
     // Same for the PGXL: the per-port block, the state word and the alert
     // channel live in the model rather than being decoded into the applet
     // here, so the applet has one source for them whichever path they arrive
@@ -6999,6 +7067,8 @@ void MainWindow::wireMeters()
             this, &MainWindow::setKiwiSdrVirtualAntennaForSlice);
     connect(m_appletPanel->rxApplet(), &RxApplet::flexRxAntennaSelected,
             this, &MainWindow::clearKiwiSdrVirtualAntennaForSlice);
+    connect(m_appletPanel->rxApplet(), &RxApplet::antennaChoiceRefused,
+            this, &MainWindow::announceAntennaChoiceRefused);
 
     // Hide APD row on radios that don't support it
     connect(&m_radioModel.transmitModel(), &TransmitModel::apdStateChanged, this, [this]() {
@@ -7079,6 +7149,7 @@ void MainWindow::enterSplit(int rxSliceId, std::optional<double> offsetMhz)
 
     m_splitActive = true;
     m_splitRxSliceId = rxSliceId;
+    m_splitRxFrequencyMhz = rxSlice->reportedFrequency();
     m_radioModel.sendCommand(
         QString("slice create pan=%1 freq=%2")
             .arg(panId).arg(txFreq, 0, 'f', 6));
@@ -7301,6 +7372,16 @@ void MainWindow::recordSplitAudioMirror(bool deferRestore)
     }
 
     disarmSplitAudioMirror();
+}
+
+// The widget refused before any send, so commandDropped() never fires; this is
+// the operator's only feedback (MainWindow::showUnsupportedControlNotice()).
+void MainWindow::announceAntennaChoiceRefused(bool tx)
+{
+    qCWarning(lcDevices) << (tx ? "TX" : "RX")
+                         << "antenna choice refused: this radio publishes no"
+                         << "antenna port to choose";
+    showUnsupportedControlNotice();
 }
 
 } // namespace AetherSDR

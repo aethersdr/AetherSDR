@@ -1,5 +1,6 @@
 #include "RxApplet.h"
 #include <QScopeGuard>
+#include "AntennaChoiceGate.h"
 #include "SplitAudioProfile.h"
 #include "AgcModeAvailability.h"
 #include "ControlAvailabilityRegistry.h"
@@ -394,6 +395,20 @@ void RxApplet::buildUI()
                 return;
             }
             QPointer<SliceModel> slice = m_slice;
+            // Nothing real to choose -- the radio published no port and no
+            // Kiwi receiver is on offer: refuse visibly instead of opening a
+            // menu of invented ANT1/ANT2 (AntennaChoiceGate.h).
+            {
+                const bool connected = m_radioModel && m_radioModel->isConnected();
+                const bool published = !slice->rxAntennaList().isEmpty()
+                    || (m_radioModel && !m_radioModel->antennaList().isEmpty());
+                const bool virtualAntennas = m_kiwiSdrManager
+                    && !m_kiwiSdrManager->virtualAntennaTokens().isEmpty();
+                if (rxAntennaChoiceRefused(connected, published, virtualAntennas)) {
+                    emit antennaChoiceRefused(false);
+                    return;
+                }
+            }
             const QString cur = slice->rxAntenna();
             QStringList menuOptions = rxAntennaOptions();
             if (m_kiwiSdrManager) {
@@ -457,6 +472,16 @@ void RxApplet::buildUI()
             "font-size: 10px; font-weight: bold; padding: 0 2px; }"
             "QPushButton:hover { color: #ff6666; }");
         connect(m_txAntBtn, &QPushButton::clicked, this, [this] {
+            // TX has no Kiwi escape: a virtual receiver never transmits.
+            if (m_slice) {
+                const bool connected = m_radioModel && m_radioModel->isConnected();
+                const bool published = !m_slice->txAntennaList().isEmpty()
+                    || (m_radioModel && !m_radioModel->antennaList().isEmpty());
+                if (txAntennaChoiceRefused(connected, published)) {
+                    emit antennaChoiceRefused(true);
+                    return;
+                }
+            }
             const QPointer<RxApplet> self(this);
             const QPointer<SliceModel> slice(m_slice);
             const QPointer<QPushButton> button(m_txAntBtn);
@@ -2003,9 +2028,13 @@ void RxApplet::setRadioModel(RadioModel* radioModel)
     }
     if (m_radioModel) {
         m_filterAvailability = new ControlAvailabilityRegistry(*m_radioModel, this);
-        const auto supportsSquelch = [this](bool, const RadioCapabilities& caps) {
-            return !caps.receiveSquelchModel || usingExternalReceiveSquelch()
-                || (m_slice && caps.receiveSquelchModel->modes.contains(m_slice->mode()));
+        const auto supportsSquelch = [this](bool connected, const RadioCapabilities& caps) {
+            if (!m_slice) {
+                return !caps.receiveSquelchModel;
+            }
+            return ModeFilters::squelchAvailableInMode(m_slice->mode(),
+                connected && caps.receiveSquelchModel ? &*caps.receiveSquelchModel : nullptr,
+                connected && caps.hasModeIndependentSquelch, usingExternalReceiveSquelch());
         };
         m_filterAvailability->registerWidget(m_sqlBtn,
             tr("Squelch is unavailable in this receive mode"), supportsSquelch,
@@ -2019,12 +2048,9 @@ void RxApplet::setRadioModel(RadioModel* radioModel)
         m_filterAvailability->registerWidget(m_filterPassband,
             tr("Receive filter adjustment is unavailable in this mode"),
             [this](bool, const RadioCapabilities& caps) {
-                if (!m_slice || !ModeFilters::isFmMode(m_slice->mode())
-                    || !m_radioFilterWidths.isEmpty()) {
-                    return true;
-                }
-                return !ModeFilters::widthsForMode(m_slice->mode(),
-                    caps.receiveFilterControl ? &*caps.receiveFilterControl : nullptr).isEmpty();
+                return !m_slice || ModeFilters::fmFilterAdjustable(m_slice->mode(),
+                    caps.receiveFilterControl ? &*caps.receiveFilterControl : nullptr,
+                    !m_radioFilterWidths.isEmpty());
             }, [] { return true; });
     }
     if (m_radioModel) {
@@ -2988,8 +3014,8 @@ void RxApplet::updateFilterButtons()
     const QString key = QStringLiteral("FilterPresets_%1").arg(m_slice->mode());
     const QString saved = AppSettings::instance().value(key, "").toString();
     if (m_radioFilterWidths.isEmpty() && !saved.isEmpty()
-        && (!ModeFilters::isFmMode(m_slice->mode())
-            || !defaultFilterWidths(m_slice->mode()).isEmpty())) {
+        && ModeFilters::fmFilterAdjustable(m_slice->mode(),
+               m_receiveFilterControl ? &*m_receiveFilterControl : nullptr, false)) {
         QVector<int> loadedWidths;
         QVector<int> loadedLo;
         QVector<int> loadedHi;
@@ -3078,14 +3104,11 @@ QString RxApplet::formatStepLabel(int hz)
 
 bool RxApplet::squelchAvailableInMode(const QString& mode) const
 {
-    if (m_receiveSquelchModel && !usingExternalReceiveSquelch()) {
-        return m_receiveSquelchModel->modes.contains(mode);
-    }
-    const bool allModeSquelch = m_radioModel && m_radioModel->isConnected()
-        && m_radioModel->backendCapabilities().hasModeIndependentSquelch
-        && !(m_slice && m_slice->externalReceiveReplacementActive());
-    return allModeSquelch || !(mode == "DIGU" || mode == "DIGL" || mode == "NT"
-                              || mode == "RTTY" || isCwMode(mode));
+    return ModeFilters::squelchAvailableInMode(mode,
+        m_receiveSquelchModel ? &*m_receiveSquelchModel : nullptr,
+        m_radioModel && m_radioModel->isConnected()
+            && m_radioModel->backendCapabilities().hasModeIndependentSquelch,
+        usingExternalReceiveSquelch());
 }
 
 void RxApplet::updateModeSettings(const QString& mode)
@@ -3102,8 +3125,8 @@ void RxApplet::updateModeSettings(const QString& mode)
     m_filterCustomLo.clear();
     m_filterCustomHi.clear();
     if (m_radioFilterWidths.isEmpty() && !saved.isEmpty()
-        && (!ModeFilters::isFmMode(m_slice->mode())
-            || !defaultFilterWidths(m_slice->mode()).isEmpty())) {
+        && ModeFilters::fmFilterAdjustable(m_slice->mode(),
+               m_receiveFilterControl ? &*m_receiveFilterControl : nullptr, false)) {
         for (const auto& s : saved.split(',', Qt::SkipEmptyParts)) {
             if (s.contains(':')) {
                 const auto parts = s.split(':');
@@ -3140,8 +3163,12 @@ void RxApplet::updateModeSettings(const QString& mode)
         m_filterCustomHi.fill(INT_MIN, m_filterWidths.size());
     }
     rebuildFilterButtons();
+    // An adjustable FM passband without presets keeps the row hidden, as
+    // before; a refused one shows the "Filter unavailable" placeholder.
     m_filterContainer->setVisible(!effectiveFilterWidths().isEmpty()
-                                  || ModeFilters::isFmMode(mode));
+        || !ModeFilters::fmFilterAdjustable(mode,
+               m_receiveFilterControl ? &*m_receiveFilterControl : nullptr,
+               !m_radioFilterWidths.isEmpty()));
     if (m_filterAvailability) {
         m_filterAvailability->refreshEngaged();
     }
@@ -3199,11 +3226,9 @@ bool RxApplet::acceptsFilterEdges(int low, int high) const
     if (!m_slice) {
         return false;
     }
-    if (!ModeFilters::isFmMode(m_slice->mode()) || !m_radioFilterWidths.isEmpty()) {
-        return true;
-    }
-    return ModeFilters::acceptsFmEdges(m_slice->mode(),
-        m_receiveFilterControl ? &*m_receiveFilterControl : nullptr, {low, high});
+    return ModeFilters::acceptsFilterEdges(m_slice->mode(),
+        m_receiveFilterControl ? &*m_receiveFilterControl : nullptr,
+        !m_radioFilterWidths.isEmpty(), {low, high});
 }
 
 QVector<int> RxApplet::defaultFilterWidths(const QString& mode) const
@@ -3265,8 +3290,10 @@ void RxApplet::rebuildFilterButtons()
     if (m_filterAvailability) {
         m_filterAvailability->refreshEngaged();
     }
-    if (m_slice && ModeFilters::isFmMode(m_slice->mode())
-        && effectiveFilterWidths().isEmpty()) {
+    if (m_slice && effectiveFilterWidths().isEmpty()
+        && !ModeFilters::fmFilterAdjustable(m_slice->mode(),
+               m_receiveFilterControl ? &*m_receiveFilterControl : nullptr,
+               !m_radioFilterWidths.isEmpty())) {
         m_filterUnavailable = mkToggle(tr("Filter unavailable"));
         m_filterUnavailable->setAccessibleName(tr("Receive filter"));
         m_filterGrid->addWidget(m_filterUnavailable, 0, 0, 1, 3);

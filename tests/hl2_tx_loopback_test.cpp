@@ -18,13 +18,13 @@
 // SKIP_RETURN_CODE on its add_test turns into an honest ctest "Skipped" rather
 // than a "Passed" that measured nothing.
 //
-// WHICH SIDE OF CENTRE A TONE LANDS ON. The loop conjugates TWICE. Hl2TxDsp
-// conjugates the modulator output for the wire (the HPSDR wire has the opposite
-// handedness to the analytic convention); the simulator feeds that IQ back
-// verbatim; Hl2RxDsp conjugates the receive stream back before it reaches the
-// panadapter FFT. Two conjugations cancel, so the spectrum this test reads is in
-// the ANALYTIC convention: a tone transmitted 5 kHz above the carrier appears
-// 5 kHz ABOVE centre.
+// WHICH SIDE OF CENTRE A TONE LANDS ON. The loop flips handedness TWICE. The
+// transmit side puts IQ on the wire in wire order, the opposite handedness to
+// the analytic convention (the tone generator conjugates; the default TXA
+// modulator gets there through its signed passband); the simulator feeds that IQ
+// back verbatim; Hl2RxDsp conjugates it before the panadapter FFT. The two
+// flips cancel, so the spectrum this test reads is in the ANALYTIC convention:
+// a tone transmitted 5 kHz above the carrier appears 5 kHz ABOVE centre.
 //
 // It did not always. The receive-side conjugation arrived in #4471, to fix a
 // panadapter that drew every signal mirrored — on 40 m it put FT8 below a
@@ -361,7 +361,7 @@ int main(int argc, char** argv)
         const int centre = n / 2;
         const double binHz = static_cast<double>(kIqRateHz) / n;
         // POSITIVE offset, and the scene anchor above is what earns the right to
-        // say so. Hl2TxDsp conjugates for the wire and Hl2RxDsp conjugates back
+        // say so. The tone generator conjugates for the wire and Hl2RxDsp conjugates back
         // for the panadapter, so the spectrum reads in the analytic convention
         // and a tone sent 5 kHz up comes back 5 kHz up. The old negative
         // expectation was correct against the pre-#4471 display, which showed
@@ -441,7 +441,7 @@ int main(int argc, char** argv)
             const int centre = n / 2;
             const double binHz = static_cast<double>(kIqRateHz) / n;
             // USB: 1.5 kHz of audio is transmitted 1.5 kHz ABOVE the carrier and,
-            // through the twice-conjugating loop, reads 1.5 kHz above centre.
+            // through the loop's two cancelling flips, reads 1.5 kHz above centre.
             //
             // Asserting the textbook sign is what let a wrong-sideband
             // transmitter pass its own tests once — but the defence against that

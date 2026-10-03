@@ -203,8 +203,8 @@ public:
     // the two fight on reconnect. On a backend with no command plane there is no
     // radio opinion to defer to, the host bank owns the channel, and a recalled
     // step would otherwise never take because the wire command that normally
-    // round-trips it is dropped. Named for its one caller so the exception stays
-    // visible; see RadioModel::recallCachedMemory().
+    // round-trips it is dropped. Callers: RadioModel::recallCachedMemory() and
+    // RadioModel::applyClientOwnedSliceStep(), both only without a command plane.
     void    applyRecalledStepHz(int hz);
     QVector<int> stepList() const { return m_stepList; }
     int     daxChannel()  const { return m_daxChannel; }
@@ -378,6 +378,10 @@ public:
 signals:
     void letterChanged(const QString& newLetter);
     void frequencyChanged(double mhz);
+    // Emitted for every valid radio-reported frequency, including same-value
+    // reports. Unlike frequencyChanged(), this never represents an optimistic
+    // local tune request.
+    void frequencyStatusReported(double mhz);
     // Supplemental observation notification when frequencyChanged does not
     // fire (same-value reports, optimistic-value echoes, or invalidation).
     void frequencyReported();
@@ -532,6 +536,7 @@ public:
 
 private:
     friend class RadioModel;
+    bool refuseOffThread(const char* setter) const;
     void setControlPolicy(ReceiveControlPolicy policy) { m_controlPolicy = policy; }
     bool confirmsControls() const { return m_controlPolicy == ReceiveControlPolicy::Confirmed; }
     ReceiveControlPolicy m_controlPolicy = ReceiveControlPolicy::Optimistic;

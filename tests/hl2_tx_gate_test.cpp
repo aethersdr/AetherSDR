@@ -76,6 +76,10 @@ struct Hl2TxGateTestAccess {
         backend.m_txAllowed = true;
         QMetaObject::invokeMethod(backend.m_metis, [metis = backend.m_metis] {
             metis->enableTransmit(true);
+            // A session, without a socket: MetisClient queues live-control
+            // banks only while running (#4579), so without this the ATU case
+            // below would be refused for being stopped, not for the gate.
+            MetisClientTestAccess::setStreaming(*metis);
         }, Qt::BlockingQueuedConnection);
         backend.setSliceMode(0, QStringLiteral("CW"));
     }
@@ -358,6 +362,11 @@ int main(int argc, char** argv)
     // assert the PA-enable bit (C2 DATA[19] = 0x08) on the wire -- MetisClient
     // forces drive 0 / PA off, so connecting can never bias the PA on in a
     // transmit-blocked session.
+    //
+    // Inside a session: a setter called on a stopped client queues nothing
+    // (#4579) -- no drive bank at all, and a PA-enable check with nothing to
+    // look at passes vacuously.
+    MetisClientTestAccess::setStreaming(client);
     client.setTxFrequencyHz(14'200'000);
     client.setTxDriveLevel(200);
     bool sawDriveBank = false, paEnabledWhileClosed = false;

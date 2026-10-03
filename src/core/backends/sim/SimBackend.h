@@ -105,6 +105,9 @@ public:
     // lets the demo reuse AE's entire real connect + spectrum path unchanged. ----
     RadioConnection*  connection() const { return m_connection; }
     PanadapterStream* panStream()  const { return m_panStream; }
+    // The synthetic RX worker, so sim_backend_test can inject a spectrum row
+    // into the forward on the owner thread (#6084).
+    SimSignalSource*  signalSourceForTest() const { return m_signalSource; }
 
 private:
     friend struct SimReceiveContractTestAccess;
