@@ -9774,7 +9774,7 @@ void RadioModel::wireSliceReceiveIntentsToBackend(SliceModel* s)
             this, &RadioModel::dispatchSliceAgc, type);
 }
 
-SliceModel* RadioModel::receiveCommandSource()
+SliceModel* RadioModel::receiveCommandSource() const
 {
     if (QThread::currentThread() != thread()) {
         return nullptr;
@@ -9802,8 +9802,6 @@ SliceModel* RadioModel::receiveCommandSource()
         qCWarning(lcProtocol).noquote()
             << "RadioModel: not connected, dropping slice" << source->sliceId()
             << "receive intent";
-        emit commandDropped(
-            QStringLiteral("slice %1 receive intent").arg(source->sliceId()));
         return nullptr;
     }
     return source;

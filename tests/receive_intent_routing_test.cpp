@@ -371,6 +371,23 @@ void wanFallback()
 
     RadioModelSliceLifecycleTestAccess::setWanConnection(f.radio, nullptr);
 }
+
+// #6121's actual shape: a real FlexBackend whose own RadioConnection is never
+// dialed, not the null-m_connection case wanFallback() above covers. Built
+// socket-free the same way tx_operation_integration_test.cpp's
+// rebuildBackendForTest() cases are.
+void wanOverUndialedFlexConnection()
+{
+    RadioModel radio;
+    check(radio.rebuildBackendForTest(QStringLiteral("flex")), "RadioModel builds a FlexBackend");
+    WanConnection wan;
+    RadioModelSliceLifecycleTestAccess::setWanConnection(radio, &wan);
+    WanConnectionTestAccess::setConnected(wan, true);
+    check(radio.backend() && !radio.backend()->isConnected(), "the FlexBackend's own link is down");
+    check(radio.isConnected(), "a live WAN link connects the model despite the undialed LAN link");
+    WanConnectionTestAccess::setConnected(wan, false);
+    RadioModelSliceLifecycleTestAccess::setWanConnection(radio, nullptr);
+}
 }
 
 int main(int argc, char** argv)
@@ -384,5 +401,6 @@ int main(int argc, char** argv)
     modeReentrancy();
     lifetimeAndReentrancy();
     wanFallback();
+    wanOverUndialedFlexConnection();
     return failures == 0 ? 0 : 1;
 }

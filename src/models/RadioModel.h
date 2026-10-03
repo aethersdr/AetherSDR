@@ -1729,7 +1729,7 @@ private:
     void wireSliceAudioIntentsToBackend(SliceModel* s);
     void wireSliceReceiveIntentsToBackend(SliceModel* s);
     bool m_stagingReceiveModels{false};
-    SliceModel* receiveCommandSource();
+    SliceModel* receiveCommandSource() const;
     void dispatchSliceTune(const SliceTuneRequest& request);
     void dispatchSliceMode(const QString& mode);
     void dispatchSliceFilter(const SliceFilterRequest& request);
