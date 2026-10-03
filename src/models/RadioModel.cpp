@@ -2717,10 +2717,12 @@ bool RadioModel::isConnected() const
     // link independently, including backends without a RadioConnection.
     // Do not key on m_flexBackend: teardown clears it before destroying the
     // backend, while the connection alias still carries the link state.
-    if (m_connection && m_connection->isConnected())
+    if (m_connection && m_connection->isConnected()) {
         return true;
-    if (m_wanConn && m_wanConn->isConnected())
+    }
+    if (m_wanConn && m_wanConn->isConnected()) {
         return true;
+    }
     return m_backend && m_backend->isConnected();
 }
 
