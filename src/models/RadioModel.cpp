@@ -1904,7 +1904,10 @@ namespace {
 //   mon, mon_gain_sb      txMonitorControl (setTxMonitor)
 //   speech_processor_*    speechProcessorControl (setSpeechProcessor), or a
 //                         host-modulating transmitter's ClientComp
-// cw break_in_delay, mon_gain_cw and mon_pan_cw have no seam setter.
+// cw break_in_delay, mon_gain_cw and mon_pan_cw have no seam setter of their
+// own. A host-keyed backend (Hl2Backend) reads break-in and its delay from
+// setCwKeying() at key time, which this gate does not model, so both keep the
+// notice there.
 bool transmitCommandDeliveredThroughSeam(const QString& command,
                                          const RadioCapabilities& caps,
                                          int cwPitchHandedToBackend,

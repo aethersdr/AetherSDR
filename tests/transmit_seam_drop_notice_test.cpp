@@ -414,8 +414,10 @@ static void cwBreakInDelayKeepsDropNoticeOnKeyerBackend()
           "cw break_in_delay: no seam setter, the drop notice stands");
 }
 
-// Without a radio-side keyer the seam connections hand the backend nothing,
-// so the speed and break-in text are real drops.
+// Without a radio-side keyer the setCwSpeed/setCwBreakIn connections hand the
+// backend nothing. The speed notice is a real drop. Break-in is a known gap,
+// not a ruling: an HL2 reads it from setCwKeying() at key time, which the gate
+// does not model, so the notice it keeps there is false.
 static void cwSpeedAndBreakInWithoutKeyerKeepDropNotice()
 {
     Fixture f(hostModulatingTransmitter());
@@ -558,8 +560,8 @@ static void flexSeamSettersWriteNothing()
           "flex: the wire text for these controls is unchanged");
 }
 
-// The negative control that keeps the first four honest: the same backend,
-// the same model, a verb nothing behind the seam implements. If the fix had
+// The negative control that keeps the routed cases honest: the Icom-shaped
+// transmitter they use, and a verb nothing behind the seam implements. If the fix had
 // gated the whole commandReady forward, this is what would go quiet.
 static void unroutedVerbStillRaisesDropNotice()
 {
