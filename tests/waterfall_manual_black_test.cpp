@@ -1,32 +1,7 @@
-// Manual waterfall Black Level on a dBm row (WaterfallLevelMap) — header-only,
-// pure logic, no Qt.
-//
-// The defect, observed on a Hermes-Lite 2 on 2026-10-01: with the Black Level
-// button on Off, every new waterfall row was exactly black at slider 0, 25, 50,
-// 75 and 100 (12 of 12 frames, mean luma 0.00). The manual branch compared the
-// row against `160 - level`, a threshold in Flex TILE-intensity units, while
-// the row on that radio is the host-computed pan frame in dBm: negative.
-//
-// What this file pins:
-//   1. THE FLEX PATH IS UNCHANGED. `mainLaw` below is the law as it stood
-//      before the change, kept as a frozen copy on purpose: with rowsAreDbm
-//      false, WaterfallLevelMap::level must agree with it bit for bit across
-//      all three black-point sources, NaN and infinities included.
-//   2. rowsAreDbm reaches the MANUAL branch only. SW and HW are untouched.
-//   3. The old law blanks a dBm row at every slider position (the defect),
-//      and the new one does not: the slider has a lit end and a dark end for
-//      every floor measured on that radio, and it moves the same way a Flex's
-//      does.
-//   4. SpectrumWidget hands the law its own m_panBinsAbsolute. THIS ONE IS A
-//      SOURCE-TEXT CHECK: SpectrumWidget links into no test, so it proves the
-//      call is WRITTEN that way and fails on a reversal. It does not prove the
-//      widget runs, and it does not see MainWindow pushing the capability in.
-//
-// That HL2 declares panBinsAbsolute() and a Flex does not is pinned on real
-// backend instances by noise_floor_auto_adjust_gate_test, not repeated here.
-//
-// No radio was measured for this file. The floors are quoted from the bench
-// record of that observation; nothing here talks to hardware.
+// Manual waterfall Black Level (WaterfallLevelMap): header-only, no Qt.
+// Pins: with rowsAreDbm false the law equals the frozen copy `mainLaw` bit for
+// bit; rowsAreDbm reaches the manual branch only; on a dBm row the slider has
+// a lit end and a dark end. The last block is a source-text pin, see there.
 
 #include "gui/WaterfallLevelMap.h"
 
@@ -54,8 +29,8 @@ static void report(const char* name, bool ok)
     }
 }
 
-// ── The law before this change, frozen. Do not "tidy" it into a call to the
-// header: its whole value is that it is NOT the code under test. ─────────────
+// A frozen copy of the tile law, deliberately not a call into the header: it
+// must not be the code under test.
 static float mainBound(float lo, float value, float hi)
 {
     // qBound(min, val, max) == qMax(min, qMin(max, val)).
@@ -116,9 +91,9 @@ int main()
     const float kNan = std::numeric_limits<float>::quiet_NaN();
     const float kInf = std::numeric_limits<float>::infinity();
 
-    // ── 1 and 2. Every black-point source, both units, against the frozen
-    // law. Tile-shaped values AND dBm-shaped values go through, so the
-    // comparison covers the range either row can carry.
+    // Every black-point source, both units, against the frozen law. Tile-shaped
+    // and dBm-shaped values both go through, so the comparison covers the
+    // range either row can carry.
     long compared = 0;
     long flexMismatch = 0;      // rowsAreDbm false, any mode
     long autoDbmMismatch = 0;   // rowsAreDbm true, SW or HW
@@ -173,10 +148,9 @@ int main()
            WLM::manualBlackThreshold(0, false) == 160.0f
                && WLM::manualBlackThreshold(100, false) == 60.0f);
 
-    // ── 3. The defect, and its repair. Floors as measured on one HL2 on a
-    // dummy load at the 384 kHz span, LNA -12 / 0 / +10 / +20 / +30 / +40 dB,
-    // plus the same radio's lowest floor at the 48 kHz span (bins eight times
-    // narrower: 10*log10(8) = 9.03 dB lower).
+    // Floors measured on one HL2 on a dummy load at the 384 kHz span, LNA
+    // -12 / 0 / +10 / +20 / +30 / +40 dB, plus the same radio's lowest floor at
+    // the 48 kHz span (bins eight times narrower: 10*log10(8) = 9.03 dB lower).
     const float floorsDbm[] = {-111.0f, -121.7f, -128.8f, -140.1f,
                                -147.6f, -148.1f, -148.1f - 9.03f};
     bool oldLawBlanksEverything = true;
@@ -192,8 +166,8 @@ int main()
             float previous = -1.0f;
             for (int slider = 0; slider <= 100; ++slider) {
                 p.blackLevel = slider;
-                // A signal 60 dB over the floor is still black under the old
-                // law: that is "the waterfall goes fully black".
+                // Under the tile law even a signal 60 dB over the floor is
+                // black.
                 p.rowsAreDbm = false;
                 if (WLM::level(floorDbm, p) != 0.0f
                         || WLM::level(floorDbm + 60.0f, p) != 0.0f) {
@@ -294,7 +268,10 @@ int main()
                same);
     }
 
-    // ── 4. The widget's call, as written. Source text: see the header note.
+    // Source-text pin. The claim: SpectrumWidget passes its m_panBinsAbsolute
+    // as rowsAreDbm and keeps no second copy of the tile law. No behavioural
+    // seam reaches it, because SpectrumWidget links into no test target. It
+    // shows how the call is written, not that the widget runs.
     {
         const std::string src =
             readFile(std::string(AETHER_SOURCE_DIR) + "/src/gui/SpectrumWidget.cpp");
