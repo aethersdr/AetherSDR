@@ -211,9 +211,8 @@ public:
     // there never leaves its -50 floor.
     bool hasMicLevelMeter() const { return m_micLevelIdx >= 0; }
     // The value a "transmit level" face shows, given a micMetersChanged pair:
-    // the MIC meter where the radio defines one, otherwise its MICPEAK. A Flex
-    // defines MIC and is unchanged; a radio that defines neither reads the
-    // MIC floor as before.
+    // the MIC meter where the radio defines one, otherwise its MICPEAK, else
+    // the MIC floor.
     float transmitLevelFaceValue(float micLevel, float micPeak) const
     {
         return (!hasMicLevelMeter() && hasMicPeakMeter()) ? micPeak : micLevel;

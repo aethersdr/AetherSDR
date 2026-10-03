@@ -4105,20 +4105,16 @@ RadioCapabilities RadioModel::backendCapabilities() const
     return m_backend ? m_backend->capabilities() : RadioCapabilities{};
 }
 
-// ── Controls whose Flex wire text has a working path elsewhere ──────────────
-// See the header block. None of these writes wire text: the Flex caller keeps
-// its own send, and these only answer for the radios where that send is dropped.
+// None of these writes wire text: the Flex caller keeps its own send.
 
 bool RadioModel::applyClientOwnedSliceStep(int sliceId, int hz)
 {
     if (hasCommandPlane()) {
         return false;   // the radio owns the step; the caller's wire text sets it
     }
-    // No command plane: the wire text would be dropped at sendCmd() and the
-    // operator told the control is unsupported, while the step it asked for is
-    // a client-side quantity on this radio (the tuning wheel and the RX applet
-    // read SliceModel::stepHz). Handled here, including when there is nothing
-    // to apply it to, so the caller never falls through to a dead send.
+    // No command plane: the step is a client-side quantity (the tuning wheel
+    // and the RX applet read SliceModel::stepHz). Returns true even when there
+    // is nothing to apply, so the caller never falls through to a dead send.
     if (SliceModel* s = slice(sliceId); s && hz > 0) {
         s->applyRecalledStepHz(hz);
     }
@@ -4185,16 +4181,9 @@ void RadioModel::recallBandStackReceiveDsp(SliceModel* slice,
     if (!slice) {
         return;
     }
-    // Same fields, same comparisons and, among themselves, the same order as
-    // the hand-written wire text this replaced, so a Flex receives the same
-    // commands.
-    //
-    // While KiwiSDR external receive audio replaces this slice, the AGC setters
-    // address the KiwiSDR AGC (a dB threshold on its own range), but the
-    // bookmark holds the RADIO's AGC -- it was saved from agcMode() and
-    // agcThreshold(). The AGC is then not recalled here: the caller writes it
-    // as the same wire text the hand-written recall sent, and the KiwiSDR AGC
-    // is left alone.
+    // Under KiwiSDR external receive the AGC setters address the KiwiSDR AGC
+    // (its own dB range), but the bookmark holds the RADIO's AGC, saved from
+    // agcMode()/agcThreshold(). The caller then sends the AGC as wire text.
     if (!slice->externalReceiveReplacementActive()) {
         if (!entry.agcMode.isEmpty() && entry.agcMode != slice->agcMode()) {
             slice->setAgcMode(entry.agcMode);

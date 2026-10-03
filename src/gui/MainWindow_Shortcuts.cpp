@@ -1419,10 +1419,7 @@ void MainWindow::registerShortcutActions()
                 s->setNr(false);
                 enableNr2WithWisdom();
             } else if (!m_radioModel.radioSideNoiseReductionAvailable()) {
-                // off → NR2. A radio with no radio-side DSP has no NR step: it
-                // set the model's NR flag and nothing else, so the first press
-                // of the cycle did nothing audible. The rest of the cycle is
-                // host DSP and runs unchanged.
+                // off → NR2: a radio with no radio-side DSP has no NR step.
                 enableNr2WithWisdom();
             } else {
                 // off → NR

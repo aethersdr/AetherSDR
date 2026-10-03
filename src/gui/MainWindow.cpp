@@ -1967,10 +1967,8 @@ MainWindow::MainWindow(QWidget* parent)
     // (the radio is already authoritative for the slice's step).
     connect(m_appletPanel->rxApplet(), &RxApplet::stepSizeChangedByUser,
             this, [this](int step) {
-        // Send step to radio for the active slice -- or, on a radio with no
-        // command plane, apply it to the slice here: the wire text would only
-        // be dropped (with an "unsupported control" notice for a control that
-        // works) and leave SliceModel::stepHz, which CAT get_ts reads, stale.
+        // Send step to radio for the active slice, or apply it on the client
+        // where there is no command plane to carry it.
         if (auto* s = m_radioModel.slice(m_activeSliceId)) {
             if (!m_radioModel.applyClientOwnedSliceStep(s->sliceId(), step)) {
                 m_radioModel.sendCommand(QString("slice set %1 step=%2").arg(s->sliceId()).arg(step));
@@ -5311,8 +5309,8 @@ void MainWindow::buildUI()
             m_radioModel.sendCommand(QString("slice set %1 txant=%2").arg(id).arg(e.txAntenna));
         }
         // AGC while KiwiSDR external receive audio replaces the slice: the
-        // bookmark holds the RADIO's AGC, and the SliceModel setters would
-        // write it into the KiwiSDR AGC instead, so it is sent as before and
+        // bookmark holds the RADIO's AGC, which the SliceModel setters would
+        // write into the KiwiSDR AGC, so it goes as wire text here and
         // recallBandStackReceiveDsp() below leaves the AGC alone.
         if (slice->externalReceiveReplacementActive()) {
             if (!e.agcMode.isEmpty() && e.agcMode != slice->agcMode()) {
@@ -5326,12 +5324,8 @@ void MainWindow::buildUI()
         if (static_cast<int>(slice->audioGain()) != e.audioGain) {
             slice->setAudioGain(static_cast<float>(e.audioGain));
         }
-        // AGC (outside KiwiSDR replacement, above), NB and NR through the
-        // SliceModel setters, not hand-written wire text: on a Flex the
-        // setters write the same `slice set` commands, and
-        // on a seam backend they reach setSliceAgc / setSliceNoiseBlanker,
-        // which the raw text bypassed -- the bookmark restored frequency and
-        // mode and silently dropped the rest.
+        // AGC (outside KiwiSDR replacement), NB and NR through the SliceModel
+        // setters, so they reach every backend, not only a command plane.
         m_radioModel.recallBandStackReceiveDsp(slice, e);
         // WNB (panadapter-level, not slice)
         if (auto* pan = m_radioModel.activePanadapter()) {

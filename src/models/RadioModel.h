@@ -592,56 +592,27 @@ public:
     // there, Flex wire text has nowhere to go and is dropped at the sink.
     bool hasCommandPlane() const { return m_wanConn != nullptr || m_connection != nullptr; }
 
-    // ── Controls whose Flex wire text has a working path elsewhere ──────────
-    //
-    // Each of these answers ONE question for a caller that today writes Flex
-    // wire text: "is there a path on THIS radio other than the wire?" None of
-    // them sends wire text itself -- the Flex caller keeps its own send, so the
-    // command-plane count moves nowhere (tools/check_command_plane.py) and a
-    // Flex sees byte-for-byte what it saw before.
-
     // The slice's tuning step, applied on the client when the radio has no
-    // command plane to carry `slice set <n> step=` and so no opinion to defer
-    // to. Returns false -- and does nothing -- when a command plane exists:
-    // the caller sends its wire text as before and the radio's status echo
-    // sets the step (Principle II). Used by CAT set_ts, the RX applet's STEP
-    // control and a net's Tune Now.
+    // command plane to carry `slice set <n> step=`. Returns false, doing
+    // nothing, when a command plane exists: the caller sends its wire text and
+    // the radio's status echo sets the step.
     bool applyClientOwnedSliceStep(int sliceId, int hz);
 
-    // The RADIO's own noise reduction and auto notch (`slice set nr=/anf=` on
-    // a Flex, the seam verbs on an Icom). A radio that declares no radio-side
-    // DSP has neither -- on an HL2 or ANAN the host runs NR2/NR4/RN2/DFNR and
-    // the VFO hides the NR and ANF buttons -- so a MIDI knob or shortcut that
-    // reaches SliceModel::setNr() there moves the model and nothing else.
-    // Fails open with no backend attached, so nothing changes before connect.
+    // The RADIO's own NR and ANF (`slice set nr=/anf=` on a Flex, seam verbs
+    // on an Icom); none where the radio declares no radio-side DSP (HL2,
+    // ANAN). Fails open with no backend. ANF is also there wherever a command
+    // plane exists: the Demo's synthetic connection answers `anf=`.
     bool radioSideNoiseReductionAvailable() const;
-    // Returns false and leaves the model untouched when the radio has no
-    // radio-side NR/ANF; the caller says so through its notice channel. ANF is
-    // also accepted wherever a command plane exists, because the Demo radio's
-    // synthetic connection answers `anf=` with an audible notch; it has no NR.
-    // The auto notch is there where radio-side DSP is, and also wherever a
-    // command plane exists (see requestRadioAutoNotch). The remote-control
-    // surfaces -- CAT set_func/ZZNR/NR/NT, TCI rx_nr_enable/rx_anf_enable and
-    // the automation bridge's `slice dsp` -- ask these two before turning
-    // either ON, and refuse in their own protocol's terms.
     bool radioSideAutoNotchAvailable() const;
+    // These return false, leaving the model untouched, where the radio lacks
+    // the control (hasRadioSideDsp, hasAmCarrierLevel); the caller says so.
     bool requestRadioNoiseReduction(SliceModel* slice, bool on);
     bool requestRadioAutoNotch(SliceModel* slice, bool on);
-    // AM carrier level, refused the same way when the radio declares no AM
-    // carrier control (RadioCapabilities::hasAmCarrierLevel) -- the Phone
-    // applet dims its slider on that same field.
     bool requestAmCarrierLevel(int level);
 
-    // A band-stack bookmark's receive DSP -- AGC mode and threshold, NB on and
-    // level, NR on and level -- through the SliceModel setters every other
-    // control uses. On a Flex those setters write the same `slice set` text the
-    // recall used to write by hand; on a seam backend they reach the verbs
-    // (setSliceAgc, setSliceNoiseBlanker) the recall used to bypass. NR is
-    // recalled only where radio-side NR exists, so a bookmark cannot plant an
-    // "NR on" the radio has no way to honour. The AGC is skipped while KiwiSDR
-    // external receive audio replaces the slice: the setters would write the
-    // bookmark's radio AGC into the KiwiSDR AGC, so the caller keeps sending
-    // it as the `slice set` text the hand-written recall sent.
+    // A band-stack bookmark's AGC, NB and NR through the SliceModel setters,
+    // so they reach every backend. NR only where radio-side NR exists; AGC not
+    // while KiwiSDR external receive replaces the slice (the caller sends it).
     void recallBandStackReceiveDsp(SliceModel* slice, const BandStackEntry& entry);
 
     // Radio-side recording is `slice set <n> record=/play=` on the slice's

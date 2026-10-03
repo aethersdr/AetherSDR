@@ -6166,9 +6166,8 @@ void MainWindow::wireMeters()
         m_appletPanel->setCrossNeedleDirectionalValues(
             fwd, reflected, swrValid ? swr : 1.0f, reflectedPowerMeasured);
     });
-    // The S-meter's TX "Level" face reads the first argument. A radio that
-    // publishes MICPEAK but no MIC (HL2) left that face on its floor while the
-    // mic was live, so it gets the peak there instead.
+    // The S-meter's TX "Level" face reads the first argument: MICPEAK on a
+    // radio that publishes no MIC meter (HL2).
     connect(&m_radioModel.meterModel(), &MeterModel::micMetersChanged,
             m_appletPanel->sMeterWidget(),
             [this](float micLevel, float compLevel, float micPeak, float compPeak) {

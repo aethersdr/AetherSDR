@@ -1902,11 +1902,9 @@ QString RigctlProtocol::cmdSetFunc(const QString& args)
         QMetaObject::invokeMethod(slice, [slice, on]() { slice->setNb(on); }, Qt::QueuedConnection);
         return rprt(0);
     }
-    // The radio's own NR / ANF. A radio that has neither (HL2, ANAN: the host
-    // runs NR2/NR4 and the VFO hides both buttons) cannot turn them ON; the
-    // model flag alone would read back as a phantom "on" through get_func.
-    // RIG_ENAVAIL, as for the other functions this rig does not have. OFF is
-    // already the truth there and is answered as before.
+    // A radio with no radio-side NR / ANF (HL2, ANAN) cannot turn them ON;
+    // the model flag alone would read back as a phantom "on" through get_func.
+    // OFF is already true there and is accepted.
     if (func == "NR") {
         if (on && m_model && !m_model->radioSideNoiseReductionAvailable())
             return rprt(-11);   // RIG_ENAVAIL
@@ -2037,16 +2035,13 @@ QString RigctlProtocol::cmdSetTs(const QString& arg)
     }
     bool ok;
     const int hz = a.toInt(&ok);
-    // A step of 0 Hz tunes nowhere. Refused as RIG_EINVAL rather than answered
-    // RPRT 0: without a command plane nothing would change, and with one the
-    // radio was sent step=0.
+    // A step of 0 Hz tunes nowhere: RIG_EINVAL.
     if (a.isEmpty() || !ok || hz <= 0) return rprt(-1);
     const int id = slice->sliceId();
     const QString cmd = QStringLiteral("slice set %1 step=%2").arg(id).arg(hz);
     QMetaObject::invokeMethod(m_model, [model = m_model, cmd, id, hz]() {
-        // A radio without a command plane owns no step to command: it is the
-        // client-side quantity the tuning wheel reads, and the wire text below
-        // would be dropped while the client was told RPRT 0.
+        // Without a command plane the step is the client-side quantity the
+        // tuning wheel reads, and the wire text below would be dropped.
         if (model->applyClientOwnedSliceStep(id, hz)) {
             return;
         }

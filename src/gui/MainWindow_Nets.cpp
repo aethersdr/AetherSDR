@@ -168,9 +168,8 @@ void MainWindow::tuneToNet(const NetEntry& entry)
     // radio-side memory slot to "memory apply").
     if (!entry.preset.mode.isEmpty())
         slice->setMode(entry.preset.mode);
-    // The filter through SliceModel, which writes the same `filt` text to a
-    // Flex and reaches setSliceFilter on every other radio; the hand-written
-    // `filt` this replaced was dropped there and the net's filter never landed.
+    // Through SliceModel, so the filter reaches every backend, not only a
+    // command plane.
     if (entry.preset.rxFilterLow != entry.preset.rxFilterHigh) {
         slice->setFilterWidth(entry.preset.rxFilterLow, entry.preset.rxFilterHigh);
     }

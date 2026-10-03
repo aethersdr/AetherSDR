@@ -1997,10 +1997,8 @@ void MainWindow::registerMidiParams()
         },
         [this]() -> float { auto* s = activeSlice(); return s && s->adaptiveFilterEnabled() ? 1 : 0; });
 
-    // The RADIO's own NR and ANF. On a radio with no radio-side DSP (HL2,
-    // ANAN, RTL) the VFO hides these buttons, and a mapped knob reaching
-    // setNr()/setAnf() there moved the model and nothing else. Refused the
-    // way the buttons are gated, and said so; the host modules (NR2, RN2,
+    // The RADIO's own NR and ANF, refused where the radio has none (HL2,
+    // ANAN, RTL: the VFO hides these buttons). The host modules (NR2, RN2,
     // NR4, DFNR) have their own parameters below.
     reg("rx.nrEnable", "Noise Reduction", "RX", P::Toggle, 0, 1,
         [this](float v) {
