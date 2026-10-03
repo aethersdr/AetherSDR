@@ -1097,6 +1097,7 @@ set(MODEL_SOURCES
     src/models/TxController.cpp
     src/models/DeclaredBands.cpp
     src/models/RadioSession.cpp
+    src/models/ReceiverSlotCount.cpp
     src/models/ModelCapabilities.cpp
     src/models/AntennaAliasStore.cpp
     src/models/SliceModel.cpp
