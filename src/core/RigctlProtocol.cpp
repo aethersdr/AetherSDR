@@ -1961,11 +1961,18 @@ QString RigctlProtocol::cmdSetFunc(const QString& args)
         QMetaObject::invokeMethod(slice, [slice, on]() { slice->setNb(on); }, Qt::QueuedConnection);
         return rprt(0);
     }
+    // A radio with no radio-side NR / ANF (HL2, ANAN) cannot turn them ON;
+    // the model flag alone would read back as a phantom "on" through get_func.
+    // OFF is already true there and is accepted.
     if (func == "NR") {
+        if (on && m_model && !m_model->radioSideNoiseReductionAvailable())
+            return rprt(-11);   // RIG_ENAVAIL
         QMetaObject::invokeMethod(slice, [slice, on]() { slice->setNr(on); }, Qt::QueuedConnection);
         return rprt(0);
     }
     if (func == "ANF") {
+        if (on && m_model && !m_model->radioSideAutoNotchAvailable())
+            return rprt(-11);   // RIG_ENAVAIL
         QMetaObject::invokeMethod(slice, [slice, on]() { slice->setAnf(on); }, Qt::QueuedConnection);
         return rprt(0);
     }
@@ -2077,7 +2084,9 @@ QString RigctlProtocol::cmdSetTs(const QString& arg)
     if (!slice) return rprt(-8);
     const QString a = parts.isEmpty() ? QString{} : parts[0];
     if (a == "?") {
-        // Common tuning steps in Hz; 0 = any step accepted.
+        // Common tuning steps in Hz. The trailing 0 is Hamlib's RIG_TS_ANY
+        // marker (any positive step is accepted), not a step: set_ts 0 is
+        // refused below.
         static const QString kSteps = QStringLiteral("1 10 100 500 1000 5000 9000 10000 12500 100000 500000 0");
         if (m_extended)
             return QStringLiteral("set_ts:\nTuning Steps: %1\n").arg(kSteps) + rprt(0);
@@ -2085,10 +2094,16 @@ QString RigctlProtocol::cmdSetTs(const QString& arg)
     }
     bool ok;
     const int hz = a.toInt(&ok);
-    if (a.isEmpty() || !ok || hz < 0) return rprt(-1);
+    // A step of 0 Hz tunes nowhere: RIG_EINVAL.
+    if (a.isEmpty() || !ok || hz <= 0) return rprt(-1);
     const int id = slice->sliceId();
     const QString cmd = QStringLiteral("slice set %1 step=%2").arg(id).arg(hz);
-    QMetaObject::invokeMethod(m_model, [model = m_model, cmd]() {
+    QMetaObject::invokeMethod(m_model, [model = m_model, cmd, id, hz]() {
+        // Without a command plane the step is the client-side quantity the
+        // tuning wheel reads, and the wire text below would be dropped.
+        if (model->applyClientOwnedSliceStep(id, hz)) {
+            return;
+        }
         model->sendCmdPublic(cmd, nullptr);
     }, Qt::QueuedConnection);
     return rprt(0);

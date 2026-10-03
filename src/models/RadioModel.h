@@ -74,6 +74,7 @@ inline bool wsprSeamAudioRouteReady(bool armed, const RadioCapabilities& capabil
 }
 
 class AprsDigipeaterModel;
+struct BandStackEntry;
 class IRadioBackend;   // aetherd RFC §5.5 radio-facing seam (owned via unique_ptr below)
 class FlexBackend;     // transitional concrete alias for 2.3 status-decode driving
 
@@ -590,6 +591,30 @@ public:
     // other family that takes typed intents through the IRadioBackend seam) —
     // there, Flex wire text has nowhere to go and is dropped at the sink.
     bool hasCommandPlane() const { return m_wanConn != nullptr || m_connection != nullptr; }
+
+    // The slice's tuning step, applied on the client when the radio has no
+    // command plane to carry `slice set <n> step=`. Returns false, doing
+    // nothing, when a command plane exists: the caller sends its wire text and
+    // the radio's status echo sets the step.
+    bool applyClientOwnedSliceStep(int sliceId, int hz);
+
+    // The RADIO's own NR and ANF (`slice set nr=/anf=` on a Flex, seam verbs
+    // on an Icom); none where the radio declares no radio-side DSP (HL2,
+    // ANAN). Fails open with no backend. ANF is also there wherever a command
+    // plane exists: the Demo's synthetic connection answers `anf=`.
+    bool radioSideNoiseReductionAvailable() const;
+    bool radioSideAutoNotchAvailable() const;
+    // These return false, leaving the model untouched, where the radio lacks
+    // the control (hasRadioSideDsp, hasAmCarrierLevel); the caller says so.
+    // NR/ANF OFF is accepted there: it is already true.
+    bool requestRadioNoiseReduction(SliceModel* slice, bool on);
+    bool requestRadioAutoNotch(SliceModel* slice, bool on);
+    bool requestAmCarrierLevel(int level);
+
+    // A band-stack bookmark's AGC, NB and NR through the SliceModel setters,
+    // so they reach every backend. NR only where radio-side NR exists; AGC not
+    // while KiwiSDR external receive replaces the slice (the caller sends it).
+    void recallBandStackReceiveDsp(SliceModel* slice, const BandStackEntry& entry);
 
     // Radio-side recording is `slice set <n> record=/play=` on the slice's
     // command plane. Without one there is no radio-side recorder to reach, so
@@ -1683,6 +1708,7 @@ public:
 private:
     friend class RadioModelSliceLifecycleTestAccess;
     friend class TxOperationIntegrationTestAccess;
+    friend class RerouteDeadControlsTestAccess;
     void expirePendingCallbacks(const QString& reason);
 
     // True only while expirePendingCallbacks() is invoking the drained

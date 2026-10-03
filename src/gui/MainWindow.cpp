@@ -1984,9 +1984,13 @@ MainWindow::MainWindow(QWidget* parent)
     // (the radio is already authoritative for the slice's step).
     connect(m_appletPanel->rxApplet(), &RxApplet::stepSizeChangedByUser,
             this, [this](int step) {
-        // Send step to radio for the active slice
-        if (auto* s = m_radioModel.slice(m_activeSliceId))
-            m_radioModel.sendCommand(QString("slice set %1 step=%2").arg(s->sliceId()).arg(step));
+        // Send step to radio for the active slice, or apply it on the client
+        // where there is no command plane to carry it.
+        if (auto* s = m_radioModel.slice(m_activeSliceId)) {
+            if (!m_radioModel.applyClientOwnedSliceStep(s->sliceId(), step)) {
+                m_radioModel.sendCommand(QString("slice set %1 step=%2").arg(s->sliceId()).arg(step));
+            }
+        }
         // Also save to AppSettings for SpectrumWidget scroll-to-tune
         auto& settings = AppSettings::instance();
         settings.setValue("TuningStepSize", QString::number(step));
@@ -5321,31 +5325,25 @@ void MainWindow::buildUI()
         if (!e.txAntenna.isEmpty() && e.txAntenna != slice->txAntenna()) {
             m_radioModel.sendCommand(QString("slice set %1 txant=%2").arg(id).arg(e.txAntenna));
         }
-        // AGC
-        if (!e.agcMode.isEmpty() && e.agcMode != slice->agcMode()) {
-            m_radioModel.sendCommand(QString("slice set %1 agc_mode=%2").arg(id).arg(e.agcMode));
-        }
-        if (e.agcThreshold != slice->agcThreshold()) {
-            m_radioModel.sendCommand(QString("slice set %1 agc_threshold=%2").arg(id).arg(e.agcThreshold));
+        // AGC while KiwiSDR external receive audio replaces the slice: the
+        // bookmark holds the RADIO's AGC, which the SliceModel setters would
+        // write into the KiwiSDR AGC, so it goes as wire text here and
+        // recallBandStackReceiveDsp() below leaves the AGC alone.
+        if (slice->externalReceiveReplacementActive()) {
+            if (!e.agcMode.isEmpty() && e.agcMode != slice->agcMode()) {
+                m_radioModel.sendCommand(QString("slice set %1 agc_mode=%2").arg(id).arg(e.agcMode));
+            }
+            if (e.agcThreshold != slice->agcThreshold()) {
+                m_radioModel.sendCommand(QString("slice set %1 agc_threshold=%2").arg(id).arg(e.agcThreshold));
+            }
         }
         // Volume
         if (static_cast<int>(slice->audioGain()) != e.audioGain) {
             slice->setAudioGain(static_cast<float>(e.audioGain));
         }
-        // NB
-        if (e.nbOn != slice->nbOn()) {
-            m_radioModel.sendCommand(QString("slice set %1 nb=%2").arg(id).arg(e.nbOn ? 1 : 0));
-        }
-        if (e.nbLevel != slice->nbLevel()) {
-            m_radioModel.sendCommand(QString("slice set %1 nb_level=%2").arg(id).arg(e.nbLevel));
-        }
-        // NR
-        if (e.nrOn != slice->nrOn()) {
-            m_radioModel.sendCommand(QString("slice set %1 nr=%2").arg(id).arg(e.nrOn ? 1 : 0));
-        }
-        if (e.nrLevel != slice->nrLevel()) {
-            m_radioModel.sendCommand(QString("slice set %1 nr_level=%2").arg(id).arg(e.nrLevel));
-        }
+        // AGC (outside KiwiSDR replacement), NB and NR through the SliceModel
+        // setters, so they reach every backend, not only a command plane.
+        m_radioModel.recallBandStackReceiveDsp(slice, e);
         // WNB (panadapter-level, not slice)
         if (auto* pan = m_radioModel.activePanadapter()) {
             if (e.wnbOn != pan->wnbActive()) {

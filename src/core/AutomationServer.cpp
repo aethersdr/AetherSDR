@@ -7782,6 +7782,13 @@ QJsonObject AutomationServer::doSlice(const QString& action, const QString& arg)
         // LEVEL BEFORE ENABLE, for the reason the AGC branch above gives: the
         // enable setter emits an intent carrying both values, so setting the
         // level first makes one request reach the backend as a coherent pair.
+        // A radio with no radio-side NR / ANF (HL2, ANAN) cannot turn them
+        // on; the setter would only mark the model on.
+        if (on && which == QLatin1String("nr")
+            && !radio->radioSideNoiseReductionAvailable())
+            return err(QStringLiteral("refused: this radio has no radio-side noise reduction"));
+        if (on && which == QLatin1String("anf") && !radio->radioSideAutoNotchAvailable())
+            return err(QStringLiteral("refused: this radio has no auto notch"));
         if (which == QLatin1String("nr")) {
             if (level >= 0) s->setNrLevel(level);
             s->setNr(on);
