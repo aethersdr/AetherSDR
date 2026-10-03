@@ -34,10 +34,12 @@ public:
     struct Tuning {
         int connectTimeoutMs{10000};
         int incompleteMessageTimeoutMs{1000};
-        // While no link is up the host calls the CTR2 with HELLO this often,
-        // and less often right after a radio connection failed.
+        // While no link is up the host calls the CTR2 with HELLO this often.
+        // After a failure (the radio connection failed, or a link fault such
+        // as a framing error) it calls at the slower rate until a link ends
+        // cleanly or the operator restarts.
         int helloIntervalMs{1000};
-        int helloRetryAfterFailureMs{5000};
+        int helloRetryAfterFaultMs{5000};
         qint64 deviceInboxLimitBytes{256 * 1024};
         qint64 socketReadBufferBytes{256 * 1024};
         // UDP waiting for the HID link; beyond this, radio datagrams are
@@ -116,7 +118,8 @@ private:
     Session* m_session{nullptr};
     QTimer* m_incompleteTimer{nullptr};
     QTimer* m_helloTimer{nullptr};
-    bool m_awaitingDevice{true};
+    bool m_linkDown{true};  // no link up: calling the CTR2, or draining the last one
+    int m_helloDelayMs{1000};  // current calling interval; slower after a failure
     bool m_closedSent{false};  // CLOSED already queued for this link
     // A HELLO has gone out since the last link ended, so a device READY is an
     // answer to it. False during failure back-off and while CLOSED is pending.

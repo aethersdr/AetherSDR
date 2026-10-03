@@ -154,6 +154,7 @@ struct Device {
     bool rxError{false};
     bool awaitingReady{false};
     int ignoredBeforeReady{0};
+    int answeredHellos{0};
 
     void pump()
     {
@@ -197,10 +198,17 @@ struct Device {
         }
         return n;
     }
-    MessageType last()
+    // The last message other than the host's HELLO calls, which may follow
+    // any link's end.
+    MessageType lastBesidesHello()
     {
         pump();
-        return messages.empty() ? MessageType::Data : messages.back().type;
+        for (auto it = messages.rbegin(); it != messages.rend(); ++it) {
+            if (it->type != MessageType::Hello) {
+                return it->type;
+            }
+        }
+        return MessageType::Data;
     }
     void hello()
     {
@@ -214,12 +222,25 @@ struct Device {
     // The CTR2's answer to the host's HELLO.
     void answer()
     {
-        pump();
+        answeredHellos = count(MessageType::Hello);
         awaitingReady = true;
         tx.reset();
         std::vector<Report> r;
         tx.encodeControl(MessageType::Ready, &r);
         port->deliver(r);
+    }
+    // Waits for a HELLO from the host not yet answered (delivering anything
+    // held on the port), then answers it: the normal way a link comes up.
+    bool answerCall()
+    {
+        if (!waitUntil([this] {
+                port->ack(port->pending());
+                return count(MessageType::Hello) > answeredHellos;
+            })) {
+            return false;
+        }
+        answer();
+        return true;
     }
     void closed()
     {
@@ -249,6 +270,15 @@ struct Device {
         }
     }
 };
+
+// The host calls quickly in tests, so a link comes up without waiting a second.
+Ctr2UsbRelay::Tuning fastCalls()
+{
+    Ctr2UsbRelay::Tuning t;
+    t.helloIntervalMs = 20;
+    t.helloRetryAfterFaultMs = 60;
+    return t;
+}
 
 // Generic radio-side byte peer.
 class RadioPeer {
@@ -308,7 +338,7 @@ struct Rig {
     FakePort* port{new FakePort};
     Device dev{port};
 
-    explicit Rig(const QByteArray& greeting = {}, const Ctr2UsbRelay::Tuning& tuning = {})
+    explicit Rig(const QByteArray& greeting = {}, const Ctr2UsbRelay::Tuning& tuning = fastCalls())
     {
         radio.greeting = greeting;
         if (!radio.listen()) {
@@ -321,7 +351,9 @@ struct Rig {
     bool linkUp()
     {
         const int readies = dev.count(MessageType::Ready);
-        dev.hello();
+        if (!dev.answerCall()) {
+            return false;
+        }
         return waitUntil([this, readies] { return dev.count(MessageType::Ready) == readies + 1; });
     }
 };
@@ -392,7 +424,7 @@ void testRadioCloseDrainsThenClosed()
     check(waitUntil([&] { return rig.dev.count(MessageType::Closed) == 1; }, 10000),
           "CTR2 receives CLOSED when the radio closes");
     rig.dev.pump();
-    check(rig.dev.data == tail && rig.dev.last() == MessageType::Closed,
+    check(rig.dev.data == tail && rig.dev.lastBesidesHello() == MessageType::Closed,
           "every radio byte arrives, and CLOSED comes after the last one");
     check(waitUntil([&] { return rig.relay.state() == State::Listening; }), "back to calling the CTR2");
     check(rig.relay.lastError().isEmpty(), "an orderly radio close is not an error");
@@ -462,7 +494,7 @@ void testProtocolViolations()
         Rig rig;
         rig.relay.setRadioSocketFactory([] { return new HangingSocket; });
         rig.start();
-        rig.dev.hello();
+        rig.dev.answerCall();
         check(waitUntil([&] { return rig.relay.state() == State::Connecting; }), "connecting");
         rig.dev.send(QByteArray("too early\n"));
         check(waitUntil([&] { return rig.dev.count(MessageType::Closed) == 1; }), "DATA before READY is a fault");
@@ -496,19 +528,19 @@ void testRadioUnavailableAndTimeout()
         auto* port = new FakePort;
         Device dev{port};
         relay.start(port, QHostAddress::LocalHost, dead);
-        dev.hello();
+        dev.answerCall();
         check(waitUntil([&] { return dev.count(MessageType::Closed) == 1; }), "refused radio sends CLOSED");
         check(dev.count(MessageType::Ready) == 0, "no READY without a radio connection");
         check(relay.lastError().contains(QStringLiteral("Radio connection failed")), "refusal reported");
         check(relay.state() == State::Listening, "still calling the CTR2");
     }
     {
-        Ctr2UsbRelay::Tuning t;
+        Ctr2UsbRelay::Tuning t = fastCalls();
         t.connectTimeoutMs = 80;
         Rig rig({}, t);
         rig.relay.setRadioSocketFactory([] { return new HangingSocket; });
         rig.start();
-        rig.dev.hello();
+        rig.dev.answerCall();
         check(waitUntil([&] { return rig.dev.count(MessageType::Closed) == 1; }, 2000), "connect timeout sends CLOSED");
         check(rig.relay.lastError().contains(QStringLiteral("timed out")), "timeout reported");
     }
@@ -516,7 +548,7 @@ void testRadioUnavailableAndTimeout()
 
 void testIncompleteMessageTimeout()
 {
-    Ctr2UsbRelay::Tuning t;
+    Ctr2UsbRelay::Tuning t = fastCalls();
     t.incompleteMessageTimeoutMs = 60;
     Rig rig({}, t);
     rig.start();
@@ -546,7 +578,7 @@ void testBackpressureTowardDevice()
     Rig rig;
     rig.port->autoAck = false;
     rig.start();
-    rig.dev.hello();
+    rig.dev.answerCall();
     check(waitUntil([&] { return rig.relay.state() == State::Relaying; }), "relaying");
     const QByteArray flood = randomBytes(100000, 9);
     rig.radio.conns[0]->socket->write(flood);
@@ -643,7 +675,7 @@ void testDatagramFloodIsDropped()
     }
     rig.port->autoAck = false;
     rig.start();
-    rig.dev.hello();
+    rig.dev.answerCall();
     check(waitUntil([&] { return rig.relay.state() == State::Relaying; }), "relaying");
     rig.port->ack(rig.port->pending());
     rig.dev.datagram(udp.port(), QByteArray(1, '\0'));
@@ -674,7 +706,7 @@ void testDatagramBeforeReady()
     Rig rig;
     rig.relay.setRadioSocketFactory([] { return new HangingSocket; });
     rig.start();
-    rig.dev.hello();
+    rig.dev.answerCall();
     check(waitUntil([&] { return rig.relay.state() == State::Connecting; }), "connecting");
     rig.dev.datagram(4992, QByteArray(1, '\0'));
     check(waitUntil([&] { return rig.dev.count(MessageType::Closed) == 1; }), "a datagram before READY is a fault");
@@ -699,10 +731,12 @@ void testDeviceLabels()
           "a CTR2 needs both its USB IDs and its product string");
 }
 
-// Brings the link up with acknowledgements held: HELLO, then deliver READY.
+// Brings the link up with acknowledgements held: answer, then deliver READY.
 bool linkUpHeld(Rig& rig)
 {
-    rig.dev.hello();
+    if (!rig.dev.answerCall()) {
+        return false;
+    }
     if (!waitUntil([&] { return rig.relay.state() == State::Relaying; })) {
         return false;
     }
@@ -756,7 +790,7 @@ void testRestartDiscardsQueuedOutput()
 
 void testEachMessageGetsItsOwnDeadline()
 {
-    Ctr2UsbRelay::Tuning t;
+    Ctr2UsbRelay::Tuning t = fastCalls();
     t.incompleteMessageTimeoutMs = 300;
     Rig rig({}, t);
     rig.start();
@@ -821,7 +855,7 @@ void testControlOutputBoundedWhileWaiting()
     auto* port = new FakePort;
     Device dev{port};
     relay.start(port, QHostAddress::LocalHost, dead);
-    dev.hello();
+    dev.answerCall();
     check(waitUntil([&] { return dev.count(MessageType::Closed) == 1; }), "refused radio: one CLOSED");
     std::vector<Report> inFlight;
     dev.tx.encodeData(QByteArray(20, 'x'), &inFlight);
@@ -870,7 +904,7 @@ void testRetryBacksOffAfterRadioFailure()
     }
     Ctr2UsbRelay::Tuning t;
     t.helloIntervalMs = 30;
-    t.helloRetryAfterFailureMs = 400;
+    t.helloRetryAfterFaultMs = 400;
     Ctr2UsbRelay relay;
     relay.setTuning(t);
     auto* port = new FakePort;
@@ -884,13 +918,23 @@ void testRetryBacksOffAfterRadioFailure()
     check(dev.count(MessageType::Hello) == hellos, "no HELLO right after a radio failure");
     check(waitUntil([&] { return dev.count(MessageType::Hello) > hellos; }, 1000),
           "HELLO resumes after the back-off");
+    const int resumed = dev.count(MessageType::Hello);
+    spin(250);
+    check(dev.count(MessageType::Hello) == resumed, "the back-off holds for every call, not just the first");
+    check(waitUntil([&] { return dev.count(MessageType::Hello) > resumed; }, 1000), "and the calls continue");
+    const int beforeStray = dev.count(MessageType::Hello);
+    for (int i = 0; i < 12; ++i) {
+        dev.closed();  // stray CLOSEDs with no link up
+        spin(100);
+    }
+    check(dev.count(MessageType::Hello) > beforeStray, "stray CLOSEDs do not postpone the next call");
 }
 
 void testNoHelloWhileDraining()
 {
     Ctr2UsbRelay::Tuning t;
     t.helloIntervalMs = 20;
-    t.helloRetryAfterFailureMs = 100;
+    t.helloRetryAfterFaultMs = 100;
     t.relay.drainTimeoutMs = 600;
     Rig rig({}, t);
     rig.relay.setRadioSocketFactory([] { return new StalledWriteSocket; });

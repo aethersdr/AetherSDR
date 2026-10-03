@@ -22,7 +22,7 @@ opens the radio connection and sends READY (connected) or CLOSED (failed).
 ```c
 static ctr2_tx tx;
 static ctr2_rx rx;
-static int waiting_for_host;  /* after answering, until the host's READY/CLOSED */
+static int waiting_for_host = 1;  /* from power-up, and after answering, until the host's READY/CLOSED */
 
 static void send_report(void *ctx, const uint8_t r[CTR2_REPORT_BYTES])
 {

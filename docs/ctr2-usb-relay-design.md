@@ -188,9 +188,11 @@ next HELLO.
 Host behavior:
 
 - **Start pressed, or no link up:** send HELLO, and repeat it about once a
-  second until the device answers, or every 5 s after a radio connection
-  failed. Never queue a HELLO while earlier output to the device is still
-  undelivered, so a device that is not reading cannot accumulate them.
+  second until the device answers. After a failure (the radio connection
+  failed, or a link fault below) repeat it every 5 s instead, until a link
+  ends cleanly or the operator presses Start again. Never queue a HELLO
+  while earlier output to the device is still undelivered, so a device that
+  is not reading cannot accumulate them.
 - **READY received while no link is up and after a HELLO the host has sent
   since the last link ended** (the answer to that HELLO), **or HELLO received
   at any time** (the device asking for a restart): close any
@@ -227,6 +229,10 @@ Host behavior:
 
 Device behavior:
 
+- **At power-up or on entering USB mode:** start in the waiting state
+  described next, as if READY had just been sent. The host's next HELLO
+  starts the link. A device that may have reset while a link was up can
+  instead send HELLO at once, so the host restarts without waiting.
 - **On HELLO from the host:** reset the counter and answer READY. Then,
   until the host's READY or CLOSED arrives, ignore every received report
   that is not a header (byte 0 `0xFF`) of type READY, CLOSED or HELLO; reset

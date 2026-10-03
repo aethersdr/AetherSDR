@@ -135,7 +135,7 @@ void testLateReadyKeepsClosedAndBackoff()
     Ctr2UsbRelay relay;
     Ctr2UsbRelay::Tuning tuning;
     tuning.helloIntervalMs = 20;
-    tuning.helloRetryAfterFailureMs = 60000;
+    tuning.helloRetryAfterFaultMs = 60000;
     relay.setTuning(tuning);
     int connections = 0;
     relay.setRadioSocketFactory([&connections] {
