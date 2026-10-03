@@ -31,6 +31,8 @@
 #include "gui/DaxRestorePolicy.h"       // #4558 last-session DAX restore window
 #include "gui/KiwiRebindTracker.h"      // #4158 band-recall Kiwi re-bind policy
 #include "gui/SplitAudioProfile.h"       // #2242 remembered split audio arrangement
+#include "gui/SplitQsyObservationPolicy.h"
+#include "gui/SplitQsySettings.h"
 #include "core/CatPort.h"
 #ifdef HAVE_WEBSOCKETS
 #include "core/TciServer.h"
@@ -128,6 +130,7 @@ class AetherClockEngine;
 class AetherClockModel;
 class AutomationServer;
 class ConnectionPanel;
+class Ctr2ProxyModel;
 class ContributeDialog;
 class TitleBar;
 class KiwiSdrManager;
@@ -518,6 +521,11 @@ private:
     void pushSliceOverlay(SliceModel* s);
     bool reattachSliceVisualsToPanadapter(SliceModel* s);
     void syncTxWaterfallSliceToSpectrums();
+    // #5750: on a radio whose span is one register for the whole board, keep
+    // the -/+ span pair live on ONE pane (the TX slice's, else the first
+    // docked one) and dim it with the reason on the others; otherwise every
+    // pane keeps its own live pair. PanSpanControlGate.h.
+    void syncPanSpanControlPlacement();
     void updateSplitState();
     void disableSplit();
     // The split pair, derived from model truth (#3726) rather than from the
@@ -571,6 +579,9 @@ private:
     // cannot honor. Shared by the commandDropped path and by the
     // capability gates that refuse BEFORE the send (M0, #5263).
     void showUnsupportedControlNotice();
+    // An antenna button or combo refused a pick because the radio published no
+    // port to choose (AntennaChoiceGate.h). Log it and say so, once a session.
+    void announceAntennaChoiceRefused(bool tx);
     // Constructor wiring blocks extracted per #3351 Phase 2 — each runs once
     // from the constructor, in original order, defined in its subject TU.
     void wireModemAudioCompletion(); // MainWindow_Wiring.cpp
@@ -632,6 +643,7 @@ private:
     // TX or RX instance.
     void applyGraphicEqToClientEq(bool transmit);
     void wireExternalControllers(); // MainWindow_Controllers.cpp
+    void setupCtr2Proxy();          // MainWindow_Controllers.cpp
     void wireKiwiSdr();             // MainWindow_KiwiSdr.cpp
     void refreshKiwiSdrAppletReceivers();
     void refreshKiwiSdrSlices();
@@ -1023,6 +1035,9 @@ private:
     void applyFlexControlWheelAction(const QString& actionId, int steps);
     void syncFlexControlDialog();
     void syncFlexControlIndicatorForSettings();
+    // Start or stop the Ulanzi Dial backend to match its enable setting.
+    void applyUlanziDialEnabled();
+    bool ulanziDialEnabled() const;
     void setFlexControlHardwareIndicator(int button);
     QJsonObject buildControlDevicesSnapshot() const;
     void showPropDashboard();
@@ -1073,6 +1088,9 @@ private:
     void beginSliderShortcutLease(QWidget* slider);
     void renewSliderShortcutLease();
     void releaseSliderShortcutLease(bool clearFocus);
+    // Arm the operating QShortcuts only when keyboard shortcuts are on and no
+    // slider holds the lease; otherwise their keys fall through (#5483).
+    void syncOperatingShortcutsEnabled();
 
     BandSnapshot captureCurrentBandState() const;
     void restoreBandState(const BandSnapshot& snap);
@@ -1200,7 +1218,7 @@ private:
     CatPort* catPort(int i) const { return m_session->catPort(i); }
 
     // Returns how many CAT ports should be visible in the UI given radio state.
-    // 1 when no radio; maxSlicesForModel() when connected.
+    // 1 when no radio; the backend-aware receiver count when connected.
     int catPortTargetCount() const;
     // Start/stop ports to match CatEnabled master + per-port Enabled flags.
     void applyCatPortCount();
@@ -1435,6 +1453,7 @@ private:
 #else
     UlanziDialBackend*         m_dialBackend{nullptr};
 #endif
+    std::optional<bool>        m_ulanziDialEnabledLogged;  // last enable state logged
     QSet<QString>              m_dialActiveMidiGates;
     // True while the DIAL is holding PTT.  Distinct from m_pttHoldActive so a
     // dial release cannot un-key a PTT the keyboard is still holding.
@@ -1724,6 +1743,8 @@ private:
     bool m_splitActive{false};
     int  m_splitRxSliceId{-1};
     int  m_splitTxSliceId{-1};
+    double m_splitRxFrequencyMhz{0.0};
+    AetherSDR::PendingSliceFrequencyEchoes m_pendingSliceFrequencyEchoes;
     // Split audio memory (#2242). The recorder holds what the operator did to
     // the two slices during this split and outlives the TX slice model, which
     // onSliceRemoved has already destroyed by the time it runs. It is fed ONLY
@@ -1731,6 +1752,7 @@ private:
     // echoes, so a pan moved by another client never becomes a preference
     // (Principle II). See gui/SplitAudioProfile.h.
     AetherSDR::SplitAudioRecorder m_splitAudioRecorder;
+    AetherSDR::SplitQsySettings m_splitQsySettings;
     QVector<QMetaObject::Connection> m_splitAudioConns;
     int m_splitAudioRxSliceId{-1};
     // The RX slice OBJECT the recorder was armed on. The RX-pan restore only
@@ -1975,6 +1997,9 @@ private:
     QString m_panadapterConnectionAnimationLabel;
     ShortcutManager m_shortcutManager;
     UpdateChecker* m_updateChecker{nullptr};
+
+// CTR2 TCP proxy prototype (MainWindow_Controllers.cpp); never persisted, off at launch
+    Ctr2ProxyModel* m_ctr2ProxyModel{nullptr};
 
 // AetherClock (MainWindow_AetherClock.cpp)
     AetherClockEngine* m_clockEngine{nullptr};

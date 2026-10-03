@@ -74,6 +74,7 @@ inline bool wsprSeamAudioRouteReady(bool armed, const RadioCapabilities& capabil
 }
 
 class AprsDigipeaterModel;
+struct BandStackEntry;
 class IRadioBackend;   // aetherd RFC §5.5 radio-facing seam (owned via unique_ptr below)
 class FlexBackend;     // transitional concrete alias for 2.3 status-decode driving
 
@@ -590,6 +591,36 @@ public:
     // other family that takes typed intents through the IRadioBackend seam) —
     // there, Flex wire text has nowhere to go and is dropped at the sink.
     bool hasCommandPlane() const { return m_wanConn != nullptr || m_connection != nullptr; }
+
+    // The slice's tuning step, applied on the client when the radio has no
+    // command plane to carry `slice set <n> step=`. Returns false, doing
+    // nothing, when a command plane exists: the caller sends its wire text and
+    // the radio's status echo sets the step.
+    bool applyClientOwnedSliceStep(int sliceId, int hz);
+
+    // The RADIO's own NR and ANF (`slice set nr=/anf=` on a Flex, seam verbs
+    // on an Icom); none where the radio declares no radio-side DSP (HL2,
+    // ANAN). Fails open with no backend. ANF is also there wherever a command
+    // plane exists: the Demo's synthetic connection answers `anf=`.
+    bool radioSideNoiseReductionAvailable() const;
+    bool radioSideAutoNotchAvailable() const;
+    // These return false, leaving the model untouched, where the radio lacks
+    // the control (hasRadioSideDsp, hasAmCarrierLevel); the caller says so.
+    // NR/ANF OFF is accepted there: it is already true.
+    bool requestRadioNoiseReduction(SliceModel* slice, bool on);
+    bool requestRadioAutoNotch(SliceModel* slice, bool on);
+    bool requestAmCarrierLevel(int level);
+
+    // A band-stack bookmark's AGC, NB and NR through the SliceModel setters,
+    // so they reach every backend. NR only where radio-side NR exists; AGC not
+    // while KiwiSDR external receive replaces the slice (the caller sends it).
+    void recallBandStackReceiveDsp(SliceModel* slice, const BandStackEntry& entry);
+
+    // Radio-side recording is `slice set <n> record=/play=` on the slice's
+    // command plane. Without one there is no radio-side recorder to reach, so
+    // "Radio Side" falls back to the client recorder instead of a button that
+    // latches and records nothing.
+    bool radioSideRecordingReachable() const { return hasCommandPlane(); }
 
     // ── Memory command routing ──────────────────────────────────────────────
     //
@@ -1412,7 +1443,9 @@ private:
     // writes the wire FIRST and advances the model only if the send happened,
     // so re-entrant requests converge. bandwidthMhz <= 0 = center-only; NaN
     // centerMhz = bandwidth-only. Profile-load replays use intent Range, the
-    // value that cannot move a radio.
+    // value that cannot move a radio. A true return means the model advanced
+    // synchronously. Confirmed backends return false after accepting an intent;
+    // their later observation advances the model, so false does not imply refusal.
     bool dispatchPanCenterBandwidth(const QString& panId,
                                     double centerMhz,
                                     double bandwidthMhz,
@@ -1561,6 +1594,10 @@ private:
     // family change.
     QString m_offlineHealthFamily;
     QVector<TxPowerBand> m_txPowerBands;
+    // The CW pitch last handed to THIS m_backend through setCwPitch(), -1 when
+    // none has been; teardownBackend() resets it. The commandReady forward uses
+    // it to tell a dropped `cw pitch N` from one the backend already holds.
+    int m_cwPitchHandedToBackend{-1};
     double m_activeTxPowerBandLowHz = 0.0;
     double m_activeTxPowerBandHighHz = 0.0;
     // RFC #4288 Route A: when true, m_backend is a wire-less SimBackend (the demo
@@ -1682,6 +1719,7 @@ public:
 private:
     friend class RadioModelSliceLifecycleTestAccess;
     friend class TxOperationIntegrationTestAccess;
+    friend class RerouteDeadControlsTestAccess;
     void expirePendingCallbacks(const QString& reason);
 
     // True only while expirePendingCallbacks() is invoking the drained
@@ -1716,10 +1754,10 @@ private:
     // Waterfall pacing for raw-spectrum (non-Flex) backends: drops pan frames
     // to one row per WaterfallRate::localRowIntervalMs(rate) (0 at rate 100 =
     // gate lifted). A plain drop, not a coalesce: it fixes cadence only, and a
-    // row is the single frame that hit the gate (HL2: one unaveraged FFT,
-    // #5833; RTL: temporal FFT average; ANAN: WDSP-averaged; Icom: a CI-V sweep).
-    // Where rows get integrated
-    // is open in RFC #5782 — do not add an accumulator here until it lands.
+    // row is the single frame that hit the gate (HL2: time-averaged over FFT
+    // AVG x 10 ms when FFT AVG > 0; RTL: temporal FFT average; ANAN:
+    // WDSP-averaged; Icom: a CI-V sweep). Where rows get integrated is open in
+    // RFC #5782 — do not add an accumulator here until it lands.
     QHash<int, qint64> m_backendWfLastRowNs;
     // Pre-seed default only; 100 is the top of the 1..100 rate control and
     // matches SpectrumWidget's m_wfLineDuration default (#4606).

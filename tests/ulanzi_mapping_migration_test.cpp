@@ -42,6 +42,25 @@ QJsonObject storedDocument()
     return QJsonDocument::fromJson(raw).object();
 }
 
+// Read a source file for the drift checks. AETHER_SOURCE_DIR comes from CMake
+// so this works for an out-of-source build; the relative forms are the
+// fallback for a hand-compiled run from the source root or a build directory.
+QString readSource(const QString& relPath)
+{
+    const QStringList candidates = {
+        QStringLiteral(AETHER_SOURCE_DIR "/") + relPath,
+        relPath,
+        QStringLiteral("../") + relPath,
+        QStringLiteral("../../") + relPath,
+    };
+    for (const QString& cand : candidates) {
+        QFile file(cand);
+        if (file.exists() && file.open(QIODevice::ReadOnly | QIODevice::Text))
+            return QString::fromUtf8(file.readAll());
+    }
+    return {};
+}
+
 const QStringList kPills = {QStringLiteral("top_left"), QStringLiteral("top_middle"),
                             QStringLiteral("side_rt"),  QStringLiteral("dial_press")};
 
@@ -318,6 +337,87 @@ int main(int argc, char** argv)
             && beforeGuard.count(QStringLiteral("#if")) == beforeGuard.count(QStringLiteral("#endif"));
         ok &= expect(guardOutsideIfdef,
                      "WheelApf guard is not inside a preprocessor conditional (#4658)");
+    }
+
+    // ── enable: on unless the operator turned it off ─────────────────────
+    // A dial is auto-detected and used with no setup; an explicit "False"
+    // (including one saved while the default was off) keeps it off.
+    s.remove(UlanziDialMappings::enabledSettingsKey());
+    s.save();
+    ok &= expect(UlanziDialMappings::enabled(), "no saved value means the dial is used");
+    ok &= expect(UlanziDialMappings::setEnabled(false), "turning it off commits to disk");
+    ok &= expect(!UlanziDialMappings::enabled(), "an explicit off is honoured");
+    s.load();
+    ok &= expect(!UlanziDialMappings::enabled(), "the off choice survives a reload");
+    UlanziDialMappings::setEnabled(true);
+    ok &= expect(UlanziDialMappings::enabled(), "turning it back on sticks");
+
+    // ── no built-in pill default keys the transmitter (Constitution VI) ────
+    // The dial is claimed as soon as it is detected and these defaults
+    // dispatch with the mapper never opened, so a TX default would turn a
+    // media key the operator never bound into MOX or TUNE. Break it on purpose:
+    // put "shortcut:mox_toggle" back on top_left in kPillSpecs and this fails.
+    {
+        const QString shortcuts = readSource(QStringLiteral("src/gui/MainWindow_Shortcuts.cpp"));
+        const QString helpers = readSource(QStringLiteral("src/gui/MainWindowHelpers.h"));
+        const QString dialog = readSource(QStringLiteral("src/gui/UlanziDialMapperDialog.cpp"));
+        ok &= expect(!shortcuts.isEmpty() && !helpers.isEmpty() && !dialog.isEmpty(),
+                     "TX-default check found its three source files");
+
+        // Every action that keys the transmitter: registerTxShortcut("id", …)
+        // plus any registerAction(…) declared /*keysTx=*/true, whose id may be
+        // a named constant from MainWindowHelpers.h.
+        QStringList txIds;
+        const QRegularExpression txShortcut(QStringLiteral(R"re(registerTxShortcut\(\s*"([^"]+)")re"));
+        for (auto it = txShortcut.globalMatch(shortcuts); it.hasNext();)
+            txIds << it.next().captured(1);
+        bool allResolved = true;
+        const QStringList chunks = shortcuts.split(QStringLiteral("registerAction("));
+        for (int i = 1; i < chunks.size(); ++i) {
+            const QString call = chunks[i].left(chunks[i].indexOf(QStringLiteral(");")));
+            if (!call.contains(QStringLiteral("/*keysTx=*/true")))
+                continue;
+            const QString first = call.section(QLatin1Char(','), 0, 0).trimmed();
+            if (first == QLatin1String("id"))
+                continue;  // registerTxShortcut's own body; its ids are counted above
+            if (first.startsWith(QLatin1Char('"'))) {
+                txIds << first.mid(1, first.size() - 2);
+                continue;
+            }
+            const QRegularExpression def(QRegularExpression::escape(first)
+                                         + QStringLiteral(R"re(\s*=\s*"([^"]+)")re"));
+            const auto m = def.match(helpers);
+            if (m.hasMatch())
+                txIds << m.captured(1);
+            else
+                allResolved = false;
+        }
+        ok &= expect(allResolved, "every keysTx action id resolves to a string");
+        ok &= expect(txIds.contains(QStringLiteral("mox_toggle"))
+                         && txIds.contains(QStringLiteral("tune_toggle"))
+                         && txIds.contains(QStringLiteral("ptt_hold")),
+                     "the TX action set was actually found (MOX, TUNE, PTT hold)");
+
+        const int tableStart = dialog.indexOf(QStringLiteral("constexpr PillSpec kPillSpecs[] = {"));
+        const int tableEnd = tableStart < 0 ? -1 : dialog.indexOf(QStringLiteral("};"), tableStart);
+        const QString table = tableEnd < 0 ? QString() : dialog.mid(tableStart, tableEnd - tableStart);
+        const QRegularExpression row(QStringLiteral(
+            R"re(\{"([a-z_]+)",\s*"[^"]*",\s*"[^"]*",\s*"([^"]+)")re"));
+        int rows = 0;
+        QStringList txDefaults;
+        for (auto it = row.globalMatch(table); it.hasNext();) {
+            const auto m = it.next();
+            ++rows;
+            const QString action = m.captured(2);
+            if (action.startsWith(QStringLiteral("shortcut:"))
+                && txIds.contains(action.mid(QStringLiteral("shortcut:").size())))
+                txDefaults << m.captured(1) + QStringLiteral("=") + action;
+        }
+        ok &= expect(rows == 8,
+                     "all 8 pill rows in kPillSpecs were parsed");
+        if (!txDefaults.isEmpty())
+            std::cout << "       TX defaults: " << txDefaults.join(QStringLiteral(", ")).toStdString() << '\n';
+        ok &= expect(txDefaults.isEmpty(), "no built-in pill default keys the transmitter");
     }
 
     std::cout << (ok ? "ALL PASS" : "FAILURES") << '\n';

@@ -1335,6 +1335,12 @@ QString TciProtocol::cmdRxNrEnable(const QStringList& args, bool isSet)
     if (args.size() < 2) return {};
     bool on = false;
     if (!argToBool(args, 1, on)) return {};
+    // A radio with no radio-side NR (HL2, ANAN) cannot turn it on. TCI has no
+    // error reply, so the refusal is the truth broadcast back: NR is off.
+    if (on && m_model && !m_model->radioSideNoiseReductionAvailable()) {
+        m_pendingNotification = QStringLiteral("rx_nr_enable:%1,false;").arg(trx);
+        return {};
+    }
     QMetaObject::invokeMethod(s, [s, on]() { s->setNr(on); },
                               Qt::QueuedConnection);
 
@@ -1359,6 +1365,11 @@ QString TciProtocol::cmdRxAnfEnable(const QStringList& args, bool isSet)
     if (args.size() < 2) return {};
     bool on = false;
     if (!argToBool(args, 1, on)) return {};
+    // Same refusal as rx_nr_enable, where the radio has no auto notch.
+    if (on && m_model && !m_model->radioSideAutoNotchAvailable()) {
+        m_pendingNotification = QStringLiteral("rx_anf_enable:%1,false;").arg(trx);
+        return {};
+    }
     QMetaObject::invokeMethod(s, [s, on]() { s->setAnf(on); },
                               Qt::QueuedConnection);
 

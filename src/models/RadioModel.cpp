@@ -23,6 +23,7 @@
 #include "core/backends/rtl/RtlSdrBackend.h"    // RTL-SDR backend (family "rtl")
 #endif
 #include "core/AppSettings.h"
+#include "core/BandStackSettings.h"
 #include "core/RadioStateMemory.h"  // RFC #4603 typed restore handoff
 #include "core/ShutdownTrace.h"
 #include "core/CwTrace.h"
@@ -1597,6 +1598,10 @@ void RadioModel::wireBackendReceiverState()
                     [this, s](bool on, int position) {
                 if (m_backend) m_backend->setSliceManualNotch(s->sliceId(), on, position);
             });
+            connect(s, &SliceModel::apfCommandIssued, this,
+                    [this, s](bool on, int level) {
+                if (m_backend) m_backend->setSliceApf(s->sliceId(), on, level);
+            });
             // FM repeater controls are distinct neutral intents. Flex
             // continues to use SliceModel's wire text; every other backend gets
             // the same operator action through the seam instead of silently
@@ -1747,6 +1752,7 @@ void RadioModel::teardownBackend()
     // is ~RadioModel(), and resetState() emits TX signals.
     m_transmitModel.resetPowerProvenance();
     m_backend.reset();
+    m_cwPitchHandedToBackend = -1;  // the next backend has been handed nothing
     acknowledgeTxTransportTeardown(m_txOperation);
     m_connection = nullptr;
     m_panStream = nullptr;
@@ -1888,6 +1894,65 @@ void RadioModel::evaluateTxFilterAudioLoss(float scFilt1, float scFilt2)
             .arg(qRound(scFilt1 - scFilt2)),
         tx ? tx->panId() : QString());
 }
+
+namespace {
+// Whether TransmitModel's Flex text duplicates a typed intent that a backend
+// with no command plane really applied, so dropping it loses nothing (#5637).
+// Every key must be routed, and each only under the capability that says its
+// setter is real (setters default to no-ops):
+//   rfpower, tunepower    canTransmit + transmitDriveControl (setTxPower;
+//                         tunepower rides setTune()'s tunePowerPercent, so
+//                         only while TUNE is not keyed: the next key-down
+//                         carries it, and nothing re-applies it mid-carrier)
+//   miclevel              canTransmit (setMicGain)
+//   filter_low/_high      hasTxFilterControls (setTxFilter)
+//   cw pitch N            N is the pitch last handed to THIS backend, because
+//                         the host-modulating connection is change-gated
+// vox, mon, speech_processor, cw wpm and cw break_in are not routed: no
+// capability proves their setters real, so they keep the notice even where one
+// is (an Icom implements setVox, setSpeechProcessor, setCwSpeed, setCwBreakIn).
+bool transmitCommandDeliveredThroughSeam(const QString& command,
+                                         const RadioCapabilities& caps,
+                                         int cwPitchHandedToBackend,
+                                         bool tuneKeyed)
+{
+    static const QString kCwPitch = QStringLiteral("cw pitch ");
+    if (command.startsWith(kCwPitch)) {
+        bool ok = false;
+        const int hz = command.mid(kCwPitch.size()).trimmed().toInt(&ok);
+        return ok && cwPitchHandedToBackend >= 0 && hz == cwPitchHandedToBackend;
+    }
+
+    static const QString kTransmitSet = QStringLiteral("transmit set ");
+    if (!command.startsWith(kTransmitSet)) {
+        return false;
+    }
+    const QMap<QString, QString> kvs =
+        CommandParser::parseKVs(command.mid(kTransmitSet.size()));
+    if (kvs.isEmpty()) {
+        return false;
+    }
+    for (auto it = kvs.cbegin(); it != kvs.cend(); ++it) {
+        const QString& key = it.key();
+        bool routed = false;
+        if (key == QLatin1String("rfpower")) {
+            routed = caps.canTransmit && caps.transmitDriveControl.has_value();
+        } else if (key == QLatin1String("tunepower")) {
+            routed = caps.canTransmit && caps.transmitDriveControl.has_value()
+                && !tuneKeyed;
+        } else if (key == QLatin1String("miclevel")) {
+            routed = caps.canTransmit;
+        } else if (key == QLatin1String("filter_low")
+                   || key == QLatin1String("filter_high")) {
+            routed = caps.hasTxFilterControls;
+        }
+        if (!routed) {
+            return false;
+        }
+    }
+    return true;
+}
+}  // namespace
 
 RadioModel::RadioModel(QObject* parent)
     : QObject(parent)
@@ -2077,13 +2142,17 @@ RadioModel::RadioModel(QObject* parent)
     // passband. Not for Flex, which applies `cw pitch` on-radio.
     connect(&m_transmitModel, &TransmitModel::cwPitchChanged, this,
             [this](int hz) {
-        if (m_backend && backendCapabilities().hostModulates)
+        if (m_backend && backendCapabilities().hostModulates) {
             m_backend->setCwPitch(hz);
+            m_cwPitchHandedToBackend = hz;
+        }
     });
     connect(&m_transmitModel, &TransmitModel::cwPitchCommandIssued, this,
             [this](int hz) {
-        if (m_backend && backendCapabilities().hasRadioSideCwKeyer)
+        if (m_backend && backendCapabilities().hasRadioSideCwKeyer) {
             m_backend->setCwPitch(hz);
+            m_cwPitchHandedToBackend = hz;
+        }
     });
     connect(&m_transmitModel, &TransmitModel::cwSpeedCommandIssued, this,
             [this](int wpm) {
@@ -2118,8 +2187,10 @@ RadioModel::RadioModel(QObject* parent)
     // disagreement would be invisible the first time either one moves.
     connect(this, &RadioModel::connectionStateChanged, this,
             [this](bool connected) {
-        if (connected && m_backend && backendCapabilities().hostModulates)
+        if (connected && m_backend && backendCapabilities().hostModulates) {
             m_backend->setCwPitch(m_transmitModel.cwPitch());
+            m_cwPitchHandedToBackend = m_transmitModel.cwPitch();
+        }
     });
 
     // The speech processor to a backend that owns its own compressor. Here, not in
@@ -2285,11 +2356,31 @@ RadioModel::RadioModel(QObject* parent)
             }
         }
 
+        // A verb the backend already applied as a typed intent is not a drop
+        // (#5637); every other verb still reaches sendCmd()'s notice (#5263).
+        if (!hasCommandPlane() && m_backend
+            && transmitCommandDeliveredThroughSeam(trimmed, m_backend->capabilities(),
+                                                   m_cwPitchHandedToBackend,
+                                                   m_transmitModel.isTuning())) {
+            qCDebug(lcProtocol).noquote()
+                << "RadioModel: no command plane; value already delivered through the seam:"
+                << cmd;
+            return;
+        }
+
         sendCmd(cmd);
     });
 
     // Forward equalizer model commands to the radio
     connect(&m_equalizerModel, &EqualizerModel::commandReady, this, [this](const QString& cmd){
+        // Without a command plane the graphic EQ is served by ClientEq
+        // (MainWindow::applyGraphicEqToClientEq, bound to the model's own
+        // state signals), so the slider and a mapped MIDI band DO act. Sending
+        // the `eq` text anyway only reached sendCmd's drop and told the
+        // operator a working control was unsupported.
+        if (!hasCommandPlane()) {
+            return;
+        }
         sendCmd(cmd);
     });
 
@@ -4027,6 +4118,111 @@ void RadioModel::rebootRadio()
 RadioCapabilities RadioModel::backendCapabilities() const
 {
     return m_backend ? m_backend->capabilities() : RadioCapabilities{};
+}
+
+// None of these writes wire text: the Flex caller keeps its own send.
+
+bool RadioModel::applyClientOwnedSliceStep(int sliceId, int hz)
+{
+    if (hasCommandPlane()) {
+        return false;   // the radio owns the step; the caller's wire text sets it
+    }
+    // No command plane: the step is a client-side quantity (the tuning wheel
+    // and the RX applet read SliceModel::stepHz). Returns true even when there
+    // is nothing to apply, so the caller never falls through to a dead send.
+    if (SliceModel* s = slice(sliceId); s && hz > 0) {
+        s->applyRecalledStepHz(hz);
+    }
+    return true;
+}
+
+bool RadioModel::radioSideNoiseReductionAvailable() const
+{
+    // Fails open without a backend: the pre-connect behaviour is unchanged.
+    return !m_backend || backendCapabilities().hasRadioSideDsp;
+}
+
+bool RadioModel::radioSideAutoNotchAvailable() const
+{
+    // A command plane carries `slice set <n> anf=` somewhere that answers it:
+    // a Flex, or the Demo radio's synthetic connection, which turns it into the
+    // generator's audible notch (SimBackend::setDemoAnf) although the Demo
+    // declares no radio-side DSP. Only a radio with neither has no ANF.
+    return hasCommandPlane() || radioSideNoiseReductionAvailable();
+}
+
+bool RadioModel::requestRadioNoiseReduction(SliceModel* slice, bool on)
+{
+    if (!slice) {
+        return false;
+    }
+    // OFF is already true where the radio has none, so only ON is refused.
+    if (on && !radioSideNoiseReductionAvailable()) {
+        qCWarning(lcProtocol) << "RadioModel: radio noise reduction refused:"
+                              << "this radio declares no radio-side DSP";
+        return false;
+    }
+    slice->setNr(on);
+    return true;
+}
+
+bool RadioModel::requestRadioAutoNotch(SliceModel* slice, bool on)
+{
+    if (!slice) {
+        return false;
+    }
+    if (on && !radioSideAutoNotchAvailable()) {
+        qCWarning(lcProtocol) << "RadioModel: radio auto notch refused:"
+                              << "this radio declares no radio-side DSP";
+        return false;
+    }
+    slice->setAnf(on);
+    return true;
+}
+
+bool RadioModel::requestAmCarrierLevel(int level)
+{
+    if (m_backend && !backendCapabilities().hasAmCarrierLevel) {
+        qCWarning(lcProtocol) << "RadioModel: AM carrier level refused:"
+                              << "this radio declares no AM carrier control";
+        return false;
+    }
+    m_transmitModel.setAmCarrierLevel(level);
+    return true;
+}
+
+void RadioModel::recallBandStackReceiveDsp(SliceModel* slice,
+                                           const BandStackEntry& entry)
+{
+    if (!slice) {
+        return;
+    }
+    // Under KiwiSDR external receive the AGC setters address the KiwiSDR AGC
+    // (its own dB range), but the bookmark holds the RADIO's AGC, saved from
+    // agcMode()/agcThreshold(). The caller then sends the AGC as wire text.
+    if (!slice->externalReceiveReplacementActive()) {
+        if (!entry.agcMode.isEmpty() && entry.agcMode != slice->agcMode()) {
+            slice->setAgcMode(entry.agcMode);
+        }
+        if (entry.agcThreshold != slice->agcThreshold()) {
+            slice->setAgcThreshold(entry.agcThreshold);
+        }
+    }
+    if (entry.nbOn != slice->nbOn()) {
+        slice->setNb(entry.nbOn);
+    }
+    if (entry.nbLevel != slice->nbLevel()) {
+        slice->setNbLevel(entry.nbLevel);
+    }
+    if (!radioSideNoiseReductionAvailable()) {
+        return;
+    }
+    if (entry.nrOn != slice->nrOn()) {
+        slice->setNr(entry.nrOn);
+    }
+    if (entry.nrLevel != slice->nrLevel()) {
+        slice->setNrLevel(entry.nrLevel);
+    }
 }
 
 void RadioModel::setTransmitFrequencyCheck(bool on)
@@ -5866,8 +6062,8 @@ bool RadioModel::requestPanAverage(const QString& panId, int average)
     // command below would fail and skip the model write. The model write
     // (m_fftAverage) feeds the rebuild restore, automation readback and
     // RadioResourceAdapter; actual averaging comes only from setPanAverage() (ANAN:
-    // WDSP analyzer averaging time). RTL averages in its acquisition-owned
-    // accumulator; HL2 does no averaging yet (#5678).
+    // WDSP analyzer averaging time; HL2: Hl2Spectrum time-constant average).
+    // RTL averages in its acquisition-owned accumulator.
     if (shapesDisplayRatesLocally()) {
         if (!pan) {
             return false;

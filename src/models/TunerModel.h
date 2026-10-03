@@ -101,6 +101,11 @@ public:
     // antenna/relay methods below) stays local and does not go through the seam.
     void setOperate(bool on);
     void setBypass(bool on);
+    // One operator action that needs BOTH verbs (STBY, BYP, the rail cycle),
+    // commanded in the order given. On a tuner no radio relays for, it is ONE
+    // refusal, not two: relayedCommandRefused fires once, naming the first
+    // verb, and nothing is sent.
+    void setOperateAndBypass(bool operate, bool bypass, bool operateFirst);
     void autoTune();
     // Break a tune already in progress — the same `autotune` the start uses,
     // which the firmware treats as a toggle. No-op when not tuning.
@@ -137,6 +142,14 @@ signals:
     void operateRequested(bool on);
     void bypassRequested(bool on);
     void autotuneRequested();
+    // OPERATE / STANDBY / BYPASS were asked of a tuner this client reaches
+    // ONLY over its direct port-9010 link. Those three are relayed by a Flex
+    // radio (the handle above), and the direct link carries no equivalent that
+    // this client speaks, so nothing was sent. Emitted instead of the silent
+    // debug-line return so the UI can say so; `command` is "operate" or
+    // "bypass". Not emitted with no tuner at all -- that is not a refusal of
+    // anything the operator can see.
+    void relayedCommandRefused(const QString& command);
 
 private:
     QString m_handle;

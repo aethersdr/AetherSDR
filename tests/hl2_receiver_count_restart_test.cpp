@@ -45,10 +45,11 @@ static void check(bool cond, const char* what)
     }
 }
 
-// A minimal valid EP6 packet: header plus both frame SYNCs. The samples are zero
-// because what is asserted here is the block GEOMETRY — how many receivers the
-// round decodes into — not any sample value.
-static QByteArray fakeEp6(std::uint32_t seq)
+// A minimal valid EP6 packet: header plus both frame SYNCs. Samples are zero,
+// because what is asserted is the block GEOMETRY, except that a `last` packet
+// carries a non-zero first RX1 I sample so the client side can recognise the
+// radio's final EP6 before a wedge. It stays in sequence for the loss accounting.
+static QByteArray fakeEp6(std::uint32_t seq, bool last = false)
 {
     QByteArray p(static_cast<int>(kUsbPacketSize), 0);
     auto* b = reinterpret_cast<std::uint8_t*>(p.data());
@@ -57,6 +58,8 @@ static QByteArray fakeEp6(std::uint32_t seq)
     b[6] = static_cast<std::uint8_t>(seq >> 8);  b[7] = static_cast<std::uint8_t>(seq);
     b[8] = b[9] = b[10] = 0x7F;                                         // frame A SYNC
     b[8 + kFrameSize] = b[9 + kFrameSize] = b[10 + kFrameSize] = 0x7F;  // frame B SYNC
+    if (last)
+        b[8 + 3 + 5] = 0x40;   // frame A: header, SYNC, C&C, then RX1 I (24-bit BE)
     return p;
 }
 
@@ -81,6 +84,10 @@ int main(int argc, char** argv)
     int stopsSeen = 0;
     int startsToDrop = 0;   // pretend this many metis-start datagrams never arrived
     std::uint32_t nextEp6Seq = 0;
+    // Set to make the radio answer its next C&C with one LAST-marked EP6 and
+    // then stop streaming, never saying so: a wedge whose final packet the
+    // client can recognise.
+    bool wedgeAfterNext = false;
     // ---- two ways a radio can come back, and the client must tell them apart ----
     //
     // The silence-recovery path deliberately does NOT reset m_haveRxSeq, and the
@@ -123,8 +130,14 @@ int main(int argc, char** argv)
             }
             // C&C (EP2). A started radio answers each one with an EP6 packet,
             // which is what keeps the ping-pong going; a stopped one says nothing.
-            if (streaming)
-                radio.writeDatagram(fakeEp6(nextEp6Seq++), dg.senderAddress(), dg.senderPort());
+            if (streaming) {
+                const bool last = wedgeAfterNext;
+                radio.writeDatagram(fakeEp6(nextEp6Seq++, last), dg.senderAddress(), dg.senderPort());
+                if (last) {
+                    wedgeAfterNext = false;
+                    streaming = false;
+                }
+            }
         }
     });
 
@@ -134,10 +147,19 @@ int main(int argc, char** argv)
     QSignalSpy downSpy(&client, &MetisClient::linkDown);
     int blocksSeen = 0;
     int lastBlockCount = 0;
+    // EP6 decoded AFTER the radio's last-marked packet. The radio sends nothing
+    // after it, so anything counted here is a real failure to stop.
+    bool lastSeen = false;
+    int blocksAfterLast = 0;
     QObject::connect(&client, &MetisClient::iqBlocksReady, &client,
                      [&](const std::vector<std::vector<std::complex<float>>>& blocks) {
                          ++blocksSeen;
                          lastBlockCount = static_cast<int>(blocks.size());
+                         if (lastSeen)
+                             ++blocksAfterLast;
+                         else if (!blocks.empty() && !blocks[0].empty()
+                                  && blocks[0][0] != std::complex<float>{})
+                             lastSeen = true;
                      });
 
     MetisClient::Params p;
@@ -158,13 +180,11 @@ int main(int argc, char** argv)
     const int stopsBefore = stopsSeen;
     client.setReceiverCount(2);
 
-    // SETTLE BEFORE ASSERTING ANYTHING. setReceiverCount blocks in
-    // sendPrimingBurst's msleeps with no event loop running, so at the instant it
-    // returns the fake radio has not yet seen the stop or the start — they are
-    // sitting in its socket, and so are the stragglers it sent before them. Both
-    // ends of this test live in one event loop; a real radio and a real host do
-    // not, which is exactly the asymmetry the retry has to survive.
-    spin(60);
+    // SETTLE BEFORE ASSERTING ANYTHING. The restart's start goes out >= 20 ms
+    // after the call and its sequence ends >= 40 ms after it, from the client's
+    // own timer. 150 ms leaves slack on a loaded runner and is still well short
+    // of the start retry, 300 ms past the restart's end.
+    spin(150);
     check(stopsSeen == stopsBefore + 1, "the restart stopped the stream first");
     check(startsSeen == startsBefore + 1, "and sent one start, which the radio lost");
     check(!streaming, "the radio is stopped — the start it lost never started it");
@@ -249,13 +269,20 @@ int main(int argc, char** argv)
         const std::uint32_t lostAcrossTheSilence = 761;
         seqBumpOnStart = lostAcrossTheSilence;
 
-        // The radio wedges: it stops streaming and never says so.
-        streaming = false;
-        blocksSeen = 0;
+        // The radio wedges: it stops streaming and never says so. Stopping it
+        // does not empty the client's socket, which may still hold answered
+        // EP6, so the radio's final EP6 is marked and the check counts only EP6
+        // decoded after it. Loopback delivers in order: no wait, no bound.
+        lastSeen = false;
+        blocksAfterLast = 0;
+        wedgeAfterNext = true;
         spin(1500);   // inside kSilenceTimeoutMs (2000) -- nothing should happen yet
+        check(!streaming, "the radio wedged after its last EP6");
         check(client.linkCounters().silenceRecoveryAttempts == 0,
               "no recovery before the silence timeout expires");
-        check(blocksSeen == 0, "and no EP6, because the radio really has stopped");
+        check(lastSeen, "the client decoded the radio's last EP6 before the silence");
+        check(blocksAfterLast == 0, "and no EP6 after it, because the radio really has stopped");
+        blocksSeen = 0;
 
         spin(1500);   // now past 2000 ms of silence, plus room for the run command
         check(client.linkCounters().silenceRecoveryAttempts == 1,

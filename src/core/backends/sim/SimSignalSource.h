@@ -20,7 +20,7 @@ namespace AetherSDR {
 //
 // Threading contract: construct anywhere, moveToThread(worker), then touch it
 // ONLY through queued calls; every public slot assumes it runs on the worker.
-// start()/stop() are slots so the member QTimer starts on its own thread.
+// startSession()/stop() are slots so the member QTimer starts on its own thread.
 // Signals are emitted on the worker and cross back queued.
 class SimSignalSource : public QObject {
     Q_OBJECT
@@ -32,7 +32,6 @@ public:
     static constexpr int kSpectrumRowEveryNFrames = 9;
 
 public slots:
-    void start();
     void startSession(quint64 session);
     void stop();
 
@@ -65,11 +64,15 @@ signals:
     // 24 kHz stereo float32, the format AudioEngine::feedAudioData() eats.
     void audioFrameReady(const AetherSDR::PcmFrame& stereo);
     void sliceAudioFrameReady(int sliceId, const AetherSDR::PcmFrame& stereo);
-    void spectrumFrameReady(int panId, const QByteArray& bins);
+    // `session` is the value startSession() was given, so the backend can
+    // drop a row a previous session queued, as the PcmFrame epoch does for
+    // audio (#6084).
+    void spectrumFrameReady(int panId, quint64 session, const QByteArray& bins);
 
 private:
     PcmProducer m_speakerPcm;
     PcmProducer m_slicePcm;
+    quint64 m_session{0};   // stamps spectrum rows; set by startSession()
     void onTick();
     void updateBirdieFromVfo();
     static QByteArray toStereoBytes(const QVector<float>& mono);
