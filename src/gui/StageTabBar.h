@@ -8,23 +8,17 @@
 class QButtonGroup;
 class QCheckBox;
 class QEvent;
+class QHBoxLayout;
 class QObject;
+class QPushButton;
 class QVBoxLayout;
 
 namespace AetherSDR {
 
-// The vertical stage column shared by AetherRX and AetherTX.
-//
-// One row per stage: a drag grip, the tab that selects its page, and an enable
-// checkbox. The bar owns the look and the gestures and knows nothing about
-// audio — the host says which stages exist and answers the questions the bar
-// asks (is this stage enabled, what is the chain order), so the same column
-// serves a receive chain and a transmit one without either growing a copy.
-//
-// Rows that are not chain stages — noise reduction ahead of the chain, the
-// output meter at the end of it — carry no grip and, if the host says so, no
-// checkbox, and hold their declared position while the rest reorder around
-// them.
+// Vertical stage column shared by AetherRX and AetherTX: per row a drag grip,
+// a page tab and an enable checkbox. Audio-agnostic; the host declares stages
+// and answers enabled/order queries. Non-chain rows (NR ahead, output meter
+// after) have no grip, optionally no checkbox, and keep their declared position.
 class StageTabBar : public QFrame {
     Q_OBJECT
 
@@ -63,9 +57,38 @@ public:
     // and TX indicators here.
     void addFooterWidget(QWidget* w);
 
-    // Add the footer button under the stretch — Settings, in both windows.
-    void addFooterButton(const QString& label, const QString& objectName,
-                         const QString& tooltip);
+    // Park a checkable button at the foot of the column, in call order with
+    // the other footer entries. Drawn as a stage tab so the column keeps one
+    // look, but checked means "engaged" rather than "selected", so it is not
+    // in the tab group and carries its own checked colour. The caller owns
+    // what it means — both windows put BYPASS here, beside the Settings gear.
+    // Returns the button for wiring and for mirroring state.
+    QPushButton* addFooterToggle(const QString& label, const QString& objectName,
+                                 const QString& tooltip);
+
+    // Several such toggles side by side on one row, sharing its width
+    // equally — the REC / PLAY pair in both windows. Returned in call order.
+    //
+    // The accent is the toggle's colour family: amber is the warning look
+    // BYPASS wears, red and green are the docked chain applet's record and
+    // play, so the same state looks the same wherever it appears.
+    enum class Accent { Amber, Red, Green };
+    struct FooterToggle {
+        QString label;
+        QString objectName;
+        QString tooltip;
+        Accent  accent{Accent::Amber};
+    };
+    QVector<QPushButton*> addFooterToggleRow(const QVector<FooterToggle>& toggles);
+
+    // The gear that opens Settings, in both windows. Icon-only, one tab
+    // high and square, and it leads the most recent toggle row -- BYPASS's,
+    // in both windows -- so the two share a line with the gear on the left;
+    // with no toggle row yet it gets a row of its own, left-aligned.
+    // `accessibleName` is what a screen reader says for it, since the glyph
+    // says nothing.
+    void addFooterGearButton(const QString& accessibleName, const QString& objectName,
+                             const QString& tooltip);
 
     // The drag payload type this column emits and accepts. Private to the
     // window: see the note in StageTabBar.cpp. Exposed so a test can cross
@@ -100,7 +123,8 @@ private:
     Host          m_host;
     QButtonGroup* m_group{nullptr};
     QVBoxLayout*  m_rows{nullptr};
-    QWidget*      m_footerRow{nullptr};
+    // The most recent toggle row's layout, for the gear to join.
+    QHBoxLayout*  m_lastToggleRow{nullptr};
 
     struct Row {
         int        id{-1};

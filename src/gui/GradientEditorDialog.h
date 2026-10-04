@@ -69,17 +69,10 @@ private:
 };
 
 
-// Modal dialog for editing a single linear or radial gradient token
-// (waterfall.colormap.default, .grayscale, .blueGreen, .fire, .plasma
-// and any other gradient leaves that flatten() finds).
-//
-// Workflow:
-//   * Open from ThemeEditorDialog when the user clicks a gradient row.
-//   * User adds / moves / recolours / deletes stops, adjusts angle (or
-//     centre/radius for radial).  Live preview shows the result.
-//   * OK → ThemeManager::setGradient(token, currentGradient()) which
-//     emits themeChanged() and re-paints every consumer.
-//   * Cancel → no-op; original on-disk value preserved.
+// Modal editor for one linear or radial gradient token
+// (waterfall.colormap.* and any gradient leaf flatten() finds), opened from
+// ThemeEditorDialog. Live preview; OK calls ThemeManager::setGradient(), which
+// emits themeChanged(); Cancel leaves the stored value untouched.
 class GradientEditorDialog : public PersistentDialog {
     Q_OBJECT
 public:

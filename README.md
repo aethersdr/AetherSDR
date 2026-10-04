@@ -10,7 +10,7 @@
 
 AetherSDR brings full FlexRadio operation to Linux, macOS, and Windows — each a native build, no Wine or virtual machines. A native aarch64 build also runs on Raspberry Pi and other embedded ARM devices. Built from the ground up with Qt6 and C++20, it speaks the SmartSDR protocol natively and aims to replicate the full SmartSDR experience.
 
-**Current version: 26.9.4** — CalVer (`YY.M.patch[.hotfix]`). | [Download](https://github.com/aethersdr/AetherSDR/releases/latest) | [Discussions](https://github.com/aethersdr/AetherSDR/discussions) | [What's New](https://github.com/aethersdr/AetherSDR/releases)
+**Current version: 26.10.1** — CalVer (`YY.M.patch[.hotfix]`). | [Download](https://github.com/aethersdr/AetherSDR/releases/latest) | [Discussions](https://github.com/aethersdr/AetherSDR/discussions) | [What's New](https://github.com/aethersdr/AetherSDR/releases)
 
 > **Native builds for Linux, macOS, and Windows** — Linux AppImage (x86-64 + aarch64), macOS DMG (Apple Silicon + Intel), Windows installer and portable ZIP. Every platform is built, tested in CI, and released together.
 
@@ -26,7 +26,7 @@ AetherSDR brings full FlexRadio operation to Linux, macOS, and Windows — each 
 - **Multi-slice & multi-panadapter** — colour-coded VFO overlays, independent TX assignment, diversity/ESC beamforming, and up to 8 detachable pans with native VITA-49 waterfall tiles and per-flag S-meter / **SmartMTR** views
 - **KiwiSDR and Web-888 public-receiver browser** — find and connect to public receivers worldwide through an API-policy-aware directory, with diversity receive and receive-only TX inhibit
 - **AetherTX and AetherRX** — the transmit and receive chains, one window each. AetherTX is the channel strip (gate, EQ, compressor, de-esser, tube, AetherVoice exciter, reverb, brickwall limiter) with a preset library and scope; AetherRX puts noise reduction, gate, EQ, compressor, tube, AetherVoice and the output meter on tabs down its left edge
-- **Seven client-side noise-reduction engines** — NR2 (spectral), RN2 (RNNoise), NR4 (libspecbleach), NNR (WDSP's Neural Noise Reduction), DFNR (DeepFilterNet3), BNR (the NVIDIA Maxine denoiser, in-process on a local RTX/GeForce GPU, Linux + Windows — [`docs/nvidia-bnr.md`](docs/nvidia-bnr.md)) and MNR (macOS)
+- **Seven client-side noise-reduction engines**, each denoising left and right independently so pans and diversity survive them — NR2 (spectral), RN2 (RNNoise), NR4 (libspecbleach), NNR (WDSP's Neural Noise Reduction), DFNR (DeepFilterNet3), BNR (the NVIDIA Maxine denoiser, in-process on a local RTX/GeForce GPU, Linux + Windows — [`docs/nvidia-bnr.md`](docs/nvidia-bnr.md)) and MNR (macOS)
 - **DAX virtual audio + IQ** — up to 8 RX audio channels (radio-dependent) plus 1 TX, and 4 channels of raw I/Q at 24–192 kHz for WSJT-X / fldigi / VARA / JS8Call, with a per-slice **WFM demodulator** for satellite data
 - **AetherModem packet radio** — KISS-over-TCP TNC, connected-mode AX.25 BBS, a personal mailbox, a WIDE1-1 fill-in digipeater, and an **APRS client** (station map, GPS beacon, messaging) on a Direwolf-derived VHF demodulator
 - **AetherSweep** — in-panadapter SWR analyzer with log scale, threshold-band shading and interpolated bandwidth at SWR ≤ 1.5 / 2.0
@@ -36,7 +36,7 @@ AetherSDR brings full FlexRadio operation to Linux, macOS, and Windows — each 
 - **FreeDV RADE** — AI digital-voice codec with a client-side neural encoder/decoder
 - **PSK Reporter map overlays** — optional global precipitation (LibreWXR, with NOAA, ECCC and EUMETNET OPERA regional radar backups and a per-provider legend), NOAA/NWS weather radar with observation playback ([`docs`](docs/psk-reporter-weather-radar.md)) and a NASA/GSFC VIIRS night-lights layer that fades through civil twilight ([`docs`](docs/psk-reporter-city-lights.md)), on both the 2D map and 3D globe
 - **SmartLink remote + TCI v2.0 server** — Auth0/TLS WAN operation, and CAT + audio + IQ + CW + spots over a single TCI WebSocket
-- **Broad hardware control** — rigctld and virtual-serial CAT, MIDI mapping, the FlexControl knob, serial PTT/CW keying, and Multi-Flex operation alongside SmartSDR/Maestro
+- **Broad hardware control** — rigctld and virtual-serial CAT, MIDI mapping, the FlexControl knob, serial PTT/CW keying, Multi-Flex operation alongside SmartSDR/Maestro, and a relay that puts a CTR2-Max controller on the radio over Wi-Fi (USB pending CTR2 firmware)
 - **Workspace canvas** — place pans and applets freely as resizable, layered items with edge and grid snapping, across several windows if you want them. Named workspaces recall which applets are open as well as where they sit, and bind to radio profiles. Off by default; the Classic shell is unchanged until you enable it
 - **Built-in demo mode** — a synthetic backend generating its own RX audio and matching panadapter, with a fault-injection harness, so you can explore the full UI with no radio attached (it cannot transmit)
 
@@ -54,7 +54,7 @@ PRs for anything labelled `aetherclaude-eligible`.
 Every change passes the same gate regardless of which tool — or human — produced
 it: branch protection enforces signed commits, green CI and CODEOWNERS review,
 and nothing reaches `main` without human review. The project's
-[Constitution](CONSTITUTION.md) (14 principles, structured per [Cisco's Foundry
+[Constitution](CONSTITUTION.md) (structured per [Cisco's Foundry
 Constitution](https://github.com/CiscoDevNet/foundry-security-spec) spec)
 codifies the conventions every contributor and every AI tool follows, and
 [`AGENTS.md`](AGENTS.md) is the canonical guide each assistant reads first.
@@ -78,33 +78,46 @@ Supported external devices include the 4O3A/FlexRadio PGXL (Power Genius XL)
 power amplifier and TGXL (Tuner Genius XL) antenna tuner, and — outside the
 radio seam entirely — ACOM S-series and SPE Expert (1.3K-FA / 1.5K-FA / 2K-FA)
 amplifiers over serial or ser2net TCP, and VK3AMP (600 W / 1000 W / 2000 W)
-amplifiers over TCP control with UDP telemetry.
+amplifiers over TCP control with UDP telemetry. Direct TGXL, PGXL and Antenna
+Genius connections authenticate with the device's access code.
 
 Active test target is FLEX-8600 firmware 4.2.18 (SmartSDR protocol v1.4.0.0);
 earlier 4.x firmware works; v3.x is unsupported.
 
-**Other radio families** ride the vendor-neutral `IRadioBackend` seam. Neither
-is a supported family yet, and FlexRadio remains the supported target:
+**Other radio families** ride the vendor-neutral `IRadioBackend` seam. None is
+a supported family yet (one Icom model is supported on its own, below), and
+FlexRadio remains the supported target:
 
 - **Hermes-Lite 2** — **experimental**. Four independent receivers, SSB voice
   through WDSP's TXA modulator with a reduction-only ALC, CW/RTTY decoding,
   AX.25 packet, band switching with hardware filters, manual notch filters, a
   host-side impulse noise blanker, host frequency calibration, a derived dBm
-  reference, an on-demand wideband bandscope and per-radio state restore
-  (including AGC mode and threshold).
+  reference, an on-demand wideband bandscope, minimum-phase receive filtering
+  outside CW, a declared board variant (bare HL2, AK4951 companion or
+  SquareSDR 2), receive squelch, the CW audio peaking filter, RIT and XIT per
+  receiver, backend-side FFT averaging, the CL1 external 10 MHz reference and
+  per-radio state restore (including AGC mode and threshold).
 - **Networked Icom** — **early**. CI-V over the RS-BA1 UDP transport, brought up
   on the IC-705 (receive, scope, transmit, FT8) and completed against a live
   IC-7300MK2 (controls, meters, ATU, WSPR, PC Audio routing and the CW decoder).
   The connect path asks the radio for its own CI-V address rather than assuming
   one. Only the IC-705 and IC-7300MK2 are verified against their own CI-V guides
   — an unrecognised model gets no scope and no transmit rather than optimistic
-  defaults.
+  defaults. The **IC-7300MK2 over built-in Ethernet/RS-BA1 is supported** as of
+  v26.9.5 ([RFC #5517](https://github.com/aethersdr/AetherSDR/issues/5517));
+  every other Icom model keeps the early, experimental treatment.
 - **ANAN-G2** — **experimental, receive-only**. openHPSDR Protocol 2 discovery
   with a single receive path, spectrum and audio, live tuning and zoom, live DDC
   rate changes, and DDC0 edge-droop compensation derived from the Saturn
-  gateware (an in-app calibration can override it). Transmit is a future phase.
+  gateware (an in-app calibration can override it). The panadapter is computed
+  by WDSP's display analyzer at one point per screen pixel, and the S-meter,
+  noise blanker and RF-gain attenuator work. The receiver's AF gain, mute and
+  balance apply, and receive audio also plays through the radio's own speaker.
+  Transmit is a future phase.
 - **RTL-SDR** — **experimental, receive-only**. Discovers supported USB dongles
-  through `librtlsdr` and provides one panadapter and one host-demodulated slice.
+  through `librtlsdr` and provides one panadapter and one host-demodulated slice,
+  publishing only the receive state the dongle confirmed, with capture browsing
+  and a 65,536-point zoom FFT.
 
 No radio at all? **Demo mode** runs the full UI against a synthetic backend
 that generates its own audio and spectrum.
@@ -134,7 +147,8 @@ Pre-built binaries are available from [Releases](https://github.com/aethersdr/Ae
 |----------|----------|-------|
 | **Linux x86_64** | `AetherSDR-*-x86_64.AppImage` | Single file, no install needed. `chmod +x` and run. |
 | **Linux ARM** | `AetherSDR-*-aarch64.AppImage` | Raspberry Pi, ARM laptops. `chmod +x` and run. |
-| **macOS** | `AetherSDR-*-macOS-apple-silicon.dmg` | Apple Silicon (M1+). Intel Macs via Rosetta. Signed & notarized. |
+| **macOS Apple Silicon** | `AetherSDR-*-macOS-apple-silicon.dmg` | Apple Silicon (M1+), macOS 14.4 or newer. Signed & notarized. |
+| **macOS Intel** | `AetherSDR-*-macOS-intel.dmg` | Intel Macs, macOS 14.4 (Sonoma) or newer. Signed & notarized. |
 | **Windows Installer** | `AetherSDR-*-Windows-x64-setup.exe` | Setup wizard with Start Menu shortcut and uninstaller. |
 | **Windows Portable** | `AetherSDR-*-Windows-x64-portable.zip` | No install needed. Extract and run. |
 
@@ -142,39 +156,51 @@ Pre-built binaries are available from [Releases](https://github.com/aethersdr/Ae
 
 ## Building from Source
 
-**Qt 6.8 or newer is required** — the same Qt the release binaries are built
-against (6.8.3 LTS), so what CI compiles is what ships. Distro Qt clears this on
-Debian Trixie, Ubuntu 25.10+, Fedora 41+ and Arch. It does **not** clear on
-Ubuntu 24.04 LTS (6.4.2), and on macOS Qt does not come from Homebrew at all —
-both cases are covered in [`docs/BUILDING.md`](docs/BUILDING.md).
+**Qt 6.12 is required** — the Qt every release is built against. Few distros
+package it yet, so Qt comes from `scripts/setup/setup-qt.sh`
+(`setup-qt.ps1` on Windows), which installs exactly the release Qt and
+qtkeychain in one command; CMake then finds it on its own. A distro Qt that is
+already 6.12 or newer also works. See
+[`docs/BUILDING.md`](docs/BUILDING.md#the-release-qt-setup-qtsh) for what the
+script checks and where it installs.
+
+See [BUILD-OPTIONS.md](BUILD-OPTIONS.md) for compile-time switches, defaults and
+prerequisites, including optional decoders and experimental radio backends.
 
 ### Dependencies
 
-Optional packages are noted in the build docs; the build succeeds without them
-with the corresponding features disabled.
+Everything except Qt and qtkeychain comes from the system. Optional packages
+are noted in the build docs; the build succeeds without them with the
+corresponding features disabled.
 
 ```bash
 # Arch / CachyOS / Manjaro
-sudo pacman -S qt6-base qt6-multimedia qt6-websockets qt6-serialport \
-  qt6-shadertools cmake ninja pkgconf autoconf automake libtool \
-  fftw rtl-sdr portaudio hidapi qtkeychain-qt6
+sudo pacman -S cmake ninja pkgconf autoconf automake libtool python curl git \
+  fftw rtl-sdr portaudio hidapi \
+  libpulse libglvnd fontconfig wayland libxkbcommon-x11 pipewire \
+  xcb-util-cursor xcb-util-image xcb-util-keysyms xcb-util-renderutil xcb-util-wm
 
-# Debian Trixie / Ubuntu 25.10+ / Linux Mint 23+
-# (Ubuntu 24.04's Qt is 6.4.2 — below the floor; see the note above.)
-sudo apt install qt6-base-dev qt6-base-private-dev qt6-multimedia-dev \
-  qt6-websockets-dev qt6-serialport-dev qt6-shader-baker qt6-shadertools-dev \
-  cmake ninja-build pkg-config autoconf automake libtool \
-  libfftw3-dev librtlsdr-dev portaudio19-dev libhidapi-dev qtkeychain-qt6-dev \
-  libxkbcommon-dev libopengl0 \
-  gstreamer1.0-pulseaudio gstreamer1.0-plugins-base
+# Debian / Ubuntu / Linux Mint
+sudo apt install cmake ninja-build pkg-config autoconf automake libtool \
+  python3 python3-venv curl git \
+  libfftw3-dev librtlsdr-dev portaudio19-dev libhidapi-dev \
+  libgl1-mesa-dev libpulse-dev libasound2-dev libpipewire-0.3-dev pipewire-bin \
+  libdbus-1-dev libglib2.0-dev libfontconfig1-dev libfreetype6-dev \
+  libx11-dev libx11-xcb-dev libxcb1-dev libxkbcommon-dev libxkbcommon-x11-dev \
+  libxcb-cursor0 libxcb-glx0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
+  libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-sync1 libxcb-util1 \
+  libxcb-xfixes0 libxcb-xinerama0 libxcb-xkb1 \
+  libopengl0 gstreamer1.0-pulseaudio gstreamer1.0-plugins-base
 
 # Fedora
-sudo dnf install qt6-qtbase-devel qt6-qtbase-private-devel qt6-qtmultimedia-devel \
-  qt6-qtwebsockets-devel qt6-qtserialport-devel qt6-qtshadertools-devel \
-  cmake ninja-build autoconf automake libtool \
-  fftw3-devel rtl-sdr-devel portaudio-devel hidapi-devel qtkeychain-qt6-devel
+sudo dnf install cmake ninja-build autoconf automake libtool python3 curl git \
+  fftw3-devel rtl-sdr-devel portaudio-devel hidapi-devel \
+  libglvnd-devel pulseaudio-libs-devel fontconfig-devel freetype-devel \
+  dbus-devel glib2-devel libX11-devel libxcb-devel \
+  libxkbcommon-devel libxkbcommon-x11-devel \
+  xcb-util-cursor xcb-util-image xcb-util-keysyms xcb-util-renderutil xcb-util-wm
 
-# macOS (Homebrew) — everything EXCEPT Qt and qtkeychain; see docs/BUILDING.md
+# macOS (Homebrew); Qt needs Xcode 16 — see docs/BUILDING.md
 brew install ninja cmake pkgconf autoconf automake libtool \
   fftw librtlsdr portaudio hidapi
 ```
@@ -184,6 +210,7 @@ brew install ninja cmake pkgconf autoconf automake libtool \
 ```bash
 git clone https://github.com/aethersdr/AetherSDR.git
 cd AetherSDR
+scripts/setup/setup-qt.sh            # Qt 6.12 (cached per user) + qtkeychain
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
 cmake --build build -j$(nproc)
 ./build/AetherSDR
@@ -212,13 +239,18 @@ Currently in flight:
 - **aetherd** — splitting a headless engine from thin UI clients across the
   vendor-neutral `IRadioBackend` seam that six backends already ride. Local
   receive control, bounded telemetry and credential-bound transmit grants with
-  Flex PTT handoff have landed; per-client propagation, transmit for the other
+  Flex PTT handoff have landed, and the desktop's slice receive controls travel
+  as typed backend requests; per-client propagation, transmit for the other
   families and a thin client to replace direct model access have not.
-- **Non-Flex backends** — Hermes-Lite 2 (experimental), networked Icom (early),
-  and ANAN-G2 and RTL-SDR (experimental, receive-only). Current coverage and
+- **Non-Flex backends** — Hermes-Lite 2 (experimental), networked Icom (early;
+  the IC-7300MK2 over RS-BA1 is supported), and ANAN-G2 and RTL-SDR
+  (experimental, receive-only). Current coverage and
   remaining work for each is under [Supported Hardware](#supported-hardware).
 - **Workspace canvas** — an experimental alternative shell; remaining work is
   live cross-window drag and field time against the Classic shell.
+- **CTR2 controller relay** — Wi-Fi mode works with today's CTR2 firmware;
+  USB mode's host side is complete, has carried the radio's status stream to
+  development firmware, and waits on a CTR2 USB firmware release.
 - **AppSettings nested-JSON refactor** — storage is on SQLite with per-radio
   versioned feature documents; the legacy flat keys still need migrating.
 - **Flathub submission** — the AppStream metainfo and manpage are in; the

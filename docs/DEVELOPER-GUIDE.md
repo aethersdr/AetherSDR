@@ -58,7 +58,7 @@ changes.
   Booleans are `"True"` / `"False"` strings. The store is SQLite
   (`AetherSDR.db`, RFC #4603) — never include `sqlite3.h` outside
   `SettingsDatabase.cpp`, and **never put a credential in the settings
-  store**: QtKeychain only (see AGENTS.md "Settings Persistence").
+  store**: QtKeychain only (see [`docs/agents/settings.md`](agents/settings.md) "Settings Persistence").
 - **Settings authority is capability-shaped** (RFC #4603): on a radio that
   persists its own state (Flex), never persist or override radio-managed
   settings client-side (frequency, mode, filter, AGC, TX power, per-pan
@@ -67,11 +67,11 @@ changes.
   NOTHING (HL2), the client is its memory — but only for the domains the
   backend declares in `RadioCapabilities::clientSettingsDomains`, and only
   through `RadioStateMemory`'s document, never flat `AppSettings` keys or
-  ad-hoc paths. See AGENTS.md "Settings Authority Policy" for the full rules.
+  ad-hoc paths. See [`docs/agents/settings.md`](agents/settings.md) "Settings Authority Policy" for the full rules.
 - **Radio-scoped config** goes in `radio_settings` feature documents via
   `RadioModel::settingsScope()` — one versioned JSON document per feature
   (Principle V), atomic whole-document writes, write failures surfaced. See
-  AGENTS.md "Radio-Scoped Feature Documents".
+  [`docs/agents/settings.md`](agents/settings.md) "Radio-Scoped Feature Documents".
 
 ### Working in MainWindow
 
@@ -162,21 +162,13 @@ Key files: `Slice.cs`, `Radio.cs`, `Panadapter.cs`, `Transmit.cs`,
 
 ### Optional Dependencies
 
-Features gated behind compile-time flags:
+See [BUILD-OPTIONS.md](../BUILD-OPTIONS.md) for the CMake switches, defaults,
+platform requirements and dependency detection that control optional features.
 
-| Flag | Package | Feature |
-|------|---------|---------|
-| `HAVE_SERIALPORT` | `Qt6::SerialPort` | FlexControl, serial PTT/CW |
-| `HAVE_WEBSOCKETS` | `Qt6::WebSockets` | FreeDV Reporter, TCI server |
-| `HAVE_KEYCHAIN` | `Qt6Keychain` | SmartLink credential persistence |
-| `HAVE_MIDI` | Bundled RtMidi | MIDI controller mapping |
-| `HAVE_RADE` | Bundled RADE/Opus | FreeDV digital voice |
-| `HAVE_SPECBLEACH` | libspecbleach (clang-cl on Win) | NR4 spectral noise reduction |
-| `HAVE_DFNR` | Bundled DeepFilterNet3 | DFNR neural noise reduction |
-| `HAVE_BNR` | NVIDIA NIM container | GPU noise removal |
-| `HAVE_MQTT` | Bundled libmosquitto | MQTT applet |
-
-Use `#ifdef HAVE_*` guards. Features must degrade gracefully when unavailable.
+CMake generates compiler definitions such as `HAVE_SERIALPORT`,
+`HAVE_WEBSOCKETS` and `HAVE_DEEPFIST` from the resulting configuration; they are
+not user-facing CMake switches. Use the corresponding `#ifdef` guards in code.
+Features must degrade gracefully when unavailable.
 
 ### Commit Messages
 

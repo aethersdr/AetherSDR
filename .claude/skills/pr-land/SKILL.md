@@ -102,7 +102,7 @@ The bar is: *would a different answer have changed the work?* If yes, ask.
   is not this: dropping a stem whose coupling the push actually removed,
   lowering a freeze count, deleting an emptied row — canon demands those of a
   conversion, so do them and say so in one line.
-- **Restructuring toward the aetherd RFC.** `AGENTS.md` is explicit: do not
+- **Restructuring toward the aetherd RFC.** `docs/agents/backends.md` is explicit: do not
   pre-emptively restructure code toward it — no new engine/UI seams, no
   backend interfaces, no speculative library targets — and architecture ahead
   of the RFC's staged order is maintainer-only. A remediation pass helpfully
@@ -233,8 +233,9 @@ author labelled "nit, non-blocking" (they still block; see step 11).
 **Reviews** — `gh api repos/aethersdr/AetherSDR/pulls/<PR>/reviews --paginate
 --jq '.[] | {id, user: .user.login, state, submitted_at}'`. Only the latest
 review per reviewer counts toward `reviewDecision`; note every
-`CHANGES_REQUESTED` and the body text of each, which often carries findings
-that never became inline threads.
+`CHANGES_REQUESTED` and the body text of each. `/pr-review` puts every finding
+in the review body, located by `file:line`, so the body is the primary finding
+list; threads come from other reviewers or the rare inline exception.
 
 **Top-level comments** — `gh pr view <PR> --json comments`. These do not block
 the merge, so they are the ones that get skipped; bot findings and maintainer
@@ -246,8 +247,8 @@ trigger tests the merge result, a `push`-triggered check on the branch does
 not include current main.
 
 **The prior review** — if `/pr-review` ran in this session, its blockers and
-nits are items. If it did not, read the posted review bodies; do not assume
-the inline threads are the whole of it.
+nits are items. If it did not, read the posted review bodies; that is where
+its findings are.
 
 ## 2. Fresh adversarial pass
 
@@ -269,14 +270,14 @@ the reason this pass exists rather than a checklist of replies.
 - **Audit governance on the current head**, because the head has moved since
   the review: `CONSTITUTION.md` (I FlexLib authority — and the HL2 gateware
   RTL as its analogue; II/III radio-authoritative state and capability-shaped
-  persistence; V feature-owned config; VI TX safety), `AGENTS.md` settings
+  persistence; V feature-owned config; VI TX safety), `docs/agents/settings.md` settings
   persistence, credentials policy, capability declarations, the CMake settings
   contract, `docs/style/theme-style-guide.md` (every colour through a
   ThemeManager token), `docs/a11y.md`, test registration in `tests/tests.cmake`.
   Quote the sentence in canon or it is a nit, not a blocker.
 - **Audit the aetherd migration ratchets**, which that list does not reach.
-  Read `AGENTS.md` § "In-flight: aetherd engine/UI decoupling" on the head you
-  are landing — the whole section, because it changes as the RFC's staged
+  Read `docs/agents/backends.md` on the head you
+  are landing — the whole file, because it changes as the RFC's staged
   order advances — and audit the diff against it: EB1/EB2/EB3, the
   build-target link rules, the capability-record and command-plane freezes,
   the routing table for where radio-facing code goes, and the THREADING AND
@@ -350,7 +351,7 @@ the same shape and was resolved by one producer and one path through `panFeed`
 rather than by a gate.
 
 **The #5554 items are mostly invisible to CI.** The notice at the top of
-`AGENTS.md` § "AI Agent Guidelines" gates any change touching
+`AGENTS.md` § "AI Agent Guidelines" (full text in `docs/agents/backends.md`) gates any change touching
 `src/core/backends/`, `RadioModel`, `RadioSession`, `TransmitModel`,
 `ConnectionPanel`, discovery or `RadioCapabilities` — which is most of what
 this skill pushes into. Check the diff adds to none of its items: no new
@@ -359,8 +360,8 @@ above the seam, no new `dynamic_cast` to a concrete backend, no new capability
 without a verb behind it, no HL2 scaffolding copied into another host-DSP
 family, no keying-class verb that skips `RadioModel`'s TX gate.
 
-**If the PR touches `src/aetherd/` or `RadioResourceAdapter`**, that same
-AGENTS.md section carries the protocol audit: new resource fields belong in
+**If the PR touches `src/aetherd/` or `RadioResourceAdapter`**, `docs/agents/backends.md` (rules) and the RFC's
+"Implementation status" appendix (current contract) carry the protocol audit: new resource fields belong in
 the adapter and the versioned catalogue, never in a transport and never via
 QObject reflection; the local transport defaults to observe permission and
 `--allow-local-control` grants non-TX control only; admission is fail-closed
@@ -410,7 +411,7 @@ Standing prohibitions, each of which has cost something real:
     demands each of these of the PR that does the conversion. Do them, prove
     the coupling is gone, and note it in one line.
   - **Growing is the prohibition.** A larger count, a new stem or row, a
-    raised `FROZEN_BOOL_COUNT`, a retagged header. AGENTS.md's rule is to
+    raised `FROZEN_BOOL_COUNT`, a retagged header. `docs/agents/backends.md`'s rule is to
     restructure the change — not to move the file, weaken the check, or add an
     exemption. The tags file is the sharpest edge, because EB3 derives its
     vendor vocabulary from it at runtime: retagging a `vendor(...)` header as
@@ -431,7 +432,7 @@ Standing prohibitions, each of which has cost something real:
   in the root `CMakeLists.txt`. A test not being in a CI gate regex is not a
   coverage gap — the sanitizer sweep runs the unfiltered tree.
 - **A socket-owning test needs operator direction before it is executed**
-  (`AGENTS.md` § Test-layer boundary). Notify, do not run it, continue.
+  (`docs/agents/tests-ci.md` § Test-layer boundary). Notify, do not run it, continue.
 
 ## 5. Prove each fix
 
@@ -588,7 +589,7 @@ non-code-owner identity nothing here makes an approval valid: finish the
 remediation, resolve the threads, and hand the approval off (step 11's
 `BLOCKED` fourth cause).
 
-Three things decide the order here, and all three fail silently:
+Two things decide the order here, and both fail silently:
 
 - **`dismiss_stale_reviews: true`** — any push dismisses an existing
   approval. Approve **after** the final push, and re-approve after any later
@@ -600,93 +601,51 @@ Three things decide the order here, and all three fail silently:
   time** — a mid-pass push by the author makes your review describe a tree you
   never read. If it moved, diff `proved..current`, re-verify which findings
   survive, and work the real head before approving.
-- **`main` may have moved since the head's checks ran** — the one below.
 
-### Is the green still current? (check every time, before approving)
+### Does it still merge cleanly? (check before approving)
 
-**A green check proves the merge result was sound WHEN IT RAN, not now.** The
-required checks are `pull_request`-triggered, so each one built `main +
-this PR` as `main` stood at that moment. If `main` has moved since, every one of
-them is describing a merge that is not the merge you are about to make.
+`main` keeps moving while you work. **Do not chase it.** `main` having moved
+since the head's checks ran is not a reason to update the branch. `main` has
+`strict: false` by design, and `ci.yml`'s header says why: requiring branches
+to be up to date forced a rerun on every open PR whenever `main` moved. That
+holds for the PR you are landing too. If it merges cleanly on a green run,
+approve it and let it merge. What shows the squash result is sound is step 13
+(CI on the squash-merge commit on `main`), together with the duty to fix
+forward if that goes red.
 
-`main` has `strict: false` deliberately, and `ci.yml`'s header says why:
-requiring branches to be up to date forced a rerun on every open PR whenever
-`main` moved, and the accepted trade-off is that a semantic conflict surfaces
-on `main` post-merge instead. **That trade-off is priced for the fleet of open
-PRs. It is not priced for the one PR you are about to merge**, where the
-conflict becomes a red `main` that step 13 makes yours.
+What you do check:
 
-The measure is when the **run was created**, not when any job started. For a
-`pull_request` event GitHub computes the merge commit and freezes `github.sha`
-at run creation; no `actions/checkout` in `ci.yml` or `static-checks.yml`
-overrides `ref`, so every required job builds that frozen tree no matter how
-long it waited to start. `static-checks.yml:297` states this in the repo's own
-words, and cites #4895 — a run whose pinned tree was 22 hours older than the
-job that scanned it.
+```sh
+gh pr view <PR> --json headRefOid,mergeable,mergeStateStatus   # MERGEABLE, not CONFLICTING
+gh pr checks <PR> --required --json name,bucket                # every required context "pass"
+```
 
-So a job's `started_at` is later than the tree it built, by the queue delay,
-and using it re-opens the same optimistic bound in a narrower form: `main`
-moves at T, a run created a minute before that builds the pre-move tree,
-`build` starts three minutes after it, and "earliest required start is newer
-than the tip" waves through exactly the merge that went red. Fork PRs held
-for workflow approval widen that gap arbitrarily.
+- **Conflicts** (`CONFLICTING` / `DIRTY`) are the only reason to bring `main`
+  in. Resolving them is a decision (gate): ask.
+- **The required checks must be green on the current head.** If this head has
+  no run, that is not a pass: wait for the run.
+- **Never `update-branch` because `main` moved**, and never update again
+  because it moved after your update. Each update is a push. It restarts CI on
+  three platforms and dismisses any approval.
 
-Taking the creation time also removes the need to single out the required
-checks: all of one push's `pull_request` runs share the event that created
-them, so there is no split to filter for, and a run from another event only
-ever moves the bound *earlier* — toward re-running, which is the safe
-direction. A hand re-run keeps its original `created_at` and only advances
-`run_started_at`, which is correct: a re-run still builds the frozen tree.
+Record which `main` the green was built against, for the report. It is not a
+gate. It tells whoever reads step 13 what the merge result contains that CI
+never built: compare the head's earliest run `created_at` with `main`'s tip,
+and if `main` is newer, list the commits that landed after the run was created
+and touch `src/`, `tests/`, `tools/`, `.github/workflows/` or a CMake file. A
+changed signature on a shared seam merges cleanly and still breaks the build,
+so a red `main` after the merge is traced from that list first:
 
 ```sh
 HEAD=$(gh pr view <PR> --json headRefOid -q .headRefOid)
-
-# When the merge base was frozen: the earliest run creation on that exact head.
-# --paginate: a busy SHA truncates at one page. The per-page --jq streams, so
-# the global minimum comes from `sort | head -1`, not from jq's `min`.
 gh api --paginate "repos/aethersdr/AetherSDR/actions/runs?head_sha=$HEAD" \
-  --jq '.workflow_runs[] | "\(.created_at)\t\(.name)"' \
-  | sort | head -1
-
-# main's tip, right now
+  --jq '.workflow_runs[] | .created_at' | sort | head -1
 gh api repos/aethersdr/AetherSDR/commits/main \
   --jq '.sha[0:12] + "  " + .commit.committer.date'
+# if main is newer: the commits CI never built against this PR
+gh api "repos/aethersdr/AetherSDR/commits?sha=main&since=<created_at>" \
+  --jq '.[] | .sha[0:9] + "  " + (.commit.message | split("\n")[0])'
 ```
-
-**Empty output is not a pass.** No run for this head means nothing has been
-built against any `main`, which is strictly worse than a stale green — treat it
-as stale and wait for the run. That the required contexts exist and are green
-is a separate question, answered at step 0 and again at step 11; this bound
-says only how old their tree is.
-
-If `main`'s tip is **newer** than that creation time, the green is stale.
-Nothing in `gh pr view` says so: `mergeStateStatus` reports `BEHIND` only
-for the branch's own position, and a PR sits at `CLEAN` on a green that predates
-`main`'s newest commit. The window does not have to be large — nine minutes
-was enough to land #5516 on a green that never saw #5659's changed
-`IRadioBackend::setKeying` signature, and `main` went red at the Build step.
-
-**Default: update the branch, then wait for the fresh run.**
-
-```sh
-gh api -X PUT repos/aethersdr/AetherSDR/pulls/<PR>/update-branch
-```
-
-That appends a merge commit — harmless, since the repo squash-merges and it
-never reaches `main` — and triggers CI against current `main`. One cycle, spent
-on the one PR that is actually landing, which is exactly the cost the
-fleet-wide setting was rejected to avoid and the only place it buys anything.
-It is a push, so it dismisses an approval: update **before** you approve, never
-after.
-
-The single exemption: every intervening commit touches nothing under `src/`,
-`tests/`, `tools/`, `.github/workflows/` or any CMake file. Workflows belong in
-that list for the same reason as the rest — a `ci.yml` change on `main` reds
-the lander without going near a source tree. Then say so in the report **with
-the commit list**, so "I checked" and "I did not check" do not read alike.
-Anything else is a re-run, not a judgment call — a changed signature on a
-shared seam is the canonical case, and it is invisible to three-way merge
-because no line of it conflicts.
 
 Then post one approving review — body only, no new inline comments; anything
 worth an inline comment at this point is a finding, and a finding means you
@@ -734,12 +693,8 @@ Arming is a request, not an outcome. Read `mergeStateStatus` after:
   and put the route to the maintainer: admin-merge (`enforce_admins: false`
   allows it), request a review from a core dev, or leave it armed and blocked
   pending that review.
-- `BEHIND` — `strict: false`, so being behind does not block the merge, and
-  being behind is not by itself a reason to update. **It is also not the
-  question.** `BEHIND` describes the branch's position; what decides whether
-  this PR is safe to arm is whether `main` moved since the head's checks ran,
-  which a `CLEAN` PR hides completely. Step 10's green-still-current check is
-  the one that answers it, and it runs whatever `mergeStateStatus` says here.
+- `BEHIND` — `strict: false`, so being behind does not block the merge and is
+  not a reason to update (step 10). Leave it armed and let it fire.
 - `DIRTY` — conflicts. Resolving them is a decision (gate): ask.
 - `DRAFT` — mark ready first.
 - `UNKNOWN` — GitHub is still computing; re-query before concluding anything.
@@ -788,11 +743,12 @@ are indistinguishable. Name anything unverified and why.
 armed and confirmed able to fire — plus the one thing still standing between
 the PR and `main`, if there is one.
 
-State the green-freshness answer here explicitly: the creation time of the
-head's earliest CI run, `main`'s tip at arming time, and which way the
-comparison went. If you
-took the docs-only exemption, list the intervening commits. A reader cannot
-otherwise tell a checked-and-current green from an unchecked one.
+Say which `main` the green was built against: the creation time of the
+head's earliest CI run, `main`'s tip at arming time, and whether `main` was
+newer. If it was, list the intervening commits that touch `src/`, `tests/`,
+`tools/`, `.github/workflows/` or a CMake file (step 10). It is not a gate. It
+tells the reader of the post-merge check what the squash result contains that
+CI never built.
 
 ### Post-merge (Principle XI)
 The squash commit's SHA and the verdict of `main`'s CI on it — the check that
@@ -850,6 +806,7 @@ finished pass; an implied one is not.
 - Work, build or `git stash` in the invoking checkout.
 - `git push origin HEAD:<branch>` on a fork PR.
 - Push an empty commit to retrigger CI.
+- Update the branch because `main` moved.
 - Leave an item "for the author".
 - Post an approving review from an identity that is not a code owner for the
   paths the PR touches.

@@ -2,6 +2,7 @@
 
 #include <complex>
 #include <cstddef>
+#include <cstdint>
 #include <span>
 #include <vector>
 
@@ -18,12 +19,50 @@ namespace AetherSDR::hl2 {
 // so construct instances off the real-time path (single-channel today).
 class Hl2Spectrum {
 public:
-    explicit Hl2Spectrum(int fftSize = 1024);
+    // `sampleRateHz` is the IQ rate this object is fed at: it turns a count of
+    // samples into time for setAverageTimeMs(). 0 (the default, for fixtures
+    // that look at one frame) leaves time-based averaging inert.
+    explicit Hl2Spectrum(int fftSize = 1024, double sampleRateHz = 0.0);
     ~Hl2Spectrum();
     Hl2Spectrum(const Hl2Spectrum&) = delete;
     Hl2Spectrum& operator=(const Hl2Spectrum&) = delete;
 
     [[nodiscard]] int fftSize() const noexcept { return m_fftSize; }
+
+    // A bin-centred steady tone of magnitude A reads 20*log10(A) plus this:
+    // 20*log10(2), because the normalisation divides by half the window sum.
+    static constexpr double kToneGainDb = 6.020599913279624;
+
+    // A fixed depth in display frames (1 = none): EMA with alpha = 1/frames, for
+    // fixtures. The operator's FFT AVG is a time (setAverageTimeMs()); setting
+    // this clears it. Drops the state. Call on the hl2-io thread (unsynchronised).
+    void setAverageFrames(int frames) noexcept;
+    [[nodiscard]] int averageFrames() const noexcept { return m_averageFrames; }
+
+    // The operator's FFT AVG as a time constant in ms (0 = none). Each frame blends
+    // with alpha = 1 - exp(-dt/tau), dt = IQ samples since the last frame / rate
+    // (WDSP's analyzer law): response time is fps-invariant, noise reduction is not.
+    // A transport gap does not advance this clock, so the pre-gap estimate holds.
+    // A change drops the state. Inert without a sample rate.
+    void setAverageTimeMs(double tauMs) noexcept;
+    [[nodiscard]] double averageTimeMs() const noexcept { return m_averageTimeMs; }
+
+    // The blend weight one frame gets after dtSeconds, at time constant
+    // tauSeconds. Exposed so the mapping is testable without an FFT; tau <= 0
+    // means no averaging and returns 1 (the new frame replaces the state).
+    [[nodiscard]] static double blendAlpha(double dtSeconds, double tauSeconds) noexcept;
+
+    // Averaging domain. false (default) integrates power and takes the log at
+    // emit; true blends dBFS (log-recursive, WDSP average mode 3), ~2.5 dB lower
+    // on noise. The operator's weighted-average toggle selects it, as on the
+    // ANAN. A change drops the state.
+    void setLogAverage(bool on) noexcept;
+    [[nodiscard]] bool logAverage() const noexcept { return m_logAverage; }
+
+    // Forget the running average and take the next frame whole. Keeps the
+    // partial frame, which a setting change leaves valid; a retune (NCO move)
+    // also calls reset() to discard it.
+    void dropAverage() noexcept;
 
     // Append IQ samples; each time a full frame accumulates, compute one
     // spectrum. `binsDbfs` is resized to fftSize (DC at index fftSize/2) and
@@ -36,44 +75,16 @@ public:
     // when the next frame comes due it completes from recent contiguous samples
     // instead of refilling from empty.
     //
-    // Refilling was what made the achieved frame rate track the SPAN rather than
-    // the operator's slider. A frame is fftSize samples and an EP6 block is 126,
-    // so an empty accumulator costs ~9 block intervals before a frame can be
-    // emitted at all — 23.6 ms at 48 kHz but only 3.0 ms at 384 kHz. Feeding it
-    // instead bounds that to a single block.
-    //
-    // Caps at fftSize - 1 deliberately: older samples can never contribute to
-    // the next transform, and leaving the buffer exactly full would break
-    // process()'s frame-boundary detection (it fires on == fftSize after a
-    // push_back, so a pre-filled buffer would step straight past it and never
-    // emit another frame).
+    // (An empty accumulator would cost ~9 EP6 blocks per frame, making frame
+    // rate track the span.) Caps at fftSize - 1: process() fires on == fftSize
+    // after a push_back, so a full buffer would step past it and never emit.
     void accumulate(std::span<const std::complex<float>> iq);
 
-    // Drop whatever partial frame has accumulated, returning how many samples
-    // went with it (0 = nothing was in flight, so nothing was salvaged).
-    //
-    // The caller is a TRANSPORT SEQUENCE GAP, not the geometry change this was
-    // originally written for. A geometry change RECONSTRUCTS this object --
-    // Hl2RxDsp::configure() does `m_spectrum = std::make_unique<Hl2Spectrum>(...)`
-    // -- so the accumulator is already empty on the far side of one, and that is
-    // why this function sat with no caller in the tree at all. The case that
-    // genuinely needs it is the one nobody wired: lost EP6 packets.
-    //
-    // WHY A GAP MATTERS HERE and not merely to a packet counter. process()
-    // carries a partial frame ACROSS calls and transforms only on
-    // `m_acc.size() == m_fftSize`. An EP6 block is 126 IQ samples and a frame is
-    // fftSize, so ~8 blocks build one frame at the 1024 points every backend
-    // here actually runs. When packets are lost mid-frame the accumulator keeps
-    // the pre-gap samples and fills the rest from post-gap ones: the FFT then
-    // spans a time discontinuity, and the phase relationship across the seam is
-    // not a measurement of anything. Discarding is the right answer rather than
-    // zero-filling the hole -- there is no sample to interpolate, the radio
-    // never sent it, and a zero run is a broadband transient this window would
-    // faithfully render as signal.
-    //
-    // The RETURN VALUE is what makes "a gap arrived" distinguishable from "a gap
-    // cost us a frame". A gap landing exactly on a frame boundary discards
-    // nothing and corrupts nothing; see Hl2RxDsp::spectrumGapDiscards().
+    // Drop the partial frame on a transport sequence gap, returning samples
+    // discarded (0 = none): discard, not zero-fill, which renders as a transient.
+    // Averaging state is kept (same spectrum). A retune wants the opposite
+    // answer and calls this AND dropAverage(); buildChannel() rebuilds this
+    // object on FFT size/rate change.
     std::size_t reset() noexcept
     {
         const std::size_t discarded = m_acc.size();
@@ -88,6 +99,30 @@ private:
     std::vector<std::complex<float>> m_acc;   // accumulation buffer (< m_fftSize)
     std::vector<double> m_window;             // Hanning window
     double m_coherentGain = 1.0;              // sum(window) / 2
+    // The square of it, precomputed. computeFrame() divides POWER by this
+    // where it used to divide magnitude by m_coherentGain, and the two are the
+    // same normalisation: (mag/g)^2 == (re^2 + im^2)/g^2.
+    double m_coherentGainSq = 1.0;
+    int m_averageFrames = 1;                  // 1 = no averaging (the default)
+    // Time-constant averaging; see setAverageTimeMs(). 0 = off. Takes
+    // precedence over m_averageFrames, and each setter clears the other.
+    double m_sampleRateHz = 0.0;
+    double m_averageTimeMs = 0.0;
+    bool m_logAverage = false;                // see setLogAverage()
+    // IQ samples received since the last frame was computed — the dt of the
+    // time-constant blend. Counts accumulate()'s discards too: they are time
+    // that passed, whether or not they reach a transform.
+    std::uint64_t m_samplesSinceFrame = 0;
+    // Per-bin EMA state, fftshifted like the emitted bins; power, or dBFS while
+    // m_logAverage is set. Sized once at construction so nothing here allocates.
+    // HL2-private on purpose (RFC #5782 q3): it moves to src/core/dsp/ when a
+    // second consumer (RTL) needs it.
+    std::vector<double> m_avgPower;
+    // Whether m_avgPower holds a frame yet. An EMA seeded at zero would show
+    // the operator roughly `frames` frames of an artificially low floor every
+    // time averaging is switched on or the geometry changes, so the first
+    // frame after a drop is TAKEN rather than blended into silence.
+    bool m_haveAverage = false;
     // Opaque FFTW handles (kept as void* so fftw3.h stays out of the header).
     void* m_in = nullptr;                     // fftw_complex[m_fftSize]
     void* m_out = nullptr;                     // fftw_complex[m_fftSize]

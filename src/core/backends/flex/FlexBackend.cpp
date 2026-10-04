@@ -6,8 +6,8 @@
 #include <QThread>
 
 #include "core/LogManager.h"
-#include "core/RadioConnection.h"
-#include "core/PanadapterStream.h"
+#include "core/backends/flex/RadioConnection.h"
+#include "core/backends/flex/PanadapterStream.h"
 #include "core/backends/MemoryWireCodec.h"
 #include "core/backends/flex/FlexKvCarry.h"
 #include "models/ModelCapabilities.h"
@@ -225,6 +225,9 @@ RadioCapabilities FlexBackend::capabilities() const
     caps.model = m_modelProvider ? m_modelProvider() : QString();
     caps.fmTonePresentation = FmTonePresentation::Legacy;
     caps.fmDtcsCodes = {};
+    // squelch_level 0..100 is dBm above -160 on the calibrated pan axis, in
+    // every mode, so the pan floor plus a margin is the level to send.
+    caps.squelchLevelScale = legacyDbmSquelchScale();
 
     // Seed from the FlexLib-sourced platform table (Principle I). This is the
     // derived-from-name truth used to *seed* the reported capabilities; a fuller
@@ -256,6 +259,13 @@ RadioCapabilities FlexBackend::capabilities() const
     caps.hasManualNotch = false;
     caps.hasTransmitFrequencyCheck = false;
     caps.hasDdcPanEdgeRolloff = false;  // superhet/direct-sampling, no DDC decimation edge
+    // Per-pan band/segment zoom. `display pan set <pan> band_zoom=|segment_zoom=`
+    // is FlexLib's own wire text and the radio owns the resulting flags, which is
+    // why this is the only backend that engages the record. The string is the
+    // declaration naming what it grants; the gate reads only that the record is
+    // engaged (gui/PanZoomModeGate.h).
+    caps.panZoomModes = RadioCapabilities::PanZoomModes{
+        QStringLiteral("display pan set")};
     // A Flex blanks impulses in its OWN DDC, so NB is already the radio's under
     // hasRadioSideDsp above and the host has nothing to add. This flag says
     // where the blanker runs, not whether the radio has one.
@@ -270,8 +280,9 @@ RadioCapabilities FlexBackend::capabilities() const
     // `transmit rfpower=` is parsed off radio status, so the value the model
     // carries is confirmed radio state rather than this client's request
     // (#5518, Principle II).
+    // Tune power reaches a Flex as command-plane text, not setTunePower().
     caps.transmitDriveControl = RadioCapabilities::TransmitDriveControl{
-        SliceFrequencyControl::Authority::Radio};
+        SliceFrequencyControl::Authority::Radio, /*tunePowerAppliesLive=*/false};
     // A Flex transmits in every mode it demodulates, so there is nothing for the
     // receive-only mode guard to refuse. Stated rather than defaulted, per the
     // "adding a field" rule in RadioCapabilities.h.
@@ -305,7 +316,8 @@ RadioCapabilities FlexBackend::capabilities() const
     caps.hasDownwardExpander = true;
     caps.hasAgcThreshold = true;
     caps.hasAmCarrierLevel = true;
-    caps.hasVoxDelay = true;
+    caps.voxControl = RadioCapabilities::VoxControl{/*hasDelay*/ true};
+    caps.txMonitorControl = RadioCapabilities::TxMonitorControl{};
 
     // FALSE, and stated rather than left to the default. A Flex modulates on
     // the radio AND takes its transmit audio over DAX/VITA-49, so it is the one
@@ -363,27 +375,11 @@ RadioCapabilities FlexBackend::capabilities() const
     // values; 10 Hz is where the model clamps.
     caps.notchMinWidthHz = 10.0;
     caps.notchMaxWidthHz = 6000.0;
-    // GPSDO / on-board GNSS, reported through the `gps` status.
-    //
-    // TRUE for every Flex, and deliberately COARSER than
-    // RadioModel::hasGpsHardware(). The two answer different questions and both
-    // are needed:
-    //
-    //   - this flag: "can a radio of this family have GPS at all" — a family
-    //     fact, which is what the capability seam is for and all a backend can
-    //     honestly assert before any status has arrived;
-    //   - hasGpsHardware(): "does THIS unit have it" — model name (8400/8600/
-    //     AU-), a live oscillator presence flag, OR a `gps` status that is not
-    //     "Not Present".
-    //
-    // Do not narrow this to the model-name test to match. That clause is one
-    // half of an OR: a FLEX-6700 with an optional GPSDO installed answers true
-    // through the STATUS clause, and a model-name test here would hide GPS on
-    // exactly those radios — a regression in the opposite direction from the one
-    // it would appear to fix.
-    //
-    // MainWindow therefore combines this family declaration with
-    // RadioModel::hasGpsHardware() while connected.
+    // GPSDO / on-board GNSS via the `gps` status. True for every Flex: a family fact,
+    // coarser than RadioModel::hasGpsHardware() (this unit: model name, oscillator
+    // presence, OR a `gps` status other than "Not Present"). Do not narrow this to
+    // the model-name test: a FLEX-6700 with an optional GPSDO is detected only via
+    // the status clause. MainWindow combines both while connected.
     caps.hasGpsLocation = true;
     caps.hasGpsSatelliteTelemetry = true;
     caps.hasGpsFrequencyReference = true;
@@ -408,8 +404,8 @@ RadioCapabilities FlexBackend::capabilities() const
     // FLEX PACURRENT is known to clip below real full-power draw, so it is not
     // an honest substitute for the calibrated PA-temperature instrument.
     caps.hasPaCurrentTelemetry = false;
-    caps.speechProcessorLevelMaximum = 2;
-    caps.speechProcessorLabel = QStringLiteral("PROC");
+    caps.speechProcessorControl = RadioCapabilities::SpeechProcessorControl{
+        2, QStringLiteral("PROC")};
     caps.hasMainFanTelemetry = true;
 
     // Advertise the "flex" extension namespace: the amp/tuner operate/bypass/
@@ -440,11 +436,144 @@ bool FlexBackend::isConnected() const
 
 void FlexBackend::setSliceFrequency(int sliceId, double hz)
 {
-    // Matches SliceModel::setFrequency's wire string exactly. Slice verbs use
-    // the TX-inhibit-guarded slice sink (§6), not the generic sink.
-    sendSlice(QStringLiteral("slice tune %1 %2 autopan=0")
-                  .arg(sliceId)
-                  .arg(hz / 1'000'000.0, 0, 'f', 6));
+    sendSliceTune(sliceId, {hz, SliceTuneRequest::PanIntent::PreservePan});
+}
+
+void FlexBackend::requestSliceTune(int sliceId, const SliceTuneRequest& request)
+{
+    sendSliceTune(sliceId, request);
+}
+
+void FlexBackend::sendSliceTune(int sliceId, const SliceTuneRequest& request)
+{
+    // FlexLib 4.2.18 Slice.Freq: MHz/f6, with autopan=0 only when the caller
+    // wants to retain the pan. Every variant uses the guarded slice sink.
+    QString command = QStringLiteral("slice tune %1 %2")
+        .arg(sliceId).arg(request.frequencyHz / 1'000'000.0, 0, 'f', 6);
+    if (request.panIntent == SliceTuneRequest::PanIntent::PreservePan) {
+        command += QStringLiteral(" autopan=0");
+    }
+    sendSlice(command);
+}
+
+void FlexBackend::requestSliceFilter(int sliceId, const SliceFilterRequest& request)
+{
+    // The radio restores its per-mode passband. A desktop polarity repair
+    // must not overwrite it; explicit operator and adaptive edits still do.
+    if (request.origin != SliceFilterRequest::Origin::ModeNormalization) {
+        setSliceFilter(sliceId, request.lowHz, request.highHz);
+    }
+}
+
+void FlexBackend::requestSliceAgc(int sliceId, const SliceAgcRequest& request)
+{
+    // FlexLib 4.2.18 Slice: each AGC setter writes only its own field.
+    switch (request.field) {
+    case SliceAgcRequest::Field::Mode:
+        sendSlice(QStringLiteral("slice set %1 agc_mode=%2").arg(sliceId).arg(request.mode));
+        break;
+    case SliceAgcRequest::Field::Threshold:
+        sendSlice(QStringLiteral("slice set %1 agc_threshold=%2").arg(sliceId).arg(request.threshold));
+        break;
+    case SliceAgcRequest::Field::OffLevel:
+        sendSlice(QStringLiteral("slice set %1 agc_off_level=%2").arg(sliceId).arg(request.offLevel));
+        break;
+    }
+}
+
+ReceiveDispatch FlexBackend::requestSliceDsp(int sliceId, const SliceDspRequest& request)
+{
+    if (sliceId < 0 || !request.valid()) {
+        return ReceiveDispatch::Unsupported;
+    }
+    // FlexLib 4.2.18 Slice.cs: the enable and level setters are independent.
+    // Manual notch is not a Flex slice feature (TNF is a different resource).
+    QString key;
+    switch (request.feature) {
+    case SliceDspRequest::Feature::Nb: key = QStringLiteral("nb"); break;
+    case SliceDspRequest::Feature::Nr: key = QStringLiteral("nr"); break;
+    case SliceDspRequest::Feature::Anf: key = QStringLiteral("anf"); break;
+    case SliceDspRequest::Feature::Apf: key = QStringLiteral("apf"); break;
+    case SliceDspRequest::Feature::Nrl: key = QStringLiteral("lms_nr"); break;
+    case SliceDspRequest::Feature::Nrs: key = QStringLiteral("speex_nr"); break;
+    case SliceDspRequest::Feature::Rnn: key = QStringLiteral("rnnoise"); break;
+    case SliceDspRequest::Feature::Nrf: key = QStringLiteral("nrf"); break;
+    case SliceDspRequest::Feature::Anfl: key = QStringLiteral("lms_anf"); break;
+    case SliceDspRequest::Feature::Anft: key = QStringLiteral("anft"); break;
+    case SliceDspRequest::Feature::Mn: return ReceiveDispatch::Unsupported;
+    }
+    if (request.field == SliceDspRequest::Field::Level) {
+        if (request.feature == SliceDspRequest::Feature::Rnn
+            || request.feature == SliceDspRequest::Feature::Anft) {
+            return ReceiveDispatch::Unsupported;
+        }
+        key += QStringLiteral("_level");
+    }
+    sendSlice(QStringLiteral("slice set %1 %2=%3").arg(sliceId).arg(key)
+                  .arg(request.field == SliceDspRequest::Field::Enabled
+                           ? int(request.enabled) : request.level));
+    return ReceiveDispatch::Dispatched;
+}
+
+ReceiveDispatch FlexBackend::requestSliceAudio(int sliceId, const SliceAudioRequest& request)
+{
+    if (sliceId < 0 || !request.valid()) {
+        return ReceiveDispatch::Unsupported;
+    }
+    QString key;
+    switch (request.field) {
+    case SliceAudioRequest::Field::Gain: key = QStringLiteral("audio_level"); break;
+    case SliceAudioRequest::Field::Mute: key = QStringLiteral("audio_mute"); break;
+    case SliceAudioRequest::Field::Pan: key = QStringLiteral("audio_pan"); break;
+    }
+    sendSlice(QStringLiteral("slice set %1 %2=%3").arg(sliceId).arg(key).arg(request.value));
+    return ReceiveDispatch::Dispatched;
+}
+
+ReceiveDispatch FlexBackend::requestSliceSquelch(int sliceId, const SliceSquelchRequest& request)
+{
+    if (sliceId < 0 || !request.valid()) {
+        return ReceiveDispatch::Unsupported;
+    }
+    // FlexLib uses separate commands; a combined write is rejected by some
+    // firmware/mode combinations. Repeated UI intent need not rewrite either.
+    if (request.enabledChanged) {
+        sendSlice(QStringLiteral("slice set %1 squelch=%2").arg(sliceId).arg(int(request.enabled)));
+    }
+    if (request.levelChanged) {
+        sendSlice(QStringLiteral("slice set %1 squelch_level=%2").arg(sliceId).arg(request.level));
+    }
+    return ReceiveDispatch::Dispatched;
+}
+
+ReceiveDispatch FlexBackend::requestSliceRxAntenna(int sliceId, const QString& antenna)
+{
+    // Port names are a single protocol token, not caller-supplied wire text.
+    if (sliceId < 0 || antenna.isEmpty() || antenna.size() > 64) {
+        return ReceiveDispatch::Unsupported;
+    }
+    for (const QChar ch : antenna) {
+        if (!((ch >= QLatin1Char('A') && ch <= QLatin1Char('Z'))
+              || (ch >= QLatin1Char('a') && ch <= QLatin1Char('z'))
+              || (ch >= QLatin1Char('0') && ch <= QLatin1Char('9'))
+              || ch == QLatin1Char('_') || ch == QLatin1Char('-')
+              || ch == QLatin1Char('/'))) {
+            return ReceiveDispatch::Unsupported;
+        }
+    }
+    sendSlice(QStringLiteral("slice set %1 rxant=%2").arg(sliceId).arg(antenna));
+    return ReceiveDispatch::Dispatched;
+}
+
+ReceiveDispatch FlexBackend::requestSliceLock(int sliceId, bool locked)
+{
+    if (sliceId < 0) {
+        return ReceiveDispatch::Unsupported;
+    }
+    // Per-slice lock, NOT the radio-wide hasRadioDialLock capability.
+    sendSlice(QStringLiteral("slice %1 %2")
+                  .arg(locked ? QStringLiteral("lock") : QStringLiteral("unlock")).arg(sliceId));
+    return ReceiveDispatch::Dispatched;
 }
 
 void FlexBackend::setSliceMode(int sliceId, const QString& mode)
@@ -459,26 +588,18 @@ void FlexBackend::setSliceFilter(int sliceId, int lowHz, int highHz)
 
 void FlexBackend::setSliceAgc(int sliceId, const QString& mode, int thresholdDb)
 {
-    // Flex owns its AGC in firmware, so both halves are plain slice-set writes.
-    // In the current wiring this is reached only through the seam; the GUI path
-    // still emits the same commands via SliceModel's Flex command sink, exactly
-    // as setSliceFilter() mirrors SliceModel::setFilterWidth's "filt" write.
-    if (!mode.trimmed().isEmpty())
+    // Compatibility paired operation; desktop edits use requestSliceAgc so
+    // an edit to one field never reasserts a stale value for another.
+    if (!mode.trimmed().isEmpty()) {
         sendSlice(QStringLiteral("slice set %1 agc_mode=%2").arg(sliceId).arg(mode));
+    }
     sendSlice(QStringLiteral("slice set %1 agc_threshold=%2").arg(sliceId).arg(thresholdDb));
 }
 
-// ── Manual notch filters (TNF) ──────────────────────────────────────────────
-//
-// These emit exactly the strings TnfModel used to build itself, quirks
-// included, because the radio is the one thing this refactor must not notice.
-// The odd one is width: the radio REPORTS it in Hz but is WRITTEN in MHz, and
-// TnfModel has always sent it that way. Normalizing it here would be a wire
-// change wearing a cleanup's clothing.
-//
-// No id is minted locally. `tnf create` makes the radio assign one and report
-// it back as `tnf <id> …` status, which RadioModel already decodes — so unlike
-// a host-DSP backend, this one never emits notchChanged().
+// Manual notch filters (TNF). The radio REPORTS width in Hz but is WRITTEN in
+// MHz; keep that wire format. No id is minted locally: `tnf create` makes the
+// radio assign one and report `tnf <id> …` status, which RadioModel decodes, so
+// this backend never emits notchChanged().
 void FlexBackend::createNotch(double centerHz, double widthHz)
 {
     // Width is not settable at create time on the Flex wire; the radio picks a
@@ -1312,27 +1433,13 @@ void FlexBackend::decodeRadioStatus(const QMap<QString, QString>& kvs)
     carry(kvs, "daxiq_available", d.daxiqAvailable);
     emit radioChanged(d);
 
-    // #5594 (M1): announce the capability revision this status just caused.
-    //
-    // The Flex capability table is DERIVED FROM THE MODEL NAME — capabilities()
-    // runs capabilitiesFor(caps.model) to seed maxSlices, the DSP tier and the
-    // rest — and the model name is not known at the connect edge. It arrives
-    // here, in a `radio ...` status, some time after. Until now nothing said so,
-    // so every consumer that bound to capabilitiesChanged saw the pre-model
-    // table forever; RadioModel's own comment at the meterDefined handler
-    // records the symptom this produced (a mic gauge hidden at connect and
-    // un-hidden only if an unrelated status happened to land afterwards).
-    //
-    // Deliberately AFTER emit radioChanged(d): a consumer woken by
-    // capabilitiesChanged calls capabilities(), which reads the model back
-    // through m_modelProvider, and that provider only returns the new name once
-    // RadioModel has applied this delta. Same thread, direct delivery, so the
-    // apply above has already happened by the time this line runs.
-    //
-    // Change-guarded against the LAST ANNOUNCED name, not merely against the
-    // key being present: a Flex repeats `radio ...` status on unrelated edits
-    // (callsign, nickname, the audio gains above), and re-announcing on each
-    // would make a republish storm out of typing in a text field.
+    // Announce the capability revision a model-name change causes (#5594 M1):
+    // capabilities() derives its table from the model name, which arrives here in a
+    // `radio ...` status after connect. Must follow emit radioChanged(d): consumers
+    // re-read the model through m_modelProvider, which returns the new name only
+    // once RadioModel has applied this delta (same thread, direct delivery).
+    // Guarded against the last announced name because `radio ...` status repeats
+    // on unrelated edits (callsign, nickname, gains).
     if (d.model && *d.model != m_announcedModel) {
         m_announcedModel = *d.model;
         emit capabilitiesChanged();

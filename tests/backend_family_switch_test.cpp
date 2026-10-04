@@ -22,7 +22,7 @@
 // synthetic wire only.
 
 #include "TestSettingsProfile.h"
-#include "core/RadioConnection.h"
+#include "core/backends/flex/RadioConnection.h"
 #include "core/RadioDiscovery.h"
 #include "core/backends/SliceDelta.h"
 #include "core/backends/TransmitDelta.h"
@@ -333,6 +333,27 @@ int main(int argc, char** argv)
                   QStringLiteral("inject: one sliceAdded (%1)").arg(added.count()));
             check(model.slices().size() == 1,
                   QStringLiteral("inject: exactly one slice model exists (%1)").arg(model.slices().size()));
+        }
+
+        // A queued raw spectrum must not be decoded using the NEXT backend's
+        // pan geometry. Emit from a joined test thread to put the production
+        // AutoConnection delivery in the main queue without draining it.
+        {
+            switchTo(model, QStringLiteral("sim"), rebuilt);
+            IRadioBackend* outgoing = model.backend();
+            QSignalSpy frames(&model, &RadioModel::panFeedSpectrumReady);
+            const float value = -80.0f;
+            const QByteArray frame(reinterpret_cast<const char*>(&value), sizeof(value));
+            const SpectrumCoverage coverage{frame, 99.0, 101.0};
+            std::thread enqueue([outgoing, frame, coverage] {
+                emit outgoing->spectrumFrameReady(0, frame, coverage);
+            });
+            enqueue.join();
+            switchTo(model, QStringLiteral("hl2"), rebuilt);
+            spin(100);
+            check(frames.isEmpty(), "stale spectrum cannot inherit replacement backend geometry");
+            emit model.backend()->spectrumFrameReady(0, frame);
+            check(frames.size() == 1, "current backend spectrum still reaches the feed");
         }
 
         // 6b. The TX power latches do not survive a family switch (#5733).

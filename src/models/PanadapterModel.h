@@ -40,19 +40,16 @@ public:
     // Display state
     double centerMhz() const { return m_centerMhz; }
     bool centerKnown() const { return m_centerKnown; }
+    // Invalidates deferred native frames when geometry changes or a retained
+    // pan enters a new session, including an A -> B -> A range transition.
+    quint64 geometryRevision() const { return m_geometryRevision; }
     double bandwidthMhz() const { return m_bandwidthMhz; }
-    // True when a target frequency (MHz) lies within this pan's current span
-    // [center - bw/2, center + bw/2]. The source of truth for the CAT
-    // (rigctld / SmartCAT) VFO-tune recenter policy — RadioModel::tuneSliceForCat
-    // and TciServer::tuneSliceAndConfirm are the callers: in-span retunes keep
-    // autopan=0 (no yank), out-of-span targets recenter/re-band the display. Every
-    // command plane resolves "in span" here so they cannot drift apart — CAT,
-    // rigctld and TCI open-coded identical copies until this one grew the
-    // centerKnown term below, which is the drift this replaces. Pinned by
-    // tests/cat_tune_policy_test.cpp. Until the radio has reported a real center
-    // (centerKnown), m_centerMhz is a placeholder, so treat the target as out of
-    // span — that recenters, which is the safe direction and establishes the
-    // center. A non-positive bandwidth (span not yet known) is likewise never in span.
+    // True when mhz lies within [center - bw/2, center + bw/2]. The single in-span
+    // test for CAT/rigctld/TCI tune recentering (RadioModel::tuneSliceForCat,
+    // TciServer::tuneSliceAndConfirm): in-span keeps autopan=0, out-of-span
+    // recenters. Before the radio reports a center, or with non-positive bandwidth,
+    // nothing is in span, so the safe recenter happens. Pinned by
+    // tests/cat_tune_policy_test.cpp.
     bool spanContainsMhz(double mhz) const {
         if (!m_centerKnown) {
             return false;
@@ -96,33 +93,24 @@ public:
     // the widgets already showing this pan.
     bool setBandwidthLimits(double minMhz, double maxMhz);
 
-    // Client-authoritative display rates, for a backend whose radio reports no
-    // display state at all (HL2). On a Flex these arrive as radio status and the
-    // radio does the rate shaping itself; on a radio that just streams spectra,
-    // the operator's Display→FFT FPS and Display→Waterfall Rate sliders have
-    // nowhere to go — the wire text they used to emit was a Flex command that
-    // reached nothing — and the engine has to shape the stream itself. This is
-    // where the target it shapes to lives. Emits the same *Reported/*Changed
-    // pairs as the radio path so consumers cannot tell the two apart.
-    // `wfRate` is the 1..100 waterfall RATE, low slow / high fast — not the
-    // milliseconds Flex's `line_duration` wire name claims (core/WaterfallRate.h,
-    // #4606).
+    // Client-authoritative display rates for a backend whose radio reports no
+    // display state (HL2); the engine shapes the stream to these. Emits the same
+    // *Reported/*Changed pairs as the radio path so consumers can't tell them
+    // apart. `wfRate` is the 1..100 waterfall rate (low slow, high fast), not
+    // milliseconds despite Flex's `line_duration` name (core/WaterfallRate.h, #4606).
     void setDisplayRates(int fps, int wfRate);
 
-    // The FFT average, applied LOCALLY and authoritatively.
-    //
-    // NOT setRequestedFftSettings(), and the difference is the whole reason
-    // this exists. That one records an INTENT awaiting the radio's echo and
-    // says so: "the next valid radio publication always supersedes this
-    // intent". On a backend that shapes its own display there is no such
-    // publication -- the client IS the authority -- so an intent flag would
-    // leave the value permanently marked as unconfirmed, waiting for an echo
-    // that cannot arrive.
-    //
-    // Mirrors setDisplayRates above, which solved the same problem for fps by
-    // emitting both Changed and Reported so the widget's existing Flex wiring
-    // picks it up with no special case.
+    // FFT average applied locally and authoritatively, for a backend that shapes
+    // its own display. Not setRequestedFftSettings(): that records an intent
+    // awaiting a radio echo that will never arrive here. Emits Changed and
+    // Reported like setDisplayRates().
     void setLocalAverage(int average);
+    // The weighted-average toggle from a backend that shapes its own spectrum
+    // -- same authority and same reasoning as setLocalAverage(): no radio echo
+    // is coming, so this IS the known value and weightedAverageKnown() flips
+    // true. Emits Reported as well as Changed so the widget's existing Flex
+    // wiring picks it up unchanged.
+    void setLocalWeightedAverage(bool weighted);
     // Flex-specific WNB extension applied from the backend's namespaced
     // extensionStatus("flex","panWnb",…). Applies only the keys present;
     // emits wnbChanged/wnbStateChanged when anything changes. (aetherd RFC 2.3
@@ -136,6 +124,11 @@ public:
     int rfGainLow() const { return m_rfGainLow; }
     int rfGainHigh() const { return m_rfGainHigh; }
     int rfGainStep() const { return m_rfGainStep; }
+    // True once a range has been published for this pan (setRfGainInfo: a
+    // Flex's rfgain_info reply, or a backend's panRfGainInfoChanged). Until
+    // then Low/High/Step are this model's defaults, which are Flex-shaped and
+    // describe no other radio — a consumer that scales against them must ask.
+    bool hasRfGainRange() const { return m_rfGainRangePublished; }
     // What the readout appends to the number. " dB" for a real gain register,
     // "%" for a radio whose RF gain is an opaque scale — see
     // IRadioBackend::panRfGainInfoChanged.
@@ -278,6 +271,7 @@ private:
     QString     m_clientHandle;
     quint32     m_ownerHandle{0};   // parsed m_clientHandle; 0 = unknown (#3977)
     double      m_centerMhz{14.1};
+    quint64     m_geometryRevision{0};
     bool        m_centerKnown{false}; // true after a normalized center update
     std::optional<qint64> m_reportedCenterHz;
     std::optional<qint64> m_reportedBandwidthHz;
@@ -294,6 +288,7 @@ private:
     int         m_rfGainLow{-8};
     int         m_rfGainHigh{32};
     int         m_rfGainStep{8};
+    bool        m_rfGainRangePublished{false};
     QString     m_rfGainUnitSuffix{QStringLiteral(" dB")};
     QStringList m_preampLabels;
     int         m_preampStep{0};

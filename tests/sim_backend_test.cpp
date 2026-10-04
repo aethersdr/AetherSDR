@@ -5,6 +5,9 @@
 // disconnect removes the slice + reconnect works, and TX stays fail-closed.
 
 #include "core/backends/sim/SimBackend.h"
+#include "core/backends/sim/DemoRadioConstants.h"
+#include "core/backends/flex/RadioConnection.h"
+#include "core/backends/sim/SimSignalSource.h"
 
 #include <QCoreApplication>
 #include <QEventLoop>
@@ -38,8 +41,17 @@ void testConnectEmitsInitialState()
     QSignalSpy connectedSpy(&sim, &SimBackend::connected);
     QSignalSpy radioSpy(&sim, &SimBackend::radioChanged);
     QSignalSpy sliceSpy(&sim, &SimBackend::sliceChanged);
+    QSignalSpy waterfallSpy(&sim, &SimBackend::panWaterfallLineDurationChanged);
 
     report("starts disconnected", !sim.isConnected());
+    report("Demo serial remains compatible with saved selections",
+           SimBackend::demoSerial() == QStringLiteral("DEMO-0001"));
+    // The pan span and the spectrum span are one value with two units; if they
+    // ever stop agreeing the demo birdie lands outside the RX passband.
+    report("Demo pan span is 8 kHz, stated in MHz",
+           AetherSDR::DemoRadio::kPanBandwidthMhz == 0.008);
+    report("the spectrum span is that same 8 kHz, stated in Hz",
+           AetherSDR::DemoRadio::kAudioSpanHz == 8000.0);
 
     sim.connectRadio(RadioConnectRequest{});
 
@@ -47,6 +59,13 @@ void testConnectEmitsInitialState()
     report("connect() reports connected", sim.isConnected());
     report("connect() emits a radio-global snapshot", radioSpy.count() == 1);
     report("connect() emits an initial slice", sliceSpy.count() == 1);
+    report("connect() emits one initial waterfall rate", waterfallSpy.count() == 1);
+    if (waterfallSpy.count() == 1) {
+        report("waterfall rate belongs to the initial Demo pan",
+               waterfallSpy.first().at(0).toString() == QStringLiteral("0x40000000"));
+        report("waterfall rate is 100, not the 48 ms row cadence",
+               waterfallSpy.first().at(1).toInt() == 100);
+    }
 
     if (radioSpy.count() == 1) {
         const auto delta = radioSpy.first().at(0).value<RadioDelta>();
@@ -212,6 +231,165 @@ void testDisconnectStopsAudio()
     report("audio stops after disconnect", audioSpy.count() == 0);
 }
 
+// pcmSession() is protected; the rows below must be stamped with it.
+class SessionPeekSim : public SimBackend {
+public:
+    using AetherSDR::IRadioBackend::pcmSession;
+};
+
+QByteArray oneSpectrumRow()
+{
+    return QByteArray(1024 * int(sizeof(float)), '\0');
+}
+
+// Rule 6 on the RadioModel path (#6084): the backend closes its forward gate
+// BEFORE it announces disconnected(). Emitting from this thread runs the
+// handler direct, so this pins that ordering, not the queued interleaving;
+// the ordering is the fix, since one handler leaves no gap to land in.
+void testNoSpectrumForwardedOnceDisconnectedIsAnnounced()
+{
+    SessionPeekSim sim;
+    sim.connectRadio({});
+    QSignalSpy spectrumSpy(&sim, &SimBackend::spectrumFrameReady);
+    bool connectedDuringAnnouncement = true;
+    QObject::connect(&sim, &SimBackend::disconnected, &sim, [&sim, &connectedDuringAnnouncement] {
+        connectedDuringAnnouncement = sim.isConnected();
+        emit sim.signalSourceForTest()->spectrumFrameReady(0, sim.pcmSession(), oneSpectrumRow());
+    }, Qt::DirectConnection);
+
+    emit sim.connection()->disconnected();
+
+    report("the gate is closed before disconnected() is announced",
+           !connectedDuringAnnouncement);
+    report("a spectrum row landing inside disconnected() is dropped",
+           spectrumSpy.count() == 0);
+}
+
+// The session half (#6084): a row the previous session's worker queued that
+// lands after a reconnect is dropped on identity; a live-session row still
+// goes through, so the drop is not vacuous.
+void testStaleSessionSpectrumIsDropped()
+{
+    SessionPeekSim sim;
+    sim.connectRadio({});
+    const quint64 firstSession = sim.pcmSession();
+    sim.disconnectRadio();
+    sim.connectRadio({});
+    const quint64 liveSession = sim.pcmSession();
+    report("a reconnect starts a new session", liveSession != firstSession);
+
+    // Silence the live worker and drain what it already queued, so only the
+    // rows emitted below can reach the spy.
+    QMetaObject::invokeMethod(sim.signalSourceForTest(), &AetherSDR::SimSignalSource::stop,
+                              Qt::BlockingQueuedConnection);
+    QCoreApplication::processEvents();
+    QSignalSpy spectrumSpy(&sim, &SimBackend::spectrumFrameReady);
+    emit sim.signalSourceForTest()->spectrumFrameReady(0, firstSession, oneSpectrumRow());
+    report("a previous session's spectrum row is dropped", spectrumSpy.count() == 0);
+    emit sim.signalSourceForTest()->spectrumFrameReady(0, liveSession, oneSpectrumRow());
+    report("the live session's spectrum row is forwarded", spectrumSpy.count() == 1);
+}
+
+// The connect-side mirror (#6095): on the RadioModel path, the gate is open
+// before connected() is announced, so a connected() handler sees
+// isConnected(). Emitting from this thread runs the handler direct.
+void testConnectedIsAnnouncedWithTheGateOpen()
+{
+    SimBackend sim;
+    bool connectedDuringAnnouncement = false;
+    QObject::connect(&sim, &SimBackend::connected, &sim, [&sim, &connectedDuringAnnouncement] {
+        connectedDuringAnnouncement = sim.isConnected();
+    }, Qt::DirectConnection);
+
+    emit sim.connection()->connected();
+
+    report("the gate is open before connected() is announced", connectedDuringAnnouncement);
+    sim.disconnectRadio();
+    QCoreApplication::processEvents();
+}
+
+// A connected() slot sees the session's pan list already reset (#6095): a pan
+// it creates is minted after pan 0 and survives the announcement.
+void testPanCreatedInsideConnectedSurvives()
+{
+    SimBackend sim;
+    bool created = false;
+    QObject::connect(&sim, &SimBackend::connected, &sim, [&sim, &created] {
+        created = sim.createPanadapter();
+    }, Qt::DirectConnection);
+
+    emit sim.connection()->connected();
+
+    report("a connected() slot can create a pan", created);
+    report("the pan a connected() slot created keeps its id",
+           sim.removePanadapter(QStringLiteral("0x40000001")));
+    sim.disconnectRadio();
+    QCoreApplication::processEvents();
+}
+
+// The worker must be started with the session connected() just opened; a
+// stale stamp would drop every spectrum row of the session with no error.
+void testFirstSpectrumRowAfterWireConnectIsForwarded()
+{
+    SimBackend sim;
+    QSignalSpy spectrumSpy(&sim, &SimBackend::spectrumFrameReady);
+    emit sim.connection()->connected();
+
+    QEventLoop loop;
+    QTimer poll;
+    QObject::connect(&poll, &QTimer::timeout, &loop, [&] {
+        if (spectrumSpy.count() > 0) loop.quit();
+    });
+    QTimer::singleShot(2000, &loop, &QEventLoop::quit);
+    poll.start(5);
+    loop.exec();
+
+    report("a spectrum row after a wire connect is forwarded", spectrumSpy.count() > 0);
+    sim.disconnectRadio();
+    QCoreApplication::processEvents();
+}
+
+// Rule 6 on the bare path (#6095): the `sim disconnect` fault's reply must
+// precede disconnected(), as it already does on the RadioModel path.
+void testDisconnectFaultRepliesBeforeDisconnected()
+{
+    SimBackend sim;
+    sim.connectRadio({});
+    QStringList order;
+    QObject::connect(&sim, &SimBackend::extensionResult, &sim,
+                     [&order](quint64, const QVariant&) { order << QStringLiteral("result"); },
+                     Qt::DirectConnection);
+    QObject::connect(&sim, &SimBackend::disconnected, &sim,
+                     [&order] { order << QStringLiteral("disconnected"); },
+                     Qt::DirectConnection);
+
+    sim.invokeExtension(QStringLiteral("sim"), QStringLiteral("disconnect"), 7, {});
+    QCoreApplication::processEvents();
+
+    report("sim disconnect replies, then disconnects",
+           order == QStringList{QStringLiteral("result"), QStringLiteral("disconnected")});
+    report("sim disconnect leaves the backend disconnected", !sim.isConnected());
+}
+
+// The bridge dispatches `sim` with requestId 0 (doSimFault): no reply is
+// emitted, and the queued teardown still lands.
+void testDisconnectFaultWithoutReplyStillDisconnects()
+{
+    SimBackend sim;
+    sim.connectRadio({});
+    QSignalSpy resultSpy(&sim, &SimBackend::extensionResult);
+    QSignalSpy errorSpy(&sim, &SimBackend::extensionError);
+    QSignalSpy disconnectedSpy(&sim, &SimBackend::disconnected);
+
+    sim.invokeExtension(QStringLiteral("sim"), QStringLiteral("disconnect"), 0, {});
+    QCoreApplication::processEvents();
+
+    report("sim disconnect with requestId 0 emits no reply",
+           resultSpy.isEmpty() && errorSpy.isEmpty());
+    report("sim disconnect with requestId 0 still disconnects",
+           disconnectedSpy.count() == 1 && !sim.isConnected());
+}
+
 }  // namespace
 
 int main(int argc, char** argv)
@@ -232,6 +410,13 @@ int main(int argc, char** argv)
     testEmitsAudioWhenConnected();
     testKeyingMutesAudio();
     testDisconnectStopsAudio();
+    testNoSpectrumForwardedOnceDisconnectedIsAnnounced();
+    testStaleSessionSpectrumIsDropped();
+    testConnectedIsAnnouncedWithTheGateOpen();
+    testPanCreatedInsideConnectedSurvives();
+    testFirstSpectrumRowAfterWireConnectIsForwarded();
+    testDisconnectFaultRepliesBeforeDisconnected();
+    testDisconnectFaultWithoutReplyStillDisconnects();
 
     if (g_failed == 0) {
         std::printf("All SimBackend lifecycle checks passed\n");

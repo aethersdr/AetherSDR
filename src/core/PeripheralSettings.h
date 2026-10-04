@@ -3,28 +3,90 @@
 #include "core/AppSettings.h"
 
 #include <QJsonDocument>
+#include <QJsonArray>
 #include <QJsonObject>
 #include <QJsonParseError>
 #include <QJsonValue>
 #include <QString>
+#include <QStringList>
+
+#include <optional>
 
 namespace AetherSDR {
 
-// Peripherals feature settings live in one nested AppSettings JSON blob per
-// constitution Principle V. The temporary flat key from PR #3321 is migrated
-// so testers of the PR branch keep their selected behavior.
-//
-// The manual connection settings (ManualIp/ManualPort/SerialPort/
-// ConnectionMode) of the ACOM S-series and the SPE Expert amplifiers use the
-// generic per-device accessors below, nested under obj["Acom"] and
-// obj["SpeExpert"] — neither has ever shipped with flat keys in a released
-// build, so there's no legacy data to migrate; new installs write directly
-// into the nested shape. TGXL/PGXL/Antenna Genius/ShackSwitch still use their
-// original flat AppSettings keys directly (not through this class) —
-// migrating those is legitimate follow-up work, scoped to its own PR rather
-// than bundled with the ACOM feature that motivated adding these accessors.
+// Peripherals settings in one nested AppSettings JSON blob; the old flat key from
+// #3321 is migrated. The blob holds the Setup Peripherals list (VisibleDevices),
+// the global AutoReconnect, per-device preferences ("Connect automatically",
+// obj[<id>]["AutoConnect"]), and the ACOM and SPE Expert manual-connection
+// settings (ManualIp/ManualPort/SerialPort/ConnectionMode), which nest under
+// obj["Acom"] / obj["SpeExpert"]. The TGXL/PGXL/Antenna Genius/ShackSwitch
+// endpoints stay in their own flat keys; only their list membership and
+// AutoConnect preference live here.
 class PeripheralSettings {
 public:
+    // VisibleDevices uses stable lowercase UI identifiers, not the legacy
+    // connection-object names (Acom/SpeExpert/Vkamp/Lp100a). Keep these namespaces
+    // distinct: changing their spelling would require a settings migration.
+    // nullopt means this installation predates the list UI: the dialog can
+    // seed it from already configured manual targets without losing them.
+    static std::optional<QStringList> visibleDeviceIds()
+    {
+        const QJsonValue value = readObj().value(QStringLiteral("VisibleDevices"));
+        if (!value.isArray()) {
+            return std::nullopt;
+        }
+        QStringList ids;
+        for (const QJsonValue& entry : value.toArray()) {
+            if (entry.isString() && !ids.contains(entry.toString())) {
+                ids.append(entry.toString());
+            }
+        }
+        return ids;
+    }
+
+    static void setVisibleDeviceIds(const QStringList& ids)
+    {
+        QJsonObject root = readObj();
+        QJsonArray value;
+        for (const QString& id : ids) {
+            if (!id.isEmpty() && !value.contains(id)) {
+                value.append(id);
+            }
+        }
+        root[QStringLiteral("VisibleDevices")] = value;
+        write(root);
+    }
+
+    // "Connect automatically" for the network devices tgxl, pgxl, ag and
+    // shackswitch. Default on: with no key stored, startup, discovery, alternate
+    // and reconnect attempts behave as they always have. Off blocks every
+    // automatic attempt for that device; an explicit Connect still works and
+    // never changes this value.
+    static bool autoConnect(const QString& id)
+    {
+        const QJsonValue value = deviceObj(id).value(QStringLiteral("AutoConnect"));
+        if (value.isBool()) {
+            return value.toBool();
+        }
+        if (value.isString()) {
+            return value.toString().compare(QStringLiteral("False"), Qt::CaseInsensitive) != 0;
+        }
+        return true;
+    }
+
+    static void setAutoConnect(const QString& id, bool on)
+    {
+        setDeviceField(id, QStringLiteral("AutoConnect"),
+                       QJsonValue(on ? QStringLiteral("True") : QStringLiteral("False")));
+    }
+
+    // Remove returns the device to its default: the toggle is cleared, so a row
+    // that is no longer listed never carries a hidden "do not connect".
+    static void resetAutoConnect(const QString& id)
+    {
+        clearDeviceField(id, QStringLiteral("AutoConnect"));
+    }
+
     static bool autoReconnect()
     {
         const QJsonObject obj = readObj();
@@ -96,6 +158,27 @@ public:
         }
         devObj.remove(field);
         root[device] = devObj;
+        write(root);
+    }
+
+    static void clearDeviceConnection(const QString& device)
+    {
+        QJsonObject root = readObj();
+        if (!root.contains(device)) {
+            return;
+        }
+        QJsonObject connection = root.value(device).toObject();
+        for (const QString& field : {QStringLiteral("ConnectionMode"),
+                                     QStringLiteral("ManualIp"),
+                                     QStringLiteral("ManualPort"),
+                                     QStringLiteral("SerialPort")}) {
+            connection.remove(field);
+        }
+        if (connection.isEmpty()) {
+            root.remove(device);
+        } else {
+            root[device] = connection;
+        }
         write(root);
     }
 

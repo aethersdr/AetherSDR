@@ -10,20 +10,16 @@ class QGridLayout;
 
 namespace AetherSDR {
 
-// Contact card for one station: colored vertical accent bar, photo on the
-// left, callsign / name / location details to the right.  One widget serves
-// every surface that shows "who is this station" — the CW decoder panel,
-// the Callsign Lookup dialog, and the future SSB voice-callsign decoder —
-// so the operator learns a single visual.
+// Contact card for one station, shared by every "who is this station" surface
+// (CW decoder panel, Callsign Lookup dialog) so the operator learns one visual:
 //
 //   ┃ ┌────┐  KI6BCJ            Extra
 //   ┃ │ 📷 │  Patrick Jensen
 //   ┃ └────┘  San Jose, CA, United States
 //   ┃          CM97 · Santa Clara
 //
-// Compact fits the decoder strip at the bottom of a panadapter; Large is
-// the lookup-dialog variant with a bigger photo and extra detail rows.
-// Colors come from ThemeManager tokens and follow live theme switches.
+// Compact fits the panadapter decoder strip; Large (lookup dialog) has a
+// bigger photo and more rows. Colours follow ThemeManager tokens live.
 class CallsignCard : public QFrame {
     Q_OBJECT
 

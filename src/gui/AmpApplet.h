@@ -19,31 +19,18 @@ class AccessoryPortRow;
 class PanelKey;
 struct AmpPortInfo;
 
-// Amplifier applet for the 4O3A Power Genius XL (PGXL).
-//
-// Two presentations, chosen by setFloating() from the container's dock mode —
-// the same docked-is-compact / popped-out-is-roomy split TunerApplet and
-// SpeApplet use, and the same scaling machinery (AccessoryPanelWidgets.h).
-//
-// Docked in the applet rail (compact):
-//  - PWR / SWR / Id horizontal gauges
-//  - temperature, drain and mains readouts beside a fan-mode pull-down and
-//    the OPERATE/STANDBY button
-//
-// Popped out or on the workspace canvas (expanded), laid out the way the
-// amplifier's own front panel is:
-//  - the same three gauges, taller, the SWR track carrying its scale gradient
-//  - a status strip per RF port: PTT lamp, band, bias profile, source radio
-//    — collapsed to a single STANDBY banner while the amplifier is in
-//    standby, since nothing on those strips is live then
-//  - the fan-speed and standby keys beside those strips, spanning both
-//  - the temperatures, drain and mains voltages as one row along the bottom
-//
-// The per-port block is only on the amplifier's own port-9008 status; the
-// radio-relayed "amplifier" object carries model, serial, ip, state and the
-// antenna map and nothing else. Without the direct connection the strips show
-// what is still knowable — which port is keyed, and which one transmit is
-// routed to — rather than inventing the rest.
+// Applet for the 4O3A Power Genius XL (PGXL). setFloating() picks a
+// presentation from dock mode, like TunerApplet/SpeApplet, using the
+// AccessoryPanelWidgets.h scaling.
+//  Docked (compact): PWR / SWR / Id gauges; temperature, drain and mains
+//  readouts beside the fan-mode pull-down and OPERATE/STANDBY.
+//  Expanded (popped out / canvas), laid out like the amp's front panel: taller
+//  gauges (SWR with scale gradient); a status strip per RF port (PTT, band,
+//  bias, source radio), collapsed to a STANDBY banner in standby; fan and
+//  standby keys; temperatures/drain/mains along the bottom.
+// Per-port data comes only from the 9008 socket (the relayed "amplifier"
+// object has model, serial, ip, state and antenna map); without it the strips
+// show only which port is keyed and where TX is routed.
 class AmpApplet : public QWidget {
     Q_OBJECT
 public:
@@ -68,9 +55,29 @@ public:
     // "not measured".
     void setDrivePower(float watts, bool valid);
 
-    void setTemp(float degC);
-    void setTempB(float degC);
+    // The PGXL reports two heatsink temperatures in degrees Celsius
+    // (PowerGeniusXL User Guide v3.9.8, p. 55):
+    //   PA: the power amplifier heatsink. Status key `temp`.
+    //   HL: the Harmonic Load heatsink. Captured status key `hltemp`.
+    //       `tempb` is also accepted, but has not been seen in a capture.
+    // A FlexRadio relays only the PA heatsink temperature. The HL
+    // temperature is available only over a direct connection to the PGXL.
+    //
+    // Drain current and the PA heatsink temperature come from two sources:
+    // the PGXL's own status (setDrainCurrent, setPaHeatsinkTemp) and the
+    // radio's ID and TEMP meters (setRadioDrainCurrent,
+    // setRadioPaHeatsinkTemp). Measured on a FLEX-8600 with a PGXL on
+    // firmware 3.9.8, both sources change these two values at the same
+    // moments, so neither is faster. The tie goes to the radio, the same as
+    // forward power and SWR, where the radio is faster: the radio's value is
+    // used while it is fresh, and the PGXL's value is used otherwise
+    // (docs/pgxl-telemetry-source-evidence.md). valid=false means the radio's
+    // meter does not exist or was withdrawn.
+    void setPaHeatsinkTemp(float degC);
+    void setRadioPaHeatsinkTemp(float degC, bool valid);
+    void setHarmonicLoadHeatsinkTemp(float degC);
     void setDrainCurrent(float amps);
+    void setRadioDrainCurrent(float amps, bool valid);
     void setDrainVoltage(float volts);
     void setMainsVoltage(int volts);
     void setState(const QString& state);
@@ -80,8 +87,9 @@ public:
     // false until the whole `setup` write group is known, which is what a
     // write needs; the control is shown but inert until then.
     void setMeffa(const QString& state, bool settable);
-    void setMeff(const QString& meff);
     void setDirectConnected(bool direct);
+    void setRadioConnected(bool connected);
+    void setDirectFailureReason(const QString& reason);
 
     // Docked (applet rail) vs floating/canvas presentation. Driven by the
     // container's dockModeChanged — see the AMP entry in AppletPanel.
@@ -115,10 +123,8 @@ protected:
 private:
     void buildUI();
     void buildExpandedUI();
-    // The four readouts run as a row along the bottom of the panel and stack
-    // in the rail's single-tile width. Same widgets either way — the grid is
-    // re-flowed rather than the controls rebuilt.
-    void applyTelemetryLayout();
+    void placeReadings();
+    void updateVoltsLabel();
     void updateTempLabel();
     void updateValueLabels();
 
@@ -136,6 +142,8 @@ private:
     // The readouts carry their own colours (live vs. not proxied by the
     // radio) and their own scale, so one place resolves both.
     void applyTelemetryStyles(qreal scale);
+    void updateSourceIndicator();
+    bool hasRadioRelay() const;
     // Both operate controls wear the amplifier's current state, so a single
     // place decides what each of them says and how it is lit.
     void applyStateToControls();
@@ -157,8 +165,10 @@ private:
     // One rule, one place: the radio-relayed AMP meters and the amplifier's own
     // port-9008 status carry the SAME measurement — on a steady carrier the
     // relayed FWD meter and the device's `fwd` field agree to within 0.05 dB —
-    // so the choice between them is about rate, not truth. The relay arrives
-    // with the radio's meter packets (~20 fps); the device is polled at 5 Hz.
+    // so the choice between them is about rate, not truth. During a transmit
+    // the relayed FWD and RL values change 13 to 19 times a second, and the
+    // device's own 2 to 11 times, measured polling the PGXL every 50 ms, twice
+    // the rate this client polls it (docs/pgxl-telemetry-source-evidence.md).
     // The relay therefore wins while its sample is fresh, and the device feed
     // takes over when the radio is not publishing amplifier meters at all
     // (no relay, or before the meter manifest lands). Last-writer-wins between
@@ -169,6 +179,7 @@ private:
     // unmediated writer is the defect this whole path exists to remove.
     void setFwdPower(float watts);
     void setSwr(float swr);
+    void applyDrainCurrent(float amps);
     void updateDriveLabel();
 
     void setAlertText(const QString& text);
@@ -190,24 +201,28 @@ private:
     QLabel*  m_idLabel{nullptr};    // "Id   39"
 
     // Right-side info column (one per gauge row)
-    QPushButton* m_tempBtn{nullptr}; // "34.7/28.4 C"  (click to toggle C/F)
-    QLabel*  m_vddLabel{nullptr};   // "Vdd  50.0 V"  (beside SWR row)
-    QLabel*  m_vacLabel{nullptr};   // "Vac   240 V"  (beside Id  row)
-    QLabel*  m_sourceLabel{nullptr}; // "● DIRECT" or "● RADIO"
+    QPushButton* m_tempBtn{nullptr};   // "PA 34.7 C"  (click to toggle C/F)
+    QPushButton* m_hlTempBtn{nullptr}; // "HL 28.4 C"  (click to toggle C/F)
+    QLabel*  m_vacLabel{nullptr};      // "Vac 240 V"
+    QLabel*  m_vddLabel{nullptr};      // "Vdd 50.0 V"
+    QString  m_drainVoltsText{QStringLiteral("—")};
+    QString  m_mainsVoltsText{QStringLiteral("—")};
+    QLabel*  m_sourceLabel{nullptr}; // bottom-right connection source
     bool     m_directConnected{false};
+    QString  m_directFailureReason;
+    bool     m_radioConnected{false};
 
     QWidget*     m_telemetryBox{nullptr};
     QGridLayout* m_telemetryGrid{nullptr};
-    // Which way the grid is currently flowed, so a density pass that changes
-    // nothing does not re-add four widgets to it.
-    bool         m_telemetryInRow{false};
+    // The presentation the readings were last placed for; -1 before the first.
+    int          m_readingsPlacedFloating{-1};
 
     QComboBox*   m_fanCombo{nullptr};
     QPushButton* m_operateBtn{nullptr};
     QString      m_fanMode{"STANDARD"};
-    // Neither fan control is shown before the amplifier has reported a mode:
-    // only the direct connection carries fanmode, and a control that cannot
-    // say what it is set to is worse than none.
+    // Until the amplifier reports a mode the rail's pull-down is disabled and
+    // the panel's fan key is hidden. Only the direct connection carries
+    // fanmode.
     bool         m_haveFanMode{false};
 
     // ── Expanded (floating / canvas) presentation ───────────────────────
@@ -235,6 +250,8 @@ private:
     // the slack themselves. Its minimum is the gap that keeps them off the
     // frame.
     QSpacerItem* m_bottomStretch{nullptr};
+    QSpacerItem* m_controlsGap{nullptr};   // docked: above the controls
+    QSpacerItem* m_readingsGap{nullptr};   // docked: above the readings
     // The amplifier's alert channel — the same `M|<text>` frame the tuner
     // sends, on the same vendor's protocol. Not in any layout: it is a child
     // of the applet, sized to cover it and raised, because a fault is the
@@ -289,6 +306,10 @@ private:
     // elapsed-time gate measured off the wall clock wedges shut for the length
     // of any backwards clock step.
     QElapsedTimer m_radioMeters;
+    // When the radio last delivered a drain current or PA heatsink
+    // temperature sample. See setDrainCurrent() and setPaHeatsinkTemp().
+    QElapsedTimer m_radioDrainCurrent;
+    QElapsedTimer m_radioPaHeatsinkTemp;
 
     // Cached telemetry values — gauges update every call, labels update at 10 Hz
     float    m_fwdWatts{0.0f};
@@ -296,10 +317,10 @@ private:
     float    m_drvWatts{0.0f};
     bool     m_haveDrive{false};
     float    m_drainAmps{0.0f};
-    float    m_tempA{0.0f};
-    float    m_tempB{0.0f};
-    bool     m_hasTempA{false};
-    bool     m_hasTempB{false};
+    float    m_paHeatsinkTemp{0.0f};           // degrees Celsius
+    float    m_harmonicLoadHeatsinkTemp{0.0f}; // degrees Celsius
+    bool     m_hasPaHeatsinkTemp{false};
+    bool     m_hasHarmonicLoadHeatsinkTemp{false};
     bool     m_tempFahrenheit{false};
     int      m_mainsVolts{0};
 };

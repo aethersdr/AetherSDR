@@ -60,16 +60,9 @@ public:
     QWidget* setContent(QWidget* content);
     QWidget* content() const { return m_content; }
 
-    // ── Child-widget API (used by nesting) ───────────────────────
-    //
-    // A container's body is a QVBoxLayout; children stack vertically
-    // in insertion order.  Children can be leaf widgets or other
-    // ContainerWidgets — the container itself doesn't distinguish
-    // (ContainerManager tracks parent/child relationships for
-    // docking logic).
-    //
-    // insertChildWidget(-1, w)  → append
-    // insertChildWidget(i, w)   → insert at index i (clamped)
+    // Child widgets stack in a QVBoxLayout body in insertion order; leaf widgets
+    // and nested ContainerWidgets are treated alike (ContainerManager tracks the
+    // nesting). index -1 appends; otherwise inserts at the clamped index.
     void insertChildWidget(int index, QWidget* child);
     void removeChildWidget(QWidget* child);
     int  childWidgetCount() const;

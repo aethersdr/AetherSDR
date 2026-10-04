@@ -1,0 +1,458 @@
+#pragma once
+
+#include "core/PcmFrame.h"
+#include <map>
+
+#include "core/PacketLossConcealment.h"
+#include "core/VitaBinCoverage.h"
+
+#include <QObject>
+#include <QUdpSocket>
+#include <QHostAddress>
+#include <QVector>
+#include <QMap>
+#include <QHash>
+#include <QSet>
+#include <QTimer>
+#include <QElapsedTimer>
+#include <QMutex>
+#include <QMutexLocker>
+#include <atomic>
+#include <functional>
+
+namespace AetherSDR {
+
+class RadioConnection;
+class OpusCodec;
+
+// Receives all VITA-49 (ExtDataWithStream, type 3) datagrams on the single
+// "client udpport" and routes them by PacketClassCode (class ID bytes 14-15):
+//   0x03E3 float32 stereo / 0x0123 int16 mono / 0x8005 Opus → pcmFrameReady()
+//   0x8003 FFT → spectrumReady()   0x8004 waterfall tiles → waterfallRowReady()
+//   0x8002 meters → meterDataReady()   DAX audio/IQ by stream id; others dropped.
+// start(conn) binds a local UDP port; RadioModel registers it with
+// "client udpport <port>".
+
+class PanadapterStream : public QObject {
+    Q_OBJECT
+    friend class TxOperationIntegrationTestAccess;
+    // Inject the terminal transport in socket-free queue/cancellation tests.
+    std::function<void(const QByteArray&)> m_packetSinkForTest;
+
+public:
+    static constexpr int VITA49_HEADER_BYTES = 28;
+
+    explicit PanadapterStream(QObject* parent = nullptr);
+
+    // Initialize socket and timer connections on the network thread.
+    // Call after moveToThread() via QThread::started signal. (#561)
+    Q_INVOKABLE void init();
+
+    // Bind a local UDP port (OS-chosen) and register it with the radio.
+    // conn must remain valid for the lifetime of this stream.
+    // Q_INVOKABLE: must run on the network worker thread (#502)
+    Q_INVOKABLE bool start(RadioConnection* conn);
+    // Rebind to an OS-assigned LAN UDP port after the radio rejects our
+    // selected port/IP pair as already registered by another client.
+    Q_INVOKABLE bool rebindToEphemeralPort(RadioConnection* conn);
+    // Start for WAN: use explicit radio address and UDP port.
+    Q_INVOKABLE bool startWan(const QHostAddress& radioAddr, quint16 radioUdpPort);
+
+    // Begin WAN UDP registration: sends "client udp_register handle=0x<handle>"
+    // via UDP every 50ms until VITA-49 packets arrive, then switches to
+    // "client ping handle=0x<handle>" keepalive every 5 seconds.
+    Q_INVOKABLE void startWanUdpRegister(quint32 clientHandle);
+    Q_INVOKABLE void stop();
+
+    QHostAddress localAddress() const { return m_localAddress; }
+    quint16 localPort() const { return m_localPort; }
+    bool    hasReceivedPackets() const { return m_hasReceivedPacket.load(); }
+    bool    isRunning() const;
+
+    // Update the dBm range used to scale incoming FFT bins for a specific stream.
+    void setDbmRange(quint32 streamId, float minDbm, float maxDbm, bool waitForEcho = false);
+    // Abandon an in-flight client range request so the next radio-authoritative
+    // range can update the FFT decoder immediately (for example, on a band change).
+    bool cancelPendingDbmRange(quint32 streamId);
+    // Update the ypixels used to scale FFT bin values for a specific stream.
+    // The radio encodes FFT bins as pixel Y positions (0 = top/max_dbm,
+    // ypixels-1 = bottom/min_dbm), NOT as 0-65535 uint16 range.
+    void setYPixels(quint32 streamId, int yPixels);
+
+    // Register/unregister pan and waterfall stream IDs we own.
+    // Only registered streams are processed; others are dropped.
+    void registerPanStream(quint32 streamId);
+    void registerWfStream(quint32 streamId);
+    void unregisterPanStream(quint32 streamId);
+    void unregisterWfStream(quint32 streamId);
+    void clearRegisteredStreams();
+
+    // Layer A radio-side orphan detector (#3856): processDatagram() records any
+    // FFT/waterfall packet whose stream id was registered earlier this session but
+    // no longer is, i.e. a stream the radio was never told to free and still sends
+    // (seen on older firmware, #268). Never-yet-registered ids are ignored
+    // (registration lag).
+    struct OrphanStream {
+        quint32 streamId{0};
+        bool    waterfall{false};  // true = waterfall tile stream, false = FFT
+        quint64 packets{0};        // packets seen since the stream went orphan
+        qint64  ageMs{0};          // ms since the most recent orphan packet
+    };
+    QVector<OrphanStream> orphanStreams() const;
+    QVector<quint32>      registeredPanStreams() const;
+    QVector<quint32>      registeredWfStreams() const;
+    void                  resetOrphanStreams();   // clear the orphan tally
+
+    // DAX stream routing
+    void registerDaxStream(quint32 streamId, int channel);
+    void unregisterDaxStream(quint32 streamId);
+    QList<quint32> daxStreamIds() const;
+    quint32 daxStreamIdForChannel(int channel) const;
+
+    // Centralized DAX RX channel ownership (#3305). Every in-process dax_rx consumer
+    // acquires/releases here; this table alone decides when a radio stream exists:
+    //   acquire, first holder → daxStreamCreateNeeded(ch)
+    //   release, last holder  → deferred (grace + revalidate) → daxStreamRemoveNeeded(id, ch)
+    //   radio removed a held stream → deferred → daxStreamCreateNeeded(ch)
+    // RadioModel sends the actual `stream create/remove`. Never decide on
+    // status-echo edges (#4009); the grace window absorbs dax=0/dax=<ch> rebind
+    // pairs (#3626). See docs/architecture/flex-protocol/state-machines.md §7.
+    enum class DaxConsumer : quint8 {
+        Bridge = 0,   // DAX virtual-audio bridge (macOS CoreAudio / PipeWire)
+        Tci    = 1,   // TCI server audio clients (WSJT-X etc.)
+        Rade   = 2,   // RADE digital-voice engine
+        Clock  = 3,   // AetherClock time-signal decode engine
+        CwDecoder = 4, // selected receiver CW decoder (pre-monitor DAX)
+        RttyDecoder = 5, // selected receiver RTTY decoder (pre-monitor DAX)
+    };
+    static const char* daxConsumerName(DaxConsumer who);
+
+    // Add `who` as a holder of `channel` (1-4). Requests stream creation when
+    // the channel gains its first holder. Idempotent per holder. Returns the
+    // channel's current stream id (0 while creation is in flight).
+    quint32 acquireDaxChannel(int channel, DaxConsumer who);
+    // Command plane reports a failed/dropped `stream create` (radio error
+    // reply, or emitted while disconnected). Clears the create latch and — if
+    // the channel is still held — arms a deferred retry, so a transient
+    // failure (DAX slots busy, connect-gap drop) cannot wedge the channel
+    // with `createPending` stuck true (the #3669 wedge class).
+    void notifyDaxCreateFailed(int channel);
+    // Drop `who` as a holder. When the last holder leaves, stream removal is
+    // requested after a grace window (cancelled by a re-acquire).
+    void releaseDaxChannel(int channel, DaxConsumer who);
+    void releaseAllDaxChannels(DaxConsumer who);
+    bool daxChannelHeldBy(int channel, DaxConsumer who) const;
+    // Drop the whole table without emitting removals — the radio reaps all of
+    // a client's streams itself on TCP disconnect (state-machines.md §4.2).
+    void resetDaxChannelsForDisconnect();
+    // Read-only snapshot of the ownership table for diagnostics and the
+    // automation bridge (`get dax`). Safe from any thread.
+    struct DaxChannelSnapshot {
+        int         channel{0};
+        quint32     streamId{0};
+        bool        createPending{false};
+        QStringList holders;   // daxConsumerName() strings
+    };
+    QVector<DaxChannelSnapshot> daxChannelSnapshot() const;
+
+    // DAX IQ stream routing
+    void registerIqStream(quint32 streamId, int channel);
+    void unregisterIqStream(quint32 streamId);
+
+    // Send a raw UDP datagram to the radio (used for DAX TX VITA-49 packets)
+    Q_INVOKABLE void sendToRadio(const QByteArray& packet);
+
+    // Enable/disable network-audio packet-loss concealment. When enabled
+    // (default), gaps detected via VITA-49 sequence skips on the CatAudio
+    // path are filled with cosine-faded silence (uncompressed) or native
+    // Opus PLC frames before the next received packet is emitted to
+    // AudioEngine. Reduces the broadband click that the splice would
+    // otherwise produce. Safe to call from any thread. (#2731)
+    Q_INVOKABLE void setPacketLossConcealment(bool on);
+    bool packetLossConcealment() const { return m_plcEnabled.load(); }
+
+    // Live-set the VITA-49 socket receive buffer (SO_RCVBUF) request, in bytes.
+    // Re-applies immediately if the socket is bound. Q_INVOKABLE: must run on
+    // the network worker thread (the socket lives there). Persistence is the
+    // caller's responsibility (NetworkSettings, on the GUI thread). (#3810)
+    Q_INVOKABLE void setReceiveBufferSizeBytes(int bytes);
+
+    // Kernel-granted SO_RCVBUF after the last apply (may be < requested when
+    // capped by net.core.rmem_max). 0 until the first bind. Safe from any thread.
+    int grantedReceiveBufferBytes() const { return m_grantedRcvBufBytes.load(); }
+
+signals:
+    // Centralized DAX ownership (#3305): command-plane requests, connected to
+    // RadioModel which sends `stream create type=dax_rx dax_channel=<ch>` /
+    // `stream remove 0x<id>` (plus the one-shot #1439 re-assert on create).
+    // RadioModel reports create failures back via notifyDaxCreateFailed().
+    void daxStreamCreateNeeded(int channel);
+    void daxStreamRemoveNeeded(quint32 streamId, int channel);
+    // A channel's radio-side stream went away (our removal or radio-initiated).
+    // TCI uses this to invalidate its channel→trx routing cache.
+    void daxStreamUnregistered(int channel, quint32 streamId);
+
+    // One DAX channel's RX audio as owning typed PCM.
+    void daxPcmReady(int channel, const AetherSDR::PcmFrame& frame);
+    void iqDataReady(int channel, const QByteArray& rawPayload, int sampleRate);
+    void spectrumReady(quint32 streamId, const QVector<float>& binsDbm, qint64 emittedNs);
+    // One row of waterfall data (intensity values, Width bins).
+    void waterfallRowReady(quint32 streamId, const QVector<float>& binsDbm,
+                           double lowFreqMhz, double highFreqMhz,
+                           quint32 timecode, qint64 emittedNs);
+    // Emitted once per waterfall tile with the radio's computed auto black level.
+    void waterfallAutoBlackLevel(quint32 streamId, quint32 autoBlack);
+    // Speaker RX audio after IF-Data decode: owning native-endian float32,
+    // at the producer's declared format. A1 publishes 24 kHz stereo.
+    void pcmFrameReady(const AetherSDR::PcmFrame& frame);
+    // Meter data: parallel arrays of (meter_index, raw_int16_value).
+    void meterDataReady(const QVector<quint16>& ids, const QVector<qint16>& vals);
+    // Emitted after the receive buffer is (re)applied on a bind or a live
+    // setReceiveBufferSizeBytes(). granted < requested ⇒ capped by rmem_max.
+    void receiveBufferApplied(int requestedBytes, int grantedBytes);
+
+private slots:
+    void onDatagramReady();
+
+private:
+    friend class PcmCompatibilityTestAccess;
+    PcmProducer m_pcmProducer;
+    std::map<quint32, std::unique_ptr<PcmProducer>> m_daxPcm;
+    void publishLegacyDaxAudio(quint32 streamId, int channel, const QByteArray& pcm);
+    void publishLegacyAudio(const QByteArray& pcm);
+    void processDatagram(const QByteArray& data);
+    // Raise the kernel receive buffer (SO_RCVBUF) on the bound VITA-49 socket so
+    // bursts / brief drain stalls don't overflow it and surface as false
+    // sequence-loss (which the adaptive throttle would react to). Logs the
+    // granted size — the kernel caps the request at net.core.rmem_max. (#3810)
+    void applyReceiveBufferSize();
+    void decodeFFT(const uchar* raw, int totalBytes, bool hasTrailer, quint32 streamId);
+    void decodeWaterfallTile(const uchar* raw, int totalBytes, bool hasTrailer, quint32 streamId);
+    void decodeNarrowAudio(const uchar* raw, int totalBytes, bool hasTrailer, quint32 streamId);
+    void decodeReducedBwAudio(const uchar* raw, int totalBytes, bool hasTrailer, quint32 streamId);
+    void decodeOpusAudio(const uchar* raw, int totalBytes, bool hasTrailer, quint32 streamId);
+    void decodeMeterData(const uchar* raw, int totalBytes, bool hasTrailer);
+
+    // Per-stream PLC state map.  Accessed only from the network worker
+    // thread.  Public AudioPlcState struct and static applyConcealmentFade
+    // declared above.
+    QMap<quint32, AudioPlcState> m_audioPlc;
+    std::atomic<bool> m_plcEnabled{true};
+
+    // VITA-49 receive-buffer (SO_RCVBUF) request + last kernel-granted size.
+    // m_desiredRcvBufBytes is seeded from NetworkSettings at init and updated by
+    // setReceiveBufferSizeBytes(); applyReceiveBufferSize() requests it on bind.
+    int m_desiredRcvBufBytes{4 * 1024 * 1024};
+    std::atomic<int> m_grantedRcvBufBytes{0};
+
+    // PacketClassCodes (from FlexLib VitaFlex.cs)
+    static constexpr quint16 PCC_IF_NARROW         = 0x03E3u; // float32 stereo, big-endian
+    static constexpr quint16 PCC_IF_NARROW_REDUCED = 0x0123u; // int16 mono, big-endian
+    static constexpr quint16 PCC_OPUS              = 0x8005u; // Opus compressed audio
+    static constexpr quint16 PCC_FFT               = 0x8003u; // panadapter FFT bins
+    static constexpr quint16 PCC_WATERFALL         = 0x8004u; // waterfall tiles
+    static constexpr quint16 PCC_METER             = 0x8002u; // meter data
+
+    // Frame assembly: a VITA-49 FFT frame may arrive in multiple UDP packets.
+    // Each packet carries start_bin_index + num_bins so we can stitch them.
+    struct FrameAssembler {
+        quint32        frameIndex{0xFFFFFFFF};
+        quint16        totalBins{0};
+        quint16        lastAcceptedTotalBins{0};
+        QVector<quint16> buf;          // raw uint16 bins, host byte-order
+        VitaBinCoverage coverage;
+        FftGrowthSuffixGuard growthSuffixGuard;
+
+        void reset(quint32 idx, quint16 total) {
+            frameIndex   = idx;
+            totalBins    = total;
+            buf.resize(total);
+            buf.fill(0);
+            coverage.reset(total);
+        }
+        bool isComplete() const { return coverage.isComplete(); }
+    };
+
+    // Waterfall frame assembly: tiles arrive in fragments across multiple packets.
+    // Each packet carries firstBinIndex + width; totalBinsInFrame is constant.
+    struct WaterfallFrame {
+        quint32          timecode{0xFFFFFFFF};
+        quint16          totalBins{0};
+        double           lowFreqMhz{0};
+        double           binBwMhz{0};
+        quint32          autoBlack{0};
+        QVector<float>   buf;   // intensity values (int16/128.0f)
+        VitaBinCoverage  coverage;
+
+        void reset(quint32 tc, quint16 total, double low, double bw, quint32 ab) {
+            timecode     = tc;
+            totalBins    = total;
+            lowFreqMhz   = low;
+            binBwMhz     = bw;
+            autoBlack    = ab;
+            buf.resize(total);
+            buf.fill(0.0f);
+            coverage.reset(total);
+        }
+        bool isComplete() const { return coverage.isComplete(); }
+    };
+
+    QMap<quint32, WaterfallFrame> m_wfFrames;  // per-stream waterfall frame assembly
+
+    // Per-stream packet sequence tracking (4-bit count in VITA-49 word0 bits 19:16)
+    struct StreamStats {
+        int  lastSeq{-1};
+        int  errorCount{0};
+        int  totalCount{0};
+    };
+
+public:
+    // Per-category network statistics
+    enum StreamCategory { CatAudio, CatFFT, CatWaterfall, CatMeter, CatDAX, CatCount };
+    struct CategoryStats {
+        qint64 bytes{0};
+        int    packets{0};
+        int    errors{0};
+    };
+    struct AudioStreamDiagnostics {
+        quint32 streamId{0};
+        quint16 packetClassCode{0};
+        qint64 packets{0};
+        qint64 frames{0};
+        int sequenceErrors{0};
+        int latePackets{0};
+        int lastGapMs{0};
+        int maxGapMs{0};
+        double expectedPacketMs{0.0};
+        double feedRateHz{0.0};
+        double deficitMs{0.0};
+        qint64 lastPacketAgeMs{0};
+    };
+    CategoryStats categoryStats(StreamCategory cat) const;
+    QVector<AudioStreamDiagnostics> audioStreamDiagnostics() const;
+    Q_INVOKABLE void resetAudioStreamDiagnostics();
+private:
+
+    // Mutex guards stream ID sets, dBm ranges, yPixels, and DAX/IQ maps.
+    // Written from main thread (RadioModel), read from network worker thread (#502).
+    mutable QMutex  m_streamMutex;
+    QSet<quint32>   m_knownPanStreams;     // registered pan stream IDs
+    QSet<quint32>   m_knownWfStreams;     // registered wf stream IDs
+
+    // Stream ids that have EVER been registered this session (never pruned on
+    // unregister; cleared only on disconnect). The orphan detector keys off
+    // these, not the live known-sets: a leaked stream is one we ONCE owned and
+    // have since let go of but the radio keeps sending — which stays detectable
+    // after the live set empties (e.g. `pan close all`), while a never-yet-
+    // registered stream in its registration-lag window is never mis-flagged.
+    QSet<quint32>   m_everRegisteredPanStreams;   // (#3856)
+    QSet<quint32>   m_everRegisteredWfStreams;
+
+    // Orphan (radio-side-leaked) display streams — see OrphanStream above (#3856).
+    // Guarded by m_streamMutex. Bounded to kMaxOrphanStreams to cap memory.
+    struct OrphanRec { bool waterfall{false}; quint64 packets{0}; qint64 lastSeenMs{0}; };
+    static constexpr int kMaxOrphanStreams = 32;
+    QHash<quint32, OrphanRec> m_orphanStreams;
+    QElapsedTimer             m_orphanClock;   // monotonic source for lastSeenMs
+    QUdpSocket*     m_socket{nullptr};
+    quint16         m_localPort{0};
+
+    QMap<quint32, QPair<float,float>> m_dbmRanges;  // streamId → (min, max)
+    QMap<quint32, QPair<float,float>> m_pendingDbmRanges;  // streamId → pending echoed range
+    QMap<quint32, int> m_yPixels;  // streamId → ypixels for FFT bin scaling
+    RadioConnection* m_conn{nullptr};
+    QMap<quint32, FrameAssembler> m_frames;  // per-stream FFT frame assembly
+    QMap<quint32, StreamStats> m_streamStats;  // keyed by stream ID
+    mutable QMutex m_statsMutex;
+    CategoryStats m_catStats[CatCount]{};
+
+    struct AudioStreamTracker {
+        quint16 packetClassCode{0};
+        qint64 packets{0};
+        qint64 frames{0};
+        int sequenceErrors{0};
+        int latePackets{0};
+        int lastGapMs{0};
+        int maxGapMs{0};
+        double expectedPacketMs{0.0};
+        double feedRateHz{0.0};
+        double deficitMs{0.0};
+        qint64 lastArrivalMs{-1};
+        qint64 windowStartMs{-1};
+        qint64 windowFrames{0};
+    };
+    QMap<quint32, AudioStreamTracker> m_audioStreamStats;
+    QElapsedTimer m_audioStreamStatsTimer;
+    void resetAudioStreamStats();
+    void recordAudioStreamPacketLocked(quint32 streamId,
+                                       quint16 pcc,
+                                       int payloadBytes,
+                                       bool sequenceError);
+    static int audioPayloadFrames(quint16 pcc, int payloadBytes);
+
+public:
+    // Packet error/total counts across all owned streams (for network quality monitor).
+    int packetErrorCount() const;
+    int packetTotalCount() const;
+    qint64 totalRxBytes() const { return m_totalRxBytes.load(); }
+    qint64 totalTxBytes() const { return m_totalTxBytes.load(); }
+    int audioPacketGapMs() const { return m_audioPacketGapMs.load(); }
+    int audioPacketGapMaxMs() const { return m_audioPacketGapMaxMs.load(); }
+    int audioPacketJitterMs() const { return m_audioPacketJitterMs.load(); }
+
+private:
+    std::atomic<qint64> m_totalRxBytes{0};
+    std::atomic<qint64> m_totalTxBytes{0};
+    std::atomic<int> m_audioPacketGapMs{0};
+    std::atomic<int> m_audioPacketGapMaxMs{0};
+    std::atomic<int> m_audioPacketJitterMs{0};
+    QElapsedTimer m_audioPacketTimer;
+    bool m_audioPacketTimerStarted{false};
+    int m_previousAudioPacketGapMs{0};
+    double m_audioPacketJitterEstimateMs{0.0};
+
+    // Opus audio decoder (lazy-initialized on first Opus packet)
+    OpusCodec* m_opusCodec{nullptr};
+
+    // DAX stream routing: stream ID → DAX channel (1-8)
+    QMap<quint32, int> m_daxStreamIds;
+    // Centralized DAX RX channel ownership (#3305), guarded by m_streamMutex.
+    // `generation` invalidates in-flight deferred removal/recreate lambdas
+    // whenever the channel's state changes (re-acquire cancels a pending
+    // removal; disconnect reset cancels everything).
+    struct DaxChannelState {
+        quint32 streamId{0};
+        bool    createPending{false};
+        quint8  holders{0};       // bitmask of DaxConsumer
+        quint32 generation{0};
+    };
+    QHash<int, DaxChannelState> m_daxChannelStates;
+    quint32 m_daxGenCounter{0};   // monotonic; entries never reuse a generation
+    static constexpr int kDaxRemovalGraceMs  = 1500;  // ≫ the ~80 ms transient rebroadcast cycle (#3626)
+    static constexpr int kDaxRecreateDelayMs = 500;   // radio-removed-but-still-held re-create backoff (#3476)
+    static constexpr int kDaxCreateRetryMs   = 2000;  // failed-create retry cadence while the channel stays held
+    void scheduleDaxRemovalLocked(int channel);       // call with m_streamMutex held
+    void scheduleDaxRecreateLocked(int channel);      // call with m_streamMutex held
+    // DAX IQ stream routing: stream ID → IQ channel (1-4)
+    QMap<quint32, int> m_iqStreamIds;
+    QSet<quint32> m_loggedDaxPacketStreams;
+    QSet<quint32> m_loggedIqPacketStreams;
+    QHostAddress m_radioAddress;
+    quint16      m_radioPort{0};
+    QHostAddress m_localAddress;
+    // Written on the network thread (first datagram), read from the GUI thread via
+    // hasReceivedPackets() (the connect health watchdog). Atomic for the same
+    // reason RadioConnection::m_syntheticDemo is.
+    std::atomic<bool> m_hasReceivedPacket{false};
+
+    // WAN UDP registration and keepalive
+    QTimer*  m_wanRegisterTimer{nullptr};   // 50ms: "client udp_register" until first packet
+    QTimer*  m_wanPingTimer{nullptr};       // 5s: "client ping" keepalive after registration
+    QTimer*  m_routedPrimeTimer{nullptr};   // 250ms: non-WAN UDP prime retry until first packet
+    bool     m_isWanMode{false};
+    bool     m_wanRegistered{false};
+    quint32  m_wanClientHandle{0};
+    QElapsedTimer m_routedPrimeElapsed;
+};
+
+} // namespace AetherSDR

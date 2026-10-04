@@ -98,10 +98,17 @@ capability, ownership and resource changes; advertisement reserves nothing.
 |---|---|---|---|---|---|
 | Sim | USB, LSB | unavailable: echo-only | unavailable | unavailable: fixed VFO scene | unavailable: fixed span |
 | Flex | USB/LSB, DIGU/DIGL, AM/SAM/DSB, CW, FM/NFM | USB/LSB, DIGU/DIGL, AM/SAM/DSB | unavailable: legacy wire route | unavailable: unknown coverage | unavailable: coupled legacy geometry |
-| HL2 | USB/LSB, DIGU/DIGL, AM/SAM, CW | USB/LSB, DIGU/DIGL, AM/SAM | supported | 100 kHz–38.4 MHz | unavailable: radio-wide rate can retire receivers |
-| ANAN | not yet qualified | not yet qualified | not yet qualified | unavailable: also retunes slice | 48 kHz–1.536 MHz; backend selects actual rate; rate changes rebuild DSP and restart the P2 session, interrupting streams |
+| HL2 | USB/LSB, DSB, DIGU/DIGL, AM/SAM, CW/CWL, FM | USB/LSB, DIGU/DIGL, AM/SAM | supported | 100 kHz–38.4 MHz | unavailable: radio-wide rate can retire receivers |
+| ANAN | not yet qualified | not yet qualified | supported | unavailable: also retunes slice | 48 kHz–1.536 MHz; backend selects actual rate; rate changes rebuild DSP and restart the P2 session, interrupting streams |
 | RTL-SDR | AM/SAM, FM/FMN/WFM, USB/LSB, CW/CWR | unavailable: DSP does not consume cuts | supported | unavailable: also retunes slice | 225001 Hz–3 MHz; observe actual result |
 | Icom | not yet qualified | profile/preset contract needed | not yet qualified | not yet qualified | not yet qualified |
+
+ANAN gain/mute is applied in the backend's own mixer, because it demodulates on
+this host: the per-slice mute and AF gain (and balance, which has no record here)
+act on the demodulated speaker feed before it leaves the backend (the per-slice
+tap for TCI and decoders stays pre-mute and pre-gain), and both gain and mute
+are echoed in `SliceDelta` so the observation this path requires exists. Balance is
+applied without a record because `SliceDelta` carries no field for it.
 
 Flex and ordinary TX-enabled HL2 still lack the normalized idle readback needed
 by this daemon path, so their declarations do **not** make those methods live.

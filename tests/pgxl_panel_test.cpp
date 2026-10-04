@@ -20,6 +20,8 @@
 
 #include <QApplication>
 #include <QComboBox>
+#include <algorithm>
+#include <cstdlib>
 #include <QLayout>
 #include <QDeadlineTimer>
 #include <QHostAddress>
@@ -197,11 +199,15 @@ int main(int argc, char** argv)
     CHECK(!portB->isVisible());
 
     // Fan speed only exists on the direct connection. Until the amplifier has
-    // reported a mode, neither fan control is up: one that cannot say what it
-    // is set to is worse than none.
+    // reported a mode, the rail's pull-down is up but disabled and shows no
+    // mode: it keeps the row's shape without asserting a setting.
     QComboBox* fanCombo = applet.findChild<QComboBox*>(QStringLiteral("ampFanModeCombo"));
     CHECK(fanCombo != nullptr);
-    if (fanCombo) CHECK(!fanCombo->isVisible());
+    if (fanCombo) {
+        CHECK(fanCombo->isVisible());
+        CHECK(!fanCombo->isEnabled());
+        CHECK(fanCombo->currentIndex() == -1);
+    }
 
     // ── Expanded ──────────────────────────────────────────────────────
     applet.setFloating(true);
@@ -303,10 +309,16 @@ int main(int argc, char** argv)
     // still describe how the port is set up.
     CHECK(rowShows(portA, QStringLiteral("40")));
     CHECK(rowShows(portA, QStringLiteral("AAB")));
-    CHECK(rowShows(portA, QStringLiteral("FLEX-8600")));
     CHECK(rowShows(portB, QStringLiteral("N/A")));
     CHECK(rowShows(portB, QStringLiteral("AB")));
-    CHECK(rowShows(portB, QStringLiteral("FLEX-8600")));
+    // The source radio is configuration, so it is on the panel — visibly, and
+    // in the spoken sentence — on both ports. The strip widget is shared with
+    // the tuner, which hides this cell when it cannot say what is on a port;
+    // that must not leak into the amplifier's strips.
+    for (const AccessoryPortRow* row : {portA, portB}) {
+        CHECK(rowShowsVisible(row, QStringLiteral("FLEX-8600")));
+        CHECK(row->accessibleDescription().contains(QStringLiteral("FLEX-8600")));
+    }
 
     // The frequency cell is not on an amplifier's strip at all. The PGXL
     // reports no frequency per port, and a cell standing at N/A forever would
@@ -400,7 +412,8 @@ int main(int argc, char** argv)
         QPushButton* rail = nullptr;
         for (QPushButton* b : applet.findChildren<QPushButton*>()) {
             if (!qobject_cast<PanelKey*>(b)
-                    && b->objectName() != QStringLiteral("ampTempUnitButton")) rail = b;
+                    && b->objectName() != QStringLiteral("ampTempUnitButton")
+                    && b->objectName() != QStringLiteral("ampHlTempButton")) rail = b;
         }
         CHECK(key != nullptr);
         CHECK(rail != nullptr);
@@ -484,61 +497,122 @@ int main(int argc, char** argv)
 
     // ── The readouts reflow with the presentation ─────────────────────
     //
-    // One row along the bottom on the panel, stacked in the rail — which is
-    // one tile wide and has nowhere to put four readings abreast. Same
-    // widgets either way; nothing is reparented between presentations.
+    // A 2x2 grid in both presentations: temperatures in the first column,
+    // voltages in the second. Docked, the connection indicator ends the
+    // second row; floating, it is the column's last line. The grid cells are
+    // the same widgets in both presentations.
     {
         QPushButton* temp = applet.findChild<QPushButton*>(QStringLiteral("ampTempUnitButton"));
-        QLabel* vdd = nullptr;
-        for (QLabel* l : applet.findChildren<QLabel*>()) {
-            if (l->text().startsWith(QStringLiteral("Vdd"))) vdd = l;
-        }
-        CHECK(temp != nullptr);
-        CHECK(vdd != nullptr);
-        if (temp && vdd) {
-            settle(QSize(560, 380));
+        QPushButton* hl = applet.findChild<QPushButton*>(QStringLiteral("ampHlTempButton"));
+        QLabel* vac = applet.findChild<QLabel*>(QStringLiteral("ampMainsVoltage"));
+        QLabel* vdd = applet.findChild<QLabel*>(QStringLiteral("ampDrainVoltage"));
+        QLabel* source = applet.findChild<QLabel*>(QStringLiteral("ampConnectionSource"));
+        CHECK(temp && hl && vac && vdd && source);
+        if (temp && hl && vac && vdd && source) {
             // Abreast is an overlap rather than an identical y: the cells are
             // vertically Fixed, so a shorter one is centred in the row rather
             // than stretched to it.
             auto abreast = [](QWidget* a, QWidget* b) {
-                return a->y() < b->y() + b->height() && b->y() < a->y() + a->height();
+                const QPoint pa = a->mapTo(a->window(), QPoint(0, 0));
+                const QPoint pb = b->mapTo(b->window(), QPoint(0, 0));
+                return pa.y() < pb.y() + b->height() && pb.y() < pa.y() + a->height();
             };
-            CHECK(applet.isFloating());
-            CHECK(abreast(temp, vdd));
-            CHECK(temp->x() < vdd->x());
+            auto at = [&applet](QWidget* w) { return w->mapTo(&applet, QPoint(0, 0)); };
+            // The grid, in both presentations: PA over HL, Vac over Vdd, the
+            // voltages in a second column that starts at one x.
+            auto gridHolds = [&] {
+                CHECK(at(hl).y() >= at(temp).y() + temp->height());
+                CHECK(at(temp).x() == at(hl).x());
+                CHECK(abreast(temp, vac));
+                CHECK(abreast(hl, vdd));
+                CHECK(at(vac).x() == at(vdd).x());
+                CHECK(at(vac).x() > at(temp).x() + temp->width());
+            };
 
-            // The source indicator is not a reading — it says which path the
-            // readings came down — so it sits at the far end of the row with
-            // the slack between, rather than trailing the measurements.
-            QLabel* source = nullptr;
-            for (QLabel* l : applet.findChildren<QLabel*>()) {
-                if (l->text().contains(QStringLiteral("DIRECT"))
-                        || l->text().contains(QStringLiteral("RADIO"))) source = l;
-            }
-            QLabel* vac = nullptr;
-            for (QLabel* l : applet.findChildren<QLabel*>()) {
-                if (l->text().startsWith(QStringLiteral("Vac"))) vac = l;
-            }
-            CHECK(source != nullptr);
-            CHECK(vac != nullptr);
-            if (source && vac) {
-                CHECK(abreast(source, vdd));
-                // The slack is BETWEEN the last reading and the indicator, not
-                // after it: a gap the width of the column's spacing would mean
-                // it is just the fourth item in the row.
-                CHECK(source->x() - (vac->x() + vac->width()) > 40);
-            }
-
-            applet.setFloating(false);
             settle(QSize(560, 380));
-            CHECK(!abreast(temp, vdd));          // stacked
-            CHECK(temp->x() == vdd->x());
+            CHECK(applet.isFloating());
+            gridHolds();
+            // Floating: the indicator on its own line, bottom-right.
+            CHECK(at(source).y() > at(vdd).y() + vdd->height());
+            CHECK(applet.width() - at(source).x() - source->width() < 20);
+            const int floatInset = applet.height() - at(source).y() - source->height();
+            CHECK(floatInset >= 6);
+            CHECK(floatInset < 20);
+
+            // Docked, at the rail's own width (AppletPanel is 260 px wide):
+            // the indicator ends the HL/Vdd row.
+            applet.setFloating(false);
+            settle(QSize(260, 380));
+            gridHolds();
+            CHECK(abreast(vdd, source));
+            CHECK(applet.width() - at(source).x() - source->width() < 20);
+            CHECK(at(source).x() >= at(vdd).x() + vdd->width());
+            // Same height as Vdd, so centring puts both texts on one line: a
+            // box a pixel shorter needs a half-pixel offset, which rounds
+            // away and lifts the indicator's text above Vdd's.
+            CHECK(source->height() == vdd->height());
+            CHECK(at(source).y() == at(vdd).y());
+
+            // Nothing is squeezed below the width its text needs.
+            QPushButton* meffa = applet.findChild<QPushButton*>(QStringLiteral("ampMeffaButton"));
+            QComboBox* fan = applet.findChild<QComboBox*>(QStringLiteral("ampFanModeCombo"));
+            QPushButton* operate = nullptr;
+            for (QPushButton* b : applet.findChildren<QPushButton*>()) {
+                if (b->isVisible() && (b->text() == QStringLiteral("OPERATE")
+                                       || b->text() == QStringLiteral("STANDBY"))) {
+                    operate = b;
+                }
+            }
+            CHECK(operate != nullptr);
+            for (QWidget* w : std::initializer_list<QWidget*>{temp, hl, vac, vdd, source,
+                                                              meffa, fan, operate}) {
+                if (w && w->isVisible()) {
+                    CHECK(w->width() >= w->sizeHint().width());
+                }
+            }
+            // The controls share one height.
+            for (QWidget* w : std::initializer_list<QWidget*>{meffa, fan}) {
+                if (w && w->isVisible() && operate) {
+                    CHECK(w->height() == operate->height());
+                }
+            }
+            if (operate) {
+                // The row's edges are the tallest control's: they differ in
+                // height, and a shorter one is centred in the row.
+                int controlsTop = at(operate).y();
+                int controlsBottom = 0;
+                for (QWidget* w : std::initializer_list<QWidget*>{meffa, fan, operate}) {
+                    if (w && w->isVisible()) {
+                        controlsTop = std::min(controlsTop, at(w).y());
+                        controlsBottom = std::max(controlsBottom, at(w).y() + w->height());
+                    }
+                }
+                // Controls first, then the readings, with as much space above
+                // them as below.
+                const int readingsTop = at(temp).y();
+                CHECK(readingsTop >= controlsBottom);
+                const int readingsBottom = std::max({at(hl).y() + hl->height(),
+                                                     at(vdd).y() + vdd->height(),
+                                                     at(source).y() + source->height()});
+                CHECK(std::abs((readingsTop - controlsBottom)
+                               - (applet.height() - readingsBottom)) <= 2);
+                // And the controls stand apart from the Id gauge above them.
+                QWidget* idGauge = nullptr;
+                for (QWidget* w : applet.findChildren<QWidget*>()) {
+                    if (w->accessibleName() == QStringLiteral("Drain current")) idGauge = w;
+                }
+                CHECK(idGauge != nullptr);
+                if (idGauge) {
+                    CHECK(controlsTop - (at(idGauge).y() + idGauge->height()) >= 8);
+                }
+            }
             // Still the same widgets, still inside the applet.
             CHECK(temp->parentWidget() == vdd->parentWidget());
 
             applet.setFloating(true);
             settle(QSize(560, 380));
-            CHECK(abreast(temp, vdd));
+            gridHolds();
+            CHECK(at(source).y() > at(vdd).y() + vdd->height());
         }
     }
 

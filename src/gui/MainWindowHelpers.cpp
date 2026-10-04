@@ -1,12 +1,13 @@
 #include "MainWindowHelpers.h"
 
 #include "SpectrumWidget.h"
-#include "core/PanadapterStream.h"
+#include "core/backends/flex/PanadapterStream.h"
 #include "core/RadioDiscovery.h"
-#include "core/SmartLinkClient.h"
+#include "core/backends/flex/SmartLinkClient.h"
 #include "models/BandSettings.h"
 #include "models/MemoryEntry.h"
 #include "models/RadioModel.h"
+#include "models/SliceModel.h"
 #include "models/XvtrPolicy.h"
 #include "models/TnfModel.h"
 
@@ -20,6 +21,21 @@
 #include <cmath>
 
 namespace AetherSDR {
+
+bool requestSlicePanCenter(RadioModel& model, int sliceId, double centerMhz)
+{
+    const SliceModel* slice = model.slice(sliceId);
+    if (!slice) { return false; }
+    if (model.confirmsReceiveControls()) {
+        // A reveal must admit capture placement with the preserved receiver.
+        // Range is for zoom: RTL deliberately clamps it to existing capture.
+        // Even an admitted Center remains pending until hardware/DSP adoption.
+        model.requestConfirmedReceiveTune(sliceId, centerMhz,
+            IRadioBackend::ReceiveTuneView::Center);
+        return false;
+    }
+    return model.requestPanCenter(slice->panId(), centerMhz);
+}
 
 // ─── Platform checks ─────────────────────────────────────────────────────────
 
@@ -357,11 +373,6 @@ int memoryIndexFromSpotId(int spotIndex)
     return -spotIndex - kMemorySpotIdBase;
 }
 
-bool isPassiveLocalSpotId(int spotIndex)
-{
-    return spotIndex <= -kPassiveSpotIdBase;
-}
-
 QString memorySpotLabel(const MemoryEntry& memory)
 {
     if (!memory.name.trimmed().isEmpty())
@@ -456,6 +467,9 @@ constexpr int kMinPanYpixels = 20;
 // 4.2.18/4.2.20, so stay one bin below it.
 constexpr int kMaxRadioPanXPixels = 4095;
 constexpr int kMaxRadioPanYPixels = 8192;
+// A sanity bound on a device-pixel width, not a backend limit: each backend
+// clamps to the point count it can produce.
+constexpr int kMaxLocalPanPixels = 16384;
 
 int radioPixelsFor(const SpectrumWidget* spectrum, int logicalPixels, int maximumPixels)
 {
@@ -473,6 +487,15 @@ int panXpixelsFor(const SpectrumWidget* spectrum)
         return kDefaultPanXpixels;
     }
     return radioPixelsFor(spectrum, spectrum->width(), kMaxRadioPanXPixels);
+}
+
+int panLocalSpectrumPointsFor(const SpectrumWidget* spectrum)
+{
+    if (!spectrum || spectrum->width() < kMinPanXpixels) {
+        return kDefaultPanXpixels;
+    }
+    const int pixels = radioPixelsFor(spectrum, spectrum->width(), kMaxLocalPanPixels);
+    return panPointsForPixelWidth(pixels, spectrum->panEdgeCropActive());
 }
 
 int panYpixelsFor(const SpectrumWidget* spectrum)
@@ -514,19 +537,6 @@ QPixmap buildBandStackIndicatorPixmap(bool active)
     painter.drawEllipse(2, 8, 6, 6);
     painter.drawEllipse(2, 15, 6, 6);
     return pixmap;
-}
-
-QKeySequence shortcutSequenceFromKeyEvent(const QKeyEvent* ev)
-{
-    if (!ev || ev->key() == Qt::Key_unknown)
-        return {};
-
-    const Qt::KeyboardModifiers modifiers =
-        ev->modifiers() & (Qt::ShiftModifier
-                           | Qt::ControlModifier
-                           | Qt::AltModifier
-                           | Qt::MetaModifier);
-    return QKeySequence(static_cast<int>(modifiers) | ev->key());
 }
 
 // ─── Client connection parsing (discovery / multiFLEX) ──────────────────────

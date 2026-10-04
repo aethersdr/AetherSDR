@@ -77,17 +77,11 @@ class MacNRFilter;
 #endif
 
 // AudioEngine handles audio playback (RX) and capture (TX).
-//
-// RX path:
-//   Typed producer PCM reaches feedPcmFrame() at its declared 24/48 kHz rate.
-//   Legacy byte input and auxiliary Kiwi routes remain 24 kHz. Per-source
-//   processing precedes stereo-preserving conversion to the negotiated sink.
-//   See docs/audio-engine-rate-domains.md for queue and epoch lifetimes.
-//
-// TX path:
-//   Captures mic/input audio via QAudioSource, frames it as VITA-49
-//   ExtDataWithStream packets (PCC 0x03E3, float32 stereo big-endian),
-//   and sends to the radio via UDP.
+// RX: typed producer PCM reaches feedPcmFrame() at its declared 24/48 kHz rate
+// (legacy byte input and Kiwi routes are 24 kHz); per-source processing precedes
+// stereo-preserving conversion to the sink. See docs/audio-engine-rate-domains.md.
+// TX: captures via QAudioSource and sends VITA-49 ExtDataWithStream packets
+// (PCC 0x03E3, float32 stereo big-endian) over UDP.
 
 class AudioEngine : public QObject {
     Q_OBJECT
@@ -515,16 +509,9 @@ public:
         Comp  = 3,
         Tube  = 4,
         Pudu  = 5,
-        // 6 was DeEss. Sibilance is a transmit problem; the RX stage only
-        // existed because this chain was built by mirroring the TX one. The
-        // value stays reserved so a future stage does not inherit it and
-        // silently reinterpret an old packed chain.
-        //
-        // Order persists by NAME, not by number — saveClientRxChainOrder()
-        // writes "Eq,Gate,Comp,…" and packRxChain() never reaches disk. A
-        // stored list still naming DeEss is handled by
-        // isRetiredRxStageName(): the entry is dropped and the rest of the
-        // operator's order is kept.
+        // 6 was DeEss (there is no RX de-esser); reserved so a future stage cannot
+        // reinterpret an old packed chain. Order persists by NAME
+        // (saveClientRxChainOrder); a stored "DeEss" is dropped by isRetiredRxStageName().
     };
     static constexpr int kMaxRxChainStages = 8;  // packs into uint64_t
 
@@ -563,9 +550,12 @@ public:
 
     // ── Master RX bypass ─────────────────────────────────────────
     // Sibling of the TX bypass plumbing above.  Same snapshot-and-
-    // restore semantics applied to the RX chain.  Stages without an
-    // implemented DSP class (currently DeEss) are skipped — they're
-    // already no-ops in the dispatcher, so disabling them is moot.
+    // restore semantics applied to the RX chain, plus the AetherNR
+    // cluster: whichever noise-reduction method is running is switched
+    // off with the chain and put back on release, so a bypassed RX
+    // path is genuinely unprocessed.  Stages without an implemented DSP
+    // class (currently DeEss) are skipped — they're already no-ops in
+    // the dispatcher, so disabling them is moot.
     // Emits rxBypassChanged(bool) on transitions.
     void setRxBypassed(bool on);
     bool isRxBypassed() const;
@@ -688,20 +678,12 @@ public:
     // routing and PhoneCwApplet UI bindings.
     CwSidetoneGenerator* cwSidetone() { return m_cwSidetone.get(); }
 
-    // Key BOTH the audible sidetone and the recorder-sidetone generator from one
-    // call so every local CW source (manual keyer, CWX macros, iambic paddle)
-    // drives them in lockstep. The recorder copy is what lets a Client-Side QSO
-    // recording capture the operator's own sent CW/CWX side-tone (#2539).
-    // `when` is the edge's scheduled instant on the producer's element grid
-    // (#4890): keying sources with an exact schedule (iambic keyer) pass their
-    // grid deadline so the sidetone renders intended rhythm, not thread-wake
-    // rhythm; sources without one take the wall-clock default.
-    // Note the deliberate asymmetry with RadioModel::sendCwKeyEdge, whose
-    // `scheduledAt` uses a default-constructed (epoch) time_point as an
-    // explicit "no schedule" sentinel it tests for.  Here the sidetone needs a
-    // usable instant on every call, so "no schedule" is spelled now() and
-    // there is nothing to test for — passing {} would stamp the epoch rather
-    // than mean "unscheduled".
+    // Key both the audible and the recorder sidetone generators from one call so
+    // every local CW source drives them in lockstep (the recorder copy captures our
+    // own sidetone in Client-Side QSO recordings, #2539). `when` is the edge's
+    // scheduled instant (#4890); scheduled sources pass their grid deadline, others
+    // take now(). Unlike RadioModel::sendCwKeyEdge, there is no epoch "unscheduled"
+    // sentinel here: passing {} would stamp the epoch.
     void setCwKeyDown(bool down,
                       std::chrono::steady_clock::time_point when =
                           std::chrono::steady_clock::now());
@@ -761,19 +743,10 @@ signals:
     void rxStarted();
     void rxStopped();
     void levelChanged(float rms);  // audio level for VU meter, 0.0–1.0
-    // How much the active client noise-reduction stage is actually taking out
-    // of the main RX path, as the linear ratio of post-NR to pre-NR block RMS
-    // (1.0 = passing everything through, 0.0 = fully suppressed). Emitted per
-    // processed block alongside levelChanged, from the one dispatch point every
-    // method shares, so it means the same thing for NR2, NR4, MNR, DFNR, RN2,
-    // BNR and NNR. `active` is false when no method is running (or the chain is
-    // bypassed for TX), which is not the same as a gain that happens to be 1.0.
-    //
-    // Emitted only when the reading actually moves — see
-    // publishNrGainIfChanged(). A block-rate signal that never changed value
-    // was ~100 queued cross-thread events a second for a strip that would
-    // paint the same pixels, and it kept arriving while AetherRX was closed,
-    // because PersistentDialog keeps the widget and its connection alive.
+    // Linear post-NR / pre-NR block RMS on the main RX path (1.0 = passthrough,
+    // 0.0 = fully suppressed), the same for every NR method. `active` is false when
+    // no method runs or the chain is bypassed for TX. Emitted only when the reading
+    // changes (publishNrGainIfChanged()).
     void nrGainChanged(float gain, bool active);
     void nr2EnabledChanged(bool on);
     void nr4EnabledChanged(bool on);
@@ -784,31 +757,16 @@ signals:
     void nnrEnabledChanged(bool on);
     void nvAfxEnabledChanged(bool on);
     void txRawPcmReady(const QByteArray& pcm, const AetherSDR::TxCoordinator::Context& context);
-    // Post-final-limiter TX monitor PCM (24 kHz stereo int16) — the exact stream
-    // packetised to the radio. Fires for all phone/SSB TX (unlike txRawPcmReady,
-    // which is RADE-only), so it is the source for Client-Side TX recording:
-    // connect to QsoRecorder::feedTxAudio (#3556). Emitted from the audio thread;
-    // receivers connect via Qt::AutoConnection (queued across threads).
-    //
-    // `source` says WHERE the frames came from — TxAudioSource.h carries the
-    // contract. Which emitter sets what:
-    //
-    //   onTxAudioReady            → Microphone (the capture chain, through the
-    //                               full voice TX DSP)
-    //   feedDaxTxAudio            → ClientLeveled (external TCI/DAX; the client
-    //                               owns its level, #4796)
-    //   sendModemTxAudio          → Microphone (the AX.25 modem — its AFSK
-    //                               amplitude is a fixed constant and the packet
-    //                               dialog has no level control, so the mic
-    //                               slider is the only thing that can move it)
-    //   startWsprPump             → EngineGenerated (111.6 s unattended; the mic
-    //                               slider must not reach it)
-    //
-    // The tag is a claim about ORIGIN, not about treatment. Slots that only
-    // record or meter the stream can ignore it (Qt permits connecting to a slot
-    // with fewer arguments) — but a slot that ASSERTS on it must compare against
-    // the enum: QVariant::toBool() on this type reads both ClientLeveled and
-    // EngineGenerated as true, which silently retired a guard once already.
+    // Post-final-limiter TX monitor PCM (24 kHz stereo int16), the exact stream sent
+    // to the radio; fires for all phone TX and feeds Client-Side TX recording
+    // (QsoRecorder::feedTxAudio, #3556). Emitted on the audio thread. `source` is the
+    // origin (contract in TxAudioSource.h):
+    //   onTxAudioReady   -> Microphone (full voice TX DSP)
+    //   feedDaxTxAudio   -> ClientLeveled (external TCI/DAX owns its level, #4796)
+    //   sendModemTxAudio -> Microphone (AX.25 AFSK: the mic slider is its only level)
+    //   startWsprPump    -> EngineGenerated (unattended; mic slider must not reach it)
+    // A slot that asserts on the tag must compare the enum: QVariant::toBool() reads
+    // both ClientLeveled and EngineGenerated as true.
     void txFinalMonitorPcmReady(const QByteArray& int16Stereo,
                                 TxAudioSource source);
     // Same samples, separate transport authority. Recorder/monitor consumers
@@ -854,27 +812,11 @@ signals:
     // DAX/TCI/RADE digital bypasses this is the pre-packetization waveform
     // because those paths intentionally skip the voice chain.
     void txPostChainScopeReady(const QByteArray& monoFloat32Pcm, int sampleRate);
-    // Mirror of txPostChainScopeReady for the RX side: high-rate emit
-    // (~125 Hz) so the channel strip's "Aetherial Waveform — RX" panel sees a
-    // wall-clock-accurate scope.  The shared scopeSamplesReady throttles at
-    // 25 ms which made the strip's RX scroll lag wall clock at short
-    // time-window settings.
-    //
-    // LOSSY — FOR DISPLAY ONLY.  This is throttled at 8 ms and the throttle
-    // DISCARDS the whole block, it does not merely skip a repaint.  Blocks
-    // shorter than 8 ms are therefore dropped outright: with NR2 enabled the
-    // RX drain hands over whole radio packets (5.33 ms on a Flex LAN stream)
-    // microseconds apart, and only the first of each drain tick survives —
-    // about half the audio.  An earlier version of this comment claimed "no
-    // sample loss across audio callbacks", which holds only while blocks are
-    // at least 8 ms long; Copy Assist was wired here on the strength of it and
-    // was fed a stream with a gap at every phoneme (#4486).
-    //
-    // Anything that must see EVERY sample — recognisers, decoders, recorders —
-    // belongs on receivePresentationPostDspAudioReady, which is unthrottled and
-    // additionally tags its source.  Also note this signal is emitted for every
-    // RX source with no tag, so a station running a Kiwi alongside the Flex
-    // sees the two interleaved here.
+    // RX mirror of txPostChainScopeReady (~125 Hz) for the channel strip's RX
+    // waveform panel. LOSSY, DISPLAY ONLY: the 8 ms throttle discards whole blocks,
+    // so with short blocks (NR2 drains 5.33 ms Flex packets back to back) about half
+    // the audio is dropped (#4486). Anything needing every sample belongs on
+    // receivePresentationPostDspAudioReady. Untagged: all RX sources interleave here.
     void rxPostChainScopeReady(const QByteArray& monoFloat32Pcm, int sampleRate);
     void tncRxAudioReady(const QByteArray& monoFloat32Pcm, int sampleRate);
     void radioTransmittingChanged(bool tx);
@@ -990,10 +932,10 @@ private:
     void processNr2(const QByteArray& stereoPcm,
                     RxDspSource source = RxDspSource::Main,
                     ExternalRxAudioSourceState* externalSource = nullptr);
-    static void processNr2StereoSharedMask(SpectralNR& nr2,
-                                           const float* src,
-                                           int stereoFrames,
-                                           QByteArray& output);
+    static void processNr2Stereo(SpectralNR& nr2,
+                                 const float* src,
+                                 int stereoFrames,
+                                 QByteArray& output);
     void updateRxBufferStats();
     ExternalRxAudioSourceState* externalKiwiSource(const QString& sourceId,
                                                    bool create);
@@ -1255,27 +1197,12 @@ private:
     // Local keyer speed, mirrored from TransmitModel::cwSpeed so the pump can
     // size the over-hang in dit units rather than wall-clock milliseconds.
     std::atomic<int>   m_cwWpm{20};
-    // How long after the last key edge the CW over is considered finished.
-    //
-    // It must outlast the longest silence WITHIN an over — the inter-word gap,
-    // 7 dit units — and no longer, because for its whole duration the recorder
-    // holds RX audio off (QsoRecorder::feedRxAudio) so the pump's silence is
-    // not interleaved with receive audio. Every extra millisecond here is a
-    // millisecond of the other station's reply missing from the recording, and
-    // in QSK they answer within 200-400 ms.
-    //
-    // 8 units = the inter-word gap plus one unit of margin for keyer jitter.
-    // At 20 WPM that is 480 ms; at 30 WPM, 320 ms. A fixed 1500 ms (the first
-    // version of this fix) cost 1.5 s of deafness after EVERY over at every
-    // speed, which is a regression against the recorder's own purpose.
-    //
-    // Known limitation: Farnsworth sending stretches word gaps beyond 7 units
-    // at the character speed this reports, so a Farnsworth over may split at a
-    // word boundary. That degrades to the pre-fix behaviour for one gap rather
-    // than losing audio.
-    //
-    // The arithmetic lives in CwRecordGate.h so it is pinned by the same test
-    // as the ownership rule.
+    // How long after the last key edge the CW over is finished. Must outlast the
+    // 7-unit inter-word gap and no more: while it runs the recorder holds RX audio off
+    // (QsoRecorder::feedRxAudio), and QSK replies come within 200-400 ms. 8 units =
+    // word gap + one unit of jitter margin (480 ms at 20 WPM, 320 ms at 30 WPM).
+    // Farnsworth word gaps exceed this and may split an over at a word boundary.
+    // Arithmetic in CwRecordGate.h, pinned by its test.
     int64_t cwOverHangMs() const {
         return AetherSDR::cwOverHangMs(
             m_cwWpm.load(std::memory_order_relaxed),
@@ -1470,7 +1397,11 @@ private:
     // RX RN2 lives in the NR cluster, not the RxChainStage enum, but
     // BYPASS must still suppress it so the post-bypass RX path is truly
     // transparent (#3054).  Same parallel-bool pattern as TX above.
-    bool m_rxBypassSnapshotRn2{false};
+    // Which NR methods RX BYPASS switched off, to put back on release.
+    enum class RxBypassNr : unsigned {
+        Nr2 = 1, Nr4 = 2, Mnr = 4, Dfnr = 8, Rn2 = 16, NvAfx = 32, Nnr = 64
+    };
+    unsigned m_rxBypassSnapshotNr{0};
     bool m_rxBypassActive{false};
     // Scratch buffer for in-place EQ on the RX path (avoids per-call alloc).
     // One scratch buffer per RX stage, reused block after block. Grouped

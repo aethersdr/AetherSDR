@@ -27,6 +27,8 @@
 
 #include "TestSettingsProfile.h"
 #include "core/AudioEngine.h"
+#include "core/backends/ReceiveCommand.h"
+#include "core/backends/RestoredRadioState.h"
 #include "core/backends/hl2/Hl2Backend.h"
 #include "core/RadioDiscovery.h"
 #include "core/TciProtocol.h"
@@ -38,7 +40,7 @@
 #include <QCoreApplication>
 #include <QSignalSpy>
 #ifdef HAVE_WEBSOCKETS
-#include <QWebSocket>
+#include "core/TciClient.h"
 #endif
 
 #include <cstdio>
@@ -111,7 +113,7 @@ public:
     static bool hasPendingTrx(TciServer& s) { return s.m_pendingTrxRequest.has_value(); }
     static bool splitRequested(TciServer& s) { return s.m_routingState.splitRequested(); }
 
-    static void trx(TciServer& s, QWebSocket* c, const TciProtocol::TrxRequest& r) {
+    static void trx(TciServer& s, TciClient* c, const TciProtocol::TrxRequest& r) {
         s.handleTrxRequest(c, r);
     }
 
@@ -120,7 +122,7 @@ public:
     // slice via TciProtocol::resolveSliceForTrx(), which returns null on a model
     // that is not connected to real hardware — every assertion below it would
     // then pass without the code under test ever running.
-    static void createVfoB(TciServer& s, QWebSocket* c,
+    static void createVfoB(TciServer& s, TciClient* c,
                            const TciProtocol::VfoRequest& r, SliceModel* rx,
                            const QString& routeConfirmation, bool splitOnly) {
         s.createTxSliceForVfoB(c, r, rx, routeConfirmation, splitOnly);
@@ -362,7 +364,7 @@ static void testSeamBackendCannotWedgeOnVfoB()
           "fixture precondition: maxSlices() reports the backend's own capacity");
 
     TciServer server(&model);
-    QWebSocket client;
+    TciClient client;
 
     // What handleSplitRequest() does for WSJT-X's split_enable:0,true; once
     // resolveVfoB() has returned RouteAction::Create: split already latched
@@ -575,6 +577,96 @@ static void testModeDefaultPassband()
           "re-selecting the SAME mode leaves an operator filter edit alone");
 }
 
+// ── DIGU/DIGL default AGC (#5629) ─────────────────────────────────────────
+// Medium AGC lifts the noise between FT8 frames into WSJT-X's noise reference,
+// which costs weak decodes beside a strong neighbour. The data modes therefore
+// open with AGC off, and the receiver's own AGC returns on leaving them.
+static void testDigitalModeDefaultAgc()
+{
+    // Before the operator has set an AGC, capture falls back to the receiver,
+    // and must read the mode held behind a data mode's off.
+    {
+        hl2::Hl2Backend fresh;
+        fresh.setSliceMode(0, QStringLiteral("DIGU"));
+        check(fresh.currentOperatingState().agcMode == QStringLiteral("med"),
+              "with no AGC set yet, capture reads the held mode, not the off");
+    }
+
+    hl2::Hl2Backend backend;
+
+    QString agc;
+    QObject::connect(&backend, &IRadioBackend::sliceChanged, &backend,
+                     [&](int, const SliceDelta& d) {
+        if (d.agcMode) agc = *d.agcMode;
+    });
+
+    backend.setSliceMode(0, QStringLiteral("LSB"));
+    backend.setSliceAgc(0, QStringLiteral("slow"), 65);
+    check(agc == QStringLiteral("slow"), "the operator's AGC is in force in LSB");
+
+    backend.setSliceMode(0, QStringLiteral("DIGU"));
+    check(agc == QStringLiteral("off"), "entering DIGU turns AGC off");
+    check(backend.currentOperatingState().agcMode == QStringLiteral("slow"),
+          "the data mode's off is not captured as the operator's AGC");
+
+    backend.setSliceMode(0, QStringLiteral("DIGL"));
+    check(agc == QStringLiteral("off"), "DIGU to DIGL keeps AGC off");
+
+    backend.setSliceMode(0, QStringLiteral("USB"));
+    check(agc == QStringLiteral("slow"),
+          "leaving the data modes restores the AGC held before them");
+
+    agc.clear();   // so the check cannot pass on the earlier publish
+    backend.setSliceMode(0, QStringLiteral("CWU"));
+    check(agc == QStringLiteral("slow"), "a non-data mode change leaves AGC alone");
+
+    // An operator's own AGC choice inside a data mode survives re-selecting
+    // the mode, and is theirs to keep on leaving it.
+    backend.setSliceMode(0, QStringLiteral("DIGL"));
+    check(agc == QStringLiteral("off"), "entering DIGL turns AGC off");
+    backend.setSliceAgc(0, QStringLiteral("fast"), 65);
+    backend.setSliceMode(0, QStringLiteral("DIGL"));
+    check(agc == QStringLiteral("fast"),
+          "re-selecting the same data mode leaves an operator AGC choice alone");
+    backend.setSliceMode(0, QStringLiteral("USB"));
+    check(agc == QStringLiteral("fast"),
+          "an AGC the operator set inside a data mode is kept on leaving it");
+
+    // A threshold change inside a data mode must not persist the off. It
+    // arrives with no mode, or with the slice's current mode repeated.
+    backend.setSliceMode(0, QStringLiteral("DIGU"));
+    backend.setSliceAgc(0, QString(), 40);
+    backend.setSliceAgc(0, QStringLiteral("off"), 45);
+    check(agc == QStringLiteral("off"), "a threshold change keeps the data mode's off");
+    check(backend.currentOperatingState().agcMode == QStringLiteral("fast"),
+          "a threshold change in a data mode does not capture off");
+    backend.setSliceMode(0, QStringLiteral("USB"));
+    check(agc == QStringLiteral("fast"), "and the held AGC still returns afterwards");
+}
+
+// The AGC-off level is captured per receiver: the open receiver's new level
+// over the remembered list, so a receiver that is not open keeps its own.
+static void testAgcOffLevelCapture()
+{
+    hl2::Hl2Backend backend;
+    RestoredRadioState remembered;
+    remembered.agcOffLevels = {20, 61};
+    backend.applyRestoredState(remembered);
+    check(backend.currentOperatingState().agcOffLevels == QList<int>({20, 61}),
+          "the remembered AGC-off levels are captured before any change");
+
+    int captureAsks = 0;
+    QObject::connect(&backend, &IRadioBackend::operatingStateChanged, &backend,
+                     [&captureAsks] { ++captureAsks; });
+    SliceAgcRequest request;
+    request.field = SliceAgcRequest::Field::OffLevel;
+    request.offLevel = 37;
+    backend.requestSliceAgc(0, request);
+    check(captureAsks == 1, "an AGC-off level change asks for a capture");
+    check(backend.currentOperatingState().agcOffLevels == QList<int>({37, 61}),
+          "the capture carries the new level and keeps the closed receiver's");
+}
+
 }  // namespace AetherSDR
 
 int main(int argc, char** argv)
@@ -596,6 +688,8 @@ int main(int argc, char** argv)
 #endif
     AetherSDR::testHostModulatedTxAudio();
     AetherSDR::testModeDefaultPassband();
+    AetherSDR::testDigitalModeDefaultAgc();
+    AetherSDR::testAgcOffLevelCapture();
     // Last: it closes the HL2 transmit gate through the environment, and every
     // test above needs it open.
     AetherSDR::testRefusedKeyPublishesNoTransmitEdge();

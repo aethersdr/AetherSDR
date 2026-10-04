@@ -142,9 +142,11 @@ std::array<std::uint8_t, 1444> buildDdcSpecific(int ddc0RateKsps, int numAdcs,
 std::array<std::uint8_t, 1444> buildHighPriority(bool run,
                                                   std::span<const std::uint32_t> ddcFreqWords,
                                                   bool bypassAdc0Filters,
-                                                  bool bypassAdc1Filters) noexcept
+                                                  bool bypassAdc1Filters,
+                                                  int adc0AttenuationDb,
+                                                  int adc1AttenuationDb) noexcept
 {
-    std::array<std::uint8_t, 1444> pkt{};  // full spec length; attenuator fields stay zero
+    std::array<std::uint8_t, 1444> pkt{};  // full spec length
     pkt[4] = run ? 0x01 : 0x00;  // bit[0] = run. Bits[1..4] = PTT0..3 -- there is no
                                   // parameter to set them; see this header's own comment.
     // One 4-byte frequency/phase word per DDC at 9 + 4*n (p.32). Same
@@ -163,18 +165,59 @@ std::array<std::uint8_t, 1444> buildHighPriority(bool run,
     // bit 12 "HF Bypass 2" (p.90-91's own Alex1 bit table).
     if (bypassAdc1Filters)
         writeU16be(&pkt[1430], std::uint16_t{1} << 12);
+    // Step attenuators, pp.34,36: byte 1443 = ADC0, byte 1442 = ADC1, 0-31 dB.
+    pkt[1443] = static_cast<std::uint8_t>(
+        std::clamp(adc0AttenuationDb, 0, kMaxStepAttenuationDb));
+    pkt[1442] = static_cast<std::uint8_t>(
+        std::clamp(adc1AttenuationDb, 0, kMaxStepAttenuationDb));
     return pkt;
 }
 
 std::array<std::uint8_t, 1444> buildHighPriority(bool run, std::uint32_t ddc0FreqWord,
                                                   bool bypassAdc0Filters,
-                                                  bool bypassAdc1Filters) noexcept
+                                                  bool bypassAdc1Filters,
+                                                  int adc0AttenuationDb,
+                                                  int adc1AttenuationDb) noexcept
 {
     // Delegates, same reasoning as buildDdcSpecific()'s single-DDC overload:
     // one implementation of the row layout, and byte-identical output to
     // what this built before (pinned by the existing tests).
     return buildHighPriority(run, std::span<const std::uint32_t>(&ddc0FreqWord, 1),
-                             bypassAdc0Filters, bypassAdc1Filters);
+                             bypassAdc0Filters, bypassAdc1Filters,
+                             adc0AttenuationDb, adc1AttenuationDb);
+}
+
+std::array<std::uint8_t, kSpeakerPacketBytes> buildSpeakerAudio(
+    std::uint32_t sequence, std::span<const std::int16_t> interleavedLr) noexcept
+{
+    std::array<std::uint8_t, kSpeakerPacketBytes> pkt{};
+    writeU32be(pkt.data(), sequence);
+    // Zero-initialised above, so the short-input case needs no separate fill
+    // path -- everything past `count` is already silence. See the header for why
+    // silence is the right answer here and a refusal is not.
+    constexpr std::size_t kMaxSamples = kSpeakerSampleBytes / sizeof(std::int16_t);
+    const std::size_t count = std::min(interleavedLr.size(), kMaxSamples);
+    for (std::size_t i = 0; i < count; ++i) {
+        // Reinterpreted through the unsigned type, not shifted as signed: a
+        // right shift of a negative value is implementation-defined, and every
+        // sample below -1 dBFS is negative half the time. The two's-complement
+        // bit pattern is what the wire wants and what the cast produces.
+        writeU16be(pkt.data() + 4 + i * sizeof(std::int16_t),
+                   static_cast<std::uint16_t>(interleavedLr[i]));
+    }
+    return pkt;
+}
+
+std::optional<HighPriorityStatus> parseHighPriorityStatus(
+    std::span<const std::uint8_t> data) noexcept
+{
+    if (data.size() != kHighPriorityStatusBytes)
+        return std::nullopt;
+    HighPriorityStatus s;
+    s.seq = readU32be(data.data());
+    s.speakerUnderflow = (data[30] & 0b0000'1000) != 0;
+    s.speakerFifoLevel = readU16be(data.data() + 37);
+    return s;
 }
 
 std::optional<int> ddcIndexForSenderPort(std::uint16_t senderPort, int numDdc,

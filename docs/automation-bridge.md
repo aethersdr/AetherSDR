@@ -78,6 +78,25 @@ sets the station label shown to other Multi-Flex clients; the legacy
 `AETHER_AUTOMATION_STATION` and then `AETHER_AUTOMATION_LABEL` are fallbacks,
 followed by the neutral default `Automation`. The agent name is display-only
 and is never used as the UUID because several worktrees may use the same LLM.
+
+The identity also decides what the radio gives back. A FlexRadio restores
+per-client panadapter state (WNB on/off and level, for one) keyed by the GUI
+client UUID, so a run under an automation identity gets that identity's last
+state, not the operator's. To check that a radio-owned setting survives an
+AetherSDR restart *for the operator*, first close any other AetherSDR instance
+using the same settings store, then launch without `AETHER_AUTOMATION` and
+enable the bridge from Radio Setup → Network instead. The app uses the
+persistent `GUIClientID` when it can acquire the identity lock; otherwise it
+falls back to a transient UUID, which would invalidate this comparison. The
+same token works. If you do not normally run the bridge, disable it again
+afterwards: the Radio Setup setting is saved across launches, unlike the
+process-only `AETHER_AUTOMATION` override.
+
+Seen on a FLEX-8600 (firmware 4.2.20.41343) while proving #6070: the same
+radio restored WNB on (level 50) for the operator's identity and off (level
+90) for the automation identity, with no client WNB command sent in either
+fix-build run.
+
 Automation identities never overwrite the user's persistent `GUIClientID`.
 
 KiwiSDR compression can be forced for diagnostic runs by adding
@@ -305,7 +324,7 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 
 | Category | Verb | One-liner |
 |---|---|---|
-| **Introspection** | [`ping`](#ping) | Handshake; returns app + version. |
+| **Introspection** | [`ping`](#ping) | Handshake; returns app + version + build identity. |
 | | [`verbs`](#verbs) | Machine-readable catalog of every verb + aliases + help. |
 | | [`dumpTree`](#dumptree) | ARIA-style snapshot of the whole widget tree. |
 | | [`grab <target> [path]`](#grab) | PNG of one widget (GPU-correct for the panadapter). |
@@ -347,7 +366,7 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | | [`get sync`](#get-sync) | Receive-Sync (Auto Assist) state. |
 | | [`get clock`](#get-clock) | AetherClock time-signal decode state (lock, station, decoded UTC, offset, quality). |
 | | [`get wavestats`](#get-wavestats) | WAVE/strip scope paint-cost counters. |
-| | [`get hostnb`](#get-hostnb) | Host-side noise blanker, read from the backend (HL2). |
+| | [`get hostnb`](#get-hostnb) | Host-side noise blanker, read from the backend (HL2 and ANAN). |
 | | `get waveforms` | Installed waveform list, WFP state, local D-STAR service/configuration, delivery health/metrics, and recent waveform status reports. |
 | | [`get dax`](#get-dax) | DAX RX channel-ownership table (holders/streams, #3305). |
 | | [`get txtimer`](#get-txtimer) | Status-bar transmit-timer state (visible/running/holding/fading/elapsed). |
@@ -389,12 +408,25 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 > the running app disagree, trust `verbs` — it cannot go stale.
 
 ### `ping`
-Connectivity / handshake.
+Connectivity / handshake, and which build is answering.
 
 ```json
 → {"cmd":"ping"}
-← {"ok":true,"app":"AetherSDR","version":"26.6.3"}
+← {"ok":true,"app":"AetherSDR","version":"26.9.3",
+   "build":{"describe":"v26.9.3-68-g7e841682","sha":"7e841682",
+            "baseline":"v26.9.3","commitsSinceTag":68,"dirty":false},
+   "authRequired":false,"readOnly":false}
 ```
+
+`version` is the release string, and a branch with unmerged changes reports the
+same one as `main`. `build` tells them apart (#5804). It is `git describe --tags
+--always --dirty`, captured when the binary is **built**, not when CMake was
+configured, so it cannot name an older commit after an incremental rebuild.
+`dirty` is `git describe`'s own notion: tracked files differed from `HEAD` at
+build time. Outside a git checkout (a source tarball) the strings are
+`"unknown"` and `commitsSinceTag` is `-1`; when no tag is reachable (a shallow
+clone), `describe` and `sha` carry the bare hash, `baseline` is `"unknown"` and
+`commitsSinceTag` is likewise `-1`.
 
 ### `verbs`
 Machine-readable catalog of every verb the running build understands —
@@ -727,7 +759,7 @@ connects).
 | `equalizer` (or `eq`) | — | 8-band RX+TX graphic EQ: `rxEnabled`/`txEnabled` and `rx`/`tx` band maps keyed by label (`63`…`8k`). Validate EQ-applet slider changes. |
 | `meters` | — | `{all:[…]}` — every radio meter with `name`, `value`, `unit`, `low`/`high`, `description`, and **`age_ms`** (staleness): a meter that updates has small `age_ms` and a tracking `value`. The reply also carries a few scalars beside `all`. **`sLevel`** (S-meter, dBm) is **null** in three distinct cases and a client cannot tell them apart from the value: no receiver declares a LEVEL meter; **two or more do**, in which case the scalar has no single answer and `all` is where you name the receiver you mean; or the newest sample is older than the vitals window, which is **1500 ms** and is NOT the 2000 ms window `txMetersFresh` two keys away reports on. If you need a specific receiver's S-meter, read `all` — the scalar is a convenience for the single-receiver case and declines rather than guessing. |
 | `slices` | — | array of all slice snapshots |
-| `slice` | `active` (default) / `tx` / `<sliceId>` | one slice (sliceId, letter, frequency, mode, filterLow/High, **filterPresetId/filterPreset** for a radio-owned FIL slot, rxAntenna, nb/nr/anf + levels, **squelch/squelchLevel, agcMode/agcThreshold, apf/apfLevel**, **adaptiveFilterEnabled/adaptiveMinLowCut/adaptiveMaxHighCut/adaptiveMinSnr/adaptiveResponse/adaptiveSplatter/adaptiveActive** (SSB adaptive RX filter — `adaptiveActive` is the live AUTO-fit state), **linkedTo** (Slice Link peer id, `-1` when unlinked), txSlice, …) |
+| `slice` | `active` (default) / `tx` / `<sliceId>` | one slice (sliceId, letter, frequency, mode, filterLow/High, **filterPresetId/filterPreset** for a radio-owned FIL slot, rxAntenna, nb/nr/anf + levels, **squelch/squelchLevel, agcMode/agcThreshold, apf/apfLevel**, **adaptiveFilterEnabled/adaptiveMinLowCut/adaptiveMaxHighCut/adaptiveMinSnr/adaptiveResponse/adaptiveSplatter/adaptiveActive** (SSB adaptive RX filter — `adaptiveActive` is the live AUTO-fit state), **linkedTo** (Slice Link peer id, `-1` when unlinked), active, **inCapture** (full guarded passband is receiving; false means parked at its saved RF), txSlice, …) |
 | `hostnb` | — (optional property) | HOST-SIDE noise blanker, read from the DSP: `{receivers:[{ddc,panId,on,level,threshold,requestedOn,requestedLevel,hasChain}]}`. **Distinct from `get slice nb`** — that reports the slice model, which is set the instant the button is clicked and stays true even if the intent never reached the DSP. `on`/`level` here are what the WDSP stage actually has; `requestedOn`/`requestedLevel` are what the backend was asked for, reported alongside so the two can be COMPARED. Errors on a radio that does not declare `hasHostNoiseBlanker` rather than returning an empty success. |
 | `clock` | — | AetherClock snapshot: `state`/`stateName` (NoSignal/Acquiring/Locked), `station`/`stationName` (WWV/WWVH/WWVB), `decodedUtc` (ISO-8601, empty until a decode), `offsetMs` (decoded − host at the second edge; positive = host behind broadcast), `lockQuality` (0–100), `sliceId` (bound slice, −1 when stopped), `gpsTimeAvailable`. Validate applet Start/Tune/station-switch actions and lock progress without pixels. |
 | `pans` | — | array of all panadapter snapshots |
@@ -1585,9 +1617,10 @@ scope actually consumed, in milliseconds per wall-clock second.
 ### `get hostnb`
 The host-side impulse noise blanker, answered by the **backend** rather than by
 the slice model. Only meaningful on a radio that declares
-`hasHostNoiseBlanker` — today the HL2, whose blanker is WDSP's ANB running on
-this host, ahead of the demodulator, because the radio ships raw IQ and has no
-firmware DSP to switch on.
+`hasHostNoiseBlanker` — currently HL2 and ANAN. Both run WDSP's ANB on
+this host ahead of demodulation. The bridge asks `nb.get` in the selected
+backend's extension namespace (`hl2` or `anan`); it does not infer applied
+state from the slice button.
 
 ```json
 → {"cmd":"get","model":"hostnb"}
@@ -1602,8 +1635,8 @@ firmware DSP to switch on.
   entirely would still report `nb: true` there and look correct.
 - **`on`/`level` are read from the DSP, not from the request.** They are the
   state the WDSP stage actually holds, read across the thread boundary from
-  `Hl2RxDsp`. `requestedOn`/`requestedLevel` are what the backend was asked
-  for. Reporting both is the point: the request is stored synchronously while
+  `Hl2RxDsp` or `AnanRxDsp`. `requestedOn`/`requestedLevel` are what the backend
+  was asked for. Reporting both is the point: the request is stored synchronously while
   the stage is configured through a queued call, so **a mismatch between the
   pairs is exactly the "the control moves and nothing happens" failure this
   verb exists to catch.** A readback that echoed the request would certify its
@@ -1611,15 +1644,19 @@ firmware DSP to switch on.
 - Because the seam is asynchronous, the pairs can differ for a few
   milliseconds right after a toggle. A driver asserts on them settling, not on
   the first read — `wait_for` rather than a bare `get`.
-- `hasChain` is false for a receiver between rebuilds (a sample-rate change,
-  a reconnect). There is nothing applied then, so `on` reads false rather than
-  flattering the request.
+- On ANAN, `hasChain` is false until a channel is installed. An asynchronous
+  rebuild keeps the outgoing channel, so readback continues to report its
+  applied state until the swap. A disconnect retains that channel too: this
+  field describes the DSP stage, not whether radio samples are arriving.
+  With no chain, `on` is false and `level` is zero, regardless of the request.
 - `threshold` is what WDSP got, computed from the **applied** level: the 0..100
   level runs the opposite way from WDSP's trigger (a multiple of the running
   average magnitude, so **smaller is more aggressive**). Level 0 → 100,
   level 50 → 20, level 100 → 4.
-- `on`/`level` are **per receiver**, not radio-wide — unlike the notches. Two
-  panadapters on different bands can legitimately want different settings.
+- `on`/`level` are **per receiver**, not radio-wide — unlike the notches. HL2
+  can report multiple receivers; ANAN currently reports DDC 0 only. ANAN
+  retains the requested NB pair across reconnects and radio identity changes,
+  and publishes it to the replacement slice so its NB button agrees.
 - Errors on a radio that does not declare the capability, rather than returning
   an empty success that a test could pass against.
 
@@ -1773,9 +1810,9 @@ re-poll `get slices`.
 | `select` | `<sliceId>` | make a slice the active slice (`slice set <id> active=1`) |
 | `tx` | `<sliceId>` | make a slice the TX slice — the external-split transition; radio enforces single-TX |
 | `mode` | `<name>` e.g. `DSTR` | set the active slice mode through `SliceModel`; validated against the radio-advertised mode list |
-| `filter` | `<lowHz> <highHz>` e.g. `-3000 -150` | set the active slice passband through `SliceModel::setFilterWidth`, the operator-intent setter — so the edges reach `IRadioBackend::setSliceFilter` and not just the model. Necessary because a mode change mirrors the passband *inside* the model without emitting that intent, which can leave a backend that owns its own DSP chain running the pre-mirror passband while `get_state` reports the mirrored one. Assert the passband before measuring anything through the audio path. Returns both the requested edges and the post-normalization `filterLow`/`filterHigh` the model actually holds. Use `-4000 4000` for a carrier-straddling AM passband |
+| `filter` | `<lowHz> <highHz>` e.g. `-3000 -150` | set the active slice passband through `SliceModel::setFilterWidth`, which emits a typed `receiveFilterRequested` with Operator origin and reaches `IRadioBackend::requestSliceFilter`. Mode normalization emits a separately tagged request: host DSP applies it, while Flex preserves its radio-owned mode-filter memory. Assert the passband before measuring the audio path. Returns requested edges and post-normalization `filterLow`/`filterHigh`; desktop model readback alone does not prove hardware application. Use `-4000 4000` for a carrier-straddling AM passband |
 | `filterpreset` | `<FIL1\|FIL2\|FIL3>` | select a stable radio-owned RX filter slot without conflating it with a passband-width edit. Returns the requested slot; re-poll `get slice active filterPreset` and the filter edges for radio-authoritative readback |
-| `agc` | `<off\|slow\|med\|fast> [threshold 0..100]` | set the active slice's receive AGC through `SliceModel`'s operator setters, so it emits `agcCommandIssued` and reaches `IRadioBackend::setSliceAgc`. Applies the threshold before the mode so a combined request arrives at the backend as one coherent pair. On a backend that owns its DSP chain (HL2) this maps to the WDSP RXA AGC mode and the AGC ceiling in dB; on Flex it is the firmware's own AGC. Use `off` with a low threshold to get a linear path for measurement |
+| `agc` | `<off\|slow\|med\|fast> [threshold 0..100]` | set receive AGC through `SliceModel` operator setters and typed `receiveAgcRequested` requests. Applies threshold before mode; each changed field dispatches independently. Flex writes only that field; the default backend adapter passes the current mode/threshold pair to host DSP for either edit. HL2 maps this to WDSP RXA AGC mode and ceiling in dB. This is not an atomic paired command. Use `off` with a low threshold for a linear measurement path |
 | `dsp` | `<nr\|nb\|anf\|squelch> <on\|off> [level]` | drive the receive DSP controls an operator drives — noise blanker, noise reduction, auto-notch, and squelch (with an optional 0..100 level). `slice dsp squelch` is the squelch path; there is deliberately no separate squelch verb (#5102) |
 | `tone` | `<off\|ctcss_tx> [freq]` | set the FM CTCSS encode mode and tone. The value is applied before the mode, so enabling CTCSS never keys on the previous tone for a round trip. The mode pair is what a FlexRadio slice carries |
 | `offset` | `<simplex\|up\|down> [mhz]` | set repeater duplex. The magnitude is unsigned (0..100 MHz — the GUI spinboxes' own bound); the direction carries the sign. Writes all three radio fields — `repeater_offset_dir`, `fm_repeater_offset_freq` **and** the signed `tx_offset_freq` that actually moves the transmitter — then reports `txOffsetFreq` so the applied split can be asserted rather than assumed |
@@ -3276,6 +3313,28 @@ The JSON file contains chunks with `point`, `source`, optional `sourceId`,
 base64 `pcmBase64`. Use `audioCapture status` for metadata only and
 `audioCapture stop` to stop early.
 
+#### DSP stereo probe: NR2, NR4, MNR, DFNR, BNR, NNR
+
+`audioCapture probeDspStereo <mode>` (or `all`, optionally with `strict`) runs
+the same deterministic three-second stereo signal through three fresh filters
+of that method: once as generated, once with the right channel replaced by
+unrelated tones, and once with the left replaced. Every client NR method
+denoises L and R independently, as RN2 does, so `ok` means each side's output
+is bit-identical whatever the other side carries (`leftIndependent`,
+`rightIndependent`, `channelsIndependent`) and both sides stay `audible`.
+
+The RMS `input`/`output`, `ratioError`, and level-ratio fields are reported
+but not judged: independent, level-dependent suppression treats the louder
+and quieter copies of one off-centre signal differently, so the L/R balance
+is not held (see the RX DSP ordering in `docs/architecture/audio-pipeline.md`). These modes no longer
+return `preserved`, the old L/R-ratio verdict; read `channelsIndependent` and
+`ok` instead (RN2 keeps `preserved`). `leftIndependenceMaxError` and
+`rightIndependenceMaxError` give the largest per-sample difference behind each
+verdict, or `-1` when the runs differ in length or produced no output. The NR2 run disables post2, whose per-instance random comfort noise
+would otherwise make the three runs differ, and says so with
+`post2Disabled: true`. A method that removes the probe's
+steady tones entirely (BNR does) reports `audible: false`.
+
 #### RN2 deterministic stereo probe
 
 `audioCapture probeDspStereo RN2` is an automation-only, synthetic RX proof
@@ -3557,12 +3616,29 @@ modulator never heard about it.
 
 `rows` is ordered as the dialog renders it; `section` appears on the first row
 of each group and is absent on the rest. A `value` of `null` means **the radio
-never reported this**, which is distinct from a zero — "the FIFO is empty" and
-"we were never told" are different answers, and collapsing them is what makes a
-readout unable to detect its own failure. An empty `rows` array with
-`"ok":true` is a real state too: nothing connected and no stream-free source
-aimed, or a family that publishes no health rows. Check `connected` to tell
-those apart.
+is not reporting this** — either it never did, or what it last reported has
+expired and is no longer being measured. Either way it is distinct from a zero:
+"the FIFO is empty" and "we were never told" are different answers, and
+collapsing them is what makes a readout unable to detect its own failure. An
+empty `rows` array with `"ok":true` is a real state too: nothing connected and
+no stream-free source aimed, or a family that publishes no health rows. Check
+`connected` to tell those apart.
+
+**Where a row can expire, a companion age row tells you which silence it is.**
+The HL2's six converter rows — `adcPeakDbfs`, `adcRmsDbfs`, `adcDcDbfs`,
+`adcDcCodes`, `adcCrestDb` and `adcClippedPerBlock` — come from a gated sensor,
+and they go `null` once the newest block has stopped describing now, which
+includes the whole of any transmission longer than about three seconds. They
+are not all in one unit: `adcDcCodes` is the block's mean in signed converter
+codes, not dB, and `adcClippedPerBlock` is a count. `adcDcDbfs` is the same
+mean as a magnitude in dBFS, and it reads `-72.25` (`kEp4FloorDbfs`) for a mean
+of exactly zero, while a tiny non-zero mean computes *below* that rather than
+being clamped to it. Because a mean of about half a code also prints `-72.25`,
+read `adcDcCodes` (`0.00` against `0.50`) to tell a zero mean from a sub-code
+one. `adcObservedAgoMs` is deliberately **not** expired with them: a `null`
+beside an age of `46810` means *reported, then expired*, while a `null` beside a
+`null` age means *never reported*. A script that reads these must treat `null`
+as a refusal to answer rather than as a number it can coerce.
 
 **Reading `health` is itself a demand signal.** A stream-free source polls only
 while something is watching, so each read renews a 5 s demand window and keeps
@@ -3691,8 +3767,11 @@ record:
    "detail":"Client-Side recording requires PC Audio; no RX audio stream exists."}
 ```
 
-`reason: "recording-mode-is-radio"` — `RecordingMode` is `Radio`, so the radio
-is the recorder and this verb has nothing local to drive:
+`reason: "recording-mode-is-radio"` — `RecordingMode` is `Radio` and the radio
+can record on its own side, so the radio is the recorder and this verb has
+nothing local to drive. A radio with no command plane (HL2, ANAN, Icom, RTL) has
+no radio-side recorder, so there Radio Side falls back to this recorder and the
+start proceeds:
 
 ```json
 ← {"ok":false,"record":"start","recording":false,"path":"",
@@ -4475,7 +4554,7 @@ still a separate radiocert task.
 
 | Verb | Aliases | Description |
 |---|---|---|
-| `ping` | — | liveness check → app + version + whether a token is required |
+| `ping` | — | liveness check → app + version + build identity + whether a token is required |
 | `verbs` | — | list every bridge verb with aliases and help (this table) |
 | `dumpTree` | — | serialize the full widget tree as JSON |
 | `floors` | — | per-pan measured noise + display floor (dBm) |

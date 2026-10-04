@@ -401,10 +401,20 @@ void TxApplet::buildUI()
         requestAtu(localTxInput(TxController::Activity::Atu));
     });
 
-    // MEM button — toggle ATU memories
-    connect(m_memBtn, &QPushButton::toggled, this, [this](bool on) {
-        if (!m_updatingFromModel && m_model)
-            m_model->setAtuMemories(on);
+    // MEM requests a change; its checked state follows radio readback. Any
+    // toggle (click or programmatic) asks for the inverse of the last reported
+    // state and is undone while waiting for the status echo (#5545). The
+    // readback sync sets the check under a QSignalBlocker, so it never lands
+    // here.
+    connect(m_memBtn, &QPushButton::toggled, this, [this] {
+        {
+            const QSignalBlocker blocker(m_memBtn);
+            m_memBtn->setChecked(m_model && m_model->memoriesEnabled());
+        }
+        if (!m_model) {
+            return;
+        }
+        m_model->setAtuMemories(!m_model->memoriesEnabled());
     });
     configureTxActions();
 }

@@ -11,10 +11,10 @@ the DDC so the panadapter holds still while tuning.
 Section 11 audits the receive bring-up against the independent correctness
 oracles at `/Users/patj/oracles/hl2/`.
 
-**Start here for a new backend:** §15 (receive handedness and tuning) and §5's
+**Start here for a new backend:** §16 (receive handedness and tuning) and §5's
 sideband-selection rules. Those two describe the most expensive bug of the
 project — one that survived a full session of correct-looking measurements —
-and §15.6 is the checklist that would have caught it on day one.
+and §16.6 is the checklist that would have caught it on day one.
 
 ### For coding agents — keep bring-up inside the family backend
 
@@ -163,11 +163,13 @@ overflow. The existing default and reference remain +20 dB, and stored gains
 are not reinterpreted.
 
 A gain fold was reported on one unit in
-[upstream issue #177](https://github.com/softerhardware/Hermes-Lite2/issues/177).
-Its scope and mechanism remain unresolved against the native command path.
-That report does not establish a universal five-bit limit; a future workaround
-needs evidence identifying affected hardware and validation of both display
-calibration and AGC behavior.
+[upstream issue #177](https://github.com/softerhardware/Hermes-Lite2/issues/177)
+and aethersdr/AetherSDR#5354. On that unit it was a hardware defect: a bad
+joint at AD9866 pin 1 (Tx[5], which carries RX gain bit 5 while receiving)
+held the bit high, so every commanded −12…+19 dB ran 32 dB hotter. Repaired,
+the same radio steps monotonically through −12…+48 dB (aethersdr/AetherSDR#5943).
+There is no five-bit limit, and automatic RF gain arms from any baseline in
+the native range.
 
 ### The C&C bank we were missing
 
@@ -420,6 +422,52 @@ with C&C **before** `metis-start`. (The earlier `CONFIG_MERCURY` diagnosis was
 wrong — HL2 gateware never decodes that bit; ordering was the real cause. Both
 the design note and `docs/archive/hl2-phase0-spike.md` carry the correction.)
 
+### The EP6 mic word runs at 12 kHz, not at the DDC rate
+
+Each EP6 round is *N* receivers' IQ followed by one 2-byte mic word, so the mic
+word is **delivered** once per round — that is, at the DDC sample rate. It does
+not follow that the mic word *changes* at that rate, and it does not.
+
+**Measured 2026-09-20** against a SquareSDR 2 (an HL2-compatible board, gateware
+7.5), receive-only, never keyed — every `C0` byte even so MOX stays clear. Each
+value is repeated for exactly `ddcRate / 12000` consecutive rounds:
+
+| DDC rate | dominant run length | implied update rate |
+|---|---|---|
+| 48 kHz  | 4  (21 728 of ~23 800 runs) | 12 kHz |
+| 96 kHz  | 8  (21 682 runs)            | 12 kHz |
+| 192 kHz | 16 (21 623 runs)            | 12 kHz |
+
+Idle values sat at DC ≈ −1430 with roughly ±50 counts of variation.
+
+**What this is NOT evidence of.** That the slot carries an actual microphone.
+A DC bias with a little noise on it looks identical whether it is an idle codec
+input or some unrelated internal signal the gateware parks there. The test that
+would settle it — watch the level about the mean while making noise near the
+radio — was not run. "It is the codec's mic input" is the likely reading and
+should be labelled as such until somebody measures it.
+
+**Why it matters, and where the reference client is wrong.** deskHPSDR computes
+`mic_sample_divisor = rate / 48000` and takes every *N*-th sample, under the
+comment `// reduce to 48000`. That describes something that is not happening:
+the stream is not at the DDC rate, so nothing is being reduced. It is harmless
+there — a zero-order hold preserves the fundamental, so the pitch comes out
+right anyway — but the description should not be inherited.
+
+For any future radio-mic transmit path here, the consequence is that **no
+anti-alias filter is needed**. The source is bandlimited to 6 kHz, so
+decimating the round stream by `ddcRate / 24000` to reach the 24 kHz that
+`Hl2Backend::submitTxAudio()` requires is safe on its own; the hold's images sit
+at ≥12 kHz, where the transmit filter removes them. The naive decimation that
+would be wrong for a genuine DDC-rate stream is exactly right for this one.
+
+**Not yet consumed.** `kRoundMicBytes` has no reader — it appears only in
+`ep6RoundBytes()`, as stride. `ep6DecodeRounds()` walks past the word with the
+comment *"the round's trailing 2 mic bytes are ignored"*. The capability comment
+at `Hl2Backend::capabilities()` saying `no on-radio mic jacks` is true of a bare
+HL2 and false of the HL2+ and SquareSDR 2 variants; it should be corrected by
+whatever change first reads this word.
+
 ---
 
 ## 5. WDSP configuration facts
@@ -463,10 +511,11 @@ in `third_party/wdsp/upstream/` and were **not** confirmed on the air.
 - **RX: WDSP's RXA selects the OPPOSITE sign to its passband bounds.** USB
   configured `[+150, +3000]` passes *negative* analytic frequencies. Confirmed
   independently by `hl2_rxdsp_test` and `hl2_shift_test`. This is the single
-  least intuitive fact in the whole backend and everything in §15 follows from
+  least intuitive fact in the whole backend and everything in §16 follows from
   it.
-- **TX — in `Hl2TxDsp` — is the mirror image: the MODE selects the sideband and
-  the bandpass is an audio-domain magnitude.** `Hl2TxDsp` filters with one real
+- **TX — in `Hl2TxDsp`'s phasing build (`AETHER_HL2_TX_TXA=OFF`) — is the mirror
+  image: the MODE selects the sideband and the bandpass is an audio-domain
+  magnitude.** The phasing modulator filters with one real
   bandpass plus a Hilbert pair built from **positive** edges, and chooses the
   sideband in `isLowerSideband()`, which negates Q. Handing it the RX table's
   signed pairs put LSB and DIGL on the upper sideband — caught by
@@ -491,20 +540,17 @@ in `third_party/wdsp/upstream/` and were **not** confirmed on the air.
   `rtype = 1`, so this one function is the mechanism behind both the RX bullet
   above and the TX correction here.
 
-The trap: RXA and `Hl2TxDsp` use **opposite conventions**, and both look
+The trap: RXA and the phasing modulator use **opposite conventions**, and both look
 plausible. A table written for one and reused for the other is silently wrong on
 exactly half the modes. The second trap is assuming the first one describes
 WDSP's transmit path: it does not.
 
-> **Forward note — not an instruction, and nothing here changes behaviour.**
-> Whether transmit should move from `Hl2TxDsp` onto a real TXA channel is the
-> open question in **#5678**; nothing has been decided. An **unfiled** analysis
-> behind that issue argues such a migration should drop `Hl2TxDsp`'s wire
-> conjugation and feed TXA *signed* RX-style edges rather than
-> `defaultTxPassbandForMode`. It is unfiled deliberately — there is no artifact
-> to cite and no number to follow, so treat the arrangement as unestablished. It
-> is a code change for a migration PR to settle and measure, not a claim this
-> section makes.
+> **The default build transmits through a WDSP TXA channel**
+> (`AETHER_HL2_TX_TXA=ON`, #5678; see the option in `CMakeLists.txt`). It takes
+> `defaultTxPassbandForMode`'s positive pair and signs it per sideband in
+> `Hl2TxDsp::applyModeAndFilter()` (LSB, CWL and DIGL negated), and it does **not**
+> conjugate: the signed passband already gives the wire's handedness. The
+> phasing modulator above is the `AETHER_HL2_TX_TXA=OFF` fallback.
 
 ### CW has no BFO unless you build one
 
@@ -586,6 +632,18 @@ convergence must be verified on real hardware through the automation bridge.
   meant a change on RX2 fired the capture and then persisted RX1's untouched
   value: the change that triggered the write was not the change that got
   written.
+- **The AGC-off level is remembered PER RECEIVER, unlike the pair.** It is the
+  fixed gain WDSP applies with AGC off (`Hl2RxDsp::agcFixedGainDbForOffLevel`),
+  and since DIGU/DIGL open with AGC off (§18.5) it is their operating gain.
+  `RestoredRadioState::agcOffLevels` holds one 0..100 entry per receiver index
+  (-1 = none), stored as the `agcOffLevels` array of the radio's
+  `OperatingState` document. `RadioStateMemory` reads and writes it only for a
+  backend that declares the `Agc` domain and `hasAgcThreshold`; a document
+  without it restores the default of 10. `Hl2Backend::requestSliceAgc()`
+  captures a change, `seedReceiverAgc()` seeds each receiver with its own
+  entry, `createPanadapter()` gives a receiver opened later the entry for its
+  index, and a receiver that is closed keeps its entry. An entry outside
+  0..100 is dropped, not clamped.
 - **"At the next connect" means a NEW radio, not a returning one.** The seeding
   runs from `connectRadio()` when the connect request's serial differs from the
   last one seeded, or when `buildReceivers()` had no previous state to carry —
@@ -663,8 +721,8 @@ it does not work: the app's own 38 KB cache made no measurable difference to
 `wdsp_channel_test` (22.8 s warm vs 22.4 s cold on macOS/arm64), because the
 app's plan set and the tests' plan set are different FFTW problems. Only a cache
 the tests themselves wrote helped — which a fresh container never has. Instead
-every test now runs with `AETHER_WDSP_FFTW_TIMELIMIT` set (see the block at the
-end of `tests/tests.cmake`), which bounds the planner through
+every test now runs with `AETHER_WDSP_FFTW_TIMELIMIT` set (§22.3 describes
+how `tests/tests.cmake` applies it), which bounds the planner through
 `fftw_set_timelimit()` and, because rushed plans must never reach the cache the
 app imports, **skips the wisdom export entirely while it is set**. One knob, so
 it is not possible to bound the planner and forget to isolate the cache.
@@ -672,7 +730,8 @@ it is not possible to bound the planner and forget to isolate the cache.
 Two independent layers, because one was not enough. The planner bound stops the
 export; separately, `AETHER_WDSP_WISDOM_DIR` **redirects the cache path** to
 `<build>/test-fftw-wisdom`. Both are set by `tests/TestWdspWisdomIsolation.cpp`,
-a TU linked into every test target whose static initializer runs **before
+a TU linked into every executable `tests/tests.cmake` declares (registered as a
+test or not, unless it opts out), whose static initializer runs **before
 main()** — because a ctest `ENVIRONMENT` property only covers `ctest`, and
 running a test binary directly (`./build/hl2_rxdsp_test`, the normal way to
 debug one) inherits nothing and would export straight over the operator's real
@@ -724,7 +783,7 @@ apart from that audit loses the point.
 | 2 | Missing ADC-assign C&C bank | All-zero IQ on conforming devices | `5c6c2fdd` |
 | 3 | AGC never reached the backend | **Dead slider** — UI moved, DSP unchanged | `4d2bc494` |
 | 4 | `dsp_rate` derived from audio rate | Low-pitched, warbling audio | `74f10f53` |
-| 5 | Mode change mirrors the passband in the model **without** emitting operator intent | Model and DSP silently diverge | *Open* — `slice filter` verb works around it |
+| 5 | Mode-change passband normalization must reach host DSP without overwriting radio-owned mode-filter memory | Model and DSP can diverge | #5904 tags normalization separately from operator edits; live convergence remains to be verified |
 | 6 | AM is in neither filter-polarity family (`SliceModel.cpp:47-57`) | AM gets an SSB passband that excludes the carrier | *Open* |
 | 7 | No pan-geometry down-verb on `IRadioBackend` | Zoom/pan can't reach the backend; waterfall and pan disagree | *Open* — structural |
 | 8 | Slice frequency **is** pan center (`Hl2Backend.cpp:165`) | Click-to-tune recenters the world instead of landing | *Open* — needs slice-offset-within-passband |
@@ -770,8 +829,10 @@ the stale echo the suppression existed to reject.
 **Principle II trap (hit twice):** `agcModeChanged`/`agcThresholdChanged` and
 `filterChanged` are emitted from *both* operator setters and status
 application. Driving a backend command off them echoes the radio's own state
-back at it as a request. Operator-only intent signals are required —
-`frequencyCommandIssued`, `filterCommandIssued`, and now `agcCommandIssued`.
+back at it as a request. Operator-only intent signals are required. Frequency, filter and AGC dispatch
+through `receiveTuneRequested`, `receiveFilterRequested` and
+`receiveAgcRequested`, bound once by `RadioModel` to the typed backend requests.
+The legacy `*CommandIssued` signals are local notifications, not dispatch paths.
 
 ---
 
@@ -1464,7 +1525,7 @@ Audited against this branch's merge base, `6f46eea7`.
 | # | Item | Source | Why it matters | Effort |
 |---|---|---|---|---|
 | ~~1~~ | ~~Mute ramps `0.010/0.025/0.000/0.010` instead of all zeros~~ **DONE** | A3 §2 | `WdspChannel::Config` carries exactly those four values and `WdspChannel::open` hands them to `OpenChannel`. **Not HL2-scoped** — it is the shared `WdspChannel::Config`, so ANAN already opens with the same anti-click envelope, and the RTL registry will once it is wired (`RtlReceiverRegistry` has no production caller today). Flex, Icom, Sim and Web-888 never touch this path | — |
-| ~~2~~ | ~~S-meter from `GetRXAMeter(RXA_S_PK)`, not post-AGC audio RMS~~ **DONE** | A3 §7 | `Hl2RxDsp` emits `meterUpdate` from `WdspChannel::meter(Meter::SignalPeak)`, which is `GetRXAMeter(..., RXA_S_PK)`; the AGC-holds-it-flat reasoning is written at the call site. `AnanRxDsp` reads the same meter. **No audio-RMS meter survives on either path** | — |
+| ~~2~~ | ~~S-meter from `GetRXAMeter(RXA_S_PK)`, not post-AGC audio RMS~~ **DONE** | A3 §7 | `Hl2RxDsp` emits `meterUpdate` from `WdspChannel::meter(Meter::SignalAverage)`, which is `GetRXAMeter(..., RXA_S_AV)` — #5785 moved both backends off the peak tap, whose peak-hold reads the band noise floor 11–14 dB high; the AGC-holds-it-flat reasoning is written at the call site. `AnanRxDsp` reads the same meter, and both gate the read through `WdspSMeter.h`. **No audio-RMS meter survives on either path** | — |
 | ~~3~~ | ~~Rename `kC0AdcAssign`; document the `0x0e` dual meaning~~ **DONE** | O §4 | The constant is `kC0AdcAssignOrTxGain`, and the comment above it splits the generic-openHPSDR reading (per-receiver ADC assignment) from the HL2 one (TX LNA gain, `[15]` enable / `[14]` mode / `[13:8]` value) and names the two unbuilt things that need `0x0e` to carry a real value: the T/R gain switch and PureSignal's feedback path. The hazard is now documented rather than latent | — |
 | ~~4~~ | ~~Pipeline reset `0x39[7:4]=0x8` after an NCO move~~ **WITHDRAWN** | A2 §B2 | Built and tried. `ccPipelineReset()` still encodes the bank and `hl2_metis_protocol_test` still pins its bytes, but `MetisClient::requestPipelineReset()` is a **deliberate no-op**: driving it per NCO move fired ~30 resets/second during a pan drag and wedged the board until a physical power cycle. It validated at 7 resets ~2 s apart; the drag path was never exercised. Two causes were never separated — the reset rate, and the zeros we wrote to `0x39[27:24]`/`[11:8]` on an unverified assumption. The preconditions for bringing it back are written at the function, and `CERTIFICATION.md` §1.7 carries the general lesson (validate at the rate the UI actually produces). **Do not re-open this as cheap work** | — |
 | ~~5~~ | ~~Normalize by `2^23-1`, not `2^23`~~ **DONE** | A1 §A2 | `kFullScale = (1 << 23) - 1` in `MetisProtocol.h`, applied in the EP6 sample decode. **Not HL2-scoped in effect** — `P2Protocol.h`'s `kFullScale24Bit` is the same constant with a comment pointing back here, so ANAN has the same dBFS scale. Both are asserted in `hl2_metis_protocol_test` and `anan_p2_protocol_test` | — |
@@ -1482,7 +1543,7 @@ Audited against this branch's merge base, `6f46eea7`.
 | ~~9b~~ | ~~`WdspChannel::close`'s `SetChannelState(0, 1)` always burns its full 100 ms~~ | ours, from 9 | **DONE.** First, the mechanism as written here was one hop off: the flush flag is NOT cleared by `fexchange2`. `fexchange0`/`fexchange2` run the down-slew and release the channel's `Sem_Flush` when it completes (the `ReleaseSemaphore` calls at the tail of each); WDSP's per-channel `flushChannel` thread wakes on that semaphore and clears `flushflag` (the tail of `flushChannel`). The conclusion survives: only a host still calling `fexchange*` can satisfy the wait, and `close()` runs behind the control fence, so it always ran to the 100 ms timeout. Two changes. (a) `close()` now takes `g_setupMutex` only for `CloseChannel`, not across the wait — `SetChannelState` touches nothing but `ch[channel]`/`ch[channel].iob`, and no `fftw_plan`/`fftw_destroy_plan` is reachable from `flush_main` either, so the planner lock was never protecting it. (b) The owners stop the channel BEFORE they let it go — `Hl2RxDsp`'s destructor and pre-swap in `configure()`, `AnanRxDsp`'s destructor and `installChannel()` — so `SetChannelState` no-ops at close and the wait is skipped. WHICH PATHS BENEFIT: the rate change (every receiver; since #5783 the N opens run on `m_dspBuildThread` and the N closes on the I/O thread at the swap, in `Hl2RxDsp::installChannel()`, which runs on the same thread that calls `processIq()` — no longer from the GUI thread through a `BlockingQueuedConnection`; see §22.4), `removePanadapter`, `releaseReceiverDsps` on connect, and the backend destructor. WHAT IS NOT BOUGHT: a clean down-slew. Every one of those paths has already withdrawn the chain from the sample fan-out, or the wire was never started, so nothing feeds the channel and WDSP's ramp does not run — the saving is the skipped wait only. The drain needs 9a. **AND THAT "NOTHING FEEDS THE CHANNEL" IS A CORRECTNESS PRECONDITION, NOT A PERFORMANCE NOTE** — it was written here and in both destructors as the reason the ramp does not run, and it was also, unremarked, the only thing keeping these paths off a use-after-free. Skipping the 100 ms removes a barrier as well as a wait: a stop that IS clocked out wakes WDSP's `flushChannel` thread, and nothing in `CloseChannel` waited for it. The three owner paths above are safe because they clock nothing after the stop; the T/R mute of 9a would not have been. Fixed in the vendored tree as AetherSDR patch 9 so the barrier is explicit and covers every caller — see 9a for the measurement, and note that the RTL backend's `WdspReceiver` (`src/core/backends/rtl/RtlReceiverRegistry.cpp`) is a THIRD `WdspChannel` owner that this row's change does not cover: it retires a bank on the registry's executor thread rather than on the thread that drives `processIq()`, so the fence argument does not carry across and it still pays the 100 ms per channel. Raised by ten9876 in review of #5628. Pinned by `runCloseSetupLockTest` (no stopwatch: the run flag is observed clearing while the test holds the setup lock), `runStoppedCloseTest` and `runCloseAfterStoppedClockingTest`. The "~0.4 s of serialised disconnect for four receivers" this row used to claim was always an INFERENCE from the 100 ms constant, never a measurement, and nothing here has been measured on hardware | XS |
 | ~~10~~ | ~~RADE null-deref at `MainWindow_DigitalModes.cpp:461`~~ **DONE** | ours, gap 9 | Fixed, and §18.3 already records it. `activateRADE()` guards `panStream()` at its top and declines with a message; the bare `connect` further down is inside that guarded region | — |
 | 11 | ~~`AETHER_AUTOMATION_NO_AUTOCONNECT` not honoured~~ | ours, gap 10 | **Withdrawn.** The variable was removed application-wide; nothing reads it. See gap 10 and the §10 recipe | — |
-| ~~12~~ | ~~One dB-reference object per slice (LNA + calibration + AGC threshold)~~ **DONE** — but **NOT per slice**, see below | A2 §A3 | `Hl2DbReference` now owns all three terms. The display half (LNA + calibration) was already built; what landed here is the AGC-T half, which the operator HEARS rather than sees. **The row's "per slice" was wrong on this radio**: the LNA is one AD9866 field in front of all four DDCs and `fullScaleDbm` is a property of the board, so two of the three terms physically cannot differ between slices and N copies of them would be the very drift the class exists to prevent. Only the AGC-T is per receiver; it stays in `Receiver::agcThresholdDb` and is an ARGUMENT to `agcCeilingDb()`, not a copy inside it. **One of this row's two remaining holes is closed and the other is narrowed.** The absolute term WAS simply absent — `fullScaleDbm` 0.0, no constant invented — and it is now DERIVED rather than per-unit: full scale is +3 dBm at 0 dB LNA gain, from the AD9866 datasheet and the HL2's own input network, so the displayed floor sits on a figure that can be checked instead of on an arbitrary zero. **`isCalibrated()` is still false, deliberately.** It reports whether a MEASUREMENT was applied — `setFullScaleDbm` has no caller in `src/` — and a datasheet derivation does not earn `PanAmplitudeModel::calibratedDbm`, which is the licence to compare this radio's levels with another station's. What would close it is a known level into the antenna port at a known APPLIED gain, read against the ADC clip counter; receive-only, and it wants a calibrated source this station does not have. **The caveat this row named is still open, and this change does not close it.** The row warned that the reference subtracts the COMMANDED gain while the AD9866 may fold `code & 0x1F` above code 31, over-shooting the correction by up to 32 dB. #5752 examined exactly that and declined to treat the fold as general: it clamped connect parameters without changing the native range, left −12…+48 and the +20 dB default standing, and recorded that the single-unit observation in softerhardware/Hermes-Lite2 #177 **remains unresolved against the native bit-6-selected RTL path**. `kLnaGainMaxDb` is therefore still +48. One board measured here at gateware 74 does fold (code 31 at −53.20 dBFS, code 32 at −97.75, all seven wrapped codes on their mod-32 twins within 0.52 dB), but one board is not the family, and the evidence bar #5752 set — reconcile against the RTL, or replicate on a second unit — is the right one. **The derivation in this row does not rest on it either way**: `kFullScaleDbmAtZeroGain` is a figure at 0 dB LNA gain, where no fold is in play | — |
+| ~~12~~ | ~~One dB-reference object per slice (LNA + calibration + AGC threshold)~~ **DONE** — but **NOT per slice**, see below | A2 §A3 | `Hl2DbReference` now owns all three terms. The display half (LNA + calibration) was already built; what landed here is the AGC-T half, which the operator HEARS rather than sees. **The row's "per slice" was wrong on this radio**: the LNA is one AD9866 field in front of all four DDCs and `fullScaleDbm` is a property of the board, so two of the three terms physically cannot differ between slices and N copies of them would be the very drift the class exists to prevent. Only the AGC-T is per receiver; it stays in `Receiver::agcThresholdDb` and is an ARGUMENT to `agcCeilingDb()`, not a copy inside it. **One of this row's two remaining holes is closed and the other is narrowed.** The absolute term WAS simply absent — `fullScaleDbm` 0.0, no constant invented — and it is now DERIVED rather than per-unit: full scale is +3 dBm at 0 dB LNA gain, from the AD9866 datasheet and the HL2's own input network, so the displayed floor sits on a figure that can be checked instead of on an arbitrary zero. **`isCalibrated()` is still false, deliberately.** It reports whether a MEASUREMENT was applied — `setFullScaleDbm` has no caller in `src/` — and a datasheet derivation does not earn `PanAmplitudeModel::calibratedDbm`, which is the licence to compare this radio's levels with another station's. What would close it is a known level into the antenna port at a known APPLIED gain, read against the ADC clip counter; receive-only, and it wants a calibrated source this station does not have. **The caveat this row named is closed.** The row warned that the reference subtracts the COMMANDED gain while the AD9866 might fold `code & 0x1F` above code 31, over-shooting the correction by up to 32 dB. The RTL does not fold: with bit 6 set, `ad9866.v` (`883a338`) takes all six gain bits natively, and #5752 kept −12…+48 and the +20 dB default on that basis. The single-unit fold reported in softerhardware/Hermes-Lite2 #177, measured here at gateware 74 (code 31 at −53.20 dBFS, code 32 at −97.75, all seven wrapped codes on their mod-32 twins within 0.52 dB), was a hardware defect on that board: RX gain bit 5 held high by a bad joint at AD9866 pin 1. Repaired, it steps monotonically through −12…+48 dB (#5354, #5943). **The derivation in this row does not rest on it either way**: `kFullScaleDbmAtZeroGain` is a figure at 0 dB LNA gain, where no fold is in play | — |
 | ~~12a~~ | ~~Seam verb for RF/LNA gain~~ **DONE** | §15.7 | `IRadioBackend::setPanRfGain` carries the ANT panel's RF Gain slider to the AD9866. Measured on hardware: a commanded 20 dB step moved the wire noise floor 19.8 dB | — |
 | 12b | Automation verbs `pan span`, `pan rate`, `perf` | §15.7 | Proving §15 needed span driven by repeated `pan_zoom_in`, the FPS slider reached through a menu, and frame rates scraped from a log file the chatter in 6a nearly buried | S |
 
@@ -1511,11 +1572,11 @@ radio. See §18 for the full audit and the proposed seam.
 |---|---|---|---|---|
 | ~~24~~ | ~~RADE / DAX-bridge bare `panStream()` deref~~ **DONE** | §18.3, gap 18 | Both halves are closed: RADE is guarded in `activateRADE()`, and `startDax()` already guarded `panStream()` by the §18 audit. The earlier DAX bring-up crash and its fix remain recorded in §6 gap 1 | — |
 | ~~25~~ | ~~WSPR beacon on a host-modulating backend~~ **DONE** | §18.4 | The audio route already existed (#4471); only the DAX-borrow guard was in the way. First external-oracle TX instrument we have | — |
-| ~~26~~ | ~~Unified RX-audio seam~~ **PARTLY DONE** | §18.5, §18.8 | `rxDemodAudioReady` landed with CW, RTTY and the QSO recorder RX tap as its consumers. The `sliceId` argument and a `Wideband` tap are still open — nothing needs them yet | S |
+| ~~26~~ | ~~Unified RX-audio seam~~ **PARTLY DONE** | §18.5, §18.8 | `rxDemodAudioReady` landed with CW, RTTY and the QSO recorder RX tap as its consumers. The `sliceId` argument is still open — nothing needs it yet. The `Wideband` tap is withdrawn (item 30) | S |
 | 27 | AetherClock off DAX-channel identity onto slice identity | §18.6, gap 17 | WWV/WWVB decode. Depends on 26 | S |
-| 28 | `hasDaxAudio` / `hasDaxIq` / tap kinds / `rxAudioSampleRateHz` capabilities | §18.5 | Lets features decline honestly instead of binding to nothing. Depends on 26 | S |
+| 28 | `hasDaxAudio` / `hasDaxIq` / tap kinds / `rxAudioSampleRateHz` capabilities | §18.5 | Lets features decline honestly instead of binding to nothing. Depends on 26. On HL2 the tap-kinds answer is `Demod` only (item 30) | S |
 | 29 | Retire the `kiwi : "flex"` source-tag ternary | §18.2, gap 19 | Blocks a third concurrent family; `AsrTapPolicy` cannot disambiguate. Fold into 26 | XS |
-| 30 | Measure whether TCI's post-AGC feed costs WSJT-X decodes | §18.5 | Decides whether a `Wideband` tap is worth building at all. **Measure before building** | S |
+| ~~30~~ | ~~Measure whether TCI's post-AGC feed costs WSJT-X decodes~~ **DONE (#5629)** | §18.5 | Measured offline against WSJT-X's FT8 decoder: no measurable loss alone or beside a +10/+20 dB signal, 32 of 82 weak decodes lost beside +30 dB and 58 of 76 beside +40 dB. `agcMode = "off"` recovers them, so no `Wideband` tap is built; DIGU/DIGL open with AGC off instead, up to 29 dB quieter (§18.5) | — |
 
 ### Tier 4 — deliberate divergences, do NOT "fix" by reflex
 
@@ -1595,7 +1656,7 @@ from 6 dB to 100 dB; opposite-sideband suppression is 85 dB.
 | EP6 response C0 | `ACK` (bit 7) **changes how the rest of C0 decodes**: ACK=0 → RADDR in `[6:3]` (4 bits) + Dot/Dash/PTT; ACK=1 → RADDR in `[6:1]` (6 bits) |
 | TX inhibit | **Active low** — the bit is SET when transmit is permitted |
 | SWR | Counts are **voltage**-proportional → `(Vf+Vr)/(Vf−Vr)`, **no square root**. Validated by reading 1.0:1 into a dummy load |
-| **Wire handedness** | The wire is the **conjugate** of the standard analytic convention. RX compensates with `-imag()` before WDSP; **TX must conjugate too**. Omitting it transmits every signal on the wrong sideband — see §14.6 |
+| **Wire handedness** | The wire is the **conjugate** of the standard analytic convention. RX: the **spectrum** takes the conjugate (`std::conj` in `Hl2RxDsp::processIqBlock`) and WDSP takes the **raw wire**, because RXA selects the opposite sign to its passband bounds — see §16.1. TX: the default WDSP TXA modulator does **not** conjugate, its signed passband already gives the wire's handedness; the phasing modulator (`AETHER_HL2_TX_TXA=OFF`) and the TUNE/tone generator conjugate. Getting TX wrong transmits every signal on the wrong sideband — see §14.6 |
 | PA enable vs handedness | A tune carrier sits at **zero offset**, where handedness has no effect. TUNE therefore works even when the sideband convention is wrong, and is useless as evidence for it |
 
 ### 14.4 Seam gaps this phase exposed
@@ -1704,12 +1765,12 @@ receive path appeared to compensate (conjugating with `-imag()` before WDSP, the
 fix filed as "USB and LSB are swapped"), and transmit never got the same
 correction.
 
-> **Correction (see §15).** That receive-side `-imag()` was itself wrong. It
+> **Correction (see §16).** That receive-side `-imag()` was itself wrong. It
 > inverted every demodulated sideband, and a second error — feeding the
 > panadapter the raw wire — hid it. The reasoning recorded here ("RX already
 > compensates, TX needs the same") was right about the wire's handedness and
 > wrong about which stage should carry the correction. **Do not use this
-> paragraph as the model for a new backend; use §15.**
+> paragraph as the model for a new backend; use §16.**
 
 **Every internal check agreed with the bug**, because the panadapter reads the
 same wire order as the transmitter. Our display and our transmission were
@@ -1740,8 +1801,10 @@ have exposed the bug was the one that always looked fine.
 
 **Why the loopback could not have caught it, and what changed.** The second row
 above is worth being precise about. `hl2_tx_loopback_test` measures a loop that
-conjugates twice — `Hl2TxDsp` for the wire on the way out, `Hl2RxDsp` for the
-panadapter on the way back — so a handedness error present at BOTH ends cancels
+flips handedness twice — into wire order on the way out (the tone generator and
+the phasing build by conjugating, the default TXA modulator by its signed
+passband), `Hl2RxDsp`'s conjugate for the panadapter on the way back — so a
+handedness error present at BOTH ends cancels
 exactly. Whichever sign that test asserted, it was blind to a global flip; it
 was another instrument sharing the convention. The test now takes an
 **independent bearing on the receive end first**: hpsdrsim generates its own
@@ -1785,7 +1848,8 @@ second receiver remains the only check that comes from outside it.
   works (`wdsp_channel_test` proves it), but driven from this backend's config it
   returned underruns and zeros. Chasing an undocumented init sequence for a path
   that keys a transmitter is a bad trade against fifty lines whose correctness is
-  a number a test prints.
+  a number a test prints. (The default build uses TXA, with the signed passband
+  §5 describes.)
 
 ### 14.8 Still open
 
@@ -1977,9 +2041,10 @@ and Display->Waterfall Rate sliders governed neither — they emitted `display p
 set … fps=` and `display panafall set … line_duration=`, Flex wire text
 addressed to a command interpreter this radio does not have.
 
-For the waterfall this was **correctness, not just load**: the widget scales its
-time axis from `line_duration`, so rows arriving at 375/s against a 100 ms
-calibration made the visible history up to **37x shorter than it claimed**.
+For the waterfall this was **correctness, not just load**: the widget seeds its
+time axis from `line_duration` until it has measured real row arrivals, so rows
+arriving at 375/s against a 100 ms seed made the visible history up to **37x
+shorter than the axis claimed**.
 
 **The cap lives at the SOURCE** (`Hl2RxDsp::setSpectrumRateFps`, reached through
 `IRadioBackend::setPanFrameRate`), where a frame that is not due costs nothing.
@@ -2160,6 +2225,21 @@ correct: the operator made a real choice on a real radio.
 
 **SW is not gated and must never be**, on any backend. On a radio reporting
 false it is the only automatic floor the operator has.
+
+**Off needs the row's unit.** The manual level is a threshold in the unit the
+row carries. A Flex waterfall tile is intensity (about 96..120) and its threshold
+is `160 - level`. The HL2 has no waterfall plane: `RadioModel::onBackendSpectrumFrame`
+hands the pan frame on as the row, so the row is the pan's dB axis (dBFS under a
+dBm label). SW measures its black point from the row and so is already in the
+row's unit.
+
+`WaterfallLevelMap::manualBlackThreshold` takes the unit from
+`RadioCapabilities::panBinsAbsolute()`, the flag the auto-floor gate already
+reads: an absolute row gets `-60 dB - level`, one dB a step, -60 down to -160 dB.
+The direction is the Flex one (a higher value draws more of the floor). The two
+end points are chosen, not derived: -160 dBm clears the lowest floor this radio
+showed (-148 dBm at 384 kHz and LNA +40 dB, 9 dB lower at 48 kHz), and -60 dBm
+leaves only strong signals lit. A Flex leaves the flag false and is unchanged.
 
 ### 15.3 hpsdrsim cannot reproduce this
 
@@ -2910,9 +2990,29 @@ RadioModel::rxAudioReady(RxAudioTap tap, int sliceId, QByteArray pcm, int rateHz
   matters: `Demod` (what the operator hears, post-AGC, post-passband) versus
   `Wideband`/`Modem` (filter-flat, pre-AGC — what a decoder wants). Today this
   is invisible because bus B happens to be pre-AGC on a Flex; on the HL2,
-  WSJT-X over TCI is currently being fed **post-AGC, post-passband** audio from
-  `Hl2RxDsp`. It decodes, but a modem on AGC'd audio is a known-marginal
-  arrangement and nothing in the code admits it.
+  WSJT-X over TCI is fed **post-AGC, post-passband** audio from `Hl2RxDsp`.
+  Measured in #5629: the AGC leaves the 12.64 s the FT8 decoder integrates
+  alone (within 0.042 dB) and instead raises the noise in the gap between
+  transmissions by 25–29 dB, which inflates the decoder's frame-averaged noise
+  reference by 18.25 dB. That costs decodes only beside a signal +30 dB or
+  stronger, and no AGC time constant avoids it. WDSP has no pre-AGC tap
+  (`wcpAGC` works in place), so the HL2 has no `Wideband` feed and does not
+  need one: AGC off on the slice is that feed, and `Hl2Backend::followModeAgc`
+  selects it whenever a receiver enters DIGU/DIGL or comes up in one (mode
+  click, connect-time restore, a receiver seeded from another). The off is
+  never written to the remembered AGC. With AGC off the gain is the AGC-off
+  level: 10 dB at the default level of 10, against a 39 dB AGC ceiling at the
+  default threshold and LNA gain. DIGU/DIGL are therefore up to 29 dB quieter
+  on the speaker and on the TCI level meter (arithmetic on the two settings,
+  not a measurement); #5629's AGC-off arm ran at that same 10 dB. The
+  operator raises the level with the AGC-T slider while AGC is off, and the
+  level is remembered per receiver (`RestoredRadioState::agcOffLevels`, §5 AGC),
+  so the compensation holds across launches. The
+  mechanism is `wcpAGC`'s, not the HL2's, and the default is HL2-only: ANAN-G2
+  runs the same AGC and keeps the operator's mode in DIGU/DIGL
+  (`AnanBackend::setSliceAgc`); RTL-SDR runs it at WDSP's medium, offers no
+  data mode and takes no AGC command (`RtlSdrBackend::setSliceAgc`). Neither
+  is measured or changed.
 - **`sliceId`** replaces the DAX channel number as the routing key. Flex maps
   slice → DAX channel internally and keeps its hold registry; HL2 maps slice →
   its single DDC. Consumers never learn which.
@@ -2939,7 +3039,7 @@ backend from re-running this audit:
 | Field | Why |
 |---|---|
 | `hasDaxAudio` / `hasDaxIq` | The honest name for what bus B *is*. RADE and the DAX bridge should decline on this, not crash on a null stream (§18.3) |
-| available tap kinds | Whether a `Wideband` feed exists at all, or only `Demod` |
+| available tap kinds | Whether a `Wideband` feed exists at all, or only `Demod`. On HL2: `Demod` only (#5629) |
 | `providesRadioSideWaveforms` | Digital Voice waveform install is Flex firmware; nothing should offer it elsewhere |
 | `rxAudioSampleRateHz` | HL2 is 24 kHz by the deliberate divergence in §13 Tier 4. A future backend may not be, and `DEFAULT_SAMPLE_RATE` is assumed widely |
 
@@ -3013,9 +3113,8 @@ decision, or an accident of the Flex being the only radio there was.
 4. **AetherClock** — the slice-identity work. WWV on a direct-sampling front end
    is a genuinely good demonstration, and 10 MHz WWV was already the proof
    signal for #4528's panadapter.
-5. **Tap kinds** (`Wideband`) — only once there is a second consumer that wants
-   one, and once someone has measured whether the AGC'd TCI feed is costing
-   WSJT-X decodes.
+5. ~~**Tap kinds** (`Wideband`)~~ — withdrawn for HL2. The AGC'd TCI feed is
+   measured (#5629, §18.5): AGC off on the slice already is the pre-AGC feed.
 
 ### 18.8 The bus, as built
 
@@ -4051,6 +4150,11 @@ The symptom an operator reports is "the app hangs when I connect a Hermes-Lite
 for the first time." It is not a hang and it is not the radio. It is FFTW
 measuring plans, on the GUI thread, with nothing on screen to say so.
 
+The 19 seconds of the title and every figure in §22.1 are from #4775
+(`57c2eb94`, 2026-08-05), with no machine recorded, and were not re-taken.
+§22.3 has one channel open re-measured on 2026-10-01, and how far that figure
+has moved with the tree since.
+
 ### 22.1 What was actually measured
 
 Driven through the automation bridge against `hpsdrsim -hermeslite2 -P1`. The
@@ -4087,27 +4191,113 @@ a shared cache when two processes exported at once (a 48 KB cache came back as
 
 ### 22.3 The planning cost is one-time per MACHINE, not per rate
 
-Measured cold, both orderings, with `WdspChannel` opened exactly as
-`Hl2RxDsp::configure` builds it:
+Measured cold, both orderings, by calling `Hl2RxDsp::configure` with
+`Hl2RxDsp::Config`'s defaults on a fresh `Hl2RxDsp` per open. Median of five
+cold processes per ordering, range in brackets (re-measured 2026-10-01, #5456):
 
 | Order | 1st open | 2nd | 3rd | 4th |
 |---|---|---|---|---|
-| 48 → 96 → 192 → 384 kHz | **18865 ms** | 100 ms | 71 ms | 39 ms |
-| 384 → 192 → 96 → 48 kHz | **18666 ms** | 64 ms | 99 ms | 175 ms |
+| 48 → 96 → 192 → 384 kHz | **1335 ms** (1324–1337) | 116 ms (113–120) | 81 ms (81–84) | 62 ms (61–66) |
+| 384 → 192 → 96 → 48 kHz | **1215 ms** (1208–1226) | 82 ms (81–85) | 113 ms (113–114) | 183 ms (181–184) |
 
-The first open costs ~19 s whichever rate it is; every other rate afterwards is
-40–175 ms. The plan sets overlap almost completely, so **do not reason about
-"cold wisdom for this sample rate"** — there is one cold open per machine, ever.
+A new process started on the wisdom those runs wrote opens each of the four
+rates in 33–48 ms (ten processes, forty opens).
+
+**Conditions, because these are figures about a machine and a tree:**
+
+- Apple M6 (12 cores, 32 GB), macOS 27.0.1, arm64. One-minute load 5.3–5.9
+  through the run, no build running.
+- `main` at `25da98de`, RelWithDebInfo, Qt 6.12.0, FFTW 3.3.11 (Homebrew).
+- `filterTaps` = `Hl2RxDsp::kRxFilterTaps` = 8192; USB, 150–3000 Hz, so
+  minimum phase is on (`rxMinimumPhaseFor`); noise blanker off.
+- Planner unbounded: `AETHER_WDSP_FFTW_TIMELIMIT` set to the empty string.
+  The wisdom directory was empty before every cold process and held one file
+  of 8.2–9.5 KB after it.
+- One channel open per figure, not a connect. §22.1's connect figures are the
+  2026-08-05 measurement and were not re-taken.
+
+The first open costs 1.2–1.3 s here whichever rate leads (the two orderings
+differ by 10 %); every other rate afterwards is 60–185 ms. The plan sets
+overlap almost completely, so **do not reason about "cold wisdom for this
+sample rate"** — there is one cold open per machine, ever. The first open is
+now 6.6–11.5× the largest later one, not the 107–189× of the first
+measurement.
+
+**The magnitude moved with the tree, three times.** First open in each
+ordering, then the lowest and highest single reading among the later opens of
+both orderings; the last three rows are the same benchmark on one machine (the
+M6 above):
+
+| Tree | What changed | 48 kHz first | 384 kHz first | Later opens |
+|---|---|---|---|---|
+| `57c2eb94` (#4775, 2026-08-05) | the first measurement: `filterTaps` at WDSP's 2048 default, machine not recorded | 18865 ms | 18666 ms | 39–175 ms |
+| `9ef15a74` (parent of #5697) | 8192 taps since #4780, WDSP 2.10 since #5686 | 40917 ms (40609–40985) | 40874 ms (40556–41147) | 36–159 ms |
+| `5fb9b58d` (#5697) | the minimum-phase workspace is built only when used | 11543 ms (11480–11551) | 11365 ms (11279–11502) | 35–158 ms |
+| `25da98de` (2026-10-01) | `create_minphase()` plans with `FFTW_ESTIMATE` (WDSP patch 12, #5954), and minimum phase is on outside CW | 1335 ms | 1215 ms | 61–184 ms |
+
+The two middle rows are adjacent commits, three cold processes per ordering,
+built against Qt 6.8.3; the step to the last row was not isolated commit by
+commit. The first row's later opens are the 100 / 71 / 39 ms and
+64 / 99 / 175 ms of the first measurement. The later opens stayed between 35
+and 184 ms in every row while the first open went from 40.9 s to 1.2–1.3 s on
+one machine: the tree moved the first open, not the rest. On an Apple M2
+(macOS 26.6.2, AetherSDR 26.9.1), before #5697, the same first open measured
+94.7 s (#5456); `third_party/wdsp/AETHERSDR-PATCHES.md` records 10.9 s for one
+RX channel create on x86_64 after patch 12. So quote a first-open time only
+with its machine and its commit.
+
+**To re-measure, two traps, both silent.** The first is the test cap. Do not
+time a registered test, nor any other binary `tests/tests.cmake` builds unless
+it has opted out.
+`aether_retrofit_tests()`, scheduled with `cmake_language(DEFER CALL)` so it
+runs after the last line of the root `CMakeLists.txt`, caps the planner twice:
+it appends `AETHER_WDSP_FFTW_TIMELIMIT` (the `AETHER_TEST_FFTW_TIMELIMIT` cache
+value, 0.001 s per plan by default) and a build-tree `AETHER_WDSP_WISDOM_DIR` to
+the ctest `ENVIRONMENT` of every registered test, and it links
+`aether_test_wisdom_isolation` (`tests/TestWdspWisdomIsolation.cpp`, which sets
+the same two variables before `main()` unless they are already set) into every
+executable the file declares, registered or not
+(`aether_collect_test_executables()`). `aether_assert_tests_retrofitted()`
+fails the configure step on a test without the `ENVIRONMENT` cap, and on an
+executable with neither the object nor an opt-out. Under the
+cap cold and warm read the same, and nothing is exported: `WdspChannel` writes
+no wisdom from a bounded planner (`plannerIsBounded()`). A measurement program
+declared there therefore opts out of the linked object, with its reason as the
+property value, and has no `add_test`, because the ctest `ENVIRONMENT` cap has
+no opt-out:
+
+```cmake
+set_property(TARGET <program> PROPERTY
+    AETHER_TEST_NO_WISDOM_ISOLATION "<why it must plan uncapped>")
+```
+
+The configure log prints every opt-out. Run the program directly, with
+`AETHER_WDSP_FFTW_TIMELIMIT` empty or unset: `plannerTimeLimitSeconds()` maps
+both to unbounded. The second trap is the wisdom directory. Without the
+object nothing redirects it, so an opted-out program reads and writes the
+developer's real cache, and a run on a cache that already holds the plans is
+warm. Point `AETHER_WDSP_WISDOM_DIR` at an empty scratch directory for every
+cold process. Then check the export, not just the clock: a cold run that wrote
+no wisdom file was capped.
 
 That "once per machine" is what the first-connect dialog tells the operator, and
-saying it is the point: a 20 s wait you are told happens once reads very
-differently from a 20 s wait with a window on screen that says "Connecting…".
-The dialog is gated on elapsed time (1500 ms), not on a cold-cache predicate —
-`WdspChannel` exposes none, and one could not be exact anyway, since a cache
-that imports cleanly may still lack plans for these geometries and would report
-"warm" while the open measured regardless. See `MainWindow::armWdspSetupDialog`.
+saying it is the point: a wait you are told happens once reads very differently
+from the same wait with a window on screen that says "Connecting…".
+How long that wait is depends on the host: the first open is 1.2–1.3 s on the
+machine above and 10.9 s for one RX channel create on x86_64 (patch 12's entry
+in `third_party/wdsp/AETHERSDR-PATCHES.md`), and a connect opens a channel per
+receiver. The slow host is the one the dialog is for.
+The dialog is gated on elapsed time (`kWdspSetupDialogDelayMs`, 1500 ms), not
+on a cold-cache predicate. The delay keeps the dialog off a warm connect
+(0.57 s in §22.1), where it would only flash; a cold connect that finishes
+inside it shows no dialog either. On the machine above the first open alone
+(1.2–1.3 s) no longer crosses the gate; a whole cold connect was not
+re-measured there. A predicate was not an option: `WdspChannel` exposes none,
+and one could not be exact anyway, since a cache that imports cleanly may
+still lack plans for these geometries and would report "warm" while the open
+measured regardless. See `MainWindow::armWdspSetupDialog`.
 
-### 22.4 Two paths blocked the GUI thread; one still does
+### 22.4 Three paths blocked the GUI thread; one still does
 
 #### Still open: backend teardown waits out an in-flight build
 
@@ -4125,12 +4315,106 @@ loop, and joining that loop first would race the post.
 
 Splitting the connect is what made this reachable, and that is not an argument
 against the split: before it, the connect itself held the UI, so nobody could
-get to the radio picker mid-connect. Now the UI is live for those twenty
-seconds, and reaching for a different radio is the obvious thing to do while
-waiting. `OpenChannel` cannot be cancelled, so the honest options are a busy
-state over the teardown or a backend that can be abandoned rather than joined —
+get to the radio picker mid-connect. Now the UI is live for as long as the
+planning takes (20.2 s in §22.1's 2026-08-05 run), and reaching for a different
+radio is the obvious thing to do while waiting. `OpenChannel` cannot be
+cancelled, so the honest options are a busy state over the teardown or a
+backend that can be abandoned rather than joined —
 and the second one also has to replace the `QPointer` guard in
 `beginDspSetup()`, which is sound today *because* teardown blocks.
+
+#### The third path, and it was not counted: "Add Panadapter"
+
+This section said **two** paths until it was corrected, and the missing one was
+`Hl2Backend::createPanadapter()`. It configured the new receiver's DSP over a
+`Qt::BlockingQueuedConnection` into `Hl2RxDsp`, and called
+`MetisClient::setReceiverCount` the same way — so it blocked the GUI thread
+unconditionally, exactly as teardown does, and it was never listed.
+
+§11.3 inherited the same omission: its "ONE path still blocks the GUI thread
+unconditionally" was false for as long as this one did.
+
+**The I/O thread was the expensive half, not the GUI thread.** `Hl2RxDsp` lives
+on `m_ioThread`, so the blocking hop ran `OpenChannel` ON the thread that paces
+EP2 from a 2 ms timer and drains EP6 — §20.8's case precisely, and the gateware
+watchdog halts the stream when EP2 stops arriving. `MetisClient::setReceiverCount`
+records a session lost this way already: *"The operator's session died from
+having clicked 'Add Panadapter'."*
+
+**And the premise that excused it was never true.** `Hl2RxDsp::configure()`
+carried a comment calling the add-a-panadapter path one "where nothing is
+streaming yet and blocking the I/O thread costs nothing". `createPanadapter()`
+refuses before `m_connected` (`Hl2DspSetupPolicy.h` says so), §20.10 is titled
+"receivers come and go while the radio runs", and `hl2_receiver_churn_test`
+asserts `"createPanadapter succeeds while EP6 is flowing"`. The connect half of
+that comment is sound; the add half was not.
+
+**What it looks like now.** Same three-thread split as #5783 above, for one
+chain instead of N — `startReceiverDspBuild()` marks and snapshots on the I/O
+thread, builds on `m_dspBuildThread`, swaps on the I/O thread —
+and `finishReceiverDspBuild()` picks the receiver back up on the GUI thread.
+
+**The announcement deliberately did NOT move.** `emitPanState()` and
+`emitSliceState()` still run before `createPanadapter()` returns, because two
+callers read the model the instant it does: `TciServer`'s non-Flex VFO-B branch
+diffs `slices()` immediately (its comment states the assumption — "the seam
+create is SYNCHRONOUS"), and `MainWindow::createPansSequentially()` diffs
+`panadapters()` after 300 ms, a figure chosen for the demo backend's two queued
+hops and not for a channel open. Neither emit reads `r.dsp`, so announcing
+before the chain exists describes the same receiver either way. What waits for
+the build is what genuinely needs it: the WDSP channel id, the shift, the notch
+and blanker seeding, and `publishIoDsps()` — which is what starts feeding it IQ,
+so the first spectrum frame is the pane filling in.
+
+**A COMPLETION HAS TO FIND ITS RECEIVER, AND A UI NUMBER IS NOT ENOUGH.**
+`finishReceiverDspBuild()` cannot carry a DDC index — closing any receiver
+renumbers every index after it, because the gateware needs them contiguous — so
+it carries the UI number, which a close leaves alone. That is true and it is not
+an identity: `Hl2ReceiverMap::append()` allocates the **lowest free** UI number,
+deliberately, because the monotonic version it replaced asked for slice id 4 on a
+radio whose slice ids run 0..3 and had the receiver refused as over capacity. So
+closing a receiver hands its number straight back to the next
+`createPanadapter()`, and a build still in flight for the closed one would
+resolve to the new one — closing a pane the operator had just opened, over a
+message about a receiver that no longer exists, or writing a dead WDSP channel id
+onto a chain that does not exist yet. The build therefore carries a **monotonic
+generation** stamped when it is posted (`Receiver::dspBuildGeneration`), and a
+completion whose generation has moved returns having touched nothing. The closed
+receiver needs no teardown there: `removePanadapter()` already did it.
+Reconnection also replaces DSP objects while retaining receiver state and UI
+numbers. `releaseReceiverDsps()` clears the in-flight flag and generation before
+`buildReceivers()` copies that state. A completion from the retired DSP therefore
+cannot delete the replacement or publish the retired channel's id.
+
+
+**AND AN ANNOUNCED RECEIVER CAN BE GIVEN A JOB BEFORE IT HAS A CHAIN.** The two
+roles the backend stores as DDC indices — which receiver owns transmit, which
+one the client's shared controls act on — are the other thing publishing early
+moved. `setTxSlice()` and `setActiveSlice()` resolve through `ddcForSlice()` and
+`rx()` and read no `r.dsp`, so for the whole length of a build the operator can
+click the new pane or press it into service as the transmit slice. When the
+build then **fails**, `finishReceiverDspBuild()` erases that receiver — and
+`hl2RoleAfterRemove()` answers "the role WAS the removed receiver" with `-1` by
+contract, so the caller can choose a new home. Nothing was choosing one, and
+`rx(-1)` is null: transmit owned no slice, and every later key attempt died in
+`RadioModel`'s interlock with *"No transmit slice is assigned"* and nothing said
+from the backend. The failure path now picks the home itself, as
+`removePanadapter()` already did — DDC 0 in post-erase numbering — and
+republishes the surviving slices, because the interlock reads the per-slice
+`txSlice` flag and not the member. The helper is unchanged: its `-1` is what
+keeps "this role is gone" distinguishable from "this role shifted down to index
+0". One case `removePanadapter()` never meets is real here — it refuses to close
+the last receiver, while a failed build can be the last receiver, if the one
+before it was closed while this one built.
+
+**Not measured.** Nothing here has a stopwatch on it. `hl2_pan_create_async_test`
+occupies each thread deliberately and asserts against that interval; it says the
+wait is gone, not how long the build takes. Its receiver setup and link edge are
+injected without discovery, `connectRadio()` or `MetisClient::start()`; no socket
+is opened. It also forces stale success/failure completions across the production
+receiver reconstruction. This is scheduling/lifecycle evidence, not live EP2
+pacing or firmware convergence proof. §22.3's ~19 s first open and this
+section's own disclaimer on the derived 0.6-1.1 s figure both still stand.
 
 #### Landed in #5783: the span change builds off the I/O thread
 
@@ -4236,5 +4520,5 @@ superseded design. Whether a zoom now keeps the audio clean is **open**, and
 closing it needs hardware — as does the length of the unmuted latch window
 above.
 
-The opt-in TXA modulator and its offline evidence are described in
+The TXA modulator (the default, `AETHER_HL2_TX_TXA=ON`) and its evidence are described in
 [HL2 TXA configuration and lifecycle](hl2-txa-configuration-diff.md).

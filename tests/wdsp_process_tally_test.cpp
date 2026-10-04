@@ -261,7 +261,12 @@ static bool runChain(Dsp& dsp, Cfg cfg, bool blockForOutput,
     cfg.inputSampleRateHz = 48000;
     cfg.audioSampleRateHz = 24000;
     cfg.dspBlockSize = 1024;
-    cfg.fftSize = 1024;
+    // HL2 sizes its own FFT; ANAN's panadapter is WDSP's analyzer, configured
+    // by output point count instead.
+    if constexpr (requires { cfg.fftSize; })
+        cfg.fftSize = 1024;
+    else
+        cfg.panPoints = 1024;
     cfg.mode = WdspChannel::Mode::Usb;
     cfg.filterLowHz = 150.0;
     cfg.filterHighHz = 3000.0;

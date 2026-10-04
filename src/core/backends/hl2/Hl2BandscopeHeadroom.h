@@ -1,100 +1,17 @@
 #pragma once
 
-// CONVERTER HEADROOM FROM THE WIDEBAND BANDSCOPE, as a pure decision.
-//
-// The wideband bandscope (endpoint 0x04, MetisProtocol.h's Ep4Stats) is the
-// first observation on this radio that answers "how much room is left below
-// the rails" rather than only "you are already too high". This header turns
-// one accepted bandscope block into that answer, and states precisely what
-// the answer is worth.
-//
-// ---------------------------------------------------------------------------
-// WHY THIS IS THE RIGHT SENSOR, AND IT IS ABOUT WHAT IS OUTSIDE THE SLICE
-// ---------------------------------------------------------------------------
-//
-// The bandscope samples `rx_data` -- the AD9866's output register, PRE-DDC,
-// pre-decimation, pre-NCO. It therefore sees the whole first Nyquist zone,
-// DC..38.4 MHz, exactly as the converter does.
-//
-// That is the property that matters, and neither of the two level readings
-// this application already had can supply it:
-//
-//   * THE S-METER is computed after the DDC, after decimation and after the
-//     demodulator. It describes one slice.
-//   * WDSP's RXA_ADC_PK is also POST-DDC (RXA.c's adcmeter runs on the IQ
-//     entering the chain). It describes one slice too, in dB relative to WIRE
-//     full scale, with the DDC's own unquantified processing gain between it
-//     and the converter.
-//
-// So a broadcast station 20 MHz away can saturate the converter while the
-// operator's slice sits 40 dB below full scale, and NOTHING the operator can
-// see will say so. docs/HERMES.md 12.5 calls the pre-DDC/post-DDC pairing "the
-// single most useful diagnostic pairing on the HL2" for this reason. The
-// bandscope is the pre-DDC half, with a MAGNITUDE rather than a boolean.
-//
-// ---------------------------------------------------------------------------
-// WHAT IS CALIBRATED HERE, AND IT IS EXACTLY ONE THING
-// ---------------------------------------------------------------------------
-//
-// NOTHING IN THIS FILE IS ANTENNA-REFERRED. No dBm, no microvolts, no LNA
-// correction, no `Hl2DbReference` (which is per-slice and defaults
-// `isCalibrated()` false). Nobody has compared a bandscope reading against a
-// signal generator, and the study's Procedure C -- which would -- needs a live
-// antenna and has not been run.
-//
-// What IS exact, and it is exact BY CONSTRUCTION rather than by measurement,
-// is the relationship between this reading and the converter's own clip
-// threshold. `ad9866.v` derives all three from the same register:
-//
-//     always @ (posedge clk) rx_data <= rx_data_assemble;
+// Converter headroom from one accepted EP4 bandscope block (MetisProtocol.h
+// Ep4Stats), as pure clock-free functions. The bandscope samples ad9866.v's
+// pre-DDC `rx_data`, so it sees out-of-slice stations that the post-DDC
+// S-meter and RXA_ADC_PK miss (docs/HERMES.md 12.5). The clip threshold comes
+// from the same register, so units are "dB below the clip point", never dBFS:
 //     assign rxclipp    = (rx_data == 12'b011111111111);   // +2047
 //     assign rxclipn    = (rx_data == 12'b100000000000);   // -2048
 //     assign rxgoodlvlp = (rx_data[11:9] == 3'b011);       // >= +1536
 //     assign rxgoodlvln = (rx_data[11:9] == 3'b100);       // <= -1536
-//
-// ONE REGISTER, THREE CONSUMERS. The bandscope is not *like* what the clip
-// detector sees; it is that, sampled. So "this block peaked 6 dB below the
-// code at which rxclip fires" is a true statement with no reference in it,
-// and it is the only kind of statement this header makes.
-//
-// The unit is therefore written "dB below the converter's clip point" and
-// never "dBFS" alone, because the second invites being read as a calibrated
-// absolute. Every label that leaves here must survive an operator asking
-// "below what?".
-//
-// ---------------------------------------------------------------------------
-// THE GATE'S DUTY CYCLE BIASES THE PEAK, AND THE BIAS IS COMPUTABLE
-// ---------------------------------------------------------------------------
-//
-// `rxclip` inspects EVERY sample. The bandscope, gated to one block a second
-// by MetisClient::kBandscopeSampleMs, inspects 2048 consecutive samples out of
-// every 76 800 000. That is 0.0027 % coverage, and it has two consequences
-// that pull in opposite directions and must both be stated:
-//
-//   1. IT CAN MISS A TRANSIENT ENTIRELY. A lightning crash or a key-click that
-//      rails the converter between blocks leaves no trace in a reading taken
-//      400 ms later. The clip flag still sees it -- enabling the bandscope
-//      removes nothing -- which is why a consumer must treat the flag as the
-//      VETO and this reading as the MAGNITUDE, never the other way round.
-//
-//   2. IT SYSTEMATICALLY UNDERESTIMATES THE PEAK, because the maximum of a
-//      sample is a function of how many samples you took. That is not a risk;
-//      it is a bias, and `gatedPeakBiasDb` below computes its bound.
-//
-// A consumer that acts in the loud direction on this number MUST budget (2) as
-// margin. That is what `headroomLicensesStepDb` is for, and it is the whole
-// reason this header exists rather than a bare `-peakDbfs()` at the call site.
-//
-// ---------------------------------------------------------------------------
-// A SEAM RATHER THAN AN INLINE CONDITION
-// ---------------------------------------------------------------------------
-//
-// For Hl2OverloadPolicy.h's reason, which binds harder here: every branch below
-// is otherwise reachable only by driving a real converter into a real overload
-// with a real out-of-slice signal, which is not a thing a test suite can
-// arrange. As pure functions they are reachable by arithmetic.
-//
-// No Qt, no clock, no radio. Age is an INPUT.
+// One 2048-sample block per MetisClient::kBandscopeSampleMs covers 0.0027 % of
+// samples: the clip flag (every sample) is the veto, this is the magnitude, and
+// the peak is underestimated (gatedPeakBiasDb() bounds it).
 
 #include <cmath>
 #include <cstdint>
@@ -105,20 +22,23 @@ namespace AetherSDR::hl2 {
 
 // ---- freshness -------------------------------------------------------------
 
-// How old a bandscope block may be and still describe "now".
-//
-// A DISPLAY AND CONTROL BOUNDARY, NOT A CALIBRATED ONE -- the same kind of
-// number as Hl2AdcPairing.h's slice-hot threshold, and chosen the same way.
-// The gate produces one block per MetisClient::kBandscopeSampleMs (1000 ms),
-// so anything inside two gate periods is the current or the previous block and
-// anything beyond it means the gate stopped delivering. Three periods is that
-// with one period of slack for a late I/O thread, which is the same tolerance
-// bandscopeGuardMs() already budgets for the arming path.
-//
-// EXPIRY IS NOT ZERO HEADROOM. An expired observation is ABSENT -- see
-// BandscopeHeadroom::Absent -- and a consumer must treat it as "not reported",
-// never as "no room". The two are opposite instructions.
+// How old a bandscope block may be and still describe "now": three gate
+// periods (kBandscopeSampleMs = 1000 ms), i.e. current or previous block plus
+// one period of slack, matching bandscopeGuardMs(). A display/control
+// boundary, not calibrated. Expired means Absent ("not reported"), never zero
+// headroom.
 inline constexpr std::int64_t kHeadroomMaxAgeMs = 3000;
+
+// The single "is this block current" predicate shared by every reader
+// (bandscopeHeadroom(), Hl2Backend::healthSnapshot()) so they cannot disagree.
+// `ageMs < 0` means never observed, the same Absent as too old.
+[[nodiscard]] inline constexpr bool bandscopeBlockIsCurrent(
+    const Ep4Stats& block,
+    std::int64_t ageMs,
+    std::int64_t maxAgeMs = kHeadroomMaxAgeMs) noexcept
+{
+    return block.samples > 0 && ageMs >= 0 && ageMs <= maxAgeMs;
+}
 
 // ---- the observation, classified ------------------------------------------
 
@@ -195,7 +115,9 @@ inline const double kGoodLevelKneeHeadroomDb =
 {
     HeadroomObservation out;
     out.ageMs = ageMs;
-    if (block.samples <= 0 || ageMs < 0 || ageMs > maxAgeMs) {
+    // The same predicate the health rows now use, called rather than restated,
+    // so the two cannot drift apart again.
+    if (!bandscopeBlockIsCurrent(block, ageMs, maxAgeMs)) {
         return out;                       // Absent
     }
     out.clippedSamples = block.clippedSamples;
@@ -216,30 +138,12 @@ inline const double kGoodLevelKneeHeadroomDb =
 
 // ---- the sampling bias, as a bound ----------------------------------------
 
-// How much a peak taken over `observedSamplesPerSecond` samples UNDERSTATES
-// the peak that `fullRateSamplesPerSecond` samples would have found, in dB,
-// returned as a POSITIVE number of dB of understatement.
-//
-// THE MODEL IS STATED AND IT IS AN UPPER BOUND, NOT A CORRECTION.
-//
-// Under a Gaussian model -- the right first model for a wide-open HF front end
-// seeing the aggregate of many signals plus noise -- the expected maximum of N
-// samples is sigma*sqrt(2 ln N). The ratio of two such expectations is the
-// bias, and because it is logarithmic in N it is bounded and slowly varying:
-// it moves about 2 dB across a hundred-fold change in duty cycle.
-//
-// THE BIAS IS ZERO FOR A DETERMINISTIC SIGNAL. A strong broadcast carrier has
-// a periodic envelope, and 2048 samples at 76.8 MSPS resolve every beat faster
-// than 37.5 kHz. So on a real band the true error sits somewhere between zero
-// and this figure, and WHERE is a measurement nobody has made.
-//
-// Therefore: budget it as MARGIN, never subtract it as a correction. A
-// consumer that added this number back to a reading would be claiming a
-// precision this observation does not have. `headroomLicensesStepDb` uses it
-// the honest way.
-//
-// Returns 0 when either count is not usable, which is the conservative answer
-// for a margin (a caller adding it gets no licence it had not already earned).
+// How many dB a peak over `observedSamplesPerSecond` samples understates the
+// full-rate peak (positive). Gaussian model: expected max of N samples is
+// sigma*sqrt(2 ln N), so the ratio is logarithmic in N (~2 dB per 100x duty).
+// For a deterministic signal (e.g. a broadcast carrier) the bias is ~0, so the
+// true error lies between 0 and this: an upper bound to budget as margin,
+// never a correction to add back. Returns 0 for unusable counts.
 [[nodiscard]] inline double gatedPeakBiasDb(
     double observedSamplesPerSecond,
     double fullRateSamplesPerSecond = kAdcSampleRateHz) noexcept
@@ -269,30 +173,12 @@ inline const double kGoodLevelKneeHeadroomDb =
 
 // ---- what the reading licenses --------------------------------------------
 
-// May a consumer take `stepDb` dB back in the LOUD direction on this evidence?
-//
-// The rule, and every term in it is load-bearing:
-//
-//     measured headroom  >=  the step itself
-//                         +  the gate's sampling-bias bound
-//                         +  the caller's own margin
-//
-//   * THE STEP ITSELF, because taking back N dB of attenuation raises the
-//     converter's input by N dB, and a step into less than N dB of room is a
-//     step into the rail by construction.
-//   * THE BIAS BOUND, because the gated peak is an UNDERESTIMATE and the
-//     direction of that error is exactly the dangerous one: it makes the band
-//     look quieter than it is. Budgeting the bound means the licence survives
-//     the worst case the model admits.
-//   * THE CALLER'S MARGIN, which is the caller's business and not this
-//     header's -- a control loop and a display want different amounts of it.
-//
-// AN ABSENT OBSERVATION LICENSES NOTHING. Not "no room" -- no answer. The
-// caller must then fall back to whatever it did before this sensor existed,
-// and must not read the refusal as a measurement.
-//
-// A NEARRAIL OBSERVATION IS STILL A MEASUREMENT and goes through the same
-// arithmetic; it will simply fail it for any useful step, which is correct.
+// May a consumer take `stepDb` back in the loud direction? Requires
+//     headroom >= step + sampling-bias bound + caller margin
+// The step because N dB less attenuation raises the ADC input N dB; the bias
+// because the gated peak errs quiet, the dangerous direction. Absent licenses
+// nothing (fall back, don't treat as "no room"); NearRail goes through the
+// same arithmetic.
 [[nodiscard]] inline bool headroomLicensesStepDb(const HeadroomObservation& obs,
                                                  double stepDb,
                                                  double marginDb,

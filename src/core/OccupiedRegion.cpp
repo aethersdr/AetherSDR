@@ -12,20 +12,12 @@ namespace {
     // Starting values, biased toward stability. Expect on-air tuning before
     // release (the maintainer signs off on the DSP feel per the RFC).
     constexpr double kScanHz        = 6500.0; // scan this far from the carrier
-    // Measurement resolution cap (zoom-invariant cost). Every loop below is
-    // O(kScanHz / hzPerBin), and the pan's hzPerBin shrinks without bound as
-    // the operator zooms in (xpixels is tied to widget width, not span) — the
-    // measurement got quadratically slower with zoom while producing edges no
-    // better: everything downstream is far coarser (50 Hz snap grid, 150 Hz
-    // margin, 220 Hz engine deadband). Below this resolution the input is
-    // decimated (mean in dB of D consecutive bins) so the effective bin stays
-    // in [kMinMeasureHzPerBin, 2*kMinMeasureHzPerBin) and the whole
-    // measurement is O(1) in zoom. Mean — not max (extreme-value bias inflates
-    // averaged noise ~5 dB and risks false-engage at the Sensitive preset) and
-    // not stride (a narrow het hopping in/out of the sample comb jitters the
-    // edges); the dB mean is literally the first stage of the kEnvHz box
-    // average, so envelope semantics are unchanged. Coarser pans (hzPerBin
-    // already >= the cap) take the D=1 path, bit-identical to before.
+    // Measurement resolution cap. Every loop is O(kScanHz / hzPerBin), and hzPerBin
+    // shrinks without bound on zoom while downstream is far coarser (50 Hz snap,
+    // 150 Hz margin, 220 Hz deadband). Finer input is decimated by the dB mean of D
+    // bins so the effective bin stays in [kMin, 2*kMin) and cost is O(1) in zoom.
+    // Mean, not max (biases noise up ~5 dB) or stride (jitters narrow hets); it is
+    // the first stage of the kEnvHz average. Coarser pans use D=1 unchanged.
     constexpr double kMinMeasureHzPerBin = 25.0;
     // Spectral-envelope smoothing: a moving average over kEnvHz suppresses
     // narrow spikes (hets/carriers) and speech fine structure, leaving the
@@ -42,37 +34,21 @@ namespace {
                                               // pre-gap-level rebound test; an
                                               // unconfident run scans on — see
                                               // the extent pass)
-    // Presence margin (env peak over floor) is operator-tunable via the Minimum-SNR
-    // setting — see OccupiedRegionParams::minPeakDb. The time-averaged envelope keeps
-    // noise excursions to ~1-3 dB, so even the most sensitive preset does not
-    // false-engage on pure noise.
-    // SSB-voice shape gate: voice energy starts near the carrier. If the
-    // occupied band starts above this (e.g. a 1600-4000 data/het signal), it
-    // isn't the SSB voice we're tuned to -> reject -> caller keeps the manual
-    // filter. Generous (well above any real voice low-cut, well below 1600).
+    // Presence margin (env peak over floor) is operator-tunable via
+    // OccupiedRegionParams::minPeakDb; the time-averaged envelope keeps noise within
+    // ~1-3 dB. SSB voice shape gate: voice starts near the carrier, so a band
+    // starting above kMaxVoiceLowCutHz (e.g. a 1600-4000 Hz data signal) is rejected
+    // and the caller keeps the manual filter.
     constexpr int    kMaxVoiceLowCutHz = 600;
-    // Extent + separate-station rejection (RFC follow-up). The wanted signal is
-    // the contiguous energy from the carrier that never returns to the noise
-    // floor — ONE signal whatever its spectral tilt. A floor-reaching gap of
-    // >= kFloorDiscHz ARMS a disconnection (measured on the RAW work-grid bins,
-    // not the envelope: the ~300 Hz envelope smear erodes ~150 Hz off each side
-    // of a real valley, so an envelope-measured width would under-read a
-    // genuine floor gap — the envelope measures LEVEL, the raw bins measure
-    // CONNECTIVITY); a shallower or merely relative dip is bridged. When energy
-    // resumes across an armed disconnection, a plateau more than kReboundDb
-    // above BOTH the pre-gap level and the reference-so-far is a DISTINCT lobe:
-    //   * if the run so far was CONFIDENT (cleared the presence preset), the
-    //     lobe is a separate/splatter station -> cut at the valley;
-    //   * if the run so far was NOT confident (a weak bass lobe that never
-    //     itself cleared the gate), the lobe IS the tuned signal's dominant
-    //     hump (smiley-EQ / presence-boosted ESSB whose mid scoop fades to the
-    //     floor) -> RE-ANCHOR: keep the inner edge, continue the extent into
-    //     the lobe — provided it starts within kReanchorMaxStartHz (energy
-    //     first appearing beyond that above a silent low band is an adjacent
-    //     station, not a voice hump).
-    // Peak/reference/presence are then computed over the FULL kept extent
-    // (anchor pass below) so a treble-dominant hump can never be judged, gated
-    // or splatter-capped against a bass-only reference.
+    // Extent and separate-station rejection. The wanted signal is the energy from the
+    // carrier that never returns to the floor. A floor gap >= kFloorDiscHz, measured
+    // on RAW bins (the ~300 Hz envelope smear erodes ~150 Hz per side), ARMS a
+    // disconnection; shallower dips are bridged. When energy resumes across an armed
+    // gap with a plateau > kReboundDb above both the pre-gap level and the reference:
+    //   * run so far CONFIDENT (cleared presence) -> separate station, cut at valley;
+    //   * run NOT confident (weak bass lobe of a mid-scooped ESSB signal) ->
+    //     RE-ANCHOR into the lobe, if it starts within kReanchorMaxStartHz.
+    // Peak/reference/presence are computed over the full kept extent (anchor pass).
     constexpr float  kReboundDb    = 8.0f;
     constexpr double kFloorDiscHz  = 250.0;  // raw floor gap this wide arms a
                                              // real disconnection (in Hz — no
@@ -80,28 +56,18 @@ namespace {
     constexpr double kReanchorMaxStartHz = 2000.0;  // re-anchor only into lobes
                                              // starting by here (voice humps
                                              // rise by ~1.2-2 kHz)
-    // Cut-vs-reanchor hysteresis (F3): the cut ("separate stronger station")
-    // pivot was a single razor edge (runConfident at exactly floor+minPeakDb,
-    // plateau at exactly ref+kReboundDb), so a ~0.2 dB wiggle in a WEAK bass
-    // lobe flipped the high-cut by the whole treble-hump width (bistable ESSB
-    // amputation). Require BOTH the pre-gap run to clear the gate by a margin
-    // AND the resuming lobe to exceed the rebound by a margin before cutting;
-    // otherwise re-anchor (keeping a real signal is the safer error). Each
-    // margin is a dead-band a 0.2 dB perturbation cannot cross.
+    // Cut-vs-reanchor hysteresis: cutting requires the pre-gap run to clear the gate
+    // by kRunConfidentHystDb AND the new lobe to exceed kReboundDb by
+    // kSeparateMarginDb, so a ~0.2 dB wiggle can't flip the high-cut by a whole hump
+    // width; otherwise re-anchor (keeping signal is the safer error).
     constexpr float  kRunConfidentHystDb = 2.0f;   // over the presence gate to CUT
     constexpr float  kSeparateMarginDb   = 2.0f;   // over kReboundDb to CUT
-    // Weak-run re-anchor guard (F4): an UNCONFIDENT run bypasses the silence
-    // stop and scans to kScanHz, so without these a weak near-carrier blip plus
-    // an adjacent station 1.5-2 kHz up would re-anchor onto the neighbour. A
-    // re-anchor now additionally requires the INNER (pre-gap) lobe to be a real
-    // sustained lobe (>= kInnerReanchorMinWidthHz occupied AND >= floor +
-    // kEnvGateDb + kInnerReanchorMinDb), and the bridged at-floor gap to be
-    // bounded (kUnconfBridgeMaxHz — also an unconfident silence-stop so the
-    // scan no longer runs to kScanHz across dead air).
-    // Occupied width (above the gate) understates a weak lobe by ~2x the 300 Hz
-    // envelope smear, so a genuine ~600-700 Hz raw bass reads ~290-390 Hz here
-    // while a narrow carrier/het blip erodes to near zero — 250 Hz separates
-    // them with margin.
+    // Weak-run re-anchor guard: an unconfident run scans toward kScanHz, so a
+    // re-anchor also needs a real inner lobe (>= kInnerReanchorMinWidthHz occupied
+    // and >= floor + kEnvGateDb + kInnerReanchorMinDb) and an at-floor gap no wider
+    // than kUnconfBridgeMaxHz (also its silence-stop). Occupied width under-reads a
+    // weak lobe by the envelope smear (600-700 Hz raw bass reads ~290-390 Hz; a
+    // carrier blip ~0), so 250 Hz separates them.
     constexpr double kInnerReanchorMinWidthHz = 250.0;
     constexpr float  kInnerReanchorMinDb      = 1.0f;   // over the occupied gate
     constexpr double kUnconfBridgeMaxHz       = 1300.0;
@@ -110,92 +76,46 @@ namespace {
                                              // treble hump; robust to a transient)
     constexpr int    kMarginHz      = 150;    // intelligibility margin
     constexpr int    kMinBwHz       = 50;     // never narrower than this
-    // Temporal envelope (video peak-hold with leak): per-offset EMA that rises
-    // FAST when energy appears and decays SLOWLY when it goes — a bounded
-    // maximum-hold, not a symmetric average. Rationale: SSB voice only fills its
-    // upper 1.5-3 kHz INTERMITTENTLY (sibilants, formant peaks), so a symmetric
-    // slow average let the upper-band envelope sag below the occupied gate in
-    // every word gap — the measured high edge then collapsed to the low formants
-    // and snapped back out when speech resumed, jittering between "narrow voice"
-    // and "full width" frame to frame. A fast attack captures the signal's reach
-    // the instant it appears; a slow, BOUNDED (~1 s) release holds that reach
-    // across gaps, so the high edge reflects the SUSTAINED occupied width. The
-    // release is short enough that a genuine narrowing still resolves in ~1-2 s,
-    // and noise is still averaged down (a near-floor spike, held briefly, stays
-    // near the floor — it cannot walk the edge far past the signal).
+    // Temporal envelope: per-offset fast-attack / slow bounded-release EMA (a leaky
+    // peak hold). SSB voice fills its upper 1.5-3 kHz only intermittently, so a
+    // symmetric average sagged in word gaps and the high edge jittered. The ~1.1 s
+    // release holds reach across gaps while real narrowing resolves in ~1-2 s.
     constexpr float  kEnvAttackAlpha  = 0.30f;  // fast rise  (~0.1 s time constant)
     constexpr float  kEnvReleaseAlpha = 0.03f;  // slow fall  (~1.1 s time constant)
 
-    // ── Edge-het rejection (opt-in, OccupiedRegionParams::hetReject) ─────────
-    // A narrow strong interferer (het/carrier) near a passband edge shows up as
-    // a RAW bin far above the local SMOOTHED envelope (a broad voice hump lifts
-    // its own envelope, so raw-minus-env stays small; only a narrow spike has a
-    // large raw-minus-env). When enabled, a het found within kHetSearchHz of a
-    // cut pulls that cut kHetGuardHz inboard of the het (a filter skirt is not a
-    // brick wall, so cut BELOW it), never past the signal peak. Cross-frame
-    // stability (a het drifting/QSB-ing in and out) is provided by the engine's
-    // temporal pipeline (median + peak-hold + slow narrowing), so the detector
-    // here stays single-frame and stateless. A mid-band het (not near an edge)
-    // is left to the notch/ANF — a bandpass edge can't remove it without gutting
-    // voice. kHetExcessDb is high enough that a formant peak or a steep voice
-    // skirt is never mistaken for a het.
+    // Edge-het rejection (opt-in, OccupiedRegionParams::hetReject): a narrow strong
+    // interferer shows as a RAW bin far (> kHetExcessDb) above the smoothed envelope,
+    // which a voice hump or formant never does. A het within kHetSearchHz of a cut
+    // pulls the cut kHetGuardHz inboard of it, never past the signal peak.
+    // Single-frame and stateless; the engine's temporal pipeline supplies stability.
+    // Mid-band hets are left to notch/ANF.
     constexpr double kHetSearchHz = 300.0;   // scan this far in/out of each cut
     constexpr float  kHetExcessDb = 15.0f;   // raw over local envelope = a het
     constexpr double kHetGuardHz  = 150.0;   // place the cut this far below it
 
-    // ── Per-frequency noise floor (spec Stage B) ────────────────────────────
-    // A single scalar floor mis-thresholds a TILTED floor: with a global 10th-pct
-    // scalar, the busy/high side reads "occupied" far past the signal and the
-    // high-cut runs out into noise. Track a floor CURVE instead: a sliding LOW
-    // PERCENTILE of the raw bins across frequency. A low percentile over a wide
-    // window returns the surrounding noise even with signal present (signal is
-    // the high minority). Two safety properties make this non-regressive vs the
-    // scalar:
-    //   * the window is WIDE (kFloorWindowHz) so it almost always spans noise
-    //     beyond the voice band — it cannot collapse onto a wide signal's level;
-    //   * the curve is CLAMPED to [scalar, scalar + kFloorTiltMaxDb] — it may only
-    //     RISE above the global scalar (to follow genuinely-louder noise), never
-    //     fall below it, and never rise far enough to swallow a real signal.
-    // The presence gate stays on the global scalar (below), so weak-signal
-    // engagement is unchanged; the curve only sharpens per-bin EDGE placement.
+    // Per-frequency noise floor: a sliding low percentile of raw bins over a wide
+    // window (kFloorWindowHz), so a tilted floor doesn't drag the high-cut into
+    // noise. Clamped to [scalar, scalar + kFloorTiltMaxDb]: it may only rise above
+    // the global scalar floor and never far enough to swallow a signal. The presence
+    // gate stays on the scalar; the curve only sharpens edge placement.
     constexpr double kFloorWindowHz   = 5000.0;  // sliding window (half = 2500 Hz)
     constexpr int    kFloorPercentile = 20;      // low pct over the window
     constexpr float  kFloorTiltMaxDb  = 10.0f;   // curve may rise at most this far
 
-    // ── Splatter cap (spec Stages F.2, G) ───────────────────────────────────
-    // The natural high-cut is where the signal returns to the noise floor (the
-    // scan's far edge). For NORMAL voice that is the correct answer and must be
-    // trusted: real SSB voice rolls off gradually, so the upper voice legitimately
-    // sits 20-25 dB below the core — a bare referenceDbm - kSplatterDownDb cut
-    // would chop useful audio (it cut a ~3 kHz signal to ~1.8 kHz on air). So the
-    // reference-relative splatter cap is applied ONLY when the floor crossing runs
-    // past kSplatterGuardHz, i.e. the signal never returns to the floor within the
-    // plausible voice band — the signature of a dirty, over-driven splatterer.
-    // kSplatterDownDb / kSplatterGuardHz are operator-tunable via the Splatter-
-    // rejection setting — see OccupiedRegionParams.
+    // Splatter cap: normal voice legitimately rolls off 20-25 dB below the core, so
+    // the natural floor-return high-cut is trusted; the reference-relative cap
+    // (referenceDbm - kSplatterDownDb) applies only when the floor crossing runs past
+    // kSplatterGuardHz (an over-driven splatterer). Both are operator-tunable
+    // (OccupiedRegionParams).
 
-    // ── Level-invariant outer edge (in-guard reference cap) ─────────────────
-    // A floor-relative crossing on a SOFT skirt is a property of the SNR, not
-    // of the TX signal: on a skirt of S dB/kHz the floor+5 crossing moves
-    // ~1000/S Hz per dB of signal-level change, so the measured width breathed
-    // with QSB and collapsed as stations weakened. The level-invariant answer
-    // is reference-relative (ITU-R SM.443 puts the 99% occupied bandwidth of
-    // SSB voice ~26 dB below the peak): INSIDE the splatter guard the edge is
-    // additionally capped at the outermost bin within
-    // (splatterDownDb + kOccupiedCapExtraDb) of the in-band reference — the
-    // SAME rule family as the splatter cap, at a deeper depth (Tight 23 /
-    // Normal 30 / Wide 40 dB), so the operator's Tight/Wide intent scales both
-    // regimes and the past-guard splatter depth is always the tighter of the
-    // two where both apply. The extra 5 dB over ITU's 26 accounts for the
-    // reference sitting a few dB under the peak plus envelope-smear headroom
-    // (a bare 26 re-chopped the declining-voice shape the splatter guard was
-    // built to protect). The cap only engages with real headroom —
-    // referenceDbm at least (depth + kCapHeadroomMarginDb) above the scalar
-    // floor — because below that the cap level is within a few dB of the
-    // noise and indistinguishable from it: weak signals stay governed by the
-    // floor crossing (that regime is handled by the engine's widen-only
-    // low-SNR behaviour instead). The floor+5 crossing remains the absolute
-    // outer limit by construction (the cap only ranges over occupied bins).
+    // Level-invariant outer edge: on a soft skirt of S dB/kHz the floor crossing moves
+    // ~1000/S Hz per dB, so width breathed with QSB. Inside the splatter guard the
+    // edge is also capped at the outermost bin within
+    // (splatterDownDb + kOccupiedCapExtraDb) of the in-band reference (Tight 23 /
+    // Normal 30 / Wide 40 dB). ITU-R SM.443 puts SSB 99% bandwidth ~26 dB down; the
+    // extra 5 dB covers reference-below-peak and smear. Engages only when
+    // referenceDbm >= scalar floor + depth + kCapHeadroomMarginDb; weaker signals
+    // follow the floor crossing, which always remains the outer limit.
     constexpr float  kOccupiedCapExtraDb   = 5.0f;
     constexpr float  kCapHeadroomMarginDb  = 5.0f;
 
@@ -207,21 +127,12 @@ namespace {
     // bounds any over-wide tail.
     constexpr float  kSteepSlopeDbPerKHz = 30.0f;
 
-    // ── Sliding-window percentile (floor curve) ────────────────────────────
-    // The floor curve needs a low percentile of a wide (±2500 Hz) raw-bin
-    // window at EVERY scan offset. Copying the window and running nth_element
-    // per offset is O(span × window) — quadratic in zoom (span and window both
-    // grow as hzPerBin shrinks) and an allocation storm on the GUI thread; on
-    // a zoomed-in Retina pan it reached millions of float copies per frame
-    // (the "waterfall chokes when zoomed" regression). The window slides by
-    // exactly one bin per offset, so a histogram over quantized dB with one
-    // remove + one add per step gives the same percentile in O(buckets).
-    //
-    // Quantization: 256 buckets over [scalarFloor - kFloorHistBelowDb,
-    // scalarFloor + kFloorHistAboveDb] ≈ 0.23 dB/bucket. The incoming bins are
-    // display-quantized (~0.13 dB) and the result is clamped to
-    // [scalarFloor, scalarFloor + kFloorTiltMaxDb] before use, so the ≤0.24 dB
-    // bucket rounding is absorbed long before the 3/5 dB gates can notice.
+    // Sliding-window percentile for the floor curve: the window (+/-2500 Hz) slides
+    // one bin per offset, so a histogram with one remove + one add per step gives the
+    // percentile in O(buckets) instead of O(span x window) copies per frame. 256
+    // buckets over [floor - kFloorHistBelowDb, floor + kFloorHistAboveDb] = ~0.23
+    // dB/bucket; input is display-quantized (~0.13 dB) and the result is clamped, so
+    // rounding stays far below the 3/5 dB gates.
     constexpr int   kFloorHistBuckets = 256;
     constexpr float kFloorHistBelowDb = 20.0f;   // histogram floor headroom
     constexpr float kFloorHistAboveDb = 40.0f;   // histogram signal headroom
@@ -366,16 +277,10 @@ OccupiedRegion measureOccupiedRegion(const QVector<float>& binsDbm,
     }
     const auto envAt = [&](int o) -> float { return avgEnv[o]; };
 
-    // ── Per-frequency floor curve (Stage B) ──────────────────────────────
-    // Sliding low percentile of the RAW bins across frequency, indexed by offset,
-    // clamped to only rise above the global scalar (never below, never far enough
-    // to swallow a signal). Tracks a tilted floor at the signal/noise boundary
-    // where edge accuracy matters, while the clamp guarantees it can never make
-    // the occupied threshold lower than the proven scalar behaviour.
-    // One histogram slides across the scan: the window center moves by exactly
-    // one bin per offset (carrier-outward), so each step removes at most one
-    // leaving bin and adds at most one entering bin (the clamps freeze an edge
-    // at the pan boundary, hence the while-loops that move each edge 0..1 step).
+    // Per-frequency floor curve: sliding low percentile of raw bins, clamped to only
+    // rise above the scalar floor. One histogram slides carrier-outward one bin per
+    // offset; edge clamps at the pan boundary mean each edge moves 0..1 step (hence
+    // the while-loops).
     const int floorHalf = std::max(2, static_cast<int>(kFloorWindowHz / hzPerBin / 2.0));
     QVector<float> floorCurve(span);
     {
@@ -413,22 +318,12 @@ OccupiedRegion measureOccupiedRegion(const QVector<float>& binsDbm,
         if (envAt(o) >= occThrAt(o)) { firstO = o; break; }
     if (firstO < 0) return r;  // nothing occupied above the floor-relative gate
 
-    // ── Extent pass (Stage F/G, tilt-robust) ────────────────────────────────
-    // ONE outward scan decides how far the tuned signal's energy extends —
-    // bridging relative dips (formant nulls, the valley between a bass and a
-    // treble hump) and internal fades, cutting at a separate station, and
-    // re-anchoring into the dominant hump of a mid-scooped signal whose lows
-    // never cleared the presence preset (see the kFloorDiscHz block comment for
-    // the full decision rules). Peak/reference/presence are deliberately NOT
-    // computed here: they come from the anchor pass below, over the FULL kept
-    // extent, so a treble-dominant hump can never be judged against a
-    // bass-only reference (that mis-anchoring both amputated smiley-EQ signals
-    // at the mid scoop and rejected strong treble-dominant signals whose weak
-    // bass lobe alone failed the presence gate).
-    //
-    // Look-ahead span for the gap-exit plateau test: the envelope ramps over
-    // ~envHalf bins, so the first re-occupied bin still reads near the gap
-    // level; peek a couple bins further to see the level the signal resumes to.
+    // Extent pass: one outward scan decides how far the signal extends, bridging
+    // relative dips and fades, cutting at a separate station, re-anchoring into a
+    // mid-scooped signal's dominant hump (rules at kFloorDiscHz). Peak/reference/
+    // presence come from the anchor pass over the full kept extent, never a
+    // bass-only reference. reboundLook: the envelope ramps over ~envHalf bins, so
+    // peek past it to see the level the signal resumes to.
     const int reboundLook = std::max(1, 2 * envHalf + 1);
 
     int keptEndO = firstO;            // outermost kept occupied bin
@@ -513,17 +408,11 @@ OccupiedRegion measureOccupiedRegion(const QVector<float>& binsDbm,
                 silenceHz = 0.0;
             }
         }
-        // Disconnection arming on the RAW bins, tracked for EVERY bin — the
-        // raw valley starts under the envelope's smear shoulder, ~150 Hz
-        // before the envelope gap opens, and that width is part of the real
-        // disconnection (accumulating only inside the envelope gap would
-        // re-shrink the standard by the very smear the raw domain is meant to
-        // bypass — see kFloorDiscHz). Hz-accumulated, so coarse pans cannot
-        // truncate it. An envelope-occupied bin clears the ARM (same-signal
-        // energy resumed and was adjudicated above), while the raw run itself
-        // only resets on a raw bin back above the floor gate. binAt(o) can run
-        // past the pan when the slice sits within kScanHz of a pan edge —
-        // clamp like env() does (edge bin repeats).
+        // Disconnection arming on RAW bins, for every bin: the raw valley starts ~150 Hz
+        // before the envelope gap and belongs to the disconnection (see kFloorDiscHz).
+        // Accumulated in Hz so coarse pans can't truncate it. An envelope-occupied bin
+        // clears the ARM; the raw run resets only on a raw bin above the floor gate.
+        // binAt(o) can pass the pan edge near it, so clamp like env().
         if (binsDbm[std::clamp(binAt(o), 0, N - 1)] < floorGateAt(o)) {
             rawFloorRunHz += hzPerBin;
             if (rawFloorRunHz >= kFloorDiscHz) armed = true;

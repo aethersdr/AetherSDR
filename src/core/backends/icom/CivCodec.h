@@ -10,20 +10,13 @@
 #include <utility>
 #include <vector>
 
-// CI-V — the Icom command plane.
+// CI-V — the Icom command plane, common to every transport: over WiFi it rides
+// inside the RS-BA1 serial stream (IcomProtocol.h), over USB the same bytes go
+// straight to a serial port. Keep this file transport-, Qt- and socket-free so
+// civ_codec_test exercises it standalone.
 //
-// This is the half of the stack that is COMMON to every transport. Over WiFi it
-// travels inside the RS-BA1 serial stream (IcomProtocol.h); over USB the exact
-// same bytes go straight down a serial port with no envelope at all. Keeping
-// this file transport-free is what makes a future USB / local-serial mode a
-// small increment rather than a second backend.
-//
-// Grounded on Icom's own IC-705 CI-V Reference Guide (A7560-8EX-1, Jul 2020),
-// which is tier 1 in ~/oracles/icom/icom-oracle.md §0. Command numbers and
-// data ranges are facts from that document; nothing here is transcribed from
-// wfview (GPL-3, read-only reference).
-//
-// Qt-free and socket-free so civ_codec_test exercises it standalone.
+// Grounded on Icom's IC-705 CI-V Reference Guide (A7560-8EX-1, Jul 2020);
+// nothing here is transcribed from wfview (GPL-3, read-only reference).
 
 namespace AetherSDR::icom {
 
@@ -44,17 +37,9 @@ inline constexpr std::uint8_t kControllerAddress = 0xE0;
 // rather than with our address, so the receive path must accept it.
 inline constexpr std::uint8_t kBroadcastAddress = 0x00;
 
-// The cap past which an unterminated frame is a resync artefact rather than a
-// frame.
-//
-// NOT 80. Hamlib and kappanhang both use 80 and both are right for what they
-// do — 80 is the longest COMMAND frame, and neither of them decodes scope data.
-// A scope sweep is command 0x27 0x00 carrying 475 points, which is ~496 bytes
-// on an IC-705 and ~710 on an IC-7610, so an 80-byte cap silently discards
-// every panadapter frame while commands keep working perfectly. The symptom is
-// a black waterfall on a session that is demonstrably healthy.
-//
-// 1200 covers the widest sweep any current model produces with room to spare.
+// Cap past which an unterminated frame is a resync artefact. Not hamlib's 80
+// (the longest COMMAND frame): a 0x27 0x00 scope sweep of 475 points is ~496
+// bytes on an IC-705 and ~710 on an IC-7610. 1200 covers every current model.
 inline constexpr std::size_t kMaxFrameBytes = 1200;
 
 // The longest frame we will ever SEND, and the cap for frames forwarded from a
@@ -98,19 +83,12 @@ struct CivFrame {
 // Decode one complete frame (FE FE … FD). Returns nullopt if it is malformed.
 [[nodiscard]] std::optional<CivFrame> parseFrame(std::span<const std::uint8_t> frame);
 
-// Reassembles CI-V frames from an arbitrarily-chunked byte stream.
-//
-// The stream is NOT frame-aligned: a datagram can split a frame, batch several,
-// or start mid-frame after a loss. Three rules make resynchronisation reliable,
-// and all three come from the reference implementations having been bitten:
-//
-//   1. Sync on the DOUBLE preamble. A single 0xFE is not a frame start — it
-//      appears inside BCD data — and accepting one leaves the decoder
-//      permanently one frame behind.
-//   2. Terminate on 0xFD, and also on 0xFC. The radio uses 0xFC as an alternate
-//      terminator in some replies.
-//   3. Time out a partial frame. Without it, one truncated frame swallows every
-//      subsequent byte forever. The caller drives this via tick().
+// Reassembles CI-V frames from an arbitrarily-chunked byte stream (datagrams can
+// split, batch, or start mid-frame). Resync rules:
+//   1. Sync on the DOUBLE 0xFE preamble; a single 0xFE appears inside BCD data.
+//   2. Terminate on 0xFD, and also on 0xFC (alternate terminator in some replies).
+//   3. Time out a partial frame via tick(), or one truncated frame swallows the
+//      stream forever.
 class CivReassembler {
 public:
     // Feed bytes; returns every complete frame that became available.
@@ -126,20 +104,11 @@ private:
     bool m_sawOne  = false;   // exactly one preamble byte seen
 };
 
-// ---------------------------------------------------------------------------
-// BCD — and the two directions it runs
-// ---------------------------------------------------------------------------
-//
-// This is the single most common source of Icom bugs, so it gets named helpers
-// rather than open-coded shifts:
-//
-//   FREQUENCY runs LITTLE-endian  — least-significant digit pair FIRST.
+// BCD byte order:
+//   FREQUENCY is LITTLE-endian — least-significant digit pair first.
 //       14.250000 MHz -> 00 60 25 14 00
-//   EVERYTHING ELSE runs BIG-endian — most-significant pair first.
+//   everything else is BIG-endian — most-significant pair first.
 //       level 0255    -> 02 55
-//
-// Mixing them produces a radio that tunes to 21.4 MHz when asked for 14.21, or
-// a power level of 55 % when asked for 2 %.
 
 // Frequency, in Hz, as N BCD bytes little-endian. 5 bytes on every current
 // model; the IC-905 uses 6 above 10 GHz, which is why this is a parameter and
@@ -154,17 +123,11 @@ inline constexpr std::size_t kFreqBytes = 5;
 [[nodiscard]] std::optional<std::uint64_t> decodeFreqExact(
     std::span<const std::uint8_t> bcd, std::size_t expectedBytes);
 
-// A scope EDGE frequency, which can be NEGATIVE.
-//
-// The IC-7300MK2's CI-V guide documents `0xF` in the 1 GHz digit — the high
-// nibble of the last byte — as a sign flag meaning the lower edge is negative.
-// That happens when a wide span sits near the bottom of the tuning range, so
-// the scope window extends below 0 Hz.
-//
-// decodeFreq() stays STRICT and rejects it, deliberately: an OPERATING
-// frequency is never negative, and a corrupt one that decodes to something
-// still retunes the radio — on transmit that is an out-of-band emission. Only
-// the scope decoder should reach for this variant.
+// A scope EDGE frequency, which can be NEGATIVE: the IC-7300MK2 CI-V guide uses
+// 0xF in the 1 GHz digit (high nibble of the last byte) as a sign flag when a
+// wide span extends below 0 Hz. decodeFreq() stays strict because an operating
+// frequency is never negative and a corrupt one would retune the radio; only the
+// scope decoder uses this variant.
 [[nodiscard]] std::optional<std::int64_t> decodeFreqSigned(std::span<const std::uint8_t> bcd);
 
 // A 0000..9999 value as two BCD bytes, big-endian. This is the shape of every
@@ -219,19 +182,10 @@ inline constexpr std::uint8_t kRxAntenna   = 0x12;
 // RIT / dTX. Icom calls transmit incremental tuning "dTX"; the operator-facing
 // name everywhere else is XIT, and they are the same control.
 inline constexpr std::uint8_t kTuneOffset   = 0x21;
-// OPERATING MODE, DATA STATE AND IF FILTER — ALL THREE IN ONE FRAME.
-//
-// This is the command that tells USB from USB-D. Commands 01/04/06 carry only
-// the mode byte, and USB and USB-D share it (0x01), so nothing in that family
-// can express or report the DATA flag. 0x26 carries mode, DATA on/off and the
-// filter slot together, per VFO, and it is both readable and writable.
-//
-// ONE FRAME MATTERS, not just one command. Setting the three separately lets
-// them clobber each other: on a real radio an ordinary-mode write can clear
-// DATA, so a mode change followed by a DATA write is a race with the radio's
-// own side effects, and a filter change sent as a plain mode write drops the
-// operator straight out of DATA. 0x26 makes the three a single transaction the
-// radio applies or refuses as a unit.
+// 0x26: operating mode, DATA flag and IF filter slot in ONE frame, per VFO,
+// readable and writable. It is the only command that distinguishes USB from
+// USB-D (01/04/06 carry only the shared mode byte). Send the three together: as
+// separate writes, an ordinary mode write can clear DATA on the radio.
 inline constexpr std::uint8_t kVfoMode      = 0x26;
 }  // namespace cmd
 
@@ -486,25 +440,12 @@ struct VfoModeState {
     int filter = 0;
 };
 
-// Filter selection. The IC-705 offers three fixed IF filters, not a continuous
-// passband, so a request in Hz can only SNAP. Returns 1, 2 or 3.
-//
-// The widths are the radio's own SSB defaults; the operator can redefine them
-// in the SET menu and we have no way to read the redefinition back. So this is
-// a best-effort mapping, and the honest consequence is that the passband the
-// UI shows must come from what the radio reports, never from what we asked for.
-//
-// MODE-DEPENDENT, and that is the whole point. The radio has three filter slots
-// and what each one MEANS changes with the mode: FIL1 is 3.0 kHz in SSB, 1.2 kHz
-// in CW, 9 kHz in AM and 15 kHz in FM. Snapping every mode against the SSB
-// thresholds — which this used to do — put every AM width on FIL1 and every CW
-// width on FIL3, so the operator had three buttons and one filter.
-//
-// Ladders from the IC-705's own defaults (hamlib rigs/icom/ic7300.c,
-// RIG_MODEL_IC705). The operator can redefine them in the SET menu and there is
-// no command to read the redefinition back, so this stays best-effort — and the
-// consequence is load-bearing: the passband the UI shows must come from what the
-// radio REPORTS after the change, never from the width we asked for.
+// Filter slot (1, 2 or 3) for a requested width; the radio has three fixed IF
+// slots, so a request in Hz can only SNAP. Mode-dependent: FIL1 is 3.0 kHz in
+// SSB, 1.2 kHz in CW, 9 kHz in AM, 15 kHz in FM. Ladders are the IC-705 defaults
+// (hamlib rigs/icom/ic7300.c, RIG_MODEL_IC705); the operator can redefine them
+// and there is no way to read that back, so the UI passband must come from what
+// the radio REPORTS after the change, never from the width requested.
 [[nodiscard]] int filterForWidthHz(const std::string& mode, int widthHz) noexcept;
 
 // The widths that mode's filter slots hold, NARROWEST FIRST — deliberately the
@@ -548,37 +489,18 @@ struct FilterPresetRecallPlan {
     std::uint8_t to, const std::string& ladderMode, CivMode wireMode,
     bool dataMode, int presetId, bool useVfoMode);
 
-// ---------------------------------------------------------------------------
-// IF filter WIDTH (1A 03) — the actual passband, not the slot that holds it
-// ---------------------------------------------------------------------------
-//
-// THREE DIFFERENT THINGS, AND THE BUG IS ALWAYS CONFLATING TWO OF THEM:
-//
-//   * the SLOT      — FIL1/FIL2/FIL3, chosen with 0x26 (or 0x06). Three
-//                     buttons. Says nothing about how wide any of them is.
-//   * the WIDTH     — 1A 03, the Hz the SELECTED slot is currently defined as.
-//                     The operator can redefine it from the front panel and
-//                     from here, per mode, and the radio remembers it.
-//   * the PBT SHIFT — 14 07 / 14 08, where that width sits relative to the
-//                     carrier, and how much of it is cut away from the inside.
-//
-// Everything before this read the slot and INFERRED the width from a table of
-// factory defaults. That is right on a radio nobody has touched and wrong on
-// every other one: an operator who redefined FIL1 to 2.8 kHz got a passband
-// drawn at 3.0 kHz, a filter button labelled 3.0k, and no way to tell.
-//
-// The width codes come straight from the guides (identical on IC-705 and
-// IC-7300MK2, and on every current Icom):
-//
-//   SSB / CW        codes 00..09 -> 50..500 Hz (50 Hz),  10..40 -> 600..3600 Hz (100 Hz)
-//   RTTY            codes 00..09 -> 50..500 Hz (50 Hz),  10..31 -> 600..2700 Hz (100 Hz)
-//   AM              codes 00..49 -> 200..10000 Hz (200 Hz)
-//   FM / DV / WFM   NO SETTABLE WIDTH — three fixed slots, 1A 03 does not apply
-//
-// NOTE THE GAP between code 09 (500 Hz) and code 10 (600 Hz): 550 Hz is not a
-// width this radio has. wfview decodes code 10 as 550 Hz because its branch is
-// `code <= 10`; that off-by-one is why the tables here are generated from ONE
-// function and the encoder searches it rather than inverting it by arithmetic.
+// IF filter WIDTH (1A 03). Three distinct things, never conflate them:
+//   * SLOT      — FIL1/2/3, chosen with 0x26 (or 0x06).
+//   * WIDTH     — 1A 03, the Hz the selected slot is currently defined as
+//                 (operator-redefinable, per mode, remembered by the radio).
+//   * PBT SHIFT — 14 07 / 14 08, position and inside cut of that width.
+// Width codes (identical on IC-705, IC-7300MK2 and current Icoms):
+//   SSB / CW        00..09 -> 50..500 Hz (50 Hz),  10..40 -> 600..3600 Hz (100 Hz)
+//   RTTY            00..09 -> 50..500 Hz (50 Hz),  10..31 -> 600..2700 Hz (100 Hz)
+//   AM              00..49 -> 200..10000 Hz (200 Hz)
+//   FM / DV / WFM   no settable width; 1A 03 does not apply
+// There is no 550 Hz code (wfview's `code <= 10` branch gets this wrong), so the
+// tables come from ONE function and the encoder searches it instead of inverting.
 
 // Which of the three code tables a mode uses. Fixed means the mode has no
 // settable width at all.
@@ -644,23 +566,13 @@ struct PassbandEdges {
 [[nodiscard]] PassbandEdges passbandFromWidthAndPbt(int centreHz, int widthHz,
                                                      int innerCode, int outerCode) noexcept;
 
-// Where this mode's passband is CENTRED relative to the carrier, signed.
-//
-// NOT the low edge. An Icom narrows and widens its SSB filter symmetrically
-// about a fixed centre — which is why the radio's own scope offers "Filter
-// Center" and "Carrier Point" as two different things to centre the display on
-// (1A 05 01 39 on the IC-7300MK2). Pinning the low edge at 300 Hz instead, as
-// this backend used to, is right at exactly one width (2.4 kHz, where the two
-// models agree) and wrong at every other: at 1.8 kHz it drew 300..2100 where
-// the radio was actually passing 600..2400.
-//
-// `widthHz` is needed for the conservative RTTY fallback: the radio's actual
-// mark frequency is configurable (SET 0050) and is not modeled yet, so RTTY
-// retains the legacy 150 Hz carrier-side edge instead of inventing a mark.
-//
-// 1500 Hz for SSB is the figure wfview uses for every Icom
-// (receiverwidget.cpp, manufIcom). CW is centred on the pitch, and AetherSDR's
-// slice frequency in CW already IS the pitch, so its centre is zero here.
+// Signed CENTRE of this mode's passband relative to the carrier — not the low
+// edge: Icom SSB filters narrow and widen symmetrically about a fixed centre
+// (cf. "Filter Center" vs "Carrier Point", 1A 05 01 39 on the IC-7300MK2).
+// SSB centre is 1500 Hz, as wfview uses for every Icom (receiverwidget.cpp).
+// CW is 0 because the slice frequency in CW already is the pitch. RTTY keeps a
+// 150 Hz carrier-side edge (needs `widthHz`); the mark frequency (SET 0050) is
+// configurable and not modeled yet.
 [[nodiscard]] int passbandCentreHz(const std::string& mode, int widthHz) noexcept;
 
 // ---------------------------------------------------------------------------
@@ -773,18 +685,9 @@ inline constexpr std::array<int, 8> kScopeSpansHz{
 };
 [[nodiscard]] int nearestScopeSpanHz(int requestedHz) noexcept;
 
-// The span one detent away from `spanHz`, in the given direction (-1 narrower,
-// +1 wider). Clamps at the ends of the table rather than wrapping.
-//
-// WHY THIS EXISTS, because "snap to nearest" looks like it should be enough and
-// is not. The spans above are spaced by ratios of 2 and 2.5, while the zoom
-// buttons scale the view by 1.5. Multiplying a span by 1.5 therefore NEVER
-// reaches the midpoint of the gap to the next one up, so nearest-snapping a
-// zoom-out request always returns the span it started from. Measured across the
-// whole table, zoom-out was inert at all eight spans and zoom-in worked at
-// seven — an asymmetry that reads as "zoom is broken" rather than "zoom is
-// quantised", and which no amount of clicking can escape because the view is
-// re-seeded from the radio's own sweep 30 times a second.
+// The span one detent away from `spanHz` (-1 narrower, +1 wider), clamped at the
+// table ends. Needed because the spans step by ratios of 2 and 2.5 while zoom
+// scales by 1.5, so nearest-snapping a zoom-out always returns the starting span.
 [[nodiscard]] int adjacentScopeSpanHz(int spanHz, int direction) noexcept;
 
 }  // namespace AetherSDR::icom

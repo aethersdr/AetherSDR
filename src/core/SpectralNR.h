@@ -32,7 +32,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include <atomic>
 #include <cstdint>
 #include <functional>
-#include <mutex>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -42,16 +42,11 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 namespace AetherSDR {
 
-// Client-side spectral noise reduction using the WDSP Gaussian/Gamma speech
-// estimators with WDSP OSMS, MMSE, or non-stationary noise-floor tracking.
-// Derived from WDSP NR2 (emnr.c) by Warren Pratt, NR0V.
-//
-// Uses FFTW3 for FFT computation (with wisdom file for optimised plans)
-// when available; falls back to a built-in radix-2 FFT otherwise.
-//
-// Processes mono float32 audio at 24 kHz.  For stereo Flex speaker audio,
-// processStereoSharedMask() computes one mono NR mask and applies it to both
-// original channels so radio-side balance survives client NR.
+// Client-side spectral NR with WDSP Gaussian/Gamma speech estimators and OSMS,
+// MMSE or non-stationary noise tracking, derived from WDSP NR2 (emnr.c, Warren
+// Pratt NR0V). FFTW3 (with wisdom) when available, else built-in radix-2.
+// Mono float32 at 24 kHz; processStereo() keeps a separate noise estimate and
+// mask per channel (diversity L/R has two noise floors).
 
 class SpectralNR {
 public:
@@ -68,12 +63,13 @@ public:
     void process(const float* input, float* output, int numSamples);
 
     // Feed interleaved stereo float32 samples in, get interleaved stereo
-    // float32 out.  The NR estimate/mask is computed from (L+R)/2, then the
-    // same spectral gain is applied to each original channel.
+    // float32 out. The left channel runs through this instance and the right
+    // through a second one with the same geometry, so each channel has its own
+    // noise estimate and mask. Every setter and reset reaches both; the
+    // getters and reset counters report this (left) instance.
     // Output buffer must be at least numFrames * 2 samples long.
-    // Use only one process entry point for an instance between resets; the mono
-    // and stereo paths share ring cursors but maintain different OLA buffers.
-    void processStereoSharedMask(const float* input, float* output, int numFrames);
+    // Use only one process entry point for an instance between resets.
+    void processStereo(const float* input, float* output, int numFrames);
 
     // Reset all internal state (call when toggling on or stream restarts).
     void reset();
@@ -113,7 +109,7 @@ public:
     int  npeMethod() const      { return m_npeMethod.load(); }
 
     // AE filter: artifact elimination post-processing
-    void setAeFilter(bool on)   { m_aeFilter.store(on); }
+    void setAeFilter(bool on);
     bool aeFilter() const       { return m_aeFilter.load(); }
 
     // ── Psychoacoustic post-processing (WDSP emnr.c's post2 stage) ─────────
@@ -125,7 +121,7 @@ public:
     // over a tapered low band: partly the GENUINE residual this reduction just
     // removed, partly synthetic white, with the level following the signal's
     // own peak. Off by default, exactly as WDSP ships it.
-    void setPost2Run(bool on)        { m_post2Run.store(on); }
+    void setPost2Run(bool on);
     bool post2Run() const            { return m_post2Run.load(); }
 
     // Blend between the removed residual (0.0) and synthetic white (1.0).
@@ -155,7 +151,10 @@ public:
     int post2BinLimit() const;
     bool usesLegacyGainMethods() const { return m_useLegacyGainMethods; }
 #ifdef HAVE_FFTW3
-    bool hasPlanFailed() const { return m_planFailed; }
+    bool hasPlanFailed() const
+    {
+        return m_planFailed || (m_rightChannel && m_rightChannel->m_planFailed);
+    }
 #else
     bool hasPlanFailed() const { return false; }
 #endif
@@ -177,10 +176,20 @@ public:
                                        WisdomCancelCb shouldCancel = nullptr);
 
 private:
-    // FFTW plan creation/destruction is NOT thread-safe. This mutex guards
-    // all fftw_plan_*, fftw_destroy_plan, and wisdom import/export calls.
-    // fftw_execute() is thread-safe and does not need the lock. (#467)
-    static std::mutex s_fftwMutex;
+    // FFTW planning and the fftw_malloc/free pairing (#5424) are not thread-safe;
+    // every .cpp site that plans, allocates, frees or moves wisdom takes the
+    // process-wide AetherSDR::fftwPlannerLock() (core/dsp/FftwPlannerLock.h,
+    // #5895). fftw_execute() needs no lock.
+
+    SpectralNR(int fftSize, int sampleRate, int overlap,
+               bool useLegacyGainMethods, bool withRightChannel);
+
+    // The right channel of processStereo(). Null on that instance itself.
+    std::unique_ptr<SpectralNR> m_rightChannel;
+    // De-interleaved staging for processStereo(), at most one hop per channel.
+    std::vector<float> m_stereoIn[2];
+    std::vector<float> m_stereoOut[2];
+
     // FFT parameters
     int m_fftSize;
     int m_overlap;          // supported values: 2 (50%) or 4 (75%)
@@ -200,10 +209,6 @@ private:
     int m_outWritePos{0};
     int m_outReadPos{0};
     int m_outputAvailable{0};           // finalized samples queued for callers
-    std::vector<double> m_stereoInAccumL;
-    std::vector<double> m_stereoInAccumR;
-    std::vector<double> m_stereoOutAccumL;
-    std::vector<double> m_stereoOutAccumR;
 
     // Window
     std::vector<double> m_window;
@@ -360,7 +365,6 @@ private:
     void processFrame();
     bool updateMaskFromCurrentFrame();
     void synthesizeCurrentFrequencyBinsWithMask();
-    void synthesizeCurrentFrameWithMask();
 
     // Noise estimation (keeps every estimator warm, then selects one)
     void estimateNoise();
@@ -384,10 +388,6 @@ private:
     // receiver seeded identically would inject correlated noise across them.
     unsigned int m_post2RngState{0};
     double m_post2PeakHold{0.0};
-    // The peak follower must advance ONCE per hop. The stereo shared-mask path
-    // calls synthesizeCurrentFrameWithMask() twice per hop, once per channel,
-    // which decayed it twice and halved the effective time constant.
-    bool m_post2FollowerAdvanced{false};
     // Raised-cosine taper, rebuilt only when the band limit moves, rather than
     // a std::cos per bin per hop on the audio thread (upstream: post2_calc_w).
     std::vector<double> m_post2Window;

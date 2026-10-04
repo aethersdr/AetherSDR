@@ -1,18 +1,7 @@
-// MainWindow_DigitalModes.cpp — digital-mode subsystems of MainWindow.
-//
-// Part of the #3351 monolith decomposition (Phase 1e). Holds the
-// activation/deactivation and routing for every digital-mode surface:
-//
-//   • RADE digital voice: activateRADE / deactivateRADE / slice-mode watch
-//   • Classic FreeDV (FDVU/FDVL): display activation + meter routing +
-//     the FreeDV Reporter window and spot reporting
-//   • DAX: startDax / stopDax / per-slice channel wiring
-//   • AX.25 / AetherModem: decode dialog + KISS TNC startup
-//   • RTTY: decoder output routing
-//   • WFM software FM demod: activateWFM / deactivateWFM with NCO-Doppler
-//     tracking + reflectWfmButtons UI state sync (DAX IQ input, #3407)
-//
-// Pure code motion from MainWindow.cpp — same class, no header changes.
+// MainWindow_DigitalModes.cpp — digital-mode subsystems: RADE, classic FreeDV
+// (FDVU/FDVL) display/meters/Reporter, DAX start/stop and per-slice channels,
+// AX.25 / AetherModem with KISS TNC, RTTY decoder routing, WFM software demod
+// with NCO-Doppler tracking (DAX IQ, #3407).
 
 #include "MainWindow.h"
 #include "DStarAvailabilityGate.h"
@@ -63,31 +52,55 @@
 
 namespace AetherSDR {
 
-#ifdef HAVE_DEEPFIST
-void MainWindow::refreshCwRxContext()
+namespace {
+struct DecoderInputHint {
+    QString text;
+    QString reason;
+};
+
+DecoderInputHint decoderInputHint(DecoderAudioModel::RouteStatus status)
 {
-    SliceModel* slice = activeSlice();
-    if (slice == m_cwRxSlice) { return; }
-    disconnect(m_cwRxFrequencyConnection);
-    disconnect(m_cwRxModeConnection);
-    m_cwRxSlice = slice;
-    m_cwDecoder.reset();
-    m_cwCallsignSpotter.clear();
-    if (slice) {
-        // Stream continuity across a retune is a DeepFist concern. ggmorse's
-        // reset() is a worker-thread join plus restart (CwDecoder::stop() is
-        // "A JOIN, never a timeout"), which is far too costly to run on every
-        // frequencyChanged emission while the operator spins the tuning knob.
-        m_cwRxFrequencyConnection = connect(slice, &SliceModel::frequencyChanged,
-            this, [this] {
-                if (CwDecodeSettings::deepFistSelected()) { m_cwDecoder.reset(); }
-            });
-        m_cwRxModeConnection = connect(slice, &SliceModel::modeChanged,
-            this, [this] {
-                if (CwDecodeSettings::deepFistSelected()) { m_cwDecoder.reset(); }
-            });
+    using Status = DecoderAudioModel::RouteStatus;
+    if (status == Status::SharedRxAudio) {
+        return {QCoreApplication::translate("MainWindow", "RX: shared audio"),
+                QCoreApplication::translate("MainWindow",
+                    "Decoding the shared receive audio, which mixes every audible slice and "
+                    "follows speaker gain and mute. Assign a DAX RX channel (1-8) to the "
+                    "selected slice to decode it on its own.")};
+    }
+    if (status == Status::DaxTransportUnavailable) {
+        return {QCoreApplication::translate("MainWindow", "RX: unavailable"),
+                QCoreApplication::translate("MainWindow",
+                    "No receive audio: the selected slice's DAX transport is unavailable.")};
+    }
+    return {};
+}
+} // namespace
+
+void MainWindow::refreshCwInputStatus()
+{
+    if (m_cwDecoderApplet && m_cwAudio) {
+        const DecoderInputHint hint = decoderInputHint(m_cwAudio->routeStatus());
+        m_cwDecoderApplet->setCwInputHint(hint.text, hint.reason);
     }
 }
+
+void MainWindow::refreshRttyInputStatus()
+{
+    if (m_rttyDecoderApplet && m_rttyAudio) {
+        const DecoderInputHint hint = decoderInputHint(m_rttyAudio->routeStatus());
+        m_rttyDecoderApplet->setRttyInputHint(hint.text, hint.reason);
+    }
+}
+
+void MainWindow::stopCwRx()
+{
+    if (m_cwAudio) { m_cwAudio->setEnabled(false); }
+    m_cwDecoder.stop();
+}
+
+
+#ifdef HAVE_DEEPFIST
 void MainWindow::selectCwRxBackend(const QString& backend)
 {
     if (!m_cwDecoder.selectBackend(backend)) { return; }
@@ -151,7 +164,7 @@ void MainWindow::refreshCwRxBackend()
         connect(m_cwDecoderApplet, &PanadapterApplet::cwModelActionRequested,
             this, &MainWindow::cwRxModelAction, Qt::UniqueConnection);
         connect(m_cwDecoderApplet, &PanadapterApplet::cwPanelCloseRequested,
-            &m_cwDecoder, &CwRxModel::stop, Qt::UniqueConnection);
+            this, &MainWindow::stopCwRx, Qt::UniqueConnection);
     }
     refreshCwRxStatus();
 }
@@ -329,6 +342,7 @@ void MainWindow::routeRttyDecoderOutput()
         connect(m_rttyDecoderApplet, &PanadapterApplet::rttyReverseChanged,
                 &m_rttyDecoder, &RttyDecoder::setReversePolarity);
     }
+    refreshRttyInputStatus();
 }
 
 void MainWindow::onRttyPanelCloseRequested()
@@ -346,19 +360,16 @@ void MainWindow::onRttyPanelCloseRequested()
 void MainWindow::refreshRttyDecodeState()
 {
     auto* s = activeSlice();
-    // Only auto-activate for explicit RTTY mode.  DIGL is a general LSB-data
-    // mode used for PSK31, FT8, SSTV, etc. — showing a Baudot decoder on
-    // those signals would be confusing.  Users who do FSK on DIGL can open
-    // the panel manually via the slice context menu (future work).
-    //
-    // Mode availability and operator intent are separate gates. The CW
-    // decoder also has enable gates, but does not persist pane dismissal.
-    // an RTTY slice makes the decoder *available*, the persisted enable
-    // flag decides whether the operator actually wants it (#5353).  The
-    // flag defaults to True, so a session that never closes the pane
-    // behaves as before.
+    // Auto-activate only for RTTY mode; DIGL carries PSK31, FT8, SSTV etc.
+    // Mode makes the decoder available; the persisted enable flag (default
+    // True) records whether the operator wants it (#5353).
     const bool isRtty = s && s->mode() == "RTTY";
     const bool wanted = isRtty && RttyDecodeSettings::enabled();
+
+    if (m_rttyAudio) {
+        m_rttyAudio->setSlice(s);
+        m_rttyAudio->setEnabled(wanted && m_rttyDecoderApplet);
+    }
 
     setDecoderPanelVisibleOnly(m_rttyDecoderApplet, wanted,
                                &PanadapterApplet::setRttyPanelVisible);
@@ -398,24 +409,11 @@ void MainWindow::activateRADE(int sliceId)
     auto* s = m_radioModel.slice(sliceId);
     if (!s) return;
 
-    // RADE's receive path is DAX channel audio (PanadapterStream::daxPcmReady),
-    // and only a Flex backend owns a PanadapterStream — RadioModel leaves
-    // panStream() null for every other family. The connect() further down
-    // dereferenced it bare, so selecting RADE on a Hermes-Lite 2 was a SEGFAULT,
-    // not a decline. Same shape as the null-deref that crashed every HL2 connect
-    // three seconds in (docs/HERMES.md §6 gap 1) and as the startDax() guard, which
-    // this deliberately mirrors.
-    //
-    // Checked HERE rather than at the connect: everything between this point and
-    // there mutates real station state — it moves the TX-slice badge, installs a
-    // PTT-off hook on TransmitModel, calls setRadeMode() and opens mic capture.
-    // Guarding only the connect would leave a radio that is half in RADE mode
-    // with no receive path and an intercepted unkey, which is worse than the
-    // crash because it looks like it worked.
-    //
-    // Declining is the honest answer, not merely the safe one. A backend that
-    // demodulates in-process could carry RADE over the seam one day, but nothing
-    // routes modem audio there today, so there is no path to take.
+    // RADE receives DAX channel audio (PanadapterStream::daxPcmReady), and only
+    // a Flex backend has a PanadapterStream. Decline before anything below
+    // mutates station state (TX badge, PTT-off hook, setRadeMode(), mic
+    // capture), which would otherwise leave a half-RADE radio. Mirrors
+    // startDax()'s guard.
     if (!m_radioModel.panStream()) {
         qCWarning(lcRade) << "MainWindow: RADE needs DAX audio, which this radio"
                           << "does not provide — refusing to activate on slice"
@@ -1158,21 +1156,9 @@ void MainWindow::showFreeDvReporter()
                 return;
             applyTuneRequest(sl, freqMhz, TuneIntent::AbsoluteJump, "freedv-reporter");
 #ifdef HAVE_RADE
-            // Without HAVE_RADE the build can't run the modem, so there is
-            // no activateRADE() to call — same reasoning as the FreeDV
-            // spot-click path in MainWindow_Wiring.cpp (#1846).
-            //
-            // Only a family with a PanadapterStream (Flex) can actually run
-            // RADE; activateRADE() otherwise declines with a blocking
-            // QMessageBox::warning, which would pop on every double-click
-            // here even though the gesture has nothing to do with RADE.
-            // Skip the call on those families instead of surfacing that
-            // modal (#4125 review).
-            //
-            // Reuse the same auto-switch gate DX Cluster uses for its
-            // CW/SSB mode-follow (#2298), so one setting controls "does
-            // double-click-to-tune also change what the radio is doing"
-            // everywhere (#4125).
+            // activateRADE() needs HAVE_RADE and a PanadapterStream (Flex);
+            // elsewhere it would pop a blocking warning on every double-click, so
+            // skip it. Uses the DX Cluster SpotAutoSwitchMode gate (#2298, #4125).
             if (m_radioModel.panStream()
                     && AppSettings::instance().value("SpotAutoSwitchMode", "True").toString() == "True")
                 activateRADE(sl->sliceId());
@@ -1431,24 +1417,13 @@ void MainWindow::wireDaxSlice(SliceModel* slice)
     }));
 }
 
-// Handle a slice's DAX channel transitioning. daxChannelChanged only fires on
-// an actual value change (SliceModel guards equality), and arrives from both
-// the local UI setter and the radio status echo.
-//
-// #3305/#4009: this reconciler translates slice→channel transitions into
-// refcounted acquire/release on PanadapterStream and NOTHING ELSE. It must
-// never send commands itself: the radio answers a re-assert of a live binding
-// with a transient unbind/rebind dax=0/dax=<ch> status pair
-// (state-machines.md §7.4), so any command emitted from this echo path feeds
-// a self-sustaining storm — the ~12-15 Hz `slice set dax` loop of #4009 and
-// the create/remove churn of #3626. Acquire/release are idempotent and the
-// manager's grace window absorbs the transient pair, so this path is
-// loop-free by construction. The #1439 dax_clients re-assert still exists in
-// RadioModel::handleDaxRxStreamRegistry; it fires from the dax_rx status echo,
-// but a per-stream one-shot (m_nudgedDaxStreams, cleared only on `stream
-// remove`) gates it to fire at most once per create so the radio's own
-// transient unbind echo cannot re-trigger it — see #4383 (which reopened #4009
-// because that gate was originally missing).
+// Reconcile a slice's DAX channel change (fires on real changes from both the
+// UI setter and the radio echo) into refcounted acquire/release on
+// PanadapterStream, and NOTHING ELSE (#3305, #4009). The radio answers a
+// re-assert with a transient dax=0/dax=<ch> pair (state-machines.md §7.4), so
+// sending commands from this echo path loops. The #1439 re-assert in
+// RadioModel::handleDaxRxStreamRegistry is one-shot per stream via
+// m_nudgedDaxStreams (#4383).
 void MainWindow::onDaxChannelChanged(SliceModel* slice, int newCh)
 {
     if (!slice || !m_daxBridge) return;
@@ -1494,6 +1469,17 @@ void MainWindow::onDaxChannelChanged(SliceModel* slice, int newCh)
 void MainWindow::activateWFM(int sliceId)
 {
     if (m_wfmSliceId == sliceId) return;
+    // WFM demodulates the pan's DAX IQ stream, which only a radio with a DAX
+    // plane produces; on any other the demodulator starts on a stream nobody
+    // feeds and its create command is dropped. The DAX panel holding the
+    // button is hidden there, but refuse here too -- every entry point asks
+    // the same question -- and say so instead of lighting a dead button.
+    if (!m_radioModel.hasDaxStreams()) {
+        qCWarning(lcDevices) << "WFM refused: this radio has no DAX IQ stream";
+        showUnsupportedControlNotice();
+        reflectWfmButtons(false, sliceId);   // un-stick the button that triggered us
+        return;
+    }
     deactivateWFM();
 
     m_wfmCooldown = true;

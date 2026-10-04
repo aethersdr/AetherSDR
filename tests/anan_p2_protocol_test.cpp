@@ -6,12 +6,15 @@
 // big-endian IQ decode. Pure protocol -- no sockets, no hardware.
 
 #include "core/backends/anan/P2Protocol.h"
+#include "core/backends/anan/AnanSliceAudio.h"
+#include "core/backends/anan/AnanSpeakerPacing.h"
 
 #include <array>
 #include <cmath>
 #include <complex>
 #include <cstdint>
 #include <cstdio>
+#include <limits>
 #include <span>
 #include <string>
 #include <vector>
@@ -213,6 +216,25 @@ int main()
               "bypassAdc0Filters=false: ANT1 stays set, HF Bypass clears");
         check(readU16(hpNoBypass, 1430) == 0,
               "bypassAdc1Filters=false: Alex1 stays zero");
+
+        // Step attenuators (pp.34,36): byte 1443 = ADC0, byte 1442 = ADC1,
+        // 0-31 dB. Default is none; values land on the right ADC's byte and
+        // are clamped to the spec range at both ends.
+        check(hp[1443] == 0 && hp[1442] == 0,
+              "default: both step attenuators at 0 dB");
+        const auto hpAtt = buildHighPriority(true, word, true, true, 12, 20);
+        check(hpAtt[1443] == 12, "adc0AttenuationDb=12 -> byte 1443 = 12");
+        check(hpAtt[1442] == 20, "adc1AttenuationDb=20 -> byte 1442 = 20");
+        const auto hpClamp = buildHighPriority(true, word, true, true, 40, -5);
+        check(hpClamp[1443] == 31, "attenuation above 31 dB clamps to 31");
+        check(hpClamp[1442] == 0, "negative attenuation clamps to 0");
+        check(readU32(hpAtt, 1432) == readU32(hp, 1432)
+                  && readU16(hpAtt, 1430) == readU16(hp, 1430)
+                  && hpAtt[4] == hp[4],
+              "attenuation touches no other field (Alex0/Alex1/run unchanged)");
+        const std::array<std::uint32_t, 1> oneWord{word};
+        check(buildHighPriority(true, oneWord, true, true, 12, 20) == hpAtt,
+              "multi-DDC overload carries the attenuators identically");
     }
 
     // ---- Multi-DDC encode (DDC-Specific rows at 17+6n, HP words at 9+4n) ----
@@ -428,6 +450,328 @@ int main()
         check(sample.real() == 1.0f, "0x7FFFFF normalises to exactly +1.0");
         check(sample.imag() < -1.0f && sample.imag() > -1.0001f,
               "0x800000 normalises to just past -1.0 (two's-complement asymmetry)");
+    }
+
+    // ---- DDC Audio, PC -> radio: buildSpeakerAudio ----
+    {
+        std::vector<std::int16_t> full(kSpeakerFramesPerPacket * kSpeakerChannels);
+        for (std::size_t i = 0; i < full.size(); ++i) {
+            full[i] = static_cast<std::int16_t>(i);
+        }
+        const auto pkt = buildSpeakerAudio(0x01020304u, full);
+        check(pkt.size() == kSpeakerPacketBytes, "speaker packet is exactly 260 bytes");
+        check(pkt[0] == 0x01 && pkt[1] == 0x02 && pkt[2] == 0x03 && pkt[3] == 0x04,
+              "sequence is big-endian in bytes 0-3");
+        // Sample 1 is the value 1, so its two bytes are 0x00,0x01 -- high byte
+        // first. A little-endian encoder passes a symmetric-value test and fails
+        // this one, which is the whole point of using an asymmetric value.
+        check(pkt[4] == 0x00 && pkt[5] == 0x00, "sample 0 == 0");
+        check(pkt[6] == 0x00 && pkt[7] == 0x01, "sample 1 is big-endian 0x0001");
+        check(pkt[8] == 0x00 && pkt[9] == 0x02, "sample 2 is big-endian 0x0002");
+        // Last sample is index 127 == 0x007F, at bytes 258-259.
+        check(pkt[258] == 0x00 && pkt[259] == 0x7F, "the 128th sample lands in the last two bytes");
+
+        // Negative samples: two's complement on the wire, not a sign-shifted
+        // value. -2 is 0xFFFE; an encoder that shifted the signed type right
+        // would be implementation-defined here.
+        const std::array<std::int16_t, 4> neg{-1, -2, -32768, 32767};
+        const auto negPkt = buildSpeakerAudio(0, neg);
+        check(negPkt[4] == 0xFF && negPkt[5] == 0xFF, "-1 encodes as 0xFFFF");
+        check(negPkt[6] == 0xFF && negPkt[7] == 0xFE, "-2 encodes as 0xFFFE");
+        check(negPkt[8] == 0x80 && negPkt[9] == 0x00, "-32768 encodes as 0x8000");
+        check(negPkt[10] == 0x7F && negPkt[11] == 0xFF, "+32767 encodes as 0x7FFF");
+        // Everything past a short input is silence, not stale content.
+        bool tailSilent = true;
+        for (std::size_t i = 12; i < kSpeakerPacketBytes; ++i) {
+            if (negPkt[i] != 0) tailSilent = false;
+        }
+        check(tailSilent, "a short input zero-fills the rest of the packet");
+
+        // Excess is ignored rather than overrunning the packet.
+        std::vector<std::int16_t> tooMany(kSpeakerFramesPerPacket * kSpeakerChannels + 64, 9);
+        const auto clipped = buildSpeakerAudio(7, tooMany);
+        check(clipped.size() == kSpeakerPacketBytes, "excess input still yields one packet");
+        check(clipped[258] == 0x00 && clipped[259] == 0x09, "the packet fills to its last byte");
+    }
+
+    // ---- High Priority Status: the two speaker fields ----
+    {
+        std::vector<std::uint8_t> pkt(kHighPriorityStatusBytes, 0);
+        pkt[0] = 0x00; pkt[1] = 0x00; pkt[2] = 0x01; pkt[3] = 0x02;  // seq 258
+        pkt[30] = 0b0000'1000;            // speaker underflow, bit 3
+        pkt[37] = 0x01; pkt[38] = 0x40;   // level 320, big-endian
+
+        const auto st = parseHighPriorityStatus(pkt);
+        check(st.has_value(), "a 60-byte status packet parses");
+        if (st) {
+            check(st->seq == 258, "the sequence is big-endian");
+            check(st->speakerUnderflow, "byte 30 bit 3 is the speaker underflow");
+            check(st->speakerFifoLevel == 320, "bytes 37-38 are the level, big-endian");
+        }
+
+        // Bit 3 only. Bit 2 is the DUC's underflow and must not read as ours --
+        // that is the mistake the bitmask exists to prevent.
+        pkt[30] = 0b0000'0100;
+        const auto duc = parseHighPriorityStatus(pkt);
+        check(duc.has_value() && !duc->speakerUnderflow,
+              "the DUC's underflow bit is not read as the speaker's");
+        pkt[30] = 0b1111'0111;   // every bit BUT ours
+        const auto others = parseHighPriorityStatus(pkt);
+        check(others.has_value() && !others->speakerUnderflow,
+              "no other overflow bit reads as the speaker's");
+        pkt[30] = 0b1111'1111;
+        const auto all = parseHighPriorityStatus(pkt);
+        check(all.has_value() && all->speakerUnderflow,
+              "our bit is still seen when every other one is set too");
+
+        // Exact length, like parseDdcFrame: a different length is a different
+        // packet, not a truncated status. Bounds are checked before indexing, so a
+        // short buffer must not be read past (Principle VII).
+        std::vector<std::uint8_t> shortPkt(kHighPriorityStatusBytes - 1, 0);
+        check(!parseHighPriorityStatus(shortPkt).has_value(),
+              "a 59-byte datagram is not a status packet");
+        std::vector<std::uint8_t> longPkt(kHighPriorityStatusBytes + 1, 0);
+        check(!parseHighPriorityStatus(longPkt).has_value(),
+              "a 61-byte datagram is not a status packet");
+        check(!parseHighPriorityStatus(std::span<const std::uint8_t>{}).has_value(),
+              "an empty datagram is not a status packet");
+
+        // A Discovery reply is also 60 bytes. It parses as BOTH, which is why the
+        // caller must try the reply first -- pinned here so the ordering
+        // requirement is visible from the test, not only from a comment.
+        std::vector<std::uint8_t> reply(kHighPriorityStatusBytes, 0);
+        reply[4] = 0x02;
+        check(parseDiscoveryReply(reply).has_value()
+              && parseHighPriorityStatus(reply).has_value(),
+              "a discovery reply satisfies both parsers, so reply-first ordering matters");
+    }
+
+    // ---- the receiver's audio stage ----
+    {
+        check(sliceAudioAmplitude(100) == 1.0f, "gain 100 is unity");
+        check(sliceAudioAmplitude(0) == 0.0f, "gain 0 is exactly silent, not -40 dB");
+        check(sliceAudioAmplitude(150) == 1.0f, "gain above 100 clamps to unity");
+        check(sliceAudioAmplitude(-5) == 0.0f, "gain below 0 clamps to silence");
+        // Midpoint is -20 dB by construction: 10^(0.05 * -20) == 0.1.
+        check(approx(sliceAudioAmplitude(50), 0.1f), "gain 50 is -20 dB");
+        // Monotonic, and NOT linear -- a linear law would put 50 at 0.5. This is
+        // the check that fails if the dB curve is replaced by a linear one.
+        check(sliceAudioAmplitude(50) < 0.2f, "the law is dB, not linear");
+        check(sliceAudioAmplitude(25) < sliceAudioAmplitude(50)
+              && sliceAudioAmplitude(50) < sliceAudioAmplitude(75),
+              "gain is monotonic across its range");
+
+        // Balance attenuates one side and never boosts the other.
+        check(sliceAudioLeftPanGain(50) == 1.0f && sliceAudioRightPanGain(50) == 1.0f,
+              "centred balance leaves both channels alone");
+        check(sliceAudioLeftPanGain(0) == 1.0f && sliceAudioRightPanGain(0) == 0.0f,
+              "hard left silences the right channel");
+        check(sliceAudioRightPanGain(100) == 1.0f && sliceAudioLeftPanGain(100) == 0.0f,
+              "hard right silences the left channel");
+        check(sliceAudioLeftPanGain(75) <= 1.0f && sliceAudioRightPanGain(75) <= 1.0f,
+              "no balance setting boosts either channel above unity");
+
+        // Applied to a real block.
+        float block[8] = {1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f};
+        applySliceAudioInPlace(block, 4, true, 100, 50);
+        bool muted = true;
+        for (float v : block) { if (v != 0.0f) muted = false; }
+        check(muted, "mute zeroes every sample in the block");
+
+        float panned[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+        applySliceAudioInPlace(panned, 2, false, 100, 0);
+        check(panned[0] == 1.0f && panned[1] == 0.0f && panned[2] == 1.0f && panned[3] == 0.0f,
+              "hard-left balance keeps L and silences R, frame by frame");
+
+        float scaled[2] = {1.0f, 1.0f};
+        applySliceAudioInPlace(scaled, 1, false, 50, 50);
+        check(approx(scaled[0], 0.1f) && approx(scaled[1], 0.1f),
+              "gain 50 scales both channels by -20 dB");
+
+        // Mute wins over a live gain, and does not consume it.
+        float both[2] = {1.0f, 1.0f};
+        applySliceAudioInPlace(both, 1, true, 50, 0);
+        check(both[0] == 0.0f && both[1] == 0.0f, "mute wins over gain and balance");
+
+        // Quantising to the wire format. NaN is the case a clamp cannot catch;
+        // infinity pins the predicate as isfinite rather than isnan.
+        check(sliceAudioToInt16(0.0f) == 0, "silence quantises to zero");
+        check(sliceAudioToInt16(1.0f) == 32767, "full scale is the positive peak");
+        check(sliceAudioToInt16(-1.0f) == -32767, "negative full scale mirrors it");
+        check(sliceAudioToInt16(2.0f) == 32767, "an overshoot clamps, not wraps");
+        check(sliceAudioToInt16(-2.0f) == -32767, "and so does a negative overshoot");
+        check(sliceAudioToInt16(std::numeric_limits<float>::quiet_NaN()) == 0,
+              "a NaN quantises to silence, not to undefined behaviour");
+        check(sliceAudioToInt16(std::numeric_limits<float>::infinity()) == 0,
+              "an infinity quantises to silence, not a full-scale click");
+        check(sliceAudioToInt16(-std::numeric_limits<float>::infinity()) == 0,
+              "including a negative infinity");
+
+        // Degenerate input must not walk off anything.
+        applySliceAudioInPlace(nullptr, 4, false, 50, 50);
+        float untouched[2] = {1.0f, -1.0f};
+        applySliceAudioInPlace(untouched, 0, false, 0, 0);
+        check(untouched[0] == 1.0f && untouched[1] == -1.0f,
+              "a zero-frame block is left alone");
+    }
+
+    // ---- speaker send pacing ----
+    {
+        SpeakerAudioPacer pacer;
+        check(pacer.estimatedFifoFrames() == 0.0, "a fresh pacer believes the FIFO is empty");
+        // Empty FIFO, plenty queued: release up to the target, not everything.
+        const int first = pacer.packetsToSend(100);
+        check(first > 0, "an empty FIFO releases packets");
+        // The target IS the burst bound -- see kTargetFifoFrames. A separate cap
+        // was removed because it could not bind, and the assertion that it did
+        // was removed with it.
+        check(first == 16, "an empty FIFO fills exactly to the sixteen-packet target");
+
+        // THE CHECK THE BENCH HAD TO FIND FOR US. The target must cover more than
+        // one drain tick's worth of audio, or the stream delivers less than real
+        // time and the radio plays a gap every few milliseconds. A 5 ms tick
+        // removes 5 * 48 = 240 frames; whole-packet truncation then releases
+        // floor(240/64) = 3 packets, 192 frames, so a target of only 240 frames
+        // can never catch up. This is stated as frames-per-tick rather than as a
+        // packet count so it stays true if the packet geometry changes.
+        {
+            constexpr double kDrainTickSeconds = 0.005;   // P2Client::kSpeakerDrainMs
+            constexpr double kFramesPerTick = kDrainTickSeconds * kSpeakerSampleRateHz;
+            check(SpeakerAudioPacer::kTargetFifoFrames > kFramesPerTick,
+                  "the target holds more than one drain tick drains");
+            // And by enough that truncation plus a late tick cannot empty it: two
+            // ticks is the margin, which four packets did not have and sixteen does.
+            check(SpeakerAudioPacer::kTargetFifoFrames >= 3.0 * kFramesPerTick,
+                  "the target has margin for a late tick, not just the nominal one");
+            // Releasing a full target must be worth at least one tick of real time,
+            // or no burst can ever restore the deficit a late tick created.
+            SpeakerAudioPacer fresh;
+            const double releasedFrames =
+                fresh.packetsToSend(1000) * static_cast<double>(kSpeakerFramesPerPacket);
+            check(releasedFrames > kFramesPerTick,
+                  "one burst delivers more audio than one tick consumes");
+
+            // AND AT LEAST ONE SOURCE BLOCK. Audio arrives in blocks, not
+            // samples: at the default 48 ksps DDC, WdspChannel's output block is
+            // 1024 * 24000/48000 = 512 frames of 24 kHz audio, which is 1024
+            // frames at the stream's rate. A target below one block cannot release
+            // a block before the next one arrives, so the queue grows to its cap
+            // and drops -- audible as garbled speech, and worst at the DEFAULT
+            // rate. Spelled out rather than hardcoded so the arithmetic is
+            // checkable against the DSP config.
+            constexpr double kWdspInputBlock = 1024.0;
+            constexpr double kDefaultDdcRate = 48000.0;
+            constexpr double kAudioRate = 24000.0;
+            constexpr double kSourceBlockFramesAtStreamRate =
+                (kWdspInputBlock * kAudioRate / kDefaultDdcRate)
+                * (static_cast<double>(kSpeakerSampleRateHz) / kAudioRate);
+            check(SpeakerAudioPacer::kTargetFifoFrames >= kSourceBlockFramesAtStreamRate,
+                  "the target holds at least one whole source block");
+        }
+
+        for (int i = 0; i < first; ++i) pacer.onPacketSent();
+        check(pacer.estimatedFifoFrames() == first * kSpeakerFramesPerPacket,
+              "each sent packet credits its own frames");
+        // At target with no time passed, nothing more may go.
+        check(pacer.packetsToSend(100) == 0, "a full FIFO releases nothing");
+
+        // One packet's worth of time drains one packet's worth of frames.
+        pacer.advance(static_cast<double>(kSpeakerFramesPerPacket) / kSpeakerSampleRateHz);
+        check(pacer.packetsToSend(100) == 1, "one packet interval makes room for one packet");
+
+        // Nothing queued, nothing sent, however much room there is.
+        check(pacer.packetsToSend(0) == 0, "an empty queue sends nothing");
+
+        // A long stall cannot bank negative depth and then over-release.
+        pacer.advance(10.0);
+        check(pacer.estimatedFifoFrames() == 0.0, "the estimate floors at empty");
+        check(pacer.packetsToSend(1000) == 16,
+              "recovery from a stall still respects the target, not a debt");
+
+        // Backwards or zero elapsed time is inert, not corrupting.
+        SpeakerAudioPacer p2;
+        p2.onPacketSent();
+        const double before = p2.estimatedFifoFrames();
+        p2.advance(0.0);
+        p2.advance(-1.0);
+        check(p2.estimatedFifoFrames() == before, "zero or negative elapsed time changes nothing");
+
+        p2.reset();
+        check(p2.estimatedFifoFrames() == 0.0, "reset clears the estimate for the next session");
+
+        // ---- catch-up: a backlog on OUR side must be recoverable ----
+        //
+        // THE G2 BENCH FOUND THIS. With only the target governing releases the
+        // queue settled at 26-45 packets of 64 and stayed there: in steady state
+        // the pacer releases exactly what time consumes, so a backlog picked up
+        // during the connect transient is never recovered. Nominal rate is
+        // break-even by definition.
+        SpeakerAudioPacer p3;
+        constexpr int kCap = 64;
+        check(!p3.catchingUp(), "a fresh pacer is not catching up");
+
+        // At target, and idle: nothing goes, which is the behaviour that stranded
+        // the backlog.
+        for (int i = 0; i < 16; ++i) p3.onPacketSent();
+        check(p3.packetsToSend(40) == 0, "at target with no drain time, nothing is released");
+
+        // ONE SOURCE BLOCK IS NOT A BACKLOG, and this is the boundary that matters
+        // most here. Audio arrives one whole block at a time -- sixteen packets at
+        // the default DDC rate, by the same arithmetic the target invariant above
+        // spells out -- so a threshold at or below one block latches on every
+        // ordinary block. Catch-up would be the steady state, the credit target
+        // would govern no release at all, and a release bounded only by the queue
+        // would run at four times nominal for as long as any backlog lasted.
+        // Derived here rather than hardcoded, so a change of block size or packet
+        // geometry moves the check with it.
+        constexpr double kWdspInputBlock = 1024.0;
+        constexpr double kDefaultDdcRate = 48000.0;
+        constexpr double kAudioRate = 24000.0;
+        constexpr int kPacketsPerSourceBlock = static_cast<int>(
+            ((kWdspInputBlock * kAudioRate / kDefaultDdcRate)
+             * (static_cast<double>(kSpeakerSampleRateHz) / kAudioRate))
+            / kSpeakerFramesPerPacket);
+        p3.setBacklog(kPacketsPerSourceBlock, kCap);
+        check(!p3.catchingUp(),
+              "one whole source block queued is a block arriving, not a backlog");
+        p3.setBacklog(2 * kPacketsPerSourceBlock - 1, kCap);
+        check(!p3.catchingUp(),
+              "and anything short of a second block is still not one");
+
+        // Two blocks is audio that arrived while we were not draining.
+        p3.setBacklog(2 * kPacketsPerSourceBlock, kCap);
+        check(p3.catchingUp(), "two whole source blocks queued enters catch-up");
+        check(p3.packetsToSend(40) > 0,
+              "catch-up releases despite the target being met -- the whole point");
+
+        // Hysteresis: it does not drop out at the same level it entered.
+        p3.setBacklog(2 * kPacketsPerSourceBlock - 1, kCap);
+        check(p3.catchingUp(), "catch-up persists through the band, so it cannot flap");
+        p3.setBacklog(kPacketsPerSourceBlock + 1, kCap);
+        check(p3.catchingUp(), "and still persists one packet above the exit");
+        p3.setBacklog(kPacketsPerSourceBlock, kCap);
+        check(!p3.catchingUp(),
+              "down to the block in flight, the backlog is gone and catch-up ends");
+        p3.setBacklog(1, kCap);
+        check(!p3.catchingUp(), "a drained queue leaves catch-up");
+
+        // Bounded. A recovery that released without limit would overrun the very
+        // FIFO this class protects.
+        SpeakerAudioPacer p4;
+        p4.setBacklog(kCap, kCap);
+        check(p4.catchingUp() && p4.packetsToSend(10000) <= 16,
+              "catch-up is bounded, not an unlimited burst");
+
+        // A zero or negative capacity must not decide anything.
+        SpeakerAudioPacer p5;
+        p5.setBacklog(100, 0);
+        check(!p5.catchingUp(), "an unknown capacity cannot trigger catch-up");
+
+        // reset() clears it, or a reconnect would start mid-recovery.
+        SpeakerAudioPacer p6;
+        p6.setBacklog(kCap, kCap);
+        p6.reset();
+        check(!p6.catchingUp(), "reset clears catch-up for the next session");
     }
 
     if (g_failures == 0)

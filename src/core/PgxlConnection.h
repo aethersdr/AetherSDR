@@ -1,11 +1,14 @@
 #pragma once
 
+#include <functional>
 #include <QObject>
 #include <QTcpSocket>
 #include <QElapsedTimer>
 #include <QTimer>
 #include <QMap>
 #include <QString>
+
+#include <functional>
 
 namespace AetherSDR {
 
@@ -15,39 +18,47 @@ namespace AetherSDR {
 // temperature, mains voltage, band, bias mode, fan mode.
 class PgxlConnection : public QObject {
     Q_OBJECT
+    friend struct PgxlConnectionTestAccess;
 
 public:
     explicit PgxlConnection(QObject* parent = nullptr);
 
     bool isConnected() const { return m_connected; }
+    bool isConnecting() const { return !m_connected && m_socket.state() != QAbstractSocket::UnconnectedState; }
+    bool isAuthBlocked() const { return m_authBlocked; }
     QString version() const { return m_version; }
     QString peerAddress() const { return m_socket.peerAddress().toString(); }
+    // The host the operator (or discovery) asked for on the current attempt:
+    // a name or a literal address. Saved codes key on it; see PeripheralAuthStore.
+    QString attemptHost() const { return m_attemptHost; }
+    quint16 attemptPort() const { return m_attemptPort; }
+    // The host reconnects aim at; an alternate attempt leaves it unchanged.
+    QString reconnectHost() const { return m_lastHost; }
+    quint16 reconnectPort() const { return m_lastPort; }
     quint16 peerPort() const { return m_socket.peerPort(); }
 
     void connectToPgxl(const QString& host, quint16 port = 9008);
+    // A connect the app makes on its own (discovery, presence, startup) rather
+    // than one the operator asked for. Only these attempts report unreachable().
+    void autoConnectToPgxl(const QString& host, quint16 port = 9008);
+    // A one-off try at another address for the same device. Reconnects keep
+    // the previous target, and a missing saved code for this address fails
+    // the try without blocking them.
+    void tryAlternatePgxl(const QString& host, quint16 port = 9008);
     void disconnect();
 
     void setAutoReconnect(bool on) { m_autoReconnect = on; }
+    void setAuthCode(const QString& code);
+    void setAuthCodeForAttempt(quint64 attempt, const QString& code,
+                               bool credentialStoreUnavailable = false);
 
     quint32 sendCommand(const QString& cmd);
 
-    // Poll fast only while the amplifier is keyed, mirroring TgxlConnection.
-    //
-    // Both numbers are measured against this hardware, not chosen by analogy
-    // with the tuner -- the two devices are very different. A two-tone into a
-    // dummy load, sampled over four parallel connections, showed the PGXL's
-    // meter producing ~10 Hz of DISTINCT values however fast it is asked:
-    // 32.9 Hz of frames carried only 10.2 Hz of new readings, sockets reading
-    // within 10 ms of each other always agreed, and identical-run length was
-    // 3.20 across 4 sockets (1.0 would mean independent sampling). Extra
-    // connections multiply frames, not information. So 10 Hz is the ceiling
-    // worth asking for, against the tuner's ~59 Hz.
-    //
-    // Receiving needs none of it, so it drops to 4 Hz.
-    //
-    // Driven from the `state` field in the device's own status frames, so it
-    // needs no wiring to the radio; setTransmitting() lets a caller that
-    // already knows raise the rate without waiting a receive poll.
+    // Poll fast only while keyed (as TgxlConnection). Measured: the PGXL meter yields
+    // ~10 Hz of distinct values however fast it is polled (32.9 Hz of frames carried
+    // 10.2 Hz of new readings across four sockets), so 10 Hz TX, 4 Hz RX. Driven by
+    // the `state` field in status frames; setTransmitting() lets a caller raise the
+    // rate early.
     void setTransmitting(bool tx);
     bool isTransmitting() const { return m_transmitting; }
     int  pollIntervalMs() const { return m_pollTimer.interval(); }
@@ -58,19 +69,22 @@ public:
 signals:
     void connected();
     void disconnected();
+    void connectionFailed(const QString& errorString);
+    // An automatic attempt never reached the device over TCP; carries the host
+    // it asked for. Not sent after a deliberate disconnect or once auth has
+    // blocked reconnects.
+    void unreachable(const QString& attemptedHost);
+    // A socket attempt has begun, from any path; carries the host it asked for.
+    void attemptStarted(const QString& host);
+    void authCodeRequired(quint64 attempt);
+    void authCodeAccepted(const QString& code);
+    void enteredAuthCodeDiscarded();
+    void authBlockCleared();
     void statusUpdated(const QMap<QString, QString>& kvs);
-    // The reply to `setup read` — the amplifier's stored configuration
-    // (nickname, ledintens, txdelay, inactivity-timeout, authcode).
-    //
-    // It arrives as an ordinary R frame of key/value pairs, indistinguishable
-    // from a status reply by shape alone, so it is matched by the sequence
-    // number of the `setup read` that asked for it. Without that it would be
-    // published as a status frame carrying none of the fields a status frame
-    // carries.
-    //
-    // Needed because `setup` WRITES take the whole group at once — the vendor
-    // utility sends `setup nickname=… meffa=… ledintens=… fanmode=… authcode=`
-    // as one line — so changing any one of them means knowing the rest.
+    // The reply to `setup read` (nickname, ledintens, txdelay, inactivity-timeout,
+    // authcode), an ordinary R frame matched by the request's sequence number. Needed
+    // because `setup` writes take the whole group in one line (as the vendor utility
+    // sends it), so changing one field means knowing the rest.
     void setupRead(const QMap<QString, QString>& kvs);
     // The amplifier refused a command: `R<seq>|<code>|` with a non-zero code
     // and an empty body. 50000013 is a bad parameter (a `setup` carrying a
@@ -96,9 +110,25 @@ private slots:
     void pollStatus();
 
 private:
+    friend struct PeripheralConnectionTestAccess;
+    // Inject transport initiation in socket-free lifecycle tests.
+    std::function<void(const QString&, quint16)> m_connectTransport;
     void applyPollRateFor(const QMap<QString, QString>& kvs);
-    void processLine(const QString& line);
+    Q_INVOKABLE void processLine(const QString& line); // injected-frame test seam
+    Q_INVOKABLE void processBytes(const QByteArray& bytes); // injected transport test seam
+    Q_INVOKABLE void beginAttempt(); // same reset used before a real TCP connect
+    Q_INVOKABLE void beginAttemptAt(const QString& host, quint16 port);
+    Q_INVOKABLE void beginAutomaticAttemptAt(const QString& host, quint16 port);
+    Q_INVOKABLE void beginAlternateAttemptAt(const QString& host, quint16 port);
+    void openSocket(const QString& host, quint16 port, bool wasConnected);
+    Q_INVOKABLE void onAuthTimeout();
+    void finishHandshake();
+    void sendAuthentication();
+    void failAuthentication(const QString& reason, bool blockReconnect = true);
 
+    // Test seam: when set, sendCommand() hands each framed line here instead
+    // of writing to the socket.
+    std::function<void(const QByteArray&)> m_commandWriter;
     QTcpSocket m_socket;
     QTimer     m_pollTimer;
     bool       m_transmitting{false};
@@ -119,8 +149,26 @@ private:
     quint32    m_setupReadSeq{0};
     bool       m_connected{false};
     bool       m_gotVersion{false};
+    bool       m_authPending{false};
+    bool       m_waitingForAuthCode{false};
+    bool       m_authBlocked{false};
+    int        m_authFailures{0};
+    quint64    m_authAttempt{0};
+    QTimer     m_authTimer;
+    QString    m_authCode;
+    bool       m_userAuthCode{false};
+    QString    m_userAuthEndpoint;
+    QString    m_attemptHost;
+    quint16    m_attemptPort{0};
+    bool       m_authCloseReported{false};
     bool       m_autoReconnect{false};
+    // Global "Reconnect automatically" and this device's "Connect automatically".
+    bool reconnectAllowed() const;
     bool       m_deliberateDisconnect{false};
+    bool       m_tcpReached{false};       // this attempt's socket connected
+    bool       m_attemptAutomatic{false}; // see autoConnectTo…
+    bool       m_lastAutomatic{false};    // reconnects repeat the target's origin
+    bool       m_alternateAttempt{false}; // see tryAlternate…
     QString    m_version;
     QString    m_lastHost;
     quint16    m_lastPort{9008};

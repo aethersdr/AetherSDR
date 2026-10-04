@@ -1,6 +1,7 @@
 #include "RadioStateMemory.h"
 
 #include <QDebug>
+#include <QJsonArray>
 #include <QJsonDocument>
 
 #include <cmath>
@@ -15,6 +16,13 @@ using Domain = RadioCapabilities::ClientSettingsDomain;
 bool has(const RadioCapabilities& caps, Domain domain)
 {
     return caps.clientSettingsDomains.testFlag(domain);
+}
+
+// The AGC-off level is client-owned only where the client owns the AGC and the
+// backend declares a writable threshold/off level. Never a family check.
+bool ownsAgcOffLevel(const RadioCapabilities& caps)
+{
+    return has(caps, Domain::Agc) && caps.hasAgcThreshold;
 }
 
 // The extension document's domain sub-keys (PR #4614 review): the engine
@@ -72,6 +80,15 @@ RestoredRadioState load(const RadioSettingsScope& scope,
         // default must sit outside the control's range — see RestoredRadioState.
         state.agcThreshold =
             doc.value(QStringLiteral("agcThreshold")).toInt(-1);
+    }
+    if (ownsAgcOffLevel(caps)) {
+        // One entry per receiver. A missing key gives an empty list, and an
+        // entry that is not a whole number reads as -1: "not restored".
+        const QJsonArray levels =
+            doc.value(QStringLiteral("agcOffLevels")).toArray();
+        for (const QJsonValue& level : levels) {
+            state.agcOffLevels.append(level.toInt(-1));
+        }
     }
     if (has(caps, Domain::Cw)) {
         state.cwSpeed = doc.value(QStringLiteral("cwSpeed")).toInt();
@@ -162,6 +179,19 @@ bool store(const RadioSettingsScope& scope, const RadioCapabilities& caps,
         // >= 0, so a threshold of 0 IS written — the sentinel is -1.
         if (state.agcThreshold >= 0) {
             doc.insert(QStringLiteral("agcThreshold"), state.agcThreshold);
+        }
+    }
+    if (ownsAgcOffLevel(caps)) {
+        // Written only when at least one receiver has a level; -1 holds the
+        // place of a receiver without one.
+        QJsonArray levels;
+        bool any = false;
+        for (const int level : state.agcOffLevels) {
+            levels.append(level >= 0 ? level : -1);
+            any = any || level >= 0;
+        }
+        if (any) {
+            doc.insert(QStringLiteral("agcOffLevels"), levels);
         }
     }
     if (has(caps, Domain::Cw)) {

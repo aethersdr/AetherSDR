@@ -2,9 +2,8 @@
 
 #ifdef HAVE_DFNR
 
-#include "MonoDspStereoAdapter.h"
-
 #include <QByteArray>
+#include <array>
 #include <atomic>
 #include <memory>
 #include <vector>
@@ -15,14 +14,11 @@ namespace AetherSDR {
 
 class Resampler;
 
-// Client-side neural noise reduction using DeepFilterNet3.
-// The immutable input/output domain is 24 or 48 kHz stereo float32. Legacy24
-// retains the existing SRC pair; native48 reaches the model without SRC.
-// The existing mono analysis and delayed stereo level-balance policy remain.
-//
-// DeepFilterNet expects 48kHz mono float [-1.0, 1.0] input.
-// Frame size determined at runtime via df_get_frame_length().
-// Thread-safe parameter setters (main thread writes, audio thread reads).
+// Client-side neural NR (DeepFilterNet3). I/O domain is 24 or 48 kHz stereo
+// float32: Legacy24 uses SRC pairs, native48 reaches the model without SRC (it
+// expects 48 kHz mono [-1, 1]). One DeepFilterNet state per channel, so diversity
+// pairs are denoised independently. Frame size from df_get_frame_length().
+// Setters: main thread writes, audio thread reads.
 
 class DeepFilterFilter {
 public:
@@ -37,8 +33,8 @@ public:
     // Returns the processed block (same format, same size).
     QByteArray process(const QByteArray& pcmStereo);
 
-    // Returns true if df_create() succeeded.
-    bool isValid() const { return m_state != nullptr; }
+    // Returns true if df_create() succeeded for both channels.
+    bool isValid() const { return m_states[0] != nullptr && m_states[1] != nullptr; }
 
     int sampleRate() const { return m_sampleRate; }
 
@@ -54,16 +50,21 @@ public:
     float postFilterBeta() const { return m_postFilterBeta.load(); }
 
 private:
+    void createStates();
+    void freeStates();
+
     const int m_sampleRate;
-    DFState* m_state{nullptr};
+    std::array<DFState*, 2> m_states{};
     int m_frameSize{0};                     // samples per frame (from df_get_frame_length)
-    std::unique_ptr<Resampler> m_up;        // 24kHz mono → 48kHz mono
-    std::unique_ptr<Resampler> m_down;      // 48kHz mono → 24kHz mono
-    QByteArray m_inAccum;                   // accumulate 48kHz mono float input
+    // Per channel, indexed 0 = left, 1 = right.
+    std::array<std::unique_ptr<Resampler>, 2> m_up;    // 24kHz → 48kHz
+    std::array<std::unique_ptr<Resampler>, 2> m_down;  // 48kHz → 24kHz
+    std::array<QByteArray, 2> m_inAccum;               // 48kHz float input
+    std::array<std::vector<float>, 2> m_channelInput;
+    std::array<std::vector<float>, 2> m_processed48k;
+    std::array<QByteArray, 2> m_channelOutput;         // configured-rate float output
+    bool m_lockstepWarned{false};                      // L/R output length mismatch logged
     QByteArray m_outAccum;                  // accumulate configured-rate stereo float output
-    std::vector<float> m_monoInput;
-    std::vector<float> m_processed48k;
-    MonoDspStereoAdapter m_stereoAdapter;
     std::atomic<float> m_attenLimit{100.0f};
     std::atomic<float> m_postFilterBeta{0.0f};
     std::atomic<bool>  m_paramsDirty{false};

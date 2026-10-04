@@ -36,6 +36,10 @@ jobs:
             label: ASan + UBSan
             image: ghcr.io/aethersdr/aethersdr-ci:latest
             build_type: Debug
+            # A Debug ASan tree with the core linked statically into ~250
+            # test executables outgrew the runner's disk ("No space left on
+            # device", three weeks running). One shared core keeps it near 17 GB.
+            shared_core: "ON"
             # ON here too, not only under TSan: the churn test's documented
             # failure class is a heap use-after-free on the receiver vector,
             # and a sequential UAF produces no TSan report — catching it is
@@ -63,6 +67,10 @@ jobs:
             # TSan cannot coexist with ASan, so build RelWithDebInfo and
             # inject the TSan flags ourselves.
             build_type: RelWithDebInfo
+            # ON for the same reason as ASan: the -g3 tree with a static core
+            # filled the runner (100%, at link 4438/4854) once the Qt 6.12
+            # :tsan image let this lane build at all.
+            shared_core: "ON"
             receiver_churn: "ON"
             extra_cxx: "-fsanitize=thread -g3 -fno-omit-frame-pointer -O1"
             extra_ld:  "-fsanitize=thread"
@@ -102,6 +110,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Configure
+        id: configure
         env:
           # CFLAGS as well as CXXFLAGS. The tree is not all C++: WDSP and its
           # Win32 port, liquid-dsp, rnnoise and the other vendored C libraries
@@ -122,10 +131,12 @@ jobs:
           # that it is out of the default graph.
           cmake -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=${{ matrix.sanitizer.build_type }} \
+            -DAETHER_SHARED_CORE=${{ matrix.sanitizer.shared_core }} \
             -DAETHER_ENABLE_HL2_RECEIVER_CHURN_TEST=${{ matrix.sanitizer.receiver_churn }} \
             -DAETHER_ENABLE_HL2_TX_LOOPBACK_TEST=ON
 
       - name: Build
+        id: build
         # The SAME sanitizer flags as Configure, because this step also runs
         # configure: vendored Opus is an ExternalProject_Add, so its child
         # CMake project configures during the parent's BUILD, when a Configure-
@@ -140,7 +151,34 @@ jobs:
           CFLAGS:   ${{ matrix.sanitizer.extra_cxx }}
           CXXFLAGS: ${{ matrix.sanitizer.extra_cxx }}
           LDFLAGS:  ${{ matrix.sanitizer.extra_ld }}
-        run: cmake --build build --parallel
+        run: |
+          # The after-build reading must survive a failed build, which is
+          # when it matters. Explicit status rather than an EXIT trap: this
+          # step runs under the container's sh, not bash.
+          df -h /
+          rc=0
+          cmake --build build --parallel || rc=$?
+          df -h /
+          exit "$rc"
+
+      # A Configure or Build failure skips every step below, ctest's report
+      # chain included, so the lane used to go dark with no artifact and no
+      # tracking issue (three weeks of "No space left on device"). This step
+      # leaves that chain a report, and a stable per-step fingerprint so the
+      # sticky issue collects repeats rather than opening one per week.
+      - name: Report a lane that did not build
+        id: nobuild
+        if: failure() && (steps.configure.outcome == 'failure' || steps.build.outcome == 'failure')
+        env:
+          FAILED_STEP: ${{ steps.configure.outcome == 'failure' && 'Configure' || 'Build' }}
+        run: |
+          {
+            echo "The lane did NOT run its tests: the $FAILED_STEP step failed."
+            echo "No result in this run is meaningful; the step log in the run says why."
+          } > report.txt
+          cp report.txt sanitizer.log
+          fp=$(printf 'nobuild:%s' "$FAILED_STEP" | sha256sum | cut -c1-12)
+          echo "fingerprint=${fp}" >> "$GITHUB_OUTPUT"
 
       - name: Run tests under sanitizer
         id: ctest
@@ -290,7 +328,7 @@ jobs:
           echo "fingerprint=${fp}" >> "$GITHUB_OUTPUT"
 
       - name: Upload sanitizer artifacts
-        if: steps.ctest.outputs.exit != '0'
+        if: (success() && steps.ctest.outputs.exit != '0') || (failure() && steps.nobuild.outcome == 'success')
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: ${{ matrix.sanitizer.id }}-${{ github.run_id }}
@@ -300,12 +338,12 @@ jobs:
           retention-days: 30
 
       - name: Open or update tracking issue
-        if: steps.ctest.outputs.exit != '0'
+        if: (success() && steps.ctest.outputs.exit != '0') || (failure() && steps.nobuild.outcome == 'success')
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         env:
           SAN_ID:     ${{ matrix.sanitizer.id }}
           SAN_LABEL:  ${{ matrix.sanitizer.label }}
-          FP:         ${{ steps.extract.outputs.fingerprint }}
+          FP:         ${{ steps.extract.outputs.fingerprint || steps.nobuild.outputs.fingerprint }}
           RUN_URL:    ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         with:
           script: |

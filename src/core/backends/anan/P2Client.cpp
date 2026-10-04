@@ -5,6 +5,8 @@
 #include <QTimer>
 #include <QUdpSocket>
 
+#include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <span>
 
@@ -41,6 +43,15 @@ P2Client::P2Client(QObject* parent) : QObject(parent)
     m_connectTimeoutTimer = new QTimer(this);
     m_connectTimeoutTimer->setSingleShot(true);
     connect(m_connectTimeoutTimer, &QTimer::timeout, this, &P2Client::onConnectTimeout);
+
+    m_speakerDrainTimer = new QTimer(this);
+    m_speakerDrainTimer->setInterval(kSpeakerDrainMs);
+    // A realtime stream's pacing timer, so ask for the accurate one. Qt's default
+    // CoarseTimer may be adjusted by up to 5% of the interval, which at 5 ms is
+    // the same order as the interval itself; the pacer's target absorbs jitter but
+    // there is no reason to hand it more than necessary.
+    m_speakerDrainTimer->setTimerType(Qt::PreciseTimer);
+    connect(m_speakerDrainTimer, &QTimer::timeout, this, &P2Client::onSpeakerDrainTick);
 }
 
 P2Client::~P2Client()
@@ -60,6 +71,17 @@ bool P2Client::start(const Params& params, int connectTimeoutMs)
     m_ddc0FreqWord = 0;
     m_bypassAdc0Filters = params.bypassAdc0Filters;
     m_bypassAdc1Filters = params.bypassAdc1Filters;
+    m_adc0AttenuationDb = params.adc0AttenuationDb;
+    m_adc1AttenuationDb = params.adc1AttenuationDb;
+    m_speakerAudioEnabled = params.speakerAudioEnabled;
+    m_speakerPending.clear();
+    m_speakerPacer.reset();
+    // Sequence restarts per session, like the DDC expectations below: p2app
+    // reads it only to spot gaps within one stream.
+    m_speakerSequence = 0;
+    m_speakerOverflowLogged = false;
+    m_speakerUnderflowReports = 0;
+    m_lastSpeakerFifoLevel = 0;
     // Every DDC's sequence tracker, not just DDC0's -- a stale expectation
     // carried across a restart would report a phantom gap on the new
     // session's first frame.
@@ -107,20 +129,10 @@ bool P2Client::start(const Params& params, int connectTimeoutMs)
     m_ditherEnabled = params.ditherEnabled;
     m_randomEnabled = params.randomEnabled;
 
-    // Every DDC starts at the same frequency: m_ddc0FreqWord, which start()
-    // zeroed above, so in practice baseband. Per-DDC tuning is a seam this
-    // class does not expose yet -- setDdc0FrequencyHz() moves DDC0 only --
-    // so sending one shared word is honest about what is actually
-    // controllable rather than implying independent tuning that has no
-    // setter behind it.
-    //
-    // The two other High Priority senders (setDdc0FrequencyHz() and
-    // onKeepaliveTick()) send the SAME shared word for the same count, so
-    // they cannot disagree with this packet. That matters because the
-    // keepalive fires every 100 ms: a single-DDC overload there would pin
-    // DDC1..N-1 at word 0 forever regardless of what this line sent, and the
-    // two would diverge permanently the moment DDC0 was retuned.
-    // (aethersdr-agent, #5547 review.)
+    // Every DDC gets the shared m_ddc0FreqWord: there is no per-DDC tuning setter
+    // yet (setDdc0FrequencyHz() moves DDC0 only). The keepalive and
+    // setDdc0FrequencyHz() send the same shared word for the same count, so the
+    // three High Priority senders cannot disagree (#5547).
     std::vector<std::uint32_t> freqWords(ddcs.size(), m_ddc0FreqWord);
 
     // Destination ports below are NOT interchangeable with kRadioPort -- see
@@ -131,10 +143,18 @@ bool P2Client::start(const Params& params, int connectTimeoutMs)
                            params.ditherEnabled, params.randomEnabled),
           m_host, kDdcSpecificPort);
     sendTo(*m_socket,
-          buildHighPriority(true, freqWords, m_bypassAdc0Filters, m_bypassAdc1Filters),
+          buildHighPriority(true, freqWords, m_bypassAdc0Filters, m_bypassAdc1Filters,
+                            m_adc0AttenuationDb, m_adc1AttenuationDb),
           m_host, kHighPriorityPort);
 
     m_keepaliveTimer->start();
+    if (m_speakerAudioEnabled) {
+        // Started from zero at the same moment as the drain, so the pacer's
+        // first advance() measures from the first tick rather than from
+        // whenever this object happened to be constructed.
+        m_speakerClock.restart();
+        m_speakerDrainTimer->start();
+    }
     m_activeConnectTimeoutMs = connectTimeoutMs;
     m_connectTimeoutTimer->start(connectTimeoutMs);
     return true;
@@ -144,12 +164,23 @@ void P2Client::stop()
 {
     m_keepaliveTimer->stop();
     m_connectTimeoutTimer->stop();
+    m_speakerDrainTimer->stop();
+    // Dropped, not drained. These samples are older than the disconnect and the
+    // radio's own FIFO does not survive it either, so playing them out on the
+    // next session would start it with a fragment of the last one.
+    m_speakerPending.clear();
+    m_speakerPacer.reset();
+    m_speakerSequence = 0;
+    m_speakerOverflowLogged = false;
+    m_speakerUnderflowReports = 0;
+    m_lastSpeakerFifoLevel = 0;
     if (m_socket) {
         // The clean-stop packet, mirroring metisStop(): run=0 reaches the
         // radio before the socket that would carry any further keepalive
         // goes away.
         sendTo(*m_socket,
-              buildHighPriority(false, 0, m_bypassAdc0Filters, m_bypassAdc1Filters),
+              buildHighPriority(false, 0, m_bypassAdc0Filters, m_bypassAdc1Filters,
+                                m_adc0AttenuationDb, m_adc1AttenuationDb),
               m_host, kHighPriorityPort);
         m_socket->close();
         m_socket->deleteLater();
@@ -162,14 +193,161 @@ void P2Client::stop()
     }
 }
 
+void P2Client::noteSpeakerFifoStatus(const HighPriorityStatus& status)
+{
+    m_lastSpeakerFifoLevel = status.speakerFifoLevel;
+    // EVERY status packet, healthy or not, at debug. The underflow bit only tells
+    // us the stream ALREADY failed; the level is what shows it coming, and a bench
+    // run needs to watch it hold steady rather than only learn afterwards that it
+    // did not. Five lines a second, so debug-gated:
+    //   QT_LOGGING_RULES="aether.anan.p2.debug=true"
+    //
+    // Logged even while the stream is disabled: then it is the radio's own idle
+    // level, which is the baseline a later run is read against.
+    if (m_speakerAudioEnabled) {
+        qCDebug(lcAnanP2).nospace()
+            << "ANAN: speaker FIFO level " << status.speakerFifoLevel
+            << " (FIFO locations), underflow reports so far "
+            << m_speakerUnderflowReports << ", queued "
+            << (m_speakerPending.size() / (kSpeakerFramesPerPacket * kSpeakerChannels))
+            << " packets" << (m_speakerPacer.catchingUp() ? ", CATCHING UP" : "");
+    } else {
+        qCDebug(lcAnanP2).nospace()
+            << "ANAN: speaker FIFO level " << status.speakerFifoLevel
+            << " (FIFO locations), stream disabled -- this is the radio's idle level";
+    }
+    if (!status.speakerUnderflow) {
+        return;
+    }
+    ++m_speakerUnderflowReports;
+    // The first underflow warns; later ones are only counted, since a starved
+    // stream sets the latched bit on every ~200 ms status packet. p2app reports
+    // underflow even when nobody feeds the FIFO, so it only means something while
+    // we are sending.
+    if (!m_speakerAudioEnabled) {
+        return;
+    }
+    if (m_speakerUnderflowReports == 1) {
+        qCWarning(lcAnanP2).nospace()
+            << "ANAN: the radio's speaker FIFO underflowed -- audio to the radio "
+               "is arriving too slowly and will click or stutter. FIFO level "
+            << status.speakerFifoLevel
+            << " (FIFO locations, not samples). Further reports are counted, not "
+               "logged; read speakerUnderflowReports().";
+    } else {
+        qCDebug(lcAnanP2).nospace()
+            << "ANAN: speaker FIFO underflow report " << m_speakerUnderflowReports
+            << ", level " << status.speakerFifoLevel;
+    }
+}
+
+void P2Client::enqueueSpeakerAudio(const QByteArray& interleavedInt16)
+{
+    if (!m_speakerAudioEnabled || !m_running || interleavedInt16.isEmpty()) {
+        return;
+    }
+    const auto count = static_cast<std::size_t>(interleavedInt16.size())
+        / sizeof(std::int16_t);
+    const auto* samples = reinterpret_cast<const std::int16_t*>(interleavedInt16.constData());
+
+    constexpr std::size_t kPacketSamples =
+        kSpeakerFramesPerPacket * kSpeakerChannels;
+    const std::size_t cap = kMaxQueuedSpeakerPackets * kPacketSamples;
+    if (m_speakerPending.size() + count > cap) {
+        // DROP THE OLDEST, not the newest. This is a realtime stream: the newest
+        // audio is the audio the operator is listening for, and discarding it to
+        // preserve a backlog they have already missed hearing keeps the latency
+        // and loses the content. Dropping from the front loses the same amount of
+        // audio and recovers the latency with it.
+        const std::size_t overflow = m_speakerPending.size() + count - cap;
+        const std::size_t drop = std::min(overflow, m_speakerPending.size());
+        m_speakerPending.erase(m_speakerPending.begin(),
+                               m_speakerPending.begin() + static_cast<std::ptrdiff_t>(drop));
+        if (!m_speakerOverflowLogged) {
+            m_speakerOverflowLogged = true;
+            qCWarning(lcAnanP2) << "ANAN: speaker audio queue overflowed, dropping oldest"
+                              << drop << "samples -- audio to the radio will have a gap."
+                              << "Logged once per session.";
+        }
+    }
+    m_speakerPending.insert(m_speakerPending.end(), samples, samples + count);
+}
+
+void P2Client::onSpeakerDrainTick()
+{
+    if (!m_speakerAudioEnabled || !m_running || !m_socket) {
+        return;
+    }
+    constexpr std::size_t kPacketSamples =
+        kSpeakerFramesPerPacket * kSpeakerChannels;
+
+    // Elapsed first: the pacer's whole estimate is "sent minus drained", and
+    // draining is what happened between ticks.
+    const qint64 elapsedNs = m_speakerClock.nsecsElapsed();
+    m_speakerClock.restart();
+    m_speakerPacer.advance(static_cast<double>(elapsedNs) * 1.0e-9);
+
+    const int queued = static_cast<int>(m_speakerPending.size() / kPacketSamples);
+    // Tell the pacer how far behind WE are before asking what may go. Without
+    // this it only ever knows about the radio's side, which is correct for the
+    // rate and blind to a backlog on ours -- measured on the G2 as a permanent
+    // 26-45 packets held here for the life of the session.
+    m_speakerPacer.setBacklog(queued, kMaxQueuedSpeakerPackets);
+    int toSend = m_speakerPacer.packetsToSend(queued);
+    std::size_t consumed = 0;
+    for (; toSend > 0; --toSend) {
+        const std::span<const std::int16_t> block(m_speakerPending.data() + consumed,
+                                                  kPacketSamples);
+        const auto pkt = buildSpeakerAudio(m_speakerSequence, block);
+        const qint64 sent = m_socket->writeDatagram(
+            reinterpret_cast<const char*>(pkt.data()),
+            static_cast<qint64>(pkt.size()), m_host, kSpeakerAudioPort);
+        if (sent != static_cast<qint64>(pkt.size())) {
+            // Neither counted into the pacer nor consumed from the queue: a
+            // packet the socket refused never reached the radio's FIFO, so
+            // crediting it would read a dead link as a full buffer and stop the
+            // stream permanently. Retried on the next tick.
+            break;
+        }
+        ++m_speakerSequence;
+        m_speakerPacer.onPacketSent();
+        consumed += kPacketSamples;
+    }
+    if (consumed > 0) {
+        m_speakerPending.erase(m_speakerPending.begin(),
+                               m_speakerPending.begin() + static_cast<std::ptrdiff_t>(consumed));
+    }
+}
+
 void P2Client::setDdc0FrequencyHz(double hz)
 {
     m_ddc0FreqWord = phaseWord(hz);
     if (m_running && m_socket)
         sendTo(*m_socket,
               buildHighPriority(true, sharedFreqWords(),
-                                m_bypassAdc0Filters, m_bypassAdc1Filters),
+                                m_bypassAdc0Filters, m_bypassAdc1Filters,
+                                m_adc0AttenuationDb, m_adc1AttenuationDb),
               m_host, kHighPriorityPort);
+}
+
+void P2Client::setStepAttenuationDb(int adcIndex, int db)
+{
+    if (adcIndex == 0) {
+        m_adc0AttenuationDb = db;
+    } else if (adcIndex == 1) {
+        m_adc1AttenuationDb = db;
+    } else {
+        return;
+    }
+    // Now rather than on the next keepalive: the operator is moving a
+    // control and should hear the change, not wait up to 100 ms for it.
+    if (m_running && m_socket) {
+        sendTo(*m_socket,
+              buildHighPriority(true, sharedFreqWords(),
+                                m_bypassAdc0Filters, m_bypassAdc1Filters,
+                                m_adc0AttenuationDb, m_adc1AttenuationDb),
+              m_host, kHighPriorityPort);
+    }
 }
 
 bool P2Client::setDdcRateLive(int ddcIndex, int rateKsps)
@@ -213,7 +391,8 @@ void P2Client::onKeepaliveTick()
     // also replay General/DDC-Specific on this cadence, same as the spike.
     sendTo(*m_socket,
           buildHighPriority(true, sharedFreqWords(),
-                            m_bypassAdc0Filters, m_bypassAdc1Filters),
+                            m_bypassAdc0Filters, m_bypassAdc1Filters,
+                            m_adc0AttenuationDb, m_adc1AttenuationDb),
           m_host, kHighPriorityPort);
 }
 
@@ -238,17 +417,22 @@ void P2Client::handleDatagram(std::span<const std::uint8_t> bytes, quint16 sende
 {
     const auto frame = parseDdcFrame(bytes);
     if (!frame) {
-        // Not DDC0-shaped -- Mic Data or High Priority Status sharing
-        // this port, exactly as measured in Phase 1a, OR the reply to
-        // THIS session's own Discovery send (class comment). Try that
-        // second, cheap parse before giving up on the datagram; neither
-        // outcome is a drop or a connection attempt.
-        if (!m_discoveryInfoSent) {
-            if (const auto reply = parseDiscoveryReply(bytes)) {
+        // Not DDC0-shaped: Mic Data, High Priority Status, or this session's
+        // Discovery reply. Parse the reply on EVERY datagram (notify once): skipping it
+        // would let a duplicate reply fall through and decode as a phantom underflow.
+        if (const auto reply = parseDiscoveryReply(bytes)) {
+            if (!m_discoveryInfoSent) {
                 m_discoveryInfoSent = true;
                 emit discoveryInfoReceived(reply->boardId, reply->firmwareVer,
                                            reply->numDdc);
             }
+            return;
+        }
+        // Tried after the Discovery reply (both 60 bytes): a status packet with
+        // sequence 0 and byte 4 = 0x02/0x03 reads as a reply and is skipped -- one
+        // diagnostic packet, never a fake fault.
+        if (const auto status = parseHighPriorityStatus(bytes)) {
+            noteSpeakerFifoStatus(*status);
         }
         return;
     }
@@ -259,22 +443,10 @@ void P2Client::handleDatagram(std::span<const std::uint8_t> bytes, quint16 sende
     const auto ddcIndex = ddcIndexForSenderPort(
         static_cast<std::uint16_t>(senderPort), m_activeDdcCount);
     if (!ddcIndex) {
-        // DDC-shaped, but from a port this session did not enable --
-        // another client's stream to this host, or a DDC left running by
-        // a previous session. Dropping it is right: attributing it to a
-        // DDC would corrupt that receiver's audio and its sequence
-        // tracking, and counting it as a drop would blame this session
-        // for someone else's traffic.
-        //
-        // "Not a drop" must not mean "not observable", though. If the
-        // radio's source port ever differs from basePort + n -- other
-        // firmware, a NAT or relay in the path, a future negotiated-port
-        // session -- then EVERY datagram lands here and the operator sees
-        // a dead receiver whose only diagnostic is onConnectTimeout()'s
-        // "no DDC0 IQ from the radio", which reads as a radio fault. One
-        // line naming the port turns that into a diagnosis. Logged once
-        // per distinct port per session: this is in the hot receive path
-        // and a mismatch is by nature every packet.
+        // DDC-shaped but from a port this session did not enable (another client, or a
+        // DDC left running): drop it without counting a drop. Warn once per port, since
+        // a source-port mismatch (other firmware, NAT, negotiated ports) would otherwise
+        // present only as onConnectTimeout()'s "no DDC0 IQ".
         if (!m_warnedUnexpectedPorts.contains(senderPort)) {
             m_warnedUnexpectedPorts.insert(senderPort);
             qCWarning(lcAnanP2).nospace()

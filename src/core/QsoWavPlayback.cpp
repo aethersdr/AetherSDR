@@ -12,7 +12,7 @@ namespace AetherSDR {
 
 std::optional<QByteArray> prepareQsoWavPlayback(
     QIODevice& source, const QAudioFormat& sinkFormat, QString* error,
-    qint64 maxOutputFrames)
+    qint64 maxOutputFrames, bool prefixOnly)
 {
     const auto fail = [error](const QString& reason) -> std::optional<QByteArray> {
         if (error) {
@@ -35,7 +35,23 @@ std::optional<QByteArray> prepareQsoWavPlayback(
     }
     // RIFF caps frameCount below 2^31. Multiplying by the bounded sink rate
     // stays in qint64; round once for the complete file, never once per block.
-    const qint64 outputFrames = (file->frameCount * sinkFormat.sampleRate()
+    qint64 inputFrames = file->frameCount;
+    if (prefixOnly) {
+        // Choose the longest whole source-frame prefix whose rounded output
+        // fits the budget. This limits both the read and the allocation before
+        // touching a potentially much longer recording.
+        qint64 low = 0;
+        qint64 high = file->frameCount;
+        while (low < high) {
+            const qint64 mid = low + (high - low + 1) / 2;
+            const qint64 frames = (mid * sinkFormat.sampleRate()
+                                   + file->sampleRate / 2) / file->sampleRate;
+            if (frames <= maxOutputFrames) low = mid;
+            else high = mid - 1;
+        }
+        inputFrames = low;
+    }
+    const qint64 outputFrames = (inputFrames * sinkFormat.sampleRate()
                                  + file->sampleRate / 2) / file->sampleRate;
     const int bytesPerFrame = sinkFormat.channelCount()
         * (sinkFormat.sampleFormat() == QAudioFormat::Float ? 4 : 2);
@@ -58,7 +74,7 @@ std::optional<QByteArray> prepareQsoWavPlayback(
 
     QByteArray result;
     result.reserve(outputBytes);
-    qint64 remaining = file->dataBytes;
+    qint64 remaining = inputFrames * file->channelCount * 2;
     constexpr qint64 kBlockFrames = 4096;
     while (remaining > 0) {
         const qint64 bytes = std::min(remaining, kBlockFrames * file->channelCount * 2);

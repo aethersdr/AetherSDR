@@ -672,8 +672,39 @@ int main()
         // Sample 1 lands in the next 8-byte slot; the rest is transmit silence.
         check(pay[12] == 0x00 && pay[13] == 0x00, "sample 1 I = 0");
         check(pay[14] == 0x3F && pay[15] == 0xFF, "sample 1 Q = 0.5 -> 16383");
+        // KEPT AS AN ASSERTION, deliberately, against the reading that it
+        // "pins a defect as correct". ep2WriteTxIq is a pure function over a
+        // span: zero-filling the slots the span does not reach is the only
+        // thing it can do, it is what makes the EP2 frame a fixed 1032 bytes
+        // at a fixed cadence, and changing it here would change every unkeyed
+        // frame too.
+        //
+        // The defect S3 row 3.3 names is one layer UP -- MetisClient::
+        // buildNextControlPacket choosing to hand this function a short span
+        // when the TX IQ FIFO has starved, and nothing recording that it did.
+        // That is where the amendment belongs and where it was made:
+        // MetisClient::txUnderflowPackets / ::txUnderflowSamples, asserted in
+        // hl2_tx_gate_test with a negative control on a clean transmission.
         check(pay[20] == 0 && pay[21] == 0 && pay[22] == 0 && pay[23] == 0,
               "unsupplied samples are transmit silence");
+    }
+
+    // ---- TX IQ: a non-finite sample is transmit silence ----
+    {
+        // NaN fails both clamp comparisons; an infinity would clamp to a
+        // full-scale rail. Either one must reach the wire as zero.
+        constexpr float nan = std::numeric_limits<float>::quiet_NaN();
+        constexpr float inf = std::numeric_limits<float>::infinity();
+        auto pkt = ep2Packet(0, ccConfig(SampleRate::R48k, 1), ccRx1Freq(7'000'000));
+        std::vector<std::complex<float>> iq;
+        iq.emplace_back(nan, inf);
+        iq.emplace_back(-inf, 0.5f);
+        ep2WriteTxIq(pkt, iq);
+        const std::uint8_t* pay = pkt.data() + 8 + 8;
+        check(pay[4] == 0 && pay[5] == 0, "a NaN I sample is transmit silence");
+        check(pay[6] == 0 && pay[7] == 0, "an infinite Q sample is silence, not a full-scale rail");
+        check(pay[12] == 0 && pay[13] == 0, "a negative infinity is silence too");
+        check(pay[14] == 0x3F && pay[15] == 0xFF, "a finite neighbour is untouched");
     }
 
     // ---- EP6 C&C response decoding (telemetry) ----
@@ -732,6 +763,27 @@ int main()
         t.apply(*parseEp6Response(frame(0x10, (100u << 16) | 42u).data()));
         check(t.reversePowerRaw.value_or(-1) == 100, "reverse power from DATA[31:16]");
         check(t.biasCurrentRaw.value_or(-1) == 42, "bias current from DATA[15:0]");
+
+        // Forward power: the window keeps the loudest non-ACK RADDR 1, not the
+        // last. The peak lands mid-window and the window ends on a trough; a
+        // RADDR 2 word or an ACK's echo is not forward power.
+        {
+            ForwardPowerWindow w;
+            check(!w.peak.has_value() && w.samples == 0,
+                  "an empty window has no peak, not a zero");
+            w.observe(*parseEp6Response(frame(0x08, (1234u << 16) | 300u).data()));
+            w.observe(*parseEp6Response(frame(0x08, (1234u << 16) | 3200u).data()));
+            w.observe(*parseEp6Response(frame(0x10, (4000u << 16) | 4000u).data()));
+            w.observe(*parseEp6Response(frame(0x80 | (0x01 << 1), 0x0FFFu).data()));
+            w.observe(*parseEp6Response(frame(0x08, (1234u << 16) | 450u).data()));
+            check(w.peak.value_or(-1) == 3200,
+                  "window peak is the loudest RADDR 1 sample, not the last (450)");
+            check(w.samples == 3,
+                  "only non-ACK RADDR 1 counts toward the denominator");
+            w.clear();
+            check(!w.peak.has_value() && w.samples == 0,
+                  "clear() leaves no stale peak for the next window");
+        }
 
         // ---- TX FIFO status: RADDR 0, DATA[15:8] ----
         //

@@ -38,25 +38,13 @@ class Resampler;
 
 namespace AetherSDR::icom {
 
-// The IRadioBackend implementor for Icom networked radios.
-//
-// Everything below this class is transport and codec; everything here is
-// translation into AetherSDR's neutral seam. The split is what lets the whole
-// session be tested against a fake radio without constructing a backend, and
-// what will let a future local-serial transport reuse the same translation.
-//
-// THREE THINGS THIS BACKEND IS NOT, stated up front because each one is a
-// tempting wrong assumption:
-//
-//   * It does NOT modulate on the host. The radio owns the modulator, so
-//     hostModulates is false and submitTxAudio ships PCM rather than baseband
-//     IQ. (Contrast the HL2, where the opposite is true of both.)
-//   * It does NOT produce IQ, and cannot. No networked Icom emits samples.
-//     hasDaxStreams is false and there is no IQ path to add later.
-//   * It does NOT own the radio's operating state. An Icom remembers its own
-//     frequency, mode and filter across power cycles and reports them on
-//     request, so clientSettingsDomains is EMPTY and this backend must never
-//     push a restored state (Constitution II/III).
+// The IRadioBackend implementor for Icom networked radios: translation from the
+// transport/codec layers below into AetherSDR's neutral seam.
+//   * The radio owns the modulator: hostModulates is false and submitTxAudio
+//     ships PCM, not baseband IQ.
+//   * No networked Icom emits IQ: hasDaxStreams is false.
+//   * The radio persists its own frequency, mode and filter, so
+//     clientSettingsDomains is EMPTY and this backend never pushes restored state.
 class IcomCivBackend : public IRadioBackend {
     Q_OBJECT
 
@@ -90,10 +78,16 @@ public:
     void setPanPreamp(const QString& panId, int step) override;
     void setPanAttenuator(const QString& panId, int step) override;
     void setSliceRxAntenna(int sliceId, const QString& antenna) override;
+    ReceiveDispatch requestSliceDsp(int sliceId, const SliceDspRequest& request) override;
+    ReceiveDispatch requestSliceAudio(int sliceId, const SliceAudioRequest& request) override;
+    ReceiveDispatch requestSliceSquelch(int sliceId, const SliceSquelchRequest& request) override;
+    ReceiveDispatch requestSliceRxAntenna(int sliceId, const QString& antenna) override;
+    ReceiveDispatch requestSliceLock(int sliceId, bool locked) override;
     void setRadioDialLock(bool locked) override;
     void setKeying(bool key, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {}) override;
     void setTune(bool on, int tunePowerPercent, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {}) override;
     void setTxPower(int percent) override;
+    void setTunePower(int percent) override;
     QString sendCwText(const QString& text, const TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {}) override;
     void abortCwText(const TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {}) override;
     void setCwSpeed(int wpm) override;
@@ -121,9 +115,10 @@ public:
     void setTransmitFrequencyCheck(bool on) override;
     void setVox(bool on, int level, int delayMs) override;
     void setAtu(bool start, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {}) override;
-    void setRitEnabled(bool on) override;
-    void setXitEnabled(bool on) override;
-    void setRitOffset(int hz) override;
+    // One slice, always the transmit slice: the slice id is ignored.
+    void setSliceRitEnabled(int sliceId, bool on) override;
+    void setSliceXitEnabled(int sliceId, bool on) override;
+    void setSliceRitOffset(int sliceId, int hz) override;
     void submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz,
                        TxAudioSource source,
                        const TxCoordinator::Context& context) override;
@@ -134,22 +129,13 @@ public:
     // ---- diagnostics ----
     [[nodiscard]] HealthSnapshot healthSnapshot() const override;
 
-    // ---- the control registry, as the bridge sees it ----------------------
-    //
     // controlMap() is the DECLARED truth: IcomControls.h joined with what this
-    // backend can observe about itself — whether a control was read at connect,
-    // whether its reply has been seen, and whether anything has been sent to it
-    // this session. Cheap, read-only, and safe with no radio attached.
-    //
-    // controlScrub() is the CHECK. For every settable control it drives the seam
-    // and verifies that the exact frame reached either the wire or the scheduler.
-    // Because the bridge request is synchronous while CI-V dispatch is not, a
-    // scheduled result is completed by waiting for `civ scheduler` to drain
-    // without a timeout. `filter` narrows it to one id or one plane; empty
-    // scrubs everything safe.
-    //
-    // NEITHER KEYS THE TRANSMITTER. The scrub deliberately excludes ptt, tuner
-    // and power: two of them transmit and the third cannot be undone over WiFi.
+    // backend has observed (read at connect, reply seen, sent this session).
+    // Read-only and safe with no radio attached.
+    // controlScrub() drives the seam for every settable control and verifies the
+    // exact frame reached the wire or the scheduler, waiting for `civ scheduler` to
+    // drain. `filter` narrows it to one id or plane. NEITHER KEYS THE TRANSMITTER:
+    // ptt, tuner and power are excluded (two transmit, one can't be undone over WiFi).
     [[nodiscard]] QVariantList controlMap() const;
     [[nodiscard]] QVariantMap profileMap() const;
     [[nodiscard]] QVariantMap repeaterStateMap() const;
@@ -189,6 +175,8 @@ private:
 
     void queueTuneAudioFrame();
     [[nodiscard]] int stopTuneProducer();
+    // The RF-power level write itself, bypassing setTxPower()'s TUNE handling.
+    void writeTxPowerLevel(int percent);
     // Commanded PTT intent inside its confirmation window, radio truth
     // otherwise. See the definition for why neither alone is right.
     [[nodiscard]] bool txAudioGateOpen() const;
@@ -324,16 +312,10 @@ private:
     void terminateScheduler(IcomCivScheduler::TerminalOutcome requestOutcome,
                             SchedulerWaiterOutcome waiterOutcome);
     void applyScopeStartup();
-    // The connect-edge read burst, lifted out of onSessionConnected UNCHANGED.
-    //
-    // It is a function only so the rare unknown-model path can defer it until
-    // the address is known, and so a retarget can re-issue it — those reads went
-    // to an address nobody was listening on, so they returned nothing and
-    // re-sending them is both correct and the only way to recover the session.
-    //
-    // NOT a place to re-pace or re-order anything. RFC #4983 names this burst's
-    // bunching as a suspected cause of an unrecoverable CI-V stall; restructuring
-    // it belongs to that scheduler work, not here.
+    // The connect-edge read burst. A function so the unknown-model path can defer it
+    // until the address is known and a retarget can re-issue it (the earlier reads
+    // went to the wrong address). Do not re-pace or re-order it here; that belongs
+    // to the scheduler work in RFC #4983.
     void sendConnectReadBurst();
     int queueMemorySnapshot(const MemoryProfile& profile, int selectedGroup);
     void finishMemoryRefresh(bool success);
@@ -480,19 +462,9 @@ private:
     // transmission, and it shares the CI-V stream with tuning.
     std::int64_t m_lastPttPollMs = 0;
     static constexpr int kPttPollMs = 250;
-    // The scope geometry the RADIO last reported, from its own sweeps. Both pan
-    // intents reason against it: a zoom step needs to know which of the eight
-    // spans it is leaving, and a centre request needs a truth to snap back to.
-    // Zero means no sweep has arrived yet, in which case neither intent acts.
-    // Last enable state actually SENT for each radio-side DSP function, so a
-    // level change does not re-send the enable.
-    //
-    // Live testing showed why: the level setter carries the current enable with
-    // it (they travel as a pair by design), so "NR on at level 60" arrived as
-    // level-then-enable and put 16 40 00 on the wire immediately before
-    // 16 40 01 — a real, if brief, disable of the operator's noise reduction,
-    // and two frames on a CI-V stream that metering already shares.
-    // -1 = unknown, 0 = off, 1 = on.
+    // Last enable state actually SENT per radio-side DSP function, so a level change
+    // does not re-send the enable (which would put e.g. 16 40 00 then 16 40 01 on the
+    // wire — a brief real disable). -1 = unknown, 0 = off, 1 = on.
     int m_nrEnableSent = -1;
     int m_nbEnableSent = -1;
     int m_anfEnableSent = -1;
@@ -505,32 +477,15 @@ private:
     // visiting another mode does not silently reset a narrow filter.
     int m_filter = 1;
 
-    // THE WIDTH THAT SLOT ACTUALLY HOLDS, in Hz, from 1A 03 — not the factory
-    // default the slot number used to be turned into.
-    //
-    // ZERO MEANS UNKNOWN, and that distinction is the whole point. An operator
-    // who redefined FIL1 to 2.8 kHz in the SET menu got a passband drawn at
-    // 3.0 kHz and a button labelled 3.0k, with nothing anywhere saying the
-    // number was a guess. Where this is zero the backend falls back to the slot
-    // ladder exactly as before; where it is set, it is the radio's own answer
-    // and it wins. FM/DV/WFM have no settable width at all and stay zero
-    // forever, which is correct rather than missing.
+    // The width the selected slot actually holds, in Hz, from 1A 03. ZERO MEANS
+    // UNKNOWN: fall back to the slot ladder; when set, the radio's answer wins.
+    // FM/DV/WFM have no settable width and stay zero.
     int m_ifWidthHz = 0;
 
-    // WHICH CONTEXT THAT WIDTH WAS READ FOR — the mode, DATA flag and slot in
-    // force when 1A 03 answered.
-    //
-    // THE RADIO HOLDS A SEPARATE WIDTH FOR EVERY COMBINATION, so a width read
-    // in AM says nothing about USB. Deciding staleness by watching for a
-    // CHANGE instead does not work, and failed live: every setter here moves
-    // m_mode/m_filter optimistically before the write goes out, so by the time
-    // the radio's confirmation arrives the "did it move?" test compares the new
-    // value against itself and says no. The symptom was every mode drawing AM's
-    // 9 kHz window — a 9 kHz passband over a 3 kHz SSB filter — because the
-    // connect-time read was never superseded.
-    //
-    // Recording the context the answer BELONGS TO instead is not fooled by an
-    // optimistic write, because it is stamped only where the reply is decoded.
+    // The mode, DATA flag and slot in force when 1A 03 answered. The radio holds a
+    // separate width per combination, so a width is valid only for its context.
+    // Stamped where the reply is decoded, not inferred from m_mode/m_filter changes,
+    // because setters move those optimistically before the write goes out.
     CivMode m_ifWidthMode = CivMode::Usb;
     bool    m_ifWidthData = false;
     int     m_ifWidthSlot = 0;
@@ -601,31 +556,19 @@ private:
     bool    m_gpsPositionValid = false;
     IcomNtpAccess m_ntpAccess;
 
-    // The radio's MOD Input selection, as last reported (-1 = not yet read).
-    //
-    // THE SINGLE MOST IMPORTANT SETTING FOR TRANSMIT, and the one nothing else
-    // can infer. The radio modulates from ONE source per mode class; if it is
-    // not WLAN then every byte of network audio is discarded and the radio
-    // transmits its own microphone or nothing at all, at zero forward power,
-    // with no error anywhere in the protocol.
-    // TUNE composes its own carrier, because on this radio nothing else will.
-    //
-    // The radio modulates from the audio WE send. Keying in SSB with silence
-    // therefore produces no carrier at all — which is why TUNE stopped working
-    // the moment MOD Input was corrected to WLAN: before that the radio was
-    // modulating ambient room noise from its own microphone, and that happened
-    // to be enough for an antenna tuner to see something.
-    //
-    // The carrier owns a 20 ms radio-rate producer while TUNE is active. It
-    // cannot depend on microphone capture callbacks: PC Audio may be disabled,
-    // and then a keyed IC-705 receives no samples at all. Exact 20 ms frames
-    // match the RS-BA1 packetizer's framing without borrowing the mic stream.
+    // TUNE composes its own carrier: the radio modulates from the audio WE send
+    // (MOD Input = WLAN), so keying SSB with silence produces no carrier. A 20 ms
+    // radio-rate producer runs while TUNE is active, independent of mic capture
+    // (PC Audio may be disabled); 20 ms frames match the RS-BA1 packetizer.
     bool m_tuning = false;
     // Last non-off value reported by 16 47. The shared UI is still boolean,
     // so remembering 01 vs 02 is what lets OFF -> ON restore Full rather than
     // silently demoting it to Semi.
     int m_cwBreakInMode = 1;
+    // The operator's RF power while TUNE holds the drive register; the unkey
+    // writes it back. setTxPower() during TUNE updates this, not the register.
     int m_preTuneTxPowerPercent = -1;
+    TxCoordinator::Operation m_tuneOperation;   // the TUNE carrier's admission
     double m_tunePhase = 0.0;
     static constexpr double kTuneToneHz = 1500.0;
     static constexpr int kTuneToneFrameMs = 20;
@@ -633,6 +576,10 @@ private:
     // that would splatter a carrier the operator is deliberately leaving up.
     static constexpr float kTuneToneAmplitude = 0.5f;
 
+    // The radio's MOD Input selection, as last reported (-1 = not yet read).
+    // The radio modulates from ONE source per mode class; unless it is WLAN,
+    // network audio is discarded and it transmits mic audio or nothing, with
+    // no protocol error.
     int m_dataOffModInput = -1;   // SSB / CW / AM / FM
     int m_dataModInput    = -1;   // data modes (FT8 and friends)
     int m_usbModLevelPercent = -1;
@@ -653,22 +600,17 @@ private:
     void checkModInput();
     void publishPhoneModulationLevel();
 
+    // Scope geometry the RADIO last reported from its own sweeps; zoom steps
+    // and centre requests reason against it. Zero = no sweep yet, so neither
+    // pan intent acts.
     std::int64_t m_scopeCentreHz = 0;
     std::int64_t m_scopeSpanHz = 0;
 
-    // A short ring of recent CI-V frames, both directions, for diagnosis.
-    //
-    // WHY THIS IS HERE AND NOT IN THE LOG. The decisive evidence for a wire-
-    // format bug is one frame and its reply — our command echoed back, then FB
-    // (accepted) or FA (rejected). Getting at that used to mean relaunching
-    // with QT_LOGGING_RULES set, and on a single-client radio every relaunch
-    // costs a session timeout, so a three-line diagnosis took three restarts.
-    // Kept in the backend it is readable at any moment through one verb.
-    //
-    // SCOPE SWEEPS ARE EXCLUDED, and that is what makes the ring usable: they
-    // are ~500 bytes at 30 Hz and would evict everything interesting within a
-    // second. The exclusion is free — onCivFrame returns on them before it
-    // reaches the recorder.
+    // A short ring of recent CI-V frames, both directions: a wire-format diagnosis
+    // needs one frame and its FB/FA reply, readable at any time through one verb
+    // without relaunching (each relaunch costs a single-client session timeout).
+    // Scope sweeps (~500 bytes at 30 Hz) are excluded; onCivFrame returns on them
+    // before the recorder.
     struct CivTraceEntry {
         std::int64_t atMs = 0;
         bool outbound = false;

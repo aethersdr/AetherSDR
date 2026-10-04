@@ -1,24 +1,10 @@
-// MainWindow_AetherClock.cpp — AetherClock wiring for MainWindow.
-//
-// Constructs the AetherClock engine + model pair and connects them to the
-// rest of the app:
-//
-//   • AetherClockEngine (core) — decodes WWV/WWVB from the bound slice's
-//     DAX RX audio; owns the DAX-hold lifecycle through the injected
-//     provider below (never a private stream registration).
-//   • AetherClockModel — first-class Q_PROPERTY mirror consumed by the
-//     strip applet and the automation bridge's `get clock` verb.
-//   • AetherClockApplet (strip) — receives the engine action surface +
-//     model via attach(); slice binding rides AppletPanel::setSlice.
-//
-// The pan stream is backend-owned and does not exist until a radio session
-// is up, so nothing here touches it at construction time: the DAX-hold
-// provider resolves panStream() at call time (the engine only drives it
-// while started, which requires a live slice and therefore a live backend),
-// and the daxPcmReady feed is connected on runningChanged(true) and torn
-// down on runningChanged(false). The engine itself ignores PCM whose
-// channel differs from the bound slice's live daxChannel(), and PCM whose
-// slice id differs from the bound slice on the seam-native feed.
+// MainWindow_AetherClock.cpp — AetherClock wiring: AetherClockEngine (decodes
+// WWV/WWVB from the bound slice's DAX audio; holds DAX via the injected
+// provider), AetherClockModel (Q_PROPERTY mirror for the strip applet and
+// `get clock`), AetherClockApplet (attach(); slice via AppletPanel::setSlice).
+// The pan stream exists only with a live session: the provider resolves
+// panStream() at call time and daxPcmReady is connected on runningChanged(true)
+// and torn down on false. The engine ignores PCM for other channels/slices.
 
 #include "MainWindow.h"
 
@@ -57,52 +43,47 @@ void MainWindow::setupAetherClock()
     m_clockEngine->setDaxAvailabilityProvider(
         [this] { return m_radioModel.hasDaxStreams(); });
 
+    const auto bindAudio = [this] {
+        disconnect(m_clockDaxConn);
+        disconnect(m_clockSliceAudioConn);
+        m_clockDaxConn = {};
+        m_clockSliceAudioConn = {};
+        if (!m_clockEngine->isRunning()) {
+            return;
+        }
+        const quint64 generation = m_clockEngine->inputGeneration();
+        if (auto* ps = m_radioModel.panStream()) {
+            m_clockDaxConn = connect(
+                ps, &PanadapterStream::daxPcmReady, m_clockEngine,
+                [engine = m_clockEngine, generation](int channel, const PcmFrame& frame) {
+                    engine->feedRxAudio(channel, frame, generation);
+                }, Qt::QueuedConnection);
+        }
+        m_clockSliceAudioConn = connect(
+            &m_radioModel, &RadioModel::backendSliceAudioFrameReady, m_clockEngine,
+            [engine = m_clockEngine, generation](int sliceId, const PcmFrame& frame) {
+                engine->feedRxSliceAudio(sliceId, frame, generation);
+            }, Qt::QueuedConnection);
+    };
+    // Disconnect alone cannot cancel posted Qt events. Each production callback
+    // carries the run/selection generation, checked inside the engine at receipt.
+    connect(m_clockEngine, &AetherClockEngine::sourceGenerationChanged,
+            this, [bindAudio](quint64) { bindAudio(); });
+    connect(&m_radioModel, &RadioModel::connectionStateChanged, m_clockEngine,
+            [engine = m_clockEngine](bool connected) {
+                if (!connected) {
+                    engine->stop();
+                }
+            });
+    connect(&m_radioModel, &RadioModel::backendRebuilt,
+            m_clockEngine, &AetherClockEngine::stop);
     connect(m_clockEngine, &AetherClockEngine::runningChanged,
-            this, [this](bool running) {
+            this, [this, bindAudio](bool running) {
                 // The engine is the slice-binding authority; mirror it into
                 // the model so `get clock` reports the bound slice.
                 m_clockModel->setSliceId(running ? m_clockEngine->boundSliceId()
                                                  : -1);
-                if (running) {
-                    auto* ps = m_radioModel.panStream();
-                    if (ps && !m_clockDaxConn)
-                        m_clockDaxConn = connect(
-                            ps, &PanadapterStream::daxPcmReady,
-                            m_clockEngine,
-                            [engine = m_clockEngine](int channel, const PcmFrame& frame) {
-                                const QByteArray pcm = frame.legacyStereo24();
-                                if (!pcm.isEmpty()) {
-                                    engine->feedRxAudio(channel, pcm);
-                                }
-                            }, Qt::QueuedConnection);
-                    // Seam-native per-slice audio (MainWindow_Session.cpp:1811
-                    // feeds TciServer from the same signal for the same
-                    // reason). A backend that demodulates in-process has no
-                    // PanadapterStream, so the connect above binds nothing and
-                    // the engine would never see a sample. A Flex never emits
-                    // this signal, so there is no double-feed and the Flex path
-                    // is unchanged; the engine's own slice filter does the rest.
-                    if (!m_clockSliceAudioConn)
-                        m_clockSliceAudioConn = connect(
-                            &m_radioModel,
-                            &RadioModel::backendSliceAudioFrameReady,
-                            m_clockEngine,
-                            [engine = m_clockEngine](int sliceId, const PcmFrame& frame) {
-                                const QByteArray pcm = frame.legacyStereo24();
-                                if (!pcm.isEmpty()) {
-                                    engine->feedRxSliceAudio(sliceId, pcm);
-                                }
-                            }, Qt::QueuedConnection);
-                } else {
-                    if (m_clockDaxConn) {
-                        disconnect(m_clockDaxConn);
-                        m_clockDaxConn = {};
-                    }
-                    if (m_clockSliceAudioConn) {
-                        disconnect(m_clockSliceAudioConn);
-                        m_clockSliceAudioConn = {};
-                    }
-                }
+                bindAudio();
             });
 
     if (m_appletPanel) {

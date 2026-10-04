@@ -76,7 +76,7 @@ from pathlib import Path
 BASELINE = {
     # ---- models ----
     "src/models/RadioModel.cpp": 135,
-    "src/models/SliceModel.cpp": 63,
+    "src/models/SliceModel.cpp": 25,
     "src/models/TransmitModel.cpp": 39,
     "src/models/CwxModel.cpp": 9,
     "src/models/DaxIqModel.cpp": 4,
@@ -85,14 +85,14 @@ BASELINE = {
     "src/models/UsbCableModel.cpp": 3,
     # ---- gui ----
     "src/gui/RadioSetupDialog.cpp": 41,
-    "src/gui/MainWindow.cpp": 21,
+    "src/gui/MainWindow.cpp": 16,
     "src/gui/MainWindow_Wiring.cpp": 20,
     "src/gui/ProfileManagerDialog.cpp": 12,
     "src/gui/MemoryDialog.cpp": 5,
     "src/gui/MainWindow_Controllers.cpp": 4,
     "src/gui/MainWindow_Shortcuts.cpp": 4,
     "src/gui/TxBandDialog.cpp": 4,
-    "src/gui/MainWindow_Nets.cpp": 3,
+    "src/gui/MainWindow_Nets.cpp": 2,
     "src/gui/MemoryCommands.cpp": 3,
     "src/gui/MainWindow_DigitalModes.cpp": 2,
     "src/gui/DxClusterDialog.cpp": 1,

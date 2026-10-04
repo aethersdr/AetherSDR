@@ -26,20 +26,10 @@ class HidDeviceParser {
 public:
     virtual ~HidDeviceParser() = default;
     virtual HidEvent parse(const uint8_t* buf, size_t len) = 0;
-    // ⚠ KEEP THIS <= 64. It is not just a description of the device: it is
-    // passed straight to hid_read() as the length bound on a write into
-    // HidEncoderManager::m_buf, which is a fixed uint8_t[64]. A parser that
-    // returns more than 64 overflows that buffer as soon as the device sends a
-    // report that long, and nothing between here and there will catch it.
-    //
-    // Every parser below satisfies this, but TMate2 returns exactly 64, so
-    // there is no headroom left. If a new device genuinely needs a larger
-    // report, grow m_buf (or clamp at the hid_read call) in the same change —
-    // do not just return the bigger number.
-    //
-    // Returning LESS than the device's real report size is fine and is already
-    // done deliberately: StreamDeck+ advertises 512 in its HID descriptor and
-    // returns 14 here, because only the first 14 bytes carry data we decode.
+    // KEEP THIS <= 64: it bounds hid_read() into HidEncoderManager::m_buf, a fixed
+    // uint8_t[64], so a larger value overflows it. TMate2 already returns 64. A device
+    // needing more must grow m_buf (or clamp at hid_read) in the same change.
+    // Returning less than the real report size is fine (StreamDeck+ returns 14).
     virtual size_t reportSize() const = 0;
     virtual int encoderCount() const { return 1; }
 
@@ -93,20 +83,14 @@ private:
     bool m_firstReport{true};
 };
 
-// Elgato StreamDeck+ (VID 0x0FD9, PID 0x0084)
-// 14-byte reports (device HID descriptor advertises 512 but only first 14
-// bytes carry event data; matching python-elgato-streamdeck library behaviour).
-// hidapi always includes the 1-byte report ID (0x01) as buf[0] on all platforms.
-// Layout (all indices into raw buf[]):
-//   [0] report ID = 0x01 (always present — strip it)
-//   [1] event type: 0x00=key state, 0x02=touchscreen, 0x03=dial (encoder)
-//   [2..3] reserved/padding
-//   Dial event ([1]==0x03):
-//     [4] sub-type: 0x01=turn, 0x00=push
-//     [5..8] 4 encoder values (signed int8 delta for turn, bool for push)
-//   Key event ([1]==0x00):
-//     [4..11] 8 LCD key states (0=up, 1=down)
-// Button numbering: LCD keys 1-8, encoder press buttons 9-12.
+// Elgato StreamDeck+ (VID 0x0FD9, PID 0x0084). 14-byte reports (the descriptor
+// says 512; only 14 carry data). hidapi includes report ID 0x01 as buf[0].
+//   [0] report ID 0x01 (strip)
+//   [1] event: 0x00 key, 0x02 touchscreen, 0x03 dial
+//   Dial ([1]==0x03): [4] 0x01 turn / 0x00 push; [5..8] 4 encoders (int8 delta
+//                     for turn, bool for push)
+//   Key  ([1]==0x00): [4..11] 8 LCD key states (0 up, 1 down)
+// Buttons: LCD keys 1-8, encoder presses 9-12.
 class StreamDeckPlusParser : public HidDeviceParser {
 public:
     HidEvent parse(const uint8_t* buf, size_t len) override;
@@ -117,23 +101,15 @@ private:
     uint8_t m_prevEncBtns{0};      // bitmask of previous encoder button states (bits 0-3)
 };
 
-// ELAD/WoodBoxRadio TMate 2 (VID 0x1721, PID 0x0614)
-// 64-byte HID reports (full USB interrupt report size).
-// Input layout (bytes 0-8 mapped; 9-63 not yet fully decoded):
-//   [0]    report ID = 0x01
-//   [1..2] encoder 1, little-endian uint16 (absolute wrapping counter)
-//   [3..4] encoder 2, little-endian uint16
-//   [5..6] encoder 3 (volume), little-endian uint16
-//   [7..8] key bitmask, little-endian uint16, active-low (bit clear = pressed):
-//          bit0=F1, bit1=F2, bit2=F3, bit3=F4, bit4=F5, bit5=F6,
-//          bit6=enc1/main-encoder push, bit7=enc2 push, bit8=enc3 push.
-//          Idle state: 0x01FF (all bits set).
-// Encoder delta uses 16-bit wrap correction (same as ShuttleXpress jog).
-// encoderIndex: 0=enc1/main-tuning (bytes 1-2), 1=enc2/TX-power (bytes 3-4), 2=enc3/volume (bytes 5-6).
-// Buttons: 1-6=F1-F6, 9=main-encoder push (enc1), 10=encoder2 push (enc2), 11=encoder3 push (enc3).
-// Encoder push buttons use the 9+ range to route through HidEncoderPushAction{0-2} in MainWindow.
-// Note: bit6=$0040=main-encoder push, bit7=$0080=enc2 push, bit8=$0100=enc3 push (hardware naming quirk).
-// Protocol reverse-engineered via USBPcap; documented in OpenTMate2Lib.
+// ELAD/WoodBoxRadio TMate 2 (VID 0x1721, PID 0x0614), 64-byte reports (bytes
+// 9-63 not decoded); reverse-engineered via USBPcap (OpenTMate2Lib):
+//   [0]    report ID 0x01
+//   [1..2] enc1 (main tuning), [3..4] enc2 (TX power), [5..6] enc3 (volume):
+//          LE uint16 wrapping counters, 16-bit wrap correction
+//   [7..8] keys, LE uint16, active-low (idle 0x01FF): bit0-5 F1-F6,
+//          bit6 enc1 push, bit7 enc2 push, bit8 enc3 push
+// Buttons: 1-6 = F1-F6, 9/10/11 = enc1/2/3 push (routes to
+// HidEncoderPushAction{0-2} in MainWindow).
 class TMate2Parser : public HidDeviceParser {
 public:
     HidEvent parse(const uint8_t* buf, size_t len) override;

@@ -6,29 +6,12 @@
 
 namespace AetherSDR {
 
-// PAPR-reduction phase rotator — TX DSP chain stage (#2887).
-//
-// Voice is asymmetric: glottal pulses produce peaks taller in one polarity
-// than the other. A compressor sees those tall peaks and pulls average gain
-// down to clamp them. Cascading several second-order all-pass sections at
-// staggered audio frequencies decorrelates the harmonic phase alignment
-// that creates those tall peaks — peak amplitude drops 2–3 dB with no
-// perceived loudness loss, so the compressor downstream has less to clamp
-// and average TX power can run hotter. Standard broadcast technique
-// (Optimod, Orban) adopted by Thetis for amateur SSB.
-//
-// Topology: cascade of N second-order all-pass (Direct Form I) filters at
-// fixed staggered centre frequencies. All-pass means unit magnitude at
-// every frequency (no spectral colouration) and only the phase response
-// is rotated, decorrelating the constructive peak alignment.
-//
-// Default centres (300/700/1500/2500 Hz with optional 1000/2000 Hz add)
-// are picked to cover the speech formant range without bunching.
-//
-// Thread model mirrors ClientGate: UI thread writes via set*() which
-// update atomics + bump a version counter; the audio thread reads the
-// version once per block and recaches. No locks, no allocations in
-// process(), no exceptions.
+// PAPR-reduction phase rotator, TX chain (#2887). Voice peaks are asymmetric;
+// cascaded second-order all-pass sections (Direct Form I) at staggered centres
+// (300/700/1500/2500 Hz, optional 1000/2000 Hz) decorrelate harmonic phase,
+// cutting peaks 2-3 dB with no magnitude change, so the compressor can run
+// average power hotter (Optimod/Orban technique). UI thread writes atomics +
+// bumps a version; the audio thread recaches per block. No locks or allocations.
 class ClientPhaseRotator {
 public:
     static constexpr int kMaxStages = 6;

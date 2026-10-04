@@ -7,7 +7,9 @@
 
 #include <array>
 
+class QAction;
 class QHideEvent;
+class QPushButton;
 class QShowEvent;
 class QStackedWidget;
 class QTimer;
@@ -24,34 +26,14 @@ class StripPuduPanel;
 class StripRxOutputPanel;
 class StripTubePanel;
 class StripWaveformPanel;
-// AetherRX — the receive chain in one window.
-//
-// Every client-side RX stage lives here, one per tab down the left-hand side
-// in signal order: noise reduction, gate, EQ, compressor, tube, exciter, and
-// the final output meter with its waveform. The tabs are the same
-// ModemChrome strip the AetherDSP body uses along its top, stood on end.
-//
-// This is the only RX surface: the Aetherial strip is AetherTX now and no
-// longer carries a receive page, so these panel instances are not competing
-// with a second copy.
-//
-// The AetherNR tab holds AetherDspWidget whole, including its own horizontal
-// method strip — the seven noise-reduction methods stay one click apart
-// rather than becoming seven more entries in this bar.
-//
-// Each tab carries a checkbox at its right-hand end that enables or bypasses
-// that stage, the same flag the RX chain strip's click-to-bypass toggles —
-// this window is where you set a stage up, so it is where you should be able
-// to switch it off. Out is the exception: a meter and a waveform are not a
-// stage and have nothing to bypass, so that row is indented to the others'
-// labels and carries no box.
-//
-// The five rows that are chain stages also carry a grip on the left, and
-// dragging one up or down rewrites AudioEngine's RX chain order — the bar is
-// the signal path, so moving a row moves the stage. AetherNR and Out have no
-// grip: client noise reduction runs ahead of the chain rather than inside it,
-// and Out is the meter at the end of it, so neither appears in RxChainStage
-// and neither can be anywhere but first and last.
+// AetherRX — the receive chain in one window, and the only RX surface. One tab
+// per client-side RX stage down the left in signal order (NR, gate, EQ,
+// compressor, tube, exciter, output meter), using the ModemChrome strip stood
+// on end. The AetherNR tab holds AetherDspWidget whole, with its own method
+// strip. Each stage tab has a bypass checkbox (the same flag as the RX chain
+// strip's click-to-bypass); Out has none. The five chain-stage rows have drag
+// grips that reorder AudioEngine's RX chain; AetherNR (runs ahead of the chain)
+// and Out (the end meter) aren't in RxChainStage and stay first and last.
 class AetherRxDialog : public PersistentDialog {
     Q_OBJECT
 
@@ -67,6 +49,20 @@ public:
 
     // The profile library: save, load, import, export the receive chain.
     void showSettings();
+
+    // The REC / PLAY pair, driven back by MainWindow with what the recorder
+    // (or the radio) actually did -- the same three setters VfoWidget has,
+    // so the wiring reads the same. Blocked, so a readback is never a click.
+    void setRecordOn(bool on);
+    void setPlayOn(bool on);
+    void setPlayEnabled(bool enabled);
+
+    // "TX Playback", the one entry on PLAY's context menu: transmit the last
+    // recording over the active slice. The action is exposed so MainWindow
+    // can register the bridge-guarded keying action on it (TxKeyingMarker);
+    // selecting it again while a playback is transmitting stops it.
+    QAction* txPlaybackAction() const { return m_txPlaybackAction; }
+    void setTxPlaybackActive(bool on);
 
     // Jump to a named tab. Understands both this window's stage names
     // ("Gate", "Tube") and the noise-reduction method names ("NR2", "MNR"),
@@ -85,6 +81,17 @@ public:
     StripEqPanel* eqPanel() const { return m_eq; }
 
 signals:
+    // REC / PLAY clicked, with the state the button now shows. Same shape as
+    // VfoWidget::recordToggled / playToggled, and MainWindow routes them the
+    // same way: to the client-side QSO recorder or the active slice's
+    // radio-side recorder, then calls the setters with what really happened.
+    void recordToggled(bool on);
+    void playToggled(bool on);
+    // The operator chose "TX Playback" on PLAY's context menu. MainWindow
+    // captures the transmit input at this boundary and keys, or stops the
+    // playback already transmitting.
+    void txPlaybackTriggered();
+
     // The AetherNR checkbox re-enabling NR2. Goes out rather than straight to
     // the engine because NR2 needs MainWindow's FFTW-wisdom prep first (#2275)
     // — the same reason AetherDspWidget and the chain strip both raise it.
@@ -139,6 +146,18 @@ private:
     AudioEngine*        m_audio{nullptr};
     AetherDspWidget*    m_widget{nullptr};
     StageTabBar*        m_tabs{nullptr};
+    // The BYPASS toggle at the foot of the stage column, beside the Settings
+    // gear, in the same spot AetherTX keeps its own. Owned by the StageTabBar; routes
+    // through AudioEngine::setRxBypassed and follows rxBypassChanged.
+    QPushButton*        m_bypassBtn{nullptr};
+    // REC / PLAY on one row above BYPASS, as in AetherTX. These record the
+    // receive audio itself, through the QSO recorder the VFO flag's pair
+    // drives; the transmit window's pair captures the processed TX chain.
+    QPushButton*        m_recBtn{nullptr};
+    QPushButton*        m_playBtn{nullptr};
+    QAction*            m_txPlaybackAction{nullptr};
+    bool                m_txPlaybackActive{false};
+    bool                m_playEnabled{false};   // what the host last said
     QStackedWidget*     m_stack{nullptr};
     QTimer*             m_checkTimer{nullptr};
 

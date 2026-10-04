@@ -75,17 +75,11 @@ constexpr double kReceiveGateMinimumDbfs = -32.0;
 constexpr double kReceiveGateFloorAlpha = 0.04;
 constexpr double kReceiveGateCloseSeconds = 3.0;
 constexpr int kDuplicateSuppressSeconds = 2;
-// TX preamble (TXDELAY) is the run of leading HDLC flags that lets the far
-// receiver's PLL/AGC settle before frame data. It is profile-specific: HF 300
-// keeps its long preamble, while VHF 1200 uses a shorter one because at 1200
-// baud each flag is 4x quicker (80 flags = 533 ms vs a far more typical ~0.43 s
-// here), trimming dead air and slot time without starving the receiver. Tune
-// kAx25Vhf1200PreambleFlags if a transverter's T/R switching needs more lead-in.
-//
-// These live in Ax25LinkTiming.h, not here, because the link-layer airtime
-// model has to read the same numbers the modulator transmits — T1 is derived
-// from them. If the two ever drifted apart, T1 would silently stop matching
-// reality, which is exactly the class of bug that broke HF connected mode.
+// TX preamble (TXDELAY) flags let the far receiver's PLL/AGC settle. HF 300
+// keeps its long preamble; VHF 1200 uses fewer flags (~0.43 s) — raise
+// kAx25Vhf1200PreambleFlags if a transverter's T/R switching needs more.
+// Defined in Ax25LinkTiming.h so the airtime model that derives T1 reads the
+// same numbers the modulator sends.
 constexpr int kTxPreambleFlags = ax25::kAx25Hf300PreambleFlags;        // HF 300: ~2.13 s
 constexpr int kVhf1200TxPreambleFlags = ax25::kAx25Vhf1200PreambleFlags; // VHF: ~0.43 s
 constexpr int kTxPostambleFlags = ax25::kAx25TxPostambleFlags;

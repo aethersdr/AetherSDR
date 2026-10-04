@@ -10,21 +10,11 @@ namespace AetherSDR {
 
 class ClientComp;
 
-// Read-only transfer curve for the Pro-XL-style compressor.  Draws the
-// static gain curve (input dB on X, output dB on Y) from the live
-// ClientComp parameters, with a glowing "ball" sliding along the curve
-// at the current input envelope level so you can see the compressor
-// working in real time.
-//
-// Used in two places: inside the docked applet as a compact dashboard,
-// and inside the floating editor as the canvas backdrop.  Interactive
-// threshold-drag + ratio-handle behaviour lives in the subclass
-// ClientCompEditorCanvas, not here.
-//
-// Thread model: the bound ClientComp is read on the UI thread only.
-// Parameter reads and meter reads are already atomic internally, so
-// paintEvent + the meter-polling QTimer are both safe from the UI
-// thread without any additional locking.
+// Read-only compressor transfer curve (input dB X, output dB Y) from live
+// ClientComp parameters, with a ball at the current input envelope. Used in the
+// docked applet and as the editor's canvas backdrop; drag handles live in
+// ClientCompEditorCanvas. UI thread only; ClientComp's parameter and meter
+// reads are atomic, so no extra locking.
 class ClientCompCurveWidget : public QWidget {
     Q_OBJECT
 

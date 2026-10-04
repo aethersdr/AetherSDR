@@ -3,7 +3,6 @@
 #include "ClientEqApplet.h"   // ClientEqApplet::Path enum
 #include "core/AudioEngine.h" // AudioEngine::TxChainStage in signal sig
 
-#include <QPointer>
 #include <QWidget>
 
 class QPushButton;
@@ -15,7 +14,6 @@ class QVBoxLayout;
 
 namespace AetherSDR {
 
-class AetherTxSettingsDialog;
 
 class AudioEngine;
 class StageTabBar;
@@ -30,18 +28,10 @@ class StripReverbPanel;
 class StripWaveformPanel;
 class StripFinalOutputPanel;
 
-// AetherTX — the transmit chain in one window.
-//
-// First-iteration plumbing for issue #2301.  Toplevel `Qt::Window`
-// that embeds all 7 client-side TX DSP stage panels in a single
-// view, with a horizontal `ClientChainWidget` at the top for chain
-// ordering / bypass.  Per-stage editors and applets continue to
-// work alongside this window during iteration; step 6 of the plan
-// removes them.
-//
-// Geometry persists via AppSettings("AetherialStripGeometry").
-// Visibility persists via AppSettings("AetherialStripVisible") so
-// the strip reopens at last position on startup.
+// AetherTX — the transmit chain in one window (#2301): a top-level Qt::Window
+// embedding the client-side TX DSP stage panels, one per page, selected from a
+// tab column on the left. Geometry persists in "AetherialStripGeometry" and
+// visibility in "AetherialStripVisible", so it reopens where it was.
 class AetherialAudioStrip : public QWidget {
     Q_OBJECT
 
@@ -55,6 +45,8 @@ public:
     ~AetherialAudioStrip() override;
 
     void setFramelessMode(bool on);
+    void setAudioPathNotice(const QString& text, bool warning);
+    void closeSettingsIfOpen();
 
     // Forward radio TX filter cutoffs to the embedded EQ canvas so the
     // dashed yellow filter-edge guide lines render here too.  MainWindow
@@ -119,12 +111,14 @@ protected:
 private:
     void refreshIndicators();
 
-    // The Settings dialog while it is open, so monitor state that changes
-    // underneath it still reaches its buttons. QPointer because the dialog is
-    // a stack local in showSettings().
-    QPointer<AetherTxSettingsDialog> m_settingsDlg;
+    // The REC / PLAY pair on one row at the foot of the stage column, above
+    // BYPASS. Owned by the StageTabBar; lit by MainWindow through the
+    // setMonitor* setters.
+    QPushButton* m_monRecBtn{nullptr};
+    QPushButton* m_monPlayBtn{nullptr};
 
     QLabel* m_micDot{nullptr};
+    QLabel* m_pcAudioNotice{nullptr};
     QLabel* m_micLabel{nullptr};
     QLabel* m_txDot{nullptr};
     QLabel* m_txLabel{nullptr};
@@ -138,6 +132,9 @@ private:
     // them.  Restores the snapshot on uncheck.  Mirrors the docked
     // ClientChainApplet's BYPASS button.
     void onBypassToggled(bool checked);
+    // The BYPASS toggle at the foot of the stage column, beside the Settings
+    // gear. Owned by the StageTabBar; follows AudioEngine::txBypassChanged.
+    QPushButton* m_bypassBtn{nullptr};
 
     void addStage(Stage stage, const QString& label, QWidget* page);
 
@@ -145,7 +142,7 @@ private:
     void setStageEnabled(Stage stage, bool on);
     bool stageEnabled(Stage stage) const;
 
-    // The profile library, bypass and the transmit monitor.
+    // The profile library.
     void showSettings();
 
     // After a profile has been applied to the engine, push fresh values
@@ -163,9 +160,6 @@ private:
     // the docked chain applet toggles the same flags.
     QTimer*              m_checkTimer{nullptr};
     bool                 m_buildingCombo{false};
-    bool               m_monRecording{false};
-    bool               m_monPlaying{false};
-    bool               m_monHasRecording{false};
     StripTubePanel*    m_tube{nullptr};
     StripGatePanel*    m_gate{nullptr};
     StripEqPanel*      m_eq{nullptr};

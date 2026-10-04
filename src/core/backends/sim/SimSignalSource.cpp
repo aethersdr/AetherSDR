@@ -1,5 +1,7 @@
 #include "core/backends/sim/SimSignalSource.h"
 
+#include "core/backends/sim/DemoRadioConstants.h"
+
 #include <QDebug>
 
 namespace AetherSDR {
@@ -15,16 +17,10 @@ SimSignalSource::SimSignalSource(QObject* parent) : QObject(parent)
     // delete children. (Caught by sim_signal_source_test — zero frames.)
     m_timer.setParent(this);
 
-    // Frame cadence: kFrameLen (128) samples at kSampleRate (24 kHz) = 5.333 ms
-    // of audio per frame — NOT an integer number of milliseconds, so no fixed
-    // interval can be right on its own. The timer only sets the CHECK cadence;
-    // onTick() emits as many whole frames as real elapsed time has earned and
-    // carries the remainder, so the long-run rate is exactly 24 kHz.
-    //
-    // 10 ms coarse, not 3 ms precise: this object lives on its own worker
-    // (#4878), where a precise short timer buys nothing and a coarse one lets
-    // the kernel batch wakeups. 10 ms earns 1–2 frames per tick; the burst cap
-    // below covers stalls.
+    // A frame is 128 samples at 24 kHz = 5.333 ms, not whole ms, so the timer only
+    // sets the check cadence: onTick() emits every frame elapsed time has earned and
+    // carries the remainder (exact 24 kHz long-run). 10 ms coarse lets the kernel
+    // batch wakeups on this worker; the burst cap below covers stalls.
     m_timer.setTimerType(Qt::CoarseTimer);
     m_timer.setInterval(10);
     connect(&m_timer, &QTimer::timeout, this, &SimSignalSource::onTick);
@@ -36,11 +32,6 @@ SimSignalSource::SimSignalSource(QObject* parent) : QObject(parent)
     m_audio.setEnabled(NoiseMixer::Channel::Birdie, true);
     m_audio.setLevelDb(NoiseMixer::Channel::Birdie, -18.0);
     m_audio.setKnob(NoiseMixer::Channel::Birdie, QStringLiteral("hz"), 1200.0);
-}
-
-void SimSignalSource::start()
-{
-    startSession(0);
 }
 
 void SimSignalSource::startSession(quint64 session)
@@ -55,6 +46,7 @@ void SimSignalSource::startSession(quint64 session)
         qWarning() << "SimSignalSource: producer refused session" << session
                    << "(speaker =" << speakerOk << ", slice =" << sliceOk << ")";
     }
+    m_session = session;
     m_clock.invalidate();   // fresh pacing baseline; first frames next tick
     m_debtNs = 0;
     m_timer.start();
@@ -143,7 +135,9 @@ void SimSignalSource::onTick()
         if (!m_scopeStalled && ++m_frames % kSpectrumRowEveryNFrames == 0) {
             constexpr int kBins = 1024;
             constexpr double kFloorDbm = -120.0;
-            constexpr double kAudioSpanHz = 8000.0;   // ±4 kHz around the VFO
+            // ±4 kHz around the VFO — the same span the synthetic connect
+            // publishes as the pan bandwidth, in Hz. One definition.
+            constexpr double kAudioSpanHz = DemoRadio::kAudioSpanHz;
             const QVector<float> row =
                 m_audio.spectrum(kBins, kFloorDbm, kAudioSpanHz, kBins / 2);
             const QByteArray bytes(
@@ -154,7 +148,7 @@ void SimSignalSource::onTick()
             // gets its own emission, so the seam carries real multi-pan load
             // and RadioModel routes rows to the right pane (#4887 phase 4).
             for (const int pan : m_panIndices)
-                emit spectrumFrameReady(pan, bytes);
+                emit spectrumFrameReady(pan, m_session, bytes);
         }
     }
 }

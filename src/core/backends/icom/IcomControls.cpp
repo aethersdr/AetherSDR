@@ -18,17 +18,10 @@ int speechProcessorRawLevel(int maximum, int level) noexcept
 
 namespace {
 
-// EVERY CI-V MESSAGE THIS BACKEND NAMES, wired or not.
-//
-// The bar for inclusion is that a constant exists in CivCodec.h. A row whose
-// `wiring` is Declared is a constant with no call sites — the radio has the
-// feature, we have written down its address, and nothing reaches it. Those rows
-// are the point of the table; deleting them would restore exactly the blindness
-// it exists to remove.
-//
-// Ranges are from the IC-705 CI-V Reference Guide (2020). Where a row's real
-// behaviour is more complicated than four integers, `note` says so rather than
-// the numbers quietly lying.
+// Every CI-V message this backend names, wired or not: the bar is a constant in
+// CivCodec.h. `Declared` rows (no call sites) are intentional — they make unwired
+// features enumerable. Ranges from the IC-705 CI-V Reference Guide (2020);
+// `note` explains rows that four integers can't describe.
 constexpr std::array kSpecs = {
     // ---- Tuning and mode ------------------------------------------------
     ControlSpec{"freq", 0x05, 0, false, "Operating frequency",
@@ -380,7 +373,7 @@ constexpr std::array kSpecs = {
     ControlSpec{"rit.offset", 0x21, 0x00, true, "RIT / XIT offset",
                 Plane::Slice, Encoding::Bcd4, Wiring::Both,
                 -9999, 9999, "Hz", -9999, 9999,
-                "setRitOffset", "vfoRitSpin", true,
+                "setSliceRitOffset", "vfoRitSpin", true,
                 "ONE register shared by both: 21 01 and 21 02 choose whether it "
                 "applies to receive, transmit or both, so the decoded offset is "
                 "published to each. A signed magnitude — the sign is a separate "
@@ -388,11 +381,11 @@ constexpr std::array kSpecs = {
     ControlSpec{"rit.enable", 0x21, 0x01, true, "RIT enable",
                 Plane::Slice, Encoding::OnOff, Wiring::Both,
                 0, 1, "on/off", 0, 1,
-                "setRitEnabled", "vfoRitBtn", true, ""},
+                "setSliceRitEnabled", "vfoRitBtn", true, ""},
     ControlSpec{"xit.enable", 0x21, 0x02, true, "XIT (dTX) enable",
                 Plane::Slice, Encoding::OnOff, Wiring::Both,
                 0, 1, "on/off", 0, 1,
-                "setXitEnabled", "vfoXitBtn", true, ""},
+                "setSliceXitEnabled", "vfoXitBtn", true, ""},
 
     // ---- SET menu (0x1A 05) ----------------------------------------------
     ControlSpec{"mod.input.dataoff", 0x1A, 0x05, true, "DATA OFF MOD input",

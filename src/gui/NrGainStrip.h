@@ -9,20 +9,11 @@
 
 namespace AetherSDR {
 
-// The scrolling noise-reduction trace in the AetherDSP status strip.
-//
-// A cursor sweeps across the strip and each step plots the gain the active
-// method is currently applying, as AudioEngine::nrGainChanged reports it: the
-// trace rides high where the reduction is passing signal through (speech) and
-// drops into the floor where it is suppressing (the gaps between syllables).
-// Speech-height steps draw bright, floor steps dim, so the shape of the
-// channel reads at a glance without anyone having to interpret a number.
-//
-// The sweep runs on its own timer rather than on the audio blocks so the
-// horizontal scale stays constant whatever rate the source delivers at; the
-// timer samples whatever value was last pushed. With no method running the
-// strip draws a flat idle baseline, which is deliberately distinct from a
-// method that happens to be passing everything (gain 1.0 rides at the top).
+// Scrolling NR trace in the AetherDSP status strip: a cursor sweeps and plots
+// the active method's gain (AudioEngine::nrGainChanged), bright at speech
+// height, dim at the floor. The sweep has its own timer so the horizontal scale
+// is constant; it samples the last pushed value. No method → flat idle
+// baseline, distinct from gain 1.0 at the top.
 class NrGainStrip final : public QWidget {
     Q_OBJECT
 

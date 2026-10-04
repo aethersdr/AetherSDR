@@ -17,25 +17,13 @@ namespace AetherSDR {
 
 class SettingsDatabase;
 
-// Client settings store, backed by SQLite (RFC #4603) at
-// <config>/AetherSDR/AetherSDR.db — ~/.config on Linux, ~/Library/Preferences
-// on macOS, %LOCALAPPDATA% on Windows. Values are strings; booleans are the
-// literal strings "True"/"False" (unchanged convention).
-//
-// Usage (unchanged since the XML era):
-//   auto& s = AppSettings::instance();
-//   s.setValue("LastConnectedRadioSerial", "2125-1213-8600-8895");
-//   QString serial = s.value("LastConnectedRadioSerial").toString();
-//   s.save();
-//
-// Reads and writes hit an in-memory cache; save() commits the dirty rows in
-// one transaction. All public accessors are thread-safe (the XML store was
-// not — #4602); never hold the audio callback on save(), which does I/O.
-//
-// On first launch after the upgrade, load() imports the legacy XML store in
-// one verified transaction and leaves the XML in place as a frozen snapshot
-// (downgrade insurance). Credentials are never imported into the database —
-// they divert to QtKeychain / the session vault (RFC #4603 proposal E).
+// Client settings store, SQLite-backed (RFC #4603) at <config>/AetherSDR/AetherSDR.db
+// (~/.config, ~/Library/Preferences, %LOCALAPPDATA%). Values are strings;
+// booleans are "True"/"False". Reads/writes hit an in-memory cache and save()
+// commits dirty rows in one transaction. Accessors are thread-safe, but save()
+// does I/O: never call it from the audio callback. First launch imports the
+// legacy XML store and leaves it in place; credentials go to QtKeychain / the
+// session vault, never the database.
 class AppSettings {
 public:
     static AppSettings& instance();

@@ -69,6 +69,7 @@ void AmpModel::setDirectConnection(PgxlConnection* conn)
         m_setupNickname.clear();
         m_setupLedIntens.clear();
         m_setupAuthCode.clear();
+        m_setupHasAuthKey = false;
         m_fanMode.clear();
         if (!m_meffa.isEmpty()) {
             m_meffa.clear();
@@ -205,7 +206,9 @@ void AmpModel::applySetupGroup(const QMap<QString, QString>& kvs)
     m_setupLedIntens = kvs.value(QStringLiteral("ledintens"));
     // Present but empty on an amplifier with no auth configured, and empty is
     // the value to send back — value() returning a default here is correct.
+    // A non-empty code is never sent back; see writeSetupGroup().
     m_setupAuthCode  = kvs.value(QStringLiteral("authcode"));
+    m_setupHasAuthKey = kvs.contains(QStringLiteral("authcode"));
     const bool becameWritable = !m_haveSetupGroup;
     m_haveSetupGroup = true;
     // Re-announce MEffA. Its VALUE has not moved, but whether it can be
@@ -219,57 +222,41 @@ void AmpModel::writeSetupGroup(const QString& meffa, const QString& fanMode)
     if (!m_directConn || !m_directConn->isConnected()) return;
     if (!m_haveSetupGroup) return;   // see canWriteSetup()
 
-    // Byte-for-byte the shape the vendor utility sends, captured off the wire:
-    //
+    // Same shape the vendor utility sends:
     //   setup nickname=PowerGeniusXL meffa=OFF ledintens=141 fanmode=STANDARD authcode=
-    //
-    // ALL FIVE KEYS, EVERY TIME, in this order. A `setup` that names only the
-    // key being changed is not how the amplifier is ever written to by its own
-    // utility, and the four omitted values are real configuration — a nickname
-    // and an LED intensity the operator set, and the auth code. Sending the
-    // group back unchanged is what makes a one-field change a one-field
-    // change.
-    //
-    // No `save` follows. That is deliberate and it is what the vendor does for
-    // the front-panel indicator: §9.4, "the change is not recorded in the
-    // amplifier's configuration memory. To make the MEffA mode change
-    // permanent, use the Save button on the Configuration screen." A panel
-    // toggle is a run-time choice, not an edit to the amplifier's stored
-    // configuration.
-    m_directConn->sendCommand(
-        QStringLiteral("setup nickname=%1 meffa=%2 ledintens=%3 fanmode=%4 authcode=%5")
-            .arg(m_setupNickname, meffa, m_setupLedIntens, fanMode, m_setupAuthCode));
+    // The group in this order, every time, echoing the unchanged values so a
+    // one-field change stays one field. No `save` follows: like the front-panel
+    // toggle (§9.4), this is a run-time choice, not stored configuration.
+    // Firmware 3.9.8 with authorization enabled refuses a `setup` carrying
+    // `authcode=<code>` (50000013) and accepts the group without it, leaving
+    // the stored code unchanged; `authcode=` goes out only when `setup read`
+    // reported it empty.
+    QString command =
+        QStringLiteral("setup nickname=%1 meffa=%2 ledintens=%3 fanmode=%4")
+            .arg(m_setupNickname, meffa, m_setupLedIntens, fanMode);
+    if (m_setupHasAuthKey && m_setupAuthCode.isEmpty()) {
+        command += QStringLiteral(" authcode=");
+    }
+    m_directConn->sendCommand(command);
 }
 
 void AmpModel::setMeffaEnabled(bool on)
 {
     if (!canWriteSetup()) return;
-    // The SETTABLE vocabulary is not the REPORTED one, and assuming otherwise
-    // is how this first shipped broken. Status reports OFF, STANDBY or ACTIVE
-    // — what the algorithm is doing. A write accepts AUTO or OFF — whether it
-    // is allowed to run at all. `setup … meffa=ACTIVE …` is refused with
-    // 50000013, a bad-parameter code distinct from the 50000015 an unknown
-    // command gets, and the amplifier is left exactly as it was.
-    //
-    // AUTO is the amplifier's own word for the checkbox in §9.6.4, captured
-    // off the vendor utility enabling it. What follows is the amplifier's
-    // call: AUTO in class AB becomes ACTIVE, in class AAB it becomes STANDBY.
+    // Settable vocabulary differs from reported: Status reports OFF/STANDBY/ACTIVE,
+    // a write accepts AUTO or OFF (`meffa=ACTIVE` is refused with 50000013 and
+    // nothing changes). AUTO is the vendor utility's word (§9.6.4); the amp then
+    // reports ACTIVE in class AB, STANDBY in class AAB.
     m_meffaIntent = on ? QStringLiteral("AUTO") : QStringLiteral("OFF");
     writeSetupGroup(m_meffaIntent, m_fanMode);
 }
 
 QString AmpModel::meffaWriteWord() const
 {
-    // NEVER the reported word. Status says OFF / STANDBY / ACTIVE — what the
-    // algorithm is doing — and a write takes AUTO or OFF, whether it may run.
-    // Sending a reported word back draws 50000013 and the whole group write is
-    // refused, silently, which is how a fan-mode change used to vanish while
-    // MEffA was on.
-    //
-    // The commanded bit wins while it is outstanding: between our write and the
-    // amplifier's next status the reported word is still the OLD state, so
-    // deriving from it would send meffa=OFF one poll after the operator
-    // enabled it and turn it straight back off.
+    // Never the reported word: Status says OFF / STANDBY / ACTIVE, a write takes
+    // AUTO or OFF, and a reported word draws 50000013, refusing the whole group.
+    // The commanded intent wins while outstanding, because until the next status
+    // the reported word is still the old state and would undo the operator's change.
     if (!m_meffaIntent.isEmpty()) return m_meffaIntent;
     return meffaEnabled() ? QStringLiteral("AUTO") : QStringLiteral("OFF");
 }
@@ -281,16 +268,10 @@ void AmpModel::setFanMode(const QString& mode)
         writeSetupGroup(meffaWriteWord(), fan);
         return;
     }
-    // The group is not known yet — `setup read` has not answered, or the
-    // amplifier has not reported a MEffA state. Send the single key rather
-    // than dropping the operator's choice on the floor.
-    //
-    // This is what shipped before the group write existed, and it is strictly
-    // better than the alternatives here: the group form's whole justification
-    // is that it carries the values we are NOT changing, and in this branch we
-    // do not have them to carry. Refusing instead would make fan mode less
-    // available than it was, on firmware that answers `setup read` with an
-    // error and on every station for the first moments after connect.
+    // Group not known yet (`setup read` unanswered, or no MEffA state reported, as
+    // on firmware that errors on `setup read`): send the single key rather than drop
+    // the operator's choice. The group form needs the unchanged values, which we
+    // don't have here.
     if (m_directConn && m_directConn->isConnected())
         m_directConn->sendCommand(QStringLiteral("setup fanmode=%1").arg(fan));
 }

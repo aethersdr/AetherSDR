@@ -7,8 +7,8 @@
 // one-time manual check. (#4058 review, @NF0T)
 
 #include "core/backends/flex/FlexBackend.h"
-#include "core/RadioConnection.h"
-#include "core/PanadapterStream.h"
+#include "core/backends/flex/RadioConnection.h"
+#include "core/backends/flex/PanadapterStream.h"
 
 #include <QCoreApplication>
 #include <QThread>

@@ -7,18 +7,12 @@
 
 namespace AetherSDR {
 
-// Visual TX DSP signal chain.  Paints a horizontal strip:
-//
-//   [MIC] ─▶ [GATE] ─▶ [EQ] ─▶ [DESS] ─▶ [COMP] ─▶ [TUBE] ─▶ [ENH] ─▶ [TX]
-//            ◄────────── draggable / bypassable ──────────►
-//
-// Clicking a processor stage emits editRequested() so the parent can
-// open the corresponding floating editor.  Dragging a stage between
-// other stages reorders the chain (AudioEngine::setTxChainStages).
-// Right-click on a stage toggles its bypass via the relevant DSP
-// module (only Eq and Comp wired today; the unimplemented stages show
-// as "coming soon" greyed-out boxes but still participate in ordering
-// so users can set up their preferred chain ahead of time).
+// Visual TX DSP chain, painted as a horizontal strip:
+//   [MIC] ─▶ [stage] ─▶ ... ─▶ [TX]   (stages draggable / bypassable)
+// Single click toggles a stage's bypass (deferred so a double-click can
+// cancel it); double-click emits editRequested() to open its editor;
+// right-click offers Bypass/Edit. Dragging reorders the chain
+// (AudioEngine::setTxChainStages).
 class ClientChainWidget : public QWidget {
     Q_OBJECT
 

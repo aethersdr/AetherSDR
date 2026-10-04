@@ -37,8 +37,11 @@ struct WdspThreadStart
     void* context;
 };
 
+static _Thread_local uint64_t g_threadAllocationSequence = 0;
 static _Atomic uint64_t g_allocationSequence = 0;
 static _Atomic uint64_t g_outstandingAllocations = 0;
+// AetherSDR patch 13: see wdspPortHandoffPauseForTest() below.
+static _Atomic unsigned g_handoffPauseMicroseconds = 0;
 
 static uint64_t monotonicMilliseconds(void)
 {
@@ -378,6 +381,7 @@ void* wdspAlignedAllocate(size_t size, size_t alignment)
     {
         return NULL;
     }
+    ++g_threadAllocationSequence;
     atomic_fetch_add_explicit(&g_allocationSequence, 1, memory_order_relaxed);
     atomic_fetch_add_explicit(&g_outstandingAllocations, 1, memory_order_relaxed);
     return pointer;
@@ -392,6 +396,11 @@ void wdspAlignedFree(void* pointer)
     }
 }
 
+uint64_t wdspPortThreadAllocationSequence(void)
+{
+    return g_threadAllocationSequence;
+}
+
 uint64_t wdspPortAllocationSequence(void)
 {
     return atomic_load_explicit(&g_allocationSequence, memory_order_relaxed);
@@ -400,6 +409,33 @@ uint64_t wdspPortAllocationSequence(void)
 uint64_t wdspPortOutstandingAllocations(void)
 {
     return atomic_load_explicit(&g_outstandingAllocations, memory_order_relaxed);
+}
+
+// AetherSDR patch 13 (#5734). A test-only widening of the window between
+// dexchange() releasing the host and dexchange() returning. Before patch 13 the
+// worker still had to copy its input slot out of r1 in that window, so a host
+// allowed to run on overwrote it; the pause makes that deterministic instead of
+// a matter of CPU load. After patch 13 the copy is already done, and the pause
+// only delays the worker. Nothing but wdsp_channel_test ever sets it.
+void wdspPortSetHandoffPauseForTest(unsigned microseconds)
+{
+    atomic_store_explicit(&g_handoffPauseMicroseconds, microseconds, memory_order_relaxed);
+}
+
+void wdspPortHandoffPauseForTest(void)
+{
+    const unsigned microseconds =
+        atomic_load_explicit(&g_handoffPauseMicroseconds, memory_order_relaxed);
+    if (microseconds != 0)
+    {
+        struct timespec requested = {
+            .tv_sec = microseconds / 1000000U,
+            .tv_nsec = (long)(microseconds % 1000000U) * 1000L
+        };
+        while (nanosleep(&requested, &requested) != 0 && errno == EINTR)
+        {
+        }
+    }
 }
 
 void wdspEnableFlushToZero(void)
@@ -454,6 +490,7 @@ void OutputDebugStringA(const char* text)
 #undef _aligned_malloc
 #undef _aligned_free
 
+static __declspec(thread) uint64_t g_threadAllocationSequence = 0;
 static volatile LONG64 g_allocationSequence = 0;
 static volatile LONG64 g_outstandingAllocations = 0;
 
@@ -462,6 +499,7 @@ void* wdspAlignedAllocate(size_t size, size_t alignment)
     void* pointer = _aligned_malloc(size, alignment);
     if (pointer != NULL)
     {
+        ++g_threadAllocationSequence;
         InterlockedIncrement64(&g_allocationSequence);
         InterlockedIncrement64(&g_outstandingAllocations);
     }
@@ -477,6 +515,11 @@ void wdspAlignedFree(void* pointer)
     }
 }
 
+uint64_t wdspPortThreadAllocationSequence(void)
+{
+    return g_threadAllocationSequence;
+}
+
 uint64_t wdspPortAllocationSequence(void)
 {
     return (uint64_t)InterlockedCompareExchange64(&g_allocationSequence, 0, 0);
@@ -485,6 +528,25 @@ uint64_t wdspPortAllocationSequence(void)
 uint64_t wdspPortOutstandingAllocations(void)
 {
     return (uint64_t)InterlockedCompareExchange64(&g_outstandingAllocations, 0, 0);
+}
+
+// AetherSDR patch 13: the Windows twin of the POSIX pair above. Sleep() has
+// millisecond resolution, so a non-zero request rounds UP to whole milliseconds
+// -- a longer window, never a shorter one.
+static volatile LONG g_handoffPauseMicroseconds = 0;
+
+void wdspPortSetHandoffPauseForTest(unsigned microseconds)
+{
+    InterlockedExchange(&g_handoffPauseMicroseconds, (LONG)microseconds);
+}
+
+void wdspPortHandoffPauseForTest(void)
+{
+    const LONG microseconds = InterlockedCompareExchange(&g_handoffPauseMicroseconds, 0, 0);
+    if (microseconds != 0)
+    {
+        Sleep((DWORD)((microseconds + 999) / 1000));
+    }
 }
 
 #endif

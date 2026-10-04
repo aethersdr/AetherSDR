@@ -43,14 +43,20 @@ int main(int argc, char** argv)
     // one without the other.
     {
         SliceModel s(1);
-        QStringList commands;
-        QObject::connect(&s, &SliceModel::commandReady,
-                         [&commands](const QString& cmd) { commands.append(cmd); });
+        QSignalSpy requests(&s, &SliceModel::receiveSquelchRequested);
+        QSignalSpy rawCommands(&s, &SliceModel::commandReady);
         s.setManualSquelch(true, 45);
         EXPECT_EQ(s.squelchLevel(), 45);
         EXPECT_EQ(s.manualSquelchLevel(), 45);
-        EXPECT_EQ(commands.join(QStringLiteral("|")),
-                  QStringLiteral("slice set 1 squelch=1|slice set 1 squelch_level=45"));
+        EXPECT_EQ(requests.size(), 1);
+        EXPECT_EQ(rawCommands.size(), 0);
+        if (!requests.isEmpty()) {
+            const SliceSquelchRequest request = qvariant_cast<SliceSquelchRequest>(requests.at(0).at(0));
+            EXPECT_EQ(request.enabled, true);
+            EXPECT_EQ(request.level, 45);
+            EXPECT_EQ(request.enabledChanged, true);
+            EXPECT_EQ(request.levelChanged, true);
+        }
     }
 
     // ── Plain setSquelch() (the shape Auto-mode call sites use) must NOT

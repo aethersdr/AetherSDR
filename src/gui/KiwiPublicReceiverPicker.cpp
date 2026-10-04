@@ -17,16 +17,9 @@ namespace AetherSDR {
 
 namespace {
 
-// Session-scoped cache of the last successful directory fetch, shared across
-// every picker instance opened this run.  Being a process-static, it is NOT
-// persisted to disk — it dies with the app, so a new session always starts
-// fresh.
-//
-// The client only ever talks to AetherSDR's own CDN, which is built to be hit,
-// so repeat "Browse public…" opens may refresh — but no faster than the mirror
-// itself updates (cache-control: max-age=1800).  Inside that window we re-serve
-// the cache; past it the next open fetches again.  "Refresh list" always
-// fetches and overwrites.
+// Process-static cache of the last directory fetch, shared by all pickers this
+// run, never persisted. Re-served within the mirror's cache-control max-age
+// (1800 s); "Refresh list" always refetches.
 QVector<KiwiPublicReceiver> g_sessionCache;
 bool g_haveSessionCache = false;
 QDateTime g_cacheFetchedAt;    // mirror's own fetched_at for the cached list

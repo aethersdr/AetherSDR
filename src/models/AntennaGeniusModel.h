@@ -5,7 +5,11 @@
 #include <QString>
 #include <QStringList>
 #include <QHostAddress>
+#include <QHash>
+#include <QByteArray>
 #include <QList>
+#include <functional>
+#include <optional>
 
 class QUdpSocket;
 class QTcpSocket;
@@ -19,6 +23,7 @@ struct AgDeviceInfo {
     QString   serial;
     QString   version;
     QHostAddress ip;
+    QString   host;       // Manual DNS name; empty for discovered devices.
     quint16   port{9007};
     int       radioPorts{2};
     int       antennaPorts{8};
@@ -55,24 +60,13 @@ struct AgPortStatus {
     bool    inhibited{false};
 };
 
-// State model for a 4O3A Antenna Genius connected via TCP/IP.
-//
-// Discovery: UDP broadcast listener on port 9007 (device sends "AG ip=... port=... ...")
-// Control:   TCP connection to device:9007, command/response protocol similar to SmartSDR
-//
-// Protocol summary:
-//   Commands:  C<seq>|<command>\r\n
-//   Responses: R<seq>|<hex_code>|<body>    (R<seq>|| = end of multi-line response)
-//   Status:    S0|<object> key=val ...      (async push after sub port all / sub relay)
-//
-// Commands used:
-//   antenna list        — enumerate antenna ports
-//   band list           — enumerate band definitions
-//   port get <id>       — get current port status
-//   port set <id> rxant=<n> txant=<n>  — select antenna for a port
-//   sub port all        — subscribe to port status changes
-//   sub relay           — subscribe to relay changes
-//   ping                — keep-alive heartbeat
+// 4O3A Antenna Genius over TCP. Discovery: UDP broadcast on 9007
+// ("AG ip=... port=..."). Control: TCP to device:9007.
+//   Command:  C<seq>|<command>\r\n
+//   Response: R<seq>|<hex_code>|<body>   (R<seq>|| ends a multi-line response)
+//   Status:   S0|<object> key=val ...     (async after `sub port all` / `sub relay`)
+// Commands used: antenna list, band list, port get <id>,
+// port set <id> rxant=<n> txant=<n>, sub port all, sub relay, ping (keep-alive).
 class AntennaGeniusModel : public QObject {
     Q_OBJECT
 
@@ -88,17 +82,28 @@ public:
     void connectToDevice(const AgDeviceInfo& info);
     // Connect directly by IP address (for remote/manual connections).
     void connectToAddress(const QHostAddress& ip, quint16 port);
+    void connectToAddress(const QString& host, quint16 port);
     void disconnectFromDevice();
 
     void setAutoReconnect(bool on) { m_autoReconnect = on; }
+    void setAuthCode(const QString& code);
+    void setAuthCodeForAttempt(quint64 attempt, const QString& code,
+                               bool credentialStoreUnavailable = false);
+    void resetAuthBudgetFor(const AgDeviceInfo& info);
 
     // Getters
     bool isConnected()   const { return m_connected; }
-    bool isConnecting()  const { return m_tcpSocket != nullptr && !m_connected; }
+    bool isConnecting() const;
+    bool isAuthBlocked() const { return authBlockedForTarget(m_attemptEndpoint); }
+    bool isAuthBlockedFor(const QString& host, quint16 port) const;
+    bool isAuthBlockedFor(const AgDeviceInfo& info) const;
     bool isPresent()     const { return !m_discoveredDevices.isEmpty(); }
     static bool isShackSwitch(const AgDeviceInfo& info);
     QString peerAddress() const;
     quint16 peerPort() const;
+    // The host asked for on the current attempt: a name or a literal address.
+    // Saved codes key on it; see PeripheralAuthStore.
+    QString attemptHost() const { return m_attemptHost; }
     const AgDeviceInfo& connectedDevice() const { return m_device; }
 
     QList<AgDeviceInfo>   discoveredDevices() const { return m_discoveredDevices; }
@@ -139,7 +144,12 @@ signals:
     void deviceLost(const QString& serial);
     void connected();
     void disconnected();
+    void authCodeRequired(quint64 attempt);
+    void authCodeAccepted(const QString& code);
+    void enteredAuthCodeDiscarded();
     void connectionError(const QString& msg);
+    // A socket attempt has begun, from any path; carries the host it asked for.
+    void attemptStarted(const QString& host);
 
     void antennasChanged();        // antenna list refreshed
     void bandsChanged();           // band list refreshed
@@ -157,6 +167,13 @@ private slots:
     void onKeepAlive();
 
 private:
+    friend struct AntennaGeniusModelTestAccess;
+    friend struct PeripheralConnectionTestAccess;
+    std::function<void(const QString&, quint16)> m_connectTransport;
+    Q_INVOKABLE void processTcpBytes(const QByteArray& bytes); // injected transport test seam
+    Q_INVOKABLE void beginAttempt(); // same reset used before a real TCP connect
+    Q_INVOKABLE void beginAttemptAt(const QString& host, quint16 port);
+    Q_INVOKABLE void onAuthTimeout();
     // Send a command, returns sequence number.
     int sendCommand(const QString& cmd);
 
@@ -168,6 +185,11 @@ private:
     void processLine(const QString& line);
     void processResponse(int seq, int code, const QString& body);
     void processStatus(const QString& body);
+    bool authBlockedForTarget(const QString& target) const;
+    int recordAuthFailure();
+    void completePrologue();
+    void sendAuthentication();
+    void failAuthentication(const QString& reason, bool blockReconnect = true);
 
     // Parse helpers
     static QMap<QString, QString> parseKeyValues(const QString& text);
@@ -189,9 +211,21 @@ private:
 
     // TCP connection
     QTcpSocket* m_tcpSocket{nullptr};
+    std::function<void(const QByteArray&)> m_authCommandWriter;
     AgDeviceInfo m_device;
     bool m_connected{false};
     bool m_gotPrologue{false};
+    bool m_authPending{false};
+    bool m_waitingForAuthCode{false};
+    QHash<QString, int> m_authFailuresByTarget;
+    quint64 m_authAttempt{0};
+    QString m_authCode;
+    bool m_userAuthCode{false};
+    QString m_attemptEndpoint;
+    QString m_attemptHost;
+    QString m_userAuthEndpoint;
+    bool m_authCloseReported{false};
+    QTimer* m_authTimer{nullptr};
     QString m_lineBuffer;
 
     // Command sequencing
@@ -225,8 +259,12 @@ private:
 
     // Auto-reconnect
     bool    m_autoReconnect{false};
+    // Global "Reconnect automatically" and the connected device's "Connect
+    // automatically" (ShackSwitch and Antenna Genius keep separate toggles).
+    bool reconnectAllowed() const;
     bool    m_deliberateDisconnect{false};
     QTimer* m_reconnectTimer{nullptr};
+    std::optional<AgDeviceInfo> m_deferredShackSwitch;
 
     // Track init commands
     int m_seqAntennaList{0};

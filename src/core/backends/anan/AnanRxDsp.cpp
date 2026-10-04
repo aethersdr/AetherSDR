@@ -25,21 +25,11 @@ AnanRxDsp::AnanRxDsp(QObject* parent) : QObject(parent)
 
 AnanRxDsp::~AnanRxDsp()
 {
-    // Same shape as Hl2RxDsp's destructor, and for the same reason: a channel
-    // destroyed while WDSP still thinks it is running makes
-    // WdspChannel::close() sit out WDSP's full 100 ms stop-and-flush timeout,
-    // because behind the control fence nothing is left calling fexchange* to
-    // satisfy it. Stopping here makes that SetChannelState a no-op.
-    // docs/HERMES.md §13 item 9b.
-    //
-    // No drain: nothing feeds this object after it is destroyed, so WDSP's mute
-    // ramp does not actually run. The saving is the skipped wait.
-    //
-    // CHECKED, not discarded. setRunning() goes through beginControlOperation(),
-    // which REFUSES rather than waits when a processIq() callback is in flight.
-    // It cannot be, here: this object is destroyed on the thread that drives
-    // processIq(). A false therefore reports that that assumption has stopped
-    // holding, which is worth a line in the log rather than a silent 100 ms.
+    // Stop the channel first so WdspChannel::close() skips WDSP's 100 ms
+    // stop-and-flush timeout (docs/HERMES.md §13 item 9b); nothing feeds it after
+    // this, so no drain runs. setRunning() refuses while a processIq() callback is in
+    // flight, which cannot happen on this (the feeding) thread -- a false means that
+    // assumption broke, so log it.
     if (m_channel && !m_channel->setRunning(false)) {
         qCWarning(lcAnanRxDsp)
             << "could not stop the WDSP channel before destroying it: a "
@@ -66,7 +56,7 @@ bool AnanRxDsp::configure(const Config& config, std::string* error)
 
     m_config = config;
     RebuildResult result = buildChannel(config);
-    if (!result.channel) {
+    if (!result.channel || !result.analyzer) {
         if (error)
             *error = result.error;
         return false;
@@ -112,6 +102,8 @@ AnanRxDsp::RebuildResult AnanRxDsp::buildChannel(const Config& config)
     wc.agcMode = config.agcMode;
     wc.maximumAgcGainDb = config.maximumAgcGainDb;
     wc.blockForOutput = config.blockForOutput;
+    wc.noiseBlankerEnabled = config.noiseBlankerEnabled;
+    wc.noiseBlankerLevel = config.noiseBlankerLevel;
     // filterTaps left at WdspChannel::Config's own default (2048): this
     // phase has no manual notch filter, so there is no narrow-notch floor to
     // widen it for (contrast Hl2RxDsp::kRxFilterTaps, which exists solely
@@ -120,10 +112,23 @@ AnanRxDsp::RebuildResult AnanRxDsp::buildChannel(const Config& config)
     auto channel = WdspChannel::create(wc, &result.error);
     if (!channel)
         return result;
+    // The analyzer reuses the channel's id as its analyzer slot: both are
+    // unique for as long as the channel lives, and RebuildResult/this class
+    // destroy the analyzer before the channel returns the id. Built here, on
+    // the build thread, because its first SetAnalyzer() plans FFTW_PATIENT.
+    AnanPanAnalyzer::Settings as;
+    as.sampleRateHz = config.inputSampleRateHz;
+    as.numPoints = config.panPoints;
+    as.framesPerSecond = config.spectrumFps;
+    as.averageTimeMs = config.spectrumAverageMs;
+    as.logAverage = config.spectrumLogAverage;
+    auto analyzer = AnanPanAnalyzer::create(channel->channelId(), as, &result.error);
+    if (!analyzer)
+        return result;   // channel is released here, analyzer never existed
     result.outputBlockSize = channel->outputBlockSize();
     result.inputSampleRateHz = config.inputSampleRateHz;
-    result.spectrum = std::make_unique<AnanSpectrum>(config.fftSize);
     result.channel = std::move(channel);
+    result.analyzer = std::move(analyzer);
     return result;
 }
 
@@ -141,7 +146,9 @@ void AnanRxDsp::beginRebuild()
 bool AnanRxDsp::installRebuiltChannel(RebuildResult result)
 {
     m_rebuildInFlight = false;
-    if (!result.channel)
+    // buildChannel() never returns one without the other; refuse a result
+    // that does rather than install a channel with no spectrum stage.
+    if (!result.channel || !result.analyzer)
         return false;
     installChannel(std::move(result));
     return true;
@@ -181,11 +188,14 @@ void AnanRxDsp::installChannel(RebuildResult result)
     }
     m_dcBlockL.reset();
     m_dcBlockR.reset();
-    // Fresh smoothing state for the new channel -- see smoothSpectrumBins()'s
-    // own comment. Without this, the first frames after a rate change would
-    // blend against the PRIOR rate's noise floor/levels, which can differ
-    // enough to show as a brief visible drift instead of a clean start.
-    m_smoothedBins.clear();
+
+    // Same idea for the S-meter, one stage further back: the new channel's
+    // own average starts at zero (create_meter() -> flush_meter()), so its
+    // first readings are low for the length of the tap's time constant
+    // whether or not a mute is involved. A rate change arms this twice --
+    // here, and again when beginRateChange()'s settle window unmutes -- which
+    // costs nothing: the window is re-armed, not accumulated.
+    armMeterSettle();
 
     // Re-apply m_config's CURRENT values -- for configure() this is exactly
     // what buildChannel() was just given (m_config == config already); for
@@ -200,29 +210,38 @@ void AnanRxDsp::installChannel(RebuildResult result)
     // slice offset rather than silently snapping the slice to centre.
     if (m_shiftHz != 0.0)
         result.channel->setShift(m_shiftHz);
+    // Sent even when it matches what the channel was built with: the operator
+    // may have moved the NB button while the background build ran.
+    if (!result.channel->setNoiseBlanker(m_config.noiseBlankerEnabled,
+                                         m_config.noiseBlankerLevel)) {
+        qCWarning(lcAnanRxDsp) << "noise blanker refused by the rebuilt channel";
+    }
+    // The hold flag belongs to the channel, so a rebuild loses it. A rate
+    // change swaps the channel while audio is muted for its settle window.
+    result.channel->setNoiseBlankerHold(m_audioMuted);
 
-    // Stop the OUTGOING channel before the assignment below destroys it, so
-    // close() finds the state already 0 and skips WDSP's 100 ms stop-and-flush
-    // timeout. This runs on this object's own thread, which is also the thread
-    // that calls processIq(), so no block reaches the old channel between here
-    // and its destruction: the down-slew does NOT complete and this buys the
-    // skipped wait, nothing more.
-    //
-    // NOT moved up into beginRebuild(), where a stop WOULD drain — the old
-    // channel keeps processing for the whole background build, so samples are
-    // genuinely still flowing there. Stopping that early would trade the
-    // receive audio that the asynchronous rebuild exists to preserve for
-    // 100 ms of teardown, which is the wrong way round.
-    //
-    // Checked for the same reason as the destructor's — see there.
+    // Stop the OUTGOING channel before it is destroyed so close() skips the 100 ms
+    // stop-and-flush timeout; this is the processIq() thread, so no block reaches it
+    // in between. Not in beginRebuild(): the old channel must keep producing audio
+    // through the background build. Checked as in the destructor.
     if (m_channel && !m_channel->setRunning(false)) {
         qCWarning(lcAnanRxDsp)
             << "could not stop the outgoing WDSP channel before the swap: a "
                "processIq callback was in flight. The rebuild will pay WDSP's "
                "100 ms stop-and-flush timeout.";
     }
+    // The analyzer was built for m_config.spectrumFps as it stood when the
+    // build began; bring it up to the operator's current rate.
+    result.analyzer->setFramesPerSecond(m_config.spectrumFps);
+    result.analyzer->setNumPoints(m_config.panPoints);
+    result.analyzer->setAverageTimeMs(m_config.spectrumAverageMs);
+    result.analyzer->setLogAverage(m_config.spectrumLogAverage);
+    // Analyzer before channel: the outgoing analyzer uses the outgoing
+    // channel's id as its slot and must be destroyed before that channel
+    // releases the id -- see RebuildResult.
+    m_analyzer = std::move(result.analyzer);
     m_channel = std::move(result.channel);
-    m_spectrum = std::move(result.spectrum);
+    publishNoiseBlankerState();
 }
 
 void AnanRxDsp::setMode(WdspChannel::Mode mode)
@@ -254,15 +273,94 @@ void AnanRxDsp::setAgc(int agcMode, double maximumGainDb)
 
 void AnanRxDsp::setAudioMuted(bool muted)
 {
+    // The mute LIFTING is the edge that matters to the S-meter: WDSP's
+    // average has been integrating the zeros this class fed it for the whole
+    // mute and nothing flushes it, so the first blocks after the unmute still
+    // read that silence. Swallow them instead of publishing them -- see
+    // WdspSMeter.h for why the guard in processIqBlock() is not enough on
+    // its own.
+    if (m_audioMuted && !muted)
+        armMeterSettle();
     m_audioMuted = muted;
+    // Muted, the channel is clocked with ZEROS. The noise blanker triggers on
+    // magnitude against a running average magnitude, so silence would drag
+    // that average toward zero and the first real block afterwards would look
+    // like one long impulse and be blanked. Holding the stage freezes the
+    // average at the pre-mute level; see WdspChannel::setNoiseBlankerHold().
+    if (m_channel)
+        m_channel->setNoiseBlankerHold(muted);
+}
+
+void AnanRxDsp::setNoiseBlanker(bool on, int level)
+{
+    m_config.noiseBlankerEnabled = on;
+    m_config.noiseBlankerLevel = std::clamp(level, 0, 100);
+    if (!m_channel || m_rebuildInFlight)
+        return;
+    // WdspChannel refuses, rather than blocks on, a control call that races
+    // another one. Logged so a refused toggle is not silent; m_config keeps
+    // the request and the next rebuild applies it.
+    if (!m_channel->setNoiseBlanker(m_config.noiseBlankerEnabled,
+                                    m_config.noiseBlankerLevel)) {
+        qCWarning(lcAnanRxDsp) << "noise blanker" << (on ? "on" : "off")
+                               << "level" << m_config.noiseBlankerLevel
+                               << "refused by the channel";
+    }
+    publishNoiseBlankerState();
+}
+
+void AnanRxDsp::publishNoiseBlankerState()
+{
+    // Read the applied channel even after refusal, never the requested config.
+    const int state = m_channel
+        ? (m_channel->noiseBlankerEnabled() ? kNbEnabledOffset : 0)
+              + m_channel->config().noiseBlankerLevel
+        : -1;
+    m_nbAppliedState.store(state, std::memory_order_relaxed);
 }
 
 void AnanRxDsp::setSpectrumRateFps(int fps)
 {
     m_spectrumIntervalMs = fps > 0 ? (1000 / fps) : 0;
+    if (fps > 0) {
+        m_config.spectrumFps = fps;
+        // Mid-rebuild the incoming analyzer picks the rate up at install
+        // (installChannel()); the outgoing one is about to be discarded.
+        if (m_analyzer && !m_rebuildInFlight)
+            m_analyzer->setFramesPerSecond(fps);
+    }
     // Do NOT reset the clock or the last-emit stamp -- a rate change
     // mid-stream should take effect on the next frame that comes due, not
     // grant an immediate extra one.
+}
+
+void AnanRxDsp::setSpectrumAverageMs(int ms)
+{
+    if (ms < 0)
+        return;
+    m_config.spectrumAverageMs = ms;
+    // Same deferral as setSpectrumRateFps(): the incoming analyzer picks it
+    // up at install.
+    if (m_analyzer && !m_rebuildInFlight)
+        m_analyzer->setAverageTimeMs(ms);
+}
+
+void AnanRxDsp::setPanPoints(int points)
+{
+    if (points < 2)
+        return;
+    m_config.panPoints = std::min(points, AnanPanAnalyzer::kMaxPoints);
+    // Same deferral as setSpectrumRateFps(): the incoming analyzer picks it
+    // up at install.
+    if (m_analyzer && !m_rebuildInFlight)
+        m_analyzer->setNumPoints(m_config.panPoints);
+}
+
+void AnanRxDsp::setSpectrumLogAverage(bool on)
+{
+    m_config.spectrumLogAverage = on;
+    if (m_analyzer && !m_rebuildInFlight)
+        m_analyzer->setLogAverage(on);
 }
 
 void AnanRxDsp::setDroopCorrectionTable(int rateKsps, const std::vector<float>& table)
@@ -320,31 +418,16 @@ bool AnanRxDsp::spectrumFrameDue()
     return (m_spectrumClock.elapsed() - m_lastSpectrumMs) >= m_spectrumIntervalMs;
 }
 
-void AnanRxDsp::smoothSpectrumBins(std::vector<float>& binsDbfs)
-{
-    if (m_smoothedBins.size() != binsDbfs.size()) {
-        // First frame after configure(), or an fftSize change -- nothing to
-        // blend against yet.
-        m_smoothedBins = binsDbfs;
-        return;
-    }
-    for (std::size_t i = 0; i < binsDbfs.size(); ++i) {
-        m_smoothedBins[i] = kSpectrumSmoothAlpha * m_smoothedBins[i]
-            + (1.0f - kSpectrumSmoothAlpha) * binsDbfs[i];
-    }
-    binsDbfs = m_smoothedBins;
-}
-
 void AnanRxDsp::onSequenceGap()
 {
-    if (!m_spectrum) {
-        return;   // between rebuilds; the new spectrum starts empty
+    if (!m_analyzer) {
+        return;   // between rebuilds; the new analyzer starts empty
     }
     // Counted only when something was actually in flight -- see
     // Hl2RxDsp::onSequenceGap() for why a boundary-aligned gap must not be
     // counted, and why neither the frame-rate clock nor the audio path is
     // touched here.
-    if (m_spectrum->reset() > 0) {
+    if (m_analyzer->dropStagedPartial() > 0) {
         m_spectrumGapDiscards.fetch_add(1, std::memory_order_relaxed);
     }
 }
@@ -354,79 +437,35 @@ void AnanRxDsp::processIqBlock(const std::vector<std::complex<float>>& iq)
     if (!m_channel)
         return;
 
-    // *** CONFIRMED FOR PROTOCOL 2, 2026-08-21 *** -- was a starting
-    // hypothesis; is now a measured fact, both sources HERMES §16 asks for.
-    // Read HERMES.md §16 and this class's header comment for the full
-    // history if you're touching this.
-    //
-    // Two facts feed this split (HERMES.md §16.1):
-    //   1. WDSP's RXA, as configured here, selects the OPPOSITE sign to its
-    //      passband bounds. A property of THIS CODEBASE's WdspChannel
-    //      configuration, which Protocol 2 reuses unchanged. Known with full
-    //      confidence since before this backend existed.
-    //   2. "The HPSDR wire is the conjugate of the analytic convention" --
-    //      originally measured against Protocol 1 / the HL2 only, and only a
-    //      plausible starting point for Protocol 2's different wire encoding
-    //      (typed packets vs C0 register banks). Now independently confirmed
-    //      for THIS radio too: `radiocert rx` (2026-08-19, real WWV carrier)
-    //      showed the textbook USB/DIGU-recover, LSB/DIGL-don't signature,
-    //      and an RSP1B running SDR++ -- sharing zero code with this
-    //      backend -- reproduced the identical pattern at the same dial/
-    //      offset geometry and confirmed the panadapter draws the carrier on
-    //      the correct side. That is the "two-source bar" HERMES §16 sets
-    //      before a polarity claim can be trusted; both are in.
-    //
-    // Fact 1 alone already implies the demodulator and the spectrum must get
-    // OPPOSITE handling from each other. Which one gets the conjugate and
-    // which gets the raw wire is fact 2's contribution -- demodulator raw,
-    // spectrum conjugated, same structure Hl2RxDsp settled on, now confirmed
-    // correct here too, not just structurally borrowed
-    // (HERMES.md §16.6 rule 2 -- conjugate exactly once, at one place).
-    m_conjugated.resize(iq.size());
-    for (std::size_t n = 0; n < iq.size(); ++n)
-        m_conjugated[n] = std::conj(iq[n]);
+    // Handedness: read docs/HERMES.md §16 before touching this. WDSP's RXA as
+    // configured here selects the opposite sign to its passband bounds, and the HPSDR
+    // wire is the conjugate of the analytic convention (confirmed for P2 by
+    // `radiocert rx` on WWV and by SDR++ on an RSP1B). So the demodulator takes the
+    // raw wire and the spectrum is mirrored exactly once (§16.6 rule 2) -- inside
+    // WDSP's analyzer, whose Spectrum0() swaps I and Q. Conjugating here too would
+    // mirror twice. anan_rxdsp_handedness_test pins this.
 
-    // Panadapter: conjugated. Fed on BOTH paths (this branch and the
-    // accumulate() branch below) because the accumulator is shared and both
-    // feed the same FFT -- see Hl2RxDsp::processIqBlock's comment for why a
-    // raw block during a skipped interval would corrupt part of the next
-    // displayed frame.
-    if (spectrumFrameDue()) {
-        if (m_spectrum->process(m_conjugated, m_bins) > 0) {
-            // Real DDC0 roll-off -- the anti-alias FIR's transition band,
-            // not CIC sin(x)/x (see AnanDroopCorrection.h). Corrected on the
-            // actual FFT magnitude BEFORE the EMA below so the emitted trace
-            // reflects the corrected value at every step -- see
-            // AnanDroopCorrection.h. inputSampleRateHz is always an exact
-            // multiple of 1000 for the six valid DDC0 rates.
-            const DroopCorrectionTable& droopTable =
-                droopTableForRate(m_config.inputSampleRateHz / 1000);
-            applyDroopCorrectionDb(m_bins, droopTable);
-            // Cosmetic fade for the true edge. See applyEdgeFade()'s own
-            // comment for why this exists instead of a larger capDb.
-            //
-            // This identity test is NOT live logic on a G2 any more, and the
-            // comment that used to claim otherwise was wrong. connectRadio()
-            // seeds the derived defaults for all six DDC0 rates, so
-            // droopTableForRate() never hands back kDroopCorrectionZero for a
-            // rate this backend can actually run -- the fade is effectively
-            // unconditional, by design: there is always a real correction to
-            // fade FROM, and the outermost bins are clamped at +90 dB, which
-            // only stays off screen because this overwrites them.
-            //
-            // What the test still does is suppress the fade while the
-            // calibrator's bypass is on, which is the one case that must not
-            // see a synthetic edge -- setDroopCorrectionBypassed() returns the
-            // kDroopCorrectionZero OBJECT for exactly this identity check, so
-            // a sweep measures the radio and not our own raised cosine.
-            if (&droopTable != &kDroopCorrectionZero)
-                applyEdgeFade(m_bins);
-            smoothSpectrumBins(m_bins);
-            emit spectrumReady(m_bins);
-            m_lastSpectrumMs = m_spectrumClock.elapsed();
-        }
-    } else {
-        m_spectrum->accumulate(m_conjugated);
+    // Panadapter: every block goes to the analyzer, whatever the display rate
+    // -- its FFTs overlap so that one completes per display frame over fresh
+    // samples, and none are thrown away. Only TAKING a frame is paced here.
+    m_analyzer->feed(iq);
+    if (spectrumFrameDue() && m_analyzer->takeFrame(m_bins)) {
+        // Real DDC0 roll-off -- the anti-alias FIR's transition band, not CIC
+        // sin(x)/x (see AnanDroopCorrection.h). The analyzer's points are
+        // already time-averaged, so the correction lands on the averaged
+        // level. inputSampleRateHz is always an exact multiple of 1000 for
+        // the six valid DDC0 rates.
+        const DroopCorrectionTable& droopTable =
+            droopTableForRate(m_config.inputSampleRateHz / 1000);
+        applyDroopCorrectionDbResampled(m_bins, droopTable);
+        // Cosmetic edge fade (see applyEdgeFade()). connectRadio() seeds defaults for
+        // all six rates, so on a G2 this always runs; the identity test only suppresses
+        // it during a calibration bypass, when droopTableForRate() returns the
+        // kDroopCorrectionZero object so a sweep measures the radio, not our fade.
+        if (&droopTable != &kDroopCorrectionZero)
+            applyEdgeFade(m_bins);
+        emit spectrumReady(m_bins);
+        m_lastSpectrumMs = m_spectrumClock.elapsed();
     }
 
     // Audio: the RAW wire (see the handedness note above).
@@ -483,25 +522,18 @@ void AnanRxDsp::processIqBlock(const std::vector<std::complex<float>>& iq)
             emit pcmReady(*frame);
             emit audioReady(m_stereo);
         }
-        // AVERAGE, NOT PEAK. WDSP's xmeter keeps both from the same
-        // smag = I*I + Q*Q: `avg` is an EMA of power, `peak` is a peak-hold
-        // that DECAYS across blocks rather than resetting per block. Both take
-        // the log after averaging, so the domain is right either way -- the tap
-        // is the whole difference.
-        //
-        // On a steady carrier the two agree exactly, because I*I + Q*Q is
-        // constant for a complex exponential. They diverge only on noise and on
-        // modulation, so every check against a test tone passes and the error
-        // appears precisely where an operator judges a receiver: the band noise
-        // floor, which a peak-hold reads roughly 11-14 dB high.
-        //
-        // That also makes the peak tap wrong for a dBm-labelled axis. S9 is
-        // defined as -73 dBm of sine, i.e. an RMS quantity, and `avg` is the
-        // mean-square -- so the average tap is what the calibration means.
-        // Meter ballistics are not lost: the backend already applies its own
-        // attack/decay EMA to the dBm value before publishing.
-        emit meterUpdate(static_cast<float>(
-            m_channel->meter(WdspChannel::Meter::SignalAverage)));
+        // AVERAGE, NOT PEAK: xmeter's `avg` is an EMA of I*I + Q*Q, `peak` a decaying
+        // peak-hold. They agree on a carrier but peak reads band noise ~11-14 dB high,
+        // and S9 (-73 dBm) is an RMS quantity. The backend applies its own ballistics.
+        // Gated off while muted and for the settle window after unmute or a channel
+        // install (the channel is fed zeros, and the average would carry that silence
+        // past the unmute; see WdspSMeter.h). The gate also fixes cadence at one reading
+        // per 48k-equivalent block (~47/s at every DDC0 rate). Blocks that underrun
+        // above do not tick it.
+        if (!m_audioMuted && m_meterTap.tick()) {
+            emit meterUpdate(static_cast<float>(
+                m_channel->meter(WdspChannel::Meter::SignalAverage)));
+        }
     }
 
     if (consumed > 0)

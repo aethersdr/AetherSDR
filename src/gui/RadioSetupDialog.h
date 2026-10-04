@@ -1,12 +1,15 @@
 #pragma once
 
 #include "PersistentDialog.h"
+#include "PeripheralConnectionSource.h"
 #include "RadioSetupIpConfigPresentation.h"
 
 #include <QHash>
 #include <QVector>
 #include <array>
 #include <functional>
+#include <memory>
+#include <vector>
 
 class QLabel;
 class QLineEdit;
@@ -37,6 +40,7 @@ class SpeConnection;
 class VkampConnection;
 class Kpa1500Connection;
 class LpMeterConnection;
+struct PeripheralDeviceUi;
 
 // Radio Setup dialog — searchable, category-based configuration window.
 class RadioSetupDialog : public PersistentDialog {
@@ -103,6 +107,20 @@ signals:
     // PeripheralSettings before this fires; MainWindow re-reads it and
     // pushes the new scale into VkampApplet::setVariant().
     void vkampVariantChanged();
+    // Emitted after a peripheral row has been removed and its settings cleared.
+    void peripheralRemoved(const QString& id);
+
+public:
+    // Test seam: answers the Remove confirmation without a modal box. Receives
+    // the device label and the confirmation text; return true to confirm. Pass
+    // an empty function to restore the real box.
+    // Test seam: a copy of what Setup currently shows for a peripheral, and a
+    // way to set the typed-code bookkeeping the way a pending attempt would.
+    PeripheralDeviceStatus peripheralStatusForTest(const QString& id) const;
+    void editPeripheralStatusForTest(const QString& id,
+                                     const std::function<void(PeripheralDeviceStatus&)>& edit);
+    static void setRemovalConfirmationHookForTest(
+        std::function<bool(const QString& label, const QString& text)> hook);
 
 protected:
     void closeEvent(QCloseEvent* event) override;
@@ -134,6 +152,17 @@ private:
     // Mirrors buildCalibrationTab()'s own shape (gated on the capability, not
     // the family; a m_droopReseed lambda re-synced the same two ways).
     QWidget* buildDroopCalibrationTab();
+    // Which Hermes-Lite 2 variant is attached: codec, the dither bit's three
+    // meanings, companion filter board, CL1 reference, gateware ATU. Protocol 1 exposes none of
+    // it, so these are operator settings (Hl2HardwareOptions). Gated on the
+    // backend's declared extension namespace; every control writes through the
+    // hl2 extension, which refuses anything else.
+    QWidget* buildHl2HardwareTab();
+    // Whether the connected backend declares the "hl2" extension namespace —
+    // i.e. whether anything will answer the hw.get / hw.set verbs this page is
+    // built on. NOT a family-string check: #5554 bars new ones, and the name a
+    // backend carries is a different question from the verbs it answers.
+    bool declaresHl2Extension() const;
     QWidget* buildAudioTab();
     QWidget* buildFiltersTab();
     QWidget* buildXvtrTab();
@@ -142,6 +171,18 @@ private:
     void     refreshApdSamplerCombo(const QString& txAnt);
     QWidget* buildUsbCablesTab();
     QWidget* buildPeripheralsTab();
+    // One builder per kind of device; each lays out its own detail page.
+    // RadioSetupDialog_Peripherals.cpp.
+    void buildAuthNetworkDevice(PeripheralDeviceUi& ui, QWidget* stackParent,
+                                const std::function<void()>& refresh);
+    void buildSerialNetworkDevice(PeripheralDeviceUi& ui, QWidget* stackParent,
+                                  const std::function<void()>& refresh,
+                                  const std::shared_ptr<QVector<std::function<void()>>>& pageReseeds);
+    void buildVkampDevice(PeripheralDeviceUi& ui, QWidget* stackParent,
+                          const std::function<void()>& refresh);
+    void buildKpa1500Device(PeripheralDeviceUi& ui, QWidget* stackParent,
+                            const std::function<void()>& refresh);
+    PeripheralDeviceUi* peripheralDevice(const QString& id) const;
     QWidget* buildUiEnhancementsTab();
     // Phase 2 of GHSA-wfx7-w6p8-4jr2 (#2951) — Pinned Certificates list
     // (host, sha256 fingerprint, pinned date) with per-row Forget and a
@@ -168,6 +209,8 @@ private:
     // file scope above; full type comes from <QTableWidget> in the cpp.
     QTableWidget* m_pinnedCertsTable{nullptr};
 
+    bool m_peripheralRemovalPending{false};
+    bool confirmPeripheralRemoval(const QString& label, const QString& toggleLabel = {});
     RadioModel*  m_model;
     AudioEngine* m_audio{nullptr};
     TgxlConnection*    m_tgxl{nullptr};
@@ -269,6 +312,7 @@ private:
     // External APD page (visible only when the radio reports apd configurable=1)
     int                       m_apdPageIndex{-1};
     int                       m_calibrationPageIndex{-1};
+    int                       m_rtlReceiverPageIndex{-1};
     // Re-seeds the Calibration page from the LIVE backend value. The page is
     // built once per process (buildDeferredTab erases the builder) and the
     // dialog is a showOrRaisePersistent singleton, so without this the spinbox
@@ -276,6 +320,21 @@ private:
     // commit that stale number to whichever radio is connected now.
     std::function<void()>     m_calibrationReseed;
     int                       m_droopCalibrationPageIndex{-1};
+    int                       m_hl2HardwarePageIndex{-1};
+    // Same reason as m_calibrationReseed: the page is built once per process
+    // and the dialog is a persistent singleton, so a different HL2 connected
+    // later would otherwise be shown — and written — with the first one's
+    // hardware options.
+    std::function<void()>     m_hl2HardwareReseed;
+    // Whether the connected HL2 is locked to an external 10 MHz reference at
+    // CL1. Cached from the HL2 Hardware page's hw.get reply because the control
+    // it gates — the manual ppb spin box — lives on the CALIBRATION page, which
+    // reads its own value straight out of the settings scope and has no reason
+    // to issue an hl2 extension call of its own. §4 of
+    // docs/architecture/hl2-frequency-calibration.md requires that control to
+    // be disabled under a locked reference; the backend refuses the verb too,
+    // so a stale cache dims the wrong thing at worst and never writes one.
+    bool                      m_hl2ExternalRefLocked = false;
     // Same reason as m_calibrationReseed above, for the Droop Correction page.
     std::function<void()>     m_droopReseed;
     // Re-fills the Audio page's PC Input/Output combos from a LIVE device
@@ -294,6 +353,7 @@ private:
     // → wipe the saved manual IP/port. New-IP edits still require an
     // explicit Connect click so an unfinished value cannot leak in.
     QVector<std::function<void()>> m_peripheralRowSavers;
+    std::vector<std::shared_ptr<PeripheralDeviceUi>> m_peripheralDevices;
 
     // Refresh already-built serial pages without rebuilding their controls.
     // Each page is built once per dialog instance; normal close deletes the

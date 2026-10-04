@@ -5,11 +5,14 @@ The quick start — dependencies and the build itself — is in
 [`README.md`](../README.md#building-from-source). Everything here is what you
 need only on a specific platform, or when something goes wrong.
 
+Compile-time switches, defaults and prerequisites are listed in
+[BUILD-OPTIONS.md](../BUILD-OPTIONS.md).
+
 - [macOS: Qt and qtkeychain](#macos-qt-and-qtkeychain)
 - [Windows 11](#windows-11)
 - [What each dependency enables](#what-each-dependency-enables)
 - [Distro notes](#distro-notes)
-- [Older distro Qt (Ubuntu 24.04 LTS)](#older-distro-qt-ubuntu-2404-lts)
+- [The release Qt: `setup-qt.sh`](#the-release-qt-setup-qtsh)
 - [GPU spectrum rendering](#gpu-spectrum-rendering)
 - [Wayland and XWayland](#wayland-and-xwayland)
 
@@ -18,32 +21,37 @@ need only on a specific platform, or when something goes wrong.
 ## macOS: Qt and qtkeychain
 
 Qt and qtkeychain do **not** come from Homebrew. Homebrew's `qt`
-formula (aliased `qt6` and `qt@6`) is a *rolling* release — 6.11.1 at the time
-of writing — while the DMG ships 6.8.3 LTS like every other artifact. Building
+formula (aliased `qt6` and `qt@6`) is a *rolling* release — 6.11.2 at the time
+of writing — while the DMG ships 6.12.0 LTS like every other artifact. Building
 against Homebrew's Qt means testing a Qt no release ships. Install the matching
-one and point CMake at it:
+one with [`scripts/setup/setup-qt.sh`](#the-release-qt-setup-qtsh), which also
+builds qtkeychain against it, then configure as usual:
 
 ```bash
-# A venv rather than a bare `pip install`: a PEP 668 python3 refuses the latter.
-python3 -m venv ~/.venv/aqt && ~/.venv/aqt/bin/pip install aqtinstall
-~/.venv/aqt/bin/aqt install-qt mac desktop 6.8.3 clang_64 \
-  -m qtmultimedia qtwebsockets qtserialport qtshadertools \
-  --outputdir ~/Qt
-cmake -B build -DCMAKE_PREFIX_PATH="$HOME/Qt/6.8.3/macos;$(brew --prefix)"
+scripts/setup/setup-qt.sh
+cmake -B build -G Ninja \
+  -DCMAKE_PREFIX_PATH="$(scripts/setup/setup-qt.sh --print-prefix);$(brew --prefix)"
 ```
+
+The pinned Qt goes first in that list on purpose. `$(brew --prefix)` is there
+for fftw, librtlsdr, portaudio and hidapi, but a Homebrew `qt` formula (often
+pulled in by something else) lives under the same prefix; naming the pinned Qt
+first keeps it the one CMake finds.
+
+Qt 6.12 needs **Xcode 16** (the macOS 15 SDK): Qt's own CMake stops at
+configure with "Qt requires at least version 16 of Xcode" on anything older,
+and the script checks before it downloads. Xcode 16 itself needs a macOS 14.5+
+host, so a Mac below macOS 14.5 cannot build AetherSDR from source — use the
+DMG if it runs there. Anything built against 6.12 runs on macOS 14.4+ only.
 
 `clang_64` is the only macOS desktop build Qt publishes, and it is universal2 —
 there is no separate arm64 archive to pick. `$(brew --prefix)` stays on the
 path for fftw, librtlsdr, portaudio and hidapi.
 
 Homebrew's `qtkeychain` is left out for a related reason: the formula depends
-on `qtbase`, so installing it pulls a second Qt in behind your back. Build it
-against the Qt you just installed instead — or skip it and build without
-SmartLink credential persistence:
-
-```bash
-CMAKE_PREFIX_PATH="$HOME/Qt/6.8.3/macos" bash scripts/setup/setup-qtkeychain.sh
-```
+on `qtbase`, so installing it pulls a second Qt in behind your back.
+`setup-qt.sh` builds qtkeychain against the pinned Qt instead
+(`--no-keychain` skips it, at the cost of SmartLink credential persistence).
 
 **Two Qt installations visible to CMake at once is a real failure, not a
 theoretical one** — it is what #711 and #812 were, and `CMakeLists.txt` puts
@@ -56,42 +64,59 @@ workflow asserts this; your machine will not.
 
 ## Windows 11
 
-Prerequisites: Visual Studio 2022 (Build Tools, Community, or higher) with the
-MSVC C++ workload, CMake 3.25+, Ninja, and Qt 6.8+ (`msvc2022_64`; both CI and
-the release binaries use 6.8.3 LTS).
+Prerequisites: Visual Studio 2022 **17.14 or newer** (Build Tools, Community,
+or higher) with the MSVC C++ workload, CMake 3.25+, Ninja, Git, and Python 3.
+7-Zip is recommended. The 17.14 floor comes from Qt 6.12 itself: its static
+`Qt6EntryPoint.lib`, which every Windows GUI app links, is built by MSVC 14.44,
+and an MSVC linker must be at least as new as the compiler behind any input.
+
+Qt 6.12 is the last Qt release that supports Windows 10 (1809 or later), so
+the next binary Qt bump will make AetherSDR's Windows builds Windows 11-only.
 
 ```bat
 :: 1. Activate the MSVC environment. Adjust the edition (BuildTools / Community /
 ::    Professional / Enterprise) to match your install; run "vswhere" if unsure.
 "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
 
-:: 2. Point at your Qt kit once, with forward slashes (CMake reads the path
-::    literally, so backslashes would be taken as escape sequences). Change the
-::    version/edition here to match your install; both steps below reuse it.
-::    setup-qtkeychain.ps1 (step 4) reads QT_ROOT_DIR; on CI that variable is
-::    exported by install-qt-action, so a local build has to set it explicitly
-::    or the script exits with "Qt not found".
-set "QT_KIT=C:/Qt/6.8.3/msvc2022_64"
-set "QT_ROOT_DIR=%QT_KIT%"
+:: 2. Install the release Qt and build qtkeychain against it. Checks Visual
+::    Studio, Python, disk space and the Qt build before downloading ~2 GB into
+::    %LOCALAPPDATA%\aethersdr\qt\ (AETHER_QT_CACHE overrides). Re-running is a
+::    no-op once installed.
+powershell -File scripts\setup\setup-qt.ps1
 
 :: 3. Generate the single-precision FFTW import lib (needed by NR4/libspecbleach)
 powershell -File scripts\setup\setup-fftw.ps1
 
-:: 4. Build qtkeychain (needed for QRZ/SmartLink credential persistence).
-::    Downloads source and builds it against your Qt kit into third_party\qtkeychain\.
-::    Skip this step and the build still succeeds, but QRZ/SmartLink passwords
-::    won't be saved between runs.
-powershell -File scripts\setup\setup-qtkeychain.ps1
+:: 4. Configure. CMake finds the Qt from step 2 on its own. Ninja is required:
+::    the default Visual Studio generator is multi-config (it ignores
+::    CMAKE_BUILD_TYPE) and takes a different manifest-embed path.
+cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
 
-:: 5. Configure. Ninja is required: the default Visual Studio generator is
-::    multi-config (it ignores CMAKE_BUILD_TYPE) and takes a different
-::    manifest-embed path. Point CMAKE_PREFIX_PATH at your Qt kit so
-::    find_package(Qt6) resolves.
-cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_PREFIX_PATH="%QT_KIT%"
-
-:: 6. Build
+:: 5. Build
 cmake --build build --target AetherSDR
 ```
+
+**Why a script and not "install Qt with aqt":** the newest aqtinstall on PyPI
+(3.3.0) cannot install Qt 6.11 or newer on Windows — it stops with *Failed to
+locate XML data for Qt version*, because Qt moved its Windows repository to one
+index per architecture. `setup-qt.ps1` installs aqt from the commit CI uses
+(`AQTINSTALL_GIT_REF` in [`cmake/qt-pin.env`](../cmake/qt-pin.env)), and
+extracts with 7-Zip because aqt's built-in extractor fails at random on Windows
+Qt archives.
+
+**Using a Qt you installed yourself** (6.12 or newer, e.g. from the Qt Online
+Installer, which needs a Qt account): skip step 2, then point both qtkeychain
+and CMake at the kit, with
+forward slashes (CMake reads the path literally):
+
+```bat
+set "QT_ROOT_DIR=C:/Qt/6.12.0/msvc2022_64"
+powershell -File scripts\setup\setup-qtkeychain.ps1
+cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_PREFIX_PATH="%QT_ROOT_DIR%"
+```
+
+An explicit `CMAKE_PREFIX_PATH` always wins over the cached release Qt;
+`-DAETHER_USE_PINNED_QT=OFF` ignores the cache outright.
 
 ---
 
@@ -121,32 +146,63 @@ install `gstreamer1.0-pulseaudio`. For PipeWire systems, also install `gstreamer
 by default for the desktop image; the build-deps line above includes it
 explicitly so this only bites users who install just the AppImage.
 
-## Older distro Qt (Ubuntu 24.04 LTS)
+## The release Qt: `setup-qt.sh`
 
-On a distribution whose Qt is older than the required 6.8 (notably Ubuntu 24.04
-LTS at 6.4.2), install a newer Qt manually:
+AetherSDR requires Qt 6.12, the Qt every release is built against, and few
+distros package it yet (Debian Trixie ships 6.8, Ubuntu 24.04 6.4, Arch and
+Debian sid 6.11 at the time of writing). Install the pinned release Qt with
+one command:
 
-1. **Option 1: Using a PPA (Ubuntu/Mint)**
-   The `kubuntu-backports` PPA may provide a newer Qt — verify the version it ships before relying on it.
+```bash
+scripts/setup/setup-qt.sh
+cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
+```
 
-2. **Option 2: Using the Qt Online Installer**
-   Install Qt into your home directory (e.g., `~/Qt/6.8.3/gcc_64`). Because CMake otherwise defaults to the system-provided Qt, point it at the newer install with `-DCMAKE_PREFIX_PATH`:
+The script reads [`cmake/qt-pin.env`](../cmake/qt-pin.env) — the same pin
+every CI leg and release workflow is checked against — installs that Qt with
+a pinned aqtinstall, and builds qtkeychain against it. CMake then finds it on
+its own; no `CMAKE_PREFIX_PATH` needed. Expect ~2 GB on disk and well under a
+minute on a fast connection.
 
-   ```bash
-   cmake -B build -G Ninja \
-       -DCMAKE_PREFIX_PATH="$HOME/Qt/6.8.3/gcc_64" \
-       -DCMAKE_BUILD_TYPE=RelWithDebInfo
-   ```
+- **Where it goes:** `~/.cache/aethersdr/qt/` on Linux,
+  `~/Library/Caches/aethersdr/qt/` on macOS, shared by every checkout. Set
+  `AETHER_QT_CACHE` to put it elsewhere. Each install is a generation under
+  `gen/`, and `<version>-<revision>.current` names the live one. A reinstall
+  builds the new generation alongside and switches the pointer in one atomic
+  step, so an interrupted or failed reinstall leaves the working Qt in place;
+  existing build directories follow the pointer on their next configure.
+  Superseded generations are kept, because built binaries link Qt by absolute
+  path and must keep launching until rebuilt; `--prune` (`-Prune` on Windows)
+  deletes every generation but the live one when you want the ~2 GB back.
+- **What it checks first**, so an unsupported machine is told before the
+  download rather than after: glibc 2.34+ (x86_64) or 2.38+ (aarch64), Xcode
+  16+ on macOS, a working `python3 -m venv` (on Debian, Ubuntu and Raspberry Pi
+  OS: `sudo apt install python3-venv`), ~3 GB free, and that Qt's repository
+  still serves the exact build the pin names.
+- **Re-running** is a no-op once installed. `--print-prefix` prints the Qt
+  path CMake will use.
+- **Using another Qt:** any Qt 6.12+ works — a distro's, once it ships one, or
+  a Qt Online Installer kit. Pass `-DAETHER_USE_PINNED_QT=OFF`, or point
+  `CMAKE_PREFIX_PATH`/`Qt6_DIR` at it; an explicit choice always wins.
+- **Let CMake run it:** `-DAETHER_FETCH_QT=ON` runs the script at configure
+  time when the Qt is missing. Off by default — a plain configure should never
+  start a 2 GB download.
+- **An existing build directory** remembers the Qt it first found; reconfigure
+  with `cmake --fresh -B build` after installing.
 
-   Make sure the `qtshadertools` and `qt5compat` (or equivalent) modules are selected in the Qt Online Installer along with `qtbase`.
+Qt's binaries also need the X11/xcb, GL and PulseAudio libraries a distro Qt
+would have pulled in; the README's per-distro install lines include them, and
+`.github/docker/Dockerfile` is the set CI builds with.
 
-*Note: GPU rendering also needs the private QtGui headers (`qt6-base-private-dev` on Debian-family, included by default in the Qt Online Installer).*
+On Windows, use `setup-qt.ps1` instead — see [Windows 11](#windows-11).
+
+*Note: GPU rendering also needs the private QtGui headers. The release Qt and the Qt Online Installer include them; a distro Qt needs its private-headers package (`qt6-base-private-dev` on Debian-family).*
 
 ---
 
 ## GPU spectrum rendering
 
-GPU-accelerated spectrum/waterfall rendering requires Qt 6.7 or greater (`QRhiWidget`). Since the build now requires Qt 6.8 as a minimum, no build is held back by the Qt version any more — the aarch64 AppImage included. What decides whether a given binary renders via QRhi is the `AETHER_GPU_SPECTRUM` build option, and for a source build whether Qt's private GUI headers are installed: CMake turns the option off with `GPU spectrum rendering disabled — Qt6GuiPrivate not found` when they are missing (install `qt6-base-private-dev` / `qt6-qtbase-private-devel`).
+GPU-accelerated spectrum/waterfall rendering requires Qt 6.7 or greater (`QRhiWidget`). The build requires Qt 6.12, so no build is held back by the Qt version — the aarch64 AppImage included. What decides whether a given binary renders via QRhi is the `AETHER_GPU_SPECTRUM` build option, and for a source build whether Qt's private GUI headers are installed: CMake turns the option off with `GPU spectrum rendering disabled — Qt6GuiPrivate not found` when they are missing (install `qt6-base-private-dev` / `qt6-qtbase-private-devel`).
 
 The CPU `QPainter` path is a **build-time alternative, not a runtime fallback**. `AETHER_GPU_SPECTRUM` selects `SpectrumWidget`'s base class — `QRhiWidget` or `QWidget` — and `SpectrumWidget::paintEvent()`, which is what draws the spectrum on the CPU, is compiled only into the `QWidget` build. (A GPU build still uses `QPainter`, but only to rasterise overlays into textures QRhi then composites.) Of the shipped artifacts only the Intel macOS DMG is built the other way, and deliberately: `QRhiWidget` misbehaves on older Metal/OpenGL hardware.
 

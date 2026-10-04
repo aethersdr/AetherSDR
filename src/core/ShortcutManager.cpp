@@ -310,7 +310,7 @@ ShortcutManager::ShortcutManager(QObject* parent)
 void ShortcutManager::registerAction(const QString& id, const QString& displayName,
                                      const QString& category, const QKeySequence& defaultKey,
                                      std::function<void()> handler,
-                                     bool autoRepeat, bool keysTx)
+                                     bool autoRepeat, bool keysTx, ShortcutPolicy policy)
 {
     // The id becomes part of the XML element name "Shortcut_<id>". AppSettings
     // silently drops keys that fail ^[A-Za-z_][A-Za-z0-9_]*$ on save (qWarning
@@ -330,7 +330,7 @@ void ShortcutManager::registerAction(const QString& id, const QString& displayNa
     }
     m_actions.append({id, displayName, category, defaultKey, defaultKey,
                       std::move(handler), autoRepeat, /*persisted=*/false, keysTx,
-                      TxController::Activity::Mox, {}});
+                      TxController::Activity::Mox, {}, policy});
 }
 
 void ShortcutManager::setBinding(const QString& actionId, const QKeySequence& key)
@@ -678,23 +678,39 @@ void ShortcutManager::rebuildShortcuts(QWidget* parent,
     // Destroy existing shortcuts
     qDeleteAll(m_shortcuts);
     m_shortcuts.clear();
+    qDeleteAll(m_windowShortcuts);
+    m_windowShortcuts.clear();
 
     for (const auto& a : m_actions) {
         if (a.currentKey.isEmpty() || !a.handler) continue;
 
         auto* sc = new QShortcut(a.currentKey, parent);
+        const bool windowManagement = isWindowManagement(a);
+        sc->setContext(windowManagement ? Qt::ApplicationShortcut : Qt::WindowShortcut);
         sc->setAutoRepeat(a.autoRepeat);
+        // A disabled QShortcut is skipped by Qt's shortcut map, so its key
+        // reaches the focused widget. An enabled one consumes the key even
+        // when the guard below refuses it (#5483).
+        if (!windowManagement)
+            sc->setEnabled(m_shortcutsEnabled);
         auto handler = a.handler;
-        connect(sc, &QShortcut::activated, this, [guardFn, handler]() {
-            if (guardFn && !guardFn()) return;
+        connect(sc, &QShortcut::activated, this, [guardFn, handler, windowManagement]() {
+            if (!windowManagement && guardFn && !guardFn()) {
+                return;
+            }
             handler();
         });
-        m_shortcuts.append(sc);
+        if (windowManagement) {
+            m_windowShortcuts.append(sc);
+        } else {
+            m_shortcuts.append(sc);
+        }
     }
 }
 
 void ShortcutManager::setShortcutsEnabled(bool enabled)
 {
+    m_shortcutsEnabled = enabled;
     for (auto* sc : m_shortcuts)
         sc->setEnabled(enabled);
 }
@@ -714,6 +730,18 @@ const ShortcutManager::Action* ShortcutManager::actionForKey(const QKeySequence&
         if (a.currentKey == key) return &a;
     }
     return nullptr;
+}
+
+const ShortcutManager::Action* ShortcutManager::operatingActionForKey(
+    const QKeySequence& key) const
+{
+    const Action* a = actionForKey(key);
+    return a && !isWindowManagement(*a) ? a : nullptr;
+}
+
+bool ShortcutManager::isWindowManagement(const Action& a)
+{
+    return a.policy == ShortcutPolicy::WindowManagement && !a.keysTx && !a.txHandler;
 }
 
 QString ShortcutManager::conflictCheck(const QKeySequence& key,

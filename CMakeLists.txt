@@ -7,7 +7,7 @@ if(POLICY CMP0156)
     cmake_policy(SET CMP0156 NEW)
 endif()
 
-project(AetherSDR VERSION 26.9.4 LANGUAGES C CXX)
+project(AetherSDR VERSION 26.10.1 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -55,13 +55,17 @@ option(ENABLE_NVIDIA_AFX "Enable the NVIDIA Maxine AFX GPU denoiser (BNR; runtim
 # is CPU-only); see third_party/whisper.cpp/AETHER_VENDORING.md. Opt out with
 # -DENABLE_ASR=OFF.
 option(ENABLE_ASR "Enable on-device speech-to-text (ASR) via vendored whisper.cpp" ON)
-# Windows-only: consume prebuilt whisper/ggml/ggml-vulkan static libs from the
-# whisper-gpu-<ver> release asset instead of compiling from source. Bypasses
-# the 4h step-timeout on stock GitHub windows-latest runners (4 core / 16 GB)
-# where the ggml-vulkan Release compile alone exceeds the budget. Local dev
-# builds should leave this OFF and compile from source.
+# Windows-only fallback: consume prebuilt whisper/ggml/ggml-vulkan static libs
+# from the whisper-gpu-<ver> release asset instead of compiling from source.
+# The Windows installer workflow compiles the vendored tree (with the /O1
+# override below, the whole whisper target is 2-3 min on a stock 4-core
+# windows-latest runner; measured 2026-09-21, run 35660187303, and
+# 2026-07-22, runs 29904473886 and 29924632118). The pinned pack predates the
+# vendored tree's local patches
+# (third_party/whisper.cpp/AETHERSDR-PATCHES.md), so turning this ON ships
+# those patches only once the pack is rebuilt and re-pinned. Leave OFF.
 option(ASR_USE_PREBUILT_WHISPER_GPU
-    "Windows CI: consume prebuilt whisper-gpu asset instead of building from source" OFF)
+    "Windows fallback: consume the prebuilt whisper-gpu asset instead of building from source" OFF)
 option(ENABLE_MQTT "Enable MQTT client support" ON)
 
 # ── Sanitizers: ONE tree-wide switch ─────────────────────────────────────────
@@ -138,6 +142,27 @@ if(NOT AETHERSDR_SANITIZER STREQUAL "none")
     add_link_options(-fsanitize=${AETHERSDR_SANITIZER})
     message(STATUS "AetherSDR: sanitizer = ${AETHERSDR_SANITIZER} (whole tree)")
     unset(_aether_san_list)
+endif()
+# Build libaethercore as one shared library instead of a static archive. The
+# ~250 test executables that link the core each absorb a full static copy
+# (~200 MB in a Debug ASan build), which exhausts a hosted runner's disk;
+# shared, they average ~13 MB. For the sanitizer lane only, never for releases:
+# the shipped app links the core statically.
+option(AETHER_SHARED_CORE "Build libaethercore as a shared library (sanitizer CI only)" OFF)
+if(AETHER_SHARED_CORE)
+    if(WIN32)
+        message(FATAL_ERROR "AETHER_SHARED_CORE is not supported on Windows")
+    endif()
+    # Vendored static libraries end up inside the shared core. Their symbols
+    # do not reach the core's consumers: a PRIVATE dependency stops at a
+    # shared library, and aether_wdsp is built with hidden visibility. A test
+    # that calls WDSP directly while linking only aethercore links against
+    # the static core and fails here; go through core/dsp/WdspChannel.h.
+    set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+    set(_aether_core_library_type SHARED)
+    message(STATUS "AetherSDR: libaethercore built SHARED (AETHER_SHARED_CORE)")
+else()
+    set(_aether_core_library_type STATIC)
 endif()
 option(ENABLE_RTL "Enable the experimental receive-only RTL-SDR backend" ON)
 # Which SSB modulator the Hermes-Lite 2 transmit path is BUILT with. There is
@@ -247,48 +272,47 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 # Qt6 components
-# Qt 6.8 minimum, matching the Qt every shipped artifact is built against:
-# the AppImage (both arches, .github/workflows/appimage.yml), the Windows
-# installer (check-windows pins 6.8.3 in ci.yml), and the Linux CI image
-# (.github/docker/Dockerfile installs 6.8.3 via aqt). One number, so a Qt API
-# that compiles in CI also compiles for a release build.
+# Qt 6.12 minimum: the same Qt every release artifact and every CI leg builds
+# against (#5487). A source build no longer depends on what a distro happens to
+# package — scripts/setup/setup-qt.{sh,ps1} install exactly this Qt in one
+# command, and cmake/AetherQtPin.cmake finds it with no flags. A distro or
+# Qt-installer Qt that is 6.12 or newer still works. The floor is
+# QT_SOURCE_FLOOR in cmake/qt-pin.env; tools/check_qt_pin.py fails Static
+# Checks if this file disagrees with it.
 #
-# Raised from 6.2 deliberately. The old floor was nominal — nothing tested it
-# after Ubuntu 22.04 left the matrix, and the only leg anywhere near it was the
-# CI image on Ubuntu 24.04's Qt 6.4.2, a release EOL upstream since the 6.4
-# series ended at 6.4.3. That gap rejected valid code (PR #4646, QList::assign)
-# while testing a Qt no artifact shipped.
-#
-# Consequence for source builds: Ubuntu 24.04's distro Qt (6.4.2) no longer
-# satisfies this — build against 6.8+ from aqt/Qt online installer, or use a
-# distro carrying it (Debian Trixie, Ubuntu 25.10+, Fedora 41+, Arch).
-# 6.8 also clears QRhiWidget (6.7+), so the GPU spectrum path is no longer
-# conditionally compiled out on Linux CI.
+# One version, so no API needs a QT_VERSION guard for an older Qt, and no CI
+# job has to compile the tree against a second Qt to keep such guards honest.
 #
 # Probe QUIET first so a below-floor Qt gets an actionable error instead of
 # CMake's bare "the version found is not compatible", which names neither the
-# floor as a project decision nor the way out. Ubuntu 24.04 LTS (Qt 6.4.2) is
-# the common case, it has the largest install base of any supported distro, and
-# it was a documented apt line here until this floor moved — so the people most
-# likely to hit this have the least context for it, and the README they need is
-# a document they have already scrolled past.
-#
-# Falls through untouched when Qt is absent entirely (the REQUIRED call below
-# emits the normal not-found error) or already satisfies the floor.
+# floor as a project decision nor the way out. A distro Qt below 6.12 is the
+# common case (Debian Trixie 6.8, Ubuntu 24.04 6.4, Arch and Debian sid 6.11 at
+# the time of writing), and those builders have the least context for it, so
+# both failure modes name the one command that fixes them.
+include(cmake/AetherQtPin.cmake)
 find_package(Qt6 QUIET COMPONENTS Core)
-if(Qt6_FOUND AND Qt6_VERSION VERSION_LESS 6.8)
+if(WIN32)
+    set(_aether_qt_setup "powershell -File scripts\\setup\\setup-qt.ps1")
+else()
+    set(_aether_qt_setup "scripts/setup/setup-qt.sh")
+endif()
+set(_aether_qt_way_out
+    "Install the release Qt (${AETHER_QT_PIN_VERSION}) with one command, then re-run cmake:\n"
+    "    ${_aether_qt_setup}\n"
+    "(or configure with -DAETHER_FETCH_QT=ON to have cmake run it). "
+    "See docs/BUILDING.md for what it checks and where it installs.")
+if(Qt6_FOUND AND Qt6_VERSION VERSION_LESS 6.12)
     message(FATAL_ERROR
-        "Qt ${Qt6_VERSION} found, but AetherSDR requires Qt 6.8 or newer.\n"
-        "This is the Qt every AetherSDR release binary is built against.\n"
-        "Ubuntu 24.04 LTS ships 6.4.2; Debian Trixie, Ubuntu 25.10+, "
-        "Fedora 41+ and Arch all ship 6.8 or newer.\n"
-        "To build on a distro below the floor, install Qt 6.8+ with aqtinstall "
-        "or the Qt online installer and re-run with "
-        "-DCMAKE_PREFIX_PATH=/path/to/Qt/6.8.3/gcc_64 — see the README's "
-        "\"Building from Source\" dependency section.")
+        "Qt ${Qt6_VERSION} found, but AetherSDR requires Qt 6.12 or newer — "
+        "the Qt every release is built against.\n"
+        ${_aether_qt_way_out})
+elseif(NOT Qt6_FOUND)
+    message(FATAL_ERROR
+        "No Qt 6 found. AetherSDR requires Qt 6.12 or newer.\n"
+        ${_aether_qt_way_out})
 endif()
 
-find_package(Qt6 6.8 REQUIRED COMPONENTS
+find_package(Qt6 6.12 REQUIRED COMPONENTS
     Core
     Concurrent
     Widgets
@@ -559,17 +583,17 @@ endif()
 
 # GPU-accelerated spectrum/waterfall rendering via QRhi (#391)
 # Requires: Qt 6.7+ (QRhiWidget), Qt6::ShaderTools (build-time shader compilation)
-# The version guard below is unreachable now that find_package demands 6.8 — it
+# The version guard below is unreachable now that find_package demands 6.12 — it
 # is kept as a cheap backstop so lowering the floor again can't silently produce
 # a build that references QRhiWidget on a Qt that lacks it.
 if(AETHER_GPU_SPECTRUM)
     if(Qt6_VERSION VERSION_LESS "6.7")
         set(AETHER_GPU_SPECTRUM OFF)
-        # 6.8.3, not 6.7.x, in the suggested path: this guard is unreachable
-        # while the floor is 6.8, so if it ever fires the floor has been
+        # 6.12.0, not 6.7.x, in the suggested path: this guard is unreachable
+        # while the floor is 6.12, so if it ever fires the floor has been
         # lowered — and pointing that reader at a 6.7 install would send them
         # to a Qt find_package still rejects.
-        message(STATUS "GPU spectrum rendering disabled (QRhiWidget requires Qt 6.7+, found ${Qt6_VERSION} — pass -DCMAKE_PREFIX_PATH=/path/to/Qt/6.8.3/gcc_64 to use a newer Qt installation)")
+        message(STATUS "GPU spectrum rendering disabled (QRhiWidget requires Qt 6.7+, found ${Qt6_VERSION} — pass -DCMAKE_PREFIX_PATH=/path/to/Qt/6.12.0/gcc_64 to use a newer Qt installation)")
     else()
         find_package(Qt6 REQUIRED COMPONENTS ShaderTools)
         # Qt6GuiPrivate provides QRhi headers needed for GPU rendering.
@@ -619,7 +643,7 @@ if(AETHER_GPU_SPECTRUM)
             # Qt6GuiPrivate CMake package at all, so nothing above finds them.
             #
             # This is not a hypothetical layout: pinning the Apple Silicon DMG
-            # to aqt Qt 6.8.3 (#4688 §1) moved that leg off Homebrew's Qt, which
+            # to aqt Qt (#4688 §1, #5487) moved that leg off Homebrew's Qt, which
             # *does* provide Qt6GuiPrivate — and AETHER_GPU_SPECTRUM promptly
             # turned itself OFF, with the CPU QPainter fallback compiled in and
             # the workflow green. Only the #4690 assertion caught it. Probe the
@@ -784,8 +808,8 @@ endif()
 # The settings store (RFC #4603): AppSettings' implementation spans the SQLite
 # wrapper, path helpers, pre-QApplication bootstrap reader, and the sanitizer.
 # Every target that compiles AppSettings.cpp needs the whole group — and the
-# vendored engine, linked by the AETHER_SETTINGS_CONSUMERS loop near the end
-# of this file.
+# vendored engine, linked by the AETHER_SETTINGS_CONSUMERS loop in
+# tests/tests.cmake.
 set(AETHER_SETTINGS_SOURCES
     src/core/AppSettings.cpp
     src/core/SettingsDatabase.cpp
@@ -821,6 +845,11 @@ set(CORE_SOURCES
     src/core/backends/flex/FlexBackend.cpp   # aetherd RFC step 2.2 (§5.5)
     src/core/backends/flex/FlexPttStopTracker.cpp # operation-bound LAN PTT evidence
     src/core/backends/flex/FlexPttWireSession.cpp
+    src/core/backends/flex/RadioConnection.cpp  # SmartSDR TCP command/reply/status wire
+    src/core/backends/flex/CommandParser.cpp    # SmartSDR wire line parse/build
+    src/core/backends/flex/PanadapterStream.cpp # SmartSDR VITA-49 UDP receiver (DAX/IQ)
+    src/core/backends/flex/SmartLinkClient.cpp  # SmartLink WAN auth + radio list
+    src/core/backends/flex/WanConnection.cpp    # SmartLink TLS transport (#5554 §2.6)
     src/core/backends/sim/SimBackend.cpp     # demo mode — 2nd IRadioBackend (RFC #4288)
     src/core/backends/sim/SimSignalSource.cpp  # demo RX engine, worker thread (#4878)
     src/core/backends/sim/SpectrumPatternGenerator.cpp  # demo mode — signal engine (RFC #4288 Phase 2)
@@ -840,10 +869,11 @@ set(CORE_SOURCES
     src/core/backends/hl2/Hl2TelemetryService.cpp # owns the poller ABOVE the backend (#15)
     src/core/backends/hl2/Hl2Settings.cpp    # owned config object, "Hl2" root key (Principle V)
     src/core/backends/hl2/Hl2FreqCal.cpp     # manual frequency calibration (no such register exists)
+    src/core/backends/hl2/Hl2HardwareOptions.cpp # which HL2 variant: codec, dither bit, filter board, CL1, ATU
     src/core/backends/anan/P2Protocol.cpp    # aetherd ANAN P2 Phase 1b (openHPSDR Protocol 2 wire codec)
     src/core/backends/anan/P2Client.cpp      # aetherd ANAN P2 Phase 1b (UDP wire + DDC0 ingest)
     src/core/backends/anan/AnanDiscovery.cpp # aetherd ANAN P2 Phase 1b (P2 discovery -> picker)
-    src/core/backends/anan/AnanSpectrum.cpp  # aetherd ANAN P2 Phase 1b (FFT panadapter, FFTW)
+    src/core/backends/anan/AnanPanAnalyzer.cpp  # ANAN panadapter via WDSP's display analyzer
     src/core/backends/anan/AnanRxDsp.cpp     # aetherd ANAN P2 Phase 1b (IQ -> WdspChannel demod + spectrum)
     src/core/backends/anan/AnanDroopCorrection.cpp # ANAN DDC0 droop compensation (pure apply math)
     src/core/backends/anan/AnanDroopCalibrator.cpp # live, in-app DDC0 droop calibration sweep
@@ -864,21 +894,26 @@ set(CORE_SOURCES
     src/core/backends/icom/IcomCivBackend.cpp # IcomCIV (IRadioBackend impl)
     src/core/backends/icom/IcomSettings.cpp  # owned config, "Icom" root key (Principle V)
     src/core/backends/icom/IcomCredentials.cpp # password -> keychain, NEVER settings
+    src/core/dsp/FftwPlannerLock.cpp # the one process-global FFTW planner lock (#5895)
     src/core/dsp/WdspChannel.cpp
+    src/core/backends/rtl/RtlCaptureTransaction.cpp
+    src/core/backends/rtl/RtlReceivePipeline.cpp
+    src/core/backends/rtl/RtlAudioMixer.cpp
+    src/core/backends/rtl/RtlRfExtractor.cpp
     src/core/backends/rtl/RtlReceiverRegistry.cpp # RFC #5468 prepared receiver ownership; no USB dependency
     ${AETHER_SETTINGS_SOURCES}
     src/core/RadioStateMemory.cpp   # RFC #4603 client-side radio memory
     src/core/RtlSliceSettings.cpp   # RFC #5468 persistence foundation
+    src/core/RtlDeviceSettings.cpp  # accepted per-device calibration and IQ controls
     src/core/GpuSelector.cpp
+    src/core/QtAudioBackendGuard.cpp  # pre-QApplication: keeps Qt 6.12 off a crashing PipeWire backend
     src/core/AgcTCalibrator.cpp
     src/core/AdaptiveFilterEngine.cpp
     src/core/OccupiedRegion.cpp
     src/core/BandStackSettings.cpp
     src/core/RadioDiscovery.cpp
-    src/core/RadioConnection.cpp
     src/core/NetworkPathResolver.cpp
     src/core/TgxlConnection.cpp
-    src/core/CommandParser.cpp
     src/core/AudioSummaryLogger.cpp
     src/core/AudioFormatNegotiator.cpp
     src/core/AudioDeviceNegotiator.cpp
@@ -917,12 +952,11 @@ set(CORE_SOURCES
     src/core/TxCoordinator.cpp
     src/core/TxGrantManager.cpp
     src/core/SpectralNR.cpp
-    src/core/MonoDspStereoAdapter.cpp
-    src/core/PanadapterStream.cpp
     src/core/TimeFrameVoter.cpp
     src/core/WwvDecoder.cpp
     src/core/WwvbDecoder.cpp
     src/core/AetherClockEngine.cpp
+    src/core/DecoderPcmAdapter.cpp
     src/core/AetherClockSettings.cpp
     src/core/MiniPanSettings.cpp
     src/core/GreenHeronProtocol.cpp
@@ -930,10 +964,15 @@ set(CORE_SOURCES
     src/core/PerfTelemetry.cpp
     src/core/MemoryTelemetry.cpp
     src/core/RigctlProtocol.cpp
+    src/core/ByteRelay.cpp
+    src/core/TcpByteProxy.cpp
+    src/core/Ctr2HidFraming.cpp
+    src/core/Ctr2HidPort.cpp
+    src/core/Ctr2HidThreadPort.cpp
+    src/core/Ctr2UsbRelay.cpp
     src/core/SmartCatProtocol.cpp
     src/core/SmartCatSession.cpp
     src/core/CatPort.cpp
-    src/core/SmartLinkClient.cpp
     src/core/KiwiSdrProtocol.cpp
     src/core/KiwiSdrRedirectPolicy.cpp
     src/core/KiwiSdrCredentialStore.cpp
@@ -941,7 +980,6 @@ set(CORE_SOURCES
     src/core/KiwiSdrManager.cpp
     src/core/ReceivePresentationSync.cpp
     src/core/KiwiPublicDirectory.cpp
-    src/core/WanConnection.cpp
     src/core/DxClusterClient.cpp
     src/core/WsjtxClient.cpp
     src/core/SpotCollectorClient.cpp
@@ -959,6 +997,8 @@ set(CORE_SOURCES
     src/core/AutomationBridgeSettings.cpp
     src/core/SpotCommandPolicy.cpp
     src/core/SpotModeResolver.cpp
+    src/core/TciIoWorker.cpp
+    src/core/TciClient.h
     src/core/TciServer.cpp
     src/core/TciRxConverter.cpp
     src/core/TciPeerProcess.cpp
@@ -1082,6 +1122,7 @@ elseif(UNIX)
 endif()
 
 set(MODEL_SOURCES
+    src/models/DecoderAudioModel.cpp
     src/models/AprsDigipeaterModel.cpp
     src/models/Nr2SettingsModel.cpp
     src/models/Rn2SettingsModel.cpp
@@ -1090,6 +1131,7 @@ set(MODEL_SOURCES
     src/models/TxController.cpp
     src/models/DeclaredBands.cpp
     src/models/RadioSession.cpp
+    src/models/ReceiverSlotCount.cpp
     src/models/ModelCapabilities.cpp
     src/models/AntennaAliasStore.cpp
     src/models/SliceModel.cpp
@@ -1115,6 +1157,7 @@ set(MODEL_SOURCES
     src/models/AntennaGeniusModel.cpp
     src/models/GreenHeronModel.cpp
     src/models/AetherClockModel.cpp
+    src/models/Ctr2ProxyModel.cpp
 )
 
 # Vendored QGeoView (LGPL-3.0) — slippy-map widget for the common
@@ -1185,10 +1228,13 @@ set(GUI_SOURCES
     src/gui/SliceLabel.cpp
     src/gui/VfoWidget.cpp
     src/gui/VfoDisplayDefaults.cpp
+    src/gui/SplitAudioProfile.cpp
     src/gui/SmartMtrWidget.cpp
     src/gui/SmartMtrConfig.cpp
     src/gui/MeterViewController.cpp
     src/gui/RadioSetupDialog.cpp
+    src/gui/RtlReceiverSettingsWidget.cpp
+    src/gui/RadioSetupDialog_Peripherals.cpp
     src/gui/NetworkDiagnosticsDialog.cpp
     src/gui/SystemInfoDialog.cpp
     src/gui/Ax25HfPacketDecodeDialog.cpp
@@ -1208,6 +1254,7 @@ set(GUI_SOURCES
     src/gui/AetherRxDialog.cpp
     src/gui/StagePage.cpp
     src/gui/StageTabBar.cpp
+    src/gui/RxPlaybackTransmitter.cpp
     src/gui/AetherRxSettingsDialog.cpp
     src/gui/AetherTxSettingsDialog.cpp
     src/gui/AetherDspWidget.cpp
@@ -1237,6 +1284,7 @@ set(GUI_SOURCES
     src/gui/VkampApplet.cpp
     src/gui/Kpa1500Applet.cpp
     src/gui/LpMeterApplet.cpp
+    src/gui/Ctr2ProxyApplet.cpp
     src/gui/MeterApplet.cpp
     src/gui/ProfileSwitcherApplet.cpp
     src/gui/RadeApplet.cpp
@@ -1557,7 +1605,7 @@ add_subdirectory(third_party/wdsp EXCLUDE_FROM_ALL)
 # their feature blocks). Qt resources (resources.qrc, DFNR model qrc) stay on
 # the executable: rcc registration runs from the exe's static initializers and
 # is process-global, so core code reading ":/..." keeps working.
-add_library(aethercore STATIC
+add_library(aethercore ${_aether_core_library_type}
     ${CORE_SOURCES}
     ${MODEL_SOURCES}
     ${RNNOISE_SOURCES}
@@ -1572,6 +1620,7 @@ target_link_libraries(aethercore PRIVATE aether::wdsp)
 # desktop executable and the automation test harnesses on the same linkage path
 # without pulling QtWidgets into the headless engine.
 add_library(aetherdesktop_support STATIC
+    src/gui/PeripheralAuthStore.cpp
     src/gui/TxPointerAction.cpp
     src/core/AutomationServer.cpp
     src/core/SettingsHelpers.cpp
@@ -1896,7 +1945,7 @@ if (ENABLE_ASR)
             set_target_properties(ggml-vulkan PROPERTIES INTERFACE_LINK_LIBRARIES "ggml-base;ggml-cpu;Vulkan::Vulkan")
             set_target_properties(ggml        PROPERTIES INTERFACE_LINK_LIBRARIES "ggml-base;ggml-cpu;ggml-vulkan")
             set_target_properties(whisper     PROPERTIES INTERFACE_LINK_LIBRARIES "ggml;Threads::Threads")
-            message(STATUS "ASR: prebuilt whisper-gpu ${_whisper_gpu_ver} pack consumed (skipped ~1h+ MSVC compile)")
+            message(STATUS "ASR: prebuilt whisper-gpu ${_whisper_gpu_ver} pack consumed (fallback; the vendored tree's local patches are absent until the pack is rebuilt)")
             # The pack is produced by a stock in-tree build (GGML_NATIVE=OFF →
             # ggml's fixed x86-64 feature set; MSVC /arch:AVX2 additionally
             # implies FMA+F16C). Recorded here for the startup inventory
@@ -2026,11 +2075,12 @@ configure_file(
     @ONLY
 )
 
-# Capture the git short SHA at configure time and surface it in the About
-# dialog so dev/test builds are identifiable.  Falls back to "unknown" for
-# source-tarball builds where .git is absent.
+# The short SHA at configure time, for the configure LOG only. It is not
+# compiled into anything: a configure-time value goes stale on the next
+# `cmake --build` after a commit, so every consumer in the binary reads the
+# build-time header below instead (#5804).
 find_package(Git QUIET)
-set(AETHER_GIT_SHA "unknown")
+set(_aether_configure_sha "unknown")
 if(Git_FOUND)
     execute_process(
         COMMAND ${GIT_EXECUTABLE} rev-parse --short HEAD
@@ -2041,15 +2091,43 @@ if(Git_FOUND)
         RESULT_VARIABLE _aether_git_sha_rv
     )
     if(_aether_git_sha_rv EQUAL 0 AND NOT "${_aether_git_sha_out}" STREQUAL "")
-        set(AETHER_GIT_SHA "${_aether_git_sha_out}")
+        set(_aether_configure_sha "${_aether_git_sha_out}")
     endif()
 endif()
-target_compile_definitions(AetherSDR PRIVATE AETHER_GIT_SHA="${AETHER_GIT_SHA}")
+
 if(Git_FOUND AND _aether_git_sha_rv EQUAL 0 AND NOT "${_aether_git_sha_out}" STREQUAL "")
-    message(STATUS "Build SHA: ${AETHER_GIT_SHA}")
+    message(STATUS "Build SHA: ${_aether_configure_sha}")
 else()
-    message(STATUS "Build SHA: ${AETHER_GIT_SHA} (git unavailable or not a git checkout)")
+    message(STATUS "Build SHA: ${_aether_configure_sha} (git unavailable or not a git checkout)")
 endif()
+
+# ---- Build identity, captured at BUILD time (#5804) -----------------------
+# The ONE build identity in the binary. A configure-time capture keeps the
+# previous value when `cmake --build` runs after a new commit; this target
+# re-evaluates on every build and writes a generated header. configure_file()
+# only rewrites it when the content changes, so an unchanged HEAD recompiles
+# nothing.
+#
+# `git describe --tags --always --dirty` carries the release baseline AND the
+# hash in one token ("v26.9.3-68-g7e841682"). The automation bridge's `ping`
+# reports it, so a harness can tell which build it is talking to.
+set(AETHER_BUILD_ID_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated/build-identity")
+set(AETHER_BUILD_ID_HEADER "${AETHER_BUILD_ID_DIR}/AetherBuildIdentity.h")
+add_custom_target(aether_build_identity ALL
+    BYPRODUCTS "${AETHER_BUILD_ID_HEADER}"
+    COMMAND ${CMAKE_COMMAND}
+        -DAETHER_SRC_DIR=${CMAKE_SOURCE_DIR}
+        -DAETHER_IN_FILE=${CMAKE_SOURCE_DIR}/src/core/AetherBuildIdentity.h.in
+        -DAETHER_OUT_FILE=${AETHER_BUILD_ID_HEADER}
+        -P ${CMAKE_SOURCE_DIR}/cmake/AetherBuildIdentity.cmake
+    COMMENT "Capturing build identity (git describe)"
+    VERBATIM)
+# AutomationServer.cpp (ping) lives in aetherdesktop_support; the About dialog
+# and Copy Assist's ASR fault stamp are in the executable.
+foreach(_aether_build_id_consumer aetherdesktop_support AetherSDR)
+    add_dependencies(${_aether_build_id_consumer} aether_build_identity)
+    target_include_directories(${_aether_build_id_consumer} PRIVATE "${AETHER_BUILD_ID_DIR}")
+endforeach()
 
 # Reproducible-builds.org SOURCE_DATE_EPOCH support.  When a distro
 # packager (Debian, Arch, NixOS, openSUSE, Fedora, etc.) sets
@@ -2705,7 +2783,9 @@ if(HIDAPI_FOUND)
         src/core/HidEncoderManager.cpp
         src/core/HidEncoderManager.h
         src/core/HidDeviceParser.cpp
-        src/core/HidDeviceParser.h)
+        src/core/HidDeviceParser.h
+        src/core/Ctr2HidapiPort.cpp
+        src/core/Ctr2HidapiPort.h)
     target_sources(AetherSDR PRIVATE
         src/gui/RC28MappingDialog.cpp
         src/gui/RC28MappingDialog.h)
@@ -3036,6 +3116,14 @@ if(ENABLE_SPECBLEACH)
     endif()
 endif()
 
+# QtAudioBackendGuard loads libpipewire at runtime (dlopen), the way Qt itself
+# does, so it has no build-time PipeWire dependency. libdl is part of libc on
+# every glibc this tree supports; linked explicitly so the guard does not ride
+# on the DFNR or AFX blocks below happening to pull it in.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_link_libraries(aethercore PRIVATE ${CMAKE_DL_LIBS})
+endif()
+
 if(ENABLE_DFNR)
     target_compile_definitions(aethercore PUBLIC HAVE_DFNR)
     target_include_directories(aethercore PRIVATE ${DEEPFILTER_DIR}/include)
@@ -3176,8 +3264,9 @@ if (NOT ENABLE_ASR)
     # stale cache still carries GGML_* entries from an earlier ASR configure
     # (which would otherwise arm an ASR warning in an ASR-less build).
 elseif (DEFINED _aether_prebuilt_ggml_baseline)
-    # Prebuilt whisper-gpu pack (Windows release): ggml's CMake never ran, so
-    # the baseline comes from the pack's recorded build settings above.
+    # Prebuilt whisper-gpu pack (the ASR_USE_PREBUILT_WHISPER_GPU fallback):
+    # ggml's CMake never ran, so the baseline comes from the pack's recorded
+    # build settings above.
     set(_aether_ggml_baseline_str "${_aether_prebuilt_ggml_baseline}")
 elseif (USE_SYSTEM_LIBWHISPER)
     # Distro libwhisper: its ISA baseline is the packager's choice and not
@@ -3279,6 +3368,11 @@ else()
                 DESTINATION lib/udev/rules.d
             )
         endif()
+    endif()
+    if(LINUX AND HIDAPI_FOUND)
+        install(FILES packaging/linux/70-aethersdr-ctr2.rules
+            DESTINATION lib/udev/rules.d
+        )
     endif()
     if(LINUX AND AETHER_BACKEND_RTL)
         install(FILES packaging/linux/70-rtl-sdr.rules

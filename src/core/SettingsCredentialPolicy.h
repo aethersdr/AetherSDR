@@ -5,15 +5,9 @@
 
 namespace AetherSDR {
 
-// THE single source of truth for "which settings names are credentials"
-// (RFC #4603 proposal E: no credential is ever stored in the settings
-// database — QtKeychain is the only persistent credential store).
-//
-// Three consumers derive from these tables so they cannot drift (PR #4612
-// review, nigelfenton + K5PTB — the drift already existed: the sanitizer's
-// regex missed the literal legacy name "MqttPass" that the exodus list
-// itself declared):
-//   - AppSettings: the XML-import exodus AND the setValue() seam guard
+// The single source of truth for which settings names are credentials (RFC
+// #4603: QtKeychain is the only persistent credential store). Consumers:
+//   - AppSettings: the XML-import exodus and the setValue() guard
 //   - SettingsSanitizer: exact-name redaction alongside the shape regex
 //   - the --config CLI: refuses to create a credential row
 namespace SettingsCredentialPolicy {
@@ -28,6 +22,16 @@ inline constexpr FlatCredential kFlatCredentials[] = {
     {"AutomationBridgeToken", "automation_bridge_token"},
     {"MqttPass",              "mqtt_password"},
     {"AsrRemoteApiKey",       "asr_remote_api_key"},
+    // Reserved names: AppSettings diverts imported plaintext values into its
+    // session vault, rejects direct setValue() writes, and omits them on export.
+    // These new peripheral codes have no trusted endpoint in old imports, so
+    // the desktop vault never sends an imported unbound code automatically.
+    {"tgxl_auth_code",        "tgxl_auth_code"},
+    {"TGXL_AuthCode",         "tgxl_auth_code"},
+    {"pgxl_auth_code",        "pgxl_auth_code"},
+    {"PGXL_AuthCode",         "pgxl_auth_code"},
+    {"antenna_genius_auth_code", "antenna_genius_auth_code"},
+    {"AG_AuthCode",           "antenna_genius_auth_code"},
 };
 
 // Credential-bearing FIELDS inside feature-owned JSON document values.
