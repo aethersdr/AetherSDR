@@ -597,13 +597,15 @@ bool WdspChannel::setFmDeviation(double deviationHz) noexcept
     return true;
 }
 
-bool WdspChannel::setSquelch(bool on, int level) noexcept
+bool WdspChannel::setSquelch(bool on, int level, double levelOffsetDb) noexcept
 {
-    if (m_config.direction != Direction::Receive || !beginControlOperation()) {
+    if (m_config.direction != Direction::Receive || !std::isfinite(levelOffsetDb)
+        || !beginControlOperation()) {
         return false;
     }
     m_config.squelchEnabled = on;
     m_config.squelchLevel = std::clamp(level, 0, 100);
+    m_config.levelSquelchOffsetDb = levelOffsetDb;
     {
         const std::scoped_lock setupLock(g_setupMutex);
         applySquelchLocked(m_config.mode);
@@ -646,12 +648,12 @@ double WdspChannel::fmSquelchThresholdForLevel(int level) noexcept
     return std::pow(10.0, -2.0 * clamped / 100.0);
 }
 
-double WdspChannel::levelSquelchThresholdDbfsForLevel(int level) noexcept
+double WdspChannel::levelSquelchThresholdDbfsForLevel(int level, double offsetDb) noexcept
 {
-    // Fitted to HL2 measurements (#5982): level 50 sits between the no-signal
-    // floor (-120..-112 dBFS) and a strong broadcast carrier (-96..-88).
+    // Fitted to HL2 measurements at the offset-0 gain (#5982, #6092): level 50
+    // sits between the no-signal floor and a strong broadcast carrier.
     const double clamped = std::clamp(static_cast<double>(level), 0.0, 100.0);
-    return -140.0 + 0.7 * clamped;
+    return kLevelSquelchBaseDbfs + kLevelSquelchDbPerStep * clamped + offsetDb;
 }
 
 void WdspChannel::applySquelchLocked(Mode mode) noexcept
@@ -677,7 +679,8 @@ void WdspChannel::applySquelchLocked(Mode mode) noexcept
         applied.fmRun = run;
         break;
     case SquelchStage::Level:
-        applied.threshold = levelSquelchThresholdDbfsForLevel(level);
+        applied.threshold =
+            levelSquelchThresholdDbfsForLevel(level, m_config.levelSquelchOffsetDb);
         SetRXAAMSQThreshold(m_channelId, applied.threshold);
         applied.amRun = run;
         break;

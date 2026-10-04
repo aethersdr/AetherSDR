@@ -2226,6 +2226,21 @@ correct: the operator made a real choice on a real radio.
 **SW is not gated and must never be**, on any backend. On a radio reporting
 false it is the only automatic floor the operator has.
 
+**Off needs the row's unit.** The manual level is a threshold in the unit the
+row carries. A Flex waterfall tile is intensity (about 96..120) and its threshold
+is `160 - level`. The HL2 has no waterfall plane: `RadioModel::onBackendSpectrumFrame`
+hands the pan frame on as the row, so the row is the pan's dB axis (dBFS under a
+dBm label). SW measures its black point from the row and so is already in the
+row's unit.
+
+`WaterfallLevelMap::manualBlackThreshold` takes the unit from
+`RadioCapabilities::panBinsAbsolute()`, the flag the auto-floor gate already
+reads: an absolute row gets `-60 dB - level`, one dB a step, -60 down to -160 dB.
+The direction is the Flex one (a higher value draws more of the floor). The two
+end points are chosen, not derived: -160 dBm clears the lowest floor this radio
+showed (-148 dBm at 384 kHz and LNA +40 dB, 9 dB lower at 48 kHz), and -60 dBm
+leaves only strong signals lit. A Flex leaves the flag false and is unchanged.
+
 ### 15.3 hpsdrsim cannot reproduce this
 
 **The simulator does not honour a sample-rate change.** Commanded to 384 kHz it

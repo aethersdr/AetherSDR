@@ -15,6 +15,7 @@
 #include "SoftwareOpenGlRequest.h"
 #include "SpectrumOverlayMenu.h"
 #include "RfGainPresentation.h"
+#include "WaterfallLevelMap.h"
 #include "VfoWidget.h"
 #include "DisplaySettings.h"
 #include "MacCursorCompat.h"
@@ -25,6 +26,7 @@
 #include "core/EibiClient.h"
 #include "core/backends/NoiseFloorAutoAdjustGate.h"
 #include "NoiseFloorEstimator.h"
+#include "WaterfallImpulseBlanker.h"
 #include <QVariant>
 #include <QVariantAnimation>
 
@@ -4509,9 +4511,18 @@ void SpectrumWidget::drawAutoSqlFloor(QPainter& p, const QRect& specRect)
     p.drawText(specRect.right() - p.fontMetrics().horizontalAdvance(lbl) - 4, y - 2, lbl);
 }
 
+void SpectrumWidget::setSquelchScale(std::optional<SquelchLevelScale> scale)
+{
+    if (m_squelchScale == scale) {
+        return;
+    }
+    m_squelchScale = std::move(scale);
+    m_lastAutoSquelchLevel = -1;
+    markOverlayDirty();
+}
+
 void SpectrumWidget::drawSquelchLine(QPainter& p, const QRect& specRect)
 {
-    constexpr float kSqlMinDbm = -160.0f;
     float squelchDbm = 0.0f;
     float pinnedDisplayNorm = 0.0f;
     bool usePinnedDisplayNorm = false;
@@ -4542,10 +4553,10 @@ void SpectrumWidget::drawSquelchLine(QPainter& p, const QRect& specRect)
                                             : QString())
             .arg(m_kiwiSdrSquelchLevel);
     } else {
-        if (!m_flexSquelchLineVisible || m_flexSquelchLevel <= 0) {
+        if (!m_flexSquelchLineVisible || m_flexSquelchLevel <= 0 || !m_squelchScale) {
             return;
         }
-        squelchDbm = kSqlMinDbm + static_cast<float>(m_flexSquelchLevel);
+        squelchDbm = static_cast<float>(m_squelchScale->thresholdDb(m_flexSquelchLevel));
         label = QStringLiteral("SQL %1").arg(m_flexSquelchLevel);
     }
 
@@ -4605,6 +4616,10 @@ void SpectrumWidget::updateAutoSquelchFromBins(const QVector<float>& binsDbm)
         return;
     }
 
+    if (!autoSquelchAvailable(m_squelchScale)) {
+        return;
+    }
+
     float sum1 = 0.0f;
     int cnt1 = 0;
     for (int j = 0; j < binsDbm.size(); j += 4) {
@@ -4631,11 +4646,9 @@ void SpectrumWidget::updateAutoSquelchFromBins(const QVector<float>& binsDbm)
             ? frameFloor
             : 0.1f * frameFloor + 0.9f * m_sqlNoiseFloorDbm;
 
-    constexpr float kSqlMinDbm = -160.0f;
     const float targetDbm =
         m_sqlNoiseFloorDbm + static_cast<float>(m_autoSqlMarginDb);
-    const int level = std::clamp(
-        static_cast<int>(targetDbm - kSqlMinDbm + 0.5f), 1, 100);
+    const int level = m_squelchScale->levelForThresholdDb(targetDbm);
     if (level != m_lastAutoSquelchLevel) {
         m_lastAutoSquelchLevel = level;
         emit autoSquelchLevelSuggested(level);
@@ -8636,9 +8649,17 @@ void SpectrumWidget::updateWaterfallRow(const QVector<float>& binsIntensity,
         if (m_wfBlankerRingCount > 0)
             baseline /= m_wfBlankerRingCount;
 
-        // Detect impulse (need ≥8 rows of history)
-        if (m_wfBlankerRingCount >= 8 && baseline > 0.0f
-                && rowMean > baseline * m_wfBlankerThreshold) {
+        // Detect impulse (need ≥8 rows of history). The test depends on the
+        // row's unit: a ratio for a tile, a dB difference for an absolute dB
+        // row. The unit is the declared capability, not the sign of the data —
+        // see WaterfallImpulseBlanker.h.
+        const WaterfallImpulseBlanker::Decision blankerDecision =
+            WaterfallImpulseBlanker::decide(
+                m_panBinsAbsolute
+                    ? WaterfallImpulseBlanker::RowKind::AbsoluteDb
+                    : WaterfallImpulseBlanker::RowKind::TileIntensity,
+                m_wfBlankerRingCount, baseline, rowMean, m_wfBlankerThreshold);
+        if (blankerDecision.impulse) {
             // Impulse detected — replace the complete last-good capture. The
             // two pixel rows and their frequency frames are one value: mixing
             // an old viewport row with the rejected tile's supplemental row
@@ -8661,13 +8682,14 @@ void SpectrumWidget::updateWaterfallRow(const QVector<float>& binsIntensity,
                           supplementalLevels.end(), floorLevel);
             }
             blankerSubstitutedRow = true;
-            m_wfBlankerRing[m_wfBlankerRingIdx] = std::min(rowMean, baseline * 1.05f);
         } else {
             m_wfLastGoodLevels = levels;
             m_wfLastGoodSupplementalLevels = supplementalLevels;
             m_wfLastGoodFrames = incomingFrames;
-            m_wfBlankerRing[m_wfBlankerRingIdx] = rowMean;
         }
+        static_assert(WF_BLANKER_N == WaterfallImpulseBlanker::kRingRows,
+                      "the blanker test models a ring of kRingRows rows");
+        m_wfBlankerRing[m_wfBlankerRingIdx] = blankerDecision.ringValue;
         m_wfBlankerRingIdx = (m_wfBlankerRingIdx + 1) % WF_BLANKER_N;
         if (m_wfBlankerRingCount < WF_BLANKER_N)
             ++m_wfBlankerRingCount;
@@ -12232,22 +12254,6 @@ float SpectrumWidget::kiwiSdrWaterfallLevel(float level) const
         level, floorDbm, adjustedCeilDbm);
 }
 
-// Cubic colour-gain curve mapping the radio's black point (low) to a white
-// point (high):
-//   num  = (100 − colorGain)/100 · cbrt(65535 − low)
-//   high = low + num³        (floored at low + 100)
-// colorGain 0 → full range (dim); 100 → narrow range (max contrast).
-static float wfHighThresholdRaw(float lowRaw, int colorGain)
-{
-    const float low = qBound(0.0f, lowRaw, 65535.0f);
-    const double num = (100.0 - colorGain) / 100.0 * std::cbrt(65535.0 - low);
-    double high = low + num * num * num;
-    if (high < low + 100.0) {
-        high = low + 100.0;
-    }
-    return static_cast<float>(high);
-}
-
 // Map native waterfall tile intensity to RGB.
 // Intensity is int16(raw)/128.0f — observed range ~96-120 on HF.
 // m_wfBlackLevel and m_wfColorGain control the mapping independently from FFT.
@@ -12258,36 +12264,19 @@ QRgb SpectrumWidget::intensityToRgb(float intensity) const
 
 float SpectrumWidget::intensityToWaterfallLevel(float intensity) const
 {
-    // Two auto-black paths (intensity arrives as raw_uint16 / 128):
-    //  • Radio-authoritative: the radio's per-tile black level is the low/black
-    //    point; the white point follows the cubic colour-gain curve
-    //    (wfHighThresholdRaw). Reproduces the radio's evenly-levelled floor.
-    //  • Fallback (no radio auto-black yet, or auto-black off): the prior
-    //    client-side noise-floor estimate / manual black level.
-    // The auto-black offset slider biases the black point: 50 = no bias,
-    // <50 darker, >50 lighter.
-    float blackThresh;   // low point  (intensity domain)
-    float rangeWidth;    // high − low (intensity domain)
-    if (m_wfAutoBlack && effectiveWfAutoBlackRadioSide() && m_radioAutoBlackRaw > 0.0f) {
-        // Clamp once so the black point, white point, and range all derive from
-        // the same low value — the offset can push lowRaw out of [0, 65535].
-        const float lowRaw = qBound(
-            0.0f,
-            m_radioAutoBlackRaw + (50 - m_wfAutoBlackOffset) * 0.5f * 128.0f,
-            65535.0f);
-        const float highRaw = wfHighThresholdRaw(lowRaw, m_wfColorGain);
-        blackThresh = lowRaw / 128.0f;
-        rangeWidth  = std::max(1.0f, (highRaw - lowRaw) / 128.0f);
-    } else if (m_wfAutoBlack) {
-        blackThresh = m_autoBlackThresh + (50 - m_wfAutoBlackOffset) * 0.5f;
-        rangeWidth  = std::max(1.0f, 120.0f - m_wfColorGain * 0.91f);
-    } else {
-        // Manual: slider 0 → thresh 160 (well above noise), slider 100 → thresh 60.
-        blackThresh = 160.0f - m_wfBlackLevel * 1.0f;
-        rangeWidth  = std::max(1.0f, 120.0f - m_wfColorGain * 0.91f);
-    }
-
-    return qBound(0.0f, (intensity - blackThresh) / rangeWidth, 1.0f);
+    // The law is WaterfallLevelMap::level, so a test can reach it; this only
+    // gathers state. With absolute bins the row is the pan frame, dBFS under
+    // a dBm label, so the manual black point is a threshold on that axis.
+    WaterfallLevelMap::Params params;
+    params.autoBlack = m_wfAutoBlack;
+    params.radioSideAutoBlack = effectiveWfAutoBlackRadioSide();
+    params.radioAutoBlackRaw = m_radioAutoBlackRaw;
+    params.autoBlackThresh = m_autoBlackThresh;
+    params.autoBlackOffset = m_wfAutoBlackOffset;
+    params.blackLevel = m_wfBlackLevel;
+    params.colorGain = m_wfColorGain;
+    params.rowsAreAbsoluteDb = m_panBinsAbsolute;
+    return WaterfallLevelMap::level(intensity, params);
 }
 
 QRgb SpectrumWidget::waterfallLevelToRgb(float level) const

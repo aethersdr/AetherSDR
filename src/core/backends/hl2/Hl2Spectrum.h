@@ -29,6 +29,10 @@ public:
 
     [[nodiscard]] int fftSize() const noexcept { return m_fftSize; }
 
+    // A bin-centred steady tone of magnitude A reads 20*log10(A) plus this:
+    // 20*log10(2), because the normalisation divides by half the window sum.
+    static constexpr double kToneGainDb = 6.020599913279624;
+
     // A fixed depth in display frames (1 = none): EMA with alpha = 1/frames, for
     // fixtures. The operator's FFT AVG is a time (setAverageTimeMs()); setting
     // this clears it. Drops the state. Call on the hl2-io thread (unsynchronised).

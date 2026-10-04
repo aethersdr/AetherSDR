@@ -110,9 +110,10 @@ public:
     void setTransmitFrequencyCheck(bool on) override;
     void setVox(bool on, int level, int delayMs) override;
     void setAtu(bool start, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {}) override;
-    void setRitEnabled(bool on) override;
-    void setXitEnabled(bool on) override;
-    void setRitOffset(int hz) override;
+    // One slice, always the transmit slice: the slice id is ignored.
+    void setSliceRitEnabled(int sliceId, bool on) override;
+    void setSliceXitEnabled(int sliceId, bool on) override;
+    void setSliceRitOffset(int sliceId, int hz) override;
     void submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz,
                        TxAudioSource source,
                        const TxCoordinator::Context& context) override;

@@ -526,18 +526,55 @@ and conflating them would hide one of them.
 | `radioOwnsDbmScale` | ✅ (default) | ⚠️ **✅ (default)** | ❌ | ❌ | Will the radio adopt a dBm range sent to it and report it back? |
 | `dbmAxisIsCalibrated()` (`panAmplitude->calibratedDbm`) | ✅ (absent) | ❌ | ✅ (absent) | ❌ | Do the numbers on that axis mean absolute dBm at the antenna? |
 | `panBinsAbsolute()` (`panAmplitude->binsAbsolute`) | ❌ (absent) | ✅ | ❌ (absent) | ✅ | Do the spectrum bins hold still while the reference level moves? |
+| `squelchLevelScale` | −160 + 1·L, all modes, Auto SQL | −119 + 0.7·L, AM/SAM/DSB/LSB/USB, no Auto SQL | Flex's (no measured map) | Flex's (no measured map) | Where does squelch level L open, on this axis? |
 
-**`panBinsAbsolute()` is consumed too, and it is the second term of ONE gate.**
+**`squelchLevelScale` draws the SQL line and drives Auto SQL** (#6092).
+The demo and RTL-SDR also keep Flex's scale. Absent, or the active slice's mode not listed: no line, and the SQL button
+skips Auto with the reason on its accessible description. The HL2 offset is
+amsq's −140 + 0.7·L dBFS map, referred to the LNA at −12 dB
+(`Hl2DbReference::levelSquelchOffsetDb`), plus the pan's LNA offset, plus the
++6.02 dB a steady carrier reads on `Hl2Spectrum`; the LNA terms cancel. At the
+default +20 dB LNA the gate is −108 + 0.7·L dBFS: on8st's no-signal input held
+it open up to level 49 and his test carrier up to level 54, so at that gain the
+working range is a few steps around 50. Lower opens on noise; higher needs a
+stronger signal than his carrier. Auto
+SQL stays off on the HL2 because amsq reads passband-limited magnitude before
+the AGC (`RXA.c` `xamsqcap` after `xnbp(nbp0)`), while the pan floor is per
+bin: a pan-derived floor would need both the filter width and the bin width.
+
+**`panBinsAbsolute()` is consumed too: as the second term of ONE gate, and as
+the unit of a waterfall row.**
 `noiseFloorAutoAdjustAllowed(radioOwnsDbmScale, panBinsAbsolute)` in
 `core/backends/NoiseFloorAutoAdjustGate.h` is an OR: a real echo from the radio
 ends the auto-floor loop by confirmation, absolute bins end it by giving it a
 fixed target, and either alone is enough. `SpectrumWidget::applyNoiseFloorAutoAdjust`
 and the auto-floor branch of `dbmRangeChangeRequested` both call it, so the
-widget and its backstop cannot drift apart. The other three
+widget and its backstop cannot drift apart.
+`SpectrumWidget::updateWaterfallRow` passes the same flag to
+`WaterfallImpulseBlanker::decide` as the row kind, because such a backend's
+waterfall row is its pan frame: NB Blank tests a ratio on a Flex tile and a dB
+margin on an absolute dB row (dBFS under a dBm label). The other three
 `radioOwnsDbmScale` gates below are about whether a range can be **sent** and
 stay on the echo alone. HL2, ANAN and RTL-SDR declare `binsAbsolute = true`,
 each quoting the expression that produces its bins; ANAN is the one whose loop
 this turned back on.
+
+**The manual Black Level reads it as the row's unit too.** A backend with no
+waterfall plane of its own sends its pan frame on as the row
+(`RadioModel::onBackendSpectrumFrame`), so the row is the pan's absolute dB
+(dBFS under a dBm label), where a Flex tile is intensity (about 96..120). The
+manual Black Level (button on Off) is a threshold in the row's unit. The widget
+holds no record of where a row came from, so
+`SpectrumWidget::intensityToWaterfallLevel` reads `binsAbsolute` as a proxy for
+it and passes it to `WaterfallLevelMap::level` as `rowsAreAbsoluteDb`: false
+keeps the tile law `160 - level`, true takes `-60 dB - level`. SW and HW do not
+read the flag.
+
+The proxy holds for HL2, ANAN and RTL-SDR. It does not hold for Icom or the
+Demo: `IcomCivBackend` (scope rows through `toDbm`) and `SimBackend`
+(`SimSignalSource`, floor -120) send dB rows down the same path and declare no
+`binsAbsolute`, so Off on either keeps the tile law and draws every row black,
+and NB Blank keeps its tile ratio test, which never fires on a dB row.
 
 **THE HL2 KEEPS THE PERMISSIVE DEFAULT, and that is deliberate rather than an
 omission.** `Hl2Backend::capabilities()` never assigns the field and says why at

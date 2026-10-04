@@ -485,6 +485,12 @@
   "split": "",
   "confidence": "high"
  },
+ "core/PeripheralRemovalGuard.h": {
+  "tag": "peripheral(4o3a)",
+  "note": "Transient main-thread removal lease checked by TGXL, PGXL and Antenna Genius connection entry points. No GUI dependency, persisted state, radio-family wire or TX authority.",
+ "split": "",
+ "confidence": "high"
+ },
  "core/PeripheralEndpointFallback.h": {
   "tag": "peripheral(4o3a)",
   "note": "Stateless choice of the radio-reported address to retry once after a saved manual TGXL or PGXL address fails at the socket level; no radio-family wire or UI state.",
@@ -1424,6 +1430,12 @@
  "models/AprsDigipeaterModel.h": {
   "tag": "universal",
   "note": "Session-local APRS fill-in policy and bounded modem queue; no backend-specific commands or transport ownership.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/backends/SquelchLevelScale.h": {
+  "tag": "universal",
+  "note": "Where a slice's squelch level sits on the panadapter's vertical axis, as a backend-published record (RadioCapabilities::squelchLevelScale) plus the mode filter and Auto-SQL predicate both the widget and MainWindow read, so the SQL line and Auto SQL share one gate. No family name or wire concept; each backend declares its own map or leaves it absent (#6092).",
   "split": "",
   "confidence": "high"
  },
