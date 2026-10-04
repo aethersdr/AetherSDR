@@ -227,6 +227,12 @@ void daxHoldsAndAbsentRoute(QCoreApplication& app)
           && snapshot.front().holders.contains(QStringLiteral("rtty-decoder"))
           && !snapshot.front().holders.contains(QStringLiteral("cw-decoder")),
           "DAX diagnostic snapshot reports actual independent decoder holders");
+    stream.acquireDaxChannel(5, Consumer::Tci);
+    stream.acquireDaxChannel(8, Consumer::Tci);
+    stream.releaseAllDaxChannels(Consumer::Tci);
+    check(!stream.daxChannelHeldBy(5, Consumer::Tci) && !stream.daxChannelHeldBy(8, Consumer::Tci)
+          && stream.daxChannelHeldBy(8, Consumer::Clock),
+          "release-all drops a consumer's holds on channels 5-8 and leaves other holders");
 
     Fixture fixture;
     fixture.source->dax = true;
