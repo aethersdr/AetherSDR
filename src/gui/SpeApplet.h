@@ -38,6 +38,9 @@ public:
     void setForwardPower(float watts);
     void setSwrAnt(float swr);
     void setSwrAtu(float swr);
+    // False for a model whose Status has no before-ATU SWR (original 1K-FA):
+    // the ATU row is dimmed with the reason as its tooltip.
+    void setAtuSwrAvailable(bool available);
     void setSupplyVoltage(float volts);   // text readout, not a gauge
     void setSupplyCurrent(float amps);    // text readout, not a gauge
     // Heatsink temperatures. The amp reports degrees in whichever unit its
@@ -175,6 +178,7 @@ private:
     float m_fwdWatts{0.0f};
     float m_swrAntVal{1.0f};
     float m_swrAtuVal{1.0f};
+    bool  m_atuSwrAvailable{true};
     float m_supplyVolts{0.0f};
     float m_supplyAmps{0.0f};
     bool  m_operate{false};

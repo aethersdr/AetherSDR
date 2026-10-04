@@ -4000,6 +4000,15 @@ target_include_directories(kpa1500_protocol_test PRIVATE src)
 target_link_libraries(kpa1500_protocol_test PRIVATE Qt6::Core)
 add_test(NAME kpa1500_protocol_test COMMAND kpa1500_protocol_test)
 
+add_executable(spe_legacy_protocol_test
+    tests/spe_legacy_protocol_test.cpp
+    src/core/SpeLegacyProtocol.cpp
+    src/core/SpeProtocol.cpp
+)
+target_include_directories(spe_legacy_protocol_test PRIVATE src)
+target_link_libraries(spe_legacy_protocol_test PRIVATE Qt6::Core)
+add_test(NAME spe_legacy_protocol_test COMMAND spe_legacy_protocol_test)
+
 add_executable(vkamp_protocol_test
     tests/vkamp_protocol_test.cpp
     src/core/VkampProtocol.cpp

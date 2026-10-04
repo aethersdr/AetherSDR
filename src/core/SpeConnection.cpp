@@ -14,6 +14,9 @@ SpeConnection::SpeConnection(QObject* parent)
     });
 
     m_parser.setFrameCallback([this](const Spe::Frame& f) { onFrameReceived(f); });
+    m_legacyParser.setFrameCallback([this](const Spe::Legacy::Frame& f) {
+        onLegacyFrameReceived(f);
+    });
     m_parser.setDisplayCallback([this](const QByteArray& raw) {
         // LCD freshness and Status liveness are deliberately independent:
         // a moving display must not keep stale telemetry/buttons looking live.
@@ -123,7 +126,7 @@ void SpeConnection::setLcdPolling(bool on)
         return;
     }
     m_lcdWanted = on;
-    if (on && m_connected) {
+    if (on && m_connected && !isLegacy()) {
         setLcdFresh(false);
         applyLcdEffect(m_lcdScheduler.enable());  // first refresh, no full wait
     } else {
@@ -170,10 +173,12 @@ void SpeConnection::connectSerial(const QString& portName)
 {
     m_mode = Mode::Serial;
     m_lastSerialPort = portName;
+    m_activeVariant = m_variant;
     m_deliberateDisconnect = false;
     m_reconnectTimer.stop();
     teardownDevice();
     m_parser.reset();
+    m_legacyParser.reset();
 
     if (!m_serialPort) {
         m_serialPort = new QSerialPort(this);
@@ -189,9 +194,9 @@ void SpeConnection::connectSerial(const QString& portName)
     }
 
     m_serialPort->setPortName(portName);
-    // 115200 8N1 no handshake — the spec's documented maximum; the amp
-    // auto-adapts to lower speeds so there's nothing to configure.
-    m_serialPort->setBaudRate(QSerialPort::Baud115200);
+    // 115200 for the newer family (the spec's maximum; the amp auto-adapts),
+    // 9600 for the original 1K-FA, which supports nothing else.
+    m_serialPort->setBaudRate(Spe::serialBaud(m_activeVariant));
     m_serialPort->setDataBits(QSerialPort::Data8);
     m_serialPort->setParity(QSerialPort::NoParity);
     m_serialPort->setStopBits(QSerialPort::OneStop);
@@ -212,8 +217,13 @@ void SpeConnection::connectSerial(const QString& portName)
     // warning, keystrokes including SWITCH OFF work normally, and repeated
     // power cycles behave — the power switch rides the RTS pulse alone,
     // which is why RTS (and only RTS) must stay low at rest.
-    m_serialPort->setDataTerminalReady(true);
-    m_serialPort->setRequestToSend(false);
+    // The original 1K-FA is the exception: there DTR held high IS the power
+    // switch, so its lines are left at the platform's open() default and only
+    // powerOn()/SWITCH OFF move them.
+    if (!isLegacy()) {
+        m_serialPort->setDataTerminalReady(true);
+        m_serialPort->setRequestToSend(false);
+    }
 
     m_device = m_serialPort;
     onTransportUp();
@@ -225,10 +235,12 @@ void SpeConnection::connectNetwork(const QString& host, quint16 port)
     m_mode = Mode::Network;
     m_lastHost = host;
     m_lastPort = port;
+    m_activeVariant = m_variant;
     m_deliberateDisconnect = false;
     m_reconnectTimer.stop();
     teardownDevice();
     m_parser.reset();
+    m_legacyParser.reset();
 
     m_device = &m_socket;
     qCDebug(lcTuner) << "SpeConnection: connecting to" << host << ":" << port;
@@ -244,6 +256,17 @@ void SpeConnection::disconnect()
     // asymmetry left AcomConnection's applet stuck at "Connected" on a
     // user-initiated serial disconnect until it was made self-contained.
     const bool wasConnected = m_connected;
+    if (wasConnected && isLegacy()) {
+        // Stop the Status stream so the amp is quiet for the next client.
+        sendRaw(Spe::Legacy::buildRcuOff());
+        if (m_device == &m_socket) {
+            m_socket.flush();
+#ifdef HAVE_SERIALPORT
+        } else if (m_serialPort && m_device == m_serialPort) {
+            m_serialPort->flush();
+#endif
+        }
+    }
     m_deliberateDisconnect = true;
     m_reconnectTimer.stop();
     m_pollTimer.stop();
@@ -257,6 +280,7 @@ void SpeConnection::disconnect()
     m_connected = false;
     teardownDevice();
     m_parser.reset();
+    m_legacyParser.reset();
     if (wasConnected) {
         qCDebug(lcTuner) << "SpeConnection: disconnected";
         emit disconnected();
@@ -294,10 +318,16 @@ void SpeConnection::onTransportUp()
     qCInfo(lcTuner) << "SpeConnection: connected via" << description();
 
     // First poll immediately — the timer only fires after a full interval,
-    // and the applet shouldn't sit blank for it.
-    sendRaw(Spe::buildStatusRequest());
+    // and the applet shouldn't sit blank for it. The 1K-FA has no poll and
+    // no LCD request: RCU_ON starts its stream, and the timer keeps only
+    // silence detection and the RCU_ON retry.
+    if (isLegacy()) {
+        sendRaw(Spe::Legacy::buildRcuOn());
+    } else {
+        sendRaw(Spe::buildStatusRequest());
+    }
     m_pollTimer.start();
-    if (m_lcdWanted) {
+    if (m_lcdWanted && !isLegacy()) {
         applyLcdEffect(m_lcdScheduler.enable());
     }
 
@@ -317,6 +347,7 @@ void SpeConnection::onTransportDown()
     m_powerOnStep = -1;
     m_rfc2217NegotiationPending = false;
     m_parser.reset();
+    m_legacyParser.reset();
     if (wasConnected) {
         qCDebug(lcTuner) << "SpeConnection: disconnected";
         emit disconnected();
@@ -374,7 +405,11 @@ void SpeConnection::onReadyRead()
         }
     }
 
-    m_parser.feed(chunk);
+    if (isLegacy()) {
+        m_legacyParser.feed(chunk);
+    } else {
+        m_parser.feed(chunk);
+    }
 }
 
 void SpeConnection::pollTick()
@@ -395,6 +430,12 @@ void SpeConnection::pollTick()
     }
     m_statusSeenSinceTick = false;
 
+    if (isLegacy()) {
+        if (m_silentPolls > 0 && m_silentPolls % kLegacyRcuRetryTicks == 0) {
+            sendRaw(Spe::Legacy::buildRcuOn());
+        }
+        return;
+    }
     sendRaw(Spe::buildStatusRequest());
 }
 
@@ -421,7 +462,29 @@ void SpeConnection::onFrameReceived(const Spe::Frame& f)
                             << f.data.size() << "B) —" << f.data.left(24);
         return;
     }
+    acceptStatus(*status);
+}
 
+void SpeConnection::onLegacyFrameReceived(const Spe::Legacy::Frame& f)
+{
+    if (f.isReply()) {
+        const quint8 code = static_cast<quint8>(f.data.at(0));
+        if (code == Spe::Legacy::kAck) {
+            qCDebug(lcTuner) << "SpeConnection: 1K-FA ACK";
+        } else {
+            // NAK = checksum/format error, UNK = command not understood.
+            qCWarning(lcTuner) << "SpeConnection: 1K-FA rejected a command, reply"
+                               << QString::number(code, 16);
+        }
+        return;
+    }
+    if (const auto status = Spe::Legacy::parseStatus(f.data)) {
+        acceptStatus(*status);
+    }
+}
+
+void SpeConnection::acceptStatus(const Spe::Status& status)
+{
     m_statusSeenSinceTick = true;
     m_silentPolls = 0;
     if (!m_responding) {
@@ -429,19 +492,28 @@ void SpeConnection::onFrameReceived(const Spe::Frame& f)
         emit respondingChanged(true);
     }
 
-    m_lastStatus = *status;
-    if (status->id != m_currentModelId) {
-        m_currentModelId = status->id;
+    m_lastStatus = status;
+    if (status.id != m_currentModelId) {
+        m_currentModelId = status.id;
         qCInfo(lcTuner) << "SpeConnection: amplifier identifies as" << m_currentModelId
                          << "(" << Spe::modelSpec(m_currentModelId).displayName << ")";
         emit modelChanged(m_currentModelId);
     }
-    emit statusUpdated(*status);
+    emit statusUpdated(status);
 }
 
 void SpeConnection::sendKey(Spe::Key key)
 {
-    sendRaw(Spe::buildKeyCommand(key));
+    if (!isLegacy()) {
+        sendRaw(Spe::buildKeyCommand(key));
+        return;
+    }
+    sendRaw(Spe::Legacy::buildKeyCommand(key));
+    // On the 1K-FA a held-high DTR keeps the amp powered and locks out its
+    // own power key, so SWITCH OFF also releases the line.
+    if (key == Spe::Key::SwitchOff && m_mode == Mode::Serial) {
+        setControlLines(false, false);
+    }
 }
 
 void SpeConnection::setControlLines(bool dtr, bool rts)
@@ -486,6 +558,16 @@ void SpeConnection::powerOnStep()
     switch (m_powerOnStep) {
         case 0:
             setControlLines(true, false);
+            if (isLegacy()) {
+                // 1K-FA: DTR held high is the power switch — no pulse. Its
+                // boot takes several seconds; the RCU_ON retry in pollTick()
+                // picks up the stream once it answers.
+                m_powerOnStep = -1;
+                m_rfc2217NegotiationPending = false;
+                m_rfc2217Tail.clear();
+                reportPowerOnOutcome();
+                break;
+            }
             m_powerOnStep = 1;
             m_powerOnTimer.start(100);
             break;
@@ -499,46 +581,51 @@ void SpeConnection::powerOnStep()
             m_powerOnStep = -1;
             m_rfc2217NegotiationPending = false;
             m_rfc2217Tail.clear();
-            // Report what was actually confirmed rather than assuming. The
-            // pulse is always sent: a proxy that ignores COM-port control
-            // simply discards the SET-CONTROL frames (or, in raw mode,
-            // forwards them to the amp, which rejects them as unframed
-            // noise), so sending is harmless — claiming it landed is not.
-            if (m_mode == Mode::Network
-                && m_comPortOption == Spe::Rfc2217::OptionReply::Refused) {
-                // "May", not "did not": ser2net 4.3.11 with a plain
-                // `accepter: telnet` port answers DONT yet still executes
-                // SET-CONTROL — bench-verified on a real 1.5K-FA (design
-                // note §9). The explicit rfc2217=true config remains the
-                // recommendation because that behaviour is unspecified.
-                qCWarning(lcTuner) << "SpeConnection: power-ON pulse sent, but"
-                                      " the proxy REFUSED RFC 2217 COM-port"
-                                      " control, so it may not have reached"
-                                      " the amplifier (some ser2net builds"
-                                      " act on it anyway — watch whether"
-                                      " status polls resume). Recommended"
-                                      " config: `accepter:"
-                                      " telnet(rfc2217=true),<port>`.";
-            } else if (m_mode == Mode::Network
-                       && m_comPortOption != Spe::Rfc2217::OptionReply::Accepted) {
-                qCWarning(lcTuner) << "SpeConnection: power-ON pulse sent, but"
-                                      " the proxy never confirmed RFC 2217"
-                                      " COM-port control — if the amplifier"
-                                      " stays silent, check that ser2net runs"
-                                      " this port as `accepter:"
-                                      " telnet(rfc2217=true),<port>` rather"
-                                      " than raw.";
-            } else {
-                qCInfo(lcTuner) << "SpeConnection: power-ON pulse complete — the"
-                                   " amp should begin answering status polls"
-                                   " shortly.";
-            }
+            reportPowerOnOutcome();
             break;
         default:
             m_powerOnStep = -1;
             m_rfc2217NegotiationPending = false;
             m_rfc2217Tail.clear();
             break;
+    }
+}
+
+void SpeConnection::reportPowerOnOutcome()
+{
+    // Report what was actually confirmed rather than assuming. The
+    // pulse is always sent: a proxy that ignores COM-port control
+    // simply discards the SET-CONTROL frames (or, in raw mode,
+    // forwards them to the amp, which rejects them as unframed
+    // noise), so sending is harmless — claiming it landed is not.
+    if (m_mode == Mode::Network
+        && m_comPortOption == Spe::Rfc2217::OptionReply::Refused) {
+        // "May", not "did not": ser2net 4.3.11 with a plain
+        // `accepter: telnet` port answers DONT yet still executes
+        // SET-CONTROL — bench-verified on a real 1.5K-FA (design
+        // note §9). The explicit rfc2217=true config remains the
+        // recommendation because that behaviour is unspecified.
+        qCWarning(lcTuner) << "SpeConnection: power-ON pulse sent, but"
+                              " the proxy REFUSED RFC 2217 COM-port"
+                              " control, so it may not have reached"
+                              " the amplifier (some ser2net builds"
+                              " act on it anyway — watch whether"
+                              " status polls resume). Recommended"
+                              " config: `accepter:"
+                              " telnet(rfc2217=true),<port>`.";
+    } else if (m_mode == Mode::Network
+               && m_comPortOption != Spe::Rfc2217::OptionReply::Accepted) {
+        qCWarning(lcTuner) << "SpeConnection: power-ON pulse sent, but"
+                              " the proxy never confirmed RFC 2217"
+                              " COM-port control — if the amplifier"
+                              " stays silent, check that ser2net runs"
+                              " this port as `accepter:"
+                              " telnet(rfc2217=true),<port>` rather"
+                              " than raw.";
+    } else {
+        qCInfo(lcTuner) << "SpeConnection: power-ON pulse complete — the"
+                           " amp should begin answering status polls"
+                           " shortly.";
     }
 }
 

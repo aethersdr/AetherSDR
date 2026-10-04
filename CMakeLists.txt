@@ -1049,6 +1049,7 @@ set(CORE_SOURCES
     src/core/AcomProtocol.cpp
     src/core/AcomConnection.cpp
     src/core/SpeProtocol.cpp
+    src/core/SpeLegacyProtocol.cpp
     src/core/SpeConnection.cpp
     src/core/VkampProtocol.cpp
     src/core/VkampConnection.cpp
