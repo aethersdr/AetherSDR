@@ -10,6 +10,8 @@
 
 #include <QCoreApplication>
 #include <QDeadlineTimer>
+#include <QEvent>
+#include <QEventLoop>
 #include <QJsonObject>
 #include <QPointer>
 #include <QThread>
