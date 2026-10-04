@@ -3373,6 +3373,19 @@ target_include_directories(spectrum_preview_logic_test PRIVATE src)
 target_link_libraries(spectrum_preview_logic_test PRIVATE Qt6::Core)
 add_test(NAME spectrum_preview_logic_test COMMAND spectrum_preview_logic_test)
 
+# Waterfall NB Blank impulse test on tile and absolute dB rows (#277):
+# header-only pure logic, no Qt. AETHER_SOURCE_DIR because the last block reads
+# SpectrumWidget.cpp and .h as text: the widget links into no test, so that
+# block pins how the call is written.
+add_executable(waterfall_impulse_blanker_test
+    tests/waterfall_impulse_blanker_test.cpp
+)
+target_include_directories(waterfall_impulse_blanker_test PRIVATE src)
+target_compile_definitions(waterfall_impulse_blanker_test PRIVATE
+    AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+add_test(NAME waterfall_impulse_blanker_test
+    COMMAND waterfall_impulse_blanker_test)
+
 add_executable(rf_gain_presentation_test
     tests/rf_gain_presentation_test.cpp
 )
@@ -3575,6 +3588,14 @@ add_test(NAME passive_spots_policy_test COMMAND passive_spots_policy_test)
 # Right-click on a client-side spot label offers Remove Spot and removes it
 # locally, never as `spot remove` wire text (#6037). Header-only helpers;
 # offscreen QMenu, socket-free.
+# MainWindow raises the unsupported-control notice when a TGXL reached by IP
+# refuses OPERATE / STANDBY / BYPASS. Source pin: MainWindow has no test seam.
+add_executable(tgxl_refused_notice_wiring_test tests/tgxl_refused_notice_wiring_test.cpp)
+target_compile_definitions(tgxl_refused_notice_wiring_test PRIVATE
+    AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(tgxl_refused_notice_wiring_test PRIVATE Qt6::Core)
+add_test(NAME tgxl_refused_notice_wiring_test COMMAND tgxl_refused_notice_wiring_test)
+
 add_executable(spot_label_menu_test tests/spot_label_menu_test.cpp)
 target_include_directories(spot_label_menu_test PRIVATE src)
 target_compile_definitions(spot_label_menu_test PRIVATE
