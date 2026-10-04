@@ -375,6 +375,7 @@ private slots:
     // broadcast all stay in lockstep regardless of which UI changed it.
     // See issue #1764.
     void applyMasterVolume(int pct);
+    void syncTitleBarOutput();
 
 private:
     enum class TuneIntent {
