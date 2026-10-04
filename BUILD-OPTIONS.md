@@ -8,6 +8,8 @@ Defaults below apply to a fresh configuration. An existing build directory
 keeps its cached choices, and release workflows can override the defaults.
 An option set to `ON` requests a feature; missing dependencies or an unsupported
 platform can still disable it. Read CMake's configure messages for availability.
+The rows that say configuration fails are the exceptions: there a missing
+prerequisite stops the configure instead of disabling the feature.
 
 ## Setting and inspecting options
 
@@ -36,7 +38,7 @@ they are not runtime settings for a downloaded binary.
 
 | Option | Default | Purpose and prerequisites |
 |---|---|---|
-| `ENABLE_DEEPFIST_EXPERIMENT` | OFF | Build the experimental DeepFist CW receive decoder. Requires ONNX Runtime at configure time and a separate verified model bundle at runtime; see below. |
+| `ENABLE_DEEPFIST_EXPERIMENT` | OFF | Build the experimental DeepFist CW receive decoder. Requires ONNX Runtime at configure time (configuration fails without it) and a separate verified model bundle at runtime; see below. |
 | `ENABLE_RTL` | ON | Build the experimental receive-only RTL-SDR USB backend when both `librtlsdr` and single-precision FFTW (`fftw3f`) are found. Missing either disables the backend. |
 | `AETHER_HL2_TX_TXA` | ON | Select WDSP's TXA chain for the Hermes-Lite 2 SSB transmit modulator. OFF builds the in-tree phasing modulator. This choice has no runtime toggle. |
 
@@ -65,10 +67,10 @@ receive/transmit limits. Compiling a backend does not establish hardware support
 | `ENABLE_DFNR` | ON | DFNR DeepFilterNet3 noise reduction. Run `scripts/setup/setup-deepfilter.sh` (Windows: `setup-deepfilter.ps1`) before configuring. A missing library disables it. |
 | `ENABLE_NVIDIA_AFX` | ON | BNR NVIDIA Maxine AFX GPU denoiser wrapper on x86-64 Linux/Windows. Operation needs a compatible NVIDIA GPU and the runtime/model pack, downloaded on demand. |
 | `ENABLE_ASR` | ON | On-device speech recognition through whisper.cpp. Speech model weights are downloaded separately. |
-| `ENABLE_ASR_METAL` | ON | ASR Metal acceleration on macOS, when ASR is enabled. |
-| `ENABLE_ASR_VULKAN` | ON | ASR Vulkan acceleration on non-macOS platforms, when ASR is enabled and the GPU build dependencies are found. |
-| `ENABLE_ASR_METAL_PRECOMPILE` | ON | Precompile Metal kernels on macOS for vendored whisper builds. Needs the offline Metal toolchain; a missing compiler warns and falls back to shader source unless `REQUIRE_ASR_GPU` is ON. |
-| `AETHER_GPU_SPECTRUM` | ON | QRhi spectrum/waterfall rendering. Needs Qt ShaderTools and private QtGui headers; missing private headers select the CPU build. See [GPU spectrum rendering](docs/BUILDING.md#gpu-spectrum-rendering). |
+| `ENABLE_ASR_METAL` | ON | ASR Metal acceleration on macOS. Declared only on macOS with ASR enabled; elsewhere the switch does not exist and `-D` produces only an unused-variable warning. |
+| `ENABLE_ASR_VULKAN` | ON | ASR Vulkan acceleration when the GPU build dependencies are found. Declared only on non-macOS platforms with ASR enabled; on macOS the switch does not exist. |
+| `ENABLE_ASR_METAL_PRECOMPILE` | ON | Precompile Metal kernels on macOS. Declared only for vendored whisper builds (`USE_SYSTEM_LIBWHISPER=OFF`) with ASR enabled. Needs the offline Metal toolchain; a missing compiler warns and falls back to shader source unless `REQUIRE_ASR_GPU` is ON. |
+| `AETHER_GPU_SPECTRUM` | ON | QRhi spectrum/waterfall rendering. Needs Qt ShaderTools (configuration fails without it) and private QtGui headers; missing private headers select the CPU build. See [GPU spectrum rendering](docs/BUILDING.md#gpu-spectrum-rendering). |
 | `ENABLE_MQTT` | ON | MQTT client support using bundled libmosquitto or the selected system library. |
 | `MQTT_TLS` | ON | MQTT TLS support. The bundled library uses OpenSSL when found; OFF omits TLS. |
 
@@ -108,9 +110,32 @@ are useful for release builds that must include those capabilities.
 Some capabilities are enabled by dependency detection rather than a dedicated
 enable switch: Qt SerialPort, Qt WebSockets, QtKeychain, PortAudio, USB HID
 support, ONNX Runtime, sherpa-onnx and native Linux PipeWire support. Setup scripts for
-ONNX Runtime and sherpa-onnx are under `scripts/setup/`. CMake generates compiler
-definitions such as `HAVE_SERIALPORT`, `HAVE_WEBSOCKETS`, `HAVE_KEYCHAIN` and
-`HAVE_ONNX`; these are outputs of configuration, not user-facing `-D` switches.
+ONNX Runtime and sherpa-onnx are under `scripts/setup/`.
+
+### Generated compiler definitions
+
+CMake defines these from the resulting configuration. They are outputs, not
+user-facing `-D` switches; code tests them with `#ifdef`. All are public on
+`aethercore`, so engine and GUI code see them, except `HAVE_SHERPA`, which only
+the ASR library (`aetherasr`) sees.
+
+| Definition | Defined when |
+|---|---|
+| `HAVE_RADE` | RADE is built (`ENABLE_RADE`). |
+| `HAVE_OPUS` | RADE is built, or a system Opus is found. |
+| `HAVE_SPECBLEACH` | `ENABLE_SPECBLEACH` is still ON after the MSVC `clang-cl` check. |
+| `HAVE_DFNR` | `ENABLE_DFNR` is still ON after the DeepFilterNet library check. |
+| `HAVE_NVIDIA_AFX` | `ENABLE_NVIDIA_AFX` on x86-64 Linux or Windows. |
+| `HAVE_MQTT` | `ENABLE_MQTT`. |
+| `HAVE_MQTT_TLS` | `MQTT_TLS`, and for the bundled library OpenSSL is found. |
+| `HAVE_DEEPFIST` | `ENABLE_DEEPFIST_EXPERIMENT`. |
+| `HAVE_MIDI` | Always; RtMidi is bundled. |
+| `HAVE_SERIALPORT`, `HAVE_WEBSOCKETS`, `HAVE_KEYCHAIN` | The Qt SerialPort, Qt WebSockets or QtKeychain package is found. |
+| `HAVE_DBUS` | Qt DBus is found on Linux or another non-Apple Unix; it is never looked for on macOS or Windows. |
+| `HAVE_ONNX` | ONNX Runtime is found. |
+| `HAVE_SHERPA` | sherpa-onnx is found and ASR is built. Private to `aetherasr`. |
+| `HAVE_HIDAPI`, `HAVE_PORTAUDIO`, `HAVE_FFTW3` | hidapi, PortAudio or FFTW3 is found. |
+| `HAVE_PIPEWIRE`, `HAVE_PIPEWIRE_NATIVE` | Linux; the native variant also needs `libpipewire-0.3` development files. |
 
 ## Diagnostics and opt-in tests
 
@@ -123,12 +148,14 @@ These options are for development and qualification.
 | `AETHER_ENABLE_HL2_TX_LOOPBACK_TEST` | OFF | Build/register HL2 transmit-loopback and DSP-readback tests against an external `hpsdrsim` peer. The loopback test keys the simulated transmitter; a missing simulator produces a skip. |
 | `AETHER_ENABLE_HL2_SIGNAL_STOP_TEST` | OFF | Build the HL2 signal-stop child process. The loopback-UDP process test is registered on non-Windows hosts with Python 3. |
 | `AETHER_ENABLE_RADAR_GL_TEST` | OFF | Build/register the native-GPU weather-radar texture test. Needs a real OpenGL 3.2 context. |
+| `AETHER_BUILD_SPECTRUM_GESTURE_TEST` | OFF | Build/register `spectrum_confirmed_geometry_test`, which compiles the desktop application sources into a test binary to exercise the real `SpectrumWidget` gestures offscreen. |
+| `AETHER_SHARED_CORE` | OFF | Build `libaethercore` as a shared library so the sanitizer lane's test binaries fit on a hosted runner. Sanitizer CI only, never for releases; configuration fails on Windows. |
 
 Additional cache values accept a value rather than ON/OFF:
 
 | Setting | Default | Values and purpose |
 |---|---|---|
-| `AETHERSDR_SANITIZER` | `none` | `none`, `address`, `undefined`, `address,undefined`, or `thread`. Instruments the main CMake tree with a GNU-driver GCC/Clang build; MSVC and clang-cl are rejected. ExternalProject children need separate sanitizer flags. |
+| `AETHERSDR_SANITIZER` | `none` | `none`, `address`, `undefined`, `address,undefined`, or `thread`. Instruments the main CMake tree with a GNU-driver GCC/Clang build; MSVC and clang-cl are rejected, and so is combining `address` with `thread`. Adds `-g3 -fno-omit-frame-pointer` to every configuration, Release included. ExternalProject children need separate sanitizer flags. |
 | `DEEPFIST_MODEL_BASE_URL` | Empty | Published, versioned HTTPS directory for the exact DeepFist assets. See the distribution prerequisite in [the DeepFist guide](docs/deepfist-cw-backend.md). |
 | `RADE_TAP_DIR` | `<build-directory>/rade_taps` | Directory for RADE WAV diagnostics; available when RADE and its taps are enabled. |
 | `AETHER_TEST_FFTW_TIMELIMIT` | `0.001` | Seconds FFTW may spend measuring each plan under test; an empty value allows unbounded measurement. |
@@ -139,3 +166,6 @@ Option definitions live in [CMakeLists.txt](CMakeLists.txt),
 [cmake/AetherQtPin.cmake](cmake/AetherQtPin.cmake) and
 [tests/tests.cmake](tests/tests.cmake). Update this reference in the same change
 that adds, removes or changes a project option or its default.
+`tools/check_build_options.py --strict` runs in Static checks and fails when an
+option or value setting is missing here, is listed here but no longer defined,
+or has a different `ON`/`OFF` default.
