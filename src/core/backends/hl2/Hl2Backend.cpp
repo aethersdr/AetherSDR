@@ -5915,7 +5915,7 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
         const hl2::AdcPairing verdict =
             hl2::adcPairing(realPeak,
                             realPeak ? *peak : std::numeric_limits<double>::quiet_NaN(),
-                            ago && *ago <= hl2::kSliceStaleMs,
+                            hl2::slicePeakIsCurrent(ago),
                             m_sliceSampling.applied(
                                 r->dsp ? r->dsp->adcPeakObservedAtNs() : 0),
                             t.adcOverload.has_value(),

@@ -351,11 +351,7 @@ public:
     [[nodiscard]] std::optional<std::int64_t> adcPeakObservedAgoMs() const
     {
         const std::int64_t at = m_adcPeakAtNs.load(std::memory_order_relaxed);
-        if (at == 0) {
-            return std::nullopt;
-        }
-        const std::int64_t ago = (steadyNowNs() - at) / 1'000'000;
-        return ago < 0 ? 0 : ago;
+        return slicePeakAgeMs(at, steadyNowNs());
     }
 
     // Every processIq() outcome, counted since construction (WdspProcessTally.h).

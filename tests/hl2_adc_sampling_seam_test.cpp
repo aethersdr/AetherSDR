@@ -34,6 +34,7 @@
 
 #include <cmath>
 #include <complex>
+#include <cstdint>
 #include <cstdio>
 #include <vector>
 
@@ -216,31 +217,38 @@ int main(int argc, char** argv)
 
     // ── Key up, short. THE BUG. ──────────────────────────────────────────
     //
-    // The held stamp is milliseconds old — this test keys up immediately, which
-    // is the short key-down that makes the age gate useless. Nothing about the
-    // DSP has changed: it is still muted, and will stay muted until the event
-    // loop runs.
+    // A short key-down: the held stamp is younger than kSliceStaleMs, which makes
+    // the age gate useless. The DSP is still muted until the event loop runs.
     keyed = false;
     queueMute();
-    const std::int64_t ago = (steadyNowNs() - dsp.adcPeakObservedAtNs()) / 1'000'000;
-    check(ago <= kSliceStaleMs,
-          "the held peak is still FRESH BY AGE at key-up, so the age gate is open");
-    // What the predicted input says here is the defect, asserted as a fact so
-    // that a future simplification back to `!(keyed && !monitor)` fails loudly
-    // instead of quietly restoring the inverted verdict.
+    // The age gate, asked at two instants on the held stamp's own timeline: no
+    // clock is read, so the verdict does not depend on how fast this host is.
+    const std::int64_t held = dsp.adcPeakObservedAtNs();
+    constexpr std::int64_t kNsPerMs = 1'000'000;
+    const bool freshAtLimit =
+        slicePeakIsCurrent(held, held + kSliceStaleMs * kNsPerMs + (kNsPerMs - 1));
+    const bool staleLater = slicePeakIsCurrent(held, held + (kSliceStaleMs + 1) * kNsPerMs);
+    check(held == frozen, "the held stamp is the one the mute froze");
+    check(freshAtLimit,
+          "the held peak is FRESH BY AGE up to kSliceStaleMs after it froze, so the "
+          "age gate is open at key-up");
+    check(!staleLater, "one millisecond past the limit the age gate is shut");
+    // The predicted input is asserted so that a simplification back to
+    // `!(keyed && !monitor)` fails here instead of restoring the wrong verdict.
     check(requested(),
           "the predicted input claims sampling the instant the key is released");
-    check(!gate.applied(dsp.adcPeakObservedAtNs()),
+    check(!gate.applied(held),
           "the gate does not — no peak has been stamped since the resume was asked for");
-    // And that is the difference between an assertion and an omission.
     const double peak = *dsp.adcPeakDbfs();
-    check(adcPairing(true, peak, /*current=*/true, /*sampling=*/requested(), true, true)
+    check(adcPairing(true, peak, freshAtLimit, /*sampling=*/requested(), true, true)
               != AdcPairing::Unknown,
           "predicted: a causal verdict from a value nothing is sampling");
-    check(adcPairing(true, peak, /*current=*/true,
-                     /*sampling=*/gate.applied(dsp.adcPeakObservedAtNs()), true, true)
+    check(adcPairing(true, peak, freshAtLimit, /*sampling=*/gate.applied(held), true, true)
               == AdcPairing::Unknown,
           "gated: Unknown until the chain has actually resumed");
+    check(adcPairing(true, peak, staleLater, /*sampling=*/requested(), true, true)
+              == AdcPairing::Unknown,
+          "a stale held peak is not paired, even on the predicted input");
 
     // ── The unmute lands. One block later the pairing is a sentence again. ─
     app.processEvents();

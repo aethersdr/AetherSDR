@@ -13,6 +13,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <optional>
 
 namespace AetherSDR::hl2 {
 
@@ -39,6 +40,33 @@ inline constexpr std::int64_t kSliceStaleMs = 150;
     return std::chrono::duration_cast<std::chrono::nanoseconds>(
                std::chrono::steady_clock::now().time_since_epoch())
         .count();
+}
+
+// Age in whole ms of a slice-peak stamp at `nowNs`, both on steadyNowNs()'s
+// timeline. Truncates toward zero and never goes negative. nullopt for stamp 0,
+// which is Hl2RxDsp's "never sampled".
+[[nodiscard]] constexpr std::optional<std::int64_t> slicePeakAgeMs(
+    std::int64_t peakAtNs, std::int64_t nowNs) noexcept
+{
+    if (peakAtNs == 0) {
+        return std::nullopt;
+    }
+    const std::int64_t ago = (nowNs - peakAtNs) / 1'000'000;
+    return ago < 0 ? 0 : ago;
+}
+
+// The age gate: may a slice peak of this age be paired with a live overload
+// flag? No age (never sampled) is not current. kSliceStaleMs itself is current.
+[[nodiscard]] constexpr bool slicePeakIsCurrent(std::optional<std::int64_t> agoMs) noexcept
+{
+    return agoMs && *agoMs <= kSliceStaleMs;
+}
+
+// The same gate for a raw stamp and an instant, through slicePeakAgeMs().
+[[nodiscard]] constexpr bool slicePeakIsCurrent(std::int64_t peakAtNs,
+                                                std::int64_t nowNs) noexcept
+{
+    return slicePeakIsCurrent(slicePeakAgeMs(peakAtNs, nowNs));
 }
 
 // Turns "sampling was ASKED to resume" into "sampling HAS resumed".
@@ -107,8 +135,8 @@ enum class AdcPairing {
 
 // `haveHardwareFlag` is false until EP6 RADDR 0x00 has been seen at all
 // (distinct from "seen, clear"). The slice side must be live on both inputs:
-// `sliceReadingIsCurrent` (observed: Hl2Backend passes `ago && *ago <=
-// kSliceStaleMs`; catches stalled IQ or a starved DSP thread, after the fact) and
+// `sliceReadingIsCurrent` (observed: Hl2Backend passes slicePeakIsCurrent() of
+// the age it displays; catches stalled IQ or a starved DSP thread, after the fact) and
 // `sliceSideSampling` (known in advance: Hl2Backend::applyRxAudioMute() passes
 // `!muted` for the mute it is about to queue, covering the TX head and unkey
 // hold (#5497); with the TX monitor on, the chain stays unmuted and keeps pairing).
