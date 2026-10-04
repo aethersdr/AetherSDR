@@ -16,18 +16,10 @@
 // that a future change which reintroduces an unechoed request has something
 // that fails rather than a warning nobody is watching.
 //
-// dbmRangeLooksPlausible() is the REAL predicate, from
-// core/DbmRangePlausibility.h. It used to be a file-static in
-// MainWindow_Wiring.cpp and this file carried a hand copy, because linking that
-// file pulls in the whole GUI; the copy could not catch a change to the real
-// constants. A third caller arrived (ClientDisplaySettings refuses to store or
-// restore a range that fails it), the predicate got its own header, and the
-// copy is gone: widen kMinAllowedDbm to -400 now and the checks below fail.
-//
-// What this file pins is the arithmetic and the shape of the runaway, which is
-// the part that was hard to characterise and easy to misread as "just a bad
-// number". The behavioural half — that a fixed-scale backend never arms the
-// loop at all — is pinned in icom_family_test via the capability.
+// dbmRangeLooksPlausible() is the real predicate, from
+// core/DbmRangePlausibility.h. This file pins the arithmetic and the shape of
+// the runaway; that a fixed-scale backend never arms the loop is pinned in
+// icom_family_test via the capability.
 
 #include "core/DbmRangePlausibility.h"
 #include "core/backends/RadioCapabilities.h"

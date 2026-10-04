@@ -2173,22 +2173,15 @@ the second bug.
 #### What survives a restart, and where it is kept
 
 A Flex stores a pan's FFT FPS, FFT AVG, Wt Avg, waterfall rate and dBm range and
-reports them back on connect, which is why the client deliberately keeps no copy
-of them (`SpectrumWidget::loadSettings` deletes the old flat keys; #2465, #4126).
-The HL2 stores none of them and nothing reports them, so for a while only the
-waterfall rate came back: it alone was written to the per-radio `ClientDisplay`
-document. On the bench, FFT FPS 12 / AVG 40 / Wt Avg on returned as 25 / 0 / off
-(the widget defaults), and a dBm scale of -2.19 top / 120 dB returned as
--40 / 90 — the `PanadapterModel` defaults, -130..-40, which pan wiring primes
-the widget from.
+reports them back on connect, which is why the client keeps no copy of them
+there (`SpectrumWidget::loadSettings` deletes the old flat keys; #2465, #4126).
+The HL2 stores none of them and nothing reports them.
 
-FFT FPS and the dBm range now live in that one document too, keyed by pan slot
-(`core/ClientDisplaySettings.h`). The Display panel's FPS slider, Clone to all
-Pans and Reset to Defaults save; `MainWindow::wirePanDisplayStatus` restores
-into the widget before it seeds the shaper. **FFT AVG and Wt Avg are still not
-remembered.** On this radio they average nothing until the backend does
-(#5782), and their persistence is being built with a capability of its own in
-the RTL work; a second writer here would put two shapes under one key.
+The waterfall rate, FFT FPS and the dBm range live in the per-radio
+`ClientDisplay` document, keyed by pan slot (`core/ClientDisplaySettings.h`).
+The Display panel's FPS slider, Clone to all Pans and Reset to Defaults save;
+`MainWindow::wirePanDisplayStatus` restores into the widget before it seeds the
+shaper. **FFT AVG and Wt Avg are not remembered.**
 
 The dBm range is the odd one: the pan model, not the widget, is what every
 re-seed reads, so a scale the operator moves is put into the model

@@ -93,7 +93,6 @@ public:
         }
     }
 
-    // ── FFT FPS ───────────────────────────────────────────────────────────
     static std::optional<int> fftFps(const RadioSettingsScope& scope,
                                      int panIndex, bool shapedLocally)
     {
@@ -111,7 +110,6 @@ public:
         writeEntry(scope, panIndex, shapedLocally, QStringLiteral("fftFps"), fps);
     }
 
-    // ── The dBm scale ─────────────────────────────────────────────────────
     // `clientOwned` is clientOwnsDbmRange(), not shapesDisplayRatesLocally()
     // alone.
     static std::optional<DbmRange> dbmRange(const RadioSettingsScope& scope,

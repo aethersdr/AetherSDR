@@ -1,35 +1,8 @@
-// FFT FPS and the dBm scale, remembered per radio and pan slot for a radio
-// that keeps no display state of its own.
-//
-// Observed on a Hermes-Lite 2 on 2026-10-01, twice out of twice: FFT FPS 12
-// came back as 25 after a clean quit and relaunch, and a dBm scale of -2.19
-// top / 120 dB came back as -40 / 90. The waterfall rate set beside them
-// survived, because it alone was stored (ClientDisplaySettings, the
-// `ClientDisplay` feature document). A Flex holds all of these itself and
-// reports them back.
-//
-// FFT AVG and Wt Avg were lost in the same observation and are NOT covered
-// here, on purpose: the PR body says why. Block 6 pins that this file's
-// writers leave an `fftAverages` table alone, whoever wrote it.
-//
-// What this file pins, as behaviour against the real settings store:
-//   1. the two values round-trip per radio and per pan slot;
-//   2. a radio that owns its display state (shapedLocally false, a Flex) is
-//      never written to and never restored from, even when a document exists;
-//   3. the dBm range needs the second term as well (absolute bins), read off
-//      real backend instances: HL2 yes, Flex no, Icom no;
-//   4. invalid values are refused on the way in AND on the way out;
-//   5. a newer schema is neither read nor overwritten;
-//   6. the new tables, the waterfall rate and a table this build does not
-//      know share one schema-1 document without disturbing each other;
-//   7. two fields of one pan, edited inside one DeferredSettingsWrites window,
-//      both reach the store.
-//
-// And what it does NOT see: MainWindow. Whether the Display panel's handlers
-// call the save and whether pan wiring restores before it seeds the shaper is
-// checked in the last block as SOURCE TEXT, because MainWindow links into no
-// test. That block proves the calls are written and in that order. It does not
-// prove the app restores anything, and nothing here ran against a radio.
+// FFT FPS and the dBm range in the per-radio ClientDisplay document, against
+// the real settings store: round trip, ownership, refusals, schema, coexistence
+// with other tables, the pending-write key.
+// SOURCE TEXT, last block only: the order and presence of the save and restore
+// calls inside MainWindow methods, which link into no test.
 
 #include "TestSettingsProfile.h"
 #include "core/ClientDisplaySettings.h"
@@ -89,7 +62,7 @@ int main(int argc, char** argv)
     const RadioSettingsScope flex(QStringLiteral("flex"), QStringLiteral("A"));
     const RadioSettingsScope unknown(QStringLiteral("hl2"), {});
 
-    // ── 1. Round trip, per pan slot and per radio. The observed values. ─────
+    // 1. Round trip, per pan slot and per radio. The observed values.
     check(!CDS::fftFps(a, 0, true) && !CDS::dbmRange(a, 0, true),
           "nothing stored reads as unconfigured, not as a default");
     CDS::saveFftFps(a, 0, true, 12);
@@ -114,7 +87,7 @@ int main(int argc, char** argv)
     check(CDS::fftFps(b, 2, true) == CDS::kFftFpsMax, "the slider maximum round-trips");
     check(b.removeFeature(feature), "fixture row removed");
 
-    // ── 2. A radio that owns its display state: no write, no restore. ───────
+    // 2. A radio that owns its display state: no write, no restore.
     CDS::saveFftFps(flex, 0, false, 12);
     CDS::saveDbmRange(flex, 0, false, -122.19f, -2.19f);
     check(flex.featureExact(feature).isEmpty(),
@@ -126,7 +99,7 @@ int main(int argc, char** argv)
     check(unknown.featureExact(feature).isEmpty(),
           "an unknown identity never writes the family default");
 
-    // ── 3. Who owns the dBm range. ──────────────────────────────────────────
+    // 3. Who owns the dBm range.
     check(CDS::clientOwnsDbmRange(true, true), "shaped locally + absolute bins: client");
     check(!CDS::clientOwnsDbmRange(true, false),
           "shaped locally, bins not absolute: the backend publishes the range");
@@ -148,7 +121,7 @@ int main(int argc, char** argv)
               "Icom: shaped locally, but its backend publishes the range");
     }
 
-    // ── 4. Refused on the way in ... ────────────────────────────────────────
+    // 4. Refused on the way in ...
     CDS::saveFftFps(a, 0, true, CDS::kFftFpsMin - 1);
     CDS::saveFftFps(a, 0, true, CDS::kFftFpsMax + 1);
     CDS::saveDbmRange(a, 0, true, -1882.0f, -1792.0f);   // the IC-9700 ratchet
@@ -181,7 +154,7 @@ int main(int argc, char** argv)
         check(a.removeFeature(feature), "damaged fixture removed");
     }
 
-    // ── 5. A newer schema is not ours to read or replace. ───────────────────
+    // 5. A newer schema is not ours to read or replace.
     {
         const QJsonObject future{
             {QStringLiteral("fftFps"), QJsonObject{{QStringLiteral("0"), 30}}}};
@@ -193,12 +166,10 @@ int main(int argc, char** argv)
         check(b.removeFeature(feature), "future fixture removed");
     }
 
-    // ── 6. One document, several tables, no schema bump. ────────────────────
+    // 6. One document, several tables, no schema bump.
     {
-        // A document written by a build that knew the waterfall rate, plus a
-        // table this build does not read at all. `fftAverages` in this shape
-        // is what the open RTL work stores FFT AVG and Wt Avg under; whoever
-        // lands first, neither side may eat the other's rows.
+        // The waterfall rate plus a table this build does not read: neither
+        // writer may drop the other's rows.
         const QJsonObject foreignAverages{
             {QStringLiteral("0"), QJsonObject{{QStringLiteral("average"), 40},
                                               {QStringLiteral("weighted"), true}}}};
@@ -224,7 +195,7 @@ int main(int argc, char** argv)
         check(version == 1, "the document is still schema 1");
     }
 
-    // ── 7. Two fields of one pan inside one deferral window. ────────────────
+    // 7. Two fields of one pan inside one deferral window.
     {
         const RadioSettingsScope c(QStringLiteral("hl2"), QStringLiteral("C"));
         const QString rateKey = CDS::pendingWriteKey(c, 0, "waterfallRate");
@@ -250,13 +221,11 @@ int main(int argc, char** argv)
     check(!dbmRangeLooksPlausible(-202.0f, -112.0f), "past -180 dBm is not");
     check(!dbmRangeLooksPlausible(-100.0f, -95.0f), "5 dB of range is not");
 
-    // ── 8. The wiring, as written. SOURCE TEXT: see the header. ─────────────
+    // 8. SOURCE TEXT: call order inside MainWindow methods no test can construct.
     {
         const QString wiring = readSource("src/gui/MainWindow_Wiring.cpp");
         const QString session = readSource("src/gui/MainWindow_Session.cpp");
-        const QString menu = readSource("src/gui/SpectrumOverlayMenu.cpp");
-        check(!wiring.isEmpty() && !session.isEmpty() && !menu.isEmpty(),
-              "the three sources were read");
+        check(!wiring.isEmpty() && !session.isEmpty(), "the two sources were read");
 
         // Restore, then seed: the request reads the widget.
         const qsizetype restoreFps = wiring.indexOf(
@@ -299,11 +268,6 @@ int main(int argc, char** argv)
         check(wiring.contains(QStringLiteral(
                   "ClientDisplaySettings::clientOwnsDbmRange(")),
               "ownership of the range is the shared predicate");
-
-        // The bound this store validates against is the panel's own.
-        check(menu.contains(QStringLiteral("makeRow(\"FFT FPS:\", %1, %2, 25,")
-                                .arg(CDS::kFftFpsMin).arg(CDS::kFftFpsMax)),
-              "the FFT FPS slider still runs kFftFpsMin..kFftFpsMax");
     }
 
     if (g_failed) {

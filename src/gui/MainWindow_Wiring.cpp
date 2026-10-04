@@ -3115,9 +3115,9 @@ void MainWindow::adoptClientOwnedDbmRange(const QString& panId, int panIndex,
         });
 }
 
-// The other half: put the remembered range into the pan MODEL before a widget
-// is primed from it, so that prime and every other site that re-seeds from the
-// model agree. No-op on a radio that owns or publishes its range.
+// Puts the remembered range into the pan MODEL before a widget is primed from
+// it, so that prime and every other site that re-seeds from the model agree.
+// No-op on a radio that owns or publishes its range.
 void MainWindow::restoreClientOwnedDbmRange(PanadapterModel* pan, int panIndex)
 {
     if (!pan || !clientOwnsPanDbmRange()) {
@@ -3203,10 +3203,9 @@ void MainWindow::wirePanDisplayStatus(PanadapterApplet* applet,
                 m_radioModel.settingsScope(), sw->panIndex(), true)) {
             sw->setWfLineDuration(*savedRate);
         }
-        // FFT FPS, the same way and for the same reason: no radio reports it
-        // here, so without this it came back at the widget default (25) after
-        // every restart. Restored into the widget BEFORE the request below,
-        // which then seeds the shaper and the pan model from it.
+        // FFT FPS likewise: no radio reports it here. Restored into the widget
+        // BEFORE the request below, which seeds the shaper and the pan model
+        // from it.
         if (const auto savedFps = ClientDisplaySettings::fftFps(
                 m_radioModel.settingsScope(), sw->panIndex(), true)) {
             sw->setFftFps(*savedFps);
@@ -3956,10 +3955,8 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         // On reconnect the auto-adjust would animate from the wrong baseline and
         // fire dbmRangeChangeRequested with bogus values — which then locks out the
         // correct radio-reported range via the pendingDbm guard. (#3034)
-        //
-        // On a radio that stores no range and publishes none, the pan model
-        // only ever holds its built-in -130..-40, so that is what this line
-        // primed after every restart, whatever the operator had set.
+        // A radio that stores and publishes no range leaves the model at its
+        // built-in -130..-40; the remembered range goes in first.
         restoreClientOwnedDbmRange(pan, sw->panIndex());
         sw->setDbmRange(pan->minDbm(), pan->maxDbm());
 
