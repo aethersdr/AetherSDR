@@ -3122,6 +3122,7 @@ add_executable(radio_setup_show_tx_waterfall_test
     tests/radio_setup_show_tx_waterfall_test.cpp
     src/gui/DragValuePopup.cpp
     src/gui/RadioSetupDialog.cpp
+    src/gui/RadioSetupDialog_Peripherals.cpp
     src/gui/PersistentDialog.cpp
     src/gui/FramelessResizer.cpp
     src/gui/FramelessWindowTitleBar.cpp
