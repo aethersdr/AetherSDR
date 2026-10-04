@@ -40,6 +40,8 @@ private:
     GuardedComboBox* m_modeCombo{nullptr};
     GuardedComboBox* m_listenCombo{nullptr};
     GuardedComboBox* m_usbCombo{nullptr};
+    QLabel* m_listenRowLabel{nullptr};
+    QLabel* m_usbRowLabel{nullptr};
     QPushButton* m_refreshBtn{nullptr};
     QLineEdit* m_listenPortEdit{nullptr};
     QLabel* m_radioLabel{nullptr};

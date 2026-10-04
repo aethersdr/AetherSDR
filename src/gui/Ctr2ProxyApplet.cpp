@@ -109,7 +109,8 @@ void Ctr2ProxyApplet::buildUi()
     ThemeManager::instance().applyStyleSheet(m_refreshBtn, kButtonStyle);
     grid->addWidget(m_refreshBtn, 0, 3);
 
-    grid->addWidget(makeLabel(tr("Listen"), QStringLiteral("color.text.label"), this), 1, 0);
+    m_listenRowLabel = makeLabel(tr("Listen"), QStringLiteral("color.text.label"), this);
+    grid->addWidget(m_listenRowLabel, 1, 0);
     m_listenCombo = new GuardedComboBox(this);
     m_listenCombo->setObjectName(QStringLiteral("ctr2ProxyListenAddress"));
     m_listenCombo->setAccessibleName(tr("CTR2 proxy listen address"));
@@ -125,7 +126,8 @@ void Ctr2ProxyApplet::buildUi()
     ThemeManager::instance().applyStyleSheet(m_listenPortEdit, kFieldStyle);
     grid->addWidget(m_listenPortEdit, 1, 2);
 
-    grid->addWidget(makeLabel(tr("USB"), QStringLiteral("color.text.label"), this), 2, 0);
+    m_usbRowLabel = makeLabel(tr("USB"), QStringLiteral("color.text.label"), this);
+    grid->addWidget(m_usbRowLabel, 2, 0);
     m_usbCombo = new GuardedComboBox(this);
     m_usbCombo->setObjectName(QStringLiteral("ctr2ProxyUsbDevice"));
     m_usbCombo->setAccessibleName(tr("CTR2 USB device"));
@@ -464,6 +466,12 @@ void Ctr2ProxyApplet::syncConfiguration()
         : tr("Used in USB mode only");
     const bool usbEditable = editable && usb && usbAvailable;
     setAvailability(m_usbCombo, usbEditable, editable ? usbReason : frozen);
+    // Only the row the mode uses is shown; the grid collapses the hidden one.
+    m_listenRowLabel->setVisible(!usb);
+    m_listenCombo->setVisible(!usb);
+    m_listenPortEdit->setVisible(!usb);
+    m_usbRowLabel->setVisible(usb);
+    m_usbCombo->setVisible(usb);
 
     if (haveModel) {
         if (m_listenPortEdit->text() != m_model->listenPortText()) {
