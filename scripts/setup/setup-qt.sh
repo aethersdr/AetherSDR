@@ -251,13 +251,13 @@ esac
 # The marker, not bin/aqt, says the venv is complete: an interrupted pip can
 # leave the aqt entry point in place with its dependencies half-installed.
 #
-# macOS takes a py7zr floor instead of the exact pin: its stock python3 is
-# Apple's 3.9, and py7zr 1.1+ needs 3.10+, so pip has no 1.1.3 to offer there.
-# py7zr only extracts the archives — aqtinstall 3.3.0 asks for >=0.22.0, and the
-# pin is CI's reproducibility, not a requirement on what lands — so 1.0.0 on
-# 3.9 lays down the same kit, and a newer Python still gets 1.1.3 or later. The
-# venv name says which rule built it, so neither reuses the other's cache.
-if [ "$OS" = "Darwin" ]; then
+# A python3 older than 3.10 takes a py7zr floor instead of the exact pin:
+# py7zr 1.1+ needs 3.10+, so pip has no 1.1.3 to offer to Apple's stock 3.9 or
+# to the 3.9 of EL9-family distros. py7zr only extracts the archives —
+# aqtinstall 3.3.0 asks for >=0.22.0 — so 1.0.0 lays down the same kit. Every
+# newer Python keeps the reviewed pin. The venv name says which rule built it,
+# so upgrading python3 builds a fresh pinned venv rather than reusing the floor.
+if python3 -c 'import sys; sys.exit(sys.version_info >= (3, 10))' 2>/dev/null; then
     PY7ZR_REQ="py7zr>=1.0.0"; PY7ZR_TAG="floor1.0.0"
 else
     PY7ZR_REQ="py7zr==$PY7ZR_VERSION"; PY7ZR_TAG="$PY7ZR_VERSION"
@@ -274,8 +274,7 @@ if [ ! -f "$VENV/.complete" ]; then
         PYVER="$("$VENV/bin/python" -c 'import platform; print(platform.python_version())' 2>/dev/null || echo unknown)"
         rm -rf "$VENV"
         die "could not install aqtinstall $AQTINSTALL_VERSION and $PY7ZR_REQ into a venv
-       built from python3 $PYVER ($(command -v python3)). py7zr 1.1+ needs
-       Python 3.10+; put a newer python3 first on PATH and re-run."
+       built from python3 $PYVER ($(command -v python3)). See pip's error above."
     fi
     touch "$VENV/.complete"
 fi
