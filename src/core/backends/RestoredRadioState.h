@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QJsonObject>
+#include <QList>
 #include <QString>
 
 namespace AetherSDR {
@@ -29,6 +30,10 @@ struct RestoredRadioState {
                                   // real dB, and KiwiSdrClient has a genuine
                                   // agcThresholdDb nearby. Matches
                                   // SliceDelta::agcThreshold, the same 0..100 scale.
+    // The AGC-off level (the fixed gain with AGC off), one entry per receiver in
+    // receiver order. Gated by the Agc domain AND hasAgcThreshold: a backend
+    // with no writable off level neither stores nor receives it.
+    QList<int> agcOffLevels;      // Agc — 0..100 each; -1 = not restored
 
     // CW controls. Flex persists and reports these in the radio; a host-keyed
     // backend has no such authority, so a backend declaring the Cw domain makes
@@ -63,6 +68,7 @@ struct RestoredRadioState {
         return rfFrequencyHz == 0.0 && mode.isEmpty() && filterLowHz == 0.0
                && filterHighHz == 0.0 && sampleRateHz == 0
                && agcMode.isEmpty() && agcThreshold < 0
+               && agcOffLevels.isEmpty()
                && cwSpeed == 0 && cwPitch == 0 && cwBreakIn < 0
                && cwDelay < 0 && cwSidetone < 0 && cwIambic < 0
                && cwIambicMode < 0 && cwSwapPaddles < 0 && cwlEnabled < 0

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "AutoBlackMode.h"
+#include "core/backends/SquelchLevelScale.h"
 #include "RfGainPresentation.h"
 
 #include <limits>
@@ -32,6 +33,7 @@
 
 class QVariantAnimation;
 class QSoundEffect;
+class QAction;
 
 #ifdef AETHER_GPU_SPECTRUM
 #include "SpectrumRhiFailureState.h"
@@ -104,6 +106,7 @@ enum class SpectrumRenderMode : int {
 // AETHER_GPU_SPECTRUM is enabled, otherwise QWidget with QPainter.
 class SpectrumWidget : public SPECTRUM_BASE_CLASS {
     Q_OBJECT
+    friend struct SpectrumOffscreenTestAccess;
     // Expose the measured FFT noise floor (and the pan index that identifies
     // which spectrum this is) to the automation bridge so a driver can read
     // them generically via QObject::property() in dumpTree — without coupling
@@ -153,6 +156,13 @@ public:
 
     // Set the frequency range covered by this panadapter.
     void setFrequencyRange(double centerMhz, double bandwidthMhz);
+    // Confirmed backends keep gestures as requests. Only this observation
+    // entry may move their native view; Flex retains its optimistic path.
+    void setPanGeometryConfirmationRequired(bool required);
+    bool panGeometryConfirmationRequired() const {
+        return m_panGeometryConfirmationRequired && !m_kiwiSdrWaterfallActive;
+    }
+    void observeFrequencyRange(double centerMhz, double bandwidthMhz);
     // Same range update, but snaps instead of using the small pan-follow
     // animation. Center Lock uses this so the locked slice stays pinned.
     void setFrequencyRangeImmediate(double centerMhz, double bandwidthMhz);
@@ -250,7 +260,7 @@ public:
     // the FFT-derived waterfall rows from updateSpectrum().
     void updateWaterfallRow(const QVector<float>& binsDbm,
                             double lowFreqMhz, double highFreqMhz,
-                            quint32 timecode = 0);
+                            quint32 timecode = 0, bool coherentSpectrumCoverage = false);
     void setKiwiSdrWaterfallAvailable(bool available);
     void setKiwiSdrWaterfallActive(bool active);
     bool kiwiSdrWaterfallActive() const { return m_kiwiSdrWaterfallActive; }
@@ -359,8 +369,18 @@ public:
     // are set from applyCapabilitiesToUi and again when a pane is added after
     // connect. Together they form the auto-floor gate, an OR — see
     // noiseFloorAutoAdjustAllowed() and RadioCapabilities::panBinsAbsolute().
-    void setPanBinsAbsolute(bool on) { m_panBinsAbsolute = on; }
+    void setPanBinsAbsolute(bool on)
+    {
+        if (m_panBinsAbsolute != on)
+            resetWfBlankerState();  // the blanker ring's unit follows this flag
+        m_panBinsAbsolute = on;
+    }
     bool panBinsAbsolute() const { return m_panBinsAbsolute; }
+    // The active slice's squelch mapping (RadioCapabilities::squelchLevelScale,
+    // filtered by mode), pushed in like the two flags above. nullopt: no SQL
+    // line and no Auto SQL level, except on Kiwi's own path.
+    void setSquelchScale(std::optional<SquelchLevelScale> scale);
+    const std::optional<SquelchLevelScale>& squelchScale() const { return m_squelchScale; }
     double centerMhz()    const { return m_centerMhz; }
     double bandwidthMhz() const { return m_bandwidthMhz; }
     // Width of the frequency canvas, in logical pixels: the widget width minus
@@ -477,6 +497,8 @@ public:
 
     // Access the floating overlay menu (for wiring signals).
     SpectrumOverlayMenu* overlayMenu() const { return m_overlayMenu; }
+    void setCapturePlacementAction(QAction* action);
+    QAction* capturePlacementAction() const;
 
     // Access VFO info widgets (one per slice).
     VfoWidget* vfoWidget() const { return m_vfoWidget; }  // active slice (compat)
@@ -724,6 +746,7 @@ public:
         int    filterHighHz{0};
         bool   isTxSlice{false};
         bool   isActive{false};
+        bool   inCapture{true};
         int    splitPartnerId{-1};  // slice ID of split partner, -1 if not in split
         bool   diversity{false};
         bool   diversityParent{false};
@@ -759,6 +782,7 @@ public:
                          int diversityIndex = -1);
     // Update just the frequency on an existing overlay (for optimistic scroll-to-tune)
     void setSliceOverlayFreq(int sliceId, double freqMhz);
+    void setSliceOverlayInCapture(int sliceId, bool inCapture);
     // Update the per-client letter on an existing overlay; safe to call
     // before/after setSliceOverlay.  Used by the Multi-Flex display mode
     // so the slice marker / passband colour can follow the radio's
@@ -925,6 +949,7 @@ signals:
     // and ends (false), so Pan Follow can stand down for the drag's duration and
     // recenter once on release. (user-reported)
     void sliceDragActiveChanged(bool active);
+    void sliceDragCancelled();
     void spotTriggered(int spotIndex);
     // Emitted when the user changes both center and bandwidth as one explicit
     // pan/zoom operation and the radio should apply them coherently. Splitting
@@ -1020,7 +1045,7 @@ private:
     void raiseWarningCard(const QString& id, const QString& title,
                           const QString& detail, int durationMs);
     void setFrequencyRangeInternal(double centerMhz, double bandwidthMhz,
-                                   bool animateSmallNudges);
+                                   bool animateSmallNudges, bool confirmedObservation = false);
     double effectiveGridStepMhz(int widgetWidth) const;
     void drawGrid(QPainter& p, const QRect& r);
     void drawSpectrum(QPainter& p, const QRect& r);
@@ -1249,29 +1274,39 @@ private:
         double supplementalBandwidthMhz = -1.0);
     void appendDssHistoryRow(const QVector<float>& binsDbm,
                              double frameCenterMhz = -1.0,
-                             double frameBandwidthMhz = -1.0);
+                             double frameBandwidthMhz = -1.0,
+                             const QVector<float>& supplementalBinsDbm = {},
+                             double supplementalCenterMhz = 0,
+                             double supplementalBandwidthMhz = 0,
+                             bool preserveInput = false);
     void appendDssWaterfallRow(const QVector<float>& binsDbm,
                                double frameCenterMhz = -1.0,
                                double frameBandwidthMhz = -1.0,
                                bool updateLiveSurface = true,
                                const QVector<float>& supplementalBinsDbm = {},
                                double supplementalCenterMhz = -1.0,
-                               double supplementalBandwidthMhz = -1.0);
+                               double supplementalBandwidthMhz = -1.0,
+                               bool preserveInput = false);
     void appendLatestDssWaterfallRow(double frameCenterMhz = -1.0,
                                      double frameBandwidthMhz = -1.0);
     QVector<float> buildNativeDssSupplementalRow(
         const QVector<float>& tileIntensity,
         double tileLowMhz,
-        double tileHighMhz) const;
+        double tileHighMhz, bool sameSpectrumScale = false) const;
     void pushDssLiveRow(DssRenderer& dss, const QVector<float>& binsDbm,
                         bool hiddenStream, double frameCenterMhz,
                         double frameBandwidthMhz,
                         const QVector<float>& supplementalBinsDbm = {},
                         double supplementalCenterMhz = -1.0,
-                        double supplementalBandwidthMhz = -1.0);
+                        double supplementalBandwidthMhz = -1.0,
+                        bool preserveInput = false);
     void retainDssHistoryRow(DssRenderer& dss, const QVector<float>& binsDbm,
                              double centerMhz, double bandwidthMhz,
-                             float fallbackDbm);
+                             float fallbackDbm,
+                             const QVector<float>& supplementalBinsDbm = {},
+                             double supplementalCenterMhz = 0,
+                             double supplementalBandwidthMhz = 0,
+                             bool preserveInput = false);
     float dssHistoryFallbackDbm() const;
     const QVector<float>& remapPreviewDssRow(const QVector<float>& binsDbm,
                                              double frameCenterMhz,
@@ -1589,6 +1624,7 @@ private:
     // state because they can be controlled from different receive surfaces.
     bool  m_flexSquelchLineVisible{false};
     int   m_flexSquelchLevel{0};
+    std::optional<SquelchLevelScale> m_squelchScale;
     bool  m_kiwiSdrSquelchLineVisible{false};
     int   m_kiwiSdrSquelchLevel{0};
     bool  m_kiwiSdrSquelchLineFloorRelative{false};
@@ -1804,9 +1840,11 @@ private:
     double m_bwDragStartBw{0.0};
     double m_bwDragAnchorMhz{0.0};
     double m_bwDragAnchorFraction{0.0};
+    bool m_panGeometryConfirmationRequired{false};
     bool m_frequencyRangeSettlePending{false};
     bool m_frequencyRangePendingValid{false};
     double m_frequencyRangePendingCenterMhz{0.0};
+    double m_frequencyRangePendingBandwidthMhz{0.0};
     QTimer* m_frequencyRangeSettleTimer{nullptr};
     QTimer* m_frequencyRangeCommandTimer{nullptr};
     QTimer* m_dssZoomFloorSyncTimer{nullptr};
@@ -1885,6 +1923,7 @@ private:
     // half of #4142's "defer, never drop".
     bool    m_deferredRangeValid{false};
     QTimer* m_deferredRangeTimer{nullptr};
+    void    cancelPanGeometryRequests();
     void    deferIncomingRange(double centerMhz, double bandwidthMhz);
     void    applyDeferredRangeIfIdle();
     bool m_vfoDragEdgePanDisabled{false};   // AETHER_NO_DRAG_EDGEPAN=1 escape hatch
@@ -2117,6 +2156,7 @@ private:
 
     // Floating overlay menu (child widget, anchored top-left)
     SpectrumOverlayMenu* m_overlayMenu{nullptr};
+    QPointer<QAction> m_capturePlacementAction;
     // VFO info widgets (one per slice, attached to VFO markers)
     QMap<int, VfoWidget*> m_vfoWidgets;
     VfoWidget* m_vfoWidget{nullptr};  // alias to active slice widget (compat)

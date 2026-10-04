@@ -5,6 +5,8 @@
 #include <QStringList>
 #include <QMap>
 #include <QTimer>
+#include <QPointer>
+#include <array>
 
 #include "core/backends/SliceDelta.h"
 #include "core/backends/ReceiveCommand.h"
@@ -22,6 +24,7 @@ class SliceModel : public QObject {
     Q_PROPERTY(int filterLow     READ filterLow  NOTIFY filterChanged)
     Q_PROPERTY(int filterHigh    READ filterHigh NOTIFY filterChanged)
     Q_PROPERTY(bool active       READ isActive   NOTIFY activeChanged)
+    Q_PROPERTY(bool inCapture    READ inCapture  NOTIFY inCaptureChanged)
     Q_PROPERTY(bool txSlice      READ isTxSlice  NOTIFY txSliceChanged)
 
 public:
@@ -82,6 +85,7 @@ public:
     bool    adaptiveHetReject()     const { return m_adaptiveHetReject; } // opt-in edge-het cut
     bool    adaptiveActive()        const { return m_adaptiveActive; }
     bool    isActive()   const { return m_active; }
+    bool    inCapture()  const { return m_inCapture; }
     bool    isTxSlice()  const { return m_txSlice; }
     float   rfGain()     const { return m_rfGain; }
     float   audioGain()  const { return m_externalReceiveAudioReplacement
@@ -199,8 +203,8 @@ public:
     // the two fight on reconnect. On a backend with no command plane there is no
     // radio opinion to defer to, the host bank owns the channel, and a recalled
     // step would otherwise never take because the wire command that normally
-    // round-trips it is dropped. Named for its one caller so the exception stays
-    // visible; see RadioModel::recallCachedMemory().
+    // round-trips it is dropped. Callers: RadioModel::recallCachedMemory() and
+    // RadioModel::applyClientOwnedSliceStep(), both only without a command plane.
     void    applyRecalledStepHz(int hz);
     QVector<int> stepList() const { return m_stepList; }
     int     daxChannel()  const { return m_daxChannel; }
@@ -374,6 +378,10 @@ public:
 signals:
     void letterChanged(const QString& newLetter);
     void frequencyChanged(double mhz);
+    // Emitted for every valid radio-reported frequency, including same-value
+    // reports. Unlike frequencyChanged(), this never represents an optimistic
+    // local tune request.
+    void frequencyStatusReported(double mhz);
     // Supplemental observation notification when frequencyChanged does not
     // fire (same-value reports, optimistic-value echoes, or invalidation).
     void frequencyReported();
@@ -399,31 +407,20 @@ signals:
     // Canonical receive dispatch. Emitted after local notifications so a
     // synchronous backend observation cannot be overwritten by an optimistic
     // notification. RadioModel wires these once for every slice lifecycle.
+    // Explicit compatibility origins preserve Kiwi suppression and NRS profile
+    // restoration; routine status updates do not create operator intents.
     void receiveTuneRequested(const AetherSDR::SliceTuneRequest& request);
     void receiveFilterRequested(const AetherSDR::SliceFilterRequest& request);
     void receiveAgcRequested(const AetherSDR::SliceAgcRequest& request);
+    void receiveDspRequested(const AetherSDR::SliceDspRequest& request);
+    void receiveAudioRequested(const AetherSDR::SliceAudioRequest& request);
+    void receiveSquelchRequested(const AetherSDR::SliceSquelchRequest& request);
+    void receiveRxAntennaRequested(const QString& antenna);
+    void receiveLockRequested(bool locked);
 
-    // Receive DSP the radio runs. Emitted only by operator-facing setters, never
-    // by status application, so a radio echo never returns as a command. These are
-    // the seam for non-Flex backends (Flex sends wire text). Enable and level travel
-    // together so a toggle never lands before the level it implies.
-    void noiseReductionCommandIssued(bool on, int level);
-    void noiseBlankerCommandIssued(bool on, int level);
-    void autoNotchCommandIssued(bool on);
-    // Enable and position together — see IRadioBackend::setSliceManualNotch
-    // for why turning the notch on without placing it is not enough.
-    void manualNotchCommandIssued(bool on, int position);
-    void squelchCommandIssued(bool on, int level);
     // Receive and transmit incremental tuning.
     void ritCommandIssued(bool on, int hz);
     void xitCommandIssued(bool on, int hz);
-    // Operator-issued per-slice audio changes. audioMute/Gain/PanChanged also fire
-    // on status apply, so commands must not be driven off them. A Flex mixes on the
-    // radio; a host-mixing backend (HL2) applies these in its own mixer.
-    void audioMuteCommandIssued(bool mute);
-    void audioGainCommandIssued(int gainPercent);
-    void audioPanCommandIssued(int panPercent);      // 0=left, 50=centre, 100=right
-    void rxAntennaCommandIssued(const QString& antenna);
     // Operator asked for THIS slice to own transmit. A radio with one
     // transmitter and several receivers has to move it rather than set a flag.
     void txSliceCommandIssued();
@@ -444,6 +441,7 @@ signals:
     void adaptiveHetRejectChanged(bool on);
     void adaptiveActiveChanged(bool on);
     void activeChanged(bool active);
+    void inCaptureChanged(bool inCapture);
     void txSliceChanged(bool tx);
     void audioGainChanged(float gain);
     void audioPanChanged(int pan);
@@ -452,7 +450,6 @@ signals:
     void rxAntennaListChanged(const QStringList& ants);
     void txAntennaListChanged(const QStringList& ants);
     void lockedChanged(bool locked);
-    void lockCommandIssued(bool locked);
     void tuneBlockedByLock();
     void lockedFeedbackActiveChanged(bool active);
     void qskChanged(bool on);
@@ -538,6 +535,11 @@ public:
     static bool filterCarrierStraddlingFamily(const QString& mode);
 
 private:
+    friend class RadioModel;
+    bool refuseOffThread(const char* setter) const;
+    void setControlPolicy(ReceiveControlPolicy policy) { m_controlPolicy = policy; }
+    bool confirmsControls() const { return m_controlPolicy == ReceiveControlPolicy::Confirmed; }
+    ReceiveControlPolicy m_controlPolicy = ReceiveControlPolicy::Optimistic;
     // Local notifications can synchronously trigger a newer edit or reconnect.
     // Do not dispatch the superseded intent when that notification returns.
     // AGC fields are independent: a threshold edit must not cancel a mode edit.
@@ -547,6 +549,37 @@ private:
     quint64 m_agcModeIntentRevision{0};
     quint64 m_agcThresholdIntentRevision{0};
     quint64 m_agcOffLevelIntentRevision{0};
+    std::array<std::array<quint64, 2>,
+        static_cast<std::size_t>(SliceDspRequest::Feature::Anft) + 1> m_dspIntentRevisions{};
+    std::array<quint64, 3> m_audioIntentRevisions{};
+    quint64 m_squelchIntentRevision{0};
+    bool m_squelchEnableIntentPending{false};
+    bool m_squelchLevelIntentPending{false};
+    quint64 m_rxAntennaIntentRevision{0};
+    quint64 m_lockIntentRevision{0};
+    template<class Notify, class Dispatch>
+    void publishReceiveIntent(quint64& epoch, Notify notify, Dispatch dispatch)
+    {
+        const QPointer<SliceModel> alive(this);
+        const quint64 revision = ++epoch;
+        notify();
+        if (alive && epoch == revision) {
+            dispatch();
+        }
+    }
+    SliceDspRequest currentDspRequest(SliceDspRequest::Feature feature,
+                                      SliceDspRequest::Field field) const;
+    template<class Notify>
+    void notifyReceiveDspIntent(SliceDspRequest::Feature feature,
+                               SliceDspRequest::Field field, Notify notify)
+    {
+        publishReceiveIntent(m_dspIntentRevisions[static_cast<size_t>(feature)][static_cast<size_t>(field)],
+                             notify, [this, feature, field] {
+            // A notification may edit the companion field. Carry its current
+            // value for paired backends without overwriting that newer edit.
+            emit receiveDspRequested(currentDspRequest(feature, field));
+        });
+    }
     void notifyReceiveFilterIntent(SliceFilterRequest::Origin origin);
     // Sign-guarded, idempotent (lo,hi)→(-hi,-lo) mirror of the stored filter
     // when its polarity is wrong for m_mode; true if it changed anything.
@@ -577,6 +610,7 @@ private:
     bool    m_adaptiveHetReject{false};  // opt-in edge-het cut
     bool    m_adaptiveActive{false};     // a confident live fit is applied
     bool    m_active{false};
+    bool    m_inCapture{true};
     bool    m_txSlice{false};
     float   m_rfGain{0.0f};
     float   m_audioGain{50.0f};
@@ -647,6 +681,11 @@ private:
     int     m_ritFreq{0};
     bool    m_xitOn{false};
     int     m_xitFreq{0};
+    // True while setRit()/setXit() is inside its command emit. A backend that
+    // answers the enable and offset verbs synchronously publishes each step;
+    // those are adopted silently and announced once, as the final value.
+    bool    m_ritCommandInFlight{false};
+    bool    m_xitCommandInFlight{false};
     int     m_daxChannel{0};
     int     m_rttyMark{2125};
     int     m_rttyMarkDefault{2125};

@@ -353,7 +353,7 @@ void testNoRxSliceMeansNoRestore()
 // ── The production sequence against real SliceModels ───────────────────────
 //
 // What MainWindow does, in its order: apply, arm with what the apply found,
-// feed the *CommandIssued signals into the recorder, merge and restore on
+// feed typed operator audio intents into the recorder, merge and restore on
 // exit. The simulator cannot create a second slice, so this is where the
 // enter/exit/enter sequence runs end to end.
 
@@ -369,14 +369,14 @@ struct SplitRun {
         applied = AetherSDR::applySplitAudioProfile(stored, &rx, &tx);
         applying = false;
         rec.arm(applied.rxPanBefore, applied.rxPanMoved);
-        conns << QObject::connect(&tx, &SliceModel::audioMuteCommandIssued,
-                                  [this](bool m) { if (!applying) rec.noteTxMute(m); });
-        conns << QObject::connect(&tx, &SliceModel::audioGainCommandIssued,
-                                  [this](int g) { if (!applying) rec.noteTxGain(g); });
-        conns << QObject::connect(&tx, &SliceModel::audioPanCommandIssued,
-                                  [this](int p) { if (!applying) rec.noteTxPan(p); });
-        conns << QObject::connect(&rx, &SliceModel::audioPanCommandIssued,
-                                  [this](int p) { if (!applying) rec.noteRxPan(p); });
+        conns << QObject::connect(&tx, &SliceModel::receiveAudioRequested,
+            [this](const AetherSDR::SliceAudioRequest& request) {
+                if (!applying) { rec.noteTxAudioIntent(request); }
+            });
+        conns << QObject::connect(&rx, &SliceModel::receiveAudioRequested,
+            [this](const AetherSDR::SliceAudioRequest& request) {
+                if (!applying) { rec.noteRxAudioIntent(request); }
+            });
     }
 
     SplitAudioProfile exit(const SplitAudioProfile& stored, SliceModel& rx)
@@ -468,7 +468,7 @@ void testRepeatedSplitsOnRealSlices()
 
 // Automated review: TCI rx_mute/rx_balance, SmartCAT ZZMB/ZZLF, rigctld MUTE,
 // Mute All, RADE and memory recall all call the same SliceModel setters and so
-// emit the same *CommandIssued signals. None of them is the operator's choice:
+// emit the same operator-origin intents. None of them is the operator's choice:
 // a logger muting VFO B must not wipe the arrangement, and a CAT pan must not
 // be replayed on every split.
 void testWritesOutsideTheOperatorScopeAreNotLearned()
@@ -488,6 +488,38 @@ void testWritesOutsideTheOperatorScopeAreNotLearned()
           "remote/app-internal writes teach nothing and wipe nothing");
     check(rx.flexAudioPan() == 50,
           "the replayed RX pan is still restored to its pre-split value");
+}
+
+void testTypedAudioIgnoresReadbackAndCompatibilityOrigins()
+{
+    SliceModel rx(0), tx(1);
+    SplitRun run;
+    const SplitAudioProfile stored = workedExampleProfile();
+    run.enter(stored, rx, tx);
+    {
+        SplitAudioOperatorEdit op;
+        tx.setExternalReceiveAudioReplacementMute(true);
+        check(!run.rec.hasPendingLearning(),
+              "Kiwi suppression is not an operator mute even inside an operator scope");
+        AetherSDR::SliceDelta status;
+        status.audioGain = 9;
+        status.audioMute = false;
+        status.audioPan = 30;
+        tx.applyChanges(status);
+        status.audioPan = 70;
+        rx.applyChanges(status);
+        check(!run.rec.hasPendingLearning(),
+              "radio readback and Kiwi status reassertion teach no audio preference");
+        tx.setExternalReceiveAudioReplacementMute(false, false);
+        rx.setAudioGain(12);
+        rx.setAudioMute(true);
+        check(!run.rec.hasPendingLearning(),
+              "compatibility release and everyday RX gain/mute remain outside split learning");
+    }
+    const SplitAudioProfile next = run.exit(stored, rx);
+    check(next.hasTxMute && !next.txMuted && next.txGain == stored.txGain
+              && next.txPan == stored.txPan && next.rxPan == stored.rxPan,
+          "ignored changes preserve the learned arrangement");
 }
 
 // "Forget remembered audio" mid-split (bot review, Codex review, rnash2 on a
@@ -717,6 +749,7 @@ int main(int argc, char** argv)
     testNoRxSliceMeansNoRestore();
     testRepeatedSplitsOnRealSlices();
     testWritesOutsideTheOperatorScopeAreNotLearned();
+    testTypedAudioIgnoresReadbackAndCompatibilityOrigins();
     testMonitorLeavesReplacedRxAlone();
     testMonitorSoloRestoresExactly();
     testMonitorBothUnmutesRxForTheHold();

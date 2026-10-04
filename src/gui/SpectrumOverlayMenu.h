@@ -100,7 +100,6 @@ public:
     // Use the active regional plan when mapping the slice frequency to a
     // native band button. The manager is owned by MainWindow.
     void setBandPlanManager(BandPlanManager* manager);
-    void setWnbState(bool on, int level);
     // Show/hide the whole WNB row (button + level slider + readout) based on
     // whether the radio runs its own DSP (RadioCapabilities::hasRadioSideDsp).
     void setRadioSideDspAvailable(bool available);
@@ -160,6 +159,7 @@ public:
     // the Black Level button's cycle and moves off it if it was selected —
     // the SW estimate is untouched and stays available on every family.
     void setRadioSideAutoBlackAvailable(bool available);
+    void setFftAverageDescriptions(const QString& average, const QString& weighted);
     void syncWnbState(bool on, int level, bool updating);
     void setRfGain(int gain);
     void setRfGainRange(int low, int high, int step,

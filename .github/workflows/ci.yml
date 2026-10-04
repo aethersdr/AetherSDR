@@ -83,7 +83,16 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
-    container: ghcr.io/aethersdr/aethersdr-ci:latest
+    # The full RelWithDebInfo tree plus ccache outgrows the hosted runner's
+    # free disk. Host toolchains this container never uses are mounted so the
+    # first step can delete them; the build tree stays where AUTOMOC expects it.
+    container:
+      image: ghcr.io/aethersdr/aethersdr-ci:latest
+      volumes:
+        - /usr/local/lib/android:/host-unused/android
+        - /usr/share/dotnet:/host-unused/dotnet
+        - /opt/ghc:/host-unused/ghc
+        - /opt/hostedtoolcache/CodeQL:/host-unused/codeql
 
     # Explicit CCACHE_DIR: the job runs as root inside a container, so `~`
     # resolves to /root and an actions/cache `path:` of `~/.cache/ccache` would
@@ -161,6 +170,12 @@ jobs:
       CCACHE_MAXSIZE: 1500M
 
     steps:
+      - name: Free runner disk
+        run: |
+          df -h /__w
+          find /host-unused -mindepth 2 -maxdepth 2 -exec rm -rf {} +
+          df -h /__w
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       # ccache is in .github/docker/Dockerfile as of #4655, but this job pins
@@ -244,7 +259,16 @@ jobs:
           #
           # AETHER_GPU_SPECTRUM=ON is stated rather than left to the CMake
           # default so the assertion below has a request to check against.
+          #
+          # -g1, not RelWithDebInfo's -g: ~250 test executables each link a
+          # static aethercore and carry their own copy of its debug info. At
+          # -g each is ~325 MB and the tree outgrew the runner; at -g1 (line
+          # tables only, so backtraces keep file:line) each is ~120 MB.
+          # full-suite.yml configures identically and restores this job's
+          # ccache, so change both together.
           cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DENABLE_NVIDIA_AFX=ON \
+            "-DCMAKE_C_FLAGS_RELWITHDEBINFO=-O2 -g1 -DNDEBUG" \
+            "-DCMAKE_CXX_FLAGS_RELWITHDEBINFO=-O2 -g1 -DNDEBUG" \
             -DAETHER_GPU_SPECTRUM=ON \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache > configure.log 2>&1 || {

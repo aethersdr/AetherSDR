@@ -250,7 +250,19 @@ esac
 # later configure would trust.
 # The marker, not bin/aqt, says the venv is complete: an interrupted pip can
 # leave the aqt entry point in place with its dependencies half-installed.
-VENV="$CACHE_ROOT/aqt-venv-$AQTINSTALL_VERSION-py7zr$PY7ZR_VERSION"
+#
+# A python3 older than 3.10 takes a py7zr floor instead of the exact pin:
+# py7zr 1.1+ needs 3.10+, so pip has no 1.1.3 to offer to Apple's stock 3.9 or
+# to the 3.9 of EL9-family distros. py7zr only extracts the archives —
+# aqtinstall 3.3.0 asks for >=0.22.0 — so 1.0.0 lays down the same kit. Every
+# newer Python keeps the reviewed pin. The venv name says which rule built it,
+# so upgrading python3 builds a fresh pinned venv rather than reusing the floor.
+if python3 -c 'import sys; sys.exit(sys.version_info >= (3, 10))' 2>/dev/null; then
+    PY7ZR_REQ="py7zr>=1.0.0"; PY7ZR_TAG="floor1.0.0"
+else
+    PY7ZR_REQ="py7zr==$PY7ZR_VERSION"; PY7ZR_TAG="$PY7ZR_VERSION"
+fi
+VENV="$CACHE_ROOT/aqt-venv-$AQTINSTALL_VERSION-py7zr$PY7ZR_TAG"
 if [ ! -f "$VENV/.complete" ]; then
     rm -rf "$VENV"
     if ! python3 -m venv "$VENV" >/dev/null 2>&1; then
@@ -258,7 +270,12 @@ if [ ! -f "$VENV/.complete" ]; then
         die "python3 cannot create a virtual environment. On Debian, Ubuntu and
        Raspberry Pi OS install it with:  sudo apt install python3-venv"
     fi
-    "$VENV/bin/pip" install -q "aqtinstall==$AQTINSTALL_VERSION" "py7zr==$PY7ZR_VERSION"
+    if ! "$VENV/bin/pip" install -q "aqtinstall==$AQTINSTALL_VERSION" "$PY7ZR_REQ"; then
+        PYVER="$("$VENV/bin/python" -c 'import platform; print(platform.python_version())' 2>/dev/null || echo unknown)"
+        rm -rf "$VENV"
+        die "could not install aqtinstall $AQTINSTALL_VERSION and $PY7ZR_REQ into a venv
+       built from python3 $PYVER ($(command -v python3)). See pip's error above."
+    fi
     touch "$VENV/.complete"
 fi
 

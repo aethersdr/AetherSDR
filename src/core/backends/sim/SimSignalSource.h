@@ -70,6 +70,7 @@ signals:
     void spectrumFrameReady(int panId, quint64 session, const QByteArray& bins);
 
 private:
+    friend struct SimReceiveContractTestAccess;
     PcmProducer m_speakerPcm;
     PcmProducer m_slicePcm;
     quint64 m_session{0};   // stamps spectrum rows; set by startSession()

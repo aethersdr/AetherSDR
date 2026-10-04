@@ -1197,28 +1197,10 @@ bool runCloseAfterStoppedClockingTest()
     return true;
 }
 
-// The minimum-phase path, which nothing else in this tree exercises:
-// WdspChannel::Config::minimumPhase is false everywhere, so RXASetMP() always
-// passes 0 and WDSP's mp == 1 branch is never entered by any other test.
-//
-// Two things are pinned here, and the second is why the first matters.
-//
-// 1. Turning minimum phase ON must still produce audio. The AetherSDR patch
-//    that builds the minimum-phase workspace lazily
-//    (third_party/wdsp/AETHERSDR-PATCHES.md) makes plan_fircore() build the
-//    minimum-phase workspace only when the core's mp flag is set, and
-//    calc_fircore() build it on first use. WdspChannel::open() calls RXASetNC()
-//    BEFORE RXASetMP(), so with minimumPhase = true the six cores RXASetNC()
-//    re-plans are planned at mp == 0 and only then flipped on: this test is the
-//    one that walks the lazy-construction path. Before the patch the workspace
-//    was always there; after it, getting the laziness wrong is a null
-//    dereference inside mp_imp_exec() on the very first mask build.
-//
-// 2. Minimum phase must COST something. If the workspace were still built
-//    unconditionally, a minimum-phase channel and a linear-phase one would hold
-//    the same number of live WDSP allocations, and (1) could pass on a patch
-//    that achieved nothing. The comparison is stated as a relation rather than
-//    a count so it does not re-hardcode WDSP's internal fircore inventory.
+// Minimum phase must produce audio and make more design allocations during
+// open than linear phase. Patch 10 avoids scratch for unused cores; patch 14
+// releases it after use. Counting allocations made, rather than held, keeps
+// this check sensitive to eager construction. runLeakChecked() pins teardown.
 bool runMinimumPhaseWorkspaceTest()
 {
     WdspChannel::Config config;
@@ -1237,15 +1219,18 @@ bool runMinimumPhaseWorkspaceTest()
     // under test is the large one.
     config.filterTaps = 8192;
 
-    // Live WDSP allocations held by one open channel, and the audio it makes.
+    // WDSP allocations made while opening one channel, and the audio it makes.
     // Both are taken while the channel is alive; it is destroyed before return,
     // so runLeakChecked() still sees a clean balance.
     const auto openAndMeasure = [&](bool minimumPhase,
-                                    uint64_t* liveAllocations,
+                                    uint64_t* allocationsMade,
                                     double* toneRms) -> bool {
         WdspChannel::Config channelConfig = config;
         channelConfig.minimumPhase = minimumPhase;
-        const uint64_t before = WdspChannel::outstandingAllocationsForTest();
+        // Patch 14 releases design scratch before open returns. Count the
+        // allocations made so patch 10's lazy construction remains observable:
+        // the minimum-phase open designs more cores than the linear one.
+        const uint64_t before = WdspChannel::allocationSequenceForTest();
         std::string error;
         std::unique_ptr<WdspChannel> channel =
             WdspChannel::create(channelConfig, &error);
@@ -1254,7 +1239,7 @@ bool runMinimumPhaseWorkspaceTest()
                       << minimumPhase << ": " << error << '\n';
             return false;
         }
-        *liveAllocations = WdspChannel::outstandingAllocationsForTest() - before;
+        *allocationsMade = WdspChannel::allocationSequenceForTest() - before;
 
         std::vector<float> inputI(config.inputBlockSize);
         std::vector<float> inputQ(config.inputBlockSize);
@@ -1300,8 +1285,8 @@ bool runMinimumPhaseWorkspaceTest()
         return false;
     }
     if (minimumAllocations <= linearAllocations) {
-        std::cerr << "FAIL: minimum phase cost no extra WDSP allocations "
-                     "(linear=" << linearAllocations
+        std::cerr << "FAIL: a minimum-phase open made no more WDSP allocations "
+                     "than a linear one (linear=" << linearAllocations
                   << " minimum=" << minimumAllocations
                   << ") - the minimum-phase workspace is still being built "
                      "for cores that do not use it\n";
@@ -3540,16 +3525,16 @@ bool runSquelchRoutingTest()
                  nearly(WdspChannel::fmSquelchThresholdForLevel(100), 0.01) &&
                  nearly(WdspChannel::fmSquelchThresholdForLevel(250), 0.01),
                  "FM squelch map is not 10^(-2*level/100)") && ok;
-    ok = require(nearly(WdspChannel::levelSquelchThresholdDbfsForLevel(1), -139.3) &&
-                 nearly(WdspChannel::levelSquelchThresholdDbfsForLevel(50), -105.0) &&
-                 nearly(WdspChannel::levelSquelchThresholdDbfsForLevel(100), -70.0) &&
-                 nearly(WdspChannel::levelSquelchThresholdDbfsForLevel(-5), -140.0),
+    ok = require(nearly(WdspChannel::levelSquelchThresholdDbfsForLevel(1, 0.0), -139.3) &&
+                 nearly(WdspChannel::levelSquelchThresholdDbfsForLevel(50, 0.0), -105.0) &&
+                 nearly(WdspChannel::levelSquelchThresholdDbfsForLevel(100, 0.0), -70.0) &&
+                 nearly(WdspChannel::levelSquelchThresholdDbfsForLevel(-5, 0.0), -140.0),
                  "level squelch map is not -140 + 0.7*level dBFS") && ok;
-    // HL2-measured (#5982): a strong broadcast carrier (-96 .. -88 dBFS at
-    // amsq's capture point) must clear the midpoint; the no-signal floor
-    // (-120 .. -112) must not.
-    ok = require(WdspChannel::levelSquelchThresholdDbfsForLevel(50) < -96.0 &&
-                 WdspChannel::levelSquelchThresholdDbfsForLevel(50) > -112.0,
+    // HL2-measured at offset 0 (LNA -12 dB, #5982/#6092): a strong broadcast
+    // carrier (-96 .. -88 dBFS at amsq's capture point) must clear the
+    // midpoint; the no-signal floor (-120 .. -112) must not.
+    ok = require(WdspChannel::levelSquelchThresholdDbfsForLevel(50, 0.0) < -96.0 &&
+                 WdspChannel::levelSquelchThresholdDbfsForLevel(50, 0.0) > -112.0,
                  "the level map's midpoint does not sit between the measured "
                  "HL2 noise floor and a strong broadcast carrier") && ok;
 
@@ -3595,7 +3580,7 @@ bool runSquelchRoutingTest()
                  "open() did not apply the squelch at all") && ok;
     expect(Stage::Level, false, -126.0, "a fresh channel is not squelch-off at the default level");
 
-    ok = require(channel->setSquelch(true, 50), "setSquelch was refused") && ok;
+    ok = require(channel->setSquelch(true, 50, 0.0), "setSquelch was refused") && ok;
     expect(Stage::Level, true, -105.0, "USB squelch on did not run amsq alone");
     ok = require(channel->setMode(WdspChannel::Mode::Am), "setMode(AM) refused") && ok;
     expect(Stage::Level, true, -105.0, "AM did not keep the squelch on amsq");
@@ -3607,20 +3592,31 @@ bool runSquelchRoutingTest()
     expect(Stage::None, false, 0.0, "DIGU left a squelch stage running");
     ok = require(channel->setMode(WdspChannel::Mode::Fm), "setMode(FM) refused") && ok;
     expect(Stage::Fm, true, 0.1, "returning to FM did not restore fmsq");
-    ok = require(channel->setSquelch(true, 80), "setSquelch level change refused") && ok;
+    ok = require(channel->setSquelch(true, 80, 0.0), "setSquelch level change refused") && ok;
     expect(Stage::Fm, true, std::pow(10.0, -1.6), "a level change did not reach fmsq");
     ok = require(channel->config().squelchEnabled && channel->config().squelchLevel == 80,
                  "the squelch pair is not in the channel's Config") && ok;
+    // The offset moves amsq's gate and only amsq's (#6092).
+    ok = require(nearly(WdspChannel::levelSquelchThresholdDbfsForLevel(50, 32.0), -73.0),
+                 "the level map does not add its offset") && ok;
+    ok = require(channel->setSquelch(true, 80, 32.0), "setSquelch with an offset refused") && ok;
+    expect(Stage::Fm, true, std::pow(10.0, -1.6), "the offset moved fmsq's threshold");
+    ok = require(channel->setMode(WdspChannel::Mode::Usb), "setMode(USB) refused") && ok;
+    expect(Stage::Level, true, -140.0 + 0.7 * 80 + 32.0, "the offset did not reach amsq");
+    ok = require(!channel->setSquelch(true, 80, std::nan("")),
+                 "a non-finite offset was accepted") && ok;
+    ok = require(channel->setSquelch(true, 80, 0.0) && channel->setMode(WdspChannel::Mode::Fm),
+                 "restoring FM/80 refused") && ok;
 
     // LEVEL 0 RUNS NOTHING, in every family: "0 = open" is structural.
     for (const auto mode : {WdspChannel::Mode::Fm, WdspChannel::Mode::Am,
                             WdspChannel::Mode::Usb, WdspChannel::Mode::Lsb}) {
-        ok = require(channel->setMode(mode) && channel->setSquelch(true, 0),
+        ok = require(channel->setMode(mode) && channel->setSquelch(true, 0, 0.0),
                      "level-0 setup refused") && ok;
         const auto& a = channel->appliedSquelch();
         ok = require(!a.fmRun && !a.amRun, "squelch on at level 0 ran a stage") && ok;
     }
-    ok = require(channel->setMode(WdspChannel::Mode::Fm) && channel->setSquelch(true, 80),
+    ok = require(channel->setMode(WdspChannel::Mode::Fm) && channel->setSquelch(true, 80, 0.0),
                  "restore FM/80 refused") && ok;
 
     // Across a rebuild: reconfigure() frees the stages; the Config carries the
@@ -3633,9 +3629,9 @@ bool runSquelchRoutingTest()
     }
     expect(Stage::Fm, true, std::pow(10.0, -1.6), "reconfigure() lost the squelch");
 
-    ok = require(channel->setSquelch(false, 80), "squelch off refused") && ok;
+    ok = require(channel->setSquelch(false, 80, 0.0), "squelch off refused") && ok;
     expect(Stage::Fm, false, std::pow(10.0, -1.6), "squelch off left fmsq running");
-    ok = require(channel->setSquelch(true, 400) && channel->config().squelchLevel == 100,
+    ok = require(channel->setSquelch(true, 400, 0.0) && channel->config().squelchLevel == 100,
                  "an out-of-range level was not clamped to 100") && ok;
 
     WdspChannel::Config tx;
@@ -3646,7 +3642,7 @@ bool runSquelchRoutingTest()
     if (!require(transmit != nullptr, "squelch test failed to open a TX channel")) {
         return false;
     }
-    ok = require(!transmit->setSquelch(true, 50),
+    ok = require(!transmit->setSquelch(true, 50, 0.0),
                  "a transmit channel accepted a receive squelch") && ok;
     return ok;
 }
@@ -3799,6 +3795,74 @@ bool runSquelchGateTest()
     return ok;
 }
 
+// amsq opens on a carrier's MAGNITUDE: an AM carrier whose mean magnitude
+// sits 2 dB above the level map's threshold opens it, 2 dB below does not, at
+// two offsets. This is the amsq side of the pan line's +6.02 dB carrier term
+// (Hl2Spectrum::kToneGainDb pins the pan side in hl2_squelch_scale_test).
+bool runSquelchCarrierThresholdTest()
+{
+    constexpr int kRate = 48000;
+    constexpr std::size_t kBlock = 256;
+    constexpr std::size_t kBlocks = 140;
+    constexpr std::size_t kMeasureFrom = 60;
+    const auto audioFor = [&](bool squelchOn, double offsetDb, double carrierDbfs) {
+        WdspChannel::Config config;
+        config.inputBlockSize = kBlock;
+        config.dspBlockSize = kBlock;
+        config.mode = WdspChannel::Mode::Am;
+        config.filterLowHz = -4000.0;
+        config.filterHighHz = 4000.0;
+        config.agcMode = 3;
+        config.maximumAgcGainDb = 39.0;
+        config.blockForOutput = true;
+        config.squelchEnabled = squelchOn;
+        config.squelchLevel = 50;
+        config.levelSquelchOffsetDb = offsetDb;
+        std::string error;
+        auto ch = WdspChannel::create(config, &error);
+        if (!ch) {
+            return -1.0;
+        }
+        // 50% AM: |A (1 + 0.5 sin)| averages to A, the magnitude amsq tracks.
+        const double amp = std::pow(10.0, carrierDbfs / 20.0);
+        std::vector<float> i(kBlock), q(kBlock, 0.0f), left(ch->outputBlockSize()),
+            right(ch->outputBlockSize());
+        double energy = 0.0;
+        std::size_t clock = 0;
+        for (std::size_t block = 0; block < kBlocks; ++block) {
+            for (std::size_t n = 0; n < kBlock; ++n) {
+                const double t = static_cast<double>(clock + n) / kRate;
+                i[n] = static_cast<float>(
+                    amp * (1.0 + 0.5 * std::sin(2.0 * std::numbers::pi * 1000.0 * t)));
+            }
+            clock += kBlock;
+            if (ch->processIq(i, q, left, right) != WdspChannel::ProcessResult::Ok) {
+                return -1.0;
+            }
+            if (block >= kMeasureFrom) {
+                energy += rms(left);
+            }
+        }
+        return energy;
+    };
+    bool ok = true;
+    for (const double offsetDb : {0.0, 32.0}) {
+        const double gate = WdspChannel::levelSquelchThresholdDbfsForLevel(50, offsetDb);
+        const double above = audioFor(true, offsetDb, gate + 2.0);
+        const double aboveRef = audioFor(false, offsetDb, gate + 2.0);
+        const double below = audioFor(true, offsetDb, gate - 2.0);
+        const double belowRef = audioFor(false, offsetDb, gate - 2.0);
+        std::cout << "amsq carrier gate " << gate << " dBFS: +2 dB " << above << " (ref "
+                  << aboveRef << "), -2 dB " << below << " (ref " << belowRef << ")\n";
+        ok = require(above >= 0.0 && aboveRef > 0.0 && below >= 0.0 && belowRef > 0.0,
+                     "carrier threshold measurement failed to run") && ok;
+        ok = require(above > 0.5 * aboveRef,
+                     "a carrier 2 dB above the gate did not open amsq") && ok;
+        ok = require(below < 1.0e-9, "a carrier 2 dB below the gate opened amsq") && ok;
+    }
+    return ok;
+}
+
 bool runTransmitDiscardTest()
 {
     WdspChannel::Config config = liveTransmitConfig(WdspChannel::Mode::Usb, 300.0, 2700.0);
@@ -3890,6 +3954,7 @@ int main()
     check(runLeakChecked("FM deviation test", runFmDeviationTest));
     check(runLeakChecked("squelch routing test", runSquelchRoutingTest));
     check(runLeakChecked("squelch gate test", runSquelchGateTest));
+    check(runLeakChecked("squelch carrier threshold test", runSquelchCarrierThresholdTest));
     // LAST, and deliberately so: see the ordering note above. Anything added
     // later belongs ABOVE this line, not below it.
     check(runLeakChecked("close-after-stopped-clocking test",

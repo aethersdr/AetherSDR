@@ -132,6 +132,9 @@ int main(int argc, char** argv)
         check(c.hasDdcPanEdgeRolloff,
               "hasDdcPanEdgeRolloff true -- ANAN's DDC has a real edge roll-off");
         check(c.backendPanAveraging.has_value()
+                  && !c.backendPanAveraging->clientPersistsAveraging
+                  && c.backendPanAveraging->averageDescription.isEmpty()
+                  && c.backendPanAveraging->weightedDescription.isEmpty()
                   && c.backendPanAveraging->msPerAverageStep == 10,
               "backendPanAveraging engaged, 10 ms per FFT AVG step -- the WDSP analyzer averages");
         check(c.tuningMinHz == 0.0 && c.tuningMaxHz == 0.0,

@@ -45,6 +45,8 @@ std::mutex g_channelMutex;
 // entry point runs from a static constructor. Every WDSP control call here
 // also takes it (RXASetNC/RXASetMP re-plan).
 std::mutex& g_setupMutex = AetherSDR::fftwPlannerMutex();
+// apfshadow.c's `selection`: 0 double-pole, 1 matched, 2 gaussian, 3 bi-quad.
+constexpr int kApfSelectionDoublePole = 0;
 std::array<bool, kWdspChannelCount> g_channelsInUse {};
 
 // WDSP plans FFTs with FFTW_PATIENT (~220 planner calls over 11 distinct
@@ -399,7 +401,7 @@ WdspChannel::ProcessResult WdspChannel::processIq(std::span<const float> inputI,
         return ProcessResult::Busy;
     }
 
-    const uint64_t allocationsBefore = wdspPortAllocationSequence();
+    const uint64_t allocationsBefore = wdspPortThreadAllocationSequence();
     int wdspError = 0;
 
     // ── Noise blanker, ahead of the channel ───────────────────────────────
@@ -448,7 +450,7 @@ WdspChannel::ProcessResult WdspChannel::processIq(std::span<const float> inputI,
                const_cast<float*>(channelI),
                const_cast<float*>(channelQ),
                outputLeft.data(), outputRight.data(), &wdspError);
-    const uint64_t allocationsAfter = wdspPortAllocationSequence();
+    const uint64_t allocationsAfter = wdspPortThreadAllocationSequence();
     m_callbacksInFlight.fetch_sub(1, std::memory_order_seq_cst);
 
     if (allocationsAfter != allocationsBefore) {
@@ -528,6 +530,9 @@ bool WdspChannel::reconfigure(const Config& config, std::string* error) noexcept
 
 bool WdspChannel::setMode(Mode mode) noexcept
 {
+    // An opt-in FM channel changes family through a complete reconfiguration;
+    // otherwise its panel normalization would leak into another demodulator.
+    if (m_config.fmReceive && mode != Mode::Fm) { return false; }
     if (!beginControlOperation()) {
         return false;
     }
@@ -582,7 +587,9 @@ bool WdspChannel::setFmDeviation(double deviationHz) noexcept
     // detector emits inf. See Config::kMinFmDeviationHz.
     if (m_config.direction != Direction::Receive || !std::isfinite(deviationHz) ||
         deviationHz < Config::kMinFmDeviationHz ||
-        deviationHz > Config::kMaxFmDeviationHz || !beginControlOperation()) {
+        deviationHz > Config::kMaxFmDeviationHz ||
+        (m_config.fmReceive && deviationHz >= m_config.dspSampleRate / 2.0) ||
+        !beginControlOperation()) {
         return false;
     }
     {
@@ -595,13 +602,15 @@ bool WdspChannel::setFmDeviation(double deviationHz) noexcept
     return true;
 }
 
-bool WdspChannel::setSquelch(bool on, int level) noexcept
+bool WdspChannel::setSquelch(bool on, int level, double levelOffsetDb) noexcept
 {
-    if (m_config.direction != Direction::Receive || !beginControlOperation()) {
+    if (m_config.direction != Direction::Receive || !std::isfinite(levelOffsetDb)
+        || !beginControlOperation()) {
         return false;
     }
     m_config.squelchEnabled = on;
     m_config.squelchLevel = std::clamp(level, 0, 100);
+    m_config.levelSquelchOffsetDb = levelOffsetDb;
     {
         const std::scoped_lock setupLock(g_setupMutex);
         applySquelchLocked(m_config.mode);
@@ -644,12 +653,12 @@ double WdspChannel::fmSquelchThresholdForLevel(int level) noexcept
     return std::pow(10.0, -2.0 * clamped / 100.0);
 }
 
-double WdspChannel::levelSquelchThresholdDbfsForLevel(int level) noexcept
+double WdspChannel::levelSquelchThresholdDbfsForLevel(int level, double offsetDb) noexcept
 {
-    // Fitted to HL2 measurements (#5982): level 50 sits between the no-signal
-    // floor (-120..-112 dBFS) and a strong broadcast carrier (-96..-88).
+    // Fitted to HL2 measurements at the offset-0 gain (#5982, #6092): level 50
+    // sits between the no-signal floor and a strong broadcast carrier.
     const double clamped = std::clamp(static_cast<double>(level), 0.0, 100.0);
-    return -140.0 + 0.7 * clamped;
+    return kLevelSquelchBaseDbfs + kLevelSquelchDbPerStep * clamped + offsetDb;
 }
 
 void WdspChannel::applySquelchLocked(Mode mode) noexcept
@@ -675,7 +684,8 @@ void WdspChannel::applySquelchLocked(Mode mode) noexcept
         applied.fmRun = run;
         break;
     case SquelchStage::Level:
-        applied.threshold = levelSquelchThresholdDbfsForLevel(level);
+        applied.threshold =
+            levelSquelchThresholdDbfsForLevel(level, m_config.levelSquelchOffsetDb);
         SetRXAAMSQThreshold(m_channelId, applied.threshold);
         applied.amRun = run;
         break;
@@ -709,6 +719,70 @@ bool WdspChannel::setAgc(int agcMode, double maximumGainDb) noexcept
     }
     m_config.agcMode = agcMode;
     m_config.maximumAgcGainDb = maximumGainDb;
+    endControlOperation();
+    return true;
+}
+
+bool WdspChannel::setAgcFixedGain(double fixedGainDb) noexcept
+{
+    if (m_config.direction != Direction::Receive || !std::isfinite(fixedGainDb) ||
+        !beginControlOperation()) {
+        return false;
+    }
+    {
+        const std::scoped_lock setupLock(g_setupMutex);
+        SetRXAAGCFixed(m_channelId, fixedGainDb);
+    }
+    // Stored so setAgc() and open() push the operator's value, not the
+    // construction default: applyRxAgc() re-sends it on every mode change.
+    m_config.agcFixedGainDb = fixedGainDb;
+    endControlOperation();
+    return true;
+}
+
+bool WdspChannel::apfParametersValid(double centerHz, double bandwidthHz,
+                                     double gain) noexcept
+{
+    // The double-pole design divides by the centre (H(f) = (bw/fc) / ...), and
+    // calc_dpole_nc sizes its FIR from the bandwidth; a zero or non-finite
+    // value in either is a filter WDSP cannot build. A zero gain is not a
+    // filter at all — it is a mute that looks like an APF.
+    return std::isfinite(centerHz) && std::isfinite(bandwidthHz) && std::isfinite(gain)
+           && centerHz > 0.0 && bandwidthHz > 0.0 && gain > 0.0;
+}
+
+bool WdspChannel::setApf(bool enabled, double centerHz, double bandwidthHz,
+                         double gain) noexcept
+{
+    if (m_config.direction != Direction::Receive ||
+        !apfParametersValid(centerHz, bandwidthHz, gain)) {
+        return false;
+    }
+    // Unchanged: return before the handshake and g_setupMutex (the global FFTW
+    // planner lock, held on the EP2-pacing I/O thread), like setMinimumPhase().
+    // applyApf() runs on every mode change, mostly to keep an off stage off.
+    // Exact equality holds: m_config is only what an accepted setApf() or
+    // open() gave WDSP, and nothing else writes SPCW.
+    if (enabled == m_config.apfEnabled && centerHz == m_config.apfCenterHz
+        && bandwidthHz == m_config.apfBandwidthHz && gain == m_config.apfGain) {
+        return true;
+    }
+    if (!beginControlOperation()) {
+        return false;
+    }
+    {
+        const std::scoped_lock setupLock(g_setupMutex);
+        // Shape before run: switching on first would run one block through
+        // whatever design the stage last held.
+        SetRXASPCWFreq(m_channelId, centerHz);
+        SetRXASPCWBandwidth(m_channelId, bandwidthHz);
+        SetRXASPCWGain(m_channelId, gain);
+        SetRXASPCWRun(m_channelId, enabled ? 1 : 0);
+    }
+    m_config.apfEnabled = enabled;
+    m_config.apfCenterHz = centerHz;
+    m_config.apfBandwidthHz = bandwidthHz;
+    m_config.apfGain = gain;
     endControlOperation();
     return true;
 }
@@ -1019,6 +1093,12 @@ bool WdspChannel::validateConfig(const Config& config, std::string* error) noexc
         setError(error, "WDSP filter edges are invalid");
         return false;
     }
+    if (config.fmReceive && (config.direction != Direction::Receive || config.mode != Mode::Fm
+        || !std::isfinite(config.fmDeviationHz) || config.fmDeviationHz <= 0.0
+        || config.fmDeviationHz >= config.dspSampleRate / 2.0)) {
+        setError(error, "WDSP receive FM deviation is invalid for this channel");
+        return false;
+    }
     if (config.direction == Direction::Transmit && config.mode == Mode::Wbfm) {
         setError(error, "WDSP TX does not define a WBFM mode");
         return false;
@@ -1051,6 +1131,17 @@ bool WdspChannel::validateConfig(const Config& config, std::string* error) noexc
          config.fmDeviationHz > Config::kMaxFmDeviationHz)) {
         setError(error,
             "WDSP FM deviation is outside Config::kMinFmDeviationHz..kMaxFmDeviationHz");
+        return false;
+    }
+    // Same door as setApf(), for the same reason as the deviation above: open()
+    // pushes these straight into the peaking-filter design.
+    if (config.direction == Direction::Receive &&
+        !apfParametersValid(config.apfCenterHz, config.apfBandwidthHz, config.apfGain)) {
+        setError(error, "WDSP APF centre, bandwidth and gain must be positive and finite");
+        return false;
+    }
+    if (config.direction == Direction::Receive && !std::isfinite(config.agcFixedGainDb)) {
+        setError(error, "WDSP AGC fixed gain must be finite");
         return false;
     }
     return true;
@@ -1167,6 +1258,15 @@ void WdspChannel::open() noexcept
                 m_config.blockForOutput ? 1 : 0);
     if (m_config.direction == Direction::Receive) {
         SetRXAMode(m_channelId, wdspMode(m_config.mode));
+        if (m_config.fmReceive) {
+            // Upstream RX panel gain defaults to 4 and the FM limiter is off.
+            // Together with FM de-emphasis this clips valid modulation at
+            // unity monitor gain. Normalize inside the FM chain, including
+            // pre-monitor taps. FM bypasses the main RX AGC.
+            SetRXAPanelGain1(m_channelId, 1.0);
+            SetRXAFMLimGain(m_channelId, 0.0);
+            SetRXAFMLimRun(m_channelId, 1);
+        }
         SetRXABandpassFreqs(m_channelId, m_config.filterLowHz, m_config.filterHighHz);
         RXANBPSetFreqs(m_channelId, m_config.filterLowHz, m_config.filterHighHz);
         applyRxAgc(m_channelId, m_config.agcMode, m_config.maximumAgcGainDb,
@@ -1184,6 +1284,15 @@ void WdspChannel::open() noexcept
         // run = 0 and close() frees them, so a reconfigure() would otherwise
         // open the operator's squelch without anything saying so.
         applySquelchLocked(m_config.mode);
+        // close() frees the peaking stages, so the APF is re-pushed on every
+        // open. The selection is stated, not inherited: everything here assumes
+        // the double-pole (its centre divide, calc_dpole_nc sizing, the mode-2
+        // I-into-Q copy that lets one positive centre serve CWL and CWU).
+        SetRXASPCWSelection(m_channelId, kApfSelectionDoublePole);
+        SetRXASPCWFreq(m_channelId, m_config.apfCenterHz);
+        SetRXASPCWBandwidth(m_channelId, m_config.apfBandwidthHz);
+        SetRXASPCWGain(m_channelId, m_config.apfGain);
+        SetRXASPCWRun(m_channelId, m_config.apfEnabled ? 1 : 0);
     } else {
         SetTXAMode(m_channelId, wdspMode(m_config.mode));
         SetTXABandpassFreqs(m_channelId, m_config.filterLowHz, m_config.filterHighHz);

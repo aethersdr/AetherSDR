@@ -1,15 +1,21 @@
 #include "TestSettingsProfile.h"
 #include "core/ShortcutManager.h"
 #include "gui/PttHoldKeyStep.h"
+#include "gui/ShortcutRefusalNotice.h"
+#include "gui/StatusBarNotice.h"
 #include "gui/TxKeyActivationGuard.h"
 
 #include <QAccessible>
 #include <QApplication>
 #include <QDialog>
+#include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QScrollArea>
 #include <QSlider>
+#include <QStatusBar>
 #include <QTest>
+#include <QVBoxLayout>
 #include <QWidget>
 
 #include <cstdio>
@@ -36,6 +42,19 @@ void focus(QWidget& window, QWidget* child = nullptr)
     (child ? child : &window)->setFocus();
     QApplication::processEvents();
 }
+
+// Stands in for the main window: counts the presses no child accepted.
+class UnacceptedKeyProbe : public QWidget {
+public:
+    int presses{0};
+
+protected:
+    void keyPressEvent(QKeyEvent* event) override
+    {
+        ++presses;
+        QWidget::keyPressEvent(event);
+    }
+};
 
 void press(Qt::Key key)
 {
@@ -396,6 +415,192 @@ int main(int argc, char** argv)
                "shortcuts off: a button inside a marked TX control is refused (parent chain)");
 
         app.removeEventFilter(&route);
+    }
+
+    // #5483 item 2: with shortcuts off, the first refused bound key in a
+    // session is announced once. Window-management keys are not refused.
+    {
+        ShortcutManager refusal;
+        refusal.registerAction("mox_toggle", "MOX Toggle", "TX",
+            QKeySequence(Qt::Key_T), [] {}, false, true);
+        refusal.registerAction("window_fullscreen", "Full screen", "Display",
+            QKeySequence(Qt::Key_F11), [] {}, false, false,
+            ShortcutManager::ShortcutPolicy::WindowManagement);
+        refusal.registerAction("keying_wm", "Keying asks for WM", "TX",
+            QKeySequence(Qt::Key_F9), [] {}, false, true,
+            ShortcutManager::ShortcutPolicy::WindowManagement);
+        expect(refusal.operatingActionForKey(QKeySequence(Qt::Key_T)) != nullptr,
+               "refusal: an operating binding resolves");
+        expect(refusal.operatingActionForKey(QKeySequence(Qt::Key_F11)) == nullptr,
+               "refusal: a window-management binding is not governed by the switch");
+        expect(refusal.operatingActionForKey(QKeySequence(Qt::Key_F9)) != nullptr,
+               "refusal: a keying action asking for window management stays operating");
+        expect(refusal.operatingActionForKey(QKeySequence(Qt::Key_Q)) == nullptr,
+               "refusal: an unbound key resolves to nothing");
+
+        const QKeyEvent tPress(QEvent::KeyPress, Qt::Key_T, Qt::NoModifier);
+        const QKeyEvent tRepeat(QEvent::KeyPress, Qt::Key_T, Qt::NoModifier,
+                                QString(), /*autorep=*/true);
+        const QKeyEvent tRelease(QEvent::KeyRelease, Qt::Key_T, Qt::NoModifier);
+        const ShortcutManager::Action* bound = refusal.operatingActionForKey(
+            AetherSDR::shortcutSequenceFromKeyEvent(&tPress));
+
+        AetherSDR::ShortcutRefusalNotice notice;
+        const ShortcutManager::Action* unbound = nullptr;
+        // take(event, shortcutsEnabled, inputCaptured, noticeVisible, action)
+        expect(!notice.take(&tPress, /*shortcutsEnabled=*/true, false, true, bound),
+               "refusal: no notice while shortcuts are on");
+        expect(!notice.take(&tPress, false, /*inputCaptured=*/true, true, bound),
+               "refusal: no notice while a text field or slider holds the keys");
+        expect(!notice.take(&tPress, false, false, true, unbound),
+               "refusal: no notice for an unbound key");
+        expect(!notice.take(&tRelease, false, false, true, bound),
+               "refusal: no notice on a key release");
+        expect(!notice.take(&tRepeat, false, false, true, bound),
+               "refusal: no notice on auto-repeat");
+        expect(!notice.take(&tPress, false, false, /*noticeVisible=*/false, bound)
+                   && !notice.given(),
+               "refusal: a notice that cannot be shown is not spent");
+        expect(!notice.given(), "refusal: nothing given before a refused press");
+        const ShortcutManager::Action* refused =
+            notice.take(&tPress, false, false, true, bound);
+        expect(bound && refused == bound
+                   && refused->displayName == QLatin1String("MOX Toggle"),
+               "refusal: the first bound press hands back the action it refused");
+        expect(notice.given() && !notice.take(&tPress, false, false, true, bound),
+               "refusal: the notice is given once per session");
+
+        // The capture test follows the action: a hold key yields to text entry
+        // only, as its handler does; a QShortcut action to every capture.
+        using AetherSDR::shortcutRefusalInputCaptured;
+        expect(!shortcutRefusalInputCaptured(/*holdKeyAction=*/true,
+                   /*textEntryCaptured=*/false, /*shortcutInputCaptured=*/true),
+               "refusal: a hold key is noticed over a combo or a slider lease");
+        expect(shortcutRefusalInputCaptured(true, true, true),
+               "refusal: a hold key typed into a text field is not noticed");
+        expect(shortcutRefusalInputCaptured(false, false, true),
+               "refusal: a QShortcut key under a combo or lease is not noticed");
+        expect(!shortcutRefusalInputCaptured(false, false, false),
+               "refusal: a QShortcut key with nothing capturing is noticed");
+    }
+
+    // The notice is raised from the window's keyPressEvent(), which Qt calls
+    // only for a key no child accepted. These pin that premise on this Qt.
+    {
+        UnacceptedKeyProbe probe;
+        auto* layout = new QVBoxLayout(&probe);
+        auto* button = new QPushButton(QStringLiteral("RX control"));
+        auto* plain = new QWidget;
+        plain->setFocusPolicy(Qt::StrongFocus);
+        auto* scroll = new QScrollArea;
+        auto* scrolled = new QWidget;
+        scrolled->setFocusPolicy(Qt::StrongFocus);
+        scroll->setWidget(scrolled);
+        layout->addWidget(button);
+        layout->addWidget(plain);
+        layout->addWidget(scroll);
+        QDialog other(&probe);
+        QPushButton otherButton(&other);
+
+        focus(probe, button);
+        press(Qt::Key_Space);
+        expect(probe.presses == 0,
+               "refusal: Space a focused button accepts does not reach the window");
+        press(Qt::Key_T);
+        expect(probe.presses == 1,
+               "refusal: a key the focused button ignores reaches the window once");
+        focus(probe, plain);
+        press(Qt::Key_Space);
+        press(Qt::Key_Left);
+        expect(probe.presses == 3,
+               "refusal: Space and an arrow nothing accepts reach the window");
+        focus(probe, scrolled);
+        press(Qt::Key_Left);
+        expect(probe.presses == 3,
+               "refusal: an arrow inside a scroll area is taken by the scroll area");
+        press(Qt::Key_Space);
+        expect(probe.presses == 4,
+               "refusal: Space inside a scroll area reaches the window");
+        focus(other, &otherButton);
+        press(Qt::Key_T);
+        expect(probe.presses == 4,
+               "refusal: a key in another top-level window does not reach the window");
+
+        // The TX key guard consumes its key; its site checks the window itself.
+        using AetherSDR::shortcutRefusalReceiverInWindow;
+        expect(shortcutRefusalReceiverInWindow(button, &probe),
+               "refusal: a guarded button in the window is noticed");
+        expect(!shortcutRefusalReceiverInWindow(&otherButton, &probe),
+               "refusal: a guarded button in another top-level window is not noticed");
+        expect(!shortcutRefusalReceiverInWindow(nullptr, &probe)
+                   && !shortcutRefusalReceiverInWindow(button, nullptr),
+               "refusal: no receiver or no window is not noticed");
+    }
+
+    // The notice sits in a permanent label, so the status bar's other widgets
+    // stay on screen; showMessage() hides them, which the control shows.
+    {
+        QWidget host;
+        auto* layout = new QVBoxLayout(&host);
+        auto* bar = new QStatusBar;
+        bar->setSizeGripEnabled(false);
+        auto* indicator = new QLabel(QStringLiteral("TX"));
+        bar->addWidget(indicator, 1);
+        layout->addStretch(1);
+        layout->addWidget(bar);
+        host.resize(900, 120);
+        focus(host);
+        const int barHeight = bar->height();
+        const int hostMinWidth = host.minimumSizeHint().width();
+
+        AetherSDR::StatusBarNoticeLabel notice(bar);
+        QApplication::processEvents();
+        expect(!notice.isVisible() && indicator->isVisible(),
+               "notice: the label is hidden until a notice is shown");
+        expect(host.minimumSizeHint().width() <= hostMinWidth + 16,
+               "notice: the hidden label does not widen the window");
+
+        const QString text = QStringLiteral("Keyboard shortcuts are off");
+        notice.showNotice(text, 150);
+        QApplication::processEvents();
+        expect(notice.isVisible() && notice.text() == text,
+               "notice: the label shows the text");
+        expect(notice.accessibleName() == text,
+               "notice: the label's accessible name is the same text");
+        expect(indicator->isVisible() && bar->currentMessage().isEmpty(),
+               "notice: the status bar's other widgets stay visible");
+        expect(bar->height() == barHeight,
+               "notice: the status bar keeps its height");
+        expect(host.minimumSizeHint().width() <= hostMinWidth + 16,
+               "notice: the shown label does not widen the window");
+        expect(notice.geometry().right() <= bar->width()
+                   && notice.geometry().left() >= indicator->geometry().right(),
+               "notice: the label sits beside the indicator, inside the bar");
+        QTest::qWait(400);
+        expect(!notice.isVisible() && notice.text().isEmpty()
+                   && notice.accessibleName().isEmpty(),
+               "notice: the label hides and clears when its time is up");
+
+        // A notice wider than the bar is clipped; it never resizes the window.
+        host.resize(hostMinWidth + 40, 120);
+        QApplication::processEvents();
+        const int narrowWidth = host.width();
+        notice.showNotice(text.repeated(8), 150);
+        QApplication::processEvents();
+        expect(host.width() == narrowWidth && indicator->isVisible()
+                   && indicator->width() >= indicator->minimumSizeHint().width(),
+               "notice: a notice wider than the bar leaves the window and indicator alone");
+        notice.clearNotice();
+
+        // Positive control: the same bar, with showMessage(), loses the indicator.
+        bar->showMessage(text, 150);
+        QApplication::processEvents();
+        expect(!indicator->isVisible(),
+               "notice control: showMessage() hides the indicator");
+        bar->clearMessage();
+        QApplication::processEvents();
+        expect(indicator->isVisible(), "notice control: the indicator returns");
+        bar->removeWidget(&notice);
     }
     return failures == 0 ? 0 : 1;
 }

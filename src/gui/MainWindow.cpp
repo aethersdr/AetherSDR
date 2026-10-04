@@ -14,6 +14,7 @@
 #include "MainWindowHelpers.h"
 #include "WindowGeometryRestore.h"
 
+#include "models/Ctr2ProxyModel.h"
 #include "models/CwDecodeSettings.h"
 #include "DisplaySettings.h"
 #ifdef HAVE_MQTT
@@ -49,8 +50,10 @@
 #include "core/StreamStatus.h"
 #include "models/PanadapterModel.h"
 #include "models/RadioStatusOwnership.h"
+#include "models/ReceiverSlotCount.h"
 #include "models/Nr2SettingsModel.h"
 #include "PanZoomModeGate.h"
+#include "ClientFftSmoothingGate.h"
 #include "SpectrumWidget.h"
 #ifdef AETHER_GPU_SPECTRUM
 #include <QRhiWidget>
@@ -1109,6 +1112,8 @@ MainWindow::MainWindow(QWidget* parent)
     , m_session(m_sessions.front().get())
     , m_radioModel(m_session->radioModel())
 {
+    m_splitQsySettings = AetherSDR::SplitQsySettings::load();
+
     // Status bar is the only top-level shell besides the spectrum / applet
     // rail / titlebar that the operator can directly retheme.  Declare its
     // container here — statusBar() lazy-creates the QStatusBar on first
@@ -1291,30 +1296,10 @@ MainWindow::MainWindow(QWidget* parent)
     });
     // Radio-Side recording needs a radio-side recorder to reach; where there is
     // none, this recorder records instead (recordsOnClient(),
-    // QsoRecordStartPolicy.h). Read live, like the provider above.
+    // QsoRecordStartPolicy.h). Read live, like the provider above. Radio Setup
+    // dims Radio Side there and shows Client Side in effect.
     m_qsoRecorder->setRadioSideRecordingReachableProvider([this]() {
         return m_radioModel.radioSideRecordingReachable();
-    });
-    // Say so when the fallback happens: the operator chose Radio Side, and a
-    // file appearing on this computer must not be a surprise. Said once, not
-    // once per recording (auto-record starts one every over); a client
-    // recording started outside the fallback re-arms it.
-    connect(m_qsoRecorder, &QsoRecorder::recordingStarted, this,
-            [this, noticeShown = false](const QString&) mutable {
-        const bool radioSideSelected =
-            AppSettings::instance().value("RecordingMode", "Client").toString()
-            != QLatin1String("Client");
-        if (!radioSideSelected || m_radioModel.radioSideRecordingReachable()) {
-            noticeShown = false;
-            return;
-        }
-        if (noticeShown)
-            return;
-        noticeShown = true;
-        statusBar()->showMessage(
-            tr("This radio can't record on its own side — recording on this "
-               "computer instead."),
-            6000);
     });
 
     // A refused start (#4629). The recorder lives below the UI seam and can only
@@ -1865,13 +1850,29 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_appletPanel->rxApplet(), &RxApplet::calibrateAgcTRequested,
             this, &MainWindow::showAgcCalibrationDialog);
     // Sync slice tab capacity after radio info/status reports actual capacity.
+    // This edge runs at the START of a connect, which is what lets a Flex draw
+    // its tabs before the first slice arrives (#2243).
     connect(&m_radioModel, &RadioModel::infoChanged, this, [this]() {
         if (m_radioModel.model().isEmpty()) {
             return;
         }
 
-        m_appletPanel->setMaxSlices(m_radioModel.maxSlices());
+        m_appletPanel->setMaxSlices(ReceiverSlotCount::forCeiling(
+            m_radioModel.maxSlices(), m_radioModel.slices()));
         m_appletPanel->updateSliceButtons(m_radioModel.slices(), m_activeSliceId);
+    });
+    // ...and on every later edge that can move the count, including a backend's
+    // post-connect capabilitiesChanged (#5775, #5776). The CAT letters are
+    // refreshed with it; on disconnect (count 0) onConnectionStateChanged resets
+    // them through applyCatPortCount().
+    auto* receiverSlots = new ReceiverSlotCount(&m_radioModel, this);
+    connect(receiverSlots, &ReceiverSlotCount::countChanged, this, [this](int count) {
+        if (count <= 0) {
+            return;
+        }
+        m_appletPanel->setMaxSlices(count);
+        m_appletPanel->updateSliceButtons(m_radioModel.slices(), m_activeSliceId);
+        applyCatPortCount();
     });
 
     // Radio info can arrive after onConnectionStateChanged, so refresh the labels.
@@ -1984,9 +1985,13 @@ MainWindow::MainWindow(QWidget* parent)
     // (the radio is already authoritative for the slice's step).
     connect(m_appletPanel->rxApplet(), &RxApplet::stepSizeChangedByUser,
             this, [this](int step) {
-        // Send step to radio for the active slice
-        if (auto* s = m_radioModel.slice(m_activeSliceId))
-            m_radioModel.sendCommand(QString("slice set %1 step=%2").arg(s->sliceId()).arg(step));
+        // Send step to radio for the active slice, or apply it on the client
+        // where there is no command plane to carry it.
+        if (auto* s = m_radioModel.slice(m_activeSliceId)) {
+            if (!m_radioModel.applyClientOwnedSliceStep(s->sliceId(), step)) {
+                m_radioModel.sendCommand(QString("slice set %1 step=%2").arg(s->sliceId()).arg(step));
+            }
+        }
         // Also save to AppSettings for SpectrumWidget scroll-to-tune
         auto& settings = AppSettings::instance();
         settings.setValue("TuningStepSize", QString::number(step));
@@ -2063,6 +2068,7 @@ MainWindow::MainWindow(QWidget* parent)
                 audioStopTx();
             }
         }
+        syncTitleBarOutput();
     });
     // Master volume — title bar slider routes through applyMasterVolume()
     // so the TCI `volume:N;` command (#1764) can hit the same code path
@@ -2072,11 +2078,11 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_titleBar, &TitleBar::headphoneVolumeChanged,
             &m_radioModel, &RadioModel::setHeadphoneGain);
     connect(m_titleBar, &TitleBar::lineoutMuteChanged, this, [this](bool muted) {
+        m_radioModel.setLineoutMute(muted);
         m_audio->setMuted(muted);
-        m_radioModel.sendCommand(QString("mixer lineout mute %1").arg(muted ? 1 : 0));
     });
     connect(m_audio, &AudioEngine::mutedChanged, this, [this](bool muted) {
-        m_titleBar->setLineoutMuted(muted);
+        syncTitleBarOutput();
         auto& s = AppSettings::instance();
         s.setValue("PcAudioMuted", muted ? "True" : "False");
         s.save();
@@ -2091,6 +2097,7 @@ MainWindow::MainWindow(QWidget* parent)
     connect(&m_radioModel, &RadioModel::audioOutputChanged, this, [this]() {
         m_titleBar->setHeadphoneVolume(m_radioModel.headphoneGain());
         m_titleBar->setHeadphoneMuted(m_radioModel.headphoneMute());
+        syncTitleBarOutput();
     });
 
     // Multi-Flex: show when another client is transmitting
@@ -2125,6 +2132,7 @@ MainWindow::MainWindow(QWidget* parent)
     if (savedMute) {
         m_audio->setMuted(true);
     }
+    syncTitleBarOutput();
 
 
     // Meter wiring (S-Meter / Tuner / MTR / HLTH / TX applets) →
@@ -3598,6 +3606,23 @@ RadioSetupDialog* MainWindow::openRadioSetupPage(const QString& page)
 void MainWindow::wireRadioSetupDialogSignals(RadioSetupDialog* dlg, const QString& prevComp)
 {
     if (!dlg) return;
+    // Removing a row hides its applet button immediately; otherwise the button
+    // stays until the next presence change. The AG button is kept when an AG
+    // is still connected or discovered through another path.
+    connect(dlg, &RadioSetupDialog::peripheralRemoved, this, [this](const QString& id) {
+        if (id == QLatin1String("shackswitch")) {
+            m_appletPanel->setShackSwitchVisible(false);
+        } else if (id == QLatin1String("ag")) {
+            const auto discovered = m_antennaGenius.discoveredDevices();
+            const bool agPresent = (m_antennaGenius.isConnected()
+                    && !AntennaGeniusModel::isShackSwitch(m_antennaGenius.connectedDevice()))
+                || std::any_of(discovered.begin(), discovered.end(),
+                               [](const AgDeviceInfo& d) { return !AntennaGeniusModel::isShackSwitch(d); });
+            if (!agPresent) {
+                m_appletPanel->setAgVisible(false);
+            }
+        }
+    });
     connect(dlg, &RadioSetupDialog::txBandSettingsRequested,
             m_txBandAction, &QAction::trigger);
     // Agent automation bridge toggle (#3646). The dialog persists the click as
@@ -3662,19 +3687,12 @@ void MainWindow::wireRadioSetupDialogSignals(RadioSetupDialog* dlg, const QStrin
 #endif
         // External-device enable evaluation. start()/loadSettings() are
         // idempotent (each guards against re-open), so re-firing them when
-        // unrelated settings change is harmless. Toggling the user-facing
-        // checkbox from off → on is the moment the OS TCC prompt fires —
-        // with user context — instead of every launch (#3257).
-        auto& s = AppSettings::instance();
-        if (m_dialBackend &&
-            s.value("UlanziDialEnabled", "False").toString() == "True") {
-            QMetaObject::invokeMethod(m_dialBackend, &UlanziDialBackend::start,
-                                      Qt::QueuedConnection);
-        } else if (m_dialBackend) {
-            QMetaObject::invokeMethod(m_dialBackend, &UlanziDialBackend::stop,
-                                      Qt::QueuedConnection);
-        }
+        // unrelated settings change is harmless. Toggling the HID checkbox
+        // from off → on is the moment the OS TCC prompt fires — with user
+        // context — instead of every launch (#3257).
+        applyUlanziDialEnabled();
 #ifdef HAVE_HIDAPI
+        auto& s = AppSettings::instance();
         if (m_hidEncoder &&
             s.value("HidEncoderEnabled", "False").toString() == "True") {
             QMetaObject::invokeMethod(m_hidEncoder, [this] {
@@ -4127,6 +4145,10 @@ void MainWindow::closeEvent(QCloseEvent* event)
     // connected through a shared ser2net proxy. Close it explicitly while
     // the event loop is still live instead of relying on member destruction.
     m_lpMeterConn.disconnect();
+    // The CTR2 proxy's sockets likewise close while the event loop is live.
+    if (m_ctr2ProxyModel) {
+        m_ctr2ProxyModel->stop();
+    }
 
     // Same event-loop reasoning: the operating-state capture flush normally
     // rides the queued backend disconnected() signal, which never lands
@@ -5254,7 +5276,8 @@ void MainWindow::buildUI()
         applet->spectrumWidget()->setPanEdgeTaperEnabled(
             connected && caps.hasDdcPanEdgeRolloff);
         applet->spectrumWidget()->setClientFftSmoothingEnabled(
-            !(connected && caps.backendPanAveraging.has_value()));
+            AetherSDR::clientFftSmoothingEnabled(
+                connected, caps.backendPanAveraging.has_value()));
         // A new pane changes WHICH pane carries a radio-wide span control,
         // not only this one's (#5750), so the whole stack is re-derived.
         syncPanSpanControlPlacement();
@@ -5327,31 +5350,25 @@ void MainWindow::buildUI()
         if (!e.txAntenna.isEmpty() && e.txAntenna != slice->txAntenna()) {
             m_radioModel.sendCommand(QString("slice set %1 txant=%2").arg(id).arg(e.txAntenna));
         }
-        // AGC
-        if (!e.agcMode.isEmpty() && e.agcMode != slice->agcMode()) {
-            m_radioModel.sendCommand(QString("slice set %1 agc_mode=%2").arg(id).arg(e.agcMode));
-        }
-        if (e.agcThreshold != slice->agcThreshold()) {
-            m_radioModel.sendCommand(QString("slice set %1 agc_threshold=%2").arg(id).arg(e.agcThreshold));
+        // AGC while KiwiSDR external receive audio replaces the slice: the
+        // bookmark holds the RADIO's AGC, which the SliceModel setters would
+        // write into the KiwiSDR AGC, so it goes as wire text here and
+        // recallBandStackReceiveDsp() below leaves the AGC alone.
+        if (slice->externalReceiveReplacementActive()) {
+            if (!e.agcMode.isEmpty() && e.agcMode != slice->agcMode()) {
+                m_radioModel.sendCommand(QString("slice set %1 agc_mode=%2").arg(id).arg(e.agcMode));
+            }
+            if (e.agcThreshold != slice->agcThreshold()) {
+                m_radioModel.sendCommand(QString("slice set %1 agc_threshold=%2").arg(id).arg(e.agcThreshold));
+            }
         }
         // Volume
         if (static_cast<int>(slice->audioGain()) != e.audioGain) {
             slice->setAudioGain(static_cast<float>(e.audioGain));
         }
-        // NB
-        if (e.nbOn != slice->nbOn()) {
-            m_radioModel.sendCommand(QString("slice set %1 nb=%2").arg(id).arg(e.nbOn ? 1 : 0));
-        }
-        if (e.nbLevel != slice->nbLevel()) {
-            m_radioModel.sendCommand(QString("slice set %1 nb_level=%2").arg(id).arg(e.nbLevel));
-        }
-        // NR
-        if (e.nrOn != slice->nrOn()) {
-            m_radioModel.sendCommand(QString("slice set %1 nr=%2").arg(id).arg(e.nrOn ? 1 : 0));
-        }
-        if (e.nrLevel != slice->nrLevel()) {
-            m_radioModel.sendCommand(QString("slice set %1 nr_level=%2").arg(id).arg(e.nrLevel));
-        }
+        // AGC (outside KiwiSDR replacement), NB and NR through the SliceModel
+        // setters, so they reach every backend, not only a command plane.
+        m_radioModel.recallBandStackReceiveDsp(slice, e);
         // WNB (panadapter-level, not slice)
         if (auto* pan = m_radioModel.activePanadapter()) {
             if (e.wnbOn != pan->wnbActive()) {
@@ -6188,14 +6205,14 @@ void MainWindow::buildUI()
 int MainWindow::catPortTargetCount() const
 {
     if (!m_radioModel.isConnected()) return 1;
-    return RadioModel::maxSlicesForModel(m_radioModel.model());
+    // Backend-aware, the same number the RX applet's slice tabs take (#5776).
+    return ReceiverSlotCount::forCeiling(m_radioModel.maxSlices(), m_radioModel.slices());
 }
 
 void MainWindow::applyCatPortCount()
 {
     auto& s = AppSettings::instance();
     const bool masterOn = s.value("CatEnabled", "False").toString() == "True";
-    const int  target   = catPortTargetCount();  // bounds applet VFO letters, not port count
 
     for (int i = 0; i < kCatPorts; ++i) {
         if (!catPort(i)) continue;
@@ -6206,7 +6223,8 @@ void MainWindow::applyCatPortCount()
         // A CAT port is a control channel, not a 1:1 mapping to a slice — don't
         // cap how many configured ports start by the radio's receiver count
         // (#3693). Receiver capacity bounds the VFO-letter choices per port
-        // (catPortTargetCount() feeds the applet), not whether a port runs.
+        // (ReceiverSlotCount::catLetters() feeds the applet), not whether a
+        // port runs.
         const bool shouldRun   = masterOn && portEnabled && (portNum >= 1024);
 
         if (shouldRun && !catPort(i)->isRunning()) {
@@ -6227,9 +6245,9 @@ void MainWindow::applyCatPortCount()
     auto* applet = m_appletPanel ? m_appletPanel->catControlApplet() : nullptr;
     if (applet) {
         applet->setCatEnabled(masterOn);
-        // Show hardware max when connected; fall back to kMaxPorts (all letters) when not.
-        const int hwSlices = (target > 1) ? target : kCatPorts;
-        applet->setMaxSlices(hwSlices);
+        // The radio's own count while connected (one letter on a one-receiver
+        // radio), every letter when none is (#5776).
+        applet->setMaxSlices(ReceiverSlotCount::catLetters(&m_radioModel));
     }
 }
 
@@ -6321,13 +6339,13 @@ void MainWindow::onConnectionStateChanged(bool connected)
         const bool edgeTaperEnabled =
             connected && m_radioModel.backendCapabilities().hasDdcPanEdgeRolloff;
         const bool backendAverages =
-            connected && m_radioModel.backendCapabilities().backendPanAveraging.has_value();
+            m_radioModel.backendCapabilities().backendPanAveraging.has_value();
         for (auto* applet : m_panStack->allApplets()) {
             if (applet && applet->spectrumWidget()) {
                 applet->spectrumWidget()->setBandSegmentZoomAvailable(zoomAvailable);
                 applet->spectrumWidget()->setPanEdgeTaperEnabled(edgeTaperEnabled);
                 applet->spectrumWidget()->setClientFftSmoothingEnabled(
-                    !backendAverages);
+                    AetherSDR::clientFftSmoothingEnabled(connected, backendAverages));
             }
         }
         // The span declaration belongs to the radio just (dis)connected, so
@@ -6462,8 +6480,7 @@ void MainWindow::onConnectionStateChanged(bool connected)
         if (m_bsExpiryTimer && !m_bsExpiryTimer->isActive())
             m_bsExpiryTimer->start();
 
-        // Apply CAT port counts for the newly connected radio.
-        // applyCatPortCount() starts/stops ports up to maxSlicesForModel().
+        // Re-apply the CAT port states and size the VFO letters to this radio.
         applyCatPortCount();
 #ifdef HAVE_WEBSOCKETS
         // Auto-start TCI WebSocket server if enabled
@@ -6589,20 +6606,29 @@ void MainWindow::onConnectionStateChanged(bool connected)
 
             // Auto-connect peripherals with manual IPs (#914)
             QString tgxlIp = cs.value("TGXL_ManualIp", "").toString();
-            if (!tgxlIp.isEmpty() && !m_tgxlConn.isConnected()) {
+            if (!tgxlIp.isEmpty() && !m_tgxlConn.isConnected()
+                && PeripheralSettings::autoConnect(QStringLiteral("tgxl"))) {
                 quint16 tgxlPort = static_cast<quint16>(cs.value("TGXL_ManualPort", "9010").toInt());
-                m_tgxlConn.connectToTgxl(tgxlIp, tgxlPort);
+                if (!m_tgxlConn.isConnecting() && !m_tgxlConn.isAuthBlocked()) {
+                    m_tgxlConn.autoConnectToTgxl(tgxlIp, tgxlPort);
+                }
             }
             QString pgxlIp = cs.value("PGXL_ManualIp", "").toString();
-            if (!pgxlIp.isEmpty() && !m_pgxlConn.isConnected()) {
+            if (!pgxlIp.isEmpty() && !m_pgxlConn.isConnected()
+                && PeripheralSettings::autoConnect(QStringLiteral("pgxl"))) {
                 quint16 pgxlPort = static_cast<quint16>(cs.value("PGXL_ManualPort", "9008").toInt());
-                m_pgxlConn.connectToPgxl(pgxlIp, pgxlPort);
+                if (!m_pgxlConn.isConnecting() && !m_pgxlConn.isAuthBlocked()) {
+                    m_pgxlConn.autoConnectToPgxl(pgxlIp, pgxlPort);
+                }
             }
             // If SS_ManualIp is set, connect to ShackSwitch immediately using a
             // synthetic serial so device-type detection works from the start.
             // This bypasses the UDP discovery race condition entirely.
             QString ssIp = cs.value("SS_ManualIp", "").toString();
-            if (!ssIp.isEmpty() && !m_antennaGenius.isConnected()) {
+            if (!ssIp.isEmpty() && !m_antennaGenius.isConnected()
+                && PeripheralSettings::autoConnect(QStringLiteral("shackswitch"))
+                && !m_antennaGenius.isConnecting()
+                && !m_antennaGenius.isAuthBlockedFor(ssIp, 9007)) {
                 AgDeviceInfo ssInfo;
                 ssInfo.ip         = QHostAddress(ssIp);
                 ssInfo.port       = 9007;
@@ -6616,7 +6642,7 @@ void MainWindow::onConnectionStateChanged(bool connected)
             // If ShackSwitch already connected above, isConnected() = true → skips.
             // A real AG (no UDP broadcast, no SS_ManualIp) still connects after delay.
             QString agIp = cs.value("AG_ManualIp", "").toString();
-            if (!agIp.isEmpty()) {
+            if (!agIp.isEmpty() && PeripheralSettings::autoConnect(QStringLiteral("ag"))) {
                 quint16 agPort = static_cast<quint16>(cs.value("AG_ManualPort", "9007").toInt());
                 if (m_agManualConnectTimer) {
                     m_agManualConnectTimer->stop();
@@ -6627,8 +6653,12 @@ void MainWindow::onConnectionStateChanged(bool connected)
                 m_agManualConnectTimer->setSingleShot(true);
                 connect(m_agManualConnectTimer, &QTimer::timeout, this, [this, agIp, agPort]() {
                     m_agManualConnectTimer = nullptr;
-                    if (!m_antennaGenius.isConnected())
-                        m_antennaGenius.connectToAddress(QHostAddress(agIp), agPort);
+                    if (m_radioModel.isConnected() && !m_antennaGenius.isConnected()
+                        && !m_antennaGenius.isConnecting()
+                        && PeripheralSettings::autoConnect(QStringLiteral("ag"))
+                        && !m_antennaGenius.isAuthBlockedFor(agIp, agPort)) {
+                        m_antennaGenius.connectToAddress(agIp, agPort);
+                    }
                 });
                 m_agManualConnectTimer->start(7000);
             }
@@ -6645,9 +6675,9 @@ void MainWindow::onConnectionStateChanged(bool connected)
         // settle timer happened to fire.
         m_daxRestore.onDisconnected();
 
-        // Radio disconnected: trim CAT ports back to 1 so apps on channel A
-        // stay connected through brief reconnects, higher channels stop cleanly.
-        applyCatPortCount();  // catPortTargetCount() returns 1 when !connected
+        // Radio disconnected: re-apply the CAT port states, and offer every
+        // VFO letter again (ReceiverSlotCount::catLetters with no radio).
+        applyCatPortCount();
 
         if (m_layoutRestoreTimer) {
             m_layoutRestoreTimer->stop();
@@ -7404,6 +7434,22 @@ void MainWindow::showRecorderNotice(const QString& key,
     box->open();   // NOT exec(): returns immediately, no nested event loop
 }
 
+// The title-bar speaker and master slider show the path the operator hears:
+// the PC sink with PC Audio on, the radio's line out with it off.
+void MainWindow::syncTitleBarOutput()
+{
+    if (!m_titleBar || !m_audio)
+        return;
+    const bool pcAudio = AppSettings::instance().value("PcAudioEnabled", "True").toString() == "True";
+    if (pcAudio) {
+        m_titleBar->setLineoutMuted(m_audio->isMuted());
+        m_titleBar->setMasterVolume(qRound(m_audio->rxVolume() * 100.0f));
+    } else {
+        m_titleBar->setLineoutMuted(m_radioModel.lineoutMute());
+        m_titleBar->setMasterVolume(m_radioModel.lineoutGain());
+    }
+}
+
 void MainWindow::applyMasterVolume(int pct)
 {
     if (pct < 0)   pct = 0;
@@ -7517,9 +7563,12 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
     // ── Mic sources: MIC / BAL / LINE / ACC are Flex connectors ────────────
     // A radio that cannot have its input chosen by a client collapses to PC.
     if (m_appletPanel) {
+        // Absent (or disconnected): the default record, PROC 0..2.
+        const RadioCapabilities::SpeechProcessorControl proc =
+            (connected ? caps.speechProcessorControl : std::nullopt)
+                .value_or(RadioCapabilities::SpeechProcessorControl{});
         m_appletPanel->phoneCwApplet()->setSpeechProcessorPresentation(
-            connected ? caps.speechProcessorLabel : QStringLiteral("PROC"),
-            connected ? caps.speechProcessorLevelMaximum : 2);
+            proc.label, proc.levelMaximum);
         m_appletPanel->meterApplet()->setMainFanTelemetryState(
             connected, caps.hasMainFanTelemetry);
         m_appletPanel->setSelectableMicInputs(!connected || caps.hasSelectableMicInputs);
@@ -7544,7 +7593,8 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
             phone->setTxFilterControlsAvailable(!connected || caps.hasTxFilterControls);
             phone->setDexpVisible(!connected || caps.hasDownwardExpander);
             phone->setAmCarrierAvailable(!connected || caps.hasAmCarrierLevel);
-            phone->setVoxDelayAvailable(!connected || caps.hasVoxDelay);
+            phone->setVoxDelayAvailable(
+                !connected || (caps.voxControl && caps.voxControl->hasDelay));
             phone->setTxFilterEdges(connected ? caps.txFilterLowEdgesHz : QList<int>{},
                                     connected ? caps.txFilterHighEdgesHz : QList<int>{});
         }
@@ -7568,6 +7618,9 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
             spectrum->setPanBinsAbsolute(binsAbsolute);
         }
     }
+    syncSquelchScaleToUi();
+    syncActiveSliceSquelchLineToSpectrums();
+    syncActiveSliceAutoSquelchToSpectrums();
 
     // ── Profiles: the PROF applet, the Profiles menu, and both dialogs ──────
     const bool profiles = !connected || caps.hasProfiles;
@@ -7887,6 +7940,7 @@ void MainWindow::applyRadioSideDspToPanDisplay(SpectrumWidget* sw) const
     if (!sw) {
         return;
     }
+    sw->setPanGeometryConfirmationRequired(m_radioModel.confirmsReceiveControls());
     auto* menu = sw->overlayMenu();
     if (menu) {
         menu->setRadioSideDspAvailable(m_radioModel.hasRadioSideDsp());
@@ -8187,6 +8241,21 @@ void MainWindow::applyTuneRequest(SliceModel* slice, double mhz,
 #endif
     }
 
+    if (m_radioModel.confirmsReceiveControls()) {
+        if (m_radioModel.slice(slice->sliceId()) != slice) { return; }
+        IRadioBackend::ReceiveTuneView view = IRadioBackend::ReceiveTuneView::Preserve;
+        if (intent == TuneIntent::CommandedTargetCenter || centerLockActiveForSlice(slice)) {
+            view = IRadioBackend::ReceiveTuneView::Center;
+        } else if (intent != TuneIntent::IncrementalTune || panFollowEnabled()) {
+            view = IRadioBackend::ReceiveTuneView::Reveal;
+        }
+        // Receiver and display intent are admitted together. A refusal leaves
+        // both observations intact; pending hardware/DSP never moves a flag.
+        m_radioModel.requestConfirmedReceiveTune(slice->sliceId(), mhz, view);
+        pushSliceFrequencyToOverlays(slice, slice->frequency());
+        return;
+    }
+
     holdCenterLockTuneTarget(slice, mhz);
     pushSliceFrequencyToOverlays(slice, mhz);
 
@@ -8434,6 +8503,8 @@ void MainWindow::setActiveSliceInternal(int sliceId, bool revealOffscreen)
         else if (m_panStack->activeApplet())
             m_panStack->activeApplet()->setSliceId(sliceId, s->letter());
     }
+    // Before setSlice(): restoring this slice's Auto SQL needs its availability.
+    syncSquelchScaleToUi();
     m_appletPanel->setSlice(s);
     m_appletPanel->updateSliceButtons(m_radioModel.slices(), sliceId);
     refreshKiwiSdrSlices();
@@ -8727,6 +8798,7 @@ void MainWindow::pushSliceOverlay(SliceModel* s)
         s->ritOn(), s->ritFreq(), s->xitOn(), s->xitFreq(),
         s->diversity(), s->isDiversityParent(),
         s->isDiversityChild(), s->diversityIndex());
+    sw->setSliceOverlayInCapture(s->sliceId(), s->inCapture());
 }
 
 void MainWindow::syncTxWaterfallSliceToSpectrums()
@@ -8766,6 +8838,7 @@ void MainWindow::disableSplit()
 {
     if (!m_splitActive) return;
 
+    m_pendingSliceFrequencyEchoes.clear();
     m_splitActive = false;
 
     // Learn this split's audio arrangement and put the RX pan back, BEFORE the
@@ -8783,6 +8856,7 @@ void MainWindow::disableSplit()
 
     m_splitRxSliceId = -1;
     m_splitTxSliceId = -1;
+    m_splitRxFrequencyMhz = 0.0;
     if (auto* sw = spectrum()) sw->setSplitPair(-1, -1);
 
     updateSplitState();
@@ -10320,7 +10394,7 @@ void MainWindow::centerActiveSliceInPanadapter(bool forceRadioCenter, double cen
     // into waterfall history. requestPanCenter() defers and replays it instead.
     bool centerDeferred = false;
     if (!kiwiDisplayActive && forceRadioCenter && m_radioModel.isConnected()) {
-        centerDeferred = !m_radioModel.requestPanCenter(s->panId(), targetMhz);
+        centerDeferred = !requestSlicePanCenter(m_radioModel, s->sliceId(), targetMhz);
     }
 
     // Keep the local spectrum centered immediately so the active slice marker is
@@ -10706,7 +10780,7 @@ void MainWindow::createPansSequentially(const QString& layoutId, int total,
                 if (pan) {
                     // Push current state to the spectrum widget
                     applet->spectrumWidget()->setDbmRange(pan->minDbm(), pan->maxDbm());
-                    applet->spectrumWidget()->setFrequencyRange(
+                    applet->spectrumWidget()->observeFrequencyRange(
                         pan->centerMhz(), pan->bandwidthMhz());
                 }
             }

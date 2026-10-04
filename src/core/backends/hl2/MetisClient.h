@@ -912,6 +912,9 @@ private:
     // rate exists: downstream sees a ~10 Hz emit of a bit cycling up to ~190 times/s.
     int m_adcWindowSamples = 0;
     int m_adcWindowOverload = 0;
+    // Forward-power maximum for the same window; see
+    // Hl2Telemetry::forwardPowerPeakRaw for why the last value is not enough.
+    ForwardPowerWindow m_fwdWindow;
 
     // ---- transport counters (see LinkCounters) ----
     LinkCounters  m_link;

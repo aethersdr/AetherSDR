@@ -247,9 +247,12 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
             // than to 0.0 (which is out of the meter's domain).
             m_cachedSwr = swrValid ? swr : 1.0f;
         });
+        // tx_sensors' mic field is the same "transmit level" the S-meter's
+        // Level face shows: MICPEAK where the radio publishes no MIC (HL2).
         connect(&m_model->meterModel(), &MeterModel::micMetersChanged,
-                this, [this](float micLevel, float, float, float) {
-            m_cachedMicLevel = micLevel;
+                this, [this](float micLevel, float, float micPeak, float) {
+            m_cachedMicLevel =
+                m_model->meterModel().transmitLevelFaceValue(micLevel, micPeak);
         });
         connect(&m_model->meterModel(), &MeterModel::swAlcChanged,
                 this, [this](float dbfs) {
@@ -3538,9 +3541,11 @@ void TciServer::onDaxStreamUnregistered(int channel, quint32 /*streamId*/)
     const TciRxBinding old = m_rxBindings.take(key);
     if (old.alive) { old.alive->store(false, std::memory_order_release); }
     m_rxBindingOwners.remove(key);
-    m_io->post([io = m_io.get(), bindings = m_rxBindings] { io->setRxBindings(bindings); });
     m_channelTrx.remove(channel);
     m_channelSlice.remove(channel);
+    // A slice that keeps its DAX channel emits nothing when the stream comes
+    // back, so the binding is rebuilt from the live slice list here (#6006).
+    refreshRxBindings();
 }
 
 void TciServer::onIqDataReady(int channel, const QByteArray& rawPayload, int sampleRate)
@@ -3934,6 +3939,9 @@ void TciServer::ensureDaxForTci()
                 ch, PanadapterStream::DaxConsumer::Tci);
         }
     }
+    // Every audio_start lands here; rebinding keeps RX routable however the
+    // re-acquire and the stream unregister are ordered (#6006).
+    refreshRxBindings();
 }
 
 void TciServer::scheduleDaxRelease()
