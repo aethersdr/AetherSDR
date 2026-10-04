@@ -281,6 +281,9 @@ private:
     // Hands receiver 0 a configured Hl2RxDsp so the APF and AGC-off verbs can
     // be followed from the seam into WDSP without a socket.
     friend struct Hl2ApfAgcOffTestAccess;
+    // The same hand-off, so hl2_rxdsp_squelch_test follows an LNA change into
+    // the squelch gate.
+    friend struct Hl2SquelchTestAccess;
     // Delivers one bandscope block through MetisClient's signal and ages the mirror,
     // so converter-row expiry is testable without a radio.
     friend struct Hl2HealthBlockTestAccess;
