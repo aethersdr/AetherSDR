@@ -2,10 +2,10 @@
 
 The source snapshot is pinned to TAPR/OpenHPSDR-wdsp commit
 `b02d5bac675dd2f33ec2bab2b339f79a597c47dd` (`Release Version 2.10`).
-AetherSDR carries seventeen local changes in the otherwise exact `Source/*.[ch]`
+AetherSDR carries eighteen local changes in the otherwise exact `Source/*.[ch]`
 snapshot. The first ten are listed below — four teardown corrections, two
 null/lifetime fixes, one added accessor set, two channel-state fixes, and one
-performance change — and patches 11 to 17 follow in their own sections:
+performance change — and patches 11 to 18 follow in their own sections:
 
 1. `upstream/nbp.c`: `destroy_notchdb()` now frees the `notchdb` object after
    its member allocations.
@@ -617,6 +617,9 @@ itself. The ten are different shapes, so grep for the shape, not for a free:
   `input_busy` release in `spectra()` / `Cspectra()` sitting **after**
   `stitch(disp)`, not before it; and `sendbuf()`'s `IQO_idx` hand-off and
   `IQout_index` advance inside its existing `BufferControlSection`.
+- **patch 18** -- in `destroy_calcc()`, the `SemsPSCorr` and
+  `hCorrChangeExited` closes inside an `== WAIT_OBJECT_0` check on the
+  thread-exit wait.
 
 Drop any local patch upstream now carries. Otherwise reapply only these minimal
 changes and run the lifecycle test under AddressSanitizer on every supported
@@ -979,3 +982,26 @@ The `AnanPanAnalyzer` teardown (a `SetAnalyzer()` drain before
 
 When updating WDSP, keep all three unless upstream's analyzer synchronises the
 same hand-offs.
+
+## Patch 18 — the PureSignal correction thread's handles are closed (#6154)
+
+`upstream/calcc.c`: `create_calcc()` (called by `create_txa()` for every TX
+channel) creates five `SemsPSCorr` semaphores for the `doPSCorrChange()`
+thread, and `destroy_calcc()` never closed them. That leaked five port handles,
+each a mutex, condition variable and allocation, on every TXA channel
+destroy. LeakSanitizer reports 86 leak blocks across 17 tests (`wdsp_channel_test`,
+the `hl2_*` TX/DSP tests, the `radiomodel_*_null` tests).
+
+`destroy_calcc()` now closes the five semaphores and the exit event **only when
+the thread-exit wait succeeds**. `doPSCorrChange()`'s last act is
+`SetEvent(hCorrChangeExited)` and `return`, so once that event is seen nothing
+touches either again. If the 500 ms wait times out, the thread may still be
+blocked in `WaitForMultipleObjects` on those semaphores. Freeing them under it
+would turn a leak into a use-after-free, so they are deliberately leaked in that
+case. Upstream closed the event unconditionally, which had the same hazard for
+a thread that later reached `SetEvent()`; it is now under the same check.
+
+**Upstream status.** Not reported.
+
+When updating WDSP, keep this unless upstream's `destroy_calcc()` closes the
+semaphores itself.

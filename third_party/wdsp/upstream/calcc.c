@@ -1098,8 +1098,18 @@ void destroy_calcc (CALCC a)
 		while (WaitForSingleObject(a->SemsPSCorr[i], 0) == WAIT_OBJECT_0);
 	InterlockedBitTestAndReset(&b->busy, 0);
 	ReleaseSemaphore(a->SemsPSCorr[4], 1, 0);
-	WaitForSingleObject(a->hCorrChangeExited, 500);
-	CloseHandle(a->hCorrChangeExited);
+	// AetherSDR patch 18: close the five SemsPSCorr semaphores, which upstream
+	// never closed (leaked on every TXA channel destroy), and close them and the
+	// exit event ONLY once doPSCorrChange() has signalled it is gone. Its last
+	// act is SetEvent(hCorrChangeExited) then return, so after that nothing
+	// touches either. On the 500 ms timeout the thread may still be waiting on
+	// them; leaking beats freeing handles under a live thread.
+	if (WaitForSingleObject(a->hCorrChangeExited, 500) == WAIT_OBJECT_0)
+	{
+		for (int i = 0; i < 5; i++)
+			CloseHandle(a->SemsPSCorr[i]);
+		CloseHandle(a->hCorrChangeExited);
+	}
 
 	ns_free(a->m_spline); a->m_spline = NULL;
 	ns_free(a->c_spline); a->c_spline = NULL;
