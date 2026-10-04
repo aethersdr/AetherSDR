@@ -7548,6 +7548,7 @@ set(AETHER_AUTOMATION_SERVER_TESTS
     backend_slice_lifecycle_test
     tci_automation_test
     reroute_dead_controls_test
+    show_tx_in_waterfall_client_flag_test
 )
 foreach(_automation_test IN LISTS AETHER_AUTOMATION_SERVER_TESTS)
     if(TARGET ${_automation_test})
