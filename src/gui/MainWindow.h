@@ -822,7 +822,8 @@ private:
     void scheduleClientWaterfallRateSave(int panIndex, int rate);
     // FFT FPS and the dBm scale, which a Flex stores for a pan and a radio
     // with no display engine does not. Same store and deferral as the
-    // waterfall rate, only where the radio holds no copy.
+    // waterfall rate, only where the backend declares the client the owner.
+    bool clientPersistsFftFps() const;
     void scheduleClientFftFpsSave(int panIndex, int fps);
     bool clientOwnsPanDbmRange() const;
     void adoptClientOwnedDbmRange(const QString& panId, int panIndex,

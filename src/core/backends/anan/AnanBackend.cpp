@@ -390,6 +390,7 @@ RadioCapabilities AnanBackend::capabilities() const
     // The bins are raw dBFS + 0, so they are ABSOLUTE: nothing in them depends on
     // the display reference level, and the auto-floor loop converges.
     amplitude.binsAbsolute = true;
+    amplitude.clientPersistsDbmRange = false;  // no client owner is declared
     c.panAmplitude = amplitude;
     // No measured squelch map; the SQL line and Auto SQL keep Flex's scale.
     c.squelchLevelScale = legacyDbmSquelchScale();
@@ -446,6 +447,7 @@ RadioCapabilities AnanBackend::capabilities() const
     c.radioOwnsDbmScale = false;   // client computes it from raw IQ
     c.hasDdcPanEdgeRolloff = true; // see RadioCapabilities.h's own comment
     c.backendPanAveraging = BackendPanAveraging{kMsPerAverageStep, false, {}, {}}; // AnanPanAnalyzer
+    c.panFrameRateShaping = std::nullopt;  // no client owner is declared for FFT FPS
     // No band/segment zoom: the protocol carries no per-pan zoom flag.
     c.panZoomModes = std::nullopt;
     c.persistsMemories = false;    // default; stated explicitly

@@ -451,6 +451,7 @@ RadioCapabilities IcomCivBackend::capabilities() const
     // CI-V has no per-pan zoom-to-band/segment verb; the scope span is set
     // directly, not by a radio-owned flag.
     c.panZoomModes = std::nullopt;
+    c.panFrameRateShaping = std::nullopt;  // no client owner is declared for FFT FPS
 
     // NO IQ, on any networked Icom. Not deferred — absent. See icom-oracle §8.1.
     c.hasDaxStreams = false;

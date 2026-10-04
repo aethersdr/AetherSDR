@@ -1,6 +1,7 @@
 // FFT FPS and the dBm range in the per-radio ClientDisplay document, against
-// the real settings store: round trip, ownership, refusals, schema, coexistence
-// with other tables, the pending-write key.
+// the real settings store: round trip, declared ownership read off real
+// backends, refusals, schema, coexistence with other tables, the pending-write
+// key.
 // SOURCE TEXT, last block only: the order and presence of the save and restore
 // calls inside MainWindow methods, which link into no test.
 
@@ -8,6 +9,7 @@
 #include "core/ClientDisplaySettings.h"
 #include "core/DbmRangePlausibility.h"
 #include "core/backends/RadioCapabilities.h"
+#include "core/backends/anan/AnanBackend.h"
 #include "core/backends/flex/FlexBackend.h"
 #include "core/backends/hl2/Hl2Backend.h"
 #include "core/backends/icom/IcomCivBackend.h"
@@ -66,6 +68,54 @@ static bool sameRange(const std::optional<CDS::DbmRange>& got, float min, float 
     return got && got->minDbm == min && got->maxDbm == max;
 }
 
+// One family's declaration against the real store. An opt-in family stores and
+// reads back; an opt-out family neither writes nor reads, and a document already
+// under its identity comes through byte for byte.
+static void checkDeclaredOwner(const RadioCapabilities& caps, const char* family,
+                               bool expectFps, bool expectRange)
+{
+    const QString feature = QStringLiteral("ClientDisplay");
+    const QByteArray name(family);
+    const auto label = [&name](const char* what) -> QByteArray {
+        return name + QByteArrayLiteral(": ") + QByteArray(what);
+    };
+    const bool ownsFps = caps.clientPersistsPanFrameRate();
+    const bool ownsRange = caps.clientPersistsDbmRange();
+    check(ownsFps == expectFps, label("FFT FPS owner as declared").constData());
+    check(ownsRange == expectRange, label("dBm range owner as declared").constData());
+
+    const RadioSettingsScope fresh(QString::fromLatin1(family), QStringLiteral("OWNER"));
+    CDS::saveFftFps(fresh, 0, ownsFps, 12);
+    CDS::saveDbmRange(fresh, 0, ownsRange, -122.19f, -2.19f);
+    check((CDS::fftFps(fresh, 0, ownsFps) == 12) == expectFps,
+          label("FFT FPS is stored and restored only by its owner").constData());
+    check(sameRange(CDS::dbmRange(fresh, 0, ownsRange), -122.19f, -2.19f) == expectRange,
+          label("the dBm range is stored and restored only by its owner").constData());
+    if (!expectFps && !expectRange) {
+        check(fresh.featureExact(feature).isEmpty(),
+              label("no document is created").constData());
+    }
+    fresh.removeFeature(feature);
+
+    // A document that already holds both rows (another build, another owner).
+    const RadioSettingsScope held(QString::fromLatin1(family), QStringLiteral("HELD"));
+    const QJsonObject before{
+        {QStringLiteral("fftFps"), QJsonObject{{QStringLiteral("0"), 30}}},
+        {QStringLiteral("dbmRanges"),
+         QJsonObject{{QStringLiteral("0"), QJsonObject{{QStringLiteral("min"), -110.0},
+                                                       {QStringLiteral("max"), -20.0}}}}}};
+    check(held.setFeature(feature, 1, before), label("held fixture stored").constData());
+    check((CDS::fftFps(held, 0, ownsFps) == 30) == expectFps,
+          label("a held FFT FPS is read only by its owner").constData());
+    check(sameRange(CDS::dbmRange(held, 0, ownsRange), -110.0f, -20.0f) == expectRange,
+          label("a held dBm range is read only by its owner").constData());
+    CDS::saveFftFps(held, 0, ownsFps, 12);
+    CDS::saveDbmRange(held, 0, ownsRange, -122.19f, -2.19f);
+    check((held.featureExact(feature) == before) == (!expectFps && !expectRange),
+          label("a held document is rewritten only by its owner").constData());
+    check(held.removeFeature(feature), label("held fixture removed").constData());
+}
+
 int main(int argc, char** argv)
 {
     // Before QCoreApplication: the backends constructed below read AppSettings.
@@ -117,26 +167,34 @@ int main(int argc, char** argv)
     check(unknown.featureExact(feature).isEmpty(),
           "an unknown identity never writes the family default");
 
-    // 3. Who owns the dBm range.
-    check(CDS::clientOwnsDbmRange(true, true), "shaped locally + absolute bins: client");
-    check(!CDS::clientOwnsDbmRange(true, false),
-          "shaped locally, bins not absolute: the backend publishes the range");
-    check(!CDS::clientOwnsDbmRange(false, true), "not shaped locally: the radio");
-    check(!CDS::clientOwnsDbmRange(false, false), "neither: the radio");
+    // 3. Who owns FFT FPS and the dBm range: each backend's own declaration,
+    // read through the accessors the wiring calls. Only the HL2 opts in.
     {
-        // shapedLocally is `backend present and not a Flex` in RadioModel; the
-        // second term is read off the real declarations.
         hl2::Hl2Backend hl2Backend;
-        check(CDS::clientOwnsDbmRange(true, hl2Backend.capabilities().panBinsAbsolute()),
-              "HL2: the client owns the dBm range");
-        FlexBackend flexBackend;
-        check(!CDS::clientOwnsDbmRange(false, flexBackend.capabilities().panBinsAbsolute()),
-              "Flex: the radio owns the dBm range - unchanged");
-        check(!CDS::clientOwnsDbmRange(true, flexBackend.capabilities().panBinsAbsolute()),
-              "Flex: and would not even if it were shaped locally");
+        checkDeclaredOwner(hl2Backend.capabilities(), "hl2", true, true);
         icom::IcomCivBackend icomBackend;
-        check(!CDS::clientOwnsDbmRange(true, icomBackend.capabilities().panBinsAbsolute()),
-              "Icom: shaped locally, but its backend publishes the range");
+        checkDeclaredOwner(icomBackend.capabilities(), "icom", false, false);
+        // Absolute bins, as on the HL2, and still no owner: bins are not the
+        // declaration.
+        anan::AnanBackend ananBackend;
+        check(ananBackend.capabilities().panBinsAbsolute(),
+              "anan: control, the bins are absolute");
+        checkDeclaredOwner(ananBackend.capabilities(), "anan", false, false);
+        FlexBackend flexBackend;
+        checkDeclaredOwner(flexBackend.capabilities(), "flex", false, false);
+        checkDeclaredOwner(RadioCapabilities{}, "undeclared", false, false);
+
+        // The range declaration counts only with absolute bins.
+        RadioCapabilities relative;
+        PanAmplitudeModel amplitude;
+        amplitude.clientPersistsDbmRange = true;
+        relative.panAmplitude = amplitude;
+        check(!relative.clientPersistsDbmRange(),
+              "a range owner declared over relative bins owns nothing");
+        amplitude.binsAbsolute = true;
+        relative.panAmplitude = amplitude;
+        check(relative.clientPersistsDbmRange(),
+              "control: the same declaration over absolute bins does");
     }
 
     // 4. Refused on the way in ...
@@ -320,9 +378,28 @@ int main(int argc, char** argv)
         check(followsWithin(session, "restoreClientOwnedDbmRange(pan, sw->panIndex());",
                             "sw->setDbmRange(pan->minDbm(), pan->maxDbm());", 120),
               "the reconnect path does the same");
+
+        // Declared ownership: one predicate per field, and the save and the
+        // restore of each field both go through it.
+        check(followsWithin(wiring, "bool MainWindow::clientPersistsFftFps() const",
+                            "m_radioModel.backendCapabilities().clientPersistsPanFrameRate();",
+                            160),
+              "the FFT FPS predicate reads the backend's declaration");
         check(wiring.contains(QStringLiteral(
-                  "ClientDisplaySettings::clientOwnsDbmRange(")),
-              "ownership of the range is the shared predicate");
+                  "if (!clientPersistsFftFps() || !scope.hasRadioIdentity() || panIndex < 0) {")),
+              "the FFT FPS save asks that predicate");
+        check(followsWithin(wiring, "if (clientPersistsFftFps()) {",
+                            "sw->setFftFps(*savedFps);", 220),
+              "and so does the FFT FPS restore");
+        check(followsWithin(wiring, "bool MainWindow::clientOwnsPanDbmRange() const",
+                            "m_radioModel.backendCapabilities().clientPersistsDbmRange();",
+                            160),
+              "the dBm range predicate reads the backend's declaration");
+        check(wiring.contains(QStringLiteral(
+                  "if (!clientOwnsPanDbmRange() || !dbmRangeLooksPlausible(minDbm, maxDbm)) {")),
+              "adopting and saving the range asks that predicate");
+        check(wiring.contains(QStringLiteral("if (!pan || !clientOwnsPanDbmRange()) {")),
+              "and so does the range restore");
     }
 
     if (g_failed) {

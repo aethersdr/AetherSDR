@@ -3130,31 +3130,36 @@ void MainWindow::scheduleClientWaterfallRateSave(int panIndex, int rate)
     });
 }
 
-// FFT FPS on a radio whose display the engine shapes: the radio holds no
-// copy, so the client is the only memory there is. A Flex stores it and
-// reports it back; `shapedLocally` is false there and nothing is scheduled.
+// May the client store and restore FFT FPS for this radio? Only where the
+// engine paces the frames and the backend declares the client the owner
+// (RadioCapabilities::clientPersistsPanFrameRate). Read by the save and by the
+// restore, so the two cannot disagree.
+bool MainWindow::clientPersistsFftFps() const
+{
+    return m_radioModel.shapesDisplayRatesLocally()
+        && m_radioModel.backendCapabilities().clientPersistsPanFrameRate();
+}
+
 void MainWindow::scheduleClientFftFpsSave(int panIndex, int fps)
 {
     const RadioSettingsScope scope = m_radioModel.settingsScope();
-    const bool shapedLocally = m_radioModel.shapesDisplayRatesLocally();
-    if (!shapedLocally || !scope.hasRadioIdentity() || panIndex < 0) {
+    if (!clientPersistsFftFps() || !scope.hasRadioIdentity() || panIndex < 0) {
         return;
     }
     m_pendingDisplayWrites.schedule(
         ClientDisplaySettings::pendingWriteKey(scope, panIndex, "fftFps"),
-        [scope, panIndex, shapedLocally, fps] {
-            ClientDisplaySettings::saveFftFps(scope, panIndex, shapedLocally, fps);
+        [scope, panIndex, fps] {
+            ClientDisplaySettings::saveFftFps(scope, panIndex, true, fps);
         });
 }
 
-// True where the pan's dBm scale is the client's alone: see
-// ClientDisplaySettings::clientOwnsDbmRange.
+// May the client store and restore this pan's dBm range? Only where the
+// backend declares it (RadioCapabilities::clientPersistsDbmRange). Read by the
+// adopt-and-save and by the restore, so the two cannot disagree.
 bool MainWindow::clientOwnsPanDbmRange() const
 {
-    return ClientDisplaySettings::clientOwnsDbmRange(
-        m_radioModel.shapesDisplayRatesLocally(),
-        m_radioModel.isConnected()
-            && m_radioModel.backendCapabilities().panBinsAbsolute());
+    return m_radioModel.isConnected()
+        && m_radioModel.backendCapabilities().clientPersistsDbmRange();
 }
 
 // The operator moved the dBm scale on a radio that stores and publishes no
@@ -3303,12 +3308,14 @@ void MainWindow::wirePanDisplayStatus(PanadapterApplet* applet,
                 m_radioModel.settingsScope(), sw->panIndex(), true)) {
             sw->setWfLineDuration(*savedRate);
         }
-        // FFT FPS likewise: no radio reports it here. Restored into the widget
-        // BEFORE the request below, which seeds the shaper and the pan model
-        // from it.
-        if (const auto savedFps = ClientDisplaySettings::fftFps(
-                m_radioModel.settingsScope(), sw->panIndex(), true)) {
-            sw->setFftFps(*savedFps);
+        // FFT FPS where the client is its declared owner. Restored into the
+        // widget BEFORE the request below, which seeds the shaper and the pan
+        // model from it.
+        if (clientPersistsFftFps()) {
+            if (const auto savedFps = ClientDisplaySettings::fftFps(
+                    m_radioModel.settingsScope(), sw->panIndex(), true)) {
+                sw->setFftFps(*savedFps);
+            }
         }
         m_radioModel.requestPanDisplayRates(panId, sw->fftFps(),
                                             sw->wfLineDuration());

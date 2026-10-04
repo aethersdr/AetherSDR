@@ -7233,7 +7233,7 @@ target_link_libraries(client_display_settings_test PRIVATE aethercore Qt6::Core)
 add_test(NAME client_display_settings_test COMMAND client_display_settings_test)
 
 # FFT FPS and the dBm range in the same ClientDisplay document.
-# Socket-free: the real settings store in a TestSettingsProfile, and three
+# Socket-free: the real settings store in a TestSettingsProfile, and four
 # backends constructed only to read capabilities() (Qt6::Network for their
 # headers, as noise_floor_auto_adjust_gate_test). AETHER_SOURCE_DIR because the
 # last block reads the MainWindow wiring as text: MainWindow links into no test.

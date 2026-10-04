@@ -10,11 +10,11 @@
 
 namespace AetherSDR {
 
-// Client-shaped display state (waterfallRates, fftAverages, fftFps, dbmRanges),
-// keyed by pan slot in the schema-1 `ClientDisplay` document. Only for a radio
-// whose display this engine shapes (`shapedLocally`); a Flex stores and reports
-// these itself (#2465, #4126). Radio publications and adaptive caps never write
-// here. Tables are optional and every writer is read-modify-write: no bump.
+// Client-kept display state (waterfallRates, fftAverages, fftFps, dbmRanges),
+// keyed by pan slot in the schema-1 `ClientDisplay` document. The caller passes
+// who owns each value: a false owner reads and writes nothing, so no copy can
+// fight a radio's own (#2465, #4126). Radio publications and adaptive caps never
+// write here. Tables are optional and every writer is read-modify-write: no bump.
 class ClientDisplaySettings {
 public:
     // The Display panel's own FFT FPS slider bounds (SpectrumOverlayMenu). A
@@ -26,16 +26,6 @@ public:
         float minDbm{0.0f};
         float maxDbm{0.0f};
     };
-
-    // May the client store and restore this pan's dBm range? Only where the
-    // engine shapes the display AND the bins are absolute levels computed here
-    // (panBinsAbsolute): a Flex echoes its range, and an Icom's backend
-    // publishes one from scope calibration that a stored copy would fight.
-    static constexpr bool clientOwnsDbmRange(bool shapedLocally,
-                                             bool panBinsAbsolute) noexcept
-    {
-        return shapedLocally && panBinsAbsolute;
-    }
 
     // DeferredSettingsWrites key for one pending edit, per (radio, pan slot,
     // field): that queue keeps the last write per key, so the waterfall rate and
@@ -141,25 +131,27 @@ public:
         }
     }
 
+    // `clientOwned`: the backend declares the client the owner
+    // (RadioCapabilities::clientPersistsPanFrameRate()) and paces the frames here.
     static std::optional<int> fftFps(const RadioSettingsScope& scope,
-                                     int panIndex, bool shapedLocally)
+                                     int panIndex, bool clientOwned)
     {
-        return boundedInt(readEntry(scope, panIndex, shapedLocally,
+        return boundedInt(readEntry(scope, panIndex, clientOwned,
                                     QStringLiteral("fftFps")),
                           kFftFpsMin, kFftFpsMax);
     }
 
     static void saveFftFps(const RadioSettingsScope& scope, int panIndex,
-                           bool shapedLocally, int fps)
+                           bool clientOwned, int fps)
     {
         if (fps < kFftFpsMin || fps > kFftFpsMax) {
             return;
         }
-        writeEntry(scope, panIndex, shapedLocally, QStringLiteral("fftFps"), fps);
+        writeEntry(scope, panIndex, clientOwned, QStringLiteral("fftFps"), fps);
     }
 
-    // `clientOwned` is clientOwnsDbmRange(), not shapesDisplayRatesLocally()
-    // alone.
+    // `clientOwned` is the backend's declaration
+    // (RadioCapabilities::clientPersistsDbmRange()).
     static std::optional<DbmRange> dbmRange(const RadioSettingsScope& scope,
                                             int panIndex, bool clientOwned)
     {
