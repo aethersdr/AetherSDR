@@ -518,6 +518,9 @@ private:
     int     m_nbLevelPercent = 0;
     int     m_notchPosPercent = 50;
     int     m_squelchPercent = 0;
+    // Our last 14 03 write was "on" at threshold 0. Icom has no squelch
+    // enable, so only this tells that write's own 0 readback from an Off.
+    bool    m_squelchOnAtZero = false;
     int     m_micGainPercent = 0;
     int     m_compLevelPercent = 0;
     bool    m_compEnable = false;

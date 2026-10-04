@@ -12,6 +12,7 @@
 #include <QCoreApplication>
 #include <algorithm>
 #include <cstdio>
+#include <optional>
 
 using namespace AetherSDR;
 
@@ -146,6 +147,18 @@ struct IcomCivBackendTestAccess {
         // deadline. Crossing a millisecond leaves the write for the next tick.
         // Drive that tick explicitly; this fixture never runs the event loop.
         backend.pumpCiv(backend.nowMs());
+    }
+
+    static void deliverSquelch(IcomCivBackend& backend, int raw)
+    {
+        backend.m_sessionGeneration = 1;
+        CivFrame frame;
+        frame.cmd = cmd::kLevel;
+        frame.hasSub = true;
+        frame.sub = level::kSquelch;
+        frame.data = {static_cast<std::uint8_t>(raw / 100),
+                      static_cast<std::uint8_t>(((raw % 100) / 10) * 16 + raw % 10)};
+        backend.onCivFrame(frame, 1);
     }
 
     static std::size_t queuedRequestCount(const IcomCivBackend& backend)
@@ -416,6 +429,39 @@ int main(int argc, char** argv)
             check(IcomCivBackendTestAccess::antennaReplyCompletesRead(transaction),
                   "bare antenna read completes on subcommand-bearing reply without timeout");
         }
+    }
+    // Icom has no squelch enable: the 14 03 threshold is the control. The
+    // readback of our own "on at 0" write must not read as Off, or every
+    // later setSquelch(receiveSquelchOn(), level) writes 0 again (#6172).
+    for (const char* name : {"IC-7300MK2", "IC-705", "IC-9700"}) {
+        const auto* model = modelForName(name);
+        check(model != nullptr, "squelch test model resolves");
+        if (!model) { continue; }
+        IcomCivBackend b;
+        IcomCivBackendTestAccess::prepareSession(b, *model);
+        std::optional<bool> on;
+        std::optional<int> level;
+        QObject::connect(&b, &IRadioBackend::sliceChanged, [&](int, const SliceDelta& delta) {
+            if (delta.squelchOn) { on = *delta.squelchOn; }
+            if (delta.squelchLevel) { level = *delta.squelchLevel; }
+        });
+        IcomCivBackendTestAccess::deliverSquelch(b, 0);
+        check(on == false && level == 0, "a connect-time 0 threshold reads as squelch off");
+        b.setSliceSquelch(0, true, 0);
+        IcomCivBackendTestAccess::deliverSquelch(b, 0);
+        check(on == true && level == 0,
+              "the readback of an on-at-0 write keeps squelch on");
+        IcomCivBackendTestAccess::deliverSquelch(b, 0);
+        check(on == true, "a periodic 0 poll after an on-at-0 write stays on");
+        b.setSliceSquelch(0, true, 20);
+        IcomCivBackendTestAccess::deliverSquelch(b, 51);
+        check(on == true && level == 20, "a non-zero threshold reads as squelch on");
+        IcomCivBackendTestAccess::deliverSquelch(b, 0);
+        check(on == false, "a radio-side return to 0 after a non-zero threshold reads as off");
+        b.setSliceSquelch(0, true, 0);
+        b.setSliceSquelch(0, false, 40);
+        IcomCivBackendTestAccess::deliverSquelch(b, 0);
+        check(on == false, "an explicit Off write reads back as off");
     }
     return g_failures ? 1 : 0;
 }

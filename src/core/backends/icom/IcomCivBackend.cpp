@@ -1569,6 +1569,7 @@ void IcomCivBackend::onSessionDisconnected(const QString& reason)
     m_accessoryModLevelPercent = -1;
     m_networkModLevelPercent = -1;
     m_micGainReported = false;
+    m_squelchOnAtZero = false;
     m_pcAudioEnabled.reset();
     m_dataOffModRestore.reset();
     m_lastModInputWarning.clear();
@@ -2129,8 +2130,13 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
             SliceDelta d;
             d.squelchLevel = pct;
             // NO SEPARATE ENABLE on this radio — the threshold IS the control,
-            // so a non-zero threshold is what "squelch on" means here.
-            d.squelchOn = pct > 0;
+            // so a non-zero threshold means "on". A zero is "off" unless it is
+            // the echo of our own on-at-0 write; a radio-side non-zero value
+            // ends that, so its later return to 0 reads as off again.
+            if (pct > 0) {
+                m_squelchOnAtZero = false;
+            }
+            d.squelchOn = pct > 0 || m_squelchOnAtZero;
             emit sliceChanged(sliceId(), d);
             return;
         }
@@ -4634,8 +4640,10 @@ void IcomCivBackend::setSliceSquelch(int, bool on, int level)
     // and squelch is "off" when it sits at zero. Mapping the UI's toggle onto
     // the threshold is the only honest translation available; the alternative
     // is a switch that does nothing.
+    const int raw = on ? percentToLevelRaw(level) : 0;
+    m_squelchOnAtZero = on && raw == 0;
     sendUserCommand(cmdSetLevel(m_session ? m_session->civAddress() : 0xA4,
-                                level::kSquelch, on ? percentToLevelRaw(level) : 0));
+                                level::kSquelch, raw));
 }
 
 void IcomCivBackend::setSliceFmToneMode(int, const QString& mode)
@@ -5639,7 +5647,7 @@ bool IcomCivBackend::scrubDrive(const icom::ControlSpec& c)
                                    : QStringLiteral("ANT1"));
         return true;
     }
-    if (id == QLatin1String("squelch"))  { setSliceSquelch(slice, m_squelchPercent > 0, m_squelchPercent); return true; }
+    if (id == QLatin1String("squelch"))  { setSliceSquelch(slice, m_squelchPercent > 0 || m_squelchOnAtZero, m_squelchPercent); return true; }
     if (id == QLatin1String("agc"))      { setSliceAgc(slice, m_agcMode, 0); return true; }
     if (id == QLatin1String("tx.power")) { writeTxPowerLevel(m_txPowerPercent); return true; }
     if (id == QLatin1String("mic.gain")) {
