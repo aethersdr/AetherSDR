@@ -32,6 +32,7 @@ private:
     void onStartClicked();
 #ifdef Q_OS_LINUX
     void offerUsbAccessRule();
+    void showManualRuleInstructions(const QString& why);
     void installUsbAccessRule();
     void startAfterRuleInstalled(int attemptsLeft);
 #endif

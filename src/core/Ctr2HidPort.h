@@ -28,10 +28,21 @@ public:
 
         // The CTR2 model these USB IDs belong to, or empty. They are the
         // ESP32-S3 boards' own IDs, so a match is a strong hint, not proof;
-        // the operator still picks the device.
+        // the first match is preselected and the operator may pick another.
         QString ctr2Model() const;
         QString label() const;
     };
+
+    // Every USB identity recognised as a CTR2. 303A:1001 is Espressif's
+    // default for any ESP32-S3, so the product string decides.
+    // packaging/linux/70-aethersdr-ctr2.rules must grant exactly this set.
+    struct KnownCtr2 {
+        quint16 vendorId;
+        quint16 productId;
+        const char* product;
+        const char* model;
+    };
+    static const std::vector<KnownCtr2>& knownCtr2Devices();
 
     using QObject::QObject;
     ~Ctr2HidPort() override = default;

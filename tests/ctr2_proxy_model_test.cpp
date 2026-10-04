@@ -9,6 +9,8 @@
 #include <QCoreApplication>
 #include <QFile>
 #include <QHostAddress>
+#include <QRegularExpression>
+#include <QSet>
 #include <QTemporaryDir>
 
 #include <cstdio>
@@ -117,6 +119,48 @@ void testRelayFollowsAetherSdrsRadio()
     check(!model.start() && log->shutdowns == shutdownsBefore + 1,
           "a refused port is handed back with shutdown(), which never blocks");
     QCoreApplication::processEvents();
+}
+
+// The packaged udev rule grants exactly the USB identities the app labels as
+// a CTR2: a recognised device the rule misses would loop forever on the
+// install prompt, and an extra one would open an unrelated ESP32-S3 board.
+void testUdevRuleMatchesKnownCtr2s()
+{
+    QFile file(QStringLiteral(AETHER_CTR2_UDEV_RULES));
+    check(file.open(QIODevice::ReadOnly | QIODevice::Text), "the packaged CTR2 udev rule is readable");
+    const auto key = [](quint16 vid, quint16 pid, const QString& product) {
+        return QStringLiteral("%1:%2:%3")
+            .arg(vid, 4, 16, QLatin1Char('0')).arg(pid, 4, 16, QLatin1Char('0')).arg(product);
+    };
+    static const QRegularExpression attr(QStringLiteral(R"re(ATTRS\{(idVendor|idProduct|product)\}=="([^"]*)")re"));
+    QSet<QString> granted;
+    for (const QString& line : QString::fromUtf8(file.readAll()).split(QLatin1Char('\n'))) {
+        if (line.trimmed().isEmpty() || line.trimmed().startsWith(QLatin1Char('#'))) {
+            continue;
+        }
+        QString vid, pid, products;
+        for (auto it = attr.globalMatch(line); it.hasNext();) {
+            const auto m = it.next();
+            (m.captured(1) == QLatin1String("idVendor") ? vid
+             : m.captured(1) == QLatin1String("idProduct") ? pid : products) = m.captured(2);
+        }
+        check(!vid.isEmpty() && !pid.isEmpty() && !products.isEmpty(),
+              "every rule line pins VID, PID and product string");
+        for (const QString& product : products.split(QLatin1Char('|'))) {
+            granted.insert(key(vid.toUShort(nullptr, 16), pid.toUShort(nullptr, 16), product));
+        }
+    }
+    QSet<QString> known;
+    for (const auto& d : AetherSDR::Ctr2HidPort::knownCtr2Devices()) {
+        known.insert(key(d.vendorId, d.productId, QString::fromLatin1(d.product)));
+    }
+    for (const QString& k : known - granted) {
+        std::fprintf(stderr, "  recognised but not granted: %s\n", qPrintable(k));
+    }
+    for (const QString& k : granted - known) {
+        std::fprintf(stderr, "  granted but not recognised: %s\n", qPrintable(k));
+    }
+    check(granted == known, "the udev rule grants exactly the recognised CTR2 devices");
 }
 
 // USB is the default mode when the build can open a CTR2, and the first
@@ -245,6 +289,7 @@ int main(int argc, char** argv)
     testRelayFollowsAetherSdrsRadio();
     testUsbAccessRuleDetection();
     testUsbDefaults();
+    testUdevRuleMatchesKnownCtr2s();
 
     if (g_failures) {
         std::fprintf(stderr, "%d check(s) failed\n", g_failures);

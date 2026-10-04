@@ -244,6 +244,21 @@ QString loadRule()
     return file.open(QIODevice::ReadOnly) ? QString::fromUtf8(file.readAll()) : QString();
 }
 
+// True when this build's rule is already in place, locally or as packaged.
+// Then a password prompt cannot help: the ACL is missing for another reason.
+bool ruleAlreadyInstalled(const QString& rule)
+{
+    for (const QString& dir : {QStringLiteral("/etc/udev/rules.d"),
+                               QStringLiteral("/usr/lib/udev/rules.d"),
+                               QStringLiteral("/lib/udev/rules.d")}) {
+        QFile file(dir + QStringLiteral("/70-aethersdr-ctr2.rules"));
+        if (file.open(QIODevice::ReadOnly) && QString::fromUtf8(file.readAll()) == rule) {
+            return true;
+        }
+    }
+    return false;
+}
+
 } // namespace
 
 // Linux opens USB devices like the CTR2 to root only until a udev rule grants
@@ -251,31 +266,21 @@ QString loadRule()
 // operator with a permissions error.
 void Ctr2ProxyApplet::offerUsbAccessRule()
 {
-    const QString pkexec = QStandardPaths::findExecutable(QStringLiteral("pkexec"));
-    if (pkexec.isEmpty()) {
-        // No polkit: save the rule where the operator can copy it by hand.
-        const QString dir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-        const QString saved = dir + QStringLiteral("/70-aethersdr-ctr2.rules");
-        QFile out(saved);
-        if (!QDir().mkpath(dir) || !out.open(QIODevice::WriteOnly)
-            || out.write(loadRule().toUtf8()) < 0) {
-            qCWarning(lcDevices) << "CTR2: could not save the udev rule to" << saved;
-        }
-        out.close();
+    if (ruleAlreadyInstalled(loadRule())) {
         ScopedChildWidget<QMessageBox> box(
-            QMessageBox::Warning, tr("CTR2 USB access"),
-            tr("Linux only lets the administrator open USB devices such as the CTR2, "
-               "and AetherSDR could not find pkexec to ask for permission.\n\n"
-               "To allow it, run these commands in a terminal, then unplug and "
-               "replug the CTR2:"),
+            QMessageBox::Information, tr("CTR2 USB access"),
+            tr("The CTR2 access rule is already installed, but this login still cannot "
+               "open the CTR2."),
             QMessageBox::Ok, this);
         box.get()->setInformativeText(
-            QStringLiteral("sudo cp '%1' '%2'\n"
-                           "sudo udevadm control --reload-rules\n"
-                           "sudo udevadm trigger --subsystem-match=hidraw")
-                .arg(saved, kRuleTarget));
-        box.get()->setTextInteractionFlags(Qt::TextSelectableByMouse);
+            tr("Unplug the CTR2, plug it back in, then press Start. The rule only opens "
+               "the CTR2 to whoever is logged in at this computer's own screen, so a "
+               "remote or background session cannot use it."));
         box.get()->exec();
+        return;
+    }
+    if (QStandardPaths::findExecutable(QStringLiteral("pkexec")).isEmpty()) {
+        showManualRuleInstructions(tr("pkexec is not installed"));
         return;
     }
 
@@ -298,27 +303,48 @@ void Ctr2ProxyApplet::offerUsbAccessRule()
     }
 }
 
-void Ctr2ProxyApplet::installUsbAccessRule()
+// No usable polkit: save the rule where the operator can copy it by hand.
+void Ctr2ProxyApplet::showManualRuleInstructions(const QString& why)
 {
-    const QString rule = loadRule();
-    if (rule.isEmpty()) {
-        qCWarning(lcDevices) << "CTR2: udev rule resource missing" << kRuleResource;
+    const QString dir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    const QString saved = dir + QStringLiteral("/70-aethersdr-ctr2.rules");
+    const QByteArray rule = loadRule().toUtf8();
+    QFile out(saved);
+    const bool wrote = !rule.isEmpty() && QDir().mkpath(dir)
+        && out.open(QIODevice::WriteOnly) && out.write(rule) == rule.size();
+    out.close();
+    if (!wrote) {
+        qCWarning(lcDevices) << "CTR2: could not save the udev rule to" << saved;
+        ScopedChildWidget<QMessageBox> box(
+            QMessageBox::Warning, tr("CTR2 USB access"),
+            tr("Linux only lets the administrator open USB devices such as the CTR2. "
+               "AetherSDR could not ask for permission (%1), and could not save the "
+               "access rule to %2 for you to install by hand.").arg(why, saved),
+            QMessageBox::Ok, this);
+        box.get()->exec();
         return;
     }
+    ScopedChildWidget<QMessageBox> box(
+        QMessageBox::Warning, tr("CTR2 USB access"),
+        tr("Linux only lets the administrator open USB devices such as the CTR2, "
+           "and AetherSDR could not ask for permission: %1.\n\n"
+           "To allow it, run these commands in a terminal, then unplug and "
+           "replug the CTR2:").arg(why),
+        QMessageBox::Ok, this);
+    box.get()->setInformativeText(
+        QStringLiteral("sudo cp '%1' '%2'\n"
+                       "sudo udevadm control --reload-rules\n"
+                       "sudo udevadm trigger --subsystem-match=hidraw")
+            .arg(saved, kRuleTarget));
+    box.get()->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    box.get()->exec();
+}
 
+void Ctr2ProxyApplet::installUsbAccessRule()
+{
     m_installingRule = true;
     syncConfiguration();
 
-    // Runs as root via polkit. The rule is passed as an argv element, never
-    // interpolated into the script. settle waits for the ACL to be applied.
-    static const QString kScript = QStringLiteral(
-        "set -e; "
-        "printf '%s' \"$1\" > \"$2\"; "
-        "udevadm control --reload-rules; "
-        "udevadm trigger --subsystem-match=hidraw; "
-        "udevadm settle --timeout=5 || true");
-
-    auto* proc = new QProcess(this);
     auto fail = [this](const QString& detail) {
         m_installingRule = false;
         syncConfiguration();
@@ -330,11 +356,31 @@ void Ctr2ProxyApplet::installUsbAccessRule()
         }
         box.get()->exec();
     };
-    // If pkexec cannot start, finished never fires.
+
+    const QString rule = loadRule();
+    if (rule.isEmpty()) {
+        qCWarning(lcDevices) << "CTR2: udev rule resource missing" << kRuleResource;
+        fail(tr("This build is missing its copy of the rule."));
+        return;
+    }
+
+    // Runs as root via polkit. The rule is passed as an argv element, never
+    // interpolated into the script. settle waits for the ACL to be applied.
+    static const QString kScript = QStringLiteral(
+        "set -e; "
+        "printf '%s' \"$1\" > \"$2\"; "
+        "udevadm control --reload-rules; "
+        "udevadm trigger --subsystem-match=hidraw; "
+        "udevadm settle --timeout=5 || true");
+
+    auto* proc = new QProcess(this);
+    // If pkexec cannot start, finished never fires. A crash emits both
+    // signals, so drop the other handler before showing the one dialog.
     connect(proc, &QProcess::errorOccurred, this, [proc, fail](QProcess::ProcessError) {
         if (proc->state() != QProcess::NotRunning) {
             return;
         }
+        QObject::disconnect(proc, nullptr, nullptr, nullptr);
         const QString why = proc->errorString();
         proc->deleteLater();
         fail(why);
@@ -347,9 +393,15 @@ void Ctr2ProxyApplet::installUsbAccessRule()
             return;
         }
         qCWarning(lcDevices) << "CTR2: udev rule install failed, code" << code << err;
-        if (code == 126 || code == 127) {  // polkit authorization dismissed or denied
+        if (code == 126) {  // the operator dismissed the polkit dialog
             m_installingRule = false;
             syncConfiguration();
+            return;
+        }
+        if (code == 127) {  // not authorized, or no polkit agent to ask with
+            m_installingRule = false;
+            syncConfiguration();
+            showManualRuleInstructions(err.isEmpty() ? tr("authorization failed") : err);
             return;
         }
         fail(err);
@@ -375,6 +427,9 @@ void Ctr2ProxyApplet::startAfterRuleInstalled(int attemptsLeft)
     }
     m_installingRule = false;
     syncConfiguration();
+    if (m_model->transport() != Ctr2ProxyModel::Transport::Usb) {
+        return;  // the Start was for USB; never start another transport from here
+    }
     if (m_model->usbDeviceNeedsAccessRule()) {
         ScopedChildWidget<QMessageBox> box(
             QMessageBox::Information, tr("CTR2 USB access"),
@@ -446,10 +501,11 @@ void Ctr2ProxyApplet::syncConfiguration()
 {
     const bool haveModel = m_model != nullptr;
     const bool running = haveModel && m_model->isRunning();
-    const bool editable = haveModel && !running;
+    const bool editable = haveModel && !running && !m_installingRule;
     const bool usb = haveModel && m_model->transport() == Ctr2ProxyModel::Transport::Usb;
-    const QString frozen = !haveModel ? tr("Proxy unavailable")
-                                      : tr("Stop the proxy to change its settings");
+    const QString frozen = !haveModel     ? tr("Proxy unavailable")
+        : m_installingRule ? tr("Waiting for administrator approval")
+                           : tr("Stop the proxy to change its settings");
 
     if (haveModel) {
         const QSignalBlocker block(m_modeCombo);
@@ -490,10 +546,13 @@ void Ctr2ProxyApplet::syncConfiguration()
     m_problemLabel->setVisible(!problem.isEmpty());
     m_startBtn->setText(m_installingRule ? tr("Authorizing\u2026")
                                           : (running ? tr("Stop") : tr("Start")));
-    m_startBtn->setAccessibleName(running ? tr("Stop CTR2 proxy") : tr("Start CTR2 proxy"));
+    m_startBtn->setAccessibleName(m_installingRule ? tr("Authorizing CTR2 USB access")
+                                  : (running ? tr("Stop CTR2 proxy") : tr("Start CTR2 proxy")));
     m_startBtn->setEnabled(haveModel && !m_installingRule && (running || problem.isEmpty()));
     m_startBtn->setAccessibleDescription(
-        !haveModel ? tr("Proxy unavailable") : (running ? QString() : problem));
+        !haveModel ? tr("Proxy unavailable")
+        : m_installingRule ? frozen
+        : (running ? QString() : problem));
 }
 
 void Ctr2ProxyApplet::syncStatus()
