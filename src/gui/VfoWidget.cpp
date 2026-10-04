@@ -761,6 +761,13 @@ VfoWidget::~VfoWidget()
     delete m_lockVfoBtn.data();
     delete m_recordBtn.data();
     delete m_playBtn.data();
+    // The label still routes its own teardown events through eventFilter(),
+    // whose `obj == m_collapsedFreqLabel` downcasts through QPointer<QLabel> --
+    // undefined once ~QLabel has run and the object is only a QWidget (UBSan,
+    // #6154). Detach the filter before deleting it.
+    if (m_collapsedFreqLabel) {
+        m_collapsedFreqLabel->removeEventFilter(this);
+    }
     delete m_collapsedFreqLabel.data();
 }
 
