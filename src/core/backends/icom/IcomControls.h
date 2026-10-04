@@ -105,7 +105,12 @@ struct ControlSpec {
 [[nodiscard]] bool controlSupported(const IcomModel& model,
                                     const IcomModelProfile& profile,
                                     const ControlSpec& spec) noexcept;
+// 14 0E both ways, in the profile's level domain 0..maximum: 2 is the
+// NOR/DX/DX+ presets, 100 the IC-9700's percent, anything else the radio's own
+// steps. The decode inverts the encode, so a write's readback lands on the
+// level that was written.
 [[nodiscard]] int speechProcessorRawLevel(int maximum, int level) noexcept;
+[[nodiscard]] int speechProcessorLevelFromRaw(int maximum, int raw) noexcept;
 
 [[nodiscard]] std::string_view encodingName(Encoding e);
 [[nodiscard]] std::string_view planeName(Plane p);

@@ -519,13 +519,13 @@ int main(int argc, char** argv)
               *AetherSDR::icom::modelForId(0xA2))
               .speechProcessorLabel == "COMP",
           "the IC-9700 profile declares its radio-native COMP label");
-    check(AetherSDR::icom::profileFor(
-              *AetherSDR::icom::modelForId(0xA4))
-                  .speechProcessorLevelMaximum == 2
-              && AetherSDR::icom::profileFor(
-                     *AetherSDR::icom::modelForId(0xB6))
-                     .speechProcessorLevelMaximum == 2,
-          "IC-705 and IC-7300MK2 retain the three-position processor contract");
+    for (const std::uint8_t civ : {std::uint8_t{0xB6}, std::uint8_t{0xA4}}) {
+        const auto& profile = AetherSDR::icom::profileFor(
+            *AetherSDR::icom::modelForId(civ));
+        check(profile.speechProcessorLevelMaximum == 10
+                  && profile.speechProcessorLabel == "COMP",
+              "IC-7300MK2 and IC-705 declare the radio-native COMP 0..10 (guide 14 0E: 0255=10)");
+    }
     check(icom::speechProcessorRawLevel(100, 0) == 0
               && icom::speechProcessorRawLevel(100, 50) == 128
               && icom::speechProcessorRawLevel(100, 100) == 255,
@@ -534,6 +534,79 @@ int main(int argc, char** argv)
               && icom::speechProcessorRawLevel(2, 1) == 153
               && icom::speechProcessorRawLevel(2, 2) == 229,
           "sibling Icom processor presets retain raw 76/153/229 encoding");
+    {
+        static constexpr int kMk2Raw[11] = {0, 26, 51, 77, 102, 128,
+                                            153, 179, 204, 230, 255};
+        bool encodes = true;
+        bool roundTrips = true;
+        for (int step = 0; step <= 10; ++step) {
+            encodes &= icom::speechProcessorRawLevel(10, step) == kMk2Raw[step];
+            roundTrips &= icom::speechProcessorLevelFromRaw(
+                10, icom::speechProcessorRawLevel(10, step)) == step;
+        }
+        check(encodes, "IC-7300MK2 COMP 0..10 writes the guide's 0000..0255 at step*25.5");
+        check(roundTrips, "every IC-7300MK2 COMP step survives write then readback");
+    }
+    // The MK2 answers with ITS bin centre for the stored step, not the raw it
+    // was sent. Live write -> readback: 0000 -> 0011, 0076 -> 0081,
+    // 0153 -> 0151, 0255 -> 0244, plus a held 0221. The guide's linear
+    // raw * 10 / 255 floors 0151 to 5 and puts 0242 (still bin 10) at 9.
+    check(icom::speechProcessorLevelFromRaw(10, 11) == 0
+              && icom::speechProcessorLevelFromRaw(10, 81) == 3
+              && icom::speechProcessorLevelFromRaw(10, 151) == 6
+              && icom::speechProcessorLevelFromRaw(10, 221) == 9
+              && icom::speechProcessorLevelFromRaw(10, 244) == 10,
+          "IC-7300MK2 COMP readback decodes every measured bin centre to its step");
+    check(icom::speechProcessorLevelFromRaw(10, 23) == 0
+              && icom::speechProcessorLevelFromRaw(10, 24) == 1
+              && icom::speechProcessorLevelFromRaw(10, 232) == 9
+              && icom::speechProcessorLevelFromRaw(10, 233) == 10
+              && icom::speechProcessorLevelFromRaw(10, 242) == 10,
+          "IC-7300MK2 COMP bins are 256/11 wide, not the guide's 255/10 line");
+    check(icom::speechProcessorLevelFromRaw(2, 76) == 0
+              && icom::speechProcessorLevelFromRaw(2, 81) == 0
+              && icom::speechProcessorLevelFromRaw(2, 151) == 1
+              && icom::speechProcessorLevelFromRaw(2, 229) == 2
+              && icom::speechProcessorLevelFromRaw(2, 0) == 0
+              && icom::speechProcessorLevelFromRaw(2, 255) == 2,
+          "preset COMP readback decodes to the nearest NOR/DX/DX+, not the top step");
+    check(icom::speechProcessorLevelFromRaw(100, 128) == 50
+              && icom::speechProcessorLevelFromRaw(100, 255) == 100,
+          "IC-9700 percent COMP readback is unchanged");
+    {
+        // Through the backend and into TransmitModel: the readback the radio
+        // sends after each write must land the slider where it was put. A
+        // percent published into the clamped model reads as the top step.
+        const auto readbackLevel = [](std::uint8_t civAddress, int maximum,
+                                      std::vector<std::uint8_t> bcd) {
+            icom::IcomCivBackend backend;
+            TransmitModel tx;
+            tx.setSpeechProcessorLevelMaximum(maximum);
+            const auto* radio = icom::modelForId(civAddress);
+            if (!radio) {
+                return -1;
+            }
+            icom::IcomCivBackendTestAccess::selectModel(backend, *radio);
+            QObject::connect(&backend, &IRadioBackend::transmitChanged, &tx,
+                             [&tx](const TransmitDelta& d) { tx.applyChanges(d); });
+            icom::CivFrame frame;
+            frame.cmd = icom::cmd::kLevel;
+            frame.hasSub = true;
+            frame.sub = icom::level::kCompLevel;
+            frame.data = std::move(bcd);
+            icom::IcomCivBackendTestAccess::injectConnectedFrame(backend, frame);
+            return tx.speechProcessorLevel();
+        };
+        check(readbackLevel(0xB6, 10, {0x00, 0x81}) == 3
+                  && readbackLevel(0xB6, 10, {0x01, 0x51}) == 6
+                  && readbackLevel(0xB6, 10, {0x02, 0x55}) == 10,
+              "IC-7300MK2 COMP readback reaches TransmitModel as the step written");
+        check(readbackLevel(0xA4, 10, {0x00, 0x81}) == 3
+                  && readbackLevel(0xA4, 10, {0x02, 0x55}) == 10,
+              "IC-705 COMP readback reaches TransmitModel as the step written");
+        check(readbackLevel(0xA2, 100, {0x01, 0x28}) == 50,
+              "IC-9700 percent COMP readback reaches TransmitModel unchanged");
+    }
     std::vector<std::uint8_t> tunerModels;
     for (const icom::IcomModel& model : icom::knownModels()) {
         if (icom::profileFor(model).supports(icom::IcomFeature::AntennaTuner)) {

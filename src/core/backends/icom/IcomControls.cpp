@@ -8,12 +8,36 @@ namespace AetherSDR::icom {
 int speechProcessorRawLevel(int maximum, int level) noexcept
 {
     const int bounded = std::clamp(level, 0, maximum);
-    if (maximum > 2) {
+    if (maximum == 100) {
         return (bounded * 255 + 99) / 100;
+    }
+    if (maximum > 2) {
+        // Nearest raw to step * 255 / maximum, so the end steps are exactly
+        // 0000 and 0255 (IC-7300MK2 guide: "00 00=0 ~ 02 55=10").
+        return (bounded * 255 + maximum / 2) / maximum;
     }
     static constexpr std::array<int, 3> kProcLevels{3, 6, 9};
     return kProcLevels[static_cast<std::size_t>(
         std::clamp(bounded, 0, 2))] * 255 / 10;
+}
+
+int speechProcessorLevelFromRaw(int maximum, int raw) noexcept
+{
+    const int bounded = std::clamp(raw, 0, 255);
+    if (maximum == 100) {
+        return bounded * 100 / 255;
+    }
+    // THE RADIO'S BINS, not the guide's line. The MK2 keeps 0..255 as
+    // maximum + 1 bins of 256/(maximum + 1) and answers with the bin centre,
+    // floor((step + 0.5) * 256 / 11): 0000 reads 0011, 0255 reads 0244.
+    // Decoding the bin leaves each centre half a bin from both edges. Readback
+    // table: docs/architecture/aetherd-icom-civ-backend-design.md §C.3.
+    const int step = bounded * (maximum > 2 ? maximum + 1 : 11) / 256;
+    if (maximum > 2) {
+        return step;
+    }
+    // NOR / DX / DX+ are written as steps 3 / 6 / 9 of ten; take the nearest.
+    return step <= 4 ? 0 : (step <= 7 ? 1 : 2);
 }
 
 namespace {

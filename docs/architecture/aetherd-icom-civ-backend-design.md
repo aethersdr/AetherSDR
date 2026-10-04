@@ -1197,7 +1197,17 @@ two commands on Icom, not one. Legacy profiles retain the shared PROC preset
 surface; a model profile may expose an evidenced continuous COMP level:
 `16 44` controls on/off and `14 0E` (0000–0255 ⇒ 0–10) is the level register.
 Legacy profiles map that register to the three shared PROC presets; the IC-9700
-profile maps it bidirectionally to the continuous 0–100 COMP percentage.
+profile maps it bidirectionally to the continuous 0–100 COMP percentage; the
+IC-7300MK2 and IC-705 profiles map it to the radio's own COMP steps 0–10 (the IC-705 from its guide's `0000=0 ~ 0255=10`, with the MK2's bin readback assumed until validated on a live IC-705). The MK2 does not
+echo the raw it was sent: it splits 0–255 into eleven bins of 256/11, keeps the
+bin, and answers with the bin's centre, `floor((step + 0.5) · 256 / 11)` (live
+write → readback: `0000` → `0011`, `0076` → `0081`, `0153` → `0151`, `0255` →
+`0244`; a held `0221` is step 9). The readback therefore decodes by bin,
+`raw · 11 / 256`, not by the guide's linear `raw · 10 / 255`, which floors
+`0151` to 5 and leaves `0244` one count from step 9. Both directions use the
+profile's maximum (`speechProcessorRawLevel` / `speechProcessorLevelFromRaw`); a
+percent readback into a preset-domain model clamped every non-zero read to the
+top step.
 
 ### C.4 RIT / XIT (`21 xx`) — entirely unmapped
 

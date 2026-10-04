@@ -2108,12 +2108,14 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
             return;
         }
         case level::kCompLevel: {
-            // Normalize the radio's compressor register to 0..100. The model
-            // capability decides whether that full domain survives to a
-            // continuous control or is bounded to the legacy preset surface.
-            m_compLevelPercent = pct;
+            // The SAME domain setSpeechProcessor writes from, the profile's
+            // 0..maximum: TransmitModel clamps to that maximum, so a percent
+            // here would read every non-zero level as the top step.
+            const int maximum = m_model
+                ? profileFor(*m_model).speechProcessorLevelMaximum : 2;
+            m_compLevel = speechProcessorLevelFromRaw(maximum, *raw);
             TransmitDelta t;
-            t.speechProcLevel = pct;
+            t.speechProcLevel = m_compLevel;
             emit transmitChanged(t);
             return;
         }
@@ -4407,7 +4409,7 @@ void IcomCivBackend::setSpeechProcessor(bool on, int level)
     m_compEnable = on;
     const int maximum = m_model
         ? profileFor(*m_model).speechProcessorLevelMaximum : 2;
-    m_compLevelPercent = std::clamp(level, 0, maximum);
+    m_compLevel = std::clamp(level, 0, maximum);
     const std::uint8_t addr = m_session ? m_session->civAddress() : 0xA4;
 
     // TWO REGISTERS, not one: 16 44 enables the compressor and 14 0E sets its
@@ -4430,8 +4432,9 @@ void IcomCivBackend::setSpeechProcessor(bool on, int level)
         return;   // the level is meaningless while the compressor is bypassed
 
     // Legacy Icom profiles retain NOR / DX / DX+ thirds. A profile with an
-    // evidenced continuous control writes the normalized percent directly.
-    const int raw = speechProcessorRawLevel(maximum, m_compLevelPercent);
+    // evidenced continuous control writes its own steps (MK2 0..10, IC-9700
+    // percent); the kCompLevel readback decodes with the same maximum.
+    const int raw = speechProcessorRawLevel(maximum, m_compLevel);
     sendUserCommand(cmdSetLevel(addr, level::kCompLevel, raw));
 }
 
@@ -5788,7 +5791,7 @@ bool IcomCivBackend::scrubDrive(const icom::ControlSpec& c)
         // Same shape: 14 0E only goes out while the compressor is enabled.
         if (id.endsWith(QLatin1String(".level")) && !m_compEnable)
             return false;
-        setSpeechProcessor(m_compEnable, m_compLevelPercent);
+        setSpeechProcessor(m_compEnable, m_compLevel);
         return true;
     }
 

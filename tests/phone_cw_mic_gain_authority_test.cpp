@@ -7,6 +7,7 @@
 #include <QApplication>
 #include <QAccessible>
 #include <QFile>
+#include <QLabel>
 #include <QPushButton>
 #include <QSignalSpy>
 #include <QSlider>
@@ -60,6 +61,15 @@ QPushButton* processorButton(PhoneCwApplet& applet)
     for (QPushButton* button : applet.findChildren<QPushButton*>()) {
         if (button->accessibleName() == QLatin1String("Speech processor"))
             return button;
+    }
+    return nullptr;
+}
+
+QLabel* processorValueLabel(PhoneCwApplet& applet)
+{
+    for (QLabel* label : applet.findChildren<QLabel*>()) {
+        if (label->accessibleName() == QLatin1String("Compressor level value"))
+            return label;
     }
     return nullptr;
 }
@@ -140,12 +150,50 @@ int main(int argc, char** argv)
     model.applyChanges(procReport);
     check(procSlider->value() == 73,
           "radio-reported continuous processor level returns to the slider");
+    QLabel* procValue = processorValueLabel(applet);
+    check(procValue != nullptr && !procValue->isHidden()
+              && procValue->text() == QLatin1String("73"),
+          "continuous COMP shows the radio's level as a number");
+
+    // IC-7300MK2: the radio's own COMP 0..10, one step per page, 0/5/10 ticks.
+    model.setSpeechProcessorLevelMaximum(10);
+    applet.setSpeechProcessorPresentation(QStringLiteral("COMP"), 10);
+    QLabel* procLabels[3] = {nullptr, nullptr, nullptr};
+    int found = 0;
+    for (QLabel* label : procSlider->parentWidget()->findChildren<QLabel*>()) {
+        if (found < 3)
+            procLabels[found++] = label;
+    }
+    check(procSlider->maximum() == 10 && procSlider->pageStep() == 1
+              && procSlider->tickInterval() == 1,
+          "MK2 COMP exposes 0..10 in single steps");
+    check(found == 3 && procLabels[0]->text() == QLatin1String("0")
+              && procLabels[1]->text() == QLatin1String("5")
+              && procLabels[2]->text() == QLatin1String("10"),
+          "MK2 COMP tick labels read 0 / 5 / 10, not NOR/DX/DX+ or percent");
+    check(procSlider->accessibleDescription()
+              == QLatin1String("Speech compressor level from 0 to 10"),
+          "MK2 COMP slider describes its own 0..10 range");
+    check(model.speechProcessorLevel() == 10 && procSlider->value() == 10
+              && procValue && procValue->text() == QLatin1String("10"),
+          "narrowing to COMP 0..10 bounds the held level and its readout");
+    procSlider->setValue(6);
+    check(model.speechProcessorLevel() == 6 && procValue->text() == QLatin1String("6"),
+          "an MK2 COMP step reaches the transmit model unchanged");
+    TransmitDelta mk2Report;
+    mk2Report.speechProcLevel = 3;
+    model.applyChanges(mk2Report);
+    check(procSlider->value() == 3 && procValue->text() == QLatin1String("3"),
+          "radio-reported MK2 COMP step returns to the slider and readout");
+
     applet.setSpeechProcessorPresentation(QStringLiteral("PROC"), 2);
     model.setSpeechProcessorLevelMaximum(2);
     check(procSlider->maximum() == 2 && model.speechProcessorLevel() == 2
               && procButton->width() == 48
               && !procButton->property("continuousCompressor").toBool(),
           "three-position capability restores and bounds the legacy surface");
+    check(procValue && procValue->isHidden(),
+          "NOR/DX/DX+ presets name themselves; no numeric readout");
 
     QFile mainWindowSource(QStringLiteral(AETHER_SOURCE_DIR "/src/gui/MainWindow.cpp"));
     check(mainWindowSource.open(QIODevice::ReadOnly),

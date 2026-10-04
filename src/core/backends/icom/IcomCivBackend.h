@@ -519,7 +519,7 @@ private:
     int     m_notchPosPercent = 50;
     int     m_squelchPercent = 0;
     int     m_micGainPercent = 0;
-    int     m_compLevelPercent = 0;
+    int     m_compLevel = 0;
     bool    m_compEnable = false;
     bool    m_monitorOn = false;
     int     m_monitorLevelPercent = 0;

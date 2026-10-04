@@ -535,6 +535,10 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
     static const IcomModelProfile kIc705Profile{
         .supportedBringup = true,
         .hasGpsHardware = true,
+        // IC-705 guide: 14 0E "0000=0 ~ 0255=10", the same COMP 0..10 as the
+        // MK2. The MK2's bin readback is assumed here, pending a live IC-705.
+        .speechProcessorLevelMaximum = 10,
+        .speechProcessorLabel = "COMP",
         .guideRevision = "IC-705 CI-V Reference Guide 2020",
         .features = kIc705Evidence,
         .modulation = ModulationProfile{116, -1, 117, 118, 119, 0x03, 0x00,
@@ -602,6 +606,10 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
         .hasModeIndependentSquelch = true,
         .hasCwTune = false,
         .pollCwSquelchAndTxBandwidth = true,
+        // MK2 guide: 14 0E "00 00=0 ~ 02 55=10"; the radio's own COMP control
+        // is 0..10. Not NOR/DX/DX+, which is Flex's speech processor.
+        .speechProcessorLevelMaximum = 10,
+        .speechProcessorLabel = "COMP",
         .guideRevision = "IC-7300MK2 CI-V Reference Guide",
         .features = kIc7300Mk2Evidence,
         .modulation = ModulationProfile{81, 82, 83, 84, 85, 0x05, 0x00,

@@ -240,8 +240,9 @@ int main(int argc, char** argv)
                       && !caps.voxControl->hasDelay,
                   "IC-7300MK2 declares unimplemented controls unavailable");
             check(caps.txMonitorControl && caps.speechProcessorControl
-                      && caps.speechProcessorControl->levelMaximum == 2,
-                  "IC-7300MK2 declares its VOX, monitor and three-position PROC");
+                      && caps.speechProcessorControl->levelMaximum == 10
+                      && caps.speechProcessorControl->label == QStringLiteral("COMP"),
+                  "IC-7300MK2 declares its VOX, monitor and radio-native COMP 0..10");
             IcomCivBackendTestAccess::prepareSession(backend, *ic7300Mk2);
             const auto queued = IcomCivBackendTestAccess::queuedRequestCount(backend);
             backend.setSliceAgc(0, QStringLiteral("off"), 0);
