@@ -37,10 +37,11 @@ const QString kButtonStyle = QStringLiteral(
 
 const QString kComboExtra = QStringLiteral("QComboBox { font-size: 10px; }");
 
-QLabel* makeLabel(const QString& text, const QString& colorToken, QWidget* parent)
+QLabel* makeLabel(const QString& text, const QString& colorToken, QWidget* parent,
+                  bool wrap = false)
 {
     auto* label = new QLabel(text, parent);
-    label->setWordWrap(true);
+    label->setWordWrap(wrap);
     ThemeManager::instance().applyStyleSheet(
         label, QStringLiteral("QLabel { color: {{%1}}; font-size: 10px; }").arg(colorToken));
     return label;
@@ -75,15 +76,6 @@ void Ctr2ProxyApplet::buildUi()
     auto* vbox = new QVBoxLayout(this);
     vbox->setContentsMargins(4, 4, 4, 4);
     vbox->setSpacing(4);
-
-    auto* note = makeLabel(
-        tr("Relays a CTR2's radio connection unchanged, over Wi-Fi (TCP) or USB "
-           "(TCP and UDP), to the radio AetherSDR is connected to. No discovery or "
-           "SmartLink. The CTR2 is its own radio client; its commands do not pass "
-           "AetherSDR's transmit guards."),
-        QStringLiteral("color.text.secondary"), this);
-    note->setAccessibleName(tr("CTR2 proxy scope"));
-    vbox->addWidget(note);
 
     auto* grid = new QGridLayout;
     grid->setHorizontalSpacing(4);
@@ -143,22 +135,41 @@ void Ctr2ProxyApplet::buildUi()
     grid->setColumnStretch(1, 1);
     vbox->addLayout(grid);
 
-    m_problemLabel = makeLabel(QString(), QStringLiteral("color.accent.warning"), this);
+    m_problemLabel = makeLabel(QString(), QStringLiteral("color.accent.warning"), this, true);
     m_problemLabel->setAccessibleName(tr("CTR2 proxy configuration"));
     vbox->addWidget(m_problemLabel);
 
-    m_stateLabel = makeLabel(QString(), QStringLiteral("color.text.primary"), this);
+    // Status readouts in their own pane with a 1 px minimum, so a window sized
+    // below the default clips the status from the bottom before the layout
+    // starts squeezing the controls above.
+    auto* statusPane = new QWidget(this);
+    statusPane->setMinimumHeight(1);
+    auto* statusBox = new QVBoxLayout(statusPane);
+    statusBox->setContentsMargins(0, 0, 0, 0);
+    statusBox->setSpacing(4);
+
+    m_stateLabel = makeLabel(QString(), QStringLiteral("color.text.primary"), statusPane);
     m_stateLabel->setObjectName(QStringLiteral("ctr2ProxyState"));
-    vbox->addWidget(m_stateLabel);
-    m_endpointsLabel = makeLabel(QString(), QStringLiteral("color.text.secondary"), this);
+    statusBox->addWidget(m_stateLabel);
+    // Endpoints and traffic side by side to save vertical space.
+    auto* statusRow = new QHBoxLayout;
+    statusRow->setSpacing(8);
+    m_endpointsLabel = makeLabel(QString(), QStringLiteral("color.text.secondary"), statusPane);
     m_endpointsLabel->setObjectName(QStringLiteral("ctr2ProxyEndpoints"));
-    vbox->addWidget(m_endpointsLabel);
-    m_trafficLabel = makeLabel(QString(), QStringLiteral("color.text.secondary"), this);
+    m_endpointsLabel->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+    // Docked width is tight: let the endpoints clip rather than widen the panel.
+    m_endpointsLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    statusRow->addWidget(m_endpointsLabel, 1);
+    m_trafficLabel = makeLabel(QString(), QStringLiteral("color.text.secondary"), statusPane);
     m_trafficLabel->setObjectName(QStringLiteral("ctr2ProxyTraffic"));
-    vbox->addWidget(m_trafficLabel);
-    m_errorLabel = makeLabel(QString(), QStringLiteral("color.accent.danger"), this);
+    m_trafficLabel->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+    statusRow->addWidget(m_trafficLabel);
+    statusBox->addLayout(statusRow);
+    m_errorLabel = makeLabel(QString(), QStringLiteral("color.accent.danger"), statusPane, true);
     m_errorLabel->setObjectName(QStringLiteral("ctr2ProxyError"));
-    vbox->addWidget(m_errorLabel);
+    statusBox->addWidget(m_errorLabel);
+    statusBox->addStretch(1);
+    vbox->addWidget(statusPane, 1);
 
     connect(m_modeCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int idx) {
         if (m_model) {
@@ -291,6 +302,7 @@ void Ctr2ProxyApplet::syncConfiguration()
 
     const QString problem = editable ? m_model->configurationProblem() : QString();
     m_problemLabel->setText(problem);
+    m_problemLabel->setVisible(!problem.isEmpty());
     m_startBtn->setText(running ? tr("Stop") : tr("Start"));
     m_startBtn->setAccessibleName(running ? tr("Stop CTR2 proxy") : tr("Start CTR2 proxy"));
     m_startBtn->setEnabled(haveModel && (running || problem.isEmpty()));
@@ -304,6 +316,7 @@ void Ctr2ProxyApplet::syncStatus()
         m_stateLabel->setText(tr("State: Stopped"));
         m_endpointsLabel->clear();
         m_errorLabel->clear();
+        m_errorLabel->hide();
         return;
     }
     m_stateLabel->setText(tr("State: %1").arg(m_model->stateText()));
@@ -312,7 +325,7 @@ void Ctr2ProxyApplet::syncStatus()
     const bool usb = m_model->transport() == Ctr2ProxyModel::Transport::Usb;
     QStringList parts;
     if (!m_model->listenerEndpoint().isEmpty()) {
-        parts << tr("Listening %1").arg(m_model->listenerEndpoint());
+        parts << tr("Listen %1").arg(m_model->listenerEndpoint());
     }
     if (!m_model->peerEndpoint().isEmpty()) {
         parts << (usb ? tr("USB %1") : tr("CTR2 %1")).arg(m_model->peerEndpoint());
@@ -325,6 +338,7 @@ void Ctr2ProxyApplet::syncStatus()
 
     const QString err = m_model->lastError();
     m_errorLabel->setText(err.isEmpty() ? QString() : tr("Last error: %1").arg(err));
+    m_errorLabel->setVisible(!err.isEmpty());
     m_errorLabel->setAccessibleName(m_errorLabel->text());
 }
 
@@ -335,18 +349,34 @@ void Ctr2ProxyApplet::syncStats()
         return;
     }
     const TcpByteProxy::Stats s = m_model->stats();
-    QString text = tr("To radio %1 (queued %2)\nTo CTR2 %3 (queued %4)")
-        .arg(formatBytes(s.toUpstream), formatBytes(static_cast<quint64>(s.queuedToUpstream)),
-             formatBytes(s.toDownstream), formatBytes(static_cast<quint64>(s.queuedToDownstream)));
+    // Compact text for the narrow column; the accessible name spells it out.
+    auto direction = [](const QString& label, quint64 sent, qint64 queued) {
+        QString line = label.arg(formatBytes(sent));
+        if (queued > 0) {
+            line += tr(" (+%1 queued)").arg(formatBytes(static_cast<quint64>(queued)));
+        }
+        return line;
+    };
+    QStringList lines{direction(tr("\u2191 Radio %1"), s.toUpstream, s.queuedToUpstream),
+                      direction(tr("\u2193 CTR2 %1"), s.toDownstream, s.queuedToDownstream)};
+    QStringList spoken{
+        tr("To radio %1, queued %2").arg(formatBytes(s.toUpstream),
+                                         formatBytes(static_cast<quint64>(s.queuedToUpstream))),
+        tr("To CTR2 %1, queued %2").arg(formatBytes(s.toDownstream),
+                                        formatBytes(static_cast<quint64>(s.queuedToDownstream)))};
     if (s.rejectedClients > 0) {
-        text += tr("\nRejected extra clients: %1").arg(s.rejectedClients);
+        lines << tr("Rejected %1").arg(s.rejectedClients);
+        spoken << tr("Rejected extra clients: %1").arg(s.rejectedClients);
     }
     if (m_model->transport() == Ctr2ProxyModel::Transport::Usb) {
-        text += tr("\nUDP: %1 to radio, %2 to CTR2, %3 dropped")
-                    .arg(s.datagramsToRadio).arg(s.datagramsToDevice).arg(s.datagramsDropped);
+        lines << tr("UDP \u2191%1 \u2193%2 \u2715%3")
+                     .arg(s.datagramsToRadio).arg(s.datagramsToDevice).arg(s.datagramsDropped);
+        spoken << tr("UDP: %1 to radio, %2 to CTR2, %3 dropped")
+                      .arg(s.datagramsToRadio).arg(s.datagramsToDevice).arg(s.datagramsDropped);
     }
+    const QString text = lines.join(QLatin1Char('\n'));
     m_trafficLabel->setText(text);
-    m_trafficLabel->setAccessibleName(QString(text).replace(QLatin1Char('\n'), QStringLiteral(", ")));
+    m_trafficLabel->setAccessibleName(spoken.join(QStringLiteral(", ")));
 }
 
 } // namespace AetherSDR
