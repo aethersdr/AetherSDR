@@ -118,9 +118,11 @@ F4/M1 provides this; F3a does not invent those values. Then:
    non-restored entries. Explicit user removals remove their stable IDs.
 
 Stored capture center/rate provide context; they do not authorize a post-connect
-recenter to accommodate otherwise rejected slices. AGC/squelch schema support is
-not evidence that the experimental demodulator applies those controls. Live
-stereo detection is not part of this document.
+recenter to accommodate otherwise rejected slices. FM/FM-N now apply accepted
+squelch enabled/level values; legacy modes restore with squelch Off. AGC schema
+support still does not establish an implemented AGC control. The desktop owns
+per-receiver manual/Auto intent separately; see [M1 runtime](rtl-m1-runtime.md).
+Live stereo detection is not part of this document.
 
 The headless catalogue remains observe-only and continues publishing its existing
 serial locator field. This PR does not expand that public wire schema. A future

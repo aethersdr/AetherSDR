@@ -71,6 +71,13 @@ struct ReceivePanRangeControl {
     // bandwidth support promises no slice creation/removal or retune.
 };
 
+// Desktop capture-placement control. It preserves every receiver's RF and
+// passband while relocating the shared capture away from converter DC. This
+// record alone grants no headless-control verb or hardware acknowledgement.
+struct ReceiveCapturePlacement {
+    qint64 minimumDcSeparationHz = 0;
+};
+
 // What the panadapter's SPAN is made of. Absent means NO BACKEND HAS BEEN READ
 // on the question — not "no". That distinction is the whole reason this is a
 // record and not two bools (#5262 M2): a bool that nobody set reports a
@@ -99,6 +106,14 @@ struct BackendPanAveraging {
     // One FFT AVG slider step as an averaging time (ANAN: deskHPSDR's 10 ms/step,
     // 0 = off). No default: an engaging backend must state its own unit.
     int msPerAverageStep;
+    // Explicit client persistence owner for these two local display controls.
+    // False preserves a family's existing settings behavior. This is separate
+    // from computing an average: ANAN already computes one without this owner.
+    bool clientPersistsAveraging;
+    // Empty preserves existing UI wording. A backend with different averaging
+    // units or weighted semantics supplies the descriptions of its controls.
+    QString averageDescription;
+    QString weightedDescription;
 };
 
 // Meaning of the panadapter's vertical axis. Absent means no backend has been
@@ -226,6 +241,7 @@ struct RadioCapabilities {
     // answers when it is absent, so read it through the accessors below rather
     // than unwrapping it at the call site.
     std::optional<PanSpanModel> panSpanModel;
+    std::optional<ReceiveCapturePlacement> receiveCapturePlacement;
     std::optional<PanAmplitudeModel> panAmplitude;
     // See BackendPanAveraging. Absent = the widget averages client-side.
     std::optional<BackendPanAveraging> backendPanAveraging;
@@ -425,6 +441,7 @@ struct RadioCapabilities {
         Memories    = 1u << 5,  // host-side memory bank documents (#4590 fold-in)
         Agc         = 1u << 6,  // AGC mode + threshold (client-side WDSP AGC)
         Cw          = 1u << 7,  // client-side keyer/sidetone setpoints; never keying
+        RtlSlices   = 1u << 8,  // accepted RTL capture and stable receiver documents
     };
     Q_DECLARE_FLAGS(ClientSettingsDomains, ClientSettingsDomain)
     ClientSettingsDomains clientSettingsDomains;   // default: empty — restore nothing

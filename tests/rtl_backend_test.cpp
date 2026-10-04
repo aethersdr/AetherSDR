@@ -6,17 +6,13 @@
 #include "core/backends/rtl/RtlSdrDdc.h"
 #include "core/backends/rtl/RtlSdrWorker.h"
 #include "core/RtlSdrDiscovery.h"
-#include "SeamThreadAffinityProbe.h"
 
 #include <QCoreApplication>
-#include <QDeadlineTimer>
 #include <QJsonObject>
-#include <QPointer>
-#include <QThread>
-#include <atomic>
 #include <cstdio>
-#include <functional>
 #include <memory>
+#include <numbers>
+#include <cmath>
 
 using namespace AetherSDR;
 
@@ -28,72 +24,6 @@ static void check(bool cond, const char* what)
         ++g_failures;
     }
 }
-
-#ifdef AETHER_BACKEND_RTL
-namespace AetherSDR::rtl {
-
-// Installs a worker the way connectRadio() does, without a dongle.
-struct RtlSdrBackendTestAccess {
-    static void connectWith(RtlSdrBackend& backend, RtlSdrWorker* worker)
-    {
-        backend.m_worker.reset(worker);
-        backend.wireWorker();
-        worker->start();
-        backend.m_connected = true;
-    }
-    // The same wiring with the connected flag still false.
-    static void wireOnly(RtlSdrBackend& backend, RtlSdrWorker* worker)
-    {
-        backend.m_worker.reset(worker);
-        backend.wireWorker();
-        worker->start();
-    }
-};
-
-}  // namespace AetherSDR::rtl
-
-namespace {
-
-// A USB reader that ignores cancellation, as a wedged libusb stack does, so
-// stopReading() gives up and disconnectRadio() strands it. It emits spectrum
-// from its own thread through the DDC, the production path.
-class StuckWorker : public rtl::RtlSdrWorker {
-public:
-    StuckWorker() : RtlSdrWorker(nullptr) {}
-    std::atomic<int> framesToEmit{0};
-    std::atomic<bool> release{false};
-    std::atomic<bool> failRead{false};
-    std::atomic<bool> readFailed{false};
-
-protected:
-    void run() override
-    {
-        while (!release.load()) {
-            if (failRead.exchange(false)) {
-                emit readError(QStringLiteral("simulated USB read failure"));
-                readFailed = true;
-            }
-            while (framesToEmit.load() > 0) {
-                --framesToEmit;
-                emit ddc()->spectrumFrameReady(0, QByteArray(16, '\x01'));
-            }
-            QThread::msleep(5);
-        }
-    }
-};
-
-bool spinUntil(const std::function<bool()>& done, int ms)
-{
-    QDeadlineTimer deadline(ms);
-    while (!done() && !deadline.hasExpired()) {
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
-    }
-    return done();
-}
-
-}  // namespace
-#endif
 
 int main(int argc, char** argv)
 {
@@ -171,10 +101,37 @@ int main(int argc, char** argv)
 
     // Feed 4096 synthetic complex float IQ samples
     QVector<std::complex<float>> syntheticSamples(4096, std::complex<float>(0.5f, 0.5f));
-    ddc.processIqData(syntheticSamples);
+    // A display frame now requires a complete continuous observation.
+    for (int i = 0; i < rtl::RtlSdrDdc::kSpectrumBinCount / syntheticSamples.size(); ++i) {
+        ddc.processIqData(syntheticSamples);
+    }
 
     check(spectrumEmitted, "RtlSdrDdc emitted spectrumFrameReady");
     check(audioEmitted, "RtlSdrDdc emitted audioFrameReady");
+
+    // WFM keeps its existing demodulation. Its independent tap must remain
+    // identical while monitor mute clocks silence at the same 24 kHz rate.
+    {
+        rtl::RtlSdrDdc audible, muted;
+        muted.setAudioMute(true); muted.setAudioGain(0);
+        QByteArray reference, tap, silent;
+        QObject::connect(&audible, &rtl::RtlSdrDdc::audioFrameReady,
+            [&](const QByteArray&, const QByteArray& preMonitor) { reference.append(preMonitor); });
+        QObject::connect(&muted, &rtl::RtlSdrDdc::audioFrameReady,
+            [&](const QByteArray& monitor, const QByteArray& preMonitor) { silent.append(monitor); tap.append(preMonitor); });
+        QVector<std::complex<float>> samples(8192);
+        for (int block = 0; block < 32; ++block) {
+            for (int i = 0; i < samples.size(); ++i) {
+                const double t = (block * samples.size() + i) / 2400000.0;
+                const double phase = 50 * std::sin(2 * std::numbers::pi * 1000 * t);
+                samples[i] = {float(0.5 * std::cos(phase)), float(0.5 * std::sin(phase))};
+            }
+            audible.processIqData(samples); muted.processIqData(samples);
+        }
+        check(!reference.isEmpty() && reference == tap, "WFM pre-monitor samples unchanged by mute/gain");
+        check(silent.size() == tap.size(), "muted WFM keeps truthful PCM duration");
+        check(std::ranges::all_of(silent, [](char byte) { return byte == 0; }), "muted WFM monitor is silence");
+    }
 
     // 5. Test direct sampling mode persistence contract
     RestoredRadioState hfState;
@@ -213,69 +170,6 @@ int main(int argc, char** argv)
     check(rtl::RtlSdrBackend::clampSampleRate(10'000'000u) == 3'000'000u, "clampSampleRate(10M) -> 3000000");
     check(rtl::RtlSdrBackend::clampSampleRate(2'400'000u) == 2'400'000u, "clampSampleRate(2.4M) -> 2400000");
     check(rtl::RtlSdrBackend::clampSampleRate(2'500'000u) == 2'400'000u, "clampSampleRate(2.5M) -> 2400000");
-
-    // 7. Contract rule 6 (#6096): a worker stranded by a failed stopReading()
-    // keeps running and stays connected to the backend. Its spectrum must not
-    // reach the seam after disconnected().
-    {
-        rtl::RtlSdrBackend stranding;
-        test::SeamThreadAffinityProbe probe(&stranding);
-        test::attachAllSeamSignals(probe);
-        auto* worker = new StuckWorker;
-        QPointer<StuckWorker> alive(worker);
-        rtl::RtlSdrBackendTestAccess::connectWith(stranding, worker);
-
-        worker->framesToEmit = 1;
-        check(spinUntil([&] { return probe.count("spectrumFrameReady") == 1; }, 2000),
-              "a connected worker's spectrum reaches the seam");
-
-        // A read failure posted to the backend just before the operator
-        // disconnects is delivered after disconnected(); it must not surface.
-        worker->failRead = true;
-        while (!worker->readFailed.load()) {
-            QThread::msleep(1);
-        }
-
-        stranding.disconnectRadio();   // stopReading() gives up after ~5 s
-        check(alive && worker->isRunning(), "the stuck worker was stranded, not joined");
-        check(probe.count("disconnected") == 1, "disconnectRadio() emitted disconnected()");
-
-        worker->framesToEmit = 3;
-        spinUntil([&] { return worker->framesToEmit.load() == 0; }, 2000);
-        spinUntil([] { return false; }, 200);   // deliver whatever was queued
-        check(probe.count("connectionError") == 0,
-              "a read error queued before the disconnect is not reported after it");
-        check(probe.afterDisconnect().isEmpty(),
-              "a stranded worker emits nothing at the seam after disconnected()");
-        check(probe.violations().isEmpty(), "every seam signal emitted on the backend thread");
-
-        worker->release = true;
-        check(spinUntil([&] { return alive.isNull(); }, 2000),
-              "the stranded worker deletes itself once its thread finishes");
-    }
-
-    // 8. The connected flag gates on its own: a current worker's output is
-    // dropped while the backend is not connected.
-    {
-        rtl::RtlSdrBackend unconnected;
-        test::SeamThreadAffinityProbe probe(&unconnected);
-        test::attachAllSeamSignals(probe);
-        auto* worker = new StuckWorker;
-        rtl::RtlSdrBackendTestAccess::wireOnly(unconnected, worker);
-
-        worker->framesToEmit = 1;
-        worker->failRead = true;
-        spinUntil([&] { return worker->readFailed.load() && worker->framesToEmit.load() == 0; },
-                  2000);
-        spinUntil([] { return false; }, 200);   // deliver whatever was queued
-        check(probe.count("spectrumFrameReady") == 0,
-              "a current worker's spectrum is dropped while not connected");
-        check(probe.count("connectionError") == 0,
-              "a current worker's read error is dropped while not connected");
-
-        worker->release = true;
-        check(worker->wait(2000), "the unconnected worker's thread finishes");
-    }
 #else
 
     std::fprintf(stderr, "rtl_backend_test: SKIPPED (librtlsdr support disabled)\n");

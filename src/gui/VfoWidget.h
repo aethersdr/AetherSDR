@@ -39,6 +39,7 @@ namespace AetherSDR {
 class SliceModel;
 class TransmitModel;
 class RadioModel;
+class ControlAvailabilityRegistry;
 class PhaseKnob;
 class RxApplet;
 class KiwiSdrManager;
@@ -412,6 +413,8 @@ private:
     void updateDspTabAccent();
     void deactivateTabButton(int closedTab);  // reset a just-closed tab's style
     void updateFreqLabel();
+    void updateCaptureStatus();
+    void updateCollapsedFrequencyLabel();
     bool cancelDirectEntry();
     void updateFilterLabel();
     void updateModeTab();
@@ -430,6 +433,13 @@ private:
     SliceModel*    m_slice{nullptr};
     TransmitModel* m_txModel{nullptr};
     RadioModel*    m_radioModel{nullptr};
+    ControlAvailabilityRegistry* m_filterAvailability{nullptr};
+    std::optional<ReceiveFilterControl> m_receiveFilterControl;
+    // exclusiveSquelchScaleValue(caps.squelchLevelScale): the receiver's own gate.
+    std::optional<SquelchLevelScale> m_exclusiveSquelch;
+    QPushButton* m_filterUnavailable{nullptr};
+    QVector<int> defaultFilterWidths(const QString& mode) const;
+    bool acceptsFilterEdges(int low, int high) const;
     KiwiSdrManager* m_kiwiSdrManager{nullptr};
     QStringList    m_antList;
     bool           m_updatingFromModel{false};
@@ -479,6 +489,7 @@ private:
 
     // Frequency / meter
     QLabel* m_freqLabel{nullptr};
+    QLabel* m_captureStatusLabel{nullptr};
     QLineEdit* m_freqEdit{nullptr};
     QStackedWidget* m_freqStack{nullptr};
     QLabel* m_dbmLabel{nullptr};

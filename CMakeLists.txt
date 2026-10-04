@@ -896,10 +896,15 @@ set(CORE_SOURCES
     src/core/backends/icom/IcomCredentials.cpp # password -> keychain, NEVER settings
     src/core/dsp/FftwPlannerLock.cpp # the one process-global FFTW planner lock (#5895)
     src/core/dsp/WdspChannel.cpp
+    src/core/backends/rtl/RtlCaptureTransaction.cpp
+    src/core/backends/rtl/RtlReceivePipeline.cpp
+    src/core/backends/rtl/RtlAudioMixer.cpp
+    src/core/backends/rtl/RtlRfExtractor.cpp
     src/core/backends/rtl/RtlReceiverRegistry.cpp # RFC #5468 prepared receiver ownership; no USB dependency
     ${AETHER_SETTINGS_SOURCES}
     src/core/RadioStateMemory.cpp   # RFC #4603 client-side radio memory
     src/core/RtlSliceSettings.cpp   # RFC #5468 persistence foundation
+    src/core/RtlDeviceSettings.cpp  # accepted per-device calibration and IQ controls
     src/core/GpuSelector.cpp
     src/core/QtAudioBackendGuard.cpp  # pre-QApplication: keeps Qt 6.12 off a crashing PipeWire backend
     src/core/AgcTCalibrator.cpp
@@ -1226,6 +1231,7 @@ set(GUI_SOURCES
     src/gui/SmartMtrConfig.cpp
     src/gui/MeterViewController.cpp
     src/gui/RadioSetupDialog.cpp
+    src/gui/RtlReceiverSettingsWidget.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
     src/gui/NetworkDiagnosticsDialog.cpp
     src/gui/SystemInfoDialog.cpp

@@ -827,6 +827,7 @@ private:
     void adoptClientOwnedDbmRange(const QString& panId, int panIndex,
                                   float minDbm, float maxDbm);
     void restoreClientOwnedDbmRange(PanadapterModel* pan, int panIndex);
+    void scheduleClientFftAverageSave(int panIndex, int average, bool weighted);
     void wirePanDisplayStatus(PanadapterApplet* applet, PanadapterModel* pan);
     void reassertUnmutedSliceAudioForPan(const QString& panId);
     void onMuteAllSlicesToggle();
