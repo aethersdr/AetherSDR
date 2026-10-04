@@ -2762,7 +2762,7 @@ QWidget* RadioSetupDialog::buildTxTab()
             swBtn->setText(on ? "Enabled" : "Disabled");
             // A radio whose waterfall rows are made on this host has no
             // display engine to tell: the model takes the flag itself. On a
-            // Flex that returns false and the radio is told, as before.
+            // Flex that returns false and the radio is told.
             if (!m_model->requestLocalShowTxInWaterfall(on)) {
                 m_model->sendCommand(
                     QString("transmit set show_tx_in_waterfall=%1").arg(on ? 1 : 0));

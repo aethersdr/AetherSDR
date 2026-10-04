@@ -2236,18 +2236,17 @@ that flag is what `SpectrumWidget` reads while keyed: true, the pane holding the
 TX passband draws its pan frames as waterfall rows; false, it drops every row
 for the whole over.
 
-The HL2 has no command plane and no display engine, so the command was dropped,
-nothing echoed, and the toggle could not be switched on (bench, 6 of 6 polls
-false). There is something to draw: `Hl2RxDsp::setAudioMuted` mutes the
-demodulator while keyed and says the spectrum keeps running on real IQ, so pan
-frames keep arriving.
+The HL2 has no command plane and no display engine: the command has nowhere to
+go and nothing echoes. There is something to draw: `Hl2RxDsp::setAudioMuted`
+mutes the demodulator while keyed and the spectrum keeps running on real IQ, so
+pan frames keep arriving.
 
 `RadioModel::requestLocalShowTxInWaterfall` takes the flag wherever
 `shapesDisplayRatesLocally()` is true: it writes the transmit model through the
 path an echo would take, and stores the value per radio in the `ClientDisplay`
 document, because a disconnect clears the model and nothing will report it
 again. `onConnected()` puts it back. On a Flex the request declines and the
-caller sends the wire text as before.
+caller sends the wire text.
 
 **Not measured:** what the HL2's own receive path reads while keyed, and
 therefore what colour those rows take. The keyed rows are coloured by

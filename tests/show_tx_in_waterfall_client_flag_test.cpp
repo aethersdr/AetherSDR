@@ -1,30 +1,8 @@
-// "Show TX in Waterfall" on a radio whose waterfall rows are made on this host.
-//
-// Observed on a Hermes-Lite 2 on 2026-10-01: after the toggle's command,
-// TransmitModel::showTxInWaterfall() read false in 6 of 6 polls, and the log
-// showed `transmit set show_tx_in_waterfall=1` dropped for want of a command
-// plane. The flag is radio-authoritative on a Flex: the radio stores it and
-// echoes it, and the echo is the only thing that ever set the model. A radio
-// with no display engine echoes nothing, so the toggle was dead, and with the
-// flag false SpectrumWidget drops every waterfall row of the pane holding the
-// TX passband for the whole over.
-//
-// What this file pins, socket-free, on the real RadioModel and TransmitModel:
-//   1. on a backend that shapes its own display, the request sets the model,
-//      announces it (stateChanged, the signal the GUI fans out to the pans),
-//      and stores it per radio;
-//   2. a disconnect clears the model (as it always did) and the next connect
-//      puts the stored value back; another radio gets its own;
-//   3. on a Flex the request declines, nothing is stored, and the radio's
-//      status echo still sets the model: the Flex path is unchanged;
-//   4. the bridge verb `txwaterfall` takes the same route on both;
-//   5. the store refuses a Flex-shaped scope, an unknown identity, a non-bool
-//      and a newer schema.
-//
-// What it does NOT see: the Radio Setup button (its handler is checked as
-// SOURCE TEXT in the last block, which proves how it is written and nothing
-// more), and anything that happens while keyed. Nothing here transmits, and no
-// radio was involved: what the waterfall then draws is not tested.
+// "Show TX in Waterfall" as a client flag where the waterfall rows are made on
+// this host: request, store per radio, restore on connect, the Flex path, the
+// bridge verb, the store's refusals. Socket-free, on the real RadioModel and
+// TransmitModel. Nothing here keys: what the waterfall draws is not tested.
+// The Radio Setup button is in radio_setup_show_tx_waterfall_test.
 
 #include "TestSettingsProfile.h"
 #include "core/AutomationServer.h"
@@ -33,7 +11,6 @@
 #include "models/RadioModel.h"
 
 #include <QCoreApplication>
-#include <QFile>
 #include <QJsonObject>
 
 #include <cstdio>
@@ -43,9 +20,8 @@ using namespace AetherSDR;
 using CDS = AetherSDR::ClientDisplaySettings;
 
 namespace AetherSDR {
-// Existing model friendship (the same struct name rtl_slice_settings_test
-// defines for its own needs). Gives the session an identity and runs the two
-// connection edges synchronously; the injected backend owns no transport.
+// Model friendship: gives the session an identity and runs the two connection
+// edges synchronously. The injected backend owns no transport.
 struct RadioModelWakeTestAccess {
     static void connectAs(RadioModel& model, const QString& serial)
     {
@@ -103,16 +79,6 @@ public:
                          const QVariant&) override {}
 };
 
-QString readSource(const char* relative)
-{
-    QFile file(QStringLiteral(AETHER_SOURCE_DIR) + QLatin1Char('/')
-               + QLatin1String(relative));
-    if (!file.open(QIODevice::ReadOnly)) {
-        return {};
-    }
-    return QString::fromUtf8(file.readAll());
-}
-
 }  // namespace
 
 int main(int argc, char** argv)
@@ -128,7 +94,7 @@ int main(int argc, char** argv)
     const RadioSettingsScope scopeA(QStringLiteral("hl2"), serialA);
     const RadioSettingsScope scopeB(QStringLiteral("hl2"), serialB);
 
-    // ── 1 and 2. A backend that shapes its own display. ─────────────────────
+    // 1 and 2. A backend that shapes its own display.
     {
         RadioModel radio;
         radio.setBackendForTest(std::make_unique<SeamBackend>(), QStringLiteral("hl2"));
@@ -185,7 +151,7 @@ int main(int argc, char** argv)
               "an unknown identity never writes the family default");
     }
 
-    // ── 3. A Flex: declined, nothing stored, the echo still works. ──────────
+    // 3. A Flex: declined, nothing stored, the echo still works.
     {
         RadioModel radio;
         check(radio.rebuildBackendForTest(QStringLiteral("flex")), "fixture: Flex backend built");
@@ -205,7 +171,7 @@ int main(int argc, char** argv)
         check(!radio.transmitModel().showTxInWaterfall(), "Flex: and clears it");
     }
 
-    // ── 4. The bridge verb takes the same route. ────────────────────────────
+    // 4. The bridge verb takes the same route.
     {
         RadioModel radio;
         radio.setBackendForTest(std::make_unique<SeamBackend>(), QStringLiteral("hl2"));
@@ -216,7 +182,7 @@ int main(int argc, char** argv)
                   && on.value(QStringLiteral("txwaterfall")).toBool(),
               "txwaterfall on: accepted");
         check(radio.transmitModel().showTxInWaterfall(),
-              "txwaterfall on: the model reads true (it stayed false before)");
+              "txwaterfall on: the model reads true");
         check(on.value(QStringLiteral("note")).toString().contains(QStringLiteral("client-side")),
               "txwaterfall on: the note says the flag is client-side here");
         const QJsonObject off = AutomationServerTestAccess::request(bridge, "txwaterfall off");
@@ -237,7 +203,7 @@ int main(int argc, char** argv)
               "Flex txwaterfall on: the model waits for the radio, unchanged");
     }
 
-    // ── 5. The store's own boundary. ────────────────────────────────────────
+    // 5. The store's own boundary.
     {
         const RadioSettingsScope c(QStringLiteral("hl2"), QStringLiteral("C"));
         const RadioSettingsScope flex(QStringLiteral("flex"), QStringLiteral("C"));
@@ -261,20 +227,6 @@ int main(int argc, char** argv)
         CDS::saveShowTxInWaterfall(c, true, false);
         check(!CDS::showTxInWaterfall(c, true), "future schema not interpreted");
         check(c.featureExact(feature) == future, "future schema not overwritten");
-    }
-
-    // ── 6. The Radio Setup button, as written. SOURCE TEXT: see the header. ─
-    {
-        const QString dialog = readSource("src/gui/RadioSetupDialog.cpp");
-        check(!dialog.isEmpty(), "RadioSetupDialog.cpp was read");
-        const qsizetype local = dialog.indexOf(
-            QStringLiteral("if (!m_model->requestLocalShowTxInWaterfall(on)) {"));
-        const qsizetype wire = dialog.indexOf(
-            QStringLiteral("transmit set show_tx_in_waterfall=%1"));
-        check(local > 0 && wire > local && wire - local < 200,
-              "the button asks the model first and sends the wire text only on a decline");
-        check(dialog.count(QStringLiteral("show_tx_in_waterfall")) == 1,
-              "and there is no second, unguarded send");
     }
 
     if (g_failed) {

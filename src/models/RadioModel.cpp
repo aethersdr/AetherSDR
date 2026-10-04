@@ -6120,20 +6120,19 @@ bool RadioModel::requestLocalPanWeightedAverage(const QString& panId, bool on)
 bool RadioModel::requestLocalShowTxInWaterfall(bool on)
 {
     // Local-shaping backends only, as requestLocalPanWeightedAverage(): on
-    // Flex the caller still sends the show_tx_in_waterfall= wire text itself,
-    // and moving it in here would add a raw command above the seam
-    // (tools/check_command_plane.py, #5262 M4).
+    // Flex the caller sends the show_tx_in_waterfall= wire text itself, which
+    // keeps a raw command out of this side of the seam (#5262 M4).
     if (!shapesDisplayRatesLocally()) {
         return false;
     }
-    // Only SpectrumWidget reads the flag, and nothing will echo it here, so the
-    // model is written through applyChanges(), the path a radio echo takes, so
-    // stateChanged reaches the same consumers.
+    // Nothing echoes the flag here, so the model is written through
+    // applyChanges(), the path a radio echo takes: stateChanged reaches the
+    // same consumers.
     TransmitDelta delta;
     delta.showTxInWaterfall = on;
     m_transmitModel.applyChanges(delta);
-    // And remembered, because TransmitModel::resetState() clears it on every
-    // disconnect and no radio status will put it back.
+    // Remembered, because TransmitModel::resetState() clears it on every
+    // disconnect and no radio status puts it back.
     ClientDisplaySettings::saveShowTxInWaterfall(settingsScope(), true, on);
     return true;
 }
@@ -6895,9 +6894,9 @@ void RadioModel::onConnected()
     m_firmwareRetryBlocked = false;
 
     // A Flex reports show_tx_in_waterfall in its transmit status. A radio with
-    // no display engine reports nothing, and the disconnect cleared the model,
-    // so the remembered value goes back in on this edge, before the GUI wires
-    // its pans and reads it. No-op on a Flex.
+    // no display engine reports nothing and a disconnect clears the model, so
+    // the remembered value goes back in here, before the GUI wires its pans.
+    // No-op on a Flex.
     restoreClientShowTxInWaterfall();
 
     emit connectionStateChanged(true);

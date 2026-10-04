@@ -3100,6 +3100,28 @@ add_test(NAME radio_setup_recording_mode_dim_test COMMAND radio_setup_recording_
 set_tests_properties(radio_setup_recording_mode_dim_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
 
+# Radio Setup's Show TX in Waterfall button on the production dialog: a click
+# sets the model where the rows are made on this host and sends the wire text
+# on a Flex. Injected backend; no socket.
+add_executable(radio_setup_show_tx_waterfall_test
+    tests/radio_setup_show_tx_waterfall_test.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/RadioSetupDialog.cpp
+    src/gui/PersistentDialog.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+    src/gui/SliceColorManager.cpp
+    src/gui/KiwiPublicReceiverPicker.cpp
+    src/gui/GuardedSlider.h
+    ${THEME_TEST_RESOURCES}
+)
+target_include_directories(radio_setup_show_tx_waterfall_test PRIVATE src tests)
+target_link_libraries(radio_setup_show_tx_waterfall_test PRIVATE
+    aetherdesktop_support Qt6::Widgets Qt6::Test)
+add_test(NAME radio_setup_show_tx_waterfall_test COMMAND radio_setup_show_tx_waterfall_test)
+set_tests_properties(radio_setup_show_tx_waterfall_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
+
 
 add_executable(zip_archive_test
     tests/zip_archive_test.cpp
@@ -5730,14 +5752,11 @@ add_test(NAME rtl_slice_settings_test COMMAND rtl_slice_settings_test)
 # a real RadioModel with an injected seam backend (and Hl2Backend / FlexBackend
 # built but never connected), the bridge verb through handleLine, the real
 # settings store in a TestSettingsProfile. Qt6::Widgets for AutomationServer.
-# AETHER_SOURCE_DIR because the last block reads RadioSetupDialog.cpp as text.
 add_executable(show_tx_in_waterfall_client_flag_test
     tests/show_tx_in_waterfall_client_flag_test.cpp)
 target_include_directories(show_tx_in_waterfall_client_flag_test PRIVATE src tests)
 target_link_libraries(show_tx_in_waterfall_client_flag_test PRIVATE
     aethercore Qt6::Core Qt6::Network Qt6::Widgets)
-target_compile_definitions(show_tx_in_waterfall_client_flag_test PRIVATE
-    AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 add_test(NAME show_tx_in_waterfall_client_flag_test
          COMMAND show_tx_in_waterfall_client_flag_test)
 
@@ -7334,6 +7353,7 @@ set(AETHER_SETTINGS_CONSUMERS
     radio_setup_label_theme_token_test
     radio_setup_max_power_field_test
     radio_setup_recording_mode_dim_test
+    radio_setup_show_tx_waterfall_test
     atu_seam_gate_test
     transmit_seam_drop_notice_test
     backend_capability_revision_test
