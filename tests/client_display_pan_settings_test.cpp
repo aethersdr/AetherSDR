@@ -43,6 +43,24 @@ static QString readSource(const char* relative)
     return QString::fromUtf8(file.readAll());
 }
 
+// Source-text order. indexOf() is -1 for an absent literal, which compares as
+// "before" anything: both literals must be present for an order to hold.
+static bool precedes(const QString& text, const char* first, const char* second)
+{
+    const qsizetype a = text.indexOf(QLatin1String(first));
+    const qsizetype b = text.indexOf(QLatin1String(second));
+    return a >= 0 && b >= 0 && a < b;
+}
+
+// `second` occurs after `first`, starting fewer than `maxGap` characters on.
+static bool followsWithin(const QString& text, const char* first,
+                          const char* second, qsizetype maxGap)
+{
+    const qsizetype a = text.indexOf(QLatin1String(first));
+    const qsizetype b = a < 0 ? -1 : text.indexOf(QLatin1String(second), a);
+    return a >= 0 && b > a && b - a < maxGap;
+}
+
 static bool sameRange(const std::optional<CDS::DbmRange>& got, float min, float max)
 {
     return got && got->minDbm == min && got->maxDbm == max;
@@ -133,6 +151,8 @@ int main(int argc, char** argv)
           "out-of-range writes leave the stored values alone");
     // ... and on the way out: a row damaged or hand-edited behind our back.
     {
+        const double nan = std::numeric_limits<double>::quiet_NaN();
+        const double inf = std::numeric_limits<double>::infinity();
         QJsonObject doc = a.featureExact(feature);
         doc.insert(QStringLiteral("fftFps"),
                    QJsonObject{{QStringLiteral("0"), 12.5},
@@ -143,7 +163,21 @@ int main(int argc, char** argv)
                        {QStringLiteral("0"), QJsonObject{{QStringLiteral("min"), -1882.0},
                                                          {QStringLiteral("max"), -1792.0}}},
                        {QStringLiteral("1"), QJsonObject{{QStringLiteral("min"), -130.0}}},
-                       {QStringLiteral("2"), QStringLiteral("-130..-40")}});
+                       {QStringLiteral("2"), QStringLiteral("-130..-40")},
+                       {QStringLiteral("3"), QJsonObject{{QStringLiteral("min"), -1e308},
+                                                         {QStringLiteral("max"), -40.0}}},
+                       {QStringLiteral("4"), QJsonObject{{QStringLiteral("min"), -130.0},
+                                                         {QStringLiteral("max"), 1e308}}},
+                       {QStringLiteral("5"), QJsonObject{{QStringLiteral("min"), 1e308},
+                                                         {QStringLiteral("max"), 0.0}}},
+                       {QStringLiteral("6"), QJsonObject{{QStringLiteral("min"), nan},
+                                                         {QStringLiteral("max"), -40.0}}},
+                       {QStringLiteral("7"), QJsonObject{{QStringLiteral("min"), -inf},
+                                                         {QStringLiteral("max"), -40.0}}},
+                       {QStringLiteral("8"), QJsonObject{{QStringLiteral("min"), -130.0},
+                                                         {QStringLiteral("max"), inf}}},
+                       {QStringLiteral("9"), QJsonObject{{QStringLiteral("min"), -180.0000001},
+                                                         {QStringLiteral("max"), -90.0}}}});
         check(a.setFeature(feature, 1, doc), "damaged fixture stored");
         check(!CDS::fftFps(a, 0, true), "a fractional FPS is rejected");
         check(!CDS::fftFps(a, 1, true), "an out-of-range FPS is rejected");
@@ -151,6 +185,15 @@ int main(int argc, char** argv)
         check(!CDS::dbmRange(a, 0, true), "an implausible stored range is rejected");
         check(!CDS::dbmRange(a, 1, true), "a range missing its max is rejected");
         check(!CDS::dbmRange(a, 2, true), "a range that is not an object is rejected");
+        // Stored doubles no float holds, through the real store and reader.
+        check(!CDS::dbmRange(a, 3, true), "a stored min of -1e308 is rejected");
+        check(!CDS::dbmRange(a, 4, true), "a stored max of 1e308 is rejected");
+        check(!CDS::dbmRange(a, 5, true), "a stored min of 1e308 is rejected");
+        check(!CDS::dbmRange(a, 6, true), "a stored NaN is rejected");
+        check(!CDS::dbmRange(a, 7, true), "a stored -inf is rejected");
+        check(!CDS::dbmRange(a, 8, true), "a stored +inf is rejected");
+        check(sameRange(CDS::dbmRange(a, 9, true), -180.0f, -90.0f),
+              "a stored double that narrows onto the bound still reads");
         check(a.removeFeature(feature), "damaged fixture removed");
     }
 
@@ -220,6 +263,14 @@ int main(int argc, char** argv)
     check(dbmRangeLooksPlausible(-130.0f, -40.0f), "the pan model's default is plausible");
     check(!dbmRangeLooksPlausible(-202.0f, -112.0f), "past -180 dBm is not");
     check(!dbmRangeLooksPlausible(-100.0f, -95.0f), "5 dB of range is not");
+    // Which stored doubles may be narrowed to float at all.
+    check(!dbmNarrowsToFloat(1e308) && !dbmNarrowsToFloat(-1e308),
+          "a finite double past float's range is not narrowed");
+    check(dbmNarrowsToFloat(static_cast<double>(std::numeric_limits<float>::max())),
+          "float's own maximum is");
+    check(dbmNarrowsToFloat(std::numeric_limits<double>::quiet_NaN())
+              && dbmNarrowsToFloat(std::numeric_limits<double>::infinity()),
+          "NaN and infinity convert as themselves; the plausibility test refuses them");
 
     // 8. SOURCE TEXT: call order inside MainWindow methods no test can construct.
     {
@@ -227,43 +278,47 @@ int main(int argc, char** argv)
         const QString session = readSource("src/gui/MainWindow_Session.cpp");
         check(!wiring.isEmpty() && !session.isEmpty(), "the two sources were read");
 
-        // Restore, then seed: the request reads the widget.
-        const qsizetype restoreFps = wiring.indexOf(
-            QStringLiteral("sw->setFftFps(*savedFps);"));
-        const qsizetype seedRates = wiring.indexOf(
-            QStringLiteral("m_radioModel.requestPanDisplayRates(panId, sw->fftFps(),"));
-        check(restoreFps > 0
-                  && wiring.contains(QStringLiteral("ClientDisplaySettings::fftFps(")),
-              "pan wiring restores FFT FPS into the widget");
-        check(seedRates > 0, "pan wiring still seeds the shaper");
-        check(restoreFps < seedRates, "and restores BEFORE it seeds");
+        // Controls for the two order helpers: an absent literal is no order.
+        check(precedes(QStringLiteral("ab"), "a", "b") && !precedes(QStringLiteral("ba"), "a", "b")
+                  && !precedes(QStringLiteral("b"), "a", "b") && !precedes(QStringLiteral("a"), "a", "b"),
+              "control: precedes() needs both literals, in order");
+        check(followsWithin(QStringLiteral("a.b"), "a", "b", 3)
+                  && !followsWithin(QStringLiteral("a.b"), "a", "b", 2)
+                  && !followsWithin(QStringLiteral("a."), "a", "b", 3)
+                  && !followsWithin(QStringLiteral(".b"), "a", "b", 3),
+              "control: followsWithin() needs both literals, inside the gap");
 
-        // The slider, the clone and the reset each save.
-        check(wiring.count(QStringLiteral("scheduleClientFftFpsSave(")) == 4,
-              "definition + slider + clone + reset call the FFT FPS save");
+        // Restore, then seed: the request reads the widget.
+        check(wiring.contains(QStringLiteral("ClientDisplaySettings::fftFps(")),
+              "pan wiring reads the stored FFT FPS");
+        check(precedes(wiring, "sw->setFftFps(*savedFps);",
+                       "m_radioModel.requestPanDisplayRates(panId, sw->fftFps(),"),
+              "pan wiring restores FFT FPS into the widget BEFORE it seeds the shaper");
+
+        // The slider, the clone and the reset each save. Whole call statements:
+        // the definition, a comment naming the function and a further call site
+        // leave these alone; removing one of the three fails its own check.
         check(wiring.contains(QStringLiteral(
                   "scheduleClientFftFpsSave(sw->panIndex(), v);")),
               "the FPS slider saves the operator's value");
-        check(wiring.indexOf(QStringLiteral("scheduleClientFftFpsSave(sw->panIndex(), v);"))
-                  < wiring.indexOf(QStringLiteral("if (m_adaptiveThrottleActive)\n            return;")),
-              "before the adaptive-throttle return, so the cap cannot drop it");
+        check(wiring.contains(QStringLiteral(
+                  "scheduleClientFftFpsSave(dst->panIndex(), src->fftFps());")),
+              "Clone to all Pans saves each pan's FFT FPS");
+        check(wiring.contains(QStringLiteral(
+                  "scheduleClientFftFpsSave(sw->panIndex(), 25);")),
+              "Reset to Defaults saves the default FFT FPS");
+        check(precedes(wiring, "scheduleClientFftFpsSave(sw->panIndex(), v);",
+                       "if (m_adaptiveThrottleActive)\n            return;"),
+              "the slider saves before the adaptive-throttle return, so the cap cannot drop it");
 
         // The dBm range: both operator gestures adopt, both primes restore.
-        check(wiring.count(QStringLiteral("adoptClientOwnedDbmRange(applet->panId()")) == 3,
+        check(wiring.count(QStringLiteral("adoptClientOwnedDbmRange(applet->panId()")) >= 3,
               "scale request, drag (no echo) and drag (echo) adopt the range");
-        const qsizetype restoreRange = wiring.indexOf(
-            QStringLiteral("restoreClientOwnedDbmRange(pan, sw->panIndex());"));
-        check(restoreRange > 0
-                  && wiring.indexOf(QStringLiteral(
-                         "sw->setDbmRange(pan->minDbm(), pan->maxDbm());"),
-                         restoreRange) - restoreRange < 120,
+        check(followsWithin(wiring, "restoreClientOwnedDbmRange(pan, sw->panIndex());",
+                            "sw->setDbmRange(pan->minDbm(), pan->maxDbm());", 120),
               "pan wiring restores the range into the model, then primes from it");
-        const qsizetype sessionRestore = session.indexOf(
-            QStringLiteral("restoreClientOwnedDbmRange(pan, sw->panIndex());"));
-        check(sessionRestore > 0
-                  && session.indexOf(QStringLiteral(
-                         "sw->setDbmRange(pan->minDbm(), pan->maxDbm());"),
-                         sessionRestore) - sessionRestore < 120,
+        check(followsWithin(session, "restoreClientOwnedDbmRange(pan, sw->panIndex());",
+                            "sw->setDbmRange(pan->minDbm(), pan->maxDbm());", 120),
               "the reconnect path does the same");
         check(wiring.contains(QStringLiteral(
                   "ClientDisplaySettings::clientOwnsDbmRange(")),

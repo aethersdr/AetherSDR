@@ -126,8 +126,13 @@ public:
         if (!minValue.isDouble() || !maxValue.isDouble()) {
             return std::nullopt;
         }
-        const DbmRange result{static_cast<float>(minValue.toDouble()),
-                              static_cast<float>(maxValue.toDouble())};
+        const double minRaw = minValue.toDouble();
+        const double maxRaw = maxValue.toDouble();
+        if (!dbmNarrowsToFloat(minRaw) || !dbmNarrowsToFloat(maxRaw)) {
+            return std::nullopt;
+        }
+        const DbmRange result{static_cast<float>(minRaw),
+                              static_cast<float>(maxRaw)};
         if (!dbmRangeLooksPlausible(result.minDbm, result.maxDbm)) {
             return std::nullopt;
         }

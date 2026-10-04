@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cmath>
+#include <limits>
 
 // The one definition of "this dBm range could be a real display range": it
 // stops an implausible range reaching the radio (MainWindow_Wiring.cpp) and
@@ -8,6 +9,15 @@
 // (ClientDisplaySettings).
 
 namespace AetherSDR {
+
+// May this stored double be narrowed to float? A finite value past float's
+// range has no defined conversion; NaN and the infinities do, and are left for
+// dbmRangeLooksPlausible to refuse.
+inline bool dbmNarrowsToFloat(double dbm)
+{
+    return !std::isfinite(dbm)
+        || std::abs(dbm) <= static_cast<double>(std::numeric_limits<float>::max());
+}
 
 inline bool dbmRangeLooksPlausible(float minDbm, float maxDbm)
 {
