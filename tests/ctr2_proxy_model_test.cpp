@@ -119,6 +119,38 @@ void testRelayFollowsAetherSdrsRadio()
     QCoreApplication::processEvents();
 }
 
+// USB is the default mode when the build can open a CTR2, and the first
+// recognized CTR2 is preselected; an explicit choice survives a rescan.
+void testUsbDefaults()
+{
+    Ctr2ProxyModel fresh;
+    check((fresh.transport() == Ctr2ProxyModel::Transport::Usb) == fresh.usbAvailable(),
+          "USB is the default mode exactly when USB HID is available");
+
+    using Info = AetherSDR::Ctr2HidPort::DeviceInfo;
+    const Info other{QStringLiteral("other"), 0x1234, 0x5678, {}, QStringLiteral("Keyboard"), {}};
+    const Info first{QStringLiteral("ctr2-a"), 0x303A, 0x1001, {}, QStringLiteral("ESP32S3_DEV"), {}};
+    const Info second{QStringLiteral("ctr2-b"), 0x303A, 0x1001, {}, QStringLiteral("M5STACK_DIAL"), {}};
+    auto devices = std::make_shared<QList<Info>>(QList<Info>{other, first, second});
+    Ctr2ProxyModel model;
+    model.setUsbBackend([devices] { return *devices; },
+                        [](const Info&, QString*) { return static_cast<AetherSDR::Ctr2HidPort*>(nullptr); });
+    check(model.usbDevicePath() == first.path, "the first recognized CTR2 is preselected");
+
+    model.setUsbDevicePath(second.path);
+    devices->append(Info{QStringLiteral("ctr2-c"), 0x303A, 0x1001, {}, QStringLiteral("ESP32S3_DEV"), {}});
+    model.refreshDevices();
+    check(model.usbDevicePath() == second.path, "a rescan keeps the operator's choice");
+
+    devices->removeIf([&](const Info& d) { return d.path == second.path; });
+    model.refreshDevices();
+    check(model.usbDevicePath() == first.path, "a vanished choice falls back to the first CTR2");
+
+    *devices = {other};
+    model.refreshDevices();
+    check(model.usbDevicePath().isEmpty(), "an unrecognized device is never preselected");
+}
+
 // The Start-time udev prompt keys off this: a node the user may not open
 // needs the rule; a missing node, an open one, or Wi-Fi mode does not.
 void testUsbAccessRuleDetection()
@@ -149,6 +181,7 @@ void testUsbAccessRuleDetection()
                             return static_cast<AetherSDR::Ctr2HidPort*>(nullptr);
                         });
     model.setTransport(Ctr2ProxyModel::Transport::Usb);
+    model.setUsbDevicePath(QString());
     check(!model.usbDeviceNeedsAccessRule(), "no device selected needs no rule");
     model.setUsbDevicePath(locked);
     check(model.usbDeviceNeedsAccessRule(), "a node the user cannot open needs the rule");
@@ -211,6 +244,7 @@ int main(int argc, char** argv)
 
     testRelayFollowsAetherSdrsRadio();
     testUsbAccessRuleDetection();
+    testUsbDefaults();
 
     if (g_failures) {
         std::fprintf(stderr, "%d check(s) failed\n", g_failures);

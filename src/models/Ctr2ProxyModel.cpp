@@ -58,6 +58,9 @@ Ctr2ProxyModel::Ctr2ProxyModel(QObject* parent)
     m_usbOpener = [](const Ctr2HidPort::DeviceInfo& device, QString* error) -> Ctr2HidPort* {
         return Ctr2HidapiPort::open(device, error);
     };
+    // USB is the default whenever this build can open a CTR2.
+    m_transport = Transport::Usb;
+    m_activeTransport = Transport::Usb;
 #endif
     refreshDevices();
 }
@@ -106,6 +109,17 @@ void Ctr2ProxyModel::refreshDevices()
     }
     m_listenChoices = choices;
     m_usbChoices = usb;
+    // Default to the first recognized CTR2 while nothing is selected or the
+    // selected device has gone; an existing choice stands.
+    if (!isRunning() && !selectedUsbDevice()) {
+        m_usbDevicePath.clear();
+        for (const Ctr2HidPort::DeviceInfo& d : std::as_const(m_usbChoices)) {
+            if (!d.ctr2Model().isEmpty()) {
+                m_usbDevicePath = d.path;
+                break;
+            }
+        }
+    }
     emit listenAddressesChanged();
     emit configurationChanged();
 }
