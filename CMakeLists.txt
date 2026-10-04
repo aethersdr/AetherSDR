@@ -143,17 +143,21 @@ if(NOT AETHERSDR_SANITIZER STREQUAL "none")
     message(STATUS "AetherSDR: sanitizer = ${AETHERSDR_SANITIZER} (whole tree)")
     unset(_aether_san_list)
 endif()
-# Build libaethercore as one shared library instead of a static archive. Every
-# test links the whole core, so a static Debug ASan build carries ~600 full
-# copies (~200 MB each) and exhausts a hosted runner's disk; shared, the test
-# executables average ~13 MB. For the sanitizer lane only, never for releases:
+# Build libaethercore as one shared library instead of a static archive. The
+# ~250 test executables that link the core each absorb a full static copy
+# (~200 MB in a Debug ASan build), which exhausts a hosted runner's disk;
+# shared, they average ~13 MB. For the sanitizer lane only, never for releases:
 # the shipped app links the core statically.
 option(AETHER_SHARED_CORE "Build libaethercore as a shared library (sanitizer CI only)" OFF)
 if(AETHER_SHARED_CORE)
     if(WIN32)
         message(FATAL_ERROR "AETHER_SHARED_CORE is not supported on Windows")
     endif()
-    # Vendored static libraries end up inside the shared core.
+    # Vendored static libraries end up inside the shared core. Their symbols
+    # do not reach the core's consumers: a PRIVATE dependency stops at a
+    # shared library, and aether_wdsp is built with hidden visibility. A test
+    # that calls WDSP directly while linking only aethercore links against
+    # the static core and fails here; go through core/dsp/WdspChannel.h.
     set(CMAKE_POSITION_INDEPENDENT_CODE ON)
     set(_aether_core_library_type SHARED)
     message(STATUS "AetherSDR: libaethercore built SHARED (AETHER_SHARED_CORE)")

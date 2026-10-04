@@ -36,9 +36,9 @@ jobs:
             label: ASan + UBSan
             image: ghcr.io/aethersdr/aethersdr-ci:latest
             build_type: Debug
-            # A Debug ASan tree with the core linked statically into ~600
-            # tests outgrew the runner's disk ("No space left on device",
-            # three weeks running). One shared core keeps it near 17 GB.
+            # A Debug ASan tree with the core linked statically into ~250
+            # test executables outgrew the runner's disk ("No space left on
+            # device", three weeks running). One shared core keeps it near 17 GB.
             shared_core: "ON"
             # ON here too, not only under TSan: the churn test's documented
             # failure class is a heap use-after-free on the receiver vector,
@@ -147,9 +147,11 @@ jobs:
           CXXFLAGS: ${{ matrix.sanitizer.extra_cxx }}
           LDFLAGS:  ${{ matrix.sanitizer.extra_ld }}
         run: |
+          # The trap keeps the after-build reading when the build fails, which
+          # is when it matters.
+          trap 'df -h /' EXIT
           df -h /
           cmake --build build --parallel
-          df -h /
 
       - name: Run tests under sanitizer
         id: ctest
