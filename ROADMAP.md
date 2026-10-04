@@ -40,8 +40,8 @@ For *what shipped*, see [`CHANGELOG.md`](CHANGELOG.md).
   controls behind the seam (#5262 M4): frequency, mode, filter, AGC, AF gain,
   mute and balance, NB, NR, ANF, manual notch, APF, squelch, RX antenna and
   slice lock travel as typed backend requests, receive contracts are seeded
-  across the families, and the raw Flex command count above the seam fell from
-  413 to 369. Remaining:
+  across the families, and with the GUI callers rerouted the raw Flex command
+  count above the seam fell from 413 to 369. Remaining:
   per-client propagation, transmit for SmartLink and the other families,
   transmit audio transport, and a replacement thin UI client — UI code still
   consumes models directly, and that remains correct until that client exists.
@@ -169,8 +169,9 @@ For *what shipped*, see [`CHANGELOG.md`](CHANGELOG.md).
   relay that connects a CTR2-Max controller to the radio AetherSDR is connected
   to, as an independent client outside AetherSDR's transmit paths. Wi-Fi mode
   works with today's CTR2 firmware. USB mode's host side is complete in link
-  format v0, with AetherSDR starting the handshake; it waits on the CTR2's USB
-  firmware, which its author is writing.
+  format v0, with AetherSDR starting the handshake, and the firmware author's
+  development firmware has received the radio's status stream over it. It
+  waits on a CTR2 USB firmware release.
 - **AppSettings nested-JSON refactor** — ~460 flat call sites today;
   the new pattern is one nested-JSON value per feature (Principle V).
   The storage layer moved to SQLite and the scoped feature-document store,
@@ -321,7 +322,7 @@ complete list are in [`CHANGELOG.md`](CHANGELOG.md):
   plane, each control either reaches the radio through a path it already has,
   is dimmed with its reason, or refuses aloud, and controls that work stop
   raising the "nothing was sent" notice (v26.10.1).
-- **A CTR2 relay over Wi-Fi and USB** — the CTR2 Proxy applet forwards a
+- **A CTR2 relay over Wi-Fi, with USB ready on the host side** — the CTR2 Proxy applet forwards a
   CTR2-Max controller's traffic to the connected radio unchanged, as an
   independent client that never touches AetherSDR's transmit paths. RFC #6091
   (v26.10.1).
@@ -338,8 +339,9 @@ complete list are in [`CHANGELOG.md`](CHANGELOG.md):
 - **RTL-SDR confirmed receive state** — changes publish only after the dongle
   confirms them, with capture browsing and a 65,536-point zoom FFT. RFC #5468 M1
   (v26.10.1).
-- **Slice receive controls behind the seam** — typed backend requests replace
-  44 raw Flex commands above the seam (413 → 369). #5262 M4 (v26.10.1).
+- **Slice receive controls behind the seam** — typed backend requests and
+  rerouted GUI callers replace 44 raw Flex commands above the seam
+  (413 → 369). #5262 M4 (v26.10.1).
 - **Qt 6.12 everywhere** — every binary and every source build, with a
   one-command Qt install; the macOS DMGs now require macOS 14.4 (v26.10.1).
 
