@@ -68,6 +68,15 @@ public:
     // Auto writes AppSettings AutoSqlMarginDb and emits
     // autoSqlMarginDbChanged. Off is a no-op.
     void    setSqlSliderValueExternal(int v);
+    // Whether Auto SQL can drive this slice's level, and if not, why
+    // (RadioCapabilities::squelchLevelScale). Kiwi external receive keeps its
+    // own Auto. Unavailable: the cycle skips Auto, a slice in Auto drops to
+    // Manual, and the reason goes on the button's accessible description.
+    void    setAutoSqlAvailability(bool available, const QString& reason);
+    bool    autoSqlAvailable() const;
+    QString autoSqlUnavailableReason() const;
+    // The SQL button's accessible description; VfoWidget's mirror reads it too.
+    QString sqlButtonAccessibleDescription() const;
     void syncStepFromSlice(int stepHz, const QVector<int>& stepList);
     void cycleStepUp();
     void cycleStepDown();
@@ -132,6 +141,8 @@ signals:
     // int so the header doesn't need to leak the enum to listeners that
     // don't care about the symbolic names.
     void sqlModeChanged(int mode);
+    // Auto SQL availability or its reason changed; see setAutoSqlAvailability().
+    void sqlAutoAvailabilityChanged();
     // Emitted when the user adjusts the SQL slider while SQL mode is Auto.
     // Carries the new dB margin above the measured noise floor.  Routes to
     // every SpectrumWidget's setAutoSqlMarginDb().  Replaces the standalone
@@ -315,6 +326,8 @@ private:
     // squelch_level when the status frame carries one, else from AppSettings,
     // so switching the active slice doesn't pull in another slice's threshold.
     int          m_sqlManualLevel{20};
+    bool         m_autoSqlAvailable{true};
+    QString      m_autoSqlUnavailableReason;
 
     // Icom has no separate SQL enable register: Off writes threshold zero.
     // Only client intent is retained, never a live threshold to replay at attach.
@@ -327,6 +340,7 @@ private:
     AetherSDR::DeferredSettingsWrites m_pendingSquelchWrites;
     QMetaObject::Connection m_squelchDisconnectConnection;
     void applySqlModeVisuals();
+    void applySqlButtonDescription();
     void cycleSqlMode();
     void setSqlMode(SqlMode m, bool propagateToRadio);
     bool usingExternalReceiveSquelch() const;

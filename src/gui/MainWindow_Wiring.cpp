@@ -9,6 +9,7 @@
 #include "core/backends/AutoRfGainControl.h"
 #include "core/ClientDisplaySettings.h"
 #include "core/backends/NoiseFloorAutoAdjustGate.h"
+#include "core/backends/SquelchLevelScale.h"
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QStatusBar>
@@ -1355,6 +1356,48 @@ void MainWindow::syncActiveSliceSquelchLineToSpectrums()
     }
 }
 
+std::optional<SquelchLevelScale> MainWindow::activeSliceSquelchScale() const
+{
+    const SliceModel* s = activeSlice();
+    if (!s || !m_radioModel.isConnected()) {
+        return std::nullopt;
+    }
+    return squelchScaleForMode(m_radioModel.backendCapabilities().squelchLevelScale,
+                               s->mode());
+}
+
+void MainWindow::syncSquelchScaleToUi()
+{
+    const std::optional<SquelchLevelScale> scale = activeSliceSquelchScale();
+    const QList<SpectrumWidget*> spectra = findChildren<SpectrumWidget*>();
+    for (SpectrumWidget* sw : spectra) {
+        sw->setSquelchScale(scale);
+    }
+    RxApplet* rx = m_appletPanel ? m_appletPanel->rxApplet() : nullptr;
+    if (!rx) {
+        return;
+    }
+    // Permissive while disconnected or before a slice is active, like every
+    // capability gate: there is no mode yet to judge the scale against.
+    QString reason;
+    const SliceModel* s = activeSlice();
+    if (m_radioModel.isConnected() && s && !autoSquelchAvailable(scale)) {
+        const auto& published = m_radioModel.backendCapabilities().squelchLevelScale;
+        if (!published) {
+            reason = tr("this radio does not publish where its squelch level "
+                        "sits on the panadapter scale.");
+        } else if (!published->appliesTo(s->mode())) {
+            reason = tr("this radio's squelch in %1 has no panadapter level.")
+                         .arg(s->mode());
+        } else {
+            reason = tr("this radio's squelch detector does not read the "
+                        "panadapter's noise floor, so a margin above it cannot "
+                        "be held.");
+        }
+    }
+    rx->setAutoSqlAvailability(reason.isEmpty(), reason);
+}
+
 bool MainWindow::autoSquelchShouldRunOnSpectrum(
     const QString& panId, const SpectrumWidget* spectrum) const
 {
@@ -1381,7 +1424,8 @@ bool MainWindow::autoSquelchShouldRunOnSpectrum(
     }
 
     return kiwiSdrProfileForPan(panId).isEmpty()
-        && (!spectrum || !spectrum->kiwiSdrWaterfallActive());
+        && (!spectrum || !spectrum->kiwiSdrWaterfallActive())
+        && autoSquelchAvailable(activeSliceSquelchScale());
 }
 
 void MainWindow::syncActiveSliceAutoSquelchToSpectrums()
@@ -2061,6 +2105,12 @@ void MainWindow::onSliceAdded(SliceModel* s)
         Q_UNUSED(level);
         if (s != activeSlice()) return;
         syncActiveSliceSquelchLineToSpectrums();
+    });
+    // The squelch scale is per mode (an HL2 FM gate has no dB place).
+    connect(s, &SliceModel::modeChanged, this, [this, s](const QString&) {
+        if (s != activeSlice()) return;
+        syncSquelchScaleToUi();
+        syncActiveSliceAutoSquelchToSpectrums();
     });
     connect(s, &SliceModel::externalReceiveSquelchChanged,
             this, [this, s](bool on, int level) {
@@ -3913,6 +3963,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         // before connect is happily running.
         sw->setPanBinsAbsolute(m_radioModel.isConnected()
                                && m_radioModel.backendCapabilities().panBinsAbsolute());
+        sw->setSquelchScale(activeSliceSquelchScale());
 
         wirePanDisplayStatus(applet, pan);
     }

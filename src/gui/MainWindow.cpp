@@ -7597,6 +7597,9 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
             spectrum->setPanBinsAbsolute(binsAbsolute);
         }
     }
+    syncSquelchScaleToUi();
+    syncActiveSliceSquelchLineToSpectrums();
+    syncActiveSliceAutoSquelchToSpectrums();
 
     // ── Profiles: the PROF applet, the Profiles menu, and both dialogs ──────
     const bool profiles = !connected || caps.hasProfiles;
@@ -8463,6 +8466,8 @@ void MainWindow::setActiveSliceInternal(int sliceId, bool revealOffscreen)
         else if (m_panStack->activeApplet())
             m_panStack->activeApplet()->setSliceId(sliceId, s->letter());
     }
+    // Before setSlice(): restoring this slice's Auto SQL needs its availability.
+    syncSquelchScaleToUi();
     m_appletPanel->setSlice(s);
     m_appletPanel->updateSliceButtons(m_radioModel.slices(), sliceId);
     refreshKiwiSdrSlices();
