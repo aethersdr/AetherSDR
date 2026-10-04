@@ -1,3 +1,5 @@
+#include "PeripheralRemovalGuard.h"
+#include "PeripheralSettings.h"
 #include "PgxlConnection.h"
 #include "PeripheralAuthCode.h"
 #include "LogManager.h"
@@ -24,7 +26,7 @@ PgxlConnection::PgxlConnection(QObject* parent)
     m_reconnectTimer.setSingleShot(true);
     m_reconnectTimer.setInterval(5000);
     connect(&m_reconnectTimer, &QTimer::timeout, this, [this]() {
-        if (!m_connected && !m_authBlocked && !m_lastHost.isEmpty()) {
+        if (!m_connected && !m_authBlocked && !m_lastHost.isEmpty() && reconnectAllowed()) {
             if (m_lastAutomatic) {
                 autoConnectToPgxl(m_lastHost, m_lastPort);
             } else {
@@ -84,8 +86,16 @@ void PgxlConnection::setAuthCodeForAttempt(quint64 attempt, const QString& code,
     }
 }
 
+bool PgxlConnection::reconnectAllowed() const
+{
+    return m_autoReconnect && PeripheralSettings::autoConnect(QStringLiteral("pgxl"));
+}
+
 void PgxlConnection::connectToPgxl(const QString& host, quint16 port)
 {
+    if (PeripheralRemovalGuard::pending(PeripheralRemovalGuard::Device::Pgxl)) {
+        return;
+    }
     const bool wasConnected = m_connected;
     beginAttemptAt(host, port);
     openSocket(host, port, wasConnected);
@@ -93,6 +103,11 @@ void PgxlConnection::connectToPgxl(const QString& host, quint16 port)
 
 void PgxlConnection::autoConnectToPgxl(const QString& host, quint16 port)
 {
+    // Checked before any attempt state changes, so a blocked attempt leaves
+    // the retry target and timer alone.
+    if (PeripheralRemovalGuard::pending(PeripheralRemovalGuard::Device::Pgxl)) {
+        return;
+    }
     const bool wasConnected = m_connected;
     beginAutomaticAttemptAt(host, port);
     openSocket(host, port, wasConnected);
@@ -100,6 +115,9 @@ void PgxlConnection::autoConnectToPgxl(const QString& host, quint16 port)
 
 void PgxlConnection::tryAlternatePgxl(const QString& host, quint16 port)
 {
+    if (PeripheralRemovalGuard::pending(PeripheralRemovalGuard::Device::Pgxl)) {
+        return;
+    }
     const bool wasConnected = m_connected;
     beginAlternateAttemptAt(host, port);
     openSocket(host, port, wasConnected);
@@ -107,6 +125,11 @@ void PgxlConnection::tryAlternatePgxl(const QString& host, quint16 port)
 
 void PgxlConnection::openSocket(const QString& host, quint16 port, bool wasConnected)
 {
+    // Every path that opens a socket (explicit, automatic, alternate, reconnect)
+    // lands here; a pending removal must stop all of them.
+    if (PeripheralRemovalGuard::pending(PeripheralRemovalGuard::Device::Pgxl)) {
+        return;
+    }
     if (m_socket.state() != QAbstractSocket::UnconnectedState) {
         m_deliberateDisconnect = true;
         m_socket.abort();  // disconnected may be emitted synchronously
@@ -116,7 +139,12 @@ void PgxlConnection::openSocket(const QString& host, quint16 port, bool wasConne
         emit disconnected();
     }
     qCDebug(lcTuner) << "PgxlConnection: connecting to" << host << ":" << port;
-    m_socket.connectToHost(host, port);
+    if (m_connectTransport) {
+        m_connectTransport(host, port);
+    } else {
+        m_socket.connectToHost(host, port);
+    }
+    emit attemptStarted(m_attemptHost);
 }
 
 void PgxlConnection::beginAutomaticAttemptAt(const QString& host, quint16 port)
@@ -141,6 +169,7 @@ void PgxlConnection::beginAlternateAttemptAt(const QString& host, quint16 port)
 void PgxlConnection::beginAttemptAt(const QString& host, quint16 port)
 {
     m_attemptHost = host.trimmed();
+    m_attemptPort = port;
     const QString target = host.trimmed().toLower() + QLatin1Char('|') + QString::number(port);
     if (m_userAuthCode && m_userAuthEndpoint != target) {
         m_authCode.clear();
@@ -235,7 +264,7 @@ void PgxlConnection::onDisconnected()
     if (wasConnected) {
         emit disconnected();
     }
-    if (!m_deliberateDisconnect && !m_authBlocked && m_autoReconnect && !m_lastHost.isEmpty()) {
+    if (!m_deliberateDisconnect && !m_authBlocked && reconnectAllowed() && !m_lastHost.isEmpty()) {
         m_reconnectTimer.start();
     }
     m_deliberateDisconnect = false;
@@ -255,7 +284,7 @@ void PgxlConnection::onError(QAbstractSocket::SocketError error)
     // the socket never reached ConnectedState. Re-arm so we keep retrying until
     // the device returns or the user disconnects. isActive() prevents double-arm
     // when a live drop emits both errorOccurred and disconnected.
-    if (!m_deliberateDisconnect && !m_authBlocked && !m_authPending && m_autoReconnect && !m_connected
+    if (!m_deliberateDisconnect && !m_authBlocked && !m_authPending && reconnectAllowed() && !m_connected
             && !m_lastHost.isEmpty() && !m_reconnectTimer.isActive()) {
         m_reconnectTimer.start();
     }
@@ -490,7 +519,7 @@ void PgxlConnection::failAuthentication(const QString& reason, bool blockReconne
     m_readBuf.clear();
     emit connectionFailed(reason);
     m_socket.abort();
-    if (!m_authBlocked && m_autoReconnect && !m_lastHost.isEmpty()
+    if (!m_authBlocked && reconnectAllowed() && !m_lastHost.isEmpty()
         && !m_reconnectTimer.isActive()) {
         m_reconnectTimer.start();
     }

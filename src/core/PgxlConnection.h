@@ -1,5 +1,6 @@
 #pragma once
 
+#include <functional>
 #include <QObject>
 #include <QTcpSocket>
 #include <QElapsedTimer>
@@ -30,8 +31,10 @@ public:
     // The host the operator (or discovery) asked for on the current attempt:
     // a name or a literal address. Saved codes key on it; see PeripheralAuthStore.
     QString attemptHost() const { return m_attemptHost; }
+    quint16 attemptPort() const { return m_attemptPort; }
     // The host reconnects aim at; an alternate attempt leaves it unchanged.
     QString reconnectHost() const { return m_lastHost; }
+    quint16 reconnectPort() const { return m_lastPort; }
     quint16 peerPort() const { return m_socket.peerPort(); }
 
     void connectToPgxl(const QString& host, quint16 port = 9008);
@@ -71,6 +74,8 @@ signals:
     // it asked for. Not sent after a deliberate disconnect or once auth has
     // blocked reconnects.
     void unreachable(const QString& attemptedHost);
+    // A socket attempt has begun, from any path; carries the host it asked for.
+    void attemptStarted(const QString& host);
     void authCodeRequired(quint64 attempt);
     void authCodeAccepted(const QString& code);
     void enteredAuthCodeDiscarded();
@@ -105,6 +110,9 @@ private slots:
     void pollStatus();
 
 private:
+    friend struct PeripheralConnectionTestAccess;
+    // Inject transport initiation in socket-free lifecycle tests.
+    std::function<void(const QString&, quint16)> m_connectTransport;
     void applyPollRateFor(const QMap<QString, QString>& kvs);
     Q_INVOKABLE void processLine(const QString& line); // injected-frame test seam
     Q_INVOKABLE void processBytes(const QByteArray& bytes); // injected transport test seam
@@ -151,8 +159,11 @@ private:
     bool       m_userAuthCode{false};
     QString    m_userAuthEndpoint;
     QString    m_attemptHost;
+    quint16    m_attemptPort{0};
     bool       m_authCloseReported{false};
     bool       m_autoReconnect{false};
+    // Global "Reconnect automatically" and this device's "Connect automatically".
+    bool reconnectAllowed() const;
     bool       m_deliberateDisconnect{false};
     bool       m_tcpReached{false};       // this attempt's socket connected
     bool       m_attemptAutomatic{false}; // see autoConnectTo…

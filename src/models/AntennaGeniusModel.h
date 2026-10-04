@@ -9,6 +9,7 @@
 #include <QByteArray>
 #include <QList>
 #include <functional>
+#include <optional>
 
 class QUdpSocket;
 class QTcpSocket;
@@ -147,6 +148,8 @@ signals:
     void authCodeAccepted(const QString& code);
     void enteredAuthCodeDiscarded();
     void connectionError(const QString& msg);
+    // A socket attempt has begun, from any path; carries the host it asked for.
+    void attemptStarted(const QString& host);
 
     void antennasChanged();        // antenna list refreshed
     void bandsChanged();           // band list refreshed
@@ -165,6 +168,8 @@ private slots:
 
 private:
     friend struct AntennaGeniusModelTestAccess;
+    friend struct PeripheralConnectionTestAccess;
+    std::function<void(const QString&, quint16)> m_connectTransport;
     Q_INVOKABLE void processTcpBytes(const QByteArray& bytes); // injected transport test seam
     Q_INVOKABLE void beginAttempt(); // same reset used before a real TCP connect
     Q_INVOKABLE void beginAttemptAt(const QString& host, quint16 port);
@@ -254,8 +259,12 @@ private:
 
     // Auto-reconnect
     bool    m_autoReconnect{false};
+    // Global "Reconnect automatically" and the connected device's "Connect
+    // automatically" (ShackSwitch and Antenna Genius keep separate toggles).
+    bool reconnectAllowed() const;
     bool    m_deliberateDisconnect{false};
     QTimer* m_reconnectTimer{nullptr};
+    std::optional<AgDeviceInfo> m_deferredShackSwitch;
 
     // Track init commands
     int m_seqAntennaList{0};
