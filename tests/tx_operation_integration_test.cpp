@@ -1107,9 +1107,12 @@ void pendingCallbackDisconnectExpiry()
 // was told a GUI-client slot was taken. Auto-reconnect never fired again.
 void guiRegistrationDropIsNotARejection()
 {
+    // Declared BEFORE `radio`: the command sink appends to it on the
+    // RadioConnection thread, and only ~RadioModel's join of that thread
+    // orders those writes before the list's destruction (TSan, #6156).
+    QStringList commands;
     RadioModel radio;
     PanadapterStream stream;
-    QStringList commands;
     int registrationFailed = 0;
     int connectionErrors = 0;
     QObject::connect(&radio, &RadioModel::guiClientRegistrationFailed,
@@ -1140,8 +1143,8 @@ void guiRegistrationDropIsNotARejection()
 // land a fresh entry in the map just cleared, re-creating the leak being closed.
 void expiringCallbackCannotRepopulateTheMap()
 {
+    QStringList commands;   // before `radio`, for the same reason as above
     RadioModel radio;
-    QStringList commands;
     TxOperationIntegrationTestAccess::primeChainedStreamCommand(radio, commands);
     check(TxOperationIntegrationTestAccess::pendingReplyCount(radio) == 1,
           "the chaining stream command is in flight before the drop");
