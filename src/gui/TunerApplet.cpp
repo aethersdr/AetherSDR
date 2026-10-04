@@ -1,4 +1,5 @@
 #include "TunerApplet.h"
+#include "PeripheralConnectionSource.h"
 #include "HGauge.h"
 #include "MeterSmoother.h"
 #include "AccessoryPanelWidgets.h"
@@ -717,8 +718,11 @@ void TunerApplet::updateSourceIndicator(bool direct)
     if (direct) {
         m_directFailureReason.clear();
     }
-    const QString source = direct ? QStringLiteral("● DIRECT")
-        : hasRadioRelay() ? QStringLiteral("● RADIO") : QStringLiteral("● OFFLINE");
+    using PeripheralConnectionSource::Source;
+    const auto text = PeripheralConnectionSource::describe(
+        direct ? Source::Direct : hasRadioRelay() ? Source::Radio : Source::Offline,
+        QStringLiteral("TGXL"));
+    const QString source = text.indicator;
     if (m_directConnected == direct && m_sourceLabel->text() == source
         && m_sourceLabel->toolTip() == m_directFailureReason
         && !m_sourceLabel->styleSheet().isEmpty()) {
@@ -726,13 +730,8 @@ void TunerApplet::updateSourceIndicator(bool direct)
     }
     m_directConnected = direct;
     m_sourceLabel->setText(source);
-    m_sourceLabel->setAccessibleName(direct ? tr("TGXL DIRECT connection")
-        : hasRadioRelay() ? tr("TGXL RADIO connection") : tr("TGXL OFFLINE"));
-    QString description = direct
-        ? tr("Connected directly to the TGXL.")
-        : hasRadioRelay()
-            ? tr("Using the radio relay; the direct TGXL connection is unavailable.")
-            : tr("No TGXL connection is available.");
+    m_sourceLabel->setAccessibleName(text.accessibleName);
+    QString description = text.description;
     if (!m_directFailureReason.isEmpty()) {
         description += QStringLiteral(" ") + m_directFailureReason;
     }

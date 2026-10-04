@@ -1,4 +1,5 @@
 #include "AmpApplet.h"
+#include "PeripheralConnectionSource.h"
 #include "HGauge.h"
 #include "AccessoryPanelWidgets.h"
 #include "GuardedSlider.h"
@@ -1645,15 +1646,13 @@ void AmpApplet::setRadioConnected(bool connected)
 
 void AmpApplet::updateSourceIndicator()
 {
-    m_sourceLabel->setText(m_directConnected ? QStringLiteral("● DIRECT")
-        : hasRadioRelay() ? QStringLiteral("● RADIO") : QStringLiteral("● OFFLINE"));
-    m_sourceLabel->setAccessibleName(m_directConnected ? tr("PGXL DIRECT connection")
-        : hasRadioRelay() ? tr("PGXL RADIO connection") : tr("PGXL OFFLINE"));
-    QString description = m_directConnected
-        ? tr("Connected directly to the PGXL.")
-        : hasRadioRelay()
-            ? tr("Using the radio relay; the direct PGXL connection is unavailable.")
-            : tr("No PGXL connection is available.");
+    using PeripheralConnectionSource::Source;
+    const Source source = m_directConnected ? Source::Direct
+        : hasRadioRelay() ? Source::Radio : Source::Offline;
+    const auto text = PeripheralConnectionSource::describe(source, QStringLiteral("PGXL"));
+    m_sourceLabel->setText(text.indicator);
+    m_sourceLabel->setAccessibleName(text.accessibleName);
+    QString description = text.description;
     if (!m_directFailureReason.isEmpty()) {
         description += QStringLiteral(" ") + m_directFailureReason;
     }
