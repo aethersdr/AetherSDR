@@ -996,10 +996,16 @@ the `hl2_*` TX/DSP tests, the `radiomodel_*_null` tests).
 the thread-exit wait succeeds**. `doPSCorrChange()`'s last act is
 `SetEvent(hCorrChangeExited)` and `return`, so once that event is seen nothing
 touches either again. If the 500 ms wait times out, the thread may still be
-blocked in `WaitForMultipleObjects` on those semaphores. Freeing them under it
-would turn a leak into a use-after-free, so they are deliberately leaked in that
-case. Upstream closed the event unconditionally, which had the same hazard for
-a thread that later reached `SetEvent()`; it is now under the same check.
+blocked in `WaitForMultipleObjects` on those semaphores, so they are not freed
+under it; upstream closed the event unconditionally, which had the same hazard
+for a thread that later reached `SetEvent()`, and it is now under the same check.
+
+**This does not make the timeout path safe, and does not claim to.** After the
+wait, `destroy_calcc()` goes on to free `a` and its members, which a correction
+thread still running past the timeout would use. That use-after-free predates
+this patch (upstream frees `a` on the same path) and is tracked separately
+(#6179). Patch 18 only stops the normal, successful-exit path from
+leaking and avoids adding a second hazard on the timeout path.
 
 **Upstream status.** Not reported.
 

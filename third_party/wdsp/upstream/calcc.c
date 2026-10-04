@@ -1103,7 +1103,10 @@ void destroy_calcc (CALCC a)
 	// exit event ONLY once doPSCorrChange() has signalled it is gone. Its last
 	// act is SetEvent(hCorrChangeExited) then return, so after that nothing
 	// touches either. On the 500 ms timeout the thread may still be waiting on
-	// them; leaking beats freeing handles under a live thread.
+	// them, so they are not freed under it. That does NOT make the timeout path
+	// safe: the rest of this function still frees `a`, which a late thread
+	// would use. That hazard predates this patch and is tracked separately
+	// (#6179; see AETHERSDR-PATCHES.md, patch 18).
 	if (WaitForSingleObject(a->hCorrChangeExited, 500) == WAIT_OBJECT_0)
 	{
 		for (int i = 0; i < 5; i++)
