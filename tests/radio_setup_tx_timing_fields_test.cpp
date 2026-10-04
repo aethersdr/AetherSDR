@@ -28,6 +28,8 @@
 #include <QLineEdit>
 #include <QList>
 #include <QLoggingCategory>
+#include <QMutex>
+#include <QMutexLocker>
 #include <QSignalSpy>
 #include <QStringList>
 #include <QtTest>
@@ -65,10 +67,21 @@ NoCommandPlaneBackend* installNoCommandPlaneRadio(RadioModel& model)
     return backend;
 }
 
+// Qt calls the message handler on whichever thread logs, and the Demo's
+// backend runs while the test reads the capture. One mutex guards the sink
+// pointer AND the list it points at.
+QMutex       g_logSinkMutex;
 QStringList* g_logSink = nullptr;
+
+void setLogSink(QStringList* sink)
+{
+    QMutexLocker lock(&g_logSinkMutex);
+    g_logSink = sink;
+}
 
 void captureLogHandler(QtMsgType, const QMessageLogContext&, const QString& msg)
 {
+    QMutexLocker lock(&g_logSinkMutex);
     if (g_logSink) {
         *g_logSink << msg;
     }
@@ -81,7 +94,7 @@ class ScopedCommandLog
 public:
     ScopedCommandLog()
     {
-        g_logSink = &m_lines;
+        setLogSink(&m_lines);
         m_previous = qInstallMessageHandler(captureLogHandler);
         QLoggingCategory::setFilterRules(QStringLiteral("aether.protocol.debug=true"));
     }
@@ -89,13 +102,14 @@ public:
     {
         QLoggingCategory::setFilterRules(QString());
         qInstallMessageHandler(m_previous);
-        g_logSink = nullptr;
+        setLogSink(nullptr);
     }
     ScopedCommandLog(const ScopedCommandLog&) = delete;
     ScopedCommandLog& operator=(const ScopedCommandLog&) = delete;
 
     int count(const QString& fragment) const
     {
+        QMutexLocker lock(&g_logSinkMutex);
         int n = 0;
         for (const QString& line : m_lines) {
             if (line.contains(fragment)) {
@@ -219,13 +233,16 @@ private slots:
         QCOMPARE(dropped.count(), 0);
     }
 
-    // POSITIVE CONTROL: with a command plane each field is enabled and sends
-    // its `interlock set` text exactly once, so the assertions above cannot be
+    // POSITIVE CONTROL, the wire text: each field is enabled and sends its
+    // `interlock set` text exactly once, so the assertions above cannot be
     // passed by fields dimmed, or disconnected from their write, on every radio.
+    // The model is NOT connected, so the gate opens on its disconnected arm;
+    // connectedCommandPlaneStaysLive() covers the command-plane arm.
     void commandPlaneSendsTheSameWireText()
     {
         RadioModel model;  // a bare model is on the Flex backend
-        QVERIFY2(model.hasCommandPlane(), "Flex has a command plane");
+        QVERIFY2(!model.isConnected(), "a bare model is not connected");
+        QVERIFY2(model.hasCommandPlane(), "the bare Flex model has a command plane: no drop");
 
         RadioSetupDialog dialog(&model);
         dialog.show();

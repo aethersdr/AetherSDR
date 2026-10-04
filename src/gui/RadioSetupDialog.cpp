@@ -2607,6 +2607,22 @@ QWidget* RadioSetupDialog::buildTxTab()
         auto* tx3Edit = addTimingField(3, 0, "RCA TX3:", tx.tx3Delay());
         connectTimingField(tx3Edit, "tx3_delay");
 
+        // TX Band Settings button
+        auto* bandSetBtn = new QPushButton("TX Band Settings");
+        AetherSDR::ThemeManager::instance().applyStyleSheet(bandSetBtn, "QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
+            "border-radius: 3px; color: {{color.text.primary}}; font-size: 11px; font-weight: bold; "
+            "padding: 4px 12px; }"
+            "QPushButton:hover { background: {{color.background.1}}; }");
+        connect(bandSetBtn, &QPushButton::clicked, this, [this] {
+            emit txBandSettingsRequested();
+        });
+        grid->addWidget(bandSetBtn, 3, 2, 1, 2);
+
+        for (auto* lbl : group->findChildren<QLabel*>())
+            if (lbl->styleSheet().isEmpty()) applyLabelStyle(lbl);
+
+        // Last in the group: the lambda copies timingEdits, so every field
+        // has to exist before this point.
         const auto applyTimingAvailability = [timingEdits, timingFieldsAvailable]() {
             const bool available = timingFieldsAvailable();
             const QString why = available
@@ -2622,20 +2638,6 @@ QWidget* RadioSetupDialog::buildTxTab()
         applyTimingAvailability();
         connect(m_model, &RadioModel::connectionStateChanged, group,
                 applyTimingAvailability);
-
-        // TX Band Settings button
-        auto* bandSetBtn = new QPushButton("TX Band Settings");
-        AetherSDR::ThemeManager::instance().applyStyleSheet(bandSetBtn, "QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
-            "border-radius: 3px; color: {{color.text.primary}}; font-size: 11px; font-weight: bold; "
-            "padding: 4px 12px; }"
-            "QPushButton:hover { background: {{color.background.1}}; }");
-        connect(bandSetBtn, &QPushButton::clicked, this, [this] {
-            emit txBandSettingsRequested();
-        });
-        grid->addWidget(bandSetBtn, 3, 2, 1, 2);
-
-        for (auto* lbl : group->findChildren<QLabel*>())
-            if (lbl->styleSheet().isEmpty()) applyLabelStyle(lbl);
 
         vbox->addWidget(group);
     }
