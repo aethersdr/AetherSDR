@@ -4223,8 +4223,9 @@ void RadioModel::recallBandStackReceiveDsp(SliceModel* slice,
         return;
     }
     // Under KiwiSDR external receive the AGC setters address the KiwiSDR AGC
-    // (its own dB range), but the bookmark holds the RADIO's AGC, saved from
-    // agcMode()/agcThreshold(). The caller then sends the AGC as wire text.
+    // (its own dB range), but the bookmark holds the RADIO's AGC: only in that
+    // case the caller sends it as wire text. Otherwise the slice setters below
+    // are the one route, through the receive-intent dispatcher to the backend.
     if (!slice->externalReceiveReplacementActive()) {
         if (!entry.agcMode.isEmpty() && entry.agcMode != slice->agcMode()) {
             slice->recallAgcMode(entry.agcMode);
