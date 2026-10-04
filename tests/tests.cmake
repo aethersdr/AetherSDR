@@ -3245,6 +3245,31 @@ add_test(NAME radio_setup_max_power_field_test COMMAND radio_setup_max_power_fie
 set_tests_properties(radio_setup_max_power_field_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
 
+# Radio Setup's Transmit timing fields on the production dialog: dimmed with
+# an announced reason, and silent, on a connected radio with no command plane;
+# the same `interlock set` text with one. Injected backend; no socket.
+add_executable(radio_setup_tx_timing_fields_test
+    tests/radio_setup_tx_timing_fields_test.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/RadioSetupDialog.cpp
+    src/gui/RtlReceiverSettingsWidget.cpp
+    src/gui/ControlAvailabilityRegistry.cpp
+    src/gui/RadioSetupDialog_Peripherals.cpp
+    src/gui/PersistentDialog.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+    src/gui/SliceColorManager.cpp
+    src/gui/KiwiPublicReceiverPicker.cpp
+    src/gui/GuardedSlider.h
+    ${THEME_TEST_RESOURCES}
+)
+target_include_directories(radio_setup_tx_timing_fields_test PRIVATE src tests)
+target_link_libraries(radio_setup_tx_timing_fields_test PRIVATE
+    aetherdesktop_support Qt6::Widgets Qt6::Test)
+add_test(NAME radio_setup_tx_timing_fields_test COMMAND radio_setup_tx_timing_fields_test)
+set_tests_properties(radio_setup_tx_timing_fields_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
+
 # Radio Setup's Record Mode pair on a connected radio with no command plane:
 # Radio Side dimmed with an announced reason, Client Side shown in effect, and
 # the saved RecordingMode never written (re-read from disk). Flex path
@@ -7555,6 +7580,7 @@ set(AETHER_SETTINGS_CONSUMERS
     firmware_close_dialog_test
     flex_control_visibility_test
     radio_setup_region_field_test
+    radio_setup_tx_timing_fields_test
     radio_setup_label_theme_token_test
     radio_setup_max_power_field_test
     radio_setup_recording_mode_dim_test

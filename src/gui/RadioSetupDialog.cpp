@@ -61,6 +61,7 @@
 #include <QTableWidgetItem>
 #include <QLabel>
 #include <QLineEdit>
+#include <QList>
 #include <QPushButton>
 #include <QSlider>
 #include <QComboBox>
@@ -2539,22 +2540,39 @@ QWidget* RadioSetupDialog::buildTxTab()
         auto* grid = new QGridLayout(group);
         grid->setSpacing(6);
 
+        QList<QLineEdit*> timingEdits;
         auto addTimingField = [&](int row, int col, const QString& label, int value) {
             auto* lbl = new QLabel(label);
             applyLabelStyle(lbl);
             grid->addWidget(lbl, row, col * 2);
             auto* edit = new QLineEdit(QString::number(value));
-            applyEditStyle(edit);
+            AetherSDR::ThemeManager::instance().applyStyleSheet(edit,
+                kEditStyleTemplate
+                + "QLineEdit:disabled { color: {{color.control.unavailable}}; }");
             edit->setFixedWidth(60);
+            edit->setAccessibleName(QString(label).remove(QLatin1Char(':')));
             grid->addWidget(edit, row, col * 2 + 1);
+            timingEdits.append(edit);
             return edit;
+        };
+
+        // `interlock set` is Flex wire text, and nothing else reads these
+        // fields: a connected radio with no command plane takes no timing from
+        // here. By hand, not ControlAvailabilityRegistry: command-plane
+        // reachability is not in RadioCapabilities.
+        const auto timingFieldsAvailable = [this] {
+            return !m_model->isConnected() || m_model->hasCommandPlane();
         };
 
         // Scale factor lets the same helper drive both 1:1 ms fields and
         // the seconds-displayed timeout field which the radio still
         // expects in ms (FlexLib Radio.cs:7463 — "in milliseconds").
         auto connectTimingField = [&](QLineEdit* edit, const QString& key, int scale = 1) {
-            connect(edit, &QLineEdit::editingFinished, this, [this, edit, key, scale] {
+            connect(edit, &QLineEdit::editingFinished, this,
+                    [this, edit, key, scale, timingFieldsAvailable] {
+                if (!timingFieldsAvailable()) {
+                    return;
+                }
                 int val = qMax(0, edit->text().toInt());
                 edit->setText(QString::number(val));
                 m_model->sendCommand(QString("interlock set %1=%2").arg(key).arg(val * scale));
@@ -2588,6 +2606,22 @@ QWidget* RadioSetupDialog::buildTxTab()
 
         auto* tx3Edit = addTimingField(3, 0, "RCA TX3:", tx.tx3Delay());
         connectTimingField(tx3Edit, "tx3_delay");
+
+        const auto applyTimingAvailability = [timingEdits, timingFieldsAvailable]() {
+            const bool available = timingFieldsAvailable();
+            const QString why = available
+                ? QString()
+                : tr("Unavailable: this radio does not accept transmit timings "
+                     "from here. No delay or timeout set here is applied.");
+            for (QLineEdit* edit : timingEdits) {
+                edit->setEnabled(available);
+                edit->setToolTip(why);
+                edit->setAccessibleDescription(why);
+            }
+        };
+        applyTimingAvailability();
+        connect(m_model, &RadioModel::connectionStateChanged, group,
+                applyTimingAvailability);
 
         // TX Band Settings button
         auto* bandSetBtn = new QPushButton("TX Band Settings");
