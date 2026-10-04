@@ -141,6 +141,25 @@ jobs:
             fail=1
           fi
 
+          # 5. AETHER_SHARED_CORE=ON (the ASan lane's link mode) must produce a
+          #    shared core, and the default must stay static. The sanitizer
+          #    lane is weekly, so this is the only per-PR check of the option.
+          #    Asserted on the generated ninja file, like case 2.
+          if cmake -B /tmp/cfg-shared -S . -G Ninja \
+                   -DAETHER_SHARED_CORE=ON > /tmp/shared.log 2>&1; then
+            grep -q '^build libaethercore\.so' /tmp/cfg-shared/build.ninja \
+              || { echo "::error::AETHER_SHARED_CORE=ON configured, but no libaethercore.so rule"; fail=1; }
+          else
+            echo "::error::-DAETHER_SHARED_CORE=ON failed to configure"
+            tail -30 /tmp/shared.log
+            fail=1
+          fi
+          if [ -f /tmp/cfg-thread/build.ninja ] \
+             && ! grep -q '^build libaethercore\.a' /tmp/cfg-thread/build.ninja; then
+            echo "::error::the default configure no longer builds a static libaethercore.a"
+            fail=1
+          fi
+
           exit "$fail"
 
   static-checks:
@@ -355,6 +374,18 @@ jobs:
       - name: Qt pin checker self-test
         if: ${{ !cancelled() }}
         run: python tools/test_check_qt_pin.py
+
+      # BUILD-OPTIONS.md is the catalog of project CMake options (#6097), and
+      # options arrive in PRs that have no reason to open it. Fails on an option
+      # or cache setting with no row, a row with no definition, or a literal
+      # ON/OFF default that differs. The self-test breaks each on purpose.
+      - name: Build options reference
+        if: ${{ !cancelled() }}
+        run: python tools/check_build_options.py --strict
+
+      - name: Build options checker self-test
+        if: ${{ !cancelled() }}
+        run: python tools/test_check_build_options.py
 
       # ── Hardcoded-colour ratchet (#4569, RFC #3076). Counts may not rise
       # above the PR's base. The gate is a DELTA rather than a stored constant:

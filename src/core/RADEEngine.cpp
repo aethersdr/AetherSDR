@@ -277,8 +277,11 @@ void RADEEngine::feedTxAudio(const QByteArray& pcm, const TxCoordinator::Context
         const int nMono = mono16k.size() / static_cast<int>(sizeof(float));
         QByteArray mono16kInt16(nMono * static_cast<int>(sizeof(int16_t)), Qt::Uninitialized);
         auto* mi = reinterpret_cast<int16_t*>(mono16kInt16.data());
-        for (int i = 0; i < nMono; ++i)
-            mi[i] = static_cast<int16_t>(std::clamp(mf[i] * 32768.0f, -32768.0f, 32767.0f));
+        // A NaN passes std::clamp and its cast is undefined.
+        for (int i = 0; i < nMono; ++i) {
+            const float v = std::isfinite(mf[i]) ? mf[i] : 0.0f;
+            mi[i] = static_cast<int16_t>(std::clamp(v * 32768.0f, -32768.0f, 32767.0f));
+        }
         m_txAccum.append(mono16kInt16);
     }
 

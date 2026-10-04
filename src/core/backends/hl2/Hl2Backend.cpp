@@ -1889,7 +1889,7 @@ RadioCapabilities Hl2Backend::capabilities() const
     // The panadapter is averaged here, in Hl2Spectrum, per the operator's FFT
     // AVG (setPanAverage). SpectrumWidget skips its own fixed SMOOTH_ALPHA EMA
     // while this is set, so the two never stack (RFC #5782).
-    c.backendPanAveraging = BackendPanAveraging{kMsPerAverageStep};
+    c.backendPanAveraging = BackendPanAveraging{kMsPerAverageStep, false, {}, {}};
     // No band/segment zoom: this backend vends no command plane at all, so
     // `display pan set ... band_zoom=` is dropped inside RadioModel::sendCmd.
     // Declaring absence is what makes the control refuse rather than lie.
@@ -3109,6 +3109,47 @@ void Hl2Backend::setSliceNoiseBlanker(int sliceId, bool on, int level)
     if (r->dsp)
         QMetaObject::invokeMethod(r->dsp, "setNoiseBlanker", Qt::QueuedConnection,
             Q_ARG(bool, r->nbOn), Q_ARG(int, r->nbLevel));
+}
+
+ReceiveDispatch Hl2Backend::requestSliceDsp(int sliceId, const SliceDspRequest& request)
+{
+    if (!request.valid() || !rx(ddcForSlice(sliceId))) {
+        return ReceiveDispatch::Unsupported;
+    }
+    switch (request.feature) {
+    case SliceDspRequest::Feature::Nb:
+        setSliceNoiseBlanker(sliceId, request.enabled, request.level);
+        break;
+    case SliceDspRequest::Feature::Apf:
+        setSliceApf(sliceId, request.enabled, request.level);
+        break;
+    default:
+        return ReceiveDispatch::Unsupported;
+    }
+    return ReceiveDispatch::Dispatched;
+}
+
+ReceiveDispatch Hl2Backend::requestSliceSquelch(int sliceId, const SliceSquelchRequest& request)
+{
+    if (!request.valid() || !rx(ddcForSlice(sliceId))) {
+        return ReceiveDispatch::Unsupported;
+    }
+    setSliceSquelch(sliceId, request.enabled, request.level);
+    return ReceiveDispatch::Dispatched;
+}
+
+ReceiveDispatch Hl2Backend::requestSliceAudio(int sliceId, const SliceAudioRequest& request)
+{
+    if (!request.valid() || request.origin != SliceAudioRequest::Origin::Operator
+        || !rx(ddcForSlice(sliceId))) {
+        return ReceiveDispatch::Unsupported;
+    }
+    switch (request.field) {
+    case SliceAudioRequest::Field::Gain: setSliceAudioGain(sliceId, request.value); break;
+    case SliceAudioRequest::Field::Mute: setSliceAudioMute(sliceId, request.value != 0); break;
+    case SliceAudioRequest::Field::Pan: setSliceAudioPan(sliceId, request.value); break;
+    }
+    return ReceiveDispatch::Dispatched;
 }
 
 void Hl2Backend::setSliceApf(int sliceId, bool on, int level)
@@ -4691,6 +4732,10 @@ void Hl2Backend::forwardSpeakerAudioToCodec(const std::vector<float>& mixed)
 
     const auto toI16 = [speakerGain](float v) -> std::int16_t {
         v *= speakerGain;
+        // Non-finite first: a NaN fails both clamp comparisons and the cast
+        // of it is undefined.
+        if (!std::isfinite(v))
+            return 0;
         // Symmetric clamp, 32767 not 32768: letting a full-scale sample wrap to
         // the negative rail is a click, and this is a speaker feed.
         v = std::clamp(v, -1.0f, 1.0f);

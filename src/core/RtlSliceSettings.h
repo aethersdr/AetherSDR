@@ -9,10 +9,10 @@
 
 namespace AetherSDR {
 
-// RFC #5468 F3a: storage and planning foundation. Runtime ownership remains
-// OperatingState until the accepted-capture adapter lands. Do not call migrate
-// or patch from that old runtime: cutover must disable its overlapping domains
-// and use RadioStateMemory::storeRtlRfGainPreservingLegacy for later gain saves.
+// RFC #5468 storage and planning. The RTL accepted-capture adapter claims this
+// owner only after readback, disables overlapping OperatingState domains, and
+// uses storeRtlRfGainPreservingLegacy for later gain saves. Pending intent is
+// never an input to patch().
 class RtlSliceSettings {
 public:
     static constexpr int kSchemaVersion = 1;

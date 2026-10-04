@@ -208,7 +208,7 @@ Full dependency list is in `README.md`. Adding a test: declare it in
 
 ### Version and release files
 
-Current version: **26.9.5**.
+Current version: **26.10.1**.
 Versioning scheme is **CalVer** (`YY.M.patch[.hotfix]`) starting from v26.5.1,
 the 1.0-equivalent. Hotfix sub-patches use a 4th component (e.g. 26.5.2.1).
 Earlier tags used semver through v0.9.8.

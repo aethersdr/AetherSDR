@@ -13,6 +13,7 @@
 #include <QStringList>
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <vector>
 
@@ -169,11 +170,14 @@ bool ClientPuduMonitor::preparePlaybackPcm(int sinkRateHz)
     auto* dst = reinterpret_cast<int16_t*>(m_playPcm.data());
     const auto* lf = reinterpret_cast<const float*>(lOut.constData());
     const auto* rf = reinterpret_cast<const float*>(rOut.constData());
+    // A NaN passes std::clamp and its cast is undefined, so zero it first.
     for (int i = 0; i < outFrames; ++i) {
+        const float l = std::isfinite(lf[i]) ? lf[i] : 0.0f;
+        const float r = std::isfinite(rf[i]) ? rf[i] : 0.0f;
         dst[i * 2]     = static_cast<int16_t>(
-            std::clamp(lf[i] * 32768.0f, -32768.0f, 32767.0f));
+            std::clamp(l * 32768.0f, -32768.0f, 32767.0f));
         dst[i * 2 + 1] = static_cast<int16_t>(
-            std::clamp(rf[i] * 32768.0f, -32768.0f, 32767.0f));
+            std::clamp(r * 32768.0f, -32768.0f, 32767.0f));
     }
     return true;
 }

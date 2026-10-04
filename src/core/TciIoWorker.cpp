@@ -575,7 +575,9 @@ QByteArray TciIoWorker::encodeRxAudio(int trx, int rate, int channels, int forma
             const float sample = static_cast<float>(value);
             std::memcpy(destination, &sample, sizeof(sample));
         } else {
-            const qint16 sample = static_cast<qint16>(std::clamp(value * 32768.0, -32768.0, 32767.0));
+            // A NaN passes std::clamp and its cast is undefined.
+            const double finite = std::isfinite(value) ? value : 0.0;
+            const qint16 sample = static_cast<qint16>(std::clamp(finite * 32768.0, -32768.0, 32767.0));
             std::memcpy(destination, &sample, sizeof(sample));
         }
     }

@@ -7,7 +7,7 @@ if(POLICY CMP0156)
     cmake_policy(SET CMP0156 NEW)
 endif()
 
-project(AetherSDR VERSION 26.9.5 LANGUAGES C CXX)
+project(AetherSDR VERSION 26.10.1 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -142,6 +142,27 @@ if(NOT AETHERSDR_SANITIZER STREQUAL "none")
     add_link_options(-fsanitize=${AETHERSDR_SANITIZER})
     message(STATUS "AetherSDR: sanitizer = ${AETHERSDR_SANITIZER} (whole tree)")
     unset(_aether_san_list)
+endif()
+# Build libaethercore as one shared library instead of a static archive. The
+# ~250 test executables that link the core each absorb a full static copy
+# (~200 MB in a Debug ASan build), which exhausts a hosted runner's disk;
+# shared, they average ~13 MB. For the sanitizer lane only, never for releases:
+# the shipped app links the core statically.
+option(AETHER_SHARED_CORE "Build libaethercore as a shared library (sanitizer CI only)" OFF)
+if(AETHER_SHARED_CORE)
+    if(WIN32)
+        message(FATAL_ERROR "AETHER_SHARED_CORE is not supported on Windows")
+    endif()
+    # Vendored static libraries end up inside the shared core. Their symbols
+    # do not reach the core's consumers: a PRIVATE dependency stops at a
+    # shared library, and aether_wdsp is built with hidden visibility. A test
+    # that calls WDSP directly while linking only aethercore links against
+    # the static core and fails here; go through core/dsp/WdspChannel.h.
+    set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+    set(_aether_core_library_type SHARED)
+    message(STATUS "AetherSDR: libaethercore built SHARED (AETHER_SHARED_CORE)")
+else()
+    set(_aether_core_library_type STATIC)
 endif()
 option(ENABLE_RTL "Enable the experimental receive-only RTL-SDR backend" ON)
 # Which SSB modulator the Hermes-Lite 2 transmit path is BUILT with. There is
@@ -876,10 +897,15 @@ set(CORE_SOURCES
     src/core/backends/icom/IcomCredentials.cpp # password -> keychain, NEVER settings
     src/core/dsp/FftwPlannerLock.cpp # the one process-global FFTW planner lock (#5895)
     src/core/dsp/WdspChannel.cpp
+    src/core/backends/rtl/RtlCaptureTransaction.cpp
+    src/core/backends/rtl/RtlReceivePipeline.cpp
+    src/core/backends/rtl/RtlAudioMixer.cpp
+    src/core/backends/rtl/RtlRfExtractor.cpp
     src/core/backends/rtl/RtlReceiverRegistry.cpp # RFC #5468 prepared receiver ownership; no USB dependency
     ${AETHER_SETTINGS_SOURCES}
     src/core/RadioStateMemory.cpp   # RFC #4603 client-side radio memory
     src/core/RtlSliceSettings.cpp   # RFC #5468 persistence foundation
+    src/core/RtlDeviceSettings.cpp  # accepted per-device calibration and IQ controls
     src/core/GpuSelector.cpp
     src/core/QtAudioBackendGuard.cpp  # pre-QApplication: keeps Qt 6.12 off a crashing PipeWire backend
     src/core/AgcTCalibrator.cpp
@@ -1206,6 +1232,7 @@ set(GUI_SOURCES
     src/gui/SmartMtrConfig.cpp
     src/gui/MeterViewController.cpp
     src/gui/RadioSetupDialog.cpp
+    src/gui/RtlReceiverSettingsWidget.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
     src/gui/NetworkDiagnosticsDialog.cpp
     src/gui/SystemInfoDialog.cpp
@@ -1576,7 +1603,7 @@ add_subdirectory(third_party/wdsp EXCLUDE_FROM_ALL)
 # their feature blocks). Qt resources (resources.qrc, DFNR model qrc) stay on
 # the executable: rcc registration runs from the exe's static initializers and
 # is process-global, so core code reading ":/..." keeps working.
-add_library(aethercore STATIC
+add_library(aethercore ${_aether_core_library_type}
     ${CORE_SOURCES}
     ${MODEL_SOURCES}
     ${RNNOISE_SOURCES}
@@ -3339,6 +3366,11 @@ else()
                 DESTINATION lib/udev/rules.d
             )
         endif()
+    endif()
+    if(LINUX AND HIDAPI_FOUND)
+        install(FILES packaging/linux/70-aethersdr-ctr2.rules
+            DESTINATION lib/udev/rules.d
+        )
     endif()
     if(LINUX AND AETHER_BACKEND_RTL)
         install(FILES packaging/linux/70-rtl-sdr.rules

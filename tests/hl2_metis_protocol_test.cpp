@@ -689,6 +689,24 @@ int main()
               "unsupplied samples are transmit silence");
     }
 
+    // ---- TX IQ: a non-finite sample is transmit silence ----
+    {
+        // NaN fails both clamp comparisons; an infinity would clamp to a
+        // full-scale rail. Either one must reach the wire as zero.
+        constexpr float nan = std::numeric_limits<float>::quiet_NaN();
+        constexpr float inf = std::numeric_limits<float>::infinity();
+        auto pkt = ep2Packet(0, ccConfig(SampleRate::R48k, 1), ccRx1Freq(7'000'000));
+        std::vector<std::complex<float>> iq;
+        iq.emplace_back(nan, inf);
+        iq.emplace_back(-inf, 0.5f);
+        ep2WriteTxIq(pkt, iq);
+        const std::uint8_t* pay = pkt.data() + 8 + 8;
+        check(pay[4] == 0 && pay[5] == 0, "a NaN I sample is transmit silence");
+        check(pay[6] == 0 && pay[7] == 0, "an infinite Q sample is silence, not a full-scale rail");
+        check(pay[12] == 0 && pay[13] == 0, "a negative infinity is silence too");
+        check(pay[14] == 0x3F && pay[15] == 0xFF, "a finite neighbour is untouched");
+    }
+
     // ---- EP6 C&C response decoding (telemetry) ----
     {
         auto frame = [](std::uint8_t c0, std::uint32_t data) {
