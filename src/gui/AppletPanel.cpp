@@ -1389,6 +1389,8 @@ QList<AppletPanel::AppletCatalogEntry> AppletPanel::appletCatalog() const
         {QStringLiteral("AMP"),   QStringLiteral("Amplifiers")},
         {QStringLiteral("ACOM"),  QStringLiteral("Amplifiers")},
         {QStringLiteral("SPE"),   QStringLiteral("Amplifiers")},
+        {QStringLiteral("VKAMP"), QStringLiteral("Amplifiers")},
+        {QStringLiteral("KPA1500"), QStringLiteral("Amplifiers")},
         {QStringLiteral("EQ"),    QStringLiteral("Audio & DSP")},
         {QStringLiteral("TXDSP"), QStringLiteral("Audio & DSP")},
         {QStringLiteral("WAVE"),  QStringLiteral("Audio & DSP")},

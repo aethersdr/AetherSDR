@@ -7,8 +7,8 @@ namespace AetherSDR {
 
 namespace {
 
-// Polled every tick — the three meter readings plus temperature, i.e. the
-// values that move while the operator is transmitting.
+// Polled every tick: the meter readings, temperature, and whether a tune is
+// running, i.e. the values that move while the operator is transmitting.
 const QStringList& fastPollCommands()
 {
     static const QStringList kFast{
@@ -16,6 +16,7 @@ const QStringList& fastPollCommands()
         QStringLiteral("PWR"),
         QStringLiteral("SW"),
         QStringLiteral("TM"),
+        QStringLiteral("TP"),
     };
     return kFast;
 }
@@ -28,10 +29,8 @@ const QStringList& slowPollCommands()
     static const QStringList kSlow{
         QStringLiteral("FL"),
         QStringLiteral("OS"),
-        QStringLiteral("ON"),
         QStringLiteral("BN"),
         QStringLiteral("AN"),
-        QStringLiteral("AE"),
         QStringLiteral("AM"),
         QStringLiteral("AI"),
     };
@@ -128,6 +127,7 @@ void Kpa1500Connection::disconnect()
     // emits disconnected() leaves the applet stuck showing "Connected".
     const bool wasConnected = m_connected;
     m_deliberateDisconnect = true;
+    ++m_connectEpoch;  // a pending connect timeout must not resurrect a user disconnect
     m_reconnectTimer.stop();
     m_pollTimer.stop();
     // Release the amp before dropping the link. Only ever an UNkey.
@@ -210,28 +210,25 @@ void Kpa1500Connection::onReadyRead()
 
 void Kpa1500Connection::onMessage(const Kpa1500::Message& message)
 {
-    if (!Kpa1500::applyMessage(message, m_status)) {
-        return;
+    const bool changed = Kpa1500::applyMessage(message, m_status);
+
+    // The amp's own `^TQ` is authoritative for the key state (Principle II):
+    // every reply counts, repeated or not, and only a `^TQ` reply does.
+    if (message.cmd == QLatin1String("TQ") && m_status.keyed && !*m_status.keyed && m_keyed) {
+        qCWarning(lcTuner) << "Kpa1500Connection: amp reports not keyed — stopping the key refresh";
+        stopKeyRefresh();
     }
 
-    if (m_status.keyed) {
-        // The amp's own view of its key state (`^TQ`) is authoritative —
-        // if it says it is not keyed, this class does not get to keep
-        // claiming it is (Principle II).
-        m_keyed = *m_status.keyed;
-        if (!m_keyed) {
-            stopKeyRefresh();
-        }
+    if (!changed) {
+        return;
     }
 
     const int fault = m_status.faultCode.value_or(0);
     if (fault != m_lastFaultCode) {
         m_lastFaultCode = fault;
         if (fault != 0) {
-            qCWarning(lcTuner) << "Kpa1500Connection: amplifier fault code" << fault;
-            emit faultRaised(fault);
-        } else {
-            emit faultCleared();
+            qCWarning(lcTuner).noquote() << "Kpa1500Connection: amplifier fault"
+                << QStringLiteral("%1").arg(fault, 2, 16, QLatin1Char('0')).toUpper();
         }
     }
 
@@ -243,6 +240,9 @@ void Kpa1500Connection::poll()
     if (!m_connected) { return; }
     for (const QString& cmd : fastPollCommands()) {
         sendRaw(Kpa1500::buildQuery(cmd));
+    }
+    if (m_keyed) {
+        sendRaw(Kpa1500::buildKeyStateQuery());
     }
     const QStringList& slow = slowPollCommands();
     if (!slow.isEmpty()) {
@@ -271,11 +271,6 @@ void Kpa1500Connection::setOperate(bool operate)
     sendRaw(Kpa1500::buildSetOperate(operate));
 }
 
-void Kpa1500Connection::setPower(bool on)
-{
-    sendRaw(Kpa1500::buildSetPower(on));
-}
-
 void Kpa1500Connection::startTune()
 {
     sendRaw(Kpa1500::buildStartTune());
@@ -284,11 +279,6 @@ void Kpa1500Connection::startTune()
 void Kpa1500Connection::cancelTune()
 {
     sendRaw(Kpa1500::buildCancelTune());
-}
-
-void Kpa1500Connection::setAtuMode(Kpa1500::AtuMode mode)
-{
-    sendRaw(Kpa1500::buildSetAtuMode(mode));
 }
 
 void Kpa1500Connection::setAtuInline(bool inLine)

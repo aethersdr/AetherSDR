@@ -13,8 +13,8 @@ exempts a standalone accessory's transport (`peripheral(...)`) from the
 **Scope of the implementation this note accompanies:** a dedicated
 `Kpa1500Applet` driven by `Kpa1500Connection` over TCP, plus a Peripherals
 settings row. Telemetry (forward/reflected power, SWR, temperature, band,
-fault), operate/standby, internal-ATU tune and in-line/bypass, and antenna
-select. **Network keying (`^TX`/`^RX`) is implemented in the protocol and
+fault), operate/standby, internal-ATU tune (start, progress, cancel) and
+in-line/bypass, and antenna select between ANT1 and ANT2. **Network keying (`^TX`/`^RX`) is implemented in the protocol and
 connection layers but is not reachable from the UI or the engine** — see §6,
 which is the part of this note the maintainer actually has to rule on.
 
@@ -47,11 +47,10 @@ explicitly clean inputs, and it puts this integration in a materially better
 position than VK3AMP's (reverse-engineered) or even ACOM's. Nothing here is
 decompiled, disassembled, or paraphrased from a proprietary binary.
 
-**What is and is not confirmed.** The *command spellings* below are quoted
-from that reference. Several *reply payload encodings* — field widths and
-numeric scaling — are not yet confirmed against a physical unit. §7 is the
-checklist for that, and the code is deliberately structured so each unconfirmed
-assumption is a single named constant rather than a scattered convention.
+**What is and is not confirmed.** Command spellings and reply encodings follow
+that reference, and the protocol test asserts its literal examples. Nothing has
+yet been run against a physical unit; §7 lists the few points the reference
+itself leaves open.
 
 ---
 
@@ -85,7 +84,8 @@ One ASCII shape for every message, in both directions:
 '^' <CMD> [<args>] ';'
 ```
 
-`<CMD>` is two or three upper-case letters. A bare `^CMD;` is a **query**; the
+`<CMD>` is two upper-case letters, or three for the handful of commands the
+reference names that way (`^PWF`, `^PWR`, `^STS`, …). A bare `^CMD;` is a **query**; the
 same token with an argument is a **set**, and the amp answers a query by
 echoing the command with its current value. That symmetry is why
 `Kpa1500::MessageParser` handles the whole stream with one decoder — there is
@@ -114,19 +114,24 @@ reasonable substitute for the control channel.
 | SWR | `^SW` |
 | Temperature | `^TM` |
 | Band data | `^BN` |
-| Fault / status | `^FL`, `^SF` |
-| Operate / standby | `^OS`, `^OP` |
-| Power on / off | `^ON` |
-| ATU mode / in-line | `^AM`, `^AI` |
-| ATU tune start / cancel | `^FT`, `^FE` |
-| ATU current setting | `^DA` |
-| Antenna select / enable | `^AN`, `^AE` |
+| Fault, and clearing it | `^FL` (two hex digits), `^FLC;` |
+| Operate / standby | `^OS` |
+| ATU mode / in-line | `^AM` (`I`/`B`), `^AI` |
+| ATU tune start / progress / cancel | `^FT;`, `^TP`, `^FE;` |
+| Antenna select | `^AN` |
 | Network keying | `^TX`, `^RX`, `^TQ` |
-| Control port | `^CP` |
 
-`^SF`, `^OP` and `^DA` are documented above for completeness but are not
-polled by the current implementation — `^FL` already carries the fault code the
-applet displays, and `^DA`'s L/C readout has no UI to land in yet.
+Encodings that matter for the readouts, all from the reference: `^SW` is SWR in
+tenths (`^SW123;` is 12.3:1); `^PWF`/`^PWR` are whole watts; `^FL` answers two
+hex digits (`B0`, `C1`, …); `^AM` answers `^AMI;` or `^AMB;`; `^TQ` answers 0
+(not keyed) or 1–3 (keyed by `^TX`, with or without KEY IN). The amp has two
+antenna connectors, ANT1 and ANT2; firmware 3.00 adds antenna numbers 3–32
+behind an external switch, which `^AN` reports but this integration never
+selects.
+
+A full-search tune "needs continuous exciter RF power to complete" (`^FE`). The
+applet starts and cancels it and shows it running from `^TP`; supplying the RF
+is the operator's, with the radio's own TUNE. Nothing here keys the radio.
 
 ### 3.4 Boundary validation (Principle VII)
 
@@ -140,10 +145,14 @@ as expected input, not an error path:
   immediately followed by a genuine frame causes the genuine frame to be
   swallowed, and the unit test for exactly that case failed before the guard
   was added;
-- a command token that is not 2–3 letters `A–Z` is dropped, never forwarded;
+- the command is matched by name — two letters, or one of the reference's
+  three-letter commands (`^PWF`, `^STS`, …) — because payloads can start with a
+  letter: a leading run of letters would read `^FLB0;` as a command `FLB`. A
+  frame that does not start with a command is dropped, never forwarded;
 - payloads are length-capped (`kMaxArgChars`) and the accumulation buffer is
   capped (`kMaxBufferBytes`), so a peer that opens a `^` and never sends `;`
-  cannot grow memory without bound;
+  cannot grow memory without bound, and one `feed()` is linear in its input
+  however the bytes are arranged;
 - `applyMessage()` range-checks every decoded value and leaves the snapshot
   **untouched** on anything malformed. A bad frame cannot flip OPERATE, drive a
   gauge negative, or select an antenna that does not exist.
@@ -155,12 +164,13 @@ as expected input, not an error path:
 Because the amp never pushes, `Kpa1500Connection` drives a 500 ms poll split in
 two:
 
-- **fast set, every tick:** `^PWF`, `^PWR`, `^SW`, `^TM` — the values that move
-  while the operator is transmitting;
-- **slow set, one per tick round-robin:** `^FL`, `^OS`, `^ON`, `^BN`, `^AN`,
-  `^AE`, `^AM`, `^AI` — configuration readbacks that change only when someone
-  changes them. A full cycle is ~4 s, which keeps the wire quiet without making
-  the panel feel stale.
+- **fast set, every tick:** `^PWF`, `^PWR`, `^SW`, `^TM`, `^TP` — the values
+  that move while the operator is transmitting or tuning (plus `^TQ` while
+  keyed, §6.2);
+- **slow set, one per tick round-robin:** `^FL`, `^OS`, `^BN`, `^AN`, `^AM`,
+  `^AI` — configuration readbacks that change only when someone changes them. A
+  full cycle is 3 s, which keeps the wire quiet without making the panel feel
+  stale.
 
 `Status` holds every field as a `std::optional`. A field stays unset until its
 own reply lands, so the applet renders `—` rather than a confident `0` for
@@ -187,12 +197,14 @@ reasons:
 
 Layout follows the `AcomApplet`/`VkampApplet` convention: PWR/REF/SWR gauges, a
 temp/band/ATU info row, a fault banner shown only when a fault stands, and a
-control row (OPERATE, TUNE, ATU IN/BYP) plus antenna 1–3. Readouts are throttled
-through the shared 10 Hz label timer rather than repainting on every reply.
+control row (OPERATE, TUNE, ATU IN/BYP) plus antenna buttons for ANT1 and ANT2,
+with an `ANT n` label when an external switch has the amp on antenna number
+3–32. TUNE lights while `^TP` reports a tune running, and pressing it then
+cancels. Readouts are throttled through the shared 10 Hz label timer rather than
+repainting on every reply.
 
-Fault codes are shown as **raw numbers**, not names. The code-to-name table is
-not something this integration has confirmed, and a confidently wrong fault
-*name* is worse than an honest number.
+Fault codes are shown as the amp's own two-digit hex code (`Fault B0`), matching
+the reference's `^FL` table and the amplifier's front panel.
 
 ---
 
@@ -225,8 +237,8 @@ too.
 held; `unkey()` sends `^RX;` unconditionally rather than gating on a remembered
 flag. If the link drops while keyed, the connection logs that the amp's own
 timeout is now the only thing that will release it, and stops pretending to
-manage a key it can no longer refresh. `^TQ` readback is authoritative: if the
-amp says it is not keyed, this class does not get to keep claiming it is.
+manage a key it can no longer refresh. While keyed, every poll also sends
+`^TQ;`, and the amp's answer is authoritative: a `^TQ0;` stops the refresh.
 
 ### 6.3 What is NOT implemented, and why
 
@@ -261,22 +273,14 @@ designed in isolation.
 
 ## 7. Hardware-validation checklist
 
-Nothing below is a blocker for reviewing the structure; all of it is a blocker
-for trusting the readouts. Each item maps to a single named constant or table.
+The reference settles the wire encodings (§3.3). What it leaves open, and what
+only a physical unit can confirm:
 
-| # | Assumption | Where | Failure if wrong |
+| # | Open point | Where | Failure if wrong |
 |---|---|---|---|
-| 1 | `^PWF`/`^PWR` payloads are whole watts | `kPowerDivisor` | Power reads 100× high/low |
-| 2 | `^SW` payload is SWR in hundredths | `kSwrDivisor` | SWR reads 100× off |
-| 3 | `^BN` uses the Elecraft `BN` band-code table | `bandName()` | Band label wrong (cosmetic; unknown codes already render `—`) |
-| 4 | `^AM` values are 0=bypass, 1=auto, 2=manual | `AtuMode` | ATU mode label wrong; `^AM` set commands wrong mode |
-| 5 | Antenna ports are 1–3 | `kMinAntenna`/`kMaxAntenna` | A 4th port would be rejected client-side |
-| 6 | `^FL0;` clears a fault | `buildClearFault()` | Clear-fault button no-ops |
-| 7 | `^TQ` answers `0`/`1` | `applyMessage` | Key-state readback ignored (fails safe — `^TX` timeout still applies) |
-
-A payload that arrives with an explicit decimal point (e.g. `1.5`) is taken at
-face value rather than re-scaled, so items 1–2 degrade gracefully if the
-firmware ever switches encodings.
+| 1 | The bypassed reply to `^AI;` is printed as `^AT0;` (p.13), almost certainly a typo for `^AI0;` | `applyMessage` | ATU IN/BYP never shows bypassed |
+| 2 | `^TP` reports a full-search tune started by `^FT;` as running until it completes or `^FE;` cancels it | TUNE button state | TUNE does not light, so it cannot cancel from the app |
+| 3 | `^AN` answers antenna numbers 3–32 as plain digits when an external switch is in use | `applyMessage` | The `ANT n` label stays hidden |
 
 ---
 
@@ -287,8 +291,8 @@ firmware ever switches encodings.
 | `src/core/Kpa1500Protocol.h/.cpp` | Framing parser, `Status` decode, command builders. No Qt GUI, no sockets — unit-testable in isolation. |
 | `src/core/Kpa1500Connection.h/.cpp` | TCP transport, reconnect, poll loop, keying refresh. `peripheral(kpa1500)`. |
 | `src/gui/Kpa1500Applet.h/.cpp` | The panel. |
-| `tests/kpa1500_protocol_test.cpp` | Framing/boundary tests and the keying-builder safety invariant. |
-| `src/gui/RadioSetupDialog.cpp` | Peripherals row (`PeripheralSettings` device `"Kpa1500"`). |
+| `tests/kpa1500_protocol_test.cpp` | Framing/boundary tests, decode and command spellings against the reference's examples, and the keying-builder safety invariant. |
+| `src/gui/RadioSetupDialog_Peripherals.cpp` | Peripherals device (`PeripheralSettings` device `"Kpa1500"`). |
 | `src/gui/MainWindow_Wiring.cpp` | Signal wiring and startup auto-connect. |
 
 Settings live under `PeripheralSettings` device `"Kpa1500"`, fields `ManualIp`

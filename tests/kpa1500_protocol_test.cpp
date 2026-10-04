@@ -8,7 +8,11 @@
 //     frames must all be handled without crashing, hanging, or growing a
 //     buffer without bound.
 //
-//  2. The KEYING builders. buildKey() must be structurally incapable of
+//  2. The decode and command spellings, asserted against the literal
+//     examples in Elecraft's KPA1500 Programming Reference V3 (the protocol
+//     authority, Principle I) rather than against this codec's own output.
+//
+//  3. The KEYING builders. buildKey() must be structurally incapable of
 //     emitting the unbounded `^TX;` form, because that form is exactly the
 //     "amp stays keyed after the controlling software dies" hazard #4097
 //     asks to eliminate.
@@ -71,7 +75,15 @@ int main()
     report("parseMessage rejects a frame with no '^'", !parseMessage("PWF1200;").has_value());
     report("parseMessage rejects an unterminated frame", !parseMessage("^PWF1200").has_value());
     report("parseMessage rejects a 1-letter command token", !parseMessage("^P1;").has_value());
-    report("parseMessage rejects a 4-letter command token", !parseMessage("^PWFX1;").has_value());
+    {
+        // The command is matched by name, so a letter after a known command
+        // is payload; the decoder then rejects "X1" as a power reading.
+        const auto m = parseMessage("^PWFX1;");
+        Status s;
+        report("^PWFX1; is PWF with payload X1, which does not decode",
+               m.has_value() && m->cmd == "PWF" && m->arg == "X1"
+                   && !applyMessage(*m, s) && !s.forwardWatts);
+    }
     // Case is normalized rather than rejected: the wire protocol is
     // upper-case, and Message::cmd's contract is "always upper-case", so
     // every comparison downstream can assume it without re-checking.
@@ -144,6 +156,18 @@ int main()
         report("parser drops a numeric command token but keeps the valid frame",
                msgs.size() == 1 && msgs[0].cmd == "PWF");
     }
+    {
+        // Payloads that start with a letter: the command is matched by
+        // name, not taken as the leading run of letters.
+        MessageParser p;
+        const auto msgs = drain(p, {"^AMI;^FLB0;^PWR15;^STS30;"});
+        report("parser splits letter-led payloads off two-letter commands",
+               msgs.size() == 4 && msgs[0].cmd == "AM" && msgs[0].arg == "I"
+                   && msgs[1].cmd == "FL" && msgs[1].arg == "B0");
+        report("parser keeps the reference's three-letter commands whole",
+               msgs.size() == 4 && msgs[2].cmd == "PWR" && msgs[2].arg == "15"
+                   && msgs[3].cmd == "STS" && msgs[3].arg == "30");
+    }
 
     // ── applyMessage(): decode into Status ───────────────────────────────
     {
@@ -154,16 +178,17 @@ int main()
         report("PWR populates reflected power",
                applyMessage(Message{"PWR", "15"}, s) && s.reflectedWatts
                    && nearlyEqual(*s.reflectedWatts, 15.0f));
-        // Fixed-point integer form: the amp's documented encoding.
-        report("SW decodes the fixed-point integer form",
-               applyMessage(Message{"SW", "150"}, s) && s.swr && nearlyEqual(*s.swr, 1.5f));
+        // Reference p.50: "swr is expressed in tenths. ^SW123; is 12.3 : 1".
+        report("SW123 decodes as 12.3:1 (reference example)",
+               applyMessage(Message{"SW", "123"}, s) && s.swr && nearlyEqual(*s.swr, 12.3f));
+        report("SW015 decodes as 1.5:1",
+               applyMessage(Message{"SW", "015"}, s) && s.swr && nearlyEqual(*s.swr, 1.5f));
         report("TM populates temperature",
                applyMessage(Message{"TM", "42"}, s) && s.tempC && *s.tempC == 42);
         report("OS1 reads as OPERATE",
                applyMessage(Message{"OS", "1"}, s) && s.operate && *s.operate);
         report("OS0 reads as STANDBY",
                applyMessage(Message{"OS", "0"}, s) && s.operate && !*s.operate);
-        report("hasAnyField() is true once something has been reported", s.hasAnyField());
     }
     {
         // An amp that sends an explicit decimal point is taken at face
@@ -190,19 +215,64 @@ int main()
                !applyMessage(Message{"TM", ""}, s) && !s.tempC);
         report("a negative power reading is rejected",
                !applyMessage(Message{"PWF", "-50"}, s) && !s.forwardWatts);
-        report("an out-of-range antenna port is rejected",
-               !applyMessage(Message{"AN", "7"}, s) && !s.antenna);
-        report("an out-of-range ATU mode is rejected",
-               !applyMessage(Message{"AM", "9"}, s) && !s.atuMode);
+        report("an antenna number past 32 is rejected",
+               !applyMessage(Message{"AN", "33"}, s) && !s.antenna);
+        report("antenna number 0 is rejected",
+               !applyMessage(Message{"AN", "0"}, s) && !s.antenna);
+        report("a numeric ATU mode is rejected (the reference uses I/B)",
+               !applyMessage(Message{"AM", "1"}, s) && !s.atuMode);
+        report("a fault code that is not two hex digits is rejected",
+               !applyMessage(Message{"FL", "G0"}, s) && !applyMessage(Message{"FL", "9"}, s)
+                   && !s.faultCode);
+        report("a key state past 3 is rejected",
+               !applyMessage(Message{"TQ", "4"}, s) && !s.keyed);
         report("an unrecognized command is ignored rather than desynchronizing",
                !applyMessage(Message{"ZZ", "1"}, s));
     }
     {
         Status s;
-        applyMessage(Message{"AM", "1"}, s);
-        report("AM1 decodes as AUTO", s.atuMode && *s.atuMode == AtuMode::Auto);
+        applyMessage(Message{"AM", "I"}, s);
+        report("AMI decodes as INLINE", s.atuMode && *s.atuMode == AtuMode::Inline);
+        applyMessage(Message{"AM", "B"}, s);
+        report("AMB decodes as BYPASS", s.atuMode && *s.atuMode == AtuMode::Bypass);
         applyMessage(Message{"AN", "2"}, s);
-        report("AN2 decodes as antenna port 2", s.antenna && *s.antenna == 2);
+        report("AN2 decodes as antenna 2", s.antenna && *s.antenna == 2);
+        applyMessage(Message{"AN", "12"}, s);
+        report("AN12 decodes as external antenna number 12", s.antenna && *s.antenna == 12);
+        applyMessage(Message{"TP", "1"}, s);
+        report("TP1 reads as a tune in progress", s.tuning && *s.tuning);
+    }
+    {
+        // Reference p.29: ^FLhh, two hex digits.
+        Status s;
+        applyMessage(Message{"FL", "90"}, s);
+        report("FL90 decodes as fault 0x90", s.faultCode && *s.faultCode == 0x90);
+        applyMessage(Message{"FL", "B0"}, s);
+        report("FLB0 decodes as fault 0xB0", s.faultCode && *s.faultCode == 0xB0);
+        applyMessage(Message{"FL", "C1"}, s);
+        report("FLC1 decodes as fault 0xC1", s.faultCode && *s.faultCode == 0xC1);
+        applyMessage(Message{"FL", "00"}, s);
+        report("FL00 clears the fault", s.faultCode && *s.faultCode == 0);
+    }
+    {
+        // Reference p.52: ^TQn, 0 not keyed, 1-3 keyed.
+        Status s;
+        applyMessage(Message{"TQ", "0"}, s);
+        report("TQ0 reads as not keyed", s.keyed && !*s.keyed);
+        applyMessage(Message{"TQ", "2"}, s);
+        report("TQ2 reads as keyed", s.keyed && *s.keyed);
+        applyMessage(Message{"TQ", "3"}, s);
+        report("TQ3 reads as keyed", s.keyed && *s.keyed);
+    }
+    {
+        // End to end through the parser, the reference's own wire examples.
+        MessageParser p;
+        Status s;
+        p.setMessageCallback([&s](const Message& m) { applyMessage(m, s); });
+        p.feed("^SW123;^FLB0;^AMI;");
+        report("wire ^SW123;^FLB0;^AMI; decodes as 12.3:1, fault B0, ATU inline",
+               s.swr && nearlyEqual(*s.swr, 12.3f) && s.faultCode && *s.faultCode == 0xB0
+                   && s.atuMode && *s.atuMode == AtuMode::Inline);
     }
 
     // ── Band names ───────────────────────────────────────────────────────
@@ -215,23 +285,19 @@ int main()
     // ── Command builders ─────────────────────────────────────────────────
     report("buildSetOperate(true) == ^OS1;", buildSetOperate(true) == "^OS1;");
     report("buildSetOperate(false) == ^OS0;", buildSetOperate(false) == "^OS0;");
-    report("buildSetPower(true) == ^ON1;", buildSetPower(true) == "^ON1;");
-    report("buildStartTune() == ^FT1;", buildStartTune() == "^FT1;");
-    report("buildCancelTune() == ^FE1;", buildCancelTune() == "^FE1;");
+    // Reference p.30 "^FT Start Tune — SET/RESPONSE format: ^FT;" and p.28 "^FE;".
+    report("buildStartTune() == ^FT;", buildStartTune() == "^FT;");
+    report("buildCancelTune() == ^FE;", buildCancelTune() == "^FE;");
     report("buildSetAtuInline(true) == ^AI1;", buildSetAtuInline(true) == "^AI1;");
-    report("buildSetAtuMode(Auto) == ^AM1;", buildSetAtuMode(AtuMode::Auto) == "^AM1;");
-    // "Unknown" is this layer's own not-yet-reported marker; sending it
-    // would command a mode that does not exist on the amp.
-    report("buildSetAtuMode(Unknown) refuses to build a frame",
-           buildSetAtuMode(AtuMode::Unknown).isEmpty());
     report("buildSelectAntenna(2) == ^AN2;", buildSelectAntenna(2) == "^AN2;");
-    report("buildSelectAntenna refuses an out-of-range port",
-           buildSelectAntenna(0).isEmpty() && buildSelectAntenna(4).isEmpty());
+    report("buildSelectAntenna refuses anything but connectors 1 and 2",
+           buildSelectAntenna(0).isEmpty() && buildSelectAntenna(3).isEmpty());
     report("buildQuery(\"PWF\") == ^PWF;", buildQuery("PWF") == "^PWF;");
     report("buildMessage refuses a malformed command token",
            buildMessage("").isEmpty() && buildMessage("P").isEmpty()
                && buildMessage("PWFX").isEmpty() && buildMessage("P1").isEmpty());
-    report("buildClearFault() == ^FL0;", buildClearFault() == "^FL0;");
+    // Reference p.29: "SET format: ^FLC; to clear current fault."
+    report("buildClearFault() == ^FLC;", buildClearFault() == "^FLC;");
 
     // ── Keying: the safety-critical half ─────────────────────────────────
     //
@@ -266,10 +332,10 @@ int main()
 
     // ── ATU mode labels ──────────────────────────────────────────────────
     report("atuModeLabel(Bypass) == BYPASS", atuModeLabel(AtuMode::Bypass) == "BYPASS");
+    report("atuModeLabel(Inline) == INLINE", atuModeLabel(AtuMode::Inline) == "INLINE");
     report("atuModeLabel(Unknown) renders as a placeholder, not a mode name",
            atuModeLabel(AtuMode::Unknown) != "BYPASS"
-               && atuModeLabel(AtuMode::Unknown) != "AUTO"
-               && atuModeLabel(AtuMode::Unknown) != "MANUAL");
+               && atuModeLabel(AtuMode::Unknown) != "INLINE");
 
     if (g_failed == 0) {
         std::printf("\nAll KPA1500 protocol tests passed.\n");

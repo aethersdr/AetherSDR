@@ -39,19 +39,15 @@ public:
     void disconnect();
     void setAutoReconnect(bool on) { m_autoReconnect = on; }
 
-    const Kpa1500::Status& lastStatus() const { return m_status; }
-
     // Control (host -> amp). Every one is a no-op, logged, when not
     // connected — the amp is the authority on its own state, so nothing
     // here latches an optimistic value; the applet repaints when the poll
     // reply lands (constitution Principle II applied to a peripheral).
     void setOperate(bool operate);
-    void setPower(bool on);
-    void startTune();
+    void startTune();   // the exciter must supply RF for the tune to finish
     void cancelTune();
-    void setAtuMode(Kpa1500::AtuMode mode);
     void setAtuInline(bool inLine);
-    void selectAntenna(int port);  // 1-3; out of range is a no-op, logged
+    void selectAntenna(int port);  // ANT1/ANT2; out of range is a no-op, logged
     void clearFault();
 
     // ── Network keying ───────────────────────────────────────────────────
@@ -71,9 +67,11 @@ public:
     // and refreshes it every kKeyRefreshMs for as long as the key is held,
     // so if this application dies or the LAN drops the amp unkeys itself
     // when the timeout expires instead of staying keyed indefinitely.
+    //
+    // While keyed, every poll also sends `^TQ;`; a reply of 0 means the amp
+    // has already dropped the key, and the refresh stops.
     void key();
     void unkey();
-    bool isKeyed() const { return m_keyed; }
 
 signals:
     void connected();
@@ -83,11 +81,6 @@ signals:
     // something. Consumers read the fields they care about; unset optionals
     // mean "the amp has not reported this yet", not zero.
     void statusUpdated(const AetherSDR::Kpa1500::Status& status);
-    // Non-zero fault code newly reported by `^FL`. Separate from
-    // statusUpdated so a fault can drive an alert without every consumer
-    // diffing the snapshot itself.
-    void faultRaised(int code);
-    void faultCleared();
 
 private slots:
     void onReadyRead();
@@ -114,9 +107,8 @@ private:
     bool m_deliberateDisconnect{false};
     bool m_keyed{false};
 
-    // Guards against re-emitting faultRaised() on every poll for a fault
-    // that is already displayed — `^FL` answers with the same non-zero code
-    // for as long as the fault stands.
+    // Logs a fault once when it appears rather than on every poll — `^FL`
+    // answers with the same code for as long as the fault stands.
     int m_lastFaultCode{0};
 
     QTimer m_reconnectTimer;
@@ -135,7 +127,7 @@ private:
     static constexpr int kPollIntervalMs = 500;
     // Rotates one slow query per tick alongside the fast set, so the meters
     // stay at the full poll rate while the configuration readbacks (band,
-    // antenna, ATU, operate/power state) still refresh a couple of times a
+    // antenna, ATU, operate state) still refresh a couple of times a
     // second without putting the whole query set on the wire every 500ms.
     int m_slowPollIndex{0};
 

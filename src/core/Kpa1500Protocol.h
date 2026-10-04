@@ -15,21 +15,21 @@ namespace AetherSDR {
 // a public manufacturer document, so this is a clean-room input under
 // constitution Principle IV (unlike VkampProtocol.h's reverse-engineered
 // case). See docs/architecture/kpa1500-amplifier-design.md for the full
-// design note, including the per-field confidence table: the COMMAND
-// SPELLINGS below are quoted from that reference, but several of the
-// REPLY PAYLOAD encodings (field widths and numeric scaling) still need
-// confirming against real hardware before the readouts can be trusted —
-// the design note's §7 checklist is what that confirmation ticks off.
+// design note. Command spellings and reply encodings below follow that
+// reference; the few points it leaves open are the design note's §7
+// checklist.
 //
 // Framing is a single ASCII shape for every message in both directions:
 //
 //     '^' <CMD> [<args>] ';'
 //
-// <CMD> is two or three uppercase letters. A bare `^CMD;` is a QUERY; the
+// <CMD> is two uppercase letters, or three for the few commands the
+// reference names that way (kThreeLetterCommands in the .cpp). Payloads can
+// start with a letter (`^AMI;`, `^FLB0;`), so the command is matched by name,
+// never taken as the leading run of letters. A bare `^CMD;` is a QUERY; the
 // same token with an argument is a SET, and the amp answers a query by
-// echoing the command with its current value. That symmetry is why one
-// parser handles the whole stream — there is no separate reply framing to
-// decode.
+// echoing the command with its current value, so one parser handles the
+// whole stream.
 //
 // Transport is TCP on port 1500 (the amp also exposes a UDP server on the
 // same port accepting the same command set; this implementation is TCP-only
@@ -65,13 +65,13 @@ QByteArray buildMessage(const QString& cmd, const QString& arg = QString());
 // bytes straight off a LAN socket:
 //   - bytes before a '^' are discarded (resynchronization), so a truncated
 //     or mid-frame connect recovers instead of poisoning every later frame;
-//   - a frame whose command token is not 2-3 letters A-Z is dropped, not
-//     forwarded;
+//   - a frame that does not start with a 2-letter (or known 3-letter)
+//     command is dropped, not forwarded;
 //   - the payload is length-capped (kMaxArgChars) so a peer that never
 //     sends a ';' cannot grow the buffer without bound;
-//   - the whole accumulation buffer is capped at kMaxBufferBytes.
-// Nothing here throws, allocates proportionally to attacker input, or
-// indexes past the end.
+//   - the whole accumulation buffer is capped at kMaxBufferBytes, and a
+//     feed() is linear in its input however the bytes are arranged.
+// Nothing here throws or indexes past the end.
 class MessageParser {
 public:
     void setMessageCallback(std::function<void(const Message&)> cb)
@@ -98,9 +98,9 @@ std::optional<Message> parseMessage(const QByteArray& frame);
 
 // ── Decoded amplifier state ──────────────────────────────────────────────
 
-// ATU modes reported/commanded by `^AM`. The wire values are the enum
-// values; Unknown is this layer's own "not reported yet", never sent.
-enum class AtuMode { Bypass = 0, Auto = 1, Manual = 2, Unknown = -1 };
+// ATU MODE from `^AM` (current band and antenna): `^AMI;` inline or
+// `^AMB;` bypassed. Unknown is this layer's own "not reported yet".
+enum class AtuMode { Unknown, Bypass, Inline };
 
 QString atuModeLabel(AtuMode mode);
 
@@ -114,18 +114,13 @@ struct Status {
     std::optional<float> swr;             // ^SW
     std::optional<int>   tempC;           // ^TM
     std::optional<int>   band;            // ^BN (raw band code, see bandName)
-    std::optional<int>   faultCode;       // ^FL, 0 = no fault
+    std::optional<int>   faultCode;       // ^FL two hex digits, 0x00 = no fault
     std::optional<bool>  operate;         // ^OS, true = OPERATE, false = STANDBY
-    std::optional<bool>  powerOn;         // ^ON
-    std::optional<int>   antenna;         // ^AN, 1-based port
-    std::optional<bool>  antennaEnabled;  // ^AE
+    std::optional<int>   antenna;         // ^AN antenna number, 1-32
     std::optional<AtuMode> atuMode;       // ^AM
     std::optional<bool>  atuInline;       // ^AI
+    std::optional<bool>  tuning;          // ^TP, a full-search tune is running
     std::optional<bool>  keyed;           // ^TQ — amp's own view of its key state
-
-    // True once any field has been populated. Used to distinguish "connected
-    // but nothing has answered yet" from "connected and reporting".
-    bool hasAnyField() const;
 };
 
 // Folds one decoded message into `status`, returning true if it changed
@@ -148,18 +143,19 @@ QByteArray buildQuery(const QString& cmd);
 
 // Control.
 QByteArray buildSetOperate(bool operate);       // ^OS1 / ^OS0
-QByteArray buildSetPower(bool on);              // ^ON1 / ^ON0
-QByteArray buildSetAtuMode(AtuMode mode);       // ^AM<n>; Unknown is a no-op (empty)
 QByteArray buildSetAtuInline(bool inLine);      // ^AI1 / ^AI0
-QByteArray buildStartTune();                    // ^FT1
-QByteArray buildCancelTune();                   // ^FE1
-// `port` must be within [kMinAntenna, kMaxAntenna]; out-of-range yields an
-// empty QByteArray rather than an antenna command the amp would reject.
+QByteArray buildStartTune();                    // ^FT
+QByteArray buildCancelTune();                   // ^FE
+// The amp has two connectors, ANT1 and ANT2, and those are the only
+// antennas this sets; out of range yields an empty QByteArray. Antenna
+// numbers 3-32 exist only behind an external switch (firmware 3.00), so
+// they are accepted on readback (kMaxAntennaNumber) but never commanded.
 QByteArray buildSelectAntenna(int port);        // ^AN<n>
-QByteArray buildClearFault();                   // ^FL0
+QByteArray buildClearFault();                   // ^FLC
 
 inline constexpr int kMinAntenna = 1;
-inline constexpr int kMaxAntenna = 3;
+inline constexpr int kMaxAntenna = 2;
+inline constexpr int kMaxAntennaNumber = 32;
 
 // ── Network keying ───────────────────────────────────────────────────────
 //

@@ -213,14 +213,22 @@ Kpa1500Applet::Kpa1500Applet(QWidget* parent)
     m_tuneBtn = makeSmallButton(QStringLiteral("TUNE"), this);
     m_tuneBtn->setAccessibleName(tr("Start antenna tuner"));
     m_tuneBtn->setAccessibleDescription(
-        tr("Starts a tuning cycle on the amplifier's internal tuner. The amplifier supplies its "
-           "own tuning carrier; this does not key the radio."));
+        tr("Starts a full-search tune on the amplifier's internal tuner. The radio must supply RF "
+           "(use the radio's TUNE); this does not key the radio. While a tune is running, "
+           "press again to cancel it."));
     theme.applyStyleSheet(m_tuneBtn, makeStateBtnStyle({
         activeStateStyle(QStringLiteral("active"), QStringLiteral("{{color.background.1}}"),
                          QStringLiteral("{{color.accent.warning}}"),
                          QStringLiteral("{{color.accent.warning}}")),
     }));
-    connect(m_tuneBtn, &QPushButton::clicked, this, [this]() { emit tuneRequested(); });
+    connect(m_tuneBtn, &QPushButton::clicked, this, [this]() {
+        // Follows the amp's own ^TP readback, not a latch of the last click.
+        if (m_status.tuning.value_or(false)) {
+            emit tuneCancelRequested();
+        } else {
+            emit tuneRequested();
+        }
+    });
 
     m_atuInlineBtn = makeSmallButton(QStringLiteral("ATU IN"), this);
     m_atuInlineBtn->setAccessibleDescription(
@@ -248,23 +256,24 @@ Kpa1500Applet::Kpa1500Applet(QWidget* parent)
     theme.applyStyleSheet(antLabel, telemetryLabelStyle());
     m_ant1Btn = makeSmallButton(QStringLiteral("1"), this);
     m_ant2Btn = makeSmallButton(QStringLiteral("2"), this);
-    m_ant3Btn = makeSmallButton(QStringLiteral("3"), this);
     // Bare digits carry no meaning to an AT reading a button out of its row
     // context (docs/a11y.md §1).
     m_ant1Btn->setAccessibleName(tr("Antenna port 1"));
     m_ant2Btn->setAccessibleName(tr("Antenna port 2"));
-    m_ant3Btn->setAccessibleName(tr("Antenna port 3"));
+    m_antNumberLabel = new QLabel(this);
+    theme.applyStyleSheet(m_antNumberLabel, telemetryLabelStyle());
+    m_antNumberLabel->setAccessibleName(tr("Antenna number from the external switch"));
+    m_antNumberLabel->hide();
     const QString antBtnStyle = makeStateBtnStyle({
         activeStateStyle(QStringLiteral("active"), QStringLiteral("{{color.background.1}}"),
                          QStringLiteral("{{color.accent}}"),
                          QStringLiteral("{{color.text.primary}}")),
     });
-    for (auto* btn : {m_ant1Btn, m_ant2Btn, m_ant3Btn}) {
+    for (auto* btn : {m_ant1Btn, m_ant2Btn}) {
         theme.applyStyleSheet(btn, antBtnStyle);
     }
     connect(m_ant1Btn, &QPushButton::clicked, this, [this]() { emit antennaSelected(1); });
     connect(m_ant2Btn, &QPushButton::clicked, this, [this]() { emit antennaSelected(2); });
-    connect(m_ant3Btn, &QPushButton::clicked, this, [this]() { emit antennaSelected(3); });
 
     m_clearFaultBtn = makeSmallButton(QStringLiteral("CLR FAULT"), this);
     m_clearFaultBtn->setAccessibleName(tr("Clear amplifier fault"));
@@ -277,7 +286,7 @@ Kpa1500Applet::Kpa1500Applet(QWidget* parent)
     antRow->addWidget(antLabel);
     antRow->addWidget(m_ant1Btn);
     antRow->addWidget(m_ant2Btn);
-    antRow->addWidget(m_ant3Btn);
+    antRow->addWidget(m_antNumberLabel);
     antRow->addStretch();
     antRow->addWidget(m_clearFaultBtn);
     vbox->addLayout(antRow);
@@ -308,10 +317,10 @@ void Kpa1500Applet::setStatus(const Kpa1500::Status& status)
         m_faultLabel->clear();
         m_clearFaultBtn->hide();
     } else {
-        // Raw numeric code: the fault-code-to-name table is not something
-        // this integration has confirmed against hardware, and a wrong
-        // fault NAME is worse than an honest number (design doc §7).
-        m_faultLabel->setText(tr("Fault %1").arg(fault));
+        // The amp's own two-digit hex code, as the Programming Reference's
+        // ^FL table and the front panel print it.
+        m_faultLabel->setText(tr("Fault %1")
+            .arg(QStringLiteral("%1").arg(fault, 2, 16, QLatin1Char('0')).toUpper()));
         m_faultLabel->show();
         m_clearFaultBtn->setVisible(m_connected);
     }
@@ -347,13 +356,27 @@ void Kpa1500Applet::refreshControls()
     const int ant = m_status.antenna.value_or(0);
     setBtnState(m_ant1Btn, ant == 1 && m_connected ? QStringLiteral("active") : QString());
     setBtnState(m_ant2Btn, ant == 2 && m_connected ? QStringLiteral("active") : QString());
-    setBtnState(m_ant3Btn, ant == 3 && m_connected ? QStringLiteral("active") : QString());
+    const bool external = m_connected && ant > Kpa1500::kMaxAntenna;
+    m_antNumberLabel->setText(external ? QStringLiteral("ANT %1").arg(ant) : QString());
+    m_antNumberLabel->setVisible(external);
+
+    const bool tuning = m_status.tuning.value_or(false);
+    m_tuneBtn->setText(tuning ? QStringLiteral("TUNING") : QStringLiteral("TUNE"));
+    const QString tuneName = tuning ? tr("Cancel antenna tune") : tr("Start antenna tuner");
+    if (m_tuneBtn->accessibleName() != tuneName) {
+        m_tuneBtn->setAccessibleName(tuneName);
+        if (QAccessible::isActive()) {
+            QAccessibleEvent event(m_tuneBtn, QAccessible::NameChanged);
+            QAccessible::updateAccessibility(&event);
+        }
+    }
+    setBtnState(m_tuneBtn, tuning && m_connected ? QStringLiteral("active") : QString());
 }
 
 void Kpa1500Applet::setConnected(bool connected)
 {
     m_connected = connected;
-    for (auto* btn : {m_operateBtn, m_tuneBtn, m_atuInlineBtn, m_ant1Btn, m_ant2Btn, m_ant3Btn}) {
+    for (auto* btn : {m_operateBtn, m_tuneBtn, m_atuInlineBtn, m_ant1Btn, m_ant2Btn}) {
         btn->setEnabled(connected);
     }
 
@@ -378,9 +401,8 @@ void Kpa1500Applet::setConnected(bool connected)
         m_pwrGauge->clearPeak();
         m_refGauge->setValueImmediate(0.0f);
         m_swrGauge->setValueImmediate(1.0f);
-        // Consume the dirty flag BEFORE updateValueLabels() so a reply that
-        // landed in the last <=100ms cannot repaint real-looking values over
-        // the placeholders — the same ordering trap VkampApplet documents.
+        // Force the repaint so the placeholders replace the last readings now
+        // rather than on the next tick.
         m_valuesDirty = true;
         refreshControls();
         updateValueLabels();

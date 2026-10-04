@@ -361,7 +361,7 @@ bool checkPendingRemoval()
             QWidget owner;
             QPointer<RadioSetupDialog> dialog = new RadioSetupDialog(
                 &model, nullptr, &tgxl, &pgxl, &ag, nullptr,
-                nullptr, nullptr, nullptr, nullptr, &owner);
+                nullptr, nullptr, nullptr, nullptr, nullptr, &owner);
             dialog->setAttribute(Qt::WA_DeleteOnClose);
             dialog->selectTab("Peripherals");
             dialog->show();
@@ -839,7 +839,7 @@ bool checkRemovalOwnerTeardown()
             auto owner = std::make_unique<QWidget>();
             QPointer<RadioSetupDialog> dialog = new RadioSetupDialog(
                 &model, nullptr, &tgxl, &pgxl, nullptr, nullptr,
-                nullptr, nullptr, nullptr, nullptr, owner.get());
+                nullptr, nullptr, nullptr, nullptr, nullptr, owner.get());
             dialog->selectTab("Peripherals");
             auto* remove = dialog->findChild<QPushButton*>("peripheralRemoveButton");
             if (!remove) {

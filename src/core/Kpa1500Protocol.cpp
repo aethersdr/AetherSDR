@@ -7,45 +7,56 @@ namespace Kpa1500 {
 
 namespace {
 
-// Numeric scaling of the reply payloads. Grouped here, named, and used in
-// exactly one place each, because this is the half of the protocol that
-// still needs real-hardware confirmation (design doc §7): when a reading
-// comes back off by a decimal place on a real KPA1500, the fix is one
-// constant here, not a hunt through the decode switch.
-//
-// decodeScaled() below never actually depends on these when the amp sends
-// an explicit decimal point — a payload containing '.' is taken at face
-// value. The divisor is the fallback for the fixed-point integer form.
-constexpr float kSwrDivisor = 100.0f;    // e.g. "150" -> 1.50
-constexpr float kPowerDivisor = 1.0f;    // whole watts
+// Reply scaling, per the Programming Reference: ^SW "is expressed in
+// tenths. ^SW123; is 12.3 : 1"; ^PWF/^PWR are whole watts. A payload with an
+// explicit decimal point is taken at face value instead.
+constexpr float kSwrDivisor = 10.0f;
+constexpr float kPowerDivisor = 1.0f;
 
-// Command token: '^' then 2-3 letters. Anything else is a desynchronized
-// stream, not a message we should forward (Principle VII).
-bool isValidCommandToken(const QString& cmd)
+// Every command in the reference is two letters except these. Payloads may
+// start with a letter (^AMI;, ^FLB0;), so the token is matched by name: a
+// leading run of letters would read ^FLB0; as a command "FLB".
+constexpr const char* kThreeLetterCommands[] = {
+    "BRP", "BRX", "PWD", "PWF", "PWI", "PWR", "RVM", "STA", "STB", "STN", "STS", "VMH",
+};
+
+bool isUpperLetter(QChar c)
 {
-    if (cmd.size() < 2 || cmd.size() > 3) {
-        return false;
-    }
-    for (const QChar c : cmd) {
-        if (c < QLatin1Char('A') || c > QLatin1Char('Z')) {
-            return false;
-        }
-    }
-    return true;
+    return c >= QLatin1Char('A') && c <= QLatin1Char('Z');
 }
 
-// Splits "PWF1200" into ("PWF", "1200"). The command token is the leading
-// run of letters; everything after it is payload. Returns false if the
-// token is not a valid command.
+// Command token for building a frame: 2 letters, or one of the 3-letter
+// commands above. Anything else would put a frame on the wire the amp
+// cannot parse.
+bool isValidCommandToken(const QString& cmd)
+{
+    if (cmd.size() == 2) {
+        return isUpperLetter(cmd.at(0)) && isUpperLetter(cmd.at(1));
+    }
+    if (cmd.size() == 3) {
+        for (const char* known : kThreeLetterCommands) {
+            if (cmd == QLatin1String(known)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+// Splits "PWF1200" into ("PWF", "1200") and "AMI" into ("AM", "I"). Returns
+// false for a body that does not start with a command (Principle VII).
 bool splitBody(const QString& body, QString& cmd, QString& arg)
 {
-    int i = 0;
-    while (i < body.size() && body.at(i).isLetter()) {
-        ++i;
+    // Message::cmd is always upper-case, so a lower-case token is normalized
+    // here rather than rejected.
+    const QString head = body.left(3).toUpper();
+    if (head.size() < 2 || !isUpperLetter(head.at(0)) || !isUpperLetter(head.at(1))) {
+        return false;
     }
-    cmd = body.left(i).toUpper();
-    arg = body.mid(i);
-    return isValidCommandToken(cmd) && arg.size() <= MessageParser::kMaxArgChars;
+    const int len = isValidCommandToken(head) ? 3 : 2;
+    cmd = head.left(len);
+    arg = body.mid(len);
+    return arg.size() <= MessageParser::kMaxArgChars;
 }
 
 std::optional<int> decodeInt(const QString& arg)
@@ -81,16 +92,38 @@ std::optional<float> decodeScaled(const QString& arg, float divisor)
     return v;
 }
 
-// Boolean payloads are "0"/"1" on every documented command that has one.
-// Anything else is rejected rather than coerced, so a malformed frame
-// cannot flip OPERATE.
+// Boolean payloads are exactly "0"/"1". Anything else is rejected rather
+// than coerced, so a malformed frame cannot flip OPERATE.
 std::optional<bool> decodeBool(const QString& arg)
 {
-    const auto n = decodeInt(arg);
-    if (!n || (*n != 0 && *n != 1)) {
+    if (arg == QLatin1String("1")) {
+        return true;
+    }
+    if (arg == QLatin1String("0")) {
+        return false;
+    }
+    return std::nullopt;
+}
+
+// ^FLhh: two hex digits ("90", "B0", "C1").
+std::optional<int> decodeFault(const QString& arg)
+{
+    if (arg.size() != 2) {
         return std::nullopt;
     }
-    return *n == 1;
+    bool ok = false;
+    const int code = arg.toInt(&ok, 16);
+    return ok ? std::optional<int>(code) : std::nullopt;
+}
+
+// ^TQn: 0 not keyed; 1, 2, 3 keyed (by ^TX, with or without KEY IN).
+std::optional<bool> decodeKeyState(const QString& arg)
+{
+    const auto n = decodeInt(arg);
+    if (!n || *n < 0 || *n > 3 || arg.size() != 1) {
+        return std::nullopt;
+    }
+    return *n != 0;
 }
 
 // Assigns and reports whether the value actually moved, so applyMessage()
@@ -121,6 +154,10 @@ void MessageParser::feed(const QByteArray& bytes)
     m_buf.append(bytes);
 
     int cursor = 0;
+    // Next ';' at or after the current frame start, reused across iterations
+    // so a run of '^' with no terminator is one scan, not one per '^'. -1
+    // means there is no ';' anywhere ahead; -2 means not looked up yet.
+    int end = -2;
     while (true) {
         const int start = m_buf.indexOf('^', cursor);
         if (start < 0) {
@@ -129,7 +166,9 @@ void MessageParser::feed(const QByteArray& bytes)
             cursor = m_buf.size();
             break;
         }
-        const int end = m_buf.indexOf(';', start + 1);
+        if (end == -2 || (end >= 0 && end <= start)) {
+            end = m_buf.indexOf(';', start + 1);
+        }
 
         // A second frame START before this frame's terminator means the
         // '^' at `start` was garbage — a truncated frame, or a stray byte
@@ -196,18 +235,10 @@ QString atuModeLabel(AtuMode mode)
 {
     switch (mode) {
         case AtuMode::Bypass: return QStringLiteral("BYPASS");
-        case AtuMode::Auto:   return QStringLiteral("AUTO");
-        case AtuMode::Manual: return QStringLiteral("MANUAL");
+        case AtuMode::Inline: return QStringLiteral("INLINE");
         case AtuMode::Unknown: break;
     }
     return QStringLiteral("—");
-}
-
-bool Status::hasAnyField() const
-{
-    return forwardWatts || reflectedWatts || swr || tempC || band || faultCode
-        || operate || powerOn || antenna || antennaEnabled || atuMode || atuInline
-        || keyed;
 }
 
 bool applyMessage(const Message& message, Status& status)
@@ -231,38 +262,37 @@ bool applyMessage(const Message& message, Status& status)
         return assignIfChanged(status.band, decodeInt(arg));
     }
     if (cmd == QLatin1String("FL")) {
-        return assignIfChanged(status.faultCode, decodeInt(arg));
+        return assignIfChanged(status.faultCode, decodeFault(arg));
     }
     if (cmd == QLatin1String("OS")) {
         return assignIfChanged(status.operate, decodeBool(arg));
     }
-    if (cmd == QLatin1String("ON")) {
-        return assignIfChanged(status.powerOn, decodeBool(arg));
-    }
     if (cmd == QLatin1String("AN")) {
         const auto port = decodeInt(arg);
-        if (!port || *port < kMinAntenna || *port > kMaxAntenna) {
+        if (!port || *port < kMinAntenna || *port > kMaxAntennaNumber) {
             return false;
         }
         return assignIfChanged(status.antenna, port);
     }
-    if (cmd == QLatin1String("AE")) {
-        return assignIfChanged(status.antennaEnabled, decodeBool(arg));
-    }
     if (cmd == QLatin1String("AM")) {
-        const auto raw = decodeInt(arg);
-        if (!raw || *raw < static_cast<int>(AtuMode::Bypass)
-                 || *raw > static_cast<int>(AtuMode::Manual)) {
-            return false;
+        // Only the current-band reply is a single letter; the per-band and
+        // all-band forms carry band/antenna digits and are not polled.
+        if (arg == QLatin1String("I")) {
+            return assignIfChanged(status.atuMode, std::optional<AtuMode>(AtuMode::Inline));
         }
-        return assignIfChanged(status.atuMode,
-                               std::optional<AtuMode>(static_cast<AtuMode>(*raw)));
+        if (arg == QLatin1String("B")) {
+            return assignIfChanged(status.atuMode, std::optional<AtuMode>(AtuMode::Bypass));
+        }
+        return false;
     }
     if (cmd == QLatin1String("AI")) {
         return assignIfChanged(status.atuInline, decodeBool(arg));
     }
+    if (cmd == QLatin1String("TP")) {
+        return assignIfChanged(status.tuning, decodeBool(arg));
+    }
     if (cmd == QLatin1String("TQ")) {
-        return assignIfChanged(status.keyed, decodeBool(arg));
+        return assignIfChanged(status.keyed, decodeKeyState(arg));
     }
     // Unrecognized command — deliberately not an error. The amp answers
     // several queries this integration does not send (and future firmware
@@ -273,11 +303,8 @@ bool applyMessage(const Message& message, Status& status)
 
 QString bandName(int code)
 {
-    // The Elecraft `BN` band-code convention, shared across the vendor's
-    // published programming references. Flagged in design doc §7 for
-    // hardware confirmation on a real KPA1500 — an unconfirmed code here
-    // mislabels a band readout, which is cosmetic, and any code outside the
-    // table renders as "—" rather than as a wrong band.
+    // The ^BN table from the Programming Reference (shared with the K3/K4).
+    // Any code outside it renders as "—" rather than as a wrong band.
     switch (code) {
         case 0:  return QStringLiteral("160");
         case 1:  return QStringLiteral("80");
@@ -305,21 +332,6 @@ QByteArray buildSetOperate(bool operate)
     return buildMessage(QStringLiteral("OS"), operate ? QStringLiteral("1") : QStringLiteral("0"));
 }
 
-QByteArray buildSetPower(bool on)
-{
-    return buildMessage(QStringLiteral("ON"), on ? QStringLiteral("1") : QStringLiteral("0"));
-}
-
-QByteArray buildSetAtuMode(AtuMode mode)
-{
-    if (mode == AtuMode::Unknown) {
-        // "Unknown" is this layer's own not-yet-reported marker, never a
-        // wire value — sending it would command a mode that does not exist.
-        return {};
-    }
-    return buildMessage(QStringLiteral("AM"), QString::number(static_cast<int>(mode)));
-}
-
 QByteArray buildSetAtuInline(bool inLine)
 {
     return buildMessage(QStringLiteral("AI"), inLine ? QStringLiteral("1") : QStringLiteral("0"));
@@ -327,12 +339,12 @@ QByteArray buildSetAtuInline(bool inLine)
 
 QByteArray buildStartTune()
 {
-    return buildMessage(QStringLiteral("FT"), QStringLiteral("1"));
+    return buildMessage(QStringLiteral("FT"));
 }
 
 QByteArray buildCancelTune()
 {
-    return buildMessage(QStringLiteral("FE"), QStringLiteral("1"));
+    return buildMessage(QStringLiteral("FE"));
 }
 
 QByteArray buildSelectAntenna(int port)
@@ -345,7 +357,7 @@ QByteArray buildSelectAntenna(int port)
 
 QByteArray buildClearFault()
 {
-    return buildMessage(QStringLiteral("FL"), QStringLiteral("0"));
+    return buildMessage(QStringLiteral("FL"), QStringLiteral("C"));
 }
 
 QByteArray buildKey(int seconds)

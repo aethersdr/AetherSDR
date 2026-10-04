@@ -38,8 +38,9 @@ public:
 signals:
     void operateToggled(bool operate);
     void tuneRequested();
+    void tuneCancelRequested();
     void atuInlineToggled(bool inLine);
-    void antennaSelected(int port);  // 1-3
+    void antennaSelected(int port);  // 1 or 2
     void faultClearRequested();
 
 private:
@@ -65,7 +66,7 @@ private:
     QPushButton* m_atuInlineBtn{nullptr};
     QPushButton* m_ant1Btn{nullptr};
     QPushButton* m_ant2Btn{nullptr};
-    QPushButton* m_ant3Btn{nullptr};
+    QLabel* m_antNumberLabel{nullptr};  // antenna numbers 3-32, behind an external switch
     QPushButton* m_clearFaultBtn{nullptr};
 
     QTimer m_labelTimer;

@@ -7054,11 +7054,14 @@ void MainWindow::wireMeters()
             [this](bool operate) {
         m_kpa1500Conn.setOperate(operate);
     });
+    // Starts or cancels the amp's full-search tune. The exciter must supply
+    // RF for it to finish; that stays with the operator (the radio's own
+    // TUNE), so nothing here keys the radio.
     connect(m_appletPanel->kpa1500Applet(), &Kpa1500Applet::tuneRequested, this, [this]() {
-        // The KPA1500 supplies its own tuning carrier, so this starts a tune
-        // on the AMPLIFIER and never keys the radio — no transmit path is
-        // involved on our side.
         m_kpa1500Conn.startTune();
+    });
+    connect(m_appletPanel->kpa1500Applet(), &Kpa1500Applet::tuneCancelRequested, this, [this]() {
+        m_kpa1500Conn.cancelTune();
     });
     connect(m_appletPanel->kpa1500Applet(), &Kpa1500Applet::atuInlineToggled, this,
             [this](bool inLine) {
