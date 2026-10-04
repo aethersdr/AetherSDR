@@ -385,6 +385,80 @@ private slots:
         QCOMPARE(slider->value(), 45);
     }
 
+    // #6092: a radio that publishes no squelch-to-pan mapping has no Auto SQL.
+    void autoSkippedWhenUnavailable()
+    {
+        SliceModel slice(0);
+        status(slice, false, 26, QStringLiteral("USB"));
+        RxApplet rx;
+        rx.setSlice(&slice);
+        VfoWidget vfo;
+        vfo.setSlice(&slice);
+        vfo.setRxApplet(&rx);
+        QSignalSpy algorithm(&rx, &RxApplet::sqlAutoChanged);
+        rx.setAutoSqlAvailability(false, QStringLiteral("no squelch scale"));
+        QVERIFY(!rx.autoSqlAvailable());
+        rx.cycleSqlModeExternal(); // Off -> Manual
+        QCOMPARE(rx.sqlMode(), RxApplet::SqlMode::Manual);
+        rx.cycleSqlModeExternal(); // Manual -> Off: Auto is skipped
+        QCOMPARE(rx.sqlMode(), RxApplet::SqlMode::Off);
+        for (const auto& args : algorithm) { QVERIFY(!args[0].toBool()); }
+
+        // Dimmed with a stated reason, not hidden: the button still cycles,
+        // and both surfaces announce why Auto is missing.
+        QPushButton* button = control<QPushButton>(rx, QStringLiteral("Squelch mode"));
+        QVERIFY(button);
+        QVERIFY(button->isVisibleTo(&rx) && button->isEnabled());
+        QVERIFY(button->accessibleDescription().contains(QStringLiteral("no squelch scale")));
+        QPushButton* mirror = control<QPushButton>(vfo, QStringLiteral("Squelch"));
+        QVERIFY(mirror);
+        QVERIFY(mirror->accessibleDescription().contains(QStringLiteral("no squelch scale")));
+
+        rx.setAutoSqlAvailability(true, QString());
+        QVERIFY(!button->accessibleDescription().contains(QStringLiteral("unavailable")));
+        QVERIFY(!mirror->accessibleDescription().contains(QStringLiteral("unavailable")));
+        rx.cycleSqlModeExternal(); // Off -> Manual
+        rx.cycleSqlModeExternal(); // Manual -> Auto once it is available
+        QCOMPARE(rx.sqlMode(), RxApplet::SqlMode::Auto);
+    }
+
+    void restoredAutoIntentLandsOnManualWhenUnavailable()
+    {
+        RadioModel radio;
+        RadioModelWakeTestAccess::identity(radio, QStringLiteral("icom"),
+                                           QStringLiteral("icom:auto-unavailable"));
+        QVERIFY(radio.settingsScope().setFeature(QStringLiteral("SquelchIntent"), 1,
+            {{QStringLiteral("manualLevel"), 26}, {QStringLiteral("autoEnabled"), true}}));
+        SliceModel slice(0);
+        RxApplet rx;
+        rx.setRadioModel(&radio);
+        rx.setAutoSqlAvailability(false, QStringLiteral("no squelch scale"));
+        QSignalSpy algorithm(&rx, &RxApplet::sqlAutoChanged);
+        rx.setSlice(&slice);
+        status(slice, true, 8, QStringLiteral("USB")); // the saved Auto intent's echo
+        QCOMPARE(rx.sqlMode(), RxApplet::SqlMode::Manual);
+        for (const auto& args : algorithm) { QVERIFY(!args[0].toBool()); }
+    }
+
+    void autoDropsToManualWhenItBecomesUnavailable()
+    {
+        AppSettings::instance().setValue("AutoSqlMarginDb", "10");
+        SliceModel slice(0);
+        status(slice, true, 45, QStringLiteral("USB"));
+        RxApplet rx;
+        rx.setSlice(&slice);
+        rx.cycleSqlModeExternal(); // Manual -> Auto
+        QCOMPARE(rx.sqlMode(), RxApplet::SqlMode::Auto);
+        QSignalSpy algorithm(&rx, &RxApplet::sqlAutoChanged);
+        rx.setAutoSqlAvailability(false, QStringLiteral("no squelch scale"));
+        // Squelch stays on at the operator's manual threshold.
+        QCOMPARE(rx.sqlMode(), RxApplet::SqlMode::Manual);
+        QVERIFY(slice.squelchOn());
+        QCOMPARE(slice.squelchLevel(), 45);
+        QCOMPARE(algorithm.count(), 1);
+        QVERIFY(!algorithm.first()[0].toBool());
+    }
+
     void fullOnReportAfterAuto_data()
     {
         QTest::addColumn<bool>("operatorTurnsOff");

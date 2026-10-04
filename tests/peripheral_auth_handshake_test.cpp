@@ -6,6 +6,7 @@
 #include "gui/PeripheralAuthStore.h"
 #include "core/PeripheralAuthCode.h"
 #include "core/PeripheralEndpointFallback.h"
+#include "core/PeripheralRemovalGuard.h"
 #include "core/AppSettings.h"
 #include "TestSettingsProfile.h"
 #include "models/AmpModel.h"
@@ -21,6 +22,13 @@
 #include <utility>
 
 namespace AetherSDR {
+struct PeripheralConnectionTestAccess {
+    template<typename Connection>
+    static void injectConnect(Connection& connection, int& calls)
+    {
+        connection.m_connectTransport = [&calls](const QString&, quint16) { ++calls; };
+    }
+};
 // Inject only the auth write, never a live peer, without widening the model's
 // production constructor API.
 struct AntennaGeniusModelTestAccess {
@@ -176,6 +184,57 @@ void checkUnreachableAndAlternate(const QString& timerName, const char* greeting
     }
 }
 
+// A pending removal must stop every route to a socket, not only the explicit
+// Connect: automatic, alternate and the reconnect timer all reach openSocket().
+template<typename Connection>
+void checkRemovalGuardStopsEveryConnectPath(const QString& timerName,
+                                            PeripheralRemovalGuard::Device device,
+                                            void (Connection::*autoConnect)(const QString&, quint16),
+                                            void (Connection::*alternate)(const QString&, quint16),
+                                            void (Connection::*explicitConnect)(const QString&, quint16),
+                                            quint16 port)
+{
+    const QString host = QStringLiteral("192.0.2.10");
+    Connection connection;
+    connection.setAutoReconnect(true);
+    int opened = 0;
+    PeripheralConnectionTestAccess::injectConnect(connection, opened);
+    // Every attempt that opens announces itself, so the Setup list can show
+    // Connecting… for automatic attempts too; a blocked one announces nothing.
+    QSignalSpy started(&connection, &Connection::attemptStarted);
+    QTimer* retry = connection.template findChild<QTimer*>(timerName);
+    CHECK(retry != nullptr);
+    if (!retry) {
+        return;
+    }
+    retry->stop();
+    // Seed the reconnect target the way a first automatic attempt does.
+    CHECK(QMetaObject::invokeMethod(&connection, "beginAutomaticAttemptAt", Qt::DirectConnection,
+        Q_ARG(QString, host), Q_ARG(quint16, port)));
+    {
+        PeripheralRemovalGuard guard(device);
+        (connection.*autoConnect)(host, port);
+        (connection.*alternate)(host, port);
+        (connection.*explicitConnect)(host, port);
+        CHECK(QMetaObject::invokeMethod(retry, "timeout", Qt::DirectConnection));
+        CHECK(opened == 0);
+        CHECK(started.isEmpty());
+        // A blocked attempt leaves the reconnect target alone.
+        (connection.*autoConnect)(QStringLiteral("192.0.2.99"), port);
+        CHECK(connection.reconnectHost() == host);
+    }
+    CHECK(!PeripheralRemovalGuard::pending(device));
+    (connection.*autoConnect)(host, port);
+    CHECK(opened == 1);
+    (connection.*alternate)(host, port);
+    CHECK(opened == 2);
+    CHECK(QMetaObject::invokeMethod(retry, "timeout", Qt::DirectConnection));
+    CHECK(opened == 3);
+    CHECK(started.size() == 3);
+    CHECK(!started.isEmpty() && started.constLast().at(0).toString() == host);
+    retry->stop();
+}
+
 template<typename Connection>
 void checkKeychainOutageKeepsReconnect(const QString& timerName, const char* greeting,
                                        quint16 port)
@@ -266,6 +325,14 @@ int main(int argc, char** argv)
         "V1.2.17 AUTH", 9010);
     checkUnreachableAndAlternate<PgxlConnection>(QStringLiteral("pgxlReconnectTimer"),
         "V3.9.1 AUTH", 9008);
+    checkRemovalGuardStopsEveryConnectPath<TgxlConnection>(
+        QStringLiteral("tgxlReconnectTimer"), PeripheralRemovalGuard::Device::Tgxl,
+        &TgxlConnection::autoConnectToTgxl, &TgxlConnection::tryAlternateTgxl,
+        &TgxlConnection::connectToTgxl, 9010);
+    checkRemovalGuardStopsEveryConnectPath<PgxlConnection>(
+        QStringLiteral("pgxlReconnectTimer"), PeripheralRemovalGuard::Device::Pgxl,
+        &PgxlConnection::autoConnectToPgxl, &PgxlConnection::tryAlternatePgxl,
+        &PgxlConnection::connectToPgxl, 9008);
     // A code set on the amplifier is never sent back; an empty one is sent as
     // the vendor utility does; a reply that omits the key gets none.
     checkSetupAuthcode({{QStringLiteral("ledintens"), QStringLiteral("74")},

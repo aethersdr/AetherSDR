@@ -62,9 +62,22 @@ public:
     //       `tempb` is also accepted, but has not been seen in a capture.
     // A FlexRadio relays only the PA heatsink temperature. The HL
     // temperature is available only over a direct connection to the PGXL.
+    //
+    // Drain current and the PA heatsink temperature come from two sources:
+    // the PGXL's own status (setDrainCurrent, setPaHeatsinkTemp) and the
+    // radio's ID and TEMP meters (setRadioDrainCurrent,
+    // setRadioPaHeatsinkTemp). Measured on a FLEX-8600 with a PGXL on
+    // firmware 3.9.8, both sources change these two values at the same
+    // moments, so neither is faster. The tie goes to the radio, the same as
+    // forward power and SWR, where the radio is faster: the radio's value is
+    // used while it is fresh, and the PGXL's value is used otherwise
+    // (docs/pgxl-telemetry-source-evidence.md). valid=false means the radio's
+    // meter does not exist or was withdrawn.
     void setPaHeatsinkTemp(float degC);
+    void setRadioPaHeatsinkTemp(float degC, bool valid);
     void setHarmonicLoadHeatsinkTemp(float degC);
     void setDrainCurrent(float amps);
+    void setRadioDrainCurrent(float amps, bool valid);
     void setDrainVoltage(float volts);
     void setMainsVoltage(int volts);
     void setState(const QString& state);
@@ -74,7 +87,6 @@ public:
     // false until the whole `setup` write group is known, which is what a
     // write needs; the control is shown but inert until then.
     void setMeffa(const QString& state, bool settable);
-    void setMeff(const QString& meff);
     void setDirectConnected(bool direct);
     void setRadioConnected(bool connected);
     void setDirectFailureReason(const QString& reason);
@@ -111,10 +123,8 @@ protected:
 private:
     void buildUI();
     void buildExpandedUI();
-    // The three telemetry readouts run as a row in the panel and stack
-    // in the rail's single-tile width. Same widgets either way — the grid is
-    // re-flowed rather than the controls rebuilt.
-    void applyTelemetryLayout();
+    void placeReadings();
+    void updateVoltsLabel();
     void updateTempLabel();
     void updateValueLabels();
 
@@ -155,8 +165,10 @@ private:
     // One rule, one place: the radio-relayed AMP meters and the amplifier's own
     // port-9008 status carry the SAME measurement — on a steady carrier the
     // relayed FWD meter and the device's `fwd` field agree to within 0.05 dB —
-    // so the choice between them is about rate, not truth. The relay arrives
-    // with the radio's meter packets (~20 fps); the device is polled at 5 Hz.
+    // so the choice between them is about rate, not truth. During a transmit
+    // the relayed FWD and RL values change 13 to 19 times a second, and the
+    // device's own 2 to 11 times, measured polling the PGXL every 50 ms, twice
+    // the rate this client polls it (docs/pgxl-telemetry-source-evidence.md).
     // The relay therefore wins while its sample is fresh, and the device feed
     // takes over when the radio is not publishing amplifier meters at all
     // (no relay, or before the meter manifest lands). Last-writer-wins between
@@ -167,6 +179,7 @@ private:
     // unmediated writer is the defect this whole path exists to remove.
     void setFwdPower(float watts);
     void setSwr(float swr);
+    void applyDrainCurrent(float amps);
     void updateDriveLabel();
 
     void setAlertText(const QString& text);
@@ -188,9 +201,12 @@ private:
     QLabel*  m_idLabel{nullptr};    // "Id   39"
 
     // Right-side info column (one per gauge row)
-    QPushButton* m_tempBtn{nullptr}; // "PA 34.7 / HL 28.4 C"; click to toggle C/F
-    QLabel*  m_vddLabel{nullptr};   // "Vdd  50.0 V"  (beside SWR row)
-    QLabel*  m_vacLabel{nullptr};   // "Vac   240 V"  (beside Id  row)
+    QPushButton* m_tempBtn{nullptr};   // "PA 34.7 C"  (click to toggle C/F)
+    QPushButton* m_hlTempBtn{nullptr}; // "HL 28.4 C"  (click to toggle C/F)
+    QLabel*  m_vacLabel{nullptr};      // "Vac 240 V"
+    QLabel*  m_vddLabel{nullptr};      // "Vdd 50.0 V"
+    QString  m_drainVoltsText{QStringLiteral("—")};
+    QString  m_mainsVoltsText{QStringLiteral("—")};
     QLabel*  m_sourceLabel{nullptr}; // bottom-right connection source
     bool     m_directConnected{false};
     QString  m_directFailureReason;
@@ -198,16 +214,15 @@ private:
 
     QWidget*     m_telemetryBox{nullptr};
     QGridLayout* m_telemetryGrid{nullptr};
-    // Which way the grid is currently flowed, so a density pass that changes
-    // nothing does not re-add four widgets to it.
-    bool         m_telemetryInRow{false};
+    // The presentation the readings were last placed for; -1 before the first.
+    int          m_readingsPlacedFloating{-1};
 
     QComboBox*   m_fanCombo{nullptr};
     QPushButton* m_operateBtn{nullptr};
     QString      m_fanMode{"STANDARD"};
-    // Neither fan control is shown before the amplifier has reported a mode:
-    // only the direct connection carries fanmode, and a control that cannot
-    // say what it is set to is worse than none.
+    // Until the amplifier reports a mode the rail's pull-down is disabled and
+    // the panel's fan key is hidden. Only the direct connection carries
+    // fanmode.
     bool         m_haveFanMode{false};
 
     // ── Expanded (floating / canvas) presentation ───────────────────────
@@ -235,6 +250,8 @@ private:
     // the slack themselves. Its minimum is the gap that keeps them off the
     // frame.
     QSpacerItem* m_bottomStretch{nullptr};
+    QSpacerItem* m_controlsGap{nullptr};   // docked: above the controls
+    QSpacerItem* m_readingsGap{nullptr};   // docked: above the readings
     // The amplifier's alert channel — the same `M|<text>` frame the tuner
     // sends, on the same vendor's protocol. Not in any layout: it is a child
     // of the applet, sized to cover it and raised, because a fault is the
@@ -289,6 +306,10 @@ private:
     // elapsed-time gate measured off the wall clock wedges shut for the length
     // of any backwards clock step.
     QElapsedTimer m_radioMeters;
+    // When the radio last delivered a drain current or PA heatsink
+    // temperature sample. See setDrainCurrent() and setPaHeatsinkTemp().
+    QElapsedTimer m_radioDrainCurrent;
+    QElapsedTimer m_radioPaHeatsinkTemp;
 
     // Cached telemetry values — gauges update every call, labels update at 10 Hz
     float    m_fwdWatts{0.0f};

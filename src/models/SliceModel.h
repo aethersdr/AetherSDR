@@ -681,6 +681,11 @@ private:
     int     m_ritFreq{0};
     bool    m_xitOn{false};
     int     m_xitFreq{0};
+    // True while setRit()/setXit() is inside its command emit. A backend that
+    // answers the enable and offset verbs synchronously publishes each step;
+    // those are adopted silently and announced once, as the final value.
+    bool    m_ritCommandInFlight{false};
+    bool    m_xitCommandInFlight{false};
     int     m_daxChannel{0};
     int     m_rttyMark{2125};
     int     m_rttyMarkDefault{2125};

@@ -508,6 +508,9 @@ RadioCapabilities IcomCivBackend::capabilities() const
     c.hasAgcThreshold = false; // 16 12 selects AGC mode, not Flex AGC-T.
     c.agcModes = {QStringLiteral("slow"), QStringLiteral("med"), QStringLiteral("fast")};
     c.hasModeIndependentSquelch = profile.hasModeIndependentSquelch;
+    // The 0..255 register has no published dB mapping; the SQL line and Auto
+    // SQL keep Flex's scale until one is measured.
+    c.squelchLevelScale = legacyDbmSquelchScale();
     c.hasCwTune = profile.hasCwTune;
     // setTune() drives the ordinary TUNE producer: one sine wave. There is no
     // CI-V route for a two-tone selection on any profiled model.
@@ -4882,20 +4885,23 @@ void IcomCivBackend::setTransmitFrequencyCheck(bool on)
         m_session ? m_session->civAddress() : 0xA4, on));
 }
 
-void IcomCivBackend::setRitEnabled(bool on)
+void IcomCivBackend::setSliceRitEnabled(int sliceId, bool on)
 {
+    Q_UNUSED(sliceId);
     m_ritOn = on;
     sendUserCommand(cmdRitEnable(m_session ? m_session->civAddress() : 0xA4, on));
 }
 
-void IcomCivBackend::setXitEnabled(bool on)
+void IcomCivBackend::setSliceXitEnabled(int sliceId, bool on)
 {
+    Q_UNUSED(sliceId);
     m_xitOn = on;
     sendUserCommand(cmdXitEnable(m_session ? m_session->civAddress() : 0xA4, on));
 }
 
-void IcomCivBackend::setRitOffset(int hz)
+void IcomCivBackend::setSliceRitOffset(int sliceId, int hz)
 {
+    Q_UNUSED(sliceId);
     m_ritOffsetHz = hz;
     // ONE offset register serves both RIT and XIT on this radio — 21 00 is the
     // shift, and 21 01 / 21 02 decide which of receive and transmit it applies
@@ -5685,9 +5691,9 @@ bool IcomCivBackend::scrubDrive(const icom::ControlSpec& c)
         setVox(m_voxOn, m_voxLevelPercent, 0);
         return true;
     }
-    if (id == QLatin1String("rit.enable")) { setRitEnabled(m_ritOn); return true; }
-    if (id == QLatin1String("xit.enable")) { setXitEnabled(m_xitOn); return true; }
-    if (id == QLatin1String("rit.offset")) { setRitOffset(m_ritOffsetHz); return true; }
+    if (id == QLatin1String("rit.enable")) { setSliceRitEnabled(slice, m_ritOn); return true; }
+    if (id == QLatin1String("xit.enable")) { setSliceXitEnabled(slice, m_xitOn); return true; }
+    if (id == QLatin1String("rit.offset")) { setSliceRitOffset(slice, m_ritOffsetHz); return true; }
     if (id == QLatin1String("repeater.tone")) {
         if (!m_repeaterToneOn) {
             return false;

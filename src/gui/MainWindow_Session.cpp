@@ -2896,6 +2896,7 @@ void MainWindow::applyTxAudioCapabilities(bool connected, const RadioCapabilitie
         if (m_appletPanel && m_appletPanel->clientChainApplet()) {
             m_appletPanel->clientChainApplet()->setRxPcAudioEnabled(true);
         }
+        syncTitleBarOutput();
     }
     updateTxAudioPathNotice();
     // Evaluate stream state on the audio thread, after any preceding update.

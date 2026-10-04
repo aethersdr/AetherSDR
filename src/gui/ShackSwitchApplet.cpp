@@ -1,4 +1,5 @@
 #include "ShackSwitchApplet.h"
+#include "core/PeripheralSettings.h"
 #include "models/AntennaGeniusModel.h"
 #include "core/AppSettings.h"
 
@@ -300,6 +301,7 @@ void ShackSwitchApplet::setModel(AntennaGeniusModel* model)
             [this](const AgDeviceInfo& info) {
         const bool isShackSwitch = info.name.contains("ShackSwitch", Qt::CaseInsensitive);
         if (isShackSwitch && !m_model->isConnected() && !m_model->isConnecting()
+            && PeripheralSettings::autoConnect(QStringLiteral("shackswitch"))
             && !m_model->isAuthBlockedFor(info))
             m_model->connectToDevice(info);
     });

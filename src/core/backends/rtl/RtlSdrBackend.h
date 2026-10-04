@@ -105,10 +105,10 @@ public:
 private:
     bool hasAcceptedSlice(int sliceId) const;
     friend struct RtlSdrBackendTestAccess;
+    // Relay the current worker's token-qualified outputs to the seam once.
+    void wireWorker();
     // Emit the initial snapshot a freshly-connected device would report.
     void emitInitialState();
-    // Relay m_worker's outputs to the seam (called once per connect).
-    void wireWorker();
 
     // Parse device index or serial from connect request params.
     int deviceIndexFromParams(const QVariantMap& params) const;

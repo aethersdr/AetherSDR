@@ -647,11 +647,12 @@ void productionCapabilityContracts()
         && rtlCaps.receiveFilterControl->modes[0].minimumLowHz == -21600
         && rtlCaps.receiveFilterControl->modes[1].maximumHighHz == 21600,
         "RTL adjustable filter qualification excludes legacy WFM");
-    check(rtlCaps.receiveSquelchModel
-        && rtlCaps.receiveSquelchModel->modes == QStringList{"FM", "FMN"}
-        && rtlCaps.receiveSquelchModel->referenceDb == -120
-        && rtlCaps.receiveSquelchModel->stepDb == 1.2
-        && rtlCaps.receiveSquelchModel->unit == QStringLiteral("dBFS/bin"),
+    check(rtlCaps.squelchLevelScale && rtlCaps.squelchLevelScale->modesExclusive
+        && rtlCaps.squelchLevelScale->autoSquelch
+        && rtlCaps.squelchLevelScale->modes == QStringList{"FM", "FMN"}
+        && rtlCaps.squelchLevelScale->offsetDb == -120
+        && rtlCaps.squelchLevelScale->dbPerStep == 1.2
+        && rtlCaps.squelchLevelScale->unit == QStringLiteral("dBFS/bin"),
         "RTL desktop squelch declares the implemented detector's modes and units");
 #endif
 }

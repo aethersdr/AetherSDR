@@ -173,6 +173,12 @@ RadioCapabilities RtlSdrBackend::capabilities() const
     c.txMonitorControl = std::nullopt;
     c.hasAgcThreshold = false;
     c.hasModeIndependentSquelch = false;
+    // RtlSquelchGate is the receiver's own squelch, FM/FMN only. The gate and
+    // the pan read the same FFT in dBFS/bin, so the pan floor plus a margin
+    // lands on the gate and Auto SQL may use it.
+    c.squelchLevelScale = SquelchLevelScale{RtlSquelchGate::kReferenceDb,
+        RtlSquelchGate::kStepDb, {QStringLiteral("FM"), QStringLiteral("FMN")}, true,
+        QStringLiteral("dBFS/bin"), true};
     c.agcModes = {QStringLiteral("off"), QStringLiteral("slow"),
                   QStringLiteral("med"), QStringLiteral("fast")};
     // Unused TX presentation retains the shared legacy shape; canTransmit
@@ -203,9 +209,6 @@ RadioCapabilities RtlSdrBackend::capabilities() const
         {{QStringLiteral("FM"), -21600, -1, 1, 21600, 2, 43200},
          {QStringLiteral("FMN"), -21600, -1, 1, 21600, 2, 43200}}};
     c.receiveAudioControl = ReceiveAudioControl{SliceFrequencyControl::Authority::Engine};
-    c.receiveSquelchModel = ReceiveSquelchModel{
-        {QStringLiteral("FM"), QStringLiteral("FMN")},
-        RtlSquelchGate::kReferenceDb, RtlSquelchGate::kStepDb, QStringLiteral("dBFS/bin")};
     c.panSpanModel = PanSpanModel{false, false};
     if (m_lastPublished && hasReceivingNarrowFm(*m_lastPublished)) {
         c.receiveCapturePlacement = ReceiveCapturePlacement{

@@ -6,6 +6,7 @@
 #include "RtlInjectedDevice.h"
 
 #include <QCoreApplication>
+#include <QPointer>
 #include <QByteArray>
 #include <QElapsedTimer>
 #include <QEvent>
@@ -39,6 +40,7 @@ struct RtlCaptureBackendTestAccess {
     static T::State state(const RtlSdrBackend& backend) { return *backend.m_capture.confirmed(); }
     static void spectrum(RtlSdrBackend& backend, const QByteArray& frame, T::Token token)
     { emit backend.m_worker->spectrumFrameReady(token.session, token.revision, 0, frame); }
+    static RtlSdrWorker* worker(RtlSdrBackend& backend) { return backend.m_worker.get(); }
 };
 }
 static int failures = 0;
@@ -592,8 +594,18 @@ int main(int argc, char** argv)
         rtl::RtlCaptureBackendTestAccess::start(stopped, std::make_unique<InjectedDevice>(delayed));
         check(waitFor([&] { std::lock_guard lock(delayed->mutex); return delayed->inReadback; }),
               "delayed reader holds a device operation");
+        const QPointer<rtl::RtlSdrWorker> retained(rtl::RtlCaptureBackendTestAccess::worker(stopped));
         stopped.disconnectRadio();
         check(!delayed->destroyed, "stop timeout never closes a live device");
+        // The retained reader is still connected to the backend (contract rule 6,
+        // #6096): its read error must not surface after disconnected().
+        check(!retained.isNull(), "stop timeout retains the reader object");
+        if (retained) {
+            emit retained->readError(QStringLiteral("simulated USB read failure"));
+        }
+        QCoreApplication::processEvents();
+        check(stoppedProbe.count(QStringLiteral("connectionError")) == 0,
+              "a retained reader's read error is not reported after disconnect");
         delayed->releaseReadback();
         check(waitFor([&] {
             QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);

@@ -100,6 +100,17 @@ public:
         return kReferenceLnaGainDb - m_lnaGainDb;
     }
 
+    // LNA gain at which WdspChannel's level-squelch map holds unshifted. on8st's
+    // brackets fit -12 dB, supported but not established (#6092).
+    static constexpr double kLevelSquelchAnchorLnaGainDb = -12.0;
+
+    // dB added to the amsq map so the gate keeps one antenna-referred point at
+    // any LNA gain; amsq gates raw dBFS, which moves dB for dB with the LNA.
+    double levelSquelchOffsetDb() const noexcept
+    {
+        return m_lnaGainDb - kLevelSquelchAnchorLnaGainDb;
+    }
+
     // The operator's AGC-T, referred to this reference. Same invariant as the
     // display: a constant antenna signal keeps a constant heard level across a
     // gain change, because the ceiling moves down by exactly what the LNA moved

@@ -70,13 +70,16 @@ RTL declaration check runs only when the RTL backend is built.
 
 ### Native squelch
 
-`receiveSquelchModel` describes native desktop squelch modes and the threshold's
-reference, step and displayed unit. RTL declares FM/FM-N and dBFS/bin; RxApplet
-and VfoWidget gate unsupported modes with accessible reasons, and MainWindow
-passes the scale to SpectrumWidget's Auto estimator and threshold overlay.
-The native `setSliceSquelch` verb applies through RTL's confirmed transaction.
-Absence preserves the legacy desktop shape for other backends. This record
-grants no headless squelch verb or calibrated-power claim.
+`squelchLevelScale` with `modesExclusive` set is the receiver's own squelch,
+not only a place for its pan line: SQL exists in its `modes` and nowhere else,
+the client keeps each receiver's manual/Auto intent (`ReceiveSquelchIntent-<n>`),
+and Auto starts from the absolute threshold. RTL declares FM/FM-N in dBFS/bin
+(`unit`); RxApplet and VfoWidget gate unsupported modes with accessible reasons,
+and SpectrumWidget draws the line and runs Auto from the same record. The native
+`setSliceSquelch` verb applies through RTL's confirmed transaction. Every other
+family leaves `modesExclusive` false, so the #2504 mode rule and radio-owned
+squelch state are unchanged. The flag grants no headless squelch verb or
+calibrated-power claim.
 
 ### Receive capture placement
 
@@ -208,7 +211,7 @@ the production dialog and checks its displayed peak level and frequency.
 | `canWriteMemories` | ✅ | ❌ | ❌ | `RadioModel::memoriesWritable`, memory dialog and panadapter memory panel | Separates native ownership from mutation support. Icom's radio-side store stays read-only, while the shared AetherSDR database remains writable for Add, Import, inline edits, Remove, and Tune on every Icom model. |
 | `canApplyMemories` | ✅ | ❌ | ❌ | `RadioModel::tryMemoryCommand` | True means the backend accepts its native memory-apply command. Initial Icom support is ❌ and applies recallable cached fields through the existing neutral slice setters instead of entering vendor Memory mode; split/RPS/DV/DD records are display-only. |
 | `canRefreshMemories` | ❌ | ❌ | ❌ | Memory Channels dialog → `RadioModel::refreshMemories` | Explicit, button-only radio-memory snapshots. IC-7300MK2 reads 99 channels; IC-9700 reads all 297 or one selected band; IC-705 requires one selected group and reads only its 100 channels. No memory scan runs during connection. |
-| `clientSettingsDomains` | empty | Tuning\|Passband\|SpanRate\|RfGain\|TxSetpoints\|Memories\|Agc | empty | `RadioStateMemory::shouldEngage` → `RadioModel::handRestoredStateToBackend` | connect-time operating-state restore + debounced capture (RFC #4603 PR 3). RTL can transfer overlapping domains to `RtlSlices` after accepted capture and successful feature ownership; see the RTL table below. Consumers re-read current capabilities for persistence and receive runtime changes through `capabilitiesChanged`: `Hl2Backend::applyRestoredState` seeds rate/freq/LNA at connect, `pushInitialState` applies restored mode+passband (reconciled with #4484 — restored as a pair, so mode and passband cannot disagree) and the start band's drive; per-band LNA/drive maps ride the extension document and follow TX-slice band changes. `Agc` (#4909) carries the mode + threshold pair as typed universal fields — FLAT, not per-band, and seeded onto EVERY receiver by `Hl2Backend::seedReceiverAgc()`, because the AGC runs in host-side WDSP and no HPSDR register can be asked what it is. Seeding runs from `connectRadio` when the connect SERIAL changes or the receivers were rebuilt from nothing — never on a plain auto-reconnect, because `handRestoredStateToBackend` re-hands the document before every connect and `buildReceivers` preserves live receiver state, so an unconditional seed flattened per-receiver AGC on each dropped link. Memories is declarative only — the bank engages on `persistsMemories` and keeps its own shared document (PR 6). Flex/Sim: no-op by empty declaration. |
+| `clientSettingsDomains` | empty | Tuning\|Passband\|SpanRate\|RfGain\|TxSetpoints\|Memories\|Agc | empty | `RadioStateMemory::shouldEngage` → `RadioModel::handRestoredStateToBackend` | connect-time operating-state restore + debounced capture (RFC #4603 PR 3). RTL can transfer overlapping domains to `RtlSlices` after accepted capture and successful feature ownership; see the RTL table below. Consumers re-read current capabilities for persistence and receive runtime changes through `capabilitiesChanged`: `Hl2Backend::applyRestoredState` seeds rate/freq/LNA at connect, `pushInitialState` applies restored mode+passband (reconciled with #4484 — restored as a pair, so mode and passband cannot disagree) and the start band's drive; per-band LNA/drive maps ride the extension document and follow TX-slice band changes. `Agc` (#4909) carries the mode + threshold pair as typed universal fields — FLAT, not per-band, and seeded onto EVERY receiver by `Hl2Backend::seedReceiverAgc()`, because the AGC runs in host-side WDSP and no HPSDR register can be asked what it is. Seeding runs from `connectRadio` when the connect SERIAL changes or the receivers were rebuilt from nothing — never on a plain auto-reconnect, because `handRestoredStateToBackend` re-hands the document before every connect and `buildReceivers` preserves live receiver state, so an unconditional seed flattened per-receiver AGC on each dropped link. The AGC-off level rides the same domain PER RECEIVER (`RestoredRadioState::agcOffLevels`, the `agcOffLevels` array of the `OperatingState` document): `RadioStateMemory` stores and loads it only when the backend declares `Agc` AND `hasAgcThreshold`, the same seed gives each receiver its own entry, and a document without the array restores the default of 10. ANAN declares `hasAgcThreshold` without the `Agc` domain and RTL-SDR declares neither, so both ignore it. Memories is declarative only — the bank engages on `persistsMemories` and keeps its own shared document (PR 6). Flex/Sim: no-op by empty declaration. |
 | `extensionNamespaces` | `["flex"]` | `["hl2"]` | — | `RadioModel::backendDeclaresExtension` (every `invokeExtension` pre-check), `MainWindow::applyCapabilitiesToUi` (the `sim` DemoApplet gate, #5263) | Flex: amp / tuner operate/bypass/autotune verbs. HL2: `freqcal.get` / `.set` / `.set_live`, behind the `freqcal` bridge verb and the Calibration page; `hw.get` / `hw.set`, the declared HL2 variant (codec, dither bit, filter board, gateware ATU) behind the HL2 Hardware page — **no bridge verb yet**, unlike `freqcal`, so these are reachable from the dialog only. `hw.set` is PARTIAL: absent keys keep their current value. One exception is worth knowing before writing a caller — **changing `codec` re-seeds `ditherBit`**, because 0x00[11] means band volts on a bare HL2 and a loudspeaker on the two boards that carry a codec, so carrying the old value across would carry a decision about something else (`Hl2HardwareOptions::ditherBitOnCodecChange`). A caller that names `ditherBit` in the SAME call still wins — that is how you declare a board and its speaker together — which also means a caller can set `{codec: 0, ditherBit: true}` and switch on a bare HL2's band-voltage output deliberately. The dialog never sends that shape; plus `bandscope.enable` (#5650), the wideband bandscope gate (endpoint `0x04`), reached **only** by the bridge's `bandscope` verb — no UI and no setting, on purpose: it is a diagnostic whose readings land in the health dialog's Converter section, uncalibrated and pre-DDC, and nothing in the app makes a decision from it. Icom: `["icom"]`, with PC-audio, scope, control-map, scheduler and diagnostic verbs. **#5262 M1 converted the family-string pre-checks** (PC-audio ×2, `power.wake`, the AX.25 capture dialog) onto `backendDeclaresExtension()` — the gate asks whether the backend *declares the namespace*, not whether it is that family, so a future backend answering the same verbs is not excluded by name. **Still outstanding:** the Flex accessory routes (`RadioModel.cpp:2385/2390/2399/2413`) do not pre-check at all — they gate on `if (m_backend)` and would fire `flex` verbs at whatever backend is connected. |
 | `maxNotchFilters` | 1000 | 1024 | 0 | `MainWindow::applyCapabilitiesToUi`, `SpectrumWidget::setNotchCapabilities` | The sidebar `+TNF` button and the panadapter's add/remove-notch entries. **0 hides them.** Flex's figure is a UI sanity limit (neither FlexLib nor the wire declares one); HL2's is WDSP's real notch-database size |
 | `notchHasDepth` | ✅ | ❌ | ❌ | `SpectrumWidget::setNotchCapabilities` | The depth submenu on a notch's right-click menu. A WDSP notch is a full null with no depth to set |
@@ -552,18 +555,55 @@ and conflating them would hide one of them.
 | `radioOwnsDbmScale` | ✅ (default) | ⚠️ **✅ (default)** | ❌ | ❌ | Will the radio adopt a dBm range sent to it and report it back? |
 | `dbmAxisIsCalibrated()` (`panAmplitude->calibratedDbm`) | ✅ (absent) | ❌ | ✅ (absent) | ❌ | Do the numbers on that axis mean absolute dBm at the antenna? |
 | `panBinsAbsolute()` (`panAmplitude->binsAbsolute`) | ❌ (absent) | ✅ | ❌ (absent) | ✅ | Do the spectrum bins hold still while the reference level moves? |
+| `squelchLevelScale` | −160 + 1·L, all modes, Auto SQL | −119 + 0.7·L, AM/SAM/DSB/LSB/USB, no Auto SQL | Flex's (no measured map) | Flex's (no measured map) | Where does squelch level L open, on this axis? |
 
-**`panBinsAbsolute()` is consumed too, and it is the second term of ONE gate.**
+**`squelchLevelScale` draws the SQL line and drives Auto SQL** (#6092).
+The demo keeps Flex's scale. RTL-SDR publishes its own gate, −120 + 1.2·L dBFS/bin in FM/FM-N with Auto SQL and `modesExclusive` (see Native squelch above): its detector reads the same FFT as the pan, so a pan-derived floor lands on the gate. Absent, or the active slice's mode not listed: no line, and the SQL button
+skips Auto with the reason on its accessible description. The HL2 offset is
+amsq's −140 + 0.7·L dBFS map, referred to the LNA at −12 dB
+(`Hl2DbReference::levelSquelchOffsetDb`), plus the pan's LNA offset, plus the
++6.02 dB a steady carrier reads on `Hl2Spectrum`; the LNA terms cancel. At the
+default +20 dB LNA the gate is −108 + 0.7·L dBFS: on8st's no-signal input held
+it open up to level 49 and his test carrier up to level 54, so at that gain the
+working range is a few steps around 50. Lower opens on noise; higher needs a
+stronger signal than his carrier. Auto
+SQL stays off on the HL2 because amsq reads passband-limited magnitude before
+the AGC (`RXA.c` `xamsqcap` after `xnbp(nbp0)`), while the pan floor is per
+bin: a pan-derived floor would need both the filter width and the bin width.
+
+**`panBinsAbsolute()` is consumed too: as the second term of ONE gate, and as
+the unit of a waterfall row.**
 `noiseFloorAutoAdjustAllowed(radioOwnsDbmScale, panBinsAbsolute)` in
 `core/backends/NoiseFloorAutoAdjustGate.h` is an OR: a real echo from the radio
 ends the auto-floor loop by confirmation, absolute bins end it by giving it a
 fixed target, and either alone is enough. `SpectrumWidget::applyNoiseFloorAutoAdjust`
 and the auto-floor branch of `dbmRangeChangeRequested` both call it, so the
-widget and its backstop cannot drift apart. The other three
+widget and its backstop cannot drift apart.
+`SpectrumWidget::updateWaterfallRow` passes the same flag to
+`WaterfallImpulseBlanker::decide` as the row kind, because such a backend's
+waterfall row is its pan frame: NB Blank tests a ratio on a Flex tile and a dB
+margin on an absolute dB row (dBFS under a dBm label). The other three
 `radioOwnsDbmScale` gates below are about whether a range can be **sent** and
 stay on the echo alone. HL2, ANAN and RTL-SDR declare `binsAbsolute = true`,
 each quoting the expression that produces its bins; ANAN is the one whose loop
 this turned back on.
+
+**The manual Black Level reads it as the row's unit too.** A backend with no
+waterfall plane of its own sends its pan frame on as the row
+(`RadioModel::onBackendSpectrumFrame`), so the row is the pan's absolute dB
+(dBFS under a dBm label), where a Flex tile is intensity (about 96..120). The
+manual Black Level (button on Off) is a threshold in the row's unit. The widget
+holds no record of where a row came from, so
+`SpectrumWidget::intensityToWaterfallLevel` reads `binsAbsolute` as a proxy for
+it and passes it to `WaterfallLevelMap::level` as `rowsAreAbsoluteDb`: false
+keeps the tile law `160 - level`, true takes `-60 dB - level`. SW and HW do not
+read the flag.
+
+The proxy holds for HL2, ANAN and RTL-SDR. It does not hold for Icom or the
+Demo: `IcomCivBackend` (scope rows through `toDbm`) and `SimBackend`
+(`SimSignalSource`, floor -120) send dB rows down the same path and declare no
+`binsAbsolute`, so Off on either keeps the tile law and draws every row black,
+and NB Blank keeps its tile ratio test, which never fires on a dB row.
 
 **THE HL2 KEEPS THE PERMISSIVE DEFAULT, and that is deliberate rather than an
 omission.** `Hl2Backend::capabilities()` never assigns the field and says why at

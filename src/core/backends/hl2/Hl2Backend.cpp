@@ -189,6 +189,13 @@ WdspChannel::Mode modeFromString(const QString& mode) noexcept
     return WdspChannel::Mode::Usb;
 }
 
+// The data modes WSJT-X and similar decoders select.
+bool isDigitalDataMode(const QString& mode) noexcept
+{
+    return mode.compare(QLatin1String("DIGU"), Qt::CaseInsensitive) == 0
+           || mode.compare(QLatin1String("DIGL"), Qt::CaseInsensitive) == 0;
+}
+
 // wdspAgcMode() falls back to medium for unknown strings, so the restore
 // boundary drops unknown values instead of persisting a silent "med". Uses
 // SliceModel's four-way vocabulary ("med", not "medium").
@@ -799,6 +806,13 @@ void Hl2Backend::buildReceivers(int count)
             // same frequency is deliberate: parked at 0 Hz they would draw
             // panadapters of DC and read as a hardware fault on first connect.
             r = previous.front();
+            // RIT/XIT are that receiver's own, as on a Flex slice: a new
+            // receiver starts with both off, as createPanadapter()'s does.
+            r.ritOn = false;
+            r.ritHz = 0;
+            r.xitOn = false;
+            r.xitHz = 0;
+            r.ncoMovedForRit = false;
         }
         r.dsp = nullptr;             // never inherited; recreated below
         r.audioMuted = false;
@@ -975,8 +989,13 @@ bool Hl2Backend::createPanadapter()
         seed.filterLowHz = first.filterLowHz;
         seed.filterHighHz = first.filterHighHz;
         seed.agcMode = first.agcMode;
+        seed.agcModeBeforeDigital = first.agcModeBeforeDigital;
         seed.agcThresholdDb = first.agcThresholdDb;
     }
+    // The AGC-off level is this receiver's own: the one remembered for its
+    // index, else the default. It is not copied from the first receiver.
+    if (const int level = rememberedAgcOffLevel(ddc); level >= 0)
+        seed.agcOffLevel = level;
     m_rx.push_back(seed);
 
     if (m_metis) {
@@ -1339,7 +1358,7 @@ bool Hl2Backend::removePanadapter(const QString& panId)
     applyBandFilter("close receiver");
     publishWideState();
     // Transmit moved: re-run the new owner's tune, as setTxSlice() does, so the
-    // TX register and RIT follow it instead of staying on the closed receiver.
+    // TX register (with the new owner's XIT) leaves the closed receiver.
     if (txMoved) {
         retuneReceiver(m_txDdc);
     }
@@ -1882,6 +1901,24 @@ RadioCapabilities Hl2Backend::capabilities() const
     // data modes have no stage, so this is false, stated explicitly: the client
     // then disables SQL there instead of showing a button wired to nothing.
     c.hasModeIndependentSquelch = false;
+    // amsq's gate on the pan axis. Every term is a dB offset from the same IQ:
+    // the LNA referral and the pan's LNA offset cancel, leaving a constant. FM
+    // (fmsq, a noise-quieting gate) has no dB place, so only amsq's modes are
+    // listed. No Auto SQL: amsq reads the passband, the pan per-bin noise.
+    {
+        SquelchLevelScale sql;
+        sql.dbPerStep = WdspChannel::kLevelSquelchDbPerStep;
+        sql.offsetDb = WdspChannel::kLevelSquelchBaseDbfs + m_dbRef.levelSquelchOffsetDb()
+                       + m_dbRef.offsetDb() + Hl2Spectrum::kToneGainDb;
+        for (const QString& mode : publishedModeStrings()) {
+            if (WdspChannel::squelchStageFor(modeFromString(mode))
+                == WdspChannel::SquelchStage::Level) {
+                sql.modes << mode;
+            }
+        }
+        sql.autoSquelch = false;
+        c.squelchLevelScale = sql;
+    }
     // The 76.8 MHz NCO scale is a localparam in the bitstream and nothing in the
     // HPSDR map can be told the crystal's real error — so the correction is ours
     // or it does not happen. See Hl2FreqCal for the derivation.
@@ -2815,13 +2852,13 @@ void Hl2Backend::setSliceFrequency(int sliceId, double hz)
     // Stay clear of the band edges: the passband rolls off there, and a slice
     // parked in the roll-off would be attenuated for no visible reason.
     const double usableHz = halfSpanHz * kUsablePassbandFraction;
-    // The window is judged on where the receiver LISTENS (dial + RIT on the
-    // transmit receiver), so a RIT offset past the edge moves the NCO too.
+    // The window is judged on where the receiver LISTENS (dial + its RIT), so
+    // a RIT offset past the edge moves the NCO too.
     const double tunedHz = rxTunedHz(*r);
     const bool ritApplies = (tunedHz != r->sliceFreqHz);
     const bool outsideWindow = std::abs(tunedHz - r->ncoHz) > usableHz;
     // A move RIT alone caused is undone when RIT stops applying to this
-    // receiver (cleared, zeroed, or transmit moved away) — the NCO comes back
+    // receiver (cleared or zeroed) — the NCO comes back
     // to the dial, or the pan centre stays offset by the old RIT for good.
     const bool ritReturn = !outsideWindow && !ritApplies && r->ncoMovedForRit;
     if (outsideWindow || ritReturn) {
@@ -2878,6 +2915,27 @@ void Hl2Backend::setSliceFrequency(int sliceId, double hz)
     notifyOperatingStateChanged();
 }
 
+// DIGU/DIGL run AGC off: medium AGC raises the noise between FT8 frames,
+// which inflates the decoder's noise reference and costs weak decodes beside
+// a strong signal (#5629). The held AGC returns on leaving them. Never
+// re-imposed inside a data mode, so an operator's own AGC choice stands.
+bool Hl2Backend::followModeAgc(Receiver& r, const QString& previousMode)
+{
+    const bool wasDigital = isDigitalDataMode(previousMode);
+    const bool isDigital = isDigitalDataMode(r.mode);
+    if (isDigital && !wasDigital) {
+        r.agcModeBeforeDigital = r.agcMode;
+        r.agcMode = QStringLiteral("off");
+        return true;
+    }
+    if (wasDigital && !isDigital && !r.agcModeBeforeDigital.isEmpty()) {
+        r.agcMode = r.agcModeBeforeDigital;
+        r.agcModeBeforeDigital.clear();
+        return true;
+    }
+    return false;
+}
+
 void Hl2Backend::setSliceMode(int sliceId, const QString& requested)
 {
     const int ddc = ddcForSlice(sliceId);
@@ -2909,6 +2967,12 @@ void Hl2Backend::setSliceMode(int sliceId, const QString& requested)
         const auto [lo, hi] = defaultPassbandForMode(mode);
         r->filterLowHz  = lo;
         r->filterHighHz = hi;
+    }
+
+    if (followModeAgc(*r, previous) && r->dsp) {
+        QMetaObject::invokeMethod(r->dsp, "setAgc", Qt::QueuedConnection,
+            Q_ARG(int, wdspAgcMode(r->agcMode)),
+            Q_ARG(double, m_dbRef.agcCeilingDb(r->agcThresholdDb)));
     }
 
     // Mode first, then passband, re-pushed on every mode set: in WDSP the NBP
@@ -2982,11 +3046,17 @@ void Hl2Backend::setSliceAgc(int sliceId, const QString& mode, int thresholdDb)
     // 40 dB, clipping hard by 50 dB.
     // Validated on the way in so capture only stores what restore accepts; an
     // unknown mode string leaves the mode unchanged.
-    if (!m.isEmpty() && isKnownAgcModeString(m))
+    if (!m.isEmpty() && isKnownAgcModeString(m)) {
+        // A changed mode is the operator's choice, so leaving DIGU/DIGL no
+        // longer overrides it. A threshold change repeats the current mode.
+        if (m != r->agcMode) {
+            r->agcModeBeforeDigital.clear();
+        }
         r->agcMode = m;
-    else if (!m.isEmpty())
+    } else if (!m.isEmpty()) {
         qCWarning(lcHl2) << "HL2: ignoring unknown AGC mode" << mode
                          << "- keeping" << r->agcMode;
+    }
     r->agcThresholdDb = qBound(0, thresholdDb, 100);
     // THE REMEMBERED PAIR IS THE LAST ONE THE OPERATOR SET, on whichever
     // receiver. Capture used to read rx(m_txDdc) instead, which split the model:
@@ -2995,7 +3065,9 @@ void Hl2Backend::setSliceAgc(int sliceId, const QString& mode, int thresholdDb)
     // capture was not the change that got captured — and the next launch seeded
     // every receiver from it. Flat restore is the deliberate design (see
     // seedReceiverAgc); this makes the capture side agree with it.
-    m_agcMode = r->agcMode;
+    // A data mode's own "off" is not the operator's choice and is not captured.
+    m_agcMode = r->agcModeBeforeDigital.isEmpty() ? r->agcMode
+                                                  : r->agcModeBeforeDigital;
     m_agcThresholdDb = r->agcThresholdDb;
     // WDSP IS TOLD WHAT THE RECEIVER NOW HOLDS, not what the caller asked for.
     // Deriving from `m` meant a refused mode still reached the DSP as
@@ -3105,6 +3177,25 @@ void Hl2Backend::requestSliceAgc(int sliceId, const SliceAgcRequest& request)
     r->agcOffLevel = qBound(0, request.offLevel, 100);
     pushAgcOffLevel(*r);
     emitSliceState(ddc);
+    // Remembered per receiver and captured, as the AGC pair is.
+    rememberAgcOffLevel(ddc, r->agcOffLevel);
+    m_agcOffLevelsLive = true;
+    notifyOperatingStateChanged();
+}
+
+int Hl2Backend::rememberedAgcOffLevel(int receiverIndex) const
+{
+    return receiverIndex >= 0 && receiverIndex < m_agcOffLevels.size()
+               ? m_agcOffLevels.at(receiverIndex) : -1;
+}
+
+void Hl2Backend::rememberAgcOffLevel(int receiverIndex, int level)
+{
+    if (receiverIndex < 0 || receiverIndex >= kMaxReceivers)
+        return;
+    while (m_agcOffLevels.size() <= receiverIndex)
+        m_agcOffLevels.append(-1);
+    m_agcOffLevels[receiverIndex] = level;
 }
 
 void Hl2Backend::setSliceSquelch(int sliceId, bool on, int level)
@@ -3231,16 +3322,6 @@ void Hl2Backend::setTxSlice(int sliceId)
     // The band filter's keyed-TX override follows m_txDdc, so re-evaluate it.
     applyBandFilter("tx slice");
     publishWideState();
-    // RIT belongs to the transmit receiver, so it leaves one and joins the other.
-    // On the new receiver this repeats the setTxFrequency() and band-memory
-    // writes above via setSliceFrequency(): the same values, and
-    // applyPerBandStateFor() returns early on an unchanged band key — a
-    // deliberate re-run of the whole tune, not a missing gate.
-    if (m_ritOn && m_ritHz != 0) {
-        logRitScope();
-        retuneReceiver(previous);
-        retuneReceiver(ddc);
-    }
 
     // Republish BOTH slices: the one that lost transmit and the one that gained
     // it. Publishing only the new one would leave the old indicator lit, and two
@@ -3314,7 +3395,8 @@ void Hl2Backend::pushSquelch(const Receiver& r)
         return;
     // Sent even when OFF — see pushNoiseBlanker().
     QMetaObject::invokeMethod(r.dsp, "setSquelch", Qt::QueuedConnection,
-        Q_ARG(bool, r.squelchOn), Q_ARG(int, r.squelchLevel));
+        Q_ARG(bool, r.squelchOn), Q_ARG(int, r.squelchLevel),
+        Q_ARG(double, m_dbRef.levelSquelchOffsetDb()));
 }
 
 void Hl2Backend::seedNotches(const Receiver& r)
@@ -4387,14 +4469,17 @@ void Hl2Backend::setTxFrequency(double hz)
     // 10 ppm on 28 MHz that is a 280 Hz error corrected to under 1 Hz.
     //
     // XIT lands here and ONLY here: every caller passes the transmit receiver's
-    // dial, so the offset reaches the TX register on every path that writes it
-    // (tune, TX slice move, reconnect, calibration) and never the receive side.
-    double txHz = hz + (m_xitOn ? m_xitHz : 0);
+    // dial, so that receiver's XIT reaches the TX register on every path that
+    // writes it (tune, TX slice move, reconnect, calibration) and never the
+    // receive side.
+    const Receiver* txRx = rx(m_txDdc);
+    const int xitHz = (txRx && txRx->xitOn) ? txRx->xitHz : 0;
+    double txHz = hz + xitHz;
     // XIT can take the command through zero behind the dial guard, and
     // ncoCommandHz() maps that to DC. Skipping the write is no better: the
     // register keeps its last value, possibly another band. Hold the dial.
     if (txHz <= 0.0) {
-        qCWarning(lcHl2) << "HL2: XIT" << m_xitHz << "Hz would put TX at" << txHz
+        qCWarning(lcHl2) << "HL2: XIT" << xitHz << "Hz would put TX at" << txHz
                          << "Hz from a dial of" << hz
                          << "Hz; TX register holds the dial, XIT not applied";
         txHz = hz;
@@ -4437,12 +4522,10 @@ double Hl2Backend::rxShiftHz(const Receiver& r) const noexcept
 
 double Hl2Backend::rxTunedHz(const Receiver& r) const noexcept
 {
-    // RIT is radio-wide at the seam (no slice id), and it only means anything
-    // relative to the transmit frequency — so it belongs to the receiver that
-    // owns transmit. Added before dspShiftHz() so it stays in the TRUE-RF
-    // domain the frequency calibration already corrects.
-    const bool ownsTx = (&r == rx(m_txDdc));
-    return r.sliceFreqHz + ((m_ritOn && ownsTx) ? m_ritHz : 0);
+    // Every receiver has its own NCO, so each carries its own RIT, as a Flex
+    // slice does. Added before dspShiftHz() so it stays in the TRUE-RF domain
+    // the frequency calibration already corrects.
+    return r.sliceFreqHz + (r.ritOn ? r.ritHz : 0);
 }
 
 void Hl2Backend::retuneReceiver(int ddc)
@@ -4456,74 +4539,97 @@ void Hl2Backend::retuneReceiver(int ddc)
     }
 }
 
-void Hl2Backend::logRitScope() const
+int Hl2Backend::clampRitXit(const char* what, int hz)
 {
-    // Radio-wide at the seam (RadioModel passes no slice id), so whichever VFO
-    // the operator turned, this is the receiver whose audio actually moved.
-    const Hl2ReceiverIds* ids = m_ids.byDdc(m_txDdc);
-    qCInfo(lcHl2) << "HL2: RIT" << (m_ritOn ? "on," : "off,") << "offset" << m_ritHz
-                  << "Hz — follows transmit: receiver DDC" << m_txDdc
-                  << "(slice" << (ids ? ids->uiNumber : -1) << ")";
-}
-
-void Hl2Backend::setRitEnabled(bool on)
-{
-    if (on == m_ritOn) {
-        return;
-    }
-    m_ritOn = on;
-    if (m_ritHz != 0) {
-        logRitScope();
-        retuneReceiver(m_txDdc);
-    }
-}
-
-void Hl2Backend::setRitOffset(int hz)
-{
-    const int requested = hz;
-    hz = std::clamp(hz, -kRitXitMaxHz, kRitXitMaxHz);
-    if (hz != requested) {
-        qCWarning(lcHl2) << "HL2: RIT offset" << requested << "Hz clamped to" << hz
+    const int clamped = std::clamp(hz, -kRitXitMaxHz, kRitXitMaxHz);
+    if (clamped != hz) {
+        qCWarning(lcHl2) << "HL2:" << what << "offset" << hz << "Hz clamped to" << clamped
                          << "Hz (limit +/-" << kRitXitMaxHz << "Hz)";
     }
-    if (hz == m_ritHz) {
+    return clamped;
+}
+
+void Hl2Backend::logRitXit(const char* what, int ddc, bool on, int hz) const
+{
+    const Hl2ReceiverIds* ids = m_ids.byDdc(ddc);
+    qCInfo(lcHl2) << "HL2:" << what << (on ? "on," : "off,") << "offset" << hz
+                  << "Hz on receiver DDC" << ddc << "slice" << (ids ? ids->uiNumber : -1)
+                  << (ddc == m_txDdc ? "(transmit)" : "(receive only)");
+}
+
+// Each setter ends by publishing the receiver's RIT/XIT, so the readout follows
+// what the receiver holds: an offset the clamp cut, and the final value of an
+// enable-then-offset pair. retuneReceiver() publishes as part of the re-tune.
+void Hl2Backend::setSliceRitEnabled(int sliceId, bool on)
+{
+    const int ddc = ddcForSlice(sliceId);
+    Receiver* r = rx(ddc);
+    if (!r || on == r->ritOn) {
         return;
     }
-    m_ritHz = hz;
-    if (m_ritOn) {
-        logRitScope();
-        retuneReceiver(m_txDdc);
+    r->ritOn = on;
+    logRitXit("RIT", ddc, r->ritOn, r->ritHz);
+    if (r->ritHz != 0) {
+        retuneReceiver(ddc);
+    } else {
+        emitSliceState(ddc);
     }
 }
 
-void Hl2Backend::setXitEnabled(bool on)
+void Hl2Backend::setSliceRitOffset(int sliceId, int hz)
 {
-    if (on == m_xitOn) {
+    const int ddc = ddcForSlice(sliceId);
+    Receiver* r = rx(ddc);
+    if (!r) {
         return;
     }
-    m_xitOn = on;
-    const Receiver* txRx = rx(m_txDdc);
-    if (m_xitHz != 0 && txRx) {
-        setTxFrequency(txRx->sliceFreqHz);
+    const int clamped = clampRitXit("RIT", hz);
+    if (clamped == r->ritHz && clamped == hz) {
+        return;
+    }
+    const bool moves = r->ritOn && clamped != r->ritHz;
+    r->ritHz = clamped;
+    logRitXit("RIT", ddc, r->ritOn, r->ritHz);
+    if (moves) {
+        retuneReceiver(ddc);
+    } else {
+        emitSliceState(ddc);
     }
 }
 
-void Hl2Backend::setXitOffset(int hz)
+void Hl2Backend::setSliceXitEnabled(int sliceId, bool on)
 {
-    const int requested = hz;
-    hz = std::clamp(hz, -kRitXitMaxHz, kRitXitMaxHz);
-    if (hz != requested) {
-        qCWarning(lcHl2) << "HL2: XIT offset" << requested << "Hz clamped to" << hz
-                         << "Hz (limit +/-" << kRitXitMaxHz << "Hz)";
-    }
-    if (hz == m_xitHz) {
+    const int ddc = ddcForSlice(sliceId);
+    Receiver* r = rx(ddc);
+    if (!r || on == r->xitOn) {
         return;
     }
-    m_xitHz = hz;
-    const Receiver* txRx = rx(m_txDdc);
-    if (m_xitOn && txRx) {
-        setTxFrequency(txRx->sliceFreqHz);
+    r->xitOn = on;
+    logRitXit("XIT", ddc, r->xitOn, r->xitHz);
+    if (r->xitHz != 0 && ddc == m_txDdc) {
+        setTxFrequency(r->sliceFreqHz);
     }
+    emitSliceState(ddc);
+}
+
+void Hl2Backend::setSliceXitOffset(int sliceId, int hz)
+{
+    const int ddc = ddcForSlice(sliceId);
+    Receiver* r = rx(ddc);
+    if (!r) {
+        return;
+    }
+    const int clamped = clampRitXit("XIT", hz);
+    if (clamped == r->xitHz && clamped == hz) {
+        return;
+    }
+    const bool moves = r->xitOn && clamped != r->xitHz && ddc == m_txDdc;
+    r->xitHz = clamped;
+    logRitXit("XIT", ddc, r->xitOn, r->xitHz);
+    if (moves) {
+        setTxFrequency(r->sliceFreqHz);
+    }
+    emitSliceState(ddc);
 }
 
 void Hl2Backend::setCwPitch(int hz)
@@ -6504,6 +6610,12 @@ void Hl2Backend::applyRestoredState(const RestoredRadioState& state)
         valid.agcMode = state.agcMode.trimmed().toLower();
     if (state.agcThreshold >= 0 && state.agcThreshold <= 100)
         valid.agcThreshold = state.agcThreshold;
+    // The AGC-off level per receiver. An entry outside 0..100 is dropped, not
+    // clamped, like the threshold; entries past the receiver ceiling are ignored.
+    for (qsizetype i = 0; i < state.agcOffLevels.size() && i < kMaxReceivers; ++i) {
+        const int level = state.agcOffLevels.at(i);
+        valid.agcOffLevels.append(level >= 0 && level <= 100 ? level : -1);
+    }
 
     // Per-band maps ride the typed extension's domain sub-objects
     // (RestoredRadioState.h). Values clamp to the hardware's own ranges.
@@ -6589,6 +6701,10 @@ void Hl2Backend::applyRestoredState(const RestoredRadioState& state)
     m_agcThresholdDb = m_restoredState.agcThreshold >= 0
                            ? m_restoredState.agcThreshold
                            : defaults.agcThresholdDb;
+    // The remembered AGC-off levels are this radio's document, for the same
+    // reason. The open receivers keep theirs until connectRadio() seeds them.
+    m_agcOffLevels = m_restoredState.agcOffLevels;
+    m_agcOffLevelsLive = false;
     qCInfo(lcHl2) << "HL2 restore: freq" << valid.rfFrequencyHz << "mode"
                   << valid.mode << "filter" << valid.filterLowHz << ".."
                   << valid.filterHighHz << "rate" << valid.sampleRateHz
@@ -6610,18 +6726,30 @@ void Hl2Backend::seedReceiverAgc()
         m_haveRestoredState && !m_restoredState.agcMode.isEmpty();
     const bool haveThreshold =
         m_haveRestoredState && m_restoredState.agcThreshold >= 0;
-    for (Receiver& r : m_rx) {
+    for (std::size_t i = 0; i < m_rx.size(); ++i) {
+        Receiver& r = m_rx[i];
+        // The AGC-off level is per receiver: the remembered one for this
+        // index, else the default. Pushed to the DSP with the AGC pair.
+        const int offLevel = rememberedAgcOffLevel(static_cast<int>(i));
+        r.agcOffLevel = offLevel >= 0 ? offLevel : defaults.agcOffLevel;
         r.agcMode = haveMode ? m_restoredState.agcMode : defaults.agcMode;
         r.agcThresholdDb = haveThreshold ? m_restoredState.agcThreshold
                                          : defaults.agcThresholdDb;
+        r.agcModeBeforeDigital.clear();
+        // A receiver already in DIGU/DIGL runs AGC off over the seeded mode.
+        followModeAgc(r, QString());
     }
     // Prime the remembered pair from what was just seeded, so a capture taken
     // before the operator touches the control records the restored value rather
-    // than falling back through an empty member.
+    // than falling back through an empty member. The seeded mode, not a data
+    // mode's off.
     if (!m_rx.empty()) {
-        m_agcMode = m_rx.front().agcMode;
-        m_agcThresholdDb = m_rx.front().agcThresholdDb;
+        const Receiver& first = m_rx.front();
+        m_agcMode = first.agcModeBeforeDigital.isEmpty()
+                        ? first.agcMode : first.agcModeBeforeDigital;
+        m_agcThresholdDb = first.agcThresholdDb;
     }
+    m_agcOffLevelsLive = true;
 }
 
 RestoredRadioState Hl2Backend::currentOperatingState() const
@@ -6645,8 +6773,19 @@ RestoredRadioState Hl2Backend::currentOperatingState() const
         state.agcMode = m_agcMode;
         state.agcThreshold = m_agcThresholdDb;
     } else if (const Receiver* txRx = rx(m_txDdc)) {
-        state.agcMode = txRx->agcMode;
+        state.agcMode = txRx->agcModeBeforeDigital.isEmpty()
+                            ? txRx->agcMode : txRx->agcModeBeforeDigital;
         state.agcThreshold = txRx->agcThresholdDb;
+    }
+    // The AGC-off level per receiver: the remembered list, with the open
+    // receivers' current levels over it once they hold this radio's values.
+    state.agcOffLevels = m_agcOffLevels;
+    if (m_agcOffLevelsLive) {
+        for (std::size_t i = 0; i < m_rx.size(); ++i) {
+            while (state.agcOffLevels.size() <= static_cast<qsizetype>(i))
+                state.agcOffLevels.append(-1);
+            state.agcOffLevels[static_cast<qsizetype>(i)] = m_rx[i].agcOffLevel;
+        }
     }
     state.sampleRateHz = m_sampleRateHz;
 
@@ -7063,6 +7202,8 @@ void Hl2Backend::pushEffectiveLnaGain()
         QMetaObject::invokeMethod(r.dsp, "setAgc", Qt::QueuedConnection,
             Q_ARG(int, wdspAgcMode(r.agcMode)),
             Q_ARG(double, m_dbRef.agcCeilingDb(r.agcThresholdDb)));
+        // The squelch gate is referred to the LNA the same way.
+        pushSquelch(r);
     }
     // Echo what the hardware actually took, to every pan — a slider that
     // asked for something outside the register's range finds out here, and so
@@ -7181,7 +7322,11 @@ void Hl2Backend::pushInitialState()
         if (m_haveRestoredState) {
             if (Receiver* txRx = rx(m_txDdc)) {
                 if (!m_restoredState.mode.isEmpty()) {
+                    // A restore into DIGU/DIGL runs AGC off, as a mode click
+                    // does; the loop below pushes it to the DSP.
+                    const QString previousMode = txRx->mode;
                     txRx->mode = m_restoredState.mode;
+                    followModeAgc(*txRx, previousMode);
                     const auto [pbLowHz, pbHighHz] =
                         defaultPassbandForMode(txRx->mode);
                     txRx->filterLowHz = pbLowHz;
@@ -7819,6 +7964,13 @@ void Hl2Backend::emitSliceState(int ddc)
     // SliceModel::applyChanges() does not emit squelchCommandIssued.
     d.squelchOn = r->squelchOn;
     d.squelchLevel = r->squelchLevel;
+    // The RIT/XIT the receiver holds, so the readout shows what it applies (a
+    // clamped offset, or a fresh connect at zero). applyChanges() emits only
+    // ritChanged/xitChanged, never the command signals, so this cannot loop.
+    d.ritOn = r->ritOn;
+    d.ritFreq = r->ritHz;
+    d.xitOn = r->xitOn;
+    d.xitFreq = r->xitHz;
     // Exactly one slice is the TX slice (the one on m_txDdc). Unset, txSlice()
     // is null and RadioModel's interlock refuses every key; set on all, the
     // operator could key from a receiver the TX NCO is not following.

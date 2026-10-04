@@ -4680,7 +4680,7 @@ void VfoWidget::setSlice(SliceModel* slice)
         //   and gates weak FSK signals (#2504)
         // CW: radio locks squelch on at fixed level, rejects changes
         const bool sqlDisabled = !ModeFilters::squelchAvailableInMode(mode,
-            m_receiveSquelchModel ? &*m_receiveSquelchModel : nullptr,
+            m_exclusiveSquelch ? &*m_exclusiveSquelch : nullptr,
             m_radioModel && m_radioModel->isConnected()
                 && m_radioModel->backendCapabilities().hasModeIndependentSquelch,
             m_slice && m_slice->externalReceiveReplacementActive());
@@ -5311,7 +5311,7 @@ void VfoWidget::syncFromSlice()
     m_fmToneContainer->setVisible(hasToneControls);
     // CW: radio locks squelch on at fixed level; Digital: not meaningful
     const bool squelchAvailable = ModeFilters::squelchAvailableInMode(m_slice->mode(),
-        m_receiveSquelchModel ? &*m_receiveSquelchModel : nullptr,
+        m_exclusiveSquelch ? &*m_exclusiveSquelch : nullptr,
         m_radioModel && m_radioModel->isConnected()
             && m_radioModel->backendCapabilities().hasModeIndependentSquelch,
         m_slice->externalReceiveReplacementActive());
@@ -6182,6 +6182,9 @@ void VfoWidget::setRxApplet(RxApplet* rx)
     connect(rx, &RxApplet::sqlModeChanged, this, [this](int) {
         syncSqlVisuals();
     });
+    connect(rx, &RxApplet::sqlAutoAvailabilityChanged, this, [this]() {
+        syncSqlVisuals();
+    });
     // Auto-margin updates come from RxApplet (or any sibling VfoWidget
     // mirroring it) — reflect them in the slider when we're in Auto mode.
     connect(rx, &RxApplet::autoSqlMarginDbChanged, this, [this](int dB) {
@@ -6287,18 +6290,24 @@ void VfoWidget::syncSqlVisuals()
 {
     if (!m_sqlBtn || !m_sqlSlider) return;
     const auto describeThreshold = qScopeGuard([this] {
-        if (!m_receiveSquelchModel || !m_sqlSlider->isEnabled()
+        if (!m_exclusiveSquelch || !m_sqlSlider->isEnabled()
             || (m_slice && m_slice->externalReceiveReplacementActive())) { return; }
-        const auto& sql = *m_receiveSquelchModel;
+        const auto& sql = *m_exclusiveSquelch;
         const bool automatic = mirrorsRxAppletSql() && m_rxApplet->sqlMode() == RxApplet::SqlMode::Auto;
         const QString description = automatic
             ? tr("Auto squelch: margin in dB above the measured spectrum noise floor (%1)").arg(sql.unit)
             : tr("Squelch 0–100 maps to %1–%2 %3. A signal above this threshold opens audio.")
-                .arg(sql.referenceDb).arg(sql.referenceDb + 100 * sql.stepDb).arg(sql.unit);
+                .arg(sql.offsetDb).arg(sql.offsetDb + 100 * sql.dbPerStep).arg(sql.unit);
         m_sqlSlider->setToolTip(description);
         m_sqlSlider->setAccessibleDescription(description);
     });
+    // An unavailable button carries the registry's mode reason; leave it.
+    const bool sqlReasonOwned = m_filterAvailability
+        && m_filterAvailability->stateOf(m_sqlBtn) == ControlAvailability::Unavailable;
     if (!mirrorsRxAppletSql()) {
+        if (!sqlReasonOwned) {
+            m_sqlBtn->setAccessibleDescription(QString());
+        }
         QSignalBlocker b1(m_sqlBtn), b2(m_sqlSlider);
         if (m_slice && m_slice->externalReceiveReplacementActive()) {
             if (m_sqlBtn->isCheckable()) {
@@ -6398,6 +6407,9 @@ void VfoWidget::syncSqlVisuals()
     }
 
     const auto mode = m_rxApplet->sqlMode();
+    if (!sqlReasonOwned) {
+        m_sqlBtn->setAccessibleDescription(m_rxApplet->sqlButtonAccessibleDescription());
+    }
     // Match RxApplet's three button styles + label so the two surfaces
     // read identically.
     switch (mode) {
@@ -6512,16 +6524,16 @@ void VfoWidget::setRadioModel(RadioModel* radioModel)
     m_radioModel = radioModel;
     m_receiveFilterControl = m_radioModel && m_radioModel->isConnected()
         ? m_radioModel->backendCapabilities().receiveFilterControl : std::nullopt;
-    m_receiveSquelchModel = m_radioModel && m_radioModel->isConnected()
-        ? m_radioModel->backendCapabilities().receiveSquelchModel : std::nullopt;
+    m_exclusiveSquelch = m_radioModel && m_radioModel->isConnected()
+        ? exclusiveSquelchScaleValue(m_radioModel->backendCapabilities().squelchLevelScale) : std::nullopt;
     if (m_radioModel) {
         m_filterAvailability = new ControlAvailabilityRegistry(*m_radioModel, this);
         const auto supportsSquelch = [this](bool connected, const RadioCapabilities& caps) {
             if (!m_slice) {
-                return !caps.receiveSquelchModel;
+                return !exclusiveSquelchScale(caps.squelchLevelScale);
             }
             return ModeFilters::squelchAvailableInMode(m_slice->mode(),
-                connected && caps.receiveSquelchModel ? &*caps.receiveSquelchModel : nullptr,
+                connected ? exclusiveSquelchScale(caps.squelchLevelScale) : nullptr,
                 connected && caps.hasModeIndependentSquelch,
                 m_slice->externalReceiveReplacementActive());
         };
@@ -6548,7 +6560,7 @@ void VfoWidget::setRadioModel(RadioModel* radioModel)
         connect(m_radioModel, &RadioModel::capabilitiesChanged, this,
                 [this](bool connected, const RadioCapabilities& caps) {
             m_receiveFilterControl = connected ? caps.receiveFilterControl : std::nullopt;
-            m_receiveSquelchModel = connected ? caps.receiveSquelchModel : std::nullopt;
+            m_exclusiveSquelch = connected ? exclusiveSquelchScaleValue(caps.squelchLevelScale) : std::nullopt;
             configureRepeaterReverseControl();
             configureFmToneControls();
             updateAgcSliderFromSlice();

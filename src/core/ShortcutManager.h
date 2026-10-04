@@ -122,6 +122,12 @@ public:
     const QVector<Action>& actions() const { return m_actions; }
     Action* action(const QString& id);
     const Action* actionForKey(const QKeySequence& key) const;
+    // The action bound to `key` that the keyboard-shortcut master switch
+    // governs; nullptr for an unbound key or a window-management action,
+    // which runs whatever the switch says.
+    const Action* operatingActionForKey(const QKeySequence& key) const;
+    // A window-management exemption never widens a keying action.
+    static bool isWindowManagement(const Action& a);
     QString conflictCheck(const QKeySequence& key,
                           const QString& excludeId = {}) const;
 

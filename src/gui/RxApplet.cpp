@@ -1301,13 +1301,7 @@ void RxApplet::buildUI()
     m_panSlider->setAccessibleName("Audio pan");
     m_panSlider->setAccessibleDescription("Stereo audio pan, left to right");
     m_sqlBtn->setAccessibleName("Squelch mode");
-    m_sqlBtn->setAccessibleDescription(
-        "Cycle squelch through Off, Manual, and Auto modes");
-    m_sqlBtn->setToolTip(
-        "Click to cycle:\n"
-        "  Off — squelch open, all audio passes\n"
-        "  SQL — manual threshold via the slider\n"
-        "  AUTO — algorithm tracks the noise floor automatically");
+    applySqlButtonDescription();
     m_sqlSlider->setAccessibleName("Squelch threshold");
     m_sqlSlider->setAccessibleDescription("Signal level below which audio is muted");
     m_agcCombo->setAccessibleName("AGC mode");
@@ -1347,13 +1341,13 @@ void RxApplet::applySqlModeVisuals()
 {
     if (!m_sqlBtn) return;
     const auto describeThreshold = qScopeGuard([this] {
-        if (!m_receiveSquelchModel || usingExternalReceiveSquelch()
+        if (!m_exclusiveSquelch || usingExternalReceiveSquelch()
             || !m_sqlSlider || !m_sqlSlider->isEnabled()) { return; }
-        const auto& sql = *m_receiveSquelchModel;
+        const auto& sql = *m_exclusiveSquelch;
         const QString description = m_sqlMode == SqlMode::Auto
             ? tr("Auto squelch: margin in dB above the measured spectrum noise floor (%1)").arg(sql.unit)
             : tr("Squelch 0–100 maps to %1–%2 %3. A signal above this threshold opens audio.")
-                .arg(sql.referenceDb).arg(sql.referenceDb + 100 * sql.stepDb).arg(sql.unit);
+                .arg(sql.offsetDb).arg(sql.offsetDb + 100 * sql.dbPerStep).arg(sql.unit);
         m_sqlSlider->setToolTip(description);
         m_sqlSlider->setAccessibleDescription(description);
     });
@@ -1438,6 +1432,69 @@ void RxApplet::applySqlModeVisuals()
         m_sqlSlider->style()->polish(m_sqlSlider);
         m_sqlSlider->update();
     }
+    applySqlButtonDescription();
+}
+
+void RxApplet::applySqlButtonDescription()
+{
+    if (!m_sqlBtn) {
+        return;
+    }
+    // An unavailable button carries the registry's mode reason; the Auto
+    // reason describes a cycle the operator cannot start.
+    if (m_filterAvailability
+        && m_filterAvailability->stateOf(m_sqlBtn) == ControlAvailability::Unavailable) {
+        return;
+    }
+    m_sqlBtn->setAccessibleDescription(sqlButtonAccessibleDescription());
+    if (autoSqlAvailable()) {
+        m_sqlBtn->setToolTip(tr(
+            "Click to cycle:\n"
+            "  Off — squelch open, all audio passes\n"
+            "  SQL — manual threshold via the slider\n"
+            "  AUTO — algorithm tracks the noise floor automatically"));
+        return;
+    }
+    m_sqlBtn->setToolTip(tr(
+        "Click to cycle:\n"
+        "  Off — squelch open, all audio passes\n"
+        "  SQL — manual threshold via the slider\n"
+        "AUTO unavailable: %1").arg(autoSqlUnavailableReason()));
+}
+
+QString RxApplet::sqlButtonAccessibleDescription() const
+{
+    if (autoSqlAvailable()) {
+        return tr("Cycle squelch through Off, Manual, and Auto modes");
+    }
+    return tr("Cycle squelch between Off and Manual. Auto is unavailable: %1")
+        .arg(autoSqlUnavailableReason());
+}
+
+bool RxApplet::autoSqlAvailable() const
+{
+    return usingExternalReceiveSquelch() || m_autoSqlAvailable;
+}
+
+QString RxApplet::autoSqlUnavailableReason() const
+{
+    return autoSqlAvailable() ? QString() : m_autoSqlUnavailableReason;
+}
+
+void RxApplet::setAutoSqlAvailability(bool available, const QString& reason)
+{
+    const QString why = available ? QString() : reason;
+    if (available == m_autoSqlAvailable && why == m_autoSqlUnavailableReason) {
+        return;
+    }
+    m_autoSqlAvailable = available;
+    m_autoSqlUnavailableReason = why;
+    if (m_sqlMode == SqlMode::Auto && !autoSqlAvailable()) {
+        // Squelch stays on, at the operator's manual threshold.
+        setSqlMode(SqlMode::Manual, /*propagateToRadio=*/true);
+    }
+    applySqlButtonDescription();
+    emit sqlAutoAvailabilityChanged();
 }
 
 void RxApplet::cycleSqlMode()
@@ -1445,7 +1502,7 @@ void RxApplet::cycleSqlMode()
     if (m_slice && !squelchAvailableInMode(m_slice->mode())) { return; }
     const SqlMode next =
         (m_sqlMode == SqlMode::Off)    ? SqlMode::Manual :
-        (m_sqlMode == SqlMode::Manual) ? SqlMode::Auto   :
+        (m_sqlMode == SqlMode::Manual && autoSqlAvailable()) ? SqlMode::Auto :
                                           SqlMode::Off;
     setSqlMode(next, /*propagateToRadio=*/true);
 }
@@ -1564,13 +1621,13 @@ void RxApplet::loadClientSquelchIntent()
     const RadioSettingsScope scope = m_radioModel->settingsScope();
     // Icom SQL Off erases the radio threshold. Flex retains it independently
     // and must continue to use its own radio-owned state, without client replay.
-    if ((scope.family() != QLatin1String("icom") && !m_receiveSquelchModel) || !scope.hasRadioIdentity()) {
+    if ((scope.family() != QLatin1String("icom") && !m_exclusiveSquelch) || !scope.hasRadioIdentity()) {
         return;
     }
     // Engine-owned native squelch keeps each stable receiver's manual/Auto
     // preference separate. The backend's RtlSlices document remains the sole
     // owner of accepted enabled/absolute-threshold state.
-    m_clientSquelchFeature = m_receiveSquelchModel
+    m_clientSquelchFeature = m_exclusiveSquelch
         ? QStringLiteral("ReceiveSquelchIntent-%1").arg(m_slice->sliceId())
         : QStringLiteral("SquelchIntent");
     m_clientSquelchScope = scope;
@@ -1622,6 +1679,10 @@ void RxApplet::saveClientSquelchIntent()
 
 void RxApplet::setSqlMode(SqlMode m, bool propagateToRadio)
 {
+    // Every route into Auto (cycle, restore, slice switch) passes here.
+    if (m == SqlMode::Auto && !autoSqlAvailable()) {
+        m = SqlMode::Manual;
+    }
     if (propagateToRadio) {
         m_clientSqlAwaitingReport = false;
     }
@@ -1675,7 +1736,7 @@ void RxApplet::setSqlMode(SqlMode m, bool propagateToRadio)
     if (propagateToRadio && m_slice) {
         saveClientSquelchIntent();
         const bool sqOn = (m != SqlMode::Off);
-        const int level = (m == SqlMode::Auto && !m_receiveSquelchModel)
+        const int level = (m == SqlMode::Auto && !m_exclusiveSquelch)
             ? autoSqlMarginDb()
             : sqlManualLevel();
         // For an absolute detector Auto starts from the accepted/manual
@@ -2019,8 +2080,8 @@ void RxApplet::setRadioModel(RadioModel* radioModel)
     m_radioModel = radioModel;
     m_receiveFilterControl = m_radioModel && m_radioModel->isConnected()
         ? m_radioModel->backendCapabilities().receiveFilterControl : std::nullopt;
-    m_receiveSquelchModel = m_radioModel && m_radioModel->isConnected()
-        ? m_radioModel->backendCapabilities().receiveSquelchModel : std::nullopt;
+    m_exclusiveSquelch = m_radioModel && m_radioModel->isConnected()
+        ? exclusiveSquelchScaleValue(m_radioModel->backendCapabilities().squelchLevelScale) : std::nullopt;
     if (!m_radioModel) {
         m_filterPassband->setEnabled(true);
         m_filterPassband->setAccessibleDescription(
@@ -2030,10 +2091,10 @@ void RxApplet::setRadioModel(RadioModel* radioModel)
         m_filterAvailability = new ControlAvailabilityRegistry(*m_radioModel, this);
         const auto supportsSquelch = [this](bool connected, const RadioCapabilities& caps) {
             if (!m_slice) {
-                return !caps.receiveSquelchModel;
+                return !exclusiveSquelchScale(caps.squelchLevelScale);
             }
             return ModeFilters::squelchAvailableInMode(m_slice->mode(),
-                connected && caps.receiveSquelchModel ? &*caps.receiveSquelchModel : nullptr,
+                connected ? exclusiveSquelchScale(caps.squelchLevelScale) : nullptr,
                 connected && caps.hasModeIndependentSquelch, usingExternalReceiveSquelch());
         };
         m_filterAvailability->registerWidget(m_sqlBtn,
@@ -2068,8 +2129,8 @@ void RxApplet::setRadioModel(RadioModel* radioModel)
         connect(m_radioModel, &RadioModel::capabilitiesChanged, this,
                 [this](bool connected, const RadioCapabilities& caps) {
             m_receiveFilterControl = connected ? caps.receiveFilterControl : std::nullopt;
-            m_receiveSquelchModel = connected ? caps.receiveSquelchModel : std::nullopt;
-            if (m_receiveSquelchModel && m_slice && !m_clientSquelchScope.hasRadioIdentity()) {
+            m_exclusiveSquelch = connected ? exclusiveSquelchScaleValue(caps.squelchLevelScale) : std::nullopt;
+            if (m_exclusiveSquelch && m_slice && !m_clientSquelchScope.hasRadioIdentity()) {
                 setSlice(m_slice);
             }
             configureRepeaterReverseControl();
@@ -2117,7 +2178,7 @@ void RxApplet::setRadioModel(RadioModel* radioModel)
     configureFmToneControls();
     syncAgcSliderFromSlice();
     if (m_slice) {
-        if (m_receiveSquelchModel) { setSlice(m_slice); }
+        if (m_exclusiveSquelch) { setSlice(m_slice); }
         updateModeSettings(m_slice->mode());
     }
 }
@@ -3105,7 +3166,7 @@ QString RxApplet::formatStepLabel(int hz)
 bool RxApplet::squelchAvailableInMode(const QString& mode) const
 {
     return ModeFilters::squelchAvailableInMode(mode,
-        m_receiveSquelchModel ? &*m_receiveSquelchModel : nullptr,
+        m_exclusiveSquelch ? &*m_exclusiveSquelch : nullptr,
         m_radioModel && m_radioModel->isConnected()
             && m_radioModel->backendCapabilities().hasModeIndependentSquelch,
         usingExternalReceiveSquelch());
