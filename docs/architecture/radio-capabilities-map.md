@@ -544,6 +544,23 @@ stay on the echo alone. HL2, ANAN and RTL-SDR declare `binsAbsolute = true`,
 each quoting the expression that produces its bins; ANAN is the one whose loop
 this turned back on.
 
+**The manual Black Level reads it as the row's unit too.** A backend with no
+waterfall plane of its own sends its pan frame on as the row
+(`RadioModel::onBackendSpectrumFrame`), so the row is the pan's absolute dB
+(dBFS under a dBm label), where a Flex tile is intensity (about 96..120). The
+manual Black Level (button on Off) is a threshold in the row's unit. The widget
+holds no record of where a row came from, so
+`SpectrumWidget::intensityToWaterfallLevel` reads `binsAbsolute` as a proxy for
+it and passes it to `WaterfallLevelMap::level` as `rowsAreAbsoluteDb`: false
+keeps the tile law `160 - level`, true takes `-60 dB - level`. SW and HW do not
+read the flag.
+
+The proxy holds for HL2, ANAN and RTL-SDR. It does not hold for Icom or the
+Demo: `IcomCivBackend` (scope rows through `toDbm`) and `SimBackend`
+(`SimSignalSource`, floor -120) send dB rows down the same path and declare no
+`binsAbsolute`, so Off on either keeps the tile law and draws every row black,
+and NB Blank keeps its tile ratio test, which never fires on a dB row.
+
 **THE HL2 KEEPS THE PERMISSIVE DEFAULT, and that is deliberate rather than an
 omission.** `Hl2Backend::capabilities()` never assigns the field and says why at
 the point where it would: the flag answers two questions, and on this radio the
