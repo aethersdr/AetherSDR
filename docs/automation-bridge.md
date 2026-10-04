@@ -3003,10 +3003,11 @@ Accepts `on`/`off` (also `1`/`0`, `true`/`false`, `enable`/`disable`). The radio
 echoes the change asynchronously — re-read with `get transmit showTxInWaterfall`.
 
 On a radio whose waterfall rows are made on this host (Hermes-Lite 2, ANAN,
-Icom, RTL-SDR) there is no radio-side display engine and no echo. The flag is a
-client setting there: the verb applies it at once through
-`RadioModel::requestLocalShowTxInWaterfall`, remembers it per radio, and the
-note says so.
+Icom, RTL-SDR, and the demo simulator) there is no radio-side display engine
+and no echo. The flag is a client setting there: the verb applies it at once
+through `RadioModel::requestLocalShowTxInWaterfall`, remembers it per radio,
+and the note says so. The demo, ANAN and RTL-SDR cannot key, so there the flag
+is set and stored and no keyed row is ever drawn.
 
 ```json
 ← {"ok":true,"txwaterfall":true,"note":"client-side flag on this radio, applied now; get transmit showTxInWaterfall reads it"}

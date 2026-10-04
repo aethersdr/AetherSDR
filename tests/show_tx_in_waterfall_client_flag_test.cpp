@@ -7,8 +7,11 @@
 #include "TestSettingsProfile.h"
 #include "core/AutomationServer.h"
 #include "core/ClientDisplaySettings.h"
+#include "core/backends/SliceDelta.h"
 #include "core/backends/hl2/Hl2Backend.h"
+#include "models/PanadapterModel.h"
 #include "models/RadioModel.h"
+#include "models/SliceModel.h"
 
 #include <QCoreApplication>
 #include <QJsonObject>
@@ -27,6 +30,10 @@ struct RadioModelWakeTestAccess {
     {
         model.m_lastInfo.serial = serial;
         model.onConnected();
+    }
+    static void setSerial(RadioModel& model, const QString& serial)
+    {
+        model.m_lastInfo.serial = serial;
     }
     static void disconnect(RadioModel& model)
     {
@@ -138,6 +145,45 @@ int main(int argc, char** argv)
         RadioModelWakeTestAccess::connectAs(radio, serialA);
         check(!radio.transmitModel().showTxInWaterfall(), "and comes back as off");
         RadioModelWakeTestAccess::disconnect(radio);
+    }
+
+    // Production HL2 wiring, and the connect edge through the backend's own
+    // connected(), then a pan and a slice in the order Hl2Backend publishes
+    // them: the model already holds the stored flag at each announcement.
+    // What MainWindow does with it is not tested here.
+    {
+        CDS::saveShowTxInWaterfall(scopeA, true, true);
+        RadioModel radio;
+        check(radio.rebuildBackendForTest(QStringLiteral("hl2")) && radio.backend(),
+              "fixture: the production HL2 backend is wired");
+        IRadioBackend* backend = radio.backend();
+        RadioModelWakeTestAccess::setSerial(radio, serialA);
+        check(!radio.transmitModel().showTxInWaterfall(), "fixture: false before the connect");
+
+        int atConnected = -1, atPan = -1, atSlice = -1;
+        const auto flag = [&radio] { return radio.transmitModel().showTxInWaterfall() ? 1 : 0; };
+        QObject::connect(&radio, &RadioModel::connectionStateChanged, &radio,
+                         [&](bool up) { if (up) { atConnected = flag(); } });
+        QObject::connect(&radio, &RadioModel::panadapterAdded, &radio,
+                         [&](PanadapterModel*) { atPan = flag(); });
+        QObject::connect(&radio, &RadioModel::sliceAdded, &radio,
+                         [&](SliceModel*) { atSlice = flag(); });
+
+        const QString pan = QStringLiteral("seam-pan");
+        emit backend->connected();
+        emit backend->panCenterBandwidthChanged(pan, 7.1, 0.192);
+        SliceDelta slice;
+        slice.panId = pan;
+        slice.frequency = 7.1;
+        slice.mode = QStringLiteral("USB");
+        slice.inUse = true;
+        emit backend->sliceChanged(0, slice);
+
+        check(atConnected == 1, "restored before connectionStateChanged(true) is emitted");
+        check(atPan == 1, "and held when the first pan is announced");
+        check(atSlice == 1, "and when the first slice is announced");
+        RadioModelWakeTestAccess::disconnect(radio);
+        CDS::saveShowTxInWaterfall(scopeA, true, false);
     }
 
     // The real HL2 backend, never connected: the same route, and no identity

@@ -6895,7 +6895,8 @@ void RadioModel::onConnected()
 
     // A Flex reports show_tx_in_waterfall in its transmit status. A radio with
     // no display engine reports nothing and a disconnect clears the model, so
-    // the remembered value goes back in here, before the GUI wires its pans.
+    // the remembered value goes back in here: the model holds it before
+    // connectionStateChanged and before the backend announces a pan or slice.
     // No-op on a Flex.
     restoreClientShowTxInWaterfall();
 
