@@ -133,6 +133,11 @@ int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
 
+    // Declared at main scope because the `hl2` factory section 5 installs
+    // captures it by reference and stays installed until the process exits:
+    // every later rebuild of `hl2` writes through it.
+    RecorderState rec;
+
     // ---- 1. the declaration exists at all ----
     check(OfflineHealthRegistry::declaredFor(QStringLiteral("hl2")),
           "hl2 declared an offline health source (registrar was linked in)");
@@ -194,7 +199,6 @@ int main(int argc, char** argv)
     // resolves. OfflineHealthRegistry::declare() warns on a re-declaration --
     // that warning is this line, and it is expected output.
     {
-        RecorderState rec;
         OfflineHealthRegistry::declare(
             QStringLiteral("hl2"), [&rec](QObject*) {
                 return std::unique_ptr<IOfflineHealthSource>(
