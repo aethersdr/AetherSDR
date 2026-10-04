@@ -90,10 +90,26 @@ RUN git clone --depth 1 --branch "${QT_GIT_TAG}" "${QT_GIT}/qtbase.git" /tmp/qtb
 # Addon modules, dependency order: shadertools before multimedia. Each is
 # configured through the installed qtbase (qt-configure-module), which
 # carries the sanitizer feature over.
-RUN for m in qtshadertools qtwebsockets qtserialport qtmultimedia; do \
+#
+# QtMultimedia builds with the base image's uninstrumented tools
+# (QT_HOST_PATH + QT_FORCE_FIND_TOOLS): Qt 6.12's TSan-built `qsb -O` hangs
+# waiting on its spirv-opt child. The libraries keep TSan. QT_HOST_ROOT pins
+# the plain Qt before QT_ROOT is re-pointed below. The checks read each
+# binary's own DT_NEEDED entries, because ldd also lists libtsan for anything
+# linked against the TSan QtCore; a failed read fails the build.
+ENV QT_HOST_ROOT=${QT_ROOT}
+RUN test -x "${QT_HOST_ROOT}/bin/qsb" \
+    && host_dynamic="$(readelf -d "${QT_HOST_ROOT}/bin/qsb")" \
+    && ! printf '%s\n' "$host_dynamic" | grep -q 'NEEDED.*libtsan' \
+    && for m in qtshadertools qtwebsockets qtserialport qtmultimedia; do \
         git clone --depth 1 --branch "${QT_GIT_TAG}" "${QT_GIT}/${m}.git" "/tmp/${m}-src" \
+        && host_tools="" \
+        && if [ "$m" = qtmultimedia ]; then \
+               host_tools="-DQT_HOST_PATH=${QT_HOST_ROOT} -DQT_FORCE_FIND_TOOLS=ON"; \
+           fi \
         && "${QT_TSAN_ROOT}/bin/qt-configure-module" "/tmp/${m}-src" -- \
             -B "/tmp/${m}-build" \
+            $host_tools \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
             -DQT_BUILD_EXAMPLES=OFF \
             -DQT_BUILD_TESTS=OFF \
@@ -105,6 +121,8 @@ RUN for m in qtshadertools qtwebsockets qtserialport qtmultimedia; do \
     && for m in Multimedia WebSockets SerialPort ShaderTools; do \
            test -f "${QT_TSAN_ROOT}/lib/cmake/Qt6${m}/Qt6${m}Config.cmake" \
            || { echo "Qt6${m} did not install"; exit 1; }; \
+           readelf -d "${QT_TSAN_ROOT}/lib/libQt6${m}.so.6" | grep -q 'NEEDED.*libtsan' \
+           || { echo "Qt6${m} is not TSan-instrumented"; exit 1; }; \
        done
 
 # qtkeychain against THAT Qt, itself instrumented, same pin as the base image.

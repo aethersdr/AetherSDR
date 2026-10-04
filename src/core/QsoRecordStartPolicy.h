@@ -25,10 +25,28 @@ enum class RecordStartDecision {
 // consulted; a non-routing caller (AutomationServer::doRecord) must not open a
 // local WAV. It gets its own value because the reason is not PC Audio.
 //
-// `clientSideMode`      AppSettings "RecordingMode" == "Client" (the default).
+// `clientSideMode`      Whether THIS CLIENT is the recorder: the operator's
+//                       "RecordingMode" == "Client" (the default), or
+//                       Radio-Side selected on a radio with no radio-side
+//                       recorder to reach — see recordsOnClient() below.
 // `pcAudioEnabled`      AppSettings "PcAudioEnabled" == "True" (the default).
 // `backendOwnsRxAudio`  IRadioBackend::ownsRxAudio(): false for Flex, true for
 //                       HL2 and the sim (remote_audio_rx not in the path).
+
+// Which recorder does REC/PLAY reach? The one routing decision every surface
+// shares (VFO flag, AetherRX, MIDI, this recorder's own start policy).
+// Radio-Side recording is `slice set <n> record=/play=` on the command plane;
+// a radio without one (HL2, ANAN, Icom, RTL) has no radio-side recorder, so
+// there the setting falls back to the client recorder.
+//
+// `clientSideSetting`            AppSettings "RecordingMode" == "Client".
+// `radioSideRecordingReachable`  RadioModel::radioSideRecordingReachable().
+constexpr bool recordsOnClient(bool clientSideSetting,
+                               bool radioSideRecordingReachable)
+{
+    return clientSideSetting || !radioSideRecordingReachable;
+}
+
 constexpr RecordStartDecision evaluateRecordStart(bool clientSideMode,
                                                   bool pcAudioEnabled,
                                                   bool backendOwnsRxAudio)

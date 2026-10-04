@@ -5,9 +5,11 @@
 // packet MetisClient would send.
 
 #include "core/backends/hl2/Hl2Backend.h"
+#include "core/backends/hl2/Hl2RxDsp.h"
 #include "core/backends/hl2/Hl2Settings.h"
 #include "core/backends/hl2/MetisClient.h"
 #include "core/backends/hl2/MetisProtocol.h"
+#include "gui/ClientFftSmoothingGate.h"
 #include "core/AppSettings.h"
 
 #include "TestSettingsProfile.h"
@@ -20,6 +22,8 @@
 
 #include <cmath>
 #include <cstdio>
+#include <optional>
+#include <string>
 
 namespace AetherSDR::hl2 {
 struct MetisClientTestAccess {
@@ -45,8 +49,33 @@ struct Hl2TxGateTestAccess {
         QMetaObject::invokeMethod(b.m_metis, [] {}, Qt::BlockingQueuedConnection);
         QCoreApplication::sendPostedEvents(&b, QEvent::MetaCall);
     }
+    // Receiver 0 gets a configured chain on this thread, owned by the backend
+    // (its destructor deletes m_rx[].dsp), so pushed verbs land in a real spectrum.
+    static Hl2RxDsp* attachSpectrumDsp(Hl2Backend& b)
+    {
+        if (b.m_rx.empty())
+            return nullptr;
+        auto* dsp = new Hl2RxDsp(nullptr);
+        Hl2RxDsp::Config cfg;
+        cfg.inputSampleRateHz = 48000;
+        cfg.audioSampleRateHz = 48000;
+        cfg.dspBlockSize = 1024;
+        cfg.fftSize = 256;
+        cfg.blockForOutput = true;
+        std::string err;
+        if (!dsp->configure(cfg, &err)) {
+            delete dsp;
+            return nullptr;
+        }
+        b.m_rx[0].dsp = dsp;
+        return dsp;
+    }
+    static int panAverage(const Hl2Backend& b) { return b.m_rx[0].panAverage; }
+    static bool panWeighted(const Hl2Backend& b) { return b.m_rx[0].panWeightedAverage; }
     static int receiverCeiling(const Hl2Backend& b) { return b.receiverCeiling(); }
     static bool keyed(const Hl2Backend& b) { return b.m_keyed; }
+    static void setKeyedFlag(Hl2Backend& b, bool keyed) { b.m_keyed = keyed; }
+    static void publish(Hl2Backend& b, const Hl2Telemetry& t) { b.publishTelemetry(t); }
     static bool hangArmed(const Hl2Backend& b) { return b.m_cwHangTimer->isActive(); }
     // Stops the timer first, so this proves what the callback decides, not
     // whether the timer was stopped.
@@ -78,6 +107,15 @@ struct Hl2TxGateTestAccess {
         QMetaObject::invokeMethod(b.m_metis, [metis = b.m_metis] {
             MetisClientTestAccess::setStreaming(*metis);
         }, Qt::BlockingQueuedConnection);
+    }
+    // The radio's transmit tail after an unkey (Hl2Backend::kTxTailHoldMs):
+    // parked so it cannot end on its own, and expired here by hand.
+    static void parkTxTail(Hl2Backend& b) { b.m_txTailHoldMs = 60 * 60 * 1000; }
+    static bool txTailPending(const Hl2Backend& b) { return b.m_txTailPending; }
+    static void expireTxTail(Hl2Backend& b)
+    {
+        b.m_txTailTimer->stop();
+        b.finishTxTail();
     }
     // The last drive level carried by the EP2 packets MetisClient would send
     // next, after every queued call has landed; -1 when none carries one.
@@ -127,6 +165,17 @@ static void capabilitiesSeam()
     // Disconnected, the slice capacity is the receivers held; connected, it is
     // the receiver ceiling (board count capped by the link budget at the span).
     check(caps.maxSlices == 1, "disconnected: maxSlices is the one receiver held");
+    // The HL2 averages its own panadapter (Hl2Spectrum, per FFT AVG), so it
+    // engages the record that turns SpectrumWidget's EMA off (RFC #5782 §8).
+    check(caps.backendPanAveraging.has_value()
+              && caps.backendPanAveraging->msPerAverageStep == Hl2Backend::kMsPerAverageStep
+              && Hl2Backend::kMsPerAverageStep == 10,
+          "backendPanAveraging engaged at 10 ms per FFT AVG step");
+    check(!AetherSDR::clientFftSmoothingEnabled(true, caps.backendPanAveraging.has_value()),
+          "connected to an HL2, the widget's own EMA is skipped");
+    check(AetherSDR::clientFftSmoothingEnabled(false, caps.backendPanAveraging.has_value())
+              && AetherSDR::clientFftSmoothingEnabled(true, false),
+          "control: disconnected, or a backend that does not average, keeps the EMA");
     Access::metisEdge(b, "linkUp");
     const RadioCapabilities live = b.capabilities();
     check(live.maxSlices == Access::receiverCeiling(b)
@@ -285,6 +334,7 @@ static void tunePowerAndRestore()
     Hl2Backend b;
     const auto reg = [&b] { return health(b, "txDriveRegister").toInt(); };
     Access::startSession(b);
+    Access::parkTxTail(b);
 
     b.setTxPower(100);
     check(reg() == driveFor(100) && Access::wireDrive(b) == driveFor(100),
@@ -292,14 +342,22 @@ static void tunePowerAndRestore()
     b.setTune(true, 10, authority.operation);
     check(reg() == driveFor(10) && Access::wireDrive(b) == driveFor(10),
           "#4549: TUNE drives at tune power, not the RF power slider");
+    // The radio still radiates the tune tone for its transmit tail after the
+    // MOX-off, so RF power comes back only when the tail ends (#6104).
     b.setKeying(false, authority.operation);
+    check(Access::txTailPending(b) && reg() == driveFor(10) && Access::wireDrive(b) == -1,
+          "#4549: an unkey that bypasses setTune() holds the tune drive through the tail");
+    Access::expireTxTail(b);
     check(reg() == driveFor(100) && Access::wireDrive(b) == driveFor(100),
-          "#4549: an unkey that bypasses setTune() still restores RF power");
+          "#4549: an unkey that bypasses setTune() still restores RF power after the tail");
 
     b.setTune(true, 10, authority.operation);
     b.setTune(false, 10, authority.operation);
+    check(Access::txTailPending(b) && reg() == driveFor(10) && Access::wireDrive(b) == driveFor(10),
+          "#4549: releasing TUNE holds the tune drive through the tail");
+    Access::expireTxTail(b);
     check(reg() == driveFor(100) && Access::wireDrive(b) == driveFor(100),
-          "#4549: releasing TUNE restores RF power");
+          "#4549: releasing TUNE restores RF power after the tail");
 
     b.setTune(true, 10, authority.operation);
     Access::wireDrive(b);
@@ -307,8 +365,11 @@ static void tunePowerAndRestore()
     check(reg() == driveFor(10) && Access::wireDrive(b) == -1,
           "#4549: a mid-tune power change leaves the tune carrier alone");
     b.setTune(false, 10, authority.operation);
+    check(reg() == driveFor(10) && Access::wireDrive(b) == -1,
+          "#4549: the power set during the tune waits for the tail");
+    Access::expireTxTail(b);
     check(reg() == driveFor(40) && Access::wireDrive(b) == driveFor(40),
-          "#4549: the unkey applies the power set during the tune");
+          "#4549: the tail's end applies the power set during the tune");
 
     // #4912: requested vs written, in a TX-capable session.
     b.setTxPower(60);
@@ -317,6 +378,18 @@ static void tunePowerAndRestore()
           "#4912: health reports the register the wire carries");
     check(health(b, "txDriveGated").isValid() && !health(b, "txDriveGated").toBool(),
           "#4912: drive is not reported gated in a TX-capable session");
+
+    // #4912 inside a tail: the request moves, the register and wire do not.
+    b.setTune(true, 10, authority.operation);
+    b.setTune(false, 10, authority.operation);
+    Access::wireDrive(b);
+    b.setTxPower(70);
+    check(health(b, "rfPowerPercent").toInt() == 70 && reg() == driveFor(10)
+              && Access::wireDrive(b) == -1,
+          "#4912: during the tail, health reports the tune register the wire still carries");
+    Access::expireTxTail(b);
+    check(reg() == driveFor(70) && Access::wireDrive(b) == reg(),
+          "#4912: after the tail, health reports the restored register the wire carries");
 }
 
 static void driveGateHealthRows()
@@ -364,6 +437,70 @@ static void notchIdsAreNeverReused()
     check(changed.isEmpty() && removed.isEmpty(), "#4780: a retired id addresses nothing");
 }
 
+// TX:FWDPWR takes the window peak only while keyed; unkeyed it keeps the last
+// value. Only the m_keyed flag is set: no transmitter exists here.
+static void forwardPowerWindowPeakWhileKeyed()
+{
+    Hl2Backend b;
+    QSignalSpy meters(&b, &IRadioBackend::meterUpdate);
+    auto fwdDbm = [&](bool keyed, int last, std::optional<int> peak) {
+        Access::setKeyedFlag(b, keyed);
+        hl2::Hl2Telemetry t;
+        t.forwardPowerRaw = last;
+        t.forwardPowerPeakRaw = peak;
+        meters.clear();
+        Access::publish(b, t);
+        for (const auto& args : meters) {
+            if (args.at(0).toString() == QStringLiteral("TX:FWDPWR"))
+                return args.at(1).toDouble();
+        }
+        return std::nan("");
+    };
+    const double loud = fwdDbm(false, 3000, std::nullopt);
+    const double quiet = fwdDbm(false, 100, std::nullopt);
+    check(std::isfinite(loud) && std::isfinite(quiet) && loud > quiet,
+          "fwd power: 3000 counts reads above 100 counts");
+    check(fwdDbm(false, 100, 3000) == quiet,
+          "fwd power unkeyed: the last value, not the window peak");
+    check(fwdDbm(true, 100, 3000) == loud,
+          "fwd power keyed: the window peak (3000), not the last value (100)");
+    Access::setKeyedFlag(b, false);
+    fwdDbm(false, 100, std::nullopt);
+    check(fwdDbm(true, 100, std::nullopt) == quiet,
+          "fwd power keyed with no RADDR 1 in the window: falls back to the last value");
+    Access::setKeyedFlag(b, false);
+}
+
+static void panAveragingSeam()
+{
+    // FFT AVG through the seam verbs RadioModel calls (RFC #5782 q2): stored
+    // on the receiver for rebuilds, and pushed into the live spectrum.
+    Hl2Backend b;
+    hl2::Hl2RxDsp* dsp = Access::attachSpectrumDsp(b);
+    check(dsp != nullptr, "receiver 0 holds a configured chain");
+    if (!dsp)
+        return;
+    check(dsp->spectrumAverageMsApplied() == 0.0 && !dsp->spectrumLogAverageApplied(),
+          "control: a fresh chain does not average, in power");
+    b.setPanAverage(QString(), 30);
+    b.setPanWeightedAverage(QString(), true);
+    QCoreApplication::sendPostedEvents(dsp, QEvent::MetaCall);
+    check(Access::panAverage(b) == 30 && Access::panWeighted(b),
+          "FFT AVG and weighted are held on the receiver for a rebuilt chain");
+    check(dsp->spectrumAverageMsApplied() == 300.0, "FFT AVG 30 reaches the spectrum as 300 ms");
+    check(dsp->spectrumLogAverageApplied(), "weighted on reaches the spectrum as log-recursive");
+    b.setPanAverage(QString(), 250);
+    b.setPanWeightedAverage(QString(), false);
+    QCoreApplication::sendPostedEvents(dsp, QEvent::MetaCall);
+    check(Access::panAverage(b) == 100 && dsp->spectrumAverageMsApplied() == 1000.0,
+          "FFT AVG above range clamps to 100 (1 s)");
+    check(!dsp->spectrumLogAverageApplied(), "weighted off returns the spectrum to power");
+    b.setPanAverage(QStringLiteral("no-such-pan"), 5);
+    QCoreApplication::sendPostedEvents(dsp, QEvent::MetaCall);
+    check(Access::panAverage(b) == 100 && dsp->spectrumAverageMsApplied() == 1000.0,
+          "an unknown pan id changes nothing");
+}
+
 int main(int argc, char** argv)
 {
     TestSettingsProfile profile(QStringLiteral("hl2-backend-seam-test"));
@@ -386,6 +523,8 @@ int main(int argc, char** argv)
     tunePowerAndRestore();
     driveGateHealthRows();
     notchIdsAreNeverReused();
+    forwardPowerWindowPeakWhileKeyed();
+    panAveragingSeam();
 
     std::fprintf(stderr, "hl2_backend_seam_test: %s\n",
                  g_failures == 0 ? "all checks passed" : "FAILED");

@@ -685,9 +685,7 @@ void ShortcutManager::rebuildShortcuts(QWidget* parent,
         if (a.currentKey.isEmpty() || !a.handler) continue;
 
         auto* sc = new QShortcut(a.currentKey, parent);
-        // A window-management exemption must never widen a keying action.
-        const bool windowManagement = a.policy == ShortcutPolicy::WindowManagement
-            && !a.keysTx && !a.txHandler;
+        const bool windowManagement = isWindowManagement(a);
         sc->setContext(windowManagement ? Qt::ApplicationShortcut : Qt::WindowShortcut);
         sc->setAutoRepeat(a.autoRepeat);
         // A disabled QShortcut is skipped by Qt's shortcut map, so its key
@@ -732,6 +730,18 @@ const ShortcutManager::Action* ShortcutManager::actionForKey(const QKeySequence&
         if (a.currentKey == key) return &a;
     }
     return nullptr;
+}
+
+const ShortcutManager::Action* ShortcutManager::operatingActionForKey(
+    const QKeySequence& key) const
+{
+    const Action* a = actionForKey(key);
+    return a && !isWindowManagement(*a) ? a : nullptr;
+}
+
+bool ShortcutManager::isWindowManagement(const Action& a)
+{
+    return a.policy == ShortcutPolicy::WindowManagement && !a.keysTx && !a.txHandler;
 }
 
 QString ShortcutManager::conflictCheck(const QKeySequence& key,

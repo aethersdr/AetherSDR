@@ -9,9 +9,8 @@ namespace AetherSDR::hl2 {
 // Owns everything relating raw dBFS to dBm, plus the AGC setpoint that must
 // move with it, so the LNA gain and its display offset cannot drift apart.
 //
-//   * LNA gain: exact while the commanded code is the applied gain. A fold
-//     above code 31 was reported (Hermes-Lite2 #177), but ad9866.v at 883a338
-//     passes all six bits natively; keep the documented range until reconciled.
+//   * LNA gain: exact while the commanded code is the applied gain; ad9866.v
+//     at 883a338 passes all six bits natively, so no fold above code 31 (#5943).
 //   * fullScaleDbm: derived from the AD9866 datasheet (kFullScaleDbmAtZeroGain),
 //     not a per-unit calibration; hl2_dbref_test asserts the step.
 //   * AGC ceiling: AGC-T (0..100) -> WDSP max gain, referred to the LNA so a
@@ -36,10 +35,10 @@ public:
     //   into 400 ohm secondary, 0.5/400              1.25 mW = +0.97 dBm at ADC
     //   50->400 ohm transformer (5:14) preserves power
     //   + transformer/N2ADR filter loss ahead of ADC  ~2 dB  => ~+3 dBm
-    // Unconfirmed by measurement; DL1YCF's "-34 dBm clip at +33 dB" depends on
-    // the open code-45 fold question (#5752). Not the openHPSDR +14 dB per-unit
-    // average. The transformer degrades above ~20 MHz (-12.5 dB return loss at
-    // 30 MHz), leaving a band-dependent residual on 10 m.
+    // Unconfirmed by measurement; DL1YCF's "-34 dBm clip at +33 dB" cannot
+    // confirm it, the gain his radio delivered being unknown. Not the openHPSDR
+    // +14 dB per-unit average. The transformer degrades above ~20 MHz (-12.5 dB
+    // return loss at 30 MHz), leaving a band-dependent residual on 10 m.
     static constexpr double kFullScaleDbmAtZeroGain = 3.0;
 
     // Upper bound on the referred ceiling. Referring may exceed the slider's
@@ -99,6 +98,17 @@ public:
     double lnaOffsetDb() const noexcept
     {
         return kReferenceLnaGainDb - m_lnaGainDb;
+    }
+
+    // LNA gain at which WdspChannel's level-squelch map holds unshifted. on8st's
+    // brackets fit -12 dB, supported but not established (#6092).
+    static constexpr double kLevelSquelchAnchorLnaGainDb = -12.0;
+
+    // dB added to the amsq map so the gate keeps one antenna-referred point at
+    // any LNA gain; amsq gates raw dBFS, which moves dB for dB with the LNA.
+    double levelSquelchOffsetDb() const noexcept
+    {
+        return m_lnaGainDb - kLevelSquelchAnchorLnaGainDb;
     }
 
     // The operator's AGC-T, referred to this reference. Same invariant as the

@@ -31,6 +31,9 @@
 #include "gui/DaxRestorePolicy.h"       // #4558 last-session DAX restore window
 #include "gui/KiwiRebindTracker.h"      // #4158 band-recall Kiwi re-bind policy
 #include "gui/SplitAudioProfile.h"       // #2242 remembered split audio arrangement
+#include "gui/SplitQsyObservationPolicy.h"
+#include "gui/SplitQsySettings.h"
+#include "gui/ShortcutRefusalNotice.h"
 #include "core/CatPort.h"
 #ifdef HAVE_WEBSOCKETS
 #include "core/TciServer.h"
@@ -128,11 +131,13 @@ class AetherClockEngine;
 class AetherClockModel;
 class AutomationServer;
 class ConnectionPanel;
+class Ctr2ProxyModel;
 class ContributeDialog;
 class TitleBar;
 class KiwiSdrManager;
 struct KiwiSdrAntennaProfile;
 class SpectrumWidget;
+class StatusBarNoticeLabel;
 class SpectrumOverlayMenu;
 class IRadioBackend;
 class PanadapterApplet;
@@ -370,6 +375,7 @@ private slots:
     // broadcast all stay in lockstep regardless of which UI changed it.
     // See issue #1764.
     void applyMasterVolume(int pct);
+    void syncTitleBarOutput();
 
 private:
     enum class TuneIntent {
@@ -640,6 +646,7 @@ private:
     // TX or RX instance.
     void applyGraphicEqToClientEq(bool transmit);
     void wireExternalControllers(); // MainWindow_Controllers.cpp
+    void setupCtr2Proxy();          // MainWindow_Controllers.cpp
     void wireKiwiSdr();             // MainWindow_KiwiSdr.cpp
     void refreshKiwiSdrAppletReceivers();
     void refreshKiwiSdrSlices();
@@ -688,6 +695,10 @@ private:
     SliceModel* flexRxPanSourceSlice() const;
     void syncFlexRxPanToAudioEngine();
     void syncActiveSliceSquelchLineToSpectrums();
+    // RadioCapabilities::squelchLevelScale for the active slice's mode, pushed to
+    // every SpectrumWidget and to RxApplet's Auto availability.
+    std::optional<SquelchLevelScale> activeSliceSquelchScale() const;
+    void syncSquelchScaleToUi();
     bool autoSquelchShouldRunOnSpectrum(const QString& panId,
                                         const SpectrumWidget* spectrum) const;
     void syncActiveSliceAutoSquelchToSpectrums();
@@ -808,6 +819,7 @@ private:
     int cloneDisplaySettingsToAllPans(PanadapterApplet* source);
     AetherSDR::DeferredSettingsWrites m_pendingDisplayWrites;
     void scheduleClientWaterfallRateSave(int panIndex, int rate);
+    void scheduleClientFftAverageSave(int panIndex, int average, bool weighted);
     void wirePanDisplayStatus(PanadapterApplet* applet, PanadapterModel* pan);
     void reassertUnmutedSliceAudioForPan(const QString& panId);
     void onMuteAllSlicesToggle();
@@ -1030,6 +1042,9 @@ private:
     void applyFlexControlWheelAction(const QString& actionId, int steps);
     void syncFlexControlDialog();
     void syncFlexControlIndicatorForSettings();
+    // Start or stop the Ulanzi Dial backend to match its enable setting.
+    void applyUlanziDialEnabled();
+    bool ulanziDialEnabled() const;
     void setFlexControlHardwareIndicator(int button);
     QJsonObject buildControlDevicesSnapshot() const;
     void showPropDashboard();
@@ -1122,6 +1137,9 @@ private:
     // hardcoded Qt::Key_Space) so a reassigned PTT-hold key actually keys the
     // radio. Returns true when the bound key was consumed (#3879).
     bool handlePttHoldShortcut(QKeyEvent* keyEvent, QEvent::Type eventType);
+    // Says once per session that a bound key was refused because keyboard
+    // shortcuts are off. Never consumes the key.
+    void noticeRefusedShortcut(QKeyEvent* keyEvent);
     // Fail-safe-to-RX for the momentary-keying family (PTT-hold, CW straight
     // key / paddles). Called when the window/app is deactivated while a
     // momentary key is "held" in our state — the KeyRelease that would un-key
@@ -1210,7 +1228,7 @@ private:
     CatPort* catPort(int i) const { return m_session->catPort(i); }
 
     // Returns how many CAT ports should be visible in the UI given radio state.
-    // 1 when no radio; maxSlicesForModel() when connected.
+    // 1 when no radio; the backend-aware receiver count when connected.
     int catPortTargetCount() const;
     // Start/stop ports to match CatEnabled master + per-port Enabled flags.
     void applyCatPortCount();
@@ -1445,6 +1463,7 @@ private:
 #else
     UlanziDialBackend*         m_dialBackend{nullptr};
 #endif
+    std::optional<bool>        m_ulanziDialEnabledLogged;  // last enable state logged
     QSet<QString>              m_dialActiveMidiGates;
     // True while the DIAL is holding PTT.  Distinct from m_pttHoldActive so a
     // dial release cannot un-key a PTT the keyboard is still holding.
@@ -1734,6 +1753,8 @@ private:
     bool m_splitActive{false};
     int  m_splitRxSliceId{-1};
     int  m_splitTxSliceId{-1};
+    double m_splitRxFrequencyMhz{0.0};
+    AetherSDR::PendingSliceFrequencyEchoes m_pendingSliceFrequencyEchoes;
     // Split audio memory (#2242). The recorder holds what the operator did to
     // the two slices during this split and outlives the TX slice model, which
     // onSliceRemoved has already destroyed by the time it runs. It is fed ONLY
@@ -1741,6 +1762,7 @@ private:
     // echoes, so a pan moved by another client never becomes a preference
     // (Principle II). See gui/SplitAudioProfile.h.
     AetherSDR::SplitAudioRecorder m_splitAudioRecorder;
+    AetherSDR::SplitQsySettings m_splitQsySettings;
     QVector<QMetaObject::Connection> m_splitAudioConns;
     int m_splitAudioRxSliceId{-1};
     // The RX slice OBJECT the recorder was armed on. The RX-pan restore only
@@ -1891,6 +1913,8 @@ private:
     qint64 m_bsConnectGraceUntilMs{0};   // suppress auto-save right after connect
     bool m_keyboardShortcutsEnabled{false}; // global enable for keyboard shortcuts (Settings menu)
     bool m_pttHoldActive{false};           // true while the PTT-hold key is held (#3879)
+    ShortcutRefusalNotice m_shortcutRefusalNotice; // once per session (#5483)
+    StatusBarNoticeLabel* m_shortcutNoticeLabel{nullptr}; // owned by the status bar
     TxController::Input m_pttHoldInput;
     bool m_cwStraightKeyActive{false};
     TxController::Input m_cwStraightKeyInput;
@@ -1985,6 +2009,9 @@ private:
     QString m_panadapterConnectionAnimationLabel;
     ShortcutManager m_shortcutManager;
     UpdateChecker* m_updateChecker{nullptr};
+
+// CTR2 TCP proxy prototype (MainWindow_Controllers.cpp); never persisted, off at launch
+    Ctr2ProxyModel* m_ctr2ProxyModel{nullptr};
 
 // AetherClock (MainWindow_AetherClock.cpp)
     AetherClockEngine* m_clockEngine{nullptr};

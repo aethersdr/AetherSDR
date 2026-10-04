@@ -3,6 +3,7 @@
 #include "IndependentTxControl.h"
 
 #include "core/RadioSettingsIdentity.h"
+#include "core/RadioSettingsScope.h"
 #include "core/TxCoordinator.h"
 #include "core/PcmFrame.h"
 
@@ -29,6 +30,7 @@
 #include "core/backends/RestoredRadioState.h"
 #include "core/backends/RadioDelta.h"
 #include "core/backends/SliceDelta.h"
+#include "core/backends/SpectrumCoverage.h"
 #include "core/backends/TransmitDelta.h"
 #include "core/backends/TunerDelta.h"
 #include "core/backends/TxAudioSource.h"
@@ -112,7 +114,7 @@ struct MemoryRecallDetails {
 //     backend-owned object returns early on mismatch (RadioModel::setupBackend()).
 //  6. A BACKEND EMITS NOTHING AFTER disconnected(). Frames a worker queued before
 //     stopping are gated on the backend's own connected flag (see SimBackend's
-//     audio forwards). sim_backend_test pins this.
+//     audio and spectrum forwards). sim_backend_test pins this.
 //
 // The interface grows one method at a time per the touchpoint burndown
 // (docs/architecture/aetherd-touchpoints.md).
@@ -167,6 +169,17 @@ public:
     virtual bool ownsRxAudio() const { return false; }
 
     // ---- connection lifecycle ----
+    // Model-owned identity handoff for feature-document owners. A backend
+    // must not reconstruct this scope from a later USB/discovery observation.
+    virtual void configureSettingsScope(const RadioSettingsScope& scope, const RadioSerialIdentity& identity)
+    { Q_UNUSED(scope); Q_UNUSED(identity); }
+    // nullopt retains generic OperatingState ownership. A feature owner
+    // returns its atomic-write result, including refusal, so a failed write
+    // never falls through into a second overlapping writer.
+    virtual std::optional<bool> storeOperatingState(const RadioSettingsScope& scope,
+                                                   const RestoredRadioState& state)
+    { Q_UNUSED(scope); Q_UNUSED(state); return std::nullopt; }
+
     // Typed restore handoff (RFC #4603 proposal B): called by RadioModel BEFORE
     // connectRadio(), only when this backend's clientSettingsDomains is non-empty.
     // The backend stashes what it wants, validates its own extension document here,
@@ -181,13 +194,19 @@ public:
     // declared clientSettingsDomains is non-empty reports its operating state
     // here on demand, and emits operatingStateChanged() (see signals) when it
     // moves. RadioModel debounces the signal and persists the snapshot via
-    // RadioStateMemory::store — the backend never touches the settings store.
+    // storeOperatingState when handled, otherwise RadioStateMemory::store.
     virtual RestoredRadioState currentOperatingState() const { return {}; }
     virtual void disconnectRadio() = 0;
     virtual bool isConnected() const = 0;
 
     // ---- intents DOWN: canonical core-profile verbs (grow per burndown) ----
     // The backend translates each to its vendor wire protocol.
+    // Opt-in for slice frequency/mode/filter, monitor gain/pan/mute and pan
+    // center/bandwidth. Dispatch is never acknowledgment: Confirmed backends
+    // publish accepted values through sliceChanged/panCenterBandwidthChanged,
+    // including after deferred DSP adoption. Refusal/rollback leaves the last
+    // observation intact. This does not grant any capability.
+    virtual ReceiveControlPolicy receiveControlPolicy() const { return ReceiveControlPolicy::Optimistic; }
     // Desktop and daemon receive callers use these intent-bearing adapters.
     // Defaults preserve the existing family implementations below: tuning may
     // still move a hardware receive window, all filter origins reach host DSP,
@@ -206,6 +225,21 @@ public:
             setSliceAgc(sliceId, request.mode, request.threshold);
         }
     }
+    // Desktop adapters. These deliberately do not consult the daemon's
+    // receiveAudioControl record: its authorization/readback contract is
+    // narrower than the existing desktop controls. Unsupported is explicit,
+    // never acceptance through an inherited empty implementation hook.
+    virtual ReceiveDispatch requestSliceDsp(int, const SliceDspRequest&)
+    { return ReceiveDispatch::Unsupported; }
+    virtual ReceiveDispatch requestSliceAudio(int, const SliceAudioRequest&)
+    { return ReceiveDispatch::Unsupported; }
+    virtual ReceiveDispatch requestSliceSquelch(int, const SliceSquelchRequest&)
+    { return ReceiveDispatch::Unsupported; }
+    virtual ReceiveDispatch requestSliceRxAntenna(int, const QString&)
+    { return ReceiveDispatch::Unsupported; }
+    virtual ReceiveDispatch requestSliceLock(int, bool)
+    { return ReceiveDispatch::LocalOnly; }
+
     // Compatibility implementation hooks for backend-internal callers and
     // existing paired AGC users. New receive routing uses the adapters above.
     virtual void setSliceFrequency(int sliceId, double hz) = 0;
@@ -242,6 +276,21 @@ public:
     // Range, which on a VFO-slaved window refuses the drag.
     virtual void setPanCenter(const QString& panId, double hz,
                               PanCenterIntent intent) = 0;
+
+    // A confirmed-control backend admits the receiver and its display intent
+    // together. False means neither intent was accepted; true is admission,
+    // not completion. Observations still arrive only after capture adoption.
+    enum class ReceiveTuneView { Preserve, Reveal, Center };
+    virtual bool requestReceiveTune(int sliceId, double hz, ReceiveTuneView view)
+    {
+        Q_UNUSED(sliceId); Q_UNUSED(hz); Q_UNUSED(view);
+        return false;
+    }
+    virtual bool recenterReceiveCapture(const QString& panId)
+    {
+        Q_UNUSED(panId);
+        return false;
+    }
 
     // Change the panadapter's SPAN. A backend owning its own DDC picks a decimation
     // rate; without this the view widens while the data stays narrow.
@@ -515,8 +564,9 @@ public:
     // "transmit tune N" as text, so FlexBackend ignores this. A backend generating
     // its own carrier needs tunePowerPercent: otherwise it can only key at the RF
     // Power level setTxPower() last pushed. Without a command plane, declaring
-    // canTransmit and transmitDriveControl promises tunePowerPercent is honoured:
-    // RadioModel then withholds the "transmit set tunepower=" drop notice.
+    // canTransmit and transmitDriveControl promises tunePowerPercent is honoured,
+    // and tunePowerAppliesLive promises setTunePower(): RadioModel then withholds
+    // the "transmit set tunepower=" drop notice (while keyed, only with the latter).
     virtual void setTune(bool on, int tunePowerPercent, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {})
     {
         Q_UNUSED(on);
@@ -533,6 +583,13 @@ public:
     // canTransmit and transmitDriveControl: RadioModel then withholds the
     // rfpower drop notice.
     virtual void setTxPower(int percent) { Q_UNUSED(percent); }
+
+    // TUNE power (0..100) changed while the TUNE carrier may be up. NEVER keys:
+    // a backend generating its own carrier re-applies drive to one in progress
+    // and otherwise does nothing, since the next setTune() carries the value.
+    // Owner thread, like setTxPower(). Declaring
+    // TransmitDriveControl::tunePowerAppliesLive promises it is implemented.
+    virtual void setTunePower(int percent) { Q_UNUSED(percent); }
 
     // The operator's CW pitch, in Hz (TransmitModel's range: 100..6000). A
     // host-demodulating backend needs it to place its passband: the marker sits on
@@ -617,6 +674,15 @@ public:
     {
         Q_UNUSED(sliceId); Q_UNUSED(on); Q_UNUSED(level);
     }
+    // CW audio peaking filter (capabilities().hasAudioPeakingFilter): the slice's
+    // enable and 0..100 apf_level together; the backend owns the centre (its CW
+    // pitch) and whether it runs in the current mode. Flex does not override it
+    // (SliceModel sends `apf=`/`apf_level=`). Interim verb: it folds into
+    // #5919's SliceDspRequest::Feature::Apf when that lands.
+    virtual void setSliceApf(int sliceId, bool on, int level)
+    {
+        Q_UNUSED(sliceId); Q_UNUSED(on); Q_UNUSED(level);
+    }
 
     // FM repeater controls.  These are separate radio registers on an Icom
     // (tone enable, tone frequency, duplex direction and duplex magnitude),
@@ -678,17 +744,18 @@ public:
     // radio-wide selected-VFO state, not a memory/slice parameter.
     virtual void setTransmitFrequencyCheck(bool on) { Q_UNUSED(on); }
 
-    // Receive and transmit incremental tuning, Hz relative to the VFO. Two enables and
-    // one offset, the IC-705's shape (21 01 RIT, 21 02 XIT, 21 00 offset). A radio
-    // without RIT does not implement these.
-    virtual void setRitEnabled(bool on) { Q_UNUSED(on); }
-    virtual void setXitEnabled(bool on) { Q_UNUSED(on); }
-    virtual void setRitOffset(int hz) { Q_UNUSED(hz); }
+    // Receive and transmit incremental tuning, Hz relative to the slice's VFO. Per
+    // slice, as FlexLib's Slice.RITOn/RITFreq/XITOn/XITFreq: each slice keeps its own
+    // pair and XIT applies when that slice transmits. A radio with one receiver may
+    // ignore the id. A radio without RIT does not implement these.
+    virtual void setSliceRitEnabled(int sliceId, bool on) { Q_UNUSED(sliceId); Q_UNUSED(on); }
+    virtual void setSliceXitEnabled(int sliceId, bool on) { Q_UNUSED(sliceId); Q_UNUSED(on); }
+    virtual void setSliceRitOffset(int sliceId, int hz) { Q_UNUSED(sliceId); Q_UNUSED(hz); }
 
-    // The TRANSMIT offset. Defaults to setRitOffset() because an IC-705 has ONE shift
-    // register (21 00; 21 01 / 21 02 choose whether it applies to RX, TX or both). A
-    // radio with two registers (Flex rit_freq / xit_freq) overrides this.
-    virtual void setXitOffset(int hz) { setRitOffset(hz); }
+    // The TRANSMIT offset. Defaults to setSliceRitOffset() because an IC-705 has ONE
+    // shift register (21 00; 21 01 / 21 02 choose whether it applies to RX, TX or
+    // both). A radio with two registers overrides this.
+    virtual void setSliceXitOffset(int sliceId, int hz) { setSliceRitOffset(sliceId, hz); }
 
     // Transmit audio passband, in Hz above the carrier (Phone applet TX low/high cut).
     // Flex takes `transmit set filter_low=/filter_high=` from TransmitModel; a backend
@@ -1057,7 +1124,11 @@ signals:
     // waterfall outlet: RadioModel derives the row from spectrumFrameReady, paced by
     // the pan's waterfall rate. A backend with a genuinely separate waterfall plane
     // adds an outlet together with its consumer.
-    void spectrumFrameReady(int panId, const QByteArray& frame);
+    // A producer may attach wider, same-observation RF coverage. Existing
+    // producers omit it; consumers interested only in the viewport keep their
+    // two-argument connection. One emission owns spectrum + paced history.
+    void spectrumFrameReady(int panId, const QByteArray& frame,
+                            const AetherSDR::SpectrumCoverage& coverage = AetherSDR::SpectrumCoverage());
     void audioFrameReady(const AetherSDR::PcmFrame& pcm);
 
 protected:

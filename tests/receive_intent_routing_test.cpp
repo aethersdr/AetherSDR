@@ -1,15 +1,22 @@
 // #5904: the production model bindings, not a second implementation of them.
 // Injected state/dispatch only: no sockets, firmware peer, hardware or keying.
+// WAN fixtures inject connected state without opening the TLS socket.
 #include "TestSettingsProfile.h"
+#include "core/backends/flex/WanConnection.h"
+#include "core/backends/flex/FlexBackend.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
 #include <QCoreApplication>
 #include <QEvent>
 #include <QSignalSpy>
+#include <QStringList>
+#include <QtLogging>
 #include <cstdio>
 #include <functional>
 #include <thread>
+#include <array>
+#include <limits>
 
 namespace AetherSDR {
 class RadioModelSliceLifecycleTestAccess {
@@ -18,12 +25,25 @@ public:
     {
         radio.wireSliceReceiveIntentsToBackend(slice);
     }
+    // Bypass the live handshake; exercise the production WAN predicate.
+    static void setWanConnection(RadioModel& radio, WanConnection* wan)
+    {
+        radio.m_wanConn = wan;
+    }
+};
+class WanConnectionTestAccess {
+public:
+    static void setConnected(WanConnection& wan, bool connected)
+    {
+        wan.m_connected = connected;
+    }
 };
 }
 
 using namespace AetherSDR;
 namespace {
 int failures = 0;
+thread_local QStringList warningMessages;
 void check(bool ok, const char* message)
 {
     std::printf("[%s] %s\n", ok ? "PASS" : "FAIL", message);
@@ -37,6 +57,12 @@ public:
     QList<SliceFilterRequest> filters;
     QList<SliceAgcRequest> agcs;
     QStringList modes;
+    QList<SliceDspRequest> dsps;
+    QList<SliceAudioRequest> audio;
+    QList<SliceSquelchRequest> squelch;
+    QStringList antennas;
+    QList<bool> locks;
+    ReceiveDispatch receiveResult = ReceiveDispatch::Dispatched;
     int pairedAgcCalls = 0;
     int keyCalls = 0;
     std::function<void(int)> observe;
@@ -72,6 +98,38 @@ public:
         if (observe) { observe(id); }
     }
     void setPanCenter(const QString&, double, PanCenterIntent) override {}
+    ReceiveDispatch requestSliceDsp(int id, const SliceDspRequest& request) override
+    {
+        dsps.append(request);
+        if (observe) { observe(id); }
+        return receiveResult;
+    }
+    ReceiveDispatch requestSliceAudio(int id, const SliceAudioRequest& request) override
+    {
+        audio.append(request);
+        if (observe) { observe(id); }
+        return receiveResult;
+    }
+    ReceiveDispatch requestSliceSquelch(int id, const SliceSquelchRequest& request) override
+    {
+        squelch.append(request);
+        if (observe) { observe(id); }
+        return receiveResult;
+    }
+    ReceiveDispatch requestSliceRxAntenna(int id, const QString& antenna) override
+    {
+        antennas.append(antenna);
+        if (observe) { observe(id); }
+        return receiveResult;
+    }
+    ReceiveDispatch requestSliceLock(int id, bool locked) override
+    {
+        locks.append(locked);
+        if (observe) { observe(id); }
+        return receiveResult;
+    }
+    int receiveCalls() const
+    { return dsps.size() + audio.size() + squelch.size() + antennas.size() + locks.size(); }
     void setKeying(bool, const TxCoordinator::Operation&, const TxCoordinator::Completion&) override
     {
         ++keyCalls;
@@ -113,6 +171,32 @@ struct Fixture {
     }
     SliceModel* slice() { return radio.slice(0); }
 };
+
+void externalReceiveHandoffOrdering()
+{
+    Fixture f;
+    SliceModel* s = f.slice();
+    QSignalSpy raw(s, &SliceModel::commandReady);
+    s->setExternalReceiveAudioReplacementMute(true, false);
+    check(f.backend->audio.size() == 1 && f.backend->audio.last().value == 1
+              && f.backend->audio.last().origin == SliceAudioRequest::Origin::ExternalReceiveSuppression,
+          "Kiwi suppression reaches the neutral backend route");
+    QStringList order;
+    f.backend->observe = [&](int) { order.append(QStringLiteral("restore primary mute")); };
+    QObject::connect(&f.radio, &RadioModel::panBandAboutToDispatch, s, [&](const QString&) {
+        // Same synchronous handoff as MainWindow_KiwiSdr. The injected backend
+        // has no command plane: this proves ordering up to the band attempt,
+        // not delivery of a band command to radio firmware.
+        s->prepareExternalReceiveAudioReplacementBandRecall(false);
+        order.append(QStringLiteral("continue band attempt"));
+    });
+    f.radio.requestPanBand(QStringLiteral("receiver"), QStringLiteral("20"));
+    check(order == QStringList{"restore primary mute", "continue band attempt"}
+              && f.backend->audio.size() == 2 && f.backend->audio.last().value == 0
+              && f.backend->audio.last().origin == SliceAudioRequest::Origin::ExternalReceiveSuppression
+              && raw.isEmpty(),
+          "typed Kiwi mute handoff completes before band dispatch continues, without a raw bypass");
+}
 
 void creationPaths()
 {
@@ -167,6 +251,191 @@ void creationPaths()
         s->tuneAndRecenter(14.5);
         check(f.backend->calls() == calls, "locked slice refuses both tune presentations");
     }
+}
+
+void receiveControls()
+{
+    for (bool commandPlane : {false, true}) {
+        Fixture f(commandPlane);
+        SliceModel* s = f.slice();
+        RadioModelSliceLifecycleTestAccess::wire(f.radio, s);
+        RadioModelSliceLifecycleTestAccess::wire(f.radio, s);
+        QSignalSpy raw(s, &SliceModel::commandReady);
+        // Every desktop feature, not merely one representative setter.
+        const std::array toggles{&SliceModel::setNb, &SliceModel::setNr, &SliceModel::setAnf,
+            &SliceModel::setMn, &SliceModel::setApf, &SliceModel::setNrl, &SliceModel::setNrs,
+            &SliceModel::setRnn, &SliceModel::setNrf, &SliceModel::setAnfl, &SliceModel::setAnft};
+        for (std::size_t i = 0; i < toggles.size(); ++i) {
+            (s->*toggles[i])(true);
+            check(f.backend->dsps.size() == int(i + 1)
+                      && int(f.backend->dsps.last().feature) == int(i)
+                      && f.backend->dsps.last().field == SliceDspRequest::Field::Enabled
+                      && f.backend->dsps.last().enabled,
+                  "every DSP enable routes exactly once from both creation paths");
+        }
+        const std::array levels{&SliceModel::setNbLevel, &SliceModel::setNrLevel,
+            &SliceModel::setAnfLevel, &SliceModel::setMnLevel, &SliceModel::setApfLevel,
+            &SliceModel::setNrlLevel, &SliceModel::setNrsLevel, &SliceModel::setNrfLevel,
+            &SliceModel::setAnflLevel};
+        for (const auto setter : levels) {
+            const int before = f.backend->dsps.size();
+            (s->*setter)(123);
+            check(f.backend->dsps.size() == before + 1
+                      && f.backend->dsps.last().field == SliceDspRequest::Field::Level
+                      && f.backend->dsps.last().level == 100 && f.backend->dsps.last().enabled,
+                  "DSP levels clamp and preserve the paired enabled value");
+        }
+        s->setAudioGain(39.5f);
+        s->setAudioMute(true);
+        s->setAudioPan(81);
+        check(f.backend->audio.size() == 3 && f.backend->audio[0].value == 39
+                  && f.backend->audio[1].field == SliceAudioRequest::Field::Mute
+                  && f.backend->audio[2].field == SliceAudioRequest::Field::Pan,
+              "audio dispatch does not require a daemon audio capability record");
+        s->setAudioGain(std::numeric_limits<float>::quiet_NaN());
+        check(f.backend->audio.size() == 3, "non-finite gain is refused before integer conversion");
+        s->setSquelch(true, 37);
+        s->setSquelch(true, 37);
+        check(f.backend->squelch.size() == 2 && f.backend->squelch[0].enabledChanged
+                  && f.backend->squelch[0].levelChanged && !f.backend->squelch[1].enabledChanged
+                  && !f.backend->squelch[1].levelChanged,
+              "squelch retains field mask and repeated paired intent without duplicate bindings");
+        s->setRxAntenna(QStringLiteral("ANT2"));
+        s->setLocked(true);
+        s->setLocked(false);
+        check(f.backend->antennas == QStringList{"ANT2"} && f.backend->locks == QList<bool>{true, false},
+              "antenna and slice lock are not gated on radio-wide dial-lock support");
+        const int before = f.backend->receiveCalls();
+        SliceDelta delta;
+        delta.nb = false; delta.nbLevel = 32; delta.nr = false; delta.anf = false;
+        delta.audioGain = 31; delta.audioMute = false; delta.audioPan = 22;
+        delta.squelchOn = false; delta.squelchLevel = 19;
+        delta.rxAntenna = QStringLiteral("ANT1"); delta.locked = true;
+        emit f.backend->sliceChanged(0, delta);
+        check(f.backend->receiveCalls() == before && s->audioGain() == 31 && !s->nbOn()
+                  && s->rxAntenna() == QStringLiteral("ANT1") && s->isLocked(),
+              "independent receive observations correct state without echoing commands");
+        QSignalSpy refused(&f.radio, &RadioModel::commandDropped);
+        f.backend->receiveResult = ReceiveDispatch::Unsupported;
+        s->setNr(true);
+        check(refused.size() == 1, "unsupported receive request reaches the existing refusal notification");
+        f.backend->receiveResult = ReceiveDispatch::LocalOnly;
+        s->setLocked(false);
+        check(refused.size() == 1 && !s->isLocked(), "local-only lock remains useful without a false refusal");
+        f.backend->receiveResult = ReceiveDispatch::Unsupported;
+        const int audioBefore = f.backend->audio.size();
+        s->setExternalReceiveAudioReplacementMute(true, false);
+        check(f.backend->audio.size() == audioBefore + 1
+                  && f.backend->audio.last().origin == SliceAudioRequest::Origin::ExternalReceiveSuppression
+                  && refused.size() == 1,
+              "a refused compatibility-origin mute is logged, not raised as the operator's unsupported-control notice");
+        s->setExternalReceiveAudioReplacementMute(false, false);
+        check(raw.isEmpty() && f.backend->keyCalls == 0, "whole migrated group sends no raw wire text or TX request");
+    }
+}
+
+void receiveReentrancyAndLifecycle()
+{
+    Fixture f;
+    SliceModel* s = f.slice();
+    float displayed = 0;
+    QObject::connect(s, &SliceModel::audioGainChanged, s, [&](float value) { displayed = value; });
+    f.backend->observe = [&](int id) {
+        SliceDelta delta; delta.audioGain = 21; delta.nb = false;
+        emit f.backend->sliceChanged(id, delta);
+    };
+    s->setAudioGain(67);
+    s->setNb(true);
+    check(s->audioGain() == 21 && displayed == 21 && !s->nbOn()
+              && f.backend->audio.size() == 1 && f.backend->dsps.size() == 1,
+          "synchronous receive corrections win over optimistic notifications and do not echo");
+    f.backend->observe = {};
+    auto connection = QObject::connect(s, &SliceModel::nbChanged, s, [s](bool on) {
+        if (on) { s->setNbLevel(73); }
+    });
+    s->setNb(true);
+    check(f.backend->dsps.size() == 3 && f.backend->dsps.last().enabled
+              && f.backend->dsps.last().level == 73,
+          "nested companion DSP edit preserves both fields with the current pair");
+    QObject::disconnect(connection);
+    connection = QObject::connect(s, &SliceModel::squelchChanged, s, [s](bool on, int level) {
+        if (on && level == 38) { s->setSquelch(true, 61); }
+    });
+    s->setSquelch(true, 38);
+    check(f.backend->squelch.size() == 1 && f.backend->squelch.last().enabledChanged
+              && f.backend->squelch.last().levelChanged && f.backend->squelch.last().level == 61,
+          "nested squelch edit retains the outer enable field in the newest paired request");
+    QObject::disconnect(connection);
+    connection = QObject::connect(s, &SliceModel::nbChanged, s, [s](bool on) {
+        if (!on) { s->setNb(true); }
+    });
+    s->setNb(false);
+    check(f.backend->dsps.size() == 4 && f.backend->dsps.last().enabled,
+          "nested same-field DSP edit supersedes the outer request");
+    QObject::disconnect(connection);
+    connection = QObject::connect(s, &SliceModel::audioGainChanged, s, [&](float value) {
+        if (value == 51) {
+            f.radio.stageSessionModelsForReconnectForTest();
+            emit f.backend->sliceChanged(0, report());
+        }
+    });
+    s->setAudioGain(51);
+    check(f.backend->audio.size() == 1, "reconnect during receive notification cancels prior-session audio intent");
+    QObject::disconnect(connection);
+
+    auto all = [](SliceModel* source) {
+        emit source->receiveDspRequested({SliceDspRequest::Feature::Nb, SliceDspRequest::Field::Enabled, true, 50});
+        emit source->receiveAudioRequested({SliceAudioRequest::Field::Mute, 1});
+        emit source->receiveSquelchRequested({true, 42, true, true});
+        emit source->receiveRxAntennaRequested(QStringLiteral("ANT1"));
+        emit source->receiveLockRequested(true);
+    };
+    const int before = f.backend->receiveCalls();
+    f.backend->connected = false;
+    all(s);
+    f.backend->connected = true;
+    f.radio.stageSessionModelsForReconnectForTest();
+    all(s);
+    emit f.backend->sliceChanged(0, report());
+    std::thread worker([&] { all(s); });
+    worker.join();
+    QCoreApplication::sendPostedEvents(&f.radio, QEvent::MetaCall);
+    check(f.backend->receiveCalls() == before, "all receive groups refuse disconnected, staged and off-thread intents");
+    all(s);
+    check(f.backend->receiveCalls() == before + 5, "reclaimed slice keeps exactly one receive binding per group");
+    emit f.backend->sliceRemoved(0);
+    emit f.backend->sliceChanged(0, report());
+    all(s);
+    check(f.backend->receiveCalls() == before + 5, "retired object cannot control replacement with the same slice id");
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+
+    auto* doomed = new SliceModel(9);
+    int requests = 0;
+    QObject::connect(doomed, &SliceModel::receiveAudioRequested, &f.radio, [&](const SliceAudioRequest&) { ++requests; });
+    QObject::connect(doomed, &SliceModel::audioGainChanged, &f.radio, [doomed](float) { delete doomed; });
+    doomed->setAudioGain(43);
+    check(requests == 0, "deletion during receive notification cancels dispatch safely");
+}
+
+void profileRestore()
+{
+    SliceModel slice(0);
+    QSignalSpy requests(&slice, &SliceModel::receiveDspRequested);
+    QSignalSpy raw(&slice, &SliceModel::commandReady);
+    slice.setNrsLevel(72);
+    SliceDelta recalled; recalled.nrsLevel = 50;
+    slice.applyChanges(recalled);
+    check(requests.size() == 2 && slice.nrsLevel() == 72
+              && qvariant_cast<SliceDspRequest>(requests.last().at(0)).origin == SliceDspRequest::Origin::ProfileRestore,
+          "NRS firmware-default recall preserves explicit operator level with tagged restore intent");
+    recalled.nrsLevel = 63;
+    slice.applyChanges(recalled);
+    check(requests.size() == 2 && slice.nrsLevel() == 63, "ordinary NRS readback is passive");
+    slice.setNrsLevel(50);
+    recalled.nrsLevel = 50;
+    slice.applyChanges(recalled);
+    check(requests.size() == 3 && slice.nrsLevel() == 50 && raw.isEmpty(),
+          "explicit operator default disables NRS reassertion and no path emits raw wire text");
 }
 
 void synchronousObservations()
@@ -311,6 +580,95 @@ void lifetimeAndReentrancy()
           "a reentrant edit to the same AGC field supersedes the older request");
     QObject::disconnect(connection);
 }
+
+// A backend without a RadioConnection can still have an active WAN link.
+void wanFallback()
+{
+    Fixture f;
+    SliceModel* s = f.slice();
+    WanConnection wan;   // never connectToRadio()'d: no socket is ever opened
+    RadioModelSliceLifecycleTestAccess::setWanConnection(f.radio, &wan);
+
+    // Every receive intent reaches the backend while only WAN is connected.
+    f.backend->connected = false;
+    WanConnectionTestAccess::setConnected(wan, true);
+    s->setFrequency(14.21);
+    // USB -> LSB also dispatches one ModeNormalization filter edit (see
+    // creationPaths() above) in addition to the explicit setFilterWidth()
+    // below — two filter dispatches is the correct count here, not a miscount.
+    s->setMode(QStringLiteral("LSB"));
+    s->setFilterWidth(-2400, -100);
+    s->setAgcMode(QStringLiteral("slow"));
+    check(f.backend->tunes.size() == 1 && f.backend->modes.size() == 1
+              && f.backend->filters.size() == 2 && f.backend->agcs.size() == 1,
+          "a live WAN link dispatches every receive intent even though the backend's own link is down");
+
+    // Sanity check the other direction: neither link connected still refuses,
+    // so the fix is not just "always dispatch".
+    WanConnectionTestAccess::setConnected(wan, false);
+    s->setFrequency(14.22);
+    check(f.backend->tunes.size() == 1, "neither link connected still refuses the intent");
+
+    RadioModelSliceLifecycleTestAccess::setWanConnection(f.radio, nullptr);
+}
+
+// Real Flex encoding with an undialed LAN link and injected WAN connectivity.
+void wanOverUndialedFlexConnection()
+{
+    QStringList commands;
+    RadioModel radio;
+    check(radio.rebuildBackendForTest(QStringLiteral("flex")), "RadioModel builds a FlexBackend");
+    auto* backend = qobject_cast<FlexBackend*>(radio.backend());
+    check(backend != nullptr, "the WAN fixture uses the production Flex backend");
+    if (!backend) {
+        return;
+    }
+    backend->setSliceCommandSink([&commands](const QString& command) { commands.append(command); });
+    check(radio.automationApplySliceFixture(0, QStringLiteral("A")), "WAN fixture creates slice zero");
+    SliceModel* slice = radio.slice(0);
+    check(slice != nullptr, "WAN fixture has an active slice");
+    if (!slice) {
+        return;
+    }
+    QSignalSpy dropped(&radio, &RadioModel::commandDropped);
+    WanConnection wan;
+    RadioModelSliceLifecycleTestAccess::setWanConnection(radio, &wan);
+    WanConnectionTestAccess::setConnected(wan, true);
+    check(radio.backend() && !radio.backend()->isConnected(), "the FlexBackend's own link is down");
+    check(radio.isConnected(), "a live WAN link connects the model despite the undialed LAN link");
+    commands.clear();
+    slice->setFrequency(14.21);
+    slice->setMode(QStringLiteral("LSB"));
+    slice->setFilterWidth(-2400, -100);
+    slice->setAgcMode(QStringLiteral("slow"));
+    slice->setAgcThreshold(42);
+    slice->setAgcOffLevel(31);
+    check(commands == QStringList{"slice tune 0 14.210000 autopan=0",
+                                  "slice set 0 mode=LSB", "filt 0 -2400 -100",
+                                  "slice set 0 agc_mode=slow", "slice set 0 agc_threshold=42",
+                                  "slice set 0 agc_off_level=31"},
+          "WAN receive edits reach the real Flex command sink exactly once with correct values");
+    WanConnectionTestAccess::setConnected(wan, false);
+    commands.clear();
+    warningMessages.clear();
+    const QtMessageHandler previousHandler = qInstallMessageHandler(
+        [](QtMsgType type, const QMessageLogContext& context, const QString& message) {
+            if (type == QtWarningMsg && QString::fromUtf8(context.category) == QStringLiteral("aether.protocol")) {
+                warningMessages.append(message);
+            }
+        });
+    slice->setFrequency(14.22);
+    qInstallMessageHandler(previousHandler);
+    check(warningMessages == QStringList{"RadioModel: not connected, dropping slice 0 receive intent"},
+          "a disconnected receive edit emits a protocol warning");
+    slice->setMode(QStringLiteral("USB"));
+    slice->setFilterWidth(200, 2600);
+    slice->setAgcMode(QStringLiteral("fast"));
+    check(!radio.isConnected() && commands.isEmpty(),
+          "both links down refuses every receive intent at the real Flex sink");
+    check(dropped.isEmpty(), "disconnected receive edits never emit an unsupported-control notice");
+    RadioModelSliceLifecycleTestAccess::setWanConnection(radio, nullptr);
+}
 }
 
 int main(int argc, char** argv)
@@ -320,8 +678,14 @@ int main(int argc, char** argv)
     QCoreApplication app(argc, argv);
     if (!profile.isValid()) { return 1; }
     creationPaths();
+    externalReceiveHandoffOrdering();
+    receiveControls();
+    receiveReentrancyAndLifecycle();
+    profileRestore();
     synchronousObservations();
     modeReentrancy();
     lifetimeAndReentrancy();
+    wanFallback();
+    wanOverUndialedFlexConnection();
     return failures == 0 ? 0 : 1;
 }

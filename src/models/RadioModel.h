@@ -74,6 +74,7 @@ inline bool wsprSeamAudioRouteReady(bool armed, const RadioCapabilities& capabil
 }
 
 class AprsDigipeaterModel;
+struct BandStackEntry;
 class IRadioBackend;   // aetherd RFC §5.5 radio-facing seam (owned via unique_ptr below)
 class FlexBackend;     // transitional concrete alias for 2.3 status-decode driving
 
@@ -591,6 +592,36 @@ public:
     // there, Flex wire text has nowhere to go and is dropped at the sink.
     bool hasCommandPlane() const { return m_wanConn != nullptr || m_connection != nullptr; }
 
+    // The slice's tuning step, applied on the client when the radio has no
+    // command plane to carry `slice set <n> step=`. Returns false, doing
+    // nothing, when a command plane exists: the caller sends its wire text and
+    // the radio's status echo sets the step.
+    bool applyClientOwnedSliceStep(int sliceId, int hz);
+
+    // The RADIO's own NR and ANF (`slice set nr=/anf=` on a Flex, seam verbs
+    // on an Icom); none where the radio declares no radio-side DSP (HL2,
+    // ANAN). Fails open with no backend. ANF is also there wherever a command
+    // plane exists: the Demo's synthetic connection answers `anf=`.
+    bool radioSideNoiseReductionAvailable() const;
+    bool radioSideAutoNotchAvailable() const;
+    // These return false, leaving the model untouched, where the radio lacks
+    // the control (hasRadioSideDsp, hasAmCarrierLevel); the caller says so.
+    // NR/ANF OFF is accepted there: it is already true.
+    bool requestRadioNoiseReduction(SliceModel* slice, bool on);
+    bool requestRadioAutoNotch(SliceModel* slice, bool on);
+    bool requestAmCarrierLevel(int level);
+
+    // A band-stack bookmark's AGC, NB and NR through the SliceModel setters,
+    // so they reach every backend. NR only where radio-side NR exists; AGC not
+    // while KiwiSDR external receive replaces the slice (the caller sends it).
+    void recallBandStackReceiveDsp(SliceModel* slice, const BandStackEntry& entry);
+
+    // Radio-side recording is `slice set <n> record=/play=` on the slice's
+    // command plane. Without one there is no radio-side recorder to reach, so
+    // "Radio Side" falls back to the client recorder instead of a button that
+    // latches and records nothing.
+    bool radioSideRecordingReachable() const { return hasCommandPlane(); }
+
     // ── Memory command routing ──────────────────────────────────────────────
     //
     // Answer a `memory …` command from the local bank or a native writable
@@ -908,12 +939,17 @@ public:
     // replayed later. Returns true only if the radio matches the request;
     // optimistic callers must gate on it. bandwidthMhz > 0 sends center+bandwidth
     // as one command. Drag retunes a VFO-slaved scope (Icom); default Range cannot.
+    // Confirmed backends return false while awaiting capture adoption; their
+    // geometry report advances the model and view.
     bool requestPanCenter(const QString& panId,
                           double centerMhz,
                           double bandwidthMhz = -1.0,
                           IRadioBackend::PanCenterIntent intent =
                               IRadioBackend::PanCenterIntent::Range);
     bool requestPanBandwidth(const QString& panId, double bandwidthMhz);
+    bool confirmsReceiveControls() const;
+    bool requestConfirmedReceiveTune(int sliceId, double mhz, IRadioBackend::ReceiveTuneView view);
+    bool requestReceiveCaptureRecenter(const QString& panId);
     bool requestPanAverage(const QString& panId, int average);
     // Weighted-average toggle for a backend that shapes its own spectrum:
     // straight down to that backend. Returns false on Flex, where the caller
@@ -1046,11 +1082,14 @@ signals:
     // Backend-neutral panadapter render feed; signatures mirror PanadapterStream's
     // so the UI binds here, not to the Flex-only stream. Flex forwards its
     // PanadapterStream 1:1; other backends synthesise from spectrumFrameReady.
+    // Coherent coverage declares final same-scale samples, avoiding repeated
+    // intensity calibration and smoothing in the renderer.
     void panFeedSpectrumReady(quint32 streamId, const QVector<float>& binsDbm,
                               qint64 emittedNs);
     void panFeedWaterfallRowReady(quint32 streamId, const QVector<float>& binsDbm,
                                   double lowFreqMhz, double highFreqMhz,
-                                  quint32 timecode, qint64 emittedNs);
+                                  quint32 timecode, qint64 emittedNs,
+                                  bool coherentSpectrumCoverage = false);
     void panFeedWaterfallAutoBlackLevel(quint32 streamId, quint32 autoBlack);
     // Demodulated RX audio from a backend that produces it in-process (HL2).
     // Owning typed PCM. A1 compatibility producers retain 24 kHz stereo.
@@ -1360,7 +1399,8 @@ private slots:
     // normalized IRadioBackend data-plane signal (e.g. HL2) into the neutral
     // panFeed. Decodes the float32 frame and re-emits panFeedSpectrumReady. Flex
     // never triggers this (it feeds panFeed via the PanadapterStream passthrough).
-    void onBackendSpectrumFrame(int panId, const QByteArray& frame);
+    void onBackendSpectrumFrame(int panId, const QByteArray& frame,
+                                const SpectrumCoverage& coverage);
 
 private:
     friend struct RadioModelWakeTestAccess;
@@ -1400,10 +1440,12 @@ private:
     bool profileLoadRadioStateWritesHeld() const;
     // Raw senders (#4142): the single pan touchpoint for wire-string building.
     // dispatchPanCenterBandwidth re-clamps against the pan's current geometry,
-    // writes the wire FIRST and advances the model only if the send happened,
-    // so re-entrant requests converge. bandwidthMhz <= 0 = center-only; NaN
+    // writes the wire FIRST and, for an optimistic backend, advances the model
+    // only if the send happened, so re-entrant requests converge. bandwidthMhz <= 0 = center-only; NaN
     // centerMhz = bandwidth-only. Profile-load replays use intent Range, the
-    // value that cannot move a radio.
+    // value that cannot move a radio. A true return means the model advanced
+    // synchronously. Confirmed backends return false after accepting an intent;
+    // their later observation advances the model, so false does not imply refusal.
     bool dispatchPanCenterBandwidth(const QString& panId,
                                     double centerMhz,
                                     double bandwidthMhz,
@@ -1677,6 +1719,7 @@ public:
 private:
     friend class RadioModelSliceLifecycleTestAccess;
     friend class TxOperationIntegrationTestAccess;
+    friend class RerouteDeadControlsTestAccess;
     void expirePendingCallbacks(const QString& reason);
 
     // True only while expirePendingCallbacks() is invoking the drained
@@ -1691,10 +1734,9 @@ private:
     quint64 m_backendReceiverGeneration = 0;
     std::function<bool(const QString&, ResponseCallback)> m_sliceLifecycleCommandSinkForTest;
     PanadapterModel* resolveBackendPan(const QString& backendPanId);
-    // Connect a slice's operator-issued AUDIO and TX-slice intents to the
-    // backend seam. Must be called from EVERY site that constructs a
-    // SliceModel — see the definition for why that is not a style preference.
-    void wireSliceAudioIntentsToBackend(SliceModel* s);
+    // Remaining selection bindings and initial global lock observation.
+    // Both helpers must be called at every SliceModel construction site.
+    void wireSliceObservationsAndTxIntentToBackend(SliceModel* s);
     void wireSliceReceiveIntentsToBackend(SliceModel* s);
     bool m_stagingReceiveModels{false};
     SliceModel* receiveCommandSource() const;
@@ -1702,6 +1744,13 @@ private:
     void dispatchSliceMode(const QString& mode);
     void dispatchSliceFilter(const SliceFilterRequest& request);
     void dispatchSliceAgc(const SliceAgcRequest& request);
+    void dispatchSliceDsp(const SliceDspRequest& request);
+    void dispatchSliceAudio(const SliceAudioRequest& request);
+    void dispatchSliceSquelch(const SliceSquelchRequest& request);
+    void dispatchSliceRxAntenna(const QString& antenna);
+    void dispatchSliceLock(bool locked);
+    void reportReceiveDispatch(ReceiveDispatch result, const QString& operation,
+                               bool operatorOrigin = true);
     // Translate a MODEL pan id to the backend's own id for a command going down
     // the seam. The inverse of resolveBackendPan(); both are needed or the
     // mapping is one-way and every pan command addresses a pan the backend
@@ -1711,9 +1760,10 @@ private:
     // Waterfall pacing for raw-spectrum (non-Flex) backends: drops pan frames
     // to one row per WaterfallRate::localRowIntervalMs(rate) (0 at rate 100 =
     // gate lifted). A plain drop, not a coalesce: it fixes cadence only, and a
-    // row is the single frame that hit the gate (HL2/RTL: one unaveraged FFT,
-    // #5833; ANAN: WDSP-averaged; Icom: a CI-V sweep). Where rows get integrated
-    // is open in RFC #5782 — do not add an accumulator here until it lands.
+    // row is the single frame that hit the gate (HL2: time-averaged over FFT
+    // AVG x 10 ms when FFT AVG > 0; RTL: temporal FFT average; ANAN:
+    // WDSP-averaged; Icom: a CI-V sweep). Where rows get integrated is open in
+    // RFC #5782 — do not add an accumulator here until it lands.
     QHash<int, qint64> m_backendWfLastRowNs;
     // Pre-seed default only; 100 is the top of the 1..100 rate control and
     // matches SpectrumWidget's m_wfLineDuration default (#4606).
@@ -1766,6 +1816,7 @@ private:
                          const TxCoordinator::Request* request, bool alreadyClosing = false);
     void endLocalTxActivity(const TxCoordinator::Intent& intent);
     unsigned activeTxActivities() const;
+    bool tuneCarrierLive() const;
     bool hasOtherPttHolds(const TxCoordinator::Operation& operation,
                           const TxCoordinator::Intent& excluded) const;
     void completeLocalTxIfDrained();
