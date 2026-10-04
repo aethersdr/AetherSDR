@@ -4200,8 +4200,10 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         armDbmRangeHandshake(minDbm, maxDbm);
         setStreamDbmRange(minDbm, maxDbm, true);
         sendDbmRangeCommand(minDbm, maxDbm);
-        // After the handshake is armed: the model's levelChanged then reads as
-        // the echo of this very request and completes it.
+        // After the handshake is armed: when the range moves, the model's
+        // levelChanged reads as the echo of this request and completes it. A
+        // request for the range the model already holds emits nothing, and the
+        // handshake runs to kDbmRangeHandshakeTimeoutMs.
         adoptClientOwnedDbmRange(applet->panId(), sw->panIndex(), minDbm, maxDbm);
     });
     connect(sw, &SpectrumWidget::radioDbmHeadroomRecoveryRequested,
