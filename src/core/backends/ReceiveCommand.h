@@ -27,10 +27,14 @@ struct SliceAgcRequest {
     // Preserve which field the operator changed: Flex has three independent
     // fields, whereas host DSP needs the mode/threshold pair for either edit.
     enum class Field { Mode, Threshold, OffLevel };
+    // A recall replays a stored value. A radio with its own per-mode AGC
+    // default must not receive that replay as an operator edit.
+    enum class Origin { Operator, Recall };
     Field field{Field::Mode};
     QString mode;
     int threshold{0};
     int offLevel{0};
+    Origin origin{Origin::Operator};
 };
 
 // Dispatch is not readback. LocalOnly is meaningful for the client-side tune

@@ -4227,7 +4227,7 @@ void RadioModel::recallBandStackReceiveDsp(SliceModel* slice,
     // agcMode()/agcThreshold(). The caller then sends the AGC as wire text.
     if (!slice->externalReceiveReplacementActive()) {
         if (!entry.agcMode.isEmpty() && entry.agcMode != slice->agcMode()) {
-            slice->setAgcMode(entry.agcMode);
+            slice->recallAgcMode(entry.agcMode);
         }
         if (entry.agcThreshold != slice->agcThreshold()) {
             slice->setAgcThreshold(entry.agcThreshold);

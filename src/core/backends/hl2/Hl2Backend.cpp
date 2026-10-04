@@ -3164,12 +3164,21 @@ void Hl2Backend::setSliceApf(int sliceId, bool on, int level)
 
 void Hl2Backend::requestSliceAgc(int sliceId, const SliceAgcRequest& request)
 {
+    const int ddc = ddcForSlice(sliceId);
+    Receiver* r = rx(ddc);
     if (request.field != SliceAgcRequest::Field::OffLevel) {
+        // A recalled AGC mode is a stored value, not the operator's choice, so
+        // DIGU/DIGL keep the AGC they run (#6142). The slice optimistically
+        // shows the stored mode; the echo puts back what the receiver holds.
+        if (r && request.field == SliceAgcRequest::Field::Mode
+            && request.origin == SliceAgcRequest::Origin::Recall
+            && isDigitalDataMode(r->mode)) {
+            emitSliceState(ddc);
+            return;
+        }
         IRadioBackend::requestSliceAgc(sliceId, request);
         return;
     }
-    const int ddc = ddcForSlice(sliceId);
-    Receiver* r = rx(ddc);
     if (!r)
         return;
     // Pushed in every AGC mode: WDSP applies the fixed gain only in its mode 0

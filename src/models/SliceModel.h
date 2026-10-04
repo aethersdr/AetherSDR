@@ -312,6 +312,9 @@ public:
     void setAnflLevel(int v);
     void setMnLevel(int v);
     void setAgcMode(const QString& mode);
+    // A stored AGC mode replayed by a bookmark recall; the backend decides
+    // whether it overrides the mode's own AGC default.
+    void recallAgcMode(const QString& mode);
     void setAgcThreshold(int value);
     void setAgcOffLevel(int value);
     void setSquelch(bool on, int level);
@@ -581,6 +584,7 @@ private:
         });
     }
     void notifyReceiveFilterIntent(SliceFilterRequest::Origin origin);
+    void applyAgcMode(const QString& mode, SliceAgcRequest::Origin origin);
     // Sign-guarded, idempotent (lo,hi)→(-hi,-lo) mirror of the stored filter
     // when its polarity is wrong for m_mode; true if it changed anything.
     bool normalizeFilterPolarity();

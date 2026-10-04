@@ -642,6 +642,16 @@ void SliceModel::setAnflLevel(int v)
 
 void SliceModel::setAgcMode(const QString& mode)
 {
+    applyAgcMode(mode, SliceAgcRequest::Origin::Operator);
+}
+
+void SliceModel::recallAgcMode(const QString& mode)
+{
+    applyAgcMode(mode, SliceAgcRequest::Origin::Recall);
+}
+
+void SliceModel::applyAgcMode(const QString& mode, SliceAgcRequest::Origin origin)
+{
     if (m_externalReceiveAudioReplacement) {
         if (m_externalReceiveAgcMode == mode) {
             return;
@@ -666,7 +676,7 @@ void SliceModel::setAgcMode(const QString& mode)
         return;
     }
     emit receiveAgcRequested({SliceAgcRequest::Field::Mode, mode,
-                              m_agcThreshold, m_agcOffLevel});
+                              m_agcThreshold, m_agcOffLevel, origin});
 }
 
 int SliceModel::receiveAgcThresholdMinimum() const
@@ -738,7 +748,8 @@ void SliceModel::setAgcThreshold(int value)
         return;
     }
     emit receiveAgcRequested({SliceAgcRequest::Field::Threshold, m_agcMode,
-                              value, m_agcOffLevel});
+                              value, m_agcOffLevel,
+                              SliceAgcRequest::Origin::Operator});
 }
 
 void SliceModel::setAgcOffLevel(int value)
@@ -764,7 +775,8 @@ void SliceModel::setAgcOffLevel(int value)
         return;
     }
     emit receiveAgcRequested({SliceAgcRequest::Field::OffLevel, m_agcMode,
-                              m_agcThreshold, value});
+                              m_agcThreshold, value,
+                              SliceAgcRequest::Origin::Operator});
 }
 
 void SliceModel::setSquelch(bool on, int level)
