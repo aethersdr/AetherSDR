@@ -7258,7 +7258,7 @@ add_executable(spectrum_overlay_fft_fps_bounds_test
     src/gui/DragValuePopup.cpp
     src/gui/DspParamPopup.cpp
 )
-target_include_directories(spectrum_overlay_fft_fps_bounds_test PRIVATE src)
+target_include_directories(spectrum_overlay_fft_fps_bounds_test PRIVATE src tests)
 if(DEBIAN_GPU_FIX_REQUIRED)
     target_include_directories(spectrum_overlay_fft_fps_bounds_test PRIVATE
         "${DEBIAN_PRIVATE_INC}"
@@ -7634,6 +7634,7 @@ set(AETHER_SETTINGS_CONSUMERS
     extended_tnf_settings_test
     client_display_settings_test
     client_display_pan_settings_test
+    spectrum_overlay_fft_fps_bounds_test
     gui_nested_lifetime_test
     rx_applet_squelch_reconciliation_test
     fm_filter_controls_test

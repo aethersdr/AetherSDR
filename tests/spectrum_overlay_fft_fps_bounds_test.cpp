@@ -2,6 +2,7 @@
 // ClientDisplaySettings accepts, so every slider position is storable and no
 // stored value is off the slider. Widget only, offscreen, no backend.
 
+#include "TestSettingsProfile.h"
 #include "core/ClientDisplaySettings.h"
 #include "gui/SpectrumOverlayMenu.h"
 
@@ -15,6 +16,12 @@ using namespace AetherSDR;
 
 int main(int argc, char* argv[])
 {
+    // Before QApplication: the menu's constructor reaches ThemeManager, then
+    // AppSettings, which must not open the operator's own profile.
+    TestSettingsProfile profile(QStringLiteral("spectrum-overlay-fft-fps-bounds"));
+    if (!profile.isValid()) {
+        return 1;
+    }
     QApplication app(argc, argv);
     QWidget parent;
     SpectrumOverlayMenu menu(&parent);
