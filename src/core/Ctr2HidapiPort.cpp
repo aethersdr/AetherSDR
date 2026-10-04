@@ -74,8 +74,7 @@ Ctr2HidPort* Ctr2HidapiPort::open(const Ctr2HidPort::DeviceInfo& device, QString
 #ifdef Q_OS_LINUX
         // hidraw nodes are root-only without a udev rule; name the fix.
         if (openErrno == EACCES) {
-            *error += QStringLiteral(". Install the udev rule "
-                                     "(packaging/linux/70-aethersdr-ctr2.rules) and replug the CTR2.");
+            *error += QStringLiteral(". Press Start to install the CTR2 access rule.");
         }
 #else
         Q_UNUSED(openErrno);

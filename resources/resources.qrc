@@ -10,6 +10,11 @@
         <file alias="demo_voice.wav">demo_voice.wav</file>
         <file alias="dist.dx_community.json">dist.dx_community.json</file>
     </qresource>
+    <!-- CTR2 USB access rule, installed on demand from the CTR2 Proxy applet;
+         the same file packaging installs, so the two cannot drift. -->
+    <qresource prefix="/udev">
+        <file alias="70-aethersdr-ctr2.rules">../packaging/linux/70-aethersdr-ctr2.rules</file>
+    </qresource>
     <qresource prefix="/bandplans">
         <file alias="arrl-us.json">bandplans/arrl-us.json</file>
         <file alias="iaru-region1.json">bandplans/iaru-region1.json</file>

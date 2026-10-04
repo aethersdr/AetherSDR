@@ -29,6 +29,12 @@ private:
     void syncConfiguration();
     void syncStatus();
     void syncStats();
+    void onStartClicked();
+#ifdef Q_OS_LINUX
+    void offerUsbAccessRule();
+    void installUsbAccessRule();
+    void startAfterRuleInstalled(int attemptsLeft);
+#endif
 
     QPointer<Ctr2ProxyModel> m_model;
     GuardedComboBox* m_modeCombo{nullptr};
@@ -43,6 +49,7 @@ private:
     QLabel* m_trafficLabel{nullptr};
     QLabel* m_problemLabel{nullptr};
     QLabel* m_errorLabel{nullptr};
+    bool m_installingRule{false};  // pkexec rule install in flight
 };
 
 } // namespace AetherSDR

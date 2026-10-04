@@ -62,6 +62,10 @@ public:
     QList<Ctr2HidPort::DeviceInfo> availableUsbDevices() const { return m_usbChoices; }
     QString usbDevicePath() const { return m_usbDevicePath; }
     bool setUsbDevicePath(const QString& path);
+    // Linux: the selected CTR2's device node exists but this user may not
+    // open it, i.e. the udev access rule is not installed yet. Always false
+    // on other platforms, in Wi-Fi mode, or with no device selected.
+    bool usbDeviceNeedsAccessRule() const;
 
     // The radio AetherSDR is connected to. A null address means the relay
     // has no usable destination, and unavailableReason says why. A running

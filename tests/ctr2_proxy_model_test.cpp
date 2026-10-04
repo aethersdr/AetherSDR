@@ -7,11 +7,17 @@
 #include "models/Ctr2ProxyModel.h"
 
 #include <QCoreApplication>
+#include <QFile>
 #include <QHostAddress>
+#include <QTemporaryDir>
 
 #include <cstdio>
 #include <memory>
 #include <vector>
+
+#ifdef Q_OS_LINUX
+#include <unistd.h>
+#endif
 
 using AetherSDR::Ctr2ProxyModel;
 
@@ -113,6 +119,49 @@ void testRelayFollowsAetherSdrsRadio()
     QCoreApplication::processEvents();
 }
 
+// The Start-time udev prompt keys off this: a node the user may not open
+// needs the rule; a missing node, an open one, or Wi-Fi mode does not.
+void testUsbAccessRuleDetection()
+{
+#ifdef Q_OS_LINUX
+    if (::geteuid() == 0) {
+        std::printf("ctr2_proxy_model_test: root ignores permissions, access-rule checks skipped\n");
+        return;
+    }
+    QTemporaryDir dir;
+    check(dir.isValid(), "temp dir for the fake device node");
+    const QString locked = dir.filePath(QStringLiteral("hidraw-locked"));
+    const QString open = dir.filePath(QStringLiteral("hidraw-open"));
+    const QString missing = dir.filePath(QStringLiteral("hidraw-missing"));
+    for (const QString& path : {locked, open}) {
+        QFile f(path);
+        check(f.open(QIODevice::WriteOnly), "create fake device node");
+    }
+    QFile::setPermissions(locked, QFileDevice::Permissions());
+
+    QList<AetherSDR::Ctr2HidPort::DeviceInfo> devices;
+    for (const QString& path : {locked, open, missing}) {
+        devices.append({path, 0x303A, 0x1001, {}, QStringLiteral("ESP32S3_DEV"), {}});
+    }
+    Ctr2ProxyModel model;
+    model.setUsbBackend([devices] { return devices; },
+                        [](const AetherSDR::Ctr2HidPort::DeviceInfo&, QString*) {
+                            return static_cast<AetherSDR::Ctr2HidPort*>(nullptr);
+                        });
+    model.setTransport(Ctr2ProxyModel::Transport::Usb);
+    check(!model.usbDeviceNeedsAccessRule(), "no device selected needs no rule");
+    model.setUsbDevicePath(locked);
+    check(model.usbDeviceNeedsAccessRule(), "a node the user cannot open needs the rule");
+    model.setTransport(Ctr2ProxyModel::Transport::Wifi);
+    check(!model.usbDeviceNeedsAccessRule(), "Wi-Fi mode never asks for the USB rule");
+    model.setTransport(Ctr2ProxyModel::Transport::Usb);
+    model.setUsbDevicePath(open);
+    check(!model.usbDeviceNeedsAccessRule(), "an openable node needs no rule");
+    model.setUsbDevicePath(missing);
+    check(!model.usbDeviceNeedsAccessRule(), "a vanished node is not a permissions problem");
+#endif
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -161,6 +210,7 @@ int main(int argc, char** argv)
           "losing the radio falls back to the default reason");
 
     testRelayFollowsAetherSdrsRadio();
+    testUsbAccessRuleDetection();
 
     if (g_failures) {
         std::fprintf(stderr, "%d check(s) failed\n", g_failures);

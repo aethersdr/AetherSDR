@@ -13,6 +13,11 @@
 
 #include <utility>
 
+#ifdef Q_OS_LINUX
+#include <cerrno>
+#include <unistd.h>
+#endif
+
 namespace AetherSDR {
 
 namespace {
@@ -294,6 +299,21 @@ bool Ctr2ProxyModel::isRunning() const
 {
     const TcpByteProxy::State s = state();
     return s != TcpByteProxy::State::Stopped && s != TcpByteProxy::State::Error;
+}
+
+bool Ctr2ProxyModel::usbDeviceNeedsAccessRule() const
+{
+#ifdef Q_OS_LINUX
+    if (m_transport != Transport::Usb || m_usbDevicePath.isEmpty()) {
+        return false;
+    }
+    // hidraw nodes are root-only until the rule grants the session user an
+    // ACL; access() honours that ACL. A missing node (ENOENT) is not ours to fix.
+    const QByteArray path = m_usbDevicePath.toLocal8Bit();
+    return ::access(path.constData(), R_OK | W_OK) != 0 && errno == EACCES;
+#else
+    return false;
+#endif
 }
 
 bool Ctr2ProxyModel::start()
