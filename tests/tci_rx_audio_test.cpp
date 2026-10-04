@@ -722,6 +722,27 @@ public:
               "a re-created slice resumes its DAX route without producer revocation");
     }
 
+    // A DAX stream that is removed and re-created while its slice keeps the
+    // same channel raises no slice event, so the unregister itself must leave
+    // the channel routable for the next stream (#6006). CONSTRUCTED frames.
+    static void daxRouteSurvivesStreamUnregister()
+    {
+        Fixture f; f.backend->add(3,2);
+        TciClient* client = f.client();
+        PcmProducer producer; producer.start(PcmPurpose::Auxiliary);
+        f.server.onDaxPcmReady(2, frame(producer,3));
+        check(f.packets[client].size() == 1, "DAX route delivers before the unregister");
+
+        f.server.onDaxStreamUnregistered(2,123);
+        f.server.onDaxPcmReady(2, frame(producer,3));
+        check(f.packets[client].size() == 1, "the unregistered stream's epoch stays refused");
+
+        producer.invalidate(); producer.start(PcmPurpose::Auxiliary);
+        f.server.onDaxPcmReady(2, frame(producer,3));
+        check(f.packets[client].size() == 2,
+              "a re-created DAX stream resumes its route without a slice event");
+    }
+
     static void refusalCloseDistinction()
     {
         // Backlog refusal MUST request close.
@@ -815,7 +836,7 @@ public:
     {
         ingressOutlivesController(); rateMatrixAndStereo(); unsupportedRatePreservesStream(); sparseRoutingAndSingleFeed(); formatEncoding(); nonFiniteInt16IsSilence();
         replayAndEpochs(); resetIsolation(); subscriptionAndForwardGapStaging(); retiredRouteAndCapacity(); daxLifecycle(); daxOwnerTransition();
-        staleFinalCheckAndChurn(); levelCallbackRetirement(); negotiationClientChurn(); lifecycleChurnAndConcurrentRevocation(); failedSendIsolation(); failedSendSocketDeletion(); backlogDiagnostics(); refusalCloseDistinction(); daxRouteSurvivesSliceRecreate(); pressureAndReplacement();
+        staleFinalCheckAndChurn(); levelCallbackRetirement(); negotiationClientChurn(); lifecycleChurnAndConcurrentRevocation(); failedSendIsolation(); failedSendSocketDeletion(); backlogDiagnostics(); refusalCloseDistinction(); daxRouteSurvivesSliceRecreate(); daxRouteSurvivesStreamUnregister(); pressureAndReplacement();
         std::printf("TCI RX: %d checks, %d failures\n",checks,failures);
         return failures==0 ? 0 : 1;
     }

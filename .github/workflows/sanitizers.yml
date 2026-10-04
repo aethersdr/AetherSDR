@@ -67,7 +67,10 @@ jobs:
             # TSan cannot coexist with ASan, so build RelWithDebInfo and
             # inject the TSan flags ourselves.
             build_type: RelWithDebInfo
-            shared_core: "OFF"
+            # ON for the same reason as ASan: the -g3 tree with a static core
+            # filled the runner (100%, at link 4438/4854) once the Qt 6.12
+            # :tsan image let this lane build at all.
+            shared_core: "ON"
             receiver_churn: "ON"
             extra_cxx: "-fsanitize=thread -g3 -fno-omit-frame-pointer -O1"
             extra_ld:  "-fsanitize=thread"
