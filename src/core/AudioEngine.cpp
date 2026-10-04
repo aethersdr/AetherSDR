@@ -9375,8 +9375,10 @@ void AudioEngine::onTxAudioReady()
         QByteArray i16(samples * static_cast<int>(sizeof(int16_t)), Qt::Uninitialized);
         auto* d = reinterpret_cast<int16_t*>(i16.data());
         for (int i = 0; i < samples; ++i) {
+            // A NaN passes std::clamp and its cast is undefined.
+            const float v = std::isfinite(f[i]) ? f[i] : 0.0f;
             d[i] = static_cast<int16_t>(
-                std::clamp(f[i] * 32768.0f, -32768.0f, 32767.0f));
+                std::clamp(v * 32768.0f, -32768.0f, 32767.0f));
         }
         data = i16;
     }
@@ -9401,8 +9403,10 @@ void AudioEngine::onTxAudioReady()
         if (rcount <= 0) return;
         data.resize(rcount * static_cast<int>(sizeof(int16_t)));
         auto* rdst = reinterpret_cast<int16_t*>(data.data());
-        for (int i = 0; i < rcount; ++i)
-            rdst[i] = static_cast<int16_t>(std::clamp(rsrc[i] * 32768.0f, -32768.0f, 32767.0f));
+        for (int i = 0; i < rcount; ++i) {
+            const float v = std::isfinite(rsrc[i]) ? rsrc[i] : 0.0f;
+            rdst[i] = static_cast<int16_t>(std::clamp(v * 32768.0f, -32768.0f, 32767.0f));
+        }
     }
 
     // RADE mode: apply client-side gain + meter, then convert int16 → float32

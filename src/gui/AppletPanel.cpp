@@ -15,6 +15,7 @@
 #include "AcomApplet.h"
 #include "SpeApplet.h"
 #include "VkampApplet.h"
+#include "Kpa1500Applet.h"
 #include "LpMeterApplet.h"
 #include "Ctr2ProxyApplet.h"
 #include "TxApplet.h"
@@ -854,6 +855,21 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
         m_appletOrder.append(entry);
     }
 
+    // Elecraft KPA1500 — independent of AMP (PGXL), ACOM, SPE and VKAMP
+    // for the same reason they are independent of each other: a station can
+    // have any combination of them connected at once. Deliberately NOT in
+    // kDefaultOrder: the KPA1500 has no discovery path, so the stored
+    // Peripherals configuration is the only thing that can ever reveal it.
+    // See docs/architecture/kpa1500-amplifier-design.md.
+    m_kpa1500Applet = new Kpa1500Applet;
+    {
+        auto entry = makeEntry("KPA1500", "Elecraft KPA1500", m_kpa1500Applet, false,
+                               m_drawer, m_drawerLayout);
+        m_kpa1500Btn = entry.btn;
+        markHardwareConditional("KPA1500");
+        m_appletOrder.append(entry);
+    }
+
     // LP-100A wattmeter — an instrument rather than an amplifier, so it is
     // independent of every amplifier applet above and lives in the Metering
     // category. Deliberately NOT in kDefaultOrder: it has no discovery path,
@@ -1373,6 +1389,8 @@ QList<AppletPanel::AppletCatalogEntry> AppletPanel::appletCatalog() const
         {QStringLiteral("AMP"),   QStringLiteral("Amplifiers")},
         {QStringLiteral("ACOM"),  QStringLiteral("Amplifiers")},
         {QStringLiteral("SPE"),   QStringLiteral("Amplifiers")},
+        {QStringLiteral("VKAMP"), QStringLiteral("Amplifiers")},
+        {QStringLiteral("KPA1500"), QStringLiteral("Amplifiers")},
         {QStringLiteral("EQ"),    QStringLiteral("Audio & DSP")},
         {QStringLiteral("TXDSP"), QStringLiteral("Audio & DSP")},
         {QStringLiteral("WAVE"),  QStringLiteral("Audio & DSP")},
@@ -1784,6 +1802,12 @@ void AppletPanel::setSpeVisible(bool visible)
 void AppletPanel::setVkampVisible(bool visible)
 {
     updateHardwareAvailability("VKAMP", "Applet_VKAMP", visible);
+    applyBarLayout();
+}
+
+void AppletPanel::setKpa1500Visible(bool visible)
+{
+    updateHardwareAvailability("KPA1500", "Applet_KPA1500", visible);
     applyBarLayout();
 }
 

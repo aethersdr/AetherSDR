@@ -652,12 +652,14 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
                                    SpeConnection* spe,
                                    VkampConnection* vkamp,
                                    LpMeterConnection* lpMeter,
+                                   Kpa1500Connection* kpa1500,
                                    QWidget* parent)
     : PersistentDialog(QStringLiteral("Radio Setup"),
                        QStringLiteral("RadioSetupDialogGeometry"), parent),
       m_model(model), m_audio(audio),
       m_tgxl(tgxl), m_pgxl(pgxl), m_ag(ag),
-      m_kiwiSdrManager(kiwiSdrManager), m_acom(acom), m_spe(spe), m_vkamp(vkamp), m_lpMeter(lpMeter)
+      m_kiwiSdrManager(kiwiSdrManager), m_acom(acom), m_spe(spe), m_vkamp(vkamp), m_lpMeter(lpMeter),
+      m_kpa1500(kpa1500)
 {
     theme::setContainer(this, QStringLiteral("dialog/radioSetup"));
     setMinimumSize(960, 680);

@@ -59,6 +59,8 @@ public:
     void setSliceFilter(int sliceId, int lowHz, int highHz) override;
     void setSliceAgc(int sliceId, const QString& mode, int thresholdDb) override;
     void setSliceNoiseBlanker(int sliceId, bool on, int level) override;
+    ReceiveDispatch requestSliceDsp(int sliceId, const SliceDspRequest& request) override;
+    ReceiveDispatch requestSliceAudio(int sliceId, const SliceAudioRequest& request) override;
 
     // The receiver's own audio stage. Without these three the operator's mute,
     // AF fader and balance moved and nothing happened: IRadioBackend's defaults

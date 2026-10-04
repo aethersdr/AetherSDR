@@ -7,7 +7,7 @@ if(POLICY CMP0156)
     cmake_policy(SET CMP0156 NEW)
 endif()
 
-project(AetherSDR VERSION 26.9.5 LANGUAGES C CXX)
+project(AetherSDR VERSION 26.10.1 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -1014,6 +1014,8 @@ set(CORE_SOURCES
     src/core/SpeConnection.cpp
     src/core/VkampProtocol.cpp
     src/core/VkampConnection.cpp
+    src/core/Kpa1500Protocol.cpp
+    src/core/Kpa1500Connection.cpp
     src/core/LpMeterProtocol.cpp
     src/core/LpMeterConnection.cpp
     src/core/FirmwareUploader.cpp
@@ -1280,6 +1282,7 @@ set(GUI_SOURCES
     src/gui/SpeApplet.cpp
     src/gui/SpeLcdWidget.cpp
     src/gui/VkampApplet.cpp
+    src/gui/Kpa1500Applet.cpp
     src/gui/LpMeterApplet.cpp
     src/gui/Ctr2ProxyApplet.cpp
     src/gui/MeterApplet.cpp
@@ -3365,6 +3368,11 @@ else()
                 DESTINATION lib/udev/rules.d
             )
         endif()
+    endif()
+    if(LINUX AND HIDAPI_FOUND)
+        install(FILES packaging/linux/70-aethersdr-ctr2.rules
+            DESTINATION lib/udev/rules.d
+        )
     endif()
     if(LINUX AND AETHER_BACKEND_RTL)
         install(FILES packaging/linux/70-rtl-sdr.rules

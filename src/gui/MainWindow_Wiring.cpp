@@ -38,6 +38,7 @@
 #include "AcomApplet.h"
 #include "SpeApplet.h"
 #include "VkampApplet.h"
+#include "Kpa1500Applet.h"
 #include "LpMeterApplet.h"
 #include "HealthApplet.h"
 #include "ImageFileDialog.h"
@@ -6439,6 +6440,7 @@ void MainWindow::wireMeters()
         m_acomConn.setAutoReconnect(ar);
         m_speConn.setAutoReconnect(ar);
         m_vkampConn.setAutoReconnect(ar);
+        m_kpa1500Conn.setAutoReconnect(ar);
         m_lpMeterConn.setAutoReconnect(ar);
     }
 
@@ -7095,6 +7097,66 @@ void MainWindow::wireMeters()
         m_appletPanel->vkampApplet()->setVariant(static_cast<AetherSDR::Vkamp::Variant>(savedVariant));
     }
 
+    // ── Elecraft KPA1500 — direct TCP, no FlexRadio relay (#4097) ────────
+    // See docs/architecture/kpa1500-amplifier-design.md. Same structure and
+    // the same ordering rule as the ACOM/SPE/VKAMP blocks above: ALL signal
+    // wiring first, the auto-connect trigger LAST, so nothing misses the
+    // first connected().
+    //
+    // Deliberately absent from this block: any transmit-path wiring. The
+    // amp's `^TX` network keying is implemented in Kpa1500Connection but is
+    // not reachable from the UI or the engine, pending the maintainer
+    // decision on #4097 about whether Ethernet keying is trusted as the sole
+    // keying path. Constitution Principle VI — a path that can transmit
+    // fails closed when the operator's intent is not unambiguous.
+    connect(&m_kpa1500Conn, &Kpa1500Connection::connected, this, [this]() {
+        m_appletPanel->kpa1500Applet()->setConnected(true);
+        m_appletPanel->setKpa1500Visible(true);
+    });
+    connect(&m_kpa1500Conn, &Kpa1500Connection::disconnected, this, [this]() {
+        m_appletPanel->kpa1500Applet()->setConnected(false);
+        m_appletPanel->setKpa1500Visible(false);
+    });
+    connect(&m_kpa1500Conn, &Kpa1500Connection::statusUpdated, this,
+            [this](const AetherSDR::Kpa1500::Status& status) {
+        m_appletPanel->kpa1500Applet()->setStatus(status);
+    });
+    connect(m_appletPanel->kpa1500Applet(), &Kpa1500Applet::operateToggled, this,
+            [this](bool operate) {
+        m_kpa1500Conn.setOperate(operate);
+    });
+    // Starts or cancels the amp's full-search tune. The exciter must supply
+    // RF for it to finish; that stays with the operator (the radio's own
+    // TUNE), so nothing here keys the radio.
+    connect(m_appletPanel->kpa1500Applet(), &Kpa1500Applet::tuneRequested, this, [this]() {
+        m_kpa1500Conn.startTune();
+    });
+    connect(m_appletPanel->kpa1500Applet(), &Kpa1500Applet::tuneCancelRequested, this, [this]() {
+        m_kpa1500Conn.cancelTune();
+    });
+    connect(m_appletPanel->kpa1500Applet(), &Kpa1500Applet::atuInlineToggled, this,
+            [this](bool inLine) {
+        m_kpa1500Conn.setAtuInline(inLine);
+    });
+    connect(m_appletPanel->kpa1500Applet(), &Kpa1500Applet::antennaSelected, this,
+            [this](int port) {
+        m_kpa1500Conn.selectAntenna(port);
+    });
+    connect(m_appletPanel->kpa1500Applet(), &Kpa1500Applet::faultClearRequested, this, [this]() {
+        m_kpa1500Conn.clearFault();
+    });
+
+    // Startup auto-connect from saved Peripherals settings — same reasoning
+    // as ACOM/VK3AMP above: the Flex radio has no idea this amplifier
+    // exists, so the saved setting is the only trigger there will ever be.
+    {
+        const QString ip = PeripheralSettings::deviceString("Kpa1500", "ManualIp");
+        const int port = PeripheralSettings::deviceInt(
+            "Kpa1500", "ManualPort", AetherSDR::Kpa1500::kDefaultPort);
+        if (!ip.isEmpty())
+            m_kpa1500Conn.connectNetwork(ip, static_cast<quint16>(port));
+    }
+
     // ── LP-100A wattmeter — serial or ser2net, no FlexRadio relay ─────────
     // See docs/architecture/lp-100a-wattmeter-design.md. Same structure and
     // the same ordering rule as the ACOM/SPE/VKAMP blocks above: ALL signal
@@ -7528,7 +7590,7 @@ void MainWindow::applySplitOffsetKHz(double offsetKHz, int rxSliceId)
 
 // The split audio arrangement is learned from what the operator does (TX
 // unmute, pans, TX gain) and replayed next split; nothing is configured.
-// Learned only from the *CommandIssued signals: the *Changed signals also fire
+// Learned only from the typed audio intent signals: the *Changed signals also fire
 // on radio status (see SliceModel.h), so they would record radio state, other
 // clients or profile loads as the operator's preference.
 
@@ -7594,26 +7656,22 @@ void MainWindow::armSplitAudioMirror(SliceModel* rx, SliceModel* tx,
                   << "rxPanMovedByApply=" << applied.rxPanMoved
                   << "restored=" << applied.restored;
 
-    m_splitAudioConns.append(connect(tx, &SliceModel::audioMuteCommandIssued, this,
-        [this](bool mute) {
-            if (!m_splitAudioApplying) m_splitAudioRecorder.noteTxMute(mute);
-        }));
-    m_splitAudioConns.append(connect(tx, &SliceModel::audioGainCommandIssued, this,
-        [this](int gain) {
-            if (!m_splitAudioApplying) m_splitAudioRecorder.noteTxGain(gain);
-        }));
-    m_splitAudioConns.append(connect(tx, &SliceModel::audioPanCommandIssued, this,
-        [this](int pan) {
-            if (!m_splitAudioApplying) m_splitAudioRecorder.noteTxPan(pan);
+    m_splitAudioConns.append(connect(tx, &SliceModel::receiveAudioRequested, this,
+        [this](const SliceAudioRequest& request) {
+            if (!m_splitAudioApplying) {
+                m_splitAudioRecorder.noteTxAudioIntent(request);
+            }
         }));
     if (rx) {
         // RX pan only. Its volume and mute are the operator's everyday
         // listening level and stay out of this entirely (#2242) — a split must
         // not come back later and change how the radio sounds the rest of the
         // time.
-        m_splitAudioConns.append(connect(rx, &SliceModel::audioPanCommandIssued, this,
-            [this](int pan) {
-                if (!m_splitAudioApplying) m_splitAudioRecorder.noteRxPan(pan);
+        m_splitAudioConns.append(connect(rx, &SliceModel::receiveAudioRequested, this,
+            [this](const SliceAudioRequest& request) {
+                if (!m_splitAudioApplying) {
+                    m_splitAudioRecorder.noteRxAudioIntent(request);
+                }
             }));
     }
 }

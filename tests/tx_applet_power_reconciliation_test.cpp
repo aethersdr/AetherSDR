@@ -974,6 +974,95 @@ void testAtuContextMenuExplainsWhyPreTuneIsDisabled()
            enabledPreTune != nullptr && enabledPreTune->isEnabled());
 }
 
+void testMemButtonFollowsReadbackOnly()
+{
+    TransmitModel model;
+    TxApplet applet;
+    applet.setTransmitModel(&model);
+    model.setHasTunerMemories(true);
+
+    auto* mem = qobject_cast<QPushButton*>(
+        namedWidget(applet, QStringLiteral("ATU memories")));
+    report("MEM button exists", mem != nullptr);
+    if (!mem) {
+        return;
+    }
+    report("MEM button is clickable", mem->isEnabled());
+
+    // A click with no atu status echo must send the command but NOT light the
+    // button: the radio has not said memories are on (#5545).
+    QSignalSpy commandSpy(&model, &TransmitModel::commandReady);
+    mem->click();
+    report("MEM click sends the memories command once",
+           commandSpy.size() == 1
+               && commandSpy.takeLast().at(0).toString()
+                      == QStringLiteral("atu set memories_enabled=1"));
+    report("MEM stays unlit until the radio echoes", !mem->isChecked());
+
+    // The echo is what lights it.
+    TransmitDelta echoed;
+    echoed.memoriesEnabled = true;
+    model.applyChanges(echoed);
+    report("MEM lights on the radio's readback", mem->isChecked());
+
+    // A click to turn it off must not unlight it before the echo either.
+    commandSpy.clear();
+    mem->click();
+    report("MEM off-click sends memories_enabled=0",
+           !commandSpy.isEmpty()
+               && commandSpy.takeLast().at(0).toString()
+                      == QStringLiteral("atu set memories_enabled=0"));
+    report("MEM stays lit until the radio echoes off", mem->isChecked());
+
+    // A programmatic toggle (the automation bridge's toggle and setChecked
+    // actions) emits toggled but not clicked; it must still send the request
+    // and leave the paint on the readback.
+    TransmitDelta echoedOff;
+    echoedOff.memoriesEnabled = false;
+    model.applyChanges(echoedOff);
+    commandSpy.clear();
+    mem->toggle();
+    report("MEM toggle() sends memories_enabled=1",
+           !commandSpy.isEmpty()
+               && commandSpy.takeLast().at(0).toString()
+                      == QStringLiteral("atu set memories_enabled=1"));
+    report("MEM toggle() stays unlit until the radio echoes", !mem->isChecked());
+    commandSpy.clear();
+    mem->setChecked(true);
+    report("MEM setChecked(true) sends memories_enabled=1",
+           !commandSpy.isEmpty()
+               && commandSpy.takeLast().at(0).toString()
+                      == QStringLiteral("atu set memories_enabled=1"));
+    report("MEM setChecked(true) stays unlit until the radio echoes",
+           !mem->isChecked());
+}
+
+void testMemButtonResyncsOnResetState()
+{
+    TransmitModel model;
+    TxApplet applet;
+    applet.setTransmitModel(&model);
+    model.setHasTunerMemories(true);
+
+    auto* mem = qobject_cast<QPushButton*>(
+        namedWidget(applet, QStringLiteral("ATU memories")));
+    if (!mem) {
+        report("MEM button exists", false);
+        return;
+    }
+
+    TransmitDelta echoed;
+    echoed.memoriesEnabled = true;
+    model.applyChanges(echoed);
+    report("MEM is lit by the radio's readback", mem->isChecked());
+
+    // Disconnect clears memoriesEnabled. resetState() emits apdStateChanged,
+    // not atuStateChanged; the button follows only because the APD handler
+    // also runs syncAtuIndicators(). Guards that path, not the click fix.
+    model.resetState();
+    report("MEM clears on disconnect", !mem->isChecked());
+}
+
 int main(int argc, char** argv)
 {
     TestSettingsProfile settingsProfile(
@@ -1006,6 +1095,8 @@ int main(int argc, char** argv)
     testAtuCapabilityUsesThreeVisibleStates();
     testTuneAvailability();
     testAtuContextMenuExplainsWhyPreTuneIsDisabled();
+    testMemButtonFollowsReadbackOnly();
+    testMemButtonResyncsOnResetState();
 
     std::printf("\n%s\n",
                 g_failed == 0

@@ -126,14 +126,14 @@ private slots:
         QPushButton* vfoSql = button(vfo, QStringLiteral("SQL"));
         QVERIFY(rxSql && vfoSql);
         QVERIFY(rxSql->isEnabled() && vfoSql->isEnabled());
-        QSignalSpy intents(&slice, &SliceModel::squelchCommandIssued);
+        QSignalSpy intents(&slice, &SliceModel::receiveSquelchRequested);
         rxSql->click();
         QCOMPARE(intents.count(), 1);
-        QCOMPARE(intents.last().at(1).toInt(), 44);
+        QCOMPARE(qvariant_cast<SliceSquelchRequest>(intents.last().at(0)).level, 44);
         rxSql->click();
         QCOMPARE(rx.sqlMode(), RxApplet::SqlMode::Auto);
         QCOMPARE(intents.count(), 2);
-        QCOMPARE(intents.last().at(1).toInt(), 44); // never the 10 dB margin
+        QCOMPARE(qvariant_cast<SliceSquelchRequest>(intents.last().at(0)).level, 44); // never the 10 dB margin
         QVERIFY(!slice.squelchOn()); // waits for accepted state
         initial.squelchOn = true;
         slice.applyChanges(initial);

@@ -358,6 +358,9 @@ add_test(NAME byte_relay_test COMMAND byte_relay_test)
 add_executable(ctr2_proxy_model_test tests/ctr2_proxy_model_test.cpp)
 target_include_directories(ctr2_proxy_model_test PRIVATE src)
 target_link_libraries(ctr2_proxy_model_test PRIVATE aethercore Qt6::Core Qt6::Network)
+# The udev rule must grant exactly the devices the app recognises as a CTR2.
+target_compile_definitions(ctr2_proxy_model_test PRIVATE
+    AETHER_CTR2_UDEV_RULES="${CMAKE_CURRENT_LIST_DIR}/../packaging/linux/70-aethersdr-ctr2.rules")
 add_test(NAME ctr2_proxy_model_test COMMAND ctr2_proxy_model_test)
 
 # Socket-free CLOSED retention: injected HID output and an inert QTcpSocket
@@ -3933,6 +3936,14 @@ add_executable(spe_protocol_test
 target_include_directories(spe_protocol_test PRIVATE src)
 target_link_libraries(spe_protocol_test PRIVATE Qt6::Core)
 add_test(NAME spe_protocol_test COMMAND spe_protocol_test)
+
+add_executable(kpa1500_protocol_test
+    tests/kpa1500_protocol_test.cpp
+    src/core/Kpa1500Protocol.cpp
+)
+target_include_directories(kpa1500_protocol_test PRIVATE src)
+target_link_libraries(kpa1500_protocol_test PRIVATE Qt6::Core)
+add_test(NAME kpa1500_protocol_test COMMAND kpa1500_protocol_test)
 
 add_executable(vkamp_protocol_test
     tests/vkamp_protocol_test.cpp

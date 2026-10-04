@@ -358,8 +358,9 @@ byte 3, exact payload count, no checksum, 512-byte DATA buffering) and is
 implementing it, Output report included.
 
 The CTR2 runs on three ESP32-S3 boards, each enumerating with its board's
-own USB IDs. AetherSDR names these in its device list and sorts them first;
-the operator still picks the device, since `303A:1001` is Espressif's
+own USB IDs. AetherSDR names these in its device list, sorts them first and
+preselects the first one (USB is the applet's default mode). The operator
+can still pick another device, since `303A:1001` is Espressif's
 default for any ESP32-S3 and only the product string tells them apart:
 
 | VID:PID | Product string | CTR2 model |

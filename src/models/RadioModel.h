@@ -1734,10 +1734,9 @@ private:
     quint64 m_backendReceiverGeneration = 0;
     std::function<bool(const QString&, ResponseCallback)> m_sliceLifecycleCommandSinkForTest;
     PanadapterModel* resolveBackendPan(const QString& backendPanId);
-    // Connect operator-issued geometry, audio and TX-slice intents to the
-    // backend seam and select its receive publication policy. Called at every
-    // SliceModel construction site — see the definition for why.
-    void wireSliceAudioIntentsToBackend(SliceModel* s, bool geometryThroughBackend = false);
+    // Remaining selection bindings and initial global lock observation.
+    // Both helpers must be called at every SliceModel construction site.
+    void wireSliceObservationsAndTxIntentToBackend(SliceModel* s);
     void wireSliceReceiveIntentsToBackend(SliceModel* s);
     bool m_stagingReceiveModels{false};
     SliceModel* receiveCommandSource() const;
@@ -1745,6 +1744,13 @@ private:
     void dispatchSliceMode(const QString& mode);
     void dispatchSliceFilter(const SliceFilterRequest& request);
     void dispatchSliceAgc(const SliceAgcRequest& request);
+    void dispatchSliceDsp(const SliceDspRequest& request);
+    void dispatchSliceAudio(const SliceAudioRequest& request);
+    void dispatchSliceSquelch(const SliceSquelchRequest& request);
+    void dispatchSliceRxAntenna(const QString& antenna);
+    void dispatchSliceLock(bool locked);
+    void reportReceiveDispatch(ReceiveDispatch result, const QString& operation,
+                               bool operatorOrigin = true);
     // Translate a MODEL pan id to the backend's own id for a command going down
     // the seam. The inverse of resolveBackendPan(); both are needed or the
     // mapping is one-way and every pan command addresses a pan the backend

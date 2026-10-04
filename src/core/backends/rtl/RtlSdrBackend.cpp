@@ -403,6 +403,18 @@ void RtlSdrBackend::startCapture(std::unique_ptr<RtlSdrWorker> worker)
     m_pendingPanId = QStringLiteral("0xe1000000");
     m_receiveGain = 100;
     m_receiveMuted = false;
+    wireWorker();
+    if (!requestCapture(m_requested)) {
+        emit connectionError(tr("RTL-SDR initial capture could not be prepared"));
+        disconnectRadio();
+        return;
+    }
+    m_captureTimer.start();
+    m_worker->startReading();
+}
+
+void RtlSdrBackend::wireWorker()
+{
     const QPointer<RtlSdrWorker> producer(m_worker.get());
     connect(m_worker.get(), &RtlSdrWorker::spectrumFrameReady, this,
         [this, producer](quint64 session, quint64 revision, int panId, const QByteArray& frame) {
@@ -436,17 +448,11 @@ void RtlSdrBackend::startCapture(std::unique_ptr<RtlSdrWorker> worker)
         });
     connect(m_worker.get(), &RtlSdrWorker::readError, this,
         [this, producer](const QString& error) {
-            if (!producer || producer.data() != m_worker.get()) { return; }
+            if ((!m_connected && !m_connecting)
+                || !producer || producer.data() != m_worker.get()) { return; }
             emit connectionError(error);
             if (producer && producer.data() == m_worker.get()) { disconnectRadio(); }
         });
-    if (!requestCapture(m_requested)) {
-        emit connectionError(tr("RTL-SDR initial capture could not be prepared"));
-        disconnectRadio();
-        return;
-    }
-    m_captureTimer.start();
-    m_worker->startReading();
 }
 
 void RtlSdrBackend::disconnectRadio()
@@ -814,6 +820,37 @@ void RtlSdrBackend::setPanFrameRate(const QString& panId, int fps)
     if (RtlSdrDdc* ddcEngine = ddc()) {
         ddcEngine->setSpectrumRateFps(fps);
     }
+}
+
+ReceiveDispatch RtlSdrBackend::requestSliceAudio(int sliceId, const SliceAudioRequest& request)
+{
+    if (!request.valid() || request.origin != SliceAudioRequest::Origin::Operator
+        || !hasAcceptedSlice(sliceId)) {
+        return ReceiveDispatch::Unsupported;
+    }
+    switch (request.field) {
+    case SliceAudioRequest::Field::Gain: setSliceAudioGain(sliceId, request.value); break;
+    case SliceAudioRequest::Field::Mute: setSliceAudioMute(sliceId, request.value != 0); break;
+    case SliceAudioRequest::Field::Pan: setSliceAudioPan(sliceId, request.value); break;
+    }
+    return ReceiveDispatch::Dispatched;
+}
+
+ReceiveDispatch RtlSdrBackend::requestSliceSquelch(int sliceId, const SliceSquelchRequest& request)
+{
+    if (!hasAcceptedSlice(sliceId) || !request.valid()) {
+        return ReceiveDispatch::Unsupported;
+    }
+    const auto receiver = std::ranges::find_if(m_requested.receivers, [sliceId](const auto& value) {
+        return value.passband.stableId == sliceId;
+    });
+    if (receiver == m_requested.receivers.end()
+        || (receiver->mode != RtlCaptureTransaction::Mode::Fm
+            && receiver->mode != RtlCaptureTransaction::Mode::Fmn)) {
+        return ReceiveDispatch::Unsupported;
+    }
+    setSliceSquelch(sliceId, request.enabled, request.level);
+    return ReceiveDispatch::Dispatched;
 }
 
 void RtlSdrBackend::setPanAverage(const QString& panId, int average)

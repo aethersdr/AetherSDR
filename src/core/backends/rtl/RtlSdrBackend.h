@@ -73,6 +73,8 @@ public:
     void setPanAverage(const QString& panId, int average) override;
     void setPanWeightedAverage(const QString& panId, bool on) override;
     void setSliceAudioMute(int sliceId, bool mute) override;
+    ReceiveDispatch requestSliceAudio(int sliceId, const SliceAudioRequest& request) override;
+    ReceiveDispatch requestSliceSquelch(int sliceId, const SliceSquelchRequest& request) override;
     void setSliceAudioGain(int sliceId, int gainPercent) override;
     void setSliceAudioPan(int sliceId, int panPercent) override;
     void setSliceSquelch(int sliceId, bool enabled, int level) override;
@@ -102,6 +104,9 @@ public:
 
 private:
     bool hasAcceptedSlice(int sliceId) const;
+    friend struct RtlSdrBackendTestAccess;
+    // Relay the current worker's token-qualified outputs to the seam once.
+    void wireWorker();
     // Emit the initial snapshot a freshly-connected device would report.
     void emitInitialState();
 

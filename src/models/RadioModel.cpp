@@ -1583,29 +1583,6 @@ void RadioModel::wireBackendReceiverState()
             }
             s = new SliceModel(sliceId, this);
             wireSliceReceiveIntentsToBackend(s);
-            // Receive DSP the radio runs. Same reasoning as AGC above: the
-            // applet toggles drive SliceModel, whose Flex wire text a non-Flex
-            // backend never sees, so without these the controls move and the
-            // radio's own NR/NB/notch/squelch keep whatever state they had.
-            connect(s, &SliceModel::noiseReductionCommandIssued, this,
-                    [this, s](bool on, int level) {
-                if (m_backend) m_backend->setSliceNoiseReduction(s->sliceId(), on, level);
-            });
-            connect(s, &SliceModel::noiseBlankerCommandIssued, this,
-                    [this, s](bool on, int level) {
-                if (m_backend) m_backend->setSliceNoiseBlanker(s->sliceId(), on, level);
-            });
-            connect(s, &SliceModel::autoNotchCommandIssued, this, [this, s](bool on) {
-                if (m_backend) m_backend->setSliceAutoNotch(s->sliceId(), on);
-            });
-            connect(s, &SliceModel::manualNotchCommandIssued, this,
-                    [this, s](bool on, int position) {
-                if (m_backend) m_backend->setSliceManualNotch(s->sliceId(), on, position);
-            });
-            connect(s, &SliceModel::apfCommandIssued, this,
-                    [this, s](bool on, int level) {
-                if (m_backend) m_backend->setSliceApf(s->sliceId(), on, level);
-            });
             // FM repeater controls are distinct neutral intents. Flex
             // continues to use SliceModel's wire text; every other backend gets
             // the same operator action through the seam instead of silently
@@ -1670,7 +1647,7 @@ void RadioModel::wireBackendReceiverState()
                 m_backend->setSliceXitOffset(s->sliceId(), hz);
             });
 
-            wireSliceAudioIntentsToBackend(s, true);
+            wireSliceObservationsAndTxIntentToBackend(s);
             m_slices.append(s);
             s->applyChanges(mapped);
             m_meterModel.setActiveTxSlice(activeTxSliceNum());
@@ -2029,6 +2006,9 @@ RadioModel::RadioModel(QObject* parent)
     qRegisterMetaType<SliceTuneRequest>();
     qRegisterMetaType<SliceFilterRequest>();
     qRegisterMetaType<SliceAgcRequest>();
+    qRegisterMetaType<SliceDspRequest>();
+    qRegisterMetaType<SliceAudioRequest>();
+    qRegisterMetaType<SliceSquelchRequest>();
     qRegisterMetaType<TransmitDelta>();
     qRegisterMetaType<MeterDef>();
     qRegisterMetaType<RadioDelta>();
@@ -4190,10 +4170,9 @@ bool RadioModel::radioSideNoiseReductionAvailable() const
 
 bool RadioModel::radioSideAutoNotchAvailable() const
 {
-    // A command plane carries `slice set <n> anf=` somewhere that answers it:
-    // a Flex, or the Demo radio's synthetic connection, which turns it into the
-    // generator's audible notch (SimBackend::setDemoAnf) although the Demo
-    // declares no radio-side DSP. Only a radio with neither has no ANF.
+    // Flex and radio-side DSP use their backend ANF adapters. Demo also accepts
+    // ANF via SimBackend::requestSliceDsp, which controls its real generator,
+    // although it declares no radio-side DSP.
     return hasCommandPlane() || radioSideNoiseReductionAvailable();
 }
 
@@ -9847,6 +9826,16 @@ void RadioModel::wireSliceReceiveIntentsToBackend(SliceModel* s)
             this, &RadioModel::dispatchSliceFilter, type);
     connect(s, &SliceModel::receiveAgcRequested,
             this, &RadioModel::dispatchSliceAgc, type);
+    connect(s, &SliceModel::receiveDspRequested,
+            this, &RadioModel::dispatchSliceDsp, type);
+    connect(s, &SliceModel::receiveAudioRequested,
+            this, &RadioModel::dispatchSliceAudio, type);
+    connect(s, &SliceModel::receiveSquelchRequested,
+            this, &RadioModel::dispatchSliceSquelch, type);
+    connect(s, &SliceModel::receiveRxAntennaRequested,
+            this, &RadioModel::dispatchSliceRxAntenna, type);
+    connect(s, &SliceModel::receiveLockRequested,
+            this, &RadioModel::dispatchSliceLock, type);
 }
 
 SliceModel* RadioModel::receiveCommandSource() const
@@ -9900,60 +9889,81 @@ void RadioModel::dispatchSliceAgc(const SliceAgcRequest& request)
     }
 }
 
-void RadioModel::wireSliceAudioIntentsToBackend(SliceModel* s, bool geometryThroughBackend)
+void RadioModel::reportReceiveDispatch(ReceiveDispatch result, const QString& operation,
+                                       bool operatorOrigin)
+{
+    if (result == ReceiveDispatch::Unsupported) {
+        qCWarning(lcProtocol).noquote() << "Backend refused receive operation" << operation
+            << (operatorOrigin ? QStringLiteral("(operator)") : QStringLiteral("(compatibility origin)"));
+        // The notice answers a control the operator just moved. A Kiwi
+        // suppression mute or a profile restore is not one, and must not spend
+        // the once-per-session notice on a refusal nobody asked for.
+        if (operatorOrigin) {
+            emit commandDropped(operation);
+        }
+    }
+}
+
+void RadioModel::dispatchSliceDsp(const SliceDspRequest& request)
+{
+    if (SliceModel* source = receiveCommandSource()) {
+        reportReceiveDispatch(m_backend->requestSliceDsp(source->sliceId(), request),
+                              QStringLiteral("receive DSP"),
+                              request.origin == SliceDspRequest::Origin::Operator);
+    }
+}
+
+void RadioModel::dispatchSliceAudio(const SliceAudioRequest& request)
+{
+    if (SliceModel* source = receiveCommandSource()) {
+        reportReceiveDispatch(m_backend->requestSliceAudio(source->sliceId(), request),
+                              QStringLiteral("receive audio"),
+                              request.origin == SliceAudioRequest::Origin::Operator);
+    }
+}
+
+void RadioModel::dispatchSliceSquelch(const SliceSquelchRequest& request)
+{
+    if (SliceModel* source = receiveCommandSource()) {
+        reportReceiveDispatch(m_backend->requestSliceSquelch(source->sliceId(), request),
+                              QStringLiteral("receive squelch"));
+    }
+}
+
+void RadioModel::dispatchSliceRxAntenna(const QString& antenna)
+{
+    if (SliceModel* source = receiveCommandSource()) {
+        const QStringList ports = source->rxAntennaList();
+        const ReceiveDispatch result = !ports.isEmpty() && !ports.contains(antenna)
+            ? ReceiveDispatch::Unsupported
+            : m_backend->requestSliceRxAntenna(source->sliceId(), antenna);
+        reportReceiveDispatch(result, QStringLiteral("receive antenna"));
+    }
+}
+
+void RadioModel::dispatchSliceLock(bool locked)
+{
+    if (SliceModel* source = receiveCommandSource()) {
+        reportReceiveDispatch(m_backend->requestSliceLock(source->sliceId(), locked),
+                              QStringLiteral("receive lock"));
+    }
+}
+
+void RadioModel::wireSliceObservationsAndTxIntentToBackend(SliceModel* s)
 {
     if (!s)
         return;
 
     s->setControlPolicy(m_backend ? m_backend->receiveControlPolicy() : ReceiveControlPolicy::Optimistic);
-    // Direct delivery rejects off-thread signals at their origin. A confirmed
-    // control must still belong to this live model, not a staged/retired object
-    // with the same numeric slot. Reclaimed objects reuse this one binding.
-    const auto canDispatch = [this, s] {
-        if (QThread::currentThread() != thread() || !m_backend) { return false; }
-        return !s->confirmsControls()
-            || (m_backend->isConnected() && slice(s->sliceId()) == s);
-    };
     if (m_radioDialLocked && backendCapabilities().hasRadioDialLock) {
         SliceDelta delta;
         delta.locked = *m_radioDialLocked;
         s->applyChanges(delta);
     }
 
-    // Called from every site that constructs a SliceModel, so a slice built by any
-    // path (radio, automation fixture, session restore) gets these sinks. Flex
-    // applies mute/level/pan on the radio (the backend defaults are no-ops); a
-    // backend that demodulates every receiver on this host applies them in its own
-    // mixer.
-    connect(s, &SliceModel::audioMuteCommandIssued, this,
-            [this, s, canDispatch](bool mute) {
-        if (canDispatch()) { m_backend->setSliceAudioMute(s->sliceId(), mute); }
-    }, Qt::DirectConnection);
-    connect(s, &SliceModel::squelchCommandIssued, this,
-            [this, s, geometryThroughBackend, canDispatch](bool on, int level) {
-        if (canDispatch() && (geometryThroughBackend || s->confirmsControls())) {
-            m_backend->setSliceSquelch(s->sliceId(), on, level);
-        }
-    }, Qt::DirectConnection);
-    connect(s, &SliceModel::audioGainCommandIssued, this,
-            [this, s, canDispatch](int gainPercent) {
-        if (canDispatch()) { m_backend->setSliceAudioGain(s->sliceId(), gainPercent); }
-    }, Qt::DirectConnection);
-    connect(s, &SliceModel::audioPanCommandIssued, this,
-            [this, s, canDispatch](int panPercent) {
-        if (canDispatch()) { m_backend->setSliceAudioPan(s->sliceId(), panPercent); }
-    }, Qt::DirectConnection);
-    connect(s, &SliceModel::rxAntennaCommandIssued, this,
-            [this, s](const QString& antenna) {
-        if (m_backend && !usesFlexCommandPlane())
-            m_backend->setSliceRxAntenna(s->sliceId(), antenna);
-    });
-    connect(s, &SliceModel::lockCommandIssued, this,
-            [this](bool locked) {
-        if (m_backend && backendCapabilities().hasRadioDialLock) {
-            m_backend->setRadioDialLock(locked);
-        }
-    });
+    // Both construction sites still call this helper for global lock readback
+    // and the selection intents below. Receive audio/antenna/lock now share
+    // wireSliceReceiveIntentsToBackend's identity-guarded, unique bindings.
     // "Make this the transmit slice." On a radio with one transmitter the
     // backend MOVES transmit rather than setting a flag, and republishes both
     // the old and the new slice so the indicator follows — which is why nothing
@@ -11961,9 +11971,9 @@ void RadioModel::handleSliceStatus(int id,
             connect(s, &SliceModel::commandReady, this, [this, s](const QString& cmd){
                 sendSliceCommand(s, cmd);
             });
-            // The per-slice audio and TX-slice intents, wired at EVERY
+            // Initial lock observation and selection intents, wired at EVERY
             // construction site rather than only the backend-materialising one.
-            wireSliceAudioIntentsToBackend(s);
+            wireSliceObservationsAndTxIntentToBackend(s);
             wireSliceReceiveIntentsToBackend(s);
             connect(s, &SliceModel::digitalVoiceSliceDisplaced,
                     this, [this](int sliceId, const QString& previousMode) {

@@ -5,6 +5,8 @@
 #include <QStringList>
 #include <QMap>
 #include <QTimer>
+#include <QPointer>
+#include <array>
 
 #include "core/backends/SliceDelta.h"
 #include "core/backends/ReceiveCommand.h"
@@ -405,35 +407,20 @@ signals:
     // Canonical receive dispatch. Emitted after local notifications so a
     // synchronous backend observation cannot be overwritten by an optimistic
     // notification. RadioModel wires these once for every slice lifecycle.
+    // Explicit compatibility origins preserve Kiwi suppression and NRS profile
+    // restoration; routine status updates do not create operator intents.
     void receiveTuneRequested(const AetherSDR::SliceTuneRequest& request);
     void receiveFilterRequested(const AetherSDR::SliceFilterRequest& request);
     void receiveAgcRequested(const AetherSDR::SliceAgcRequest& request);
+    void receiveDspRequested(const AetherSDR::SliceDspRequest& request);
+    void receiveAudioRequested(const AetherSDR::SliceAudioRequest& request);
+    void receiveSquelchRequested(const AetherSDR::SliceSquelchRequest& request);
+    void receiveRxAntennaRequested(const QString& antenna);
+    void receiveLockRequested(bool locked);
 
-    // Receive DSP the radio runs. Emitted only by operator-facing setters, never
-    // by status application, so a radio echo never returns as a command. These are
-    // the seam for non-Flex backends (Flex sends wire text). Enable and level travel
-    // together so a toggle never lands before the level it implies.
-    void noiseReductionCommandIssued(bool on, int level);
-    void noiseBlankerCommandIssued(bool on, int level);
-    void autoNotchCommandIssued(bool on);
-    // Enable and position together — see IRadioBackend::setSliceManualNotch
-    // for why turning the notch on without placing it is not enough.
-    void manualNotchCommandIssued(bool on, int position);
-    void squelchCommandIssued(bool on, int level);
-    // CW audio peaking filter, enable and level together (setApf/setApfLevel).
-    // Operator setters only, never status application; Flex also gets its
-    // `apf=`/`apf_level=` wire text.
-    void apfCommandIssued(bool on, int level);
     // Receive and transmit incremental tuning.
     void ritCommandIssued(bool on, int hz);
     void xitCommandIssued(bool on, int hz);
-    // Operator-issued per-slice audio changes. audioMute/Gain/PanChanged also fire
-    // on status apply, so commands must not be driven off them. A Flex mixes on the
-    // radio; a host-mixing backend (HL2) applies these in its own mixer.
-    void audioMuteCommandIssued(bool mute);
-    void audioGainCommandIssued(int gainPercent);
-    void audioPanCommandIssued(int panPercent);      // 0=left, 50=centre, 100=right
-    void rxAntennaCommandIssued(const QString& antenna);
     // Operator asked for THIS slice to own transmit. A radio with one
     // transmitter and several receivers has to move it rather than set a flag.
     void txSliceCommandIssued();
@@ -463,7 +450,6 @@ signals:
     void rxAntennaListChanged(const QStringList& ants);
     void txAntennaListChanged(const QStringList& ants);
     void lockedChanged(bool locked);
-    void lockCommandIssued(bool locked);
     void tuneBlockedByLock();
     void lockedFeedbackActiveChanged(bool active);
     void qskChanged(bool on);
@@ -563,6 +549,37 @@ private:
     quint64 m_agcModeIntentRevision{0};
     quint64 m_agcThresholdIntentRevision{0};
     quint64 m_agcOffLevelIntentRevision{0};
+    std::array<std::array<quint64, 2>,
+        static_cast<std::size_t>(SliceDspRequest::Feature::Anft) + 1> m_dspIntentRevisions{};
+    std::array<quint64, 3> m_audioIntentRevisions{};
+    quint64 m_squelchIntentRevision{0};
+    bool m_squelchEnableIntentPending{false};
+    bool m_squelchLevelIntentPending{false};
+    quint64 m_rxAntennaIntentRevision{0};
+    quint64 m_lockIntentRevision{0};
+    template<class Notify, class Dispatch>
+    void publishReceiveIntent(quint64& epoch, Notify notify, Dispatch dispatch)
+    {
+        const QPointer<SliceModel> alive(this);
+        const quint64 revision = ++epoch;
+        notify();
+        if (alive && epoch == revision) {
+            dispatch();
+        }
+    }
+    SliceDspRequest currentDspRequest(SliceDspRequest::Feature feature,
+                                      SliceDspRequest::Field field) const;
+    template<class Notify>
+    void notifyReceiveDspIntent(SliceDspRequest::Feature feature,
+                               SliceDspRequest::Field field, Notify notify)
+    {
+        publishReceiveIntent(m_dspIntentRevisions[static_cast<size_t>(feature)][static_cast<size_t>(field)],
+                             notify, [this, feature, field] {
+            // A notification may edit the companion field. Carry its current
+            // value for paired backends without overwriting that newer edit.
+            emit receiveDspRequested(currentDspRequest(feature, field));
+        });
+    }
     void notifyReceiveFilterIntent(SliceFilterRequest::Origin origin);
     // Sign-guarded, idempotent (lo,hi)→(-hi,-lo) mirror of the stored filter
     // when its polarity is wrong for m_mode; true if it changed anything.

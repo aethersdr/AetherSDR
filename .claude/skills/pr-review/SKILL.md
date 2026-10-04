@@ -173,8 +173,8 @@ the shape the bullet above routes a simulator closed loop to — see
   If `main` is newer, the green describes a merge that no longer exists, and
   any conclusion you draw from it inherits that. `main` has `strict: false`, so
   nothing forces a rerun to close the gap — say so in the report rather than
-  reporting the checks as green without qualification. /pr-land turns the same
-  comparison into a gate before it arms auto-merge.
+  reporting the checks as green without qualification. /pr-land records the
+  same comparison in its report but does not gate on it.
 
 ## 2. Linked issue → does the PR actually solve it?
 
