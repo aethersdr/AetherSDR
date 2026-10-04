@@ -207,7 +207,7 @@ int main()
     // The case that case 7 could not express, and the reason the first fix
     // shipped with the fault still in it. At key-down the last receive block is
     // at most
-    // one block period old — 21.3 ms at 48 kHz — so `ago <= kSliceStaleMs` is
+    // one block period old — 21.3 ms at 48 kHz — so slicePeakIsCurrent() is
     // TRUE and stays true while the age climbs, for 129-150 ms depending on
     // where key-down fell inside a block. For that whole window the pre-transmit
     // peak, which is genuinely fresh, is paired against a live flag that is now
@@ -274,7 +274,8 @@ int main()
         check(!slicePeakIsCurrent(std::nullopt), "no age is not current");
         check(slicePeakAgeMs(at, at) == 0 && slicePeakIsCurrent(at, at),
               "age 0 is current");
-        check(slicePeakAgeMs(at, at - 3 * kNsPerMs) == 0 && slicePeakIsCurrent(at, at - 1),
+        check(slicePeakAgeMs(at, at - 3 * kNsPerMs) == 0
+                  && slicePeakIsCurrent(at, at - 3 * kNsPerMs),
               "an instant before the stamp reads as age 0, current");
         check(slicePeakAgeMs(at, limit - 1) == kSliceStaleMs - 1,
               "the age truncates to whole milliseconds");

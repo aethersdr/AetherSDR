@@ -221,8 +221,10 @@ int main(int argc, char** argv)
     // the age gate useless. The DSP is still muted until the event loop runs.
     keyed = false;
     queueMute();
-    // The age gate, asked at two instants on the held stamp's own timeline: no
-    // clock is read, so the verdict does not depend on how fast this host is.
+    // The age input is a deliberate constant here: `held` cancels, so these are
+    // "inside the stale window" and "past it", with no clock read. The age
+    // gate's own edges are pinned in hl2_adc_pairing_test; this section tests
+    // the sampling gate.
     const std::int64_t held = dsp.adcPeakObservedAtNs();
     constexpr std::int64_t kNsPerMs = 1'000'000;
     const bool freshAtLimit =
