@@ -523,6 +523,8 @@ RadioCapabilities IcomCivBackend::capabilities() const
     c.txMonitorControl = m.hasTransmit
         ? std::optional(RadioCapabilities::TxMonitorControl{})
         : std::nullopt;
+    // No client owner is declared for "Show TX in Waterfall" on an Icom.
+    c.txWaterfallClientFlag = std::nullopt;
 
     // THREE, and only three — and WHICH three depends on the mode. FIL1 is
     // 3.0 kHz in SSB, 1.2 kHz in CW, 9 kHz in AM and 15 kHz in FM, so a single

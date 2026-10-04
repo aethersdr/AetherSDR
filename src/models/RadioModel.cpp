@@ -6156,10 +6156,11 @@ bool RadioModel::requestLocalPanWeightedAverage(const QString& panId, bool on)
 
 bool RadioModel::requestLocalShowTxInWaterfall(bool on)
 {
-    // Local-shaping backends only, as requestLocalPanWeightedAverage(): on
-    // Flex the caller sends the show_tx_in_waterfall= wire text itself, which
+    // Only where the backend declares the client owns the flag. Elsewhere
+    // the caller sends the show_tx_in_waterfall= wire text itself, which
     // keeps a raw command out of this side of the seam (#5262 M4).
-    if (!shapesDisplayRatesLocally()) {
+    const bool clientOwns = backendCapabilities().clientPersistsShowTxInWaterfall();
+    if (!clientOwns) {
         return false;
     }
     // Nothing echoes the flag here, so the model is written through
@@ -6170,17 +6171,15 @@ bool RadioModel::requestLocalShowTxInWaterfall(bool on)
     m_transmitModel.applyChanges(delta);
     // Remembered, because TransmitModel::resetState() clears it on every
     // disconnect and no radio status puts it back.
-    ClientDisplaySettings::saveShowTxInWaterfall(settingsScope(), true, on);
+    ClientDisplaySettings::saveShowTxInWaterfall(settingsScope(), clientOwns, on);
     return true;
 }
 
 void RadioModel::restoreClientShowTxInWaterfall()
 {
-    if (!shapesDisplayRatesLocally()) {
-        return;
-    }
-    const std::optional<bool> saved =
-        ClientDisplaySettings::showTxInWaterfall(settingsScope(), true);
+    // The same declared owner as the request above; undeclared restores nothing.
+    const std::optional<bool> saved = ClientDisplaySettings::showTxInWaterfall(
+        settingsScope(), backendCapabilities().clientPersistsShowTxInWaterfall());
     if (!saved) {
         return;
     }
@@ -6942,11 +6941,11 @@ void RadioModel::onConnected()
     // connection, not to an attempt dispatched before the radio rebooted (#5572).
     m_firmwareRetryBlocked = false;
 
-    // A Flex reports show_tx_in_waterfall in its transmit status. A radio with
-    // no display engine reports nothing and a disconnect clears the model, so
-    // the remembered value goes back in here: the model holds it before
-    // connectionStateChanged and before the backend announces a pan or slice.
-    // No-op on a Flex.
+    // A Flex reports show_tx_in_waterfall in its transmit status. Where the
+    // backend declares the client the flag's persistence owner, nothing reports
+    // it and a disconnect clears the model, so the remembered value goes back in
+    // here: before connectionStateChanged and before a pan or slice is announced.
+    // No-op everywhere else.
     restoreClientShowTxInWaterfall();
 
     emit connectionStateChanged(true);

@@ -1,12 +1,12 @@
 // Radio Setup → Transmit's "Show TX in Waterfall" button on the production
-// dialog. Where the waterfall rows are made on this host the click sets the
-// transmit model and no wire text is sent; on a Flex the click sends the wire
-// text and the model waits for the radio's echo. No transport: an injected
-// backend, and a bare model on the never-connected Flex backend.
+// dialog. Where the backend declares the client owns the flag (the HL2) the
+// click sets the transmit model and no wire text is sent; on every other
+// backend the click sends the wire text and the model waits for an echo. No
+// transport: real backends, never connected.
 
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
-#include "core/backends/IRadioBackend.h"
+#include "core/backends/hl2/Hl2Backend.h"
 #include "gui/RadioSetupDialog.h"
 #include "models/RadioModel.h"
 #include "models/TransmitModel.h"
@@ -69,23 +69,6 @@ private:
     QtMessageHandler m_previous{nullptr};
 };
 
-class NoCommandPlaneBackend final : public IRadioBackend {
-public:
-    RadioCapabilities caps;
-    RadioCapabilities capabilities() const override { return caps; }
-    bool isConnected() const override { return true; }
-    void connectRadio(const RadioConnectRequest&) override {}
-    void disconnectRadio() override {}
-    void setSliceFrequency(int, double) override {}
-    void setSliceMode(int, const QString&) override {}
-    void setSliceFilter(int, int, int) override {}
-    void setSliceAgc(int, const QString&, int) override {}
-    void setPanCenter(const QString&, double, PanCenterIntent) override {}
-    void setKeying(bool, const TxCoordinator::Operation&,
-                   const TxCoordinator::Completion&) override {}
-    void invokeExtension(const QString&, const QString&, quint64, const QVariant&) override {}
-};
-
 // Found from the caption the operator reads, so the lookup does not depend on
 // an object name.
 QPushButton* findShowTxButton(QWidget& dialog)
@@ -113,13 +96,12 @@ class RadioSetupShowTxWaterfallTest : public QObject {
     Q_OBJECT
 private slots:
 
-    void hostMadeRowsTakeTheFlagInTheModel()
+    void declaredClientFlagIsTakenInTheModel()
     {
         RadioModel model;
-        auto backend = std::make_unique<NoCommandPlaneBackend>();
-        backend->caps.family = QStringLiteral("hl2");
-        model.setBackendForTest(std::move(backend), QStringLiteral("hl2"));
-        QVERIFY2(model.shapesDisplayRatesLocally(), "the rows are made on this host");
+        model.setBackendForTest(std::make_unique<hl2::Hl2Backend>(), QStringLiteral("hl2"));
+        QVERIFY2(model.backendCapabilities().clientPersistsShowTxInWaterfall(),
+                 "the HL2 declares the client owns the flag");
         QVERIFY(!model.transmitModel().showTxInWaterfall());
 
         RadioSetupDialog dialog(&model);
@@ -141,13 +123,37 @@ private slots:
         QVERIFY(!log.contains(kWireText));
     }
 
+    // Declared opt-out on a backend that is not a Flex: an Icom's rows are made
+    // on this host and it declares no client owner, so the click takes the wire
+    // route and the model is not set.
+    void undeclaredBackendDoesNotTakeTheFlag()
+    {
+        RadioModel model;
+        QVERIFY(model.rebuildBackendForTest(QStringLiteral("icom")));
+        QVERIFY2(model.shapesDisplayRatesLocally(), "the rows are made on this host");
+        QVERIFY2(!model.backendCapabilities().clientPersistsShowTxInWaterfall(),
+                 "and no client owner is declared");
+
+        RadioSetupDialog dialog(&model);
+        dialog.show();
+        dialog.selectTab(QStringLiteral("Transmit"));
+        QPushButton* button = findShowTxButton(dialog);
+        QVERIFY2(button, "Show TX in Waterfall button found");
+
+        ScopedCommandLog log;
+        button->click();
+        QVERIFY2(log.contains(kWireText + QLatin1Char('1')), "the wire route is taken");
+        QVERIFY2(!model.transmitModel().showTxInWaterfall(), "the model is not set");
+    }
+
     // POSITIVE CONTROL: on a Flex the click sends the wire text and the model
-    // is not set optimistically, so the slot above cannot pass on a button
+    // is not set optimistically, so the first slot cannot pass on a button
     // that takes the flag locally on every radio.
     void flexStillSendsTheWireText()
     {
         RadioModel model;  // a bare model is on the Flex backend
         QVERIFY(!model.shapesDisplayRatesLocally());
+        QVERIFY(!model.backendCapabilities().clientPersistsShowTxInWaterfall());
 
         RadioSetupDialog dialog(&model);
         dialog.show();
@@ -159,6 +165,8 @@ private slots:
         button->click();
         QVERIFY2(log.contains(kWireText + QLatin1Char('1')), "the radio is told");
         QVERIFY2(!model.transmitModel().showTxInWaterfall(), "the model waits for the echo");
+        button->click();
+        QVERIFY2(log.contains(kWireText + QLatin1Char('0')), "and told again when switched off");
     }
 };
 

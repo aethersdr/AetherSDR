@@ -318,6 +318,8 @@ RadioCapabilities FlexBackend::capabilities() const
     caps.hasAmCarrierLevel = true;
     caps.voxControl = RadioCapabilities::VoxControl{/*hasDelay*/ true};
     caps.txMonitorControl = RadioCapabilities::TxMonitorControl{};
+    // The radio stores "Show TX in Waterfall" and echoes it in transmit status.
+    caps.txWaterfallClientFlag = std::nullopt;
 
     // FALSE, and stated rather than left to the default. A Flex modulates on
     // the radio AND takes its transmit audio over DAX/VITA-49, so it is the one

@@ -3002,16 +3002,22 @@ toggle — it does **not** key the transmitter.
 Accepts `on`/`off` (also `1`/`0`, `true`/`false`, `enable`/`disable`). The radio
 echoes the change asynchronously — re-read with `get transmit showTxInWaterfall`.
 
-On a radio whose waterfall rows are made on this host (Hermes-Lite 2, ANAN,
-Icom, RTL-SDR, and the demo simulator) there is no radio-side display engine
-and no echo. The flag is a client setting there: the verb applies it at once
+Where the backend declares the client the owner of the flag
+(`RadioCapabilities::txWaterfallClientFlag`: the **Hermes-Lite 2 only**) there
+is no radio-side display engine and no echo. The verb applies the flag at once
 through `RadioModel::requestLocalShowTxInWaterfall`, remembers it per radio,
-and the note says so. The demo, ANAN and RTL-SDR cannot key, so there the flag
-is set and stored and no keyed row is ever drawn.
+and the note says so:
 
 ```json
 ← {"ok":true,"txwaterfall":true,"note":"client-side flag on this radio, applied now; get transmit showTxInWaterfall reads it"}
 ```
+
+Flex owns the flag in the radio. ANAN, Icom, RTL-SDR and the **demo simulator**
+declare no owner: there the verb sends the wire text and answers with the first
+note above, nothing echoes, `get transmit showTxInWaterfall` stays `false`, and
+nothing is stored. A `true` flag only says keyed rows are allowed: the demo,
+ANAN and RTL-SDR cannot key, and on a Hermes-Lite 2 what those rows show while
+keyed has not been measured.
 
 ### `get dax`
 Read the centralized DAX RX channel-ownership table (#3305): which consumers

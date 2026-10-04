@@ -81,13 +81,13 @@ public:
         return rate;
     }
 
-    // "Show TX in Waterfall" where the waterfall rows are made on this host,
-    // one flag per radio as on a Flex. `shapedLocally` false (the radio stores
-    // it) reads and writes nothing, so no copy can fight the radio's.
+    // "Show TX in Waterfall", one flag per radio. `clientOwns` is the backend's
+    // declaration (RadioCapabilities::clientPersistsShowTxInWaterfall()); false
+    // reads and writes nothing, so no copy can fight a radio's own.
     static std::optional<bool> showTxInWaterfall(const RadioSettingsScope& scope,
-                                                 bool shapedLocally)
+                                                 bool clientOwns)
     {
-        if (!shapedLocally || !scope.hasRadioIdentity()) {
+        if (!clientOwns || !scope.hasRadioIdentity()) {
             return std::nullopt;
         }
         int version = 0;
@@ -103,9 +103,9 @@ public:
     }
 
     static void saveShowTxInWaterfall(const RadioSettingsScope& scope,
-                                      bool shapedLocally, bool on)
+                                      bool clientOwns, bool on)
     {
-        if (!shapedLocally || !scope.hasRadioIdentity()) {
+        if (!clientOwns || !scope.hasRadioIdentity()) {
             return;
         }
         int version = 0;

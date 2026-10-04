@@ -380,6 +380,8 @@ RadioCapabilities AnanBackend::capabilities() const
     c.voxControl = std::nullopt;
     c.speechProcessorControl = std::nullopt;
     c.txMonitorControl = std::nullopt;
+    // No client owner is declared for "Show TX in Waterfall" on an ANAN.
+    c.txWaterfallClientFlag = std::nullopt;
     // The panadapter dBm axis is dBFS with a dBm label: kUncalibratedDbfsToDbmOffset
     // is 0.0f and bin levels depend on window/normalisation, unverified against a
     // known input. Internally consistent, but not comparable: never publish as a

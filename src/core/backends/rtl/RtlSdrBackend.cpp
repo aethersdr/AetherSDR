@@ -171,6 +171,7 @@ RadioCapabilities RtlSdrBackend::capabilities() const
     c.voxControl = std::nullopt;  // receive only
     c.speechProcessorControl = std::nullopt;
     c.txMonitorControl = std::nullopt;
+    c.txWaterfallClientFlag = std::nullopt;  // receive only; no owner declared
     c.hasAgcThreshold = false;
     c.hasModeIndependentSquelch = false;
     // RtlSquelchGate is the receiver's own squelch, FM/FMN only. The gate and

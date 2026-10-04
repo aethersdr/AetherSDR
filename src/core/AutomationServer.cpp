@@ -3583,9 +3583,9 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
             parseValueOnly,
             [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
                 // Whether keyed-up TX renders rows in the waterfall: radio-held on a
-                // Flex (`transmit set show_tx_in_waterfall`), a client flag where
-                // the rows are made on this host, by the same route as Radio Setup.
-                // Off by default (#3646/#3804).
+                // Flex (`transmit set show_tx_in_waterfall`), a client flag where the
+                // backend declares one (RadioCapabilities::txWaterfallClientFlag), by
+                // the same route as Radio Setup. Off by default (#3646/#3804).
                 if (!s.m_radioModel)
                     return err(QStringLiteral("no radio model available"));
                 const QString v = a.value.trimmed().toLower();

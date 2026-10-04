@@ -1,8 +1,9 @@
-// "Show TX in Waterfall" as a client flag where the waterfall rows are made on
-// this host: request, store per radio, restore on connect, the Flex path, the
-// bridge verb, the store's refusals. Socket-free, on the real RadioModel and
-// TransmitModel. Nothing here keys: what the waterfall draws is not tested.
-// The Radio Setup button is in radio_setup_show_tx_waterfall_test.
+// "Show TX in Waterfall" as a client flag where the backend declares the client
+// owns it (RadioCapabilities::txWaterfallClientFlag): request, store per radio,
+// restore on connect; the backends that declare nothing; the Flex path; the
+// bridge verb; the store's refusals. Socket-free, on the real RadioModel,
+// TransmitModel and backends. Nothing here keys: what the waterfall draws is
+// not tested. The Radio Setup button is in radio_setup_show_tx_waterfall_test.
 
 #include "TestSettingsProfile.h"
 #include "core/AutomationServer.h"
@@ -28,12 +29,21 @@ namespace AetherSDR {
 struct RadioModelWakeTestAccess {
     static void connectAs(RadioModel& model, const QString& serial)
     {
-        model.m_lastInfo.serial = serial;
+        setSerial(model, serial);
         model.onConnected();
     }
+    // The reported serial too: it is what identifies an RTL-SDR.
     static void setSerial(RadioModel& model, const QString& serial)
     {
         model.m_lastInfo.serial = serial;
+        model.m_lastInfo.serialIdentity.reportedSerial = serial;
+    }
+    // The connect edge's restore alone, for a backend whose onConnected()
+    // continues into the command-plane handshake.
+    static void restoreOnly(RadioModel& model, const QString& serial)
+    {
+        setSerial(model, serial);
+        model.restoreClientShowTxInWaterfall();
     }
     static void disconnect(RadioModel& model)
     {
@@ -61,15 +71,17 @@ void check(bool ok, const char* name)
     }
 }
 
-// A backend on the typed seam with no command plane and no display engine:
-// what an HL2 is to RadioModel, without its sockets and threads.
-class SeamBackend final : public IRadioBackend {
+// A backend on the typed seam that engages the record with the owner field
+// false. No production backend declares this; it is the record's own second
+// state, and it must behave as an absent record does.
+class DeclaresFalseBackend final : public IRadioBackend {
 public:
     bool connected = true;
     RadioCapabilities capabilities() const override
     {
         RadioCapabilities caps;
-        caps.family = QStringLiteral("hl2");
+        caps.family = QStringLiteral("seam");
+        caps.txWaterfallClientFlag = RadioCapabilities::TxWaterfallClientFlag{false};
         return caps;
     }
     void connectRadio(const RadioConnectRequest&) override { connected = true; }
@@ -101,12 +113,14 @@ int main(int argc, char** argv)
     const RadioSettingsScope scopeA(QStringLiteral("hl2"), serialA);
     const RadioSettingsScope scopeB(QStringLiteral("hl2"), serialB);
 
-    // 1 and 2. A backend that shapes its own display.
+    // 1 and 2. The backend that declares the client owns the flag: the real
+    // Hl2Backend, never connected.
     {
         RadioModel radio;
-        radio.setBackendForTest(std::make_unique<SeamBackend>(), QStringLiteral("hl2"));
-        check(radio.shapesDisplayRatesLocally() && !radio.hasCommandPlane(),
-              "fixture: shaped locally, no command plane");
+        radio.setBackendForTest(std::make_unique<hl2::Hl2Backend>(), QStringLiteral("hl2"));
+        check(radio.backendCapabilities().clientPersistsShowTxInWaterfall()
+                  && !radio.hasCommandPlane(),
+              "fixture: the HL2 declares the client owns the flag");
         RadioModelWakeTestAccess::connectAs(radio, serialA);
         check(radio.settingsScope().radioId() == serialA, "fixture: the session has an identity");
         check(!radio.transmitModel().showTxInWaterfall(), "the flag starts false");
@@ -197,15 +211,96 @@ int main(int argc, char** argv)
               "an unknown identity never writes the family default");
     }
 
-    // 3. A Flex: declined, nothing stored, the echo still works.
+    // Declared opt-out, on each real non-Flex backend that declares no owner.
+    // Its rows are made on this host, so the old family test would have taken
+    // it. A document that already holds the flag is neither read nor rewritten.
+    for (const QString& family : {QStringLiteral("icom"), QStringLiteral("anan"),
+                                  QStringLiteral("rtl"), QStringLiteral("sim")}) {
+        const QByteArray tag = family.toLatin1();
+        const auto named = [&tag](const char* what) -> QByteArray {
+            return tag + ": " + what;
+        };
+        RadioModel radio;
+        if (!radio.rebuildBackendForTest(family)) {
+            check(family == QLatin1String("rtl"), named("fixture: backend built").constData());
+            continue;   // RTL-SDR support is optional in a build
+        }
+        RadioModelWakeTestAccess::setSerial(radio, serialA);
+        const RadioSettingsScope scope = radio.settingsScope();
+        check(scope.hasRadioIdentity() && scope.family() == family,
+              named("fixture: the session has an identity").constData());
+        const QJsonObject seeded{{QStringLiteral("showTxInWaterfall"), true},
+                                 {QStringLiteral("waterfallRates"),
+                                  QJsonObject{{QStringLiteral("0"), 60}}}};
+        check(scope.setFeature(feature, 1, seeded), named("fixture: document seeded").constData());
+        const RadioCapabilities caps = radio.backendCapabilities();
+        check(radio.shapesDisplayRatesLocally(),
+              named("fixture: the rows are made on this host").constData());
+        check(!caps.clientPersistsShowTxInWaterfall(),
+              named("declares no client owner").constData());
+
+        if (radio.hasCommandPlane()) {
+            RadioModelWakeTestAccess::restoreOnly(radio, serialA);
+        } else {
+            RadioModelWakeTestAccess::connectAs(radio, serialA);
+        }
+        check(CDS::showTxInWaterfall(radio.settingsScope(), true) == true,
+              named("fixture: a declared owner would have read the seeded flag").constData());
+        check(!radio.transmitModel().showTxInWaterfall(),
+              named("the connect edge restores nothing").constData());
+        check(!radio.requestLocalShowTxInWaterfall(true),
+              named("the request declines").constData());
+        check(!radio.transmitModel().showTxInWaterfall(),
+              named("the model is not set").constData());
+        check(!radio.requestLocalShowTxInWaterfall(false),
+              named("and declines off as well").constData());
+        check(scope.featureExact(feature) == seeded,
+              named("the ClientDisplay document is untouched").constData());
+        if (!radio.hasCommandPlane()) {
+            RadioModelWakeTestAccess::disconnect(radio);
+        }
+        check(scope.setFeature(feature, 1, QJsonObject{}), named("fixture: cleared").constData());
+    }
+
+    // The record's second state: engaged with the owner field false.
     {
+        const RadioSettingsScope scope(QStringLiteral("seam"), serialA);
+        const QJsonObject seeded{{QStringLiteral("showTxInWaterfall"), true}};
+        check(scope.setFeature(feature, 1, seeded), "declared false fixture: document seeded");
+        RadioModel radio;
+        radio.setBackendForTest(std::make_unique<DeclaresFalseBackend>(), QStringLiteral("seam"));
+        check(radio.backendCapabilities().txWaterfallClientFlag.has_value()
+                  && !radio.backendCapabilities().clientPersistsShowTxInWaterfall(),
+              "declared false fixture: the record is engaged and names no owner");
+        RadioModelWakeTestAccess::connectAs(radio, serialA);
+        check(CDS::showTxInWaterfall(radio.settingsScope(), true) == true,
+              "declared false fixture: a declared owner would have read the seeded flag");
+        check(!radio.transmitModel().showTxInWaterfall(), "declared false: nothing is restored");
+        check(!radio.requestLocalShowTxInWaterfall(true), "declared false: the request declines");
+        check(!radio.transmitModel().showTxInWaterfall(), "declared false: the model is not set");
+        check(!radio.requestLocalShowTxInWaterfall(false), "declared false: off declines too");
+        check(scope.featureExact(feature) == seeded, "declared false: nothing is written");
+        RadioModelWakeTestAccess::disconnect(radio);
+    }
+
+    // 3. A Flex: declined, nothing stored or restored, the echo still works.
+    {
+        const RadioSettingsScope scope(QStringLiteral("flex"), serialA);
+        const QJsonObject seeded{{QStringLiteral("showTxInWaterfall"), true}};
+        check(scope.setFeature(feature, 1, seeded), "Flex fixture: document seeded");
         RadioModel radio;
         check(radio.rebuildBackendForTest(QStringLiteral("flex")), "fixture: Flex backend built");
         check(!radio.shapesDisplayRatesLocally(), "fixture: a Flex shapes nothing locally");
+        check(!radio.backendCapabilities().clientPersistsShowTxInWaterfall(),
+              "Flex: declares no client owner, the radio holds the flag");
+        RadioModelWakeTestAccess::restoreOnly(radio, serialA);
+        check(!radio.transmitModel().showTxInWaterfall(), "Flex: nothing is restored");
         check(!radio.requestLocalShowTxInWaterfall(true),
               "Flex: the request declines, so the caller sends the wire command");
         check(!radio.transmitModel().showTxInWaterfall(),
               "Flex: the model is NOT set optimistically - the radio decides");
+        check(!radio.requestLocalShowTxInWaterfall(false), "Flex: off declines too");
+        check(scope.featureExact(feature) == seeded, "Flex: the document is untouched");
         check(RadioSettingsScope(QStringLiteral("flex"), {}).featureExact(feature).isEmpty(),
               "Flex: nothing is stored");
         radio.handleStatusForTest(QStringLiteral("transmit"),
@@ -220,7 +315,7 @@ int main(int argc, char** argv)
     // 4. The bridge verb takes the same route.
     {
         RadioModel radio;
-        radio.setBackendForTest(std::make_unique<SeamBackend>(), QStringLiteral("hl2"));
+        radio.setBackendForTest(std::make_unique<hl2::Hl2Backend>(), QStringLiteral("hl2"));
         AutomationServer bridge;
         bridge.setRadioModel(&radio);
         const QJsonObject on = AutomationServerTestAccess::request(bridge, "txwaterfall on");
@@ -236,17 +331,25 @@ int main(int argc, char** argv)
                   && !radio.transmitModel().showTxInWaterfall(),
               "txwaterfall off: the model reads false");
     }
-    {
+    // Flex, and the demo simulator, which declares no owner: the verb sends the
+    // wire text and answers as it does on a Flex. Nothing echoes on the demo.
+    for (const QString& family : {QStringLiteral("flex"), QStringLiteral("sim")}) {
+        const QByteArray tag = family.toLatin1();
+        const auto named = [&tag](const char* what) -> QByteArray {
+            return tag + " txwaterfall on: " + what;
+        };
         RadioModel radio;
-        check(radio.rebuildBackendForTest(QStringLiteral("flex")), "fixture: Flex backend built");
+        check(radio.rebuildBackendForTest(family), named("fixture: backend built").constData());
         AutomationServer bridge;
         bridge.setRadioModel(&radio);
         const QJsonObject on = AutomationServerTestAccess::request(bridge, "txwaterfall on");
-        check(on.value(QStringLiteral("ok")).toBool(), "Flex txwaterfall on: accepted");
-        check(on.value(QStringLiteral("note")).toString().contains(QStringLiteral("radio echoes")),
-              "Flex txwaterfall on: the note still says the radio echoes");
+        check(on.value(QStringLiteral("ok")).toBool(), named("accepted").constData());
+        check(on.value(QStringLiteral("note")).toString()
+                  == QStringLiteral("radio echoes status; re-read with get transmit "
+                                    "showTxInWaterfall"),
+              named("the note is the radio-echo one").constData());
         check(!radio.transmitModel().showTxInWaterfall(),
-              "Flex txwaterfall on: the model waits for the radio, unchanged");
+              named("the model waits for the radio").constData());
     }
 
     // 5. The store's own boundary.

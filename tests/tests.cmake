@@ -3269,8 +3269,8 @@ set_tests_properties(radio_setup_recording_mode_dim_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
 
 # Radio Setup's Show TX in Waterfall button on the production dialog: a click
-# sets the model where the rows are made on this host and sends the wire text
-# on a Flex. Injected backend; no socket.
+# sets the model where the backend declares the client owns the flag (HL2) and
+# sends the wire text everywhere else. Real backends, never connected; no socket.
 add_executable(radio_setup_show_tx_waterfall_test
     tests/radio_setup_show_tx_waterfall_test.cpp
     src/gui/DragValuePopup.cpp
@@ -5953,10 +5953,10 @@ target_include_directories(rtl_device_settings_test PRIVATE src tests)
 target_link_libraries(rtl_device_settings_test PRIVATE aethercore Qt6::Core)
 add_test(NAME rtl_device_settings_test COMMAND rtl_device_settings_test)
 
-# "Show TX in Waterfall" as a client flag where no radio stores it. Socket-free:
-# a real RadioModel with an injected seam backend (and Hl2Backend / FlexBackend
-# built but never connected), the bridge verb through handleLine, the real
-# settings store in a TestSettingsProfile. Qt6::Widgets for AutomationServer.
+# "Show TX in Waterfall" as a client flag where the backend declares the client
+# its owner. Socket-free: a real RadioModel on each real backend, built but never
+# connected, the bridge verb through handleLine, the real settings store in a
+# TestSettingsProfile. Qt6::Widgets for AutomationServer.
 add_executable(show_tx_in_waterfall_client_flag_test
     tests/show_tx_in_waterfall_client_flag_test.cpp)
 target_include_directories(show_tx_in_waterfall_client_flag_test PRIVATE src tests)
