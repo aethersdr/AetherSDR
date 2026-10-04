@@ -22,6 +22,14 @@ struct SquelchLevelScale {
     // True only where the pan's noise floor plus a margin lands on the gate the
     // radio applies, so Auto SQL may pick the level from pan bins.
     bool autoSquelch = false;
+    // The threshold's unit as the operator reads it; empty means dBm.
+    QString unit;
+    // True only where this record IS the receiver's squelch, not just a place
+    // for its line: SQL exists in `modes` and nowhere else, the client keeps
+    // each receiver's manual/Auto intent, and Auto starts from the absolute
+    // threshold rather than sending a margin. False keeps the #2504 mode rule
+    // and the radio-owned squelch state every other family has.
+    bool modesExclusive = false;
 
     bool operator==(const SquelchLevelScale&) const = default;
 
@@ -64,6 +72,20 @@ struct SquelchLevelScale {
         return std::nullopt;
     }
     return published;
+}
+
+// The published record when it is the receiver's own gate (modesExclusive),
+// else nullptr.
+[[nodiscard]] inline const SquelchLevelScale* exclusiveSquelchScale(
+    const std::optional<SquelchLevelScale>& published)
+{
+    return published && published->modesExclusive ? &*published : nullptr;
+}
+
+[[nodiscard]] inline std::optional<SquelchLevelScale> exclusiveSquelchScaleValue(
+    const std::optional<SquelchLevelScale>& published)
+{
+    return published && published->modesExclusive ? published : std::nullopt;
 }
 
 [[nodiscard]] inline bool autoSquelchAvailable(const std::optional<SquelchLevelScale>& scale)

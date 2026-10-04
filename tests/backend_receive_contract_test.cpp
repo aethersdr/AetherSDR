@@ -99,9 +99,9 @@ const std::array kFamilies{
     Family{"anan", make<anan::AnanBackend>, false, false, "pre-connect receiver configuration (not DSP completion)"},
     Family{"sim", make<SimBackend>, true, false, "production Demo session state (not hardware/filter DSP)"},
 #ifdef AETHER_BACKEND_RTL
-    Family{"rtl", make<rtl::RtlSdrBackend>, true, false, "cold refusal only; USB/DDC dispatch not covered"},
+    Family{"rtl", make<rtl::RtlSdrBackend>, true, true, "cold refusal only; USB/DDC dispatch not covered"},
 #else
-    Family{"rtl", nullptr, true, false, "NOT BUILT: optional librtlsdr unavailable"},
+    Family{"rtl", nullptr, true, true, "NOT BUILT: optional librtlsdr unavailable"},
 #endif
 };
 

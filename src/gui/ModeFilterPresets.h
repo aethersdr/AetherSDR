@@ -3,6 +3,8 @@
 #include <QString>
 #include <QVector>
 
+namespace AetherSDR { struct ReceiveFilterControl; struct SquelchLevelScale; }
+
 namespace AetherSDR::ModeFilters {
 
 // Per-mode filter ladders and the width → passband-edges rule, shared by the
@@ -23,12 +25,33 @@ struct Edges {
     int hi = 0;
 };
 
-// The ladder for a mode, narrow to wide. Empty for modes with no presets (FM);
+// The ladder for a mode, narrow to wide. Empty for analog FM without a
+// declared adjustable-filter capability;
 // unknown modes get the SSB ladder, as they always have.
 const QVector<int>& widthsForMode(const QString& mode);
 
+// FM defaults above describe fixed radio filters. A receiver which declares
+// adjustable FM edges can use the existing DFM ladder within those bounds.
+// The conservative headless record does not gate unrelated desktop modes.
+QVector<int> widthsForMode(const QString& mode, const ReceiveFilterControl* control);
+// Analog FM spellings. DFM retains its existing separate preset behavior.
+bool isFmMode(const QString& mode);
+
 // The passband a labelled width means in this mode.
 Edges edgesForWidth(const QString& mode, int widthHz, const SliceContext& ctx);
+bool acceptsFmEdges(const QString& mode, const ReceiveFilterControl* control, Edges edges);
+
+// Whether an FM-family passband is operator-adjustable: a declared row for the
+// mode (range checked per edit); not if other FM rows are declared or the radio
+// owns the filter; otherwise as before.
+bool fmFilterAdjustable(const QString& mode, const ReceiveFilterControl* control,
+                        bool radioPublishesWidths);
+bool acceptsFilterEdges(const QString& mode, const ReceiveFilterControl* control,
+                        bool radioPublishesWidths, Edges edges);
+// The receive-mode squelch rule shared by the RX applet and VFO. `exclusive` is
+// exclusiveSquelchScale(caps.squelchLevelScale): non-null replaces the rule.
+bool squelchAvailableInMode(const QString& mode, const SquelchLevelScale* exclusive,
+                            bool modeIndependentSquelch, bool externalReplacement);
 
 // A passband's labelled width, for matching a ladder entry against what the
 // slice is actually running. The inverse of edgesForWidth for every mode whose

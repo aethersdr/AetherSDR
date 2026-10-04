@@ -24,6 +24,7 @@
 #include "core/dsp/WdspChannel.h"
 #ifdef AETHER_BACKEND_RTL
 #include "core/backends/rtl/RtlSdrBackend.h"
+#include "core/backends/rtl/RtlSquelchGate.h"
 #endif
 
 #include <QCoreApplication>
@@ -147,8 +148,18 @@ void recordsPerBackend()
     check(anan::AnanBackend().capabilities().squelchLevelScale == legacy,
           "ANAN: Flex's -160 + 1*level, every mode, with Auto SQL");
 #ifdef AETHER_BACKEND_RTL
-    check(rtl::RtlSdrBackend().capabilities().squelchLevelScale == legacy,
-          "RTL-SDR: Flex's -160 + 1*level, every mode, with Auto SQL");
+    {
+        // RtlSquelchGate is the receiver's own gate: its map, FM/FMN only, Auto
+        // SQL (the gate reads the pan's FFT), and SQL nowhere else.
+        const SquelchLevelScale rtlScale{rtl::RtlSquelchGate::kReferenceDb,
+            rtl::RtlSquelchGate::kStepDb, {QStringLiteral("FM"), QStringLiteral("FMN")},
+            true, QStringLiteral("dBFS/bin"), true};
+        check(rtl::RtlSdrBackend().capabilities().squelchLevelScale == rtlScale,
+              "RTL-SDR: RtlSquelchGate's -120 + 1.2*level dBFS/bin, FM/FMN, exclusive");
+    }
+    // Only RTL owns its gate; every other family keeps the #2504 mode rule.
+    check(!legacy.modesExclusive && !exclusiveSquelchScale(std::optional(legacy)),
+          "the legacy scale is a line placement, not the receiver's gate");
 #endif
 }
 
