@@ -31,11 +31,18 @@ struct Ctr2HidDeviceIo {
 // Nothing here ever waits for that thread on the owner's thread: queued
 // output is cancelled between writes, and shutdown() lets the port delete
 // itself once the thread has finished.
+//
+// Ports opened with the same deviceKey (the device path) reach the device in
+// order: a new port's I/O thread waits, up to a second, until the previous
+// port has written its final reports and closed the device. Without that, a
+// Stop then Start could deliver the old link's CLOSED after the new link's
+// READY, and the device would drop a link the host still thinks is up.
 class Ctr2HidThreadPort final : public Ctr2HidPort {
     Q_OBJECT
 
 public:
-    Ctr2HidThreadPort(Ctr2HidDeviceIo io, const QString& description, QObject* parent = nullptr);
+    Ctr2HidThreadPort(Ctr2HidDeviceIo io, const QString& description,
+                      const QString& deviceKey = {}, QObject* parent = nullptr);
     // Only reached when shutdown() was never called; waits for an idle thread.
     ~Ctr2HidThreadPort() override;
 

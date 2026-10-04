@@ -12,8 +12,9 @@
  *           [length hi][length lo]              packets includes the header
  *   Data:   [counter][7 payload bytes, zero-padded after the last byte]
  *
- * Message types: DATA 0x00 (radio TCP bytes), HELLO 0x01 (device -> host),
- * READY 0x02 (host -> device), CLOSED 0x03 (either direction),
+ * Message types: DATA 0x00 (radio TCP bytes), HELLO 0x01 (host: calling;
+ * device: restart), READY 0x02 (device: answer; host: radio connected),
+ * CLOSED 0x03 (either direction),
  * DATAGRAM 0x04 (one UDP datagram: [radio port hi][radio port lo][bytes]).
  * Counters are 0x00-0x7F and wrap 0x7F -> 0x00.
  */
@@ -53,7 +54,7 @@ typedef struct {
     uint8_t counter;
 } ctr2_tx;
 
-/* Call before sending HELLO: a link starts with counter 0. */
+/* Call before sending HELLO or READY: each resets the counter to 0. */
 void ctr2_tx_reset(ctr2_tx *tx);
 
 /* Sends one message: the header report, then ceil(len / 7) data reports.

@@ -343,6 +343,10 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         applyRxAudioMute(false);
     });
 
+    m_txTailTimer = new QTimer(this);
+    m_txTailTimer->setSingleShot(true);
+    connect(m_txTailTimer, &QTimer::timeout, this, &Hl2Backend::finishTxTail);
+
     m_cwHangTimer = new QTimer(this);
     m_cwHangTimer->setSingleShot(true);
     connect(m_cwHangTimer, &QTimer::timeout, this, [this] {
@@ -795,6 +799,13 @@ void Hl2Backend::buildReceivers(int count)
             // same frequency is deliberate: parked at 0 Hz they would draw
             // panadapters of DC and read as a hardware fault on first connect.
             r = previous.front();
+            // RIT/XIT are that receiver's own, as on a Flex slice: a new
+            // receiver starts with both off, as createPanadapter()'s does.
+            r.ritOn = false;
+            r.ritHz = 0;
+            r.xitOn = false;
+            r.xitHz = 0;
+            r.ncoMovedForRit = false;
         }
         r.dsp = nullptr;             // never inherited; recreated below
         r.audioMuted = false;
@@ -834,10 +845,19 @@ bool Hl2Backend::openReceiverDsp(int ddc, std::string* error)
     // the UI number never changes (Hl2ReceiverMap::remove).
     const int ui = ids->uiNumber;
 
+    // Rule 6 holds by ordering: the DSP emits on m_ioThread, the thread that
+    // emits linkDown, so no frame is delivered after disconnected(). A frame is
+    // published only while its producer is still the receiver behind its UI
+    // number: a queued frame outlives disconnect() and deleteLater(), and a
+    // reopened receiver can take the same number. audioReady and meterUpdate
+    // below apply the same check.
     connect(dsp, &Hl2RxDsp::spectrumReady, this,
-            [this, ui](const std::vector<float>& bins) {
-        if (!m_ids.byUi(ui))
+            [this, ui, producer = QPointer<Hl2RxDsp>(dsp)](const std::vector<float>& bins) {
+        const auto* ids = m_ids.byUi(ui);
+        const Receiver* receiver = ids ? rx(ids->ddcIndex) : nullptr;
+        if (!producer || !receiver || receiver->dsp != producer.data()) {
             return;
+        }
         // dBFS -> dBm through the shared reference (one AD9866 behind every
         // DDC): derived full scale (+3 dB) minus LNA gain, so the trace holds
         // still across gain changes. off == 0.0 fires only when the LNA gain
@@ -876,11 +896,12 @@ bool Hl2Backend::openReceiverDsp(int ddc, std::string* error)
     });
 
     connect(dsp, &Hl2RxDsp::meterUpdate, this,
-            [this, ui](float dbfs) {
+            [this, ui, producer = QPointer<Hl2RxDsp>(dsp)](float dbfs) {
         const auto* ids = m_ids.byUi(ui);
         Receiver* r = ids ? rx(ids->ddcIndex) : nullptr;
-        if (!r)
+        if (!producer || !r || r->dsp != producer.data()) {
             return;
+        }
         // Same reference as the spectrum -- a meter that moved on a gain
         // change while the trace stayed put would be its own kind of lie.
         const double dbm = m_dbRef.toDbm(dbfs);
@@ -1325,7 +1346,7 @@ bool Hl2Backend::removePanadapter(const QString& panId)
     applyBandFilter("close receiver");
     publishWideState();
     // Transmit moved: re-run the new owner's tune, as setTxSlice() does, so the
-    // TX register and RIT follow it instead of staying on the closed receiver.
+    // TX register (with the new owner's XIT) leaves the closed receiver.
     if (txMoved) {
         retuneReceiver(m_txDdc);
     }
@@ -1832,7 +1853,7 @@ RadioCapabilities Hl2Backend::capabilities() const
     // 100 with no RF leaving the radio. Consumers that act on drive must see that
     // distinction rather than infer applied power from a request.
     c.transmitDriveControl = RadioCapabilities::TransmitDriveControl{
-        SliceFrequencyControl::Authority::Engine};
+        SliceFrequencyControl::Authority::Engine, /*tunePowerAppliesLive=*/true};
     c.hasRadioDialLock = false;
     c.hasTuner = false;
     c.hasTunerMemories = false;
@@ -1963,8 +1984,10 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.hasSupplyVoltageTelemetry = false;
     c.hasPaTemperatureTelemetry = true;
     c.hasPaCurrentTelemetry = false;
-    c.speechProcessorLevelMaximum = 2;
-    c.speechProcessorLabel = QStringLiteral("PROC");
+    // PROC runs in this host's ClientComp (hostModulates), not in the radio.
+    c.speechProcessorControl = std::nullopt;
+    c.voxControl = std::nullopt;
+    c.txMonitorControl = std::nullopt;
     c.hasMainFanTelemetry = false;
     // The HL2 persists NOTHING across power cycles — "the radio reports no
     // VFO, so the app is authoritative and must push" (pushInitialState).
@@ -2714,6 +2737,7 @@ void Hl2Backend::disconnectRadio()
     // ending in MetisClient::start(), for a session nobody is in. Measured:
     // connect, connect, disconnect gave two dspSetupFinished and a running wire.
     m_queuedConnect.reset();
+    cancelTxTail();
 
     if (m_metis)
         // Queued: serialises behind whatever the I/O thread is doing.
@@ -2798,13 +2822,13 @@ void Hl2Backend::setSliceFrequency(int sliceId, double hz)
     // Stay clear of the band edges: the passband rolls off there, and a slice
     // parked in the roll-off would be attenuated for no visible reason.
     const double usableHz = halfSpanHz * kUsablePassbandFraction;
-    // The window is judged on where the receiver LISTENS (dial + RIT on the
-    // transmit receiver), so a RIT offset past the edge moves the NCO too.
+    // The window is judged on where the receiver LISTENS (dial + its RIT), so
+    // a RIT offset past the edge moves the NCO too.
     const double tunedHz = rxTunedHz(*r);
     const bool ritApplies = (tunedHz != r->sliceFreqHz);
     const bool outsideWindow = std::abs(tunedHz - r->ncoHz) > usableHz;
     // A move RIT alone caused is undone when RIT stops applying to this
-    // receiver (cleared, zeroed, or transmit moved away) — the NCO comes back
+    // receiver (cleared or zeroed) — the NCO comes back
     // to the dial, or the pan centre stays offset by the old RIT for good.
     const bool ritReturn = !outsideWindow && !ritApplies && r->ncoMovedForRit;
     if (outsideWindow || ritReturn) {
@@ -3173,16 +3197,6 @@ void Hl2Backend::setTxSlice(int sliceId)
     // The band filter's keyed-TX override follows m_txDdc, so re-evaluate it.
     applyBandFilter("tx slice");
     publishWideState();
-    // RIT belongs to the transmit receiver, so it leaves one and joins the other.
-    // On the new receiver this repeats the setTxFrequency() and band-memory
-    // writes above via setSliceFrequency(): the same values, and
-    // applyPerBandStateFor() returns early on an unchanged band key — a
-    // deliberate re-run of the whole tune, not a missing gate.
-    if (m_ritOn && m_ritHz != 0) {
-        logRitScope();
-        retuneReceiver(previous);
-        retuneReceiver(ddc);
-    }
 
     // Republish BOTH slices: the one that lost transmit and the one that gained
     // it. Publishing only the new one would leave the old indicator lit, and two
@@ -4112,13 +4126,18 @@ void Hl2Backend::applyKeying(bool key, const TxCoordinator::Operation& operation
 
     // While keyed the shared filter board must follow the TRANSMIT receiver
     // rather than the agree-or-bypass receive policy — see applyBandFilter().
-    applyBandFilter(key ? "key" : "unkey");
+    // A re-key inside the transmit tail cancels the tail: the carrier continues.
+    if (key) {
+        cancelTxTail();
+        applyBandFilter("key");
+    }
 
     // A voice key must not inherit a TUNE carrier (the packet builder prefers
     // the tone over audio). Only a tone TUNE raised is cleared; an explicitly
     // requested tone is the operator's to key.
     if (key && !m_tuning && m_toneFromTune)
         setTxTestTone(0.0, 0.0, operation);
+    bool wasTuning = false;
     if (!key) {
         if (m_cwHangTimer) {
             m_cwHangTimer->stop();
@@ -4128,21 +4147,15 @@ void Hl2Backend::applyKeying(bool key, const TxCoordinator::Operation& operation
         // Every unkey ends tune, so drive is restored here rather than in
         // setTune(): the TX watchdog, key verb, MOX/PTT coordinator and
         // disconnect reset all call setKeying(false) directly.
-        const bool wasTuning = m_tuning;
+        wasTuning = m_tuning;
         m_tuning = false;
+        m_tuneOperation = {};
         // Cleared on EVERY unkey, not only a tuning one, and unconditionally
         // rather than behind `wasTuning`: this is the single point every unkey
         // path converges on (the comment above enumerates them), and a tune
         // request left standing is a bit the radio re-reads on the next key —
         // a tuner that starts on the operator's next voice transmission.
         applyAtuTuneRequest(false);
-        if (wasTuning) {
-            setTxPower(m_rfPowerPercent);
-            // Re-decide the filter: the earlier call ran with m_tuning still
-            // set and so forced the TX receiver's filter, and the
-            // `oc == m_ocFilterByte` early-out would keep it until a retune.
-            applyBandFilter("tune-end");
-        }
     }
     if (m_metis) {
         QMetaObject::invokeMethod(m_metis, [metis = m_metis, key, operation, cwBreakIn] {
@@ -4152,6 +4165,15 @@ void Hl2Backend::applyKeying(bool key, const TxCoordinator::Operation& operation
                 metis->setMox(key, operation);
             }
         }, Qt::QueuedConnection);
+    }
+    // The receive filter and an owed RF drive wait out the radio's transmit
+    // tail (see kTxTailHoldMs), armed only after the MOX-off is queued.
+    if (!key) {
+        if (keyChanged || wasTuning) {
+            beginTxTail();
+        } else if (!m_txTailPending) {
+            applyBandFilter("unkey");
+        }
     }
     // Release only now, after the MOX-off is queued, so even a zero hold
     // posts behind it; the hold covers the control-packet wait, network hop,
@@ -4321,14 +4343,17 @@ void Hl2Backend::setTxFrequency(double hz)
     // 10 ppm on 28 MHz that is a 280 Hz error corrected to under 1 Hz.
     //
     // XIT lands here and ONLY here: every caller passes the transmit receiver's
-    // dial, so the offset reaches the TX register on every path that writes it
-    // (tune, TX slice move, reconnect, calibration) and never the receive side.
-    double txHz = hz + (m_xitOn ? m_xitHz : 0);
+    // dial, so that receiver's XIT reaches the TX register on every path that
+    // writes it (tune, TX slice move, reconnect, calibration) and never the
+    // receive side.
+    const Receiver* txRx = rx(m_txDdc);
+    const int xitHz = (txRx && txRx->xitOn) ? txRx->xitHz : 0;
+    double txHz = hz + xitHz;
     // XIT can take the command through zero behind the dial guard, and
     // ncoCommandHz() maps that to DC. Skipping the write is no better: the
     // register keeps its last value, possibly another band. Hold the dial.
     if (txHz <= 0.0) {
-        qCWarning(lcHl2) << "HL2: XIT" << m_xitHz << "Hz would put TX at" << txHz
+        qCWarning(lcHl2) << "HL2: XIT" << xitHz << "Hz would put TX at" << txHz
                          << "Hz from a dial of" << hz
                          << "Hz; TX register holds the dial, XIT not applied";
         txHz = hz;
@@ -4371,12 +4396,10 @@ double Hl2Backend::rxShiftHz(const Receiver& r) const noexcept
 
 double Hl2Backend::rxTunedHz(const Receiver& r) const noexcept
 {
-    // RIT is radio-wide at the seam (no slice id), and it only means anything
-    // relative to the transmit frequency — so it belongs to the receiver that
-    // owns transmit. Added before dspShiftHz() so it stays in the TRUE-RF
-    // domain the frequency calibration already corrects.
-    const bool ownsTx = (&r == rx(m_txDdc));
-    return r.sliceFreqHz + ((m_ritOn && ownsTx) ? m_ritHz : 0);
+    // Every receiver has its own NCO, so each carries its own RIT, as a Flex
+    // slice does. Added before dspShiftHz() so it stays in the TRUE-RF domain
+    // the frequency calibration already corrects.
+    return r.sliceFreqHz + (r.ritOn ? r.ritHz : 0);
 }
 
 void Hl2Backend::retuneReceiver(int ddc)
@@ -4390,74 +4413,97 @@ void Hl2Backend::retuneReceiver(int ddc)
     }
 }
 
-void Hl2Backend::logRitScope() const
+int Hl2Backend::clampRitXit(const char* what, int hz)
 {
-    // Radio-wide at the seam (RadioModel passes no slice id), so whichever VFO
-    // the operator turned, this is the receiver whose audio actually moved.
-    const Hl2ReceiverIds* ids = m_ids.byDdc(m_txDdc);
-    qCInfo(lcHl2) << "HL2: RIT" << (m_ritOn ? "on," : "off,") << "offset" << m_ritHz
-                  << "Hz — follows transmit: receiver DDC" << m_txDdc
-                  << "(slice" << (ids ? ids->uiNumber : -1) << ")";
-}
-
-void Hl2Backend::setRitEnabled(bool on)
-{
-    if (on == m_ritOn) {
-        return;
-    }
-    m_ritOn = on;
-    if (m_ritHz != 0) {
-        logRitScope();
-        retuneReceiver(m_txDdc);
-    }
-}
-
-void Hl2Backend::setRitOffset(int hz)
-{
-    const int requested = hz;
-    hz = std::clamp(hz, -kRitXitMaxHz, kRitXitMaxHz);
-    if (hz != requested) {
-        qCWarning(lcHl2) << "HL2: RIT offset" << requested << "Hz clamped to" << hz
+    const int clamped = std::clamp(hz, -kRitXitMaxHz, kRitXitMaxHz);
+    if (clamped != hz) {
+        qCWarning(lcHl2) << "HL2:" << what << "offset" << hz << "Hz clamped to" << clamped
                          << "Hz (limit +/-" << kRitXitMaxHz << "Hz)";
     }
-    if (hz == m_ritHz) {
+    return clamped;
+}
+
+void Hl2Backend::logRitXit(const char* what, int ddc, bool on, int hz) const
+{
+    const Hl2ReceiverIds* ids = m_ids.byDdc(ddc);
+    qCInfo(lcHl2) << "HL2:" << what << (on ? "on," : "off,") << "offset" << hz
+                  << "Hz on receiver DDC" << ddc << "slice" << (ids ? ids->uiNumber : -1)
+                  << (ddc == m_txDdc ? "(transmit)" : "(receive only)");
+}
+
+// Each setter ends by publishing the receiver's RIT/XIT, so the readout follows
+// what the receiver holds: an offset the clamp cut, and the final value of an
+// enable-then-offset pair. retuneReceiver() publishes as part of the re-tune.
+void Hl2Backend::setSliceRitEnabled(int sliceId, bool on)
+{
+    const int ddc = ddcForSlice(sliceId);
+    Receiver* r = rx(ddc);
+    if (!r || on == r->ritOn) {
         return;
     }
-    m_ritHz = hz;
-    if (m_ritOn) {
-        logRitScope();
-        retuneReceiver(m_txDdc);
+    r->ritOn = on;
+    logRitXit("RIT", ddc, r->ritOn, r->ritHz);
+    if (r->ritHz != 0) {
+        retuneReceiver(ddc);
+    } else {
+        emitSliceState(ddc);
     }
 }
 
-void Hl2Backend::setXitEnabled(bool on)
+void Hl2Backend::setSliceRitOffset(int sliceId, int hz)
 {
-    if (on == m_xitOn) {
+    const int ddc = ddcForSlice(sliceId);
+    Receiver* r = rx(ddc);
+    if (!r) {
         return;
     }
-    m_xitOn = on;
-    const Receiver* txRx = rx(m_txDdc);
-    if (m_xitHz != 0 && txRx) {
-        setTxFrequency(txRx->sliceFreqHz);
+    const int clamped = clampRitXit("RIT", hz);
+    if (clamped == r->ritHz && clamped == hz) {
+        return;
+    }
+    const bool moves = r->ritOn && clamped != r->ritHz;
+    r->ritHz = clamped;
+    logRitXit("RIT", ddc, r->ritOn, r->ritHz);
+    if (moves) {
+        retuneReceiver(ddc);
+    } else {
+        emitSliceState(ddc);
     }
 }
 
-void Hl2Backend::setXitOffset(int hz)
+void Hl2Backend::setSliceXitEnabled(int sliceId, bool on)
 {
-    const int requested = hz;
-    hz = std::clamp(hz, -kRitXitMaxHz, kRitXitMaxHz);
-    if (hz != requested) {
-        qCWarning(lcHl2) << "HL2: XIT offset" << requested << "Hz clamped to" << hz
-                         << "Hz (limit +/-" << kRitXitMaxHz << "Hz)";
-    }
-    if (hz == m_xitHz) {
+    const int ddc = ddcForSlice(sliceId);
+    Receiver* r = rx(ddc);
+    if (!r || on == r->xitOn) {
         return;
     }
-    m_xitHz = hz;
-    const Receiver* txRx = rx(m_txDdc);
-    if (m_xitOn && txRx) {
-        setTxFrequency(txRx->sliceFreqHz);
+    r->xitOn = on;
+    logRitXit("XIT", ddc, r->xitOn, r->xitHz);
+    if (r->xitHz != 0 && ddc == m_txDdc) {
+        setTxFrequency(r->sliceFreqHz);
     }
+    emitSliceState(ddc);
+}
+
+void Hl2Backend::setSliceXitOffset(int sliceId, int hz)
+{
+    const int ddc = ddcForSlice(sliceId);
+    Receiver* r = rx(ddc);
+    if (!r) {
+        return;
+    }
+    const int clamped = clampRitXit("XIT", hz);
+    if (clamped == r->xitHz && clamped == hz) {
+        return;
+    }
+    const bool moves = r->xitOn && clamped != r->xitHz && ddc == m_txDdc;
+    r->xitHz = clamped;
+    logRitXit("XIT", ddc, r->xitOn, r->xitHz);
+    if (moves) {
+        setTxFrequency(r->sliceFreqHz);
+    }
+    emitSliceState(ddc);
 }
 
 void Hl2Backend::setCwPitch(int hz)
@@ -4881,6 +4927,7 @@ void Hl2Backend::setTune(bool on, int tunePowerPercent, const AetherSDR::TxCoord
     // clears it.
     if (on) {
         m_tuning = true;
+        m_tuneOperation = operation;
         // BEFORE the carrier, not after. The HL2's AH-4 handler samples the
         // request alongside the key, and raising it after the tone is already
         // radiating leaves the first moments of the tune un-requested — which
@@ -4889,8 +4936,10 @@ void Hl2Backend::setTune(bool on, int tunePowerPercent, const AetherSDR::TxCoord
         applyAtuTuneRequest(true);
         // Straight to the drive register rather than through setTxPower(), which
         // would overwrite the saved RF power we have to restore on release.
-        if (tunePowerPercent >= 0)
+        if (tunePowerPercent >= 0) {
             applyDrive(tunePowerPercent);
+            m_rfDriveOwed = true;
+        }
         setTxTestTone(0.0, kTuneCarrierAmplitude, operation);
         m_toneFromTune = true;   // set AFTER: setTxTestTone clears the flag
         setKeying(true, operation, completion);
@@ -4900,9 +4949,58 @@ void Hl2Backend::setTune(bool on, int tunePowerPercent, const AetherSDR::TxCoord
     }
 }
 
+// Drive only, straight to the register: m_rfPowerPercent stays the value the
+// unkey restores. A carrier whose admission has lapsed takes no drive change.
+void Hl2Backend::setTunePower(int percent)
+{
+    if (!m_tuning
+        || !TxCoordinator::Command{m_tuneOperation, true}.permitsDispatch(TxCoordinator::monotonicMs())) {
+        return;
+    }
+    applyDrive(percent);
+    m_rfDriveOwed = true;
+}
+
+// The radio keeps radiating after the MOX-off frame: keyed IQ already in its TX
+// FIFO drains (tx_buffer_latency, radio.v:934) and the last sample is held for
+// ptt_hang_time (radio.v:935, 1036-1047), while drive applies at once
+// (ad9866ctrl.v:134-140). So the band filter and an owed RF drive wait.
+void Hl2Backend::beginTxTail()
+{
+    m_txTailPending = true;
+    if (m_txTailHoldMs <= 0) {
+        finishTxTail();
+        return;
+    }
+    if (!m_txTailTimer->isActive()) {
+        m_txTailTimer->start(m_txTailHoldMs);
+    }
+}
+
+void Hl2Backend::cancelTxTail()
+{
+    if (m_txTailTimer) {
+        m_txTailTimer->stop();
+    }
+    m_txTailPending = false;
+}
+
+void Hl2Backend::finishTxTail()
+{
+    if (!m_txTailPending || m_keyed) {
+        return;
+    }
+    m_txTailPending = false;
+    applyBandFilter("unkey");
+    if (m_rfDriveOwed && !m_tuning) {
+        m_rfDriveOwed = false;
+        applyDrive(m_rfPowerPercent);
+    }
+}
+
 // Clamp, map to the drive register, and honour the transmit gate. Shared by
-// setTxPower() and setTune() so the mapping — whose coarseness is documented in
-// setTxPower() — exists once and cannot drift between the two.
+// setTxPower(), setTune() and setTunePower() so the mapping — whose coarseness
+// is documented in setTxPower() — exists once and cannot drift between them.
 void Hl2Backend::applyDrive(int percent)
 {
     // Drive is gated exactly like keying. setTxDriveLevel writes the PA-enable
@@ -5049,6 +5147,9 @@ void Hl2Backend::setTxPower(int percent)
     notifyOperatingStateChanged();
     if (m_tuning)
         return;   // tune power owns the drive register until the carrier drops
+    if (m_rfDriveOwed && m_txTailPending)
+        return;   // the tune tail is still radiating; finishTxTail() applies it
+    m_rfDriveOwed = false;
     applyDrive(m_rfPowerPercent);
 }
 
@@ -7200,6 +7301,9 @@ void Hl2Backend::pushInitialState()
     // keyed because the previous session ended mid-transmission.
     m_keyed = false;
     m_tuning = false;
+    m_tuneOperation = {};
+    cancelTxTail();
+    m_rfDriveOwed = false;
     // BELT AND BRACES, and named as such rather than dressed up: the bit lives
     // in MetisClient, which clears it in start(), so on the path that matters
     // this is redundant. It is here because this function is the one place that
@@ -7589,7 +7693,7 @@ void Hl2Backend::applyBandFilter(const char* reason)
     // Keyed or tuning uses the transmit byte (Hl2HardwareOptions::FilterBoard
     // decides which path the relays sit in), and the TX receiver's filter wins
     // when spanned.
-    const bool transmitting = m_keyed || m_tuning;
+    const bool transmitting = m_keyed || m_tuning || m_txTailPending;
 
     int oc = -1;
     bool spanned = false;
@@ -7695,6 +7799,13 @@ void Hl2Backend::emitSliceState(int ddc)
     // SliceModel::applyChanges() does not emit squelchCommandIssued.
     d.squelchOn = r->squelchOn;
     d.squelchLevel = r->squelchLevel;
+    // The RIT/XIT the receiver holds, so the readout shows what it applies (a
+    // clamped offset, or a fresh connect at zero). applyChanges() emits only
+    // ritChanged/xitChanged, never the command signals, so this cannot loop.
+    d.ritOn = r->ritOn;
+    d.ritFreq = r->ritHz;
+    d.xitOn = r->xitOn;
+    d.xitFreq = r->xitHz;
     // Exactly one slice is the TX slice (the one on m_txDdc). Unset, txSlice()
     // is null and RadioModel's interlock refuses every key; set on all, the
     // operator could key from a receiver the TX NCO is not following.
