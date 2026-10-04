@@ -72,7 +72,8 @@ private:
 //   - bandIndex is translated to the newer family's table (no 60m here).
 //   - txAntenna is 1..4 (0 = none); atuState is not reported (null).
 //   - STANDBY reports SWR directly; OPERATE reports PA gain instead, so
-//     swrAnt is derived from forward/reverse power there. swrAtu stays 0.
+//     swrAnt is derived from forward/reverse power there and flagged
+//     swrEstimated. swrAtu stays 0.
 //   - Warnings come from the display context; alarmDetail flags the ALARM bit.
 // Returns nullopt for a payload of the wrong size.
 std::optional<Status> parseStatus(const QByteArray& payload);

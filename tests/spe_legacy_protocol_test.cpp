@@ -143,7 +143,8 @@ int main()
                    bandName(s->bandIndex) == QLatin1String("20m"));
             report("input nibble 1 is IN2", s->input == 2);
             report("antenna nibble 2 is ANT 3", s->txAntenna == 3);
-            report("STANDBY SWR comes straight from the field", near(s->swrAnt, 1.5f));
+            report("STANDBY SWR comes straight from the field, not estimated",
+                   near(s->swrAnt, 1.5f) && !s->swrEstimated);
             report("no before-ATU SWR on the 1K-FA", s->swrAtu == 0.0f);
             report("power, voltage, current, temperature scale by 10/10/10/1",
                    near(s->outputPowerW, 25.0f) && near(s->paVoltageV, 48.3f)
@@ -165,6 +166,7 @@ int main()
                    bandName(s->bandIndex) == QLatin1String("40m"));
             report("OPERATE SWR is derived from forward/reverse, not the gain field",
                    near(s->swrAnt, 1.5f));
+            report("a derived SWR is flagged as an estimate", s->swrEstimated);
             report("display context 0x17 is the temperature warning",
                    s->warningDetail == QLatin1String("Temperature high"));
             report("ALARM bit sets alarm text", !s->alarmDetail.isEmpty());

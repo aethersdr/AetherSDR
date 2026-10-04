@@ -208,10 +208,7 @@ SpeApplet::SpeApplet(QWidget* parent)
     // The family's operate-green (same pair as ACOM's engaged OPERATE) —
     // an "energize" affordance, not a new colour.
     theme.applyStyleSheet(m_onBtn, ampOperateActiveBtnStyle());
-    m_onBtn->setToolTip(tr("Power the amplifier ON — pulses the serial control"
-                           " lines (over the network this needs an"
-                           " rfc2217-enabled ser2net port; see the Radio Setup"
-                           " row's tooltip)."));
+    m_onBtn->setToolTip(onButtonTip());
     connect(m_onBtn, &QPushButton::clicked, this, &SpeApplet::powerOnClicked);
     // "OPER"/"STBY" rather than the full words — the row has 5 buttons and
     // the long labels clip at the applet's default width (hardware-tested).
@@ -481,9 +478,18 @@ void SpeApplet::setForwardPower(float watts)
     // Peak marker: HGauge's sliding window, fed by setValue (canon).
 }
 
-void SpeApplet::setSwrAnt(float swr)
+void SpeApplet::setSwrAnt(float swr, bool estimated)
 {
     m_swrAntVal = swr;
+    if (estimated != m_swrEstimated) {
+        m_swrEstimated = estimated;
+        const QString note = estimated
+            ? tr("Estimated from forward and reverse power; the amplifier's own"
+                 " meter may read higher.")
+            : QString();
+        m_swrAntLabel->setToolTip(note);
+        m_swrAntGauge->setAccessibleDescription(note);
+    }
     // Without forward drive SWR is undefined (the amp reports 0.00 in RX,
     // which is below the gauge's 1.0 floor anyway) — hold the needle at 1.0,
     // same gate as the readout label.
@@ -496,8 +502,29 @@ void SpeApplet::setSwrAtu(float swr)
     m_swrAtuGauge->setValue(m_atuSwrAvailable && m_fwdWatts >= 1.0f ? swr : 1.0f);
 }
 
-void SpeApplet::setAtuSwrAvailable(bool available)
+QString SpeApplet::onButtonTip()
 {
+    return tr("Power the amplifier ON — pulses the serial control"
+              " lines (over the network this needs an"
+              " rfc2217-enabled ser2net port; see the Radio Setup"
+              " row's tooltip).");
+}
+
+void SpeApplet::setModelCapabilities(const AetherSDR::Spe::ModelSpec& spec)
+{
+    m_powerOnAvailable = spec.serialPowerOn;
+    const QString onReason = spec.serialPowerOn
+        ? QString()
+        : tr("The %1 is switched on by its 12 V remote line from the"
+             " transceiver, not over the serial port.").arg(spec.displayName);
+    m_onBtn->setToolTip(spec.serialPowerOn ? onButtonTip() : onReason);
+    m_onBtn->setAccessibleDescription(onReason);
+    m_lcd->setUnavailableText(spec.hasLcdMirror
+        ? QString()
+        : tr("The %1 has no remote display mirror").arg(spec.displayName));
+    updateCommandsEnabled();
+
+    const bool available = spec.reportsAtuSwr;
     m_atuSwrAvailable = available;
     const QString reason = available
         ? QString()
@@ -659,7 +686,7 @@ void SpeApplet::updateCommandsEnabled()
     }
     // ON stays available whenever the transport is up — a silent amp is
     // exactly when it's needed.
-    m_onBtn->setEnabled(m_connected);
+    m_onBtn->setEnabled(m_connected && m_powerOnAvailable);
 }
 
 void SpeApplet::clearTelemetry()
@@ -726,7 +753,8 @@ void SpeApplet::updateValueLabels()
         ? QStringLiteral("PWR  %1").arg(static_cast<int>(m_fwdWatts))
         : QStringLiteral("PWR"));
     m_swrAntLabel->setText(m_fwdWatts >= 1.0f
-        ? QStringLiteral("SWR  %1:1").arg(m_swrAntVal, 0, 'f', 1)
+        ? (m_swrEstimated ? QStringLiteral("SWR ≈%1:1") : QStringLiteral("SWR  %1:1"))
+              .arg(m_swrAntVal, 0, 'f', 1)
         : QStringLiteral("SWR"));
     m_swrAtuLabel->setText(m_atuSwrAvailable && m_fwdWatts >= 1.0f
         ? QStringLiteral("ATU  %1:1").arg(m_swrAtuVal, 0, 'f', 1)
