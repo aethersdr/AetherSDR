@@ -6063,6 +6063,9 @@ void VfoWidget::setRxApplet(RxApplet* rx)
     connect(rx, &RxApplet::sqlModeChanged, this, [this](int) {
         syncSqlVisuals();
     });
+    connect(rx, &RxApplet::sqlAutoAvailabilityChanged, this, [this]() {
+        syncSqlVisuals();
+    });
     // Auto-margin updates come from RxApplet (or any sibling VfoWidget
     // mirroring it) — reflect them in the slider when we're in Auto mode.
     connect(rx, &RxApplet::autoSqlMarginDbChanged, this, [this](int dB) {
@@ -6168,6 +6171,7 @@ void VfoWidget::syncSqlVisuals()
 {
     if (!m_sqlBtn || !m_sqlSlider) return;
     if (!mirrorsRxAppletSql()) {
+        m_sqlBtn->setAccessibleDescription(QString());
         QSignalBlocker b1(m_sqlBtn), b2(m_sqlSlider);
         if (m_slice && m_slice->externalReceiveReplacementActive()) {
             if (m_sqlBtn->isCheckable()) {
@@ -6267,6 +6271,7 @@ void VfoWidget::syncSqlVisuals()
     }
 
     const auto mode = m_rxApplet->sqlMode();
+    m_sqlBtn->setAccessibleDescription(m_rxApplet->sqlButtonAccessibleDescription());
     // Match RxApplet's three button styles + label so the two surfaces
     // read identically.
     switch (mode) {

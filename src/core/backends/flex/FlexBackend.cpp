@@ -225,6 +225,9 @@ RadioCapabilities FlexBackend::capabilities() const
     caps.model = m_modelProvider ? m_modelProvider() : QString();
     caps.fmTonePresentation = FmTonePresentation::Legacy;
     caps.fmDtcsCodes = {};
+    // squelch_level 0..100 is dBm above -160 on the calibrated pan axis, in
+    // every mode, so the pan floor plus a margin is the level to send.
+    caps.squelchLevelScale = legacyDbmSquelchScale();
 
     // Seed from the FlexLib-sourced platform table (Principle I). This is the
     // derived-from-name truth used to *seed* the reported capabilities; a fuller

@@ -526,6 +526,21 @@ and conflating them would hide one of them.
 | `radioOwnsDbmScale` | ✅ (default) | ⚠️ **✅ (default)** | ❌ | ❌ | Will the radio adopt a dBm range sent to it and report it back? |
 | `dbmAxisIsCalibrated()` (`panAmplitude->calibratedDbm`) | ✅ (absent) | ❌ | ✅ (absent) | ❌ | Do the numbers on that axis mean absolute dBm at the antenna? |
 | `panBinsAbsolute()` (`panAmplitude->binsAbsolute`) | ❌ (absent) | ✅ | ❌ (absent) | ✅ | Do the spectrum bins hold still while the reference level moves? |
+| `squelchLevelScale` | −160 + 1·L, all modes, Auto SQL | −119 + 0.7·L, AM/SAM/DSB/LSB/USB, no Auto SQL | Flex's (no measured map) | Flex's (no measured map) | Where does squelch level L open, on this axis? |
+
+**`squelchLevelScale` draws the SQL line and drives Auto SQL** (#6092).
+The demo and RTL-SDR also keep Flex's scale. Absent, or the active slice's mode not listed: no line, and the SQL button
+skips Auto with the reason on its accessible description. The HL2 offset is
+amsq's −140 + 0.7·L dBFS map, referred to the LNA at −12 dB
+(`Hl2DbReference::levelSquelchOffsetDb`), plus the pan's LNA offset, plus the
++6.02 dB a steady carrier reads on `Hl2Spectrum`; the LNA terms cancel. At the
+default +20 dB LNA the gate is −108 + 0.7·L dBFS: on8st's no-signal input held
+it open up to level 49 and his test carrier up to level 54, so at that gain the
+working range is a few steps around 50. Lower opens on noise; higher needs a
+stronger signal than his carrier. Auto
+SQL stays off on the HL2 because amsq reads passband-limited magnitude before
+the AGC (`RXA.c` `xamsqcap` after `xnbp(nbp0)`), while the pan floor is per
+bin: a pan-derived floor would need both the filter width and the bin width.
 
 **`panBinsAbsolute()` is consumed too: as the second term of ONE gate, and as
 the unit of a waterfall row.**
