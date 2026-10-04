@@ -44,12 +44,16 @@ on:
       - '.github/workflows/codeql.yml'
   schedule:
     - cron: '0 6 * * 1'  # weekly Monday 06:00 UTC
+  # Run on a branch by hand, so a change to this file can be checked before
+  # it merges rather than on main's first push after.
+  workflow_dispatch:
 
-# Every trigger above resolves to refs/heads/main, so each run gets its own
-# group (run_id suffix) and nothing is ever cancelled — the post-merge scan and
-# the weekly scheduled scan stay fully parallel. The ref guard is retained
-# verbatim so the block still behaves correctly if a pull_request trigger is
-# ever restored.
+# Push and schedule resolve to refs/heads/main, so each of those runs gets its
+# own group (run_id suffix) and nothing is ever cancelled — the post-merge scan
+# and the weekly scheduled scan stay fully parallel. A manual run on another
+# branch shares that branch's group, so re-dispatching it cancels the stale
+# run. The ref guard also keeps this correct if a pull_request trigger is ever
+# restored.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}${{ github.ref == 'refs/heads/main' && format('-{0}', github.run_id) || '' }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
