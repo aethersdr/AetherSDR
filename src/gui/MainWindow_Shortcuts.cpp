@@ -379,7 +379,7 @@ void MainWindow::noticeRefusedShortcut(QKeyEvent* keyEvent)
                            " font-size: 14px; background: transparent; }"));
     }
     m_shortcutNoticeLabel->showNotice(
-        tr("Keyboard shortcuts are off — Settings → Keyboard Shortcuts turns them on."),
+        tr("Keyboard shortcuts are off"),
         10000);
 }
 

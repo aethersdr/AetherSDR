@@ -560,7 +560,7 @@ int main(int argc, char** argv)
         expect(host.minimumSizeHint().width() <= hostMinWidth + 16,
                "notice: the hidden label does not widen the window");
 
-        const QString text = QStringLiteral("Keyboard shortcuts are off.");
+        const QString text = QStringLiteral("Keyboard shortcuts are off");
         notice.showNotice(text, 150);
         QApplication::processEvents();
         expect(notice.isVisible() && notice.text() == text,
