@@ -6947,7 +6947,13 @@ bool VfoWidget::eventFilter(QObject* obj, QEvent* event)
     // deliberately not mirrored here: m_freqStack (which holds the edit
     // box) is hidden/mouse-transparent while collapsed and would need
     // real repositioning work to become usable — left as a follow-up.
-    if ((obj == m_freqLabel || obj == m_collapsedFreqLabel) && event->type() == QEvent::MouseButtonPress) {
+    // Event type FIRST: comparing against the QPointer<QLabel> downcasts
+    // through it, which is undefined for the collapsed label's own teardown
+    // events once it is only a QWidget. A parent can destroy that sibling
+    // before this VFO (e.g. after beginDirectEntry() raise()s us), so the
+    // destructor's removeEventFilter() alone does not cover it (#6154).
+    if (event->type() == QEvent::MouseButtonPress
+        && (obj == m_freqLabel || obj == m_collapsedFreqLabel)) {
         auto* me = static_cast<QMouseEvent*>(event);
         if (me->button() == Qt::RightButton && m_slice) {
             ScopedChildWidget<QMenu> menuOwner(this);
