@@ -4728,6 +4728,10 @@ void Hl2Backend::forwardSpeakerAudioToCodec(const std::vector<float>& mixed)
 
     const auto toI16 = [speakerGain](float v) -> std::int16_t {
         v *= speakerGain;
+        // Non-finite first: a NaN fails both clamp comparisons and the cast
+        // of it is undefined.
+        if (!std::isfinite(v))
+            return 0;
         // Symmetric clamp, 32767 not 32768: letting a full-scale sample wrap to
         // the negative rail is a click, and this is a speaker feed.
         v = std::clamp(v, -1.0f, 1.0f);
