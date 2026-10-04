@@ -508,6 +508,9 @@ RadioCapabilities IcomCivBackend::capabilities() const
     c.hasAgcThreshold = false; // 16 12 selects AGC mode, not Flex AGC-T.
     c.agcModes = {QStringLiteral("slow"), QStringLiteral("med"), QStringLiteral("fast")};
     c.hasModeIndependentSquelch = profile.hasModeIndependentSquelch;
+    // The 0..255 register has no published dB mapping; the SQL line and Auto
+    // SQL keep Flex's scale until one is measured.
+    c.squelchLevelScale = legacyDbmSquelchScale();
     c.hasCwTune = profile.hasCwTune;
     // setTune() drives the ordinary TUNE producer: one sine wave. There is no
     // CI-V route for a two-tone selection on any profiled model.

@@ -1309,6 +1309,15 @@ target_include_directories(hl2_spectrum_test PRIVATE src ${FFTW3_INCLUDE_DIRS})
 target_link_libraries(hl2_spectrum_test PRIVATE aethercore Qt6::Core ${FFTW3_LIBRARIES})
 add_test(NAME hl2_spectrum_test COMMAND hl2_spectrum_test)
 
+# #6092: squelch level -> pan scale. The HL2 amsq gate referred to the LNA
+# against on8st's measured rows, each backend's squelchLevelScale record, and
+# the drawn line against a synthetic carrier through Hl2Spectrum. Backends are
+# constructed cold; no socket, no radio.
+add_executable(squelch_level_scale_test tests/squelch_level_scale_test.cpp)
+target_include_directories(squelch_level_scale_test PRIVATE src tests ${FFTW3_INCLUDE_DIRS})
+target_link_libraries(squelch_level_scale_test PRIVATE aethercore Qt6::Core ${FFTW3_LIBRARIES})
+add_test(NAME squelch_level_scale_test COMMAND squelch_level_scale_test)
+
 # #5678 row 2.1 on HL2: FFT AVG as a time constant in Hl2Spectrum (RFC #5782).
 # The mapping, the variance reduction on noise against theory, fps-invariance of
 # the step response (with a frame-depth control), the domain toggle, the retune
@@ -1387,11 +1396,11 @@ add_test(NAME hl2_noise_blanker_test COMMAND hl2_noise_blanker_test)
 
 # Receive squelch from Hl2RxDsp to the WDSP channel: held before configure,
 # moved by mode, kept across configure() and the asynchronous rebuild (#5678
-# row 1.5). The stage/threshold maps and the audible gate are in
-# wdsp_channel_test.
+# row 1.5), and re-pushed by an Hl2Backend LNA change (#6092). The
+# stage/threshold maps and the audible gate are in wdsp_channel_test.
 add_executable(hl2_rxdsp_squelch_test tests/hl2_rxdsp_squelch_test.cpp)
 target_include_directories(hl2_rxdsp_squelch_test PRIVATE src)
-target_link_libraries(hl2_rxdsp_squelch_test PRIVATE aethercore Qt6::Core)
+target_link_libraries(hl2_rxdsp_squelch_test PRIVATE aethercore Qt6::Core Qt6::Network)
 add_test(NAME hl2_rxdsp_squelch_test COMMAND hl2_rxdsp_squelch_test)
 
 # HL2 host-side CW audio peaking filter and AGC-off level (G2 of the silent
@@ -7357,6 +7366,7 @@ target_link_libraries(CAT_Flex_test PRIVATE Qt6::Core Qt6::Network)
 # Conditional targets are guarded with if(TARGET ...).
 set(AETHER_SETTINGS_CONSUMERS
     reroute_dead_controls_test
+    squelch_level_scale_test
     hl2_pan_create_async_test
     anan_backend_test
     anan_noise_blanker_readback_test
