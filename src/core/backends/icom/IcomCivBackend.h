@@ -181,6 +181,9 @@ private:
     // otherwise. See the definition for why neither alone is right.
     [[nodiscard]] bool txAudioGateOpen() const;
     void reassertPanPreampWireStep(int step);
+    // Reads the other receive front-end stage after a preamp/ATT write; the
+    // radio interlocks the two without reporting it.
+    void queueFrontEndInterlockRead(const std::vector<std::uint8_t>& read);
     [[nodiscard]] bool tunerSupported() const;
     bool sendTunerCommandIfSupported(bool start, const TxCoordinator::Operation& operation,
                                      const TxCoordinator::Completion& completion);

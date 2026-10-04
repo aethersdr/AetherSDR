@@ -135,6 +135,13 @@ struct IcomCivBackendTestAccess {
         return b.confirmationFor(write) == read && b.semanticKey(write) == b.semanticKey(read);
     }
 
+    static bool queuedFrame(const IcomCivBackend& backend, const std::vector<std::uint8_t>& frame)
+    {
+        return std::any_of(backend.m_civScheduler.m_queue.begin(),
+                           backend.m_civScheduler.m_queue.end(),
+                           [&](const auto& request) { return request.request.frame == frame; });
+    }
+
     static QString lastOutboundCiv(const IcomCivBackend& backend)
     {
         return backend.m_lastOutboundCiv;
@@ -345,6 +352,28 @@ int main(int argc, char** argv)
             }
         }
 
+    }
+    // The radio interlocks preamp and ATT and reports neither side effect, so
+    // a write to one stage must read the other back, or its button keeps the
+    // old position until the next controls poll.
+    for (const char* name : {"IC-7300MK2", "IC-705", "IC-9700"}) {
+        const auto* model = modelForName(name);
+        check(model != nullptr, "front-end interlock model resolves");
+        if (!model) { continue; }
+        const std::uint8_t address = model->civAddress;
+        const bool hasAttenuator = !attenStepsFor(*model).empty();
+        IcomCivBackend attWrite;
+        IcomCivBackendTestAccess::prepareSession(attWrite, *model);
+        attWrite.setPanAttenuator(QString(), 1);
+        check(!hasAttenuator
+                  || IcomCivBackendTestAccess::queuedFrame(attWrite, cmdReadFunction(address, func::kPreamp)),
+              "an ATT write reads the preamp back");
+        IcomCivBackend preampWrite;
+        IcomCivBackendTestAccess::prepareSession(preampWrite, *model);
+        preampWrite.setPanPreamp(QString(), 1);
+        check(IcomCivBackendTestAccess::queuedFrame(preampWrite, cmdReadAttenuator(address))
+                  == hasAttenuator,
+              "a preamp write reads ATT back where the model has one");
     }
     check(cmdReadRxAntenna(0xB6) == std::vector<std::uint8_t>({0xFE,0xFE,0xB6,0xE0,0x12,0xFD}),
           "MK2 antenna read uses observed bare 12 form");
