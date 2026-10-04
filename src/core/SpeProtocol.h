@@ -153,6 +153,9 @@ struct Status {
     // 1K-FA); when set they replace warningText()/alarmText() of the codes.
     QString warningDetail;
     QString alarmDetail;
+    // swrAnt was derived from forward/reverse power rather than reported by
+    // the amplifier's own meter; such a ratio typically reads low (#4436).
+    bool    swrEstimated{false};
 };
 
 // Decodes a Status frame's 67-character payload. Tolerates the payload
@@ -266,6 +269,8 @@ struct ModelSpec {
     bool    hasMemoryBanks{false};  // A/B bank field is meaningful
     bool    hasCombiner{false};     // lower/combiner temperatures are real
     bool    reportsAtuSwr{true};    // Status carries the before-ATU SWR
+    bool    hasLcdMirror{true};     // answers the 0x80 display request
+    bool    serialPowerOn{true};    // ON via the serial control lines
 };
 
 // 1.5K-FA is the entry validated against real hardware by this project

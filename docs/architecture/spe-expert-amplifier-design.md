@@ -446,7 +446,7 @@ shared with the newer family; everything a client depends on differs:
 | `0x80` | LCD display request | RCU_ON — so the LCD mirror must never be requested |
 | Keys | single byte `0x01`..`0x11` | `0x10` + key code (`0x18`..`0x34`) |
 | Model ID | in every Status | none — the operator picks the model |
-| Power ON | RTS pulse, DTR high at rest | DTR held high **is** the power switch |
+| Power ON | RTS pulse on the serial lines | the transceiver's 12 V remote line — not the serial port |
 | Power level | LOW / MID / HIGH | HALF / FULL (MODE key) |
 
 Design: one connection class, two protocols. The operator picks
@@ -459,19 +459,34 @@ the binary Status onto the shared `Spe::Status`, so `SpeApplet` and the
 wiring are reused. Mapping choices:
 
 - Model ID is the synthetic `10K`, keying a `1K-FA` row in the model
-  table (1000 W FULL, 500 W HALF; HALF → `L`, FULL → `H`).
+  table (FULL 1000 W, HALF 500 W per the operator's manual; HALF → `L`,
+  FULL → `H`). The row's capability flags (`reportsAtuSwr`,
+  `hasLcdMirror`, `serialPowerOn`, all false) drive
+  `SpeApplet::setModelCapabilities()`, which dims each missing control
+  with its reason on tooltip and accessibleDescription.
 - Bands 0..9 (160..6 m, no 60 m) are translated onto the shared table.
 - SWR: STANDBY reports it directly; OPERATE reports PA gain in that field
-  instead, so SWR is derived from forward and reverse power. There is no
-  before-ATU SWR — the ATU row is dimmed with that reason.
+  instead, so SWR is derived from forward and reverse power and flagged
+  `Status::swrEstimated`; the applet shows it as `SWR ≈` with a tooltip,
+  because a power-ratio SWR reads low against the amp's own meter
+  (#4436). There is no before-ATU SWR — the ATU row is dimmed.
 - Warnings come from the Status's display-context byte, the alarm from its
   ALARM flag, as plain text (`Status::warningDetail` / `alarmDetail`).
-- No LCD mirror: the floating presentation's menu keys stay gated off,
-  exactly as when the mirror is stale on the newer family.
-- Lines: left at the platform's `open()` default on connect. ON raises
-  DTR (over ser2net: RFC 2217 SET-CONTROL, as in §4); SWITCH OFF sends the
-  OFF key and, on a local port, drops DTR. RCU_ON is re-sent once a second
-  while no Status arrives, which covers the amp's 7–10 s boot.
+- No LCD mirror (the amp's own display works as usual; there is just no
+  remote copy): `0x80` is never sent, the floating window's glass says
+  so instead of "waiting for display…", and the menu keys stay gated
+  off, exactly as when the mirror is stale on the newer family.
+- Power: the 1K-FA is switched on by the transceiver's 12 V remote line,
+  so the serial lines are not a power control. A local port gets the same
+  explicit rest state as the newer family (DTR high, RTS low) — chosen,
+  not inherited from the platform — and is never moved afterwards;
+  transport teardown or reconnect therefore cannot power-cycle the amp.
+  The applet's ON button is dimmed with that reason; SWITCH OFF is only
+  the front-panel OFF key. RCU_ON is re-sent once a second while no
+  Status arrives, which covers the amp's boot after the transceiver
+  switches it on.
+- Every legacy frame is logged as hex at debug level (Help → Support
+  logging: Tuner/AGM) so field reports can pin the Status offsets.
 - Disconnect sends RCU_OFF so the amplifier stops streaming.
 - ser2net: prefer **raw** mode. The Status is binary, and telnet mode
   doubles every `0xFF` byte, so a Status that happens to contain one fails
@@ -481,5 +496,5 @@ wiring are reused. Mapping choices:
 
 Unit tests: `tests/spe_legacy_protocol_test.cpp` (framing, parser resync,
 Status decode, key table, variant persistence). Not yet verified on
-hardware: the key codes, the DTR power behaviour, and whether the
-platform's DTR state on `open()` powers the amp on.
+hardware: the Status field offsets (the test fixture is built from the
+same table as the decoder) and the key codes.

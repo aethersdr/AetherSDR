@@ -7068,7 +7068,7 @@ void MainWindow::wireMeters()
     connect(&m_speConn, &SpeConnection::modelChanged, this, [this](const QString& modelId) {
         const auto& spec = AetherSDR::Spe::modelSpec(modelId);
         m_appletPanel->speApplet()->setModelName(spec.displayName);
-        m_appletPanel->speApplet()->setAtuSwrAvailable(spec.reportsAtuSwr);
+        m_appletPanel->speApplet()->setModelCapabilities(spec);
     });
 
     connect(&m_speConn, &SpeConnection::statusUpdated, this,
@@ -7085,7 +7085,7 @@ void MainWindow::wireMeters()
         spe->setPowerRange(range.nominalW, range.warnW, range.maxW);
 
         spe->setForwardPower(s.outputPowerW);
-        spe->setSwrAnt(s.swrAnt);
+        spe->setSwrAnt(s.swrAnt, s.swrEstimated);
         spe->setSwrAtu(s.swrAtu);
         spe->setSupplyVoltage(s.paVoltageV);
         spe->setSupplyCurrent(s.paCurrentA);

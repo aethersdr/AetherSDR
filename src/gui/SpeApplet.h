@@ -36,11 +36,12 @@ public:
 
     // Telemetry
     void setForwardPower(float watts);
-    void setSwrAnt(float swr);
+    // estimated: derived from forward/reverse power, not the amp's own meter.
+    void setSwrAnt(float swr, bool estimated = false);
     void setSwrAtu(float swr);
-    // False for a model whose Status has no before-ATU SWR (original 1K-FA):
-    // the ATU row is dimmed with the reason as its tooltip.
-    void setAtuSwrAvailable(bool available);
+    // Dims what the model lacks (ATU SWR, LCD mirror, serial power-ON) with
+    // the reason on tooltip and accessibleDescription.
+    void setModelCapabilities(const AetherSDR::Spe::ModelSpec& spec);
     void setSupplyVoltage(float volts);   // text readout, not a gauge
     void setSupplyCurrent(float amps);    // text readout, not a gauge
     // Heatsink temperatures. The amp reports degrees in whichever unit its
@@ -103,6 +104,7 @@ signals:
     void lcdPollingWanted(bool wanted);
 
 private:
+    static QString onButtonTip();
     void updateValueLabels();  // 10 Hz throttled label text refresh
     void updateCommandsEnabled();
     void applyModePill();
@@ -179,6 +181,8 @@ private:
     float m_swrAntVal{1.0f};
     float m_swrAtuVal{1.0f};
     bool  m_atuSwrAvailable{true};
+    bool  m_powerOnAvailable{true};
+    bool  m_swrEstimated{false};
     float m_supplyVolts{0.0f};
     float m_supplyAmps{0.0f};
     bool  m_operate{false};

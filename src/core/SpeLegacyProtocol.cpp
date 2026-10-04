@@ -206,6 +206,7 @@ std::optional<Status> parseStatus(const QByteArray& d)
     const float reverseW = le16(d, kReverse) / 10.0f;
     if (s.operate) {
         s.swrAnt = swrFromPower(s.outputPowerW, reverseW);
+        s.swrEstimated = true;
     } else {
         const quint16 raw = le16(d, kSwrOrGain);
         s.swrAnt = raw >= kSwrInfinite ? kSwrCap : raw / 100.0f;
