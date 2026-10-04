@@ -431,3 +431,55 @@ the alignment out. Pacing from the reply folds the amplifier's variable
 response latency into the period, so no stable phase relationship can
 form — and it is also what makes the small 250 ms gap safe on slow links
 (see the request bullet above).
+
+## 12. The original 1K-FA (legacy protocol)
+
+The original Expert 1K-FA — the RS-232-only model that predates the
+1.3K/1.5K/2K-FA, not the later 1K-FA "Taurus" — speaks SPE's older
+"Expert 1K-FA Remote Control Protocol" Rev 2.0. Only the sync framing is
+shared with the newer family; everything a client depends on differs:
+
+| | 1.3K / 1.5K / 2K-FA | original 1K-FA |
+|---|---|---|
+| Line | 115200 8N1 (amp auto-adapts) | 9600 8N1 only |
+| Status | `0x90` poll → 67-char ASCII CSV, 16-bit checksum + CR LF | `0x80` RCU_ON → amp streams a 30-byte binary Status at 5–8 Hz, 8-bit checksum |
+| `0x80` | LCD display request | RCU_ON — so the LCD mirror must never be requested |
+| Keys | single byte `0x01`..`0x11` | `0x10` + key code (`0x18`..`0x34`) |
+| Model ID | in every Status | none — the operator picks the model |
+| Power ON | RTS pulse, DTR high at rest | DTR held high **is** the power switch |
+| Power level | LOW / MID / HIGH | HALF / FULL (MODE key) |
+
+Design: one connection class, two protocols. The operator picks
+**Amplifier Model** in the Peripherals row (persisted as
+`PeripheralSettings["SpeExpert"]["Model"]`, `Expert` or `1K-FA-Legacy`;
+absent reads as `Expert`, so existing installs are unchanged).
+`SpeConnection` latches the variant at connect and swaps parser, poll
+loop, key encoding and line handling; `Spe::Legacy::parseStatus()` maps
+the binary Status onto the shared `Spe::Status`, so `SpeApplet` and the
+wiring are reused. Mapping choices:
+
+- Model ID is the synthetic `10K`, keying a `1K-FA` row in the model
+  table (1000 W FULL, 500 W HALF; HALF → `L`, FULL → `H`).
+- Bands 0..9 (160..6 m, no 60 m) are translated onto the shared table.
+- SWR: STANDBY reports it directly; OPERATE reports PA gain in that field
+  instead, so SWR is derived from forward and reverse power. There is no
+  before-ATU SWR — the ATU row is dimmed with that reason.
+- Warnings come from the Status's display-context byte, the alarm from its
+  ALARM flag, as plain text (`Status::warningDetail` / `alarmDetail`).
+- No LCD mirror: the floating presentation's menu keys stay gated off,
+  exactly as when the mirror is stale on the newer family.
+- Lines: left at the platform's `open()` default on connect. ON raises
+  DTR (over ser2net: RFC 2217 SET-CONTROL, as in §4); SWITCH OFF sends the
+  OFF key and, on a local port, drops DTR. RCU_ON is re-sent once a second
+  while no Status arrives, which covers the amp's 7–10 s boot.
+- Disconnect sends RCU_OFF so the amplifier stops streaming.
+- ser2net: prefer **raw** mode. The Status is binary, and telnet mode
+  doubles every `0xFF` byte, so a Status that happens to contain one fails
+  its checksum and is dropped (the stream resyncs on the next frame).
+  Telnet with `rfc2217=true` still works — the price is an occasional lost
+  frame — and is needed only for power-ON over the network.
+
+Unit tests: `tests/spe_legacy_protocol_test.cpp` (framing, parser resync,
+Status decode, key table, variant persistence). Not yet verified on
+hardware: the key codes, the DTR power behaviour, and whether the
+platform's DTR state on `open()` powers the amp on.

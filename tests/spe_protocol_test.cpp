@@ -235,7 +235,11 @@ int main()
            modelSpec("13K").displayName == "1.3K-FA");
     report("an unknown ID falls back to the hardware-validated 1.5K-FA entry",
            modelSpec("99K").displayName == "1.5K-FA");
-    report("modelIds() lists all three documented models", modelIds().size() == 3);
+    report("modelIds() lists the three documented models plus the original 1K-FA",
+           modelIds().size() == 4);
+    report("the original 1K-FA row reports no before-ATU SWR",
+           modelSpec("10K").displayName == "1K-FA" && !modelSpec("10K").reportsAtuSwr
+               && modelSpec("15K").reportsAtuSwr);
     report("per-level nominals: 1.5K-FA LOW/MID/HIGH = 500/1000/1500 "
            "(hardware-validated — the reference app's bar rescaled to these)",
            levelNominalW(s15, u'L') == 500.0f && levelNominalW(s15, u'M') == 1000.0f

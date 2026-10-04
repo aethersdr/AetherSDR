@@ -7068,6 +7068,7 @@ void MainWindow::wireMeters()
     connect(&m_speConn, &SpeConnection::modelChanged, this, [this](const QString& modelId) {
         const auto& spec = AetherSDR::Spe::modelSpec(modelId);
         m_appletPanel->speApplet()->setModelName(spec.displayName);
+        m_appletPanel->speApplet()->setAtuSwrAvailable(spec.reportsAtuSwr);
     });
 
     connect(&m_speConn, &SpeConnection::statusUpdated, this,
@@ -7095,9 +7096,12 @@ void MainWindow::wireMeters()
         spe->setPowerLevel(AetherSDR::Spe::powerLevelName(s.powerLevel));
         spe->setMode(s.operate, s.transmitting);
 
-        // One banner for both severity tiers, alarms first.
-        const QString alarm = AetherSDR::Spe::alarmText(s.alarm);
-        const QString warning = AetherSDR::Spe::warningText(s.warning);
+        // One banner for both severity tiers, alarms first. The original
+        // 1K-FA reports faults as text rather than letter codes.
+        const QString alarm = !s.alarmDetail.isEmpty()
+            ? s.alarmDetail : AetherSDR::Spe::alarmText(s.alarm);
+        const QString warning = !s.warningDetail.isEmpty()
+            ? s.warningDetail : AetherSDR::Spe::warningText(s.warning);
         QString fault;
         if (!alarm.isEmpty())
             fault = QStringLiteral("ALARM: %1").arg(alarm);
@@ -7173,6 +7177,8 @@ void MainWindow::wireMeters()
     // the SPE has no radio-side presence signal; the saved setting is the
     // only trigger there will ever be.
     {
+        m_speConn.setVariant(AetherSDR::Spe::variantFromKey(
+            PeripheralSettings::deviceString("SpeExpert", "Model")));
         const QString mode = PeripheralSettings::deviceString("SpeExpert", "ConnectionMode",
 #ifdef HAVE_SERIALPORT
             "Serial"

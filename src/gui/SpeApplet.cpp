@@ -493,7 +493,23 @@ void SpeApplet::setSwrAnt(float swr)
 void SpeApplet::setSwrAtu(float swr)
 {
     m_swrAtuVal = swr;
-    m_swrAtuGauge->setValue(m_fwdWatts >= 1.0f ? swr : 1.0f);
+    m_swrAtuGauge->setValue(m_atuSwrAvailable && m_fwdWatts >= 1.0f ? swr : 1.0f);
+}
+
+void SpeApplet::setAtuSwrAvailable(bool available)
+{
+    m_atuSwrAvailable = available;
+    const QString reason = available
+        ? QString()
+        : tr("This amplifier model does not report the SWR seen before the ATU.");
+    // Tooltip for the mouse, accessibleDescription for screen readers.
+    for (QWidget* w : {static_cast<QWidget*>(m_swrAtuLabel), static_cast<QWidget*>(m_swrAtuGauge)}) {
+        w->setEnabled(available);
+        w->setToolTip(reason);
+        w->setAccessibleDescription(reason);
+    }
+    m_swrAtuGauge->setValueImmediate(1.0f);
+    updateValueLabels();
 }
 
 void SpeApplet::setSupplyVoltage(float volts)
@@ -712,7 +728,7 @@ void SpeApplet::updateValueLabels()
     m_swrAntLabel->setText(m_fwdWatts >= 1.0f
         ? QStringLiteral("SWR  %1:1").arg(m_swrAntVal, 0, 'f', 1)
         : QStringLiteral("SWR"));
-    m_swrAtuLabel->setText(m_fwdWatts >= 1.0f
+    m_swrAtuLabel->setText(m_atuSwrAvailable && m_fwdWatts >= 1.0f
         ? QStringLiteral("ATU  %1:1").arg(m_swrAtuVal, 0, 'f', 1)
         : QStringLiteral("ATU"));
 
