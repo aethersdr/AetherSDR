@@ -6007,6 +6007,19 @@ target_compile_definitions(pan_dimension_routing_test PRIVATE
 target_link_libraries(pan_dimension_routing_test PRIVATE aethercore Qt6::Core)
 add_test(NAME pan_dimension_routing_test COMMAND pan_dimension_routing_test)
 
+# A panadapter display control the client applied itself raises no drop
+# notice: WtrFall Gain, Black Level, Clone to all Pans and Reset display
+# defaults on an injected backend carrying each real backend's capabilities()
+# (executed), the wire text with a command sink on an unopened RadioConnection
+# (executed), and the four MainWindow sites read as text. No sockets, no radio.
+add_executable(pan_display_drop_notice_test tests/pan_display_drop_notice_test.cpp)
+target_include_directories(pan_display_drop_notice_test PRIVATE src tests)
+target_compile_definitions(pan_display_drop_notice_test PRIVATE
+    AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(pan_display_drop_notice_test PRIVATE
+    aethercore Qt6::Core Qt6::Network)
+add_test(NAME pan_display_drop_notice_test COMMAND pan_display_drop_notice_test)
+
 add_executable(hl2_family_transition_test tests/hl2_family_transition_test.cpp)
 target_include_directories(hl2_family_transition_test PRIVATE src)
 target_link_libraries(hl2_family_transition_test PRIVATE aethercore Qt6::Core Qt6::Test)
@@ -7849,6 +7862,7 @@ set(AETHER_SETTINGS_CONSUMERS
     radio_setup_recording_mode_dim_test
     atu_seam_gate_test
     transmit_seam_drop_notice_test
+    pan_display_drop_notice_test
     backend_capability_revision_test
     icom_panadapter_capacity_test
     backend_receive_contract_test

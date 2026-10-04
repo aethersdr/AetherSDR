@@ -6707,16 +6707,36 @@ void RadioModel::setPanWeightedAverage(bool on)
 
 void RadioModel::setWaterfallColorGain(int gain)
 {
-    if (activeWfId().isEmpty() || !hasCommandPlane()) return;
+    setWaterfallColorGainFor(m_activePanId, gain);
+}
+
+void RadioModel::setWaterfallColorGainFor(const QString& panId, int gain)
+{
+    // The client draws colour gain on every row it renders, so without a
+    // command plane the control has already acted and there is nothing to send.
+    const PanadapterModel* pan = panadapter(panId);
+    if (!pan || pan->waterfallId().isEmpty() || !hasCommandPlane()) return;
     sendCmd(
-        QString("display panafall set %1 color_gain=%2").arg(activeWfId()).arg(gain));
+        QString("display panafall set %1 color_gain=%2").arg(pan->waterfallId()).arg(gain));
 }
 
 void RadioModel::setWaterfallBlackLevel(int level)
 {
-    if (activeWfId().isEmpty() || !hasCommandPlane()) return;
+    // The connect-time replay of the stored level: no operator moved a control.
+    if (!hasCommandPlane()) return;
+    setWaterfallBlackLevelFor(m_activePanId, level);
+}
+
+void RadioModel::setWaterfallBlackLevelFor(const QString& panId, int level)
+{
+    const PanadapterModel* pan = panadapter(panId);
+    if (!pan || pan->waterfallId().isEmpty()) return;
+    // Without a command plane the client draws the manual black point only on
+    // absolute-dB rows (WaterfallLevelMap). There the control has acted; on any
+    // other row it has not, and sendCmd() reports the drop.
+    if (!hasCommandPlane() && backendCapabilities().panBinsAbsolute()) return;
     sendCmd(
-        QString("display panafall set %1 black_level=%2").arg(activeWfId()).arg(level));
+        QString("display panafall set %1 black_level=%2").arg(pan->waterfallId()).arg(level));
 }
 
 void RadioModel::setWaterfallAutoBlack(bool on)

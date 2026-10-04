@@ -86,7 +86,7 @@ BASELINE = {
     # ---- gui ----
     "src/gui/RadioSetupDialog.cpp": 41,
     "src/gui/MainWindow.cpp": 16,
-    "src/gui/MainWindow_Wiring.cpp": 20,
+    "src/gui/MainWindow_Wiring.cpp": 14,
     "src/gui/ProfileManagerDialog.cpp": 12,
     "src/gui/MemoryDialog.cpp": 5,
     "src/gui/MainWindow_Controllers.cpp": 4,

@@ -1016,6 +1016,12 @@ public:
     // Display controls — Waterfall (display panafall set)
     void setWaterfallColorGain(int gain);
     void setWaterfallBlackLevel(int level);
+    // The same two for one named pan, for a control the operator moved after
+    // the widget applied the value. A backend with no command plane is sent
+    // nothing; the black level is then reported as dropped unless the client
+    // draws it (RadioCapabilities::panBinsAbsolute()).
+    void setWaterfallColorGainFor(const QString& panId, int gain);
+    void setWaterfallBlackLevelFor(const QString& panId, int level);
     void setWaterfallAutoBlack(bool on);
     // Auto-black source: false = client-side estimate (radio auto_black off),
     // true = radio's per-tile level (radio auto_black on). The radio only
