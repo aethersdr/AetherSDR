@@ -27,6 +27,8 @@
 
 #include "TestSettingsProfile.h"
 #include "core/AudioEngine.h"
+#include "core/backends/ReceiveCommand.h"
+#include "core/backends/RestoredRadioState.h"
 #include "core/backends/hl2/Hl2Backend.h"
 #include "core/RadioDiscovery.h"
 #include "core/TciProtocol.h"
@@ -642,6 +644,29 @@ static void testDigitalModeDefaultAgc()
     check(agc == QStringLiteral("fast"), "and the held AGC still returns afterwards");
 }
 
+// The AGC-off level is captured per receiver: the open receiver's new level
+// over the remembered list, so a receiver that is not open keeps its own.
+static void testAgcOffLevelCapture()
+{
+    hl2::Hl2Backend backend;
+    RestoredRadioState remembered;
+    remembered.agcOffLevels = {20, 61};
+    backend.applyRestoredState(remembered);
+    check(backend.currentOperatingState().agcOffLevels == QList<int>({20, 61}),
+          "the remembered AGC-off levels are captured before any change");
+
+    int captureAsks = 0;
+    QObject::connect(&backend, &IRadioBackend::operatingStateChanged, &backend,
+                     [&captureAsks] { ++captureAsks; });
+    SliceAgcRequest request;
+    request.field = SliceAgcRequest::Field::OffLevel;
+    request.offLevel = 37;
+    backend.requestSliceAgc(0, request);
+    check(captureAsks == 1, "an AGC-off level change asks for a capture");
+    check(backend.currentOperatingState().agcOffLevels == QList<int>({37, 61}),
+          "the capture carries the new level and keeps the closed receiver's");
+}
+
 }  // namespace AetherSDR
 
 int main(int argc, char** argv)
@@ -664,6 +689,7 @@ int main(int argc, char** argv)
     AetherSDR::testHostModulatedTxAudio();
     AetherSDR::testModeDefaultPassband();
     AetherSDR::testDigitalModeDefaultAgc();
+    AetherSDR::testAgcOffLevelCapture();
     // Last: it closes the HL2 transmit gate through the environment, and every
     // test above needs it open.
     AetherSDR::testRefusedKeyPublishesNoTransmitEdge();
