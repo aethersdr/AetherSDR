@@ -373,7 +373,7 @@ constexpr std::array kSpecs = {
     ControlSpec{"rit.offset", 0x21, 0x00, true, "RIT / XIT offset",
                 Plane::Slice, Encoding::Bcd4, Wiring::Both,
                 -9999, 9999, "Hz", -9999, 9999,
-                "setRitOffset", "vfoRitSpin", true,
+                "setSliceRitOffset", "vfoRitSpin", true,
                 "ONE register shared by both: 21 01 and 21 02 choose whether it "
                 "applies to receive, transmit or both, so the decoded offset is "
                 "published to each. A signed magnitude — the sign is a separate "
@@ -381,11 +381,11 @@ constexpr std::array kSpecs = {
     ControlSpec{"rit.enable", 0x21, 0x01, true, "RIT enable",
                 Plane::Slice, Encoding::OnOff, Wiring::Both,
                 0, 1, "on/off", 0, 1,
-                "setRitEnabled", "vfoRitBtn", true, ""},
+                "setSliceRitEnabled", "vfoRitBtn", true, ""},
     ControlSpec{"xit.enable", 0x21, 0x02, true, "XIT (dTX) enable",
                 Plane::Slice, Encoding::OnOff, Wiring::Both,
                 0, 1, "on/off", 0, 1,
-                "setXitEnabled", "vfoXitBtn", true, ""},
+                "setSliceXitEnabled", "vfoXitBtn", true, ""},
 
     // ---- SET menu (0x1A 05) ----------------------------------------------
     ControlSpec{"mod.input.dataoff", 0x1A, 0x05, true, "DATA OFF MOD input",

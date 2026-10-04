@@ -145,6 +145,7 @@ public:
                        TxAudioSource source,
                        const TxCoordinator::Context& context) override;
     void setTxPower(int percent) override;
+    void setTunePower(int percent) override;
     void setTxFilter(int lowHz, int highHz) override;
     void setMicGain(int level) override;
     // No default argument: defaults on virtuals bind statically and would diverge
@@ -152,16 +153,16 @@ public:
     void setTune(bool on, int tunePowerPercent, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {}) override;
     void setTxAudioMonitor(bool on) override;
     void setTxFrequency(double hz);
-    // RIT / XIT (#5386). The seam carries no slice id, so both are radio-wide
-    // here and follow transmit: RIT offsets the RECEIVE of the transmit-owning
-    // receiver (m_txDdc) only, XIT the TX NCO register only. Neither moves the
-    // published slice frequency — that stays the dial.
-    void setRitEnabled(bool on) override;
-    void setRitOffset(int hz) override;
-    void setXitEnabled(bool on) override;
-    // Overridden, not inherited: the base forwards to setRitOffset() for a radio
+    // RIT / XIT, per receiver (#5386, #6105). RIT offsets that receiver's own
+    // receive; XIT is held per receiver and reaches the TX NCO register only
+    // while that receiver owns transmit. Neither moves the published slice
+    // frequency — that stays the dial.
+    void setSliceRitEnabled(int sliceId, bool on) override;
+    void setSliceRitOffset(int sliceId, int hz) override;
+    void setSliceXitEnabled(int sliceId, bool on) override;
+    // Overridden, not inherited: the base forwards to the RIT offset for a radio
     // with one shared register, and the HL2's RX and TX paths are independent.
-    void setXitOffset(int hz) override;
+    void setSliceXitOffset(int sliceId, int hz) override;
     void setTxDriveLevel(int level);
     // Baseband TX test tone, offsetHz from the carrier, amplitude 0..1.
     // Opt-in only — never enabled by a default.
@@ -400,6 +401,9 @@ private:
     // Clamp 0..100, map onto the drive register, honour the transmit gate.
     // Shared by setTxPower() and setTune() so the mapping exists exactly once.
     void applyDrive(int percent);
+    void beginTxTail();
+    void cancelTxTail();
+    void finishTxTail();
     static double temperatureCelsius(int raw);
     // Coupler counts -> watts is AetherSDR::hl2::directionalWatts() in MetisProtocol.
     // Watts -> dBm for the meter seam, floored so 0 W does not become -inf.
@@ -496,6 +500,13 @@ private:
         // clearing RIT re-centres it on the dial. A pan drag clears it.
         bool ncoMovedForRit = false;
 
+        // RIT / XIT, Hz from the dial. Nothing on the wire echoes them, so
+        // emitSliceState() publishes these back as the readout.
+        bool ritOn = false;
+        int  ritHz = 0;
+        bool xitOn = false;
+        int  xitHz = 0;
+
         QString mode = QStringLiteral("USB");
         // Overwritten from defaultPassbandForMode(mode) on the first linkUp of each
         // connect (#4484). These initial values match no mode's passband.
@@ -568,22 +579,19 @@ private:
     // WDSP shift: the slice's offset from the NCO less the BFO, so the marker lands
     // on the pitch.
     [[nodiscard]] double rxShiftHz(const Receiver& r) const noexcept;
-    // Where a receiver actually listens: its dial, plus RIT when it owns
-    // transmit. Feeds the NCO window and the shift; sliceFreqHz stays the dial.
+    // Where a receiver actually listens: its dial plus its own RIT. Feeds the
+    // NCO window and the shift; sliceFreqHz stays the dial.
     [[nodiscard]] double rxTunedHz(const Receiver& r) const noexcept;
-    // Re-run one receiver's tune after its share of RIT changed.
+    // Re-run one receiver's tune after its RIT changed.
     void retuneReceiver(int ddc);
-    // qCInfo naming the receiver RIT landed on: the seam is radio-wide, so the
-    // VFO turned need not be the receiver that moved.
-    void logRitScope() const;
+    // The offset clamped to kRitXitMaxHz, logging when the clamp bites.
+    [[nodiscard]] static int clampRitXit(const char* what, int hz);
+    // qCInfo naming the receiver and slice an RIT/XIT change landed on.
+    void logRitXit(const char* what, int ddc, bool on, int hz) const;
     // SmartCatProtocol's kRitMaxHz. Only SmartCAT clamps to it: SliceModel::
     // setRit() and the VFO's RIT/XIT steppers do not, so an offset past it can
     // reach the setters, and they log when this clamp bites.
     static constexpr int kRitXitMaxHz = 9999;
-    bool m_ritOn = false;
-    int m_ritHz = 0;
-    bool m_xitOn = false;
-    int m_xitHz = 0;
 
     // The operator's CW pitch via setCwPitch(). Defaults to TransmitModel's 600.
     int m_cwPitchHz = 600;
@@ -929,6 +937,7 @@ private:
     static constexpr int kAdcMinWindowSamples = 4;
     bool m_keyed = false;
     bool m_tuning = false;
+    TxCoordinator::Operation m_tuneOperation;   // the TUNE carrier's admission
     bool m_cwAutoKeyed = false;
     QTimer* m_cwHangTimer = nullptr;
     TxCoordinator::Operation m_cwHangOperation;
@@ -950,6 +959,18 @@ private:
     int m_unkeyUnmuteHoldMs = kUnkeyUnmuteHoldMs;
     // Single-shot, owned, on this thread, so applyKeying() cancels it without a lock.
     QTimer* m_unkeyUnmuteTimer = nullptr;
+    // How long the band filter and an owed RF drive wait after the MOX-off is
+    // queued. Gateware defaults put the radio's tail at 20 ms FIFO + 12 ms hang
+    // (radio.v:934-935; 0x17 is never written); one unit measured 40-54 ms
+    // end-to-end, and the RX hold above measured 51.66-66.15 ms of the same
+    // tail. Never below kUnkeyUnmuteHoldMs. A member so tests can shorten it.
+    static constexpr int kTxTailHoldMs = kUnkeyUnmuteHoldMs;
+    int m_txTailHoldMs = kTxTailHoldMs;
+    QTimer* m_txTailTimer = nullptr;
+    bool m_txTailPending = false;
+    // The drive register holds a tune level; the operator's RF drive is owed
+    // once no tune carrier or tail is radiating.
+    bool m_rfDriveOwed = false;
     // The flags above flip synchronously while setAudioMuted rides a queued
     // connection, so at key-up they claim "sampling" a block early. This gate answers
     // from the reading's stamp instead; healthSnapshot() feeds it to adcPairing().

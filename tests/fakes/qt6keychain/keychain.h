@@ -74,12 +74,14 @@ private:
 
 class ReadPasswordJob;
 class WritePasswordJob;
+class DeletePasswordJob;
 
 namespace TestControl {
 inline int readStartCount{0};
 inline ReadPasswordJob* pendingRead{nullptr};
 inline int writeStartCount{0};
 inline WritePasswordJob* pendingWrite{nullptr};
+inline DeletePasswordJob* pendingDelete{nullptr};
 
 void reset();
 void completeRead(const QString& value);
@@ -128,7 +130,8 @@ private:
 class WritePasswordJob : public Job {
 public:
     using Job::Job;
-    void setTextData(const QString&) { }
+    void setTextData(const QString& text) { m_textData = text; }
+    [[nodiscard]] QString textData() const { return m_textData; }
     void setBinaryData(const QByteArray& bytes) { m_binaryData = bytes; }
     [[nodiscard]] QByteArray binaryData() const { return m_binaryData; }
     void finish(Error error = NoError) { complete(error, {}); }
@@ -139,12 +142,16 @@ protected:
         TestControl::pendingWrite = this;
     }
 private:
+    QString m_textData;
     QByteArray m_binaryData;
 };
 
 class DeletePasswordJob : public Job {
 public:
     using Job::Job;
+    void finish(Error error = NoError) { complete(error, {}); }
+protected:
+    void started() override { TestControl::pendingDelete = this; }
 };
 
 inline void TestControl::reset()
@@ -153,6 +160,7 @@ inline void TestControl::reset()
     pendingRead = nullptr;
     writeStartCount = 0;
     pendingWrite = nullptr;
+    pendingDelete = nullptr;
 }
 
 inline void TestControl::completeRead(const QString& value)

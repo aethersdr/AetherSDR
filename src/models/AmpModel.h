@@ -172,6 +172,7 @@ private:
     QString m_setupNickname;
     QString m_setupLedIntens;
     QString m_setupAuthCode;
+    bool    m_setupHasAuthKey{false};   // `setup read` named authcode at all
     bool    m_haveSetupGroup{false};
     QString m_meffa;
     // The settable word we last commanded (AUTO / OFF), empty once the

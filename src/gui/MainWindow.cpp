@@ -2068,6 +2068,7 @@ MainWindow::MainWindow(QWidget* parent)
                 audioStopTx();
             }
         }
+        syncTitleBarOutput();
     });
     // Master volume — title bar slider routes through applyMasterVolume()
     // so the TCI `volume:N;` command (#1764) can hit the same code path
@@ -2077,11 +2078,11 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_titleBar, &TitleBar::headphoneVolumeChanged,
             &m_radioModel, &RadioModel::setHeadphoneGain);
     connect(m_titleBar, &TitleBar::lineoutMuteChanged, this, [this](bool muted) {
+        m_radioModel.setLineoutMute(muted);
         m_audio->setMuted(muted);
-        m_radioModel.sendCommand(QString("mixer lineout mute %1").arg(muted ? 1 : 0));
     });
     connect(m_audio, &AudioEngine::mutedChanged, this, [this](bool muted) {
-        m_titleBar->setLineoutMuted(muted);
+        syncTitleBarOutput();
         auto& s = AppSettings::instance();
         s.setValue("PcAudioMuted", muted ? "True" : "False");
         s.save();
@@ -2096,6 +2097,7 @@ MainWindow::MainWindow(QWidget* parent)
     connect(&m_radioModel, &RadioModel::audioOutputChanged, this, [this]() {
         m_titleBar->setHeadphoneVolume(m_radioModel.headphoneGain());
         m_titleBar->setHeadphoneMuted(m_radioModel.headphoneMute());
+        syncTitleBarOutput();
     });
 
     // Multi-Flex: show when another client is transmitting
@@ -2130,6 +2132,7 @@ MainWindow::MainWindow(QWidget* parent)
     if (savedMute) {
         m_audio->setMuted(true);
     }
+    syncTitleBarOutput();
 
 
     // Meter wiring (S-Meter / Tuner / MTR / HLTH / TX applets) →
@@ -6588,18 +6591,24 @@ void MainWindow::onConnectionStateChanged(bool connected)
             QString tgxlIp = cs.value("TGXL_ManualIp", "").toString();
             if (!tgxlIp.isEmpty() && !m_tgxlConn.isConnected()) {
                 quint16 tgxlPort = static_cast<quint16>(cs.value("TGXL_ManualPort", "9010").toInt());
-                m_tgxlConn.connectToTgxl(tgxlIp, tgxlPort);
+                if (!m_tgxlConn.isConnecting() && !m_tgxlConn.isAuthBlocked()) {
+                    m_tgxlConn.autoConnectToTgxl(tgxlIp, tgxlPort);
+                }
             }
             QString pgxlIp = cs.value("PGXL_ManualIp", "").toString();
             if (!pgxlIp.isEmpty() && !m_pgxlConn.isConnected()) {
                 quint16 pgxlPort = static_cast<quint16>(cs.value("PGXL_ManualPort", "9008").toInt());
-                m_pgxlConn.connectToPgxl(pgxlIp, pgxlPort);
+                if (!m_pgxlConn.isConnecting() && !m_pgxlConn.isAuthBlocked()) {
+                    m_pgxlConn.autoConnectToPgxl(pgxlIp, pgxlPort);
+                }
             }
             // If SS_ManualIp is set, connect to ShackSwitch immediately using a
             // synthetic serial so device-type detection works from the start.
             // This bypasses the UDP discovery race condition entirely.
             QString ssIp = cs.value("SS_ManualIp", "").toString();
-            if (!ssIp.isEmpty() && !m_antennaGenius.isConnected()) {
+            if (!ssIp.isEmpty() && !m_antennaGenius.isConnected()
+                && !m_antennaGenius.isConnecting()
+                && !m_antennaGenius.isAuthBlockedFor(ssIp, 9007)) {
                 AgDeviceInfo ssInfo;
                 ssInfo.ip         = QHostAddress(ssIp);
                 ssInfo.port       = 9007;
@@ -6624,8 +6633,11 @@ void MainWindow::onConnectionStateChanged(bool connected)
                 m_agManualConnectTimer->setSingleShot(true);
                 connect(m_agManualConnectTimer, &QTimer::timeout, this, [this, agIp, agPort]() {
                     m_agManualConnectTimer = nullptr;
-                    if (!m_antennaGenius.isConnected())
-                        m_antennaGenius.connectToAddress(QHostAddress(agIp), agPort);
+                    if (m_radioModel.isConnected() && !m_antennaGenius.isConnected()
+                        && !m_antennaGenius.isConnecting()
+                        && !m_antennaGenius.isAuthBlockedFor(agIp, agPort)) {
+                        m_antennaGenius.connectToAddress(agIp, agPort);
+                    }
                 });
                 m_agManualConnectTimer->start(7000);
             }
@@ -7401,6 +7413,22 @@ void MainWindow::showRecorderNotice(const QString& key,
     box->open();   // NOT exec(): returns immediately, no nested event loop
 }
 
+// The title-bar speaker and master slider show the path the operator hears:
+// the PC sink with PC Audio on, the radio's line out with it off.
+void MainWindow::syncTitleBarOutput()
+{
+    if (!m_titleBar || !m_audio)
+        return;
+    const bool pcAudio = AppSettings::instance().value("PcAudioEnabled", "True").toString() == "True";
+    if (pcAudio) {
+        m_titleBar->setLineoutMuted(m_audio->isMuted());
+        m_titleBar->setMasterVolume(qRound(m_audio->rxVolume() * 100.0f));
+    } else {
+        m_titleBar->setLineoutMuted(m_radioModel.lineoutMute());
+        m_titleBar->setMasterVolume(m_radioModel.lineoutGain());
+    }
+}
+
 void MainWindow::applyMasterVolume(int pct)
 {
     if (pct < 0)   pct = 0;
@@ -7514,9 +7542,12 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
     // ── Mic sources: MIC / BAL / LINE / ACC are Flex connectors ────────────
     // A radio that cannot have its input chosen by a client collapses to PC.
     if (m_appletPanel) {
+        // Absent (or disconnected): the default record, PROC 0..2.
+        const RadioCapabilities::SpeechProcessorControl proc =
+            (connected ? caps.speechProcessorControl : std::nullopt)
+                .value_or(RadioCapabilities::SpeechProcessorControl{});
         m_appletPanel->phoneCwApplet()->setSpeechProcessorPresentation(
-            connected ? caps.speechProcessorLabel : QStringLiteral("PROC"),
-            connected ? caps.speechProcessorLevelMaximum : 2);
+            proc.label, proc.levelMaximum);
         m_appletPanel->meterApplet()->setMainFanTelemetryState(
             connected, caps.hasMainFanTelemetry);
         m_appletPanel->setSelectableMicInputs(!connected || caps.hasSelectableMicInputs);
@@ -7541,7 +7572,8 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
             phone->setTxFilterControlsAvailable(!connected || caps.hasTxFilterControls);
             phone->setDexpVisible(!connected || caps.hasDownwardExpander);
             phone->setAmCarrierAvailable(!connected || caps.hasAmCarrierLevel);
-            phone->setVoxDelayAvailable(!connected || caps.hasVoxDelay);
+            phone->setVoxDelayAvailable(
+                !connected || (caps.voxControl && caps.voxControl->hasDelay));
             phone->setTxFilterEdges(connected ? caps.txFilterLowEdgesHz : QList<int>{},
                                     connected ? caps.txFilterHighEdgesHz : QList<int>{});
         }
