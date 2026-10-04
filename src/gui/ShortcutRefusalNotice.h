@@ -2,6 +2,7 @@
 
 #include <QEvent>
 #include <QKeyEvent>
+#include <QWidget>
 
 namespace AetherSDR {
 
@@ -14,13 +15,20 @@ inline bool shortcutRefusalInputCaptured(bool holdKeyAction, bool textEntryCaptu
     return holdKeyAction ? textEntryCaptured : shortcutInputCaptured;
 }
 
+// A key no widget accepted reaches the window's keyPressEvent(). The TX key
+// guard consumes its key in the event filter, so that press is noticed at the
+// guard instead, and only for a receiver in the same window.
+inline bool shortcutRefusalReceiverInWindow(const QObject* receiver, const QWidget* window)
+{
+    const auto* widget = qobject_cast<const QWidget*>(receiver);
+    return widget && window && widget->window() == window;
+}
+
 // With keyboard shortcuts off a bound key does nothing, so the operator cannot
 // tell "off" from "unbound" (#5483). take() returns the refused action for the
-// first refused press in a session only, else nullptr: a key press, not
-// auto-repeat, bound to an operating action, with the master switch off and
-// nothing capturing the key. A notice that cannot be shown (the status bar is
-// hidden in minimal mode) is not taken, so it is still there to give later.
-// A template, so this header stays Qt-only.
+// first refused press in a session, else nullptr. A notice that cannot be
+// shown (minimal mode hides the status bar) is not taken. A template, so
+// this header includes no engine header.
 class ShortcutRefusalNotice {
 public:
     template <typename Action>
