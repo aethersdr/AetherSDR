@@ -131,9 +131,13 @@ RadioCapabilities RtlSdrBackend::capabilities() const
     c.twoToneGenerator = std::nullopt;  // receive only; there is no transmitter.
     c.panZoomModes = std::nullopt;      // no command plane, no per-pan zoom flags.
     c.hasAmCarrierLevel = false;
-    c.hasVoxDelay = false;
+    c.voxControl = std::nullopt;  // receive only
+    c.speechProcessorControl = std::nullopt;
+    c.txMonitorControl = std::nullopt;
     c.hasAgcThreshold = false;
     c.hasModeIndependentSquelch = false;
+    // No measured squelch map; the SQL line and Auto SQL keep Flex's scale.
+    c.squelchLevelScale = legacyDbmSquelchScale();
     c.agcModes = {QStringLiteral("off"), QStringLiteral("slow"),
                   QStringLiteral("med"), QStringLiteral("fast")};
     // Unused TX presentation retains the shared legacy shape; canTransmit
@@ -402,9 +406,29 @@ void RtlSdrBackend::connectRadio(const RadioConnectRequest& request)
         ddcEngine->setSliceFilter(m_sliceFilterLow, m_sliceFilterHigh);
     }
 
-    // Relay worker/DDC signals to IRadioBackend outputs via cross-thread queued connection
+    wireWorker();
+
+    m_worker->startReading();
+
+    // ── Mark connected, emit signals ────────────────────────────────────────
+    m_connected = true;
+    emit connected();
+    emitInitialState();
+}
+
+void RtlSdrBackend::wireWorker()
+{
+    // A worker left running by disconnectRadio() (stopReading() failed) stays
+    // connected here, so spectrum carries the same producer check as audio:
+    // nothing from a stranded worker reaches the seam after disconnected().
     connect(m_worker.get(), &RtlSdrWorker::spectrumFrameReady,
-            this, &IRadioBackend::spectrumFrameReady);
+            this, [this, producer = QPointer<RtlSdrWorker>(m_worker.get())](int panId,
+                                                                          const QByteArray& frame) {
+                if (!m_connected || !producer || producer.data() != m_worker.get()) {
+                    return;
+                }
+                emit spectrumFrameReady(panId, frame);
+            });
     connect(m_worker.get(), &RtlSdrWorker::audioFrameReady,
             this, [this, producer = QPointer<RtlSdrWorker>(m_worker.get())](const QByteArray& pcm) {
                 if (!producer || producer.data() != m_worker.get()) {
@@ -413,8 +437,13 @@ void RtlSdrBackend::connectRadio(const RadioConnectRequest& request)
                 publishLegacyAudio(pcm);
                 publishLegacySliceAudio(0, pcm);
             });
+    // readError is queued to this object, so deleting the worker does not drop
+    // one posted just before a disconnect; gate it like spectrum.
     connect(m_worker.get(), &RtlSdrWorker::readError,
-            this, [this](const QString& err) {
+            this, [this, producer = QPointer<RtlSdrWorker>(m_worker.get())](const QString& err) {
+                if (!m_connected || !producer || producer.data() != m_worker.get()) {
+                    return;
+                }
                 emit connectionError(err);
                 disconnectRadio();
             });
@@ -422,13 +451,6 @@ void RtlSdrBackend::connectRadio(const RadioConnectRequest& request)
             this, &RtlSdrBackend::handleControlApplied);
     connect(m_worker.get(), &RtlSdrWorker::controlFailed,
             this, &RtlSdrBackend::handleControlFailed);
-
-    m_worker->startReading();
-
-    // ── Mark connected, emit signals ────────────────────────────────────────
-    m_connected = true;
-    emit connected();
-    emitInitialState();
 }
 
 void RtlSdrBackend::disconnectRadio()

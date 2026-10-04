@@ -121,6 +121,11 @@ public:
     int rfGainLow() const { return m_rfGainLow; }
     int rfGainHigh() const { return m_rfGainHigh; }
     int rfGainStep() const { return m_rfGainStep; }
+    // True once a range has been published for this pan (setRfGainInfo: a
+    // Flex's rfgain_info reply, or a backend's panRfGainInfoChanged). Until
+    // then Low/High/Step are this model's defaults, which are Flex-shaped and
+    // describe no other radio — a consumer that scales against them must ask.
+    bool hasRfGainRange() const { return m_rfGainRangePublished; }
     // What the readout appends to the number. " dB" for a real gain register,
     // "%" for a radio whose RF gain is an opaque scale — see
     // IRadioBackend::panRfGainInfoChanged.
@@ -279,6 +284,7 @@ private:
     int         m_rfGainLow{-8};
     int         m_rfGainHigh{32};
     int         m_rfGainStep{8};
+    bool        m_rfGainRangePublished{false};
     QString     m_rfGainUnitSuffix{QStringLiteral(" dB")};
     QStringList m_preampLabels;
     int         m_preampStep{0};

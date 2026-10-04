@@ -158,6 +158,7 @@ int main(int argc, char** argv)
     check(model.headphoneMute() && model.lineoutMute() && model.frontSpeakerMute(),
           "precondition: all three mutes set before disconnect");
 
+    audio.clear();
     model.disconnectFromRadio();
     // isConnected() goes false BEFORE onDisconnected() runs its state reset, so
     // waiting on the connection flag alone races the thing under test. Wait for
@@ -170,6 +171,8 @@ int main(int argc, char** argv)
     check(!model.frontSpeakerMute(), "disconnect clears front speaker mute");
     check(model.headphoneGain() == 50,
           "disconnect still resets the gains it always did");
+    check(audio.count() >= 1,
+          "disconnect publishes the reset output state to its subscribers");
 
     if (g_failures == 0)
         std::fprintf(stderr, "radiomodel_audio_mute_test: PASS\n");

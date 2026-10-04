@@ -85,6 +85,7 @@
 #include <QItemSelectionModel>
 #include <QComboBox>
 #include <QLineEdit>
+#include "AutomationSensitiveLineEdit.h"
 #include <QLabel>
 #include <QSpinBox>
 #include <QProgressBar>
@@ -293,9 +294,7 @@ QString widgetValue(const QWidget* w, bool* truncated = nullptr)
         // dumpTree is written to a temp tree.json, so returning the cleartext
         // would exfiltrate credentials. Reporting a placeholder keeps the field
         // assertable (present / non-empty) without leaking the value. (#3646)
-        if (le->echoMode() != QLineEdit::Normal)
-            return le->text().isEmpty() ? QString() : QStringLiteral("<hidden>");
-        return le->text();
+        return automationLineEditValue(le);
     }
     // Text views (transcripts, logs, terminals) carry a bounded prefix; the `text`
     // verb returns the full document. Read via the plainText Q_PROPERTY that
@@ -1244,6 +1243,7 @@ ResolvedAction resolveMenuBarAction(const QString& target)
 // so route QRhiWidget through its own grab().
 QImage grabWidget(QWidget* w)
 {
+    AutomationSensitiveGrabMask mask(w);
 #ifdef AETHER_GPU_SPECTRUM
     // QRhiWidget inherits QWidget::grab() (which returns an empty pixmap for a
     // GPU surface); grabFramebuffer() is the real readback and returns a QImage.
@@ -1430,46 +1430,6 @@ bool parseBool(const QString& v)
         || s == QLatin1String("checked");
 }
 
-// Tokenize an identifier or label into lowercased words, splitting on
-// non-alphanumeric separators AND camelCase humps (tuneButton -> [tune, button],
-// aprsSvcWXBOT -> [aprs, svc, wxbot], "Auto-Tune" -> [auto, tune]). The TX-guard
-// fallback matches a deny-word against a WHOLE token, so a cross-token trigram
-// like "cwx" formed by the c in "svc" + "wx" in "wxbot" no longer false-positives
-// as the CWX keyer, while genuine keyers (moxButton, pttSend, "Auto-Tune") still
-// match. This is the anchored replacement for the old bare contains() blocklist
-// that flagged the RX-only APRS weather entry (#3646).
-QStringList identifierTokens(const QString& s)
-{
-    QString spaced;
-    spaced.reserve(s.size() * 2);
-    for (int i = 0; i < s.size(); ++i) {
-        const QChar c = s.at(i);
-        // Break at a lower/digit -> Upper hump (tuneButton -> "tune Button") and
-        // at an acronym -> word hump (WXBot -> "WX Bot"); runs of caps stay whole
-        // (WXBOT -> "wxbot").
-        if (i > 0 && c.isUpper()
-            && (s.at(i - 1).isLower() || s.at(i - 1).isDigit()
-                || (i + 1 < s.size() && s.at(i + 1).isLower())))
-            spaced.append(QLatin1Char(' '));
-        spaced.append(c);
-    }
-    return spaced.toLower().split(QRegularExpression(QStringLiteral("[^a-z0-9]+")),
-                                  Qt::SkipEmptyParts);
-}
-
-// True if any haystack contributes a whole token equal to a deny-word — the
-// anchored TX-guard fallback match.
-bool matchesTxDenyToken(const QStringList& haystacks, const QStringList& deny)
-{
-    for (const QString& h : haystacks) {
-        const QStringList tokens = identifierTokens(h);
-        for (const QString& d : deny)
-            if (tokens.contains(d))
-                return true;
-    }
-    return false;
-}
-
 // TX-safety guard for invoke(): refuse a control that keys the transmitter unless
 // AETHER_AUTOMATION_ALLOW_TX is set. Authoritative: the "aetherTxKeying" property
 // set by markTxKeying() at creation (MOX/PTT, TUNE, ATU, CWX send, packet send).
@@ -1477,38 +1437,14 @@ bool matchesTxDenyToken(const QStringList& haystacks, const QStringList& deny)
 // control; it logs a warning so the control gets markTxKeying().
 bool isTransmitControl(const QWidget* w)
 {
-    if (w->property(kTxKeyingProperty).toBool())
-        return true;  // authoritative positive marker
-
-    const auto* btn = qobject_cast<const QAbstractButton*>(w);
-    if (!btn)
-        return false;  // sliders / combos / spinboxes can't trigger TX
-
-    if (w->objectName().startsWith(QStringLiteral("panOverlayMessageClose_"))) {
-        return false;  // closes an overlay notification, never keys TX.
-    }
-
-    // Keep the fallback deny-list narrow and aligned with isTransmitAction():
-    // only words that unambiguously mean "keys TX". "tune"/"atu"/"vox" were
-    // dropped because they false-positive on RX-only controls — the "Tune Now"
-    // button (net/spot retune) and "Tune to <spot>" only move the VFO, and a VOX
-    // toggle arms TX rather than keying it. The genuine keying TUNE/ATU buttons
-    // (TxApplet, AtuPreTuneDialog) all carry the authoritative markTxKeying()
-    // marker, which the positive check above already honors, so removing them
-    // here loses no real protection — it just stops blocking RX-only buttons
-    // that happen to contain "tune". (#3918 — "Tune Now" false-positive)
-    static const QStringList kDeny = {
-        QStringLiteral("mox"), QStringLiteral("ptt"),
-        QStringLiteral("transmit"), QStringLiteral("cwx"),
-    };
-    const QStringList hay{w->objectName(), w->accessibleName(), btn->text()};
-    if (matchesTxDenyToken(hay, kDeny)) {
+    // Shared with the keyboard TX activation guard.
+    const TransmitControlMatch match = transmitControlMatch(w);
+    if (match == TransmitControlMatch::NameFallback) {
         qCWarning(lcAutomation).noquote()
-            << "TX guard fell back to name match on" << btn->text()
+            << "TX guard fell back to name match on" << w->property("text").toString()
             << "— add markTxKeying() at its creation site if it keys TX";
-        return true;
     }
-    return false;
+    return match != TransmitControlMatch::None;
 }
 
 bool hasTransmitControlInChain(const QWidget* widget)
@@ -1533,17 +1469,12 @@ bool isTransmitAction(const QAction* action, const QMenu* owner)
         return true;
     }
 
-    static const QStringList kDeny = {
-        QStringLiteral("mox"), QStringLiteral("ptt"),
-        QStringLiteral("transmit"), QStringLiteral("cwx"),
-    };
-
     // QAction labels such as "Tune to <spot>" and tooltips like "Next Tune
     // press transmits..." describe RX tuning or future behavior, not this
     // action keying TX. Keep the fallback narrow (whole-token match only); real
     // keying actions should be marked explicitly with kTxKeyingProperty.
     const QStringList hay{action->objectName(), actionDisplayText(action)};
-    if (matchesTxDenyToken(hay, kDeny)) {
+    if (matchesTxDenyToken(hay, txDenyTokens())) {
         qCWarning(lcAutomation).noquote()
             << "TX guard fell back to QAction name match on"
             << actionDisplayText(action)
@@ -7851,6 +7782,13 @@ QJsonObject AutomationServer::doSlice(const QString& action, const QString& arg)
         // LEVEL BEFORE ENABLE, for the reason the AGC branch above gives: the
         // enable setter emits an intent carrying both values, so setting the
         // level first makes one request reach the backend as a coherent pair.
+        // A radio with no radio-side NR / ANF (HL2, ANAN) cannot turn them
+        // on; the setter would only mark the model on.
+        if (on && which == QLatin1String("nr")
+            && !radio->radioSideNoiseReductionAvailable())
+            return err(QStringLiteral("refused: this radio has no radio-side noise reduction"));
+        if (on && which == QLatin1String("anf") && !radio->radioSideAutoNotchAvailable())
+            return err(QStringLiteral("refused: this radio has no auto notch"));
         if (which == QLatin1String("nr")) {
             if (level >= 0) s->setNrLevel(level);
             s->setNr(on);
@@ -8219,6 +8157,8 @@ QJsonObject AutomationServer::doBandscope(const QString& action)
             // two silences it is looking at.
             {QStringLiteral("adcPeakDbfs"), row("adcPeakDbfs")},
             {QStringLiteral("adcRmsDbfs"), row("adcRmsDbfs")},
+            {QStringLiteral("adcDcDbfs"), row("adcDcDbfs")},
+            {QStringLiteral("adcDcCodes"), row("adcDcCodes")},
             {QStringLiteral("adcCrestDb"), row("adcCrestDb")},
             {QStringLiteral("adcClippedPerBlock"), row("adcClippedPerBlock")},
             {QStringLiteral("adcObservedAgoMs"), row("adcObservedAgoMs")},

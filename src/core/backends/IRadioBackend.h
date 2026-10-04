@@ -112,7 +112,7 @@ struct MemoryRecallDetails {
 //     backend-owned object returns early on mismatch (RadioModel::setupBackend()).
 //  6. A BACKEND EMITS NOTHING AFTER disconnected(). Frames a worker queued before
 //     stopping are gated on the backend's own connected flag (see SimBackend's
-//     audio forwards). sim_backend_test pins this.
+//     audio and spectrum forwards). sim_backend_test pins this.
 //
 // The interface grows one method at a time per the touchpoint burndown
 // (docs/architecture/aetherd-touchpoints.md).
@@ -515,8 +515,9 @@ public:
     // "transmit tune N" as text, so FlexBackend ignores this. A backend generating
     // its own carrier needs tunePowerPercent: otherwise it can only key at the RF
     // Power level setTxPower() last pushed. Without a command plane, declaring
-    // canTransmit and transmitDriveControl promises tunePowerPercent is honoured:
-    // RadioModel then withholds the "transmit set tunepower=" drop notice.
+    // canTransmit and transmitDriveControl promises tunePowerPercent is honoured,
+    // and tunePowerAppliesLive promises setTunePower(): RadioModel then withholds
+    // the "transmit set tunepower=" drop notice (while keyed, only with the latter).
     virtual void setTune(bool on, int tunePowerPercent, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {})
     {
         Q_UNUSED(on);
@@ -533,6 +534,13 @@ public:
     // canTransmit and transmitDriveControl: RadioModel then withholds the
     // rfpower drop notice.
     virtual void setTxPower(int percent) { Q_UNUSED(percent); }
+
+    // TUNE power (0..100) changed while the TUNE carrier may be up. NEVER keys:
+    // a backend generating its own carrier re-applies drive to one in progress
+    // and otherwise does nothing, since the next setTune() carries the value.
+    // Owner thread, like setTxPower(). Declaring
+    // TransmitDriveControl::tunePowerAppliesLive promises it is implemented.
+    virtual void setTunePower(int percent) { Q_UNUSED(percent); }
 
     // The operator's CW pitch, in Hz (TransmitModel's range: 100..6000). A
     // host-demodulating backend needs it to place its passband: the marker sits on
@@ -617,6 +625,15 @@ public:
     {
         Q_UNUSED(sliceId); Q_UNUSED(on); Q_UNUSED(level);
     }
+    // CW audio peaking filter (capabilities().hasAudioPeakingFilter): the slice's
+    // enable and 0..100 apf_level together; the backend owns the centre (its CW
+    // pitch) and whether it runs in the current mode. Flex does not override it
+    // (SliceModel sends `apf=`/`apf_level=`). Interim verb: it folds into
+    // #5919's SliceDspRequest::Feature::Apf when that lands.
+    virtual void setSliceApf(int sliceId, bool on, int level)
+    {
+        Q_UNUSED(sliceId); Q_UNUSED(on); Q_UNUSED(level);
+    }
 
     // FM repeater controls.  These are separate radio registers on an Icom
     // (tone enable, tone frequency, duplex direction and duplex magnitude),
@@ -678,17 +695,18 @@ public:
     // radio-wide selected-VFO state, not a memory/slice parameter.
     virtual void setTransmitFrequencyCheck(bool on) { Q_UNUSED(on); }
 
-    // Receive and transmit incremental tuning, Hz relative to the VFO. Two enables and
-    // one offset, the IC-705's shape (21 01 RIT, 21 02 XIT, 21 00 offset). A radio
-    // without RIT does not implement these.
-    virtual void setRitEnabled(bool on) { Q_UNUSED(on); }
-    virtual void setXitEnabled(bool on) { Q_UNUSED(on); }
-    virtual void setRitOffset(int hz) { Q_UNUSED(hz); }
+    // Receive and transmit incremental tuning, Hz relative to the slice's VFO. Per
+    // slice, as FlexLib's Slice.RITOn/RITFreq/XITOn/XITFreq: each slice keeps its own
+    // pair and XIT applies when that slice transmits. A radio with one receiver may
+    // ignore the id. A radio without RIT does not implement these.
+    virtual void setSliceRitEnabled(int sliceId, bool on) { Q_UNUSED(sliceId); Q_UNUSED(on); }
+    virtual void setSliceXitEnabled(int sliceId, bool on) { Q_UNUSED(sliceId); Q_UNUSED(on); }
+    virtual void setSliceRitOffset(int sliceId, int hz) { Q_UNUSED(sliceId); Q_UNUSED(hz); }
 
-    // The TRANSMIT offset. Defaults to setRitOffset() because an IC-705 has ONE shift
-    // register (21 00; 21 01 / 21 02 choose whether it applies to RX, TX or both). A
-    // radio with two registers (Flex rit_freq / xit_freq) overrides this.
-    virtual void setXitOffset(int hz) { setRitOffset(hz); }
+    // The TRANSMIT offset. Defaults to setSliceRitOffset() because an IC-705 has ONE
+    // shift register (21 00; 21 01 / 21 02 choose whether it applies to RX, TX or
+    // both). A radio with two registers overrides this.
+    virtual void setSliceXitOffset(int sliceId, int hz) { setSliceRitOffset(sliceId, hz); }
 
     // Transmit audio passband, in Hz above the carrier (Phone applet TX low/high cut).
     // Flex takes `transmit set filter_low=/filter_high=` from TransmitModel; a backend

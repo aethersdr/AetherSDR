@@ -326,6 +326,8 @@ AnanBackend::AnanBackend(QObject* parent)
         publishLegacyAudio(bytes);
         sendSpeakerAudioToRadio(bytes);
     });
+    // Ungated by design: m_dsp emits on m_ioThread, the thread that emits linkDown,
+    // so every frame is delivered before disconnected() (contract rule 6).
     connect(m_dsp, &AnanRxDsp::spectrumReady, this, [this](const std::vector<float>& binsDbfs) {
         std::vector<float> dbm(binsDbfs.size());
         // Attenuation added back, as deskHPSDR does for its panadapter: a
@@ -372,6 +374,12 @@ RadioCapabilities AnanBackend::capabilities() const
     c.family = QStringLiteral("anan");
     // No setTune() implementation, so no tune generator to select a mode on.
     c.twoToneGenerator = std::nullopt;
+    // No VOX, monitor or speech-processor setters. PROC would be the host
+    // ClientComp, but canTransmit is false below, so nothing serves it and the
+    // drop notice correctly stands.
+    c.voxControl = std::nullopt;
+    c.speechProcessorControl = std::nullopt;
+    c.txMonitorControl = std::nullopt;
     // The panadapter dBm axis is dBFS with a dBm label: kUncalibratedDbfsToDbmOffset
     // is 0.0f and bin levels depend on window/normalisation, unverified against a
     // known input. Internally consistent, but not comparable: never publish as a
@@ -383,6 +391,8 @@ RadioCapabilities AnanBackend::capabilities() const
     // the display reference level, and the auto-floor loop converges.
     amplitude.binsAbsolute = true;
     c.panAmplitude = amplitude;
+    // No measured squelch map; the SQL line and Auto SQL keep Flex's scale.
+    c.squelchLevelScale = legacyDbmSquelchScale();
 
     // Span follows the sample rate: it snaps by ratio to one of the six DDC0 rates
     // (no continuous zoom); panBandwidthLimitsChanged clamps to that list's ends.
@@ -425,7 +435,7 @@ RadioCapabilities AnanBackend::capabilities() const
     // rather than left absent because the ownership answer is already known; it
     // populates no TransmitDelta::rfPower today, so nothing publishes drive yet.
     c.transmitDriveControl = RadioCapabilities::TransmitDriveControl{
-        SliceFrequencyControl::Authority::Engine};
+        SliceFrequencyControl::Authority::Engine, /*tunePowerAppliesLive=*/false};
     c.hasRadioPttReadback = false; // no PTT at all, so no readback either
     c.hasTuner = false;            // G2 has no internal ATU (Apache Labs spec)
     c.hasTunerMemories = false;    // no internal ATU, so no tuner-memory surface

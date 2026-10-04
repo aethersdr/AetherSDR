@@ -56,6 +56,7 @@ public:
     // frequency, and guessing one would be inventing telemetry.
     void setPortAFrequencyMhz(double mhz);
     void setRadioConnected(bool connected);
+    void setDirectFailureReason(const QString& reason);
     // The transmit slice's antenna ("ANT1"/"ANT2"). The tuner's own status
     // cannot say which port carries transmit — with one radio cabled to both
     // it reports both live — so the port is identified by matching this
@@ -107,6 +108,9 @@ private:
     // group is shown, for the current m_floating.
     void applyDensity();
     void applyDensityAtScale(qreal scale);
+    void updateSourceIndicator(bool direct);
+    void applySourceIndicatorStyle(qreal scale);
+    bool hasRadioRelay() const;
     // One uniform scale for every metric, from how much room the panel has.
     qreal contentScale() const;
     // Measures what the column costs at scale 1.0. Runs once.
@@ -202,6 +206,9 @@ private:
     // keys into columns while the dials stay small. Its minimum is the gap
     // that keeps the controls off the frame.
     QSpacerItem* m_bottomStretch{nullptr};
+    QLabel*      m_sourceLabel{nullptr}; // "● DIRECT", "● RADIO", or "● OFFLINE"
+    bool         m_directConnected{false};
+    QString      m_directFailureReason;
     // Tuner alerts ("LOW RF POWER", "Tuned SWR: 1.13:1") cover the whole applet in
     // both presentations; a child raised over it, not in any layout. The tuner sends
     // the text and later an empty frame, so duration is the device's (~1.9 s after

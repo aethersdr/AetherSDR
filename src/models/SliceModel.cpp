@@ -460,6 +460,7 @@ void SliceModel::setApf(bool on)
     m_apf = on;
     sendCommand(QString("slice set %1 apf=%2").arg(m_id).arg(on ? 1 : 0));
     emit apfChanged(on);
+    emit apfCommandIssued(m_apf, m_apfLevel);
 }
 
 void SliceModel::setApfLevel(int v)
@@ -469,6 +470,7 @@ void SliceModel::setApfLevel(int v)
     m_apfLevel = v;
     sendCommand(QString("slice set %1 apf_level=%2").arg(m_id).arg(v));
     emit apfLevelChanged(v);
+    emit apfCommandIssued(m_apf, m_apfLevel);
 }
 
 void SliceModel::setNbLevel(int v)
@@ -746,8 +748,12 @@ void SliceModel::setRit(bool on, int hz)
     m_ritFreq = hz;
     sendCommand(QString("slice set %1 rit_on=%2 rit_freq=%3")
                     .arg(m_id).arg(on ? 1 : 0).arg(hz));
+    m_ritCommandInFlight = true;
     emit ritCommandIssued(on, hz);
-    emit ritChanged(on, hz);
+    m_ritCommandInFlight = false;
+    // The members, not the arguments: a backend that answers synchronously
+    // (HL2's clamp) has already corrected them.
+    emit ritChanged(m_ritOn, m_ritFreq);
 }
 
 void SliceModel::setXit(bool on, int hz)
@@ -756,8 +762,10 @@ void SliceModel::setXit(bool on, int hz)
     m_xitFreq = hz;
     sendCommand(QString("slice set %1 xit_on=%2 xit_freq=%3")
                     .arg(m_id).arg(on ? 1 : 0).arg(hz));
+    m_xitCommandInFlight = true;
     emit xitCommandIssued(on, hz);
-    emit xitChanged(on, hz);
+    m_xitCommandInFlight = false;
+    emit xitChanged(m_xitOn, m_xitFreq);
 }
 
 void SliceModel::setDaxChannel(int ch)
@@ -1615,9 +1623,12 @@ void SliceModel::applyChanges(const SliceDelta& d)
         const int v = *d.agcThreshold;
         if (m_agcThreshold != v) { m_agcThreshold = v; emit agcThresholdChanged(v); }
     }
+    // Guarded for the same reason as the pair above: HL2 now publishes the
+    // off-level on every emitSliceState() too, and AgcCalibrationDialog wires
+    // agcOffLevelChanged to the calibrator exactly as it wires the threshold.
     if (d.agcOffLevel.has_value()) {
-        m_agcOffLevel = *d.agcOffLevel;
-        emit agcOffLevelChanged(m_agcOffLevel);
+        const int v = *d.agcOffLevel;
+        if (m_agcOffLevel != v) { m_agcOffLevel = v; emit agcOffLevelChanged(v); }
     }
     if (d.squelchOn.has_value() || d.squelchLevel.has_value()) {
         m_squelchOnKnown |= d.squelchOn.has_value();
@@ -1639,15 +1650,25 @@ void SliceModel::applyChanges(const SliceDelta& d)
         }
         emit squelchChanged(m_squelchOn, m_squelchLevel);
     }
+    // Guarded like the AGC pair: HL2 publishes RIT/XIT on every emitSliceState().
+    // Inside setRit()/setXit() the value is adopted and announced there, once.
     if (d.ritOn.has_value() || d.ritFreq.has_value()) {
-        if (d.ritOn.has_value())   m_ritOn   = *d.ritOn;
-        if (d.ritFreq.has_value()) m_ritFreq = *d.ritFreq;
-        emit ritChanged(m_ritOn, m_ritFreq);
+        const bool on = d.ritOn.value_or(m_ritOn);
+        const int hz = d.ritFreq.value_or(m_ritFreq);
+        if (on != m_ritOn || hz != m_ritFreq) {
+            m_ritOn = on;
+            m_ritFreq = hz;
+            if (!m_ritCommandInFlight) emit ritChanged(m_ritOn, m_ritFreq);
+        }
     }
     if (d.xitOn.has_value() || d.xitFreq.has_value()) {
-        if (d.xitOn.has_value())   m_xitOn   = *d.xitOn;
-        if (d.xitFreq.has_value()) m_xitFreq = *d.xitFreq;
-        emit xitChanged(m_xitOn, m_xitFreq);
+        const bool on = d.xitOn.value_or(m_xitOn);
+        const int hz = d.xitFreq.value_or(m_xitFreq);
+        if (on != m_xitOn || hz != m_xitFreq) {
+            m_xitOn = on;
+            m_xitFreq = hz;
+            if (!m_xitCommandInFlight) emit xitChanged(m_xitOn, m_xitFreq);
+        }
     }
     if (d.daxChannel.has_value()) {
         int ch = *d.daxChannel;
@@ -1771,6 +1792,9 @@ void SliceModel::applyChanges(const SliceDelta& d)
     }
     if (freqChanged)
         emit frequencyChanged(m_frequency);
+    if (d.frequency.has_value() && m_frequencyReportedKnown) {
+        emit frequencyStatusReported(m_reportedFrequency);
+    }
     if (modeChanged_)   emit modeChanged(m_mode);
     if (filterChanged_) emit filterChanged(m_filterLow, m_filterHigh);
     if (previousObservation != m_receiveObservation) {

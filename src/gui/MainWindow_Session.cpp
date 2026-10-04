@@ -1706,8 +1706,8 @@ void MainWindow::wirePanLifecycle()
         }
     });
     // Legacy panadapterInfoChanged — only used for initial client-rendered
-    // display settings and local WNB/RF-gain restore. Profile-owned FFT
-    // processing and waterfall timing arrive through PanadapterModel status.
+    // display settings and local RF-gain restore. Profile-owned FFT
+    // processing, waterfall timing and WNB arrive through PanadapterModel status.
     // Per-pan frequency/level tracking is done via PanadapterModel signals in panadapterAdded.
     connect(&m_radioModel, &RadioModel::panadapterInfoChanged,
             this, [this]() {
@@ -1720,10 +1720,9 @@ void MainWindow::wirePanLifecycle()
             m_radioModel.setWaterfallAutoBlack(sw->wfAutoBlack());
             m_radioModel.setWaterfallAutoBlackSource(
                 sw->effectiveWfAutoBlackRadioSide());
-            // Restore saved WNB and RF gain
+            // Restore saved RF gain. WNB is radio-owned; wirePanadapter()
+            // mirrors its live pan status without replaying a client copy (#5111).
             auto& s = AppSettings::instance();
-            bool wnbOn = s.value(sw->settingsKey("DisplayWnbEnabled"), "False").toString() == "True";
-            int wnbLevel = s.value(sw->settingsKey("DisplayWnbLevel"), "50").toInt();
             // RF gain: push only a value the operator saved; otherwise leave the
             // radio's gain and mirror it into the widgets. A default is not
             // neutral everywhere (HL2 boots at 20 dB LNA, so "0" deafens it), and
@@ -1735,17 +1734,13 @@ void MainWindow::wirePanLifecycle()
                 m_radioModel.backendCapabilities().clientSettingsDomains.testFlag(
                     RadioCapabilities::ClientSettingsDomain::RfGain);
             PanadapterModel* activePan = m_radioModel.activePanadapter();
-            m_radioModel.setPanWnb(wnbOn);
-            m_radioModel.setPanWnbLevel(wnbLevel);
             const int rfGain = restoreLegacyRfGain(
                 m_radioModel.backendCapabilities().family, clientOwnsRfGain,
                 haveSavedRfGain ? std::optional<int>(s.value(rfGainKey).toInt())
                                : std::nullopt,
                 activePan ? activePan->rfGain() : 0,
                 [this](int gain) { m_radioModel.setPanRfGain(gain); });
-            sw->setWnbActive(wnbOn);
             sw->setRfGain(rfGain);
-            sw->overlayMenu()->setWnbState(wnbOn, wnbLevel);
             sw->overlayMenu()->setRfGain(rfGain);
             QString bgPath = s.value(sw->settingsKey("BackgroundImage")).toString();
             if (!bgPath.isEmpty() && bgPath != "none")
@@ -2706,13 +2701,7 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
             }
         }
 
-        const auto dialEnabled = [] {
-            return AppSettings::instance()
-                       .value(QStringLiteral("UlanziDialEnabled"),
-                              QStringLiteral("False"))
-                       .toString()
-                   == QLatin1String("True");
-        };
+        const auto dialEnabled = [this] { return ulanziDialEnabled(); };
 
         // queued means accepted for delivery, not completed. A later thread
         // shutdown can still prevent delivery; do not report device state from
@@ -2888,6 +2877,7 @@ void MainWindow::applyTxAudioCapabilities(bool connected, const RadioCapabilitie
         if (m_appletPanel && m_appletPanel->clientChainApplet()) {
             m_appletPanel->clientChainApplet()->setRxPcAudioEnabled(true);
         }
+        syncTitleBarOutput();
     }
     updateTxAudioPathNotice();
     // Evaluate stream state on the audio thread, after any preceding update.

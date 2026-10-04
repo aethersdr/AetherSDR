@@ -69,6 +69,7 @@ void AmpModel::setDirectConnection(PgxlConnection* conn)
         m_setupNickname.clear();
         m_setupLedIntens.clear();
         m_setupAuthCode.clear();
+        m_setupHasAuthKey = false;
         m_fanMode.clear();
         if (!m_meffa.isEmpty()) {
             m_meffa.clear();
@@ -205,7 +206,9 @@ void AmpModel::applySetupGroup(const QMap<QString, QString>& kvs)
     m_setupLedIntens = kvs.value(QStringLiteral("ledintens"));
     // Present but empty on an amplifier with no auth configured, and empty is
     // the value to send back — value() returning a default here is correct.
+    // A non-empty code is never sent back; see writeSetupGroup().
     m_setupAuthCode  = kvs.value(QStringLiteral("authcode"));
+    m_setupHasAuthKey = kvs.contains(QStringLiteral("authcode"));
     const bool becameWritable = !m_haveSetupGroup;
     m_haveSetupGroup = true;
     // Re-announce MEffA. Its VALUE has not moved, but whether it can be
@@ -221,12 +224,20 @@ void AmpModel::writeSetupGroup(const QString& meffa, const QString& fanMode)
 
     // Same shape the vendor utility sends:
     //   setup nickname=PowerGeniusXL meffa=OFF ledintens=141 fanmode=STANDARD authcode=
-    // All five keys, in this order, every time, echoing the unchanged values so a
+    // The group in this order, every time, echoing the unchanged values so a
     // one-field change stays one field. No `save` follows: like the front-panel
     // toggle (§9.4), this is a run-time choice, not stored configuration.
-    m_directConn->sendCommand(
-        QStringLiteral("setup nickname=%1 meffa=%2 ledintens=%3 fanmode=%4 authcode=%5")
-            .arg(m_setupNickname, meffa, m_setupLedIntens, fanMode, m_setupAuthCode));
+    // Firmware 3.9.8 with authorization enabled refuses a `setup` carrying
+    // `authcode=<code>` (50000013) and accepts the group without it, leaving
+    // the stored code unchanged; `authcode=` goes out only when `setup read`
+    // reported it empty.
+    QString command =
+        QStringLiteral("setup nickname=%1 meffa=%2 ledintens=%3 fanmode=%4")
+            .arg(m_setupNickname, meffa, m_setupLedIntens, fanMode);
+    if (m_setupHasAuthKey && m_setupAuthCode.isEmpty()) {
+        command += QStringLiteral(" authcode=");
+    }
+    m_directConn->sendCommand(command);
 }
 
 void AmpModel::setMeffaEnabled(bool on)

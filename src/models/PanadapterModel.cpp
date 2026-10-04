@@ -80,6 +80,7 @@ void PanadapterModel::setRfGainInfo(int low, int high, int step,
     m_rfGainHigh = high;
     m_rfGainStep = step;
     m_rfGainUnitSuffix = unitSuffix;
+    m_rfGainRangePublished = true;
     emit rfGainInfoChanged(low, high, step, unitSuffix);
 }
 

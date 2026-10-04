@@ -44,6 +44,7 @@ RadioCapabilities hl2Caps()
                                  | Domain::SpanRate | Domain::RfGain
                                  | Domain::TxSetpoints | Domain::Agc
                                  | Domain::Cw;
+    caps.hasAgcThreshold = true;   // a writable threshold/off level, as HL2 declares
     return caps;
 }
 
@@ -57,6 +58,7 @@ RestoredRadioState sampleState()
     state.sampleRateHz = 192'000;
     state.agcMode = QStringLiteral("slow");
     state.agcThreshold = 40;
+    state.agcOffLevels = {20, -1, 35};
     state.cwSpeed = 31;
     state.cwPitch = 720;
     state.cwBreakIn = 1;
@@ -182,6 +184,8 @@ int main(int argc, char** argv)
         // deliberate AGC-T of 0.
         check(gated.agcMode.isEmpty() && gated.agcThreshold == -1,
               "an undeclared Agc domain is absent, not a threshold of 0");
+        check(gated.agcOffLevels.isEmpty(),
+              "an undeclared Agc domain hands over no AGC-off levels");
         check(gated.cwSpeed == 0 && gated.cwPitch == 0
                   && gated.cwBreakIn == -1 && gated.cwDelay == -1
                   && gated.monGainCw == -1 && gated.monPanCw == -1,
@@ -238,6 +242,58 @@ int main(int argc, char** argv)
         const RestoredRadioState back = RadioStateMemory::load(zeroRadio, caps);
         check(back.agcThreshold == 0 && back.agcMode == QStringLiteral("off"),
               "a deliberate AGC threshold of 0 is not mistaken for 'absent'");
+    }
+
+    // ---- the AGC-off level per receiver is capability-shaped --------------
+    // Radio A's document carries agcOffLevels (sampleState). It is read and
+    // written only where the Agc domain AND hasAgcThreshold are declared.
+    {
+        const RadioCapabilities caps = hl2Caps();
+        const RestoredRadioState back = RadioStateMemory::load(radioA, caps);
+        check(back.agcOffLevels == QList<int>({20, -1, 35}),
+              "the per-receiver AGC-off levels round-trip, holes included");
+        const QJsonObject doc = radioA.featureExact(RadioStateMemory::featureName());
+        check(doc.value(QStringLiteral("agcOffLevels")).isArray(),
+              "they are one array in the radio's OperatingState document");
+
+        RadioCapabilities noOffLevel = hl2Caps();
+        noOffLevel.hasAgcThreshold = false;
+        check(RadioStateMemory::load(radioA, noOffLevel).agcOffLevels.isEmpty(),
+              "a backend with no writable off level is handed none");
+        check(RadioStateMemory::load(radioA, noOffLevel).agcMode
+                  == QStringLiteral("slow"),
+              "and still gets the AGC pair its domain declares");
+
+        RadioCapabilities noAgcDomain;
+        noAgcDomain.family = QStringLiteral("anan");
+        noAgcDomain.clientSettingsDomains = Domain::RfGain;
+        noAgcDomain.hasAgcThreshold = true;
+        check(RadioStateMemory::load(radioA, noAgcDomain).agcOffLevels.isEmpty(),
+              "a backend that does not own the AGC is handed none");
+
+        const RadioSettingsScope otherRadio(QStringLiteral("hl2"),
+                                            QStringLiteral("00:00:00:00:00:0F"));
+        check(RadioStateMemory::store(otherRadio, noOffLevel, sampleState()),
+              "a store without the off-level capability succeeds");
+        check(!otherRadio.featureExact(RadioStateMemory::featureName())
+                   .contains(QStringLiteral("agcOffLevels")),
+              "and writes no AGC-off levels");
+
+        const RadioSettingsScope oldRadio(QStringLiteral("hl2"),
+                                          QStringLiteral("00:00:00:00:00:0E"));
+        check(oldRadio.setFeature(
+                  RadioStateMemory::featureName(), RadioStateMemory::kSchemaVersion,
+                  QJsonObject{{QStringLiteral("agcMode"), QStringLiteral("slow")},
+                              {QStringLiteral("agcThreshold"), 40}}),
+              "a document without the field is planted");
+        const RestoredRadioState old = RadioStateMemory::load(oldRadio, caps);
+        check(old.agcOffLevels.isEmpty() && old.agcMode == QStringLiteral("slow"),
+              "a document without the field loads, with no AGC-off levels");
+
+        RestoredRadioState onlyLevels;
+        onlyLevels.agcOffLevels = {44};
+        check(!onlyLevels.isEmpty(),
+              "a state carrying only AGC-off levels is not 'nothing stored'");
     }
 
     // ---- per-domain gating on store ---------------------------------------

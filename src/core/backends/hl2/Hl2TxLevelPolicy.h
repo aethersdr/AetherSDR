@@ -62,9 +62,9 @@ inline constexpr int kMicLevelCurve = 2;
 // ---- Forward-power peak hold -----------------------------------------------
 
 // One step of the TX forward-power peak hold, in watts. Forward power is one
-// unaveraged 12-bit I2C ADC sample at 10 Hz (rtl/slow_adc.v), which almost
-// never lands on a speech peak, so SSB reads 8-12 dB under PEP. Instant attack
-// and exponential release accumulate the max across an over. Unkeyed, the
+// unaveraged 12-bit I2C ADC sample (rtl/slow_adc.v), re-sampled every other EP6
+// response (control.v:261); the input is each publish window's maximum. Instant
+// attack and exponential release carry the max across an over. Unkeyed, the
 // reading follows the instant sample so the gauge drops when TX stops.
 [[nodiscard]] constexpr double fwdPeakHoldStep(double previousPeakW,
                                                double instantW,

@@ -456,10 +456,39 @@ struct Hl2Telemetry {
     int adcOverloadSamples = 0;
     int adcWindowMs = 0;
 
+    // Maximum of the publish window's non-ACK RADDR-1 DATA[15:0] (the radio
+    // re-samples forward power every other EP6 response, control.v:261, so the
+    // last value alone misses speech peaks); nullopt when the window saw none.
+    // `forwardPowerSamples` counts them; the window length is `adcWindowMs`.
+    std::optional<int> forwardPowerPeakRaw;
+    int forwardPowerSamples = 0;
+
     // Merge a decoded response in, leaving untouched fields alone. ACK
     // responses contribute only PTT: their raddr is the command address and
     // data our own echo, which would otherwise decode as telemetry.
     void apply(const Ep6Response& r) noexcept;
+};
+
+// Accumulator for Hl2Telemetry::forwardPowerPeakRaw: the maximum of DATA[15:0]
+// over non-ACK RADDR-1 responses. Kept here so the rule is testable without a socket.
+struct ForwardPowerWindow {
+    std::optional<int> peak;
+    int samples = 0;
+
+    void observe(const Ep6Response& r) noexcept
+    {
+        if (r.ack || r.raddr != 0x01)
+            return;
+        const int v = static_cast<int>(r.data & 0xFFFF);
+        if (!peak || v > *peak)
+            peak = v;
+        ++samples;
+    }
+    void clear() noexcept
+    {
+        peak.reset();
+        samples = 0;
+    }
 };
 
 // Directional-coupler counts -> watts via Quisk's reference curve (see the
@@ -779,14 +808,25 @@ struct Ep4Stats {
     // Uncalibrated pre-DDC dBFS, comparable only with the gateware's clip and
     // good-level flags (not an S-meter, the WDSP ADC peak, or antenna level).
     // peakDbfs() is ABSOLUTE (largest |code|); rmsDbfs() is AC-coupled (about
-    // the record's mean). The mixed reference is deliberate (#5802); a signed
-    // pedestal row is tracked at #5856.
+    // the record's mean). The mixed reference is deliberate (#5802); the mean
+    // the RMS removes is published by dcDbfs() and meanCodes() below (#5856).
     [[nodiscard]] double peakDbfs() const noexcept;
     [[nodiscard]] double rmsDbfs()  const noexcept;
     // Peak-to-RMS in dB, or nullopt unless BOTH are above kEp4FloorDbfs, a
     // sentinel rather than a level. A DC pedestal with sub-code AC deviation
     // would otherwise publish 60-90 dB of meaningless "crest" (#5802).
     [[nodiscard]] std::optional<double> crestDb() const noexcept;
+    // The record's mean, the DC level rmsDbfs() removes, as
+    // 20*log10(|mean| / kEp4FullScale) on the same pre-DDC scale (#5856). Named
+    // for where it is measured, not for a cause. kEp4FloorDbfs is returned only
+    // for no samples or a mean of exactly zero; a non-zero mean under half a
+    // code computes BELOW the floor, unclamped, as rmsDbfs() does.
+    [[nodiscard]] double dcDbfs() const noexcept;
+    // The same mean, SIGNED, in raw converter codes. At two decimals a mean
+    // of about half a code prints the same -72.25 as the zero-mean sentinel in
+    // dcDbfs(); this prints 0.50 against 0.00. 0.0 for a record with no
+    // samples, so callers check `samples` first.
+    [[nodiscard]] double meanCodes() const noexcept;
     // Fold another packet's statistics in. Peak takes the max, everything else
     // sums, so a merged block's mean and variance are those of the 2048-sample
     // concatenation.
