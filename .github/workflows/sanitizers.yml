@@ -57,8 +57,14 @@ jobs:
             # workflow.
             extra_cxx: "-fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer"
             extra_ld:  "-fsanitize=address,undefined"
+            # No halt_on_error=0 in ASAN_OPTIONS: with it, LeakSanitizer
+            # still PRINTS a leak but the process exits 0, so the test passes
+            # and ctest --output-on-failure discards the report. The lane was
+            # blind to every leak until #6173 found them by hand. (It bought
+            # nothing for ASan errors either: without -fsanitize-recover=address
+            # the first one aborts regardless.)
             runtime_env: |
-              ASAN_OPTIONS=detect_leaks=1:abort_on_error=0:halt_on_error=0:strict_string_checks=1:detect_stack_use_after_return=1:print_summary=1
+              ASAN_OPTIONS=detect_leaks=1:abort_on_error=0:strict_string_checks=1:detect_stack_use_after_return=1:print_summary=1
               UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=0:print_summary=1
               LSAN_OPTIONS=print_suppressions=0
           - id: tsan
