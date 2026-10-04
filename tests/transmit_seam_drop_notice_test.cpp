@@ -1,7 +1,8 @@
 // #5637 §1: a TransmitModel control whose value already crossed the
 // IRadioBackend seam must not ALSO be reported as dropped.
 //
-// TransmitModel emits two things for RF power, mic level and the TX passband
+// TransmitModel emits two things for RF power, mic level, the TX passband and
+// (#6086) CW speed, break-in, VOX, the SSB monitor and the speech processor
 // (tune power reaches the backend as setTune()'s argument at key time, and
 // while keyed through setTunePower() where the backend declares it live):
 // a typed intent (rfPowerCommandIssued / micLevelCommandIssued /
@@ -16,13 +17,17 @@
 // The drop notice is deliberate (#5263: it is how dead controls on non-Flex
 // radios are found), so this test pins BOTH halves:
 //   1. a routed verb reaches the backend and raises no commandDropped;
-//   2. an unrouted verb (VOX here, which this backend does not implement) and a
-//      routed verb on a backend that does not declare the capability behind it
-//      still raise commandDropped — the alarm is narrowed, not silenced.
+//   2. a routed verb on a backend that does not declare the capability behind
+//      it still raises commandDropped — the alarm is narrowed, not silenced. So
+//      does a verb no seam setter carries (`cw break_in_delay`, an Icom's
+//      `vox_delay`).
+// Flex declares the same records and has a command plane, so its wire text is
+// untouched; the last case pins that its seam setters write nothing.
 //
 // Socket-free: an injected backend records the seam calls. No radio, no peer.
 
 #include "TestSettingsProfile.h"
+#include "core/backends/flex/FlexBackend.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
@@ -52,6 +57,11 @@ public:
     QList<int> cwPitches;
     QList<QPair<bool, int>> tunes;  // (on, tunePowerPercent) per setTune()
     QList<int> tunePowers;          // per setTunePower()
+    QList<int> cwSpeeds;
+    QList<bool> cwBreakIns;
+    int voxCalls{0};
+    int monitorCalls{0};
+    int speechProcessorCalls{0};
     bool connected{true};
     RadioCapabilities capabilities() const override { return caps; }
     bool isConnected() const override { return connected; }
@@ -69,6 +79,8 @@ public:
     void setTxFilter(int lowHz, int highHz) override { txFilters << qMakePair(lowHz, highHz); }
     void setCwPitch(int hz) override { cwPitches << hz; }
     void setTunePower(int percent) override { tunePowers << percent; }
+    void setCwSpeed(int wpm) override { cwSpeeds << wpm; }
+    void setCwBreakIn(bool on) override { cwBreakIns << on; }
     // Honours tunePowerPercent the way Hl2Backend::setTune does (drive set
     // from TUNE power at key time, PR #4551): records it rather than applying.
     void setTune(bool on, int tunePowerPercent, const TxCoordinator::Operation&,
@@ -76,8 +88,9 @@ public:
     {
         tunes << qMakePair(on, tunePowerPercent);
     }
-    // setVox() is deliberately NOT overridden: this backend has no VOX, so the
-    // Flex text for it really does reach nothing.
+    void setVox(bool, int, int) override { ++voxCalls; }
+    void setTxMonitor(bool, int) override { ++monitorCalls; }
+    void setSpeechProcessor(bool, int) override { ++speechProcessorCalls; }
 };
 
 // The capability set of a host-modulating transmitter with no command plane —
@@ -92,6 +105,28 @@ RadioCapabilities hostModulatingTransmitter(bool tunePowerAppliesLive = true)
     c.transmitDriveControl = RadioCapabilities::TransmitDriveControl{
         SliceFrequencyControl::Authority::Engine, tunePowerAppliesLive};
     c.hasTxFilterControls = true;
+    return c;
+}
+
+// A radio-side CW keyer with no command plane and no host modulation: the
+// IC-705 / IC-7300MK2 answers (IcomCivBackend sets hasRadioSideCwKeyer from
+// the profile's text keyer).
+RadioCapabilities radioSideKeyerTransmitter()
+{
+    RadioCapabilities c;
+    c.family = QStringLiteral("icom");
+    c.canTransmit = true;
+    c.hasRadioSideCwKeyer = true;
+    return c;
+}
+
+// An Icom transmitter's answers: its own VOX (no delay register), MON and PROC.
+RadioCapabilities icomTransmitter()
+{
+    RadioCapabilities c = radioSideKeyerTransmitter();
+    c.voxControl = RadioCapabilities::VoxControl{/*hasDelay*/ false};
+    c.txMonitorControl = RadioCapabilities::TxMonitorControl{};
+    c.speechProcessorControl = RadioCapabilities::SpeechProcessorControl{};
     return c;
 }
 
@@ -349,15 +384,191 @@ static void cwPitchRepeatOfHandedValueStaysQuiet()
           "cw pitch: a repeat of the value the backend holds raises no notice");
 }
 
-// The negative control that keeps the first four honest: the same backend,
-// the same model, a verb nothing behind the seam implements. If the fix had
-// gated the whole commandReady forward, this is what would go quiet.
-static void unroutedVerbStillRaisesDropNotice()
+static void cwSpeedReachesSeamWithoutDropNotice()
+{
+    Fixture f(radioSideKeyerTransmitter());
+    f.radio.transmitModel().setCwSpeed(25);
+    check(f.backend->cwSpeeds == QList<int>{25},
+          "cw wpm: setCwSpeed(25) reached the radio-side keyer once");
+    check(!f.droppedStartingWith(QStringLiteral("cw wpm ")),
+          "cw wpm: no commandDropped for a speed the backend applied");
+}
+
+static void cwBreakInReachesSeamWithoutDropNotice()
+{
+    Fixture f(radioSideKeyerTransmitter());
+    f.radio.transmitModel().setCwBreakIn(true);
+    check(f.backend->cwBreakIns == QList<bool>{true},
+          "cw break_in: setCwBreakIn(true) reached the radio-side keyer once");
+    check(!f.droppedStartingWith(QStringLiteral("cw break_in ")),
+          "cw break_in: no commandDropped for break-in the backend applied");
+}
+
+// No seam setter carries the break-in delay, so its text is a real drop even
+// on the backend that takes `cw break_in` (the prefix must not swallow it).
+static void cwBreakInDelayKeepsDropNoticeOnKeyerBackend()
+{
+    Fixture f(radioSideKeyerTransmitter());
+    f.radio.transmitModel().setCwDelay(300);
+    check(f.droppedStartingWith(QStringLiteral("cw break_in_delay ")),
+          "cw break_in_delay: no seam setter, the drop notice stands");
+}
+
+// Without a radio-side keyer the setCwSpeed/setCwBreakIn connections hand the
+// backend nothing. The speed notice is a real drop. Break-in is a known gap,
+// not a ruling: an HL2 reads it from setCwKeying() at key time, which the gate
+// does not model, so the notice it keeps there is false.
+static void cwSpeedAndBreakInWithoutKeyerKeepDropNotice()
+{
+    Fixture f(hostModulatingTransmitter());
+    f.radio.transmitModel().setCwSpeed(25);
+    f.radio.transmitModel().setCwBreakIn(true);
+    check(f.backend->cwSpeeds.isEmpty() && f.backend->cwBreakIns.isEmpty(),
+          "premise: no radio-side keyer, no CW speed or break-in reaches the seam");
+    check(f.droppedStartingWith(QStringLiteral("cw wpm ")),
+          "no radio-side keyer: cw wpm still raises commandDropped");
+    check(f.droppedStartingWith(QStringLiteral("cw break_in ")),
+          "no radio-side keyer: cw break_in still raises commandDropped");
+}
+
+static void voxReachesSeamWithoutDropNotice()
+{
+    Fixture f(icomTransmitter());
+    f.radio.transmitModel().setVoxEnable(true);
+    f.radio.transmitModel().setVoxLevel(40);
+    check(f.backend->voxCalls == 2, "vox: setVox reached the backend for enable and level");
+    check(!f.droppedStartingWith(QStringLiteral("transmit set vox_enable="))
+              && !f.droppedStartingWith(QStringLiteral("transmit set vox_level=")),
+          "vox: no commandDropped for an enable and level the backend applied");
+}
+
+// setVox is handed the delay, but a backend without the register ignores it.
+static void voxDelayFollowsHasDelay()
+{
+    Fixture f(icomTransmitter());
+    f.radio.transmitModel().setVoxDelay(30);
+    check(f.droppedStartingWith(QStringLiteral("transmit set vox_delay=")),
+          "vox_delay without a delay register: the drop notice stands");
+    RadioCapabilities caps = icomTransmitter();
+    caps.voxControl->hasDelay = true;
+    Fixture g(caps);
+    g.radio.transmitModel().setVoxDelay(30);
+    check(!g.droppedStartingWith(QStringLiteral("transmit set vox_delay=")),
+          "vox_delay with a delay register: no commandDropped");
+}
+
+static void monitorReachesSeamWithoutDropNotice()
+{
+    Fixture f(icomTransmitter());
+    f.radio.transmitModel().setSbMonitor(true);
+    f.radio.transmitModel().setMonGainSb(60);
+    check(f.backend->monitorCalls == 2,
+          "mon: setTxMonitor reached the backend for MON and its gain");
+    check(!f.droppedStartingWith(QStringLiteral("transmit set mon="))
+              && !f.droppedStartingWith(QStringLiteral("transmit set mon_gain_sb=")),
+          "mon: no commandDropped for a monitor the backend applied");
+}
+
+static void speechProcessorReachesSeamWithoutDropNotice()
+{
+    Fixture f(icomTransmitter());
+    f.radio.transmitModel().setSpeechProcessorEnable(true);
+    f.radio.transmitModel().setSpeechProcessorLevel(1);
+    check(f.backend->speechProcessorCalls == 2,
+          "proc: setSpeechProcessor reached the backend for enable and level");
+    check(!f.droppedStartingWith(QStringLiteral("transmit set speech_processor_")),
+          "proc: no commandDropped for a processor the backend applied");
+}
+
+// A host-modulating transmitter (HL2, ANAN) runs PROC in this host's ClientComp
+// (MainWindow::applySpeechProcessorToClientComp), not through the seam setter.
+static void speechProcessorOnHostCompressorWithoutDropNotice()
+{
+    Fixture f(hostModulatingTransmitter());
+    f.radio.transmitModel().setSpeechProcessorEnable(true);
+    f.radio.transmitModel().setSpeechProcessorLevel(2);
+    check(f.backend->speechProcessorCalls == 0,
+          "premise: no PROC record, so the seam setter is not called");
+    check(!f.droppedStartingWith(QStringLiteral("transmit set speech_processor_")),
+          "proc on a host-modulating transmitter: no commandDropped");
+}
+
+// Neither the record nor a transmitter whose host compressor could serve it.
+static void speechProcessorWithNoProcessorKeepsDropNotice()
+{
+    RadioCapabilities caps = hostModulatingTransmitter();
+    caps.canTransmit = false;
+    Fixture f(caps);
+    f.radio.transmitModel().setSpeechProcessorEnable(true);
+    check(f.backend->speechProcessorCalls == 0,
+          "premise: no PROC record, so the seam setter is not called");
+    check(f.droppedStartingWith(QStringLiteral("transmit set speech_processor_enable=")),
+          "no radio or host processor: speech_processor still raises commandDropped");
+}
+
+// The HL2 implements neither setVox nor setTxMonitor and declares neither record.
+static void voxAndMonitorWithoutRecordsKeepDropNotice()
 {
     Fixture f(hostModulatingTransmitter());
     f.radio.transmitModel().setVoxEnable(true);
-    check(f.droppedStartingWith(QStringLiteral("transmit set vox_enable=")),
-          "vox: an unrouted verb still raises commandDropped");
+    f.radio.transmitModel().setVoxLevel(40);
+    f.radio.transmitModel().setSbMonitor(true);
+    f.radio.transmitModel().setMonGainSb(60);
+    check(f.backend->voxCalls == 0 && f.backend->monitorCalls == 0,
+          "premise: without the records neither setter is called");
+    check(f.droppedStartingWith(QStringLiteral("transmit set vox_enable="))
+              && f.droppedStartingWith(QStringLiteral("transmit set vox_level=")),
+          "no VOX record: vox still raises commandDropped");
+    check(f.droppedStartingWith(QStringLiteral("transmit set mon="))
+              && f.droppedStartingWith(QStringLiteral("transmit set mon_gain_sb=")),
+          "no monitor record: mon still raises commandDropped");
+}
+
+// Flex now has its VOX, monitor and PROC setters called (it declares the
+// records), and they must write nothing: the wire text from TransmitModel is
+// still the only Flex output for these controls.
+static void flexSeamSettersWriteNothing()
+{
+    FlexBackend flex;
+    QStringList written;
+    flex.setCommandSink([&written](const QString& cmd) { written << cmd; });
+    flex.setSliceCommandSink([&written](const QString& cmd) { written << cmd; });
+    flex.setTxCommandSink([&written](const QString& cmd, const TxCoordinator::Command&) {
+        written << cmd;
+    });
+    const RadioCapabilities caps = flex.capabilities();
+    check(caps.voxControl && caps.voxControl->hasDelay && caps.txMonitorControl
+              && caps.speechProcessorControl,
+          "flex: declares VOX (with delay), monitor and PROC");
+    flex.setVox(true, 40, 30);
+    flex.setTxMonitor(true, 60);
+    flex.setSpeechProcessor(true, 1);
+    check(written.isEmpty(), "flex: setVox/setTxMonitor/setSpeechProcessor write nothing");
+
+    TransmitModel model;
+    QStringList text;
+    QObject::connect(&model, &TransmitModel::commandReady,
+                     [&text](const QString& cmd) { text << cmd; });
+    model.setVoxEnable(true);
+    model.setVoxDelay(30);
+    model.setSbMonitor(true);
+    model.setSpeechProcessorLevel(1);
+    check(text == QStringList{QStringLiteral("transmit set vox_enable=1"),
+                              QStringLiteral("transmit set vox_delay=30"),
+                              QStringLiteral("transmit set mon=1"),
+                              QStringLiteral("transmit set speech_processor_level=1")},
+          "flex: the wire text for these controls is unchanged");
+}
+
+// The negative control that keeps the routed cases honest: the Icom-shaped
+// transmitter they use, and a verb nothing behind the seam implements. If the fix had
+// gated the whole commandReady forward, this is what would go quiet.
+static void unroutedVerbStillRaisesDropNotice()
+{
+    Fixture f(icomTransmitter());
+    f.radio.transmitModel().setMonGainCw(50);
+    check(f.droppedStartingWith(QStringLiteral("transmit set mon_gain_cw=")),
+          "mon_gain_cw: a verb with no seam setter still raises commandDropped");
 }
 
 // Routed on the seam is not enough: the backend must also declare the
@@ -419,6 +630,18 @@ int main(int argc, char** argv)
     cwPitchHandedToPreviousBackendKeepsDropNotice();
     cwPitchDifferentFromHandedValueKeepsDropNotice();
     cwPitchRepeatOfHandedValueStaysQuiet();
+    cwSpeedReachesSeamWithoutDropNotice();
+    cwBreakInReachesSeamWithoutDropNotice();
+    cwBreakInDelayKeepsDropNoticeOnKeyerBackend();
+    cwSpeedAndBreakInWithoutKeyerKeepDropNotice();
+    voxReachesSeamWithoutDropNotice();
+    voxDelayFollowsHasDelay();
+    monitorReachesSeamWithoutDropNotice();
+    speechProcessorReachesSeamWithoutDropNotice();
+    speechProcessorOnHostCompressorWithoutDropNotice();
+    speechProcessorWithNoProcessorKeepsDropNotice();
+    voxAndMonitorWithoutRecordsKeepDropNotice();
+    flexSeamSettersWriteNothing();
     unroutedVerbStillRaisesDropNotice();
     undeclaredCapabilityKeepsDropNotice();
     tunePowerWithoutDriveOwnershipKeepsDropNotice();

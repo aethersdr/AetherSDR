@@ -373,6 +373,7 @@ private slots:
     // broadcast all stay in lockstep regardless of which UI changed it.
     // See issue #1764.
     void applyMasterVolume(int pct);
+    void syncTitleBarOutput();
 
 private:
     enum class TuneIntent {
@@ -692,6 +693,10 @@ private:
     SliceModel* flexRxPanSourceSlice() const;
     void syncFlexRxPanToAudioEngine();
     void syncActiveSliceSquelchLineToSpectrums();
+    // RadioCapabilities::squelchLevelScale for the active slice's mode, pushed to
+    // every SpectrumWidget and to RxApplet's Auto availability.
+    std::optional<SquelchLevelScale> activeSliceSquelchScale() const;
+    void syncSquelchScaleToUi();
     bool autoSquelchShouldRunOnSpectrum(const QString& panId,
                                         const SpectrumWidget* spectrum) const;
     void syncActiveSliceAutoSquelchToSpectrums();

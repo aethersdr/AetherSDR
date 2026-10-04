@@ -632,6 +632,18 @@ convergence must be verified on real hardware through the automation bridge.
   meant a change on RX2 fired the capture and then persisted RX1's untouched
   value: the change that triggered the write was not the change that got
   written.
+- **The AGC-off level is remembered PER RECEIVER, unlike the pair.** It is the
+  fixed gain WDSP applies with AGC off (`Hl2RxDsp::agcFixedGainDbForOffLevel`),
+  and since DIGU/DIGL open with AGC off (§18.5) it is their operating gain.
+  `RestoredRadioState::agcOffLevels` holds one 0..100 entry per receiver index
+  (-1 = none), stored as the `agcOffLevels` array of the radio's
+  `OperatingState` document. `RadioStateMemory` reads and writes it only for a
+  backend that declares the `Agc` domain and `hasAgcThreshold`; a document
+  without it restores the default of 10. `Hl2Backend::requestSliceAgc()`
+  captures a change, `seedReceiverAgc()` seeds each receiver with its own
+  entry, `createPanadapter()` gives a receiver opened later the entry for its
+  index, and a receiver that is closed keeps its entry. An entry outside
+  0..100 is dropped, not clamped.
 - **"At the next connect" means a NEW radio, not a returning one.** The seeding
   runs from `connectRadio()` when the connect request's serial differs from the
   last one seeded, or when `buildReceivers()` had no previous state to carry —
@@ -1560,11 +1572,11 @@ radio. See §18 for the full audit and the proposed seam.
 |---|---|---|---|---|
 | ~~24~~ | ~~RADE / DAX-bridge bare `panStream()` deref~~ **DONE** | §18.3, gap 18 | Both halves are closed: RADE is guarded in `activateRADE()`, and `startDax()` already guarded `panStream()` by the §18 audit. The earlier DAX bring-up crash and its fix remain recorded in §6 gap 1 | — |
 | ~~25~~ | ~~WSPR beacon on a host-modulating backend~~ **DONE** | §18.4 | The audio route already existed (#4471); only the DAX-borrow guard was in the way. First external-oracle TX instrument we have | — |
-| ~~26~~ | ~~Unified RX-audio seam~~ **PARTLY DONE** | §18.5, §18.8 | `rxDemodAudioReady` landed with CW, RTTY and the QSO recorder RX tap as its consumers. The `sliceId` argument and a `Wideband` tap are still open — nothing needs them yet | S |
+| ~~26~~ | ~~Unified RX-audio seam~~ **PARTLY DONE** | §18.5, §18.8 | `rxDemodAudioReady` landed with CW, RTTY and the QSO recorder RX tap as its consumers. The `sliceId` argument is still open — nothing needs it yet. The `Wideband` tap is withdrawn (item 30) | S |
 | 27 | AetherClock off DAX-channel identity onto slice identity | §18.6, gap 17 | WWV/WWVB decode. Depends on 26 | S |
-| 28 | `hasDaxAudio` / `hasDaxIq` / tap kinds / `rxAudioSampleRateHz` capabilities | §18.5 | Lets features decline honestly instead of binding to nothing. Depends on 26 | S |
+| 28 | `hasDaxAudio` / `hasDaxIq` / tap kinds / `rxAudioSampleRateHz` capabilities | §18.5 | Lets features decline honestly instead of binding to nothing. Depends on 26. On HL2 the tap-kinds answer is `Demod` only (item 30) | S |
 | 29 | Retire the `kiwi : "flex"` source-tag ternary | §18.2, gap 19 | Blocks a third concurrent family; `AsrTapPolicy` cannot disambiguate. Fold into 26 | XS |
-| 30 | Measure whether TCI's post-AGC feed costs WSJT-X decodes | §18.5 | Decides whether a `Wideband` tap is worth building at all. **Measure before building** | S |
+| ~~30~~ | ~~Measure whether TCI's post-AGC feed costs WSJT-X decodes~~ **DONE (#5629)** | §18.5 | Measured offline against WSJT-X's FT8 decoder: no measurable loss alone or beside a +10/+20 dB signal, 32 of 82 weak decodes lost beside +30 dB and 58 of 76 beside +40 dB. `agcMode = "off"` recovers them, so no `Wideband` tap is built; DIGU/DIGL open with AGC off instead, up to 29 dB quieter (§18.5) | — |
 
 ### Tier 4 — deliberate divergences, do NOT "fix" by reflex
 
@@ -2213,6 +2225,21 @@ correct: the operator made a real choice on a real radio.
 
 **SW is not gated and must never be**, on any backend. On a radio reporting
 false it is the only automatic floor the operator has.
+
+**Off needs the row's unit.** The manual level is a threshold in the unit the
+row carries. A Flex waterfall tile is intensity (about 96..120) and its threshold
+is `160 - level`. The HL2 has no waterfall plane: `RadioModel::onBackendSpectrumFrame`
+hands the pan frame on as the row, so the row is the pan's dB axis (dBFS under a
+dBm label). SW measures its black point from the row and so is already in the
+row's unit.
+
+`WaterfallLevelMap::manualBlackThreshold` takes the unit from
+`RadioCapabilities::panBinsAbsolute()`, the flag the auto-floor gate already
+reads: an absolute row gets `-60 dB - level`, one dB a step, -60 down to -160 dB.
+The direction is the Flex one (a higher value draws more of the floor). The two
+end points are chosen, not derived: -160 dBm clears the lowest floor this radio
+showed (-148 dBm at 384 kHz and LNA +40 dB, 9 dB lower at 48 kHz), and -60 dBm
+leaves only strong signals lit. A Flex leaves the flag false and is unchanged.
 
 ### 15.3 hpsdrsim cannot reproduce this
 
@@ -2963,9 +2990,29 @@ RadioModel::rxAudioReady(RxAudioTap tap, int sliceId, QByteArray pcm, int rateHz
   matters: `Demod` (what the operator hears, post-AGC, post-passband) versus
   `Wideband`/`Modem` (filter-flat, pre-AGC — what a decoder wants). Today this
   is invisible because bus B happens to be pre-AGC on a Flex; on the HL2,
-  WSJT-X over TCI is currently being fed **post-AGC, post-passband** audio from
-  `Hl2RxDsp`. It decodes, but a modem on AGC'd audio is a known-marginal
-  arrangement and nothing in the code admits it.
+  WSJT-X over TCI is fed **post-AGC, post-passband** audio from `Hl2RxDsp`.
+  Measured in #5629: the AGC leaves the 12.64 s the FT8 decoder integrates
+  alone (within 0.042 dB) and instead raises the noise in the gap between
+  transmissions by 25–29 dB, which inflates the decoder's frame-averaged noise
+  reference by 18.25 dB. That costs decodes only beside a signal +30 dB or
+  stronger, and no AGC time constant avoids it. WDSP has no pre-AGC tap
+  (`wcpAGC` works in place), so the HL2 has no `Wideband` feed and does not
+  need one: AGC off on the slice is that feed, and `Hl2Backend::followModeAgc`
+  selects it whenever a receiver enters DIGU/DIGL or comes up in one (mode
+  click, connect-time restore, a receiver seeded from another). The off is
+  never written to the remembered AGC. With AGC off the gain is the AGC-off
+  level: 10 dB at the default level of 10, against a 39 dB AGC ceiling at the
+  default threshold and LNA gain. DIGU/DIGL are therefore up to 29 dB quieter
+  on the speaker and on the TCI level meter (arithmetic on the two settings,
+  not a measurement); #5629's AGC-off arm ran at that same 10 dB. The
+  operator raises the level with the AGC-T slider while AGC is off, and the
+  level is remembered per receiver (`RestoredRadioState::agcOffLevels`, §5 AGC),
+  so the compensation holds across launches. The
+  mechanism is `wcpAGC`'s, not the HL2's, and the default is HL2-only: ANAN-G2
+  runs the same AGC and keeps the operator's mode in DIGU/DIGL
+  (`AnanBackend::setSliceAgc`); RTL-SDR runs it at WDSP's medium, offers no
+  data mode and takes no AGC command (`RtlSdrBackend::setSliceAgc`). Neither
+  is measured or changed.
 - **`sliceId`** replaces the DAX channel number as the routing key. Flex maps
   slice → DAX channel internally and keeps its hold registry; HL2 maps slice →
   its single DDC. Consumers never learn which.
@@ -2992,7 +3039,7 @@ backend from re-running this audit:
 | Field | Why |
 |---|---|
 | `hasDaxAudio` / `hasDaxIq` | The honest name for what bus B *is*. RADE and the DAX bridge should decline on this, not crash on a null stream (§18.3) |
-| available tap kinds | Whether a `Wideband` feed exists at all, or only `Demod` |
+| available tap kinds | Whether a `Wideband` feed exists at all, or only `Demod`. On HL2: `Demod` only (#5629) |
 | `providesRadioSideWaveforms` | Digital Voice waveform install is Flex firmware; nothing should offer it elsewhere |
 | `rxAudioSampleRateHz` | HL2 is 24 kHz by the deliberate divergence in §13 Tier 4. A future backend may not be, and `DEFAULT_SAMPLE_RATE` is assumed widely |
 
@@ -3066,9 +3113,8 @@ decision, or an accident of the Flex being the only radio there was.
 4. **AetherClock** — the slice-identity work. WWV on a direct-sampling front end
    is a genuinely good demonstration, and 10 MHz WWV was already the proof
    signal for #4528's panadapter.
-5. **Tap kinds** (`Wideband`) — only once there is a second consumer that wants
-   one, and once someone has measured whether the AGC'd TCI feed is costing
-   WSJT-X decodes.
+5. ~~**Tap kinds** (`Wideband`)~~ — withdrawn for HL2. The AGC'd TCI feed is
+   measured (#5629, §18.5): AGC off on the slice already is the pre-AGC feed.
 
 ### 18.8 The bus, as built
 

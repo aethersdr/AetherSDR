@@ -34,8 +34,8 @@ using Report = std::array<std::uint8_t, kReportBytes>;
 
 enum class MessageType : std::uint8_t {
     Data = 0x00,    // opaque radio TCP bytes, either direction
-    Hello = 0x01,   // device -> host: start or restart the link
-    Ready = 0x02,   // host -> device: radio connection open
+    Hello = 0x01,   // host: calling the device; device: restart the link
+    Ready = 0x02,   // device: answering HELLO; host: radio connection open
     Closed = 0x03,  // either direction: link ended; device restarts with Hello
     Datagram = 0x04,  // one UDP datagram: [radio port hi][radio port lo][bytes]
 };
@@ -65,7 +65,7 @@ public:
     // One datagram of 1..kMaxDatagramBytes; returns false (and emits
     // nothing) when it does not fit.
     bool encodeDatagram(std::uint16_t port, const QByteArray& datagram, std::vector<Report>* out);
-    // Hello (device) and Ready (host) start a link with counter 0.
+    // Sending Hello or Ready starts the counter again at 0.
     void reset() { m_counter = 0; }
     std::uint8_t counter() const { return m_counter; }
 

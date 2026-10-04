@@ -356,6 +356,12 @@ Ctr2UsbRelay::Ctr2UsbRelay(QObject* parent)
         linkFault(QStringLiteral("CTR2 message incomplete after %1 ms")
                       .arg(m_tuning.incompleteMessageTimeoutMs));
     });
+    m_helloTimer = new QTimer(this);
+    m_helloTimer->setSingleShot(true);
+    connect(m_helloTimer, &QTimer::timeout, this, [this] {
+        sendHello();
+        scheduleHello(m_helloDelayMs);
+    });
 }
 
 Ctr2UsbRelay::~Ctr2UsbRelay()
@@ -396,17 +402,40 @@ bool Ctr2UsbRelay::start(Ctr2HidPort* port, const QHostAddress& radioAddress, qu
     m_reportCosts.clear();
     m_unsentPayload = 0;
     m_unsentDatagramBytes = 0;
-    m_awaitingHello = true;
+    m_linkDown = true;
     m_closedSent = false;
+    m_helloSent = false;
+    m_helloDelayMs = m_tuning.helloIntervalMs;
     m_lastSessionStats = {};
     ++m_generation;
     setLastError({});
-    qCInfo(lcDevices) << "CTR2 USB: waiting for HELLO from" << m_port->description()
-                      << "-> radio" << radioDescription();
+    qCInfo(lcDevices) << "CTR2 USB: calling" << m_port->description()
+                      << "with HELLO -> radio" << radioDescription();
     setState(State::Listening);
+    sendHello();
+    scheduleHello(m_helloDelayMs);
     emit endpointsChanged();
     emit statsChanged();
     return true;
+}
+
+void Ctr2UsbRelay::sendHello()
+{
+    // At most one HELLO waits on the port: a CTR2 that is not reading cannot
+    // accumulate them, and a pending CLOSED always goes out first.
+    if (!m_port || !m_linkDown || !m_reportCosts.empty()) {
+        return;
+    }
+    m_tx.reset();
+    sendControl(MessageType::Hello);
+    m_helloSent = true;
+}
+
+void Ctr2UsbRelay::scheduleHello(int delayMs)
+{
+    if (m_port && m_linkDown) {
+        m_helloTimer->start(std::max(1, delayMs));
+    }
 }
 
 void Ctr2UsbRelay::stop()
@@ -416,6 +445,7 @@ void Ctr2UsbRelay::stop()
     }
     endSession();
     m_incompleteTimer->stop();
+    m_helloTimer->stop();
     if (m_port) {
         // Queued radio bytes are dropped; CLOSED still reaches the device.
         std::vector<ctr2hid::Report> closed;
@@ -477,7 +507,7 @@ void Ctr2UsbRelay::onReportsReceived(const QByteArray& reports)
         if (!m_rx.feed(bytes, ctr2hid::kReportBytes, &messages)) {
             const QString err = m_rx.errorText();
             m_rx.reset();
-            if (!m_awaitingHello) {
+            if (!m_linkDown) {
                 linkFault(QStringLiteral("CTR2 link framing error: %1").arg(err));
             }
             continue;
@@ -505,10 +535,10 @@ void Ctr2UsbRelay::onMessage(const Message& message)
 {
     switch (message.type) {
     case MessageType::Hello:
-        onHello();
+        onDeviceStart();
         return;
     case MessageType::Data:
-        if (m_awaitingHello) {
+        if (m_linkDown) {
             // In flight before the device saw our CLOSED; it restarts with HELLO.
             return;
         }
@@ -519,7 +549,7 @@ void Ctr2UsbRelay::onMessage(const Message& message)
         m_session->deviceData(message.payload);
         return;
     case MessageType::Datagram:
-        if (m_awaitingHello) {
+        if (m_linkDown) {
             return;
         }
         if (!m_session || !m_session->relaying()) {
@@ -529,34 +559,46 @@ void Ctr2UsbRelay::onMessage(const Message& message)
         m_session->deviceDatagram(message.port, message.payload);
         return;
     case MessageType::Closed:
-        m_awaitingHello = true;
+        m_linkDown = true;
+        m_helloSent = false;
         if (m_session) {
+            // The session may still be draining the device's last bytes to the
+            // radio; its end schedules the next HELLO.
             m_session->deviceClosed();
+        } else if (!m_helloTimer->isActive()) {
+            // Never restart a running timer: stray CLOSEDs must not postpone
+            // the next call indefinitely.
+            scheduleHello(m_helloDelayMs);
         }
         return;
     case MessageType::Ready:
-        if (!m_awaitingHello) {
-            linkFault(QStringLiteral("CTR2 sent READY, which only the host sends"));
+        // The CTR2's answer to a HELLO sent since the last link ended. Any
+        // other READY is a late answer to an earlier HELLO and changes nothing:
+        // it must not discard a pending CLOSED or skip the failure back-off.
+        if (m_linkDown && m_helloSent && !m_session) {
+            onDeviceStart();
         }
         return;
     }
 }
 
-void Ctr2UsbRelay::onHello()
+void Ctr2UsbRelay::onDeviceStart()
 {
     if (m_session) {
         m_session->terminate(QStringLiteral("CTR2 restarted the link"));
     }
     endSession();
+    m_helloTimer->stop();
     // Nothing from the previous link may reach the device after it restarted.
     discardOutput();
     m_closedSent = false;
-    m_awaitingHello = false;
+    m_helloSent = false;
+    m_linkDown = false;
     ++m_generation;
     m_lastSessionStats = {};
     QTcpSocket* radio = m_socketFactory();
     m_session = new Session(this, m_generation, radio);
-    qCInfo(lcDevices) << "CTR2 USB: HELLO; opening" << radioDescription();
+    qCInfo(lcDevices) << "CTR2 USB: CTR2 ready; opening" << radioDescription();
     setState(State::Connecting);
     emit endpointsChanged();
     m_session->begin(m_radioAddress, m_radioPort);
@@ -570,7 +612,8 @@ void Ctr2UsbRelay::linkFault(const QString& message)
     endSession();
     m_incompleteTimer->stop();
     m_rx.reset();
-    m_awaitingHello = true;
+    m_linkDown = true;
+    m_helloSent = false;
     qCWarning(lcDevices) << "CTR2 USB:" << message;
     setLastError(message);
     if (m_port) {
@@ -580,6 +623,8 @@ void Ctr2UsbRelay::linkFault(const QString& message)
             sendClosedOnce();
         }
         setState(State::Listening);
+        m_helloDelayMs = m_tuning.helloRetryAfterFaultMs;
+        scheduleHello(m_helloDelayMs);
     }
     emit endpointsChanged();
     emit statsChanged();
@@ -608,6 +653,7 @@ void Ctr2UsbRelay::onPortFailed(const QString& message)
     }
     endSession();
     m_incompleteTimer->stop();
+    m_helloTimer->stop();
     releasePort({});
     setLastError(message);
     setState(State::Error);
@@ -702,7 +748,8 @@ void Ctr2UsbRelay::sessionEnded(quint64 generation, const QString& message, bool
     m_session = nullptr;
     QObject::disconnect(session, nullptr, this, nullptr);
     session->deleteLater();
-    m_awaitingHello = true;
+    m_linkDown = true;
+    m_helloSent = false;
     if (sendClosed) {
         discardOutput();
         sendClosedOnce();
@@ -715,6 +762,8 @@ void Ctr2UsbRelay::sessionEnded(quint64 generation, const QString& message, bool
     }
     if (m_port) {
         setState(State::Listening);
+        m_helloDelayMs = error ? m_tuning.helloRetryAfterFaultMs : m_tuning.helloIntervalMs;
+        scheduleHello(m_helloDelayMs);
     }
     emit endpointsChanged();
     emit statsChanged();

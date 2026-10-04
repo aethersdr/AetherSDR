@@ -27,6 +27,11 @@ public:
     // Set the TGXL amplifier handle so AMP meters can be routed correctly
     // (TGXL FWD/RL → TunerApplet, PGXL FWD/RL → AmpApplet)
     void setTgxlHandle(quint32 handle);
+    // Set the power amplifier's handle. Once known, an AMP meter reaches the
+    // amplifier only when its source index matches it, as FlexLib's
+    // Radio.FindMetersByAmplifier matches; 0 means not yet known, and any AMP
+    // meter that is not the tuner's goes to the amplifier.
+    void setAmpHandle(quint32 handle);
 
     // Register or update a meter definition from a TCP status message.
     void defineMeter(const MeterDef& def);
@@ -381,6 +386,17 @@ signals:
     void ampMetersChanged(float fwdPower, float swr, float temp,
                           float drivePower, bool driveValid);
     void tgxlMetersChanged(float fwdPower, float swr);
+    // The PGXL's drain current (amps, "ID") and PA heatsink temperature
+    // (degrees Celsius, "TEMP"), relayed by the radio. Each valid flag is false
+    // when its meter does not exist or has been withdrawn; the float alongside
+    // is 0.0f and MUST NOT be rendered. Each *Updated flag is true only when
+    // that reading arrived in the packet that caused the emit, so a consumer
+    // stamps freshness per reading; on a withdrawal both are false and the
+    // valid flags carry the change.
+    void ampVitalsChanged(float drainCurrent, bool drainCurrentValid,
+                          bool drainCurrentUpdated,
+                          float paHeatsinkTemp, bool paHeatsinkTempValid,
+                          bool paHeatsinkTempUpdated);
 
     // Emitted when any meter value changes (for debug/generic display).
     void meterUpdated(int index, float value);
@@ -391,6 +407,10 @@ private:
     void applyValues(const QVector<quint16>& ids, const QVector<Value>& vals);
     void clearCompressionState();
     void recomputeSourceIndexMins();
+    // Re-route existing AMP meter definitions after a handle changes.
+    void rescanAmpMeters();
+    bool isTgxlMeter(int sourceIndex) const;
+    bool isAmpMeter(int sourceIndex) const;
     // Map a radio-side ALC reading onto the dBFS range the gauges are built
     // for. Identity when the backend already declares dBFS.
     // Mirrors the Phone/CW gauge's floor without introducing a gui dependency.
@@ -473,10 +493,12 @@ private:
     int m_ampFwdPwrIdx{-1};  // "AMP" / "FWD" (PGXL)
     int m_ampSwrIdx{-1};     // "AMP" / "RL" (PGXL)
     int m_ampDrvIdx{-1};     // "AMP" / "DRV" (PGXL — exciter power at the amp input)
-    int m_ampTempIdx{-1};    // "AMP" / "TEMP"
+    int m_ampTempIdx{-1};    // "AMP" / "TEMP" (PGXL PA heatsink)
+    int m_ampIdIdx{-1};      // "AMP" / "ID" (PGXL drain current)
     int m_tgxlFwdIdx{-1};   // "AMP" / "FWD" (TGXL — matched by handle)
     int m_tgxlSwrIdx{-1};   // "AMP" / "RL" (TGXL — matched by handle)
     quint32 m_tgxlHandle{0}; // TGXL amplifier handle for meter disambiguation
+    quint32 m_ampHandle{0};  // power amplifier handle; 0 = not yet known
     float m_tgxlFwdPwr{0.0f};
     float m_tgxlSwr{1.0f};
     qint64 m_lastTgxlFwdPowerUpdateMs{0};
@@ -528,6 +550,7 @@ private:
     float m_ampFwdPwr{0.0f};
     float m_ampSwr{1.0f};
     float m_ampTemp{0.0f};
+    float m_ampDrainCurrent{0.0f};
     float m_ampDrv{0.0f};
     // Set when a FWD or RL value packet lands for the amplifier. ampMetersChanged
     // also fires for TEMP and DRV, and a consumer that arbitrates between the
@@ -538,6 +561,10 @@ private:
     // Set when a DRV value packet lands, cleared wherever m_ampDrvIdx is, so a
     // drive reading can never outlive the meter it describes.
     bool m_hasAmpDrvValue{false};
+    // Set when an ID or TEMP value packet lands, cleared wherever the meter's
+    // index is, so neither reading can outlive the meter it describes.
+    bool m_hasAmpDrainCurrentValue{false};
+    bool m_hasAmpTempValue{false};
 };
 
 } // namespace AetherSDR

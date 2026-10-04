@@ -426,10 +426,15 @@ RadioCapabilities IcomCivBackend::capabilities() const
     // it, 16 57 picks one of three widths. Not a TNF and not the auto notch —
     // see the capability's own note.
     c.hasManualNotch = true;
-    c.speechProcessorLevelMaximum = profile.speechProcessorLevelMaximum;
-    c.speechProcessorLabel = QString::fromUtf8(
-        profile.speechProcessorLabel.data(),
-        static_cast<qsizetype>(profile.speechProcessorLabel.size()));
+    if (m.hasTransmit) {
+        c.speechProcessorControl = RadioCapabilities::SpeechProcessorControl{
+            profile.speechProcessorLevelMaximum,
+            QString::fromUtf8(
+                profile.speechProcessorLabel.data(),
+                static_cast<qsizetype>(profile.speechProcessorLabel.size()))};
+    } else {
+        c.speechProcessorControl = std::nullopt;
+    }
     // Publish the momentary UI only when the active model profile attests both
     // the XFC command family and the FM facet's release contract. An address is
     // identity, not evidence that a command shape is supported.
@@ -503,12 +508,21 @@ RadioCapabilities IcomCivBackend::capabilities() const
     c.hasAgcThreshold = false; // 16 12 selects AGC mode, not Flex AGC-T.
     c.agcModes = {QStringLiteral("slow"), QStringLiteral("med"), QStringLiteral("fast")};
     c.hasModeIndependentSquelch = profile.hasModeIndependentSquelch;
+    // The 0..255 register has no published dB mapping; the SQL line and Auto
+    // SQL keep Flex's scale until one is measured.
+    c.squelchLevelScale = legacyDbmSquelchScale();
     c.hasCwTune = profile.hasCwTune;
     // setTune() drives the ordinary TUNE producer: one sine wave. There is no
     // CI-V route for a two-tone selection on any profiled model.
     c.twoToneGenerator = std::nullopt;
     c.hasAmCarrierLevel = false; // RF power is separate; no AM carrier setter.
-    c.hasVoxDelay = false; // setVox implements enable/gain only.
+    // setVox implements enable/gain only; setTxMonitor writes MON and its level.
+    c.voxControl = m.hasTransmit
+        ? std::optional(RadioCapabilities::VoxControl{/*hasDelay*/ false})
+        : std::nullopt;
+    c.txMonitorControl = m.hasTransmit
+        ? std::optional(RadioCapabilities::TxMonitorControl{})
+        : std::nullopt;
 
     // THREE, and only three — and WHICH three depends on the mode. FIL1 is
     // 3.0 kHz in SSB, 1.2 kHz in CW, 9 kHz in AM and 15 kHz in FM, so a single
@@ -4802,20 +4816,23 @@ void IcomCivBackend::setTransmitFrequencyCheck(bool on)
         m_session ? m_session->civAddress() : 0xA4, on));
 }
 
-void IcomCivBackend::setRitEnabled(bool on)
+void IcomCivBackend::setSliceRitEnabled(int sliceId, bool on)
 {
+    Q_UNUSED(sliceId);
     m_ritOn = on;
     sendUserCommand(cmdRitEnable(m_session ? m_session->civAddress() : 0xA4, on));
 }
 
-void IcomCivBackend::setXitEnabled(bool on)
+void IcomCivBackend::setSliceXitEnabled(int sliceId, bool on)
 {
+    Q_UNUSED(sliceId);
     m_xitOn = on;
     sendUserCommand(cmdXitEnable(m_session ? m_session->civAddress() : 0xA4, on));
 }
 
-void IcomCivBackend::setRitOffset(int hz)
+void IcomCivBackend::setSliceRitOffset(int sliceId, int hz)
 {
+    Q_UNUSED(sliceId);
     m_ritOffsetHz = hz;
     // ONE offset register serves both RIT and XIT on this radio — 21 00 is the
     // shift, and 21 01 / 21 02 decide which of receive and transmit it applies
@@ -5605,9 +5622,9 @@ bool IcomCivBackend::scrubDrive(const icom::ControlSpec& c)
         setVox(m_voxOn, m_voxLevelPercent, 0);
         return true;
     }
-    if (id == QLatin1String("rit.enable")) { setRitEnabled(m_ritOn); return true; }
-    if (id == QLatin1String("xit.enable")) { setXitEnabled(m_xitOn); return true; }
-    if (id == QLatin1String("rit.offset")) { setRitOffset(m_ritOffsetHz); return true; }
+    if (id == QLatin1String("rit.enable")) { setSliceRitEnabled(slice, m_ritOn); return true; }
+    if (id == QLatin1String("xit.enable")) { setSliceXitEnabled(slice, m_xitOn); return true; }
+    if (id == QLatin1String("rit.offset")) { setSliceRitOffset(slice, m_ritOffsetHz); return true; }
     if (id == QLatin1String("repeater.tone")) {
         if (!m_repeaterToneOn) {
             return false;

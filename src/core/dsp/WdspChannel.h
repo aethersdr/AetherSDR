@@ -102,6 +102,9 @@ public:
         static constexpr double kMinFmDeviationHz = 100.0;
         static constexpr double kMaxFmDeviationHz = 100000.0;
         double fmDeviationHz = 5000.0;
+        // true: fexchange waits for each output block. The r1/r2 buffer phase is
+        // still set per channel open (flush_iobuffs() drains with a 1 ms timed
+        // wait), so two opens fed the same burst can differ (#5629).
         bool blockForOutput = false;
         // Impulse noise blanker — see the setNoiseBlanker() block below. Kept
         // in Config, not just as a runtime setter, so that reconfigure() (a
@@ -126,6 +129,8 @@ public:
         // the seam's 0..100 (SliceModel's), and 20 is SliceModel's default.
         bool squelchEnabled = false;
         int squelchLevel = 20;
+        // Added to the amsq map; see setSquelch().
+        double levelSquelchOffsetDb = 0.0;
         bool operator==(const Config&) const = default;
     };
 
@@ -292,16 +297,21 @@ public:
     // level 100 is tightest, and setMode() re-applies it.
     //   level 0                  nothing runs, in every mode ("0 = open")
     //   FM                       fmsq, threshold 10^(-2 * level / 100)
-    //   AM, SAM, DSB, LSB, USB   amsq, threshold -140 + 0.7 * level dBFS
+    //   AM, SAM, DSB, LSB, USB   amsq, threshold -140 + 0.7 * level + offset dBFS
     //   CW, DIG, WBFM, other     none
-    // amsq's map is fitted to HL2-measured dBFS levels, so it moves with RF gain;
-    // SSB is on amsq because ssql never opens at this chain's audio level (#5982).
+    // amsq gates raw dBFS, so a front-end gain change moves its antenna-referred
+    // point; `levelOffsetDb` is how the caller, which owns that gain, refers it
+    // back. The channel has no gain of its own to refer to (#6092). SSB is on
+    // amsq because ssql never opens at this chain's audio level (#5982).
     // Receive only; false while a control operation is in flight; not from processIq().
-    bool setSquelch(bool on, int level) noexcept;
+    bool setSquelch(bool on, int level, double levelOffsetDb) noexcept;
     [[nodiscard]] static SquelchStage squelchStageFor(Mode mode) noexcept;
+    static constexpr double kLevelSquelchBaseDbfs = -140.0;
+    static constexpr double kLevelSquelchDbPerStep = 0.7;
     // The two maps above, each clamping level to 0..100, so tests can pin them.
     [[nodiscard]] static double fmSquelchThresholdForLevel(int level) noexcept;
-    [[nodiscard]] static double levelSquelchThresholdDbfsForLevel(int level) noexcept;
+    [[nodiscard]] static double levelSquelchThresholdDbfsForLevel(int level,
+                                                                  double offsetDb) noexcept;
     // A snapshot by value, safe from any thread: guarded by its own mutex, not
     // g_setupMutex (the FFTW planner lock, which can be held for a whole plan).
     [[nodiscard]] AppliedSquelch appliedSquelch() const;

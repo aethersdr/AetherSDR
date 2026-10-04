@@ -374,6 +374,12 @@ RadioCapabilities AnanBackend::capabilities() const
     c.family = QStringLiteral("anan");
     // No setTune() implementation, so no tune generator to select a mode on.
     c.twoToneGenerator = std::nullopt;
+    // No VOX, monitor or speech-processor setters. PROC would be the host
+    // ClientComp, but canTransmit is false below, so nothing serves it and the
+    // drop notice correctly stands.
+    c.voxControl = std::nullopt;
+    c.speechProcessorControl = std::nullopt;
+    c.txMonitorControl = std::nullopt;
     // The panadapter dBm axis is dBFS with a dBm label: kUncalibratedDbfsToDbmOffset
     // is 0.0f and bin levels depend on window/normalisation, unverified against a
     // known input. Internally consistent, but not comparable: never publish as a
@@ -385,6 +391,8 @@ RadioCapabilities AnanBackend::capabilities() const
     // the display reference level, and the auto-floor loop converges.
     amplitude.binsAbsolute = true;
     c.panAmplitude = amplitude;
+    // No measured squelch map; the SQL line and Auto SQL keep Flex's scale.
+    c.squelchLevelScale = legacyDbmSquelchScale();
 
     // Span follows the sample rate: it snaps by ratio to one of the six DDC0 rates
     // (no continuous zoom); panBandwidthLimitsChanged clamps to that list's ends.

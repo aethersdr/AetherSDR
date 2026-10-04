@@ -435,7 +435,8 @@ private:
     RadioModel*    m_radioModel{nullptr};
     ControlAvailabilityRegistry* m_filterAvailability{nullptr};
     std::optional<ReceiveFilterControl> m_receiveFilterControl;
-    std::optional<ReceiveSquelchModel> m_receiveSquelchModel;
+    // exclusiveSquelchScaleValue(caps.squelchLevelScale): the receiver's own gate.
+    std::optional<SquelchLevelScale> m_exclusiveSquelch;
     QPushButton* m_filterUnavailable{nullptr};
     QVector<int> defaultFilterWidths(const QString& mode) const;
     bool acceptsFilterEdges(int low, int high) const;

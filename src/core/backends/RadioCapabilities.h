@@ -8,6 +8,8 @@
 #include <QVariantMap>
 #include <optional>
 
+#include "core/backends/SquelchLevelScale.h"
+
 namespace AetherSDR {
 
 struct TxPowerBand {
@@ -60,15 +62,6 @@ struct ReceiveFilterControl {
 struct ReceiveAudioControl {
     SliceFrequencyControl::Authority authority{SliceFrequencyControl::Authority::Unknown};
     // Both gain (0..100) and mute must act on the shared slice's RX audio.
-};
-// Native slice squelch semantics. Absence preserves the legacy desktop shape;
-// this record alone grants no headless-control verb. Explicit modes make an
-// unsupported demodulator distinguishable from a supported control set to Off.
-struct ReceiveSquelchModel {
-    QStringList modes;
-    double referenceDb = -160.0;
-    double stepDb = 1.0;
-    QString unit = QStringLiteral("dBm");
 };
 struct ReceivePanRangeControl {
     SliceFrequencyControl::Authority authority{SliceFrequencyControl::Authority::Unknown};
@@ -295,7 +288,6 @@ struct RadioCapabilities {
     std::optional<ReceiveModeControl> receiveModeControl;
     std::optional<ReceiveFilterControl> receiveFilterControl;
     std::optional<ReceiveAudioControl> receiveAudioControl;
-    std::optional<ReceiveSquelchModel> receiveSquelchModel;
     std::optional<ReceivePanRangeControl> receivePanCenterControl;
     std::optional<ReceivePanRangeControl> receivePanBandwidthControl;
     // Engaged when the radio can deliver a wideband converter view; see the
@@ -515,12 +507,16 @@ struct RadioCapabilities {
     // (hasRadioSideDsp's ANF).
     bool hasManualNotch = false;
 
-    // Inclusive upper bound of the radio's speech-processor level control.
-    // Flex-shaped controls use 0..2 (NOR/DX/DX+); a model with an evidenced
-    // continuous control publishes a maximum greater than 2. The minimum is
-    // always zero. The legacy-shape default is intentional; see ADDING A FIELD.
-    int speechProcessorLevelMaximum = 2;
-    QString speechProcessorLabel = QStringLiteral("PROC");
+    // The radio's own speech processor (Flex by its command plane; otherwise
+    // IRadioBackend::setSpeechProcessor must apply it). Absent: the P/CW face
+    // keeps PROC 0..2, and a host-modulating transmitter's ClientComp is the
+    // processor instead (#6086). levelMaximum: inclusive top of the level, 2 for
+    // NOR/DX/DX+, larger for an evidenced continuous control; minimum is zero.
+    struct SpeechProcessorControl {
+        int levelMaximum = 2;
+        QString label{QStringLiteral("PROC")};
+    };
+    std::optional<SpeechProcessorControl> speechProcessorControl;
 
     // The radio can temporarily monitor the transmit frequency while the
     // operator holds a control. This is Icom's XFC (CI-V 1C 02), not a
@@ -581,8 +577,20 @@ struct RadioCapabilities {
     // The radio accepts manual SQL in CW/data modes and owns its persistence.
     // False preserves the existing mode-specific client squelch policy.
     bool hasModeIndependentSquelch = false;
+    // The squelch level's place on the pan axis. Absent: no SQL line, no Auto SQL.
+    std::optional<SquelchLevelScale> squelchLevelScale;
     bool hasAmCarrierLevel = false;
-    bool hasVoxDelay = false;
+
+    // The radio's own VOX and SSB transmit monitor (Flex by its command plane;
+    // otherwise IRadioBackend::setVox / setTxMonitor must apply them). Absent:
+    // their wire text reaches nothing, and the drop notice says so (#6086).
+    // hasDelay: the VOX hang time is applied too, not just enable and level.
+    struct VoxControl {
+        bool hasDelay = false;
+    };
+    std::optional<VoxControl> voxControl;
+    struct TxMonitorControl {};
+    std::optional<TxMonitorControl> txMonitorControl;
 
 
     // TX audio reaches this backend through IRadioBackend::submitTxAudio rather than

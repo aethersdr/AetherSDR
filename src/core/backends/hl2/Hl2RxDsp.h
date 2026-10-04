@@ -116,7 +116,9 @@ public:
         double maximumAgcGainDb = 39.0;   // = slice default 65 * 0.6
         // false (live): processIq is non-blocking — real-time input paces WDSP's
         // async worker and audio flows with ~1 block latency. true: processIq
-        // waits for each output block (deterministic for a burst/offline feed).
+        // waits for each output block. That does not make a burst feed
+        // reproducible: flush_iobuffs() drains with a 1 ms timed wait, so the
+        // r1/r2 phase is fixed per channel open, not per run (#5629).
         bool blockForOutput = false;
     };
 
@@ -236,10 +238,13 @@ public:
     // the blanker, and re-applied by installChannel(). A change the channel
     // refuses (a control operation in flight) is marked pending and retried at
     // the top of each processIqBlock() until it is taken; see squelchPending().
-    Q_INVOKABLE void setSquelch(bool on, int level);
+    // `levelOffsetDb` refers the level map to the LNA:
+    // Hl2DbReference::levelSquelchOffsetDb().
+    Q_INVOKABLE void setSquelch(bool on, int level, double levelOffsetDb);
     [[nodiscard]] bool squelchPending() const noexcept { return m_squelchPending; }
     [[nodiscard]] bool squelchEnabled() const noexcept { return m_squelchOn; }
     [[nodiscard]] int squelchLevel() const noexcept { return m_squelchLevel; }
+    [[nodiscard]] double squelchLevelOffsetDb() const noexcept { return m_squelchOffsetDb; }
     // What the channel last WROTE to WDSP (stage, run flags, threshold), or
     // nullopt before configure(). Forwarded, not mirrored, for the reason
     // channelConfig() gives below. The record itself is a by-value snapshot
@@ -569,6 +574,7 @@ private:
     // Squelch request — see setSquelch(). Defaults mirror SliceModel's.
     bool m_squelchOn = false;
     int  m_squelchLevel = 20;
+    double m_squelchOffsetDb = 0.0;
     // True while the channel has refused the current request; see setSquelch().
     bool m_squelchPending = false;
     std::atomic<bool> m_nbAppliedOn {false};

@@ -41,6 +41,13 @@ struct MetisClientTestAccess {
         client.m_packetSinkForTest = std::move(sink);
     }
     static void send(MetisClient& client) { client.sendControlPacket(); }
+    // The TX NCO register (C&C addr 0x01) as last commanded.
+    static std::uint32_t txRegisterHz(const MetisClient& client)
+    {
+        const Cc& cc = client.m_ccTxFreq;
+        return (static_cast<std::uint32_t>(cc[1]) << 24) | (static_cast<std::uint32_t>(cc[2]) << 16)
+             | (static_cast<std::uint32_t>(cc[3]) << 8) | static_cast<std::uint32_t>(cc[4]);
+    }
     // kTxQueueMax is private and deliberately stays that way; the overflow
     // check needs the real bound rather than a retyped copy of it, because a
     // test that retypes a constant agrees with itself while the code it guards
@@ -100,6 +107,14 @@ struct Hl2TxGateTestAccess {
     }
 
     static MetisClient* metis(Hl2Backend& backend) { return backend.m_metis; }
+    static std::uint32_t txRegisterHz(Hl2Backend& backend)
+    {
+        std::uint32_t hz = 0;
+        QMetaObject::invokeMethod(backend.m_metis, [&hz, metis = backend.m_metis] {
+            hz = MetisClientTestAccess::txRegisterHz(*metis);
+        }, Qt::BlockingQueuedConnection);
+        return hz;
+    }
     // The radio's transmit tail, driven by hand: a zero-length hold would finish
     // it inside the unkey, so tests park it and expire it explicitly.
     static void setTxTailHoldMs(Hl2Backend& backend, int ms) { backend.m_txTailHoldMs = ms; }
@@ -625,6 +640,39 @@ static void testTransmitTailEdges(TxTestAuthority& authority)
         Hl2TxGateTestAccess::expireTxTail(backend);
         check(Hl2TxGateTestAccess::ocFilterByte(backend) == rxByte,
               "the tail ending returns the filter to the RX byte");
+    }
+    {
+        // Per-slice XIT (#6105) composes with TUNE and the tail: an XIT change
+        // moves only the TX NCO register. It keys nothing, leaves the tune
+        // drive alone while tuning, and neither ends nor pays the tail early.
+        Hl2Backend backend;
+        Hl2TxGateTestAccess::prepare(backend);
+        backend.setSliceMode(0, QStringLiteral("USB"));
+        backend.setSliceFrequency(0, 14.074e6);
+        backend.setTxPower(80);
+        backend.setTune(true, 10, authority.operation, {});
+        check(lastDriveIs(drain(backend), 25), "premise: TUNE keyed at the tune drive (25)");
+        backend.setSliceXitEnabled(0, true);
+        backend.setSliceXitOffset(0, -300);
+        const Drained tuning = drain(backend);
+        check(Hl2TxGateTestAccess::txRegisterHz(backend) == 14'073'700u,
+              "XIT -300 while TUNE is keyed: the TX register moves -300 Hz");
+        check(tuning.anyKeyed && !tuning.lastDrive,
+              "XIT while TUNE is keyed: still keyed, no drive bank written");
+        backend.setTune(false, 10, authority.operation, {});
+        (void)drain(backend);
+        check(Hl2TxGateTestAccess::txTailPending(backend), "premise: TUNE release arms the tail");
+        backend.setSliceXitOffset(0, 200);
+        const Drained inTail = drain(backend);
+        check(Hl2TxGateTestAccess::txRegisterHz(backend) == 14'074'200u,
+              "XIT +200 inside the tail: the TX register follows");
+        check(Hl2TxGateTestAccess::txTailPending(backend) && !inTail.anyKeyed && !inTail.lastDrive,
+              "XIT inside the tail: the tail stays pending, unkeyed, the RF drive still owed");
+        Hl2TxGateTestAccess::expireTxTail(backend);
+        check(lastDriveIs(drain(backend), 204), "the tail then restores the 80% RF drive (204)");
+        backend.setSliceXitEnabled(0, false);
+        check(Hl2TxGateTestAccess::txRegisterHz(backend) == 14'074'000u,
+              "XIT off: the TX register back on the dial");
     }
     {
         // The timer, not the test, ends a real tail.

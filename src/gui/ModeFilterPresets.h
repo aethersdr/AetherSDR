@@ -3,7 +3,7 @@
 #include <QString>
 #include <QVector>
 
-namespace AetherSDR { struct ReceiveFilterControl; struct ReceiveSquelchModel; }
+namespace AetherSDR { struct ReceiveFilterControl; struct SquelchLevelScale; }
 
 namespace AetherSDR::ModeFilters {
 
@@ -48,8 +48,9 @@ bool fmFilterAdjustable(const QString& mode, const ReceiveFilterControl* control
                         bool radioPublishesWidths);
 bool acceptsFilterEdges(const QString& mode, const ReceiveFilterControl* control,
                         bool radioPublishesWidths, Edges edges);
-// The receive-mode squelch rule shared by the RX applet and VFO.
-bool squelchAvailableInMode(const QString& mode, const ReceiveSquelchModel* model,
+// The receive-mode squelch rule shared by the RX applet and VFO. `exclusive` is
+// exclusiveSquelchScale(caps.squelchLevelScale): non-null replaces the rule.
+bool squelchAvailableInMode(const QString& mode, const SquelchLevelScale* exclusive,
                             bool modeIndependentSquelch, bool externalReplacement);
 
 // A passband's labelled width, for matching a ladder entry against what the

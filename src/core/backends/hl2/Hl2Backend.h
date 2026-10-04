@@ -153,16 +153,16 @@ public:
     void setTune(bool on, int tunePowerPercent, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {}) override;
     void setTxAudioMonitor(bool on) override;
     void setTxFrequency(double hz);
-    // RIT / XIT (#5386). The seam carries no slice id, so both are radio-wide
-    // here and follow transmit: RIT offsets the RECEIVE of the transmit-owning
-    // receiver (m_txDdc) only, XIT the TX NCO register only. Neither moves the
-    // published slice frequency — that stays the dial.
-    void setRitEnabled(bool on) override;
-    void setRitOffset(int hz) override;
-    void setXitEnabled(bool on) override;
-    // Overridden, not inherited: the base forwards to setRitOffset() for a radio
+    // RIT / XIT, per receiver (#5386, #6105). RIT offsets that receiver's own
+    // receive; XIT is held per receiver and reaches the TX NCO register only
+    // while that receiver owns transmit. Neither moves the published slice
+    // frequency — that stays the dial.
+    void setSliceRitEnabled(int sliceId, bool on) override;
+    void setSliceRitOffset(int sliceId, int hz) override;
+    void setSliceXitEnabled(int sliceId, bool on) override;
+    // Overridden, not inherited: the base forwards to the RIT offset for a radio
     // with one shared register, and the HL2's RX and TX paths are independent.
-    void setXitOffset(int hz) override;
+    void setSliceXitOffset(int sliceId, int hz) override;
     void setTxDriveLevel(int level);
     // Baseband TX test tone, offsetHz from the carrier, amplitude 0..1.
     // Opt-in only — never enabled by a default.
@@ -281,6 +281,9 @@ private:
     // Hands receiver 0 a configured Hl2RxDsp so the APF and AGC-off verbs can
     // be followed from the seam into WDSP without a socket.
     friend struct Hl2ApfAgcOffTestAccess;
+    // The same hand-off, so hl2_rxdsp_squelch_test follows an LNA change into
+    // the squelch gate.
+    friend struct Hl2SquelchTestAccess;
     // Delivers one bandscope block through MetisClient's signal and ages the mirror,
     // so converter-row expiry is testable without a radio.
     friend struct Hl2HealthBlockTestAccess;
@@ -500,6 +503,13 @@ private:
         // clearing RIT re-centres it on the dial. A pan drag clears it.
         bool ncoMovedForRit = false;
 
+        // RIT / XIT, Hz from the dial. Nothing on the wire echoes them, so
+        // emitSliceState() publishes these back as the readout.
+        bool ritOn = false;
+        int  ritHz = 0;
+        bool xitOn = false;
+        int  xitHz = 0;
+
         QString mode = QStringLiteral("USB");
         // Overwritten from defaultPassbandForMode(mode) on the first linkUp of each
         // connect (#4484). These initial values match no mode's passband.
@@ -509,6 +519,10 @@ private:
         // so the first sliceChanged reports what WDSP was actually opened with.
         QString agcMode = QStringLiteral("med");
         int agcThresholdDb = 65;
+        // The AGC mode held while DIGU/DIGL run AGC off (followModeAgc());
+        // restored on leaving them unless the operator set AGC since. Empty
+        // when nothing is waiting. A receiver seeded from another copies it.
+        QString agcModeBeforeDigital;
 
         // Authoritative noise-blanker state: nothing echoes it, and a rebuilt receiver
         // must be told again. Defaults mirror SliceModel's (off, level 50).
@@ -569,25 +583,26 @@ private:
     // The receiver's passband in the demodulator's audio domain: carrier-relative
     // cuts slid up (CWU) or down (CWL) onto the pitch.
     [[nodiscard]] std::pair<double, double> dspFilterHz(const Receiver& r) const noexcept;
+    // Moves r's AGC with its mode: off on entering DIGU/DIGL from
+    // previousMode, the held AGC on leaving them. Every site that writes
+    // Receiver::mode calls it. True when agcMode changed.
+    static bool followModeAgc(Receiver& r, const QString& previousMode);
     // WDSP shift: the slice's offset from the NCO less the BFO, so the marker lands
     // on the pitch.
     [[nodiscard]] double rxShiftHz(const Receiver& r) const noexcept;
-    // Where a receiver actually listens: its dial, plus RIT when it owns
-    // transmit. Feeds the NCO window and the shift; sliceFreqHz stays the dial.
+    // Where a receiver actually listens: its dial plus its own RIT. Feeds the
+    // NCO window and the shift; sliceFreqHz stays the dial.
     [[nodiscard]] double rxTunedHz(const Receiver& r) const noexcept;
-    // Re-run one receiver's tune after its share of RIT changed.
+    // Re-run one receiver's tune after its RIT changed.
     void retuneReceiver(int ddc);
-    // qCInfo naming the receiver RIT landed on: the seam is radio-wide, so the
-    // VFO turned need not be the receiver that moved.
-    void logRitScope() const;
+    // The offset clamped to kRitXitMaxHz, logging when the clamp bites.
+    [[nodiscard]] static int clampRitXit(const char* what, int hz);
+    // qCInfo naming the receiver and slice an RIT/XIT change landed on.
+    void logRitXit(const char* what, int ddc, bool on, int hz) const;
     // SmartCatProtocol's kRitMaxHz. Only SmartCAT clamps to it: SliceModel::
     // setRit() and the VFO's RIT/XIT steppers do not, so an offset past it can
     // reach the setters, and they log when this clamp bites.
     static constexpr int kRitXitMaxHz = 9999;
-    bool m_ritOn = false;
-    int m_ritHz = 0;
-    bool m_xitOn = false;
-    int m_xitHz = 0;
 
     // The operator's CW pitch via setCwPitch(). Defaults to TransmitModel's 600.
     int m_cwPitchHz = 600;
@@ -651,6 +666,14 @@ private:
     // Empty mode = untouched this session.
     QString m_agcMode;
     int     m_agcThresholdDb = 0;
+    // The remembered AGC-off level per receiver index; -1 = none. It seeds a
+    // receiver at connect and when a panadapter opens, and it keeps the level
+    // of a receiver that is not open. m_agcOffLevelsLive: the open receivers
+    // hold the current levels (set by the seed and by the operator).
+    QList<int> m_agcOffLevels;
+    bool       m_agcOffLevelsLive = false;
+    int  rememberedAgcOffLevel(int receiverIndex) const;
+    void rememberAgcOffLevel(int receiverIndex, int level);
     // The serial seedReceiverAgc() last ran for. A different radio is seeded; the
     // same radio reconnecting is not (buildReceivers() kept its live AGC). Empty
     // until the first connect.

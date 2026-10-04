@@ -72,11 +72,11 @@ bool acceptsFilterEdges(const QString& mode, const ReceiveFilterControl* control
                                        : fmFilterAdjustable(mode, control, false);
 }
 
-bool squelchAvailableInMode(const QString& mode, const ReceiveSquelchModel* model,
+bool squelchAvailableInMode(const QString& mode, const SquelchLevelScale* exclusive,
                             bool modeIndependentSquelch, bool externalReplacement)
 {
-    if (model && !externalReplacement) {
-        return model->modes.contains(mode);
+    if (exclusive && !externalReplacement) {
+        return exclusive->appliesTo(mode);
     }
     // Digital/RTTY feed decoders and SQL gates weak FSK (#2504); a radio holds
     // CW squelch itself. Only an all-mode radio squelch lifts that rule.

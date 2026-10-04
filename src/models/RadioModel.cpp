@@ -1211,7 +1211,11 @@ void RadioModel::setupBackend(const QString& family)
 
     // aetherd 2.4 (#4094): power-amp status decoded in the backend drives AmpModel.
     connect(m_backend.get(), &IRadioBackend::amplifierChanged, this,
-            [this](const AmpDelta& delta) { m_amplifier.applyChanges(delta); });
+            [this](const AmpDelta& delta) {
+        m_amplifier.applyChanges(delta);
+        // AMP meters reach the amplifier by matching its handle.
+        m_meterModel.setAmpHandle(m_amplifier.handle().toUInt(nullptr, 0));
+    });
 
     // aetherd 2.4 (#4092): TGXL tuner status decoded in the backend drives TunerModel.
     connect(m_backend.get(), &IRadioBackend::tunerChanged, this,
@@ -1653,18 +1657,17 @@ void RadioModel::wireBackendReceiverState()
             });
             // RIT / XIT. The control already existed in VfoWidget and drove
             // SliceModel; only the last hop to the seam was missing.
-            connect(s, &SliceModel::ritCommandIssued, this, [this](bool on, int hz) {
+            connect(s, &SliceModel::ritCommandIssued, this, [this, s](bool on, int hz) {
                 if (!m_backend) return;
-                m_backend->setRitEnabled(on);
-                m_backend->setRitOffset(hz);
+                m_backend->setSliceRitEnabled(s->sliceId(), on);
+                m_backend->setSliceRitOffset(s->sliceId(), hz);
             });
-            connect(s, &SliceModel::xitCommandIssued, this, [this](bool on, int hz) {
+            connect(s, &SliceModel::xitCommandIssued, this, [this, s](bool on, int hz) {
                 if (!m_backend) return;
-                m_backend->setXitEnabled(on);
+                m_backend->setSliceXitEnabled(s->sliceId(), on);
                 // The TRANSMIT offset verb, which defaults to the receive one
-                // for a radio with a single shared register (Icom) and is
-                // overridable by a radio with two (Flex).
-                m_backend->setXitOffset(hz);
+                // for a radio with a single shared register (Icom).
+                m_backend->setSliceXitOffset(s->sliceId(), hz);
             });
 
             wireSliceAudioIntentsToBackend(s, true);
@@ -1909,9 +1912,15 @@ namespace {
 //   filter_low/_high      hasTxFilterControls (setTxFilter)
 //   cw pitch N            N is the pitch last handed to THIS backend, because
 //                         the host-modulating connection is change-gated
-// vox, mon, speech_processor, cw wpm and cw break_in are not routed: no
-// capability proves their setters real, so they keep the notice even where one
-// is (an Icom implements setVox, setSpeechProcessor, setCwSpeed, setCwBreakIn).
+//   cw wpm, cw break_in   hasRadioSideCwKeyer (setCwSpeed, setCwBreakIn)
+//   vox_enable/_level     voxControl (setVox); vox_delay only if hasDelay
+//   mon, mon_gain_sb      txMonitorControl (setTxMonitor)
+//   speech_processor_*    speechProcessorControl (setSpeechProcessor), or a
+//                         host-modulating transmitter's ClientComp
+// cw break_in_delay, mon_gain_cw and mon_pan_cw have no seam setter of their
+// own. A host-keyed backend (Hl2Backend) reads break-in and its delay from
+// setCwKeying() at key time, which this gate does not model, so both keep the
+// notice there.
 bool transmitCommandDeliveredThroughSeam(const QString& command,
                                          const RadioCapabilities& caps,
                                          int cwPitchHandedToBackend,
@@ -1923,6 +1932,11 @@ bool transmitCommandDeliveredThroughSeam(const QString& command,
         bool ok = false;
         const int hz = command.mid(kCwPitch.size()).trimmed().toInt(&ok);
         return ok && cwPitchHandedToBackend >= 0 && hz == cwPitchHandedToBackend;
+    }
+    // Trailing space: `cw break_in_delay N` must not match.
+    if (command.startsWith(QLatin1String("cw wpm "))
+        || command.startsWith(QLatin1String("cw break_in "))) {
+        return caps.hasRadioSideCwKeyer;
     }
 
     static const QString kTransmitSet = QStringLiteral("transmit set ");
@@ -1948,6 +1962,18 @@ bool transmitCommandDeliveredThroughSeam(const QString& command,
         } else if (key == QLatin1String("filter_low")
                    || key == QLatin1String("filter_high")) {
             routed = caps.hasTxFilterControls;
+        } else if (key == QLatin1String("vox_enable")
+                   || key == QLatin1String("vox_level")) {
+            routed = caps.voxControl.has_value();
+        } else if (key == QLatin1String("vox_delay")) {
+            routed = caps.voxControl && caps.voxControl->hasDelay;
+        } else if (key == QLatin1String("mon")
+                   || key == QLatin1String("mon_gain_sb")) {
+            routed = caps.txMonitorControl.has_value();
+        } else if (key == QLatin1String("speech_processor_enable")
+                   || key == QLatin1String("speech_processor_level")) {
+            routed = caps.speechProcessorControl.has_value()
+                || (caps.hostModulates && caps.canTransmit);
         }
         if (!routed) {
             return false;
@@ -2209,19 +2235,19 @@ RadioModel::RadioModel(QObject* parent)
         }
     });
 
-    // The speech processor to a backend that owns its own compressor. Here, not in
-    // setupBackend(): m_transmitModel outlives every backend (#4599). Operator intent
-    // only (speechProcessorCommandIssued, never micStateChanged), or the radio's echo
-    // would come back as a command. Flex and host-modulating backends ignore it.
-    // VOX and the ATU: their wire text is a Flex command, so the intent has to cross
-    // the seam for other families.
+    // The speech processor, VOX and MON to a backend that declares its own (the
+    // record says so; Flex declares them and its setters are no-ops, the wire
+    // text carries them). Here, not in setupBackend(): m_transmitModel outlives
+    // every backend (#4599). Operator intent only, never micStateChanged, or the
+    // radio's echo would come back as a command.
     connect(&m_transmitModel, &TransmitModel::voxCommandIssued, this,
             [this](bool on, int level, int delayMs) {
-        if (m_backend) m_backend->setVox(on, level, delayMs);
+        if (m_backend && backendCapabilities().voxControl)
+            m_backend->setVox(on, level, delayMs);
     });
     connect(&m_transmitModel, &TransmitModel::monitorCommandIssued, this,
             [this](bool on, int level) {
-        if (m_backend && !usesFlexCommandPlane())
+        if (m_backend && backendCapabilities().txMonitorControl)
             m_backend->setTxMonitor(on, level);
     });
     // Primary keying intents have one typed route on every backend. Admission
@@ -2234,7 +2260,7 @@ RadioModel::RadioModel(QObject* parent)
     });
     connect(&m_transmitModel, &TransmitModel::speechProcessorCommandIssued, this,
             [this](bool on, int level) {
-        if (m_backend && !m_flexBackend)
+        if (m_backend && backendCapabilities().speechProcessorControl)
             m_backend->setSpeechProcessor(on, level);
     });
 
@@ -2701,13 +2727,16 @@ QString RadioModel::connectState() const
 
 bool RadioModel::isConnected() const
 {
-    // Whoever carries the link reports its state: the RadioConnection when one exists
-    // (Flex, the demo's synthetic wire), else the backend (HL2). Mirrors
-    // connectToRadio()'s dispatch and setupBackend()'s lifecycle wiring. Do not key
-    // on m_flexBackend: teardownBackend() nulls it before destroying the backend, so
-    // a status slot during teardown would reach a half-destroyed backend.
-    if (m_connection)
-        return m_connection->isConnected() || (m_wanConn && m_wanConn->isConnected());
+    // WAN sessions leave the backend's LAN connection undialed. Check each
+    // link independently, including backends without a RadioConnection.
+    // Do not key on m_flexBackend: teardown clears it before destroying the
+    // backend, while the connection alias still carries the link state.
+    if (m_connection && m_connection->isConnected()) {
+        return true;
+    }
+    if (m_wanConn && m_wanConn->isConnected()) {
+        return true;
+    }
     return m_backend && m_backend->isConnected();
 }
 
@@ -4485,7 +4514,9 @@ void RadioModel::publishCapabilities(bool connected)
     m_transmitModel.setHasTuner(!connected || caps.hasTuner);
     m_transmitModel.setHasTunerMemories(!connected || caps.hasTunerMemories);
     m_transmitModel.setSpeechProcessorLevelMaximum(
-        connected ? caps.speechProcessorLevelMaximum : 2);
+        (connected ? caps.speechProcessorControl : std::nullopt)
+            .value_or(RadioCapabilities::SpeechProcessorControl{})
+            .levelMaximum);
     refreshTxPowerLimit();
 
     emit capabilitiesChanged(connected, caps);
@@ -8065,6 +8096,7 @@ void RadioModel::onDisconnected()
     m_lineoutMute = false;
     m_headphoneMute = false;
     m_frontSpeakerMute = false;
+    emit audioOutputChanged();
 
     stopNetworkMonitor();
     // stop() must run on the network thread (socket lives there). (#561)
@@ -9825,8 +9857,16 @@ SliceModel* RadioModel::receiveCommandSource() const
     SliceModel* source = qobject_cast<SliceModel*>(sender());
     // A retired object must not control a new slice reusing its id. Resolve
     // the current backend only after checking exact active object identity.
-    if (!source || m_stagingReceiveModels || slice(source->sliceId()) != source || !m_backend
-        || !m_backend->isConnected()) {
+    if (!source || m_stagingReceiveModels || slice(source->sliceId()) != source || !m_backend) {
+        return nullptr;
+    }
+    // WAN never dials FlexBackend's LAN connection, so the model's combined
+    // connectivity determines whether a receive intent can be dispatched.
+    // Log disconnected drops without the unsupported-control UI notice.
+    if (!isConnected()) {
+        qCWarning(lcProtocol).noquote()
+            << "RadioModel: not connected, dropping slice" << source->sliceId()
+            << "receive intent";
         return nullptr;
     }
     return source;

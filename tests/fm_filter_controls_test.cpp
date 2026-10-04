@@ -102,8 +102,8 @@ private slots:
     {
         RadioModel model;
         auto backend = std::make_unique<FilterBackend>();
-        backend->caps.receiveSquelchModel = ReceiveSquelchModel{
-            {QStringLiteral("FM"), QStringLiteral("FMN")}, -120, 1.2, QStringLiteral("dBFS/bin")};
+        backend->caps.squelchLevelScale = SquelchLevelScale{-120, 1.2,
+            {QStringLiteral("FM"), QStringLiteral("FMN")}, true, QStringLiteral("dBFS/bin"), true};
         FilterBackend* source = backend.get();
         model.setBackendForTest(std::move(backend), QStringLiteral("test"));
         RadioModelWakeTestAccess::identity(model, QStringLiteral("sql-controls"));
@@ -150,8 +150,10 @@ private slots:
         QCOMPARE(rx.sqlManualLevel(), 44);
         setMode(slice, QStringLiteral("WFM"));
         QVERIFY(!rxSql->isEnabled() && !vfoSql->isEnabled());
-        QVERIFY(!rxSql->accessibleDescription().isEmpty());
-        QVERIFY(!vfoSql->accessibleDescription().isEmpty());
+        QVERIFY2(rxSql->accessibleDescription().contains(QStringLiteral("unavailable in this receive mode")),
+                 qPrintable(rxSql->accessibleDescription()));
+        QVERIFY2(vfoSql->accessibleDescription().contains(QStringLiteral("unavailable in this receive mode")),
+                 qPrintable(vfoSql->accessibleDescription()));
         const int before = intents.count();
         rx.cycleSqlModeExternal();
         QCOMPARE(intents.count(), before);
@@ -164,12 +166,29 @@ private slots:
             .value(QStringLiteral("autoEnabled")).toBool());
     }
 
+    void squelchFollowsModeRuleWithoutDeclaredModel_data()
+    {
+        QTest::addColumn<int>("scale");   // 0 absent, 1 Flex legacy, 2 per-mode line only
+        QTest::newRow("absent") << 0;
+        QTest::newRow("legacy-all-modes") << 1;
+        QTest::newRow("line-modes-not-exclusive") << 2;
+    }
+
     void squelchFollowsModeRuleWithoutDeclaredModel()
     {
-        // No receiveSquelchModel, no all-mode squelch: the #2504 mode rule owns
-        // SQL availability, and a capability refresh must not re-enable it.
+        // No exclusive squelch scale, no all-mode squelch: the #2504 mode rule
+        // owns SQL availability, and a capability refresh must not re-enable it.
+        // A scale that only places the pan line (every family but RTL) must not
+        // grant SQL, even in a mode it lists.
+        QFETCH(int, scale);
         RadioModel model;
         auto backend = std::make_unique<FilterBackend>();
+        if (scale == 1) {
+            backend->caps.squelchLevelScale = legacyDbmSquelchScale();
+        } else if (scale == 2) {
+            backend->caps.squelchLevelScale = SquelchLevelScale{-140, 0.7,
+                {QStringLiteral("USB"), QStringLiteral("DIGU"), QStringLiteral("CW")}, false};
+        }
         FilterBackend* source = backend.get();
         model.setBackendForTest(std::move(backend), QStringLiteral("test"));
         SliceModel slice(0);
