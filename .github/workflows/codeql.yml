@@ -105,9 +105,10 @@ jobs:
           trap-caching: false
 
       # Release, not RelWithDebInfo: CodeQL extracts from the compiler
-      # invocations and never uses debug info, while -g made every test
-      # executable ~4x larger (each links its own static aethercore). Building
-      # every target with -g filled the runner's disk mid-build (#6130).
+      # invocations and never uses debug info, while -g made the ~250 test
+      # executables that link a static aethercore ~10x larger (~317 MB each
+      # against ~29 MB). Building every target with -g filled the runner's
+      # disk mid-build (#6130).
       - name: Configure
         run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 
