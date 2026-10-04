@@ -360,7 +360,12 @@ public:
     // are set from applyCapabilitiesToUi and again when a pane is added after
     // connect. Together they form the auto-floor gate, an OR — see
     // noiseFloorAutoAdjustAllowed() and RadioCapabilities::panBinsAbsolute().
-    void setPanBinsAbsolute(bool on) { m_panBinsAbsolute = on; }
+    void setPanBinsAbsolute(bool on)
+    {
+        if (m_panBinsAbsolute != on)
+            resetWfBlankerState();  // the blanker ring's unit follows this flag
+        m_panBinsAbsolute = on;
+    }
     bool panBinsAbsolute() const { return m_panBinsAbsolute; }
     // The active slice's squelch mapping (RadioCapabilities::squelchLevelScale,
     // filtered by mode), pushed in like the two flags above. nullopt: no SQL

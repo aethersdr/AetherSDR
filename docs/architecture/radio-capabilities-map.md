@@ -542,13 +542,18 @@ SQL stays off on the HL2 because amsq reads passband-limited magnitude before
 the AGC (`RXA.c` `xamsqcap` after `xnbp(nbp0)`), while the pan floor is per
 bin: a pan-derived floor would need both the filter width and the bin width.
 
-**`panBinsAbsolute()` is consumed too, and it is the second term of ONE gate.**
+**`panBinsAbsolute()` is consumed too: as the second term of ONE gate, and as
+the unit of a waterfall row.**
 `noiseFloorAutoAdjustAllowed(radioOwnsDbmScale, panBinsAbsolute)` in
 `core/backends/NoiseFloorAutoAdjustGate.h` is an OR: a real echo from the radio
 ends the auto-floor loop by confirmation, absolute bins end it by giving it a
 fixed target, and either alone is enough. `SpectrumWidget::applyNoiseFloorAutoAdjust`
 and the auto-floor branch of `dbmRangeChangeRequested` both call it, so the
-widget and its backstop cannot drift apart. The other three
+widget and its backstop cannot drift apart.
+`SpectrumWidget::updateWaterfallRow` passes the same flag to
+`WaterfallImpulseBlanker::decide` as the row kind, because such a backend's
+waterfall row is its pan frame: NB Blank tests a ratio on a Flex tile and a dB
+margin on an absolute dB row (dBFS under a dBm label). The other three
 `radioOwnsDbmScale` gates below are about whether a range can be **sent** and
 stay on the echo alone. HL2, ANAN and RTL-SDR declare `binsAbsolute = true`,
 each quoting the expression that produces its bins; ANAN is the one whose loop
