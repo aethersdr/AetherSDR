@@ -5333,7 +5333,8 @@ void MainWindow::buildUI()
         if (!slice) return;
         int id = slice->sliceId();
 
-        // Mode first (affects filter ranges)
+        // Mode first (affects filter ranges). The HL2's data-mode AGC relies
+        // on this order; hl2_bandstack_digital_agc_test replays it.
         if (slice->mode() != e.mode) {
             slice->setMode(e.mode);
         }

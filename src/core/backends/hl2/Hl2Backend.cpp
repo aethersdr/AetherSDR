@@ -3170,6 +3170,8 @@ void Hl2Backend::requestSliceAgc(int sliceId, const SliceAgcRequest& request)
         // A recalled AGC mode is a stored value, not the operator's choice, so
         // DIGU/DIGL keep the AGC they run (#6142). The slice optimistically
         // shows the stored mode; the echo puts back what the receiver holds.
+        // The echo must stay synchronous: the threshold recall that follows
+        // reads the slice's mode, and a stale one would clear the held AGC.
         if (r && request.field == SliceAgcRequest::Field::Mode
             && request.origin == SliceAgcRequest::Origin::Recall
             && isDigitalDataMode(r->mode)) {

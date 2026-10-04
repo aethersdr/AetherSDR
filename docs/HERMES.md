@@ -3003,7 +3003,8 @@ RadioModel::rxAudioReady(RxAudioTap tap, int sliceId, QByteArray pcm, int rateHz
   never written to the remembered AGC. A band-stack recall does not override
   it: the bookmark's AGC mode arrives as `SliceAgcRequest::Origin::Recall`
   and `Hl2Backend::requestSliceAgc` drops it in DIGU/DIGL, so a bookmark
-  cannot bring an AGC mode into a data mode; its threshold still applies. With AGC off the gain is the AGC-off
+  cannot bring an AGC mode into a data mode; its threshold still applies.
+  With AGC off the gain is the AGC-off
   level: 10 dB at the default level of 10, against a 39 dB AGC ceiling at the
   default threshold and LNA gain. DIGU/DIGL are therefore up to 29 dB quieter
   on the speaker and on the TCI level meter (arithmetic on the two settings,
