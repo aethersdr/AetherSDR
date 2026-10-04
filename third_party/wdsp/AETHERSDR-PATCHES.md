@@ -2,10 +2,10 @@
 
 The source snapshot is pinned to TAPR/OpenHPSDR-wdsp commit
 `b02d5bac675dd2f33ec2bab2b339f79a597c47dd` (`Release Version 2.10`).
-AetherSDR carries sixteen local changes in the otherwise exact `Source/*.[ch]`
+AetherSDR carries seventeen local changes in the otherwise exact `Source/*.[ch]`
 snapshot. The first ten are listed below — four teardown corrections, two
 null/lifetime fixes, one added accessor set, two channel-state fixes, and one
-performance change — and patches 11 to 16 follow in their own sections:
+performance change — and patches 11 to 17 follow in their own sections:
 
 1. `upstream/nbp.c`: `destroy_notchdb()` now frees the `notchdb` object after
    its member allocations.
@@ -612,6 +612,11 @@ itself. The ten are different shapes, so grep for the shape, not for a free:
   `iobuffs.h` and `include/aether_wdsp.h`).
 - **patch 16** -- `SetTXABandpassFreqs()` in `TXA.c` holding `ch[].csDSP`
   around its body.
+- **patch 17** -- in `analyzer.c`: `stop` / `end_dispatcher` read and written
+  through `Interlocked*` (and `volatile LONG` in `analyzer.h`); the
+  `input_busy` release in `spectra()` / `Cspectra()` sitting **after**
+  `stitch(disp)`, not before it; and `sendbuf()`'s `IQO_idx` hand-off and
+  `IQout_index` advance inside its existing `BufferControlSection`.
 
 Drop any local patch upstream now carries. Otherwise reapply only these minimal
 changes and run the lifecycle test under AddressSanitizer on every supported
@@ -931,3 +936,46 @@ it, the same order `setMode()` and `open()` already use; `csDSP` is recursive.
 
 When updating WDSP, keep this unless upstream's `SetTXABandpassFreqs()` takes
 `csDSP` itself.
+
+## Patch 17 — the panadapter analyzer's dispatcher hand-offs are synchronised (#6156)
+
+Three races in `upstream/analyzer.c`, all reported by the TSan lane against
+`AnanPanAnalyzer` (`anan_rxdsp_handedness_test`, `spectrum_sequence_gap_test`,
+`wdsp_process_tally_test`). The port's `Interlocked*` are `__atomic` seq_cst and
+its threads are `pthread_create`, so TSan saw these accurately.
+
+1. **`stop` and `end_dispatcher` are atomic.** Both were plain `int`, written
+   by `SetAnalyzer()` / `DestroyAnalyzer()` and polled by `sendbuf()`'s loop and
+   the workers' early-outs. The drain itself was already sound (the
+   `dispatcher` bit and `pnum_threads` are atomic), so this one is a formal
+   race rather than a symptom; it is fixed because it was most of the lane's
+   noise and an unsynchronised polled flag is undefined behaviour the compiler
+   may hoist. Now `volatile LONG`, written with `InterlockedExchange()` and
+   read with `InterlockedAnd(&x, 1)`, the idiom upstream already uses for
+   `dispatcher`.
+2. **`input_busy` is released after the stitch, not before.** When the last
+   FFT of a frame finished, `spectra()` / `Cspectra()` cleared every
+   `input_busy` bit and then called `stitch()`. `sendbuf()` could therefore
+   dispatch the next frame's workers while the stitch was still reading
+   `result[]` and `ss_bins` — `Celiminate()` writing what `stitch()` was
+   copying, i.e. a torn panadapter frame — and could let two `stitch()` calls
+   overlap on `w_pix_buff` / `last_pix_buff`. Clearing after `stitch()` makes
+   the next dispatch wait for it. **This is the only part that changes
+   timing:** the next frame's FFTs start one stitch later (tens of
+   microseconds). `stitch()` waits on nothing the dispatcher holds, so it
+   cannot deadlock.
+3. **`sendbuf()` hands off the read index under the buffer lock.**
+   `Spectrum0()` moves `IQout_index` under `BufferControlSection` when it skips
+   ahead on an overrun; `sendbuf()` read it into `IQO_idx` and advanced it
+   unlocked, a lost update that points one FFT at the wrong span of the
+   sample ring. The read, the advance and the existing `have_samples`
+   decrement now share one `BufferControlSection`, taken before the worker is
+   queued so the worker still sees its `IQO_idx` through the thread start.
+
+The `AnanPanAnalyzer` teardown (a `SetAnalyzer()` drain before
+`DestroyAnalyzer()`) is unchanged and was already correct.
+
+**Upstream status.** Not reported.
+
+When updating WDSP, keep all three unless upstream's analyzer synchronises the
+same hand-offs.
