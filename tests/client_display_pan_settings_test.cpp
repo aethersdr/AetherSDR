@@ -168,21 +168,27 @@ int main(int argc, char** argv)
           "an unknown identity never writes the family default");
 
     // 3. Who owns FFT FPS and the dBm range: each backend's own declaration,
-    // read through the accessors the wiring calls. Only the HL2 opts in.
+    // read through the accessors the wiring calls. The HL2 opts in to both,
+    // the ANAN to the range only.
     {
         hl2::Hl2Backend hl2Backend;
         checkDeclaredOwner(hl2Backend.capabilities(), "hl2", true, true);
         icom::IcomCivBackend icomBackend;
         checkDeclaredOwner(icomBackend.capabilities(), "icom", false, false);
-        // Absolute bins, as on the HL2, and still no owner: bins are not the
-        // declaration.
         anan::AnanBackend ananBackend;
-        check(ananBackend.capabilities().panBinsAbsolute(),
-              "anan: control, the bins are absolute");
-        checkDeclaredOwner(ananBackend.capabilities(), "anan", false, false);
+        checkDeclaredOwner(ananBackend.capabilities(), "anan", false, true);
         FlexBackend flexBackend;
         checkDeclaredOwner(flexBackend.capabilities(), "flex", false, false);
         checkDeclaredOwner(RadioCapabilities{}, "undeclared", false, false);
+
+        // Absolute bins and no declaration own nothing: bins are not the
+        // declaration.
+        RadioCapabilities undeclaredRange;
+        PanAmplitudeModel absoluteOnly;
+        absoluteOnly.binsAbsolute = true;
+        undeclaredRange.panAmplitude = absoluteOnly;
+        check(undeclaredRange.panBinsAbsolute() && !undeclaredRange.clientPersistsDbmRange(),
+              "absolute bins without a range owner own nothing");
 
         // The range declaration counts only with absolute bins.
         RadioCapabilities relative;

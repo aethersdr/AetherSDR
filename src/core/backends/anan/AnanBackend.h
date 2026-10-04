@@ -108,6 +108,18 @@ public:
     // Vocabulary matches modeFromString's.
     [[nodiscard]] static std::pair<int, int> defaultPassbandForMode(const QString& mode) noexcept;
 
+    // Every spelling modeFromString() maps, case-insensitive. The restore needs
+    // it because modeFromString() falls back to USB instead of failing.
+    [[nodiscard]] static bool isKnownModeString(const QString& mode) noexcept;
+
+    // Where a session starts when this radio has no remembered state.
+    static constexpr double kFirstConnectFrequencyHz = 14'175'000.0;
+    static constexpr const char* kFirstConnectMode = "USB";
+
+    // Bounded by the DDS encoding, not a band edge: tuningMinHz/MaxHz are not
+    // reported. Refused, never clamped, at or above Nyquist.
+    [[nodiscard]] static bool isRestorableFrequencyHz(double hz) noexcept;
+
     // The CW BFO offset (HERMES.md §5: "CW has no BFO unless you build one").
     // +pitchHz for CWU/CW, -pitchHz for CWL, 0 for every other mode -- zero
     // for non-CW is why every mode routes through this rather than only the
@@ -138,6 +150,9 @@ public:
     // *ForTest convention as the four above: read-only, not part of the seam.
     [[nodiscard]] int lineoutGainPercentForTest() const noexcept { return m_lineoutGainPercent; }
     [[nodiscard]] bool lineoutMutedForTest() const noexcept { return m_lineoutMuted; }
+    // What applyRestoredState() accepted; connectRadio() consumes it behind a socket.
+    [[nodiscard]] double restoredFrequencyHzForTest() const noexcept { return m_restoredFreqHz; }
+    [[nodiscard]] QString restoredModeForTest() const { return m_restoredMode; }
     // Drives the S-meter path as AnanRxDsp::meterUpdate would, so the
     // smoothing and publish tick can be tested without a live radio.
     void feedMeterForTest(float dbfs) { onDspMeter(dbfs); }
@@ -302,6 +317,10 @@ private:
     int m_filterHighHz = 2900;
     int m_cwPitchHz = 600;
     double m_sliceFreqHz = 0.0;
+    // What applyRestoredState() accepted, held for connectRadio(); kept apart
+    // from the live m_sliceFreqHz/m_mode. Zero/empty: nothing restored.
+    double m_restoredFreqHz = 0.0;
+    QString m_restoredMode;
     // Live AGC state, so beginRateChange() rebuilds the DSP config from CURRENT
     // state rather than connect-time defaults (which these match).
     int m_agcMode = 3;
@@ -329,8 +348,10 @@ private:
     // rather than reaching into m_pendingParams on every block.
     bool m_speakerAudioEnabled = false;
     // The radio's own output level/mute. 50 matches RadioModel's default, which it
-    // resets to on every radio change; the two halves must agree.
-    int m_lineoutGainPercent = 50;
+    // resets to on every radio change; the two halves must agree. Also the
+    // level applyRestoredState() returns to for a radio with none stored.
+    static constexpr int kDefaultLineoutGainPercent = 50;
+    int m_lineoutGainPercent = kDefaultLineoutGainPercent;
     bool m_lineoutMuted = false;
     // One resampler PER CHANNEL, never processStereoToStereo(), which averages to
     // mono and would undo the balance (as the engine's own output resampler,

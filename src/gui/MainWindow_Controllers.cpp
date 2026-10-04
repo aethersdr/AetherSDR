@@ -560,13 +560,13 @@ void MainWindow::handleFlexControlButton(int button, int action,
         }
     } else if (actionName == "VolumeUp") {
         // Route to master volume to match SmartSDR behavior (#2921).
-        const int current = AppSettings::instance().value("MasterVolume", "100").toInt();
+        const int current = m_radioModel.activeOutputVolumePercent();
         const int next = std::clamp(current + 5, 0, 100);
         if (m_titleBar)
             m_titleBar->setMasterVolume(next);
         applyMasterVolume(next);
     } else if (actionName == "VolumeDown") {
-        const int current = AppSettings::instance().value("MasterVolume", "100").toInt();
+        const int current = m_radioModel.activeOutputVolumePercent();
         const int next = std::clamp(current - 5, 0, 100);
         if (m_titleBar)
             m_titleBar->setMasterVolume(next);
@@ -1103,12 +1103,12 @@ void MainWindow::dispatchHidAction(const QString& actionName,
         }
     } else if (actionName == "VolumeUp") {
         const int next = std::clamp(
-            AppSettings::instance().value("MasterVolume","100").toInt() + 5, 0, 100);
+            m_radioModel.activeOutputVolumePercent() + 5, 0, 100);
         if (m_titleBar) m_titleBar->setMasterVolume(next);
         applyMasterVolume(next);
     } else if (actionName == "VolumeDown") {
         const int next = std::clamp(
-            AppSettings::instance().value("MasterVolume","100").toInt() - 5, 0, 100);
+            m_radioModel.activeOutputVolumePercent() - 5, 0, 100);
         if (m_titleBar) m_titleBar->setMasterVolume(next);
         applyMasterVolume(next);
     } else if (actionName == "SplitMonitorTx") {
@@ -1520,7 +1520,7 @@ void MainWindow::applyFlexControlWheelAction(const QString& actionId, int steps)
         // "WheelMasterAf" is the legacy action name from #2888; accepted
         // here for back-compat with saved FlexControl bindings made
         // before the #2986 consolidation but routes to the same code path.
-        const int current = AppSettings::instance().value("MasterVolume", "100").toInt();
+        const int current = m_radioModel.activeOutputVolumePercent();
         const int next = std::clamp(current + steps * 2, 0, 100);
         if (m_titleBar)
             m_titleBar->setMasterVolume(next);
@@ -2331,7 +2331,7 @@ void MainWindow::registerMidiParams()
                                             m_radioModel.hasCommandPlane(),
                                             pcAudioEnabledSetting())) {
                 return std::clamp(
-                    AppSettings::instance().value("MasterVolume", "100").toInt(), 0, 100);
+                    m_radioModel.activeOutputVolumePercent(), 0, 100);
             }
             return m_radioModel.lineoutGain();
         });

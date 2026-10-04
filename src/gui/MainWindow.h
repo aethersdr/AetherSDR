@@ -390,6 +390,10 @@ private slots:
     void applyMasterVolume(int pct);
     void syncTitleBarOutput();
 
+    // A deliberate operator step change from the STEP buttons or the cycle
+    // shortcuts. Radio-driven syncs must not come here; see the connect site.
+    void applyOperatorTuningStep(int stepHz);
+
 private:
     enum class TuneIntent {
         IncrementalTune,

@@ -7351,6 +7351,16 @@ target_compile_definitions(client_display_pan_settings_test PRIVATE
 add_test(NAME client_display_pan_settings_test
          COMMAND client_display_pan_settings_test)
 
+# RadioModel's own client-owned state on an ANAN: the master-volume read-back,
+# the restored line-out level, and the Tuning-domain step. Socket-free, through
+# setBackendForTest() and a TestSettingsProfile store.
+add_executable(radio_model_client_state_test tests/radio_model_client_state_test.cpp)
+target_include_directories(radio_model_client_state_test PRIVATE src tests)
+target_link_libraries(radio_model_client_state_test PRIVATE
+    aethercore Qt6::Core Qt6::Network)
+add_test(NAME radio_model_client_state_test COMMAND radio_model_client_state_test)
+set_tests_properties(radio_model_client_state_test PROPERTIES TIMEOUT 120)
+
 # The Display panel's FFT FPS slider runs the bounds ClientDisplaySettings
 # stores. Same link set and shape as spectrum_overlay_dax_availability_test.
 add_executable(spectrum_overlay_fft_fps_bounds_test
@@ -7697,6 +7707,7 @@ target_link_libraries(CAT_Flex_test PRIVATE Qt6::Core Qt6::Network)
 # Conditional targets are guarded with if(TARGET ...).
 set(AETHER_SETTINGS_CONSUMERS
     reroute_dead_controls_test
+    radio_model_client_state_test
     squelch_level_scale_test
     hl2_pan_create_async_test
     anan_backend_test

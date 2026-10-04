@@ -466,7 +466,7 @@ struct RadioCapabilities {
     // (Flex) never has radio-owned values re-asserted (#2465/#4126/#4261). Restore
     // never keys transmit: TxSetpoints covers drive setpoints only.
     enum class ClientSettingsDomain : quint32 {
-        Tuning      = 1u << 0,  // RF frequency + demod mode
+        Tuning      = 1u << 0,  // RF frequency + demod mode (+ step, no command plane)
         Passband    = 1u << 1,  // filter low/high edges
         SpanRate    = 1u << 2,  // span / IQ sample rate
         RfGain      = 1u << 3,  // LNA/preamp gain (per band — see RFC PR 3)
@@ -475,6 +475,9 @@ struct RadioCapabilities {
         Agc         = 1u << 6,  // AGC mode + threshold (client-side WDSP AGC)
         Cw          = 1u << 7,  // client-side keyer/sidetone setpoints; never keying
         RtlSlices   = 1u << 8,  // accepted RTL capture and stable receiver documents
+        // The radio's own receive output level. Not the PC sink's, which is
+        // app-global and stays the flat MasterVolume key.
+        ReceiveOutputLevel = 1u << 9,
     };
     Q_DECLARE_FLAGS(ClientSettingsDomains, ClientSettingsDomain)
     ClientSettingsDomains clientSettingsDomains;   // default: empty — restore nothing

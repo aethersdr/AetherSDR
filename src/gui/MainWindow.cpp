@@ -1962,27 +1962,7 @@ MainWindow::MainWindow(QWidget* parent)
     // echoes a redundant `slice set step=` and spams a "Step: …" toast
     // (the radio is already authoritative for the slice's step).
     connect(m_appletPanel->rxApplet(), &RxApplet::stepSizeChangedByUser,
-            this, [this](int step) {
-        // Send step to radio for the active slice, or apply it on the client
-        // where there is no command plane to carry it.
-        if (auto* s = m_radioModel.slice(m_activeSliceId)) {
-            if (!m_radioModel.applyClientOwnedSliceStep(s->sliceId(), step)) {
-                m_radioModel.sendCommand(QString("slice set %1 step=%2").arg(s->sliceId()).arg(step));
-            }
-        }
-        // Also save to AppSettings for SpectrumWidget scroll-to-tune
-        auto& settings = AppSettings::instance();
-        settings.setValue("TuningStepSize", QString::number(step));
-        settings.save();
-        QString stepStr;
-        if (step >= 1000000)
-            stepStr = QString("%1 MHz").arg(step / 1000000.0, 0, 'f', step % 1000000 ? 1 : 0);
-        else if (step >= 1000)
-            stepStr = QString("%1 kHz").arg(step / 1000.0, 0, 'f', step % 1000 ? 1 : 0);
-        else
-            stepStr = QString("%1 Hz").arg(step);
-        statusBar()->showMessage(QString("Step: %1").arg(stepStr), 2000);
-    });
+            this, &MainWindow::applyOperatorTuningStep);
     int savedStep = AppSettings::instance().value("TuningStepSize", "100").toInt();
     for (auto* a : m_panStack->allApplets()) a->spectrumWidget()->setStepSize(savedStep);
     m_appletPanel->rxApplet()->setInitialStepSize(savedStep);
@@ -2020,10 +2000,17 @@ MainWindow::MainWindow(QWidget* parent)
 
         // Re-apply master volume: applyMasterVolume() targets the local sink
         // with PC Audio on and the radio output with it off, so the new
-        // destination needs the level. ANAN only: on a Flex this would write
-        // `mixer lineout gain` on every toggle, overwriting the radio-side level.
-        if (m_radioModel.family().compare(QLatin1String("anan"), Qt::CaseInsensitive) == 0)
-            applyMasterVolume(AppSettings::instance().value("MasterVolume", "50").toInt());
+        // destination needs the level. Only where the client keeps the radio's
+        // level: on a Flex this would overwrite the radio's own `mixer lineout gain`.
+        if (m_radioModel.backendCapabilities().clientSettingsDomains.testFlag(
+                RadioCapabilities::ClientSettingsDomain::ReceiveOutputLevel)) {
+            const int level = m_radioModel.activeOutputVolumePercent();
+            // The slider shows the newly active level; setMasterVolume() is
+            // signal-blocked, so this does not apply it twice.
+            if (m_titleBar)
+                m_titleBar->setMasterVolume(level);
+            applyMasterVolume(level);
+        }
 
         // On Icom this CLICK -- and only a click -- asks the radio to switch
         // DATA OFF MOD: the network source while on, and whatever the operator
@@ -2916,6 +2903,33 @@ MainWindow::~MainWindow()
 #ifdef HAVE_HIDAPI
     m_hidEncoder = nullptr;
 #endif
+}
+
+// A DELIBERATE operator step change: push it to the active slice (or apply it
+// on the client where there is no command plane), persist it, and toast it.
+void MainWindow::applyOperatorTuningStep(int step)
+{
+    if (step <= 0)
+        return;
+    // Send step to radio for the active slice, or apply it on the client
+    // where there is no command plane to carry it.
+    if (auto* s = m_radioModel.slice(m_activeSliceId)) {
+        if (!m_radioModel.applyClientOwnedSliceStep(s->sliceId(), step)) {
+            m_radioModel.sendCommand(QString("slice set %1 step=%2").arg(s->sliceId()).arg(step));
+        }
+    }
+    // Also save to AppSettings for SpectrumWidget scroll-to-tune
+    auto& settings = AppSettings::instance();
+    settings.setValue("TuningStepSize", QString::number(step));
+    settings.save();
+    QString stepStr;
+    if (step >= 1000000)
+        stepStr = QString("%1 MHz").arg(step / 1000000.0, 0, 'f', step % 1000000 ? 1 : 0);
+    else if (step >= 1000)
+        stepStr = QString("%1 kHz").arg(step / 1000.0, 0, 'f', step % 1000 ? 1 : 0);
+    else
+        stepStr = QString("%1 Hz").arg(step);
+    statusBar()->showMessage(QString("Step: %1").arg(stepStr), 2000);
 }
 
 void MainWindow::preparePanadapterUiForShutdown()
@@ -7499,9 +7513,13 @@ void MainWindow::applyMasterVolume(int pct)
         m_audio->setRxVolume(pct / 100.0f);
     else
         m_radioModel.setLineoutGain(pct);
-    auto& s = AppSettings::instance();
-    s.setValue("MasterVolume", QString::number(pct));
-    s.save();
+    // MasterVolume is the PC sink's level only. With PC Audio off this moves
+    // the radio's output, which RadioModel reads back from lineoutGain().
+    if (pcAudio) {
+        auto& s = AppSettings::instance();
+        s.setValue(QStringLiteral("MasterVolume"), QString::number(pct));
+        s.save();
+    }
 #ifdef HAVE_WEBSOCKETS
     if (tciServer()) tciServer()->broadcastMasterVolume(pct);
 #endif
