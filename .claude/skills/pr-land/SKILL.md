@@ -617,7 +617,7 @@ What you do check:
 
 ```sh
 gh pr view <PR> --json headRefOid,mergeable,mergeStateStatus   # MERGEABLE, not CONFLICTING
-gh pr checks <PR> --json name,bucket                           # every required context "pass"
+gh pr checks <PR> --required --json name,bucket                # every required context "pass"
 ```
 
 - **Conflicts** (`CONFLICTING` / `DIRTY`) are the only reason to bring `main`
@@ -628,9 +628,13 @@ gh pr checks <PR> --json name,bucket                           # every required 
   because it moved after your update. Each update is a push. It restarts CI on
   three platforms and dismisses any approval.
 
-Record which `main` the green was built against (the head's earliest run
-`created_at` against `main`'s tip) for the report. It is not a gate. It tells
-whoever reads step 13 how far the merge result is from what CI saw:
+Record which `main` the green was built against, for the report. It is not a
+gate. It tells whoever reads step 13 what the merge result contains that CI
+never built: compare the head's earliest run `created_at` with `main`'s tip,
+and if `main` is newer, list the commits that landed after the run was created
+and touch `src/`, `tests/`, `tools/`, `.github/workflows/` or a CMake file. A
+changed signature on a shared seam merges cleanly and still breaks the build,
+so a red `main` after the merge is traced from that list first:
 
 ```sh
 HEAD=$(gh pr view <PR> --json headRefOid -q .headRefOid)
@@ -638,6 +642,9 @@ gh api --paginate "repos/aethersdr/AetherSDR/actions/runs?head_sha=$HEAD" \
   --jq '.workflow_runs[] | .created_at' | sort | head -1
 gh api repos/aethersdr/AetherSDR/commits/main \
   --jq '.sha[0:12] + "  " + .commit.committer.date'
+# if main is newer: the commits CI never built against this PR
+gh api "repos/aethersdr/AetherSDR/commits?sha=main&since=<created_at>" \
+  --jq '.[] | .sha[0:9] + "  " + (.commit.message | split("\n")[0])'
 ```
 
 Then post one approving review — body only, no new inline comments; anything
@@ -737,9 +744,11 @@ armed and confirmed able to fire — plus the one thing still standing between
 the PR and `main`, if there is one.
 
 Say which `main` the green was built against: the creation time of the
-head's earliest CI run, and `main`'s tip at arming time. It is not a gate
-(step 10). It tells the reader of the post-merge check how far the squash
-result is from what CI built.
+head's earliest CI run, `main`'s tip at arming time, and whether `main` was
+newer. If it was, list the intervening commits that touch `src/`, `tests/`,
+`tools/`, `.github/workflows/` or a CMake file (step 10). It is not a gate. It
+tells the reader of the post-merge check what the squash result contains that
+CI never built.
 
 ### Post-merge (Principle XI)
 The squash commit's SHA and the verdict of `main`'s CI on it — the check that
@@ -797,7 +806,7 @@ finished pass; an implied one is not.
 - Work, build or `git stash` in the invoking checkout.
 - `git push origin HEAD:<branch>` on a fork PR.
 - Push an empty commit to retrigger CI.
-- Update the branch because `main` moved. Merge it if it merges cleanly on green.
+- Update the branch because `main` moved.
 - Leave an item "for the author".
 - Post an approving review from an identity that is not a code owner for the
   paths the PR touches.
