@@ -5,6 +5,7 @@
 #include <hidapi/hidapi.h>
 
 #include <algorithm>
+#include <cerrno>
 #include <utility>
 
 namespace AetherSDR {
@@ -63,11 +64,22 @@ Ctr2HidPort* Ctr2HidapiPort::open(const Ctr2HidPort::DeviceInfo& device, QString
         *error = QStringLiteral("USB HID support failed to initialize");
         return nullptr;
     }
+    errno = 0;
     hid_device* handle = hid_open_path(device.path.toUtf8().constData());
     if (!handle) {
+        const int openErrno = errno;
         const QString why = fromWide(hid_error(nullptr));
         *error = QStringLiteral("Cannot open %1: %2")
             .arg(device.label(), why.isEmpty() ? QStringLiteral("HID I/O error") : why);
+#ifdef Q_OS_LINUX
+        // hidraw nodes are root-only without a udev rule; name the fix.
+        if (openErrno == EACCES) {
+            *error += QStringLiteral(". Install the udev rule "
+                                     "(packaging/linux/70-aethersdr-ctr2.rules) and replug the CTR2.");
+        }
+#else
+        Q_UNUSED(openErrno);
+#endif
         return nullptr;
     }
     hid_set_nonblocking(handle, 1);

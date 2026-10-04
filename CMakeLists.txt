@@ -3366,6 +3366,11 @@ else()
             )
         endif()
     endif()
+    if(LINUX AND HIDAPI_FOUND)
+        install(FILES packaging/linux/70-aethersdr-ctr2.rules
+            DESTINATION lib/udev/rules.d
+        )
+    endif()
     if(LINUX AND AETHER_BACKEND_RTL)
         install(FILES packaging/linux/70-rtl-sdr.rules
             DESTINATION lib/udev/rules.d
