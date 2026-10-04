@@ -189,6 +189,13 @@ WdspChannel::Mode modeFromString(const QString& mode) noexcept
     return WdspChannel::Mode::Usb;
 }
 
+// The data modes WSJT-X and similar decoders select.
+bool isDigitalDataMode(const QString& mode) noexcept
+{
+    return mode.compare(QLatin1String("DIGU"), Qt::CaseInsensitive) == 0
+           || mode.compare(QLatin1String("DIGL"), Qt::CaseInsensitive) == 0;
+}
+
 // wdspAgcMode() falls back to medium for unknown strings, so the restore
 // boundary drops unknown values instead of persisting a silent "med". Uses
 // SliceModel's four-way vocabulary ("med", not "medium").
@@ -982,8 +989,13 @@ bool Hl2Backend::createPanadapter()
         seed.filterLowHz = first.filterLowHz;
         seed.filterHighHz = first.filterHighHz;
         seed.agcMode = first.agcMode;
+        seed.agcModeBeforeDigital = first.agcModeBeforeDigital;
         seed.agcThresholdDb = first.agcThresholdDb;
     }
+    // The AGC-off level is this receiver's own: the one remembered for its
+    // index, else the default. It is not copied from the first receiver.
+    if (const int level = rememberedAgcOffLevel(ddc); level >= 0)
+        seed.agcOffLevel = level;
     m_rx.push_back(seed);
 
     if (m_metis) {
@@ -2885,6 +2897,27 @@ void Hl2Backend::setSliceFrequency(int sliceId, double hz)
     notifyOperatingStateChanged();
 }
 
+// DIGU/DIGL run AGC off: medium AGC raises the noise between FT8 frames,
+// which inflates the decoder's noise reference and costs weak decodes beside
+// a strong signal (#5629). The held AGC returns on leaving them. Never
+// re-imposed inside a data mode, so an operator's own AGC choice stands.
+bool Hl2Backend::followModeAgc(Receiver& r, const QString& previousMode)
+{
+    const bool wasDigital = isDigitalDataMode(previousMode);
+    const bool isDigital = isDigitalDataMode(r.mode);
+    if (isDigital && !wasDigital) {
+        r.agcModeBeforeDigital = r.agcMode;
+        r.agcMode = QStringLiteral("off");
+        return true;
+    }
+    if (wasDigital && !isDigital && !r.agcModeBeforeDigital.isEmpty()) {
+        r.agcMode = r.agcModeBeforeDigital;
+        r.agcModeBeforeDigital.clear();
+        return true;
+    }
+    return false;
+}
+
 void Hl2Backend::setSliceMode(int sliceId, const QString& requested)
 {
     const int ddc = ddcForSlice(sliceId);
@@ -2916,6 +2949,12 @@ void Hl2Backend::setSliceMode(int sliceId, const QString& requested)
         const auto [lo, hi] = defaultPassbandForMode(mode);
         r->filterLowHz  = lo;
         r->filterHighHz = hi;
+    }
+
+    if (followModeAgc(*r, previous) && r->dsp) {
+        QMetaObject::invokeMethod(r->dsp, "setAgc", Qt::QueuedConnection,
+            Q_ARG(int, wdspAgcMode(r->agcMode)),
+            Q_ARG(double, m_dbRef.agcCeilingDb(r->agcThresholdDb)));
     }
 
     // Mode first, then passband, re-pushed on every mode set: in WDSP the NBP
@@ -2989,11 +3028,17 @@ void Hl2Backend::setSliceAgc(int sliceId, const QString& mode, int thresholdDb)
     // 40 dB, clipping hard by 50 dB.
     // Validated on the way in so capture only stores what restore accepts; an
     // unknown mode string leaves the mode unchanged.
-    if (!m.isEmpty() && isKnownAgcModeString(m))
+    if (!m.isEmpty() && isKnownAgcModeString(m)) {
+        // A changed mode is the operator's choice, so leaving DIGU/DIGL no
+        // longer overrides it. A threshold change repeats the current mode.
+        if (m != r->agcMode) {
+            r->agcModeBeforeDigital.clear();
+        }
         r->agcMode = m;
-    else if (!m.isEmpty())
+    } else if (!m.isEmpty()) {
         qCWarning(lcHl2) << "HL2: ignoring unknown AGC mode" << mode
                          << "- keeping" << r->agcMode;
+    }
     r->agcThresholdDb = qBound(0, thresholdDb, 100);
     // THE REMEMBERED PAIR IS THE LAST ONE THE OPERATOR SET, on whichever
     // receiver. Capture used to read rx(m_txDdc) instead, which split the model:
@@ -3002,7 +3047,9 @@ void Hl2Backend::setSliceAgc(int sliceId, const QString& mode, int thresholdDb)
     // capture was not the change that got captured — and the next launch seeded
     // every receiver from it. Flat restore is the deliberate design (see
     // seedReceiverAgc); this makes the capture side agree with it.
-    m_agcMode = r->agcMode;
+    // A data mode's own "off" is not the operator's choice and is not captured.
+    m_agcMode = r->agcModeBeforeDigital.isEmpty() ? r->agcMode
+                                                  : r->agcModeBeforeDigital;
     m_agcThresholdDb = r->agcThresholdDb;
     // WDSP IS TOLD WHAT THE RECEIVER NOW HOLDS, not what the caller asked for.
     // Deriving from `m` meant a refused mode still reached the DSP as
@@ -3071,6 +3118,25 @@ void Hl2Backend::requestSliceAgc(int sliceId, const SliceAgcRequest& request)
     r->agcOffLevel = qBound(0, request.offLevel, 100);
     pushAgcOffLevel(*r);
     emitSliceState(ddc);
+    // Remembered per receiver and captured, as the AGC pair is.
+    rememberAgcOffLevel(ddc, r->agcOffLevel);
+    m_agcOffLevelsLive = true;
+    notifyOperatingStateChanged();
+}
+
+int Hl2Backend::rememberedAgcOffLevel(int receiverIndex) const
+{
+    return receiverIndex >= 0 && receiverIndex < m_agcOffLevels.size()
+               ? m_agcOffLevels.at(receiverIndex) : -1;
+}
+
+void Hl2Backend::rememberAgcOffLevel(int receiverIndex, int level)
+{
+    if (receiverIndex < 0 || receiverIndex >= kMaxReceivers)
+        return;
+    while (m_agcOffLevels.size() <= receiverIndex)
+        m_agcOffLevels.append(-1);
+    m_agcOffLevels[receiverIndex] = level;
 }
 
 void Hl2Backend::setSliceSquelch(int sliceId, bool on, int level)
@@ -6484,6 +6550,12 @@ void Hl2Backend::applyRestoredState(const RestoredRadioState& state)
         valid.agcMode = state.agcMode.trimmed().toLower();
     if (state.agcThreshold >= 0 && state.agcThreshold <= 100)
         valid.agcThreshold = state.agcThreshold;
+    // The AGC-off level per receiver. An entry outside 0..100 is dropped, not
+    // clamped, like the threshold; entries past the receiver ceiling are ignored.
+    for (qsizetype i = 0; i < state.agcOffLevels.size() && i < kMaxReceivers; ++i) {
+        const int level = state.agcOffLevels.at(i);
+        valid.agcOffLevels.append(level >= 0 && level <= 100 ? level : -1);
+    }
 
     // Per-band maps ride the typed extension's domain sub-objects
     // (RestoredRadioState.h). Values clamp to the hardware's own ranges.
@@ -6569,6 +6641,10 @@ void Hl2Backend::applyRestoredState(const RestoredRadioState& state)
     m_agcThresholdDb = m_restoredState.agcThreshold >= 0
                            ? m_restoredState.agcThreshold
                            : defaults.agcThresholdDb;
+    // The remembered AGC-off levels are this radio's document, for the same
+    // reason. The open receivers keep theirs until connectRadio() seeds them.
+    m_agcOffLevels = m_restoredState.agcOffLevels;
+    m_agcOffLevelsLive = false;
     qCInfo(lcHl2) << "HL2 restore: freq" << valid.rfFrequencyHz << "mode"
                   << valid.mode << "filter" << valid.filterLowHz << ".."
                   << valid.filterHighHz << "rate" << valid.sampleRateHz
@@ -6590,18 +6666,30 @@ void Hl2Backend::seedReceiverAgc()
         m_haveRestoredState && !m_restoredState.agcMode.isEmpty();
     const bool haveThreshold =
         m_haveRestoredState && m_restoredState.agcThreshold >= 0;
-    for (Receiver& r : m_rx) {
+    for (std::size_t i = 0; i < m_rx.size(); ++i) {
+        Receiver& r = m_rx[i];
+        // The AGC-off level is per receiver: the remembered one for this
+        // index, else the default. Pushed to the DSP with the AGC pair.
+        const int offLevel = rememberedAgcOffLevel(static_cast<int>(i));
+        r.agcOffLevel = offLevel >= 0 ? offLevel : defaults.agcOffLevel;
         r.agcMode = haveMode ? m_restoredState.agcMode : defaults.agcMode;
         r.agcThresholdDb = haveThreshold ? m_restoredState.agcThreshold
                                          : defaults.agcThresholdDb;
+        r.agcModeBeforeDigital.clear();
+        // A receiver already in DIGU/DIGL runs AGC off over the seeded mode.
+        followModeAgc(r, QString());
     }
     // Prime the remembered pair from what was just seeded, so a capture taken
     // before the operator touches the control records the restored value rather
-    // than falling back through an empty member.
+    // than falling back through an empty member. The seeded mode, not a data
+    // mode's off.
     if (!m_rx.empty()) {
-        m_agcMode = m_rx.front().agcMode;
-        m_agcThresholdDb = m_rx.front().agcThresholdDb;
+        const Receiver& first = m_rx.front();
+        m_agcMode = first.agcModeBeforeDigital.isEmpty()
+                        ? first.agcMode : first.agcModeBeforeDigital;
+        m_agcThresholdDb = first.agcThresholdDb;
     }
+    m_agcOffLevelsLive = true;
 }
 
 RestoredRadioState Hl2Backend::currentOperatingState() const
@@ -6625,8 +6713,19 @@ RestoredRadioState Hl2Backend::currentOperatingState() const
         state.agcMode = m_agcMode;
         state.agcThreshold = m_agcThresholdDb;
     } else if (const Receiver* txRx = rx(m_txDdc)) {
-        state.agcMode = txRx->agcMode;
+        state.agcMode = txRx->agcModeBeforeDigital.isEmpty()
+                            ? txRx->agcMode : txRx->agcModeBeforeDigital;
         state.agcThreshold = txRx->agcThresholdDb;
+    }
+    // The AGC-off level per receiver: the remembered list, with the open
+    // receivers' current levels over it once they hold this radio's values.
+    state.agcOffLevels = m_agcOffLevels;
+    if (m_agcOffLevelsLive) {
+        for (std::size_t i = 0; i < m_rx.size(); ++i) {
+            while (state.agcOffLevels.size() <= static_cast<qsizetype>(i))
+                state.agcOffLevels.append(-1);
+            state.agcOffLevels[static_cast<qsizetype>(i)] = m_rx[i].agcOffLevel;
+        }
     }
     state.sampleRateHz = m_sampleRateHz;
 
@@ -7161,7 +7260,11 @@ void Hl2Backend::pushInitialState()
         if (m_haveRestoredState) {
             if (Receiver* txRx = rx(m_txDdc)) {
                 if (!m_restoredState.mode.isEmpty()) {
+                    // A restore into DIGU/DIGL runs AGC off, as a mode click
+                    // does; the loop below pushes it to the DSP.
+                    const QString previousMode = txRx->mode;
                     txRx->mode = m_restoredState.mode;
+                    followModeAgc(*txRx, previousMode);
                     const auto [pbLowHz, pbHighHz] =
                         defaultPassbandForMode(txRx->mode);
                     txRx->filterLowHz = pbLowHz;

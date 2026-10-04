@@ -516,6 +516,10 @@ private:
         // so the first sliceChanged reports what WDSP was actually opened with.
         QString agcMode = QStringLiteral("med");
         int agcThresholdDb = 65;
+        // The AGC mode held while DIGU/DIGL run AGC off (followModeAgc());
+        // restored on leaving them unless the operator set AGC since. Empty
+        // when nothing is waiting. A receiver seeded from another copies it.
+        QString agcModeBeforeDigital;
 
         // Authoritative noise-blanker state: nothing echoes it, and a rebuilt receiver
         // must be told again. Defaults mirror SliceModel's (off, level 50).
@@ -576,6 +580,10 @@ private:
     // The receiver's passband in the demodulator's audio domain: carrier-relative
     // cuts slid up (CWU) or down (CWL) onto the pitch.
     [[nodiscard]] std::pair<double, double> dspFilterHz(const Receiver& r) const noexcept;
+    // Moves r's AGC with its mode: off on entering DIGU/DIGL from
+    // previousMode, the held AGC on leaving them. Every site that writes
+    // Receiver::mode calls it. True when agcMode changed.
+    static bool followModeAgc(Receiver& r, const QString& previousMode);
     // WDSP shift: the slice's offset from the NCO less the BFO, so the marker lands
     // on the pitch.
     [[nodiscard]] double rxShiftHz(const Receiver& r) const noexcept;
@@ -655,6 +663,14 @@ private:
     // Empty mode = untouched this session.
     QString m_agcMode;
     int     m_agcThresholdDb = 0;
+    // The remembered AGC-off level per receiver index; -1 = none. It seeds a
+    // receiver at connect and when a panadapter opens, and it keeps the level
+    // of a receiver that is not open. m_agcOffLevelsLive: the open receivers
+    // hold the current levels (set by the seed and by the operator).
+    QList<int> m_agcOffLevels;
+    bool       m_agcOffLevelsLive = false;
+    int  rememberedAgcOffLevel(int receiverIndex) const;
+    void rememberAgcOffLevel(int receiverIndex, int level);
     // The serial seedReceiverAgc() last ran for. A different radio is seeded; the
     // same radio reconnecting is not (buildReceivers() kept its live AGC). Empty
     // until the first connect.
