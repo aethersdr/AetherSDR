@@ -769,7 +769,7 @@ void SliceModel::setAgcOffLevel(int value)
 
 void SliceModel::setSquelch(bool on, int level)
 {
-    if (QThread::currentThread() != thread()) { return; }
+    if (refuseOffThread(__func__)) { return; }
     if (m_externalReceiveAudioReplacement) {
         level = qBound(0, level, 99);
         const bool onChanged = (m_externalReceiveSquelchOn != on);

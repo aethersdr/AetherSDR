@@ -532,7 +532,7 @@ ReceiveDispatch FlexBackend::requestSliceAudio(int sliceId, const SliceAudioRequ
 
 ReceiveDispatch FlexBackend::requestSliceSquelch(int sliceId, const SliceSquelchRequest& request)
 {
-    if (sliceId < 0 || request.level < 0 || request.level > 100) {
+    if (sliceId < 0 || !request.valid()) {
         return ReceiveDispatch::Unsupported;
     }
     // FlexLib uses separate commands; a combined write is rejected by some

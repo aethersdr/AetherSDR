@@ -322,6 +322,14 @@ void receiveControls()
         f.backend->receiveResult = ReceiveDispatch::LocalOnly;
         s->setLocked(false);
         check(refused.size() == 1 && !s->isLocked(), "local-only lock remains useful without a false refusal");
+        f.backend->receiveResult = ReceiveDispatch::Unsupported;
+        const int audioBefore = f.backend->audio.size();
+        s->setExternalReceiveAudioReplacementMute(true, false);
+        check(f.backend->audio.size() == audioBefore + 1
+                  && f.backend->audio.last().origin == SliceAudioRequest::Origin::ExternalReceiveSuppression
+                  && refused.size() == 1,
+              "a refused compatibility-origin mute is logged, not raised as the operator's unsupported-control notice");
+        s->setExternalReceiveAudioReplacementMute(false, false);
         check(raw.isEmpty() && f.backend->keyCalls == 0, "whole migrated group sends no raw wire text or TX request");
     }
 }

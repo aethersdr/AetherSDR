@@ -79,6 +79,8 @@ struct SliceSquelchRequest {
     int level{0};
     bool enabledChanged{false};
     bool levelChanged{false};
+
+    bool valid() const { return level >= 0 && level <= 100; }
 };
 
 } // namespace AetherSDR

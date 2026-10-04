@@ -4347,7 +4347,7 @@ ReceiveDispatch IcomCivBackend::requestSliceAudio(int sliceId, const SliceAudioR
 
 ReceiveDispatch IcomCivBackend::requestSliceSquelch(int sliceId, const SliceSquelchRequest& request)
 {
-    if (!m_connected || !m_session || !m_model || sliceId != 0 || request.level < 0 || request.level > 100) {
+    if (!m_connected || !m_session || !m_model || sliceId != 0 || !request.valid()) {
         return ReceiveDispatch::Unsupported;
     }
     setSliceSquelch(sliceId, request.enabled, request.level);

@@ -838,7 +838,7 @@ ReceiveDispatch RtlSdrBackend::requestSliceAudio(int sliceId, const SliceAudioRe
 
 ReceiveDispatch RtlSdrBackend::requestSliceSquelch(int sliceId, const SliceSquelchRequest& request)
 {
-    if (!hasAcceptedSlice(sliceId) || request.level < 0 || request.level > 100) {
+    if (!hasAcceptedSlice(sliceId) || !request.valid()) {
         return ReceiveDispatch::Unsupported;
     }
     const auto receiver = std::ranges::find_if(m_requested.receivers, [sliceId](const auto& value) {

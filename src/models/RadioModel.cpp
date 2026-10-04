@@ -9889,11 +9889,18 @@ void RadioModel::dispatchSliceAgc(const SliceAgcRequest& request)
     }
 }
 
-void RadioModel::reportReceiveDispatch(ReceiveDispatch result, const QString& operation)
+void RadioModel::reportReceiveDispatch(ReceiveDispatch result, const QString& operation,
+                                       bool operatorOrigin)
 {
     if (result == ReceiveDispatch::Unsupported) {
-        qCWarning(lcProtocol) << "Backend refused receive operation" << operation;
-        emit commandDropped(operation);
+        qCWarning(lcProtocol).noquote() << "Backend refused receive operation" << operation
+            << (operatorOrigin ? QStringLiteral("(operator)") : QStringLiteral("(compatibility origin)"));
+        // The notice answers a control the operator just moved. A Kiwi
+        // suppression mute or a profile restore is not one, and must not spend
+        // the once-per-session notice on a refusal nobody asked for.
+        if (operatorOrigin) {
+            emit commandDropped(operation);
+        }
     }
 }
 
@@ -9901,7 +9908,8 @@ void RadioModel::dispatchSliceDsp(const SliceDspRequest& request)
 {
     if (SliceModel* source = receiveCommandSource()) {
         reportReceiveDispatch(m_backend->requestSliceDsp(source->sliceId(), request),
-                              QStringLiteral("receive DSP"));
+                              QStringLiteral("receive DSP"),
+                              request.origin == SliceDspRequest::Origin::Operator);
     }
 }
 
@@ -9909,7 +9917,8 @@ void RadioModel::dispatchSliceAudio(const SliceAudioRequest& request)
 {
     if (SliceModel* source = receiveCommandSource()) {
         reportReceiveDispatch(m_backend->requestSliceAudio(source->sliceId(), request),
-                              QStringLiteral("receive audio"));
+                              QStringLiteral("receive audio"),
+                              request.origin == SliceAudioRequest::Origin::Operator);
     }
 }
 

@@ -374,6 +374,15 @@ void receiveControlContracts()
               && truth.locked == true && commands.size() == 8,
           "independent Flex status corrects every migrated control group without writeback");
     commands.clear();
+    check(SliceSquelchRequest{true, 0, true, true}.valid()
+              && SliceSquelchRequest{true, 100, true, true}.valid()
+              && !SliceSquelchRequest{true, -1, true, true}.valid()
+              && !SliceSquelchRequest{true, 101, true, true}.valid(),
+          "squelch request validity is the shared 0..100 level range");
+    check(flex.requestSliceSquelch(3, {true, 101, true, true}) == ReceiveDispatch::Unsupported
+              && flex.requestSliceSquelch(3, {true, -1, true, true}) == ReceiveDispatch::Unsupported
+              && commands.isEmpty(),
+          "Flex refuses out-of-range squelch levels without wire text");
     check(flex.requestSliceAudio(0, {SliceAudioRequest::Field::Mute, 2}) == ReceiveDispatch::Unsupported
               && flex.requestSliceDsp(0, {SliceDspRequest::Feature::Nb, SliceDspRequest::Field::Level, true, -1}) == ReceiveDispatch::Unsupported
               && flex.requestSliceRxAntenna(0, QStringLiteral("ANT1\nslice set 0 tx=1")) == ReceiveDispatch::Unsupported

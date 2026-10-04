@@ -3127,7 +3127,7 @@ ReceiveDispatch Hl2Backend::requestSliceDsp(int sliceId, const SliceDspRequest& 
 
 ReceiveDispatch Hl2Backend::requestSliceSquelch(int sliceId, const SliceSquelchRequest& request)
 {
-    if (request.level < 0 || request.level > 100 || !rx(ddcForSlice(sliceId))) {
+    if (!request.valid() || !rx(ddcForSlice(sliceId))) {
         return ReceiveDispatch::Unsupported;
     }
     setSliceSquelch(sliceId, request.enabled, request.level);

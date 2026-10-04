@@ -1749,7 +1749,8 @@ private:
     void dispatchSliceSquelch(const SliceSquelchRequest& request);
     void dispatchSliceRxAntenna(const QString& antenna);
     void dispatchSliceLock(bool locked);
-    void reportReceiveDispatch(ReceiveDispatch result, const QString& operation);
+    void reportReceiveDispatch(ReceiveDispatch result, const QString& operation,
+                               bool operatorOrigin = true);
     // Translate a MODEL pan id to the backend's own id for a command going down
     // the seam. The inverse of resolveBackendPan(); both are needed or the
     // mapping is one-way and every pan command addresses a pan the backend
