@@ -196,8 +196,6 @@ QString peripheralTr(const char* text)
     return RadioSetupDialog::tr(text);
 }
 
-// ── What a device shows ────────────────────────────────────────────────────
-
 bool effectivelyConnecting(const PeripheralDeviceUi& ui)
 {
     return ui.state.connecting || (ui.isConnecting && ui.isConnecting());
@@ -363,8 +361,6 @@ bool codeDiscarded(PeripheralDeviceUi& ui)
     return true;
 }
 
-// ── Detail page layout ─────────────────────────────────────────────────────
-
 struct DetailPage {
     QWidget* page{nullptr};
     QVBoxLayout* layout{nullptr};
@@ -422,7 +418,7 @@ void addFormRow(DetailPage& detail, const QString& caption, QWidget* field)
     ++detail.row;
 }
 
-// The "Connect automatically" toggle, the Connect button row and the stretch.
+// The automatic-connection toggle, the Connect button row and the stretch.
 // `extraButtons` follow the edit hint.
 void finishDetailPage(DetailPage& detail, PeripheralDeviceUi& ui,
                       const QList<QWidget*>& extraButtons)
@@ -431,12 +427,24 @@ void finishDetailPage(DetailPage& detail, PeripheralDeviceUi& ui,
     detail.layout->addWidget(detail.group, 0, Qt::AlignTop);
 
     if (ui.kind == PeripheralDeviceUi::Kind::AuthNetwork) {
-        auto* autoConnect = new QCheckBox(RadioSetupDialog::tr("Connect automatically"), detail.page);
+        // TGXL and PGXL can also be reached through the radio, so for them the
+        // toggle chooses the direct link over the radio's relay.
+        const bool relayed = ui.id == QLatin1String("tgxl") || ui.id == QLatin1String("pgxl");
+        auto* autoConnect = new QCheckBox(relayed
+            ? RadioSetupDialog::tr("Connect directly when available")
+            : RadioSetupDialog::tr("Connect automatically"), detail.page);
         autoConnect->setObjectName(QStringLiteral("peripheralAutoConnect_%1").arg(ui.id));
-        autoConnect->setAccessibleName(RadioSetupDialog::tr("%1 connect automatically").arg(ui.label));
-        autoConnect->setAccessibleDescription(RadioSetupDialog::tr(
-            "Connect to %1 on startup, when the radio or discovery reports it, and after a "
-            "drop. Turn off to connect only when you click Connect.").arg(ui.label));
+        autoConnect->setAccessibleName(relayed
+            ? RadioSetupDialog::tr("%1 connect directly when available").arg(ui.label)
+            : RadioSetupDialog::tr("%1 connect automatically").arg(ui.label));
+        autoConnect->setAccessibleDescription(relayed
+            ? RadioSetupDialog::tr(
+                  "Connect directly to %1 on startup, when the radio reports it, and after a "
+                  "drop. Turn off to use the radio's relay; Connect still connects directly "
+                  "until that session drops.").arg(ui.label)
+            : RadioSetupDialog::tr(
+                  "Connect to %1 on startup, when discovery reports it, and after a drop. "
+                  "Turn off to connect only when you click Connect.").arg(ui.label));
         ThemeManager::instance().applyStyleSheet(autoConnect,
             "QCheckBox { color: {{color.text.primary}}; font-size: 11px; spacing: 8px; }"
             + kCheckBoxIndicator);
@@ -625,8 +633,6 @@ void RadioSetupDialog::editPeripheralStatusForTest(
         edit(ui->state);
     }
 }
-
-// ── TGXL, PGXL, Antenna Genius, ShackSwitch ────────────────────────────────
 
 void RadioSetupDialog::buildAuthNetworkDevice(PeripheralDeviceUi& ui, QWidget* stackParent,
                                               const std::function<void()>& refresh)
@@ -903,8 +909,6 @@ void RadioSetupDialog::buildAuthNetworkDevice(PeripheralDeviceUi& ui, QWidget* s
     finishDetailPage(detail, ui, extras);
 }
 
-// ── ACOM, SPE Expert, LP-100A ──────────────────────────────────────────────
-
 void RadioSetupDialog::buildSerialNetworkDevice(PeripheralDeviceUi& ui, QWidget* stackParent,
                                                 const std::function<void()>& refresh,
                                                 const std::shared_ptr<QVector<std::function<void()>>>& pageReseeds)
@@ -1108,8 +1112,6 @@ void RadioSetupDialog::buildSerialNetworkDevice(PeripheralDeviceUi& ui, QWidget*
     finishDetailPage(detail, ui, extras);
 }
 
-// ── VK3AMP ─────────────────────────────────────────────────────────────────
-
 void RadioSetupDialog::buildVkampDevice(PeripheralDeviceUi& ui, QWidget* stackParent,
                                         const std::function<void()>& refresh)
 {
@@ -1206,8 +1208,6 @@ void RadioSetupDialog::buildVkampDevice(PeripheralDeviceUi& ui, QWidget* stackPa
     finishDetailPage(detail, ui, {});
 }
 
-// ── The tab ────────────────────────────────────────────────────────────────
-
 namespace {
 
 // Calls `refresh` whenever the page is shown.
@@ -1271,6 +1271,7 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
 
     auto& settings = AppSettings::instance();
     m_peripheralDevices.clear();
+    m_peripheralRowSavers.clear();   // they point into m_peripheralDevices
 
     auto* content = new QWidget(page);
     content->setObjectName(QStringLiteral("peripheralContent"));
@@ -1292,7 +1293,6 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
     emptyLayout->addWidget(emptyText);
     detailStack->addWidget(emptyPage);
 
-    // ── Describe and build each device ────────────────────────────────────
     auto addDevice = [this](const QString& id, const QString& label, const QString& shortName,
                             PeripheralDeviceUi::Kind kind, int defaultPort) {
         auto ui = std::make_shared<PeripheralDeviceUi>();
@@ -1569,7 +1569,6 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
         ui->afterRemoval = [this]() { m_lpMeter->disconnect(); };
         buildSerialNetworkDevice(*ui, detailStack, refresh, serialReseeds);
     }
-    // ── Reconnect checkbox ────────────────────────────────────────────────
     auto* reconnectCheck = new QCheckBox(tr("Reconnect automatically"));
     reconnectCheck->setObjectName(QStringLiteral("peripheralAutoReconnect"));
     reconnectCheck->setAccessibleDescription(tr("Reconnect peripherals after a connection drops."));
@@ -1599,15 +1598,9 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
         if (m_lpMeter) {
             m_lpMeter->setAutoReconnect(on);
         }
-        // NOTE: m_vkamp is deliberately NOT propagated here. That is a
-        // pre-existing gap from #4919, not an intentional omission:
-        // VkampConnection has setAutoReconnect() and the startup block in
-        // MainWindow_Wiring.cpp calls it, so toggling this mid-session reaches
-        // every peripheral except that one. It is left alone because it is not
-        // this feature's to change and needs its own one-line fix.
+        // VK3AMP takes this setting only at startup (#4919).
     });
 
-    // ── Device list, Add and Remove ───────────────────────────────────────
     auto* listGroup = new QGroupBox(tr("Devices"), content);
     listGroup->setMinimumWidth(250);
     listGroup->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
@@ -1681,8 +1674,9 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
                "including remote, VPN, and SmartLink setups.\n\n"
                "Configured devices connect when the radio connects. "
                "Reconnect automatically also retries after a connection drops. "
-               "Turn off Connect automatically on a device to connect it only when you "
-               "click Connect.\n\n"
+               "On a TGXL or PGXL, turn off Connect directly when available to use the "
+               "radio's relay instead. On an Antenna Genius or ShackSwitch, turn off "
+               "Connect automatically to connect it only when you click Connect.\n\n"
                "If a device requests authorization, enter its code. "
                "An accepted code is saved securely when a credential store is available. "
                "Disconnect before changing the connection address or port."));
@@ -1721,7 +1715,6 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
         pageIndex->insert(ui->id, detailStack->addWidget(ui->page));
     }
 
-    // ── Which devices are listed ──────────────────────────────────────────
     // activeIds: what the list shows. configuredIds: what is persisted. Recovery
     // rows (a blocked device the radio reported) may be in the first only.
     auto activeIds = std::make_shared<QStringList>();
@@ -1840,9 +1833,13 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
                                      const std::optional<QPair<QString, QString>>& savedAtClick = std::nullopt) {
         // An address saved from elsewhere (the AG applet) while the credential
         // deletion was pending is newer than this Remove: keep it.
+        // An empty value is not a target: MainWindow clears AG_ManualIp when a
+        // ShackSwitch is discovered.
+        const QString currentHost = settings.value(ui.ipKey, QString()).toString();
         const bool newerEndpointSaved = savedAtClick
             && ui.kind == PeripheralDeviceUi::Kind::AuthNetwork
-            && (settings.value(ui.ipKey, QString()).toString() != savedAtClick->first
+            && !currentHost.isEmpty()
+            && (currentHost != savedAtClick->first
                 || settings.value(ui.portKey, QString()).toString() != savedAtClick->second);
         if (ui.kind == PeripheralDeviceUi::Kind::AuthNetwork) {
             // Remove resets the device to its defaults, "Connect automatically"
@@ -1915,7 +1912,9 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
                 .arg(ui->label));
             return;
         }
-        if (!confirmPeripheralRemoval(ui->label)) {
+        if (!confirmPeripheralRemoval(ui->label, ui->autoConnectCheck
+                                                       ? ui->autoConnectCheck->text()
+                                                       : QString())) {
             return;
         }
         // Acquire before disconnect: model signals can synchronously request
@@ -2023,7 +2022,20 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
             // This device has no endpoint to match a code against. If the shared
             // slot holds the other device's code, there is nothing of this
             // device's to delete; only when the owner is unknown does Remove stop.
-            const QString otherEndpoint = ui->isShackSwitch
+            const bool otherLive = m_ag->isConnected()
+                && AntennaGeniusModel::isShackSwitch(m_ag->connectedDevice()) != ui->isShackSwitch;
+            // The other device's live session: its code was saved under the host
+            // the attempt asked for, which configuredEndpoint() rebuilds when the
+            // socket has no peer to report.
+            const QString otherLiveEndpoint = !otherLive ? QString()
+                : !m_ag->peerAddress().isEmpty()
+                ? PeripheralAuthStore::endpoint(m_ag->attemptHost(), m_ag->peerAddress(),
+                                                m_ag->peerPort())
+                : PeripheralAuthStore::configuredEndpoint(m_ag->attemptHost(),
+                                                          m_ag->connectedDevice().port);
+            const QString otherEndpoint = otherLive
+                ? otherLiveEndpoint
+                : ui->isShackSwitch
                 ? (AntennaGeniusModel::isShackSwitch(m_ag->connectedDevice())
                        ? QString()
                        : PeripheralAuthStore::configuredEndpoint(
@@ -2054,7 +2066,6 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
         }
     });
 
-    // ── Presentation ──────────────────────────────────────────────────────
     // From connection state and cached credential metadata only. No socket or
     // keychain request is made by a refresh.
     auto updateFieldAvailability = [](PeripheralDeviceUi& ui, QWidget* field, bool connected,
@@ -2120,9 +2131,12 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
                 activeIds->append(ui->id);
                 addedRow = true;
             }
-            if (ui->addressEdit->text().isEmpty() && !ui->addressEdit->isModified()) {
-                ui->addressEdit->setText(host);
-                ui->portSpin->setValue(tgxl ? m_tgxl->attemptPort() : m_pgxl->attemptPort());
+            if (!ui->addressEdit->isModified()) {
+                const quint16 port = tgxl ? m_tgxl->attemptPort() : m_pgxl->attemptPort();
+                if (ui->addressEdit->text() != host || ui->portSpin->value() != port) {
+                    ui->addressEdit->setText(host);
+                    ui->portSpin->setValue(port);
+                }
             }
             ui->addressEdit->setProperty("peripheralDiscoveredHost", ui->discoveredHost());
             ui->addressEdit->setProperty("peripheralDiscoveredPort", ui->discoveredPort);
@@ -2226,7 +2240,6 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
         }
     };
 
-    // ── What triggers a refresh ───────────────────────────────────────────
     // Connection and model signals, the operator's own field edits, and the
     // page being shown. Each connection also updates its status first.
     auto onLink = [this, refresh](const QString& id) {
@@ -2266,6 +2279,8 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
     };
     if (m_tgxl) {
         connect(m_tgxl, &TgxlConnection::connected, this, [onLink]() { onLink(QStringLiteral("tgxl")); });
+        // An automatic attempt starts without any other signal; show Connecting….
+        connect(m_tgxl, &TgxlConnection::attemptStarted, this, [refresh]() { refresh(); });
         connect(m_tgxl, &TgxlConnection::disconnected, this, [onLink]() { onLink(QStringLiteral("tgxl")); });
         connect(m_tgxl, &TgxlConnection::connectionFailed, this, [this, onFailure](const QString& error) {
             onFailure(QStringLiteral("tgxl"), error, m_tgxl->isAuthBlocked());
@@ -2281,6 +2296,7 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
     }
     if (m_pgxl) {
         connect(m_pgxl, &PgxlConnection::connected, this, [onLink]() { onLink(QStringLiteral("pgxl")); });
+        connect(m_pgxl, &PgxlConnection::attemptStarted, this, [refresh]() { refresh(); });
         connect(m_pgxl, &PgxlConnection::disconnected, this, [onLink]() { onLink(QStringLiteral("pgxl")); });
         connect(m_pgxl, &PgxlConnection::connectionFailed, this, [this, onFailure](const QString& error) {
             onFailure(QStringLiteral("pgxl"), error, m_pgxl->isAuthBlocked());
@@ -2297,6 +2313,7 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
     if (m_ag) {
         // Antenna Genius and ShackSwitch share the model; the device it is
         // serving owns the event.
+        connect(m_ag, &AntennaGeniusModel::attemptStarted, this, [refresh]() { refresh(); });
         connect(m_ag, &AntennaGeniusModel::connected, this, [this, onLink]() {
             onLink(QStringLiteral("ag"));
             onLink(QStringLiteral("shackswitch"));

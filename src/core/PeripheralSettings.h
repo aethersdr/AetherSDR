@@ -78,16 +78,13 @@ public:
     {
         setDeviceField(id, QStringLiteral("AutoConnect"),
                        QJsonValue(on ? QStringLiteral("True") : QStringLiteral("False")));
-        clearDeviceField(id, QStringLiteral("DiscoveryDismissed"));
     }
 
     // Remove returns the device to its default: the toggle is cleared, so a row
-    // that is no longer listed never carries a hidden "do not connect". The
-    // retired DiscoveryDismissed key (branch builds only) is dropped with it.
+    // that is no longer listed never carries a hidden "do not connect".
     static void resetAutoConnect(const QString& id)
     {
         clearDeviceField(id, QStringLiteral("AutoConnect"));
-        clearDeviceField(id, QStringLiteral("DiscoveryDismissed"));
     }
 
     static bool autoReconnect()

@@ -148,6 +148,8 @@ signals:
     void authCodeAccepted(const QString& code);
     void enteredAuthCodeDiscarded();
     void connectionError(const QString& msg);
+    // A socket attempt has begun, from any path; carries the host it asked for.
+    void attemptStarted(const QString& host);
 
     void antennasChanged();        // antenna list refreshed
     void bandsChanged();           // band list refreshed

@@ -85,6 +85,8 @@ signals:
     // it asked for. Not sent after a deliberate disconnect or once auth has
     // blocked reconnects.
     void unreachable(const QString& attemptedHost);
+    // A socket attempt has begun, from any path; carries the host it asked for.
+    void attemptStarted(const QString& host);
     void authCodeRequired(quint64 attempt);
     void authCodeAccepted(const QString& code);
     void enteredAuthCodeDiscarded();

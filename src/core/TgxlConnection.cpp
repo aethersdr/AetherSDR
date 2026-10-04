@@ -145,6 +145,7 @@ void TgxlConnection::openSocket(const QString& host, quint16 port, bool wasConne
     } else {
         m_socket.connectToHost(host, port);
     }
+    emit attemptStarted(m_attemptHost);
 }
 
 void TgxlConnection::beginAutomaticAttemptAt(const QString& host, quint16 port)

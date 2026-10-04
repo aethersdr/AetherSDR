@@ -8788,15 +8788,18 @@ void RadioSetupDialog::setRemovalConfirmationHookForTest(
     removalConfirmationHook() = std::move(hook);
 }
 
-bool RadioSetupDialog::confirmPeripheralRemoval(const QString& label)
+bool RadioSetupDialog::confirmPeripheralRemoval(const QString& label, const QString& toggleLabel)
 {
-    const QString text = tr(
-        "Remove %1?\n\n"
-        "This disconnects it and clears its saved connection settings and any stored "
-        "authorization code. \"Connect automatically\" returns to its default (on).\n\n"
-        "Remove does not stop discovery: a device the radio or your network reports may "
-        "connect again. To keep a device from connecting by itself, leave it in the list "
-        "and turn off Connect automatically instead.").arg(label);
+    // Only the network devices with an authorization code have a toggle.
+    const QString text = toggleLabel.isEmpty()
+        ? tr("Remove %1?\n\n"
+             "This disconnects it and clears its saved connection settings.").arg(label)
+        : tr("Remove %1?\n\n"
+             "This disconnects it and clears its saved connection settings and any stored "
+             "authorization code. \"%2\" returns to its default (on).\n\n"
+             "Remove does not stop discovery: a device the radio or your network reports may "
+             "connect again. To keep a device from connecting by itself, leave it in the list "
+             "and turn off %2 instead.").arg(label, toggleLabel);
     if (const auto& hook = removalConfirmationHook()) {
         return hook(label, text);
     }

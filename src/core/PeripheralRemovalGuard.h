@@ -28,7 +28,6 @@ public:
         return s_pending[static_cast<std::size_t>(device)] != 0;
     }
 
-
 private:
     Device m_device;
     inline static std::array<unsigned, 3> s_pending{};

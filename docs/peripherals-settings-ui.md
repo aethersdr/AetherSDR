@@ -39,13 +39,19 @@ A TGXL or PGXL that the radio reports and that needs authorization can appear as
 a temporary recovery row. Retrying its unchanged reported address does not save
 it as a manual target; editing the address or port does.
 
-## Connect automatically
+## Connecting automatically
 
-TGXL, PGXL, Antenna Genius and ShackSwitch each have a **Connect automatically**
-toggle, on by default. When it is off, nothing connects that device by itself:
-not startup, not discovery or the radio reporting it, not the alternate-address
-attempt, and not reconnect after a drop. **Connect** always works and does not
-change the toggle.
+TGXL, PGXL, Antenna Genius and ShackSwitch each have a toggle, on by default.
+When it is off, nothing connects that device by itself: not startup, not
+discovery or the radio reporting it, not the alternate-address attempt, and not
+reconnect after a drop. **Connect** always works and does not change the toggle;
+a session it starts is not reconnected after it drops.
+
+- **TGXL and PGXL:** **Connect directly when available**. Off, the device is
+  controlled through the radio's relay whenever the radio offers one (the applet
+  shows RADIO); a live direct session continues until it drops.
+- **Antenna Genius and ShackSwitch:** **Connect automatically**. These have no
+  relay, so off leaves the device offline until you click **Connect**.
 
 To keep a discovered device from connecting, keep its row and turn the toggle
 off. The setting is stored as `Peripherals.<id>.AutoConnect` (`True` or
@@ -55,7 +61,7 @@ off. The setting is stored as `Peripherals.<id>.AutoConnect` (`True` or
 
 **Remove** asks for confirmation first; Cancel changes nothing. Confirming
 disconnects the device and clears its saved connection settings and stored
-authorization code, and returns **Connect automatically** to its default. Remove
+authorization code, and returns the device's toggle to its default. Remove
 does not stop discovery: a device the radio or the network reports may connect
 again. A removed device that is blocked on authorization and reported again
 brings its recovery row back.
@@ -80,7 +86,7 @@ is pending is newer than the Remove and is kept.
 
 | Outcome | Configuration | Credential | Reconnection | Recovery |
 |---|---|---|---|---|
-| Success | Settings and row removed; toggle back to default | Stored code deleted | Guard released; discovery may connect the device again unless its row is kept with Connect automatically off | **Add** re-creates the row |
+| Success | Settings and row removed; toggle back to default | Stored code deleted | Guard released; discovery may connect the device again unless its row is kept with its toggle off | **Add** re-creates the row |
 | Failed (denied or error) | Kept; row stays | Saved code remains; error shown on the row | Connection stopped, guard released; normal reconnect events may connect it again | Retry **Remove** |
 | Unconfirmed (15 s timeout), then late completion | Kept; the row's pending field edits are not saved | Deletion unconfirmed | Guard held until the request returns, then released; a late completion changes no row or newer setting | The Peripherals page stays disabled in that Setup window. Close Setup and reopen it to retry; restart the app if the backend never returns |
 | No credential backend | Same as success | Session copy cleared; stored-code deletion unconfirmed, with a notice saying so | Same as success | Remove the code from the OS vault once it is available |
@@ -91,7 +97,7 @@ is pending is newer than the Remove and is kept.
 
 The TGXL, PGXL, Antenna Genius and ShackSwitch endpoints stay in their own flat
 keys (`TGXL_ManualIp` and so on). The device list, the global
-**Reconnect automatically**, each device's **Connect automatically**, and the
+**Reconnect automatically**, each device's toggle, and the
 ACOM, SPE Expert, VK3AMP and LP-100A connection settings live in the nested
 `Peripherals` document. Lowercase list ids and the case-sensitive
 connection-object names are separate namespaces; their spelling is fixed.

@@ -352,6 +352,7 @@ void AntennaGeniusModel::connectToDevice(const AgDeviceInfo& info)
     m_device = info;
     if (m_connectTransport) {
         m_connectTransport(host, info.port);
+        emit attemptStarted(m_attemptHost);
         return;
     }
     m_tcpSocket = new QTcpSocket(this);
@@ -366,6 +367,7 @@ void AntennaGeniusModel::connectToDevice(const AgDeviceInfo& info)
 
     qCDebug(lcTuner) << "AntennaGenius: connecting to" << host << ":" << info.port;
     m_tcpSocket->connectToHost(host, info.port);
+    emit attemptStarted(m_attemptHost);
 }
 
 void AntennaGeniusModel::beginAttemptAt(const QString& host, quint16 port)

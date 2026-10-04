@@ -206,7 +206,7 @@ private:
     QTableWidget* m_pinnedCertsTable{nullptr};
 
     bool m_peripheralRemovalPending{false};
-    bool confirmPeripheralRemoval(const QString& label);
+    bool confirmPeripheralRemoval(const QString& label, const QString& toggleLabel = {});
     RadioModel*  m_model;
     AudioEngine* m_audio{nullptr};
     TgxlConnection*    m_tgxl{nullptr};

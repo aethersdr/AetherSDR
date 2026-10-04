@@ -199,6 +199,9 @@ void checkRemovalGuardStopsEveryConnectPath(const QString& timerName,
     connection.setAutoReconnect(true);
     int opened = 0;
     PeripheralConnectionTestAccess::injectConnect(connection, opened);
+    // Every attempt that opens announces itself, so the Setup list can show
+    // Connecting… for automatic attempts too; a blocked one announces nothing.
+    QSignalSpy started(&connection, &Connection::attemptStarted);
     QTimer* retry = connection.template findChild<QTimer*>(timerName);
     CHECK(retry != nullptr);
     if (!retry) {
@@ -215,6 +218,7 @@ void checkRemovalGuardStopsEveryConnectPath(const QString& timerName,
         (connection.*explicitConnect)(host, port);
         CHECK(QMetaObject::invokeMethod(retry, "timeout", Qt::DirectConnection));
         CHECK(opened == 0);
+        CHECK(started.isEmpty());
         // A blocked attempt leaves the reconnect target alone.
         (connection.*autoConnect)(QStringLiteral("192.0.2.99"), port);
         CHECK(connection.reconnectHost() == host);
@@ -226,6 +230,8 @@ void checkRemovalGuardStopsEveryConnectPath(const QString& timerName,
     CHECK(opened == 2);
     CHECK(QMetaObject::invokeMethod(retry, "timeout", Qt::DirectConnection));
     CHECK(opened == 3);
+    CHECK(started.size() == 3);
+    CHECK(!started.isEmpty() && started.constLast().at(0).toString() == host);
     retry->stop();
 }
 
