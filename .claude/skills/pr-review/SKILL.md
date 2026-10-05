@@ -454,13 +454,27 @@ say plainly when a load-bearing claim went unverified — an untested assertion
 reported as untested is honest; one reported as fine is not. Never trust a
 green CI badge over a local reproduction when they disagree.
 
-**Build only what you run.** Configure normally, then build named targets —
-never the default `all`:
+**Build only what you run.** Configure a lean review build, then build named
+targets — never the default `all`:
 
 ```sh
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+  -DAETHER_SHARED_CORE=ON \
+  "-DCMAKE_CXX_FLAGS_RELWITHDEBINFO=-O2 -g1 -DNDEBUG" \
+  "-DCMAKE_C_FLAGS_RELWITHDEBINFO=-O2 -g1 -DNDEBUG"
 cmake --build build --parallel --target AetherSDR <test_a> <test_b>
 ctest --test-dir build -R '^(test_a|test_b)$' --output-on-failure
 ```
+
+`AETHER_SHARED_CORE=ON` links every target against one `libaethercore`
+instead of a static copy each, and `-g1` keeps backtraces with a fraction of
+the debug info. Together they shrink a test binary roughly twentyfold. Both are
+for Linux and macOS: on Windows, drop the shared core (it is a configure error)
+and the GCC/Clang flags. The app then loads the core as a shared library, which
+is not how it ships. That is fine for driving behaviour, but name it if a
+finding could depend on link mode. A test that calls WDSP directly does not
+link against the shared core by design; reconfigure static for that one.
+Add `-DCMAKE_{C,CXX}_COMPILER_LAUNCHER=ccache` when ccache is installed.
 
 Pick the tests from the diff: the ones the PR adds or modifies, the ones its
 body names, and the ones whose `tests/tests.cmake` block compiles a file the

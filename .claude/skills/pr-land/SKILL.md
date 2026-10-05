@@ -440,7 +440,8 @@ A fix without evidence is not landable, and the evidence is what you paste
 into the thread reply and the dismissal. Per item:
 
 - **Build and run the tests** in your worktree — every commit, not just the
-  last. Build named targets, never the default `all`:
+  last. Configure the lean build from `/pr-review` step 7 (shared core and
+  `-g1` on Linux/macOS), then build named targets, never the default `all`:
   `cmake --build build --parallel --target AetherSDR <test_a> <test_b>`, then
   `ctest --test-dir build -R '^(test_a|test_b)$'`. The tests are the ones the
   PR adds or modifies, the ones covering the findings you fixed, and the ones
