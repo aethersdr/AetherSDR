@@ -181,6 +181,9 @@ private:
     // otherwise. See the definition for why neither alone is right.
     [[nodiscard]] bool txAudioGateOpen() const;
     void reassertPanPreampWireStep(int step);
+    // Reads the other receive front-end stage after a preamp/ATT write; the
+    // radio interlocks the two without reporting it.
+    void queueFrontEndInterlockRead(const std::vector<std::uint8_t>& read);
     [[nodiscard]] bool tunerSupported() const;
     bool sendTunerCommandIfSupported(bool start, const TxCoordinator::Operation& operation,
                                      const TxCoordinator::Completion& completion);
@@ -267,7 +270,7 @@ private:
     void applyKeying(bool key, const std::optional<TxCoordinator::Command>& command);
     void queueRead(const std::vector<std::uint8_t>& frame, const std::string& key,
                    IcomCivScheduler::Priority priority, qint64 notBeforeMs = 0,
-                   std::vector<std::uint8_t> replyDataPrefix = {});
+                   std::vector<std::uint8_t> replyDataPrefix = {}, bool coalesce = true);
     void queueWrite(const std::vector<std::uint8_t>& frame, const std::string& key,
                     IcomCivScheduler::Priority priority, bool supersedes = true,
                     bool coalesce = true, const std::optional<TxCoordinator::Command>& command = {});
