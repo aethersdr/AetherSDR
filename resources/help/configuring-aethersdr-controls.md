@@ -441,7 +441,7 @@ Examples include:
 - CW speed
 - TX and RX EQ bands
 - Master and headphone volume
-- RADE modem on/off (the active slice)
+- RADE modem on/off on the active slice (switches it to DIGU/DIGL and makes it the TX slice)
 - Next and previous slice
 
 ### The best way to map knobs

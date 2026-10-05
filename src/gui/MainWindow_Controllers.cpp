@@ -2372,7 +2372,7 @@ void MainWindow::registerMidiParams()
     reg("global.rade", "RADE Modem", "Global", P::Toggle, 0, 1,
         [this](float v) {
             auto* s = activeSlice();
-            if (!s) return;
+            if (!s) { return; }
             if (v > 0.5f) {
                 // Same pre-check as the FreeDV Reporter path: without DAX audio
                 // activateRADE() declines with a modal, which a controller
