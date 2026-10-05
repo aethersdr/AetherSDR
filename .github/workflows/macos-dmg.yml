@@ -360,8 +360,14 @@ jobs:
           # (#3639). Intel is no longer exempt — it only ever was because #812
           # had to drop Homebrew qtkeychain to dodge the Qt clash.
           KEYCHAIN_FLAG="-DREQUIRE_KEYCHAIN=ON"
+          # -g on top of Release's -O3: clang's code generation does not depend
+          # on it. "Split debug symbols" collects the DWARF into a dSYM and
+          # strips the debug map before anything is signed
+          # (docs/debugging-crashes.md).
           cmake -B build -G "Unix Makefiles" \
             -DCMAKE_BUILD_TYPE=Release \
+            "-DCMAKE_C_FLAGS_RELEASE=-O3 -DNDEBUG -g" \
+            "-DCMAKE_CXX_FLAGS_RELEASE=-O3 -DNDEBUG -g" \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DCMAKE_OSX_DEPLOYMENT_TARGET="${{ matrix.deploy_target }}" \
@@ -424,6 +430,15 @@ jobs:
         # `all` target also builds ~200 unit-test executables the DMG never bundles
         # or runs. (The DAX driver is built separately in the driver-build step.)
         run: cmake --build build --target AetherSDR aether-dv-waveform -j$(sysctl -n hw.ncpu)
+
+      # Straight after Build: dsymutil reads the DWARF from the object files
+      # the debug map points at, macdeployqt strips what it touches, and the
+      # signature has to cover the stripped bytes.
+      - name: Split debug symbols
+        run: |
+          bash scripts/build/split-debug-symbols.sh symbols \
+            build/AetherSDR.app/Contents/MacOS/AetherSDR \
+            build/AetherSDR.app/Contents/MacOS/aether-dv-waveform
 
       - name: Bundle DFNR model
         run: |
@@ -726,14 +741,35 @@ jobs:
             AetherSDR-${{ github.ref_name }}-macOS-${{ matrix.label }}.dmg
           echo "Notarization and stapling complete"
 
+      # Read the UUIDs back from the signed bundle the DMG was made from: the
+      # archive is only worth attaching if they are the ones that ship.
+      - name: Package debug symbols
+        run: |
+          set -euo pipefail
+          while read -r name _ uuid arch _; do
+            if ! dwarfdump --uuid "build/AetherSDR.app/Contents/MacOS/$name" | grep -q "UUID: $uuid $arch"; then
+              echo "::error::$name $arch in the signed bundle does not carry UUID $uuid"
+              dwarfdump --uuid "build/AetherSDR.app/Contents/MacOS/$name" || true
+              exit 1
+            fi
+            echo "$name $arch: UUID $uuid matches the bundle"
+          done < symbols/SYMBOLS.txt
+          SAFE_REF="${GITHUB_REF_NAME//[^A-Za-z0-9._-]/_}"
+          tar -cJf "AetherSDR-${SAFE_REF}-macOS-${{ matrix.label }}-symbols.tar.xz" -C symbols .
+          ls -l AetherSDR-*-symbols.tar.xz
+
       - name: Upload artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: macOS-DMG-${{ matrix.label }}
-          path: AetherSDR-*.dmg
+          path: |
+            AetherSDR-*.dmg
+            AetherSDR-*-symbols.tar.xz
 
       - name: Attach to release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64
         with:
-          files: AetherSDR-*.dmg
+          files: |
+            AetherSDR-*.dmg
+            AetherSDR-*-symbols.tar.xz

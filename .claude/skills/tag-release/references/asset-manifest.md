@@ -38,6 +38,26 @@ out or the workflow changed.
 `streamcontroller-aethersdr.zip` (+ `.asc`), which every release through
 v26.9.2 carried. Their presence on a new release is a `WARN`.
 
+## Debug-symbol archives — outside the fifteen
+
+Each platform build also attaches one `.tar.xz` of debug symbols
+(`docs/debugging-crashes.md`). Users never download them, so they are not part
+of the set above:
+
+| asset | produced by | contents |
+|---|---|---|
+| `AetherSDR-vX.Y.Z-x86_64-symbols.tar.xz` | AppImage (x86_64) | `.build-id/` debug files + `SYMBOLS.txt` |
+| `AetherSDR-vX.Y.Z-aarch64-symbols.tar.xz` | AppImage (aarch64) | same |
+| `AetherSDR-vX.Y.Z-macOS-apple-silicon-symbols.tar.xz` | macOS DMG (apple-silicon) | `.dSYM` bundles + `SYMBOLS.txt` |
+| `AetherSDR-vX.Y.Z-macOS-intel-symbols.tar.xz` | macOS DMG (intel) | same |
+| `AetherSDR-vX.Y.Z-Windows-x64-symbols.tar.xz` | Windows Installer | AetherSDR, helper and Qt PDBs |
+
+They are neither GPG-signed nor in `SHA256SUMS.txt`. `.tar.xz` keeps them out
+of the signing job's `*.AppImage`/`*.exe`/`*.zip` download patterns, so
+`SHA256SUMS.txt` stays at five lines. `check_release_assets.py` reports them
+as a separate check: missing ones are a `WARN`, because that build's crashes
+cannot be symbolized; the release itself is unaffected.
+
 ## Signature timing
 
 The four CI-built binaries (rows 1, 3, 7, 9) are attached by their build
