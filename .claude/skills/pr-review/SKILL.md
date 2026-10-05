@@ -488,9 +488,13 @@ test, grep again for that target or variable name. A file compiled into
 `aethercore` reaches every test that links it, so no grep finds them all;
 pick the ones that exercise the touched code. `-R` matches the
 `add_test(NAME ...)` name, which is usually the target name but not always
-(`settings_browser_dialog_test` registers as `settings_browser_dialog`);
-`--no-tests=error` turns a filter that matched nothing into a failure instead
-of a silent pass. Leave out `AetherSDR` only when you will not drive the app.
+(`settings_browser_dialog_test` registers as `settings_browser_dialog`), and
+one binary can be registered several times under different arguments or
+environment (`deepfist_cw_model_test` is registered five times). Take the
+names from `grep -n 'COMMAND <target>' tests/tests.cmake` for every target
+you build. `--no-tests=error` turns a filter that matched nothing into a
+failure instead of a silent pass, but it cannot see a registration the filter
+left out. Leave out `AetherSDR` only when you will not drive the app.
 The default target builds every test executable — several hundred, most
 linking a large slice of the app and each carrying its own debug info — which
 costs tens of gigabytes and most of the build time for binaries the review
