@@ -20,6 +20,7 @@
 #include <QJsonObject>
 #include <QList>
 #include <QMap>
+#include <QPair>
 #include <QSet>
 #include <QString>
 #include <QVector>
@@ -264,6 +265,7 @@ private:
     void onRadioTransmitConfirmed(bool transmitting);
     void broadcastActualTxState(bool transmitting);
     void handleTuneRequest(TciClient* client, const TciProtocol::TuneRequest& request);
+    void scheduleTuneBroadcast();
     void broadcastTuneState();
     void stopTciOwnedTune();
     void teardownTciRoute();
@@ -483,6 +485,8 @@ private:
     bool m_lastTuneSent { false };   // tune state as last broadcast (#3327)
     QPointer<TciClient> m_tuneClient;  // the TCI client whose request started the tune
     int m_tuneClientTrx { 0 };
+    bool m_tuneBroadcastQueued { false };
+    QList<QPair<QPointer<TciClient>, int>> m_tuneRequesters;  // owed an answer
     float             m_cachedSLevel[8]{-130,-130,-130,-130,-130,-130,-130,-130};
     float             m_cachedFwdPower{0};
     float             m_cachedSwr{1.0f};

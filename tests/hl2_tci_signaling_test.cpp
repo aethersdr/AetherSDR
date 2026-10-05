@@ -302,7 +302,10 @@ struct TuneWire {
     void clear() { broadcasts.clear(); toClient.clear(); }
 };
 
-static void testLocalTuneIsBroadcastBeforeTheCarrier()
+// tune: follows the trx: edge of the carrier the same press keyed. An AH-4
+// type controller that sees TUNE with no carrier reported asserts START into
+// a carrier that is already up, and the AH-4 then acknowledges without tuning.
+static void testLocalTuneIsBroadcastAfterTheCarrier()
 {
     TuneWire w;
     w.model.transmitModel().startTune();
@@ -311,7 +314,7 @@ static void testLocalTuneIsBroadcastBeforeTheCarrier()
     const int trxOn = w.broadcasts.indexOf(QStringLiteral("trx:0,true;"));
     check(tuneOn >= 0, "an operator TUNE press is broadcast as tune:0,true");
     check(trxOn >= 0, "fixture: the tune carrier is broadcast as trx:0,true");
-    check(tuneOn >= 0 && tuneOn < trxOn, "tune:0,true goes out before trx:0,true");
+    check(tuneOn >= 0 && trxOn < tuneOn, "tune:0,true goes out after trx:0,true");
     check(w.broadcasts.count(QStringLiteral("tune:0,true;")) == 1,
           "one tune press is one tune:true edge");
     check(Hl2TciSignalingTest::initBurst(*w.server).contains(QStringLiteral("tune:0,true;")),
@@ -323,7 +326,7 @@ static void testLocalTuneIsBroadcastBeforeTheCarrier()
     const int tuneOff = w.broadcasts.indexOf(QStringLiteral("tune:0,false;"));
     const int trxOff = w.broadcasts.indexOf(QStringLiteral("trx:0,false;"));
     check(tuneOff >= 0, "releasing TUNE is broadcast as tune:0,false");
-    check(tuneOff >= 0 && tuneOff < trxOff, "tune:0,false goes out before trx:0,false");
+    check(tuneOff >= 0 && trxOff >= 0 && trxOff < tuneOff, "tune:0,false goes out after trx:0,false");
     check(Hl2TciSignalingTest::initBurst(*w.server).contains(QStringLiteral("tune:0,false;")),
           "the init burst reports an idle tune");
 }
@@ -344,6 +347,7 @@ static void testRadioReportedTuneIsBroadcast()
     TransmitDelta on;
     on.tune = true;
     model.transmitModel().applyChanges(on);
+    TuneWire::settle();
     check(broadcasts.filter(QStringLiteral("trx:")).isEmpty(),
           "fixture: a status-only tune carries no trx: edge");
     check(broadcasts.filter(QStringLiteral("tune:")) == QStringList{QStringLiteral("tune:0,true;")},
@@ -351,8 +355,34 @@ static void testRadioReportedTuneIsBroadcast()
     TransmitDelta off;
     off.tune = false;
     model.transmitModel().applyChanges(off);
+    TuneWire::settle();
     check(broadcasts.filter(QStringLiteral("tune:")).value(1) == QStringLiteral("tune:0,false;"),
           "a radio-reported tune release is broadcast as tune:0,false");
+}
+
+// The controller's carrier-first sequence (HB9DUT, documented for Thetis):
+// it sees the carrier before TUNE, stops the tune, asserts START itself and
+// restarts it over TCI. Each step must be honoured and confirmed.
+static void testCarrierFirstControllerRestartsTheTune()
+{
+    TuneWire w;
+    w.model.transmitModel().startTune();
+    TuneWire::settle();
+    check(w.toClient.indexOf(QStringLiteral("trx:0,true;"))
+              < w.toClient.indexOf(QStringLiteral("tune:0,true;")),
+          "the controller learns of the carrier before the tune");
+    w.clear();
+    w.send(QStringLiteral("tune:0,false;"));
+    check(!w.model.transmitModel().isTuning()
+              && w.toClient.contains(QStringLiteral("trx:0,false;"))
+              && w.toClient.contains(QStringLiteral("tune:0,false;")),
+          "the controller's stop ends the carrier and is confirmed");
+    w.clear();
+    w.send(QStringLiteral("tune:0,true;"));
+    check(w.model.transmitModel().isTuning()
+              && w.toClient.contains(QStringLiteral("tune:0,true;")),
+          "the controller's restart keys the tune and is confirmed");
+    w.send(QStringLiteral("tune:0,false;"));
 }
 
 // A TCI-started tune has no TxCoordinator producer: nothing but this server
@@ -905,9 +935,10 @@ int main(int argc, char** argv)
     AetherSDR::testTciSeesHostModulation();
     AetherSDR::testSeamBackendCannotWedgeOnVfoB();
     AetherSDR::testSeamBackendPromoteAlwaysAnswers();
-    AetherSDR::testLocalTuneIsBroadcastBeforeTheCarrier();
+    AetherSDR::testLocalTuneIsBroadcastAfterTheCarrier();
     AetherSDR::testTciTuneRequestIsConfirmed();
     AetherSDR::testTciTuneDiesWithItsClient();
+    AetherSDR::testCarrierFirstControllerRestartsTheTune();
     AetherSDR::testRadioReportedTuneIsBroadcast();
 #endif
     AetherSDR::testHostModulatedTxAudio();

@@ -274,7 +274,7 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         // a TCI client, or the radio's own status (#3327).
         m_lastTuneSent = m_model->transmitModel().isTuning();
         connect(&m_model->transmitModel(), &TransmitModel::tuneChanged,
-                this, &TciServer::broadcastTuneState);
+                this, &TciServer::scheduleTuneBroadcast);
     }
 
     // Capture DAX RX stream creation responses so we can register them
@@ -3344,33 +3344,28 @@ void TciServer::handleTuneRequest(TciClient* client, const TciProtocol::TuneRequ
         if (!m_model) {
             return;
         }
-        const bool live = client && client->live();
         // Never key for a client that has gone away; a stop always applies.
-        if (request.tune && !live) {
+        if (request.tune && !(client && client->live())) {
             return;
         }
-        const bool before = m_lastTuneSent;
+        TransmitModel& tx = m_model->transmitModel();
         if (request.tune) {
-            // Owned before the call, so the edge it broadcasts carries the
-            // requester's trx; kept only if this request started the tune.
-            if (!before) {
+            // Owned before the call, so the edge carries the requester's trx;
+            // kept only if this request started the tune.
+            const bool joining = tx.isTuning();
+            if (!joining) {
                 m_tuneClient = client;
                 m_tuneClientTrx = request.trx;
             }
-            m_model->transmitModel().startTune(TransmitModel::PttSource::Dax);
-            if (!m_lastTuneSent) {
+            tx.startTune(TransmitModel::PttSource::Dax);
+            if (!joining && !tx.isTuning()) {
                 m_tuneClient.clear();
             }
         } else {
-            m_model->transmitModel().stopTune();
+            tx.stopTune();
         }
-        // A refused start, or a stop with nothing running, broadcasts nothing.
-        // The requester still gets the state: a client that repeats its stop
-        // until confirmed would otherwise never hear one.
-        if (m_lastTuneSent == before && live) {
-            replyText(client, QStringLiteral("tune:%1,%2;")
-                                  .arg(request.trx).arg(m_lastTuneSent ? "true" : "false"));
-        }
+        m_tuneRequesters.append({client, request.trx});
+        scheduleTuneBroadcast();
     }, Qt::QueuedConnection);
 }
 
@@ -3387,26 +3382,47 @@ void TciServer::stopTciOwnedTune()
     }
 }
 
-// TransmitModel emits tuneChanged before it dispatches the carrier, so this
-// edge precedes the trx: edge it causes: a TCI tuner controller (ICOM AH-4
-// type) does not tune once it sees the carrier first.
+// One event-loop turn late, so tune: follows the trx: edge the same command
+// produced. A TCI tuner controller (ICOM AH-4 type) must learn the carrier is
+// already up: the AH-4 does not tune when its START comes after the carrier,
+// and over a network an SDR-started tune always does.
+void TciServer::scheduleTuneBroadcast()
+{
+    if (m_tuneBroadcastQueued) {
+        return;
+    }
+    m_tuneBroadcastQueued = true;
+    QMetaObject::invokeMethod(this, &TciServer::broadcastTuneState, Qt::QueuedConnection);
+}
+
 void TciServer::broadcastTuneState()
 {
+    m_tuneBroadcastQueued = false;
+    const auto requesters = std::exchange(m_tuneRequesters, {});
     if (!m_model) {
         return;
     }
     const bool tuning = m_model->transmitModel().isTuning();
-    if (tuning == m_lastTuneSent) {
+    if (tuning != m_lastTuneSent) {
+        m_lastTuneSent = tuning;
+        const int trx = m_tuneClient ? m_tuneClientTrx
+            : m_tciPttClient ? m_tciPttTrx
+            : m_trxMap.trxForSlice(m_model, m_model->txSlice());
+        if (!tuning) {
+            m_tuneClient.clear();
+        }
+        // Reaches every requester too, so none is answered twice.
+        broadcast(QStringLiteral("tune:%1,%2;").arg(trx).arg(tuning ? "true" : "false"));
         return;
     }
-    m_lastTuneSent = tuning;
-    const int trx = m_tuneClient ? m_tuneClientTrx
-        : m_tciPttClient ? m_tciPttTrx
-        : m_trxMap.trxForSlice(m_model, m_model->txSlice());
-    if (!tuning) {
-        m_tuneClient.clear();
+    // Nothing moved: a refused start, or a stop with no tune running. The
+    // requester still gets the state, or a client that repeats its stop until
+    // confirmed never hears one.
+    for (const auto& [client, trx] : requesters) {
+        if (client && client->live()) {
+            replyText(client, QStringLiteral("tune:%1,%2;").arg(trx).arg(tuning ? "true" : "false"));
+        }
     }
-    broadcast(QStringLiteral("tune:%1,%2;").arg(trx).arg(tuning ? "true" : "false"));
 }
 
 void TciServer::onRadioTransmittingChanged(bool transmitting)
