@@ -207,8 +207,17 @@ set_tests_properties(cw_decoder_pcm_lifecycle_test PROPERTIES TIMEOUT 60)
 # Socket/device-free production RX queue, processing-domain and output checks.
 add_executable(audio_engine_rates_test tests/audio_engine_rates_test.cpp)
 target_link_libraries(audio_engine_rates_test PRIVATE aethercore Qt6::Core)
-add_test(NAME audio_engine_rates_test COMMAND audio_engine_rates_test)
-set_tests_properties(audio_engine_rates_test PROPERTIES TIMEOUT 120)
+# Each invocation retains a bounded scenario instead of accumulating every
+# DSP initialization and effect comparison under one sanitizer timeout.
+foreach(_case IN ITEMS rateMatrix bandwidthAndMono negotiatedSpeakerOutput
+        negotiationOpenFailure negotiationLifetimeAndCoalescing auxiliaryAcrossNegotiation
+        transitionsAndRejection queueBudgetsAndDeviceTransitions effects-bypass effects-EQ
+        effects-NR2 effects-RN2 effects-NR4 effects-DFNR effects-MNR kiwiDeviceRateMatrix
+        processingStateReset legacyReplacementAndKiwiReset fixedProcessingDomains)
+    add_test(NAME audio_engine_rates_${_case}_test
+        COMMAND audio_engine_rates_test --case=${_case})
+    set_tests_properties(audio_engine_rates_${_case}_test PROPERTIES TIMEOUT 120)
+endforeach()
 
 # The pre-NR fan-out Copy Assist's "unprocessed audio" tap subscribes to
 # (RFC #4861). Same socket-free engine seam as audio_engine_rates_test; pins
@@ -1048,8 +1057,16 @@ set_tests_properties(nnr_filter_test PROPERTIES TIMEOUT 300)
 # two everywhere through stand-in C APIs).
 add_executable(nr_stereo_independence_test tests/nr_stereo_independence_test.cpp)
 target_link_libraries(nr_stereo_independence_test PRIVATE aethercore Qt6::Core)
-add_test(NAME nr_stereo_independence_test COMMAND nr_stereo_independence_test)
-set_tests_properties(nr_stereo_independence_test PROPERTIES TIMEOUT 300)
+# Every filter/rate still runs all four stereo checks. Isolate their compute
+# budgets so a slow neural filter cannot prevent later methods from running.
+foreach(_method IN ITEMS nr2 nr4 nnr dfnr bnr)
+    foreach(_rate IN ITEMS 24000 48000)
+        add_test(NAME nr_stereo_independence_${_method}_${_rate}_test
+            COMMAND nr_stereo_independence_test --method=${_method} --rate=${_rate})
+        set_tests_properties(nr_stereo_independence_${_method}_${_rate}_test
+            PROPERTIES TIMEOUT 300 SKIP_RETURN_CODE 77)
+    endforeach()
+endforeach()
 
 add_executable(rtl_receiver_registry_test tests/rtl_receiver_registry_test.cpp)
 target_link_libraries(rtl_receiver_registry_test PRIVATE aethercore Qt6::Core)
@@ -2488,9 +2505,52 @@ target_include_directories(weather_radar_loading_test PRIVATE src)
 target_link_libraries(weather_radar_loading_test PRIVATE aethercore qgeoview
     Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network Qt6::Concurrent Qt6::Test
     Qt6::OpenGL Qt6::OpenGLWidgets)
-add_test(NAME weather_radar_loading_test COMMAND weather_radar_loading_test)
-set_tests_properties(weather_radar_loading_test PROPERTIES
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
+# QtTest runs every data row of the selected method. Give each independent
+# asynchronous loading scenario its own ceiling; no case is omitted.
+foreach(_case IN ITEMS
+        coverageTooltipClearsWhenLeavingOrDisabling
+        playbackCoverageRemainsPinnedDuringRebuffer
+        globeCoverageMovesWithRenderedSurface
+        globeAdmitsNativeRegionalLiveTiles
+        globePlaybackOverviewKeepsFullAtlasResolution
+        regionalCompositeKeepsIndependentCoverage
+        providerIdentitySurvivesPngCacheAndTexturePreparation
+        legendsFollowDisplayedSourcesAndCoverageNeedsNoNetwork
+        legendPositionTracksMapAndSourceSize
+        compositeObservationNeverUsesFutureOrStaleWeather
+        changingRegionsRetiresPreviousProduct
+        noRegionsReturnsTransparentPixelsWithoutNetwork
+        cityLightsGlobeDrawsAboveDetailAndBelowRadar
+        cityLightsFlatWrapAndOpacity
+        partialHistoryRetriesMissingOriginal
+        completedLiveTilesSurviveSmallPan
+        liveTilesRetryWithoutCameraMovement
+        liveTilesRetryDuringCameraMovement
+        completedCoverageDoesNotWaitForOldFailures
+        liveTileFailureReportsOnceAndRecovers
+        liveRadarAtCloseZoom
+        catalogRetiresExpiredFramesWithoutANewObservation
+        emptyExportRequiresAvailableRasters
+        flatControllerLoopRetainsEveryPaint
+        globeControllerLoopRetainsEveryPaint
+        conciseLoadingLifecycle
+        initialFailureRetriesWithoutLosingIntent
+        speedChangesRetainFramesAndFinalHold
+        globeRadarAboveDetailGeometry
+        failedLiveAtlasRetainsPixels
+        globePlaybackResidency
+        projectionAndRollingHistory
+        geometryAndPriority
+        queuedExportRetainsItsGeometryAfterCacheEviction
+        retainedTransparentTiles
+        overlayLoadingMessagesCoexist
+        progressiveZoomAndFailures
+)
+    add_test(NAME weather_radar_loading_${_case}_test
+        COMMAND weather_radar_loading_test ${_case})
+    set_tests_properties(weather_radar_loading_${_case}_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
+endforeach()
 
 # Opt-in: the native GPU radar upload and shader alpha-filtering contract. It
 # needs a real OpenGL 3.2 context, which no CI lane has. Enable on a machine
@@ -4692,9 +4752,13 @@ target_include_directories(peripheral_auth_dialog_test PRIVATE tests/fakes src t
 target_link_libraries(peripheral_auth_dialog_test PRIVATE
     aetherdesktop_support Qt6::Widgets Qt6::Test)
 set_target_properties(peripheral_auth_dialog_test PROPERTIES AUTOMOC ON)
-add_test(NAME peripheral_auth_dialog_test COMMAND peripheral_auth_dialog_test)
-set_tests_properties(peripheral_auth_dialog_test PROPERTIES
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
+foreach(_case IN ITEMS automatic removal auth-read manual-recovery external-ag
+        discovery availability discovered-recovery interaction)
+    add_test(NAME peripheral_auth_dialog_${_case}_test
+        COMMAND peripheral_auth_dialog_test --case=${_case})
+    set_tests_properties(peripheral_auth_dialog_${_case}_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
+endforeach()
 
 # Production Keychain adapter with an in-memory job double; no OS vault or socket.
 add_executable(peripheral_auth_keychain_test

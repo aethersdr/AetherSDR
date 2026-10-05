@@ -25,6 +25,7 @@
 #include <QPointer>
 #include <QByteArray>
 #include <QComboBox>
+#include <QElapsedTimer>
 #include <QLabel>
 #include <QScrollArea>
 #include <QScrollBar>
@@ -40,6 +41,7 @@
 #include <QTimer>
 #include <QTreeWidget>
 #include <cstdio>
+#include <cstring>
 #include <utility>
 #include <memory>
 
@@ -1872,61 +1874,8 @@ bool checkStatusPresentation()
     return sawDisabled;
 }
 
-int main(int argc, char** argv)
+int checkInteraction(QApplication& app)
 {
-    TestSettingsProfile profile(QStringLiteral("peripheral-auth-dialog-test"));
-    if (!profile.isValid()) {
-        return 1;
-    }
-    QApplication app(argc, argv);
-    AppSettings::instance().load();
-    // Remove asks first; the lifecycle checks below confirm it. The confirmation
-    // itself is covered by checkConnectAutomaticallyToggle.
-    RadioSetupDialog::setRemovalConfirmationHookForTest(
-        [](const QString&, const QString&) { return true; });
-    if (!checkRemovalWithUnknownOwner() || !checkRemovalKeepsNewerEndpoint()
-        || !checkRemovalOfUnconfiguredSharedRow() || !checkConnectAutomaticallyToggle() || !checkConnectAutomaticallyGates()
-        || !checkStatusPresentation()) {
-        std::fprintf(stderr, "Connect automatically regressed\n");
-        return 1;
-    }
-    if (!checkSharedCredentialRemoval() || !checkRemovalWithFailedVaultRead() || !checkNeverConfiguredRemovalKeepsDiscovery() || !checkRemovalSignalAndPendingNotice() || !checkRemovalTimeout() || !checkSharedModelRemovalIsolation()
-        || !checkPendingRemoval() || !checkRemovalOwnerTeardown()
-        || !checkShackSwitchRetryDuringRemoval() || !checkOneShotShackSwitchDuringRemoval()
-        || !checkRemovalIgnoresClearedAddress() || !checkRemovalBesideLiveSharedDevice()
-        || !checkRecoveryShowsRefusingEndpoint()) {
-        std::fprintf(stderr, "Pending removal lifecycle regressed\n");
-        return 1;
-    }
-    if (!checkRemovalDuringAuthRead()) {
-        std::fprintf(stderr, "Removal during a pending auth read created a false failure\n");
-        return 1;
-    }
-    if (!checkManualRecoveryProvenance()) {
-        std::fprintf(stderr, "Manual recovery was mistaken for radio discovery\n");
-        return 1;
-    }
-    if (!checkAgCloseAfterExternalConfiguration()) {
-        std::fprintf(stderr, "AG external configuration/close regression\n");
-        return 1;
-    }
-    if (!checkRemovedDiscovery() || !checkExternalAgConfiguration()) {
-        std::fprintf(stderr, "Removed discovery or external AG configuration regressed\n");
-        return 1;
-    }
-    if (!checkUnavailableKeychainRemoval() || !checkFieldDescriptions()) {
-        std::fprintf(stderr, "Keychain-unavailable removal or field descriptions regressed\n");
-        return 1;
-    }
-    for (bool savedEmptyList : {false, true}) {
-        for (bool blockedBeforeOpening : {false, true}) {
-            if (!checkDiscoveredAuthRecovery(savedEmptyList, blockedBeforeOpening)) {
-                std::fprintf(stderr, "Blocked discovered devices lacked recovery controls (saved=%d, before=%d)\n",
-                             savedEmptyList, blockedBeforeOpening);
-                return 1;
-            }
-        }
-    }
     AppSettings::instance().remove(QStringLiteral("Peripherals"));
     PeripheralSettings::setDeviceInt(QStringLiteral("Vkamp"), QStringLiteral("Variant"), 1);
     PeripheralSettings::setDeviceInt(QStringLiteral("Lp100a"), QStringLiteral("RangeHighW"), 3000);
@@ -2447,6 +2396,167 @@ int main(int argc, char** argv)
     if (qEnvironmentVariableIsSet("AETHER_PERIPHERAL_SCREENSHOT")) {
         QCoreApplication::processEvents();
         dialog.grab().save(qEnvironmentVariable("AETHER_PERIPHERAL_SCREENSHOT"));
+    }
+    return 0;
+}
+
+struct Case {
+    const char* name;
+};
+
+void printUsage(const char* program)
+{
+    std::fprintf(stderr,
+        "usage: %s [--case=automatic|removal|auth-read|manual-recovery|external-ag|"
+        "discovery|availability|discovered-recovery|interaction]\n", program);
+}
+
+const char* parseCase(int argc, char** argv, bool& valid)
+{
+    valid = true;
+    if (argc == 1) {
+        return nullptr;
+    }
+    if (argc != 2 || std::strncmp(argv[1], "--case=", 7) != 0) {
+        valid = false;
+        return nullptr;
+    }
+    const char* name = argv[1] + 7;
+    for (const Case candidate : {Case{"automatic"}, Case{"removal"}, Case{"auth-read"},
+                                 Case{"manual-recovery"}, Case{"external-ag"},
+                                 Case{"discovery"}, Case{"availability"},
+                                 Case{"discovered-recovery"}, Case{"interaction"}}) {
+        if (std::strcmp(name, candidate.name) == 0) {
+            return candidate.name;
+        }
+    }
+    valid = false;
+    return nullptr;
+}
+
+template <class Function>
+int runStage(const char* name, Function function)
+{
+    QElapsedTimer elapsed;
+    elapsed.start();
+    std::fprintf(stderr, "STAGE start %s\n", name);
+    std::fflush(stderr);
+    const int result = function();
+    std::fprintf(stderr, "STAGE finish %s elapsed_ms=%lld result=%d\n", name,
+                 static_cast<long long>(elapsed.elapsed()), result);
+    std::fflush(stderr);
+    return result;
+}
+
+int main(int argc, char** argv)
+{
+    bool validCase = false;
+    const char* const selectedCase = parseCase(argc, argv, validCase);
+    if (!validCase) {
+        printUsage(argv[0]);
+        return 2;
+    }
+    TestSettingsProfile profile(QStringLiteral("peripheral-auth-dialog-test"));
+    if (!profile.isValid()) {
+        return 1;
+    }
+    QApplication app(argc, argv);
+    AppSettings::instance().load();
+    // Remove asks first; the lifecycle checks below confirm it. The confirmation
+    // itself is covered by checkConnectAutomaticallyToggle.
+    RadioSetupDialog::setRemovalConfirmationHookForTest(
+        [](const QString&, const QString&) { return true; });
+    const auto selected = [selectedCase](const char* name) {
+        return !selectedCase || std::strcmp(selectedCase, name) == 0;
+    };
+    if (selected("automatic") && runStage("automatic", [] {
+            if (!checkRemovalWithUnknownOwner() || !checkRemovalKeepsNewerEndpoint()
+                || !checkRemovalOfUnconfiguredSharedRow() || !checkConnectAutomaticallyToggle()
+                || !checkConnectAutomaticallyGates() || !checkStatusPresentation()) {
+                std::fprintf(stderr, "Connect automatically regressed\n");
+                return 1;
+            }
+            return 0;
+        }) != 0) {
+        return 1;
+    }
+    if (selected("removal") && runStage("removal", [] {
+            if (!checkSharedCredentialRemoval() || !checkRemovalWithFailedVaultRead()
+                || !checkNeverConfiguredRemovalKeepsDiscovery() || !checkRemovalSignalAndPendingNotice()
+                || !checkRemovalTimeout() || !checkSharedModelRemovalIsolation()
+                || !checkPendingRemoval() || !checkRemovalOwnerTeardown()
+                || !checkShackSwitchRetryDuringRemoval() || !checkOneShotShackSwitchDuringRemoval()
+                || !checkRemovalIgnoresClearedAddress() || !checkRemovalBesideLiveSharedDevice()
+                || !checkRecoveryShowsRefusingEndpoint()) {
+                std::fprintf(stderr, "Pending removal lifecycle regressed\n");
+                return 1;
+            }
+            return 0;
+        }) != 0) {
+        return 1;
+    }
+    if (selected("auth-read") && runStage("auth-read", [] {
+            if (!checkRemovalDuringAuthRead()) {
+                std::fprintf(stderr, "Removal during a pending auth read created a false failure\n");
+                return 1;
+            }
+            return 0;
+        }) != 0) {
+        return 1;
+    }
+    if (selected("manual-recovery") && runStage("manual-recovery", [] {
+            if (!checkManualRecoveryProvenance()) {
+                std::fprintf(stderr, "Manual recovery was mistaken for radio discovery\n");
+                return 1;
+            }
+            return 0;
+        }) != 0) {
+        return 1;
+    }
+    if (selected("external-ag") && runStage("external-ag", [] {
+            if (!checkAgCloseAfterExternalConfiguration()) {
+                std::fprintf(stderr, "AG external configuration/close regression\n");
+                return 1;
+            }
+            return 0;
+        }) != 0) {
+        return 1;
+    }
+    if (selected("discovery") && runStage("discovery", [] {
+            if (!checkRemovedDiscovery() || !checkExternalAgConfiguration()) {
+                std::fprintf(stderr, "Removed discovery or external AG configuration regressed\n");
+                return 1;
+            }
+            return 0;
+        }) != 0) {
+        return 1;
+    }
+    if (selected("availability") && runStage("availability", [] {
+            if (!checkUnavailableKeychainRemoval() || !checkFieldDescriptions()) {
+                std::fprintf(stderr, "Keychain-unavailable removal or field descriptions regressed\n");
+                return 1;
+            }
+            return 0;
+        }) != 0) {
+        return 1;
+    }
+    if (selected("discovered-recovery") && runStage("discovered-recovery", [] {
+            for (bool savedEmptyList : {false, true}) {
+                for (bool blockedBeforeOpening : {false, true}) {
+                    if (!checkDiscoveredAuthRecovery(savedEmptyList, blockedBeforeOpening)) {
+                        std::fprintf(stderr,
+                            "Blocked discovered devices lacked recovery controls (saved=%d, before=%d)\n",
+                            savedEmptyList, blockedBeforeOpening);
+                        return 1;
+                    }
+                }
+            }
+            return 0;
+        }) != 0) {
+        return 1;
+    }
+    if (selected("interaction") && runStage("interaction", [&app] { return checkInteraction(app); }) != 0) {
+        return 1;
     }
     return 0;
 }
