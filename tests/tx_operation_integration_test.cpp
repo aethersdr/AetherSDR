@@ -34,6 +34,7 @@ using namespace AetherSDR;
 namespace AetherSDR {
 class TxOperationIntegrationTestAccess {
 public:
+    static unsigned activeTxActivities(const RadioModel& radio) { return radio.activeTxActivities(); }
     static void flexPrologue(FlexBackend& backend, const QString& version)
     {
         RadioConnection* connection = backend.connection();
@@ -2175,6 +2176,32 @@ void protocolCwxLifetimes()
 
 void producerTuneAndAtu()
 {
+    {
+        // A TCI client, a MIDI toggle or the SWR sweep stops TUNE with no
+        // route. The backend's one tune latch drops every producer's carrier,
+        // so the producer's contribution must end with it; otherwise the next
+        // TUNE from anywhere but that producer is refused without a word.
+        Fixture f;
+        const TxCoordinator::Request owner = f.radio.registerTxProducer().request();
+        check(f.radio.requestProducerTune(owner, true) && f.commands.contains("tune:on"),
+              "fixture: a producer (the TX applet's path) starts TUNE");
+        f.commands.clear();
+        f.radio.transmitModel().stopTune();
+        check(f.commands.contains("tune:off") && !f.radio.transmitModel().isTuning(),
+              "an unrouted stop ends a producer's TUNE");
+        check((TxOperationIntegrationTestAccess::activeTxActivities(f.radio)
+               & static_cast<unsigned>(TxCoordinator::Activity::Tune)) == 0,
+              "an unrouted stop leaves no TUNE contribution behind");
+        f.commands.clear();
+        f.radio.transmitModel().startTune();
+        check(f.commands.contains("tune:on") && f.radio.transmitModel().isTuning(),
+              "TUNE starts again after another caller stopped a producer's TUNE");
+        f.radio.transmitModel().stopTune();
+        f.commands.clear();
+        f.radio.requestProducerTune(owner, false);
+        check(!f.commands.contains("tune:off"),
+              "the original producer's late release writes nothing");
+    }
     {
         Fixture f;
         const TxCoordinator::Request request = f.radio.registerTxProducer().request();

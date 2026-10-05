@@ -299,6 +299,8 @@ public:
     [[nodiscard]] bool endIntent(const Intent& intent);
     [[nodiscard]] bool hasIntents(const Operation& operation) const;
     [[nodiscard]] unsigned activeActivities(const Operation& operation) const;
+    // Every live contribution to this operation of the given activities.
+    [[nodiscard]] std::vector<Intent> intents(const Operation& operation, unsigned activities) const;
     // Stop-only delivery fence, including when no operation was acquired.
     // It conveys no key-on, ownership, completion or acknowledgment authority.
     [[nodiscard]] Operation cleanupFence() const;

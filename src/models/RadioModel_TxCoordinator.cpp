@@ -4,6 +4,7 @@
 
 #include <QPointer>
 #include <QScopeGuard>
+#include <vector>
 
 namespace AetherSDR {
 
@@ -483,8 +484,14 @@ bool RadioModel::dispatchTuneIntent(bool on, const TxCoordinator::Request* reque
     const TxCoordinator::Operation operation = request ? m_txCoordinator.requestOperation(*request) : m_txOperation;
     const TxCoordinator::Intent intent = request ? m_txCoordinator.requestIntent(*request)
         : m_localTxIntents.value(TxActivity::Tune);
+    // The backend has one tune latch, so an unrouted stop ends every producer's
+    // carrier. Their contributions end with it, or a stale one refuses every
+    // later TUNE start until its own producer stops again. Captured before the
+    // dispatch: a TUNE re-engaged from the stop's own edge is not this stop's.
+    std::vector<TxCoordinator::Intent> latchHolders;
     if (!on && !request) {
         (void)m_txCoordinator.requestIntentEnd(intent);
+        latchHolders = m_txCoordinator.intents(m_txOperation, static_cast<unsigned>(TxActivity::Tune));
     }
     if (on) {
         armInterlockNotification(m_transmitModel.activePttSource());
@@ -511,6 +518,10 @@ bool RadioModel::dispatchTuneIntent(bool on, const TxCoordinator::Request* reque
     }
     if (!on && !releaseQueued) {
         endLocalTxActivity(intent);
+    }
+    for (const TxCoordinator::Intent& holder : latchHolders) {
+        (void)m_txCoordinator.requestIntentEnd(holder);
+        endLocalTxActivity(holder);
     }
     return dispatched;
 }
