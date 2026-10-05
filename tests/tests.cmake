@@ -2506,8 +2506,8 @@ target_link_libraries(weather_radar_loading_test PRIVATE aethercore qgeoview
     Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network Qt6::Concurrent Qt6::Test
     Qt6::OpenGL Qt6::OpenGLWidgets)
 # QtTest runs every data row of the selected method. Give each independent
-# asynchronous loading scenario its own ceiling; no case is omitted.
-foreach(_case IN ITEMS
+# asynchronous loading scenario its own ceiling and verify the method inventory.
+set(_weather_radar_loading_cases
         coverageTooltipClearsWhenLeavingOrDisabling
         playbackCoverageRemainsPinnedDuringRebuffer
         globeCoverageMovesWithRenderedSurface
@@ -2546,6 +2546,14 @@ foreach(_case IN ITEMS
         overlayLoadingMessagesCoexist
         progressiveZoomAndFailures
 )
+add_test(NAME weather_radar_loading_registration_test
+    COMMAND ${CMAKE_COMMAND}
+        "-DTEST_EXECUTABLE=$<TARGET_FILE:weather_radar_loading_test>"
+        "-DEXPECTED_METHODS=${_weather_radar_loading_cases}"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/verify_qttest_registration.cmake")
+set_tests_properties(weather_radar_loading_registration_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 15)
+foreach(_case IN LISTS _weather_radar_loading_cases)
     add_test(NAME weather_radar_loading_${_case}_test
         COMMAND weather_radar_loading_test ${_case})
     set_tests_properties(weather_radar_loading_${_case}_test PROPERTIES
