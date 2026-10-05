@@ -4267,11 +4267,6 @@ void IcomCivBackend::setPanRfGain(const QString&, int gainDb)
                                 level::kRf, percentToLevelRaw(std::clamp(gainDb, 0, 100))));
 }
 
-// Publish the requested step optimistically: a set is answered with a bare FB,
-// never an echo of the new value, so waiting would leave the widget stuck. If
-// the radio refused (the IC-705 has no P.AMP2 and no attenuator above 50 MHz),
-// the write's confirmation read corrects it.
-//
 // THE TWO STAGES ARE INTERLOCKED ON THE RADIO. Engaging ATT drops the preamp,
 // engaging the preamp drops ATT, and ATT off brings the preamp back (measured on
 // an IC-7300MK2). Neither change is reported unsolicited, so without a read of
@@ -4286,6 +4281,10 @@ void IcomCivBackend::queueFrontEndInterlockRead(const std::vector<std::uint8_t>&
     pumpCiv(now);
 }
 
+// Publish the requested step optimistically: a set is answered with a bare FB,
+// never an echo of the new value, so waiting would leave the widget stuck. If
+// the radio refused (the IC-705 has no P.AMP2 and no attenuator above 50 MHz),
+// the write's confirmation read corrects it.
 void IcomCivBackend::setPanPreamp(const QString&, int step)
 {
     // Operator intent is bounded by the model's verified presentation ladder.
