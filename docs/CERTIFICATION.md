@@ -871,6 +871,12 @@ running it:
   the bracket failed and the stage said so. Use a groundwave carrier, or the
   attenuator in front of a strong steady one.
 
+Both squelch stages decline while the operator's Auto SQL is engaged. Auto
+rewrites the slice on every pan frame, and its writes land on one level and hold,
+exactly like a decode in the wrong domain, so a sweep under it would report a
+confident, fabricated defect. The intent lives only in the RX applet, so the bridge
+reads the applet's SQL button and the report says when it could not.
+
 Where Auto SQL is published, the stage also finds the band-noise gate 10 kHz off
 the carrier. Auto picks pan floor + 5…20 dB, so a noise gate more than 20 dB above
 the floor means Auto leaves the noise open.

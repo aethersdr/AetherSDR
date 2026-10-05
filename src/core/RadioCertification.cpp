@@ -581,17 +581,17 @@ QJsonValue msOrNull(int index)
 
 }  // namespace
 
-void RadioCertification::stageControlDomain()
+void RadioCertification::stageControlDomain(const Options& o)
 {
     // A SCALED CONTROL READS BACK WHERE IT WAS WRITTEN, ACROSS ITS WHOLE RANGE.
     //
     // The IC-7300MK2 wrote PROC as NOR/DX/DX+ and decoded the confirmation read
-    // as a percent, so NOR and DX snapped to DX+ (#6171). Its squelch, with no
-    // enable register, read its own "on at 0" write back as Off and stuck there
-    // (#6172). Both backends had round-trip tests that shared the wrong
-    // convention (§1.1). So each published value is written through the
-    // operator's setter and the model is watched until the radio has answered —
-    // and, at the ends of the range, through two periodic polls.
+    // as a percent, so NOR and DX snapped to DX+ (#6171, fixed by #6174). Its
+    // squelch, with no enable register, read its own "on at 0" write back as Off
+    // and stuck there (#6172, fixed by #6175). Both backends had round-trip
+    // tests that shared the wrong convention (§1.1). So each published value is
+    // written through the operator's setter and the model is watched until the
+    // radio has answered — and, at the ends of the range, through two polls.
     //
     // A model that never reads back also holds. This proves no contradicting
     // readback arrived, not that one did; persist's restart read is the
@@ -601,20 +601,34 @@ void RadioCertification::stageControlDomain()
     const RadioCapabilities caps = m_radio->backendCapabilities();
     QStringList problems;
     QJsonObject m;
+    bool interrupted = false;
 
+    // spin() runs the event loop, where a disconnect deletes slices and can
+    // delete the radio model; `alive` is re-asked after every wait.
     auto sweep = [&](const QString& name, int maximum,
+                     const std::function<bool()>& alive,
                      const std::function<void(int)>& write,
                      const std::function<int()>& read) {
         QJsonArray rows;
         QJsonArray failed;
         const std::vector<int> values = certmath::domainProbeValues(maximum);
         for (int value : values) {
+            if (!alive()) {
+                interrupted = true;
+                break;
+            }
             const bool end = value == values.front() || value == values.back();
             write(value);
             std::vector<int> samples;
             for (int t = 0; t < (end ? kBoundaryHoldMs : kControlProbeMs); t += kControlSampleMs) {
                 spin(kControlSampleMs);
+                if (!alive())
+                    break;
                 samples.push_back(read());
+            }
+            if (!alive() || samples.empty()) {
+                interrupted = true;
+                break;
             }
             const certmath::Readback r = certmath::readbackOf(samples, value);
             const int landed = r.departedAt >= 0 ? samples[static_cast<std::size_t>(r.departedAt)]
@@ -647,24 +661,33 @@ void RadioCertification::stageControlDomain()
     };
 
     // ---- speech processor level: written only while PROC is on (Icom 14 0E) ----
-    auto& tx = m_radio->transmitModel();
     if (caps.speechProcessorControl || m_radio->usesFlexCommandPlane()) {
+        auto& tx = m_radio->transmitModel();
         const bool enableWas = tx.speechProcessorEnable();
         const int levelWas = tx.speechProcessorLevel();
+        // Restored on every exit: a run continues into keyed stages, which must
+        // not inherit a force-enabled processor at a probe level.
+        const auto restore = qScopeGuard([&] {
+            if (!m_radio)
+                return;
+            auto& t = m_radio->transmitModel();
+            t.setSpeechProcessorLevel(levelWas);
+            spin(400);
+            if (!enableWas && m_radio)
+                m_radio->transmitModel().setSpeechProcessorEnable(false);
+        });
         if (!enableWas) {
             tx.setSpeechProcessorEnable(true);
             spin(400);
         }
+        const QPointer<RadioModel> radio(m_radio);
         QJsonObject proc = sweep(caps.speechProcessorControl
                                      ? caps.speechProcessorControl->label
                                      : QStringLiteral("PROC"),
-                                 tx.speechProcessorLevelMaximum(),
-                                 [&tx](int v) { tx.setSpeechProcessorLevel(v); },
-                                 [&tx] { return tx.speechProcessorLevel(); });
-        tx.setSpeechProcessorLevel(levelWas);
-        spin(400);
-        if (!enableWas)
-            tx.setSpeechProcessorEnable(false);
+                                 m_radio ? m_radio->transmitModel().speechProcessorLevelMaximum() : 2,
+                                 [radio] { return !radio.isNull(); },
+                                 [radio](int v) { radio->transmitModel().setSpeechProcessorLevel(v); },
+                                 [radio] { return radio->transmitModel().speechProcessorLevel(); });
         proc[QStringLiteral("enabledForSweep")] = !enableWas;
         m[QStringLiteral("speechProcessorLevel")] = proc;
     } else {
@@ -675,21 +698,50 @@ void RadioCertification::stageControlDomain()
     // ---- squelch: the sample carries the enable, -1 for Off ----
     //
     // A level-only comparison reads "on at 0" back as 0 and certifies the
-    // defect. Auto SQL must be off: its loop would write over these probes.
-    if (SliceModel* slice = m_radio->slice(0)) {
+    // defect. Auto SQL writes the slice on every pan frame, so with it engaged
+    // a "moved to N" here would be Auto, not a decode: decline instead.
+    const std::optional<bool> autoBefore = o.autoSquelchEngaged ? o.autoSquelchEngaged()
+                                                                : std::nullopt;
+    const QPointer<SliceModel> slice(m_radio ? m_radio->slice(0) : nullptr);
+    if (autoBefore.value_or(false)) {
+        m[QStringLiteral("squelch")] = QStringLiteral(
+            "not exercised: Auto SQL is engaged and would overwrite every probe");
+    } else if (slice) {
         const bool onWas = slice->squelchOn();
         const int levelWas = slice->squelchLevel();
         const int manualWas = slice->manualSquelchLevel();
+        const auto restore = qScopeGuard([&] {
+            if (!slice)
+                return;
+            slice->setSquelch(onWas, levelWas);
+            slice->setManualSquelchLevel(manualWas);
+            spin(600);
+        });
         QJsonObject sql = sweep(QStringLiteral("squelch"), 100,
+                                [slice] { return !slice.isNull(); },
                                 [slice](int v) { slice->setManualSquelch(true, v); },
                                 [slice] { return slice->squelchOn() ? slice->squelchLevel() : -1; });
-        slice->setSquelch(onWas, levelWas);
-        slice->setManualSquelchLevel(manualWas);
-        spin(600);
         sql[QStringLiteral("sampleEncoding")] = QStringLiteral("level while on, -1 while off");
+        const std::optional<bool> autoAfter = o.autoSquelchEngaged ? o.autoSquelchEngaged()
+                                                                   : std::nullopt;
+        sql[QStringLiteral("autoSquelchEngaged")] =
+            autoBefore ? QJsonValue(*autoBefore) : QJsonValue();
+        if (autoAfter.value_or(false)) {
+            // Engaged during the sweep: its departures may be Auto's writes.
+            problems << QStringLiteral("INCONCLUSIVE — Auto SQL was engaged during the "
+                                       "squelch sweep, so its departures may be Auto's");
+        } else if (!autoBefore) {
+            sql[QStringLiteral("autoSquelchNote")] = QStringLiteral(
+                "Auto SQL state not observable from this run; a departure that lands "
+                "on the same level for every probe may be Auto rather than a decode");
+        }
         m[QStringLiteral("squelch")] = sql;
     }
 
+    if (interrupted) {
+        problems.prepend(QStringLiteral("INCONCLUSIVE — the radio, slice or link went "
+                                        "away mid-sweep"));
+    }
     record(QStringLiteral("control-domain"),
            QStringLiteral("A scaled control reads back where it was written"),
            m,
@@ -709,10 +761,10 @@ void RadioCertification::stageFrontEndInterlock()
     //
     // The IC-7300MK2 links its preamp and attenuator: ATT on drops the preamp,
     // preamp on drops ATT, ATT off restores the preamp — and reports none of
-    // it. The other button learned it at the next 3 s poll (#6178). So each
-    // transition below times when the control NOT written reached its final
-    // value. One transition can be lucky with the poll phase, so there are
-    // several (CERTIFICATION.md 1.42).
+    // it. The other button learned it at the next 3 s poll (#6178, fixed by
+    // #6183). So each transition below times when the control NOT written
+    // reached its final value. One transition can be lucky with the poll
+    // phase, so there are several (CERTIFICATION.md 1.42).
     if (!m_radio)
         return;
     const QString panId = m_radio->panId();
@@ -810,7 +862,11 @@ void RadioCertification::stageFrontEndInterlock()
     spin(1500);
     const bool restored = watched && watched->preampStep() == preampWas
                        && watched->attenuatorStep() == attWas;
-    if (!restored) {
+    if (!watched) {
+        // A dropped link, not a refused restore: say which.
+        problems.prepend(QStringLiteral("INCONCLUSIVE — the panadapter went away mid-stage; "
+                                        "the front end was not restored"));
+    } else if (!restored) {
         problems << QStringLiteral("could not restore the front end to preamp %1 / "
                                    "attenuator %2").arg(preampWas).arg(attWas);
     }
@@ -841,15 +897,18 @@ void RadioCertification::stageSquelchScale(const Options& o)
     // The line is the published SquelchLevelScale on the pan's dBm axis. The
     // Icom backend published Flex's -160 + level while the IC-7300MK2 gates at
     // about -195 + 1.5·level on its pan, so the line missed by up to 10 dB at
-    // the levels squelch is used at (#6180). Nothing in the client can see that:
-    // the line and Auto SQL both read the same record. So the gate is found by
-    // its effect — the audio stops — against a steady carrier whose pan peak is
-    // read off the same bins the line is drawn on (CERTIFICATION.md 1.43).
+    // the levels squelch is used at (#6180, fixed by #6184). Nothing in the
+    // client can see that: the line and Auto SQL both read the same record. So
+    // the gate is found by its effect — the audio stops — against a steady
+    // carrier whose pan peak is read off the bins the line is drawn on
+    // (CERTIFICATION.md 1.43).
     if (!m_radio)
         return;
-    SliceModel* slice = m_radio->slice(0);
+    // Guarded: every wait below runs the event loop, where a disconnect deletes
+    // slices and pans.
+    const QPointer<SliceModel> slice(m_radio->slice(0));
     const QString panId = m_radio->panId();
-    PanadapterModel* pan = panId.isEmpty() ? nullptr : m_radio->panadapter(panId);
+    const QPointer<PanadapterModel> pan(panId.isEmpty() ? nullptr : m_radio->panadapter(panId));
     const std::optional<SquelchLevelScale> scale = m_radio->backendCapabilities().squelchLevelScale;
     const QString id = QStringLiteral("squelch-scale");
     const QString title = QStringLiteral("The SQL line sits where the radio's gate closes");
@@ -879,6 +938,18 @@ void RadioCertification::stageSquelchScale(const Options& o)
                QStringLiteral("The scale covers none of USB/LSB/AM/CW."), QString(), ref);
         return;
     }
+    // Auto SQL rewrites the slice's level on every pan frame, so a gate search
+    // under it measures Auto, not the radio.
+    const std::optional<bool> autoEngaged = o.autoSquelchEngaged ? o.autoSquelchEngaged()
+                                                                 : std::nullopt;
+    if (autoEngaged.value_or(false)) {
+        record(id, title, QJsonObject{{QStringLiteral("autoSquelchEngaged"), true}},
+               QStringLiteral("Auto SQL is engaged on the slice under test."),
+               QStringLiteral("INCONCLUSIVE — Auto SQL is engaged and would overwrite "
+                              "every probe; turn it off and re-run"),
+               ref);
+        return;
+    }
 
     const double carrierMhz = o.squelchCarrierMhz > 0.0 ? o.squelchCarrierMhz
                                                         : o.referenceCarrierMhz;
@@ -887,14 +958,14 @@ void RadioCertification::stageSquelchScale(const Options& o)
     const bool onWas = slice->squelchOn();
     const int levelWas = slice->squelchLevel();
     const int manualWas = slice->manualSquelchLevel();
-    const QPointer<SliceModel> watchedSlice(slice);
+    bool interrupted = false;
     const auto restore = qScopeGuard([&] {
-        if (!watchedSlice)
+        if (!slice)
             return;
-        watchedSlice->setSquelch(onWas, levelWas);
-        watchedSlice->setManualSquelchLevel(manualWas);
-        watchedSlice->setMode(modeWas);
-        watchedSlice->setFrequency(freqWas);
+        slice->setSquelch(onWas, levelWas);
+        slice->setManualSquelchLevel(manualWas);
+        slice->setMode(modeWas);
+        slice->setFrequency(freqWas);
         spin(800);
     });
 
@@ -904,6 +975,8 @@ void RadioCertification::stageSquelchScale(const Options& o)
         std::vector<double> peaks;
         std::vector<double> floors;
         const QPointer<PanadapterModel> p(pan);
+        if (!m_radio)
+            return std::pair{std::nan(""), std::nan("")};
         const auto c = QObject::connect(m_radio, &RadioModel::panFeedSpectrumReady, m_radio,
             [&, p](quint32 streamId, const QVector<float>& bins, qint64) {
                 if (!p || streamId != p->panStreamId() || bins.isEmpty())
@@ -925,6 +998,8 @@ void RadioCertification::stageSquelchScale(const Options& o)
     auto audioDb = [&](int ms) {
         double sum = 0.0;
         qint64 n = 0;
+        if (!m_radio)
+            return -999.0;
         const auto c = QObject::connect(m_radio, &RadioModel::rxDemodAudioReady, m_radio,
             [&](const PcmFrame& pcm) {
                 for (const float s : pcm.samples()) {
@@ -940,6 +1015,11 @@ void RadioCertification::stageSquelchScale(const Options& o)
     QJsonArray probes;
     auto findGate = [&](double openDb) {
         auto closedAt = [&](int level) {
+            if (!slice) {
+                // Ends the search quickly; the result is discarded below.
+                interrupted = true;
+                return true;
+            }
             slice->setSquelch(true, level);
             spin(900);
             const double d = audioDb(700);
@@ -954,9 +1034,12 @@ void RadioCertification::stageSquelchScale(const Options& o)
         // Confirm with a one-level bracket, not a repeat at the gate itself:
         // there the carrier sits on the threshold and the gate chatters
         // (measured on the MK2: closed, then open 6 dB down, at one level).
+        // At 100 there is no level above, so only the level below can confirm.
         bool confirmed = gate >= 1;
-        if (gate >= 1)
-            confirmed = closedAt(std::min(gate + 1, 100)) && (gate == 1 || !closedAt(gate - 1));
+        if (gate == 100)
+            confirmed = !closedAt(99);
+        else if (gate >= 1)
+            confirmed = closedAt(gate + 1) && (gate == 1 || !closedAt(gate - 1));
         return std::pair{gate, confirmed};
     };
 
@@ -979,8 +1062,9 @@ void RadioCertification::stageSquelchScale(const Options& o)
         {QStringLiteral("mode"), mode},
         {QStringLiteral("carrierMhz"), carrierMhz},
         {QStringLiteral("dialMhz"), dialMhz},
-        {QStringLiteral("preamp"), pan->preampStep()},
-        {QStringLiteral("attenuator"), pan->attenuatorStep()},
+        {QStringLiteral("preamp"), pan ? QJsonValue(pan->preampStep()) : QJsonValue()},
+        {QStringLiteral("attenuator"), pan ? QJsonValue(pan->attenuatorStep()) : QJsonValue()},
+        {QStringLiteral("autoSquelchEngaged"), autoEngaged ? QJsonValue(*autoEngaged) : QJsonValue()},
         {QStringLiteral("carrierPanPeakDb"), std::isfinite(peakDb) ? QJsonValue(peakDb) : QJsonValue()},
         {QStringLiteral("panFloorDb"), std::isfinite(floorDb) ? QJsonValue(floorDb) : QJsonValue()},
         {QStringLiteral("sLevelDbm"), levels.value(QStringLiteral("sLevelDbm"))},
@@ -1006,7 +1090,9 @@ void RadioCertification::stageSquelchScale(const Options& o)
         const auto [gate, confirmed] = findGate(openDb);
         m[QStringLiteral("gateLevel")] = gate;
         m[QStringLiteral("gateConfirmed")] = confirmed;
-        if (gate < 1) {
+        if (interrupted) {
+            inconclusive = QStringLiteral("the slice went away mid-search");
+        } else if (gate < 1) {
             inconclusive = QStringLiteral("the gate is still open at level 100 — the "
                                           "carrier is above the whole scale");
         } else {
@@ -1015,8 +1101,9 @@ void RadioCertification::stageSquelchScale(const Options& o)
             m[QStringLiteral("lineAtGateDb")] = lineDb;
             m[QStringLiteral("lineMinusCarrierDb")] = errorDb;
             if (!confirmed) {
-                inconclusive = QStringLiteral("the gate did not repeat at level %1 — a "
-                                              "fading carrier or a non-monotonic gate")
+                inconclusive = QStringLiteral("the gate at level %1 did not bracket (closed "
+                                              "one above, open one below) — a fading "
+                                              "carrier or a non-monotonic gate")
                                    .arg(gate);
             } else if (std::fabs(errorDb) > certmath::kSquelchLineToleranceDb) {
                 problems << QStringLiteral(
@@ -1033,7 +1120,7 @@ void RadioCertification::stageSquelchScale(const Options& o)
 
     // AUTO SQL picks floor + margin (5..20 dB) on the pan. It can only hold a
     // margin if the radio gates band noise inside that window above the floor.
-    if (scale->autoSquelch && inconclusive.isEmpty()) {
+    if (scale->autoSquelch && inconclusive.isEmpty() && slice) {
         probes = QJsonArray{};
         const double noiseDialMhz = dialMhz + 0.010;   // carrier out of the passband
         slice->setFrequency(noiseDialMhz);
@@ -1041,7 +1128,11 @@ void RadioCertification::stageSquelchScale(const Options& o)
         spin(2500);
         const double noiseFloorDb = readPan(noiseDialMhz * 1e6, 2000).second;
         const double noiseOpenDb = audioDb(1000);
-        const auto [noiseGate, noiseConfirmed] = findGate(noiseOpenDb);
+        // The carrier branch's silence guard, for the same reason: a near-silent
+        // passband "closes" at any level and would report a gate from nothing.
+        const bool noiseAudible = noiseOpenDb >= -90.0;
+        const auto [noiseGate, noiseConfirmed] = noiseAudible ? findGate(noiseOpenDb)
+                                                              : std::pair{-1, false};
         QJsonObject a{
             {QStringLiteral("dialMhz"), noiseDialMhz},
             {QStringLiteral("panFloorDb"), std::isfinite(noiseFloorDb) ? QJsonValue(noiseFloorDb) : QJsonValue()},
@@ -1050,7 +1141,11 @@ void RadioCertification::stageSquelchScale(const Options& o)
             {QStringLiteral("noiseGateConfirmed"), noiseConfirmed},
             {QStringLiteral("probes"), probes},
         };
-        if (noiseGate >= 1 && noiseConfirmed && std::isfinite(noiseFloorDb)) {
+        if (!noiseAudible) {
+            a[QStringLiteral("inconclusive")] = QStringLiteral(
+                "no band-noise audio with squelch open; the noise gate cannot be found");
+        } else if (noiseGate >= 1 && noiseConfirmed && !interrupted
+                   && std::isfinite(noiseFloorDb)) {
             const double aboveFloorDb = scale->thresholdDb(noiseGate) - noiseFloorDb;
             a[QStringLiteral("noiseGateAboveFloorDb")] = aboveFloorDb;
             if (aboveFloorDb > 20.0) {
@@ -2379,7 +2474,7 @@ QJsonObject RadioCertification::run(const Options& o)
     if (doMet) {
         // NON-KEYING INSTRUMENTS FIRST. They need no TX dial; the squelch stage
         // parks the dial on its carrier and puts it back before anything keys.
-        stageControlDomain();
+        stageControlDomain(o);
         stageFrontEndInterlock();
         stageSquelchScale(o);
 

@@ -10,6 +10,7 @@
 #include <QString>
 
 #include <functional>
+#include <optional>
 
 namespace AetherSDR {
 
@@ -69,6 +70,12 @@ public:
         // Choose one below S9: above it the IC-7300MK2's gate sits 6-10 dB off
         // its own measured line, and Flex's scale happens to land near both.
         double squelchCarrierMhz = 0.0;
+
+        // Whether the operator's Auto SQL is engaged on the slice under test;
+        // nullopt when it cannot be observed. Auto writes the slice on every pan
+        // frame, so the squelch stages decline while it is on. Supplied by the
+        // caller because the intent lives in the GUI, not in any model.
+        std::function<std::optional<bool>()> autoSquelchEngaged;
     };
 
     RadioCertification(RadioModel* radio, AudioEngine* audio,
@@ -116,7 +123,7 @@ private:
     // A scaled control's readout, an interlocked button and the SQL line are
     // instruments too, and each was wrong on the IC-7300MK2 while the backend's
     // own tests agreed with it (CERTIFICATION.md 1.41-1.43).
-    void stageControlDomain();
+    void stageControlDomain(const Options& o);
     void stageFrontEndInterlock();
     void stageSquelchScale(const Options& o);
 

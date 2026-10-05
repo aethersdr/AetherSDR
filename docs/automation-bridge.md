@@ -1116,7 +1116,15 @@ keyed ones. With bridge TX permission off, every key is refused and counted in
 | `squelch-scale` | Parks the dial 1.5 kHz below the `sql=` carrier (default: the RX reference carrier), finds the lowest level that drops the operator's audio by 20 dB, confirms it at ±1 level, and compares the published line there with the carrier's pan peak. If Auto SQL is published, it repeats the search on band noise 10 kHz away. | the line is more than 6 dB from the carrier, or Auto's widest margin is below the noise gate |
 
 `squelch-scale` is `INCONCLUSIVE` for a carrier above S9 (−73 dBm), for one that
-fades during the search, and when there is no audio with squelch open. Use a steady
+fades during the search, and when there is no audio with squelch open. Both squelch
+stages decline while the RX applet's SQL button reads AUTO, because Auto SQL rewrites
+the slice on every pan frame; when the button can't be found, the report says the
+state was not observable. `freqMhz` and `sql=` take `tune`'s validation (finite,
+0.001–105000 MHz), and a malformed argument is refused before anything runs.
+
+Together the three stages add about 1.5–2 minutes of nested event loops to every
+`radiocert meters` and `radiocert all`, and longer where Auto SQL is published
+and the noise gate is searched too. A two-minute `meters` run is not a hang. Use a steady
 groundwave carrier below S9, or the attenuator in front of a strong one. Each stage
 restores the slice, squelch, processor and front end it changed. See
 [CERTIFICATION.md](CERTIFICATION.md) §1.41–1.43.

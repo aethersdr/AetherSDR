@@ -3635,7 +3635,9 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
 
         add("radiocert", {},
             "radiocert <tune|rx|tx|meters|all|persist> [freqMhz] [sql=<MHz>] — bring-up diagnostic; sql= is the steady carrier the meters squelch-scale stage measures; persist is a read-only snapshot for tools/radiocert_persist.py (tx/meters key)",
-            parseActionValue,
+            // Rest, not Value: Value keeps one token and drops the rest, which
+            // lost `sql=` after a frequency in the line form.
+            parseActionRest,
             [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
                 return s.doRadioCert(a.action, a.value);
             });
@@ -8797,15 +8799,8 @@ QJsonObject AutomationServer::doRadioCert(const QString& phaseArg, const QString
             {QStringLiteral("dsp"), doGet(QStringLiteral("dsp"), {}, {})},
         };
     }
-    if (!m_audioEngine)
-        return err(QStringLiteral("no audio engine available"));
-
-    // ONE AT A TIME. run() spins nested event loops for the whole diagnostic, so
-    // any bridge command arriving meanwhile — including a second radiocert — is
-    // dispatched INSIDE the run and mutates the same models mid-measurement.
-    if (m_certRunning)
-        return err(QStringLiteral("radiocert is already running"));
-
+    // Input first: a malformed request is refused for what it says, before
+    // any check of what this process has to run it with.
     RadioCertification::Options opts;
     const QString phase = phaseArg.trimmed().toLower();
     if (phase == QLatin1String("tune"))        opts.phase = RadioCertification::Phase::Tune;
@@ -8836,24 +8831,44 @@ QJsonObject AutomationServer::doRadioCert(const QString& phaseArg, const QString
             "(or set AETHER_AUTOMATION_ALLOW_TX=1), or run 'radiocert tune' / 'radiocert rx'"));
 
     // [freqMhz] [sql=<MHz>]: the keyed stages' dial, and the steady carrier
-    // stage-squelch-scale measures the radio's gate on.
+    // stage-squelch-scale measures the radio's gate on. Both are dial targets,
+    // so both take tune's validation: QString::toDouble() accepts nan and inf.
     static const QRegularExpression certArgSep(QStringLiteral("\\s+"));
     for (const QString& token : freqArg.trimmed().split(certArgSep, Qt::SkipEmptyParts)) {
-        bool okF = false;
+        double mhz = 0.0;
         if (token.startsWith(QLatin1String("sql="), Qt::CaseInsensitive)) {
-            const double sqlMhz = token.mid(4).toDouble(&okF);
-            if (!okF || sqlMhz <= 0.0)
-                return err(QStringLiteral("radiocert: sql= takes a carrier in MHz, got '%1'")
-                               .arg(token));
-            opts.squelchCarrierMhz = sqlMhz;
+            if (auto refusal = refuseUntunableMhz(QStringLiteral("radiocert sql="),
+                                                  token.mid(4), mhz))
+                return *refusal;
+            opts.squelchCarrierMhz = mhz;
             continue;
         }
-        const double mhz = token.toDouble(&okF);
-        if (!okF || mhz <= 0.0)
-            return err(QStringLiteral("radiocert: expected [freqMhz] [sql=<MHz>], got '%1'")
-                           .arg(token));
+        if (auto refusal = refuseUntunableMhz(QStringLiteral("radiocert [freqMhz]"),
+                                              token, mhz))
+            return *refusal;
         opts.frequencyMhz = mhz;
     }
+
+    // Auto SQL is RX-applet intent, held in no model. Read the operator's own
+    // SQL button — it says AUTO (an untranslated literal) while Auto runs. The
+    // applet follows the active slice; the stages use slice 0, which is the
+    // same receiver on every single-slice radio. Unknown when there is no button.
+    opts.autoSquelchEngaged = []() -> std::optional<bool> {
+        auto* button = qobject_cast<QAbstractButton*>(
+            resolveWidget(QStringLiteral("RxApplet/Squelch mode")));
+        if (!button)
+            return std::nullopt;
+        return button->text() == QLatin1String("AUTO");
+    };
+
+    if (!m_audioEngine)
+        return err(QStringLiteral("no audio engine available"));
+
+    // ONE AT A TIME. run() spins nested event loops for the whole diagnostic, so
+    // any bridge command arriving meanwhile — including a second radiocert — is
+    // dispatched INSIDE the run and mutates the same models mid-measurement.
+    if (m_certRunning)
+        return err(QStringLiteral("radiocert is already running"));
 
     // Hand the bridge's power ceiling to the run. The widget-setpoint clamp does
     // not cover this verb — radiocert keys through its own path — so without this

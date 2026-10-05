@@ -236,18 +236,22 @@ int main()
         struct Point { double raw; double panPeakDb; };
         const Point mk2[] = {{131, -118.0}, {135, -114.7}, {158, -103.4}, {160, -103.2},
                              {199, -78.5}, {206.5, -74.5}, {207, -74.4}, {211, -71.0}};
-        int legacyMisses = 0;
+        std::vector<double> legacyMissedRaw;
         double measuredWorst = 0.0;
         for (const Point& p : mk2) {
             const double level = p.raw / 2.55;
             const double legacy = -160.0 + level - p.panPeakDb;
             const double measured = -194.8 + 1.49 * level - p.panPeakDb;
-            legacyMisses += std::fabs(legacy) > kSquelchLineToleranceDb;
+            if (std::fabs(legacy) > kSquelchLineToleranceDb)
+                legacyMissedRaw.push_back(p.raw);
             measuredWorst = std::max(measuredWorst, std::fabs(measured));
         }
-        std::fprintf(stderr, "SQL line: legacy misses %d of 8, measured worst %.1f dB\n",
-                     legacyMisses, measuredWorst);
-        check(legacyMisses >= 2, "Flex's scale misses the MK2 gate at low levels");
+        std::fprintf(stderr, "SQL line: legacy misses %zu of 8, measured worst %.1f dB\n",
+                     legacyMissedRaw.size(), measuredWorst);
+        // Exactly the two lowest gates (+9.4, +7.6 dB) and the highest (-6.3 dB):
+        // the slope error shows at both ends and hides in the middle.
+        check(legacyMissedRaw == std::vector<double>({131, 135, 211}),
+              "Flex's scale misses the MK2 gate at both ends of the measured range");
         check(measuredWorst < kSquelchLineToleranceDb, "the measured MK2 record lands on every gate");
         // The proof carrier: open at level 51, closed at 52, peak -118.2 median.
         check(std::fabs(-160.0 + 52 - -118.2) > kSquelchLineToleranceDb
