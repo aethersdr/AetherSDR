@@ -77,6 +77,17 @@ int main(int argc, char** argv)
                                      QStringLiteral(R"({"ddc0AdcIndex":7})"));
     check(AnanSettings::ddc0AdcIndex() == 0, "an out-of-range ADC index falls back to ADC0");
 
+    // The rate list a setup page offers. It exists on this header because a
+    // page above the radio seam may not include the protocol header that owns
+    // the constant.
+    const QList<int> rates = AnanSettings::validDdc0RatesKsps();
+    check(rates.size() == 6, "six DDC0 rates, as the protocol defines");
+    check(rates.contains(48) && rates.contains(1536),
+          "including both ends of the range");
+    check(rates.contains(AnanSettings::ddc0RateKsps())
+              || AnanSettings::ddc0RateKsps() == 48,
+          "and the stored rate is one of them, or the 48 ksps fallback");
+
     if (g_failures == 0)
         std::printf("anan_settings_test: all checks passed\n");
     return g_failures == 0 ? 0 : 1;

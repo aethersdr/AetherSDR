@@ -1,4 +1,10 @@
 #include "core/DroopCalibration.h"
+// The ANAN Front End page's ONE ANAN dependency. Tagged ui-support precisely so
+// a setup page may include it; the family's protocol header is vendor(anan) and
+// must not be included above the radio seam (tools/check_engine_boundary.py's
+// EB3 ratchet refuses it), which is why the rate list is reached through this
+// header rather than from the wire code.
+#include "core/backends/anan/AnanSettings.h"
 #include "RadioSetupDialog.h"
 #include "RtlReceiverSettingsWidget.h"
 #include "SerialPortCombo.h"
@@ -833,6 +839,24 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
         if (m_droopReseed)
             m_droopReseed();
     });
+    // ANAN Front End page -- gated on RadioCapabilities::adcFrontEnd, but shown
+    // with nothing connected, which the two pages above are not. See
+    // ananFrontEndAvailable().
+    QTreeWidgetItem* ananItem = addPage(radioCategory, QStringLiteral("ANAN Front End"),
+        QStringLiteral("anan g2 saturn openhpsdr protocol 2 ddc sample rate adc select dither "
+                       "random filter bank bypass speaker audio"),
+        [this] { return buildAnanFrontEndTab(); });
+    m_ananFrontEndPageIndex = m_pageIndexes.value(QStringLiteral("ANAN Front End"));
+    setNavigationItemHidden(ananItem, !ananFrontEndAvailable());
+    connect(m_model, &RadioModel::connectionStateChanged, this, [this, ananItem] {
+        settleNavigationLayout(m_navigation,
+                               setNavigationItemHidden(ananItem, !ananFrontEndAvailable()));
+        // A different radio may now be connected, and these settings are
+        // family-global: re-read them so the page describes what the next
+        // connect will actually request.
+        if (m_ananFrontEndReseed)
+            m_ananFrontEndReseed();
+    });
     addPage(hardwareCategory, QStringLiteral("Antennas"),
         QStringLiteral("antenna names ant1 ant2 rx in transverter"), [this] { return buildAntennaNamesTab(); });
     addPage(hardwareCategory, QStringLiteral("Transverters"),
@@ -916,6 +940,7 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
                 const bool calRow = item == m_pageItems.value(m_calibrationPageIndex);
                 const bool droopRow = item == m_pageItems.value(m_droopCalibrationPageIndex);
                 const bool hl2HwRow = item == m_pageItems.value(m_hl2HardwarePageIndex);
+                const bool ananRow = item == m_pageItems.value(m_ananFrontEndPageIndex);
                 const bool gated =
                     ((isFlexOnlyPage(item) || item == m_pageItems.value(m_rtlReceiverPageIndex))
                         && !isCapabilityPageAvailable(item))
@@ -924,7 +949,8 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
                     || (apdRow && !m_model->transmitModel().apdConfigurable())
                     || (calRow && !m_model->backendCapabilities().hostFrequencyCalibration)
                     || (droopRow && !droopCalibrationAvailable(m_model->backend()))
-                    || (hl2HwRow && !declaresHl2Extension());
+                    || (hl2HwRow && !declaresHl2Extension())
+                    || (ananRow && !ananFrontEndAvailable());
                 if (!gated) {
                     navigationChanged |= setNavigationItemHidden(item, !matches);
                 }
@@ -1013,6 +1039,11 @@ void RadioSetupDialog::showEvent(QShowEvent* event)
     // dialog was hidden, and there is no hotplug signal to tell us.
     for (const auto& reseed : m_serialPortReseeds)
         reseed();
+    // And the ANAN page's own controls, for the same reason: AnanSettings is
+    // family-global, so a profile load or another surface can have changed what
+    // these show while the dialog was hidden.
+    if (m_ananFrontEndReseed)
+        m_ananFrontEndReseed();
 }
 
 bool RadioSetupDialog::declaresHl2Extension() const
@@ -1045,6 +1076,9 @@ bool RadioSetupDialog::isCapabilityPageAvailable(const QTreeWidgetItem* item) co
     }
     if (index == m_droopCalibrationPageIndex) {
         return droopCalibrationAvailable(m_model->backend());
+    }
+    if (index == m_ananFrontEndPageIndex) {
+        return ananFrontEndAvailable();
     }
     if (!m_model->isConnected()) {
         return true;
@@ -4637,6 +4671,241 @@ QWidget* RadioSetupDialog::buildDroopCalibrationTab()
         }
     };
     m_droopReseed();
+
+    vbox->addStretch(1);
+    return page;
+}
+
+// ── ANAN Front End tab ──────────────────────────────────────────────────────
+
+bool RadioSetupDialog::ananFrontEndAvailable() const
+{
+    if (!m_model) {
+        return false;
+    }
+    // SHOWN WITH NOTHING CONNECTED, deliberately, and unlike the Droop and HL2
+    // Hardware pages beside it. Every control here is a preference the connect
+    // path reads out of AnanSettings (RadioModel's populateFamilyParams()) and
+    // takes effect only when a session starts -- so a page that appeared only
+    // once a radio was connected could never configure the FIRST connect. The
+    // `!connected || capability` shape is the one applyCapabilitySurface-
+    // Availability() already uses for individual controls; this is that applied
+    // to a page.
+    if (!m_model->isConnected()) {
+        return true;
+    }
+    return m_model->backendCapabilities().adcFrontEnd.has_value();
+}
+
+QWidget* RadioSetupDialog::buildAnanFrontEndTab()
+{
+    using AetherSDR::anan::AnanSettings;
+
+    auto* page = new QWidget;
+    auto* vbox = new QVBoxLayout(page);
+    vbox->setSpacing(8);
+
+    auto& theme = AetherSDR::ThemeManager::instance();
+    auto themed = [&theme](QWidget* w, const QString& tpl) { theme.applyStyleSheet(w, tpl); };
+
+    static const QString kLabel =
+        QStringLiteral("QLabel { color: {{color.text.primary}}; font-size: 12px; }");
+    static const QString kHint =
+        QStringLiteral("QLabel { color: {{color.text.secondary}}; font-size: 11px; }");
+    static const QString kCheck =
+        QStringLiteral("QCheckBox { color: {{color.text.primary}}; font-size: 12px; }");
+    static const QString kGroup =
+        QStringLiteral("QGroupBox { border: 1px solid {{color.background.2}}; border-radius: 4px; "
+                       "margin-top: 8px; padding-top: 12px; font-weight: bold; "
+                       "color: {{color.text.secondary}}; }"
+                       "QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }");
+
+    auto* intro = new QLabel(
+        "Receive front-end options for the ANAN-G2. Each is read when a session starts, "
+        "so a change here takes effect on the NEXT CONNECT. The panadapter's zoom can "
+        "still change the sample rate during a session; this sets where a session begins.");
+    themed(intro, kHint);
+    intro->setWordWrap(true);
+    vbox->addWidget(intro);
+
+    // ── Receiver ─────────────────────────────────────────────────────────────
+    auto* rxGroup = new QGroupBox("Receiver");
+    themed(rxGroup, kGroup);
+    auto* rvb = new QVBoxLayout(rxGroup);
+    rvb->setSpacing(6);
+
+    // One labelled row, laid out the way the rest of this dialog lays its rows
+    // out (an HBox each) rather than through a form layout.
+    auto labelledRow = [&themed, rvb](const QString& text, QWidget* field) {
+        auto* row = new QHBoxLayout;
+        auto* label = new QLabel(text);
+        themed(label, kLabel);
+        row->addWidget(label);
+        row->addWidget(field);
+        row->addStretch(1);
+        rvb->addLayout(row);
+    };
+
+    auto* feRateCombo = new QComboBox;
+    feRateCombo->setObjectName(QStringLiteral("ananDdc0Rate"));
+    AetherSDR::applyComboStyle(feRateCombo);
+    for (const int ksps : AnanSettings::validDdc0RatesKsps())
+        feRateCombo->addItem(QStringLiteral("%1 ksps").arg(ksps), ksps);
+    feRateCombo->setAccessibleName(QStringLiteral("ANAN DDC0 sample rate"));
+    feRateCombo->setToolTip(QStringLiteral(
+        "DDC0 sample rate — also the width of the panadapter span a session starts at.\n"
+        "Higher rates use more of the radio's Ethernet link.\n\n"
+        "Takes effect on the next connect. A live zoom can still change the span\n"
+        "afterwards; this is where a session begins."));
+    labelledRow(QStringLiteral("Sample rate:"), feRateCombo);
+    connect(feRateCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            [feRateCombo](int index) {
+        if (index < 0) return;
+        AnanSettings::setDdc0RateKsps(feRateCombo->itemData(index).toInt());
+    });
+
+    auto* feAdcCombo = new QComboBox;
+    feAdcCombo->setObjectName(QStringLiteral("ananAdcSelect"));
+    AetherSDR::applyComboStyle(feAdcCombo);
+    feAdcCombo->addItem(QStringLiteral("ADC0 — behind the ANT1/2/3 relays"), 0);
+    feAdcCombo->addItem(QStringLiteral("ADC1 — the RX2 jack"), 1);
+    feAdcCombo->setAccessibleName(QStringLiteral("ANAN ADC select"));
+    feAdcCombo->setToolTip(QStringLiteral(
+        "Which receive chain feeds the receiver.\n\n"
+        "ADC0 sits behind the switched ANT1/2/3 relay bank. ADC1's chain is wired\n"
+        "straight to its own RX2 jack with no relay in front of it — two physically\n"
+        "different paths, not a label swap.\n\n"
+        "Takes effect on the next connect."));
+    labelledRow(QStringLiteral("Feed the receiver from:"), feAdcCombo);
+    connect(feAdcCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            [feAdcCombo](int index) {
+        if (index < 0) return;
+        AnanSettings::setDdc0AdcIndex(feAdcCombo->itemData(index).toInt());
+    });
+
+    auto* feDitherChk = new QCheckBox("Dither");
+    feDitherChk->setObjectName(QStringLiteral("ananDither"));
+    themed(feDitherChk, kCheck);
+    feDitherChk->setAccessibleDescription(QStringLiteral(
+        "Enables the ADC's dither bit, a standard converter linearization. Leave it on "
+        "unless you have a specific reason to test without it. Takes effect on the next "
+        "connect."));
+    feDitherChk->setToolTip(QStringLiteral(
+        "The ADC's dither bit — standard converter linearization.\n"
+        "Leave it on unless you have a specific reason to test without it.\n\n"
+        "Takes effect on the next connect."));
+    rvb->addWidget(feDitherChk);
+    connect(feDitherChk, &QCheckBox::toggled, this,
+            [](bool on) { AnanSettings::setDitherEnabled(on); });
+
+    auto* feRandomChk = new QCheckBox("Randomization");
+    feRandomChk->setObjectName(QStringLiteral("ananRandom"));
+    themed(feRandomChk, kCheck);
+    feRandomChk->setAccessibleDescription(QStringLiteral(
+        "Enables the ADC's random bit, a standard converter linearization. Leave it on "
+        "unless you have a specific reason to test without it. Takes effect on the next "
+        "connect."));
+    feRandomChk->setToolTip(QStringLiteral(
+        "The ADC's random bit — standard converter linearization.\n"
+        "Leave it on unless you have a specific reason to test without it.\n\n"
+        "Takes effect on the next connect."));
+    rvb->addWidget(feRandomChk);
+    connect(feRandomChk, &QCheckBox::toggled, this,
+            [](bool on) { AnanSettings::setRandomEnabled(on); });
+
+    vbox->addWidget(rxGroup);
+
+    // ── Front-end filters ────────────────────────────────────────────────────
+    auto* feFilterGroup = new QGroupBox("Front-End Filter Bank");
+    themed(feFilterGroup, kGroup);
+    auto* fvb = new QVBoxLayout(feFilterGroup);
+    fvb->setSpacing(6);
+
+    auto* feFilterIntro = new QLabel(
+        "Each ADC has a band-pass filter bank in series ahead of it, and this client never "
+        "selects one of its filters, so the bypass is that ADC's only signal path. Leave "
+        "both checked.");
+    themed(feFilterIntro, kHint);
+    feFilterIntro->setWordWrap(true);
+    fvb->addWidget(feFilterIntro);
+
+    auto* feBypass0Chk = new QCheckBox("Bypass ADC0's bank");
+    feBypass0Chk->setObjectName(QStringLiteral("ananBypassAdc0"));
+    themed(feBypass0Chk, kCheck);
+    auto* feBypass1Chk = new QCheckBox("Bypass ADC1's bank (RX2)");
+    feBypass1Chk->setObjectName(QStringLiteral("ananBypassAdc1"));
+    themed(feBypass1Chk, kCheck);
+    const QString bypassHint = QStringLiteral(
+        "Routes this ADC's signal around its front-end filter bank. Leave it checked:\n"
+        "no band filter is ever selected, so unchecked means nothing reaches the ADC\n"
+        "at all — not just a less selective receiver.\n\n"
+        "Takes effect on the next connect.");
+    feBypass0Chk->setToolTip(bypassHint);
+    feBypass1Chk->setToolTip(bypassHint);
+    const QString bypassAccessible = QStringLiteral(
+        "Routes this ADC's signal around its front-end filter bank. Leave it checked: no "
+        "band filter is ever selected, so with it unchecked nothing reaches the ADC at all. "
+        "Takes effect on the next connect.");
+    feBypass0Chk->setAccessibleDescription(bypassAccessible);
+    feBypass1Chk->setAccessibleDescription(bypassAccessible);
+    fvb->addWidget(feBypass0Chk);
+    fvb->addWidget(feBypass1Chk);
+    connect(feBypass0Chk, &QCheckBox::toggled, this,
+            [](bool on) { AnanSettings::setBypassAdc0Filters(on); });
+    connect(feBypass1Chk, &QCheckBox::toggled, this,
+            [](bool on) { AnanSettings::setBypassAdc1Filters(on); });
+
+    vbox->addWidget(feFilterGroup);
+
+    // ── The radio's own audio ────────────────────────────────────────────────
+    auto* audioGroup = new QGroupBox("The Radio's Own Speaker");
+    themed(audioGroup, kGroup);
+    auto* avb = new QVBoxLayout(audioGroup);
+    avb->setSpacing(6);
+
+    auto* speakerAudioChk = new QCheckBox("Send receive audio to the radio");
+    speakerAudioChk->setObjectName(QStringLiteral("ananSpeakerAudio"));
+    themed(speakerAudioChk, kCheck);
+    speakerAudioChk->setAccessibleDescription(QStringLiteral(
+        "Sends the demodulated receive audio back to the radio so its own speaker and "
+        "headphone jack reproduce it, as well as this computer's sound card. Off by "
+        "default, because it is the only option here that makes this computer originate "
+        "a continuous outbound stream. Takes effect on the next connect."));
+    speakerAudioChk->setToolTip(QStringLiteral(
+        "Send the demodulated receive audio back to the radio so its own speaker and\n"
+        "headphone jack reproduce it, as well as this computer's sound card. The\n"
+        "receiver's mute and volume apply to both.\n\n"
+        "Off by default: it is the only option here that makes this computer\n"
+        "originate a continuous outbound stream. Takes effect on the next connect."));
+    avb->addWidget(speakerAudioChk);
+    connect(speakerAudioChk, &QCheckBox::toggled, this,
+            [](bool on) { AnanSettings::setSpeakerAudioEnabled(on); });
+
+    vbox->addWidget(audioGroup);
+
+    // Re-read AnanSettings into every control. Needed on show as well as on a
+    // connection change: these settings are global to this radio family and
+    // another surface (or another profile load) can have moved them while this
+    // dialog sat hidden -- the same reason the audio-device and serial-port
+    // combos have reseeds.
+    m_ananFrontEndReseed = [feRateCombo, feAdcCombo, feDitherChk, feRandomChk,
+                            feBypass0Chk, feBypass1Chk, speakerAudioChk] {
+        // Blocked while seeding: every one of these controls persists on change,
+        // so an unblocked setCurrentIndex() would write back the value it just
+        // read.
+        const QSignalBlocker b1(feRateCombo), b2(feAdcCombo), b3(feDitherChk), b4(feRandomChk),
+                             b5(feBypass0Chk), b6(feBypass1Chk), b7(speakerAudioChk);
+        const int rateIdx = feRateCombo->findData(AnanSettings::ddc0RateKsps());
+        feRateCombo->setCurrentIndex(rateIdx >= 0 ? rateIdx : 0);
+        const int adcIdx = feAdcCombo->findData(AnanSettings::ddc0AdcIndex());
+        feAdcCombo->setCurrentIndex(adcIdx >= 0 ? adcIdx : 0);
+        feDitherChk->setChecked(AnanSettings::ditherEnabled());
+        feRandomChk->setChecked(AnanSettings::randomEnabled());
+        feBypass0Chk->setChecked(AnanSettings::bypassAdc0Filters());
+        feBypass1Chk->setChecked(AnanSettings::bypassAdc1Filters());
+        speakerAudioChk->setChecked(AnanSettings::speakerAudioEnabled());
+    };
+    m_ananFrontEndReseed();
 
     vbox->addStretch(1);
     return page;
