@@ -154,7 +154,6 @@ void ThemeManager::seedGeneratedDefaults()
     m_tokens.insert("color.text.primary", QString("#c8d8e8"));
     m_tokens.insert("color.text.secondary", QString("#8ea8c0"));
     m_tokens.insert("color.titlebar.background", QString("#eb0d1624"));
-    m_tokens.insert("color.titlebar.background.mac", QString("#9e0d1624"));
     m_tokens.insert("color.titlebar.border", QString("#2978bee6"));
     m_tokens.insert("color.titlebar.caption.close.glyph", QString("#ffffff"));
     m_tokens.insert("color.titlebar.caption.close.hover", QString("#c42b1c"));

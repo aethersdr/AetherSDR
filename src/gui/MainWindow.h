@@ -302,11 +302,13 @@ public:
     // Unified-title-bar introspection + drive-the-real-control actions for the
     // agent automation bridge (`titlebar` model / `titlebar` verb).
     QJsonObject automationAppletPanelSnapshot() const;
+    // Validate synchronously; on success *activate holds the change for the
+    // bridge to run on a clean main-loop turn (see AutomationServer).
     bool automationAppletPanelAction(const QString& action, const QString& value,
-                                     QString* error);
+                                     QString* error, std::function<void()>* activate);
     QJsonObject automationTitleBarSnapshot() const;
     bool automationTitleBarAction(const QString& action, const QString& target,
-                                  QString* error);
+                                  QString* error, std::function<void()>* activate);
 
     // Agent automation bridge (#3646) lifecycle. Construction + full
     // handler wiring lives in startAutomationBridge() so it can be driven

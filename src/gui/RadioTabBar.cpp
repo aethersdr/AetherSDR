@@ -404,7 +404,7 @@ public:
     {
         setObjectName(QStringLiteral("discoveredRadiosPopover"));
         setAttribute(Qt::WA_TranslucentBackground, true);
-        setAccessibleName(QStringLiteral("Discovered radios"));
+        setAccessibleName(tr("Discovered radios"));
 
         auto* outer = new QVBoxLayout(this);
         outer->setContentsMargins(0, 0, 0, 0);
@@ -505,10 +505,10 @@ RadioTabBar::RadioTabBar(QWidget* parent)
     m_addButton->setFixedSize(kAddButtonSize, kTabHeight);
     m_addButton->setCursor(Qt::PointingHandCursor);
     m_addButton->setFocusPolicy(Qt::StrongFocus);
-    m_addButton->setAccessibleName(QStringLiteral("Add radio"));
+    m_addButton->setAccessibleName(tr("Add radio"));
     m_addButton->setAccessibleDescription(
-        QStringLiteral("Open the list of discovered radios"));
-    m_addButton->setToolTip(QStringLiteral("Discovered radios"));
+        tr("Open the list of discovered radios"));
+    m_addButton->setToolTip(tr("Discovered radios"));
     ThemeManager::instance().applyStyleSheet(
         m_addButton,
         QStringLiteral(
@@ -836,7 +836,7 @@ void RadioTabBar::showDiscoveryPopover()
     m_popover = popover;
     QVBoxLayout* rows = popover->rows();
 
-    auto* heading = new QLabel(QStringLiteral("Discovered radios"), popover->panel());
+    auto* heading = new QLabel(tr("Discovered radios"), popover->panel());
     heading->setObjectName(QStringLiteral("discoveredRadiosHeading"));
     ThemeManager::instance().applyStyleSheet(
         heading,
@@ -994,13 +994,13 @@ void RadioTabBar::showDiscoveryPopover()
                                   " max-height: 1px; }"));
     rows->addWidget(separator);
 
-    auto* manual = new QPushButton(QStringLiteral("Connect manually\u2026"),
+    auto* manual = new QPushButton(tr("Connect manually\u2026"),
                                    popover->panel());
     manual->setFlat(true);
     manual->setCursor(Qt::PointingHandCursor);
     manual->setFocusPolicy(Qt::StrongFocus);
     manual->setObjectName(QStringLiteral("connectManuallyRow"));
-    manual->setAccessibleName(QStringLiteral("Connect manually"));
+    manual->setAccessibleName(tr("Connect manually"));
     ThemeManager::instance().applyStyleSheet(manual, rowStyleTemplate());
     connect(manual, &QPushButton::clicked, this, [this]() {
         if (m_popover) {

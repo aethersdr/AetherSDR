@@ -3095,6 +3095,14 @@ buttons in window-content coordinates (empty outside Cocoa or in fullscreen).
 With expanded chrome, check that the brand begins 16 logical pixels after the
 native rectangle's right edge, unless a larger safe-area inset is required.
 The native controls and brand should share the 52-pixel bar's vertical center.
+`radios.linkPulse` (0–1, the heartbeat glow's current level — it swells on each
+discovery beat and decays in ~850 ms), `radios.linkAlarm` (link lost: three
+missed beats) and `radios.linkOverrideColor` (the colour speaking over the
+active tab's status dot: amber while discovering, red on loss, empty when the
+link is healthy) are the heartbeat as data — assert on these rather than on
+the dot's pixels. `radios.discovered[].canRename` says whether the switcher
+offers Rename… for that radio (client-owned nickname) or routes to Radio
+Setup instead.
 `radios.overflowing` reports whether the bounded tab viewport is
 currently clipping configured radios. `radios.tabs[].visibleInTabs` is the
 retained tab preference and `visible` is current widget visibility (which can
@@ -3131,7 +3139,7 @@ requests discovery without connecting. Inspect enabled states before invoking.
 ```json
 → {"cmd":"titlebar","action":"selectRadio","target":"1234-5678-9012-3456"}
 ← {"ok":true,"action":"selectRadio","target":"1234-5678-9012-3456",
-   "titlebar":{…}}
+   "deferred":true,"titlebar":{…}}
 ```
 
 | Action | Effect |
@@ -3140,8 +3148,13 @@ requests discovery without connecting. Inspect enabled states before invoking.
 | `showDiscovery` | Opens the "Discovered radios" popover the `+` button owns. |
 | `minimize` / `maximize` / `close` | Activates the matching caption control. |
 
-The reply echoes the post-action `get titlebar` snapshot, so a caller never
-needs a follow-up read.
+Every action is validated synchronously — an unknown action or a missing tab
+still comes back `ok:false` — and then **runs on the next main-loop turn**
+(`"deferred":true`), never inside the bridge's socket callback: a tab click can
+raise the Connect window, `showDiscovery` builds a popup, and `close` runs the
+window's `closeEvent` (#3646, the same rule as `invoke click` and `close`).
+The echoed `titlebar` is therefore the state **before** the action; re-read
+`get titlebar` (or `wait_for` a field) to confirm the result.
 
 ### `applet`
 Drive the applet panel's layout. Floating, dock side and visibility are three
@@ -3151,11 +3164,21 @@ proves the operator's own path rather than a parallel one.
 
 ```json
 → {"cmd":"applet","action":"dock","value":"left"}
-← {"ok":true,"action":"dock","value":"left",
+← {"ok":true,"action":"dock","value":"left","deferred":true,
+   "applet":{"present":true,"floating":false,"side":"right","visible":true,
+             "geometry":{"x":1140,"y":83,"w":260,"h":773},
+             "splitterIndex":1,"panIndex":0}}
+→ {"cmd":"applet","action":"state"}
+← {"ok":true,"action":"state",
    "applet":{"present":true,"floating":false,"side":"left","visible":true,
              "geometry":{"x":0,"y":83,"w":260,"h":773},
              "splitterIndex":0,"panIndex":1}}
 ```
+
+Actions are validated synchronously and applied on the next main-loop turn
+(`"deferred":true`) — floating creates and destroys a top-level window, which
+must not happen inside the socket callback (#3646). The `applet` echoed with an
+action is the state **before** it; follow with `applet state` to confirm.
 
 | Action | Effect |
 |---|---|

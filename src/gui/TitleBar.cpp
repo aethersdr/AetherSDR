@@ -727,7 +727,7 @@ QVariantMap TitleBar::barState() const
         {QStringLiteral("nativeCaption"), WindowChrome::usesNativeCaption(window())},
         {QStringLiteral("expandedClientArea"), window()->windowFlags().testFlag(Qt::ExpandedClientAreaHint)},
         {QStringLiteral("frameless"),
-         window() && window()->windowFlags().testFlag(Qt::FramelessWindowHint)},
+         window()->windowFlags().testFlag(Qt::FramelessWindowHint)},
     };
     if (m_captionButtons) {
         chrome.insert(QStringLiteral("captionButtons"), m_captionButtons->state());

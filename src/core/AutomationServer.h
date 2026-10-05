@@ -258,8 +258,16 @@ public:
     // Title-bar actions (the `titlebar` verb): selectRadio / showDiscovery /
     // minimize / maximize / close. Drives the real widgets, not the models
     // behind them, so a passing call proves the control itself is reachable.
+    //
+    // Two-phase: the handler validates synchronously (an unknown action or a
+    // missing tab still errors in the reply) and hands back, through its last
+    // argument, the activation to run.  The server runs that activation on a
+    // clean main-loop turn, never inside the socket read callback — a click
+    // can raise a top-level window and `close` runs closeEvent (#3646).
+    using DeferredUiAction = std::function<void()>;
     void setTitleBarActionHandler(
-        std::function<bool(const QString&, const QString&, QString*)> handler)
+        std::function<bool(const QString&, const QString&, QString*,
+                           DeferredUiAction*)> handler)
     {
         m_titleBarActionHandler = std::move(handler);
     }
@@ -272,8 +280,11 @@ public:
     // Applet-panel layout actions (the `applet` verb): dock left/right, float
     // on/off, show/hide. Drives the same entry point as the title-bar icons,
     // so a passing call proves the real routing and not a parallel path.
+    // Same two-phase contract as setTitleBarActionHandler(): floating creates
+    // and tears down a top-level window, so activation is deferred too.
     void setAppletPanelActionHandler(
-        std::function<bool(const QString&, const QString&, QString*)> handler)
+        std::function<bool(const QString&, const QString&, QString*,
+                           DeferredUiAction*)> handler)
     {
         m_appletPanelActionHandler = std::move(handler);
     }
@@ -767,10 +778,10 @@ private:
     std::function<QJsonObject()> m_kiwiSdrSnapshotHandler;
     std::function<QJsonObject()> m_txTimerSnapshotHandler;
     std::function<QJsonObject()> m_titleBarSnapshotHandler;
-    std::function<bool(const QString&, const QString&, QString*)>
+    std::function<bool(const QString&, const QString&, QString*, DeferredUiAction*)>
         m_titleBarActionHandler;
     std::function<QJsonObject()> m_appletPanelSnapshotHandler;
-    std::function<bool(const QString&, const QString&, QString*)>
+    std::function<bool(const QString&, const QString&, QString*, DeferredUiAction*)>
         m_appletPanelActionHandler;
     std::function<QJsonObject()> m_tciRouteSnapshotHandler;
     std::function<QJsonObject(const QString&)> m_deviceDiagnosticsHandler;

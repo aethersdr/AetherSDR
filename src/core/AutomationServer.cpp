@@ -9235,12 +9235,13 @@ QWidget* AutomationServer::topLevelWindowForTarget(const QString& target)
     return nullptr;
 }
 
-// ── Window state (#3918) ─────────────────────────────────────────────────────
-// Drive a top-level window's state so an agent can maximize / restore / minimize
-// / fullscreen and prove it via dumpTree's `windowState`. resize only set
-// explicit geometry, so an un-maximize (restore) was previously unverifiable.
-// State changes don't spin a nested event loop, so they're safe to run
-// synchronously here (unlike click/menu, which defer).
+// ── Unified title bar ────────────────────────────────────────────────────────
+// Validate now, activate on the next main-loop turn.  selectRadio clicks a tab
+// (which can raise the Connect window), showDiscovery builds a popup, and close
+// runs MainWindow::closeEvent — none of which may run inside this QLocalSocket
+// read callback (#3646; see invoke click and doClose).  The snapshot is taken
+// BEFORE the action for the same reason close is deferred: afterwards it would
+// read a window that has already torn down.  Re-read `get titlebar` to confirm.
 QJsonObject AutomationServer::doTitleBar(const QString& action, const QString& target)
 {
     if (action.trimmed().isEmpty()) {
@@ -9251,18 +9252,21 @@ QJsonObject AutomationServer::doTitleBar(const QString& action, const QString& t
         return err(QStringLiteral("title bar actions unavailable"));
     }
     QString why;
-    if (!m_titleBarActionHandler(action.trimmed(), target.trimmed(), &why)) {
+    DeferredUiAction activate;
+    if (!m_titleBarActionHandler(action.trimmed(), target.trimmed(), &why, &activate)) {
         return err(why.isEmpty() ? QStringLiteral("titlebar action failed") : why);
     }
     QJsonObject reply{{QStringLiteral("ok"), true},
-                      {QStringLiteral("action"), action.trimmed()}};
+                      {QStringLiteral("action"), action.trimmed()},
+                      {QStringLiteral("deferred"), true}};
     if (!target.trimmed().isEmpty()) {
         reply.insert(QStringLiteral("target"), target.trimmed());
     }
-    // Echo the resulting bar state so a caller never has to follow the action
-    // with a separate get_state to see what it did.
     if (m_titleBarSnapshotHandler) {
         reply.insert(QStringLiteral("titlebar"), m_titleBarSnapshotHandler());
+    }
+    if (activate) {
+        deferInvokeAction(std::move(activate), /*transmitAction=*/false);
     }
     return reply;
 }
@@ -9281,12 +9285,13 @@ QJsonObject AutomationServer::doAppletPanel(const QString& action,
 
     // `state` is read-only — no action handler needed, and it must stay
     // side-effect free so a test can poll it between transitions.
+    DeferredUiAction activate;
     if (a != QLatin1String("state")) {
         if (!m_appletPanelActionHandler) {
             return err(QStringLiteral("applet panel actions unavailable"));
         }
         QString why;
-        if (!m_appletPanelActionHandler(a, value.trimmed().toLower(), &why)) {
+        if (!m_appletPanelActionHandler(a, value.trimmed().toLower(), &why, &activate)) {
             return err(why.isEmpty() ? QStringLiteral("applet action failed") : why);
         }
     }
@@ -9296,12 +9301,24 @@ QJsonObject AutomationServer::doAppletPanel(const QString& action,
     if (!value.trimmed().isEmpty()) {
         reply.insert(QStringLiteral("value"), value.trimmed().toLower());
     }
-    // Always echo the resulting state so a caller never has to follow an
-    // action with a second call to see what it did.
+    // The state as of this reply.  For an action it is the state BEFORE the
+    // change: floating creates/destroys a top-level window, so the change runs
+    // on the next main-loop turn, never in this socket callback (#3646).
+    // Follow with `applet state` to confirm.
     reply.insert(QStringLiteral("applet"), m_appletPanelSnapshotHandler());
+    if (activate) {
+        reply.insert(QStringLiteral("deferred"), true);
+        deferInvokeAction(std::move(activate), /*transmitAction=*/false);
+    }
     return reply;
 }
 
+// ── Window state (#3918) ─────────────────────────────────────────────────────
+// Drive a top-level window's state so an agent can maximize / restore / minimize
+// / fullscreen and prove it via dumpTree's `windowState`. resize only set
+// explicit geometry, so an un-maximize (restore) was previously unverifiable.
+// State changes don't spin a nested event loop, so they're safe to run
+// synchronously here (unlike click/menu, which defer).
 QJsonObject AutomationServer::doWindow(const QString& action, const QString& target) const
 {
     const QString a = action.trimmed().toLower();

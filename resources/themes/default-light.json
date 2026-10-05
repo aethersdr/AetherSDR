@@ -75,7 +75,6 @@
           },
           "titlebar": {
             "background":             "#ebf5f5f8",
-            "background.mac":         "#9ef5f5f8",
             "border":                 "#4d506e8c",
             "tab": {
               "hover":            "#0f000000",

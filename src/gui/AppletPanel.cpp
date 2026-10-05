@@ -281,14 +281,15 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     // an applet inherit applet.<name> → applet → root.
     theme::setContainer(this, QStringLiteral("applet"));
 
-    // The docked panel paints its own background, and must.  MainWindow is
-    // WA_TranslucentBackground, so its paintEvent is the only thing filling
-    // any region the widget tree leaves bare — and Qt excludes native
-    // children (the QRhi panadapter) from that backdrop entirely.  A panel
-    // with no background of its own therefore composites straight through
-    // to the desktop wherever the backdrop doesn't reach.  The FLOATING
-    // panel has always been opaque (its window sets WA_StyledBackground);
-    // this gives the docked panel the same guarantee instead of leaving it
+    // The docked panel paints its own background, and must.  MainWindow's
+    // paintEvent is the only other thing filling a region the widget tree
+    // leaves bare, and Qt excludes native children (the QRhi panadapter) from
+    // that backdrop entirely — so during a dock flip the strip a panel slides
+    // over can be left unpainted.  The window is opaque now (WindowChrome
+    // clears WA_TranslucentBackground), so that strip shows stale pixels
+    // rather than the desktop, but it is the same hole.  The FLOATING panel
+    // has always been opaque (its window sets WA_StyledBackground); this
+    // gives the docked panel the same guarantee instead of leaving it
     // dependent on whatever happens to be painted underneath.
     setObjectName(QStringLiteral("appletPanel"));
     setAttribute(Qt::WA_StyledBackground, true);

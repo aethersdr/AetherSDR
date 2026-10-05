@@ -256,9 +256,14 @@ void MainWindow::refreshRadioTabs()
         entry.model = wan.model;
         entry.detail = wan.callsign;
         entry.transport = QStringLiteral("SmartLink");
+        // "In Use" is a claim that another station has the radio, so make it
+        // only when SmartLink says so ("In Use" / "In_Use").  An empty or
+        // unrecognised status reads as available rather than as taken.
+        QString wanStatus = wan.status;
+        wanStatus.replace(QLatin1Char('_'), QLatin1Char(' '));
         entry.status = statusFor(wan.serial,
-                                 wan.status.compare(QStringLiteral("Available"),
-                                                    Qt::CaseInsensitive) != 0);
+                                 wanStatus.trimmed().compare(QStringLiteral("In Use"),
+                                                             Qt::CaseInsensitive) == 0);
         tabs.append(entry);
     }
 
@@ -511,7 +516,14 @@ void MainWindow::wireDiscovery()
                 return;   // already the active session — nothing to do
             }
             showConnectionDialog();
-            m_connPanel->selectRadio(radioId);
+            if (!m_connPanel->selectRadio(radioId)) {
+                // The tab outlived the picker's row (a SmartLink radio after
+                // logging out, or one discovery has not re-announced yet).
+                // Say so instead of opening on whatever page was last used.
+                m_connPanel->setStatusText(
+                    tr("That radio isn't in the current radio list — rescan, "
+                       "log in to SmartLink, or connect by IP."));
+            }
         });
         connect(m_titleBar, &TitleBar::connectManuallyRequested,
                 this, [this]() {
@@ -598,6 +610,9 @@ void MainWindow::wireDiscovery()
                     return;
                 }
                 document.insert(QStringLiteral("hiddenRadios"), updated);
+                // App-global UI state, one JSON object per feature; versioned so
+                // a later schema change can migrate instead of guessing.
+                document.insert(QStringLiteral("version"), 1);
                 settings.setValue("RadioSwitcher", QString::fromUtf8(
                     QJsonDocument(document).toJson(QJsonDocument::Compact)));
                 settings.save();
@@ -2902,14 +2917,16 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
     m_automation->setTitleBarSnapshotHandler(
         [this]() { return automationTitleBarSnapshot(); });
     m_automation->setTitleBarActionHandler(
-        [this](const QString& action, const QString& target, QString* error) {
-            return automationTitleBarAction(action, target, error);
+        [this](const QString& action, const QString& target, QString* error,
+               std::function<void()>* activate) {
+            return automationTitleBarAction(action, target, error, activate);
         });
     m_automation->setAppletPanelSnapshotHandler(
         [this]() { return automationAppletPanelSnapshot(); });
     m_automation->setAppletPanelActionHandler(
-        [this](const QString& action, const QString& value, QString* error) {
-            return automationAppletPanelAction(action, value, error);
+        [this](const QString& action, const QString& value, QString* error,
+               std::function<void()>* activate) {
+            return automationAppletPanelAction(action, value, error, activate);
         });
     m_automation->setTciRouteSnapshotHandler([this]() {
         if (!tciServer()) {

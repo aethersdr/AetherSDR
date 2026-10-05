@@ -4486,7 +4486,8 @@ QJsonObject MainWindow::automationAppletPanelSnapshot() const
 
 bool MainWindow::automationAppletPanelAction(const QString& action,
                                              const QString& value,
-                                             QString* error)
+                                             QString* error,
+                                             std::function<void()>* activate)
 {
     auto fail = [error](const QString& why) {
         if (error) *error = why;
@@ -4495,33 +4496,52 @@ bool MainWindow::automationAppletPanelAction(const QString& action,
     if (!m_appletPanel)
         return fail(QStringLiteral("applet panel not built"));
 
-    bool floating = false, dockedLeft = false, visible = false;
-    appletPanelState(&floating, &dockedLeft, &visible);
+    // Validate now; the bridge runs the change on the next main-loop turn
+    // (floating creates/destroys a top-level window).  The state is read
+    // again at activation, not captured here, so a change that lands in
+    // between is respected.
+    auto later = [this, activate](std::function<void(bool, bool, bool)> apply) {
+        if (activate) {
+            *activate = [this, apply = std::move(apply)]() {
+                bool floating = false, dockedLeft = false, visible = false;
+                appletPanelState(&floating, &dockedLeft, &visible);
+                apply(floating, dockedLeft, visible);
+            };
+        }
+        return true;
+    };
 
     if (action == QLatin1String("dock")) {
         if (value == QLatin1String("left"))
-            applyAppletPanelState(false, true, true);
-        else if (value == QLatin1String("right"))
-            applyAppletPanelState(false, false, true);
-        else
-            return fail(QStringLiteral("dock needs left|right"));
-    } else if (action == QLatin1String("float")) {
+            return later([this](bool, bool, bool) { applyAppletPanelState(false, true, true); });
+        if (value == QLatin1String("right"))
+            return later([this](bool, bool, bool) { applyAppletPanelState(false, false, true); });
+        return fail(QStringLiteral("dock needs left|right"));
+    }
+    if (action == QLatin1String("float")) {
         if (value == QLatin1String("on"))
-            applyAppletPanelState(true, dockedLeft, true);
-        else if (value == QLatin1String("off"))
-            applyAppletPanelState(false, dockedLeft, true);
-        else
-            return fail(QStringLiteral("float needs on|off"));
-    } else if (action == QLatin1String("show")) {
-        applyAppletPanelState(floating, dockedLeft, true);
-    } else if (action == QLatin1String("hide")) {
+            return later([this](bool, bool dockedLeft, bool) {
+                applyAppletPanelState(true, dockedLeft, true);
+            });
+        if (value == QLatin1String("off"))
+            return later([this](bool, bool dockedLeft, bool) {
+                applyAppletPanelState(false, dockedLeft, true);
+            });
+        return fail(QStringLiteral("float needs on|off"));
+    }
+    if (action == QLatin1String("show")) {
+        return later([this](bool floating, bool dockedLeft, bool) {
+            applyAppletPanelState(floating, dockedLeft, true);
+        });
+    }
+    if (action == QLatin1String("hide")) {
         // Hiding is only meaningful docked — a hidden float window is the
         // unreachable state applyAppletPanelState() refuses to represent.
-        applyAppletPanelState(false, dockedLeft, false);
-    } else {
-        return fail(QStringLiteral("unknown applet action: ") + action);
+        return later([this](bool, bool dockedLeft, bool) {
+            applyAppletPanelState(false, dockedLeft, false);
+        });
     }
-    return true;
+    return fail(QStringLiteral("unknown applet action: ") + action);
 }
 
 QJsonObject MainWindow::automationTitleBarSnapshot() const
@@ -4535,11 +4555,16 @@ QJsonObject MainWindow::automationTitleBarSnapshot() const
 
 bool MainWindow::automationTitleBarAction(const QString& action,
                                           const QString& target,
-                                          QString* error)
+                                          QString* error,
+                                          std::function<void()>* activate)
 {
     auto fail = [error](const QString& why) {
         if (error) *error = why;
         return false;
+    };
+    auto later = [activate](std::function<void()> run) {
+        if (activate) *activate = std::move(run);
+        return true;
     };
     if (!m_titleBar) {
         return fail(QStringLiteral("no title bar"));
@@ -4559,40 +4584,46 @@ bool MainWindow::automationTitleBarAction(const QString& action,
         const auto tabWidgets = tabs->findChildren<RadioTab*>();
         for (RadioTab* tab : tabWidgets) {
             if (tab->entry().id == target) {
-                tab->click();
-                return true;
+                // Discovery can rebuild the strip before the deferred turn.
+                const QPointer<RadioTab> guarded(tab);
+                return later([guarded]() {
+                    if (guarded) guarded->click();
+                });
             }
         }
         return fail(QStringLiteral("no radio tab with id '") + target
                     + QStringLiteral("'"));
     }
     if (action == QLatin1String("showDiscovery")) {
-        tabs->showDiscoveryPopover();
-        return true;
+        const QPointer<RadioTabBar> guarded(tabs);
+        return later([guarded]() {
+            if (guarded) guarded->showDiscoveryPopover();
+        });
     }
     if (action == QLatin1String("minimize") || action == QLatin1String("maximize")
         || action == QLatin1String("close")) {
-        WindowCaptionButtons* caption = m_titleBar->captionButtons();
-        if (!caption || !caption->isVisible()) {
-            if (action == QLatin1String("minimize")) {
-                showMinimized();
-            } else if (action == QLatin1String("maximize")) {
-                if (m_titleBar->isMinimalMode()) {
-                    toggleMinimalMode(false);
-                } else if (isMaximized()) {
-                    showNormal();
+        return later([this, action]() {
+            WindowCaptionButtons* caption = m_titleBar ? m_titleBar->captionButtons() : nullptr;
+            if (!caption || !caption->isVisible()) {
+                if (action == QLatin1String("minimize")) {
+                    showMinimized();
+                } else if (action == QLatin1String("maximize")) {
+                    if (m_titleBar && m_titleBar->isMinimalMode()) {
+                        toggleMinimalMode(false);
+                    } else if (isMaximized()) {
+                        showNormal();
+                    } else {
+                        showMaximized();
+                    }
                 } else {
-                    showMaximized();
+                    close();
                 }
-            } else {
-                close();
+                return;
             }
-            return true;
-        }
-        if (action == QLatin1String("minimize")) emit caption->minimizeRequested();
-        else if (action == QLatin1String("maximize")) emit caption->maximizeRestoreRequested();
-        else emit caption->closeRequested();
-        return true;
+            if (action == QLatin1String("minimize")) emit caption->minimizeRequested();
+            else if (action == QLatin1String("maximize")) emit caption->maximizeRestoreRequested();
+            else emit caption->closeRequested();
+        });
     }
     return fail(QStringLiteral("unknown titlebar action '") + action
                 + QStringLiteral("'"));

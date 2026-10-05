@@ -93,8 +93,7 @@ band of reserved-but-empty space above the old strip for as long as they matched
 
 | Token | Canonical (dark) | Refs |
 |---|---|---|
-| `color.titlebar.background` | `#eb0d1624` | the 52 px bar's surface (0.92 alpha) |
-| `color.titlebar.background.mac` | `#9e0d1624` | macOS tint over the native visual-effect material (0.62 alpha) |
+| `color.titlebar.background` | `#eb0d1624` | the 52 px bar's surface (0.92 alpha, pre-composited over `background.app` — the window is opaque) |
 | `color.titlebar.border` | `#2978bee6` | 1 px rule under the bar (0.16 alpha) |
 | `color.titlebar.tab.hover` | `#12ffffff` | inactive radio tab, hovered |
 | `color.titlebar.tab.active.background` | `#1a00b4d8` | active radio tab fill |
@@ -265,15 +264,15 @@ six tokens so the footer stays editable and follows theme changes.
 - Text: **4**
 - Accents: **6** (3 cyan family + 3 status)
 - Borders: **4**
-- Title bar + brand: **21** (20 scalar + 1 gradient)
+- Title bar + brand: **20** (19 scalar + 1 gradient)
 - Meters: **6**
 - Spectrum / waterfall: **5** (4 scalar + 1 gradient)
 - Slice: **9** (A–H + TX)
 - Font: **6**
 - Sizing: **5**
 
-**Total: 72 tokens** — still inside the 50-80 envelope from the RFC.
-(51 at the Phase 1 migration; +21 for the unified title bar and brand mark.)
+**Total: 71 tokens** — still inside the 50-80 envelope from the RFC.
+(51 at the Phase 1 migration; +20 for the unified title bar and brand mark.)
 
 ## Migration risks
 
