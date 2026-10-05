@@ -564,6 +564,10 @@ bool TciServer::start(quint16 requestedPort)
     m_ioThread = std::make_unique<QThread>();
     m_ioThread->setObjectName(QStringLiteral("TciIo"));
     m_io->moveToThread(m_ioThread.get());
+    // High QoS: performance cores, no power throttling (macOS/Windows; no-op
+    // on Linux). Never add setPriority()/start(priority) to this thread — on
+    // macOS an explicit priority silently cancels the QoS class.
+    m_ioThread->setServiceLevel(QThread::QualityOfService::High);
     m_ioThread->start();
     bool started = false;
     quint16 bound = 0;

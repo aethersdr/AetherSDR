@@ -173,6 +173,10 @@ AnanBackend::AnanBackend(QObject* parent)
     m_ioThread->setObjectName(QStringLiteral("anan-io"));
     m_client->moveToThread(m_ioThread);
     m_dsp->moveToThread(m_ioThread);
+    // High QoS: performance cores, no power throttling (macOS/Windows; no-op
+    // on Linux). Never add setPriority()/start(priority) to this thread — on
+    // macOS an explicit priority silently cancels the QoS class.
+    m_ioThread->setServiceLevel(QThread::QualityOfService::High);
     m_ioThread->start();
 
     // Build-only thread for a rate change's background DSP rebuild -- see

@@ -322,6 +322,10 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
     m_ioThread->setObjectName(QStringLiteral("hl2-io"));
     m_metis->moveToThread(m_ioThread);
     m_txDsp->moveToThread(m_ioThread);
+    // High QoS: performance cores, no power throttling (macOS/Windows; no-op
+    // on Linux). Never add setPriority()/start(priority) to this thread — on
+    // macOS an explicit priority silently cancels the QoS class.
+    m_ioThread->setServiceLevel(QThread::QualityOfService::High);
     m_ioThread->start();
 
     // The rate-change build thread — see the member declarations. Started here

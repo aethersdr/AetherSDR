@@ -1236,6 +1236,10 @@ MainWindow::MainWindow(QWidget* parent)
     m_audio->setRxBufferCapMs(
         AppSettings::instance().value("AudioBufferMs", "100").toInt());
     m_audio->moveToThread(m_audioThread);
+    // High QoS: performance cores, no power throttling (macOS/Windows; no-op
+    // on Linux). Never add setPriority()/start(priority) to this thread — on
+    // macOS an explicit priority silently cancels the QoS class.
+    m_audioThread->setServiceLevel(QThread::QualityOfService::High);
     m_audioThread->start();
     const auto updateAetherDspPolicy = [this](bool) {
         updateAetherDspModePolicy();

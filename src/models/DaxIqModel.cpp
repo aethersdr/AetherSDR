@@ -98,6 +98,10 @@ DaxIqModel::DaxIqModel(QObject* parent)
     connect(&m_workerThread, &QThread::finished, m_worker, &QObject::deleteLater);
     connect(m_worker, &DaxIqWorker::levelReady,   this, &DaxIqModel::iqLevelReady);
     connect(m_worker, &DaxIqWorker::samplesReady, this, &DaxIqModel::relayIqSamples);
+    // High QoS: performance cores, no power throttling (macOS/Windows; no-op
+    // on Linux). Never add setPriority()/start(priority) to this thread — on
+    // macOS an explicit priority silently cancels the QoS class.
+    m_workerThread.setServiceLevel(QThread::QualityOfService::High);
     m_workerThread.start();
 }
 

@@ -1104,7 +1104,8 @@ set(CORE_SOURCES
 )
 
 if(APPLE)
-    list(APPEND CORE_SOURCES src/core/VirtualAudioBridge.cpp src/core/MacMicPermission.mm)
+    list(APPEND CORE_SOURCES src/core/VirtualAudioBridge.cpp src/core/MacMicPermission.mm
+                             src/core/AppActivity.mm)
 elseif(UNIX)
     # Linux DAX uses PulseAudio pipe modules via pactl (works with PipeWire too).
     # When libpipewire-0.3 dev headers are present we additionally compile a
@@ -1119,6 +1120,9 @@ elseif(UNIX)
         )
         set(HAVE_PIPEWIRE_NATIVE TRUE)
     endif()
+endif()
+if(WIN32)
+    list(APPEND CORE_SOURCES src/core/AppActivity_win.cpp)
 endif()
 
 set(MODEL_SOURCES
@@ -2314,7 +2318,7 @@ if(APPLE)
         MACOSX_BUNDLE_ICON_FILE "AetherSDR.icns"
         MACOSX_BUNDLE_INFO_PLIST "${CMAKE_SOURCE_DIR}/packaging/macos/Info.plist.in"
     )
-    target_link_libraries(aethercore PRIVATE "-framework AVFoundation" "-framework Accelerate") # core: MacNRFilter/VirtualAudioBridge
+    target_link_libraries(aethercore PRIVATE "-framework AVFoundation" "-framework Accelerate" "-framework Foundation") # core: MacNRFilter/VirtualAudioBridge/AppActivity
     target_sources(aethercore PRIVATE src/core/MacNRFilter.cpp)
 
     # Generate AetherSDR.icns at build time from docs/assets/logo-circle.png so local
