@@ -105,6 +105,7 @@ bool P2Client::start(const Params& params, int connectTimeoutMs)
     m_rxPackets = 0;
     m_txBytes = 0;
     m_warnedUnexpectedPorts.clear();
+    m_warnedForeignSender = false;
     m_linkUp = false;
     m_discoveryInfoSent = false;
 
@@ -457,8 +458,28 @@ void P2Client::onReadyRead()
 {
     while (m_socket && m_socket->hasPendingDatagrams()) {
         const QNetworkDatagram dg = m_socket->receiveDatagram();
-        handleDatagram(asBytes(dg.data()), static_cast<quint16>(dg.senderPort()));
+        handleDatagramFrom(dg.senderAddress(), asBytes(dg.data()),
+                           static_cast<quint16>(dg.senderPort()));
     }
+}
+
+void P2Client::handleDatagramFrom(const QHostAddress& sender,
+                                  std::span<const std::uint8_t> bytes, quint16 senderPort)
+{
+    // The radio answers from the address start() sent to: Discovery is unicast
+    // to m_host from this same socket, so its reply passes too. A spoofed
+    // source still passes; this keeps out stray LAN traffic, not an attacker.
+    if (!sender.isEqual(m_host, QHostAddress::TolerantConversion)) {
+        if (!m_warnedForeignSender) {
+            m_warnedForeignSender = true;
+            qCWarning(lcAnanP2).nospace()
+                << "ANAN: ignoring datagram from " << sender.toString()
+                << " (the radio is " << m_host.toString()
+                << ") -- further foreign senders this session are not logged";
+        }
+        return;
+    }
+    handleDatagram(bytes, senderPort);
 }
 
 // Socket-free ingest seam: production and regression tests share validation,
@@ -466,11 +487,9 @@ void P2Client::onReadyRead()
 void P2Client::handleDatagram(std::span<const std::uint8_t> bytes, quint16 senderPort)
 {
     // Before any parse decides what this datagram IS: the transport carried it
-    // either way, and a session whose IQ has stalled while Status packets still
-    // arrive must not read as a dead link. Counting after the shape checks
-    // below would make every rejected datagram invisible to the readout.
+    // either way, and LinkStats::alive reads bytes, so a session whose IQ has
+    // stalled while Status packets still arrive does not read as a dead link.
     m_rxBytes += static_cast<quint64>(bytes.size());
-    ++m_rxPackets;
 
     const auto frame = parseDdcFrame(bytes);
     if (!frame) {
@@ -517,6 +536,10 @@ void P2Client::handleDatagram(std::span<const std::uint8_t> bytes, quint16 sende
         return;
     }
     const std::size_t slot = static_cast<std::size_t>(*ddcIndex);
+    // The denominator rxPacketsLost is a fraction of: sequence-tracked DDC
+    // frames only. Mic Data and Status would dilute RadioModel's loss
+    // percentage several-fold at low DDC rates.
+    ++m_rxPackets;
 
     // Per-DDC gap detection; see m_expectedSeq's own comment for why a
     // shared counter would manufacture drops once a second DDC streams.

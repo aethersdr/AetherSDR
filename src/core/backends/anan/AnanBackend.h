@@ -154,6 +154,7 @@ public:
 
 private:
     friend class AnanNoiseBlankerTestAccess;
+    friend class AnanLinkStatsTestAccess;
     void beginDspSetup();
     void finishDspSetup(quint64 generation, bool ok, const QString& error);
     // The "restart P2Client with m_pendingParams, then retune" half of what

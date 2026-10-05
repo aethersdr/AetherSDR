@@ -131,10 +131,11 @@ public:
     // says the same thing: a backend with worker-side values caches them on its
     // own thread.
     //
-    // Session-cumulative, reset by start(). EVERY datagram the socket handed us
-    // counts, including Mic Data and Status: this measures the TRANSPORT, not
-    // the IQ stream, so a session whose DDC traffic has stalled while status
-    // packets still arrive must not read as a dead link.
+    // Session-cumulative, reset by start(). Only the radio's own datagrams
+    // count (handleDatagramFrom()). Bytes count every one of them, so a session
+    // whose IQ has stalled while Status packets still arrive does not read as
+    // a dead link. Packets count DDC frames only: drops counts gaps in that
+    // stream, and RadioModel's loss percentage divides one by the other.
     struct LinkCounters {
         quint64 rxBytes = 0;
         quint64 rxPackets = 0;
@@ -190,6 +191,11 @@ private slots:
 
 private:
     friend struct P2ClientTestAccess;
+    // onReadyRead()'s socket-free half: drops anything not from m_host, so
+    // foreign LAN traffic can neither hold LinkStats::alive true after the
+    // radio has gone nor reach the parsers.
+    void handleDatagramFrom(const QHostAddress& sender,
+                            std::span<const std::uint8_t> bytes, quint16 senderPort);
     void handleDatagram(std::span<const std::uint8_t> bytes, quint16 senderPort);
     void noteSpeakerFifoStatus(const HighPriorityStatus& status);
 
@@ -301,6 +307,9 @@ private:
     // nature affects every packet -- logs once per distinct port rather than
     // per datagram. Session-scoped; cleared with the rest of the state.
     QSet<quint16> m_warnedUnexpectedPorts;
+    // One warning per session, not per sender: a set keyed on the source
+    // address would grow without bound under a flood of spoofed ones.
+    bool m_warnedForeignSender = false;
 
     // Reused decode buffer, cleared and refilled per frame rather than
     // reallocated -- matches MetisClient's m_blocks for the same reason.

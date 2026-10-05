@@ -406,16 +406,11 @@ RadioCapabilities AnanBackend::capabilities() const
     c.manufacturer = QStringLiteral("Apache Labs");
     c.model = QStringLiteral("ANAN-G2");
     // ---- PA telemetry ----
-    // hasSupplyVoltageTelemetry stays FALSE even though the radio does send a
-    // supply-rail reading (P2Protocol decodes it). Raw ADC counts become volts
-    // only against the RF board's ADC reference -- 5 V on one board, 3.3 V on
-    // another, a 1.5x difference that would read 21 V for a 13.8 V rail -- and
-    // NOTHING THE RADIO REPORTS IDENTIFIES WHICH. The board id cannot answer
-    // it: see DiscoveryReply::isSaturn(), which is explicitly a discovery-time
-    // picker filter and not for gating backend behaviour, because board type is
-    // a p2app launch option rather than a fact about the hardware. So the row
-    // stays withdrawn until the reference comes from somewhere load-bearing or
-    // from the operator; a confidently wrong voltage is worse than none.
+    // hasSupplyVoltageTelemetry stays FALSE although the radio sends a
+    // supply-rail count (P2Protocol decodes it): no known scale fits it. On a
+    // G2 bench the 5 V-reference scale read a 13.8 V rail as ~40 V, 2.9x high,
+    // and the 3.3 V board's scale differs from it by only 1.5x, so no board
+    // choice fixes it. A volts readout waits for an operator calibration.
     //
     // There is NO PA temperature in this protocol. The radio's whole analog
     // payload is six fields and none of them is a temperature, so the readout
@@ -1455,10 +1450,12 @@ IRadioBackend::LinkStats AnanBackend::linkStats() const
 
 void AnanBackend::onLinkCounters(const P2Client::LinkCounters& counters)
 {
-    // First snapshot of a session compares against ZERO, not against itself:
-    // P2Client::start() resets its counters, and comparing a first snapshot to
-    // itself would report a dead link on the very tick after a connect that
-    // only happened because DDC0 frames arrived.
+    // A session restart shows as a BACKWARD jump, since P2Client::start() zeroes
+    // its counters; the cache is then a dead session's and is discarded here,
+    // whichever path restarted it. The first snapshot of a session compares
+    // against ZERO: against itself, it would read dead on the first tick.
+    if (counters.rxBytes < m_linkCounters.rxBytes)
+        m_linkCountersSeen = false;
     m_lastSnapshotRxBytes = m_linkCountersSeen ? m_linkCounters.rxBytes : 0;
     m_linkCounters = counters;
     m_linkCountersSeen = true;

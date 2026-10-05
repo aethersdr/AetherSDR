@@ -22,10 +22,10 @@
 // WHAT A GAP DID REACH, before this. A counter, and only a counter:
 // MetisClient's EP6 path computes the gap, adds it to m_drops, and emits
 // dropsUpdated, which Hl2Backend mirrors onto the GUI thread for the health
-// rows. On the ANAN side P2Client's dropsUpdated reaches a deliberately empty
-// lambda in AnanBackend. Neither path touches a sample-path object. "A gap
-// reaches nothing" would be too strong; "a gap reaches nothing that can act on
-// it" is the accurate statement, and it is what this file closes.
+// rows. On the ANAN side P2Client's drop total reaches only the LinkStats
+// snapshot AnanBackend publishes. Neither path touches a sample-path object.
+// "A gap reaches nothing" would be too strong; "a gap reaches nothing that can
+// act on it" is the accurate statement, and it is what this file closes.
 //
 // FIVE CLAIMS, in the order they build on each other:
 //

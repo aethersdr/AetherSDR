@@ -257,14 +257,11 @@ struct HighPriorityStatus {
     // or unassigned, and there is NO TEMPERATURE anywhere in the payload, which
     // is why no client can populate a PA temperature readout for this radio.
     //
-    // DECODED BUT NOT YET CONSUMED, deliberately. Counts become volts only
-    // against the RF board's ADC reference, and nothing the radio reports
-    // identifies it: board type is a p2app launch option, not a hardware fact
-    // (see DiscoveryReply::isSaturn()). Publishing a scaled value would mean
-    // picking a reference at a 1.5x spread -- 21 V shown for a 13.8 V rail if
-    // wrong. The decode is pinned here so the wire format is recorded and
-    // tested; the reference has to come from the operator or from a
-    // load-bearing field before a reading can be offered.
+    // DECODED BUT NOT YET CONSUMED, deliberately: no known scale turns these
+    // counts into volts on this radio. A G2 bench read a 13.8 V rail as ~40 V
+    // through the 5 V-reference scale (2.9x high), and the 3.3 V board's scale
+    // is only 1.5x from that, so neither board explains it. The raw count is
+    // what an operator calibration against a meter will need.
     std::uint16_t supplyVoltageRaw = 0;
 };
 

@@ -6015,7 +6015,7 @@ void MainWindow::buildUI()
     paVbox->addWidget(m_supplyVoltLabel);
     hbox->addWidget(paStack);
 
-    addSep();
+    m_paSeparator = addSep();
 
     // Network label (top) + quality (bottom) stacked
     auto* netStack = new QWidget;
@@ -7819,26 +7819,24 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
             m_hasPaTempTelemetry = false;
             updatePaTempLabel();
         }
-        // Republishing the minimum width cannot currently matter here, and the
-        // call is kept only so the gate stays correct if that stops being true:
-        // paStack's minimum is PINNED by reserveTelemetryStack() with a
-        // "99.99 V" sample, so hiding one of its children leaves
-        // m_statusBarContainer->minimumSizeHint() unchanged, and
-        // updateStatusBarMinimumWidth() only ever READS that hint. So no stale
-        // minimum, gap or clipped size grip is reachable today — and the HL2
-        // reclaims no width from the hidden row either, nor would it:
-        // "PA 248.0°F" is the wider sample.
-        updateStatusBarMinimumWidth();
     }
-    // Both rows withdrawn: take the container down too. Its minimum width is
-    // PINNED by reserveTelemetryStack(), so hiding only the children would
-    // leave a reserved, empty gap sitting between two separators.
+    // Both rows withdrawn: take the container down too, and the separator after
+    // it. Its minimum width is PINNED by reserveTelemetryStack(), so hiding only
+    // the children would leave a reserved, empty gap sitting between two
+    // separators.
     if (m_paStack) {
         const bool anyPaRow =
             (m_paTempLabel && m_paTempLabel->isVisibleTo(m_paStack))
             || (m_supplyVoltLabel && m_supplyVoltLabel->isVisibleTo(m_paStack));
         m_paStack->setVisible(anyPaRow);
+        if (m_paSeparator) {
+            m_paSeparator->setVisible(anyPaRow);
+        }
     }
+    // After the hide, not before: hiding the stack drops its pinned minimum out
+    // of m_statusBarContainer->minimumSizeHint(), which this only ever READS.
+    // Hiding one row alone changes nothing, since the pin holds the width.
+    updateStatusBarMinimumWidth();
 
     // CWX/CWK, DVK and FDX status-bar toggles are HIDDEN without the capability:
     // each is a firmware verb (`cwx`, `dvk`, `radio set full_duplex_enabled=`)
