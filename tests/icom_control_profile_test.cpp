@@ -369,10 +369,14 @@ int main(int argc, char** argv)
                       "the MK2 SQL line lands on the measured gate");
                 check(!(*sql == legacyDbmSquelchScale()), "the MK2 no longer uses Flex's scale");
                 check(!sql->autoSquelch, "MK2 Auto SQL is withdrawn: the gate reads the S-meter");
-                check(sql->appliesTo(QStringLiteral("USB")) && sql->appliesTo(QStringLiteral("CW"))
+                check(sql->appliesTo(QStringLiteral("USB"))
+                          && sql->appliesTo(QStringLiteral("LSB"))
+                          && sql->appliesTo(QStringLiteral("CW"))
                           && sql->appliesTo(QStringLiteral("CWU"))
+                          && sql->appliesTo(QStringLiteral("CWL"))
                           && sql->appliesTo(QStringLiteral("AM"))
-                          && sql->appliesTo(QStringLiteral("DIGU")),
+                          && sql->appliesTo(QStringLiteral("DIGU"))
+                          && sql->appliesTo(QStringLiteral("DIGL")),
                       "the MK2 SQL line covers its S-meter squelch modes");
                 check(!sql->appliesTo(QStringLiteral("FM")) && !sql->appliesTo(QStringLiteral("DFM"))
                           && !sql->appliesTo(QStringLiteral("WFM")),

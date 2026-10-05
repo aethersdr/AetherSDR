@@ -232,29 +232,14 @@ bool validNtpServer(const QString& address)
     return true;
 }
 
-// Where the IC-7300MK2's S-meter squelch closes, as the pan peak of a steady
-// carrier (#6180). Measured live: 14 03 binary-searched to the lowest value at
-// which 15 01 reads closed, against AM-broadcast carriers' pan peaks with the
-// preamp on. Seven points over 40 dB fit pan = -195.1 + 0.584 * raw within
-// 0.9 dB RMS; a preamp-off carrier below S9 sits on the same line. Strong
-// carriers (S9 and up) with the preamp off or ATT in sit 6-10 dB under it.
-// In levels, raw = ceil(2.55 * L) adds half a raw step on average.
-constexpr double kMk2SquelchPanDbmAtRawZero = -195.1;
-constexpr double kMk2SquelchPanDbPerRaw = 0.584;
-
-// The pan's per-bin floor sits below the passband power the S-meter gates on,
-// and often clips at the axis floor, so no Auto SQL. The modes are every name
-// modeToNeutral() gives an S-meter-squelch mode (RTTY reads as DIGL/DIGU), plus
-// CWU, which the backend accepts as an input spelling of CW. FM and DFM use
-// noise squelch and WFM is broadcast receive; none has a dB place, as on the HL2.
-SquelchLevelScale ic7300Mk2SquelchScale()
+SquelchLevelScale measuredSquelchScale(const SquelchScaleProfile& profile)
 {
     SquelchLevelScale sql;
-    sql.dbPerStep = kMk2SquelchPanDbPerRaw * 2.55;
-    sql.offsetDb = kMk2SquelchPanDbmAtRawZero + kMk2SquelchPanDbPerRaw * 0.5;
-    sql.modes = {QStringLiteral("USB"), QStringLiteral("LSB"), QStringLiteral("CW"),
-                 QStringLiteral("CWU"), QStringLiteral("CWL"), QStringLiteral("AM"),
-                 QStringLiteral("DIGU"), QStringLiteral("DIGL")};
+    sql.offsetDb = profile.offsetDb;
+    sql.dbPerStep = profile.dbPerStep;
+    for (const std::string_view mode : profile.modes) {
+        sql.modes.append(QString::fromUtf8(mode.data(), static_cast<qsizetype>(mode.size())));
+    }
     sql.autoSquelch = false;
     return sql;
 }
@@ -537,8 +522,8 @@ RadioCapabilities IcomCivBackend::capabilities() const
     c.hasModeIndependentSquelch = profile.hasModeIndependentSquelch;
     // The 0..255 register has no published dB mapping. The IC-7300MK2's is
     // measured; the others keep Flex's scale until theirs are.
-    c.squelchLevelScale = profile.meters.calibration == MeterCalibration::Ic7300Mk2
-        ? ic7300Mk2SquelchScale()
+    c.squelchLevelScale = profile.squelchScale
+        ? measuredSquelchScale(*profile.squelchScale)
         : legacyDbmSquelchScale();
     c.hasCwTune = profile.hasCwTune;
     // setTune() drives the ordinary TUNE producer: one sine wave. There is no
