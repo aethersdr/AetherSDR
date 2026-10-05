@@ -96,6 +96,27 @@ struct IcomCivBackendTestAccess {
         b.m_scopeView = IcomSettings::ScopeView::ScrollF;
         b.m_scopeStarted = true;
     }
+    // Run the one-turn deferrals, then flush a throttled edge write now
+    // rather than after its real 200 ms, so the tests never race the clock.
+    static void settleScope(IcomCivBackend& b)
+    {
+        QCoreApplication::processEvents();
+        if (b.m_scopeEdgeWriteTimer && b.m_scopeEdgeWriteTimer->isActive()) {
+            b.m_scopeEdgeWriteTimer->stop();
+            b.flushScopeEdgeWrite();
+        }
+    }
+    static void armThrottle(IcomCivBackend& b) { b.m_scopeLastEdgeWriteMs = b.nowMs(); }
+    static bool edgeWritePending(const IcomCivBackend& b)
+    {
+        return b.m_scopeEdgeWriteTimer && b.m_scopeEdgeWriteTimer->isActive();
+    }
+    static qint64 holdRemainingMs(const IcomCivBackend& b)
+    {
+        return b.m_scopeEdgeHoldUntilMs - b.nowMs();
+    }
+    static void refuse(IcomCivBackend& b, const char* key) { b.handleScopeRefusal(key); }
+    static bool scopeModesOffered(const IcomCivBackend& b) { return b.scopeModesOffered(); }
     static bool tuning(const IcomCivBackend& b) { return b.m_tuning; }
     static bool tuneTimerActive(const IcomCivBackend& b)
     {
@@ -807,8 +828,10 @@ void testScrollFPanIntents()
 
     Access::forget(backend);
     backend.setPanCenter(QStringLiteral("0"), 14'030'000.0, IRadioBackend::PanCenterIntent::Drag);
-    QCoreApplication::processEvents();
+    Access::settleScope(backend);
     auto edges = edgeWrites(Access::issued(backend));
+    check(Access::holdRemainingMs(backend) <= 1000,
+          "the hold runs one second from the write reaching the wire, not the queued bound");
     check(!retunes(Access::issued(backend)), "a SCROLL-F drag does not retune");
     check(edges.size() == 1 && edges.front().range == 6 && edges.front().slot == 4
               && edges.front().lowerHz == 13'980'000 && edges.front().upperHz == 14'080'000,
@@ -817,7 +840,7 @@ void testScrollFPanIntents()
     Access::forget(backend);
     QSignalSpy pan(&backend, &IRadioBackend::panCenterBandwidthChanged);
     backend.setPanCenter(QStringLiteral("0"), 13'900'000.0, IRadioBackend::PanCenterIntent::Drag);
-    QCoreApplication::processEvents();
+    Access::settleScope(backend);
     edges = edgeWrites(Access::issued(backend));
     check(edges.size() == 1 && edges.front().upperHz == 14'052'000,
           "a drag that would lose the VFO stops with it 2 kHz inside the edge");
@@ -827,7 +850,7 @@ void testScrollFPanIntents()
     Access::forget(backend);
     backend.setPanCenter(QStringLiteral("0"), 400'900.0, IRadioBackend::PanCenterIntent::Range);
     backend.setSliceFrequency(0, 400'900.0);
-    QCoreApplication::processEvents();
+    Access::settleScope(backend);
     edges = edgeWrites(Access::issued(backend));
     check(edges.size() == 1 && edges.front().range == 1
               && edges.front().lowerHz == 351'000 && edges.front().upperHz == 451'000,
@@ -842,10 +865,76 @@ void testScrollFPanIntents()
     backend.setPanBandwidth(QStringLiteral("0"), 50'000.0);
     check(!pan.isEmpty() && std::fabs(pan.first().at(2).toDouble() - 0.05) < 1e-9,
           "a zoom announces its new width at once");
-    QCoreApplication::processEvents();
+    Access::settleScope(backend);
     edges = edgeWrites(Access::issued(backend));
     check(edges.size() == 1 && edges.front().upperHz - edges.front().lowerHz == 50'000,
           "a zoom costs one edge write, at the new width");
+}
+
+// Gestures inside the 200 ms throttle coalesce into one write of the latest window.
+void testScrollFEdgeWriteThrottle()
+{
+    IcomCivBackend backend;
+    Access::prepare(backend, "IC-7300MK2");
+    Access::scrollF(backend);
+    Access::deliver(backend, frequencyEcho(14'050'000));
+    Access::deliver(backend, *scopeEdgeSweep(14'000'000, 14'100'000));
+
+    Access::forget(backend);
+    Access::armThrottle(backend);
+    backend.setPanCenter(QStringLiteral("0"), 14'040'000.0, IRadioBackend::PanCenterIntent::Drag);
+    backend.setPanCenter(QStringLiteral("0"), 14'035'000.0, IRadioBackend::PanCenterIntent::Drag);
+    QCoreApplication::processEvents();
+    check(Access::edgeWritePending(backend) && edgeWrites(Access::issued(backend)).empty(),
+          "drags inside the throttle wait for it");
+    Access::settleScope(backend);
+    const auto edges = edgeWrites(Access::issued(backend));
+    check(edges.size() == 1 && edges.front().lowerHz == 13'985'000,
+          "and then cost one write, of the latest window");
+}
+
+// Entering a new edge range re-selects slot 4: the radio remembers a slot per band.
+void testScrollFReselectsSlotOnRangeChange()
+{
+    IcomCivBackend backend;
+    Access::prepare(backend, "IC-7300MK2");
+    Access::scrollF(backend);
+    Access::deliver(backend, frequencyEcho(14'050'000));
+    Access::deliver(backend, *scopeEdgeSweep(14'000'000, 14'100'000));
+    Access::forget(backend);
+    Access::deliver(backend, frequencyEcho(7'074'000));
+    const auto slotWrites = writes(Access::issued(backend), cmd::kScope, scope::kEdgeNumber);
+    check(any(slotWrites, [](const CivFrame& f) {
+              return f.data.size() == 2 && f.data[0] == 0x00 && f.data[1] == 0x04;
+          }),
+          "a move from range 06 to range 04 re-selects slot 4 (27 16 00 04)");
+}
+
+// FA to SCROLL-F or slot 4 (old firmware) falls back to Center and says so;
+// FA to a slot READ is not proof of old firmware.
+void testScrollFRefusalFallsBackToCenter()
+{
+    {
+        IcomCivBackend backend;
+        Access::prepare(backend, "IC-705");
+        Access::scrollF(backend);
+        Access::refuse(backend, "scope.edge.read");
+        check(Access::scopeModesOffered(backend), "an FA to a slot read keeps SCROLL-F");
+    }
+    IcomCivBackend backend;
+    Access::prepare(backend, "IC-705");
+    Access::scrollF(backend);
+    QSignalSpy modes(&backend, &IRadioBackend::panScopeModesChanged);
+    QSignalSpy warning(&backend, &IRadioBackend::configurationWarning);
+    Access::forget(backend);
+    Access::refuse(backend, "scope.mode");
+    check(!Access::scopeModesOffered(backend), "an FA to 27 14 00 03 withdraws SCROLL-F");
+    check(!modes.isEmpty() && modes.last().at(1).toStringList().isEmpty(),
+          "the Scope row is hidden");
+    check(warning.count() == 1, "the operator is told why");
+    const auto mode = writes(Access::issued(backend), cmd::kScope, scope::kMode);
+    check(mode.size() == 1 && mode.front().data.size() == 2 && mode.front().data[1] == 0x00,
+          "and the radio is put back in Center");
 }
 
 // A VFO move AetherSDR did not command (the dial) is followed; our own is not.
@@ -860,13 +949,13 @@ void testScrollFFollowsTheDial()
     Access::forget(backend);
     backend.setSliceFrequency(0, 14'095'000.0);
     Access::deliver(backend, frequencyEcho(14'095'000));
-    QCoreApplication::processEvents();
+    Access::settleScope(backend);
     check(edgeWrites(Access::issued(backend)).empty(),
           "the echo of our own tune does not move the window (the GUI places it)");
 
     Access::forget(backend);
     Access::deliver(backend, frequencyEcho(14'097'000));
-    QCoreApplication::processEvents();
+    Access::settleScope(backend);
     const auto edges = edgeWrites(Access::issued(backend));
     check(edges.size() == 1 && edges.front().upperHz == 14'122'000,
           "a dial move into the edge zone pans so the VFO sits 25 % inside");
@@ -1072,6 +1161,9 @@ int main(int argc, char** argv)
     testPanIntents();
     testScrollFPanIntents();
     testScrollFFollowsTheDial();
+    testScrollFEdgeWriteThrottle();
+    testScrollFReselectsSlotOnRangeChange();
+    testScrollFRefusalFallsBackToCenter();
     testCwTextLimits();
     testReceiveAudioRatio();
     testTraceTags();

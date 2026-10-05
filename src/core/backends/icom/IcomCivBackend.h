@@ -655,7 +655,7 @@ private:
     int m_scopeEdgeTargetRange = 0;
     int m_scopeEdgeWrittenRange = 0;
     qint64 m_scopeEdgeHoldUntilMs = 0;
-    qint64 m_scopeLastEdgeWriteMs = 0;
+    std::optional<qint64> m_scopeLastEdgeWriteMs;   // nullopt = none this session
     qint64 m_scopeBlankSweepUntilMs = 0;
     QTimer* m_scopeEdgeWriteTimer = nullptr;
     // Set when our slot comes into view; the first sweep decides whether the

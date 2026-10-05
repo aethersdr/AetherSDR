@@ -1823,8 +1823,8 @@ void SpectrumOverlayMenu::buildDisplayPanel()
         m_scopeModeLayout = new QHBoxLayout(m_scopeModeRow);
         m_scopeModeLayout->setContentsMargins(0, 2, 0, 2);
         m_scopeModeLayout->setSpacing(3);
-        m_scopeModeLayout->addWidget(new QLabel(QStringLiteral("Scope:")));
-        m_scopeModeRow->setToolTip(QStringLiteral(
+        m_scopeModeLayout->addWidget(new QLabel(tr("Scope:")));
+        m_scopeModeRow->setToolTip(tr(
             "How the radio's scope window follows the VFO.\n"
             "Center: the window is centred on the VFO; dragging retunes.\n"
             "Scroll-F: the window stays put; click to tune, drag to scroll.\n"
@@ -3258,7 +3258,7 @@ void SpectrumOverlayMenu::rebuildScopeModeButtons()
         slug.remove(QLatin1Char('-'));
         slug.remove(QLatin1Char(' '));
         btn->setObjectName(QStringLiteral("displayScopeMode_%1").arg(slug));
-        btn->setAccessibleName(QStringLiteral("Scope mode %1").arg(m_scopeModeLabels.at(i)));
+        btn->setAccessibleName(tr("Scope mode %1").arg(m_scopeModeLabels.at(i)));
         m_scopeModeLayout->addWidget(btn, 1);
         m_scopeModeBtns.append(btn);
         connect(btn, &QPushButton::clicked, this, [this, i] {

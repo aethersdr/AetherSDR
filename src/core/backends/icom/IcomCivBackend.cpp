@@ -1941,7 +1941,12 @@ void IcomCivBackend::onScopeVfoMoved(std::uint64_t previousHz, std::uint64_t hz)
 double IcomCivBackend::scopeDragCentre(double requestedHz, double widthHz) const
 {
     const std::uint64_t vfoHz = scopeVfoHz();
-    if (!m_scopeReportedMode || *m_scopeReportedMode != ScopeMode::ScrollF || vfoHz == 0) {
+    const bool commandedRecently = m_scopeModeRequestedAtMs > 0
+        && nowMs() - m_scopeModeRequestedAtMs < kScopeModeRequestGraceMs;
+    const bool scrollF = commandedRecently
+        ? m_scopeView == IcomSettings::ScopeView::ScrollF
+        : m_scopeReportedMode && *m_scopeReportedMode == ScopeMode::ScrollF;
+    if (!scrollF || vfoHz == 0) {
         return requestedHz;
     }
     return scopeCentreHoldingVfo(requestedHz, widthHz, static_cast<double>(vfoHz),
@@ -2133,7 +2138,7 @@ void IcomCivBackend::resetScopeEdgeState()
         m_scopeEnsureVfoVisible = false;
         m_scopeScrollRefused = false;
         m_scopeSelector = 0;
-        m_scopeLastEdgeWriteMs = 0;
+        m_scopeLastEdgeWriteMs.reset();
         m_scopeBlankSweepUntilMs = 0;
         m_scopeRecentTunes.clear();
     }
@@ -2197,9 +2202,9 @@ void IcomCivBackend::requestScopeEdgeWindow(double centreHz, double widthHz, con
     if (m_scopeEdgeWriteTimer->isActive()) {
         return;   // the pending flush carries this target
     }
-    const qint64 since = nowMs() - m_scopeLastEdgeWriteMs;
-    const qint64 wait = m_scopeLastEdgeWriteMs == 0 ? 0
-                                                    : std::max<qint64>(0, kScopeEdgeWriteIntervalMs - since);
+    const qint64 wait = m_scopeLastEdgeWriteMs
+        ? std::max<qint64>(0, kScopeEdgeWriteIntervalMs - (nowMs() - *m_scopeLastEdgeWriteMs))
+        : 0;
     m_scopeEdgeWriteTimer->start(static_cast<int>(wait));
 }
 
@@ -2229,16 +2234,17 @@ void IcomCivBackend::writeScopeEdgeWindow(int rangeNumber, const ScopeEdgeWindow
 {
     qCInfo(lcIcomPan) << "scope edge write: range" << rangeNumber << "slot" << scopeEdgeSlot()
                       << w.lowerHz << "-" << w.upperHz << "Hz";
+    const qint64 now = nowMs();
+    // Bound the wait while queued; pumpCiv replaces it with the wire-time hold
+    // the moment the frame goes out, so this must be set before pumping.
+    m_scopeEdgeHoldUntilMs = std::max(m_scopeEdgeHoldUntilMs, now + kScopeEdgeQueuedHoldMs);
     queueWrite(cmdScopeFixedEdge(m_session->civAddress(), rangeNumber, scopeEdgeSlot(),
                                  w.lowerHz, w.upperHz),
                "scope.edgewin", IcomCivScheduler::Priority::Operator, true);
-    pumpCiv(nowMs());
-    const qint64 now = nowMs();
+    pumpCiv(now);
     m_scopeEdgeWritten = w;
     m_scopeEdgeWrittenRange = rangeNumber;
     m_scopeLastEdgeWriteMs = now;
-    // Held until pumpCiv puts the write on the wire and restarts the hold.
-    m_scopeEdgeHoldUntilMs = std::max(m_scopeEdgeHoldUntilMs, now + kScopeEdgeQueuedHoldMs);
 }
 
 void IcomCivBackend::onScopeSelectorChanged(std::uint8_t selector)
@@ -2326,7 +2332,7 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
             && (sweep->startHz != m_scopeLowerHz || sweep->endHz != m_scopeUpperHz)) {
             qCDebug(lcIcomPan) << "sweep window" << sweep->startHz << "-" << sweep->endHz
                                << "mode" << static_cast<int>(sweep->mode) << "last edge write"
-                               << (m_scopeLastEdgeWriteMs ? nowMs() - m_scopeLastEdgeWriteMs : -1)
+                               << (m_scopeLastEdgeWriteMs ? nowMs() - *m_scopeLastEdgeWriteMs : -1)
                                << "ms ago";
         }
         if (sweep->bandwidthHz() > 0) {
@@ -2360,7 +2366,7 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
                 qCInfo(lcIcomPan) << "scope edge write not reflected after hold; radio shows"
                                   << sweep->startHz << "-" << sweep->endHz;
                 queueRead(cmdReadScopeEdgeNumber(m_session->civAddress(), m_scopeSelector),
-                          "scope.edge", IcomCivScheduler::Priority::Maintenance);
+                          "scope.edge.read", IcomCivScheduler::Priority::Maintenance);
             }
             m_scopeEdgeTarget.reset();
             m_scopeEdgeWritten.reset();
@@ -2482,6 +2488,8 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
             << "radio refused the frequency write (CI-V FA); restoring"
             << actualMhz << "MHz";
         scheduleFrequencyRestore();
+        // A window placed for the refused tune must not stay on screen.
+        resetScopeEdgeState();
         // The dual-receiver explanation is TRUE ONLY WHERE THERE ARE TWO.
         // This block fires on every Icom model, so an IC-705 refusing a write
         // for some other reason was being handed a reason that cannot apply to
@@ -4979,10 +4987,12 @@ void IcomCivBackend::setPanBandwidth(const QString&, double hz)
         if (!shown) {
             return;
         }
-        const double centre = m_scopePendingCentreHz
+        const bool absorbed = m_scopePendingCentreHz.has_value();
+        const double centre = absorbed
             ? *std::exchange(m_scopePendingCentreHz, std::nullopt)
             : (static_cast<double>(shown->lowerHz) + shown->upperHz) / 2.0;
-        requestScopeEdgeWindow(centre, hz, "zoom");
+        requestScopeEdgeWindow(centre, hz, "zoom",
+                               absorbed ? scopeEdgeRangeAt(scopeVfoHz()) : std::nullopt);
         return;
     }
     // Fixed from the front panel: 27 15 does nothing there and the edges are the
