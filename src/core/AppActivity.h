@@ -9,10 +9,11 @@
 //            coalescing, I/O and priority throttling), no idle system sleep,
 //            and (implied by that option set) sudden/automatic termination
 //            disabled, so logout sends a normal quit.
-//   Windows: PowerRequestSystemRequired (no idle system sleep; Modern
-//            Standby on battery may end it, and it is not re-taken after
-//            resume), process power throttling off (HighQoS, not EcoQoS),
-//            and timer-resolution requests honoured while minimized/occluded.
+//   Windows: PowerRequestSystemRequired (no idle system sleep until the
+//            first manual sleep, or Modern Standby on battery, ends it; not
+//            re-taken after resume), process power throttling off (HighQoS,
+//            not EcoQoS), and timer-resolution requests honoured while
+//            minimized/occluded.
 //   Linux:   no-op; the opt-in "Prevent system sleep while connected"
 //            (SleepInhibitor, #1420) remains, Linux only.
 //

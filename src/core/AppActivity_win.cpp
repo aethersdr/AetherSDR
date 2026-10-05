@@ -27,16 +27,17 @@ bool disableThrottling(ULONG mask)
 void keepAppActive()
 {
     static bool done = false;
-    if (done)
+    if (done) {
         return;
+    }
     done = true;
 
     // No idle system sleep. A power request is its own object (visible in
     // `powercfg /requests`), so SleepInhibitor's SetThreadExecutionState
     // reset on disconnect cannot clear it. Never closed: held until exit.
-    // Idle sleep only: user-initiated sleep (lid, Start > Sleep) still
-    // sleeps, and on Modern Standby laptops on battery Windows may end the
-    // request; it is not re-taken after resume.
+    // Idle sleep only, and only until the first sleep: Windows ends power
+    // requests on user-initiated sleep (lid, Start > Sleep) and may end them
+    // on Modern Standby laptops on battery. Not re-taken after resume.
     REASON_CONTEXT reason{};
     reason.Version = POWER_REQUEST_CONTEXT_VERSION;
     reason.Flags = POWER_REQUEST_CONTEXT_SIMPLE_STRING;
