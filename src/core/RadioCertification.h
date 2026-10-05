@@ -64,6 +64,11 @@ public:
         // verb that keys repeatedly and unattended. The ceiling exists precisely
         // so automation cannot do that.
         int maxRfPowerPercent = -1;
+
+        // A steady carrier for stage-squelch-scale, or 0 for referenceCarrierMhz.
+        // Choose one below S9: above it the IC-7300MK2's gate sits 6-10 dB off
+        // its own measured line, and Flex's scale happens to land near both.
+        double squelchCarrierMhz = 0.0;
     };
 
     RadioCertification(RadioModel* radio, AudioEngine* audio,
@@ -105,6 +110,15 @@ private:
     void stageMeterInventory();
     void stageMeterScale(const Options& o);
     void stageControlEffect(const Options& o);
+
+    // ---- what the operator reads off a control: non-keying, before the above ----
+    //
+    // A scaled control's readout, an interlocked button and the SQL line are
+    // instruments too, and each was wrong on the IC-7300MK2 while the backend's
+    // own tests agreed with it (CERTIFICATION.md 1.41-1.43).
+    void stageControlDomain();
+    void stageFrontEndInterlock();
+    void stageSquelchScale(const Options& o);
 
     // ---- receive stages ----
     //

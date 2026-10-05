@@ -8,6 +8,7 @@ from radiocert_persist_applets import AppletRun, Control, ALL_CONTROLS, flatten,
 import unittest
 from unittest.mock import Mock, patch
 
+from radiocert_persist_controls import ControlsRun, range_seeds, ready_controls, sql_mode
 from radiocert_persist import (Journal, Run, StopRun, Supervisor, alternate,
                                atomic_json, band_of, compare, ready, values, show_control, named_widget)
 
@@ -503,6 +504,154 @@ class FmAgcPolicyTest(unittest.TestCase):
                              [{'cmd': 'slice', 'action': 'mode', 'value': 'FM'},
                               {'cmd': 'slice', 'action': 'mode', 'value': 'USB'}])
             run.set_state.assert_not_called()
+
+class ControlContractPolicyTest(unittest.TestCase):
+    """radiocert_persist_controls: the range, boundary and restart contracts."""
+
+    def icom(self):
+        data = snapshot()
+        data['family'] = 'icom'
+        data['radio'].update(model='IC-7300MK2')
+        data['transmit'].update(speechProc=True, speechProcLevel=3, speechProcLevelMaximum=10)
+        data['slices'][0].update(squelch=True, squelchLevel=0, manualSquelchLevel=0)
+        return data
+
+    def run_with(self, directory, samples):
+        run = ControlsRun(Mock(), Journal(Path(directory) / 'j.json', {}), icom_host='192.0.2.1')
+        run.identity = {'family': 'icom', 'model': 'IC-7300MK2'}
+        run.snapshot = Mock(side_effect=samples)
+        return run
+
+    def test_range_seeds_are_interior_and_distinct(self):
+        self.assertEqual(range_seeds(10), (3, 6))       # MK2 COMP bins measured live
+        self.assertEqual(range_seeds(2), (1, 2))        # NOR/DX/DX+: DX snapped to DX+
+        self.assertEqual(range_seeds(100), (30, 60))
+        for maximum in range(2, 101):
+            first, second = range_seeds(maximum)
+            self.assertTrue(0 < first < second <= maximum, maximum)
+        for bad in (1, 0, None, 2.0):
+            with self.assertRaises(ValueError):
+                range_seeds(bad)
+
+    def test_icom_is_admitted_and_flex_ownership_is_not_required(self):
+        data = self.icom()
+        data.pop('clients'); data['pans'] = []
+        self.assertEqual(ready_controls(data, {'family': 'icom', 'model': 'IC-7300MK2'})['sliceId'], 3)
+
+    def test_preflight_refuses_unsafe_or_changed_radio(self):
+        mutations = [lambda d: d['identity'].update(txAllowed=True),
+                     lambda d: d['radio'].update(transmitting=True),
+                     lambda d: d['transmit'].pop('voxEnable'),
+                     lambda d: d['transmit'].update(mox=True),
+                     lambda d: d['radio'].update(connected=False),
+                     lambda d: d['radio'].update(model='IC-705'),
+                     lambda d: d.update(family='kiwi'),
+                     lambda d: d['slices'].append(copy.deepcopy(d['slices'][0]))]
+        for mutate in mutations:
+            data = self.icom()
+            mutate(data)
+            with self.assertRaises(StopRun):
+                ready_controls(data, {'family': 'icom', 'model': 'IC-7300MK2'})
+
+    def test_on_at_zero_read_back_as_off_is_a_concern(self):
+        # #6175: the confirmation read of "on at 0" published Off.
+        good, bad = self.icom(), self.icom()
+        bad['slices'][0]['squelch'] = False
+        tree = {'children': []}
+        with tempfile.TemporaryDirectory() as directory:
+            run = self.run_with(directory, [good, bad, good])
+            run.tree = Mock(return_value=tree)
+            with patch('radiocert_persist_controls.time.sleep'):
+                result = run.observe('boundary', {'slice.squelch': True, 'slice.squelchLevel': 0}, samples=3)
+        self.assertEqual(result['outcome'], 'CONCERN')
+        self.assertEqual(result['differences'][0]['field'], 'slice.squelch')
+
+    def test_level_only_comparison_would_have_missed_it(self):
+        bad = self.icom()
+        bad['slices'][0]['squelch'] = False
+        with tempfile.TemporaryDirectory() as directory:
+            run = self.run_with(directory, [bad])
+            run.tree = Mock(return_value={'children': []})
+            with patch('radiocert_persist_controls.time.sleep'):
+                result = run.observe('level only', {'slice.squelchLevel': 0}, samples=1)
+        self.assertEqual(result['outcome'], 'ESTABLISHED')
+
+    def test_processor_snapped_by_its_readback_is_a_concern(self):
+        # #6174: DX written, percent readback clamped to DX+.
+        written, snapped = self.icom(), self.icom()
+        for data in (written, snapped):
+            data['transmit']['speechProcLevelMaximum'] = 2
+        written['transmit']['speechProcLevel'] = 1
+        snapped['transmit']['speechProcLevel'] = 2
+        with tempfile.TemporaryDirectory() as directory:
+            run = self.run_with(directory, [written, snapped])
+            run.tree = Mock(return_value={'children': []})
+            with patch('radiocert_persist_controls.time.sleep'):
+                result = run.observe('range', {'transmit.speechProcLevel': 1}, samples=2)
+        self.assertEqual(result['outcome'], 'CONCERN')
+
+    def test_sql_intent_is_read_from_the_applet(self):
+        def tree(text, enabled):
+            return {'class': 'RxApplet', 'children': [
+                {'accessibleName': 'Squelch mode', 'text': text},
+                {'accessibleName': 'Squelch threshold', 'enabled': enabled}]}
+        self.assertEqual(sql_mode(tree('SQL', True)), 'manual')
+        self.assertEqual(sql_mode(tree('SQL', False)), 'off')
+        self.assertEqual(sql_mode(tree('AUTO', True)), 'auto')
+        self.assertIsNone(sql_mode({'children': []}))
+
+    def test_range_contract_reports_a_gap_without_a_published_maximum(self):
+        data = self.icom()
+        data['transmit'].pop('speechProcLevelMaximum')
+        with tempfile.TemporaryDirectory() as directory:
+            run = self.run_with(directory, [])
+            run.set_widget = Mock()
+            run.seed_range(data)
+            run.set_widget.assert_not_called()
+            self.assertEqual(run.journal.data['events'][-1]['kind'], 'contract-gap')
+
+    def test_range_contract_enables_processor_before_its_level(self):
+        data = self.icom()
+        data['transmit'].update(speechProc=False, speechProcLevel=3)
+        with tempfile.TemporaryDirectory() as directory:
+            run = self.run_with(directory, [])
+            run.set_widget = Mock()
+            run.observe = Mock(return_value={'outcome': 'ESTABLISHED'})
+            run.seed_range(data)
+        calls = [c.args[:3] for c in run.set_widget.call_args_list]
+        self.assertEqual(calls, [('PhoneCwApplet/Speech processor', 'setChecked', True),
+                                 ('PhoneCwApplet/Processor level', 'setValue', 6)])
+
+    def test_cleanup_never_overwrites_a_newer_value(self):
+        data = self.icom()
+        data['transmit']['speechProcLevel'] = 9
+        with tempfile.TemporaryDirectory() as directory:
+            run = self.run_with(directory, [data])
+            run.expected = {'transmit.speechProcLevel': 6}
+            run.set_widget = Mock()
+            run.restore()
+            run.set_widget.assert_not_called()
+            self.assertEqual(run.journal.data['cleanup'][0]['outcome'], 'INCONCLUSIVE')
+
+    def test_unreachable_manual_is_a_recorded_concern_not_a_stop(self):
+        # #6172: Manual at a remembered 0 reads back Off, so Manual never sticks.
+        with tempfile.TemporaryDirectory() as directory:
+            run = self.run_with(directory, [])
+            run.select_sql = Mock(side_effect=StopRun('SQL intent did not converge'))
+            run.set_widget = Mock()
+            run.seed_sql()
+            run.set_widget.assert_not_called()
+            self.assertEqual(run.journal.data['results'][-1]['outcome'], 'CONCERN')
+            self.assertNotIn('slice.squelchLevel', run.expected)
+
+    def test_exactly_one_connection_target(self):
+        with tempfile.TemporaryDirectory() as directory:
+            journal = Journal(Path(directory) / 'j.json', {})
+            with self.assertRaises(ValueError):
+                ControlsRun(Mock(), journal)
+            with self.assertRaises(ValueError):
+                ControlsRun(Mock(), journal, serial='x', icom_host='192.0.2.1')
+
 
 if __name__ == "__main__":
     unittest.main()

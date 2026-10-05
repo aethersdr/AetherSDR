@@ -1875,6 +1875,9 @@ QJsonObject transmitSnapshot(const TransmitModel* t,
         {QStringLiteral("tx3Delay"),        t->tx3Delay()},
         {QStringLiteral("speechProc"),      t->speechProcessorEnable()},
         {QStringLiteral("speechProcLevel"), t->speechProcessorLevel()},
+        // The published top of that level (2 for NOR/DX/DX+): persist seeds
+        // its range contract from it rather than from Flex's presets.
+        {QStringLiteral("speechProcLevelMaximum"), t->speechProcessorLevelMaximum()},
         {QStringLiteral("dax"),             t->daxOn()},
         {QStringLiteral("monitor"),         t->sbMonitor()},
         {QStringLiteral("monGainSb"),       t->monGainSb()},
@@ -3631,7 +3634,7 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
             });
 
         add("radiocert", {},
-            "radiocert <tune|rx|tx|meters|all|persist> [freqMhz] — bring-up diagnostic; persist is a read-only snapshot for tools/radiocert_persist.py (tx/meters key)",
+            "radiocert <tune|rx|tx|meters|all|persist> [freqMhz] [sql=<MHz>] — bring-up diagnostic; sql= is the steady carrier the meters squelch-scale stage measures; persist is a read-only snapshot for tools/radiocert_persist.py (tx/meters key)",
             parseActionValue,
             [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
                 return s.doRadioCert(a.action, a.value);
@@ -8832,10 +8835,25 @@ QJsonObject AutomationServer::doRadioCert(const QString& phaseArg, const QString
             "blocked: this phase keys the transmitter — enable TX automation "
             "(or set AETHER_AUTOMATION_ALLOW_TX=1), or run 'radiocert tune' / 'radiocert rx'"));
 
-    bool okF = false;
-    const double mhz = freqArg.trimmed().toDouble(&okF);
-    if (okF && mhz > 0.0)
+    // [freqMhz] [sql=<MHz>]: the keyed stages' dial, and the steady carrier
+    // stage-squelch-scale measures the radio's gate on.
+    static const QRegularExpression certArgSep(QStringLiteral("\\s+"));
+    for (const QString& token : freqArg.trimmed().split(certArgSep, Qt::SkipEmptyParts)) {
+        bool okF = false;
+        if (token.startsWith(QLatin1String("sql="), Qt::CaseInsensitive)) {
+            const double sqlMhz = token.mid(4).toDouble(&okF);
+            if (!okF || sqlMhz <= 0.0)
+                return err(QStringLiteral("radiocert: sql= takes a carrier in MHz, got '%1'")
+                               .arg(token));
+            opts.squelchCarrierMhz = sqlMhz;
+            continue;
+        }
+        const double mhz = token.toDouble(&okF);
+        if (!okF || mhz <= 0.0)
+            return err(QStringLiteral("radiocert: expected [freqMhz] [sql=<MHz>], got '%1'")
+                           .arg(token));
         opts.frequencyMhz = mhz;
+    }
 
     // Hand the bridge's power ceiling to the run. The widget-setpoint clamp does
     // not cover this verb — radiocert keys through its own path — so without this

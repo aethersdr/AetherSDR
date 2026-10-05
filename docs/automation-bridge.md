@@ -1103,6 +1103,24 @@ The refusal comes before the TX gate — it is about what the evidence would
 claim, so it applies even when `AETHER_AUTOMATION_ALLOW_TX=1`. Ordinary TUNE
 remains available in supported modes.
 
+### `radiocert meters`: control readback, interlock and the SQL line
+
+`radiocert meters [freqMhz] [sql=<MHz>]` runs three non-keying stages before its
+keyed ones. With bridge TX permission off, every key is refused and counted in
+`keyRefusals`, and these three still run:
+
+| Stage | What it does | Concern when |
+|---|---|---|
+| `control-domain` | Writes every published speech-processor level (enabling PROC for the sweep) and squelch level 0…100 through the operator's setters. Both ends are held 6.5 s, two IC-7300MK2 polls. The squelch sample carries the enable. | a value never reads back as written, or reads back and then moves |
+| `front-end-interlock` | On a pan publishing stepped preamp and attenuator labels, runs five transitions from both-off, timing when the stage *not* written settles. Restores the front end afterwards. | the radio moved the other stage and the pan showed it after more than 500 ms |
+| `squelch-scale` | Parks the dial 1.5 kHz below the `sql=` carrier (default: the RX reference carrier), finds the lowest level that drops the operator's audio by 20 dB, confirms it at ±1 level, and compares the published line there with the carrier's pan peak. If Auto SQL is published, it repeats the search on band noise 10 kHz away. | the line is more than 6 dB from the carrier, or Auto's widest margin is below the noise gate |
+
+`squelch-scale` is `INCONCLUSIVE` for a carrier above S9 (−73 dBm), for one that
+fades during the search, and when there is no audio with squelch open. Use a steady
+groundwave carrier below S9, or the attenuator in front of a strong one. Each stage
+restores the slice, squelch, processor and front end it changed. See
+[CERTIFICATION.md](CERTIFICATION.md) §1.41–1.43.
+
 ### `radiocert persist`
 
 `radiocert persist` returns a **read-only persistence snapshot**, also allowed in
@@ -1181,7 +1199,27 @@ python3 tools/radiocert_persist_multislice.py run --app build/AetherSDR.app \
   --serial EXACT_DISCOVERY_SERIAL
 ```
 
-It starts with one owned USB/LSB slice and requires advertised capacity for two.
+A third runner holds the control contracts that broke on the IC-7300MK2, for
+Flex, HL2 or Icom:
+
+```sh
+python3 tools/radiocert_persist_controls.py plan
+python3 tools/radiocert_persist_controls.py run --app build/AetherSDR.app \
+  --profile /tmp/persist-controls-profile --output /tmp/persist-controls-evidence \
+  --icom-host 192.168.1.90        # or --serial EXACT_DISCOVERY_SERIAL
+```
+
+It seeds the processor level at an interior value of the published maximum
+(`transmit.speechProcLevelMaximum` in the snapshot), sets manual SQL to threshold 0
+and requires Manual to hold through two polls, seeds a distinctive manual SQL
+level, then quits, relaunches and checks both values came back from the radio. An
+Icom connects by host. **The runner never handles credentials**: complete the
+Icom sign-in in the client window at each launch (twice per run). If SQL Manual
+cannot be re-entered after the boundary contract, that is recorded as a concern,
+not a stop. SQL at 0 across a restart is not asserted, because a radio with no
+squelch enable reads threshold 0 as Off.
+
+The two-slice runner starts with one owned USB/LSB slice and requires advertised capacity for two.
 Both 14.180 and 14.160 MHz RX seeds must fit inside the original pan span. The
 runner creates the additional slice, assigns distinct SQL, AGC, filter and audio
 values, switches the selected slice, exercises SQL on/off isolation and independent
@@ -1279,7 +1317,7 @@ values on context revisit and restart, including cleanup revisits.
 A real-app, no-radio restart smoke check is available with `smoke` instead of
 `run` (omit `--serial`); it uses Qt offscreen. The policy test
 `radiocert_persist_policy` uses only in-process data fixtures and no radio peer.
-Process supervision currently supports macOS/Linux. Icom mutation contracts,
+Process supervision currently supports macOS/Linux. Icom mutation contracts beyond the controls runner,
 additional antenna types, multiple slices/pans, MultiFlex, crash/power-cycle recovery,
 DSP, memory banks and layout/audio-device scenarios remain explicit gaps for
 subsequent iterations. The broader issue table and proposed contracts are in
@@ -1293,8 +1331,9 @@ retention result; peer changes, missing fields and unrelated drift stop the
 run. The expanded FM/AGC matrix is locally policy-tested but awaits a live run.
 See the [Flex-to-Icom handoff](research/persist-flex-to-icom-handoff-2026-09-08.md)
 for completed evidence, remaining gaps and the IC-7300MK2 receive-only plan.
-These mutation runners remain Flex-only; Icom AGC modes do not imply support
-for Flex's AGC threshold/off-level controls.
+The single- and two-slice mutation runners remain Flex-only; Icom AGC modes do
+not imply support for Flex's AGC threshold/off-level controls. The controls runner
+above is the Icom-capable one.
 
 ### `get display`
 Per-panadapter **Display panel** settings — every value the panel's PANADAPTER
@@ -4615,7 +4654,7 @@ still a separate radiocert task.
 | `liveness` | — | liveness — per-class data ages and the producer->consumer meter join |
 | `civ` | — | civ <wake <model-id-hex> <address-hex>\|send <hex>\|trace [all]\|session\|scheduler\|incident> — CI-V inject, frame trace, lease/scheduler health, or last incident (Icom; send is TX-gated) |
 | `controls` | — | controls <map\|meters\|scrub [id\|plane]> — the CI-V control and meter registry joined against what is actually wired, and a linkage check that drives every settable control without moving any of them (Icom) |
-| `radiocert` | — | radiocert <tune\|rx\|tx\|meters\|all\|persist> [freqMhz] — bring-up diagnostic; persist is a read-only snapshot for tools/radiocert_persist.py (tx/meters key) |
+| `radiocert` | — | radiocert <tune\|rx\|tx\|meters\|all\|persist> [freqMhz] [sql=<MHz>] — bring-up diagnostic; sql= is the steady carrier the meters squelch-scale stage measures; persist is a read-only snapshot for tools/radiocert_persist.py (tx/meters key) |
 | `transmit` | — | transmit <rfpower\|tunepower> <0..100> — transmit drive (TX-gated) |
 | `key` | — | key <ptt on\|off \| mox> — semantic keying (TX-gated) |
 | `station` | — | station <name> — set the GUI-client station name |
