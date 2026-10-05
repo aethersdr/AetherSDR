@@ -27,13 +27,14 @@ on:
     # Scope = what the Build step compiles, because CodeQL can
     # only analyze translation units the build emits. tools/ is listed by
     # EXTENSION so a change to one of its Python scripts does not re-arm this;
-    # tools/kiwi_directory_poc.cpp is a default target and does need coverage.
+    # The Kiwi directory tool and CTR2 C reference codec both need coverage.
     # hal-plugin/ is deliberately absent — it is a separate CMake project built
     # only by packaging/macos/build-installer.sh, so this workflow never sees it.
     paths:
       - 'src/**'
       - 'third_party/**'
       - 'tools/**.cpp'
+      - 'tools/**.c'
       - 'tools/**.h'
       - 'CMakeLists.txt'
       # Test registration moved out of the root file into tests/tests.cmake.
@@ -84,6 +85,9 @@ jobs:
       # the two small tests whose first-party inputs are absent from the
       # default production graph: the opt-in DeepFist asset downloader and
       # the CTR2 firmware reference codec. The coverage check guards this list.
+      # This Linux configuration uses ENABLE_RADE=ON and the current vendored
+      # snapshot, which defines rade_demod_wav. If coverage fails after a
+      # merge, add the target owning the named input here and dispatch a run.
       CODEQL_BUILD_TARGETS: >-
         AetherSDR aetherd kiwi_directory_poc rade_demod_wav
         deepfist_model_assets_test ctr2_hid_reference_test
@@ -99,7 +103,6 @@ jobs:
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - name: Initialize CodeQL
-        id: codeql-init
         uses: github/codeql-action/init@7c1e4cf0b20d7c1872b26569c00ba908797a59bf
         with:
           languages: ${{ matrix.language }}
@@ -119,7 +122,8 @@ jobs:
           trap-caching: false
 
       # CodeQL extracts compiler invocations, not debug info. Keep Release
-      # even with the smaller target graph so extraction does not pay for -g.
+      # even with the smaller target graph so extraction does not pay for -g
+      # or its extra disk pressure (#6130).
       - name: Configure
         run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 
@@ -172,7 +176,9 @@ jobs:
                           files.add(name[len(prefix):])
           if not files:
               raise SystemExit('CodeQL source archive has no workspace files')
-          Path('build/codeql-coverage/extracted-files.txt').write_text(
+          output = Path('build/codeql-coverage/extracted-files.txt')
+          output.parent.mkdir(parents=True, exist_ok=True)
+          output.write_text(
               ''.join(name + '\n' for name in sorted(files)), encoding='utf-8')
           print(f'CodeQL extracted {len(files)} workspace files')
           PY

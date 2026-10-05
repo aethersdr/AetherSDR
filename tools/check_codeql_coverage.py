@@ -5,9 +5,9 @@ Usage:
     python tools/check_codeql_coverage.py BUILD_DIR TARGET [TARGET ...]
 
 The guard compares ``ninja -t commands all`` with the commands generated for
-the requested production targets.  It deliberately considers only C and C++
-inputs beneath ``src/`` and ``tools/``: test and third-party commands do not
-affect the coverage decision.
+the requested production targets. It considers C, C++, Objective-C, and
+Objective-C++ inputs beneath ``src/`` and ``tools/``: test and third-party
+commands do not affect the coverage decision.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-C_CPP_SUFFIXES = frozenset({".c", ".cc", ".cp", ".cxx", ".cpp", ".c++", ".C"})
+C_CPP_SUFFIXES = frozenset({".c", ".cc", ".cp", ".cxx", ".cpp", ".c++", ".C", ".m", ".mm"})
 
 
 def ninja_commands(build_dir: Path, targets: list[str]) -> list[str]:
@@ -43,7 +43,7 @@ def ninja_commands(build_dir: Path, targets: list[str]) -> list[str]:
 
 
 def compiler_input(command: str, build_dir: Path) -> Path | None:
-    """Return a C/C++ input from a shell compiler command, if it has one."""
+    """Return a C-family input from a shell compiler command, if it has one."""
     try:
         arguments = shlex.split(command, posix=True)
     except ValueError as error:
@@ -143,11 +143,11 @@ def main() -> int:
         print(f"  artifacts: {args.output_dir.resolve()}")
 
     if not baseline:
-        print("error: default Ninja graph has no first-party C/C++ compile inputs; refusing to pass",
+        print("error: default Ninja graph has no first-party C-family compile inputs; refusing to pass",
               file=sys.stderr)
         return 1
     if not selected:
-        print("error: selected targets have no first-party C/C++ compile inputs; refusing to pass",
+        print("error: selected targets have no first-party C-family compile inputs; refusing to pass",
               file=sys.stderr)
         return 1
     if missing:

@@ -4569,6 +4569,10 @@ endif()
 # no app or Qt needed — guards the schema ↔ bridge verb field mapping.
 find_program(PYTHON3_EXECUTABLE NAMES python3 python)
 if(PYTHON3_EXECUTABLE)
+    # Socket-free Ninja graph fixtures; no compiler or application is executed.
+    add_test(NAME codeql_coverage_guard
+             COMMAND ${PYTHON3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_check_codeql_coverage.py)
     add_test(NAME aether_mcp_field_mapping
              COMMAND ${PYTHON3_EXECUTABLE}
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_aether_mcp.py)
