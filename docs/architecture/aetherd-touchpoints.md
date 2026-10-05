@@ -4,7 +4,7 @@
 
 Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine-design.md) §2, §10). One row per engine header the UI includes; converting a touchpoint means the UI reaches that surface through the versioned protocol instead of the header.
 
-**Totals:** 239 touchpoint headers (200 core, 39 models) — 239/239 tagged, 0/239 converted.
+**Totals:** 240 touchpoint headers (201 core, 39 models) — 240/240 tagged, 0/240 converted.
 
 | Header | Includers | Tag | Status |
 |---|---:|---|---|
@@ -17,6 +17,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/AetherRxProfiles.h` | 1 | universal — Named-profile save/recall/import-export for the receive DSP chain; operates on core-profile DSP state only, same precedent as core/ChannelStripPresets.h, whose RX capture/apply it shares. | unconverted |
 | `core/AetherTxProfiles.h` | 1 | universal — Named-profile save/recall/import-export for the transmit DSP chain; operates on core-profile DSP state only. Mirror of core/AetherRxProfiles.h, and shares ChannelStripPresets' TX capture/apply. | unconverted |
 | `core/AgcTCalibrator.h` | 1 | universal — Engine algo sweeping slice AGC threshold vs audio RMS/S-meter to recommend a value; only canonical state. | unconverted |
+| `core/AppActivity.h` | 1 | ui-support — Process-lifetime power/activity hold (App Nap + idle-sleep suppression on macOS, PowerSetRequest + process power-throttling opt-out on Windows); app plumbing, not radio state. | unconverted |
 | `core/AppSettings.h` | 107 | ui-support — Client-side XML settings store (SSDR.settings-style key/value persistence); app plumbing, not radio state. | unconverted |
 | `core/AudioEngine.h` | 47 | mixed(flex) — Client audio I/O + full RX/TX DSP chain (universal) fused with Flex VITA-49/DAX/Opus TX and Kiwi buffering | unconverted |
 | `core/AudioOutputRouter.h` | 1 | ui-support — Registry fanning the user-selected QAudioDevice to local playback sinks; OS device plumbing, no radio state | unconverted |

@@ -47,6 +47,12 @@
   "split": "",
   "confidence": "medium"
  },
+ "core/AppActivity.h": {
+  "tag": "ui-support",
+  "note": "Process-lifetime power/activity hold (App Nap + idle-sleep suppression on macOS, PowerSetRequest + process power-throttling opt-out on Windows); app plumbing, not radio state.",
+  "split": "",
+  "confidence": "high"
+ },
  "core/AppSettings.h": {
   "tag": "ui-support",
   "note": "Client-side XML settings store (SSDR.settings-style key/value persistence); app plumbing, not radio state.",
