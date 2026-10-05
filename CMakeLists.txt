@@ -282,7 +282,7 @@ endif()
 foreach(_lang C CXX)
     if(CMAKE_${_lang}_COMPILER_ID MATCHES "GNU|Clang"
        AND CMAKE_${_lang}_FLAGS_RELWITHDEBINFO STREQUAL "-O2 -g -DNDEBUG"
-       AND NOT CMAKE_${_lang}_FLAGS MATCHES "(^| )-g")
+       AND NOT CMAKE_${_lang}_FLAGS MATCHES "(^|[ \t])-g")
         set(CMAKE_${_lang}_FLAGS_RELWITHDEBINFO "-O2 -g1 -DNDEBUG" CACHE STRING
             "Flags used by the compiler during RELWITHDEBINFO builds." FORCE)
     endif()
