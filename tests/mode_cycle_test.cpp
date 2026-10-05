@@ -58,16 +58,18 @@ int main(int argc, char** argv)
     ok &= expect(nextCycledMode(modes, QStringLiteral("DFM"), +1) == QStringLiteral("DIGU"),
                  "Mode Up from DFM skips DSTR to DIGU");
 
-    const QStringList down = walk(modes, QStringLiteral("USB"), -1, 14);
-    ok &= expect(down == QStringList({"FDVL", "FDVU", "RTTY", "DIGL", "DIGU", "DFM",
-                                      "NFM", "FM", "SAM", "AM", "CWL", "CW", "LSB",
-                                      "USB"}),
+    // No reported list: every mode except the radio-waveform ones (FDVU/FDVL).
+    const QStringList down = walk(modes, QStringLiteral("USB"), -1, 12);
+    ok &= expect(down == QStringList({"RTTY", "DIGL", "DIGU", "DFM", "NFM", "FM",
+                                      "SAM", "AM", "CWL", "CW", "LSB", "USB"}),
                  "Mode Down from USB visits every other mode and returns to USB");
-    const QStringList up = walk(modes, QStringLiteral("USB"), +1, 14);
+    const QStringList up = walk(modes, QStringLiteral("USB"), +1, 12);
     ok &= expect(up == QStringList({"LSB", "CW", "CWL", "AM", "SAM", "FM", "NFM",
-                                    "DFM", "DIGU", "DIGL", "RTTY", "FDVU", "FDVL",
-                                    "USB"}),
+                                    "DFM", "DIGU", "DIGL", "RTTY", "USB"}),
                  "Mode Up from USB visits every other mode and returns to USB");
+    ok &= expect(nextCycledMode(modes, QStringLiteral("RTTY"), +1, {})
+                     == QStringLiteral("USB"),
+                 "Mode Up from RTTY skips FDVU/FDVL when the radio reports no list");
 
     // Helper running: DSTR is a normal stop in both directions.
     ok &= expect(registry.activateMode(DigitalVoiceModeId::DStar),
