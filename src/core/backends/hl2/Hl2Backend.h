@@ -159,16 +159,6 @@ public:
     void setTune(bool on, int tunePowerPercent, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {}) override;
     void setTxAudioMonitor(bool on) override;
     void setTxFrequency(double hz);
-    // RIT / XIT, per receiver (#5386, #6105). RIT offsets that receiver's own
-    // receive; XIT is held per receiver and reaches the TX NCO register only
-    // while that receiver owns transmit. Neither moves the published slice
-    // frequency — that stays the dial.
-    void setSliceRitEnabled(int sliceId, bool on) override;
-    void setSliceRitOffset(int sliceId, int hz) override;
-    void setSliceXitEnabled(int sliceId, bool on) override;
-    // Overridden, not inherited: the base forwards to the RIT offset for a radio
-    // with one shared register, and the HL2's RX and TX paths are independent.
-    void setSliceXitOffset(int sliceId, int hz) override;
     void setTxDriveLevel(int level);
     // Baseband TX test tone, offsetHz from the carrier, amplitude 0..1.
     // Opt-in only — never enabled by a default.

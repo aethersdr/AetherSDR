@@ -140,7 +140,9 @@ ReceiveDispatch FlexBackend::requestTransmitControl(const TransmitControlRequest
         command = QStringLiteral("atu set memories_enabled=") + QString::number(int(std::get<bool>(request.value))); break;
     case Field::ProcessorEnabled: case Field::ProcessorLevel: {
         const ProcessorSetting setting = std::get<ProcessorSetting>(request.value);
-        if (setting.level > 2) { return ReceiveDispatch::Unsupported; }
+        if (request.field == Field::ProcessorLevel && setting.level > 2) {
+            return ReceiveDispatch::Unsupported;
+        }
         command = request.field == Field::ProcessorEnabled
             ? QStringLiteral("transmit set speech_processor_enable=%1").arg(int(setting.enabled))
             : QStringLiteral("transmit set speech_processor_level=%1").arg(setting.level);

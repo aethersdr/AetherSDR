@@ -73,6 +73,9 @@ struct Fixture {
 void receipts()
 {
     Fixture f;
+    f.radio.slice(0)->setActive(true);
+    check(f.radio.slice(0)->isActive() && f.dropped.isEmpty(),
+          "local slice selection never consumes the unsupported-control notice");
     TransmitModel& tx = f.radio.transmitModel();
     tx.setRfPower(42);
     check(f.backend->requests.size() == 1 && f.dropped.size() == 1,
@@ -198,6 +201,10 @@ void cwPitchBackendLifetime()
 int main(int argc, char** argv)
 {
     TestSettingsProfile profile(QStringLiteral("transmit-control-receipts"));
+    if (!profile.isValid()) {
+        std::fprintf(stderr, "Cannot create isolated settings profile\n");
+        return 1;
+    }
     QCoreApplication app(argc, argv);
     receipts();
     tuneOwnership();

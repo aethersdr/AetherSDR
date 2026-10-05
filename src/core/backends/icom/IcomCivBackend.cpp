@@ -4358,7 +4358,6 @@ ReceiveDispatch IcomCivBackend::requestSliceControl(int sliceId, const SliceCont
     switch (request.field) {
     case Field::Rit: case Field::Xit: {
         const IncrementalTuning tuning = std::get<IncrementalTuning>(request.value);
-        if (std::abs(tuning.hz) > 9999) { return ReceiveDispatch::Unsupported; }
         if (request.field == Field::Rit) { setSliceRitEnabled(sliceId, tuning.enabled); }
         else { setSliceXitEnabled(sliceId, tuning.enabled); }
         setSliceRitOffset(sliceId, tuning.hz); // one register shared by RX and TX
@@ -4458,9 +4457,13 @@ ReceiveDispatch IcomCivBackend::requestTransmitControl(const TransmitControlRequ
         }
         setMicGain(std::get<int>(request.value)); break;
     }
-    case Field::CwPitch: setCwPitch(std::get<int>(request.value)); break;
-    case Field::CwSpeed: setCwSpeed(std::get<int>(request.value)); break;
-    case Field::CwBreakIn: setCwBreakIn(std::get<bool>(request.value)); break;
+    case Field::CwPitch: case Field::CwSpeed: case Field::CwBreakIn:
+        // Preserve the current capability gate until #6110 defines its replacement.
+        if (!caps.hasRadioSideCwKeyer) { return ReceiveDispatch::Unsupported; }
+        if (request.field == Field::CwPitch) { setCwPitch(std::get<int>(request.value)); }
+        else if (request.field == Field::CwSpeed) { setCwSpeed(std::get<int>(request.value)); }
+        else { setCwBreakIn(std::get<bool>(request.value)); }
+        break;
     case Field::Filter: {
         if (!caps.hasTxFilterControls || activeTxBandwidthItem() < 0) {
             return ReceiveDispatch::Unsupported;

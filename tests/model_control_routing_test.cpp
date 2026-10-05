@@ -102,6 +102,15 @@ void transmitEncoding()
     delta.rfPower = 33;
     model.applyChanges(delta);
     check(commands.isEmpty() && model.rfPowerIsFromRadio(), "radio power readback never becomes a request");
+    commands.clear();
+    check(backend.requestTransmitControl({TransmitControlRequest::Field::ProcessorEnabled,
+              ProcessorSetting{true, 20}}) == ReceiveDispatch::Dispatched
+              && commands == QStringList{"transmit set speech_processor_enable=1"},
+          "Flex processor enable is independent of the companion level domain");
+    commands.clear();
+    check(backend.requestTransmitControl({TransmitControlRequest::Field::ProcessorLevel,
+              ProcessorSetting{true, 20}}) == ReceiveDispatch::Unsupported && commands.isEmpty(),
+          "Flex processor level still rejects values outside its three-step ladder");
 }
 struct SliceCase {
     const char* name;
@@ -210,6 +219,33 @@ void routingAndReentrancy()
     check(commands.isEmpty(), "retired TX setting cannot dispatch after notification");
 }
 
+void noOpReentrancy()
+{
+    SliceModel slice(7);
+    QSignalSpy toneChanged(&slice, &SliceModel::fmToneValueChanged);
+    QSignalSpy offsetChanged(&slice, &SliceModel::fmRepeaterOffsetFreqChanged);
+    QSignalSpy daxChanged(&slice, &SliceModel::daxChannelChanged);
+    QSignalSpy escChanged(&slice, &SliceModel::escGainChanged);
+    QObject::connect(&slice, &SliceModel::controlRequested, &slice,
+                     [&](const SliceControlRequest& request) {
+        using Field = SliceControlRequest::Field;
+        switch (request.field) {
+        case Field::FmToneValue: slice.setFmToneValue(QStringLiteral("88.50")); break;
+        case Field::RepeaterOffset: slice.setFmRepeaterOffsetFreq(0.6); break;
+        case Field::DaxChannel: slice.setDaxChannel(99); break;
+        case Field::EscGain: slice.setEscGain(3.0f); break;
+        default: break;
+        }
+    });
+    slice.setFmToneValue(QStringLiteral("88.50"));
+    slice.setFmRepeaterOffsetFreq(0.6);
+    slice.setDaxChannel(8);
+    slice.setEscGain(2.0f);
+    check(toneChanged.size() == 1 && offsetChanged.size() == 1
+              && daxChanged.size() == 1 && escChanged.size() == 1,
+          "reentrant equal or clamped no-ops do not cancel the accepted intent's notification");
+}
+
 void deletionAndMalformedInput()
 {
     check(!SliceControlRequest{}.valid() && !TransmitControlRequest{}.valid(),
@@ -234,10 +270,15 @@ void deletionAndMalformedInput()
 int main(int argc, char** argv)
 {
     TestSettingsProfile settings(QStringLiteral("model-control-routing"));
+    if (!settings.isValid()) {
+        std::fprintf(stderr, "Cannot create isolated settings profile\n");
+        return 1;
+    }
     QCoreApplication app(argc, argv);
     transmitEncoding();
     sliceEncoding();
     routingAndReentrancy();
+    noOpReentrancy();
     deletionAndMalformedInput();
     return failures ? 1 : 0;
 }

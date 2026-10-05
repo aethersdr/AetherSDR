@@ -3123,12 +3123,14 @@ ReceiveDispatch Hl2Backend::requestSliceControl(int sliceId, const SliceControlR
             const bool moves = (receiver->ritOn ? receiver->ritHz : 0) != (tuning.enabled ? hz : 0);
             receiver->ritOn = tuning.enabled;
             receiver->ritHz = hz;
+            logRitXit("RIT", ddc, receiver->ritOn, receiver->ritHz);
             if (moves) { retuneReceiver(ddc); }
             else { emitSliceState(ddc); }
         } else {
             const bool moves = (receiver->xitOn ? receiver->xitHz : 0) != (tuning.enabled ? hz : 0);
             receiver->xitOn = tuning.enabled;
             receiver->xitHz = hz;
+            logRitXit("XIT", ddc, receiver->xitOn, receiver->xitHz);
             if (moves && ddc == m_txDdc) { setTxFrequency(receiver->sliceFreqHz); }
             emitSliceState(ddc);
         }
@@ -4627,81 +4629,6 @@ void Hl2Backend::logRitXit(const char* what, int ddc, bool on, int hz) const
     qCInfo(lcHl2) << "HL2:" << what << (on ? "on," : "off,") << "offset" << hz
                   << "Hz on receiver DDC" << ddc << "slice" << (ids ? ids->uiNumber : -1)
                   << (ddc == m_txDdc ? "(transmit)" : "(receive only)");
-}
-
-// Each setter ends by publishing the receiver's RIT/XIT, so the readout follows
-// what the receiver holds: an offset the clamp cut, and the final value of an
-// enable-then-offset pair. retuneReceiver() publishes as part of the re-tune.
-void Hl2Backend::setSliceRitEnabled(int sliceId, bool on)
-{
-    const int ddc = ddcForSlice(sliceId);
-    Receiver* r = rx(ddc);
-    if (!r || on == r->ritOn) {
-        return;
-    }
-    r->ritOn = on;
-    logRitXit("RIT", ddc, r->ritOn, r->ritHz);
-    if (r->ritHz != 0) {
-        retuneReceiver(ddc);
-    } else {
-        emitSliceState(ddc);
-    }
-}
-
-void Hl2Backend::setSliceRitOffset(int sliceId, int hz)
-{
-    const int ddc = ddcForSlice(sliceId);
-    Receiver* r = rx(ddc);
-    if (!r) {
-        return;
-    }
-    const int clamped = clampRitXit("RIT", hz);
-    if (clamped == r->ritHz && clamped == hz) {
-        return;
-    }
-    const bool moves = r->ritOn && clamped != r->ritHz;
-    r->ritHz = clamped;
-    logRitXit("RIT", ddc, r->ritOn, r->ritHz);
-    if (moves) {
-        retuneReceiver(ddc);
-    } else {
-        emitSliceState(ddc);
-    }
-}
-
-void Hl2Backend::setSliceXitEnabled(int sliceId, bool on)
-{
-    const int ddc = ddcForSlice(sliceId);
-    Receiver* r = rx(ddc);
-    if (!r || on == r->xitOn) {
-        return;
-    }
-    r->xitOn = on;
-    logRitXit("XIT", ddc, r->xitOn, r->xitHz);
-    if (r->xitHz != 0 && ddc == m_txDdc) {
-        setTxFrequency(r->sliceFreqHz);
-    }
-    emitSliceState(ddc);
-}
-
-void Hl2Backend::setSliceXitOffset(int sliceId, int hz)
-{
-    const int ddc = ddcForSlice(sliceId);
-    Receiver* r = rx(ddc);
-    if (!r) {
-        return;
-    }
-    const int clamped = clampRitXit("XIT", hz);
-    if (clamped == r->xitHz && clamped == hz) {
-        return;
-    }
-    const bool moves = r->xitOn && clamped != r->xitHz && ddc == m_txDdc;
-    r->xitHz = clamped;
-    logRitXit("XIT", ddc, r->xitOn, r->xitHz);
-    if (moves) {
-        setTxFrequency(r->sliceFreqHz);
-    }
-    emitSliceState(ddc);
 }
 
 void Hl2Backend::setCwPitch(int hz)

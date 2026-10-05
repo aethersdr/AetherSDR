@@ -128,8 +128,15 @@ class IRadioBackend : public QObject {
 
 public:
     // Desktop control routing only: these do not extend the daemon registry.
-    virtual ReceiveDispatch requestSliceControl(int, const SliceControlRequest&)
-    { return ReceiveDispatch::Unsupported; }
+    virtual ReceiveDispatch requestSliceControl(int sliceId, const SliceControlRequest& request)
+    {
+        // Selecting a local receiver is not a radio or TX operation.
+        if (sliceId >= 0 && request.valid()
+            && request.field == SliceControlRequest::Field::ActiveSlice) {
+            return ReceiveDispatch::LocalOnly;
+        }
+        return ReceiveDispatch::Unsupported;
+    }
     virtual ReceiveDispatch requestTransmitControl(const TransmitControlRequest&,
                                                     TunePowerContext = TunePowerContext::Deferred)
     { return ReceiveDispatch::Unsupported; }

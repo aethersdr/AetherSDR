@@ -301,26 +301,23 @@ void TransmitModel::setApdEnabled(bool on)
         if (!current()) { return; }
     }
     emit controlRequested({field, on});
-    if (!current()) { return; }
 }
 
 void TransmitModel::setApdSamplerPort(const QString& txAnt, const QString& port)
 {
     if (refuseControlOffThread()) { return; }
     const auto field = TransmitControlRequest::Field::ApdSampler;
-    const auto current = captureControlIntent(field);
-    if (txAnt.isEmpty() || port.isEmpty()) return;
+    if (txAnt.isEmpty() || port.isEmpty()) { return; }
+    captureControlIntent(field);
     emit controlRequested({field, ApdSamplerSetting{txAnt.toUpper(), port.toUpper()}});
-    if (!current()) { return; }
 }
 
 void TransmitModel::resetApdEqualizer()
 {
     if (refuseControlOffThread()) { return; }
     const auto field = TransmitControlRequest::Field::ApdReset;
-    const auto current = captureControlIntent(field);
+    captureControlIntent(field);
     emit controlRequested({field, true});
-    if (!current()) { return; }
 }
 
 void TransmitModel::setProfileList(const QStringList& profiles)
@@ -407,7 +404,6 @@ void TransmitModel::setRfPower(int power)
     emit controlRequested({field, power});
     if (!current()) { return; }
     emit rfPowerCommandIssued(power);
-    if (!current()) { return; }
 }
 
 void TransmitModel::setTunePower(int power)
@@ -426,20 +422,18 @@ void TransmitModel::setTunePower(int power)
     emit controlRequested({field, power});
     if (!current()) { return; }
     emit tunePowerCommandIssued(power);
-    if (!current()) { return; }
 }
 
 void TransmitModel::setTuneMode(const QString& mode)
 {
     if (refuseControlOffThread()) { return; }
     const auto field = TransmitControlRequest::Field::TuneMode;
-    const auto current = captureControlIntent(field);
     if (mode != "single_tone" && mode != "two_tone") {
         qWarning() << "TransmitModel: ignoring invalid tune mode:" << mode;
         return;
     }
+    captureControlIntent(field);
     emit controlRequested({field, mode});
-    if (!current()) { return; }
 }
 
 void TransmitModel::setTuneAvailable(bool available)
@@ -629,31 +623,28 @@ void TransmitModel::setAtuMemories(bool on)
 {
     if (refuseControlOffThread()) { return; }
     const auto field = TransmitControlRequest::Field::AtuMemories;
-    const auto current = captureControlIntent(field);
+    captureControlIntent(field);
     emit controlRequested({field, on});
-    if (!current()) { return; }
 }
 
 void TransmitModel::atuClearMemories()
 {
     if (refuseControlOffThread()) { return; }
     const auto field = TransmitControlRequest::Field::AtuClear;
-    const auto current = captureControlIntent(field);
+    captureControlIntent(field);
     // FlexLib Radio.cs:11055-11060 confirms "atu clear" wipes the entire
     // ATU memory database. There is no per-band variant and no status echo;
     // the only visible side effect is that subsequent using_mem=1 flags
     // stop appearing on previously-stored frequencies. (#2624)
     emit controlRequested({field, true});
-    if (!current()) { return; }
 }
 
 void TransmitModel::loadProfile(const QString& name)
 {
     if (refuseControlOffThread()) { return; }
     const auto field = TransmitControlRequest::Field::TxProfile;
-    const auto current = captureControlIntent(field);
+    captureControlIntent(field);
     emit controlRequested({field, name});
-    if (!current()) { return; }
 }
 
 // ── Mic profile setters (called from RadioModel) ────────────────────────────
@@ -696,7 +687,6 @@ void TransmitModel::setMicSelection(const QString& input)
         if (!current()) { return; }
     }
     emit controlRequested({field, normalized});
-    if (!current()) { return; }
 }
 
 void TransmitModel::setMicLevel(int level)
@@ -718,16 +708,14 @@ void TransmitModel::setMicLevel(int level)
     emit micLevelCommandIssued(level);
     if (!current()) { return; }
     emit controlRequested({field, level});
-    if (!current()) { return; }
 }
 
 void TransmitModel::setMicAcc(bool on)
 {
     if (refuseControlOffThread()) { return; }
     const auto field = TransmitControlRequest::Field::MicAccessory;
-    const auto current = captureControlIntent(field);
+    captureControlIntent(field);
     emit controlRequested({field, on});
-    if (!current()) { return; }
 }
 
 void TransmitModel::setSpeechProcessorEnable(bool on)
@@ -744,7 +732,6 @@ void TransmitModel::setSpeechProcessorEnable(bool on)
     emit speechProcessorCommandIssued(m_speechProcEnable, m_speechProcLevel);
     if (!current()) { return; }
     emit controlRequested({field, ProcessorSetting{m_speechProcEnable, m_speechProcLevel}});
-    if (!current()) { return; }
 }
 
 void TransmitModel::setSpeechProcessorLevel(int level)
@@ -763,7 +750,6 @@ void TransmitModel::setSpeechProcessorLevel(int level)
     emit speechProcessorCommandIssued(m_speechProcEnable, m_speechProcLevel);
     if (!current()) { return; }
     emit controlRequested({field, ProcessorSetting{m_speechProcEnable, m_speechProcLevel}});
-    if (!current()) { return; }
 }
 
 void TransmitModel::setSpeechProcessorLevelMaximum(int maximum)
@@ -815,7 +801,6 @@ void TransmitModel::setDax(bool on)
         if (!current()) { return; }
     }
     emit controlRequested({field, on});
-    if (!current()) { return; }
 }
 
 void TransmitModel::setSbMonitor(bool on)
@@ -835,7 +820,6 @@ void TransmitModel::setSbMonitor(bool on)
     emit controlRequested({field, MonitorSetting{m_sbMonitor, m_monGainSb}});
     if (!current()) { return; }
     emit monitorCommandIssued(m_sbMonitor, m_monGainSb);
-    if (!current()) { return; }
 }
 
 void TransmitModel::setMonGainSb(int gain)
@@ -850,16 +834,14 @@ void TransmitModel::setMonGainSb(int gain)
     emit controlRequested({field, MonitorSetting{m_sbMonitor, m_monGainSb}});
     if (!current()) { return; }
     emit monitorCommandIssued(m_sbMonitor, m_monGainSb);
-    if (!current()) { return; }
 }
 
 void TransmitModel::loadMicProfile(const QString& name)
 {
     if (refuseControlOffThread()) { return; }
     const auto field = TransmitControlRequest::Field::MicProfile;
-    const auto current = captureControlIntent(field);
+    captureControlIntent(field);
     emit controlRequested({field, name});
-    if (!current()) { return; }
 }
 
 // ── VOX commands ────────────────────────────────────────────────────────────
@@ -875,7 +857,6 @@ void TransmitModel::setVoxEnable(bool on)
     emit controlRequested({field, VoxSetting{m_voxEnable, m_voxLevel, m_voxDelay}});
     if (!current()) { return; }
     emit voxCommandIssued(on, m_voxLevel, m_voxDelay);
-    if (!current()) { return; }
 }
 
 void TransmitModel::setVoxLevel(int level)
@@ -890,7 +871,6 @@ void TransmitModel::setVoxLevel(int level)
     emit controlRequested({field, VoxSetting{m_voxEnable, m_voxLevel, m_voxDelay}});
     if (!current()) { return; }
     emit voxCommandIssued(m_voxEnable, m_voxLevel, m_voxDelay);
-    if (!current()) { return; }
 }
 
 void TransmitModel::setVoxDelay(int delay)
@@ -905,7 +885,6 @@ void TransmitModel::setVoxDelay(int delay)
     emit controlRequested({field, VoxSetting{m_voxEnable, m_voxLevel, m_voxDelay}});
     if (!current()) { return; }
     emit voxCommandIssued(m_voxEnable, m_voxLevel, m_voxDelay);
-    if (!current()) { return; }
 }
 
 void TransmitModel::setMicBoost(bool on)
@@ -917,7 +896,6 @@ void TransmitModel::setMicBoost(bool on)
     emit phoneStateChanged();
     if (!current()) { return; }
     emit controlRequested({field, on});
-    if (!current()) { return; }
 }
 
 void TransmitModel::setMicBias(bool on)
@@ -929,7 +907,6 @@ void TransmitModel::setMicBias(bool on)
     emit phoneStateChanged();
     if (!current()) { return; }
     emit controlRequested({field, on});
-    if (!current()) { return; }
 }
 
 void TransmitModel::setAmCarrierLevel(int level)
@@ -944,7 +921,6 @@ void TransmitModel::setAmCarrierLevel(int level)
         if (!current()) { return; }
     }
     emit controlRequested({field, level});
-    if (!current()) { return; }
 }
 
 void TransmitModel::setDexp(bool on)
@@ -961,7 +937,6 @@ void TransmitModel::setDexp(bool on)
     emit micStateChanged();
     if (!current()) { return; }
     emit controlRequested({field, on});
-    if (!current()) { return; }
 }
 
 void TransmitModel::setDexpLevel(int level)
@@ -978,7 +953,6 @@ void TransmitModel::setDexpLevel(int level)
     emit micStateChanged();
     if (!current()) { return; }
     emit controlRequested({field, level});
-    if (!current()) { return; }
 }
 
 // TX passband setters: bound, adopt optimistically, and emit typed intent.
@@ -1014,7 +988,6 @@ void TransmitModel::setTxFilter(int lowHz, int highHz)
     emit txFilterCommandIssued(lowHz, highHz);
     if (!current()) { return; }
     emit controlRequested({field, TxPassband{lowHz, highHz}});
-    if (!current()) { return; }
 }
 
 // ── CW commands ─────────────────────────────────────────────────────────────
@@ -1080,7 +1053,6 @@ void TransmitModel::setCwPitch(int hz)
     emit cwPitchCommandIssued(hz);
     if (!current()) { return; }
     emit controlRequested({field, hz});
-    if (!current()) { return; }
 }
 
 void TransmitModel::setCwBreakIn(bool on)
@@ -1096,7 +1068,6 @@ void TransmitModel::setCwBreakIn(bool on)
     emit cwBreakInCommandIssued(on);
     if (!current()) { return; }
     emit controlRequested({field, on});
-    if (!current()) { return; }
 }
 
 void TransmitModel::setCwDelay(int ms)
@@ -1121,7 +1092,6 @@ void TransmitModel::setCwDelay(int ms)
         if (!current()) { return; }
     }
     emit controlRequested({field, ms});
-    if (!current()) { return; }
 }
 
 void TransmitModel::setHoldBreakInDelay(bool on)
@@ -1150,7 +1120,6 @@ void TransmitModel::setCwSidetone(bool on)
         if (!current()) { return; }
     }
     emit controlRequested({field, on});
-    if (!current()) { return; }
 }
 
 void TransmitModel::setCwIambic(bool on)
@@ -1167,7 +1136,6 @@ void TransmitModel::setCwIambic(bool on)
         if (!current()) { return; }
     }
     emit controlRequested({field, on});
-    if (!current()) { return; }
 }
 
 void TransmitModel::setCwIambicMode(int mode)
@@ -1182,7 +1150,6 @@ void TransmitModel::setCwIambicMode(int mode)
         if (!current()) { return; }
     }
     emit controlRequested({field, mode});
-    if (!current()) { return; }
 }
 
 void TransmitModel::setCwSwapPaddles(bool on)
@@ -1196,7 +1163,6 @@ void TransmitModel::setCwSwapPaddles(bool on)
         if (!current()) { return; }
     }
     emit controlRequested({field, on});
-    if (!current()) { return; }
 }
 
 void TransmitModel::setCwlEnabled(bool on)
@@ -1210,7 +1176,6 @@ void TransmitModel::setCwlEnabled(bool on)
         if (!current()) { return; }
     }
     emit controlRequested({field, on});
-    if (!current()) { return; }
 }
 
 void TransmitModel::setMonGainCw(int gain)
@@ -1225,7 +1190,6 @@ void TransmitModel::setMonGainCw(int gain)
         if (!current()) { return; }
     }
     emit controlRequested({field, gain});
-    if (!current()) { return; }
 }
 
 void TransmitModel::setMonPanCw(int pan)
@@ -1240,7 +1204,6 @@ void TransmitModel::setMonPanCw(int pan)
         if (!current()) { return; }
     }
     emit controlRequested({field, pan});
-    if (!current()) { return; }
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
