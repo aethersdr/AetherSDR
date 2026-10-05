@@ -1807,8 +1807,8 @@ void SpectrumOverlayMenu::buildDisplayPanel()
     }
 
     // Scope mode, for a radio whose panadapter is its own scope (Icom). First
-    // in the group because it changes what every spectrum gesture does; hidden
-    // until a backend publishes two or more modes.
+    // in the group because it changes what every spectrum gesture does; unavailable
+    // choices remain dimmed until the backend publishes its supported modes.
     {
         m_scopeModeRow = new QWidget;
         // The label and the buttons rebuilt per radio share the row's one
@@ -1833,7 +1833,7 @@ void SpectrumOverlayMenu::buildDisplayPanel()
             "  the VFO; AetherSDR follows the VFO when you tune off-screen.\n"
             "Scroll-F and Fixed use the radio's Fixed Edge slot 4;\n"
             "slots 1-3 are left as you set them."));
-        m_scopeModeRow->hide();
+        rebuildScopeModeButtons();
         grid->addWidget(m_scopeModeRow, row, 0, 1, 4);
         ++row;
     }
@@ -3250,15 +3250,17 @@ void SpectrumOverlayMenu::rebuildScopeModeButtons()
     }
     qDeleteAll(m_scopeModeBtns);
     m_scopeModeBtns.clear();
-    for (int i = 0; i < m_scopeModeLabels.size(); ++i) {
-        auto* btn = new QPushButton(m_scopeModeLabels.at(i));
+    const QStringList labels = m_scopeModeLabels.isEmpty()
+        ? QStringList{tr("Center"), tr("Scroll-F"), tr("Fixed")} : m_scopeModeLabels;
+    for (int i = 0; i < labels.size(); ++i) {
+        auto* btn = new QPushButton(labels.at(i));
         btn->setCheckable(true);
         btn->setFixedHeight(20);
-        QString slug = m_scopeModeLabels.at(i).toLower();
+        QString slug = labels.at(i).toLower();
         slug.remove(QLatin1Char('-'));
         slug.remove(QLatin1Char(' '));
         btn->setObjectName(QStringLiteral("displayScopeMode_%1").arg(slug));
-        btn->setAccessibleName(tr("Scope mode %1").arg(m_scopeModeLabels.at(i)));
+        btn->setAccessibleName(tr("Scope mode %1").arg(labels.at(i)));
         m_scopeModeLayout->addWidget(btn, 1);
         m_scopeModeBtns.append(btn);
         connect(btn, &QPushButton::clicked, this, [this, i] {
@@ -3277,11 +3279,18 @@ void SpectrumOverlayMenu::refreshScopeModeButtons()
     if (!m_scopeModeRow) {
         return;
     }
-    // A one-entry list is not a choice.
-    m_scopeModeRow->setVisible(m_scopeModeLabels.size() > 1);
+    // Availability is reported by the backend label list, including firmware
+    // refusal, rather than a static model capability. Keep the controls discoverable.
+    const bool available = m_scopeModeLabels.size() > 1;
+    const QString reason = available ? QString{}
+        : tr("Scope mode selection is unavailable for this radio or firmware.");
+    m_scopeModeRow->setEnabled(available);
+    m_scopeModeRow->setAccessibleDescription(reason);
     for (int i = 0; i < m_scopeModeBtns.size(); ++i) {
         QSignalBlocker b(m_scopeModeBtns[i]);
-        m_scopeModeBtns[i]->setChecked(i == m_scopeModeIndex);
+        m_scopeModeBtns[i]->setChecked(available && i == m_scopeModeIndex);
+        m_scopeModeBtns[i]->setAccessibleDescription(reason);
+        m_scopeModeBtns[i]->setToolTip(available ? m_scopeModeRow->toolTip() : reason);
     }
 }
 

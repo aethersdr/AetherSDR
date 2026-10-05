@@ -5,12 +5,15 @@
 #include "core/backends/icom/IcomCivBackend.h"
 #include "core/backends/icom/IcomSession.h"
 #include "TxTestAuthority.h"
+#include "TestSettingsProfile.h"
+#include "core/AppSettings.h"
 
 #include <QCoreApplication>
 #include <QLoggingCategory>
 #include <QSignalSpy>
 #include <QStringList>
 #include <QTimer>
+#include <QProcess>
 
 #include <algorithm>
 #include <cmath>
@@ -117,6 +120,7 @@ struct IcomCivBackendTestAccess {
     }
     static void refuse(IcomCivBackend& b, const char* key) { b.handleScopeRefusal(key); }
     static bool scopeModesOffered(const IcomCivBackend& b) { return b.scopeModesOffered(); }
+    static void scopeStartup(IcomCivBackend& b) { b.applyScopeStartup(); }
     static void fixedView(IcomCivBackend& b) { b.m_scopeView = IcomSettings::ScopeView::Fixed; }
     static bool tuning(const IcomCivBackend& b) { return b.m_tuning; }
     static bool tuneTimerActive(const IcomCivBackend& b)
@@ -931,11 +935,63 @@ void testScrollFRefusalFallsBackToCenter()
     Access::refuse(backend, "scope.mode");
     check(!Access::scopeModesOffered(backend), "an FA to 27 14 00 03 withdraws SCROLL-F");
     check(!modes.isEmpty() && modes.last().at(1).toStringList().isEmpty(),
-          "the Scope row is hidden");
+          "the unsupported scope choices are withdrawn");
     check(warning.count() == 1, "the operator is told why");
     const auto mode = writes(Access::issued(backend), cmd::kScope, scope::kMode);
     check(mode.size() == 1 && mode.front().data.size() == 2 && mode.front().data[1] == 0x00,
           "and the radio is put back in Center");
+}
+
+// Startup owns the presentation preference, with isolated settings. It applies
+// once per session, preserves an explicit choice, and leaves unsupported models alone.
+void testScopeStartupPreference()
+{
+    IcomSettings::reset();
+    IcomSettings::setUsername(QStringLiteral("scope-startup-test"));
+    for (const char* model : {"IC-7300MK2", "IC-705", "IC-9700"}) {
+        IcomCivBackend backend;
+        Access::prepare(backend, model);
+        Access::scopeStartup(backend);
+        const auto mode = writes(Access::issued(backend), cmd::kScope, scope::kMode);
+        const auto slot = writes(Access::issued(backend), cmd::kScope, scope::kEdgeNumber);
+        check(mode.size() == 1 && mode.front().data == std::vector<std::uint8_t>({0x00, 0x03}),
+              "an existing profile without scopeView starts in SCROLL-F");
+        check(slot.size() == 1 && slot.front().data == std::vector<std::uint8_t>({0x00, 0x04}),
+              "edge-driven startup selects only slot 4");
+        Access::forget(backend);
+        Access::scopeStartup(backend);
+        check(Access::issued(backend).empty(), "scope startup is applied only once per session");
+    }
+    for (const IcomSettings::ScopeView view : {IcomSettings::ScopeView::Center, IcomSettings::ScopeView::Fixed}) {
+        IcomSettings::setScopeView(view);
+        IcomCivBackend backend;
+        Access::prepare(backend, "IC-7300MK2");
+        Access::scopeStartup(backend);
+        const auto mode = writes(Access::issued(backend), cmd::kScope, scope::kMode);
+        const std::uint8_t expected = view == IcomSettings::ScopeView::Center ? 0x00 : 0x01;
+        check(mode.size() == 1 && mode.front().data == std::vector<std::uint8_t>({0x00, expected}),
+              "a new session respects the operator's saved Center or Fixed choice");
+        check(view != IcomSettings::ScopeView::Center
+                  || writes(Access::issued(backend), cmd::kScope, scope::kEdgeNumber).empty(),
+              "Center startup does not acquire an edge slot");
+        QProcess child;
+        child.start(QCoreApplication::applicationFilePath(),
+                    {QStringLiteral("--scope-startup-check"), QString::number(expected)});
+        const bool finished = child.waitForFinished(10000);
+        if (!finished) {
+            child.kill();
+            child.waitForFinished(1000);
+        }
+        check(finished && child.exitStatus() == QProcess::NormalExit && child.exitCode() == 0,
+              "the explicit scope preference survives a process restart");
+    }
+    IcomSettings::reset();
+    IcomCivBackend unsupported;
+    Access::prepare(unsupported, "IC-7300");
+    Access::scopeStartup(unsupported);
+    check(writes(Access::issued(unsupported), cmd::kScope, scope::kMode).empty()
+              && writes(Access::issued(unsupported), cmd::kScope, scope::kEdgeNumber).empty(),
+          "the original IC-7300 keeps its existing scope mode and slot");
 }
 
 // Fixed chosen here, but the radio shows one of the operator's slots (picked on
@@ -1173,7 +1229,25 @@ void testScrubReasserts()
 
 int main(int argc, char** argv)
 {
+    // A child reads the parent's isolated store in a fresh process. It neither
+    // starts a transport nor acts as a firmware peer.
+    if (argc == 3 && QString::fromLocal8Bit(argv[1]) == QLatin1String("--scope-startup-check")) {
+        QCoreApplication app(argc, argv);
+        AppSettings::instance().load();
+        IcomCivBackend backend;
+        Access::prepare(backend, "IC-7300MK2");
+        Access::scopeStartup(backend);
+        const auto mode = writes(Access::issued(backend), cmd::kScope, scope::kMode);
+        const int expected = QString::fromLocal8Bit(argv[2]).toInt();
+        return mode.size() == 1 && mode.front().data.size() == 2
+            && mode.front().data[1] == expected ? 0 : 1;
+    }
+    TestSettingsProfile profile(QStringLiteral("icom-backend-seam-test"));
+    if (!profile.isValid()) {
+        return 1;
+    }
     QCoreApplication app(argc, argv);
+    AppSettings::instance().load();
     qRegisterMetaType<SliceDelta>("SliceDelta");
     qRegisterMetaType<MeterDef>("MeterDef");
 
@@ -1195,6 +1269,7 @@ int main(int argc, char** argv)
     testScrollFReselectsSlotOnRangeChange();
     testScrollFRefusalFallsBackToCenter();
     testFixedOnOperatorSlotRefusesGestures();
+    testScopeStartupPreference();
     testCwTextLimits();
     testReceiveAudioRatio();
     testTraceTags();
