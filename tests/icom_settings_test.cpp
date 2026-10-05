@@ -58,6 +58,17 @@ int main(int argc, char** argv)
     check(IcomSettings::serialPort() == icom::kSerialPort, "default serial port 50002");
     check(IcomSettings::audioPort() == icom::kAudioPort, "default audio port 50003");
     check(IcomSettings::civAddress() == 0xA4, "default CI-V address is the IC-705's 0xA4");
+    check(IcomSettings::scopeView() == IcomSettings::ScopeView::ScrollF,
+          "SCROLL-F is the default scope view");
+    IcomSettings::setScopeView(IcomSettings::ScopeView::Center);
+    check(IcomSettings::scopeView() == IcomSettings::ScopeView::Center,
+          "Center round-trips");
+    IcomSettings::setScopeView(IcomSettings::ScopeView::Fixed);
+    check(IcomSettings::scopeView() == IcomSettings::ScopeView::Fixed,
+          "Fixed round-trips");
+    IcomSettings::setScopeView(IcomSettings::ScopeView::ScrollF);
+    check(IcomSettings::scopeView() == IcomSettings::ScopeView::ScrollF,
+          "SCROLL-F round-trips");
 
     IcomSettings::setUsername(QStringLiteral("beer"));
     IcomSettings::setLastHost(QStringLiteral("ic-705.local"));

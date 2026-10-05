@@ -1944,6 +1944,18 @@ void MainWindow::wirePanLifecycle()
                 this, [this, panId = pan->panId()](int step) {
             m_radioModel.setPanAttenuatorFor(panId, step);
         });
+        // The radio's scope mode: same model -> menu / menu -> model shape.
+        connect(pan, &PanadapterModel::scopeModeLabelsChanged,
+                applet->spectrumWidget()->overlayMenu(),
+                &SpectrumOverlayMenu::setScopeModeLabels);
+        connect(pan, &PanadapterModel::scopeModeIndexChanged,
+                applet->spectrumWidget()->overlayMenu(),
+                &SpectrumOverlayMenu::setScopeModeIndex);
+        connect(applet->spectrumWidget()->overlayMenu(),
+                &SpectrumOverlayMenu::scopeModeChanged,
+                this, [this, panId = pan->panId()](int index) {
+            m_radioModel.setPanScopeModeFor(panId, index);
+        });
         // Seed from whatever the model already holds: this wiring can run after
         // the backend has published, and a control built empty would stay empty
         // until the operator moved something on the radio.
@@ -1960,6 +1972,8 @@ void MainWindow::wirePanLifecycle()
         syncPreampIndicator();
         applet->spectrumWidget()->overlayMenu()->setAttenuatorLabels(pan->attenuatorLabels());
         applet->spectrumWidget()->overlayMenu()->setAttenuatorStep(pan->attenuatorStep());
+        applet->spectrumWidget()->overlayMenu()->setScopeModeLabels(pan->scopeModeLabels());
+        applet->spectrumWidget()->overlayMenu()->setScopeModeIndex(pan->scopeModeIndex());
 
         // Push display dimensions to the radio so it sends full-size FFT bins.
         // Without this, the radio uses xpixels=50 ypixels=20 (default) and

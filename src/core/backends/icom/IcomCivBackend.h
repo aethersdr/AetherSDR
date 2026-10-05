@@ -27,6 +27,7 @@
 #include "core/backends/icom/IcomNtpAccess.h"
 #include "core/backends/icom/IcomScope.h"
 #include "core/backends/icom/IcomSession.h"
+#include "core/backends/icom/IcomSettings.h"
 
 class QTimer;
 
@@ -66,6 +67,7 @@ public:
 
     // ---- intents DOWN ----
     void setSliceFrequency(int sliceId, double hz) override;
+    void requestSliceTune(int sliceId, const SliceTuneRequest& request) override;
     void setSliceMode(int sliceId, const QString& mode) override;
     void setSliceFilter(int sliceId, int lowHz, int highHz) override;
     void setSliceFilterPreset(int sliceId, int presetId) override;
@@ -77,6 +79,7 @@ public:
     void setPanRfGain(const QString& panId, int gainDb) override;
     void setPanPreamp(const QString& panId, int step) override;
     void setPanAttenuator(const QString& panId, int step) override;
+    void setPanScopeMode(const QString& panId, int index) override;
     void setSliceRxAntenna(int sliceId, const QString& antenna) override;
     ReceiveDispatch requestSliceDsp(int sliceId, const SliceDspRequest& request) override;
     ReceiveDispatch requestSliceAudio(int sliceId, const SliceAudioRequest& request) override;
@@ -605,6 +608,70 @@ private:
     // pan intent acts.
     std::int64_t m_scopeCentreHz = 0;
     std::int64_t m_scopeSpanHz = 0;
+
+    // Fixed / SCROLL-F: the window is one of the radio's stored edge presets
+    // (27 1E), selected per range by an edge number (27 16), so a scroll or a
+    // zoom is a throttled edge write to the slot AetherSDR owns.
+    [[nodiscard]] bool scopeModesOffered() const;
+    [[nodiscard]] bool scopeWindowIsEdgeDriven() const;
+    [[nodiscard]] bool scopeViewUsesEdgeSlot() const;
+    [[nodiscard]] std::span<const ScopeEdgeRange> scopeEdgeRanges() const;
+    [[nodiscard]] std::optional<ScopeEdgeRange> scopeEdgeRangeAt(std::uint64_t hz) const;
+    [[nodiscard]] std::optional<ScopeEdgeWindow> scopeShownWindow() const;
+    [[nodiscard]] std::optional<ScopeEdgeRange> scopeShownRange() const;
+    [[nodiscard]] std::uint64_t scopeVfoHz() const;
+    [[nodiscard]] double scopeDragCentre(double requestedHz, double widthHz) const;
+    [[nodiscard]] int scopeEdgeSlot() const;
+    void publishScopeModes();
+    void noteSweepScopeMode(ScopeMode mode);
+    void requestScopeEdgeWindow(double centreHz, double widthHz, const char* why,
+                                std::optional<ScopeEdgeRange> range = std::nullopt);
+    void flushScopeEdgeWrite();
+    void applyPendingScopeCentre();
+    void writeScopeEdgeWindow(int rangeNumber, const ScopeEdgeWindow& w);
+    void handleScopeReply(const CivFrame& frame);
+    void handleScopeRefusal(const std::string& key);
+    void resetScopeEdgeState();
+    void selectScopeEdgeSlot(IcomCivScheduler::Priority priority);
+    void onScopeVfoMoved(std::uint64_t previousHz, std::uint64_t hz);
+    void onScopeSelectorChanged(std::uint8_t selector);
+    void noteCommandedTune(std::uint64_t hz);
+    [[nodiscard]] bool wasCommandedTune(std::uint64_t hz) const;
+
+    IcomSettings::ScopeView m_scopeView = IcomSettings::ScopeView::ScrollF;
+    // The mode the radio last reported (sweep or 27 14 read).
+    std::optional<ScopeMode> m_scopeReportedMode;
+    int m_scopePublishedModeIndex = -2;   // -2 = nothing published yet
+    qint64 m_scopeModeRequestedAtMs = 0;
+    // 27 16 slot the radio is showing, as last selected or read; 0 = unknown.
+    int m_scopeEdgeNumber = 0;
+    // The window the last sweep covered.
+    std::int64_t m_scopeLowerHz = 0;
+    std::int64_t m_scopeUpperHz = 0;
+    // The window a gesture wants, already legal; sweeps are remapped into it
+    // until one arrives with its edges or the hold expires.
+    std::optional<ScopeEdgeWindow> m_scopeEdgeTarget;
+    std::optional<ScopeEdgeWindow> m_scopeEdgeWritten;
+    int m_scopeEdgeTargetRange = 0;
+    int m_scopeEdgeWrittenRange = 0;
+    qint64 m_scopeEdgeHoldUntilMs = 0;
+    qint64 m_scopeLastEdgeWriteMs = 0;
+    qint64 m_scopeBlankSweepUntilMs = 0;
+    QTimer* m_scopeEdgeWriteTimer = nullptr;
+    // Set when our slot comes into view; the first sweep decides whether the
+    // stored window needs moving to hold the VFO.
+    bool m_scopeEnsureVfoVisible = false;
+    // The radio answered FA to SCROLL-F or slot 4 (old firmware).
+    bool m_scopeScrollRefused = false;
+    // 27 00 byte 1: the scope the radio streams (IC-9700 MAIN 00 / SUB 01).
+    std::uint8_t m_scopeSelector = 0;
+    struct CommandedTune {
+        std::uint64_t hz = 0;
+        qint64 atMs = 0;
+    };
+    std::deque<CommandedTune> m_scopeRecentTunes;
+    // A range-change centre waiting one event-loop turn for its tune.
+    std::optional<double> m_scopePendingCentreHz;
 
     // A short ring of recent CI-V frames, both directions: a wire-format diagnosis
     // needs one frame and its FB/FA reply, readable at any time through one verb

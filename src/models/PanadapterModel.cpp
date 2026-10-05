@@ -119,6 +119,24 @@ void PanadapterModel::setAttenuatorStep(int step)
     emit attenuatorStepChanged(m_attenuatorStep);
 }
 
+void PanadapterModel::setScopeModeLabels(const QStringList& labels)
+{
+    if (labels == m_scopeModeLabels) {
+        return;
+    }
+    m_scopeModeLabels = labels;
+    emit scopeModeLabelsChanged(m_scopeModeLabels);
+}
+
+void PanadapterModel::setScopeModeIndex(int index)
+{
+    if (index == m_scopeModeIndex) {
+        return;
+    }
+    m_scopeModeIndex = index;
+    emit scopeModeIndexChanged(m_scopeModeIndex);
+}
+
 bool PanadapterModel::setCenterBandwidth(double centerMhz, double bandwidthMhz)
 {
     bool changed = false;

@@ -337,6 +337,14 @@ public:
         Q_UNUSED(panId);
         Q_UNUSED(step);
     }
+    // How the radio's own scope window follows the VFO. `index` addresses the
+    // label list published on panScopeModesChanged; an empty list hides the
+    // control, so only a backend with a real choice receives this.
+    virtual void setPanScopeMode(const QString& panId, int index)
+    {
+        Q_UNUSED(panId);
+        Q_UNUSED(index);
+    }
     virtual void setSliceRxAntenna(int sliceId, const QString& antenna)
     {
         Q_UNUSED(sliceId);
@@ -1100,6 +1108,13 @@ signals:
     void panPreampChanged(const QString& panId, int step);
     void panAttenuatorInfoChanged(const QString& panId, const QStringList& labels);
     void panAttenuatorChanged(const QString& panId, int step);
+
+    // The radio's scope mode, for a backend whose panadapter is the radio's own
+    // scope (Icom: Center / Scroll-F / Fixed). Empty labels hide the control;
+    // index -1 means the radio is in a mode outside the list (e.g. SCROLL-C
+    // picked on its front panel), so the UI lights none.
+    void panScopeModesChanged(const QString& panId, const QStringList& labels);
+    void panScopeModeChanged(const QString& panId, int index);
 
     // Panadapter antenna selection (universal). Two signals because the wire may
     // report the selected RX antenna and the available list independently.

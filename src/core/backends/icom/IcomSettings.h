@@ -26,6 +26,14 @@ public:
     static bool wakeOnConnect();
     static void setWakeOnConnect(bool enabled);
 
+    // How the panadapter follows the VFO (#6168). ScrollF (default): the
+    // window stays put, a click tunes, a drag scrolls. Center: the window is
+    // slaved to the VFO. Fixed: like ScrollF, but the radio never pages, so a
+    // drag may leave the VFO off-screen. A preference, not radio state.
+    enum class ScopeView { ScrollF, Center, Fixed };
+    static ScopeView scopeView();
+    static void setScopeView(ScopeView view);
+
     // The last host connected to, so the connect dialog can offer it back.
     static QString lastHost();
     static void setLastHost(const QString& host);

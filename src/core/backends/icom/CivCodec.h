@@ -392,11 +392,11 @@ inline constexpr std::uint8_t kWaveData    = 0x00;
 // number-one "my panadapter is black" cause.
 inline constexpr std::uint8_t kOnOff       = 0x10;
 inline constexpr std::uint8_t kDataOutput  = 0x11;
-inline constexpr std::uint8_t kMainSub     = 0x12;   // IC-705: fixed 00
+inline constexpr std::uint8_t kMainSub     = 0x12;   // 00 MAIN / 01 SUB (IC-9700); fixed 00 elsewhere
 inline constexpr std::uint8_t kSingleDual  = 0x13;   // IC-705: fixed 00
-inline constexpr std::uint8_t kMode        = 0x14;   // 0000 centre, 0001 fixed
-inline constexpr std::uint8_t kSpan        = 0x15;   // centre mode only
-inline constexpr std::uint8_t kEdgeNumber  = 0x16;   // fixed mode, 0001..0003
+inline constexpr std::uint8_t kMode        = 0x14;   // 00 centre, 01 fixed, 02 scroll-c, 03 scroll-f
+inline constexpr std::uint8_t kSpan        = 0x15;   // centre and scroll-c modes
+inline constexpr std::uint8_t kEdgeNumber  = 0x16;   // fixed and scroll-f modes, 01..04
 inline constexpr std::uint8_t kHold        = 0x17;
 inline constexpr std::uint8_t kReference   = 0x19;   // -20.0..+20.0 dB, 0.5 steps
 inline constexpr std::uint8_t kSweepSpeed  = 0x1A;   // 0000..0002
@@ -667,7 +667,93 @@ repeaterToneConfirmationForWrite(std::uint8_t to, const CivFrame& write);
 [[nodiscard]] std::vector<std::uint8_t> cmdReadId(std::uint8_t to);
 [[nodiscard]] std::vector<std::uint8_t> cmdScopeOnOff(std::uint8_t to, bool on);
 [[nodiscard]] std::vector<std::uint8_t> cmdScopeDataOutput(std::uint8_t to, bool on);
-[[nodiscard]] std::vector<std::uint8_t> cmdScopeMode(std::uint8_t to, bool fixed);
+// 0x27 0x14 / 0x16: `mode` is 00 centre, 01 fixed, 02 SCROLL-C, 03 SCROLL-F.
+// `selector` is the scope these address: always 00 on single-scope radios,
+// 00 MAIN / 01 SUB on the IC-9700 (guide ed. 4 p. 25). Which modes a radio
+// accepts depends on firmware; the caller gates on the profile and on FA.
+[[nodiscard]] std::vector<std::uint8_t> cmdScopeMode(std::uint8_t to, std::uint8_t mode,
+                                                      std::uint8_t selector = 0x00);
+[[nodiscard]] std::vector<std::uint8_t> cmdScopeEdgeNumber(std::uint8_t to, int edge,
+                                                            std::uint8_t selector = 0x00);
+[[nodiscard]] std::vector<std::uint8_t> cmdReadScopeEdgeNumber(std::uint8_t to,
+                                                                std::uint8_t selector = 0x00);
+// 0x27 0x1E: range number, edge number, lower and upper edge (5-byte LE BCD).
+// No selector byte on any model. This writes the stored Fixed Edges preset the
+// operator edits on the radio, so write only an owned slot, and throttle it.
+[[nodiscard]] std::vector<std::uint8_t> cmdScopeFixedEdge(std::uint8_t to, int rangeNumber,
+                                                           int edge, std::uint64_t lowerHz,
+                                                           std::uint64_t upperHz);
+
+// One Fixed Edges range: the edge preset is addressed by (range, edge number),
+// and a window may not cross the range's bounds (the radio answers FA).
+struct ScopeEdgeRange {
+    int number = 0;              // the wire value
+    std::uint64_t lowerHz = 0;   // settable lower bound, inclusive
+    std::uint64_t upperHz = 0;   // settable upper bound, inclusive
+};
+// IC-7300MK2 / IC-7300 / IC-705 share ranges 01-13 (MK2 guide p. 26).
+inline constexpr std::array<ScopeEdgeRange, 13> kScopeEdgeRangesHf{{
+    {1,         30'000,  1'600'000},
+    {2,      1'600'000,  2'000'000},
+    {3,      2'000'000,  6'000'000},
+    {4,      6'000'000,  8'000'000},
+    {5,      8'000'000, 11'000'000},
+    {6,     11'000'000, 15'000'000},
+    {7,     15'000'000, 20'000'000},
+    {8,     20'000'000, 22'000'000},
+    {9,     22'000'000, 26'000'000},
+    {10,    26'000'000, 30'000'000},
+    {11,    30'000'000, 45'000'000},
+    {12,    45'000'000, 60'000'000},
+    {13,    60'000'000, 74'800'000},
+}};
+// IC-705 adds 14-17 (guide ed. 6 p. 29); there is no range over 200-400 MHz.
+inline constexpr std::array<ScopeEdgeRange, 17> kScopeEdgeRangesIc705{{
+    {1,         30'000,  1'600'000},
+    {2,      1'600'000,  2'000'000},
+    {3,      2'000'000,  6'000'000},
+    {4,      6'000'000,  8'000'000},
+    {5,      8'000'000, 11'000'000},
+    {6,     11'000'000, 15'000'000},
+    {7,     15'000'000, 20'000'000},
+    {8,     20'000'000, 22'000'000},
+    {9,     22'000'000, 26'000'000},
+    {10,    26'000'000, 30'000'000},
+    {11,    30'000'000, 45'000'000},
+    {12,    45'000'000, 60'000'000},
+    {13,    60'000'000, 74'800'000},
+    {14,    74'800'000, 108'000'000},
+    {15,   108'000'000, 137'000'000},
+    {16,   137'000'000, 200'000'000},
+    {17,   400'000'000, 470'000'000},
+}};
+// IC-9700: one range per band (guide ed. 4 p. 26).
+inline constexpr std::array<ScopeEdgeRange, 3> kScopeEdgeRangesIc9700{{
+    {1,   144'000'000,   148'000'000},
+    {2,   430'000'000,   450'000'000},
+    {3, 1'240'000'000, 1'300'000'000},
+}};
+// "Set the upper Edge frequency within 1 MHz of the lower frequency" (MK2
+// Advanced Manual, Fixed Edges). Icom publishes no minimum; 5 kHz is the
+// narrowest Center span.
+inline constexpr std::uint64_t kScopeFixedEdgeMaxWidthHz = 1'000'000;
+inline constexpr std::uint64_t kScopeFixedEdgeMinWidthHz = 5'000;
+
+// The range `hz` falls in, or nullopt. A shared boundary resolves upward to the
+// range it starts, except at the top of the last range.
+[[nodiscard]] std::optional<ScopeEdgeRange> scopeEdgeRangeFor(std::span<const ScopeEdgeRange> ranges,
+                                                              std::uint64_t hz) noexcept;
+
+// A requested window made legal for `range`: width clamped to
+// [kScopeFixedEdgeMinWidthHz, min(1 MHz, range width)], edges on whole kHz
+// (the radio ignores sub-kHz digits), then shifted, not shrunk, into the range.
+struct ScopeEdgeWindow {
+    std::uint64_t lowerHz = 0;
+    std::uint64_t upperHz = 0;
+};
+[[nodiscard]] ScopeEdgeWindow clampScopeEdgeWindow(const ScopeEdgeRange& range,
+                                                   double centreHz,
+                                                   double widthHz) noexcept;
 [[nodiscard]] std::vector<std::uint8_t> cmdScopeSpan(std::uint8_t to, int spanHz);
 [[nodiscard]] std::vector<std::uint8_t> cmdScopeReference(std::uint8_t to, double db);
 

@@ -90,6 +90,12 @@ struct IcomCivBackendTestAccess {
             b.pumpCiv(t);
         }
     }
+    // Operator picked SCROLL-F; the startup writes themselves are not under test.
+    static void scrollF(IcomCivBackend& b)
+    {
+        b.m_scopeView = IcomSettings::ScopeView::ScrollF;
+        b.m_scopeStarted = true;
+    }
     static bool tuning(const IcomCivBackend& b) { return b.m_tuning; }
     static bool tuneTimerActive(const IcomCivBackend& b)
     {
@@ -737,6 +743,135 @@ void testPanIntents()
           "zoom-out from 100 kHz steps to the next span (250 kHz), not back");
 }
 
+std::optional<CivFrame> scopeEdgeSweep(std::uint64_t lowerHz, std::uint64_t upperHz,
+                                       std::uint8_t civAddress = 0xB6)
+{
+    std::vector<std::uint8_t> body{0x00, encodeBcdByte(1), encodeBcdByte(1), 0x03};
+    const auto lower = encodeFreq(lowerHz);
+    const auto upper = encodeFreq(upperHz);
+    body.insert(body.end(), lower.begin(), lower.end());
+    body.insert(body.end(), upper.begin(), upper.end());
+    body.push_back(0x00);
+    body.insert(body.end(), static_cast<std::size_t>(kScopePointsIc705), 0x20);
+    return parseFrame(buildFrameSub(civAddress, cmd::kScope, scope::kWaveData, body));
+}
+
+CivFrame frequencyEcho(std::uint64_t hz)
+{
+    const auto bytes = encodeFreq(hz);
+    return frame(cmd::kReadFreq, std::nullopt, std::vector<std::uint8_t>(bytes.begin(), bytes.end()));
+}
+
+struct EdgeWrite {
+    int range = 0;
+    int slot = 0;
+    std::uint64_t lowerHz = 0;
+    std::uint64_t upperHz = 0;
+};
+
+std::vector<EdgeWrite> edgeWrites(const std::vector<CivFrame>& frames)
+{
+    std::vector<EdgeWrite> out;
+    for (const CivFrame& f : writes(frames, cmd::kScope, scope::kFixedEdge)) {
+        if (f.data.size() < 2 + 2 * kFreqBytes) {
+            continue;
+        }
+        const std::span<const std::uint8_t> d(f.data);
+        out.push_back({decodeBcdByte(d[0]), decodeBcdByte(d[1]),
+                       decodeFreq(d.subspan(2, kFreqBytes)).value_or(0),
+                       decodeFreq(d.subspan(2 + kFreqBytes, kFreqBytes)).value_or(0)});
+    }
+    return out;
+}
+
+// SCROLL-F (#6168): the window is free. A drag scrolls without retuning and
+// stops short of losing the VFO; a reveal lands in the range of the tune it
+// reveals, even when it arrives first; a zoom is one write.
+void testScrollFPanIntents()
+{
+    IcomCivBackend backend;
+    Access::prepare(backend, "IC-7300MK2");
+    Access::scrollF(backend);
+    const auto sweep = scopeEdgeSweep(14'000'000, 14'100'000);
+    check(sweep.has_value(), "SCROLL-F fixture sweep parses");
+    if (!sweep) {
+        return;
+    }
+    Access::deliver(backend, frequencyEcho(14'050'000));
+    Access::deliver(backend, *sweep);
+    const auto retunes = [](const std::vector<CivFrame>& frames) {
+        return any(frames, [](const CivFrame& f) {
+            return (f.cmd == cmd::kSetFreq || f.cmd == cmd::kSetFreqTrx) && !f.data.empty();
+        });
+    };
+
+    Access::forget(backend);
+    backend.setPanCenter(QStringLiteral("0"), 14'030'000.0, IRadioBackend::PanCenterIntent::Drag);
+    QCoreApplication::processEvents();
+    auto edges = edgeWrites(Access::issued(backend));
+    check(!retunes(Access::issued(backend)), "a SCROLL-F drag does not retune");
+    check(edges.size() == 1 && edges.front().range == 6 && edges.front().slot == 4
+              && edges.front().lowerHz == 13'980'000 && edges.front().upperHz == 14'080'000,
+          "it writes the dragged window to slot 4 of range 06");
+
+    Access::forget(backend);
+    QSignalSpy pan(&backend, &IRadioBackend::panCenterBandwidthChanged);
+    backend.setPanCenter(QStringLiteral("0"), 13'900'000.0, IRadioBackend::PanCenterIntent::Drag);
+    QCoreApplication::processEvents();
+    edges = edgeWrites(Access::issued(backend));
+    check(edges.size() == 1 && edges.front().upperHz == 14'052'000,
+          "a drag that would lose the VFO stops with it 2 kHz inside the edge");
+    check(!pan.isEmpty(), "and the view is told where it stopped");
+
+    // Memory recall order: the reveal arrives before the tune it reveals.
+    Access::forget(backend);
+    backend.setPanCenter(QStringLiteral("0"), 400'900.0, IRadioBackend::PanCenterIntent::Range);
+    backend.setSliceFrequency(0, 400'900.0);
+    QCoreApplication::processEvents();
+    edges = edgeWrites(Access::issued(backend));
+    check(edges.size() == 1 && edges.front().range == 1
+              && edges.front().lowerHz == 351'000 && edges.front().upperHz == 451'000,
+          "a reveal before its tune is centred in the tune's range, not the old band's");
+
+    // A zoom's centre and width travel as one write.
+    Access::deliver(backend, frequencyEcho(400'900));
+    Access::deliver(backend, *scopeEdgeSweep(351'000, 451'000));
+    Access::forget(backend);
+    pan.clear();
+    backend.setPanCenter(QStringLiteral("0"), 400'000.0, IRadioBackend::PanCenterIntent::Range);
+    backend.setPanBandwidth(QStringLiteral("0"), 50'000.0);
+    check(!pan.isEmpty() && std::fabs(pan.first().at(2).toDouble() - 0.05) < 1e-9,
+          "a zoom announces its new width at once");
+    QCoreApplication::processEvents();
+    edges = edgeWrites(Access::issued(backend));
+    check(edges.size() == 1 && edges.front().upperHz - edges.front().lowerHz == 50'000,
+          "a zoom costs one edge write, at the new width");
+}
+
+// A VFO move AetherSDR did not command (the dial) is followed; our own is not.
+void testScrollFFollowsTheDial()
+{
+    IcomCivBackend backend;
+    Access::prepare(backend, "IC-7300MK2");
+    Access::scrollF(backend);
+    Access::deliver(backend, frequencyEcho(14'050'000));
+    Access::deliver(backend, *scopeEdgeSweep(14'000'000, 14'100'000));
+
+    Access::forget(backend);
+    backend.setSliceFrequency(0, 14'095'000.0);
+    Access::deliver(backend, frequencyEcho(14'095'000));
+    QCoreApplication::processEvents();
+    check(edgeWrites(Access::issued(backend)).empty(),
+          "the echo of our own tune does not move the window (the GUI places it)");
+
+    Access::forget(backend);
+    Access::deliver(backend, frequencyEcho(14'097'000));
+    QCoreApplication::processEvents();
+    const auto edges = edgeWrites(Access::issued(backend));
+    check(edges.size() == 1 && edges.front().upperHz == 14'122'000,
+          "a dial move into the edge zone pans so the VFO sits 25 % inside");
+}
+
 // CW text keyer limits: rejected text emits nothing; 30 characters fit.
 void testCwTextLimits()
 {
@@ -935,6 +1070,8 @@ int main(int argc, char** argv)
     testCompoundModeWrite();
     testPassbandDecomposition();
     testPanIntents();
+    testScrollFPanIntents();
+    testScrollFFollowsTheDial();
     testCwTextLimits();
     testReceiveAudioRatio();
     testTraceTags();

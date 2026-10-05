@@ -1803,6 +1803,33 @@ void SpectrumOverlayMenu::buildDisplayPanel()
         });
     }
 
+    // Scope mode, for a radio whose panadapter is its own scope (Icom). First
+    // in the group because it changes what every spectrum gesture does; hidden
+    // until a backend publishes two or more modes.
+    {
+        m_scopeModeRow = new QWidget;
+        applyTransparentStyle(m_scopeModeRow, QStringLiteral("displayScopeModeRow"));
+        m_scopeModeLayout = new QHBoxLayout(m_scopeModeRow);
+        m_scopeModeLayout->setContentsMargins(0, 2, 0, 2);
+        m_scopeModeLayout->setSpacing(3);
+        auto* lbl = new QLabel(QStringLiteral("Scope:"));
+        lbl->setStyleSheet(labelStyle);
+        m_scopeModeLayout->addWidget(lbl);
+        m_scopeModeRow->setToolTip(QStringLiteral(
+            "How the radio's scope window follows the VFO.\n"
+            "Center: the window is centred on the VFO; dragging retunes.\n"
+            "Scroll-F: the window stays put; click to tune, drag to scroll.\n"
+            "  A drag stops before the VFO leaves the screen.\n"
+            "Fixed: as Scroll-F, but the window can be dragged away from\n"
+            "  the VFO; AetherSDR follows the VFO when you tune off-screen.\n"
+            "Scroll-F and Fixed use the radio's Fixed Edge slot 4;\n"
+            "slots 1-3 are left as you set them."));
+        m_scopeModeRow->setProperty("scopeModeBtnStyle", btnStyle);
+        m_scopeModeRow->hide();
+        grid->addWidget(m_scopeModeRow, row, 0, 1, 4);
+        ++row;
+    }
+
     // ── Sliders ───────────────────────────────────────────────────────────
 
     // AVG
@@ -3189,6 +3216,67 @@ void SpectrumOverlayMenu::refreshFrontEndButtons()
           QStringLiteral("preamp"));
     apply(m_attenuatorRow, m_attenuatorBtn, m_attenuatorLabels, m_attenuatorStep,
           QStringLiteral("attenuator"));
+}
+
+// The buttons do not own their state: a click emits the request and they
+// repaint from the index the backend reports.
+void SpectrumOverlayMenu::setScopeModeLabels(const QStringList& labels)
+{
+    if (labels == m_scopeModeLabels && m_scopeModeBtns.size() == labels.size()) {
+        return;
+    }
+    m_scopeModeLabels = labels;
+    rebuildScopeModeButtons();
+}
+
+void SpectrumOverlayMenu::setScopeModeIndex(int index)
+{
+    m_scopeModeIndex = index;
+    refreshScopeModeButtons();
+}
+
+void SpectrumOverlayMenu::rebuildScopeModeButtons()
+{
+    if (!m_scopeModeRow || !m_scopeModeLayout) {
+        return;
+    }
+    qDeleteAll(m_scopeModeBtns);
+    m_scopeModeBtns.clear();
+    const QString style = m_scopeModeRow->property("scopeModeBtnStyle").toString();
+    for (int i = 0; i < m_scopeModeLabels.size(); ++i) {
+        auto* btn = new QPushButton(m_scopeModeLabels.at(i));
+        btn->setCheckable(true);
+        btn->setStyleSheet(style);
+        btn->setFixedHeight(20);
+        QString slug = m_scopeModeLabels.at(i).toLower();
+        slug.remove(QLatin1Char('-'));
+        slug.remove(QLatin1Char(' '));
+        btn->setObjectName(QStringLiteral("displayScopeMode_%1").arg(slug));
+        btn->setAccessibleName(QStringLiteral("Scope mode %1").arg(m_scopeModeLabels.at(i)));
+        m_scopeModeLayout->addWidget(btn, 1);
+        m_scopeModeBtns.append(btn);
+        connect(btn, &QPushButton::clicked, this, [this, i] {
+            // Undo the checked state Qt gave the click; the backend's answer lights it.
+            refreshScopeModeButtons();
+            if (i != m_scopeModeIndex) {
+                emit scopeModeChanged(i);
+            }
+        });
+    }
+    refreshScopeModeButtons();
+}
+
+void SpectrumOverlayMenu::refreshScopeModeButtons()
+{
+    if (!m_scopeModeRow) {
+        return;
+    }
+    // A one-entry list is not a choice.
+    m_scopeModeRow->setVisible(m_scopeModeLabels.size() > 1);
+    for (int i = 0; i < m_scopeModeBtns.size(); ++i) {
+        QSignalBlocker b(m_scopeModeBtns[i]);
+        m_scopeModeBtns[i]->setChecked(i == m_scopeModeIndex);
+    }
 }
 
 void SpectrumOverlayMenu::setLoopState(bool loopA, bool loopB)

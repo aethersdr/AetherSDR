@@ -1004,6 +1004,9 @@ public:
     // wire-text fallback.
     void setPanPreampFor(const QString& panId, int step);
     void setPanAttenuatorFor(const QString& panId, int step);
+    // The radio's own scope mode — `index` addresses
+    // PanadapterModel::scopeModeLabels. Seam-only, like the two above.
+    void setPanScopeModeFor(const QString& panId, int index);
 
     // Display controls — FFT (display pan set)
     void setPanAverage(int frames);
