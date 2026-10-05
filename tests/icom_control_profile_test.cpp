@@ -3,6 +3,7 @@
 // No connectRadio(), event-loop waits, sockets or firmware peer: the session
 // is unstarted and frames/state are injected through the existing test seam.
 #include "core/backends/icom/IcomCivBackend.h"
+#include "core/backends/icom/IcomScope.h"
 #include "core/backends/icom/IcomSession.h"
 #include "core/backends/flex/FlexBackend.h"
 #include "core/backends/hl2/Hl2Backend.h"
@@ -369,15 +370,23 @@ int main(int argc, char** argv)
                 check(!(*sql == legacyDbmSquelchScale()), "the MK2 no longer uses Flex's scale");
                 check(!sql->autoSquelch, "MK2 Auto SQL is withdrawn: the gate reads the S-meter");
                 check(sql->appliesTo(QStringLiteral("USB")) && sql->appliesTo(QStringLiteral("CW"))
+                          && sql->appliesTo(QStringLiteral("CWU"))
                           && sql->appliesTo(QStringLiteral("AM"))
                           && sql->appliesTo(QStringLiteral("DIGU")),
                       "the MK2 SQL line covers its S-meter squelch modes");
-                check(!sql->appliesTo(QStringLiteral("FM")) && !sql->appliesTo(QStringLiteral("DFM")),
-                      "FM noise squelch has no dB place on the MK2");
+                check(!sql->appliesTo(QStringLiteral("FM")) && !sql->appliesTo(QStringLiteral("DFM"))
+                          && !sql->appliesTo(QStringLiteral("WFM")),
+                      "FM noise squelch and WFM have no dB place on the MK2");
             }
+            // The record is in the pan's dBm, and that axis is ScopeCalibration's
+            // ESTIMATE. If the estimate moves, the measured line must move with it.
+            const ScopeCalibration mk2Pan;
+            check(mk2Pan.floorDbm == -140.0 && mk2Pan.spanDb == 80.0 && !mk2Pan.measured,
+                  "the MK2 SQL record still matches the pan axis it was measured on");
         }
         for (const char* name : {"IC-705", "IC-9700"}) {
             const auto* model = modelForName(name);
+            check(model != nullptr, "an unmeasured Icom resolves for the squelch scale");
             if (!model) { continue; }
             IcomCivBackend backend;
             IcomCivBackendTestAccess::selectModel(backend, *model);

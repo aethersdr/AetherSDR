@@ -244,16 +244,17 @@ constexpr double kMk2SquelchPanDbPerRaw = 0.584;
 
 // The pan's per-bin floor sits below the passband power the S-meter gates on,
 // and often clips at the axis floor, so no Auto SQL. The modes are every name
-// modeToNeutral() gives an S-meter-squelch mode (RTTY reads as DIGL/DIGU); FM's
-// noise squelch has no dB place and is left out, as on the HL2.
+// modeToNeutral() gives an S-meter-squelch mode (RTTY reads as DIGL/DIGU), plus
+// CWU, which the backend accepts as an input spelling of CW. FM and DFM use
+// noise squelch and WFM is broadcast receive; none has a dB place, as on the HL2.
 SquelchLevelScale ic7300Mk2SquelchScale()
 {
     SquelchLevelScale sql;
     sql.dbPerStep = kMk2SquelchPanDbPerRaw * 2.55;
     sql.offsetDb = kMk2SquelchPanDbmAtRawZero + kMk2SquelchPanDbPerRaw * 0.5;
     sql.modes = {QStringLiteral("USB"), QStringLiteral("LSB"), QStringLiteral("CW"),
-                 QStringLiteral("CWL"), QStringLiteral("AM"), QStringLiteral("DIGU"),
-                 QStringLiteral("DIGL")};
+                 QStringLiteral("CWU"), QStringLiteral("CWL"), QStringLiteral("AM"),
+                 QStringLiteral("DIGU"), QStringLiteral("DIGL")};
     sql.autoSquelch = false;
     return sql;
 }
