@@ -270,7 +270,7 @@ private:
     void applyKeying(bool key, const std::optional<TxCoordinator::Command>& command);
     void queueRead(const std::vector<std::uint8_t>& frame, const std::string& key,
                    IcomCivScheduler::Priority priority, qint64 notBeforeMs = 0,
-                   std::vector<std::uint8_t> replyDataPrefix = {});
+                   std::vector<std::uint8_t> replyDataPrefix = {}, bool coalesce = true);
     void queueWrite(const std::vector<std::uint8_t>& frame, const std::string& key,
                     IcomCivScheduler::Priority priority, bool supersedes = true,
                     bool coalesce = true, const std::optional<TxCoordinator::Command>& command = {});

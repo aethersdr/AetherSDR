@@ -152,6 +152,30 @@ struct IcomCivBackendTestAccess {
         return -1;
     }
 
+    static bool interlockReadSurvivesEarlierRead(const IcomModel& model,
+                                                 bool attenuatorWrite, bool inFlight)
+    {
+        IcomCivBackend backend;
+        prepareSession(backend, model);
+        const std::vector<std::uint8_t> read = attenuatorWrite
+            ? cmdReadFunction(model.civAddress, func::kPreamp)
+            : cmdReadAttenuator(model.civAddress);
+        backend.queueRead(read, backend.semanticKey(read), IcomCivScheduler::Priority::Operator);
+        if (inFlight && !backend.m_civScheduler.takeNext(backend.nowMs())) {
+            return false;
+        }
+        if (attenuatorWrite) {
+            backend.setPanAttenuator(QString(), 1);
+        } else {
+            backend.setPanPreamp(QString(), 1);
+        }
+        return std::any_of(backend.m_civScheduler.m_queue.begin(),
+                           backend.m_civScheduler.m_queue.end(), [&](const auto& entry) {
+            return entry.request.frame == read
+                && entry.request.notBeforeMs - entry.enqueuedAtMs >= 50;
+        });
+    }
+
     static QString lastOutboundCiv(const IcomCivBackend& backend)
     {
         return backend.m_lastOutboundCiv;
@@ -392,6 +416,19 @@ int main(int argc, char** argv)
             IcomCivBackendTestAccess::queuedHoldOffMs(preampWrite, cmdReadAttenuator(address));
         check(hasAttenuator ? attHoldOff >= 50 : attHoldOff == -1,
               "a preamp write reads ATT back after the write, where the model has one");
+    }
+    for (const char* name : {"IC-7300MK2", "IC-705"}) {
+        const IcomModel* model = modelForName(name);
+        if (!model) {
+            continue;
+        }
+        for (const bool attenuatorWrite : {false, true}) {
+            for (const bool inFlight : {false, true}) {
+                check(IcomCivBackendTestAccess::interlockReadSurvivesEarlierRead(
+                          *model, attenuatorWrite, inFlight),
+                      "interlock read survives an earlier queued or in-flight stage read");
+            }
+        }
     }
     check(cmdReadRxAntenna(0xB6) == std::vector<std::uint8_t>({0xFE,0xFE,0xB6,0xE0,0x12,0xFD}),
           "MK2 antenna read uses observed bare 12 form");
