@@ -17,6 +17,7 @@
 #include "FramelessMessageBox.h"
 #include "MixerControlAvailability.h"
 #include "PhoneCwApplet.h"
+#include "PersistentDialog.h"
 #include "SpectrumOverlayMenu.h"
 #include "RfGainPresentation.h"
 #include "RfGainRestore.h"
@@ -64,6 +65,11 @@
 #include "core/AutomationBridgeSettings.h"
 #include "core/AutomationServer.h"
 
+#include <QDialogButtonBox>
+#include <QLabel>
+#include <QLineEdit>
+#include <QPushButton>
+#include <QVBoxLayout>
 #include <QStatusBar>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -514,6 +520,42 @@ void MainWindow::wireDiscovery()
         });
         connect(m_connPanel, &ConnectionPanel::radioNicknameChanged,
                 this, &MainWindow::scheduleRadioTabRefresh);
+        connect(m_connPanel, &ConnectionPanel::radioRenameRequested,
+                this, [this](const RadioInfo& radio, const QString& currentNickname) {
+            auto* dialog = new PersistentDialog(tr("Rename radio"),
+                QStringLiteral("RadioNicknameDialogGeometry"), m_connPanel);
+            dialog->setAttribute(Qt::WA_DeleteOnClose);
+            dialog->setObjectName(QStringLiteral("radioNicknameDialog"));
+            auto* form = new QVBoxLayout(dialog->bodyWidget());
+            auto* label = new QLabel(tr("Nickname for %1 (leave blank to reset):").arg(radio.model),
+                                     dialog->bodyWidget());
+            auto* editor = new QLineEdit(dialog->bodyWidget());
+            editor->setObjectName(QStringLiteral("radioNicknameEditor"));
+            editor->setAccessibleName(tr("Radio nickname"));
+            editor->setText(currentNickname);
+            editor->selectAll();
+            label->setBuddy(editor);
+            form->addWidget(label);
+            form->addWidget(editor);
+            auto* buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel,
+                                                 dialog->bodyWidget());
+            buttons->button(QDialogButtonBox::Save)->setAccessibleName(tr("Save radio nickname"));
+            buttons->button(QDialogButtonBox::Save)->setObjectName(QStringLiteral("saveRadioNickname"));
+            form->addWidget(buttons);
+            ThemeManager::instance().applyStyleSheet(dialog, QStringLiteral(
+                "QDialog, QLabel { background: {{color.background.1}}; color: {{color.text.primary}}; }"
+                "QLineEdit { background: {{color.background.0}}; color: {{color.text.primary}};"
+                " border: 1px solid {{color.border.strong}}; padding: 6px; }"
+                "QPushButton { background: {{color.background.2}}; color: {{color.text.primary}}; padding: 6px 14px; }"
+                "QPushButton:focus, QLineEdit:focus { border: 1px solid {{color.border.accent}}; }"));
+            connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::reject);
+            connect(buttons, &QDialogButtonBox::accepted, dialog, &QDialog::accept);
+            connect(dialog, &QDialog::accepted, this, [this, radio, editor]() {
+                m_connPanel->setRadioNickname(radio, editor->text());
+            });
+            dialog->show();
+            editor->setFocus(Qt::OtherFocusReason);
+        });
         connect(m_titleBar->radioTabBar(), &RadioTabBar::rescanRequested,
                 m_connPanel, &ConnectionPanel::retryDiscoveryRequested);
         connect(m_titleBar->radioTabBar(), &RadioTabBar::radioActionRequested,

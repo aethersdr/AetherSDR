@@ -14,7 +14,6 @@
 #include "ComboStyle.h"   // shared themed combo look (painted arrow)
 #include "FramelessResizer.h"
 #include "FramelessWindowTitleBar.h"
-#include "PersistentDialog.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -1607,46 +1606,28 @@ void ConnectionPanel::renameRadio(const RadioInfo& radio)
     if (!canRenameRadio(radio)) {
         return;
     }
-    const QString serial = radio.serial;
-    auto* dialog = new PersistentDialog(tr("Rename radio"), QStringLiteral("RadioNicknameDialogGeometry"), this);
-    dialog->setAttribute(Qt::WA_DeleteOnClose);
-    dialog->setObjectName(QStringLiteral("radioNicknameDialog"));
-    auto* form = new QVBoxLayout(dialog->bodyWidget());
-    auto* label = new QLabel(tr("Nickname for %1 (leave blank to reset):").arg(radio.model), dialog->bodyWidget());
-    auto* editor = new QLineEdit(dialog->bodyWidget());
-    editor->setObjectName(QStringLiteral("radioNicknameEditor"));
-    editor->setAccessibleName(tr("Radio nickname"));
-    editor->setText(hl2::Hl2Discovery::effectiveNickname(radio.family, serial, QString()));
-    editor->selectAll();
-    label->setBuddy(editor);
-    form->addWidget(label);
-    form->addWidget(editor);
-    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, dialog->bodyWidget());
-    buttons->button(QDialogButtonBox::Save)->setAccessibleName(tr("Save radio nickname"));
-    buttons->button(QDialogButtonBox::Save)->setObjectName(QStringLiteral("saveRadioNickname"));
-    form->addWidget(buttons);
-    ThemeManager::instance().applyStyleSheet(dialog, QStringLiteral(
-        "QDialog, QLabel { background: {{color.background.1}}; color: {{color.text.primary}}; }"
-        "QLineEdit { background: {{color.background.0}}; color: {{color.text.primary}};"
-        " border: 1px solid {{color.border.strong}}; padding: 6px; }"
-        "QPushButton { background: {{color.background.2}}; color: {{color.text.primary}}; padding: 6px 14px; }"
-        "QPushButton:focus, QLineEdit:focus { border: 1px solid {{color.border.accent}}; }"));
-    connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::reject);
-    connect(buttons, &QDialogButtonBox::accepted, dialog, &QDialog::accept);
-    connect(dialog, &QDialog::accepted, this, [this, radio, serial, editor]() {
-        hl2::Hl2Discovery::setNickname(radio.family, serial, editor->text().trimmed());
-        for (int current = 0; current < m_radios.size(); ++current) {
-            if (m_radios[current].serial == serial) {
-                m_radios[current].nickname = hl2::Hl2Discovery::effectiveNickname(
-                    radio.family, serial, radio.model);
-                m_radioList->item(current)->setText(formatLocalRadioLabel(m_radios[current]));
-                break;
+    // The dialog itself is the owner's to build (MainWindow, as a
+    // PersistentDialog).  Keeping it out of this class keeps ConnectionPanel
+    // free of the frameless-dialog stack, which the startup/auto-connect
+    // tests link without.
+    emit radioRenameRequested(radio, hl2::Hl2Discovery::effectiveNickname(
+                                         radio.family, radio.serial, QString()));
+}
+
+void ConnectionPanel::setRadioNickname(const RadioInfo& radio, const QString& nickname)
+{
+    hl2::Hl2Discovery::setNickname(radio.family, radio.serial, nickname.trimmed());
+    for (int current = 0; current < m_radios.size(); ++current) {
+        if (m_radios[current].serial == radio.serial) {
+            m_radios[current].nickname = hl2::Hl2Discovery::effectiveNickname(
+                radio.family, radio.serial, radio.model);
+            if (QListWidgetItem* item = m_radioList->item(current)) {
+                item->setText(formatLocalRadioLabel(m_radios[current]));
             }
+            break;
         }
-        emit radioNicknameChanged();
-    });
-    dialog->show();
-    editor->setFocus(Qt::OtherFocusReason);
+    }
+    emit radioNicknameChanged();
 }
 
 bool ConnectionPanel::automationConnectLocalSerial(const QString& serial, QString* error)

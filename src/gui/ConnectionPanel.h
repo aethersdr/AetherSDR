@@ -45,8 +45,11 @@ public:
     bool canRenameRadio(const QString& serial) const;
     bool canRenameRadio(const RadioInfo& radio) const;
     QString radioDisplayName(const RadioInfo& radio, const QString& fallback) const;
+    // Ask the owner to collect a new nickname (radioRenameRequested); the
+    // owner applies it with setRadioNickname().  Empty resets to the default.
     void renameRadio(const QString& serial);
     void renameRadio(const RadioInfo& radio);
+    void setRadioNickname(const RadioInfo& radio, const QString& nickname);
     void fitToScreen(QScreen* preferredScreen = nullptr);
     // Fit, then pull the frame back inside the work area without otherwise
     // moving the window. The placement-preserving counterpart to
@@ -133,6 +136,7 @@ signals:
     void routedRadioFound(const RadioInfo& radio);
     void retryDiscoveryRequested();
     void radioNicknameChanged();
+    void radioRenameRequested(const RadioInfo& radio, const QString& currentNickname);
     void networkDiagnosticsRequested();
     void smartLinkLoginRequested(const QString& email, const QString& password);
     // A startup auto-connect gave up before it could reach the radio. Carries
