@@ -297,6 +297,18 @@ bool validNtpServer(const QString& address)
     return true;
 }
 
+SquelchLevelScale measuredSquelchScale(const SquelchScaleProfile& profile)
+{
+    SquelchLevelScale sql;
+    sql.offsetDb = profile.offsetDb;
+    sql.dbPerStep = profile.dbPerStep;
+    for (const std::string_view mode : profile.modes) {
+        sql.modes.append(QString::fromUtf8(mode.data(), static_cast<qsizetype>(mode.size())));
+    }
+    sql.autoSquelch = false;
+    return sql;
+}
+
 }  // namespace
 
 IcomCivBackend::IcomCivBackend(QObject* parent)
@@ -573,9 +585,11 @@ RadioCapabilities IcomCivBackend::capabilities() const
     c.hasAgcThreshold = false; // 16 12 selects AGC mode, not Flex AGC-T.
     c.agcModes = {QStringLiteral("slow"), QStringLiteral("med"), QStringLiteral("fast")};
     c.hasModeIndependentSquelch = profile.hasModeIndependentSquelch;
-    // The 0..255 register has no published dB mapping; the SQL line and Auto
-    // SQL keep Flex's scale until one is measured.
-    c.squelchLevelScale = legacyDbmSquelchScale();
+    // The 0..255 register has no published dB mapping. The IC-7300MK2's is
+    // measured; the others keep Flex's scale until theirs are.
+    c.squelchLevelScale = profile.squelchScale
+        ? measuredSquelchScale(*profile.squelchScale)
+        : legacyDbmSquelchScale();
     c.hasCwTune = profile.hasCwTune;
     // setTune() drives the ordinary TUNE producer: one sine wave. There is no
     // CI-V route for a two-tone selection on any profiled model.
@@ -4094,7 +4108,7 @@ void IcomCivBackend::queueRead(const std::vector<std::uint8_t>& frame,
                                const std::string& key,
                                IcomCivScheduler::Priority priority,
                                qint64 notBeforeMs,
-                               std::vector<std::uint8_t> replyDataPrefix)
+                               std::vector<std::uint8_t> replyDataPrefix, bool coalesce)
 {
     const std::optional<CivFrame> parsed = parseFrame(frame);
     if (!parsed) {
@@ -4116,6 +4130,7 @@ void IcomCivBackend::queueRead(const std::vector<std::uint8_t>& frame,
         request.replySub = 0;
     }
     request.replyDataPrefix = std::move(replyDataPrefix);
+    request.coalesce = coalesce;
     request.notBeforeMs = notBeforeMs;
     m_civScheduler.enqueue(std::move(request), nowMs());
 }
@@ -5048,10 +5063,25 @@ void IcomCivBackend::setPanRfGain(const QString&, int gainDb)
                                 level::kRf, percentToLevelRaw(std::clamp(gainDb, 0, 100))));
 }
 
+// On the IC-7300MK2, engaging ATT drops the preamp, engaging the preamp
+// drops ATT, and ATT off restores the preamp. These interlock changes have no
+// unsolicited report, so the other stage needs a read after the write.
+void IcomCivBackend::queueFrontEndInterlockRead(const std::vector<std::uint8_t>& read)
+{
+    if (!m_session || !m_connected) {
+        return;
+    }
+    const qint64 now = nowMs();
+    // An earlier read can observe the stage before this write applies its
+    // interlock. Keep a fresh read even when that register is queued/in flight.
+    queueRead(read, semanticKey(read), IcomCivScheduler::Priority::Operator, now + 60, {}, false);
+    pumpCiv(now);
+}
+
 // Publish the requested step optimistically: a set is answered with a bare FB,
 // never an echo of the new value, so waiting would leave the widget stuck. If
 // the radio refused (the IC-705 has no P.AMP2 and no attenuator above 50 MHz),
-// the next unsolicited 16 02 / 11 report corrects it.
+// the write's confirmation read corrects it.
 void IcomCivBackend::setPanPreamp(const QString&, int step)
 {
     // Operator intent is bounded by the model's verified presentation ladder.
@@ -5065,6 +5095,9 @@ void IcomCivBackend::setPanPreamp(const QString&, int step)
     sendUserCommand(cmdSetFunction(m_session ? m_session->civAddress() : 0xA4,
                                    func::kPreamp, wanted));
     emit panPreampChanged(panId(), wanted);
+    if (!attenStepsFor(*m_model).empty() && m_session) {
+        queueFrontEndInterlockRead(cmdReadAttenuator(m_session->civAddress()));
+    }
 }
 
 void IcomCivBackend::reassertPanPreampWireStep(int step)
@@ -5091,6 +5124,9 @@ void IcomCivBackend::setPanAttenuator(const QString&, int step)
     sendUserCommand(cmdSetAttenuator(m_session ? m_session->civAddress() : 0xA4,
                                      steps[static_cast<std::size_t>(wanted)].db));
     emit panAttenuatorChanged(panId(), wanted);
+    if (m_session) {
+        queueFrontEndInterlockRead(cmdReadFunction(m_session->civAddress(), func::kPreamp));
+    }
 }
 
 ReceiveDispatch IcomCivBackend::requestSliceDsp(int sliceId, const SliceDspRequest& request)
