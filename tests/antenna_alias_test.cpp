@@ -1,3 +1,4 @@
+#include "ModelControlWireSpy.h"
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
 #include "core/SettingsDatabase.h"
@@ -74,8 +75,7 @@ int main(int argc, char** argv)
     QStringList receiveAntennas;
     QObject::connect(&slice, &SliceModel::receiveRxAntennaRequested,
                      [&receiveAntennas](const QString& antenna) { receiveAntennas.append(antenna); });
-    QObject::connect(&slice, &SliceModel::commandReady,
-                     [&commands](const QString& cmd) { commands.append(cmd); });
+    const auto wireEncoder1 = modelControlEncoder(&slice, [&commands](const QString& cmd) { commands.append(cmd); });
     // aetherd RFC 2.3: antenna-list splitting moved to FlexBackend::decodeSliceStatus;
     // the model now receives the already-split QStringList via a typed SliceDelta.
     {

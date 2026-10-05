@@ -1,3 +1,4 @@
+#include "ModelControlWireSpy.h"
 #include "models/TransmitModel.h"
 #include "core/backends/TransmitDelta.h"
 #include "core/ClientQuindarTone.h"
@@ -38,8 +39,7 @@ int main(int argc, char** argv)
     TransmitModel tx;
     QStringList commands;
     QStringList blockedMessages;
-    QObject::connect(&tx, &TransmitModel::commandReady,
-                     [&commands](const QString& cmd) { commands.append(cmd); });
+    const auto wireEncoder1 = modelControlEncoder(&tx, [&commands](const QString& cmd) { commands.append(cmd); });
     QObject::connect(&tx, &TransmitModel::tuneCommandIssued,
                      [&commands](bool on) { commands.append(on ? "intent:tune:on" : "intent:tune:off"); });
     QObject::connect(&tx, &TransmitModel::moxCommandIssued,
@@ -448,8 +448,7 @@ int main(int argc, char** argv)
     {
         TransmitModel cw;
         QStringList cwCmds;
-        QObject::connect(&cw, &TransmitModel::commandReady,
-                         [&cwCmds](const QString& c) { cwCmds.append(c); });
+        const auto wireEncoder2 = modelControlEncoder(&cw, [&cwCmds](const QString& c) { cwCmds.append(c); });
 
         // Hold off (default): the radio walks break_in_delay down on a speed
         // change and the status path adopts it verbatim — nothing on the wire.
@@ -478,8 +477,7 @@ int main(int argc, char** argv)
     {
         TransmitModel cw;
         QStringList cwCmds;
-        QObject::connect(&cw, &TransmitModel::commandReady,
-                         [&cwCmds](const QString& c) { cwCmds.append(c); });
+        const auto wireEncoder3 = modelControlEncoder(&cw, [&cwCmds](const QString& c) { cwCmds.append(c); });
 
         cw.setCwDelay(48);                 // operator commits a delay above QSK
         cw.setHoldBreakInDelay(true);
@@ -535,8 +533,7 @@ int main(int argc, char** argv)
     {
         TransmitModel cw;
         QStringList cwCmds;
-        QObject::connect(&cw, &TransmitModel::commandReady,
-                         [&cwCmds](const QString& c) { cwCmds.append(c); });
+        const auto wireEncoder4 = modelControlEncoder(&cw, [&cwCmds](const QString& c) { cwCmds.append(c); });
 
         cw.setHoldBreakInDelay(true);
         cw.setCwDelay(0);
@@ -552,8 +549,7 @@ int main(int argc, char** argv)
     {
         TransmitModel cw;
         QStringList cwCmds;
-        QObject::connect(&cw, &TransmitModel::commandReady,
-                         [&cwCmds](const QString& c) { cwCmds.append(c); });
+        const auto wireEncoder5 = modelControlEncoder(&cw, [&cwCmds](const QString& c) { cwCmds.append(c); });
         QList<bool> holdEdges;
         QObject::connect(&cw, &TransmitModel::holdBreakInDelayChanged,
                          [&holdEdges](bool on) { holdEdges.append(on); });
@@ -662,8 +658,7 @@ int main(int argc, char** argv)
     {
         TransmitModel cw;
         QStringList cwCmds;
-        QObject::connect(&cw, &TransmitModel::commandReady,
-                         [&cwCmds](const QString& c) { cwCmds.append(c); });
+        const auto wireEncoder6 = modelControlEncoder(&cw, [&cwCmds](const QString& c) { cwCmds.append(c); });
 
         cw.setHoldBreakInDelay(true);
         cw.setCwDelay(300);               // committed for radio A's session

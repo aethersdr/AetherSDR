@@ -94,6 +94,9 @@ public:
     // ANF are deliberately not implemented and stay hidden.
     void setSliceNoiseBlanker(int sliceId, bool on, int level) override;
     ReceiveDispatch requestSliceDsp(int sliceId, const SliceDspRequest& request) override;
+    ReceiveDispatch requestSliceControl(int sliceId, const SliceControlRequest& request) override;
+    ReceiveDispatch requestTransmitControl(const TransmitControlRequest& request,
+        TunePowerContext context = TunePowerContext::Deferred) override;
     ReceiveDispatch requestSliceAudio(int sliceId, const SliceAudioRequest& request) override;
     ReceiveDispatch requestSliceSquelch(int sliceId, const SliceSquelchRequest& request) override;
     void setSliceSquelch(int sliceId, bool on, int level) override;

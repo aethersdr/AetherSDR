@@ -1,4 +1,5 @@
 #pragma once
+#include "core/backends/ModelControlRequest.h"
 
 #include <QObject>
 #include <QString>
@@ -417,6 +418,7 @@ signals:
     void receiveSquelchRequested(const AetherSDR::SliceSquelchRequest& request);
     void receiveRxAntennaRequested(const QString& antenna);
     void receiveLockRequested(bool locked);
+    void controlRequested(const AetherSDR::SliceControlRequest& request);
 
     // Receive and transmit incremental tuning.
     void ritCommandIssued(bool on, int hz);
@@ -519,7 +521,8 @@ signals:
     void recordOnChanged(bool on);
     void playOnChanged(bool on);
     void playEnabledChanged(bool enabled);
-    void commandReady(const QString& cmd);  // ready to send to radio
+    // Legacy no-raw-command regression probe; no setter emits this signal.
+    void commandReady(const QString& cmd);
     // Mode dispatch precedes polarity normalization so synchronous backend
     // defaults win. RadioModel routes it through IRadioBackend::setSliceMode.
     void modeChangeRequested(const QString& mode);
@@ -535,6 +538,14 @@ public:
     static bool filterCarrierStraddlingFamily(const QString& mode);
 
 private:
+    auto captureControlIntent(SliceControlRequest::Field field)
+    {
+        const QPointer<SliceModel> alive(this);
+        const quint64 revision = ++m_controlIntentRevisions[static_cast<size_t>(field)];
+        return [alive, field, revision] {
+            return alive && alive->m_controlIntentRevisions[static_cast<size_t>(field)] == revision;
+        };
+    }
     friend class RadioModel;
     bool refuseOffThread(const char* setter) const;
     void setControlPolicy(ReceiveControlPolicy policy) { m_controlPolicy = policy; }
@@ -557,6 +568,7 @@ private:
     bool m_squelchLevelIntentPending{false};
     quint64 m_rxAntennaIntentRevision{0};
     quint64 m_lockIntentRevision{0};
+    std::array<quint64, static_cast<size_t>(SliceControlRequest::Field::Count)> m_controlIntentRevisions{};
     template<class Notify, class Dispatch>
     void publishReceiveIntent(quint64& epoch, Notify notify, Dispatch dispatch)
     {
@@ -727,7 +739,6 @@ private:
 
     void setLockedFeedbackActive(bool on);
 
-    void sendCommand(const QString& cmd);
 
     QStringList m_pendingCommands;
 };

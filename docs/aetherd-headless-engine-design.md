@@ -626,6 +626,12 @@ backend receive observations, bounded latest-value `meter` resources and a
 read-only `transmitState`; see `docs/aetherd-local-receive-control.md` for the
 per-backend support matrix and remaining no-op, geometry and TX-idle limits.
 This is not all-backend feature parity: unavailable operations remain absent.
+The M4 desktop command migration now removes raw Flex emitters from both
+`SliceModel` and `TransmitModel`. Their typed control requests preserve separate
+operator intent and radio readback; Flex encoding lives behind `IRadioBackend`,
+with explicit native dispatch/refusal for HL2 and Icom and no new TX authority.
+Dialogs, controllers and the remaining `RadioModel` command-plane sites are
+still follow-up work. This does not complete M4 or the UI/engine split.
 The desktop adapter has not landed; UI code still consumes models directly, and that
 remains correct. New resource fields belong in the adapter and the versioned
 catalogue, never in a transport or via QObject reflection. No protocol TX

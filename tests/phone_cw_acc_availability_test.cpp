@@ -66,7 +66,7 @@ int main(int argc, char** argv)
     // Light it first, as an operator on a Flex would have, then connect a
     // radio that cannot select inputs.
     acc->setChecked(true);
-    QSignalSpy commands(&model, &TransmitModel::commandReady);
+    QSignalSpy commands(&model, &TransmitModel::controlRequested);
     applet.setSelectableMicInputs(false);
 
     check(!acc->isEnabled(), "no selectable inputs -> +ACC is dimmed");

@@ -79,6 +79,9 @@ public:
     void setPanAttenuator(const QString& panId, int step) override;
     void setSliceRxAntenna(int sliceId, const QString& antenna) override;
     ReceiveDispatch requestSliceDsp(int sliceId, const SliceDspRequest& request) override;
+    ReceiveDispatch requestSliceControl(int sliceId, const SliceControlRequest& request) override;
+    ReceiveDispatch requestTransmitControl(const TransmitControlRequest& request,
+        TunePowerContext context = TunePowerContext::Deferred) override;
     ReceiveDispatch requestSliceAudio(int sliceId, const SliceAudioRequest& request) override;
     ReceiveDispatch requestSliceSquelch(int sliceId, const SliceSquelchRequest& request) override;
     ReceiveDispatch requestSliceRxAntenna(int sliceId, const QString& antenna) override;

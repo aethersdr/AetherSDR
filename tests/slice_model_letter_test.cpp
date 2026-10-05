@@ -1,3 +1,4 @@
+#include "ModelControlWireSpy.h"
 #include "models/SliceModel.h"
 #include "core/backends/SliceDelta.h"
 
@@ -121,8 +122,7 @@ int main(int argc, char** argv)
     {
         SliceModel s(4);
         QStringList commands;
-        QObject::connect(&s, &SliceModel::commandReady,
-                         [&commands](const QString& cmd) { commands.append(cmd); });
+        const auto wireEncoder = modelControlEncoder(&s, [&commands](const QString& cmd) { commands.append(cmd); });
         trackReceiveRequests(s, commands);
         s.applyChanges(delta([](SliceDelta& d){ d.audioPan = 25; }));
         EXPECT_EQ(s.audioPan(), 25);
@@ -172,8 +172,7 @@ int main(int argc, char** argv)
     {
         SliceModel s(6);
         QStringList commands;
-        QObject::connect(&s, &SliceModel::commandReady,
-                         [&commands](const QString& cmd) { commands.append(cmd); });
+        const auto wireEncoder = modelControlEncoder(&s, [&commands](const QString& cmd) { commands.append(cmd); });
         trackReceiveRequests(s, commands);
 
         s.setExternalReceiveAudioReplacementMute(true);
@@ -229,8 +228,7 @@ int main(int argc, char** argv)
         SliceModel s(5);
         QStringList commands;
         QSignalSpy agcRequests(&s, &SliceModel::receiveAgcRequested);
-        QObject::connect(&s, &SliceModel::commandReady,
-                         [&commands](const QString& cmd) { commands.append(cmd); });
+        const auto wireEncoder = modelControlEncoder(&s, [&commands](const QString& cmd) { commands.append(cmd); });
         trackReceiveRequests(s, commands);
         s.applyChanges(delta([](SliceDelta& d){
             d.agcMode = QStringLiteral("slow"); d.agcThreshold = 40;
@@ -604,8 +602,7 @@ int main(int argc, char** argv)
         // the IC-705 may have cleared tone as a side effect of tuning.
         SliceModel s(7);
         QStringList commands;
-        QObject::connect(&s, &SliceModel::commandReady,
-                         [&commands](const QString& command) { commands.append(command); });
+        const auto wireEncoder = modelControlEncoder(&s, [&commands](const QString& command) { commands.append(command); });
         QSignalSpy toneModeSpy(&s, &SliceModel::fmToneModeCommandIssued);
         QSignalSpy toneValueSpy(&s, &SliceModel::fmToneValueCommandIssued);
         QSignalSpy directionSpy(&s, &SliceModel::repeaterOffsetDirCommandIssued);

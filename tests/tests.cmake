@@ -517,15 +517,19 @@ target_include_directories(atu_seam_gate_test PRIVATE src tests)
 target_link_libraries(atu_seam_gate_test PRIVATE aethercore Qt6::Core)
 add_test(NAME atu_seam_gate_test COMMAND atu_seam_gate_test)
 
-# #5637 §1: a TransmitModel verb the backend already applied through the seam
-# (rfpower, miclevel, TX passband, cw pitch) raises no commandDropped on a
-# backend with no command plane, while an unrouted verb, and a cw pitch this
-# backend was never handed, still does. Injected
-# backend records the seam calls; no sockets, no radio.
+# #5637 §1: explicit dispatch/local-only receipts suppress commandDropped;
+# unsupported controls still report refusal regardless of advertised capability.
+# Injected backend records the seam calls; no sockets, no radio.
 add_executable(transmit_seam_drop_notice_test tests/transmit_seam_drop_notice_test.cpp)
 target_include_directories(transmit_seam_drop_notice_test PRIVATE src tests)
 target_link_libraries(transmit_seam_drop_notice_test PRIVATE aethercore Qt6::Core)
 add_test(NAME transmit_seam_drop_notice_test COMMAND transmit_seam_drop_notice_test)
+
+# Socket-free model intent routing, stale/lifetime guards and Flex encoding.
+add_executable(model_control_routing_test tests/model_control_routing_test.cpp)
+target_include_directories(model_control_routing_test PRIVATE src tests)
+target_link_libraries(model_control_routing_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME model_control_routing_test COMMAND model_control_routing_test)
 
 # Socket-free frequency control: a recording engine backend and normalized
 # observations exercise the production target/service. LocalControlServer
@@ -1803,11 +1807,9 @@ add_test(NAME mac_cursor_compat_test COMMAND mac_cursor_compat_test)
 
 add_executable(slice_model_letter_test
     tests/slice_model_letter_test.cpp
-    src/models/SliceModel.cpp
-    src/core/DigitalVoiceModeRegistry.cpp
 )
 target_include_directories(slice_model_letter_test PRIVATE src)
-target_link_libraries(slice_model_letter_test PRIVATE Qt6::Core Qt6::Test)
+target_link_libraries(slice_model_letter_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME slice_model_letter_test COMMAND slice_model_letter_test)
 
 # Per-slice manual squelch memory (#3326 follow-up, #4592) — guards against
@@ -4809,13 +4811,9 @@ set_tests_properties(window_shortcut_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFOR
 
 add_executable(antenna_alias_test
     tests/antenna_alias_test.cpp
-    src/models/AntennaAliasStore.cpp
-    src/models/SliceModel.cpp
-    src/core/DigitalVoiceModeRegistry.cpp
-    ${AETHER_SETTINGS_SOURCES}
 )
 target_include_directories(antenna_alias_test PRIVATE src)
-target_link_libraries(antenna_alias_test PRIVATE Qt6::Core)
+target_link_libraries(antenna_alias_test PRIVATE aethercore Qt6::Core)
 set_target_properties(antenna_alias_test PROPERTIES AUTOMOC ON)
 add_test(NAME antenna_alias_test COMMAND antenna_alias_test)
 
@@ -6323,14 +6321,9 @@ add_test(NAME tx_audio_context_test COMMAND tx_audio_context_test)
 
 add_executable(transmit_model_apd_test
     tests/transmit_model_apd_test.cpp
-    src/models/TransmitModel.cpp
-    src/core/ClientQuindarTone.cpp
-    src/core/AsyncLogWriter.cpp
-    src/core/LogManager.cpp
-    ${AETHER_SETTINGS_SOURCES}
 )
 target_include_directories(transmit_model_apd_test PRIVATE src)
-target_link_libraries(transmit_model_apd_test PRIVATE Qt6::Core Qt6::Test)
+target_link_libraries(transmit_model_apd_test PRIVATE aethercore Qt6::Core Qt6::Test)
 if(UNIX)
     target_link_libraries(transmit_model_apd_test PRIVATE pthread)
 endif()
@@ -6752,14 +6745,9 @@ add_test(NAME ulanzi_mapping_migration_test COMMAND ulanzi_mapping_migration_tes
 
 add_executable(transmit_model_test
     tests/transmit_model_test.cpp
-    src/models/TransmitModel.cpp
-    src/core/ClientQuindarTone.cpp
-    ${AETHER_SETTINGS_SOURCES}
-    src/core/AsyncLogWriter.cpp
-    src/core/LogManager.cpp
 )
 target_include_directories(transmit_model_test PRIVATE src)
-target_link_libraries(transmit_model_test PRIVATE Qt6::Core)
+target_link_libraries(transmit_model_test PRIVATE aethercore Qt6::Core)
 if(UNIX)
     target_link_libraries(transmit_model_test PRIVATE pthread)
 endif()
@@ -7568,6 +7556,7 @@ set(AETHER_SETTINGS_CONSUMERS
     radio_setup_recording_mode_dim_test
     atu_seam_gate_test
     transmit_seam_drop_notice_test
+    model_control_routing_test
     backend_capability_revision_test
     icom_panadapter_capacity_test
     backend_receive_contract_test

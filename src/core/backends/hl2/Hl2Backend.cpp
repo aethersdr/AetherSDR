@@ -3107,6 +3107,78 @@ void Hl2Backend::setSliceNoiseBlanker(int sliceId, bool on, int level)
             Q_ARG(bool, r->nbOn), Q_ARG(int, r->nbLevel));
 }
 
+ReceiveDispatch Hl2Backend::requestSliceControl(int sliceId, const SliceControlRequest& request)
+{
+    using Field = SliceControlRequest::Field;
+    if (!request.valid() || !rx(ddcForSlice(sliceId))) { return ReceiveDispatch::Unsupported; }
+    switch (request.field) {
+    case Field::Rit: case Field::Xit: {
+        const IncrementalTuning tuning = std::get<IncrementalTuning>(request.value);
+        const int ddc = ddcForSlice(sliceId);
+        Receiver* receiver = rx(ddc);
+        const int hz = clampRitXit(request.field == Field::Rit ? "RIT" : "XIT", tuning.hz);
+        // Commit the pair before publishing. An enable echo can synchronously
+        // trigger a newer request; no tail of this request may overwrite it.
+        if (request.field == Field::Rit) {
+            const bool moves = (receiver->ritOn ? receiver->ritHz : 0) != (tuning.enabled ? hz : 0);
+            receiver->ritOn = tuning.enabled;
+            receiver->ritHz = hz;
+            if (moves) { retuneReceiver(ddc); }
+            else { emitSliceState(ddc); }
+        } else {
+            const bool moves = (receiver->xitOn ? receiver->xitHz : 0) != (tuning.enabled ? hz : 0);
+            receiver->xitOn = tuning.enabled;
+            receiver->xitHz = hz;
+            if (moves && ddc == m_txDdc) { setTxFrequency(receiver->sliceFreqHz); }
+            emitSliceState(ddc);
+        }
+        break;
+    }
+    case Field::ActiveSlice:
+        if (std::get<bool>(request.value)) { setActiveSlice(sliceId); }
+        break;
+    case Field::TxSlice:
+        if (std::get<bool>(request.value)) { setTxSlice(sliceId); }
+        break;
+    default: return ReceiveDispatch::Unsupported;
+    }
+    return ReceiveDispatch::Dispatched;
+}
+
+ReceiveDispatch Hl2Backend::requestTransmitControl(const TransmitControlRequest& request,
+                                               TunePowerContext context)
+{
+    using Field = TransmitControlRequest::Field;
+    if (!request.valid()) { return ReceiveDispatch::Unsupported; }
+    switch (request.field) {
+    case Field::RfPower: setTxPower(std::get<int>(request.value)); break;
+    case Field::TunePower:
+        if (context == TunePowerContext::Deferred) { return ReceiveDispatch::LocalOnly; }
+        if (context != TunePowerContext::LiveLocalCarrier || !m_tuning
+            || !TxCoordinator::Command{m_tuneOperation, true}.permitsDispatch(TxCoordinator::monotonicMs())) {
+            return ReceiveDispatch::Unsupported;
+        }
+        setTunePower(std::get<int>(request.value)); break;
+    case Field::MicGain: setMicGain(std::get<int>(request.value)); break;
+    case Field::CwPitch: setCwPitch(std::get<int>(request.value)); break;
+    case Field::Filter: {
+        const TxPassband filter = std::get<TxPassband>(request.value);
+        setTxFilter(filter.lowHz, filter.highHz); break;
+    }
+    // ClientComp and the host keyer consume the model's local notifications.
+    case Field::ProcessorEnabled: case Field::ProcessorLevel:
+    case Field::CwSpeed: case Field::CwBreakIn: case Field::CwDelay:
+    case Field::CwSidetone: case Field::CwIambic: case Field::CwIambicMode:
+    case Field::CwSwap: case Field::CwMonitorGain: case Field::CwMonitorPan:
+        return ReceiveDispatch::LocalOnly;
+    case Field::MicInput:
+        return std::get<QString>(request.value) == QLatin1String("PC")
+            ? ReceiveDispatch::LocalOnly : ReceiveDispatch::Unsupported;
+    default: return ReceiveDispatch::Unsupported;
+    }
+    return ReceiveDispatch::Dispatched;
+}
+
 ReceiveDispatch Hl2Backend::requestSliceDsp(int sliceId, const SliceDspRequest& request)
 {
     if (!request.valid() || !rx(ddcForSlice(sliceId))) {
@@ -5161,7 +5233,7 @@ std::pair<int, int> Hl2Backend::effectiveTxPassband(const QString& mode) const
 // Push the effective passband to the modulator and echo it upward, so the
 // Phone applet shows what the modulator runs (including a restored
 // passband). TransmitModel::applyChanges() does not emit
-// txFilterCommandIssued, so the echo cannot loop (pinned by
+// controlRequested, so the echo cannot loop (pinned by
 // transmit_model_test).
 void Hl2Backend::pushTxPassband(const QString& mode)
 {

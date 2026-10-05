@@ -1,3 +1,4 @@
+#include "ModelControlWireSpy.h"
 // RIT / XIT cross the IRadioBackend seam per slice (#6105), as FlexLib models
 // them (Slice.RITOn/RITFreq/XITOn/XITFreq). Socket-free: an injected backend
 // records each RIT/XIT verb with the slice id RadioModel passes, two slices are
@@ -48,6 +49,22 @@ public:
     void setKeying(bool, const AetherSDR::TxCoordinator::Operation&,
                    const AetherSDR::TxCoordinator::Completion&) override {}
     void invokeExtension(const QString&, const QString&, quint64, const QVariant&) override {}
+    ReceiveDispatch requestSliceControl(int id, const SliceControlRequest& request) override
+    {
+        if (!request.valid() || (request.field != SliceControlRequest::Field::Rit
+            && request.field != SliceControlRequest::Field::Xit)) {
+            return ReceiveDispatch::Unsupported;
+        }
+        const IncrementalTuning tuning = std::get<IncrementalTuning>(request.value);
+        if (request.field == SliceControlRequest::Field::Rit) {
+            setSliceRitEnabled(id, tuning.enabled);
+            setSliceRitOffset(id, tuning.hz);
+        } else if (request.field == SliceControlRequest::Field::Xit) {
+            setSliceXitEnabled(id, tuning.enabled);
+            setSliceXitOffset(id, tuning.hz);
+        } else { return ReceiveDispatch::Unsupported; }
+        return ReceiveDispatch::Dispatched;
+    }
     void setSliceRitEnabled(int id, bool on) override
     {
         log("ritOn", id, on);
@@ -130,8 +147,7 @@ int main(int argc, char** argv)
     }
 
     QStringList wire;
-    QObject::connect(b, &SliceModel::commandReady, &radio,
-                     [&](const QString& cmd) { wire << cmd; });
+    const auto encoder1 = modelControlEncoder(b, [&](const QString& cmd) { wire << cmd; });
 
     // ---- RIT on the NON-transmit slice carries that slice's id ----
     backend->calls.clear();
@@ -208,8 +224,7 @@ int main(int argc, char** argv)
     SliceModel flex(3);
     QStringList flexWire;
     QList<QPair<bool, int>> flexSeen;
-    QObject::connect(&flex, &SliceModel::commandReady, &radio,
-                     [&](const QString& cmd) { flexWire << cmd; });
+    const auto encoder2 = modelControlEncoder(&flex, [&](const QString& cmd) { flexWire << cmd; });
     QObject::connect(&flex, &SliceModel::ritChanged, &radio,
                      [&](bool on, int hz) { flexSeen.append({on, hz}); });
     flex.setRit(true, 500);
