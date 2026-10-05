@@ -63,6 +63,7 @@ their nicknames on this computer.
 | **Calibration** | Host-side frequency calibration in ppb, for radios that cannot calibrate themselves ([Hermes-Lite 2](./hermes-lite-2.md)). Hidden on FlexRadio, which calibrates on the Receive page. |
 | **RTL Receiver** | ppm correction, IQ DC suppression and serial for an [RTL-SDR](./rtl-sdr.md) dongle. Only when one is connected. |
 | **HL2 Hardware** | Board variant, dither, companion filter board, CL1 external 10 MHz reference and tuner for the [Hermes-Lite 2](./hermes-lite-2.md). Only when an HL2 is connected. |
+| **ANAN Front End** | Starting sample rate, ADC choice, dither, randomization, filter-bank bypass and radio-speaker audio for the [ANAN-G2](./anan-g2.md). Available while disconnected or connected to a G2; changes apply on the next connect. |
 | **Droop Correction** | Panadapter edge-droop correction for the [ANAN-G2](./anan-g2.md). Only when one is connected. |
 
 ### RECEIVE & TRANSMIT
@@ -103,6 +104,8 @@ their nicknames on this computer.
 ### A page you expect is missing
 
 Radio Setup hides pages for hardware the connected radio does not have. For example, **Calibration** is hidden on a FlexRadio, and **HL2 Hardware**, **RTL Receiver** and **Droop Correction** appear only when that radio is connected.
+
+**ANAN Front End** is also listed while disconnected so you can configure the first G2 connection. Connecting another radio family hides that page.
 
 1. Check which radio you are connected to.
 2. Use **Search settings** (Ctrl+F, ⌘F on macOS) to find where the setting lives on this radio. For example, a FlexRadio calibrates on the **Receive** page.

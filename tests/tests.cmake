@@ -1284,6 +1284,15 @@ add_test(NAME anan_link_telemetry_test COMMAND anan_link_telemetry_test)
 # Exit 77 == no local UDP socket could be bound, so nothing could be observed.
 set_tests_properties(anan_link_telemetry_test PROPERTIES SKIP_RETURN_CODE 77)
 
+# ANAN discovery targets: directed broadcasts for distinct attached subnets,
+# retaining the global broadcast and excluding /31 and /32 point-to-point links.
+# Two NICs sharing a subnet still use the preferred route. Pure address
+# arithmetic: nothing is sent and no socket is opened.
+add_executable(anan_discovery_test tests/anan_discovery_test.cpp)
+target_include_directories(anan_discovery_test PRIVATE src)
+target_link_libraries(anan_discovery_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME anan_discovery_test COMMAND anan_discovery_test)
+
 # The three-state noise blanker at the model boundary: SliceModel only, no
 # radio, no backend and no DSP. Pins that nbOn() keeps its old meaning for the
 # bool consumers (rigctl/SmartCat/TCI/MIDI), that one intent carries kind+level+

@@ -3,6 +3,11 @@
 #include "core/RadioDiscovery.h"   // RadioInfo
 
 #include <QHash>
+#include <QList>
+// For QNetworkAddressEntry, broadcastTargets()' parameter. The whole-module
+// include rather than the per-class one because this tree already depends on
+// it in six places and it is the form every one of them uses.
+#include <QNetworkInterface>
 #include <QObject>
 #include <QString>
 
@@ -33,6 +38,24 @@ public:
     void sweepNow();
 
     [[nodiscard]] bool isRunning() const noexcept;
+
+    // Every address one sweep sends its discovery datagram to, built from the
+    // host's own interface addresses.
+    //
+    // Directed broadcasts reach a second NIC on a distinct subnet even when
+    // the global broadcast follows a different route. Targets are per subnet,
+    // not per interface: two NICs sharing a subnet still use the preferred route.
+    //
+    // 255.255.255.255 IS ALWAYS FIRST IN THE RESULT, and that is the point: the
+    // directed addresses are added to what this already did rather than
+    // replacing it, so a host where enumeration comes back empty or wrong is no
+    // worse off than before. Entries are deduplicated and IPv4-only; loopback
+    // and entries without a broadcast domain (/31, /32 or no address) are skipped.
+    //
+    // Static and taking its input so it can be tested without a host that has
+    // the interesting network shape -- which is most hosts.
+    [[nodiscard]] static QList<QHostAddress> broadcastTargets(
+        const QList<QNetworkAddressEntry>& entries);
 
     // Canonical "AA:BB:CC:DD:EE:FF" rendering of a discovery reply's MAC, which IS
     // RadioInfo::serial for this family. Must match Hl2Discovery::macToSerial and be
