@@ -738,6 +738,14 @@ QString TciProtocol::cmdTune(const QStringList& args, bool isSet)
     // so "anything that is not the word true" has to keep meaning STOP.
     // Fail closed, not silent — Constitution VI. (#4867 review)
     const bool tune = (args[1].trimmed().toLower() == QLatin1String("true"));
+    if (trx < 0 && tune) {
+        // A malformed start keys nothing; it is answered with the real state.
+        const bool tuning = m_model && m_model->transmitModel().isTuning();
+        return QStringLiteral("tune:%1,%2;").arg(txTrx()).arg(tuning ? "true" : "false");
+    }
+    if (trx < 0) {
+        trx = txTrx();
+    }
     // TciServer applies it, so the requester is answered with the state the
     // model reached — a refused start included.
     m_tuneRequest = TuneRequest{trx, tune};

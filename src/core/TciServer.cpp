@@ -633,6 +633,7 @@ void TciServer::stop()
     Q_ASSERT(QThread::currentThread() == thread());
     const bool hadResources = isRunning() || !m_clients.isEmpty() || !m_tciDaxSlices.isEmpty();
     abortTciPtt();
+    stopTciOwnedTune();
     teardownTciRoute();
     releaseAllIqStreams();
     stopIo();
@@ -947,6 +948,9 @@ void TciServer::onClientDisconnected()
             // If this client owned TCI PTT/TX audio, fail closed.
             if (ws == m_tciPttClient || ws == m_txChronoClient) {
                 abortTciPtt();
+            }
+            if (ws == m_tuneClient) {
+                stopTciOwnedTune();
             }
             // Drop every receiver this client subscribed, independently. The
             // stream survives when another client still consumes that receiver.
@@ -3340,20 +3344,47 @@ void TciServer::handleTuneRequest(TciClient* client, const TciProtocol::TuneRequ
         if (!m_model) {
             return;
         }
+        const bool live = client && client->live();
+        // Never key for a client that has gone away; a stop always applies.
+        if (request.tune && !live) {
+            return;
+        }
         const bool before = m_lastTuneSent;
         if (request.tune) {
+            // Owned before the call, so the edge it broadcasts carries the
+            // requester's trx; kept only if this request started the tune.
+            if (!before) {
+                m_tuneClient = client;
+                m_tuneClientTrx = request.trx;
+            }
             m_model->transmitModel().startTune(TransmitModel::PttSource::Dax);
+            if (!m_lastTuneSent) {
+                m_tuneClient.clear();
+            }
         } else {
             m_model->transmitModel().stopTune();
         }
         // A refused start, or a stop with nothing running, broadcasts nothing.
         // The requester still gets the state: a client that repeats its stop
         // until confirmed would otherwise never hear one.
-        if (m_lastTuneSent == before && client && client->live()) {
+        if (m_lastTuneSent == before && live) {
             replyText(client, QStringLiteral("tune:%1,%2;")
                                   .arg(request.trx).arg(m_lastTuneSent ? "true" : "false"));
         }
     }, Qt::QueuedConnection);
+}
+
+// A TCI-started tune has no TxCoordinator producer, so nothing else ends it
+// when its client or this server goes away.
+void TciServer::stopTciOwnedTune()
+{
+    if (!m_tuneClient) {
+        return;
+    }
+    m_tuneClient.clear();
+    if (m_model && m_model->transmitModel().isTuning()) {
+        m_model->transmitModel().stopTune();
+    }
 }
 
 // TransmitModel emits tuneChanged before it dispatches the carrier, so this
@@ -3369,7 +3400,12 @@ void TciServer::broadcastTuneState()
         return;
     }
     m_lastTuneSent = tuning;
-    const int trx = m_trxMap.trxForSlice(m_model, m_model->txSlice());
+    const int trx = m_tuneClient ? m_tuneClientTrx
+        : m_tciPttClient ? m_tciPttTrx
+        : m_trxMap.trxForSlice(m_model, m_model->txSlice());
+    if (!tuning) {
+        m_tuneClient.clear();
+    }
     broadcast(QStringLiteral("tune:%1,%2;").arg(trx).arg(tuning ? "true" : "false"));
 }
 

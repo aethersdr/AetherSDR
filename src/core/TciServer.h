@@ -265,6 +265,7 @@ private:
     void broadcastActualTxState(bool transmitting);
     void handleTuneRequest(TciClient* client, const TciProtocol::TuneRequest& request);
     void broadcastTuneState();
+    void stopTciOwnedTune();
     void teardownTciRoute();
     QJsonObject txChronoStallSnapshot() const;
     ClientState* clientStateFor(TciClient* socket);
@@ -480,6 +481,8 @@ private:
     float             m_rxChannelGain[8]{1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f};
     bool m_lastRadioTx { false };
     bool m_lastTuneSent { false };   // tune state as last broadcast (#3327)
+    QPointer<TciClient> m_tuneClient;  // the TCI client whose request started the tune
+    int m_tuneClientTrx { 0 };
     float             m_cachedSLevel[8]{-130,-130,-130,-130,-130,-130,-130,-130};
     float             m_cachedFwdPower{0};
     float             m_cachedSwr{1.0f};

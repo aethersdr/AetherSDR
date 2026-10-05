@@ -128,6 +128,7 @@ public:
         cs.protocol = new TciProtocol(&model, &s.m_routingState, &s.m_trxMap);
         s.m_clients.append(cs);
         QObject::connect(c, &TciClient::textMessageReceived, &s, &TciServer::onTextMessage);
+        QObject::connect(c, &TciClient::disconnected, &s, &TciServer::onClientDisconnected);
     }
     static QString initBurst(TciServer& s) {
         return s.m_clients.isEmpty() ? QString() : s.m_clients.first().protocol->generateInitBurst();
@@ -263,25 +264,36 @@ static void testFlexEdgeStaysInterlockOwned()
 // the carrier with `tune:0,false`, repeating it until the server confirms.
 struct TuneWire {
     RadioModel model;
-    TciClient client;          // outlives the server, as a socket would
+    // Heap, unparented: onClientDisconnected() deleteLater()s it, as it would
+    // a real socket's client.
+    QPointer<TciClient> client{new TciClient};
     std::unique_ptr<TciServer> server;
     QStringList broadcasts;    // tx→all, in wire order
     QStringList toClient;      // everything the client received
     TuneWire() {
         prepareTxFixture(model);
         server = std::make_unique<TciServer>(&model);
-        client.textSink = [this](const QString& m) {
+        client->textSink = [this](const QString& m) {
             toClient << m.trimmed();
             return static_cast<qint64>(m.size());
         };
-        Hl2TciSignalingTest::attach(*server, &client, model);
+        Hl2TciSignalingTest::attach(*server, client, model);
         QObject::connect(server.get(), &TciServer::tciMessage,
                          [this](const QString& dir, const QString& m) {
             if (dir == QLatin1String("tx")) { broadcasts << m.trimmed(); }
         });
     }
+    ~TuneWire() {
+        server.reset();
+        delete client.data();
+    }
+    void post(const QString& text) { emit client->textMessageReceived(text); }
     void send(const QString& text) {
-        emit client.textMessageReceived(text);
+        post(text);
+        settle();
+    }
+    void disconnect() {
+        emit client->disconnected();
         settle();
     }
     static void settle() {
@@ -343,6 +355,46 @@ static void testRadioReportedTuneIsBroadcast()
           "a radio-reported tune release is broadcast as tune:0,false");
 }
 
+// A TCI-started tune has no TxCoordinator producer: nothing but this server
+// can end it when its client goes away (Principle VI).
+static void testTciTuneDiesWithItsClient()
+{
+    {
+        TuneWire w;
+        w.send(QStringLiteral("tune:0,true;"));
+        check(w.model.transmitModel().isTuning(), "fixture: the TCI tune is up");
+        w.disconnect();
+        check(!w.model.transmitModel().isTuning(),
+              "the requester's disconnect stops the tune it started");
+        check(w.broadcasts.contains(QStringLiteral("tune:0,false;")),
+              "that stop is broadcast");
+    }
+    {
+        TuneWire w;
+        w.post(QStringLiteral("tune:0,true;"));   // still queued...
+        w.disconnect();                           // ...when the client drops
+        check(!w.model.transmitModel().isTuning(),
+              "a start whose client is gone before it runs keys nothing");
+    }
+    {
+        TuneWire w;
+        w.send(QStringLiteral("tune:0,true;"));
+        w.server.reset();
+        check(!w.model.transmitModel().isTuning(),
+              "server teardown stops a tune a TCI client started");
+    }
+    {
+        TuneWire w;
+        w.model.transmitModel().startTune();
+        TuneWire::settle();
+        w.send(QStringLiteral("tune:0,true;"));   // joins a running tune
+        w.disconnect();
+        check(w.model.transmitModel().isTuning(),
+              "a client leaving does not stop the operator's own tune");
+        w.model.transmitModel().stopTune();
+    }
+}
+
 static void testTciTuneRequestIsConfirmed()
 {
     TuneWire w;
@@ -363,6 +415,22 @@ static void testTciTuneRequestIsConfirmed()
     w.send(QStringLiteral("tune:0,false;"));
     check(w.toClient == QStringList{QStringLiteral("tune:0,false;")},
           "a stop with no tune running is answered tune:0,false, once");
+
+    // Tune is radio-wide; the edge a TCI client caused is reported in the
+    // trx that client addressed, so it can match its own request.
+    w.clear();
+    w.send(QStringLiteral("tune:1,true;"));
+    check(w.broadcasts.contains(QStringLiteral("tune:1,true;")),
+          "a TCI tune is reported in the requester's trx");
+    w.send(QStringLiteral("tune:1,false;"));
+    check(!w.model.transmitModel().isTuning(), "fixture: tune:1,false stops it");
+
+    // A malformed trx never starts a carrier, and is still answered.
+    w.clear();
+    w.send(QStringLiteral("tune:-1,true;"));
+    check(!w.model.transmitModel().isTuning(), "tune:-1,true starts nothing");
+    check(w.toClient == QStringList{QStringLiteral("tune:0,false;")},
+          "tune:-1,true is answered with the real state");
     check(w.broadcasts.isEmpty(), "a stop that changed nothing is not broadcast");
 
     // A start the tune admission refuses re-emits tuneChanged(false) to resync
@@ -839,6 +907,7 @@ int main(int argc, char** argv)
     AetherSDR::testSeamBackendPromoteAlwaysAnswers();
     AetherSDR::testLocalTuneIsBroadcastBeforeTheCarrier();
     AetherSDR::testTciTuneRequestIsConfirmed();
+    AetherSDR::testTciTuneDiesWithItsClient();
     AetherSDR::testRadioReportedTuneIsBroadcast();
 #endif
     AetherSDR::testHostModulatedTxAudio();
