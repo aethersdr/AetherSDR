@@ -1638,6 +1638,13 @@ if(AETHER_BACKEND_RTL)
     target_link_libraries(rtl_capture_worker_test PRIVATE aethercore Qt6::Core Qt6::Test)
     add_test(NAME rtl_capture_worker_test COMMAND rtl_capture_worker_test)
     set_tests_properties(rtl_capture_worker_test PROPERTIES TIMEOUT 20)
+    # The same binary with every injected USB callback 30 ms slow: a fast
+    # device thread is no longer something a check can assume by accident.
+    # 30 ms is where the old fixed-count block feeding first broke the
+    # DC-correction check, which is how it failed under TSan (#6202).
+    add_test(NAME rtl_capture_worker_slow_device_test COMMAND rtl_capture_worker_test)
+    set_tests_properties(rtl_capture_worker_slow_device_test PROPERTIES
+        TIMEOUT 60 ENVIRONMENT "AETHER_TEST_RTL_CALLBACK_DELAY_MS=30")
 
     # Generated IQ only: genuine resolution, continuity, gain and detector independence.
     add_executable(rtl_spectrum_resolution_test tests/rtl_spectrum_resolution_test.cpp)
