@@ -785,6 +785,33 @@ int main()
                   "clear() leaves no stale peak for the next window");
         }
 
+        // A RADDR-1 response whose temperature word is 0 is not a measurement:
+        // its forward word is neither the peak nor counted. Nothing else is
+        // dropped: not the response after it, and not a lone high sample.
+        {
+            ForwardPowerWindow w;
+            w.observe(*parseEp6Response(frame(0x08, (1234u << 16) | 300u).data()));
+            w.observe(*parseEp6Response(frame(0x08, 2944u).data()));
+            check(w.peak.value_or(-1) == 300 && w.samples == 1,
+                  "a forward word beside a temperature word of 0 is not the peak, nor counted");
+            w.observe(*parseEp6Response(frame(0x08, (1234u << 16) | 3200u).data()));
+            check(w.peak.value_or(-1) == 3200 && w.samples == 2,
+                  "the response right after a marked one is kept");
+            w.clear();
+            w.observe(*parseEp6Response(frame(0x08, (1234u << 16) | 5u).data()));
+            w.observe(*parseEp6Response(frame(0x08, (1234u << 16) | 3200u).data()));
+            w.observe(*parseEp6Response(frame(0x08, (1234u << 16) | 5u).data()));
+            check(w.peak.value_or(-1) == 3200 && w.samples == 3,
+                  "a lone sample far above both neighbours is kept: it may be a real peak");
+            w.observe(*parseEp6Response(frame(0x08, (1u << 16) | 3300u).data()));
+            check(w.peak.value_or(-1) == 3300,
+                  "only a temperature word of exactly 0 marks a response");
+            w.clear();
+            w.observe(*parseEp6Response(frame(0x08, 2944u).data()));
+            check(!w.peak.has_value() && w.samples == 0,
+                  "a window of marked responses only has no peak, so the last value is used");
+        }
+
         // ---- TX FIFO status: RADDR 0, DATA[15:8] ----
         //
         // This is the check MetisProtocol.cpp's own comment above txFifoCount
