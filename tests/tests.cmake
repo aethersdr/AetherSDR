@@ -7974,22 +7974,17 @@ target_compile_definitions(aether_test_wisdom_isolation PRIVATE
 # ── Sanitizer builds scale every TIMEOUT ────────────────────────────────────
 #
 # The ceilings above, and each test's own TIMEOUT, are sized for an
-# uninstrumented build. Under ASan/UBSan a Debug test runs several times slower,
-# and TSan slower again: the weekly lane's failures were nothing but tests
-# finishing past limits sized for normal builds (#6201, #6202).
-# rtl_spectrum_averaging_test passes in 37s against its 30s limit;
-# audio_engine_rates_test and nr_stereo_independence_test use 94s of 120s and
-# 169s of 300s under ASan, then time out under TSan; peripheral_auth_dialog_test
-# takes 18s under ASan and over 60s under TSan. Across the tests that pass in
-# both lanes, TSan is 1.1x ASan at the median and up to ~9x for GUI tests.
+# uninstrumented build; sanitizer instrumentation makes the same test several
+# times slower in wall-clock time. So in an instrumented build,
+# aether_retrofit_tests() multiplies every TIMEOUT (the test's own, or the
+# default above) by AETHER_SANITIZER_TIMEOUT_SCALE. An ordinary build keeps
+# every limit exactly as written, so a slow test still fails fast there; if one
+# outgrows its limit in an ordinary build, raise ITS TIMEOUT, not the scale.
 #
-# So in an instrumented build, aether_retrofit_tests() multiplies every TIMEOUT
-# (the test's own, or the default above) by AETHER_SANITIZER_TIMEOUT_SCALE.
-# "Instrumented" means AETHERSDR_SANITIZER is set, or the C/C++ flags carry
-# -fsanitize= (how sanitizers.yml builds the tree). An ordinary build keeps
-# every limit exactly as written, so a slow test still fails fast there. The
-# scale is a sanitizer allowance, not a place to hide a slow test: if one
-# outgrows its limit in an ordinary build, raise ITS TIMEOUT.
+# "Instrumented": AETHERSDR_SANITIZER is set, or -fsanitize= appears in the
+# global C/C++ flags (how sanitizers.yml builds) or in a configuration's
+# CMAKE_<LANG>_FLAGS_<CONFIG>. A test TIMEOUT is not per-configuration, so a
+# multi-config generator scales when ANY of its configurations is instrumented.
 set(AETHER_SANITIZER_TIMEOUT_SCALE 4 CACHE STRING
     "Multiplier applied to every test TIMEOUT in a sanitizer-instrumented build")
 if(NOT AETHER_SANITIZER_TIMEOUT_SCALE MATCHES "^[1-9][0-9]*$")
@@ -7997,9 +7992,20 @@ if(NOT AETHER_SANITIZER_TIMEOUT_SCALE MATCHES "^[1-9][0-9]*$")
         "AETHER_SANITIZER_TIMEOUT_SCALE must be a positive integer, got "
         "'${AETHER_SANITIZER_TIMEOUT_SCALE}'.")
 endif()
+set(_aether_compile_flags "${CMAKE_C_FLAGS} ${CMAKE_CXX_FLAGS}")
+if(CMAKE_CONFIGURATION_TYPES)
+    set(_aether_flag_configs ${CMAKE_CONFIGURATION_TYPES})
+else()
+    set(_aether_flag_configs ${CMAKE_BUILD_TYPE})
+endif()
+foreach(_aether_flag_config IN LISTS _aether_flag_configs)
+    string(TOUPPER "${_aether_flag_config}" _aether_flag_config)
+    string(APPEND _aether_compile_flags
+        " ${CMAKE_C_FLAGS_${_aether_flag_config}} ${CMAKE_CXX_FLAGS_${_aether_flag_config}}")
+endforeach()
 set(_aether_tests_instrumented OFF)
 if(NOT AETHERSDR_SANITIZER STREQUAL "none"
-        OR "${CMAKE_C_FLAGS} ${CMAKE_CXX_FLAGS}" MATCHES "-fsanitize=")
+        OR _aether_compile_flags MATCHES "-fsanitize=")
     set(_aether_tests_instrumented ON)
     message(STATUS "Sanitizer-instrumented build: test TIMEOUTs scaled x"
                    "${AETHER_SANITIZER_TIMEOUT_SCALE}")
