@@ -454,6 +454,25 @@ say plainly when a load-bearing claim went unverified — an untested assertion
 reported as untested is honest; one reported as fine is not. Never trust a
 green CI badge over a local reproduction when they disagree.
 
+**Build only what you run.** Configure normally, then build named targets —
+never the default `all`:
+
+```sh
+cmake --build build --parallel --target AetherSDR <test_a> <test_b>
+ctest --test-dir build -R '^(test_a|test_b)$' --output-on-failure
+```
+
+Pick the tests from the diff: the ones the PR adds or modifies, the ones its
+body names, and the ones whose `tests/tests.cmake` block compiles a file the
+PR touches (`grep -n 'Touched.cpp' tests/tests.cmake`). Leave out `AetherSDR`
+only when you will not drive the app. The default target builds every test
+executable — several hundred, most linking a large slice of the app and each
+carrying its own debug info — which costs tens of gigabytes and most of the
+build time for binaries the review never runs. An unfiltered `ctest` then
+reports the unbuilt ones as "Not Run"; that is a missing `-R`, not a failure.
+Build the whole tree only when the claim under test is about the tree itself
+(a CMake or link-contract change), and say in the report that you did.
+
 Where the PR adds or changes a test, break the code on purpose and confirm
 the test notices. A regression test that still passes with the fix reverted
 is a blocker in its own right — it pins nothing, and it will read as coverage
@@ -464,8 +483,9 @@ forever after.
 gate a merge. If you run the suite locally, expect failures that have nothing
 to do with the PR.
 
-**Before blaming the PR for a test failure, prove it.** Build the PR's merge
-base clean in a separate worktree and run the same test there. For a genuinely
+**Before blaming the PR for a test failure, prove it.** Build the same
+targets on the PR's merge base in a separate worktree and run the same test
+there. For a genuinely
 intermittent, socket-free failure, compare repeated runs on each side using a
 proportionate sample. For a bind, sandbox, permission, or unavailable-peer
 failure, do not repeat it — but do check the merge base once before classifying
