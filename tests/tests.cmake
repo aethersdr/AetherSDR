@@ -7236,7 +7236,8 @@ add_test(NAME client_display_settings_test COMMAND client_display_settings_test)
 # Socket-free: the real settings store in a TestSettingsProfile, and four
 # backends constructed only to read capabilities() (Qt6::Network for their
 # headers, as noise_floor_auto_adjust_gate_test). AETHER_SOURCE_DIR because the
-# last block reads the MainWindow wiring as text: MainWindow links into no test.
+# last block reads the MainWindow wiring and SpectrumWidget as text: neither
+# links into a test.
 add_executable(client_display_pan_settings_test
     tests/client_display_pan_settings_test.cpp)
 target_include_directories(client_display_pan_settings_test PRIVATE src tests)

@@ -4267,7 +4267,11 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         // levelChanged reads as the echo of this request and completes it. A
         // request for the range the model already holds emits nothing, and the
         // handshake runs to kDbmRangeHandshakeTimeoutMs.
-        adoptClientOwnedDbmRange(applet->panId(), sw->panIndex(), minDbm, maxDbm);
+        // The 3D floor resync after a zoom is the widget's own move: sent as
+        // any request, never adopted or stored as the operator's range.
+        if (!sw->emittingDssZoomFloorDbmRange()) {
+            adoptClientOwnedDbmRange(applet->panId(), sw->panIndex(), minDbm, maxDbm);
+        }
     });
     connect(sw, &SpectrumWidget::radioDbmHeadroomRecoveryRequested,
             this, [this, applet, sw, encoderDbmRange,

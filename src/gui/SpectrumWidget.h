@@ -353,6 +353,12 @@ public:
     bool pendingAutoNoiseFloorDbmRange() const {
         return m_pendingDbmRangeEcho && m_pendingDbmRangeEchoFromAutoFloor;
     }
+    // True only while the 3D floor resync after a zoom emits
+    // dbmRangeChangeRequested: the range follows a measured frame, not an
+    // operator edit. The request is still sent to the radio.
+    bool emittingDssZoomFloorDbmRange() const {
+        return m_emittingDssZoomFloorDbmRange;
+    }
     bool noiseFloorAutoAdjustEnabled() const { return m_noiseFloorEnable; }
     // False when the connected backend decodes its scope at a FIXED scale it
     // does not accept range commands for (Icom CI-V). The auto-floor loop is
@@ -1570,6 +1576,7 @@ private:
     bool  m_resetFftSmoothingOnNextFrame{false};
     bool  m_pendingDbmRangeEcho{false};
     bool  m_pendingDbmRangeEchoFromAutoFloor{false};
+    bool  m_emittingDssZoomFloorDbmRange{false};
     qint64 m_pendingDbmRangeEchoStartMs{0};
     qint64 m_dbmReleaseRebaseUntilMs{0};
     float m_dbmReleasePreviewOldMinDbm{0.0f};

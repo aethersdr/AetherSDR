@@ -400,6 +400,41 @@ int main(int argc, char** argv)
               "adopting and saving the range asks that predicate");
         check(wiring.contains(QStringLiteral("if (!pan || !clientOwnsPanDbmRange()) {")),
               "and so does the range restore");
+
+        // Automatic moves of the range are never adopted or stored. The 2D
+        // auto-floor returns before the adopt; the 3D floor resync after a zoom
+        // is sent like any request and skips only the adopt.
+        const QString widget = readSource("src/gui/SpectrumWidget.cpp");
+        const QString widgetHeader = readSource("src/gui/SpectrumWidget.h");
+        check(!widget.isEmpty() && !widgetHeader.isEmpty(), "the widget sources were read");
+        check(widget.count(QStringLiteral("emit dbmRangeChangeRequested(")) == 3,
+              "the widget requests a range from three sites: 3D resync, auto-floor, arrows");
+        check(widget.contains(QStringLiteral(
+                  "m_emittingDssZoomFloorDbmRange = true;\n"
+                  "        emit dbmRangeChangeRequested(\n"
+                  "            requestedRange.minDbm, requestedRange.maxDbm);\n"
+                  "        m_emittingDssZoomFloorDbmRange = false;")),
+              "the 3D floor resync marks its own request, and only while it emits");
+        check(widget.count(QStringLiteral("m_emittingDssZoomFloorDbmRange = true;")) == 1,
+              "no other request carries that mark: the arrows stay an operator edit");
+        check(widgetHeader.contains(QStringLiteral(
+                  "bool emittingDssZoomFloorDbmRange() const {\n"
+                  "        return m_emittingDssZoomFloorDbmRange;")),
+              "the mark is read through one accessor");
+        check(wiring.contains(QStringLiteral(
+                  "if (!sw->emittingDssZoomFloorDbmRange()) {\n"
+                  "            adoptClientOwnedDbmRange(applet->panId(), sw->panIndex(), minDbm, maxDbm);")),
+              "the 3D floor resync is not adopted or stored");
+        check(wiring.count(QStringLiteral("emittingDssZoomFloorDbmRange")) == 1,
+              "and the mark gates nothing else: the request is still sent");
+        check(precedes(wiring, "sendDbmRangeCommand(minDbm, maxDbm);\n",
+                       "if (!sw->emittingDssZoomFloorDbmRange()) {"),
+              "the send comes before the mark is read");
+        check(followsWithin(wiring, "const bool localOnly = profileLoadHeld || autoFloorChange;",
+                            "sw->setDbmRange(minDbm, maxDbm);\n            return;", 520)
+                  && precedes(wiring, "const bool localOnly = profileLoadHeld || autoFloorChange;",
+                              "adoptClientOwnedDbmRange(applet->panId(), sw->panIndex(), minDbm, maxDbm);"),
+              "a 2D auto-floor move returns before the adopt");
     }
 
     if (g_failed) {
