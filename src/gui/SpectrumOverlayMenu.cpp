@@ -248,12 +248,15 @@ static void applyPanelStyle(QWidget* panel, const QString& objectName)
 // (label+control rows, the Display scroll area/viewport/content). Scoped
 // because an unscoped "QWidget { … }" cascades onto children and their tooltip
 // labels. QWidget# even for the QScrollArea: the name already pins one widget.
-static void applyTransparentStyle(QWidget* widget, const QString& objectName)
+// `childRules` styles the row's children through this one call (already scoped).
+static void applyTransparentStyle(QWidget* widget, const QString& objectName,
+                                  const QString& childRules = {})
 {
     widget->setObjectName(objectName);
     widget->setStyleSheet(
         QStringLiteral("QWidget#%1 { background: transparent; border: none; }")
-            .arg(objectName));
+            .arg(objectName)
+        + childRules);
 }
 
 static const QString kLabelStyle =
@@ -1808,13 +1811,19 @@ void SpectrumOverlayMenu::buildDisplayPanel()
     // until a backend publishes two or more modes.
     {
         m_scopeModeRow = new QWidget;
-        applyTransparentStyle(m_scopeModeRow, QStringLiteral("displayScopeModeRow"));
+        // The label and the buttons rebuilt per radio share the row's one
+        // stylesheet, scoped to it, with the panel's label and button looks.
+        const QString scoped = QStringLiteral("QWidget#displayScopeModeRow ");
+        applyTransparentStyle(m_scopeModeRow, QStringLiteral("displayScopeModeRow"),
+                              QString(labelStyle).replace(QStringLiteral("QLabel"),
+                                                          scoped + QStringLiteral("QLabel"))
+                                  + QString(btnStyle).replace(
+                                      QStringLiteral("QPushButton"),
+                                      scoped + QStringLiteral("QPushButton")));
         m_scopeModeLayout = new QHBoxLayout(m_scopeModeRow);
         m_scopeModeLayout->setContentsMargins(0, 2, 0, 2);
         m_scopeModeLayout->setSpacing(3);
-        auto* lbl = new QLabel(QStringLiteral("Scope:"));
-        lbl->setStyleSheet(labelStyle);
-        m_scopeModeLayout->addWidget(lbl);
+        m_scopeModeLayout->addWidget(new QLabel(QStringLiteral("Scope:")));
         m_scopeModeRow->setToolTip(QStringLiteral(
             "How the radio's scope window follows the VFO.\n"
             "Center: the window is centred on the VFO; dragging retunes.\n"
@@ -1824,7 +1833,6 @@ void SpectrumOverlayMenu::buildDisplayPanel()
             "  the VFO; AetherSDR follows the VFO when you tune off-screen.\n"
             "Scroll-F and Fixed use the radio's Fixed Edge slot 4;\n"
             "slots 1-3 are left as you set them."));
-        m_scopeModeRow->setProperty("scopeModeBtnStyle", btnStyle);
         m_scopeModeRow->hide();
         grid->addWidget(m_scopeModeRow, row, 0, 1, 4);
         ++row;
@@ -3242,11 +3250,9 @@ void SpectrumOverlayMenu::rebuildScopeModeButtons()
     }
     qDeleteAll(m_scopeModeBtns);
     m_scopeModeBtns.clear();
-    const QString style = m_scopeModeRow->property("scopeModeBtnStyle").toString();
     for (int i = 0; i < m_scopeModeLabels.size(); ++i) {
         auto* btn = new QPushButton(m_scopeModeLabels.at(i));
         btn->setCheckable(true);
-        btn->setStyleSheet(style);
         btn->setFixedHeight(20);
         QString slug = m_scopeModeLabels.at(i).toLower();
         slug.remove(QLatin1Char('-'));
