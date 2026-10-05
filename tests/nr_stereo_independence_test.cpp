@@ -209,10 +209,8 @@ int main(int argc, char** argv)
                 checkMethod("NNR", rate, makeWrapper<NnrFilter>(rate));
             });
         } else if (selected(*selection, Method::Nnr)) {
-            std::printf("SKIP NNR @ %d Hz: create_nnr() failed\n", rate);
-            if (selection->method) {
-                return g_failures != 0 ? 1 : 77;
-            }
+            check(false, QStringLiteral("NNR @ %1 Hz: unconditional vendored filter initializes")
+                             .arg(rate));
         }
 
 #ifdef HAVE_DFNR
