@@ -1012,6 +1012,15 @@ controls open at our defaults rather than the radio's. Unlike the above this is
 a *reconnect* problem, not a dead control: the operator sets RIT, reconnects, and
 the app shows zero on a radio that is still offset.
 
+**Scope preference ownership (#6168).** Constitution II/III permit the saved
+Icom scope-view preference to be applied at connect or to a newly shown receiver
+scope, where the model and firmware support it. Scroll-F is the default for
+new and existing profiles without an explicit choice; saved Center/Fixed choices
+are respected. Scope gestures may write only the disclosed dedicated edge slot,
+not the operator's other presets. Radio state reconciles after bounded command
+settling, and a front-panel change is not continuously reasserted. This exception
+does not permit restoring any other radio-managed state.
+
 ### Triage a connection hang by its last command
 
 `controls meters` reports each meter's age and `civ trace` reports the last
