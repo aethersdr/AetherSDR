@@ -7963,6 +7963,40 @@ target_compile_definitions(aether_test_wisdom_isolation PRIVATE
 # property always beats a `ctest --timeout` flag, so this is authoritative
 # in every lane — gate steps, sanitizers, and local dev alike. Applied by
 # aether_retrofit_tests() below.
+#
+# ── Sanitizer builds scale every TIMEOUT ────────────────────────────────────
+#
+# The ceilings above, and each test's own TIMEOUT, are sized for an
+# uninstrumented build. Under ASan/UBSan a Debug test runs several times slower,
+# and TSan slower again: the weekly lane's failures were nothing but tests
+# finishing past limits sized for normal builds (#6201, #6202).
+# rtl_spectrum_averaging_test passes in 37s against its 30s limit;
+# audio_engine_rates_test and nr_stereo_independence_test use 94s of 120s and
+# 169s of 300s under ASan, then time out under TSan; peripheral_auth_dialog_test
+# takes 18s under ASan and over 60s under TSan. Across the tests that pass in
+# both lanes, TSan is 1.1x ASan at the median and up to ~9x for GUI tests.
+#
+# So in an instrumented build, aether_retrofit_tests() multiplies every TIMEOUT
+# (the test's own, or the default above) by AETHER_SANITIZER_TIMEOUT_SCALE.
+# "Instrumented" means AETHERSDR_SANITIZER is set, or the C/C++ flags carry
+# -fsanitize= (how sanitizers.yml builds the tree). An ordinary build keeps
+# every limit exactly as written, so a slow test still fails fast there. The
+# scale is a sanitizer allowance, not a place to hide a slow test: if one
+# outgrows its limit in an ordinary build, raise ITS TIMEOUT.
+set(AETHER_SANITIZER_TIMEOUT_SCALE 4 CACHE STRING
+    "Multiplier applied to every test TIMEOUT in a sanitizer-instrumented build")
+if(NOT AETHER_SANITIZER_TIMEOUT_SCALE MATCHES "^[1-9][0-9]*$")
+    message(FATAL_ERROR
+        "AETHER_SANITIZER_TIMEOUT_SCALE must be a positive integer, got "
+        "'${AETHER_SANITIZER_TIMEOUT_SCALE}'.")
+endif()
+set(_aether_tests_instrumented OFF)
+if(NOT AETHERSDR_SANITIZER STREQUAL "none"
+        OR "${CMAKE_C_FLAGS} ${CMAKE_CXX_FLAGS}" MATCHES "-fsanitize=")
+    set(_aether_tests_instrumented ON)
+    message(STATUS "Sanitizer-instrumented build: test TIMEOUTs scaled x"
+                   "${AETHER_SANITIZER_TIMEOUT_SCALE}")
+endif()
 
 # Every executable declared in this file: the directory's targets now, minus the
 # baseline from the top of the file, each one checked against the names this
@@ -8053,7 +8087,20 @@ function(aether_retrofit_tests)
         # replaced too: the rule is a ceiling on every test.
         get_test_property(${_test} TIMEOUT _existing_timeout)
         if(NOT _existing_timeout)
+            set(_existing_timeout 300)
             set_tests_properties(${_test} PROPERTIES TIMEOUT 300)
+        endif()
+
+        # The sanitizer allowance (see "Sanitizer builds scale every TIMEOUT").
+        if(_aether_tests_instrumented)
+            if(NOT _existing_timeout MATCHES "^[0-9]+$")
+                message(FATAL_ERROR
+                    "test ${_test}: TIMEOUT '${_existing_timeout}' is not a whole "
+                    "number of seconds, so it cannot be scaled for a sanitizer build.")
+            endif()
+            math(EXPR _scaled_timeout
+                "${_existing_timeout} * ${AETHER_SANITIZER_TIMEOUT_SCALE}")
+            set_tests_properties(${_test} PROPERTIES TIMEOUT ${_scaled_timeout})
         endif()
     endforeach()
 
