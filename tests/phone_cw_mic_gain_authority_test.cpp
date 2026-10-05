@@ -158,12 +158,12 @@ int main(int argc, char** argv)
     // IC-7300MK2: the radio's own COMP 0..10, one step per page, 0/5/10 ticks.
     model.setSpeechProcessorLevelMaximum(10);
     applet.setSpeechProcessorPresentation(QStringLiteral("COMP"), 10);
-    QLabel* procLabels[3] = {nullptr, nullptr, nullptr};
-    int found = 0;
-    for (QLabel* label : procSlider->parentWidget()->findChildren<QLabel*>()) {
-        if (found < 3)
-            procLabels[found++] = label;
-    }
+    QLabel* procLabels[3] = {
+        applet.findChild<QLabel*>(QStringLiteral("procTickLow")),
+        applet.findChild<QLabel*>(QStringLiteral("procTickMid")),
+        applet.findChild<QLabel*>(QStringLiteral("procTickHigh"))};
+    const int found = (procLabels[0] ? 1 : 0) + (procLabels[1] ? 1 : 0)
+        + (procLabels[2] ? 1 : 0);
     check(procSlider->maximum() == 10 && procSlider->pageStep() == 1
               && procSlider->tickInterval() == 1,
           "MK2 COMP exposes 0..10 in single steps");

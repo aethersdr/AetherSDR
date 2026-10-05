@@ -460,6 +460,9 @@ void PhoneCwApplet::buildPhonePanel()
         m_procLowLabel = new QLabel("NOR");
         m_procMidLabel = new QLabel("DX");
         m_procHighLabel = new QLabel("DX+");
+        m_procLowLabel->setObjectName("procTickLow");
+        m_procMidLabel->setObjectName("procTickMid");
+        m_procHighLabel->setObjectName("procTickHigh");
         const QString tickLabelStyle = "QLabel { color: #c8d8e8; font-size: 8px; }";
         for (QLabel* tick : {m_procLowLabel, m_procMidLabel, m_procHighLabel}) {
             tick->setStyleSheet(tickLabelStyle);

@@ -107,8 +107,9 @@ struct ControlSpec {
                                     const ControlSpec& spec) noexcept;
 // 14 0E both ways, in the profile's level domain 0..maximum: 2 is the
 // NOR/DX/DX+ presets, 100 the IC-9700's percent, anything else the radio's own
-// steps. The decode inverts the encode, so a write's readback lands on the
-// level that was written.
+// steps. For those three shapes the decode inverts the encode, so a write's
+// readback lands on the level written; the bin decode is evidenced only for
+// 11 steps (MK2), so check the round trip before adding another maximum.
 [[nodiscard]] int speechProcessorRawLevel(int maximum, int level) noexcept;
 [[nodiscard]] int speechProcessorLevelFromRaw(int maximum, int raw) noexcept;
 
