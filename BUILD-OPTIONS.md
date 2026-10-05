@@ -34,6 +34,26 @@ vendored-library options. This guide lists AetherSDR's own selectable options
 and additional project cache values. Changing them requires a source rebuild;
 they are not runtime settings for a downloaded binary.
 
+## Build type and debug info
+
+With no `CMAKE_BUILD_TYPE`, the build is `RelWithDebInfo`. On GCC and Clang,
+`RelWithDebInfo` uses `-O2 -g1 -DNDEBUG` rather than CMake's `-g`. That keeps
+line tables and function names, so backtraces and core dumps still symbolize,
+and keeps each test binary a fraction of the size. When you need local
+variables and types in a debugger, build `Debug`, or ask for full debug info
+explicitly:
+
+```bash
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+  "-DCMAKE_C_FLAGS_RELWITHDEBINFO=-O2 -g2 -DNDEBUG" \
+  "-DCMAKE_CXX_FLAGS_RELWITHDEBINFO=-O2 -g2 -DNDEBUG"
+```
+
+Spell it `-g2`. A value identical to CMake's default (`-O2 -g -DNDEBUG`) cannot
+be told apart from no choice, so it is lowered too. A debug level already in
+`CFLAGS`/`CXXFLAGS` (for example `-g3` for a sanitizer run) leaves the default
+alone. MSVC flags and `Release` builds are unaffected.
+
 ## Radio backends and decoder experiments
 
 | Option | Default | Purpose and prerequisites |
