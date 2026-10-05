@@ -36,9 +36,9 @@ const QMap<QString, ModelSpec>& modelTable()
         {"15K", ModelSpec{"15K", "1.5K-FA", 1500.0f, 1600.0f, 1450.0f,  500.0f, 1000.0f, true,  false}},
         {"20K", ModelSpec{"20K", "2K-FA",   2000.0f, 2100.0f, 1950.0f, 1000.0f, 1500.0f, false, true}},
         // Original 1K-FA (Spe::Legacy): HALF 500 W -> L, FULL 1000 W -> H; no
-        // M level. Switched on by the transceiver's 12 V remote line, not DTR.
+        // M level. DTR held high is its power switch.
         {"10K", ModelSpec{"10K", "1K-FA",   1000.0f, 1100.0f,  950.0f,  500.0f,  500.0f,
-                          false, false, false, false, false}},
+                          false, false, false, false, true}},
     };
     return table;
 }

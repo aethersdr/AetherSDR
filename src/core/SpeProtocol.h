@@ -270,7 +270,7 @@ struct ModelSpec {
     bool    hasCombiner{false};     // lower/combiner temperatures are real
     bool    reportsAtuSwr{true};    // Status carries the before-ATU SWR
     bool    hasLcdMirror{true};     // answers the 0x80 display request
-    bool    serialPowerOn{true};    // ON via the serial control lines
+    bool    powerOnHoldsDtr{false}; // ON holds DTR high (else: RTS pulse)
 };
 
 // 1.5K-FA is the entry validated against real hardware by this project

@@ -446,7 +446,7 @@ shared with the newer family; everything a client depends on differs:
 | `0x80` | LCD display request | RCU_ON — so the LCD mirror must never be requested |
 | Keys | single byte `0x01`..`0x11` | `0x10` + key code (`0x18`..`0x34`) |
 | Model ID | in every Status | none — the operator picks the model |
-| Power ON | RTS pulse on the serial lines | the transceiver's 12 V remote line — not the serial port |
+| Power ON | RTS pulse, DTR high at rest | DTR held high **is** the power switch |
 | Power level | LOW / MID / HIGH | HALF / FULL (MODE key) |
 
 Design: one connection class, two protocols. The operator picks
@@ -460,10 +460,11 @@ wiring are reused. Mapping choices:
 
 - Model ID is the synthetic `10K`, keying a `1K-FA` row in the model
   table (FULL 1000 W, HALF 500 W per the operator's manual; HALF → `L`,
-  FULL → `H`). The row's capability flags (`reportsAtuSwr`,
-  `hasLcdMirror`, `serialPowerOn`, all false) drive
-  `SpeApplet::setModelCapabilities()`, which dims each missing control
-  with its reason on tooltip and accessibleDescription.
+  FULL → `H`). The row's capability flags (`reportsAtuSwr` and
+  `hasLcdMirror` false, `powerOnHoldsDtr` true) drive
+  `SpeApplet::setModelCapabilities()`, which dims each missing readout
+  with its reason on tooltip and accessibleDescription and describes how
+  ON works.
 - Bands 0..9 (160..6 m, no 60 m) are translated onto the shared table.
 - SWR: STANDBY reports it directly; OPERATE reports PA gain in that field
   instead, so SWR is derived from forward and reverse power and flagged
@@ -476,15 +477,17 @@ wiring are reused. Mapping choices:
   remote copy): `0x80` is never sent, the floating window's glass says
   so instead of "waiting for display…", and the menu keys stay gated
   off, exactly as when the mirror is stale on the newer family.
-- Power: the 1K-FA is switched on by the transceiver's 12 V remote line,
-  so the serial lines are not a power control. A local port gets the same
-  explicit rest state as the newer family (DTR high, RTS low) — chosen,
-  not inherited from the platform — and is never moved afterwards;
-  transport teardown or reconnect therefore cannot power-cycle the amp.
-  The applet's ON button is dimmed with that reason; SWITCH OFF is only
-  the front-panel OFF key. RCU_ON is re-sent once a second while no
-  Status arrives, which covers the amp's boot after the transceiver
-  switches it on.
+- Power: DTR held high is the 1K-FA's power switch (bench-confirmed:
+  ON from the applet powers a real 1K-FA). ON raises DTR — over ser2net
+  via RFC 2217 SET-CONTROL, as in §4, so a raw-mode port cannot do it and
+  powerOn() reports that. SWITCH OFF sends the OFF key and releases DTR on
+  either transport. On connect the lines are left at the platform's
+  `open()` state; choosing that rest state deliberately is open (#6162)
+  until the amplifier's response to each state is observed on hardware.
+  Consequence to keep in mind: closing the port, a transport drop or an
+  auto-reconnect can release DTR and so power the amplifier off.
+  RCU_ON is re-sent once a second while no Status arrives, which covers
+  the amp's boot.
 - Every legacy frame is logged as hex at debug level (Help → Support
   logging: Tuner/AGM) so field reports can pin the Status offsets.
 - Disconnect sends RCU_OFF so the amplifier stops streaming.
@@ -495,6 +498,8 @@ wiring are reused. Mapping choices:
   frame — and is needed only for power-ON over the network.
 
 Unit tests: `tests/spe_legacy_protocol_test.cpp` (framing, parser resync,
-Status decode, key table, variant persistence). Not yet verified on
-hardware: the Status field offsets (the test fixture is built from the
-same table as the decoder) and the key codes.
+Status decode, key table, variant persistence). The fixture is built from
+the same offset table as the decoder, so the hardware evidence is a bench
+test on a real 1K-FA: readings matched the amp's own display, the keys and
+DTR power-ON worked. Raw hex captures of live Status frames are to follow
+(#6162).

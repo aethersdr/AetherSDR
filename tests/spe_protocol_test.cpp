@@ -237,12 +237,12 @@ int main()
            modelSpec("99K").displayName == "1.5K-FA");
     report("modelIds() lists the three documented models plus the original 1K-FA",
            modelIds().size() == 4);
-    report("the original 1K-FA row: no ATU SWR, no LCD mirror, no serial power-ON",
+    report("the original 1K-FA row: no ATU SWR, no LCD mirror, ON holds DTR",
            modelSpec("10K").displayName == "1K-FA" && !modelSpec("10K").reportsAtuSwr
-               && !modelSpec("10K").hasLcdMirror && !modelSpec("10K").serialPowerOn);
-    report("the newer family keeps ATU SWR, LCD mirror and serial power-ON",
+               && !modelSpec("10K").hasLcdMirror && modelSpec("10K").powerOnHoldsDtr);
+    report("the newer family keeps ATU SWR and LCD mirror, ON is a pulse",
            modelSpec("15K").reportsAtuSwr && modelSpec("15K").hasLcdMirror
-               && modelSpec("15K").serialPowerOn);
+               && !modelSpec("15K").powerOnHoldsDtr);
     report("1K-FA rated output: FULL 1000 W, HALF 500 W",
            levelNominalW(modelSpec("10K"), u'H') == 1000.0f
                && levelNominalW(modelSpec("10K"), u'L') == 500.0f);
