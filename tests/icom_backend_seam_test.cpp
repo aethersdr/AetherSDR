@@ -117,6 +117,7 @@ struct IcomCivBackendTestAccess {
     }
     static void refuse(IcomCivBackend& b, const char* key) { b.handleScopeRefusal(key); }
     static bool scopeModesOffered(const IcomCivBackend& b) { return b.scopeModesOffered(); }
+    static void fixedView(IcomCivBackend& b) { b.m_scopeView = IcomSettings::ScopeView::Fixed; }
     static bool tuning(const IcomCivBackend& b) { return b.m_tuning; }
     static bool tuneTimerActive(const IcomCivBackend& b)
     {
@@ -765,9 +766,9 @@ void testPanIntents()
 }
 
 std::optional<CivFrame> scopeEdgeSweep(std::uint64_t lowerHz, std::uint64_t upperHz,
-                                       std::uint8_t civAddress = 0xB6)
+                                       std::uint8_t civAddress = 0xB6, std::uint8_t mode = 0x03)
 {
-    std::vector<std::uint8_t> body{0x00, encodeBcdByte(1), encodeBcdByte(1), 0x03};
+    std::vector<std::uint8_t> body{0x00, encodeBcdByte(1), encodeBcdByte(1), mode};
     const auto lower = encodeFreq(lowerHz);
     const auto upper = encodeFreq(upperHz);
     body.insert(body.end(), lower.begin(), lower.end());
@@ -935,6 +936,35 @@ void testScrollFRefusalFallsBackToCenter()
     const auto mode = writes(Access::issued(backend), cmd::kScope, scope::kMode);
     check(mode.size() == 1 && mode.front().data.size() == 2 && mode.front().data[1] == 0x00,
           "and the radio is put back in Center");
+}
+
+// Fixed chosen here, but the radio shows one of the operator's slots (picked on
+// its front panel): the window is theirs, a retune would not move it, so a
+// drag or a zoom is refused rather than falling through to Center's retune.
+void testFixedOnOperatorSlotRefusesGestures()
+{
+    IcomCivBackend backend;
+    Access::prepare(backend, "IC-7300MK2");
+    Access::scrollF(backend);
+    Access::fixedView(backend);
+    Access::deliver(backend, frequencyEcho(14'050'000));
+    Access::deliver(backend, *scopeEdgeSweep(14'000'000, 14'100'000, 0xB6, 0x01));
+    Access::deliver(backend, frame(cmd::kScope, scope::kEdgeNumber, {0x00, 0x01}));
+    const auto retunes = [](const std::vector<CivFrame>& frames) {
+        return any(frames, [](const CivFrame& f) {
+            return (f.cmd == cmd::kSetFreq || f.cmd == cmd::kSetFreqTrx) && !f.data.empty();
+        });
+    };
+    Access::forget(backend);
+    QSignalSpy pan(&backend, &IRadioBackend::panCenterBandwidthChanged);
+    backend.setPanCenter(QStringLiteral("0"), 14'030'000.0, IRadioBackend::PanCenterIntent::Drag);
+    backend.setPanBandwidth(QStringLiteral("0"), 50'000.0);
+    Access::settleScope(backend);
+    check(!retunes(Access::issued(backend)), "a drag on the operator's Fixed slot does not retune");
+    check(edgeWrites(Access::issued(backend)).empty()
+              && writes(Access::issued(backend), cmd::kScope, scope::kSpan).empty(),
+          "nor writes their preset or a dead span");
+    check(!pan.isEmpty(), "and the view is put back");
 }
 
 // A VFO move AetherSDR did not command (the dial) is followed; our own is not.
@@ -1164,6 +1194,7 @@ int main(int argc, char** argv)
     testScrollFEdgeWriteThrottle();
     testScrollFReselectsSlotOnRangeChange();
     testScrollFRefusalFallsBackToCenter();
+    testFixedOnOperatorSlotRefusesGestures();
     testCwTextLimits();
     testReceiveAudioRatio();
     testTraceTags();

@@ -4906,11 +4906,11 @@ void IcomCivBackend::setPanCenter(const QString&, double hz, PanCenterIntent int
         return;
     }
 
-    // Fixed from the front panel shows one of the operator's presets, which we
-    // never rewrite, and a retune would not move it: refuse and re-assert.
+    // Fixed that is not ours (an operator slot, picked on the radio) shows a
+    // preset we never rewrite, and a retune would not move it: refuse and
+    // re-assert. Our own Fixed returned above as edge-driven.
     if (scopeModesOffered() && m_scopeReportedMode
-        && *m_scopeReportedMode == ScopeMode::Fixed
-        && m_scopeView != IcomSettings::ScopeView::Fixed) {
+        && *m_scopeReportedMode == ScopeMode::Fixed) {
         const double fixedCentreMhz = static_cast<double>(m_scopeCentreHz) / 1e6;
         const double fixedWidthMhz = static_cast<double>(m_scopeSpanHz * 2) / 1e6;
         QMetaObject::invokeMethod(this, [this, fixedCentreMhz, fixedWidthMhz] {
@@ -4995,11 +4995,10 @@ void IcomCivBackend::setPanBandwidth(const QString&, double hz)
                                absorbed ? scopeEdgeRangeAt(scopeVfoHz()) : std::nullopt);
         return;
     }
-    // Fixed from the front panel: 27 15 does nothing there and the edges are the
+    // Fixed that is not ours: 27 15 does nothing there and the edges are the
     // operator's preset, so put the view back rather than send a dead span.
     if (scopeModesOffered() && m_scopeReportedMode
-        && *m_scopeReportedMode == ScopeMode::Fixed
-        && m_scopeView != IcomSettings::ScopeView::Fixed) {
+        && *m_scopeReportedMode == ScopeMode::Fixed) {
         if (m_scopeSpanHz > 0) {
             const double centreMhz = static_cast<double>(m_scopeCentreHz) / 1e6;
             const double widthMhz = static_cast<double>(m_scopeSpanHz * 2) / 1e6;
