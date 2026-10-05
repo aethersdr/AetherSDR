@@ -208,7 +208,7 @@ SpeApplet::SpeApplet(QWidget* parent)
     // The family's operate-green (same pair as ACOM's engaged OPERATE) —
     // an "energize" affordance, not a new colour.
     theme.applyStyleSheet(m_onBtn, ampOperateActiveBtnStyle());
-    m_onBtn->setToolTip(onButtonTip());
+    m_onBtn->setToolTip(onButtonTip(false));
     connect(m_onBtn, &QPushButton::clicked, this, &SpeApplet::powerOnClicked);
     // "OPER"/"STBY" rather than the full words — the row has 5 buttons and
     // the long labels clip at the applet's default width (hardware-tested).
@@ -502,8 +502,13 @@ void SpeApplet::setSwrAtu(float swr)
     m_swrAtuGauge->setValue(m_atuSwrAvailable && m_fwdWatts >= 1.0f ? swr : 1.0f);
 }
 
-QString SpeApplet::onButtonTip()
+QString SpeApplet::onButtonTip(bool holdsDtr)
 {
+    if (holdsDtr) {
+        return tr("Power the amplifier ON — holds the serial DTR line high;"
+                  " OFF releases it (over the network this needs an"
+                  " rfc2217-enabled ser2net port).");
+    }
     return tr("Power the amplifier ON — pulses the serial control"
               " lines (over the network this needs an"
               " rfc2217-enabled ser2net port; see the Radio Setup"
@@ -512,17 +517,10 @@ QString SpeApplet::onButtonTip()
 
 void SpeApplet::setModelCapabilities(const AetherSDR::Spe::ModelSpec& spec)
 {
-    m_powerOnAvailable = spec.serialPowerOn;
-    const QString onReason = spec.serialPowerOn
-        ? QString()
-        : tr("The %1 is switched on by its 12 V remote line from the"
-             " transceiver, not over the serial port.").arg(spec.displayName);
-    m_onBtn->setToolTip(spec.serialPowerOn ? onButtonTip() : onReason);
-    m_onBtn->setAccessibleDescription(onReason);
+    m_onBtn->setToolTip(onButtonTip(spec.powerOnHoldsDtr));
     m_lcd->setUnavailableText(spec.hasLcdMirror
         ? QString()
         : tr("The %1 has no remote display mirror").arg(spec.displayName));
-    updateCommandsEnabled();
 
     const bool available = spec.reportsAtuSwr;
     m_atuSwrAvailable = available;
@@ -686,7 +684,7 @@ void SpeApplet::updateCommandsEnabled()
     }
     // ON stays available whenever the transport is up — a silent amp is
     // exactly when it's needed.
-    m_onBtn->setEnabled(m_connected && m_powerOnAvailable);
+    m_onBtn->setEnabled(m_connected);
 }
 
 void SpeApplet::clearTelemetry()

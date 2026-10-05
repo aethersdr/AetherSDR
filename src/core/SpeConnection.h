@@ -123,6 +123,7 @@ private:
     void onFrameReceived(const Spe::Frame& frame);
     void onLegacyFrameReceived(const Spe::Legacy::Frame& frame);
     void acceptStatus(const Spe::Status& status);
+    void reportPowerOnOutcome();
     bool isLegacy() const { return m_activeVariant == Spe::Variant::Legacy1k; }
     void teardownDevice();
     void sendRaw(const QByteArray& packet);

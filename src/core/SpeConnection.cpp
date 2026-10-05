@@ -217,11 +217,13 @@ void SpeConnection::connectSerial(const QString& portName)
     // warning, keystrokes including SWITCH OFF work normally, and repeated
     // power cycles behave — the power switch rides the RTS pulse alone,
     // which is why RTS (and only RTS) must stay low at rest.
-    // The original 1K-FA gets the same explicit rest state: it is switched on
-    // by the transceiver's 12 V remote line, so neither line is a power
-    // control there and powerOn() never moves them.
-    m_serialPort->setDataTerminalReady(true);
-    m_serialPort->setRequestToSend(false);
+    // The original 1K-FA is the exception: there DTR held high IS the power
+    // switch, so its lines are left at the platform's open() default and only
+    // powerOn()/SWITCH OFF move them.
+    if (!isLegacy()) {
+        m_serialPort->setDataTerminalReady(true);
+        m_serialPort->setRequestToSend(false);
+    }
 
     m_device = m_serialPort;
     onTransportUp();
@@ -511,6 +513,12 @@ void SpeConnection::sendKey(Spe::Key key)
         return;
     }
     sendRaw(Spe::Legacy::buildKeyCommand(key));
+    // On the 1K-FA a held-high DTR keeps the amp powered and locks out its
+    // own power key, so SWITCH OFF also releases the line — over ser2net via
+    // RFC 2217, like powerOn().
+    if (key == Spe::Key::SwitchOff) {
+        setControlLines(false, false);
+    }
 }
 
 void SpeConnection::setControlLines(bool dtr, bool rts)
@@ -532,11 +540,6 @@ void SpeConnection::setControlLines(bool dtr, bool rts)
 void SpeConnection::powerOn()
 {
     if (!m_connected || m_powerOnStep >= 0) { return; }
-    if (isLegacy()) {
-        qCInfo(lcTuner) << "SpeConnection: the 1K-FA is switched on by its 12 V"
-                           " remote line, not over the serial port — ignored.";
-        return;
-    }
     qCInfo(lcTuner) << "SpeConnection: sending power-ON pulse via" << sourceLabel();
     m_powerOnStep = 0;
     if (m_mode == Mode::Network) {
@@ -560,6 +563,16 @@ void SpeConnection::powerOnStep()
     switch (m_powerOnStep) {
         case 0:
             setControlLines(true, false);
+            if (isLegacy()) {
+                // 1K-FA: DTR held high is the power switch — no pulse. Its
+                // boot takes several seconds; the RCU_ON retry in pollTick()
+                // picks up the stream once it answers.
+                m_powerOnStep = -1;
+                m_rfc2217NegotiationPending = false;
+                m_rfc2217Tail.clear();
+                reportPowerOnOutcome();
+                break;
+            }
             m_powerOnStep = 1;
             m_powerOnTimer.start(100);
             break;
@@ -573,46 +586,51 @@ void SpeConnection::powerOnStep()
             m_powerOnStep = -1;
             m_rfc2217NegotiationPending = false;
             m_rfc2217Tail.clear();
-            // Report what was actually confirmed rather than assuming. The
-            // pulse is always sent: a proxy that ignores COM-port control
-            // simply discards the SET-CONTROL frames (or, in raw mode,
-            // forwards them to the amp, which rejects them as unframed
-            // noise), so sending is harmless — claiming it landed is not.
-            if (m_mode == Mode::Network
-                && m_comPortOption == Spe::Rfc2217::OptionReply::Refused) {
-                // "May", not "did not": ser2net 4.3.11 with a plain
-                // `accepter: telnet` port answers DONT yet still executes
-                // SET-CONTROL — bench-verified on a real 1.5K-FA (design
-                // note §9). The explicit rfc2217=true config remains the
-                // recommendation because that behaviour is unspecified.
-                qCWarning(lcTuner) << "SpeConnection: power-ON pulse sent, but"
-                                      " the proxy REFUSED RFC 2217 COM-port"
-                                      " control, so it may not have reached"
-                                      " the amplifier (some ser2net builds"
-                                      " act on it anyway — watch whether"
-                                      " status polls resume). Recommended"
-                                      " config: `accepter:"
-                                      " telnet(rfc2217=true),<port>`.";
-            } else if (m_mode == Mode::Network
-                       && m_comPortOption != Spe::Rfc2217::OptionReply::Accepted) {
-                qCWarning(lcTuner) << "SpeConnection: power-ON pulse sent, but"
-                                      " the proxy never confirmed RFC 2217"
-                                      " COM-port control — if the amplifier"
-                                      " stays silent, check that ser2net runs"
-                                      " this port as `accepter:"
-                                      " telnet(rfc2217=true),<port>` rather"
-                                      " than raw.";
-            } else {
-                qCInfo(lcTuner) << "SpeConnection: power-ON pulse complete — the"
-                                   " amp should begin answering status polls"
-                                   " shortly.";
-            }
+            reportPowerOnOutcome();
             break;
         default:
             m_powerOnStep = -1;
             m_rfc2217NegotiationPending = false;
             m_rfc2217Tail.clear();
             break;
+    }
+}
+
+void SpeConnection::reportPowerOnOutcome()
+{
+    // Report what was actually confirmed rather than assuming. The
+    // pulse is always sent: a proxy that ignores COM-port control
+    // simply discards the SET-CONTROL frames (or, in raw mode,
+    // forwards them to the amp, which rejects them as unframed
+    // noise), so sending is harmless — claiming it landed is not.
+    if (m_mode == Mode::Network
+        && m_comPortOption == Spe::Rfc2217::OptionReply::Refused) {
+        // "May", not "did not": ser2net 4.3.11 with a plain
+        // `accepter: telnet` port answers DONT yet still executes
+        // SET-CONTROL — bench-verified on a real 1.5K-FA (design
+        // note §9). The explicit rfc2217=true config remains the
+        // recommendation because that behaviour is unspecified.
+        qCWarning(lcTuner) << "SpeConnection: power-ON pulse sent, but"
+                              " the proxy REFUSED RFC 2217 COM-port"
+                              " control, so it may not have reached"
+                              " the amplifier (some ser2net builds"
+                              " act on it anyway — watch whether"
+                              " status polls resume). Recommended"
+                              " config: `accepter:"
+                              " telnet(rfc2217=true),<port>`.";
+    } else if (m_mode == Mode::Network
+               && m_comPortOption != Spe::Rfc2217::OptionReply::Accepted) {
+        qCWarning(lcTuner) << "SpeConnection: power-ON pulse sent, but"
+                              " the proxy never confirmed RFC 2217"
+                              " COM-port control — if the amplifier"
+                              " stays silent, check that ser2net runs"
+                              " this port as `accepter:"
+                              " telnet(rfc2217=true),<port>` rather"
+                              " than raw.";
+    } else {
+        qCInfo(lcTuner) << "SpeConnection: power-ON pulse complete — the"
+                           " amp should begin answering status polls"
+                           " shortly.";
     }
 }
 

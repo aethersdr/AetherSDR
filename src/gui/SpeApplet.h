@@ -39,8 +39,8 @@ public:
     // estimated: derived from forward/reverse power, not the amp's own meter.
     void setSwrAnt(float swr, bool estimated = false);
     void setSwrAtu(float swr);
-    // Dims what the model lacks (ATU SWR, LCD mirror, serial power-ON) with
-    // the reason on tooltip and accessibleDescription.
+    // Dims what the model lacks (ATU SWR, LCD mirror) with the reason on
+    // tooltip and accessibleDescription, and describes how ON works for it.
     void setModelCapabilities(const AetherSDR::Spe::ModelSpec& spec);
     void setSupplyVoltage(float volts);   // text readout, not a gauge
     void setSupplyCurrent(float amps);    // text readout, not a gauge
@@ -104,7 +104,7 @@ signals:
     void lcdPollingWanted(bool wanted);
 
 private:
-    static QString onButtonTip();
+    static QString onButtonTip(bool holdsDtr);
     void updateValueLabels();  // 10 Hz throttled label text refresh
     void updateCommandsEnabled();
     void applyModePill();
@@ -181,7 +181,6 @@ private:
     float m_swrAntVal{1.0f};
     float m_swrAtuVal{1.0f};
     bool  m_atuSwrAvailable{true};
-    bool  m_powerOnAvailable{true};
     bool  m_swrEstimated{false};
     float m_supplyVolts{0.0f};
     float m_supplyAmps{0.0f};
