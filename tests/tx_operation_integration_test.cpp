@@ -2182,7 +2182,8 @@ void producerTuneAndAtu()
         // so the producer's contribution must end with it; otherwise the next
         // TUNE from anywhere but that producer is refused without a word.
         Fixture f;
-        const TxCoordinator::Request owner = f.radio.registerTxProducer().request();
+        const TxCoordinator::Producer applet = f.radio.registerTxProducer();
+        const TxCoordinator::Request owner = applet.request();
         check(f.radio.requestProducerTune(owner, true) && f.commands.contains("tune:on"),
               "fixture: a producer (the TX applet's path) starts TUNE");
         f.commands.clear();
@@ -2192,6 +2193,9 @@ void producerTuneAndAtu()
         check((TxOperationIntegrationTestAccess::activeTxActivities(f.radio)
                & static_cast<unsigned>(TxCoordinator::Activity::Tune)) == 0,
               "an unrouted stop leaves no TUNE contribution behind");
+        // The applet's next press re-captures only if its Request went invalid;
+        // reused, it would hand back the retired intent and never key again.
+        check(!owner.valid(), "a Request whose TUNE was retired behind it is spent");
         f.commands.clear();
         f.radio.transmitModel().startTune();
         check(f.commands.contains("tune:on") && f.radio.transmitModel().isTuning(),
@@ -2201,6 +2205,11 @@ void producerTuneAndAtu()
         f.radio.requestProducerTune(owner, false);
         check(!f.commands.contains("tune:off"),
               "the original producer's late release writes nothing");
+        f.commands.clear();
+        const TxCoordinator::Request fresh = applet.request();
+        check(f.radio.requestProducerTune(fresh, true) && f.commands.contains("tune:on"),
+              "the same producer starts TUNE again with a fresh request");
+        f.radio.requestProducerTune(fresh, false);
     }
     {
         Fixture f;

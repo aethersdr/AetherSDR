@@ -487,7 +487,8 @@ bool RadioModel::dispatchTuneIntent(bool on, const TxCoordinator::Request* reque
     // The backend has one tune latch, so an unrouted stop ends every producer's
     // carrier. Their contributions end with it, or a stale one refuses every
     // later TUNE start until its own producer stops again. Captured before the
-    // dispatch: a TUNE re-engaged from the stop's own edge is not this stop's.
+    // dispatch, so a local TUNE re-engaged from the stop's own edge (a fresh
+    // intent) survives; a producer re-engaging that way reuses its bound one.
     std::vector<TxCoordinator::Intent> latchHolders;
     if (!on && !request) {
         (void)m_txCoordinator.requestIntentEnd(intent);
