@@ -225,6 +225,10 @@ is required during configure or build.
 sudo cmake --install build
 ```
 
+Source installs depend on the Qt location used at build time. If that Qt
+generation is replaced, rebuild and reinstall AetherSDR before pruning the old
+Qt generation.
+
 > **Platform setup and troubleshooting** — Windows 11 and macOS step-by-step,
 > the dependency-to-feature table, GPU/QRhi rendering and its `AETHER_NO_GPU`
 > escape hatch, Wayland vs XWayland selection, and older-distro Qt: see
