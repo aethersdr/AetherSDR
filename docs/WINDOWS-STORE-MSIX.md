@@ -136,7 +136,10 @@ The Windows installer workflow produces this automatically:
    SHA-256 manifest (90-day retention), and uploads the standalone `.appxsym`
    alongside the other Windows-Installer artifacts. Maintainers therefore get
    the same AetherSDR and Qt PDB set for local WinDbg/Visual Studio debugging
-   without unpacking a `.msixupload`.
+   without unpacking a `.msixupload`. On a tag, the same set plus the waveform
+   helper's PDB is also attached to the release as
+   `AetherSDR-vX.Y.Z-Windows-x64-symbols.tar.xz`, which does not expire
+   ([debugging-crashes.md](debugging-crashes.md)).
 
 The Qt-provided PDBs are packaged unchanged. `windeployqt` selects them from
 the same exact Qt installation that supplied the deployed DLLs; `pdbcopy` is
@@ -163,8 +166,11 @@ works cross-platform against the same PDB:
    the `HKLM\...\Windows Error Reporting\LocalDumps` key, `DumpType=2`). Store
    Partner Center TSVs are unsymbolized — always request the `.dmp`.
 2. **Get the matching PDBs** — they must be from the *exact* build that crashed
-   or the debug-ids won't match. Pull the `Windows-Symbols` artifact from the
-   `windows-installer.yml` CI run for that tag/branch:
+   or the debug-ids won't match. For a release, download its symbol archive:
+   `gh release download vX.Y.Z -R aethersdr/AetherSDR -p '*-Windows-x64-symbols.tar.xz'`
+   and extract it with `tar -xJf`. For a branch build, or a release older than
+   those archives, pull the `Windows-Symbols` artifact from that
+   `windows-installer.yml` run within its 90 days:
    `gh run download <run-id> -R aethersdr/AetherSDR -n Windows-Symbols`.
 3. **Convert + walk.** [`dump_syms`](https://github.com/mozilla/dump_syms)
    turns each needed PDB into a Breakpad `.sym`; `minidump-stackwalk` walks
