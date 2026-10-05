@@ -182,6 +182,10 @@ signals:
     // start(), unordered relative to linkUp(); AnanBackend reports capabilities from
     // it (field meanings: P2Protocol.h's DiscoveryReply).
     void discoveryInfoReceived(quint8 boardId, quint8 firmwareVer, quint8 numDdc);
+    // One status packet's supply-rail reading, raw counts
+    // (HighPriorityStatus::supplyRailCounts), once per packet: every 200 ms
+    // while receiving. Unsmoothed; AnanBackend averages it before publishing.
+    void supplyRailSampled(int counts);
 
 private slots:
     void onReadyRead();

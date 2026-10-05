@@ -239,8 +239,17 @@ std::array<std::uint8_t, kSpeakerPacketBytes> buildSpeakerAudio(
 // ---- High Priority Status, radio -> PC (spec p.47) ----
 // 60 bytes: 4-byte BE sequence, then hardware state. The two speaker-stream
 // fields and the supply rail are decoded. Arrives on the same socket as DDC0 IQ (see
-// kDdc0DefaultPort); parseDdcFrame() rejects it.
+// kDdc0DefaultPort); parseDdcFrame() rejects it. p2app sends one every 200 ms
+// while receiving (OutHighPriority.c).
 inline constexpr std::size_t kHighPriorityStatusBytes = 60;
+
+// Volts per count of HighPriorityStatus::supplyRailCounts: a 23.0/1.1 divider
+// into the 12-bit slow ADC at its 5 V reference, the scale in common use for
+// this input. MEASURED, NOT ASSUMED: on a G2, 2026-10-05, a meter at the DC
+// input jack read 13.65 V while the radio reported a median of 536 counts,
+// which this scale reads as 13.68 V. One rail voltage only (the supply was not
+// adjustable), so the point fixes the scale where it is used, not an offset.
+inline constexpr double kSupplyRailVoltsPerCount = (23.0 / 1.1) * (5.0 / 4095.0);
 
 struct HighPriorityStatus {
     std::uint32_t seq = 0;
@@ -251,18 +260,20 @@ struct HighPriorityStatus {
     // "2 samples per location" doubling never reaches the send, OutHighPriority.c).
     // Not comparable to kSpeakerFramesPerPacket; use as a trend.
     std::uint16_t speakerFifoLevel = 0;
-    // Bytes 49-50: the PA supply rail, AIN6, in RAW 12-bit ADC counts (0-4095).
-    // The only analog field here a receive-only client could use -- the other
-    // five (forward/reverse/exciter power, two user analogs) are transmit-side
-    // or unassigned, and there is NO TEMPERATURE anywhere in the payload, which
-    // is why no client can populate a PA temperature readout for this radio.
+    // Bytes 57-58: the DC supply rail, in RAW 12-bit ADC counts (0-4095).
+    // p2app labels this input "AIN3 user_analog1". That it carries the rail on
+    // a G2 is a bench measurement, not something the label says -- see
+    // kSupplyRailVoltsPerCount.
     //
-    // DECODED BUT NOT YET CONSUMED, deliberately: no known scale turns these
-    // counts into volts on this radio. A G2 bench read a 13.8 V rail as ~40 V
-    // through the 5 V-reference scale (2.9x high), and the 3.3 V board's scale
-    // is only 1.5x from that, so neither board explains it. The raw count is
-    // what an operator calibration against a meter will need.
-    std::uint16_t supplyVoltageRaw = 0;
+    // NOT BYTES 49-50, which the spec and p2app call "supply voltage" (AIN6).
+    // On the same bench that input read 1589 counts against the meter's
+    // 13.65 V, which no published scale fits, so it is not decoded. Of the
+    // other analog fields, forward/reverse/exciter power are transmit-side and
+    // AIN4 (bytes 55-56) read 0-16 counts while receiving, with nothing here
+    // measuring what it carries. There is NO TEMPERATURE anywhere in the
+    // payload, which is why no client can populate a PA temperature readout
+    // for this radio.
+    std::uint16_t supplyRailCounts = 0;
 };
 
 // Decode, or nullopt if this is not a status packet. Bounds-checked

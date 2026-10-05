@@ -509,6 +509,7 @@ void P2Client::handleDatagram(std::span<const std::uint8_t> bytes, quint16 sende
         // diagnostic packet, never a fake fault.
         if (const auto status = parseHighPriorityStatus(bytes)) {
             noteSpeakerFifoStatus(*status);
+            emit supplyRailSampled(status->supplyRailCounts);
         }
         return;
     }

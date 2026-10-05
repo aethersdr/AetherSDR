@@ -8,6 +8,7 @@
 #include "core/backends/anan/P2Client.h"
 #include "core/dsp/WdspSMeter.h"
 
+#include <QElapsedTimer>
 #include <QMap>
 #include <QString>
 #include <QThread>
@@ -170,6 +171,7 @@ public:
 private:
     friend class AnanNoiseBlankerTestAccess;
     friend class AnanLinkStatsTestAccess;
+    friend class AnanSupplyRailTestAccess;
     void beginDspSetup();
     void finishDspSetup(quint64 generation, bool ok, const QString& error);
     // The "restart P2Client with m_pendingParams, then retune" half of what
@@ -201,8 +203,8 @@ private:
     // whenever the DSP is configured or rebuilt, because the rate is theirs to
     // follow and a rate change invalidates their filter state.
     void resetSpeakerResamplers();
-    // Declares SLC:LEVEL to the meter seam; on every connect, before the
-    // first reading can arrive. See its definition.
+    // Declares SLC:LEVEL and RAD:+13.8A to the meter seam; on every connect,
+    // before the first reading can arrive. See its definition.
     void defineMeters();
     // One client snapshot -> one LinkStats push. The FIXED cadence is the
     // client's timer, not ours: this runs on whatever the client published, and
@@ -224,6 +226,24 @@ private:
     // The same smoother Hl2Backend publishes through, so the two receivers'
     // needles move alike by construction -- see WdspSMeter.h.
     SMeterSmoother m_sMeter;
+    // One status packet's supply-rail count -> RAD:+13.8A, in volts, as the MEAN
+    // of every count since the last publication, once a second. A plain mean
+    // and not the S-meter's attack/decay: the readout wants the rail's level,
+    // and one packet alone wanders by about +/-11 counts (+/-0.3 V) on the bench.
+    void onSupplyRailCounts(int counts);
+    // The clocked half of the above, publication included, so the window and
+    // the meter it feeds are testable against an injected time.
+    void onSupplyRailCountsAt(int counts, qint64 nowMs);
+    // Every 1000 ms: under MeterModel::kVitalsFreshMs (1500), so a live rail
+    // never reads as stale between publications, and about five packets at
+    // p2app's 200 ms receive cadence.
+    static constexpr qint64 kSupplyRailWindowMs = 1000;
+    QElapsedTimer m_supplyRailClock;
+    // -1 = no window open. Reset per session in the linkUp handler, like
+    // m_sMeter, so a new session never averages in the last one's counts.
+    qint64 m_supplyRailWindowStartMs = -1;
+    qint64 m_supplyRailCountSum = 0;
+    int m_supplyRailSamples = 0;
     // Leading+trailing throttle around applyTuneToRadioAndPan() -- see
     // setSliceFrequency()'s comment for why an unthrottled click/drag-tune
     // gesture is a problem for this backend specifically.

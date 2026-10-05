@@ -233,6 +233,11 @@ AnanBackend::AnanBackend(QObject* parent)
             // A new session's needle starts from its first reading, not from
             // where the last session's left off.
             m_sMeter.reset();
+            // Likewise the rail's window: counts from before this session
+            // must not ride into its first published voltage.
+            m_supplyRailWindowStartMs = -1;
+            m_supplyRailCountSum = 0;
+            m_supplyRailSamples = 0;
         }
         emitSliceState();
         emitPanState();
@@ -283,6 +288,10 @@ AnanBackend::AnanBackend(QObject* parent)
     // link that has gone silent still reports.
     connect(m_client, &P2Client::linkCountersUpdated, this,
             &AnanBackend::onLinkCounters);
+    // Queued onto this thread, like the snapshot above: the meter seam's
+    // signals are emitted from the backend's own thread.
+    connect(m_client, &P2Client::supplyRailSampled, this,
+            &AnanBackend::onSupplyRailCounts);
     // Only DDC0 feeds this DSP. Like ddc0IqReady above, notification and
     // processing run directly on the I/O thread, with the DSP as context.
     // Invalidate its partial FFT before the discontinuous block arrives.
@@ -431,11 +440,11 @@ RadioCapabilities AnanBackend::capabilities() const
     c.manufacturer = QStringLiteral("Apache Labs");
     c.model = QStringLiteral("ANAN-G2");
     // ---- PA telemetry ----
-    // hasSupplyVoltageTelemetry stays FALSE although the radio sends a
-    // supply-rail count (P2Protocol decodes it): no known scale fits it. On a
-    // G2 bench the 5 V-reference scale read a 13.8 V rail as ~40 V, 2.9x high,
-    // and the 3.3 V board's scale differs from it by only 1.5x, so no board
-    // choice fixes it. A volts readout waits for an operator calibration.
+    // The DC supply rail, published as RAD:+13.8A from every status packet's
+    // count (onSupplyRailCounts()). Claimed on a bench measurement, not on the
+    // input's label: see kSupplyRailVoltsPerCount for the reading and for why
+    // the input is not the one the spec calls "supply voltage".
+    c.hasSupplyVoltageTelemetry = true;
     //
     // There is NO PA temperature in this protocol. The radio's whole analog
     // payload is six fields and none of them is a temperature, so the readout
@@ -1488,6 +1497,19 @@ void AnanBackend::defineMeters()
     d.high = 0.0;
     d.description = QStringLiteral("Receive signal level");
     emit meterDefined(d);
+
+    // The supply rail. "+13.8A" is the name MeterModel binds to the status bar
+    // and Meter applet voltage readouts, whatever the radio; unit and range as
+    // IcomMeters declares the same meter.
+    MeterDef rail;
+    rail.index = 2;
+    rail.source = QStringLiteral("RAD");
+    rail.name = QStringLiteral("+13.8A");
+    rail.unit = QStringLiteral("Volts");
+    rail.low = 0.0;
+    rail.high = 16.0;
+    rail.description = QStringLiteral("DC supply voltage");
+    emit meterDefined(rail);
 }
 
 IRadioBackend::LinkStats AnanBackend::linkStats() const
@@ -1537,6 +1559,32 @@ void AnanBackend::onDspMeter(float dbfs)
     // second at 48 and at 1536 ksps alike.
     if (const auto out = m_sMeter.feed(dbm))
         emit meterUpdate(QStringLiteral("SLC:LEVEL"), *out);
+}
+
+void AnanBackend::onSupplyRailCounts(int counts)
+{
+    if (!m_supplyRailClock.isValid())
+        m_supplyRailClock.start();
+    onSupplyRailCountsAt(counts, m_supplyRailClock.elapsed());
+}
+
+void AnanBackend::onSupplyRailCountsAt(int counts, qint64 nowMs)
+{
+    m_supplyRailCountSum += counts;
+    ++m_supplyRailSamples;
+    // The first window opens on its first count; each later one opens where the
+    // last closed, so publications stay a fixed window apart rather than
+    // drifting by a packet interval each time.
+    if (m_supplyRailWindowStartMs < 0)
+        m_supplyRailWindowStartMs = nowMs;
+    if (nowMs - m_supplyRailWindowStartMs < kSupplyRailWindowMs)
+        return;
+    const double meanCounts =
+        static_cast<double>(m_supplyRailCountSum) / m_supplyRailSamples;
+    m_supplyRailCountSum = 0;
+    m_supplyRailSamples = 0;
+    m_supplyRailWindowStartMs = nowMs;
+    emit meterUpdate(QStringLiteral("RAD:+13.8A"), meanCounts * kSupplyRailVoltsPerCount);
 }
 
 void AnanBackend::emitSliceState()

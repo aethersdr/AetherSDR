@@ -46,6 +46,17 @@ public:
         backend.onLinkCounters(counters);
     }
 };
+
+// AnanBackend's friend: the supply rail's meter definition and its averaging
+// window, against an injected clock rather than a status packet every 200 ms.
+class AnanSupplyRailTestAccess {
+public:
+    static void defineMeters(AnanBackend& backend) { backend.defineMeters(); }
+    static void countsAt(AnanBackend& backend, int counts, qint64 nowMs)
+    {
+        backend.onSupplyRailCountsAt(counts, nowMs);
+    }
+};
 }  // namespace AetherSDR::anan
 
 using namespace AetherSDR;
@@ -629,12 +640,63 @@ int main(int argc, char** argv)
               " claim the status bar withdraws its readout on");
         check(!caps.hasPaTemperatureTelemetry,
               "and no temperature is claimed as received");
-        // The radio DOES send a supply count, but no known scale fits it (a
-        // 13.8 V rail read as ~40 V on a G2 bench), so the row stays withdrawn.
-        check(!caps.hasSupplyVoltageTelemetry,
-              "no supply voltage is claimed while no scale for its counts is known");
+        check(caps.hasSupplyVoltageTelemetry,
+              "the supply rail is claimed, which is what keeps the status bar's"
+              " volts row up while the temperature row is withdrawn");
         check(!caps.hasPaCurrentTelemetry,
               "no PA drain current is claimed");
+    }
+
+    // ---- The supply rail: the meter MeterModel binds, and its window ----
+    {
+        AnanBackend backend;
+        test::SeamThreadAffinityProbe probe(&backend);
+        test::attachAllSeamSignals(probe);
+        QList<MeterDef> defined;
+        QObject::connect(&backend, &IRadioBackend::meterDefined, &backend,
+                         [&defined](const MeterDef& def) { defined.append(def); });
+        AnanSupplyRailTestAccess::defineMeters(backend);
+        bool railDefined = false;
+        for (const MeterDef& def : defined) {
+            if (def.source == QStringLiteral("RAD") && def.name == QStringLiteral("+13.8A")
+                && def.unit == QStringLiteral("Volts")) {
+                railDefined = true;
+            }
+        }
+        check(railDefined,
+              "RAD:+13.8A is defined in volts -- the exact name MeterModel binds"
+              " to the status bar and Meter applet voltage readouts");
+
+        // One status packet every 200 ms, alternating between the bench's
+        // extremes. The publication must be the MEAN of the window (532 counts),
+        // not the last packet (543) or the first (521).
+        QSignalSpy meter(&backend, &IRadioBackend::meterUpdate);
+        const int counts[] = {521, 543, 521, 543, 521};
+        for (int i = 0; i < 5; ++i)
+            AnanSupplyRailTestAccess::countsAt(backend, counts[i], 200 * i);
+        check(meter.isEmpty(), "nothing is published before the window has run 1 s");
+        AnanSupplyRailTestAccess::countsAt(backend, 543, 1000);
+        check(meter.count() == 1, "the packet that closes the window publishes it");
+        if (meter.count() == 1) {
+            check(meter.at(0).at(0).toString() == QStringLiteral("RAD:+13.8A"),
+                  "the rail is published as RAD:+13.8A");
+            check(qAbs(meter.at(0).at(1).toDouble() - 532 * kSupplyRailVoltsPerCount) < 1e-9,
+                  "and reads the window's mean, 532 counts, not one packet");
+        }
+
+        // The next window opens where that one closed, not at its own first
+        // packet, so publications stay 1 s apart -- inside MeterModel's 1.5 s
+        // freshness window -- rather than drifting by a packet each time.
+        for (int t = 1200; t < 2000; t += 200)
+            AnanSupplyRailTestAccess::countsAt(backend, 536, t);
+        check(meter.count() == 1, "the second window is still open at 1.8 s");
+        AnanSupplyRailTestAccess::countsAt(backend, 536, 2000);
+        check(meter.count() == 2, "and closes at 2.0 s, one window after the first");
+        if (meter.count() == 2) {
+            check(qAbs(meter.at(1).at(1).toDouble() - 536 * kSupplyRailVoltsPerCount) < 1e-9,
+                  "averaging only its own packets, none of the first window's");
+        }
+        check(probe.violations().isEmpty(), "the rail's meter signals stay on the owner thread");
     }
 
     // ---- LinkStats: silence before the first snapshot, never a zeroed one ----
