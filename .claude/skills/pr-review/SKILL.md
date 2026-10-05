@@ -321,8 +321,9 @@ Read the diff against each of these; cite the specific rule when flagging:
   is THE table; QtKeychain only), capability declarations
   (`RadioCapabilities` + caps-map doc + gating test, per that file's
   ADDING-A-FIELD contract).
-- **CMake contract** — any target compiling `AppSettings.cpp` uses
-  `${AETHER_SETTINGS_SOURCES}` and joins `AETHER_SETTINGS_CONSUMERS`; tests
+- **CMake contract** — a test needing `AppSettings` without `aethercore` takes
+  `$<TARGET_OBJECTS:aether_test_settings>` and joins
+  `AETHER_SETTINGS_CONSUMERS`; tests
   isolate via `TestSettingsProfile.h` (`AETHER_SETTINGS_DIR`).
 - **`docs/agents/backends.md`** (the aetherd / engine-boundary sub-doc of AGENTS.md) — the migration
   ratchets, which the settings and capability rules above do not reach:
