@@ -74,10 +74,10 @@ public:
     // own swapchains.  A sideways move lays out through a transient geometry,
     // and the swapchain can end up sized for that transient rather than the
     // final width; the widget then keeps presenting a too-narrow drawable and
-    // the strip it moved into is never painted by anyone.  Under
-    // MainWindow's WA_TranslucentBackground that strip is see-through, not
-    // merely blank.  Continuous rendering does NOT heal it — the pan redraws
-    // every frame into the same stale drawable.
+    // the strip it moved into is never painted by anyone.  Continuous
+    // rendering does NOT heal it — the pan redraws every frame into the same
+    // stale drawable.  The native re-realize is macOS (Metal) only, where the
+    // fault was measured; elsewhere this is just the repaint sweep.
     //
     // This is the same hazard prepareForTopLevelChange()/refreshAfterReparent()
     // handle for reparenting between windows, minus the native-window

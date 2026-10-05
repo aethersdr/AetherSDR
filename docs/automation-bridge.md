@@ -3065,10 +3065,10 @@ the radio tabs, the audio cluster, and the window controls on every platform.
              "contentWidth":257,"overflowing":false,
              "popoverVisible":false,"pulseEnabled":true,
              "tabs":[{"id":"DEMO-0001","name":"Simulator (not on the air)",
-                      "status":"connected",
-                      "statusLine":"Simulator (not on the air) · connected · DEMO",
+                      "model":"FLEX-6600","status":"connected",
+                      "statusLine":"FLEX-6600 · connected · DEMO",
                       "transport":"127.0.0.1","active":true,"linkCarrier":true,
-                      "screenRect":[233,43,257,40],
+                      "screenRect":[233,48,257,36],
                       "accessibleName":"Radio Simulator (not on the air), connected"}],
              "discovered":[…]},
    "audio":{"pcAudioEnabled":true,"pcAudioLocked":true,"lineoutMuted":false,
@@ -3100,9 +3100,13 @@ currently clipping configured radios. `radios.tabs[].visibleInTabs` is the
 retained tab preference and `visible` is current widget visibility (which can
 also change in minimal mode). `radios.tabs[].linkCarrier` identifies
 the one tab carrying discovery/heartbeat state. `radios.tabs[].status` is one of `connected` / `available` /
-`in use`, and `statusLine` is the text the tab actually renders — assert against
-that rather than the dot colour, since [status is never encoded by colour
-alone](a11y.md). `screenRect` (on the bar and on each tab) is `[x, y, w, h]` in
+`in use`, and `statusLine` is the second line the tab actually renders —
+`[model ·] status [· detail]`, with the model shown only when a nickname hides
+it and the name (line one) never repeated. Assert against it rather than the
+dot colour, since [status is never encoded by colour alone](a11y.md); the
+tab's accessible description and tooltip prefix the name. Tabs are 36 px tall,
+inset 8 px from the bar's top and bottom so they stay clear of the window's
+resize band. `screenRect` (on the bar and on each tab) is `[x, y, w, h]` in
 screen coordinates, so a driver can aim a real click at a control instead of
 guessing from a screenshot. A trailing property narrows the reply:
 `get titlebar height` → `{"value":52}`.
@@ -4672,7 +4676,7 @@ code changes RX audio or keys TX. Physical-radio persistence validation is
 still a separate radiocert task.
 
 <!-- BEGIN GENERATED VERB TABLE (tools/gen_bridge_docs.py) -->
-<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 77 verbs. -->
+<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 79 verbs. -->
 
 | Verb | Aliases | Description |
 |---|---|---|

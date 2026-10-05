@@ -4,6 +4,7 @@
 
 #include <QEnterEvent>
 #include <QFontMetricsF>
+#include <QFocusEvent>
 #include <QFrame>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -19,9 +20,13 @@
 #include <QScreen>
 #include <QScrollArea>
 #include <QSizePolicy>
+#include <QStyle>
 #include <QTimer>
 #include <QToolButton>
 #include <QVBoxLayout>
+#include <QScrollBar>
+#include <QWheelEvent>
+#include <QStringList>
 #include <QVariantList>
 #include <QWindow>
 #include <QtMath>
@@ -31,10 +36,14 @@ namespace AetherSDR {
 
 namespace {
 
-constexpr int  kTabHeight     = 40;   // 52 px bar − 6 px above/below
+// 52 px bar − 8 px above and below.  The 8 px is load-bearing, not taste:
+// it is FramelessResizer's edge band on Linux and roughly Qt's top resize
+// border on Windows, so a taller tab would sit inside the strip where a
+// press starts a window resize instead of reaching the tab.
+constexpr int  kTabHeight     = 36;
 constexpr int  kTabRadius     = 8;
 constexpr int  kTabPadX       = 14;
-constexpr int  kTabPadY       = 6;
+constexpr int  kTabPadY       = 4;
 constexpr int  kDotDiameter   = 7;
 constexpr int  kDotTextGap    = 8;
 constexpr int  kAddButtonSize = 28;
@@ -130,13 +139,37 @@ RadioTab::RadioTab(const RadioTabEntry& entry, QWidget* parent)
 
 QString RadioTab::statusLine() const
 {
-    QString line = m_entry.name.isEmpty()
-        ? radioTabStatusText(m_entry.status)
-        : m_entry.name + middleDot() + radioTabStatusText(m_entry.status);
-    if (!m_entry.detail.isEmpty()) {
-        line += middleDot() + m_entry.detail;
+    // The name is already line one; repeating it here pushed the state — the
+    // part that changes — off the end of every narrow tab.  The model is shown
+    // only when an operator nickname hides it.
+    QStringList parts;
+    if (!m_entry.model.isEmpty() && m_entry.model != m_entry.name) {
+        parts << m_entry.model;
     }
-    return line;
+    parts << radioTabStatusText(m_entry.status);
+    if (!m_entry.detail.isEmpty()) {
+        parts << m_entry.detail;
+    }
+    return parts.join(middleDot());
+}
+
+QString RadioTab::descriptionLine() const
+{
+    // Screen readers and the tooltip get the name too: they are not reading
+    // the two lines together the way a sighted operator does.
+    return m_entry.name.isEmpty() ? statusLine()
+                                  : m_entry.name + middleDot() + statusLine();
+}
+
+QRect RadioTab::dotDirtyRect() const
+{
+    // Everything the link indicator paints — the dot and its heartbeat glow
+    // (radius kDotDiameter * 1.9, see paintEvent) — plus a pixel for
+    // antialiasing.  The heartbeat repaints only this, not the whole tab.
+    const qreal cx = kTabPadX + kDotDiameter / 2.0;
+    const qreal cy = height() / 2.0;
+    const int r = int(qCeil(kDotDiameter * 1.9)) + 1;
+    return QRect(int(cx) - r, int(cy) - r, 2 * r + 1, 2 * r + 1);
 }
 
 void RadioTab::refreshAccessibility()
@@ -146,8 +179,8 @@ void RadioTab::refreshAccessibility()
     // reader user must not have to infer it from the dot's colour.
     setAccessibleName(QStringLiteral("Radio %1, %2")
                           .arg(m_entry.name, radioTabStatusText(m_entry.status)));
-    setAccessibleDescription(statusLine());
-    setToolTip(statusLine());
+    setAccessibleDescription(descriptionLine());
+    setToolTip(descriptionLine());
 }
 
 void RadioTab::setEntry(const RadioTabEntry& entry)
@@ -169,7 +202,7 @@ void RadioTab::setPulse(qreal v)
         return;
     }
     m_pulse = v;
-    update();
+    update(dotDirtyRect());
 }
 
 void RadioTab::setLinkOverride(const QColor& overrideColor, bool alarm)
@@ -182,7 +215,7 @@ void RadioTab::setLinkOverride(const QColor& overrideColor, bool alarm)
     if (!alarm) {
         m_alarmVisible = true;
     }
-    update();
+    update(dotDirtyRect());
 }
 
 void RadioTab::setAlarmVisible(bool on)
@@ -192,7 +225,7 @@ void RadioTab::setAlarmVisible(bool on)
     }
     m_alarmVisible = on;
     if (m_alarm) {
-        update();
+        update(dotDirtyRect());
     }
 }
 
@@ -202,7 +235,7 @@ void RadioTab::setBeatColor(const QColor& color)
         return;
     }
     m_beatColor = color;
-    update();
+    update(dotDirtyRect());
 }
 
 QColor RadioTab::dotColor() const
@@ -463,6 +496,7 @@ RadioTabBar::RadioTabBar(QWidget* parent)
     m_tabsLayout->setContentsMargins(0, 0, 0, 0);
     m_tabsLayout->setSpacing(kStripSpacing);
     m_scrollArea->setWidget(m_tabHost);
+    m_scrollArea->viewport()->installEventFilter(this);
     m_layout->addWidget(m_scrollArea, 1);
 
     m_addButton = new QToolButton(this);
@@ -486,7 +520,11 @@ RadioTabBar::RadioTabBar(QWidget* parent)
             " color: {{color.text.secondary}}; }"
             "QToolButton:hover { background: {{color.titlebar.tab.hover}};"
             " color: {{color.text.primary}}; }"
-            "QToolButton:focus { border: 1px solid {{color.border.accent}}; }"));
+            "QToolButton[focusVisible=\"true\"] { border: 1px solid {{color.border.accent}}; }"));
+    // Ring on keyboard focus only, like the tabs.  A plain :focus rule lit the
+    // "+" on every launch, because it is the first focusable widget in the
+    // window and takes its initial focus.
+    m_addButton->installEventFilter(this);
     connect(m_addButton, &QToolButton::clicked, this, [this]() {
         emit discoveryPopoverRequested();
         showDiscoveryPopover();
@@ -518,6 +556,42 @@ RadioTabBar::RadioTabBar(QWidget* parent)
         m_alarmVisible = !m_alarmVisible;
         applyLinkVisuals();
     });
+}
+
+bool RadioTabBar::eventFilter(QObject* watched, QEvent* ev)
+{
+    if (watched == m_addButton
+        && (ev->type() == QEvent::FocusIn || ev->type() == QEvent::FocusOut)) {
+        bool visible = false;
+        if (ev->type() == QEvent::FocusIn) {
+            const Qt::FocusReason reason = static_cast<QFocusEvent*>(ev)->reason();
+            visible = reason == Qt::TabFocusReason || reason == Qt::BacktabFocusReason
+                   || reason == Qt::ShortcutFocusReason;
+        }
+        if (m_addButton->property("focusVisible").toBool() != visible) {
+            m_addButton->setProperty("focusVisible", visible);
+            m_addButton->style()->unpolish(m_addButton);
+            m_addButton->style()->polish(m_addButton);
+        }
+    }
+    // The strip scrolls sideways with its scroll bars hidden, so a plain mouse
+    // wheel — vertical only — was the one pointer that could not reach an
+    // overflowing tab.  Map a mostly-vertical wheel onto the horizontal bar;
+    // trackpad sideways swipes keep QScrollArea's native handling.
+    if (ev->type() == QEvent::Wheel && m_scrollArea
+        && watched == m_scrollArea->viewport()) {
+        auto* wheel = static_cast<QWheelEvent*>(ev);
+        QScrollBar* bar = m_scrollArea->horizontalScrollBar();
+        const QPoint angle = wheel->angleDelta();
+        if (bar->maximum() > 0 && qAbs(angle.y()) > qAbs(angle.x())) {
+            const int delta = wheel->pixelDelta().y() != 0
+                ? wheel->pixelDelta().y()
+                : angle.y() / 2;   // 120 per notch → 60 px, about half a tab
+            bar->setValue(bar->value() - delta);
+            return true;
+        }
+    }
+    return QWidget::eventFilter(watched, ev);
 }
 
 QSize RadioTabBar::sizeHint() const
@@ -813,7 +887,8 @@ void RadioTabBar::showDiscoveryPopover()
     QList<QWidget*> radioRows;
     for (const RadioTabEntry& entry : entries) {
         auto* container = new QWidget(list);
-        container->setProperty("radioSearchText", entry.name + ' ' + entry.transport
+        container->setProperty("radioSearchText", entry.name + ' ' + entry.model
+            + ' ' + entry.transport
             + ' ' + entry.id + ' ' + radioTabStatusText(entry.status));
         auto* rowLayout = new QHBoxLayout(container);
         rowLayout->setContentsMargins(0, 0, 0, 0);
@@ -894,7 +969,7 @@ void RadioTabBar::showDiscoveryPopover()
         radioRows.append(container);
     }
     listLayout->addStretch();
-    auto filterRows = [radioRows, empty](const QString& query) {
+    auto filterRows = [radioRows, empty, this](const QString& query) {
         bool found = false;
         for (QWidget* row : radioRows) {
             const bool matches = row->property("radioSearchText").toString()
@@ -902,6 +977,9 @@ void RadioTabBar::showDiscoveryPopover()
             row->setVisible(matches);
             found = found || matches;
         }
+        // "No matching" only makes sense once there is something to match.
+        empty->setText(radioRows.isEmpty() ? tr("No radios found on the network yet")
+                                           : tr("No matching radios"));
         empty->setVisible(!found);
     };
     connect(search, &QLineEdit::textChanged, popover, filterRows);
@@ -974,7 +1052,8 @@ QVariantMap RadioTabBar::state() const
              QVariantList{screen.x(), screen.y(), screen.width(), screen.height()}},
             {QStringLiteral("name"), e.name},
             {QStringLiteral("status"), radioTabStatusText(e.status)},
-            {QStringLiteral("statusLine"), tab->accessibleDescription()},
+            {QStringLiteral("model"), e.model},
+            {QStringLiteral("statusLine"), tab->statusLine()},
             {QStringLiteral("transport"), e.transport},
             {QStringLiteral("active"), tab->isChecked()},
             {QStringLiteral("visible"), tab->isVisible()},

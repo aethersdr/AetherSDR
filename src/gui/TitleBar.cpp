@@ -13,6 +13,7 @@
 #include <QIcon>
 #include <QPainter>
 #include <QPainterPath>
+#include <QPaintEvent>
 #include <QPixmap>
 #include <QVBoxLayout>
 #include <QDialog>
@@ -183,6 +184,20 @@ TitleBar::TitleBar(QWidget* parent)
     AetherSDR::theme::setContainer(this, QStringLiteral("titlebar"));
     setFixedHeight(kHeight);
     applyBarStyle();
+    // MainWindow's window-wide `QWidget { background-color: … }` rule gives
+    // every plain QWidget container a styled background in the window colour.
+    // While the bar was that same colour nobody could see it; with the bar
+    // painting its own fill, the drag gutter, the audio cluster and the empty
+    // tab viewport each showed up as a dark slab.  Scoped by object name, not
+    // by type, because the discovery popover and the bar's menus are
+    // descendants too and must keep their own panels.
+    AetherSDR::ThemeManager::instance().applyStyleSheet(
+        this,
+        QStringLiteral(
+            "QWidget#titleBarDragGutter, QWidget#titleBarAudioCluster,"
+            " QScrollArea#radioTabScroller, QWidget#radioTabHost,"
+            " QScrollArea#radioTabScroller > QWidget#qt_scrollarea_viewport"
+            " { background: transparent; }"));
 
     m_hbox = new QHBoxLayout(this);
     m_hbox->setContentsMargins(16, 0, 16, 0);
@@ -190,6 +205,7 @@ TitleBar::TitleBar(QWidget* parent)
 
     auto makeDragGutter = [this]() {
         auto* gutter = new QWidget(this);
+        gutter->setObjectName(QStringLiteral("titleBarDragGutter"));
         gutter->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
         gutter->setMinimumWidth(0);
         markDragHandle(gutter);
@@ -406,7 +422,7 @@ TitleBar::TitleBar(QWidget* parent)
     // JetBrains Mono for the numeric readouts — the house mono face for any
     // value the operator reads rather than reads *about*.
     const QString barValueStyle = QStringLiteral(
-        "QLabel { color: {{color.text.secondary}}; font-size: 11px;"
+        "QLabel { color: {{color.text.secondary}}; font-size: 11px; background: transparent;"
         " font-family: \"{{font.family.mono}}\", \"JetBrains Mono\", monospace; }");
     const QString iconBtnStyle = QStringLiteral(
         "QPushButton { background: transparent; border: none; padding: 0;"
@@ -500,14 +516,16 @@ TitleBar::TitleBar(QWidget* parent)
     m_hbox->addWidget(audioCluster);
 
     // ── Dock-side selectors + our own caption controls ──────────────────────
-    auto* sep = new QFrame;
-    sep->setFixedSize(1, 20);
-    AetherSDR::ThemeManager::instance().applyStyleSheet(sep, "QFrame { background: {{color.background.2}}; border: none; }");
-    markDragHandle(sep);
-    m_hbox->addWidget(sep);
+    // Leads the dock trio and hides with it (minimal mode, panel hidden) —
+    // left as a local it dangled alone at the end of the bar.
+    m_dockSep = new QFrame;
+    m_dockSep->setFixedSize(1, 20);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_dockSep, "QFrame { background: {{color.background.2}}; border: none; }");
+    markDragHandle(m_dockSep);
+    m_hbox->addWidget(m_dockSep);
 
     const QString dockLblStyle = QStringLiteral(
-        "QLabel { padding: 0 6px; border-radius: 4px; }"
+        "QLabel { padding: 0 6px; border-radius: 4px; background: transparent; }"
         "QLabel:hover { background: {{color.titlebar.caption.hover}}; }");
 
     // Dock-side selectors (applet panel left vs right of the panadapter).
@@ -597,12 +615,36 @@ TitleBar::TitleBar(QWidget* parent)
 
 void TitleBar::applyBarStyle()
 {
-    const QString backgroundToken = QStringLiteral("color.titlebar.background");
-    AetherSDR::ThemeManager::instance().applyStyleSheet(
-        this,
-        QStringLiteral("TitleBar { background: {{%1}};"
-                       " border-bottom: 1px solid {{color.titlebar.border}}; }")
-            .arg(backgroundToken));
+
+    // Painted, not styled.  The old `TitleBar { background: … }` rule never
+    // matched — the class is namespaced and a bare QWidget subclass also needs
+    // WA_StyledBackground — so the bar never drew its fill or border at all.
+    // A painted fill is also the cheapest bar there is: no style-engine pass
+    // on each repaint, and a pre-composited opaque colour lets the bar skip
+    // repainting the window behind it.
+    auto& theme = AetherSDR::ThemeManager::instance();
+    const QColor under = theme.color(this, QStringLiteral("color.background.app"));
+    auto over = [&under](const QColor& c) {
+        const qreal a = c.alphaF();
+        return QColor::fromRgbF(c.redF() * a + under.redF() * (1.0 - a),
+                                c.greenF() * a + under.greenF() * (1.0 - a),
+                                c.blueF() * a + under.blueF() * (1.0 - a));
+    };
+    m_barFill = over(theme.color(this, QStringLiteral("color.titlebar.background")));
+    m_barBorder = over(theme.color(this, QStringLiteral("color.titlebar.border")));
+    setAttribute(Qt::WA_OpaquePaintEvent, true);
+    update();
+}
+
+void TitleBar::paintEvent(QPaintEvent* ev)
+{
+    QPainter p(this);
+    const QRect dirty = ev->rect();
+    p.fillRect(dirty, m_barFill);
+    const QRect border(0, height() - 1, width(), 1);
+    if (dirty.intersects(border)) {
+        p.fillRect(border, m_barBorder);
+    }
 }
 
 void TitleBar::showEvent(QShowEvent* ev)
@@ -1441,6 +1483,13 @@ void TitleBar::setThrottleFlashColor(const QString& color)
     // The alarm owns the indicator while it is up — never fight it.  The new
     // tint takes effect on the next beat, which is also when it becomes true.
     if (m_missedBeats >= kHeartbeatAlarmThreshold) return;
+    pushLinkIndicator();
+}
+
+void TitleBar::clearLinkAlarm()
+{
+    if (m_missedBeats == 0) return;
+    m_missedBeats = 0;
     pushLinkIndicator();
 }
 

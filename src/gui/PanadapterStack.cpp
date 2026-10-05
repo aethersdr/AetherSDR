@@ -20,15 +20,19 @@
 
 #include <functional>
 
-// After moving a QRhiWidget or its native surface, force a fresh initialize()
-// cycle so the platform backend binds to the final native-child geometry. The
-// backing-store notification is sent before an actual top-level reparent;
-// sending it again here can remove a stale cleanup callback from the wrong QRhi
-// during startup floating restore.
+// After moving a QRhiWidget between top-level windows, force a fresh initialize()
+// cycle so Metal binds to the new NSView. The backing-store notification is sent
+// before the actual reparent; sending it again here can make QRhiWidget remove a
+// stale cleanup callback from the wrong QRhi during startup floating restore.
+//
+// macOS only, as on main.  The pan float/dock paths that call this predate the
+// unified title bar, and the stale-drawable fault refreshAfterLayoutShift()
+// reuses it for was measured on Metal only; widening it to D3D/GL would change
+// four existing reparent paths on Windows and Linux without a reproduction.
 static void refreshAfterReparent(AetherSDR::SpectrumWidget* sw)
 {
     if (!sw) return;
-#if defined(AETHER_GPU_SPECTRUM)
+#if defined(Q_OS_MAC) && defined(AETHER_GPU_SPECTRUM)
     const bool wasVisible = sw->isVisible();
     sw->hide();
     sw->resetGpuResources();
@@ -376,7 +380,7 @@ void PanadapterStack::refreshAfterLayoutShift()
     }
     // The non-native siblings (band-stack strip, splitter handles) repaint
     // from the ordinary damage path, but the move can leave their old
-    // footprint un-invalidated in a translucent window, so sweep the stack.
+    // footprint un-invalidated, so sweep the stack.
     update();
 }
 

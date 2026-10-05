@@ -229,6 +229,7 @@ void MainWindow::refreshRadioTabs()
         if (entry.name.isEmpty()) {
             entry.name = info.name;
         }
+        entry.model = info.model;
         entry.detail = info.callsign;
         entry.transport = info.address.isNull() ? QStringLiteral("LAN")
                                                 : info.address.toString();
@@ -246,6 +247,7 @@ void MainWindow::refreshRadioTabs()
         RadioTabEntry entry;
         entry.id = wan.serial;
         entry.name = wan.nickname.isEmpty() ? wan.model : wan.nickname;
+        entry.model = wan.model;
         entry.detail = wan.callsign;
         entry.transport = QStringLiteral("SmartLink");
         entry.status = statusFor(wan.serial,
@@ -262,6 +264,7 @@ void MainWindow::refreshRadioTabs()
         entry.name = m_radioModel.nickname().isEmpty() ? m_radioModel.model()
                                                        : m_radioModel.nickname();
         entry.name = m_connPanel->radioDisplayName(m_radioModel.lastRadioInfo(), entry.name);
+        entry.model = m_radioModel.model();
         entry.transport = QStringLiteral("Manual");
         entry.status = RadioTabStatus::Connected;
         tabs.prepend(entry);

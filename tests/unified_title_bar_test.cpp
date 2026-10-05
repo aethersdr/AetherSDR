@@ -23,7 +23,10 @@
 //     Raw UTF-8 bytes land as mojibake, look like a font problem, and are only
 //     visible if something compares the actual string.
 //
-// Runs headless (offscreen); asserts on widget state, never on pixels.
+// Runs headless (offscreen); asserts on widget state.  The one pixel check is
+// the bar's own fill: a stylesheet rule that never matches (the bar shipped that
+// way — `TitleBar {}` cannot select a namespaced class) is invisible to every
+// state assertion, so only the rendered bar can catch it.
 
 #include "gui/RadioTabBar.h"
 #include "gui/TitleBar.h"
@@ -33,13 +36,17 @@
 
 #include <QAbstractButton>
 #include <QApplication>
+#include <QFocusEvent>
+#include <QFrame>
 #include <QImage>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QScrollBar>
 #include <QSlider>
+#include <QWheelEvent>
 
 #include <cstdio>
 
@@ -93,6 +100,11 @@ int main(int argc, char** argv)
     QApplication app(argc, argv);
 
     QWidget host;
+    // MainWindow carries a window-wide `QWidget { background-color }` rule,
+    // which styles every plain QWidget container inside the bar.  Mirror it so
+    // the bar is tested under the cascade it actually ships in.
+    host.setStyleSheet(QStringLiteral("QWidget { background-color: %1; }")
+        .arg(ThemeManager::instance().color(QStringLiteral("color.background.app")).name()));
     WindowChrome::configure(&host, true);
     auto* bar = new TitleBar(&host);
     host.resize(1400, 200);
@@ -127,6 +139,35 @@ int main(int argc, char** argv)
                "barState reports 52 px");
     checkEqual(state.value(QStringLiteral("offsetInWindow")).toInt(), 0,
                "nothing reserves a strip above the bar");
+
+    // The bar paints its own fill and bottom hairline, opaque, so a tab's
+    // heartbeat repaint stops at the bar instead of repainting the window.
+    {
+        check(bar->testAttribute(Qt::WA_OpaquePaintEvent),
+              "bar paints opaquely so child repaints stop at the bar");
+        const QImage painted = bar->grab().toImage();
+        const QColor app = ThemeManager::instance().color(bar, QStringLiteral("color.background.app"));
+        // Sample inside the bar's 16 px left margin, where no child can sit.
+        const QColor fill = painted.pixelColor(4, painted.height() / 2);
+        const QColor edge = painted.pixelColor(4, painted.height() - 1);
+        check(fill.alpha() == 255, "bar fill is opaque");
+        check(fill.rgb() != app.rgb(), "bar fill differs from the window background");
+        check(edge.rgb() != fill.rgb(), "bar draws a bottom border distinct from its fill");
+
+        // No container inside the bar may repaint the window colour over it.
+        for (const char* name : {"titleBarDragGutter", "titleBarAudioCluster", "radioTabScroller"}) {
+            QWidget* w = bar->findChild<QWidget*>(QLatin1String(name));
+            check(w != nullptr, "bar container exists");
+            if (!w || w->width() <= 0) continue;
+            const QPoint at = w->mapTo(bar, QPoint(w->width() / 2, 2));
+            const qreal dpr = painted.devicePixelRatio();
+            const QColor seen = painted.pixelColor(int(at.x() * dpr), int(at.y() * dpr));
+            if (seen.rgb() != fill.rgb()) {
+                std::fprintf(stderr, "  %s paints %s over the bar\n", name, qPrintable(seen.name()));
+            }
+            check(seen.rgb() == fill.rgb(), "bar containers are transparent over the bar fill");
+        }
+    }
 
     // ── Brand ───────────────────────────────────────────────────────────────
     const QVariantMap brand = state.value(QStringLiteral("brand")).toMap();
@@ -194,6 +235,26 @@ int main(int argc, char** argv)
               "caption cluster paints visible platform controls");
     }
 
+    // Minimal mode hides the dock trio — and the separator that leads it,
+    // which once dangled alone at the end of the bar because the member that
+    // should have hidden it was never assigned.
+    {
+        auto visibleSeparators = [bar]() {
+            int n = 0;
+            for (QFrame* f : bar->findChildren<QFrame*>(QString(), Qt::FindDirectChildrenOnly)) {
+                if (f->isVisible() && f->width() == 1) ++n;
+            }
+            return n;
+        };
+        check(visibleSeparators() > 0, "dock separator shows in the full bar");
+        bar->setMinimalMode(true);
+        app.processEvents();
+        checkEqual(visibleSeparators(), 0, "minimal mode leaves no dangling separator");
+        bar->setMinimalMode(false);
+        app.processEvents();
+        check(visibleSeparators() > 0, "dock separator returns after minimal mode");
+    }
+
     // ── Radio tabs ──────────────────────────────────────────────────────────
     RadioTabEntry connected;
     connected.id = QStringLiteral("SERIAL-1");
@@ -230,12 +291,66 @@ int main(int argc, char** argv)
         check(inUseTab->accessibleDescription().contains(QLatin1String("in use")),
               "in-use tab spells its state on the rendered status line");
 
+        // Line two is the state, not the name again: the name is line one, and
+        // repeating it pushed the state off the end of every narrow tab.
+        check(!connectedTab->statusLine().contains(connected.name),
+              "rendered status line does not repeat the tab's name");
+        check(connectedTab->statusLine() == QLatin1String("connected"),
+              "status line with no model or detail is just the state");
+        check(connectedTab->accessibleDescription().contains(connected.name),
+              "accessible description still carries the name");
+
+        // Keep tabs out of the 8 px resize band at the bar's top and bottom.
+        app.processEvents();
+        const int tabTop = connectedTab->mapTo(bar, QPoint()).y();
+        check(tabTop >= 8, "radio tab starts below the 8 px top resize band");
+        check(tabTop + connectedTab->height() <= TitleBar::kUnifiedBarHeight - 8,
+              "radio tab ends above the bar's bottom 8 px");
+
         // U+00B7, one code unit — not the two that raw UTF-8 bytes would give.
         const QString line = connectedTab->accessibleDescription();
         check(line.contains(QChar(0x00B7)),
               "status line joins with a real MIDDLE DOT");
         check(!line.contains(QChar(0x00C2)),
               "status line is not mojibake (Â from byte-escaped UTF-8)");
+    }
+
+    // A nickname hides the hardware, so the model rides on line two.
+    {
+        RadioTabEntry nick = inUse;
+        nick.id = QStringLiteral("SERIAL-NICK");
+        nick.name = QStringLiteral("Shack Rig");
+        nick.model = QStringLiteral("FLEX-6600");
+        RadioTab probe(nick);
+        check(probe.statusLine().startsWith(nick.model),
+              "nicknamed radio shows its model on the status line");
+        check(!probe.statusLine().contains(nick.name),
+              "nicknamed radio does not repeat the nickname");
+        RadioTabEntry plain = nick;
+        plain.name = plain.model;
+        RadioTab plainProbe(plain);
+        check(!plainProbe.statusLine().contains(plain.model),
+              "model is not shown twice when it is the name");
+    }
+
+    // The "+" rings for keyboard focus only — it is the window's first
+    // focusable widget, so a plain :focus rule lit it on every launch.
+    if (QAbstractButton* add = bar->findChild<QAbstractButton*>(QStringLiteral("radioTabAddButton"))) {
+        // Delivered directly: an offscreen window is never active, so
+        // setFocus() alone would never send these.
+        auto focus = [add](QEvent::Type type, Qt::FocusReason reason) {
+            QFocusEvent ev(type, reason);
+            QApplication::sendEvent(add, &ev);
+        };
+        focus(QEvent::FocusIn, Qt::ActiveWindowFocusReason);
+        check(!add->property("focusVisible").toBool(), "+ shows no ring for initial window focus");
+        focus(QEvent::FocusOut, Qt::OtherFocusReason);
+        focus(QEvent::FocusIn, Qt::TabFocusReason);
+        check(add->property("focusVisible").toBool(), "+ shows its ring for keyboard focus");
+        focus(QEvent::FocusOut, Qt::TabFocusReason);
+        check(!add->property("focusVisible").toBool(), "+ drops its ring on focus out");
+    } else {
+        check(false, "+ button exists");
     }
 
     // Re-pushing an identical list must not rebuild the widgets: discovery
@@ -427,6 +542,19 @@ int main(int argc, char** argv)
                                        lastTab->size());
             check(scroller->viewport()->rect().intersects(lastInViewport),
                   "activating an overflow tab scrolls it into view");
+
+            // A vertical-only mouse wheel must reach overflow tabs too: the
+            // strip's scroll bars are hidden, so nothing else could.
+            QScrollBar* hbar = scroller->horizontalScrollBar();
+            check(hbar->maximum() > 0, "eight radios overflow the strip");
+            const int before = hbar->value();
+            const QPointF at = scroller->viewport()->rect().center();
+            QWheelEvent wheel(at, scroller->viewport()->mapToGlobal(at), QPoint(),
+                              QPoint(0, 120), Qt::NoButton, Qt::NoModifier,
+                              Qt::NoScrollPhase, false);
+            QApplication::sendEvent(scroller->viewport(), &wheel);
+            check(hbar->value() < before,
+                  "a vertical wheel notch scrolls the overflowing strip sideways");
         }
         nowAvailable.visibleInTabs = false;
         tabs->setRadios({nowAvailable, inUse});
@@ -436,6 +564,17 @@ int main(int argc, char** argv)
         check(tabWithId(*bar, nowAvailable.id)->isHidden(), "removed radio stays hidden in compact mode");
         check(tabWithId(*bar, inUse.id)->isLinkCarrier(), "link status stays on a visible tab after removal");
         tabs->setCompactMode(false);
+
+        // A lost link raises the alarm; an operator disconnect clears it.
+        for (int miss = 0; miss < 3; ++miss) {
+            bar->onHeartbeatLost();
+        }
+        check(tabs->state().value(QStringLiteral("linkAlarm")).toBool(),
+              "three missed beats raise the link alarm");
+        bar->clearLinkAlarm();
+        check(!tabs->state().value(QStringLiteral("linkAlarm")).toBool(),
+              "an operator disconnect clears the link alarm");
+
         check(ThemeManager::instance().setActiveTheme(QStringLiteral("Default Light")), "light theme loads");
         tabs->showDiscoveryPopover();
         QWidget* lightPopover = QApplication::activePopupWidget();

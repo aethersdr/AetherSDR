@@ -87,6 +87,10 @@ public:
     void setMultiFlexStatus(int clientCount, const QStringList& names);
     void onHeartbeat();       // Call when a discovery packet arrives
     void onHeartbeatLost();   // Call when radio lost from discovery
+    // The operator disconnected on purpose: that is not a lost link, so drop
+    // any missed-beat count rather than letting it raise the red alarm on an
+    // idle tab.  An unexpected loss never calls this and keeps its alarm.
+    void clearLinkAlarm();
     void setDiscovering(bool active); // Solid amber while discovering / not yet connected
     void setMinimalMode(bool on);
     bool isMinimalMode() const { return m_minimalMode; }
@@ -158,6 +162,11 @@ private:
     void updatePcAudioToolTip();
     void applyPcAudioStyle();
     void applyBarStyle();
+    // Bar fill pre-composited over the window background, so the bar can be
+    // WA_OpaquePaintEvent: a tab repaint then stops here instead of also
+    // repainting MainWindow underneath it.
+    QColor       m_barFill;
+    QColor       m_barBorder;
     QPointer<QWindow> m_chromeWindow;
     QHBoxLayout* m_hbox{nullptr};
     QMenuBar*    m_menuBar{nullptr};
@@ -175,8 +184,9 @@ private:
     QLabel*      m_hpLabel{nullptr};
     bool         m_headphoneAvailable{true};
 
-    // Caption controls.  Present on every platform — the window is frameless
-    // everywhere, so there is never a native control to defer to.
+    // Fallback caption controls.  Shown only where Qt has no expanded client
+    // area (Linux/X11/Wayland); on Cocoa and Windows the native controls draw
+    // over the bar and these stay hidden — see WindowChrome::usesNativeCaption.
     WindowCaptionButtons* m_captionButtons{nullptr};
     // Index the menu bar is inserted at by setMenuBar() — after the brand mark
     // rather than at 0, so the brand always leads the bar.
@@ -229,6 +239,7 @@ protected:
     void mouseDoubleClickEvent(QMouseEvent* ev) override;
     bool eventFilter(QObject* obj, QEvent* ev) override;
     void showEvent(QShowEvent* ev) override;
+    void paintEvent(QPaintEvent* ev) override;
 
 private:
     void updateMaximizeIcon();

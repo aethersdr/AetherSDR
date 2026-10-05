@@ -6656,6 +6656,15 @@ void MainWindow::onConnectionStateChanged(bool connected)
             m_appletPanel->clearSliceButtons();
         }
 
+        // A disconnect the operator asked for is not a lost link.  The miss
+        // timer would otherwise keep counting against a radio we stopped
+        // talking to and raise the red link alarm on an idle tab ~4.5 s later.
+        // An unexpected drop leaves both alone so the alarm still shows.
+        if (m_userDisconnected) {
+            if (m_heartbeatMissTimer) m_heartbeatMissTimer->stop();
+            if (m_titleBar) m_titleBar->clearLinkAlarm();
+        }
+
         const bool reconnectWan = !m_userDisconnected && m_radioModel.isWan()
             && !m_pendingWanRadio.serial.isEmpty();
         if (reconnectWan && !m_wanReconnectTimer.isActive()) {

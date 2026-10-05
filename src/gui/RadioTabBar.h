@@ -30,14 +30,15 @@ struct RadioTabEntry {
     bool           canRename{false};
     bool           visibleInTabs{true};
     QString        id;         // stable key — serial, or family:address for HL2
-    QString        name;       // "Hermes-Lite 2", "FLEX-6600"
+    QString        name;       // "Hermes-Lite 2", "FLEX-6600" — or the operator's nickname
+    QString        model;      // hardware model; shown on line two only when `name` hides it
     QString        detail;     // free text appended after the status, e.g. a callsign
     QString        transport;  // "SmartLink" | "192.168.1.21" — shown in the popover
     RadioTabStatus status{RadioTabStatus::Available};
 
     bool operator==(const RadioTabEntry& o) const
     {
-        return id == o.id && name == o.name && detail == o.detail
+        return id == o.id && name == o.name && model == o.model && detail == o.detail
             && transport == o.transport && status == o.status
             && canRename == o.canRename && visibleInTabs == o.visibleInTabs;
     }
@@ -85,6 +86,10 @@ public:
     QSize sizeHint() const override;
     QSize minimumSizeHint() const override { return sizeHint(); }
 
+    // The second line exactly as painted: [model ·] status [· detail].  The
+    // name is line one and is deliberately not repeated here.
+    QString statusLine() const;
+
 protected:
     void paintEvent(QPaintEvent* ev) override;
     void enterEvent(QEnterEvent* ev) override;
@@ -94,7 +99,8 @@ protected:
 
 private:
     void refreshAccessibility();
-    QString statusLine() const;
+    QString descriptionLine() const;   // name + statusLine, for a11y and tooltip
+    QRect dotDirtyRect() const;        // the link indicator's repaint footprint
 
     QColor dotColor() const;
 
@@ -158,6 +164,10 @@ public:
     QSize sizeHint() const override;
     QSize minimumSizeHint() const override;
 
+protected:
+    bool eventFilter(QObject* watched, QEvent* ev) override;
+
+public:
     // Introspection for the automation bridge (`titlebar` model).
     QVariantMap state() const;
 
