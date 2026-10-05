@@ -274,19 +274,40 @@ endif()
 # RelWithDebInfo uses -g1 on GCC/Clang: line tables and function names, so
 # backtraces and core dumps still symbolize, without the full DWARF that made
 # test binaries 100-400 MB each (#6214). Only CMake's untouched default is
-# replaced, and only when CFLAGS/CXXFLAGS set no debug level of their own (the
-# TSan lane injects -g3, which RelWithDebInfo's flags would otherwise
-# override). An explicit -DCMAKE_<LANG>_FLAGS_RELWITHDEBINFO wins, MSVC's /Zi
-# flags never match, and Release builds are unaffected. For locals and types
-# in a debugger, build Debug.
+# replaced, and only while CFLAGS/CXXFLAGS (or CMAKE_<LANG>_FLAGS) set no debug
+# level of their own: the TSan lane injects -g3, which RelWithDebInfo's flags
+# would otherwise override. The value is cached, so _AETHER_<LANG>_RWD_G1
+# records that this block wrote it; when a later reconfigure adds a -g, the
+# block puts CMake's default back rather than leave its -g1 overriding it. An
+# explicit -DCMAKE_<LANG>_FLAGS_RELWITHDEBINFO wins, MSVC's /Zi flags never
+# match, and Release builds are unaffected. For locals and types in a
+# debugger, build Debug.
+set(_aether_rwd_cmake "-O2 -g -DNDEBUG")
+set(_aether_rwd_g1 "-O2 -g1 -DNDEBUG")
 foreach(_lang C CXX)
-    if(CMAKE_${_lang}_COMPILER_ID MATCHES "GNU|Clang"
-       AND CMAKE_${_lang}_FLAGS_RELWITHDEBINFO STREQUAL "-O2 -g -DNDEBUG"
-       AND NOT CMAKE_${_lang}_FLAGS MATCHES "(^|[ \t])-g")
-        set(CMAKE_${_lang}_FLAGS_RELWITHDEBINFO "-O2 -g1 -DNDEBUG" CACHE STRING
+    if(NOT CMAKE_${_lang}_COMPILER_ID MATCHES "GNU|Clang")
+        continue()
+    endif()
+    set(_rwd CMAKE_${_lang}_FLAGS_RELWITHDEBINFO)
+    if(NOT "${${_rwd}}" STREQUAL "${_aether_rwd_g1}")
+        # Someone else set the value since; it is theirs now.
+        set(_AETHER_${_lang}_RWD_G1 OFF CACHE INTERNAL "")
+    endif()
+    if(CMAKE_${_lang}_FLAGS MATCHES "(^|[ \t])-g")
+        if(_AETHER_${_lang}_RWD_G1)
+            set(${_rwd} "${_aether_rwd_cmake}" CACHE STRING
+                "Flags used by the compiler during RELWITHDEBINFO builds." FORCE)
+            set(_AETHER_${_lang}_RWD_G1 OFF CACHE INTERNAL "")
+        endif()
+    elseif("${${_rwd}}" STREQUAL "${_aether_rwd_cmake}")
+        set(${_rwd} "${_aether_rwd_g1}" CACHE STRING
             "Flags used by the compiler during RELWITHDEBINFO builds." FORCE)
+        set(_AETHER_${_lang}_RWD_G1 ON CACHE INTERNAL "")
     endif()
 endforeach()
+unset(_aether_rwd_cmake)
+unset(_aether_rwd_g1)
+unset(_rwd)
 
 # Qt6 components
 # Qt 6.12 minimum: the same Qt every release artifact and every CI leg builds
