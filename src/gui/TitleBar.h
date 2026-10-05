@@ -155,6 +155,14 @@ private:
     void markDragHandle(QWidget* widget);
     bool isDragHandle(QObject* obj) const;
     bool startWindowMove(QMouseEvent* ev);
+    bool continueWindowMove(QMouseEvent* ev);
+    bool finishWindowMove(QMouseEvent* ev);
+    // Manual-move state for the xcb fallback (#4827); unused while the
+    // system move owns the drag.
+    bool         m_windowMoveActive{false};
+    bool         m_windowMoveUsesSystem{false};
+    QPoint       m_windowMovePressGlobal;
+    QPoint       m_windowMoveStartPos;
     void updateChromeLayout();
     bool m_updatingChromeLayout{false};
     void handleTitleDoubleClick(QMouseEvent* ev);

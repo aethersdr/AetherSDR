@@ -1,6 +1,7 @@
 #include "TitleBar.h"
 #include "BrandMark.h"
 #include "FramelessMessageBox.h"
+#include "FramelessMoveHelper.h"
 #include "WindowChrome.h"
 #include "GuardedSlider.h"
 #include "PersistentDialog.h"
@@ -110,9 +111,9 @@ QPixmap buildPopOutIcon(const QWidget* widget, bool active)
 
 // ── Audio-cluster icons ─────────────────────────────────────────────────────
 // Thin-line marks in the house style (1.8 px stroke, no fill), replacing the
-// 🔊 / 🎧 emoji the strip used to carry.  The design system forbids emoji as UI
-// outright: they render in the platform's own colour and weight, so they never
-// matched the bar around them and never followed the theme.
+// speaker/headphone emoji the strip used to carry: emoji render in the
+// platform's own colour and weight, so they never matched the bar around them
+// and could not follow the theme.
 enum class AudioIcon { Speaker, Headphone };
 
 QPixmap buildAudioIcon(AudioIcon kind, bool muted, const QColor& stroke, qreal dpr)
@@ -817,11 +818,68 @@ bool TitleBar::startWindowMove(QMouseEvent* ev)
     if (!w)
         return false;
 
-    QWindow* handle = w->windowHandle();
-    if (!handle || !handle->startSystemMove()) {
-        return false;
+    // startSystemMove() reports success on xcb but the WM-driven drag it
+    // hands off to is unreliable there (QTBUG-69716) — under Mutter/
+    // XWayland (the common case for `QT_QPA_PLATFORM=xcb` on a Wayland
+    // desktop) the press is swallowed and the window never follows the
+    // pointer (#4827).  Only the Linux frameless fallback reaches this:
+    // Cocoa and Windows draw native captions.  Same rule Qt's own
+    // QSizeGrip::usePlatformSizeGrip() applies.
+    if (!FramelessMoveHelper::systemMoveResizeUnreliable(w)) {
+        if (QWindow* handle = w->windowHandle(); handle && handle->startSystemMove()) {
+            m_windowMoveActive = true;
+            m_windowMoveUsesSystem = true;
+            ev->accept();
+            return true;
+        }
     }
+
+    // Manual-move path: when a child-widget eventFilter consumes the press
+    // (returns true), Qt never establishes an implicit grab on the child,
+    // so subsequent mouse-move events stop reaching us as soon as the
+    // cursor leaves the widget that was clicked.  Explicitly grab on
+    // TitleBar so all moves/releases route to our handlers.
+    m_windowMoveActive = true;
+    m_windowMoveUsesSystem = false;
+    m_windowMovePressGlobal = ev->globalPosition().toPoint();
+    m_windowMoveStartPos = w->pos();
+    grabMouse();
+
     ev->accept();
+    return true;
+}
+
+bool TitleBar::continueWindowMove(QMouseEvent* ev)
+{
+    if (!m_windowMoveActive || !ev)
+        return false;
+
+    if (!(ev->buttons() & Qt::LeftButton))
+        return finishWindowMove(ev);
+
+    if (!m_windowMoveUsesSystem) {
+        if (auto* w = window()) {
+            const QPoint delta = ev->globalPosition().toPoint() - m_windowMovePressGlobal;
+            w->move(m_windowMoveStartPos + delta);
+        }
+    }
+
+    ev->accept();
+    return true;
+}
+
+bool TitleBar::finishWindowMove(QMouseEvent* ev)
+{
+    if (!m_windowMoveActive)
+        return false;
+
+    const bool wasManual = !m_windowMoveUsesSystem;
+    m_windowMoveActive = false;
+    m_windowMoveUsesSystem = false;
+    if (wasManual)
+        releaseMouse();
+    if (ev)
+        ev->accept();
     return true;
 }
 
@@ -862,6 +920,12 @@ bool TitleBar::eventFilter(QObject* obj, QEvent* ev)
         return QWidget::eventFilter(obj, ev);
     }
 
+    if (m_windowMoveActive) {
+        if (ev->type() == QEvent::MouseMove)
+            return continueWindowMove(static_cast<QMouseEvent*>(ev));
+        if (ev->type() == QEvent::MouseButtonRelease)
+            return finishWindowMove(static_cast<QMouseEvent*>(ev));
+    }
 
     if (obj == m_menuBar) {
         if (ev->type() == QEvent::MouseButtonDblClick) {
@@ -938,11 +1002,15 @@ void TitleBar::mousePressEvent(QMouseEvent* ev)
 
 void TitleBar::mouseMoveEvent(QMouseEvent* ev)
 {
+    if (continueWindowMove(ev))
+        return;
     QWidget::mouseMoveEvent(ev);
 }
 
 void TitleBar::mouseReleaseEvent(QMouseEvent* ev)
 {
+    if (finishWindowMove(ev))
+        return;
     QWidget::mouseReleaseEvent(ev);
 }
 

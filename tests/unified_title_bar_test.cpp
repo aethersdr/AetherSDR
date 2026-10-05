@@ -300,10 +300,11 @@ int main(int argc, char** argv)
         check(connectedTab->accessibleDescription().contains(connected.name),
               "accessible description still carries the name");
 
-        // Keep tabs out of the 8 px resize band at the bar's top and bottom.
+        // Keep tabs 8 px clear of the bar's edges: Qt's Windows frame keeps a
+        // ~8 px top resize border, and a tab there would start a resize.
         app.processEvents();
         const int tabTop = connectedTab->mapTo(bar, QPoint()).y();
-        check(tabTop >= 8, "radio tab starts below the 8 px top resize band");
+        check(tabTop >= 8, "radio tab starts below the top resize border");
         check(tabTop + connectedTab->height() <= TitleBar::kUnifiedBarHeight - 8,
               "radio tab ends above the bar's bottom 8 px");
 
@@ -574,6 +575,45 @@ int main(int argc, char** argv)
         bar->clearLinkAlarm();
         check(!tabs->state().value(QStringLiteral("linkAlarm")).toBool(),
               "an operator disconnect clears the link alarm");
+
+        // After an unexpected drop the alarm stays on the radio that dropped,
+        // not on whichever tab comes first (LAN radios are listed first, so on
+        // a two-radio network the idle one used to go red).
+        {
+            RadioTabEntry first;
+            first.id = QStringLiteral("LAN-FIRST");
+            first.name = QStringLiteral("FLEX-8600");
+            first.status = RadioTabStatus::Available;
+            RadioTabEntry dropped;
+            dropped.id = QStringLiteral("DROPPED");
+            dropped.name = QStringLiteral("Simulator");
+            dropped.status = RadioTabStatus::Connected;
+            bar->setRadioTabs({first, dropped});
+            bar->setActiveRadio(dropped.id);
+            app.processEvents();
+            dropped.status = RadioTabStatus::Available;
+            bar->setRadioTabs({first, dropped});
+            bar->setActiveRadio(QString());
+            for (int miss = 0; miss < 3; ++miss) {
+                bar->onHeartbeatLost();
+            }
+            RadioTab* firstTab = tabWithId(*bar, first.id);
+            RadioTab* droppedTab = tabWithId(*bar, dropped.id);
+            check(firstTab && droppedTab, "both radios have tabs");
+            if (firstTab && droppedTab) {
+                check(droppedTab->isLinkCarrier(), "after a drop the link stays on the radio that dropped");
+                check(!firstTab->isLinkCarrier(), "the first tab does not inherit another radio's link");
+                check(droppedTab->statusLine().contains(QLatin1String("link lost")),
+                      "a lost link is spelled out on the dropped radio's tab");
+                check(droppedTab->accessibleName().contains(QLatin1String("link lost")),
+                      "a lost link is in the dropped radio's accessible name");
+                check(!firstTab->statusLine().contains(QLatin1String("link lost")),
+                      "an idle radio's tab never claims a lost link");
+                bar->clearLinkAlarm();
+                check(!droppedTab->statusLine().contains(QLatin1String("link lost")),
+                      "clearing the alarm restores the radio's own status word");
+            }
+        }
 
         check(ThemeManager::instance().setActiveTheme(QStringLiteral("Default Light")), "light theme loads");
         tabs->showDiscoveryPopover();

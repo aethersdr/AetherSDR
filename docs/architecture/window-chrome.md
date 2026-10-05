@@ -56,7 +56,10 @@ gap before the brand unless a larger safe-area inset is required.
   not proof that Snap Layouts works; test it on Windows 11.
 - **Linux:** Qt's desktop Linux backends do not advertise expanded client
   areas. The fallback uses the shared caption cluster and `FramelessResizer`
-  (8 px edge band); title dragging calls `QWindow::startSystemMove()`. Disable
+  (6 px edge band; no top-edge resize under the bar, #4886). Title dragging
+  calls `QWindow::startSystemMove()`, except on xcb, where the WM grab is
+  silently dropped under Mutter/XWayland (#4827) and the bar moves the window
+  itself. Disable
   Frameless Window to use compositor decorations. Compositor decoration-
   preference negotiation is not implemented. Wayland/X11 snap and
   fractional-scale resize are native test items.
@@ -84,9 +87,9 @@ it. Two traps, both covered by `unified_title_bar_test`:
   and the bar's menus are descendants and must keep their panels.
 
 Radio tabs are 36 px tall and sit 8 px clear of the bar's top and bottom
-edges. The 8 px is load-bearing: it is `FramelessResizer`'s edge band on Linux
-and roughly Qt's top resize border on Windows, so a taller tab would sit where
-a press starts a window resize.
+edges. The inset is load-bearing: Qt's expanded Windows frame keeps a top
+resize border of about 8 px, so a taller tab would sit where a press starts a
+window resize.
 
 ## Radio switcher behaviour
 
@@ -97,7 +100,10 @@ tab's dot is also the radio-link indicator: it swells once per discovery
 heartbeat, turns amber while discovering and red after three missed beats
 (blinking, or solid when the operator has blinking off). An operator
 disconnect stops the miss timer and clears the alarm; an unexpected loss
-raises it. A vertical mouse wheel scrolls an overflowing strip.
+raises it. While the alarm is up the tab says "link lost" in words too, and the
+alarm stays on the radio that dropped (not on whichever tab comes first) until
+a different session starts. A vertical mouse wheel scrolls an overflowing
+strip.
 
 The "+" panel has a bounded scrollable list, search by name/model/address/
 status, active-radio-first ordering, readable status text, and one Actions menu
@@ -108,7 +114,7 @@ accessible names. Search and controls are keyboard reachable.
 | --- | --- |
 | Select a radio | Opens Connect to Radio on that radio's LAN/SmartLink row; never connects or disconnects without confirmation. |
 | Disconnect | Enabled only for this client's connected radio; uses the intentional-disconnect path. |
-| Rename | Client-owned names use the per-radio identity store and a non-modal dialog (built by MainWindow; `ConnectionPanel` decides and applies). Radio-owned names open Radio Setup while connected and are disabled while disconnected. An empty nickname resets it. |
+| Rename | Client-owned names use the per-radio identity store and a non-modal dialog (built by MainWindow; `ConnectionPanel` decides and applies). Radio-owned names open Radio Setup while connected and are disabled while disconnected. The demo radio's "not on the air" name is a safety label and cannot be renamed. An empty nickname resets it. |
 | Radio setup | Enabled only for this client's connected radio. |
 | Remove from tabs | Available only while not connected here. Hides the tab; does not erase credentials, operating state, or the radio. |
 | Add to tabs | Restores a hidden tab. Hidden radios stay in the "+" list; selecting one also restores it. |

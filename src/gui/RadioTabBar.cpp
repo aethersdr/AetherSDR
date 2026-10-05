@@ -36,10 +36,11 @@ namespace AetherSDR {
 
 namespace {
 
-// 52 px bar − 8 px above and below.  The 8 px is load-bearing, not taste:
-// it is FramelessResizer's edge band on Linux and roughly Qt's top resize
-// border on Windows, so a taller tab would sit inside the strip where a
-// press starts a window resize instead of reaching the tab.
+// 52 px bar − 8 px above and below.  The inset is load-bearing, not taste:
+// Qt's expanded Windows frame keeps a top resize border of about 8 px, so a
+// taller tab would sit where a press starts a window resize instead of
+// reaching the tab.  (On Linux the resizer reserves the whole bar height —
+// no top-edge resize there, #4886.)
 constexpr int  kTabHeight     = 36;
 constexpr int  kTabRadius     = 8;
 constexpr int  kTabPadX       = 14;
@@ -146,11 +147,18 @@ QString RadioTab::statusLine() const
     if (!m_entry.model.isEmpty() && m_entry.model != m_entry.name) {
         parts << m_entry.model;
     }
-    parts << radioTabStatusText(m_entry.status);
+    parts << statusWord();
     if (!m_entry.detail.isEmpty()) {
         parts << m_entry.detail;
     }
     return parts.join(middleDot());
+}
+
+QString RadioTab::statusWord() const
+{
+    // The alarm is the one state the dot exists to show, so it must be in
+    // words too (WCAG 1.4.1) — it speaks over the radio's own status.
+    return m_alarm ? tr("link lost") : radioTabStatusText(m_entry.status);
 }
 
 QString RadioTab::descriptionLine() const
@@ -177,8 +185,7 @@ void RadioTab::refreshAccessibility()
     setText(m_entry.name);
     // The status is in the accessible name as well as on screen — a screen
     // reader user must not have to infer it from the dot's colour.
-    setAccessibleName(QStringLiteral("Radio %1, %2")
-                          .arg(m_entry.name, radioTabStatusText(m_entry.status)));
+    setAccessibleName(QStringLiteral("Radio %1, %2").arg(m_entry.name, statusWord()));
     setAccessibleDescription(descriptionLine());
     setToolTip(descriptionLine());
 }
@@ -210,12 +217,21 @@ void RadioTab::setLinkOverride(const QColor& overrideColor, bool alarm)
     if (m_overrideColor == overrideColor && m_alarm == alarm) {
         return;
     }
+    const bool alarmChanged = m_alarm != alarm;
     m_overrideColor = overrideColor;
     m_alarm = alarm;
     if (!alarm) {
         m_alarmVisible = true;
     }
-    update(dotDirtyRect());
+    if (alarmChanged) {
+        // The words change with the alarm, so the whole tab (and possibly its
+        // width) does; a colour-only change stays on the dot's footprint.
+        refreshAccessibility();
+        updateGeometry();
+        update();
+    } else {
+        update(dotDirtyRect());
+    }
 }
 
 void RadioTab::setAlarmVisible(bool on)
@@ -643,18 +659,28 @@ void RadioTabBar::pulseLink(const QColor& beatColor)
     applyLinkVisuals();
 }
 
+QString RadioTabBar::linkRadioId() const
+{
+    return m_activeId.isEmpty() ? m_carrierId : m_activeId;
+}
+
 void RadioTabBar::applyLinkVisuals()
 {
     const qreal eased = m_pulseLevel * m_pulseLevel;
     RadioTab* carrier = linkCarrierTab();
+    // "Link lost" names a radio.  Only the tab of the radio whose link this
+    // is may show it; a fallback carrier shows its own status colour instead.
+    const bool ownsLink = carrier && carrier->entry().id == linkRadioId();
+    const bool alarm = m_alarm && ownsLink;
+    const QColor linkOverride = (m_alarm && !ownsLink) ? QColor() : m_linkOverride;
 
     for (RadioTab* tab : std::as_const(m_tabs)) {
         // Only the carrier shows the link state — the others describe radios
         // this client is not talking to, so a heartbeat says nothing about them.
         const bool isCarrier = tab == carrier;
         tab->setLinkCarrier(isCarrier);
-        tab->setLinkOverride(isCarrier ? m_linkOverride : QColor(),
-                             isCarrier && m_alarm);
+        tab->setLinkOverride(isCarrier ? linkOverride : QColor(),
+                             isCarrier && alarm);
         tab->setAlarmVisible(m_alarmVisible);
         tab->setBeatColor(isCarrier ? m_beatColor : QColor());
         tab->setPulse(isCarrier ? eased : 0.0);
@@ -663,11 +689,17 @@ void RadioTabBar::applyLinkVisuals()
 
 RadioTab* RadioTabBar::linkCarrierTab() const
 {
+    const QString& id = linkRadioId();
     for (RadioTab* tab : m_tabs) {
-        if (tab->entry().id == m_activeId) {
+        if (!id.isEmpty() && tab->entry().id == id
+            && (tab->entry().visibleInTabs || id == m_activeId)) {
             return tab;
         }
     }
+    // No session yet, or the dropped radio's tab is hidden: "searching" still
+    // needs a tab to render on, so it rides the first visible one.  That tab
+    // is not the link's radio, so applyLinkVisuals() never paints the alarm
+    // on it.
     if (m_activeId.isEmpty()) {
         for (RadioTab* tab : m_tabs) {
             if (tab->entry().visibleInTabs) {
@@ -742,6 +774,12 @@ void RadioTabBar::setActiveRadio(const QString& id)
     if (m_activeId == id) {
         return;
     }
+    if (!id.isEmpty()) {
+        // The link the heartbeat describes.  Kept through a drop — when the
+        // active id goes empty — so a lost link is shown on the radio that
+        // lost it, not on whichever tab happens to come first.
+        m_carrierId = id;
+    }
     m_activeId = id;
     applyActiveState();
 }
@@ -759,21 +797,11 @@ void RadioTabBar::rebuild()
     while (m_tabs.size() < m_radios.size()) {
         auto* tab = new RadioTab(m_radios.at(m_tabs.size()), this);
         connect(tab, &QAbstractButton::clicked, this, [this, tab]() {
-            // Deliberately does NOT claim the clicked tab as active.  MainWindow
-            // treats a single click as "show me the picker", not "switch" — so
-            // moving m_activeId here would leave the strip, and the bridge's
-            // activeId, asserting a radio the client never connected to, with
-            // the link visuals following the wrong tab.  The active tab changes
-            // only when the session does, via setActiveRadio() from
-            // refreshRadioTabs().
-            //
-            // applyActiveState() re-asserts the checked state because
-            // QAbstractButton has already toggled this tab on press: the tabs
-            // are checkable and belong to no exclusive group, so clicking the
-            // ALREADY-active tab would otherwise leave it unchecked for good
-            // (setActiveRadio() early-returns on an unchanged id, and
-            // setRadios() early-returns on an unchanged list, so nothing else
-            // ever restores it).
+            // A click opens the picker; it does not switch radios, so the
+            // active tab changes only when the session does (setActiveRadio).
+            // Re-assert the checked state: this checkable, ungrouped tab has
+            // already toggled itself on press, and nothing else would restore
+            // it for an unchanged active id.
             applyActiveState();
             emit radioActivated(tab->entry().id);
         });

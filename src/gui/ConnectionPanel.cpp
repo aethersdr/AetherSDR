@@ -1282,6 +1282,7 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
         m_slUserLabel->setText("Signed out of SmartLink.");
         m_slUserLabel->setStyleSheet(kHintLabelStyle);
         updateSmartLinkUi();
+        emit smartLinkSignedOut();
     });
 
     // Settle the body layout so preferredClientHeight() has a real answer the
@@ -1581,6 +1582,11 @@ bool ConnectionPanel::canRenameRadio(const QString& serial) const
 
 bool ConnectionPanel::canRenameRadio(const RadioInfo& radio) const
 {
+    // The demo's name IS its safety label ("not on the air"); it is not the
+    // operator's to replace.
+    if (radio.family == SimBackend::familyName()) {
+        return false;
+    }
     return !radio.serial.isEmpty() && !hl2::Hl2Discovery::nicknameLivesOnRadio(radio);
 }
 
@@ -2079,7 +2085,7 @@ void ConnectionPanel::addDemoRadio()
     // backend entirely. One selector, and this is it.
     demo.family = SimBackend::familyName();
     demo.version = QStringLiteral("0.0.0.0");
-    demo.nickname = radioDisplayName(demo, QStringLiteral("Simulator (not on the air)"));
+    demo.nickname = QStringLiteral("Simulator (not on the air)");
     demo.callsign = QStringLiteral("DEMO");
     demo.address = QHostAddress(QHostAddress::LocalHost);   // synthetic; never dialed
     demo.port = 4992;

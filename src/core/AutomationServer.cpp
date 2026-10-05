@@ -2757,6 +2757,9 @@ bool isReadOnlyRequest(const QString& name, const QString& action,
         };
         return kSafeStreamActions.contains(normalizedAction);
     }
+    if (name == QLatin1String("applet")) {
+        return normalizedAction == QLatin1String("state");  // snapshot only
+    }
     if (name == QLatin1String("gesture")) {
         return normalizedAction == QLatin1String("status");
     }

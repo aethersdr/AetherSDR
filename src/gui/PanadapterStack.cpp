@@ -354,21 +354,14 @@ void PanadapterStack::equalizeSizes()
 
 void PanadapterStack::refreshAfterLayoutShift()
 {
+#if defined(Q_OS_MAC) && defined(AETHER_GPU_SPECTRUM)
     // Re-realize each spectrum's NATIVE window, not just its GPU pipelines.
-    //
-    // Measured: after the flip the widget reports the correct width (e.g.
-    // 1450) while its native surface is still the pre-flip 1190 — short by
-    // exactly the panel's 260 px.  So the widget repaints happily, every
-    // frame, into a drawable that is too narrow, and the strip beyond it is
-    // painted by nobody.  resetGpuResources() + update() alone does NOT fix
-    // this: re-rendering into the same undersized surface changes nothing,
-    // which is also why the continuously-redrawing waterfall never heals it.
-    //
-    // Destroying the native window is the part that actually re-establishes
-    // the geometry, so this uses the full reparent path even though the
-    // widget has not changed top-level.  It costs a Metal re-bind, which is
-    // acceptable for an explicit, infrequent operator action and is the same
-    // cost already paid when floating or docking a pan.
+    // Measured on Metal: after the flip the native surface keeps its pre-flip
+    // width (short by the panel's 260 px), so re-rendering into it — even
+    // continuously — never paints the strip.  Destroying the native window is
+    // what re-establishes the geometry; it costs one Metal re-bind per flip.
+    // macOS only: nothing reproduced this on D3D/GL, so elsewhere the flip
+    // pays nothing beyond the repaint sweep below.
     for (PanadapterApplet* applet : std::as_const(m_pans)) {
         if (!applet) continue;
         // A dock/visibility change in this window cannot move a panadapter
@@ -378,6 +371,7 @@ void PanadapterStack::refreshAfterLayoutShift()
             refreshAfterReparent(sw);
         }
     }
+#endif
     // The non-native siblings (band-stack strip, splitter handles) repaint
     // from the ordinary damage path, but the move can leave their old
     // footprint un-invalidated, so sweep the stack.

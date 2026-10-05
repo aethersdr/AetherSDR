@@ -100,6 +100,7 @@ protected:
 private:
     void refreshAccessibility();
     QString descriptionLine() const;   // name + statusLine, for a11y and tooltip
+    QString statusWord() const;        // "connected" … or "link lost" while alarmed
     QRect dotDirtyRect() const;        // the link indicator's repaint footprint
 
     QColor dotColor() const;
@@ -182,6 +183,7 @@ private:
     void rebuild();
     void applyActiveState();
     RadioTab* linkCarrierTab() const;
+    QString   linkRadioId() const;   // the radio the heartbeat describes
     void updateTabViewport(RadioTab* ensureVisible = nullptr);
     // Push the current link state (override colour, alarm phase, glow level)
     // onto the tabs — the active one carries it, the rest stay neutral.
@@ -197,6 +199,7 @@ private:
     QAbstractButton*     m_addButton{nullptr};
     QWidget*             m_popover{nullptr};
     QString              m_activeId;
+    QString              m_carrierId;   // last session's radio; carries the link through a drop
     QTimer*              m_pulseTimer{nullptr};   // glow decay after a heartbeat
     QTimer*              m_alarmTimer{nullptr};   // 500 ms red blink on link loss
     bool                 m_pulseEnabled{true};

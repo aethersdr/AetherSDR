@@ -282,8 +282,11 @@ void MainWindow::refreshRadioTabs()
     }
 
     for (RadioTabEntry& entry : tabs) {
-        entry.canRename = entry.status == RadioTabStatus::Connected
-            || m_connPanel->canRenameRadio(entry.id);
+        // The demo's name is its "not on the air" safety label — never offer
+        // to replace it, not even through Radio Setup while connected.
+        entry.canRename = entry.id != SimBackend::demoSerial()
+            && (entry.status == RadioTabStatus::Connected
+                || m_connPanel->canRenameRadio(entry.id));
         entry.visibleInTabs = entry.status == RadioTabStatus::Connected
             || !hidden.contains(entry.id);
     }
@@ -504,6 +507,19 @@ void MainWindow::wireDiscovery()
         m_smartLinkRadios = radios;
         scheduleRadioTabRefresh();
     });
+    // Signed out: the picker drops its SmartLink rows, so the strip must too,
+    // or it keeps showing those radios as "available".  A server drop while
+    // still signed in keeps them — that is a transient, not a sign-out.
+    auto dropSmartLinkTabs = [this]() {
+        if (m_smartLinkRadios.isEmpty()) return;
+        m_smartLinkRadios.clear();
+        scheduleRadioTabRefresh();
+    };
+    connect(m_connPanel, &ConnectionPanel::smartLinkSignedOut, this, dropSmartLinkTabs);
+    connect(&m_smartLink, &SmartLinkClient::serverDisconnected, this,
+            [this, dropSmartLinkTabs]() {
+        if (!m_smartLink.isAuthenticated()) dropSmartLinkTabs();
+    });
 
     if (m_titleBar) {
         // Clicking a tab means "make that the radio I'm using".  Connecting to
@@ -538,6 +554,9 @@ void MainWindow::wireDiscovery()
                 QStringLiteral("RadioNicknameDialogGeometry"), m_connPanel);
             dialog->setAttribute(Qt::WA_DeleteOnClose);
             dialog->setObjectName(QStringLiteral("radioNicknameDialog"));
+            // Follows View → Frameless Window while it is open, like every
+            // other PersistentDialog this window owns.
+            trackPersistentDialog(dialog);
             auto* form = new QVBoxLayout(dialog->bodyWidget());
             auto* label = new QLabel(tr("Nickname for %1 (leave blank to reset):").arg(radio.model),
                                      dialog->bodyWidget());

@@ -137,6 +137,8 @@ signals:
     void retryDiscoveryRequested();
     void radioNicknameChanged();
     void radioRenameRequested(const RadioInfo& radio, const QString& currentNickname);
+    // The operator signed out of SmartLink and the WAN list was cleared.
+    void smartLinkSignedOut();
     void networkDiagnosticsRequested();
     void smartLinkLoginRequested(const QString& email, const QString& password);
     // A startup auto-connect gave up before it could reach the radio. Carries
