@@ -379,26 +379,10 @@ int main(int argc, char** argv)
         check(nb2Zero.peak != nb2Interp.peak || nb2Zero.rms != nb2Interp.rms,
               "the fill mode reaches WDSP, so Zero and Interpolate differ");
 
-        // NO RUNTIME EXCLUSIVITY CHECK HERE, and the reason is worth recording
-        // so it is not attempted again. Two were written and both were removed:
-        //
-        //   * Comparing a fresh NB chain against a fresh "NB with a fill set"
-        //     chain passes whatever the run flags do — a chain that has only
-        //     ever been one kind can leak nothing, so the assertion could not
-        //     fail and was measuring nothing.
-        //   * Switching one chain NB2 -> NB and comparing it against a fresh NB
-        //     chain fails even when the code is CORRECT: the switched chain sees
-        //     a second arming lead-in, and the two stages delay the stream by
-        //     different amounts, so the impulses arrive at a different phase.
-        //     Worse, with the run flags deliberately broken so BOTH stages ran,
-        //     the measured peak and RMS moved by less than the printout's four
-        //     decimals — so even a tolerance-based version could not tell the
-        //     bug from the fix.
-        //
-        // Exclusivity is therefore pinned where it can actually be seen:
-        // wdsp_nb_hold_invariant_test reads setNoiseBlanker as text and requires
-        // both run flags to be written OUTSIDE the per-kind branches. That check
-        // was mutation-proven by moving one of them inside.
+        // These two checks are also the exclusivity pin. WdspChannel::processIq
+        // feeds one stage per block, so a run flag left on the unchosen stage
+        // blanks nothing. Feeding both with both running double-blanks, which
+        // makes Zero and Interpolate identical and fails DISCRIMINATION 2.
     }
 
     // ── 4. The blanker survives a rate change ─────────────────────────────

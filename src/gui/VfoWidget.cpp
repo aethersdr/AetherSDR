@@ -3600,22 +3600,15 @@ void VfoWidget::refreshNbControls()
     const AetherSDR::NoiseBlankerKind kind =
         m_slice ? m_slice->nbKind() : AetherSDR::NoiseBlankerKind::Off;
     const bool advanced = kind == AetherSDR::NoiseBlankerKind::Advanced;
-    // The label IS the state readout. A cycling button whose face never changes
-    // leaves the operator counting clicks to know which blanker is running.
+    // The label is the state readout for the cycle.
     m_nbBtn->setText(advanced ? QStringLiteral("NB2") : QStringLiteral("NB"));
     m_nbBtn->setAccessibleName(advanced ? QStringLiteral("Noise blanker 2")
                                         : QStringLiteral("Noise blanker"));
-    // The objectName does NOT follow the label: the bridge addresses this button
-    // by it, and a control that renames itself as its state changes is a control
-    // no script can hold on to.
-    const bool showFill = advanced && m_hasHostNoiseBlanker;
-    // Whether this call CHANGES the row's visibility, because only then does the
-    // panel have to be refitted -- and it does have to be. The DSP tab's height
-    // is pinned to its page's size hint (syncTabStackHeightToCurrentPage), so a
-    // row that appears inside an already-sized panel is simply clipped by the
-    // bottom edge: the combo was half a widget tall and unusable. Same treatment
-    // the shared level row gets in setDspLevelTarget(), queued for the same
-    // reason -- the new row has to be laid out before its height can be read.
+    // objectName stays fixed: the bridge addresses the button by it. The fill
+    // row also follows m_nbModeOk, since the NB button hides in FM.
+    const bool showFill = advanced && m_hasHostNoiseBlanker && m_nbModeOk;
+    // A visibility change must refit the DSP tab, whose height is pinned to its
+    // size hint; queued, as setDspLevelTarget() does, so the row is laid out first.
     const bool visibilityChanged = m_nbFillContainer->isHidden() == showFill;
     m_nbFillContainer->setVisible(showFill);
     const int index = m_slice ? static_cast<int>(m_slice->nbFill())
@@ -4862,6 +4855,7 @@ void VfoWidget::setSlice(SliceModel* slice)
         // NRL is available on 6000-series too (#2177)
         m_nrlModeOk = !isFm;
         applyRadioSideDspVisibility();
+        refreshNbControls();
         // 8000-series-only firmware DSP filters — shared rule (#2177)
         updateExtendedDspVisibility();
         updateDspTabAccent();
@@ -5447,6 +5441,7 @@ void VfoWidget::syncFromSlice()
     // NRL is available on 6000-series too (#2177)
     m_nrlModeOk = !isFm;
     applyRadioSideDspVisibility();
+    refreshNbControls();
     // 8000-series-only firmware DSP filters — shared rule (#2177)
     updateExtendedDspVisibility();
     m_apfContainer->setVisible(isCw);

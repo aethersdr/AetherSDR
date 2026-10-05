@@ -7773,28 +7773,11 @@ QJsonObject AutomationServer::doSlice(const QString& action, const QString& arg)
             return err(QStringLiteral("slice dsp control must be one of: ")
                        + kWhich.join(QLatin1Char('/')));
 
-        // NB2 IS A HOST-SIDE STAGE, so a radio whose blanker is its own firmware
-        // has nothing to select. Refused rather than folded down to plain `nb`,
-        // for the reason `get hostnb` above refuses rather than answering empty:
-        // a command that reports ok after changing nothing is a test that passes
-        // against a radio where the question is meaningless. It would not even
-        // be a harmless no-op -- SliceModel would reach Advanced and STAY there,
-        // because applyChanges is deliberately written so the radio's `nb=1`
-        // echo cannot pull a host kind back down, and VfoWidget keys the button
-        // label on the kind alone and would read "NB2" on a radio that has none.
-        // That invariant is stated in IRadioBackend.h:764 and SliceModel.h:317
-        // and enforced nowhere; this is where it is enforced.
-        //
-        // WITH THE CONTROL-NAME CHECK and not with the argument checks below,
-        // because on such a radio `nb2` is not a control given bad arguments;
-        // it is not a control at all. That also puts the refusal ahead of slice
-        // resolution, so the answer is about the radio rather than "no slice
-        // available" on a radio that has none yet.
-        //
-        // The capability read and not RadioModel::hasHostNoiseBlanker(), which
-        // is additionally gated on isConnected(): that gate exists to keep a
-        // BUTTON off an unconfirmed radio, and no other branch of `slice dsp`
-        // refuses for being disconnected. Same read as `get hostnb`.
+        // NB2 is a host-side stage: refuse it on a radio without one, before
+        // slice resolution, rather than let the slice reach Advanced and stick
+        // there (a radio's `nb=1` echo cannot downgrade a host kind). Reads the
+        // capability, not RadioModel::hasHostNoiseBlanker(), whose isConnected()
+        // gate is for the button; same read as `get hostnb`.
         if (which == QLatin1String("nb2")
             && !radio->backendCapabilities().hasHostNoiseBlanker)
             return err(QStringLiteral(

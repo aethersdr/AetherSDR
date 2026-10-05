@@ -654,20 +654,10 @@ public:
     {
         Q_UNUSED(sliceId); Q_UNUSED(on); Q_UNUSED(level);
     }
-    // THREE-STATE, unlike its siblings, because WDSP has two impulse blankers
-    // and a host that runs them has to say which. A radio whose blanker is its
-    // own firmware has one, and treats anything but Off as on — that is a
-    // faithful reading of the request, not a silent downgrade: the operator can
-    // only reach Advanced on a radio that publishes hasHostNoiseBlanker.
-    //
-    // `fill` is Advanced's parameter — what goes in the blanked window — and is
-    // carried on every call so a backend never has to remember it separately
-    // from the kind. Meaningless for Impulse and for a radio-side blanker, which
-    // ignore it.
-    //
-    // Level and fill travel with the kind for the reason stated above: one call
-    // carries the whole state, so no ordering between "which blanker" and "how
-    // hard" can exist to get wrong.
+    // Three-state: WDSP has two impulse blankers. Kind, level and fill arrive
+    // together so no ordering between them exists; `fill` is Advanced's only.
+    // A radio with its own single blanker treats anything but Off as on, since
+    // Advanced is reachable only where hasHostNoiseBlanker is published.
     virtual void setSliceNoiseBlanker(int sliceId, AetherSDR::NoiseBlankerKind kind,
                                       int level, AetherSDR::NoiseBlankerFill fill)
     {

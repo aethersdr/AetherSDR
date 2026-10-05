@@ -3,18 +3,10 @@
 #include "core/backends/NoiseBlankerKind.h"
 #include "core/dsp/WdspChannel.h"
 
-// The one place the seam's blanker vocabulary meets the engine's.
-//
-// Two enums exist rather than one because core/dsp is a leaf — WdspChannel
-// depends on Qt and the standard library and nothing else in this tree, and it
-// should not have to include the seam's headers to blank an impulse. The cost of
-// that is a conversion, and the cost of a conversion is that it can rot. So it
-// lives here, once, with static_asserts that fail the BUILD if either enum is
-// renumbered — rather than as a switch in each backend, where a third algorithm
-// added to one enum and not the other would compile and mis-dispatch.
-//
-// Only a backend that runs WDSP on the host includes this. A backend whose
-// blanker is the radio's own firmware never sees the engine's enum at all.
+// The one place the seam's blanker vocabulary meets the engine's (core/dsp is a
+// leaf and keeps its own enums). The static_asserts fail the build if an
+// existing value is renumbered; they do not catch a value added to only one
+// enum. Only backends that run WDSP on the host include this.
 namespace AetherSDR {
 
 static_assert(static_cast<int>(NoiseBlankerKind::Off)

@@ -156,13 +156,6 @@ baseline warn; a new violation or a grown baseline errors.
   present, fields = shape (the `cwText*` pattern) — because a bool cannot
   carry shape and an unset bool reads as a considered "no". Converting one to
   a record lowers `FROZEN_BOOL_COUNT` in the same commit.
-- **Noise-blanker exclusivity** (`tools/check_nb_exclusivity.py`). WDSP's two
-  impulse blankers, ANB and NOB, watch the same detector and blank the same
-  window, so with both running the second reconstructs what the first zeroed.
-  `WdspChannel::setNoiseBlanker()` writes BOTH run flags on every call, outside
-  the per-kind branches, so the stage that was not chosen is always stopped. A
-  text check because it cannot be anything else: the EXT API cannot read a run
-  flag back, so no runtime test can observe which stages are running.
 - **Command-plane freeze** (#5262 M4, `tools/check_command_plane.py`). Raw Flex
   wire text above the seam is frozen per file and may only shrink; **a file
   not already in the baseline must stay at zero.** On HL2/Icom/ANAN/RTL that

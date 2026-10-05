@@ -1257,9 +1257,8 @@ bool WdspChannel::setNoiseBlanker(NoiseBlanker kind, int level,
         } else if (kind == NoiseBlanker::Advanced) {
             flush_nobEXT(m_channelId);
         }
-        // Run flags for both, every time, so the two can never both be running:
-        // the stage that is not chosen is explicitly stopped rather than left as
-        // it was.
+        // processIq feeds only the chosen stage, which is what keeps the two
+        // exclusive; the run flags only follow the kind.
         SetEXTANBRun(m_channelId, kind == NoiseBlanker::Impulse ? 1 : 0);
         SetEXTNOBRun(m_channelId, kind == NoiseBlanker::Advanced ? 1 : 0);
     }
