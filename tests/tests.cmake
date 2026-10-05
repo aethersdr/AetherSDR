@@ -7212,7 +7212,8 @@ set_tests_properties(unified_title_bar_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 if(APPLE)
-    foreach(titlebar_target IN ITEMS unified_title_bar_test titlebar_headphone_mute_test hl2_pc_audio_lock_test)
+    foreach(titlebar_target IN ITEMS unified_title_bar_test titlebar_headphone_mute_test hl2_pc_audio_lock_test
+            mixer_control_availability_test)
         target_sources(${titlebar_target} PRIVATE src/gui/mac/NativeWindowTitle.mm)
         target_link_libraries(${titlebar_target} PRIVATE "-framework AppKit")
     endforeach()
