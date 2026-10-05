@@ -463,29 +463,41 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
   "-DCMAKE_CXX_FLAGS_RELWITHDEBINFO=-O2 -g1 -DNDEBUG" \
   "-DCMAKE_C_FLAGS_RELWITHDEBINFO=-O2 -g1 -DNDEBUG"
 cmake --build build --parallel --target AetherSDR <test_a> <test_b>
-ctest --test-dir build -R '^(test_a|test_b)$' --output-on-failure
+ctest --test-dir build -R '^(test_a|test_b)$' --no-tests=error --output-on-failure
 ```
 
 `AETHER_SHARED_CORE=ON` links every target against one `libaethercore`
-instead of a static copy each, and `-g1` keeps backtraces with a fraction of
-the debug info. Together they shrink a test binary roughly twentyfold. Both are
-for Linux and macOS: on Windows, drop the shared core (it is a configure error)
-and the GCC/Clang flags. The app then loads the core as a shared library, which
-is not how it ships. That is fine for driving behaviour, but name it if a
-finding could depend on link mode. A test that calls WDSP directly does not
-link against the shared core by design; reconfigure static for that one.
-Add `-DCMAKE_{C,CXX}_COMPILER_LAUNCHER=ccache` when ccache is installed.
+instead of a static copy each. `-g1` keeps line tables and function names, so
+backtraces still symbolize, with a fraction of the debug info; it is spelled
+out so the recipe does not depend on the build-type default. Together they
+shrink a test binary roughly twentyfold. The app then loads the core as a
+shared library, which is not how it ships. That is fine for driving
+behaviour, but name it if a finding could depend on link mode. Both are for
+Linux and macOS: on Windows, drop the shared core (it is a configure error)
+and the GCC/Clang flags. A test that calls WDSP directly cannot rely on the
+shared core exporting it, because WDSP is a private, hidden-visibility
+dependency; link `aether_wdsp` explicitly, as the existing direct-call tests
+do, or go through `core/dsp/WdspChannel.h`. Add
+`-DCMAKE_{C,CXX}_COMPILER_LAUNCHER=ccache` when ccache is installed.
 
 Pick the tests from the diff: the ones the PR adds or modifies, the ones its
 body names, and the ones whose `tests/tests.cmake` block compiles a file the
-PR touches (`grep -n 'Touched.cpp' tests/tests.cmake`). Leave out `AetherSDR`
-only when you will not drive the app. The default target builds every test
-executable — several hundred, most linking a large slice of the app and each
-carrying its own debug info — which costs tens of gigabytes and most of the
-build time for binaries the review never runs. An unfiltered `ctest` then
-reports the unbuilt ones as "Not Run"; that is a missing `-R`, not a failure.
-Build the whole tree only when the claim under test is about the tree itself
-(a CMake or link-contract change), and say in the report that you did.
+PR touches (`grep -n 'Touched.cpp' tests/tests.cmake`). When the hit is an
+`OBJECT` library (`aether_test_*`) or a `set(..._SOURCES` list rather than a
+test, grep again for that target or variable name. A file compiled into
+`aethercore` reaches every test that links it, so no grep finds them all;
+pick the ones that exercise the touched code. `-R` matches the
+`add_test(NAME ...)` name, which is usually the target name but not always
+(`settings_browser_dialog_test` registers as `settings_browser_dialog`);
+`--no-tests=error` turns a filter that matched nothing into a failure instead
+of a silent pass. Leave out `AetherSDR` only when you will not drive the app.
+The default target builds every test executable — several hundred, most
+linking a large slice of the app and each carrying its own debug info — which
+costs tens of gigabytes and most of the build time for binaries the review
+never runs. An unfiltered `ctest` then reports the unbuilt ones as "Not Run";
+that is a missing `-R`, not a failure. Build the whole tree only when the
+claim under test is about the tree itself (a CMake or link-contract change),
+and say in the report that you did.
 
 Where the PR adds or changes a test, break the code on purpose and confirm
 the test notices. A regression test that still passes with the fix reverted

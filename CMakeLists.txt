@@ -146,9 +146,9 @@ endif()
 # Build libaethercore as one shared library instead of a static archive. The
 # ~250 test executables that link the core each absorb a full static copy
 # (~200 MB in a Debug ASan build), which exhausts a hosted runner's disk;
-# shared, they average ~13 MB. For the sanitizer lane only, never for releases:
-# the shipped app links the core statically.
-option(AETHER_SHARED_CORE "Build libaethercore as a shared library (sanitizer CI only)" OFF)
+# shared, they average ~13 MB. For the sanitizer lane and local review builds,
+# never for releases: the shipped app links the core statically.
+option(AETHER_SHARED_CORE "Build libaethercore as a shared library (sanitizer and review builds only)" OFF)
 if(AETHER_SHARED_CORE)
     if(WIN32)
         message(FATAL_ERROR "AETHER_SHARED_CORE is not supported on Windows")

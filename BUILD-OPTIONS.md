@@ -149,7 +149,7 @@ These options are for development and qualification.
 | `AETHER_ENABLE_HL2_SIGNAL_STOP_TEST` | OFF | Build the HL2 signal-stop child process. The loopback-UDP process test is registered on non-Windows hosts with Python 3. |
 | `AETHER_ENABLE_RADAR_GL_TEST` | OFF | Build/register the native-GPU weather-radar texture test. Needs a real OpenGL 3.2 context. |
 | `AETHER_BUILD_SPECTRUM_GESTURE_TEST` | OFF | Build/register `spectrum_confirmed_geometry_test`, which compiles the desktop application sources into a test binary to exercise the real `SpectrumWidget` gestures offscreen. |
-| `AETHER_SHARED_CORE` | OFF | Build `libaethercore` as a shared library so the sanitizer lane's test binaries fit on a hosted runner. Sanitizer CI only, never for releases; configuration fails on Windows. |
+| `AETHER_SHARED_CORE` | OFF | Build `libaethercore` as a shared library so the sanitizer lane's test binaries fit on a hosted runner. For the sanitizer lane and local review builds (`/pr-review` step 7), never for releases; configuration fails on Windows. |
 
 Additional cache values accept a value rather than ON/OFF:
 
