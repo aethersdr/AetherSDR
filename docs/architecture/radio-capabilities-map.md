@@ -555,7 +555,7 @@ and conflating them would hide one of them.
 | `radioOwnsDbmScale` | ✅ (default) | ⚠️ **✅ (default)** | ❌ | ❌ | Will the radio adopt a dBm range sent to it and report it back? |
 | `dbmAxisIsCalibrated()` (`panAmplitude->calibratedDbm`) | ✅ (absent) | ❌ | ✅ (absent) | ❌ | Do the numbers on that axis mean absolute dBm at the antenna? |
 | `panBinsAbsolute()` (`panAmplitude->binsAbsolute`) | ❌ (absent) | ✅ | ❌ (absent) | ✅ | Do the spectrum bins hold still while the reference level moves? |
-| `squelchLevelScale` | −160 + 1·L, all modes, Auto SQL | −119 + 0.7·L, AM/SAM/DSB/LSB/USB, no Auto SQL | Flex's (no measured map) | Flex's (no measured map) | Where does squelch level L open, on this axis? |
+| `squelchLevelScale` | −160 + 1·L, all modes, Auto SQL | −119 + 0.7·L, AM/SAM/DSB/LSB/USB, no Auto SQL | IC-7300MK2: −194.8 + 1.49·L on the pan, USB/LSB/CW/CWU/CWL/AM/DIGU/DIGL, no Auto SQL (measured, #6180); Flex's for every other Icom | Flex's (no measured map) | Where does squelch level L open, on this axis? |
 
 **`squelchLevelScale` draws the SQL line and drives Auto SQL** (#6092).
 The demo keeps Flex's scale. RTL-SDR publishes its own gate, −120 + 1.2·L dBFS/bin in FM/FM-N with Auto SQL and `modesExclusive` (see Native squelch above): its detector reads the same FFT as the pan, so a pan-derived floor lands on the gate. Absent, or the active slice's mode not listed: no line, and the SQL button
@@ -570,6 +570,16 @@ stronger signal than his carrier. Auto
 SQL stays off on the HL2 because amsq reads passband-limited magnitude before
 the AGC (`RXA.c` `xamsqcap` after `xnbp(nbp0)`), while the pan floor is per
 bin: a pan-derived floor would need both the filter width and the bin width.
+
+The IC-7300MK2's record is its S-meter squelch measured on the pan (#6180):
+`14 03` searched for the lowest value at which `15 01` reads closed, against
+steady carriers' pan peaks, gives −195.1 + 0.584·raw dBm. That is in the
+pan's dBm, which for Icom is `ScopeCalibration`'s uncalibrated estimate, so a
+pan calibration must move this record with it. It holds with the preamp on and
+for any front end below S9; strong carriers (S9 and up) with the preamp off or
+ATT in sit 6–10 dB under the line, so it reads high there. FM noise squelch and
+WFM have no line. No Auto SQL: the gate reads passband power on the S-meter,
+and the Icom pan's per-bin floor sits below it and often clips at −140.
 
 **`panBinsAbsolute()` is consumed too: as the second term of ONE gate, and as
 the unit of a waterfall row.**

@@ -232,6 +232,18 @@ bool validNtpServer(const QString& address)
     return true;
 }
 
+SquelchLevelScale measuredSquelchScale(const SquelchScaleProfile& profile)
+{
+    SquelchLevelScale sql;
+    sql.offsetDb = profile.offsetDb;
+    sql.dbPerStep = profile.dbPerStep;
+    for (const std::string_view mode : profile.modes) {
+        sql.modes.append(QString::fromUtf8(mode.data(), static_cast<qsizetype>(mode.size())));
+    }
+    sql.autoSquelch = false;
+    return sql;
+}
+
 }  // namespace
 
 IcomCivBackend::IcomCivBackend(QObject* parent)
@@ -508,9 +520,11 @@ RadioCapabilities IcomCivBackend::capabilities() const
     c.hasAgcThreshold = false; // 16 12 selects AGC mode, not Flex AGC-T.
     c.agcModes = {QStringLiteral("slow"), QStringLiteral("med"), QStringLiteral("fast")};
     c.hasModeIndependentSquelch = profile.hasModeIndependentSquelch;
-    // The 0..255 register has no published dB mapping; the SQL line and Auto
-    // SQL keep Flex's scale until one is measured.
-    c.squelchLevelScale = legacyDbmSquelchScale();
+    // The 0..255 register has no published dB mapping. The IC-7300MK2's is
+    // measured; the others keep Flex's scale until theirs are.
+    c.squelchLevelScale = profile.squelchScale
+        ? measuredSquelchScale(*profile.squelchScale)
+        : legacyDbmSquelchScale();
     c.hasCwTune = profile.hasCwTune;
     // setTune() drives the ordinary TUNE producer: one sine wave. There is no
     // CI-V route for a two-tone selection on any profiled model.
