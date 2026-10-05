@@ -171,7 +171,8 @@ constexpr std::array kSpecs = {
                 0, 255, "%", 0, 100,
                 "setSliceSquelch", "sliceSquelchSlider", true,
                 "NO separate enable exists on this radio — the threshold IS the "
-                "control, and squelch is off at zero."},
+                "control. Off writes 0; a 0 read is off unless it echoes our own "
+                "on-at-0 write."},
     ControlSpec{"nr.level", 0x14, 0x06, true, "Noise reduction level",
                 Plane::Slice, Encoding::Level255, Wiring::Both,
                 0, 255, "%", 0, 100,

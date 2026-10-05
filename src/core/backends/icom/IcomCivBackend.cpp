@@ -982,6 +982,9 @@ void IcomCivBackend::disconnectRadio()
     m_controlsValueKnown.clear();
     m_controlsSeen.clear();
     m_confirmedState.clear();
+    // stop() emits no disconnected(), so onSessionDisconnected's reset does
+    // not run for an operator disconnect; the next connect's 0 is not ours.
+    m_squelchOnAtZero = false;
     ++m_stateContext;
     m_controlsSent.clear();
     m_controlsScheduled.clear();
@@ -4636,10 +4639,10 @@ bool IcomCivBackend::queueTunerReadIfSupported(
 void IcomCivBackend::setSliceSquelch(int, bool on, int level)
 {
     m_squelchPercent = on ? level : 0;
-    // NO SQUELCH ENABLE EXISTS on this radio — the threshold IS the control,
-    // and squelch is "off" when it sits at zero. Mapping the UI's toggle onto
-    // the threshold is the only honest translation available; the alternative
-    // is a switch that does nothing.
+    // NO SQUELCH ENABLE EXISTS on this radio — the threshold IS the control.
+    // Off writes 0; on writes the level, and on-at-0 is remembered so its own
+    // 0 readback stays on (the kSquelch decode). Mapping the UI's toggle onto
+    // the threshold is the only honest translation available.
     const int raw = on ? percentToLevelRaw(level) : 0;
     m_squelchOnAtZero = on && raw == 0;
     sendUserCommand(cmdSetLevel(m_session ? m_session->civAddress() : 0xA4,

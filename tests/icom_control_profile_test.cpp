@@ -462,6 +462,27 @@ int main(int argc, char** argv)
         b.setSliceSquelch(0, false, 40);
         IcomCivBackendTestAccess::deliverSquelch(b, 0);
         check(on == false, "an explicit Off write reads back as off");
+
+        // The controls scrub re-asserts on-at-0 as on, so it cannot re-arm the trap.
+        const ControlSpec* squelchSpec = nullptr;
+        for (const auto& spec : controlSpecs()) {
+            if (spec.id == "squelch") { squelchSpec = &spec; }
+        }
+        check(squelchSpec != nullptr, "squelch registry row exists");
+        b.setSliceSquelch(0, true, 0);
+        IcomCivBackendTestAccess::deliverSquelch(b, 0);
+        if (squelchSpec) {
+            check(b.scrubDrive(*squelchSpec), "a known squelch row can be scrubbed");
+            IcomCivBackendTestAccess::deliverSquelch(b, 0);
+            check(on == true, "scrubbing an on-at-0 squelch keeps it on");
+        }
+
+        // An operator disconnect (stop(), no disconnected() signal) forgets
+        // the flag: the next session's connect-time 0 is not our write.
+        b.disconnectRadio();
+        IcomCivBackendTestAccess::prepareSession(b, *model);
+        IcomCivBackendTestAccess::deliverSquelch(b, 0);
+        check(on == false, "after an operator disconnect, a connect-time 0 reads as off");
     }
     return g_failures ? 1 : 0;
 }
