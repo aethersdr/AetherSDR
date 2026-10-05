@@ -23,6 +23,10 @@ SimBackend::SimBackend(QObject* parent) : IRadioBackend(parent)
     m_signalThread->setObjectName("SimSignalSource");
     m_signalSource = new SimSignalSource;   // no parent — moved to thread
     m_signalSource->moveToThread(m_signalThread);
+    // High QoS: performance cores, no power throttling (macOS/Windows; no-op
+    // on Linux). Never add setPriority()/start(priority) to this thread (demo audio/spectrum) — on
+    // macOS an explicit priority silently cancels the QoS class.
+    m_signalThread->setServiceLevel(QThread::QualityOfService::High);
     m_signalThread->start();
 
     // Gated on m_connected, not plain signal-to-signal: stop() reaches the

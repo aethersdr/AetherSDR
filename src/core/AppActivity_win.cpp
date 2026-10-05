@@ -33,13 +33,13 @@ void keepAppActive()
 
     // No idle system sleep. A power request is its own object (visible in
     // `powercfg /requests`), so SleepInhibitor's SetThreadExecutionState
-    // reset on disconnect cannot clear it. Handle is held until exit.
+    // reset on disconnect cannot clear it. Never closed: held until exit.
     REASON_CONTEXT reason{};
     reason.Version = POWER_REQUEST_CONTEXT_VERSION;
     reason.Flags = POWER_REQUEST_CONTEXT_SIMPLE_STRING;
     reason.Reason.SimpleReasonString =
         const_cast<LPWSTR>(L"AetherSDR audio, DAX and TCI streaming");
-    const HANDLE request = PowerCreateRequest(&reason);
+    static const HANDLE request = PowerCreateRequest(&reason);
     const bool noSleep = request != INVALID_HANDLE_VALUE
         && PowerSetRequest(request, PowerRequestSystemRequired);
 

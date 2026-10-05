@@ -6876,9 +6876,13 @@ void RadioModel::onConnected()
         emit infoChanged();
     }
 
-    // Inhibit system sleep while connected if the user has opted in (#1420)
+    // Inhibit system sleep while connected if the user has opted in (#1420).
+    // Linux only: macOS/Windows already hold an app-lifetime idle-sleep block
+    // (keepAppActive(), #6192) and no longer show the option.
+#if !defined(Q_OS_MACOS) && !defined(Q_OS_WIN)
     if (AppSettings::instance().value("InhibitSleepWhileConnected", "False").toString() == "True")
         m_sleepInhibitor.acquire("AetherSDR connected to radio");
+#endif
 
     // A fresh command session is the one thing that makes a firmware retry
     // unambiguous again: any `file update` status arriving now belongs to this

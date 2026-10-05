@@ -336,6 +336,10 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
     m_dspBuildThread->setObjectName(QStringLiteral("hl2-dsp-build"));
     m_dspBuildContext = new QObject();   // nullptr parent: moveToThread requires it
     m_dspBuildContext->moveToThread(m_dspBuildThread);
+    // Same High QoS as the io thread: this thread holds the FFTW planner mutex
+    // the io thread takes in WdspChannel::setShift, so a lower class here would
+    // be a priority inversion. Idle except during a rebuild.
+    m_dspBuildThread->setServiceLevel(QThread::QualityOfService::High);
     m_dspBuildThread->start();
 
     // THE UNKEY HOLD. Single-shot and parented here, so it lives and fires on

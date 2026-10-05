@@ -4873,6 +4873,9 @@ QWidget* RadioSetupDialog::buildAudioTab()
     }
 
     // ── Prevent Sleep ───────────────────────────────────────────────────
+    // Linux only: on macOS/Windows AetherSDR blocks idle system sleep for as
+    // long as it is open (keepAppActive(), #6192), which supersedes this.
+#if !defined(Q_OS_MACOS) && !defined(Q_OS_WIN)
     {
         auto* sleepCheck = new QCheckBox("Prevent system sleep while connected");
         AetherSDR::ThemeManager::instance().applyStyleSheet(sleepCheck,
@@ -4890,6 +4893,7 @@ QWidget* RadioSetupDialog::buildAudioTab()
         });
         vbox->addWidget(sleepCheck);
     }
+#endif
 
     // ── PC Audio Devices ────────────────────────────────────────────────
     auto* pcGroup = new QGroupBox("PC Audio Devices");

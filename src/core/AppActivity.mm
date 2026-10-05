@@ -15,7 +15,10 @@ void keepAppActive()
     activity = [[[NSProcessInfo processInfo]
         beginActivityWithOptions:NSActivityUserInitiated
                           reason:@"AetherSDR audio, DAX and TCI streaming"] retain];
-    qCInfo(lcAudio) << "AppActivity: App Nap and idle system sleep disabled";
+    if (activity)
+        qCInfo(lcAudio) << "AppActivity: App Nap and idle system sleep disabled";
+    else
+        qCWarning(lcAudio) << "AppActivity: beginActivityWithOptions returned nil";
 }
 
 } // namespace AetherSDR

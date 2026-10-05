@@ -5,16 +5,19 @@
 // silent (e.g. WSJT-X in front, AetherSDR minimized and muted, feeding it
 // over TCI/DAX). The display may still sleep.
 //
-//   macOS:   NSProcessInfo user-initiated activity — no App Nap (timer
-//            coalescing, I/O and priority throttling), no idle system sleep.
+//   macOS:   NSProcessInfo NSActivityUserInitiated — no App Nap (timer
+//            coalescing, I/O and priority throttling), no idle system sleep,
+//            and (implied by that option set) sudden/automatic termination
+//            disabled, so logout sends a normal quit.
 //   Windows: PowerRequestSystemRequired (no idle system sleep), process power
 //            throttling off (HighQoS, not EcoQoS), and timer-resolution
 //            requests honoured while minimized/occluded.
-//   Linux:   no-op; SleepInhibitor still covers the connected session.
+//   Linux:   no-op; the opt-in "Prevent system sleep while connected"
+//            (SleepInhibitor, #1420) remains, Linux only.
 //
-// Independent of SleepInhibitor, so its release on disconnect does not drop
-// this. Call once from the GUI thread after QApplication exists; held until
-// exit.
+// Supersedes the #1420 opt-in on macOS/Windows, where that option is no
+// longer shown. Call once from the GUI thread after QApplication exists;
+// held until exit.
 namespace AetherSDR {
 #if defined(__APPLE__) || defined(_WIN32)
 void keepAppActive();

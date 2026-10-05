@@ -94,6 +94,7 @@ DaxIqModel::DaxIqModel(QObject* parent)
         m_streams[i].channel = i + 1;
 
     m_worker = new DaxIqWorker;
+    m_workerThread.setObjectName(QStringLiteral("DaxIq"));
     m_worker->moveToThread(&m_workerThread);
     connect(&m_workerThread, &QThread::finished, m_worker, &QObject::deleteLater);
     connect(m_worker, &DaxIqWorker::levelReady,   this, &DaxIqModel::iqLevelReady);
