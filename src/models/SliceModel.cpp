@@ -978,7 +978,7 @@ void SliceModel::setActive(bool on)
         }
         emit controlRequested({field, true});
         if (!current()) { return; }
-        // Compatibility notification for local consumers. Backend selection
+        // Compatibility notification for test observers. Backend selection
         // (including clearing the previous slice) uses controlRequested above.
         emit activeSliceCommandIssued();
         if (!current()) { return; }
@@ -1115,7 +1115,8 @@ void SliceModel::applyRecalledFmRepeater(const QString& direction, double offset
     applyRecalledFmRepeaterState(
         direction, offsetMhz, toneMode, toneHz, 0.0);
     if (!current()) { return; }
-    emit controlRequested({field, RepeaterSetting{direction, offsetMhz * 1.0e6, toneMode, toneHz}});
+    emit controlRequested({field, RepeaterSetting{direction, offsetMhz * 1.0e6, toneMode, toneHz},
+                           SliceControlRequest::Origin::RadioDefaultRestore});
     if (!current()) { return; }
     emit fmRepeaterRecallCommandIssued(direction, offsetMhz * 1.0e6,
                                        toneMode, toneHz);

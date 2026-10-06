@@ -199,6 +199,11 @@ void routingAndReentrancy()
     slice->setRit(true, 100);
     check(commands == QStringList{"slice set 0 rit_on=1 rit_freq=100"}, "RIT has one route");
     commands.clear();
+    QSignalSpy dropped(&radio, &RadioModel::commandDropped);
+    slice->applyRecalledFmRepeater(QStringLiteral("up"), 0.6, QStringLiteral("ctcss_tx"), 88.5);
+    check(commands.isEmpty() && dropped.isEmpty()
+              && slice->repeaterOffsetDir() == QStringLiteral("up"),
+          "Flex local-bank recall stays local without an unsupported-control notice");
     backend->connected = false;
     slice->setXit(true, 200);
     check(commands.isEmpty(), "disconnected slice cannot dispatch");
@@ -246,10 +251,38 @@ void noOpReentrancy()
           "reentrant equal or clamped no-ops do not cancel the accepted intent's notification");
 }
 
+void heldDelayReentrancy()
+{
+    TransmitModel model;
+    FlexBackend backend;
+    QStringList commands;
+    QObject::connect(&model, &TransmitModel::controlRequested, &backend,
+                     [&](const TransmitControlRequest& request) { backend.requestTransmitControl(request); });
+    backend.setCommandSink([&](const QString& command) { commands.append(command); });
+    model.setHoldBreakInDelay(true);
+    bool nested = false;
+    QObject::connect(&model, &TransmitModel::phoneStateChanged, &model, [&] {
+        if (!nested) {
+            nested = true;
+            model.setCwSpeed(27);
+        }
+    });
+    model.setCwDelay(300);
+    check(commands == QStringList{"cw wpm 27", "cw break_in_delay 300"},
+          "held-delay reassertion retires the outer pending delay intent");
+}
+
 void deletionAndMalformedInput()
 {
     check(!SliceControlRequest{}.valid() && !TransmitControlRequest{}.valid(),
           "default-constructed control requests fail closed");
+    using Field = SliceControlRequest::Field;
+    using Origin = SliceControlRequest::Origin;
+    check(SliceControlRequest{Field::RepeaterRecall, RepeaterSetting{"up", 600000, "ctcss_tx", 88.5},
+                              Origin::RadioDefaultRestore}.valid()
+              && !SliceControlRequest{Field::TxSlice, true, Origin::RadioDefaultRestore}.valid()
+              && !SliceControlRequest{Field::RepeaterRecall, true, Origin::RadioDefaultRestore}.valid(),
+          "restore origin permits valid grouped recall but neither TX selection nor malformed payloads");
     int requests = 0;
     auto tx = std::make_unique<TransmitModel>();
     QObject::connect(tx.get(), &TransmitModel::controlRequested, QCoreApplication::instance(),
@@ -279,6 +312,7 @@ int main(int argc, char** argv)
     sliceEncoding();
     routingAndReentrancy();
     noOpReentrancy();
+    heldDelayReentrancy();
     deletionAndMalformedInput();
     return failures ? 1 : 0;
 }

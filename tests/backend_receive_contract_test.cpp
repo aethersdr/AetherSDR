@@ -634,8 +634,19 @@ void remainingModelControls()
     check(hl2.requestSliceControl(0, {SF::Rit, IncrementalTuning{true, 123}})
               == ReceiveDispatch::Dispatched && nested && last(observations).ritFreq == 456,
           "HL2 paired RIT commits before readback; a reentrant newer request wins");
+    const auto ritObservations = observations.size();
+    check(hl2.requestSliceControl(0, {SF::Rit, IncrementalTuning{true, 456}})
+              == ReceiveDispatch::Dispatched && observations.size() == ritObservations,
+          "an identical HL2 RIT pair publishes no redundant observation");
     hl2.requestSliceControl(0, {SF::Xit, IncrementalTuning{true, 20000}});
     check(last(observations).xitFreq == 9999, "HL2 typed XIT retains the production clamp");
+    const auto xitObservations = observations.size();
+    hl2.requestSliceControl(0, {SF::Xit, IncrementalTuning{true, 9999}});
+    check(observations.size() == xitObservations,
+          "an identical HL2 XIT pair publishes no redundant observation");
+    hl2.requestSliceControl(0, {SF::Xit, IncrementalTuning{true, 20000}});
+    check(observations.size() == xitObservations + 1 && last(observations).xitFreq == 9999,
+          "an oversized repeated XIT intent still receives its corrective clamp observation");
     check(hl2.requestTransmitControl({TF::TunePower, 20}) == ReceiveDispatch::LocalOnly
               && hl2.requestTransmitControl({TF::TunePower, 20}, TunePowerContext::LiveLocalCarrier)
                   == ReceiveDispatch::Unsupported,

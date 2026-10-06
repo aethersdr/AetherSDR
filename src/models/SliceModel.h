@@ -420,16 +420,14 @@ signals:
     void receiveLockRequested(bool locked);
     void controlRequested(const AetherSDR::SliceControlRequest& request);
 
-    // Receive and transmit incremental tuning.
+    // Compatibility intent signals for test observers; production backend
+    // dispatch uses controlRequested. Radio observations never emit these.
     void ritCommandIssued(bool on, int hz);
     void xitCommandIssued(bool on, int hz);
-    // Operator asked for THIS slice to own transmit. A radio with one
-    // transmitter and several receivers has to move it rather than set a flag.
+    // Test notification that the operator asked for this slice to own TX.
     void txSliceCommandIssued();
-    // Operator selected THIS slice as the one the shared controls act on.
-    // Separate from activeChanged, which also fires when radio status is
-    // applied — driving a command off that would echo the radio's own state
-    // back as a request (Principle II).
+    // Test notification of operator selection, separate from activeChanged,
+    // which also fires for radio observations.
     void activeSliceCommandIssued();
     void panIdChanged(const QString& panId);
     void modeChanged(const QString& mode);

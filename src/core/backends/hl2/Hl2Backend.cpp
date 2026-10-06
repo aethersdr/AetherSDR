@@ -3120,6 +3120,9 @@ ReceiveDispatch Hl2Backend::requestSliceControl(int sliceId, const SliceControlR
         // Commit the pair before publishing. An enable echo can synchronously
         // trigger a newer request; no tail of this request may overwrite it.
         if (request.field == Field::Rit) {
+            if (receiver->ritOn == tuning.enabled && receiver->ritHz == hz && hz == tuning.hz) {
+                return ReceiveDispatch::Dispatched;
+            }
             const bool moves = (receiver->ritOn ? receiver->ritHz : 0) != (tuning.enabled ? hz : 0);
             receiver->ritOn = tuning.enabled;
             receiver->ritHz = hz;
@@ -3127,6 +3130,9 @@ ReceiveDispatch Hl2Backend::requestSliceControl(int sliceId, const SliceControlR
             if (moves) { retuneReceiver(ddc); }
             else { emitSliceState(ddc); }
         } else {
+            if (receiver->xitOn == tuning.enabled && receiver->xitHz == hz && hz == tuning.hz) {
+                return ReceiveDispatch::Dispatched;
+            }
             const bool moves = (receiver->xitOn ? receiver->xitHz : 0) != (tuning.enabled ? hz : 0);
             receiver->xitOn = tuning.enabled;
             receiver->xitHz = hz;
@@ -3142,7 +3148,15 @@ ReceiveDispatch Hl2Backend::requestSliceControl(int sliceId, const SliceControlR
     case Field::TxSlice:
         if (std::get<bool>(request.value)) { setTxSlice(sliceId); }
         break;
-    default: return ReceiveDispatch::Unsupported;
+    case Field::TxAntenna: case Field::DaxChannel: case Field::RttyMark:
+    case Field::RttyShift: case Field::DiglOffset: case Field::DiguOffset:
+    case Field::Record: case Field::Play: case Field::FmToneMode:
+    case Field::FmToneValue: case Field::FmRxToneValue: case Field::FmDtcs:
+    case Field::RepeaterDirection: case Field::RepeaterOffset: case Field::TxOffset:
+    case Field::FmDeviation: case Field::RfGain: case Field::Diversity:
+    case Field::EscEnabled: case Field::EscGain: case Field::EscPhase:
+    case Field::RepeaterRecall: case Field::Count:
+        return ReceiveDispatch::Unsupported;
     }
     return ReceiveDispatch::Dispatched;
 }
@@ -3176,7 +3190,14 @@ ReceiveDispatch Hl2Backend::requestTransmitControl(const TransmitControlRequest&
     case Field::MicInput:
         return std::get<QString>(request.value) == QLatin1String("PC")
             ? ReceiveDispatch::LocalOnly : ReceiveDispatch::Unsupported;
-    default: return ReceiveDispatch::Unsupported;
+    case Field::TuneMode: case Field::MicAccessory: case Field::Dax:
+    case Field::MonitorEnabled: case Field::MonitorLevel: case Field::VoxEnabled:
+    case Field::VoxLevel: case Field::VoxDelay: case Field::MicBoost:
+    case Field::MicBias: case Field::AmCarrier: case Field::ExpanderEnabled:
+    case Field::ExpanderLevel: case Field::CwlEnabled: case Field::TxProfile:
+    case Field::MicProfile: case Field::ApdEnabled: case Field::ApdSampler:
+    case Field::ApdReset: case Field::AtuMemories: case Field::AtuClear: case Field::Count:
+        return ReceiveDispatch::Unsupported;
     }
     return ReceiveDispatch::Dispatched;
 }

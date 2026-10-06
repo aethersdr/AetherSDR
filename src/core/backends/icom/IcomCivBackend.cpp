@@ -4420,12 +4420,17 @@ ReceiveDispatch IcomCivBackend::requestSliceControl(int sliceId, const SliceCont
                                          : setting.toneHz > 299.9)) {
             return ReceiveDispatch::Unsupported;
         }
-        setSliceFmRepeater(sliceId, setting.direction, setting.offsetHz, setting.toneMode, setting.toneHz);
+        setSliceFmRepeater(sliceId, direction, setting.offsetHz, mode, setting.toneHz);
         break;
     }
     case Field::ActiveSlice: case Field::TxSlice:
         return ReceiveDispatch::LocalOnly; // the existing sole selected VFO
-    default: return ReceiveDispatch::Unsupported;
+    case Field::TxAntenna: case Field::DaxChannel: case Field::RttyMark:
+    case Field::RttyShift: case Field::DiglOffset: case Field::DiguOffset:
+    case Field::Record: case Field::Play: case Field::TxOffset:
+    case Field::FmDeviation: case Field::RfGain: case Field::Diversity:
+    case Field::EscEnabled: case Field::EscGain: case Field::EscPhase: case Field::Count:
+        return ReceiveDispatch::Unsupported;
     }
     return ReceiveDispatch::Dispatched;
 }
@@ -4448,15 +4453,7 @@ ReceiveDispatch IcomCivBackend::requestTransmitControl(const TransmitControlRequ
             return ReceiveDispatch::Unsupported;
         }
         setTunePower(std::get<int>(request.value)); break;
-    case Field::MicGain: {
-        const auto mod = modulationProfileFor(*m_model);
-        if (mod && mod->phoneLevelFollowsNetworkInput
-            && (m_dataMode ? m_dataModInput : m_dataOffModInput) == mod->networkOnlyValue
-            && m_networkModLevelPercent < 0) {
-            return ReceiveDispatch::Unsupported;
-        }
-        setMicGain(std::get<int>(request.value)); break;
-    }
+    case Field::MicGain: setMicGain(std::get<int>(request.value)); break;
     case Field::CwPitch: case Field::CwSpeed: case Field::CwBreakIn:
         // Preserve the current capability gate until #6110 defines its replacement.
         if (!caps.hasRadioSideCwKeyer) { return ReceiveDispatch::Unsupported; }
@@ -4486,7 +4483,15 @@ ReceiveDispatch IcomCivBackend::requestTransmitControl(const TransmitControlRequ
         const MonitorSetting setting = std::get<MonitorSetting>(request.value);
         setTxMonitor(setting.enabled, setting.level); break;
     }
-    default: return ReceiveDispatch::Unsupported;
+    case Field::TuneMode: case Field::MicInput: case Field::MicAccessory:
+    case Field::Dax: case Field::VoxDelay: case Field::MicBoost: case Field::MicBias:
+    case Field::AmCarrier: case Field::ExpanderEnabled: case Field::ExpanderLevel:
+    case Field::CwDelay: case Field::CwSidetone: case Field::CwIambic:
+    case Field::CwIambicMode: case Field::CwSwap: case Field::CwlEnabled:
+    case Field::CwMonitorGain: case Field::CwMonitorPan: case Field::TxProfile:
+    case Field::MicProfile: case Field::ApdEnabled: case Field::ApdSampler:
+    case Field::ApdReset: case Field::AtuMemories: case Field::AtuClear: case Field::Count:
+        return ReceiveDispatch::Unsupported;
     }
     return ReceiveDispatch::Dispatched;
 }

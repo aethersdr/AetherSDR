@@ -1020,8 +1020,9 @@ void TransmitModel::setCwSpeed(int wpm)
     // Never write m_cwDelay here: it stays radio truth, and a refused or
     // unechoed value would never be corrected.
     if (speedChanged && m_holdBreakInDelay && m_cwDelayHeld > 0) {
+        const auto delayCurrent = captureControlIntent(TransmitControlRequest::Field::CwDelay);
         emit controlRequested({TransmitControlRequest::Field::CwDelay, m_cwDelayHeld});
-        if (!current()) { return; }
+        if (!current() || !delayCurrent()) { return; }
         // Log only the real divergence — the radio's delay having actually moved
         // off what the operator set — not every prophylactic re-send. qCWarning,
         // not qCInfo: aether.transmit is a QtWarningMsg category, so Info would

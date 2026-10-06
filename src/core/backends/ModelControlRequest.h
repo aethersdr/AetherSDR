@@ -69,7 +69,8 @@ inline bool controlTextValid(const QString& text)
 inline bool SliceControlRequest::valid() const
 {
     if (origin != Origin::Operator
-        && !(origin == Origin::RadioDefaultRestore && field == Field::RttyMark)) {
+        && !(origin == Origin::RadioDefaultRestore
+             && (field == Field::RttyMark || field == Field::RepeaterRecall))) {
         return false;
     }
     const int* integer = std::get_if<int>(&value);

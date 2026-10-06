@@ -1,6 +1,7 @@
 // Socket-free production routing: dispatch receipts, not capability guesses,
 // determine notices. Keying is recorded by the injected backend only.
 #include "TestSettingsProfile.h"
+#include "IcomReceiveContractTestAccess.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include <QCoreApplication>
@@ -76,6 +77,10 @@ void receipts()
     f.radio.slice(0)->setActive(true);
     check(f.radio.slice(0)->isActive() && f.dropped.isEmpty(),
           "local slice selection never consumes the unsupported-control notice");
+    f.radio.slice(0)->applyRecalledFmRepeater(QStringLiteral("up"), 0.6,
+                                           QStringLiteral("ctcss_tx"), 88.5);
+    check(f.dropped.isEmpty() && f.radio.slice(0)->fmToneMode() == QStringLiteral("ctcss_tx"),
+          "local memory recall applies its state without consuming the refusal notice");
     TransmitModel& tx = f.radio.transmitModel();
     tx.setRfPower(42);
     check(f.backend->requests.size() == 1 && f.dropped.size() == 1,
@@ -197,6 +202,44 @@ void cwPitchBackendLifetime()
               && f.dropped.isEmpty(),
           "a pitch handed only to the old backend is dispatched to its replacement");
 }
+
+void icomMicReadbackWindow()
+{
+    using Access = icom::IcomCivBackendTestAccess;
+    RadioModel radio;
+    auto owned = std::make_unique<icom::IcomCivBackend>();
+    icom::IcomCivBackend* backend = owned.get();
+    radio.setBackendForTest(std::move(owned), QStringLiteral("icom-mic-readback-test"));
+    Access::prepare(*backend);
+    Access::selectModel(*backend, *icom::modelForId(0xA2));
+    QStringList dropped;
+    QObject::connect(&radio, &RadioModel::commandDropped, &radio,
+                     [&](const QString& operation) { dropped.append(operation); });
+    // IC-9700 CI-V guide: DATA OFF MOD input is SET 0115; LAN is 05.
+    icom::CivFrame input;
+    input.cmd = icom::cmd::kSetting;
+    input.hasSub = true;
+    input.sub = 0x05;
+    input.data = {0x01, 0x15, 0x05};
+    Access::observe(*backend, input);
+    const auto queued = Access::queuedCount(*backend);
+    const auto dispatched = Access::dispatchCount(*backend);
+    radio.transmitModel().setMicLevel(34);
+    check(dropped.isEmpty() && Access::queuedCount(*backend) == queued
+              && Access::dispatchCount(*backend) == dispatched,
+          "unestablished LAN mic readback neither writes a register nor reports unsupported");
+    // The radio establishes LAN MOD level via SET 0114 before an operator edit.
+    icom::CivFrame level = input;
+    level.data = {0x01, 0x14, 0x00, 0x26};
+    Access::observe(*backend, level);
+    check(Access::queuedCount(*backend) == queued && Access::dispatchCount(*backend) == dispatched,
+          "LAN level readback does not replay the earlier slider intent");
+    radio.transmitModel().setMicLevel(35);
+    Access::pump(*backend);
+    check(dropped.isEmpty()
+              && Access::dispatched(*backend, QStringLiteral("fe fe a4 e0 1a 05 01 14 00 90 fd")),
+          "after LAN readback, the routed slider dispatches the actual LAN MOD write");
+}
 }
 int main(int argc, char** argv)
 {
@@ -210,5 +253,6 @@ int main(int argc, char** argv)
     tuneOwnership();
     filterWarningReentrancy();
     cwPitchBackendLifetime();
+    icomMicReadbackWindow();
     return failures ? 1 : 0;
 }

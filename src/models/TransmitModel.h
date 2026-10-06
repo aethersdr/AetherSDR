@@ -458,14 +458,11 @@ signals:
     // instead of phoneStateChanged for slot work that should NOT run on
     // every VOX/CW/dexp/mic-boost/etc. status update.
     void txFilterCutoffChanged(int lowHz, int highHz);
-    // Compatibility notification that the operator asked for a TX passband.
+    // Compatibility notification for test observers of a TX passband request.
     // Backend dispatch uses controlRequested. Unlike txFilterCutoffChanged,
     // neither intent signal is emitted by radio status (Principle II).
     void txFilterCommandIssued(int lowHz, int highHz);
-    // The operator moved the MIC slider. OPERATOR INTENT ONLY, for exactly the
-    // reason txFilterCommandIssued carries above: applyStatus() must never emit
-    // this, or a Flex's own `transmit set miclevel=` echo would be handed
-    // straight back to the seam as a fresh command.
+    // Test notification of MIC-slider intent; radio observations never emit it.
     void micLevelCommandIssued(int level);
     // The operator moved PROC or its NOR/DX/DX+ level. OPERATOR INTENT ONLY,
     // for the same reason as txFilterCommandIssued — and here the distinction is
@@ -476,21 +473,21 @@ signals:
     // transition and overwrite the settings the operator had just dialled in
     // there. applySpeechProcessorState() never emits this.
     void speechProcessorCommandIssued(bool on, int level);
-    // Compatibility intent notifications for local consumers. Backend setting
-    // dispatch uses controlRequested exclusively; ATU start/stop retains its
-    // separate operation-fenced route. Radio status never emits these.
+    // Compatibility setting-intent notifications for test observers. Backend
+    // dispatch uses controlRequested exclusively. Radio status never emits them.
     void voxCommandIssued(bool on, int level, int delayMs);
     void monitorCommandIssued(bool on, int level);
     void rfPowerCommandIssued(int percent);
     void tunePowerCommandIssued(int percent);
+    // Production ATU start/stop uses this separate operation-fenced route.
     void atuCommandIssued(bool start);
     // Fires only when cwPitch actually changes. Use this instead of
     // phoneStateChanged for slot work that should NOT run on every
     // VOX/CW/dexp/mic-boost/etc. status update (e.g. #4423 KiwiSDR BFO sync).
     void cwPitchChanged(int hz);
     void cwSpeedChanged(int wpm);
-    // Operator intent only. Radio status applied through applyStatus() never
-    // emits these, so a CI-V readback cannot loop straight back into a write.
+    // Compatibility CW-intent notifications for test observers; radio
+    // observations never emit them. Backend dispatch uses controlRequested.
     void cwPitchCommandIssued(int hz);
     void cwSpeedCommandIssued(int wpm);
     void cwBreakInCommandIssued(bool on);
