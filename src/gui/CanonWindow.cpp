@@ -331,7 +331,7 @@ void SparkRing::paintEvent(QPaintEvent*)
     disc.addEllipse(imageRect);
     p.save();
     p.setClipPath(disc);
-    p.drawPixmap(imageRect.topLeft(), m_scaled);
+    p.drawPixmap(imageRect.toRect(), m_scaled);   // whole pixels: no resampling blur
     p.restore();
 
     // Contrast ring just outside the image, so the dark mark separates from
