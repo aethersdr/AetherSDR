@@ -1,15 +1,19 @@
 #include "CanonWindow.h"
 
+#include "FramelessMoveHelper.h"
+
 #include "core/ThemeManager.h"
 
 #include <QConicalGradient>
 #include <QGuiApplication>
+#include <QKeySequence>
 #include <QLinearGradient>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
 #include <QRadialGradient>
 #include <QScreen>
+#include <QShortcut>
 #include <QTimer>
 #include <QToolButton>
 #include <QVBoxLayout>
@@ -18,12 +22,19 @@
 namespace AetherSDR {
 
 namespace {
-constexpr int kInset = 1;            // hairline border inside the window edge
 constexpr int kCloseSize = 26;
 constexpr int kCloseMargin = 12;
 constexpr int kGridStep = 64;
 constexpr int kSparkLapMs = 7000;
 constexpr int kSparkFrameMs = 33;
+
+// A spark frame is wasted on a window nobody can see. Qt sends no hideEvent
+// when a window is minimised or covered, but the window stops being exposed.
+bool sparkVisible(const QWidget* w)
+{
+    const QWindow* handle = w->window()->windowHandle();
+    return handle && handle->isExposed();
+}
 } // namespace
 
 CanonWindow::CanonWindow(const QString& title, QWidget* parent)
@@ -59,6 +70,14 @@ CanonWindow::CanonWindow(const QString& title, QWidget* parent)
         "QToolButton:hover { background: {{color.canon.nested}}; color: {{color.canon.ink}}; border-color: {{color.canon.lineHi}}; }"
         "QToolButton:focus { border: 2px solid {{color.canon.cyan}}; }");
     connect(m_close, &QToolButton::clicked, this, &QDialog::close);
+
+    // QDialog handles Escape itself; a caption-less window gets no Close
+    // shortcut from the platform, so ⌘W / Ctrl+W is wired here.
+    auto* closeShortcut = new QShortcut(QKeySequence::Close, this);
+    connect(closeShortcut, &QShortcut::activated, this, &QDialog::reject);
+
+    // The ground is painted from tokens; repaint it when the theme changes.
+    connect(&tm, &ThemeManager::themeChanged, this, qOverload<>(&QWidget::update));
 }
 
 void CanonWindow::resizeEvent(QResizeEvent* event)
@@ -87,12 +106,29 @@ void CanonWindow::showEvent(QShowEvent* event)
 void CanonWindow::mousePressEvent(QMouseEvent* event)
 {
     // Empty areas of the window move it (the window has no title bar).
-    if (event->button() == Qt::LeftButton && windowHandle()) {
-        windowHandle()->startSystemMove();
-        event->accept();
+    // FramelessMoveHelper picks startSystemMove() or the #4827 manual move:
+    // startSystemMove() silently fails on xcb (QTBUG-69716) and on Windows
+    // with WA_TranslucentBackground (QTBUG-90628), which this window sets.
+    if (FramelessMoveHelper::start(this, event)) {
         return;
     }
     QDialog::mousePressEvent(event);
+}
+
+void CanonWindow::mouseMoveEvent(QMouseEvent* event)
+{
+    if (FramelessMoveHelper::move(this, event)) {
+        return;
+    }
+    QDialog::mouseMoveEvent(event);
+}
+
+void CanonWindow::mouseReleaseEvent(QMouseEvent* event)
+{
+    if (FramelessMoveHelper::finish(this, event)) {
+        return;
+    }
+    QDialog::mouseReleaseEvent(event);
 }
 
 void CanonWindow::paintEvent(QPaintEvent*)
@@ -154,6 +190,8 @@ SparkRing::SparkRing(const QPixmap& image, int diameter, QWidget* parent)
     m_timer = new QTimer(this);
     m_timer->setInterval(kSparkFrameMs);
     connect(m_timer, &QTimer::timeout, this, [this] {
+        if (!sparkVisible(this))
+            return;
         m_angle -= 360.0 * kSparkFrameMs / kSparkLapMs;   // clockwise
         if (m_angle < 0.0)
             m_angle += 360.0;
@@ -240,11 +278,14 @@ SparkBorder::SparkBorder(QWidget* child, int radius, QWidget* parent)
 {
     setAttribute(Qt::WA_TranslucentBackground);
     auto* lay = new QVBoxLayout(this);
-    lay->setContentsMargins(kSparkGap + 2, kSparkGap + 2, kSparkGap + 2, kSparkGap + 2);
+    // Room outside the outline for half of the 5 px glow pen.
+    lay->setContentsMargins(kSparkGap + 3, kSparkGap + 3, kSparkGap + 3, kSparkGap + 3);
     lay->addWidget(child);
     m_timer = new QTimer(this);
     m_timer->setInterval(kSparkFrameMs);
     connect(m_timer, &QTimer::timeout, this, [this] {
+        if (!sparkVisible(this))
+            return;
         m_angle -= 360.0 * kSparkFrameMs / kSparkBorderLapMs;   // clockwise
         if (m_angle < 0.0)
             m_angle += 360.0;
