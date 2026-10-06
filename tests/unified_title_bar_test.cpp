@@ -705,7 +705,7 @@ int main(int argc, char** argv)
 
         auto* menuBarHost = new TitleBar(&menuHost);
         menuBarHost->setMenuBar(menuBar);
-        menuBar->addMenu(QStringLiteral("&Help"));   // added after the hand-off
+        QMenu* helpMenu = menuBar->addMenu(QStringLiteral("&Help"));   // added after the hand-off
         menuHost.resize(1400, 200);
         menuHost.show();
         QApplication::setActiveWindow(&menuHost);
@@ -740,9 +740,23 @@ int main(int argc, char** argv)
         check(menuBtn && menuBtn->isVisible() && !menuBar->isVisible(),
               "leaving minimal mode restores only the hamburger");
 
+        // Rounded corners need a see-through, shadowless window under the
+        // stylesheet radius, on every menu the hamburger reaches.
+        auto rounded = [](const QMenu* m) {
+            return m && m->testAttribute(Qt::WA_TranslucentBackground)
+                && m->windowFlags().testFlag(Qt::NoDropShadowWindowHint);
+        };
+        check(rounded(appMenu) && rounded(fileMenu) && rounded(helpMenu),
+              "the hamburger and its menus, including one added later, are rounded");
+        check(appMenu && appMenu->styleSheet().contains(QStringLiteral("border-radius: 8px")),
+              "the hamburger menu panel carries the 8 px radius");
+        QMenu* lateSubmenu = fileMenu->addMenu(QStringLiteral("Recent"));
+        check(!rounded(lateSubmenu), "a submenu added later is not rounded until its parent opens");
+
         QTest::keyClick(&menuHost, Qt::Key_F, Qt::AltModifier);
         check(QApplication::activePopupWidget() == fileMenu,
               "Alt+F still opens the File menu with the menu bar hidden");
+        check(rounded(lateSubmenu), "opening a menu rounds the submenus added to it since");
         fileMenu->close();
         app.processEvents();
 

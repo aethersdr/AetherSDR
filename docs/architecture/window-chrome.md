@@ -46,6 +46,10 @@ carries the menu's action, and each menu's Alt+<letter> mnemonic is
 re-registered on the bar to pop that menu under the button (the hidden bar's
 own never match). A native menu bar (macOS) is left where the platform shows
 it.
+The hamburger's menus and every submenu under them are rounded (8 px, like the
+radio tabs): `roundMenuTree()` gives each a see-through, shadowless window
+before it first opens, reaching later submenus from their parent's
+`aboutToShow`.
 
 - **macOS:** Qt keeps the real `NSWindow`, native controls, corners, shadow
   and window-state behaviour. `mac/NativeWindowTitle.mm` sets

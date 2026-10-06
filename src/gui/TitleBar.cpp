@@ -106,6 +106,30 @@ QIcon buildAppMenuIcon(const QWidget* widget)
     return icon;
 }
 
+// The hamburger's menus and every submenu under them get rounded corners.
+// A stylesheet border-radius only shapes what is painted, so each menu also
+// needs a see-through window, and no system drop shadow (square on Windows),
+// set before its native window is first created: submenus are reached on
+// their parent's aboutToShow, which runs before the submenu can open.
+constexpr const char* kRoundedMenuProperty = "aetherRoundedMenu";
+
+void roundMenuTree(QMenu* menu)
+{
+    if (!menu || menu->property(kRoundedMenuProperty).toBool()) {
+        return;
+    }
+    menu->setProperty(kRoundedMenuProperty, true);
+    menu->setAttribute(Qt::WA_TranslucentBackground);
+    menu->setWindowFlag(Qt::NoDropShadowWindowHint);
+    const auto roundChildren = [menu]() {
+        for (QAction* action : menu->actions()) {
+            roundMenuTree(action->menu());
+        }
+    };
+    roundChildren();
+    QObject::connect(menu, &QMenu::aboutToShow, menu, roundChildren);
+}
+
 // Build a 16×18 pop-out indicator: hollow square (the main waterfall
 // window) on the left, with a smaller filled rectangle to its right
 // representing the applet panel detached into its own window.  The
@@ -970,6 +994,7 @@ bool TitleBar::eventFilter(QObject* obj, QEvent* ev)
             QAction* before = ae->before();
             m_appMenu->insertAction(m_appMenu->actions().contains(before) ? before : nullptr,
                                     ae->action());
+            roundMenuTree(ae->action()->menu());
             addAppMenuMnemonic(ae->action());
         } else if (ev->type() == QEvent::ActionRemoved) {
             auto* ae = static_cast<QActionEvent*>(ev);
@@ -1099,12 +1124,21 @@ void TitleBar::setMenuBar(QMenuBar* mb)
     // it, and MainWindow keeps building menus into it.
     mb->hide();
 
+    // Rounded panels (roundMenuTree), 8 px like the radio tabs; the inset keeps
+    // the selection clear of the curve.
+    const char* roundedMenuRules =
+        "QMenu { background: {{color.background.0}}; color: {{color.text.primary}};"
+        " border: 1px solid {{color.background.2}}; border-radius: 8px; padding: 4px; }"
+        "QMenu::item:selected { background: {{color.background.2}}; border-radius: 4px; }"
+        "QMenu::separator { height: 1px; background: {{color.background.2}}; margin: 4px 8px; }";
+    AetherSDR::ThemeManager::instance().applyStyleSheet(mb,
+        QStringLiteral("QMenuBar { background: transparent; }") + QLatin1String(roundedMenuRules));
+
     m_appMenu = new QMenu(this);
     m_appMenu->setObjectName(QStringLiteral("titleBarAppMenu"));
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_appMenu,
-        "QMenu { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.2}}; }"
-        "QMenu::item:selected { background: {{color.background.2}}; }");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_appMenu, roundedMenuRules);
     m_appMenu->addActions(mb->actions());
+    roundMenuTree(m_appMenu);
     for (QAction* a : mb->actions())
         addAppMenuMnemonic(a);
 
