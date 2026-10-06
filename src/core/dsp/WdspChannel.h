@@ -50,6 +50,18 @@ public:
         bool operator==(const FmReceive&) const = default;
     };
 
+    // Broadcast receive recipe from WDSP Guide section 5.3.10. This opt-in
+    // owns an RF FIR before WDSP's 384 -> 192 kHz conversion and normalizes
+    // paired audio before any receiver tap. Other channel owners are unchanged.
+    struct WbfmReceive
+    {
+        enum class Deemphasis { Us75, Us50 };
+        Deemphasis deemphasis = Deemphasis::Us75;
+        double outputGain = 0.25;
+        static constexpr double kRfTransitionGuardHz = 3000.0;
+        bool operator==(const WbfmReceive&) const = default;
+    };
+
     struct Config
     {
         Direction direction = Direction::Receive;
@@ -60,6 +72,7 @@ public:
         int outputSampleRate = 48000;
         Mode mode = Mode::Usb;
         std::optional<FmReceive> fmReceive;
+        std::optional<WbfmReceive> wbfmReceive;
         double filterLowHz = 150.0;
         double filterHighHz = 3000.0;
         int agcMode = 3;
@@ -247,6 +260,11 @@ public:
     bool reconfigure(const Config& config, std::string* error = nullptr) noexcept;
     bool setMode(Mode mode) noexcept;
     bool setFilter(double lowHz, double highHz) noexcept;
+    bool setWbfmDeemphasis(WbfmReceive::Deemphasis deemphasis) noexcept;
+    // Lock-free latest completed decoder observation, sampled by processIq().
+    // It is not an exact PCM-ring timestamp. False after stop/open; absent for
+    // channels that do not own the broadcast recipe. Caller owns the lifetime.
+    [[nodiscard]] std::optional<bool> wbfmStereoDetected() const noexcept;
     // Runtime RX AGC change. agcMode is the WDSP RXA AGC mode (0 off, 1 long,
     // 2 slow, 3 medium, 4 fast); maximumGainDb is the AGC "top", the ceiling on
     // how much gain the AGC may apply. Receive channels only — returns false on
@@ -460,6 +478,9 @@ private:
     bool beginControlOperation() noexcept;
     void endControlOperation() noexcept;
 
+    struct WbfmState;
+    std::unique_ptr<WbfmState> m_wbfm;
+    std::atomic<int> m_wbfmStereo {-1};
     int m_channelId = -1;
     Config m_config;
     // Fixed for a given Config; cached at open()/reconfigure() so the real-time

@@ -62,6 +62,12 @@ typedef struct _wbfm
 	double dcbSave_x;
 	double dcbSave_y;
 	double disc_gain_comp;
+	// AetherSDR: opt-in continuous-FM discriminator response correction.
+	int disc_compensate;
+	double disc_history[13];
+	int disc_history_index;
+	double audio_dcb_x[2];
+	double audio_dcb_y[2];
 	
 	// filter:  0-15 kHz
 	FIRCORE pfil0_15;
@@ -102,6 +108,8 @@ typedef struct _wbfm
 
 	// Miscellaneous
 	int stereo;
+	// AetherSDR: lock-free publication of the last completed decoder block.
+	long stereoPublished;
 	double sqgain;
 	double mag19;
 	int dmph;
