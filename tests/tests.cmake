@@ -6986,7 +6986,7 @@ add_test(NAME hl2_link_state_alias_test COMMAND hl2_link_state_alias_test)
 # states apart, so a test seeing only one answer proves nothing.
 add_executable(hl2_telemetry_source_test tests/hl2_telemetry_source_test.cpp)
 target_include_directories(hl2_telemetry_source_test PRIVATE src)
-target_link_libraries(hl2_telemetry_source_test PRIVATE Qt6::Core)
+target_link_libraries(hl2_telemetry_source_test PRIVATE Qt6::Core Qt6::Network)
 add_test(NAME hl2_telemetry_source_test COMMAND hl2_telemetry_source_test)
 
 # The WIRE between the cadence rule and the backend that must ask it. Links
