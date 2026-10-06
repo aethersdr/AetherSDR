@@ -498,6 +498,9 @@ jobs:
           # Branch refs contain slashes, which cannot appear in the output name.
           SAFE_REF="${GITHUB_REF_NAME//[^A-Za-z0-9._-]/_}"
           export LDAI_OUTPUT="AetherSDR-${SAFE_REF}-${{ matrix.arch }}.AppImage"
+          # linuxdeploy scans dependencies again when generating the image.
+          # Prefer the staged closure and retain the original build prefixes.
+          export LD_LIBRARY_PATH="$PWD/AppDir/usr/lib:$PWD/third_party/rtl-deps/lib:$PWD/third_party/qtkeychain/lib:$PWD/third_party/onnxruntime/lib:$PWD/third_party/sherpa-onnx/lib:${LD_LIBRARY_PATH:-}"
           ./linuxdeploy-${{ matrix.arch }}.AppImage --appdir AppDir --output appimage
 
       # The archive is only worth attaching if its build IDs are the ones the

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Socket-free package checks using injected binary inspection reports."""
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 
@@ -8,6 +9,7 @@ from check_rtl_package import check_windows_runtime
 from stage_rtl_appimage import stage_libusb
 
 
+@unittest.skipIf(sys.platform == "win32", "AppImage staging requires POSIX symlinks")
 class LinuxStagingTest(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
