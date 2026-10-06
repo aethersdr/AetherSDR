@@ -1880,10 +1880,12 @@ void MainWindow::buildMenuBar()
             "QPushButton { background: {{color.canon.control}}; color: {{color.canon.cyan}}; "
             "border: 1px solid {{color.canon.lineHi}}; border-radius: 4px; padding: 7px 18px; "
             "font-weight: bold; font-size: 12px; }"
-            "QPushButton:hover { background: {{color.canon.nested}}; border-color: {{color.canon.cyan}}; }"
-            "QPushButton:focus { border: 2px solid {{color.canon.cyan}}; padding: 6px 17px; }");
-        vbox->addSpacing(4);
-        vbox->addWidget(logbookButton, 0, Qt::AlignCenter);
+            "QPushButton:hover { background: {{color.canon.nested}}; color: {{color.canon.aqua}}; }"
+            "QPushButton:focus { border-color: {{color.canon.sparkGold}}; }");
+        // The logbook is where contributors are recognised: the gold spark
+        // circles the button, as it circles the award cards there.
+        vbox->addSpacing(2);
+        vbox->addWidget(new SparkBorder(logbookButton, 4), 0, Qt::AlignCenter);
         connect(logbookButton, &QPushButton::clicked, dlg, [] {
             QDesktopServices::openUrl(QUrl(QStringLiteral("https://contributors.aethersdr.com/#all-time")));
         });

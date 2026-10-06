@@ -65,4 +65,27 @@ private:
     QTimer* m_timer{nullptr};
 };
 
+// Wraps one widget (a button) and draws the guide's gold spark around it: a
+// point of light in color.canon.sparkGold with a color.canon.sparkGoldHot tip
+// circling a rounded border once every seven seconds, as on the Contributor
+// Logbook's award cards. Gold marks recognition. Animates only while visible.
+class SparkBorder : public QWidget {
+    Q_OBJECT
+
+public:
+    // radius: the wrapped widget's corner radius; the spark runs just outside it.
+    SparkBorder(QWidget* child, int radius, QWidget* parent = nullptr);
+
+protected:
+    void paintEvent(QPaintEvent* event) override;
+    void showEvent(QShowEvent* event) override;
+    void hideEvent(QHideEvent* event) override;
+
+private:
+    QWidget* m_child;
+    int      m_radius;
+    qreal    m_angle{90.0};
+    QTimer*  m_timer{nullptr};
+};
+
 } // namespace AetherSDR

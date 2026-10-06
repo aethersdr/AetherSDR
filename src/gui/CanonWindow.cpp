@@ -230,4 +230,73 @@ void SparkRing::paintEvent(QPaintEvent*)
     spark(2.0, 1.0);
 }
 
+namespace {
+constexpr int kSparkGap = 3;   // spark border sits this far outside the child
+} // namespace
+
+SparkBorder::SparkBorder(QWidget* child, int radius, QWidget* parent)
+    : QWidget(parent), m_child(child), m_radius(radius)
+{
+    setAttribute(Qt::WA_TranslucentBackground);
+    auto* lay = new QVBoxLayout(this);
+    lay->setContentsMargins(kSparkGap + 2, kSparkGap + 2, kSparkGap + 2, kSparkGap + 2);
+    lay->addWidget(child);
+    m_timer = new QTimer(this);
+    m_timer->setInterval(kSparkFrameMs);
+    connect(m_timer, &QTimer::timeout, this, [this] {
+        m_angle -= 360.0 * kSparkFrameMs / kSparkLapMs;   // clockwise
+        if (m_angle < 0.0)
+            m_angle += 360.0;
+        update();
+    });
+}
+
+void SparkBorder::showEvent(QShowEvent* event)
+{
+    QWidget::showEvent(event);
+    m_timer->start();
+}
+
+void SparkBorder::hideEvent(QHideEvent* event)
+{
+    QWidget::hideEvent(event);
+    m_timer->stop();
+}
+
+void SparkBorder::paintEvent(QPaintEvent*)
+{
+    auto& tm = ThemeManager::instance();
+    QPainter p(this);
+    p.setRenderHint(QPainter::Antialiasing, true);
+
+    const QRectF box = QRectF(m_child->geometry()).adjusted(-kSparkGap, -kSparkGap, kSparkGap, kSparkGap);
+    const qreal r = m_radius + kSparkGap;
+    QPainterPath outline;
+    outline.addRoundedRect(box, r, r);
+
+    const QColor gold = tm.color(this, QStringLiteral("color.canon.sparkGold"));
+    const QColor hot = tm.color(this, QStringLiteral("color.canon.sparkGoldHot"));
+    auto spark = [&](qreal width, qreal alpha) {
+        QConicalGradient g(box.center(), m_angle);
+        QColor clear = gold;
+        clear.setAlpha(0);
+        QColor faint = gold;
+        faint.setAlphaF(0.25 * alpha);
+        QColor body = gold;
+        body.setAlphaF(alpha);
+        QColor tip = hot;
+        tip.setAlphaF(alpha);
+        g.setColorAt(0.0, tip);
+        g.setColorAt(0.04, body);
+        g.setColorAt(0.16, faint);
+        g.setColorAt(0.30, clear);
+        g.setColorAt(1.0, clear);
+        p.setPen(QPen(QBrush(g), width, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        p.setBrush(Qt::NoBrush);
+        p.drawPath(outline);
+    };
+    spark(5.0, 0.22);
+    spark(1.5, 1.0);
+}
+
 } // namespace AetherSDR

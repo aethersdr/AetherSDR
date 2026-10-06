@@ -133,6 +133,8 @@
             "aqua":     "{color.blue.300}",
             "onAccent": "{color.gray.950}",
             "sparkHot": "{color.blue.300}",
+            "sparkGold": "{color.amber.500}",
+            "sparkGoldHot": "#e0a030",
             "bloom": { "blue": "#140b6bc4", "teal": "#0f12a08c" },
             "grid":     "#0a1a2a3a"
           },
