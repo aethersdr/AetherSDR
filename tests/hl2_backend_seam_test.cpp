@@ -531,7 +531,7 @@ static void forwardPowerSkippedHealthRow()
 struct KeyOnReplay {
     int windows = 0;
     int peakDiffersFromPlainMax = 0;   // windows whose peak is not the plain maximum
-    int publishedTop = -1;             // highest forward word in any published window
+    int plainTop = -1;                 // highest forward word fed, before any skip
     double shownMaxW = 0.0;            // highest TX:FWDPWR of the over
     double shownLastW = 0.0;
     double plainMaxHeldW = 0.0;        // the same over through a plain window maximum
@@ -559,7 +559,7 @@ static KeyOnReplay replayKeyOn(std::span<const Hl2KeyOnRaddr1> rows, int phaseMs
         ++out.windows;
         if (t.forwardPowerPeakRaw.value_or(-1) != plainMax)
             ++out.peakDiffersFromPlainMax;
-        out.publishedTop = std::max(out.publishedTop, plainMax);
+        out.plainTop = std::max(out.plainTop, plainMax);
         meters.clear();
         Access::publish(b, t);
         for (const QList<QVariant>& args : meters) {
@@ -612,7 +612,8 @@ static KeyOnReplay replayKeyOn(std::span<const Hl2KeyOnRaddr1> rows, int phaseMs
 }
 
 // TX:FWDPWR at key-on, replayed from recorded RADDR-1 words (Hl2KeyOnRaddr1Fixture.h)
-// at ten phases of the publish window. Nothing is keyed here.
+// at ten phases of the publish window. No transmitter, no radio: replayKeyOn
+// sets only the backend's keyed flag, which selects the window-peak branch.
 static void forwardPowerKeyOnReplay()
 {
     static constexpr int kPhasesMs[] = {10, 20, 30, 40, 50, 60, 70, 80, 90, 100};
@@ -669,7 +670,7 @@ static void forwardPowerKeyOnReplay()
         for (const int phase : kPhasesMs) {
             const KeyOnReplay r = replayKeyOn(rows, phase);
             same = same && r.windows >= 3 && r.peakDiffersFromPlainMax == 0
-                && std::abs(r.shownMaxW - hl2::directionalWatts(r.publishedTop)) < 1e-9
+                && std::abs(r.shownMaxW - hl2::directionalWatts(r.plainTop)) < 1e-9
                 && std::abs(r.shownMaxW - r.plainMaxHeldW) < 1e-9;
             shownW = std::max(shownW, r.shownMaxW);
         }
@@ -697,8 +698,8 @@ static void forwardPowerKeyOnReplay()
             const KeyOnReplay r = replayKeyOn(speech, phase);
             noneSkipped = noneSkipped && r.skippedReported && r.skippedShown == 0;
             caught = caught && r.windows >= 19 && r.peakDiffersFromPlainMax == 0
-                && r.publishedTop >= 2200
-                && std::abs(r.shownMaxW - hl2::directionalWatts(r.publishedTop)) < 1e-9;
+                && r.plainTop >= 2200
+                && std::abs(r.shownMaxW - hl2::directionalWatts(r.plainTop)) < 1e-9;
         }
         check(caught, "synthetic speech: every one-sample peak between polls still wins its window");
         check(noneSkipped, "synthetic speech: Radio Health reports 0 skipped responses");
