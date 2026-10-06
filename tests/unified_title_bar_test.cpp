@@ -42,6 +42,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
+#include <QMouseEvent>
 #include <QMenuBar>
 #include <QPointer>
 #include <QPushButton>
@@ -650,6 +651,53 @@ int main(int argc, char** argv)
             QApplication::sendEvent(scroller->viewport(), &wheel);
             check(hbar->value() < before,
                   "a vertical wheel notch scrolls the overflowing strip sideways");
+
+            // Dragging a tab sideways pans the overflowing strip and is not a
+            // click; a press that does not move still activates the tab.
+            hbar->setValue(hbar->maximum() / 2);
+            RadioTab* grabbed = nullptr;
+            int grabX = 0;   // a point on the tab that is inside the viewport
+            for (RadioTab* t : tabs->findChildren<RadioTab*>()) {
+                const QRect inView(t->mapTo(scroller->viewport(), QPoint()), t->size());
+                const QRect seen = inView & scroller->viewport()->rect();
+                if (t->isVisible() && seen.width() > 8) {
+                    grabbed = t;
+                    grabX = seen.center().x() - inView.x();
+                    break;
+                }
+            }
+            check(grabbed != nullptr, "a tab is in view to drag");
+            if (grabbed) {
+                int activations = 0;
+                const QMetaObject::Connection activation = QObject::connect(
+                    tabs, &RadioTabBar::radioActivated, [&activations](const QString&) { ++activations; });
+                // A real pointer's screen position does not move with the strip.
+                const QPointF pressGlobal = grabbed->mapToGlobal(QPointF(grabX, grabbed->height() / 2.0));
+                auto send = [grabbed, pressGlobal](QEvent::Type type, int dx, Qt::MouseButtons held) {
+                    const QPointF global = pressGlobal + QPointF(dx, 0);
+                    QMouseEvent e(type, grabbed->mapFromGlobal(global), global,
+                                  type == QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton,
+                                  held, Qt::NoModifier);
+                    QApplication::sendEvent(grabbed, &e);
+                };
+                const int start = hbar->value();
+                send(QEvent::MouseButtonPress, 0, Qt::LeftButton);
+                send(QEvent::MouseMove, -20, Qt::LeftButton);
+                send(QEvent::MouseMove, -60, Qt::LeftButton);
+                send(QEvent::MouseButtonRelease, -60, Qt::NoButton);
+                checkEqual(hbar->value() - start, 60, "dragging a tab 60 px left pans the strip 60 px");
+                checkEqual(activations, 0, "a drag does not activate the tab it started on");
+                // Click where that tab is now, after the pan.
+                const QPointF here(grabbed->width() / 2.0, grabbed->height() / 2.0);
+                QMouseEvent press(QEvent::MouseButtonPress, here, grabbed->mapToGlobal(here),
+                                  Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+                QApplication::sendEvent(grabbed, &press);
+                QMouseEvent release(QEvent::MouseButtonRelease, here, grabbed->mapToGlobal(here),
+                                    Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+                QApplication::sendEvent(grabbed, &release);
+                checkEqual(activations, 1, "a still click still activates the tab after a drag");
+                QObject::disconnect(activation);
+            }
         }
         nowAvailable.visibleInTabs = false;
         tabs->setRadios({nowAvailable, inUse});

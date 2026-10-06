@@ -12,6 +12,7 @@
 #include <QLineEdit>
 #include <QMenu>
 #include <QKeyEvent>
+#include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPaintEvent>
@@ -515,6 +516,7 @@ RadioTabBar::RadioTabBar(QWidget* parent)
     m_tabsLayout->setSpacing(kStripSpacing);
     m_scrollArea->setWidget(m_tabHost);
     m_scrollArea->viewport()->installEventFilter(this);
+    m_tabHost->installEventFilter(this);   // drag between tabs
     m_layout->addWidget(m_scrollArea, 1);
 
     m_addButton = new QToolButton(this);
@@ -609,7 +611,71 @@ bool RadioTabBar::eventFilter(QObject* watched, QEvent* ev)
             return true;
         }
     }
+    if (handleStripDrag(watched, ev)) {
+        return true;
+    }
     return QWidget::eventFilter(watched, ev);
+}
+
+bool RadioTabBar::handleStripDrag(QObject* watched, QEvent* ev)
+{
+    if (!m_scrollArea) {
+        return false;
+    }
+    const auto type = ev->type();
+    if (type != QEvent::MouseButtonPress && type != QEvent::MouseMove
+        && type != QEvent::MouseButtonRelease) {
+        return false;
+    }
+    auto* tab = qobject_cast<RadioTab*>(watched);
+    if (!tab && watched != m_tabHost && watched != m_scrollArea->viewport()) {
+        return false;
+    }
+    auto* me = static_cast<QMouseEvent*>(ev);
+    QScrollBar* bar = m_scrollArea->horizontalScrollBar();
+    const int x = qRound(me->globalPosition().x());
+
+    if (type == QEvent::MouseButtonPress) {
+        m_dragArmed = me->button() == Qt::LeftButton && bar->maximum() > 0;
+        m_dragging = false;
+        m_dragPressX = x;
+        m_dragStartValue = bar->value();
+        m_dragPressedTab = tab;
+        return false;   // the tab still sees the press: a still click selects it
+    }
+    if (!m_dragArmed) {
+        return false;
+    }
+    if (type == QEvent::MouseMove) {
+        if (!(me->buttons() & Qt::LeftButton)) {
+            m_dragArmed = m_dragging = false;
+            return false;
+        }
+        const int dx = x - m_dragPressX;
+        if (!m_dragging && qAbs(dx) >= QApplication::startDragDistance()) {
+            m_dragging = true;
+            // A drag is not a click: release the tab's pressed state so the
+            // swallowed release can't activate it.
+            if (m_dragPressedTab) {
+                m_dragPressedTab->setDown(false);
+            }
+            m_scrollArea->viewport()->setCursor(Qt::ClosedHandCursor);
+        }
+        if (m_dragging) {
+            bar->setValue(m_dragStartValue - dx);
+            return true;
+        }
+        return false;
+    }
+    // Release.
+    const bool wasDragging = m_dragging;
+    m_dragArmed = m_dragging = false;
+    m_dragPressedTab = nullptr;
+    if (wasDragging) {
+        m_scrollArea->viewport()->unsetCursor();
+        return true;
+    }
+    return false;
 }
 
 QSize RadioTabBar::sizeHint() const
@@ -822,6 +888,7 @@ void RadioTabBar::rebuild()
     }
     while (m_tabs.size() < m_radios.size()) {
         auto* tab = new RadioTab(m_radios.at(m_tabs.size()), this);
+        tab->installEventFilter(this);   // drag-to-scroll (handleStripDrag)
         connect(tab, &QAbstractButton::clicked, this, [this, tab]() {
             // A click opens the picker; it does not switch radios, so the
             // active tab changes only when the session does (setActiveRadio).

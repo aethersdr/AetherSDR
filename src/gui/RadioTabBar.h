@@ -4,6 +4,7 @@
 #include <QList>
 #include <QString>
 #include <QVariantMap>
+#include <QPointer>
 #include <QWidget>
 
 class QHBoxLayout;
@@ -192,6 +193,15 @@ private:
 
     QHBoxLayout*         m_layout{nullptr};
     QScrollArea*         m_scrollArea{nullptr};
+    // Drag-to-scroll for an overflowing strip: a press on a tab or between
+    // tabs that moves sideways past the drag distance pans the strip and is
+    // not a click.
+    bool handleStripDrag(QObject* watched, QEvent* ev);
+    QPointer<QAbstractButton> m_dragPressedTab;
+    int                  m_dragPressX{0};
+    int                  m_dragStartValue{0};
+    bool                 m_dragArmed{false};
+    bool                 m_dragging{false};
     QWidget*             m_tabHost{nullptr};
     QHBoxLayout*         m_tabsLayout{nullptr};
     QList<RadioTabEntry> m_radios;

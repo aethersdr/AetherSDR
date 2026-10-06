@@ -125,8 +125,10 @@ heartbeat, turns amber while discovering and red after three missed beats
 disconnect stops the miss timer and clears the alarm; an unexpected loss
 raises it. While the alarm is up the tab says "link lost" in words too, and the
 alarm stays on the radio that dropped (not on whichever tab comes first) until
-a different session starts. A vertical mouse wheel scrolls an overflowing
-strip.
+a different session starts. The strip takes the bar's free width and scrolls
+only once that runs out; then a vertical mouse wheel scrolls it, and dragging
+a tab sideways past the system drag distance pans it (that press is not a
+click; a still press still is).
 
 The "+" panel has a bounded scrollable list, search by name/model/address/
 status, active-radio-first ordering, readable status text, and one Actions menu
@@ -154,7 +156,7 @@ explicit workflow.
 
 `unified_title_bar_test` (headless) covers bar geometry, the painted fill and
 border under MainWindow's real stylesheet cascade, tab insets, status text,
-overflow and wheel scrolling, hidden-tab link carrier, link-alarm raise/clear,
+overflow, wheel and drag scrolling, hidden-tab link carrier, link-alarm raise/clear,
 minimal mode, search, action enablement/dispatch, keyboard-only focus rings and
 light-theme panel colours. These are QWidget checks, not native frame
 certification.
