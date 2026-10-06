@@ -1872,7 +1872,7 @@ void MainWindow::buildMenuBar()
         auto* logbookButton = new QPushButton(QStringLiteral("Contributor Logbook  ↗"));
         logbookButton->setAccessibleName(QStringLiteral("Open the AetherSDR Contributor Logbook"));
         logbookButton->setAccessibleDescription(
-            QStringLiteral("Opens contributors.aethersdr.com in your browser."));
+            QStringLiteral("Opens the all-time standings at contributors.aethersdr.com in your browser."));
         logbookButton->setToolTip(QStringLiteral("contributors.aethersdr.com"));
         logbookButton->setCursor(Qt::PointingHandCursor);
         tm.applyStyleSheet(
@@ -1885,7 +1885,7 @@ void MainWindow::buildMenuBar()
         vbox->addSpacing(4);
         vbox->addWidget(logbookButton, 0, Qt::AlignCenter);
         connect(logbookButton, &QPushButton::clicked, dlg, [] {
-            QDesktopServices::openUrl(QUrl(QStringLiteral("https://contributors.aethersdr.com")));
+            QDesktopServices::openUrl(QUrl(QStringLiteral("https://contributors.aethersdr.com/#all-time")));
         });
 
         auto* sep = new QFrame;
