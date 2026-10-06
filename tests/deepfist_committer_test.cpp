@@ -108,5 +108,32 @@ int main()
     scored.process({}, true, 5.2, 3.9, true, &pieces);
     if (pieces.size() != 2 || pieces[0].text != "T" || !near(pieces[0].confidence, 0.4f)
         || pieces[1].text != " " || !near(pieces[1].confidence, 1.f)) { return 23; }
+    // A repeated letter inside the 0.12 s tolerance keeps its own score (CONSTRUCTED,
+    // the review's case): two E 80 ms apart, seen identically in two windows.
+    DeepFistCommitter closePair;
+    pieces.clear();
+    closePair.process({{6, 2.80, "E", 0.9f}, {6, 2.88, "E", 0.1f}}, false, 4.0, 2.0, false, &pieces);
+    closePair.process({{6, 2.80, "E", 0.9f}, {6, 2.88, "E", 0.1f}}, false, 4.4, 3.0, false, &pieces);
+    if (pieces.size() != 2 || !near(pieces[0].confidence, 0.9f) || !near(pieces[1].confidence, 0.1f)) {
+        return 24;
+    }
+    // The same pair with the later window's times shifted 50 ms: matched by order,
+    // since the closest earlier sighting of the first E is now the second E's.
+    DeepFistCommitter shiftedPair;
+    pieces.clear();
+    shiftedPair.process({{6, 2.80, "E", 0.9f}, {6, 2.88, "E", 0.1f}}, false, 4.0, 2.0, false, &pieces);
+    shiftedPair.process({{6, 2.85, "E", 0.9f}, {6, 2.93, "E", 0.1f}}, false, 4.4, 3.0, false, &pieces);
+    if (pieces.size() != 2 || !near(pieces[0].confidence, 0.9f) || !near(pieces[1].confidence, 0.1f)) {
+        return 25;
+    }
+    // Counts differ (the earlier window saw one E): each letter takes the closest
+    // sighting, so both average in the earlier 0.9.
+    DeepFistCommitter unevenPair;
+    pieces.clear();
+    unevenPair.process({{6, 2.80, "E", 0.9f}}, false, 4.0, 2.0, false, &pieces);
+    unevenPair.process({{6, 2.80, "E", 0.9f}, {6, 2.88, "E", 0.1f}}, false, 4.4, 3.0, false, &pieces);
+    if (pieces.size() != 2 || !near(pieces[0].confidence, 0.9f) || !near(pieces[1].confidence, 0.5f)) {
+        return 26;
+    }
     std::puts("committer: carry mutation, expiry, repeated tokens, reset, delayed separators, confidence passed");
 }
