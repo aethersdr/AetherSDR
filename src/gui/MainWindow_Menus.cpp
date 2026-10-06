@@ -4,8 +4,8 @@
 // every QMenu/QAction in the menu bar, their enable/disable wiring, and the
 // inline lambdas they trigger (~70 connects).
 //
-// The community-credits subsystem lives in Contribute.cpp; this TU retains
-// only the About-dialog button and its connection.
+// Contributors are recognised in the Contributor Logbook, which the About
+// window links to.
 
 #include "MainWindow.h"
 #include "AetherBuildIdentity.h"   // generated at build time (#5804)
@@ -24,7 +24,6 @@
 #include "RadioSetupDialog.h"
 #include "TciApplet.h"
 #include "ClientChainApplet.h"
-#include "Contribute.h"
 #include "CwxPanel.h"
 #include "DxClusterDialog.h"
 #include "HelpDialog.h"
@@ -69,25 +68,17 @@
 #include <QDesktopServices>
 #include <QFrame>
 #include <QHBoxLayout>
-#include <QJsonDocument>
 #include <QJsonObject>
 #include <QKeySequence>
 #include <QLabel>
 #include <QMenuBar>
-#include <QNetworkAccessManager>
-#include <QNetworkReply>
-#include <QNetworkRequest>
 #include <QPointer>
 #include <QGridLayout>
 #include <QFontMetricsF>
-#include <QLinearGradient>
-#include <QRadialGradient>
 #include <QPainterPath>
 #include <QPainter>
 #include <QPushButton>
 #include <QSpinBox>
-#include <QScrollArea>
-#include <QScrollBar>
 #include <QShortcut>
 #include <QTimer>
 #include <QUrl>
@@ -1790,10 +1781,6 @@ void MainWindow::buildMenuBar()
         vbox->setSpacing(10);
         vbox->setContentsMargins(24, 26, 24, 22);
 
-        // Links take the accent from the theme at open time (the dialog is
-        // rebuilt on every open).
-        const QString cyan = tm.color(dlg, QStringLiteral("color.canon.cyan")).name();
-
         // The mark is dark on a dark ground: a contrast ring and the guide's
         // spark set it apart.
         const qreal dpr = dlg->devicePixelRatioF();
@@ -1846,21 +1833,37 @@ void MainWindow::buildMenuBar()
             {QStringLiteral("COMPILED"), QStringLiteral(__DATE__)},
             {QStringLiteral("RENDERER"), rendererDescription},
         };
+        // The body's content width: the window less its hairline inset and
+        // the body margins.
+        const QMargins vm = vbox->contentsMargins();
+        const int contentWidth = dlg->width() - 2 * CanonWindow::kInset - vm.left() - vm.right();
+        QList<QLabel*> values;
+        int keyWidth = 0;
         for (int i = 0; i < rows.size(); ++i) {
             auto* k = new QLabel(rows[i].first);
             k->setProperty("role", QStringLiteral("key"));
             auto* v = new QLabel(rows[i].second);
             v->setWordWrap(true);
-            // Wrapped labels under-report their height in a fixed-width
-            // window; reserve it for the value column's width (window minus
-            // margins, card padding and the key column).
-            v->setMinimumHeight(v->heightForWidth(400 - 48 - 28 - 12 - 76));
             v->setAlignment(Qt::AlignLeft | Qt::AlignTop);
             v->setTextInteractionFlags(Qt::TextSelectableByMouse);
             grid->addWidget(k, i, 0, Qt::AlignTop | Qt::AlignRight);
             grid->addWidget(v, i, 1, Qt::AlignTop);
+            // Measure in the card's stylesheet fonts, not the defaults.
+            k->ensurePolished();
+            keyWidth = std::max(keyWidth, k->sizeHint().width());
+            values.append(v);
         }
         grid->setColumnStretch(1, 1);
+        // Wrapped labels under-report their height in a fixed-width window;
+        // reserve it for the value column's width: the content width less the
+        // card's padding and border, the spacing and the measured key column.
+        const QMargins gm = grid->contentsMargins();
+        const int valueWidth = contentWidth - gm.left() - gm.right() - 2 * build->frameWidth()
+                               - grid->horizontalSpacing() - keyWidth;
+        for (QLabel* v : values) {
+            v->ensurePolished();
+            v->setMinimumHeight(v->heightForWidth(valueWidth));
+        }
         // The renderer line comes from the active pan at dialog-open time,
         // after Qt has picked a real QRhi backend when the GPU path is active.
         build->setToolTip(QStringLiteral("Build identity and active pan renderer. The SHA is captured "
@@ -1897,25 +1900,34 @@ void MainWindow::buildMenuBar()
         vbox->addSpacing(4);
         vbox->addWidget(sep);
 
-        auto* footer = new QLabel(QStringLiteral(
-            "<div style='text-align:center;'>"
-            "<p style='margin:0 0 6px 0;'>&copy; 2026 AetherSDR Contributors &middot; Licensed under "
-            "<a href='https://www.gnu.org/licenses/gpl-3.0.html' style='color:%1; text-decoration:none;'>GPLv3</a></p>"
-            "<p style='margin:0 0 8px 0;'><a href='https://github.com/aethersdr/AetherSDR' style='color:%1; text-decoration:none;'>"
-            "github.com/aethersdr/AetherSDR</a></p>"
-            "<p style='font-size:10px; margin:0;'>SmartSDR protocol &copy; FlexRadio Systems<br>"
-            "D-STAR is a registered trademark of Icom Inc.<br>"
-            "AetherSDR is not affiliated with or endorsed by Icom Inc.<br>"
-            "HF propagation forecasts provided by "
-            "<a href='https://www.hamqsl.com/' style='color:%1; text-decoration:none;'>hamqsl.com</a></p>"
-            "</div>").arg(cyan));
+        // Rich-text link colours are baked into the HTML, so the footer is
+        // rewritten when the theme changes while the window is open.
+        auto* footer = new QLabel;
+        auto setFooterText = [footer] {
+            auto& tm = AetherSDR::ThemeManager::instance();
+            footer->setText(QStringLiteral(
+                "<div style='text-align:center;'>"
+                "<p style='margin:0 0 6px 0;'>&copy; 2026 AetherSDR Contributors &middot; Licensed under "
+                "<a href='https://www.gnu.org/licenses/gpl-3.0.html' style='color:%1; text-decoration:none;'>GPLv3</a></p>"
+                "<p style='margin:0 0 8px 0;'><a href='https://github.com/aethersdr/AetherSDR' style='color:%1; text-decoration:none;'>"
+                "github.com/aethersdr/AetherSDR</a></p>"
+                "<p style='font-size:10px; margin:0;'>SmartSDR protocol &copy; FlexRadio Systems<br>"
+                "D-STAR is a registered trademark of Icom Inc.<br>"
+                "AetherSDR is not affiliated with or endorsed by Icom Inc.<br>"
+                "HF propagation forecasts provided by "
+                "<a href='https://www.hamqsl.com/' style='color:%1; text-decoration:none;'>hamqsl.com</a></p>"
+                "</div>").arg(tm.color(footer, QStringLiteral("color.canon.cyan")).name()));
+        };
+        setFooterText();
+        connect(&tm, &AetherSDR::ThemeManager::themeChanged, footer, setFooterText);
         footer->setAlignment(Qt::AlignCenter);
         footer->setOpenExternalLinks(true);
         footer->setWordWrap(true);
         tm.applyStyleSheet(footer, "QLabel { color: {{color.canon.muted}}; font-size: 11px; background: transparent; }");
         // A wrapped rich-text label under-reports its height in a fixed-width
         // dialog; size it for the content width so the last line isn't clipped.
-        footer->setMinimumHeight(footer->heightForWidth(dlg->width() - 48));
+        footer->ensurePolished();
+        footer->setMinimumHeight(footer->heightForWidth(contentWidth));
         vbox->addWidget(footer);
 
         // OK: the primary action, in the brand gradient.
