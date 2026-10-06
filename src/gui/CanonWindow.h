@@ -18,8 +18,9 @@ namespace AetherSDR {
 // still set for the taskbar and screen readers.
 //
 // Always frameless: it does not follow the View → Frameless Window setting,
-// and it opens centred on its parent rather than restoring a saved geometry
-// (see docs/style/dialog-patterns.md).
+// and it asks to open centred on its parent rather than restoring a saved
+// geometry (see docs/style/dialog-patterns.md). Wayland compositors place
+// top-level windows themselves, so there the request may be ignored.
 //
 // Corners are transparent, so the rounding needs a compositing window manager
 // (always on macOS, Windows and Wayland; an X11 session without a compositor
@@ -45,70 +46,88 @@ protected:
     void showEvent(QShowEvent* event) override;
 
 private:
+    void paintGround(QPaintDevice& device) const;
+
     QWidget*     m_body{nullptr};
     QToolButton* m_close{nullptr};
     bool         m_placed{false};
+    QPixmap      m_ground;   // the painted ground, rebuilt on resize, DPR or theme change
 };
 
-// A circular image (a logo, an avatar) with a contrast ring and the guide's
-// spark: a point of light circling the ring once every seven seconds, in
-// color.canon.cyan with a color.canon.sparkHot tip. Animates only while
-// visible, and skips frames while its window is not exposed (minimised or
-// covered). When the OS asks for reduced motion the spark holds still.
-class SparkRing : public QWidget {
+// The guide's spark: a point of light circling a path, with a bright tip and a
+// tail that fades to nothing, over a wider faint glow. The base owns the
+// animation: it runs only while the widget is visible, ticks slowly while its
+// window is not exposed (minimised or covered), and holds still when the OS
+// asks for reduced motion (QAccessibilityHints::motionPreference).
+class SparkWidget : public QWidget {
+    Q_OBJECT
+
+public:
+    // Follows the OS preference; public so a test can apply one the platform
+    // does not report.
+    void setMotionPreference(Qt::MotionPreference preference);
+    bool isAnimating() const;
+
+protected:
+    SparkWidget(int lapMs, QWidget* parent);
+
+    void showEvent(QShowEvent* event) override;
+    void hideEvent(QHideEvent* event) override;
+
+    // Strokes `path` with the spark centred on `centre` at the current angle:
+    // a `glowWidth` pass at `glowAlpha`, then a `coreWidth` pass at full
+    // strength.
+    void paintSpark(QPainter& p, const QPainterPath& path, const QPointF& centre,
+                    const QColor& body, const QColor& tip,
+                    qreal glowWidth, qreal glowAlpha, qreal coreWidth) const;
+
+private:
+    void tick();
+
+    int     m_lapMs;
+    qreal   m_angle{90.0};
+    bool    m_motionReduced{false};
+    QTimer* m_timer{nullptr};
+};
+
+// A circular image (a logo, an avatar) with a contrast ring and a cyan spark
+// (color.canon.cyan with a color.canon.sparkHot tip) circling it once every
+// seven seconds. The image is scaled at paint time for the screen's device
+// pixel ratio, so it stays sharp when the window moves between screens.
+class SparkRing : public SparkWidget {
     Q_OBJECT
 
 public:
     SparkRing(const QPixmap& image, int diameter, QWidget* parent = nullptr);
     QSize sizeHint() const override;
 
-    // Follows the OS reduced-motion preference (QAccessibilityHints); public
-    // so a test can apply a preference the platform does not report.
-    void setMotionPreference(Qt::MotionPreference preference);
-    bool isAnimating() const;
-
 protected:
     void paintEvent(QPaintEvent* event) override;
-    void showEvent(QShowEvent* event) override;
-    void hideEvent(QHideEvent* event) override;
 
 private:
-    QPixmap m_image;
+    QPixmap m_source;
+    QPixmap m_scaled;
+    qreal   m_scaledDpr{0.0};
     int     m_diameter;
-    qreal   m_angle{90.0};
-    bool    m_motionReduced{false};
-    QTimer* m_timer{nullptr};
 };
 
-// Wraps one widget (a button) and draws the guide's gold spark around it: a
-// point of light in color.canon.sparkGold with a color.canon.sparkGoldHot tip
-// circling a rounded border once every three seconds, like the Contributor
-// Logbook's award cards. Gold marks recognition. Animates only while visible,
-// skips frames while its window is not exposed, and holds still when the OS
-// asks for reduced motion.
-class SparkBorder : public QWidget {
+// Wraps one widget (a button) and draws a gold spark (color.canon.sparkGold
+// with a color.canon.sparkGoldHot tip) around it, circling a rounded border
+// once every three seconds, like the Contributor Logbook's award cards. Gold
+// marks recognition.
+class SparkBorder : public SparkWidget {
     Q_OBJECT
 
 public:
     // radius: the wrapped widget's corner radius; the spark runs just outside it.
     SparkBorder(QWidget* child, int radius, QWidget* parent = nullptr);
 
-    // Follows the OS reduced-motion preference (QAccessibilityHints); public
-    // so a test can apply a preference the platform does not report.
-    void setMotionPreference(Qt::MotionPreference preference);
-    bool isAnimating() const;
-
 protected:
     void paintEvent(QPaintEvent* event) override;
-    void showEvent(QShowEvent* event) override;
-    void hideEvent(QHideEvent* event) override;
 
 private:
     QWidget* m_child;
     int      m_radius;
-    qreal    m_angle{90.0};
-    bool     m_motionReduced{false};
-    QTimer*  m_timer{nullptr};
 };
 
 } // namespace AetherSDR

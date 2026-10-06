@@ -29,14 +29,7 @@ constexpr int kCloseMargin = 12;
 constexpr int kGridStep = 64;
 constexpr int kSparkLapMs = 7000;
 constexpr int kSparkFrameMs = 33;
-
-// A spark frame is wasted on a window nobody can see. Qt sends no hideEvent
-// when a window is minimised or covered, but the window stops being exposed.
-bool sparkVisible(const QWidget* w)
-{
-    const QWindow* handle = w->window()->windowHandle();
-    return handle && handle->isExposed();
-}
+constexpr int kSparkIdleMs = 500;   // while the window is not exposed
 
 const QAccessibilityHints* accessibilityHints()
 {
@@ -83,13 +76,17 @@ CanonWindow::CanonWindow(const QString& title, QWidget* parent)
     auto* closeShortcut = new QShortcut(QKeySequence::Close, this);
     connect(closeShortcut, &QShortcut::activated, this, &QDialog::reject);
 
-    // The ground is painted from tokens; repaint it when the theme changes.
-    connect(&tm, &ThemeManager::themeChanged, this, qOverload<>(&QWidget::update));
+    // The ground is painted from tokens; rebuild it when the theme changes.
+    connect(&tm, &ThemeManager::themeChanged, this, [this] {
+        m_ground = QPixmap();
+        update();
+    });
 }
 
 void CanonWindow::resizeEvent(QResizeEvent* event)
 {
     QDialog::resizeEvent(event);
+    m_ground = QPixmap();
     m_close->move(width() - kCloseSize - kCloseMargin, kCloseMargin);
     m_close->raise();
 }
@@ -143,8 +140,24 @@ void CanonWindow::mouseReleaseEvent(QMouseEvent* event)
 
 void CanonWindow::paintEvent(QPaintEvent*)
 {
+    // The ground (fill, blooms, grid, border) only changes with size, DPR or
+    // theme, but the sparks repaint the window under them 30 times a second:
+    // paint it once into a pixmap and blit that.
+    const qreal dpr = devicePixelRatioF();
+    if (m_ground.isNull() || m_ground.size() != size() * dpr
+        || !qFuzzyCompare(m_ground.devicePixelRatio(), dpr)) {
+        m_ground = QPixmap(size() * dpr);
+        m_ground.setDevicePixelRatio(dpr);
+        m_ground.fill(Qt::transparent);
+        paintGround(m_ground);
+    }
+    QPainter(this).drawPixmap(0, 0, m_ground);
+}
+
+void CanonWindow::paintGround(QPaintDevice& device) const
+{
     auto& tm = ThemeManager::instance();
-    QPainter p(this);
+    QPainter p(&device);
     p.setRenderHint(QPainter::Antialiasing, true);
 
     const QRectF r = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
@@ -193,26 +206,99 @@ void CanonWindow::paintEvent(QPaintEvent*)
     p.drawPath(shape);
 }
 
-SparkRing::SparkRing(const QPixmap& image, int diameter, QWidget* parent)
-    : QWidget(parent), m_image(image), m_diameter(diameter)
+SparkWidget::SparkWidget(int lapMs, QWidget* parent)
+    : QWidget(parent), m_lapMs(lapMs)
 {
     setAttribute(Qt::WA_TranslucentBackground);
-    setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
     m_timer = new QTimer(this);
     m_timer->setInterval(kSparkFrameMs);
-    connect(m_timer, &QTimer::timeout, this, [this] {
-        if (!sparkVisible(this)) {
-            return;
-        }
-        m_angle -= 360.0 * kSparkFrameMs / kSparkLapMs;   // clockwise
-        if (m_angle < 0.0) {
-            m_angle += 360.0;
-        }
-        update();
-    });
+    connect(m_timer, &QTimer::timeout, this, &SparkWidget::tick);
     setMotionPreference(accessibilityHints()->motionPreference());
     connect(accessibilityHints(), &QAccessibilityHints::motionPreferenceChanged,
-            this, &SparkRing::setMotionPreference);
+            this, &SparkWidget::setMotionPreference);
+}
+
+void SparkWidget::tick()
+{
+    // A frame is wasted on a window nobody can see, and Qt sends no hideEvent
+    // when a window is minimised or covered; it only stops being exposed.
+    // Tick slowly until it is exposed again.
+    const QWindow* handle = window()->windowHandle();
+    if (!handle || !handle->isExposed()) {
+        m_timer->setInterval(kSparkIdleMs);
+        return;
+    }
+    m_timer->setInterval(kSparkFrameMs);
+    m_angle -= 360.0 * kSparkFrameMs / m_lapMs;   // clockwise
+    if (m_angle < 0.0) {
+        m_angle += 360.0;
+    }
+    update();
+}
+
+void SparkWidget::showEvent(QShowEvent* event)
+{
+    QWidget::showEvent(event);
+    if (!m_motionReduced) {
+        m_timer->start(kSparkFrameMs);
+    }
+}
+
+void SparkWidget::hideEvent(QHideEvent* event)
+{
+    QWidget::hideEvent(event);
+    m_timer->stop();
+}
+
+void SparkWidget::setMotionPreference(Qt::MotionPreference preference)
+{
+    m_motionReduced = preference == Qt::MotionPreference::ReducedMotion;
+    if (m_motionReduced) {
+        m_timer->stop();
+    } else if (isVisible()) {
+        m_timer->start(kSparkFrameMs);
+    }
+    update();
+}
+
+bool SparkWidget::isAnimating() const
+{
+    return m_timer->isActive();
+}
+
+void SparkWidget::paintSpark(QPainter& p, const QPainterPath& path, const QPointF& centre,
+                             const QColor& body, const QColor& tip,
+                             qreal glowWidth, qreal glowAlpha, qreal coreWidth) const
+{
+    // A conical gradient whose bright end trails into nothing, rotated each
+    // frame and stroked on the path; the wider faint pass is the glow.
+    auto stroke = [&](qreal width, qreal alpha) {
+        QConicalGradient g(centre, m_angle);
+        QColor clear = body;
+        clear.setAlpha(0);
+        QColor faint = body;
+        faint.setAlphaF(0.25 * alpha);
+        QColor main = body;
+        main.setAlphaF(alpha);
+        QColor hot = tip;
+        hot.setAlphaF(alpha);
+        g.setColorAt(0.0, hot);
+        g.setColorAt(0.04, main);
+        g.setColorAt(0.16, faint);
+        g.setColorAt(0.30, clear);
+        g.setColorAt(1.0, clear);
+        p.setPen(QPen(QBrush(g), width, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        p.setBrush(Qt::NoBrush);
+        p.drawPath(path);
+    };
+    stroke(glowWidth, glowAlpha);
+    stroke(coreWidth, 1.0);
+}
+
+SparkRing::SparkRing(const QPixmap& image, int diameter, QWidget* parent)
+    : SparkWidget(kSparkLapMs, parent), m_source(image), m_diameter(diameter)
+{
+    setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
 }
 
 QSize SparkRing::sizeHint() const
@@ -220,39 +306,19 @@ QSize SparkRing::sizeHint() const
     return QSize(m_diameter + 20, m_diameter + 20);
 }
 
-void SparkRing::showEvent(QShowEvent* event)
-{
-    QWidget::showEvent(event);
-    if (!m_motionReduced) {
-        m_timer->start();
-    }
-}
-
-void SparkRing::hideEvent(QHideEvent* event)
-{
-    QWidget::hideEvent(event);
-    m_timer->stop();
-}
-
-void SparkRing::setMotionPreference(Qt::MotionPreference preference)
-{
-    m_motionReduced = preference == Qt::MotionPreference::ReducedMotion;
-    if (m_motionReduced) {
-        m_timer->stop();
-    } else if (isVisible()) {
-        m_timer->start();
-    }
-    update();
-}
-
-bool SparkRing::isAnimating() const
-{
-    return m_timer->isActive();
-}
-
 void SparkRing::paintEvent(QPaintEvent*)
 {
     auto& tm = ThemeManager::instance();
+
+    // Scale for the screen this frame is painted on, once per DPR.
+    const qreal dpr = devicePixelRatioF();
+    if (m_scaled.isNull() || !qFuzzyCompare(m_scaledDpr, dpr)) {
+        m_scaled = m_source.scaled(QSize(m_diameter, m_diameter) * dpr,
+                                   Qt::KeepAspectRatio, Qt::SmoothTransformation);
+        m_scaled.setDevicePixelRatio(dpr);
+        m_scaledDpr = dpr;
+    }
+
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing, true);
     p.setRenderHint(QPainter::SmoothPixmapTransform, true);
@@ -265,41 +331,20 @@ void SparkRing::paintEvent(QPaintEvent*)
     disc.addEllipse(imageRect);
     p.save();
     p.setClipPath(disc);
-    p.drawPixmap(imageRect.toRect(), m_image);
+    p.drawPixmap(imageRect.topLeft(), m_scaled);
     p.restore();
 
     // Contrast ring just outside the image, so the dark mark separates from
     // the dark ground.
     const qreal ringR = radius + 4.0;
-    const QRectF ring(c.x() - ringR, c.y() - ringR, ringR * 2, ringR * 2);
+    QPainterPath ring;
+    ring.addEllipse(QRectF(c.x() - ringR, c.y() - ringR, ringR * 2, ringR * 2));
     p.setBrush(Qt::NoBrush);
     p.setPen(QPen(tm.color(this, QStringLiteral("color.canon.lineHi")), 1.5));
-    p.drawEllipse(ring);
+    p.drawPath(ring);
 
-    // The spark: a conical gradient whose bright end trails into nothing,
-    // rotated each frame, stroked on the ring; a wider faint pass is the glow.
-    const QColor cyan = tm.color(this, QStringLiteral("color.canon.cyan"));
-    const QColor hot = tm.color(this, QStringLiteral("color.canon.sparkHot"));
-    auto spark = [&](qreal width, qreal alpha) {
-        QConicalGradient g(c, m_angle);
-        QColor clear = cyan;
-        clear.setAlpha(0);
-        QColor faint = cyan;
-        faint.setAlphaF(0.25 * alpha);
-        QColor body = cyan;
-        body.setAlphaF(alpha);
-        QColor tip = hot;
-        tip.setAlphaF(alpha);
-        g.setColorAt(0.0, tip);
-        g.setColorAt(0.04, body);
-        g.setColorAt(0.16, faint);
-        g.setColorAt(0.30, clear);
-        g.setColorAt(1.0, clear);
-        p.setPen(QPen(QBrush(g), width, Qt::SolidLine, Qt::RoundCap));
-        p.drawEllipse(ring);
-    };
-    spark(6.0, 0.18);
-    spark(2.0, 1.0);
+    paintSpark(p, ring, c, tm.color(this, QStringLiteral("color.canon.cyan")),
+               tm.color(this, QStringLiteral("color.canon.sparkHot")), 6.0, 0.18, 2.0);
 }
 
 namespace {
@@ -308,58 +353,12 @@ constexpr int kSparkBorderLapMs = 3000;   // a button's spark laps faster than t
 } // namespace
 
 SparkBorder::SparkBorder(QWidget* child, int radius, QWidget* parent)
-    : QWidget(parent), m_child(child), m_radius(radius)
+    : SparkWidget(kSparkBorderLapMs, parent), m_child(child), m_radius(radius)
 {
-    setAttribute(Qt::WA_TranslucentBackground);
     auto* lay = new QVBoxLayout(this);
     // Room outside the outline for half of the 5 px glow pen.
     lay->setContentsMargins(kSparkGap + 3, kSparkGap + 3, kSparkGap + 3, kSparkGap + 3);
     lay->addWidget(child);
-    m_timer = new QTimer(this);
-    m_timer->setInterval(kSparkFrameMs);
-    connect(m_timer, &QTimer::timeout, this, [this] {
-        if (!sparkVisible(this)) {
-            return;
-        }
-        m_angle -= 360.0 * kSparkFrameMs / kSparkBorderLapMs;   // clockwise
-        if (m_angle < 0.0) {
-            m_angle += 360.0;
-        }
-        update();
-    });
-    setMotionPreference(accessibilityHints()->motionPreference());
-    connect(accessibilityHints(), &QAccessibilityHints::motionPreferenceChanged,
-            this, &SparkBorder::setMotionPreference);
-}
-
-void SparkBorder::showEvent(QShowEvent* event)
-{
-    QWidget::showEvent(event);
-    if (!m_motionReduced) {
-        m_timer->start();
-    }
-}
-
-void SparkBorder::hideEvent(QHideEvent* event)
-{
-    QWidget::hideEvent(event);
-    m_timer->stop();
-}
-
-void SparkBorder::setMotionPreference(Qt::MotionPreference preference)
-{
-    m_motionReduced = preference == Qt::MotionPreference::ReducedMotion;
-    if (m_motionReduced) {
-        m_timer->stop();
-    } else if (isVisible()) {
-        m_timer->start();
-    }
-    update();
-}
-
-bool SparkBorder::isAnimating() const
-{
-    return m_timer->isActive();
 }
 
 void SparkBorder::paintEvent(QPaintEvent*)
@@ -373,29 +372,8 @@ void SparkBorder::paintEvent(QPaintEvent*)
     QPainterPath outline;
     outline.addRoundedRect(box, r, r);
 
-    const QColor gold = tm.color(this, QStringLiteral("color.canon.sparkGold"));
-    const QColor hot = tm.color(this, QStringLiteral("color.canon.sparkGoldHot"));
-    auto spark = [&](qreal width, qreal alpha) {
-        QConicalGradient g(box.center(), m_angle);
-        QColor clear = gold;
-        clear.setAlpha(0);
-        QColor faint = gold;
-        faint.setAlphaF(0.25 * alpha);
-        QColor body = gold;
-        body.setAlphaF(alpha);
-        QColor tip = hot;
-        tip.setAlphaF(alpha);
-        g.setColorAt(0.0, tip);
-        g.setColorAt(0.04, body);
-        g.setColorAt(0.16, faint);
-        g.setColorAt(0.30, clear);
-        g.setColorAt(1.0, clear);
-        p.setPen(QPen(QBrush(g), width, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-        p.setBrush(Qt::NoBrush);
-        p.drawPath(outline);
-    };
-    spark(5.0, 0.22);
-    spark(1.5, 1.0);
+    paintSpark(p, outline, box.center(), tm.color(this, QStringLiteral("color.canon.sparkGold")),
+               tm.color(this, QStringLiteral("color.canon.sparkGoldHot")), 5.0, 0.22, 1.5);
 }
 
 } // namespace AetherSDR
