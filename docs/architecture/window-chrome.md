@@ -36,6 +36,18 @@ caption-button rectangles, so the Windows gutter is conservative. On macOS the
 buttons are measured in Qt content-view coordinates, leaving exactly one 16 px
 gap before the brand unless a larger safe-area inset is required.
 
+Where the platform has no native menu bar (Windows, and Linux without a global
+menu), the menus live behind a hamburger button that leads the bar, ahead of
+the brand. `TitleBar::setMenuBar()` keeps the `QMenuBar` as a hidden child:
+`MainWindow` still builds menus into it, the automation bridge still resolves
+actions through it, and the button mirrors menus added later. The button opens
+the menu with `popup()`, never a button-owned menu's `exec()` and its nested
+event loop. Menu shortcuts survive the hidden bar because the visible button
+carries the menu's action, and each menu's Alt+<letter> mnemonic is
+re-registered on the bar to pop that menu under the button (the hidden bar's
+own never match). A native menu bar (macOS) is left where the platform shows
+it.
+
 - **macOS:** Qt keeps the real `NSWindow`, native controls, corners, shadow
   and window-state behaviour. `mac/NativeWindowTitle.mm` sets
   `NSWindow.titleVisibility` and installs an empty unified `NSToolbar` so

@@ -42,10 +42,12 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
+#include <QMenuBar>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QSlider>
+#include <QTest>
 #include <QWheelEvent>
 
 #include <cstdio>
@@ -628,6 +630,75 @@ int main(int argc, char** argv)
             lightPopover->close();
         }
         ThemeManager::instance().setActiveTheme(QStringLiteral("Default Dark"));
+    }
+
+    // ── Hamburger application menu ──────────────────────────────────────────
+    // A non-native menu bar moves into a hamburger that leads the bar; the
+    // bar itself stays hidden, and its menu shortcuts must keep firing.
+    {
+        QWidget menuHost;
+        auto* menuBar = new QMenuBar(&menuHost);
+        menuBar->setNativeMenuBar(false);
+        QMenu* fileMenu = menuBar->addMenu(QStringLiteral("&File"));
+        QAction* shortcutAct = fileMenu->addAction(QStringLiteral("Shortcut probe"));
+        shortcutAct->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+F9")));
+        int shortcutFired = 0;
+        QObject::connect(shortcutAct, &QAction::triggered, [&shortcutFired]() { ++shortcutFired; });
+
+        auto* menuBarHost = new TitleBar(&menuHost);
+        menuBarHost->setMenuBar(menuBar);
+        menuBar->addMenu(QStringLiteral("&Help"));   // added after the hand-off
+        menuHost.resize(1400, 200);
+        menuHost.show();
+        QApplication::setActiveWindow(&menuHost);
+        app.processEvents();
+
+        auto* menuBtn = menuBarHost->findChild<QPushButton*>(QStringLiteral("titleBarAppMenuButton"));
+        auto* appMenu = menuBarHost->findChild<QMenu*>(QStringLiteral("titleBarAppMenu"));
+        QWidget* brand = menuBarHost->findChild<QWidget*>(QStringLiteral("brandMark"));
+        check(menuBtn && menuBtn->isVisible(), "non-native menu bar becomes a visible hamburger");
+        check(!menuBar->isVisible(), "the inline menu bar is hidden");
+        if (menuBtn && brand)
+            check(menuBtn->geometry().right() < brand->x(), "hamburger leads the brand");
+        if (appMenu) {
+            checkEqual(appMenu->actions().size(), 2,
+                       "hamburger mirrors menus added before and after setMenuBar");
+        }
+        if (menuBtn) {
+            checkEqual(menuBtn->y() + menuBtn->height() / 2, menuBarHost->height() / 2,
+                       "hamburger sits on the bar's centre line");
+        }
+
+        QTest::keyClick(&menuHost, Qt::Key_F9, Qt::ControlModifier | Qt::ShiftModifier);
+        checkEqual(shortcutFired, 1, "menu shortcuts still fire with the menu bar hidden");
+
+        menuBarHost->setMinimalMode(true);
+        check(menuBtn && !menuBtn->isVisible() && !menuBar->isVisible(),
+              "minimal mode hides the hamburger and does not resurrect the menu bar");
+        QTest::keyClick(&menuHost, Qt::Key_F, Qt::AltModifier);
+        check(QApplication::activePopupWidget() == nullptr,
+              "minimal mode leaves the menu mnemonics inert, as the hidden bar did");
+        menuBarHost->setMinimalMode(false);
+        check(menuBtn && menuBtn->isVisible() && !menuBar->isVisible(),
+              "leaving minimal mode restores only the hamburger");
+
+        QTest::keyClick(&menuHost, Qt::Key_F, Qt::AltModifier);
+        check(QApplication::activePopupWidget() == fileMenu,
+              "Alt+F still opens the File menu with the menu bar hidden");
+        fileMenu->close();
+        app.processEvents();
+
+        // Last: offscreen does not hand activation back to this window after a
+        // popup closes, so nothing keyboard-driven may follow one.
+        // popup(), not exec(): an exec()'d menu would block this click until
+        // something closed it, so returning here at all is half the check.
+        if (menuBtn && appMenu) {
+            QTest::mouseClick(menuBtn, Qt::LeftButton);
+            check(QApplication::activePopupWidget() == appMenu,
+                  "clicking the hamburger pops its menu without a nested loop");
+            appMenu->close();
+            app.processEvents();
+        }
     }
 
     if (g_failures == 0) {

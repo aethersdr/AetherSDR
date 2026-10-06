@@ -21,6 +21,9 @@
 #include <QMouseEvent>
 #include <QPointer>
 #include <QPushButton>
+#include <QShortcut>
+#include <QKeySequence>
+#include <QActionEvent>
 #include <QSignalBlocker>
 #include <QScopedValueRollback>
 #include <QSizePolicy>
@@ -79,6 +82,28 @@ QPixmap buildDockSideIcon(const QWidget* widget, bool fillLeft, bool active)
         p.fillRect(10, 3, 4, 13, stroke);
     p.end();
     return pm;
+}
+
+// Build an 18×18 hamburger glyph: three 2 px bars, the conventional
+// "application menu" mark.  One pixmap per common device pixel ratio, so the
+// bars stay crisp when the window moves to a screen with another scale.
+QIcon buildAppMenuIcon(const QWidget* widget)
+{
+    const QColor stroke = ThemeManager::instance().color(
+        widget, QStringLiteral("color.titlebar.caption.glyph"));
+    QIcon icon;
+    for (const qreal dpr : {1.0, 2.0, 3.0}) {
+        QPixmap pm(QSize(18, 18) * dpr);
+        pm.setDevicePixelRatio(dpr);
+        pm.fill(Qt::transparent);
+        QPainter p(&pm);
+        p.setRenderHint(QPainter::Antialiasing, false);
+        for (const int y : {3, 8, 13})
+            p.fillRect(QRectF(2, y, 14, 2), stroke);
+        p.end();
+        icon.addPixmap(pm);
+    }
+    return icon;
 }
 
 // Build a 16×18 pop-out indicator: hollow square (the main waterfall
@@ -607,6 +632,7 @@ TitleBar::TitleBar(QWidget* parent)
     // repaint them explicitly when the palette changes.
     connect(&ThemeManager::instance(), &ThemeManager::themeChanged, this, [this]() {
         applyBarStyle();
+        if (m_appMenuBtn) m_appMenuBtn->setIcon(buildAppMenuIcon(m_appMenuBtn));
         applyAudioIcon(m_speakerBtn, AudioIcon::Speaker, m_speakerBtn->isChecked());
         applyAudioIcon(m_headphoneBtn, AudioIcon::Headphone, m_headphoneBtn->isChecked());
         setAppletDockState(m_appletPanelVisible, m_appletPanelDockedLeft);
@@ -761,6 +787,16 @@ QVariantMap TitleBar::barState() const
              {QStringLiteral("rect"), m_brand
                   ? QVariantList{m_brand->x(), m_brand->y(), m_brand->width(), m_brand->height()}
                   : QVariantList{}},
+         }},
+        {QStringLiteral("appMenu"),
+         QVariantMap{
+             {QStringLiteral("present"), m_appMenuBtn != nullptr},
+             {QStringLiteral("visible"), m_appMenuBtn && m_appMenuBtn->isVisible()},
+             {QStringLiteral("rect"), m_appMenuBtn
+                  ? QVariantList{m_appMenuBtn->x(), m_appMenuBtn->y(),
+                                 m_appMenuBtn->width(), m_appMenuBtn->height()}
+                  : QVariantList{}},
+             {QStringLiteral("menuCount"), m_appMenu ? m_appMenu->actions().size() : 0},
          }},
         {QStringLiteral("radios"), m_radioTabs ? m_radioTabs->state() : QVariantMap{}},
         {QStringLiteral("audio"), audio},
@@ -927,6 +963,21 @@ bool TitleBar::eventFilter(QObject* obj, QEvent* ev)
             return finishWindowMove(static_cast<QMouseEvent*>(ev));
     }
 
+    if (obj == m_menuBar && m_appMenu) {
+        // Keep the hamburger in step with menus added to the bar later.
+        if (ev->type() == QEvent::ActionAdded) {
+            auto* ae = static_cast<QActionEvent*>(ev);
+            QAction* before = ae->before();
+            m_appMenu->insertAction(m_appMenu->actions().contains(before) ? before : nullptr,
+                                    ae->action());
+            addAppMenuMnemonic(ae->action());
+        } else if (ev->type() == QEvent::ActionRemoved) {
+            auto* ae = static_cast<QActionEvent*>(ev);
+            m_appMenu->removeAction(ae->action());
+            removeAppMenuMnemonic(ae->action());
+        }
+    }
+
     if (obj == m_menuBar) {
         if (ev->type() == QEvent::MouseButtonDblClick) {
             auto* me = static_cast<QMouseEvent*>(ev);
@@ -1036,9 +1087,82 @@ void TitleBar::setMenuBar(QMenuBar* mb)
     mb->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Preferred);
     m_menuBar = mb;
     m_menuBar->installEventFilter(this);
-    // Between the brand mark and the radio tabs — the brand always leads the
-    // bar, so the menu can't be at index 0 any more.
+    // Reparent into the bar either way, so QMainWindow no longer lays it out
+    // above the central widget.
     m_hbox->insertWidget(m_menuBarSlot, mb);
+    if (mb->isNativeMenuBar())
+        return;   // macOS / a global-menu desktop shows the menus itself
+
+    // An inline menu bar does not sit on the 52 px bar's centre line, so
+    // its menus move into a hamburger ahead of the brand.  The bar stays
+    // hidden but alive: the automation bridge resolves menu actions through
+    // it, and MainWindow keeps building menus into it.
+    mb->hide();
+
+    m_appMenu = new QMenu(this);
+    m_appMenu->setObjectName(QStringLiteral("titleBarAppMenu"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_appMenu,
+        "QMenu { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.2}}; }"
+        "QMenu::item:selected { background: {{color.background.2}}; }");
+    m_appMenu->addActions(mb->actions());
+    for (QAction* a : mb->actions())
+        addAppMenuMnemonic(a);
+
+    m_appMenuBtn = new QPushButton(this);
+    m_appMenuBtn->setObjectName(QStringLiteral("titleBarAppMenuButton"));
+    m_appMenuBtn->setFlat(true);
+    m_appMenuBtn->setFixedSize(32, 32);
+    m_appMenuBtn->setIconSize(QSize(18, 18));
+    m_appMenuBtn->setIcon(buildAppMenuIcon(m_appMenuBtn));
+    m_appMenuBtn->setCursor(Qt::PointingHandCursor);
+    m_appMenuBtn->setToolTip(tr("Open menu"));
+    m_appMenuBtn->setAccessibleName(tr("Application menu"));
+    // popup(), not a button-owned menu: QToolButton/QPushButton open those
+    // with exec(), whose nested event loop re-enters discovery, socket and
+    // timer callbacks for as long as a menu is open.  Opened on press, like a
+    // menu bar; the press that dismissed the menu is replayed to this button
+    // straight away, and must not reopen it.
+    connect(m_appMenu, &QMenu::aboutToHide, this, [this]() { m_appMenuClosed.start(); });
+    connect(m_appMenuBtn, &QPushButton::pressed, this, [this]() {
+        if (m_appMenuClosed.isValid() && m_appMenuClosed.elapsed() < 100)
+            return;
+        m_appMenu->popup(m_appMenuBtn->mapToGlobal(QPoint(0, m_appMenuBtn->height())));
+    });
+    // Menu shortcuts keep firing with the bar hidden because this visible
+    // button carries the menu's action, which passes Qt's shortcut-context
+    // check.  Hiding the button as well would silence them.
+    m_appMenuBtn->addAction(m_appMenu->menuAction());
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_appMenuBtn, QStringLiteral(
+        "QPushButton { border: none; border-radius: 4px; background: transparent; }"
+        "QPushButton:hover, QPushButton:pressed { background: {{color.titlebar.caption.hover}}; }"));
+    m_hbox->insertWidget(0, m_appMenuBtn);
+    if (m_minimalMode)
+        m_appMenuBtn->hide();
+}
+
+void TitleBar::addAppMenuMnemonic(QAction* menuAction)
+{
+    if (!menuAction || !menuAction->menu() || m_appMenuMnemonics.contains(menuAction))
+        return;
+    const QKeySequence key = QKeySequence::mnemonic(menuAction->text());
+    if (key.isEmpty())
+        return;
+    auto* shortcut = new QShortcut(key, this);
+    connect(shortcut, &QShortcut::activated, this, [this, menuAction]() {
+        // Same reach as the bar's own mnemonics: none in minimal mode, none
+        // for a menu the radio's capabilities have hidden.
+        if (!m_appMenuBtn || !m_appMenuBtn->isVisible() || !menuAction->isVisible()
+            || !menuAction->isEnabled())
+            return;
+        if (QMenu* menu = menuAction->menu())
+            menu->popup(m_appMenuBtn->mapToGlobal(QPoint(0, m_appMenuBtn->height())));
+    });
+    m_appMenuMnemonics.insert(menuAction, shortcut);
+}
+
+void TitleBar::removeAppMenuMnemonic(QAction* menuAction)
+{
+    delete m_appMenuMnemonics.take(menuAction);
 }
 
 void TitleBar::setPcAudioLocked(bool locked)
@@ -1592,7 +1716,8 @@ void TitleBar::setMinimalMode(bool on)
     m_minimalMode = on;
 
     // Hide non-essential controls so status badges fit in the narrow strip.
-    if (m_menuBar) m_menuBar->setVisible(!on);
+    if (m_appMenuBtn) m_appMenuBtn->setVisible(!on);
+    else if (m_menuBar) m_menuBar->setVisible(!on);
     if (m_brand) m_brand->setVisible(!on);
     // The radio strip stays, compacted to the active tab: its dot is the
     // radio-link indicator now, and minimal mode is exactly when an operator

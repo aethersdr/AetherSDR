@@ -4,6 +4,7 @@
 
 #include <QColor>
 #include <QElapsedTimer>
+#include <QHash>
 #include <QList>
 #include <QPointer>
 #include <QString>
@@ -11,9 +12,12 @@
 #include <QWidget>
 
 class QPushButton;
+class QShortcut;
+class QAction;
 class QSlider;
 class QLabel;
 class QFrame;
+class QMenu;
 class QMenuBar;
 class QHBoxLayout;
 class QTimer;
@@ -47,7 +51,9 @@ public:
     // shell invites arrangements the mode cannot honor.
     void setAppletPanelControlsVisible(bool visible);
 
-    // Embed the menu bar into the left side of the title bar
+    // Take over the window's menu bar.  A native (system) menu bar is left
+    // where the platform puts it; otherwise its menus move into a hamburger
+    // button that leads the bar, ahead of the brand.
     void setMenuBar(QMenuBar* mb);
 
     void setPcAudioEnabled(bool on);
@@ -178,6 +184,17 @@ private:
     QPointer<QWindow> m_chromeWindow;
     QHBoxLayout* m_hbox{nullptr};
     QMenuBar*    m_menuBar{nullptr};
+    // Hamburger that carries the menu bar's menus where there is no native
+    // menu bar.  The QMenuBar itself stays as a hidden child: the automation
+    // bridge walks it, and it remains the single place menus are built.
+    QPushButton* m_appMenuBtn{nullptr};
+    QElapsedTimer m_appMenuClosed;   // when the menu last hid; see setMenuBar()
+    QMenu*       m_appMenu{nullptr};
+    // Alt+<letter> for each top-level menu.  The hidden bar's own mnemonics
+    // never match, so these keep the menus reachable from the keyboard.
+    QHash<QAction*, QShortcut*> m_appMenuMnemonics;
+    void addAppMenuMnemonic(QAction* menuAction);
+    void removeAppMenuMnemonic(QAction* menuAction);
     BrandMark*   m_brand{nullptr};
     RadioTabBar* m_radioTabs{nullptr};
     QLabel*      m_experimentalRadioLabel{nullptr};
