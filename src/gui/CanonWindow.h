@@ -67,7 +67,7 @@ private:
 
 // Wraps one widget (a button) and draws the guide's gold spark around it: a
 // point of light in color.canon.sparkGold with a color.canon.sparkGoldHot tip
-// circling a rounded border once every seven seconds, as on the Contributor
+// circling a rounded border once every three seconds, like the Contributor
 // Logbook's award cards. Gold marks recognition. Animates only while visible.
 class SparkBorder : public QWidget {
     Q_OBJECT

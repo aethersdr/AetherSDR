@@ -232,6 +232,7 @@ void SparkRing::paintEvent(QPaintEvent*)
 
 namespace {
 constexpr int kSparkGap = 3;   // spark border sits this far outside the child
+constexpr int kSparkBorderLapMs = 3000;   // a button's spark laps faster than the logo's
 } // namespace
 
 SparkBorder::SparkBorder(QWidget* child, int radius, QWidget* parent)
@@ -244,7 +245,7 @@ SparkBorder::SparkBorder(QWidget* child, int radius, QWidget* parent)
     m_timer = new QTimer(this);
     m_timer->setInterval(kSparkFrameMs);
     connect(m_timer, &QTimer::timeout, this, [this] {
-        m_angle -= 360.0 * kSparkFrameMs / kSparkLapMs;   // clockwise
+        m_angle -= 360.0 * kSparkFrameMs / kSparkBorderLapMs;   // clockwise
         if (m_angle < 0.0)
             m_angle += 360.0;
         update();
