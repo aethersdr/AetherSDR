@@ -1,10 +1,75 @@
 #!/usr/bin/env python3
-"""Socket-free package closure checks using injected dumpbin reports."""
+"""Socket-free package checks using injected binary inspection reports."""
 from pathlib import Path
 import tempfile
 import unittest
 
 from check_rtl_package import check_windows_runtime
+from stage_rtl_appimage import stage_libusb
+
+
+class LinuxStagingTest(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.prefix = self.root / "pinned"
+        self.libdir = self.prefix / "lib"
+        self.libdir.mkdir(parents=True)
+        self.appdir = self.root / "AppDir"
+        (self.libdir / "librtlsdr.so.0").touch()
+        self.payload = self.libdir / "libusb-1.0.so.0.5.0"
+        self.payload.write_bytes(b"pinned libusb payload")
+        self.soname = self.libdir / "libusb-1.0.so.0"
+        self.soname.symlink_to(self.payload.name)
+        self.reports = {
+            "librtlsdr.so.0": " (NEEDED) Shared library: [libusb-1.0.so.0]\n",
+            "libusb-1.0.so.0": " (SONAME) Library soname: [libusb-1.0.so.0]\n",
+        }
+
+    def stage(self):
+        return stage_libusb(self.prefix, self.appdir,
+                            lambda path: self.reports[path.name])
+
+    def test_soname_copy_survives_removing_build_prefix(self):
+        destination = self.stage()
+        self.assertEqual(destination, self.appdir / "usr/lib/libusb-1.0.so.0")
+        self.assertFalse(destination.is_symlink())
+        self.soname.unlink()
+        self.payload.unlink()
+        self.assertEqual(destination.read_bytes(), b"pinned libusb payload")
+
+    def test_missing_prefix_never_uses_host_library(self):
+        host = self.root / "host"
+        host.mkdir()
+        (host / self.soname.name).write_bytes(b"host libusb payload")
+        with self.assertRaisesRegex(ValueError, "Missing pinned RTL dependency"):
+            stage_libusb(self.root / "absent", self.appdir,
+                         lambda path: self.reports[path.name])
+        self.assertFalse(self.appdir.exists())
+
+    def test_missing_soname_is_not_satisfied_by_versioned_payload(self):
+        self.soname.unlink()
+        with self.assertRaisesRegex(ValueError, "Missing pinned RTL dependency"):
+            self.stage()
+
+    def test_source_must_stay_inside_pinned_prefix(self):
+        host = self.root / "host-libusb.so"
+        host.write_bytes(b"host libusb payload")
+        self.soname.unlink()
+        self.soname.symlink_to(host)
+        with self.assertRaisesRegex(ValueError, "Missing pinned RTL dependency"):
+            self.stage()
+
+    def test_driver_and_library_sonames_must_match(self):
+        for binary in self.reports:
+            with self.subTest(binary=binary):
+                original = self.reports[binary]
+                self.reports[binary] = original.replace("libusb-1.0.so.0", "libusb-1.0.so.1")
+                with self.assertRaisesRegex(ValueError, "must require|does not match"):
+                    self.stage()
+                self.reports[binary] = original
+        self.assertFalse(self.appdir.exists())
 
 
 class WindowsRuntimeTest(unittest.TestCase):
