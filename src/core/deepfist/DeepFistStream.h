@@ -7,7 +7,7 @@ namespace AetherSDR {
 // One worker owns this fixed-memory 3.2 kHz streaming context.
 class DeepFistStream {
 public:
-    // Explicit developer replay configuration; the application uses these defaults.
+    // Stream defaults for developer replay; the app overrides some in DeepFistCwModel::appParameters().
     struct Parameters {
         int tickSamples = 1280;
         double guardSeconds = 1.3;

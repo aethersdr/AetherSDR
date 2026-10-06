@@ -233,7 +233,8 @@ bool carrierRegression(const QByteArray& directory)
             if (stream.failed()) { return false; }
         }
     }
-    // The application's parameters (activityThreshold 3, #5950) must still hold the carrier off.
+    // The app's parameters hold the carrier off too. The completed-mark guard does that at any
+    // activityThreshold (a carrier has no key-up), so this arm says nothing about the value 3.
     QString appOutput;
     {
         DeepFistStream stream(DeepFistCwModel::appParameters());
@@ -260,7 +261,9 @@ bool carrierRegression(const QByteArray& directory)
 // out at activityThreshold 12. CONSTRUCTED fixture: the CQ TEST CQ tone plus in-band noise
 // (40 fixed random-phase tones, 550-650 Hz, seed 5950) — it exercises the gate only and does
 // not stand for any measured signal; the field evidence is the recordings attached to #5950.
-QString weakSignalDecode(lyra::dsp::DeepFistModel& model, DeepFistStream::Parameters parameters)
+// keyed = false leaves the noise alone.
+QString weakSignalDecode(lyra::dsp::DeepFistModel& model, DeepFistStream::Parameters parameters,
+    bool keyed = true)
 {
     constexpr int rate = 3200;
     // In-band noise RMS: from 0.06 to 0.13 the final CQ decodes only with the app's parameters
@@ -284,7 +287,7 @@ QString weakSignalDecode(lyra::dsp::DeepFistModel& model, DeepFistStream::Parame
         for (int k = 0; k < 40; ++k) {
             noise += std::sin(2.0 * 3.141592653589793 * frequency[k] * i / rate + phase[k]);
         }
-        audio[i] = static_cast<float>(clean[i] + noiseRms * noise / std::sqrt(20.0));
+        audio[i] = static_cast<float>((keyed ? clean[i] : 0.f) + noiseRms * noise / std::sqrt(20.0));
     }
     DeepFistStream stream(parameters);
     QString text;
@@ -305,8 +308,17 @@ bool weakSignal(const QByteArray& directory)
     const QString previous = weakSignalDecode(model, strict);
     std::fprintf(stderr, "weak signal: app parameters '%s'; threshold 12 '%s'\n",
         qPrintable(app), qPrintable(previous));
-    // The gate effect: the fading final CQ survives only with the app's parameters.
-    return app.endsWith(QStringLiteral(" CQ")) && !previous.endsWith(QStringLiteral("CQ"));
+    // Noise alone must not print more with the app's parameters than at 12.
+    const QString appNoise = weakSignalDecode(model, DeepFistCwModel::appParameters(), false);
+    const QString previousNoise = weakSignalDecode(model, strict, false);
+    std::fprintf(stderr, "noise only: app parameters '%s'; threshold 12 '%s'\n",
+        qPrintable(appNoise), qPrintable(previousNoise));
+    const QString failed = QStringLiteral("<failed>");
+    if (previous == failed || appNoise == failed || previousNoise == failed) { return false; }
+    // The gate effect: the final CQ survives only with the app's parameters. The trailing
+    // noise-only tail dilutes the 6 s window's keying ratio, which is what closes the gate at 12.
+    return app.endsWith(QStringLiteral(" CQ")) && !previous.endsWith(QStringLiteral("CQ"))
+        && appNoise.size() <= previousNoise.size();
 }
 bool churn()
 {
