@@ -241,19 +241,23 @@ the first one.
 | Concern | `CanonWindow` | Why |
 |---|---|---|
 | Frameless chrome integration | Always frameless; ignores `FramelessWindow` and is not tracked by `trackPersistentDialog()` | The style guide's rounded, title-bar-less window *is* the design; native chrome would put a title bar over it |
-| Geometry persistence | None; opens centred on its parent every time | It is a short-lived window, not a workspace tool |
+| Geometry persistence | None; asks to open centred on its parent every time (Wayland compositors place top-level windows themselves and may ignore it) | It is a short-lived window, not a workspace tool |
 
 What it keeps:
 
 - **Moving:** dragging any empty part of the window moves it through
   `FramelessMoveHelper` (press/move/release), so the xcb and translucent-Windows
-  fallbacks still apply.
+  fallbacks still apply. A press on a widget that takes it for itself — a
+  button, a link, text you can select — does not move the window; About's
+  build details stay selectable so they can be copied into a bug report.
 - **Closing:** the corner close button, Escape and `QKeySequence::Close`
   (⌘W, Ctrl+W) all close it.
-- **Deletion:** pair it with `WA_DeleteOnClose`, as About does.
+- **Deletion:** pair it with `WA_DeleteOnClose`, as About does, and hold it in
+  a `QPointer` so a second open raises the existing window.
 - **Motion:** `SparkRing` and `SparkBorder` follow the OS reduced-motion
   preference (`QAccessibilityHints::motionPreference`) and hold still when it
-  is set.
+  is set. They animate only while visible and tick slowly while the window is
+  not exposed.
 
 It is translucent, so the rounded corners need a compositor; an X11 session
 without one shows square black corners. Use `CanonWindow` only for windows the
