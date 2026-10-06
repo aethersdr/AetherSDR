@@ -812,6 +812,28 @@ int main()
                   "a window of marked responses only has no peak, so the last value is used");
         }
 
+        // The rule itself, without the window: non-ACK, RADDR 1, DATA[31:16]
+        // exactly 0. An ACK's echo and the other response addresses are never
+        // marked, whatever their upper half holds.
+        {
+            static_assert(isNonMeasurementRaddr1(Ep6Response{false, 0x01, false, false, 2944u}));
+            static_assert(!isNonMeasurementRaddr1(Ep6Response{false, 0x01, false, false, 1u << 16}));
+            const auto marked = [&](std::uint8_t c0, std::uint32_t data) {
+                return isNonMeasurementRaddr1(*parseEp6Response(frame(c0, data).data()));
+            };
+            check(marked(0x08, 2944u),
+                  "non-measurement rule: RADDR 1 with a temperature word of 0 is marked");
+            check(marked(0x08, 0u) && marked(0x08 | 0x01, 0xFFFFu),
+                  "non-measurement rule: whatever the forward word or the PTT bit");
+            check(!marked(0x08, (1u << 16) | 2944u) && !marked(0x08, (1234u << 16) | 2944u)
+                      && !marked(0x08, 0x8000u << 16),
+                  "non-measurement rule: any non-zero temperature word is a measurement");
+            check(!marked(0x80 | (0x01 << 1), 2944u),
+                  "non-measurement rule: an ACK on command address 1 is not marked");
+            check(!marked(0x00, 0x15u) && !marked(0x10, 4095u) && !marked(0x18, 0u),
+                  "non-measurement rule: RADDR 0, 2 and 3 are not marked by a zero upper half");
+        }
+
         // ---- TX FIFO status: RADDR 0, DATA[15:8] ----
         //
         // This is the check MetisProtocol.cpp's own comment above txFifoCount

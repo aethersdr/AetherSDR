@@ -470,6 +470,15 @@ struct Hl2Telemetry {
     void apply(const Ep6Response& r) noexcept;
 };
 
+// A non-ACK RADDR-1 response whose temperature word, DATA[31:16], is 0 is not a
+// measurement. hl2TemperatureCelsius puts 0 C at 0.5 V, so 0 counts is 0 V,
+// which no working sensor reads. Gateware 74.2 sends a few such responses just
+// after the T/R switch-over, and their forward word can be far above the carrier.
+[[nodiscard]] constexpr bool isNonMeasurementRaddr1(const Ep6Response& r) noexcept
+{
+    return !r.ack && r.raddr == 0x01 && (r.data >> 16) == 0;
+}
+
 // Accumulator for Hl2Telemetry::forwardPowerPeakRaw: the maximum of DATA[15:0]
 // over non-ACK RADDR-1 responses that carry a measurement. Kept here so the
 // rule is testable without a socket.
@@ -481,11 +490,9 @@ struct ForwardPowerWindow {
     {
         if (r.ack || r.raddr != 0x01)
             return;
-        // A temperature word of 0 (DATA[31:16]; -50 C by hl2TemperatureCelsius)
-        // marks a response that is not a measurement: gateware 74.2 sends a few
-        // just after the T/R switch-over, and their forward word can be far
-        // above the carrier. The last-value fields in apply() still take it.
-        if ((r.data >> 16) == 0)
+        // Only this window skips it: Hl2Telemetry::apply() still takes both
+        // halves of the word as last values.
+        if (isNonMeasurementRaddr1(r))
             return;
         const int v = static_cast<int>(r.data & 0xFFFF);
         if (!peak || v > *peak)
