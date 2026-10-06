@@ -493,9 +493,10 @@ jobs:
           SAFE_REF="${GITHUB_REF_NAME//[^A-Za-z0-9._-]/_}"
           "./AetherSDR-${SAFE_REF}-${{ matrix.arch }}.AppImage" --appimage-extract > /dev/null
           while read -r name _ id _; do
-            shipped=$(find squashfs-root -type f -name "$name" | head -1)
+            shipped=$(find squashfs-root -type f -name "$name" -print -quit)
             [ -n "$shipped" ] || { echo "::error::$name is not in the AppImage"; exit 1; }
-            got=$(readelf -n "$shipped" | sed -n 's/^ *Build ID: *\([0-9a-f]*\)$/\1/p' | head -1)
+            notes=$(readelf -n "$shipped")
+            got=$(sed -n '/Build ID:/{s/^ *Build ID: *\([0-9a-f]*\)$/\1/p;q;}' <<< "$notes")
             if [ "$got" != "$id" ]; then
               echo "::error::$name in the AppImage has build ID '$got', symbols are for '$id'"
               exit 1

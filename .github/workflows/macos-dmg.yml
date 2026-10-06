@@ -747,7 +747,8 @@ jobs:
         run: |
           set -euo pipefail
           while read -r name _ uuid arch _; do
-            if ! dwarfdump --uuid "build/AetherSDR.app/Contents/MacOS/$name" | grep -q "UUID: $uuid $arch"; then
+            uuids=$(dwarfdump --uuid "build/AetherSDR.app/Contents/MacOS/$name")
+            if [[ "$uuids" != *"UUID: $uuid $arch"* ]]; then
               echo "::error::$name $arch in the signed bundle does not carry UUID $uuid"
               dwarfdump --uuid "build/AetherSDR.app/Contents/MacOS/$name" || true
               exit 1

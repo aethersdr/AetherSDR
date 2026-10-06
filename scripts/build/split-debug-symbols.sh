@@ -35,12 +35,17 @@ case "$(uname -s)" in
 Linux)
     for bin in "$@"; do
         [ -f "$bin" ] || { echo "error: $bin not found" >&2; exit 1; }
-        id=$(readelf -n "$bin" | sed -n 's/^ *Build ID: *\([0-9a-f]*\)$/\1/p' | head -1)
+        # Tool output is captured before it is searched: under pipefail, a
+        # reader that stops early (grep -q, head) SIGPIPEs a large writer and
+        # fails the whole check.
+        notes=$(readelf -n "$bin")
+        id=$(sed -n '/Build ID:/{s/^ *Build ID: *\([0-9a-f]*\)$/\1/p;q;}' <<< "$notes")
         if [ -z "$id" ]; then
             echo "error: $bin has no GNU build ID; its symbols could never be matched" >&2
             exit 1
         fi
-        if ! readelf -S "$bin" | grep -q '\.debug_info'; then
+        sections=$(readelf -S "$bin")
+        if [[ "$sections" != *.debug_info* ]]; then
             echo "error: $bin has no .debug_info; was it built with -g?" >&2
             exit 1
         fi
@@ -59,7 +64,13 @@ Darwin)
         dsym="$out/$name.dSYM"
         dsymutil "$bin" -o "$dsym"
         dwarf="$dsym/Contents/Resources/DWARF/$name"
-        if [ ! -s "$dwarf" ] || ! dwarfdump --debug-info "$dwarf" | grep -q 'DW_TAG_compile_unit'; then
+        # The dSYM's __debug_info section size, from the load commands.
+        info_size=0
+        if [ -s "$dwarf" ]; then
+            commands=$(otool -l "$dwarf")
+            info_size=$(awk '/sectname __debug_info$/ {f = 1} f && $1 == "size" {print $2; exit}' <<< "$commands")
+        fi
+        if [ -z "$info_size" ] || [ $((info_size)) -eq 0 ]; then
             echo "error: $dsym holds no DWARF; was $bin built with -g?" >&2
             exit 1
         fi
