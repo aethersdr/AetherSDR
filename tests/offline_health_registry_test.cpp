@@ -193,8 +193,13 @@ int main(int argc, char** argv)
     // declaration; nothing below it needs a radio, a socket or an address that
     // resolves. OfflineHealthRegistry::declare() warns on a re-declaration --
     // that warning is this line, and it is expected output.
+    //
+    // `rec` lives at main() scope, not in the block below, because the factory
+    // that captures it outlives the block: section 6 rebuilds `hl2` and gets a
+    // double pointing at it. Block-scoped, that was a stack-use-after-scope
+    // (ASan, #6154).
+    RecorderState rec;
     {
-        RecorderState rec;
         OfflineHealthRegistry::declare(
             QStringLiteral("hl2"), [&rec](QObject*) {
                 return std::unique_ptr<IOfflineHealthSource>(

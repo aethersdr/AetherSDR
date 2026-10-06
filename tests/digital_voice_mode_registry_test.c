@@ -2,6 +2,10 @@
 #include "SmartSDR_Interface/traffic_cop.h"
 #include "common.h"
 
+/* Every check here is an assert(), and the calls under test sit inside them,
+ * so the test must keep them in RelWithDebInfo/Release builds (-DNDEBUG).
+ * <assert.h> re-reads NDEBUG on each inclusion. */
+#undef NDEBUG
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
