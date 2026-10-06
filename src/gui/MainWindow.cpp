@@ -4485,7 +4485,7 @@ QJsonObject MainWindow::automationAppletPanelSnapshot() const
         snapshot.insert(QStringLiteral("splitterIndex"),
                         m_splitter->indexOf(m_appletPanel));
         snapshot.insert(QStringLiteral("panIndex"),
-                        m_splitter->indexOf(m_panStack));
+                        m_splitter->indexOf(centralPanWidget()));
     }
     return snapshot;
 }
@@ -4590,6 +4590,12 @@ bool MainWindow::automationTitleBarAction(const QString& action,
         const auto tabWidgets = tabs->findChildren<RadioTab*>();
         for (RadioTab* tab : tabWidgets) {
             if (tab->entry().id == target) {
+                // A hidden tab (removed from the strip, or compacted away)
+                // is one the operator cannot click either.
+                if (!tab->isVisible()) {
+                    return fail(QStringLiteral("radio tab '") + target
+                                + QStringLiteral("' is not visible"));
+                }
                 // Discovery can rebuild the strip before the deferred turn.
                 const QPointer<RadioTab> guarded(tab);
                 return later([guarded]() {
@@ -6691,6 +6697,8 @@ void MainWindow::onConnectionStateChanged(bool connected)
         if (m_userDisconnected) {
             if (m_heartbeatMissTimer) m_heartbeatMissTimer->stop();
             if (m_titleBar) m_titleBar->clearLinkAlarm();
+            m_lastSessionTab = {};
+            scheduleRadioTabRefresh();
         }
 
         const bool reconnectWan = !m_userDisconnected && m_radioModel.isWan()
@@ -9730,9 +9738,9 @@ void MainWindow::appletPanelState(bool* floating, bool* dockedLeft,
     if (dockedLeft) {
         *dockedLeft = AppSettings::instance()
             .value("AppletPanelDockedLeft", "False").toString() == "True";
-        if (!m_appletPanelFloatWindow && m_splitter && m_appletPanel && m_panStack) {
+        if (!m_appletPanelFloatWindow && m_splitter && m_appletPanel) {
             const int appletIdx = m_splitter->indexOf(m_appletPanel);
-            const int panIdx    = m_splitter->indexOf(m_panStack);
+            const int panIdx    = m_splitter->indexOf(centralPanWidget());
             if (appletIdx >= 0 && panIdx >= 0)
                 *dockedLeft = appletIdx < panIdx;
         }

@@ -86,6 +86,9 @@
               "available": "{color.gray.300}",
               "inUse":     "{color.amber.500}"
             },
+            "otherTx": {
+              "background": "#ffffff"
+            },
             "caption": {
               "glyph":       "{color.gray.100}",
               "glyph.hover": "{color.gray.50}",

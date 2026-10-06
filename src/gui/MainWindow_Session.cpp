@@ -281,6 +281,20 @@ void MainWindow::refreshRadioTabs()
         tabs.prepend(entry);
     }
 
+    if (connected) {
+        for (const RadioTabEntry& entry : std::as_const(tabs)) {
+            if (entry.id == activeSerial) {
+                m_lastSessionTab = entry;
+                break;
+            }
+        }
+    } else if (!m_lastSessionTab.id.isEmpty() && !seen.contains(m_lastSessionTab.id)) {
+        // Dropped and no longer discovered (or never was: a routed radio).
+        RadioTabEntry entry = m_lastSessionTab;
+        entry.status = RadioTabStatus::Available;
+        tabs.prepend(entry);
+    }
+
     for (RadioTabEntry& entry : tabs) {
         // The demo's name is its "not on the air" safety label — never offer
         // to replace it, not even through Radio Setup while connected.
@@ -288,6 +302,7 @@ void MainWindow::refreshRadioTabs()
             && (entry.status == RadioTabStatus::Connected
                 || m_connPanel->canRenameRadio(entry.id));
         entry.visibleInTabs = entry.status == RadioTabStatus::Connected
+            || entry.id == m_lastSessionTab.id
             || !hidden.contains(entry.id);
     }
     m_titleBar->setRadioTabs(tabs);
@@ -624,6 +639,14 @@ void MainWindow::wireDiscovery()
                 }
                 if (action == QStringLiteral("remove")) {
                     updated.append(radioId);
+                    // Removing the dropped radio's tab dismisses its alarm, as
+                    // a deliberate disconnect would.
+                    if (radioId == m_lastSessionTab.id) {
+                        m_lastSessionTab = {};
+                        if (m_heartbeatMissTimer) m_heartbeatMissTimer->stop();
+                        if (m_titleBar) m_titleBar->clearLinkAlarm();
+                        scheduleRadioTabRefresh();   // it may already be hidden
+                    }
                 }
                 if (updated == hidden) {
                     return;

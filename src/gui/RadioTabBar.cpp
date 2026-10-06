@@ -2,6 +2,7 @@
 
 #include "core/ThemeManager.h"
 
+#include <QApplication>
 #include <QEnterEvent>
 #include <QFontMetricsF>
 #include <QFocusEvent>
@@ -761,12 +762,36 @@ void RadioTabBar::setDiscoveredRadios(const QList<RadioTabEntry>& radios)
         return;
     }
     m_discovered = radios;
-    if (isDiscoveryPopoverVisible()) {
-        const QLineEdit* search = m_popover->findChild<QLineEdit*>(QStringLiteral("radioSwitcherSearch"));
-        const QString query = search ? search->text() : QString();
-        showDiscoveryPopover();
-        m_popover->findChild<QLineEdit*>(QStringLiteral("radioSwitcherSearch"))->setText(query);
+    refreshOpenPopover();
+}
+
+void RadioTabBar::refreshOpenPopover()
+{
+    if (!isDiscoveryPopoverVisible()) {
+        return;
     }
+    // A row's Actions menu is open: rebuilding would delete it under the
+    // cursor.  Rebuild once it closes, from whatever the list is by then.
+    auto* openMenu = qobject_cast<QMenu*>(QApplication::activePopupWidget());
+    for (QWidget* w = openMenu ? openMenu->parentWidget() : nullptr; w; w = w->parentWidget()) {
+        if (w != m_popover) {
+            continue;
+        }
+        if (!m_popoverRefreshPending) {
+            m_popoverRefreshPending = true;
+            connect(openMenu, &QMenu::aboutToHide, this, [this]() {
+                QTimer::singleShot(0, this, [this]() {
+                    m_popoverRefreshPending = false;
+                    refreshOpenPopover();
+                });
+            }, Qt::SingleShotConnection);
+        }
+        return;
+    }
+    const QLineEdit* search = m_popover->findChild<QLineEdit*>(QStringLiteral("radioSwitcherSearch"));
+    const QString query = search ? search->text() : QString();
+    showDiscoveryPopover();
+    m_popover->findChild<QLineEdit*>(QStringLiteral("radioSwitcherSearch"))->setText(query);
 }
 
 void RadioTabBar::setActiveRadio(const QString& id)

@@ -183,6 +183,7 @@ private:
     void rebuild();
     void applyActiveState();
     RadioTab* linkCarrierTab() const;
+    void refreshOpenPopover();   // rebuild an open popover from m_discovered
     QString   linkRadioId() const;   // the radio the heartbeat describes
     void updateTabViewport(RadioTab* ensureVisible = nullptr);
     // Push the current link state (override colour, alarm phase, glow level)
@@ -198,6 +199,7 @@ private:
     QList<RadioTab*>     m_tabs;
     QAbstractButton*     m_addButton{nullptr};
     QWidget*             m_popover{nullptr};
+    bool                 m_popoverRefreshPending{false};   // waiting on a row's menu to close
     QString              m_activeId;
     QString              m_carrierId;   // last session's radio; carries the link through a drop
     QTimer*              m_pulseTimer{nullptr};   // glow decay after a heartbeat

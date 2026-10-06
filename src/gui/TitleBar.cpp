@@ -342,7 +342,7 @@ TitleBar::TitleBar(QWidget* parent)
     ThemeManager::instance().applyStyleSheet(
         m_otherTxLabel,
         QStringLiteral(
-            "QLabel { background: {{color.titlebar.caption.close.glyph}};"
+            "QLabel { background: {{color.titlebar.otherTx.background}};"
             " color: {{color.accent.danger}}; font-size: 12px; font-weight: bold;"
             " border-radius: 3px; padding: 2px 8px; }"));
     m_otherTxLabel->setVisible(false);

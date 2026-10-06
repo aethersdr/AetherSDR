@@ -7249,11 +7249,11 @@ add_executable(unified_title_bar_test
     src/gui/FramelessResizer.cpp
     src/gui/FramelessWindowTitleBar.cpp
     src/gui/DragValuePopup.cpp
-    ${AETHER_SETTINGS_SOURCES}
+    $<TARGET_OBJECTS:aether_test_settings>
     src/core/ThemeManager.cpp
     src/core/ThemeSeedGenerated.cpp
-    src/core/LogManager.cpp
-    src/core/AsyncLogWriter.cpp
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
     ${THEME_TEST_RESOURCES}
 )
 target_include_directories(unified_title_bar_test PRIVATE src)

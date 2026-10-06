@@ -101,6 +101,7 @@ band of reserved-but-empty space above the old strip for as long as they matched
 | `color.titlebar.status.connected` | `{color.green.500}` | radio-link dot: this client owns the session |
 | `color.titlebar.status.available` | `{color.gray.500}` | radio-link dot: discovered, idle |
 | `color.titlebar.status.inUse` | `{color.amber.500}` | radio-link dot: another station has it |
+| `color.titlebar.otherTx.background` | `#ffffff` | "other station transmitting" badge fill, under `color.accent.danger` text |
 | `color.titlebar.caption.glyph` | `{color.gray.400}` | window-control glyph, at rest |
 | `color.titlebar.caption.glyph.hover` | `{color.gray.50}` | window-control glyph, hovered |
 | `color.titlebar.caption.hover` | `#14ffffff` | window-control hover wash |

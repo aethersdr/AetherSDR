@@ -43,6 +43,7 @@
 #include <QLineEdit>
 #include <QMenu>
 #include <QMenuBar>
+#include <QPointer>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QScrollBar>
@@ -508,6 +509,35 @@ int main(int argc, char** argv)
             check(paintedPixelCount(rendered) > 0,
                   "the discovered-radios popover paints an opaque themed panel");
             popover->close();
+        }
+
+        // Discovery changes while a row's Actions menu is open must not delete
+        // that menu under the cursor; the popover rebuilds once it closes.
+        tabs->showDiscoveryPopover();
+        if (QWidget* reopened = QApplication::activePopupWidget()) {
+            QPointer<QMenu> rowMenu = reopened->findChild<QMenu*>(QStringLiteral("radioSwitcherMenu_SERIAL-2"));
+            check(!rowMenu.isNull(), "the reopened popover has the in-use radio's menu");
+            if (rowMenu) {
+                rowMenu->popup(reopened->mapToGlobal(QPoint(0, 0)));
+                app.processEvents();
+                tabs->setDiscoveredRadios({connected});
+                app.processEvents();
+                // No event loop runs here, so flush deleteLater() by hand: a
+                // rebuild would delete the menu exactly as the live app does.
+                QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+                check(!rowMenu.isNull() && rowMenu->isVisible(),
+                      "an open row menu survives a discovery change");
+                if (rowMenu) rowMenu->close();
+                app.processEvents();
+                app.processEvents();
+                // The old popover is still pending deleteLater(); the rebuilt
+                // one is the open popup.
+                QWidget* rebuilt = QApplication::activePopupWidget();
+                check(rebuilt && !rebuilt->findChild<QPushButton*>(QStringLiteral("radioSwitcherRow_SERIAL-2")),
+                      "the popover rebuilds from the new list once the menu closes");
+                if (rebuilt) rebuilt->close();
+            }
+            tabs->setDiscoveredRadios({connected, inUse});
         }
 
         // The strip must not make the whole title bar wider for every radio.

@@ -1956,6 +1956,9 @@ void ConnectionPanel::showRadioContextMenu(const QPoint& pos)
     // on-radio store (HL2, sim, any future non-Flex backend).
     if (hl2::Hl2Discovery::nicknameLivesOnRadio(radio))
         return;
+    // The demo's name is its "not on the air" safety label (canRenameRadio).
+    if (radio.family == SimBackend::familyName())
+        return;
 
     QMenu menu(this);
     QAction* setNick = menu.addAction(tr("Set Nickname…"));
