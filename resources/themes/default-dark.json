@@ -118,6 +118,22 @@
               ]
             }
           },
+          "canon": {
+            "ground":   "#060b13",
+            "raised":   "#0a121e",
+            "nested":   "#0e1a2a",
+            "control":  "#12233a",
+            "ink":      "#eaf2fb",
+            "inkSoft":  "#c4d4e8",
+            "muted":    "#8598b4",
+            "line":     "#1f78a5d2",
+            "lineHi":   "#4778bee6",
+            "cyan":     "#5de3ff",
+            "aqua":     "#8ef7e6",
+            "onAccent": "#041019",
+            "bloom": { "blue": "#293aa7ff", "teal": "#1a7bf2dc" },
+            "grid":     "#0978aad2"
+          },
           "meter": {
             "crst":   "{color.red.500}",
             "rms":    "{color.blue.500}",

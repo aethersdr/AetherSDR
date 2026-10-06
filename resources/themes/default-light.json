@@ -119,6 +119,22 @@
               ]
             }
           },
+          "canon": {
+            "ground":   "{color.gray.900}",
+            "raised":   "{color.gray.950}",
+            "nested":   "{color.gray.800}",
+            "control":  "{color.gray.750}",
+            "ink":      "{color.gray.50}",
+            "inkSoft":  "{color.gray.50}",
+            "muted":    "{color.gray.100}",
+            "line":     "{color.gray.700}",
+            "lineHi":   "{color.gray.400}",
+            "cyan":     "{color.blue.500}",
+            "aqua":     "{color.blue.300}",
+            "onAccent": "{color.gray.950}",
+            "bloom": { "blue": "#140b6bc4", "teal": "#0f12a08c" },
+            "grid":     "#0a1a2a3a"
+          },
           "meter": {
             "crst":   "{color.red.500}",
             "rms":    "{color.blue.500}",
