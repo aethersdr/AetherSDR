@@ -54,6 +54,7 @@
 #include "core/AppSettings.h"
 #include "core/SpotModeResolver.h"
 #include "core/ThemeManager.h"
+#include "BrandMark.h"
 #include "CanonWindow.h"
 #include "core/TxKeyingMarker.h"
 #include "models/BandPlanManager.h"
@@ -75,7 +76,6 @@
 #include <QPointer>
 #include <QGridLayout>
 #include <QFontMetricsF>
-#include <QPainterPath>
 #include <QPainter>
 #include <QPushButton>
 #include <QSpinBox>
@@ -93,9 +93,8 @@ namespace AetherSDR {
 
 namespace {
 
-// "AetherSDR" at display size, centred: "Aether" in the brand wordmark ink and
-// "SDR" filled with the brand gradient (the BrandMark treatment, without the
-// mark, which the About window shows larger above it).
+// "AetherSDR" at display size, centred: BrandMark's wordmark, without the
+// mark, which the About window shows larger above it.
 class AboutWordmark : public QWidget {
 public:
     explicit AboutWordmark(QWidget* parent = nullptr) : QWidget(parent)
@@ -106,33 +105,17 @@ public:
     QSize sizeHint() const override
     {
         const QFontMetricsF fm(wordFont());
-        return QSize(int(fm.horizontalAdvance(QStringLiteral("AetherSDR"))) + 8,
-                     int(fm.height()) + 4);
+        return QSize(int(BrandMark::wordmarkWidth(wordFont())) + 8, int(fm.height()) + 4);
     }
 
 protected:
     void paintEvent(QPaintEvent*) override
     {
-        auto& tm = ThemeManager::instance();
         QPainter p(this);
-        p.setRenderHint(QPainter::Antialiasing, true);
-        p.setRenderHint(QPainter::TextAntialiasing, true);
         const QFont f = wordFont();
         const QFontMetricsF fm(f);
-        const QString one = QStringLiteral("Aether"), two = QStringLiteral("SDR");
-        const qreal w = fm.horizontalAdvance(one) + fm.horizontalAdvance(two);
-        qreal x = (width() - w) / 2.0;
-        const qreal baseline = (height() + fm.capHeight()) / 2.0;
-        p.setFont(f);
-        p.setPen(tm.color(this, QStringLiteral("color.brand.wordmark")));
-        p.drawText(QPointF(x, baseline), one);
-        x += fm.horizontalAdvance(one);
-        QPainterPath glyphs;
-        glyphs.addText(QPointF(x, baseline), f, two);
-        p.setPen(Qt::NoPen);
-        p.setBrush(tm.brush(this, QStringLiteral("color.brand.gradient"),
-                            QRectF(x, 0, fm.horizontalAdvance(two), height()).toRect()));
-        p.drawPath(glyphs);
+        BrandMark::paintWordmark(p, this, f, (width() - BrandMark::wordmarkWidth(f)) / 2.0,
+                                 (height() + fm.capHeight()) / 2.0, height());
     }
 
 private:
@@ -1770,11 +1753,18 @@ void MainWindow::buildMenuBar()
         // Styled to the AetherSDR style guide: an ambient ground, the gradient
         // wordmark, nested build details, and colour only from color.canon.*
         // and color.brand.* tokens.
+        // One About at a time: a second click brings the open one forward.
+        if (m_aboutWindow) {
+            m_aboutWindow->raise();
+            m_aboutWindow->activateWindow();
+            return;
+        }
         auto& tm = AetherSDR::ThemeManager::instance();
         // A CanonWindow: no title bar, rounded corners, the ambient ground,
         // a corner close button; Escape and OK close it too.
         auto* dlg = new CanonWindow(QStringLiteral("About AetherSDR"), this);
         dlg->setAttribute(Qt::WA_DeleteOnClose);
+        m_aboutWindow = dlg;
         dlg->setFixedWidth(400);
 
         auto* vbox = new QVBoxLayout(dlg->bodyWidget());
@@ -1782,12 +1772,8 @@ void MainWindow::buildMenuBar()
         vbox->setContentsMargins(24, 26, 24, 22);
 
         // The mark is dark on a dark ground: a contrast ring and the guide's
-        // spark set it apart.
-        const qreal dpr = dlg->devicePixelRatioF();
-        QPixmap mark = QPixmap(":/icon.png").scaled(QSize(88, 88) * dpr, Qt::KeepAspectRatio,
-                                                    Qt::SmoothTransformation);
-        mark.setDevicePixelRatio(dpr);
-        auto* logo = new SparkRing(mark, 88);
+        // spark set it apart. SparkRing scales it for the screen's DPR.
+        auto* logo = new SparkRing(QPixmap(QStringLiteral(":/icon.png")), 88);
         logo->setAccessibleName(QStringLiteral("AetherSDR logo"));
         vbox->addWidget(logo, 0, Qt::AlignHCenter);
         auto* wordmark = new AboutWordmark;
@@ -1843,6 +1829,8 @@ void MainWindow::buildMenuBar()
             auto* k = new QLabel(rows[i].first);
             k->setProperty("role", QStringLiteral("key"));
             auto* v = new QLabel(rows[i].second);
+            // Driver and device names are not markup.
+            v->setTextFormat(Qt::PlainText);
             v->setWordWrap(true);
             v->setAlignment(Qt::AlignLeft | Qt::AlignTop);
             v->setTextInteractionFlags(Qt::TextSelectableByMouse);

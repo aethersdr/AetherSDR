@@ -3,6 +3,8 @@
 #include <QPixmap>
 #include <QWidget>
 
+class QPainter;
+
 namespace AetherSDR {
 
 // Brand cluster for the unified title bar: the circular logo mark followed by
@@ -31,6 +33,15 @@ public:
     // Introspection for the automation bridge (`titlebar` model).
     QString wordmarkText() const;
     bool    hasLogo() const { return !m_logo.isNull(); }
+
+    // Paints the wordmark ("Aether" in color.brand.wordmark, "SDR" filled
+    // with color.brand.gradient) in `font`, starting at `x` on `baseline`.
+    // The gradient spans the "SDR" run across `height`, the painted widget's
+    // height. `scope` resolves the theme tokens. Shared so every place that
+    // shows the wordmark draws it the same way.
+    static void paintWordmark(QPainter& p, const QWidget* scope, const QFont& font,
+                              qreal x, qreal baseline, qreal height);
+    static qreal wordmarkWidth(const QFont& font);
 
 protected:
     void paintEvent(QPaintEvent* ev) override;
