@@ -8,6 +8,9 @@
 //
 // Closing: a caption-less QDialog gets no Close shortcut from the platform, so
 // CanonWindow wires QKeySequence::Close (⌘W on macOS, Ctrl+W elsewhere).
+//
+// Reduced motion (RFC #6226): the sparks stop animating when the OS asks for
+// reduced motion, and resume when it stops asking.
 
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
@@ -15,6 +18,8 @@
 #include "gui/CanonWindow.h"
 
 #include <QApplication>
+#include <QPushButton>
+#include <QVBoxLayout>
 #include <QKeyEvent>
 #include <QKeySequence>
 #include <QMouseEvent>
@@ -119,6 +124,47 @@ int main(int argc, char** argv)
         EXPECT_TRUE(QTest::qWaitForWindowActive(&w));
         QTest::keyClick(&w, Qt::Key_Escape);
         EXPECT_TRUE(!w.isVisible());
+    }
+
+    // ---- the sparks hold still under the OS reduced-motion preference ----
+    {
+        CanonWindow w(QStringLiteral("Canon"));
+        auto* lay = new QVBoxLayout(w.bodyWidget());
+        QPixmap image(32, 32);
+        image.fill(Qt::darkBlue);
+        auto* ring = new SparkRing(image, 32);
+        auto* border = new SparkBorder(new QPushButton(QStringLiteral("Logbook")), 4);
+        lay->addWidget(ring);
+        lay->addWidget(border);
+        w.resize(400, 300);
+        w.show();
+        EXPECT_TRUE(QTest::qWaitForWindowExposed(&w));
+
+        // The offscreen platform reports no preference: both animate.
+        EXPECT_TRUE(ring->isAnimating());
+        EXPECT_TRUE(border->isAnimating());
+
+        ring->setMotionPreference(Qt::MotionPreference::ReducedMotion);
+        border->setMotionPreference(Qt::MotionPreference::ReducedMotion);
+        EXPECT_TRUE(!ring->isAnimating());
+        EXPECT_TRUE(!border->isAnimating());
+
+        // Re-showing must not restart a held spark.
+        w.hide();
+        w.show();
+        EXPECT_TRUE(QTest::qWaitForWindowExposed(&w));
+        EXPECT_TRUE(!ring->isAnimating());
+        EXPECT_TRUE(!border->isAnimating());
+
+        ring->setMotionPreference(Qt::MotionPreference::NoPreference);
+        border->setMotionPreference(Qt::MotionPreference::NoPreference);
+        EXPECT_TRUE(ring->isAnimating());
+        EXPECT_TRUE(border->isAnimating());
+
+        // Lifting the preference while hidden waits for the next show.
+        w.hide();
+        ring->setMotionPreference(Qt::MotionPreference::NoPreference);
+        EXPECT_TRUE(!ring->isAnimating());
     }
 
     if (g_failures == 0) {

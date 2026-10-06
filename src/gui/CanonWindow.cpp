@@ -5,6 +5,7 @@
 #include "core/ThemeManager.h"
 
 #include <QConicalGradient>
+#include <QAccessibilityHints>
 #include <QGuiApplication>
 #include <QKeySequence>
 #include <QLinearGradient>
@@ -14,6 +15,7 @@
 #include <QRadialGradient>
 #include <QScreen>
 #include <QShortcut>
+#include <QStyleHints>
 #include <QTimer>
 #include <QToolButton>
 #include <QVBoxLayout>
@@ -34,6 +36,11 @@ bool sparkVisible(const QWidget* w)
 {
     const QWindow* handle = w->window()->windowHandle();
     return handle && handle->isExposed();
+}
+
+const QAccessibilityHints* accessibilityHints()
+{
+    return QGuiApplication::styleHints()->accessibility();
 }
 } // namespace
 
@@ -203,6 +210,9 @@ SparkRing::SparkRing(const QPixmap& image, int diameter, QWidget* parent)
         }
         update();
     });
+    setMotionPreference(accessibilityHints()->motionPreference());
+    connect(accessibilityHints(), &QAccessibilityHints::motionPreferenceChanged,
+            this, &SparkRing::setMotionPreference);
 }
 
 QSize SparkRing::sizeHint() const
@@ -213,13 +223,31 @@ QSize SparkRing::sizeHint() const
 void SparkRing::showEvent(QShowEvent* event)
 {
     QWidget::showEvent(event);
-    m_timer->start();
+    if (!m_motionReduced) {
+        m_timer->start();
+    }
 }
 
 void SparkRing::hideEvent(QHideEvent* event)
 {
     QWidget::hideEvent(event);
     m_timer->stop();
+}
+
+void SparkRing::setMotionPreference(Qt::MotionPreference preference)
+{
+    m_motionReduced = preference == Qt::MotionPreference::ReducedMotion;
+    if (m_motionReduced) {
+        m_timer->stop();
+    } else if (isVisible()) {
+        m_timer->start();
+    }
+    update();
+}
+
+bool SparkRing::isAnimating() const
+{
+    return m_timer->isActive();
 }
 
 void SparkRing::paintEvent(QPaintEvent*)
@@ -299,18 +327,39 @@ SparkBorder::SparkBorder(QWidget* child, int radius, QWidget* parent)
         }
         update();
     });
+    setMotionPreference(accessibilityHints()->motionPreference());
+    connect(accessibilityHints(), &QAccessibilityHints::motionPreferenceChanged,
+            this, &SparkBorder::setMotionPreference);
 }
 
 void SparkBorder::showEvent(QShowEvent* event)
 {
     QWidget::showEvent(event);
-    m_timer->start();
+    if (!m_motionReduced) {
+        m_timer->start();
+    }
 }
 
 void SparkBorder::hideEvent(QHideEvent* event)
 {
     QWidget::hideEvent(event);
     m_timer->stop();
+}
+
+void SparkBorder::setMotionPreference(Qt::MotionPreference preference)
+{
+    m_motionReduced = preference == Qt::MotionPreference::ReducedMotion;
+    if (m_motionReduced) {
+        m_timer->stop();
+    } else if (isVisible()) {
+        m_timer->start();
+    }
+    update();
+}
+
+bool SparkBorder::isAnimating() const
+{
+    return m_timer->isActive();
 }
 
 void SparkBorder::paintEvent(QPaintEvent*)

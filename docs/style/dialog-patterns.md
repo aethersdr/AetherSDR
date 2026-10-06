@@ -251,6 +251,9 @@ What it keeps:
 - **Closing:** the corner close button, Escape and `QKeySequence::Close`
   (⌘W, Ctrl+W) all close it.
 - **Deletion:** pair it with `WA_DeleteOnClose`, as About does.
+- **Motion:** `SparkRing` and `SparkBorder` follow the OS reduced-motion
+  preference (`QAccessibilityHints::motionPreference`) and hold still when it
+  is set.
 
 It is translucent, so the rounded corners need a compositor; an X11 session
 without one shows square black corners. Use `CanonWindow` only for windows the

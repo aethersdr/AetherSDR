@@ -54,13 +54,18 @@ private:
 // spark: a point of light circling the ring once every seven seconds, in
 // color.canon.cyan with a color.canon.sparkHot tip. Animates only while
 // visible, and skips frames while its window is not exposed (minimised or
-// covered).
+// covered). When the OS asks for reduced motion the spark holds still.
 class SparkRing : public QWidget {
     Q_OBJECT
 
 public:
     SparkRing(const QPixmap& image, int diameter, QWidget* parent = nullptr);
     QSize sizeHint() const override;
+
+    // Follows the OS reduced-motion preference (QAccessibilityHints); public
+    // so a test can apply a preference the platform does not report.
+    void setMotionPreference(Qt::MotionPreference preference);
+    bool isAnimating() const;
 
 protected:
     void paintEvent(QPaintEvent* event) override;
@@ -71,6 +76,7 @@ private:
     QPixmap m_image;
     int     m_diameter;
     qreal   m_angle{90.0};
+    bool    m_motionReduced{false};
     QTimer* m_timer{nullptr};
 };
 
@@ -78,13 +84,19 @@ private:
 // point of light in color.canon.sparkGold with a color.canon.sparkGoldHot tip
 // circling a rounded border once every three seconds, like the Contributor
 // Logbook's award cards. Gold marks recognition. Animates only while visible,
-// and skips frames while its window is not exposed.
+// skips frames while its window is not exposed, and holds still when the OS
+// asks for reduced motion.
 class SparkBorder : public QWidget {
     Q_OBJECT
 
 public:
     // radius: the wrapped widget's corner radius; the spark runs just outside it.
     SparkBorder(QWidget* child, int radius, QWidget* parent = nullptr);
+
+    // Follows the OS reduced-motion preference (QAccessibilityHints); public
+    // so a test can apply a preference the platform does not report.
+    void setMotionPreference(Qt::MotionPreference preference);
+    bool isAnimating() const;
 
 protected:
     void paintEvent(QPaintEvent* event) override;
@@ -95,6 +107,7 @@ private:
     QWidget* m_child;
     int      m_radius;
     qreal    m_angle{90.0};
+    bool     m_motionReduced{false};
     QTimer*  m_timer{nullptr};
 };
 
