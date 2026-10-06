@@ -179,6 +179,37 @@ int main()
                s && near(s->swrAnt, 99.9f) && bandName(s->bandIndex) == QLatin1String("6m")
                    && s->txAntenna == 0);
     }
+    {
+        // Live capture from a real original 1K-FA (Windows bench, #6162):
+        // OPERATE, FULL, receiving on 160 m (1950 kHz), CAT = Flex, ANT1,
+        // 32 degC, 48.4 V. Pins the field offsets to hardware, not to the
+        // offset table this decoder was written from.
+        const QByteArray live = QByteArray::fromHex(
+            "a0d201000000000000000000006400119e075000002000000000e4010000");
+        const auto s = Legacy::parseStatus(live);
+        report("live 1K-FA capture decodes", s.has_value());
+        if (s) {
+            report("live: OPERATE, receiving, FULL",
+                   s->operate && !s->transmitting && s->powerLevel == u'H');
+            report("live: 160 m, IN1, ANT 1",
+                   bandName(s->bandIndex) == QLatin1String("160m") && s->input == 1
+                       && s->txAntenna == 1);
+            report("live: 32 degC, 48.4 V, 0 A, no output",
+                   s->tempUpper == 32 && near(s->paVoltageV, 48.4f)
+                       && s->paCurrentA == 0.0f && s->outputPowerW == 0.0f);
+            report("live: no warning or alarm",
+                   s->warningDetail.isEmpty() && s->alarmDetail.isEmpty());
+        }
+        // The same payload framed and fed through the parser byte-wise.
+        QList<Legacy::Frame> frames;
+        Legacy::FrameParser p;
+        p.setFrameCallback([&](const Legacy::Frame& f) { frames.append(f); });
+        for (char c : ampFrame(live)) {
+            p.feed(QByteArray(1, c));
+        }
+        report("live capture survives framing and byte-wise parsing",
+               frames.size() == 1 && frames.at(0).data == live);
+    }
     report("a short payload is rejected", !Legacy::parseStatus(QByteArray(29, '\0')));
 
     report("SWR from power: no forward power is 0",
