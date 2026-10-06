@@ -24,6 +24,9 @@ therefore retains its upstream fallback behavior.
 recorded in `AETHERSDR-PATCHES.md`. The WFM integration adds patch 14: live
 paired deemphasis, lock-free stereo observation, complete decoder reset, and
 opt-in phase-difference/DC corrections that preserve stereo separation.
+Patch 15 prepares depth-8 exchange rings only for nonblocking opt-in WFM,
+retains legacy depth 2, and publishes copied output before its ring credit.
+Its fixed memory/latency costs and deterministic tests are in the patch registry.
 Existing WDSP overlap-save RF filtering is exposed
 through the narrow C facade without changing the vendor filter. All portability
 changes live outside it:
