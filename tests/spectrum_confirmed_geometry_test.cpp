@@ -1,6 +1,7 @@
 // Opt-in real-widget test: no sockets, radio, USB, or synthetic firmware peer.
 #include "TestSettingsProfile.h"
 #include "gui/SpectrumWidget.h"
+#include "gui/VfoWidget.h"
 #include "gui/SpectrumOverlayMenu.h"
 #include "gui/MainWindowHelpers.h"
 #include "RtlInjectedDevice.h"

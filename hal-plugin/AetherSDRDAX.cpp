@@ -75,6 +75,7 @@ public:
         }
 
         uint32_t rp = block->readPos.load(std::memory_order_acquire);
+        uint32_t originalRp = rp;
         uint32_t wp = block->writePos.load(std::memory_order_acquire);
 
         uint32_t available = wp - rp;
@@ -89,7 +90,13 @@ public:
             std::memset(dst + toRead, 0, (totalSamples - toRead) * sizeof(float));
         }
 
-        block->readPos.store(rp, std::memory_order_release);
+        // The app can retire a route or trim backlog while this callback copies.
+        // Do not overwrite its newer cursor or return an old owner's samples.
+        // Equality cannot detect an ABA reset to the same cursor; this only
+        // protects a concurrently changed cursor value.
+        if (!block->readPos.compare_exchange_strong(originalRp,rp,std::memory_order_acq_rel)) {
+            std::memset(dst,0,bytesCount);
+        }
     }
 
 private:

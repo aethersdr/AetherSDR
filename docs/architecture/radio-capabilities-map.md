@@ -74,18 +74,36 @@ are in [local receive control](../aetherd-local-receive-control.md#qualified-bac
 `control_receive_test` pins declarations and action-time admission; the optional
 RTL declaration check runs only when the RTL backend is built.
 
+### Native receive audio export
+
+`receiveAudioExport` describes the typed pre-monitor `sliceAudioFrameReady`
+formats and independent receiver capacity. RTL declares 24/48 kHz and, when its
+Digital decoder is built, 44.1 kHz. The other backends explicitly leave it absent.
+`DaxReceiveModel` admits only declared rates and live TCI receiver bindings;
+MainWindow offers the existing DAX audio bridge separately from radio-side DAX
+selectors and IQ. This record grants no TX or headless-control permission.
+Native DAX currently requires the optional WebSockets build component for the
+shared receiver map, but neither a listening TCI server nor an attached TCI
+client. Builds without it retain their existing Flex bridge and do not offer
+native DAX. See [native DAX receive routing](../native-dax-receive.md).
+
 ### Native squelch
 
-`squelchLevelScale` with `modesExclusive` set is the receiver's own squelch,
-not only a place for its pan line: SQL exists in its `modes` and nowhere else,
-the client keeps each receiver's manual/Auto intent (`ReceiveSquelchIntent-<n>`),
-and Auto starts from the absolute threshold. RTL declares FM/FM-N in dBFS/bin
-(`unit`); RxApplet and VfoWidget gate unsupported modes with accessible reasons,
-and SpectrumWidget draws the line and runs Auto from the same record. The native
-`setSliceSquelch` verb applies through RTL's confirmed transaction. Every other
-family leaves `modesExclusive` false, so the #2504 mode rule and radio-owned
-squelch state are unchanged. The flag grants no headless squelch verb or
-calibrated-power claim.
+`squelchLevelScale` adds `automaticInEngine` for backend-owned Auto SQL, dispatched
+through `requestSliceSquelch` with an Automatic intent. RTL alone sets it; other
+families retain manual dispatch and their existing client Auto behavior. RTL
+sets `spectrumComparable=false` because its 2048-bin detector and pan display
+have different measurement bandwidths, so no display SQL line or display-driven
+Auto loop is used. The manual threshold uses dBFS/2048-bin.
+
+`squelchLevelScale` with `modesExclusive` set is the receiver's own squelch:
+SQL exists in its `modes` and nowhere else. RTL declares FM/FM-N and owns
+manual/Auto state in its accepted receiver configuration (`RtlSlices`);
+`RxApplet` and `VfoWidget` keep unsupported modes dimmed with reasons. The
+existing `requestSliceSquelch` path carries both manual and Automatic requests
+through the confirmed transaction. Other families leave `modesExclusive` and
+`automaticInEngine` false, preserving the #2504 mode rule and radio-owned state.
+The record grants no headless squelch verb or calibrated-power claim.
 
 ### Receive capture placement
 
@@ -568,7 +586,7 @@ and conflating them would hide one of them.
 | `squelchLevelScale` | −160 + 1·L, all modes, Auto SQL | −119 + 0.7·L, AM/SAM/DSB/LSB/USB, no Auto SQL | IC-7300MK2: −194.8 + 1.49·L on the pan, USB/LSB/CW/CWU/CWL/AM/DIGU/DIGL, no Auto SQL (measured, #6180); Flex's for every other Icom | Flex's (no measured map) | Where does squelch level L open, on this axis? |
 
 **`squelchLevelScale` draws the SQL line and drives Auto SQL** (#6092).
-The demo keeps Flex's scale. RTL-SDR publishes its own gate, −120 + 1.2·L dBFS/bin in FM/FM-N with Auto SQL and `modesExclusive` (see Native squelch above): its detector reads the same FFT as the pan, so a pan-derived floor lands on the gate. Absent, or the active slice's mode not listed: no line, and the SQL button
+The demo keeps Flex's scale. RTL-SDR publishes its own gate, −120 + 1.2·L dBFS/2048-bin in FM/FM-N, with engine-owned Auto and no display line (see Native squelch above). For display-driven Auto, an absent record or an unlisted mode means no line, and the SQL button
 skips Auto with the reason on its accessible description. The HL2 offset is
 amsq's −140 + 0.7·L dBFS map, referred to the LNA at −12 dB
 (`Hl2DbReference::levelSquelchOffsetDb`), plus the pan's LNA offset, plus the

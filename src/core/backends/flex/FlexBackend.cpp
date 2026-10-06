@@ -214,6 +214,7 @@ RadioCapabilities FlexBackend::capabilities() const
         {QStringLiteral("SAM"), -12000, -10, 10, 12000, 20, 24000},
         {QStringLiteral("DSB"), -12000, -10, 10, 12000, 20, 24000}}};
     caps.receiveAudioControl = std::nullopt; // legacy wire mixer path has not migrated
+    caps.receiveAudioExport = std::nullopt; // native DAX export not qualified for this backend
     caps.receivePanCenterControl = std::nullopt; // unknown coverage including transverters
     caps.receivePanBandwidthControl = std::nullopt; // legacy coupled geometry path
     caps.txPowerBands = {};
@@ -542,6 +543,9 @@ ReceiveDispatch FlexBackend::requestSliceAudio(int sliceId, const SliceAudioRequ
 
 ReceiveDispatch FlexBackend::requestSliceSquelch(int sliceId, const SliceSquelchRequest& request)
 {
+    if (request.kind != SliceSquelchRequest::Kind::Manual) {
+        return ReceiveDispatch::Unsupported;
+    }
     if (sliceId < 0 || !request.valid()) {
         return ReceiveDispatch::Unsupported;
     }

@@ -311,6 +311,7 @@ RadioCapabilities IcomCivBackend::capabilities() const
     c.receiveModeControl = std::nullopt;
     c.receiveFilterControl = std::nullopt;
     c.receiveAudioControl = std::nullopt;
+    c.receiveAudioExport = std::nullopt; // native DAX export not qualified for this backend
     c.receivePanCenterControl = std::nullopt;
     c.receivePanBandwidthControl = std::nullopt;
 
@@ -4405,6 +4406,9 @@ ReceiveDispatch IcomCivBackend::requestSliceAudio(int sliceId, const SliceAudioR
 
 ReceiveDispatch IcomCivBackend::requestSliceSquelch(int sliceId, const SliceSquelchRequest& request)
 {
+    if (request.kind != SliceSquelchRequest::Kind::Manual) {
+        return ReceiveDispatch::Unsupported;
+    }
     if (!m_connected || !m_session || !m_model || sliceId != 0 || !request.valid()) {
         return ReceiveDispatch::Unsupported;
     }

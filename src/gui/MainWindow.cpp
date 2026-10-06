@@ -7956,18 +7956,17 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
 
     // ── DAX: the DAX and DAX-IQ applets, and the autostart toggle ──────────
     //
-    // VISIBILITY ONLY. startDax()'s null-check on panStream() is a separate
-    // crash guard and stays exactly where it is — the two are not merged. This
-    // stops the operator being offered the controls; that stops a session that
-    // somehow reaches the bridge anyway from segfaulting on a null stream.
     const bool dax = !connected || caps.hasDaxStreams;
+    bool nativeDax = false;
+#if defined(HAVE_WEBSOCKETS) && (defined(Q_OS_MAC) || defined(HAVE_PIPEWIRE))
+    nativeDax = connected && caps.receiveAudioExport.has_value();
+#endif
     if (m_appletPanel) {
-        m_appletPanel->setDaxStreamsVisible(dax);
+        m_appletPanel->setDaxStreamsVisible(dax,nativeDax);
+        m_appletPanel->daxApplet()->setNativeReceiveRouting(nativeDax);
     }
-    for (VfoWidget* vfo : findChildren<VfoWidget*>())
+    for (VfoWidget* vfo : findChildren<VfoWidget*>()) {
         vfo->setDaxVisible(dax);
-    if (m_autoDaxAction) {
-        m_autoDaxAction->setVisible(dax);
     }
 
     // Extended DSP (NRS / RNN / NRF): read via hasExtendedDspFilters(), which

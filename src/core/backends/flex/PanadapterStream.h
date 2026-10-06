@@ -133,6 +133,7 @@ public:
         Clock  = 3,   // AetherClock time-signal decode engine
         CwDecoder = 4, // selected receiver CW decoder (pre-monitor DAX)
         RttyDecoder = 5, // selected receiver RTTY decoder (pre-monitor DAX)
+        Ax25Decoder = 6, // selected receiver AX.25/APRS decoder (pre-monitor DAX)
     };
     static const char* daxConsumerName(DaxConsumer who);
 

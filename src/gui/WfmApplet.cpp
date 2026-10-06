@@ -11,6 +11,7 @@
 #include "models/SliceModel.h"
 
 #include <QAccessible>
+#include <QAbstractItemView>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QFrame>
@@ -20,6 +21,9 @@
 #include <QJsonObject>
 #include <QLabel>
 #include <QPushButton>
+#include <QKeyEvent>
+#include <QShowEvent>
+#include <optional>
 #include <QSignalBlocker>
 #include <QVBoxLayout>
 
@@ -30,6 +34,55 @@ QJsonObject preferences()
     return QJsonDocument::fromJson(AppSettings::instance()
         .value(QStringLiteral("WfmApplet"), QString{}).toString().toUtf8()).object();
 }
+
+// A popup may outlive its receiver binding. Preserve the binding witness
+// after hidePopup(): Qt can deliver activated later.
+class WfmReceiverComboBox final : public GuardedComboBox {
+public:
+    using GuardedComboBox::GuardedComboBox;
+    void setBinding(quint64 binding)
+    {
+        m_binding = binding;
+        invalidateInteraction();
+    }
+    void invalidateInteraction()
+    {
+        ++m_generation;
+        hidePopup();
+    }
+    quint64 takeActivationBinding()
+    {
+        const Origin origin = m_origin.value_or(Origin{m_binding, m_generation});
+        m_origin.reset();
+        // Bound controls use nonzero slice generations. Zero cannot authorize
+        // an activation whose receiver binding was retired.
+        return origin.generation == m_generation ? origin.binding : 0;
+    }
+    void showPopup() override
+    {
+        m_origin = Origin{m_binding, m_generation};
+        GuardedComboBox::showPopup();
+    }
+protected:
+    void keyPressEvent(QKeyEvent* event) override
+    {
+        if (!view()->isVisible()) { m_origin = Origin{m_binding, m_generation}; }
+        GuardedComboBox::keyPressEvent(event);
+    }
+    void wheelEvent(QWheelEvent* event) override
+    {
+        if (!view()->isVisible()) { m_origin = Origin{m_binding, m_generation}; }
+        GuardedComboBox::wheelEvent(event);
+    }
+private:
+    struct Origin {
+        quint64 binding;
+        quint64 generation;
+    };
+    quint64 m_binding{0};
+    quint64 m_generation{0};
+    std::optional<Origin> m_origin;
+};
 
 void setReadout(QLabel* label, const QString& text, const QString& name)
 {
@@ -67,6 +120,13 @@ WfmApplet::WfmApplet(QWidget* parent) : QWidget(parent)
     auto* root = new QVBoxLayout(this);
     root->setContentsMargins(2, 2, 2, 2);
     root->setSpacing(3);
+    m_identity = new QLabel(this);
+    m_identity->setObjectName(QStringLiteral("wfmReceiverIdentity"));
+    m_identity->setTextFormat(Qt::PlainText);
+    m_identity->setWordWrap(true);
+    ThemeManager::instance().applyStyleSheet(m_identity,
+        "QLabel { color: {{color.text.primary}}; font-size: 11px; }");
+    root->addWidget(m_identity);
     m_scope = new WfmLockScope(this);
     m_scope->setObjectName(QStringLiteral("wfmLockScope"));
     root->addWidget(m_scope);
@@ -90,13 +150,13 @@ WfmApplet::WfmApplet(QWidget* parent) : QWidget(parent)
     auto* settings = new QGridLayout;
     settings->setHorizontalSpacing(5);
     settings->setVerticalSpacing(3);
-    m_deemphasis = new GuardedComboBox(this);
+    m_deemphasis = new WfmReceiverComboBox(this);
     m_deemphasis->setObjectName(QStringLiteral("wfmDeemphasis"));
     m_deemphasis->setAccessibleName(tr("Broadcast FM deemphasis"));
     m_deemphasis->setPlaceholderText(tr("Unknown"));
     m_deemphasis->setFocusPolicy(Qt::StrongFocus);
     applyComboStyle(m_deemphasis);
-    m_bandwidth = new GuardedComboBox(this);
+    m_bandwidth = new WfmReceiverComboBox(this);
     m_bandwidth->setObjectName(QStringLiteral("wfmBandwidth"));
     m_bandwidth->setAccessibleName(tr("Broadcast FM bandwidth"));
     m_bandwidth->setPlaceholderText(tr("Unavailable"));
@@ -151,20 +211,25 @@ WfmApplet::WfmApplet(QWidget* parent) : QWidget(parent)
         " border-radius: 3px; padding: 4px; }");
     root->addWidget(m_diagnostics);
 
+    connect(m_audioMode, &QPushButton::pressed, this, [this] {
+        m_audioModeBinding = m_sliceBinding;
+    });
     connect(m_audioMode, &QPushButton::clicked, this, [this] {
-        if (m_available && m_slice && m_audioMode->isEnabled()) {
+        if (acceptsControl(m_audioMode, m_audioModeBinding)) {
             m_slice->setWfmForceMono(!m_slice->wfmForceMono());
         }
-        refresh();
+        refresh(); // The displayed selection remains backend-confirmed.
     });
     connect(m_deemphasis, &QComboBox::activated, this, [this](int index) {
-        if (m_available && m_slice && m_deemphasis->isEnabled()) {
+        const quint64 binding = static_cast<WfmReceiverComboBox*>(m_deemphasis)->takeActivationBinding();
+        if (acceptsControl(m_deemphasis, binding) && index >= 0 && index < m_deemphasis->count()) {
             m_slice->setWfmDeemphasis(m_deemphasis->itemData(index).toInt());
         }
         refresh();
     });
     connect(m_bandwidth, &QComboBox::activated, this, [this](int index) {
-        if (m_available && m_slice && m_bandwidth->isEnabled()) {
+        const quint64 binding = static_cast<WfmReceiverComboBox*>(m_bandwidth)->takeActivationBinding();
+        if (acceptsControl(m_bandwidth, binding) && index >= 0 && index < m_bandwidth->count()) {
             const int width = m_bandwidth->itemData(index).toInt();
             const ModeFilters::Edges edges = ModeFilters::edgesForWidth(QStringLiteral("WFM"), width, {});
             const RadioCapabilities caps = m_model->backendCapabilities();
@@ -197,8 +262,15 @@ bool WfmApplet::ownsWfmSlice() const
         && m_slice->mode() == QLatin1String("WFM");
 }
 
+bool WfmApplet::acceptsControl(const QWidget* control, quint64 binding) const
+{
+    return binding == m_sliceBinding && m_connected && m_available && ownsWfmSlice()
+        && !m_slice->externalReceiveReplacementActive() && control->isEnabled();
+}
+
 void WfmApplet::setRadioModel(RadioModel* model)
 {
+    const quint64 binding = ++m_modelBinding;
     for (const auto& connection : m_modelConnections) { disconnect(connection); }
     m_modelConnections.clear();
     m_availability.reset();
@@ -208,58 +280,81 @@ void WfmApplet::setRadioModel(RadioModel* model)
     m_caps = model ? model->backendCapabilities() : RadioCapabilities{};
     if (model) {
         m_modelConnections.append(connect(model, &RadioModel::capabilitiesChanged, this,
-            [this](bool connected, const RadioCapabilities& caps) {
+            [this, binding](bool connected, const RadioCapabilities& caps) {
+                if (binding != m_modelBinding) { return; }
+                const bool connectionChanged = connected != m_connected;
                 m_connected = connected;
                 m_caps = caps;
+                if (connectionChanged) { setSlice(m_slice); }
                 refresh();
             }));
         m_modelConnections.append(connect(model, &RadioModel::connectionStateChanged, this,
-            [this](bool connected) {
+            [this, binding](bool connected) {
+                if (binding != m_modelBinding) { return; }
+                const bool connectionChanged = connected != m_connected;
                 m_connected = connected;
                 m_caps = m_model ? m_model->backendCapabilities() : RadioCapabilities{};
+                if (connectionChanged) { setSlice(m_slice); }
                 refresh();
             }));
         m_modelConnections.append(connect(model, &RadioModel::sliceRemoved, this,
-            [this](int id) {
-                if (m_slice && m_slice->sliceId() == id) { setSlice(nullptr); }
+            [this, binding](int id) {
+                if (binding != m_modelBinding) { return; }
+                if (m_slice && m_slice->sliceId() == id
+                    && (!m_model || m_model->slice(id) != m_slice)) { setSlice(nullptr); }
             }));
-        m_modelConnections.append(connect(model, &QObject::destroyed, this, [this] {
+        m_modelConnections.append(connect(model, &QObject::destroyed, this, [this, binding] {
+            if (binding != m_modelBinding) { return; }
             m_availability.reset();
             m_model = nullptr;
             m_connected = false;
             m_caps = {};
-            refresh();
+            setSlice(nullptr);
         }));
         registerControls();
     }
-    refresh();
+    setSlice(m_slice);
 }
 
 void WfmApplet::setSlice(SliceModel* slice)
 {
+    const quint64 binding = ++m_sliceBinding;
+    for (QComboBox* combo : {m_deemphasis, m_bandwidth}) {
+        static_cast<WfmReceiverComboBox*>(combo)->setBinding(binding);
+    }
+    m_audioMode->setDown(false);
     for (const auto& connection : m_sliceConnections) { disconnect(connection); }
     m_sliceConnections.clear();
     m_scope->clear();
     m_slice = slice;
     if (slice) {
-        m_sliceConnections.append(connect(slice, &SliceModel::modeChanged, this, &WfmApplet::refresh));
-        m_sliceConnections.append(connect(slice, &SliceModel::filterChanged, this, &WfmApplet::refresh));
-        m_sliceConnections.append(connect(slice, &SliceModel::wfmDeemphasisChanged, this, &WfmApplet::refresh));
-        m_sliceConnections.append(connect(slice, &SliceModel::wfmForceMonoChanged, this, &WfmApplet::refresh));
-        m_sliceConnections.append(connect(slice, &SliceModel::wfmStereoStatusChanged, this, &WfmApplet::refresh));
-        m_sliceConnections.append(connect(slice, &SliceModel::wfmReceptionDiagnosticsChanged, this, [this] {
+        const auto current = [this, binding] {
+            return binding == m_sliceBinding && m_slice && m_model
+                && m_model->slice(m_slice->sliceId()) == m_slice;
+        };
+        const auto update = [this, current] { if (current()) { refresh(); } };
+        m_sliceConnections.append(connect(slice, &SliceModel::modeChanged, this, update));
+        m_sliceConnections.append(connect(slice, &SliceModel::filterChanged, this, update));
+        m_sliceConnections.append(connect(slice, &SliceModel::letterChanged, this, update));
+        m_sliceConnections.append(connect(slice, &SliceModel::frequencyReported, this, update));
+        m_sliceConnections.append(connect(slice, &SliceModel::wfmDeemphasisChanged, this, update));
+        m_sliceConnections.append(connect(slice, &SliceModel::wfmForceMonoChanged, this, update));
+        m_sliceConnections.append(connect(slice, &SliceModel::wfmStereoStatusChanged, this, update));
+        m_sliceConnections.append(connect(slice, &SliceModel::wfmReceptionDiagnosticsChanged, this, [this, current] {
+            if (!current()) { return; }
             refreshDiagnostics();
             appendScopeSample();
         }));
-        m_sliceConnections.append(connect(slice, &SliceModel::frequencyChanged, this, [this] {
+        m_sliceConnections.append(connect(slice, &SliceModel::frequencyChanged, this, [this, current] {
+            if (!current()) { return; }
             m_scope->clear();
             refreshDiagnostics();
         }));
-        m_sliceConnections.append(connect(slice, &SliceModel::inCaptureChanged, this, &WfmApplet::refresh));
-        m_sliceConnections.append(connect(slice, &SliceModel::externalReceiveReplacementChanged, this, &WfmApplet::refresh));
-        m_sliceConnections.append(connect(slice, &QObject::destroyed, this, [this] {
-            m_slice = nullptr;
-            refresh();
+        m_sliceConnections.append(connect(slice, &SliceModel::inCaptureChanged, this, update));
+        m_sliceConnections.append(connect(slice, &SliceModel::externalReceiveReplacementChanged, this, update));
+        m_sliceConnections.append(connect(slice, &QObject::destroyed, this, [this, binding] {
+            if (binding != m_sliceBinding) { return; }
+            setSlice(nullptr);
         }));
     }
     refresh();
@@ -305,6 +400,11 @@ void WfmApplet::refresh()
         if (!available) { m_scope->clear(); }
         emit availabilityChanged(available);
     }
+    const QString identity = m_available
+        ? tr("Slice %1 · %2").arg(m_slice->letter(), m_slice->frequencyReportedKnown()
+            ? tr("%1 MHz").arg(m_slice->reportedFrequency(), 0, 'f', 6) : tr("Frequency unavailable"))
+        : tr("No selected WFM receiver");
+    setReadout(m_identity, identity, tr("Broadcast FM receiver: %1").arg(identity));
     if (m_availability) {
         m_availability->refreshEngaged();
     } else {

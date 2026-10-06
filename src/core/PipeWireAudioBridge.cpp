@@ -111,10 +111,11 @@ static void cleanupStaleModules()
     }
 }
 
-bool PipeWireAudioBridge::open(int activeChannels)
+bool PipeWireAudioBridge::open(int activeChannels, bool receiveOnly)
 {
     if (m_open) return true;
 
+    m_receiveOnly = receiveOnly;
     cleanupStaleModules();
 
     // Open only as many RX sources as the radio has slices (the device list
@@ -134,7 +135,7 @@ bool PipeWireAudioBridge::open(int activeChannels)
     // fails (e.g. PipeWire not running, only PulseAudio).
     for (int i = 0; i < m_activeChannels; ++i) {
 #ifdef HAVE_PIPEWIRE_NATIVE
-        auto native = std::make_unique<PipeWireNativeRxSource>(i + 1);
+        auto native = std::make_unique<PipeWireNativeRxSource>(i + 1, receiveOnly);
         if (native->open()) {
             m_nativeRx[i] = std::move(native);
             continue;
@@ -149,22 +150,24 @@ bool PipeWireAudioBridge::open(int activeChannels)
         }
     }
 
-    // Create TX pipe sink (apps → radio)
-    if (!loadPipeSink()) {
-        qCWarning(lcDax) << "PipeWireAudioBridge: failed to create TX pipe";
-        close();
-        return false;
+    if (!receiveOnly) {
+        // Create TX pipe sink (apps → radio)
+        if (!loadPipeSink()) {
+            qCWarning(lcDax) << "PipeWireAudioBridge: failed to create TX pipe";
+            close();
+            return false;
+        }
+
+        // Poll TX pipe for incoming audio from apps
+        m_txReadTimer = new QTimer(this);
+        m_txReadTimer->setInterval(5);
+        m_txReadTimer->setTimerType(Qt::PreciseTimer);
+        connect(m_txReadTimer, &QTimer::timeout, this, &PipeWireAudioBridge::readTxPipe);
+        m_txReadTimer->start();
     }
 
-    // Poll TX pipe for incoming audio from apps
-    m_txReadTimer = new QTimer(this);
-    m_txReadTimer->setInterval(5);
-    m_txReadTimer->setTimerType(Qt::PreciseTimer);
-    connect(m_txReadTimer, &QTimer::timeout, this, &PipeWireAudioBridge::readTxPipe);
-    m_txReadTimer->start();
-
     m_open.store(true, std::memory_order_release);
-    qCInfo(lcDax) << "PipeWireAudioBridge: opened —" << m_activeChannels << "RX sources + 1 TX sink";
+    qCInfo(lcDax) << "PipeWireAudioBridge: opened —" << m_activeChannels << "RX sources, TX sink:" << !receiveOnly;
     return true;
 }
 
@@ -198,6 +201,7 @@ void PipeWireAudioBridge::close()
     // Close pipe file descriptors
     for (auto& rx : m_rx) {
         if (rx.fd >= 0) { ::close(rx.fd); rx.fd = -1; }
+        if (rx.drainFd >= 0) { ::close(rx.drainFd); rx.drainFd = -1; }
     }
     if (m_tx.fd >= 0) { ::close(m_tx.fd); m_tx.fd = -1; }
 
@@ -280,7 +284,7 @@ bool PipeWireAudioBridge::loadPipeSource(int index)
     }
 
     // Open the pipe for writing (non-blocking to avoid hanging if no reader)
-    int fd = ::open(pipePath.toUtf8().constData(), O_WRONLY | O_NONBLOCK);
+    int fd = ::open(pipePath.toUtf8().constData(), O_WRONLY | O_NONBLOCK | O_CLOEXEC);
     if (fd < 0) {
         qCWarning(lcDax) << "PipeWireAudioBridge: open pipe failed:" << strerror(errno);
         runPactl({"unload-module", QString::number(modIdx)});
@@ -288,18 +292,42 @@ bool PipeWireAudioBridge::loadPipeSource(int index)
         return false;
     }
 
-    // Cap kernel FIFO capacity so back-pressure surfaces quickly instead of
-    // accumulating ~1.3 s of audio in the default 64 KB pipe buffer.
-    if (::fcntl(fd, F_SETPIPE_SZ, PIPE_KERNEL_BUF) < 0) {
-        qCDebug(lcDax) << "PipeWireAudioBridge: F_SETPIPE_SZ failed (non-fatal):" << strerror(errno);
+    // Native decoded PCM can arrive in bursts (Digital prebuffer is ~186 ms).
+    // Bound that RX-only backlog to ~341 ms rather than truncating a valid burst
+    // at the legacy Flex packet-sized 21 ms capacity. No blocking writes.
+    const int capacity = m_receiveOnly ? NATIVE_RX_KERNEL_BUF : PIPE_KERNEL_BUF;
+    const int actual = ::fcntl(fd,F_SETPIPE_SZ,capacity);
+    if (actual < 0) {
+        qCDebug(lcDax) << "PipeWireAudioBridge: F_SETPIPE_SZ failed:" << strerror(errno);
     }
-
+    if (actual < capacity && m_receiveOnly) {
+        qCWarning(lcDax) << "PipeWireAudioBridge: insufficient native RX FIFO capacity";
+        ::close(fd);
+        runPactl({"unload-module",QString::number(modIdx)});
+        ::unlink(pipePath.toUtf8().constData());
+        return false;
+    }
+    if (!openRxDrain(index, pipePath)) {
+        ::close(fd);
+        runPactl({"unload-module",QString::number(modIdx)});
+        ::unlink(pipePath.toUtf8().constData());
+        return false;
+    }
     m_rx[index].fd = fd;
     m_rx[index].moduleIndex = modIdx;
     m_rx[index].pipePath = pipePath;
 
     qCDebug(lcDax) << "PipeWireAudioBridge: RX" << (index + 1) << "pipe source loaded, module" << modIdx;
     return true;
+}
+
+bool PipeWireAudioBridge::openRxDrain(int index, const QString& pipePath)
+{
+    // Receive-only route changes discard retained FIFO bytes. Flex has no
+    // route-reset consumer and must retain its sole-reader/EPIPE behavior.
+    if (!m_receiveOnly) { return true; }
+    m_rx[index].drainFd = ::open(pipePath.toUtf8().constData(), O_RDONLY|O_NONBLOCK|O_CLOEXEC);
+    return m_rx[index].drainFd >= 0;
 }
 
 bool PipeWireAudioBridge::loadPipeSink()
@@ -448,8 +476,29 @@ void PipeWireAudioBridge::feedDaxAudio(int channel, const QByteArray& pcm)
     }
 }
 
+void PipeWireAudioBridge::resetRxChannel(int channel)
+{
+    if (channel < 1 || channel > NUM_CHANNELS) { return; }
+    m_rxLastSample[channel-1] = 0;
+#ifdef HAVE_PIPEWIRE_NATIVE
+    if (m_nativeRx[channel-1]) { m_nativeRx[channel-1]->reset(); }
+#endif
+    const int fd = m_rx[channel-1].drainFd;
+    if (fd >= 0) {
+        std::array<char,4096> discarded{};
+        int total = 0;
+        while (total < NATIVE_RX_KERNEL_BUF) {
+            const ssize_t count = ::read(fd,discarded.data(),discarded.size());
+            if (count <= 0) { break; }
+            total += int(count);
+        }
+    }
+    emit daxRxLevel(channel,0);
+}
+
 void PipeWireAudioBridge::setTransmitting(bool tx)
 {
+    if (m_receiveOnly) { return; }
     m_transmitting.store(tx, std::memory_order_release);
 
     if (tx) {

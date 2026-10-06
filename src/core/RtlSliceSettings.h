@@ -34,6 +34,8 @@ public:
         // Optional in schema 1; old documents retain the legacy 75 us default.
         int wfmDeemphasisUs = 75;
         bool wfmForceMono = false;
+        bool automaticSquelch = false;
+        int automaticSquelchMarginDb = 10;
     };
     struct Document {
         double captureCenterHz = 0;

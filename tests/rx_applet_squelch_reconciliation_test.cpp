@@ -15,6 +15,11 @@
 using namespace AetherSDR;
 
 namespace AetherSDR {
+struct RxAppletSquelchTestAccess {
+    static void engineSql(RxApplet& applet) {
+        applet.m_exclusiveSquelch = SquelchLevelScale{-120, 1.2, {"FM", "FMN"}, false, "dBFS/2048-bin", true, true, false};
+    }
+};
 struct RadioModelWakeTestAccess {
     static void identity(RadioModel& radio, const QString& family, const QString& id)
     {
@@ -56,6 +61,72 @@ class RxAppletSquelchReconciliationTest : public QObject
     Q_OBJECT
 
 private slots:
+    void engineAutoRestoreKeepsManualThresholdOnAttachedSlice()
+    {
+        SliceModel first(0);
+        RxApplet rx;
+        RxAppletSquelchTestAccess::engineSql(rx);
+        rx.setSlice(&first);
+        QSignalSpy commands(&first, &SliceModel::commandReady);
+        SliceDelta restored;
+        restored.mode = QStringLiteral("FMN");
+        restored.squelchOn = true;
+        restored.squelchLevel = 54;
+        restored.automaticSquelch = true;
+        restored.automaticSquelchMarginDb = 13;
+        first.applyChanges(restored);
+        QCOMPARE(rx.sqlMode(), RxApplet::SqlMode::Auto);
+        QCOMPARE(rx.autoSqlMarginDb(), 13);
+        QCOMPARE(first.manualSquelchLevel(), 54);
+        QCOMPARE(rx.sqlManualLevel(), 54);
+        QVERIFY(commands.isEmpty());
+        rx.cycleSqlModeExternal(); // Auto -> Off
+        rx.cycleSqlModeExternal(); // Off -> Manual restores the saved threshold
+        QCOMPARE(rx.sqlManualLevel(), 54);
+        QCOMPARE(first.squelchLevel(), 54);
+    }
+
+    void engineAutoFollowsSelectedSliceWithoutCrossWrites()
+    {
+        SliceModel first(0), eighth(7);
+        status(first, true, 54, "FMN");
+        status(eighth, true, 61, "FM");
+        SliceDelta automatic;
+        automatic.automaticSquelch = true;
+        automatic.automaticSquelchMarginDb = 13;
+        eighth.applyChanges(automatic);
+        RxApplet rx;
+        RxAppletSquelchTestAccess::engineSql(rx);
+        QSignalSpy firstAuto(&first, &SliceModel::receiveSquelchRequested);
+        QSignalSpy eighthAuto(&eighth, &SliceModel::receiveSquelchRequested);
+        rx.setSlice(&eighth);
+        QCOMPARE(rx.sqlMode(), RxApplet::SqlMode::Auto);
+        QCOMPARE(rx.autoSqlMarginDb(), 13);
+        rx.setSlice(&first);
+        QCOMPARE(rx.sqlMode(), RxApplet::SqlMode::Manual);
+        QCOMPARE(rx.sqlManualLevel(), 54);
+        QVERIFY(firstAuto.isEmpty() && eighthAuto.isEmpty());
+        rx.cycleSqlModeExternal();
+        QCOMPARE(firstAuto.count(), 1);
+        QCOMPARE(qvariant_cast<SliceSquelchRequest>(firstAuto.at(0).at(0)).marginDb, 10);
+        QVERIFY(eighthAuto.isEmpty());
+        rx.setSlice(&eighth);
+        rx.setSqlSliderValueExternal(17);
+        QCOMPARE(eighthAuto.count(), 1);
+        QCOMPARE(qvariant_cast<SliceSquelchRequest>(eighthAuto.at(0).at(0)).marginDb, 17);
+        QCOMPARE(firstAuto.count(), 1);
+        QCOMPARE(first.manualSquelchLevel(), 54);
+        QCOMPARE(eighth.manualSquelchLevel(), 61);
+        SliceDelta manual;
+        manual.automaticSquelch = false;
+        manual.squelchOn = true;
+        manual.squelchLevel = 72;
+        eighth.applyChanges(manual);
+        QCOMPARE(rx.sqlMode(), RxApplet::SqlMode::Manual);
+        QCOMPARE(rx.sqlManualLevel(), 72);
+        QCOMPARE(first.manualSquelchLevel(), 54);
+    }
+
     void deferredWritesCoalesceAndFlush()
     {
         int writes = 0;
