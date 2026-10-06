@@ -955,6 +955,11 @@ private:
     quint64 m_adcTotalSamples = 0;
     quint64 m_adcTotalOverloadSamples = 0;
     QElapsedTimer m_adcWindowClock;
+    // Session totals of Hl2Telemetry::forwardPowerSamples + forwardPowerSkipped,
+    // and of the skipped ones alone. Published in healthSnapshot(), driving
+    // nothing; the first is what makes a skipped count of 0 a reading.
+    quint64 m_fwdTotalResponses = 0;
+    quint64 m_fwdTotalSkipped = 0;
     // Below this many observations a window has no rate, only a numerator.
     static constexpr int kAdcMinWindowSamples = 4;
     bool m_keyed = false;

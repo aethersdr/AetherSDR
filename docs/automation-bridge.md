@@ -3728,6 +3728,13 @@ script that asserts on it reads a transient from the start of the over as
 though it were the power now. It is reset at each key edge, which is right for
 a needle and wrong for a test.
 
+**`forwardPowerSkippedTotal` counts HL2 forward-power responses left out of the
+peak window** because their temperature word is 0, which no working sensor
+reads. It is a total since connect and absent until a forward-power response
+arrived, so `0` is a reading. A few per key-on is normal on gateware 74.2. A
+count that rises all the time means the radio's temperature word reads 0: the
+peak hold then runs on the last value alone and reads low on speech.
+
 On the HL2, `rfPowerPercent` / `txDriveRegister` / `txDriveGated` are the
 requested-versus-applied pair for transmit drive. `txDriveRegister` is the raw
 value last written to the radio and is **absent until the first write** — a `0`

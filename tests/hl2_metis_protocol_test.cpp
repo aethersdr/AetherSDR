@@ -812,6 +812,29 @@ int main()
                   "a window of marked responses only has no peak, so the last value is used");
         }
 
+        // The skipped count rises on a marked response and on nothing else.
+        {
+            ForwardPowerWindow w;
+            check(w.skipped == 0, "skipped count: an empty window has skipped nothing");
+            w.observe(*parseEp6Response(frame(0x08, (1234u << 16) | 300u).data()));
+            w.observe(*parseEp6Response(frame(0x08, (1u << 16) | 3300u).data()));
+            w.observe(*parseEp6Response(frame(0x10, 4095u).data()));
+            w.observe(*parseEp6Response(frame(0x80 | (0x01 << 1), 0x0FFFu).data()));
+            w.observe(*parseEp6Response(frame(0x00, 0x15u).data()));
+            check(w.skipped == 0 && w.samples == 2,
+                  "skipped count: kept responses, RADDR 0 and 2 and an ACK do not raise it");
+            w.observe(*parseEp6Response(frame(0x08, 2944u).data()));
+            w.observe(*parseEp6Response(frame(0x08, 0u).data()));
+            check(w.skipped == 2 && w.samples == 2 && w.peak.value_or(-1) == 3300,
+                  "skipped count: each marked response raises it by one and leaves the rest alone");
+            w.clear();
+            check(w.skipped == 0, "skipped count: clear() zeroes it for the next window");
+            w.observe(*parseEp6Response(frame(0x08, 2944u).data()));
+            w.observe(*parseEp6Response(frame(0x08, 7u).data()));
+            check(w.skipped == 2 && !w.peak.has_value() && w.samples == 0,
+                  "skipped count: a window of marked responses only shows a count and no peak");
+        }
+
         // The rule itself, without the window: non-ACK, RADDR 1, DATA[31:16]
         // exactly 0. An ACK's echo and the other response addresses are never
         // marked, whatever their upper half holds.

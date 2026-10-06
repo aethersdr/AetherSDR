@@ -6228,6 +6228,13 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
     put("forwardPowerPeakW",
         QStringLiteral("Forward (W, approx — peak HOLD, display only)"),
         t.forwardPowerRaw ? QVariant(m_fwdPeakWatts) : QVariant());
+    // Responses the peak window skipped (isNonMeasurementRaddr1). A few per
+    // key-on is what gateware 74.2 does; a count rising all the time means the
+    // temperature word reads 0 and the peak hold runs on the last value only.
+    // Absent until a RADDR-1 response arrived, so 0 is a reading.
+    put("forwardPowerSkippedTotal",
+        QStringLiteral("Forward responses skipped, not measurements (since connect)"),
+        m_fwdTotalResponses > 0 ? QVariant(m_fwdTotalSkipped) : QVariant());
     put("reversePowerRaw", QStringLiteral("Reverse (raw counts)"),
         opt(t.reversePowerRaw));
     put("reversePowerW", QStringLiteral("Reverse (W, approx)"),
@@ -6535,6 +6542,8 @@ void Hl2Backend::applyRestoredState(const RestoredRadioState& state)
     m_adcTotalSamples = 0;
     m_adcTotalOverloadSamples = 0;
     m_adcWindowClock.invalidate();
+    m_fwdTotalResponses = 0;
+    m_fwdTotalSkipped = 0;
     m_lnaSessionPin = false;
     m_driveDefaultPercent = -1;
     m_rfPowerPercent = 100;       // TransmitModel's session default
@@ -7604,9 +7613,13 @@ void Hl2Backend::publishTelemetry(const Hl2Telemetry& t)
                          << "-> fwd" << directionalWatts(*t.forwardPowerRaw) << "W"
                          << "(uncalibrated reference curve);"
                          << "window peak" << t.forwardPowerPeakRaw.value_or(-1)
-                         << "of" << t.forwardPowerSamples << "RADDR-1 samples in"
+                         << "of" << t.forwardPowerSamples << "RADDR-1 samples ("
+                         << t.forwardPowerSkipped << "skipped) in"
                          << t.adcWindowMs << "ms";
     }
+    m_fwdTotalResponses += static_cast<quint64>(t.forwardPowerSamples)
+                           + static_cast<quint64>(t.forwardPowerSkipped);
+    m_fwdTotalSkipped += static_cast<quint64>(t.forwardPowerSkipped);
     // The radio's TX IQ FIFO: `fill` is the top 7 bits of the gateware's DSIQ
     // level (0-127, not a sample count); `pacingFault` is the one flag for both
     // underrun and blocked writes. It cannot see a dry client queue

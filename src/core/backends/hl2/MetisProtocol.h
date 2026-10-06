@@ -463,6 +463,9 @@ struct Hl2Telemetry {
     // `forwardPowerSamples` counts the ones kept; the window length is `adcWindowMs`.
     std::optional<int> forwardPowerPeakRaw;
     int forwardPowerSamples = 0;
+    // The window's RADDR-1 responses skipped as isNonMeasurementRaddr1(). A unit
+    // whose temperature word is always 0 has every response here and no peak.
+    int forwardPowerSkipped = 0;
 
     // Merge a decoded response in, leaving untouched fields alone. ACK
     // responses contribute only PTT: their raddr is the command address and
@@ -485,6 +488,7 @@ struct Hl2Telemetry {
 struct ForwardPowerWindow {
     std::optional<int> peak;
     int samples = 0;
+    int skipped = 0;
 
     void observe(const Ep6Response& r) noexcept
     {
@@ -492,8 +496,10 @@ struct ForwardPowerWindow {
             return;
         // Only this window skips it: Hl2Telemetry::apply() still takes both
         // halves of the word as last values.
-        if (isNonMeasurementRaddr1(r))
+        if (isNonMeasurementRaddr1(r)) {
+            ++skipped;
             return;
+        }
         const int v = static_cast<int>(r.data & 0xFFFF);
         if (!peak || v > *peak)
             peak = v;
@@ -503,6 +509,7 @@ struct ForwardPowerWindow {
     {
         peak.reset();
         samples = 0;
+        skipped = 0;
     }
 };
 
