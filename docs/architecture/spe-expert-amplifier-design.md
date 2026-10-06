@@ -501,6 +501,13 @@ wiring are reused. Mapping choices:
   its checksum and is dropped (the stream resyncs on the next frame).
   Telnet with `rfc2217=true` still works — the price is an occasional lost
   frame — and is needed only for power-ON over the network.
+- Plain serial-to-Ethernet converters (field report: a Waveshare RS232 TO
+  ETH in TCP-server mode, protocol "None") behave like a raw ser2net port:
+  monitoring, keys and SWITCH OFF work, but they never answer the RFC 2217
+  request and offer no remote DTR control, so ON cannot power the amp.
+  powerOn() names this case in its log warning; the operator powers on at
+  the front panel, or replaces the bridge with ser2net (`rfc2217=true`)
+  and a serial adapter that drives DTR.
 
 Unit tests: `tests/spe_legacy_protocol_test.cpp` (framing, parser resync,
 Status decode, key table, variant persistence). The fixture is built from

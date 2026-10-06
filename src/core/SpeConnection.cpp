@@ -626,13 +626,22 @@ void SpeConnection::reportPowerOnOutcome()
                               " telnet(rfc2217=true),<port>`.";
     } else if (m_mode == Mode::Network
                && m_comPortOption != Spe::Rfc2217::OptionReply::Accepted) {
+        // No answer at all: a raw TCP bridge. Besides ser2net in raw
+        // mode this covers plain serial-to-Ethernet converters (Waveshare
+        // RS232 TO ETH and similar in TCP-server mode), which forward
+        // bytes only and offer no way to drive DTR/RTS remotely.
         qCWarning(lcTuner) << "SpeConnection: power-ON pulse sent, but"
-                              " the proxy never confirmed RFC 2217"
-                              " COM-port control — if the amplifier"
-                              " stays silent, check that ser2net runs"
-                              " this port as `accepter:"
-                              " telnet(rfc2217=true),<port>` rather"
-                              " than raw.";
+                              " the network bridge never answered the"
+                              " RFC 2217 COM-port-control request, so"
+                              " it cannot drive DTR/RTS — remote"
+                              " power-ON is not possible this way."
+                              " Plain serial-to-Ethernet converters"
+                              " (e.g. Waveshare in TCP-server mode)"
+                              " do not support it: power the amplifier"
+                              " on at its front panel, or use ser2net"
+                              " with `accepter:"
+                              " telnet(rfc2217=true),<port>` and a"
+                              " serial adapter that has a DTR line.";
     } else {
         qCInfo(lcTuner) << "SpeConnection: power-ON pulse complete — the"
                            " amp should begin answering status polls"

@@ -1633,6 +1633,10 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
             "    connector: serialdev,\n"
             "              /dev/ttyUSB0\n"
             "\n"
+            "Plain serial-to-Ethernet converters (e.g. Waveshare in\n"
+            "TCP-server mode) work for monitoring and control, but cannot\n"
+            "power the amplifier ON — they have no RFC 2217 support.\n"
+            "\n"
             "Original 1K-FA: set the proxy's serial side to 9600 baud;\n"
             "raw mode is preferred (its binary status suffers in telnet mode).");
         auto ui = serialDevice(QStringLiteral("spe"), tr("SPE Expert Amplifier"),
