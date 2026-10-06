@@ -6,8 +6,10 @@
 
 class QCheckBox;
 class QGroupBox;
+class QHideEvent;
 class QLabel;
 class QSpinBox;
+class QTimer;
 
 namespace AetherSDR {
 class RadioModel;
@@ -21,12 +23,16 @@ class RtlReceiverSettingsWidget final : public QWidget {
 public:
     explicit RtlReceiverSettingsWidget(RadioModel& model, QWidget* parent = nullptr);
 
+protected:
+    void hideEvent(QHideEvent* event) override;
+
 private:
     void bindBackend();
     void queryStatus();
     void acceptStatus(const QVariantMap& status);
     void submit(const QString& verb, const QVariant& value, quint64& pending);
     void renderStatus();
+    void submitPpm();
 
     RadioModel& m_model;
     QPointer<IRadioBackend> m_backend;
@@ -36,6 +42,7 @@ private:
     ControlAvailabilityRegistry* m_availability;
     QGroupBox* m_controls;
     QSpinBox* m_ppm;
+    QTimer* m_ppmTimer;
     QCheckBox* m_dc;
     QLabel* m_applied;
     QLabel* m_status;
@@ -44,6 +51,7 @@ private:
     QString m_error;
     bool m_haveState = false;
     bool m_ppmEdited = false;
+    int m_submittedPpm = 0;
     quint64 m_bindingGeneration = 0;
     quint64 m_queryRequest = 0;
     quint64 m_ppmRequest = 0;
