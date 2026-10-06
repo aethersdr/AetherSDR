@@ -59,7 +59,8 @@ alone. MSVC flags and `Release` builds are unaffected.
 | Option | Default | Purpose and prerequisites |
 |---|---|---|
 | `ENABLE_DEEPFIST_EXPERIMENT` | OFF | Build the experimental DeepFist CW receive decoder. Requires ONNX Runtime at configure time (configuration fails without it) and a separate verified model bundle at runtime; see below. |
-| `ENABLE_RTL` | ON | Build the experimental receive-only RTL-SDR USB backend when both `librtlsdr` and single-precision FFTW (`fftw3f`) are found. Missing either disables the backend. |
+| `ENABLE_RTL` | ON | Build the experimental receive-only RTL-SDR USB backend when both `librtlsdr` and single-precision FFTW (`fftw3f`) are found. Missing either disables the backend unless `REQUIRE_RTL=ON`. |
+| `ENABLE_HD_FM` | OFF | Retained optional Digital FM switch. This analog submission rejects ON and points to the separate RFC #6079 proposal; official release workflows explicitly keep it OFF. |
 | `AETHER_HL2_TX_TXA` | ON | Select WDSP's TXA chain for the Hermes-Lite 2 SSB transmit modulator. OFF builds the in-tree phasing modulator. This choice has no runtime toggle. |
 
 **DeepFist:** enabling `-DENABLE_DEEPFIST_EXPERIMENT=ON` alone does not supply its
@@ -121,6 +122,7 @@ are useful for release builds that must include those capabilities.
 
 | Option | Default | Fail configuration when… |
 |---|---|---|
+| `REQUIRE_RTL` | OFF | RTL is disabled, or `librtlsdr` or single-precision FFTW (`fftw3f`) is missing. Official release workflows set this ON together with `ENABLE_RTL=ON`. |
 | `REQUIRE_SERIALPORT` | OFF | Qt SerialPort is missing. |
 | `REQUIRE_KEYCHAIN` | OFF | QtKeychain is missing. |
 | `REQUIRE_ASR_ONNX` | OFF | ONNX Runtime is missing for Silero VAD, speaker labeling and the signal classifier. |
