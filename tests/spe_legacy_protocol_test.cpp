@@ -200,6 +200,23 @@ int main()
             report("live: no warning or alarm",
                    s->warningDetail.isEmpty() && s->alarmDetail.isEmpty());
         }
+        // Second live capture, keyed: TUNE on 80 m (3788 kHz, 5 W drive)
+        // into the operator's load. Pins the TX-only fields.
+        const QByteArray keyed = QByteArray::fromHex(
+            "a0d601000000000000000000006410" "28cc0e50b50024d20e1f00dc01a700");
+        const auto t = Legacy::parseStatus(keyed);
+        report("live keyed 1K-FA capture decodes", t.has_value());
+        if (t) {
+            report("live keyed: OPERATE, transmitting, FULL, 80 m, ANT 1",
+                   t->operate && t->transmitting && t->powerLevel == u'H'
+                       && bandName(t->bandIndex) == QLatin1String("80m")
+                       && t->txAntenna == 1);
+            report("live keyed: 379.4 W out, 47.6 V, 16.7 A, 36 degC",
+                   near(t->outputPowerW, 379.4f) && near(t->paVoltageV, 47.6f)
+                       && near(t->paCurrentA, 16.7f) && t->tempUpper == 36);
+            report("live keyed: 3.1 W reflected gives an estimated SWR of 1.2",
+                   t->swrEstimated && near(t->swrAnt, 1.2f));
+        }
         // The same payload framed and fed through the parser byte-wise.
         QList<Legacy::Frame> frames;
         Legacy::FrameParser p;
