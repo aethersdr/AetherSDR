@@ -4,8 +4,8 @@
 // every QMenu/QAction in the menu bar, their enable/disable wiring, and the
 // inline lambdas they trigger (~70 connects).
 //
-// The community-credits subsystem lives in Contribute.cpp; this TU retains
-// only the About-dialog button and its connection.
+// Contributors are recognised in the Contributor Logbook, which the About
+// window links to.
 
 #include "MainWindow.h"
 #include "AetherBuildIdentity.h"   // generated at build time (#5804)
@@ -24,7 +24,6 @@
 #include "RadioSetupDialog.h"
 #include "TciApplet.h"
 #include "ClientChainApplet.h"
-#include "Contribute.h"
 #include "CwxPanel.h"
 #include "DxClusterDialog.h"
 #include "HelpDialog.h"
@@ -55,6 +54,8 @@
 #include "core/AppSettings.h"
 #include "core/SpotModeResolver.h"
 #include "core/ThemeManager.h"
+#include "BrandMark.h"
+#include "CanonWindow.h"
 #include "core/TxKeyingMarker.h"
 #include "models/BandPlanManager.h"
 #include "models/RadioModel.h"
@@ -68,19 +69,16 @@
 #include <QDesktopServices>
 #include <QFrame>
 #include <QHBoxLayout>
-#include <QJsonDocument>
 #include <QJsonObject>
 #include <QKeySequence>
 #include <QLabel>
 #include <QMenuBar>
-#include <QNetworkAccessManager>
-#include <QNetworkReply>
-#include <QNetworkRequest>
 #include <QPointer>
+#include <QGridLayout>
+#include <QFontMetricsF>
+#include <QPainter>
 #include <QPushButton>
 #include <QSpinBox>
-#include <QScrollArea>
-#include <QScrollBar>
 #include <QShortcut>
 #include <QTimer>
 #include <QUrl>
@@ -94,8 +92,42 @@
 namespace AetherSDR {
 
 namespace {
-// Stall timeout for the About dialog's GitHub contributor fetch (#4688 §6).
-constexpr int kTransferTimeoutMs = 15000;
+
+// "AetherSDR" at display size, centred: BrandMark's wordmark, without the
+// mark, which the About window shows larger above it.
+class AboutWordmark : public QWidget {
+public:
+    explicit AboutWordmark(QWidget* parent = nullptr) : QWidget(parent)
+    {
+        setAccessibleName(QStringLiteral("AetherSDR"));
+        setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+    }
+    QSize sizeHint() const override
+    {
+        const QFontMetricsF fm(wordFont());
+        return QSize(int(BrandMark::wordmarkWidth(wordFont())) + 8, int(fm.height()) + 4);
+    }
+
+protected:
+    void paintEvent(QPaintEvent*) override
+    {
+        QPainter p(this);
+        const QFont f = wordFont();
+        const QFontMetricsF fm(f);
+        BrandMark::paintWordmark(p, this, f, (width() - BrandMark::wordmarkWidth(f)) / 2.0,
+                                 (height() + fm.capHeight()) / 2.0, height());
+    }
+
+private:
+    QFont wordFont() const
+    {
+        QFont f = font();
+        f.setPixelSize(26);
+        f.setWeight(QFont::Bold);
+        f.setLetterSpacing(QFont::PercentageSpacing, 98);
+        return f;
+    }
+};
 
 QWidget* windowMenuTarget(QWidget* primaryWindow,
                           const QList<WindowMenuEntry>& entries)
@@ -1718,171 +1750,188 @@ void MainWindow::buildMenuBar()
     });
     helpMenu->addSeparator();
     helpMenu->addAction("About AetherSDR", this, [this]{
-        auto* dlg = new PersistentDialog(QStringLiteral("About AetherSDR"),
-                                         QStringLiteral("AboutDialogGeometry"), this);
+        // Styled to the AetherSDR style guide: an ambient ground, the gradient
+        // wordmark, nested build details, and colour only from color.canon.*
+        // and color.brand.* tokens.
+        // One About at a time: a second click brings the open one forward.
+        if (m_aboutWindow) {
+            m_aboutWindow->raise();
+            m_aboutWindow->activateWindow();
+            return;
+        }
+        auto& tm = AetherSDR::ThemeManager::instance();
+        // A CanonWindow: no title bar, rounded corners, the ambient ground,
+        // a corner close button; Escape and OK close it too.
+        auto* dlg = new CanonWindow(QStringLiteral("About AetherSDR"), this);
         dlg->setAttribute(Qt::WA_DeleteOnClose);
-        dlg->setFixedWidth(380);
-        AetherSDR::ThemeManager::instance().applyStyleSheet(dlg, "QDialog { background: {{color.background.0}}; }");
+        m_aboutWindow = dlg;
+        dlg->setFixedWidth(400);
 
         auto* vbox = new QVBoxLayout(dlg->bodyWidget());
-        vbox->setSpacing(8);
-        vbox->setContentsMargins(16, 16, 16, 16);
-        dlg->setBodyLayoutMargins(QMargins(16, 16, 16, 16),
-                                  QMargins(16, 14, 16, 16));
-        trackPersistentDialog(dlg);
+        vbox->setSpacing(10);
+        vbox->setContentsMargins(24, 26, 24, 22);
 
-        // Icon
-        auto* iconLbl = new QLabel;
-        iconLbl->setPixmap(QPixmap(":/icon.png").scaled(96, 96, Qt::KeepAspectRatio, Qt::SmoothTransformation));
-        iconLbl->setAlignment(Qt::AlignCenter);
-        vbox->addWidget(iconLbl);
+        // The mark is dark on a dark ground: a contrast ring and the guide's
+        // spark set it apart. SparkRing scales it for the screen's DPR.
+        auto* logo = new SparkRing(QPixmap(QStringLiteral(":/icon.png")), 88);
+        logo->setAccessibleName(QStringLiteral("AetherSDR logo"));
+        vbox->addWidget(logo, 0, Qt::AlignHCenter);
+        auto* wordmark = new AboutWordmark;
+        tm.applyStyleSheet(wordmark, "background: transparent;");
+        vbox->addWidget(wordmark);
 
-        // Header
         // The git SHA identifies the build — useful when bug-reporting against
         // a dev/test build that doesn't correspond to a tagged release. It is
         // captured at build time; see cmake/AetherBuildIdentity.cmake.
+        auto* version = new QLabel(QStringLiteral("v%1  <span style='font-family:monospace; font-size:11px;'>%2</span>")
+                                       .arg(QCoreApplication::applicationVersion(),
+                                            QStringLiteral(AETHER_BUILD_SHA)));
+        version->setAlignment(Qt::AlignCenter);
+        version->setToolTip(QStringLiteral("Version and the commit this binary was built from."));
+        tm.applyStyleSheet(version, "QLabel { color: {{color.canon.muted}}; font-size: 13px; background: transparent; }");
+        vbox->addWidget(version);
+
+        auto* blurb = new QLabel(QStringLiteral("Cross-platform SmartSDR-compatible client\nfor FlexRadio transceivers."));
+        blurb->setAlignment(Qt::AlignCenter);
+        blurb->setWordWrap(true);
+        tm.applyStyleSheet(blurb, "QLabel { color: {{color.canon.inkSoft}}; font-size: 13px; padding: 2px 0 4px 0; background: transparent; }");
+        vbox->addWidget(blurb);
+
+        // Build details: a nested card of label / value rows.
         const QString rendererDescription = [this]() {
             if (SpectrumWidget* sw = spectrum()) {
                 return sw->rendererDescription();
             }
             return QStringLiteral("No active pan");
         }();
-        auto* header = new QLabel(QString(
-            "<div style='text-align:center;'>"
-            "<h2 style='margin-bottom:2px; color:#c8d8e8;'>AetherSDR</h2>"
-            "<p style='margin-top:0; color:#8aa8c0;'>v%1<br>"
-            "<span style='font-size:10px; color:#6a8090;'>(%4)</span></p>"
-            "<p style='margin-top:8px; color:#c8d8e8;'>Cross-platform SmartSDR-compatible client<br>"
-            "for FlexRadio transceivers.</p>"
-            "<p style='font-size:11px; color:#6a8090;'>"
-            "Built with Qt %2 &middot; C++20<br>"
-            "Compiled: %3<br>"
-            "Renderer: %5</p>"
-            "</div>")
-            .arg(QCoreApplication::applicationVersion(), qVersion(),
-                 QStringLiteral(__DATE__),
-                 QStringLiteral(AETHER_BUILD_SHA),
-                 rendererDescription.toHtmlEscaped()));
-        header->setAlignment(Qt::AlignCenter);
-        header->setWordWrap(true);
-        // The SHA comes from the header cmake/AetherBuildIdentity.cmake
-        // regenerates on every build (#5804), so an incremental `cmake --build`
-        // after a new commit shows the new SHA without re-configuring. The
-        // renderer line comes from the active pan at dialog-open time, after Qt
-        // has picked a real QRhi backend when the GPU path is active.
-        header->setToolTip(
-            QStringLiteral("Build identity and active pan renderer. The SHA is captured "
-                           "when the binary is built."));
-        vbox->addWidget(header);
+        auto* build = new QFrame;
+        build->setObjectName(QStringLiteral("aboutBuild"));
+        tm.applyStyleSheet(build,
+            "QFrame#aboutBuild { background: {{color.canon.nested}}; border: 1px solid {{color.canon.line}}; border-radius: 12px; }"
+            "QLabel { background: transparent; border: none; font-size: 12px; color: {{color.canon.inkSoft}}; }"
+            "QLabel[role=\"key\"] { color: {{color.canon.muted}}; font-size: 10px; font-weight: bold; }");
+        auto* grid = new QGridLayout(build);
+        grid->setContentsMargins(14, 10, 14, 10);
+        grid->setHorizontalSpacing(12);
+        grid->setVerticalSpacing(5);
+        const QList<QPair<QString, QString>> rows = {
+            {QStringLiteral("BUILT WITH"), QStringLiteral("Qt %1 · C++20").arg(QString::fromLatin1(qVersion()))},
+            {QStringLiteral("COMPILED"), QStringLiteral(__DATE__)},
+            {QStringLiteral("RENDERER"), rendererDescription},
+        };
+        // The body's content width: the window less its hairline inset and
+        // the body margins.
+        const QMargins vm = vbox->contentsMargins();
+        const int contentWidth = dlg->width() - 2 * CanonWindow::kInset - vm.left() - vm.right();
+        QList<QLabel*> values;
+        int keyWidth = 0;
+        for (int i = 0; i < rows.size(); ++i) {
+            auto* k = new QLabel(rows[i].first);
+            k->setProperty("role", QStringLiteral("key"));
+            auto* v = new QLabel(rows[i].second);
+            // Driver and device names are not markup.
+            v->setTextFormat(Qt::PlainText);
+            v->setWordWrap(true);
+            v->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+            v->setTextInteractionFlags(Qt::TextSelectableByMouse);
+            grid->addWidget(k, i, 0, Qt::AlignTop | Qt::AlignRight);
+            grid->addWidget(v, i, 1, Qt::AlignTop);
+            // Measure in the card's stylesheet fonts, not the defaults.
+            k->ensurePolished();
+            keyWidth = std::max(keyWidth, k->sizeHint().width());
+            values.append(v);
+        }
+        grid->setColumnStretch(1, 1);
+        // Wrapped labels under-report their height in a fixed-width window;
+        // reserve it for the value column's width: the content width less the
+        // card's padding and border, the spacing and the measured key column.
+        const QMargins gm = grid->contentsMargins();
+        const int valueWidth = contentWidth - gm.left() - gm.right() - 2 * build->frameWidth()
+                               - grid->horizontalSpacing() - keyWidth;
+        for (QLabel* v : values) {
+            v->ensurePolished();
+            v->setMinimumHeight(v->heightForWidth(valueWidth));
+        }
+        // The renderer line comes from the active pan at dialog-open time,
+        // after Qt has picked a real QRhi backend when the GPU path is active.
+        build->setToolTip(QStringLiteral("Build identity and active pan renderer. The SHA is captured "
+                                         "when the binary is built."));
+        vbox->addWidget(build);
 
-        // Separator
-        auto* sep1 = new QFrame;
-        sep1->setFrameShape(QFrame::HLine);
-        AetherSDR::ThemeManager::instance().applyStyleSheet(sep1, "color: {{color.background.2}};");
-        vbox->addWidget(sep1);
-
-        // Contributors label
-        auto* contribTitle = new QLabel("<b style='color:#c8d8e8;'>Contributors</b>");
-        contribTitle->setAlignment(Qt::AlignCenter);
-        vbox->addWidget(contribTitle);
-
-        // Scrollable contributors list
-        auto* contribLabel = new QLabel("Jeremy (KK7GWY)<br>Claude &middot; Anthropic<br>rfoust<br>Ian (M7HNF)<br>VE3NEM<br>jensenpat<br>chibondking<br>Dependabot");
-        contribLabel->setAlignment(Qt::AlignCenter);
-        AetherSDR::ThemeManager::instance().applyStyleSheet(contribLabel, "QLabel { color: {{color.text.primary}}; font-size: 11px; }");
-        contribLabel->setWordWrap(true);
-
-        auto* scroll = new QScrollArea;
-        scroll->setWidget(contribLabel);
-        scroll->setWidgetResizable(true);
-        scroll->setFixedHeight(80);
-        scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-        AetherSDR::ThemeManager::instance().applyStyleSheet(scroll, "QScrollArea { background: {{color.background.0}}; border: 1px solid {{color.background.1}}; border-radius: 4px; }"
-            "QScrollBar:vertical { background: {{color.background.0}}; width: 6px; }"
-            "QScrollBar::handle:vertical { background: {{color.background.2}}; border-radius: 3px; }"
-            "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }");
-        vbox->addWidget(scroll);
-
-        // Separator
-        auto* sep2 = new QFrame;
-        sep2->setFrameShape(QFrame::HLine);
-        AetherSDR::ThemeManager::instance().applyStyleSheet(sep2, "color: {{color.background.2}};");
-        vbox->addWidget(sep2);
-
-        auto* communityCreditsButton = new QPushButton(QStringLiteral("Play Community Credits..."));
-        communityCreditsButton->setAccessibleName(QStringLiteral("Play AetherSDR community credits"));
-        communityCreditsButton->setAccessibleDescription(
-            QStringLiteral("Opens an animated thank-you to contributors and Open Collective supporters with music."));
-        AetherSDR::ThemeManager::instance().applyStyleSheet(
-            communityCreditsButton,
-            "QPushButton { background: {{color.background.1}}; color: {{color.accent.bright}}; "
-            "border: 1px solid {{color.accent}}; border-radius: 4px; padding: 7px 18px; "
-            "font-weight: bold; }"
-            "QPushButton:hover { background: {{color.background.2}}; }");
-        vbox->addWidget(communityCreditsButton, 0, Qt::AlignCenter);
-        connect(communityCreditsButton, &QPushButton::clicked, this, [this] {
-            showOrRaisePersistent(m_contributeDialog);
+        // Contributors live in the Contributor Logbook (points, weekly
+        // awards, bios); the window links there instead of listing names.
+        auto* logbookButton = new QPushButton(QStringLiteral("Contributor Logbook  ↗"));
+        logbookButton->setAccessibleName(QStringLiteral("Open the AetherSDR Contributor Logbook"));
+        logbookButton->setAccessibleDescription(
+            QStringLiteral("Opens the all-time standings at contributors.aethersdr.com in your browser."));
+        logbookButton->setToolTip(QStringLiteral("contributors.aethersdr.com"));
+        logbookButton->setCursor(Qt::PointingHandCursor);
+        tm.applyStyleSheet(
+            logbookButton,
+            "QPushButton { background: {{color.canon.control}}; color: {{color.canon.cyan}}; "
+            "border: 1px solid {{color.canon.lineHi}}; border-radius: 4px; padding: 7px 18px; "
+            "font-weight: bold; font-size: 12px; }"
+            "QPushButton:hover { background: {{color.canon.nested}}; color: {{color.canon.aqua}}; }"
+            "QPushButton:focus { border-color: {{color.canon.sparkGold}}; }");
+        // The logbook is where contributors are recognised: the gold spark
+        // circles the button, as it circles the award cards there.
+        vbox->addSpacing(2);
+        vbox->addWidget(new SparkBorder(logbookButton, 4), 0, Qt::AlignCenter);
+        connect(logbookButton, &QPushButton::clicked, dlg, [] {
+            QDesktopServices::openUrl(QUrl(QStringLiteral("https://contributors.aethersdr.com/#all-time")));
         });
 
-        // Footer
-        auto* footer = new QLabel(
-            "<div style='text-align:center;'>"
-            "<p style='font-size:11px; color:#8aa8c0;'>"
-            "&copy; 2026 AetherSDR Contributors<br>"
-            "Licensed under "
-            "<a href='https://www.gnu.org/licenses/gpl-3.0.html' style='color:#00b4d8;'>GPLv3</a></p>"
-            "<p style='font-size:11px;'>"
-            "<a href='https://github.com/aethersdr/AetherSDR' style='color:#00b4d8;'>"
-            "github.com/aethersdr/AetherSDR</a></p>"
-            "<p style='font-size:10px; color:#6a8090;'>"
-            "SmartSDR protocol &copy; FlexRadio Systems</p>"
-            "<p style='font-size:10px; color:#6a8090;'>"
-            "D-STAR is a registered trademark of Icom Inc.<br>"
-            "AetherSDR is not affiliated with or endorsed by Icom Inc.</p>"
-            "<p style='font-size:10px; color:#6a8090;'>"
-            "HF propagation forecasts provided by "
-            "<a href='https://www.hamqsl.com/' style='color:#8aa8c0;'>hamqsl.com</a></p>"
-            "</div>");
+        auto* sep = new QFrame;
+        sep->setFrameShape(QFrame::HLine);
+        sep->setFixedHeight(1);
+        tm.applyStyleSheet(sep, "QFrame { background: {{color.canon.line}}; border: none; }");
+        vbox->addSpacing(4);
+        vbox->addWidget(sep);
+
+        // Rich-text link colours are baked into the HTML, so the footer is
+        // rewritten when the theme changes while the window is open.
+        auto* footer = new QLabel;
+        auto setFooterText = [footer] {
+            auto& tm = AetherSDR::ThemeManager::instance();
+            footer->setText(QStringLiteral(
+                "<div style='text-align:center;'>"
+                "<p style='margin:0 0 6px 0;'>&copy; 2026 AetherSDR Contributors &middot; Licensed under "
+                "<a href='https://www.gnu.org/licenses/gpl-3.0.html' style='color:%1; text-decoration:none;'>GPLv3</a></p>"
+                "<p style='margin:0 0 8px 0;'><a href='https://github.com/aethersdr/AetherSDR' style='color:%1; text-decoration:none;'>"
+                "github.com/aethersdr/AetherSDR</a></p>"
+                "<p style='font-size:10px; margin:0;'>SmartSDR protocol &copy; FlexRadio Systems<br>"
+                "D-STAR is a registered trademark of Icom Inc.<br>"
+                "AetherSDR is not affiliated with or endorsed by Icom Inc.<br>"
+                "HF propagation forecasts provided by "
+                "<a href='https://www.hamqsl.com/' style='color:%1; text-decoration:none;'>hamqsl.com</a></p>"
+                "</div>").arg(tm.color(footer, QStringLiteral("color.canon.cyan")).name()));
+        };
+        setFooterText();
+        connect(&tm, &AetherSDR::ThemeManager::themeChanged, footer, setFooterText);
         footer->setAlignment(Qt::AlignCenter);
         footer->setOpenExternalLinks(true);
         footer->setWordWrap(true);
+        tm.applyStyleSheet(footer, "QLabel { color: {{color.canon.muted}}; font-size: 11px; background: transparent; }");
+        // A wrapped rich-text label under-reports its height in a fixed-width
+        // dialog; size it for the content width so the last line isn't clipped.
+        footer->ensurePolished();
+        footer->setMinimumHeight(footer->heightForWidth(contentWidth));
         vbox->addWidget(footer);
 
-        // OK button
-        auto* okBtn = new QPushButton("OK");
-        AetherSDR::ThemeManager::instance().applyStyleSheet(okBtn, "QPushButton { background: {{color.accent}}; color: {{color.background.0}}; font-weight: bold; "
-            "border-radius: 4px; padding: 6px 24px; }"
-            "QPushButton:hover { background: {{color.accent.bright}}; }");
+        // OK: the primary action, in the brand gradient.
+        auto* okBtn = new QPushButton(QStringLiteral("OK"));
+        okBtn->setDefault(true);
+        tm.applyStyleSheet(okBtn,
+            "QPushButton { background: {{color.brand.gradient}}; color: {{color.canon.onAccent}}; font-weight: bold; "
+            "font-size: 12px; border: 1px solid transparent; border-radius: 4px; padding: 6px 30px; }"
+            "QPushButton:hover { border-color: {{color.canon.aqua}}; }"
+            "QPushButton:focus { border: 2px solid {{color.canon.aqua}}; padding: 5px 29px; }");
         connect(okBtn, &QPushButton::clicked, dlg, &QDialog::close);
+        vbox->addSpacing(4);
         vbox->addWidget(okBtn, 0, Qt::AlignCenter);
 
         dlg->show();
-
-        // Fetch live contributor list from GitHub API
-        auto* nam = new QNetworkAccessManager(dlg);
-        // Bound the contributor fetch (#4688 §6) — without it a half-open
-        // connection leaves the About dialog's list pending with no error.
-        nam->setTransferTimeout(kTransferTimeoutMs);
-        auto* reply = nam->get(QNetworkRequest(
-            QUrl("https://api.github.com/repos/aethersdr/AetherSDR/contributors")));
-        connect(reply, &QNetworkReply::finished, dlg, [contribLabel, reply] {
-            reply->deleteLater();
-            if (reply->error() != QNetworkReply::NoError) return;
-            auto doc = QJsonDocument::fromJson(reply->readAll());
-            if (!doc.isArray()) return;
-            QStringList names;
-            names << "Jeremy (KK7GWY)" << "Claude &middot; Anthropic";
-            for (const auto& val : doc.array()) {
-                auto obj = val.toObject();
-                QString login = obj.value("login").toString();
-                if (login.isEmpty() || login == "ten9876") continue;
-                if (login.contains("[bot]"))
-                    login = login.replace("[bot]", "");
-                if (!names.contains(login))
-                    names << login;
-            }
-            contribLabel->setText(names.join("<br>"));
-        });
+        okBtn->setFocus(Qt::OtherFocusReason);   // Enter closes; the corner × stays quiet
     });
 }
 

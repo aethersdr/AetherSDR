@@ -132,9 +132,9 @@ class AetherClockApplet;
 class AetherClockEngine;
 class AetherClockModel;
 class AutomationServer;
+class CanonWindow;
 class ConnectionPanel;
 class Ctr2ProxyModel;
-class ContributeDialog;
 class TitleBar;
 class KiwiSdrManager;
 struct KiwiSdrAntennaProfile;
@@ -1658,7 +1658,7 @@ private:
     QPointer<GpsLocationDialog> m_gpsLocationDialog;
     QPointer<FlexControlDialog> m_flexControlDialog;
     QPointer<WhatsNewDialog> m_whatsNewDialog;
-    QPointer<ContributeDialog> m_contributeDialog;
+    QPointer<CanonWindow> m_aboutWindow;
     QPointer<AetherRxDialog> m_rxDialog;
     QPointer<QDialog> m_nr2WisdomDialog;
 #ifdef HAVE_MQTT

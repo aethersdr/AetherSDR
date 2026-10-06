@@ -2027,6 +2027,25 @@ add_test(NAME theme_manager_test COMMAND theme_manager_test)
 set_tests_properties(theme_manager_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# CanonWindow (RFC #6226): the title-bar-less window falls back to the manual
+# move when startSystemMove() is unavailable, and closes on QKeySequence::Close.
+add_executable(canon_window_test
+    tests/canon_window_test.cpp
+    src/gui/CanonWindow.cpp
+    src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
+    $<TARGET_OBJECTS:aether_test_settings>
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
+    ${THEME_TEST_RESOURCES}
+)
+target_include_directories(canon_window_test PRIVATE src)
+target_link_libraries(canon_window_test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
+set_target_properties(canon_window_test PROPERTIES AUTOMOC ON)
+add_test(NAME canon_window_test COMMAND canon_window_test)
+set_tests_properties(canon_window_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # Compiled-in theme seed (#3184).  DELIBERATELY has no ${THEME_TEST_RESOURCES}:
 # with the theme resource linked, the ThemeManager constructor loads Default
 # Dark straight after seeding and the JSON hides whatever the seed actually
@@ -7781,6 +7800,7 @@ set(AETHER_SETTINGS_CONSUMERS
     aether_tx_profiles_test
     aether_rx_profiles_test
     theme_manager_test
+    canon_window_test
     theme_seed_test
     panadapter_message_overlay_test
     app_settings_safety_test

@@ -232,6 +232,38 @@ replace these with a single `QSet<QPointer<PersistentDialog>>` walk.
 - `src/gui/PanLayoutDialog.{h,cpp}`
 - `src/gui/ProfileManagerDialog.{h,cpp}` — most recent example; has the move/resize event saving
 
+## The exception: `CanonWindow` windows
+
+A window built on `CanonWindow` (`src/gui/CanonWindow.{h,cpp}`, RFC #6226)
+deliberately opts out of two of the four concerns above. About AetherSDR is
+the first one.
+
+| Concern | `CanonWindow` | Why |
+|---|---|---|
+| Frameless chrome integration | Always frameless; ignores `FramelessWindow` and is not tracked by `trackPersistentDialog()` | The style guide's rounded, title-bar-less window *is* the design; native chrome would put a title bar over it |
+| Geometry persistence | None; asks to open centred on its parent every time (Wayland compositors place top-level windows themselves and may ignore it) | It is a short-lived window, not a workspace tool |
+
+What it keeps:
+
+- **Moving:** dragging any empty part of the window moves it through
+  `FramelessMoveHelper` (press/move/release), so the xcb and translucent-Windows
+  fallbacks still apply. A press on a widget that takes it for itself — a
+  button, a link, text you can select — does not move the window; About's
+  build details stay selectable so they can be copied into a bug report.
+- **Closing:** the corner close button, Escape and `QKeySequence::Close`
+  (⌘W, Ctrl+W) all close it.
+- **Deletion:** pair it with `WA_DeleteOnClose`, as About does, and hold it in
+  a `QPointer` so a second open raises the existing window.
+- **Motion:** `SparkRing` and `SparkBorder` follow the OS reduced-motion
+  preference (`QAccessibilityHints::motionPreference`) and hold still when it
+  is set. They animate only while visible and tick slowly while the window is
+  not exposed.
+
+It is translucent, so the rounded corners need a compositor; an X11 session
+without one shows square black corners. Use `CanonWindow` only for windows the
+style guide covers. Tool and workspace dialogs keep the persistent pattern
+above.
+
 ## Common pitfalls
 
 These are the issues that have hit real PRs in the project's history.
