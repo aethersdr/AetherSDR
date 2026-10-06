@@ -94,6 +94,7 @@ void ThemeManager::seedGeneratedDefaults()
     m_tokens.insert("color.canon.nested", QString("#0e1a2a"));
     m_tokens.insert("color.canon.onAccent", QString("#041019"));
     m_tokens.insert("color.canon.raised", QString("#0a121e"));
+    m_tokens.insert("color.canon.sparkHot", QString("#e6fdff"));
     m_tokens.insert("color.canvas.background", QString("#08080d"));
     m_tokens.insert("color.canvas.dots", QString("#50e6f0fa"));
     m_tokens.insert("color.control.inactive", QString("#8ea8c0"));

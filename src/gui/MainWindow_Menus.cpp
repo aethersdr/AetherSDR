@@ -55,6 +55,7 @@
 #include "core/AppSettings.h"
 #include "core/SpotModeResolver.h"
 #include "core/ThemeManager.h"
+#include "CanonWindow.h"
 #include "core/TxKeyingMarker.h"
 #include "models/BandPlanManager.h"
 #include "models/RadioModel.h"
@@ -102,58 +103,6 @@ namespace AetherSDR {
 namespace {
 // Stall timeout for the About dialog's GitHub contributor fetch (#4688 §6).
 constexpr int kTransferTimeoutMs = 15000;
-
-// The About window's ground, per the AetherSDR style guide: color.canon.ground
-// with a blue bloom at the top right, a teal bloom at the top left, and a 64 px
-// hairline grid that fades out towards the bottom. Paint-only; holds the
-// dialog's content as children.
-class AboutBackdrop : public QWidget {
-public:
-    using QWidget::QWidget;
-
-protected:
-    void paintEvent(QPaintEvent*) override
-    {
-        auto& tm = ThemeManager::instance();
-        QPainter p(this);
-        p.setRenderHint(QPainter::Antialiasing, true);
-        const QRectF r = rect();
-        p.fillRect(r, tm.color(this, QStringLiteral("color.canon.ground")));
-
-        auto bloom = [&](const QPointF& centre, qreal radius, const QString& token) {
-            QColor c = tm.color(this, token);
-            QColor clear = c;
-            clear.setAlpha(0);
-            QRadialGradient g(centre, radius);
-            g.setColorAt(0.0, c);
-            g.setColorAt(0.6, clear);
-            p.fillRect(r, g);
-        };
-        bloom(QPointF(r.width() * 0.72, -r.height() * 0.08), r.width() * 1.1,
-              QStringLiteral("color.canon.bloom.blue"));
-        bloom(QPointF(r.width() * 0.12, r.height() * 0.04), r.width() * 0.9,
-              QStringLiteral("color.canon.bloom.teal"));
-
-        // Grid: full strength at the top, gone by three quarters down.
-        const QColor grid = tm.color(this, QStringLiteral("color.canon.grid"));
-        const qreal fadeTo = r.height() * 0.75;
-        constexpr int kStep = 64;
-        for (int y = kStep; y < fadeTo; y += kStep) {
-            QColor c = grid;
-            c.setAlphaF(grid.alphaF() * (1.0 - y / fadeTo));
-            p.setPen(QPen(c, 1));
-            p.drawLine(QPointF(0, y + 0.5), QPointF(r.width(), y + 0.5));
-        }
-        QColor clear = grid;
-        clear.setAlpha(0);
-        QLinearGradient fade(0, 0, 0, fadeTo);
-        fade.setColorAt(0.0, grid);
-        fade.setColorAt(1.0, clear);
-        p.setPen(QPen(QBrush(fade), 1));
-        for (int x = kStep; x < r.width(); x += kStep)
-            p.drawLine(QPointF(x + 0.5, 0), QPointF(x + 0.5, fadeTo));
-    }
-};
 
 // "AetherSDR" at display size, centred: "Aether" in the brand wordmark ink and
 // "SDR" filled with the brand gradient (the BrandMark treatment, without the
@@ -1833,31 +1782,29 @@ void MainWindow::buildMenuBar()
         // wordmark, nested build details, and colour only from color.canon.*
         // and color.brand.* tokens.
         auto& tm = AetherSDR::ThemeManager::instance();
-        auto* dlg = new PersistentDialog(QStringLiteral("About AetherSDR"),
-                                         QStringLiteral("AboutDialogGeometry"), this);
+        // A CanonWindow: no title bar, rounded corners, the ambient ground,
+        // a corner close button; Escape and OK close it too.
+        auto* dlg = new CanonWindow(QStringLiteral("About AetherSDR"), this);
         dlg->setAttribute(Qt::WA_DeleteOnClose);
         dlg->setFixedWidth(400);
-        tm.applyStyleSheet(dlg, "QDialog { background: {{color.canon.ground}}; }");
-        dlg->setBodyLayoutMargins(QMargins(0, 0, 0, 0), QMargins(0, 0, 0, 0));
-        trackPersistentDialog(dlg);
 
-        auto* outer = new QVBoxLayout(dlg->bodyWidget());
-        outer->setContentsMargins(0, 0, 0, 0);
-        auto* backdrop = new AboutBackdrop;
-        outer->addWidget(backdrop);
-        auto* vbox = new QVBoxLayout(backdrop);
+        auto* vbox = new QVBoxLayout(dlg->bodyWidget());
         vbox->setSpacing(10);
-        vbox->setContentsMargins(24, 22, 24, 22);
+        vbox->setContentsMargins(24, 26, 24, 22);
 
         // Links take the accent from the theme at open time (the dialog is
         // rebuilt on every open).
         const QString cyan = tm.color(dlg, QStringLiteral("color.canon.cyan")).name();
 
-        auto* iconLbl = new QLabel;
-        iconLbl->setPixmap(QPixmap(":/icon.png").scaled(88, 88, Qt::KeepAspectRatio, Qt::SmoothTransformation));
-        iconLbl->setAlignment(Qt::AlignCenter);
-        tm.applyStyleSheet(iconLbl, "QLabel { background: transparent; }");
-        vbox->addWidget(iconLbl);
+        // The mark is dark on a dark ground: a contrast ring and the guide's
+        // spark set it apart.
+        const qreal dpr = dlg->devicePixelRatioF();
+        QPixmap mark = QPixmap(":/icon.png").scaled(QSize(88, 88) * dpr, Qt::KeepAspectRatio,
+                                                    Qt::SmoothTransformation);
+        mark.setDevicePixelRatio(dpr);
+        auto* logo = new SparkRing(mark, 88);
+        logo->setAccessibleName(QStringLiteral("AetherSDR logo"));
+        vbox->addWidget(logo, 0, Qt::AlignHCenter);
         auto* wordmark = new AboutWordmark;
         tm.applyStyleSheet(wordmark, "background: transparent;");
         vbox->addWidget(wordmark);
@@ -1906,6 +1853,11 @@ void MainWindow::buildMenuBar()
             k->setProperty("role", QStringLiteral("key"));
             auto* v = new QLabel(rows[i].second);
             v->setWordWrap(true);
+            // Wrapped labels under-report their height in a fixed-width
+            // window; reserve it for the value column's width (window minus
+            // margins, card padding and the key column).
+            v->setMinimumHeight(v->heightForWidth(400 - 48 - 28 - 12 - 76));
+            v->setAlignment(Qt::AlignLeft | Qt::AlignTop);
             v->setTextInteractionFlags(Qt::TextSelectableByMouse);
             grid->addWidget(k, i, 0, Qt::AlignTop | Qt::AlignRight);
             grid->addWidget(v, i, 1, Qt::AlignTop);

@@ -132,6 +132,7 @@
             "cyan":     "{color.blue.500}",
             "aqua":     "{color.blue.300}",
             "onAccent": "{color.gray.950}",
+            "sparkHot": "{color.blue.300}",
             "bloom": { "blue": "#140b6bc4", "teal": "#0f12a08c" },
             "grid":     "#0a1a2a3a"
           },
