@@ -151,6 +151,10 @@ private:
     // a live stream.
     Spe::Variant m_variant{Spe::Variant::Expert};
     Spe::Variant m_activeVariant{Spe::Variant::Expert};
+    // 1K-FA only: whether this session last commanded DTR high (ON) or low
+    // (SWITCH OFF); re-applied on every serial connect. Bench (Windows):
+    // closing the port keeps the line, exiting the process drops it.
+    bool m_legacyDtrHeld{false};
 
     Mode      m_mode{Mode::None};
     QString   m_lastSerialPort;
