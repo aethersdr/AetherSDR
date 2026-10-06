@@ -188,6 +188,15 @@ SpeApplet::SpeApplet(QWidget* parent)
     m_faultLabel->hide();
     vbox->addWidget(m_faultLabel);
 
+    // ── ON outcome note (own row, only while it applies). The log has the
+    //    detail; this is what the operator who pressed ON actually sees.
+    m_powerNoteLabel = new QLabel(this);
+    m_powerNoteLabel->setWordWrap(true);
+    theme.applyStyleSheet(m_powerNoteLabel,
+        "QLabel { color: {{color.accent.warning}}; font-size: 10px; }");
+    m_powerNoteLabel->hide();
+    vbox->addWidget(m_powerNoteLabel);
+
     // ── Button rows: OPER/STBY · power level · TUNE · OFF, then INPUT/ANT
     //    and the drive-power arrows. Every button is a literal front-panel
     //    keystroke.
@@ -344,6 +353,11 @@ SpeApplet::SpeApplet(QWidget* parent)
         fpGrid->addWidget(m_cPlusBtn,  1, 3);
 
         fpBox->addLayout(fpGrid);
+        // setModelCapabilities() appends a per-model reason to these.
+        for (QPushButton* btn : {m_bandDownBtn, m_bandUpBtn, m_setBtn,
+                                 m_lMinusBtn, m_lPlusBtn, m_cMinusBtn, m_cPlusBtn}) {
+            btn->setProperty("baseToolTip", btn->toolTip());
+        }
     }
     vbox->addWidget(m_frontPanel);
 
@@ -435,6 +449,9 @@ void SpeApplet::applyDensity()
     theme.applyStyleSheet(m_faultLabel, f
         ? "QLabel { color: {{color.accent.danger}}; font-size: 12px; font-weight: bold; }"
         : "QLabel { color: {{color.accent.danger}}; font-size: 10px; font-weight: bold; }");
+    theme.applyStyleSheet(m_powerNoteLabel, f
+        ? "QLabel { color: {{color.accent.warning}}; font-size: 12px; }"
+        : "QLabel { color: {{color.accent.warning}}; font-size: 10px; }");
 
     // Command buttons get a comfortable hit target in the window.
     for (auto* btn : {m_onBtn, m_operateBtn, m_pwrLevelBtn, m_tuneBtn, m_offBtn,
@@ -505,9 +522,12 @@ void SpeApplet::setSwrAtu(float swr)
 QString SpeApplet::onButtonTip(bool holdsDtr)
 {
     if (holdsDtr) {
-        return tr("Power the amplifier ON — holds the serial DTR line high;"
-                  " OFF releases it (over the network this needs an"
-                  " rfc2217-enabled ser2net port).");
+        return tr("Power the amplifier ON — holds the serial DTR line high"
+                  " (over the network this needs an rfc2217-enabled ser2net"
+                  " port; plain serial-to-Ethernet converters cannot do it).\n"
+                  "The line is held only while AetherSDR is connected: OFF,"
+                  " Disconnect, quitting AetherSDR or losing the serial link"
+                  " releases it, and the amplifier then powers off.");
     }
     return tr("Power the amplifier ON — pulses the serial control"
               " lines (over the network this needs an"
@@ -518,6 +538,25 @@ QString SpeApplet::onButtonTip(bool holdsDtr)
 void SpeApplet::setModelCapabilities(const AetherSDR::Spe::ModelSpec& spec)
 {
     m_onBtn->setToolTip(onButtonTip(spec.powerOnHoldsDtr));
+    m_pwrLevelBtn->setToolTip(spec.halfFullLevels
+        ? tr("Output power level — click to toggle HALF / FULL")
+        : tr("Output power level — click to cycle LOW / MID / HIGH"));
+
+    // Without a mirror the menu/manual-tuning keys never enable
+    // (updateCommandsEnabled gates them on a fresh mirror), so the reason
+    // goes on each key, for the mouse and for screen readers.
+    const QString fpReason = spec.hasLcdMirror
+        ? QString()
+        : tr("Not available on the %1: this key is only safe with the"
+             " amplifier's display mirrored beside it, and this model has no"
+             " remote display mirror.").arg(spec.displayName);
+    for (QPushButton* btn : {m_bandDownBtn, m_bandUpBtn, m_setBtn,
+                             m_lMinusBtn, m_lPlusBtn, m_cMinusBtn, m_cPlusBtn}) {
+        const QString base = btn->property("baseToolTip").toString();
+        btn->setToolTip(fpReason.isEmpty() ? base
+                                           : base + QStringLiteral("\n\n") + fpReason);
+        btn->setAccessibleDescription(fpReason);
+    }
     m_lcd->setUnavailableText(spec.hasLcdMirror
         ? QString()
         : tr("The %1 has no remote display mirror").arg(spec.displayName));
@@ -642,6 +681,13 @@ void SpeApplet::setFaultText(const QString& text)
     }
     m_faultLabel->setText(text);
     m_faultLabel->show();
+}
+
+void SpeApplet::setPowerOnNote(const QString& text)
+{
+    m_powerNoteLabel->setText(text);
+    m_powerNoteLabel->setAccessibleName(text);
+    m_powerNoteLabel->setHidden(text.isEmpty());
 }
 
 void SpeApplet::setSource(const QString& text)

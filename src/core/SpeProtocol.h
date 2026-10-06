@@ -271,6 +271,7 @@ struct ModelSpec {
     bool    reportsAtuSwr{true};    // Status carries the before-ATU SWR
     bool    hasLcdMirror{true};     // answers the 0x80 display request
     bool    powerOnHoldsDtr{false}; // ON holds DTR high (else: RTS pulse)
+    bool    halfFullLevels{false};  // panel says HALF/FULL, not LOW/MID/HIGH
 };
 
 // 1.5K-FA is the entry validated against real hardware by this project
@@ -292,6 +293,10 @@ QString variantKey(Variant v);
 Variant variantFromKey(const QString& key);
 // Serial line settings the variant mandates, for display ("115200 8N1").
 int serialBaud(Variant v);
+
+// Model-aware variant: the original 1K-FA's panel names its two levels
+// HALF/FULL, so L/H read that way there; every other model as powerLevelName(QChar).
+QString powerLevelName(QChar code, const ModelSpec& spec);
 
 // Rated output for the currently selected power level (Status::powerLevel).
 // H (or an unknown letter) is the model's full nominalPowerW.

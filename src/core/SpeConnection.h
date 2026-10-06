@@ -28,6 +28,16 @@ class SpeConnection : public QObject {
 
 public:
     explicit SpeConnection(QObject* parent = nullptr);
+    // Releases the 1K-FA's DTR power line before the port closes — see
+    // teardownDevice(). Emits nothing.
+    ~SpeConnection() override;
+
+    // How the last powerOn() went, for the applet. Network only can fall
+    // short: a proxy that refuses RFC 2217 may not move the line, and a
+    // bridge that never answers (raw ser2net, plain serial-to-Ethernet
+    // converters such as a Waveshare) cannot move it at all.
+    enum class PowerOnResult { Sent, ProxyRefused, NoLineControl };
+    Q_ENUM(PowerOnResult)
 
     bool isConnected() const { return m_connected; }
     QString description() const;  // "COM4" or "192.168.1.52:64002", for status display
@@ -41,6 +51,8 @@ public:
     // detected, so the operator's Peripherals choice is passed in here.
     void setVariant(Spe::Variant variant) { m_variant = variant; }
     Spe::Variant variant() const { return m_variant; }
+    // The variant latched by the current (or last) connect.
+    Spe::Variant activeVariant() const { return m_activeVariant; }
 
 #ifdef HAVE_SERIALPORT
     // 8N1, no handshake, at Spe::serialBaud(variant): 115200 for the newer
@@ -110,6 +122,7 @@ signals:
     // switched off, so this — not disconnected() — is the "amp went away"
     // signal for that topology.
     void respondingChanged(bool responding);
+    void powerOnReported(AetherSDR::SpeConnection::PowerOnResult result);
 
 private slots:
     void onReadyRead();
@@ -131,6 +144,9 @@ private:
     void pollTick();
     void powerOnStep();
     void setControlLines(bool dtr, bool rts);  // transport-appropriate DTR/RTS
+    // Lets queued bytes (RCU_OFF, a key) reach the wire before a close
+    // discards them; bounded, as in FlexControlManager.
+    void drainWrites();
     // Executes a scheduler decision: send the 0x80 request and/or re-arm
     // m_lcdTimer with the interval for the role the scheduler assigned it.
     void applyLcdEffect(const Spe::LcdScheduler::Effect& effect);
@@ -151,10 +167,18 @@ private:
     // a live stream.
     Spe::Variant m_variant{Spe::Variant::Expert};
     Spe::Variant m_activeVariant{Spe::Variant::Expert};
-    // 1K-FA only: whether this session last commanded DTR high (ON) or low
-    // (SWITCH OFF); re-applied on every serial connect. Bench (Windows):
-    // closing the port keeps the line, exiting the process drops it.
-    bool m_legacyDtrHeld{false};
+    // 1K-FA only: ON raised DTR on THIS connection's transport — always on
+    // a local port, over the network only if the proxy answered the RFC 2217
+    // request (a raw bridge moves no line). Network teardown releases the
+    // line only when this is set; a local port is released unconditionally.
+    // Cleared on every connect: the line policy (design note §12) is that
+    // DTR is held only while AetherSDR has the port open, so a serial
+    // connect always starts with DTR low and never powers the amp on.
+    bool m_legacyDtrRaised{false};
+    // SWITCH OFF sends the OFF key first and releases DTR this much later,
+    // so the key is on the wire (~7 ms at 9600 baud) before the line drops.
+    QTimer m_offReleaseTimer;
+    static constexpr int kLegacyOffReleaseMs = 150;
 
     Mode      m_mode{Mode::None};
     QString   m_lastSerialPort;
