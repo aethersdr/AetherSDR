@@ -90,17 +90,20 @@ void CanonWindow::resizeEvent(QResizeEvent* event)
 void CanonWindow::showEvent(QShowEvent* event)
 {
     QDialog::showEvent(event);
-    if (m_placed)
+    if (m_placed) {
         return;
+    }
     m_placed = true;
     // Centre over the parent window (or the screen) the first time it opens.
     QRect anchor;
-    if (parentWidget())
+    if (parentWidget()) {
         anchor = parentWidget()->window()->frameGeometry();
-    else if (const QScreen* s = QGuiApplication::primaryScreen())
+    } else if (const QScreen* s = QGuiApplication::primaryScreen()) {
         anchor = s->availableGeometry();
-    if (anchor.isValid())
+    }
+    if (anchor.isValid()) {
         move(anchor.center() - rect().center());
+    }
 }
 
 void CanonWindow::mousePressEvent(QMouseEvent* event)
@@ -173,8 +176,9 @@ void CanonWindow::paintEvent(QPaintEvent*)
     fade.setColorAt(0.0, grid);
     fade.setColorAt(1.0, clearGrid);
     p.setPen(QPen(QBrush(fade), 1));
-    for (int x = kGridStep; x < r.width(); x += kGridStep)
+    for (int x = kGridStep; x < r.width(); x += kGridStep) {
         p.drawLine(QPointF(x + 0.5, 0), QPointF(x + 0.5, fadeTo));
+    }
 
     p.setClipping(false);
     p.setPen(QPen(tm.color(this, QStringLiteral("color.canon.lineHi")), 1));
@@ -190,11 +194,13 @@ SparkRing::SparkRing(const QPixmap& image, int diameter, QWidget* parent)
     m_timer = new QTimer(this);
     m_timer->setInterval(kSparkFrameMs);
     connect(m_timer, &QTimer::timeout, this, [this] {
-        if (!sparkVisible(this))
+        if (!sparkVisible(this)) {
             return;
+        }
         m_angle -= 360.0 * kSparkFrameMs / kSparkLapMs;   // clockwise
-        if (m_angle < 0.0)
+        if (m_angle < 0.0) {
             m_angle += 360.0;
+        }
         update();
     });
 }
@@ -284,11 +290,13 @@ SparkBorder::SparkBorder(QWidget* child, int radius, QWidget* parent)
     m_timer = new QTimer(this);
     m_timer->setInterval(kSparkFrameMs);
     connect(m_timer, &QTimer::timeout, this, [this] {
-        if (!sparkVisible(this))
+        if (!sparkVisible(this)) {
             return;
+        }
         m_angle -= 360.0 * kSparkFrameMs / kSparkBorderLapMs;   // clockwise
-        if (m_angle < 0.0)
+        if (m_angle < 0.0) {
             m_angle += 360.0;
+        }
         update();
     });
 }

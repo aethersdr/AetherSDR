@@ -1423,9 +1423,10 @@ int main(int argc, char** argv)
             EXPECT_TRUE(tm.setActiveTheme(theme));
             for (const QString& t : canonTokens) {
                 const QColor c = tm.factoryColor("color.canon." + t);
-                if (!c.isValid())
+                if (!c.isValid()) {
                     std::fprintf(stderr, "  %s: color.canon.%s does not resolve\n",
                                  qPrintable(theme), qPrintable(t));
+                }
                 EXPECT_TRUE(c.isValid());
             }
             auto canon = [&](const char* t) { return tm.factoryColor(QStringLiteral("color.canon.") + t); };
@@ -1441,9 +1442,10 @@ int main(int argc, char** argv)
             };
             for (const auto& pr : pairs) {
                 const double r = contrast(canon(pr.fg), canon(pr.bg));
-                if (r < pr.floor)
+                if (r < pr.floor) {
                     std::fprintf(stderr, "  %s: canon.%s on canon.%s is %.2f:1, floor %.1f:1\n",
                                  qPrintable(theme), pr.fg, pr.bg, r, pr.floor);
+                }
                 EXPECT_TRUE(r >= pr.floor);
             }
         }
