@@ -1044,6 +1044,10 @@ void RxApplet::buildUI()
         connect(m_sqlBtn, &QPushButton::clicked,
                 this, &RxApplet::cycleSqlMode);
         connect(m_sqlSlider, &QSlider::valueChanged, this, [this](int v) {
+            if (usingEngineAutoSquelch() && m_slice) {
+                setSqlSliderValueExternal(v);
+                return;
+            }
             if (m_sqlMode == SqlMode::Manual) {
                 // Cache the user's chosen manual level so re-entering
                 // Manual from Auto/Off restores it on Flex. Kiwi replacement
@@ -1592,6 +1596,19 @@ void RxApplet::setManualSqlLevelForCurrentSurface(int level)
 
 void RxApplet::setSqlSliderValueExternal(int v)
 {
+    if (usingEngineAutoSquelch() && m_slice) {
+        // A request may be refused or adopted later. Keep both sliders on
+        // the accepted state until the backend publishes squelchChanged.
+        if (m_sqlMode == SqlMode::Auto) {
+            m_slice->setAutomaticSquelch(true, std::clamp(v, 5, 20));
+            emit autoSqlMarginDbChanged(autoSqlMarginDb());
+        } else if (m_sqlMode == SqlMode::Manual) {
+            m_slice->setSquelch(true, clampManualSqlLevelForCurrentSurface(v));
+            emit sqlModeChanged(static_cast<int>(m_sqlMode));
+        }
+        applySqlModeVisuals();
+        return;
+    }
     if (m_sqlMode == SqlMode::Manual) {
         const int level = clampManualSqlLevelForCurrentSurface(v);
         setManualSqlLevelForCurrentSurface(level);
@@ -1696,6 +1713,16 @@ void RxApplet::setSqlMode(SqlMode m, bool propagateToRadio)
     // Every route into Auto (cycle, restore, slice switch) passes here.
     if (m == SqlMode::Auto && !autoSqlAvailable()) {
         m = SqlMode::Manual;
+    }
+    if (propagateToRadio && usingEngineAutoSquelch() && m_slice) {
+        // Engine SQL is confirmed state, including transitions out of Auto.
+        // Only the accepted delta below may publish a new presentation.
+        if (m == SqlMode::Auto) {
+            m_slice->setAutomaticSquelch(true, autoSqlMarginDb());
+        } else {
+            m_slice->setSquelch(m != SqlMode::Off, sqlManualLevel());
+        }
+        return;
     }
     if (propagateToRadio) {
         m_clientSqlAwaitingReport = false;
@@ -2778,6 +2805,7 @@ void RxApplet::connectSlice(SliceModel* s)
             const SqlMode mode = !on ? SqlMode::Off
                 : (m_slice->automaticSquelch() ? SqlMode::Auto : SqlMode::Manual);
             setSqlMode(mode, /*propagateToRadio=*/false);
+            emit autoSqlMarginDbChanged(autoSqlMarginDb());
             emit squelchStateChanged(on, level);
             return;
         }
