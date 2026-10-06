@@ -44,6 +44,11 @@ the must-knows that fit in Gemini's chat context efficiently.
    double-assigning when another non-AetherClaude agent is already
    engaged — coordinate via comment in that case.
 
+7. **New or reworked UI follows the visual canon**
+   (`docs/style/aethersdr-style-guide.md`, RFC #6226): `color.canon.*`
+   tokens, `CanonWindow`, gold only for recognising people. Apply it to UI
+   the issue already changes; never restyle other screens unasked.
+
 ## C++ / Qt6 style essentials (full guide in AGENTS.md)
 
 - C++20, Qt6, no `QSettings`, no naked `new`/`delete`, no `goto`,

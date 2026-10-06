@@ -11,6 +11,11 @@ set.
 > add-a-token path for new UX — live in
 > [`docs/style/theme-style-guide.md`](../style/theme-style-guide.md).
 > This file is the migration inventory behind them.
+>
+> The **visual canon** — where these tokens' values are heading, the
+> `color.canon.*` group, and the order surfaces migrate in — is
+> [`docs/style/aethersdr-style-guide.md`](../style/aethersdr-style-guide.md)
+> (RFC #6226).
 
 ## Methodology
 
