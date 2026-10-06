@@ -456,10 +456,11 @@ struct Hl2Telemetry {
     int adcOverloadSamples = 0;
     int adcWindowMs = 0;
 
-    // Maximum of the publish window's non-ACK RADDR-1 DATA[15:0] (the radio
-    // re-samples forward power every other EP6 response, control.v:261, so the
-    // last value alone misses speech peaks); nullopt when the window saw none.
-    // `forwardPowerSamples` counts them; the window length is `adcWindowMs`.
+    // Maximum of the publish window's non-ACK RADDR-1 DATA[15:0] over responses
+    // that carry a measurement (ForwardPowerWindow::observe skips the rest; the
+    // radio re-samples forward power every other EP6 response, control.v:261, so
+    // the last value alone misses speech peaks); nullopt when the window saw none.
+    // `forwardPowerSamples` counts the ones kept; the window length is `adcWindowMs`.
     std::optional<int> forwardPowerPeakRaw;
     int forwardPowerSamples = 0;
 
