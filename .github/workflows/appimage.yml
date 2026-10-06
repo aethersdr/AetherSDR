@@ -308,6 +308,9 @@ jobs:
       # each debug file is keyed on survives install, patchelf and that strip;
       # "Package debug symbols" below checks it on the AppImage itself.
       - name: Split debug symbols
+        # Symbols are for us, not users: a failure here must not cost the release
+        # its installer. A missing archive surfaces as /tag-release's WARN.
+        continue-on-error: true
         run: bash scripts/build/split-debug-symbols.sh symbols build/AetherSDR build/aether-dv-waveform
 
       - name: Install to AppDir
@@ -488,6 +491,7 @@ jobs:
       # .tar.xz on purpose: sign-release.yml downloads and checksums *.zip, so
       # a .zip here would change SHA256SUMS.txt.
       - name: Package debug symbols
+        continue-on-error: true   # never blocks the release; see "Split debug symbols"
         run: |
           set -euo pipefail
           SAFE_REF="${GITHUB_REF_NAME//[^A-Za-z0-9._-]/_}"

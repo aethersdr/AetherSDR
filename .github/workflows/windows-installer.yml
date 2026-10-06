@@ -536,6 +536,9 @@ jobs:
       # .tar.xz on purpose: sign-release.yml downloads and checksums *.zip, so
       # a .zip here would change SHA256SUMS.txt.
       - name: Package debug symbols
+        # Symbols are for us, not users: a failure here must not cost the release
+        # its installers. A missing archive surfaces as /tag-release's WARN.
+        continue-on-error: true
         if: hashFiles('symbols/AetherSDR.pdb') != ''
         run: |
           $safeRefName = "${{ github.ref_name }}" -replace '[\\/:*?"<>|]', '_'

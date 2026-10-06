@@ -56,7 +56,10 @@ They are neither GPG-signed nor in `SHA256SUMS.txt`. `.tar.xz` keeps them out
 of the signing job's `*.AppImage`/`*.exe`/`*.zip` download patterns, so
 `SHA256SUMS.txt` stays at five lines. `check_release_assets.py` reports them
 as a separate check: missing ones are a `WARN`, because that build's crashes
-cannot be symbolized; the release itself is unaffected.
+cannot be symbolized; the release itself is unaffected. The workflows' symbol
+steps are `continue-on-error` for the same reason, so a missing archive means
+a symbol step failed on that build: read its annotations rather than
+re-running a green release job.
 
 ## Signature timing
 

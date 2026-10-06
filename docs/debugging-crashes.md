@@ -107,10 +107,14 @@ than misread.
   the same. `scripts/build/split-debug-symbols.sh` then moves the DWARF out
   before packaging and signing: into `.build-id/` debug files on Linux, into
   `.dSYM` bundles on macOS. Before attaching, each workflow reads the build ID
-  or UUID back from the packaged AppImage or the signed app bundle and fails
-  if it does not match the archive.
+  or UUID back from the packaged AppImage or the signed app bundle, and
+  attaches no archive if it does not match.
 - **Windows:** `windows-installer.yml` archives the PDB set it already
   stages for the Store's `.appxsym`.
+- **A symbol step never blocks a release.** The split and package steps are
+  `continue-on-error`: if one fails, the installers still attach and get
+  signed, the job annotations show the failure, and `/tag-release` warns
+  that the archive is missing.
 - **Signing:** the archives are not GPG-signed and not in `SHA256SUMS.txt`.
   They are developer files, and the `.tar.xz` name keeps them out of the
   signing job's download patterns.

@@ -438,6 +438,9 @@ jobs:
       # the debug map points at, macdeployqt strips what it touches, and the
       # signature has to cover the stripped bytes.
       - name: Split debug symbols
+        # Symbols are for us, not users: a failure here must not cost the release
+        # its installer. A missing archive surfaces as /tag-release's WARN.
+        continue-on-error: true
         run: |
           bash scripts/build/split-debug-symbols.sh symbols \
             build/AetherSDR.app/Contents/MacOS/AetherSDR \
@@ -747,6 +750,7 @@ jobs:
       # Read the UUIDs back from the signed bundle the DMG was made from: the
       # archive is only worth attaching if they are the ones that ship.
       - name: Package debug symbols
+        continue-on-error: true   # never blocks the release; see "Split debug symbols"
         run: |
           set -euo pipefail
           while read -r name _ uuid arch _; do
