@@ -97,6 +97,16 @@ struct PanSpanModel {
     bool radioWide = false;
 };
 
+// The FFT frame rate of a pan whose frames this engine paces (Display, FFT
+// FPS). Absent: no owner is declared for it and the client stores nothing,
+// which is every family's existing behavior (a Flex stores and reports its own).
+struct PanFrameRateShaping {
+    // Explicit client persistence owner for the FFT frame rate. False preserves
+    // a family's existing settings behavior. No default: an engaging backend
+    // must state its own value.
+    bool clientPersistsFrameRate;
+};
+
 // Engaged when the backend averages its own pan frames per the operator's FFT
 // AVG (ANAN: WDSP's display analyzer, AnanPanAnalyzer). The widget then skips
 // its client-side EMA (SpectrumWidget::SMOOTH_ALPHA), which would add ~90 ms of
@@ -137,6 +147,11 @@ struct PanAmplitudeModel {
     // noiseFloorAutoAdjustAllowed() (NoiseFloorAutoAdjustGate.h): echo OR absolute
     // bins. Declare true only after reading the backend's bin path.
     bool binsAbsolute = false;
+
+    // Explicit client persistence owner for the pan's dBm range (the axis
+    // limits the operator sets). False preserves a family's existing settings
+    // behavior. Read through RadioCapabilities::clientPersistsDbmRange().
+    bool clientPersistsDbmRange = false;
 };
 
 // Wideband converter view: raw ADC output before the DDC, spanning the
@@ -245,6 +260,8 @@ struct RadioCapabilities {
     std::optional<PanAmplitudeModel> panAmplitude;
     // See BackendPanAveraging. Absent = the widget averages client-side.
     std::optional<BackendPanAveraging> backendPanAveraging;
+    // See PanFrameRateShaping. Absent = the client keeps no FFT frame rate.
+    std::optional<PanFrameRateShaping> panFrameRateShaping;
 
     // A backend nobody has read labelled its axis dBm and was consumed as
     // though it meant it. ABSENT KEEPS THAT CLAIM, so this is the legacy shape
@@ -262,6 +279,22 @@ struct RadioCapabilities {
     [[nodiscard]] bool panBinsAbsolute() const
     {
         return panAmplitude && panAmplitude->binsAbsolute;
+    }
+
+    // The one predicate for storing and for restoring the FFT frame rate.
+    // Absent is "not declared", and an undeclared backend owns nothing here.
+    [[nodiscard]] bool clientPersistsPanFrameRate() const
+    {
+        return panFrameRateShaping && panFrameRateShaping->clientPersistsFrameRate;
+    }
+
+    // The one predicate for storing and for restoring the pan's dBm range. The
+    // declaration counts only with absolute bins: the client writes the range
+    // into the pan model, which is safe only where no bin is scaled by it.
+    [[nodiscard]] bool clientPersistsDbmRange() const
+    {
+        return panAmplitude && panAmplitude->clientPersistsDbmRange
+            && panAmplitude->binsAbsolute;
     }
 
 

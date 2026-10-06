@@ -6,7 +6,9 @@
 //      carrier brackets on every LNA row he ran (+20, +8, -4, -12).
 //   2. Each backend's RadioCapabilities::squelchLevelScale: Flex -160 + 1*L in
 //      every mode with Auto SQL; HL2 its exact pan-axis map in amsq's modes
-//      only, without Auto SQL; Icom, demo, ANAN and RTL keep Flex's scale.
+//      only, without Auto SQL; an unidentified Icom, demo, ANAN and RTL keep
+//      Flex's scale (the IC-7300MK2's measured map is in
+//      icom_control_profile_test, #6180).
 //   3. The line: a carrier exactly at the amsq gate reads on the HL2 pan at
 //      the record's threshold, at any LNA gain. Flex's line and Auto SQL level
 //      are what the old -160 + level code produced.
@@ -142,7 +144,7 @@ void recordsPerBackend()
     const SquelchLevelScale legacy{-160.0, 1.0, {}, true};
     check(legacyDbmSquelchScale() == legacy, "the legacy scale is -160 + 1*level with Auto SQL");
     check(icom::IcomCivBackend().capabilities().squelchLevelScale == legacy,
-          "Icom: Flex's -160 + 1*level, every mode, with Auto SQL");
+          "unidentified Icom: Flex's -160 + 1*level, every mode, with Auto SQL");
     check(SimBackend().capabilities().squelchLevelScale == legacy,
           "Demo: Flex's -160 + 1*level, every mode, with Auto SQL");
     check(anan::AnanBackend().capabilities().squelchLevelScale == legacy,

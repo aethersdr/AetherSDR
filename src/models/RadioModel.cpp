@@ -7102,7 +7102,16 @@ void RadioModel::disconnectClientHandlesThen(const QList<quint32>& requestedHand
     auto remaining = std::make_shared<QList<quint32>>(handles);
     auto completion = std::make_shared<std::function<void()>>(std::move(continuation));
     auto step = std::make_shared<std::function<void()>>();
-    *step = [this, remaining, completion, step]() mutable {
+    // WEAK self-reference: a strong one made the function own itself, a cycle
+    // nothing ever broke, so every call leaked it (LSan). What keeps the chain
+    // alive between steps is the in-flight sendCmd callback's strong `self`;
+    // when the last callback is dropped -- chain done or never reached the
+    // radio -- the chain frees.
+    *step = [this, remaining, completion, weakStep = std::weak_ptr(step)]() mutable {
+        const auto self = weakStep.lock();
+        if (!self) {
+            return;
+        }
         if (remaining->isEmpty()) {
             if (*completion) {
                 QTimer::singleShot(250, this, [completion]() mutable {
@@ -7117,7 +7126,7 @@ void RadioModel::disconnectClientHandlesThen(const QList<quint32>& requestedHand
         const quint32 handle = remaining->takeFirst();
         const QString command = QString("client disconnect 0x%1").arg(handle, 0, 16);
         qCDebug(lcProtocol) << "RadioModel: disconnecting occupied client" << Qt::hex << handle;
-        sendCmd(command, [handle, step](int code, const QString& body) {
+        sendCmd(command, [handle, self](int code, const QString& body) {
             if (commandNeverReachedRadio(code)) {
                 return;
             }
@@ -7127,7 +7136,7 @@ void RadioModel::disconnectClientHandlesThen(const QList<quint32>& requestedHand
                                       << "code" << code
                                       << "body:" << body;
             }
-            (*step)();
+            (*self)();
         });
     };
 

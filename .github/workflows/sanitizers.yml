@@ -57,8 +57,10 @@ jobs:
             # workflow.
             extra_cxx: "-fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer"
             extra_ld:  "-fsanitize=address,undefined"
+            # Keep ASan's default halt_on_error so LeakSanitizer returns nonzero.
+            # CTest then retains leak reports with --output-on-failure.
             runtime_env: |
-              ASAN_OPTIONS=detect_leaks=1:abort_on_error=0:halt_on_error=0:strict_string_checks=1:detect_stack_use_after_return=1:print_summary=1
+              ASAN_OPTIONS=detect_leaks=1:abort_on_error=0:strict_string_checks=1:detect_stack_use_after_return=1:print_summary=1
               UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=0:print_summary=1
               LSAN_OPTIONS=print_suppressions=0
           - id: tsan

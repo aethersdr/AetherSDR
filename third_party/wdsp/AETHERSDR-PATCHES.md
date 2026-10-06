@@ -2,10 +2,10 @@
 
 The source snapshot is pinned to TAPR/OpenHPSDR-wdsp commit
 `b02d5bac675dd2f33ec2bab2b339f79a597c47dd` (`Release Version 2.10`).
-AetherSDR carries fifteen local changes in the otherwise exact `Source/*.[ch]`
+AetherSDR carries eighteen local changes in the otherwise exact `Source/*.[ch]`
 snapshot. The first ten are listed below — four teardown corrections, two
 null/lifetime fixes, one added accessor set, two channel-state fixes, and one
-performance change — and patches 11 to 15 follow in their own sections:
+performance change — and patches 11 to 18 follow in their own sections:
 
 1. `upstream/nbp.c`: `destroy_notchdb()` now frees the `notchdb` object after
    its member allocations.
@@ -610,6 +610,16 @@ itself. The ten are different shapes, so grep for the shape, not for a free:
   `r2_inidx` advance) sits **before** the `r2_havesamps` increment; plus the
   added read-only `GetChannelOutputReady()` in `iobuffs.c` (declared in
   `iobuffs.h` and `include/aether_wdsp.h`).
+- **patch 16** -- `SetTXABandpassFreqs()` in `TXA.c` holding `ch[].csDSP`
+  around its body.
+- **patch 17** -- in `analyzer.c`: `stop` / `end_dispatcher` read and written
+  through `Interlocked*` (and `volatile LONG` in `analyzer.h`); the
+  `input_busy` release in `spectra()` / `Cspectra()` sitting **after**
+  `stitch(disp)`, not before it; and `sendbuf()`'s `IQO_idx` hand-off and
+  `IQout_index` advance inside its existing `BufferControlSection`.
+- **patch 18** -- in `destroy_calcc()`, the `SemsPSCorr` and
+  `hCorrChangeExited` closes inside an `== WAIT_OBJECT_0` check on the
+  thread-exit wait.
 
 Drop any local patch upstream now carries. Otherwise reapply only these minimal
 changes and run the lifecycle test under AddressSanitizer on every supported
@@ -898,3 +908,106 @@ counts before it copies and has no readiness query.
 
 When updating WDSP, keep this unless upstream grows an equivalent query; keep
 the reorder unless upstream's `dexchange()` already copies before it counts.
+
+## Patch 16 — the TX bandpass setter takes the DSP lock (#6156)
+
+`upstream/TXA.c`: `SetTXABandpassFreqs()` now holds `ch[channel].csDSP` around
+its body, as `SetTXAMode()` already does around the same `TXASetupBPFilters()`
+call. So do `SetTXACompressorRun()` and `SetTXAosctrlRun()`;
+`SetTXABandpassFreqs()` was the only caller of it that took no lock.
+
+**Why it matters on air.** `TXASetupBPFilters()` clears `bp1` and `bp2`'s
+`run` first and sets them again only after `CalcBandpassFilter()` has
+redesigned the FIR. `xbandpass()` with `run` clear copies input to output. The
+DSP worker runs `xtxa()` under `csDSP`, so before this patch a filter change
+made while transmitting with the compressor (and CESSB) on could pass one or
+more TX blocks with the post-compressor bandpass bypassed: a burst of
+out-of-band splatter. The FIR coefficients themselves were never torn, since
+`fircore` double-buffers them under `a->update`; the `run` flags were the hole.
+
+**Found by** the TSan lane once it could run the full tree: `wdsp_channel_test`
+reported `TXASetupBPFilters` (`TXA.c` writes of `bp0/1/2.p->run`) racing
+`xbandpass` on the worker, with no lock in common. The port's critical
+sections are plain `pthread_mutex`, so the report was not a shim artefact.
+
+**Cost and lock order.** The worker waits for one FIR redesign per TX filter
+change, the cost upstream already accepts in `SetTXAMode()`. No new lock edge:
+`WdspChannel::setFilter()` holds `g_setupMutex` and now takes `csDSP` inside
+it, the same order `setMode()` and `open()` already use; `csDSP` is recursive.
+
+**Upstream status.** Not reported.
+
+When updating WDSP, keep this unless upstream's `SetTXABandpassFreqs()` takes
+`csDSP` itself.
+
+## Patch 17 — the panadapter analyzer's dispatcher hand-offs are synchronised (#6156)
+
+Three races in `upstream/analyzer.c`, all reported by the TSan lane against
+`AnanPanAnalyzer` (`anan_rxdsp_handedness_test`, `spectrum_sequence_gap_test`,
+`wdsp_process_tally_test`). The port's `Interlocked*` are `__atomic` seq_cst and
+its threads are `pthread_create`, so TSan saw these accurately.
+
+1. **`stop` and `end_dispatcher` are atomic.** Both were plain `int`, written
+   by `SetAnalyzer()` / `DestroyAnalyzer()` and polled by `sendbuf()`'s loop and
+   the workers' early-outs. The drain itself was already sound (the
+   `dispatcher` bit and `pnum_threads` are atomic), so this one is a formal
+   race rather than a symptom; it is fixed because it was most of the lane's
+   noise and an unsynchronised polled flag is undefined behaviour the compiler
+   may hoist. Now `volatile LONG`, written with `InterlockedExchange()` and
+   read with `InterlockedAnd(&x, 1)`, the idiom upstream already uses for
+   `dispatcher`.
+2. **`input_busy` is released after the stitch, not before.** When the last
+   FFT of a frame finished, `spectra()` / `Cspectra()` cleared every
+   `input_busy` bit and then called `stitch()`. `sendbuf()` could therefore
+   dispatch the next frame's workers while the stitch was still reading
+   `result[]` and `ss_bins` — `Celiminate()` writing what `stitch()` was
+   copying, i.e. a torn panadapter frame — and could let two `stitch()` calls
+   overlap on `w_pix_buff` / `last_pix_buff`. Clearing after `stitch()` makes
+   the next dispatch wait for it. **This is the only part that changes
+   timing:** the next frame's FFTs start one stitch later (tens of
+   microseconds). `stitch()` waits on nothing the dispatcher holds, so it
+   cannot deadlock.
+3. **`sendbuf()` hands off the read index under the buffer lock.**
+   `Spectrum0()` moves `IQout_index` under `BufferControlSection` when it skips
+   ahead on an overrun; `sendbuf()` read it into `IQO_idx` and advanced it
+   unlocked, a lost update that points one FFT at the wrong span of the
+   sample ring. The read, the advance and the existing `have_samples`
+   decrement now share one `BufferControlSection`, taken before the worker is
+   queued so the worker still sees its `IQO_idx` through the thread start.
+
+The `AnanPanAnalyzer` teardown (a `SetAnalyzer()` drain before
+`DestroyAnalyzer()`) is unchanged and was already correct.
+
+**Upstream status.** Not reported.
+
+When updating WDSP, keep all three unless upstream's analyzer synchronises the
+same hand-offs.
+
+## Patch 18 — the PureSignal correction thread's handles are closed (#6154)
+
+`upstream/calcc.c`: `create_calcc()` (called by `create_txa()` for every TX
+channel) creates five `SemsPSCorr` semaphores for the `doPSCorrChange()`
+thread, and `destroy_calcc()` never closed them. That leaked five port handles,
+each a mutex, condition variable and allocation, on every TXA channel
+destroy. LeakSanitizer reports 86 leak blocks across 17 tests (`wdsp_channel_test`,
+the `hl2_*` TX/DSP tests, the `radiomodel_*_null` tests).
+
+`destroy_calcc()` now closes the five semaphores and the exit event **only when
+the thread-exit wait succeeds**. `doPSCorrChange()`'s last act is
+`SetEvent(hCorrChangeExited)` and `return`, so once that event is seen nothing
+touches either again. If the 500 ms wait times out, the thread may still be
+blocked in `WaitForMultipleObjects` on those semaphores, so they are not freed
+under it; upstream closed the event unconditionally, which had the same hazard
+for a thread that later reached `SetEvent()`, and it is now under the same check.
+
+**This does not make the timeout path safe, and does not claim to.** After the
+wait, `destroy_calcc()` goes on to free `a` and its members, which a correction
+thread still running past the timeout would use. That use-after-free predates
+this patch (upstream frees `a` on the same path) and is tracked separately
+(#6179). Patch 18 only stops the normal, successful-exit path from
+leaking and avoids adding a second hazard on the timeout path.
+
+**Upstream status.** Not reported.
+
+When updating WDSP, keep this unless upstream's `destroy_calcc()` closes the
+semaphores itself.

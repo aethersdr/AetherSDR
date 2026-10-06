@@ -530,6 +530,38 @@ jobs:
           path: symbols/
           retention-days: 90
 
+      # The same PDB set, kept with the release so it outlives the 90-day
+      # artifact (docs/debugging-crashes.md), plus the waveform helper's PDB.
+      # Staged in a copy because symbols/ is what the .appxsym check verifies.
+      # .tar.xz on purpose: sign-release.yml downloads and checksums *.zip, so
+      # a .zip here would change SHA256SUMS.txt.
+      - name: Package debug symbols
+        # Symbols are for us, not users: a failure here must not cost the release
+        # its installers. A missing archive surfaces as /tag-release's WARN.
+        continue-on-error: true
+        if: hashFiles('symbols/AetherSDR.pdb') != ''
+        run: |
+          $safeRefName = "${{ github.ref_name }}" -replace '[\\/:*?"<>|]', '_'
+          $archive = "AetherSDR-$safeRefName-Windows-x64-symbols.tar.xz"
+          New-Item -ItemType Directory -Force symbols-release | Out-Null
+          Copy-Item symbols\* symbols-release\ -Recurse -Force
+          if (Test-Path build\aether-dv-waveform.pdb) {
+            Copy-Item build\aether-dv-waveform.pdb symbols-release\
+          }
+          7z a -ttar symbols-release.tar .\symbols-release\* | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "7z tar failed ($LASTEXITCODE)" }
+          7z a -txz -mmt=on $archive symbols-release.tar | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "7z xz failed ($LASTEXITCODE)" }
+          Remove-Item symbols-release.tar
+          Get-Item $archive | Format-Table Name, Length
+
+      - name: Upload symbol archive
+        if: hashFiles('AetherSDR-*-symbols.tar.xz') != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: Windows-Symbols-archive
+          path: AetherSDR-*-symbols.tar.xz
+
       - name: Attach to release
         if: steps.store-plan.outputs.releaseArtifacts == 'true'
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64
@@ -547,6 +579,7 @@ jobs:
             AetherSDR-*.zip
             AetherSDR-*-setup.exe
             AetherSDR-*.msixupload
+            AetherSDR-*-symbols.tar.xz
 
       # ----------------------------------------------------------------------
       # Automated Microsoft Store submission (weekly release cycle).

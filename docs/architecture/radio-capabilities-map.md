@@ -186,6 +186,7 @@ the production dialog and checks its displayed peak level and frequency.
 | `hasAutoRfGain` | ❌ | ✅ | ❌ | `RadioModel::hasAutoRfGain()` → `SpectrumOverlayMenu::setAutoRfGainAvailable`, and `IRadioBackend::setAutoRfGain` | The backend drives its own **receive RF gain** from an ADC-overload observation, and offers an on/off switch for it. NOT the audio AGC: this is gain ahead of every DDC, driven by converter saturation across the whole receive span, which an audio meter in one slice cannot see. HL2: ✅ — one AD9866 behind every DDC, and its overload flag rides the EP6 C&C bytes. **Off by default** — RFC #5535 approved it armed, but the shipped LNA default of +20 dB sits one dB above the baseline the loop will arm from, so default-on would refuse on every fresh connect; it waits on a trustworthy gain axis at that default. Arming in the default `bandscope` law starts the wideband gate — about 0.11 Mbit/s on the same 100BASE-T link the EP6 receivers share, which is the sort of thing this table is read for. The flag itself says only that the switch exists. **Not** permissive on disconnect — it can only ADD the Auto checkbox beside the ANT panel's RF Gain slider. Also reachable headlessly as `pan autorfgain on\|off`, because that checkbox lives in a popup the bridge's `invoke` refuses to drive while hidden |
 | `hasDdcPanEdgeRolloff` | ❌ | ❌ | ❌ | `MainWindow::onConnectionStateChanged()` → `SpectrumWidget::setPanEdgeTaperEnabled()` | Real, bench-measured attenuation baked into the sampled data itself toward the extreme edges of the panadapter bandwidth — not a display artifact. True only for ANAN-G2, the first (and so far only) DDC-based backend; Flex/HL2/Sim report false since none of their receive chains have this shape. A capability flag rather than a family-string check, so a future DDC backend gets the same display-only edge crop automatically. Icom: ❌ (CI-V ships finished audio, not a decimated IQ stream with an edge to taper) |
 | `backendPanAveraging` (record) | absent | **10 ms** | absent | `MainWindow::onConnectionStateChanged()` → `SpectrumWidget::setClientFftSmoothingEnabled()` | The backend already averages the panadapter per the operator's FFT AVG before the frame leaves it, so the widget skips its fixed client-side EMA (`SMOOTH_ALPHA`) instead of averaging twice. Engaged by ANAN (WDSP's display analyzer, `AnanPanAnalyzer`) and HL2 (`Hl2Spectrum`'s time-constant average, power domain unless the weighted toggle selects log-recursive); `msPerAverageStep` is what one FFT AVG step means (10 ms on both). Engaged by RTL too (`SpectrumTemporalAverage` in its acquisition-owned accumulator, 10 ms per step). `clientPersistsAveraging` makes the client the persistence owner for FFT AVG and Wt Avg (per-radio `ClientDisplay.fftAverages`); RTL-owned, ✅ only for RTL, false for ANAN and HL2. `averageDescription` / `weightedDescription` replace the controls' default wording where the backend's units or weighted semantics differ; RTL supplies both, others leave them empty. Icom: absent |
+| `panFrameRateShaping` (record) | absent | **engaged**, `clientPersistsFrameRate` ✅ | absent | `MainWindow::clientPersistsFftFps()` → `RadioCapabilities::clientPersistsPanFrameRate()`, from `scheduleClientFftFpsSave` and `wirePanDisplayStatus` | Who keeps a pan's FFT frame rate (Display ▸ FFT FPS) where this engine paces the frames. Engaged with `clientPersistsFrameRate` true makes the client the persistence owner: the per-radio `ClientDisplay.fftFps` table is written and restored. Absent keeps a family's existing behavior, which is to store nothing. HL2 only; Flex (the radio stores and reports it), Icom, ANAN, RTL and Sim leave it absent. The save and the restore read the one accessor |
 | `panZoomModes` (record) | ✅ engaged | — (absent) | — (absent) | `MainWindow::onConnectionStateChanged()` and the `PanadapterStack::panAdded` lambda → `SpectrumWidget::setBandSegmentZoomAvailable()`; `MainWindow::togglePanZoomModeForPan` and `MainWindow::setPanZoomMode` → `gui/PanZoomModeGate.h` | Per-pan band/segment zoom (`display pan set <pan> band_zoom=`/`segment_zoom=`). ENGAGED means the radio answers that wire text; ABSENT means undeclared and the gate REFUSES — the write would otherwise be dropped inside `RadioModel::sendCmd` while the control moved anyway. One predicate serves both the B/S button enable and all six command surfaces (shortcuts, MIDI, FlexControl, the RC28/Stream Deck/T-Mate2 chain, the wheel, the automation bridge), so "the button is grey" and "the keystroke is refused" cannot drift apart. A refusal on this rung logs and calls `MainWindow::showUnsupportedControlNotice()`, because a gate refuses before the send and `commandDropped()` never fires. A record and not a bool per #5262 M2 — the two zoom modes are separate wire keys — and a record and not a family string per the standing #5554 notice. Icom/ANAN/RTL: absent |
 | `hasRadioSideWaterfallAutoBlack` | ✅ | ❌ | ❌ | `MainWindow::applyRadioSideDspToPanDisplay` | The HW position of the Display ▸ Black Level button. False cycles Off ↔ SW. **Masks, never rewrites** the stored preference — see below |
 | `hasRadioSideCwKeyer` | ✅ | ❌ | ❌ | `RadioModel::hasRadioSideCwKeyer()` | Status-bar text-keyer indicator and every text-send entry point. Icom: ✅ only for the verified IC-705 / IC-7300MK2 command-17 profiles |
@@ -555,7 +556,8 @@ and conflating them would hide one of them.
 | `radioOwnsDbmScale` | ✅ (default) | ⚠️ **✅ (default)** | ❌ | ❌ | Will the radio adopt a dBm range sent to it and report it back? |
 | `dbmAxisIsCalibrated()` (`panAmplitude->calibratedDbm`) | ✅ (absent) | ❌ | ✅ (absent) | ❌ | Do the numbers on that axis mean absolute dBm at the antenna? |
 | `panBinsAbsolute()` (`panAmplitude->binsAbsolute`) | ❌ (absent) | ✅ | ❌ (absent) | ✅ | Do the spectrum bins hold still while the reference level moves? |
-| `squelchLevelScale` | −160 + 1·L, all modes, Auto SQL | −119 + 0.7·L, AM/SAM/DSB/LSB/USB, no Auto SQL | Flex's (no measured map) | Flex's (no measured map) | Where does squelch level L open, on this axis? |
+| `clientPersistsDbmRange()` (`panAmplitude->clientPersistsDbmRange`, with `binsAbsolute`) | ❌ (absent) | ✅ | ❌ (absent) | ❌ (declared false) | May the client store and restore the dBm range the operator sets? RTL: ❌ (declared false). Sim: ❌ (absent) |
+| `squelchLevelScale` | −160 + 1·L, all modes, Auto SQL | −119 + 0.7·L, AM/SAM/DSB/LSB/USB, no Auto SQL | IC-7300MK2: −194.8 + 1.49·L on the pan, USB/LSB/CW/CWU/CWL/AM/DIGU/DIGL, no Auto SQL (measured, #6180); Flex's for every other Icom | Flex's (no measured map) | Where does squelch level L open, on this axis? |
 
 **`squelchLevelScale` draws the SQL line and drives Auto SQL** (#6092).
 The demo keeps Flex's scale. RTL-SDR publishes its own gate, −120 + 1.2·L dBFS/bin in FM/FM-N with Auto SQL and `modesExclusive` (see Native squelch above): its detector reads the same FFT as the pan, so a pan-derived floor lands on the gate. Absent, or the active slice's mode not listed: no line, and the SQL button
@@ -570,6 +572,16 @@ stronger signal than his carrier. Auto
 SQL stays off on the HL2 because amsq reads passband-limited magnitude before
 the AGC (`RXA.c` `xamsqcap` after `xnbp(nbp0)`), while the pan floor is per
 bin: a pan-derived floor would need both the filter width and the bin width.
+
+The IC-7300MK2's record is its S-meter squelch measured on the pan (#6180):
+`14 03` searched for the lowest value at which `15 01` reads closed, against
+steady carriers' pan peaks, gives −195.1 + 0.584·raw dBm. That is in the
+pan's dBm, which for Icom is `ScopeCalibration`'s uncalibrated estimate, so a
+pan calibration must move this record with it. It holds with the preamp on and
+for any front end below S9; strong carriers (S9 and up) with the preamp off or
+ATT in sit 6–10 dB under the line, so it reads high there. FM noise squelch and
+WFM have no line. No Auto SQL: the gate reads passband power on the S-meter,
+and the Icom pan's per-bin floor sits below it and often clips at −140.
 
 **`panBinsAbsolute()` is consumed too: as the second term of ONE gate, and as
 the unit of a waterfall row.**
@@ -587,6 +599,16 @@ margin on an absolute dB row (dBFS under a dBm label). The other three
 stay on the echo alone. HL2, ANAN and RTL-SDR declare `binsAbsolute = true`,
 each quoting the expression that produces its bins; ANAN is the one whose loop
 this turned back on.
+
+**`clientPersistsDbmRange()` is who remembers the range.**
+`MainWindow::clientOwnsPanDbmRange()` reads it for
+`adoptClientOwnedDbmRange` (the operator's range goes into the pan model and
+the per-radio `ClientDisplay.dbmRanges` table) and for
+`restoreClientOwnedDbmRange`, so the save and the restore cannot disagree. It is
+a declaration, separate from `binsAbsolute`: ANAN and RTL-SDR have absolute bins
+and declare no owner. The accessor also requires `binsAbsolute`, because the
+adopt writes the range into the pan model, which scales the bins of a radio
+whose bins are relative.
 
 **The manual Black Level reads it as the row's unit too.** A backend with no
 waterfall plane of its own sends its pan frame on as the row
