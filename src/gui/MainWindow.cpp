@@ -3757,11 +3757,39 @@ void MainWindow::paintEvent(QPaintEvent* event)
     QMainWindow::paintEvent(event);
 }
 
+#ifdef Q_OS_WIN
+void MainWindow::applyWindowsCaptionStyles()
+{
+    // Those hints are also what gave the HWND its minimize/maximize boxes,
+    // which taskbar-click minimize, Win+Up and snap-to-maximize all need.
+    if (!windowFlags().testFlag(Qt::ExpandedClientAreaHint)) {
+        return;
+    }
+    HWND hwnd = reinterpret_cast<HWND>(winId());
+    if (!hwnd) {
+        return;
+    }
+    const LONG_PTR style = GetWindowLongPtr(hwnd, GWL_STYLE);
+    const LONG_PTR desired = style | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX;
+    if (style != desired) {
+        SetWindowLongPtr(hwnd, GWL_STYLE, desired);
+        SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER
+                     | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+    }
+}
+#endif
+
 void MainWindow::showEvent(QShowEvent* event)
 {
     QMainWindow::showEvent(event);
 #ifdef Q_OS_MACOS
     mac::updateNativeTitleVisibility(this);
+#endif
+#ifdef Q_OS_WIN
+    // Every show: setWindowFlags() (View -> Frameless Window) re-creates the
+    // native window with Qt's own style set.
+    applyWindowsCaptionStyles();
 #endif
 
     // The caption controls are keyboard-reachable, which puts them first in the

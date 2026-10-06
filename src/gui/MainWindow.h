@@ -348,6 +348,11 @@ signals:
 
 protected:
     void showEvent(QShowEvent* event) override;
+#ifdef Q_OS_WIN
+    // Restore WS_MINIMIZEBOX / WS_MAXIMIZEBOX on the HWND under the expanded
+    // client area, where WindowChrome drops Qt's caption-button hints.
+    void applyWindowsCaptionStyles();
+#endif
     void closeEvent(QCloseEvent* event) override;
     void changeEvent(QEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;

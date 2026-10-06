@@ -108,6 +108,34 @@ int main(int argc, char** argv)
     // the bar is tested under the cascade it actually ships in.
     host.setStyleSheet(QStringLiteral("QWidget { background-color: %1; }")
         .arg(ThemeManager::instance().color(QStringLiteral("color.background.app")).name()));
+    // ── Window-chrome policy per platform (pure; runs on any host) ─────────
+    {
+        const Qt::WindowFlags base = Qt::Window;
+        const QString win = QStringLiteral("windows");
+        const Qt::WindowFlags winOn = WindowChrome::chromeFlags(base, true, win);
+        check(winOn.testFlag(Qt::ExpandedClientAreaHint) && winOn.testFlag(Qt::CustomizeWindowHint),
+              "Windows frameless uses Qt's expanded client area");
+        check(!winOn.testFlag(Qt::WindowTitleHint) && !winOn.testFlag(Qt::WindowMinimizeButtonHint)
+                  && !winOn.testFlag(Qt::WindowMaximizeButtonHint)
+                  && !winOn.testFlag(Qt::WindowCloseButtonHint),
+              "Windows frameless drops the hints that make Qt draw its own title and buttons");
+        check(!WindowChrome::usesNativeCaption(winOn, win),
+              "Windows frameless shows the bar's own caption buttons");
+        const Qt::WindowFlags winOff = WindowChrome::chromeFlags(winOn, false, win);
+        check(!winOff.testFlag(Qt::ExpandedClientAreaHint) && !winOff.testFlag(Qt::CustomizeWindowHint)
+                  && winOff.testFlag(Qt::WindowTitleHint) && winOff.testFlag(Qt::WindowCloseButtonHint),
+              "turning frameless off on Windows restores the system title and buttons");
+        check(WindowChrome::usesNativeCaption(winOff, win),
+              "Windows system decorations hide the bar's caption buttons");
+        const Qt::WindowFlags macOn = WindowChrome::chromeFlags(base, true, QStringLiteral("cocoa"));
+        check(WindowChrome::usesNativeCaption(macOn, QStringLiteral("cocoa")),
+              "macOS frameless keeps the native traffic lights");
+        const Qt::WindowFlags linuxOn = WindowChrome::chromeFlags(base, true, QStringLiteral("wayland"));
+        check(linuxOn.testFlag(Qt::FramelessWindowHint)
+                  && !WindowChrome::usesNativeCaption(linuxOn, QStringLiteral("wayland")),
+              "Linux frameless draws the bar's caption buttons");
+    }
+
     WindowChrome::configure(&host, true);
     auto* bar = new TitleBar(&host);
     host.resize(1400, 200);

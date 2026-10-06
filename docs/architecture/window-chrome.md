@@ -20,7 +20,7 @@ which is why `supportsExpandedClientArea()` keys off the platform name.
 | Platform | Window mode | Window controls |
 | --- | --- | --- |
 | macOS (cocoa) | Expanded client area, no title-bar background | Native traffic lights (tiling menu, Stage Manager, native fullscreen) |
-| Windows | Expanded client area, no title-bar background | Qt-drawn caption buttons and native hit testing |
+| Windows | Expanded client area, no title-bar background | Shared painted caption chips (`WindowCaptionButtons`) |
 | Linux (xcb / Wayland) | `FramelessWindowHint` fallback | Shared painted caption chips (`WindowCaptionButtons`) |
 
 `View → Frameless Window` turns the whole policy off on every platform and
@@ -28,13 +28,12 @@ returns the window to system decorations.
 
 `TitleBar` draws the same 52-logical-pixel content everywhere. It opts out of
 QWidget's automatic top-level safe-area margin and instead reserves horizontal
-control gutters from `QWindow::safeAreaMargins()`, the measured macOS caption
-bounds, and `QStyle::PM_TitleBarHeight` on Windows (`WindowChrome::contentInsets`).
-Safe-area changes re-run the layout. A fullscreen safe-area top inset can make
-the reserved height exceed 52 px. Qt has no portable API for the native
-caption-button rectangles, so the Windows gutter is conservative. On macOS the
-buttons are measured in Qt content-view coordinates, leaving exactly one 16 px
-gap before the brand unless a larger safe-area inset is required.
+control gutters from `QWindow::safeAreaMargins()` and, on macOS, the measured
+caption bounds (`WindowChrome::contentInsets`). Safe-area changes re-run the
+layout. A fullscreen safe-area top inset can make the reserved height exceed
+52 px. On macOS the buttons are measured in Qt content-view coordinates,
+leaving exactly one 16 px gap before the brand unless a larger safe-area inset
+is required.
 
 Where the platform has no native menu bar (Windows, and Linux without a global
 menu), the menus live behind a hamburger button that leads the bar, ahead of
@@ -59,13 +58,18 @@ it.
   name and an existing native view, so offscreen tests never reach AppKit. The
   window title itself is kept (Window menu and accessibility need it); Qt's
   background flag alone does not hide the title text.
-- **Windows:** Qt owns the expanded frame, DWM integration, caption drawing
-  and native hit testing. `CustomizeWindowHint` plus explicit caption-button
-  flags suppresses duplicate title text while keeping the window title. Qt 6.12
-  draws its caption buttons at the system title-bar height (~31 px) at the top
-  of the bar, and returns `HTMAXBUTTON` only while the left button is down — so
-  **the Snap Layouts hover flyout does not appear**. Native-looking buttons are
-  not proof that Snap Layouts works; test it on Windows 11.
+- **Windows:** Qt owns the expanded frame, DWM integration (shadow, rounded
+  corners) and the resize borders; the bar draws its own caption buttons.
+  Qt 6.12 paints its Windows caption buttons and title into a layered child
+  window that does not reliably appear, can show stale title text after a
+  re-create, and takes its glyph colour from the OS light/dark mode rather than
+  the theme. `WindowChrome::chromeFlags()` therefore keeps
+  `CustomizeWindowHint` but drops the title and caption-button hints, so Qt
+  neither draws nor hit-tests its own; `MainWindow::applyWindowsCaptionStyles()`
+  puts `WS_MINIMIZEBOX`/`WS_MAXIMIZEBOX` back on the HWND on every show, since
+  taskbar minimize, Win+Up and snap-to-maximize need them. **The Snap Layouts
+  hover flyout does not appear** (nothing returns `HTMAXBUTTON` on hover);
+  that is tracked in #6224.
 - **Linux:** Qt's desktop Linux backends do not advertise expanded client
   areas. The fallback uses the shared caption cluster and `FramelessResizer`
   (6 px edge band; no top-edge resize under the bar, #4886). Title dragging
