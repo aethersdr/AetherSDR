@@ -1,10 +1,14 @@
 #pragma once
 #include "core/backends/rtl/RtlSdrWorker.h"
+#include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
+#include <cstdlib>
 #include <memory>
 #include <mutex>
+#include <thread>
 
 namespace AetherSDR::test {
 using T = rtl::RtlCaptureTransaction;
@@ -82,6 +86,7 @@ public:
             --m_state->blocks;
             lock.unlock();
             iq.fill(m_state->iqLevel.load());
+            if (m_callbackDelay.count() > 0) { std::this_thread::sleep_for(m_callbackDelay); }
             callback(iq.data(), m_state->callbackBytes.load(), context);
             ++m_state->callbacks;
             lock.lock();
@@ -97,5 +102,13 @@ public:
     }
 private:
     std::shared_ptr<DeviceState> m_state;
+    // AETHER_TEST_RTL_CALLBACK_DELAY_MS makes every callback slow, the way a
+    // sanitizer build's DSP is, so a test that silently assumes a fast device
+    // thread fails deterministically instead of only under TSan.
+    // rtl_capture_worker_slow_device_test runs with it set.
+    std::chrono::milliseconds m_callbackDelay{[] {
+        const char* value = std::getenv("AETHER_TEST_RTL_CALLBACK_DELAY_MS");
+        return value ? std::max(0, std::atoi(value)) : 0;
+    }()};
 };
 } // namespace AetherSDR::test

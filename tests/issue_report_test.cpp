@@ -110,6 +110,8 @@ void testSnapshotSectionsPresent()
     report("specific privacy notice is present",
            body.contains("GPS coordinates")
            && body.contains("SmartLink account names"));
+    report("points a crash reporter at the crash-report guide",
+           body.contains("docs/debugging-crashes.md#for-users-what-to-attach-to-the-issue"));
 }
 
 // The bundle's system-info.json is the structured artifact that survives a

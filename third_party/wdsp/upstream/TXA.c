@@ -786,9 +786,16 @@ void SetTXABandpassFreqs (int channel, double f_low, double f_high)
 {
 	if ((txa[channel].f_low != f_low) || (txa[channel].f_high != f_high))
 	{
+		// AetherSDR patch 16: under csDSP, as SetTXAMode() already does around
+		// the same call. TXASetupBPFilters() clears bp1/bp2 run first and sets
+		// them again only after the FIR redesign; unlocked, the DSP worker
+		// could run TX blocks through xbandpass() with them cleared -- the
+		// post-compressor bandpass bypassed, i.e. splatter -- mid-transmit.
+		EnterCriticalSection (&ch[channel].csDSP);
 		txa[channel].f_low = f_low;
 		txa[channel].f_high = f_high;
 		TXASetupBPFilters (channel);
+		LeaveCriticalSection (&ch[channel].csDSP);
 	}
 }
 

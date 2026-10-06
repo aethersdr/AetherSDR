@@ -65,6 +65,54 @@ unset(_aether_root_code)
 unset(_aether_stray_targets)
 unset(_aether_stray_registrations)
 
+# ── Shared objects for tests that do not link aethercore (#6214) ─────────────
+# The light tests compile a few app sources themselves rather than linking the
+# engine. Each is compiled ONCE here and handed to those tests as
+# $<TARGET_OBJECTS:...>, instead of once per test that lists it (75 tests
+# compile the settings store, 63 LogManager, 65 AsyncLogWriter).
+# OBJECT, not STATIC, for the same reason as aether_test_wisdom_isolation:
+# every object is linked, as when the test listed the source, so nothing that
+# matters only through a static initializer can be dropped.
+#
+# Use these only in a test that does not link aethercore or
+# aetherdesktop_support. Those already contain the same code, and a second
+# copy of AppSettings next to libaethercore.so (AETHER_SHARED_CORE) would be a
+# second singleton. A test that touches AppSettings adds
+# $<TARGET_OBJECTS:aether_test_settings> and still joins
+# AETHER_SETTINGS_CONSUMERS for aether_sqlite3. LogManager calls AppSettings,
+# so aether_test_log_manager needs aether_test_settings too.
+add_library(aether_test_settings OBJECT ${AETHER_SETTINGS_SOURCES})
+target_include_directories(aether_test_settings PRIVATE src)
+target_link_libraries(aether_test_settings PRIVATE Qt6::Core aether_sqlite3)
+
+add_library(aether_test_log_manager OBJECT src/core/LogManager.cpp)
+target_include_directories(aether_test_log_manager PRIVATE src)
+target_link_libraries(aether_test_log_manager PRIVATE Qt6::Core)
+
+add_library(aether_test_async_log_writer OBJECT src/core/AsyncLogWriter.cpp)
+target_include_directories(aether_test_async_log_writer PRIVATE src)
+target_link_libraries(aether_test_async_log_writer PRIVATE Qt6::Core)
+
+# Keeps it that way: a block copied from before this change would quietly
+# bring back one compile per test. Scans this file's own text, as "Bound"
+# below does.
+file(READ "${CMAKE_CURRENT_LIST_FILE}" _aether_tests_text)
+string(REGEX REPLACE "#[^\n]*" "" _aether_tests_text "${_aether_tests_text}")
+string(REGEX MATCHALL
+       "\\$\\{AETHER_SETTINGS_SOURCES\\}|src/core/LogManager\\.cpp|src/core/AsyncLogWriter\\.cpp"
+       _aether_shared_source_uses "${_aether_tests_text}")
+list(LENGTH _aether_shared_source_uses _aether_shared_source_count)
+if(NOT _aether_shared_source_count EQUAL 3)
+    message(FATAL_ERROR
+        "tests/tests.cmake: a test compiles the settings store, LogManager or "
+        "AsyncLogWriter from source. Use $<TARGET_OBJECTS:aether_test_settings>, "
+        "aether_test_log_manager or aether_test_async_log_writer instead (see "
+        "\"Shared objects\" at the top of this file).")
+endif()
+unset(_aether_tests_text)
+unset(_aether_shared_source_uses)
+unset(_aether_shared_source_count)
+
 # ── Baseline: what existed before this file declared anything ────────────────
 # Taken here, before the first target below, and subtracted again by the
 # deferred retrofits near the end of this file ("Deferred retrofits"). The
@@ -1642,6 +1690,13 @@ if(AETHER_BACKEND_RTL)
     target_link_libraries(rtl_capture_worker_test PRIVATE aethercore Qt6::Core Qt6::Test)
     add_test(NAME rtl_capture_worker_test COMMAND rtl_capture_worker_test)
     set_tests_properties(rtl_capture_worker_test PROPERTIES TIMEOUT 20)
+    # The same binary with every injected USB callback 30 ms slow: a fast
+    # device thread is no longer something a check can assume by accident.
+    # 30 ms is where the old fixed-count block feeding first broke the
+    # DC-correction check, which is how it failed under TSan (#6202).
+    add_test(NAME rtl_capture_worker_slow_device_test COMMAND rtl_capture_worker_test)
+    set_tests_properties(rtl_capture_worker_slow_device_test PROPERTIES
+        TIMEOUT 60 ENVIRONMENT "AETHER_TEST_RTL_CALLBACK_DELAY_MS=30")
 
     # Generated IQ only: genuine resolution, continuity, gain and detector independence.
     add_executable(rtl_spectrum_resolution_test tests/rtl_spectrum_resolution_test.cpp)
@@ -1769,7 +1824,7 @@ target_include_directories(client_comp_test PRIVATE src)
 add_executable(slice_label_test
     tests/slice_label_test.cpp
     src/gui/SliceLabel.cpp
-    ${AETHER_SETTINGS_SOURCES}
+    $<TARGET_OBJECTS:aether_test_settings>
 )
 target_include_directories(slice_label_test PRIVATE src)
 target_link_libraries(slice_label_test PRIVATE Qt6::Gui)
@@ -1778,7 +1833,7 @@ add_test(NAME slice_label_test COMMAND slice_label_test)
 add_executable(vfo_display_defaults_test
     tests/vfo_display_defaults_test.cpp
     src/gui/VfoDisplayDefaults.cpp
-    ${AETHER_SETTINGS_SOURCES}
+    $<TARGET_OBJECTS:aether_test_settings>
 )
 target_include_directories(vfo_display_defaults_test PRIVATE src tests)
 target_link_libraries(vfo_display_defaults_test PRIVATE Qt6::Core)
@@ -1848,7 +1903,7 @@ add_executable(split_qsy_settings_test
     tests/split_qsy_settings_test.cpp
     src/models/SliceModel.cpp
     src/core/DigitalVoiceModeRegistry.cpp
-    ${AETHER_SETTINGS_SOURCES}
+    $<TARGET_OBJECTS:aether_test_settings>
 )
 target_include_directories(split_qsy_settings_test PRIVATE src tests)
 target_compile_definitions(split_qsy_settings_test PRIVATE
@@ -1914,9 +1969,9 @@ add_executable(modem_chrome_test
     src/gui/ModemChrome.cpp
     src/core/ThemeManager.cpp
     src/core/ThemeSeedGenerated.cpp
-    ${AETHER_SETTINGS_SOURCES}
-    src/core/LogManager.cpp
-    src/core/AsyncLogWriter.cpp
+    $<TARGET_OBJECTS:aether_test_settings>
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
     src/gui/DragValuePopup.cpp
 )
 target_include_directories(modem_chrome_test PRIVATE src)
@@ -1931,9 +1986,9 @@ add_executable(stage_tab_bar_drag_test
     src/gui/ModemChrome.cpp
     src/core/ThemeManager.cpp
     src/core/ThemeSeedGenerated.cpp
-    ${AETHER_SETTINGS_SOURCES}
-    src/core/LogManager.cpp
-    src/core/AsyncLogWriter.cpp
+    $<TARGET_OBJECTS:aether_test_settings>
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
     src/gui/DragValuePopup.cpp
 )
 target_include_directories(stage_tab_bar_drag_test PRIVATE src)
@@ -1947,9 +2002,9 @@ add_executable(comp_makeup_fader_test
     src/gui/ClientCompMeter.cpp
     src/core/ThemeManager.cpp
     src/core/ThemeSeedGenerated.cpp
-    ${AETHER_SETTINGS_SOURCES}
-    src/core/LogManager.cpp
-    src/core/AsyncLogWriter.cpp
+    $<TARGET_OBJECTS:aether_test_settings>
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
     src/gui/DragValuePopup.cpp
 )
 target_include_directories(comp_makeup_fader_test PRIVATE src)
@@ -1962,9 +2017,9 @@ add_executable(theme_manager_test
     tests/theme_manager_test.cpp
     src/core/ThemeManager.cpp
     src/core/ThemeSeedGenerated.cpp
-    ${AETHER_SETTINGS_SOURCES}
-    src/core/LogManager.cpp
-    src/core/AsyncLogWriter.cpp
+    $<TARGET_OBJECTS:aether_test_settings>
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
     src/gui/DragValuePopup.cpp
     ${THEME_TEST_RESOURCES}
 )
@@ -1986,9 +2041,9 @@ add_executable(theme_seed_test
     tests/theme_seed_test.cpp
     src/core/ThemeManager.cpp
     src/core/ThemeSeedGenerated.cpp
-    ${AETHER_SETTINGS_SOURCES}
-    src/core/LogManager.cpp
-    src/core/AsyncLogWriter.cpp
+    $<TARGET_OBJECTS:aether_test_settings>
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
 )
 target_include_directories(theme_seed_test PRIVATE src)
 target_link_libraries(theme_seed_test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
@@ -2005,9 +2060,9 @@ add_executable(panadapter_message_overlay_test
     src/gui/PanadapterMessageOverlay.cpp
     src/core/ThemeManager.cpp
     src/core/ThemeSeedGenerated.cpp
-    ${AETHER_SETTINGS_SOURCES}
-    src/core/LogManager.cpp
-    src/core/AsyncLogWriter.cpp
+    $<TARGET_OBJECTS:aether_test_settings>
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
     ${PAN_OVERLAY_TEST_RESOURCES}
 )
 target_include_directories(panadapter_message_overlay_test PRIVATE src)
@@ -2039,7 +2094,7 @@ set_tests_properties(settings_browser_dialog PROPERTIES
 
 add_executable(app_settings_safety_test
     tests/app_settings_safety_test.cpp
-    ${AETHER_SETTINGS_SOURCES}
+    $<TARGET_OBJECTS:aether_test_settings>
     # format instead of a copy of it (Qt6::Network/AUTOMOC are for its QObject
     # + QUdpSocket; the test only calls its static helpers).
     src/core/backends/hl2/Hl2Discovery.cpp
@@ -2091,7 +2146,7 @@ set_tests_properties(
 add_executable(nr2_settings_model_test
     tests/nr2_settings_model_test.cpp
     src/models/Nr2SettingsModel.cpp
-    ${AETHER_SETTINGS_SOURCES}
+    $<TARGET_OBJECTS:aether_test_settings>
 )
 target_include_directories(nr2_settings_model_test PRIVATE src tests)
 target_link_libraries(nr2_settings_model_test PRIVATE Qt6::Core Qt6::Test)
@@ -2112,7 +2167,7 @@ add_test(NAME nr2_tx_rx_reset_test COMMAND nr2_tx_rx_reset_test)
 add_executable(rn2_settings_model_test
     tests/rn2_settings_model_test.cpp
     src/models/Rn2SettingsModel.cpp
-    ${AETHER_SETTINGS_SOURCES}
+    $<TARGET_OBJECTS:aether_test_settings>
 )
 target_include_directories(rn2_settings_model_test PRIVATE src tests)
 target_link_libraries(rn2_settings_model_test PRIVATE Qt6::Core Qt6::Test)
@@ -2126,9 +2181,9 @@ add_executable(panadapter_model_rx_antenna_test
     tests/panadapter_model_rx_antenna_test.cpp
     src/models/PanadapterModel.cpp
     src/core/PerfTelemetry.cpp
-    src/core/LogManager.cpp
-    src/core/AsyncLogWriter.cpp
-    ${AETHER_SETTINGS_SOURCES}
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
+    $<TARGET_OBJECTS:aether_test_settings>
 )
 target_include_directories(panadapter_model_rx_antenna_test PRIVATE src)
 target_link_libraries(panadapter_model_rx_antenna_test PRIVATE Qt6::Core Qt6::Test)
@@ -2416,11 +2471,11 @@ add_executable(workspace_canvas_widget_test
     src/gui/workspace/CanvasLayout.cpp
     src/gui/workspace/WorkspaceCanvas.cpp
     src/gui/workspace/WorkspaceGeometry.cpp
-    ${AETHER_SETTINGS_SOURCES}
+    $<TARGET_OBJECTS:aether_test_settings>
     src/core/ThemeManager.cpp
     src/core/ThemeSeedGenerated.cpp
-    src/core/LogManager.cpp
-    src/core/AsyncLogWriter.cpp
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
 )
 target_include_directories(workspace_canvas_widget_test PRIVATE src)
 target_link_libraries(workspace_canvas_widget_test PRIVATE Qt6::Widgets Qt6::Test)
@@ -2496,11 +2551,11 @@ add_executable(workspace_container_mode_test
     src/gui/containers/ContainerTitleBar.cpp
     src/gui/containers/ContainerWidget.cpp
     src/gui/containers/FloatingContainerWindow.cpp
-    ${AETHER_SETTINGS_SOURCES}
+    $<TARGET_OBJECTS:aether_test_settings>
     src/core/ThemeManager.cpp
     src/core/ThemeSeedGenerated.cpp
-    src/core/LogManager.cpp
-    src/core/AsyncLogWriter.cpp
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
 )
 target_include_directories(workspace_container_mode_test PRIVATE src tests)
 target_link_libraries(workspace_container_mode_test PRIVATE
@@ -2532,11 +2587,11 @@ add_executable(workspace_controller_test
     src/gui/workspace/WorkspaceGeometry.cpp
     src/gui/workspace/WorkspaceMigration.cpp
     src/gui/workspace/WorkspaceStore.cpp
-    ${AETHER_SETTINGS_SOURCES}
+    $<TARGET_OBJECTS:aether_test_settings>
     src/core/ThemeManager.cpp
     src/core/ThemeSeedGenerated.cpp
-    src/core/LogManager.cpp
-    src/core/AsyncLogWriter.cpp
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
 )
 target_include_directories(workspace_controller_test PRIVATE src tests)
 target_link_libraries(workspace_controller_test PRIVATE
@@ -2646,9 +2701,9 @@ qt_add_resources(BANDPLAN_VOICE_LABELS_TEST_RESOURCES resources/resources.qrc)
 add_executable(bandplan_voice_labels_test
     tests/bandplan_voice_labels_test.cpp
     src/core/VoiceSignalDetector.cpp
-    src/core/LogManager.cpp
-    src/core/AsyncLogWriter.cpp
-    ${AETHER_SETTINGS_SOURCES}
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
+    $<TARGET_OBJECTS:aether_test_settings>
     ${BANDPLAN_VOICE_LABELS_TEST_RESOURCES}
 )
 target_include_directories(bandplan_voice_labels_test PRIVATE src)
@@ -2835,11 +2890,11 @@ add_executable(qso_recorder_write_error_test
     src/core/QsoPcmConverter.cpp
     src/core/QsoWavFormat.cpp
     src/core/QsoWavPlayback.cpp
-    ${AETHER_SETTINGS_SOURCES}
+    $<TARGET_OBJECTS:aether_test_settings>
     src/core/AudioDeviceNegotiator.cpp
     src/core/AudioFormatNegotiator.cpp
-    src/core/LogManager.cpp
-    src/core/AsyncLogWriter.cpp
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
     src/core/Resampler.cpp
     src/models/SliceModel.cpp
     src/core/DigitalVoiceModeRegistry.cpp
@@ -2860,11 +2915,11 @@ add_executable(qso_recorder_slice_lifetime_test
     src/core/QsoPcmConverter.cpp
     src/core/QsoWavFormat.cpp
     src/core/QsoWavPlayback.cpp
-    ${AETHER_SETTINGS_SOURCES}
+    $<TARGET_OBJECTS:aether_test_settings>
     src/core/AudioDeviceNegotiator.cpp
     src/core/AudioFormatNegotiator.cpp
-    src/core/LogManager.cpp
-    src/core/AsyncLogWriter.cpp
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
     src/core/Resampler.cpp
     src/models/SliceModel.cpp
     src/core/DigitalVoiceModeRegistry.cpp
@@ -2884,11 +2939,11 @@ add_executable(qso_recorder_rates_test
     src/core/QsoPcmConverter.cpp
     src/core/QsoWavFormat.cpp
     src/core/QsoWavPlayback.cpp
-    ${AETHER_SETTINGS_SOURCES}
+    $<TARGET_OBJECTS:aether_test_settings>
     src/core/AudioDeviceNegotiator.cpp
     src/core/AudioFormatNegotiator.cpp
-    src/core/LogManager.cpp
-    src/core/AsyncLogWriter.cpp
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
     src/core/Resampler.cpp
     src/models/SliceModel.cpp
     src/core/DigitalVoiceModeRegistry.cpp
@@ -2907,11 +2962,11 @@ add_executable(qso_recorder_playback_lifecycle_test
     src/core/QsoPcmConverter.cpp
     src/core/QsoWavFormat.cpp
     src/core/QsoWavPlayback.cpp
-    ${AETHER_SETTINGS_SOURCES}
+    $<TARGET_OBJECTS:aether_test_settings>
     src/core/AudioDeviceNegotiator.cpp
     src/core/AudioFormatNegotiator.cpp
-    src/core/LogManager.cpp
-    src/core/AsyncLogWriter.cpp
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
     src/core/Resampler.cpp
     src/models/SliceModel.cpp
     src/core/DigitalVoiceModeRegistry.cpp
@@ -2979,11 +3034,11 @@ add_executable(qso_recorder_pc_audio_guard_test
     src/core/QsoPcmConverter.cpp
     src/core/QsoWavFormat.cpp
     src/core/QsoWavPlayback.cpp
-    ${AETHER_SETTINGS_SOURCES}
+    $<TARGET_OBJECTS:aether_test_settings>
     src/core/AudioDeviceNegotiator.cpp
     src/core/AudioFormatNegotiator.cpp
-    src/core/LogManager.cpp
-    src/core/AsyncLogWriter.cpp
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
     src/core/Resampler.cpp
     src/models/SliceModel.cpp
     src/core/DigitalVoiceModeRegistry.cpp
@@ -3042,11 +3097,11 @@ add_executable(qso_recorder_filename_collision_test
     src/core/QsoPcmConverter.cpp
     src/core/QsoWavFormat.cpp
     src/core/QsoWavPlayback.cpp
-    ${AETHER_SETTINGS_SOURCES}
+    $<TARGET_OBJECTS:aether_test_settings>
     src/core/AudioDeviceNegotiator.cpp
     src/core/AudioFormatNegotiator.cpp
-    src/core/LogManager.cpp
-    src/core/AsyncLogWriter.cpp
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
     src/core/Resampler.cpp
     src/models/SliceModel.cpp
     src/core/DigitalVoiceModeRegistry.cpp
@@ -3306,7 +3361,7 @@ add_test(NAME legacy_waveform_package_test COMMAND legacy_waveform_package_test)
 add_executable(band_plan_license_filter_test
     tests/band_plan_license_filter_test.cpp
     src/models/BandPlanManager.cpp
-    ${AETHER_SETTINGS_SOURCES}
+    $<TARGET_OBJECTS:aether_test_settings>
 )
 target_include_directories(band_plan_license_filter_test PRIVATE src)
 target_link_libraries(band_plan_license_filter_test PRIVATE Qt6::Core Qt6::Gui)
@@ -3316,7 +3371,7 @@ qt_add_resources(KIWISDR_DX_SPOTS_TEST_RESOURCES resources/resources.qrc)
 add_executable(kiwisdr_dx_spots_test
     tests/kiwisdr_dx_spots_test.cpp
     src/models/BandPlanManager.cpp
-    ${AETHER_SETTINGS_SOURCES}
+    $<TARGET_OBJECTS:aether_test_settings>
     ${KIWISDR_DX_SPOTS_TEST_RESOURCES}
 )
 target_include_directories(kiwisdr_dx_spots_test PRIVATE src tests)
@@ -3743,7 +3798,7 @@ add_test(NAME iambic_keyer_test COMMAND iambic_keyer_test)
 
 add_executable(passive_spots_policy_test
     tests/passive_spots_policy_test.cpp
-    ${AETHER_SETTINGS_SOURCES}
+    $<TARGET_OBJECTS:aether_test_settings>
     src/core/SpotCommandPolicy.cpp
 )
 target_include_directories(passive_spots_policy_test PRIVATE src)
@@ -3861,9 +3916,9 @@ add_executable(digital_voice_waveform_process_test
     src/core/DigitalVoiceWaveformProcess.cpp
     src/core/DigitalVoiceModeRegistry.cpp
     src/models/DigitalVoiceWaveformHistory.cpp
-    src/core/LogManager.cpp
-    src/core/AsyncLogWriter.cpp
-    ${AETHER_SETTINGS_SOURCES}
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
+    $<TARGET_OBJECTS:aether_test_settings>
 )
 target_include_directories(digital_voice_waveform_process_test PRIVATE src)
 target_link_libraries(digital_voice_waveform_process_test PRIVATE Qt6::Core Qt6::Network)
@@ -3893,9 +3948,9 @@ add_executable(dstar_model_test
     src/core/DigitalVoiceWaveformTelemetry.cpp
     src/core/DigitalVoiceWaveformProcess.cpp
     src/core/DigitalVoiceModeRegistry.cpp
-    src/core/LogManager.cpp
-    src/core/AsyncLogWriter.cpp
-    ${AETHER_SETTINGS_SOURCES}
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
+    $<TARGET_OBJECTS:aether_test_settings>
 )
 target_include_directories(dstar_model_test PRIVATE src)
 target_link_libraries(dstar_model_test PRIVATE Qt6::Core Qt6::Network Qt6::Test)
@@ -3967,9 +4022,9 @@ add_executable(vkamp_connection_test
     tests/vkamp_connection_test.cpp
     src/core/VkampConnection.cpp
     src/core/VkampProtocol.cpp
-    ${AETHER_SETTINGS_SOURCES}
-    src/core/LogManager.cpp
-    src/core/AsyncLogWriter.cpp
+    $<TARGET_OBJECTS:aether_test_settings>
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
 )
 target_include_directories(vkamp_connection_test PRIVATE src tests)
 target_link_libraries(vkamp_connection_test PRIVATE Qt6::Core Qt6::Network Qt6::Test)
@@ -3980,9 +4035,9 @@ add_executable(ole_compound_file_test
     tests/ole_compound_file_test.cpp
     src/core/OleCompoundFile.cpp
     src/core/CabExtractor.cpp
-    src/core/AsyncLogWriter.cpp
-    src/core/LogManager.cpp
-    ${AETHER_SETTINGS_SOURCES}
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_settings>
 )
 target_include_directories(ole_compound_file_test PRIVATE src)
 if (USE_SYSTEM_MSPACK)
@@ -4196,9 +4251,9 @@ if (ENABLE_ASR)
         src/gui/FramelessWindowTitleBar.cpp
         src/core/ThemeManager.cpp
         src/core/ThemeSeedGenerated.cpp
-        ${AETHER_SETTINGS_SOURCES}
-        src/core/LogManager.cpp
-        src/core/AsyncLogWriter.cpp
+        $<TARGET_OBJECTS:aether_test_settings>
+        $<TARGET_OBJECTS:aether_test_log_manager>
+        $<TARGET_OBJECTS:aether_test_async_log_writer>
     )
     target_include_directories(copy_assist_settings_dialog_test PRIVATE src)
     target_link_libraries(copy_assist_settings_dialog_test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
@@ -4237,9 +4292,9 @@ add_executable(s_meter_geometry_test
     src/gui/SMeterWidget.cpp
     src/core/ThemeManager.cpp
     src/core/ThemeSeedGenerated.cpp
-    ${AETHER_SETTINGS_SOURCES}
-    src/core/LogManager.cpp
-    src/core/AsyncLogWriter.cpp
+    $<TARGET_OBJECTS:aether_test_settings>
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
     ${CROSS_NEEDLE_METER_TEST_RESOURCES}
 )
 target_include_directories(s_meter_geometry_test PRIVATE src)
@@ -4329,9 +4384,9 @@ add_executable(tgxl_panel_widgets_test
     src/gui/AccessoryPanelWidgets.cpp
     src/core/ThemeManager.cpp
     src/core/ThemeSeedGenerated.cpp
-    ${AETHER_SETTINGS_SOURCES}
-    src/core/LogManager.cpp
-    src/core/AsyncLogWriter.cpp
+    $<TARGET_OBJECTS:aether_test_settings>
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
 )
 target_include_directories(tgxl_panel_widgets_test PRIVATE src)
 target_link_libraries(tgxl_panel_widgets_test PRIVATE
@@ -4408,9 +4463,9 @@ add_executable(peripheral_auth_handshake_test
     src/core/PgxlConnection.cpp
     src/models/AntennaGeniusModel.cpp
     src/models/AmpModel.cpp
-    src/core/LogManager.cpp
-    src/core/AsyncLogWriter.cpp
-    ${AETHER_SETTINGS_SOURCES}
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
+    $<TARGET_OBJECTS:aether_test_settings>
 )
 target_include_directories(peripheral_auth_handshake_test PRIVATE src tests)
 target_link_libraries(peripheral_auth_handshake_test PRIVATE
@@ -4425,9 +4480,9 @@ add_executable(pgxl_direct_protocol_test
     tests/pgxl_direct_protocol_test.cpp
     src/core/PgxlConnection.cpp
     src/models/AmpModel.cpp
-    src/core/LogManager.cpp
-    src/core/AsyncLogWriter.cpp
-    ${AETHER_SETTINGS_SOURCES}
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
+    $<TARGET_OBJECTS:aether_test_settings>
 )
 target_include_directories(pgxl_direct_protocol_test PRIVATE src)
 target_link_libraries(pgxl_direct_protocol_test PRIVATE Qt6::Core Qt6::Network Qt6::Test)
@@ -4448,9 +4503,9 @@ add_executable(pgxl_panel_test
     src/core/PgxlConnection.cpp
     src/core/ThemeManager.cpp
     src/core/ThemeSeedGenerated.cpp
-    src/core/LogManager.cpp
-    src/core/AsyncLogWriter.cpp
-    ${AETHER_SETTINGS_SOURCES}
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
+    $<TARGET_OBJECTS:aether_test_settings>
 )
 target_include_directories(pgxl_panel_test PRIVATE src tests)
 target_link_libraries(pgxl_panel_test PRIVATE
@@ -4470,9 +4525,9 @@ add_executable(tgxl_direct_protocol_test
     tests/tgxl_direct_protocol_test.cpp
     src/core/TgxlConnection.cpp
     src/models/TunerModel.cpp
-    src/core/LogManager.cpp
-    src/core/AsyncLogWriter.cpp
-    ${AETHER_SETTINGS_SOURCES}
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
+    $<TARGET_OBJECTS:aether_test_settings>
 )
 target_include_directories(tgxl_direct_protocol_test PRIVATE src)
 target_link_libraries(tgxl_direct_protocol_test PRIVATE Qt6::Core Qt6::Network Qt6::Test)
@@ -4495,9 +4550,9 @@ add_executable(tgxl_docked_parity_test
     src/core/TgxlConnection.cpp
     src/core/ThemeManager.cpp
     src/core/ThemeSeedGenerated.cpp
-    src/core/LogManager.cpp
-    src/core/AsyncLogWriter.cpp
-    ${AETHER_SETTINGS_SOURCES}
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
+    $<TARGET_OBJECTS:aether_test_settings>
 )
 target_include_directories(tgxl_docked_parity_test PRIVATE src)
 target_link_libraries(tgxl_docked_parity_test PRIVATE
@@ -4522,9 +4577,9 @@ add_executable(tgxl_applet_ports_test
     src/core/TgxlConnection.cpp
     src/core/ThemeManager.cpp
     src/core/ThemeSeedGenerated.cpp
-    src/core/LogManager.cpp
-    src/core/AsyncLogWriter.cpp
-    ${AETHER_SETTINGS_SOURCES}
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
+    $<TARGET_OBJECTS:aether_test_settings>
 )
 target_include_directories(tgxl_applet_ports_test PRIVATE src)
 target_link_libraries(tgxl_applet_ports_test PRIVATE
@@ -4781,9 +4836,9 @@ add_executable(qrz_callsign_test
     src/core/QrzClient.cpp
     # LogManager provides lcQrz (spotter's qCDebug category); it drags
     # AsyncLogWriter + AppSettings for its writer/ctor chain at link time.
-    src/core/LogManager.cpp
-    src/core/AsyncLogWriter.cpp
-    ${AETHER_SETTINGS_SOURCES}
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
+    $<TARGET_OBJECTS:aether_test_settings>
 )
 target_include_directories(qrz_callsign_test PRIVATE src)
 target_link_libraries(qrz_callsign_test PRIVATE Qt6::Core Qt6::Network Qt6::Test)
@@ -4792,7 +4847,7 @@ add_test(NAME qrz_callsign_test COMMAND qrz_callsign_test)
 add_executable(shortcut_manager_test
     tests/shortcut_manager_test.cpp
     src/core/ShortcutManager.cpp
-    ${AETHER_SETTINGS_SOURCES}
+    $<TARGET_OBJECTS:aether_test_settings>
 )
 target_include_directories(shortcut_manager_test PRIVATE src)
 target_link_libraries(shortcut_manager_test PRIVATE Qt6::Core Qt6::Widgets)
@@ -4802,7 +4857,7 @@ add_test(NAME shortcut_manager_test COMMAND shortcut_manager_test)
 add_executable(window_shortcut_test
     tests/window_shortcut_test.cpp
     src/core/ShortcutManager.cpp
-    ${AETHER_SETTINGS_SOURCES}
+    $<TARGET_OBJECTS:aether_test_settings>
 )
 target_include_directories(window_shortcut_test PRIVATE src)
 target_link_libraries(window_shortcut_test PRIVATE Qt6::Widgets Qt6::Test)
@@ -4844,9 +4899,9 @@ add_executable(mqtt_radio_state_test
     src/core/MqttRadioState.cpp
     src/models/TransmitModel.cpp
     src/core/ClientQuindarTone.cpp
-    ${AETHER_SETTINGS_SOURCES}
-    src/core/AsyncLogWriter.cpp
-    src/core/LogManager.cpp
+    $<TARGET_OBJECTS:aether_test_settings>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
+    $<TARGET_OBJECTS:aether_test_log_manager>
 )
 target_include_directories(mqtt_radio_state_test PRIVATE src)
 target_link_libraries(mqtt_radio_state_test PRIVATE Qt6::Core)
@@ -4859,7 +4914,7 @@ add_executable(mqtt_settings_test
     tests/mqtt_settings_test.cpp
     src/core/MqttSettings.cpp
     src/core/MqttAntennaAlias.cpp
-    ${AETHER_SETTINGS_SOURCES}
+    $<TARGET_OBJECTS:aether_test_settings>
 )
 target_include_directories(mqtt_settings_test PRIVATE src)
 target_link_libraries(mqtt_settings_test PRIVATE Qt6::Core)
@@ -4986,9 +5041,9 @@ add_executable(ax25_libmodem_shim_test
     # LogManager.cpp depends on AsyncLogWriter via the m_writer member, so
     # AppSettings + AsyncLogWriter come along to satisfy the constructor /
     # destructor chain at link time.
-    src/core/LogManager.cpp
-    src/core/AsyncLogWriter.cpp
-    ${AETHER_SETTINGS_SOURCES}
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
+    $<TARGET_OBJECTS:aether_test_settings>
 )
 target_include_directories(ax25_libmodem_shim_test PRIVATE
     src
@@ -5025,9 +5080,9 @@ add_executable(ax25_replay EXCLUDE_FROM_ALL
     src/core/tnc/Ax25FrameFormatter.cpp
     src/core/tnc/HdlcCodec.cpp
     src/core/tnc/KissFraming.cpp
-    src/core/LogManager.cpp
-    src/core/AsyncLogWriter.cpp
-    ${AETHER_SETTINGS_SOURCES}
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
+    $<TARGET_OBJECTS:aether_test_settings>
 )
 target_include_directories(ax25_replay PRIVATE src)
 target_link_libraries(ax25_replay PRIVATE Qt6::Core aether_libmodem_core aether_afskdemod)
@@ -5040,9 +5095,9 @@ add_executable(ax25_session_analyze EXCLUDE_FROM_ALL
     src/core/tnc/Ax25.cpp
     src/core/tnc/Ax25Connection.cpp
     src/core/tnc/KissFraming.cpp
-    src/core/LogManager.cpp
-    src/core/AsyncLogWriter.cpp
-    ${AETHER_SETTINGS_SOURCES}
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
+    $<TARGET_OBJECTS:aether_test_settings>
 )
 target_include_directories(ax25_session_analyze PRIVATE src)
 target_link_libraries(ax25_session_analyze PRIVATE Qt6::Core aether_libmodem_core aether_afskdemod)
@@ -5053,9 +5108,9 @@ add_executable(ax25_link_timing_test
     tests/ax25_link_timing_test.cpp
     src/core/tnc/Ax25.cpp
     src/core/tnc/Ax25Connection.cpp
-    src/core/LogManager.cpp
-    src/core/AsyncLogWriter.cpp
-    ${AETHER_SETTINGS_SOURCES}
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
+    $<TARGET_OBJECTS:aether_test_settings>
 )
 target_include_directories(ax25_link_timing_test PRIVATE src tests)
 target_link_libraries(ax25_link_timing_test PRIVATE Qt6::Core)
@@ -5069,9 +5124,9 @@ add_executable(pms_mailbox_test
     src/core/pms/PmsMailbox.cpp
     # Ax25Connection logs link timing / RTT via lcAx25Link; LogManager brings
     # AsyncLogWriter (member) along, same pattern as tnc_terminal_test.
-    src/core/LogManager.cpp
-    src/core/AsyncLogWriter.cpp
-    ${AETHER_SETTINGS_SOURCES}
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
+    $<TARGET_OBJECTS:aether_test_settings>
 )
 target_include_directories(pms_mailbox_test PRIVATE src)
 target_link_libraries(pms_mailbox_test PRIVATE Qt6::Core)
@@ -5097,9 +5152,9 @@ add_executable(aprs_messenger_test
     src/core/aprs/AprsMessenger.cpp
     src/core/aprs/AprsStationList.cpp
     src/core/tnc/Ax25.cpp
-    src/core/LogManager.cpp
-    src/core/AsyncLogWriter.cpp
-    ${AETHER_SETTINGS_SOURCES}
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
+    $<TARGET_OBJECTS:aether_test_settings>
 )
 target_include_directories(aprs_messenger_test PRIVATE src)
 target_link_libraries(aprs_messenger_test PRIVATE Qt6::Core)
@@ -5137,9 +5192,9 @@ add_executable(tnc_terminal_test
     src/core/tnc/TncTerminal.cpp
     # HeardList now emits qCWarning(lcAx25) on persistence failure; pull in
     # LogManager + its deps so the category symbol resolves.
-    src/core/LogManager.cpp
-    src/core/AsyncLogWriter.cpp
-    ${AETHER_SETTINGS_SOURCES}
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
+    $<TARGET_OBJECTS:aether_test_settings>
 )
 target_include_directories(tnc_terminal_test PRIVATE src)
 target_link_libraries(tnc_terminal_test PRIVATE Qt6::Core)
@@ -5152,9 +5207,9 @@ add_executable(cwx_speed_modifier_test
     # CwxModel now logs via lcCw (qCWarning) — pull in the logging category.
     # LogManager depends on AsyncLogWriter (member) + AppSettings (retention
     # config), so both come along to satisfy the link. (#3949)
-    src/core/LogManager.cpp
-    src/core/AsyncLogWriter.cpp
-    ${AETHER_SETTINGS_SOURCES}
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
+    $<TARGET_OBJECTS:aether_test_settings>
 )
 target_include_directories(cwx_speed_modifier_test PRIVATE src)
 target_link_libraries(cwx_speed_modifier_test PRIVATE Qt6::Core)
@@ -5166,9 +5221,9 @@ add_executable(cwx_drain_watch_test
     tests/cwx_drain_watch_test.cpp
     src/models/CwxModel.cpp
     src/models/CwxModel.h
-    src/core/LogManager.cpp
-    src/core/AsyncLogWriter.cpp
-    ${AETHER_SETTINGS_SOURCES}
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
+    $<TARGET_OBJECTS:aether_test_settings>
 )
 target_include_directories(cwx_drain_watch_test PRIVATE src)
 target_link_libraries(cwx_drain_watch_test PRIVATE Qt6::Core Qt6::Test)
@@ -5190,9 +5245,9 @@ set_tests_properties(cwx_panel_test PROPERTIES
 add_executable(meter_model_test
     tests/meter_model_test.cpp
     src/models/MeterModel.cpp
-    src/core/AsyncLogWriter.cpp
-    src/core/LogManager.cpp
-    ${AETHER_SETTINGS_SOURCES}
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_settings>
 )
 target_include_directories(meter_model_test PRIVATE src)
 target_link_libraries(meter_model_test PRIVATE Qt6::Core)
@@ -5261,9 +5316,9 @@ add_executable(health_applet_test
     src/models/MeterModel.cpp
     src/core/ThemeManager.cpp
     src/core/ThemeSeedGenerated.cpp
-    ${AETHER_SETTINGS_SOURCES}
-    src/core/LogManager.cpp
-    src/core/AsyncLogWriter.cpp
+    $<TARGET_OBJECTS:aether_test_settings>
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
 )
 target_include_directories(health_applet_test PRIVATE src)
 target_link_libraries(health_applet_test PRIVATE
@@ -5284,9 +5339,9 @@ add_executable(meter_applet_capability_test
     src/models/MeterModel.cpp
     src/core/ThemeManager.cpp
     src/core/ThemeSeedGenerated.cpp
-    ${AETHER_SETTINGS_SOURCES}
-    src/core/LogManager.cpp
-    src/core/AsyncLogWriter.cpp
+    $<TARGET_OBJECTS:aether_test_settings>
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
 )
 target_include_directories(meter_applet_capability_test PRIVATE src)
 target_compile_definitions(meter_applet_capability_test PRIVATE
@@ -5309,9 +5364,9 @@ add_executable(meter_applet_voltage_state_test
     src/models/MeterModel.cpp
     src/core/ThemeManager.cpp
     src/core/ThemeSeedGenerated.cpp
-    ${AETHER_SETTINGS_SOURCES}
-    src/core/LogManager.cpp
-    src/core/AsyncLogWriter.cpp
+    $<TARGET_OBJECTS:aether_test_settings>
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
 )
 target_include_directories(meter_applet_voltage_state_test PRIVATE src)
 target_link_libraries(meter_applet_voltage_state_test PRIVATE
@@ -6122,7 +6177,7 @@ add_test(NAME usb_cable_model_test COMMAND usb_cable_model_test)
 
 add_executable(async_log_writer_test
     tests/async_log_writer_test.cpp
-    src/core/AsyncLogWriter.cpp
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
 )
 target_include_directories(async_log_writer_test PRIVATE src)
 target_link_libraries(async_log_writer_test PRIVATE Qt6::Core)
@@ -6138,9 +6193,9 @@ add_test(NAME async_log_writer_test COMMAND async_log_writer_test)
 # categories unreachable.
 add_executable(log_manager_filter_rules_test
     tests/log_manager_filter_rules_test.cpp
-    src/core/LogManager.cpp
-    ${AETHER_SETTINGS_SOURCES}
-    src/core/AsyncLogWriter.cpp
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_settings>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
 )
 target_include_directories(log_manager_filter_rules_test PRIVATE src)
 target_link_libraries(log_manager_filter_rules_test PRIVATE Qt6::Core)
@@ -6156,7 +6211,7 @@ add_test(NAME log_manager_filter_rules_test COMMAND log_manager_filter_rules_tes
 add_executable(issue_report_test
     tests/issue_report_test.cpp
     src/core/IssueReport.cpp
-    src/core/AsyncLogWriter.cpp
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
 )
 target_include_directories(issue_report_test PRIVATE src src/core)
 target_link_libraries(issue_report_test PRIVATE Qt6::Core)
@@ -6173,9 +6228,9 @@ add_executable(perf_telemetry_test
     # the Q_LOGGING_CATEGORY consolidation in #2770); LogManager has AsyncLogWriter
     # as a member which transitively needs AppSettings, so all three .cpp
     # files come along to satisfy the ctor/dtor chain at link time.
-    src/core/LogManager.cpp
-    src/core/AsyncLogWriter.cpp
-    ${AETHER_SETTINGS_SOURCES}
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
+    $<TARGET_OBJECTS:aether_test_settings>
 )
 target_include_directories(perf_telemetry_test PRIVATE src)
 target_link_libraries(perf_telemetry_test PRIVATE Qt6::Core)
@@ -6256,9 +6311,9 @@ add_executable(local_memory_bank_test
     src/core/LocalMemoryBank.cpp
     src/core/LocalMemoryStore.cpp
     src/core/backends/MemoryWireCodec.cpp
-    src/core/AsyncLogWriter.cpp
-    src/core/LogManager.cpp
-    ${AETHER_SETTINGS_SOURCES}
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_settings>
 )
 target_include_directories(local_memory_bank_test PRIVATE src)
 target_link_libraries(local_memory_bank_test PRIVATE Qt6::Core)
@@ -6345,9 +6400,9 @@ add_executable(system_info_dialog_test
     src/core/SystemInfoCollector.cpp
     src/core/MemoryTelemetry.cpp
     src/core/ThreadName.cpp
-    src/core/LogManager.cpp
-    src/core/AsyncLogWriter.cpp
-    ${AETHER_SETTINGS_SOURCES}
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
+    $<TARGET_OBJECTS:aether_test_settings>
 )
 target_include_directories(system_info_dialog_test PRIVATE src tests)
 target_link_libraries(system_info_dialog_test PRIVATE Qt6::Widgets)
@@ -6367,9 +6422,9 @@ add_executable(help_dialog_test
     # pull in the manager + its logging deps so the test links.
     src/core/ThemeManager.cpp
     src/core/ThemeSeedGenerated.cpp
-    ${AETHER_SETTINGS_SOURCES}
-    src/core/LogManager.cpp
-    src/core/AsyncLogWriter.cpp
+    $<TARGET_OBJECTS:aether_test_settings>
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
 )
 target_include_directories(help_dialog_test PRIVATE src)
 target_link_libraries(help_dialog_test PRIVATE
@@ -6418,9 +6473,9 @@ add_executable(flex_control_dialog_size_test
     src/core/KiwiSdrProtocol.cpp
     src/core/ThemeManager.cpp
     src/core/ThemeSeedGenerated.cpp
-    ${AETHER_SETTINGS_SOURCES}
-    src/core/LogManager.cpp
-    src/core/AsyncLogWriter.cpp
+    $<TARGET_OBJECTS:aether_test_settings>
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
 )
 target_include_directories(flex_control_dialog_size_test PRIVATE src)
 target_link_libraries(flex_control_dialog_size_test PRIVATE
@@ -6434,6 +6489,7 @@ set_tests_properties(flex_control_dialog_size_test PROPERTIES
 add_executable(connection_panel_size_test
     tests/connection_panel_size_test.cpp
     src/gui/ConnectionPanel.cpp
+    src/gui/PersistentDialog.cpp
     src/gui/FramelessResizer.cpp
     src/gui/FramelessWindowTitleBar.cpp
 )
@@ -6532,9 +6588,9 @@ add_executable(pan_layout_dialog_size_test
     src/gui/FramelessWindowTitleBar.cpp
     src/core/ThemeManager.cpp
     src/core/ThemeSeedGenerated.cpp
-    ${AETHER_SETTINGS_SOURCES}
-    src/core/LogManager.cpp
-    src/core/AsyncLogWriter.cpp
+    $<TARGET_OBJECTS:aether_test_settings>
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
 )
 target_include_directories(pan_layout_dialog_size_test PRIVATE src)
 target_link_libraries(pan_layout_dialog_size_test PRIVATE
@@ -6730,9 +6786,9 @@ endif()
 add_executable(ulanzi_mapping_migration_test
     tests/ulanzi_mapping_migration_test.cpp
     src/core/UlanziDialMappings.cpp
-    src/core/AsyncLogWriter.cpp
-    src/core/LogManager.cpp
-    ${AETHER_SETTINGS_SOURCES}
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_settings>
 )
 target_include_directories(ulanzi_mapping_migration_test PRIVATE src tests)
 # The drift assertion parses the wheel-action else-if chain out of
@@ -7033,14 +7089,14 @@ add_executable(container_widget_test
     src/gui/containers/ContainerTitleBar.cpp
     src/gui/containers/ContainerWidget.cpp
     src/gui/containers/FloatingContainerWindow.cpp
-    ${AETHER_SETTINGS_SOURCES}
+    $<TARGET_OBJECTS:aether_test_settings>
     # through ThemeManager::applyStyleSheet — pull in the manager + its
     # logging deps so the test links.  ThemeManager's compiled-in
     # seedBuiltinDefaults() means we don't need the theme resource here.
     src/core/ThemeManager.cpp
     src/core/ThemeSeedGenerated.cpp
-    src/core/LogManager.cpp
-    src/core/AsyncLogWriter.cpp
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
 )
 target_include_directories(container_widget_test PRIVATE src)
 target_link_libraries(container_widget_test PRIVATE
@@ -7059,15 +7115,15 @@ add_executable(mini_pan_widget_test
     src/gui/MiniPanApplet.cpp
     src/gui/FramelessResizer.cpp
     src/gui/FramelessWindowTitleBar.cpp
-    ${AETHER_SETTINGS_SOURCES}
+    $<TARGET_OBJECTS:aether_test_settings>
     src/core/MiniPanSettings.cpp
     src/core/ThemeManager.cpp
     # ThemeManager.cpp calls seedGeneratedDefaults(), which lives ONLY in the
     # generated seed TU — every other ThemeManager consumer in this file pairs
     # the two, and omitting it is a link error, not a compile one.
     src/core/ThemeSeedGenerated.cpp
-    src/core/LogManager.cpp
-    src/core/AsyncLogWriter.cpp
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
 )
 target_include_directories(mini_pan_widget_test PRIVATE src)
 target_link_libraries(mini_pan_widget_test PRIVATE
@@ -7083,6 +7139,9 @@ set_tests_properties(mini_pan_widget_test PROPERTIES
 add_executable(hl2_pc_audio_lock_test
     tests/hl2_pc_audio_lock_test.cpp
     src/gui/TitleBar.cpp
+    src/gui/BrandMark.cpp
+    src/gui/RadioTabBar.cpp
+    src/gui/WindowCaptionButtons.cpp
     # TitleBar's dialogs (PC-audio tooltip help, message boxes) are frameless,
     # so the resizer + frameless title bar come along; ThemeManager pulls its
     # logging deps, same as container_widget_test.
@@ -7091,11 +7150,11 @@ add_executable(hl2_pc_audio_lock_test
     src/gui/FramelessResizer.cpp
     src/gui/FramelessWindowTitleBar.cpp
     src/gui/DragValuePopup.cpp
-    ${AETHER_SETTINGS_SOURCES}
+    $<TARGET_OBJECTS:aether_test_settings>
     src/core/ThemeManager.cpp
     src/core/ThemeSeedGenerated.cpp
-    src/core/LogManager.cpp
-    src/core/AsyncLogWriter.cpp
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
 )
 target_include_directories(hl2_pc_audio_lock_test PRIVATE src)
 target_link_libraries(hl2_pc_audio_lock_test PRIVATE
@@ -7111,6 +7170,9 @@ set_tests_properties(hl2_pc_audio_lock_test PROPERTIES
 add_executable(titlebar_headphone_mute_test
     tests/titlebar_headphone_mute_test.cpp
     src/gui/TitleBar.cpp
+    src/gui/BrandMark.cpp
+    src/gui/RadioTabBar.cpp
+    src/gui/WindowCaptionButtons.cpp
     # TitleBar's dialogs are frameless, so the resizer + frameless title bar
     # come along; ThemeManager pulls its logging deps.
     src/gui/FramelessMessageBox.cpp
@@ -7118,11 +7180,11 @@ add_executable(titlebar_headphone_mute_test
     src/gui/FramelessResizer.cpp
     src/gui/FramelessWindowTitleBar.cpp
     src/gui/DragValuePopup.cpp
-    ${AETHER_SETTINGS_SOURCES}
+    $<TARGET_OBJECTS:aether_test_settings>
     src/core/ThemeManager.cpp
     src/core/ThemeSeedGenerated.cpp
-    src/core/LogManager.cpp
-    src/core/AsyncLogWriter.cpp
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
 )
 target_include_directories(titlebar_headphone_mute_test PRIVATE src tests)
 target_link_libraries(titlebar_headphone_mute_test PRIVATE
@@ -7135,20 +7197,25 @@ set_tests_properties(titlebar_headphone_mute_test PROPERTIES
 
 # Which radio-mixer controls exist on the connected radio:
 # MixerControlAvailability.h's truth table plus the title bar's headphone dim.
-# Same TitleBar link set as titlebar_headphone_mute_test above.
+# Same TitleBar link set as titlebar_headphone_mute_test above — TitleBar's
+# constructor builds the brand mark, the radio strip and the caption controls,
+# so every target that links it needs those three too.
 add_executable(mixer_control_availability_test
     tests/mixer_control_availability_test.cpp
     src/gui/TitleBar.cpp
+    src/gui/BrandMark.cpp
+    src/gui/RadioTabBar.cpp
+    src/gui/WindowCaptionButtons.cpp
     src/gui/FramelessMessageBox.cpp
     src/gui/PersistentDialog.cpp
     src/gui/FramelessResizer.cpp
     src/gui/FramelessWindowTitleBar.cpp
     src/gui/DragValuePopup.cpp
-    ${AETHER_SETTINGS_SOURCES}
+    $<TARGET_OBJECTS:aether_test_settings>
     src/core/ThemeManager.cpp
     src/core/ThemeSeedGenerated.cpp
-    src/core/LogManager.cpp
-    src/core/AsyncLogWriter.cpp
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
 )
 target_include_directories(mixer_control_availability_test PRIVATE src tests)
 target_link_libraries(mixer_control_availability_test PRIVATE
@@ -7158,6 +7225,42 @@ set_target_properties(mixer_control_availability_test PROPERTIES AUTOMOC ON)
 add_test(NAME mixer_control_availability_test COMMAND mixer_control_availability_test)
 set_tests_properties(mixer_control_availability_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+add_executable(unified_title_bar_test
+    tests/unified_title_bar_test.cpp
+    src/gui/TitleBar.cpp
+    src/gui/BrandMark.cpp
+    src/gui/RadioTabBar.cpp
+    src/gui/WindowCaptionButtons.cpp
+    src/gui/FramelessMessageBox.cpp
+    src/gui/PersistentDialog.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+    src/gui/DragValuePopup.cpp
+    $<TARGET_OBJECTS:aether_test_settings>
+    src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
+    ${THEME_TEST_RESOURCES}
+)
+target_include_directories(unified_title_bar_test PRIVATE src)
+target_link_libraries(unified_title_bar_test PRIVATE
+    aether_sqlite3
+    Qt6::Core Qt6::Widgets Qt6::Network Qt6::Test
+)
+set_target_properties(unified_title_bar_test PROPERTIES AUTOMOC ON)
+add_test(NAME unified_title_bar_test COMMAND unified_title_bar_test)
+set_tests_properties(unified_title_bar_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+if(APPLE)
+    foreach(titlebar_target IN ITEMS unified_title_bar_test titlebar_headphone_mute_test hl2_pc_audio_lock_test
+            mixer_control_availability_test)
+        target_sources(${titlebar_target} PRIVATE src/gui/mac/NativeWindowTitle.mm)
+        target_link_libraries(${titlebar_target} PRIVATE "-framework AppKit")
+    endforeach()
+endif()
 
 # Pure index arithmetic lifted out of RxApplet — no GUI, no radio.
 add_executable(icom_replay_test tests/icom_replay_test.cpp)
@@ -7195,11 +7298,11 @@ add_executable(amp_applet_test
     src/gui/DragValuePopup.cpp
     src/models/AmpModel.cpp
     src/core/PgxlConnection.cpp
-    ${AETHER_SETTINGS_SOURCES}
+    $<TARGET_OBJECTS:aether_test_settings>
     src/core/ThemeManager.cpp
     src/core/ThemeSeedGenerated.cpp
-    src/core/LogManager.cpp
-    src/core/AsyncLogWriter.cpp
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
 )
 target_include_directories(amp_applet_test PRIVATE src)
 target_link_libraries(amp_applet_test PRIVATE
@@ -7469,11 +7572,11 @@ add_executable(container_manager_test
     src/gui/containers/ContainerTitleBar.cpp
     src/gui/containers/ContainerWidget.cpp
     src/gui/containers/FloatingContainerWindow.cpp
-    ${AETHER_SETTINGS_SOURCES}
+    $<TARGET_OBJECTS:aether_test_settings>
     src/core/ThemeManager.cpp
     src/core/ThemeSeedGenerated.cpp
-    src/core/LogManager.cpp
-    src/core/AsyncLogWriter.cpp
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
 )
 target_include_directories(container_manager_test PRIVATE src)
 target_link_libraries(container_manager_test PRIVATE
@@ -7488,11 +7591,11 @@ add_executable(container_nesting_test
     src/gui/containers/ContainerTitleBar.cpp
     src/gui/containers/ContainerWidget.cpp
     src/gui/containers/FloatingContainerWindow.cpp
-    ${AETHER_SETTINGS_SOURCES}
+    $<TARGET_OBJECTS:aether_test_settings>
     src/core/ThemeManager.cpp
     src/core/ThemeSeedGenerated.cpp
-    src/core/LogManager.cpp
-    src/core/AsyncLogWriter.cpp
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
 )
 target_include_directories(container_nesting_test PRIVATE src)
 target_link_libraries(container_nesting_test PRIVATE
@@ -7525,8 +7628,8 @@ target_include_directories(CAT_Flex_test PRIVATE src)
 target_link_libraries(CAT_Flex_test PRIVATE Qt6::Core Qt6::Network)
 
 # ── Settings store (RFC #4603) ───────────────────────────────────────────────
-# Every standalone test/tool target that compiles ${AETHER_SETTINGS_SOURCES}
-# directly (rather than linking aethercore) needs the vendored SQLite engine.
+# Every standalone test/tool target that takes $<TARGET_OBJECTS:aether_test_settings>
+# (rather than linking aethercore) needs the vendored SQLite engine.
 # Conditional targets are guarded with if(TARGET ...).
 set(AETHER_SETTINGS_CONSUMERS
     reroute_dead_controls_test
@@ -7664,6 +7767,7 @@ set(AETHER_SETTINGS_CONSUMERS
     hl2_pc_audio_lock_test
     titlebar_headphone_mute_test
     mixer_control_availability_test
+    unified_title_bar_test
     amp_applet_test
     container_manager_test
     container_nesting_test
@@ -7952,6 +8056,46 @@ target_compile_definitions(aether_test_wisdom_isolation PRIVATE
 # property always beats a `ctest --timeout` flag, so this is authoritative
 # in every lane — gate steps, sanitizers, and local dev alike. Applied by
 # aether_retrofit_tests() below.
+#
+# ── Sanitizer builds scale every TIMEOUT ────────────────────────────────────
+#
+# The ceilings above, and each test's own TIMEOUT, are sized for an
+# uninstrumented build; sanitizer instrumentation makes the same test several
+# times slower in wall-clock time. So in an instrumented build,
+# aether_retrofit_tests() multiplies every TIMEOUT (the test's own, or the
+# default above) by AETHER_SANITIZER_TIMEOUT_SCALE. An ordinary build keeps
+# every limit exactly as written, so a slow test still fails fast there; if one
+# outgrows its limit in an ordinary build, raise ITS TIMEOUT, not the scale.
+#
+# "Instrumented": AETHERSDR_SANITIZER is set, or -fsanitize= appears in the
+# global C/C++ flags (how sanitizers.yml builds) or in a configuration's
+# CMAKE_<LANG>_FLAGS_<CONFIG>. A test TIMEOUT is not per-configuration, so a
+# multi-config generator scales when ANY of its configurations is instrumented.
+set(AETHER_SANITIZER_TIMEOUT_SCALE 4 CACHE STRING
+    "Multiplier applied to every test TIMEOUT in a sanitizer-instrumented build")
+if(NOT AETHER_SANITIZER_TIMEOUT_SCALE MATCHES "^[1-9][0-9]*$")
+    message(FATAL_ERROR
+        "AETHER_SANITIZER_TIMEOUT_SCALE must be a positive integer, got "
+        "'${AETHER_SANITIZER_TIMEOUT_SCALE}'.")
+endif()
+set(_aether_compile_flags "${CMAKE_C_FLAGS} ${CMAKE_CXX_FLAGS}")
+if(CMAKE_CONFIGURATION_TYPES)
+    set(_aether_flag_configs ${CMAKE_CONFIGURATION_TYPES})
+else()
+    set(_aether_flag_configs ${CMAKE_BUILD_TYPE})
+endif()
+foreach(_aether_flag_config IN LISTS _aether_flag_configs)
+    string(TOUPPER "${_aether_flag_config}" _aether_flag_config)
+    string(APPEND _aether_compile_flags
+        " ${CMAKE_C_FLAGS_${_aether_flag_config}} ${CMAKE_CXX_FLAGS_${_aether_flag_config}}")
+endforeach()
+set(_aether_tests_instrumented OFF)
+if(NOT AETHERSDR_SANITIZER STREQUAL "none"
+        OR _aether_compile_flags MATCHES "-fsanitize=")
+    set(_aether_tests_instrumented ON)
+    message(STATUS "Sanitizer-instrumented build: test TIMEOUTs scaled x"
+                   "${AETHER_SANITIZER_TIMEOUT_SCALE}")
+endif()
 
 # Every executable declared in this file: the directory's targets now, minus the
 # baseline from the top of the file, each one checked against the names this
@@ -8042,7 +8186,20 @@ function(aether_retrofit_tests)
         # replaced too: the rule is a ceiling on every test.
         get_test_property(${_test} TIMEOUT _existing_timeout)
         if(NOT _existing_timeout)
+            set(_existing_timeout 300)
             set_tests_properties(${_test} PROPERTIES TIMEOUT 300)
+        endif()
+
+        # The sanitizer allowance (see "Sanitizer builds scale every TIMEOUT").
+        if(_aether_tests_instrumented)
+            if(NOT _existing_timeout MATCHES "^[0-9]+$")
+                message(FATAL_ERROR
+                    "test ${_test}: TIMEOUT '${_existing_timeout}' is not a whole "
+                    "number of seconds, so it cannot be scaled for a sanitizer build.")
+            endif()
+            math(EXPR _scaled_timeout
+                "${_existing_timeout} * ${AETHER_SANITIZER_TIMEOUT_SCALE}")
+            set_tests_properties(${_test} PROPERTIES TIMEOUT ${_scaled_timeout})
         endif()
     endforeach()
 
