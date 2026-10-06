@@ -573,6 +573,42 @@ int main(int argc, char** argv)
         // a clipped horizontal viewport; selecting an off-screen active radio
         // scrolls it into view while the + button remains outside the viewport.
         const int twoRadioMinimum = tabs->minimumSizeHint().width();
+
+        // While the bar has room, every tab is shown whole: the strip must not
+        // scroll the first tab off behind the brand with spare width left over.
+        {
+            const QStringList names{QStringLiteral("Hermes-Lite 2"), QStringLiteral("70CM-RXA-XVTR"),
+                                    QStringLiteral("ANT1-AV640"), QStringLiteral("FLEX-6600")};
+            QList<RadioTabEntry> four;
+            for (int i = 0; i < names.size(); ++i) {
+                RadioTabEntry entry;
+                entry.id = QStringLiteral("FOUR-%1").arg(i);
+                entry.name = names.at(i);
+                entry.model = QStringLiteral("FLEX-6700");
+                entry.detail = QStringLiteral("K6OZY");
+                entry.transport = QStringLiteral("192.0.2.%1").arg(i + 40);
+                entry.status = i == 2 ? RadioTabStatus::Connected : RadioTabStatus::Available;
+                four.append(entry);
+            }
+            const QSize barSize = bar->size();
+            bar->resize(1800, barSize.height());
+            tabs->setRadios(four);
+            tabs->setActiveRadio(four.at(2).id);
+            app.processEvents();
+            app.processEvents();
+            QScrollArea* strip = tabs->findChild<QScrollArea*>(QStringLiteral("radioTabScroller"));
+            bool allWhole = strip != nullptr;
+            for (const RadioTabEntry& entry : four) {
+                RadioTab* t = tabWithId(*bar, entry.id);
+                if (!t || !strip) { allWhole = false; continue; }
+                const QRect inView(t->mapTo(strip->viewport(), QPoint()), t->size());
+                allWhole = allWhole && strip->viewport()->rect().contains(inView);
+            }
+            check(allWhole && strip && strip->horizontalScrollBar()->maximum() == 0,
+                  "four radios fit whole in an 1800 px bar, none scrolled behind the brand");
+            bar->resize(barSize);
+            app.processEvents();
+        }
         QList<RadioTabEntry> manyRadios;
         for (int index = 0; index < 8; ++index) {
             RadioTabEntry entry;
@@ -591,8 +627,6 @@ int main(int argc, char** argv)
                    "overflow keeps one keyboard-reachable tab per configured radio");
         checkEqual(tabs->minimumSizeHint().width(), twoRadioMinimum,
                    "radio-strip minimum width does not grow with radio count");
-        check(tabs->maximumWidth() <= 560,
-              "radio strip has a finite title-bar width ceiling");
         QScrollArea* scroller =
             tabs->findChild<QScrollArea*>(QStringLiteral("radioTabScroller"));
         RadioTab* lastTab = tabWithId(*bar, manyRadios.last().id);

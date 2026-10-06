@@ -3061,7 +3061,7 @@ the radio tabs, the audio cluster, and the window controls on every platform.
 ← {"ok":true,"model":"titlebar","present":true,"height":52,"expectedHeight":52,
    "offsetInWindow":0,"screenRect":[103,40,1402,52],"minimalMode":false,
    "brand":{"wordmark":"AetherSDR","logoLoaded":true,"visible":true},
-   "radios":{"activeId":"DEMO-0001","width":560,"maximumWidth":560,
+   "radios":{"activeId":"DEMO-0001","width":291,"maximumWidth":16777215,
              "contentWidth":257,"overflowing":false,
              "popoverVisible":false,"pulseEnabled":true,
              "tabs":[{"id":"DEMO-0001","name":"Simulator (not on the air)",

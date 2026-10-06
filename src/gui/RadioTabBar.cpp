@@ -50,7 +50,6 @@ constexpr int  kDotDiameter   = 7;
 constexpr int  kDotTextGap    = 8;
 constexpr int  kAddButtonSize = 28;
 constexpr int  kStripSpacing  = 6;
-constexpr int  kStripMaxWidth = 560;
 constexpr int  kStripMinWidth = 112;
 constexpr qreal kNameSizePx   = 12.5;
 constexpr qreal kStatusSizePx = 9.5;
@@ -487,8 +486,10 @@ RadioTabBar::RadioTabBar(QWidget* parent)
 {
     setObjectName(QStringLiteral("radioTabBar"));
     setAccessibleName(QStringLiteral("Radios"));
+    // Preferred: the strip takes its full width while the bar has room and
+    // gives it back, down to kStripMinWidth, only when it runs out; past that
+    // it scrolls.  No ceiling, so spare bar width never clips a tab.
     setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
-    setMaximumWidth(kStripMaxWidth);
 
     m_layout = new QHBoxLayout(this);
     m_layout->setContentsMargins(0, 0, 0, 0);
@@ -616,7 +617,7 @@ QSize RadioTabBar::sizeHint() const
     const int tabsWidth = m_tabsLayout ? m_tabsLayout->sizeHint().width() : 0;
     const int addWidth = m_addButton && m_addButton->isVisible()
         ? kStripSpacing + kAddButtonSize : 0;
-    return QSize(qMin(kStripMaxWidth, tabsWidth + addWidth), kTabHeight);
+    return QSize(tabsWidth + addWidth, kTabHeight);
 }
 
 QSize RadioTabBar::minimumSizeHint() const
