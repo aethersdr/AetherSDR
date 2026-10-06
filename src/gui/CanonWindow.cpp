@@ -33,9 +33,16 @@ CanonWindow::CanonWindow(const QString& title, QWidget* parent)
     setWindowFlags(Qt::Dialog | Qt::FramelessWindowHint);
     setAttribute(Qt::WA_TranslucentBackground);
 
+    // The app stylesheet gives dialogs an opaque background, which would fill
+    // the square behind the rounded corners. This window paints its own ground.
+    ThemeManager::instance().applyStyleSheet(
+        this, "AetherSDR--CanonWindow { background: transparent; border: none; }"
+              "QWidget#canonBody { background: transparent; }");
+
     auto* outer = new QVBoxLayout(this);
     outer->setContentsMargins(kInset, kInset, kInset, kInset);
     m_body = new QWidget(this);
+    m_body->setObjectName(QStringLiteral("canonBody"));
     m_body->setAttribute(Qt::WA_TranslucentBackground);
     outer->addWidget(m_body);
 
