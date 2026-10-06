@@ -218,9 +218,13 @@ void SpeConnection::connectSerial(const QString& portName)
     // power cycles behave — the power switch rides the RTS pulse alone,
     // which is why RTS (and only RTS) must stay low at rest.
     // The original 1K-FA is the exception: there DTR held high IS the power
-    // switch, so its lines are left at the platform's open() default and only
-    // powerOn()/SWITCH OFF move them.
-    if (!isLegacy()) {
+    // switch, so it is set to what this session last commanded (ON sets, OFF
+    // clears; low before any ON). An auto-reconnect after ON therefore keeps
+    // the amp powered, and a first connect never powers it on or off.
+    if (isLegacy()) {
+        m_serialPort->setDataTerminalReady(m_legacyDtrHeld);
+        m_serialPort->setRequestToSend(false);
+    } else {
         m_serialPort->setDataTerminalReady(true);
         m_serialPort->setRequestToSend(false);
     }
@@ -517,6 +521,7 @@ void SpeConnection::sendKey(Spe::Key key)
     // own power key, so SWITCH OFF also releases the line — over ser2net via
     // RFC 2217, like powerOn().
     if (key == Spe::Key::SwitchOff) {
+        m_legacyDtrHeld = false;
         setControlLines(false, false);
     }
 }
@@ -564,6 +569,7 @@ void SpeConnection::powerOnStep()
         case 0:
             setControlLines(true, false);
             if (isLegacy()) {
+                m_legacyDtrHeld = true;
                 // 1K-FA: DTR held high is the power switch — no pulse. Its
                 // boot takes several seconds; the RCU_ON retry in pollTick()
                 // picks up the stream once it answers.

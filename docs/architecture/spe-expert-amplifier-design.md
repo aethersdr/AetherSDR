@@ -477,17 +477,22 @@ wiring are reused. Mapping choices:
   remote copy): `0x80` is never sent, the floating window's glass says
   so instead of "waiting for display…", and the menu keys stay gated
   off, exactly as when the mirror is stale on the newer family.
-- Power: DTR held high is the 1K-FA's power switch (bench-confirmed:
-  ON from the applet powers a real 1K-FA). ON raises DTR — over ser2net
-  via RFC 2217 SET-CONTROL, as in §4, so a raw-mode port cannot do it and
-  powerOn() reports that. SWITCH OFF sends the OFF key and releases DTR on
-  either transport. On connect the lines are left at the platform's
-  `open()` state; choosing that rest state deliberately is open (#6162)
-  until the amplifier's response to each state is observed on hardware.
-  Consequence to keep in mind: closing the port, a transport drop or an
-  auto-reconnect can release DTR and so power the amplifier off.
-  RCU_ON is re-sent once a second while no Status arrives, which covers
-  the amp's boot.
+- Power: DTR held high is the 1K-FA's power switch. ON raises DTR —
+  over ser2net via RFC 2217 SET-CONTROL, as in §4, so a raw-mode port
+  cannot do it and powerOn() reports that. SWITCH OFF sends the OFF key
+  and releases DTR on either transport. On a local port the connect-time
+  rest state is chosen, not inherited: DTR is set to what the session last
+  commanded (low before any ON), RTS low. Bench results on Windows with a
+  real 1K-FA:
+  - amp off, connect: stays off; ON powers it about 3 s later;
+  - amp on from its front panel, connect: stays on;
+  - after ON, Disconnect: stays on; quitting AetherSDR: powers off (the
+    process exit releases the line, which no software can prevent);
+  - after ON, front-panel power switch: refused ("Shutdown not allowed")
+    while DTR is held.
+  Re-applying the last commanded state is what keeps an auto-reconnect
+  from power-cycling an amp that ON switched on. RCU_ON is re-sent once
+  a second while no Status arrives, which covers the amp's boot.
 - Every legacy frame is logged as hex at debug level (Help → Support
   logging: Tuner/AGM) so field reports can pin the Status offsets.
 - Disconnect sends RCU_OFF so the amplifier stops streaming.
