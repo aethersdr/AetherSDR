@@ -101,8 +101,6 @@
 namespace AetherSDR {
 
 namespace {
-// Stall timeout for the About dialog's GitHub contributor fetch (#4688 §6).
-constexpr int kTransferTimeoutMs = 15000;
 
 // "AetherSDR" at display size, centred: "Aether" in the brand wordmark ink and
 // "SDR" filled with the brand gradient (the BrandMark treatment, without the
@@ -1869,48 +1867,25 @@ void MainWindow::buildMenuBar()
                                          "when the binary is built."));
         vbox->addWidget(build);
 
-        // Contributors
-        auto* contribTitle = new QLabel(QStringLiteral("CONTRIBUTORS"));
-        contribTitle->setAlignment(Qt::AlignCenter);
-        tm.applyStyleSheet(contribTitle,
-            "QLabel { color: {{color.canon.muted}}; font-size: 11px; font-weight: bold; padding-top: 6px; background: transparent; }");
-        vbox->addWidget(contribTitle);
-
-        auto* contribLabel = new QLabel("Jeremy (KK7GWY)<br>Claude &middot; Anthropic<br>rfoust<br>Ian (M7HNF)<br>VE3NEM<br>jensenpat<br>chibondking<br>Dependabot");
-        contribLabel->setAlignment(Qt::AlignCenter);
-        tm.applyStyleSheet(contribLabel, "QLabel { color: {{color.canon.inkSoft}}; font-size: 12px; background: transparent; padding: 6px 0; }");
-        contribLabel->setWordWrap(true);
-
-        auto* scroll = new QScrollArea;
-        scroll->setWidget(contribLabel);
-        scroll->setWidgetResizable(true);
-        scroll->setFixedHeight(96);
-        scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-        scroll->setAccessibleName(QStringLiteral("Contributors"));
-        tm.applyStyleSheet(scroll,
-            "QScrollArea { background: {{color.canon.raised}}; border: 1px solid {{color.canon.line}}; border-radius: 12px; }"
-            "QScrollArea > QWidget > QWidget { background: transparent; }"
-            "QScrollBar:vertical { background: transparent; width: 6px; margin: 6px 3px 6px 0; }"
-            "QScrollBar::handle:vertical { background: {{color.canon.lineHi}}; border-radius: 3px; min-height: 20px; }"
-            "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }"
-            "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }");
-        vbox->addWidget(scroll);
-
-        auto* communityCreditsButton = new QPushButton(QStringLiteral("Play Community Credits…"));
-        communityCreditsButton->setAccessibleName(QStringLiteral("Play AetherSDR community credits"));
-        communityCreditsButton->setAccessibleDescription(
-            QStringLiteral("Opens an animated thank-you to contributors and Open Collective supporters with music."));
+        // Contributors live in the Contributor Logbook (points, weekly
+        // awards, bios); the window links there instead of listing names.
+        auto* logbookButton = new QPushButton(QStringLiteral("Contributor Logbook  ↗"));
+        logbookButton->setAccessibleName(QStringLiteral("Open the AetherSDR Contributor Logbook"));
+        logbookButton->setAccessibleDescription(
+            QStringLiteral("Opens contributors.aethersdr.com in your browser."));
+        logbookButton->setToolTip(QStringLiteral("contributors.aethersdr.com"));
+        logbookButton->setCursor(Qt::PointingHandCursor);
         tm.applyStyleSheet(
-            communityCreditsButton,
+            logbookButton,
             "QPushButton { background: {{color.canon.control}}; color: {{color.canon.cyan}}; "
             "border: 1px solid {{color.canon.lineHi}}; border-radius: 4px; padding: 7px 18px; "
             "font-weight: bold; font-size: 12px; }"
             "QPushButton:hover { background: {{color.canon.nested}}; border-color: {{color.canon.cyan}}; }"
             "QPushButton:focus { border: 2px solid {{color.canon.cyan}}; padding: 6px 17px; }");
         vbox->addSpacing(4);
-        vbox->addWidget(communityCreditsButton, 0, Qt::AlignCenter);
-        connect(communityCreditsButton, &QPushButton::clicked, this, [this] {
-            showOrRaisePersistent(m_contributeDialog);
+        vbox->addWidget(logbookButton, 0, Qt::AlignCenter);
+        connect(logbookButton, &QPushButton::clicked, dlg, [] {
+            QDesktopServices::openUrl(QUrl(QStringLiteral("https://contributors.aethersdr.com")));
         });
 
         auto* sep = new QFrame;
@@ -1954,32 +1929,7 @@ void MainWindow::buildMenuBar()
         vbox->addWidget(okBtn, 0, Qt::AlignCenter);
 
         dlg->show();
-
-        // Fetch live contributor list from GitHub API
-        auto* nam = new QNetworkAccessManager(dlg);
-        // Bound the contributor fetch (#4688 §6) — without it a half-open
-        // connection leaves the About dialog's list pending with no error.
-        nam->setTransferTimeout(kTransferTimeoutMs);
-        auto* reply = nam->get(QNetworkRequest(
-            QUrl("https://api.github.com/repos/aethersdr/AetherSDR/contributors")));
-        connect(reply, &QNetworkReply::finished, dlg, [contribLabel, reply] {
-            reply->deleteLater();
-            if (reply->error() != QNetworkReply::NoError) return;
-            auto doc = QJsonDocument::fromJson(reply->readAll());
-            if (!doc.isArray()) return;
-            QStringList names;
-            names << "Jeremy (KK7GWY)" << "Claude &middot; Anthropic";
-            for (const auto& val : doc.array()) {
-                auto obj = val.toObject();
-                QString login = obj.value("login").toString();
-                if (login.isEmpty() || login == "ten9876") continue;
-                if (login.contains("[bot]"))
-                    login = login.replace("[bot]", "");
-                if (!names.contains(login))
-                    names << login;
-            }
-            contribLabel->setText(names.join("<br>"));
-        });
+        okBtn->setFocus(Qt::OtherFocusReason);   // Enter closes; the corner × stays quiet
     });
 }
 
