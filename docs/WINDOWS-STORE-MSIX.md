@@ -161,10 +161,13 @@ You don't need Windows or WinDbg to symbolize a reporter's crash. The
 [`rust-minidump`](https://github.com/rust-minidump/rust-minidump) toolchain
 works cross-platform against the same PDB:
 
-1. **Get the reporter's dump.** A Windows Error Reporting minidump lives in
-   `%LOCALAPPDATA%\CrashDumps\AetherSDR.exe.<pid>.dmp` (enable full dumps via
-   the `HKLM\...\Windows Error Reporting\LocalDumps` key, `DumpType=2`). Store
-   Partner Center TSVs are unsymbolized — always request the `.dmp`.
+1. **Get the reporter's dump.** Enable a Windows Error Reporting minidump
+   (`DumpType=1`) using the instructions and privacy notes in
+   [debugging-crashes.md](debugging-crashes.md#for-users-what-to-attach-to-the-issue);
+   it lands in `%LOCALAPPDATA%\CrashDumps\AetherSDR.exe.<pid>.dmp`. A full
+   dump (`DumpType=2`) holds all of the process's memory, so ask for one only
+   privately, for a crash a minidump cannot explain. Store Partner Center TSVs
+   are unsymbolized — request the `.dmp`.
 2. **Get the matching PDBs** — they must be from the *exact* build that crashed
    or the debug-ids won't match. For a release, download its symbol archive:
    `gh release download vX.Y.Z -R aethersdr/AetherSDR -p '*-Windows-x64-symbols.tar.xz'`
