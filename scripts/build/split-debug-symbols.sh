@@ -78,7 +78,11 @@ Darwin)
         bin_uuids=$(dwarfdump --uuid "$bin" | awk '{print $2, $3}' | sort)
         dsym_uuids=$(dwarfdump --uuid "$dsym" | awk '{print $2, $3}' | sort)
         if [ "$bin_uuids" != "$dsym_uuids" ]; then
-            echo "error: UUID mismatch between $bin and $dsym" >&2
+            {
+                echo "error: UUID mismatch between $bin and $dsym"
+                echo "  binary: ${bin_uuids:-<none>}"
+                echo "  dSYM:   ${dsym_uuids:-<none>}"
+            } >&2
             exit 1
         fi
         strip -S "$bin"

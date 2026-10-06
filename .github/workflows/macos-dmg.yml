@@ -11,6 +11,9 @@ permissions:
 jobs:
   build-dmg:
     strategy:
+      # Each Mac leg builds, signs and attaches its own DMG and symbols, as the
+      # AppImage legs do: a flaky step on one must not cancel the other's.
+      fail-fast: false
       matrix:
         include:
           # deploy_target moves out of job-level env and into the matrix. It was
