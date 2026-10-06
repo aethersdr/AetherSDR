@@ -6870,17 +6870,57 @@ void MainWindow::wireMeters()
         // ConnectionMode setting — same divergence rationale as ACOM.
         spe->setSource(m_speConn.sourceLabel());
         spe->setConnected(true);
+        spe->setPowerOnNote(QString());
+        // The original 1K-FA is known from the operator's choice, not from a
+        // Status, and ON is pressed precisely while it is off and silent —
+        // so its capabilities (ON semantics, no mirror, no ATU SWR) apply
+        // now rather than on the first Status. The newer family identifies
+        // itself; until it does, the default row applies, so a variant
+        // switch never leaves the previous model's state behind.
+        const bool legacy =
+            m_speConn.activeVariant() == AetherSDR::Spe::Variant::Legacy1k;
+        const auto& spec = AetherSDR::Spe::modelSpec(legacy
+            ? QString::fromLatin1(AetherSDR::Spe::Legacy::kModelId) : QString());
+        if (legacy) {
+            spe->setModelName(spec.displayName);
+        }
+        spe->setModelCapabilities(spec);
         m_appletPanel->setSpeVisible(true);
     });
     connect(&m_speConn, &SpeConnection::disconnected, this, [this]() {
         m_appletPanel->speApplet()->setConnected(false);
+        m_appletPanel->speApplet()->setPowerOnNote(QString());
         m_appletPanel->setSpeVisible(false);
+    });
+    // Over a network bridge ON can fall short without any error on the wire;
+    // say so where the operator pressed it (the log carries the detail).
+    connect(&m_speConn, &SpeConnection::powerOnReported, this,
+            [this](SpeConnection::PowerOnResult result) {
+        QString note;
+        switch (result) {
+            case SpeConnection::PowerOnResult::NoLineControl:
+                note = tr("ON cannot work over this connection: the network"
+                          " bridge does not support RFC 2217 line control"
+                          " (e.g. a plain serial-to-Ethernet converter)."
+                          " Power the amplifier on at its front panel.");
+                break;
+            case SpeConnection::PowerOnResult::ProxyRefused:
+                note = tr("ON sent, but the proxy refused RFC 2217 line"
+                          " control, so it may not reach the amplifier.");
+                break;
+            case SpeConnection::PowerOnResult::Sent:
+                break;
+        }
+        m_appletPanel->speApplet()->setPowerOnNote(note);
     });
     // Poll-silence tracking: with ser2net the TCP link outlives the amp being
     // switched off, so respondingChanged — not disconnected — is what greys
     // the panel out in that topology.
     connect(&m_speConn, &SpeConnection::respondingChanged, this, [this](bool responding) {
         m_appletPanel->speApplet()->setResponding(responding);
+        if (responding) {
+            m_appletPanel->speApplet()->setPowerOnNote(QString());
+        }
     });
 
     // Model-dependent layout follows the Status ID field — the SPE identifies
@@ -6917,7 +6957,7 @@ void MainWindow::wireMeters()
         spe->setBand(AetherSDR::Spe::bandName(s.bandIndex));
         spe->setAntenna(s.txAntenna, s.atuState);
         spe->setInputPort(s.input);
-        spe->setPowerLevel(AetherSDR::Spe::powerLevelName(s.powerLevel));
+        spe->setPowerLevel(AetherSDR::Spe::powerLevelName(s.powerLevel, spec));
         spe->setMode(s.operate, s.transmitting);
 
         // One banner for both severity tiers, alarms first. The original

@@ -220,6 +220,12 @@ int main()
     report("powerLevelName expands L/M/H",
            powerLevelName(u'L') == "LOW" && powerLevelName(u'M') == "MID"
                && powerLevelName(u'H') == "HIGH");
+    report("powerLevelName reads HALF/FULL on the 1K-FA, LOW/HIGH elsewhere",
+           powerLevelName(u'L', modelSpec("10K")) == "HALF"
+               && powerLevelName(u'H', modelSpec("10K")) == "FULL"
+               && powerLevelName(u'L', modelSpec("15K")) == "LOW"
+               && powerLevelName(u'M', modelSpec("15K")) == "MID"
+               && powerLevelName(QChar(), modelSpec("10K")).isEmpty());
 
     // ── Per-model display scaling.
     const auto& s15 = modelSpec("15K");

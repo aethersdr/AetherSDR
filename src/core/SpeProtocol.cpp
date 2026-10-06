@@ -38,7 +38,7 @@ const QMap<QString, ModelSpec>& modelTable()
         // Original 1K-FA (Spe::Legacy): HALF 500 W -> L, FULL 1000 W -> H; no
         // M level. DTR held high is its power switch.
         {"10K", ModelSpec{"10K", "1K-FA",   1000.0f, 1100.0f,  950.0f,  500.0f,  500.0f,
-                          false, false, false, false, true}},
+                          false, false, false, false, true, true}},
     };
     return table;
 }
@@ -371,6 +371,15 @@ QString powerLevelName(QChar code)
         // NUL glyph; unknown real letters still echo through.
         default:   return code.isNull() ? QString() : QString(code);
     }
+}
+
+QString powerLevelName(QChar code, const ModelSpec& spec)
+{
+    if (spec.halfFullLevels) {
+        if (code == u'L') { return QStringLiteral("HALF"); }
+        if (code == u'H') { return QStringLiteral("FULL"); }
+    }
+    return powerLevelName(code);
 }
 
 namespace Lcd {

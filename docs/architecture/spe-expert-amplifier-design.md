@@ -478,24 +478,43 @@ wiring are reused. Mapping choices:
   so instead of "waiting for display…", and the menu keys stay gated
   off, exactly as when the mirror is stale on the newer family.
 - Power: DTR held high is the 1K-FA's power switch. ON raises DTR —
-  over ser2net via RFC 2217 SET-CONTROL, as in §4, so a raw-mode port
-  cannot do it and powerOn() reports that. SWITCH OFF sends the OFF key
-  and releases DTR on either transport. On a local port the connect-time
-  rest state is chosen, not inherited: DTR is set to what the session last
-  commanded (low before any ON), RTS low. Bench results on Windows with a
-  real 1K-FA:
-  - amp off, connect: stays off; ON powers it about 3 s later;
-  - amp on from its front panel, connect: stays on;
-  - after ON, Disconnect: stays on; quitting AetherSDR: powers off (the
-    process exit releases the line, which no software can prevent);
-  - after ON, front-panel power switch: refused ("Shutdown not allowed")
-    while DTR is held.
-  Re-applying the last commanded state is what keeps an auto-reconnect
-  from power-cycling an amp that ON switched on. RCU_ON is re-sent once
-  a second while no Status arrives, which covers the amp's boot.
+  over ser2net via RFC 2217 SET-CONTROL, as in §4, so a raw-mode port or a
+  plain serial-to-Ethernet bridge cannot do it; powerOn() reports that in
+  the log and as a note under the applet's buttons.
+- Line policy, the same on every OS: **DTR is held only while AetherSDR
+  has the port open.** A connect never raises it (both lines go low right
+  after open()). SWITCH OFF sends the OFF key, then releases DTR 150 ms
+  later, once the key is on the wire. Disconnect, a reconnect, quitting
+  AetherSDR (the destructor) and a serial error all release it explicitly
+  before close(), so the amp powers off if ON had powered it; an amp
+  switched on from its front panel is not affected (DTR was never raised).
+  The ON tooltip says so. The release is explicit because close() is not
+  portable: Windows restores the DCB captured before open() (its DTR setting
+  predates AetherSDR) and then leaves the line to the driver, while Linux
+  and macOS restore the original termios and drop DTR via HUPCL. For the
+  1K-FA, `setSettingsRestoredOnClose(false)` keeps the Windows restore from
+  re-raising the line after the release. Over the network the release is
+  an RFC 2217 SET-CONTROL before the socket closes, sent only if ON raised
+  the line on that connection.
+- Not controllable in software: Linux and macOS assert DTR inside open()
+  itself, so on those systems the line can be high for the instant until
+  AetherSDR lowers it (reasoned from the kernels, not measured). Whether
+  that blip starts a 1K-FA is an open bench question; a crash or a pulled
+  adapter leaves the line to the OS/driver.
+- Bench results so far, **Windows 11 only**, real 1K-FA on a local COM
+  port, from the build before the policy above (`7de6abec`..`72a971a5`
+  era): amp off, connect: stays off, ON powers it about 3 s later; amp on
+  from its front panel, connect: stays on; after ON, front-panel power
+  switch: refused ("Shutdown not allowed") while DTR is held; after ON,
+  quitting AetherSDR: powers off. Under the old behaviour Disconnect left
+  the amp on; under the policy above it powers off by design. Linux and
+  macOS, and the policy itself on all three, still need a bench.
+- RCU_ON is re-sent once a second while no Status arrives, which covers
+  the amp's boot after ON.
 - Every legacy frame is logged as hex at debug level (Help → Support
   logging: Tuner/AGM) so field reports can pin the Status offsets.
-- Disconnect sends RCU_OFF so the amplifier stops streaming.
+- Disconnect sends RCU_OFF so the amplifier stops streaming, and waits up
+  to 50 ms for it to leave (Qt's Windows close() discards unsent bytes).
 - ser2net: prefer **raw** mode. The Status is binary, and telnet mode
   doubles every `0xFF` byte, so a Status that happens to contain one fails
   its checksum and is dropped (the stream resyncs on the next frame).
@@ -513,5 +532,8 @@ Unit tests: `tests/spe_legacy_protocol_test.cpp` (framing, parser resync,
 Status decode, key table, variant persistence). The fixture is built from
 the same offset table as the decoder, so the hardware evidence is a bench
 test on a real 1K-FA: readings matched the amp's own display, the keys and
-DTR power-ON worked. Raw hex captures of live Status frames are to follow
-(#6162).
+DTR power-ON worked. Two live Status captures (OPERATE + FULL, ANT1:
+receiving on 160 m, keyed on 80 m) are pinned as fixtures; STANDBY, HALF,
+ANT≠1 and IN2 captures are still to come (#6162), so the direct-SWR field,
+the HALF polarity, the antenna/input nibbles beyond 1, the display-context
+warning texts and the ALARM bit rest on the spec table until then.

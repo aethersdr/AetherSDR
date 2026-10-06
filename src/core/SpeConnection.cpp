@@ -62,6 +62,18 @@ SpeConnection::SpeConnection(QObject* parent)
     m_powerOnTimer.setSingleShot(true);
     connect(&m_powerOnTimer, &QTimer::timeout, this, &SpeConnection::powerOnStep);
 
+    m_offReleaseTimer.setSingleShot(true);
+    m_offReleaseTimer.setInterval(kLegacyOffReleaseMs);
+    connect(&m_offReleaseTimer, &QTimer::timeout, this, [this]() {
+        if (!m_connected || !isLegacy()) { return; }
+        // A raw bridge never moved the line, and SET-CONTROL frames sent
+        // into one only reach the amp as noise.
+        if (m_mode == Mode::Serial || m_legacyDtrRaised) {
+            setControlLines(false, false);
+        }
+        m_legacyDtrRaised = false;
+    });
+
     // ONE timer, single-shot, always armed with an explicit interval by
     // applyLcdEffect() for whichever role the scheduler assigned it (idle
     // gap, lost-reply fallback, or reject-retry pause). Request pacing
@@ -98,6 +110,16 @@ SpeConnection::SpeConnection(QObject* parent)
                             " re-requesting";
         applyLcdEffect(m_lcdScheduler.replyRejected());
     });
+}
+
+SpeConnection::~SpeConnection()
+{
+    // Members are destroyed after this body and the owner may be mid-
+    // destruction, so nothing is emitted; disconnect() still sends RCU_OFF
+    // and teardownDevice() releases the line explicitly — the OS close
+    // behaviour differs by platform and driver (design note §12).
+    blockSignals(true);
+    disconnect();
 }
 
 void SpeConnection::applyLcdEffect(const Spe::LcdScheduler::Effect& effect)
@@ -173,10 +195,11 @@ void SpeConnection::connectSerial(const QString& portName)
 {
     m_mode = Mode::Serial;
     m_lastSerialPort = portName;
-    m_activeVariant = m_variant;
     m_deliberateDisconnect = false;
     m_reconnectTimer.stop();
-    teardownDevice();
+    teardownDevice();  // under the previous variant's line rules
+    m_activeVariant = m_variant;
+    m_legacyDtrRaised = false;
     m_parser.reset();
     m_legacyParser.reset();
 
@@ -201,6 +224,12 @@ void SpeConnection::connectSerial(const QString& portName)
     m_serialPort->setParity(QSerialPort::NoParity);
     m_serialPort->setStopBits(QSerialPort::OneStop);
     m_serialPort->setFlowControl(QSerialPort::NoFlowControl);
+    // 1K-FA: DTR is its power switch, so the line must not depend on what
+    // close() restores. Windows restores the DCB captured before open()
+    // (qserialport_win.cpp), whose DTR setting predates AetherSDR; POSIX
+    // restores the original termios. teardownDevice() lowers the line
+    // explicitly instead. The newer family keeps Qt's default.
+    m_serialPort->setSettingsRestoredOnClose(!isLegacy());
 
     if (!m_serialPort->open(QIODevice::ReadWrite)) {
         const QString err = m_serialPort->errorString();
@@ -218,11 +247,13 @@ void SpeConnection::connectSerial(const QString& portName)
     // power cycles behave — the power switch rides the RTS pulse alone,
     // which is why RTS (and only RTS) must stay low at rest.
     // The original 1K-FA is the exception: there DTR held high IS the power
-    // switch, so it is set to what this session last commanded (ON sets, OFF
-    // clears; low before any ON). An auto-reconnect after ON therefore keeps
-    // the amp powered, and a first connect never powers it on or off.
+    // switch, so both lines go low at once. AetherSDR never raises DTR on
+    // connect — only ON does. Caveat, reasoned from the kernels and not yet
+    // measured: Linux and macOS assert DTR inside open() itself, so the line
+    // can be high for the moment until this call; whether such a blip starts
+    // a 1K-FA is an open bench question (design note §12).
     if (isLegacy()) {
-        m_serialPort->setDataTerminalReady(m_legacyDtrHeld);
+        m_serialPort->setDataTerminalReady(false);
         m_serialPort->setRequestToSend(false);
     } else {
         m_serialPort->setDataTerminalReady(true);
@@ -239,10 +270,11 @@ void SpeConnection::connectNetwork(const QString& host, quint16 port)
     m_mode = Mode::Network;
     m_lastHost = host;
     m_lastPort = port;
-    m_activeVariant = m_variant;
     m_deliberateDisconnect = false;
     m_reconnectTimer.stop();
-    teardownDevice();
+    teardownDevice();  // under the previous variant's line rules
+    m_activeVariant = m_variant;
+    m_legacyDtrRaised = false;
     m_parser.reset();
     m_legacyParser.reset();
 
@@ -263,13 +295,7 @@ void SpeConnection::disconnect()
     if (wasConnected && isLegacy()) {
         // Stop the Status stream so the amp is quiet for the next client.
         sendRaw(Spe::Legacy::buildRcuOff());
-        if (m_device == &m_socket) {
-            m_socket.flush();
-#ifdef HAVE_SERIALPORT
-        } else if (m_serialPort && m_device == m_serialPort) {
-            m_serialPort->flush();
-#endif
-        }
+        drainWrites();
     }
     m_deliberateDisconnect = true;
     m_reconnectTimer.stop();
@@ -280,6 +306,7 @@ void SpeConnection::disconnect()
     setLcdFresh(false);
     m_powerOnTimer.stop();
     m_powerOnStep = -1;
+    m_offReleaseTimer.stop();  // teardownDevice() releases the line anyway
     m_rfc2217NegotiationPending = false;
     m_connected = false;
     teardownDevice();
@@ -294,15 +321,49 @@ void SpeConnection::disconnect()
 
 void SpeConnection::teardownDevice()
 {
+    // 1K-FA line policy (design note §12): DTR — its power switch — is held
+    // only while AetherSDR has the port open. It is lowered explicitly here,
+    // before every close (Disconnect, reconnect, quit), rather than left to
+    // the platform: what close() does to DTR differs between Windows (DCB
+    // restore, then the driver) and Linux/macOS (HUPCL), so only an explicit
+    // release behaves the same everywhere.
     if (m_device == &m_socket && m_socket.state() != QAbstractSocket::UnconnectedState) {
+        if (isLegacy() && m_legacyDtrRaised
+            && m_socket.state() == QAbstractSocket::ConnectedState) {
+            m_socket.write(Spe::Rfc2217::buildSetControl(Spe::Rfc2217::kDtrOff));
+            m_socket.write(Spe::Rfc2217::buildSetControl(Spe::Rfc2217::kRtsOff));
+            m_socket.waitForBytesWritten(50);
+        }
         m_socket.abort();
     }
 #ifdef HAVE_SERIALPORT
     if (m_serialPort && m_device == m_serialPort && m_serialPort->isOpen()) {
+        // A port in error (adapter unplugged) has no line left to release,
+        // and touching it would only raise errorOccurred again.
+        if (isLegacy() && m_serialPort->error() == QSerialPort::NoError) {
+            m_serialPort->setDataTerminalReady(false);
+            m_serialPort->setRequestToSend(false);
+        }
         m_serialPort->close();
     }
 #endif
     m_device = nullptr;
+    m_legacyDtrRaised = false;
+}
+
+void SpeConnection::drainWrites()
+{
+    if (m_device == &m_socket) {
+        if (m_socket.state() == QAbstractSocket::ConnectedState) {
+            m_socket.waitForBytesWritten(50);
+        }
+#ifdef HAVE_SERIALPORT
+    } else if (m_serialPort && m_device == m_serialPort && m_serialPort->isOpen()) {
+        // Qt's Windows close() cancels pending I/O and clears the write
+        // buffer, so without this the bytes never leave.
+        m_serialPort->waitForBytesWritten(50);
+#endif
+    }
 }
 
 void SpeConnection::onTransportUp()
@@ -349,6 +410,7 @@ void SpeConnection::onTransportDown()
     setLcdFresh(false);
     m_powerOnTimer.stop();
     m_powerOnStep = -1;
+    m_offReleaseTimer.stop();
     m_rfc2217NegotiationPending = false;
     m_parser.reset();
     m_legacyParser.reset();
@@ -519,10 +581,11 @@ void SpeConnection::sendKey(Spe::Key key)
     sendRaw(Spe::Legacy::buildKeyCommand(key));
     // On the 1K-FA a held-high DTR keeps the amp powered and locks out its
     // own power key, so SWITCH OFF also releases the line — over ser2net via
-    // RFC 2217, like powerOn().
+    // RFC 2217, like powerOn(). The key goes first; the line follows once
+    // it is on the wire (m_offReleaseTimer), so the amp is told to shut down
+    // rather than having its power switch pulled mid-keystroke.
     if (key == Spe::Key::SwitchOff) {
-        m_legacyDtrHeld = false;
-        setControlLines(false, false);
+        m_offReleaseTimer.start();
     }
 }
 
@@ -567,9 +630,13 @@ void SpeConnection::powerOnStep()
     // pulse), then DTR on + RTS off to idle.
     switch (m_powerOnStep) {
         case 0:
+            m_offReleaseTimer.stop();  // a pending OFF release must not undo ON
             setControlLines(true, false);
             if (isLegacy()) {
-                m_legacyDtrHeld = true;
+                // A raw bridge (no RFC 2217 answer) moved no line; a refusing
+                // proxy may have (design note §9), so it counts as raised.
+                m_legacyDtrRaised = m_mode == Mode::Serial
+                    || m_comPortOption != Spe::Rfc2217::OptionReply::None;
                 // 1K-FA: DTR held high is the power switch — no pulse. Its
                 // boot takes several seconds; the RCU_ON retry in pollTick()
                 // picks up the stream once it answers.
@@ -624,6 +691,7 @@ void SpeConnection::reportPowerOnOutcome()
                               " status polls resume). Recommended"
                               " config: `accepter:"
                               " telnet(rfc2217=true),<port>`.";
+        emit powerOnReported(PowerOnResult::ProxyRefused);
     } else if (m_mode == Mode::Network
                && m_comPortOption != Spe::Rfc2217::OptionReply::Accepted) {
         // No answer at all: a raw TCP bridge. Besides ser2net in raw
@@ -642,10 +710,12 @@ void SpeConnection::reportPowerOnOutcome()
                               " with `accepter:"
                               " telnet(rfc2217=true),<port>` and a"
                               " serial adapter that has a DTR line.";
+        emit powerOnReported(PowerOnResult::NoLineControl);
     } else {
         qCInfo(lcTuner) << "SpeConnection: power-ON pulse complete — the"
                            " amp should begin answering status polls"
                            " shortly.";
+        emit powerOnReported(PowerOnResult::Sent);
     }
 }
 

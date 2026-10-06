@@ -58,6 +58,9 @@ public:
     void setPowerLevel(const QString& levelName);
     void setMode(bool operate, bool transmitting); // drives pill + OPR/STBY button
     void setFaultText(const QString& text);        // empty clears/hides the banner
+    // Why the last ON may not have reached the amplifier (a network bridge
+    // without RFC 2217 line control); empty clears/hides it.
+    void setPowerOnNote(const QString& text);
     void setSource(const QString& text);           // "SERIAL" or "NETWORK"
     void setConnected(bool connected);   // shows/hides live controls, resets on disconnect
     // Transport up but the amplifier isn't answering polls (ser2net with the
@@ -138,6 +141,7 @@ private:
     QLabel* m_inputLabel{nullptr};
 
     QLabel* m_faultLabel{nullptr};
+    QLabel* m_powerNoteLabel{nullptr};
 
     QPushButton* m_onBtn{nullptr};
     QPushButton* m_operateBtn{nullptr};
