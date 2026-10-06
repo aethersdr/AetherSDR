@@ -920,15 +920,19 @@ void PanadapterApplet::appendUnscoredCwText(const QString& text)
 void PanadapterApplet::appendColoredCwText(const QString& text, float cost)
 {
     // The cost is 1 - the backend's own per-letter posterior. It picks the
-    // color and is never compared with the Sens threshold, which is on
-    // ggmorse's scale.
+    // color (ggmorse's four bands, as theme tokens) and is never compared
+    // with the Sens threshold, which is on ggmorse's scale.
     QString clean = text;
     clean.replace('\n', ' ');
     m_cwText->moveCursor(QTextCursor::End);
     if (m_lastCwTextSource == CwTextSource::Tx) { m_cwText->insertPlainText(" "); }
     m_lastCwTextSource = CwTextSource::Rx;
     QTextCharFormat format;
-    format.setForeground(QColor(cwCostColor(cost)));
+    const QString band = cost < 0.15f ? QStringLiteral("high")
+        : cost < 0.35f ? QStringLiteral("medium")
+        : cost < 0.60f ? QStringLiteral("fair") : QStringLiteral("low");
+    format.setForeground(AetherSDR::ThemeManager::instance().color(
+        m_cwText, QStringLiteral("color.cw.confidence.") + band));
     QTextCursor cursor = m_cwText->textCursor();
     cursor.insertText(clean, format);
     m_cwText->moveCursor(QTextCursor::End);

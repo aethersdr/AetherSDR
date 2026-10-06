@@ -72,6 +72,12 @@
             "accent": "{color.blue.500}",
             "tx":     "#5a4a28"
           },
+          "cw": {
+            "confidence.high":   "#00ff88",
+            "confidence.medium": "#e0e040",
+            "confidence.fair":   "#ff9020",
+            "confidence.low":    "#ff4040"
+          },
           "meter": {
             "crst":   "{color.red.500}",
             "rms":    "{color.blue.500}",
