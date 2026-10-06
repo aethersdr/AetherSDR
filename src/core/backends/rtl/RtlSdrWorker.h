@@ -51,6 +51,7 @@ public:
     bool rfObservationIsCurrent(const RtlReceivePipeline::RfObservation& value) const { return m_pipeline->rfObservationIsCurrent(value); }
     void setReceiveMetersEnabled(bool enabled) { m_pipeline->setReceiveMetersEnabled(enabled); }
     bool takeAudio(RtlReceivePipeline::Packet& packet) { return m_pipeline->takePacket(packet); }
+    bool takeHdObservation(RtlReceivePipeline::HdFmObservation& value) { return m_pipeline->takeHdObservation(value); }
     // Independently sampled counters since construction. Timing covers each
     // valid callback's adoption and processing, not USB transport latency.
     // The final bucket is unbounded; finite percentile bounds are conservative.

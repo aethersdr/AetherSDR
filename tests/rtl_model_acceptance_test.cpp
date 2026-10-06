@@ -14,6 +14,7 @@
 #include <cstdio>
 #include <algorithm>
 #include <cmath>
+#include <chrono>
 #include <limits>
 #include <memory>
 #include <thread>
@@ -79,6 +80,49 @@ struct RtlCaptureBackendTestAccess {
         QThread::msleep(510);
         backend.expireWfmObservations();
     }
+    static void hd(RtlSdrBackend& backend, const RtlReceivePipeline::HdFmObservation& observation)
+    { backend.observeHd(observation); }
+    static void expireHd(RtlSdrBackend& backend) { backend.expireHdObservations(); }
+    static HdFmReception hdReception(const RtlSdrBackend& backend, int id)
+    { return backend.m_hdReception[id]; }
+    static bool refusesProgramDuringPendingTune(RtlSdrBackend& backend, SliceModel& slice,
+                                                double frequencyHz, int program)
+    {
+        if (!idle(backend)) { return false; }
+        auto desired = backend.m_requested;
+        const auto receiver = std::ranges::find_if(desired.receivers,
+            [&slice](const auto& value) { return value.passband.stableId == slice.sliceId(); });
+        if (receiver == desired.receivers.end()) { return false; }
+        receiver->passband.carrierHz = frequencyHz;
+        desired.followReceiverId = slice.sliceId();
+        const auto savedCapture = backend.m_capture;
+        const auto savedRequested = backend.m_requested;
+        const auto savedStatus = backend.m_captureStatus;
+        const auto savedDrag = backend.m_dragCapture;
+        const bool savedPendingDrag = backend.m_pendingDrag;
+        const auto savedViewport = backend.m_pendingViewport;
+        const auto savedExtensions = backend.m_pendingExtensionRequests;
+        const auto submitted = backend.m_capture.submit(desired);
+        // Hold the production transaction after dispatch ownership is claimed,
+        // but never hand its work to the injected device. A missing refusal
+        // can only coalesce intent here; it cannot advance hardware or adoption.
+        const auto heldWork = backend.m_capture.takeWork();
+        bool refused = false;
+        if (submitted && heldWork) {
+            backend.m_requested = desired;
+            slice.setHdProgram(program);
+            refused = backend.m_capture.requested() == submitted.token
+                && backend.m_requested.receivers == desired.receivers;
+        }
+        backend.m_capture = savedCapture;
+        backend.m_requested = savedRequested;
+        backend.m_captureStatus = savedStatus;
+        backend.m_dragCapture = savedDrag;
+        backend.m_pendingDrag = savedPendingDrag;
+        backend.m_pendingViewport = savedViewport;
+        backend.m_pendingExtensionRequests = savedExtensions;
+        return refused;
+    }
     static void spectrum(RtlSdrBackend& backend, const QByteArray& frame, T::Token token)
     { emit backend.m_worker->spectrumFrameReady(token.session, token.revision, 0, frame); }
 };
@@ -125,6 +169,242 @@ static std::uint64_t monotonicMs()
 {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+static void hdModelBoundary()
+{
+    SliceModel model(3);
+    int choices = 0, programs = 0;
+    QObject::connect(&model, &SliceModel::wfmAudioModeRequested, &model, [&](WfmAudioMode) { ++choices; });
+    QObject::connect(&model, &SliceModel::hdProgramRequested, &model, [&](int) { ++programs; });
+    model.setWfmAudioMode(WfmAudioMode::HdStereo); model.setHdProgram(7);
+    model.setWfmAudioMode(static_cast<WfmAudioMode>(99)); model.setHdProgram(-1); model.setHdProgram(8);
+    check(choices == 1 && programs == 1 && model.wfmAudioMode() == WfmAudioMode::Stereo
+        && model.hdProgram() == 0, "typed HD setters validate intent without publishing accepted state");
+    HdFmReception reception;
+    reception.valid = true; reception.sessionId = 1; reception.receiverEpoch = 2; reception.revision = 3;
+    reception.frequencyHz = 100'000'000; reception.selectedProgram = 0;
+    reception.synced = true; reception.audioValid = true; reception.observationSequence = 1;
+    reception.services = {{0, QStringLiteral("News\nHD"), true}};
+    reception.stationName = QString(100, QLatin1Char('x'));
+    reception.title = QStringLiteral("Title\n") + QChar(0x202e) + QStringLiteral("Artist");
+    reception.cber = 0.01; reception.merLowerDb = 12.0;
+    SliceDelta delta; delta.mode = QStringLiteral("WFM"); delta.frequency = 100.0;
+    delta.wfmAudioMode = WfmAudioMode::HdStereo; delta.hdProgram = 0; delta.hdFmReception = reception;
+    model.applyChanges(delta);
+    check(model.hdFmReception().valid && model.hdFmReception().audioValid
+        && model.hdFmReception().stationName.size() == 64
+        && model.hdFmReception().services.front().name == QStringLiteral("News HD")
+        && model.hdFmReception().title == QStringLiteral("Title Artist"),
+        "accepted HD snapshot bounds and normalizes broadcast text before model publication");
+    delta = {}; reception.cber = std::numeric_limits<double>::quiet_NaN(); delta.hdFmReception = reception;
+    model.applyChanges(delta);
+    check(!model.hdFmReception().valid, "nonfinite reception metric cannot enter the model");
+    reception.cber = 0.01; reception.services.push_back(reception.services.front());
+    delta.hdFmReception = reception; model.applyChanges(delta);
+    check(!model.hdFmReception().valid, "duplicate discovered programs cannot enter the model");
+    reception.services.resize(1); reception.synced = false;
+    delta.hdFmReception = reception; model.applyChanges(delta);
+    check(model.hdFmReception().valid && !model.hdFmReception().audioValid
+        && model.hdFmReception().services.isEmpty() && model.hdFmReception().title.isEmpty()
+        && !model.hdFmReception().merLowerDb,
+        "sync loss clears decoded metadata, service choices and audio claims");
+    reception.synced = true; delta.hdFmReception = reception; model.applyChanges(delta);
+    delta = {}; delta.frequency = 100.1; model.applyChanges(delta);
+    check(!model.hdFmReception().valid, "retuning invalidates HD reception without waiting for new metadata");
+    delta = {}; delta.frequency = 100.0; delta.hdFmReception = reception; model.applyChanges(delta);
+    delta = {}; delta.hdProgram = 1; model.applyChanges(delta);
+    check(!model.hdFmReception().valid, "program change invalidates the old program's reception");
+}
+
+static void hdAcceptedControls(RadioModel& model, rtl::RtlSdrBackend& backend,
+                               SliceModel& slice, CaptureClock& captureClock,
+                               const RadioSettingsScope& scope)
+{
+    using Access = rtl::RtlCaptureBackendTestAccess;
+    using Observation = rtl::RtlReceivePipeline::HdFmObservation;
+    const auto feature = backend.capabilities().broadcastFmReceive;
+    RadioModelSliceLifecycleTestAccess::flush(model);
+    const auto before = scope.featureExact("RtlSlices");
+    const auto beforeState = Access::state(backend);
+    slice.setWfmAudioMode(static_cast<WfmAudioMode>(99)); slice.setHdProgram(-1); slice.setHdProgram(8);
+    check(Access::idle(backend) && Access::state(backend).token == beforeState.token,
+          "invalid HD controls never reach a transaction");
+    slice.setWfmAudioMode(WfmAudioMode::HdStereo);
+    check(slice.wfmAudioMode() == WfmAudioMode::Stereo && scope.featureExact("RtlSlices") == before,
+          "HD mode request neither changes accepted selection nor persists pending intent");
+    if (!feature || !feature->hdStereo) {
+        check(Access::idle(backend) && Access::state(backend).token == beforeState.token,
+              "build without qualified native HD refuses HD mode without queuing work");
+        RadioModelSliceLifecycleTestAccess::flush(model);
+        check(scope.featureExact("RtlSlices") == before, "unavailable HD selection cannot overwrite analog settings");
+        return;
+    }
+    check(waitFor([&] { captureClock.advance(); return Access::idle(backend)
+        && slice.wfmAudioMode() == WfmAudioMode::HdStereo; }), "native HD selection waits for receiver adoption");
+    RadioModelSliceLifecycleTestAccess::flush(model);
+    const auto hdSaved = RtlSliceSettings(scope).load().document.slices.value(3);
+    check(hdSaved.wfmHdStereo && !hdSaved.wfmForceMono && hdSaved.hdProgram == 0
+        && hdSaved.filterLowHz == -90000 && hdSaved.filterHighHz == 90000 && hdSaved.wfmDeemphasisUs == 50,
+        "only adopted HD selection persists while the analog filter and deemphasis remain intact");
+    slice.setHdProgram(1);
+    check(Access::idle(backend) && slice.hdProgram() == 0,
+          "program choice requires a currently discovered audio service");
+
+    Observation current;
+    current.slot = 3; current.token = Access::state(backend).token;
+    current.instance = 9001; current.receiverEpoch = 9002; current.audioEpoch = 9003; current.captureEpoch = 9004;
+    auto& raw = current.reception;
+    raw.valid = true; raw.sessionId = current.token.session; raw.revision = current.token.revision;
+    raw.receiverEpoch = current.receiverEpoch; raw.audioEpoch = current.audioEpoch;
+    raw.frequencyHz = static_cast<std::int64_t>(std::llround(slice.frequency() * 1e6));
+    raw.selectedProgram = 0; raw.synced = true; raw.audioValid = true;
+    raw.publicationSequence = 1000; raw.observationSequence = 1000; raw.audioSequence = 1000;
+    raw.observationMonotonicMs = monotonicMs(); raw.audioMonotonicMs = raw.observationMonotonicMs;
+    raw.services[0].program = 0; raw.services[0].audioAvailable = true;
+    raw.services[1].program = 1; raw.services[1].audioAvailable = true;
+    raw.services[2].program = 2; raw.services[2].audioAvailable = false;
+    raw.cber = 0.01; raw.merLowerDb = 12.0;
+    std::copy_n("Station", 7, raw.stationName.begin());
+    Access::hd(backend, current);
+    check(slice.hdFmReception().valid && slice.hdFmReception().synced && slice.hdFmReception().audioValid
+        && slice.hdFmReception().stationName == QStringLiteral("Station"),
+        "current accepted decoder observation publishes real HD service and audio state");
+    const auto accepted = Access::hdReception(backend, 3);
+    for (int invalid = 0; invalid < 12; ++invalid) {
+        auto stale = current;
+        ++stale.reception.publicationSequence; ++stale.reception.observationSequence;
+        if (invalid == 0) { --stale.token.revision; --stale.reception.revision; }
+        if (invalid == 1) { ++stale.token.session; ++stale.reception.sessionId; }
+        if (invalid == 2) { ++stale.reception.frequencyHz; }
+        if (invalid == 3) { stale.reception.selectedProgram = 1; }
+        if (invalid == 4) { stale.reception.observationMonotonicMs = monotonicMs() - 501; }
+        if (invalid == 5) { stale.reception.observationMonotonicMs = monotonicMs() + 10000; }
+        if (invalid == 6) { stale.reception.observationMonotonicMs = 0; }
+        if (invalid == 7) { stale.reception.cber = std::numeric_limits<double>::quiet_NaN(); }
+        if (invalid == 8) { stale.reception.services[2].program = 1; }
+        if (invalid == 9) { --stale.audioEpoch; --stale.reception.audioEpoch; }
+        if (invalid == 10) { stale.reception.observationSequence = raw.observationSequence - 1; }
+        if (invalid == 11) { stale.reception.services[3].program = -2; }
+        Access::hd(backend, stale);
+        check(Access::hdReception(backend, 3) == accepted,
+              "stale, mismatched or malformed HD observations cannot replace accepted reception");
+    }
+    slice.setHdProgram(2); slice.setHdProgram(7);
+    check(Access::idle(backend) && slice.hdProgram() == 0,
+          "data-only and undiscovered services cannot be selected as audio programs");
+    std::thread foreign([&] { slice.setWfmAudioMode(WfmAudioMode::Mono); slice.setHdProgram(1); });
+    foreign.join();
+    check(Access::idle(backend) && slice.wfmAudioMode() == WfmAudioMode::HdStereo && slice.hdProgram() == 0,
+          "HD controls from a foreign thread cannot dispatch through the model");
+
+    // Acquisition readiness can change between decoder measurements. A new
+    // publication may report that change without inventing a new source time.
+    auto notReady = current;
+    ++notReady.reception.publicationSequence; notReady.reception.audioValid = false;
+    Access::hd(backend, notReady);
+    check(slice.hdFmReception().valid && !slice.hdFmReception().audioValid,
+          "new playout publication can withdraw audio with the same decoder observation");
+    raw.publicationSequence = notReady.reception.publicationSequence + 1;
+    Access::hd(backend, current);
+    check(slice.hdFmReception().audioValid,
+          "ready publication uses existing fresh producer evidence without requiring a new decoder block");
+
+    for (const auto invalidAudioTime : {quint64{0}, quint64{monotonicMs() + 10000}}) {
+        ++raw.publicationSequence;
+        raw.audioMonotonicMs = invalidAudioTime;
+        Access::hd(backend, current);
+        check(!slice.hdFmReception().audioValid,
+              "invalid current PCM timestamp cannot borrow an earlier fresh audio claim");
+        ++raw.publicationSequence;
+        raw.audioMonotonicMs = monotonicMs();
+        Access::hd(backend, current);
+        check(slice.hdFmReception().audioValid, "valid source timestamp restores current selected PCM");
+    }
+
+    // No event processing while time advances: exercise the producer clock,
+    // including a service request before the owner expiry timer gets a turn.
+    QThread::msleep(510);
+    slice.setHdProgram(1);
+    check(Access::idle(backend) && slice.hdProgram() == 0,
+          "old discovered service cannot authorize a program request before expiry timer delivery");
+    ++raw.publicationSequence; ++raw.observationSequence; raw.observationMonotonicMs = monotonicMs();
+    Access::hd(backend, current);
+    check(Access::hdReception(backend, 3).valid && Access::hdReception(backend, 3).synced
+        && !Access::hdReception(backend, 3).audioValid,
+        "fresh metadata cannot renew old PCM producer time or retain Audio valid");
+    ++raw.publicationSequence; ++raw.observationSequence; ++raw.audioSequence;
+    raw.observationMonotonicMs = monotonicMs(); raw.audioMonotonicMs = raw.observationMonotonicMs;
+    Access::hd(backend, current);
+    check(slice.hdFmReception().audioValid, "new selected-program PCM restores the audio observation");
+    QThread::msleep(510);
+    Access::expireHd(backend);
+    check(!slice.hdFmReception().valid, "stopped HD producer expires all reception and service claims");
+    auto cached = current;
+    cached.reception.observationMonotonicMs = monotonicMs(); cached.reception.audioMonotonicMs = monotonicMs();
+    Access::hd(backend, cached);
+    check(!slice.hdFmReception().valid, "duplicate decoder observation cannot become fresh by later receipt");
+    ++raw.publicationSequence; ++raw.observationSequence; ++raw.audioSequence;
+    raw.observationMonotonicMs = monotonicMs(); raw.audioMonotonicMs = raw.observationMonotonicMs;
+    Access::hd(backend, current);
+    check(slice.hdFmReception().valid && slice.hdFmReception().audioValid,
+          "new producer evidence can restore HD reception after timeout");
+
+    auto barrier = current;
+    ++barrier.reception.publicationSequence;
+    barrier.reception.valid = false; barrier.reception.synced = false; barrier.reception.audioValid = false;
+    barrier.reception.observationSequence = 0; barrier.reception.observationMonotonicMs = 0;
+    barrier.reception.audioSequence = 0; barrier.reception.audioMonotonicMs = 0;
+    barrier.reception.iqDrops = 2; barrier.reception.pcmDrops = 3; barrier.reception.playoutUnderruns = 4;
+    Access::hd(backend, barrier);
+    const auto hdHealth = backend.healthSnapshot();
+    check(hdHealth.values.value(QStringLiteral("rtlHdIqDrops")).toULongLong() == 2
+        && hdHealth.values.value(QStringLiteral("rtlHdPcmDrops")).toULongLong() == 3
+        && hdHealth.values.value(QStringLiteral("rtlHdPlayoutUnderruns")).toULongLong() == 4,
+        "withdrawal retains observed HD processing faults for runtime diagnostics");
+    check(!slice.hdFmReception().valid,
+          "current lifetime barrier clears reception even without decoder measurement time");
+    Access::hd(backend, current);
+    check(!slice.hdFmReception().valid, "old acquisition publication cannot revive reception after its barrier");
+    raw.publicationSequence = barrier.reception.publicationSequence + 1;
+    ++raw.observationSequence; ++raw.audioSequence;
+    raw.observationMonotonicMs = monotonicMs(); raw.audioMonotonicMs = raw.observationMonotonicMs;
+    Access::hd(backend, current);
+    check(slice.hdFmReception().valid && slice.hdFmReception().audioValid,
+          "new producer measurement can restore reception after a lifetime barrier");
+    check(backend.healthSnapshot().values.value(QStringLiteral("rtlHdPlayoutUnderruns")).toULongLong() == 4,
+          "HD diagnostic totals cannot regress on a later receiver observation");
+
+    const auto beforeProgram = scope.featureExact("RtlSlices");
+    const auto beforePendingTune = Access::state(backend);
+    check(Access::refusesProgramDuringPendingTune(backend, slice,
+              raw.frequencyHz + 200'000.0, 1),
+          "a discovered program at the accepted station cannot alter a pending tune to another station");
+    RadioModelSliceLifecycleTestAccess::flush(model);
+    check(Access::idle(backend) && Access::state(backend).token == beforePendingTune.token
+        && std::abs(slice.frequency() * 1e6 - raw.frequencyHz) <= 0.5 && slice.hdProgram() == 0
+        && slice.hdFmReception().valid && scope.featureExact("RtlSlices") == beforeProgram,
+          "pending-tune program refusal preserves accepted reception and persistent settings");
+    slice.setHdProgram(1);
+    check(slice.hdProgram() == 0 && scope.featureExact("RtlSlices") == beforeProgram,
+          "discovered program request remains unaccepted and unpersisted until adoption");
+    check(waitFor([&] { captureClock.advance(); return Access::idle(backend) && slice.hdProgram() == 1; }),
+          "matching HD receiver adoption confirms the selected program");
+    RadioModelSliceLifecycleTestAccess::flush(model);
+    check(RtlSliceSettings(scope).load().document.slices.value(3).hdProgram == 1,
+          "only adopted program reaches persistent receiver settings");
+    Access::hd(backend, current);
+    check(!slice.hdFmReception().valid || slice.hdFmReception().selectedProgram == 1,
+          "previous program revision cannot restore old service or title state");
+    slice.setWfmAudioMode(WfmAudioMode::Mono);
+    check(slice.wfmAudioMode() == WfmAudioMode::HdStereo, "leaving HD remains pending until decoder adoption");
+    check(waitFor([&] { captureClock.advance(); return Access::idle(backend)
+        && slice.wfmAudioMode() == WfmAudioMode::Mono; }), "accepted Mono leaves HD through the normal receiver transaction");
+    check(slice.wfmForceMono() && !slice.hdFmReception().valid,
+          "accepted analog Mono clears HD reception and applies the real Mono policy");
+    slice.setWfmAudioMode(WfmAudioMode::Stereo);
+    check(waitFor([&] { captureClock.advance(); return Access::idle(backend)
+        && slice.wfmAudioMode() == WfmAudioMode::Stereo; }), "Auto Stereo restored after HD lifecycle checks");
 }
 
 static void analogBankRestoreAndSharedCapture()
@@ -273,26 +553,27 @@ static void analogBankSelection(int capacity = 4)
     model.slice(2)->setMode("WFM");
     check(waitFor([&] { return settled() && model.slice(2)->mode() == "WFM"; }),
         "second WFM receiver independently adopted");
-    model.slice(1)->setWfmForceMono(true);
+    model.slice(1)->setWfmAudioMode(WfmAudioMode::Mono);
     model.slice(1)->setWfmDeemphasis(50);
     model.slice(1)->setFilterWidth(-90000, 90000);
-    model.slice(2)->setWfmForceMono(false);
+    model.slice(2)->setWfmAudioMode(WfmAudioMode::Stereo);
     model.slice(2)->setWfmDeemphasis(75);
     model.slice(2)->setFilterWidth(-80000, 80000);
     check(waitFor([&] { return settled() && model.slice(1)->filterLow() == -90000
         && model.slice(2)->filterLow() == -80000; }), "two independent WFM recipes adopt");
-    check(model.slice(1)->wfmForceMono()
+    check(model.slice(1)->wfmAudioMode() == WfmAudioMode::Mono
         && model.slice(1)->wfmDeemphasisUs() == 50
-        && !model.slice(2)->wfmForceMono()
+        && model.slice(2)->wfmAudioMode() == WfmAudioMode::Stereo
         && model.slice(2)->wfmDeemphasisUs() == 75 && selected(3),
         "WFM recipes and focus survive sibling publications");
     const auto beforeRefusal = Access::state(backend);
     int warnings = 0;
     QObject::connect(&backend, &IRadioBackend::configurationWarning, &model, [&](const QString&) { ++warnings; });
+    model.slice(1)->setWfmAudioMode(WfmAudioMode::HdStereo);
     model.slice(0)->setMode("AM");
     check(Access::idle(backend) && Access::state(backend).token == beforeRefusal.token
-        && model.slice(0)->mode() == "FM" && model.slice(1)->wfmForceMono()
-        && warnings >= 1, "unsupported legacy combinations refuse without altering recipes");
+        && model.slice(0)->mode() == "FM" && model.slice(1)->wfmAudioMode() == WfmAudioMode::Mono
+        && warnings >= 1, "unsupported HD and legacy combinations refuse without altering recipes");
     model.slice(2)->setActive(true);
     auto* pan = model.panadapter(model.slice(2)->panId());
     check(pan != nullptr, "multi receiver pan materialized");
@@ -348,6 +629,7 @@ int main(int argc, char** argv)
     TestSettingsProfile profile(QStringLiteral("rtl-model-acceptance"));
     if (!profile.isValid()) { return 1; }
     QCoreApplication app(argc, argv); AppSettings::instance().load();
+    hdModelBoundary();
     analogBankSelection();
     analogBankSelection(8);
     analogBankRestoreAndSharedCapture();
@@ -709,6 +991,7 @@ int main(int argc, char** argv)
         RadioModelSliceLifecycleTestAccess::flush(model);
         check(!RtlSliceSettings(scope).load().document.slices.value(3).wfmForceMono,
               "accepted Auto Stereo replaces only the chosen persistent policy");
+        hdAcceptedControls(model, backend, *slice, captureClock, scope);
     } else {
         const int wfmLow = slice->filterLow();
         const int wfmHigh = slice->filterHigh();

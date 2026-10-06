@@ -9,6 +9,7 @@
 #include "gui/VfoWidget.h"
 #include "gui/WfmApplet.h"
 #include "gui/WfmLockScope.h"
+#include "gui/WfmPresentationSettings.h"
 #include "core/ThemeManager.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -41,6 +42,8 @@ public:
     bool refuseWfm = false;
     QVector<QPair<int, int>> requests;
     QVector<QPair<int, bool>> monoRequests;
+    QVector<QPair<int, WfmAudioMode>> audioModeRequests;
+    QVector<QPair<int, int>> programRequests;
     RadioCapabilities capabilities() const override { return caps; }
     bool isConnected() const override { return connected; }
     ReceiveControlPolicy receiveControlPolicy() const override { return ReceiveControlPolicy::Confirmed; }
@@ -55,8 +58,12 @@ public:
         if (refuseWfm || !request.valid()) { return ReceiveDispatch::Unsupported; }
         if (request.field == SliceWfmRequest::Field::ForceMono) {
             setSliceWfmForceMono(id, request.value != 0);
-        } else {
+        } else if (request.field == SliceWfmRequest::Field::Deemphasis) {
             setSliceWfmDeemphasis(id, request.value);
+        } else if (request.field == SliceWfmRequest::Field::AudioMode) {
+            setSliceWfmAudioMode(id, static_cast<WfmAudioMode>(request.value));
+        } else {
+            setSliceHdProgram(id, request.value);
         }
         return ReceiveDispatch::Dispatched;
     }
@@ -64,6 +71,10 @@ public:
     { requests.append({id, microseconds}); }
     void setSliceWfmForceMono(int id, bool mono) override
     { monoRequests.append({id, mono}); }
+    void setSliceWfmAudioMode(int id, WfmAudioMode mode) override
+    { audioModeRequests.append({id, mode}); }
+    void setSliceHdProgram(int id, int program) override
+    { programRequests.append({id, program}); }
     void setPanCenter(const QString&, double, PanCenterIntent) override {}
     void setKeying(bool, const TxCoordinator::Operation&,
                    const TxCoordinator::Completion&) override {}
@@ -83,6 +94,29 @@ WfmReceptionDiagnostics measuredPilot(bool locked = false)
     value.observationDurationMs = 6000;
     value.stableDurationMs = 5000;
     value.lockDurationMs = locked ? 6000 : 0;
+    return value;
+}
+
+HdFmReception measuredHd(int program = 0)
+{
+    HdFmReception value;
+    value.valid = true;
+    value.sessionId = 1;
+    value.receiverEpoch = 2;
+    value.revision = 3;
+    value.frequencyHz = 100300000;
+    value.selectedProgram = program;
+    value.observationSequence = 1;
+    value.synced = value.audioValid = true;
+    value.services = {{0, QStringLiteral("Main"), true}, {1, QStringLiteral("Second"), true},
+                      {2, QStringLiteral("Data only"), false}};
+    value.stationName = QStringLiteral("Fixture digital station");
+    value.title = QStringLiteral("Title <plain text>");
+    value.artist = QStringLiteral("Artist");
+    value.merLowerDb = 16.5;
+    value.merUpperDb = 17.0;
+    value.cber = 0.0001;
+    value.syncDurationMs = 5000;
     return value;
 }
 
@@ -483,6 +517,7 @@ private slots:
         WfmBackend* source = attachBackend(model);
         SliceDelta first = initialWfm();
         first.letter = QStringLiteral("A");
+        first.wfmAudioMode = WfmAudioMode::Mono;
         first.wfmForceMono = true;
         emit source->sliceChanged(3, first);
         SliceDelta second = initialWfm();
@@ -518,7 +553,7 @@ private slots:
         }
         QVERIFY(source->requests.isEmpty());
         QVERIFY(source->monoRequests.isEmpty());
-        QVERIFY(source->monoRequests.isEmpty());
+        QVERIFY(source->audioModeRequests.isEmpty());
         QTest::keyClick(deemphasis, Qt::Key_Up);
         QCOMPARE(source->requests.size(), 1);
         QCOMPARE(source->requests.last(), qMakePair(3, 50));
@@ -554,16 +589,20 @@ private slots:
     {
         RadioModel model;
         WfmBackend* source = attachBackend(model);
-        SliceDelta analog = initialWfm();
-        emit source->sliceChanged(3, analog);
-        emit source->sliceChanged(4, analog);
+        source->caps.broadcastFmReceive->hdStereo = true;
+        SliceDelta hd = initialWfm();
+        hd.wfmAudioMode = WfmAudioMode::HdStereo;
+        hd.hdFmReception = measuredHd();
+        emit source->sliceChanged(3, hd);
+        emit source->sliceChanged(4, hd);
         WfmApplet applet;
         applet.setRadioModel(&model);
         applet.setSlice(model.slice(3));
         applet.show();
         QSignalSpy firstFilter(model.slice(3), &SliceModel::filterCommandIssued);
         QSignalSpy secondFilter(model.slice(4), &SliceModel::filterCommandIssued);
-        for (const QString& name : {QStringLiteral("wfmDeemphasis"), QStringLiteral("wfmBandwidth")}) {
+        for (const QString& name : {QStringLiteral("wfmDeemphasis"), QStringLiteral("wfmBandwidth"),
+                                    QStringLiteral("wfmHdProgram")}) {
             auto* combo = applet.findChild<QComboBox*>(name);
             QVERIFY(combo && combo->isEnabled());
             applet.setSlice(model.slice(3));
@@ -580,6 +619,7 @@ private slots:
             QCOMPARE(combo->currentIndex(), acceptedIndex);
         }
         QVERIFY(source->requests.isEmpty());
+        QVERIFY(source->programRequests.isEmpty());
         QVERIFY(firstFilter.isEmpty());
         QVERIFY(secondFilter.isEmpty());
         auto* cycle = applet.findChild<QPushButton*>(QStringLiteral("wfmAudioMode"));
@@ -588,17 +628,17 @@ private slots:
         QTest::mousePress(cycle, Qt::LeftButton);
         applet.setSlice(model.slice(4));
         QTest::mouseRelease(cycle, Qt::LeftButton);
-        QVERIFY(source->monoRequests.isEmpty());
+        QVERIFY(source->audioModeRequests.isEmpty());
         cycle->click();
-        QCOMPARE(source->monoRequests.size(), 1);
-        QCOMPARE(source->monoRequests.last().first, 4);
+        QCOMPARE(source->audioModeRequests.size(), 1);
+        QCOMPARE(source->audioModeRequests.last().first, 4);
         auto* deemphasis = applet.findChild<QComboBox*>(QStringLiteral("wfmDeemphasis"));
         applet.setSlice(model.slice(3));
         deemphasis->showPopup();
         std::thread removalNotice([&model] { emit model.sliceRemoved(3); });
         removalNotice.join();
         emit source->sliceRemoved(3);
-        emit source->sliceChanged(3, analog);
+        emit source->sliceChanged(3, hd);
         applet.setSlice(model.slice(3));
         QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
         QVERIFY(applet.isAvailable());
@@ -624,7 +664,8 @@ private slots:
         QVERIFY(scope && scope->isVisible());
         std::thread queued([oldSlice] {
             emit oldSlice->frequencyChanged(100.7);
-            emit oldSlice->wfmForceMonoChanged(true);
+            emit oldSlice->wfmAudioModeChanged(WfmAudioMode::Mono);
+            emit oldSlice->hdProgramChanged(1);
             emit oldSlice->wfmReceptionDiagnosticsChanged(measuredPilot());
         });
         queued.join();
@@ -672,6 +713,54 @@ private slots:
         QVERIFY(applet.isAvailable());
         auto* identity = applet.findChild<QLabel*>(QStringLiteral("wfmReceiverIdentity"));
         QCOMPARE(identity->text(), QStringLiteral("Slice D · 100.300000 MHz"));
+    }
+
+    void selectedHdMetadataNeverUsesASiblingsStationOrService()
+    {
+        RadioModel model;
+        WfmBackend* source = attachBackend(model);
+        source->caps.broadcastFmReceive->hdStereo = true;
+        SliceDelta first = initialWfm();
+        first.wfmAudioMode = WfmAudioMode::HdStereo;
+        first.hdProgram = 0;
+        first.hdFmReception = measuredHd();
+        emit source->sliceChanged(3, first);
+        SliceDelta second = first;
+        second.frequency = 100.9;
+        second.hdProgram = 1;
+        second.hdFmReception = measuredHd(1);
+        second.hdFmReception->frequencyHz = 100900000;
+        second.hdFmReception->receiverEpoch = 7;
+        second.hdFmReception->stationName = QStringLiteral("Other station");
+        second.hdFmReception->title = QStringLiteral("Other song");
+        emit source->sliceChanged(4, second);
+        WfmApplet applet;
+        applet.setRadioModel(&model);
+        applet.setSlice(model.slice(3));
+        auto* metadata = applet.findChild<QLabel*>(QStringLiteral("wfmBroadcastMetadata"));
+        auto* program = applet.findChild<QComboBox*>(QStringLiteral("wfmHdProgram"));
+        QVERIFY(metadata && program);
+        QVERIFY(metadata->text().contains(QStringLiteral("Fixture digital station")));
+        applet.setSlice(model.slice(4));
+        const QString secondText = metadata->text();
+        QVERIFY(secondText.contains(QStringLiteral("Other station")));
+        QVERIFY(secondText.contains(QStringLiteral("P2")));
+        QCOMPARE(program->currentData().toInt(), 1);
+        first.hdFmReception->title = QStringLiteral("Sibling song changed");
+        emit source->sliceChanged(3, first);
+        QCOMPARE(metadata->text(), secondText);
+        SliceDelta parked;
+        parked.inCapture = false;
+        emit source->sliceChanged(4, parked);
+        QVERIFY(!metadata->text().contains(QStringLiteral("Other station")));
+        QCOMPARE(model.slice(4)->hdProgram(), 1);
+        applet.setSlice(model.slice(3));
+        QVERIFY(metadata->text().contains(QStringLiteral("Sibling song changed")));
+        emit source->sliceRemoved(4);
+        QVERIFY(metadata->text().contains(QStringLiteral("Sibling song changed")));
+        QVERIFY(source->requests.isEmpty());
+        QVERIFY(source->programRequests.isEmpty());
+        QVERIFY(source->audioModeRequests.isEmpty());
     }
 
     void audioCycleWaitsForAcceptanceAndPreservesObservedPilot()
@@ -971,6 +1060,415 @@ private slots:
         checkBroadcastFmVisibility(*host.applet, true);
         model.reset();
         checkBroadcastFmVisibility(*host.applet, false);
+    }
+
+    void hdCycleProgramAndMetadataFollowAcceptedStateOnly()
+    {
+        RadioModel model;
+        WfmBackend* source = attachBackend(model);
+        source->caps.broadcastFmReceive->hdStereo = true;
+        emit model.capabilitiesChanged(true, source->caps);
+        WfmApplet applet;
+        applet.setRadioModel(&model);
+        applet.setSlice(model.slice(3));
+        auto* cycle = applet.findChild<QPushButton*>(QStringLiteral("wfmAudioMode"));
+        auto* program = applet.findChild<QComboBox*>(QStringLiteral("wfmHdProgram"));
+        auto* status = applet.findChild<QLabel*>(QStringLiteral("wfmStereoStatus"));
+        auto* metadata = applet.findChild<QLabel*>(QStringLiteral("wfmBroadcastMetadata"));
+        QVERIFY(cycle && program && status && metadata);
+        QVERIFY(!program->isEnabled());
+        cycle->click();
+        QCOMPARE(source->audioModeRequests.size(), 1);
+        QCOMPARE(source->audioModeRequests.last().second, WfmAudioMode::HdStereo);
+        QCOMPARE(cycle->text(), QStringLiteral("Auto Stereo"));
+        QCOMPARE(model.slice(3)->wfmAudioMode(), WfmAudioMode::Stereo);
+        SliceDelta accepted;
+        accepted.wfmAudioMode = WfmAudioMode::HdStereo;
+        emit source->sliceChanged(3, accepted);
+        QCOMPARE(cycle->text(), QStringLiteral("Digital"));
+        QCOMPARE(status->text(), QStringLiteral("Digital acquiring"));
+        QVERIFY(!program->isEnabled());
+        accepted = {};
+        accepted.hdFmReception = measuredHd();
+        emit source->sliceChanged(3, accepted);
+        QCOMPARE(status->text(), QStringLiteral("Digital audio valid"));
+        const QString healthyStyle = status->styleSheet();
+        QCOMPARE(program->count(), 2); // data-only services never masquerade as audio
+        QCOMPARE(program->currentData().toInt(), 0);
+        QVERIFY(program->isEnabled());
+        QCOMPARE(metadata->textFormat(), Qt::PlainText);
+        QVERIFY(metadata->text().contains(QStringLiteral("Digital · P1")));
+        QVERIFY(metadata->text().contains(QStringLiteral("<plain text>")));
+        const QString text = metadata->text();
+        WfmPresentationSettings::instance().setBroadcastOverlayEnabled(false);
+        QCOMPARE(metadata->text(), text); // overlay preference does not stop applet text
+        QVERIFY(model.slice(3)->hdFmReception().audioValid);
+        program->setCurrentIndex(1);
+        QVERIFY(QMetaObject::invokeMethod(program, "activated", Q_ARG(int, 1)));
+        QCOMPARE(source->programRequests.size(), 1);
+        QCOMPARE(source->programRequests.last().second, 1);
+        QCOMPARE(program->currentData().toInt(), 0); // pending intent is not readback
+        accepted = {}; accepted.hdProgram = 1;
+        emit source->sliceChanged(3, accepted);
+        QVERIFY(!metadata->text().contains(QStringLiteral("Fixture digital station")));
+        QVERIFY(status->styleSheet() != healthyStyle);
+        accepted = {}; accepted.hdFmReception = measuredHd(1);
+        emit source->sliceChanged(3, accepted);
+        QCOMPARE(program->currentData().toInt(), 1);
+        QCOMPARE(status->styleSheet(), healthyStyle);
+        QVERIFY(metadata->text().contains(QStringLiteral("P2")));
+        cycle->click();
+        QCOMPARE(source->audioModeRequests.last().second, WfmAudioMode::Mono);
+        QCOMPARE(cycle->text(), QStringLiteral("Digital"));
+        accepted = {}; accepted.wfmAudioMode = WfmAudioMode::Mono; accepted.wfmForceMono = true;
+        emit source->sliceChanged(3, accepted);
+        QCOMPARE(cycle->text(), QStringLiteral("Mono"));
+        QVERIFY(!program->isEnabled());
+        cycle->click();
+        QCOMPARE(source->audioModeRequests.last().second, WfmAudioMode::Stereo);
+        QCOMPARE(cycle->text(), QStringLiteral("Mono"));
+        WfmPresentationSettings::instance().setBroadcastOverlayEnabled(true);
+    }
+
+    void hdPopupTelemetryPreservesPendingChoice_data()
+    {
+        QTest::addColumn<bool>("mouse");
+        QTest::addColumn<int>("serviceChange");
+        QTest::newRow("mouse-press-telemetry-release") << true << 0;
+        QTest::newRow("keyboard-highlight-telemetry-return") << false << 0;
+        QTest::newRow("mouse-service-rename") << true << 1;
+        QTest::newRow("keyboard-service-rename") << false << 1;
+        QTest::newRow("mouse-service-reorder") << true << 2;
+        QTest::newRow("keyboard-service-reorder") << false << 2;
+    }
+
+    void hdPopupTelemetryPreservesPendingChoice()
+    {
+        QFETCH(bool, mouse);
+        QFETCH(int, serviceChange);
+        RadioModel model;
+        WfmBackend* source = attachBackend(model);
+        source->caps.broadcastFmReceive->hdStereo = true;
+        emit model.capabilitiesChanged(true, source->caps);
+        WfmHarness host;
+        WfmApplet& applet = *host.applet;
+        applet.setRadioModel(&model);
+        applet.setSlice(model.slice(3));
+        SliceDelta observation;
+        observation.wfmAudioMode = WfmAudioMode::HdStereo;
+        observation.hdFmReception = measuredHd();
+        emit source->sliceChanged(3, observation);
+        auto* program = applet.findChild<QComboBox*>(QStringLiteral("wfmHdProgram"));
+        auto* settings = applet.findChild<QPushButton*>(QStringLiteral("wfmSettingsToggle"));
+        QVERIFY(program && settings && program->isEnabled());
+        host.resize(400, 600);
+        host.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&host));
+        if (!settings->isChecked()) { QTest::mouseClick(settings, Qt::LeftButton); }
+        QTRY_VERIFY(program->isVisible());
+        QCOMPARE(program->currentData().toInt(), 0);
+        QTest::mouseClick(program, Qt::LeftButton);
+        QAbstractItemView* view = program->view();
+        QTRY_VERIFY(view->isVisible());
+        QVERIFY(QTest::qWaitForWindowExposed(view->window()));
+        // Qt ignores the opening click's release for a short interval. Wait
+        // before the distinct selection click; telemetry still interleaves
+        // strictly between its press and release below.
+        if (mouse) { QTest::qWait(QApplication::doubleClickInterval() + 20); }
+        const QModelIndex second = program->model()->index(program->findData(1), 0);
+        const QPoint position = view->visualRect(second).center();
+        QVERIFY(view->viewport()->rect().contains(position));
+        if (mouse) {
+            QTest::mouseMove(view->viewport(), position);
+            QTest::mousePress(view->viewport(), Qt::LeftButton, Qt::NoModifier, position);
+        } else {
+            QTest::keyClick(view, Qt::Key_Down);
+        }
+        QCOMPARE(view->currentIndex().data(Qt::UserRole).toInt(), 1);
+        QVERIFY(source->programRequests.isEmpty());
+        for (int sequence = 2; sequence < 18; ++sequence) {
+            observation.hdFmReception->observationSequence = sequence;
+            observation.hdFmReception->syncDurationMs += 250;
+            observation.hdFmReception->title = QStringLiteral("Telemetry %1").arg(sequence);
+            if (serviceChange == 1) {
+                observation.hdFmReception->services[1].name = QStringLiteral("Renamed %1").arg(sequence);
+            } else if (serviceChange == 2) {
+                observation.hdFmReception->services.swapItemsAt(0, 1);
+            }
+            emit source->sliceChanged(3, observation);
+            QApplication::processEvents();
+        }
+        const bool popupStayedOpen = view->isVisible();
+        const int highlightedProgram = view->currentIndex().data(Qt::UserRole).toInt();
+        QVERIFY(source->programRequests.isEmpty()); // telemetry cannot activate a choice
+        if (mouse) {
+            QTest::mouseRelease(view->viewport(), Qt::LeftButton, Qt::NoModifier, position);
+        } else {
+            QTest::keyClick(view, Qt::Key_Return);
+        }
+        QApplication::processEvents();
+        qInfo("Digital popup input=%s openAfterTelemetry=%d highlightedProgram=%d requests=%lld displayedProgram=%d",
+              mouse ? "mouse" : "keyboard", popupStayedOpen, highlightedProgram,
+              static_cast<long long>(source->programRequests.size()), program->currentData().toInt());
+        QCOMPARE(source->programRequests.size(), 1);
+        QCOMPARE(source->programRequests.first(), (QPair<int, int>{3, 1}));
+        QVERIFY(popupStayedOpen);
+        QCOMPARE(highlightedProgram, 1);
+        QCOMPARE(model.slice(3)->hdProgram(), 0);
+        QCOMPARE(program->currentData().toInt(), 0); // intent is not confirmed state
+        if (serviceChange == 1) {
+            QVERIFY(program->itemText(program->findData(1)).contains(QStringLiteral("Renamed 17")));
+        }
+        emit source->sliceChanged(3, observation); // unchanged backend state is not an acknowledgement
+        QCOMPARE(program->currentData().toInt(), 0);
+        QCOMPARE(source->programRequests.size(), 1);
+        observation.hdProgram = 1;
+        observation.hdFmReception = measuredHd(1);
+        emit source->sliceChanged(3, observation);
+        QCOMPARE(program->currentData().toInt(), 1);
+        QCOMPARE(source->programRequests.size(), 1);
+        QTest::mouseClick(program, Qt::LeftButton);
+        QTRY_VERIFY(view->isVisible());
+        QTest::keyClick(view, Qt::Key_Return); // the accepted service is a no-op
+        QCOMPARE(source->programRequests.size(), 1);
+    }
+
+    void hdPopupCancelsWhenReceiverOrServiceIdentityChanges_data()
+    {
+        QTest::addColumn<QString>("change");
+        QTest::addColumn<bool>("mouse");
+        const QStringList changes = {QStringLiteral("service-removed"), QStringLiteral("service-added"),
+            QStringLiteral("audio-unavailable"), QStringLiteral("session"), QStringLiteral("epoch"),
+            QStringLiteral("revision"), QStringLiteral("frequency"), QStringLiteral("slice"),
+            QStringLiteral("reused-slice-id"), QStringLiteral("radio-model"), QStringLiteral("confirmed-program"),
+            QStringLiteral("reception-unavailable")};
+        for (const QString& change : changes) {
+            for (bool mouse : {false, true}) {
+                const QByteArray name = (change + (mouse ? QStringLiteral("-mouse") : QStringLiteral("-keyboard"))).toUtf8();
+                QTest::newRow(name.constData()) << change << mouse;
+            }
+        }
+    }
+
+    void hdPopupCancelsWhenReceiverOrServiceIdentityChanges()
+    {
+        QFETCH(QString, change);
+        QFETCH(bool, mouse);
+        RadioModel model;
+        WfmBackend* source = attachBackend(model);
+        source->caps.broadcastFmReceive->hdStereo = true;
+        emit model.capabilitiesChanged(true, source->caps);
+        RadioModel replacementModel;
+        WfmBackend* replacementSource = attachBackend(replacementModel);
+        replacementSource->caps.broadcastFmReceive->hdStereo = true;
+        emit replacementModel.capabilitiesChanged(true, replacementSource->caps);
+        WfmHarness host;
+        WfmApplet& applet = *host.applet;
+        applet.setRadioModel(&model);
+        applet.setSlice(model.slice(3));
+        SliceDelta observation = initialWfm();
+        observation.wfmAudioMode = WfmAudioMode::HdStereo;
+        observation.hdFmReception = measuredHd();
+        emit source->sliceChanged(3, observation);
+        auto* program = applet.findChild<QComboBox*>(QStringLiteral("wfmHdProgram"));
+        auto* settings = applet.findChild<QPushButton*>(QStringLiteral("wfmSettingsToggle"));
+        QVERIFY(program && settings && program->isEnabled());
+        host.resize(400, 600);
+        host.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&host));
+        if (!settings->isChecked()) { QTest::mouseClick(settings, Qt::LeftButton); }
+        QTRY_VERIFY(program->isVisible());
+        QTest::mouseClick(program, Qt::LeftButton);
+        QAbstractItemView* view = program->view();
+        QTRY_VERIFY(view->isVisible());
+        QVERIFY(QTest::qWaitForWindowExposed(view->window()));
+        if (mouse) { QTest::qWait(QApplication::doubleClickInterval() + 20); }
+        const QModelIndex second = program->model()->index(program->findData(1), 0);
+        const QPoint position = view->visualRect(second).center();
+        QVERIFY(view->viewport()->rect().contains(position));
+        if (mouse) {
+            QTest::mouseMove(view->viewport(), position);
+            QTest::mousePress(view->viewport(), Qt::LeftButton, Qt::NoModifier, position);
+        } else {
+            QTest::keyClick(view, Qt::Key_Down);
+        }
+        QCOMPARE(view->currentIndex().data(Qt::UserRole).toInt(), 1);
+        QVERIFY(source->programRequests.isEmpty());
+        if (change == QStringLiteral("slice")) {
+            emit source->sliceChanged(4, observation);
+            applet.setSlice(model.slice(4));
+        } else if (change == QStringLiteral("reused-slice-id")) {
+            SliceModel* original = model.slice(3);
+            emit source->sliceRemoved(3);
+            emit source->sliceChanged(3, observation);
+            QVERIFY(model.slice(3) != original);
+            applet.setSlice(model.slice(3));
+        } else if (change == QStringLiteral("radio-model")) {
+            emit replacementSource->sliceChanged(3, observation);
+            applet.setRadioModel(&replacementModel);
+            applet.setSlice(replacementModel.slice(3));
+        } else {
+            if (change == QStringLiteral("service-removed")) {
+                observation.hdFmReception->services.removeAt(1);
+            } else if (change == QStringLiteral("service-added")) {
+                observation.hdFmReception->services.append({4, QStringLiteral("New service"), true});
+            } else if (change == QStringLiteral("audio-unavailable")) {
+                observation.hdFmReception->services[1].audioAvailable = false;
+            } else if (change == QStringLiteral("session")) {
+                ++observation.hdFmReception->sessionId;
+            } else if (change == QStringLiteral("epoch")) {
+                ++observation.hdFmReception->receiverEpoch;
+            } else if (change == QStringLiteral("revision")) {
+                ++observation.hdFmReception->revision;
+            } else if (change == QStringLiteral("frequency")) {
+                observation.frequency = 101.1;
+                observation.hdFmReception->frequencyHz = 101100000;
+            } else if (change == QStringLiteral("confirmed-program")) {
+                observation.hdProgram = 1;
+                observation.hdFmReception->selectedProgram = 1;
+            } else if (change == QStringLiteral("reception-unavailable")) {
+                observation.hdFmReception->valid = false;
+            }
+            emit source->sliceChanged(3, observation);
+        }
+        QApplication::processEvents();
+        QTRY_VERIFY(!view->isVisible());
+        QVERIFY(source->programRequests.isEmpty());
+        QVERIFY(replacementSource->programRequests.isEmpty());
+        // A completion already aimed at the old popup must never select a
+        // same-numbered row in its replacement receiver or service list.
+        if (mouse) {
+            QTest::mouseRelease(view->viewport(), Qt::LeftButton, Qt::NoModifier, position);
+        } else {
+            QTest::keyClick(view, Qt::Key_Return);
+        }
+        QApplication::processEvents();
+        QVERIFY(source->programRequests.isEmpty());
+        QVERIFY(replacementSource->programRequests.isEmpty());
+        if (program->isEnabled() && program->count() > 1) {
+            const int acceptedProgram = program->currentData().toInt();
+            const int targetRow = program->currentIndex() == 0 ? program->count() - 1 : 0;
+            const int targetProgram = program->itemData(targetRow).toInt();
+            QTest::mouseClick(program, Qt::LeftButton);
+            QTRY_VERIFY(view->isVisible());
+            QTest::keyClick(view, targetRow == 0 ? Qt::Key_Home : Qt::Key_End);
+            QCOMPARE(view->currentIndex().data(Qt::UserRole).toInt(), targetProgram);
+            QTest::keyClick(view, Qt::Key_Return);
+            const bool replacement = change == QStringLiteral("radio-model");
+            WfmBackend* activeSource = replacement ? replacementSource : source;
+            WfmBackend* inactiveSource = replacement ? source : replacementSource;
+            const int sliceId = change == QStringLiteral("slice") ? 4 : 3;
+            QCOMPARE(activeSource->programRequests, (QVector<QPair<int, int>>{{sliceId, targetProgram}}));
+            QVERIFY(inactiveSource->programRequests.isEmpty());
+            QCOMPARE(program->currentData().toInt(), acceptedProgram);
+        }
+    }
+
+    void hdTelemetryScopeIsMeasuredBoundedAndRetiresOnIdentityChanges()
+    {
+        AppSettings::instance().remove(QStringLiteral("WfmApplet"));
+        RadioModel model;
+        WfmBackend* source = attachBackend(model);
+        source->caps.broadcastFmReceive->hdStereo = true;
+        WfmApplet applet;
+        applet.setRadioModel(&model);
+        applet.setSlice(model.slice(3));
+        applet.resize(300, 460);
+        applet.show();
+        QCoreApplication::processEvents();
+        auto* scope = applet.findChild<WfmLockScope*>();
+        auto* status = applet.findChild<QLabel*>(QStringLiteral("wfmStereoStatus"));
+        auto* metadata = applet.findChild<QLabel*>(QStringLiteral("wfmBroadcastMetadata"));
+        QVERIFY(scope && status && metadata);
+        SliceDelta accepted;
+        accepted.wfmAudioMode = WfmAudioMode::HdStereo;
+        accepted.hdFmReception = measuredHd();
+        emit source->sliceChanged(3, accepted);
+        QCOMPARE(scope->sampleCount(), 1);
+        auto* accessible = QAccessible::queryAccessibleInterface(scope);
+        QVERIFY(accessible);
+        QVERIFY(accessible->text(QAccessible::Value).contains(QStringLiteral("16.5 dB")));
+        QVERIFY(accessible->text(QAccessible::Value).contains(QStringLiteral("Digital audio valid")));
+        const QString healthyStyle = status->styleSheet();
+        const QString fixtureDirectory = qEnvironmentVariable("AETHER_WFM_APPLET_SCREENSHOT_DIR");
+        if (!fixtureDirectory.isEmpty()) {
+            QVERIFY(QDir().mkpath(fixtureDirectory));
+            auto* fixtureLabel = new QLabel(QStringLiteral("TEST FIXTURE · synthetic Digital telemetry"), &applet);
+            fixtureLabel->setWordWrap(true);
+            qobject_cast<QVBoxLayout*>(applet.layout())->insertWidget(0, fixtureLabel);
+            auto* diagnostics = applet.findChild<QCheckBox*>(QStringLiteral("wfmShowDiagnostics"));
+            diagnostics->setChecked(true);
+            applet.findChild<QPushButton*>(QStringLiteral("wfmSettingsToggle"))->setChecked(true);
+            applet.resize(300, applet.sizeHint().height());
+            QCoreApplication::processEvents();
+            QVERIFY(applet.grab().save(QDir(fixtureDirectory).filePath(QStringLiteral("wfm-test-fixture-hd.png"))));
+            diagnostics->setChecked(false);
+            applet.findChild<QPushButton*>(QStringLiteral("wfmSettingsToggle"))->setChecked(false);
+        }
+        HdFmReception next = measuredHd();
+        next.title = QStringLiteral("Updated title");
+        accepted = {}; accepted.hdFmReception = next;
+        emit source->sliceChanged(3, accepted);
+        QCOMPARE(scope->sampleCount(), 1); // same observation never grows history
+        QCOMPARE(metadata->text().contains(QStringLiteral("Updated title")), true);
+        next.observationSequence = 2;
+        next.audioValid = false;
+        accepted.hdFmReception = next;
+        emit source->sliceChanged(3, accepted);
+        QCOMPARE(scope->sampleCount(), 2);
+        QCOMPARE(status->text(), QStringLiteral("Digital synced · awaiting audio"));
+        QVERIFY(status->styleSheet() != healthyStyle);
+        next.audioValid = true;
+        next.syncLossCount = 1;
+        next.syncDurationMs = 100;
+        accepted.hdFmReception = next;
+        emit source->sliceChanged(3, accepted);
+        QVERIFY(status->text().contains(QStringLiteral("Unstable")));
+        QVERIFY(status->styleSheet() != healthyStyle);
+        next.observationSequence = 3;
+        next.receiverEpoch = 4;
+        accepted.hdFmReception = next;
+        emit source->sliceChanged(3, accepted);
+        QCOMPARE(scope->sampleCount(), 1);
+        scope->hide();
+        next.observationSequence = 4;
+        accepted.hdFmReception = next;
+        emit source->sliceChanged(3, accepted);
+        QCOMPARE(scope->sampleCount(), 0);
+        scope->show();
+        QCOMPARE(scope->sampleCount(), 0);
+        next.observationSequence = 5;
+        accepted.hdFmReception = next;
+        emit source->sliceChanged(3, accepted);
+        QCOMPARE(scope->sampleCount(), 1);
+        accepted = {}; accepted.frequency = 101.1;
+        emit source->sliceChanged(3, accepted);
+        QCOMPARE(scope->sampleCount(), 0);
+        QVERIFY(!metadata->text().contains(QStringLiteral("Updated title")));
+        QVERIFY(accessible->text(QAccessible::Value).contains(QStringLiteral("Awaiting")));
+        for (int i = 0; i < 180; ++i) { scope->appendHdSample(16.5, 17.0, true, true); }
+        QCOMPARE(scope->sampleCount(), 160);
+        scope->appendHdSample(std::numeric_limits<double>::quiet_NaN(), 17.0, true, true);
+        QCOMPARE(scope->sampleCount(), 0);
+        scope->appendHdSample({}, {}, false, false);
+        QCOMPARE(scope->sampleCount(), 1);
+        QVERIFY(accessible->text(QAccessible::Value).contains(QStringLiteral("unavailable")));
+        scope->setHdMode(false);
+        QCOMPARE(scope->sampleCount(), 0);
+        QVERIFY(accessible->text(QAccessible::Value).contains(QStringLiteral("pilot")));
+        SliceDelta another = initialWfm();
+        another.wfmAudioMode = WfmAudioMode::HdStereo;
+        another.hdFmReception = measuredHd();
+        emit source->sliceChanged(4, another);
+        applet.setSlice(model.slice(4));
+        QVERIFY(metadata->text().contains(QStringLiteral("Fixture digital station")));
+        const QString selectedText = metadata->text();
+        next = measuredHd(); next.frequencyHz = 101100000; next.title = QStringLiteral("Stale old slice song");
+        accepted = {}; accepted.hdFmReception = next;
+        emit source->sliceChanged(3, accepted);
+        QCOMPARE(metadata->text(), selectedText);
+        applet.setSlice(nullptr);
+        QVERIFY(!metadata->text().contains(QStringLiteral("Fixture digital station")));
     }
 
     void broadcastFilterPresetsPreserveSavedEdgesInBothWidgets()

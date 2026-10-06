@@ -947,6 +947,9 @@ set(CORE_SOURCES
     src/core/backends/rtl/RtlReceivePipeline.cpp
     src/core/backends/rtl/RtlAudioMixer.cpp
     src/core/backends/rtl/RtlRfExtractor.cpp
+    src/core/backends/rtl/HdFmIqAdapter.cpp
+    src/core/backends/rtl/Nrsc5FmDecoder.cpp
+    src/core/backends/rtl/HdFmReceiver.cpp
     src/core/backends/rtl/RtlReceiverRegistry.cpp # RFC #5468 prepared receiver ownership; no USB dependency
     ${AETHER_SETTINGS_SOURCES}
     src/core/RadioStateMemory.cpp   # RFC #4603 client-side radio memory
@@ -1393,6 +1396,8 @@ set(GUI_SOURCES
     src/gui/WaveformWidget.cpp
     src/gui/AetherClockApplet.cpp
     src/gui/WfmApplet.cpp
+    src/gui/WfmPresentationSettings.cpp
+    src/gui/WfmBroadcastOverlay.cpp
     src/gui/WfmLockScope.cpp
     src/gui/ClockAlignmentWidget.cpp
     src/gui/ClientEqApplet.cpp
@@ -2838,6 +2843,20 @@ if(WIN32 AND AETHER_BACKEND_RTL)
             message(FATAL_ERROR "Required RTL runtime missing: ${_rtl_dll}; run scripts/setup/setup-rtl-deps.ps1 and setup-fftw.ps1")
         endif()
     endforeach()
+endif()
+
+include(cmake/AetherHdFm.cmake)
+if(TARGET aether_nrsc5)
+    target_link_libraries(aethercore PRIVATE aether_nrsc5)
+    target_compile_definitions(aethercore PUBLIC AETHER_ENABLE_NRSC5=1)
+    # Explicit diagnostic: a user-supplied recorded IQ file drives the real
+    # embedded decoder. It is never run by CTest or built by the default target.
+    add_executable(hd_fm_recording_probe EXCLUDE_FROM_ALL tools/hd_fm_recording_probe.cpp)
+    target_link_libraries(hd_fm_recording_probe PRIVATE aethercore aether_nrsc5 Qt6::Core)
+    # Separate source-clock-paced production worker/mixer diagnostic. No USB,
+    # sockets or audio devices; intentionally absent from default builds/CTest.
+    add_executable(hd_fm_worker_recording_probe EXCLUDE_FROM_ALL tools/hd_fm_worker_recording_probe.cpp)
+    target_link_libraries(hd_fm_worker_recording_probe PRIVATE aethercore aether_nrsc5 Qt6::Core)
 endif()
 
 # Ulanzi Dial backend — one per platform.  All three implementations

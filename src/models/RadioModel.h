@@ -1777,6 +1777,8 @@ private:
     void dispatchSliceAgc(const SliceAgcRequest& request);
     void dispatchSliceDsp(const SliceDspRequest& request);
     void dispatchSliceAudio(const SliceAudioRequest& request);
+    void dispatchSliceWfmAudioMode(WfmAudioMode mode);
+    void dispatchSliceHdProgram(int program);
     void dispatchSliceWfmForceMono(bool forceMono);
     void dispatchSliceWfmDeemphasis(int microseconds);
     void dispatchSliceWfm(const SliceWfmRequest& request);

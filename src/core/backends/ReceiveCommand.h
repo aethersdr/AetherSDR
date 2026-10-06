@@ -100,14 +100,16 @@ struct SliceAudioRequest {
 };
 
 struct SliceWfmRequest {
-    enum class Field { ForceMono, Deemphasis };
+    enum class Field { ForceMono, Deemphasis, AudioMode, HdProgram };
     Field field{Field::ForceMono};
     int value{0};
 
     bool valid() const
     {
         return (field == Field::ForceMono && (value == 0 || value == 1))
-            || (field == Field::Deemphasis && (value == 50 || value == 75));
+            || (field == Field::Deemphasis && (value == 50 || value == 75))
+            || (field == Field::AudioMode && value >= 0 && value <= 2)
+            || (field == Field::HdProgram && value >= 0 && value < 8);
     }
 };
 
