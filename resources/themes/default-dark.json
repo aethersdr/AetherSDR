@@ -85,6 +85,9 @@
               "available": "{color.gray.500}",
               "inUse":     "{color.amber.500}"
             },
+            "menu": {
+              "background": "#eb0f0f1a"
+            },
             "otherTx": {
               "background": "#ffffff"
             },

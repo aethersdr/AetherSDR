@@ -705,6 +705,11 @@ int main(int argc, char** argv)
 
         auto* menuBarHost = new TitleBar(&menuHost);
         menuBarHost->setMenuBar(menuBar);
+        QMenu* viewMenu = menuBar->addMenu(QStringLiteral("&View"));
+        viewMenu->addAction(QStringLiteral("Plain item"));
+        QAction* checkItem = viewMenu->addAction(QStringLiteral("Checked item"));
+        checkItem->setCheckable(true);
+        checkItem->setChecked(true);
         QMenu* helpMenu = menuBar->addMenu(QStringLiteral("&Help"));   // added after the hand-off
         menuHost.resize(1400, 200);
         menuHost.show();
@@ -719,7 +724,7 @@ int main(int argc, char** argv)
         if (menuBtn && brand)
             check(menuBtn->geometry().right() < brand->x(), "hamburger leads the brand");
         if (appMenu) {
-            checkEqual(appMenu->actions().size(), 2,
+            checkEqual(appMenu->actions().size(), 3,
                        "hamburger mirrors menus added before and after setMenuBar");
         }
         if (menuBtn) {
@@ -750,6 +755,32 @@ int main(int argc, char** argv)
               "the hamburger and its menus, including one added later, are rounded");
         check(appMenu && appMenu->styleSheet().contains(QStringLiteral("border-radius: 8px")),
               "the hamburger menu panel carries the 8 px radius");
+        // Text starts at one x in every menu, with or without a check column.
+        auto textLeft = [](QMenu* m, QAction* row) {
+            QMetaObject::invokeMethod(m, "aboutToShow");   // as popup() would
+            m->adjustSize();
+            QImage img(m->size(), QImage::Format_ARGB32);
+            img.fill(Qt::black);
+            m->render(&img);
+            const QRect r = m->actionGeometry(row);
+            for (int x = 0; x < img.width(); ++x)
+                for (int y = r.top(); y <= r.bottom(); ++y)
+                    if (img.pixelColor(x, y).lightness() > 150)
+                        return x;
+            return -1;
+        };
+        const int plainLeft = textLeft(fileMenu, shortcutAct);
+        const int checkMenuLeft = textLeft(viewMenu, viewMenu->actions().first());
+        check(plainLeft > 0 && plainLeft == checkMenuLeft,
+              "menu text starts at the same x with or without a check column");
+        std::fprintf(stderr, "  menu text x: plain=%d with-checks=%d\n", plainLeft, checkMenuLeft);
+        const QColor menuBg = ThemeManager::instance().color(appMenu, QStringLiteral("color.titlebar.menu.background"));
+        const QString menuBgCss = QStringLiteral("background: rgba(%1, %2, %3, ")
+            .arg(menuBg.red()).arg(menuBg.green()).arg(menuBg.blue());
+        check(appMenu && menuBg.alpha() < 255 && menuBg.alpha() > 200
+                  && appMenu->styleSheet().contains(menuBgCss),
+              "menu panels use the slightly see-through menu background");
+
         QMenu* lateSubmenu = fileMenu->addMenu(QStringLiteral("Recent"));
         check(!rounded(lateSubmenu), "a submenu added later is not rounded until its parent opens");
 

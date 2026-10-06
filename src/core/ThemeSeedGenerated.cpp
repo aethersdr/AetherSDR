@@ -165,6 +165,7 @@ void ThemeManager::seedGeneratedDefaults()
     m_tokens.insert("color.titlebar.caption.semantic.inactive", QString("#565a60"));
     m_tokens.insert("color.titlebar.caption.semantic.maximize", QString("#28c840"));
     m_tokens.insert("color.titlebar.caption.semantic.minimize", QString("#febc2e"));
+    m_tokens.insert("color.titlebar.menu.background", QString("#eb0f0f1a"));
     m_tokens.insert("color.titlebar.otherTx.background", QString("#ffffff"));
     m_tokens.insert("color.titlebar.status.available", QString("#506070"));
     m_tokens.insert("color.titlebar.status.connected", QString("#4dd87a"));

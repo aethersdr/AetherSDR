@@ -49,7 +49,10 @@ it.
 The hamburger's menus and every submenu under them are rounded (8 px, like the
 radio tabs): `roundMenuTree()` gives each a see-through, shadowless window
 before it first opens, reaching later submenus from their parent's
-`aboutToShow`.
+`aboutToShow`. Their panels use `color.titlebar.menu.background` (`background.0` at
+0.92 alpha), and item text starts at one x in every menu: a 14 px check column,
+with the same 14 px added to the left padding of menus that have no checkable
+item (`syncMenuCheckColumn()`, refreshed before each show).
 
 - **macOS:** Qt keeps the real `NSWindow`, native controls, corners, shadow
   and window-state behaviour. `mac/NativeWindowTitle.mm` sets
