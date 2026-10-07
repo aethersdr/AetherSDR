@@ -367,7 +367,7 @@ AetherSDR recognizes:
 - The spring-loaded shuttle ring
 - Five buttons
 
-The **jog wheel** tunes step by step. The **shuttle ring** tunes continuously while you hold it. Turning it moves one step straight away, like a jog detent. After that, a small turn creeps (about 20 Hz per second) and full deflection sweeps the band (about 100 kHz per second). Letting go stops tuning. The top speed is the same whatever step size is selected. With a large step, the first positions still move at least a couple of steps per second.
+The **jog wheel** tunes step by step. The **shuttle ring** tunes continuously while you hold it. Turning it moves one step almost at once (after about 60 ms, so the spring's bounce on release cannot step backwards), like a jog detent. After that, a small turn creeps (about 20 Hz per second) and full deflection sweeps the band (about 100 kHz per second). Letting go stops tuning. The top speed is the same whatever step size is selected. With a large step, the first positions still move at least a couple of steps per second.
 
 Set the ring up in `Settings > Radio Setup... > Serial`, in the **Shuttle Ring** group:
 

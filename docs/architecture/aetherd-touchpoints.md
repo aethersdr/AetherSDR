@@ -4,7 +4,7 @@
 
 Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine-design.md) §2, §10). One row per engine header the UI includes; converting a touchpoint means the UI reaches that surface through the versioned protocol instead of the header.
 
-**Totals:** 240 touchpoint headers (201 core, 39 models) — 240/240 tagged, 0/240 converted.
+**Totals:** 241 touchpoint headers (202 core, 39 models) — 241/241 tagged, 0/241 converted.
 
 | Header | Includers | Tag | Status |
 |---|---:|---|---|
@@ -67,7 +67,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/FreeDvClient.h` | 4 | universal — FreeDV Reporter spot client (qso.freedv.org); radio-agnostic spotting fed by canonical freq/TX + RADE SNR | unconverted |
 | `core/GpuSelector.h` | 2 | ui-support — GPU enumeration + persisted QRhi render-adapter choice applied at app startup; pure client rendering plumbing | unconverted |
 | `core/GreenHeronProtocol.h` | 1 | peripheral(greenheron) — Pure framing/parsing/encoding for the Green Heron Everyware wire protocol — the antenna switches and the rotator both, which share one TCP connection. No sockets, no timers, so the parser can be tested against verbatim captured bytes. Peripheral accessory transport, NOT radio-family wire and NOT behind the IRadioBackend radio seam. See docs/green-heron-everyware.md. | unconverted |
-| `core/HidEncoderManager.h` | 2 | ui-support — USB HID control-surface driver (RC-28, StreamDeck+, TMate 2): desktop input device plumbing, not radio state | unconverted |
+| `core/HidEncoderManager.h` | 3 | ui-support — USB HID control-surface driver (RC-28, StreamDeck+, TMate 2): desktop input device plumbing, not radio state | unconverted |
 | `core/HostVoiceChainPolicy.h` | 1 | mixed(flex) — Decides when the Flex-shaped voice controls (PROC, 8-band graphic EQ) may write the SHARED ClientComp/ClientEq objects the Aetherial strip also edits — two surfaces onto one object, so 'may we write' has a wrong answer (#4609). Universal DSP-ownership question, answered today from Flex-shaped state. | unconverted |
 | `core/IConnectionAutomation.h` | 1 | ui-support — Gui-free connect/disconnect/dialog hook the automation bridge drives; bridge plumbing, not radio state. | unconverted |
 | `core/IambicKeyer.h` | 4 | universal — Radio-agnostic software iambic state machine for local sidetone + CW paddle/keying intent; no vendor coupling. | unconverted |
@@ -136,6 +136,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/SettingsSanitizer.h` | 2 | ui-support — Recursive secret-safe rendering of the settings store for the support bundle and `--config export` (RFC #4603). Diagnostics plumbing. | unconverted |
 | `core/ShortcutManager.h` | 5 | ui-support — Keyboard shortcut registry: QShortcut bindings, persistence, conflict checks — client input plumbing, no radio state. | unconverted |
 | `core/ShutdownTrace.h` | 2 | ui-support — Process-local shutdown diagnostics and support-log breadcrumbs; lifecycle plumbing, not radio state. | unconverted |
+| `core/ShuttleRateIntegrator.h` | 1 | ui-support — pure shuttle-ring rate arithmetic for the desktop HID surface, no radio state | unconverted |
 | `core/SignalClassifier.h` | 1 | universal — ONNX CNN voice/carrier classifier over spectrogram patches; radio-agnostic engine DSP/analysis feature | unconverted |
 | `core/SpeConnection.h` | 3 | peripheral(spe) — Direct serial/ser2net client for the SPE Expert amplifier line (1.5K-FA primary target, protocol shared across 1.3K-FA/2K-FA) — a standalone USB/RS-232 accessory with no FlexRadio awareness at all, same precedent as core/AcomConnection.h. Not radio-family wire; a peripheral accessory, NOT behind the IRadioBackend radio seam. See docs/architecture/spe-expert-amplifier-design.md. | unconverted |
 | `core/SpeProtocol.h` | 2 | peripheral(spe) — Wire codec for standalone SPE Expert amplifiers over serial/ser2net. The accessory connects independently of the radio and stays outside IRadioBackend, matching the ACOM/VKAMP peripheral precedent. | unconverted |

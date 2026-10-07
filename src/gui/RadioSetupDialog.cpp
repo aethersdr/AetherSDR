@@ -8445,10 +8445,10 @@ QWidget* RadioSetupDialog::buildSerialTab()
         vbox->addWidget(group);
     }
 
-    // ── Contour shuttle ring (#5928) ─────────────────────────────────────────
+    // Contour shuttle ring (#5928)
     {
         auto* group = new QGroupBox("Shuttle Ring (ShuttleXpress / ShuttlePro)");
-        group->setStyleSheet(kGroupStyle);
+        ThemeManager::instance().applyStyleSheet(group, kGroupStyle);
         auto* grid = new QGridLayout(group);
         grid->setSpacing(6);
 
@@ -8457,11 +8457,10 @@ QWidget* RadioSetupDialog::buildSerialTab()
             "turn creeps, full deflection sweeps the band, letting go stops. "
             "Speed does not depend on the step size.");
         note->setWordWrap(true);
-        note->setStyleSheet(kLabelStyle);
+        ThemeManager::instance().applyStyleSheet(note, kLabelStyle);
         grid->addWidget(note, 0, 0, 1, 3);
 
-        // Deliberately limited to tuning-like actions: a held ring driving
-        // RF power or volume at a sustained rate would be unsafe or useless.
+        // Tuning-like actions only: a held ring on RF power or volume is unsafe.
         static const struct { const char* id; const char* label; } kShuttleActions[] = {
             {"WheelFrequency", "Tune Slice"},
             {"WheelRit",       "RIT (Receive Incremental Tuning)"},
@@ -8478,7 +8477,8 @@ QWidget* RadioSetupDialog::buildSerialTab()
                             const QString& field, const QString& dflt) {
             grid->addWidget(new QLabel(label), row, 0);
             auto* combo = new QComboBox;
-            combo->setStyleSheet(QString(kEditStyle).replace("QLineEdit", "QComboBox"));
+            ThemeManager::instance().applyStyleSheet(
+                combo, QString(kEditStyle).replace("QLineEdit", "QComboBox"));
             for (const auto& it : items)
                 combo->addItem(QString::fromLatin1(it.label), QString::fromLatin1(it.id));
             const int idx = combo->findData(HidEncoderManager::shuttleMappingField(field, dflt));

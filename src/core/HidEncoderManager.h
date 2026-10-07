@@ -73,9 +73,8 @@ public:
     static QString rc28MappingField(const QString& field, const QString& dflt);
     static void setRc28MappingField(const QString& field, const QString& value);
 
-    // Contour shuttle ring settings, same single-JSON-key pattern under
-    // "ShuttleMapping" (Principle V, #5928). Fields: action
-    // (WheelFrequency / WheelRit / WheelXit / None), speed (Slow / Normal /
+    // Contour shuttle ring settings, one JSON object under "ShuttleMapping":
+    // action (WheelFrequency / WheelRit / WheelXit / None), speed (Slow / Normal /
     // Fast). Direction follows the shared HidEncoderInvertDir flag.
     static QString shuttleMappingField(const QString& field, const QString& dflt);
     static void setShuttleMappingField(const QString& field, const QString& value);

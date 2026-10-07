@@ -623,6 +623,12 @@
   "split": "",
   "confidence": "high"
  },
+ "core/ShuttleRateIntegrator.h": {
+  "tag": "ui-support",
+  "note": "pure shuttle-ring rate arithmetic for the desktop HID surface, no radio state",
+  "split": "",
+  "confidence": "high"
+ },
  "core/SignalClassifier.h": {
   "tag": "universal",
   "note": "ONNX CNN voice/carrier classifier over spectrogram patches; radio-agnostic engine DSP/analysis feature",
