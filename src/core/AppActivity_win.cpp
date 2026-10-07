@@ -73,11 +73,14 @@ void keepAppActive()
                                                | PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION);
     if (timerError != 0) {
         qCInfo(lcAudio) << "AppActivity: timer-resolution opt-out unsupported, error"
-                        << timerError << "(execution-speed opt-out still applies)";
+                        << timerError << (speedError == 0
+                            ? "(execution-speed opt-out still applies)"
+                            : "(execution-speed opt-out also failed)");
     }
 
+    // Either call carrying EXECUTION_SPEED leaves HighQoS in effect.
     qCInfo(lcAudio) << "AppActivity: idle sleep blocked" << noSleep
-                    << "HighQoS" << (speedError == 0)
+                    << "HighQoS" << (speedError == 0 || timerError == 0)
                     << "timer resolution honoured" << (timerError == 0);
 }
 
