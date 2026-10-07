@@ -30,10 +30,17 @@ public:
     int activeId() const { return m_activeId; }
     bool enabled() const { return m_enabled; }
     // The radio does not refuse overlapping operations, so a new one may only
-    // start from idle. Unknown (no status yet) fails open.
-    bool canStartOperation() const { return m_status == Idle || m_status == Unknown; }
+    // start from idle (Unknown, before any status, fails open), with no start
+    // of ours still awaiting its reply and no WAV transfer running.
+    bool canStartOperation() const;
+    // The start we sent and are still waiting on, or Unknown for none.
+    Status pendingOperation() const { return m_pending; }
+    // DvkWavTransfer reports a running import or export here.
+    void setTransferActive(bool active);
     // The radio answered a dvk command with 50004001 (feature not licensed).
     bool licenseRefused() const { return m_licenseRefused; }
+    // Latches a 50004001 refusal from any dvk path, including WAV transfers.
+    void noteRefusal(uint code);
     const QVector<DvkRecording>& recordings() const { return m_recordings; }
 
     static QString defaultName(int id);
@@ -80,6 +87,9 @@ signals:
     // the user sees the failure instead of a stuck "checked" REC button.
     void commandFailed(const QString& verb, int id, uint code, const QString& message);
     void licenseRefusedChanged(bool refused);
+    // canStartOperation() may have changed (a start sent or answered, a
+    // transfer begun or ended).
+    void admissionChanged();
 
 private:
     static constexpr uint kNotLicensed = 0x50004001u;
@@ -88,6 +98,10 @@ private:
     int m_activeId{-1};
     bool m_enabled{false};
     bool m_licenseRefused{false};
+    Status m_pending{Unknown};
+    bool m_transferActive{false};
+
+    void setPending(Status pending);
     QVector<DvkRecording> m_recordings;
 
     DvkRecording* findRecording(int id);

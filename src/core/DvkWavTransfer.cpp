@@ -13,7 +13,7 @@
 namespace AetherSDR {
 
 DvkWavTransfer::DvkWavTransfer(RadioModel* model, QObject* parent)
-    : QObject(parent), m_model(model)
+    : QObject(parent), m_model(model), m_dvk(model ? &model->dvkModel() : nullptr)
 {
     m_timeout = new QTimer(this);
     m_timeout->setSingleShot(true);
@@ -38,6 +38,24 @@ DvkWavTransfer::~DvkWavTransfer()
 bool DvkWavTransfer::canSendCommands() const
 {
     return m_commandSender || m_model;
+}
+
+bool DvkWavTransfer::isBusy() const
+{
+    return m_transferring
+        || (m_sinceUpload.isValid() && m_sinceUpload.elapsed() < FILE_SERVER_SETTLE_MS);
+}
+
+bool DvkWavTransfer::isRadioPeer(const QHostAddress& peer, const QHostAddress& radio)
+{
+    return radio.isNull() || peer.isEqual(radio, QHostAddress::ConvertV4MappedToIPv4);
+}
+
+void DvkWavTransfer::reportRefusal(int code)
+{
+    if (m_dvk) {
+        m_dvk->noteRefusal(static_cast<uint>(code));
+    }
 }
 
 void DvkWavTransfer::sendCommand(const QString& command, ReplyCallback callback)
@@ -97,6 +115,12 @@ quint64 DvkWavTransfer::begin(Direction direction, int slotId)
     m_transferring = true;
     m_cancelled = false;
     m_finished = false;
+    m_uploadPort = 0;
+    m_uploadFallbackTried = false;
+    m_uploadConnected = false;
+    if (m_dvk) {
+        m_dvk->setTransferActive(true);
+    }
     return m_operationGeneration;
 }
 
@@ -118,6 +142,10 @@ void DvkWavTransfer::download(int slotId, const QString& savePath)
 {
     if (m_transferring) {
         emit finished(false, "Transfer already in progress");
+        return;
+    }
+    if (isBusy()) {
+        emit finished(false, "The radio's file server is still busy; try again in a moment");
         return;
     }
 
@@ -161,6 +189,7 @@ void DvkWavTransfer::handleDownloadPortReceived(quint64 generation, quint64 requ
     m_portRequestId = 0;
 
     if (code != 0) {
+        reportRefusal(code);
         finish(false, QString("Radio rejected download — %1")
                    .arg(DvkModel::dvkErrorString(static_cast<uint>(code))),
                false);
@@ -221,10 +250,20 @@ bool DvkWavTransfer::openDownloadFile()
 void DvkWavTransfer::handleNewConnection(quint64 generation, QTcpServer* server)
 {
     if (!isCurrentServer(generation, server) || m_client) return;
-    stopConnectTimeout();
 
-    m_client = m_server->nextPendingConnection();
-    if (!m_client) return;
+    QTcpSocket* pending = m_server->nextPendingConnection();
+    if (!pending) return;
+    // Anyone on the LAN can reach the listening port; only the radio may
+    // write the operator's file. Others are dropped and the wait continues.
+    if (m_model && !isRadioPeer(pending->peerAddress(), m_model->radioAddress())) {
+        qWarning() << "DvkWavTransfer: rejected export connection from"
+                   << pending->peerAddress().toString();
+        pending->abort();
+        pending->deleteLater();
+        return;
+    }
+    stopConnectTimeout();
+    m_client = pending;
 
     m_server->close();
 
@@ -335,6 +374,10 @@ void DvkWavTransfer::upload(int slotId, const QString& filePath)
         emit finished(false, "Transfer already in progress");
         return;
     }
+    if (isBusy()) {
+        emit finished(false, "The radio's file server is still busy; try again in a moment");
+        return;
+    }
 
     if (!canSendCommands()) {
         emit finished(false, "The radio connection was lost before the transfer could start.");
@@ -394,6 +437,7 @@ void DvkWavTransfer::handleUploadSlotAccepted(quint64 generation, quint64 reques
     m_portRequestId = 0;
 
     if (code != 0) {
+        reportRefusal(code);
         finish(false, QString("Radio rejected upload — %1")
                    .arg(DvkModel::dvkErrorString(static_cast<uint>(code))),
                false);
@@ -404,8 +448,13 @@ void DvkWavTransfer::handleUploadSlotAccepted(quint64 generation, quint64 reques
     // generic file-upload server under the dvk_recording type.
     const quint64 portRequestId = nextAsyncId();
     m_portRequestId = portRequestId;
-    sendCommand(QString("file upload %1 dvk_recording").arg(m_uploadData.size()),
-                makeUploadPortCallback(generation, portRequestId));
+    ReplyCallback onPort = makeUploadPortCallback(generation, portRequestId);
+    if (m_uploadPortRequester) {
+        m_uploadPortRequester(m_uploadData.size(), std::move(onPort));
+    } else if (m_model) {
+        m_model->requestFileUploadPort(m_uploadData.size(), QStringLiteral("dvk_recording"),
+                                       std::move(onPort));
+    }
 }
 
 std::function<void(int, const QString&)> DvkWavTransfer::makeUploadPortCallback(
@@ -427,6 +476,7 @@ void DvkWavTransfer::handleUploadPortReceived(quint64 generation, quint64 reques
     m_portRequestId = 0;
 
     if (code != 0) {
+        reportRefusal(code);
         finish(false, QString("Radio rejected upload — %1")
                    .arg(DvkModel::dvkErrorString(static_cast<uint>(code))),
                false);
@@ -441,9 +491,18 @@ void DvkWavTransfer::handleUploadPortReceived(quint64 generation, quint64 reques
         port = DEFAULT_UPLOAD_PORT;
     }
 
+    openUploadSocket(generation, port);
+}
+
+void DvkWavTransfer::openUploadSocket(quint64 generation, int port)
+{
     qDebug() << "DvkWavTransfer: connecting to upload port" << port << "for slot" << m_slotId;
     emit statusChanged(QString("Connecting to port %1…").arg(port));
+    if (!isCurrent(generation)) {
+        return;
+    }
 
+    m_uploadPort = port;
     m_client = new QTcpSocket(this);
     QPointer<DvkWavTransfer> transfer(this);
     QPointer<QTcpSocket> socket(m_client);
@@ -497,6 +556,7 @@ std::function<void()> DvkWavTransfer::makeUploadConnectCallback(
 void DvkWavTransfer::handleUploadConnected(quint64 generation, QTcpSocket* socket)
 {
     if (!isCurrentSocket(generation, socket)) return;
+    m_uploadConnected = true;
     stopConnectTimeout();
 
     qDebug() << "DvkWavTransfer: connected, sending" << m_uploadData.size() << "bytes";
@@ -579,6 +639,21 @@ void DvkWavTransfer::handleUploadError(quint64 generation, QTcpSocket* socket)
 {
     if (!isCurrentSocket(generation, socket)) return;
 
+    // As FirmwareUploader: a port the radio named but would not connect gets
+    // one retry on the file server's usual 42607. An error after connecting is
+    // a failed upload, not a wrong port.
+    if (!m_uploadFallbackTried && !m_uploadConnected && m_uploadPort != 0
+        && m_uploadPort != DEFAULT_UPLOAD_PORT) {
+        m_uploadFallbackTried = true;
+        m_client->disconnect(this);
+        m_client->abort();
+        m_client->deleteLater();
+        m_client = nullptr;
+        stopConnectTimeout();
+        openUploadSocket(generation, DEFAULT_UPLOAD_PORT);
+        return;
+    }
+
     const QString err = m_client ? m_client->errorString() : "Unknown error";
     finish(false, "Upload error: " + err, false);
 }
@@ -629,8 +704,14 @@ void DvkWavTransfer::cleanup(bool discardDownload)
     // already queued for this transfer must not match a replacement started
     // from the finished() handler below.
     invalidateOperation();
+    if (m_direction == Upload) {
+        m_sinceUpload.start();
+    }
     m_transferring = false;
     m_direction = None;
+    if (m_dvk) {
+        m_dvk->setTransferActive(false);
+    }
 
     // Disconnect every socket/server signal BEFORE tearing down so abort() and
     // deleteLater() cannot re-enter our slots and touch freed objects.

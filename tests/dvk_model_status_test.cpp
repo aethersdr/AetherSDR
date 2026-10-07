@@ -163,16 +163,9 @@ int main(int argc, char* argv[])
         Sent sent;
         capture(model, sent);
         model.clear(7);
-        report("clear sends only the clear until the radio accepts it",
-               sent.commands == QStringList{QStringLiteral("dvk clear id=7")});
         model.handleCommandResponse(QStringLiteral("clear"), 7, 0u, QString());
-        report("an accepted clear restores the default name (fw 4.2.20 keeps it)",
-               sent.commands == QStringList{QStringLiteral("dvk clear id=7"),
-                                            QStringLiteral("dvk set_name name=\"Recording 7\" id=7")});
-        model.clear(8);
-        model.handleCommandResponse(QStringLiteral("clear"), 8, 0xE2000000u, QString());
-        report("a refused clear sends no rename",
-               sent.commands.size() == 3 && sent.commands.last() == QStringLiteral("dvk clear id=8"));
+        report("clear sends only the clear; the radio's name stands (fw 4.2.20 keeps it)",
+               sent.commands == QStringList{QStringLiteral("dvk clear id=7")});
     }
     {
         DvkModel model;
@@ -193,6 +186,50 @@ int main(int argc, char* argv[])
         const QByteArray utf8 = DvkModel::sanitizeName(wide).toUtf8();
         report("multi-byte name never exceeds 61 bytes",
                utf8.size() <= DvkModel::kMaxNameBytes && utf8.size() >= DvkModel::kMaxNameBytes - 1);
+    }
+
+    // ── One operation at a time, before the radio echoes it (#6244 item 6) ──
+    {
+        DvkModel model;
+        feed(model, QStringLiteral("S1|dvk status=idle enabled=1"));
+        report("idle admits a start", model.canStartOperation());
+        model.previewStart(1);
+        report("a sent start blocks the next one before any echo",
+               !model.canStartOperation() && model.pendingOperation() == DvkModel::Preview);
+        feed(model, QStringLiteral("S1|dvk status=preview id=1 enabled=1"));
+        model.handleCommandResponse(QStringLiteral("preview_start"), 1, 0u, QString());
+        report("the reply settles the pending start; the status still blocks",
+               model.pendingOperation() == DvkModel::Unknown && !model.canStartOperation());
+        feed(model, QStringLiteral("S0|dvk status=idle enabled=1"));
+        report("idle again admits a start", model.canStartOperation());
+
+        model.recStart(2);
+        model.handleCommandResponse(QStringLiteral("rec_start"), 2, 0x50004001u, QString());
+        report("a refused start releases admission", model.canStartOperation());
+
+        model.setTransferActive(true);
+        report("a running WAV transfer blocks a start", !model.canStartOperation());
+        model.setTransferActive(false);
+        report("the transfer's end admits again", model.canStartOperation());
+
+        model.playbackStart(3);
+        model.setTransferActive(true);
+        model.reset();
+        report("disconnect clears a pending start and transfer",
+               model.pendingOperation() == DvkModel::Unknown && model.canStartOperation());
+    }
+    {
+        DvkModel model;
+        model.noteRefusal(0x50000053u);
+        report("a non-license refusal does not latch", !model.licenseRefused());
+        model.noteRefusal(0x50004001u);
+        report("noteRefusal latches 50004001 from any path", model.licenseRefused());
+    }
+    {
+        const QString name = QString(59, QLatin1Char('A')) + QString::fromUtf8("\xF0\x9F\x93\xBB");
+        const QString clean = DvkModel::sanitizeName(name);
+        report("a trailing emoji over the byte limit is dropped whole, not split",
+               clean == QString(59, QLatin1Char('A')) && !clean.back().isHighSurrogate());
     }
 
     // ── 50004001 is the license signal ──────────────────────────────────────

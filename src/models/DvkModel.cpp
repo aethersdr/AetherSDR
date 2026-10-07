@@ -19,6 +19,7 @@ DvkModel::DvkModel(QObject* parent) : QObject(parent) {}
 
 void DvkModel::recStart(int id)
 {
+    setPending(Recording);
     emit replyCommandReady(QString("dvk rec_start id=%1").arg(id), "rec_start", id);
 }
 void DvkModel::recStop()
@@ -27,6 +28,7 @@ void DvkModel::recStop()
 }
 void DvkModel::previewStart(int id)
 {
+    setPending(Preview);
     emit replyCommandReady(QString("dvk preview_start id=%1").arg(id), "preview_start", id);
 }
 void DvkModel::previewStop()
@@ -35,6 +37,7 @@ void DvkModel::previewStop()
 }
 void DvkModel::playbackStart(int id)
 {
+    setPending(Playback);
     emit replyCommandReady(QString("dvk playback_start id=%1").arg(id), "playback_start", id);
 }
 void DvkModel::playbackStop()
@@ -43,6 +46,8 @@ void DvkModel::playbackStop()
 }
 void DvkModel::clear(int id)
 {
+    // The radio is authoritative: fw 4.2.20 `clear` erases the audio and keeps
+    // the slot's name, and the client leaves it that way.
     emit replyCommandReady(QString("dvk clear id=%1").arg(id), "clear", id);
 }
 void DvkModel::setName(int id, const QString& name)
@@ -68,8 +73,15 @@ QString DvkModel::sanitizeName(const QString& name)
     clean.remove(QLatin1Char('\''));
     clean.remove(QLatin1Char('|'));
     clean = clean.simplified();
+    // The limit is in UTF-8 bytes; never split a surrogate pair while trimming.
     while (clean.toUtf8().size() > kMaxNameBytes) {
-        clean.chop(1);
+        const qsizetype last = clean.size() - 1;
+        if (last > 0 && clean.at(last).isLowSurrogate()
+            && clean.at(last - 1).isHighSurrogate()) {
+            clean.chop(2);
+        } else {
+            clean.chop(1);
+        }
     }
     return clean.trimmed();
 }
@@ -80,23 +92,51 @@ void DvkModel::handleCommandResponse(const QString& verb, int id, uint code,
                                      const QString& body)
 {
     Q_UNUSED(body);
+    // The radio publishes a start's status before its reply, so by the reply
+    // the status already holds the truth either way and the start is settled.
+    if (verb.endsWith(QLatin1String("_start"))) {
+        setPending(Unknown);
+    }
     if (code == 0) {
-        // fw 4.2.20 `clear` erases the audio but keeps the name; the wiki says
-        // the slot returns to its default name, so ask for that once it lands.
-        if (verb == QLatin1String("clear")) {
-            setName(id, defaultName(id));
-        }
         return;  // status broadcast drives the UI
     }
 
-    if (code == kNotLicensed && !m_licenseRefused) {
-        m_licenseRefused = true;
-        emit licenseRefusedChanged(true);
-    }
+    noteRefusal(code);
 
     qWarning() << "DvkModel: command" << verb << "id=" << id
                << "failed with code 0x" << QString::number(code, 16);
     emit commandFailed(verb, id, code, dvkErrorString(code));
+}
+
+bool DvkModel::canStartOperation() const
+{
+    return (m_status == Idle || m_status == Unknown) && m_pending == Unknown && !m_transferActive;
+}
+
+void DvkModel::setPending(Status pending)
+{
+    if (m_pending == pending) {
+        return;
+    }
+    m_pending = pending;
+    emit admissionChanged();
+}
+
+void DvkModel::setTransferActive(bool active)
+{
+    if (m_transferActive == active) {
+        return;
+    }
+    m_transferActive = active;
+    emit admissionChanged();
+}
+
+void DvkModel::noteRefusal(uint code)
+{
+    if (code == kNotLicensed && !m_licenseRefused) {
+        m_licenseRefused = true;
+        emit licenseRefusedChanged(true);
+    }
 }
 
 QString DvkModel::dvkErrorString(uint code)
@@ -213,6 +253,8 @@ void DvkModel::reset()
     m_activeId = -1;
     m_enabled = false;
     m_licenseRefused = false;
+    m_pending = Unknown;
+    m_transferActive = false;
     const QVector<DvkRecording> gone = std::exchange(m_recordings, {});
     emit statusChanged(m_status, m_activeId);
     for (const DvkRecording& r : gone) {
@@ -221,6 +263,7 @@ void DvkModel::reset()
     if (wasRefused) {
         emit licenseRefusedChanged(false);
     }
+    emit admissionChanged();
 }
 
 } // namespace AetherSDR

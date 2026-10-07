@@ -246,6 +246,10 @@ public:
     QString licenseSubscription()   const { return m_licenseSubscription; }
     LicenseFeatureState licenseFeature(const QString& name) const;
     bool licenseFeatureSeen(const QString& name) const;
+    // The radio refused a dvk command as unlicensed (50004001); the reliable
+    // DVK entitlement signal, since `dvk … enabled=` is always 1. Changes emit
+    // licenseFeaturesChanged() like the other entitlement inputs.
+    bool dvkLicenseRefused() const { return m_dvkModel.licenseRefused(); }
     bool licenseFeatureEnabled(const QString& name) const;
     QString licenseFeatureReason(const QString& name) const;
 

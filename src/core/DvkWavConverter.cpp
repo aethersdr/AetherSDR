@@ -90,7 +90,9 @@ QByteArray encodePcm16Mono(const std::vector<float>& samples)
     put32(dataBytes);
 
     for (const float s : samples) {
-        const float clamped = std::clamp(s, -1.0F, 1.0F);
+        // A mix of near-FLT_MAX channels can reach inf, and the resampler NaN;
+        // std::clamp passes NaN through, and lround(NaN) is unspecified.
+        const float clamped = std::isfinite(s) ? std::clamp(s, -1.0F, 1.0F) : 0.0F;
         put16(static_cast<quint16>(static_cast<qint16>(std::lround(clamped * 32767.0F))));
     }
     return out;
@@ -187,7 +189,7 @@ QByteArray convertForRadio(const QByteArray& wav, QString& error)
     }
 
     // Resampler output lags by its group delay; drain() returns the tail, and
-    // the leading delay is trimmed so the clip keeps its exact length.
+    // the leading delay is trimmed so the clip keeps its timing and length.
     const double ratio = static_cast<double>(kRadioSampleRate) / fmt.sampleRate;
     Resampler resampler(fmt.sampleRate, kRadioSampleRate);
     QByteArray converted = resampler.process(mono.data(), static_cast<int>(mono.size()));

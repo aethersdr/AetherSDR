@@ -14,6 +14,7 @@
 #include <QDir>
 #include <QRegularExpression>
 #include "core/ThemeManager.h"
+#include "core/TxKeyingMarker.h"
 
 namespace AetherSDR {
 
@@ -77,6 +78,7 @@ DvkPanel::DvkPanel(DvkModel* model, QWidget* parent)
         fkeyBtn->setFixedWidth(34);
         fkeyBtn->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Expanding);
         fkeyBtn->setToolTip(QString("Play recording %1 on-air (F%1)").arg(id));
+        markTxKeying(fkeyBtn);   // plays the slot on air → keys TX
         rowLayout->addWidget(fkeyBtn);
 
         auto* nameLabel = new QLabel(QString("Recording %1").arg(id));
@@ -166,6 +168,7 @@ DvkPanel::DvkPanel(DvkModel* model, QWidget* parent)
     m_playBtn->setAccessibleDescription(
         QStringLiteral("Transmits the selected slot on the transmit slice."));
     m_playBtn->setCheckable(true);
+    markTxKeying(m_playBtn);   // plays the selected slot on air → keys TX
     m_playBtn->setStyleSheet(QString(kBtnStyle) +
         "QPushButton:checked { background: #33aa33; color: #fff; }");
     btnRow->addWidget(m_playBtn);
@@ -291,12 +294,18 @@ void DvkPanel::updateSlotAccessibility(int id, const QString& name, int duration
     m_rowFrames[idx]->setAccessibleName(QString("Slot %1: %2, %3").arg(id).arg(name, length));
 
     auto* play = m_fkeyBtns[idx];
-    play->setAccessibleName(QString("Play slot %1: %2").arg(id).arg(name));
+    const QString playName = QString("Play slot %1: %2").arg(id).arg(name);
+    const bool changed = play->accessibleName() != playName;
+    play->setAccessibleName(playName);
     play->setAccessibleDescription(durationMs > 0
         ? QString("%1 recording. Transmits on the transmit slice (F%2).").arg(length).arg(id)
         : QStringLiteral("Empty slot, nothing to play."));
-    QAccessibleEvent ev(play, QAccessible::NameChanged);
-    QAccessible::updateAccessibility(&ev);
+    // Announce a real change the operator can see; slot loads and resets on
+    // connect and disconnect would otherwise be a burst of a dozen.
+    if (changed && play->isVisible()) {
+        QAccessibleEvent ev(play, QAccessible::NameChanged);
+        QAccessible::updateAccessibility(&ev);
+    }
 }
 
 void DvkPanel::announceStatus(const QString& text)
@@ -321,7 +330,14 @@ void DvkPanel::togglePlayback(int id)
 
 void DvkPanel::stopActiveOperation()
 {
-    switch (m_model->status()) {
+    // Before the radio has echoed a start (or before any status at all), stop
+    // what we asked for: STOP must never be weaker than the start it follows.
+    DvkModel::Status active = m_model->status();
+    if (active != DvkModel::Recording && active != DvkModel::Playback
+        && active != DvkModel::Preview) {
+        active = m_model->pendingOperation();
+    }
+    switch (active) {
     case DvkModel::Recording: m_model->recStop(); break;
     case DvkModel::Playback:  m_model->playbackStop(); break;
     case DvkModel::Preview:   m_model->previewStop(); break;
@@ -569,7 +585,7 @@ void DvkPanel::showContextMenu(int id, const QPoint& globalPos)
 
     int dur = durationForSlot(id);
     bool hasRecording = dur > 0;
-    bool notBusy = m_wavTransfer && !m_wavTransfer->isTransferring();
+    bool notBusy = m_wavTransfer && !m_wavTransfer->isBusy();
     // Clearing or loading a slot mid-operation can leave the DVK inconsistent.
     const bool idle = m_model->canStartOperation();
     clearAct->setEnabled(hasRecording && idle && notBusy);
@@ -635,7 +651,8 @@ void DvkPanel::startRename(int id)
     m_renameEdit->setMaxLength(DvkModel::kMaxNameBytes);
     m_renameEdit->setAccessibleName(QString("Slot %1 name").arg(id));
     m_renameEdit->setAccessibleDescription(QStringLiteral(
-        "Up to 61 characters. Quotes and | are removed. Enter saves, Escape cancels."));
+        "Up to 61 UTF-8 bytes (61 plain letters, fewer with accents or symbols). "
+        "Quotes and | are removed. Enter saves, Escape cancels."));
 
     // Swap label out, edit in (same layout position)
     int labelIdx = rowLayout->indexOf(label);

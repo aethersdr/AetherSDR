@@ -134,7 +134,6 @@
 #include "VoiceModeGate.h"
 #include "DvkPanel.h"
 #include "core/DvkWavTransfer.h"
-#include "models/DvkModel.h"
 #include "AmpApplet.h"
 #include "MeterApplet.h"
 #include "HealthApplet.h"
@@ -1906,8 +1905,6 @@ MainWindow::MainWindow(QWidget* parent)
     // returns the indicator to its unknown-entitlement, fail-open state before
     // the next radio's statuses arrive.)
     connect(&m_radioModel, &RadioModel::licenseFeaturesChanged, this,
-            &MainWindow::updateKeyerAvailability);
-    connect(&m_radioModel.dvkModel(), &DvkModel::licenseRefusedChanged, this,
             &MainWindow::updateKeyerAvailability);
 
     // Client-side DSP buttons (NR2 / NR4 / MNR / BNR / DFNR / RN2) now
@@ -10425,7 +10422,7 @@ void MainWindow::updateKeyerAvailability()
         txIsSsb,
         m_radioModel.licenseFeatureSeen(kDvkLicenseFeature),
         m_radioModel.licenseFeatureEnabled(kDvkLicenseFeature),
-        m_radioModel.dvkModel().licenseRefused());
+        m_radioModel.dvkLicenseRefused());
     // hasVoiceKeyer is ANDed in HERE rather than into the mode test, because
     // isVoiceMode() is shared with the ASR indicator below and Copy Assist is
     // host-side — folding a radio-side voice-keyer capability into the shared

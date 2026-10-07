@@ -10,7 +10,8 @@ QMap<QString, QString> CommandParser::parseKVs(const QString& body)
     QMap<QString, QString> result;
     // Body may look like: "freq=14.225000 mode=USB filter_lo=-1500 filter_hi=1500"
     // A quoted value may contain spaces (`dvk … name="CQ Contest"`) and is kept
-    // whole, quotes included. An unterminated quote splits as before.
+    // whole, quotes included, up to the next token holding a quote. A quote
+    // left open with no later quote on the line splits as before.
     const QStringList tokens = body.split(' ', Qt::SkipEmptyParts);
     for (qsizetype i = 0; i < tokens.size(); ++i) {
         QString token = tokens[i];

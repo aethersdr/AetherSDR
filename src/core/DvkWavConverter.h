@@ -19,7 +19,7 @@ inline constexpr int kRadioSampleRate = 24'000;
 inline constexpr int kMaxDurationMs = 10'000;
 
 // Accepts PCM 8/16/24/32-bit and 32-bit float (plain or WAVE_FORMAT_EXTENSIBLE),
-// any channel count, any chunk order. Returns a 24 kHz mono 16-bit PCM WAV, or
+// 1 to 8 channels, 8 to 384 kHz, any chunk order. Returns a 24 kHz mono 16-bit PCM WAV, or
 // an empty array with a user-facing reason in `error`.
 QByteArray convertForRadio(const QByteArray& wav, QString& error);
 

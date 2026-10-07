@@ -20,6 +20,8 @@
 #include <QtEndian>
 
 #include "core/DvkWavTransfer.h"
+#include "gui/DvkAvailabilityGate.h"
+#include "models/DvkModel.h"
 
 #include <functional>
 #include <iostream>
@@ -72,7 +74,20 @@ public:
             sent << command;
             replies.push_back(std::move(reply));
         };
+        // RadioModel::requestFileUploadPort() encodes this leg; record what it would send.
+        transfer.m_uploadPortRequester = [&sent, &replies](qint64 size, Reply reply) {
+            sent << QStringLiteral("file upload %1 dvk_recording").arg(size);
+            replies.push_back(std::move(reply));
+        };
     }
+
+    static void attachDvk(DvkWavTransfer& transfer, DvkModel* dvk) { transfer.m_dvk = dvk; }
+    static int uploadPort(const DvkWavTransfer& transfer) { return transfer.m_uploadPort; }
+    static void uploadError(DvkWavTransfer& transfer)
+    {
+        transfer.handleUploadError(transfer.m_operationGeneration, transfer.m_client);
+    }
+    static void finishOk(DvkWavTransfer& transfer) { transfer.finish(true, QString(), false); }
 
     static qint64 uploadSize(const DvkWavTransfer& transfer) { return transfer.m_uploadData.size(); }
 
@@ -365,6 +380,97 @@ int main(int argc, char* argv[])
         transfer.upload(3, path);
         ok &= expect(sent.isEmpty() && !transfer.isTransferring(),
                      "an unreadable WAV sends nothing to the radio");
+    }
+
+    {
+        // #6244 review: a refusal on any transfer leg reaches the DVK license
+        // latch, so an unlicensed radio's first Import closes the gate too.
+        QTemporaryDir dir;
+        const QString path = dir.filePath(QStringLiteral("cq.wav"));
+        ok &= expect(writeFile(path, stereo48kWav()), "fixture WAV written");
+        const auto blocked = [](const AetherSDR::DvkModel& dvk) {
+            return AetherSDR::dvkIndicatorBlocker(true, false, false, dvk.licenseRefused())
+                == AetherSDR::DvkIndicatorBlocker::NotLicensed;
+        };
+        for (int leg = 0; leg < 3; ++leg) {
+            AetherSDR::DvkModel dvk;
+            AetherSDR::DvkWavTransfer transfer(nullptr);
+            QStringList sent;
+            std::vector<TA::Reply> replies;
+            TA::recordCommands(transfer, sent, replies);
+            TA::attachDvk(transfer, &dvk);
+            if (leg == 2) {
+                transfer.download(3, dir.filePath(QStringLiteral("out.wav")));
+            } else {
+                transfer.upload(3, path);
+                if (leg == 1) {
+                    replies.at(0)(0, QString());
+                }
+            }
+            replies.back()(static_cast<int>(0x50004001u), QString());
+            const char* label = leg == 0 ? "a refused dvk upload latches the license refusal"
+                              : leg == 1 ? "a refused file upload latches the license refusal"
+                                         : "a refused dvk download latches the license refusal";
+            ok &= expect(dvk.licenseRefused() && blocked(dvk) && !transfer.isTransferring(), label);
+        }
+    }
+
+    {
+        // A WAV transfer holds DVK admission for its whole life (#6244 item 6).
+        QTemporaryDir dir;
+        const QString path = dir.filePath(QStringLiteral("cq.wav"));
+        ok &= expect(writeFile(path, stereo48kWav()), "fixture WAV written");
+        AetherSDR::DvkModel dvk;
+        AetherSDR::DvkWavTransfer transfer(nullptr);
+        QStringList sent;
+        std::vector<TA::Reply> replies;
+        TA::recordCommands(transfer, sent, replies);
+        TA::attachDvk(transfer, &dvk);
+        transfer.upload(3, path);
+        ok &= expect(!dvk.canStartOperation(), "a running upload blocks a DVK start");
+        TA::finishOk(transfer);
+        ok &= expect(dvk.canStartOperation(), "the upload's end admits DVK starts again");
+
+        // fw 4.2.20's file server answers 50000053 for ~2.2 s after an upload.
+        ok &= expect(transfer.isBusy(), "the file server settle window follows an upload");
+        QString message;
+        QObject::connect(&transfer, &AetherSDR::DvkWavTransfer::finished, &transfer,
+                         [&message](bool, const QString& m) { message = m; });
+        const int before = sent.size();
+        transfer.upload(4, path);
+        ok &= expect(sent.size() == before && message.contains(QStringLiteral("still busy")),
+                     "a transfer inside the settle window is refused locally");
+    }
+
+    {
+        // A named port that refuses the connection gets one retry on 42607.
+        AetherSDR::DvkWavTransfer transfer(nullptr);
+        TA::begin(transfer, TA::Direction::Upload, 1);
+        auto reply = TA::armUploadPortReply(transfer);
+        reply(0, QStringLiteral("4995"));
+        QTcpSocket* first = TA::client(transfer);
+        ok &= expect(TA::uploadPort(transfer) == 4995, "the named port is tried first");
+        TA::uploadError(transfer);
+        ok &= expect(transfer.isTransferring() && TA::client(transfer) != first
+                         && TA::uploadPort(transfer) == 42607,
+                     "a refused named port retries once on 42607");
+        TA::uploadError(transfer);
+        ok &= expect(!transfer.isTransferring(), "a refused 42607 ends the upload");
+    }
+
+    {
+        // Export accepts only the radio as its peer.
+        const QHostAddress radio(QStringLiteral("192.168.50.100"));
+        ok &= expect(AetherSDR::DvkWavTransfer::isRadioPeer(radio, radio), "the radio is accepted");
+        ok &= expect(AetherSDR::DvkWavTransfer::isRadioPeer(
+                         QHostAddress(QStringLiteral("::ffff:192.168.50.100")), radio),
+                     "the radio over a v4-mapped socket is accepted");
+        ok &= expect(!AetherSDR::DvkWavTransfer::isRadioPeer(
+                         QHostAddress(QStringLiteral("192.168.50.77")), radio),
+                     "another LAN host is rejected");
+        ok &= expect(AetherSDR::DvkWavTransfer::isRadioPeer(
+                         QHostAddress(QStringLiteral("192.168.50.77")), QHostAddress()),
+                     "an unknown radio address accepts (not connected)");
     }
 
     {

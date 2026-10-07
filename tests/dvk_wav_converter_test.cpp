@@ -181,10 +181,42 @@ void checkConverts(const char* label, const Spec& spec)
     const bool pitch = std::abs(hz - spec.hz) < 5.0;
     const bool amplitude = std::abs(level - 0.5 / std::sqrt(2.0)) < 0.02;
     char line[256];
-    std::snprintf(line, sizeof(line), "%s -> 24k mono PCM16 (len %zu/%zu, %.1f Hz, rms %.3f)%s%s",
+    std::snprintf(line, sizeof(line),
+                  "%s -> 24k mono PCM16 (len %zu/%zu, %.1f Hz, rms %.3f)%s%s",
                   label, out.samples.size(), expected, hz, level,
                   error.isEmpty() ? "" : " error: ", qPrintable(error));
     report(line, format && length && pitch && amplitude);
+}
+
+// A lone click at exactly 0.5 s must land at output sample 12000: the
+// resampler's group delay is trimmed from the head, not left in or over-cut.
+// A click, unlike a tone, has no period a wrong trim could alias onto.
+void checkClickAligned(int rate)
+{
+    const int frames = rate;  // 1 s, mono 16-bit
+    QByteArray data(frames * 2, '\0');
+    char* click = data.data() + (rate / 2) * 2;
+    qToLittleEndian<qint16>(29000, click);
+    QByteArray fmt;
+    put16(fmt, 1); put16(fmt, 1); put32(fmt, static_cast<quint32>(rate));
+    put32(fmt, static_cast<quint32>(rate * 2)); put16(fmt, 2); put16(fmt, 16);
+    QByteArray body("WAVE");
+    body += chunk("fmt ", fmt);
+    body += chunk("data", data);
+    QByteArray wav("RIFF");
+    put32(wav, static_cast<quint32>(body.size()));
+    QString error;
+    const Decoded out = decode(DvkWavConverter::convertForRadio(wav + body, error));
+    size_t peak = 0;
+    for (size_t i = 1; i < out.samples.size(); ++i) {
+        if (std::abs(out.samples[i]) > std::abs(out.samples[peak])) {
+            peak = i;
+        }
+    }
+    char line[160];
+    std::snprintf(line, sizeof(line), "click at 0.5 s from %d Hz lands at sample %zu (want 12000)",
+                  rate, peak);
+    report(line, out.ok && peak + 1 >= 12000 && peak <= 12001);
 }
 
 void checkRefused(const char* label, const QByteArray& wav, const char* needle)
@@ -210,6 +242,10 @@ int main()
     checkConverts("LIST chunk before fmt", Spec{.listChunkFirst = true});
     checkConverts("data chunk before fmt", Spec{.dataBeforeFmt = true});
     checkConverts("exactly 10 s", Spec{.channels = 1, .seconds = 10.0});
+
+    for (int rate : {8'000, 24'000, 44'100, 48'000, 96'000, 192'000}) {
+        checkClickAligned(rate);
+    }
 
     checkRefused("10.5 s clip", makeWav(Spec{.channels = 1, .seconds = 10.5}), "at most 10 s");
     checkRefused("not RIFF", QByteArray("hello world, not a wav"), "Not a WAV");

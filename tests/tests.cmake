@@ -3160,6 +3160,19 @@ target_include_directories(dvk_model_status_test PRIVATE src)
 target_link_libraries(dvk_model_status_test PRIVATE aethercore Qt6::Core)
 add_test(NAME dvk_model_status_test COMMAND dvk_model_status_test)
 
+# #6244 review — the panel admits one DVK operation at a time from the moment a
+# start is sent (not from the radio's echo) and none during a WAV transfer;
+# STOP reaches a start still awaiting its echo; PLAY and F-keys key TX.
+add_executable(dvk_panel_admission_test
+    tests/dvk_panel_admission_test.cpp
+    src/gui/DvkPanel.cpp
+)
+target_include_directories(dvk_panel_admission_test PRIVATE src tests)
+target_link_libraries(dvk_panel_admission_test PRIVATE aetherdesktop_support Qt6::Widgets)
+add_test(NAME dvk_panel_admission_test COMMAND dvk_panel_admission_test)
+set_tests_properties(dvk_panel_admission_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
+
 # #5640 — QsoRecorder claims filename candidates atomically so a same-second
 # recording cannot truncate a populated WAV or a concurrently-created file.
 add_executable(qso_recorder_filename_collision_test
