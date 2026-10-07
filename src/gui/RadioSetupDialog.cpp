@@ -9464,7 +9464,8 @@ QWidget* RadioSetupDialog::buildQrzTab()
     auto* desc = new QLabel(
         "AetherSDR uses your QRZ.com account to look up station details — "
         "name, location, grid, and photo — for callsigns heard in the CW "
-        "decoder and entered in Tools → Callsign Lookup. An XML Logbook Data "
+        "decoder and entered in View → Callsign Lookup. Enable View → Show live CW "
+        "contacts to see decoded stations in a separate window. An XML Logbook Data "
         "subscription returns full details; a free account returns limited "
         "fields. Your password is stored in the operating system keychain, "
         "never in the settings file.");

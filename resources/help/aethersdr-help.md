@@ -102,6 +102,7 @@ This menu changes how the operator workspace is presented.
 - `Minimal Mode` removes visual clutter for a compact operating view.
 - `Frameless Window` controls custom window chrome.
 - `Propagation Conditions`, `Smart Spot Filtering`, and `FPS Meters` control optional display overlays.
+- `Show live CW contacts`, below `Smart Spot Filtering`, opens a separate station window and is off by default. `Close live contacts` closes the window and turns the option off. The CW decoder keeps its full text area.
 - `Blink Status Indicator` controls the discovery heartbeat animation.
 
 ### `Help`

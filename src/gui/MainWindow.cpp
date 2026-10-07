@@ -9163,6 +9163,7 @@ void MainWindow::routeCwDecoderOutput()
     // Text from the old applet's stream must never concatenate with the
     // new one's — a station boundary, as far as the spotter is concerned.
     m_cwCallsignSpotter.clear();
+    clearLiveCwContact();
 
     m_cwDecoderApplet = target;
 

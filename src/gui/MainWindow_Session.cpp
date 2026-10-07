@@ -2663,6 +2663,8 @@ void MainWindow::wireRxDemodAudioSinks()
             &m_cwDecoder, &CwRxModel::reset);
     connect(m_cwAudio.get(), &DecoderAudioModel::sourceReset,
             &m_cwCallsignSpotter, &CwCallsignSpotter::clear);
+    connect(m_cwAudio.get(), &DecoderAudioModel::sourceReset,
+            this, &MainWindow::clearLiveCwContact);
 
     // RFC #5468 A5: selected receiver/DAX tap, before speaker gain/mute/mix.
     m_rttyAudio = std::make_unique<DecoderAudioModel>(

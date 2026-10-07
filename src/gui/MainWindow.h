@@ -178,6 +178,7 @@ class MqttSettingsDialog;
 class WaveformsDialog;
 class DxClusterDialog;
 class CallsignLookupDialog;
+class LiveCwContactsDialog;
 class Ax25HfPacketDecodeDialog;
 class PskReporterMapDialog;
 class GpsLocationDialog;
@@ -872,10 +873,12 @@ private:
     void refreshCwInputStatus();
     void stopCwRx();
     // QRZ callsign lookup (MainWindow_Callsign.cpp): CW-spotter → lookup
-    // service → contact card on the CW decode panel + lookup dialog.
+    // service → opt-in live contacts window + manual lookup dialog.
     void wireCallsignLookup();
     void onCwCallsignSpotted(const QString& call);
     void showCallsignLookupDialog(const QString& call = QString());
+    void setLiveCwContactsVisible(bool visible);
+    void clearLiveCwContact();
     void showGpsLocationDialog();
     void routeRttyDecoderOutput();
     void refreshRttyDecodeState();
@@ -1638,6 +1641,9 @@ private:
     // Modeless dialogs
     QPointer<DxClusterDialog> m_spotHubDialog;
     QPointer<CallsignLookupDialog> m_callsignLookupDialog;
+    QPointer<LiveCwContactsDialog> m_liveCwContactsDialog;
+    QAction* m_liveCwContactsAction{nullptr};
+    QString m_lastCwContactCall;
     QPointer<RadioSetupDialog> m_radioSetupDialog;
     QPointer<NetworkDiagnosticsDialog> m_networkDiagnosticsDialog;
     QPointer<SystemInfoDialog> m_systemInfoDialog;

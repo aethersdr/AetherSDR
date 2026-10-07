@@ -15,7 +15,6 @@ class QVBoxLayout;
 namespace AetherSDR {
 
 class SpectrumWidget;
-class CallsignCard;
 #ifdef AETHER_ASR_ENABLED
 class CopyAssistPanel;
 #endif
@@ -84,9 +83,6 @@ public:
     QPushButton* lockPitchButton()  const { return m_lockPitchBtn; }
     QPushButton* lockSpeedButton()  const { return m_lockSpeedBtn; }
     float        cwCostThreshold()  const { return m_cwCostThreshold; }
-    // Contact card beside the decoded text — MainWindow's QRZ wiring
-    // fills it when the CW stream identifies a station (hidden until then).
-    CallsignCard* cwCallsignCard() const { return m_cwCallsignCard; }
     int speedRangeLow()   const;
     int speedRangeHigh()  const;
     int pitchRangeLow()   const;
@@ -189,7 +185,6 @@ private:
     QWidget*      m_cwPanel{nullptr};
     QWidget*      m_cwGrip{nullptr};
     QTextEdit*    m_cwText{nullptr};
-    CallsignCard* m_cwCallsignCard{nullptr};
     QLabel*       m_cwStatsLabel{nullptr};
     QLabel*       m_cwInputHint{nullptr};
     QSlider*      m_cwSensSlider{nullptr};

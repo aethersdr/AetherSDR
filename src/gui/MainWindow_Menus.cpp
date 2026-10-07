@@ -8,6 +8,7 @@
 // window links to.
 
 #include "MainWindow.h"
+#include "models/CwDecodeSettings.h"
 #include "AetherBuildIdentity.h"   // generated at build time (#5804)
 
 #include "workspace/WorkspaceController.h"
@@ -1400,6 +1401,16 @@ void MainWindow::buildMenuBar()
         AppSettings::instance().setValue("SmartSpotFilterEnabled", on ? "True" : "False");
         AppSettings::instance().save();
     });
+
+    m_liveCwContactsAction = viewMenu->addAction(tr("Show live CW contacts"));
+    m_liveCwContactsAction->setObjectName(QStringLiteral("showLiveCwContacts"));
+    m_liveCwContactsAction->setMenuRole(QAction::NoRole);
+    m_liveCwContactsAction->setCheckable(true);
+    m_liveCwContactsAction->setChecked(CwDecodeSettings::liveContactsEnabled());
+    m_liveCwContactsAction->setToolTip(tr("Show station information heard in CW in a separate window."));
+    m_liveCwContactsAction->setStatusTip(tr("Show live CW contacts without covering decoded text. Close the contacts window to turn this off."));
+    connect(m_liveCwContactsAction, &QAction::toggled,
+            this, &MainWindow::setLiveCwContactsVisible);
 
     auto* fpsMetersAct = viewMenu->addAction("FPS Meters");
     fpsMetersAct->setCheckable(true);

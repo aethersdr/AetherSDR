@@ -12,7 +12,76 @@
 #include <QPushButton>
 #include <QVBoxLayout>
 
+#include <algorithm>
+
 namespace AetherSDR {
+
+LiveCwContactsDialog::LiveCwContactsDialog(int textFontPx, QWidget* parent)
+    : PersistentDialog(tr("Live CW contacts"), QString(), parent),
+      m_textFontPx(std::clamp(textFontPx, 18, 32))
+{
+    setObjectName(QStringLiteral("liveCwContactsDialog"));
+    setAccessibleName(tr("Live CW contacts"));
+    setAccessibleDescription(tr("Station information heard in decoded CW. Closing turns off live contacts."));
+    setMinimumWidth(480);
+
+    auto* root = new QVBoxLayout(bodyWidget());
+    root->setSpacing(12);
+    setBodyLayoutMargins(QMargins(12, 12, 12, 12), QMargins(12, 12, 12, 12));
+
+    m_waiting = new QLabel(tr("Waiting for a callsign in decoded CW…"), this);
+    m_waiting->setObjectName(QStringLiteral("liveCwContactsWaiting"));
+    m_waiting->setAccessibleName(tr("Live contact status"));
+    m_waiting->setWordWrap(true);
+    root->addWidget(m_waiting);
+
+    m_card = new CallsignCard(CallsignCard::Variant::LiveCw, this);
+    m_card->setTextFontPx(m_textFontPx);
+    m_card->hide();
+    root->addWidget(m_card);
+
+    m_closeBtn = new QPushButton(tr("Close live contacts"), this);
+    m_closeBtn->setObjectName(QStringLiteral("closeLiveCwContacts"));
+    m_closeBtn->setAccessibleName(tr("Close live contacts"));
+    m_closeBtn->setAccessibleDescription(tr("Close this window and turn off Show live CW contacts in the View menu."));
+    m_closeBtn->setMinimumHeight(44);
+    m_closeBtn->setAutoDefault(false);
+    connect(m_closeBtn, &QPushButton::clicked, this, &QWidget::close);
+    root->addWidget(m_closeBtn);
+
+    applyTheme();
+    connect(&ThemeManager::instance(), &ThemeManager::themeChanged,
+            this, &LiveCwContactsDialog::applyTheme);
+}
+
+void LiveCwContactsDialog::applyTheme()
+{
+    auto& tm = ThemeManager::instance();
+    tm.applyStyleSheet(bodyWidget(),
+        "QWidget { background: {{color.canon.ground}}; }");
+    tm.applyStyleSheet(m_waiting,
+        QStringLiteral("QLabel { color: {{color.canon.inkSoft}}; font-size: %1px; }").arg(m_textFontPx));
+    tm.applyStyleSheet(m_closeBtn,
+        QStringLiteral("QPushButton { background: {{color.canon.control}}; color: {{color.canon.cyan}};"
+                       " border: 1px solid {{color.canon.lineHi}}; border-radius: 4px;"
+                       " padding: 8px 14px; font-size: %1px; }"
+                       "QPushButton:hover { background: {{color.canon.nested}}; color: {{color.canon.aqua}}; }")
+            .arg(m_textFontPx));
+}
+
+void LiveCwContactsDialog::showCallsign(const QString& call)
+{
+    m_waiting->hide();
+    m_card->showPending(call);
+    m_card->show();
+}
+
+void LiveCwContactsDialog::clearContact()
+{
+    m_card->clearCard();
+    m_card->hide();
+    m_waiting->show();
+}
 
 CallsignLookupDialog::CallsignLookupDialog(QWidget* parent)
     : PersistentDialog(QStringLiteral("Callsign Lookup"),
