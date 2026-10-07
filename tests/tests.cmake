@@ -3177,11 +3177,28 @@ add_test(NAME dvk_model_status_test COMMAND dvk_model_status_test)
 add_executable(dvk_panel_admission_test
     tests/dvk_panel_admission_test.cpp
     src/gui/DvkPanel.cpp
+    src/gui/RoundedMenu.cpp
 )
 target_include_directories(dvk_panel_admission_test PRIVATE src tests)
 target_link_libraries(dvk_panel_admission_test PRIVATE aetherdesktop_support Qt6::Widgets)
 add_test(NAME dvk_panel_admission_test COMMAND dvk_panel_admission_test)
 set_tests_properties(dvk_panel_admission_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
+
+# #6249 — the DVK panel on the canon: every panel token resolves in both
+# themes, no colour literals, and each state (selected, empty, preview,
+# on-air, recording, refusal) lands on the right widget, driven by fw 4.2.20
+# status lines. Set DVK_PANEL_GRAB_DIR to save a PNG of each state.
+add_executable(dvk_panel_theme_test
+    tests/dvk_panel_theme_test.cpp
+    src/gui/DvkPanel.cpp
+    src/gui/RoundedMenu.cpp
+    ${THEME_TEST_RESOURCES}
+)
+target_include_directories(dvk_panel_theme_test PRIVATE src tests)
+target_link_libraries(dvk_panel_theme_test PRIVATE aetherdesktop_support Qt6::Widgets)
+add_test(NAME dvk_panel_theme_test COMMAND dvk_panel_theme_test)
+set_tests_properties(dvk_panel_theme_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
 
 # #5640 — QsoRecorder claims filename candidates atomically so a same-second
@@ -7256,6 +7273,7 @@ set_tests_properties(mini_pan_widget_test PROPERTIES
 add_executable(hl2_pc_audio_lock_test
     tests/hl2_pc_audio_lock_test.cpp
     src/gui/TitleBar.cpp
+    src/gui/RoundedMenu.cpp
     src/gui/BrandMark.cpp
     src/gui/RadioTabBar.cpp
     src/gui/WindowCaptionButtons.cpp
@@ -7287,6 +7305,7 @@ set_tests_properties(hl2_pc_audio_lock_test PROPERTIES
 add_executable(titlebar_headphone_mute_test
     tests/titlebar_headphone_mute_test.cpp
     src/gui/TitleBar.cpp
+    src/gui/RoundedMenu.cpp
     src/gui/BrandMark.cpp
     src/gui/RadioTabBar.cpp
     src/gui/WindowCaptionButtons.cpp
@@ -7320,6 +7339,7 @@ set_tests_properties(titlebar_headphone_mute_test PROPERTIES
 add_executable(mixer_control_availability_test
     tests/mixer_control_availability_test.cpp
     src/gui/TitleBar.cpp
+    src/gui/RoundedMenu.cpp
     src/gui/BrandMark.cpp
     src/gui/RadioTabBar.cpp
     src/gui/WindowCaptionButtons.cpp
@@ -7346,6 +7366,7 @@ set_tests_properties(mixer_control_availability_test PROPERTIES
 add_executable(unified_title_bar_test
     tests/unified_title_bar_test.cpp
     src/gui/TitleBar.cpp
+    src/gui/RoundedMenu.cpp
     src/gui/BrandMark.cpp
     src/gui/RadioTabBar.cpp
     src/gui/WindowCaptionButtons.cpp

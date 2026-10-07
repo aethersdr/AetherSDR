@@ -19,6 +19,10 @@ class DvkPanel : public QWidget {
     Q_OBJECT
 public:
     explicit DvkPanel(DvkModel* model, QWidget* parent = nullptr);
+    // The panel's themed stylesheet, before token resolution.
+    static QString styleTemplate();
+    // The operator's word for a dvk command verb ("playback_start" → "Play").
+    static QString verbLabel(const QString& verb);
     int selectedSlot() const;
     void setWavTransfer(DvkWavTransfer* transfer);
 
@@ -48,6 +52,7 @@ private:
     QPushButton* m_playBtn;
     QPushButton* m_prevBtn;
     QLabel* m_statusLabel;
+    QLabel* m_statusDot{nullptr};
     int m_selectedSlot{1};
     QLineEdit* m_renameEdit{nullptr};
     int m_renameSlot{-1};
@@ -69,7 +74,9 @@ private:
     // Row and F-key names carry the slot's name and length for screen readers.
     void updateSlotAccessibility(int id, const QString& name, int durationMs);
     // Sets the status text and announces it; the elapsed-time tick does not.
-    void announceStatus(const QString& text);
+    // `error` shows it in the danger colour (the text always says "failed").
+    void announceStatus(const QString& text, bool error = false);
+    void refreshTransport();
     void togglePlayback(int id);
     void stopActiveOperation();
     void showContextMenu(int id, const QPoint& globalPos);

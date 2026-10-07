@@ -1,4 +1,5 @@
 #include "TitleBar.h"
+#include "RoundedMenu.h"
 #include "BrandMark.h"
 #include "FramelessMessageBox.h"
 #include "FramelessMoveHelper.h"
@@ -104,52 +105,6 @@ QIcon buildAppMenuIcon(const QWidget* widget)
         icon.addPixmap(pm);
     }
     return icon;
-}
-
-// The hamburger's menus and every submenu under them get rounded corners.
-// A stylesheet border-radius only shapes what is painted, so each menu also
-// needs a see-through window, and no system drop shadow (square on Windows),
-// set before its native window is first created: submenus are reached on
-// their parent's aboutToShow, which runs before the submenu can open.
-constexpr const char* kRoundedMenuProperty = "aetherRoundedMenu";
-
-// Qt reserves a check-mark column only in a menu that has a checkable item,
-// so text would start further left in every other menu.  The stylesheet pads
-// those by the same width (`aetherHasChecks="false"`); the flag is refreshed
-// before each show because MainWindow edits some menus at runtime.
-constexpr const char* kHasChecksProperty = "aetherHasChecks";
-
-void syncMenuCheckColumn(QMenu* menu)
-{
-    bool hasChecks = false;
-    for (const QAction* action : menu->actions()) {
-        hasChecks = hasChecks || action->isCheckable();
-    }
-    const QVariant current = menu->property(kHasChecksProperty);
-    if (current.isValid() && current.toBool() == hasChecks) {
-        return;
-    }
-    menu->setProperty(kHasChecksProperty, hasChecks);
-    menu->style()->unpolish(menu);
-    menu->style()->polish(menu);
-}
-
-void roundMenuTree(QMenu* menu)
-{
-    if (!menu || menu->property(kRoundedMenuProperty).toBool()) {
-        return;
-    }
-    menu->setProperty(kRoundedMenuProperty, true);
-    menu->setAttribute(Qt::WA_TranslucentBackground);
-    menu->setWindowFlag(Qt::NoDropShadowWindowHint);
-    const auto prepare = [menu]() {
-        syncMenuCheckColumn(menu);
-        for (QAction* action : menu->actions()) {
-            roundMenuTree(action->menu());
-        }
-    };
-    prepare();
-    QObject::connect(menu, &QMenu::aboutToShow, menu, prepare);
 }
 
 // Build a 16×18 pop-out indicator: hollow square (the main waterfall
@@ -1146,24 +1101,13 @@ void TitleBar::setMenuBar(QMenuBar* mb)
     // it, and MainWindow keeps building menus into it.
     mb->hide();
 
-    // Rounded, slightly see-through panels (roundMenuTree), 8 px like the radio
-    // tabs; the inset keeps the selection clear of the curve.  Item text starts at one x in every
-    // menu: a 14 px check column, and the same 14 px added to the padding of
-    // menus that have none (syncMenuCheckColumn).
-    const char* roundedMenuRules =
-        "QMenu { background: {{color.titlebar.menu.background}}; color: {{color.text.primary}};"
-        " border: 1px solid {{color.background.2}}; border-radius: 8px; padding: 4px; }"
-        "QMenu::item { padding: 4px 24px 4px 12px; }"
-        "QMenu[aetherHasChecks=\"false\"]::item { padding-left: 26px; }"
-        "QMenu::indicator { width: 14px; height: 14px; }"
-        "QMenu::item:selected { background: {{color.background.2}}; border-radius: 4px; }"
-        "QMenu::separator { height: 1px; background: {{color.background.2}}; margin: 4px 8px; }";
+    // Rounded, slightly see-through panels (RoundedMenu.h).
     AetherSDR::ThemeManager::instance().applyStyleSheet(mb,
-        QStringLiteral("QMenuBar { background: transparent; }") + QLatin1String(roundedMenuRules));
+        QStringLiteral("QMenuBar { background: transparent; }") + kRoundedMenuRules);
 
     m_appMenu = new QMenu(this);
     m_appMenu->setObjectName(QStringLiteral("titleBarAppMenu"));
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_appMenu, roundedMenuRules);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_appMenu, kRoundedMenuRules);
     m_appMenu->addActions(mb->actions());
     roundMenuTree(m_appMenu);
     for (QAction* a : mb->actions())
