@@ -7,6 +7,7 @@
 #include "models/RadioModel.h"
 
 #include <QCoreApplication>
+#include <QMap>
 #include <QStringList>
 
 #include <cstdio>
@@ -99,6 +100,22 @@ int main(int argc, char* argv[])
                kvs.value("freq") == QStringLiteral("14.225000")
                    && kvs.value("name") == QStringLiteral("\"Solo\"")
                    && kvs.contains("removed") && kvs.value("removed").isEmpty());
+    }
+    {
+        const QStringList names{QStringLiteral("CQ a="), QStringLiteral("CQ ="),
+                                QStringLiteral("CQ a=b"), QStringLiteral("CQ a= b=")};
+        for (const QString& name : names) {
+            const QString body = QStringLiteral("id=1 name=\"%1\" duration=1000").arg(name);
+            const QMap<QString, QString> kvs = CommandParser::parseKVs(body);
+            report("equals signs inside a quoted name stay whole",
+                   kvs.value("name") == QStringLiteral("\"%1\"").arg(name)
+                       && kvs.value("duration") == QStringLiteral("1000") && kvs.size() == 3);
+
+            DvkModel model;
+            feed(model, QStringLiteral("S629BA1D4|dvk added %1").arg(body));
+            report("a DVK status preserves the full name and duration",
+                   nameOf(model, 1) == name && durationOf(model, 1) == 1000);
+        }
     }
     {
         // Review #6247: an unterminated value must not swallow a later quoted key.

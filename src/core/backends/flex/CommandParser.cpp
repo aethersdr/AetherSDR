@@ -21,7 +21,11 @@ QMap<QString, QString> CommandParser::parseKVs(const QString& body)
             while (end < tokens.size() && !tokens[end].contains('"')) {
                 ++end;
             }
-            if (end < tokens.size() && !tokens[end].contains(QLatin1String("=\""))) {
+            // A trailing quote closes this value even when its last character is '='.
+            // A quote followed by content instead begins the next quoted field.
+            if (end < tokens.size()
+                && (!tokens[end].contains(QLatin1String("=\""))
+                    || tokens[end].indexOf(QLatin1Char('"')) == tokens[end].size() - 1)) {
                 for (qsizetype j = i + 1; j <= end; ++j) {
                     token += QLatin1Char(' ') + tokens[j];
                 }
