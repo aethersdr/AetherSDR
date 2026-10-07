@@ -46,8 +46,9 @@ the must-knows that fit in Gemini's chat context efficiently.
 
 7. **New or reworked UI follows the visual canon**
    (`docs/style/aethersdr-style-guide.md`, RFC #6226): `color.canon.*`
-   tokens, `CanonWindow`, gold only for recognising people. Apply it to UI
-   the issue already changes; never restyle other screens unasked.
+   tokens, `CanonWindow`, the spark's gold only for recognising people
+   (warning amber and meter zones are unaffected). Apply it to UI the issue
+   already changes; never restyle other screens unasked.
 
 ## C++ / Qt6 style essentials (full guide in AGENTS.md)
 

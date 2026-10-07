@@ -23,15 +23,20 @@ The first implementation is the **About window** (#6227):
 - **Light, not paint.** Depth comes from soft blooms, a faint sheen and
   glows on dark surfaces — not from bevels or heavy borders.
 - **One accent, used as light.** Cyan and the brand gradient mark what is
-  live, selected or clickable. **Gold is reserved for recognising people**
-  (awards, the Contributor Logbook) and nothing else.
+  live, selected or clickable. **The canon's gold (`color.canon.sparkGold`)
+  is reserved for recognising people** (awards, the Contributor Logbook).
+  Existing state colours that happen to be amber or gold — warnings
+  (`color.accent.warning`), meter zones, peak hold — are unaffected.
 - **State is never colour alone.** Good / warn / crit always travel with a
   word, sign or icon (`docs/a11y.md`).
-- **Transmit is the one loud state.** Only transmit gets a full red
-  surface. Errors, faults and destructive actions keep
+- **Transmit is the one loud state.** Red marks the transmit indicators
+  (the TX label, the slice's TX flag). TX panels and the MOX button keep
+  their existing amber and orange tokens (`color.background.tx`,
+  `color.tx.mox.*`). Errors, faults and destructive actions keep
   `color.accent.danger` (red) as `theme-style-guide.md` maps them, always
-  with a word or icon and never as a filled ground. Instrument faces
-  (SmartMTR, the analog meter faces) keep their own palettes exactly.
+  with a word or icon and never as a window or panel background.
+  Instrument faces (SmartMTR, the analog meter faces) keep their own
+  palettes exactly.
 
 ## Foundations
 
@@ -66,8 +71,9 @@ The theme JSON writes alpha colours in Qt's `#AARRGGBB` order
 light-mode values are AI-generated and not managed by humans.
 `tests/theme_manager_test.cpp` checks that every canon token resolves in
 both themes and that the About pairs it lists (link, button, card and
-focus-ring colours) meet the `docs/a11y.md` contrast floors. It does not
-cover the primary action on the brand gradient; see below. Unlike dark,
+focus-ring colours) meet the `docs/a11y.md` contrast floors. It also
+checks the primary action on every brand-gradient stop: 4.5:1 in dark, and
+the 3.0:1 recorded for light's accepted exception (see below). Unlike dark,
 several light canon tokens (`ground`, `ink`, `muted`, `line`, `nested`, `control`,
 `raised`, `onAccent`, `sparkHot`) alias the same grey and blue primitives
 the base tokens use, so retuning the light primitives moves them too.
@@ -81,11 +87,11 @@ The canon does not change control geometry.
 
 | You want | Use |
 |---|---|
-| A window in the canon (no title bar, 16 px rounded corners, ambient ground, round close button, drag to move, Escape / ⌘W to close) | `CanonWindow`; put content in `bodyWidget()` |
+| A window in the canon (no title bar, 16 px rounded corners, ambient ground, round close button, drag to move, Escape or ⌘W / Ctrl+W to close) | `CanonWindow`; put content in `bodyWidget()` |
 | A logo or avatar with a contrast ring and a cyan spark | `SparkRing` |
 | A recognition control (gold spark around a button) | `SparkBorder` |
 | The "AetherSDR" wordmark ("Aether" in ink, "SDR" in the gradient) | `BrandMark::paintWordmark` |
-| A primary action | `color.brand.gradient` fill with `color.canon.onAccent` text. Dark clears 4.5:1 on every gradient stop (7.5–15.2:1). Light measures 3.7:1 and 3.3:1 at the middle and teal stops; that is accepted for About's OK per the RFC approval. Get a ruling before using it on another surface (#6239) |
+| A primary action | `color.brand.gradient` fill with `color.canon.onAccent` text. Dark clears 4.5:1 on every gradient stop (7.5–15.2:1). Light measures 3.7:1 and 3.3:1 at the middle and teal stops; that is accepted for About's OK per the RFC approval. Get a ruling before using it on another surface (#6239). `theme_manager_test` checks both |
 | A secondary control | `color.canon.control` fill, `color.canon.lineHi` border, `color.canon.cyan` text; `color.canon.nested` + `color.canon.aqua` on hover |
 | A card of label / value rows | `color.canon.nested` fill, `color.canon.line` border, 12 px radius; keys in `muted`, values in `inkSoft` |
 
@@ -127,17 +133,20 @@ is fixed by the RFC's approval:
 2. **One surface at a time, each in its own PR under an issue:** move that
    surface's widgets from the base tokens to `color.canon.*`.
 3. **Once, at the end:** flip the base tokens to canon values in a single
-   PR, after the surfaces have moved:
+   PR, after the surfaces have moved. **Repoint the tokens; never change a
+   shared primitive.** `color.accent`'s primitive also feeds the spectrum
+   trace and the RMS meter, which must not change, so the flip points
+   each listed token at the canon value instead:
 
    | Base token | Becomes |
    |---|---|
-   | `color.background.0` | ground |
+   | `color.background.0` and `color.background.app` | ground |
    | `color.background.1` | control |
    | `color.text.primary` | ink-soft |
    | `color.text.secondary` | muted |
    | `color.border.subtle` / `strong` | hairline / emphasised line |
    | `color.accent` | cyan |
-   | `color.accent.dim` | `#3aa7ff` |
+   | `color.accent.dim` | `#3aa7ff`, the brand gradient's first stop; the flip adds it as a dark primitive, with a light counterpart in `default-light.json` |
 
 **A migration PR never changes a base token's value.** Slice colours, meter
 zones, TX / RX / dynamics scopes and spectrum black stay exactly as users

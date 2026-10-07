@@ -44,11 +44,12 @@ writing or modifying a `QDialog`: the canonical lazy-construct + non-modal +
 geometry-persist + frameless-chrome pattern, its pitfalls, and reference
 dialogs (cleanup tracked in #2605, `PersistentDialog` base class).
 
-A window the style guide covers is built on `CanonWindow` instead, and is
-the one exception to the frameless-setting rule below: always frameless,
-centred rather than geometry-persistent (see the `CanonWindow` section of
-`dialog-patterns.md` and
-[`docs/style/aethersdr-style-guide.md`](../style/aethersdr-style-guide.md)).
+A window the style guide covers is built on `CanonWindow` instead. It is a
+documented exception to two rules below: it is always frameless, whatever
+the `FramelessWindow` setting, and it centres itself on its parent on first
+show (once it has a valid size), because it has no saved geometry to
+restore. See the `CanonWindow` section of `dialog-patterns.md` and
+[`docs/style/aethersdr-style-guide.md`](../style/aethersdr-style-guide.md).
 
 Any new popout window, floating tool window, or `QDialog` must respect the
 global `FramelessWindow` setting unless there is a specific reason not to:

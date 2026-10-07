@@ -46,8 +46,9 @@ priority must-knows that fit in Copilot's chat context window.
 
 7. **New or reworked UI follows the visual canon**
    (`docs/style/aethersdr-style-guide.md`, RFC #6226): `color.canon.*`
-   tokens, `CanonWindow`, gold only for recognising people. Apply it to UI
-   the issue already changes; never restyle other screens unasked.
+   tokens, `CanonWindow`, the spark's gold only for recognising people
+   (warning amber and meter zones are unaffected). Apply it to UI the issue
+   already changes; never restyle other screens unasked.
 
 ## C++ / Qt6 style highlights (full guide in AGENTS.md)
 
