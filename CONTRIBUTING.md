@@ -33,8 +33,8 @@ the RFC process for significant changes.
 - Attach the log. Logs live in `AetherSDR/logs/` under the config directory
   (`~/.config/AetherSDR/logs/` on Linux, `~/Library/Preferences/AetherSDR/logs/`
   on macOS, `%LOCALAPPDATA%\AetherSDR\logs\` on Windows): one timestamped
-  `aethersdr-YYYYMMDD-HHMMSS.log` per launch, with `aethersdr.log` pointing at
-  the newest. **Help → Support & Diagnostics...** turns on extra logging per
+  `aethersdr-YYYYMMDD-HHMMSS.log` per launch. Attach the newest one; on Linux
+  and macOS `aethersdr.log` is a link to it. **Help → Support & Diagnostics...** turns on extra logging per
   module and opens the log folder; **Help → File an Issue...** packages the logs
   and settings into a support bundle you can drag into the issue.
 - Check existing issues first to avoid duplicates.

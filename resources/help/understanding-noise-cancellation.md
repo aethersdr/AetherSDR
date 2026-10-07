@@ -252,7 +252,7 @@ originally developed for video conferencing. It runs inside AetherSDR itself, on
 own NVIDIA RTX or GeForce graphics card — nothing is sent to the cloud, and
 there is no container or separate service to install. BNR is available on
 Linux and Windows. The first time you use it, the **Download** button in the
-BNR panel fetches NVIDIA's runtime (about 1.2 GB, once); after that it starts
+BNR panel fetches NVIDIA's runtime (about 1 GB, once); after that it starts
 from the local copy.
 
 BNR delivers some of the highest-quality noise removal available because it

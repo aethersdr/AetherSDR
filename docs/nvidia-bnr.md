@@ -57,7 +57,7 @@ At load time the pack's `bin/` is pinned on the process DLL search path
 (`SetDefaultDllDirectories` + `AddDllDirectory`) and the core is loaded with
 `LOAD_WITH_ALTERED_SEARCH_PATH`, so it finds its siblings.
 
-Total one-time download is ~1.2 GB; subsequent launches use the cache.
+Total one-time download is ~1 GB; subsequent launches use the cache.
 
 > **Offline / air-gapped:** a pre-assembled pack can be imported instead of
 > downloaded — see `NvidiaAfxPack::installFromFile()`.
