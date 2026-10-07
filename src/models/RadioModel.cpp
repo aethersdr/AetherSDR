@@ -11993,6 +11993,15 @@ int RadioModel::activeOutputVolumePercent() const
         .value(QStringLiteral("MasterVolume"), QStringLiteral("100")).toInt();
 }
 
+// The `mixer lineout` text is for a radio with a command plane. A backend
+// without one takes the typed seam call below; the text would only raise a
+// drop notice for a request the seam already carried (#4665: muting the
+// inactive path is harmless).
+bool RadioModel::sendsLineoutWireText() const
+{
+    return !m_backend || usesFlexCommandPlane() || hasCommandPlane();
+}
+
 void RadioModel::setLineoutGain(int v)
 {
     v = std::clamp(v, 0, 100);
@@ -12001,7 +12010,9 @@ void RadioModel::setLineoutGain(int v)
     }
     m_lineoutGain = v;
     qCDebug(lcAudio) << "setLineoutGain:" << v;
-    sendCmd(QString("mixer lineout gain %1").arg(v));
+    if (sendsLineoutWireText()) {
+        sendCmd(QString("mixer lineout gain %1").arg(v));
+    }
     // The same request, typed, for a backend with no command plane to receive the
     // string on. Without it this control reached a Flex and nothing else, so on
     // every other radio the master volume had no effect at all once PC Audio was
@@ -12023,7 +12034,9 @@ void RadioModel::setLineoutGain(int v)
 void RadioModel::setLineoutMute(bool m)
 {
     qCDebug(lcAudio) << "setLineoutMute:" << m;
-    sendCmd(QString("mixer lineout mute %1").arg(m ? 1 : 0));
+    if (sendsLineoutWireText()) {
+        sendCmd(QString("mixer lineout mute %1").arg(m ? 1 : 0));
+    }
     // Sent unconditionally, like the command above and for the reason this
     // function's own comment gives: a mute is a request, and a model that has
     // drifted from the radio must stay recoverable from the UI.
