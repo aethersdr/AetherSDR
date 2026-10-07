@@ -4,6 +4,7 @@
 #include "UlanziDialWindowsManager.h"
 #include "core/LogManager.h"
 #include "core/UlanziChordDecoder.h"
+#include "core/UlanziDialIds.h"
 
 #include <QDebug>
 #include <QTimer>
@@ -98,7 +99,13 @@ void UlanziDialWindowsManager::stop()
 bool UlanziDialWindowsManager::rescan()
 {
     closeAll();
-    struct hid_device_info* infos = hid_enumerate(0, 0);
+    // Filtered by VID/PID so hidapi reads only the cached attributes of other
+    // HID devices. An unfiltered scan asks every device on the machine for its
+    // strings and descriptor on each hotplug tick, on the thread that also
+    // polls the RC-28 (#6225, #6204).
+    struct hid_device_info* infos =
+        hid_enumerate(static_cast<unsigned short>(kUlanziVendorId),
+                      static_cast<unsigned short>(kUlanziProductId));
     for (auto* info = infos; info; info = info->next) {
         if (!info->product_string) continue;
         if (wcsstr(info->product_string, kProductMatch) == nullptr) continue;
