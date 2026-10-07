@@ -1578,6 +1578,14 @@ target_include_directories(hl2_pan_create_async_test PRIVATE src tests)
 target_link_libraries(hl2_pan_create_async_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
 add_test(NAME hl2_pan_create_async_test COMMAND hl2_pan_create_async_test)
 
+# What an HL2 remembers beyond the flat operating state: TUNE power per band,
+# a chosen auto-RF-gain law and floor, each receiver's setpoints and the
+# receiver set (#5777), and the notches. Injected link edge, no socket.
+add_executable(hl2_session_memory_test tests/hl2_session_memory_test.cpp)
+target_include_directories(hl2_session_memory_test PRIVATE src tests)
+target_link_libraries(hl2_session_memory_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME hl2_session_memory_test COMMAND hl2_session_memory_test)
+
 # RFC #5535 approved the automatic RF-gain loop ON THE CONDITION that it is
 # visible -- the clipping AND the regulator's own action. This pins both, and
 # pins the rule that stops the second from making the radio unusable with a
@@ -7864,6 +7872,7 @@ set(AETHER_SETTINGS_CONSUMERS
     radio_model_client_state_test
     squelch_level_scale_test
     hl2_pan_create_async_test
+    hl2_session_memory_test
     anan_backend_test
     anan_noise_blanker_readback_test
     noise_blanker_kind_model_test

@@ -5,6 +5,7 @@
 #include <QJsonDocument>
 
 #include <cmath>
+#include <utility>
 
 namespace AetherSDR {
 namespace RadioStateMemory {
@@ -33,6 +34,27 @@ bool ownsAgcOffLevel(const RadioCapabilities& caps)
 // feature documents (one domain, one document — PR 6).
 constexpr const char* kExtRfGainKey = "rfGain";
 constexpr const char* kExtTxSetpointsKey = "txSetpoints";
+constexpr const char* kExtReceiversKey = "receivers";
+constexpr const char* kExtNotchesKey = "notches";
+
+// The declared domains' sub-objects of `ext`; load() and store() share it so
+// the two gates cannot drift apart.
+QJsonObject gateExtension(const RadioCapabilities& caps, const QJsonObject& ext)
+{
+    const std::pair<Domain, const char*> domains[] = {
+        {Domain::RfGain, kExtRfGainKey},
+        {Domain::TxSetpoints, kExtTxSetpointsKey},
+        {Domain::Receivers, kExtReceiversKey},
+        {Domain::Notches, kExtNotchesKey},
+    };
+    QJsonObject gated;
+    for (const auto& [domain, key] : domains) {
+        if (has(caps, domain) && ext.contains(QLatin1String(key))) {
+            gated.insert(QLatin1String(key), ext.value(QLatin1String(key)));
+        }
+    }
+    return gated;
+}
 
 } // namespace
 
@@ -115,18 +137,8 @@ RestoredRadioState load(const RadioSettingsScope& scope,
     // sub-object is handed over, so a narrowed declaration cannot smuggle
     // another domain's data to the backend (PR #4614 review — previously the
     // whole blob rode on any one of the ext domains).
-    const QJsonObject storedExt = doc.value(QStringLiteral("ext")).toObject();
-    QJsonObject gatedExt;
-    if (has(caps, Domain::RfGain)
-        && storedExt.contains(QLatin1String(kExtRfGainKey))) {
-        gatedExt.insert(QLatin1String(kExtRfGainKey),
-                        storedExt.value(QLatin1String(kExtRfGainKey)));
-    }
-    if (has(caps, Domain::TxSetpoints)
-        && storedExt.contains(QLatin1String(kExtTxSetpointsKey))) {
-        gatedExt.insert(QLatin1String(kExtTxSetpointsKey),
-                        storedExt.value(QLatin1String(kExtTxSetpointsKey)));
-    }
+    const QJsonObject gatedExt =
+        gateExtension(caps, doc.value(QStringLiteral("ext")).toObject());
     if (!gatedExt.isEmpty()) {
         state.extension = gatedExt;
         state.extensionSchemaVersion =
@@ -245,17 +257,7 @@ bool store(const RadioSettingsScope& scope, const RadioCapabilities& caps,
     }
 
     // Extension: same per-domain sub-object gate as load().
-    QJsonObject gatedExt;
-    if (has(caps, Domain::RfGain)
-        && state.extension.contains(QLatin1String(kExtRfGainKey))) {
-        gatedExt.insert(QLatin1String(kExtRfGainKey),
-                        state.extension.value(QLatin1String(kExtRfGainKey)));
-    }
-    if (has(caps, Domain::TxSetpoints)
-        && state.extension.contains(QLatin1String(kExtTxSetpointsKey))) {
-        gatedExt.insert(QLatin1String(kExtTxSetpointsKey),
-                        state.extension.value(QLatin1String(kExtTxSetpointsKey)));
-    }
+    const QJsonObject gatedExt = gateExtension(caps, state.extension);
     if (!gatedExt.isEmpty()) {
         doc.insert(QStringLiteral("ext"), gatedExt);
         doc.insert(QStringLiteral("extVersion"), state.extensionSchemaVersion);

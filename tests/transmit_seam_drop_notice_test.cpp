@@ -227,9 +227,9 @@ static void cwPitchReachesSeamWithoutDropNotice()
           "cw pitch: no commandDropped for a pitch the backend applied");
 }
 
-// Unkeyed, tune power has nothing to re-apply: setTune() hands tunePower() to
-// the backend at key time (#4551), so the text is not a drop and no
-// setTunePower() is sent.
+// Unkeyed, tune power reaches a live-declaring backend to be recorded (the
+// HL2 keeps it per band), and setTune() still hands tunePower() over at key
+// time (#4551), so the text is not a drop.
 static void tunePowerDeliveredAtKeyTimeWithoutDropNotice()
 {
     Fixture f(hostModulatingTransmitter());
@@ -237,8 +237,8 @@ static void tunePowerDeliveredAtKeyTimeWithoutDropNotice()
     f.radio.transmitModel().setTunePower(25);
     check(!f.droppedStartingWith(QStringLiteral("transmit set tunepower=")),
           "tunepower: no commandDropped on a backend that applies it at key time");
-    check(f.backend->tunePowers.isEmpty(),
-          "tunepower while not tuning: no setTunePower() reaches the backend");
+    check(f.backend->tunePowers == QList<int>{25},
+          "tunepower while not tuning: setTunePower(25) reaches the backend to be recorded");
     f.radio.transmitModel().startTune();
     check(!f.backend->tunes.isEmpty() && f.backend->tunes.first() == qMakePair(true, 25),
           "tunepower: TUNE keyed with setTune(true, 25), the slider's value");
@@ -256,6 +256,7 @@ static void tunePowerChangedWhileKeyedAppliesLive()
     check(f.radio.transmitModel().isTuning(), "premise: TUNE is keyed");
     const auto tunesAtKeyDown = f.backend->tunes;
     f.dropped.clear();
+    f.backend->tunePowers.clear();   // the unkeyed 10 was recorded; see above
     f.radio.transmitModel().setTunePower(30);
     check(f.backend->tunePowers == QList<int>{30},
           "live tune power: setTunePower(30) reached the backend exactly once");
@@ -276,8 +277,8 @@ static void tunePowerChangedWhileKeyedAppliesLive()
 
     f.radio.transmitModel().stopTune();
     f.radio.transmitModel().setTunePower(50);
-    check(f.backend->tunePowers == QList<int>{30},
-          "after TUNE is released: no setTunePower() reaches the backend");
+    check(f.backend->tunePowers == QList<int>{30, 50},
+          "after TUNE is released: setTunePower(50) reaches the backend to be recorded");
 }
 
 // A tune state decoded off the radio is not a TUNE this client admitted: with

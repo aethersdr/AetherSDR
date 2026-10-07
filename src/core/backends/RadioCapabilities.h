@@ -485,6 +485,10 @@ struct RadioCapabilities {
         // The radio's own receive output level. Not the PC sink's, which is
         // app-global and stays the flat MasterVolume key.
         ReceiveOutputLevel = 1u << 9,
+        // Each receiver's own setpoints (blanker, APF, squelch, RIT/XIT, audio,
+        // pan centre) and how many receivers run; the backend replays the set.
+        Receivers   = 1u << 10,
+        Notches     = 1u << 11,  // host-side manual notches (centre, width, active)
     };
     Q_DECLARE_FLAGS(ClientSettingsDomains, ClientSettingsDomain)
     ClientSettingsDomains clientSettingsDomains;   // default: empty — restore nothing

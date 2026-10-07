@@ -6,6 +6,7 @@
 #include "core/dsp/WdspSMeter.h"
 
 #include <QElapsedTimer>
+#include <QJsonObject>
 #include <QPointer>
 #include <QString>
 #include <QThread>
@@ -215,9 +216,9 @@ public:
     //             interval. What "bandscope" degenerates to without the measurement.
     // "binary"    binaryHighLowConfig(): two-state per-band switch.
     // Same state machine, different numbers; selecting a mode installs its floor.
-    // "default" names the law a backend starts with. Neither law nor floor is
-    // persisted: every connect reinstalls the default (applyRestoredState).
-    // Returns false, changing nothing, on an unknown name.
+    // "default" names the law a backend starts with. A chosen law and floor are
+    // persisted per radio (rfGain); "default" clears the choice. Returns false,
+    // changing nothing, on an unknown name.
     bool setAutoRfGainMode(const QString& mode);
 
     // IAutoRfGainControl (AutoRfGainControl.h), thin forwarders. autoRfGainControl()
@@ -300,6 +301,7 @@ private:
     // Fires link edges through MetisClient's signals and seeds the connect
     // baseline, so hl2_auto_gain_law_test reads the installed law without a radio.
     friend struct Hl2AutoGainLawTestAccess;
+    friend struct Hl2SessionMemoryTestAccess;
     void applyKeying(bool key, const TxCoordinator::Operation& operation,
                      const TxCoordinator::Completion& completion, bool cwBreakIn);
     void invalidateTxDspConfiguration();
@@ -535,6 +537,8 @@ private:
         AetherSDR::NoiseBlankerKind nbKind = AetherSDR::NoiseBlankerKind::Off;
         int  nbLevel = 50;
         AetherSDR::NoiseBlankerFill nbFill = AetherSDR::kDefaultNoiseBlankerFill;
+        // A restored blanker still to be published once (emitSliceState).
+        bool nbEchoPending = false;
 
         // APF request and AGC-off level, held like the blanker: nothing echoes
         // them and a fresh chain must be told again. Literal defaults match
@@ -637,6 +641,22 @@ private:
 
     // Index of `notchId` in m_notches — which IS its WDSP handle — or -1.
     [[nodiscard]] int notchIndexFor(int notchId) const;
+
+    // Session memory beyond the flat fields (Receivers and Notches domains),
+    // validated by applyRestoredState() and replayed once per connect by
+    // replayRestoredSession(). Index 0 is receiver A; ids in the notches are unused.
+    std::vector<Receiver> m_restoredReceivers;
+    std::vector<NotchRecord> m_restoredNotches;
+    int m_restoredTxReceiver = 0;   // the list index that held transmit
+    bool m_sessionReplayPending = false;
+    void replayRestoredSession();
+    // Receiver A's own setpoints from the document, onto m_rx[0] before its DSP opens.
+    void seedFirstReceiverFromMemory();
+    [[nodiscard]] static QJsonObject receiverMemoryJson(const Receiver& r);
+    // Nullopt for an entry with no usable frequency or mode; other bad fields drop alone.
+    [[nodiscard]] std::optional<Receiver> receiverFromMemory(const QJsonObject& o) const;
+    // createPanadapter() with the new receiver's state given rather than copied.
+    bool addReceiver(const Receiver& seed);
     // Push the whole notch set + tune frequency into a receiver added later.
     void seedNotches(const Receiver& r);
     // Re-point a receiver's notch axis at its current NCO; call wherever ncoHz moves.
@@ -854,6 +874,10 @@ private:
     // is just numbers). No initialiser: installDefaultAutoGainLaw() sets name and
     // config together, so there is one copy of the default.
     QString m_autoGainMode;
+    // Whether the law and the floor are the operator's choice, so only a choice is
+    // persisted: a stored default would freeze it against a later build's default.
+    bool m_autoGainLawChosen = false;
+    bool m_autoGainFloorChosen = false;
     // A law is a name and its numbers, kept as one value so neither is installed
     // without the other.
     struct AutoGainLaw {
@@ -1028,6 +1052,15 @@ private:
     // True while band-memory/restore code drives setTxPower(): only operator intent
     // bootstraps the baseline or records into the per-band map.
     bool m_applyingBandMemory = false;
+    // TUNE power per band, with the same first-set baseline rule as drive. -1 in
+    // m_tunePowerPercent: nothing known yet, TransmitModel's value stands.
+    QMap<QString, int> m_tuneByBand;
+    int m_tuneDefaultPercent = -1;
+    int m_tunePowerPercent = -1;
+    // Records an operator's TUNE power under the current band; false when unchanged.
+    bool recordTunePower(int percent);
+    // The band's remembered TUNE power, echoed to TransmitModel; nothing when unknown.
+    void applyTuneMemoryFor(const QString& bandKey);
 
     // The operator's TX passband and whether they have set one.
     // defaultTxPassbandForMode() is re-pushed on every mode set and TX-slice move

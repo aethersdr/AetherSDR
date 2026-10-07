@@ -1942,7 +1942,8 @@ namespace {
 // setter is real (setters default to no-ops):
 //   rfpower, tunepower    canTransmit + transmitDriveControl (setTxPower;
 //                         tunepower rides setTune()'s tunePowerPercent at
-//                         key-down; while TUNE is keyed it is routed only to a
+//                         key-down and, unkeyed, setTunePower() where declared
+//                         live; while TUNE is keyed it is routed only to a
 //                         live carrier (tuneCarrierLive()) whose backend
 //                         declares tunePowerAppliesLive)
 //   miclevel              canTransmit (setMicGain)
@@ -2208,11 +2209,13 @@ RadioModel::RadioModel(QObject* parent)
             m_backend->setTxPower(percent);
     });
 
-    // TUNE power to a carrier already up, on a backend that declares it live.
-    // Not keyed: setTune() carries the value at the next key-down.
+    // TUNE power to a backend that declares it live: applied to a carrier this
+    // client keyed, recorded while unkeyed (the HL2 remembers it per band). A
+    // TUNE decoded off the radio is not this client's carrier. Never keys;
+    // setTune() still carries the value at the next key-down.
     connect(&m_transmitModel, &TransmitModel::tunePowerCommandIssued, this,
             [this](int percent) {
-        if (!m_backend || !tuneCarrierLive()) {
+        if (!m_backend || (m_transmitModel.isTuning() && !tuneCarrierLive())) {
             return;
         }
         const RadioCapabilities caps = backendCapabilities();
