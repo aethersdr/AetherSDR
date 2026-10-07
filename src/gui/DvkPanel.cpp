@@ -119,6 +119,10 @@ DvkPanel::DvkPanel(DvkModel* model, QWidget* parent)
     statusRow->addWidget(m_statusDot, 0, Qt::AlignTop);
     m_statusLabel = new QLabel("Idle");
     m_statusLabel->setObjectName(QStringLiteral("dvkStatus"));
+    // A QLabel with no accessible name announces every setText(). This one's
+    // name carries the last announced state, so the 10 Hz elapsed-time text is
+    // silent and each state change is one NameChanged (announceStatus).
+    m_statusLabel->setAccessibleName(QStringLiteral("Idle"));
     m_statusLabel->setWordWrap(true);
     m_statusLabel->setAlignment(Qt::AlignLeft | Qt::AlignTop);
     // Two lines are reserved so a wrapped refusal never shifts the slots.
@@ -359,11 +363,6 @@ DvkPanel::DvkPanel(DvkModel* model, QWidget* parent)
         stopActiveOperation();
     });
 
-    m_announceTimer = new QTimer(this);
-    m_announceTimer->setSingleShot(true);
-    m_announceTimer->setInterval(150);
-    connect(m_announceTimer, &QTimer::timeout, this, &DvkPanel::flushSlotAnnouncement);
-
     // Elapsed timer for recording/playback/preview progress
     m_elapsedTimer = new QTimer(this);
     m_elapsedTimer->setInterval(100);
@@ -397,36 +396,20 @@ void DvkPanel::updateSlotAccessibility(int id, const QString& name, int duration
 {
     const int idx = id - 1;
     const QString length = durationMs > 0 ? formatDuration(durationMs) : QStringLiteral("empty");
-    m_rowFrames[idx]->setAccessibleName(QString("Slot %1: %2, %3").arg(id).arg(name, length));
+    // setAccessibleName() emits NameChanged itself, so names are set only when
+    // they change: a rename is one event, and a reload of unchanged slots none.
+    const auto setName = [](QWidget* widget, const QString& name) {
+        if (widget->accessibleName() != name) {
+            widget->setAccessibleName(name);
+        }
+    };
+    setName(m_rowFrames[idx], QString("Slot %1: %2, %3").arg(id).arg(name, length));
 
     auto* play = m_fkeyBtns[idx];
-    const QString playName = QString("Play slot %1: %2").arg(id).arg(name);
-    const bool changed = play->accessibleName() != playName;
-    play->setAccessibleName(playName);
+    setName(play, QString("Play slot %1: %2").arg(id).arg(name));
     play->setAccessibleDescription(durationMs > 0
         ? QString("%1 recording. Transmits on the transmit slice (F%2).").arg(length).arg(id)
         : QStringLiteral("Empty slot, nothing to play."));
-    // Announce a real change the operator can see, one slot at a time. A
-    // load or reset changes many slots at once; flushSlotAnnouncement() stays
-    // silent for those instead of reading a dozen names back to back.
-    if (changed && m_announceTimer) {
-        if (!m_announceSlots.contains(id)) {
-            m_announceSlots.append(id);
-        }
-        m_announceTimer->start();
-    }
-}
-
-void DvkPanel::flushSlotAnnouncement()
-{
-    if (m_announceSlots.size() == 1) {
-        QPushButton* play = m_fkeyBtns[m_announceSlots.first() - 1];
-        if (play->isVisible()) {
-            QAccessibleEvent ev(play, QAccessible::NameChanged);
-            QAccessible::updateAccessibility(&ev);
-        }
-    }
-    m_announceSlots.clear();
 }
 
 void DvkPanel::announceStatus(const QString& text, bool error)
@@ -436,8 +419,7 @@ void DvkPanel::announceStatus(const QString& text, bool error)
         return;
     }
     m_statusLabel->setText(text);
-    QAccessibleEvent ev(m_statusLabel, QAccessible::NameChanged);
-    QAccessible::updateAccessibility(&ev);
+    m_statusLabel->setAccessibleName(text);  // emits the one NameChanged
 }
 
 void DvkPanel::togglePlayback(int id)
@@ -563,11 +545,10 @@ void DvkPanel::onStatusChanged(int status, int id)
                 m_elapsedTimer->start();
 
             // Announce the new operation once; the 100 ms tick that follows
-            // only rewrites the elapsed time and stays silent.
+            // only rewrites the visible elapsed time.
             setStyleProperty(m_statusLabel, "tone", QString());
             onElapsedTick();
-            QAccessibleEvent ev(m_statusLabel, QAccessible::NameChanged);
-            QAccessible::updateAccessibility(&ev);
+            m_statusLabel->setAccessibleName(m_statusLabel->text());
         } else {
             onElapsedTick();
         }

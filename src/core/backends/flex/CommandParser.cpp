@@ -10,9 +10,16 @@ QMap<QString, QString> CommandParser::parseKVs(const QString& body)
     QMap<QString, QString> result;
     // Body may look like: "freq=14.225000 mode=USB filter_lo=-1500 filter_hi=1500"
     // A quoted value may contain spaces (`dvk … name="CQ Contest"`) and is kept
-    // whole, quotes included, up to the token that closes it. A quote left
-    // open (no closing token before the next `key="` or the end of the line)
-    // splits as before, so a malformed value cannot swallow the keys after it.
+    // whole, quotes included, up to the token that closes it: the next token
+    // holding a quote, unless that token opens another quoted field
+    // (`key="text…`). A token whose only quote is its last character always
+    // closes, so a name may end in '=' (`name="CQ a="`); on a malformed line
+    // that same shape (`label="` alone) is read as the close. A quote left
+    // open splits as before, so it cannot swallow the keys after it.
+    const auto closesQuotedValue = [](const QString& token) {
+        return !token.contains(QLatin1String("=\""))
+            || (token.endsWith(QLatin1Char('"')) && token.count(QLatin1Char('"')) == 1);
+    };
     const QStringList tokens = body.split(' ', Qt::SkipEmptyParts);
     for (qsizetype i = 0; i < tokens.size(); ++i) {
         QString token = tokens[i];
@@ -21,11 +28,7 @@ QMap<QString, QString> CommandParser::parseKVs(const QString& body)
             while (end < tokens.size() && !tokens[end].contains('"')) {
                 ++end;
             }
-            // A trailing quote closes this value even when its last character is '='.
-            // A quote followed by content instead begins the next quoted field.
-            if (end < tokens.size()
-                && (!tokens[end].contains(QLatin1String("=\""))
-                    || tokens[end].indexOf(QLatin1Char('"')) == tokens[end].size() - 1)) {
+            if (end < tokens.size() && closesQuotedValue(tokens[end])) {
                 for (qsizetype j = i + 1; j <= end; ++j) {
                     token += QLatin1Char(' ') + tokens[j];
                 }

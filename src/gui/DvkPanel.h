@@ -70,11 +70,6 @@ private:
     // (#2464, #2582).
     QVector<QShortcut*> m_shortcuts;
 
-    // F-key name changes collected for one announcement; a burst (slot load,
-    // disconnect) of more than one is not announced.
-    QVector<int> m_announceSlots;
-    QTimer* m_announceTimer{nullptr};
-    void flushSlotAnnouncement();
 
     void selectSlot(int id);
     // Row and F-key names carry the slot's name and length for screen readers.

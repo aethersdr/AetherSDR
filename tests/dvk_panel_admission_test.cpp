@@ -7,7 +7,11 @@
 #include "gui/DvkPanel.h"
 #include "models/DvkModel.h"
 
+#include <QAccessible>
 #include <QApplication>
+#include <QElapsedTimer>
+#include <QHash>
+#include <QLabel>
 #include <QPushButton>
 #include <QStringList>
 
@@ -33,6 +37,24 @@ void feed(DvkModel& model, const QString& line)
 {
     const ParsedMessage msg = CommandParser::parseLine(line);
     model.applyStatus(msg.object, msg.kvs);
+}
+
+// NameChanged events per widget, through Qt's accessibility update hook.
+QHash<QObject*, int> g_nameChanges;
+void countNameChanges(QAccessibleEvent* event)
+{
+    if (event->type() == QAccessible::NameChanged) {
+        ++g_nameChanges[event->object()];
+    }
+}
+
+void spin(int ms)
+{
+    QElapsedTimer t;
+    t.start();
+    while (t.elapsed() < ms) {
+        QApplication::processEvents(QEventLoop::AllEvents, 20);
+    }
 }
 
 void seed(DvkModel& model)
@@ -99,6 +121,48 @@ int main(int argc, char** argv)
         panel.findChild<QPushButton*>(QStringLiteral("dvkRecord"))->click();
         report("the transfer's end admits REC again",
                sent == QStringList{QStringLiteral("dvk rec_start id=1")});
+    }
+
+    {
+        // Review #6262: setAccessibleName() and QLabel::setText() emit their own
+        // NameChanged. The panel adds none of its own, so each real change is
+        // one event, unchanged reloads are none, and the elapsed tick is silent.
+        QAccessible::setActive(true);
+        QAccessible::installUpdateHandler(countNameChanges);
+        DvkModel model;
+        DvkPanel panel(&model);
+        panel.show();
+        auto* f3 = panel.findChild<QPushButton*>(QStringLiteral("dvkPlaySlot3"));
+        auto* status = panel.findChild<QLabel*>(QStringLiteral("dvkStatus"));
+
+        g_nameChanges.clear();
+        seed(model);
+        int fkeyEvents = 0;
+        for (int id = 1; id <= 12; ++id) {
+            fkeyEvents += g_nameChanges.value(
+                panel.findChild<QPushButton*>(QStringLiteral("dvkPlaySlot%1").arg(id)));
+        }
+        report("loading slots whose names did not change emits no F-key NameChanged",
+               fkeyEvents == 0);
+
+        g_nameChanges.clear();
+        feed(model, QStringLiteral("S1|dvk id=3 name=\"CQ Contest\" duration=4210"));
+        spin(300);  // past any deferred announcement
+        report("a rename emits exactly one NameChanged on its F-key",
+               g_nameChanges.value(f3) == 1);
+
+        g_nameChanges.clear();
+        feed(model, QStringLiteral("S1|dvk status=preview id=3 enabled=1"));
+        spin(550);  // five elapsed-time ticks
+        report("a state change is one status NameChanged; the elapsed tick adds none",
+               g_nameChanges.value(status) == 1);
+
+        g_nameChanges.clear();
+        feed(model, QStringLiteral("S0|dvk status=idle enabled=1"));
+        model.reset();
+        report("disconnect announces the state once and only the renamed slot's F-key",
+               g_nameChanges.value(status) == 1 && g_nameChanges.value(f3) == 1);
+        QAccessible::installUpdateHandler(nullptr);
     }
 
     {
