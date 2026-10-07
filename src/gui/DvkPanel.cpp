@@ -1,6 +1,7 @@
 #include "DvkPanel.h"
 #include "models/DvkModel.h"
 #include "core/DvkWavTransfer.h"
+#include <QAccessible>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QGridLayout>
@@ -38,6 +39,7 @@ DvkPanel::DvkPanel(DvkModel* model, QWidget* parent)
     : QWidget(parent), m_model(model)
 {
     theme::setContainer(this, QStringLiteral("panel/dvk"));
+    setAccessibleName(QStringLiteral("Digital Voice Keyer"));
     auto* outerVbox = new QVBoxLayout(this);
     outerVbox->setContentsMargins(4, 4, 4, 4);
     outerVbox->setSpacing(4);
@@ -58,6 +60,7 @@ DvkPanel::DvkPanel(DvkModel* model, QWidget* parent)
 
         // Inset container per row: VBox with content row + progress bar
         auto* rowFrame = new QFrame;
+        rowFrame->setObjectName(QString("dvkSlot%1").arg(id));
         AetherSDR::ThemeManager::instance().applyStyleSheet(rowFrame, "QFrame { background: #0f1520; border: 1px solid {{color.background.1}}; border-radius: 3px; }");
         rowFrame->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
         auto* rowVbox = new QVBoxLayout(rowFrame);
@@ -69,6 +72,7 @@ DvkPanel::DvkPanel(DvkModel* model, QWidget* parent)
         rowLayout->setSpacing(4);
 
         auto* fkeyBtn = new QPushButton(QString("F%1").arg(id));
+        fkeyBtn->setObjectName(QString("dvkPlaySlot%1").arg(id));
         fkeyBtn->setStyleSheet(kFKeyStyle);
         fkeyBtn->setFixedWidth(34);
         fkeyBtn->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Expanding);
@@ -76,10 +80,12 @@ DvkPanel::DvkPanel(DvkModel* model, QWidget* parent)
         rowLayout->addWidget(fkeyBtn);
 
         auto* nameLabel = new QLabel(QString("Recording %1").arg(id));
+        nameLabel->setObjectName(QString("dvkSlotName%1").arg(id));
         nameLabel->setStyleSheet("QLabel { color: #505060; font-size: 10px; }");
         rowLayout->addWidget(nameLabel, 1);
 
         auto* durLabel = new QLabel("Empty");
+        durLabel->setObjectName(QString("dvkSlotLength%1").arg(id));
         durLabel->setStyleSheet(kDurStyle);
         durLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         durLabel->setFixedWidth(40);
@@ -88,6 +94,8 @@ DvkPanel::DvkPanel(DvkModel* model, QWidget* parent)
         rowVbox->addLayout(rowLayout, 1);
 
         auto* progressBar = new QProgressBar;
+        progressBar->setObjectName(QString("dvkSlotProgress%1").arg(id));
+        progressBar->setAccessibleName(QString("Slot %1 progress").arg(id));
         progressBar->setFixedHeight(3);
         progressBar->setTextVisible(false);
         progressBar->setRange(0, 100);
@@ -105,6 +113,7 @@ DvkPanel::DvkPanel(DvkModel* model, QWidget* parent)
         m_nameLabels.append(nameLabel);
         m_durLabels.append(durLabel);
         m_progressBars.append(progressBar);
+        updateSlotAccessibility(id, DvkModel::defaultName(id), 0);
 
         // Right-click context menu on row
         rowFrame->setContextMenuPolicy(Qt::CustomContextMenu);
@@ -132,23 +141,40 @@ DvkPanel::DvkPanel(DvkModel* model, QWidget* parent)
     auto* btnRow = new QHBoxLayout;
     btnRow->setSpacing(3);
 
+    // The glyph prefixes would be read aloud, so each button carries a plain name.
     m_recBtn = new QPushButton(QString::fromUtf8("\u25CF REC"));
+    m_recBtn->setObjectName(QStringLiteral("dvkRecord"));
+    m_recBtn->setAccessibleName(QStringLiteral("Record"));
+    m_recBtn->setAccessibleDescription(
+        QStringLiteral("Records your transmit audio into the selected slot, up to 10 seconds. Does not transmit."));
     m_recBtn->setCheckable(true);
     m_recBtn->setStyleSheet(QString(kBtnStyle) +
         "QPushButton:checked { background: #cc3333; color: #fff; }");
     btnRow->addWidget(m_recBtn);
 
     m_stopBtn = new QPushButton(QString::fromUtf8("\u25A0 STOP"));
+    m_stopBtn->setObjectName(QStringLiteral("dvkStop"));
+    m_stopBtn->setAccessibleName(QStringLiteral("Stop"));
+    m_stopBtn->setAccessibleDescription(
+        QStringLiteral("Stops the recording, preview or playback in progress."));
     m_stopBtn->setStyleSheet(kBtnStyle);
     btnRow->addWidget(m_stopBtn);
 
     m_playBtn = new QPushButton(QString::fromUtf8("\u25B6 PLAY"));
+    m_playBtn->setObjectName(QStringLiteral("dvkPlay"));
+    m_playBtn->setAccessibleName(QStringLiteral("Play on air"));
+    m_playBtn->setAccessibleDescription(
+        QStringLiteral("Transmits the selected slot on the transmit slice."));
     m_playBtn->setCheckable(true);
     m_playBtn->setStyleSheet(QString(kBtnStyle) +
         "QPushButton:checked { background: #33aa33; color: #fff; }");
     btnRow->addWidget(m_playBtn);
 
     m_prevBtn = new QPushButton(QString::fromUtf8("\u25C0 PREV"));
+    m_prevBtn->setObjectName(QStringLiteral("dvkPreview"));
+    m_prevBtn->setAccessibleName(QStringLiteral("Preview"));
+    m_prevBtn->setAccessibleDescription(
+        QStringLiteral("Plays the selected slot to your speakers without transmitting."));
     m_prevBtn->setCheckable(true);
     m_prevBtn->setStyleSheet(QString(kBtnStyle) +
         "QPushButton:checked { background: #3388cc; color: #fff; }");
@@ -158,6 +184,7 @@ DvkPanel::DvkPanel(DvkModel* model, QWidget* parent)
 
     // Status label
     m_statusLabel = new QLabel("Status: Idle");
+    m_statusLabel->setObjectName(QStringLiteral("dvkStatus"));
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_statusLabel, "QLabel { color: {{color.text.label}}; font-size: 10px; }");
     outerVbox->addWidget(m_statusLabel);
 
@@ -213,8 +240,8 @@ DvkPanel::DvkPanel(DvkModel* model, QWidget* parent)
         // failure text afterwards or it gets clobbered before the event loop
         // returns and the user never sees the rejection. (#3377)
         onStatusChanged(static_cast<int>(m_model->status()), m_model->activeId());
-        m_statusLabel->setText(QString("Status: %1 (slot %2) failed — %3")
-                                   .arg(verb).arg(id).arg(message));
+        announceStatus(QString("Status: %1 (slot %2) failed — %3")
+                           .arg(verb).arg(id).arg(message));
     });
 
     // F1-F12 hotkeys (only play if slot has a recording).  Registered as
@@ -255,6 +282,31 @@ DvkPanel::DvkPanel(DvkModel* model, QWidget* parent)
 
     m_selectedSlot = 1;
     selectSlot(1);
+}
+
+void DvkPanel::updateSlotAccessibility(int id, const QString& name, int durationMs)
+{
+    const int idx = id - 1;
+    const QString length = durationMs > 0 ? formatDuration(durationMs) : QStringLiteral("empty");
+    m_rowFrames[idx]->setAccessibleName(QString("Slot %1: %2, %3").arg(id).arg(name, length));
+
+    auto* play = m_fkeyBtns[idx];
+    play->setAccessibleName(QString("Play slot %1: %2").arg(id).arg(name));
+    play->setAccessibleDescription(durationMs > 0
+        ? QString("%1 recording. Transmits on the transmit slice (F%2).").arg(length).arg(id)
+        : QStringLiteral("Empty slot, nothing to play."));
+    QAccessibleEvent ev(play, QAccessible::NameChanged);
+    QAccessible::updateAccessibility(&ev);
+}
+
+void DvkPanel::announceStatus(const QString& text)
+{
+    if (m_statusLabel->text() == text) {
+        return;
+    }
+    m_statusLabel->setText(text);
+    QAccessibleEvent ev(m_statusLabel, QAccessible::NameChanged);
+    QAccessible::updateAccessibility(&ev);
 }
 
 void DvkPanel::togglePlayback(int id)
@@ -365,10 +417,15 @@ void DvkPanel::onStatusChanged(int status, int id)
 
             if (!m_elapsedTimer->isActive())
                 m_elapsedTimer->start();
-        }
 
-        // Update status label with initial text (tick will update with elapsed)
-        onElapsedTick();
+            // Announce the new operation once; the 100 ms tick that follows
+            // only rewrites the elapsed time and stays silent.
+            onElapsedTick();
+            QAccessibleEvent ev(m_statusLabel, QAccessible::NameChanged);
+            QAccessible::updateAccessibility(&ev);
+        } else {
+            onElapsedTick();
+        }
     } else {
         // Stop timer and hide progress bars
         m_elapsedTimer->stop();
@@ -378,9 +435,8 @@ void DvkPanel::onStatusChanged(int status, int id)
         for (auto* bar : m_progressBars) bar->hide();
 
         switch (s) {
-        case DvkModel::Idle:     m_statusLabel->setText("Status: Idle"); break;
-        case DvkModel::Disabled: m_statusLabel->setText("Status: Disabled (SmartSDR+ required)"); break;
-        default:                 m_statusLabel->setText("Status: Idle"); break;
+        case DvkModel::Disabled: announceStatus("Status: Disabled (SmartSDR+ required)"); break;
+        default:                 announceStatus("Status: Idle"); break;
         }
     }
 }
@@ -402,6 +458,7 @@ void DvkPanel::onRecordingChanged(int id)
     }
     m_nameLabels[idx]->setText(name);
     m_durLabels[idx]->setText(durationMs > 0 ? formatDuration(durationMs) : "Empty");
+    updateSlotAccessibility(id, name, durationMs);
     m_nameLabels[idx]->setStyleSheet(durationMs > 0
         ? kNameStyle
         : "QLabel { color: #505060; font-size: 10px; }");
@@ -495,7 +552,7 @@ void DvkPanel::setWavTransfer(DvkWavTransfer* transfer)
             m_statusLabel, &QLabel::setText);
     connect(m_wavTransfer, &DvkWavTransfer::finished,
             this, [this](bool success, const QString& msg) {
-        m_statusLabel->setText(success ? msg : QString("Transfer failed: %1").arg(msg));
+        announceStatus(success ? msg : QString("Transfer failed: %1").arg(msg));
     });
 }
 
@@ -576,6 +633,9 @@ void DvkPanel::startRename(int id)
     m_renameEdit->setText(label->text());
     m_renameEdit->selectAll();
     m_renameEdit->setMaxLength(DvkModel::kMaxNameBytes);
+    m_renameEdit->setAccessibleName(QString("Slot %1 name").arg(id));
+    m_renameEdit->setAccessibleDescription(QStringLiteral(
+        "Up to 61 characters. Quotes and | are removed. Enter saves, Escape cancels."));
 
     // Swap label out, edit in (same layout position)
     int labelIdx = rowLayout->indexOf(label);

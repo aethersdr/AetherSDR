@@ -5787,9 +5787,12 @@ void MainWindow::buildUI()
 #endif
 
     m_dvkIndicator = new QLabel("DVK");
+    m_dvkIndicator->setObjectName(QStringLiteral("dvkIndicator"));
+    m_dvkIndicator->setAccessibleName(QStringLiteral("Digital Voice Keyer"));
     m_dvkIndicator->setStyleSheet(greyIndLg);
     m_dvkIndicator->setCursor(Qt::PointingHandCursor);
-    m_dvkIndicator->setToolTip("Digital Voice Keyer — click to toggle");
+    m_dvkIndicator->setToolTip(dvkIndicatorTooltip(DvkIndicatorBlocker::None));
+    m_dvkIndicator->setAccessibleDescription(dvkIndicatorTooltip(DvkIndicatorBlocker::None));
     m_dvkIndicator->installEventFilter(this);
     hbox->addWidget(m_dvkIndicator);
 
@@ -10473,6 +10476,8 @@ void MainWindow::updateKeyerAvailability()
     // mode gate keeps the normal one, since the panel's own title and the F-key
     // rows already make "wrong mode" obvious once it opens.
     m_dvkIndicator->setToolTip(dvkIndicatorTooltip(dvkBlocker));
+    // A tooltip is never announced, so the reason also rides the description.
+    m_dvkIndicator->setAccessibleDescription(dvkIndicatorTooltip(dvkBlocker));
 
 #ifdef AETHER_ASR_ENABLED
     // ASR (Copy Assist): available in voice modes only (dimmed in CW and

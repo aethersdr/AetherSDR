@@ -66,6 +66,10 @@ private:
     QVector<QShortcut*> m_shortcuts;
 
     void selectSlot(int id);
+    // Row and F-key names carry the slot's name and length for screen readers.
+    void updateSlotAccessibility(int id, const QString& name, int durationMs);
+    // Sets the status text and announces it; the elapsed-time tick does not.
+    void announceStatus(const QString& text);
     void togglePlayback(int id);
     void stopActiveOperation();
     void showContextMenu(int id, const QPoint& globalPos);
