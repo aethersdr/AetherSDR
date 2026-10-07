@@ -1444,6 +1444,11 @@ private:
     // Sends the radio auto_black flag from the combined auto-black on/off +
     // client/radio-source state (auto_black=1 only when both select radio-side).
     void applyWaterfallAutoBlack();
+    // The one wire site per key. Without a command plane the text reaches
+    // sendCmd(), which reports it as dropped, only when reportDrop is set: an
+    // operator moved the control and the client did not draw it.
+    void sendWaterfallColorGain(const QString& panId, int gain, bool reportDrop);
+    void sendWaterfallBlackLevel(const QString& panId, int level, bool reportDrop);
     bool m_wfAutoBlackOn{true};         // mirrors the client auto-black on/off
     bool m_wfAutoBlackRadioSide{false}; // false = client-side, true = radio-side
     bool profileLoadRadioStateWritesHeld() const;
