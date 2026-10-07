@@ -5924,6 +5924,14 @@ add_test(NAME hl2_txdsp_capture_burst_test COMMAND hl2_txdsp_capture_burst_test)
 # inconclusive, not failed. An underrun still fails.
 set_tests_properties(hl2_txdsp_capture_burst_test PROPERTIES SKIP_RETURN_CODE 77)
 
+# What the operator's transmitted audio gets from TXA (#5911): passband shape
+# per mode and the onset. 77 = phasing build, or starved by machine load.
+add_executable(hl2_tx_passband_onset_test tests/hl2_tx_passband_onset_test.cpp)
+target_include_directories(hl2_tx_passband_onset_test PRIVATE src tests)
+target_link_libraries(hl2_tx_passband_onset_test PRIVATE aethercore Qt6::Core)
+add_test(NAME hl2_tx_passband_onset_test COMMAND hl2_tx_passband_onset_test)
+set_tests_properties(hl2_tx_passband_onset_test PROPERTIES SKIP_RETURN_CODE 77)
+
 # radiocert's measurement primitives. Header-only by design so this needs no
 # Qt and no link against aethercore — see the test's header comment for why it
 # exists at all (both shipped bugs in the diagnostic were in this arithmetic).
