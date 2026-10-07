@@ -17,6 +17,7 @@
 // command plane has to exist, and no transport, DSP or radio of any kind.
 // Nothing is keyed.
 
+#include "ModelControlWireSpy.h"
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
 #include "core/AutomationServer.h"
@@ -204,7 +205,7 @@ struct FlexWire {
     }
 };
 
-QStringList wireOf(const QSignalSpy& spy)
+QStringList wireOf(const QList<QList<QVariant>>& spy)
 {
     QStringList out;
     for (const QList<QVariant>& args : spy) {
@@ -411,7 +412,7 @@ void testAmCarrierFollowsTheCapability()
 {
     {
         Fixture f;
-        QSignalSpy wire(&f.radio.transmitModel(), &TransmitModel::commandReady);
+        ModelControlWireSpy wire(&f.radio.transmitModel());
         const int before = f.radio.transmitModel().amCarrierLevel();
         check(!f.radio.requestAmCarrierLevel(before == 30 ? 31 : 30),
               "AM carrier: refused on a radio that declares no AM carrier control");
@@ -420,7 +421,7 @@ void testAmCarrierFollowsTheCapability()
     }
     {
         Fixture f([](RadioCapabilities& c) { c.hasAmCarrierLevel = true; });
-        QSignalSpy wire(&f.radio.transmitModel(), &TransmitModel::commandReady);
+        ModelControlWireSpy wire(&f.radio.transmitModel());
         check(f.radio.requestAmCarrierLevel(30), "AM carrier/flex: accepted where declared");
         check(wireOf(wire) == QStringList{QStringLiteral("transmit set am_carrier=30")},
               "AM carrier/flex: the same wire text as before");

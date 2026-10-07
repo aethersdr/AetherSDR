@@ -17,16 +17,23 @@
 
 #include <QCoreApplication>
 #include <QEvent>
+#include <QJsonObject>
 #include <QSignalSpy>
 #include <array>
 #include <cmath>
 #include <cstdio>
 #include <memory>
+#include <utility>
 
 namespace AetherSDR::hl2 {
 // Reuse the existing friend to open only a production RX worker/channel.
 // No connectRadio(), Metis start, network peer, TX DSP configure or samples.
 struct Hl2DspReadbackTestAccess {
+    static int rfPower(const Hl2Backend& backend) { return backend.m_rfPowerPercent; }
+    static int micLevel(const Hl2Backend& backend) { return backend.m_micLevel; }
+    static int cwPitch(const Hl2Backend& backend) { return backend.m_cwPitchHz; }
+    static std::pair<int, int> txPassband(const Hl2Backend& backend)
+    { return backend.effectiveTxPassband(QStringLiteral("USB")); }
     static std::array<double, 3> audio(Hl2Backend& backend)
     {
         const Hl2Backend::Receiver* receiver = backend.rx(0);
@@ -512,6 +519,154 @@ void hostConfiguration()
     }
 }
 
+void remainingModelControls()
+{
+    using SF = SliceControlRequest::Field;
+    using TF = TransmitControlRequest::Field;
+    using Access = icom::IcomCivBackendTestAccess;
+    const std::array<TransmitControlRequest, 3> cwRequests{{
+        {TF::CwPitch, 700}, {TF::CwSpeed, 25}, {TF::CwBreakIn, true}}};
+    for (const int modelId : {0xA4, 0xB6, 0xA2}) {
+        for (const TransmitControlRequest& request : cwRequests) {
+            icom::IcomCivBackend backend;
+            Access::prepare(backend);
+            Access::selectModel(backend, *icom::modelForId(modelId));
+            const bool supported = modelId != 0xA2;
+            check(backend.requestTransmitControl(request)
+                      == (supported ? ReceiveDispatch::Dispatched : ReceiveDispatch::Unsupported),
+                  "Icom CW settings preserve the declared keyer capability gate");
+            check((Access::queuedCount(backend) != 0) == supported,
+                  "unsupported Icom CW settings queue no CI-V writes");
+        }
+    }
+    // IC-705 command list: RF power 14 0A, mic gain 14 0B, CW pitch 14 09.
+    for (const auto field : {SF::Rit, SF::Xit}) {
+        for (const int hz : {-20'000, 20'000}) {
+            icom::IcomCivBackend backend;
+            Access::prepare(backend);
+            check(backend.requestSliceControl(0, {field, IncrementalTuning{true, hz}})
+                      == ReceiveDispatch::Dispatched,
+                  "Icom RIT/XIT retains its native clamping path");
+            Access::pump(backend);
+            for (int step = 0; step < 3; ++step) { Access::expireReply(backend); }
+            const QString expected = hz < 0 ? QStringLiteral("fe fe a4 e0 21 00 90 99 01 fd")
+                                            : QStringLiteral("fe fe a4 e0 21 00 90 99 00 fd");
+            check(Access::dispatched(backend, expected),
+                  "Icom typed offset is clamped to signed 9990 in the actual CI-V write");
+        }
+    }
+    const std::array fields{TF::RfPower, TF::MicGain, TF::CwPitch};
+    const std::array values{50, 50, 600};
+    const std::array<QString, 3> wires{
+        "fe fe a4 e0 14 0a 01 28 fd", "fe fe a4 e0 14 0b 01 28 fd",
+        "fe fe a4 e0 14 09 01 28 fd"};
+    for (std::size_t i = 0; i < fields.size(); ++i) {
+        icom::IcomCivBackend backend;
+        Access::prepare(backend);
+        QSignalSpy readback(&backend, &IRadioBackend::transmitChanged);
+        check(backend.requestTransmitControl({fields[i], values[i]}) == ReceiveDispatch::Dispatched,
+              "Icom typed TX setting has an implemented dispatch");
+        Access::pump(backend);
+        check(Access::firstDispatched(backend) == wires[i], "Icom TX setting retains its CI-V encoding");
+        check(readback.isEmpty(), "Icom TX dispatch never invents radio readback");
+    }
+    icom::IcomCivBackend icom;
+    Access::prepare(icom);
+    const auto queued = Access::queuedCount(icom);
+    check(icom.requestSliceControl(0, {SF::RepeaterRecall,
+              RepeaterSetting{"up", 600000, "ctcss_tx", 999}}) == ReceiveDispatch::Unsupported
+              && icom.requestSliceControl(0, {SF::RepeaterOffset, 100'000'000.0}) == ReceiveDispatch::Unsupported
+              && Access::queuedCount(icom) == queued,
+          "invalid Icom grouped recall or oversized offset produces no partial writes");
+    check(icom.requestTransmitControl({TF::Filter, TxPassband{100, 2800}}) == ReceiveDispatch::Unsupported,
+          "Icom TX filter refuses until the active radio slot is known");
+    check(icom.requestTransmitControl({TF::TunePower, 20}) == ReceiveDispatch::LocalOnly
+              && icom.requestTransmitControl({TF::TunePower, 20}, TunePowerContext::UnqualifiedCarrier)
+                  == ReceiveDispatch::Unsupported
+              && icom.requestTransmitControl({TF::TunePower, 20}, TunePowerContext::LiveLocalCarrier)
+                  == ReceiveDispatch::Unsupported && Access::queuedCount(icom) == queued,
+          "Icom deferred TUNE power writes nothing; forged live context cannot replace admission");
+    hl2::Hl2Backend hl2;
+    using Hl2Access = hl2::Hl2DspReadbackTestAccess;
+    check(hl2.requestTransmitControl({TF::RfPower, 42}) == ReceiveDispatch::Dispatched
+              && Hl2Access::rfPower(hl2) == 42,
+          "HL2 typed RF power reaches its real drive setpoint");
+    check(hl2.requestTransmitControl({TF::MicGain, 34}) == ReceiveDispatch::Dispatched
+              && Hl2Access::micLevel(hl2) == 34,
+          "HL2 typed mic gain reaches its real modulator setpoint");
+    check(hl2.requestTransmitControl({TF::CwPitch, 700}) == ReceiveDispatch::Dispatched
+              && Hl2Access::cwPitch(hl2) == 700,
+          "HL2 typed CW pitch reaches its real BFO setpoint");
+    check(hl2.requestTransmitControl({TF::Filter, TxPassband{200, 3400}}) == ReceiveDispatch::Dispatched
+              && Hl2Access::txPassband(hl2) == std::pair{200, 3400},
+          "HL2 typed filter reaches its effective SSB TX passband");
+    const RestoredRadioState saved = hl2.currentOperatingState();
+    hl2::Hl2Backend restored;
+    restored.applyRestoredState(saved);
+    check(Hl2Access::txPassband(restored) == std::pair{200, 3400},
+          "HL2 restores the typed operator TX passband without a model push");
+    restored.applyRestoredState({});
+    check(Hl2Access::txPassband(restored) == std::pair{300, 2700},
+          "an empty radio restore clears the previous radio's TX passband");
+    const std::array<TransmitControlRequest, 12> localRequests{{
+        {TF::ProcessorEnabled, ProcessorSetting{true, 1}},
+        {TF::ProcessorLevel, ProcessorSetting{true, 2}},
+        {TF::CwSpeed, 25}, {TF::CwBreakIn, true}, {TF::CwDelay, 300},
+        {TF::CwSidetone, true}, {TF::CwIambic, true}, {TF::CwIambicMode, 1},
+        {TF::CwSwap, true}, {TF::CwMonitorGain, 35}, {TF::CwMonitorPan, 45},
+        {TF::MicInput, QStringLiteral("PC")}}};
+    for (const TransmitControlRequest& request : localRequests) {
+        check(hl2.requestTransmitControl(request) == ReceiveDispatch::LocalOnly,
+              "HL2 host-consumed control returns an honest local receipt");
+    }
+    check(hl2.requestTransmitControl({TF::MicInput, QStringLiteral("BAL")})
+              == ReceiveDispatch::Unsupported,
+          "HL2 refuses a nonexistent physical mic input");
+    QSignalSpy observations(&hl2, &IRadioBackend::sliceChanged);
+    bool nested = false;
+    QObject::connect(&hl2, &IRadioBackend::sliceChanged, &hl2,
+                     [&](int, const SliceDelta& delta) {
+        if (!nested && delta.ritFreq == 123) {
+            nested = true;
+            hl2.requestSliceControl(0, {SF::Rit, IncrementalTuning{true, 456}});
+        }
+    });
+    check(hl2.requestSliceControl(0, {SF::Rit, IncrementalTuning{true, 123}})
+              == ReceiveDispatch::Dispatched && nested && last(observations).ritFreq == 456,
+          "HL2 paired RIT commits before readback; a reentrant newer request wins");
+    const auto ritObservations = observations.size();
+    check(hl2.requestSliceControl(0, {SF::Rit, IncrementalTuning{true, 456}})
+              == ReceiveDispatch::Dispatched && observations.size() == ritObservations,
+          "an identical HL2 RIT pair publishes no redundant observation");
+    hl2.requestSliceControl(0, {SF::Xit, IncrementalTuning{true, 20000}});
+    check(last(observations).xitFreq == 9999, "HL2 typed XIT retains the production clamp");
+    const auto xitObservations = observations.size();
+    hl2.requestSliceControl(0, {SF::Xit, IncrementalTuning{true, 9999}});
+    check(observations.size() == xitObservations,
+          "an identical HL2 XIT pair publishes no redundant observation");
+    hl2.requestSliceControl(0, {SF::Xit, IncrementalTuning{true, 20000}});
+    check(observations.size() == xitObservations + 1 && last(observations).xitFreq == 9999,
+          "an oversized repeated XIT intent still receives its corrective clamp observation");
+    check(hl2.requestTransmitControl({TF::TunePower, 20}) == ReceiveDispatch::LocalOnly
+              && hl2.requestTransmitControl({TF::TunePower, 20}, TunePowerContext::LiveLocalCarrier)
+                  == ReceiveDispatch::Unsupported,
+          "HL2 idle TUNE edits are local setpoints, never an unadmitted drive write");
+    for (const Family& family : kFamilies) {
+        if (!family.make || (QLatin1String(family.name) != QLatin1String("sim")
+            && QLatin1String(family.name) != QLatin1String("anan")
+            && QLatin1String(family.name) != QLatin1String("rtl"))) { continue; }
+        const auto backend = family.make();
+        check(backend->requestSliceControl(0, {SF::ActiveSlice, true}) == ReceiveDispatch::LocalOnly
+                  && backend->requestSliceControl(0, {SF::ActiveSlice, false}) == ReceiveDispatch::LocalOnly
+                  && backend->requestSliceControl(-1, {SF::ActiveSlice, true}) == ReceiveDispatch::Unsupported
+                  && backend->requestSliceControl(0, {SF::ActiveSlice, 1}) == ReceiveDispatch::Unsupported,
+              "RX-only backends accept local selection but reject malformed requests");
+        check(backend->requestTransmitControl({TF::RfPower, 50}) == ReceiveDispatch::Unsupported
+                  && backend->requestSliceControl(0, {SF::TxSlice, true}) == ReceiveDispatch::Unsupported,
+              "RX-only production backends refuse new TX-related settings without connecting");
+    }
+}
+
 void demoAndColdRefusal()
 {
     SimBackend backend;
@@ -703,6 +858,7 @@ int main(int argc, char** argv)
     hostConfiguration();
     ananNoiseBlankerDispatch();
     hl2WorkerDispatch();
+    remainingModelControls();
     demoAndColdRefusal();
     return failures == 0 ? 0 : 1;
 }

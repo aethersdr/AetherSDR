@@ -1,3 +1,4 @@
+#include "ModelControlWireSpy.h"
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
 #include "core/backends/TransmitDelta.h"
@@ -99,7 +100,7 @@ int main(int argc, char** argv)
 
     check(procSlider->maximum() == 2,
           "default processor surface preserves Flex NOR/DX/DX+ range");
-    QSignalSpy flexCommands(&model, &TransmitModel::commandReady);
+    ModelControlWireSpy flexCommands(&model);
     procSlider->setValue(2);
     check(flexCommands.count() == 1
               && flexCommands.takeFirst().at(0).toString()

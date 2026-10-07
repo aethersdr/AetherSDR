@@ -163,6 +163,19 @@ baseline warn; a new violation or a grown baseline errors.
   nothing. New controls use a typed intent through `IRadioBackend`. Growth
   under `src/core/backends/flex/` is not counted.
 
+`SliceModel` and `TransmitModel` no longer encode Flex commands. Their remaining
+desktop setters emit validated `SliceControlRequest` / `TransmitControlRequest`
+values through the identity-guarded `RadioModel` route. `FlexModelControls.cpp`
+owns the encoding; HL2 and Icom adapt only implemented controls and return
+explicit dispatch, local-only, or unsupported receipts. RX-only backends inherit
+local active-slice selection and refuse TX controls. These are desktop intents,
+not new daemon methods or TX permissions.
+MOX, TUNE and ATU start/stop still use the existing operation-fenced TX path;
+host TUNE-power edits additionally require a live locally admitted carrier.
+HL2 host-keyer, sidetone and compressor settings return local-only receipts;
+their existing local consumers still apply them (#6153). Icom CW controls retain
+the current keyer capability gate; its replacement belongs to #6110.
+
 If your change trips any of these, restructure the change — do not move the
 file, weaken the check, or add an exemption. Engine code that needs a UI
 callback defines a gui-free interface in `core/` (e.g. `IConnectionAutomation`)

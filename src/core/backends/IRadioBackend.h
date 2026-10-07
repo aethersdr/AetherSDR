@@ -27,6 +27,7 @@
 #include "core/backends/FrontEndOverload.h"
 #include "core/backends/RadioCapabilities.h"
 #include "core/backends/ReceiveCommand.h"
+#include "core/backends/ModelControlRequest.h"
 #include "core/backends/RestoredRadioState.h"
 #include "core/backends/RadioDelta.h"
 #include "core/backends/SliceDelta.h"
@@ -126,6 +127,19 @@ class IRadioBackend : public QObject {
     Q_OBJECT
 
 public:
+    // Desktop control routing only: these do not extend the daemon registry.
+    virtual ReceiveDispatch requestSliceControl(int sliceId, const SliceControlRequest& request)
+    {
+        // Selecting a local receiver is not a radio or TX operation.
+        if (sliceId >= 0 && request.valid()
+            && request.field == SliceControlRequest::Field::ActiveSlice) {
+            return ReceiveDispatch::LocalOnly;
+        }
+        return ReceiveDispatch::Unsupported;
+    }
+    virtual ReceiveDispatch requestTransmitControl(const TransmitControlRequest&,
+                                                    TunePowerContext = TunePowerContext::Deferred)
+    { return ReceiveDispatch::Unsupported; }
     explicit IRadioBackend(QObject* parent = nullptr) : QObject(parent)
     {
         connect(this, &IRadioBackend::connected, this, [this] {

@@ -75,9 +75,7 @@ from pathlib import Path
 # drop the number here in the same commit. When a file reaches 0, delete its row.
 BASELINE = {
     # ---- models ----
-    "src/models/RadioModel.cpp": 135,
-    "src/models/SliceModel.cpp": 25,
-    "src/models/TransmitModel.cpp": 39,
+    "src/models/RadioModel.cpp": 134,
     "src/models/CwxModel.cpp": 9,
     "src/models/DaxIqModel.cpp": 4,
     "src/models/EqualizerModel.cpp": 4,
@@ -165,8 +163,8 @@ ABOVE_SEAM_DIR_FLOOR = 20
 # its own QTcpSocket, VkampConnection/TgxlConnection/PgxlConnection/WanConnection
 # each speak their own protocol.
 #
-# RadioModel.cpp is the sink itself; SliceModel.cpp reaches it through a one-line
-# helper whose body is `emit commandReady(cmd)`.
+# RadioModel.cpp is the sink itself. Keep SliceModel in the watched helper set
+# to catch a reintroduction of its retired raw-command helper.
 PLANE_HELPER_FILES = {
     "src/models/RadioModel.cpp",
     "src/models/SliceModel.cpp",

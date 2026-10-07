@@ -3113,6 +3113,101 @@ void Hl2Backend::setSliceNoiseBlanker(int sliceId, bool on, int level)
             Q_ARG(bool, r->nbOn), Q_ARG(int, r->nbLevel));
 }
 
+ReceiveDispatch Hl2Backend::requestSliceControl(int sliceId, const SliceControlRequest& request)
+{
+    using Field = SliceControlRequest::Field;
+    if (!request.valid() || !rx(ddcForSlice(sliceId))) { return ReceiveDispatch::Unsupported; }
+    switch (request.field) {
+    case Field::Rit: case Field::Xit: {
+        const IncrementalTuning tuning = std::get<IncrementalTuning>(request.value);
+        const int ddc = ddcForSlice(sliceId);
+        Receiver* receiver = rx(ddc);
+        const int hz = clampRitXit(request.field == Field::Rit ? "RIT" : "XIT", tuning.hz);
+        // Commit the pair before publishing. An enable echo can synchronously
+        // trigger a newer request; no tail of this request may overwrite it.
+        if (request.field == Field::Rit) {
+            if (receiver->ritOn == tuning.enabled && receiver->ritHz == hz && hz == tuning.hz) {
+                return ReceiveDispatch::Dispatched;
+            }
+            const bool moves = (receiver->ritOn ? receiver->ritHz : 0) != (tuning.enabled ? hz : 0);
+            receiver->ritOn = tuning.enabled;
+            receiver->ritHz = hz;
+            logRitXit("RIT", ddc, receiver->ritOn, receiver->ritHz);
+            if (moves) { retuneReceiver(ddc); }
+            else { emitSliceState(ddc); }
+        } else {
+            if (receiver->xitOn == tuning.enabled && receiver->xitHz == hz && hz == tuning.hz) {
+                return ReceiveDispatch::Dispatched;
+            }
+            const bool moves = (receiver->xitOn ? receiver->xitHz : 0) != (tuning.enabled ? hz : 0);
+            receiver->xitOn = tuning.enabled;
+            receiver->xitHz = hz;
+            logRitXit("XIT", ddc, receiver->xitOn, receiver->xitHz);
+            if (moves && ddc == m_txDdc) { setTxFrequency(receiver->sliceFreqHz); }
+            emitSliceState(ddc);
+        }
+        break;
+    }
+    case Field::ActiveSlice:
+        if (std::get<bool>(request.value)) { setActiveSlice(sliceId); }
+        break;
+    case Field::TxSlice:
+        if (std::get<bool>(request.value)) { setTxSlice(sliceId); }
+        break;
+    case Field::TxAntenna: case Field::DaxChannel: case Field::RttyMark:
+    case Field::RttyShift: case Field::DiglOffset: case Field::DiguOffset:
+    case Field::Record: case Field::Play: case Field::FmToneMode:
+    case Field::FmToneValue: case Field::FmRxToneValue: case Field::FmDtcs:
+    case Field::RepeaterDirection: case Field::RepeaterOffset: case Field::TxOffset:
+    case Field::FmDeviation: case Field::RfGain: case Field::Diversity:
+    case Field::EscEnabled: case Field::EscGain: case Field::EscPhase:
+    case Field::RepeaterRecall: case Field::Count:
+        return ReceiveDispatch::Unsupported;
+    }
+    return ReceiveDispatch::Dispatched;
+}
+
+ReceiveDispatch Hl2Backend::requestTransmitControl(const TransmitControlRequest& request,
+                                               TunePowerContext context)
+{
+    using Field = TransmitControlRequest::Field;
+    if (!request.valid()) { return ReceiveDispatch::Unsupported; }
+    switch (request.field) {
+    case Field::RfPower: setTxPower(std::get<int>(request.value)); break;
+    case Field::TunePower:
+        if (context == TunePowerContext::Deferred) { return ReceiveDispatch::LocalOnly; }
+        if (context != TunePowerContext::LiveLocalCarrier || !m_tuning
+            || !TxCoordinator::Command{m_tuneOperation, true}.permitsDispatch(TxCoordinator::monotonicMs())) {
+            return ReceiveDispatch::Unsupported;
+        }
+        setTunePower(std::get<int>(request.value)); break;
+    case Field::MicGain: setMicGain(std::get<int>(request.value)); break;
+    case Field::CwPitch: setCwPitch(std::get<int>(request.value)); break;
+    case Field::Filter: {
+        const TxPassband filter = std::get<TxPassband>(request.value);
+        setTxFilter(filter.lowHz, filter.highHz); break;
+    }
+    // ClientComp and the host keyer consume the model's local notifications.
+    case Field::ProcessorEnabled: case Field::ProcessorLevel:
+    case Field::CwSpeed: case Field::CwBreakIn: case Field::CwDelay:
+    case Field::CwSidetone: case Field::CwIambic: case Field::CwIambicMode:
+    case Field::CwSwap: case Field::CwMonitorGain: case Field::CwMonitorPan:
+        return ReceiveDispatch::LocalOnly;
+    case Field::MicInput:
+        return std::get<QString>(request.value) == QLatin1String("PC")
+            ? ReceiveDispatch::LocalOnly : ReceiveDispatch::Unsupported;
+    case Field::TuneMode: case Field::MicAccessory: case Field::Dax:
+    case Field::MonitorEnabled: case Field::MonitorLevel: case Field::VoxEnabled:
+    case Field::VoxLevel: case Field::VoxDelay: case Field::MicBoost:
+    case Field::MicBias: case Field::AmCarrier: case Field::ExpanderEnabled:
+    case Field::ExpanderLevel: case Field::CwlEnabled: case Field::TxProfile:
+    case Field::MicProfile: case Field::ApdEnabled: case Field::ApdSampler:
+    case Field::ApdReset: case Field::AtuMemories: case Field::AtuClear: case Field::Count:
+        return ReceiveDispatch::Unsupported;
+    }
+    return ReceiveDispatch::Dispatched;
+}
+
 ReceiveDispatch Hl2Backend::requestSliceDsp(int sliceId, const SliceDspRequest& request)
 {
     if (!request.valid() || !rx(ddcForSlice(sliceId))) {
@@ -4563,81 +4658,6 @@ void Hl2Backend::logRitXit(const char* what, int ddc, bool on, int hz) const
                   << (ddc == m_txDdc ? "(transmit)" : "(receive only)");
 }
 
-// Each setter ends by publishing the receiver's RIT/XIT, so the readout follows
-// what the receiver holds: an offset the clamp cut, and the final value of an
-// enable-then-offset pair. retuneReceiver() publishes as part of the re-tune.
-void Hl2Backend::setSliceRitEnabled(int sliceId, bool on)
-{
-    const int ddc = ddcForSlice(sliceId);
-    Receiver* r = rx(ddc);
-    if (!r || on == r->ritOn) {
-        return;
-    }
-    r->ritOn = on;
-    logRitXit("RIT", ddc, r->ritOn, r->ritHz);
-    if (r->ritHz != 0) {
-        retuneReceiver(ddc);
-    } else {
-        emitSliceState(ddc);
-    }
-}
-
-void Hl2Backend::setSliceRitOffset(int sliceId, int hz)
-{
-    const int ddc = ddcForSlice(sliceId);
-    Receiver* r = rx(ddc);
-    if (!r) {
-        return;
-    }
-    const int clamped = clampRitXit("RIT", hz);
-    if (clamped == r->ritHz && clamped == hz) {
-        return;
-    }
-    const bool moves = r->ritOn && clamped != r->ritHz;
-    r->ritHz = clamped;
-    logRitXit("RIT", ddc, r->ritOn, r->ritHz);
-    if (moves) {
-        retuneReceiver(ddc);
-    } else {
-        emitSliceState(ddc);
-    }
-}
-
-void Hl2Backend::setSliceXitEnabled(int sliceId, bool on)
-{
-    const int ddc = ddcForSlice(sliceId);
-    Receiver* r = rx(ddc);
-    if (!r || on == r->xitOn) {
-        return;
-    }
-    r->xitOn = on;
-    logRitXit("XIT", ddc, r->xitOn, r->xitHz);
-    if (r->xitHz != 0 && ddc == m_txDdc) {
-        setTxFrequency(r->sliceFreqHz);
-    }
-    emitSliceState(ddc);
-}
-
-void Hl2Backend::setSliceXitOffset(int sliceId, int hz)
-{
-    const int ddc = ddcForSlice(sliceId);
-    Receiver* r = rx(ddc);
-    if (!r) {
-        return;
-    }
-    const int clamped = clampRitXit("XIT", hz);
-    if (clamped == r->xitHz && clamped == hz) {
-        return;
-    }
-    const bool moves = r->xitOn && clamped != r->xitHz && ddc == m_txDdc;
-    r->xitHz = clamped;
-    logRitXit("XIT", ddc, r->xitOn, r->xitHz);
-    if (moves) {
-        setTxFrequency(r->sliceFreqHz);
-    }
-    emitSliceState(ddc);
-}
-
 void Hl2Backend::setCwPitch(int hz)
 {
     // TransmitModel's own range. Clamped again rather than trusted: this is a
@@ -5167,7 +5187,7 @@ std::pair<int, int> Hl2Backend::effectiveTxPassband(const QString& mode) const
 // Push the effective passband to the modulator and echo it upward, so the
 // Phone applet shows what the modulator runs (including a restored
 // passband). TransmitModel::applyChanges() does not emit
-// txFilterCommandIssued, so the echo cannot loop (pinned by
+// controlRequested, so the echo cannot loop (pinned by
 // transmit_model_test).
 void Hl2Backend::pushTxPassband(const QString& mode)
 {

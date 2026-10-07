@@ -1755,6 +1755,8 @@ private:
     void dispatchSliceSquelch(const SliceSquelchRequest& request);
     void dispatchSliceRxAntenna(const QString& antenna);
     void dispatchSliceLock(bool locked);
+    void dispatchSliceControl(const SliceControlRequest& request);
+    void dispatchTransmitControl(const TransmitControlRequest& request);
     void reportReceiveDispatch(ReceiveDispatch result, const QString& operation,
                                bool operatorOrigin = true);
     // Translate a MODEL pan id to the backend's own id for a command going down

@@ -1,3 +1,4 @@
+#include "ModelControlWireSpy.h"
 #include "TestSettingsProfile.h"
 #include "core/backends/TransmitDelta.h"
 #include "core/TxKeyingMarker.h"
@@ -126,7 +127,7 @@ void testReleaseReconcilesAuthoritativePower(const QString& accessibleName,
         return;
     }
 
-    QSignalSpy commandSpy(&model, &TransmitModel::commandReady);
+    ModelControlWireSpy commandSpy(&model);
 
     slider->setSliderDown(true);
     slider->setValue(66);
@@ -387,7 +388,7 @@ void testMidiProducerDispatch()
            recorder->commands == QStringList{"mox:off"} && !radio.transmitModel().isTransmitting());
 
     const auto tuneController = TxController::captureInputScope(controller, controller->captureRawInput());
-    QSignalSpy modeCommands(&radio.transmitModel(), &TransmitModel::commandReady);
+    ModelControlWireSpy modeCommands(&radio.transmitModel());
     recorder->commands.clear();
     dispatchMidiTxInput("global.twoToneTune", 1.0f, radio, tuneController, cw);
     report("first MIDI two-tone press starts its own tune",
@@ -778,7 +779,7 @@ void testAtuCapabilityUsesThreeVisibleStates()
                && inactiveSuccessStyle == inactiveBypassStyle
                && inactiveSuccessStyle == inactiveMemoryStyle);
 
-    QSignalSpy commandSpy(&model, &TransmitModel::commandReady);
+    ModelControlWireSpy commandSpy(&model);
     QSignalSpy atuIntents(&model, &TransmitModel::atuCommandIssued);
     model.setHasTuner(false);
     model.setHasTunerMemories(false);
@@ -867,7 +868,7 @@ void testTuneAvailability()
     if (!tune) {
         return;
     }
-    QSignalSpy commands(&model, &TransmitModel::commandReady);
+    ModelControlWireSpy commands(&model);
     QSignalSpy tuneIntents(&model, &TransmitModel::tuneCommandIssued);
     model.setTuneAvailable(false);
     report("unsupported Tune button is disabled", !tune->isEnabled());
@@ -991,7 +992,7 @@ void testMemButtonFollowsReadbackOnly()
 
     // A click with no atu status echo must send the command but NOT light the
     // button: the radio has not said memories are on (#5545).
-    QSignalSpy commandSpy(&model, &TransmitModel::commandReady);
+    ModelControlWireSpy commandSpy(&model);
     mem->click();
     report("MEM click sends the memories command once",
            commandSpy.size() == 1

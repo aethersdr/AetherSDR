@@ -8,6 +8,7 @@
 // packet the client would send, from the same builder the socket path uses,
 // rather than trusting a status flag.
 
+#include "TestSettingsProfile.h"
 #include "core/backends/hl2/MetisClient.h"
 #include "core/backends/hl2/Hl2Backend.h"
 #include "core/backends/hl2/Hl2HardwareOptions.h"
@@ -152,6 +153,8 @@ struct Hl2TxGateTestAccess {
 }
 
 using namespace AetherSDR::hl2;
+using AetherSDR::IncrementalTuning;
+using AetherSDR::SliceControlRequest;
 
 // ---- THE SEAM THAT GIVES reportTxUnderflowRun() AN ASSERTION ----
 //
@@ -652,8 +655,8 @@ static void testTransmitTailEdges(TxTestAuthority& authority)
         backend.setTxPower(80);
         backend.setTune(true, 10, authority.operation, {});
         check(lastDriveIs(drain(backend), 25), "premise: TUNE keyed at the tune drive (25)");
-        backend.setSliceXitEnabled(0, true);
-        backend.setSliceXitOffset(0, -300);
+        backend.requestSliceControl(0, {SliceControlRequest::Field::Xit,
+                                       IncrementalTuning{true, -300}});
         const Drained tuning = drain(backend);
         check(Hl2TxGateTestAccess::txRegisterHz(backend) == 14'073'700u,
               "XIT -300 while TUNE is keyed: the TX register moves -300 Hz");
@@ -662,7 +665,8 @@ static void testTransmitTailEdges(TxTestAuthority& authority)
         backend.setTune(false, 10, authority.operation, {});
         (void)drain(backend);
         check(Hl2TxGateTestAccess::txTailPending(backend), "premise: TUNE release arms the tail");
-        backend.setSliceXitOffset(0, 200);
+        backend.requestSliceControl(0, {SliceControlRequest::Field::Xit,
+                                       IncrementalTuning{true, 200}});
         const Drained inTail = drain(backend);
         check(Hl2TxGateTestAccess::txRegisterHz(backend) == 14'074'200u,
               "XIT +200 inside the tail: the TX register follows");
@@ -670,7 +674,8 @@ static void testTransmitTailEdges(TxTestAuthority& authority)
               "XIT inside the tail: the tail stays pending, unkeyed, the RF drive still owed");
         Hl2TxGateTestAccess::expireTxTail(backend);
         check(lastDriveIs(drain(backend), 204), "the tail then restores the 80% RF drive (204)");
-        backend.setSliceXitEnabled(0, false);
+        backend.requestSliceControl(0, {SliceControlRequest::Field::Xit,
+                                       IncrementalTuning{false, 200}});
         check(Hl2TxGateTestAccess::txRegisterHz(backend) == 14'074'000u,
               "XIT off: the TX register back on the dial");
     }
@@ -696,6 +701,11 @@ static void testTransmitTailEdges(TxTestAuthority& authority)
 
 int main(int argc, char** argv)
 {
+    TestSettingsProfile profile(QStringLiteral("hl2-tx-gate"));
+    if (!profile.isValid()) {
+        std::fprintf(stderr, "Cannot create isolated settings profile\n");
+        return 1;
+    }
     QCoreApplication app(argc, argv);
     TxTestAuthority authority;
     MetisClient client;

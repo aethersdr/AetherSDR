@@ -20,6 +20,8 @@
 // 4. Mid-session slice creation into an empty list (after connect window expires) uses TopologyFallback.
 // 5. ConnectSliceEnumerationGuard does not latch across disconnect/reconnect cycles.
 
+#include "ModelControlWireSpy.h"
+#include <vector>
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "gui/BandRecallSliceSelectionPolicy.h"
@@ -47,6 +49,7 @@ struct SliceWiringHarness {
     ConnectSliceEnumerationGuard connectEnumerationGuard;
     qint64 nowMs{1000};
     QStringList emittedCommands;
+    std::vector<std::unique_ptr<FlexBackend>> encoders;
 
     void attach(RadioModel* m) {
         model = m;
@@ -56,9 +59,9 @@ struct SliceWiringHarness {
     }
 
     void onSliceAdded(SliceModel* s) {
-        QObject::connect(s, &SliceModel::commandReady, [this](const QString& cmd) {
+        encoders.push_back(modelControlEncoder(s, [this](const QString& cmd) {
             emittedCommands.append(cmd);
-        });
+        }));
 
         const bool firstSlice = (activeSliceId < 0);
         if (firstSlice) {

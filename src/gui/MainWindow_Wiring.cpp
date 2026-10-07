@@ -1817,7 +1817,7 @@ void MainWindow::onSliceAdded(SliceModel* s)
             QPointer<SliceModel> sp(s);
             QTimer::singleShot(300, this, [this, sp, savedDax, key]() {
                 if (sp && !profileLoadRadioStateWritesHeld()) {
-                    // The send path below (SliceModel::commandReady) has no
+                    // The send path below (SliceModel::controlRequested) has no
                     // logging of its own; without this line the restore is
                     // invisible in any capture (#4558).
                     qCDebug(lcDax) << "MainWindow: restoring last-session DAX"

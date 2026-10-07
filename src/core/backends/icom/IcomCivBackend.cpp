@@ -4349,6 +4349,154 @@ void IcomCivBackend::setPanAttenuator(const QString&, int step)
     }
 }
 
+ReceiveDispatch IcomCivBackend::requestSliceControl(int sliceId, const SliceControlRequest& request)
+{
+    using Field = SliceControlRequest::Field;
+    if (!m_connected || !m_session || !m_model || sliceId != 0 || !request.valid()) {
+        return ReceiveDispatch::Unsupported;
+    }
+    const FmRepeaterProfile* fm = basicFmProfileFor(m_model);
+    switch (request.field) {
+    case Field::Rit: case Field::Xit: {
+        const IncrementalTuning tuning = std::get<IncrementalTuning>(request.value);
+        if (request.field == Field::Rit) { setSliceRitEnabled(sliceId, tuning.enabled); }
+        else { setSliceXitEnabled(sliceId, tuning.enabled); }
+        setSliceRitOffset(sliceId, tuning.hz); // one register shared by RX and TX
+        break;
+    }
+    case Field::FmToneMode: {
+        const QString mode = std::get<QString>(request.value).trimmed().toLower();
+        if (!fm || !fm->hasTxCtcss || !capabilities().fmToneModes.contains(mode)) {
+            return ReceiveDispatch::Unsupported;
+        }
+        setSliceFmToneMode(sliceId, mode); break;
+    }
+    case Field::FmToneValue: {
+        const double hz = std::get<double>(request.value);
+        if (!fm || !fm->hasTxCtcss
+            || (ctcssRxProfileFor(m_model) ? !isCanonicalCtcssTone(hz) : hz > 299.9)) {
+            return ReceiveDispatch::Unsupported;
+        }
+        setSliceFmToneValue(sliceId, hz); break;
+    }
+    case Field::FmRxToneValue: {
+        const double hz = std::get<double>(request.value);
+        if (!ctcssRxProfileFor(m_model) || !isCanonicalCtcssTone(hz)) {
+            return ReceiveDispatch::Unsupported;
+        }
+        setSliceFmToneRxValue(sliceId, hz); break;
+    }
+    case Field::FmDtcs: {
+        const DtcsSetting setting = std::get<DtcsSetting>(request.value);
+        const FmRepeaterProfile* extended = extendedFmReadbackProfileFor(m_model);
+        if (!extended || !extended->hasDtcs || !isCanonicalDtcsCode(setting.code)) {
+            return ReceiveDispatch::Unsupported;
+        }
+        setSliceFmDtcs(sliceId, setting.code, setting.txReverse, setting.rxReverse); break;
+    }
+    case Field::RepeaterDirection: {
+        const QString direction = std::get<QString>(request.value).trimmed().toLower();
+        if (!fm || !fm->hasDuplex || (direction != QLatin1String("simplex")
+            && direction != QLatin1String("up") && direction != QLatin1String("down"))) {
+            return ReceiveDispatch::Unsupported;
+        }
+        setSliceRepeaterOffsetDir(sliceId, direction); break;
+    }
+    case Field::RepeaterOffset:
+        if (!fm || !fm->hasDuplex || std::get<double>(request.value) < 0
+            || std::get<double>(request.value) > 99'999'900.0) {
+            return ReceiveDispatch::Unsupported;
+        }
+        setSliceFmRepeaterOffset(sliceId, std::get<double>(request.value)); break;
+    case Field::RepeaterRecall: {
+        if (!fm || !fm->hasDuplex || !fm->hasTxCtcss) { return ReceiveDispatch::Unsupported; }
+        const RepeaterSetting setting = std::get<RepeaterSetting>(request.value);
+        const QString direction = setting.direction.trimmed().toLower();
+        const QString mode = setting.toneMode.trimmed().toLower();
+        // Validate the whole recall before the first write of its four parts.
+        if ((direction != QLatin1String("simplex") && direction != QLatin1String("up")
+             && direction != QLatin1String("down")) || setting.offsetHz < 0
+            || setting.offsetHz > 99'999'900.0 || !capabilities().fmToneModes.contains(mode)
+            || (ctcssRxProfileFor(m_model) ? !isCanonicalCtcssTone(setting.toneHz)
+                                         : setting.toneHz > 299.9)) {
+            return ReceiveDispatch::Unsupported;
+        }
+        setSliceFmRepeater(sliceId, direction, setting.offsetHz, mode, setting.toneHz);
+        break;
+    }
+    case Field::ActiveSlice: case Field::TxSlice:
+        return ReceiveDispatch::LocalOnly; // the existing sole selected VFO
+    case Field::TxAntenna: case Field::DaxChannel: case Field::RttyMark:
+    case Field::RttyShift: case Field::DiglOffset: case Field::DiguOffset:
+    case Field::Record: case Field::Play: case Field::TxOffset:
+    case Field::FmDeviation: case Field::RfGain: case Field::Diversity:
+    case Field::EscEnabled: case Field::EscGain: case Field::EscPhase: case Field::Count:
+        return ReceiveDispatch::Unsupported;
+    }
+    return ReceiveDispatch::Dispatched;
+}
+
+ReceiveDispatch IcomCivBackend::requestTransmitControl(const TransmitControlRequest& request,
+                                               TunePowerContext context)
+{
+    using Field = TransmitControlRequest::Field;
+    if (!m_connected || !m_session || !m_model || !request.valid()) {
+        return ReceiveDispatch::Unsupported;
+    }
+    const RadioCapabilities caps = capabilities();
+    switch (request.field) {
+    case Field::RfPower: setTxPower(std::get<int>(request.value)); break;
+    case Field::TunePower:
+        if (context == TunePowerContext::Deferred) { return ReceiveDispatch::LocalOnly; }
+        if (context != TunePowerContext::LiveLocalCarrier || !m_tuning
+            || !TxCoordinator::Command{m_tuneOperation, true}.permitsDispatch(TxCoordinator::monotonicMs())
+            || !transmitContext().permitsDispatch(TxCoordinator::monotonicMs())) {
+            return ReceiveDispatch::Unsupported;
+        }
+        setTunePower(std::get<int>(request.value)); break;
+    case Field::MicGain: setMicGain(std::get<int>(request.value)); break;
+    case Field::CwPitch: case Field::CwSpeed: case Field::CwBreakIn:
+        // Preserve the current capability gate until #6110 defines its replacement.
+        if (!caps.hasRadioSideCwKeyer) { return ReceiveDispatch::Unsupported; }
+        if (request.field == Field::CwPitch) { setCwPitch(std::get<int>(request.value)); }
+        else if (request.field == Field::CwSpeed) { setCwSpeed(std::get<int>(request.value)); }
+        else { setCwBreakIn(std::get<bool>(request.value)); }
+        break;
+    case Field::Filter: {
+        if (!caps.hasTxFilterControls || activeTxBandwidthItem() < 0) {
+            return ReceiveDispatch::Unsupported;
+        }
+        const TxPassband filter = std::get<TxPassband>(request.value);
+        setTxFilter(filter.lowHz, filter.highHz); break;
+    }
+    case Field::ProcessorEnabled: case Field::ProcessorLevel: {
+        if (!caps.speechProcessorControl) { return ReceiveDispatch::Unsupported; }
+        const ProcessorSetting setting = std::get<ProcessorSetting>(request.value);
+        setSpeechProcessor(setting.enabled, setting.level); break;
+    }
+    case Field::VoxEnabled: case Field::VoxLevel: {
+        if (!caps.voxControl) { return ReceiveDispatch::Unsupported; }
+        const VoxSetting setting = std::get<VoxSetting>(request.value);
+        setVox(setting.enabled, setting.level, setting.delay); break;
+    }
+    case Field::MonitorEnabled: case Field::MonitorLevel: {
+        if (!caps.txMonitorControl) { return ReceiveDispatch::Unsupported; }
+        const MonitorSetting setting = std::get<MonitorSetting>(request.value);
+        setTxMonitor(setting.enabled, setting.level); break;
+    }
+    case Field::TuneMode: case Field::MicInput: case Field::MicAccessory:
+    case Field::Dax: case Field::VoxDelay: case Field::MicBoost: case Field::MicBias:
+    case Field::AmCarrier: case Field::ExpanderEnabled: case Field::ExpanderLevel:
+    case Field::CwDelay: case Field::CwSidetone: case Field::CwIambic:
+    case Field::CwIambicMode: case Field::CwSwap: case Field::CwlEnabled:
+    case Field::CwMonitorGain: case Field::CwMonitorPan: case Field::TxProfile:
+    case Field::MicProfile: case Field::ApdEnabled: case Field::ApdSampler:
+    case Field::ApdReset: case Field::AtuMemories: case Field::AtuClear: case Field::Count:
+        return ReceiveDispatch::Unsupported;
+    }
+    return ReceiveDispatch::Dispatched;
+}
+
 ReceiveDispatch IcomCivBackend::requestSliceDsp(int sliceId, const SliceDspRequest& request)
 {
     if (!m_connected || !m_session || !m_model || sliceId != 0 || !request.valid()
