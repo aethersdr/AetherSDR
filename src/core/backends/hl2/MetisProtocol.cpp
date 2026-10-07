@@ -296,6 +296,8 @@ void ep2WriteTxIq(std::array<std::uint8_t, kUsbPacketSize>& pkt,
                 const auto clamp = [](float v) -> std::int16_t {
                     // Symmetric clamp: 32767, not 32768. Letting a full-scale
                     // sample wrap to the negative rail is a click at best.
+                    // A NaN fails both comparisons, so it is zeroed first.
+                    if (!std::isfinite(v)) return 0;
                     if (v >  1.0f) v =  1.0f;
                     if (v < -1.0f) v = -1.0f;
                     return static_cast<std::int16_t>(v * 32767.0f);

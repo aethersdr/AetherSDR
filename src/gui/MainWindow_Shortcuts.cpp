@@ -1046,12 +1046,19 @@ void MainWindow::registerShortcutActions()
         if (!sw) return;
         static const int steps[] = {10, 50, 100, 250, 500, 1000, 2500, 5000, 10000};
         int cur = sw->stepSize();
+        // A deliberate step change, so it reaches the slice and the applet too.
+        // Clamped at both ends, unlike RxApplet::cycleStepUp(), which wraps.
+        const auto applyCycled = [this](int hz) {
+            if (auto* applet = m_appletPanel ? m_appletPanel->rxApplet() : nullptr)
+                applet->setInitialStepSize(hz);   // label + index only, no re-entry
+            applyOperatorTuningStep(hz);
+        };
         if (dir > 0) {
             for (int i = 0; i < static_cast<int>(std::size(steps)); ++i)
-                if (steps[i] > cur) { sw->setStepSize(steps[i]); return; }
+                if (steps[i] > cur) { sw->setStepSize(steps[i]); applyCycled(steps[i]); return; }
         } else {
             for (int i = static_cast<int>(std::size(steps)) - 1; i >= 0; --i)
-                if (steps[i] < cur) { sw->setStepSize(steps[i]); return; }
+                if (steps[i] < cur) { sw->setStepSize(steps[i]); applyCycled(steps[i]); return; }
         }
     };
 
@@ -1288,14 +1295,14 @@ void MainWindow::registerShortcutActions()
     m_shortcutManager.registerAction("master_volume_up", "Master Volume Up", "Audio",
         QKeySequence(), [this]() {
             const int next = std::clamp(
-                AppSettings::instance().value("MasterVolume", "100").toInt() + 5, 0, 100);
+                m_radioModel.activeOutputVolumePercent() + 5, 0, 100);
             if (m_titleBar) m_titleBar->setMasterVolume(next);
             applyMasterVolume(next);
         }, /*autoRepeat=*/true);
     m_shortcutManager.registerAction("master_volume_down", "Master Volume Down", "Audio",
         QKeySequence(), [this]() {
             const int next = std::clamp(
-                AppSettings::instance().value("MasterVolume", "100").toInt() - 5, 0, 100);
+                m_radioModel.activeOutputVolumePercent() - 5, 0, 100);
             if (m_titleBar) m_titleBar->setMasterVolume(next);
             applyMasterVolume(next);
         }, /*autoRepeat=*/true);

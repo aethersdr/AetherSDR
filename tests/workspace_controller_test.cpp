@@ -803,6 +803,54 @@ int main(int argc, char** argv)
             report("...both ways", inner->isContainerVisible());
         }
 
+        // A capability/mode-specific applet can suppress its presentation
+        // without closing the workspace item. Recall still owns logical open
+        // state, including a workspace that deliberately closed the applet.
+        {
+            ctl.switchWorkspace(wsA);
+            rx->setContainerVisible(true);
+            if (!rx->isOnCanvas()) { ctl.sendAppletToCanvas("RX"); }
+            const QString openWorkspace = ctl.createWorkspace(
+                WorkspaceController::NewWorkspaceSource::Current,
+                QStringLiteral("PresentationOpen"));
+            const QString closedWorkspace = ctl.createWorkspace(
+                WorkspaceController::NewWorkspaceSource::Current,
+                QStringLiteral("PresentationClosed"));
+            rx->setContainerVisible(false);
+            ctl.switchWorkspace(openWorkspace);
+            const QString beforeGate = storedDocument();
+            const QVariant beforePreference = AppSettings::instance().value("Applet_RX");
+            const NormRect beforeRect = canvas.itemRect("applet:RX");
+            rx->setPresentationAvailable(false);
+            report("presentation suppression preserves workspace bytes and preference",
+                   storedDocument() == beforeGate
+                       && AppSettings::instance().value("Applet_RX") == beforePreference
+                       && rx->isContainerVisible() && rx->isOnCanvas()
+                       && canvas.itemRect("applet:RX") == beforeRect && rx->isHidden());
+            ctl.switchWorkspace(closedWorkspace);
+            ctl.switchWorkspace(openWorkspace);
+            report("recall retains logical membership without exposing suppressed content",
+                   rx->isContainerVisible() && rx->isOnCanvas()
+                       && canvas.contains("applet:RX") && rx->isHidden()
+                       && canvas.itemRect("applet:RX") == beforeRect);
+            const QString beforeResume = storedDocument();
+            rx->setPresentationAvailable(true);
+            report("resuming presentation preserves recalled workspace intent",
+                   rx->isVisible() && storedDocument() == beforeResume
+                       && AppSettings::instance().value("Applet_RX") == beforePreference);
+            rx->setPresentationAvailable(false);
+            ctl.switchWorkspace(closedWorkspace);
+            const QString beforeClosedResume = storedDocument();
+            rx->setPresentationAvailable(true);
+            report("availability cannot reopen a workspace's deliberately closed applet",
+                   !rx->isContainerVisible() && rx->isHidden()
+                       && !canvas.contains("applet:RX")
+                       && storedDocument() == beforeClosedResume);
+            ctl.switchWorkspace(wsA);
+            ctl.deleteWorkspace(openWorkspace);
+            ctl.deleteWorkspace(closedWorkspace);
+        }
+
         // Red-team B2: recall-driven bulk visibility runs inside the
         // recall guard, so the panel can suppress preference writes.
         {

@@ -27,7 +27,8 @@ struct RtlCaptureBackendTestAccess {
     static void start(RtlSdrBackend& backend, std::unique_ptr<RtlSdrWorker::Device> device, int capacity = 1)
     {
         backend.m_requested.hardware = {100'000'000, 2'400'000, 0, 0, 0, 240};
-        backend.m_requested.receivers = {{{0, 100'000'000, -100'000, 100'000, 0, 0, 0}, T::Mode::Wfm}};
+        const double wfmGuard = RtlReceivePipeline::kQualifiedWfmEnabled ? 3000 : 0;
+        backend.m_requested.receivers = {{{0, 100'000'000, -100'000, 100'000, 0, wfmGuard, wfmGuard}, T::Mode::Wfm}};
         if (capacity > 1) {
             backend.m_receiverCapacity = capacity;
             backend.m_capture = RtlCaptureTransaction({8, static_cast<std::size_t>(capacity)});
@@ -50,10 +51,10 @@ static void check(bool value, const char* message)
 }
 using DeviceState = AetherSDR::test::DeviceState;
 using InjectedDevice = AetherSDR::test::InjectedDevice;
-template<class Predicate> bool waitFor(Predicate predicate)
+template<class Predicate> bool waitFor(Predicate predicate, qint64 boundMs = 3000)
 {
     QElapsedTimer timer; timer.start();
-    while (!predicate() && timer.elapsed() < 3000) {
+    while (!predicate() && timer.elapsed() < boundMs) {
         QCoreApplication::processEvents(); QThread::msleep(1);
     }
     return predicate();
@@ -112,12 +113,25 @@ static void sustainedPanProgress(bool narrow)
         const int beforeFrames = frames;
         const int beforeWrites = device->writes;
         const int beforeCallbacks = device->callbacks;
-        for (int block = 0; block < 7; ++block) { device->block(); }
+        // Each injected block represents real sample time (3.4 ms here).
+        // Bursting all seven drains native WFM's nonblocking WDSP output ring
+        // and correctly requests receiver repair, superseding this pan. Pace
+        // the fixture so it tests held-pan ordering through the native graph.
+        const unsigned long callbackMicroseconds = static_cast<unsigned long>(std::ceil(
+            1.0e6 * (device->callbackBytes.load() / 2.0) / accepted.hardware.sampleRateHz));
+        const auto clockBlock = [&] {
+            const int completed = device->callbacks + 1;
+            device->block();
+            check(waitFor([&] { return device->callbacks >= completed; }),
+                  "paced capture callback completes");
+            QThread::usleep(callbackMicroseconds);
+        };
+        for (int block = 0; block < 7; ++block) { clockBlock(); }
         check(waitFor([&] { return device->callbacks >= beforeCallbacks + 7; }),
               "fresh capture receives seven partial FFT blocks");
         check(frames == beforeFrames && device->writes == beforeWrites,
               "next pan waits for a whole fresh observation, not a partial window");
-        device->block();
+        clockBlock();
         check(waitFor([&] { return frames > beforeFrames; }),
               "fresh RF frame escapes while continuous pointer motion is pending");
         check(std::abs(framedCenter - accepted.hardware.centerHz) < 1,
@@ -179,35 +193,51 @@ static void receiverTuneKeepsDisplayAverage()
             ++frames;
             std::memcpy(&lastDc, frame.constData() + frame.size() / 2, sizeof(lastDc));
         });
-    for (int i = 0; i < 8; ++i) { device->block(); }
-    check(waitFor([&] { return frames > 0; }), "averaging worker seeds a complete observation");
+    // Every step below asserts on the FIRST window after an adoption, so no
+    // block may still be queued when a change adopts: a queued block would
+    // join the post-adoption window and shift which window the next frame
+    // is. block() only queues; the device thread consumes on its own time,
+    // which a sanitizer build slows enough to leave a backlog. So feed in
+    // lockstep, one consumed block at a time.
+    const auto feedOne = [&] {
+        const int before = device->callbacks;
+        device->block();
+        return waitFor([&] { return device->callbacks > before; });
+    };
+    // Adopt a change at a real callback boundary: one consumed block per pass
+    // until the backend has published the new revision.
+    const auto adopt = [&] {
+        return waitFor([&] { feedOne(); return !rtl::RtlCaptureBackendTestAccess::busy(receiver); });
+    };
+    // The first accepted frame after the latest adoption, one block at a time.
+    const auto nextFrame = [&] {
+        const int before = frames;
+        return waitFor([&] {
+            if (frames > before) { return true; }
+            feedOne(); QCoreApplication::processEvents();
+            return frames > before;
+        });
+    };
+    check(nextFrame(), "averaging worker seeds a complete observation");
     const int writes = device->writes;
     device->iqLevel = 190;
     receiver.setSliceFrequency(0, 100'100'000);
-    check(waitFor([&] { device->block(); return !rtl::RtlCaptureBackendTestAccess::busy(receiver); }),
-          "receiver-only tune adopts through the actual USB callback");
-    const int beforeFrames = frames;
-    for (int i = 0; i < 8; ++i) { device->block(); }
-    check(waitFor([&] { return frames > beforeFrames; }), "tuned receiver emits new accepted FFT");
+    check(adopt(), "receiver-only tune adopts through the actual USB callback");
+    check(nextFrame(), "tuned receiver emits new accepted FFT");
     const double raw = 20 * std::log10(std::sqrt(2.) * (190 - 127.5) / 127.5
                                       * .35875 * (65535. / 65536));
     check(device->writes == writes && lastDc < raw - 8,
           "receiver-only adoption preserves display smoothing with unchanged hardware");
     receiver.setPanRfGain({}, 25);
-    check(waitFor([&] { device->block(); return !rtl::RtlCaptureBackendTestAccess::busy(receiver); }),
-          "gain change adopts through verified hardware path");
-    const int beforeGainFrames = frames;
-    for (int i = 0; i < 8; ++i) { device->block(); }
-    check(waitFor([&] { return frames > beforeGainFrames; }), "new gain emits complete frame");
+    check(adopt(), "gain change adopts through verified hardware path");
+    check(nextFrame(), "new gain emits complete frame");
     check(std::abs(lastDc - raw) < .02,
           "gain transition discards incompatible amplitude history");
     device->iqLevel = 130;
     receiver.invokeExtension("rtl", "ppm.set", 1, 1);
     check(waitFor([&] { return !rtl::RtlCaptureBackendTestAccess::busy(receiver); }),
           "PPM change completes its hardware readback");
-    const int beforePpmFrames = frames;
-    for (int i = 0; i < 8; ++i) { device->block(); }
-    check(waitFor([&] { return frames > beforePpmFrames; }), "PPM change emits complete observation");
+    check(nextFrame(), "PPM change emits complete observation");
     const double weak = 20 * std::log10(std::sqrt(2.) * (130 - 127.5) / 127.5
                                        * .35875 * (65535. / 65536));
     check(rtl::RtlCaptureBackendTestAccess::state(receiver).hardware.ppm == 1
@@ -215,13 +245,8 @@ static void receiverTuneKeepsDisplayAverage()
           "PPM change cannot reinterpret the previous RF history");
     device->iqLevel = 190;
     receiver.invokeExtension("rtl", "dc_suppression.set", 2, true);
-    check(waitFor([&] {
-        device->block(); QThread::msleep(20);
-        return !rtl::RtlCaptureBackendTestAccess::busy(receiver);
-    }), "DC correction adopts on a real callback boundary");
-    const int beforeDcFrames = frames;
-    for (int i = 0; i < 8; ++i) { device->block(); }
-    check(waitFor([&] { return frames > beforeDcFrames; }), "DC correction emits complete observation");
+    check(adopt(), "DC correction adopts on a real callback boundary");
+    check(nextFrame(), "DC correction emits complete observation");
     const double pole = std::exp(-2 * std::numbers::pi * rtl::RtlDcBlocker::kCornerHz / 2'400'000);
     double correctedWindowGain = 0;
     for (int i = 0; i < 65536; ++i) {
@@ -321,7 +346,7 @@ int main(int argc, char** argv)
     const int beforeFilter = changes;
     backend.setSliceFilter(0, -8000, 8000);
     check(changes == beforeFilter && !rtl::RtlCaptureBackendTestAccess::busy(backend),
-          "unimplemented WFM filter request neither publishes nor queues work");
+          "invalid narrow WFM filter request neither publishes nor queues work");
     const int beforeMode = changes;
     backend.setSliceMode(0, QStringLiteral("FM"));
     check(waitFor([&] { state->block(); QThread::msleep(5); return changes > beforeMode; }), "mode adopted at callback boundary");
@@ -527,7 +552,12 @@ int main(int argc, char** argv)
         check(!activeFrame.current(), "park revokes the previously published native PCM stream");
         const int audioAtPark = sliceAudioPackets;
         const int iqSpectraAtPark = spectra;
+        const int parkedCallbacks = device->callbacks + 64;
         for (int i = 0; i < 64; ++i) { pump(); QCoreApplication::processEvents(); }
+        // pump() only queues; both checks below are about blocks the worker
+        // actually processed, so wait for the queue to drain first.
+        check(waitFor([&] { return device->callbacks >= parkedCallbacks; }, 30000),
+              "parked IQ callbacks are all processed");
         QThread::msleep(20); QCoreApplication::processEvents();
         check(sliceAudioPackets == audioAtPark,
             "IQ callbacks with every slice parked publish no slice PCM");
@@ -559,8 +589,11 @@ int main(int argc, char** argv)
         // produces real FM packets. This is queue saturation, not a fake counter.
         const int targetCallbacks = device->callbacks + 200;
         { std::lock_guard lock(device->mutex); device->blocks += 200; device->changed.notify_all(); }
+        // Bounded only so a broken worker fails rather than hangs: 200 callbacks
+        // take well under 3 s normally, but a sanitizer build's DSP is several
+        // times slower and must not read as a missing saturation.
         QElapsedTimer stalledOwner; stalledOwner.start();
-        while (device->callbacks < targetCallbacks && stalledOwner.elapsed() < 3000) { QThread::msleep(1); }
+        while (device->callbacks < targetCallbacks && stalledOwner.elapsed() < 30000) { QThread::msleep(1); }
         check(device->callbacks >= targetCallbacks, "injected acquisition reaches bounded queue saturation");
         check(waitFor([&] {
             return multiple.healthSnapshot().values.value("rtlQueueDrops").toULongLong() > 0;

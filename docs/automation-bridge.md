@@ -348,6 +348,7 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | | [`menu list \| open <name>`](#menu) | Enumerate / pop a menu-bar menu. |
 | | [`resize <w> <h> [target]`](#resize) | Resize a window (drives panadapter `x_pixels`). |
 | | [`window <state> [target]`](#window) | maximize / restore / minimize / fullscreen. |
+| | [`titlebar <action> [id]`](#titlebar) | Drive the unified title bar: selectRadio / showDiscovery / minimize / maximize / close. |
 | | [`shortcut <id>`](#shortcut) | Fire a ShortcutManager/MIDI action by id (TX-guarded). |
 | | [`midi cc <0-127>`](#midi) | Inject a learned VFO Tune Knob CC event (RX-only). |
 | | [`scrollTo <target>`](#scrollto-alias-ensurevisible) | Scroll a widget into its scroll-area viewport. |
@@ -370,6 +371,7 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | | `get waveforms` | Installed waveform list, WFP state, local D-STAR service/configuration, delivery health/metrics, and recent waveform status reports. |
 | | [`get dax`](#get-dax) | DAX RX channel-ownership table (holders/streams, #3305). |
 | | [`get txtimer`](#get-txtimer) | Status-bar transmit-timer state (visible/running/holding/fading/elapsed). |
+| | [`get titlebar`](#get-titlebar) | Unified 52 px title bar — brand, radio tabs, audio cluster, window chrome. |
 | **Connection** | [`connect …`](#connect--disconnect) | list / show / hide / local / ip / wait. |
 | | [`disconnect`](#connect--disconnect) | Normal user disconnect. |
 | **Tuning & slices** | [`tune <mhz>`](#tune) | Set the active slice frequency (VFO; not keying). |
@@ -1664,12 +1666,28 @@ state from the slice button.
 
 ```
 slice dsp nb on 80          # drive the control the operator drives
-get hostnb                  # DSP agrees: on=true, level=80, threshold≈7.6,
-                            #   and requestedOn/requestedLevel match it
+get hostnb                  # DSP agrees: on=true, kind=1, level=80,
+                            #   threshold≈7.6, and requested* match it
 get slice active nb         # model agrees too
 slice dsp nb off
 get hostnb                  # on=false everywhere
 ```
+
+**The second blanker (NB2):**
+
+```
+slice dsp nb2 on 80 4       # WDSP's NOB, level 80, fill 4 (interpolate)
+get hostnb                  # kind=2, fill=4; `on` is still true, so a script
+                            #   that only reads `on` keeps working
+slice dsp nb2 on            # switch to NB2 without touching level or fill
+slice dsp nb on             # back to the first blanker; at most one ever runs
+```
+
+`kind` is 0 off, 1 NB (WDSP's ANB, which silences the blanked window) and 2 NB2
+(its NOB, which reconstructs it). `fill` is WDSP's own numbering for that
+reconstruction — 0 zero, 1 sample-hold, 2 mean-hold, 3 hold-sample,
+4 interpolate — and applies to NB2 only. Only `nb2` accepts it; `slice dsp nb on
+80 4` is an error rather than a silently ignored argument.
 
 ### `tune`
 Set a slice's frequency in MHz — the most fundamental control the
@@ -1813,7 +1831,7 @@ re-poll `get slices`.
 | `filter` | `<lowHz> <highHz>` e.g. `-3000 -150` | set the active slice passband through `SliceModel::setFilterWidth`, which emits a typed `receiveFilterRequested` with Operator origin and reaches `IRadioBackend::requestSliceFilter`. Mode normalization emits a separately tagged request: host DSP applies it, while Flex preserves its radio-owned mode-filter memory. Assert the passband before measuring the audio path. Returns requested edges and post-normalization `filterLow`/`filterHigh`; desktop model readback alone does not prove hardware application. Use `-4000 4000` for a carrier-straddling AM passband |
 | `filterpreset` | `<FIL1\|FIL2\|FIL3>` | select a stable radio-owned RX filter slot without conflating it with a passband-width edit. Returns the requested slot; re-poll `get slice active filterPreset` and the filter edges for radio-authoritative readback |
 | `agc` | `<off\|slow\|med\|fast> [threshold 0..100]` | set receive AGC through `SliceModel` operator setters and typed `receiveAgcRequested` requests. Applies threshold before mode; each changed field dispatches independently. Flex writes only that field; the default backend adapter passes the current mode/threshold pair to host DSP for either edit. HL2 maps this to WDSP RXA AGC mode and ceiling in dB. This is not an atomic paired command. Use `off` with a low threshold for a linear measurement path |
-| `dsp` | `<nr\|nb\|anf\|squelch> <on\|off> [level]` | drive the receive DSP controls an operator drives — noise blanker, noise reduction, auto-notch, and squelch (with an optional 0..100 level). `slice dsp squelch` is the squelch path; there is deliberately no separate squelch verb (#5102) |
+| `dsp` | `<nr\|nb\|nb2\|anf\|squelch> <on\|off> [level] [fill]` | drive the receive DSP controls an operator drives — noise blanker, noise reduction, auto-notch, and squelch (with an optional 0..100 level). `nb2` selects WDSP's second impulse blanker and takes an optional fill mode 0..4; at most one blanker runs, so `nb2 on` replaces `nb`. `slice dsp squelch` is the squelch path; there is deliberately no separate squelch verb (#5102) |
 | `tone` | `<off\|ctcss_tx> [freq]` | set the FM CTCSS encode mode and tone. The value is applied before the mode, so enabling CTCSS never keys on the previous tone for a round trip. The mode pair is what a FlexRadio slice carries |
 | `offset` | `<simplex\|up\|down> [mhz]` | set repeater duplex. The magnitude is unsigned (0..100 MHz — the GUI spinboxes' own bound); the direction carries the sign. Writes all three radio fields — `repeater_offset_dir`, `fm_repeater_offset_freq` **and** the signed `tx_offset_freq` that actually moves the transmitter — then reports `txOffsetFreq` so the applied split can be asserted rather than assumed |
 | `diversity` | `<sliceId> <on\|off>` | enable or disable diversity through the slice model; re-poll `get slices` for parent/child state |
@@ -3049,6 +3067,153 @@ dummy-load MOX key, `running=true` + `elapsedMs` climbing; after unkey,
 `running=false`, `holding=true`, `text` frozen; ~15 s later `fading=true` then
 `visible=false`. A TUNE, two-tone, ATU, DAX, TCI, or CW transmit must leave
 `visible=false` throughout.
+
+### `get titlebar`
+Read the unified 52 px title bar — the single strip that owns the brand mark,
+the radio tabs, the audio cluster, and the window controls on every platform.
+
+```json
+→ {"cmd":"get","model":"titlebar"}
+← {"ok":true,"model":"titlebar","present":true,"height":52,"expectedHeight":52,
+   "offsetInWindow":0,"screenRect":[103,40,1402,52],"minimalMode":false,
+   "brand":{"wordmark":"AetherSDR","logoLoaded":true,"visible":true},
+   "radios":{"activeId":"DEMO-0001","width":291,"maximumWidth":16777215,
+             "contentWidth":257,"overflowing":false,
+             "popoverVisible":false,"pulseEnabled":true,
+             "tabs":[{"id":"DEMO-0001","name":"Simulator (not on the air)",
+                      "model":"FLEX-6600","status":"connected",
+                      "statusLine":"FLEX-6600 · connected · DEMO",
+                      "transport":"127.0.0.1","active":true,"linkCarrier":true,
+                      "screenRect":[233,48,257,36],
+                      "accessibleName":"Radio Simulator (not on the air), connected"}],
+             "discovered":[…]},
+   "audio":{"pcAudioEnabled":true,"pcAudioLocked":true,"lineoutMuted":false,
+            "headphoneMuted":false,"masterVolume":100,"headphoneVolume":50,
+            "masterText":"100","headphoneText":"50","sliderWidth":64},
+   "chrome":{"frameless":false,"nativeCaption":true,
+             "expandedClientArea":true,"qtVersion":"6.12.0",
+             "captionButtons":{"style":"shared","close":{…},
+                               "minimize":{…},"maximize":{…}}},
+   "txTimer":{…}}
+```
+
+`offsetInWindow` is the distance from the top of the window to the top of the
+bar and **must be 0** — anything else means something is reserving a strip above
+the unified bar, which is the wasted top row this design exists to remove.
+`chrome.nativeCaption` identifies a system-decorated window. With expanded
+client-area support (Cocoa/Windows), Qt owns native window controls and the
+shared fallback caption widgets report `visible:false`. The fallback style
+is `shared`; Linux uses it when custom chrome is enabled. `qtVersion` is the
+actual runtime version, not the build-machine SDK version.
+`brand.rect` is `[x, y, width, height]` in title-bar coordinates.
+On macOS, `chrome.nativeCaptionRect` is the union of visible native caption
+buttons in window-content coordinates (empty outside Cocoa or in fullscreen).
+With expanded chrome, check that the brand begins 16 logical pixels after the
+native rectangle's right edge, unless a larger safe-area inset is required.
+The native controls and brand should share the 52-pixel bar's vertical center.
+`radios.linkPulse` (0–1, the heartbeat glow's current level — it swells on each
+discovery beat and decays in ~850 ms), `radios.linkAlarm` (link lost: three
+missed beats) and `radios.linkOverrideColor` (the colour speaking over the
+active tab's status dot: amber while discovering, red on loss, empty when the
+link is healthy) are the heartbeat as data — assert on these rather than on
+the dot's pixels. `radios.discovered[].canRename` says whether the switcher
+offers Rename… for that radio (client-owned nickname) or routes to Radio
+Setup instead.
+`radios.overflowing` reports whether the bounded tab viewport is
+currently clipping configured radios. `radios.tabs[].visibleInTabs` is the
+retained tab preference and `visible` is current widget visibility (which can
+also change in minimal mode). `radios.tabs[].linkCarrier` identifies
+the one tab carrying discovery/heartbeat state. `radios.tabs[].status` is one of `connected` / `available` /
+`in use`, and `statusLine` is the second line the tab actually renders —
+`[model ·] status [· detail]`, with the model shown only when a nickname hides
+it and the name (line one) never repeated. Assert against it rather than the
+dot colour, since [status is never encoded by colour alone](a11y.md); the
+tab's accessible description and tooltip prefix the name. Tabs are 36 px tall,
+inset 8 px from the bar's top and bottom so they stay clear of the window's
+resize band. `screenRect` (on the bar and on each tab) is `[x, y, w, h]` in
+screen coordinates, so a driver can aim a real click at a control instead of
+guessing from a screenshot. A trailing property narrows the reply:
+`get titlebar height` → `{"value":52}`.
+
+### `titlebar`
+Drive the title bar's controls. Native-caption minimize/maximize/close actions
+use QWidget window operations; they do **not** prove a native traffic-light
+click, native hover menu, or Windows Snap Layouts. Those require native UI
+testing on the target OS.
+
+The radio switcher is also drivable with existing generic bridge verbs:
+`invoke radioSwitcherSearch setText <query>`,
+`invoke radioSwitcherActions_<radio-id> click`, then invoke the visible menu's
+`radioSwitcher_disconnect_<radio-id>`, `radioSwitcher_rename_<radio-id>`,
+`radioSwitcher_setup_<radio-id>`, or `radioSwitcher_remove_<radio-id>` action.
+Removed tabs offer `radioSwitcher_restore_<radio-id>`. These are widget/action
+targets, not new bridge verbs. `radioNicknameEditor` and `saveRadioNickname`
+exercise client-owned naming. Radio-owned naming uses Radio Setup instead.
+`connectManuallyRow` opens the IP connection page, and `radioSwitcherRescan`
+requests discovery without connecting. Inspect enabled states before invoking.
+
+```json
+→ {"cmd":"titlebar","action":"selectRadio","target":"1234-5678-9012-3456"}
+← {"ok":true,"action":"selectRadio","target":"1234-5678-9012-3456",
+   "deferred":true,"titlebar":{…}}
+```
+
+| Action | Effect |
+|---|---|
+| `selectRadio <id>` | Clicks the radio tab whose `id` matches; errors if there is no such tab. |
+| `showDiscovery` | Opens the "Discovered radios" popover the `+` button owns. |
+| `minimize` / `maximize` / `close` | Activates the matching caption control. |
+
+Every action is validated synchronously — an unknown action or a missing tab
+still comes back `ok:false` — and then **runs on the next main-loop turn**
+(`"deferred":true`), never inside the bridge's socket callback: a tab click can
+raise the Connect window, `showDiscovery` builds a popup, and `close` runs the
+window's `closeEvent` (#3646, the same rule as `invoke click` and `close`).
+The echoed `titlebar` is therefore the state **before** the action; re-read
+`get titlebar` (or `wait_for` a field) to confirm the result.
+
+### `applet`
+Drive the applet panel's layout. Floating, dock side and visibility are three
+fields of one state, and every action routes through the same entry point the
+title-bar icons use (`MainWindow::applyAppletPanelState`), so a passing call
+proves the operator's own path rather than a parallel one.
+
+```json
+→ {"cmd":"applet","action":"dock","value":"left"}
+← {"ok":true,"action":"dock","value":"left","deferred":true,
+   "applet":{"present":true,"floating":false,"side":"right","visible":true,
+             "geometry":{"x":1140,"y":83,"w":260,"h":773},
+             "splitterIndex":1,"panIndex":0}}
+→ {"cmd":"applet","action":"state"}
+← {"ok":true,"action":"state",
+   "applet":{"present":true,"floating":false,"side":"left","visible":true,
+             "geometry":{"x":0,"y":83,"w":260,"h":773},
+             "splitterIndex":0,"panIndex":1}}
+```
+
+Actions are validated synchronously and applied on the next main-loop turn
+(`"deferred":true`) — floating creates and destroys a top-level window, which
+must not happen inside the socket callback (#3646). The `applet` echoed with an
+action is the state **before** it; follow with `applet state` to confirm.
+
+| Action | Effect |
+|---|---|
+| `dock <left\|right>` | Docks the panel to that wall and shows it, un-floating first if needed. |
+| `float <on\|off>` | Floats the panel into its own window, or docks it back to its last wall. |
+| `show` / `hide` | Shows or hides the panel. `hide` always docks first — see below. |
+| `state` | Read-only; returns the snapshot with no side effects. |
+
+Two combinations are deliberately not representable, because both strand the
+panel where no title-bar click can recover it:
+
+- **Floating and hidden.** An empty float window has no affordance to bring the
+  contents back. `float on` always shows; `hide` always docks first.
+- **Docked, visible, but off-wall.** `dock` sets side and visibility together
+  rather than letting a caller set one and leave the other stale.
+
+`geometry` and `splitterIndex`/`panIndex` are what prove the panel actually
+landed where the flags claim — `splitterIndex < panIndex` is the left dock.
+Assert on those, not just on `side`, or a zero-width panel reads as a pass.
 
 ### `tci`
 In-process TCI **client** simulator. Connects to this app's own TCI server
@@ -4550,7 +4715,7 @@ code changes RX audio or keys TX. Physical-radio persistence validation is
 still a separate radiocert task.
 
 <!-- BEGIN GENERATED VERB TABLE (tools/gen_bridge_docs.py) -->
-<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 77 verbs. -->
+<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 79 verbs. -->
 
 | Verb | Aliases | Description |
 |---|---|---|
@@ -4621,6 +4786,8 @@ still a separate radiocert task.
 | `station` | — | station <name> — set the GUI-client station name |
 | `resize` | — | resize <w> <h> [target] — resize a window |
 | `window` | — | window <maximize\|restore\|minimize\|fullscreen> [target] |
+| `titlebar` | — | titlebar <selectRadio <id>\|showDiscovery\|minimize\|maximize\|close> — drive the unified title bar's own controls |
+| `applet` | — | applet <dock <left\|right>\|float <on\|off>\|show\|hide\|state> — drive the applet panel's dock side, floating and visibility |
 | `shortcut` | — | shortcut <id> — fire a ShortcutManager/MIDI action (TX-gated) |
 | `keyevent` | — | keyevent <press\|release> <action-id\|key-seq> — inject a real key edge through the app event filter (momentary shortcuts only — PTT hold, and the CW keys once bound: their ids ship unbound, so KeyInjectUnbound until the operator binds them in Configure Shortcuts; press is TX-gated; a literal Tab/Backtab moves focus yet reports consumed) |
 | `midi` | — | midi cc <0-127> — inject a learned VFO Tune Knob CC event |

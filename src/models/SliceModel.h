@@ -8,6 +8,7 @@
 #include <QPointer>
 #include <array>
 
+#include "core/backends/NoiseBlankerKind.h"
 #include "core/backends/SliceDelta.h"
 #include "core/backends/ReceiveCommand.h"
 
@@ -104,7 +105,12 @@ public:
     QStringList txAntennaList() const { return m_txAntennaList; }
     bool    isLocked()    const { return m_locked; }
     bool    qskOn()       const { return m_qsk; }
-    bool    nbOn()        const { return m_nb; }
+    // WHETHER a blanker is running, for the many callers that only ask that:
+    // rigctl's NB, SmartCat's NB, TCI's rx_nb_enable, `get slice`, the MIDI
+    // mapping and the keyboard shortcut. nbKind() is WHICH one — see setNbKind().
+    bool    nbOn()        const { return m_nbKind != AetherSDR::NoiseBlankerKind::Off; }
+    AetherSDR::NoiseBlankerKind nbKind() const { return m_nbKind; }
+    AetherSDR::NoiseBlankerFill nbFill() const { return m_nbFill; }
     bool    nrOn()        const { return m_nr; }
     bool    anfOn()       const { return m_anf; }
     bool    nrlOn()       const { return m_nrl; }
@@ -175,6 +181,11 @@ public:
         return m_externalReceiveAutoSquelch;
     }
     int     squelchLevel()const { return m_squelchLevel; }
+    // Zero means not observed; never present a default as adopted DSP state.
+    int wfmDeemphasisUs() const { return m_wfmDeemphasisUs; }
+    bool wfmForceMono() const { return m_wfmForceMono; }
+    const WfmReceptionDiagnostics& wfmReceptionDiagnostics() const { return m_wfmReceptionDiagnostics; }
+    WfmStereoStatus wfmStereoStatus() const { return m_wfmStereoStatus; }
     int     flexSquelchLevel() const { return m_squelchLevel; }
     int     receiveSquelchLevel() const { return m_externalReceiveAudioReplacement
                                               ? m_externalReceiveSquelchLevel
@@ -291,7 +302,18 @@ public:
     bool isLockedFeedbackActive() const { return m_lockedFeedbackActive; }
     static constexpr int kLockedFeedbackMs = 500;
     void setQsk(bool on);
+    // The bool door, kept because most callers have only one: true means the
+    // FIRST blanker (Impulse), which is what every one of them meant before a
+    // second existed. A caller that wants NB2 uses setNbKind().
     void setNb(bool on);
+    // WHICH blanker. Off/Impulse/Advanced; Advanced is reachable only on a radio
+    // that runs the blanker on this host (RadioCapabilities::
+    // hasHostNoiseBlanker), because it is WDSP's second stage and a radio-side
+    // blanker has nothing to map it onto but its one blanker.
+    void setNbKind(AetherSDR::NoiseBlankerKind kind);
+    // What Advanced puts in the blanked window. Remembered while another kind
+    // runs, so switching to NB2 and back does not reset the operator's choice.
+    void setNbFill(AetherSDR::NoiseBlankerFill fill);
     void setNr(bool on);
     void setAnf(bool on);
     void setNrl(bool on);
@@ -318,6 +340,8 @@ public:
     void setAgcThreshold(int value);
     void setAgcOffLevel(int value);
     void setSquelch(bool on, int level);
+    void setWfmDeemphasis(int microseconds);
+    void setWfmForceMono(bool forceMono);
     // For genuine operator-driven manual squelch input only (a VFO flag's
     // own SQL controls, a controller-mapped squelch knob) — setSquelch()
     // plus recording the level as the operator's manual choice, in one
@@ -456,7 +480,12 @@ signals:
     void tuneBlockedByLock();
     void lockedFeedbackActiveChanged(bool active);
     void qskChanged(bool on);
+    // Stays a bool: every consumer of it (TCI's rx_nb_enable broadcast, the
+    // VFO button's checked state) asks whether a blanker is on. nbKindChanged
+    // follows for the one that also needs to know which.
     void nbChanged(bool on);
+    void nbKindChanged(AetherSDR::NoiseBlankerKind kind);
+    void nbFillChanged(AetherSDR::NoiseBlankerFill fill);
     void nrChanged(bool on);
     void anfChanged(bool on);
     void nrlChanged(bool on);
@@ -489,7 +518,14 @@ signals:
     void externalReceiveAgcThresholdChanged(int value);
     void externalReceiveAgcOffLevelChanged(int value);
     void externalReceiveAutoSquelchChanged(bool on);
+    void externalReceiveReplacementChanged(bool active);
     void squelchChanged(bool on, int level);
+    void wfmDeemphasisChanged(int microseconds);
+    void wfmForceMonoChanged(bool forceMono);
+    void wfmForceMonoRequested(bool forceMono);
+    void wfmReceptionDiagnosticsChanged(const AetherSDR::WfmReceptionDiagnostics& diagnostics);
+    void wfmStereoStatusChanged(AetherSDR::WfmStereoStatus status);
+    void wfmDeemphasisRequested(int microseconds);
     void externalReceiveSquelchChanged(bool on, int level);
     void stepChanged(int hz, const QVector<int>& stepList);
     void ritChanged(bool on, int hz);
@@ -552,7 +588,7 @@ private:
     quint64 m_agcModeIntentRevision{0};
     quint64 m_agcThresholdIntentRevision{0};
     quint64 m_agcOffLevelIntentRevision{0};
-    std::array<std::array<quint64, 2>,
+    std::array<std::array<quint64, 3>,
         static_cast<std::size_t>(SliceDspRequest::Feature::Anft) + 1> m_dspIntentRevisions{};
     std::array<quint64, 3> m_audioIntentRevisions{};
     quint64 m_squelchIntentRevision{0};
@@ -648,7 +684,8 @@ private:
     bool    m_escEnabled{false};
     float   m_escGain{1.0f};
     float   m_escPhaseShift{0.0f};
-    bool    m_nb{false};
+    AetherSDR::NoiseBlankerKind m_nbKind{AetherSDR::NoiseBlankerKind::Off};
+    AetherSDR::NoiseBlankerFill m_nbFill{AetherSDR::kDefaultNoiseBlankerFill};
     bool    m_nr{false};
     bool    m_anf{false};
     bool    m_nrl{false};
@@ -677,6 +714,10 @@ private:
     bool m_squelchLevelKnown{false};
     bool    m_squelchOn{false};
     int     m_squelchLevel{20};
+    int m_wfmDeemphasisUs{0};
+    bool m_wfmForceMono{false};
+    WfmReceptionDiagnostics m_wfmReceptionDiagnostics;
+    WfmStereoStatus m_wfmStereoStatus{WfmStereoStatus::Unavailable};
     int     m_manualSquelchLevel{20};
     bool    m_squelchEchoIsManual{true};
     int     m_stepHz{100};

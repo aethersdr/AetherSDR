@@ -347,6 +347,19 @@ void receiveControlContracts()
                   "Flex DSP preserves exact enable/level encoding without inventing manual notch");
         }
     }
+    // A Flex has one blanker: a host kind reaches it as `nb=1`, and the host
+    // blanker's fill has no Flex command at all.
+    commands.clear();
+    SliceDspRequest nb2{SliceDspRequest::Feature::Nb, SliceDspRequest::Field::Enabled, true, 47};
+    nb2.kind = NoiseBlankerKind::Advanced;
+    nb2.fill = NoiseBlankerFill::Interpolate;
+    check(flex.requestSliceDsp(3, nb2) == ReceiveDispatch::Dispatched
+              && commands == QStringList{QStringLiteral("slice set 3 nb=1")},
+          "Flex reads a host blanker kind as its one blanker on");
+    commands.clear();
+    nb2.field = SliceDspRequest::Field::Fill;
+    check(flex.requestSliceDsp(3, nb2) == ReceiveDispatch::Unsupported && commands.isEmpty(),
+          "Flex refuses the host blanker's fill without inventing wire text");
     commands.clear();
     check(!flex.capabilities().receiveAudioControl && !flex.capabilities().hasRadioDialLock,
           "Flex desktop audio and slice lock do not grow daemon or global-lock capabilities");
@@ -646,7 +659,8 @@ void hl2WorkerDispatch()
     check(backend.requestSliceDsp(0, {SliceDspRequest::Feature::Nb, SliceDspRequest::Field::Level, true, 71})
               == ReceiveDispatch::Dispatched, "HL2 accepts its implemented blanker");
     applied = hl2::Hl2DspReadbackTestAccess::applied(backend);
-    check(applied.noiseBlankerEnabled && applied.noiseBlankerLevel == 71,
+    check(applied.noiseBlanker == WdspChannel::NoiseBlanker::Impulse
+              && applied.noiseBlankerLevel == 71,
           "HL2 typed blanker configures the actual DSP worker");
     check(backend.requestSliceDsp(0, {SliceDspRequest::Feature::Apf,
               SliceDspRequest::Field::Enabled, true, 75}) == ReceiveDispatch::Dispatched,

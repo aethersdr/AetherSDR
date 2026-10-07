@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/SharedCapturePolicy.h"
+#include "core/backends/rtl/RtlRfExtractor.h"
 #include "core/dsp/WdspChannel.h"
 
 #include <complex>
@@ -53,6 +54,21 @@ public:
         bool operator==(const ReceiverSpec&) const = default;
     };
 
+    enum class ProcessingFailureReason { NoExtractor, SessionMismatch, Extraction, DspProcess, AudioLattice };
+    struct ProcessingFailure {
+        ProcessingFailureReason reason = ProcessingFailureReason::Extraction;
+        WdspChannel::ProcessResult processResult = WdspChannel::ProcessResult::Ok;
+        std::uint64_t expectedCaptureFirst = 0;
+        std::uint64_t captureFirst = 0;
+        std::uint64_t captureFrames = 0;
+        std::uint64_t iqFirst = 0;
+        std::uint64_t iqFrames = 0;
+        bool hasExpectedCaptureFirst = false;
+        bool hasIqFirst = false;
+        std::optional<RtlRfExtractor::Failure> extraction;
+        bool operator==(const ProcessingFailure&) const = default;
+    };
+
     // Prepared fixed-block DSP, with no allocating setters exposed. M1 owns
     // the RF extraction/conversion feeding these exact-size planar blocks.
     // Returned output spans are borrowed until the next processIq() call.
@@ -64,12 +80,24 @@ public:
         virtual std::span<const float> left() const noexcept = 0;
         virtual std::span<const float> right() const noexcept = 0;
         virtual bool processCapture(const SampleBlock&, AudioSink&) noexcept { return false; }
+        // Fixed-size first-failure observation; acquisition context only, or
+        // after acquisition has stopped. Reading does not acknowledge/reset it.
+        virtual std::optional<ProcessingFailure> processingFailure() const noexcept { return std::nullopt; }
     };
     class AudioSink {
     public:
         virtual ~AudioSink() = default;
         virtual void audioBlock(const ReceiverSpec& spec, std::uint64_t firstSample,
             std::span<const float> left, std::span<const float> right, bool discontinuity) noexcept = 0;
+        // Optional decoder observation for the same live receiver. The decoder
+        // publishes its latest completed DSP block, not an RF arrival timestamp.
+        virtual void audioBlockWithStatus(const ReceiverSpec& spec, std::uint64_t firstSample,
+            std::span<const float> left, std::span<const float> right, bool discontinuity,
+            std::optional<AetherSDR::WfmReceptionDiagnostics> reception) noexcept
+        {
+            (void)reception;
+            audioBlock(spec, firstSample, left, right, discontinuity);
+        }
     };
     // Injection is for deterministic preparation failures/delays. The default
     // constructs real WDSP channels and output buffers on the Qt worker pool.

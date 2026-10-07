@@ -121,7 +121,7 @@
  },
  "core/ClientDisplaySettings.h": {
   "tag": "ui-support",
-  "note": "Radio-scoped client persistence for locally shaped waterfall cadence under the ClientDisplay feature document; UI settings plumbing, not radio-owned display state.",
+  "note": "Radio-scoped client persistence for locally shaped display state (waterfall cadence, FFT FPS, the dBm range) under the ClientDisplay feature document; UI settings plumbing, not radio-owned display state.",
   "split": "",
   "confidence": "high"
  },
@@ -224,6 +224,12 @@
  "core/DaxTxPolicy.h": {
   "tag": "vendor(flex)",
   "note": "Policy deciding when to claim a Flex dax_tx stream vs deferring to SmartSDR DAX2; whole surface is DAX/VITA-49.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/DbmRangePlausibility.h": {
+  "tag": "ui-support",
+  "note": "Header-only predicate: could this dBm range be a real display range. Shared by the pan wiring's outbound backstop and ClientDisplaySettings' store validation; no radio state.",
   "split": "",
   "confidence": "high"
  },
@@ -332,6 +338,18 @@
  "core/KiwiSdrProtocol.h": {
   "tag": "vendor(kiwi)",
   "note": "KiwiSDR websocket wire protocol: SND/W/F frame decode, ADPCM, MSG tokens, camp/auth, kiwi command formatting; family enum + inbound-frame classification shared by the Web-888 receiver family",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/Kpa1500Connection.h": {
+  "tag": "peripheral(kpa1500)",
+  "note": "Direct TCP control/status client (port 1500, ^CP-configurable) for the Elecraft KPA1500 amplifier — a standalone Ethernet accessory with no FlexRadio awareness at all, same precedent as core/AcomConnection.h, core/SpeConnection.h and core/VkampConnection.h. Unlike PGXL/TGXL the Flex radio neither discovers it nor proxies its telemetry, so port 1500 is the only control channel. Not radio-family wire; a peripheral accessory, NOT behind the IRadioBackend radio seam. See docs/architecture/kpa1500-amplifier-design.md.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/Kpa1500Protocol.h": {
+  "tag": "peripheral(kpa1500)",
+  "note": "Wire codec for the KPA1500 peripheral: the '^CMD<arg>;' ASCII framing parser, the decode into a per-field optional Status snapshot, and the command builders — including the bounded-timeout keying builder that makes the unbounded '^TX;' form unrepresentable. Derived from the vendor's public KPA1500 Programming Reference V3, a clean-room input (Constitution Principle IV). Peripheral accessory wire, NOT behind the IRadioBackend radio seam.",
   "split": "",
   "confidence": "high"
  },

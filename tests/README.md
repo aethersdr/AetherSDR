@@ -26,9 +26,13 @@ have in the root file — `tests/my_new_test.cpp` and `src/gui/Bar.cpp`, not
 header of that file explains why, and why it should not be "tidied up" into a
 subdirectory later.
 
-A test that touches `AppSettings` compiles `${AETHER_SETTINGS_SOURCES}` and
-needs `aether_sqlite3` — add its target name to the `AETHER_SETTINGS_CONSUMERS`
-list at the bottom of `tests.cmake`.
+A test that touches `AppSettings` without linking `aethercore` adds
+`$<TARGET_OBJECTS:aether_test_settings>` to its sources and needs
+`aether_sqlite3` — add its target name to the `AETHER_SETTINGS_CONSUMERS` list
+at the bottom of `tests.cmake`. `LogManager` and `AsyncLogWriter` come the same
+way, from `aether_test_log_manager` and `aether_test_async_log_writer`. Each is
+compiled once rather than once per test; configure fails if a test compiles
+them from source again.
 
 Putting a test target in the root `CMakeLists.txt` instead fails two ways, on
 purpose: `tests.cmake` aborts the CMake configure step with a message pointing

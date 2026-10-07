@@ -23,7 +23,8 @@ class Ctr2UsbRelay;
 // to, which the owner pushes in through setAetherRadio(); that destination is
 // captured at start() and never retargeted while running. The model never
 // reads RadioModel or a backend itself: the CTR2 is its own radio client.
-// Nothing persists; the relay is off on every launch.
+// Nothing persists; the relay is off on every launch. USB mode is the default
+// when the build has hidapi, with the first recognized CTR2 preselected.
 // Design: docs/ctr2-tcp-proxy-design.md, docs/ctr2-usb-relay-design.md.
 class Ctr2ProxyModel : public QObject {
     Q_OBJECT
@@ -62,6 +63,10 @@ public:
     QList<Ctr2HidPort::DeviceInfo> availableUsbDevices() const { return m_usbChoices; }
     QString usbDevicePath() const { return m_usbDevicePath; }
     bool setUsbDevicePath(const QString& path);
+    // Linux: the selected CTR2's device node exists but this user may not
+    // open it, i.e. the udev access rule is not installed yet. Always false
+    // on other platforms, in Wi-Fi mode, or with no device selected.
+    bool usbDeviceNeedsAccessRule() const;
 
     // The radio AetherSDR is connected to. A null address means the relay
     // has no usable destination, and unavailableReason says why. A running

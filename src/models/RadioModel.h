@@ -561,6 +561,9 @@ public:
 
     // Audio output
     int     lineoutGain()    const { return m_lineoutGain; }
+    // The level of the output the operator hears, on every family: the PC sink's
+    // MasterVolume with PC Audio on, this model's line-out gain with it off.
+    [[nodiscard]] int activeOutputVolumePercent() const;
     bool    lineoutMute()    const { return m_lineoutMute; }
     int     headphoneGain()  const { return m_headphoneGain; }
     bool    headphoneMute()  const { return m_headphoneMute; }
@@ -1552,6 +1555,9 @@ private:
     void releaseOfflineHealth();
     void captureClientOwnedCwState(RestoredRadioState& state) const;
     void restoreClientOwnedCwState(const RestoredRadioState& state);
+    // The step rides the Tuning domain only where no command plane carries it.
+    bool clientOwnsSliceStep() const;
+    void restoreClientOwnedStep(const RestoredRadioState& state);
 
     // aetherd Gap B: build/destroy the backend for a radio family. The backend
     // follows the radio the operator picks in the connection manager, so these
@@ -1746,6 +1752,9 @@ private:
     void dispatchSliceAgc(const SliceAgcRequest& request);
     void dispatchSliceDsp(const SliceDspRequest& request);
     void dispatchSliceAudio(const SliceAudioRequest& request);
+    void dispatchSliceWfmForceMono(bool forceMono);
+    void dispatchSliceWfmDeemphasis(int microseconds);
+    void dispatchSliceWfm(const SliceWfmRequest& request);
     void dispatchSliceSquelch(const SliceSquelchRequest& request);
     void dispatchSliceRxAntenna(const QString& antenna);
     void dispatchSliceLock(bool locked);
@@ -1910,6 +1919,9 @@ private:
     bool        m_muteLocalWhenRemote{false};
     bool        m_autoSave{true};
     int         m_lineoutGain{50};
+    // This radio's client-owned tuning step: restored at connect, seeded into
+    // each new slice, and updated by any slice's step change. 0 = none.
+    int         m_clientStepHz{0};
     bool        m_lineoutMute{false};
     int         m_headphoneGain{50};
     bool        m_headphoneMute{false};

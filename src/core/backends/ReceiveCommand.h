@@ -1,5 +1,7 @@
 #pragma once
 
+#include "core/backends/NoiseBlankerKind.h"
+
 #include <QMetaType>
 #include <QString>
 
@@ -43,19 +45,38 @@ enum class ReceiveDispatch { Dispatched, LocalOnly, Unsupported };
 
 struct SliceDspRequest {
     enum class Feature { Nb, Nr, Anf, Mn, Apf, Nrl, Nrs, Rnn, Nrf, Anfl, Anft };
-    enum class Field { Enabled, Level };
+    // Fill is Nb-only. `kind` and `fill` ride with every Nb request, so a
+    // backend always receives the whole blanker state and never has to
+    // remember a half of it (see IRadioBackend::setSliceNoiseBlanker). A change
+    // of blanker is an Enabled request: `enabled` says whether one runs, `kind`
+    // says which, so a backend with one blanker reads `enabled` and is right.
+    enum class Field { Enabled, Level, Fill };
     enum class Origin { Operator, ProfileRestore };
     Feature feature{Feature::Nb};
     Field field{Field::Enabled};
     bool enabled{false};
     int level{0};
     Origin origin{Origin::Operator};
+    NoiseBlankerKind kind{NoiseBlankerKind::Off};
+    NoiseBlankerFill fill{NoiseBlankerFill::Zero};
+
+    // The blanker this request asks for: Off unless `enabled`, then `kind`, with
+    // a request built without a kind (any caller predating NB2) meaning Impulse.
+    NoiseBlankerKind requestedBlanker() const
+    {
+        if (!enabled)
+            return NoiseBlankerKind::Off;
+        return kind == NoiseBlankerKind::Off ? NoiseBlankerKind::Impulse : kind;
+    }
 
     bool valid() const
     {
         return feature >= Feature::Nb && feature <= Feature::Anft
-            && (field == Field::Enabled || field == Field::Level)
+            && (field == Field::Enabled || field == Field::Level
+                || (feature == Feature::Nb && field == Field::Fill))
             && level >= 0 && level <= 100
+            && isValidNoiseBlankerKind(static_cast<int>(kind))
+            && isValidNoiseBlankerFill(static_cast<int>(fill))
             && (origin == Origin::Operator
                 || (origin == Origin::ProfileRestore && feature == Feature::Nrs
                     && field == Field::Level));
@@ -78,6 +99,18 @@ struct SliceAudioRequest {
     }
 };
 
+struct SliceWfmRequest {
+    enum class Field { ForceMono, Deemphasis };
+    Field field{Field::ForceMono};
+    int value{0};
+
+    bool valid() const
+    {
+        return (field == Field::ForceMono && (value == 0 || value == 1))
+            || (field == Field::Deemphasis && (value == 50 || value == 75));
+    }
+};
+
 struct SliceSquelchRequest {
     bool enabled{false};
     int level{0};
@@ -95,3 +128,4 @@ Q_DECLARE_METATYPE(AetherSDR::SliceAgcRequest)
 Q_DECLARE_METATYPE(AetherSDR::SliceDspRequest)
 Q_DECLARE_METATYPE(AetherSDR::SliceAudioRequest)
 Q_DECLARE_METATYPE(AetherSDR::SliceSquelchRequest)
+Q_DECLARE_METATYPE(AetherSDR::SliceWfmRequest)

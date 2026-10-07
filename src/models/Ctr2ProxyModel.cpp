@@ -13,6 +13,11 @@
 
 #include <utility>
 
+#ifdef Q_OS_LINUX
+#include <cerrno>
+#include <unistd.h>
+#endif
+
 namespace AetherSDR {
 
 namespace {
@@ -53,6 +58,9 @@ Ctr2ProxyModel::Ctr2ProxyModel(QObject* parent)
     m_usbOpener = [](const Ctr2HidPort::DeviceInfo& device, QString* error) -> Ctr2HidPort* {
         return Ctr2HidapiPort::open(device, error);
     };
+    // USB is the default whenever this build can open a CTR2.
+    m_transport = Transport::Usb;
+    m_activeTransport = Transport::Usb;
 #endif
     refreshDevices();
 }
@@ -101,6 +109,17 @@ void Ctr2ProxyModel::refreshDevices()
     }
     m_listenChoices = choices;
     m_usbChoices = usb;
+    // Default to the first recognized CTR2 while nothing is selected or the
+    // selected device has gone; an existing choice stands.
+    if (!isRunning() && !selectedUsbDevice()) {
+        m_usbDevicePath.clear();
+        for (const Ctr2HidPort::DeviceInfo& d : std::as_const(m_usbChoices)) {
+            if (!d.ctr2Model().isEmpty()) {
+                m_usbDevicePath = d.path;
+                break;
+            }
+        }
+    }
     emit listenAddressesChanged();
     emit configurationChanged();
 }
@@ -294,6 +313,21 @@ bool Ctr2ProxyModel::isRunning() const
 {
     const TcpByteProxy::State s = state();
     return s != TcpByteProxy::State::Stopped && s != TcpByteProxy::State::Error;
+}
+
+bool Ctr2ProxyModel::usbDeviceNeedsAccessRule() const
+{
+#ifdef Q_OS_LINUX
+    if (m_transport != Transport::Usb || m_usbDevicePath.isEmpty()) {
+        return false;
+    }
+    // hidraw nodes are root-only until the rule grants the session user an
+    // ACL; access() honours that ACL. A missing node (ENOENT) is not ours to fix.
+    const QByteArray path = m_usbDevicePath.toLocal8Bit();
+    return ::access(path.constData(), R_OK | W_OK) != 0 && errno == EACCES;
+#else
+    return false;
+#endif
 }
 
 bool Ctr2ProxyModel::start()

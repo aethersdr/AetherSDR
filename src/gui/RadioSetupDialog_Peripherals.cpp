@@ -19,6 +19,7 @@
 #include "ScopedChildWidget.h"
 #include "core/AcomConnection.h"
 #include "core/AppSettings.h"
+#include "core/Kpa1500Connection.h"
 #include "core/LpMeterConnection.h"
 #include "core/PeripheralRemovalGuard.h"
 #include "core/PeripheralSettings.h"
@@ -73,6 +74,7 @@ struct PeripheralDeviceUi {
         AuthNetwork,      // TGXL, PGXL, Antenna Genius, ShackSwitch: host + port, maybe a code
         SerialOrNetwork,  // ACOM, SPE Expert, LP-100A: serial port or ser2net host
         Vkamp,            // host + port, plus the amplifier model
+        Kpa1500,          // host + port
     };
 
     // Identity
@@ -1208,6 +1210,70 @@ void RadioSetupDialog::buildVkampDevice(PeripheralDeviceUi& ui, QWidget* stackPa
     finishDetailPage(detail, ui, {});
 }
 
+void RadioSetupDialog::buildKpa1500Device(PeripheralDeviceUi& ui, QWidget* stackParent,
+                                          const std::function<void()>& refresh)
+{
+    PeripheralDeviceUi* const u = &ui;
+    DetailPage detail = beginDetailPage(ui, stackParent);
+
+    ui.addressEdit = new QLineEdit;
+    ui.addressEdit->setObjectName(QStringLiteral("peripheralAddress_%1").arg(ui.id));
+    ui.addressEdit->setPlaceholderText(QStringLiteral("e.g. 192.168.1.60"));
+    applyEditStyle(ui.addressEdit);
+    ui.addressEdit->setText(PeripheralSettings::deviceString("Kpa1500", "ManualIp"));
+    ui.addressEdit->setAccessibleName(tr("KPA1500 address"));
+    ui.addressEdit->setAccessibleDescription(
+        tr("IP address or host name of the Elecraft KPA1500 amplifier"));
+
+    // The amp's port is movable with ^CP, so it is editable rather than fixed.
+    ui.portSpin = makePortSpin(ui);
+    ui.portSpin->setValue(PeripheralSettings::deviceInt("Kpa1500", "ManualPort", ui.defaultPort));
+    ui.portSpin->setAccessibleName(tr("KPA1500 control port"));
+    ui.portSpin->setAccessibleDescription(tr("TCP control port, 1 to 65535, default 1500"));
+
+    ui.connectButton = makeConnectButton(ui);
+    ui.connectButton->setAccessibleName(tr("Connect or disconnect the Elecraft KPA1500"));
+    connect(ui.connectButton, &QPushButton::clicked, this, [u, refresh]() {
+        if (u->isConnected()) {
+            u->disconnectNow();
+            return;
+        }
+        u->state.attention = Attention::None;
+        u->state.message.clear();
+        const QString ip = u->addressEdit->text().trimmed();
+        if (ip.isEmpty()) {
+            refresh();
+            return;
+        }
+        const int port = u->portSpin->value();
+        PeripheralSettings::setDeviceString("Kpa1500", "ManualIp", ip);
+        PeripheralSettings::setDeviceInt("Kpa1500", "ManualPort", port);
+        u->state.connecting = true;
+        refresh();
+        u->connectNetwork(ip, static_cast<quint16>(port));
+        refresh();
+    });
+
+    addFormRow(detail, tr("IP Address"), ui.addressEdit);
+    addFormRow(detail, tr("Port"), ui.portSpin);
+
+    m_peripheralRowSavers.append([u]() {
+        if (!u->addressEdit || !u->addressEdit->text().trimmed().isEmpty()) {
+            return;
+        }
+        const QString savedIp = PeripheralSettings::deviceString("Kpa1500", "ManualIp");
+        if (savedIp.isEmpty()) {
+            return;
+        }
+        PeripheralSettings::clearDeviceField("Kpa1500", "ManualIp");
+        PeripheralSettings::clearDeviceField("Kpa1500", "ManualPort");
+        if (u->isConnected() && u->description().startsWith(savedIp + ":")) {
+            u->disconnectNow();
+        }
+    });
+    finishDetailPage(detail, ui, {});
+}
+
 namespace {
 
 // Calls `refresh` whenever the page is shown.
@@ -1555,6 +1621,20 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
         ui->afterRemoval = [this]() { m_vkamp->disconnect(); };
         buildVkampDevice(*ui, detailStack, refresh);
     }
+    if (m_kpa1500) {
+        // TCP only: the amp's UDP server takes the same commands, but control
+        // writes here need delivery confirmation (kpa1500-amplifier-design.md).
+        auto ui = addDevice(QStringLiteral("kpa1500"), tr("Elecraft KPA1500"),
+                            QStringLiteral("KPA1500 amplifier"),
+                            PeripheralDeviceUi::Kind::Kpa1500, Kpa1500::kDefaultPort);
+        ui->settingsGroup = QStringLiteral("Kpa1500");
+        ui->isConnected = [this]() { return m_kpa1500->isConnected(); };
+        ui->disconnectNow = [this]() { m_kpa1500->disconnect(); };
+        ui->connectNetwork = [this](const QString& h, quint16 p) { m_kpa1500->connectNetwork(h, p); };
+        ui->description = [this]() { return m_kpa1500->description(); };
+        ui->afterRemoval = [this]() { m_kpa1500->disconnect(); };
+        buildKpa1500Device(*ui, detailStack, refresh);
+    }
     if (m_lpMeter) {
         auto ui = serialDevice(QStringLiteral("lp100a"), tr("LP-100A Meter"), QStringLiteral("LP-100A meter"),
             QStringLiteral("Lp100a"), 2000, QStringLiteral("115200 8N1"),
@@ -1597,6 +1677,9 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
         }
         if (m_lpMeter) {
             m_lpMeter->setAutoReconnect(on);
+        }
+        if (m_kpa1500) {
+            m_kpa1500->setAutoReconnect(on);
         }
         // VK3AMP takes this setting only at startup (#4919).
     });
@@ -2347,7 +2430,7 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
     connect(&m_model->amplifier(), &AmpModel::presenceChanged, this, refresh);
     connect(m_model, &RadioModel::connectionStateChanged, this, refresh);
 
-    // The serial and VK3AMP devices: link changes, failures, and link-up with a
+    // The serial, VK3AMP and KPA1500 devices: link changes, failures, and link-up with a
     // silent device.
     auto wireLinkDevice = [this, onLink, onFailure](const QString& id, auto* connection) {
         using Connection = std::remove_pointer_t<decltype(connection)>;
@@ -2364,6 +2447,9 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
     }
     if (m_vkamp) {
         wireLinkDevice(QStringLiteral("vkamp"), m_vkamp);
+    }
+    if (m_kpa1500) {
+        wireLinkDevice(QStringLiteral("kpa1500"), m_kpa1500);
     }
     if (m_lpMeter) {
         wireLinkDevice(QStringLiteral("lp100a"), m_lpMeter);

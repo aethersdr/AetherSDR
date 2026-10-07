@@ -375,6 +375,18 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/test_check_qt_pin.py
 
+      # BUILD-OPTIONS.md is the catalog of project CMake options (#6097), and
+      # options arrive in PRs that have no reason to open it. Fails on an option
+      # or cache setting with no row, a row with no definition, or a literal
+      # ON/OFF default that differs. The self-test breaks each on purpose.
+      - name: Build options reference
+        if: ${{ !cancelled() }}
+        run: python tools/check_build_options.py --strict
+
+      - name: Build options checker self-test
+        if: ${{ !cancelled() }}
+        run: python tools/test_check_build_options.py
+
       # ── Hardcoded-colour ratchet (#4569, RFC #3076). Counts may not rise
       # above the PR's base. The gate is a DELTA rather than a stored constant:
       # main gains colours from unrelated UI merges, so a frozen baseline goes

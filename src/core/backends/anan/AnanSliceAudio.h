@@ -1,7 +1,9 @@
 #pragma once
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 
 // The ANAN receiver's own audio stage: mute, AF gain and left/right balance,
 // applied to demodulated stereo before it leaves the backend. It lives here, not
@@ -40,6 +42,19 @@ inline constexpr double kSliceAudioRangeDb = 40.0;
 [[nodiscard]] inline float sliceAudioRightPanGain(int panPercent) noexcept
 {
     return panPercent <= 50 ? static_cast<float>(panPercent) / 50.0f : 1.0f;
+}
+
+// Quantise one sample to the stream's signed 16-bit wire format. Clamped before
+// scaling: the resampler overshoots on transients and an unclamped cast wraps
+// sign. The non-finite guard must be separate from the clamp -- std::clamp
+// returns v unless v < lo or hi < v, and every NaN comparison is false -- and
+// covers infinity too, which clamps correctly but would emit a full-scale click.
+[[nodiscard]] inline std::int16_t sliceAudioToInt16(float v) noexcept
+{
+    if (!std::isfinite(v)) {
+        return 0;
+    }
+    return static_cast<std::int16_t>(std::clamp(v, -1.0f, 1.0f) * 32767.0f);
 }
 
 // Apply all three to interleaved L,R float32 in place. Mute zeroes the output

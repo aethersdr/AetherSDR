@@ -442,7 +442,8 @@ SliceDspRequest SliceModel::currentDspRequest(SliceDspRequest::Feature feature,
     SliceDspRequest request{feature, field, false, 0};
     switch (feature) {
     case SliceDspRequest::Feature::Nb:
-        request.enabled = m_nb; request.level = m_nbLevel; break;
+        request.enabled = nbOn(); request.level = m_nbLevel;
+        request.kind = m_nbKind; request.fill = m_nbFill; break;
     case SliceDspRequest::Feature::Nr:
         request.enabled = m_nr; request.level = m_nrLevel; break;
     case SliceDspRequest::Feature::Anf:
@@ -469,9 +470,34 @@ SliceDspRequest SliceModel::currentDspRequest(SliceDspRequest::Feature feature,
 
 void SliceModel::setNb(bool on)
 {
-    m_nb = on;
+    m_nbKind = on ? AetherSDR::NoiseBlankerKind::Impulse
+                  : AetherSDR::NoiseBlankerKind::Off;
     notifyReceiveDspIntent(SliceDspRequest::Feature::Nb, SliceDspRequest::Field::Enabled,
-                           [this, on] { emit nbChanged(on); });
+                           [this, on] {
+        emit nbChanged(on);
+        emit nbKindChanged(m_nbKind);
+    });
+}
+
+void SliceModel::setNbKind(AetherSDR::NoiseBlankerKind kind)
+{
+    m_nbKind = kind;
+    // Off is not a separate verb: the kind carries it, and nbOn() follows.
+    notifyReceiveDspIntent(SliceDspRequest::Feature::Nb, SliceDspRequest::Field::Enabled,
+                           [this, kind] {
+        emit nbChanged(kind != AetherSDR::NoiseBlankerKind::Off);
+        emit nbKindChanged(kind);
+    });
+}
+
+void SliceModel::setNbFill(AetherSDR::NoiseBlankerFill fill)
+{
+    if (m_nbFill == fill) return;
+    m_nbFill = fill;
+    // No wire text: there is no Flex command for it. This is a parameter of a
+    // blanker that only exists on this host.
+    notifyReceiveDspIntent(SliceDspRequest::Feature::Nb, SliceDspRequest::Field::Fill,
+                           [this, fill] { emit nbFillChanged(fill); });
 }
 
 void SliceModel::setNr(bool on)
@@ -777,6 +803,19 @@ void SliceModel::setAgcOffLevel(int value)
     emit receiveAgcRequested({SliceAgcRequest::Field::OffLevel, m_agcMode,
                               m_agcThreshold, value,
                               SliceAgcRequest::Origin::Operator});
+}
+
+void SliceModel::setWfmForceMono(bool forceMono)
+{
+    // Selection is intent until the prepared decoder revision is accepted.
+    emit wfmForceMonoRequested(forceMono);
+}
+
+void SliceModel::setWfmDeemphasis(int microseconds)
+{
+    if (microseconds != 50 && microseconds != 75) { return; }
+    // Requests never update observed state, even on optimistic legacy slices.
+    emit wfmDeemphasisRequested(microseconds);
 }
 
 void SliceModel::setSquelch(bool on, int level)
@@ -1166,6 +1205,7 @@ void SliceModel::setExternalReceiveAudioReplacementMute(bool active,
                                                         bool restoreMute)
 {
     const QPointer<SliceModel> alive(this);
+    const bool previousReplacement = m_externalReceiveAudioReplacement;
     const bool previousVisibleMute = audioMute();
     const float previousVisibleGain = audioGain();
     const int previousVisiblePan = audioPan();
@@ -1249,6 +1289,9 @@ void SliceModel::setExternalReceiveAudioReplacementMute(bool active,
     }
     if (m_externalReceiveAutoSquelch != previousExternalAutoSquelch) {
         emit externalReceiveAutoSquelchChanged(m_externalReceiveAutoSquelch);
+    }
+    if (m_externalReceiveAudioReplacement != previousReplacement) {
+        emit externalReceiveReplacementChanged(m_externalReceiveAudioReplacement);
     }
 }
 
@@ -1670,9 +1713,25 @@ void SliceModel::applyChanges(const SliceDelta& d)
         m_qsk = *d.qsk;
         emit qskChanged(m_qsk);
     }
-    if (d.nb.has_value()) {
-        m_nb = *d.nb;
-        emit nbChanged(m_nb);
+    if (d.nbFill.has_value()) {
+        m_nbFill = *d.nbFill;
+        emit nbFillChanged(m_nbFill);
+    }
+    if (d.nbKind.has_value() || d.nb.has_value()) {
+        // The KIND wins where a backend sent one: it knows which blanker is
+        // running. A bare `nb` is a radio's echo, and a bool is all a radio-side
+        // blanker has to say — so it must not clobber a host kind with a
+        // downgrade. "Blanker on" is still true of a slice running Advanced, so
+        // only the Off<->on transitions are taken from it.
+        if (d.nbKind.has_value()) {
+            m_nbKind = *d.nbKind;
+        } else if (!*d.nb) {
+            m_nbKind = AetherSDR::NoiseBlankerKind::Off;
+        } else if (m_nbKind == AetherSDR::NoiseBlankerKind::Off) {
+            m_nbKind = AetherSDR::NoiseBlankerKind::Impulse;
+        }
+        emit nbChanged(nbOn());
+        emit nbKindChanged(m_nbKind);
     }
     if (d.nr.has_value()) {
         m_nr = *d.nr;
@@ -1779,6 +1838,46 @@ void SliceModel::applyChanges(const SliceDelta& d)
     if (d.agcOffLevel.has_value()) {
         const int v = *d.agcOffLevel;
         if (m_agcOffLevel != v) { m_agcOffLevel = v; emit agcOffLevelChanged(v); }
+    }
+    if (d.wfmDeemphasisUs && (*d.wfmDeemphasisUs == 50 || *d.wfmDeemphasisUs == 75)
+        && m_wfmDeemphasisUs != *d.wfmDeemphasisUs) {
+        m_wfmDeemphasisUs = *d.wfmDeemphasisUs;
+        emit wfmDeemphasisChanged(m_wfmDeemphasisUs);
+    }
+    if (d.wfmForceMono && m_wfmForceMono != *d.wfmForceMono) {
+        m_wfmForceMono = *d.wfmForceMono;
+        emit wfmForceMonoChanged(m_wfmForceMono);
+    }
+    if (d.wfmStereoStatus) {
+        const WfmStereoStatus status = *d.wfmStereoStatus;
+        switch (status) {
+        case WfmStereoStatus::Unavailable:
+        case WfmStereoStatus::Acquiring:
+        case WfmStereoStatus::Mono:
+        case WfmStereoStatus::Stereo:
+            if (m_wfmStereoStatus != status) {
+                m_wfmStereoStatus = status;
+                emit wfmStereoStatusChanged(status);
+            }
+            break;
+        }
+    }
+    if (d.wfmReceptionDiagnostics) {
+        WfmReceptionDiagnostics value = *d.wfmReceptionDiagnostics;
+        if (!value.valid || !std::isfinite(value.pilotMagnitude)
+            || value.pilotMagnitude < 0.0
+            || !std::isfinite(value.pilotEngageThreshold) || !std::isfinite(value.pilotReleaseThreshold)
+            || value.pilotReleaseThreshold < 0.0
+            || value.pilotEngageThreshold <= value.pilotReleaseThreshold
+            || value.engageBlocks == 0 || value.releaseBlocks == 0
+            || value.stableDurationMs > 5000
+            || value.lockDurationMs > value.observationDurationMs
+            || value.stableDurationMs > value.observationDurationMs
+            || (!value.pilotLocked && value.lockDurationMs != 0)) { value = {}; }
+        if (m_wfmReceptionDiagnostics != value) {
+            m_wfmReceptionDiagnostics = value;
+            emit wfmReceptionDiagnosticsChanged(value);
+        }
     }
     if (d.squelchOn.has_value() || d.squelchLevel.has_value()) {
         m_squelchOnKnown |= d.squelchOn.has_value();

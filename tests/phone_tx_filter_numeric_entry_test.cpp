@@ -510,7 +510,8 @@ int main(int argc, char** argv)
     if (QLineEdit* ed = openEditor(low)) {
         ed->clear();
         check(!ed->hasAcceptableInput(), "an empty field is not Acceptable (the precondition)");
-        QApplication::sendEvent(ed, new QFocusEvent(QEvent::FocusOut));
+        QFocusEvent focusOut(QEvent::FocusOut);   // sendEvent never takes ownership
+        QApplication::sendEvent(ed, &focusOut);
     }
     check(!low->isEditing(),
           "focus-out always closes the editor, even on unacceptable input");

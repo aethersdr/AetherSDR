@@ -2182,6 +2182,39 @@ Measured on the real HL2 at 96 kHz span, 25 fps pan:
 that the slider midpoint is the speed midpoint — the property whose absence was
 the second bug.
 
+#### What survives a restart, and where it is kept
+
+A Flex stores a pan's FFT FPS, FFT AVG, Wt Avg, waterfall rate and dBm range and
+reports them back on connect, which is why the client keeps no copy of them
+there (`SpectrumWidget::loadSettings` deletes the old flat keys; #2465, #4126).
+The HL2 stores none of them and nothing reports them.
+
+The waterfall rate, FFT FPS and the dBm range live in the per-radio
+`ClientDisplay` document, keyed by pan slot (`core/ClientDisplaySettings.h`).
+The Display panel's FPS slider, Clone to all Pans and Reset to Defaults save;
+`MainWindow::wirePanDisplayStatus` restores into the widget before it seeds the
+shaper. FFT AVG and Wt Avg have a table of their own in that document
+(`fftAverages`), kept only for a backend that declares
+`BackendPanAveraging::clientPersistsAveraging`. The HL2 declares it false, so on
+this radio those two are not remembered.
+
+The dBm range is the odd one: the pan model, not the widget, is what every
+re-seed reads, so a scale the operator moves is put into the model
+(`MainWindow::adoptClientOwnedDbmRange`) and the remembered one goes into the
+model before the first prime. FFT Floor Auto's own moves are not stored; with it
+on, the top is re-derived at every start and what survives is the dynamic range.
+
+Never as flat `AppSettings` keys, and FFT FPS and the range only where the
+backend declares the client their persistence owner:
+`PanFrameRateShaping::clientPersistsFrameRate` and
+`PanAmplitudeModel::clientPersistsDbmRange`, read by the save and the restore
+alike through `RadioCapabilities::clientPersistsPanFrameRate()` and
+`clientPersistsDbmRange()`. The HL2 declares both and no other family does;
+another family opts in with one declaration in its own backend. The range
+declaration counts only with absolute bins, because the client writes the range
+into the pan model. The waterfall rate keeps its own gate,
+`RadioModel::shapesDisplayRatesLocally()`.
+
 ### 15.2.3 There is no hardware black level to select
 
 The Display panel's **Black Level** button cycles the waterfall floor source:

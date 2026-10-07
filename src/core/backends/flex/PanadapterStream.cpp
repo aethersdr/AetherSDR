@@ -1689,7 +1689,7 @@ void PanadapterStream::notifyDaxCreateFailed(int channel)
 
 void PanadapterStream::releaseAllDaxChannels(DaxConsumer who)
 {
-    for (int ch = 1; ch <= 4; ++ch)
+    for (int ch = 1; ch <= 8; ++ch)
         releaseDaxChannel(ch, who);
 }
 
