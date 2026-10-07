@@ -2357,6 +2357,8 @@ endif()
 # Windows: GUI app (no console window) + icon resource
 if(WIN32)
     set_target_properties(AetherSDR PROPERTIES WIN32_EXECUTABLE TRUE)
+    # MainWindow::applyWindowsFrameColor (DwmSetWindowAttribute).
+    target_link_libraries(AetherSDR PRIVATE dwmapi)
 endif()
 
 # macOS app bundle

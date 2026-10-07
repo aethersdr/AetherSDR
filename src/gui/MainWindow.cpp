@@ -281,6 +281,8 @@
 #include <windows.h>
 #include <windowsx.h>
 #include <psapi.h>
+#include <dwmapi.h>
+#include <QOperatingSystemVersion>
 #else
 #include <sys/resource.h>
 #ifdef Q_OS_MAC
@@ -1141,6 +1143,10 @@ MainWindow::MainWindow(QWidget* parent)
         setAutoFillBackground(false);
         connect(&ThemeManager::instance(), &ThemeManager::themeChanged,
                 this, qOverload<>(&QWidget::update));
+#ifdef Q_OS_WIN
+        connect(&ThemeManager::instance(), &ThemeManager::themeChanged,
+                this, &MainWindow::applyWindowsFrameColor);
+#endif
 
         // 8-axis edge resize in frameless mode; app-wide filter because
         // MainWindow's children are native windows (see FramelessResizer, #4827).
@@ -3855,6 +3861,24 @@ void MainWindow::restoreNativeClientRect(const QString& role)
         setNativeClientRect(saved);
     }
 }
+
+void MainWindow::applyWindowsFrameColor()
+{
+    // DWMWA_BORDER_COLOR exists from Windows 11 (build 22000); Windows 10 gets
+    // only the dark/light border from ThemeManager's colour scheme (#6266).
+    constexpr DWORD kDwmBorderColor = 34;
+    if (QOperatingSystemVersion::current() < QOperatingSystemVersion::Windows11
+        || !windowHandle()) {
+        return;
+    }
+    const QColor bg = ThemeManager::instance().color("color.background.app");
+    if (!bg.isValid()) {
+        return;
+    }
+    const COLORREF border = RGB(bg.red(), bg.green(), bg.blue());
+    DwmSetWindowAttribute(reinterpret_cast<HWND>(winId()), kDwmBorderColor,
+                          &border, sizeof(border));
+}
 #endif
 
 void MainWindow::showEvent(QShowEvent* event)
@@ -3867,6 +3891,7 @@ void MainWindow::showEvent(QShowEvent* event)
     // Every show: setWindowFlags() (View -> Frameless Window) re-creates the
     // native window with Qt's own style set.
     applyWindowsCaptionStyles();
+    applyWindowsFrameColor();
 #endif
 
     // The caption controls are keyboard-reachable, which puts them first in the
