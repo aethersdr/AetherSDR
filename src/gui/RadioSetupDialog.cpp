@@ -2003,9 +2003,11 @@ QWidget* RadioSetupDialog::buildNetworkTab()
         tokenEdit->setReadOnly(true);
         tokenEdit->setPlaceholderText("(loading…)");
         tokenEdit->setToolTip(
-            "Paste this into your AI assistant's MCP server config as the\n"
-            "AETHER_MCP_TOKEN environment variable. Only a client holding\n"
-            "this token can drive the radio. Stored in your OS secret store.");
+            "Export this as AETHER_MCP_TOKEN only in the shell session that\n"
+            "launches your AI assistant, without recording it in shell history.\n"
+            "Never put it in an MCP config file or a shell profile.\n"
+            "Only a client holding this token can drive the radio.\n"
+            "Stored in your OS secret store. See docs/automation-bridge.md.");
         AetherSDR::ThemeManager::instance().applyStyleSheet(tokenEdit,
             "QLineEdit { background: {{color.background.0}}; border: 1px solid {{color.background.2}}; "
             "border-radius: 3px; color: {{color.text.primary}}; font-family: monospace; "
