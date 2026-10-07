@@ -1473,6 +1473,13 @@ target_include_directories(hl2_rxdsp_unmute_return_test PRIVATE src)
 target_link_libraries(hl2_rxdsp_unmute_return_test PRIVATE aethercore Qt6::Core)
 add_test(NAME hl2_rxdsp_unmute_return_test COMMAND hl2_rxdsp_unmute_return_test)
 
+# #5942: the HL2 RX chain opens RXA's panel at unity, not WDSP's 4.0. A real
+# Hl2RxDsp fed a known tone; socket-free.
+add_executable(hl2_rx_panel_gain_test tests/hl2_rx_panel_gain_test.cpp)
+target_include_directories(hl2_rx_panel_gain_test PRIVATE src)
+target_link_libraries(hl2_rx_panel_gain_test PRIVATE aethercore Qt6::Core)
+add_test(NAME hl2_rx_panel_gain_test COMMAND hl2_rx_panel_gain_test)
+
 # #5578 / #5678 row 4.1: the RX bandpass length follows mode, passband and
 # notch count, so CW opens short and buys 8192 taps only when a notch or a
 # narrow filter needs them. Measures the magnitude response and onset latency

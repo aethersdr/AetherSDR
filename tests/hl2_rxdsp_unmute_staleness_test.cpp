@@ -97,13 +97,10 @@
 // min_volts and slope_constant, neither of which is read on that path -- and is
 // pinned in the config only so the config states it.
 //
-// ONE CONSEQUENCE FOR LEVEL, which is not obvious from the config. With the AGC
-// out of the way the remaining gain is NOT just WdspChannel's fixed 10 dB:
-// WDSP's RXA patch panel multiplies by a hard-coded 4.0 downstream of it,
-// unconditionally -- that gain loop sits outside the stage's own run check, and
-// nothing in this tree ever calls SetRXAPanelGain1. So the marker meets about
-// +22 dB, not +10, and kMarkerAmplitude is set small enough that this cannot
-// drive the demodulated audio into the rail. Controls assert both ends of that:
+// ONE CONSEQUENCE FOR LEVEL. With the AGC off the marker meets WdspChannel's
+// fixed 10 dB and RXA's panel at Hl2RxDsp::kRxPanelGain (unity, #5942), and
+// kMarkerAmplitude is set small enough that this cannot drive the demodulated
+// audio into the rail. Controls assert both ends of that:
 // not clipping, and not so small that the -40 dB crossing sits in the grass.
 // Reasoning of this kind goes stale silently, which is why it is checked.
 //
@@ -485,11 +482,9 @@ int main(int argc, char** argv)
     //   2 -- what the DDC is handing up DURING the over.
     const double kMarker1Hz = 1500.0;
     const double kMarker2Hz = 2500.0;
-    // Small, because with the AGC off the marker meets a fixed ~+22 dB (10 dB of
-    // WdspChannel fixed gain, 12 dB of WDSP's unconditional RXA panel gain of
-    // 4.0) and nothing is left to hold it down. Every figure below is relative,
-    // so the absolute level is free; the two level controls are what make this
-    // choice safe rather than lucky. 0.1 would have hit the rail.
+    // Small, because with the AGC off the marker meets a fixed +10 dB and
+    // nothing is left to hold it down. Every figure below is relative, so the
+    // absolute level is free; the two level controls make this choice safe.
     const double kMarkerAmplitude = 0.02;
 
     enum class Phase { Marker, Muted, Unmuted, Calib2 };

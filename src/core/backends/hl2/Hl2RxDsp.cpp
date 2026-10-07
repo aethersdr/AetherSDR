@@ -163,6 +163,7 @@ Hl2RxDsp::RebuildResult Hl2RxDsp::buildChannel(
     // a build does not open linear and then re-plan all six masks under the
     // process-global FFTW lock.
     wc.minimumPhase = rxMinimumPhaseFor(config.mode);
+    wc.rxPanelGain = kRxPanelGain;
 
     auto channel = WdspChannel::create(wc, &result.error);
     if (!channel)

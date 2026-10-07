@@ -70,6 +70,10 @@ public:
         return mode != WdspChannel::Mode::Cwl && mode != WdspChannel::Mode::Cwu;
     }
 
+    // RXA panel gain: unity, so the AGC's ceiling (-0.16 dBFS) is the output
+    // ceiling. WDSP's 4.0 put every HL2 mode 12.04 dB past it (#5942).
+    static constexpr double kRxPanelGain = 1.0;
+
     // RX filter length (#5578). Outside CW minimum phase already removed the
     // delay, so length buys nothing there. In CW the length is the latency, so
     // it runs kRxShortFilterTaps unless a notch needs the long filter's floor or

@@ -606,6 +606,9 @@ convergence must be verified on real hardware through the automation bridge.
 - `SetRXAAGCTop` is the **maximum gain in dB**, and 120 dB is the top of WDSP's
   range. Inheriting that default ran the HL2 wide open: peak 3.186, **10.31% of
   samples at or beyond full scale**. At a 65 dB ceiling: peak 2.664, 0.27%.
+- Both peaks include RXA's panel gain of 4.0 after the AGC. The HL2 now opens
+  it at unity (`Hl2RxDsp::kRxPanelGain`, #5942): 12.04 dB quieter, so the AGC's
+  -0.16 dBFS ceiling is the output's.
 - Mode vocabulary: `off/slow/med/fast` → WDSP RXA 0/2/3/4. WDSP's "long" (1)
   has no representation in the four-way UI control.
 - **The AGC is client-owned state and nothing on the radio can be asked for

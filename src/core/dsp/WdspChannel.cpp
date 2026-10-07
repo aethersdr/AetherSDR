@@ -1291,6 +1291,11 @@ bool WdspChannel::validateConfig(const Config& config, std::string* error) noexc
         setError(error, "WDSP AGC fixed gain must be finite");
         return false;
     }
+    if (config.rxPanelGain && (config.direction != Direction::Receive
+        || !std::isfinite(*config.rxPanelGain) || *config.rxPanelGain < 0.0)) {
+        setError(error, "WDSP RX panel gain must be finite, non-negative and receive-only");
+        return false;
+    }
     return true;
 }
 
@@ -1461,6 +1466,9 @@ bool WdspChannel::open() noexcept
             SetRXAPanelGain1(m_channelId, 1.0);
             SetRXAFMLimGain(m_channelId, 0.0);
             SetRXAFMLimRun(m_channelId, 1);
+        }
+        if (m_config.rxPanelGain) {
+            SetRXAPanelGain1(m_channelId, *m_config.rxPanelGain);
         }
         if (m_config.wbfmReceive) {
             m_wbfm = std::make_unique<WbfmState>(m_config);
