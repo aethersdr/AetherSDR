@@ -172,8 +172,8 @@ public:
     void setPreampStep(int step);
     void setAttenuatorLabels(const QStringList& labels);
     void setAttenuatorStep(int step);
-    // The radio's own scope mode (Display panel, PANADAPTER group). Unavailable
-    // modes stay dimmed with a reason; index -1 lights neither.
+    // The radio's own scope mode (Display panel, PANADAPTER group). No labels:
+    // no row; one label: dimmed with a reason; index -1 lights none.
     void setScopeModeLabels(const QStringList& labels);
     void setScopeModeIndex(int index);
     void setLoopState(bool loopA, bool loopB);

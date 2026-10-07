@@ -934,8 +934,9 @@ void testScrollFRefusalFallsBackToCenter()
     Access::forget(backend);
     Access::refuse(backend, "scope.mode");
     check(!Access::scopeModesOffered(backend), "an FA to 27 14 00 03 withdraws SCROLL-F");
-    check(!modes.isEmpty() && modes.last().at(1).toStringList().isEmpty(),
-          "the unsupported scope choices are withdrawn");
+    check(!modes.isEmpty()
+              && modes.last().at(1).toStringList() == QStringList{QStringLiteral("Center")},
+          "the unsupported scope choices are withdrawn, leaving Center (the row stays, dimmed)");
     check(warning.count() == 1, "the operator is told why");
     const auto mode = writes(Access::issued(backend), cmd::kScope, scope::kMode);
     check(mode.size() == 1 && mode.front().data.size() == 2 && mode.front().data[1] == 0x00,

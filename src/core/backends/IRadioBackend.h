@@ -1110,9 +1110,9 @@ signals:
     void panAttenuatorChanged(const QString& panId, int step);
 
     // The radio's scope mode, for a backend whose panadapter is the radio's own
-    // scope (Icom: Center / Scroll-F / Fixed). Empty labels hide the control;
-    // index -1 means the radio is in a mode outside the list (e.g. SCROLL-C
-    // picked on its front panel), so the UI lights none.
+    // scope (Icom: Center / Scroll-F / Fixed). Empty labels hide the control; a
+    // single label shows it unavailable; index -1 means a mode outside the list
+    // (e.g. SCROLL-C picked on the front panel), so the UI lights none.
     void panScopeModesChanged(const QString& panId, const QStringList& labels);
     void panScopeModeChanged(const QString& panId, int index);
 

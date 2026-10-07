@@ -1806,9 +1806,9 @@ void SpectrumOverlayMenu::buildDisplayPanel()
         });
     }
 
-    // Scope mode, for a radio whose panadapter is its own scope (Icom). First
-    // in the group because it changes what every spectrum gesture does; unavailable
-    // choices remain dimmed until the backend publishes its supported modes.
+    // Scope mode, for a radio whose panadapter is its own scope (Icom). First in
+    // the group because it changes what every spectrum gesture does. Absent for
+    // every other family; dimmed with a reason on an Icom that has no choice.
     {
         m_scopeModeRow = new QWidget;
         // The label and the buttons rebuilt per radio share the row's one
@@ -3250,8 +3250,8 @@ void SpectrumOverlayMenu::rebuildScopeModeButtons()
     }
     qDeleteAll(m_scopeModeBtns);
     m_scopeModeBtns.clear();
-    const QStringList labels = m_scopeModeLabels.isEmpty()
-        ? QStringList{tr("Center"), tr("Scroll-F"), tr("Fixed")} : m_scopeModeLabels;
+    const QStringList labels = m_scopeModeLabels.size() > 1
+        ? m_scopeModeLabels : QStringList{tr("Center"), tr("Scroll-F"), tr("Fixed")};
     for (int i = 0; i < labels.size(); ++i) {
         auto* btn = new QPushButton(labels.at(i));
         btn->setCheckable(true);
@@ -3279,8 +3279,10 @@ void SpectrumOverlayMenu::refreshScopeModeButtons()
     if (!m_scopeModeRow) {
         return;
     }
-    // Availability is reported by the backend label list, including firmware
-    // refusal, rather than a static model capability. Keep the controls discoverable.
+    // The backend's label list decides: empty = this radio has no scope mode
+    // (Flex, HL2, ...), so no row; one entry = an Icom without a choice (model
+    // or firmware), shown dimmed with the reason; two or more = a choice.
+    m_scopeModeRow->setVisible(!m_scopeModeLabels.isEmpty());
     const bool available = m_scopeModeLabels.size() > 1;
     const QString reason = available ? QString{}
         : tr("Scope mode selection is unavailable for this radio or firmware.");

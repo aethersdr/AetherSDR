@@ -1987,7 +1987,14 @@ void IcomCivBackend::selectScopeEdgeSlot(IcomCivScheduler::Priority priority)
 void IcomCivBackend::publishScopeModes()
 {
     if (!scopeModesOffered()) {
-        emit panScopeModesChanged(panId(), {});
+        // An Icom scope without a choice (model or firmware) shows the row
+        // dimmed; no scope at all hides it, as on every other family.
+        const bool hasScope = m_model && m_model->hasScope;
+        emit panScopeModesChanged(panId(), hasScope ? QStringList{QStringLiteral("Center")}
+                                                    : QStringList{});
+        if (hasScope) {
+            emit panScopeModeChanged(panId(), kScopeModeIndexCenter);
+        }
         return;
     }
     emit panScopeModesChanged(panId(), {QStringLiteral("Center"), QStringLiteral("Scroll-F"),
