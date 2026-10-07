@@ -27,9 +27,11 @@ The first implementation is the **About window** (#6227):
   (awards, the Contributor Logbook) and nothing else.
 - **State is never colour alone.** Good / warn / crit always travel with a
   word, sign or icon (`docs/a11y.md`).
-- **Transmit is the one loud state.** Red means TX and nothing else.
-  Instrument faces (SmartMTR, the analog meter faces) keep their own
-  palettes exactly.
+- **Transmit is the one loud state.** Only transmit gets a full red
+  surface. Errors, faults and destructive actions keep
+  `color.accent.danger` (red) as `theme-style-guide.md` maps them, always
+  with a word or icon and never as a filled ground. Instrument faces
+  (SmartMTR, the analog meter faces) keep their own palettes exactly.
 
 ## Foundations
 
@@ -61,13 +63,19 @@ The theme JSON writes alpha colours in Qt's `#AARRGGBB` order
 (`#1f78a5d2` is the hairline above).
 
 **Light theme.** Every role exists in `default-light.json` too. All
-light-mode values are AI-generated and not managed by humans; they are
-chosen to meet the `docs/a11y.md` contrast floors, which
-`tests/theme_manager_test.cpp` checks for the About window's text and focus
-pairs in both themes.
+light-mode values are AI-generated and not managed by humans.
+`tests/theme_manager_test.cpp` checks that every canon token resolves in
+both themes and that the About pairs it lists (link, button, card and
+focus-ring colours) meet the `docs/a11y.md` contrast floors. It does not
+cover the primary action on the brand gradient; see below. Unlike dark,
+several light canon tokens (`ground`, `ink`, `muted`, `line`, `nested`, `control`,
+`raised`, `onAccent`, `sparkHot`) alias the same grey and blue primitives
+the base tokens use, so retuning the light primitives moves them too.
 
 **Type and geometry stay as they are.** Inter for UI, DSEG7 for instrument
-readouts; 22 px buttons, 26 px combos, the 52 px title bar.
+readouts; the 22 px standard control height of
+[`applet-style-guide.md`](applet-style-guide.md) and the 52 px title bar.
+The canon does not change control geometry.
 
 ## Building blocks
 
@@ -77,7 +85,7 @@ readouts; 22 px buttons, 26 px combos, the 52 px title bar.
 | A logo or avatar with a contrast ring and a cyan spark | `SparkRing` |
 | A recognition control (gold spark around a button) | `SparkBorder` |
 | The "AetherSDR" wordmark ("Aether" in ink, "SDR" in the gradient) | `BrandMark::paintWordmark` |
-| A primary action | `color.brand.gradient` fill with `color.canon.onAccent` text |
+| A primary action | `color.brand.gradient` fill with `color.canon.onAccent` text. Dark clears 4.5:1 on every gradient stop (7.5–15.2:1). Light measures 3.7:1 and 3.3:1 at the middle and teal stops; that is accepted for About's OK per the RFC approval. Get a ruling before using it on another surface (#6239) |
 | A secondary control | `color.canon.control` fill, `color.canon.lineHi` border, `color.canon.cyan` text; `color.canon.nested` + `color.canon.aqua` on hover |
 | A card of label / value rows | `color.canon.nested` fill, `color.canon.line` border, 12 px radius; keys in `muted`, values in `inkSoft` |
 
@@ -91,8 +99,12 @@ restore a saved geometry, and is not tracked by `trackPersistentDialog()`.
 [`dialog-patterns.md`](dialog-patterns.md) §"The exception: `CanonWindow`
 windows" lists what it keeps (the `FramelessMoveHelper` drag, Escape and
 ⌘W, `WA_DeleteOnClose` plus a `QPointer` so a second open raises it).
-`FramelessWindowTitleBar` is deprecated for new windows; existing dialogs
-move to `CanonWindow` one at a time, each in its own PR.
+Which windows the canon covers: short-lived, informational windows (About,
+and the candidates listed on #6239, once the maintainer picks them). Tool
+and workspace dialogs keep `PersistentDialog` and `FramelessWindowTitleBar`
+as `docs/agents/gui.md` describes. For windows the canon covers,
+`FramelessWindowTitleBar` is deprecated: those dialogs move to
+`CanonWindow` one at a time, each in its own PR.
 
 ### Motion
 
