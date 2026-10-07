@@ -252,15 +252,34 @@ The applet panel is a persistent right-side control column. It has two always-vi
 
 Default applet order is:
 
-- `RX`
-- `TUN`
-- `AMP`
-- `TX`
-- `PHN`
-- `P/CW`
-- `EQ`
-- `MTR`
-- `AG`
+- `PWR` — Power & SWR
+- `RX` — RX Controls
+- `WFM` — WFM
+- `TUN` — TGXL
+- `AMP` — PGXL
+- `TX` — TX Controls
+- `PHNE` — Phone (tray button `PHN`)
+- `P/CW` — Phone/CW
+- `EQ` — Equalizer
+- `WAVE` — Waveform (tray button `WAV`)
+- `TXDSP` — Channel Strip
+- `CAT` — CAT Control
+- `DAX` — DAX Audio
+- `TCI` — TCI Server
+- `IQ` — DAX IQ
+- `MTR` — Radio Vitals
+- `PROF` — Profile Switcher
+- `KSDR` — KiwiSDR
+- `HLTH` — Antenna Health
+- `AG` — Antenna Genius
+- `SS` — ShackSwitch
+- `GHE` — Green Heron
+- `CLOCK` — AetherClock (tray button `CLK`)
+
+Not every applet is on screen at once: some appear only when the radio or the
+station accessory they control is present, and several start hidden until you
+turn them on from the applet tray. `View -> Reset Applet Order` restores this
+order.
 
 ### `VU`
 
