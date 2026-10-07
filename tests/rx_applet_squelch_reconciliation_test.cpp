@@ -399,9 +399,14 @@ private slots:
         const QString ownDescription = button->accessibleDescription();
         QVERIFY(ownTip.startsWith(QStringLiteral("Click to cycle")));
         QVERIFY(!ownDescription.isEmpty());
+        // Squelch is off, so the button is Inactive: the announcement is appended.
+        const QString trimmed = ownDescription.trimmed();
+        const QString inactive = trimmed
+            + (trimmed.endsWith(u'.') ? QStringLiteral(" ") : QStringLiteral(". "))
+            + QStringLiteral("Available, not currently active");
         rx.setRadioModel(&radio);
         QCOMPARE(button->toolTip(), ownTip);
-        QCOMPARE(button->accessibleDescription(), ownDescription);
+        QCOMPARE(button->accessibleDescription(), inactive);
 
         RadioCapabilities exclusive;
         SquelchLevelScale scale;
@@ -417,7 +422,7 @@ private slots:
         emit radio.capabilitiesChanged(true, RadioCapabilities{});
         QVERIFY(button->isEnabled());
         QCOMPARE(button->toolTip(), ownTip);
-        QCOMPARE(button->accessibleDescription(), ownDescription);
+        QCOMPARE(button->accessibleDescription(), inactive);
     }
 
     // #6092: a radio that publishes no squelch-to-pan mapping has no Auto SQL.

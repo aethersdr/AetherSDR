@@ -30,19 +30,25 @@ QString treatmentToken(ControlAvailability state)
     return {};
 }
 
-// The registry holds a text channel only while it shows text of its own there.
-// The hold lives on the control as {own, shown}, so a re-created registry finds
-// it too. Text the owner wrote since the last apply is the control's own text,
-// and that is what comes back when the registry lets go. A null `wanted` lets go.
+// The registry holds a text channel only while it shows text of its own there,
+// as {own, shown} on the control, so a re-created registry finds it too. Text
+// the owner wrote since the last apply is its own text (read via `ownOf` if
+// given) and comes back on release. An empty `wanted` releases, so an empty
+// reason cannot blank the own text.
 template <typename Set>
 void applyText(QObject* control, const char* key, const QString& current,
-               const std::function<QString(const QString& own)>& wanted, Set set)
+               const std::function<QString(const QString& own)>& wanted, Set set,
+               const std::function<QString()>& ownOf = {})
 {
     const QStringList hold = control->property(key).toStringList();
     const bool held = hold.size() == 2;
-    const QString own = held && current == hold.at(1) ? hold.at(0) : current;
+    const bool fromHold = held && current == hold.at(1);
+    QString own = fromHold ? hold.at(0) : current;
     const QString want = wanted(own);
-    if (want.isNull()) {
+    if (!fromHold && ownOf && !want.isEmpty()) {
+        own = ownOf();
+    }
+    if (want.isEmpty()) {
         if (held) {
             set(own);
             control->setProperty(key, QVariant());
@@ -56,6 +62,33 @@ void applyText(QObject* control, const char* key, const QString& current,
     if (hold != next) {
         control->setProperty(key, next);
     }
+}
+
+// The inactive announcement is appended to the control's own description, so
+// the state is announced without losing what the control is.
+QString withInactivePhrase(const QString& own)
+{
+    const QString phrase = QObject::tr("Available, not currently active");
+    const QString base = own.trimmed();
+    if (base.isEmpty()) {
+        return phrase;
+    }
+    const QChar last = base.back();
+    const bool closed = last == u'.' || last == u'!' || last == u'?';
+    return base + (closed ? QStringLiteral(" ") : QStringLiteral(". ")) + phrase;
+}
+
+// The tooltip an action set itself; null when it reports its text instead, so
+// that releasing the hold makes it follow its text again.
+QString explicitToolTip(QAction* action)
+{
+    const QString shown = action->toolTip();
+    action->setToolTip(QString());
+    if (action->toolTip() == shown) {
+        return QString();
+    }
+    action->setToolTip(shown);
+    return shown;
 }
 
 constexpr char kToolTipHold[] = "aetherAvailabilityToolTip";
@@ -151,8 +184,8 @@ void ControlAvailabilityRegistry::applyOne(Entry& entry,
         // do this, rather than wondering where the control went.
         w->setEnabled(!unavailable);
         // The reason rides on BOTH channels: a tooltip is help text, not the
-        // description a screen reader announces (#4896). Inactive is announced
-        // only on a widget with no description of its own.
+        // description a screen reader announces (#4896). Inactive is appended to
+        // the widget's own description.
         applyText(w, kToolTipHold, w->toolTip(), reasonOnly,
                   [w](const QString& text) { w->setToolTip(text); });
         applyText(w, kDescriptionHold, w->accessibleDescription(),
@@ -160,22 +193,19 @@ void ControlAvailabilityRegistry::applyOne(Entry& entry,
                 if (unavailable) {
                     return entry.reason;
                 }
-                return entry.state == ControlAvailability::Inactive && own.isEmpty()
-                    ? QObject::tr("Available, not currently active") : QString();
+                return entry.state == ControlAvailability::Inactive
+                    ? withInactivePhrase(own) : QString();
             },
             [w](const QString& text) { w->setAccessibleDescription(text); });
         ThemeManager::instance().setWidgetForegroundToken(w, treatmentToken(entry.state));
     }
     if (QAction* a = entry.action) {
         a->setEnabled(!unavailable);
-        // An action with no tooltip of its own reports its text; clearing first
-        // keeps that default instead of freezing a copy of the text.
-        applyText(a, kToolTipHold, a->toolTip(), reasonOnly, [a](const QString& text) {
-            a->setToolTip(QString());
-            if (a->toolTip() != text) {
-                a->setToolTip(text);
-            }
-        });
+        // An action with no tooltip of its own is held as null and released to
+        // follow its text, also when the text changed meanwhile.
+        applyText(a, kToolTipHold, a->toolTip(), reasonOnly,
+                  [a](const QString& text) { a->setToolTip(text); },
+                  [a] { return explicitToolTip(a); });
         // QAction has no accessibleDescription; Qt exposes the status tip to
         // accessibility clients. Only the reason goes there: it also shows in
         // the status bar on hover, and describing every entry would flood it.

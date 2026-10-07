@@ -184,7 +184,7 @@ a radio-specific cluster moves to its own applet, which hides wholesale.
 
 The reason replaces a control's own tooltip and description only while it is
 unavailable; the control's own texts come back when it is available again. The
-inactive announcement is used only on a control with no description of its own.
+inactive announcement is appended to the control's own description.
 
 ### Why dim rather than hide
 
