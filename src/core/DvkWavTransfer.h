@@ -84,6 +84,9 @@ private:
                                                                     quint64 requestId);
     void handleUploadSlotAccepted(quint64 generation, quint64 requestId, int code);
     void openUploadSocket(quint64 generation, int port);
+    // One retry on 42607 for a named port that refused or never answered,
+    // before any connection was made. False when it does not apply.
+    bool retryUploadOnDefaultPort(quint64 generation);
     // A refusal on any transfer leg also reaches the DVK license latch.
     void reportRefusal(int code);
     std::function<void(int, const QString&)> makeUploadPortCallback(quint64 generation,

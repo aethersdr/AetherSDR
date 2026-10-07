@@ -1,8 +1,10 @@
 // #6244 — DvkModel against the SmartSDR API wiki (TCPIP-dvk) and lines
 // captured from a FLEX-8600 on fw 4.2.20. Status lines go through the real
 // CommandParser, so quoted names with spaces are covered end to end.
+#include "TestSettingsProfile.h"
 #include "core/backends/flex/CommandParser.h"
 #include "models/DvkModel.h"
+#include "models/RadioModel.h"
 
 #include <QCoreApplication>
 #include <QStringList>
@@ -67,6 +69,10 @@ void capture(DvkModel& model, Sent& sent)
 
 int main(int argc, char* argv[])
 {
+    TestSettingsProfile profile(QStringLiteral("dvk-model-status-test"));
+    if (!profile.isValid()) {
+        return 1;
+    }
     QCoreApplication app(argc, argv);
 
     // ── parseKVs keeps quoted values whole ──────────────────────────────────
@@ -93,6 +99,14 @@ int main(int argc, char* argv[])
                kvs.value("freq") == QStringLiteral("14.225000")
                    && kvs.value("name") == QStringLiteral("\"Solo\"")
                    && kvs.contains("removed") && kvs.value("removed").isEmpty());
+    }
+    {
+        // Review #6247: an unterminated value must not swallow a later quoted key.
+        const auto kvs = CommandParser::parseKVs(
+            QStringLiteral("name=\"abc foo=1 bar=\"x\" baz=2"));
+        report("an unterminated quote stops at the next quoted key",
+               kvs.value("foo") == QStringLiteral("1") && kvs.value("bar") == QStringLiteral("\"x\"")
+                   && kvs.value("baz") == QStringLiteral("2"));
     }
     {
         const auto kvs = CommandParser::parseKVs(QStringLiteral("name=\"open ended x=1"));
@@ -215,8 +229,45 @@ int main(int argc, char* argv[])
         model.playbackStart(3);
         model.setTransferActive(true);
         model.reset();
-        report("disconnect clears a pending start and transfer",
-               model.pendingOperation() == DvkModel::Unknown && model.canStartOperation());
+        report("disconnect clears a pending start",
+               model.pendingOperation() == DvkModel::Unknown);
+        report("a transfer still running keeps admission closed after disconnect",
+               !model.canStartOperation());
+        model.setTransferActive(false);
+        report("its owner's end of transfer reopens it", model.canStartOperation());
+    }
+    {
+        // Review #6247: STOP before the echo names the slot it stops.
+        DvkModel model;
+        int stopId = 0;
+        QObject::connect(&model, &DvkModel::replyCommandReady, &model,
+                         [&stopId](const QString&, const QString& verb, int id) {
+            if (verb == QLatin1String("rec_stop")) {
+                stopId = id;
+            }
+        });
+        model.recStart(4);
+        model.recStop();
+        report("a stop before the echo carries the pending start's slot", stopId == 4);
+    }
+    {
+        // The radio's licensed status outranks an earlier 50004001 refusal.
+        RadioModel radio;
+        using Kvs = QMap<QString, QString>;  // Q_ARG cannot take the comma
+        const auto status = [&radio](const QString& name, const QString& enabled) {
+            const Kvs kvs{{QStringLiteral("name"), name}, {QStringLiteral("enabled"), enabled}};
+            QMetaObject::invokeMethod(&radio, "onStatusReceived", Qt::DirectConnection,
+                                      Q_ARG(QString, QStringLiteral("license feature")),
+                                      Q_ARG(Kvs, kvs));
+        };
+        radio.dvkModel().noteRefusal(0x50004001u);
+        report("a refusal reaches RadioModel's entitlement input", radio.dvkLicenseRefused());
+        status(QStringLiteral("digital_voice_keyer"), QStringLiteral("0"));
+        report("a not-licensed status keeps the refusal", radio.dvkLicenseRefused());
+        status(QStringLiteral("some_other_feature"), QStringLiteral("1"));
+        report("another feature's licence does not clear it", radio.dvkLicenseRefused());
+        status(QStringLiteral("digital_voice_keyer"), QStringLiteral("1"));
+        report("the radio reporting DVK licensed clears the refusal", !radio.dvkLicenseRefused());
     }
     {
         DvkModel model;

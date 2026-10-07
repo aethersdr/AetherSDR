@@ -3167,7 +3167,7 @@ add_test(NAME dvk_wav_converter_test COMMAND dvk_wav_converter_test)
 add_executable(dvk_model_status_test
     tests/dvk_model_status_test.cpp
 )
-target_include_directories(dvk_model_status_test PRIVATE src)
+target_include_directories(dvk_model_status_test PRIVATE src tests)
 target_link_libraries(dvk_model_status_test PRIVATE aethercore Qt6::Core)
 add_test(NAME dvk_model_status_test COMMAND dvk_model_status_test)
 

@@ -359,6 +359,11 @@ DvkPanel::DvkPanel(DvkModel* model, QWidget* parent)
         stopActiveOperation();
     });
 
+    m_announceTimer = new QTimer(this);
+    m_announceTimer->setSingleShot(true);
+    m_announceTimer->setInterval(150);
+    connect(m_announceTimer, &QTimer::timeout, this, &DvkPanel::flushSlotAnnouncement);
+
     // Elapsed timer for recording/playback/preview progress
     m_elapsedTimer = new QTimer(this);
     m_elapsedTimer->setInterval(100);
@@ -401,12 +406,27 @@ void DvkPanel::updateSlotAccessibility(int id, const QString& name, int duration
     play->setAccessibleDescription(durationMs > 0
         ? QString("%1 recording. Transmits on the transmit slice (F%2).").arg(length).arg(id)
         : QStringLiteral("Empty slot, nothing to play."));
-    // Announce a real change the operator can see; slot loads and resets on
-    // connect and disconnect would otherwise be a burst of a dozen.
-    if (changed && play->isVisible()) {
-        QAccessibleEvent ev(play, QAccessible::NameChanged);
-        QAccessible::updateAccessibility(&ev);
+    // Announce a real change the operator can see, one slot at a time. A
+    // load or reset changes many slots at once; flushSlotAnnouncement() stays
+    // silent for those instead of reading a dozen names back to back.
+    if (changed && m_announceTimer) {
+        if (!m_announceSlots.contains(id)) {
+            m_announceSlots.append(id);
+        }
+        m_announceTimer->start();
     }
+}
+
+void DvkPanel::flushSlotAnnouncement()
+{
+    if (m_announceSlots.size() == 1) {
+        QPushButton* play = m_fkeyBtns[m_announceSlots.first() - 1];
+        if (play->isVisible()) {
+            QAccessibleEvent ev(play, QAccessible::NameChanged);
+            QAccessible::updateAccessibility(&ev);
+        }
+    }
+    m_announceSlots.clear();
 }
 
 void DvkPanel::announceStatus(const QString& text, bool error)

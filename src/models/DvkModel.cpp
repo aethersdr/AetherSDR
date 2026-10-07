@@ -19,30 +19,36 @@ DvkModel::DvkModel(QObject* parent) : QObject(parent) {}
 
 void DvkModel::recStart(int id)
 {
+    m_pendingId = id;
     setPending(Recording);
     emit replyCommandReady(QString("dvk rec_start id=%1").arg(id), "rec_start", id);
 }
 void DvkModel::recStop()
 {
-    emit replyCommandReady(QStringLiteral("dvk rec_stop"), "rec_stop", m_activeId);
+    emit replyCommandReady(QStringLiteral("dvk rec_stop"), "rec_stop",
+                           m_activeId > 0 ? m_activeId : m_pendingId);
 }
 void DvkModel::previewStart(int id)
 {
+    m_pendingId = id;
     setPending(Preview);
     emit replyCommandReady(QString("dvk preview_start id=%1").arg(id), "preview_start", id);
 }
 void DvkModel::previewStop()
 {
-    emit replyCommandReady(QStringLiteral("dvk preview_stop"), "preview_stop", m_activeId);
+    emit replyCommandReady(QStringLiteral("dvk preview_stop"), "preview_stop",
+                           m_activeId > 0 ? m_activeId : m_pendingId);
 }
 void DvkModel::playbackStart(int id)
 {
+    m_pendingId = id;
     setPending(Playback);
     emit replyCommandReady(QString("dvk playback_start id=%1").arg(id), "playback_start", id);
 }
 void DvkModel::playbackStop()
 {
-    emit replyCommandReady(QStringLiteral("dvk playback_stop"), "playback_stop", m_activeId);
+    emit replyCommandReady(QStringLiteral("dvk playback_stop"), "playback_stop",
+                           m_activeId > 0 ? m_activeId : m_pendingId);
 }
 void DvkModel::clear(int id)
 {
@@ -129,6 +135,14 @@ void DvkModel::setTransferActive(bool active)
     }
     m_transferActive = active;
     emit admissionChanged();
+}
+
+void DvkModel::clearRefusal()
+{
+    if (m_licenseRefused) {
+        m_licenseRefused = false;
+        emit licenseRefusedChanged(false);
+    }
 }
 
 void DvkModel::noteRefusal(uint code)
@@ -254,7 +268,9 @@ void DvkModel::reset()
     m_enabled = false;
     m_licenseRefused = false;
     m_pending = Unknown;
-    m_transferActive = false;
+    m_pendingId = -1;
+    // m_transferActive belongs to DvkWavTransfer, which clears it when its own
+    // transfer ends; a transfer can outlive the connection by its timeout.
     const QVector<DvkRecording> gone = std::exchange(m_recordings, {});
     emit statusChanged(m_status, m_activeId);
     for (const DvkRecording& r : gone) {

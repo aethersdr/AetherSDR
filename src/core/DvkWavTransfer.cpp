@@ -23,6 +23,9 @@ DvkWavTransfer::DvkWavTransfer(RadioModel* model, QObject* parent)
             finish(false, "Timed out waiting for radio connection", true);
         } else if (m_direction == Upload && m_client &&
                    m_client->state() != QAbstractSocket::ConnectedState) {
+            if (retryUploadOnDefaultPort(m_connectTimeoutGeneration)) {
+                return;
+            }
             finish(false, "Timed out connecting to radio upload port", false);
         }
     });
@@ -256,8 +259,11 @@ void DvkWavTransfer::handleNewConnection(quint64 generation, QTcpServer* server)
     // Anyone on the LAN can reach the listening port; only the radio may
     // write the operator's file. Others are dropped and the wait continues.
     if (m_model && !isRadioPeer(pending->peerAddress(), m_model->radioAddress())) {
-        qWarning() << "DvkWavTransfer: rejected export connection from"
-                   << pending->peerAddress().toString();
+        const QString peer = pending->peerAddress().toString();
+        qWarning() << "DvkWavTransfer: rejected export connection from" << peer
+                   << "expected" << m_model->radioAddress().toString();
+        emit statusChanged(QString("Ignored a connection from %1; waiting for the radio at %2…")
+                               .arg(peer, m_model->radioAddress().toString()));
         pending->abort();
         pending->deleteLater();
         return;
@@ -383,6 +389,12 @@ void DvkWavTransfer::upload(int slotId, const QString& filePath)
         emit finished(false, "The radio connection was lost before the transfer could start.");
         return;
     }
+    // Checked here, not only when the menu opened: the file dialog is modal,
+    // and the DVK may have started recording or playing while it was up.
+    if (m_dvk && !m_dvk->canStartOperation()) {
+        emit finished(false, "The voice keyer is busy; stop it before importing");
+        return;
+    }
 
     QFile f(filePath);
     if (!f.open(QIODevice::ReadOnly)) {
@@ -488,6 +500,8 @@ void DvkWavTransfer::handleUploadPortReceived(quint64 generation, quint64 reques
     bool ok = false;
     int port = body.trimmed().toInt(&ok);
     if (!ok || port <= 0 || port > 65535) {
+        qWarning() << "DvkWavTransfer: no usable port in file upload reply" << body.trimmed()
+                   << "- using" << DEFAULT_UPLOAD_PORT;
         port = DEFAULT_UPLOAD_PORT;
     }
 
@@ -635,6 +649,24 @@ void DvkWavTransfer::handleUploadBytesWritten(quint64 generation, QTcpSocket* so
     sendNextChunk(generation, socket);
 }
 
+bool DvkWavTransfer::retryUploadOnDefaultPort(quint64 generation)
+{
+    if (!isCurrent(generation) || m_uploadFallbackTried || m_uploadConnected
+        || m_uploadPort == 0 || m_uploadPort == DEFAULT_UPLOAD_PORT) {
+        return false;
+    }
+    m_uploadFallbackTried = true;
+    if (m_client) {
+        m_client->disconnect(this);
+        m_client->abort();
+        m_client->deleteLater();
+        m_client = nullptr;
+    }
+    stopConnectTimeout();
+    openUploadSocket(generation, DEFAULT_UPLOAD_PORT);
+    return true;
+}
+
 void DvkWavTransfer::handleUploadError(quint64 generation, QTcpSocket* socket)
 {
     if (!isCurrentSocket(generation, socket)) return;
@@ -642,15 +674,7 @@ void DvkWavTransfer::handleUploadError(quint64 generation, QTcpSocket* socket)
     // As FirmwareUploader: a port the radio named but would not connect gets
     // one retry on the file server's usual 42607. An error after connecting is
     // a failed upload, not a wrong port.
-    if (!m_uploadFallbackTried && !m_uploadConnected && m_uploadPort != 0
-        && m_uploadPort != DEFAULT_UPLOAD_PORT) {
-        m_uploadFallbackTried = true;
-        m_client->disconnect(this);
-        m_client->abort();
-        m_client->deleteLater();
-        m_client = nullptr;
-        stopConnectTimeout();
-        openUploadSocket(generation, DEFAULT_UPLOAD_PORT);
+    if (retryUploadOnDefaultPort(generation)) {
         return;
     }
 
@@ -704,7 +728,9 @@ void DvkWavTransfer::cleanup(bool discardDownload)
     // already queued for this transfer must not match a replacement started
     // from the finished() handler below.
     invalidateOperation();
-    if (m_direction == Upload) {
+    // Only an upload that reached the file server leaves it busy; a refused
+    // `dvk upload` or a port that never connected must not mask the next try.
+    if (m_direction == Upload && m_uploadConnected) {
         m_sinceUpload.start();
     }
     m_transferring = false;

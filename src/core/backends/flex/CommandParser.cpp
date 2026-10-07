@@ -10,8 +10,9 @@ QMap<QString, QString> CommandParser::parseKVs(const QString& body)
     QMap<QString, QString> result;
     // Body may look like: "freq=14.225000 mode=USB filter_lo=-1500 filter_hi=1500"
     // A quoted value may contain spaces (`dvk … name="CQ Contest"`) and is kept
-    // whole, quotes included, up to the next token holding a quote. A quote
-    // left open with no later quote on the line splits as before.
+    // whole, quotes included, up to the token that closes it. A quote left
+    // open (no closing token before the next `key="` or the end of the line)
+    // splits as before, so a malformed value cannot swallow the keys after it.
     const QStringList tokens = body.split(' ', Qt::SkipEmptyParts);
     for (qsizetype i = 0; i < tokens.size(); ++i) {
         QString token = tokens[i];
@@ -20,7 +21,7 @@ QMap<QString, QString> CommandParser::parseKVs(const QString& body)
             while (end < tokens.size() && !tokens[end].contains('"')) {
                 ++end;
             }
-            if (end < tokens.size()) {
+            if (end < tokens.size() && !tokens[end].contains(QLatin1String("=\""))) {
                 for (qsizetype j = i + 1; j <= end; ++j) {
                     token += QLatin1Char(' ') + tokens[j];
                 }

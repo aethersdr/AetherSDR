@@ -10301,9 +10301,11 @@ void MainWindow::updateToolsMenuState()
 
     if (m_swrScanAction) {
         m_swrScanAction->setEnabled(txReady);
-        m_swrScanAction->setToolTip(txReady ? QString()
+        const QString reason = txReady ? QString()
             : tr("Requires an idle, TX-capable radio with this client holding "
-                 "the interlock"));
+                 "the interlock");
+        m_swrScanAction->setToolTip(reason);
+        m_swrScanAction->setStatusTip(reason);  // a tooltip is never announced
     }
 
     // Every disabling condition names itself. A greyed control with no stated
@@ -10311,7 +10313,7 @@ void MainWindow::updateToolsMenuState()
     if (m_preTuneAction) {
         m_preTuneAction->setEnabled(txReady && memories && tx.memoriesEnabled()
             && hasTxApplet);
-        m_preTuneAction->setToolTip(
+        const QString reason =
             !caps.hasTunerMemories
                 ? tr("ATU memory controls are unavailable for this radio")
             : tgxlOperate
@@ -10323,11 +10325,13 @@ void MainWindow::updateToolsMenuState()
             : !txReady
                 ? tr("Requires an idle, TX-capable radio with this client "
                      "holding the interlock")
-            : QString());
+            : QString();
+        m_preTuneAction->setToolTip(reason);
+        m_preTuneAction->setStatusTip(reason);
     }
     if (m_clearAtuAction) {
         m_clearAtuAction->setEnabled(connected && memories && hasTxApplet);
-        m_clearAtuAction->setToolTip(
+        const QString reason =
             !caps.hasTunerMemories
                 ? tr("ATU memory controls are unavailable for this radio")
             : tgxlOperate
@@ -10336,7 +10340,9 @@ void MainWindow::updateToolsMenuState()
                 ? tr("The transmit applet is unavailable in this build")
             : !connected
                 ? tr("Connect to a radio first")
-            : QString());
+            : QString();
+        m_clearAtuAction->setToolTip(reason);
+        m_clearAtuAction->setStatusTip(reason);
     }
 
     if (m_gpsDashboardAction) {
@@ -10349,7 +10355,7 @@ void MainWindow::updateToolsMenuState()
         const bool externalRx = active
             && active->externalReceiveReplacementActive();
         m_agcTCalibrationMenuAction->setEnabled(connected && active && !externalRx);
-        m_agcTCalibrationMenuAction->setToolTip(
+        const QString reason =
             !connected
                 ? tr("Connect to a radio first")
             : !active
@@ -10357,7 +10363,9 @@ void MainWindow::updateToolsMenuState()
             : externalRx
                 ? tr("Not available while an external receive source "
                      "replaces this slice's RX")
-            : QString());
+            : QString();
+        m_agcTCalibrationMenuAction->setToolTip(reason);
+        m_agcTCalibrationMenuAction->setStatusTip(reason);
     }
 }
 

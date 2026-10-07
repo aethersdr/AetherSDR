@@ -3,6 +3,7 @@
 #include <QObject>
 #include <QString>
 #include <QVector>
+#include <QLatin1String>
 #include <QMap>
 
 namespace AetherSDR {
@@ -41,6 +42,11 @@ public:
     bool licenseRefused() const { return m_licenseRefused; }
     // Latches a 50004001 refusal from any dvk path, including WAV transfers.
     void noteRefusal(uint code);
+    // The radio later reported the feature licensed (its status outranks an
+    // earlier refusal, e.g. a subscription activated mid-session).
+    void clearRefusal();
+    // The radio's name for the DVK entitlement in `license feature` status.
+    static constexpr QLatin1String kLicenseFeature{"digital_voice_keyer"};
     const QVector<DvkRecording>& recordings() const { return m_recordings; }
 
     static QString defaultName(int id);
@@ -99,6 +105,7 @@ private:
     bool m_enabled{false};
     bool m_licenseRefused{false};
     Status m_pending{Unknown};
+    int m_pendingId{-1};
     bool m_transferActive{false};
 
     void setPending(Status pending);
