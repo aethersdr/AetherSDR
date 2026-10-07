@@ -819,9 +819,9 @@ void MainWindow::applySpeechProcessorToClientComp(bool operatorIntent)
         // than merely squashing peaks — "more processing" has to sound louder or
         // the control reads as broken.
         //
-        // Deliberately gentler than a Flex's own speech processor: this stage
-        // feeds the modulator's ALC, which applies its own makeup gain on top
-        // (Hl2TxDsp::Config). Matching Flex numbers here would compress twice.
+        // Gentler than a Flex's own speech processor. This stage feeds the
+        // modulator's ALC (Hl2TxAlc), which only reduces level and adds no
+        // makeup gain of its own.
         struct Preset { float thresholdDb; float ratio; float makeupDb; };
         static constexpr Preset kPresets[3] = {
             { -18.0f, 2.5f,  4.0f },   // NOR
