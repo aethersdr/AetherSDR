@@ -651,7 +651,7 @@ void MainWindow::handleVirtualFlexControlWheel(const QString& actionId, int step
 }
 
 #ifdef HAVE_HIDAPI
-// ── Contour shuttle ring (#5928) ────────────────────────────────────────────
+// Contour shuttle ring (#5928)
 
 void MainWindow::onShuttleChanged(int position)
 {

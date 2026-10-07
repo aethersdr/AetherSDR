@@ -6,25 +6,11 @@
 
 namespace AetherSDR {
 
-// Turns a spring-return shuttle ring position into tuning steps (#5928).
-//
-// The Contour ring reports an absolute position (-7..+7) only when it moves,
-// never while held, so it is a rate input rather than a step input: the caller
-// runs a timer while the ring is deflected and calls tick() on it. tick()
-// integrates a speed in Hz/s into whole steps of the caller's step size and
-// carries the remainder, so the top speed does not depend on the step size.
-//
-// Two things keep the first detents from feeling dead (measured on hardware:
-// at 20 Hz/s and a 10 Hz step the first step otherwise took 0.5 s):
-//   - leaving centre (or reversing) applies one step once the deflection has
-//     been held for kFirstStepDelaySec, the way a jog detent would, before
-//     the rate takes over. The delay is longer than the spring's snap-back
-//     overshoot on release (30-35 ms through the opposite side, measured),
-//     so letting go never produces a step backwards;
-//   - the rate never drops below (|position| + 1) steps/s, so with a large
-//     step (1 kHz) every position still moves and still differs.
-//
-// Pure arithmetic, no Qt: unit-tested in tests/hid_device_parser_test.cpp.
+// Contour shuttle ring (-7..+7, reported only when it moves) as a rate input:
+// tick() runs on a timer while deflected and integrates Hz/s into whole steps of
+// the caller's step size, carrying the remainder. A new deflection steps once
+// after kFirstStepDelaySec, longer than the ~35 ms spring overshoot on release,
+// and the rate never falls below (|position| + 1) steps/s (#5928).
 class ShuttleRateIntegrator {
 public:
     static constexpr int kMaxPosition = 7;
@@ -40,9 +26,8 @@ public:
         return kRate[std::clamp(std::abs(position), 0, kMaxPosition)];
     }
 
-    // The remainder is dropped when the ring returns to centre or reverses,
-    // so a fraction of a step never leaks into the opposite direction. A new
-    // deflection (from centre or a reversal) arms the immediate first step.
+    // Centre or a reversal drops the remainder, so it never leaks into the other
+    // direction, and arms the first step.
     void setPosition(int position)
     {
         position = std::clamp(position, -kMaxPosition, kMaxPosition);
