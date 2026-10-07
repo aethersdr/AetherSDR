@@ -1,12 +1,15 @@
 #pragma once
 
 #include "PersistentDialog.h"
+#include "PeripheralConnectionSource.h"
 #include "RadioSetupIpConfigPresentation.h"
 
 #include <QHash>
 #include <QVector>
 #include <array>
 #include <functional>
+#include <memory>
+#include <vector>
 
 class QLabel;
 class QLineEdit;
@@ -35,7 +38,9 @@ class KiwiSdrManager;
 class AcomConnection;
 class SpeConnection;
 class VkampConnection;
+class Kpa1500Connection;
 class LpMeterConnection;
+struct PeripheralDeviceUi;
 
 // Radio Setup dialog — searchable, category-based configuration window.
 class RadioSetupDialog : public PersistentDialog {
@@ -51,6 +56,7 @@ public:
                               SpeConnection* spe = nullptr,
                               VkampConnection* vkamp = nullptr,
                               LpMeterConnection* lpMeter = nullptr,
+                              Kpa1500Connection* kpa1500 = nullptr,
                               QWidget* parent = nullptr);
     void selectTab(const QString& tabName);
     void done(int result) override;
@@ -101,6 +107,20 @@ signals:
     // PeripheralSettings before this fires; MainWindow re-reads it and
     // pushes the new scale into VkampApplet::setVariant().
     void vkampVariantChanged();
+    // Emitted after a peripheral row has been removed and its settings cleared.
+    void peripheralRemoved(const QString& id);
+
+public:
+    // Test seam: answers the Remove confirmation without a modal box. Receives
+    // the device label and the confirmation text; return true to confirm. Pass
+    // an empty function to restore the real box.
+    // Test seam: a copy of what Setup currently shows for a peripheral, and a
+    // way to set the typed-code bookkeeping the way a pending attempt would.
+    PeripheralDeviceStatus peripheralStatusForTest(const QString& id) const;
+    void editPeripheralStatusForTest(const QString& id,
+                                     const std::function<void(PeripheralDeviceStatus&)>& edit);
+    static void setRemovalConfirmationHookForTest(
+        std::function<bool(const QString& label, const QString& text)> hook);
 
 protected:
     void closeEvent(QCloseEvent* event) override;
@@ -151,6 +171,18 @@ private:
     void     refreshApdSamplerCombo(const QString& txAnt);
     QWidget* buildUsbCablesTab();
     QWidget* buildPeripheralsTab();
+    // One builder per kind of device; each lays out its own detail page.
+    // RadioSetupDialog_Peripherals.cpp.
+    void buildAuthNetworkDevice(PeripheralDeviceUi& ui, QWidget* stackParent,
+                                const std::function<void()>& refresh);
+    void buildSerialNetworkDevice(PeripheralDeviceUi& ui, QWidget* stackParent,
+                                  const std::function<void()>& refresh,
+                                  const std::shared_ptr<QVector<std::function<void()>>>& pageReseeds);
+    void buildVkampDevice(PeripheralDeviceUi& ui, QWidget* stackParent,
+                          const std::function<void()>& refresh);
+    void buildKpa1500Device(PeripheralDeviceUi& ui, QWidget* stackParent,
+                            const std::function<void()>& refresh);
+    PeripheralDeviceUi* peripheralDevice(const QString& id) const;
     QWidget* buildUiEnhancementsTab();
     // Phase 2 of GHSA-wfx7-w6p8-4jr2 (#2951) — Pinned Certificates list
     // (host, sha256 fingerprint, pinned date) with per-row Forget and a
@@ -177,6 +209,8 @@ private:
     // file scope above; full type comes from <QTableWidget> in the cpp.
     QTableWidget* m_pinnedCertsTable{nullptr};
 
+    bool m_peripheralRemovalPending{false};
+    bool confirmPeripheralRemoval(const QString& label, const QString& toggleLabel = {});
     RadioModel*  m_model;
     AudioEngine* m_audio{nullptr};
     TgxlConnection*    m_tgxl{nullptr};
@@ -187,6 +221,7 @@ private:
     SpeConnection* m_spe{nullptr};
     VkampConnection* m_vkamp{nullptr};
     LpMeterConnection* m_lpMeter{nullptr};
+    Kpa1500Connection* m_kpa1500{nullptr};
     QTreeWidget* m_navigation{nullptr};
     QStackedWidget* m_pages{nullptr};
     QLabel* m_pageTitle{nullptr};
@@ -277,6 +312,7 @@ private:
     // External APD page (visible only when the radio reports apd configurable=1)
     int                       m_apdPageIndex{-1};
     int                       m_calibrationPageIndex{-1};
+    int                       m_rtlReceiverPageIndex{-1};
     // Re-seeds the Calibration page from the LIVE backend value. The page is
     // built once per process (buildDeferredTab erases the builder) and the
     // dialog is a showOrRaisePersistent singleton, so without this the spinbox
@@ -317,6 +353,7 @@ private:
     // → wipe the saved manual IP/port. New-IP edits still require an
     // explicit Connect click so an unfinished value cannot leak in.
     QVector<std::function<void()>> m_peripheralRowSavers;
+    std::vector<std::shared_ptr<PeripheralDeviceUi>> m_peripheralDevices;
 
     // Refresh already-built serial pages without rebuilding their controls.
     // Each page is built once per dialog instance; normal close deletes the

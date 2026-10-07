@@ -1,5 +1,6 @@
 #include "core/DroopCalibration.h"
 #include "RadioSetupDialog.h"
+#include "RtlReceiverSettingsWidget.h"
 #include "SerialPortCombo.h"
 #include "models/CwDecodeSettings.h"
 #include "RttyDecodeSettings.h"
@@ -20,6 +21,8 @@
 #include "core/LogManager.h"
 #include "core/PeripheralSettings.h"
 #include <QApplication>
+#include <QHash>
+#include <QPair>
 #include <QAbstractItemView>
 #include <QLocale>
 #include <QSysInfo>
@@ -40,7 +43,11 @@
 #include "core/backends/flex/WanConnection.h"   // PinnedCertInfo + WanCertCache (#2951)
 #include "core/CallsignLookupService.h"
 #include "core/QrzLookupSettings.h"
+#include "core/UlanziDialMappings.h"
 #include "models/AntennaGeniusModel.h"
+#include "PeripheralAuthStore.h"
+#include "core/PeripheralRemovalGuard.h"
+#include "PeripheralAuthConnectFlow.h"
 
 #include <QCloseEvent>
 #include <QTabWidget>
@@ -77,7 +84,9 @@
 #include <QRadioButton>
 #include <QProgressBar>
 #include <QProcess>
+#include <QAccessible>
 #include <QListWidget>
+#include <QMenu>
 #include <QStackedWidget>
 #include <QStyle>
 #include <QPlainTextEdit>
@@ -102,26 +111,14 @@
 #include <QKeySequence>
 
 #include <algorithm>
+#include <array>
 #include <functional>
 #include <memory>
 #include <utility>
 #include "core/ThemeManager.h"
+#include "RadioSetupDialogCommon.h"
 
 namespace AetherSDR {
-
-static const QString kGroupStyle =
-    "QGroupBox { border: 1px solid #304050; border-radius: 4px; "
-    "margin-top: 8px; padding-top: 12px; font-weight: bold; color: #8aa8c0; }"
-    "QGroupBox::title { subcontrol-origin: margin; left: 10px; "
-    "padding: 0 4px; }";
-
-// Caption label style (#5896): tokens, applied only through
-// ThemeManager::applyStyleSheet, which tracks widgets for re-resolution on
-// themeChanged (plain setStyleSheet does not, so literals survive a theme
-// switch). Named *Template because a {{token}} string must never reach
-// setStyleSheet(), which does not expand it.
-static const QString kLabelStyleTemplate =
-    "QLabel { color: {{color.text.primary}}; font-size: 12px; }";
 
 // Value colour as the color.accent.bright token (tools/migrate_colours.py maps
 // the old literals here); applied via ThemeManager::applyStyleSheet so it
@@ -140,30 +137,6 @@ static QLabel* makeValueLabel(const QString& text)
     return label;
 }
 
-// Line-edit style as tokens; each literal it replaced was that token's Default
-// Dark value (resources/themes/default-dark.json), so only Light changes.
-static const QString kEditStyleTemplate =
-    "QLineEdit { background: {{color.background.1}}; "
-    "border: 1px solid {{color.background.2}}; border-radius: 3px; "
-    "color: {{color.text.primary}}; font-size: 12px; padding: 2px 4px; }";
-
-// One call shape for every caption label and line edit routed through the two
-// templates above. The defect these close is not only "the colour is wrong"
-// but "the widget is not tracked" -- and the trap in between is real and was
-// already live in this file: six sites passed the raw-hex constants THROUGH
-// applyStyleSheet, which registers the widget and then gives it nothing to
-// resolve. That satisfies audit_colours.py's call-site metric while the
-// colour stays dark. These helpers take the templates and nothing else.
-static void applyLabelStyle(QWidget* widget)
-{
-    ThemeManager::instance().applyStyleSheet(widget, kLabelStyleTemplate);
-}
-
-static void applyEditStyle(QWidget* widget)
-{
-    ThemeManager::instance().applyStyleSheet(widget, kEditStyleTemplate);
-}
-
 static const QString kKiwiRowStyle =
     "QFrame#kiwiAntennaRow { background: #101622; border: 1px solid #203040; "
     "border-radius: 3px; }";
@@ -180,16 +153,6 @@ static const QString kKiwiIconButtonStyle =
     "border-radius: 4px; padding: 3px; }"
     "QPushButton:hover { background: #20465e; }"
     "QPushButton:pressed { background: #132c3d; }";
-
-// Shared indicator block for all QCheckBox instances in this dialog.
-// Uses ThemeManager tokens (Low Latency architecture) with hover + disabled
-// pseudo-states (FreeDV Reporter pattern) so boxes are visible in dark mode.
-static const QString kCheckBoxIndicator =
-    "QCheckBox::indicator { width: 14px; height: 14px; "
-    "border: 2px solid {{color.background.3}}; border-radius: 3px; background: {{color.background.0}}; }"
-    "QCheckBox::indicator:hover { border-color: {{color.accent}}; background: {{color.background.1}}; }"
-    "QCheckBox::indicator:checked { border: 2px solid {{color.accent}}; background: {{color.background.2}}; }"
-    "QCheckBox::indicator:disabled { border-color: {{color.background.2}}; background: {{color.background.0}}; }";
 
 static constexpr int kInfoLeftLabelWidth = 112;
 static constexpr int kInfoRightLabelWidth = 160;
@@ -681,26 +644,6 @@ static void refreshOscillatorSourceCombo(QComboBox* combo, const RadioModel* mod
     if (idx >= 0) combo->setCurrentIndex(idx);
 }
 
-#ifdef HAVE_SERIALPORT
-// Enumeration stays in the GUI's deferred page/show paths. The shared helper
-// accepts a port list so selection and signal behavior can be tested without
-// serial hardware.
-static bool populateSerialPortCombo(QComboBox* combo, QLineEdit* customEdit,
-                                    const QString& savedPort)
-{
-    return SerialPortCombo::populate(combo, customEdit, savedPort,
-                                     QSerialPortInfo::availablePorts());
-}
-
-static bool refreshSerialPortCombo(QComboBox* combo, QLineEdit* customEdit)
-{
-    return SerialPortCombo::refresh(combo, customEdit, [] {
-        return QSerialPortInfo::availablePorts();
-    });
-}
-
-#endif
-
 RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
                                    TgxlConnection* tgxl, PgxlConnection* pgxl,
                                    AntennaGeniusModel* ag,
@@ -709,12 +652,14 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
                                    SpeConnection* spe,
                                    VkampConnection* vkamp,
                                    LpMeterConnection* lpMeter,
+                                   Kpa1500Connection* kpa1500,
                                    QWidget* parent)
     : PersistentDialog(QStringLiteral("Radio Setup"),
                        QStringLiteral("RadioSetupDialogGeometry"), parent),
       m_model(model), m_audio(audio),
       m_tgxl(tgxl), m_pgxl(pgxl), m_ag(ag),
-      m_kiwiSdrManager(kiwiSdrManager), m_acom(acom), m_spe(spe), m_vkamp(vkamp), m_lpMeter(lpMeter)
+      m_kiwiSdrManager(kiwiSdrManager), m_acom(acom), m_spe(spe), m_vkamp(vkamp), m_lpMeter(lpMeter),
+      m_kpa1500(kpa1500)
 {
     theme::setContainer(this, QStringLiteral("dialog/radioSetup"));
     setMinimumSize(960, 680);
@@ -850,6 +795,12 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
         if (m_calibrationReseed)
             m_calibrationReseed();
     });
+    addPage(radioCategory, QStringLiteral("RTL Receiver"),
+        QStringLiteral("rtl receiver ppm oscillator frequency correction calibration iq dc suppression serial"),
+        [this] { return new RtlReceiverSettingsWidget(*m_model); });
+    m_rtlReceiverPageIndex = m_pageIndexes.value(QStringLiteral("RTL Receiver"));
+    setNavigationItemHidden(m_pageItems.value(m_rtlReceiverPageIndex),
+        !isCapabilityPageAvailable(m_pageItems.value(m_rtlReceiverPageIndex)));
     // HL2 Hardware page: which board variant is connected. Gated on the
     // backend declaring the hw.get/hw.set extension
     // (capabilities().extensionNamespaces), not a family string (#5554), like
@@ -966,7 +917,8 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
                 const bool droopRow = item == m_pageItems.value(m_droopCalibrationPageIndex);
                 const bool hl2HwRow = item == m_pageItems.value(m_hl2HardwarePageIndex);
                 const bool gated =
-                    (isFlexOnlyPage(item) && !isCapabilityPageAvailable(item))
+                    ((isFlexOnlyPage(item) || item == m_pageItems.value(m_rtlReceiverPageIndex))
+                        && !isCapabilityPageAvailable(item))
                     || (isGpsPage(item)
                         && !isGpsSetupAvailable())
                     || (apdRow && !m_model->transmitModel().apdConfigurable())
@@ -1086,6 +1038,11 @@ bool RadioSetupDialog::isCapabilityPageAvailable(const QTreeWidgetItem* item) co
         return false;
     }
     const int index = item->data(0, Qt::UserRole).toInt();
+    if (index == m_rtlReceiverPageIndex) {
+        return m_model->backendDeclaresExtension(QStringLiteral("rtl"))
+            && m_model->backendCapabilities().extensions.value(QStringLiteral("rtl")).toMap()
+                .value(QStringLiteral("settingsVersion")).toInt() == 1;
+    }
     if (index == m_droopCalibrationPageIndex) {
         return droopCalibrationAvailable(m_model->backend());
     }
@@ -1212,7 +1169,7 @@ void RadioSetupDialog::updateRadioCapabilityVisibility()
     const QLineEdit* search = findChild<QLineEdit*>(QStringLiteral("radioSetupSearch"));
     const QString needle = search ? search->text().trimmed() : QString();
     bool navigationChanged = false;
-    for (const int index : {m_filtersPageIndex, m_smartLinkPageIndex}) {
+    for (const int index : {m_filtersPageIndex, m_smartLinkPageIndex, m_rtlReceiverPageIndex}) {
         if (QTreeWidgetItem* item = m_pageItems.value(index, nullptr)) {
             const QString haystack = item->text(0) + QStringLiteral(" ")
                 + item->data(0, Qt::UserRole + 1).toString();
@@ -1312,14 +1269,14 @@ void RadioSetupDialog::done(int result)
     // QDialog routes Escape, reject() and accept() through done(), bypassing
     // closeEvent. Keep those paths behind the same confirmation without
     // redirecting reject() to close() (which recurses during Qt's close path).
-    if (confirmFirmwareClose()) {
+    if (!m_peripheralRemovalPending && confirmFirmwareClose()) {
         PersistentDialog::done(result);
     }
 }
 
 void RadioSetupDialog::closeEvent(QCloseEvent* event)
 {
-    if (!confirmFirmwareClose()) {
+    if (m_peripheralRemovalPending || !confirmFirmwareClose()) {
         event->ignore();
         return;
     }
@@ -5177,14 +5134,39 @@ QWidget* RadioSetupDialog::buildAudioTab()
 
         auto* radioSideBtn = new QPushButton("Radio Side");
         radioSideBtn->setCheckable(true);
-        radioSideBtn->setStyleSheet(modeBtnStyle);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(radioSideBtn,
+            modeBtnStyle
+            + "QPushButton:disabled { background: {{color.button.background.disabled}}; "
+              "color: {{color.control.unavailable}}; "
+              "border-color: {{color.button.border.disabled}}; }");
         auto* clientSideBtn = new QPushButton("Client Side");
         clientSideBtn->setCheckable(true);
         clientSideBtn->setStyleSheet(modeBtnStyle);
 
-        bool clientSide = settings.value("RecordingMode", "Client").toString() == "Client";
-        radioSideBtn->setChecked(!clientSide);
-        clientSideBtn->setChecked(clientSide);
+        // A connected radio with no command plane has no radio-side recorder, so
+        // Client Side is in effect there (recordsOnClient()). Shown, never
+        // written: the saved choice returns on the next radio that has one.
+        // By hand, not ControlAvailabilityRegistry: command-plane reachability
+        // is not in RadioCapabilities.
+        const auto applyRecordingModeAvailability = [this, radioSideBtn, clientSideBtn]() {
+            const bool radioSideAvailable =
+                !m_model->isConnected() || m_model->radioSideRecordingReachable();
+            const bool clientSide = !radioSideAvailable
+                || AppSettings::instance().value("RecordingMode", "Client").toString()
+                       == "Client";
+            radioSideBtn->setEnabled(radioSideAvailable);
+            radioSideBtn->setChecked(!clientSide);
+            clientSideBtn->setChecked(clientSide);
+            const QString why = radioSideAvailable
+                ? QString()
+                : tr("Unavailable: this radio can't record on its own side. "
+                     "Recordings go to this computer.");
+            radioSideBtn->setToolTip(why);
+            radioSideBtn->setAccessibleDescription(why);
+        };
+        applyRecordingModeAvailability();
+        connect(m_model, &RadioModel::connectionStateChanged, radioSideBtn,
+                applyRecordingModeAvailability);
 
         connect(radioSideBtn, &QPushButton::clicked, this, [radioSideBtn, clientSideBtn]() {
             QSignalBlocker b(clientSideBtn);
@@ -5198,6 +5180,10 @@ QWidget* RadioSetupDialog::buildAudioTab()
             QSignalBlocker b(radioSideBtn);
             clientSideBtn->setChecked(true);
             radioSideBtn->setChecked(false);
+            // Already in effect while Radio Side is dimmed; saving would erase
+            // the Radio Side choice the next capable radio restores.
+            if (!radioSideBtn->isEnabled())
+                return;
             auto& s = AppSettings::instance();
             s.setValue("RecordingMode", "Client");
             s.save();
@@ -7811,8 +7797,10 @@ QWidget* RadioSetupDialog::buildSerialTab()
     auto& settings = AppSettings::instance();
 
     // ── USB control surfaces (Ulanzi Dial, StreamDeck+) (#3257) ──────────
-    // These are opt-in because the first call into each backend triggers the
-    // macOS Input Monitoring permission prompt (kIOHIDOptionsTypeSeizeDevice
+    // The Ulanzi Dial is on by default: every backend detects the dial before
+    // claiming it, so only a present dial reaches the macOS Input Monitoring
+    // prompt. HID encoders stay opt-in because the first call into the HID
+    // encoder backend triggers that prompt (kIOHIDOptionsTypeSeizeDevice
     // in the IOKit-direct backend, hid_open() in HIDAPI). Defaulting them off
     // means the prompt only ever fires for users who actually own and want to
     // use the hardware.
@@ -7823,23 +7811,22 @@ QWidget* RadioSetupDialog::buildSerialTab()
         gvbox->setSpacing(6);
 
         auto* note = new QLabel(
-            "Enable only if you connect a Ulanzi Dial or Elgato Stream Deck+. "
-            "On macOS, enabling will trigger an Input Monitoring permission "
-            "prompt the first time AetherSDR scans for the device.");
+            "A connected Ulanzi Dial is detected and used automatically; turn "
+            "it off to leave the dial's media keys to the operating system. "
+            "Enable HID encoders only if you connect one. On macOS, AetherSDR "
+            "asks for Input Monitoring permission the first time it claims "
+            "one of these devices.");
         note->setWordWrap(true);
         note->setStyleSheet(kLabelStyle);
         gvbox->addWidget(note);
 
-        auto* ulanziEnable = new QCheckBox("Enable Ulanzi Dial");
+        auto* ulanziEnable = new QCheckBox("Use a Ulanzi Dial when detected");
         AetherSDR::ThemeManager::instance().applyStyleSheet(
             ulanziEnable, "QCheckBox { color: {{color.text.primary}}; spacing: 8px; }"
             + kCheckBoxIndicator);
-        ulanziEnable->setChecked(
-            settings.value("UlanziDialEnabled", "False").toString() == "True");
+        ulanziEnable->setChecked(UlanziDialMappings::enabled());
         connect(ulanziEnable, &QCheckBox::toggled, this, [this](bool on) {
-            auto& s = AppSettings::instance();
-            s.setValue("UlanziDialEnabled", on ? "True" : "False");
-            s.save();
+            UlanziDialMappings::setEnabled(on);
             emit serialSettingsChanged();
         });
         gvbox->addWidget(ulanziEnable);
@@ -8802,1162 +8789,44 @@ QWidget* RadioSetupDialog::buildSerialTab()
 
 // ─── Peripherals tab — manual IP connect for TGXL, PGXL, AG (#914) ───────────
 
-QWidget* RadioSetupDialog::buildPeripheralsTab()
+namespace {
+std::function<bool(const QString&, const QString&)>& removalConfirmationHook()
 {
-    auto* page = new QWidget;
-    auto* vbox = new QVBoxLayout(page);
-    vbox->setSpacing(8);
+    static std::function<bool(const QString&, const QString&)> hook;
+    return hook;
+}
+} // namespace
 
-    // Reseeds for this page's serial-port combos (ACOM, SPE, LP-100A). Each
-    // row appends to both this and m_serialPortReseeds; this copy drives the
-    // page's own "Refresh serial ports" button, the member drives showEvent().
-    // shared_ptr because the rows are built by lambdas taking `this` by
-    // reference and the button outlives their scope.
-    [[maybe_unused]] auto serialReseeds =
-        std::make_shared<QVector<std::function<void()>>>();
+void RadioSetupDialog::setRemovalConfirmationHookForTest(
+    std::function<bool(const QString&, const QString&)> hook)
+{
+    removalConfirmationHook() = std::move(hook);
+}
 
-    auto* group = new QGroupBox("External Devices — Manual IP Connection");
-    group->setStyleSheet(kGroupStyle);
-    auto* grid = new QGridLayout(group);
-    grid->setSpacing(6);
-
-    // Column headers
-    auto addHeader = [&](int col, const QString& text) {
-        auto* lbl = new QLabel(text);
-        AetherSDR::ThemeManager::instance().applyStyleSheet(lbl, "QLabel { color: {{color.text.secondary}}; font-size: 11px; font-weight: bold; }");
-        grid->addWidget(lbl, 0, col);
-    };
-    addHeader(0, "Device");
-    addHeader(1, "IP Address");
-    addHeader(2, "Port");
-    addHeader(3, "");
-    addHeader(4, "Status");
-
-    auto& settings = AppSettings::instance();
-
-    static const QString kBtnStyle =
-        "QPushButton { background: #1a2a3a; border: 1px solid #304050; "
-        "border-radius: 3px; color: #c8d8e8; font-size: 11px; font-weight: bold; "
-        "padding: 3px 10px; }"
-        "QPushButton:hover { background: #203040; }";
-
-    // Helper to build one peripheral row
-    auto buildRow = [&](int row, const QString& label, const QString& ipKey,
-                        const QString& portKey, int defaultPort,
-                        auto connectFn, auto disconnectFn, auto isConnectedFn,
-                        auto peerAddressFn, auto peerPortFn) {
-        // Device label
-        auto* devLbl = new QLabel(label);
-        applyLabelStyle(devLbl);
-        grid->addWidget(devLbl, row, 0);
-
-        // IP field — pre-fill from settings, or from live connection if discovered
-        auto* ipEdit = new QLineEdit;
-        ipEdit->setPlaceholderText("e.g. 192.168.1.100");
-        applyEditStyle(ipEdit);
-        ipEdit->setMinimumWidth(140);
-        QString savedIp = settings.value(ipKey, "").toString();
-        if (!savedIp.isEmpty()) {
-            ipEdit->setText(savedIp);
-        } else if (isConnectedFn()) {
-            ipEdit->setText(peerAddressFn());
-        }
-        grid->addWidget(ipEdit, row, 1);
-
-        // Port field — pre-fill from settings, or from live connection
-        auto* portSpin = new QSpinBox;
-        portSpin->setRange(1, 65535);
-        int savedPort = settings.value(portKey, "0").toInt();
-        if (savedPort > 0) {
-            portSpin->setValue(savedPort);
-        } else if (isConnectedFn() && peerPortFn() > 0) {
-            portSpin->setValue(peerPortFn());
-        } else {
-            portSpin->setValue(defaultPort);
-        }
-        AetherSDR::ThemeManager::instance().applyStyleSheet(portSpin, "QSpinBox { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
-            "border-radius: 3px; color: {{color.text.primary}}; font-size: 12px; padding: 2px; }");
-        grid->addWidget(portSpin, row, 2);
-
-        // Status label
-        auto* statusLbl = new QLabel(isConnectedFn() ? "Connected" : "Not connected");
-        statusLbl->setStyleSheet(isConnectedFn()
-            ? "QLabel { color: #00e060; font-size: 11px; }"
-            : "QLabel { color: #8aa8c0; font-size: 11px; }");
-        grid->addWidget(statusLbl, row, 4);
-
-        // Connect/Disconnect button
-        auto* btn = new QPushButton(isConnectedFn() ? "Disconnect" : "Connect");
-        btn->setStyleSheet(kBtnStyle);
-        grid->addWidget(btn, row, 3);
-
-        connect(btn, &QPushButton::clicked, this,
-                [=, &settings]() {
-            QString ip = ipEdit->text().trimmed();
-            if (isConnectedFn()) {
-                // If the user cleared the IP field before clicking, wipe
-                // the saved manual IP/port FIRST — the disconnect signal
-                // fires synchronously and downstream handlers (e.g. SS
-                // button visibility) read these settings to decide
-                // whether to keep showing the device. Clearing after the
-                // disconnect would leave the button visible.
-                if (ip.isEmpty()) {
-                    settings.remove(ipKey);
-                    settings.remove(portKey);
-                    settings.save();
-                }
-                disconnectFn();
-            } else {
-                if (ip.isEmpty()) {
-                    // Empty IP while disconnected: if a manual IP was saved
-                    // previously, treat this click as "save back to default"
-                    // — clear the persisted manual IP/port so the device
-                    // stops auto-connecting.
-                    if (!settings.value(ipKey, "").toString().isEmpty()) {
-                        settings.remove(ipKey);
-                        settings.remove(portKey);
-                        settings.save();
-                    }
-                    return;
-                }
-                int port = portSpin->value();
-                // Save to settings
-                settings.setValue(ipKey, ip);
-                settings.setValue(portKey, QString::number(port));
-                settings.save();
-                connectFn(ip, static_cast<quint16>(port));
-            }
-        });
-
-        // Update UI on connection state changes
-        auto updateState = [btn, statusLbl, isConnectedFn]() {
-            bool conn = isConnectedFn();
-            btn->setText(conn ? "Disconnect" : "Connect");
-            statusLbl->setText(conn ? "Connected" : "Not connected");
-            statusLbl->setStyleSheet(conn
-                ? "QLabel { color: #00e060; font-size: 11px; }"
-                : "QLabel { color: #8aa8c0; font-size: 11px; }");
-        };
-
-        // Save-on-close: if the user has cleared the IP field and closes
-        // the dialog without clicking Connect/Disconnect, treat that as
-        // "wipe the saved manual IP/port". A non-empty edit still requires
-        // an explicit Connect click so a partially-typed IP cannot leak in.
-        m_peripheralRowSavers.append([ipEdit, ipKey, portKey, &settings,
-                                      isConnectedFn, disconnectFn]() {
-            if (!ipEdit) return;
-            const QString ip = ipEdit->text().trimmed();
-            if (!ip.isEmpty()) return;
-            const QString savedIp = settings.value(ipKey, "").toString();
-            if (savedIp.isEmpty()) return;
-            // The user cleared a previously-saved IP. If still connected
-            // (e.g. auto-connect ran at startup), disconnect first so
-            // downstream visibility handlers see the cleared settings.
-            settings.remove(ipKey);
-            settings.remove(portKey);
-            settings.save();
-            if (isConnectedFn()) disconnectFn();
-        });
-
-        return updateState;
-    };
-
-    // Row 1: Tuner Genius XL (TGXL)
-    if (m_tgxl) {
-        auto updateTgxl = buildRow(1, "Tuner Genius XL (TGXL)", "TGXL_ManualIp", "TGXL_ManualPort", 9010,
-            [this](const QString& ip, quint16 port) { m_tgxl->connectToTgxl(ip, port); },
-            [this]() { m_tgxl->disconnect(); },
-            [this]() { return m_tgxl->isConnected(); },
-            [this]() { return m_tgxl->peerAddress(); },
-            [this]() { return m_tgxl->peerPort(); });
-        connect(m_tgxl, &TgxlConnection::connected, this, updateTgxl);
-        connect(m_tgxl, &TgxlConnection::disconnected, this, updateTgxl);
-        // Pre-fill radio-discovered TGXL IP when no saved IP and not connected (#1039)
-        auto* tgxlIpEdit = qobject_cast<QLineEdit*>(grid->itemAtPosition(1, 1)->widget());
-        if (tgxlIpEdit && tgxlIpEdit->text().isEmpty()) {
-            QString discovered = m_model->tunerModel().tgxlIp();
-            if (!discovered.isEmpty()) {
-                tgxlIpEdit->setText(discovered);
-            }
-        }
-        // Show TCP error reason in status column (#1039)
-        auto* tgxlStatus = qobject_cast<QLabel*>(grid->itemAtPosition(1, 4)->widget());
-        if (tgxlStatus) {
-            connect(m_tgxl, &TgxlConnection::connectionFailed, this,
-                    [tgxlStatus](const QString& err) {
-                tgxlStatus->setText("Error: " + err);
-                tgxlStatus->setStyleSheet("QLabel { color: #e06060; font-size: 11px; }");
-            });
-        }
+bool RadioSetupDialog::confirmPeripheralRemoval(const QString& label, const QString& toggleLabel)
+{
+    // Only the network devices with an authorization code have a toggle.
+    const QString text = toggleLabel.isEmpty()
+        ? tr("Remove %1?\n\n"
+             "This disconnects it and clears its saved connection settings.").arg(label)
+        : tr("Remove %1?\n\n"
+             "This disconnects it and clears its saved connection settings and any stored "
+             "authorization code. \"%2\" returns to its default (on).\n\n"
+             "Remove does not stop discovery: a device the radio or your network reports may "
+             "connect again. To keep a device from connecting by itself, leave it in the list "
+             "and turn off %2 instead.").arg(label, toggleLabel);
+    if (const auto& hook = removalConfirmationHook()) {
+        return hook(label, text);
     }
-
-    // Row 2: Power Genius XL (PGXL)
-    if (m_pgxl) {
-        auto updatePgxl = buildRow(2, "Power Genius XL (PGXL)", "PGXL_ManualIp", "PGXL_ManualPort", 9008,
-            [this](const QString& ip, quint16 port) { m_pgxl->connectToPgxl(ip, port); },
-            [this]() { m_pgxl->disconnect(); },
-            [this]() { return m_pgxl->isConnected(); },
-            [this]() { return m_pgxl->peerAddress(); },
-            [this]() { return m_pgxl->peerPort(); });
-        connect(m_pgxl, &PgxlConnection::connected, this, updatePgxl);
-        connect(m_pgxl, &PgxlConnection::disconnected, this, updatePgxl);
-    }
-
-    // Row 3: Antenna Genius (AG) — hide "Connected" when ShackSwitch is using the model
-    if (m_ag) {
-        auto isRealAg = [this]() {
-            if (!m_ag->isConnected()) return false;
-            return !AntennaGeniusModel::isShackSwitch(m_ag->connectedDevice());
-        };
-        auto updateAg = buildRow(3, "Antenna Genius (AG)", "AG_ManualIp", "AG_ManualPort", 9007,
-            [this](const QString& ip, quint16 port) {
-                m_ag->connectToAddress(QHostAddress(ip), port);
-            },
-            [this]() { m_ag->disconnectFromDevice(); },
-            isRealAg,
-            [this]() { return m_ag->peerAddress(); },
-            [this]() { return m_ag->peerPort(); });
-        connect(m_ag, &AntennaGeniusModel::connected,    this, updateAg);
-        connect(m_ag, &AntennaGeniusModel::disconnected, this, updateAg);
-    }
-
-    // Row 4: ShackSwitch — Connect/Disconnect + status (same pattern as AG)
-    //         plus a small "⚙ Web UI" button that opens the device's web interface.
-    if (m_ag) {
-        auto isSsConnected = [this]() {
-            return m_ag->isConnected() &&
-                   AntennaGeniusModel::isShackSwitch(m_ag->connectedDevice());
-        };
-        auto updateSs = buildRow(4, "ShackSwitch", "SS_ManualIp", "SS_ControlPort", 9007,
-            [this](const QString& ip, quint16 /*port*/) {
-                // Always connect on port 9007 (AG control protocol)
-                AgDeviceInfo info;
-                info.ip     = QHostAddress(ip);
-                info.port   = 9007;
-                info.serial = QStringLiteral("ShackSwitch-manual");
-                info.name   = QStringLiteral("ShackSwitch");
-                m_ag->connectToDevice(info);
-            },
-            [this]() { m_ag->disconnectFromDevice(); },
-            isSsConnected,
-            [this]() { return m_ag->peerAddress(); },
-            []() { return (quint16)9007; });
-        connect(m_ag, &AntennaGeniusModel::connected,    this, updateSs);
-        connect(m_ag, &AntennaGeniusModel::disconnected, this, updateSs);
-
-        // "⚙ Web UI" button — opens ShackSwitch web interface in a compact app window
-        auto* webBtn = new QPushButton("⚙ Web UI");
-        webBtn->setStyleSheet(kBtnStyle);
-        webBtn->setToolTip("Open ShackSwitch web interface");
-        grid->addWidget(webBtn, 4, 5);
-        connect(webBtn, &QPushButton::clicked, this, [this]() {
-            auto& s = AppSettings::instance();
-            QString ip = s.value("SS_ManualIp", "").toString();
-            // Only use live address if the connected device is actually the ShackSwitch
-            if (ip.isEmpty() && m_ag->isConnected()) {
-                if (AntennaGeniusModel::isShackSwitch(m_ag->connectedDevice()))
-                    ip = m_ag->peerAddress();
-            }
-            if (ip.isEmpty()) return;
-            // Use beacon webPort only when advertising a valid port (>1024).
-            int port = 0;
-            if (m_ag->isConnected()) {
-                const auto& dev = m_ag->connectedDevice();
-                if (AntennaGeniusModel::isShackSwitch(dev) && dev.webPort > 1024)
-                    port = dev.webPort;
-            }
-            if (port <= 1024)
-                port = s.value("SS_WebPort", "5000").toInt();
-            if (port <= 1024) port = 5000;
-            QDesktopServices::openUrl(QUrl("http://" + ip + ":" + QString::number(port) + "/"));
-        });
-    }
-
-    // Row 5: ACOM S-series amplifier — serial OR ser2net network, unlike the
-    // rows above (which are network-only). See
-    // docs/architecture/acom-600s-amplifier-design.md for the design note.
-    if (m_acom) {
-        const int row = 5;
-        static const QString kComboStyle =
-            "QComboBox { background: #1a2a3a; border: 1px solid #304050; "
-            "border-radius: 3px; color: #c8d8e8; font-size: 12px; padding: 2px 4px; }"
-            "QComboBox::drop-down { border: none; }";
-
-        auto* devWidget = new QWidget;
-        auto* devLay = new QVBoxLayout(devWidget);
-        devLay->setContentsMargins(0, 0, 0, 0);
-        devLay->setSpacing(2);
-        auto* devLbl = new QLabel("ACOM Amplifier");
-        applyLabelStyle(devLbl);
-        devLay->addWidget(devLbl);
-        auto* modeCombo = new QComboBox;
-        modeCombo->setStyleSheet(kComboStyle);
-#ifdef HAVE_SERIALPORT
-        modeCombo->addItem("Serial", "Serial");
-#endif
-        modeCombo->addItem("Network", "Network");
-        devLay->addWidget(modeCombo);
-        grid->addWidget(devWidget, row, 0);
-
-        // Address column: serial-port combo (with "Custom..." fallback, same
-        // pattern as the CW/keying Port Configuration group) OR a plain IP
-        // field, swapped via a QStackedWidget.
-        auto* addrStack = new QStackedWidget;
-        int serialPageIdx = -1;
-        QComboBox* serialCombo = nullptr;
-        QLineEdit* serialCustomEdit = nullptr;
-#ifdef HAVE_SERIALPORT
-        {
-            auto* serialPage = new QWidget;
-            auto* lay = new QHBoxLayout(serialPage);
-            lay->setContentsMargins(0, 0, 0, 0);
-            serialCombo = new QComboBox;
-            serialCombo->setStyleSheet(kComboStyle);
-            serialCustomEdit = new QLineEdit;
-            serialCustomEdit->setPlaceholderText("/dev/ttyUSB0");
-            applyEditStyle(serialCustomEdit);
-            const QString savedSerialPort = PeripheralSettings::deviceString("Acom", "SerialPort");
-            populateSerialPortCombo(serialCombo, serialCustomEdit, savedSerialPort);
-            serialCustomEdit->setVisible(serialCombo->currentData().toString() == "__custom__");
-            connect(serialCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
-                    [serialCombo, serialCustomEdit](int idx) {
-                serialCustomEdit->setVisible(serialCombo->itemData(idx).toString() == "__custom__");
-            });
-            // Refresh a retained page without discarding its current edits.
-            auto reseed = [combo = QPointer<QComboBox>(serialCombo),
-                           edit = QPointer<QLineEdit>(serialCustomEdit)]() {
-                if (!combo || !edit)
-                    return;
-                edit->setVisible(refreshSerialPortCombo(combo, edit));
-            };
-            m_serialPortReseeds.append(reseed);
-            serialReseeds->append(reseed);
-            lay->addWidget(serialCombo, 1);
-            lay->addWidget(serialCustomEdit, 1);
-            serialPageIdx = addrStack->addWidget(serialPage);
-        }
-#endif
-        auto* netPage = new QWidget;
-        auto* netLay = new QHBoxLayout(netPage);
-        netLay->setContentsMargins(0, 0, 0, 0);
-        auto* netIpEdit = new QLineEdit;
-        netIpEdit->setPlaceholderText("ser2net host, raw mode — e.g. 192.168.1.52");
-        applyEditStyle(netIpEdit);
-        netIpEdit->setText(PeripheralSettings::deviceString("Acom", "ManualIp"));
-        netLay->addWidget(netIpEdit);
-        const int netPageIdx = addrStack->addWidget(netPage);
-        grid->addWidget(addrStack, row, 1);
-
-        // Port/baud column: fixed "9600 8N1" text for serial (not
-        // user-configurable — mandated by the amplifier's own protocol
-        // spec) OR a port spin box for network mode.
-        auto* portStack = new QStackedWidget;
-        int serialBaudIdx = -1;
-#ifdef HAVE_SERIALPORT
-        {
-            auto* fixedLbl = new QLabel("9600 8N1");
-            fixedLbl->setStyleSheet("QLabel { color: #8aa8c0; font-size: 11px; }");
-            serialBaudIdx = portStack->addWidget(fixedLbl);
-        }
-#endif
-        auto* netPortSpin = new QSpinBox;
-        netPortSpin->setRange(1, 65535);
-        netPortSpin->setValue(PeripheralSettings::deviceInt("Acom", "ManualPort", 7000));
-        AetherSDR::ThemeManager::instance().applyStyleSheet(netPortSpin,
-            "QSpinBox { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
-            "border-radius: 3px; color: {{color.text.primary}}; font-size: 12px; padding: 2px; }");
-        const int netPortIdx = portStack->addWidget(netPortSpin);
-        grid->addWidget(portStack, row, 2);
-
-        auto applyMode = [=](const QString& mode) {
-#ifdef HAVE_SERIALPORT
-            if (mode == "Serial" && serialPageIdx >= 0) {
-                addrStack->setCurrentIndex(serialPageIdx);
-                portStack->setCurrentIndex(serialBaudIdx);
-                return;
-            }
-#endif
-            addrStack->setCurrentIndex(netPageIdx);
-            portStack->setCurrentIndex(netPortIdx);
-        };
-        const QString savedMode = PeripheralSettings::deviceString("Acom", "ConnectionMode",
-#ifdef HAVE_SERIALPORT
-            "Serial"
-#else
-            "Network"
-#endif
-        );
-        {
-            const int idx = modeCombo->findData(savedMode);
-            modeCombo->setCurrentIndex(idx >= 0 ? idx : 0);
-        }
-        applyMode(modeCombo->currentData().toString());
-        connect(modeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
-                [=](int idx) {
-            const QString mode = modeCombo->itemData(idx).toString();
-            PeripheralSettings::setDeviceString("Acom", "ConnectionMode", mode);
-            applyMode(mode);
-        });
-
-        auto* statusLbl = new QLabel(m_acom->isConnected() ? "Connected" : "Not connected");
-        statusLbl->setStyleSheet(m_acom->isConnected()
-            ? "QLabel { color: #00e060; font-size: 11px; }"
-            : "QLabel { color: #8aa8c0; font-size: 11px; }");
-        grid->addWidget(statusLbl, row, 4);
-
-        auto* acomBtn = new QPushButton(m_acom->isConnected() ? "Disconnect" : "Connect");
-        acomBtn->setStyleSheet(kBtnStyle);
-        grid->addWidget(acomBtn, row, 3);
-
-        auto updateAcomState = [this, acomBtn, statusLbl]() {
-            const bool conn = m_acom->isConnected();
-            acomBtn->setText(conn ? "Disconnect" : "Connect");
-            statusLbl->setText(conn ? "Connected" : "Not connected");
-            statusLbl->setStyleSheet(conn
-                ? "QLabel { color: #00e060; font-size: 11px; }"
-                : "QLabel { color: #8aa8c0; font-size: 11px; }");
-        };
-        connect(m_acom, &AcomConnection::connected, this, updateAcomState);
-        connect(m_acom, &AcomConnection::disconnected, this, updateAcomState);
-        connect(m_acom, &AcomConnection::connectionFailed, this,
-                [statusLbl](const QString& err) {
-            statusLbl->setText("Error: " + err);
-            statusLbl->setStyleSheet("QLabel { color: #e06060; font-size: 11px; }");
-        });
-
-        connect(acomBtn, &QPushButton::clicked, this, [=, this]() {
-            if (m_acom->isConnected()) {
-                m_acom->disconnect();
-                return;
-            }
-            const QString mode = modeCombo->currentData().toString();
-            if (mode == "Network") {
-                const QString ip = netIpEdit->text().trimmed();
-                if (ip.isEmpty()) return;
-                const int port = netPortSpin->value();
-                PeripheralSettings::setDeviceString("Acom", "ManualIp", ip);
-                PeripheralSettings::setDeviceInt("Acom", "ManualPort", port);
-                m_acom->connectNetwork(ip, static_cast<quint16>(port));
-            }
-#ifdef HAVE_SERIALPORT
-            else {
-                QString port = serialCombo->currentData().toString();
-                if (port == "__custom__")
-                    port = serialCustomEdit->text().trimmed();
-                if (port.isEmpty()) return;
-                PeripheralSettings::setDeviceString("Acom", "SerialPort", port);
-                m_acom->connectSerial(port);
-            }
-#endif
-        });
-
-        // Save-on-close: same "user cleared the field and closed the dialog
-        // without clicking Connect/Disconnect" handling the network-only
-        // rows get via buildRow() above — wipe the saved manual network IP
-        // (and its port) so a cleared field does not leave a stale
-        // auto-connect target behind. Serial mode has no equivalent free-text
-        // field to leak (the combo always resolves to either a discovered
-        // port or the explicit "Custom..." edit, which is only committed on
-        // a Connect click), so this only covers Acom's ManualIp/ManualPort.
-        m_peripheralRowSavers.append([netIpEdit, this]() {
-            if (!netIpEdit) return;
-            const QString ip = netIpEdit->text().trimmed();
-            if (!ip.isEmpty()) return;
-            const QString savedIp = PeripheralSettings::deviceString("Acom", "ManualIp");
-            if (savedIp.isEmpty()) return;
-            PeripheralSettings::clearDeviceField("Acom", "ManualIp");
-            PeripheralSettings::clearDeviceField("Acom", "ManualPort");
-            // Only disconnect if the live connection is actually the network
-            // target being cleared — ACOM, unlike the network-only rows
-            // above, may currently be connected over Serial instead, which
-            // this saved IP has nothing to do with.
-            if (m_acom->isConnected() && m_acom->description().startsWith(savedIp + ":")) {
-                m_acom->disconnect();
-            }
-        });
-    }
-
-    // Row 6: SPE Expert amplifier — serial OR ser2net network, structurally
-    // identical to the ACOM row above. See
-    // docs/architecture/spe-expert-amplifier-design.md for the design note.
-    if (m_spe) {
-        const int row = 6;
-        auto& speTheme = AetherSDR::ThemeManager::instance();
-        // Themed (token) styles rather than the ACOM row's raw-hex ones —
-        // the hardcoded-colour ratchet gates new hex references, and the
-        // tokens re-resolve on theme change for free.
-        static const QString kComboStyle =
-            "QComboBox { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
-            "border-radius: 3px; color: {{color.text.primary}}; font-size: 12px; padding: 2px 4px; }"
-            "QComboBox::drop-down { border: none; }";
-        static const QString kStatusOkStyle =
-            "QLabel { color: {{color.accent.success}}; font-size: 11px; }";
-        static const QString kStatusIdleStyle =
-            "QLabel { color: {{color.text.secondary}}; font-size: 11px; }";
-
-        auto* devWidget = new QWidget;
-        auto* devLay = new QVBoxLayout(devWidget);
-        devLay->setContentsMargins(0, 0, 0, 0);
-        devLay->setSpacing(2);
-        auto* devLbl = new QLabel("SPE Expert Amplifier");
-        speTheme.applyStyleSheet(devLbl, kLabelStyleTemplate);
-        devLay->addWidget(devLbl);
-        auto* modeCombo = new QComboBox;
-        speTheme.applyStyleSheet(modeCombo, kComboStyle);
-#ifdef HAVE_SERIALPORT
-        modeCombo->addItem("Serial", "Serial");
-#endif
-        modeCombo->addItem("Network", "Network");
-        devLay->addWidget(modeCombo);
-        // Network mode = ser2net proxy. Raw and telnet modes both work for
-        // monitoring/control, but powering the amplifier ON over the network
-        // drives the proxy's DTR/RTS lines via RFC 2217 COM-port control, so
-        // that one feature needs `telnet(rfc2217=true)` specifically — plain
-        // telnet answers DONT and a raw port never answers at all. Surface
-        // the reference config where the user is already looking.
-        const QString speSer2netTip = QStringLiteral(
-            "Network mode connects through a ser2net serial-to-TCP proxy.\n"
-            "Monitoring and control work with the port in raw or telnet mode.\n"
-            "Powering the amplifier ON over the network additionally needs\n"
-            "RFC 2217 COM-port control, i.e. an rfc2217-enabled telnet port:\n"
-            "\n"
-            "connection: &spe\n"
-            "    accepter: telnet(rfc2217=true),64002\n"
-            "    enable: on\n"
-            "    options:\n"
-            "      kickolduser: true\n"
-            "    connector: serialdev,\n"
-            "              /dev/ttyUSB0");
-        devWidget->setToolTip(speSer2netTip);
-        modeCombo->setToolTip(speSer2netTip);
-        grid->addWidget(devWidget, row, 0);
-
-        auto* addrStack = new QStackedWidget;
-        int serialPageIdx = -1;
-        QComboBox* serialCombo = nullptr;
-        QLineEdit* serialCustomEdit = nullptr;
-#ifdef HAVE_SERIALPORT
-        {
-            auto* serialPage = new QWidget;
-            auto* lay = new QHBoxLayout(serialPage);
-            lay->setContentsMargins(0, 0, 0, 0);
-            serialCombo = new QComboBox;
-            speTheme.applyStyleSheet(serialCombo, kComboStyle);
-            serialCustomEdit = new QLineEdit;
-            serialCustomEdit->setPlaceholderText("/dev/ttyUSB0");
-            speTheme.applyStyleSheet(serialCustomEdit, kEditStyleTemplate);
-            const QString savedSerialPort = PeripheralSettings::deviceString("SpeExpert", "SerialPort");
-            populateSerialPortCombo(serialCombo, serialCustomEdit, savedSerialPort);
-            serialCustomEdit->setVisible(serialCombo->currentData().toString() == "__custom__");
-            connect(serialCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
-                    [serialCombo, serialCustomEdit](int idx) {
-                serialCustomEdit->setVisible(serialCombo->itemData(idx).toString() == "__custom__");
-            });
-            // Refresh a retained page without discarding its current edits.
-            auto reseed = [combo = QPointer<QComboBox>(serialCombo),
-                           edit = QPointer<QLineEdit>(serialCustomEdit)]() {
-                if (!combo || !edit)
-                    return;
-                edit->setVisible(refreshSerialPortCombo(combo, edit));
-            };
-            m_serialPortReseeds.append(reseed);
-            serialReseeds->append(reseed);
-            lay->addWidget(serialCombo, 1);
-            lay->addWidget(serialCustomEdit, 1);
-            serialPageIdx = addrStack->addWidget(serialPage);
-        }
-#endif
-        auto* netPage = new QWidget;
-        auto* netLay = new QHBoxLayout(netPage);
-        netLay->setContentsMargins(0, 0, 0, 0);
-        auto* netIpEdit = new QLineEdit;
-        netIpEdit->setPlaceholderText("ser2net host — e.g. 192.168.1.52");
-        speTheme.applyStyleSheet(netIpEdit, kEditStyleTemplate);
-        netIpEdit->setToolTip(speSer2netTip);
-        netIpEdit->setText(PeripheralSettings::deviceString("SpeExpert", "ManualIp"));
-        netLay->addWidget(netIpEdit);
-        const int netPageIdx = addrStack->addWidget(netPage);
-        grid->addWidget(addrStack, row, 1);
-
-        // Fixed "115200 8N1" for serial (the spec's documented maximum, the
-        // amp auto-adapts — nothing to configure) OR a port spin box for
-        // network mode.
-        auto* portStack = new QStackedWidget;
-        int serialBaudIdx = -1;
-#ifdef HAVE_SERIALPORT
-        {
-            auto* fixedLbl = new QLabel("115200 8N1");
-            speTheme.applyStyleSheet(fixedLbl, kStatusIdleStyle);
-            serialBaudIdx = portStack->addWidget(fixedLbl);
-        }
-#endif
-        auto* netPortSpin = new QSpinBox;
-        netPortSpin->setRange(1, 65535);
-        netPortSpin->setValue(PeripheralSettings::deviceInt("SpeExpert", "ManualPort", 7000));
-        AetherSDR::ThemeManager::instance().applyStyleSheet(netPortSpin,
-            "QSpinBox { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
-            "border-radius: 3px; color: {{color.text.primary}}; font-size: 12px; padding: 2px; }");
-        const int netPortIdx = portStack->addWidget(netPortSpin);
-        grid->addWidget(portStack, row, 2);
-
-        auto applyMode = [=](const QString& mode) {
-#ifdef HAVE_SERIALPORT
-            if (mode == "Serial" && serialPageIdx >= 0) {
-                addrStack->setCurrentIndex(serialPageIdx);
-                portStack->setCurrentIndex(serialBaudIdx);
-                return;
-            }
-#endif
-            addrStack->setCurrentIndex(netPageIdx);
-            portStack->setCurrentIndex(netPortIdx);
-        };
-        const QString savedMode = PeripheralSettings::deviceString("SpeExpert", "ConnectionMode",
-#ifdef HAVE_SERIALPORT
-            "Serial"
-#else
-            "Network"
-#endif
-        );
-        {
-            const int idx = modeCombo->findData(savedMode);
-            modeCombo->setCurrentIndex(idx >= 0 ? idx : 0);
-        }
-        applyMode(modeCombo->currentData().toString());
-        connect(modeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
-                [=](int idx) {
-            const QString mode = modeCombo->itemData(idx).toString();
-            PeripheralSettings::setDeviceString("SpeExpert", "ConnectionMode", mode);
-            applyMode(mode);
-        });
-
-        auto* statusLbl = new QLabel(m_spe->isConnected() ? "Connected" : "Not connected");
-        speTheme.applyStyleSheet(statusLbl,
-            m_spe->isConnected() ? kStatusOkStyle : kStatusIdleStyle);
-        grid->addWidget(statusLbl, row, 4);
-
-        auto* speBtn = new QPushButton(m_spe->isConnected() ? "Disconnect" : "Connect");
-        speTheme.applyStyleSheet(speBtn, kBtnStyle);
-        grid->addWidget(speBtn, row, 3);
-
-        auto updateSpeState = [this, speBtn, statusLbl]() {
-            const bool conn = m_spe->isConnected();
-            speBtn->setText(conn ? "Disconnect" : "Connect");
-            statusLbl->setText(conn ? "Connected" : "Not connected");
-            AetherSDR::ThemeManager::instance().applyStyleSheet(statusLbl,
-                conn ? kStatusOkStyle : kStatusIdleStyle);
-        };
-        connect(m_spe, &SpeConnection::connected, this, updateSpeState);
-        connect(m_spe, &SpeConnection::disconnected, this, updateSpeState);
-        connect(m_spe, &SpeConnection::connectionFailed, this,
-                [statusLbl](const QString& err) {
-            statusLbl->setText("Error: " + err);
-            AetherSDR::ThemeManager::instance().applyStyleSheet(statusLbl,
-                "QLabel { color: {{color.accent.danger}}; font-size: 11px; }");
-        });
-
-        connect(speBtn, &QPushButton::clicked, this, [=, this]() {
-            if (m_spe->isConnected()) {
-                m_spe->disconnect();
-                return;
-            }
-            const QString mode = modeCombo->currentData().toString();
-            if (mode == "Network") {
-                const QString ip = netIpEdit->text().trimmed();
-                if (ip.isEmpty()) return;
-                const int port = netPortSpin->value();
-                PeripheralSettings::setDeviceString("SpeExpert", "ManualIp", ip);
-                PeripheralSettings::setDeviceInt("SpeExpert", "ManualPort", port);
-                m_spe->connectNetwork(ip, static_cast<quint16>(port));
-            }
-#ifdef HAVE_SERIALPORT
-            else {
-                QString port = serialCombo->currentData().toString();
-                if (port == "__custom__")
-                    port = serialCustomEdit->text().trimmed();
-                if (port.isEmpty()) return;
-                PeripheralSettings::setDeviceString("SpeExpert", "SerialPort", port);
-                m_spe->connectSerial(port);
-            }
-#endif
-        });
-
-        // Save-on-close: same cleared-field handling as the ACOM row — wipe
-        // the saved manual network target when the user clears the field and
-        // closes without clicking Connect/Disconnect.
-        m_peripheralRowSavers.append([netIpEdit, this]() {
-            if (!netIpEdit) return;
-            const QString ip = netIpEdit->text().trimmed();
-            if (!ip.isEmpty()) return;
-            const QString savedIp = PeripheralSettings::deviceString("SpeExpert", "ManualIp");
-            if (savedIp.isEmpty()) return;
-            PeripheralSettings::clearDeviceField("SpeExpert", "ManualIp");
-            PeripheralSettings::clearDeviceField("SpeExpert", "ManualPort");
-            if (m_spe->isConnected() && m_spe->description().startsWith(savedIp + ":")) {
-                m_spe->disconnect();
-            }
-        });
-    }
-
-    // Row 7: VK3AMP amplifier — TCP control/status only for v1 (see
-    // docs/architecture/vkamp-amplifier-design.md Section 3.3/Section 9:
-    // serial is a genuinely different wire format, deferred to a later
-    // phase), so this row is a plain host/port pair, no Serial/Network
-    // toggle.
-    if (m_vkamp) {
-        const int row = 7;
-
-        auto* devLbl = new QLabel("VK3AMP Amplifier");
-        AetherSDR::ThemeManager::instance().applyStyleSheet(devLbl, kLabelStyleTemplate);
-        grid->addWidget(devLbl, row, 0);
-
-        auto* ipEdit = new QLineEdit;
-        ipEdit->setPlaceholderText("e.g. 192.168.1.50");
-        AetherSDR::ThemeManager::instance().applyStyleSheet(ipEdit, kEditStyleTemplate);
-        ipEdit->setText(PeripheralSettings::deviceString("Vkamp", "ManualIp"));
-        // Name answers "what is this?", description answers "what do I type?"
-        // -- docs/a11y.md Section 2's rule for input widgets.
-        ipEdit->setAccessibleName(tr("VK3AMP address"));
-        ipEdit->setAccessibleDescription(tr("IP address or host name of the VK3AMP amplifier"));
-        grid->addWidget(ipEdit, row, 1);
-
-        auto* portSpin = new QSpinBox;
-        portSpin->setRange(1, 65535);
-        portSpin->setValue(PeripheralSettings::deviceInt("Vkamp", "ManualPort", 5005));
-        portSpin->setAccessibleName(tr("VK3AMP control port"));
-        portSpin->setAccessibleDescription(tr("TCP control port, 1 to 65535, default 5005"));
-        AetherSDR::ThemeManager::instance().applyStyleSheet(portSpin,
-            "QSpinBox { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
-            "border-radius: 3px; color: {{color.text.primary}}; font-size: 12px; padding: 2px; }");
-        grid->addWidget(portSpin, row, 2);
-
-        static const QString kVkampConnectedStyle = "QLabel { color: {{color.accent.success}}; font-size: 11px; }";
-        static const QString kVkampDisconnectedStyle = "QLabel { color: {{color.text.secondary}}; font-size: 11px; }";
-        static const QString kVkampErrorStyle = "QLabel { color: {{color.accent.danger}}; font-size: 11px; }";
-        static const QString kVkampConnectingStyle = "QLabel { color: {{color.accent.warning}}; font-size: 11px; }";
-
-        auto* statusLbl = new QLabel(m_vkamp->isConnected() ? "Connected" : "Not connected");
-        AetherSDR::ThemeManager::instance().applyStyleSheet(statusLbl,
-            m_vkamp->isConnected() ? kVkampConnectedStyle : kVkampDisconnectedStyle);
-        statusLbl->setAccessibleName(tr("VK3AMP connection status"));
-        grid->addWidget(statusLbl, row, 4);
-
-        auto* vkampBtn = new QPushButton(m_vkamp->isConnected() ? "Disconnect" : "Connect");
-        AetherSDR::ThemeManager::instance().applyStyleSheet(vkampBtn, kBtnStyle);
-        vkampBtn->setAccessibleName(tr("Connect or disconnect the VK3AMP amplifier"));
-        grid->addWidget(vkampBtn, row, 3);
-
-        auto updateVkampState = [this, vkampBtn, statusLbl]() {
-            const bool conn = m_vkamp->isConnected();
-            vkampBtn->setText(conn ? "Disconnect" : "Connect");
-            statusLbl->setText(conn ? "Connected" : "Not connected");
-            AetherSDR::ThemeManager::instance().applyStyleSheet(statusLbl,
-                conn ? kVkampConnectedStyle : kVkampDisconnectedStyle);
-        };
-        connect(m_vkamp, &VkampConnection::connected, this, updateVkampState);
-        connect(m_vkamp, &VkampConnection::disconnected, this, updateVkampState);
-        connect(m_vkamp, &VkampConnection::connectionFailed, this,
-                [statusLbl](const QString& err) {
-            statusLbl->setText("Error: " + err);
-            AetherSDR::ThemeManager::instance().applyStyleSheet(statusLbl, kVkampErrorStyle);
-        });
-
-        connect(vkampBtn, &QPushButton::clicked, this, [=, this]() {
-            if (m_vkamp->isConnected()) {
-                m_vkamp->disconnect();
-                return;
-            }
-            const QString ip = ipEdit->text().trimmed();
-            if (ip.isEmpty()) return;
-            const int port = portSpin->value();
-            PeripheralSettings::setDeviceString("Vkamp", "ManualIp", ip);
-            PeripheralSettings::setDeviceInt("Vkamp", "ManualPort", port);
-            // Immediate feedback -- a cold connect can legitimately take
-            // several seconds (this amp's own network stack only answers
-            // broadcast ARP, which can stall Windows' unicast-first
-            // neighbor-cache reconfirmation for up to ~kConnectTimeoutMs --
-            // see VkampConnection.h's own doc comment). Without this the
-            // status label just sits on "Not connected" the whole time,
-            // which reads as frozen/unresponsive rather than in progress.
-            // Overwritten by updateVkampState()/the connectionFailed handler
-            // below as soon as the real outcome lands.
-            statusLbl->setText("Connecting…");
-            AetherSDR::ThemeManager::instance().applyStyleSheet(statusLbl, kVkampConnectingStyle);
-            m_vkamp->connectNetwork(ip, static_cast<quint16>(port));
-        });
-
-        // Save-on-close: same "user cleared the field and closed the dialog
-        // without clicking Connect/Disconnect" handling as ACOM's own row
-        // above.
-        m_peripheralRowSavers.append([ipEdit, this]() {
-            if (!ipEdit) return;
-            const QString ip = ipEdit->text().trimmed();
-            if (!ip.isEmpty()) return;
-            const QString savedIp = PeripheralSettings::deviceString("Vkamp", "ManualIp");
-            if (savedIp.isEmpty()) return;
-            PeripheralSettings::clearDeviceField("Vkamp", "ManualIp");
-            PeripheralSettings::clearDeviceField("Vkamp", "ManualPort");
-            if (m_vkamp->isConnected() && m_vkamp->description().startsWith(savedIp + ":")) {
-                m_vkamp->disconnect();
-            }
-        });
-
-        // Row 8: VK3AMP hardware variant -- 600W/1000W/2000W ship as
-        // distinct rated-power classes, and the wire protocol has no
-        // model/wattage field to auto-detect which one this is (design
-        // doc's variant table). Picking the wrong one only misscales the
-        // forward-power gauge, not a safety issue, so this defaults to
-        // W2000 (the originally-confirmed unit) rather than blocking on a
-        // choice.
-        auto* variantLbl = new QLabel("Amplifier Model");
-        AetherSDR::ThemeManager::instance().applyStyleSheet(variantLbl, kLabelStyleTemplate);
-        grid->addWidget(variantLbl, row + 1, 0);
-
-        auto* variantCombo = new QComboBox;
-        static const QString kVariantComboStyle =
-            "QComboBox { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
-            "border-radius: 3px; color: {{color.text.primary}}; font-size: 12px; padding: 2px 4px; }"
-            "QComboBox::drop-down { border: none; }";
-        AetherSDR::ThemeManager::instance().applyStyleSheet(variantCombo, kVariantComboStyle);
-        variantCombo->setAccessibleName(tr("VK3AMP amplifier model"));
-        variantCombo->setAccessibleDescription(
-            tr("Rated output of your unit. Sets the power meter's full scale; it does not change "
-               "anything on the amplifier."));
-        for (auto v : {Vkamp::Variant::W600, Vkamp::Variant::W1000, Vkamp::Variant::W2000}) {
-            variantCombo->addItem(Vkamp::variantLabel(v), static_cast<int>(v));
-        }
-        const int savedVariant = PeripheralSettings::deviceInt(
-            "Vkamp", "Variant", static_cast<int>(Vkamp::Variant::W2000));
-        {
-            const int idx = variantCombo->findData(savedVariant);
-            variantCombo->setCurrentIndex(idx >= 0 ? idx : variantCombo->count() - 1);
-        }
-        grid->addWidget(variantCombo, row + 1, 1);
-
-        connect(variantCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
-                [this, variantCombo](int idx) {
-            PeripheralSettings::setDeviceInt("Vkamp", "Variant", variantCombo->itemData(idx).toInt());
-            emit vkampVariantChanged();
-        });
-    }
-
-    for (auto* lbl : group->findChildren<QLabel*>())
-        if (lbl->styleSheet().isEmpty()) applyLabelStyle(lbl);
-
-    vbox->addWidget(group);
-
-    // Auto-reconnect checkbox
-    auto* reconnectCheck = new QCheckBox("Auto-reconnect to peripherals on connection drop");
-    AetherSDR::ThemeManager::instance().applyStyleSheet(reconnectCheck,
-        "QCheckBox { color: {{color.text.primary}}; font-size: 11px; spacing: 8px; }"
-        + kCheckBoxIndicator);
-    const bool autoReconnect = PeripheralSettings::autoReconnect();
-    reconnectCheck->setChecked(autoReconnect);
-    connect(reconnectCheck, &QCheckBox::toggled, this, [this](bool on) {
-        PeripheralSettings::setAutoReconnect(on);
-        // Propagate immediately to live connection objects
-        if (m_tgxl) {
-            m_tgxl->setAutoReconnect(on);
-        }
-        if (m_pgxl) {
-            m_pgxl->setAutoReconnect(on);
-        }
-        if (m_ag) {
-            m_ag->setAutoReconnect(on);
-        }
-        if (m_acom) {
-            m_acom->setAutoReconnect(on);
-        }
-        if (m_spe) {
-            m_spe->setAutoReconnect(on);
-        }
-        if (m_lpMeter) {
-            m_lpMeter->setAutoReconnect(on);
-        }
-        // NOTE: m_vkamp is deliberately NOT propagated here, and that is a
-        // pre-existing gap from #4919 rather than an intentional omission --
-        // VkampConnection has setAutoReconnect() and the startup block in
-        // MainWindow_Wiring.cpp does call it, so toggling this checkbox
-        // mid-session reaches every peripheral except that one. Left alone on
-        // purpose: it is not this PR's row to change, and bundling an
-        // unrelated shipped-code fix into a feature PR is what the project's
-        // scope-discipline rule exists to prevent. Needs its own one-liner.
-    });
-    vbox->addWidget(reconnectCheck);
-
-    // Info note
-    auto* note = new QLabel(
-        "Configure manual IP addresses for peripherals that cannot be discovered via UDP broadcast.\n"
-        "This is needed for remote, VPN, and SmartLink connections. "
-        "Configured devices auto-connect when the radio connects.");
-    // Next free row: TelePost LP-100A wattmeter — serial OR ser2net network,
-    // structurally identical to the ACOM row above. See
-    // docs/architecture/lp-100a-wattmeter-design.md for the design note.
-    //
-    // Only the CONNECTION settings live here. The per-range full scale is a
-    // display preference and is edited from the applet's own context menu.
-    if (m_lpMeter) {
-        const int row = grid->rowCount();
-        static const QString kComboStyle =
-            "QComboBox { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
-            "border-radius: 3px; color: {{color.text.primary}}; font-size: 12px; padding: 2px 4px; }"
-            "QComboBox::drop-down { border: none; }";
-        // Tokens via ThemeManager: the colour ratchet counts setStyleSheet call
-        // sites, and only tokens re-resolve on theme change (literal hex
-        // resolves to itself). Mappings per docs/theming/canonical-tokens.md.
-        // kBtnStyle's hover folds into its own base fill (background.1), so it
-        // lifts one tier to background.2, as Theme.h does for such buttons.
-        static const QString kLpBtnStyle =
-            "QPushButton { background: {{color.background.1}}; "
-            "border: 1px solid {{color.background.2}}; border-radius: 3px; "
-            "color: {{color.text.primary}}; font-size: 11px; font-weight: bold; "
-            "padding: 3px 10px; }"
-            "QPushButton:hover { background: {{color.background.2}}; }";
-        auto& tm = AetherSDR::ThemeManager::instance();
-
-        auto* devWidget = new QWidget;
-        auto* devLay = new QVBoxLayout(devWidget);
-        devLay->setContentsMargins(0, 0, 0, 0);
-        devLay->setSpacing(2);
-        auto* devLbl = new QLabel("LP-100A Meter");
-        tm.applyStyleSheet(devLbl, kLabelStyleTemplate);
-        devLay->addWidget(devLbl);
-        auto* modeCombo = new QComboBox;
-        modeCombo->setAccessibleName(tr("LP-100A connection type"));
-        tm.applyStyleSheet(modeCombo, kComboStyle);
-#ifdef HAVE_SERIALPORT
-        modeCombo->addItem("Serial", "Serial");
-#endif
-        modeCombo->addItem("Network", "Network");
-        devLay->addWidget(modeCombo);
-        grid->addWidget(devWidget, row, 0);
-
-        auto* addrStack = new QStackedWidget;
-        int serialPageIdx = -1;
-        QComboBox* serialCombo = nullptr;
-        QLineEdit* serialCustomEdit = nullptr;
-#ifdef HAVE_SERIALPORT
-        {
-            auto* serialPage = new QWidget;
-            auto* lay = new QHBoxLayout(serialPage);
-            lay->setContentsMargins(0, 0, 0, 0);
-            serialCombo = new QComboBox;
-            serialCombo->setAccessibleName(tr("LP-100A serial port"));
-            tm.applyStyleSheet(serialCombo, kComboStyle);
-            serialCustomEdit = new QLineEdit;
-            serialCustomEdit->setAccessibleName(tr("LP-100A custom serial port"));
-            serialCustomEdit->setPlaceholderText("/dev/ttyUSB0");
-            tm.applyStyleSheet(serialCustomEdit, kEditStyleTemplate);
-            const QString savedSerialPort =
-                PeripheralSettings::deviceString("Lp100a", "SerialPort");
-            populateSerialPortCombo(serialCombo, serialCustomEdit, savedSerialPort);
-            serialCustomEdit->setVisible(serialCombo->currentData().toString() == "__custom__");
-            connect(serialCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
-                    [serialCombo, serialCustomEdit](int idx) {
-                serialCustomEdit->setVisible(serialCombo->itemData(idx).toString() == "__custom__");
-            });
-            // Refresh a retained page without discarding its current edits.
-            auto reseed = [combo = QPointer<QComboBox>(serialCombo),
-                           edit = QPointer<QLineEdit>(serialCustomEdit)]() {
-                if (!combo || !edit)
-                    return;
-                edit->setVisible(refreshSerialPortCombo(combo, edit));
-            };
-            m_serialPortReseeds.append(reseed);
-            serialReseeds->append(reseed);
-            lay->addWidget(serialCombo, 1);
-            lay->addWidget(serialCustomEdit, 1);
-            serialPageIdx = addrStack->addWidget(serialPage);
-        }
-#endif
-        auto* netPage = new QWidget;
-        auto* netLay = new QHBoxLayout(netPage);
-        netLay->setContentsMargins(0, 0, 0, 0);
-        auto* netIpEdit = new QLineEdit;
-        netIpEdit->setAccessibleName(tr("LP-100A network address"));
-        netIpEdit->setAccessibleDescription(
-            tr("IP address or host name of the raw-mode serial proxy"));
-        netIpEdit->setPlaceholderText("ser2net host, raw mode — e.g. 192.168.1.7");
-        tm.applyStyleSheet(netIpEdit, kEditStyleTemplate);
-        netIpEdit->setText(PeripheralSettings::deviceString("Lp100a", "ManualIp"));
-        netLay->addWidget(netIpEdit);
-        const int netPageIdx = addrStack->addWidget(netPage);
-        grid->addWidget(addrStack, row, 1);
-
-        auto* portStack = new QStackedWidget;
-        int serialBaudIdx = -1;
-#ifdef HAVE_SERIALPORT
-        {
-            // Fixed by the meter's own spec, not user-configurable. Firmware
-            // before 1.2.0.0 used 38400 and before 1.0.3 used 19200 without
-            // dBm or SWR; neither is supported.
-            auto* fixedLbl = new QLabel("115200 8N1");
-            tm.applyStyleSheet(fixedLbl,
-                "QLabel { color: {{color.text.secondary}}; font-size: 11px; }");
-            serialBaudIdx = portStack->addWidget(fixedLbl);
-        }
-#endif
-        auto* netPortSpin = new QSpinBox;
-        netPortSpin->setAccessibleName(tr("LP-100A network port"));
-        netPortSpin->setAccessibleDescription(tr("TCP port, 1 to 65535, default 2000"));
-        netPortSpin->setRange(1, 65535);
-        // 2000, not the ACOM row's 7000: ser2net's own common default.
-        netPortSpin->setValue(PeripheralSettings::deviceInt("Lp100a", "ManualPort", 2000));
-        tm.applyStyleSheet(netPortSpin,
-            "QSpinBox { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
-            "border-radius: 3px; color: {{color.text.primary}}; font-size: 12px; padding: 2px; }");
-        const int netPortIdx = portStack->addWidget(netPortSpin);
-        grid->addWidget(portStack, row, 2);
-
-        auto applyMode = [=](const QString& mode) {
-#ifdef HAVE_SERIALPORT
-            if (mode == "Serial" && serialPageIdx >= 0) {
-                addrStack->setCurrentIndex(serialPageIdx);
-                portStack->setCurrentIndex(serialBaudIdx);
-                return;
-            }
-#endif
-            addrStack->setCurrentIndex(netPageIdx);
-            portStack->setCurrentIndex(netPortIdx);
-        };
-        const QString savedMode = PeripheralSettings::deviceString("Lp100a", "ConnectionMode",
-#ifdef HAVE_SERIALPORT
-            "Serial"
-#else
-            "Network"
-#endif
-        );
-        {
-            const int idx = modeCombo->findData(savedMode);
-            modeCombo->setCurrentIndex(idx >= 0 ? idx : 0);
-        }
-        applyMode(modeCombo->currentData().toString());
-        connect(modeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
-                [=](int idx) {
-            const QString mode = modeCombo->itemData(idx).toString();
-            PeripheralSettings::setDeviceString("Lp100a", "ConnectionMode", mode);
-            applyMode(mode);
-        });
-
-        auto* statusLbl = new QLabel(m_lpMeter->isConnected() ? "Connected" : "Not connected");
-        statusLbl->setAccessibleName(tr("LP-100A connection status"));
-        const QString kOkStyle =
-            "QLabel { color: {{color.accent.success}}; font-size: 11px; }";
-        const QString kIdleStyle =
-            "QLabel { color: {{color.text.secondary}}; font-size: 11px; }";
-        const QString kErrStyle =
-            "QLabel { color: {{color.accent.danger}}; font-size: 11px; }";
-        tm.applyStyleSheet(statusLbl, m_lpMeter->isConnected() ? kOkStyle : kIdleStyle);
-        grid->addWidget(statusLbl, row, 4);
-
-        auto* lpBtn = new QPushButton(m_lpMeter->isConnected() ? "Disconnect" : "Connect");
-        lpBtn->setAccessibleName(tr("Connect or disconnect the LP-100A meter"));
-        tm.applyStyleSheet(lpBtn, kLpBtnStyle);
-        grid->addWidget(lpBtn, row, 3);
-
-        auto updateLpState = [this, lpBtn, statusLbl, kOkStyle, kIdleStyle]() {
-            const bool conn = m_lpMeter->isConnected();
-            lpBtn->setText(conn ? "Disconnect" : "Connect");
-            statusLbl->setText(conn ? "Connected" : "Not connected");
-            AetherSDR::ThemeManager::instance().applyStyleSheet(
-                statusLbl, conn ? kOkStyle : kIdleStyle);
-        };
-        connect(m_lpMeter, &LpMeterConnection::connected, this, updateLpState);
-        connect(m_lpMeter, &LpMeterConnection::disconnected, this, updateLpState);
-        connect(m_lpMeter, &LpMeterConnection::connectionFailed, this,
-                [statusLbl, kErrStyle](const QString& err) {
-            statusLbl->setText("Error: " + err);
-            AetherSDR::ThemeManager::instance().applyStyleSheet(statusLbl, kErrStyle);
-        });
-        // Link up but the meter silent is its own state, and the operator
-        // should be able to tell it apart from "not connected" here as well
-        // as in the applet.
-        connect(m_lpMeter, &LpMeterConnection::dataFlowingChanged, this,
-                [this, statusLbl, kOkStyle, kIdleStyle](bool flowing) {
-            if (!m_lpMeter->isConnected()) return;
-            statusLbl->setText(flowing ? "Connected" : "Connected — meter not answering");
-            AetherSDR::ThemeManager::instance().applyStyleSheet(
-                statusLbl, flowing ? kOkStyle : kIdleStyle);
-        });
-
-        connect(lpBtn, &QPushButton::clicked, this, [=, this]() {
-            if (m_lpMeter->isConnected()) {
-                m_lpMeter->disconnect();
-                return;
-            }
-            const QString mode = modeCombo->currentData().toString();
-            if (mode == "Network") {
-                const QString ip = netIpEdit->text().trimmed();
-                if (ip.isEmpty()) return;
-                const int port = netPortSpin->value();
-                PeripheralSettings::setDeviceString("Lp100a", "ManualIp", ip);
-                PeripheralSettings::setDeviceInt("Lp100a", "ManualPort", port);
-                m_lpMeter->connectNetwork(ip, static_cast<quint16>(port));
-            }
-#ifdef HAVE_SERIALPORT
-            else {
-                QString port = serialCombo->currentData().toString();
-                if (port == "__custom__")
-                    port = serialCustomEdit->text().trimmed();
-                if (port.isEmpty()) return;
-                PeripheralSettings::setDeviceString("Lp100a", "SerialPort", port);
-                m_lpMeter->connectSerial(port);
-            }
-#endif
-        });
-
-        // Save-on-close, same shape and same reasoning as the ACOM row's.
-        m_peripheralRowSavers.append([netIpEdit, this]() {
-            if (!netIpEdit) return;
-            const QString ip = netIpEdit->text().trimmed();
-            if (!ip.isEmpty()) return;
-            const QString savedIp = PeripheralSettings::deviceString("Lp100a", "ManualIp");
-            if (savedIp.isEmpty()) return;
-            PeripheralSettings::clearDeviceField("Lp100a", "ManualIp");
-            PeripheralSettings::clearDeviceField("Lp100a", "ManualPort");
-            if (m_lpMeter->isConnected()
-                && m_lpMeter->description().startsWith(savedIp + ":")) {
-                m_lpMeter->disconnect();
-            }
-        });
-    }
-
-#ifdef HAVE_SERIALPORT
-    // One Refresh for the page rather than one per row: the three serial rows
-    // sit in the same QGridLayout as the network-only rows above them and a
-    // per-row button would have to claim a column those rows do not use.
-    // showEvent() runs the same reseeds, so this button is for a device
-    // plugged in while the operator is already looking at the page.
-    if (!serialReseeds->isEmpty()) {
-        auto* refreshRow = new QHBoxLayout;
-        auto* refreshBtn = new QPushButton("Refresh serial ports");
-        // Through ThemeManager, like every sibling button in this function
-        // (speBtn, vkampBtn, lpBtn). The colour ratchet counts setStyleSheet()
-        // CALL SITES rather than colours, so a direct call here costs a ratchet
-        // slot even though kBtnStyle is the same literal hex the siblings use.
-        // MidiMappingDialog's makeStyledButton() in this same change already
-        // says exactly that in its own comment -- the constraint was understood
-        // in one file and missed in the other.
-        AetherSDR::ThemeManager::instance().applyStyleSheet(refreshBtn, kBtnStyle);
-        refreshBtn->setAccessibleName(tr("Refresh serial port list"));
-        refreshBtn->setToolTip(
-            "Re-scan for serial ports. The list is also re-scanned every time "
-            "this window is opened.");
-        connect(refreshBtn, &QPushButton::clicked, this, [serialReseeds]() {
-            for (const auto& reseed : *serialReseeds)
-                reseed();
-        });
-        refreshRow->addWidget(refreshBtn);
-        refreshRow->addStretch();
-        vbox->addLayout(refreshRow);
-    }
-#endif
-
-    note->setWordWrap(true);
-    AetherSDR::ThemeManager::instance().applyStyleSheet(note, "QLabel { color: {{color.text.label}}; font-size: 11px; padding: 8px; }");
-    vbox->addWidget(note);
-
-    vbox->addStretch();
-    return page;
+    const QPointer<RadioSetupDialog> self(this);
+    ScopedChildWidget<QMessageBox> boxOwner(
+        QMessageBox::Warning, tr("Remove %1").arg(label), text,
+        QMessageBox::Ok | QMessageBox::Cancel, this);
+    boxOwner.get()->setObjectName(QStringLiteral("peripheralRemoveConfirmation"));
+    boxOwner.get()->setDefaultButton(QMessageBox::Cancel);
+    boxOwner.get()->button(QMessageBox::Ok)->setText(tr("Remove"));
+    const int ret = boxOwner.get()->exec();
+    return self && boxOwner && ret == QMessageBox::Ok;
 }
 
 void RadioSetupDialog::buildDeferredTab(int index)

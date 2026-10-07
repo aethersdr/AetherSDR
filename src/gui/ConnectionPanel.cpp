@@ -25,7 +25,7 @@
 #include <QLineEdit>
 #include <QFormLayout>
 #include <QGuiApplication>
-#include <QInputDialog>
+#include <QDialogButtonBox>
 #include <QMenu>
 #include <QFrame>
 #include <QGroupBox>
@@ -1282,6 +1282,7 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
         m_slUserLabel->setText("Signed out of SmartLink.");
         m_slUserLabel->setStyleSheet(kHintLabelStyle);
         updateSmartLinkUi();
+        emit smartLinkSignedOut();
     });
 
     // Settle the body layout so preferredClientHeight() has a real answer the
@@ -1543,6 +1544,96 @@ void ConnectionPanel::setStatusText(const QString& text)
 QList<RadioInfo> ConnectionPanel::automationLocalRadios() const
 {
     return m_radios;
+}
+
+bool ConnectionPanel::selectRadio(const QString& serial)
+{
+    for (int index = 0; index < m_radios.size(); ++index) {
+        if (m_radios[index].serial == serial) {
+            setCurrentMode(LocalMode);
+            m_radioList->setCurrentRow(index);
+            return true;
+        }
+    }
+    for (int index = 0; index < m_wanRadios.size(); ++index) {
+        if (m_wanRadios[index].serial == serial) {
+            setCurrentMode(SmartLinkMode);
+            m_wanList->setCurrentRow(index);
+            return true;
+        }
+    }
+    return false;
+}
+
+void ConnectionPanel::selectManualConnection()
+{
+    setCurrentMode(ManualMode);
+}
+
+bool ConnectionPanel::canRenameRadio(const QString& serial) const
+{
+    for (const RadioInfo& radio : m_radios) {
+        if (radio.serial == serial) {
+            return canRenameRadio(radio);
+        }
+    }
+    return false;
+}
+
+bool ConnectionPanel::canRenameRadio(const RadioInfo& radio) const
+{
+    // The demo's name IS its safety label ("not on the air"); it is not the
+    // operator's to replace.
+    if (radio.family == SimBackend::familyName()) {
+        return false;
+    }
+    return !radio.serial.isEmpty() && !hl2::Hl2Discovery::nicknameLivesOnRadio(radio);
+}
+
+QString ConnectionPanel::radioDisplayName(const RadioInfo& radio, const QString& fallback) const
+{
+    return canRenameRadio(radio)
+        ? hl2::Hl2Discovery::effectiveNickname(radio.family, radio.serial, fallback)
+        : fallback;
+}
+
+void ConnectionPanel::renameRadio(const QString& serial)
+{
+    for (const RadioInfo& radio : m_radios) {
+        if (radio.serial == serial) {
+            renameRadio(radio);
+            return;
+        }
+    }
+}
+
+void ConnectionPanel::renameRadio(const RadioInfo& radio)
+{
+    if (!canRenameRadio(radio)) {
+        return;
+    }
+    // The dialog itself is the owner's to build (MainWindow, as a
+    // PersistentDialog).  Keeping it out of this class keeps ConnectionPanel
+    // free of the frameless-dialog stack, which the startup/auto-connect
+    // tests link without.
+    emit radioRenameRequested(radio, hl2::Hl2Discovery::effectiveNickname(
+                                         radio.family, radio.serial, QString()));
+}
+
+void ConnectionPanel::setRadioNickname(const RadioInfo& radio, const QString& nickname)
+{
+    hl2::Hl2Discovery::setNickname(radio.family, radio.serial, nickname.trimmed());
+    for (int current = 0; current < m_radios.size(); ++current) {
+        if (m_radios[current].serial == radio.serial) {
+            m_radios[current].nickname = hl2::Hl2Discovery::effectiveNickname(
+                radio.family, radio.serial, radio.model);
+            if (QListWidgetItem* item = m_radioList->item(current)) {
+                item->setText(formatLocalRadioLabel(m_radios[current]));
+            }
+            break;
+        }
+    }
+    emit radioNicknameChanged();
 }
 
 bool ConnectionPanel::automationConnectLocalSerial(const QString& serial, QString* error)
@@ -1865,6 +1956,9 @@ void ConnectionPanel::showRadioContextMenu(const QPoint& pos)
     // on-radio store (HL2, sim, any future non-Flex backend).
     if (hl2::Hl2Discovery::nicknameLivesOnRadio(radio))
         return;
+    // The demo's name is its "not on the air" safety label (canRenameRadio).
+    if (radio.family == SimBackend::familyName())
+        return;
 
     QMenu menu(this);
     QAction* setNick = menu.addAction(tr("Set Nickname…"));
@@ -1877,19 +1971,8 @@ void ConnectionPanel::showRadioContextMenu(const QPoint& pos)
         return;
 
     if (chosen == setNick) {
-        bool ok = false;
-        const QString current = hl2::Hl2Discovery::effectiveNickname(
-            radio.family, radio.serial, QString());
-        const QString name = QInputDialog::getText(
-            this, tr("Set Nickname"),
-            tr("Nickname for %1:").arg(radio.model),
-            QLineEdit::Normal, current, &ok);
-        if (ok) {
-            // setNickname commits eagerly — a naming the operator just
-            // confirmed shouldn't be lost to a crash or a kill.
-            hl2::Hl2Discovery::setNickname(radio.family, radio.serial,
-                                           name.trimmed());
-        }
+        renameRadio(radio.serial);
+        return;
     } else if (clearNick && chosen == clearNick) {
         hl2::Hl2Discovery::setNickname(radio.family, radio.serial, QString());
     }
@@ -1910,6 +1993,7 @@ void ConnectionPanel::showRadioContextMenu(const QPoint& pos)
         }
         break;
     }
+    emit radioNicknameChanged();
 }
 
 void ConnectionPanel::onRadioDiscovered(const RadioInfo& radio)

@@ -5,9 +5,12 @@
 
 #include "MainWindow.h"
 #include "models/CwDecodeSettings.h"
+#include "PeripheralAuthStore.h"
 #include "core/backends/AutoRfGainControl.h"
 #include "core/ClientDisplaySettings.h"
+#include "core/DbmRangePlausibility.h"
 #include "core/backends/NoiseFloorAutoAdjustGate.h"
+#include "core/backends/SquelchLevelScale.h"
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QStatusBar>
@@ -25,6 +28,7 @@
 #include "OwnedSingleShotTimer.h"
 #include "PanRecenterPolicy.h"
 #include "PanadapterApplet.h"
+#include "ReceiveCaptureAction.h"
 #include "PanadapterMessageOverlay.h"
 #include "PanadapterStack.h"
 #include "RadioSetupDialog.h"
@@ -34,6 +38,7 @@
 #include "AcomApplet.h"
 #include "SpeApplet.h"
 #include "VkampApplet.h"
+#include "Kpa1500Applet.h"
 #include "LpMeterApplet.h"
 #include "HealthApplet.h"
 #include "ImageFileDialog.h"
@@ -43,6 +48,7 @@
 #include "TunerApplet.h"
 #include "TxApplet.h"
 #include "core/PeripheralSettings.h"
+#include "core/PeripheralEndpointFallback.h"
 #include "core/KiwiSdrManager.h"
 #include "core/KiwiSdrProtocol.h"
 #include "SliceLabel.h"
@@ -158,24 +164,6 @@ bool memoryRevealTargetMatches(double actualMhz, double targetMhz)
 {
     return targetMhz <= 0.0
         || std::abs(actualMhz - targetMhz) <= kMemoryRevealTargetToleranceMhz;
-}
-
-bool dbmRangeLooksPlausible(float minDbm, float maxDbm)
-{
-    constexpr float kMinAllowedDbm = -180.0f;
-    constexpr float kMaxAllowedDbm = 80.0f;
-    constexpr float kMinRangeDb = 10.0f;
-    constexpr float kMaxRangeDb = 180.0f;
-
-    if (!std::isfinite(minDbm) || !std::isfinite(maxDbm)) {
-        return false;
-    }
-
-    const float rangeDb = maxDbm - minDbm;
-    return minDbm >= kMinAllowedDbm
-        && maxDbm <= kMaxAllowedDbm
-        && rangeDb >= kMinRangeDb
-        && rangeDb <= kMaxRangeDb;
 }
 
 SliceModel* kiwiAssignedSliceForPan(const RadioModel& radioModel,
@@ -716,7 +704,7 @@ bool MainWindow::snapCenterLockForSlice(SliceModel* slice, double mhz, bool send
             // #4142 — defer, never drop. requestPanCenter() advances the local
             // model only when the command actually reaches the wire, and queues
             // it for replay when a profile load is holding radio-state writes.
-            centerDeferred = !m_radioModel.requestPanCenter(panId, targetCenterMhz);
+            centerDeferred = !requestSlicePanCenter(m_radioModel, slice->sliceId(), targetCenterMhz);
         } else {
             // Local-only snap: the caller explicitly wants no radio write, so
             // there is no wire command for the model to diverge from.
@@ -760,6 +748,10 @@ void MainWindow::resyncPanGeometryToView(const QString& panId)
     auto* sw = m_panStack->spectrum(panId);
     if (!pan || !sw)
         return;
+    if (m_radioModel.confirmsReceiveControls()) {
+        sw->observeFrequencyRange(pan->centerMhz(), pan->bandwidthMhz());
+        return;
+    }
     // Effective (pending-else-model) geometry: a deferred write in flight —
     // e.g. the leave-kiwi reconcile parked behind a profile-load hold (#4142)
     // — supersedes the model value; re-pushing the superseded span here would
@@ -1353,6 +1345,48 @@ void MainWindow::syncActiveSliceSquelchLineToSpectrums()
     }
 }
 
+std::optional<SquelchLevelScale> MainWindow::activeSliceSquelchScale() const
+{
+    const SliceModel* s = activeSlice();
+    if (!s || !m_radioModel.isConnected()) {
+        return std::nullopt;
+    }
+    return squelchScaleForMode(m_radioModel.backendCapabilities().squelchLevelScale,
+                               s->mode());
+}
+
+void MainWindow::syncSquelchScaleToUi()
+{
+    const std::optional<SquelchLevelScale> scale = activeSliceSquelchScale();
+    const QList<SpectrumWidget*> spectra = findChildren<SpectrumWidget*>();
+    for (SpectrumWidget* sw : spectra) {
+        sw->setSquelchScale(scale);
+    }
+    RxApplet* rx = m_appletPanel ? m_appletPanel->rxApplet() : nullptr;
+    if (!rx) {
+        return;
+    }
+    // Permissive while disconnected or before a slice is active, like every
+    // capability gate: there is no mode yet to judge the scale against.
+    QString reason;
+    const SliceModel* s = activeSlice();
+    if (m_radioModel.isConnected() && s && !autoSquelchAvailable(scale)) {
+        const auto& published = m_radioModel.backendCapabilities().squelchLevelScale;
+        if (!published) {
+            reason = tr("this radio does not publish where its squelch level "
+                        "sits on the panadapter scale.");
+        } else if (!published->appliesTo(s->mode())) {
+            reason = tr("this radio's squelch in %1 has no panadapter level.")
+                         .arg(s->mode());
+        } else {
+            reason = tr("this radio's squelch detector does not read the "
+                        "panadapter's noise floor, so a margin above it cannot "
+                        "be held.");
+        }
+    }
+    rx->setAutoSqlAvailability(reason.isEmpty(), reason);
+}
+
 bool MainWindow::autoSquelchShouldRunOnSpectrum(
     const QString& panId, const SpectrumWidget* spectrum) const
 {
@@ -1378,8 +1412,15 @@ bool MainWindow::autoSquelchShouldRunOnSpectrum(
         return panId == s->panId();
     }
 
+    // The receiver's own gate runs Auto only on its slice's pan.
+    if (exclusiveSquelchScale(m_radioModel.backendCapabilities().squelchLevelScale)
+        && panId != s->panId()) {
+        return false;
+    }
+
     return kiwiSdrProfileForPan(panId).isEmpty()
-        && (!spectrum || !spectrum->kiwiSdrWaterfallActive());
+        && (!spectrum || !spectrum->kiwiSdrWaterfallActive())
+        && autoSquelchAvailable(activeSliceSquelchScale());
 }
 
 void MainWindow::syncActiveSliceAutoSquelchToSpectrums()
@@ -1539,9 +1580,13 @@ void MainWindow::wireVfoTelemetry(VfoWidget* vfo, SliceModel* s)
     // shows the operator-selected meter only on its own TX slice while
     // transmitting. No amp-operate gate (unlike the analog S-Meter below): the
     // meter reports the truth of whatever the operator selected.
+    // The mic value is the same "transmit level" the S-meter's Level face
+    // shows (MeterModel::transmitLevelFaceValue): MICPEAK on a radio that
+    // publishes no MIC meter (HL2), where MIC would sit on its floor.
     connect(&m_radioModel.meterModel(), &MeterModel::micMetersChanged,
-            vfo, [vfo](float micLevel, float, float micPeak, float compPeak) {
-        vfo->setMicLevel(micLevel, micPeak);
+            vfo, [this, vfo](float micLevel, float, float micPeak, float compPeak) {
+        vfo->setMicLevel(
+            m_radioModel.meterModel().transmitLevelFaceValue(micLevel, micPeak), micPeak);
         vfo->setTxCompression(compPeak);
     });
     connect(&m_radioModel.meterModel(), &MeterModel::txMetersChanged,
@@ -1865,6 +1910,9 @@ void MainWindow::onSliceAdded(SliceModel* s)
 
     // Push overlay for this slice to the spectrum widget
     pushSliceOverlay(s);
+    connect(s, &SliceModel::inCaptureChanged, this, [this, s](bool) {
+        pushSliceOverlay(s);
+    });
 
     // Set the panadapter applet's slice label (e.g. "Slice B") based on
     // which pan this slice belongs to
@@ -1960,7 +2008,8 @@ void MainWindow::onSliceAdded(SliceModel* s)
         const bool dragTargetSlice =
             m_sliceDragTargetSliceId >= 0
             && (s->sliceId() == m_sliceDragTargetSliceId || dragDiversityPartner);
-        if (dragEchoHoldActive && dragTargetSlice
+        const bool confirmedControls = m_radioModel.confirmsReceiveControls();
+        if (!confirmedControls && dragEchoHoldActive && dragTargetSlice
             && m_sliceDragTargetMhz > 0.0 && !memoryRevealPending) {
             const int sliceId = s->sliceId();
             QTimer::singleShot(0, this, [this, sliceId]() {
@@ -1980,7 +2029,7 @@ void MainWindow::onSliceAdded(SliceModel* s)
             });
             return;
         }
-        if (activeTuning
+        if (!confirmedControls && activeTuning
             && (s->sliceId() == m_activeSliceId || activeDiversityPartner)
             && !memoryRevealPending) {
             return;
@@ -2055,6 +2104,12 @@ void MainWindow::onSliceAdded(SliceModel* s)
         Q_UNUSED(level);
         if (s != activeSlice()) return;
         syncActiveSliceSquelchLineToSpectrums();
+    });
+    // The squelch scale is per mode (an HL2 FM gate has no dB place).
+    connect(s, &SliceModel::modeChanged, this, [this, s](const QString&) {
+        if (s != activeSlice()) return;
+        syncSquelchScaleToUi();
+        syncActiveSliceAutoSquelchToSpectrums();
     });
     connect(s, &SliceModel::externalReceiveSquelchChanged,
             this, [this, s](bool on, int level) {
@@ -3069,11 +3124,99 @@ void MainWindow::scheduleClientWaterfallRateSave(int panIndex, int rate)
         return;
     }
     // Include scope in the key so a radio switch cannot overwrite a pending edit.
-    const QString key = QString::number(scope.family().size()) + QLatin1Char(':') + scope.family()
-        + QString::number(scope.radioId().size()) + QLatin1Char(':') + scope.radioId()
-        + QLatin1Char(':') + QString::number(panIndex);
+    const QString key = ClientDisplaySettings::pendingWriteKey(scope, panIndex, "waterfallRate");
     m_pendingDisplayWrites.schedule(key, [scope, panIndex, shapedLocally, rate] {
         ClientDisplaySettings::saveWaterfallRate(scope, panIndex, shapedLocally, rate);
+    });
+}
+
+// May the client store and restore FFT FPS for this radio? Only where the
+// engine paces the frames and the backend declares the client the owner
+// (RadioCapabilities::clientPersistsPanFrameRate). Read by the save and by the
+// restore, so the two cannot disagree.
+bool MainWindow::clientPersistsFftFps() const
+{
+    return m_radioModel.shapesDisplayRatesLocally()
+        && m_radioModel.backendCapabilities().clientPersistsPanFrameRate();
+}
+
+void MainWindow::scheduleClientFftFpsSave(int panIndex, int fps)
+{
+    const RadioSettingsScope scope = m_radioModel.settingsScope();
+    if (!clientPersistsFftFps() || !scope.hasRadioIdentity() || panIndex < 0) {
+        return;
+    }
+    m_pendingDisplayWrites.schedule(
+        ClientDisplaySettings::pendingWriteKey(scope, panIndex, "fftFps"),
+        [scope, panIndex, fps] {
+            ClientDisplaySettings::saveFftFps(scope, panIndex, true, fps);
+        });
+}
+
+// May the client store and restore this pan's dBm range? Only where the
+// backend declares it (RadioCapabilities::clientPersistsDbmRange). Read by the
+// adopt-and-save and by the restore, so the two cannot disagree.
+bool MainWindow::clientOwnsPanDbmRange() const
+{
+    return m_radioModel.isConnected()
+        && m_radioModel.backendCapabilities().clientPersistsDbmRange();
+}
+
+// The operator moved the dBm scale on a radio that stores and publishes no
+// range: the pan model takes it, as a Flex echo would, so re-seeding sites hand
+// it back, and it is remembered for the next start.
+void MainWindow::adoptClientOwnedDbmRange(const QString& panId, int panIndex,
+                                          float minDbm, float maxDbm)
+{
+    if (!clientOwnsPanDbmRange() || !dbmRangeLooksPlausible(minDbm, maxDbm)) {
+        return;
+    }
+    if (auto* pan = m_radioModel.panadapter(panId)) {
+        pan->setRange(minDbm, maxDbm);
+    }
+    const RadioSettingsScope scope = m_radioModel.settingsScope();
+    if (!scope.hasRadioIdentity() || panIndex < 0) {
+        return;
+    }
+    m_pendingDisplayWrites.schedule(
+        ClientDisplaySettings::pendingWriteKey(scope, panIndex, "dbmRange"),
+        [scope, panIndex, minDbm, maxDbm] {
+            ClientDisplaySettings::saveDbmRange(scope, panIndex, true,
+                                                minDbm, maxDbm);
+        });
+}
+
+// Puts the remembered range into the pan MODEL before a widget is primed from
+// it, so that prime and every other site that re-seeds from the model agree.
+// No-op on a radio that owns or publishes its range.
+void MainWindow::restoreClientOwnedDbmRange(PanadapterModel* pan, int panIndex)
+{
+    if (!pan || !clientOwnsPanDbmRange()) {
+        return;
+    }
+    // A pending edit is newer than the stored row.
+    m_pendingDisplayWrites.flush();
+    if (const auto savedRange = ClientDisplaySettings::dbmRange(
+            m_radioModel.settingsScope(), panIndex, true)) {
+        pan->setRange(savedRange->minDbm, savedRange->maxDbm);
+    }
+}
+
+void MainWindow::scheduleClientFftAverageSave(int panIndex, int average, bool weighted)
+{
+    const auto averaging = m_radioModel.backendCapabilities().backendPanAveraging;
+    const RadioSettingsScope scope = m_radioModel.settingsScope();
+    if (!m_radioModel.shapesDisplayRatesLocally() || !averaging
+        || !averaging->clientPersistsAveraging || scope.radioId().isEmpty() || panIndex < 0) {
+        return;
+    }
+    // Distinct from waterfall cadence; edits to either feature must survive
+    // coalescing. Capture scope now so a later radio switch cannot redirect it.
+    const QString key = QStringLiteral("fft:") + QString::number(scope.family().size())
+        + QLatin1Char(':') + scope.family() + QString::number(scope.radioId().size())
+        + QLatin1Char(':') + scope.radioId() + QLatin1Char(':') + QString::number(panIndex);
+    m_pendingDisplayWrites.schedule(key, [scope, panIndex, average, weighted] {
+        ClientDisplaySettings::saveFftAverage(scope, panIndex, true, {average, weighted});
     });
 }
 
@@ -3144,10 +3287,35 @@ void MainWindow::wirePanDisplayStatus(PanadapterApplet* applet,
     // (core/WaterfallRate.h; they differ >10x mid-slider), unconditionally so a
     // switch back to Flex resets it.
     sw->setWfRateShapedLocally(m_radioModel.shapesDisplayRatesLocally());
+    const auto averaging = m_radioModel.backendCapabilities().backendPanAveraging;
+    if (SpectrumOverlayMenu* menu = sw->overlayMenu()) {
+        menu->setFftAverageDescriptions(averaging ? averaging->averageDescription : QString{},
+                                       averaging ? averaging->weightedDescription : QString{});
+    }
     if (m_radioModel.shapesDisplayRatesLocally()) {
+        if (averaging && averaging->clientPersistsAveraging) {
+            if (pan->average() >= 0) {
+                // A live model wins over disk on applet/layout rebuild.
+                sw->setFftAverage(pan->average());
+                sw->setFftWeightedAvg(pan->weightedAverage());
+            } else if (const auto saved = ClientDisplaySettings::fftAverage(
+                           m_radioModel.settingsScope(), sw->panIndex(), true)) {
+                sw->setFftAverage(saved->average);
+                sw->setFftWeightedAvg(saved->weighted);
+            }
+        }
         if (const auto savedRate = ClientDisplaySettings::waterfallRate(
                 m_radioModel.settingsScope(), sw->panIndex(), true)) {
             sw->setWfLineDuration(*savedRate);
+        }
+        // FFT FPS where the client is its declared owner. Restored into the
+        // widget BEFORE the request below, which seeds the shaper and the pan
+        // model from it.
+        if (clientPersistsFftFps()) {
+            if (const auto savedFps = ClientDisplaySettings::fftFps(
+                    m_radioModel.settingsScope(), sw->panIndex(), true)) {
+                sw->setFftFps(*savedFps);
+            }
         }
         m_radioModel.requestPanDisplayRates(panId, sw->fftFps(),
                                             sw->wfLineDuration());
@@ -3269,7 +3437,9 @@ int MainWindow::cloneDisplaySettingsToAllPans(PanadapterApplet* source)
         // requestPanAverage()/requestPanDisplayRates() reject an empty id;
         // weighted-average still needs this guard on its raw command path.
         if (!targetPanId.isEmpty()) {
-            m_radioModel.requestPanAverage(targetPanId, src->fftAverage());
+            if (m_radioModel.requestPanAverage(targetPanId, src->fftAverage())) {
+                scheduleClientFftAverageSave(dst->panIndex(), src->fftAverage(), src->fftWeightedAvg());
+            }
             if (!m_radioModel.requestLocalPanWeightedAverage(targetPanId,
                                                              src->fftWeightedAvg())) {
                 m_radioModel.sendCommand(QString("display pan set %1 weighted_average=%2")
@@ -3283,6 +3453,7 @@ int MainWindow::cloneDisplaySettingsToAllPans(PanadapterApplet* source)
         // congestion-aware throttle isn't holding the rates down (same rule as
         // the FPS slider — otherwise the clone fights the cap).
         dst->setFftFps(src->fftFps());
+        scheduleClientFftFpsSave(dst->panIndex(), src->fftFps());
         if (!m_adaptiveThrottleActive) {
             m_radioModel.requestPanDisplayRates(targetPanId, src->fftFps(),
                                                 /*wfMs=*/0);
@@ -3503,6 +3674,10 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
 {
     auto* sw = applet->spectrumWidget();
     auto* menu = sw->overlayMenu();
+    if (!sw->capturePlacementAction()) {
+        sw->setCapturePlacementAction(new ReceiveCaptureAction(m_radioModel,
+            [applet] { return applet->panId(); }, sw));
+    }
     if (profileLoadRadioStateWritesHeld()) {
         // Profile recall briefly rebuilds pan topology and pixel dimensions.
         // Keep auto noise-floor from sliding the client-side dBm scale during
@@ -3893,6 +4068,9 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         // On reconnect the auto-adjust would animate from the wrong baseline and
         // fire dbmRangeChangeRequested with bogus values — which then locks out the
         // correct radio-reported range via the pendingDbm guard. (#3034)
+        // A radio that stores and publishes no range leaves the model at its
+        // built-in -130..-40; the remembered range goes in first.
+        restoreClientOwnedDbmRange(pan, sw->panIndex());
         sw->setDbmRange(pan->minDbm(), pan->maxDbm());
 
         // Also set here, not only from applyCapabilitiesToUi: a pane added
@@ -3907,6 +4085,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         // before connect is happily running.
         sw->setPanBinsAbsolute(m_radioModel.isConnected()
                                && m_radioModel.backendCapabilities().panBinsAbsolute());
+        sw->setSquelchScale(activeSliceSquelchScale());
 
         wirePanDisplayStatus(applet, pan);
     }
@@ -4084,6 +4263,15 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         armDbmRangeHandshake(minDbm, maxDbm);
         setStreamDbmRange(minDbm, maxDbm, true);
         sendDbmRangeCommand(minDbm, maxDbm);
+        // After the handshake is armed: when the range moves, the model's
+        // levelChanged reads as the echo of this request and completes it. A
+        // request for the range the model already holds emits nothing, and the
+        // handshake runs to kDbmRangeHandshakeTimeoutMs.
+        // The 3D floor resync after a zoom is the widget's own move: sent as
+        // any request, never adopted or stored as the operator's range.
+        if (!sw->emittingDssZoomFloorDbmRange()) {
+            adoptClientOwnedDbmRange(applet->panId(), sw->panIndex(), minDbm, maxDbm);
+        }
     });
     connect(sw, &SpectrumWidget::radioDbmHeadroomRecoveryRequested,
             this, [this, applet, sw, encoderDbmRange,
@@ -4147,12 +4335,15 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         if (!m_radioModel.backendCapabilities().radioOwnsDbmScale) {
             sw->setDbmRange(minDbm, maxDbm);
             setStreamDbmRange(minDbm, maxDbm, true);
+            adoptClientOwnedDbmRange(applet->panId(), sw->panIndex(),
+                                     minDbm, maxDbm);
             return;
         }
 
         armDbmRangeHandshake(minDbm, maxDbm);
         setStreamDbmRange(minDbm, maxDbm, true);
         sendDbmRangeCommand(minDbm, maxDbm);
+        adoptClientOwnedDbmRange(applet->panId(), sw->panIndex(), minDbm, maxDbm);
     });
 
     // ── TNF signals ──────────────────────────────────────────────────────
@@ -4394,7 +4585,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
                 true, margin, true);
         } else {
             s->setSquelch(true, level);
-            sw->setSquelchLine(true, level);
+            sw->setSquelchLine(s->squelchOn(), s->squelchLevel());
         }
     });
     // Auto-squelch margin: now driven by the RX Applet's SQL slider when
@@ -4470,11 +4661,16 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     connect(menu, &SpectrumOverlayMenu::fftAverageChanged,
             this, [this, applet, sw](int v) {
         sw->setFftAverage(v);
-        m_radioModel.requestPanAverage(applet->panId(), v);
+        if (m_radioModel.requestPanAverage(applet->panId(), v)) {
+            scheduleClientFftAverageSave(sw->panIndex(), v, sw->fftWeightedAvg());
+        }
     });
     connect(menu, &SpectrumOverlayMenu::fftFpsChanged,
             this, [this, applet, sw](int v) {
         sw->setFftFps(v);  // always update restore target for when throttle lifts
+        // The operator's value, saved before the throttle test: the adaptive
+        // cap is transient and must not decide what is remembered.
+        scheduleClientFftFpsSave(sw->panIndex(), v);
         if (m_adaptiveThrottleActive)
             return;
         // Through the model, not a raw sendCommand: on a backend that streams
@@ -4489,6 +4685,8 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         if (!m_radioModel.requestLocalPanWeightedAverage(applet->panId(), on)) {
             m_radioModel.sendCommand(
                 QString("display pan set %1 weighted_average=%2").arg(applet->panId()).arg(on ? 1 : 0));
+        } else {
+            scheduleClientFftAverageSave(sw->panIndex(), sw->fftAverage(), on);
         }
     });
     connect(menu, &SpectrumOverlayMenu::wfColorSchemeChanged,
@@ -4750,6 +4948,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         sw->setWfAutoBlackRadioSide(false);
         sw->setWfLineDuration(100);
         scheduleClientWaterfallRateSave(sw->panIndex(), 100);
+        scheduleClientFftFpsSave(sw->panIndex(), 25);
         sw->setWfBlankerEnabled(false);
         sw->setWfBlankerThreshold(1.15f);
         sw->setWfBlankerMode(0);
@@ -4770,7 +4969,9 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         // so the reset doesn't fight the congestion-aware cap. The SpectrumWidget
         // values above (sw->setFftFps / sw->setWfLineDuration) are already updated,
         // so they become the new restore targets when the throttle lifts.
-        m_radioModel.requestPanAverage(applet->panId(), 0);
+        if (m_radioModel.requestPanAverage(applet->panId(), 0)) {
+            scheduleClientFftAverageSave(sw->panIndex(), 0, false);
+        }
         if (!m_radioModel.requestLocalPanWeightedAverage(applet->panId(), false)) {
             m_radioModel.sendCommand(
                 QString("display pan set %1 weighted_average=0").arg(applet->panId()));
@@ -5014,6 +5215,12 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     // Center Lock stands down for the whole duration of a slice drag so it
     // doesn't fight the drag (in-window tune or edge auto-pan) with per-tick
     // recenters; on release it recenters once so the locked pan re-asserts.
+    connect(sw, &SpectrumWidget::sliceDragCancelled, this, [this]() {
+        m_sliceDragInProgress = false;
+        m_sliceDragTargetSliceId = -1;
+        m_sliceDragTargetMhz = 0.0;
+        m_sliceDragEchoHoldUntilMs = 0;
+    });
     connect(sw, &SpectrumWidget::sliceDragActiveChanged, this, [this](bool active) {
         m_sliceDragInProgress = active;
         if (active) {
@@ -6162,8 +6369,16 @@ void MainWindow::wireMeters()
         m_appletPanel->setCrossNeedleDirectionalValues(
             fwd, reflected, swrValid ? swr : 1.0f, reflectedPowerMeasured);
     });
+    // The S-meter's TX "Level" face reads the first argument: MICPEAK on a
+    // radio that publishes no MIC meter (HL2).
     connect(&m_radioModel.meterModel(), &MeterModel::micMetersChanged,
-            m_appletPanel->sMeterWidget(), &SMeterWidget::setMicMeters);
+            m_appletPanel->sMeterWidget(),
+            [this](float micLevel, float compLevel, float micPeak, float compPeak) {
+        const MeterModel& meters = m_radioModel.meterModel();
+        m_appletPanel->sMeterWidget()->setMicMeters(
+            meters.transmitLevelFaceValue(micLevel, micPeak),
+            compLevel, micPeak, compPeak);
+    });
     connect(&m_radioModel.transmitModel(), &TransmitModel::moxChanged,
             m_appletPanel, &AppletPanel::setMeterTransmitting);
 
@@ -6210,11 +6425,20 @@ void MainWindow::wireMeters()
         updateStatusBarMinimumWidth();
         // Auto-connect/disconnect direct TGXL connection for manual relay control (#469)
         if (present) {
-            QString ip = m_radioModel.tunerModel().tgxlIp();
-            if (!ip.isEmpty() && !m_tgxlConn.isConnected()) {
-                m_tgxlConn.connectToTgxl(ip);
+            const AppSettings& settings = AppSettings::instance();
+            QString ip = settings.value("TGXL_ManualIp", "").toString().trimmed();
+            const quint16 port = ip.isEmpty() ? 9010
+                : static_cast<quint16>(settings.value("TGXL_ManualPort", "9010").toInt());
+            if (ip.isEmpty()) {
+                ip = m_radioModel.tunerModel().tgxlIp();
             }
-        } else {
+            if (!ip.isEmpty() && !m_tgxlConn.isConnected()
+                && PeripheralSettings::autoConnect(QStringLiteral("tgxl"))) {
+                if (!m_tgxlConn.isConnecting() && !m_tgxlConn.isAuthBlocked()) {
+                    m_tgxlConn.autoConnectToTgxl(ip, port);
+                }
+            }
+        } else if (AppSettings::instance().value("TGXL_ManualIp", "").toString().trimmed().isEmpty()) {
             m_tgxlConn.disconnect();
         }
     });
@@ -6227,11 +6451,146 @@ void MainWindow::wireMeters()
         m_acomConn.setAutoReconnect(ar);
         m_speConn.setAutoReconnect(ar);
         m_vkampConn.setAutoReconnect(ar);
+        m_kpa1500Conn.setAutoReconnect(ar);
         m_lpMeterConn.setAutoReconnect(ar);
     }
 
     // Wire TgxlConnection to TunerModel
     m_radioModel.tunerModel().setDirectConnection(&m_tgxlConn);
+    // Ordinary peripherals connect immediately. An AUTH greeting alone asks
+    // the OS vault; the attempt token discards replies to an abandoned socket.
+    connect(&m_tgxlConn, &TgxlConnection::authCodeRequired, this,
+            [this](quint64 attempt) {
+        PeripheralAuthStore::load(PeripheralAuthStore::Device::Tgxl,
+            PeripheralAuthStore::endpoint(m_tgxlConn.attemptHost(), m_tgxlConn.peerAddress(), m_tgxlConn.peerPort()), this,
+            [this, attempt](const PeripheralAuthStore::LoadResult& result) {
+                m_tgxlConn.setAuthCodeForAttempt(attempt, result.code,
+                    result.status == PeripheralAuthStore::LoadStatus::Unavailable);
+            });
+    });
+    connect(&m_pgxlConn, &PgxlConnection::authCodeRequired, this,
+            [this](quint64 attempt) {
+        PeripheralAuthStore::load(PeripheralAuthStore::Device::Pgxl,
+            PeripheralAuthStore::endpoint(m_pgxlConn.attemptHost(), m_pgxlConn.peerAddress(), m_pgxlConn.peerPort()), this,
+            [this, attempt](const PeripheralAuthStore::LoadResult& result) {
+                m_pgxlConn.setAuthCodeForAttempt(attempt, result.code,
+                    result.status == PeripheralAuthStore::LoadStatus::Unavailable);
+            });
+    });
+    connect(&m_antennaGenius, &AntennaGeniusModel::authCodeRequired, this,
+            [this](quint64 attempt) {
+        PeripheralAuthStore::load(PeripheralAuthStore::Device::AntennaGenius,
+            PeripheralAuthStore::endpoint(m_antennaGenius.attemptHost(), m_antennaGenius.peerAddress(), m_antennaGenius.peerPort()), this,
+            [this, attempt](const PeripheralAuthStore::LoadResult& result) {
+                m_antennaGenius.setAuthCodeForAttempt(attempt, result.code,
+                    result.status == PeripheralAuthStore::LoadStatus::Unavailable);
+            });
+    });
+    // Persist a newly entered code only after an AUTH reply accepts it.
+    // A rejected typo must not replace a previously working keychain entry.
+    const auto saveAcceptedCode = [this](PeripheralAuthStore::Device device,
+                                         const QString& endpoint, const QString& code) {
+        PeripheralAuthStore::save(device, endpoint, code, this, [this](bool ok) {
+            if (!ok && PeripheralAuthStore::persistentStoreAvailable()) {
+                statusBar()->showMessage(
+                    tr("Authorization code could not be saved; it works for this session only."),
+                    15000);
+            }
+        });
+    };
+    connect(&m_tgxlConn, &TgxlConnection::authCodeAccepted, this,
+            [this, saveAcceptedCode](const QString& code) {
+        saveAcceptedCode(PeripheralAuthStore::Device::Tgxl,
+            PeripheralAuthStore::endpoint(m_tgxlConn.attemptHost(), m_tgxlConn.peerAddress(), m_tgxlConn.peerPort()), code);
+    });
+    connect(&m_pgxlConn, &PgxlConnection::authCodeAccepted, this,
+            [this, saveAcceptedCode](const QString& code) {
+        saveAcceptedCode(PeripheralAuthStore::Device::Pgxl,
+            PeripheralAuthStore::endpoint(m_pgxlConn.attemptHost(), m_pgxlConn.peerAddress(), m_pgxlConn.peerPort()), code);
+    });
+    connect(&m_antennaGenius, &AntennaGeniusModel::authCodeAccepted, this,
+            [this, saveAcceptedCode](const QString& code) {
+        saveAcceptedCode(PeripheralAuthStore::Device::AntennaGenius,
+            PeripheralAuthStore::endpoint(m_antennaGenius.attemptHost(), m_antennaGenius.peerAddress(), m_antennaGenius.peerPort()), code);
+    });
+    const auto showBlockedConnection = [this](const QString& device,
+                                               const QString& reason, bool blocked) {
+        if (blocked) {
+            statusBar()->showMessage(device + ": " + reason, 15000);
+        }
+    };
+    connect(&m_tgxlConn, &TgxlConnection::connectionFailed, this,
+            [this, showBlockedConnection](const QString& reason) {
+        const bool blocked = m_tgxlConn.isAuthBlocked();
+        if (blocked) {
+            m_appletPanel->tunerApplet()->setDirectFailureReason(reason);
+        }
+        showBlockedConnection("TGXL", reason, blocked);
+    });
+    connect(&m_pgxlConn, &PgxlConnection::connectionFailed, this,
+            [this, showBlockedConnection](const QString& reason) {
+        const bool blocked = m_pgxlConn.isAuthBlocked();
+        if (blocked) {
+            m_appletPanel->ampApplet()->setDirectFailureReason(reason);
+        }
+        showBlockedConnection("PGXL", reason, blocked);
+    });
+    connect(&m_antennaGenius, &AntennaGeniusModel::connectionError, this,
+            [this, showBlockedConnection](const QString& reason) {
+        const QString device = AntennaGeniusModel::isShackSwitch(m_antennaGenius.connectedDevice())
+            ? QStringLiteral("ShackSwitch") : QStringLiteral("Antenna Genius");
+        showBlockedConnection(device, reason, m_antennaGenius.isAuthBlocked());
+    });
+    connect(&m_tgxlConn, &TgxlConnection::authBlockCleared, this, [this]() {
+        m_appletPanel->tunerApplet()->setDirectFailureReason(QString());
+    });
+    connect(&m_pgxlConn, &PgxlConnection::authBlockCleared, this, [this]() {
+        m_appletPanel->ampApplet()->setDirectFailureReason(QString());
+    });
+    connect(&m_tgxlConn, &TgxlConnection::connected, this, [this]() {
+        m_appletPanel->tunerApplet()->setDirectFailureReason(QString());
+    });
+    // A saved manual address can go stale while the radio still reports the
+    // device. When an automatic connect to it never reaches the device, try
+    // the radio-reported address once, on the default port, as an alternate:
+    // reconnects keep aiming at the manual address. Queued, so the failed
+    // socket finishes its error handling before the next attempt starts.
+    {
+        auto tgxlFallbackTried = std::make_shared<bool>(false);
+        auto pgxlFallbackTried = std::make_shared<bool>(false);
+        connect(&m_tgxlConn, &TgxlConnection::connected, this,
+                [tgxlFallbackTried]() { *tgxlFallbackTried = false; });
+        connect(&m_pgxlConn, &PgxlConnection::connected, this,
+                [pgxlFallbackTried]() { *pgxlFallbackTried = false; });
+        connect(&m_tgxlConn, &TgxlConnection::unreachable, this,
+                [this, tgxlFallbackTried](const QString& attemptedHost) {
+            if (m_tgxlConn.isConnected() || m_tgxlConn.isConnecting()) return;
+            const QString host = peripheralFallbackHost(
+                attemptedHost,
+                AppSettings::instance().value("TGXL_ManualIp", "").toString(),
+                m_radioModel.tunerModel().tgxlIp(),
+                m_tgxlConn.isAuthBlocked(), *tgxlFallbackTried);
+            if (!host.isEmpty() && m_radioModel.tunerModel().isPresent()
+                && PeripheralSettings::autoConnect(QStringLiteral("tgxl"))) {
+                *tgxlFallbackTried = true;
+                m_tgxlConn.tryAlternateTgxl(host, 9010);
+            }
+        }, Qt::QueuedConnection);
+        connect(&m_pgxlConn, &PgxlConnection::unreachable, this,
+                [this, pgxlFallbackTried](const QString& attemptedHost) {
+            if (m_pgxlConn.isConnected() || m_pgxlConn.isConnecting()) return;
+            const QString host = peripheralFallbackHost(
+                attemptedHost,
+                AppSettings::instance().value("PGXL_ManualIp", "").toString(),
+                m_radioModel.amplifier().ip(),
+                m_pgxlConn.isAuthBlocked(), *pgxlFallbackTried);
+            if (!host.isEmpty() && m_radioModel.amplifier().present()
+                && PeripheralSettings::autoConnect(QStringLiteral("pgxl"))) {
+                *pgxlFallbackTried = true;
+                m_pgxlConn.tryAlternatePgxl(host, 9008);
+            }
+        }, Qt::QueuedConnection);
+    }
     // OPERATE / STANDBY / BYPASS on a TGXL reached by manual IP only: no radio
     // relays them, nothing was sent. Every surface (applet keys, the status-bar
     // cycle, the SWR sweep's bypass) funnels through TunerModel, so one
@@ -6249,6 +6608,9 @@ void MainWindow::wireMeters()
     // on.
     m_radioModel.amplifier().setDirectConnection(&m_pgxlConn);
     m_appletPanel->ampApplet()->setAmpModel(&m_radioModel.amplifier());
+    connect(&m_radioModel, &RadioModel::connectionStateChanged,
+            m_appletPanel->ampApplet(), &AmpApplet::setRadioConnected);
+    m_appletPanel->ampApplet()->setRadioConnected(m_radioModel.isConnected());
     // ACOM deliberately does NOT route through AmpModel — it has its own
     // dedicated AcomApplet talking straight to AcomConnection (commands and
     // telemetry alike), so AmpModel stays 100% PGXL/Flex-relay-only. Wiring
@@ -6259,22 +6621,47 @@ void MainWindow::wireMeters()
     // Also attempt connection when TGXL IP arrives (may come after presence)
     connect(&m_radioModel.tunerModel(), &TunerModel::stateChanged, this, [this]() {
         auto* tuner = &m_radioModel.tunerModel();
-        if (tuner->isPresent() && !tuner->tgxlIp().isEmpty() && !m_tgxlConn.isConnected()) {
-            m_tgxlConn.connectToTgxl(tuner->tgxlIp());
+        if (tuner->isPresent() && !m_tgxlConn.isConnected()) {
+            const AppSettings& settings = AppSettings::instance();
+            QString ip = settings.value("TGXL_ManualIp", "").toString().trimmed();
+            const quint16 port = ip.isEmpty() ? 9010
+                : static_cast<quint16>(settings.value("TGXL_ManualPort", "9010").toInt());
+            if (ip.isEmpty()) {
+                ip = tuner->tgxlIp();
+            }
+            if (!ip.isEmpty() && !m_tgxlConn.isConnecting() && !m_tgxlConn.isAuthBlocked()
+                && PeripheralSettings::autoConnect(QStringLiteral("tgxl"))) {
+                m_tgxlConn.autoConnectToTgxl(ip, port);
+            }
         }
     });
 
     // Auto-connect to PGXL when detected
     connect(&m_radioModel.amplifier(), &AmpModel::presenceChanged, this, [this](bool present) {
-        if (present && !m_radioModel.amplifier().ip().isEmpty() && !m_pgxlConn.isConnected()) {
-            m_pgxlConn.connectToPgxl(m_radioModel.amplifier().ip());
-        } else if (!present) {
+        if (present && !m_pgxlConn.isConnected()) {
+            const AppSettings& settings = AppSettings::instance();
+            QString ip = settings.value("PGXL_ManualIp", "").toString().trimmed();
+            const quint16 port = ip.isEmpty() ? 9008
+                : static_cast<quint16>(settings.value("PGXL_ManualPort", "9008").toInt());
+            if (ip.isEmpty()) {
+                ip = m_radioModel.amplifier().ip();
+            }
+            if (!ip.isEmpty() && !m_pgxlConn.isConnecting() && !m_pgxlConn.isAuthBlocked()
+                && PeripheralSettings::autoConnect(QStringLiteral("pgxl"))) {
+                m_pgxlConn.autoConnectToPgxl(ip, port);
+            }
+        } else if (!present && AppSettings::instance().value("PGXL_ManualIp", "")
+                                      .toString().trimmed().isEmpty()) {
             m_pgxlConn.disconnect();
         }
     });
     // PGXL status → AmpApplet (direct telemetry: vac, vdd, id, temp, hltemp, state, etc.)
     connect(&m_pgxlConn, &PgxlConnection::statusUpdated, this, [this](const QMap<QString, QString>& kvs) {
-        qCDebug(lcTuner) << "PGXL status:" << kvs;
+        QMap<QString, QString> logged = kvs;
+        if (logged.contains("authcode")) {
+            logged["authcode"] = QStringLiteral("<redacted>");
+        }
+        qCDebug(lcTuner) << "PGXL status:" << logged;
         auto* amp = m_appletPanel->ampApplet();
         // Heatsink temperatures, in degrees Celsius:
         //   `temp` is the PA heatsink.
@@ -6342,37 +6729,17 @@ void MainWindow::wireMeters()
     connect(&m_pgxlConn, &PgxlConnection::disconnected, this, [this]() {
         m_appletPanel->ampApplet()->setDirectConnected(false);
     });
-    // Radio amplifier status → AmpApplet telemetry (fallback path).
-    // The radio proxies PGXL telemetry fields (id, vac, vdd, meffa, state) in its
-    // amplifier status messages, so the applet keeps updating even when the direct
-    // PGXL TCP connection isn't established.  When direct TCP IS connected, that
-    // path is faster and higher-precision (the radio rebroadcast may round/lag),
-    // so we skip the radio fallback to avoid display jitter from two paths
-    // alternately writing slightly-different values.
-    connect(&m_radioModel.amplifier(), &AmpModel::telemetryUpdated,
-            this, [this](const QMap<QString, QString>& kvs) {
-        if (m_pgxlConn.isConnected()) return;
-        auto* amp = m_appletPanel->ampApplet();
-        // A FlexRadio relays no temperature in the amplifier status at all:
-        // the PA heatsink temperature arrives as the AMP `TEMP` meter
-        // (MeterModel::ampMetersChanged, below). The Harmonic Load heatsink
-        // temperature is available only over a direct connection to the PGXL.
-        if (kvs.contains("id"))
-            amp->setDrainCurrent(kvs["id"].toFloat());
-        if (kvs.contains("vdd"))
-            amp->setDrainVoltage(kvs["vdd"].toFloat());
-        if (kvs.contains("vac"))
-            amp->setMainsVoltage(kvs["vac"].toInt());
-        // The RELAYED MEffA state. This is the only place it appears on a
-        // station with no direct port-9008 socket, so it reads out — but it
-        // stays inert, because a write needs the rest of the `setup` group and
-        // only the socket can read that. See AmpApplet::setMeff.
-        if (kvs.contains("meffa"))
-            amp->setMeff(kvs["meffa"]);
-    });
+    // No PGXL telemetry is read from the radio's amplifier status. On a
+    // FLEX-8600 (SmartSDR 4.2.20) with a PGXL on firmware 3.9.8, that status
+    // carries only ip, model, serial_num, ant and state, both idle and while
+    // transmitting. The readings the radio does relay arrive as meters: FWD,
+    // RL, DRV, ID and TEMP (see the MeterModel connections below). Vdd, Vac,
+    // the Harmonic Load heatsink temperature, fan mode and MEffA are
+    // available only over the direct connection. See
+    // docs/pgxl-telemetry-source-evidence.md.
     // Fan mode is sent via AmpModel (wired in AmpApplet::setAmpModel), because
-    // a `setup` write carries the whole group (nickname, meffa, ledintens,
-    // fanmode, authcode) and a fanmode-only write would drop the rest.
+    // a `setup` write carries the whole group (see AmpModel::writeSetupGroup)
+    // and a fanmode-only write would drop the rest.
     // OPERATE button → standby/operate via the radio's amplifier API
     // (AmpModel::setOperate; no-op without an amp handle) (#4094).
     connect(m_appletPanel->ampApplet(), &AmpApplet::operateToggled, this, [this](bool on) {
@@ -6741,6 +7108,66 @@ void MainWindow::wireMeters()
         m_appletPanel->vkampApplet()->setVariant(static_cast<AetherSDR::Vkamp::Variant>(savedVariant));
     }
 
+    // ── Elecraft KPA1500 — direct TCP, no FlexRadio relay (#4097) ────────
+    // See docs/architecture/kpa1500-amplifier-design.md. Same structure and
+    // the same ordering rule as the ACOM/SPE/VKAMP blocks above: ALL signal
+    // wiring first, the auto-connect trigger LAST, so nothing misses the
+    // first connected().
+    //
+    // Deliberately absent from this block: any transmit-path wiring. The
+    // amp's `^TX` network keying is implemented in Kpa1500Connection but is
+    // not reachable from the UI or the engine, pending the maintainer
+    // decision on #4097 about whether Ethernet keying is trusted as the sole
+    // keying path. Constitution Principle VI — a path that can transmit
+    // fails closed when the operator's intent is not unambiguous.
+    connect(&m_kpa1500Conn, &Kpa1500Connection::connected, this, [this]() {
+        m_appletPanel->kpa1500Applet()->setConnected(true);
+        m_appletPanel->setKpa1500Visible(true);
+    });
+    connect(&m_kpa1500Conn, &Kpa1500Connection::disconnected, this, [this]() {
+        m_appletPanel->kpa1500Applet()->setConnected(false);
+        m_appletPanel->setKpa1500Visible(false);
+    });
+    connect(&m_kpa1500Conn, &Kpa1500Connection::statusUpdated, this,
+            [this](const AetherSDR::Kpa1500::Status& status) {
+        m_appletPanel->kpa1500Applet()->setStatus(status);
+    });
+    connect(m_appletPanel->kpa1500Applet(), &Kpa1500Applet::operateToggled, this,
+            [this](bool operate) {
+        m_kpa1500Conn.setOperate(operate);
+    });
+    // Starts or cancels the amp's full-search tune. The exciter must supply
+    // RF for it to finish; that stays with the operator (the radio's own
+    // TUNE), so nothing here keys the radio.
+    connect(m_appletPanel->kpa1500Applet(), &Kpa1500Applet::tuneRequested, this, [this]() {
+        m_kpa1500Conn.startTune();
+    });
+    connect(m_appletPanel->kpa1500Applet(), &Kpa1500Applet::tuneCancelRequested, this, [this]() {
+        m_kpa1500Conn.cancelTune();
+    });
+    connect(m_appletPanel->kpa1500Applet(), &Kpa1500Applet::atuInlineToggled, this,
+            [this](bool inLine) {
+        m_kpa1500Conn.setAtuInline(inLine);
+    });
+    connect(m_appletPanel->kpa1500Applet(), &Kpa1500Applet::antennaSelected, this,
+            [this](int port) {
+        m_kpa1500Conn.selectAntenna(port);
+    });
+    connect(m_appletPanel->kpa1500Applet(), &Kpa1500Applet::faultClearRequested, this, [this]() {
+        m_kpa1500Conn.clearFault();
+    });
+
+    // Startup auto-connect from saved Peripherals settings — same reasoning
+    // as ACOM/VK3AMP above: the Flex radio has no idea this amplifier
+    // exists, so the saved setting is the only trigger there will ever be.
+    {
+        const QString ip = PeripheralSettings::deviceString("Kpa1500", "ManualIp");
+        const int port = PeripheralSettings::deviceInt(
+            "Kpa1500", "ManualPort", AetherSDR::Kpa1500::kDefaultPort);
+        if (!ip.isEmpty())
+            m_kpa1500Conn.connectNetwork(ip, static_cast<quint16>(port));
+    }
+
     // ── LP-100A wattmeter — serial or ser2net, no FlexRadio relay ─────────
     // See docs/architecture/lp-100a-wattmeter-design.md. Same structure and
     // the same ordering rule as the ACOM/SPE/VKAMP blocks above: ALL signal
@@ -6912,17 +7339,30 @@ void MainWindow::wireMeters()
         updateStatusBarMinimumWidth();
         if (present) updatePgxlStyle();
     });
+    // Drain current and PA heatsink temperature, relayed by the radio as the
+    // PGXL's ID and TEMP meters. The applet prefers these while they are
+    // fresh and falls back to the PGXL's own values; see
+    // AmpApplet::setRadioDrainCurrent.
+    connect(&m_radioModel.meterModel(), &MeterModel::ampVitalsChanged,
+            this, [this](float drainCurrent, bool drainCurrentValid, bool drainCurrentUpdated,
+                         float paHeatsinkTemp, bool paHeatsinkTempValid,
+                         bool paHeatsinkTempUpdated) {
+        auto* amp = m_appletPanel->ampApplet();
+        // Each setter restamps its reading's freshness, so only the reading
+        // that arrived (or was withdrawn) is passed on.
+        if (drainCurrentUpdated || !drainCurrentValid)
+            amp->setRadioDrainCurrent(drainCurrent, drainCurrentValid);
+        if (paHeatsinkTempUpdated || !paHeatsinkTempValid)
+            amp->setRadioPaHeatsinkTemp(paHeatsinkTemp, paHeatsinkTempValid);
+    });
     connect(&m_radioModel.meterModel(), &MeterModel::ampMetersChanged,
-            this, [this](float fwdPwr, float swr, float temp,
+            this, [this](float fwdPwr, float swr, float /*temp*/,
                          float drivePwr, bool driveValid) {
         // hasAmpPower() says whether a forward-power or SWR sample has ever
         // landed. ampMetersChanged also fires for TEMP and DRV, and the applet
         // must not read those as the relay being the live source of power.
         m_appletPanel->ampApplet()->setRadioMeters(
             fwdPwr, swr, m_radioModel.meterModel().hasAmpPower());
-        // The radio's AMP TEMP meter is the PA heatsink temperature. It is
-        // the only temperature a FlexRadio relays.
-        m_appletPanel->ampApplet()->setPaHeatsinkTemp(temp);
         // Exciter power at the amplifier's input — the amp's own DRV meter,
         // relayed by the radio. There is no second source for it: the PGXL's
         // port-9008 status carries no drive field (probed on firmware 3.8.9;
@@ -7161,7 +7601,7 @@ void MainWindow::applySplitOffsetKHz(double offsetKHz, int rxSliceId)
 
 // The split audio arrangement is learned from what the operator does (TX
 // unmute, pans, TX gain) and replayed next split; nothing is configured.
-// Learned only from the *CommandIssued signals: the *Changed signals also fire
+// Learned only from the typed audio intent signals: the *Changed signals also fire
 // on radio status (see SliceModel.h), so they would record radio state, other
 // clients or profile loads as the operator's preference.
 
@@ -7227,26 +7667,22 @@ void MainWindow::armSplitAudioMirror(SliceModel* rx, SliceModel* tx,
                   << "rxPanMovedByApply=" << applied.rxPanMoved
                   << "restored=" << applied.restored;
 
-    m_splitAudioConns.append(connect(tx, &SliceModel::audioMuteCommandIssued, this,
-        [this](bool mute) {
-            if (!m_splitAudioApplying) m_splitAudioRecorder.noteTxMute(mute);
-        }));
-    m_splitAudioConns.append(connect(tx, &SliceModel::audioGainCommandIssued, this,
-        [this](int gain) {
-            if (!m_splitAudioApplying) m_splitAudioRecorder.noteTxGain(gain);
-        }));
-    m_splitAudioConns.append(connect(tx, &SliceModel::audioPanCommandIssued, this,
-        [this](int pan) {
-            if (!m_splitAudioApplying) m_splitAudioRecorder.noteTxPan(pan);
+    m_splitAudioConns.append(connect(tx, &SliceModel::receiveAudioRequested, this,
+        [this](const SliceAudioRequest& request) {
+            if (!m_splitAudioApplying) {
+                m_splitAudioRecorder.noteTxAudioIntent(request);
+            }
         }));
     if (rx) {
         // RX pan only. Its volume and mute are the operator's everyday
         // listening level and stay out of this entirely (#2242) — a split must
         // not come back later and change how the radio sounds the rest of the
         // time.
-        m_splitAudioConns.append(connect(rx, &SliceModel::audioPanCommandIssued, this,
-            [this](int pan) {
-                if (!m_splitAudioApplying) m_splitAudioRecorder.noteRxPan(pan);
+        m_splitAudioConns.append(connect(rx, &SliceModel::receiveAudioRequested, this,
+            [this](const SliceAudioRequest& request) {
+                if (!m_splitAudioApplying) {
+                    m_splitAudioRecorder.noteRxAudioIntent(request);
+                }
             }));
     }
 }

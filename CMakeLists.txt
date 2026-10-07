@@ -7,7 +7,7 @@ if(POLICY CMP0156)
     cmake_policy(SET CMP0156 NEW)
 endif()
 
-project(AetherSDR VERSION 26.9.5 LANGUAGES C CXX)
+project(AetherSDR VERSION 26.10.1 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -143,6 +143,27 @@ if(NOT AETHERSDR_SANITIZER STREQUAL "none")
     message(STATUS "AetherSDR: sanitizer = ${AETHERSDR_SANITIZER} (whole tree)")
     unset(_aether_san_list)
 endif()
+# Build libaethercore as one shared library instead of a static archive. The
+# ~250 test executables that link the core each absorb a full static copy
+# (~200 MB in a Debug ASan build), which exhausts a hosted runner's disk;
+# shared, they average ~13 MB. For the sanitizer lane and local review builds,
+# never for releases: the shipped app links the core statically.
+option(AETHER_SHARED_CORE "Build libaethercore as a shared library (sanitizer and review builds only)" OFF)
+if(AETHER_SHARED_CORE)
+    if(WIN32)
+        message(FATAL_ERROR "AETHER_SHARED_CORE is not supported on Windows")
+    endif()
+    # Vendored static libraries end up inside the shared core. Their symbols
+    # do not reach the core's consumers: a PRIVATE dependency stops at a
+    # shared library, and aether_wdsp is built with hidden visibility. A test
+    # that calls WDSP directly while linking only aethercore links against
+    # the static core and fails here; go through core/dsp/WdspChannel.h.
+    set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+    set(_aether_core_library_type SHARED)
+    message(STATUS "AetherSDR: libaethercore built SHARED (AETHER_SHARED_CORE)")
+else()
+    set(_aether_core_library_type STATIC)
+endif()
 option(ENABLE_RTL "Enable the experimental receive-only RTL-SDR backend" ON)
 # Which SSB modulator the Hermes-Lite 2 transmit path is BUILT with. There is
 # no runtime switch and there must not be one: two silent transmit paths are
@@ -249,6 +270,44 @@ endif()
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE RelWithDebInfo)
 endif()
+
+# RelWithDebInfo uses -g1 on GCC/Clang: line tables and function names, so
+# backtraces and core dumps still symbolize, without the full DWARF that made
+# test binaries 100-400 MB each (#6214). Only CMake's untouched default is
+# replaced, and only while CFLAGS/CXXFLAGS (or CMAKE_<LANG>_FLAGS) set no debug
+# level of their own: the TSan lane injects -g3, which RelWithDebInfo's flags
+# would otherwise override. The value is cached, so _AETHER_<LANG>_RWD_G1
+# records that this block wrote it; when a later reconfigure adds a -g, the
+# block puts CMake's default back rather than leave its -g1 overriding it. An
+# explicit -DCMAKE_<LANG>_FLAGS_RELWITHDEBINFO wins, MSVC's /Zi flags never
+# match, and Release builds are unaffected. For locals and types in a
+# debugger, build Debug.
+set(_aether_rwd_cmake "-O2 -g -DNDEBUG")
+set(_aether_rwd_g1 "-O2 -g1 -DNDEBUG")
+foreach(_lang C CXX)
+    if(NOT CMAKE_${_lang}_COMPILER_ID MATCHES "GNU|Clang")
+        continue()
+    endif()
+    set(_rwd CMAKE_${_lang}_FLAGS_RELWITHDEBINFO)
+    if(NOT "${${_rwd}}" STREQUAL "${_aether_rwd_g1}")
+        # Someone else set the value since; it is theirs now.
+        set(_AETHER_${_lang}_RWD_G1 OFF CACHE INTERNAL "")
+    endif()
+    if(CMAKE_${_lang}_FLAGS MATCHES "(^|[ \t])-g")
+        if(_AETHER_${_lang}_RWD_G1)
+            set(${_rwd} "${_aether_rwd_cmake}" CACHE STRING
+                "Flags used by the compiler during RELWITHDEBINFO builds." FORCE)
+            set(_AETHER_${_lang}_RWD_G1 OFF CACHE INTERNAL "")
+        endif()
+    elseif("${${_rwd}}" STREQUAL "${_aether_rwd_cmake}")
+        set(${_rwd} "${_aether_rwd_g1}" CACHE STRING
+            "Flags used by the compiler during RELWITHDEBINFO builds." FORCE)
+        set(_AETHER_${_lang}_RWD_G1 ON CACHE INTERNAL "")
+    endif()
+endforeach()
+unset(_aether_rwd_cmake)
+unset(_aether_rwd_g1)
+unset(_rwd)
 
 # Qt6 components
 # Qt 6.12 minimum: the same Qt every release artifact and every CI leg builds
@@ -787,8 +846,8 @@ endif()
 # The settings store (RFC #4603): AppSettings' implementation spans the SQLite
 # wrapper, path helpers, pre-QApplication bootstrap reader, and the sanitizer.
 # Every target that compiles AppSettings.cpp needs the whole group — and the
-# vendored engine, linked by the AETHER_SETTINGS_CONSUMERS loop near the end
-# of this file.
+# vendored engine, linked by the AETHER_SETTINGS_CONSUMERS loop in
+# tests/tests.cmake.
 set(AETHER_SETTINGS_SOURCES
     src/core/AppSettings.cpp
     src/core/SettingsDatabase.cpp
@@ -875,10 +934,15 @@ set(CORE_SOURCES
     src/core/backends/icom/IcomCredentials.cpp # password -> keychain, NEVER settings
     src/core/dsp/FftwPlannerLock.cpp # the one process-global FFTW planner lock (#5895)
     src/core/dsp/WdspChannel.cpp
+    src/core/backends/rtl/RtlCaptureTransaction.cpp
+    src/core/backends/rtl/RtlReceivePipeline.cpp
+    src/core/backends/rtl/RtlAudioMixer.cpp
+    src/core/backends/rtl/RtlRfExtractor.cpp
     src/core/backends/rtl/RtlReceiverRegistry.cpp # RFC #5468 prepared receiver ownership; no USB dependency
     ${AETHER_SETTINGS_SOURCES}
     src/core/RadioStateMemory.cpp   # RFC #4603 client-side radio memory
     src/core/RtlSliceSettings.cpp   # RFC #5468 persistence foundation
+    src/core/RtlDeviceSettings.cpp  # accepted per-device calibration and IQ controls
     src/core/GpuSelector.cpp
     src/core/QtAudioBackendGuard.cpp  # pre-QApplication: keeps Qt 6.12 off a crashing PipeWire backend
     src/core/AgcTCalibrator.cpp
@@ -938,6 +1002,12 @@ set(CORE_SOURCES
     src/core/PerfTelemetry.cpp
     src/core/MemoryTelemetry.cpp
     src/core/RigctlProtocol.cpp
+    src/core/ByteRelay.cpp
+    src/core/TcpByteProxy.cpp
+    src/core/Ctr2HidFraming.cpp
+    src/core/Ctr2HidPort.cpp
+    src/core/Ctr2HidThreadPort.cpp
+    src/core/Ctr2UsbRelay.cpp
     src/core/SmartCatProtocol.cpp
     src/core/SmartCatSession.cpp
     src/core/CatPort.cpp
@@ -982,6 +1052,8 @@ set(CORE_SOURCES
     src/core/SpeConnection.cpp
     src/core/VkampProtocol.cpp
     src/core/VkampConnection.cpp
+    src/core/Kpa1500Protocol.cpp
+    src/core/Kpa1500Connection.cpp
     src/core/LpMeterProtocol.cpp
     src/core/LpMeterConnection.cpp
     src/core/FirmwareUploader.cpp
@@ -1097,6 +1169,7 @@ set(MODEL_SOURCES
     src/models/TxController.cpp
     src/models/DeclaredBands.cpp
     src/models/RadioSession.cpp
+    src/models/ReceiverSlotCount.cpp
     src/models/ModelCapabilities.cpp
     src/models/AntennaAliasStore.cpp
     src/models/SliceModel.cpp
@@ -1122,6 +1195,7 @@ set(MODEL_SOURCES
     src/models/AntennaGeniusModel.cpp
     src/models/GreenHeronModel.cpp
     src/models/AetherClockModel.cpp
+    src/models/Ctr2ProxyModel.cpp
 )
 
 # Vendored QGeoView (LGPL-3.0) — slippy-map widget for the common
@@ -1130,7 +1204,6 @@ set(MODEL_SOURCES
 add_subdirectory(third_party/QGeoView/lib EXCLUDE_FROM_ALL)
 
 set(GUI_SOURCES
-    src/gui/Contribute.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/MainWindow.cpp
     src/gui/MainWindowHelpers.cpp
@@ -1197,6 +1270,8 @@ set(GUI_SOURCES
     src/gui/SmartMtrConfig.cpp
     src/gui/MeterViewController.cpp
     src/gui/RadioSetupDialog.cpp
+    src/gui/RtlReceiverSettingsWidget.cpp
+    src/gui/RadioSetupDialog_Peripherals.cpp
     src/gui/NetworkDiagnosticsDialog.cpp
     src/gui/SystemInfoDialog.cpp
     src/gui/Ax25HfPacketDecodeDialog.cpp
@@ -1244,12 +1319,15 @@ set(GUI_SOURCES
     src/gui/SpeApplet.cpp
     src/gui/SpeLcdWidget.cpp
     src/gui/VkampApplet.cpp
+    src/gui/Kpa1500Applet.cpp
     src/gui/LpMeterApplet.cpp
+    src/gui/Ctr2ProxyApplet.cpp
     src/gui/MeterApplet.cpp
     src/gui/ProfileSwitcherApplet.cpp
     src/gui/RadeApplet.cpp
     src/gui/HealthApplet.cpp
     src/gui/PersistentDialog.cpp
+    src/gui/CanonWindow.cpp
     src/gui/FramelessMessageBox.cpp
     src/gui/ProfileManagerDialog.cpp
     src/gui/SettingsBrowserDialog.cpp
@@ -1364,6 +1442,9 @@ set(GUI_SOURCES
     src/gui/ShackSwitchApplet.cpp
     src/gui/GreenHeronApplet.cpp
     src/gui/TitleBar.cpp
+    src/gui/BrandMark.cpp
+    src/gui/RadioTabBar.cpp
+    src/gui/WindowCaptionButtons.cpp
     src/gui/SupportDialog.cpp
     src/gui/SliceTroubleshootingDialog.cpp
     src/gui/RadioHealthDialog.cpp
@@ -1565,7 +1646,7 @@ add_subdirectory(third_party/wdsp EXCLUDE_FROM_ALL)
 # their feature blocks). Qt resources (resources.qrc, DFNR model qrc) stay on
 # the executable: rcc registration runs from the exe's static initializers and
 # is process-global, so core code reading ":/..." keeps working.
-add_library(aethercore STATIC
+add_library(aethercore ${_aether_core_library_type}
     ${CORE_SOURCES}
     ${MODEL_SOURCES}
     ${RNNOISE_SOURCES}
@@ -1580,6 +1661,7 @@ target_link_libraries(aethercore PRIVATE aether::wdsp)
 # desktop executable and the automation test harnesses on the same linkage path
 # without pulling QtWidgets into the headless engine.
 add_library(aetherdesktop_support STATIC
+    src/gui/PeripheralAuthStore.cpp
     src/gui/TxPointerAction.cpp
     src/core/AutomationServer.cpp
     src/core/SettingsHelpers.cpp
@@ -2264,6 +2346,8 @@ endif()
 # macOS app bundle
 if(APPLE)
     target_sources(AetherSDR PRIVATE src/MacStartupAbortGuard.cpp)
+    target_sources(AetherSDR PRIVATE src/gui/mac/NativeWindowTitle.mm)
+    target_link_libraries(AetherSDR PRIVATE "-framework AppKit")
     set_target_properties(AetherSDR PROPERTIES
         MACOSX_BUNDLE TRUE
         MACOSX_BUNDLE_GUI_IDENTIFIER "com.aethersdr.AetherSDR"
@@ -2742,7 +2826,9 @@ if(HIDAPI_FOUND)
         src/core/HidEncoderManager.cpp
         src/core/HidEncoderManager.h
         src/core/HidDeviceParser.cpp
-        src/core/HidDeviceParser.h)
+        src/core/HidDeviceParser.h
+        src/core/Ctr2HidapiPort.cpp
+        src/core/Ctr2HidapiPort.h)
     target_sources(AetherSDR PRIVATE
         src/gui/RC28MappingDialog.cpp
         src/gui/RC28MappingDialog.h)
@@ -3325,6 +3411,11 @@ else()
                 DESTINATION lib/udev/rules.d
             )
         endif()
+    endif()
+    if(LINUX AND HIDAPI_FOUND)
+        install(FILES packaging/linux/70-aethersdr-ctr2.rules
+            DESTINATION lib/udev/rules.d
+        )
     endif()
     if(LINUX AND AETHER_BACKEND_RTL)
         install(FILES packaging/linux/70-rtl-sdr.rules

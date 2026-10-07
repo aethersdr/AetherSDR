@@ -326,6 +326,8 @@ AnanBackend::AnanBackend(QObject* parent)
         publishLegacyAudio(bytes);
         sendSpeakerAudioToRadio(bytes);
     });
+    // Ungated by design: m_dsp emits on m_ioThread, the thread that emits linkDown,
+    // so every frame is delivered before disconnected() (contract rule 6).
     connect(m_dsp, &AnanRxDsp::spectrumReady, this, [this](const std::vector<float>& binsDbfs) {
         std::vector<float> dbm(binsDbfs.size());
         // Attenuation added back, as deskHPSDR does for its panadapter: a
@@ -372,6 +374,12 @@ RadioCapabilities AnanBackend::capabilities() const
     c.family = QStringLiteral("anan");
     // No setTune() implementation, so no tune generator to select a mode on.
     c.twoToneGenerator = std::nullopt;
+    // No VOX, monitor or speech-processor setters. PROC would be the host
+    // ClientComp, but canTransmit is false below, so nothing serves it and the
+    // drop notice correctly stands.
+    c.voxControl = std::nullopt;
+    c.speechProcessorControl = std::nullopt;
+    c.txMonitorControl = std::nullopt;
     // The panadapter dBm axis is dBFS with a dBm label: kUncalibratedDbfsToDbmOffset
     // is 0.0f and bin levels depend on window/normalisation, unverified against a
     // known input. Internally consistent, but not comparable: never publish as a
@@ -382,7 +390,10 @@ RadioCapabilities AnanBackend::capabilities() const
     // The bins are raw dBFS + 0, so they are ABSOLUTE: nothing in them depends on
     // the display reference level, and the auto-floor loop converges.
     amplitude.binsAbsolute = true;
+    amplitude.clientPersistsDbmRange = false;  // no client owner is declared
     c.panAmplitude = amplitude;
+    // No measured squelch map; the SQL line and Auto SQL keep Flex's scale.
+    c.squelchLevelScale = legacyDbmSquelchScale();
 
     // Span follows the sample rate: it snaps by ratio to one of the six DDC0 rates
     // (no continuous zoom); panBandwidthLimitsChanged clamps to that list's ends.
@@ -425,7 +436,7 @@ RadioCapabilities AnanBackend::capabilities() const
     // rather than left absent because the ownership answer is already known; it
     // populates no TransmitDelta::rfPower today, so nothing publishes drive yet.
     c.transmitDriveControl = RadioCapabilities::TransmitDriveControl{
-        SliceFrequencyControl::Authority::Engine};
+        SliceFrequencyControl::Authority::Engine, /*tunePowerAppliesLive=*/false};
     c.hasRadioPttReadback = false; // no PTT at all, so no readback either
     c.hasTuner = false;            // G2 has no internal ATU (Apache Labs spec)
     c.hasTunerMemories = false;    // no internal ATU, so no tuner-memory surface
@@ -435,7 +446,8 @@ RadioCapabilities AnanBackend::capabilities() const
     c.hasHostNoiseBlanker = true;  // WDSP ANB on the raw IQ, in AnanRxDsp
     c.radioOwnsDbmScale = false;   // client computes it from raw IQ
     c.hasDdcPanEdgeRolloff = true; // see RadioCapabilities.h's own comment
-    c.backendPanAveraging = BackendPanAveraging{kMsPerAverageStep}; // AnanPanAnalyzer
+    c.backendPanAveraging = BackendPanAveraging{kMsPerAverageStep, false, {}, {}}; // AnanPanAnalyzer
+    c.panFrameRateShaping = std::nullopt;  // no client owner is declared for FFT FPS
     // No band/segment zoom: the protocol carries no per-pan zoom flag.
     c.panZoomModes = std::nullopt;
     c.persistsMemories = false;    // default; stated explicitly
@@ -839,6 +851,18 @@ void AnanBackend::setSliceAgc(int sliceId, const QString& mode, int thresholdDb)
     emitSliceState();
 }
 
+ReceiveDispatch AnanBackend::requestSliceDsp(int sliceId, const SliceDspRequest& request)
+{
+    // #5824 already owns the worker and NB readback. The typed desktop route
+    // must consume that implementation, not replace it or invent other DSP.
+    if (sliceId != kSliceId || !request.valid()
+        || request.feature != SliceDspRequest::Feature::Nb) {
+        return ReceiveDispatch::Unsupported;
+    }
+    setSliceNoiseBlanker(sliceId, request.enabled, request.level);
+    return ReceiveDispatch::Dispatched;
+}
+
 void AnanBackend::setSliceNoiseBlanker(int sliceId, bool on, int level)
 {
     Q_UNUSED(sliceId);   // one slice in this phase
@@ -848,6 +872,20 @@ void AnanBackend::setSliceNoiseBlanker(int sliceId, bool on, int level)
         QMetaObject::invokeMethod(m_dsp, "setNoiseBlanker", Qt::QueuedConnection,
             Q_ARG(bool, m_nbOn), Q_ARG(int, m_nbLevel));
     }
+}
+
+ReceiveDispatch AnanBackend::requestSliceAudio(int sliceId, const SliceAudioRequest& request)
+{
+    if (sliceId != kSliceId || !request.valid()
+        || request.origin != SliceAudioRequest::Origin::Operator) {
+        return ReceiveDispatch::Unsupported;
+    }
+    switch (request.field) {
+    case SliceAudioRequest::Field::Gain: setSliceAudioGain(sliceId, request.value); break;
+    case SliceAudioRequest::Field::Mute: setSliceAudioMute(sliceId, request.value != 0); break;
+    case SliceAudioRequest::Field::Pan: setSliceAudioPan(sliceId, request.value); break;
+    }
+    return ReceiveDispatch::Dispatched;
 }
 
 void AnanBackend::setSliceAudioMute(int sliceId, bool mute)
@@ -1498,17 +1536,12 @@ void AnanBackend::sendSpeakerAudioToRadio(const QByteArray& stereoFloat)
     const float lineout = m_lineoutMuted ? 0.0f
                                          : sliceAudioAmplitude(m_lineoutGainPercent);
 
-    // Interleave and quantise. CLAMPED BEFORE SCALING: the converter is
-    // linear-phase and overshoots on transients, so a block that was inside
-    // [-1,1] going in can leave it, and an unclamped cast of that wraps sign --
-    // a loud transient becomes a full-scale click of the opposite polarity,
-    // which is far more audible than the clipping it replaces.
+    // Interleave and quantise. sliceAudioToInt16() carries the
+    // clamp-before-scale law and the non-finite guard, with the tests for both.
     m_speakerInterleaved.resize(outFrames * 2);
     for (std::size_t i = 0; i < outFrames; ++i) {
-        const float l = std::clamp(outL[i] * lineout, -1.0f, 1.0f);
-        const float r = std::clamp(outR[i] * lineout, -1.0f, 1.0f);
-        m_speakerInterleaved[i * 2] = static_cast<qint16>(l * 32767.0f);
-        m_speakerInterleaved[i * 2 + 1] = static_cast<qint16>(r * 32767.0f);
+        m_speakerInterleaved[i * 2] = sliceAudioToInt16(outL[i] * lineout);
+        m_speakerInterleaved[i * 2 + 1] = sliceAudioToInt16(outR[i] * lineout);
     }
 
     // One queued hand-off per block. P2Client owns the socket, the packetising

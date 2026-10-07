@@ -182,8 +182,9 @@ jobs:
           # No qtwayland entry, deliberately: it rides in the BASE package.
           # qt.qt6.<ver>.<arch>'s DownloadableArchives lists qtwayland-Linux-...7z
           # next to qtbase, so this install already lays down
-          # plugins/platforms/libqwayland-generic.so, libqwayland-egl.so and the
-          # three wayland-* integration dirs. There is no "qtwayland" module in
+          # plugins/platforms/libqwayland.so — Qt 6.12's single Wayland platform
+          # plugin (keys wayland, wayland-egl, wayland-brcm) — and the three
+          # wayland-* integration dirs. There is no "qtwayland" module in
           # the desktop repository — only qtwaylandcompositor — and aqt
           # hard-errors on an unknown module ("The packages ['qtwayland'] were
           # not found"), so naming one here fails the whole release build.
@@ -256,8 +257,14 @@ jobs:
           # (which also implies -eo pipefail) so the guard is self-contained and
           # survives anyone editing the step's shell.
           set -o pipefail
+          # -g on top of Release's -O3: GCC's code generation does not depend
+          # on it, so the shipped code is unchanged. The DWARF is split off
+          # before packaging and attached to the release as its own archive
+          # (docs/debugging-crashes.md).
           cmake -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
+            "-DCMAKE_C_FLAGS_RELEASE=-O3 -DNDEBUG -g" \
+            "-DCMAKE_CXX_FLAGS_RELEASE=-O3 -DNDEBUG -g" \
             -DCMAKE_INSTALL_PREFIX=/usr \
             -DREQUIRE_SERIALPORT=ON \
             -DREQUIRE_KEYCHAIN=ON \
@@ -297,6 +304,15 @@ jobs:
         # the AppImage never bundles and never runs — pure wasted build time.
         run: cmake --build build --target AetherSDR aether-dv-waveform -j$(nproc)
 
+      # Before Install: linuxdeploy strips everything it bundles. The build ID
+      # each debug file is keyed on survives install, patchelf and that strip;
+      # "Package debug symbols" below checks it on the AppImage itself.
+      - name: Split debug symbols
+        # Symbols are for us, not users: a failure here must not cost the release
+        # its installer. A missing archive surfaces as /tag-release's WARN.
+        continue-on-error: true
+        run: bash scripts/build/split-debug-symbols.sh symbols build/AetherSDR build/aether-dv-waveform
+
       - name: Install to AppDir
         run: |
           DESTDIR=${{ github.workspace }}/AppDir cmake --install build
@@ -321,11 +337,9 @@ jobs:
           cp -v "$QT_PLUGIN_PATH"/multimedia/* AppDir/usr/plugins/multimedia/
 
           # Bundle the Wayland client buffer integration. QT_QPA_PLATFORM=wayland
-          # resolves to platforms/libqwayland-generic.so (qwayland-generic.json
-          # declares Keys: ["wayland"]; the EGL *platform* plugin's key is
-          # "wayland-egl", so that name never selects it), and the generic plugin
-          # obtains OpenGL only through a client buffer integration plugin loaded
-          # from this directory — libqt-plugin-wayland-egl.so. Without it native
+          # resolves to platforms/libqwayland.so, which obtains OpenGL only
+          # through a client buffer integration plugin loaded from this
+          # directory — libqt-plugin-wayland-egl.so. Without it native
           # Wayland comes up with no GL at all, which matters because both legs
           # ship AETHER_GPU_SPECTRUM=ON.
           #
@@ -389,7 +403,7 @@ jobs:
           # wayland-decoration-client and wayland-shell-integration on its own —
           # only wayland-graphics-integration-client has to be staged by hand,
           # which the "Install to AppDir" step above does.
-          EXTRA_PLATFORM_PLUGINS: libqwayland-generic.so;libqwayland-egl.so
+          EXTRA_PLATFORM_PLUGINS: libqwayland.so
         run: |
           # Sanitize the ref for the output filename: a workflow_dispatch on a
           # branch like "ci/appimage-qtkeychain" puts a '/' in github.ref_name,
@@ -445,7 +459,7 @@ jobs:
             echo "Wayland platform plugin(s):"
             echo "$platform"
           fi
-          # The generic platform plugin gets OpenGL only through this one, and no
+          # The Wayland platform plugin gets OpenGL only through this one, and no
           # linuxdeploy variable deploys it — the "Install to AppDir" step stages
           # it by hand, so a typo there is silent without this check.
           if [ ! -f "$plugins/wayland-graphics-integration-client/libqt-plugin-wayland-egl.so" ]; then
@@ -472,14 +486,43 @@ jobs:
           echo "Wayland integration plugin dirs:"
           find "$plugins" -maxdepth 1 -type d -name 'wayland-*' | sort
 
+      # The archive is only worth attaching if its build IDs are the ones the
+      # AppImage actually ships, so read them back from the packaged binaries.
+      # .tar.xz on purpose: sign-release.yml downloads and checksums *.zip, so
+      # a .zip here would change SHA256SUMS.txt.
+      - name: Package debug symbols
+        continue-on-error: true   # never blocks the release; see "Split debug symbols"
+        run: |
+          set -euo pipefail
+          SAFE_REF="${GITHUB_REF_NAME//[^A-Za-z0-9._-]/_}"
+          "./AetherSDR-${SAFE_REF}-${{ matrix.arch }}.AppImage" --appimage-extract > /dev/null
+          while read -r name _ id _; do
+            shipped=$(find squashfs-root -type f -name "$name" -print -quit)
+            [ -n "$shipped" ] || { echo "::error::$name is not in the AppImage"; exit 1; }
+            notes=$(readelf -n "$shipped")
+            got=$(sed -n '/Build ID:/{s/^ *Build ID: *\([0-9a-f]*\)$/\1/p;q;}' <<< "$notes")
+            if [ "$got" != "$id" ]; then
+              echo "::error::$name in the AppImage has build ID '$got', symbols are for '$id'"
+              exit 1
+            fi
+            echo "$name: build ID $id matches the AppImage"
+          done < symbols/SYMBOLS.txt
+          rm -rf squashfs-root
+          tar -cJf "AetherSDR-${SAFE_REF}-${{ matrix.arch }}-symbols.tar.xz" -C symbols .
+          ls -l AetherSDR-*-symbols.tar.xz
+
       - name: Upload artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: AppImage-${{ matrix.arch }}
-          path: AetherSDR-*.AppImage
+          path: |
+            AetherSDR-*.AppImage
+            AetherSDR-*-symbols.tar.xz
 
       - name: Attach to release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64
         with:
-          files: AetherSDR-*.AppImage
+          files: |
+            AetherSDR-*.AppImage
+            AetherSDR-*-symbols.tar.xz

@@ -396,6 +396,7 @@ QString TciProtocol::generateInitBurst()
         burst += QStringLiteral("tune_drive:%1,%2;").arg(txTrxIndex).arg(tx.tunePower());
         burst += QStringLiteral("mic_level:%1;").arg(tx.micLevel());
         burst += QStringLiteral("trx:%1,%2;").arg(txTrxIndex).arg(isTx ? "true" : "false");
+        burst += QStringLiteral("tune:%1,%2;").arg(txTrxIndex).arg(tx.isTuning() ? "true" : "false");
 
         // Master AF volume — whole-radio (no trx prefix), same saved value
         // cmdVolume's GET returns, reported in dB per the TCI spec
@@ -589,6 +590,13 @@ std::optional<TciProtocol::TrxRequest> TciProtocol::takeTrxRequest()
     return request;
 }
 
+std::optional<TciProtocol::TuneRequest> TciProtocol::takeTuneRequest()
+{
+    std::optional<TuneRequest> request = std::move(m_tuneRequest);
+    m_tuneRequest.reset();
+    return request;
+}
+
 // ── Command implementations ────────────────────────────────────────────────
 
 QString TciProtocol::cmdStart()
@@ -730,13 +738,17 @@ QString TciProtocol::cmdTune(const QStringList& args, bool isSet)
     // so "anything that is not the word true" has to keep meaning STOP.
     // Fail closed, not silent — Constitution VI. (#4867 review)
     const bool tune = (args[1].trimmed().toLower() == QLatin1String("true"));
-    QMetaObject::invokeMethod(m_model, [model = m_model, tune]() {
-        if (tune)
-            model->transmitModel().startTune(TransmitModel::PttSource::Dax);
-        else
-            model->transmitModel().stopTune();
-    }, Qt::QueuedConnection);
-
+    if (trx < 0 && tune) {
+        // A malformed start keys nothing; it is answered with the real state.
+        const bool tuning = m_model && m_model->transmitModel().isTuning();
+        return QStringLiteral("tune:%1,%2;").arg(txTrx()).arg(tuning ? "true" : "false");
+    }
+    if (trx < 0) {
+        trx = txTrx();
+    }
+    // TciServer applies it, so the requester is answered with the state the
+    // model reached — a refused start included.
+    m_tuneRequest = TuneRequest{trx, tune};
     return {};
 }
 
@@ -1335,6 +1347,12 @@ QString TciProtocol::cmdRxNrEnable(const QStringList& args, bool isSet)
     if (args.size() < 2) return {};
     bool on = false;
     if (!argToBool(args, 1, on)) return {};
+    // A radio with no radio-side NR (HL2, ANAN) cannot turn it on. TCI has no
+    // error reply, so the refusal is the truth broadcast back: NR is off.
+    if (on && m_model && !m_model->radioSideNoiseReductionAvailable()) {
+        m_pendingNotification = QStringLiteral("rx_nr_enable:%1,false;").arg(trx);
+        return {};
+    }
     QMetaObject::invokeMethod(s, [s, on]() { s->setNr(on); },
                               Qt::QueuedConnection);
 
@@ -1359,6 +1377,11 @@ QString TciProtocol::cmdRxAnfEnable(const QStringList& args, bool isSet)
     if (args.size() < 2) return {};
     bool on = false;
     if (!argToBool(args, 1, on)) return {};
+    // Same refusal as rx_nr_enable, where the radio has no auto notch.
+    if (on && m_model && !m_model->radioSideAutoNotchAvailable()) {
+        m_pendingNotification = QStringLiteral("rx_anf_enable:%1,false;").arg(trx);
+        return {};
+    }
     QMetaObject::invokeMethod(s, [s, on]() { s->setAnf(on); },
                               Qt::QueuedConnection);
 

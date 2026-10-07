@@ -2,9 +2,10 @@
 
 The source snapshot is pinned to TAPR/OpenHPSDR-wdsp commit
 `b02d5bac675dd2f33ec2bab2b339f79a597c47dd` (`Release Version 2.10`).
-AetherSDR carries ten local changes in the otherwise exact `Source/*.[ch]`
-snapshot — four teardown corrections, two null/lifetime fixes, one added
-accessor set, two channel-state fixes, and one performance change:
+AetherSDR carries eighteen local changes in the otherwise exact `Source/*.[ch]`
+snapshot. The first ten are listed below — four teardown corrections, two
+null/lifetime fixes, one added accessor set, two channel-state fixes, and one
+performance change — and patches 11 to 18 follow in their own sections:
 
 1. `upstream/nbp.c`: `destroy_notchdb()` now frees the `notchdb` object after
    its member allocations.
@@ -511,6 +512,15 @@ accessor set, two channel-state fixes, and one performance change:
     `create_minphase()`'s own allocation sizes. **No memory was measured**, here
     or on hardware, and nothing in this work ran a radio.
 
+    **Since patch 14 the `mp == 1` case holds none of it either.** Patch 10
+    stops building the workspace for cores that never design at minimum phase;
+    `Hl2RxDsp` now runs its bandpass cores at minimum phase outside CW (#5498),
+    and for those cores the workspace is used -- but only during a design.
+    Patch 14 frees it after each one, so no core holds it between designs.
+    Measured there with `wdspPortOutstandingAllocations()`: an 8192-tap RX
+    channel holds 1200 live WDSP allocations at either phase; without patch 14
+    the minimum-phase channel held 48 more, ~49 MB by heap measurement.
+
     This is shared DSP -- **every backend that opens a `WdspChannel` pays it**,
     not only the HL2, and the HL2's tap count only sets how much.
 
@@ -600,6 +610,16 @@ itself. The ten are different shapes, so grep for the shape, not for a free:
   `r2_inidx` advance) sits **before** the `r2_havesamps` increment; plus the
   added read-only `GetChannelOutputReady()` in `iobuffs.c` (declared in
   `iobuffs.h` and `include/aether_wdsp.h`).
+- **patch 16** -- `SetTXABandpassFreqs()` in `TXA.c` holding `ch[].csDSP`
+  around its body.
+- **patch 17** -- in `analyzer.c`: `stop` / `end_dispatcher` read and written
+  through `Interlocked*` (and `volatile LONG` in `analyzer.h`); the
+  `input_busy` release in `spectra()` / `Cspectra()` sitting **after**
+  `stitch(disp)`, not before it; and `sendbuf()`'s `IQO_idx` hand-off and
+  `IQout_index` advance inside its existing `BufferControlSection`.
+- **patch 18** -- in `destroy_calcc()`, the `SemsPSCorr` and
+  `hCorrChangeExited` closes inside an `== WAIT_OBJECT_0` check on the
+  thread-exit wait.
 
 Drop any local patch upstream now carries. Otherwise reapply only these minimal
 changes and run the lifecycle test under AddressSanitizer on every supported
@@ -628,6 +648,17 @@ channel retention, repeated discard, RX/pending-flush refusal, and leaks.
 When updating WDSP, retain this local entry point unless upstream supplies an
 equivalent synchronous discard with the same locking and refusal contract.
 
+## Host portability allocation accounting
+
+The host-owned `port/wdsp_port.c` retains process-wide allocation/resource
+counters and additionally exposes `wdspPortThreadAllocationSequence()`.
+`WdspChannel::processIq()` compares the calling thread's counter: preparing a
+new channel on the registry pool must not falsely report callback allocation
+on a different, already-running receiver. Successful aligned allocations
+advance both counters; failed allocations advance neither. RTL materializes
+platform TLS on its acquisition thread before entering USB callbacks.
+`wdsp_allocation_scope_test` pins local detection and foreign-thread isolation.
+This changes host instrumentation, not the upstream DSP snapshot.
 ## Patch 12 — `create_minphase()` plans with `FFTW_ESTIMATE` (#5498)
 
 `upstream/fir.c::create_minphase()` plans its four transforms with
@@ -745,10 +776,77 @@ When updating WDSP, keep this unless upstream's `dexchange()` reads `r1` before
 it releases `Sem_OutReady`. Keep the pause call (and its declaration at the top
 of `iobuffs.c`) regardless: it is AetherSDR's own test surface.
 
-## Patch 15 — a non-blocking host can ask whether an output block is ready
+## Patch 14 — the minimum-phase design workspace is freed after each design (#5954)
 
-> Numbered 15 because #5965 (open) claims 14 for the minimum-phase workspace
-> free. If #5965 is withdrawn, this one keeps its number; numbers are never reused.
+The HL2 phase policy keeps CW linear and every other mode minimum phase, as
+[confirmed by the maintainer](https://github.com/aethersdr/AetherSDR/pull/5954#discussion_r4110668837).
+A new `WdspChannel::Mode` takes minimum phase unless the policy lists it.
+
+`upstream/firmin.c`: `plan_fircore()` no longer builds a core's
+`create_minphase()` workspace, and `calc_fircore()` frees it with
+`destroy_minphase()` straight after `mp_imp_exec()` has used it.
+`ensure_minphase()` (patch 10) rebuilds it for the next design.
+
+The workspace is design scratch: seven buffers of `nc * pfactor` elements and
+four FFTW plans, read only by `mp_imp_exec()`. Upstream held it for the life of
+the core. After #5498 put `Hl2RxDsp`'s bandpass at minimum phase outside CW,
+that was the six cores `RXASetMP()` reaches -- three of them 131072 points -- for
+every non-CW HL2 receiver. The original measurements on an x86 Linux host,
+for one 8192-tap RX channel, heap in use:
+
+| | linear phase | minimum phase |
+|---|---|---|
+| before this patch | 37.8 MB | 86.7 MB |
+| with this patch | **31.3 MB** | **31.3 MB** |
+| `setFilter()` at minimum phase, mean of 20 | -- | 9.1 ms -> **14.6 ms** |
+
+The linear channel shrinks too, because the equaliser core (`eqp`, built
+minimum-phase by upstream on every RX and TX channel) releases its workspace as
+well. The cost is the rebuild on every design: the allocation and zeroing of the
+buffers plus four `FFTW_ESTIMATE` plans (patch 12), about +5 ms per passband
+change at 8192 taps. It is paid on the control path, never per sample.
+Tuning can also pay this cost: `WdspChannel::setShift()` and
+`setNotchTuneFrequency()` reach `calc_nbp_lightweight()`, which redesigns the
+mask when the enabled notch stage had or has a notch in the passband. Tuning
+without those notches does not redesign the filter.
+
+Every caller of `calc_fircore()` is a WDSP control function (`Set*` / `RXA*Set*`,
+the notch-database edits in `nbp.c`, `RXAbpsnbaCheck`); none is reached from the
+per-block exchange. The host makes every such call under
+`WdspChannel`'s `g_setupMutex`, the process-wide FFTW planner lock, so the
+re-plan is serialised like any other. A host that calls those functions without
+that lock would now plan FFTW concurrently; keep that in mind before adding one.
+
+**The re-plan must not pick up the aligned DSP plans' wisdom.** This patch
+adds `FFTW_UNALIGNED` to patch 12's four `create_minphase()` plans.
+`FFTW_ESTIMATE` still uses wisdom when a matching plan exists. Re-planning on every design meant an
+aligned request could pick up wisdom another plan recorded in between, and
+design the same filter with a different FFT algorithm: two identical channels
+then differed at rounding level. Measured under `ctest -R 'anan|wdsp' -j16`,
+15 loops each: current `main` 0 failing loops; this patch without
+`FFTW_UNALIGNED` 15 of 15 (all `wdsp_channel_test`, including 3 × "identical
+WDSP channels produced different vectors" and 3 intermittent group-delay
+checks, alongside the deterministic patch-10 check restated below); with
+`FFTW_UNALIGNED` 0 of 15. No other plan in this process is unaligned, so the key
+does not match the aligned DSP plans' wisdom. These design plans can reuse
+their own heuristic wisdom; `FFTW_UNALIGNED` also disables SIMD. See
+[FFTW planner flags](https://www.fftw.org/fftw3_doc/Planner-Flags.html) and
+[wisdom accumulation](https://www.fftw.org/fftw3_doc/Words-of-Wisdom_002dSaving-Plans.html). The
+`setFilter()` figure in the table is with it.
+
+Coverage: `wdsp_minphase_workspace_test` requires a minimum-phase channel to
+hold the same live WDSP allocations as a linear one after opening, after a
+filter change, and after twenty more; removing the free fails it (1256 against
+1208), and so does reverting patch 10 (1248 against 1296). `wdsp_channel_test`'s
+patch-10 check now counts allocations MADE by each open rather than held after
+it -- the minimum-phase open builds and frees the workspace, the linear open
+never builds it -- and still fails when patch 10 is reverted.
+The workspace test also checks every repeated edit is accepted, that tuning
+through an active notch builds and releases scratch, and that teardown returns
+the live-allocation counter to its starting value.
+When updating WDSP, keep this unless upstream stops holding the workspace.
+
+## Patch 15 — a non-blocking host can ask whether an output block is ready
 
 `upstream/iobuffs.c` gains `GetChannelOutputReady(channel)`: 1 when
 `r2_havesamps >= out_size`, i.e. when the next `fexchange*` would find a whole
@@ -810,3 +908,106 @@ counts before it copies and has no readiness query.
 
 When updating WDSP, keep this unless upstream grows an equivalent query; keep
 the reorder unless upstream's `dexchange()` already copies before it counts.
+
+## Patch 16 — the TX bandpass setter takes the DSP lock (#6156)
+
+`upstream/TXA.c`: `SetTXABandpassFreqs()` now holds `ch[channel].csDSP` around
+its body, as `SetTXAMode()` already does around the same `TXASetupBPFilters()`
+call. So do `SetTXACompressorRun()` and `SetTXAosctrlRun()`;
+`SetTXABandpassFreqs()` was the only caller of it that took no lock.
+
+**Why it matters on air.** `TXASetupBPFilters()` clears `bp1` and `bp2`'s
+`run` first and sets them again only after `CalcBandpassFilter()` has
+redesigned the FIR. `xbandpass()` with `run` clear copies input to output. The
+DSP worker runs `xtxa()` under `csDSP`, so before this patch a filter change
+made while transmitting with the compressor (and CESSB) on could pass one or
+more TX blocks with the post-compressor bandpass bypassed: a burst of
+out-of-band splatter. The FIR coefficients themselves were never torn, since
+`fircore` double-buffers them under `a->update`; the `run` flags were the hole.
+
+**Found by** the TSan lane once it could run the full tree: `wdsp_channel_test`
+reported `TXASetupBPFilters` (`TXA.c` writes of `bp0/1/2.p->run`) racing
+`xbandpass` on the worker, with no lock in common. The port's critical
+sections are plain `pthread_mutex`, so the report was not a shim artefact.
+
+**Cost and lock order.** The worker waits for one FIR redesign per TX filter
+change, the cost upstream already accepts in `SetTXAMode()`. No new lock edge:
+`WdspChannel::setFilter()` holds `g_setupMutex` and now takes `csDSP` inside
+it, the same order `setMode()` and `open()` already use; `csDSP` is recursive.
+
+**Upstream status.** Not reported.
+
+When updating WDSP, keep this unless upstream's `SetTXABandpassFreqs()` takes
+`csDSP` itself.
+
+## Patch 17 — the panadapter analyzer's dispatcher hand-offs are synchronised (#6156)
+
+Three races in `upstream/analyzer.c`, all reported by the TSan lane against
+`AnanPanAnalyzer` (`anan_rxdsp_handedness_test`, `spectrum_sequence_gap_test`,
+`wdsp_process_tally_test`). The port's `Interlocked*` are `__atomic` seq_cst and
+its threads are `pthread_create`, so TSan saw these accurately.
+
+1. **`stop` and `end_dispatcher` are atomic.** Both were plain `int`, written
+   by `SetAnalyzer()` / `DestroyAnalyzer()` and polled by `sendbuf()`'s loop and
+   the workers' early-outs. The drain itself was already sound (the
+   `dispatcher` bit and `pnum_threads` are atomic), so this one is a formal
+   race rather than a symptom; it is fixed because it was most of the lane's
+   noise and an unsynchronised polled flag is undefined behaviour the compiler
+   may hoist. Now `volatile LONG`, written with `InterlockedExchange()` and
+   read with `InterlockedAnd(&x, 1)`, the idiom upstream already uses for
+   `dispatcher`.
+2. **`input_busy` is released after the stitch, not before.** When the last
+   FFT of a frame finished, `spectra()` / `Cspectra()` cleared every
+   `input_busy` bit and then called `stitch()`. `sendbuf()` could therefore
+   dispatch the next frame's workers while the stitch was still reading
+   `result[]` and `ss_bins` — `Celiminate()` writing what `stitch()` was
+   copying, i.e. a torn panadapter frame — and could let two `stitch()` calls
+   overlap on `w_pix_buff` / `last_pix_buff`. Clearing after `stitch()` makes
+   the next dispatch wait for it. **This is the only part that changes
+   timing:** the next frame's FFTs start one stitch later (tens of
+   microseconds). `stitch()` waits on nothing the dispatcher holds, so it
+   cannot deadlock.
+3. **`sendbuf()` hands off the read index under the buffer lock.**
+   `Spectrum0()` moves `IQout_index` under `BufferControlSection` when it skips
+   ahead on an overrun; `sendbuf()` read it into `IQO_idx` and advanced it
+   unlocked, a lost update that points one FFT at the wrong span of the
+   sample ring. The read, the advance and the existing `have_samples`
+   decrement now share one `BufferControlSection`, taken before the worker is
+   queued so the worker still sees its `IQO_idx` through the thread start.
+
+The `AnanPanAnalyzer` teardown (a `SetAnalyzer()` drain before
+`DestroyAnalyzer()`) is unchanged and was already correct.
+
+**Upstream status.** Not reported.
+
+When updating WDSP, keep all three unless upstream's analyzer synchronises the
+same hand-offs.
+
+## Patch 18 — the PureSignal correction thread's handles are closed (#6154)
+
+`upstream/calcc.c`: `create_calcc()` (called by `create_txa()` for every TX
+channel) creates five `SemsPSCorr` semaphores for the `doPSCorrChange()`
+thread, and `destroy_calcc()` never closed them. That leaked five port handles,
+each a mutex, condition variable and allocation, on every TXA channel
+destroy. LeakSanitizer reports 86 leak blocks across 17 tests (`wdsp_channel_test`,
+the `hl2_*` TX/DSP tests, the `radiomodel_*_null` tests).
+
+`destroy_calcc()` now closes the five semaphores and the exit event **only when
+the thread-exit wait succeeds**. `doPSCorrChange()`'s last act is
+`SetEvent(hCorrChangeExited)` and `return`, so once that event is seen nothing
+touches either again. If the 500 ms wait times out, the thread may still be
+blocked in `WaitForMultipleObjects` on those semaphores, so they are not freed
+under it; upstream closed the event unconditionally, which had the same hazard
+for a thread that later reached `SetEvent()`, and it is now under the same check.
+
+**This does not make the timeout path safe, and does not claim to.** After the
+wait, `destroy_calcc()` goes on to free `a` and its members, which a correction
+thread still running past the timeout would use. That use-after-free predates
+this patch (upstream frees `a` on the same path) and is tracked separately
+(#6179). Patch 18 only stops the normal, successful-exit path from
+leaking and avoids adding a second hazard on the timeout path.
+
+**Upstream status.** Not reported.
+
+When updating WDSP, keep this unless upstream's `destroy_calcc()` closes the
+semaphores itself.

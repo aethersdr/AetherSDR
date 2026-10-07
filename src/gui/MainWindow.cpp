@@ -14,6 +14,7 @@
 #include "MainWindowHelpers.h"
 #include "WindowGeometryRestore.h"
 
+#include "models/Ctr2ProxyModel.h"
 #include "models/CwDecodeSettings.h"
 #include "DisplaySettings.h"
 #ifdef HAVE_MQTT
@@ -28,6 +29,11 @@
 #include "ClientDisconnectDialog.h"
 #include "ConnectedStationsDialog.h"
 #include "TitleBar.h"
+#include "WindowCaptionButtons.h"
+#include "WindowChrome.h"
+#ifdef Q_OS_MACOS
+#include "mac/NativeWindowTitle.h"
+#endif
 #include "PanRecenterPolicy.h"
 #include "PanadapterApplet.h"
 #ifdef AETHER_ASR_ENABLED
@@ -49,8 +55,10 @@
 #include "core/StreamStatus.h"
 #include "models/PanadapterModel.h"
 #include "models/RadioStatusOwnership.h"
+#include "models/ReceiverSlotCount.h"
 #include "models/Nr2SettingsModel.h"
 #include "PanZoomModeGate.h"
+#include "ClientFftSmoothingGate.h"
 #include "SpectrumWidget.h"
 #ifdef AETHER_GPU_SPECTRUM
 #include <QRhiWidget>
@@ -65,6 +73,7 @@
 #include "TunerApplet.h"
 #include "TxApplet.h"
 #include "VkampApplet.h"
+#include "Kpa1500Applet.h"
 #include "PhoneCwApplet.h"
 #include "PhoneApplet.h"
 #include "EqApplet.h"
@@ -591,21 +600,6 @@ bool sameAudioDeviceSelection(const QAudioDevice& lhs, const QAudioDevice& rhs)
 }
 
 // memoryRevealTargetMatches moved to MainWindow_Wiring.cpp (#3351 Phase 1d).
-
-#ifdef Q_OS_WIN
-bool mainWindowCustomFrameEnabled()
-{
-    return AppSettings::instance()
-        .value("FramelessWindow", "True").toString() == "True";
-}
-
-int windowsResizeBorderThickness(HWND hwnd)
-{
-    const UINT dpi = GetDpiForWindow(hwnd);
-    return GetSystemMetricsForDpi(SM_CXSIZEFRAME, dpi)
-        + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
-}
-#endif
 
 // flexWheelModeForAction / flexControlButtonAction moved to
 // MainWindow_Controllers.cpp (#3351 Phase 1a) — only controller code calls them.
@@ -1139,21 +1133,10 @@ MainWindow::MainWindow(QWidget* parent)
             s.setValue("FramelessMigratedV0823", "True");
             s.save();
         }
-        if (s.value("FramelessWindow", "True").toString() == "True") {
-#ifndef Q_OS_WIN
-            setWindowFlags(windowFlags() | Qt::FramelessWindowHint);
-#endif
-        }
+        WindowChrome::configure(this,
+            s.value("FramelessWindow", "True").toString() == "True");
 
-        // Theming layer-0 backdrop (Phase 5 PR 3 — "fade to desktop"
-        // experiment).  Disabling the default opaque window background
-        // lets MainWindow::paintEvent() honour color.background.app's
-        // alpha.  Today's installs see no visual change because the
-        // bundled themes ship the token fully opaque (#0f0f1a / #f5f5f8) —
-        // the architectural hook just lets operators dial alpha down
-        // through the Theme Editor to A/B test which applets/docks still
-        // need their own opaque backgrounds.
-        setAttribute(Qt::WA_TranslucentBackground, true);
+        setAttribute(Qt::WA_TranslucentBackground, false);
         setAutoFillBackground(false);
         connect(&ThemeManager::instance(), &ThemeManager::themeChanged,
                 this, qOverload<>(&QWidget::update));
@@ -1162,7 +1145,8 @@ MainWindow::MainWindow(QWidget* parent)
         // MainWindow's children are native windows (see FramelessResizer, #4827).
         // topMoveReserve = TitleBar::kHeight keeps the title bar's controls
         // clickable, so there is no top-edge resize (#4886). Stays installed;
-        // it no-ops while the system frame is on.
+        // it no-ops while a native frame or expanded client area is in use —
+        // in practice only the Linux frameless fallback reaches it.
         FramelessResizer::install(this, 6, TitleBar::kHeight);
 
         // One-shot migration: collapse the legacy "CwDecodeOverlay" flat
@@ -1293,30 +1277,10 @@ MainWindow::MainWindow(QWidget* parent)
     });
     // Radio-Side recording needs a radio-side recorder to reach; where there is
     // none, this recorder records instead (recordsOnClient(),
-    // QsoRecordStartPolicy.h). Read live, like the provider above.
+    // QsoRecordStartPolicy.h). Read live, like the provider above. Radio Setup
+    // dims Radio Side there and shows Client Side in effect.
     m_qsoRecorder->setRadioSideRecordingReachableProvider([this]() {
         return m_radioModel.radioSideRecordingReachable();
-    });
-    // Say so when the fallback happens: the operator chose Radio Side, and a
-    // file appearing on this computer must not be a surprise. Said once, not
-    // once per recording (auto-record starts one every over); a client
-    // recording started outside the fallback re-arms it.
-    connect(m_qsoRecorder, &QsoRecorder::recordingStarted, this,
-            [this, noticeShown = false](const QString&) mutable {
-        const bool radioSideSelected =
-            AppSettings::instance().value("RecordingMode", "Client").toString()
-            != QLatin1String("Client");
-        if (!radioSideSelected || m_radioModel.radioSideRecordingReachable()) {
-            noticeShown = false;
-            return;
-        }
-        if (noticeShown)
-            return;
-        noticeShown = true;
-        statusBar()->showMessage(
-            tr("This radio can't record on its own side — recording on this "
-               "computer instead."),
-            6000);
     });
 
     // A refused start (#4629). The recorder lives below the UI seam and can only
@@ -1527,9 +1491,6 @@ MainWindow::MainWindow(QWidget* parent)
     buildMenuBar();
     buildUI();
     loadCenterLockSettings();
-#ifdef Q_OS_WIN
-    applyWindowsCustomFrame();
-#endif
     registerShortcutActions();
 
     m_swrSweepTimer.setTimerType(Qt::PreciseTimer);
@@ -1867,13 +1828,29 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_appletPanel->rxApplet(), &RxApplet::calibrateAgcTRequested,
             this, &MainWindow::showAgcCalibrationDialog);
     // Sync slice tab capacity after radio info/status reports actual capacity.
+    // This edge runs at the START of a connect, which is what lets a Flex draw
+    // its tabs before the first slice arrives (#2243).
     connect(&m_radioModel, &RadioModel::infoChanged, this, [this]() {
         if (m_radioModel.model().isEmpty()) {
             return;
         }
 
-        m_appletPanel->setMaxSlices(m_radioModel.maxSlices());
+        m_appletPanel->setMaxSlices(ReceiverSlotCount::forCeiling(
+            m_radioModel.maxSlices(), m_radioModel.slices()));
         m_appletPanel->updateSliceButtons(m_radioModel.slices(), m_activeSliceId);
+    });
+    // ...and on every later edge that can move the count, including a backend's
+    // post-connect capabilitiesChanged (#5775, #5776). The CAT letters are
+    // refreshed with it; on disconnect (count 0) onConnectionStateChanged resets
+    // them through applyCatPortCount().
+    auto* receiverSlots = new ReceiverSlotCount(&m_radioModel, this);
+    connect(receiverSlots, &ReceiverSlotCount::countChanged, this, [this](int count) {
+        if (count <= 0) {
+            return;
+        }
+        m_appletPanel->setMaxSlices(count);
+        m_appletPanel->updateSliceButtons(m_radioModel.slices(), m_activeSliceId);
+        applyCatPortCount();
     });
 
     // Radio info can arrive after onConnectionStateChanged, so refresh the labels.
@@ -1986,9 +1963,13 @@ MainWindow::MainWindow(QWidget* parent)
     // (the radio is already authoritative for the slice's step).
     connect(m_appletPanel->rxApplet(), &RxApplet::stepSizeChangedByUser,
             this, [this](int step) {
-        // Send step to radio for the active slice
-        if (auto* s = m_radioModel.slice(m_activeSliceId))
-            m_radioModel.sendCommand(QString("slice set %1 step=%2").arg(s->sliceId()).arg(step));
+        // Send step to radio for the active slice, or apply it on the client
+        // where there is no command plane to carry it.
+        if (auto* s = m_radioModel.slice(m_activeSliceId)) {
+            if (!m_radioModel.applyClientOwnedSliceStep(s->sliceId(), step)) {
+                m_radioModel.sendCommand(QString("slice set %1 step=%2").arg(s->sliceId()).arg(step));
+            }
+        }
         // Also save to AppSettings for SpectrumWidget scroll-to-tune
         auto& settings = AppSettings::instance();
         settings.setValue("TuningStepSize", QString::number(step));
@@ -2065,6 +2046,7 @@ MainWindow::MainWindow(QWidget* parent)
                 audioStopTx();
             }
         }
+        syncTitleBarOutput();
     });
     // Master volume — title bar slider routes through applyMasterVolume()
     // so the TCI `volume:N;` command (#1764) can hit the same code path
@@ -2074,11 +2056,11 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_titleBar, &TitleBar::headphoneVolumeChanged,
             &m_radioModel, &RadioModel::setHeadphoneGain);
     connect(m_titleBar, &TitleBar::lineoutMuteChanged, this, [this](bool muted) {
+        m_radioModel.setLineoutMute(muted);
         m_audio->setMuted(muted);
-        m_radioModel.sendCommand(QString("mixer lineout mute %1").arg(muted ? 1 : 0));
     });
     connect(m_audio, &AudioEngine::mutedChanged, this, [this](bool muted) {
-        m_titleBar->setLineoutMuted(muted);
+        syncTitleBarOutput();
         auto& s = AppSettings::instance();
         s.setValue("PcAudioMuted", muted ? "True" : "False");
         s.save();
@@ -2093,6 +2075,7 @@ MainWindow::MainWindow(QWidget* parent)
     connect(&m_radioModel, &RadioModel::audioOutputChanged, this, [this]() {
         m_titleBar->setHeadphoneVolume(m_radioModel.headphoneGain());
         m_titleBar->setHeadphoneMuted(m_radioModel.headphoneMute());
+        syncTitleBarOutput();
     });
 
     // Multi-Flex: show when another client is transmitting
@@ -2127,6 +2110,7 @@ MainWindow::MainWindow(QWidget* parent)
     if (savedMute) {
         m_audio->setMuted(true);
     }
+    syncTitleBarOutput();
 
 
     // Meter wiring (S-Meter / Tuner / MTR / HLTH / TX applets) →
@@ -3589,7 +3573,7 @@ RadioSetupDialog* MainWindow::openRadioSetupPage(const QString& page)
                           &m_radioModel, m_audio,
                           &m_tgxlConn, &m_pgxlConn, &m_antennaGenius,
                           m_kiwiSdrManager, &m_acomConn, &m_speConn, &m_vkampConn,
-                          &m_lpMeterConn);
+                          &m_lpMeterConn, &m_kpa1500Conn);
     if (wasFresh && m_radioSetupDialog)
         wireRadioSetupDialogSignals(m_radioSetupDialog, prevComp);
     if (m_radioSetupDialog && !page.isEmpty())
@@ -3600,6 +3584,23 @@ RadioSetupDialog* MainWindow::openRadioSetupPage(const QString& page)
 void MainWindow::wireRadioSetupDialogSignals(RadioSetupDialog* dlg, const QString& prevComp)
 {
     if (!dlg) return;
+    // Removing a row hides its applet button immediately; otherwise the button
+    // stays until the next presence change. The AG button is kept when an AG
+    // is still connected or discovered through another path.
+    connect(dlg, &RadioSetupDialog::peripheralRemoved, this, [this](const QString& id) {
+        if (id == QLatin1String("shackswitch")) {
+            m_appletPanel->setShackSwitchVisible(false);
+        } else if (id == QLatin1String("ag")) {
+            const auto discovered = m_antennaGenius.discoveredDevices();
+            const bool agPresent = (m_antennaGenius.isConnected()
+                    && !AntennaGeniusModel::isShackSwitch(m_antennaGenius.connectedDevice()))
+                || std::any_of(discovered.begin(), discovered.end(),
+                               [](const AgDeviceInfo& d) { return !AntennaGeniusModel::isShackSwitch(d); });
+            if (!agPresent) {
+                m_appletPanel->setAgVisible(false);
+            }
+        }
+    });
     connect(dlg, &RadioSetupDialog::txBandSettingsRequested,
             m_txBandAction, &QAction::trigger);
     // Agent automation bridge toggle (#3646). The dialog persists the click as
@@ -3664,19 +3665,12 @@ void MainWindow::wireRadioSetupDialogSignals(RadioSetupDialog* dlg, const QStrin
 #endif
         // External-device enable evaluation. start()/loadSettings() are
         // idempotent (each guards against re-open), so re-firing them when
-        // unrelated settings change is harmless. Toggling the user-facing
-        // checkbox from off → on is the moment the OS TCC prompt fires —
-        // with user context — instead of every launch (#3257).
-        auto& s = AppSettings::instance();
-        if (m_dialBackend &&
-            s.value("UlanziDialEnabled", "False").toString() == "True") {
-            QMetaObject::invokeMethod(m_dialBackend, &UlanziDialBackend::start,
-                                      Qt::QueuedConnection);
-        } else if (m_dialBackend) {
-            QMetaObject::invokeMethod(m_dialBackend, &UlanziDialBackend::stop,
-                                      Qt::QueuedConnection);
-        }
+        // unrelated settings change is harmless. Toggling the HID checkbox
+        // from off → on is the moment the OS TCC prompt fires — with user
+        // context — instead of every launch (#3257).
+        applyUlanziDialEnabled();
 #ifdef HAVE_HIDAPI
+        auto& s = AppSettings::instance();
         if (m_hidEncoder &&
             s.value("HidEncoderEnabled", "False").toString() == "True") {
             QMetaObject::invokeMethod(m_hidEncoder, [this] {
@@ -3755,24 +3749,62 @@ void MainWindow::wireRadioSetupDialogSignals(RadioSetupDialog* dlg, const QStrin
 // wireAetherDspWidget() lives in MainWindow_Wiring.cpp (#3351 Phase 1d).
 void MainWindow::paintEvent(QPaintEvent* event)
 {
-    // Layer-0 app backdrop.  WA_TranslucentBackground (set in the
-    // constructor) disables Qt's default opaque window fill, so this
-    // paintEvent is the single source of pixels for any region the rest
-    // of the widget tree doesn't paint.  Honours alpha so operators can
-    // edit color.background.app down toward translucency and see the
-    // desktop bleed through anywhere a child widget doesn't have its own
-    // opaque background — useful for A/B testing which applets/docks
-    // still need explicit fills before a "glass-mode" theme is viable.
     QPainter p(this);
     const QColor bg = ThemeManager::instance().color("color.background.app");
     p.setCompositionMode(QPainter::CompositionMode_Source);
+
     p.fillRect(rect(), bg.isValid() ? bg : QColor("#0f0f1a"));
     QMainWindow::paintEvent(event);
 }
 
+#ifdef Q_OS_WIN
+void MainWindow::applyWindowsCaptionStyles()
+{
+    // Those hints are also what gave the HWND its minimize/maximize boxes,
+    // which taskbar-click minimize, Win+Up and snap-to-maximize all need.
+    if (!windowFlags().testFlag(Qt::ExpandedClientAreaHint)) {
+        return;
+    }
+    HWND hwnd = reinterpret_cast<HWND>(winId());
+    if (!hwnd) {
+        return;
+    }
+    const LONG_PTR style = GetWindowLongPtr(hwnd, GWL_STYLE);
+    const LONG_PTR desired = style | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX;
+    if (style != desired) {
+        SetWindowLongPtr(hwnd, GWL_STYLE, desired);
+        SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER
+                     | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+    }
+}
+#endif
+
 void MainWindow::showEvent(QShowEvent* event)
 {
     QMainWindow::showEvent(event);
+#ifdef Q_OS_MACOS
+    mac::updateNativeTitleVisibility(this);
+#endif
+#ifdef Q_OS_WIN
+    // Every show: setWindowFlags() (View -> Frameless Window) re-creates the
+    // native window with Qt's own style set.
+    applyWindowsCaptionStyles();
+#endif
+
+    // The caption controls are keyboard-reachable, which puts them first in the
+    // window's tab order — so Qt hands them the initial focus and the window
+    // opens with a focus ring drawn around a traffic light.  Drop it: a freshly
+    // opened window should show no focus ring until the operator tabs or
+    // clicks.  They stay fully reachable by Tab, which is what the a11y
+    // contract actually requires.
+    QTimer::singleShot(0, this, [this]() {
+        auto* caption = m_titleBar ? m_titleBar->captionButtons() : nullptr;
+        QWidget* focused = QApplication::focusWidget();
+        if (caption && focused && caption->isAncestorOf(focused)) {
+            focused->clearFocus();
+        }
+    });
 
     if (m_startupGeometryReapplied || m_startupGeometryForFirstShow.isEmpty()) {
         return;
@@ -3798,14 +3830,7 @@ void MainWindow::reapplyStartupGeometryAfterShow()
     // Pop-out applet containers are restored and shown during construction.
     // Re-apply the main-window geometry after this window is mapped so Qt
     // honors the saved monitor instead of the last pop-out's screen. (#3319)
-    //
-    // Then undo Qt's phantom-caption clamp now the window is mapped and the custom
-    // frame's real (zero) top margin applies.  A false return means Qt itself
-    // refused the blob — most often its large-screen-variation bail — and in
-    // that case the saved rect is exactly what we must not force. (#4328)
-    if (restoreGeometry(m_startupGeometryForFirstShow)) {
-        reanchorCustomFrameGeometry(m_startupGeometryForFirstShow);
-    }
+    restoreGeometry(m_startupGeometryForFirstShow);
 
     // Test the frame's center against each screen's full geometry rather than
     // the top-left against availableGeometry().  A top-left landing in a
@@ -3830,56 +3855,6 @@ void MainWindow::reapplyStartupGeometryAfterShow()
         move(available.center().x() - width() / 2,
              available.center().y() - height() / 2);
     }
-}
-
-void MainWindow::reanchorCustomFrameGeometry(const QByteArray& geometryBlob)
-{
-#ifdef Q_OS_WIN
-    // Call this after every restoreGeometry() on this window, never instead of
-    // one.  Qt's restore runs the saved rect through checkRestoredGeometry(),
-    // which reserves PM_TitleBarHeight above the top edge and shaves
-    // 2 + PM_TitleBarHeight off a window that would otherwise fill the work
-    // area — both correct for a native caption, both pure loss once
-    // WM_NCCALCSIZE has taken ours away.  The result is a title-bar-sized gap
-    // above the window (#4328), and a matching one below it for anyone who
-    // sized the window to their screen.  Re-run the clamp here without the
-    // caption term.  See src/gui/WindowGeometryRestore.h for the arithmetic.
-    if (!mainWindowCustomFrameEnabled()) {
-        return;  // native caption present — Qt's reservation is honest.
-    }
-
-    SavedWindowGeometry saved;
-    if (!parseSavedWindowGeometry(geometryBlob, &saved)) {
-        return;
-    }
-
-    // Read the saved state, not windowState(): Qt applies maximized/fullscreen
-    // rects unclamped, and the live state depends on platform timing. Known
-    // limitation: a session that exits maximized restores down into Qt's
-    // clamped normalGeometry, and closeEvent() then saves that.
-    if (saved.maximized || saved.fullScreen) {
-        return;
-    }
-
-    // Prefer the screen the user actually left the window on; if that monitor
-    // is gone, fall back to wherever Qt just put us.  Either way the rect is
-    // clamped into that screen's work area, so the custom title bar — the only
-    // mouse drag handle a frameless window has — can never land under a
-    // taskbar that moved or appeared between sessions.
-    const QScreen* target = QGuiApplication::screenAt(saved.normalRect.center());
-    if (!target) {
-        target = screen();
-    }
-    if (!target) {
-        return;
-    }
-
-    // setGeometry() rather than move(): the custom frame's margins are zero, so
-    // frame rect == client rect, and the size has to go back too.
-    setGeometry(clampFrameToWorkArea(saved.normalRect, target->availableGeometry()));
-#else
-    Q_UNUSED(geometryBlob);
-#endif
 }
 
 void MainWindow::resizeEvent(QResizeEvent* event)
@@ -3919,122 +3894,6 @@ void MainWindow::updateStatusBarMinimumWidth()
         qBound(1024, statusMinWidth, qMax(1024, screenWidthCap));
     setMinimumSize(boundedMinWidth, qMax(400, minimumHeight()));
 }
-
-#if defined(Q_OS_WIN)
-void MainWindow::applyWindowsCustomFrame()
-{
-    HWND hwnd = reinterpret_cast<HWND>(winId());
-    if (!hwnd) {
-        return;
-    }
-
-    LONG_PTR style = GetWindowLongPtr(hwnd, GWL_STYLE);
-    const LONG_PTR desiredStyle = style
-        | WS_CAPTION
-        | WS_THICKFRAME
-        | WS_SYSMENU
-        | WS_MINIMIZEBOX
-        | WS_MAXIMIZEBOX;
-    if (style != desiredStyle) {
-        SetWindowLongPtr(hwnd, GWL_STYLE, desiredStyle);
-    }
-
-    SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
-                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER
-                 | SWP_NOACTIVATE | SWP_FRAMECHANGED);
-}
-
-bool MainWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr* result)
-{
-    MSG* msg = static_cast<MSG*>(message);
-    if (!msg || !result || !mainWindowCustomFrameEnabled()) {
-        return QMainWindow::nativeEvent(eventType, message, result);
-    }
-
-    if (msg->message == WM_NCCALCSIZE && msg->wParam) {
-        if (IsZoomed(msg->hwnd) && windowHandle()
-            && windowHandle()->visibility() != QWindow::FullScreen) {
-            auto* params = reinterpret_cast<NCCALCSIZE_PARAMS*>(msg->lParam);
-            RECT* clientArea = &params->rgrc[0];
-            const int border = windowsResizeBorderThickness(msg->hwnd);
-            clientArea->top += border;
-            clientArea->bottom -= border;
-            clientArea->left += border;
-            clientArea->right -= border;
-        }
-        *result = 0;
-        return true;
-    }
-
-    if (msg->message == WM_NCHITTEST) {
-        RECT windowRect;
-        if (!GetWindowRect(msg->hwnd, &windowRect)) {
-            return QMainWindow::nativeEvent(eventType, message, result);
-        }
-
-        const POINT nativePos{GET_X_LPARAM(msg->lParam), GET_Y_LPARAM(msg->lParam)};
-        if (nativePos.x < windowRect.left || nativePos.x > windowRect.right
-            || nativePos.y < windowRect.top || nativePos.y > windowRect.bottom) {
-            return QMainWindow::nativeEvent(eventType, message, result);
-        }
-
-        const bool canResize = !IsZoomed(msg->hwnd)
-            && !(windowState() & Qt::WindowFullScreen);
-        if (canResize) {
-            const int border = windowsResizeBorderThickness(msg->hwnd);
-            const bool onLeft = nativePos.x >= windowRect.left
-                && nativePos.x < windowRect.left + border;
-            const bool onRight = nativePos.x > windowRect.right - border
-                && nativePos.x <= windowRect.right;
-            const bool onTop = nativePos.y >= windowRect.top
-                && nativePos.y < windowRect.top + border;
-            const bool onBottom = nativePos.y > windowRect.bottom - border
-                && nativePos.y <= windowRect.bottom;
-
-            if (onTop && onLeft) {
-                *result = HTTOPLEFT;
-                return true;
-            }
-            if (onTop && onRight) {
-                *result = HTTOPRIGHT;
-                return true;
-            }
-            if (onBottom && onLeft) {
-                *result = HTBOTTOMLEFT;
-                return true;
-            }
-            if (onBottom && onRight) {
-                *result = HTBOTTOMRIGHT;
-                return true;
-            }
-            if (onLeft) {
-                *result = HTLEFT;
-                return true;
-            }
-            if (onRight) {
-                *result = HTRIGHT;
-                return true;
-            }
-            if (onTop) {
-                *result = HTTOP;
-                return true;
-            }
-            if (onBottom) {
-                *result = HTBOTTOM;
-                return true;
-            }
-        }
-
-        if (m_titleBar && m_titleBar->isVisible()
-            && m_titleBar->isSystemMoveAreaAt(QCursor::pos())) {
-            *result = HTCAPTION;
-            return true;
-        }
-    }
-
-    return QMainWindow::nativeEvent(eventType, message, result);
-}
-#endif
 
 void MainWindow::changeEvent(QEvent* event)
 {
@@ -4125,10 +3984,19 @@ void MainWindow::closeEvent(QCloseEvent* event)
     // this function returns, leaving the amp holding a stale half-open
     // connection instead of seeing a clean close.
     m_vkampConn.disconnect();
+    // The KPA1500 is in exactly the same position: zero radio awareness, so
+    // it never learns the app is closing. Closing it here also gives its
+    // destructor-path unkey somewhere to run while the event loop is still
+    // live, rather than during member destruction (#4097).
+    m_kpa1500Conn.disconnect();
     // The LP-100A is likewise independent of the radio lifecycle and may be
     // connected through a shared ser2net proxy. Close it explicitly while
     // the event loop is still live instead of relying on member destruction.
     m_lpMeterConn.disconnect();
+    // The CTR2 proxy's sockets likewise close while the event loop is live.
+    if (m_ctr2ProxyModel) {
+        m_ctr2ProxyModel->stop();
+    }
 
     // Same event-loop reasoning: the operating-state capture flush normally
     // rides the queued backend disconnected() signal, which never lands
@@ -4615,6 +4483,190 @@ QJsonObject MainWindow::automationTxTimerSnapshot() const
         return QJsonObject{{QStringLiteral("visible"), false},
                            {QStringLiteral("running"), false}};
     return QJsonObject::fromVariantMap(m_titleBar->txTimerState());
+}
+
+QJsonObject MainWindow::automationAppletPanelSnapshot() const
+{
+    if (!m_appletPanel)
+        return QJsonObject{{QStringLiteral("present"), false}};
+
+    bool floating = false, dockedLeft = false, visible = false;
+    appletPanelState(&floating, &dockedLeft, &visible);
+
+    QJsonObject snapshot{
+        {QStringLiteral("present"),  true},
+        {QStringLiteral("floating"), floating},
+        {QStringLiteral("side"),     dockedLeft ? QStringLiteral("left")
+                                                : QStringLiteral("right")},
+        {QStringLiteral("visible"),  visible},
+    };
+    // Geometry is what proves the panel actually landed where the state says
+    // it did — a caller asserting only on the flags would miss a panel that
+    // is "docked left" but zero-width.
+    const QRect g = m_appletPanel->geometry();
+    snapshot.insert(QStringLiteral("geometry"),
+                    QJsonObject{{QStringLiteral("x"), g.x()},
+                                {QStringLiteral("y"), g.y()},
+                                {QStringLiteral("w"), g.width()},
+                                {QStringLiteral("h"), g.height()}});
+    if (m_splitter && !floating) {
+        snapshot.insert(QStringLiteral("splitterIndex"),
+                        m_splitter->indexOf(m_appletPanel));
+        snapshot.insert(QStringLiteral("panIndex"),
+                        m_splitter->indexOf(centralPanWidget()));
+    }
+    return snapshot;
+}
+
+bool MainWindow::automationAppletPanelAction(const QString& action,
+                                             const QString& value,
+                                             QString* error,
+                                             std::function<void()>* activate)
+{
+    auto fail = [error](const QString& why) {
+        if (error) *error = why;
+        return false;
+    };
+    if (!m_appletPanel)
+        return fail(QStringLiteral("applet panel not built"));
+
+    // Validate now; the bridge runs the change on the next main-loop turn
+    // (floating creates/destroys a top-level window).  The state is read
+    // again at activation, not captured here, so a change that lands in
+    // between is respected.
+    auto later = [this, activate](std::function<void(bool, bool, bool)> apply) {
+        if (activate) {
+            *activate = [this, apply = std::move(apply)]() {
+                bool floating = false, dockedLeft = false, visible = false;
+                appletPanelState(&floating, &dockedLeft, &visible);
+                apply(floating, dockedLeft, visible);
+            };
+        }
+        return true;
+    };
+
+    if (action == QLatin1String("dock")) {
+        if (value == QLatin1String("left"))
+            return later([this](bool, bool, bool) { applyAppletPanelState(false, true, true); });
+        if (value == QLatin1String("right"))
+            return later([this](bool, bool, bool) { applyAppletPanelState(false, false, true); });
+        return fail(QStringLiteral("dock needs left|right"));
+    }
+    if (action == QLatin1String("float")) {
+        if (value == QLatin1String("on"))
+            return later([this](bool, bool dockedLeft, bool) {
+                applyAppletPanelState(true, dockedLeft, true);
+            });
+        if (value == QLatin1String("off"))
+            return later([this](bool, bool dockedLeft, bool) {
+                applyAppletPanelState(false, dockedLeft, true);
+            });
+        return fail(QStringLiteral("float needs on|off"));
+    }
+    if (action == QLatin1String("show")) {
+        return later([this](bool floating, bool dockedLeft, bool) {
+            applyAppletPanelState(floating, dockedLeft, true);
+        });
+    }
+    if (action == QLatin1String("hide")) {
+        // Hiding is only meaningful docked — a hidden float window is the
+        // unreachable state applyAppletPanelState() refuses to represent.
+        return later([this](bool, bool dockedLeft, bool) {
+            applyAppletPanelState(false, dockedLeft, false);
+        });
+    }
+    return fail(QStringLiteral("unknown applet action: ") + action);
+}
+
+QJsonObject MainWindow::automationTitleBarSnapshot() const
+{
+    if (!m_titleBar)
+        return QJsonObject{{QStringLiteral("present"), false}};
+    QJsonObject snapshot = QJsonObject::fromVariantMap(m_titleBar->barState());
+    snapshot.insert(QStringLiteral("present"), true);
+    return snapshot;
+}
+
+bool MainWindow::automationTitleBarAction(const QString& action,
+                                          const QString& target,
+                                          QString* error,
+                                          std::function<void()>* activate)
+{
+    auto fail = [error](const QString& why) {
+        if (error) *error = why;
+        return false;
+    };
+    auto later = [activate](std::function<void()> run) {
+        if (activate) *activate = std::move(run);
+        return true;
+    };
+    if (!m_titleBar) {
+        return fail(QStringLiteral("no title bar"));
+    }
+    RadioTabBar* tabs = m_titleBar->radioTabBar();
+    if (!tabs) {
+        return fail(QStringLiteral("no radio tab bar"));
+    }
+
+    if (action == QLatin1String("selectRadio")) {
+        if (target.isEmpty()) {
+            return fail(QStringLiteral("selectRadio needs a radio id"));
+        }
+        // Drive the real tab widget rather than the model behind it: the point
+        // of the verb is to prove the control the operator clicks works, and a
+        // model-only path would pass even if the tab were unreachable.
+        const auto tabWidgets = tabs->findChildren<RadioTab*>();
+        for (RadioTab* tab : tabWidgets) {
+            if (tab->entry().id == target) {
+                // A hidden tab (removed from the strip, or compacted away)
+                // is one the operator cannot click either.
+                if (!tab->isVisible()) {
+                    return fail(QStringLiteral("radio tab '") + target
+                                + QStringLiteral("' is not visible"));
+                }
+                // Discovery can rebuild the strip before the deferred turn.
+                const QPointer<RadioTab> guarded(tab);
+                return later([guarded]() {
+                    if (guarded) guarded->click();
+                });
+            }
+        }
+        return fail(QStringLiteral("no radio tab with id '") + target
+                    + QStringLiteral("'"));
+    }
+    if (action == QLatin1String("showDiscovery")) {
+        const QPointer<RadioTabBar> guarded(tabs);
+        return later([guarded]() {
+            if (guarded) guarded->showDiscoveryPopover();
+        });
+    }
+    if (action == QLatin1String("minimize") || action == QLatin1String("maximize")
+        || action == QLatin1String("close")) {
+        return later([this, action]() {
+            WindowCaptionButtons* caption = m_titleBar ? m_titleBar->captionButtons() : nullptr;
+            if (!caption || !caption->isVisible()) {
+                if (action == QLatin1String("minimize")) {
+                    showMinimized();
+                } else if (action == QLatin1String("maximize")) {
+                    if (m_titleBar && m_titleBar->isMinimalMode()) {
+                        toggleMinimalMode(false);
+                    } else if (isMaximized()) {
+                        showNormal();
+                    } else {
+                        showMaximized();
+                    }
+                } else {
+                    close();
+                }
+                return;
+            }
+            if (action == QLatin1String("minimize")) emit caption->minimizeRequested();
+            else if (action == QLatin1String("maximize")) emit caption->maximizeRestoreRequested();
+            else emit caption->closeRequested();
+        });
+    }
+    return fail(QStringLiteral("unknown titlebar action '") + action
+                + QStringLiteral("'"));
 }
 
 // The agent automation-bridge lifecycle (startAutomationBridge / stop /
@@ -5149,35 +5201,32 @@ void MainWindow::buildUI()
     // applet panel; clicking the inactive-side icon moves it there (and
     // shows it if hidden).
     auto handleDockClick = [this](bool wantLeft) {
-        // If currently floating, dock back first so the float window is
-        // torn down via the canonical path; otherwise reparenting the
-        // contents into the splitter leaves an empty float window alive
-        // and visible (the "black box" in #2584).
-        if (m_appletPanelFloatWindow) {
-            toggleAppletPanelFloating(false);
-        }
-        const bool dockedLeft = AppSettings::instance()
-            .value("AppletPanelDockedLeft", "False").toString() == "True";
-        const bool visible = m_appletPanel && m_appletPanel->isVisible();
-        if (visible && dockedLeft == wantLeft) {
-            setAppletPanelVisible(false);
-        } else {
-            if (!visible) setAppletPanelVisible(true);
-            if (dockedLeft != wantLeft) setAppletPanelDockedLeft(wantLeft);
-        }
+        bool floating = false, dockedLeft = false, visible = false;
+        appletPanelState(&floating, &dockedLeft, &visible);
+        // Clicking the wall the panel already occupies is the "hide" gesture.
+        // That only reads as "hide" when the panel is genuinely docked there
+        // and on screen — while floating, or while hidden, the same click
+        // means "bring it back to this wall", which is why the floating case
+        // must not fall through to the hide branch.
+        const bool alreadyThere = !floating && visible && dockedLeft == wantLeft;
+        applyAppletPanelState(/*floating=*/false, wantLeft, !alreadyThere);
     };
     connect(m_titleBar, &TitleBar::dockAppletLeftRequested,  this, [handleDockClick]() { handleDockClick(true);  });
     connect(m_titleBar, &TitleBar::dockAppletRightRequested, this, [handleDockClick]() { handleDockClick(false); });
-    // Pop-out icon: toggle floating via the shared helper so the icon, the
-    // Ctrl+Shift+S shortcut, and the float-window close-X stay in sync.
+    // Pop-out icon: flip only the floating field, leaving the wall alone, so
+    // the icon, the Ctrl+Shift+S shortcut and the float-window close-X all
+    // agree on what one activation does.
     connect(m_titleBar, &TitleBar::popOutAppletRequested, this, [this]() {
-        toggleAppletPanelFloating(m_appletPanelFloatWindow == nullptr);
+        bool floating = false, dockedLeft = false, visible = false;
+        appletPanelState(&floating, &dockedLeft, &visible);
+        applyAppletPanelState(!floating, dockedLeft, true);
     });
 
     m_splitter = new QSplitter(Qt::Horizontal, this);
     m_splitter->setHandleWidth(0);
 
     auto* central = new QWidget(this);
+    central->setObjectName(QStringLiteral("mainCentralWidget"));
     auto* vbox = new QVBoxLayout(central);
     vbox->setContentsMargins(0, 0, 0, 0);
     vbox->setSpacing(0);
@@ -5256,7 +5305,8 @@ void MainWindow::buildUI()
         applet->spectrumWidget()->setPanEdgeTaperEnabled(
             connected && caps.hasDdcPanEdgeRolloff);
         applet->spectrumWidget()->setClientFftSmoothingEnabled(
-            !(connected && caps.backendPanAveraging.has_value()));
+            AetherSDR::clientFftSmoothingEnabled(
+                connected, caps.backendPanAveraging.has_value()));
         // A new pane changes WHICH pane carries a radio-wide span control,
         // not only this one's (#5750), so the whole stack is re-derived.
         syncPanSpanControlPlacement();
@@ -5329,31 +5379,25 @@ void MainWindow::buildUI()
         if (!e.txAntenna.isEmpty() && e.txAntenna != slice->txAntenna()) {
             m_radioModel.sendCommand(QString("slice set %1 txant=%2").arg(id).arg(e.txAntenna));
         }
-        // AGC
-        if (!e.agcMode.isEmpty() && e.agcMode != slice->agcMode()) {
-            m_radioModel.sendCommand(QString("slice set %1 agc_mode=%2").arg(id).arg(e.agcMode));
-        }
-        if (e.agcThreshold != slice->agcThreshold()) {
-            m_radioModel.sendCommand(QString("slice set %1 agc_threshold=%2").arg(id).arg(e.agcThreshold));
+        // AGC while KiwiSDR external receive audio replaces the slice: the
+        // bookmark holds the RADIO's AGC, which the SliceModel setters would
+        // write into the KiwiSDR AGC, so it goes as wire text here and
+        // recallBandStackReceiveDsp() below leaves the AGC alone.
+        if (slice->externalReceiveReplacementActive()) {
+            if (!e.agcMode.isEmpty() && e.agcMode != slice->agcMode()) {
+                m_radioModel.sendCommand(QString("slice set %1 agc_mode=%2").arg(id).arg(e.agcMode));
+            }
+            if (e.agcThreshold != slice->agcThreshold()) {
+                m_radioModel.sendCommand(QString("slice set %1 agc_threshold=%2").arg(id).arg(e.agcThreshold));
+            }
         }
         // Volume
         if (static_cast<int>(slice->audioGain()) != e.audioGain) {
             slice->setAudioGain(static_cast<float>(e.audioGain));
         }
-        // NB
-        if (e.nbOn != slice->nbOn()) {
-            m_radioModel.sendCommand(QString("slice set %1 nb=%2").arg(id).arg(e.nbOn ? 1 : 0));
-        }
-        if (e.nbLevel != slice->nbLevel()) {
-            m_radioModel.sendCommand(QString("slice set %1 nb_level=%2").arg(id).arg(e.nbLevel));
-        }
-        // NR
-        if (e.nrOn != slice->nrOn()) {
-            m_radioModel.sendCommand(QString("slice set %1 nr=%2").arg(id).arg(e.nrOn ? 1 : 0));
-        }
-        if (e.nrLevel != slice->nrLevel()) {
-            m_radioModel.sendCommand(QString("slice set %1 nr_level=%2").arg(id).arg(e.nrLevel));
-        }
+        // AGC (outside KiwiSDR replacement), NB and NR through the SliceModel
+        // setters, so they reach every backend, not only a command plane.
+        m_radioModel.recallBandStackReceiveDsp(slice, e);
         // WNB (panadapter-level, not slice)
         if (auto* pan = m_radioModel.activePanadapter()) {
             if (e.wnbOn != pan->wnbActive()) {
@@ -6190,14 +6234,14 @@ void MainWindow::buildUI()
 int MainWindow::catPortTargetCount() const
 {
     if (!m_radioModel.isConnected()) return 1;
-    return RadioModel::maxSlicesForModel(m_radioModel.model());
+    // Backend-aware, the same number the RX applet's slice tabs take (#5776).
+    return ReceiverSlotCount::forCeiling(m_radioModel.maxSlices(), m_radioModel.slices());
 }
 
 void MainWindow::applyCatPortCount()
 {
     auto& s = AppSettings::instance();
     const bool masterOn = s.value("CatEnabled", "False").toString() == "True";
-    const int  target   = catPortTargetCount();  // bounds applet VFO letters, not port count
 
     for (int i = 0; i < kCatPorts; ++i) {
         if (!catPort(i)) continue;
@@ -6208,7 +6252,8 @@ void MainWindow::applyCatPortCount()
         // A CAT port is a control channel, not a 1:1 mapping to a slice — don't
         // cap how many configured ports start by the radio's receiver count
         // (#3693). Receiver capacity bounds the VFO-letter choices per port
-        // (catPortTargetCount() feeds the applet), not whether a port runs.
+        // (ReceiverSlotCount::catLetters() feeds the applet), not whether a
+        // port runs.
         const bool shouldRun   = masterOn && portEnabled && (portNum >= 1024);
 
         if (shouldRun && !catPort(i)->isRunning()) {
@@ -6229,9 +6274,9 @@ void MainWindow::applyCatPortCount()
     auto* applet = m_appletPanel ? m_appletPanel->catControlApplet() : nullptr;
     if (applet) {
         applet->setCatEnabled(masterOn);
-        // Show hardware max when connected; fall back to kMaxPorts (all letters) when not.
-        const int hwSlices = (target > 1) ? target : kCatPorts;
-        applet->setMaxSlices(hwSlices);
+        // The radio's own count while connected (one letter on a one-receiver
+        // radio), every letter when none is (#5776).
+        applet->setMaxSlices(ReceiverSlotCount::catLetters(&m_radioModel));
     }
 }
 
@@ -6323,13 +6368,13 @@ void MainWindow::onConnectionStateChanged(bool connected)
         const bool edgeTaperEnabled =
             connected && m_radioModel.backendCapabilities().hasDdcPanEdgeRolloff;
         const bool backendAverages =
-            connected && m_radioModel.backendCapabilities().backendPanAveraging.has_value();
+            m_radioModel.backendCapabilities().backendPanAveraging.has_value();
         for (auto* applet : m_panStack->allApplets()) {
             if (applet && applet->spectrumWidget()) {
                 applet->spectrumWidget()->setBandSegmentZoomAvailable(zoomAvailable);
                 applet->spectrumWidget()->setPanEdgeTaperEnabled(edgeTaperEnabled);
                 applet->spectrumWidget()->setClientFftSmoothingEnabled(
-                    !backendAverages);
+                    AetherSDR::clientFftSmoothingEnabled(connected, backendAverages));
             }
         }
         // The span declaration belongs to the radio just (dis)connected, so
@@ -6464,8 +6509,7 @@ void MainWindow::onConnectionStateChanged(bool connected)
         if (m_bsExpiryTimer && !m_bsExpiryTimer->isActive())
             m_bsExpiryTimer->start();
 
-        // Apply CAT port counts for the newly connected radio.
-        // applyCatPortCount() starts/stops ports up to maxSlicesForModel().
+        // Re-apply the CAT port states and size the VFO letters to this radio.
         applyCatPortCount();
 #ifdef HAVE_WEBSOCKETS
         // Auto-start TCI WebSocket server if enabled
@@ -6591,20 +6635,29 @@ void MainWindow::onConnectionStateChanged(bool connected)
 
             // Auto-connect peripherals with manual IPs (#914)
             QString tgxlIp = cs.value("TGXL_ManualIp", "").toString();
-            if (!tgxlIp.isEmpty() && !m_tgxlConn.isConnected()) {
+            if (!tgxlIp.isEmpty() && !m_tgxlConn.isConnected()
+                && PeripheralSettings::autoConnect(QStringLiteral("tgxl"))) {
                 quint16 tgxlPort = static_cast<quint16>(cs.value("TGXL_ManualPort", "9010").toInt());
-                m_tgxlConn.connectToTgxl(tgxlIp, tgxlPort);
+                if (!m_tgxlConn.isConnecting() && !m_tgxlConn.isAuthBlocked()) {
+                    m_tgxlConn.autoConnectToTgxl(tgxlIp, tgxlPort);
+                }
             }
             QString pgxlIp = cs.value("PGXL_ManualIp", "").toString();
-            if (!pgxlIp.isEmpty() && !m_pgxlConn.isConnected()) {
+            if (!pgxlIp.isEmpty() && !m_pgxlConn.isConnected()
+                && PeripheralSettings::autoConnect(QStringLiteral("pgxl"))) {
                 quint16 pgxlPort = static_cast<quint16>(cs.value("PGXL_ManualPort", "9008").toInt());
-                m_pgxlConn.connectToPgxl(pgxlIp, pgxlPort);
+                if (!m_pgxlConn.isConnecting() && !m_pgxlConn.isAuthBlocked()) {
+                    m_pgxlConn.autoConnectToPgxl(pgxlIp, pgxlPort);
+                }
             }
             // If SS_ManualIp is set, connect to ShackSwitch immediately using a
             // synthetic serial so device-type detection works from the start.
             // This bypasses the UDP discovery race condition entirely.
             QString ssIp = cs.value("SS_ManualIp", "").toString();
-            if (!ssIp.isEmpty() && !m_antennaGenius.isConnected()) {
+            if (!ssIp.isEmpty() && !m_antennaGenius.isConnected()
+                && PeripheralSettings::autoConnect(QStringLiteral("shackswitch"))
+                && !m_antennaGenius.isConnecting()
+                && !m_antennaGenius.isAuthBlockedFor(ssIp, 9007)) {
                 AgDeviceInfo ssInfo;
                 ssInfo.ip         = QHostAddress(ssIp);
                 ssInfo.port       = 9007;
@@ -6618,7 +6671,7 @@ void MainWindow::onConnectionStateChanged(bool connected)
             // If ShackSwitch already connected above, isConnected() = true → skips.
             // A real AG (no UDP broadcast, no SS_ManualIp) still connects after delay.
             QString agIp = cs.value("AG_ManualIp", "").toString();
-            if (!agIp.isEmpty()) {
+            if (!agIp.isEmpty() && PeripheralSettings::autoConnect(QStringLiteral("ag"))) {
                 quint16 agPort = static_cast<quint16>(cs.value("AG_ManualPort", "9007").toInt());
                 if (m_agManualConnectTimer) {
                     m_agManualConnectTimer->stop();
@@ -6629,8 +6682,12 @@ void MainWindow::onConnectionStateChanged(bool connected)
                 m_agManualConnectTimer->setSingleShot(true);
                 connect(m_agManualConnectTimer, &QTimer::timeout, this, [this, agIp, agPort]() {
                     m_agManualConnectTimer = nullptr;
-                    if (!m_antennaGenius.isConnected())
-                        m_antennaGenius.connectToAddress(QHostAddress(agIp), agPort);
+                    if (m_radioModel.isConnected() && !m_antennaGenius.isConnected()
+                        && !m_antennaGenius.isConnecting()
+                        && PeripheralSettings::autoConnect(QStringLiteral("ag"))
+                        && !m_antennaGenius.isAuthBlockedFor(agIp, agPort)) {
+                        m_antennaGenius.connectToAddress(agIp, agPort);
+                    }
                 });
                 m_agManualConnectTimer->start(7000);
             }
@@ -6647,9 +6704,9 @@ void MainWindow::onConnectionStateChanged(bool connected)
         // settle timer happened to fire.
         m_daxRestore.onDisconnected();
 
-        // Radio disconnected: trim CAT ports back to 1 so apps on channel A
-        // stay connected through brief reconnects, higher channels stop cleanly.
-        applyCatPortCount();  // catPortTargetCount() returns 1 when !connected
+        // Radio disconnected: re-apply the CAT port states, and offer every
+        // VFO letter again (ReceiverSlotCount::catLetters with no radio).
+        applyCatPortCount();
 
         if (m_layoutRestoreTimer) {
             m_layoutRestoreTimer->stop();
@@ -6659,6 +6716,17 @@ void MainWindow::onConnectionStateChanged(bool connected)
         clearKiwiSdrPanDisplaySourceOverrides();
         if (m_appletPanel) {
             m_appletPanel->clearSliceButtons();
+        }
+
+        // A disconnect the operator asked for is not a lost link.  The miss
+        // timer would otherwise keep counting against a radio we stopped
+        // talking to and raise the red link alarm on an idle tab ~4.5 s later.
+        // An unexpected drop leaves both alone so the alarm still shows.
+        if (m_userDisconnected) {
+            if (m_heartbeatMissTimer) m_heartbeatMissTimer->stop();
+            if (m_titleBar) m_titleBar->clearLinkAlarm();
+            m_lastSessionTab = {};
+            scheduleRadioTabRefresh();
         }
 
         const bool reconnectWan = !m_userDisconnected && m_radioModel.isWan()
@@ -7406,6 +7474,22 @@ void MainWindow::showRecorderNotice(const QString& key,
     box->open();   // NOT exec(): returns immediately, no nested event loop
 }
 
+// The title-bar speaker and master slider show the path the operator hears:
+// the PC sink with PC Audio on, the radio's line out with it off.
+void MainWindow::syncTitleBarOutput()
+{
+    if (!m_titleBar || !m_audio)
+        return;
+    const bool pcAudio = AppSettings::instance().value("PcAudioEnabled", "True").toString() == "True";
+    if (pcAudio) {
+        m_titleBar->setLineoutMuted(m_audio->isMuted());
+        m_titleBar->setMasterVolume(qRound(m_audio->rxVolume() * 100.0f));
+    } else {
+        m_titleBar->setLineoutMuted(m_radioModel.lineoutMute());
+        m_titleBar->setMasterVolume(m_radioModel.lineoutGain());
+    }
+}
+
 void MainWindow::applyMasterVolume(int pct)
 {
     if (pct < 0)   pct = 0;
@@ -7519,9 +7603,12 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
     // ── Mic sources: MIC / BAL / LINE / ACC are Flex connectors ────────────
     // A radio that cannot have its input chosen by a client collapses to PC.
     if (m_appletPanel) {
+        // Absent (or disconnected): the default record, PROC 0..2.
+        const RadioCapabilities::SpeechProcessorControl proc =
+            (connected ? caps.speechProcessorControl : std::nullopt)
+                .value_or(RadioCapabilities::SpeechProcessorControl{});
         m_appletPanel->phoneCwApplet()->setSpeechProcessorPresentation(
-            connected ? caps.speechProcessorLabel : QStringLiteral("PROC"),
-            connected ? caps.speechProcessorLevelMaximum : 2);
+            proc.label, proc.levelMaximum);
         m_appletPanel->meterApplet()->setMainFanTelemetryState(
             connected, caps.hasMainFanTelemetry);
         m_appletPanel->setSelectableMicInputs(!connected || caps.hasSelectableMicInputs);
@@ -7546,7 +7633,8 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
             phone->setTxFilterControlsAvailable(!connected || caps.hasTxFilterControls);
             phone->setDexpVisible(!connected || caps.hasDownwardExpander);
             phone->setAmCarrierAvailable(!connected || caps.hasAmCarrierLevel);
-            phone->setVoxDelayAvailable(!connected || caps.hasVoxDelay);
+            phone->setVoxDelayAvailable(
+                !connected || (caps.voxControl && caps.voxControl->hasDelay));
             phone->setTxFilterEdges(connected ? caps.txFilterLowEdgesHz : QList<int>{},
                                     connected ? caps.txFilterHighEdgesHz : QList<int>{});
         }
@@ -7570,6 +7658,9 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
             spectrum->setPanBinsAbsolute(binsAbsolute);
         }
     }
+    syncSquelchScaleToUi();
+    syncActiveSliceSquelchLineToSpectrums();
+    syncActiveSliceAutoSquelchToSpectrums();
 
     // ── Profiles: the PROF applet, the Profiles menu, and both dialogs ──────
     const bool profiles = !connected || caps.hasProfiles;
@@ -7889,6 +7980,7 @@ void MainWindow::applyRadioSideDspToPanDisplay(SpectrumWidget* sw) const
     if (!sw) {
         return;
     }
+    sw->setPanGeometryConfirmationRequired(m_radioModel.confirmsReceiveControls());
     auto* menu = sw->overlayMenu();
     if (menu) {
         menu->setRadioSideDspAvailable(m_radioModel.hasRadioSideDsp());
@@ -8189,6 +8281,21 @@ void MainWindow::applyTuneRequest(SliceModel* slice, double mhz,
 #endif
     }
 
+    if (m_radioModel.confirmsReceiveControls()) {
+        if (m_radioModel.slice(slice->sliceId()) != slice) { return; }
+        IRadioBackend::ReceiveTuneView view = IRadioBackend::ReceiveTuneView::Preserve;
+        if (intent == TuneIntent::CommandedTargetCenter || centerLockActiveForSlice(slice)) {
+            view = IRadioBackend::ReceiveTuneView::Center;
+        } else if (intent != TuneIntent::IncrementalTune || panFollowEnabled()) {
+            view = IRadioBackend::ReceiveTuneView::Reveal;
+        }
+        // Receiver and display intent are admitted together. A refusal leaves
+        // both observations intact; pending hardware/DSP never moves a flag.
+        m_radioModel.requestConfirmedReceiveTune(slice->sliceId(), mhz, view);
+        pushSliceFrequencyToOverlays(slice, slice->frequency());
+        return;
+    }
+
     holdCenterLockTuneTarget(slice, mhz);
     pushSliceFrequencyToOverlays(slice, mhz);
 
@@ -8436,6 +8543,8 @@ void MainWindow::setActiveSliceInternal(int sliceId, bool revealOffscreen)
         else if (m_panStack->activeApplet())
             m_panStack->activeApplet()->setSliceId(sliceId, s->letter());
     }
+    // Before setSlice(): restoring this slice's Auto SQL needs its availability.
+    syncSquelchScaleToUi();
     m_appletPanel->setSlice(s);
     m_appletPanel->updateSliceButtons(m_radioModel.slices(), sliceId);
     refreshKiwiSdrSlices();
@@ -8729,6 +8838,7 @@ void MainWindow::pushSliceOverlay(SliceModel* s)
         s->ritOn(), s->ritFreq(), s->xitOn(), s->xitFreq(),
         s->diversity(), s->isDiversityParent(),
         s->isDiversityChild(), s->diversityIndex());
+    sw->setSliceOverlayInCapture(s->sliceId(), s->inCapture());
 }
 
 void MainWindow::syncTxWaterfallSliceToSpectrums()
@@ -9506,12 +9616,27 @@ void MainWindow::setAppletPanelDockedLeft(bool left)
     // Move m_appletPanel either before m_panStack (left dock) or to the end
     // (right dock).  insertWidget()/addWidget() on an already-attached child
     // reparents it to the new index without destroy/recreate.
-    if (left) {
-        const int panIdx = m_splitter->indexOf(centralPanWidget());
-        if (panIdx < 0) return;
-        m_splitter->insertWidget(panIdx, m_appletPanel);
-    } else {
-        m_splitter->addWidget(m_appletPanel);
+    //
+    // Both calls must be skipped when the panel is ALREADY on the requested
+    // wall, because neither is idempotent: insertWidget() detaches the panel
+    // first, which shifts the centre widget down one index, so re-inserting
+    // at the now-stale panIdx drops the panel on the far side and silently
+    // flips the dock.  Re-asserting the current side is a legitimate call
+    // (it happens on un-float and on restore), so the guard lives here
+    // rather than in the callers.
+    //
+    // Rebase note (#4906 onto the #4941 canvas trunk): the reference widget
+    // is centralPanWidget() — the workspace canvas when the mode is on, the
+    // pan stack otherwise — not m_panStack, which leaves the splitter
+    // entirely in canvas mode.
+    const int panIdx    = m_splitter->indexOf(centralPanWidget());
+    const int appletIdx = m_splitter->indexOf(m_appletPanel);
+    if (panIdx < 0) return;
+    const bool alreadyOnWall =
+        appletIdx >= 0 && (left ? appletIdx < panIdx : appletIdx > panIdx);
+    if (!alreadyOnWall) {
+        if (left) m_splitter->insertWidget(panIdx, m_appletPanel);
+        else      m_splitter->addWidget(m_appletPanel);
     }
 
     // Re-apply stretch/collapse rules by widget identity (indices shifted).
@@ -9547,6 +9672,29 @@ void MainWindow::setAppletPanelDockedLeft(bool left)
     AppSettings::instance().setValue("AppletPanelDockedLeft", left ? "True" : "False");
     AppSettings::instance().save();
 
+    // Everything above changed geometry and NOTHING invalidated, which is the
+    // whole of the see-through-strip bug: the panel does not resize when it
+    // changes walls, it TRANSLATES, so the panadapter has to slide the same
+    // 260 px the other way.  The strip the pan slides into is covered by the
+    // pan alone, and its swapchain can still be sized for the transient
+    // layout — so that strip is painted by nobody (stale pixels in the
+    // opaque window; the desktop, back when it was translucent).  Docking RIGHT never
+    // showed it because there the strip needing new cover is taken by the
+    // applet panel, an ordinary widget that paints correctly; that asymmetry
+    // is why the report was always "panel on the left".
+    // Scoped to an actual wall change.  applyAppletPanelState() routes show,
+    // hide, un-float, pop-out, Ctrl+Shift+S and the bridge verb all through
+    // this function, and refreshAfterLayoutShift() is a per-panadapter native
+    // re-realize — far too expensive to pay on transitions where no panadapter
+    // moved.  It is also the wrong moment on the hide path, which applies
+    // visibility after this returns.
+    if (!alreadyOnWall) {
+        if (m_panStack)
+            m_panStack->refreshAfterLayoutShift();
+        if (m_splitter)
+            m_splitter->update();
+    }
+
     if (m_titleBar)
         m_titleBar->setAppletDockState(m_appletPanel->isVisible(), left);
 }
@@ -9558,7 +9706,21 @@ void MainWindow::setAppletPanelVisible(bool visible)
     // AppletPanel::setFixedWidth(260) means Qt restores the same width on
     // un-hide automatically — the splitter just shrinks PanStack (stretch=1)
     // by 260 and gives the slot back to the applet.
+    const bool changed = m_appletPanel->isVisible() != visible;
     m_appletPanel->setVisible(visible);
+
+    // The panadapter gains or loses the panel's 260 px here, which is the same
+    // geometry change that strands its native surface on a dock flip — so the
+    // refresh belongs here too, where the width actually changes, rather than
+    // being fired blanket from setAppletPanelDockedLeft() on transitions that
+    // move nothing.  Guarded on a real change so a redundant setVisible() is
+    // still free.
+    if (changed) {
+        if (m_panStack)
+            m_panStack->refreshAfterLayoutShift();
+        if (m_splitter)
+            m_splitter->update();
+    }
 
     AppSettings::instance().setValue("AppletPanelVisible", visible ? "True" : "False");
     AppSettings::instance().save();
@@ -9590,6 +9752,68 @@ void MainWindow::toggleAppletPanelFloating(bool floating)
     }
 }
 
+void MainWindow::appletPanelState(bool* floating, bool* dockedLeft,
+                                  bool* visible) const
+{
+    // Floating and visibility come off the widgets — the settings store lags
+    // by a save and cannot be trusted mid-transition.  The dock side has no
+    // widget to read while the panel is floating (it is out of the splitter),
+    // so that one field falls back to the persisted wall it will return to.
+    if (floating)
+        *floating = m_appletPanelFloatWindow != nullptr;
+    if (visible)
+        *visible = m_appletPanel && m_appletPanel->isVisible();
+    if (dockedLeft) {
+        *dockedLeft = AppSettings::instance()
+            .value("AppletPanelDockedLeft", "False").toString() == "True";
+        if (!m_appletPanelFloatWindow && m_splitter && m_appletPanel) {
+            const int appletIdx = m_splitter->indexOf(m_appletPanel);
+            const int panIdx    = m_splitter->indexOf(centralPanWidget());
+            if (appletIdx >= 0 && panIdx >= 0)
+                *dockedLeft = appletIdx < panIdx;
+        }
+    }
+}
+
+void MainWindow::applyAppletPanelState(bool floating, bool dockedLeft, bool visible)
+{
+    if (!m_appletPanel)
+        return;
+
+    // A floating panel is always shown.  Hiding one leaves an empty float
+    // window with no affordance to bring the contents back, which is the
+    // "white space" state — so this combination is not representable.
+    if (floating)
+        visible = true;
+
+    if (floating) {
+        // Record the wall to return to without moving the panel while it
+        // lives in its own window; dockAppletPanel() reads this back.
+        AppSettings::instance().setValue("AppletPanelDockedLeft",
+                                         dockedLeft ? "True" : "False");
+        AppSettings::instance().save();
+        setAppletPanelVisible(true);
+        if (!m_appletPanelFloatWindow)
+            toggleAppletPanelFloating(true);
+    } else {
+        // Tear the float window down first so the panel is back in the
+        // splitter before the side and visibility are applied to it.
+        if (m_appletPanelFloatWindow)
+            toggleAppletPanelFloating(false);
+        // QSplitter will not re-slot a HIDDEN child: calling
+        // setAppletPanelDockedLeft() while the panel is hidden persists the
+        // new side but leaves the widget in its old slot, so it reappears on
+        // the wrong wall when shown.  Show it first whenever the wall has to
+        // change, then apply the caller's final visibility.
+        bool currentLeft = false;
+        appletPanelState(nullptr, &currentLeft, nullptr);
+        if (currentLeft != dockedLeft && !m_appletPanel->isVisible())
+            setAppletPanelVisible(true);
+        setAppletPanelDockedLeft(dockedLeft);
+        setAppletPanelVisible(visible);
+    }
+}
+
 void MainWindow::trackPersistentDialog(PersistentDialog* dialog)
 {
     if (!dialog) {
@@ -9611,27 +9835,11 @@ void MainWindow::setFramelessWindow(bool on)
     // geometry so the window stays where the user put it.
     const QRect geom = geometry();
     const bool wasVisible = isVisible();
-    Qt::WindowFlags flags = windowFlags();
-#ifdef Q_OS_WIN
-    if (flags & Qt::FramelessWindowHint) {
-        flags &= ~Qt::FramelessWindowHint;
-        setWindowFlags(flags);
-        setGeometry(geom);
-        if (wasVisible) {
-            show();
-        }
-    }
-    applyWindowsCustomFrame();
-#else
-    if (on)
-        flags |= Qt::FramelessWindowHint;
-    else
-        flags &= ~Qt::FramelessWindowHint;
-    setWindowFlags(flags);
+    WindowChrome::configure(this, on);
     setGeometry(geom);
-    if (wasVisible)
+    if (wasVisible) {
         show();
-#endif
+    }
 
     // Keep the bottom-right size grip in sync — only useful when frameless.
     if (m_sizeGrip) m_sizeGrip->setVisible(on);
@@ -9817,13 +10025,9 @@ void MainWindow::toggleMinimalMode(bool on)
 
         QByteArray geom = QByteArray::fromBase64(
             s.value("MinimalModeGeometry", "").toByteArray());
-        // Re-anchor as well as restore: this window is already mapped, so Qt
-        // reapplies its caption-reserving clamp on every entry and the #4328
-        // gap would come straight back on one Ctrl+Shift+M round trip — then stick,
-        // because closeEvent() saves whatever origin is current.
-        if (!geom.isEmpty() && restoreGeometry(geom))
-            reanchorCustomFrameGeometry(geom);
-
+        if (!geom.isEmpty()) {
+            restoreGeometry(geom);
+        }
         // Defer clearing the guard so any AppKit-deferred WindowStateChange
         // queued by the showNormal() / setFixedWidth() calls above is drained
         // through changeEvent's early-return before the guard drops.
@@ -9896,17 +10100,13 @@ void MainWindow::toggleMinimalMode(bool on)
         // Restore full geometry
         QByteArray geom = QByteArray::fromBase64(
             s.value("FullModeGeometry", "").toByteArray());
-        const bool restored = !geom.isEmpty() && restoreGeometry(geom);
+        if (!geom.isEmpty()) {
+            restoreGeometry(geom);
+        }
 
         // Belt-and-suspenders: if FullModeGeometry encoded a state, ensure
         // we land windowed.
         showNormal();
-
-        // After showNormal(), not before: leaving maximized drops us onto Qt's
-        // clamped normal geometry, which is the rect that carries the #4328
-        // phantom-caption offset.  Re-anchoring first would just be undone.
-        if (restored)
-            reanchorCustomFrameGeometry(geom);
 
         // Now show the spectrum, one turn later (see the note above the
         // splitter restore).  Queued BEFORE the canvas re-entry below, which
@@ -10324,7 +10524,7 @@ void MainWindow::centerActiveSliceInPanadapter(bool forceRadioCenter, double cen
     // into waterfall history. requestPanCenter() defers and replays it instead.
     bool centerDeferred = false;
     if (!kiwiDisplayActive && forceRadioCenter && m_radioModel.isConnected()) {
-        centerDeferred = !m_radioModel.requestPanCenter(s->panId(), targetMhz);
+        centerDeferred = !requestSlicePanCenter(m_radioModel, s->sliceId(), targetMhz);
     }
 
     // Keep the local spectrum centered immediately so the active slice marker is
@@ -10710,7 +10910,7 @@ void MainWindow::createPansSequentially(const QString& layoutId, int total,
                 if (pan) {
                     // Push current state to the spectrum widget
                     applet->spectrumWidget()->setDbmRange(pan->minDbm(), pan->maxDbm());
-                    applet->spectrumWidget()->setFrequencyRange(
+                    applet->spectrumWidget()->observeFrequencyRange(
                         pan->centerMhz(), pan->bandwidthMhz());
                 }
             }
@@ -10970,6 +11170,32 @@ void MainWindow::floatAppletPanel()
             .value("AppletPanelFloatGeometry", "").toByteArray());
     if (!geom.isEmpty()) {
         m_appletPanelFloatWindow->restoreGeometry(geom);
+        // restoreGeometry() faithfully restores a MAXIMIZED/FULLSCREEN state
+        // if one was ever captured — and the geometry is re-saved on every
+        // Move/Resize, so a single accidental maximize (double-clicking the
+        // float window's title bar is enough) poisons the setting and every
+        // later pop-out opens the panel full-screen.  A 260 px applet rail
+        // maximized across the display is never what the operator wants, so
+        // the state is dropped on restore and a clean geometry is written
+        // back, healing an already-poisoned config on first use.
+        if (m_appletPanelFloatWindow->isMaximized()
+            || m_appletPanelFloatWindow->isFullScreen()) {
+            const QRect restoredNormalGeometry =
+                m_appletPanelFloatWindow->normalGeometry();
+            m_appletPanelFloatWindow->setWindowState(
+                m_appletPanelFloatWindow->windowState()
+                & ~(Qt::WindowMaximized | Qt::WindowFullScreen));
+            if (restoredNormalGeometry.isValid()
+                && !restoredNormalGeometry.isEmpty()) {
+                m_appletPanelFloatWindow->setGeometry(restoredNormalGeometry);
+            } else {
+                m_appletPanelFloatWindow->resize(320, 720);
+            }
+            AppSettings::instance().setValue(
+                "AppletPanelFloatGeometry",
+                m_appletPanelFloatWindow->saveGeometry().toBase64());
+            AppSettings::instance().save();
+        }
     } else {
         m_appletPanelFloatWindow->resize(320, 720);
     }

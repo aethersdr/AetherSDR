@@ -2384,17 +2384,16 @@ void SpectrumOverlayMenu::buildDisplayPanel()
     }
 
     // Display panel tooltips
-    m_avgSlider->setToolTip("FFT frame averaging. Higher values smooth the spectrum trace but reduce time resolution.");
+    setFftAverageDescriptions({}, {});
     m_fpsSlider->setToolTip("FFT refresh rate in frames per second.");
     m_fillSlider->setToolTip("Opacity of the spectrum fill area below the trace.");
     if (m_heatMapBtn) m_heatMapBtn->setToolTip("Colors the spectrum trace by signal strength instead of a single color.");
     if (m_showGridBtn) m_showGridBtn->setToolTip("Show or hide the frequency and dB grid lines on the panadapter.");
-    if (m_weightedAvgBtn) m_weightedAvgBtn->setToolTip("Weights recent FFT frames more heavily for faster response to signal changes.");
     m_gainSlider->setToolTip("Waterfall color gain. Higher values brighten weak signals.");
     m_blackSlider->setToolTip("Waterfall black level. Decrease to darken the noise floor.");
     if (m_autoBlackBtn) m_autoBlackBtn->setToolTip("Automatically adjusts the waterfall black level to match the current noise floor.");
     m_rateSlider->setToolTip("Waterfall rate. 1% = slowest; 100% = fastest.");
-    if (m_wfBlankerThreshSlider) m_wfBlankerThreshSlider->setToolTip("Waterfall noise blanking threshold. Higher values blank more aggressively.");
+    if (m_wfBlankerThreshSlider) m_wfBlankerThreshSlider->setToolTip("Waterfall noise blanking threshold. Higher values blank less.");
     if (m_freqGridSpacingCmb) m_freqGridSpacingCmb->setToolTip("Frequency grid line spacing. Auto adapts to the current span.");
     if (m_freqScaleFontCmb) m_freqScaleFontCmb->setToolTip("Text size of the frequency scale labels. The scale strip grows to fit larger sizes.");
     if (m_colorSchemeCmb) m_colorSchemeCmb->setToolTip("Selects the waterfall color palette.");
@@ -2502,6 +2501,22 @@ void SpectrumOverlayMenu::applyAutoBlackMode(int mode, bool emitSignals)
         emit wfAutoBlackSourceChanged(radioSide);
         if (autoOn) emit wfAutoBlackOffsetChanged(m_blackAutoOffsetValue);
         else        emit wfBlackLevelChanged(m_blackManualValue);
+    }
+}
+
+void SpectrumOverlayMenu::setFftAverageDescriptions(const QString& average, const QString& weighted)
+{
+    if (m_avgSlider) {
+        m_avgSlider->setToolTip(average.isEmpty()
+            ? tr("FFT frame averaging. Higher values smooth the spectrum trace but reduce time resolution.")
+            : average);
+        m_avgSlider->setAccessibleDescription(average);
+    }
+    if (m_weightedAvgBtn) {
+        m_weightedAvgBtn->setToolTip(weighted.isEmpty()
+            ? tr("Weights recent FFT frames more heavily for faster response to signal changes.")
+            : weighted);
+        m_weightedAvgBtn->setAccessibleDescription(weighted);
     }
 }
 

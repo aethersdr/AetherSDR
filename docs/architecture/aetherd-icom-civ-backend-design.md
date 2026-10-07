@@ -152,6 +152,7 @@ and it is the cleanest part of that codebase.
 | `setKeying` | CI-V `1C 00` (00=RX, 01=TX) |
 | `setTune` | **no direct command** — see below |
 | `setTxPower` | CI-V `14 0A`, 0000–0255 BCD |
+| `setTunePower` | CI-V `14 0A` while TUNE is keyed (the tune drive); nothing otherwise. RF power set during TUNE is held and written back at the unkey |
 | `setMicGain` | CI-V `14 0B`, 0000–0255 BCD |
 | `setTxMonitor` | CI-V `16 45` enable plus `14 15` level |
 | `setTxFilter` | CI-V `1A 05 0020/0021/0022` — **discrete WIDE/MID/NAR**, not Hz |
@@ -250,7 +251,14 @@ under the exact radio scope, indexed by pan slot. Slider/scroll, clone and reset
 intents save it; pan wiring restores it before seeding the local rate shaper.
 Radio publications and adaptive throttle caps never write that document. Flex
 radio-owned cadence continues to use readback and is never restored from this
-client feature. Both documents use atomic radio-feature writes, retain unrelated
+client feature. FFT FPS (`fftFps`) and the pan's dBm range (`dbmRanges`) live in
+the same document, each only where the backend declares the client its
+persistence owner (`RadioCapabilities::clientPersistsPanFrameRate()`,
+`clientPersistsDbmRange()`). An Icom declares neither: its FFT FPS is not
+stored, and its range is published from the scope calibration
+(`panRangeChanged`), which a stored copy would fight. The two tables were added without a schema
+bump; each is optional and every writer is read-modify-write on the whole
+document. Both documents use atomic radio-feature writes, retain unrelated
 fields, reject invalid values and refuse unknown identities or future schemas.
 UI edits coalesce within 250 ms, capturing their original scope and values.
 Pending writes flush on disconnect, owner teardown and normal application quit;
@@ -1297,6 +1305,7 @@ their own right (CERTIFICATION.md §1.29):
 | **TX Controls** | MOX / PTT | ✅ `setKeying` |
 | | TUNE | ✅ `setTune` |
 | | RF power | ✅ `setTxPower` |
+| | TUNE power while keyed | ✅ `setTunePower` (socket-free tests only; not live-verified) |
 | | power / SWR gauges | ✅ (units fixed; unverified on hardware) |
 | | TX filter | ❌ `setTxFilter` not implemented (`16 58` unmapped) |
 | **Phone / CW** | profile-shaped PROC/COMP enable + level | ✅ `setSpeechProcessor` (`16 44` + `14 0E`) |

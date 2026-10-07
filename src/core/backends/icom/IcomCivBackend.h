@@ -78,10 +78,16 @@ public:
     void setPanPreamp(const QString& panId, int step) override;
     void setPanAttenuator(const QString& panId, int step) override;
     void setSliceRxAntenna(int sliceId, const QString& antenna) override;
+    ReceiveDispatch requestSliceDsp(int sliceId, const SliceDspRequest& request) override;
+    ReceiveDispatch requestSliceAudio(int sliceId, const SliceAudioRequest& request) override;
+    ReceiveDispatch requestSliceSquelch(int sliceId, const SliceSquelchRequest& request) override;
+    ReceiveDispatch requestSliceRxAntenna(int sliceId, const QString& antenna) override;
+    ReceiveDispatch requestSliceLock(int sliceId, bool locked) override;
     void setRadioDialLock(bool locked) override;
     void setKeying(bool key, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {}) override;
     void setTune(bool on, int tunePowerPercent, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {}) override;
     void setTxPower(int percent) override;
+    void setTunePower(int percent) override;
     QString sendCwText(const QString& text, const TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {}) override;
     void abortCwText(const TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {}) override;
     void setCwSpeed(int wpm) override;
@@ -109,9 +115,10 @@ public:
     void setTransmitFrequencyCheck(bool on) override;
     void setVox(bool on, int level, int delayMs) override;
     void setAtu(bool start, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {}) override;
-    void setRitEnabled(bool on) override;
-    void setXitEnabled(bool on) override;
-    void setRitOffset(int hz) override;
+    // One slice, always the transmit slice: the slice id is ignored.
+    void setSliceRitEnabled(int sliceId, bool on) override;
+    void setSliceXitEnabled(int sliceId, bool on) override;
+    void setSliceRitOffset(int sliceId, int hz) override;
     void submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz,
                        TxAudioSource source,
                        const TxCoordinator::Context& context) override;
@@ -168,10 +175,15 @@ private:
 
     void queueTuneAudioFrame();
     [[nodiscard]] int stopTuneProducer();
+    // The RF-power level write itself, bypassing setTxPower()'s TUNE handling.
+    void writeTxPowerLevel(int percent);
     // Commanded PTT intent inside its confirmation window, radio truth
     // otherwise. See the definition for why neither alone is right.
     [[nodiscard]] bool txAudioGateOpen() const;
     void reassertPanPreampWireStep(int step);
+    // Reads the other receive front-end stage after a preamp/ATT write; the
+    // radio interlocks the two without reporting it.
+    void queueFrontEndInterlockRead(const std::vector<std::uint8_t>& read);
     [[nodiscard]] bool tunerSupported() const;
     bool sendTunerCommandIfSupported(bool start, const TxCoordinator::Operation& operation,
                                      const TxCoordinator::Completion& completion);
@@ -258,7 +270,7 @@ private:
     void applyKeying(bool key, const std::optional<TxCoordinator::Command>& command);
     void queueRead(const std::vector<std::uint8_t>& frame, const std::string& key,
                    IcomCivScheduler::Priority priority, qint64 notBeforeMs = 0,
-                   std::vector<std::uint8_t> replyDataPrefix = {});
+                   std::vector<std::uint8_t> replyDataPrefix = {}, bool coalesce = true);
     void queueWrite(const std::vector<std::uint8_t>& frame, const std::string& key,
                     IcomCivScheduler::Priority priority, bool supersedes = true,
                     bool coalesce = true, const std::optional<TxCoordinator::Command>& command = {});
@@ -556,7 +568,10 @@ private:
     // so remembering 01 vs 02 is what lets OFF -> ON restore Full rather than
     // silently demoting it to Semi.
     int m_cwBreakInMode = 1;
+    // The operator's RF power while TUNE holds the drive register; the unkey
+    // writes it back. setTxPower() during TUNE updates this, not the register.
     int m_preTuneTxPowerPercent = -1;
+    TxCoordinator::Operation m_tuneOperation;   // the TUNE carrier's admission
     double m_tunePhase = 0.0;
     static constexpr double kTuneToneHz = 1500.0;
     static constexpr int kTuneToneFrameMs = 20;

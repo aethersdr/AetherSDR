@@ -44,6 +44,12 @@ void fexchange2(int channel, float* inputI, float* inputQ,
 // must pace a burst of input blocks against the worker.
 int GetChannelOutputReady(int channel);
 void SetRXAMode(int channel, int mode);
+// Receive FM construction/control only: these take WDSP's DSP lock and the
+// limiter gain setter rebuilds its state. Never call from acquisition/audio.
+void SetRXAFMDeviation(int channel, double deviationHz);
+void SetRXAFMLimGain(int channel, double maximumGainDb);
+void SetRXAFMLimRun(int channel, int run);
+void SetRXAPanelGain1(int channel, double gain);
 void SetRXABandpassFreqs(int channel, double lowHz, double highHz);
 // Canonical passband setter. RXASetPassband() is what both reference clients
 // (Thetis, pihpsdr) call: it sets the bandpass AND the SNBA output bandwidth
@@ -196,6 +202,16 @@ void SetRXAAGCAttack(int channel, int attackMs);
 void SetRXAAGCDecay(int channel, int decayMs);
 void SetRXAAGCHang(int channel, int hangMs);
 void SetRXAAGCHangThreshold(int channel, int hangThreshold);
+
+// CW audio peaking filter (apfshadow.c): routes to one of RXA.c's four
+// built-in peaking stages by `selection` (0 = double-pole). They run after the
+// AGC, so the centre is an audio frequency; `gain` is linear. Control-path
+// calls (csDSP); the double-pole redesigns only when a parameter changes.
+void SetRXASPCWSelection(int channel, int selection);
+void SetRXASPCWRun(int channel, int run);
+void SetRXASPCWFreq(int channel, double centerHz);
+void SetRXASPCWBandwidth(int channel, double bandwidthHz);
+void SetRXASPCWGain(int channel, double gain);
 
 // ── FM demodulator deviation ──────────────────────────────────────────────
 //
@@ -404,6 +420,7 @@ void SetDisplayNormOneHz(int disp, int pixout, int norm);
 
 int GetWDSPVersion(void);
 
+uint64_t wdspPortThreadAllocationSequence(void);
 uint64_t wdspPortAllocationSequence(void);
 uint64_t wdspPortOutstandingAllocations(void);
 

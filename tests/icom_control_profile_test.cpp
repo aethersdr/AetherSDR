@@ -3,6 +3,7 @@
 // No connectRadio(), event-loop waits, sockets or firmware peer: the session
 // is unstarted and frames/state are injected through the existing test seam.
 #include "core/backends/icom/IcomCivBackend.h"
+#include "core/backends/icom/IcomScope.h"
 #include "core/backends/icom/IcomSession.h"
 #include "core/backends/flex/FlexBackend.h"
 #include "core/backends/hl2/Hl2Backend.h"
@@ -11,6 +12,7 @@
 
 #include <QCoreApplication>
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 
 using namespace AetherSDR;
@@ -55,9 +57,7 @@ struct IcomCivBackendTestAccess {
         backend.m_dataMode = true;
         backend.onLinkTick();
         const auto queued = [&](const std::vector<std::uint8_t>& frame) {
-            return std::any_of(backend.m_civScheduler.m_queue.begin(),
-                               backend.m_civScheduler.m_queue.end(),
-                               [&](const auto& request) { return request.request.frame == frame; });
+            return queuedFrame(backend, frame);
         };
         const std::uint8_t address = backend.m_session->civAddress();
         return queued(cmdReadLevel(address, level::kSquelch))
@@ -135,6 +135,49 @@ struct IcomCivBackendTestAccess {
         return b.confirmationFor(write) == read && b.semanticKey(write) == b.semanticKey(read);
     }
 
+    static bool queuedFrame(const IcomCivBackend& backend, const std::vector<std::uint8_t>& frame)
+    {
+        return std::any_of(backend.m_civScheduler.m_queue.begin(),
+                           backend.m_civScheduler.m_queue.end(),
+                           [&](const auto& request) { return request.request.frame == frame; });
+    }
+
+    // How long after it was queued `frame` may go out; -1 when it is not queued.
+    static std::int64_t queuedHoldOffMs(const IcomCivBackend& backend,
+                                        const std::vector<std::uint8_t>& frame)
+    {
+        for (const auto& entry : backend.m_civScheduler.m_queue) {
+            if (entry.request.frame == frame) {
+                return entry.request.notBeforeMs - entry.enqueuedAtMs;
+            }
+        }
+        return -1;
+    }
+
+    static bool interlockReadSurvivesEarlierRead(const IcomModel& model,
+                                                 bool attenuatorWrite, bool inFlight)
+    {
+        IcomCivBackend backend;
+        prepareSession(backend, model);
+        const std::vector<std::uint8_t> read = attenuatorWrite
+            ? cmdReadFunction(model.civAddress, func::kPreamp)
+            : cmdReadAttenuator(model.civAddress);
+        backend.queueRead(read, backend.semanticKey(read), IcomCivScheduler::Priority::Operator);
+        if (inFlight && !backend.m_civScheduler.takeNext(backend.nowMs())) {
+            return false;
+        }
+        if (attenuatorWrite) {
+            backend.setPanAttenuator(QString(), 1);
+        } else {
+            backend.setPanPreamp(QString(), 1);
+        }
+        return std::any_of(backend.m_civScheduler.m_queue.begin(),
+                           backend.m_civScheduler.m_queue.end(), [&](const auto& entry) {
+            return entry.request.frame == read
+                && entry.request.notBeforeMs - entry.enqueuedAtMs >= 50;
+        });
+    }
+
     static QString lastOutboundCiv(const IcomCivBackend& backend)
     {
         return backend.m_lastOutboundCiv;
@@ -176,8 +219,13 @@ int main(int argc, char** argv)
         FlexBackend flex;
         const RadioCapabilities caps = flex.capabilities();
         check(caps.canCreateSlices, "Flex retains independent ordinary slice creation");
-        check(caps.hasAgcThreshold && caps.hasAmCarrierLevel && caps.hasVoxDelay,
+        check(caps.hasAgcThreshold && caps.hasAmCarrierLevel && caps.voxControl
+                  && caps.voxControl->hasDelay,
               "Flex retains AGC threshold, AM carrier, and VOX delay");
+        check(caps.txMonitorControl && caps.speechProcessorControl
+                  && caps.speechProcessorControl->levelMaximum == 2
+                  && caps.speechProcessorControl->label == QStringLiteral("PROC"),
+              "Flex declares its monitor and its NOR/DX/DX+ PROC");
         check(!caps.hasModeIndependentSquelch, "Flex retains its mode-specific SQL policy");
         check(caps.cwSpeedMinWpm == 5 && caps.cwSpeedMaxWpm == 100
                   && caps.cwPitchMinHz == 100 && caps.cwPitchMaxHz == 6000
@@ -187,6 +235,10 @@ int main(int argc, char** argv)
         check(!hl2Backend.capabilities().canCreateSlices,
               "HL2 paired receiver/pan topology does not expose independent creation");
         check(hl2Backend.capabilities().hasAgcThreshold, "HL2 retains host AGC threshold");
+        check(!hl2Backend.capabilities().speechProcessorControl
+                  && !hl2Backend.capabilities().voxControl
+                  && !hl2Backend.capabilities().txMonitorControl,
+              "HL2 declares no radio-side PROC, VOX or monitor (its PROC is ClientComp)");
     }
     {
         const IcomModel* ic705 = modelForName("IC-705");
@@ -227,8 +279,12 @@ int main(int argc, char** argv)
             check(caps.txPowerBands.isEmpty()
                       && caps.txPowerMaxWattsAt(14'200'000.0) == 100.0,
                   "IC-7300MK2 retains its unbanded 100 W capability path");
-            check(!caps.hasAgcThreshold && !caps.hasAmCarrierLevel && !caps.hasVoxDelay,
+            check(!caps.hasAgcThreshold && !caps.hasAmCarrierLevel && caps.voxControl
+                      && !caps.voxControl->hasDelay,
                   "IC-7300MK2 declares unimplemented controls unavailable");
+            check(caps.txMonitorControl && caps.speechProcessorControl
+                      && caps.speechProcessorControl->levelMaximum == 2,
+                  "IC-7300MK2 declares its VOX, monitor and three-position PROC");
             IcomCivBackendTestAccess::prepareSession(backend, *ic7300Mk2);
             const auto queued = IcomCivBackendTestAccess::queuedRequestCount(backend);
             backend.setSliceAgc(0, QStringLiteral("off"), 0);
@@ -333,6 +389,99 @@ int main(int argc, char** argv)
         }
 
     }
+    // The radio interlocks preamp and ATT and reports neither side effect, so
+    // a write to one stage must read the other back, or its button keeps the
+    // old position until the next controls poll.
+    for (const char* name : {"IC-7300MK2", "IC-705", "IC-9700"}) {
+        const auto* model = modelForName(name);
+        check(model != nullptr, "front-end interlock model resolves");
+        if (!model) { continue; }
+        const std::uint8_t address = model->civAddress;
+        const bool hasAttenuator = !attenStepsFor(*model).empty();
+        IcomCivBackend attWrite;
+        IcomCivBackendTestAccess::prepareSession(attWrite, *model);
+        attWrite.setPanAttenuator(QString(), 1);
+        if (hasAttenuator) {
+            // Held behind the write, like its confirmation read: the radio
+            // applies the interlock with the write, not before it.
+            check(IcomCivBackendTestAccess::queuedHoldOffMs(
+                      attWrite, cmdReadFunction(address, func::kPreamp)) >= 50,
+                  "an ATT write reads the preamp back after the write");
+        } else {
+            check(IcomCivBackendTestAccess::queuedRequestCount(attWrite) == 0,
+                  "an ATT write on a model with no attenuator sends nothing");
+        }
+        IcomCivBackend preampWrite;
+        IcomCivBackendTestAccess::prepareSession(preampWrite, *model);
+        preampWrite.setPanPreamp(QString(), 1);
+        const std::int64_t attHoldOff =
+            IcomCivBackendTestAccess::queuedHoldOffMs(preampWrite, cmdReadAttenuator(address));
+        check(hasAttenuator ? attHoldOff >= 50 : attHoldOff == -1,
+              "a preamp write reads ATT back after the write, where the model has one");
+    }
+    for (const char* name : {"IC-7300MK2", "IC-705"}) {
+        const IcomModel* model = modelForName(name);
+        if (!model) {
+            continue;
+        }
+        for (const bool attenuatorWrite : {false, true}) {
+            for (const bool inFlight : {false, true}) {
+                check(IcomCivBackendTestAccess::interlockReadSurvivesEarlierRead(
+                          *model, attenuatorWrite, inFlight),
+                      "interlock read survives an earlier queued or in-flight stage read");
+            }
+        }
+    }
+    // The IC-7300MK2's S-meter squelch on the pan (#6180): measured carrier
+    // pan peaks at the 14 03 value where 15 01 reads closed. Flex's
+    // -160 + level scale missed the 1480 kHz point by 6 dB and the slope by
+    // half, so the legacy record must not satisfy these checks.
+    {
+        const auto* mk2 = modelForName("IC-7300MK2");
+        check(mk2 != nullptr, "the IC-7300MK2 resolves for the squelch scale");
+        if (mk2) {
+            IcomCivBackend backend;
+            IcomCivBackendTestAccess::selectModel(backend, *mk2);
+            const auto sql = backend.capabilities().squelchLevelScale;
+            check(sql.has_value(), "the IC-7300MK2 publishes a squelch scale");
+            if (sql) {
+                // Level 63 writes 14 03 = 161 and level 78 writes 199; the
+                // radio closed on carriers peaking at -103.2 (raw 160) and
+                // -78.5 dBm (raw 199) on the pan.
+                check(std::abs(sql->thresholdDb(63) - -103.2) < 2.5
+                          && std::abs(sql->thresholdDb(78) - -78.5) < 1.5,
+                      "the MK2 SQL line lands on the measured gate");
+                check(!(*sql == legacyDbmSquelchScale()), "the MK2 no longer uses Flex's scale");
+                check(!sql->autoSquelch, "MK2 Auto SQL is withdrawn: the gate reads the S-meter");
+                check(sql->appliesTo(QStringLiteral("USB"))
+                          && sql->appliesTo(QStringLiteral("LSB"))
+                          && sql->appliesTo(QStringLiteral("CW"))
+                          && sql->appliesTo(QStringLiteral("CWU"))
+                          && sql->appliesTo(QStringLiteral("CWL"))
+                          && sql->appliesTo(QStringLiteral("AM"))
+                          && sql->appliesTo(QStringLiteral("DIGU"))
+                          && sql->appliesTo(QStringLiteral("DIGL")),
+                      "the MK2 SQL line covers its S-meter squelch modes");
+                check(!sql->appliesTo(QStringLiteral("FM")) && !sql->appliesTo(QStringLiteral("DFM"))
+                          && !sql->appliesTo(QStringLiteral("WFM")),
+                      "FM noise squelch and WFM have no dB place on the MK2");
+            }
+            // The record is in the pan's dBm, and that axis is ScopeCalibration's
+            // ESTIMATE. If the estimate moves, the measured line must move with it.
+            const ScopeCalibration mk2Pan;
+            check(mk2Pan.floorDbm == -140.0 && mk2Pan.spanDb == 80.0 && !mk2Pan.measured,
+                  "the MK2 SQL record still matches the pan axis it was measured on");
+        }
+        for (const char* name : {"IC-705", "IC-9700"}) {
+            const auto* model = modelForName(name);
+            check(model != nullptr, "an unmeasured Icom resolves for the squelch scale");
+            if (!model) { continue; }
+            IcomCivBackend backend;
+            IcomCivBackendTestAccess::selectModel(backend, *model);
+            check(backend.capabilities().squelchLevelScale == legacyDbmSquelchScale(),
+                  "an unmeasured Icom keeps Flex's squelch scale");
+        }
+    }
     check(cmdReadRxAntenna(0xB6) == std::vector<std::uint8_t>({0xFE,0xFE,0xB6,0xE0,0x12,0xFD}),
           "MK2 antenna read uses observed bare 12 form");
     for (const std::vector<uint8_t>& payload : {std::vector<uint8_t>{}, {2}, {0, 1}}) {
@@ -350,6 +499,23 @@ int main(int argc, char** argv)
             check(IcomCivBackendTestAccess::lastOutboundCiv(backend).isEmpty(),
                   "malformed antenna reply cannot cause a default antenna write");
         }
+    }
+    {
+        const IcomModel* ic9700 = modelForName("IC-9700");
+        check(ic9700 != nullptr, "the IC-9700 resolves from the Icom model table");
+        if (ic9700) {
+            IcomCivBackend backend;
+            IcomCivBackendTestAccess::selectModel(backend, *ic9700);
+            const auto proc = backend.capabilities().speechProcessorControl;
+            check(proc && proc->levelMaximum == 100 && proc->label == QStringLiteral("COMP"),
+                  "IC-9700 publishes its continuous COMP through the PROC record");
+        }
+        IcomCivBackend unknown;
+        IcomCivBackendTestAccess::selectModel(unknown, unknownModel());
+        const RadioCapabilities caps = unknown.capabilities();
+        check(!caps.canTransmit && !caps.speechProcessorControl && !caps.voxControl
+                  && !caps.txMonitorControl,
+              "an unidentified (receive-only) Icom declares no PROC, VOX or monitor");
     }
     for (const char* name : {"IC-7300MK2", "IC-705", "IC-9700"}) {
         const auto* model = modelForName(name);

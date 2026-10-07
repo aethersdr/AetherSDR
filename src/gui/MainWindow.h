@@ -1,5 +1,6 @@
 #pragma once
 
+#include "RadioTabBar.h"
 #include "DeferredSettingsWrites.h"
 #include "TxAudioPathPolicy.h"
 
@@ -33,6 +34,7 @@
 #include "gui/SplitAudioProfile.h"       // #2242 remembered split audio arrangement
 #include "gui/SplitQsyObservationPolicy.h"
 #include "gui/SplitQsySettings.h"
+#include "gui/ShortcutRefusalNotice.h"
 #include "core/CatPort.h"
 #ifdef HAVE_WEBSOCKETS
 #include "core/TciServer.h"
@@ -88,6 +90,7 @@
 #include "core/LpMeterConnection.h"
 #include "core/SpeConnection.h"
 #include "core/VkampConnection.h"
+#include "core/Kpa1500Connection.h"
 #include "core/DxccColorProvider.h"
 
 #include <QMainWindow>
@@ -129,12 +132,14 @@ class AetherClockApplet;
 class AetherClockEngine;
 class AetherClockModel;
 class AutomationServer;
+class CanonWindow;
 class ConnectionPanel;
-class ContributeDialog;
+class Ctr2ProxyModel;
 class TitleBar;
 class KiwiSdrManager;
 struct KiwiSdrAntennaProfile;
 class SpectrumWidget;
+class StatusBarNoticeLabel;
 class SpectrumOverlayMenu;
 class IRadioBackend;
 class PanadapterApplet;
@@ -295,6 +300,16 @@ public:
     QJsonObject automationKiwiSdrSnapshot() const;
     // Status-bar TX-timer state for the bridge `get txtimer` verb.
     QJsonObject automationTxTimerSnapshot() const;
+    // Unified-title-bar introspection + drive-the-real-control actions for the
+    // agent automation bridge (`titlebar` model / `titlebar` verb).
+    QJsonObject automationAppletPanelSnapshot() const;
+    // Validate synchronously; on success *activate holds the change for the
+    // bridge to run on a clean main-loop turn (see AutomationServer).
+    bool automationAppletPanelAction(const QString& action, const QString& value,
+                                     QString* error, std::function<void()>* activate);
+    QJsonObject automationTitleBarSnapshot() const;
+    bool automationTitleBarAction(const QString& action, const QString& target,
+                                  QString* error, std::function<void()>* activate);
 
     // Agent automation bridge (#3646) lifecycle. Construction + full
     // handler wiring lives in startAutomationBridge() so it can be driven
@@ -333,6 +348,11 @@ signals:
 
 protected:
     void showEvent(QShowEvent* event) override;
+#ifdef Q_OS_WIN
+    // Restore WS_MINIMIZEBOX / WS_MAXIMIZEBOX on the HWND under the expanded
+    // client area, where WindowChrome drops Qt's caption-button hints.
+    void applyWindowsCaptionStyles();
+#endif
     void closeEvent(QCloseEvent* event) override;
     void changeEvent(QEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
@@ -340,10 +360,6 @@ protected:
     void keyPressEvent(QKeyEvent* event) override;
     void keyReleaseEvent(QKeyEvent* event) override;
     bool eventFilter(QObject* obj, QEvent* event) override;
-#if defined(Q_OS_WIN)
-    bool nativeEvent(const QByteArray& eventType, void* message, qintptr* result) override;
-    void applyWindowsCustomFrame();
-#endif
 
 private slots:
     // Radio/connection events
@@ -372,6 +388,7 @@ private slots:
     // broadcast all stay in lockstep regardless of which UI changed it.
     // See issue #1764.
     void applyMasterVolume(int pct);
+    void syncTitleBarOutput();
 
 private:
     enum class TuneIntent {
@@ -592,6 +609,12 @@ private:
     void wirePanLifecycle();
     void wireCatPorts();            // MainWindow_Session.cpp
     void wireDaxIq();               // MainWindow_Session.cpp
+    // Push the current radio picture (discovered LAN + SmartLink radios, which
+    // one this client owns) into the title bar's radio tabs.  Coalesced onto
+    // the event loop: discovery re-announces every radio every 5 s and each
+    // announcement would otherwise rebuild the strip.
+    void scheduleRadioTabRefresh();      // MainWindow_Session.cpp
+    void refreshRadioTabs();             // MainWindow_Session.cpp
     // Re-establish the connections bound to the backend's PanadapterStream after
     // RadioModel swapped backends for a different radio family.
     void rewirePanStreamAfterBackendSwap();   // MainWindow_Session.cpp
@@ -642,6 +665,7 @@ private:
     // TX or RX instance.
     void applyGraphicEqToClientEq(bool transmit);
     void wireExternalControllers(); // MainWindow_Controllers.cpp
+    void setupCtr2Proxy();          // MainWindow_Controllers.cpp
     void wireKiwiSdr();             // MainWindow_KiwiSdr.cpp
     void refreshKiwiSdrAppletReceivers();
     void refreshKiwiSdrSlices();
@@ -690,6 +714,10 @@ private:
     SliceModel* flexRxPanSourceSlice() const;
     void syncFlexRxPanToAudioEngine();
     void syncActiveSliceSquelchLineToSpectrums();
+    // RadioCapabilities::squelchLevelScale for the active slice's mode, pushed to
+    // every SpectrumWidget and to RxApplet's Auto availability.
+    std::optional<SquelchLevelScale> activeSliceSquelchScale() const;
+    void syncSquelchScaleToUi();
     bool autoSquelchShouldRunOnSpectrum(const QString& panId,
                                         const SpectrumWidget* spectrum) const;
     void syncActiveSliceAutoSquelchToSpectrums();
@@ -810,6 +838,16 @@ private:
     int cloneDisplaySettingsToAllPans(PanadapterApplet* source);
     AetherSDR::DeferredSettingsWrites m_pendingDisplayWrites;
     void scheduleClientWaterfallRateSave(int panIndex, int rate);
+    // FFT FPS and the dBm scale, which a Flex stores for a pan and a radio
+    // with no display engine does not. Same store and deferral as the
+    // waterfall rate, only where the backend declares the client the owner.
+    bool clientPersistsFftFps() const;
+    void scheduleClientFftFpsSave(int panIndex, int fps);
+    bool clientOwnsPanDbmRange() const;
+    void adoptClientOwnedDbmRange(const QString& panId, int panIndex,
+                                  float minDbm, float maxDbm);
+    void restoreClientOwnedDbmRange(PanadapterModel* pan, int panIndex);
+    void scheduleClientFftAverageSave(int panIndex, int average, bool weighted);
     void wirePanDisplayStatus(PanadapterApplet* applet, PanadapterModel* pan);
     void reassertUnmutedSliceAudioForPan(const QString& panId);
     void onMuteAllSlicesToggle();
@@ -853,12 +891,6 @@ private:
     void applyUiScale(int pct);
     void stepUiScale(int direction);  // +1 = zoom in, -1 = zoom out
     void reapplyStartupGeometryAfterShow();
-    // Undo Qt's caption-reserving restore clamp for the Windows custom frame,
-    // which has no caption to reserve for.  Call after every successful
-    // restoreGeometry() on this window, passing the same blob; a no-op off
-    // Windows, without the custom frame, or for a maximized/fullscreen blob.
-    // (#4328 — see src/gui/WindowGeometryRestore.h.)
-    void reanchorCustomFrameGeometry(const QByteArray& geometryBlob);
     void toggleMinimalModeFromAction();
     void toggleMinimalMode(bool on);
     // Toggle the Aetherial Audio Channel Strip — unified TX DSP window.
@@ -970,6 +1002,19 @@ private:
     // title-bar pop-out icon highlight.
     void toggleAppletPanelFloating(bool floating);
 
+    // The one entry point for applet-panel layout changes.  Floating, dock
+    // side and visibility are three fields of ONE state; the three title-bar
+    // controls, Ctrl+Shift+S and the bridge all express a complete desired
+    // state here rather than each toggling a field of their own.  Routing
+    // them separately is what let the fields disagree — a dock-side click
+    // while floating used to dock the panel and then immediately hide it,
+    // stranding an invisible panel that took two more clicks to recover.
+    void applyAppletPanelState(bool floating, bool dockedLeft, bool visible);
+
+    // Current applet-panel state, read off the real widgets rather than the
+    // settings store so a caller sees what is actually on screen.
+    void appletPanelState(bool* floating, bool* dockedLeft, bool* visible) const;
+
     void showMemoryDialog();
     void showQuickAddMemoryDialog(const QString& preferredPanId = {});
 
@@ -1032,6 +1077,9 @@ private:
     void applyFlexControlWheelAction(const QString& actionId, int steps);
     void syncFlexControlDialog();
     void syncFlexControlIndicatorForSettings();
+    // Start or stop the Ulanzi Dial backend to match its enable setting.
+    void applyUlanziDialEnabled();
+    bool ulanziDialEnabled() const;
     void setFlexControlHardwareIndicator(int button);
     QJsonObject buildControlDevicesSnapshot() const;
     void showPropDashboard();
@@ -1124,6 +1172,9 @@ private:
     // hardcoded Qt::Key_Space) so a reassigned PTT-hold key actually keys the
     // radio. Returns true when the bound key was consumed (#3879).
     bool handlePttHoldShortcut(QKeyEvent* keyEvent, QEvent::Type eventType);
+    // Says once per session that a bound key was refused because keyboard
+    // shortcuts are off. Never consumes the key.
+    void noticeRefusedShortcut(QKeyEvent* keyEvent);
     // Fail-safe-to-RX for the momentary-keying family (PTT-hold, CW straight
     // key / paddles). Called when the window/app is deactivated while a
     // momentary key is "held" in our state — the KeyRelease that would un-key
@@ -1212,7 +1263,7 @@ private:
     CatPort* catPort(int i) const { return m_session->catPort(i); }
 
     // Returns how many CAT ports should be visible in the UI given radio state.
-    // 1 when no radio; maxSlicesForModel() when connected.
+    // 1 when no radio; the backend-aware receiver count when connected.
     int catPortTargetCount() const;
     // Start/stop ports to match CatEnabled master + per-port Enabled flags.
     void applyCatPortCount();
@@ -1232,6 +1283,7 @@ private:
     LpMeterConnection m_lpMeterConn;    // TelePost LP-100A wattmeter, serial or ser2net
     SpeConnection     m_speConn;         // SPE Expert amplifier, serial or ser2net
     VkampConnection   m_vkampConn;       // VK3AMP amplifier, TCP control/status + UDP telemetry
+    Kpa1500Connection m_kpa1500Conn;     // Elecraft KPA1500 amplifier, TCP control/status on port 1500 (#4097)
     BandPlanManager*  m_bandPlanMgr{nullptr};
 #ifdef HAVE_DEEPFIST
     void selectCwRxBackend(const QString& backend);
@@ -1448,6 +1500,7 @@ private:
 #else
     UlanziDialBackend*         m_dialBackend{nullptr};
 #endif
+    std::optional<bool>        m_ulanziDialEnabledLogged;  // last enable state logged
     QSet<QString>              m_dialActiveMidiGates;
     // True while the DIAL is holding PTT.  Distinct from m_pttHoldActive so a
     // dial release cannot un-key a PTT the keyboard is still holding.
@@ -1606,7 +1659,7 @@ private:
     QPointer<GpsLocationDialog> m_gpsLocationDialog;
     QPointer<FlexControlDialog> m_flexControlDialog;
     QPointer<WhatsNewDialog> m_whatsNewDialog;
-    QPointer<ContributeDialog> m_contributeDialog;
+    QPointer<CanonWindow> m_aboutWindow;
     QPointer<AetherRxDialog> m_rxDialog;
     QPointer<QDialog> m_nr2WisdomDialog;
 #ifdef HAVE_MQTT
@@ -1807,6 +1860,18 @@ private:
     // forever.
     QString m_autoConnectSerial;                 // an auto-connect is in flight for this serial
     QHash<QString, int> m_autoConnectAttempts;   // consecutive failed auto-connects, per serial
+    // Title-bar radio tabs.  The refresh is coalesced through this flag rather
+    // than a timer object so the pending state is visible to the automation
+    // bridge's own state dump.
+    bool m_radioTabRefreshPending{false};
+    // Last SmartLink radio list, cached because the title bar has to redraw the
+    // tabs on LAN discovery events too and SmartLink only pushes on change.
+    QList<WanRadioInfo> m_smartLinkRadios;
+    // The last session's radio, as its tab read while connected.  It keeps a
+    // visible tab after an unexpected drop, so the "link lost" alarm always has
+    // somewhere to show; cleared when the operator disconnects on purpose or
+    // removes that tab.
+    RadioTabEntry m_lastSessionTab;
     static constexpr int kMaxAutoConnectAttempts = 3;
     QDialog* m_reconnectDlg{nullptr}; // shown on unexpected disconnect, dismissed on reconnect
     QString m_terminalConnectionError; // preserved until the next explicit connect
@@ -1897,6 +1962,8 @@ private:
     qint64 m_bsConnectGraceUntilMs{0};   // suppress auto-save right after connect
     bool m_keyboardShortcutsEnabled{false}; // global enable for keyboard shortcuts (Settings menu)
     bool m_pttHoldActive{false};           // true while the PTT-hold key is held (#3879)
+    ShortcutRefusalNotice m_shortcutRefusalNotice; // once per session (#5483)
+    StatusBarNoticeLabel* m_shortcutNoticeLabel{nullptr}; // owned by the status bar
     TxController::Input m_pttHoldInput;
     bool m_cwStraightKeyActive{false};
     TxController::Input m_cwStraightKeyInput;
@@ -1991,6 +2058,9 @@ private:
     QString m_panadapterConnectionAnimationLabel;
     ShortcutManager m_shortcutManager;
     UpdateChecker* m_updateChecker{nullptr};
+
+// CTR2 TCP proxy prototype (MainWindow_Controllers.cpp); never persisted, off at launch
+    Ctr2ProxyModel* m_ctr2ProxyModel{nullptr};
 
 // AetherClock (MainWindow_AetherClock.cpp)
     AetherClockEngine* m_clockEngine{nullptr};

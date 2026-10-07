@@ -237,6 +237,15 @@ def expected_assets(v: str, hotfix: bool) -> list[str]:
     return out
 
 
+def expected_symbol_assets(v: str) -> list[str]:
+    # Debug-symbol archives, one per platform build (docs/debugging-crashes.md).
+    # Kept out of the fifteen: users never download them, nothing signs them,
+    # and a missing one costs crash symbolization, not the release.
+    return [f"AetherSDR-{v}-x86_64-symbols.tar.xz", f"AetherSDR-{v}-aarch64-symbols.tar.xz",
+            f"AetherSDR-{v}-macOS-apple-silicon-symbols.tar.xz", f"AetherSDR-{v}-macOS-intel-symbols.tar.xz",
+            f"AetherSDR-{v}-Windows-x64-symbols.tar.xz"]
+
+
 def check_assets(rel: dict[str, Any], v: str, hotfix: bool) -> dict[str, dict[str, Any]]:
     assets = {a["name"]: a for a in rel.get("assets", [])}
     want = expected_assets(v, hotfix)
@@ -246,7 +255,14 @@ def check_assets(rel: dict[str, Any], v: str, hotfix: bool) -> dict[str, dict[st
         report("FAIL", f"the {n_want}-asset set is present", "missing: " + ", ".join(missing))
     else:
         report("PASS", f"the {n_want}-asset set is present ({'hotfix: no .msixupload' if hotfix else 'incl. .msixupload'})")
-    extra = sorted(set(assets) - set(want))
+    symbols = expected_symbol_assets(v)
+    sym_missing = [n for n in symbols if n not in assets]
+    if sym_missing:
+        report("WARN", f"the {len(symbols)} debug-symbol archives are present",
+               "missing: " + ", ".join(sym_missing) + " (crashes on that build cannot be symbolized)")
+    else:
+        report("PASS", f"the {len(symbols)} debug-symbol archives are present")
+    extra = sorted(set(assets) - set(want) - set(symbols))
     if extra:
         bad = [e for e in extra if "msixupload" in e]
         report("FAIL" if bad else "WARN", "no unexpected assets", ", ".join(extra))

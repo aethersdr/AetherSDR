@@ -27,6 +27,11 @@ QString buildIssueReport(const SupportBundle::SystemInfo& sys,
     body += "### Steps to reproduce\n";
     body += "1. _First step_\n";
     body += "2. _\xE2\x80\xA6_\n\n";
+    // Release builds ship symbols as release assets, so the OS crash report is
+    // what turns "it crashed" into a stack trace (docs/debugging-crashes.md).
+    body += "_If AetherSDR crashed, please attach the crash report your system "
+            "kept: [where to find it](https://github.com/aethersdr/AetherSDR/blob/"
+            "main/docs/debugging-crashes.md#for-users-what-to-attach-to-the-issue)._\n\n";
 
     body += "### Radio model & firmware\n";
     if (radio.connected) {

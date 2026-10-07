@@ -15,7 +15,9 @@
 #include "AcomApplet.h"
 #include "SpeApplet.h"
 #include "VkampApplet.h"
+#include "Kpa1500Applet.h"
 #include "LpMeterApplet.h"
+#include "Ctr2ProxyApplet.h"
 #include "TxApplet.h"
 #include "PhoneCwApplet.h"
 #include "PhoneApplet.h"
@@ -278,6 +280,24 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     // "applet.rx", …) inside its own constructor so widgets inside
     // an applet inherit applet.<name> → applet → root.
     theme::setContainer(this, QStringLiteral("applet"));
+
+    // The docked panel paints its own background, and must.  MainWindow's
+    // paintEvent is the only other thing filling a region the widget tree
+    // leaves bare, and Qt excludes native children (the QRhi panadapter) from
+    // that backdrop entirely — so during a dock flip the strip a panel slides
+    // over can be left unpainted.  The window is opaque now (WindowChrome
+    // clears WA_TranslucentBackground), so that strip shows stale pixels
+    // rather than the desktop, but it is the same hole.  The FLOATING panel
+    // has always been opaque (its window sets WA_StyledBackground); this
+    // gives the docked panel the same guarantee instead of leaving it
+    // dependent on whatever happens to be painted underneath.
+    setObjectName(QStringLiteral("appletPanel"));
+    setAttribute(Qt::WA_StyledBackground, true);
+    // Scoped to this widget by object name so the rule cannot cascade into
+    // the applets, which own their own surfaces.
+    ThemeManager::instance().applyStyleSheet(
+        this,
+        QStringLiteral("QWidget#appletPanel { background: {{color.background.app}}; }"));
 
     setFixedWidth(260);
 
@@ -853,6 +873,21 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
         m_appletOrder.append(entry);
     }
 
+    // Elecraft KPA1500 — independent of AMP (PGXL), ACOM, SPE and VKAMP
+    // for the same reason they are independent of each other: a station can
+    // have any combination of them connected at once. Deliberately NOT in
+    // kDefaultOrder: the KPA1500 has no discovery path, so the stored
+    // Peripherals configuration is the only thing that can ever reveal it.
+    // See docs/architecture/kpa1500-amplifier-design.md.
+    m_kpa1500Applet = new Kpa1500Applet;
+    {
+        auto entry = makeEntry("KPA1500", "Elecraft KPA1500", m_kpa1500Applet, false,
+                               m_drawer, m_drawerLayout);
+        m_kpa1500Btn = entry.btn;
+        markHardwareConditional("KPA1500");
+        m_appletOrder.append(entry);
+    }
+
     // LP-100A wattmeter — an instrument rather than an amplifier, so it is
     // independent of every amplifier applet above and lives in the Metering
     // category. Deliberately NOT in kDefaultOrder: it has no discovery path,
@@ -880,6 +915,13 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
 
     m_waveApplet = new WaveApplet;
     m_appletOrder.append(makeEntry("WAVE", "Waveform", m_waveApplet, true, m_drawer, m_drawerLayout, "WAV"));
+
+    // CTR2 Proxy — prototype opaque TCP relay for a CTR2 controller; off by
+    // default and outside kDefaultOrder. The proxy itself is off on every
+    // launch regardless of this tile's visibility.
+    m_ctr2ProxyApplet = new Ctr2ProxyApplet;
+    m_appletOrder.append(makeEntry("CTR2", "CTR2 Proxy", m_ctr2ProxyApplet, false,
+                                   m_drawer, m_drawerLayout));
 
     m_aetherClockApplet = new AetherClockApplet;
     m_appletOrder.append(makeEntry("CLOCK", "AetherClock", m_aetherClockApplet, false, m_drawer, m_drawerLayout, "CLK"));
@@ -1365,6 +1407,8 @@ QList<AppletPanel::AppletCatalogEntry> AppletPanel::appletCatalog() const
         {QStringLiteral("AMP"),   QStringLiteral("Amplifiers")},
         {QStringLiteral("ACOM"),  QStringLiteral("Amplifiers")},
         {QStringLiteral("SPE"),   QStringLiteral("Amplifiers")},
+        {QStringLiteral("VKAMP"), QStringLiteral("Amplifiers")},
+        {QStringLiteral("KPA1500"), QStringLiteral("Amplifiers")},
         {QStringLiteral("EQ"),    QStringLiteral("Audio & DSP")},
         {QStringLiteral("TXDSP"), QStringLiteral("Audio & DSP")},
         {QStringLiteral("WAVE"),  QStringLiteral("Audio & DSP")},
@@ -1381,6 +1425,7 @@ QList<AppletPanel::AppletCatalogEntry> AppletPanel::appletCatalog() const
         {QStringLiteral("TCI"),   QStringLiteral("Integration")},
         {QStringLiteral("MQTT"),  QStringLiteral("Integration")},
         {QStringLiteral("RADE"),  QStringLiteral("Integration")},
+        {QStringLiteral("CTR2"),  QStringLiteral("Integration")},
         {QStringLiteral("CLOCK"), QStringLiteral("Station")},
         {QStringLiteral("PROF"),  QStringLiteral("Station")},
     };
@@ -1775,6 +1820,12 @@ void AppletPanel::setSpeVisible(bool visible)
 void AppletPanel::setVkampVisible(bool visible)
 {
     updateHardwareAvailability("VKAMP", "Applet_VKAMP", visible);
+    applyBarLayout();
+}
+
+void AppletPanel::setKpa1500Visible(bool visible)
+{
+    updateHardwareAvailability("KPA1500", "Applet_KPA1500", visible);
     applyBarLayout();
 }
 

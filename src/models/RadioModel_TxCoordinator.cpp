@@ -4,6 +4,7 @@
 
 #include <QPointer>
 #include <QScopeGuard>
+#include <vector>
 
 namespace AetherSDR {
 
@@ -483,8 +484,15 @@ bool RadioModel::dispatchTuneIntent(bool on, const TxCoordinator::Request* reque
     const TxCoordinator::Operation operation = request ? m_txCoordinator.requestOperation(*request) : m_txOperation;
     const TxCoordinator::Intent intent = request ? m_txCoordinator.requestIntent(*request)
         : m_localTxIntents.value(TxActivity::Tune);
+    // The backend has one tune latch, so an unrouted stop ends every producer's
+    // carrier. Their contributions end with it, or a stale one refuses every
+    // later TUNE start until its own producer stops again. Captured before the
+    // dispatch, so a local TUNE re-engaged from the stop's own edge (a fresh
+    // intent) survives; a producer re-engaging that way reuses its bound one.
+    std::vector<TxCoordinator::Intent> latchHolders;
     if (!on && !request) {
         (void)m_txCoordinator.requestIntentEnd(intent);
+        latchHolders = m_txCoordinator.intents(m_txOperation, static_cast<unsigned>(TxActivity::Tune));
     }
     if (on) {
         armInterlockNotification(m_transmitModel.activePttSource());
@@ -511,6 +519,10 @@ bool RadioModel::dispatchTuneIntent(bool on, const TxCoordinator::Request* reque
     }
     if (!on && !releaseQueued) {
         endLocalTxActivity(intent);
+    }
+    for (const TxCoordinator::Intent& holder : latchHolders) {
+        (void)m_txCoordinator.requestIntentEnd(holder);
+        endLocalTxActivity(holder);
     }
     return dispatched;
 }
@@ -563,6 +575,15 @@ unsigned RadioModel::activeTxActivities() const
     // Include older draining contributions, not just the current compatibility
     // slot. A later completed edge cannot hide an earlier pending CW tail.
     return m_txCoordinator.activeActivities(m_txOperation);
+}
+
+// A TUNE this client admitted and still holds. A tune state decoded off the
+// radio alone is not one, so live tune power neither reaches it nor hides its
+// drop notice.
+bool RadioModel::tuneCarrierLive() const
+{
+    return m_transmitModel.isTuning()
+        && (activeTxActivities() & static_cast<unsigned>(TxActivity::Tune)) != 0;
 }
 
 bool RadioModel::hasOtherPttHolds(const TxCoordinator::Operation& operation,

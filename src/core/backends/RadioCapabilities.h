@@ -8,6 +8,8 @@
 #include <QVariantMap>
 #include <optional>
 
+#include "core/backends/SquelchLevelScale.h"
+
 namespace AetherSDR {
 
 struct TxPowerBand {
@@ -69,6 +71,13 @@ struct ReceivePanRangeControl {
     // bandwidth support promises no slice creation/removal or retune.
 };
 
+// Desktop capture-placement control. It preserves every receiver's RF and
+// passband while relocating the shared capture away from converter DC. This
+// record alone grants no headless-control verb or hardware acknowledgement.
+struct ReceiveCapturePlacement {
+    qint64 minimumDcSeparationHz = 0;
+};
+
 // What the panadapter's SPAN is made of. Absent means NO BACKEND HAS BEEN READ
 // on the question — not "no". That distinction is the whole reason this is a
 // record and not two bools (#5262 M2): a bool that nobody set reports a
@@ -88,6 +97,16 @@ struct PanSpanModel {
     bool radioWide = false;
 };
 
+// The FFT frame rate of a pan whose frames this engine paces (Display, FFT
+// FPS). Absent: no owner is declared for it and the client stores nothing,
+// which is every family's existing behavior (a Flex stores and reports its own).
+struct PanFrameRateShaping {
+    // Explicit client persistence owner for the FFT frame rate. False preserves
+    // a family's existing settings behavior. No default: an engaging backend
+    // must state its own value.
+    bool clientPersistsFrameRate;
+};
+
 // Engaged when the backend averages its own pan frames per the operator's FFT
 // AVG (ANAN: WDSP's display analyzer, AnanPanAnalyzer). The widget then skips
 // its client-side EMA (SpectrumWidget::SMOOTH_ALPHA), which would add ~90 ms of
@@ -97,6 +116,14 @@ struct BackendPanAveraging {
     // One FFT AVG slider step as an averaging time (ANAN: deskHPSDR's 10 ms/step,
     // 0 = off). No default: an engaging backend must state its own unit.
     int msPerAverageStep;
+    // Explicit client persistence owner for these two local display controls.
+    // False preserves a family's existing settings behavior. This is separate
+    // from computing an average: ANAN already computes one without this owner.
+    bool clientPersistsAveraging;
+    // Empty preserves existing UI wording. A backend with different averaging
+    // units or weighted semantics supplies the descriptions of its controls.
+    QString averageDescription;
+    QString weightedDescription;
 };
 
 // Meaning of the panadapter's vertical axis. Absent means no backend has been
@@ -120,6 +147,11 @@ struct PanAmplitudeModel {
     // noiseFloorAutoAdjustAllowed() (NoiseFloorAutoAdjustGate.h): echo OR absolute
     // bins. Declare true only after reading the backend's bin path.
     bool binsAbsolute = false;
+
+    // Explicit client persistence owner for the pan's dBm range (the axis
+    // limits the operator sets). False preserves a family's existing settings
+    // behavior. Read through RadioCapabilities::clientPersistsDbmRange().
+    bool clientPersistsDbmRange = false;
 };
 
 // Wideband converter view: raw ADC output before the DDC, spanning the
@@ -224,9 +256,12 @@ struct RadioCapabilities {
     // answers when it is absent, so read it through the accessors below rather
     // than unwrapping it at the call site.
     std::optional<PanSpanModel> panSpanModel;
+    std::optional<ReceiveCapturePlacement> receiveCapturePlacement;
     std::optional<PanAmplitudeModel> panAmplitude;
     // See BackendPanAveraging. Absent = the widget averages client-side.
     std::optional<BackendPanAveraging> backendPanAveraging;
+    // See PanFrameRateShaping. Absent = the client keeps no FFT frame rate.
+    std::optional<PanFrameRateShaping> panFrameRateShaping;
 
     // A backend nobody has read labelled its axis dBm and was consumed as
     // though it meant it. ABSENT KEEPS THAT CLAIM, so this is the legacy shape
@@ -244,6 +279,22 @@ struct RadioCapabilities {
     [[nodiscard]] bool panBinsAbsolute() const
     {
         return panAmplitude && panAmplitude->binsAbsolute;
+    }
+
+    // The one predicate for storing and for restoring the FFT frame rate.
+    // Absent is "not declared", and an undeclared backend owns nothing here.
+    [[nodiscard]] bool clientPersistsPanFrameRate() const
+    {
+        return panFrameRateShaping && panFrameRateShaping->clientPersistsFrameRate;
+    }
+
+    // The one predicate for storing and for restoring the pan's dBm range. The
+    // declaration counts only with absolute bins: the client writes the range
+    // into the pan model, which is safe only where no bin is scaled by it.
+    [[nodiscard]] bool clientPersistsDbmRange() const
+    {
+        return panAmplitude && panAmplitude->clientPersistsDbmRange
+            && panAmplitude->binsAbsolute;
     }
 
 
@@ -316,6 +367,9 @@ struct RadioCapabilities {
     struct TransmitDriveControl {
         SliceFrequencyControl::Authority authority{
             SliceFrequencyControl::Authority::Unknown};
+        // IRadioBackend::setTunePower() re-applies drive to a TUNE carrier in
+        // progress. False: tune power reaches the backend only at key-down.
+        bool tunePowerAppliesLive = false;
     };
     std::optional<TransmitDriveControl> transmitDriveControl;
 
@@ -420,6 +474,7 @@ struct RadioCapabilities {
         Memories    = 1u << 5,  // host-side memory bank documents (#4590 fold-in)
         Agc         = 1u << 6,  // AGC mode + threshold (client-side WDSP AGC)
         Cw          = 1u << 7,  // client-side keyer/sidetone setpoints; never keying
+        RtlSlices   = 1u << 8,  // accepted RTL capture and stable receiver documents
     };
     Q_DECLARE_FLAGS(ClientSettingsDomains, ClientSettingsDomain)
     ClientSettingsDomains clientSettingsDomains;   // default: empty — restore nothing
@@ -485,12 +540,16 @@ struct RadioCapabilities {
     // (hasRadioSideDsp's ANF).
     bool hasManualNotch = false;
 
-    // Inclusive upper bound of the radio's speech-processor level control.
-    // Flex-shaped controls use 0..2 (NOR/DX/DX+); a model with an evidenced
-    // continuous control publishes a maximum greater than 2. The minimum is
-    // always zero. The legacy-shape default is intentional; see ADDING A FIELD.
-    int speechProcessorLevelMaximum = 2;
-    QString speechProcessorLabel = QStringLiteral("PROC");
+    // The radio's own speech processor (Flex by its command plane; otherwise
+    // IRadioBackend::setSpeechProcessor must apply it). Absent: the P/CW face
+    // keeps PROC 0..2, and a host-modulating transmitter's ClientComp is the
+    // processor instead (#6086). levelMaximum: inclusive top of the level, 2 for
+    // NOR/DX/DX+, larger for an evidenced continuous control; minimum is zero.
+    struct SpeechProcessorControl {
+        int levelMaximum = 2;
+        QString label{QStringLiteral("PROC")};
+    };
+    std::optional<SpeechProcessorControl> speechProcessorControl;
 
     // The radio can temporarily monitor the transmit frequency while the
     // operator holds a control. This is Icom's XFC (CI-V 1C 02), not a
@@ -551,8 +610,20 @@ struct RadioCapabilities {
     // The radio accepts manual SQL in CW/data modes and owns its persistence.
     // False preserves the existing mode-specific client squelch policy.
     bool hasModeIndependentSquelch = false;
+    // The squelch level's place on the pan axis. Absent: no SQL line, no Auto SQL.
+    std::optional<SquelchLevelScale> squelchLevelScale;
     bool hasAmCarrierLevel = false;
-    bool hasVoxDelay = false;
+
+    // The radio's own VOX and SSB transmit monitor (Flex by its command plane;
+    // otherwise IRadioBackend::setVox / setTxMonitor must apply them). Absent:
+    // their wire text reaches nothing, and the drop notice says so (#6086).
+    // hasDelay: the VOX hang time is applied too, not just enable and level.
+    struct VoxControl {
+        bool hasDelay = false;
+    };
+    std::optional<VoxControl> voxControl;
+    struct TxMonitorControl {};
+    std::optional<TxMonitorControl> txMonitorControl;
 
 
     // TX audio reaches this backend through IRadioBackend::submitTxAudio rather than

@@ -247,9 +247,12 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
             // than to 0.0 (which is out of the meter's domain).
             m_cachedSwr = swrValid ? swr : 1.0f;
         });
+        // tx_sensors' mic field is the same "transmit level" the S-meter's
+        // Level face shows: MICPEAK where the radio publishes no MIC (HL2).
         connect(&m_model->meterModel(), &MeterModel::micMetersChanged,
-                this, [this](float micLevel, float, float, float) {
-            m_cachedMicLevel = micLevel;
+                this, [this](float micLevel, float, float micPeak, float) {
+            m_cachedMicLevel =
+                m_model->meterModel().transmitLevelFaceValue(micLevel, micPeak);
         });
         connect(&m_model->meterModel(), &MeterModel::swAlcChanged,
                 this, [this](float dbfs) {
@@ -266,6 +269,12 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
                 this, [this](int) { m_drivePending = true; queuePowerBroadcast(); });
         connect(&m_model->transmitModel(), &TransmitModel::tunePowerChanged,
                 this, [this](int) { m_tuneDrivePending = true; queuePowerBroadcast(); });
+
+        // `tune:` follows the model whatever started the tune: the TX applet,
+        // a TCI client, or the radio's own status (#3327).
+        m_lastTuneSent = m_model->transmitModel().isTuning();
+        connect(&m_model->transmitModel(), &TransmitModel::tuneChanged,
+                this, &TciServer::scheduleTuneBroadcast);
     }
 
     // Capture DAX RX stream creation responses so we can register them
@@ -624,6 +633,7 @@ void TciServer::stop()
     Q_ASSERT(QThread::currentThread() == thread());
     const bool hadResources = isRunning() || !m_clients.isEmpty() || !m_tciDaxSlices.isEmpty();
     abortTciPtt();
+    stopTciOwnedTune();
     teardownTciRoute();
     releaseAllIqStreams();
     stopIo();
@@ -938,6 +948,9 @@ void TciServer::onClientDisconnected()
             // If this client owned TCI PTT/TX audio, fail closed.
             if (ws == m_tciPttClient || ws == m_txChronoClient) {
                 abortTciPtt();
+            }
+            if (ws == m_tuneClient) {
+                stopTciOwnedTune();
             }
             // Drop every receiver this client subscribed, independently. The
             // stream survives when another client still consumes that receiver.
@@ -1535,6 +1548,9 @@ void TciServer::onTextMessage(const QString& msg)
         if (const auto request = client.protocol->takeTrxRequest()) {
             notePttRequest(*request);
             handleTrxRequest(ws, *request);
+        }
+        if (const auto request = client.protocol->takeTuneRequest()) {
+            handleTuneRequest(ws, *request);
         }
 
         // If the command changed radio state, broadcast to all other clients
@@ -3319,6 +3335,96 @@ void TciServer::broadcastActualTxState(bool transmitting)
     }
 }
 
+void TciServer::handleTuneRequest(TciClient* client, const TciProtocol::TuneRequest& request)
+{
+    if (!m_model) {
+        return;
+    }
+    QMetaObject::invokeMethod(this, [this, client = QPointer<TciClient>(client), request]() {
+        if (!m_model) {
+            return;
+        }
+        // Never key for a client that has gone away; a stop always applies.
+        if (request.tune && !(client && client->live())) {
+            return;
+        }
+        TransmitModel& tx = m_model->transmitModel();
+        if (request.tune) {
+            // Owned before the call, so the edge carries the requester's trx;
+            // kept only if this request started the tune.
+            const bool joining = tx.isTuning();
+            if (!joining) {
+                m_tuneClient = client;
+                m_tuneClientTrx = request.trx;
+            }
+            tx.startTune(TransmitModel::PttSource::Dax);
+            if (!joining && !tx.isTuning()) {
+                m_tuneClient.clear();
+            }
+        } else {
+            tx.stopTune();
+        }
+        m_tuneRequesters.append({client, request.trx});
+        scheduleTuneBroadcast();
+    }, Qt::QueuedConnection);
+}
+
+// A TCI-started tune has no TxCoordinator producer, so nothing else ends it
+// when its client or this server goes away.
+void TciServer::stopTciOwnedTune()
+{
+    if (!m_tuneClient) {
+        return;
+    }
+    m_tuneClient.clear();
+    if (m_model && m_model->transmitModel().isTuning()) {
+        m_model->transmitModel().stopTune();
+    }
+}
+
+// One event-loop turn late, so tune: follows the trx: edge the same command
+// produced. A TCI tuner controller (ICOM AH-4 type) must learn the carrier is
+// already up: the AH-4 does not tune when its START comes after the carrier,
+// and over a network an SDR-started tune always does.
+void TciServer::scheduleTuneBroadcast()
+{
+    if (m_tuneBroadcastQueued) {
+        return;
+    }
+    m_tuneBroadcastQueued = true;
+    QMetaObject::invokeMethod(this, &TciServer::broadcastTuneState, Qt::QueuedConnection);
+}
+
+void TciServer::broadcastTuneState()
+{
+    m_tuneBroadcastQueued = false;
+    const auto requesters = std::exchange(m_tuneRequesters, {});
+    if (!m_model) {
+        return;
+    }
+    const bool tuning = m_model->transmitModel().isTuning();
+    if (tuning != m_lastTuneSent) {
+        m_lastTuneSent = tuning;
+        const int trx = m_tuneClient ? m_tuneClientTrx
+            : m_tciPttClient ? m_tciPttTrx
+            : m_trxMap.trxForSlice(m_model, m_model->txSlice());
+        if (!tuning) {
+            m_tuneClient.clear();
+        }
+        // Reaches every requester too, so none is answered twice.
+        broadcast(QStringLiteral("tune:%1,%2;").arg(trx).arg(tuning ? "true" : "false"));
+        return;
+    }
+    // Nothing moved: a refused start, or a stop with no tune running. The
+    // requester still gets the state, or a client that repeats its stop until
+    // confirmed never hears one.
+    for (const auto& [client, trx] : requesters) {
+        if (client && client->live()) {
+            replyText(client, QStringLiteral("tune:%1,%2;").arg(trx).arg(tuning ? "true" : "false"));
+        }
+    }
+}
+
 void TciServer::onRadioTransmittingChanged(bool transmitting)
 {
     const bool changed = transmitting != m_lastRadioTx;
@@ -3538,9 +3644,11 @@ void TciServer::onDaxStreamUnregistered(int channel, quint32 /*streamId*/)
     const TciRxBinding old = m_rxBindings.take(key);
     if (old.alive) { old.alive->store(false, std::memory_order_release); }
     m_rxBindingOwners.remove(key);
-    m_io->post([io = m_io.get(), bindings = m_rxBindings] { io->setRxBindings(bindings); });
     m_channelTrx.remove(channel);
     m_channelSlice.remove(channel);
+    // A slice that keeps its DAX channel emits nothing when the stream comes
+    // back, so the binding is rebuilt from the live slice list here (#6006).
+    refreshRxBindings();
 }
 
 void TciServer::onIqDataReady(int channel, const QByteArray& rawPayload, int sampleRate)
@@ -3934,6 +4042,9 @@ void TciServer::ensureDaxForTci()
                 ch, PanadapterStream::DaxConsumer::Tci);
         }
     }
+    // Every audio_start lands here; rebinding keeps RX routable however the
+    // re-acquire and the stream unregister are ordered (#6006).
+    refreshRxBindings();
 }
 
 void TciServer::scheduleDaxRelease()

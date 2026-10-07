@@ -173,8 +173,8 @@ the shape the bullet above routes a simulator closed loop to — see
   If `main` is newer, the green describes a merge that no longer exists, and
   any conclusion you draw from it inherits that. `main` has `strict: false`, so
   nothing forces a rerun to close the gap — say so in the report rather than
-  reporting the checks as green without qualification. /pr-land turns the same
-  comparison into a gate before it arms auto-merge.
+  reporting the checks as green without qualification. /pr-land records the
+  same comparison in its report but does not gate on it.
 
 ## 2. Linked issue → does the PR actually solve it?
 
@@ -321,8 +321,9 @@ Read the diff against each of these; cite the specific rule when flagging:
   is THE table; QtKeychain only), capability declarations
   (`RadioCapabilities` + caps-map doc + gating test, per that file's
   ADDING-A-FIELD contract).
-- **CMake contract** — any target compiling `AppSettings.cpp` uses
-  `${AETHER_SETTINGS_SOURCES}` and joins `AETHER_SETTINGS_CONSUMERS`; tests
+- **CMake contract** — a test needing `AppSettings` without `aethercore` takes
+  `$<TARGET_OBJECTS:aether_test_settings>` and joins
+  `AETHER_SETTINGS_CONSUMERS`; tests
   isolate via `TestSettingsProfile.h` (`AETHER_SETTINGS_DIR`).
 - **`docs/agents/backends.md`** (the aetherd / engine-boundary sub-doc of AGENTS.md) — the migration
   ratchets, which the settings and capability rules above do not reach:
@@ -454,6 +455,55 @@ say plainly when a load-bearing claim went unverified — an untested assertion
 reported as untested is honest; one reported as fine is not. Never trust a
 green CI badge over a local reproduction when they disagree.
 
+**Build only what you run.** Configure a lean review build, then build named
+targets — never the default `all`:
+
+```sh
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+  -DAETHER_SHARED_CORE=ON \
+  "-DCMAKE_CXX_FLAGS_RELWITHDEBINFO=-O2 -g1 -DNDEBUG" \
+  "-DCMAKE_C_FLAGS_RELWITHDEBINFO=-O2 -g1 -DNDEBUG"
+cmake --build build --parallel --target AetherSDR <test_a> <test_b>
+ctest --test-dir build -R '^(test_a|test_b)$' --no-tests=error --output-on-failure
+```
+
+`AETHER_SHARED_CORE=ON` links every target against one `libaethercore`
+instead of a static copy each. `-g1` keeps line tables and function names, so
+backtraces still symbolize, with a fraction of the debug info; it is spelled
+out so the recipe does not depend on the build-type default. Together they
+shrink a test binary roughly twentyfold. The app then loads the core as a
+shared library, which is not how it ships. That is fine for driving
+behaviour, but name it if a finding could depend on link mode. Both are for
+Linux and macOS: on Windows, drop the shared core (it is a configure error)
+and the GCC/Clang flags. A test that calls WDSP directly cannot rely on the
+shared core exporting it, because WDSP is a private, hidden-visibility
+dependency; link `aether_wdsp` explicitly, as the existing direct-call tests
+do, or go through `core/dsp/WdspChannel.h`. Add
+`-DCMAKE_{C,CXX}_COMPILER_LAUNCHER=ccache` when ccache is installed.
+
+Pick the tests from the diff: the ones the PR adds or modifies, the ones its
+body names, and the ones whose `tests/tests.cmake` block compiles a file the
+PR touches (`grep -n 'Touched.cpp' tests/tests.cmake`). When the hit is an
+`OBJECT` library (`aether_test_*`) or a `set(..._SOURCES` list rather than a
+test, grep again for that target or variable name. A file compiled into
+`aethercore` reaches every test that links it, so no grep finds them all;
+pick the ones that exercise the touched code. `-R` matches the
+`add_test(NAME ...)` name, which is usually the target name but not always
+(`settings_browser_dialog_test` registers as `settings_browser_dialog`), and
+one binary can be registered several times under different arguments or
+environment (`deepfist_cw_model_test` is registered five times). Take the
+names from `grep -n 'COMMAND <target>' tests/tests.cmake` for every target
+you build. `--no-tests=error` turns a filter that matched nothing into a
+failure instead of a silent pass, but it cannot see a registration the filter
+left out. Leave out `AetherSDR` only when you will not drive the app.
+The default target builds every test executable — several hundred, most
+linking a large slice of the app and each carrying its own debug info — which
+costs tens of gigabytes and most of the build time for binaries the review
+never runs. An unfiltered `ctest` then reports the unbuilt ones as "Not Run";
+that is a missing `-R`, not a failure. Build the whole tree only when the
+claim under test is about the tree itself (a CMake or link-contract change),
+and say in the report that you did.
+
 Where the PR adds or changes a test, break the code on purpose and confirm
 the test notices. A regression test that still passes with the fix reverted
 is a blocker in its own right — it pins nothing, and it will read as coverage
@@ -464,8 +514,9 @@ forever after.
 gate a merge. If you run the suite locally, expect failures that have nothing
 to do with the PR.
 
-**Before blaming the PR for a test failure, prove it.** Build the PR's merge
-base clean in a separate worktree and run the same test there. For a genuinely
+**Before blaming the PR for a test failure, prove it.** Build the same
+targets on the PR's merge base in a separate worktree and run the same test
+there. For a genuinely
 intermittent, socket-free failure, compare repeated runs on each side using a
 proportionate sample. For a bind, sandbox, permission, or unavailable-peer
 failure, do not repeat it — but do check the merge base once before classifying

@@ -121,7 +121,7 @@
  },
  "core/ClientDisplaySettings.h": {
   "tag": "ui-support",
-  "note": "Radio-scoped client persistence for locally shaped waterfall cadence under the ClientDisplay feature document; UI settings plumbing, not radio-owned display state.",
+  "note": "Radio-scoped client persistence for locally shaped display state (waterfall cadence, FFT FPS, the dBm range) under the ClientDisplay feature document; UI settings plumbing, not radio-owned display state.",
   "split": "",
   "confidence": "high"
  },
@@ -224,6 +224,12 @@
  "core/DaxTxPolicy.h": {
   "tag": "vendor(flex)",
   "note": "Policy deciding when to claim a Flex dax_tx stream vs deferring to SmartSDR DAX2; whole surface is DAX/VITA-49.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/DbmRangePlausibility.h": {
+  "tag": "ui-support",
+  "note": "Header-only predicate: could this dBm range be a real display range. Shared by the pan wiring's outbound backstop and ClientDisplaySettings' store validation; no radio state.",
   "split": "",
   "confidence": "high"
  },
@@ -332,6 +338,18 @@
  "core/KiwiSdrProtocol.h": {
   "tag": "vendor(kiwi)",
   "note": "KiwiSDR websocket wire protocol: SND/W/F frame decode, ADPCM, MSG tokens, camp/auth, kiwi command formatting; family enum + inbound-frame classification shared by the Web-888 receiver family",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/Kpa1500Connection.h": {
+  "tag": "peripheral(kpa1500)",
+  "note": "Direct TCP control/status client (port 1500, ^CP-configurable) for the Elecraft KPA1500 amplifier — a standalone Ethernet accessory with no FlexRadio awareness at all, same precedent as core/AcomConnection.h, core/SpeConnection.h and core/VkampConnection.h. Unlike PGXL/TGXL the Flex radio neither discovers it nor proxies its telemetry, so port 1500 is the only control channel. Not radio-family wire; a peripheral accessory, NOT behind the IRadioBackend radio seam. See docs/architecture/kpa1500-amplifier-design.md.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/Kpa1500Protocol.h": {
+  "tag": "peripheral(kpa1500)",
+  "note": "Wire codec for the KPA1500 peripheral: the '^CMD<arg>;' ASCII framing parser, the decode into a per-field optional Status snapshot, and the command builders — including the bounded-timeout keying builder that makes the unbounded '^TX;' form unrepresentable. Derived from the vendor's public KPA1500 Programming Reference V3, a clean-room input (Constitution Principle IV). Peripheral accessory wire, NOT behind the IRadioBackend radio seam.",
   "split": "",
   "confidence": "high"
  },
@@ -482,6 +500,24 @@
  "core/PeripheralSettings.h": {
   "tag": "ui-support",
   "note": "Client settings blob (AutoReconnect + legacy-key migration) for peripheral devices atop AppSettings; no radio state.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/PeripheralRemovalGuard.h": {
+  "tag": "peripheral(4o3a)",
+  "note": "Transient main-thread removal lease checked by TGXL, PGXL and Antenna Genius connection entry points. No GUI dependency, persisted state, radio-family wire or TX authority.",
+ "split": "",
+ "confidence": "high"
+ },
+ "core/PeripheralEndpointFallback.h": {
+  "tag": "peripheral(4o3a)",
+  "note": "Stateless choice of the radio-reported address to retry once after a saved manual TGXL or PGXL address fails at the socket level; no radio-family wire or UI state.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/PeripheralAuthCodeValidation.h": {
+  "tag": "peripheral(4o3a)",
+  "note": "Stateless validation of authorization codes before constructing line-oriented TGXL, PGXL and Antenna Genius peripheral commands; no radio-family wire or UI state.",
   "split": "",
   "confidence": "high"
  },
@@ -878,6 +914,12 @@
  "models/FlexWaveformModel.h": {
   "tag": "vendor(flex)",
   "note": "FlexLib waveform/WFP container management: parses SmartSDR waveform status, emits Flex protocol commands",
+  "split": "",
+  "confidence": "high"
+ },
+ "models/Ctr2ProxyModel.h": {
+  "tag": "peripheral(ctr2)",
+  "note": "CTR2-Max controller relay: an operator-enabled opaque byte relay between the controller (TCP listener in Wi-Fi mode, USB HID link in USB mode) and a dedicated radio TCP connection. The CTR2 is an independent radio client; nothing passes RadioModel, a backend socket or IRadioBackend. A peripheral accessory transport, NOT behind the radio seam. See docs/ctr2-tcp-proxy-design.md and docs/ctr2-usb-relay-design.md (RFC #6091).",
   "split": "",
   "confidence": "high"
  },
@@ -1409,6 +1451,12 @@
   "split": "",
   "confidence": "high"
  },
+ "core/backends/SquelchLevelScale.h": {
+  "tag": "universal",
+  "note": "Where a slice's squelch level sits on the panadapter's vertical axis, as a backend-published record (RadioCapabilities::squelchLevelScale) plus the mode filter and Auto-SQL predicate both the widget and MainWindow read, so the SQL line and Auto SQL share one gate. No family name or wire concept; each backend declares its own map or leaves it absent (#6092).",
+  "split": "",
+  "confidence": "high"
+ },
  "core/backends/NoiseFloorAutoAdjustGate.h": {
   "tag": "universal",
   "note": "The ONE predicate deciding whether the noise-floor auto-adjust may move the display reference level, as an OR over two backend-neutral properties (a real dBm-range echo, or absolute spectrum bins). Deliberately free of Qt and of RadioCapabilities so the widget and its test read the same function rather than two copies; the UI reaching it is the seam working, not coupling. Family backends populate the capability it is called with.",
@@ -1437,6 +1485,12 @@
   "tag": "mixed(flex)",
   "note": "Selected-receiver fixed24 decoder PCM and bounded delivery, independent of speaker controls. Native ingress uses normalized typed slice frames; the compatibility DAX lane uses RadioModel's existing stream and holder registry.",
   "split": "Core: receiver selection, epochs, bounded backlog, rate conversion and decoder resets. Flex compatibility: DAX channel selection and central consumer holds; no wire commands are generated here.",
+  "confidence": "high"
+ },
+ "models/ReceiverSlotCount.h": {
+  "tag": "universal",
+  "note": "How many receiver letters (A, B, C, ...) the UI offers — the RX applet's slice tabs and the CAT applet's VFO targets — tracked from the connection/capability/slice edges. Family-agnostic: the backend's declared ceiling, floored by the slots live receivers occupy (#5775, #5776).",
+  "split": "",
   "confidence": "high"
  }
 }

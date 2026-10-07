@@ -583,9 +583,17 @@ int main(int argc, char* argv[])
     static_cast<void>(AetherSDR::Nr2SettingsModel::instance());
     AetherSDR::AppSettings::instance().initializeGuiClientIdentity();
     {
+        // Retired keys nothing reads any more. AboutDialogGeometry went when
+        // About moved to CanonWindow, which opens centred (RFC #6226).
         auto& s = AetherSDR::AppSettings::instance();
-        if (s.contains("SHistorySoftEdgeDb")) {
-            s.remove("SHistorySoftEdgeDb");
+        bool removed = false;
+        for (const char* key : {"SHistorySoftEdgeDb", "AboutDialogGeometry"}) {
+            if (s.contains(key)) {
+                s.remove(key);
+                removed = true;
+            }
+        }
+        if (removed) {
             s.save();
         }
     }

@@ -78,7 +78,7 @@ HEADER = REPO / "src" / "core" / "backends" / "RadioCapabilities.h"
 # std::optional<...Control> record, or one that turned out to have no consumer.
 # When you convert one, drop this number in the same commit — that is the whole
 # ratchet. Raising it needs a maintainer ruling on #5262, not a quiet edit.
-FROZEN_BOOL_COUNT = 71
+FROZEN_BOOL_COUNT = 70
 
 # The largest one-commit drop that is plausibly a real conversion rather than the
 # parser falling over. See the vacuity check in main().

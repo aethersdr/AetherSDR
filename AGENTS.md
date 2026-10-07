@@ -68,7 +68,10 @@ When helping with AetherSDR:
   exposed to the UI through models — never via a new gui→core header include.
 - **Adding or changing UI?** Every colour is a ThemeManager token, and a
   control the radio lacks is dimmed with a stated reason, never hidden — see
-  [`docs/agents/gui.md`](docs/agents/gui.md).
+  [`docs/agents/gui.md`](docs/agents/gui.md). New or reworked surfaces follow
+  the visual canon in
+  [`docs/style/aethersdr-style-guide.md`](docs/style/aethersdr-style-guide.md);
+  apply it only to UI your issue already changes.
 - **Read `CONTRIBUTING.md`** for contribution policy (what we accept, who
   reviews what) and `docs/DEVELOPER-GUIDE.md` for the contributor-facing
   coding conventions and the AI-to-AI debugging protocol (open a GitHub issue
@@ -208,7 +211,7 @@ Full dependency list is in `README.md`. Adding a test: declare it in
 
 ### Version and release files
 
-Current version: **26.9.5**.
+Current version: **26.10.1**.
 Versioning scheme is **CalVer** (`YY.M.patch[.hotfix]`) starting from v26.5.1,
 the 1.0-equivalent. Hotfix sub-patches use a 4th component (e.g. 26.5.2.1).
 Earlier tags used semver through v0.9.8.

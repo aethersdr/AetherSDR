@@ -1,102 +1,90 @@
 #pragma once
 
 #include "core/backends/rtl/RtlSdrDdc.h"
+#include "core/backends/rtl/RtlCaptureTransaction.h"
+#include "core/backends/rtl/RtlReceivePipeline.h"
+#include "core/backends/rtl/RtlDcBlocker.h"
 
-#include <QObject>
 #include <QThread>
 #include <QVector>
-#include <climits>
-#include <complex>
 #include <atomic>
+#include <complex>
+#include <memory>
+#include <optional>
 
 struct rtlsdr_dev;
 
 namespace AetherSDR::rtl {
 
-// Runs rtlsdr_read_async() and RtlSdrDdc off the main thread (u8 I/Q → float).
-//
-// Deadlock prevention (§ Hazards #1): read_async blocks until cancel_async, and
-// a cancel issued just before the loop starts is lost, so stopReading() repeats
-// the cancel every 100 ms for up to 5 s.
-//
-// Thread safety (§ Hazards #2): set_center_freq / set_tuner_gain /
-// set_direct_sampling are USB control transfers (~100-300 ms) that fail or
-// deadlock inside the read callback. The setters store the request atomically
-// and cancel read_async; run() applies it between async-read sessions.
+// Owns the USB handle until readAsync has exited. Exactly one immutable command
+// crosses to the acquisition context. The backend polls the acknowledgment
+// before reusing its storage; no mutex, allocation or destruction for receiver
+// reconfiguration occurs in the sample callback.
 class RtlSdrWorker : public QThread {
     Q_OBJECT
-
 public:
-    explicit RtlSdrWorker(struct rtlsdr_dev* dev, QObject* parent = nullptr);
+    using Transaction = RtlCaptureTransaction;
+    class Device : public Transaction::DeviceOperations {
+    public:
+        using Callback = void (*)(unsigned char*, std::uint32_t, void*);
+        virtual bool resetBuffer() = 0;
+        virtual int readAsync(Callback callback, void* context) = 0;
+        virtual void cancelAsync() = 0; // only cross-thread device operation
+    };
+
+    explicit RtlSdrWorker(struct rtlsdr_dev* dev, QObject* parent = nullptr, std::size_t capacity = 1);
+    explicit RtlSdrWorker(std::unique_ptr<Device> device, QObject* parent = nullptr, std::size_t capacity = 1);
     ~RtlSdrWorker() override;
-
-    // Start async USB reading loop on this thread
     void startReading();
-
-    // Safely stop reading and wait for worker thread exit. Returns false only
-    // when the USB read thread did not acknowledge repeated cancellation.
     bool stopReading();
-
     bool isReading() const { return m_readerRunning.load(); }
-
     RtlSdrDdc* ddc() { return &m_ddc; }
 
-    // Dispatch blocking USB control transfers to the worker thread.
-    // Setters store requested values in atomic variables and trigger a cancel/restart
-    // loop on the worker thread so control transfers are executed safely outside callback.
-    void setCenterFrequency(uint32_t hz);
-    void setTunerGain(int gainTenths);
-    void setDirectSampling(int mode);
-    void setPpmCorrection(int ppm);
-    void setSampleRate(uint32_t rate);
-    void setOffsetTuning(int enable);
+    // Backend-thread calls. One in-flight work item, enforced by the mailbox.
+    bool submit(const Transaction::Work& work);
+    std::optional<Transaction::Result> takeResult();
+    void serviceCancellation();
+    bool takeAudio(RtlReceivePipeline::Packet& packet) { return m_pipeline->takePacket(packet); }
+    RtlReceivePipeline::Diagnostics diagnostics() const { return m_pipeline->diagnostics(); }
+    bool needsRepair() const { return m_pipeline->needsRepair(); }
+    void setMonitor(int slot, int gain, int pan, bool mute) { m_pipeline->setMonitor(slot, gain, pan, mute); }
 
 signals:
-    // Emitted on USB read error or unexpected disconnect
     void readError(const QString& message);
-
-    // Relayed from RtlSdrDdc (cross-thread queued connection to main thread)
-    void spectrumFrameReady(int panId, const QByteArray& frame);
-    void audioFrameReady(const QByteArray& pcm);
-
-    // USB control completion, emitted only after the transfer has run between
-    // async-read sessions. value is read back from librtlsdr where available.
-    void controlApplied(const QString& control, qint64 value);
-    void controlFailed(const QString& control, const QString& message);
+    // Stamp at production, never infer identity on delivery to the backend.
+    void spectrumFrameReady(quint64 session, quint64 revision, int panId, const QByteArray& frame);
+    void audioFrameReady(quint64 session, quint64 revision, const QByteArray& pcm, const QByteArray& preMonitor);
 
 protected:
     void run() override;
 
 private:
-    static void rtlsdrCallback(unsigned char* buf, uint32_t len, void* ctx);
-    void handleCallback(unsigned char* buf, uint32_t len);
+    enum class Command { Idle, Preparing, Receiver, Hardware, Applying, Complete };
+    static void rtlsdrCallback(unsigned char* buf, std::uint32_t len, void* ctx);
+    void handleCallback(unsigned char* buf, std::uint32_t len);
+    void applyDdc(const Transaction::State& state);
+    void applyHardware();
+    bool prepareHardwareResult();
 
-    // Owned by this worker. The run loop closes it only after read_async exits,
-    // so the backend can never close a handle still used by libusb.
-    struct rtlsdr_dev* m_dev{nullptr};
+    std::unique_ptr<Device> m_device;
     std::atomic<bool> m_readerRunning{false};
     std::atomic<bool> m_stopRequested{false};
+    std::atomic<Command> m_command{Command::Idle};
+    // Written before publishing Receiver/Hardware, read until Complete. Not
+    // touched by the backend again until it acquires Complete in takeResult().
+    std::optional<Transaction::Work> m_work;
+    std::optional<Transaction::Result> m_result;
+    bool m_preparationSubmitted = false; // backend thread only
+    unsigned m_prepareAttempts = 0;
+    Transaction::Token m_applied; // acquisition-context only
+    bool m_legacyReceiving = false; // acquisition-context only
+    int m_legacyFilterLowHz = 0;
+    int m_legacyFilterHighHz = 0;
+    std::unique_ptr<RtlReceivePipeline> m_pipeline;
+    std::uint64_t m_firstSample = 0;
     RtlSdrDdc m_ddc;
-
-    // Pre-allocated IQ buffer to prevent per-callback heap allocations
+    RtlDcBlocker m_dcBlocker;
+    bool m_dcSuppression = false;
     QVector<std::complex<float>> m_iqBuffer;
-
-    // Pending USB control requests (set from any thread, applied between
-    // read_async sessions in the run() loop — never inside the callback)
-    std::atomic<int64_t> m_pendingCenterHz{-1};
-    std::atomic<int> m_pendingGainTenths{INT_MIN};
-    std::atomic<int> m_pendingDirectSampling{-1};
-    std::atomic<int> m_pendingPpm{INT_MIN};
-    std::atomic<int64_t> m_pendingSampleRate{-1};
-    std::atomic<int> m_pendingOffsetTuning{-1};
-
-    // Set by setters to signal the callback to cancel read_async so the
-    // run() loop can apply USB control transfers outside the callback.
-    std::atomic<bool> m_retuneRequested{false};
-
-    // Apply all pending USB control transfers. Called from run() OUTSIDE
-    // the rtlsdr_read_async callback context.
-    void applyPendingControls();
 };
-
-}  // namespace AetherSDR::rtl
+} // namespace AetherSDR::rtl

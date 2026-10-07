@@ -36,7 +36,9 @@ class DemoApplet;
 class AcomApplet;
 class SpeApplet;
 class VkampApplet;
+class Kpa1500Applet;
 class LpMeterApplet;
+class Ctr2ProxyApplet;
 class TxApplet;
 class PhoneCwApplet;
 enum class MicMeterSessionState;
@@ -107,7 +109,9 @@ public:
     AcomApplet*   acomApplet()    { return m_acomApplet; }
     SpeApplet*    speApplet()     { return m_speApplet; }
     VkampApplet*  vkampApplet()   { return m_vkampApplet; }
+    Kpa1500Applet* kpa1500Applet() { return m_kpa1500Applet; }
     LpMeterApplet* lpMeterApplet() { return m_lpMeterApplet; }
+    Ctr2ProxyApplet* ctr2ProxyApplet() { return m_ctr2ProxyApplet; }
     TxApplet*       txApplet()       { return m_txApplet; }
     PhoneCwApplet*  phoneCwApplet()  { return m_phoneCwApplet; }
     PhoneApplet*    phoneApplet()    { return m_phoneApplet; }
@@ -188,6 +192,12 @@ public:
     // station can have a radio-relayed PGXL, a direct ACOM, and a direct
     // VK3AMP all present at once, each fully independent hardware.
     void setVkampVisible(bool visible);
+
+    // Show/hide the KPA1500 button and applet based on a direct Elecraft
+    // KPA1500 connection (#4097). Independent of every other amplifier
+    // applet for the same reason setVkampVisible is: these are separate,
+    // simultaneously-present pieces of hardware, not alternatives.
+    void setKpa1500Visible(bool visible);
 
     // Show/hide the LP100 button and applet from the direct LP-100A connection,
     // independent of any amplifier applet. Gated on the connection like
@@ -404,7 +414,10 @@ private:
     SpeApplet*   m_speApplet{nullptr};
     QPushButton* m_speBtn{nullptr};
     VkampApplet* m_vkampApplet{nullptr};
+    Kpa1500Applet* m_kpa1500Applet{nullptr};
+    QPushButton* m_kpa1500Btn{nullptr};
     LpMeterApplet* m_lpMeterApplet{nullptr};
+    Ctr2ProxyApplet* m_ctr2ProxyApplet{nullptr};
     QPushButton* m_vkampBtn{nullptr};
     TxApplet*      m_txApplet{nullptr};
     PhoneCwApplet* m_phoneCwApplet{nullptr};

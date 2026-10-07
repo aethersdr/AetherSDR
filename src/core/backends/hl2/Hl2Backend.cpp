@@ -189,6 +189,13 @@ WdspChannel::Mode modeFromString(const QString& mode) noexcept
     return WdspChannel::Mode::Usb;
 }
 
+// The data modes WSJT-X and similar decoders select.
+bool isDigitalDataMode(const QString& mode) noexcept
+{
+    return mode.compare(QLatin1String("DIGU"), Qt::CaseInsensitive) == 0
+           || mode.compare(QLatin1String("DIGL"), Qt::CaseInsensitive) == 0;
+}
+
 // wdspAgcMode() falls back to medium for unknown strings, so the restore
 // boundary drops unknown values instead of persisting a silent "med". Uses
 // SliceModel's four-way vocabulary ("med", not "medium").
@@ -269,14 +276,12 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
 {
     // THE DEFAULT CONTROL LAW, set here rather than as a member initialiser
     // because its sampling-bias budget is a logarithm of the gate period and
-    // therefore not a constant expression. See setAutoRfGainMode.
+    // therefore not a constant expression. See installDefaultAutoGainLaw.
     //
     // Setting a law is not arming one: m_autoRfGainEnabled stays false, no
     // stream starts, and nothing about this installation's behaviour changes
     // until an operator switches the control on.
-    m_autoGainConfig = AetherSDR::hl2::bandscopeReleaseConfig(
-        AetherSDR::hl2::gatedPeakBiasDbForPeriod(
-            MetisClient::bandscopeSamplePeriodMs()));
+    installDefaultAutoGainLaw();
 
     // No parent: moveToThread() refuses an object that has one, and both of
     // these belong on the I/O thread rather than the GUI thread. They are
@@ -344,6 +349,10 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         }
         applyRxAudioMute(false);
     });
+
+    m_txTailTimer = new QTimer(this);
+    m_txTailTimer->setSingleShot(true);
+    connect(m_txTailTimer, &QTimer::timeout, this, &Hl2Backend::finishTxTail);
 
     m_cwHangTimer = new QTimer(this);
     m_cwHangTimer->setSingleShot(true);
@@ -442,6 +451,13 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         // clamped to the native range, so it arms; a refusal would be logged.
         if (m_autoRfGainWanted && !m_autoRfGainEnabled) {
             setAutoRfGain(true);
+        } else {
+            // The loop can already be running: MetisClient re-emits linkUp when
+            // EP6 resumes after a silence, with no connect in between. The link
+            // edge ended the bandscope gate and this object's claim on it, so
+            // ask again. A no-op for a loop that is off and for a law that does
+            // not read the bandscope.
+            applyBandscopeForAutoGain();
         }
     });
     connect(m_metis, &MetisClient::linkDown, this, [this] {
@@ -790,6 +806,13 @@ void Hl2Backend::buildReceivers(int count)
             // same frequency is deliberate: parked at 0 Hz they would draw
             // panadapters of DC and read as a hardware fault on first connect.
             r = previous.front();
+            // RIT/XIT are that receiver's own, as on a Flex slice: a new
+            // receiver starts with both off, as createPanadapter()'s does.
+            r.ritOn = false;
+            r.ritHz = 0;
+            r.xitOn = false;
+            r.xitHz = 0;
+            r.ncoMovedForRit = false;
         }
         r.dsp = nullptr;             // never inherited; recreated below
         r.audioMuted = false;
@@ -829,10 +852,19 @@ bool Hl2Backend::openReceiverDsp(int ddc, std::string* error)
     // the UI number never changes (Hl2ReceiverMap::remove).
     const int ui = ids->uiNumber;
 
+    // Rule 6 holds by ordering: the DSP emits on m_ioThread, the thread that
+    // emits linkDown, so no frame is delivered after disconnected(). A frame is
+    // published only while its producer is still the receiver behind its UI
+    // number: a queued frame outlives disconnect() and deleteLater(), and a
+    // reopened receiver can take the same number. audioReady and meterUpdate
+    // below apply the same check.
     connect(dsp, &Hl2RxDsp::spectrumReady, this,
-            [this, ui](const std::vector<float>& bins) {
-        if (!m_ids.byUi(ui))
+            [this, ui, producer = QPointer<Hl2RxDsp>(dsp)](const std::vector<float>& bins) {
+        const auto* ids = m_ids.byUi(ui);
+        const Receiver* receiver = ids ? rx(ids->ddcIndex) : nullptr;
+        if (!producer || !receiver || receiver->dsp != producer.data()) {
             return;
+        }
         // dBFS -> dBm through the shared reference (one AD9866 behind every
         // DDC): derived full scale (+3 dB) minus LNA gain, so the trace holds
         // still across gain changes. off == 0.0 fires only when the LNA gain
@@ -871,11 +903,12 @@ bool Hl2Backend::openReceiverDsp(int ddc, std::string* error)
     });
 
     connect(dsp, &Hl2RxDsp::meterUpdate, this,
-            [this, ui](float dbfs) {
+            [this, ui, producer = QPointer<Hl2RxDsp>(dsp)](float dbfs) {
         const auto* ids = m_ids.byUi(ui);
         Receiver* r = ids ? rx(ids->ddcIndex) : nullptr;
-        if (!r)
+        if (!producer || !r || r->dsp != producer.data()) {
             return;
+        }
         // Same reference as the spectrum -- a meter that moved on a gain
         // change while the trace stayed put would be its own kind of lie.
         const double dbm = m_dbRef.toDbm(dbfs);
@@ -956,8 +989,13 @@ bool Hl2Backend::createPanadapter()
         seed.filterLowHz = first.filterLowHz;
         seed.filterHighHz = first.filterHighHz;
         seed.agcMode = first.agcMode;
+        seed.agcModeBeforeDigital = first.agcModeBeforeDigital;
         seed.agcThresholdDb = first.agcThresholdDb;
     }
+    // The AGC-off level is this receiver's own: the one remembered for its
+    // index, else the default. It is not copied from the first receiver.
+    if (const int level = rememberedAgcOffLevel(ddc); level >= 0)
+        seed.agcOffLevel = level;
     m_rx.push_back(seed);
 
     if (m_metis) {
@@ -1151,6 +1189,9 @@ void Hl2Backend::finishReceiverDspBuild(int uiNumber, quint64 generation, bool o
                 Q_ARG(int, static_cast<int>(m_rx.size())));
         }
         publishIoDsps();
+        if (txWasHere) {
+            retuneReceiver(m_txDdc);
+        }
         emit sliceLifecycleFailed(QStringLiteral("create"), removedUi,
                                   QString::fromStdString(error));
         emit sliceRemoved(removedUi);
@@ -1190,7 +1231,10 @@ void Hl2Backend::finishReceiverDspBuild(int uiNumber, quint64 generation, bool o
     // inheriting RX1's — which for a receiver that has never been configured is
     // the default of off.
     pushNoiseBlanker(*r);
+    pushPanAveraging(*r);
     pushSquelch(*r);
+    pushApf(*r);
+    pushAgcOffLevel(*r);
 
     // AND ONLY NOW does the sample path learn about it. Last, after the chain is
     // configured, tuned and shifted — so the first block it is ever handed lands
@@ -1229,7 +1273,8 @@ bool Hl2Backend::removePanadapter(const QString& panId)
     // m_txDdc and the active DDC are indices, and removal renumbers every
     // index after the closed one. A role on the closing receiver must move; a
     // role after it must shift down, or it names the wrong receiver.
-    if (ddc == m_txDdc) {
+    const bool txMoved = (ddc == m_txDdc);
+    if (txMoved) {
         // Move transmit to DDC 0 in post-removal numbering (always exists,
         // since closing the last receiver is refused), or txSlice() goes null.
         qCInfo(lcHl2) << "HL2: transmit moves from DDC" << ddc
@@ -1312,6 +1357,11 @@ bool Hl2Backend::removePanadapter(const QString& panId)
     // Closing one can take the set back onto a single band.
     applyBandFilter("close receiver");
     publishWideState();
+    // Transmit moved: re-run the new owner's tune, as setTxSlice() does, so the
+    // TX register (with the new owner's XIT) leaves the closed receiver.
+    if (txMoved) {
+        retuneReceiver(m_txDdc);
+    }
     // The TX slice may have moved; republish so the indicator follows.
     emitAllSliceState();
     return true;
@@ -1744,6 +1794,9 @@ RadioCapabilities Hl2Backend::capabilities() const
     // SpectrumWidget's noise-floor auto-adjust converges without a dBm range
     // echo. See PanAmplitudeModel::binsAbsolute.
     amplitude.binsAbsolute = true;
+    // No register holds a display range and nothing reports one: the client
+    // is the only memory the operator's dBm range has.
+    amplitude.clientPersistsDbmRange = true;
     c.panAmplitude = amplitude;
 
     // radioOwnsDbmScale is not declared: this radio cannot be commanded a dBm
@@ -1815,7 +1868,7 @@ RadioCapabilities Hl2Backend::capabilities() const
     // 100 with no RF leaving the radio. Consumers that act on drive must see that
     // distinction rather than infer applied power from a request.
     c.transmitDriveControl = RadioCapabilities::TransmitDriveControl{
-        SliceFrequencyControl::Authority::Engine};
+        SliceFrequencyControl::Authority::Engine, /*tunePowerAppliesLive=*/true};
     c.hasRadioDialLock = false;
     c.hasTuner = false;
     c.hasTunerMemories = false;
@@ -1825,10 +1878,20 @@ RadioCapabilities Hl2Backend::capabilities() const
     // this radio has — but stated rather than defaulted, per the struct's
     // "a backend that omits one silently declares it absent" rule.
     c.hasLmsNoiseFilters = false;
-    c.hasAudioPeakingFilter = false;
+    // THE EXCEPTION, like the blanker below: WDSP's CW peaking filter runs on
+    // this host (setSliceApf), so the APF row is a working control here even
+    // though the radio has no firmware DSP at all.
+    c.hasAudioPeakingFilter = true;
     c.hasManualNotch = false;
     c.hasTransmitFrequencyCheck = false;
     c.hasDdcPanEdgeRolloff = false;
+    // The panadapter is averaged here, in Hl2Spectrum, per the operator's FFT
+    // AVG (setPanAverage). SpectrumWidget skips its own fixed SMOOTH_ALPHA EMA
+    // while this is set, so the two never stack (RFC #5782).
+    c.backendPanAveraging = BackendPanAveraging{kMsPerAverageStep, false, {}, {}};
+    // The pan's frame rate is paced on this host and the radio stores no
+    // display state: the client is the only memory FFT FPS has.
+    c.panFrameRateShaping = PanFrameRateShaping{/*clientPersistsFrameRate*/ true};
     // No band/segment zoom: this backend vends no command plane at all, so
     // `display pan set ... band_zoom=` is dropped inside RadioModel::sendCmd.
     // Declaring absence is what makes the control refuse rather than lie.
@@ -1844,6 +1907,24 @@ RadioCapabilities Hl2Backend::capabilities() const
     // data modes have no stage, so this is false, stated explicitly: the client
     // then disables SQL there instead of showing a button wired to nothing.
     c.hasModeIndependentSquelch = false;
+    // amsq's gate on the pan axis. Every term is a dB offset from the same IQ:
+    // the LNA referral and the pan's LNA offset cancel, leaving a constant. FM
+    // (fmsq, a noise-quieting gate) has no dB place, so only amsq's modes are
+    // listed. No Auto SQL: amsq reads the passband, the pan per-bin noise.
+    {
+        SquelchLevelScale sql;
+        sql.dbPerStep = WdspChannel::kLevelSquelchDbPerStep;
+        sql.offsetDb = WdspChannel::kLevelSquelchBaseDbfs + m_dbRef.levelSquelchOffsetDb()
+                       + m_dbRef.offsetDb() + Hl2Spectrum::kToneGainDb;
+        for (const QString& mode : publishedModeStrings()) {
+            if (WdspChannel::squelchStageFor(modeFromString(mode))
+                == WdspChannel::SquelchStage::Level) {
+                sql.modes << mode;
+            }
+        }
+        sql.autoSquelch = false;
+        c.squelchLevelScale = sql;
+    }
     // The 76.8 MHz NCO scale is a localparam in the bitstream and nothing in the
     // HPSDR map can be told the crystal's real error — so the correction is ours
     // or it does not happen. See Hl2FreqCal for the derivation.
@@ -1939,8 +2020,10 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.hasSupplyVoltageTelemetry = false;
     c.hasPaTemperatureTelemetry = true;
     c.hasPaCurrentTelemetry = false;
-    c.speechProcessorLevelMaximum = 2;
-    c.speechProcessorLabel = QStringLiteral("PROC");
+    // PROC runs in this host's ClientComp (hostModulates), not in the radio.
+    c.speechProcessorControl = std::nullopt;
+    c.voxControl = std::nullopt;
+    c.txMonitorControl = std::nullopt;
     c.hasMainFanTelemetry = false;
     // The HL2 persists NOTHING across power cycles — "the radio reports no
     // VFO, so the app is authoritative and must push" (pushInitialState).
@@ -2690,6 +2773,7 @@ void Hl2Backend::disconnectRadio()
     // ending in MetisClient::start(), for a session nobody is in. Measured:
     // connect, connect, disconnect gave two dspSetupFinished and a running wire.
     m_queuedConnect.reset();
+    cancelTxTail();
 
     if (m_metis)
         // Queued: serialises behind whatever the I/O thread is doing.
@@ -2774,19 +2858,33 @@ void Hl2Backend::setSliceFrequency(int sliceId, double hz)
     // Stay clear of the band edges: the passband rolls off there, and a slice
     // parked in the roll-off would be attenuated for no visible reason.
     const double usableHz = halfSpanHz * kUsablePassbandFraction;
-    if (std::abs(hz - r->ncoHz) > usableHz) {
-        r->ncoHz = hz;
+    // The window is judged on where the receiver LISTENS (dial + its RIT), so
+    // a RIT offset past the edge moves the NCO too.
+    const double tunedHz = rxTunedHz(*r);
+    const bool ritApplies = (tunedHz != r->sliceFreqHz);
+    const bool outsideWindow = std::abs(tunedHz - r->ncoHz) > usableHz;
+    // A move RIT alone caused is undone when RIT stops applying to this
+    // receiver (cleared or zeroed) — the NCO comes back
+    // to the dial, or the pan centre stays offset by the old RIT for good.
+    const bool ritReturn = !outsideWindow && !ritApplies && r->ncoMovedForRit;
+    if (outsideWindow || ritReturn) {
+        // Judged against the NCO BEFORE it moves: did the dial alone fit?
+        r->ncoMovedForRit = outsideWindow && ritApplies
+            && std::abs(r->sliceFreqHz - r->ncoHz) <= usableHz;
+        r->ncoHz = tunedHz;
         if (m_metis)
             // THIS receiver's NCO register, not RX1's. The two-argument overload
             // is the whole reason the receivers can sit on different bands.
             QMetaObject::invokeMethod(m_metis, "setRxFrequencyHz", Qt::QueuedConnection,
                 Q_ARG(int, ddc),
-                Q_ARG(std::uint32_t, ncoCommandHz(hz)));
+                Q_ARG(std::uint32_t, ncoCommandHz(tunedHz)));
         // Notch centres are measured from the NCO, so moving it without saying
         // so leaves every notch parked at its old RF frequency — the operator
         // tunes across the band and the notches follow them, which is precisely
         // the behaviour a TRACKING notch exists to avoid.
         pushNotchTune(*r);
+        // The averaged panadapter is on the old axis too.
+        dropPanAverage(*r);
     }
 
     // shift = slice - NCO: the wire places frequency F at -(F - NCO), so this
@@ -2823,6 +2921,27 @@ void Hl2Backend::setSliceFrequency(int sliceId, double hz)
     notifyOperatingStateChanged();
 }
 
+// DIGU/DIGL run AGC off: medium AGC raises the noise between FT8 frames,
+// which inflates the decoder's noise reference and costs weak decodes beside
+// a strong signal (#5629). The held AGC returns on leaving them. Never
+// re-imposed inside a data mode, so an operator's own AGC choice stands.
+bool Hl2Backend::followModeAgc(Receiver& r, const QString& previousMode)
+{
+    const bool wasDigital = isDigitalDataMode(previousMode);
+    const bool isDigital = isDigitalDataMode(r.mode);
+    if (isDigital && !wasDigital) {
+        r.agcModeBeforeDigital = r.agcMode;
+        r.agcMode = QStringLiteral("off");
+        return true;
+    }
+    if (wasDigital && !isDigital && !r.agcModeBeforeDigital.isEmpty()) {
+        r.agcMode = r.agcModeBeforeDigital;
+        r.agcModeBeforeDigital.clear();
+        return true;
+    }
+    return false;
+}
+
 void Hl2Backend::setSliceMode(int sliceId, const QString& requested)
 {
     const int ddc = ddcForSlice(sliceId);
@@ -2854,6 +2973,12 @@ void Hl2Backend::setSliceMode(int sliceId, const QString& requested)
         const auto [lo, hi] = defaultPassbandForMode(mode);
         r->filterLowHz  = lo;
         r->filterHighHz = hi;
+    }
+
+    if (followModeAgc(*r, previous) && r->dsp) {
+        QMetaObject::invokeMethod(r->dsp, "setAgc", Qt::QueuedConnection,
+            Q_ARG(int, wdspAgcMode(r->agcMode)),
+            Q_ARG(double, m_dbRef.agcCeilingDb(r->agcThresholdDb)));
     }
 
     // Mode first, then passband, re-pushed on every mode set: in WDSP the NBP
@@ -2927,11 +3052,17 @@ void Hl2Backend::setSliceAgc(int sliceId, const QString& mode, int thresholdDb)
     // 40 dB, clipping hard by 50 dB.
     // Validated on the way in so capture only stores what restore accepts; an
     // unknown mode string leaves the mode unchanged.
-    if (!m.isEmpty() && isKnownAgcModeString(m))
+    if (!m.isEmpty() && isKnownAgcModeString(m)) {
+        // A changed mode is the operator's choice, so leaving DIGU/DIGL no
+        // longer overrides it. A threshold change repeats the current mode.
+        if (m != r->agcMode) {
+            r->agcModeBeforeDigital.clear();
+        }
         r->agcMode = m;
-    else if (!m.isEmpty())
+    } else if (!m.isEmpty()) {
         qCWarning(lcHl2) << "HL2: ignoring unknown AGC mode" << mode
                          << "- keeping" << r->agcMode;
+    }
     r->agcThresholdDb = qBound(0, thresholdDb, 100);
     // THE REMEMBERED PAIR IS THE LAST ONE THE OPERATOR SET, on whichever
     // receiver. Capture used to read rx(m_txDdc) instead, which split the model:
@@ -2940,7 +3071,9 @@ void Hl2Backend::setSliceAgc(int sliceId, const QString& mode, int thresholdDb)
     // capture was not the change that got captured — and the next launch seeded
     // every receiver from it. Flat restore is the deliberate design (see
     // seedReceiverAgc); this makes the capture side agree with it.
-    m_agcMode = r->agcMode;
+    // A data mode's own "off" is not the operator's choice and is not captured.
+    m_agcMode = r->agcModeBeforeDigital.isEmpty() ? r->agcMode
+                                                  : r->agcModeBeforeDigital;
     m_agcThresholdDb = r->agcThresholdDb;
     // WDSP IS TOLD WHAT THE RECEIVER NOW HOLDS, not what the caller asked for.
     // Deriving from `m` meant a refused mode still reached the DSP as
@@ -2978,6 +3111,97 @@ void Hl2Backend::setSliceNoiseBlanker(int sliceId, bool on, int level)
     if (r->dsp)
         QMetaObject::invokeMethod(r->dsp, "setNoiseBlanker", Qt::QueuedConnection,
             Q_ARG(bool, r->nbOn), Q_ARG(int, r->nbLevel));
+}
+
+ReceiveDispatch Hl2Backend::requestSliceDsp(int sliceId, const SliceDspRequest& request)
+{
+    if (!request.valid() || !rx(ddcForSlice(sliceId))) {
+        return ReceiveDispatch::Unsupported;
+    }
+    switch (request.feature) {
+    case SliceDspRequest::Feature::Nb:
+        setSliceNoiseBlanker(sliceId, request.enabled, request.level);
+        break;
+    case SliceDspRequest::Feature::Apf:
+        setSliceApf(sliceId, request.enabled, request.level);
+        break;
+    default:
+        return ReceiveDispatch::Unsupported;
+    }
+    return ReceiveDispatch::Dispatched;
+}
+
+ReceiveDispatch Hl2Backend::requestSliceSquelch(int sliceId, const SliceSquelchRequest& request)
+{
+    if (!request.valid() || !rx(ddcForSlice(sliceId))) {
+        return ReceiveDispatch::Unsupported;
+    }
+    setSliceSquelch(sliceId, request.enabled, request.level);
+    return ReceiveDispatch::Dispatched;
+}
+
+ReceiveDispatch Hl2Backend::requestSliceAudio(int sliceId, const SliceAudioRequest& request)
+{
+    if (!request.valid() || request.origin != SliceAudioRequest::Origin::Operator
+        || !rx(ddcForSlice(sliceId))) {
+        return ReceiveDispatch::Unsupported;
+    }
+    switch (request.field) {
+    case SliceAudioRequest::Field::Gain: setSliceAudioGain(sliceId, request.value); break;
+    case SliceAudioRequest::Field::Mute: setSliceAudioMute(sliceId, request.value != 0); break;
+    case SliceAudioRequest::Field::Pan: setSliceAudioPan(sliceId, request.value); break;
+    }
+    return ReceiveDispatch::Dispatched;
+}
+
+void Hl2Backend::setSliceApf(int sliceId, bool on, int level)
+{
+    const int ddc = ddcForSlice(sliceId);
+    Receiver* r = rx(ddc);
+    if (!r)
+        return;
+    // Per receiver, like the blanker: two receivers on two CW signals can
+    // want different peaking, and the slice model holds it per slice.
+    r->apfOn = on;
+    r->apfLevel = qBound(0, level, 100);
+    pushApf(*r);
+    emitSliceState(ddc);
+}
+
+void Hl2Backend::requestSliceAgc(int sliceId, const SliceAgcRequest& request)
+{
+    if (request.field != SliceAgcRequest::Field::OffLevel) {
+        IRadioBackend::requestSliceAgc(sliceId, request);
+        return;
+    }
+    const int ddc = ddcForSlice(sliceId);
+    Receiver* r = rx(ddc);
+    if (!r)
+        return;
+    // Pushed in every AGC mode: WDSP applies the fixed gain only in its mode 0
+    // (wcpAGC.c xwcpagc), so a level set before AGC goes off lands when it does.
+    r->agcOffLevel = qBound(0, request.offLevel, 100);
+    pushAgcOffLevel(*r);
+    emitSliceState(ddc);
+    // Remembered per receiver and captured, as the AGC pair is.
+    rememberAgcOffLevel(ddc, r->agcOffLevel);
+    m_agcOffLevelsLive = true;
+    notifyOperatingStateChanged();
+}
+
+int Hl2Backend::rememberedAgcOffLevel(int receiverIndex) const
+{
+    return receiverIndex >= 0 && receiverIndex < m_agcOffLevels.size()
+               ? m_agcOffLevels.at(receiverIndex) : -1;
+}
+
+void Hl2Backend::rememberAgcOffLevel(int receiverIndex, int level)
+{
+    if (receiverIndex < 0 || receiverIndex >= kMaxReceivers)
+        return;
+    while (m_agcOffLevels.size() <= receiverIndex)
+        m_agcOffLevels.append(-1);
+    m_agcOffLevels[receiverIndex] = level;
 }
 
 void Hl2Backend::setSliceSquelch(int sliceId, bool on, int level)
@@ -3150,13 +3374,35 @@ void Hl2Backend::pushNoiseBlanker(const Receiver& r)
         Q_ARG(bool, r.nbOn), Q_ARG(int, r.nbLevel));
 }
 
+void Hl2Backend::pushApf(const Receiver& r)
+{
+    if (!r.dsp)
+        return;
+    // The centre is the pitch, not the BFO: the peaking filter runs on the
+    // demodulated audio, where both CWU and CWL come out at +pitch. Hl2RxDsp
+    // decides from its own mode whether the stage runs, so this is safe to
+    // send in any mode and is sent unconditionally, like the blanker.
+    QMetaObject::invokeMethod(r.dsp, "setApf", Qt::QueuedConnection,
+        Q_ARG(bool, r.apfOn), Q_ARG(int, r.apfLevel),
+        Q_ARG(double, static_cast<double>(m_cwPitchHz)));
+}
+
+void Hl2Backend::pushAgcOffLevel(const Receiver& r)
+{
+    if (!r.dsp)
+        return;
+    QMetaObject::invokeMethod(r.dsp, "setAgcOffLevel", Qt::QueuedConnection,
+        Q_ARG(int, r.agcOffLevel));
+}
+
 void Hl2Backend::pushSquelch(const Receiver& r)
 {
     if (!r.dsp)
         return;
     // Sent even when OFF — see pushNoiseBlanker().
     QMetaObject::invokeMethod(r.dsp, "setSquelch", Qt::QueuedConnection,
-        Q_ARG(bool, r.squelchOn), Q_ARG(int, r.squelchLevel));
+        Q_ARG(bool, r.squelchOn), Q_ARG(int, r.squelchLevel),
+        Q_ARG(double, m_dbRef.levelSquelchOffsetDb()));
 }
 
 void Hl2Backend::seedNotches(const Receiver& r)
@@ -3312,6 +3558,8 @@ void Hl2Backend::setPanCenter(const QString& panId, double hz, PanCenterIntent)
     if (hz == r->ncoHz)
         return;
     r->ncoHz = hz;
+    // The operator placed the centre: it is theirs now, not RIT's to undo.
+    r->ncoMovedForRit = false;
     if (m_metis)
         QMetaObject::invokeMethod(m_metis, "setRxFrequencyHz", Qt::QueuedConnection,
             Q_ARG(int, ddc),
@@ -3322,6 +3570,10 @@ void Hl2Backend::setPanCenter(const QString& panId, double hz, PanCenterIntent)
     // The NCO moved, so the notch axis has to move with it. See the note at the
     // matching site in setSliceFrequency.
     pushNotchTune(*r);
+    // So has the panadapter's frequency axis. A drag delivers ~30 of these a
+    // second, so while the operator drags, the display is effectively
+    // unaveraged — which is right: an average of a moving axis is smear.
+    dropPanAverage(*r);
     // Panning one receiver can move it onto another band, which changes what the
     // SHARED filter board should be doing. Re-evaluate across every receiver.
     applyBandFilter("pan");
@@ -3812,6 +4064,48 @@ void Hl2Backend::setPanFrameRate(const QString& panId, int fps)
         Q_ARG(int, fps));
 }
 
+void Hl2Backend::setPanAverage(const QString& panId, int average)
+{
+    // Per pan, like the frame rate: each receiver has its own spectrum.
+    // Stored first, so a chain that does not exist yet (or is rebuilt on
+    // reconnect) picks it up in pushPanAveraging().
+    Receiver* r = rx(ddcForPan(panId));
+    if (!r)
+        return;
+    r->panAverage = std::clamp(average, 0, 100);
+    pushPanAveraging(*r);
+}
+
+void Hl2Backend::setPanWeightedAverage(const QString& panId, bool on)
+{
+    Receiver* r = rx(ddcForPan(panId));
+    if (!r)
+        return;
+    r->panWeightedAverage = on;
+    pushPanAveraging(*r);
+}
+
+void Hl2Backend::pushPanAveraging(const Receiver& r)
+{
+    if (!r.dsp)
+        return;
+    // Queued: the spectrum's state is read on the DSP thread (see
+    // Hl2Spectrum::setAverageFrames on why no other thread may touch it).
+    // Both pushed every time; each is a no-op in Hl2Spectrum when unchanged,
+    // so a replay does not throw the running average away.
+    QMetaObject::invokeMethod(r.dsp, "setSpectrumAverageMs", Qt::QueuedConnection,
+        Q_ARG(int, averageTimeMsForStep(r.panAverage)));
+    QMetaObject::invokeMethod(r.dsp, "setSpectrumLogAverage", Qt::QueuedConnection,
+        Q_ARG(bool, r.panWeightedAverage));
+}
+
+void Hl2Backend::dropPanAverage(const Receiver& r)
+{
+    if (!r.dsp || r.panAverage <= 0)
+        return;
+    QMetaObject::invokeMethod(r.dsp, "dropSpectrumAverage", Qt::QueuedConnection);
+}
+
 void Hl2Backend::setKeying(bool key, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion)
 {
     applyKeying(key, operation, completion, false);
@@ -3964,13 +4258,18 @@ void Hl2Backend::applyKeying(bool key, const TxCoordinator::Operation& operation
 
     // While keyed the shared filter board must follow the TRANSMIT receiver
     // rather than the agree-or-bypass receive policy — see applyBandFilter().
-    applyBandFilter(key ? "key" : "unkey");
+    // A re-key inside the transmit tail cancels the tail: the carrier continues.
+    if (key) {
+        cancelTxTail();
+        applyBandFilter("key");
+    }
 
     // A voice key must not inherit a TUNE carrier (the packet builder prefers
     // the tone over audio). Only a tone TUNE raised is cleared; an explicitly
     // requested tone is the operator's to key.
     if (key && !m_tuning && m_toneFromTune)
         setTxTestTone(0.0, 0.0, operation);
+    bool wasTuning = false;
     if (!key) {
         if (m_cwHangTimer) {
             m_cwHangTimer->stop();
@@ -3980,21 +4279,15 @@ void Hl2Backend::applyKeying(bool key, const TxCoordinator::Operation& operation
         // Every unkey ends tune, so drive is restored here rather than in
         // setTune(): the TX watchdog, key verb, MOX/PTT coordinator and
         // disconnect reset all call setKeying(false) directly.
-        const bool wasTuning = m_tuning;
+        wasTuning = m_tuning;
         m_tuning = false;
+        m_tuneOperation = {};
         // Cleared on EVERY unkey, not only a tuning one, and unconditionally
         // rather than behind `wasTuning`: this is the single point every unkey
         // path converges on (the comment above enumerates them), and a tune
         // request left standing is a bit the radio re-reads on the next key —
         // a tuner that starts on the operator's next voice transmission.
         applyAtuTuneRequest(false);
-        if (wasTuning) {
-            setTxPower(m_rfPowerPercent);
-            // Re-decide the filter: the earlier call ran with m_tuning still
-            // set and so forced the TX receiver's filter, and the
-            // `oc == m_ocFilterByte` early-out would keep it until a retune.
-            applyBandFilter("tune-end");
-        }
     }
     if (m_metis) {
         QMetaObject::invokeMethod(m_metis, [metis = m_metis, key, operation, cwBreakIn] {
@@ -4004,6 +4297,15 @@ void Hl2Backend::applyKeying(bool key, const TxCoordinator::Operation& operation
                 metis->setMox(key, operation);
             }
         }, Qt::QueuedConnection);
+    }
+    // The receive filter and an owed RF drive wait out the radio's transmit
+    // tail (see kTxTailHoldMs), armed only after the MOX-off is queued.
+    if (!key) {
+        if (keyChanged || wasTuning) {
+            beginTxTail();
+        } else if (!m_txTailPending) {
+            applyBandFilter("unkey");
+        }
     }
     // Release only now, after the MOX-off is queued, so even a zero hold
     // posts behind it; the hold covers the control-packet wait, network hop,
@@ -4171,8 +4473,25 @@ void Hl2Backend::setTxFrequency(double hz)
     // TX is single-stage: there is no software shift behind this the way there
     // is on receive, so the 1 Hz register granularity is the floor here. At
     // 10 ppm on 28 MHz that is a 280 Hz error corrected to under 1 Hz.
+    //
+    // XIT lands here and ONLY here: every caller passes the transmit receiver's
+    // dial, so that receiver's XIT reaches the TX register on every path that
+    // writes it (tune, TX slice move, reconnect, calibration) and never the
+    // receive side.
+    const Receiver* txRx = rx(m_txDdc);
+    const int xitHz = (txRx && txRx->xitOn) ? txRx->xitHz : 0;
+    double txHz = hz + xitHz;
+    // XIT can take the command through zero behind the dial guard, and
+    // ncoCommandHz() maps that to DC. Skipping the write is no better: the
+    // register keeps its last value, possibly another band. Hold the dial.
+    if (txHz <= 0.0) {
+        qCWarning(lcHl2) << "HL2: XIT" << xitHz << "Hz would put TX at" << txHz
+                         << "Hz from a dial of" << hz
+                         << "Hz; TX register holds the dial, XIT not applied";
+        txHz = hz;
+    }
     QMetaObject::invokeMethod(m_metis, "setTxFrequencyHz", Qt::QueuedConnection,
-        Q_ARG(std::uint32_t, ncoCommandHz(hz)));
+        Q_ARG(std::uint32_t, ncoCommandHz(txHz)));
 }
 
 std::uint32_t Hl2Backend::ncoCommandHz(double trueHz) const noexcept
@@ -4204,7 +4523,119 @@ double Hl2Backend::rxShiftHz(const Receiver& r) const noexcept
     // zero (dspShiftHz's contract), so lowering it by the pitch lifts the
     // marker onto the pitch. Not scaled by the frequency calibration: this is
     // an audio offset, not an RF frequency.
-    return dspShiftHz(r.sliceFreqHz, r.ncoHz) - cwBfoHz(r.mode);
+    return dspShiftHz(rxTunedHz(r), r.ncoHz) - cwBfoHz(r.mode);
+}
+
+double Hl2Backend::rxTunedHz(const Receiver& r) const noexcept
+{
+    // Every receiver has its own NCO, so each carries its own RIT, as a Flex
+    // slice does. Added before dspShiftHz() so it stays in the TRUE-RF domain
+    // the frequency calibration already corrects.
+    return r.sliceFreqHz + (r.ritOn ? r.ritHz : 0);
+}
+
+void Hl2Backend::retuneReceiver(int ddc)
+{
+    // The same re-run setPanSampleRate() uses: re-centres the NCO only if the
+    // receive frequency left the window, re-pushes the shift, re-emits state.
+    const Hl2ReceiverIds* ids = m_ids.byDdc(ddc);
+    const Receiver* r = rx(ddc);
+    if (ids && r) {
+        setSliceFrequency(ids->uiNumber, r->sliceFreqHz);
+    }
+}
+
+int Hl2Backend::clampRitXit(const char* what, int hz)
+{
+    const int clamped = std::clamp(hz, -kRitXitMaxHz, kRitXitMaxHz);
+    if (clamped != hz) {
+        qCWarning(lcHl2) << "HL2:" << what << "offset" << hz << "Hz clamped to" << clamped
+                         << "Hz (limit +/-" << kRitXitMaxHz << "Hz)";
+    }
+    return clamped;
+}
+
+void Hl2Backend::logRitXit(const char* what, int ddc, bool on, int hz) const
+{
+    const Hl2ReceiverIds* ids = m_ids.byDdc(ddc);
+    qCInfo(lcHl2) << "HL2:" << what << (on ? "on," : "off,") << "offset" << hz
+                  << "Hz on receiver DDC" << ddc << "slice" << (ids ? ids->uiNumber : -1)
+                  << (ddc == m_txDdc ? "(transmit)" : "(receive only)");
+}
+
+// Each setter ends by publishing the receiver's RIT/XIT, so the readout follows
+// what the receiver holds: an offset the clamp cut, and the final value of an
+// enable-then-offset pair. retuneReceiver() publishes as part of the re-tune.
+void Hl2Backend::setSliceRitEnabled(int sliceId, bool on)
+{
+    const int ddc = ddcForSlice(sliceId);
+    Receiver* r = rx(ddc);
+    if (!r || on == r->ritOn) {
+        return;
+    }
+    r->ritOn = on;
+    logRitXit("RIT", ddc, r->ritOn, r->ritHz);
+    if (r->ritHz != 0) {
+        retuneReceiver(ddc);
+    } else {
+        emitSliceState(ddc);
+    }
+}
+
+void Hl2Backend::setSliceRitOffset(int sliceId, int hz)
+{
+    const int ddc = ddcForSlice(sliceId);
+    Receiver* r = rx(ddc);
+    if (!r) {
+        return;
+    }
+    const int clamped = clampRitXit("RIT", hz);
+    if (clamped == r->ritHz && clamped == hz) {
+        return;
+    }
+    const bool moves = r->ritOn && clamped != r->ritHz;
+    r->ritHz = clamped;
+    logRitXit("RIT", ddc, r->ritOn, r->ritHz);
+    if (moves) {
+        retuneReceiver(ddc);
+    } else {
+        emitSliceState(ddc);
+    }
+}
+
+void Hl2Backend::setSliceXitEnabled(int sliceId, bool on)
+{
+    const int ddc = ddcForSlice(sliceId);
+    Receiver* r = rx(ddc);
+    if (!r || on == r->xitOn) {
+        return;
+    }
+    r->xitOn = on;
+    logRitXit("XIT", ddc, r->xitOn, r->xitHz);
+    if (r->xitHz != 0 && ddc == m_txDdc) {
+        setTxFrequency(r->sliceFreqHz);
+    }
+    emitSliceState(ddc);
+}
+
+void Hl2Backend::setSliceXitOffset(int sliceId, int hz)
+{
+    const int ddc = ddcForSlice(sliceId);
+    Receiver* r = rx(ddc);
+    if (!r) {
+        return;
+    }
+    const int clamped = clampRitXit("XIT", hz);
+    if (clamped == r->xitHz && clamped == hz) {
+        return;
+    }
+    const bool moves = r->xitOn && clamped != r->xitHz && ddc == m_txDdc;
+    r->xitHz = clamped;
+    logRitXit("XIT", ddc, r->xitOn, r->xitHz);
+    if (moves) {
+        setTxFrequency(r->sliceFreqHz);
+    }
+    emitSliceState(ddc);
 }
 
 void Hl2Backend::setCwPitch(int hz)
@@ -4226,6 +4657,11 @@ void Hl2Backend::setCwPitch(int hz)
     // 500 Hz filter stays a 500 Hz filter centred on the marker whatever the
     // pitch is. That is the point of keeping the two domains apart.
     for (Receiver& r : m_rx) {
+        // The APF centre follows the pitch on EVERY receiver, before the CW
+        // test below: Hl2RxDsp holds the centre outside CW and setSliceMode
+        // does not re-send it, so a receiver skipped here would re-enter CW
+        // with its peak on the old pitch.
+        pushApf(r);
         if (!r.dsp || cwBfoHz(r.mode) == 0.0)
             continue;
         const auto [lo, hi] = dspFilterHz(r);
@@ -4298,6 +4734,10 @@ void Hl2Backend::forwardSpeakerAudioToCodec(const std::vector<float>& mixed)
 
     const auto toI16 = [speakerGain](float v) -> std::int16_t {
         v *= speakerGain;
+        // Non-finite first: a NaN fails both clamp comparisons and the cast
+        // of it is undefined.
+        if (!std::isfinite(v))
+            return 0;
         // Symmetric clamp, 32767 not 32768: letting a full-scale sample wrap to
         // the negative rail is a click, and this is a speaker feed.
         v = std::clamp(v, -1.0f, 1.0f);
@@ -4623,6 +5063,7 @@ void Hl2Backend::setTune(bool on, int tunePowerPercent, const AetherSDR::TxCoord
     // clears it.
     if (on) {
         m_tuning = true;
+        m_tuneOperation = operation;
         // BEFORE the carrier, not after. The HL2's AH-4 handler samples the
         // request alongside the key, and raising it after the tone is already
         // radiating leaves the first moments of the tune un-requested — which
@@ -4631,8 +5072,10 @@ void Hl2Backend::setTune(bool on, int tunePowerPercent, const AetherSDR::TxCoord
         applyAtuTuneRequest(true);
         // Straight to the drive register rather than through setTxPower(), which
         // would overwrite the saved RF power we have to restore on release.
-        if (tunePowerPercent >= 0)
+        if (tunePowerPercent >= 0) {
             applyDrive(tunePowerPercent);
+            m_rfDriveOwed = true;
+        }
         setTxTestTone(0.0, kTuneCarrierAmplitude, operation);
         m_toneFromTune = true;   // set AFTER: setTxTestTone clears the flag
         setKeying(true, operation, completion);
@@ -4642,9 +5085,58 @@ void Hl2Backend::setTune(bool on, int tunePowerPercent, const AetherSDR::TxCoord
     }
 }
 
+// Drive only, straight to the register: m_rfPowerPercent stays the value the
+// unkey restores. A carrier whose admission has lapsed takes no drive change.
+void Hl2Backend::setTunePower(int percent)
+{
+    if (!m_tuning
+        || !TxCoordinator::Command{m_tuneOperation, true}.permitsDispatch(TxCoordinator::monotonicMs())) {
+        return;
+    }
+    applyDrive(percent);
+    m_rfDriveOwed = true;
+}
+
+// The radio keeps radiating after the MOX-off frame: keyed IQ already in its TX
+// FIFO drains (tx_buffer_latency, radio.v:934) and the last sample is held for
+// ptt_hang_time (radio.v:935, 1036-1047), while drive applies at once
+// (ad9866ctrl.v:134-140). So the band filter and an owed RF drive wait.
+void Hl2Backend::beginTxTail()
+{
+    m_txTailPending = true;
+    if (m_txTailHoldMs <= 0) {
+        finishTxTail();
+        return;
+    }
+    if (!m_txTailTimer->isActive()) {
+        m_txTailTimer->start(m_txTailHoldMs);
+    }
+}
+
+void Hl2Backend::cancelTxTail()
+{
+    if (m_txTailTimer) {
+        m_txTailTimer->stop();
+    }
+    m_txTailPending = false;
+}
+
+void Hl2Backend::finishTxTail()
+{
+    if (!m_txTailPending || m_keyed) {
+        return;
+    }
+    m_txTailPending = false;
+    applyBandFilter("unkey");
+    if (m_rfDriveOwed && !m_tuning) {
+        m_rfDriveOwed = false;
+        applyDrive(m_rfPowerPercent);
+    }
+}
+
 // Clamp, map to the drive register, and honour the transmit gate. Shared by
-// setTxPower() and setTune() so the mapping — whose coarseness is documented in
-// setTxPower() — exists once and cannot drift between the two.
+// setTxPower(), setTune() and setTunePower() so the mapping — whose coarseness
+// is documented in setTxPower() — exists once and cannot drift between them.
 void Hl2Backend::applyDrive(int percent)
 {
     // Drive is gated exactly like keying. setTxDriveLevel writes the PA-enable
@@ -4791,6 +5283,9 @@ void Hl2Backend::setTxPower(int percent)
     notifyOperatingStateChanged();
     if (m_tuning)
         return;   // tune power owns the drive register until the carrier drops
+    if (m_rfDriveOwed && m_txTailPending)
+        return;   // the tune tail is still radiating; finishTxTail() applies it
+    m_rfDriveOwed = false;
     applyDrive(m_rfPowerPercent);
 }
 
@@ -4910,6 +5405,13 @@ QVariantList Hl2Backend::gatherDspChains(const std::vector<Hl2RxDsp*>& rxDsps,
         e[QStringLiteral("agcMaxGainDb")] = c->maximumAgcGainDb;
         e[QStringLiteral("agcSlopeDb")] = c->agcSlopeDb;
         e[QStringLiteral("agcFixedGainDb")] = c->agcFixedGainDb;
+        // What the channel's SPCW stage last ACCEPTED (WdspChannel stores
+        // these only after WDSP took them), so a refused or never-delivered
+        // APF request reads differently from an applied one.
+        e[QStringLiteral("apfRun")] = c->apfEnabled;
+        e[QStringLiteral("apfCenterHz")] = c->apfCenterHz;
+        e[QStringLiteral("apfBandwidthHz")] = c->apfBandwidthHz;
+        e[QStringLiteral("apfGain")] = c->apfGain;
         // Level 4 where it exists: these two ask WDSP itself rather than
         // reading the config, and are marked so a reader can tell.
         e[QStringLiteral("wdspNotchCount")] = dsp->wdspNotchCount();
@@ -5146,10 +5648,12 @@ void Hl2Backend::invokeExtension(const QString& ns, const QString& verb, quint64
         }
         // Wideband bandscope (EP 0x04): a diagnostic with no UI or setting, off
         // again at next connect; the only caller is the bridge's `bandscope`
-        // verb. This starts MetisClient's duty-cycle gate, not the raw stream:
-        // one 2048-sample block per period, 12 datagrams/s, 0.11 Mbit/s (3.3
-        // Mbit/s ungated; see setBandscopeEnabled in MetisClient.h). Completes
-        // locally: Protocol 1 never reads the run byte back.
+        // verb (the auto RF gain loop starts the gate itself, in
+        // applyBandscopeForAutoGain). This starts MetisClient's duty-cycle gate,
+        // not the raw stream: one 2048-sample block per period, 12 datagrams/s,
+        // 0.11 Mbit/s (3.3 Mbit/s ungated; see setBandscopeEnabled in
+        // MetisClient.h). Completes locally: Protocol 1 never reads the run byte
+        // back.
         if (verb == QLatin1String("bandscope.enable")) {
             // Refused while disconnected, and REPORTED as refused: MetisClient
             // ignores a run byte with no stream behind it, so echoing the
@@ -6021,8 +6525,9 @@ void Hl2Backend::applyRestoredState(const RestoredRadioState& state)
     // lambda would surface radio A's number as radio B's.
     m_autoRfGainRefusal.clear();
     m_autoGainState = AetherSDR::hl2::AutoGainState{};
-    m_autoGainConfig = AetherSDR::hl2::AutoGainConfig{};
-    m_autoGainMode = QStringLiteral("ramp");
+    // The same call the constructor makes. Neither the law nor the floor is
+    // persisted: both are the constructed default after every connect.
+    installDefaultAutoGainLaw();
     m_autoGainReason = AetherSDR::hl2::AutoGainReason::Disarmed;
     m_autoGainBandKey.clear();
     m_autoGainBaselineDb = 0;
@@ -6115,6 +6620,12 @@ void Hl2Backend::applyRestoredState(const RestoredRadioState& state)
         valid.agcMode = state.agcMode.trimmed().toLower();
     if (state.agcThreshold >= 0 && state.agcThreshold <= 100)
         valid.agcThreshold = state.agcThreshold;
+    // The AGC-off level per receiver. An entry outside 0..100 is dropped, not
+    // clamped, like the threshold; entries past the receiver ceiling are ignored.
+    for (qsizetype i = 0; i < state.agcOffLevels.size() && i < kMaxReceivers; ++i) {
+        const int level = state.agcOffLevels.at(i);
+        valid.agcOffLevels.append(level >= 0 && level <= 100 ? level : -1);
+    }
 
     // Per-band maps ride the typed extension's domain sub-objects
     // (RestoredRadioState.h). Values clamp to the hardware's own ranges.
@@ -6200,6 +6711,10 @@ void Hl2Backend::applyRestoredState(const RestoredRadioState& state)
     m_agcThresholdDb = m_restoredState.agcThreshold >= 0
                            ? m_restoredState.agcThreshold
                            : defaults.agcThresholdDb;
+    // The remembered AGC-off levels are this radio's document, for the same
+    // reason. The open receivers keep theirs until connectRadio() seeds them.
+    m_agcOffLevels = m_restoredState.agcOffLevels;
+    m_agcOffLevelsLive = false;
     qCInfo(lcHl2) << "HL2 restore: freq" << valid.rfFrequencyHz << "mode"
                   << valid.mode << "filter" << valid.filterLowHz << ".."
                   << valid.filterHighHz << "rate" << valid.sampleRateHz
@@ -6221,18 +6736,30 @@ void Hl2Backend::seedReceiverAgc()
         m_haveRestoredState && !m_restoredState.agcMode.isEmpty();
     const bool haveThreshold =
         m_haveRestoredState && m_restoredState.agcThreshold >= 0;
-    for (Receiver& r : m_rx) {
+    for (std::size_t i = 0; i < m_rx.size(); ++i) {
+        Receiver& r = m_rx[i];
+        // The AGC-off level is per receiver: the remembered one for this
+        // index, else the default. Pushed to the DSP with the AGC pair.
+        const int offLevel = rememberedAgcOffLevel(static_cast<int>(i));
+        r.agcOffLevel = offLevel >= 0 ? offLevel : defaults.agcOffLevel;
         r.agcMode = haveMode ? m_restoredState.agcMode : defaults.agcMode;
         r.agcThresholdDb = haveThreshold ? m_restoredState.agcThreshold
                                          : defaults.agcThresholdDb;
+        r.agcModeBeforeDigital.clear();
+        // A receiver already in DIGU/DIGL runs AGC off over the seeded mode.
+        followModeAgc(r, QString());
     }
     // Prime the remembered pair from what was just seeded, so a capture taken
     // before the operator touches the control records the restored value rather
-    // than falling back through an empty member.
+    // than falling back through an empty member. The seeded mode, not a data
+    // mode's off.
     if (!m_rx.empty()) {
-        m_agcMode = m_rx.front().agcMode;
-        m_agcThresholdDb = m_rx.front().agcThresholdDb;
+        const Receiver& first = m_rx.front();
+        m_agcMode = first.agcModeBeforeDigital.isEmpty()
+                        ? first.agcMode : first.agcModeBeforeDigital;
+        m_agcThresholdDb = first.agcThresholdDb;
     }
+    m_agcOffLevelsLive = true;
 }
 
 RestoredRadioState Hl2Backend::currentOperatingState() const
@@ -6256,8 +6783,19 @@ RestoredRadioState Hl2Backend::currentOperatingState() const
         state.agcMode = m_agcMode;
         state.agcThreshold = m_agcThresholdDb;
     } else if (const Receiver* txRx = rx(m_txDdc)) {
-        state.agcMode = txRx->agcMode;
+        state.agcMode = txRx->agcModeBeforeDigital.isEmpty()
+                            ? txRx->agcMode : txRx->agcModeBeforeDigital;
         state.agcThreshold = txRx->agcThresholdDb;
+    }
+    // The AGC-off level per receiver: the remembered list, with the open
+    // receivers' current levels over it once they hold this radio's values.
+    state.agcOffLevels = m_agcOffLevels;
+    if (m_agcOffLevelsLive) {
+        for (std::size_t i = 0; i < m_rx.size(); ++i) {
+            while (state.agcOffLevels.size() <= static_cast<qsizetype>(i))
+                state.agcOffLevels.append(-1);
+            state.agcOffLevels[static_cast<qsizetype>(i)] = m_rx[i].agcOffLevel;
+        }
     }
     state.sampleRateHz = m_sampleRateHz;
 
@@ -6489,6 +7027,28 @@ void Hl2Backend::setAutoRfGainFloorDb(int floorDb)
                   << "dB below the operator's baseline";
 }
 
+// The law a backend starts with, and the only place that says so: the
+// constructor, applyRestoredState() and the name "default" all come here. Not a
+// constant: the bias budget is computed from the gate period MetisClient
+// actually runs, never from a literal, so the two cannot drift apart.
+Hl2Backend::AutoGainLaw Hl2Backend::defaultAutoGainLaw()
+{
+    using namespace AetherSDR::hl2;
+    return {QStringLiteral("bandscope"),
+            bandscopeReleaseConfig(
+                gatedPeakBiasDbForPeriod(MetisClient::bandscopeSamplePeriodMs()))};
+}
+
+// The name and the numbers together, so that no caller can install one without
+// the other. Touches nothing else: no state, no gate. The constructor runs it
+// before m_metis exists.
+void Hl2Backend::installDefaultAutoGainLaw()
+{
+    const AutoGainLaw law = defaultAutoGainLaw();
+    m_autoGainConfig = law.config;
+    m_autoGainMode = law.name;
+}
+
 // Which of Hl2AutoGainPolicy.h's configurations the loop runs. Applied live:
 // the state is NOT reset, because the offset the radio is actually holding is
 // real whichever law asked for it, and the policy's own ceiling check gives
@@ -6497,20 +7057,17 @@ bool Hl2Backend::setAutoRfGainMode(const QString& mode)
 {
     using namespace AetherSDR::hl2;
     const QString m = mode.trimmed().toLower();
-    AutoGainConfig cfg;
-    if (m == QLatin1String("ramp") || m == QLatin1String("default")) {
-        cfg = AutoGainConfig{};
+    AutoGainLaw law;
+    if (m == QLatin1String("bandscope") || m == QLatin1String("default")) {
+        // The one law here whose release rests on a measurement. "default" is
+        // whatever defaultAutoGainLaw() returns, not a second name for one law.
+        law = defaultAutoGainLaw();
+    } else if (m == QLatin1String("ramp")) {
+        law = {QStringLiteral("ramp"), AutoGainConfig{}};
     } else if (m == QLatin1String("probe") || m == QLatin1String("probing")) {
-        cfg = probingReleaseConfig();
+        law = {QStringLiteral("probe"), probingReleaseConfig()};
     } else if (m == QLatin1String("binary")) {
-        cfg = binaryHighLowConfig();
-    } else if (m == QLatin1String("bandscope")) {
-        // THE DEFAULT, and the one law here whose release condition rests on a
-        // measurement rather than on a gamble. The bias budget is computed from
-        // the gate period MetisClient actually runs, never from a literal, so
-        // the two cannot drift apart.
-        cfg = bandscopeReleaseConfig(
-            gatedPeakBiasDbForPeriod(MetisClient::bandscopeSamplePeriodMs()));
+        law = {QStringLiteral("binary"), binaryHighLowConfig()};
     } else {
         qWarning().noquote()
             << QStringLiteral("Hl2Backend: auto RF gain mode \"%1\" is not one of "
@@ -6519,9 +7076,8 @@ bool Hl2Backend::setAutoRfGainMode(const QString& mode)
                    .arg(mode);
         return false;
     }
-    m_autoGainConfig = cfg;
-    m_autoGainMode = (m == QLatin1String("default")) ? QStringLiteral("ramp")
-                   : (m == QLatin1String("probing")) ? QStringLiteral("probe") : m;
+    m_autoGainConfig = law.config;
+    m_autoGainMode = law.name;
     // A law that needs the wideband reading needs the stream that carries it.
     // Called unconditionally so that switching AWAY from bandscope mode also
     // releases the gate, rather than leaving it running for a law that ignores
@@ -6656,6 +7212,8 @@ void Hl2Backend::pushEffectiveLnaGain()
         QMetaObject::invokeMethod(r.dsp, "setAgc", Qt::QueuedConnection,
             Q_ARG(int, wdspAgcMode(r.agcMode)),
             Q_ARG(double, m_dbRef.agcCeilingDb(r.agcThresholdDb)));
+        // The squelch gate is referred to the LNA the same way.
+        pushSquelch(r);
     }
     // Echo what the hardware actually took, to every pan — a slider that
     // asked for something outside the register's range finds out here, and so
@@ -6774,7 +7332,11 @@ void Hl2Backend::pushInitialState()
         if (m_haveRestoredState) {
             if (Receiver* txRx = rx(m_txDdc)) {
                 if (!m_restoredState.mode.isEmpty()) {
+                    // A restore into DIGU/DIGL runs AGC off, as a mode click
+                    // does; the loop below pushes it to the DSP.
+                    const QString previousMode = txRx->mode;
                     txRx->mode = m_restoredState.mode;
+                    followModeAgc(*txRx, previousMode);
                     const auto [pbLowHz, pbHighHz] =
                         defaultPassbandForMode(txRx->mode);
                     txRx->filterLowHz = pbLowHz;
@@ -6847,7 +7409,11 @@ void Hl2Backend::pushInitialState()
         // so a reconnect into a session that had it on would leave the slice's
         // NB button lit over a chain that is not blanking anything.
         pushNoiseBlanker(r);
+        // And the panadapter averaging, for the same reason.
+        pushPanAveraging(r);
         pushSquelch(r);
+        pushApf(r);
+        pushAgcOffLevel(r);
     }
     if (m_txDsp) {
         const Receiver* txRx = rx(m_txDdc);
@@ -6910,6 +7476,9 @@ void Hl2Backend::pushInitialState()
     // keyed because the previous session ended mid-transmission.
     m_keyed = false;
     m_tuning = false;
+    m_tuneOperation = {};
+    cancelTxTail();
+    m_rfDriveOwed = false;
     // BELT AND BRACES, and named as such rather than dressed up: the bit lives
     // in MetisClient, which clears it in start(), so on the path that matters
     // this is redundant. It is here because this function is the one place that
@@ -7009,10 +7578,16 @@ void Hl2Backend::publishTelemetry(const Hl2Telemetry& t)
     }
     // Forward/reverse power through directionalWatts()'s uncalibrated reference
     // curve; raw counts are logged too, for future per-unit calibration.
-    // MetisClient already paces telemetry at 10 Hz (kTelemetryMinIntervalMs).
-    // Published through the peak hold; see kFwdPeakReleaseAlpha.
+    // MetisClient paces telemetry at kTelemetryMinIntervalMs. Forward power is
+    // published through the peak hold; see kFwdPeakReleaseAlpha.
     if (t.forwardPowerRaw) {
-        const double instantW = directionalWatts(*t.forwardPowerRaw);
+        // Keyed: the window's loudest RADDR-1 sample, since the radio reports
+        // ~190 a second and the last one misses speech peaks. Unkeyed: the
+        // last value, because a maximum of noise samples would sit above the
+        // no-carrier floor MeterModel snaps to zero on.
+        const int fwdRaw = (m_keyed && t.forwardPowerPeakRaw)
+            ? *t.forwardPowerPeakRaw : *t.forwardPowerRaw;
+        const double instantW = directionalWatts(fwdRaw);
         // The hold applies only while keyed. Unkeyed, the reading must fall to
         // zero on the same schedule REFPWR does — MeterModel snaps its own
         // forward-power filter to zero the moment a no-carrier sample arrives,
@@ -7027,10 +7602,16 @@ void Hl2Backend::publishTelemetry(const Hl2Telemetry& t)
                          wattsToDbm(directionalWatts(*t.reversePowerRaw)));
     if (t.forwardPowerRaw && (*t.forwardPowerRaw != m_lastFwdRaw)) {
         m_lastFwdRaw = *t.forwardPowerRaw;
+        // The sample count shows whether the RADDR-1 stream itself is thin
+        // (~19 per 100 ms is healthy at 48 kHz); adcWindowMs is stamped at the
+        // same emit, so it is this window's real length.
         qCDebug(lcHl2Tx) << "HL2 directional: fwd" << *t.forwardPowerRaw
                          << "rev" << t.reversePowerRaw.value_or(-1)
                          << "-> fwd" << directionalWatts(*t.forwardPowerRaw) << "W"
-                         << "(uncalibrated reference curve)";
+                         << "(uncalibrated reference curve);"
+                         << "window peak" << t.forwardPowerPeakRaw.value_or(-1)
+                         << "of" << t.forwardPowerSamples << "RADDR-1 samples in"
+                         << t.adcWindowMs << "ms";
     }
     // The radio's TX IQ FIFO: `fill` is the top 7 bits of the gateware's DSIQ
     // level (0-127, not a sample count); `pacingFault` is the one flag for both
@@ -7287,7 +7868,7 @@ void Hl2Backend::applyBandFilter(const char* reason)
     // Keyed or tuning uses the transmit byte (Hl2HardwareOptions::FilterBoard
     // decides which path the relays sit in), and the TX receiver's filter wins
     // when spanned.
-    const bool transmitting = m_keyed || m_tuning;
+    const bool transmitting = m_keyed || m_tuning || m_txTailPending;
 
     int oc = -1;
     bool spanned = false;
@@ -7383,11 +7964,23 @@ void Hl2Backend::emitSliceState(int ddc)
     // agcCommandIssued.
     d.agcMode = r->agcMode;
     d.agcThreshold = r->agcThresholdDb;
+    // The AGC-off level and APF the receiver holds; applyChanges() guards
+    // each, so an echo at an unchanged value emits nothing.
+    d.agcOffLevel = r->agcOffLevel;
+    d.apf = r->apfOn;
+    d.apfLevel = r->apfLevel;
     // The squelch pair the receiver holds and has pushed to its chain, so the
     // SQL control shows the receiver's state. Safe to echo:
     // SliceModel::applyChanges() does not emit squelchCommandIssued.
     d.squelchOn = r->squelchOn;
     d.squelchLevel = r->squelchLevel;
+    // The RIT/XIT the receiver holds, so the readout shows what it applies (a
+    // clamped offset, or a fresh connect at zero). applyChanges() emits only
+    // ritChanged/xitChanged, never the command signals, so this cannot loop.
+    d.ritOn = r->ritOn;
+    d.ritFreq = r->ritHz;
+    d.xitOn = r->xitOn;
+    d.xitFreq = r->xitHz;
     // Exactly one slice is the TX slice (the one on m_txDdc). Unset, txSlice()
     // is null and RadioModel's interlock refuses every key; set on all, the
     // operator could key from a receiver the TX NCO is not following.

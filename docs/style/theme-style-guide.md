@@ -6,6 +6,12 @@
 > **Every colour in AetherSDR resolves through a ThemeManager token.
 > A contribution never introduces a new hardcoded colour literal.**
 
+For *what the result should look like* on a new or reworked surface — the
+canon's principles, the `color.canon.*` tokens and `CanonWindow` — read
+[`aethersdr-style-guide.md`](aethersdr-style-guide.md) alongside this
+guide; the token inventory behind both is
+[`../theming/canonical-tokens.md`](../theming/canonical-tokens.md).
+
 This guide is the semantic map from *what you are trying to say* on
 screen (error, warning, success, notification, transmit, selection,
 plain text…) to *the token that says it*. If you follow the map, your

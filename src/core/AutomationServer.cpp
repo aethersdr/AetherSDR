@@ -85,6 +85,7 @@
 #include <QItemSelectionModel>
 #include <QComboBox>
 #include <QLineEdit>
+#include "AutomationSensitiveLineEdit.h"
 #include <QLabel>
 #include <QSpinBox>
 #include <QProgressBar>
@@ -293,9 +294,7 @@ QString widgetValue(const QWidget* w, bool* truncated = nullptr)
         // dumpTree is written to a temp tree.json, so returning the cleartext
         // would exfiltrate credentials. Reporting a placeholder keeps the field
         // assertable (present / non-empty) without leaking the value. (#3646)
-        if (le->echoMode() != QLineEdit::Normal)
-            return le->text().isEmpty() ? QString() : QStringLiteral("<hidden>");
-        return le->text();
+        return automationLineEditValue(le);
     }
     // Text views (transcripts, logs, terminals) carry a bounded prefix; the `text`
     // verb returns the full document. Read via the plainText Q_PROPERTY that
@@ -1244,6 +1243,7 @@ ResolvedAction resolveMenuBarAction(const QString& target)
 // so route QRhiWidget through its own grab().
 QImage grabWidget(QWidget* w)
 {
+    AutomationSensitiveGrabMask mask(w);
 #ifdef AETHER_GPU_SPECTRUM
     // QRhiWidget inherits QWidget::grab() (which returns an empty pixmap for a
     // GPU surface); grabFramebuffer() is the real readback and returns a QImage.
@@ -1579,6 +1579,7 @@ QJsonObject sliceSnapshot(const SliceModel* s, int linkedTo,
         {QStringLiteral("filterPresetId"), filterControl.selectedPresetId},
         {QStringLiteral("filterPreset"), filterPreset},
         {QStringLiteral("active"),     s->isActive()},
+        {QStringLiteral("inCapture"),  s->inCapture()},
         {QStringLiteral("txSlice"),    s->isTxSlice()},
         {QStringLiteral("rxAntenna"),  s->rxAntenna()},
         {QStringLiteral("txAntenna"),  s->txAntenna()},   // live TX antenna — lets a driver enforce the dummy-load gate before keying (#3646)
@@ -2756,6 +2757,9 @@ bool isReadOnlyRequest(const QString& name, const QString& action,
         };
         return kSafeStreamActions.contains(normalizedAction);
     }
+    if (name == QLatin1String("applet")) {
+        return normalizedAction == QLatin1String("state");  // snapshot only
+    }
     if (name == QLatin1String("gesture")) {
         return normalizedAction == QLatin1String("status");
     }
@@ -3679,6 +3683,30 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
             },
             [](AutomationServer& s, A& a, QLocalSocket*) {
                 return s.doWindow(a.action, a.target);
+            });
+
+        add("titlebar", {},
+            "titlebar <selectRadio <id>|showDiscovery|minimize|maximize|close> "
+            "— drive the unified title bar's own controls",
+            [](const QList<QByteArray>& p, A& a) -> QJsonObject {
+                a.action = vtok(p, 1);
+                a.target = vtok(p, 2);   // radio id, for selectRadio
+                return {};
+            },
+            [](AutomationServer& s, A& a, QLocalSocket*) {
+                return s.doTitleBar(a.action, a.target);
+            });
+
+        add("applet", {},
+            "applet <dock <left|right>|float <on|off>|show|hide|state> "
+            "— drive the applet panel's dock side, floating and visibility",
+            [](const QList<QByteArray>& p, A& a) -> QJsonObject {
+                a.action = vtok(p, 1);
+                a.value  = vtok(p, 2);   // left|right for dock, on|off for float
+                return {};
+            },
+            [](AutomationServer& s, A& a, QLocalSocket*) {
+                return s.doAppletPanel(a.action, a.value);
             });
 
         add("shortcut", {}, "shortcut <id> — fire a ShortcutManager/MIDI action (TX-gated)",
@@ -5988,6 +6016,27 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
         return data;
     }
 
+    if (model == QLatin1String("titlebar")) {
+        // Unified title bar — geometry, brand, radio tabs, audio cluster,
+        // window-chrome variant. Served before the radio guard because the bar
+        // exists (and must be assertable) with no radio connected at all.
+        if (!m_titleBarSnapshotHandler)
+            return err(QStringLiteral("title bar snapshot unavailable"));
+        QJsonObject data = m_titleBarSnapshotHandler();
+        if (!property.isEmpty()) {
+            if (!data.contains(property))
+                return err(QStringLiteral("unknown property '") + property
+                           + QStringLiteral("' for titlebar"));
+            return QJsonObject{{QStringLiteral("ok"), true},
+                               {QStringLiteral("model"), model},
+                               {QStringLiteral("property"), property},
+                               {QStringLiteral("value"), data.value(property)}};
+        }
+        data[QStringLiteral("ok")] = true;
+        data[QStringLiteral("model")] = model;
+        return data;
+    }
+
     if (model == QLatin1String("clock")) {
         // AetherClock time-signal decode state — model exists independently
         // of a radio connection, so it is served before the radio guard.
@@ -7782,6 +7831,13 @@ QJsonObject AutomationServer::doSlice(const QString& action, const QString& arg)
         // LEVEL BEFORE ENABLE, for the reason the AGC branch above gives: the
         // enable setter emits an intent carrying both values, so setting the
         // level first makes one request reach the backend as a coherent pair.
+        // A radio with no radio-side NR / ANF (HL2, ANAN) cannot turn them
+        // on; the setter would only mark the model on.
+        if (on && which == QLatin1String("nr")
+            && !radio->radioSideNoiseReductionAvailable())
+            return err(QStringLiteral("refused: this radio has no radio-side noise reduction"));
+        if (on && which == QLatin1String("anf") && !radio->radioSideAutoNotchAvailable())
+            return err(QStringLiteral("refused: this radio has no auto notch"));
         if (which == QLatin1String("nr")) {
             if (level >= 0) s->setNrLevel(level);
             s->setNr(on);
@@ -9180,6 +9236,84 @@ QWidget* AutomationServer::topLevelWindowForTarget(const QString& target)
         if (tlw->isWindow() && tlw->isVisible()) return tlw;
     }
     return nullptr;
+}
+
+// ── Unified title bar ────────────────────────────────────────────────────────
+// Validate now, activate on the next main-loop turn.  selectRadio clicks a tab
+// (which can raise the Connect window), showDiscovery builds a popup, and close
+// runs MainWindow::closeEvent — none of which may run inside this QLocalSocket
+// read callback (#3646; see invoke click and doClose).  The snapshot is taken
+// BEFORE the action for the same reason close is deferred: afterwards it would
+// read a window that has already torn down.  Re-read `get titlebar` to confirm.
+QJsonObject AutomationServer::doTitleBar(const QString& action, const QString& target)
+{
+    if (action.trimmed().isEmpty()) {
+        return err(QStringLiteral("titlebar needs an action "
+                                  "(selectRadio|showDiscovery|minimize|maximize|close)"));
+    }
+    if (!m_titleBarActionHandler) {
+        return err(QStringLiteral("title bar actions unavailable"));
+    }
+    QString why;
+    DeferredUiAction activate;
+    if (!m_titleBarActionHandler(action.trimmed(), target.trimmed(), &why, &activate)) {
+        return err(why.isEmpty() ? QStringLiteral("titlebar action failed") : why);
+    }
+    QJsonObject reply{{QStringLiteral("ok"), true},
+                      {QStringLiteral("action"), action.trimmed()},
+                      {QStringLiteral("deferred"), true}};
+    if (!target.trimmed().isEmpty()) {
+        reply.insert(QStringLiteral("target"), target.trimmed());
+    }
+    if (m_titleBarSnapshotHandler) {
+        reply.insert(QStringLiteral("titlebar"), m_titleBarSnapshotHandler());
+    }
+    if (activate) {
+        deferInvokeAction(std::move(activate), /*transmitAction=*/false);
+    }
+    return reply;
+}
+
+QJsonObject AutomationServer::doAppletPanel(const QString& action,
+                                            const QString& value)
+{
+    const QString a = action.trimmed().toLower();
+    if (a.isEmpty()) {
+        return err(QStringLiteral("applet needs an action "
+                                  "(dock <left|right>|float <on|off>|show|hide|state)"));
+    }
+    if (!m_appletPanelSnapshotHandler) {
+        return err(QStringLiteral("applet panel unavailable"));
+    }
+
+    // `state` is read-only — no action handler needed, and it must stay
+    // side-effect free so a test can poll it between transitions.
+    DeferredUiAction activate;
+    if (a != QLatin1String("state")) {
+        if (!m_appletPanelActionHandler) {
+            return err(QStringLiteral("applet panel actions unavailable"));
+        }
+        QString why;
+        if (!m_appletPanelActionHandler(a, value.trimmed().toLower(), &why, &activate)) {
+            return err(why.isEmpty() ? QStringLiteral("applet action failed") : why);
+        }
+    }
+
+    QJsonObject reply{{QStringLiteral("ok"), true},
+                      {QStringLiteral("action"), a}};
+    if (!value.trimmed().isEmpty()) {
+        reply.insert(QStringLiteral("value"), value.trimmed().toLower());
+    }
+    // The state as of this reply.  For an action it is the state BEFORE the
+    // change: floating creates/destroys a top-level window, so the change runs
+    // on the next main-loop turn, never in this socket callback (#3646).
+    // Follow with `applet state` to confirm.
+    reply.insert(QStringLiteral("applet"), m_appletPanelSnapshotHandler());
+    if (activate) {
+        reply.insert(QStringLiteral("deferred"), true);
+        deferInvokeAction(std::move(activate), /*transmitAction=*/false);
+    }
+    return reply;
 }
 
 // ── Window state (#3918) ─────────────────────────────────────────────────────

@@ -5,6 +5,7 @@
 #include <QElapsedTimer>
 #include <QObject>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -48,6 +49,8 @@ public:
     // 200 Hz, wide enough to swallow a CW signal next to the carrier being
     // notched. Keep kMinNotchWidthHz in step if this changes — the UI offers
     // widths from it.
+    // This is the LONG length (rxFilterTapsFor): whenever a notch exists it is
+    // in force, so the advertised notch floor derives from it.
     static constexpr int kRxFilterTaps = 8192;
     static constexpr double kMinNotchWidthHz =
         1600.0 / (static_cast<double>(kRxFilterTaps) / 256.0)
@@ -56,14 +59,37 @@ public:
                   "RX filter taps no longer allow a 50 Hz notch; the width "
                   "presets in the TNF menu assume one.");
 
-    // RX filter phase per mode (#5498). Linear phase at kRxFilterTaps delays by
-    // half the length (4096 samples, ~85 ms); minimum phase keeps the magnitude
-    // response and notch floor and cut post-unmute return from 128 -> 44 ms
-    // (AGC off). CW stays linear phase: through a 300 Hz filter minimum phase
-    // measured overshoot 5.8 -> 19.6 % and more post-edge ringing (#5578).
+    // RX filter phase per mode (#5498): minimum phase preserves the notch
+    // floor and cuts post-unmute return from 128 to 44 ms (AGC off). CW stays
+    // linear by the ruling linked in the WDSP patch ledger. Minimum
+    // phase costs ~14 ms per filter edit on hl2-io; patch 14 frees its design
+    // scratch. See third_party/wdsp/AETHERSDR-PATCHES.md for the measurements.
+    // CW's latency is cut by length instead: rxFilterTapsFor().
     [[nodiscard]] static constexpr bool rxMinimumPhaseFor(WdspChannel::Mode mode) noexcept
     {
         return mode != WdspChannel::Mode::Cwl && mode != WdspChannel::Mode::Cwu;
+    }
+
+    // RX filter length (#5578). Outside CW minimum phase already removed the
+    // delay, so length buys nothing there. In CW the length is the latency, so
+    // it runs kRxShortFilterTaps unless a notch needs the long filter's floor or
+    // the passband is under kRxShortTapsMinWidthHz; 2048 would leave a -33 dB
+    // skirt 50 Hz out (hl2_rxdsp_adaptive_taps_test measures each length).
+    // Shortening needs kRxTapsHysteresisHz of margin; currentTaps <= 0 = none.
+    static constexpr int kRxShortFilterTaps = 4096;
+    static constexpr double kRxShortTapsMinWidthHz = 100.0;
+    static constexpr double kRxTapsHysteresisHz = 20.0;
+    [[nodiscard]] static constexpr int rxFilterTapsFor(WdspChannel::Mode mode, double lowHz,
+                                                       double highHz, int notchCount,
+                                                       int currentTaps = 0) noexcept
+    {
+        if (rxMinimumPhaseFor(mode) || notchCount > 0)
+            return kRxFilterTaps;
+        const double width = highHz >= lowHz ? highHz - lowHz : lowHz - highHz;
+        const bool shortening = currentTaps <= 0 || currentTaps > kRxShortFilterTaps;
+        const double needed = kRxShortTapsMinWidthHz
+                              + (shortening && currentTaps > 0 ? kRxTapsHysteresisHz : 0.0);
+        return width >= needed ? kRxShortFilterTaps : kRxFilterTaps;
     }
 
     struct Config {
@@ -90,7 +116,9 @@ public:
         double maximumAgcGainDb = 39.0;   // = slice default 65 * 0.6
         // false (live): processIq is non-blocking — real-time input paces WDSP's
         // async worker and audio flows with ~1 block latency. true: processIq
-        // waits for each output block (deterministic for a burst/offline feed).
+        // waits for each output block. That does not make a burst feed
+        // reproducible: flush_iobuffs() drains with a 1 ms timed wait, so the
+        // r1/r2 phase is fixed per channel open, not per run (#5629).
         bool blockForOutput = false;
     };
 
@@ -178,6 +206,26 @@ public:
     // sample-rate change.
     Q_INVOKABLE void setSpectrumRateFps(int fps);
 
+    // Panadapter averaging: the operator's FFT AVG as a time constant in ms
+    // (0 = none) and the weighted toggle as the averaging domain (true =
+    // log-recursive, false = power); see Hl2Spectrum. Held here, not in Config,
+    // and re-applied in installChannel(): every zoom builds a fresh Hl2Spectrum.
+    Q_INVOKABLE void setSpectrumAverageMs(int ms);
+    Q_INVOKABLE void setSpectrumLogAverage(bool on);
+    // The NCO moved: forget the running average and the held partial window, so
+    // old-axis IQ does not ghost across the new axis. Not a transport gap, which
+    // keeps the average (see Hl2Spectrum::reset()).
+    Q_INVOKABLE void dropSpectrumAverage();
+    // What the installed spectrum is actually running, for tests. DSP thread.
+    [[nodiscard]] double spectrumAverageMsApplied() const noexcept
+    {
+        return m_spectrum ? m_spectrum->averageTimeMs() : -1.0;
+    }
+    [[nodiscard]] bool spectrumLogAverageApplied() const noexcept
+    {
+        return m_spectrum && m_spectrum->logAverage();
+    }
+
     // Impulse noise blanker, the HL2's only one (no firmware DSP), so NB is shown
     // even with hasRadioSideDsp = false. Runs in WdspChannel::processIq() on the
     // wire samples ahead of fexchange2, before the bandpass smears the impulse.
@@ -190,10 +238,13 @@ public:
     // the blanker, and re-applied by installChannel(). A change the channel
     // refuses (a control operation in flight) is marked pending and retried at
     // the top of each processIqBlock() until it is taken; see squelchPending().
-    Q_INVOKABLE void setSquelch(bool on, int level);
+    // `levelOffsetDb` refers the level map to the LNA:
+    // Hl2DbReference::levelSquelchOffsetDb().
+    Q_INVOKABLE void setSquelch(bool on, int level, double levelOffsetDb);
     [[nodiscard]] bool squelchPending() const noexcept { return m_squelchPending; }
     [[nodiscard]] bool squelchEnabled() const noexcept { return m_squelchOn; }
     [[nodiscard]] int squelchLevel() const noexcept { return m_squelchLevel; }
+    [[nodiscard]] double squelchLevelOffsetDb() const noexcept { return m_squelchOffsetDb; }
     // What the channel last WROTE to WDSP (stage, run flags, threshold), or
     // nullopt before configure(). Forwarded, not mirrored, for the reason
     // channelConfig() gives below. The record itself is a by-value snapshot
@@ -220,6 +271,55 @@ public:
     [[nodiscard]] int appliedNoiseBlankerLevel() const
     {
         return m_nbAppliedLevel.load(std::memory_order_relaxed);
+    }
+
+    // AGC-off level and CW APF: held outside Config (configure() replaces it)
+    // and re-applied by installChannel(), pushed only when canPushToChannel().
+    //
+    // AGC-off level 0..100 -> WDSP fixed gain: 10 + 0.6 * (level - 10) dB, so
+    // the default level 10 is exactly WDSP's 10 dB channel default, and the
+    // slope matches the AGC-T threshold's 0.6 dB/unit. Not referred to the LNA
+    // gain: with AGC off the operator rides RF gain against overload.
+    static constexpr double kAgcFixedGainDbPerUnit = 0.6;
+    static constexpr int kDefaultAgcOffLevel = 10;           // SliceModel::m_agcOffLevel
+    static constexpr double kDefaultAgcFixedGainDb = 10.0;   // WdspChannel::Config
+    [[nodiscard]] static double agcFixedGainDbForOffLevel(int level) noexcept
+    {
+        return kDefaultAgcFixedGainDb
+               + static_cast<double>(std::clamp(level, 0, 100) - kDefaultAgcOffLevel)
+                     * kAgcFixedGainDbPerUnit;
+    }
+    // WDSP applies the fixed gain only in AGC mode 0 (wcpAGC.c xwcpagc), so
+    // this is safe in any mode and audible exactly when AGC is Off.
+    Q_INVOKABLE void setAgcOffLevel(int level);
+    [[nodiscard]] int agcOffLevel() const noexcept { return m_agcOffLevel; }
+
+    // APF level 0..100 -> the peak's bandwidth (the UI labels it "APF
+    // bandwidth", higher = narrower): 200 Hz at 0 halving every 50 units, so
+    // the default 50 is RXA.c's own 100 Hz. Gain stays at RXA.c's linear 2.0,
+    // so the slider changes selectivity, not loudness.
+    static constexpr double kApfWidestBandwidthHz = 200.0;
+    static constexpr double kApfGain = 2.0;          // RXA.c create_apfshadow
+    static constexpr int kDefaultApfLevel = 50;      // SliceModel::m_apfLevel
+    [[nodiscard]] static double apfBandwidthHzForLevel(int level) noexcept
+    {
+        const double units = static_cast<double>(std::clamp(level, 0, 100));
+        return kApfWidestBandwidthHz * std::pow(2.0, -units / 50.0);
+    }
+    [[nodiscard]] static constexpr bool isCwMode(WdspChannel::Mode mode) noexcept
+    {
+        return mode == WdspChannel::Mode::Cwl || mode == WdspChannel::Mode::Cwu;
+    }
+    // centerHz is the CW pitch in audio Hz (the backend owns it). The stage
+    // runs only in CWL/CWU; the request is held through other modes and
+    // setMode() re-evaluates it.
+    Q_INVOKABLE void setApf(bool on, int level, double centerHz);
+    [[nodiscard]] bool apfRequested() const noexcept { return m_apfOn; }
+    [[nodiscard]] int apfLevel() const noexcept { return m_apfLevel; }
+    [[nodiscard]] double apfCenterHz() const noexcept { return m_apfCenterHz; }
+    [[nodiscard]] bool apfInCircuit() const noexcept
+    {
+        return m_apfOn && isCwMode(m_config.mode);
     }
 
     // Post-DDC half of the ADC pairing (docs/HERMES.md §13 item 16;
@@ -295,6 +395,15 @@ public:
     // index map depends on it — so both are exposed for the test that pins it.
     [[nodiscard]] int notchCount() const;
     [[nodiscard]] int wdspNotchCount() const;
+    // The RX filter length and notch-width floor the live channel is running
+    // (0 without one). Read back from the channel, not from the policy, so a
+    // test of the wiring cannot agree with itself.
+    [[nodiscard]] int rxFilterTapsInForce() const;
+    [[nodiscard]] double minimumNotchWidthInForceHz() const;
+    // TEST ONLY: treat every filter-length change as refused, as setFilterTaps()
+    // refuses one that loses beginControlOperation(). That race cannot be built
+    // on one thread, and refusing at WdspChannel would refuse the notch too.
+    void setRefuseFilterTapsChangesForTest(bool on) noexcept { m_refuseFilterTapsForTest = on; }
 
     // Mute the demodulator while transmitting. The spectrum keeps running on
     // real IQ, but the audio channel is clocked with silence so WDSP's buffers
@@ -410,18 +519,30 @@ private:
     // Pushes rxMinimumPhaseFor(m_config.mode) to the live channel. Only
     // called where the control verbs may reach it (setMode, installChannel).
     void applyMinimumPhaseForMode();
+    // Pushes rxFilterTapsFor(mode, passband, notchCount) to the live channel;
+    // notchCount is passed so addNotch() can raise for the notch it is about to
+    // add. hysteresisFromTaps (> 0) is the length the hysteresis is measured
+    // from, for a fresh channel replacing one; 0 means the length in force.
+    // Returns whether the wanted length is in force afterwards.
+    bool applyFilterTaps(int notchCount, int hysteresisFromTaps = 0);
     // One attempt to put the squelch request on the channel; marks it pending
     // on refusal. Caller has checked canPushToChannel().
     void pushSquelchToChannel();
+    // Push the held APF request / AGC-off level at the live channel. Callers
+    // check canPushToChannel() first. Refusals are logged and the request is
+    // kept, so the next install re-applies it.
+    void applyApf();
+    void applyAgcOffLevel();
     // True when the next panadapter frame may be computed. Stays true until one
     // actually completes, since a frame spans several EP6 blocks.
     bool spectrumFrameDue();
 
     // The shared install step: resize the scratch buffers, recompute the DC
     // blocker, re-apply everything Config does not carry (shift, the notch set,
-    // the noise blanker, the blanker hold, the squelch) and take ownership of the
-    // new channel/spectrum. configure() and installRebuiltChannel() both end here
-    // so a second copy of that list cannot drift and lose one of them.
+    // the noise blanker, the blanker hold, the squelch, the AGC-off level, the
+    // APF) and take ownership of the new channel/spectrum. configure() and
+    // installRebuiltChannel() both end here so a second copy of that list
+    // cannot drift and lose one of them.
     void installChannel(RebuildResult result);
     // Arm m_meterTap from the current geometry. One site for the arithmetic,
     // called on the mute's release edge and on a channel install so the two
@@ -441,6 +562,9 @@ private:
     std::unique_ptr<WdspChannel> m_channel;
     std::unique_ptr<Hl2Spectrum> m_spectrum;
     double m_shiftHz = 0.0;   // current slice offset from the NCO, Hz
+    // The operator's panadapter averaging; see setSpectrumAverageMs().
+    int m_spectrumAverageMs = 0;
+    bool m_spectrumLogAverage = false;
     // Noise-blanker state, kept out of m_config so configure() cannot clear it.
     // m_nbOn/m_nbLevel are the REQUEST; m_nbApplied* are what the WDSP stage
     // took. They diverge exactly when something went wrong, which is the whole
@@ -450,10 +574,17 @@ private:
     // Squelch request — see setSquelch(). Defaults mirror SliceModel's.
     bool m_squelchOn = false;
     int  m_squelchLevel = 20;
+    double m_squelchOffsetDb = 0.0;
     // True while the channel has refused the current request; see setSquelch().
     bool m_squelchPending = false;
     std::atomic<bool> m_nbAppliedOn {false};
     std::atomic<int>  m_nbAppliedLevel {50};
+    // AGC-off level and APF, kept out of m_config for the same reason; see
+    // setAgcOffLevel()/setApf(). Requests, in the slice model's units.
+    int m_agcOffLevel = kDefaultAgcOffLevel;
+    bool m_apfOn = false;
+    int m_apfLevel = kDefaultApfLevel;
+    double m_apfCenterHz = 600.0;
     // Latest RXA_ADC_PK and when it was taken; see adcPeakDbfs() above. NaN and
     // 0 are the "never observed" sentinels, which is why neither is a value the
     // accessors can return. A steady_clock stamp rather than a QElapsedTimer
@@ -476,6 +607,7 @@ private:
         bool active = true;
     };
     std::vector<Notch> m_notches;
+    bool m_refuseFilterTapsForTest = false;
     bool m_notchesEnabled = true;
     double m_notchTuneHz = 0.0;
 

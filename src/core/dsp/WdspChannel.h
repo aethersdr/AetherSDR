@@ -41,6 +41,15 @@ public:
         Wbfm
     };
 
+    // Opt-in receive FM recipe. Other channel owners retain their existing
+    // settings. The FM limiter and unity output panel normalize demodulated
+    // audio before it reaches a speaker mixer or an independent receiver tap.
+    struct FmReceive
+    {
+        // Deviation has one owner: Config::fmDeviationHz, including runtime setters.
+        bool operator==(const FmReceive&) const = default;
+    };
+
     struct Config
     {
         Direction direction = Direction::Receive;
@@ -50,6 +59,7 @@ public:
         int dspSampleRate = 48000;
         int outputSampleRate = 48000;
         Mode mode = Mode::Usb;
+        std::optional<FmReceive> fmReceive;
         double filterLowHz = 150.0;
         double filterHighHz = 3000.0;
         int agcMode = 3;
@@ -92,6 +102,9 @@ public:
         static constexpr double kMinFmDeviationHz = 100.0;
         static constexpr double kMaxFmDeviationHz = 100000.0;
         double fmDeviationHz = 5000.0;
+        // true: fexchange waits for each output block. The r1/r2 buffer phase is
+        // still set per channel open (flush_iobuffs() drains with a 1 ms timed
+        // wait), so two opens fed the same burst can differ (#5629).
         bool blockForOutput = false;
         // Impulse noise blanker — see the setNoiseBlanker() block below. Kept
         // in Config, not just as a runtime setter, so that reconfigure() (a
@@ -102,6 +115,13 @@ public:
         // 0..100, the seam's units. Mapped to WDSP's threshold by
         // noiseBlankerThresholdForLevel().
         int noiseBlankerLevel = 50;
+        // CW audio peaking filter (setApf()). In Config because reconfigure()
+        // frees the peaking stages; defaults are RXA.c's own (off, 600 Hz,
+        // 100 Hz, linear gain 2.0).
+        bool apfEnabled = false;
+        double apfCenterHz = 600.0;
+        double apfBandwidthHz = 100.0;
+        double apfGain = 2.0;   // LINEAR, not dB
         // Receive squelch — see setSquelch() below. In Config for the same
         // reason as the blanker and the FM deviation: reconfigure() frees all
         // three WDSP squelch stages, so a squelch held only in a runtime setter
@@ -109,6 +129,9 @@ public:
         // the seam's 0..100 (SliceModel's), and 20 is SliceModel's default.
         bool squelchEnabled = false;
         int squelchLevel = 20;
+        // Added to the amsq map; see setSquelch().
+        double levelSquelchOffsetDb = 0.0;
+        bool operator==(const Config&) const = default;
     };
 
     // Which WDSP squelch stage a mode uses — see squelchStageFor().
@@ -231,6 +254,18 @@ public:
     // already in flight. Control-path work, guarded exactly like setMode(); it
     // must not be called from the processIq() callback.
     bool setAgc(int agcMode, double maximumGainDb) noexcept;
+    // The AGC's gain in mode 0 (off), in dB; xwcpagc() ignores it in every
+    // other mode, so it may be set any time. Receive only; refuses a
+    // non-finite value or a racing control operation.
+    bool setAgcFixedGain(double fixedGainDb) noexcept;
+    // CW audio peaking filter (WDSP SPCW, apfshadow.c): centerHz is audio (the
+    // CW pitch), gain is linear. Receive only; refuses a non-positive or
+    // non-finite parameter. While it runs both outputs come from I alone
+    // (xdoublepole mode 2 copies I into Q), so any left/right difference is
+    // lost. Stored in Config so open() re-applies it.
+    bool setApf(bool enabled, double centerHz, double bandwidthHz, double gain) noexcept;
+    [[nodiscard]] static bool apfParametersValid(double centerHz, double bandwidthHz,
+                                                 double gain) noexcept;
 
     // Runtime filter length / phase mode without reconfigure() (which would
     // destroy the notch database).
@@ -262,16 +297,21 @@ public:
     // level 100 is tightest, and setMode() re-applies it.
     //   level 0                  nothing runs, in every mode ("0 = open")
     //   FM                       fmsq, threshold 10^(-2 * level / 100)
-    //   AM, SAM, DSB, LSB, USB   amsq, threshold -140 + 0.7 * level dBFS
+    //   AM, SAM, DSB, LSB, USB   amsq, threshold -140 + 0.7 * level + offset dBFS
     //   CW, DIG, WBFM, other     none
-    // amsq's map is fitted to HL2-measured dBFS levels, so it moves with RF gain;
-    // SSB is on amsq because ssql never opens at this chain's audio level (#5982).
+    // amsq gates raw dBFS, so a front-end gain change moves its antenna-referred
+    // point; `levelOffsetDb` is how the caller, which owns that gain, refers it
+    // back. The channel has no gain of its own to refer to (#6092). SSB is on
+    // amsq because ssql never opens at this chain's audio level (#5982).
     // Receive only; false while a control operation is in flight; not from processIq().
-    bool setSquelch(bool on, int level) noexcept;
+    bool setSquelch(bool on, int level, double levelOffsetDb) noexcept;
     [[nodiscard]] static SquelchStage squelchStageFor(Mode mode) noexcept;
+    static constexpr double kLevelSquelchBaseDbfs = -140.0;
+    static constexpr double kLevelSquelchDbPerStep = 0.7;
     // The two maps above, each clamping level to 0..100, so tests can pin them.
     [[nodiscard]] static double fmSquelchThresholdForLevel(int level) noexcept;
-    [[nodiscard]] static double levelSquelchThresholdDbfsForLevel(int level) noexcept;
+    [[nodiscard]] static double levelSquelchThresholdDbfsForLevel(int level,
+                                                                  double offsetDb) noexcept;
     // A snapshot by value, safe from any thread: guarded by its own mutex, not
     // g_setupMutex (the FFTW planner lock, which can be held for a whole plan).
     [[nodiscard]] AppliedSquelch appliedSquelch() const;
