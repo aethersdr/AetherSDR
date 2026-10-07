@@ -496,11 +496,21 @@ wiring are reused. Mapping choices:
   re-raising the line after the release. Over the network the release is
   an RFC 2217 SET-CONTROL before the socket closes, sent only if ON raised
   the line on that connection.
-- Not controllable in software: Linux and macOS assert DTR inside open()
-  itself, so on those systems the line can be high for the instant until
-  AetherSDR lowers it (reasoned from the kernels, not measured). Whether
-  that blip starts a 1K-FA is an open bench question; a crash or a pulled
-  adapter leaves the line to the OS/driver.
+- Not controllable in software: the OS asserts DTR inside open() itself.
+  Measured on macOS 27 (Apple Silicon) with an FTDI FT2232H dual-port
+  RS-232 adapter, port A's DTR wired to port B's DSR and port B polled at
+  about 6.6 kHz while port A was driven through QSerialPort exactly as
+  above. Every open() (14 of 14) raised DTR for 3.5–4.5 ms, until
+  AetherSDR's own setDataTerminalReady(false). ON then held the line
+  steadily, and the explicit release dropped it before close(). A close()
+  without the release also dropped DTR (HUPCL), with and without Qt's
+  settings restore. So on macOS the pre-policy code would have powered the
+  amp off on Disconnect, unlike the Windows bench. Linux is expected to
+  behave alike (unmeasured). Whether a ~4 ms DTR pulse starts a 1K-FA is
+  still an open bench question; ON's own boot took about 3 s with the line
+  held. If it does, the remedies are keeping the port open (one blip per
+  session) or an RC delay on the cable's DTR. A crash or a pulled adapter
+  leaves the line to the OS/driver.
 - Bench results so far, **Windows 11 only**, real 1K-FA on a local COM
   port, from the build before the policy above (`7de6abec`..`72a971a5`
   era): amp off, connect: stays off, ON powers it about 3 s later; amp on
