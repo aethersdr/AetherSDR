@@ -182,6 +182,10 @@ a radio-specific cluster moves to its own applet, which hides wholesale.
 | **inactive** | supported here, not engaged now | `color.control.inactive` | "Available, not currently active" |
 | **active** | engaged | normal text colour | nothing extra |
 
+The reason replaces a control's own tooltip and description only while it is
+unavailable; the control's own texts come back when it is available again. The
+inactive announcement is used only on a control with no description of its own.
+
 ### Why dim rather than hide
 
 A hidden control tells a blind operator *nothing at all* — it is not announced,

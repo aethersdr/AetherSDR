@@ -293,6 +293,84 @@ int main(int argc, char** argv)
               "unavailable line edits use the Text role");
     }
 
+    // ---- a control's own texts survive the reason (#5859) ----
+    //
+    // Restored, not merely preserved across registration: the defect wrote an
+    // empty tooltip whenever the control was not Unavailable.
+    {
+        bool supported = true;
+        const auto when = [&supported](bool, const RadioCapabilities&) { return supported; };
+        const QString ownTip = QStringLiteral("Start or stop tune carrier");
+        const QString ownDescription = QStringLiteral("Keys a carrier for tuning");
+        QPushButton tune(QStringLiteral("TUNE"));
+        tune.setToolTip(ownTip);
+        tune.setAccessibleDescription(ownDescription);
+        registry.registerWidget(&tune, reason, when);
+        check(tune.toolTip() == ownTip && tune.accessibleDescription() == ownDescription,
+              "registering an available control keeps its own tooltip and description");
+        supported = false;
+        registry.refreshEngaged();
+        check(tune.toolTip() == reason && tune.accessibleDescription() == reason,
+              "the reason replaces both only while the control is unavailable");
+        supported = true;
+        registry.refreshEngaged();
+        check(tune.toolTip() == ownTip && tune.accessibleDescription() == ownDescription,
+              "available again restores the control's own tooltip and description");
+
+        // The owner's text is whatever it wrote last, also while the reason showed.
+        const QString later = QStringLiteral("Tune carrier at 10 W");
+        tune.setToolTip(later);
+        registry.refreshEngaged();
+        check(tune.toolTip() == later, "an available control's later tooltip is left alone");
+        supported = false;
+        registry.refreshEngaged();
+        const QString meanwhile = QStringLiteral("Tune carrier at 5 W");
+        tune.setToolTip(meanwhile);
+        registry.refreshEngaged();
+        check(tune.toolTip() == reason, "the next apply puts the reason back over an owner write");
+        supported = true;
+        registry.refreshEngaged();
+        check(tune.toolTip() == meanwhile,
+              "and the text written while unavailable is what comes back");
+
+        // A registry re-created while the reason shows still restores the own text.
+        supported = false;
+        registry.refreshEngaged();
+        {
+            ControlAvailabilityRegistry second(model);
+            second.registerWidget(&tune, reason, when);
+            supported = true;
+            second.refreshEngaged();
+            check(tune.toolTip() == meanwhile && tune.accessibleDescription() == ownDescription,
+                  "a new registry restores the own text, not the old reason");
+        }
+
+        QAction action(QStringLiteral("&Tune"));
+        const QString actionTip = QStringLiteral("Start or stop tune carrier");
+        const QString actionStatus = QStringLiteral("Tune the antenna");
+        action.setToolTip(actionTip);
+        action.setStatusTip(actionStatus);
+        registry.registerAction(&action, reason, when);
+        supported = false;
+        registry.refreshEngaged();
+        check(action.toolTip() == reason && action.statusTip() == reason,
+              "an unavailable action shows the reason on both channels");
+        supported = true;
+        registry.refreshEngaged();
+        check(action.toolTip() == actionTip && action.statusTip() == actionStatus,
+              "available again restores the action's own tooltip and status tip");
+
+        QAction plain(QStringLiteral("Plain"));
+        registry.registerAction(&plain, reason, when);
+        supported = false;
+        registry.refreshEngaged();
+        supported = true;
+        registry.refreshEngaged();
+        plain.setText(QStringLiteral("Renamed"));
+        check(plain.toolTip() == QStringLiteral("Renamed"),
+              "an action without its own tooltip keeps following its text");
+    }
+
     if (g_failures == 0) {
         std::printf("control_availability_registry_test: all checks passed\n");
     }
