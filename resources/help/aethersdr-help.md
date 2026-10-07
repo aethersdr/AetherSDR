@@ -13,25 +13,41 @@ Everything else in the program supports those four ideas.
 
 ## Title Bar and Top Controls
 
-The title bar combines identity, status, and quick client controls in one narrow strip.
+The title bar is a single 52 px strip that carries the application menu, the
+radio you are connected to, and the quick audio controls.
 
 ### What you can read there quickly
 
-- Discovery heartbeat
-- Application identity
+- Which radio you are on: each radio has its own tab, and the active tab's
+  status dot doubles as the discovery heartbeat. It turns amber while
+  discovering and red after three missed discovery beats.
+- An `EXPERIMENTAL` badge when the connected radio family is still
+  experimental
 - multiFLEX presence
 - Whether another client currently owns transmit
+- The transmit timer while you are keyed
 - Whether `PC Audio` is enabled
 - Speaker and headphone levels
 
 ### What you can do there quickly
 
+- Open the application menu (the ☰ button at the left end on Windows and
+  Linux; macOS keeps its menus in the system menu bar)
+- Switch radios by clicking a tab, or use the `+` button to see discovered
+  radios and connect manually
+- Right-click a radio tab to turn the status-dot blink on or off
 - Toggle `PC Audio`
 - Mute or unmute line out
 - Mute or unmute headphones
 - Change local output levels
-- Enter `Minimal Mode`
-- Open the feature request and AI-assisted reporting flow
+- Dock the applet panel left or right of the panadapter, or pop it out into
+  its own window
+- Double-click empty space in the bar to maximize or restore the window
+
+`Minimal Mode` is in the `View` menu, or press `Ctrl+Shift+M`. While it is
+on, the maximize button or a double-click on the bar leaves it. Feature
+requests and AI-assisted bug reports start from `Help -> Submit your Idea...`
+and `Help -> File an Issue...`.
 
 This is the best place to look when you want to answer, "Is this a station problem, an audio problem, or simply the wrong client state?"
 
@@ -80,7 +96,7 @@ This menu manages operating profiles.
 This is the everyday operations menu. Items appear or enable themselves according to the connected radio and features included in the build.
 
 - `Add Panadapter` creates another display when the connected radio has capacity.
-- `Aetherial Audio`, `CW Keyer`, and `Copy Assist` show their operating panels when available.
+- `AetherTX...`, `CW Keyer`, and `Copy Assist` show their operating panels when available.
 - `AetherModem...` opens the packet-decoder workspace, while `Configure KiwiSDR...` jumps to KiwiSDR configuration.
 - `Start SWR Scan...`, `Pre-tune ATU Bands...`, and `Clear ATU Memories...` provide guarded tuner operations on supported radios.
 - `Callsign Lookup...`, `PSK Reporter...`, and `FreeDV Reporter...` open lookup and reporting tools.
@@ -148,8 +164,8 @@ The floating left-side overlay is a fast operator menu for the currently focused
 - `+TNF`: add a tracking notch filter
 - `Band`: jump by band and open XVTR setup
 - `ANT`: receive antenna, RF gain, and WNB controls
-- `DSP`: per-slice DSP toggles and levels
 - `Display`: FFT, waterfall, color, averaging, and background presentation
+- `Memory`: browse, recall, and add memories
 - `DAX`: DAX channel and IQ channel choices for that panadapter or slice context
 
 This overlay is important because it keeps the most common "I need to adjust the picture or slice quickly" controls next to the spectrum instead of burying them in a large dialog.
@@ -243,7 +259,6 @@ Default applet order is:
 - `PHN`
 - `P/CW`
 - `EQ`
-- `DIGI`
 - `MTR`
 - `AG`
 
@@ -455,9 +470,9 @@ The status bar is easy to underestimate. It carries both fast actions and live t
 ### Left side
 
 - Add panadapter
-- Applet panel toggle
 - TNF
 - CWX
+- ASR
 - DVK
 - FDX
 - radio and station context

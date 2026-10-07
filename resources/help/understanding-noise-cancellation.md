@@ -61,9 +61,10 @@ works remarkably well with zero tuning required.
 
 Since then, AI-based noise reduction has advanced rapidly. DeepFilterNet
 (2022) uses deep learning with a specialized filter structure that preserves
-voice quality even in very noisy environments. NVIDIA's Maxine platform brings
-GPU-accelerated AI denoising that can run in real time alongside your radio
-software.
+voice quality even in very noisy environments. NVIDIA's Maxine Audio Effects
+brings GPU-accelerated AI denoising that can run in real time alongside your
+radio software, and WDSP's neural noise reduction uses a model trained on
+off-air HF noise.
 
 The trend is clear: each generation gets better at separating voice from noise,
 needs less manual tuning, and handles a wider range of noise types. AetherSDR
@@ -87,9 +88,8 @@ modes for the best result.
 ### Radio-Side (FlexRadio Hardware)
 
 These are built into your FlexRadio and processed on the radio itself.
-AetherSDR gives you access to them through the DSP buttons on the VFO bar
-and the spectrum overlay panel, but the processing happens on the radio —
-not on your PC.
+AetherSDR gives you access to them through the DSP buttons on the VFO bar,
+but the processing happens on the radio — not on your PC.
 
 | Mode | Full Name | Tunables | Best For |
 |------|-----------|----------|----------|
@@ -102,25 +102,27 @@ controlled through AetherSDR but running on your FlexRadio hardware.
 
 ### Client-Side (AetherSDR Software)
 
-These are unique to AetherSDR and run on your computer's CPU (or GPU in the
-case of BNR). They process the audio after it leaves the radio, giving you an
+These are unique to AetherSDR and run on your computer's CPU (or your local
+NVIDIA GPU in the case of BNR). They process the audio after it leaves the radio, giving you an
 additional layer of noise reduction beyond what the radio provides. Only one
 client-side mode can be active at a time.
 
 | Mode | Full Name | Type | Tunables | CPU/GPU | Best For |
 |------|-----------|------|----------|---------|----------|
 | NR2 | Spectral NR | Statistical DSP | 6 parameters | CPU | Fine-tuned control over SSB noise |
-| RN2 | RNNoise | Neural network | None | CPU | Quick cleanup, no fuss |
+| RN2 | RNNoise | Neural network | 1 slider | CPU | Quick cleanup, no fuss |
 | NR4 | SpecBleach | Advanced spectral | 7 parameters | CPU | Stubborn broadband noise |
 | MNR | Apple MMSE-Wiener | Statistical DSP | 1 slider | CPU (macOS only) | macOS users wanting a native option |
-| BNR | NVIDIA Maxine | AI (cloud/GPU) | 1 slider | RTX GPU | Maximum quality with NVIDIA hardware |
+| BNR | NVIDIA Maxine Audio Effects | AI (local GPU) | 1 slider | NVIDIA RTX/GeForce GPU (Linux, Windows) | Maximum quality with NVIDIA hardware |
 | DFNR | DeepFilterNet3 | AI (local) | 2 parameters | CPU | Best all-around AI denoising |
+| NNR | WDSP Neural NR | AI (local) | Strength + model | CPU | Weak SSB voice in real HF band noise |
 
-**Note:** Not every client-side mode may be visible on your system. Some
-options (such as BNR or DFNR) require additional hardware (an NVIDIA RTX GPU
-for BNR) or optional libraries that may not be compiled into your build. If
-you do not see a particular button in the VFO bar or DSP panel, it is not
-available in your installation — this is normal and nothing is broken.
+**Note:** Not every client-side mode is available on every system. Some
+options need particular hardware (an NVIDIA RTX or GeForce GPU for BNR), a
+particular platform (MNR is macOS-only; BNR is Linux and Windows only), or an
+optional library that may not be compiled into your build (DFNR). An
+unavailable mode stays in the AetherNR method strip, dimmed, and its tooltip
+says why — this is normal and nothing is broken.
 
 ### A Note About CW and Digital Modes
 
@@ -129,7 +131,7 @@ operation. They work by identifying and preserving human speech while removing
 everything else — which is exactly the wrong thing to do when the signal you
 want is a CW tone or a digital mode like FT8, JS8Call, or RTTY.
 
-For this reason, the client-side modes (NR2, RN2, NR4, MNR, BNR, and DFNR)
+For this reason, the client-side modes (NR2, RN2, NR4, MNR, BNR, DFNR, and NNR)
 automatically disable themselves when you switch to CW, CWL, or a digital
 mode. This is intentional — do not try to force them on. Running voice-optimized
 noise reduction on non-voice signals can distort the audio, confuse decoding
@@ -186,8 +188,8 @@ specifically, so it can sometimes struggle with the unique characteristics of
 weak, fading shortwave signals. Very weak signals may be suppressed along with
 the noise.
 
-**Available tunables:** None — the trained model handles everything
-automatically.
+**Available tunables:**
+- **Noise Floor** — How much of the original signal RN2 leaves under the denoised audio (0–50%). The default, 0%, is full suppression, which can sound silent between phrases; 10–20% keeps a steady, quiet noise floor so the receiver still sounds live. It affects received audio only.
 
 **Recommendation:** RN2 is a great starting point if you are new to noise reduction or just want cleaner audio without learning what all the knobs do. If it is clipping weak signals or the audio sounds slightly muffled on very noisy bands, try DFNR or NR2 instead.
 
@@ -245,24 +247,27 @@ noise is consistent, and its seven tunables give you fine-grained control.
 
 ### BNR — NVIDIA Maxine Background Noise Removal
 
-BNR uses NVIDIA's Maxine AI platform, originally developed for video
-conferencing and released as part of the NVIDIA Broadcast suite in 2020.
-It runs as a local service on your machine and uses your NVIDIA RTX graphics
-card's AI tensor cores to perform real-time noise removal.
+BNR uses the denoiser from NVIDIA's Maxine Audio Effects, an AI platform
+originally developed for video conferencing. It runs inside AetherSDR itself, on your
+own NVIDIA RTX or GeForce graphics card — nothing is sent to the cloud, and
+there is no container or separate service to install. BNR is available on
+Linux and Windows. The first time you use it, the **Download** button in the
+BNR panel fetches NVIDIA's runtime (about 1.2 GB, once); after that it starts
+from the local copy.
 
 BNR delivers some of the highest-quality noise removal available because it
 has access to massive GPU computing power. It handles virtually every type of
 noise — broadband hiss, impulse noise, hum, and even complex non-stationary
 interference — with minimal impact on voice quality. The trade-off is that it
-requires an NVIDIA RTX GPU and a running Docker container to operate.
+requires a supported NVIDIA GPU.
 
 **Available tunables:**
 - **Intensity** — A single slider (0–100%) controlling how aggressively noise is removed. 100% is the default and works well for most HF conditions.
 
-**Recommendation:** If you have an NVIDIA RTX GPU, BNR is worth trying for the
+**Recommendation:** If you have a supported NVIDIA GPU, BNR is worth trying for the
 best possible noise removal with the simplest controls. It pairs especially
 well with weak-signal DX work where every decibel of cleanup matters. If you
-do not have an RTX GPU, DFNR provides similar AI-quality results on CPU.
+do not have one, or you are on macOS, DFNR provides similar AI-quality results on CPU.
 
 ---
 
@@ -290,6 +295,29 @@ including fading signals and varying noise floors.
 
 ---
 
+### NNR — WDSP Neural Noise Reduction
+
+NNR is the neural noise reduction from WDSP, Warren Pratt's (NR0V) DSP
+library. Unlike general-purpose speech denoisers, its model was trained on
+off-air HF: over a hundred noise recordings from real receivers, with speech
+passed through an SSB transmit chain before it was mixed in. It runs on your
+CPU.
+
+NNR is for voice only — it treats a steady carrier as noise and removes it.
+It runs after the AGC, so set the AGC threshold as far above the noise floor
+as is practical: an AGC riding the noise floor moves the level faster than
+NNR's own level tracking follows, and the result can sound worse than no
+noise reduction at all.
+
+**Available tunables:**
+- **Strength** — How much of the received noise NNR may remove (0–100). Lower leaves more of the real band noise in place, which often makes a weak signal easier to follow. The mark on the slider is WDSP's default.
+- **Model** — **Standard** (the default, about 13% of one CPU core) or **Premium** (measurably better at poor signal-to-noise, at about twice the CPU; not suitable for a Raspberry Pi).
+- **Advanced** — Six further WDSP tuning controls, which WDSP leaves undocumented. Each is marked where WDSP starts it; leave them there unless you are experimenting.
+
+**Recommendation:** Try NNR on weak SSB in real band noise. Start with the Standard model and the default Strength, and lower Strength if a weak voice starts to thin out.
+
+---
+
 ## Quick-Start Guide
 
 Not sure where to begin? Here is a simple decision tree:
@@ -308,10 +336,15 @@ gradually — over-processing can make voices sound robotic or hollow.
 
 ## Where to Find the Controls
 
-- **Quick toggle:** The DSP buttons on the VFO bar (NR2, RN2, NR4, MNR, BNR, DFNR)
-- **Overlay panel:** Right-click the spectrum display, open the DSP panel
-- **Full settings:** `Settings → AetherRX...`, AetherNR tab (or right-click any DSP applet)
-- **Right-click shortcut:** Right-click the NR2 button on the VFO bar for a quick parameter popup
+- **Client-side modes:** Open AetherRX — the `AetherRX` button on the VFO, or
+  `Settings → AetherRX...` — and select the **AetherNR** stage. Its method
+  strip (NR2, NR4, MNR, DFNR, RN2, BNR, NNR) turns a mode on; click the lit
+  one again to turn it off. The selected mode's settings appear below the
+  strip.
+- **Radio-side modes:** The DSP buttons on the VFO bar (NB, NR, ANF and the
+  others your radio supports).
+- The `AetherRX` button on the VFO lights up while any client-side mode is
+  running.
 
 ---
 
@@ -349,12 +382,13 @@ build a profile of the noise in your environment. During this time it passes
 audio through unprocessed. After the learning period, suppression kicks in
 automatically.
 
-**I do not see BNR or DFNR in my DSP buttons**
-These modes require optional components that may not be included in every
-build. BNR requires an NVIDIA RTX GPU and a running Maxine Docker container.
-DFNR requires the DeepFilterNet3 library to be compiled into your build. If
-they are not available on your platform, they will not appear — this is
-expected. The other modes (NR2, RN2, NR4) are always available.
+**BNR, DFNR, or another mode is dimmed in the AetherNR method strip**
+Hover over it — the tooltip says why. BNR needs a supported NVIDIA RTX or
+GeForce GPU on Linux or Windows. DFNR needs the DeepFilterNet3 library
+compiled into your build. MNR is macOS-only, and on Windows NR4 needs a build
+made with LLVM. NR2 is dimmed while the audio is Opus-compressed (SmartLink),
+because its noise estimator cannot tell codec artifacts from real noise. RN2
+and NNR are available everywhere.
 
 **Audio sounds worse with two noise reduction modes stacked**
 Stacking radio-side NR with a client-side mode can help, but too much of both

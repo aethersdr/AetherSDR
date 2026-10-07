@@ -201,8 +201,9 @@ In practice, pinch-to-zoom is most commonly reliable on macOS trackpads. On Wind
 
 If a slice is currently outside the visible spectrum window:
 
-- **Single-click** its edge indicator to make that slice active.
-- **Double-click** its edge indicator to recenter the panadapter on that slice.
+- **Single-click** its edge indicator to make that slice active and recenter
+  the panadapter on it.
+- **Right-click** its edge indicator for that slice's context menu.
 
 ## Using the built-in VFO and native controls
 
