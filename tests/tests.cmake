@@ -3201,6 +3201,20 @@ add_test(NAME dvk_panel_theme_test COMMAND dvk_panel_theme_test)
 set_tests_properties(dvk_panel_theme_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
 
+# #6257 — click-handled status-bar indicators are operable without a mouse:
+# Tab focus, Return/Enter/Space, a Button role with a Press action, and a
+# canon-cyan underline while focused.
+add_executable(status_indicator_test
+    tests/status_indicator_test.cpp
+    src/gui/StatusIndicator.cpp
+    ${THEME_TEST_RESOURCES}
+)
+target_include_directories(status_indicator_test PRIVATE src tests)
+target_link_libraries(status_indicator_test PRIVATE aetherdesktop_support Qt6::Widgets)
+add_test(NAME status_indicator_test COMMAND status_indicator_test)
+set_tests_properties(status_indicator_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
+
 # #5640 — QsoRecorder claims filename candidates atomically so a same-second
 # recording cannot truncate a populated WAV or a concurrently-created file.
 add_executable(qso_recorder_filename_collision_test

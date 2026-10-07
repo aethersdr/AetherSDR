@@ -1446,6 +1446,7 @@ set(GUI_SOURCES
     src/gui/GreenHeronApplet.cpp
     src/gui/TitleBar.cpp
     src/gui/RoundedMenu.cpp
+    src/gui/StatusIndicator.cpp
     src/gui/BrandMark.cpp
     src/gui/RadioTabBar.cpp
     src/gui/WindowCaptionButtons.cpp

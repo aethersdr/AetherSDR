@@ -905,6 +905,10 @@ private:
     // keyer panels mutually exclusive and restore the splitter identically.
     void toggleCwKeyerPanel();
     void toggleVoiceKeyerPanel();
+    // Status-bar indicators are click-handled labels and containers; a mouse
+    // press (eventFilter) and the keyboard (StatusIndicator) share one action.
+    bool isStatusIndicator(const QObject* obj) const;
+    void activateStatusIndicator(QObject* obj);
     // Shared by the status-bar +PAN affordance and Tools ▸ Add Panadapter… so
     // both route through PanLayoutDialog and the layout machinery.
     void showAddPanadapterDialog();

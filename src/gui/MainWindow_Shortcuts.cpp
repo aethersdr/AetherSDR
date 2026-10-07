@@ -851,24 +851,47 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
         toggleConnectionDialog();
         return true;
     }
+    // Status-bar indicators: a press and the keyboard (StatusIndicator's
+    // Return/Enter/Space and the accessible Press action) run one action.
+    if (event->type() == QEvent::MouseButtonPress && isStatusIndicator(obj)) {
+        if (obj == m_txIndicator
+            && static_cast<QMouseEvent*>(event)->button() != Qt::LeftButton) {
+            return true;
+        }
+        activateStatusIndicator(obj);
+        return true;
+    }
+    return QMainWindow::eventFilter(obj, event);
+}
+
+bool MainWindow::isStatusIndicator(const QObject* obj) const
+{
+    return obj && (obj == m_asrIndicator || obj == m_cwxIndicator || obj == m_tnfIndicator
+        || obj == m_fdxIndicator || obj == m_bandStackIndicator || obj == m_tgxlContainer
+        || obj == m_pgxlContainer || obj == m_txIndicator || obj == m_addPanLabel
+        || obj == m_dvkIndicator);
+}
+
+void MainWindow::activateStatusIndicator(QObject* obj)
+{
 #ifdef AETHER_ASR_ENABLED
-    if (obj == m_asrIndicator && event->type() == QEvent::MouseButtonPress) {
-        if (!m_asrIndicator->isEnabled()) return true;
+    if (obj == m_asrIndicator) {
+        if (!m_asrIndicator->isEnabled()) return;
         showCopyAssist();           // toggles the docked Copy Assist panel
         updateKeyerAvailability();  // refresh the indicator's active/available style
-        return true;
+        return;
     }
 #endif
-    if (obj == m_cwxIndicator && event->type() == QEvent::MouseButtonPress) {
-        if (!m_cwxIndicator->isEnabled()) return true;
+    if (obj == m_cwxIndicator) {
+        if (!m_cwxIndicator->isEnabled()) return;
         toggleCwKeyerPanel();
-        return true;
+        return;
     }
-    if (obj == m_tnfIndicator && event->type() == QEvent::MouseButtonPress) {
+    if (obj == m_tnfIndicator) {
         m_radioModel.tnfModel().requestGlobalTnfEnabled(!m_radioModel.tnfModel().globalEnabled());
-        return true;
+        return;
     }
-    if (obj == m_fdxIndicator && event->type() == QEvent::MouseButtonPress) {
+    if (obj == m_fdxIndicator) {
         bool on = !m_radioModel.fullDuplexEnabled();
         m_radioModel.sendCmdPublic(
             QString("radio set full_duplex_enabled=%1").arg(on ? 1 : 0),
@@ -882,15 +905,15 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
                 // Radio accepted; no status echo follows, so apply manually.
                 m_radioModel.setFullDuplex(on);
             });
-        return true;
+        return;
     }
-    if (obj == m_bandStackIndicator && event->type() == QEvent::MouseButtonPress) {
+    if (obj == m_bandStackIndicator) {
         bool show = !m_panStack->bandStackPanel()->isVisible();
         setBandStackPanelVisible(show);
         updateBandStackIndicator();
-        return true;
+        return;
     }
-    if (obj == m_tgxlContainer && event->type() == QEvent::MouseButtonPress) {
+    if (obj == m_tgxlContainer) {
         auto& t = m_radioModel.tunerModel();
         // Cycle: OPERATE → BYPASS → STANDBY → OPERATE
         if (t.isOperate() && !t.isBypass())
@@ -901,29 +924,26 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
             t.setBypass(false);
             t.setOperate(true);
         }
-        return true;
+        return;
     }
-    if (obj == m_pgxlContainer && event->type() == QEvent::MouseButtonPress) {
+    if (obj == m_pgxlContainer) {
         // Simple toggle: OPERATE ↔ STANDBY (PGXL has no BYPASS)
         m_radioModel.amplifier().setOperate(!m_radioModel.amplifier().operate());
-        return true;
+        return;
     }
-    if (obj == m_txIndicator && event->type() == QEvent::MouseButtonPress) {
-        auto* mouseEvent = static_cast<QMouseEvent*>(event);
-        if (mouseEvent->button() == Qt::LeftButton)
-            cancelTransmitFromIndicator();
-        return true;
+    if (obj == m_txIndicator) {
+        cancelTransmitFromIndicator();
+        return;
     }
-    if (obj == m_addPanLabel && event->type() == QEvent::MouseButtonPress) {
+    if (obj == m_addPanLabel) {
         showAddPanadapterDialog();
-        return true;
+        return;
     }
-    if (obj == m_dvkIndicator && event->type() == QEvent::MouseButtonPress) {
-        if (!m_dvkIndicator->isEnabled()) return true;
+    if (obj == m_dvkIndicator) {
+        if (!m_dvkIndicator->isEnabled()) return;
         toggleVoiceKeyerPanel();
-        return true;
+        return;
     }
-    return QMainWindow::eventFilter(obj, event);
 }
 
 // Shared by the status-bar +PAN affordance and Tools ▸ Add Panadapter… so both
