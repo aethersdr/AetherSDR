@@ -4817,6 +4817,29 @@ QWidget* RadioSetupDialog::buildAudioTab()
     });
     connect(hpMute, &QPushButton::toggled, m_model, &RadioModel::setHeadphoneMute);
 
+    // Dimmed, never hidden, on a radio with no headphone output: the title
+    // bar's predicate (MixerControlAvailability.h) and its slider's reason.
+    auto applyHeadphoneAvailability = [this, hpLabel, hpSlider, hpValue, hpMute] {
+        const bool available = AetherSDR::headphoneControlsAvailable(
+            m_model->isConnected(), m_model->hasCommandPlane());
+        const QString reason = available
+            ? QString()
+            : QStringLiteral("Unavailable: this radio has no headphone output. "
+                             "Its audio plays on this computer; set its level "
+                             "with the master volume slider.");
+        for (QWidget* w : {static_cast<QWidget*>(hpLabel),
+                           static_cast<QWidget*>(hpSlider),
+                           static_cast<QWidget*>(hpValue),
+                           static_cast<QWidget*>(hpMute)}) {
+            w->setEnabled(available);
+            w->setToolTip(reason);
+            w->setAccessibleDescription(reason);
+        }
+    };
+    applyHeadphoneAvailability();
+    connect(m_model, &RadioModel::connectionStateChanged, hpMute,
+            applyHeadphoneAvailability);
+
     // Front Speaker (mute only) — only on M-suffix models with built-in speaker
     // M-suffix models have a built-in front speaker (6400M, 6600M, 8400M, 8600M, AU-510M, AU-520M)
     bool hasFrontSpeaker = m_model->model().endsWith("M", Qt::CaseInsensitive);
