@@ -26,6 +26,10 @@ inline constexpr std::uint16_t kMetisPort = 1024;
 // reference rather than 0.0000001 dB adrift.
 inline constexpr int kFullScale = (1 << 23) - 1;
 
+// Host-generated CW and TUNE carriers use the same full-scale normalized IQ
+// amplitude. The TX drive register remains the operator's power control.
+inline constexpr double kHl2CarrierAmplitude = 1.0;
+
 // EP2 (host->radio) and EP6 (radio->host) are both 1032-byte USB-over-IP frames:
 //   EF FE 01 <ep> | seq[4] | frame512 | frame512
 // each 512-byte frame: 7F 7F 7F | C0 C1 C2 C3 C4 | 504 payload bytes

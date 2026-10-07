@@ -338,7 +338,6 @@ void PhoneCwApplet::buildPhonePanel()
     // operators use to verify clean keying envelope shape.
     m_alcGaugePhone = new HGauge(kAlcGaugeFloorDbfs, 0.0f, -3.0f, "ALC", "dBFS",
         {{-20, "-20"}, {-15, "-15"}, {-10, "-10"}, {-5, "-5"}, {0, "0"}});
-    m_alcGaugePhone->setFillFromRight(true);  // empty at -20, fills leftward toward 0
     m_alcGaugePhone->setValueImmediate(kAlcGaugeFloorDbfs);
     m_alcGaugePhone->setAccessibleName("ALC gauge (Phone)");
     m_alcGaugePhone->setAccessibleDescription("Automatic level control — post-software-ALC SSB peak (dBFS)");
@@ -653,7 +652,6 @@ void PhoneCwApplet::buildCwPanel()
     // window by default (-20…0 dBFS); capabilities select native percent.
     m_alcGaugeCw = new HGauge(kAlcGaugeFloorDbfs, 0.0f, -3.0f, "ALC", "dBFS",
         {{-20, "-20"}, {-15, "-15"}, {-10, "-10"}, {-5, "-5"}, {0, "0"}});
-    m_alcGaugeCw->setFillFromRight(true);  // empty at -20, fills leftward toward 0
     m_alcGaugeCw->setValueImmediate(kAlcGaugeFloorDbfs);
     m_alcGaugeCw->setAccessibleName("ALC gauge (CW)");
     m_alcGaugeCw->setAccessibleDescription("Automatic level control — post-software-ALC SSB peak (dBFS)");

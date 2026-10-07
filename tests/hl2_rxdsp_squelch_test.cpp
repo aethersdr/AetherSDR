@@ -148,7 +148,8 @@ int main(int argc, char** argv)
     dsp.setSquelch(true, 90, 0.0);
     check(dsp.appliedSquelch()->applications == before,
           "nothing is pushed at the old channel while a rebuild runs");
-    auto result = Hl2RxDsp::buildChannel(fast, false, 50);
+    auto result = Hl2RxDsp::buildChannel(fast, WdspChannel::NoiseBlanker::Off, 50,
+                                         WdspChannel::NoiseBlankerFill::Zero);
     check(result.channel != nullptr, "background build");
     check(dsp.installRebuiltChannel(std::move(result)), "install");
     check(applied(dsp, Stage::Fm, true, std::pow(10.0, -1.8)),

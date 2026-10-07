@@ -237,8 +237,8 @@ std::array<std::uint8_t, kSpeakerPacketBytes> buildSpeakerAudio(
     std::uint32_t sequence, std::span<const std::int16_t> interleavedLr) noexcept;
 
 // ---- High Priority Status, radio -> PC (spec p.47) ----
-// 60 bytes: 4-byte BE sequence, then hardware state. Only the two speaker-stream
-// fields are decoded. Arrives on the same socket as DDC0 IQ (see
+// 60 bytes: 4-byte BE sequence, then hardware state. The two speaker-stream
+// fields and the supply rail are decoded. Arrives on the same socket as DDC0 IQ (see
 // kDdc0DefaultPort); parseDdcFrame() rejects it.
 inline constexpr std::size_t kHighPriorityStatusBytes = 60;
 
@@ -251,6 +251,18 @@ struct HighPriorityStatus {
     // "2 samples per location" doubling never reaches the send, OutHighPriority.c).
     // Not comparable to kSpeakerFramesPerPacket; use as a trend.
     std::uint16_t speakerFifoLevel = 0;
+    // Bytes 49-50: the PA supply rail, AIN6, in RAW 12-bit ADC counts (0-4095).
+    // The only analog field here a receive-only client could use -- the other
+    // five (forward/reverse/exciter power, two user analogs) are transmit-side
+    // or unassigned, and there is NO TEMPERATURE anywhere in the payload, which
+    // is why no client can populate a PA temperature readout for this radio.
+    //
+    // DECODED BUT NOT YET CONSUMED, deliberately: no known scale turns these
+    // counts into volts on this radio. A G2 bench read a 13.8 V rail as ~40 V
+    // through the 5 V-reference scale (2.9x high), and the 3.3 V board's scale
+    // is only 1.5x from that, so neither board explains it. The raw count is
+    // what an operator calibration against a meter will need.
+    std::uint16_t supplyVoltageRaw = 0;
 };
 
 // Decode, or nullopt if this is not a status packet. Bounds-checked

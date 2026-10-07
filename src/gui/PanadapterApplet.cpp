@@ -822,6 +822,19 @@ int PanadapterApplet::pitchRangeHigh() const
     return m_pitchRangeSlider ? m_pitchRangeSlider->high() : 700;
 }
 
+QString PanadapterApplet::cwCostColor(float cost)
+{
+    // Color by confidence: lower cost = higher confidence
+    //   < 0.15  green   (high confidence)
+    //   < 0.35  yellow  (medium)
+    //   < 0.60  orange  (meh)
+    //   >= 0.60 red     (low confidence)
+    if (cost < 0.15f) { return QStringLiteral("#00ff88"); }
+    if (cost < 0.35f) { return QStringLiteral("#e0e040"); }
+    if (cost < 0.60f) { return QStringLiteral("#ff9020"); }
+    return QStringLiteral("#ff4040");
+}
+
 void PanadapterApplet::appendCwText(const QString& text, float cost)
 {
 #ifdef HAVE_DEEPFIST
@@ -835,16 +848,7 @@ void PanadapterApplet::appendCwText(const QString& text, float cost)
     QString clean = text;
     clean.replace('\n', ' ');
 
-    // Color by confidence: lower cost = higher confidence
-    //   < 0.15  green   (high confidence)
-    //   < 0.35  yellow  (medium)
-    //   < 0.60  orange  (meh)
-    //   >= 0.60 red     (low confidence)
-    QString color;
-    if (cost < 0.15f)      color = "#00ff88";
-    else if (cost < 0.35f) color = "#e0e040";
-    else if (cost < 0.60f) color = "#ff9020";
-    else                   color = "#ff4040";
+    const QString color = cwCostColor(cost);
 
     m_cwText->moveCursor(QTextCursor::End);
     // Switching back from TX → RX inserts a separator space so the [TX]
@@ -911,7 +915,27 @@ void PanadapterApplet::appendUnscoredCwText(const QString& text)
     QTextCursor cursor = m_cwText->textCursor();
     cursor.insertText(clean, format);
     m_cwText->moveCursor(QTextCursor::End);
-    // DeepFist does not provide a calibrated ggmorse confidence score.
+    // For a backend that reports no per-letter score.
+}
+void PanadapterApplet::appendColoredCwText(const QString& text, float cost)
+{
+    // The cost is 1 - the backend's own per-letter posterior. It picks the
+    // color (ggmorse's four bands, as theme tokens) and is never compared
+    // with the Sens threshold, which is on ggmorse's scale.
+    QString clean = text;
+    clean.replace('\n', ' ');
+    m_cwText->moveCursor(QTextCursor::End);
+    if (m_lastCwTextSource == CwTextSource::Tx) { m_cwText->insertPlainText(" "); }
+    m_lastCwTextSource = CwTextSource::Rx;
+    QTextCharFormat format;
+    const QString band = cost < 0.15f ? QStringLiteral("high")
+        : cost < 0.35f ? QStringLiteral("medium")
+        : cost < 0.60f ? QStringLiteral("fair") : QStringLiteral("low");
+    format.setForeground(AetherSDR::ThemeManager::instance().color(
+        m_cwText, QStringLiteral("color.cw.confidence.") + band));
+    QTextCursor cursor = m_cwText->textCursor();
+    cursor.insertText(clean, format);
+    m_cwText->moveCursor(QTextCursor::End);
 }
 #endif
 

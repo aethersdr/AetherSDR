@@ -35,6 +35,9 @@ signals:
     // Backends without a calibrated cost use unscoredTextDecoded instead.
     void textDecoded(const QString& text, float cost);
     void unscoredTextDecoded(const QString& text);
+    // Colored by cost on the same scale, never hidden by the Sens threshold:
+    // the cost ranks this backend's own letters, it is not ggmorse's cost.
+    void coloredTextDecoded(const QString& text, float cost);
     void statsUpdated(float pitch, float speed);
     void statusChanged();
 };
@@ -70,6 +73,7 @@ public:
 signals:
     void textDecoded(const QString& text, float cost);
     void unscoredTextDecoded(const QString& text);
+    void coloredTextDecoded(const QString& text, float cost);
     void statsUpdated(float pitch, float speed);
     void statusChanged();
 private:

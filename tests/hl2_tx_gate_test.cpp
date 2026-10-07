@@ -237,6 +237,13 @@ static bool payloadNonZero(const std::array<std::uint8_t, kUsbPacketSize>& pkt)
     return false;
 }
 
+static std::array<std::uint8_t, 4> firstIqSample(
+    const std::array<std::uint8_t, kUsbPacketSize>& pkt)
+{
+    const std::uint8_t* pay = pkt.data() + 8 + 8;
+    return {pay[4], pay[5], pay[6], pay[7]};
+}
+
 // THE WIRE SIGNATURE OF A STARVATION, as opposed to the counter's report of
 // one. A short block leaves a run of zeroed samples at the TAIL of the EP2
 // packet -- which is exactly the shape FIND-23 measured on the captures (48,
@@ -913,10 +920,25 @@ int main(int argc, char** argv)
 
         cw.setMox(true, authority.operation);
         bool sawCarrier = false;
+        std::array<std::uint8_t, kUsbPacketSize> cwPlateauPkt{};
         for (int i = 0; i < 5; ++i) {
-            sawCarrier |= payloadNonZero(cw.buildNextControlPacket());
+            cwPlateauPkt = cw.buildNextControlPacket();
+            sawCarrier |= payloadNonZero(cwPlateauPkt);
         }
         check(sawCarrier, "key-down emits the raised-cosine CW carrier under MOX");
+
+        // After the 5 ms rise, the CW plateau must match TUNE's full-scale
+        // zero-offset carrier on the wire. Compare encoded IQ rather than a
+        // magic byte so this protects the invariant without depending on
+        // floating-point rounding details.
+        TxTestAuthority tuneAuthority;
+        MetisClient tune;
+        tune.enableTransmit(true);
+        tune.setMox(true, tuneAuthority.operation);
+        tune.setTxTestTone(0.0, kHl2CarrierAmplitude, tuneAuthority.operation);
+        const auto tunePkt = tune.buildNextControlPacket();
+        check(firstIqSample(cwPlateauPkt) == firstIqSample(tunePkt),
+              "CW plateau matches TUNE carrier amplitude (#5610)");
 
         // Voice queued behind manual PTT must not leak between CW elements.
         std::vector<std::complex<float>> voice(512, std::complex<float>(0.4f, -0.4f));

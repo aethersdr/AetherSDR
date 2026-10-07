@@ -11,6 +11,11 @@ set.
 > add-a-token path for new UX — live in
 > [`docs/style/theme-style-guide.md`](../style/theme-style-guide.md).
 > This file is the migration inventory behind them.
+>
+> The **visual canon** — where these tokens' values are heading, the
+> `color.canon.*` group, and the order surfaces migrate in — is
+> [`docs/style/aethersdr-style-guide.md`](../style/aethersdr-style-guide.md)
+> (RFC #6226).
 
 ## Methodology
 
@@ -134,6 +139,18 @@ themes can preserve contrast without bypassing the theme system.
 | `color.meter.peak` | `#e6f0fa` | peak-hold tick |
 | `color.meter.gainReduction` | `#f2c14e` | GR meter bar |
 | `color.meter.bar.fill` | `#405060` | meter bar inactive fill (~31 refs) |
+
+### CW decoder confidence (specialised — paint code only)
+
+DeepFist letters, by cost = 1 − the model's posterior (< 0.15 / < 0.35 / < 0.60 / else). Light values are at least
+4.5 : 1 on `color.background.0`.
+
+| Token | Dark | Light |
+|---|---|---|
+| `color.cw.confidence.high` | `#00ff88` | `{color.green.500}` (`#1a8040`) |
+| `color.cw.confidence.medium` | `#e0e040` | `#737313` |
+| `color.cw.confidence.fair` | `#ff9020` | `#ae5700` |
+| `color.cw.confidence.low` | `#ff4040` | `{color.red.500}` (`#c02020`) |
 
 ### Spectrum / waterfall (specialised — paint code only)
 

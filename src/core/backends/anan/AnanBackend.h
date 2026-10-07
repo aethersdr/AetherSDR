@@ -58,7 +58,8 @@ public:
     void setSliceMode(int sliceId, const QString& mode) override;
     void setSliceFilter(int sliceId, int lowHz, int highHz) override;
     void setSliceAgc(int sliceId, const QString& mode, int thresholdDb) override;
-    void setSliceNoiseBlanker(int sliceId, bool on, int level) override;
+    void setSliceNoiseBlanker(int sliceId, AetherSDR::NoiseBlankerKind kind,
+                              int level, AetherSDR::NoiseBlankerFill fill) override;
     ReceiveDispatch requestSliceDsp(int sliceId, const SliceDspRequest& request) override;
     ReceiveDispatch requestSliceAudio(int sliceId, const SliceAudioRequest& request) override;
 
@@ -92,6 +93,11 @@ public:
     void setKeying(bool key, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {}) override;
     void invokeExtension(const QString& ns, const QString& verb,
                          quint64 requestId, const QVariant& arg = {}) override;
+    // Transport snapshot for the status bar's Network field and Network
+    // Diagnostics. Synchronous, and reads only the cache onLinkCounters() keeps
+    // on this thread -- never the client's own counters, which belong to the
+    // I/O thread. The push half is onLinkCounters(), on the client's tick.
+    [[nodiscard]] LinkStats linkStats() const override;
 
     // ---- pure-function pieces, exposed static for testability ----
     // (matches the WdspChannel/Hl2RxDsp precedent of exposing normally-
@@ -107,6 +113,18 @@ public:
     // Per-mode default passband, operator-facing (marker-relative) Hz.
     // Vocabulary matches modeFromString's.
     [[nodiscard]] static std::pair<int, int> defaultPassbandForMode(const QString& mode) noexcept;
+
+    // Every spelling modeFromString() maps, case-insensitive. The restore needs
+    // it because modeFromString() falls back to USB instead of failing.
+    [[nodiscard]] static bool isKnownModeString(const QString& mode) noexcept;
+
+    // Where a session starts when this radio has no remembered state.
+    static constexpr double kFirstConnectFrequencyHz = 14'175'000.0;
+    static constexpr const char* kFirstConnectMode = "USB";
+
+    // Bounded by the DDS encoding, not a band edge: tuningMinHz/MaxHz are not
+    // reported. Refused, never clamped, at or above Nyquist.
+    [[nodiscard]] static bool isRestorableFrequencyHz(double hz) noexcept;
 
     // The CW BFO offset (HERMES.md §5: "CW has no BFO unless you build one").
     // +pitchHz for CWU/CW, -pitchHz for CWL, 0 for every other mode -- zero
@@ -132,12 +150,26 @@ public:
     [[nodiscard]] int agcModeForTest() const noexcept { return m_agcMode; }
     [[nodiscard]] double agcCeilingDbForTest() const noexcept { return m_agcCeilingDb; }
     [[nodiscard]] int attenuationDbForTest() const noexcept { return m_attenuationDb; }
-    [[nodiscard]] bool noiseBlankerOnForTest() const noexcept { return m_nbOn; }
+    [[nodiscard]] bool noiseBlankerOnForTest() const noexcept
+    {
+        return m_nbKind != AetherSDR::NoiseBlankerKind::Off;
+    }
+    [[nodiscard]] AetherSDR::NoiseBlankerKind noiseBlankerKindForTest() const noexcept
+    {
+        return m_nbKind;
+    }
     [[nodiscard]] int noiseBlankerLevelForTest() const noexcept { return m_nbLevel; }
+    [[nodiscard]] AetherSDR::NoiseBlankerFill noiseBlankerFillForTest() const noexcept
+    {
+        return m_nbFill;
+    }
     // The radio's own output level/mute as the lineout seam last set them. Same
-    // *ForTest convention as the four above: read-only, not part of the seam.
+    // *ForTest convention as the accessors above: read-only, not part of the seam.
     [[nodiscard]] int lineoutGainPercentForTest() const noexcept { return m_lineoutGainPercent; }
     [[nodiscard]] bool lineoutMutedForTest() const noexcept { return m_lineoutMuted; }
+    // What applyRestoredState() accepted; connectRadio() consumes it behind a socket.
+    [[nodiscard]] double restoredFrequencyHzForTest() const noexcept { return m_restoredFreqHz; }
+    [[nodiscard]] QString restoredModeForTest() const { return m_restoredMode; }
     // Drives the S-meter path as AnanRxDsp::meterUpdate would, so the
     // smoothing and publish tick can be tested without a live radio.
     void feedMeterForTest(float dbfs) { onDspMeter(dbfs); }
@@ -149,6 +181,7 @@ public:
 
 private:
     friend class AnanNoiseBlankerTestAccess;
+    friend class AnanLinkStatsTestAccess;
     void beginDspSetup();
     void finishDspSetup(quint64 generation, bool ok, const QString& error);
     // The "restart P2Client with m_pendingParams, then retune" half of what
@@ -183,6 +216,21 @@ private:
     // Declares SLC:LEVEL to the meter seam; on every connect, before the
     // first reading can arrive. See its definition.
     void defineMeters();
+    // One client snapshot -> one LinkStats push. The FIXED cadence is the
+    // client's timer, not ours: this runs on whatever the client published, and
+    // it must keep arriving after the radio goes quiet, because "nothing came
+    // this second" is the observation the heartbeat's alarm path waits for
+    // (IRadioBackend::LinkStats).
+    void onLinkCounters(const P2Client::LinkCounters& counters);
+    // The last snapshot the client published, cached on THIS thread so the
+    // synchronous linkStats() getter never reads the I/O thread's counters --
+    // see P2Client::LinkCounters for why that read would be a race.
+    P2Client::LinkCounters m_linkCounters;
+    bool m_linkCountersSeen = false;
+    // rxBytes at the previous snapshot, for LinkStats::alive -- a link that is
+    // bound and counting but has gone quiet must read as dead, which a
+    // cumulative total alone cannot say.
+    quint64 m_lastSnapshotRxBytes = 0;
     // One WDSP S-meter reading (dBFS) -> dBm, smoothed, published on a tick.
     void onDspMeter(float dbfs);
     // The same smoother Hl2Backend publishes through, so the two receivers'
@@ -302,6 +350,10 @@ private:
     int m_filterHighHz = 2900;
     int m_cwPitchHz = 600;
     double m_sliceFreqHz = 0.0;
+    // What applyRestoredState() accepted, held for connectRadio(); kept apart
+    // from the live m_sliceFreqHz/m_mode. Zero/empty: nothing restored.
+    double m_restoredFreqHz = 0.0;
+    QString m_restoredMode;
     // Live AGC state, so beginRateChange() rebuilds the DSP config from CURRENT
     // state rather than connect-time defaults (which these match).
     int m_agcMode = 3;
@@ -313,8 +365,9 @@ private:
     // reconnect. emitSliceState() also publishes the pair when a different
     // radio gets a fresh slice, keeping its NB button in agreement with the
     // retained setting. Defaults match AnanRxDsp::Config's.
-    bool m_nbOn = false;
+    AetherSDR::NoiseBlankerKind m_nbKind = AetherSDR::NoiseBlankerKind::Off;
     int m_nbLevel = 50;
+    AetherSDR::NoiseBlankerFill m_nbFill = AetherSDR::kDefaultNoiseBlankerFill;
 
     // The receiver audio stage as last set; emitSliceState() publishes these.
     // Retained across rate changes and reconnects (like the blanker, unlike AGC).
@@ -329,8 +382,10 @@ private:
     // rather than reaching into m_pendingParams on every block.
     bool m_speakerAudioEnabled = false;
     // The radio's own output level/mute. 50 matches RadioModel's default, which it
-    // resets to on every radio change; the two halves must agree.
-    int m_lineoutGainPercent = 50;
+    // resets to on every radio change; the two halves must agree. Also the
+    // level applyRestoredState() returns to for a radio with none stored.
+    static constexpr int kDefaultLineoutGainPercent = 50;
+    int m_lineoutGainPercent = kDefaultLineoutGainPercent;
     bool m_lineoutMuted = false;
     // One resampler PER CHANNEL, never processStereoToStereo(), which averages to
     // mono and would undo the balance (as the engine's own output resampler,

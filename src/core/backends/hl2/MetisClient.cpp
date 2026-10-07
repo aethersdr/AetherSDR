@@ -5,6 +5,7 @@
 #include <QElapsedTimer>
 #include <QThread>
 #include <QNetworkDatagram>
+#include <QNetworkInterface>
 #include <QUdpSocket>
 #include <QtGlobal>
 
@@ -18,6 +19,7 @@
 #include <mutex>
 #include <span>
 #include <vector>
+#include <memory>
 
 #ifdef Q_OS_WIN
 // winsock2.h pulls in windows.h, whose min/max function-like macros otherwise
@@ -205,34 +207,67 @@ QList<MetisClient::Discovered> MetisClient::discover(int timeoutMs, const QHostA
                                                      quint16 port)
 {
     QList<Discovered> found;
-    QUdpSocket sock;
-    if (!sock.bind(QHostAddress::AnyIPv4, 0))
-        return found;
-    enableBroadcast(sock);
-
     const auto req = discoveryRequest();
-    sock.writeDatagram(reinterpret_cast<const char*>(req.data()), static_cast<qint64>(req.size()),
-                       broadcast, port);
+
+    // Thetis walks the active NICs instead of relying on a wildcard bind.
+    // That matters for HL2 link-local addresses on Windows, where the route
+    // chosen for 255.255.255.255 (or even for a unicast probe) can be a
+    // different adapter from the one carrying the radio.
+    std::vector<QHostAddress> localAddresses;
+    for (const QNetworkInterface& iface : QNetworkInterface::allInterfaces()) {
+        const auto flags = iface.flags();
+        if (!flags.testFlag(QNetworkInterface::IsUp)
+            || !flags.testFlag(QNetworkInterface::IsRunning)
+            || flags.testFlag(QNetworkInterface::IsLoopBack)) {
+            continue;
+        }
+        for (const QNetworkAddressEntry& entry : iface.addressEntries()) {
+            if (entry.ip().protocol() == QAbstractSocket::IPv4Protocol)
+                localAddresses.push_back(entry.ip());
+        }
+    }
+    if (localAddresses.empty())
+        localAddresses.push_back(QHostAddress::AnyIPv4);
+
+    std::vector<std::unique_ptr<QUdpSocket>> sockets;
+    sockets.reserve(localAddresses.size());
+    for (const QHostAddress& local : localAddresses) {
+        auto socket = std::make_unique<QUdpSocket>();
+        if (!socket->bind(local, 0))
+            continue;
+        enableBroadcast(*socket);
+        socket->writeDatagram(reinterpret_cast<const char*>(req.data()),
+                              static_cast<qint64>(req.size()), broadcast, port);
+        sockets.push_back(std::move(socket));
+    }
+    if (sockets.empty())
+        return found;
 
     QList<QByteArray> seenMacs;   // dedup by MAC
     QElapsedTimer timer;
     timer.start();
     while (timer.elapsed() < timeoutMs) {
-        const int remaining = std::max(1, timeoutMs - static_cast<int>(timer.elapsed()));
-        if (!sock.waitForReadyRead(remaining))
-            continue;
-        while (sock.hasPendingDatagrams()) {
-            const QNetworkDatagram dg = sock.receiveDatagram();
-            const auto reply = parseDiscoveryReply(asBytes(dg.data()));
-            if (!reply)
-                continue;
-            const QByteArray mac(reinterpret_cast<const char*>(reply->mac.data()),
-                                 static_cast<qsizetype>(reply->mac.size()));
-            if (seenMacs.contains(mac))
-                continue;
-            seenMacs.append(mac);
-            found.append(Discovered{*reply, dg.senderAddress()});
+        bool received = false;
+        for (const auto& socket : sockets) {
+            if (!socket->hasPendingDatagrams())
+                socket->waitForReadyRead(
+                    std::max(1, timeoutMs - static_cast<int>(timer.elapsed())));
+            while (socket->hasPendingDatagrams()) {
+                received = true;
+                const QNetworkDatagram dg = socket->receiveDatagram();
+                const auto reply = parseDiscoveryReply(asBytes(dg.data()));
+                if (!reply)
+                    continue;
+                const QByteArray mac(reinterpret_cast<const char*>(reply->mac.data()),
+                                     static_cast<qsizetype>(reply->mac.size()));
+                if (seenMacs.contains(mac))
+                    continue;
+                seenMacs.append(mac);
+                found.append(Discovered{*reply, dg.senderAddress(), socket->localAddress()});
+            }
         }
+        if (!received && timer.elapsed() >= timeoutMs)
+            break;
     }
     return found;
 }
@@ -328,7 +363,9 @@ bool MetisClient::start(const Params& params)
     m_ioBoardTxFreqHz = 0;
 
     m_socket = new QUdpSocket(this);
-    if (!m_socket->bind(QHostAddress::AnyIPv4, 0)) {
+    const QHostAddress bindAddress = params.localAddress.isNull()
+        ? QHostAddress::AnyIPv4 : params.localAddress;
+    if (!m_socket->bind(bindAddress, 0)) {
         m_socket->deleteLater();
         m_socket = nullptr;
         return false;
@@ -1455,8 +1492,8 @@ std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket()
         // piHPSDR's local/PC keyer likewise transmits host-generated IQ under
         // MOX. Five milliseconds is long enough to suppress key clicks while
         // staying short against a 40 ms dit at 30 WPM. A raised cosine has zero
-        // slope at both ends, unlike a linear edge.
-        constexpr double kCwCarrierAmplitude = 0.5;
+        // slope at both ends, unlike a linear edge. The plateau is full scale,
+        // matching TUNE; the TX drive register remains the power control.
         constexpr int kCwRampSamples = 5 * kEp2AudioRateHz / 1000;
         constexpr double kRampStep = 1.0 / static_cast<double>(kCwRampSamples);
         constexpr double kPi = 3.14159265358979323846;
@@ -1468,7 +1505,7 @@ std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket()
                 m_cwEnvelope = std::max(0.0, m_cwEnvelope - kRampStep);
             }
             const double shaped = 0.5 - 0.5 * std::cos(kPi * m_cwEnvelope);
-            sample = {static_cast<float>(kCwCarrierAmplitude * shaped), 0.0f};
+            sample = {static_cast<float>(kHl2CarrierAmplitude * shaped), 0.0f};
         }
         ep2WriteTxIq(pkt, block);
     } else if (keyed && m_toneAmp > 0.0) {

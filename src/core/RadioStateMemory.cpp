@@ -66,6 +66,7 @@ RestoredRadioState load(const RadioSettingsScope& scope,
     if (has(caps, Domain::Tuning)) {
         state.rfFrequencyHz = doc.value(QStringLiteral("rfFrequencyHz")).toDouble();
         state.mode = doc.value(QStringLiteral("mode")).toString();
+        state.tuningStepHz = doc.value(QStringLiteral("tuningStepHz")).toInt();
     }
     if (has(caps, Domain::Passband)) {
         state.filterLowHz = doc.value(QStringLiteral("filterLowHz")).toDouble();
@@ -102,6 +103,12 @@ RestoredRadioState load(const RadioSettingsScope& scope,
         state.cwlEnabled = doc.value(QStringLiteral("cwlEnabled")).toInt(-1);
         state.monGainCw = doc.value(QStringLiteral("monGainCw")).toInt(-1);
         state.monPanCw = doc.value(QStringLiteral("monPanCw")).toInt(-1);
+    }
+    if (has(caps, Domain::ReceiveOutputLevel)) {
+        // Out of range reads as absent, not clamped: the backend's default
+        // applies rather than a level nobody chose.
+        const int pct = doc.value(QStringLiteral("receiveOutputLevelPct")).toInt(-1);
+        state.receiveOutputLevelPct = (pct >= 0 && pct <= 100) ? pct : -1;
     }
 
     // The extension is gated per domain too: only a declared domain's
@@ -162,6 +169,9 @@ bool store(const RadioSettingsScope& scope, const RadioCapabilities& caps,
         }
         if (!state.mode.isEmpty()) {
             doc.insert(QStringLiteral("mode"), state.mode);
+        }
+        if (state.tuningStepHz > 0) {
+            doc.insert(QStringLiteral("tuningStepHz"), state.tuningStepHz);
         }
     }
     if (has(caps, Domain::Passband)
@@ -228,6 +238,10 @@ bool store(const RadioSettingsScope& scope, const RadioCapabilities& caps,
         if (state.monPanCw >= 0) {
             doc.insert(QStringLiteral("monPanCw"), state.monPanCw);
         }
+    }
+    // >= 0, so a level of 0 IS written — the sentinel is -1.
+    if (has(caps, Domain::ReceiveOutputLevel) && state.receiveOutputLevelPct >= 0) {
+        doc.insert(QStringLiteral("receiveOutputLevelPct"), state.receiveOutputLevelPct);
     }
 
     // Extension: same per-domain sub-object gate as load().

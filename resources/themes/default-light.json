@@ -138,6 +138,12 @@
             "bloom": { "blue": "#140b6bc4", "teal": "#0f12a08c" },
             "grid":     "#0a1a2a3a"
           },
+          "cw": {
+            "confidence.high":   "{color.green.500}",
+            "confidence.medium": "#737313",
+            "confidence.fair":   "#ae5700",
+            "confidence.low":    "{color.red.500}"
+          },
           "meter": {
             "crst":   "{color.red.500}",
             "rms":    "{color.blue.500}",

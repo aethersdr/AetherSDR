@@ -34,6 +34,7 @@
 #include "RadioSetupDialog.h"
 #include "GpsLocationDialog.h"
 #include "RxApplet.h"
+#include "WfmApplet.h"
 #include "AmpApplet.h"
 #include "AcomApplet.h"
 #include "SpeApplet.h"
@@ -7421,6 +7422,7 @@ void MainWindow::wireMeters()
     m_appletPanel->txApplet()->setRadioModel(&m_radioModel);
     m_appletPanel->txApplet()->setBandPlanManager(m_bandPlanMgr);
     m_appletPanel->rxApplet()->setRadioModel(&m_radioModel);
+    m_appletPanel->wfmApplet()->setRadioModel(&m_radioModel);
     m_appletPanel->rxApplet()->setKiwiSdrManager(m_kiwiSdrManager);
     m_appletPanel->rxApplet()->setTransmitModel(&m_radioModel.transmitModel());
     connect(m_appletPanel->rxApplet(), &RxApplet::kiwiRxAntennaSelected,

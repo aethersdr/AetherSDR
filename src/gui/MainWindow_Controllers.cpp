@@ -560,13 +560,13 @@ void MainWindow::handleFlexControlButton(int button, int action,
         }
     } else if (actionName == "VolumeUp") {
         // Route to master volume to match SmartSDR behavior (#2921).
-        const int current = AppSettings::instance().value("MasterVolume", "100").toInt();
+        const int current = m_radioModel.activeOutputVolumePercent();
         const int next = std::clamp(current + 5, 0, 100);
         if (m_titleBar)
             m_titleBar->setMasterVolume(next);
         applyMasterVolume(next);
     } else if (actionName == "VolumeDown") {
-        const int current = AppSettings::instance().value("MasterVolume", "100").toInt();
+        const int current = m_radioModel.activeOutputVolumePercent();
         const int next = std::clamp(current - 5, 0, 100);
         if (m_titleBar)
             m_titleBar->setMasterVolume(next);
@@ -1103,12 +1103,12 @@ void MainWindow::dispatchHidAction(const QString& actionName,
         }
     } else if (actionName == "VolumeUp") {
         const int next = std::clamp(
-            AppSettings::instance().value("MasterVolume","100").toInt() + 5, 0, 100);
+            m_radioModel.activeOutputVolumePercent() + 5, 0, 100);
         if (m_titleBar) m_titleBar->setMasterVolume(next);
         applyMasterVolume(next);
     } else if (actionName == "VolumeDown") {
         const int next = std::clamp(
-            AppSettings::instance().value("MasterVolume","100").toInt() - 5, 0, 100);
+            m_radioModel.activeOutputVolumePercent() - 5, 0, 100);
         if (m_titleBar) m_titleBar->setMasterVolume(next);
         applyMasterVolume(next);
     } else if (actionName == "SplitMonitorTx") {
@@ -1520,7 +1520,7 @@ void MainWindow::applyFlexControlWheelAction(const QString& actionId, int steps)
         // "WheelMasterAf" is the legacy action name from #2888; accepted
         // here for back-compat with saved FlexControl bindings made
         // before the #2986 consolidation but routes to the same code path.
-        const int current = AppSettings::instance().value("MasterVolume", "100").toInt();
+        const int current = m_radioModel.activeOutputVolumePercent();
         const int next = std::clamp(current + steps * 2, 0, 100);
         if (m_titleBar)
             m_titleBar->setMasterVolume(next);
@@ -2331,7 +2331,7 @@ void MainWindow::registerMidiParams()
                                             m_radioModel.hasCommandPlane(),
                                             pcAudioEnabledSetting())) {
                 return std::clamp(
-                    AppSettings::instance().value("MasterVolume", "100").toInt(), 0, 100);
+                    m_radioModel.activeOutputVolumePercent(), 0, 100);
             }
             return m_radioModel.lineoutGain();
         });
@@ -2362,6 +2362,37 @@ void MainWindow::registerMidiParams()
         [this](float v) { m_radioModel.setTransmit(v > 0.5f); },
         [this]() -> float { return m_radioModel.transmitModel().isTransmitting() ? 1 : 0; });
 
+#ifdef HAVE_RADE
+    // RADE is a modem switched on a DIGU/DIGL slice, not a radio mode, so it
+    // has no place in the mode triggers below (#6024). This calls the same
+    // activateRADE()/deactivateRADE() the dropdown's RADE entry reaches, scoped
+    // to the active slice: a press there while RADE runs on another slice moves
+    // it (activateRADE() tears the old one down first) instead of stopping RADE
+    // on a slice the operator is not looking at.
+    reg("global.rade", "RADE Modem", "Global", P::Toggle, 0, 1,
+        [this](float v) {
+            auto* s = activeSlice();
+            if (!s) { return; }
+            if (v > 0.5f) {
+                // Same pre-check as the FreeDV Reporter path: without DAX audio
+                // activateRADE() declines with a modal, which a controller
+                // press must not raise.
+                if (!m_radioModel.panStream()) {
+                    qCWarning(lcRade) << "global.rade ignored: RADE needs DAX audio,"
+                                      << "which this radio does not provide";
+                    return;
+                }
+                activateRADE(s->sliceId());
+            } else if (s->sliceId() == m_radeSliceId) {
+                deactivateRADE();
+            }
+        },
+        [this]() -> float {
+            const auto* s = activeSlice();
+            return (s && s->sliceId() == m_radeSliceId) ? 1 : 0;
+        });
+#endif
+
     // Through the model, not sendCommand: the raw string only ever reached a
     // Flex, so this MIDI binding silently did nothing on any other radio.
     reg("global.tnfEnable", "TNF Global", "Global", P::Toggle, 0, 1,
@@ -2378,9 +2409,7 @@ void MainWindow::registerMidiParams()
     };
 
     // ── Mode triggers (mirror Mode/* keyboard shortcuts) ───────────────
-    const QStringList modes = filterUnavailableDigitalVoiceModes(
-        {"USB", "LSB", "CW", "CWL", "AM", "SAM", "FM", "NFM",
-         "DFM", "DSTR", "DIGU", "DIGL", "RTTY"});
+    const QStringList modes = modeActionModes();
     for (const QString& m : modes) {
         const QString idShort = QString("mode_%1").arg(m.toLower());
         const QString idMidi  = QString("global.mode%1").arg(m);
@@ -2449,7 +2478,8 @@ void MainWindow::registerMidiParams()
     // ── Mode Up / Down (cycle through the mode list above) ───────────
     auto cycleMode = [this, fireShortcut, modes](int direction) {
         auto* s = activeSlice();
-        const QString next = nextCycledMode(modes, s ? s->mode() : QString(), direction);
+        const QString next = nextCycledMode(modes, s ? s->mode() : QString(), direction,
+                                            s ? s->modeList() : QStringList());
         if (next.isEmpty()) {
             return;
         }

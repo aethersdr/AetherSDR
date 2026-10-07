@@ -390,6 +390,10 @@ private slots:
     void applyMasterVolume(int pct);
     void syncTitleBarOutput();
 
+    // A deliberate operator step change from the STEP buttons or the cycle
+    // shortcuts. Radio-driven syncs must not come here; see the connect site.
+    void applyOperatorTuningStep(int stepHz);
+
 private:
     enum class TuneIntent {
         IncrementalTune,
@@ -1290,6 +1294,7 @@ private:
     void cwRxModelAction();
     void refreshCwRxStatus();
     void appendUnscoredCwText(const QString& text);
+    void appendColoredCwText(const QString& text, float cost);
     void refreshCwRxBackend();
 #endif
     CwRxModel         m_cwDecoder;
@@ -1761,6 +1766,13 @@ private:
     QTimer* m_cpuTimer{nullptr};
     QLabel* m_paTempLabel{nullptr};
     QLabel* m_supplyVoltLabel{nullptr};
+    // The container holding the two labels above. Held so the whole stack can
+    // come down when BOTH its rows are withdrawn: reserveTelemetryStack() pins
+    // its minimum width, so hiding only the children would leave a reserved
+    // empty gap between two separators. The separator after it hides with it,
+    // or the two would sit back to back.
+    QWidget* m_paStack{nullptr};
+    QLabel*  m_paSeparator{nullptr};
     QLabel* m_networkLabel{nullptr};
     QTimer m_networkTooltipRefreshTimer;
     QTimer m_perfHeartbeatTimer;

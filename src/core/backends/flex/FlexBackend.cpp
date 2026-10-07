@@ -198,6 +198,7 @@ void FlexBackend::setRadioReportedCapacity(int maxSlices, int maxPanadapters)
 RadioCapabilities FlexBackend::capabilities() const
 {
     RadioCapabilities caps;
+    caps.broadcastFmReceive = std::nullopt;
     // FlexLib 4.2.18 Slice.Freq delegates range refusal to firmware; its old
     // bounds are commented out. Do not guess coverage (including transverters).
     caps.sliceFrequencyControl = {SliceFrequencyControl::Authority::Radio, 0, 0};
@@ -507,6 +508,12 @@ ReceiveDispatch FlexBackend::requestSliceDsp(int sliceId, const SliceDspRequest&
     case SliceDspRequest::Feature::Anfl: key = QStringLiteral("lms_anf"); break;
     case SliceDspRequest::Feature::Anft: key = QStringLiteral("anft"); break;
     case SliceDspRequest::Feature::Mn: return ReceiveDispatch::Unsupported;
+    }
+    // The blanker fill belongs to a host-side blanker; a Flex has no command
+    // for it. (A change of blanker arrives as Enabled, which a Flex reads as
+    // its one blanker on or off.)
+    if (request.field == SliceDspRequest::Field::Fill) {
+        return ReceiveDispatch::Unsupported;
     }
     if (request.field == SliceDspRequest::Field::Level) {
         if (request.feature == SliceDspRequest::Feature::Rnn

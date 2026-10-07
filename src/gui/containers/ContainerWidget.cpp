@@ -136,10 +136,31 @@ void ContainerWidget::setContainerVisible(bool visible)
     emit visibilityChanged(visible);
 }
 
+void ContainerWidget::setVisible(bool visible)
+{
+    m_requestedVisible = visible;
+    QWidget::setVisible(visible && (!m_presentationManaged || m_visible)
+        && (m_presentationAvailable || isFloating()));
+}
+
+void ContainerWidget::setPresentationAvailable(bool available)
+{
+    if (m_presentationManaged && available == m_presentationAvailable) { return; }
+    m_presentationManaged = true;
+    m_presentationAvailable = available;
+    // Bypass the override: suppressing presentation must not become a new
+    // explicit hide request. Ancestor hide/show similarly leaves intent alone.
+    QWidget::setVisible(m_visible && m_requestedVisible && (available || isFloating()));
+    emit presentationAvailabilityChanged(available);
+}
+
 void ContainerWidget::setDockMode(DockMode mode)
 {
     if (mode == m_dockMode) return;
     m_dockMode = mode;
+    if (!m_presentationAvailable) {
+        QWidget::setVisible(m_visible && m_requestedVisible && isFloating());
+    }
     if (m_titleBar) {
         // Order matters: setFloatingState() repaints the docked/floating
         // visuals, and setCanvasState() overrides them only when the new

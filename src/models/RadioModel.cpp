@@ -464,6 +464,9 @@ void RadioModel::persistOperatingState(bool force)
             RadioCapabilities::ClientSettingsDomain::Cw)) {
         captureClientOwnedCwState(state);
     }
+    if (m_clientStepHz > 0 && clientOwnsSliceStep()) {
+        state.tuningStepHz = m_clientStepHz;
+    }
     if (!m_backend->storeOperatingState(settingsScope(), state).has_value()) {
         RadioStateMemory::store(settingsScope(), caps, state);
     }
@@ -540,6 +543,25 @@ void RadioModel::restoreClientOwnedCwState(const RestoredRadioState& state)
     delta.monPanCw =
         rangedOrDefault(state.monPanCw, -1, 0, 100, 50, "sidetone pan");
     m_transmitModel.applyChanges(delta);
+}
+
+bool RadioModel::clientOwnsSliceStep() const
+{
+    return m_backend && !hasCommandPlane()
+        && m_backend->capabilities().clientSettingsDomains.testFlag(
+            RadioCapabilities::ClientSettingsDomain::Tuning);
+}
+
+void RadioModel::restoreClientOwnedStep(const RestoredRadioState& state)
+{
+    // Refused, not clamped, outside 1 Hz..1 MHz. Seeded into each slice as it
+    // is created; with nothing stored the slice keeps its own default.
+    const int hz = state.tuningStepHz;
+    if (hz >= 1 && hz <= 1'000'000) {
+        m_clientStepHz = hz;
+    } else if (hz != 0) {
+        qWarning() << "RadioModel: dropping invalid restored tuning step" << hz;
+    }
 }
 
 void RadioModel::flushPendingOperatingState()
@@ -640,6 +662,7 @@ void RadioModel::handRestoredStateToBackend()
         return;
     }
     m_backend->configureSettingsScope(settingsScope(), m_lastInfo.serialIdentity);
+    m_clientStepHz = 0;   // never carry radio A's step onto radio B
     const RadioCapabilities caps = m_backend->capabilities();
     if (!RadioStateMemory::shouldEngage(caps)) {
         return;
@@ -657,6 +680,18 @@ void RadioModel::handRestoredStateToBackend()
             RadioCapabilities::ClientSettingsDomain::Cw)) {
         restoreClientOwnedCwState(state);
     }
+    if (clientOwnsSliceStep()) {
+        restoreClientOwnedStep(state);
+    }
+    // The model's copy of the restored level, which the title-bar slider shows
+    // with PC Audio off (#6124); applyRestoredState() below sets the backend's.
+    // Not setLineoutGain(), which would push it down a second time.
+    if (caps.clientSettingsDomains.testFlag(
+            RadioCapabilities::ClientSettingsDomain::ReceiveOutputLevel)
+        && state.receiveOutputLevelPct >= 0) {
+        m_lineoutGain = state.receiveOutputLevelPct;
+        emit audioOutputChanged();
+    }
     // UNCONDITIONALLY — an empty state is the reset that stops a same-family
     // backend reuse leaking radio A's maps and live members into radio B
     // ("this radio has no memory" is information, not a no-op).
@@ -664,13 +699,26 @@ void RadioModel::handRestoredStateToBackend()
 }
 
 
-// Family-specific connect parameters, namespaced by family in `params` (Icom:
-// username from settings, password from the keychain session cache).
-// Synchronous: this runs on the connect path, including the auto-reconnect
-// timer, so IcomCredentials' process-lifetime cache must already be primed by
-// the connect dialog; see its header.
-static void populateFamilyParams(RadioConnectRequest& req, const QString& family)
+// Family-specific connect parameters.
+//
+// The neutral RadioConnectRequest carries host/port/serial; anything a family
+// needs beyond that rides in `params`, namespaced by family. Icom is the first
+// family that cannot connect without a credential, so this is where the
+// username (settings) and password (keychain session cache) are attached.
+//
+// SYNCHRONOUS by necessity: this runs on the connect path, including from the
+// auto-reconnect timer, and a keychain read is async. IcomCredentials keeps a
+// process-lifetime session cache primed by the connect dialog precisely so this
+// call cannot block on the keyring — see its header.
+static void populateFamilyParams(RadioConnectRequest& req, const QString& family,
+                                 const QHostAddress& sessionBindAddress = {})
 {
+    // The probe's winning local address is transport metadata, not a family
+    // parameter. Keep it neutral so each backend can use the route without
+    // adding a family-string branch above the backend seam.
+    if (sessionBindAddress.protocol() == QAbstractSocket::IPv4Protocol)
+        req.localBindAddress = sessionBindAddress;
+
     // The DDC0 rate and ADC options are connect-time preferences selected in
     // ConnectionPanel's ANAN-only manual-connect rows. Operating state such as
     // frequency is deliberately absent until this backend participates in the
@@ -1647,9 +1695,21 @@ void RadioModel::wireBackendReceiverState()
                 m_backend->setSliceXitOffset(s->sliceId(), hz);
             });
 
+            // Tuning capture of the client-owned step, whatever moved it.
+            connect(s, &SliceModel::stepChanged, this, [this](int hz) {
+                if (hz > 0 && hz != m_clientStepHz && clientOwnsSliceStep()) {
+                    m_clientStepHz = hz;
+                    scheduleOperatingStateSave();
+                }
+            });
+
             wireSliceObservationsAndTxIntentToBackend(s);
             m_slices.append(s);
             s->applyChanges(mapped);
+            // Before sliceAdded, so the UI never shows the default first.
+            if (m_clientStepHz > 0 && clientOwnsSliceStep()) {
+                s->applyRecalledStepHz(m_clientStepHz);
+            }
             m_meterModel.setActiveTxSlice(activeTxSliceNum());
             refreshTxPowerLimit();
             emit sliceAdded(s);
@@ -2003,12 +2063,15 @@ RadioModel::RadioModel(QObject* parent)
     qRegisterMetaType<TxCoordinator::StopRequest>();
     qRegisterMetaType<TxStopEvidence>();
     qRegisterMetaType<SliceDelta>();
+    qRegisterMetaType<WfmStereoStatus>();
+    qRegisterMetaType<WfmReceptionDiagnostics>();
     qRegisterMetaType<SliceTuneRequest>();
     qRegisterMetaType<SliceFilterRequest>();
     qRegisterMetaType<SliceAgcRequest>();
     qRegisterMetaType<SliceDspRequest>();
     qRegisterMetaType<SliceAudioRequest>();
     qRegisterMetaType<SliceSquelchRequest>();
+    qRegisterMetaType<SliceWfmRequest>();
     qRegisterMetaType<TransmitDelta>();
     qRegisterMetaType<MeterDef>();
     qRegisterMetaType<RadioDelta>();
@@ -2591,7 +2654,7 @@ RadioModel::RadioModel(QObject* parent)
                 // The RECONNECT path needs these too. Populating only the
                 // initial connect gives a session that authenticates once and
                 // then fails every automatic retry.
-                populateFamilyParams(req, m_family);
+                populateFamilyParams(req, m_family, m_lastInfo.sessionBindAddress);
                 handRestoredStateToBackend();
                 m_backend->connectRadio(req);
             }
@@ -3714,7 +3777,7 @@ void RadioModel::connectToRadio(const RadioInfo& info)
         req.port   = info.port;
         req.serial = info.serial;
         req.serialIdentity = info.serialIdentity;
-        populateFamilyParams(req, info.family);
+        populateFamilyParams(req, info.family, info.sessionBindAddress);
         handRestoredStateToBackend();
         m_backend->connectRadio(req);
     }
@@ -4008,7 +4071,7 @@ bool RadioModel::wakeIcomRadio(int modelId, int address, QString* error)
         request.host = selectedRadio.address.toString();
         request.port = selectedRadio.port;
         request.serial = selectedRadio.serial;
-        populateFamilyParams(request, m_family);
+        populateFamilyParams(request, m_family, selectedRadio.sessionBindAddress);
         request.params.insert(QStringLiteral("icom.wakeOnConnect"), false);
         request.params.insert(QStringLiteral("icom.waitingForWake"), true);
         request.params.insert(QStringLiteral("icom.civAddress"), address);
@@ -4223,11 +4286,12 @@ void RadioModel::recallBandStackReceiveDsp(SliceModel* slice,
         return;
     }
     // Under KiwiSDR external receive the AGC setters address the KiwiSDR AGC
-    // (its own dB range), but the bookmark holds the RADIO's AGC, saved from
-    // agcMode()/agcThreshold(). The caller then sends the AGC as wire text.
+    // (its own dB range), but the bookmark holds the RADIO's AGC: only in that
+    // case the caller sends it as wire text. Otherwise the slice setters below
+    // are the one route, through the receive-intent dispatcher to the backend.
     if (!slice->externalReceiveReplacementActive()) {
         if (!entry.agcMode.isEmpty() && entry.agcMode != slice->agcMode()) {
-            slice->setAgcMode(entry.agcMode);
+            slice->recallAgcMode(entry.agcMode);
         }
         if (entry.agcThreshold != slice->agcThreshold()) {
             slice->setAgcThreshold(entry.agcThreshold);
@@ -6946,6 +7010,10 @@ void RadioModel::stageSessionModelsForReconnect()
         if (slice) {
             slice->invalidateSquelchState();
             slice->invalidateFrequencyObservation();
+            SliceDelta unavailableWfm;
+            unavailableWfm.wfmStereoStatus = WfmStereoStatus::Unavailable;
+            unavailableWfm.wfmReceptionDiagnostics = WfmReceptionDiagnostics{};
+            slice->applyChanges(unavailableWfm);
             m_staleSlices.insert(slice->sliceId(), slice);
         }
     }
@@ -9843,6 +9911,10 @@ void RadioModel::wireSliceReceiveIntentsToBackend(SliceModel* s)
             this, &RadioModel::dispatchSliceDsp, type);
     connect(s, &SliceModel::receiveAudioRequested,
             this, &RadioModel::dispatchSliceAudio, type);
+    connect(s, &SliceModel::wfmForceMonoRequested,
+            this, &RadioModel::dispatchSliceWfmForceMono, type);
+    connect(s, &SliceModel::wfmDeemphasisRequested,
+            this, &RadioModel::dispatchSliceWfmDeemphasis, type);
     connect(s, &SliceModel::receiveSquelchRequested,
             this, &RadioModel::dispatchSliceSquelch, type);
     connect(s, &SliceModel::receiveRxAntennaRequested,
@@ -9932,6 +10004,31 @@ void RadioModel::dispatchSliceAudio(const SliceAudioRequest& request)
         reportReceiveDispatch(m_backend->requestSliceAudio(source->sliceId(), request),
                               QStringLiteral("receive audio"),
                               request.origin == SliceAudioRequest::Origin::Operator);
+    }
+}
+
+void RadioModel::dispatchSliceWfmForceMono(bool forceMono)
+{
+    dispatchSliceWfm({SliceWfmRequest::Field::ForceMono, int(forceMono)});
+}
+
+void RadioModel::dispatchSliceWfmDeemphasis(int microseconds)
+{
+    dispatchSliceWfm({SliceWfmRequest::Field::Deemphasis, microseconds});
+}
+
+void RadioModel::dispatchSliceWfm(const SliceWfmRequest& request)
+{
+    if (SliceModel* source = receiveCommandSource()) {
+        const std::optional<BroadcastFmReceive> feature = m_backend->capabilities().broadcastFmReceive;
+        const bool available = request.valid() && feature
+            && source->mode() == QLatin1String("WFM")
+            && !source->externalReceiveReplacementActive()
+            && (request.field == SliceWfmRequest::Field::ForceMono
+                ? feature->forceMonoControl : feature->deemphasisUs.contains(request.value));
+        reportReceiveDispatch(available
+            ? m_backend->requestSliceWfm(source->sliceId(), request)
+            : ReceiveDispatch::Unsupported, QStringLiteral("broadcast FM"));
     }
 }
 
@@ -11801,6 +11898,19 @@ void RadioModel::applyRadioChanges(const RadioDelta& d)
     if (changed) emit infoChanged();
 }
 
+int RadioModel::activeOutputVolumePercent() const
+{
+    // No capability gate: applyMasterVolume() drives setLineoutGain() on every
+    // family with PC Audio off, so that is the level being heard.
+    const bool pcAudio =
+        AppSettings::instance().value("PcAudioEnabled", "True").toString() == "True";
+    if (!pcAudio) {
+        return m_lineoutGain;
+    }
+    return AppSettings::instance()
+        .value(QStringLiteral("MasterVolume"), QStringLiteral("100")).toInt();
+}
+
 void RadioModel::setLineoutGain(int v)
 {
     v = std::clamp(v, 0, 100);
@@ -13058,7 +13168,13 @@ QJsonObject RadioModel::troubleshootingSnapshot() const
         QJsonObject dsp;
         dsp["agc_mode"] = sliceModel->agcMode();
         dsp["agc_threshold"] = sliceModel->agcThreshold();
-        dsp["nb"] = QJsonObject{{"enabled", sliceModel->nbOn()}, {"level", sliceModel->nbLevel()}};
+        // "kind" and "fill" alongside "enabled", not instead of it: this
+        // snapshot is read by scripts and by the resource dump, and the bool is
+        // the field they already read.
+        dsp["nb"] = QJsonObject{{"enabled", sliceModel->nbOn()},
+                                {"kind", static_cast<int>(sliceModel->nbKind())},
+                                {"fill", static_cast<int>(sliceModel->nbFill())},
+                                {"level", sliceModel->nbLevel()}};
         dsp["nr"] = QJsonObject{{"enabled", sliceModel->nrOn()}, {"level", sliceModel->nrLevel()}};
         dsp["anf"] = QJsonObject{{"enabled", sliceModel->anfOn()}, {"level", sliceModel->anfLevel()}};
         dsp["lms_nr"] = QJsonObject{{"enabled", sliceModel->nrlOn()}, {"level", sliceModel->nrlLevel()}};

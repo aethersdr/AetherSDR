@@ -6,6 +6,8 @@
 #include "gui/Theme.h"
 
 #include <QApplication>
+#include <QBrush>
+#include <QGradient>
 #include <QHoverEvent>
 #include <QLabel>
 #include <QSlider>
@@ -1447,6 +1449,28 @@ int main(int argc, char** argv)
                                  qPrintable(theme), pr.fg, pr.bg, r, pr.floor);
                 }
                 EXPECT_TRUE(r >= pr.floor);
+            }
+
+            // The primary action: onAccent text on every brand-gradient
+            // stop. Dark clears the 4.5:1 text floor. Light does not (white
+            // measures 3.7 and 3.3:1 on the middle and teal stops), which
+            // RFC #6226 accepts for About's OK pending a brand-gradient
+            // ruling (#6239); 3.0:1 records that, so neither side drifts
+            // without this test noticing.
+            const QBrush gradient = tm.brush(QStringLiteral("color.brand.gradient"),
+                                             QRect(0, 0, 100, 10));
+            EXPECT_TRUE(gradient.gradient() != nullptr);
+            if (const QGradient* g = gradient.gradient()) {
+                const double floor = theme == QStringLiteral("Default Dark") ? 4.5 : 3.0;
+                EXPECT_TRUE(g->stops().size() >= 2);
+                for (const QGradientStop& stop : g->stops()) {
+                    const double r = contrast(canon("onAccent"), stop.second);
+                    if (r < floor) {
+                        std::fprintf(stderr, "  %s: canon.onAccent on gradient stop %s is %.2f:1, floor %.1f:1\n",
+                                     qPrintable(theme), qPrintable(stop.second.name()), r, floor);
+                    }
+                    EXPECT_TRUE(r >= floor);
+                }
             }
         }
         EXPECT_TRUE(tm.setActiveTheme("Default Dark"));

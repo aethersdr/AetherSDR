@@ -63,6 +63,12 @@ struct ReceiveAudioControl {
     SliceFrequencyControl::Authority authority{SliceFrequencyControl::Authority::Unknown};
     // Both gain (0..100) and mute must act on the shared slice's RX audio.
 };
+// Broadcast FM controls are available only when their typed request is supported.
+struct BroadcastFmReceive {
+    QVector<int> deemphasisUs;
+    bool forceMonoControl = false;
+    bool receptionDiagnostics = false;
+};
 struct ReceivePanRangeControl {
     SliceFrequencyControl::Authority authority{SliceFrequencyControl::Authority::Unknown};
     qint64 minimumHz{0};
@@ -321,6 +327,7 @@ struct RadioCapabilities {
     std::optional<ReceiveModeControl> receiveModeControl;
     std::optional<ReceiveFilterControl> receiveFilterControl;
     std::optional<ReceiveAudioControl> receiveAudioControl;
+    std::optional<BroadcastFmReceive> broadcastFmReceive;
     std::optional<ReceivePanRangeControl> receivePanCenterControl;
     std::optional<ReceivePanRangeControl> receivePanBandwidthControl;
     // Engaged when the radio can deliver a wideband converter view; see the
@@ -466,7 +473,7 @@ struct RadioCapabilities {
     // (Flex) never has radio-owned values re-asserted (#2465/#4126/#4261). Restore
     // never keys transmit: TxSetpoints covers drive setpoints only.
     enum class ClientSettingsDomain : quint32 {
-        Tuning      = 1u << 0,  // RF frequency + demod mode
+        Tuning      = 1u << 0,  // RF frequency + demod mode (+ step, no command plane)
         Passband    = 1u << 1,  // filter low/high edges
         SpanRate    = 1u << 2,  // span / IQ sample rate
         RfGain      = 1u << 3,  // LNA/preamp gain (per band — see RFC PR 3)
@@ -475,6 +482,9 @@ struct RadioCapabilities {
         Agc         = 1u << 6,  // AGC mode + threshold (client-side WDSP AGC)
         Cw          = 1u << 7,  // client-side keyer/sidetone setpoints; never keying
         RtlSlices   = 1u << 8,  // accepted RTL capture and stable receiver documents
+        // The radio's own receive output level. Not the PC sink's, which is
+        // app-global and stays the flat MasterVolume key.
+        ReceiveOutputLevel = 1u << 9,
     };
     Q_DECLARE_FLAGS(ClientSettingsDomains, ClientSettingsDomain)
     ClientSettingsDomains clientSettingsDomains;   // default: empty — restore nothing
@@ -576,6 +586,28 @@ struct RadioCapabilities {
     // PA temperature is unavailable; the capability is deliberately separate
     // because some radios define PACURRENT with an unusable/clipped range.
     bool hasPaCurrentTelemetry = false;
+
+    // A PROTOCOL audit of the PA telemetry the radio's wire format can carry at
+    // all, as distinct from the three flags above, which report what a session
+    // has so far RECEIVED. Engaged means the payload was read field by field and
+    // the absence is a property of the protocol rather than of a radio that has
+    // simply not sent one yet -- so a readout may be WITHDRAWN instead of left
+    // printing a placeholder that can never resolve.
+    //
+    // std::nullopt (the default) means NOT AUDITED, and every consumer keeps its
+    // historical presentation. That is deliberate: it holds a family that has
+    // made no such claim at its existing behaviour instead of quietly
+    // reclassifying a default `false` above as "proven absent" -- the
+    // all-defaults-false trap check_capability_records.py was written to stop.
+    //
+    // A record rather than another bool because RadioCapabilities is AT its
+    // frozen boolean count and shrink-only (#5262 M2); per-feature records are
+    // the sanctioned shape for a new capability.
+    struct PaTelemetryAudit {
+        // The protocol defines no PA temperature field anywhere in its payload.
+        bool temperatureAbsent = false;
+    };
+    std::optional<PaTelemetryAudit> paTelemetryAudit;
 
     // The radio reports main-fan speed as live telemetry. False means the
     // Radio Vitals applet omits the fan gauge instead of presenting an
