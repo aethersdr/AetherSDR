@@ -248,10 +248,10 @@ void SpeConnection::connectSerial(const QString& portName)
     // which is why RTS (and only RTS) must stay low at rest.
     // The original 1K-FA is the exception: there DTR held high IS the power
     // switch, so both lines go low at once. AetherSDR never raises DTR on
-    // connect — only ON does. Caveat, reasoned from the kernels and not yet
-    // measured: Linux and macOS assert DTR inside open() itself, so the line
-    // can be high for the moment until this call; whether such a blip starts
-    // a 1K-FA is an open bench question (design note §12).
+    // connect — only ON does. Caveat: the OS asserts DTR inside open()
+    // itself — measured on macOS at 3.5–4.5 ms until this call, Linux
+    // expected alike; whether such a blip starts a 1K-FA is an open bench
+    // question (design note §12).
     if (isLegacy()) {
         m_serialPort->setDataTerminalReady(false);
         m_serialPort->setRequestToSend(false);
