@@ -3482,7 +3482,8 @@ int MainWindow::cloneDisplaySettingsToAllPans(PanadapterApplet* source)
             // Re-sending them once per target would be the same write N times.
             dst->setWfColorGain(src->wfColorGain());
             dst->setWfBlackLevel(src->wfBlackLevel());
-            m_radioModel.setWaterfallColorGainFor(targetPanId, src->wfColorGain());
+            m_radioModel.setWaterfallColorGainFor(targetPanId, src->wfColorGain(),
+                                                 dst->wfAutoBlack());
             m_radioModel.setWaterfallBlackLevelFor(targetPanId, src->wfBlackLevel());
             // Clamp like the slider path does (applyWaterfallLineDuration).
             // The source value came through the same clamp today, so this is
@@ -4705,7 +4706,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             return;
         }
         sw->setWfColorGain(v);
-        m_radioModel.setWaterfallColorGainFor(applet->panId(), v);
+        m_radioModel.setWaterfallColorGainFor(applet->panId(), v, sw->wfAutoBlack());
     });
     connect(menu, &SpectrumOverlayMenu::wfBlackLevelChanged,
             this, [this, applet, sw](int v) {
@@ -4969,7 +4970,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         // not reset the rate. (#4470)
         if (!m_adaptiveThrottleActive)
             m_radioModel.requestPanDisplayRates(applet->panId(), 25, 100);
-        m_radioModel.setWaterfallColorGainFor(applet->panId(), 50);
+        m_radioModel.setWaterfallColorGainFor(applet->panId(), 50, sw->wfAutoBlack());
         m_radioModel.setWaterfallBlackLevelFor(applet->panId(), 15);
 
         // Persist all defaults to AppSettings

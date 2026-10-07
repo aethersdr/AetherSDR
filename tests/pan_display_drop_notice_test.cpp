@@ -14,7 +14,8 @@
 //      - no command plane, absolute-dB rows (HL2): none of the four raises
 //        commandDropped;
 //      - no command plane, rows the manual black point cannot reach (Icom):
-//        WtrFall Gain raises nothing, Black Level still raises commandDropped;
+//        Black Level still raises commandDropped, and so does WtrFall Gain
+//        with manual black; with auto black WtrFall Gain raises nothing;
 //      - a command plane (Flex): the wire text, compared whole, per pan.
 //    "The client applied it" is checked on the renderer's own law
 //    (WaterfallLevelMap::level) with the row unit taken from the same
@@ -161,18 +162,24 @@ QString blackText(const QString& wf, int v)
 constexpr float kRowLowDb = -160.0f;
 constexpr float kRowHighDb = -20.0f;
 
-// WtrFall Gain moves the drawn level of a sample above the black point.
-bool clientDrawsColourGain(const RadioCapabilities& caps)
+// WtrFall Gain moves the drawn level of some sample of a dB row, with auto
+// black (the client's estimate, on the row's own axis) or the default manual
+// black level.
+bool clientDrawsColourGain(const RadioCapabilities& caps, bool autoBlack)
 {
     WaterfallLevelMap::Params params;
-    params.autoBlack = true;
+    params.autoBlack = autoBlack;
     params.autoBlackThresh = -130.0f;
     params.rowsAreAbsoluteDb = caps.panBinsAbsolute();
-    params.colorGain = 20;
-    const float low = WaterfallLevelMap::level(-110.0f, params);
-    params.colorGain = 80;
-    const float high = WaterfallLevelMap::level(-110.0f, params);
-    return low != high;
+    for (float db = kRowLowDb; db <= kRowHighDb; db += 5.0f) {
+        params.colorGain = 20;
+        const float low = WaterfallLevelMap::level(db, params);
+        params.colorGain = 80;
+        if (low != WaterfallLevelMap::level(db, params)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 // Manual Black Level: some slider position lights a dB row and some position
@@ -211,19 +218,24 @@ void absoluteRowsWithoutCommandPlane()
           "hl2: control, raw gain text is still reported as dropped");
     f.dropped.clear();
 
-    check(clientDrawsColourGain(caps), "hl2 WtrFall Gain: the client draws it");
-    f.radio.setWaterfallColorGainFor(f.pan0, 60);
-    check(f.dropped.isEmpty(), "hl2 WtrFall Gain: no commandDropped");
+    check(clientDrawsColourGain(caps, true), "hl2 WtrFall Gain, auto black: the client draws it");
+    f.radio.setWaterfallColorGainFor(f.pan0, 60, true);
+    check(f.dropped.isEmpty(), "hl2 WtrFall Gain, auto black: no commandDropped");
+
+    check(clientDrawsColourGain(caps, false),
+          "hl2 WtrFall Gain, manual black: the client draws it");
+    f.radio.setWaterfallColorGainFor(f.pan0, 61, false);
+    check(f.dropped.isEmpty(), "hl2 WtrFall Gain, manual black: no commandDropped");
 
     check(clientDrawsManualBlackLevel(caps), "hl2 Black Level: the client draws it");
     f.radio.setWaterfallBlackLevelFor(f.pan0, 40);
     check(f.dropped.isEmpty(), "hl2 Black Level: no commandDropped");
 
-    f.radio.setWaterfallColorGainFor(f.pan1, 70);
+    f.radio.setWaterfallColorGainFor(f.pan1, 70, false);
     f.radio.setWaterfallBlackLevelFor(f.pan1, 30);
     check(f.dropped.isEmpty(), "hl2 Clone to all Pans: no commandDropped for the target pan");
 
-    f.radio.setWaterfallColorGainFor(f.pan0, 50);
+    f.radio.setWaterfallColorGainFor(f.pan0, 50, true);
     f.radio.setWaterfallBlackLevelFor(f.pan0, 15);
     check(f.dropped.isEmpty(), "hl2 Reset display defaults: no commandDropped");
 }
@@ -238,9 +250,17 @@ void otherRowsWithoutCommandPlane()
     check(!caps.panBinsAbsolute(), "icom: premise, the backend declares no absolute-dB rows");
     check(f.hasTwoPanes(), "icom: premise, two panes with distinct waterfall ids");
 
-    check(clientDrawsColourGain(caps), "icom WtrFall Gain: the client draws it");
-    f.radio.setWaterfallColorGainFor(f.pan0, 60);
-    check(f.dropped.isEmpty(), "icom WtrFall Gain: no commandDropped");
+    check(clientDrawsColourGain(caps, true), "icom WtrFall Gain, auto black: the client draws it");
+    f.radio.setWaterfallColorGainFor(f.pan0, 60, true);
+    check(f.dropped.isEmpty(), "icom WtrFall Gain, auto black: no commandDropped");
+
+    // With manual black every row is black, so the gain does nothing either.
+    check(!clientDrawsColourGain(caps, false),
+          "icom WtrFall Gain, manual black: no gain changes a dB row");
+    f.radio.setWaterfallColorGainFor(f.pan0, 61, false);
+    check(f.dropped == QStringList{gainText(f.wf0, 61)},
+          "icom WtrFall Gain, manual black: still raises commandDropped");
+    f.dropped.clear();
 
     // The negative: a slider that changes nothing keeps its notice.
     check(!clientDrawsManualBlackLevel(caps),
@@ -250,13 +270,19 @@ void otherRowsWithoutCommandPlane()
           "icom Black Level: a slider that does nothing still raises commandDropped");
 
     f.dropped.clear();
-    f.radio.setWaterfallColorGainFor(f.pan1, 70);
+    f.radio.setWaterfallColorGainFor(f.pan1, 70, true);
     f.radio.setWaterfallBlackLevelFor(f.pan1, 30);
     check(f.dropped == QStringList{blackText(f.wf1, 30)},
-          "icom Clone to all Pans: only the black level is reported");
+          "icom Clone to all Pans, auto black: only the black level is reported");
 
     f.dropped.clear();
-    f.radio.setWaterfallColorGainFor(f.pan0, 50);
+    f.radio.setWaterfallColorGainFor(f.pan1, 71, false);
+    f.radio.setWaterfallBlackLevelFor(f.pan1, 31);
+    check(f.dropped == QStringList{gainText(f.wf1, 71), blackText(f.wf1, 31)},
+          "icom Clone to all Pans, manual black: gain and black are reported");
+
+    f.dropped.clear();
+    f.radio.setWaterfallColorGainFor(f.pan0, 50, true);
     f.radio.setWaterfallBlackLevelFor(f.pan0, 15);
     check(f.dropped == QStringList{blackText(f.wf0, 15)},
           "icom Reset display defaults: only the black level is reported");
@@ -280,7 +306,7 @@ void commandPlaneGetsTheWireText()
         TxOperationIntegrationTestAccess::useCommandPlane(f.radio, connection, written);
         check(f.radio.hasCommandPlane(), "flex: premise, a command plane");
 
-        f.radio.setWaterfallColorGainFor(f.pan0, 60);
+        f.radio.setWaterfallColorGainFor(f.pan0, 60, false);
         check(written == QStringList{gainText(f.wf0, 60)},
               QStringLiteral("flex WtrFall Gain: wire text (got: %1)")
                   .arg(written.join(QStringLiteral(" | "))));
@@ -293,14 +319,14 @@ void commandPlaneGetsTheWireText()
 
         // The target pan, not the active one, and gain before black.
         written.clear();
-        f.radio.setWaterfallColorGainFor(f.pan1, 70);
+        f.radio.setWaterfallColorGainFor(f.pan1, 70, true);
         f.radio.setWaterfallBlackLevelFor(f.pan1, 30);
         check(written == QStringList{gainText(f.wf1, 70), blackText(f.wf1, 30)},
               QStringLiteral("flex Clone to all Pans: wire text for the target pan (got: %1)")
                   .arg(written.join(QStringLiteral(" | "))));
 
         written.clear();
-        f.radio.setWaterfallColorGainFor(f.pan0, 50);
+        f.radio.setWaterfallColorGainFor(f.pan0, 50, true);
         f.radio.setWaterfallBlackLevelFor(f.pan0, 15);
         check(written == QStringList{gainText(f.wf0, 50), blackText(f.wf0, 15)},
               QStringLiteral("flex Reset display defaults: wire text (got: %1)")
@@ -316,7 +342,7 @@ void commandPlaneGetsTheWireText()
                   .arg(written.join(QStringLiteral(" | "))));
 
         written.clear();
-        f.radio.setWaterfallColorGainFor(QStringLiteral("0xdeadbeef"), 60);
+        f.radio.setWaterfallColorGainFor(QStringLiteral("0xdeadbeef"), 60, false);
         f.radio.setWaterfallBlackLevelFor(QString(), 40);
         check(written.isEmpty(), "flex: an unknown or empty pan id writes nothing");
         check(f.dropped.isEmpty(), "flex: nothing is dropped");
@@ -397,7 +423,8 @@ void guiSitesCallTheModelSetters()
               region(code, QStringLiteral("&SpectrumOverlayMenu::wfColorGainChanged"),
                      QStringLiteral("&SpectrumOverlayMenu::wfBlackLevelChanged")),
               {QStringLiteral("sw->setWfColorGain(v);")},
-              {QStringLiteral("m_radioModel.setWaterfallColorGainFor(applet->panId(), v);")}),
+              {QStringLiteral(
+                  "m_radioModel.setWaterfallColorGainFor(applet->panId(), v, sw->wfAutoBlack());")}),
           "source WtrFall Gain: the widget is set, then the model setter is called");
 
     check(widgetThenModel(
@@ -413,7 +440,8 @@ void guiSitesCallTheModelSetters()
               {QStringLiteral("dst->setWfColorGain(src->wfColorGain());"),
                QStringLiteral("dst->setWfBlackLevel(src->wfBlackLevel());")},
               {QStringLiteral(
-                   "m_radioModel.setWaterfallColorGainFor(targetPanId, src->wfColorGain());"),
+                   "m_radioModel.setWaterfallColorGainFor(targetPanId, src->wfColorGain(),"),
+               QStringLiteral("dst->wfAutoBlack());"),
                QStringLiteral(
                    "m_radioModel.setWaterfallBlackLevelFor(targetPanId, src->wfBlackLevel());")}),
           "source Clone to all Pans: the target widget is set, then gain and black "
@@ -422,8 +450,10 @@ void guiSitesCallTheModelSetters()
     check(widgetThenModel(
               region(code, QStringLiteral("sw->setWfColorGain(50);"),
                      QStringLiteral("auto& s = AppSettings::instance();")),
-              {QStringLiteral("sw->setWfColorGain(50);"), QStringLiteral("sw->setWfBlackLevel(15);")},
-              {QStringLiteral("m_radioModel.setWaterfallColorGainFor(applet->panId(), 50);"),
+              {QStringLiteral("sw->setWfColorGain(50);"), QStringLiteral("sw->setWfBlackLevel(15);"),
+               QStringLiteral("sw->setWfAutoBlack(true);")},
+              {QStringLiteral(
+                   "m_radioModel.setWaterfallColorGainFor(applet->panId(), 50, sw->wfAutoBlack());"),
                QStringLiteral("m_radioModel.setWaterfallBlackLevelFor(applet->panId(), 15);")}),
           "source Reset display defaults: the widget is set, then gain and black "
           "go to the model setters");

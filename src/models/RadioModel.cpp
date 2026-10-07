@@ -6711,11 +6711,14 @@ void RadioModel::setWaterfallColorGain(int gain)
     sendWaterfallColorGain(m_activePanId, gain, /*reportDrop=*/false);
 }
 
-void RadioModel::setWaterfallColorGainFor(const QString& panId, int gain)
+void RadioModel::setWaterfallColorGainFor(const QString& panId, int gain, bool autoBlack)
 {
-    // The client draws colour gain on every row it renders, so without a
-    // command plane the control has already acted and there is nothing to send.
-    sendWaterfallColorGain(panId, gain, /*reportDrop=*/false);
+    // Colour gain widens the range above the black point, so the client draws
+    // it wherever the black point is in the row's unit: auto black, estimated
+    // from the row, or manual black on absolute-dB rows (WaterfallLevelMap).
+    // With manual black on any other row every row is black and gain is not.
+    const bool clientDraws = autoBlack || backendCapabilities().panBinsAbsolute();
+    sendWaterfallColorGain(panId, gain, /*reportDrop=*/!clientDraws);
 }
 
 void RadioModel::setWaterfallBlackLevel(int level)
@@ -6728,7 +6731,8 @@ void RadioModel::setWaterfallBlackLevelFor(const QString& panId, int level)
 {
     // Without a command plane the client draws the manual black point only on
     // absolute-dB rows (WaterfallLevelMap). There the control has acted; on any
-    // other row it has not, and sendCmd() reports the drop.
+    // other row it has not, and sendCmd() reports the drop. An undeclared
+    // panAmplitude reads as "not absolute", so a mistake here is a false notice.
     sendWaterfallBlackLevel(panId, level, !backendCapabilities().panBinsAbsolute());
 }
 
