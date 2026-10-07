@@ -1,6 +1,9 @@
 #include "core/backends/flex/PanadapterStream.h"
 #include "core/VitaBinCoverage.h"
 #include "gui/DbmRangeTransition.h"
+#include "models/RadioModel.h"
+#include "models/PanadapterModel.h"
+#include "TestSettingsProfile.h"
 
 #include <QCoreApplication>
 
@@ -19,7 +22,42 @@ static int g_failures = 0;
 
 int main(int argc, char** argv)
 {
+    TestSettingsProfile profile(QStringLiteral("panadapter-dbm-range"));
     QCoreApplication app(argc, argv);
+
+    {
+        RadioModel radio;
+        const QString panId = QStringLiteral("0x40000011");
+        radio.handleStatusForTest(QStringLiteral("display pan ") + panId,
+            {{"client_handle", "0x0"}, {"min_dbm", "-130"}, {"max_dbm", "-40"}});
+        radio.handleStatusForTest(QStringLiteral("display pan ") + panId,
+            {{"client_handle", "0xdeadbeef"}, {"min_dbm", "-130"}, {"max_dbm", "-40"}});
+        const PanadapterModel* foreign = radio.panadapter(panId);
+        CHECK(foreign && !foreign->ownedByClient(radio.ourClientHandle()));
+        bool replied = false;
+        CHECK(!radio.sendCmdPublic(QStringLiteral("display pan set ") + panId
+                + QStringLiteral(" min_dbm=-154 max_dbm=-40"),
+            [&](int, const QString&) { replied = true; }));
+        CHECK(!replied);
+        CHECK(!radio.sendCommand(QStringLiteral("display pan set ") + panId
+                + QStringLiteral(" min_dbm=-154 max_dbm=-40")));
+    }
+
+    int dispatches = 0;
+    int commits = 0;
+    const auto dispatch = [&]() { ++dispatches; return true; };
+    const auto commit = [&]() { ++commits; };
+    CHECK(!DbmRangeTransition::dispatchValidatedRange(
+        {-202.0f, -112.0f}, dispatch, commit));
+    CHECK(!DbmRangeTransition::dispatchValidatedRange(
+        {std::nanf(""), -40.0f}, dispatch, commit));
+    CHECK(dispatches == 0 && commits == 0);
+    CHECK(!DbmRangeTransition::dispatchValidatedRange(
+        {-135.0f, -40.0f}, []() { return false; }, commit));
+    CHECK(commits == 0);
+    CHECK(DbmRangeTransition::dispatchValidatedRange(
+        {-135.0f, -40.0f}, dispatch, commit));
+    CHECK(dispatches == 1 && commits == 1);
 
     VitaBinCoverage fragmentCoverage;
     fragmentCoverage.reset(8);
@@ -102,6 +140,34 @@ int main(int argc, char** argv)
     // PanadapterModel emits levelChanged only when the values change, so there
     // may be no second status available to repair the decoder afterward.
     DbmRangeTransition::Handshake handshake;
+    const DbmRangeTransition::Range previousRange{-80.0f, -10.0f};
+    const quint64 acceptedGeneration = handshake.arm(-104.0f, -10.0f, 500);
+    const DbmRangeTransition::HandshakeDecision acceptedReply =
+        handshake.completeReply(acceptedGeneration, true, previousRange);
+    CHECK(acceptedReply.action == DbmRangeTransition::HandshakeAction::ReconcileRadioRange);
+    CHECK(acceptedReply.range.minDbm == -104.0f && acceptedReply.range.maxDbm == -10.0f);
+    CHECK(!handshake.active());
+    CHECK(handshake.finish(acceptedGeneration).action == DbmRangeTransition::HandshakeAction::Ignore);
+    const quint64 rejectedGeneration = handshake.arm(-104.0f, -10.0f, 600);
+    const DbmRangeTransition::HandshakeDecision rejectedReply =
+        handshake.completeReply(rejectedGeneration, false, previousRange);
+    CHECK(rejectedReply.range.minDbm == -80.0f && rejectedReply.range.maxDbm == -10.0f);
+    const quint64 supersededGeneration = handshake.arm(-104.0f, -10.0f, 700);
+    const quint64 supersedingGeneration = handshake.arm(-128.0f, -10.0f, 750);
+    CHECK(handshake.completeReply(supersededGeneration, true, previousRange).action
+          == DbmRangeTransition::HandshakeAction::Ignore);
+    handshake.observeRadioRange(-130.0f, -20.0f, 800, 2000);
+    const DbmRangeTransition::HandshakeDecision reportedReply =
+        handshake.completeReply(supersedingGeneration, true, previousRange);
+    CHECK(reportedReply.range.minDbm == -128.0f && reportedReply.range.maxDbm == -10.0f);
+    const DbmRangeTransition::HandshakeDecision laterStatus =
+        handshake.observeRadioRange(-130.0f, -20.0f, 850, 2000);
+    CHECK(laterStatus.action == DbmRangeTransition::HandshakeAction::ApplyRadioRange);
+    const quint64 rejectionAfterStatus = handshake.arm(-128.0f, -10.0f, 900);
+    handshake.observeRadioRange(-130.0f, -20.0f, 920, 2000);
+    const DbmRangeTransition::HandshakeDecision rejectedAfterStatus =
+        handshake.completeReply(rejectionAfterStatus, false, previousRange);
+    CHECK(rejectedAfterStatus.range.minDbm == -130.0f && rejectedAfterStatus.range.maxDbm == -20.0f);
     const quint64 mismatchGeneration = handshake.arm(-138.0f, -95.0f, 1000);
     const DbmRangeTransition::HandshakeDecision heldMismatch =
         handshake.observeRadioRange(-130.0f, -30.0f, 1100, 2000);
@@ -250,18 +316,35 @@ int main(int argc, char** argv)
         movedFloorRange, {-123.48f, -113.48f}));
 
     // A clipped frame cannot estimate the real floor. Recovery must add
-    // headroom while preserving the radio encoder span, then verify again.
+    // lower headroom without sacrificing the existing peak ceiling.
     const DbmRangeTransition::Range clippedRecoveryRange =
         DbmRangeTransition::clippedFloorRecoveryRange(-110.5f, -15.5f);
     CHECK(std::abs(clippedRecoveryRange.minDbm - -116.5f) < 0.01f);
-    CHECK(std::abs(clippedRecoveryRange.maxDbm - -21.5f) < 0.01f);
+    CHECK(std::abs(clippedRecoveryRange.maxDbm - -15.5f) < 0.01f);
     CHECK(std::abs((clippedRecoveryRange.maxDbm
-                    - clippedRecoveryRange.minDbm) - 95.0f) < 0.01f);
+                    - clippedRecoveryRange.minDbm) - 101.0f) < 0.01f);
     const DbmRangeTransition::Range oneShotRecoveryRange =
         DbmRangeTransition::clippedFloorRecoveryRange(
             -111.0f, -16.0f, 24.0f);
     CHECK(std::abs(oneShotRecoveryRange.minDbm - -135.0f) < 0.01f);
-    CHECK(std::abs(oneShotRecoveryRange.maxDbm - -40.0f) < 0.01f);
+    CHECK(std::abs(oneShotRecoveryRange.maxDbm - -16.0f) < 0.01f);
+
+    const DbmRangeTransition::Range boundedFloor =
+        DbmRangeTransition::clippedFloorRecoveryRange(-178.0f, -88.0f, 24.0f);
+    CHECK(boundedFloor.minDbm == -180.0f && boundedFloor.maxDbm == -88.0f);
+    CHECK(!DbmRangeTransition::materiallyDifferent(boundedFloor,
+        DbmRangeTransition::clippedFloorRecoveryRange(-180.0f, -88.0f, 24.0f)));
+    const DbmRangeTransition::Range expandedPeak =
+        DbmRangeTransition::clippedPeakRecoveryRange(-178.0f, -88.0f, 24.0f);
+    CHECK(expandedPeak.minDbm == -178.0f && expandedPeak.maxDbm == -64.0f);
+    const DbmRangeTransition::Range spanLimited =
+        DbmRangeTransition::clippedPeakRecoveryRange(-180.0f, -10.0f, 24.0f);
+    CHECK(spanLimited.minDbm == -180.0f && spanLimited.maxDbm == 0.0f);
+    const DbmRangeTransition::Range ceilingLimited =
+        DbmRangeTransition::clippedPeakRecoveryRange(-130.0f, 10.0f, 24.0f);
+    CHECK(ceilingLimited.minDbm == -130.0f && ceilingLimited.maxDbm == 20.0f);
+    CHECK(!DbmRangeTransition::materiallyDifferent({-180.0f, 0.0f},
+        DbmRangeTransition::clippedFloorRecoveryRange(-180.0f, 0.0f, 24.0f)));
 
     const DbmRangeTransition::Range flex2dRange =
         DbmRangeTransition::manualRequestRange(

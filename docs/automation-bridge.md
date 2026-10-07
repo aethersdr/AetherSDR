@@ -1079,6 +1079,20 @@ used by the stacked trace renderer.
   sources; useful for checking that hidden histories continue updating.
 - `kiwiFftTraceFloorDbm` versus `kiwiDisplayFloorDbm` — distinguishes the FFT
   trace floor used by 3D placement from the waterfall color floor.
+- `encoderMinDbm`, `encoderMaxDbm`, `encoderRangeGeneration` — the locally
+  applied native pixel-decoder range, separate from the display axis.
+- `noiseFloorReacquiring` — whether auto floor is waiting for a settled fresh
+  sequence after a native range, tuning, antenna, or RF-gain transition.
+- `nativeInputBins` — native FFT values delivered to the widget, before its
+  temporal display smoothing, including any active local range rebase. These
+  are decoded dBm, not raw VITA pixel rows.
+- `renderedTrace` — the last native 2D trace submitted by the GPU renderer (or painted
+  by the software renderer), with its axis, floor, time, local FFT sequence,
+  and locally applied encoder generation. `valid:false` means no trace has
+  rendered, or the visible source is Kiwi/3D. These generations are local
+  diagnostics, not VITA wire tags;
+  this snapshot does not certify scanout or exclude old UDP frames. Use a
+  native screenshot to confirm the visible result.
 
 `get meters` additionally reports `temperature` and `voltage` observations with
 `status`, `value`, `unit` and `ageMs`. `status` is one of `unsupported`,

@@ -9353,23 +9353,30 @@ void RadioModel::finishTxAudio(quint64 token, const TxCoordinator::Context& cont
     emit txAudioFinished(token, drainMs);
 }
 
-bool RadioModel::sendCommand(const QString& cmd)
+namespace {
+bool rejectsForeignPanWrite(const RadioModel& radio, const QString& cmd)
 {
-    // #3977: last-line ownership gate for pan writes. Every UI path that
-    // adjusts a pan (auto-floor, band restore, center/bandwidth/zoom/fps)
-    // funnels through here; when the radio has told us another client owns
-    // the pan, drop the write instead of stomping the rightful owner — the
-    // #3951 signature. Fails open when ownership is unknown.
+    // Both command entry points enforce confirmed pan ownership. Unknown
+    // ownership retains the existing fail-open behavior (#3977).
     if (cmd.startsWith(QLatin1String("display pan set "))) {
         const QString panId =
             normalizePanadapterId(cmd.mid(16).section(QLatin1Char(' '), 0, 0));
-        if (auto* pan = m_panadapters.value(panId, nullptr);
-            pan && !pan->ownedByClient(clientHandle())) {
+        if (auto* pan = radio.panadapter(panId);
+            pan && !pan->ownedByClient(radio.ourClientHandle())) {
             qCWarning(lcProtocol).noquote()
                 << "RadioModel: dropping pan-set for foreign-owned pan"
                 << panId << "(owner 0x" + pan->clientHandle() + ") —" << cmd;
-            return false;
+            return true;
         }
+    }
+    return false;
+}
+} // namespace
+
+bool RadioModel::sendCommand(const QString& cmd)
+{
+    if (rejectsForeignPanWrite(*this, cmd)) {
+        return false;
     }
     qCDebug(lcProtocol) << "RadioModel::sendCommand:" << cmd
              << "connected:" << isConnected() << "wan:" << (m_wanConn != nullptr);
@@ -9380,9 +9387,12 @@ bool RadioModel::sendCommand(const QString& cmd)
     return this->sendCmd(cmd) != 0;
 }
 
-void RadioModel::sendCmdPublic(const QString& cmd, ResponseCallback cb)
+bool RadioModel::sendCmdPublic(const QString& cmd, ResponseCallback cb)
 {
-    sendCmd(cmd, cb);
+    if (rejectsForeignPanWrite(*this, cmd)) {
+        return false;
+    }
+    return sendCmd(cmd, std::move(cb)) != 0;
 }
 
 void RadioModel::requestFileUploadPort(qint64 size, const QString& uploadKind,

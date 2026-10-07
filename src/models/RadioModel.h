@@ -1372,8 +1372,8 @@ public:
     void createRxAudioStream();
     void removeRxAudioStream();
 
-    // Send a command with a response callback (for firmware uploader, etc.)
-    void sendCmdPublic(const QString& cmd, std::function<void(int code, const QString& body)> cb);
+    // True only when dispatched; the callback reports the later radio reply.
+    bool sendCmdPublic(const QString& cmd, std::function<void(int code, const QString& body)> cb);
     void requestFileUploadPort(qint64 size, const QString& uploadKind,
                                std::function<void(int code, const QString& body)> cb);
     void requestFileDownloadPort(const QString& downloadKind,

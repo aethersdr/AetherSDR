@@ -25,6 +25,21 @@ using namespace AetherSDR;
 
 namespace AetherSDR {
 struct SpectrumOffscreenTestAccess {
+    static void finishSettleWindow(SpectrumWidget& widget) {
+        const qint64 now = QDateTime::currentMSecsSinceEpoch();
+        widget.m_noiseFloorScaleSettlingUntilMs = now - 1;
+        widget.m_noiseFloorReacquisition = NoiseFloorReacquisition{};
+        widget.m_noiseFloorReacquisition.arm(now - 1);
+    }
+    static void allowHeadroom(SpectrumWidget& widget) {
+        widget.m_encoderRangeChangedMs = 0;
+        widget.m_lastDssRadioHeadroomRequestMs = 0;
+        widget.m_noiseFloorScaleSettlingUntilMs = 0;
+    }
+    static bool acquiring(const SpectrumWidget& widget) { return widget.m_noiseFloorReacquisition.active(); }
+    static int freshFrames(const SpectrumWidget& widget) { return widget.m_noiseFloorFreshFrameCount; }
+    static float baseline(const SpectrumWidget& widget) { return widget.m_noiseFloorBaselineDbm; }
+    static bool baselineValid(const SpectrumWidget& widget) { return widget.m_noiseFloorBaselineValid; }
     static const QVector<float>& trace(const SpectrumWidget& widget) { return widget.displaySpectrumBins(); }
     static QVector<float> supplemental(const SpectrumWidget& widget, const QVector<float>& bins,
                                        double low, double high, bool sameScale) {
@@ -99,6 +114,106 @@ int main(int argc, char** argv)
         std::printf("[%s] %s\n", ok ? "OK" : "FAIL", name);
         failures += !ok;
     };
+    {
+        SpectrumWidget trace;
+        trace.resize(1000, 900);
+        trace.setDbmRange(-135, -40);
+        trace.setEncoderDbmRange(-135, -40);
+        trace.setNoiseFloorPosition(25);
+        trace.setNoiseFloorEnable(true);
+        trace.updateSpectrum(QVector<float>(256, -100));
+        const float lockedRef = trace.refLevel();
+        // MainWindow retires the local-only auto-floor request synchronously.
+        trace.cancelPendingDbmRangeChange();
+        trace.setEncoderDbmRange(-160, -60);
+        trace.setDbmRange(-160, -60);
+        check(std::abs(trace.refLevel() - (-100 + 25.0f)) < .1f,
+              "encoder range changes preserve floor placement instead of painting the encoder ceiling");
+        trace.setRfGain(32);
+        const float before = trace.refLevel();
+        trace.updateSpectrum(QVector<float>(256, -95));
+        check(near(trace.refLevel(), before) && SpectrumOffscreenTestAccess::acquiring(trace),
+              "preamp fast lock cannot bypass the settle window");
+        SpectrumOffscreenTestAccess::finishSettleWindow(trace);
+        trace.updateSpectrum(QVector<float>(256, -105));
+        wait(60);
+        trace.updateSpectrum(QVector<float>(256, -104.7f));
+        wait(60);
+        trace.updateSpectrum(QVector<float>(256, -105.1f));
+        std::printf("floor_lock acquiring=%d fresh=%d baseline=%.3f ref=%.3f span=%.3f\n",
+            SpectrumOffscreenTestAccess::acquiring(trace), SpectrumOffscreenTestAccess::freshFrames(trace),
+            SpectrumOffscreenTestAccess::baseline(trace), trace.refLevel(), trace.dynamicRange());
+        check(!SpectrumOffscreenTestAccess::acquiring(trace)
+              && SpectrumOffscreenTestAccess::freshFrames(trace) == 0
+              && std::abs(trace.refLevel() - -80.0f) < .1f,
+              "a settled fresh sequence acquires and snaps exactly once");
+        const float settledBaseline = SpectrumOffscreenTestAccess::baseline(trace);
+        trace.cancelPendingDbmRangeChange();
+        trace.updateSpectrum(QVector<float>(256, -80));
+        check(near(SpectrumOffscreenTestAccess::baseline(trace), settledBaseline),
+              "the next large transient uses ordinary rejection instead of repeated cold acquisition");
+        trace.setNoiseFloorEnable(false);
+        trace.setEncoderDbmRange(-178, -88);
+        SpectrumOffscreenTestAccess::allowHeadroom(trace);
+        int requests = 0;
+        float lower = -1, upper = -1;
+        QObject::connect(&trace, &SpectrumWidget::radioDbmHeadroomRecoveryRequested,
+                         &trace, [&](float lo, float hi) { ++requests; lower = lo; upper = hi; });
+        QVector<float> sparse(256, -115);
+        sparse[25] = -88.05f;
+        trace.updateSpectrum(sparse);
+        check(requests == 1 && lower == 0 && upper == 24,
+              "a sparse clipped peak requests upper headroom even with auto floor disabled");
+        trace.setPanBinsAbsolute(true);
+        SpectrumOffscreenTestAccess::allowHeadroom(trace);
+        trace.updateSpectrum(sparse);
+        check(requests == 1, "host absolute bins never request pixel-encoder recovery");
+        check(lockedRef > -100, "initial local floor lock was established");
+    }
+    {
+        SpectrumWidget trace;
+        trace.setDbmRange(-100, -16);
+        trace.setEncoderDbmRange(-100, -16);
+        trace.setNoiseFloorPosition(25);
+        trace.setNoiseFloorEnable(true);
+        trace.updateSpectrum(QVector<float>(256, -80));
+        trace.cancelPendingDbmRangeChange();
+        int requests = 0;
+        float lower = 0, upper = 0;
+        QObject::connect(&trace, &SpectrumWidget::radioDbmHeadroomRecoveryRequested,
+                         &trace, [&](float lo, float hi) { ++requests; lower = lo; upper = hi; });
+        SpectrumOffscreenTestAccess::allowHeadroom(trace);
+        trace.setRfGain(32);
+        QVector<float> clipped(256, -100);
+        clipped[25] = -40;
+        trace.updateSpectrum(clipped);
+        check(requests == 0 && !SpectrumOffscreenTestAccess::baselineValid(trace),
+              "a preamp settling transient neither expands headroom nor acquires a clipped floor");
+        SpectrumOffscreenTestAccess::allowHeadroom(trace);
+        trace.updateSpectrum(clipped);
+        check(requests == 1 && lower == 24 && upper == 0
+              && !SpectrumOffscreenTestAccess::baselineValid(trace),
+              "a persistent clipped floor requests recovery after settling without locking to the encoder boundary");
+        SpectrumOffscreenTestAccess::finishSettleWindow(trace);
+        trace.updateSpectrum(clipped);
+        wait(60);
+        trace.updateSpectrum(clipped);
+        wait(60);
+        trace.updateSpectrum(clipped);
+        check(!SpectrumOffscreenTestAccess::baselineValid(trace)
+              && SpectrumOffscreenTestAccess::acquiring(trace),
+              "even stable clipped input cannot complete floor acquisition");
+        trace.setEncoderDbmRange(-124, -16);
+        SpectrumOffscreenTestAccess::finishSettleWindow(trace);
+        trace.updateSpectrum(QVector<float>(256, -110));
+        wait(60);
+        trace.updateSpectrum(QVector<float>(256, -110));
+        wait(60);
+        trace.updateSpectrum(QVector<float>(256, -110));
+        check(SpectrumOffscreenTestAccess::baselineValid(trace)
+              && !SpectrumOffscreenTestAccess::acquiring(trace),
+              "unclipped settled input completes floor recovery");
+    }
     {
         SpectrumWidget trace;
         trace.updateSpectrum(QVector<float>(32,-80));

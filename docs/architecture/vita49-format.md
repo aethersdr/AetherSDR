@@ -32,6 +32,23 @@ dBm = max_dbm - (sample / (y_pixels - 1.0)) × (max_dbm − min_dbm)
 `y_pixels` comes from `display pan` status (must be tracked per-stream via
 `PanadapterStream::setYPixels()`).
 
+An owned-pan range write can be accepted with `R<seq>|0|` and no matching
+`display pan` status (FlexLib 4.2.18's LowDbm/HighDbm reply handlers also accept
+this). The range handshake applies a validated, dispatched request to the
+decoder; its successful reply converges the pan model and retires the pending
+guard. A rejection restores the prior range unless intervening radio status
+provides an authoritative range. Superseded replies cannot complete a newer
+request; ordinary status updates refresh the same per-pan encoder cache.
+
+The encoder range is separate from the auto-floor display axis. Headroom
+recovery expands only the clipped endpoint, bounded by -180 dBm, +20 dBm
+(FlexLib limits), and the client's 180 dB span limit. Native pixel auto floor
+preserves its axis across encoder changes and reacquires once after the existing
+750 ms settle window plus three floors within 1 dB over at least 100 ms. This
+settling gate also holds headroom requests during the transition; clipped
+floors cannot acquire a baseline. It does not identify VITA frames by the TCP
+range generation or suppress all decoded-trace transients.
+
 ### FFT Frame Assembly
 
 FFT data may span multiple VITA-49 packets. A 12-byte sub-header at offset 28
@@ -96,4 +113,3 @@ The S-Meter is the "LEVEL" meter from source "SLC" (slice).
 - `0x42000000` — waterfall tiles
 - `0x04xxxxxx` — remote audio RX (dynamically assigned)
 - `0x00000700` — meter data
-

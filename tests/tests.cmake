@@ -7762,6 +7762,7 @@ set(AETHER_SETTINGS_CONSUMERS
     rx_applet_squelch_reconciliation_test
     fm_filter_controls_test
     spectrum_confirmed_geometry_test
+    panadapter_dbm_range_test
     flex_slice_mode_intent_test
     rtl_slice_settings_test
     rtl_device_settings_test

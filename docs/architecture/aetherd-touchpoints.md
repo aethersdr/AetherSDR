@@ -49,7 +49,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/CwTrace.h` | 4 | ui-support — Header-only helpers minting monotonic ms timestamps + trace IDs for CW keying latency diagnostics, not radio state | unconverted |
 | `core/CwxLocalKeyer.h` | 2 | universal — Local CW sidetone keyer: text+WPM in, key-down edges out; radio-agnostic despite Flex 'CWX' naming. | unconverted |
 | `core/DaxTxPolicy.h` | 1 | vendor(flex) — Policy deciding when to claim a Flex dax_tx stream vs deferring to SmartSDR DAX2; whole surface is DAX/VITA-49. | unconverted |
-| `core/DbmRangePlausibility.h` | 1 | ui-support — Header-only predicate: could this dBm range be a real display range. Shared by the pan wiring's outbound backstop and ClientDisplaySettings' store validation; no radio state. | unconverted |
+| `core/DbmRangePlausibility.h` | 2 | ui-support — Header-only predicate: could this dBm range be a real display range. Shared by the pan wiring's outbound backstop and ClientDisplaySettings' store validation; no radio state. | unconverted |
 | `core/DeviceDiagnostics.h` | 1 | ui-support — Host audio-device diagnostics (Qt device BT/USB heuristics, JSON snapshots for troubleshooting), not radio state | unconverted |
 | `core/DigitalVoiceFeature.h` | 8 | universal — Build-flag and availability filtering for digital-voice modes. Radio-agnostic mode-list logic over the DV registry. | unconverted |
 | `core/DigitalVoiceModeRegistry.h` | 1 | universal — Registry of digital-voice mode descriptors (id, settings id, display name, radio mode, underlying mode, waveform name). Canonical mode metadata; no wire coupling. | unconverted |
