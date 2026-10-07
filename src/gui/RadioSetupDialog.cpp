@@ -8478,7 +8478,7 @@ QWidget* RadioSetupDialog::buildSerialTab()
             grid->addWidget(new QLabel(label), row, 0);
             auto* combo = new QComboBox;
             ThemeManager::instance().applyStyleSheet(
-                combo, QString(kEditStyle).replace("QLineEdit", "QComboBox"));
+                combo, QString(kEditStyleTemplate).replace("QLineEdit", "QComboBox"));
             for (const auto& it : items)
                 combo->addItem(QString::fromLatin1(it.label), QString::fromLatin1(it.id));
             const int idx = combo->findData(HidEncoderManager::shuttleMappingField(field, dflt));
