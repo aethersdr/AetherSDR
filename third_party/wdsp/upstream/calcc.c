@@ -1094,13 +1094,21 @@ void destroy_calcc (CALCC a)
 	ReleaseSemaphore(a->SemsPSCorr[4], 1, 0);
 	// AetherSDR patch 22 (#6179): nothing the correction thread touches (`a`,
 	// its util splines, the iqc stage, cs_update) is freed until it has exited.
-	// No time limit: with the work semaphores drained the exit token is its
-	// next one. iqc's busy bit is cleared on each pass, since SetTXAiqcStart/
-	// Swap spin on it for a DSP worker that is already gone.
-	if (a->corrThreadStarted)
+	// No time limit once patch 4 saw the DSP worker exit: csDSP, which the
+	// thread's iqc setters take, is then free, and iqc's busy bit they spin on
+	// is cleared each pass. If that wait fell through, upstream's 500 ms stands.
+	if (a->corrThreadStarted && a->hCorrChangeExited != NULL)
 	{
-		while (WaitForSingleObject(a->hCorrChangeExited, 1) != WAIT_OBJECT_0)
+		const int workerGone = _InterlockedAnd(&ch[a->channel].mainExited, ~0L)
+			== _InterlockedAnd(&ch[a->channel].mainGen, ~0L);
+		int waited = 0;
+		DWORD waitstat;
+		while ((waitstat = WaitForSingleObject(a->hCorrChangeExited, 1)) != WAIT_OBJECT_0)
+		{
+			if (waitstat == WAIT_FAILED || (!workerGone && ++waited >= 500))
+				break;
 			InterlockedBitTestAndReset(&b->busy, 0);
+		}
 	}
 	for (int i = 0; i < 5; i++)
 		CloseHandle(a->SemsPSCorr[i]);

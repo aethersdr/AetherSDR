@@ -573,7 +573,7 @@ number, so the grep above does not find them; it is findable from this file
 and from `ensure_minphase` in `upstream/firmin.c`.
 
 When refreshing WDSP, first check whether upstream has made each change
-itself. The ten are different shapes, so grep for the shape, not for a free:
+itself. They are different shapes, so grep for the shape, not for a free:
 
 - **patches 1-2** -- a trailing `_aligned_free()` of the object itself at the
   end of `destroy_notchdb()` / `destroy_nurbs()`.
@@ -620,8 +620,9 @@ itself. The ten are different shapes, so grep for the shape, not for a free:
   the closes now follow the unbounded exit wait.
 - **patch 22** -- in `calcc.c`: the `corrThreadStarted` field set from
   `_beginthread()`'s result in `create_calcc()`, and in `destroy_calcc()` the
-  unbounded `hCorrChangeExited` wait (clearing iqc's `busy` bit each pass)
-  with the six `util` spline frees moved **after** it, not before.
+  `hCorrChangeExited` wait (clearing iqc's `busy` bit each pass, unbounded
+  once patch 4 saw the worker exit) with the six `util` spline frees moved
+  **after** it, not before.
 
 Drop any local patch upstream now carries. Otherwise reapply only these minimal
 changes and run the lifecycle test under AddressSanitizer on every supported
@@ -1259,21 +1260,31 @@ Now:
 - `create_calcc()` records whether `_beginthread()` started the thread
   (`corrThreadStarted`). A thread that never started is not waited for, which
   is the reason patches 4 and 9 bound their waits.
-- `destroy_calcc()` waits for `hCorrChangeExited` with **no time limit**. The
-  four work semaphores are drained first, so the exit token is the next one the
-  thread takes once its current work ends. Each 1 ms pass clears iqc's `busy`
-  bit, because `SetTXAiqcStart()` / `SetTXAiqcSwap()` spin on it for a DSP
-  worker that `CloseChannel()` has already stopped. `ch[].csDSP`, which those
-  setters take, is free at this point (patch 9).
+- `destroy_calcc()` waits for `hCorrChangeExited`, clearing iqc's `busy` bit
+  on each 1 ms pass, because `SetTXAiqcStart()` / `SetTXAiqcSwap()` spin on
+  it for a DSP worker that `CloseChannel()` has already stopped. With the four
+  work semaphores drained first, the exit token is the next one the thread
+  takes once its current work ends.
+- The wait has **no time limit only when patch 4's worker wait succeeded**
+  (`mainExited == mainGen`). Those iqc setters take `ch[].csDSP`, which is
+  free only once the worker has exited (patch 9). If patch 4's wait fell
+  through its cap, a wedged worker may still hold `csDSP`, an unbounded wait
+  could then never end, and upstream's 500 ms bound stands instead. That path
+  is already undefined on `main` (`post_main_destroy` deletes `csDSP` under a
+  live holder); this patch does not make it worse.
+- A `WAIT_FAILED` return (an exit event `CreateEvent` failed to make) ends
+  the wait rather than spinning.
 - The `SemsPSCorr` / exit-event closes (patch 18) and the six `util` spline
   frees follow the exit.
 
-**What can still stall teardown.** The thread's own work: `calc()` is bounded
-CPU work. Correction-file I/O can block as long as the file system does.
+**What can still stall teardown.** The thread's own work, on the normal path:
+`calc()` is bounded CPU work. Correction-file I/O can block as long as the file system does.
 AetherSDR calls neither `PSSaveCorr` nor `PSRestoreCorr` today; a caller that
 adds them owns that stall.
 
-**Reproduced before fixing.** `wdsp_calcc_teardown_test` holds the thread in
+**Reproduced before fixing**, locally: no `ci.yml` filter runs the test, and
+it covers the wait, not the reordering of the frees after it (that half is the
+sanitizer lanes'). `wdsp_calcc_teardown_test` holds the thread in
 `PSRestoreCorr()` on a FIFO with no writer, closes the channel on another
 thread, and opens the writer 1 s later. Before this patch `CloseChannel()`
 returned after ~500 ms while the thread was still blocked. With it,

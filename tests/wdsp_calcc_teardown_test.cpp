@@ -64,7 +64,7 @@ int main()
     ::unlink(fifo.c_str());
     check(::mkfifo(fifo.c_str(), 0600) == 0, "premise: the FIFO is created");
 
-    // The correction thread now blocks in fopen(fifo, "rb") until a writer opens.
+    // The correction thread now blocks in fopen(fifo, "r") until a writer opens.
     PSRestoreCorr(channel->channelId(), fifo.data());
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
