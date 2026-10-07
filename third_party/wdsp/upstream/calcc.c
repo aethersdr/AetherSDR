@@ -199,6 +199,7 @@ typedef struct _calcc
 		CurveEMA      m_calavg_save, c_calavg_save, s_calavg_save;
 	} util;
 	HANDLE hCorrChangeExited;
+	int corrThreadStarted;	// AetherSDR patch 22: destroy_calcc() waits only for a thread that exists
 } calcc, * CALCC;
 
 void __cdecl doPSCorrChange(void* arg);
@@ -1079,7 +1080,7 @@ CALCC create_calcc (int channel, int runcal, int size, int rate, double hw_scale
 		a->SemsPSCorr[i] = CreateSemaphoreW(0, 0, 1, 0);
 	}
 	a->hCorrChangeExited = CreateEvent(NULL, FALSE, FALSE, NULL);
-	_beginthread(doPSCorrChange, 0, (void*)a);
+	a->corrThreadStarted = _beginthread(doPSCorrChange, 0, (void*)a) != (uintptr_t)-1;
 	return a;
 }
 
@@ -1087,32 +1088,29 @@ void destroy_calcc (CALCC a)
 {
 	IQC b = txa[a->channel].iqc.p;
 
+	for (int i = 0; i < 4; i++)
+		while (WaitForSingleObject(a->SemsPSCorr[i], 0) == WAIT_OBJECT_0);
+	InterlockedBitTestAndReset(&b->busy, 0);
+	ReleaseSemaphore(a->SemsPSCorr[4], 1, 0);
+	// AetherSDR patch 22 (#6179): nothing the correction thread touches (`a`,
+	// its util splines, the iqc stage, cs_update) is freed until it has exited.
+	// No time limit: with the work semaphores drained the exit token is its
+	// next one. iqc's busy bit is cleared on each pass, since SetTXAiqcStart/
+	// Swap spin on it for a DSP worker that is already gone.
+	if (a->corrThreadStarted)
+	{
+		while (WaitForSingleObject(a->hCorrChangeExited, 1) != WAIT_OBJECT_0)
+			InterlockedBitTestAndReset(&b->busy, 0);
+	}
+	for (int i = 0; i < 5; i++)
+		CloseHandle(a->SemsPSCorr[i]);
+	CloseHandle(a->hCorrChangeExited);
 	ns_free(a->util.m_spline_restore); a->util.m_spline_restore = NULL;
 	ns_free(a->util.c_spline_restore); a->util.c_spline_restore = NULL;
 	ns_free(a->util.s_spline_restore); a->util.s_spline_restore = NULL;
 	ns_free(a->util.m_spline_save);    a->util.m_spline_save = NULL;
 	ns_free(a->util.c_spline_save);    a->util.c_spline_save = NULL;
 	ns_free(a->util.s_spline_save);    a->util.s_spline_save = NULL;
-
-	for (int i = 0; i < 4; i++)
-		while (WaitForSingleObject(a->SemsPSCorr[i], 0) == WAIT_OBJECT_0);
-	InterlockedBitTestAndReset(&b->busy, 0);
-	ReleaseSemaphore(a->SemsPSCorr[4], 1, 0);
-	// AetherSDR patch 18: close the five SemsPSCorr semaphores, which upstream
-	// never closed (leaked on every TXA channel destroy), and close them and the
-	// exit event ONLY once doPSCorrChange() has signalled it is gone. Its last
-	// act is SetEvent(hCorrChangeExited) then return, so after that nothing
-	// touches either. On the 500 ms timeout the thread may still be waiting on
-	// them, so they are not freed under it. That does NOT make the timeout path
-	// safe: the rest of this function still frees `a`, which a late thread
-	// would use. That hazard predates this patch and is tracked separately
-	// (#6179; see AETHERSDR-PATCHES.md, patch 18).
-	if (WaitForSingleObject(a->hCorrChangeExited, 500) == WAIT_OBJECT_0)
-	{
-		for (int i = 0; i < 5; i++)
-			CloseHandle(a->SemsPSCorr[i]);
-		CloseHandle(a->hCorrChangeExited);
-	}
 
 	ns_free(a->m_spline); a->m_spline = NULL;
 	ns_free(a->c_spline); a->c_spline = NULL;

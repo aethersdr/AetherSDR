@@ -616,8 +616,12 @@ itself. The ten are different shapes, so grep for the shape, not for a free:
   `stitch(disp)`, not before it; and `sendbuf()`'s `IQO_idx` hand-off and
   `IQout_index` advance inside its existing `BufferControlSection`.
 - **patch 18** -- in `destroy_calcc()`, the `SemsPSCorr` and
-  `hCorrChangeExited` closes inside an `== WAIT_OBJECT_0` check on the
-  thread-exit wait.
+  `hCorrChangeExited` closes. Patch 22 replaced its `== WAIT_OBJECT_0` check:
+  the closes now follow the unbounded exit wait.
+- **patch 22** -- in `calcc.c`: the `corrThreadStarted` field set from
+  `_beginthread()`'s result in `create_calcc()`, and in `destroy_calcc()` the
+  unbounded `hCorrChangeExited` wait (clearing iqc's `busy` bit each pass)
+  with the six `util` spline frees moved **after** it, not before.
 
 Drop any local patch upstream now carries. Otherwise reapply only these minimal
 changes and run the lifecycle test under AddressSanitizer on every supported
@@ -1003,7 +1007,8 @@ wait, `destroy_calcc()` goes on to free `a` and its members, which a correction
 thread still running past the timeout would use. That use-after-free predates
 this patch (upstream frees `a` on the same path) and is tracked separately
 (#6179). Patch 18 only stops the normal, successful-exit path from
-leaking and avoids adding a second hazard on the timeout path.
+leaking and avoids adding a second hazard on the timeout path. Patch 22 closes
+the timeout path by removing it.
 
 **Upstream status.** Not reported.
 
@@ -1238,3 +1243,44 @@ freshness and retired observations. These tests are added validation obligations
 their results must come from a subsequent exact-source Nobara run. On upstream
 refresh retain this extension unless equivalent typed, bounded, race-free
 semantics replace it, and do not label INDY as a PLL.
+
+## Patch 22 — `destroy_calcc()` frees nothing the correction thread still uses (#6179)
+
+`upstream/calcc.c`. `destroy_calcc()` waited at most 500 ms for the
+`doPSCorrChange()` thread to signal `hCorrChangeExited`, then freed `a` and its
+members anyway. The thread reads `a`, the six `util` splines, `txa[].iqc` and
+`txa[].calcc.cs_update`, all freed by `destroy_calcc()` / `destroy_txa()`
+right after. A thread in `calc()` or in correction-file I/O past the 500 ms
+went on using freed memory. Upstream also freed the six `util` splines
+**before** the wait, under a thread in `PSSaveCorr` / `PSRestoreCorr` work.
+
+Now:
+
+- `create_calcc()` records whether `_beginthread()` started the thread
+  (`corrThreadStarted`). A thread that never started is not waited for, which
+  is the reason patches 4 and 9 bound their waits.
+- `destroy_calcc()` waits for `hCorrChangeExited` with **no time limit**. The
+  four work semaphores are drained first, so the exit token is the next one the
+  thread takes once its current work ends. Each 1 ms pass clears iqc's `busy`
+  bit, because `SetTXAiqcStart()` / `SetTXAiqcSwap()` spin on it for a DSP
+  worker that `CloseChannel()` has already stopped. `ch[].csDSP`, which those
+  setters take, is free at this point (patch 9).
+- The `SemsPSCorr` / exit-event closes (patch 18) and the six `util` spline
+  frees follow the exit.
+
+**What can still stall teardown.** The thread's own work: `calc()` is bounded
+CPU work. Correction-file I/O can block as long as the file system does.
+AetherSDR calls neither `PSSaveCorr` nor `PSRestoreCorr` today; a caller that
+adds them owns that stall.
+
+**Reproduced before fixing.** `wdsp_calcc_teardown_test` holds the thread in
+`PSRestoreCorr()` on a FIFO with no writer, closes the channel on another
+thread, and opens the writer 1 s later. Before this patch `CloseChannel()`
+returned after ~500 ms while the thread was still blocked. With it,
+`CloseChannel()` returns only after the writer opens. POSIX only (`mkfifo`);
+skipped on Windows.
+
+**Upstream status.** Not reported.
+
+When updating WDSP, keep this unless upstream's `destroy_calcc()` joins the
+correction thread before freeing.

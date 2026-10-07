@@ -1011,6 +1011,13 @@ set_tests_properties(audio_thread_planner_join_test PROPERTIES TIMEOUT 60)
 
 # Socket-free shared-pool admission and injected receiver lifetime tests. These
 # foundations are compiled/tested even when the optional RTL USB driver is off.
+# Tearing down a TX channel waits for the PureSignal correction thread before
+# freeing what it uses (#6179, WDSP patch 22). POSIX FIFO; skips on Windows.
+add_executable(wdsp_calcc_teardown_test tests/wdsp_calcc_teardown_test.cpp)
+target_link_libraries(wdsp_calcc_teardown_test PRIVATE aethercore)
+add_test(NAME wdsp_calcc_teardown_test COMMAND wdsp_calcc_teardown_test)
+set_tests_properties(wdsp_calcc_teardown_test PROPERTIES TIMEOUT 120)
+
 add_executable(wdsp_channel_reservation_test tests/wdsp_channel_reservation_test.cpp)
 target_link_libraries(wdsp_channel_reservation_test PRIVATE aethercore)
 add_test(NAME wdsp_channel_reservation_test COMMAND wdsp_channel_reservation_test)
