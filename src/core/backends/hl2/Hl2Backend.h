@@ -648,10 +648,16 @@ private:
     std::vector<Receiver> m_restoredReceivers;
     std::vector<NotchRecord> m_restoredNotches;
     int m_restoredTxReceiver = 0;   // the list index that held transmit
+    // Remembered receivers the replay could not reopen (ceiling, failed open).
+    // Captured after the live ones so a short connect does not erase them;
+    // dropped once the operator adds or closes a receiver.
+    std::vector<Receiver> m_replayUnreopened;
     bool m_sessionReplayPending = false;
     void replayRestoredSession();
-    // Receiver A's own setpoints from the document, onto m_rx[0] before its DSP opens.
-    void seedFirstReceiverFromMemory();
+    // The open receivers' own setpoints from the document, before their DSPs
+    // open: receiver A's extras, and the whole entry for any a numRx param opened.
+    void seedOpenReceiversFromMemory();
+    void seedReceiverExtras(Receiver& r, const Receiver& memory) const;
     [[nodiscard]] static QJsonObject receiverMemoryJson(const Receiver& r);
     // Nullopt for an entry with no usable frequency or mode; other bad fields drop alone.
     [[nodiscard]] std::optional<Receiver> receiverFromMemory(const QJsonObject& o) const;

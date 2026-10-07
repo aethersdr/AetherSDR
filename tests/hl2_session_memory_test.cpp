@@ -20,9 +20,12 @@
 
 #include "TestDspBuildWait.h"
 #include "TestSettingsProfile.h"
+#include "TxTestAuthority.h"
 
 #include <QCoreApplication>
 #include <QEvent>
+#include <QEventLoop>
+#include <QTimer>
 #include <QHash>
 #include <QJsonArray>
 #include <QJsonObject>
@@ -39,6 +42,7 @@ struct Hl2SessionMemoryTestAccess {
     {
         backend.m_boardMaxRx = Hl2Backend::kAssumedBoardMaxRx;
         backend.buildReceivers(count);
+        backend.seedOpenReceiversFromMemory();   // as connectRadio() does
         for (int ddc = 0; ddc < count; ++ddc) {
             Hl2Backend::Receiver* const receiver = backend.rx(ddc);
             if (!receiver || !receiver->dsp) {
@@ -91,7 +95,17 @@ struct Hl2SessionMemoryTestAccess {
     {
         return static_cast<int>(backend.m_restoredReceivers.size());
     }
-    static void seedFirstReceiver(Hl2Backend& backend) { backend.seedFirstReceiverFromMemory(); }
+    static void seedFirstReceiver(Hl2Backend& backend) { backend.seedOpenReceiversFromMemory(); }
+    static AetherSDR::NoiseBlankerKind nbKind(const Hl2Backend& backend, int ddc)
+    {
+        const Hl2Backend::Receiver* r = backend.rx(ddc);
+        return r ? r->nbKind : AetherSDR::NoiseBlankerKind::Off;
+    }
+    static double sliceHz(const Hl2Backend& backend, int ddc)
+    {
+        const Hl2Backend::Receiver* r = backend.rx(ddc);
+        return r ? r->sliceFreqHz : 0.0;
+    }
     static int txDdc(const Hl2Backend& backend) { return backend.m_txDdc; }
     static void setTuning(Hl2Backend& backend, bool on) { backend.m_tuning = on; }
     static void armReplay(Hl2Backend& backend) { backend.m_sessionReplayPending = true; }
@@ -331,6 +345,8 @@ void theReplayCountsReceiversAlreadyRunning()
     backend.applyRestoredState(stateWith(receivers));
     check(Access::bringUp(backend, true, 2), "two receivers are up before the replay");
     check(Access::receiverCount(backend) == 3, "the replay adds only the third");
+    check(Access::sliceHz(backend, 1) == 14'074'000.0,
+          "the receiver the connect opened takes its own remembered entry");
     AetherSDR::test::spinUntil([&] { return Access::buildsSettled(backend); });
 }
 
@@ -352,6 +368,54 @@ void aCaptureBeforeTheReplayKeepsTheLists()
           "the remembered notch is kept");
 }
 
+RadioConnectRequest request(const QString& serial)
+{
+    RadioConnectRequest req;
+    req.host = QStringLiteral("192.0.2.1");   // TEST-NET-1, never routable
+    req.port = 1024;
+    req.serial = serial;
+    return req;
+}
+
+void settleConnect(Hl2Backend& backend)
+{
+    QEventLoop loop;
+    QObject::connect(&backend, &Hl2Backend::dspSetupFinished, &loop, &QEventLoop::quit);
+    QTimer::singleShot(120'000, &loop, &QEventLoop::quit);
+    loop.exec();
+}
+
+// Receiver A's remembered setpoints seed it on a new radio, or on receivers
+// rebuilt from nothing; a reconnect of the same radio keeps its live values.
+void aReconnectKeepsReceiverALive()
+{
+    QJsonObject a = receiverEntry(7'100'000.0, QStringLiteral("LSB"));
+    a.insert(QStringLiteral("nbKind"), static_cast<int>(NoiseBlankerKind::Impulse));
+    const RestoredRadioState doc = stateWith(QJsonArray{a});
+    Hl2Backend backend;
+    backend.applyRestoredState(doc);
+    backend.connectRadio(request(QStringLiteral("AA:BB:CC:00:00:01")));
+    settleConnect(backend);
+    check(Access::nbKind(backend, 0) == NoiseBlankerKind::Impulse,
+          "a first connect seeds receiver A from the document");
+    backend.disconnectRadio();
+
+    backend.setSliceNoiseBlanker(0, NoiseBlankerKind::Off, 50, kDefaultNoiseBlankerFill);
+    backend.applyRestoredState(doc);
+    backend.connectRadio(request(QStringLiteral("AA:BB:CC:00:00:01")));
+    settleConnect(backend);
+    check(Access::nbKind(backend, 0) == NoiseBlankerKind::Off,
+          "a reconnect of the same radio keeps receiver A's live blanker");
+    backend.disconnectRadio();
+
+    backend.applyRestoredState(doc);
+    backend.connectRadio(request(QStringLiteral("AA:BB:CC:00:00:02")));
+    settleConnect(backend);
+    check(Access::nbKind(backend, 0) == NoiseBlankerKind::Impulse,
+          "another radio is seeded from its own document");
+    backend.disconnectRadio();
+}
+
 void theReplayStopsAtTheReceiverCeiling()
 {
     QJsonArray receivers;
@@ -363,6 +427,15 @@ void theReplayStopsAtTheReceiverCeiling()
     check(Access::bringUp(backend, true), "the injected link edge reaches the backend");
     check(Access::receiverCount(backend) == Access::ceiling(backend),
           "no more receivers come back than this span allows");
+    check(backend.currentOperatingState().extension.value(QStringLiteral("receivers"))
+              .toArray().size() == 8,
+          "the receivers that did not fit are still in the document for the next connect");
+    AetherSDR::test::spinUntil([&] { return Access::buildsSettled(backend); });
+    check(backend.removePanadapter(QStringLiteral("hl2-1")), "the operator closes receiver B");
+    const int afterClose = backend.currentOperatingState()
+        .extension.value(QStringLiteral("receivers")).toArray().size();
+    check(afterClose == Access::receiverCount(backend),
+          "once the operator reshapes the set, the kept tail is dropped");
     AetherSDR::test::spinUntil([&] { return Access::buildsSettled(backend); });
 }
 
@@ -421,7 +494,10 @@ void tunePowerIsRememberedPerBand()
     Access::setTuning(next, true);
     next.setSliceFrequency(0, 7'100'000.0);
     check(restored.isEmpty(), "a band change under a TUNE carrier echoes no other TUNE power");
-    Access::setTuning(next, false);
+    TxTestAuthority authority;
+    next.setTune(false, -1, authority.operation, {});
+    check(!restored.isEmpty() && restored.last() == 30,
+          "at unkey the new band's own TUNE power applies");
 }
 
 // Only an operator's choice of law or floor is kept; a law change takes the
@@ -515,6 +591,7 @@ int main(int argc, char** argv)
     theReplayCountsReceiversAlreadyRunning();
     aCaptureBeforeTheReplayKeepsTheLists();
     theReplayStopsAtTheReceiverCeiling();
+    aReconnectKeepsReceiverALive();
     withoutAConnectNothingIsReplayed();
     tunePowerIsRememberedPerBand();
     autoGainLawAndFloorAreKeptOnlyWhenChosen();

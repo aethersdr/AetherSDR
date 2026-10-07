@@ -982,6 +982,9 @@ void Hl2Backend::announceReceiverCeilingRevision()
 
 bool Hl2Backend::createPanadapter()
 {
+    // The operator is reshaping the set; a tail the last replay kept is theirs
+    // to rebuild, not to have resurrected.
+    m_replayUnreopened.clear();
     // A new receiver starts where the first one is, so its pan is not of DC.
     Receiver seed;
     if (!m_rx.empty()) {
@@ -1307,6 +1310,7 @@ bool Hl2Backend::removePanadapter(const QString& panId)
         qCWarning(lcHl2) << "HL2: refusing to close the last receiver";
         return false;
     }
+    m_replayUnreopened.clear();   // see createPanadapter()
     // m_txDdc and the active DDC are indices, and removal renumbers every
     // index after the closed one. A role on the closing receiver must move; a
     // role after it must shift down, or it names the wrong receiver.
@@ -2404,7 +2408,7 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
     if (request.serial != m_agcSeededSerial || !m_rxCarriedState) {
         m_agcSeededSerial = request.serial;
         seedReceiverAgc();
-        seedFirstReceiverFromMemory();
+        seedOpenReceiversFromMemory();
         if (!m_rx.empty()) {
             mp.rxFrequencyHz = ncoCommandHz(m_rx.front().ncoHz);
         }
@@ -5181,6 +5185,9 @@ void Hl2Backend::setTune(bool on, int tunePowerPercent, const AetherSDR::TxCoord
     } else {
         setKeying(false, operation, completion);   // clears m_tuning and restores the operator's RF power
         setTxTestTone(0.0, 0.0, operation);
+        // A band changed under the carrier held its TUNE power back
+        // (applyTuneMemoryFor); with the carrier down it applies now.
+        applyTuneMemoryFor(m_currentBandKey);
     }
 }
 
@@ -6682,6 +6689,7 @@ void Hl2Backend::applyRestoredState(const RestoredRadioState& state)
     m_tuneDefaultPercent = -1;
     m_tunePowerPercent = -1;
     m_restoredReceivers.clear();
+    m_replayUnreopened.clear();
     m_restoredTxReceiver = 0;
     m_restoredNotches.clear();
     m_autoGainReason = AetherSDR::hl2::AutoGainReason::Disarmed;
@@ -7076,15 +7084,28 @@ std::optional<Hl2Backend::Receiver> Hl2Backend::receiverFromMemory(const QJsonOb
     return r;
 }
 
-void Hl2Backend::seedFirstReceiverFromMemory()
+void Hl2Backend::seedOpenReceiversFromMemory()
 {
-    if (m_restoredReceivers.empty() || m_rx.empty()) {
-        return;
+    const std::size_t count = std::min(m_rx.size(), m_restoredReceivers.size());
+    for (std::size_t i = 0; i < count; ++i) {
+        Receiver& r = m_rx[i];
+        const Receiver& memory = m_restoredReceivers[i];
+        // Receiver A's frequency, mode and passband came in through the flat
+        // fields, taken from this same entry; the others take their own.
+        if (i > 0) {
+            const QString previousMode = r.mode;
+            r.sliceFreqHz = memory.sliceFreqHz;
+            r.mode = memory.mode;
+            r.filterLowHz = memory.filterLowHz;
+            r.filterHighHz = memory.filterHighHz;
+            followModeAgc(r, previousMode);
+        }
+        seedReceiverExtras(r, memory);
     }
-    // Frequency, mode and passband already came in through the flat fields,
-    // which applyRestoredState() took from this same entry.
-    const Receiver& memory = m_restoredReceivers.front();
-    Receiver& r = m_rx.front();
+}
+
+void Hl2Backend::seedReceiverExtras(Receiver& r, const Receiver& memory) const
+{
     r.nbKind = memory.nbKind;
     r.nbLevel = memory.nbLevel;
     r.nbFill = memory.nbFill;
@@ -7131,14 +7152,20 @@ void Hl2Backend::replayRestoredSession()
     // From the count already running: an explicit numRx connect param may have
     // opened more than receiver A, and those take their slots in the list.
     const double usableHz = m_sampleRateHz / 2.0 * kUsablePassbandFraction;
+    m_replayUnreopened.clear();
     for (std::size_t i = m_rx.size(); i < m_restoredReceivers.size(); ++i) {
         Receiver seed = m_restoredReceivers[i];
         if (std::abs(rxTunedHz(seed) - seed.ncoHz) > usableHz) {
             seed.ncoHz = rxTunedHz(seed);
         }
         if (!addReceiver(seed)) {
-            qCInfo(lcHl2) << "HL2 restore:" << (m_restoredReceivers.size() - i)
-                          << "remembered receiver(s) not reopened";
+            // Kept, not dropped: the capture this replay triggers would
+            // otherwise erase them, and a later connect may have room.
+            m_replayUnreopened.assign(m_restoredReceivers.begin()
+                                          + static_cast<std::ptrdiff_t>(i),
+                                      m_restoredReceivers.end());
+            qCInfo(lcHl2) << "HL2 restore:" << m_replayUnreopened.size()
+                          << "remembered receiver(s) not reopened; kept for the next connect";
             break;
         }
     }
@@ -7265,6 +7292,8 @@ RestoredRadioState Hl2Backend::currentOperatingState() const
             entry.insert(QStringLiteral("transmit"), true);
         receivers.append(entry);
     }
+    for (const Receiver& r : m_replayUnreopened)
+        receivers.append(receiverMemoryJson(r));
     // Until the replay has run, the remembered notches are still the truth;
     // store() rebuilds the document, so leaving them out would erase them.
     QJsonArray notches;
@@ -7285,9 +7314,8 @@ RestoredRadioState Hl2Backend::currentOperatingState() const
     }
     state.extension = QJsonObject{{QStringLiteral("rfGain"), rfGain},
                                   {QStringLiteral("txSetpoints"), txSetpoints},
+                                  {QStringLiteral("receivers"), receivers},
                                   {QStringLiteral("notches"), notches}};
-    if (!receivers.isEmpty())
-        state.extension.insert(QStringLiteral("receivers"), receivers);
     state.extensionSchemaVersion = 1;
     return state;
 }
