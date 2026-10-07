@@ -1467,7 +1467,7 @@ bool WdspChannel::open() noexcept
             SetRXAFMLimGain(m_channelId, 0.0);
             SetRXAFMLimRun(m_channelId, 1);
         }
-        if (m_config.rxPanelGain) {
+        if (m_config.rxPanelGain) {  // a set field wins over the FM value above
             SetRXAPanelGain1(m_channelId, *m_config.rxPanelGain);
         }
         if (m_config.wbfmReceive) {

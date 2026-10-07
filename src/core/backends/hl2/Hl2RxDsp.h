@@ -70,8 +70,9 @@ public:
         return mode != WdspChannel::Mode::Cwl && mode != WdspChannel::Mode::Cwu;
     }
 
-    // RXA panel gain: unity, so the AGC's ceiling (-0.16 dBFS) is the output
-    // ceiling. WDSP's 4.0 put every HL2 mode 12.04 dB past it (#5942).
+    // RXA panel gain, applied after the AGC: unity removes WDSP's x4, which put
+    // every HL2 mode 12.04 dB past the AGC's level (#5942). Bandpass, speak and
+    // mpeak still run between the AGC and the panel, so this bounds no peak.
     static constexpr double kRxPanelGain = 1.0;
 
     // RX filter length (#5578). Outside CW minimum phase already removed the
