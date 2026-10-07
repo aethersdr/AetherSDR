@@ -409,6 +409,9 @@ RadioCapabilities AnanBackend::capabilities() const
     c.voxControl = std::nullopt;
     c.speechProcessorControl = std::nullopt;
     c.txMonitorControl = std::nullopt;
+    // The radio's speaker output: setLineoutMute() sends it silence and
+    // setLineoutGain() scales the samples this host feeds it.
+    c.lineoutControl = RadioCapabilities::LineoutControl{};
     // The panadapter dBm axis is dBFS with a dBm label: kUncalibratedDbfsToDbmOffset
     // is 0.0f and bin levels depend on window/normalisation, unverified against a
     // known input. Internally consistent, but not comparable: never publish as a

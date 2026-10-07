@@ -6,6 +6,7 @@
 #include "RttyDecodeSettings.h"
 #include "ScopedChildWidget.h"
 #include "GuardedSlider.h"
+#include "MixerControlAvailability.h"
 #include "ComboStyle.h"
 #include "DocsLinks.h"
 #include "SliceColorManager.h"
@@ -4725,6 +4726,22 @@ QWidget* RadioSetupDialog::buildAudioTab()
         m_model->setLineoutGain(v);
     });
     connect(lineoutMute, &QPushButton::toggled, m_model, &RadioModel::setLineoutMute);
+    // Dimmed, never hidden, on a radio with no line out of its own.
+    if (!AetherSDR::lineoutControlsAvailable(
+            m_model->isConnected(), m_model->hasCommandPlane(),
+            m_model->backendCapabilities().lineoutControl.has_value())) {
+        const QString reason = QStringLiteral(
+            "Unavailable: this radio has no line out of its own. Its audio plays "
+            "on this computer; set its level with the title bar's volume.");
+        for (QWidget* w : {static_cast<QWidget*>(lineoutLabel),
+                           static_cast<QWidget*>(lineoutSlider),
+                           static_cast<QWidget*>(lineoutValue),
+                           static_cast<QWidget*>(lineoutMute)}) {
+            w->setEnabled(false);
+            w->setToolTip(reason);
+            w->setAccessibleDescription(reason);
+        }
+    }
 
     // Headphone
     auto* hpRow = new QHBoxLayout;

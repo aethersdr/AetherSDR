@@ -528,26 +528,40 @@ static void voxAndMonitorWithoutRecordsKeepDropNotice()
           "no monitor record: mon still raises commandDropped");
 }
 
-// Flex now has its VOX, monitor and PROC setters called (it declares the
-// records), and they must write nothing: the wire text from TransmitModel is
-// still the only Flex output for these controls.
-// The title-bar speaker mutes the radio's line out and the PC sink together
-// (#4665). Without a command plane the line out goes through the seam, and its
-// Flex text must not raise a drop notice for a request the seam carried.
-static void lineoutReachesSeamWithoutDropNotice()
+// A backend that declares its own line out takes setLineoutMute/Gain typed,
+// and their Flex text raises no drop notice (#4665). One that declares none
+// gets no seam call and keeps the notice: nothing applied the request.
+static void lineoutReachesDeclaredSeamWithoutDropNotice()
 {
-    Fixture f(hostModulatingTransmitter());
+    RadioCapabilities caps = hostModulatingTransmitter();
+    caps.lineoutControl = RadioCapabilities::LineoutControl{};
+    Fixture f(caps);
     f.radio.setLineoutMute(true);
     f.radio.setLineoutMute(false);
     f.radio.setLineoutGain(30);
     check(f.backend->lineoutMutes == QList<bool>{true, false},
-          "lineout mute: setLineoutMute() reached the backend for each click");
+          "lineout mute: setLineoutMute() reached a declaring backend for each click");
     check(f.backend->lineoutGains == QList<int>{30},
-          "lineout gain: setLineoutGain(30) reached the backend once");
+          "lineout gain: setLineoutGain(30) reached a declaring backend once");
     check(!f.droppedStartingWith(QStringLiteral("mixer lineout")),
-          "lineout: no commandDropped on a backend without a command plane");
+          "lineout: no commandDropped where the backend applied it");
 }
 
+static void lineoutWithoutRecordKeepsDropNotice()
+{
+    Fixture f(hostModulatingTransmitter());   // the HL2: no line out declared
+    f.radio.setLineoutMute(true);
+    f.radio.setLineoutGain(30);
+    check(f.backend->lineoutMutes.isEmpty() && f.backend->lineoutGains.isEmpty(),
+          "lineout: no seam call to a backend that declares no line out");
+    check(f.droppedStartingWith(QStringLiteral("mixer lineout mute"))
+              && f.droppedStartingWith(QStringLiteral("mixer lineout gain")),
+          "lineout without a record: the drop notice stands");
+}
+
+// Flex now has its VOX, monitor and PROC setters called (it declares the
+// records), and they must write nothing: the wire text from TransmitModel is
+// still the only Flex output for these controls.
 static void flexSeamSettersWriteNothing()
 {
     FlexBackend flex;
@@ -662,7 +676,8 @@ int main(int argc, char** argv)
     speechProcessorOnHostCompressorWithoutDropNotice();
     speechProcessorWithNoProcessorKeepsDropNotice();
     voxAndMonitorWithoutRecordsKeepDropNotice();
-    lineoutReachesSeamWithoutDropNotice();
+    lineoutReachesDeclaredSeamWithoutDropNotice();
+    lineoutWithoutRecordKeepsDropNotice();
     flexSeamSettersWriteNothing();
     unroutedVerbStillRaisesDropNotice();
     undeclaredCapabilityKeepsDropNotice();

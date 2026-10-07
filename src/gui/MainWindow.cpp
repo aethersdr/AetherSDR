@@ -13,6 +13,7 @@
 #include "core/backends/AutoRfGainControl.h"
 
 #include "MainWindowHelpers.h"
+#include "MixerControlAvailability.h"
 #include "WindowGeometryRestore.h"
 
 #include "models/Ctr2ProxyModel.h"
@@ -2052,7 +2053,13 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_titleBar, &TitleBar::headphoneVolumeChanged,
             &m_radioModel, &RadioModel::setHeadphoneGain);
     connect(m_titleBar, &TitleBar::lineoutMuteChanged, this, [this](bool muted) {
-        m_radioModel.setLineoutMute(muted);
+        // Both paths where the radio has a line out (#4665); a radio without
+        // one has only this computer's output to mute (MixerControlAvailability.h).
+        if (lineoutControlsAvailable(m_radioModel.isConnected(),
+                                     m_radioModel.hasCommandPlane(),
+                                     m_radioModel.backendCapabilities().lineoutControl.has_value())) {
+            m_radioModel.setLineoutMute(muted);
+        }
         m_audio->setMuted(muted);
     });
     connect(m_audio, &AudioEngine::mutedChanged, this, [this](bool muted) {

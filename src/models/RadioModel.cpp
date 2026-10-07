@@ -11993,13 +11993,10 @@ int RadioModel::activeOutputVolumePercent() const
         .value(QStringLiteral("MasterVolume"), QStringLiteral("100")).toInt();
 }
 
-// The `mixer lineout` text is for a radio with a command plane. A backend
-// without one takes the typed seam call below; the text would only raise a
-// drop notice for a request the seam already carried (#4665: muting the
-// inactive path is harmless).
-bool RadioModel::sendsLineoutWireText() const
+bool RadioModel::lineoutThroughSeam() const
 {
-    return !m_backend || usesFlexCommandPlane() || hasCommandPlane();
+    return m_backend && !usesFlexCommandPlane()
+        && m_backend->capabilities().lineoutControl.has_value();
 }
 
 void RadioModel::setLineoutGain(int v)
@@ -12010,17 +12007,13 @@ void RadioModel::setLineoutGain(int v)
     }
     m_lineoutGain = v;
     qCDebug(lcAudio) << "setLineoutGain:" << v;
-    if (sendsLineoutWireText()) {
-        sendCmd(QString("mixer lineout gain %1").arg(v));
-    }
-    // The same request, typed, for a backend with no command plane to receive the
-    // string on. Without it this control reached a Flex and nothing else, so on
-    // every other radio the master volume had no effect at all once PC Audio was
-    // off -- MainWindow::applyMasterVolume() routes here in exactly that case.
-    // Same shape as the rx-antenna and pan-dimension calls above: guarded on
-    // usesFlexCommandPlane() so a Flex is not told twice.
-    if (m_backend && !usesFlexCommandPlane()) {
+    // A backend that declares a line out takes the request typed; a Flex takes
+    // the wire text, and on a radio with neither the text's drop notice says
+    // that nothing applied it.
+    if (lineoutThroughSeam()) {
         m_backend->setLineoutGain(v);
+    } else {
+        sendCmd(QString("mixer lineout gain %1").arg(v));
     }
     emit audioOutputChanged();
 }
@@ -12034,14 +12027,11 @@ void RadioModel::setLineoutGain(int v)
 void RadioModel::setLineoutMute(bool m)
 {
     qCDebug(lcAudio) << "setLineoutMute:" << m;
-    if (sendsLineoutWireText()) {
-        sendCmd(QString("mixer lineout mute %1").arg(m ? 1 : 0));
-    }
-    // Sent unconditionally, like the command above and for the reason this
-    // function's own comment gives: a mute is a request, and a model that has
-    // drifted from the radio must stay recoverable from the UI.
-    if (m_backend && !usesFlexCommandPlane()) {
+    // Routed as in setLineoutGain(), but always sent, for the reason above.
+    if (lineoutThroughSeam()) {
         m_backend->setLineoutMute(m);
+    } else {
+        sendCmd(QString("mixer lineout mute %1").arg(m ? 1 : 0));
     }
     if (m_lineoutMute != m) {
         m_lineoutMute = m;
