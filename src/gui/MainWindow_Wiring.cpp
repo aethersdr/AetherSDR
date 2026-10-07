@@ -3734,13 +3734,15 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         [this, applet, sw, encoderDbmRange]
         (float minDbm, float maxDbm, bool waitForEcho = false) {
         *encoderDbmRange = {minDbm, maxDbm};
-        sw->setEncoderDbmRange(minDbm, maxDbm);
+        SpectrumDecodeScale decodeScale;
         if (auto* pan = m_radioModel.panadapter(applet->panId())) {
             sw->setEncoderYPixels(pan->fftYPixels());
             if (pan->panStreamId() && m_radioModel.panStream()) {
-                m_radioModel.panStream()->setDbmRange(pan->panStreamId(), minDbm, maxDbm, waitForEcho);
+                decodeScale = m_radioModel.panStream()->setDbmRange(
+                    pan->panStreamId(), minDbm, maxDbm, waitForEcho);
             }
         }
+        sw->setEncoderDbmRange(minDbm, maxDbm, decodeScale.generation);
     };
     auto applyAuthoritativeDbmRange =
         [this, applet, sw, setStreamDbmRange, encoderRecoveryPending]
@@ -3846,7 +3848,8 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
                 .arg(static_cast<double>(minDbm), 0, 'f', 2)
                 .arg(static_cast<double>(maxDbm), 0, 'f', 2),
             [this, guard, pan, pendingDbm, generation, previousRange,
-             applyAuthoritativeDbmRange, rangeWiringEpoch, sessionCommandsPan](int code, const QString&) {
+             applyAuthoritativeDbmRange, setStreamDbmRange, encoderRecoveryPending,
+             rangeWiringEpoch, sessionCommandsPan](int code, const QString&) {
                 if (!guard || !pan
                     || guard->dbmRangeWireEpoch() != rangeWiringEpoch
                     || pan != m_radioModel.panadapter(pan->panId())
@@ -3861,7 +3864,18 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
                 // Accepted reply-only writes converge the same canonical model
                 // as status. Any later radio status remains authoritative.
                 if (!pan->setRange(decision.range.minDbm, decision.range.maxDbm)) {
-                    applyAuthoritativeDbmRange(decision.range);
+                    if (code == 0) {
+                        // A reply confirms command acceptance, not which aperture
+                        // the next queued FFT used. Keep its frame guard alive.
+                        setStreamDbmRange(decision.range.minDbm, decision.range.maxDbm);
+                        guard->setDbmRange(decision.range.minDbm, decision.range.maxDbm);
+                        if (*encoderRecoveryPending) {
+                            *encoderRecoveryPending = false;
+                            guard->reacquireNoiseFloorLock();
+                        }
+                    } else {
+                        applyAuthoritativeDbmRange(decision.range);
+                    }
                 }
             });
         }, [&]() {

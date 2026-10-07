@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/TxGrantManager.h"
+#include "core/SpectrumDecodeScale.h"
 #include "core/backends/IndependentTxControl.h"
 
 #include "core/backends/flex/CommandParser.h"   // MessageSeverity for radioMessageReceived
@@ -1108,7 +1109,8 @@ signals:
     // Coherent coverage declares final same-scale samples, avoiding repeated
     // intensity calibration and smoothing in the renderer.
     void panFeedSpectrumReady(quint32 streamId, const QVector<float>& binsDbm,
-                              qint64 emittedNs);
+                              qint64 emittedNs,
+                              const AetherSDR::SpectrumDecodeScale& decodeScale = {});
     void panFeedWaterfallRowReady(quint32 streamId, const QVector<float>& binsDbm,
                                   double lowFreqMhz, double highFreqMhz,
                                   quint32 timecode, qint64 emittedNs,

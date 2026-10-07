@@ -2063,6 +2063,7 @@ RadioModel::RadioModel(QObject* parent)
     connect(this, &RadioModel::capabilitiesChanged, this, &RadioModel::updateTuneAvailability);
     qRegisterMetaType<PcmFrame>();
     qRegisterMetaType<SpectrumCoverage>();
+    qRegisterMetaType<SpectrumDecodeScale>();
     qRegisterMetaType<TxCoordinator::StopRequest>();
     qRegisterMetaType<TxStopEvidence>();
     qRegisterMetaType<SliceDelta>();

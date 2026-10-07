@@ -36,14 +36,31 @@ An owned-pan range write can be accepted with `R<seq>|0|` and no matching
 `display pan` status (FlexLib 4.1.5.39794, `Panadapter.cs`
 `SetLowDbmReply`/`SetHighDbmReply`, returns on `resp_val == 0` without touching
 the range). The range handshake applies a validated, dispatched request to the
-decoder; its reply retires the pending guard and converges the pan model. A
-radio status received after the write wins over the request, accepted or not
-(Principle II); with none, an accepted write stands and a rejected one restores
-the range the radio last confirmed. FlexLib's per-endpoint handlers adopt a
-rejection's reply body as that endpoint's value; this client writes both
+decoder; its reply retires the pending guard and converges the pan model.
+Command acceptance alone does not identify the aperture of an in-flight FFT
+frame. A radio status received after the write wins over the request, accepted
+or not (Principle II); with none, an accepted write stands and a rejected one
+restores the range the radio last confirmed. FlexLib's per-endpoint handlers
+adopt a rejection's reply body as that endpoint's value; this client writes both
 endpoints in one command, whose rejection body has no documented shape, so it
 is not parsed. Superseded replies cannot complete a newer
 request; ordinary status updates refresh the same per-pan encoder cache.
+
+Each decoded FFT carries a `SpectrumDecodeScale`: the aperture and local
+generation captured under the stream mutex with its samples. This context stays
+with the observation through queued model delivery and deferred GUI presentation.
+It is client decode provenance, not a VITA tag or proof of the radio's aperture.
+During a manual range transition, the widget compares candidate wire apertures
+against the preceding corrected observation before smoothing. A pre-request
+decode cannot retire the frame guard. Rapid reversals retain at most 32 candidate
+apertures (including the original and intermediate min/max combinations) for
+the existing 2-second handshake window; late old-wire frames remain correctable
+after the target has first appeared.
+Explicit cancellation, authoritative reconciliation, RF-gain or accepted RF
+geometry changes discard the history: the preceding spectrum is no longer a
+valid comparison for a different reception scene.
+Absolute-level producers leave the decode context empty and keep their existing
+rendering contract.
 
 The encoder range is separate from the auto-floor display axis. Headroom
 recovery runs only with Auto Floor on and only on a pan this client owns, since

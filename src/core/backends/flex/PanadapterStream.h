@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/PcmFrame.h"
+#include "core/SpectrumDecodeScale.h"
 #include <map>
 
 #include "core/PacketLossConcealment.h"
@@ -71,7 +72,7 @@ public:
     bool    isRunning() const;
 
     // Update the dBm range used to scale incoming FFT bins for a specific stream.
-    void setDbmRange(quint32 streamId, float minDbm, float maxDbm, bool waitForEcho = false);
+    SpectrumDecodeScale setDbmRange(quint32 streamId, float minDbm, float maxDbm, bool waitForEcho = false);
     // Abandon an in-flight client range request so the next radio-authoritative
     // range can update the FFT decoder immediately (for example, on a band change).
     bool cancelPendingDbmRange(quint32 streamId);
@@ -203,7 +204,8 @@ signals:
     // One DAX channel's RX audio as owning typed PCM.
     void daxPcmReady(int channel, const AetherSDR::PcmFrame& frame);
     void iqDataReady(int channel, const QByteArray& rawPayload, int sampleRate);
-    void spectrumReady(quint32 streamId, const QVector<float>& binsDbm, qint64 emittedNs);
+    void spectrumReady(quint32 streamId, const QVector<float>& binsDbm, qint64 emittedNs,
+                       const AetherSDR::SpectrumDecodeScale& decodeScale);
     // One row of waterfall data (intensity values, Width bins).
     void waterfallRowReady(quint32 streamId, const QVector<float>& binsDbm,
                            double lowFreqMhz, double highFreqMhz,
@@ -225,6 +227,7 @@ private slots:
 private:
     friend class PcmCompatibilityTestAccess;
     friend class VitaSequenceLossLogTestAccess;
+    friend struct PanadapterDbmRangeTestAccess;
     PcmProducer m_pcmProducer;
     std::map<quint32, std::unique_ptr<PcmProducer>> m_daxPcm;
     void publishLegacyDaxAudio(quint32 streamId, int channel, const QByteArray& pcm);
@@ -376,6 +379,8 @@ private:
     quint16         m_localPort{0};
 
     QMap<quint32, QPair<float,float>> m_dbmRanges;  // streamId → (min, max)
+    QMap<quint32, quint64> m_dbmRangeGenerations;
+    quint64 m_nextDbmRangeGeneration{0};
     QMap<quint32, QPair<float,float>> m_pendingDbmRanges;  // streamId → pending echoed range
     QMap<quint32, int> m_yPixels;  // streamId → ypixels for FFT bin scaling
     RadioConnection* m_conn{nullptr};

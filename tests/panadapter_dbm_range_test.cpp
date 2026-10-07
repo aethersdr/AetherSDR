@@ -6,10 +6,28 @@
 #include "TestSettingsProfile.h"
 
 #include <QCoreApplication>
+#include <QtEndian>
 
 #include <cstdio>
 
 using namespace AetherSDR;
+
+namespace AetherSDR {
+struct PanadapterDbmRangeTestAccess {
+    static void fft(PanadapterStream& stream, quint32 id) {
+        QByteArray frame(48, '\0');
+        auto* raw = reinterpret_cast<uchar*>(frame.data());
+        qToBigEndian<quint16>(4, raw + 30);
+        qToBigEndian<quint16>(2, raw + 32);
+        qToBigEndian<quint16>(4, raw + 34);
+        qToBigEndian<quint32>(1, raw + 36);
+        for (int i = 0; i < 4; ++i) {
+            qToBigEndian<quint16>(350, raw + 40 + 2 * i);
+        }
+        stream.decodeFFT(raw, frame.size(), false, id);
+    }
+};
+}
 
 static int g_failures = 0;
 
@@ -135,6 +153,72 @@ int main(int argc, char** argv)
     // range applies normally instead of remaining blocked behind the old drag.
     stream.setDbmRange(kStreamId, -130.0f, -30.0f);
     CHECK(!stream.cancelPendingDbmRange(kStreamId));
+
+    // The queued payload owns its decoder aperture even if the GUI changes
+    // the stream range before delivering the observation. No socket is used.
+    {
+        const SpectrumDecodeScale old = stream.setDbmRange(kStreamId, -165, -35);
+        CHECK(old.valid());
+        SpectrumDecodeScale queued;
+        QVector<float> queuedBins;
+        QObject receiver;
+        QObject::connect(&stream, &PanadapterStream::spectrumReady, &receiver,
+            [&](quint32 id, const QVector<float>& bins, qint64,
+                const SpectrumDecodeScale& scale) {
+                CHECK(id == kStreamId);
+                queued = scale;
+                queuedBins = bins;
+            }, Qt::QueuedConnection);
+        PanadapterDbmRangeTestAccess::fft(stream, kStreamId);
+        const SpectrumDecodeScale requested = stream.setDbmRange(kStreamId, -127.5f, 2.5f, true);
+        CHECK(requested.generation > old.generation);
+        const SpectrumDecodeScale staleEcho = stream.setDbmRange(kStreamId, -165, -35);
+        CHECK(staleEcho.generation == requested.generation);
+        const SpectrumDecodeScale matchingEcho = stream.setDbmRange(kStreamId, -127.5f, 2.5f);
+        CHECK(matchingEcho.generation == requested.generation);
+        app.processEvents();
+        CHECK(queued.generation == old.generation);
+        CHECK(queued.minDbm == -165 && queued.maxDbm == -35);
+        CHECK(queuedBins.size() == 4);
+        CHECK(std::abs(queuedBins.front() - (-35 - 350.0f / 699 * 130)) < 0.001f);
+    }
+
+    {
+        DbmRangeTransition::FrameGuard frames;
+        const DbmRangeTransition::Range first{-165, -35}, middle{-127.5f, 2.5f};
+        const QVector<float> physical(256, -104);
+        frames.arm(first, middle, 1000, 2000);
+        frames.setTargetScale({middle.minDbm, middle.maxDbm, 2});
+        CHECK(!frames.evaluate(physical, physical, {-165, -35, 1}, 1001).newEncodingObserved);
+        const QVector<float> wrong(256, -66.5f);
+        const auto corrected = frames.evaluate(wrong, physical, {-127.5f, 2.5f, 2}, 1002);
+        CHECK(corrected.useRebasedBins && !corrected.newEncodingObserved);
+        CHECK(std::abs(corrected.rebasedBins.front() + 104) < 0.001f);
+        CHECK(frames.evaluate(physical, physical, {-127.5f, 2.5f, 2}, 1100).newEncodingObserved);
+        CHECK(frames.evaluate(wrong, physical, {-127.5f, 2.5f, 2}, 1101).useRebasedBins);
+        frames.arm(middle, first, 1200, 2000);
+        frames.setTargetScale({-165, -35, 3});
+        CHECK(!frames.evaluate(physical, physical, {-165, -35, 1}, 1201).newEncodingObserved);
+        const QVector<float> intermediateWire(256, -141.5f);
+        const auto reversed = frames.evaluate(intermediateWire, physical, {-165, -35, 3}, 1202);
+        CHECK(reversed.useRebasedBins && !reversed.newEncodingObserved);
+        CHECK(std::abs(reversed.rebasedBins.front() + 104) < 0.001f);
+        for (const DbmRangeTransition::Range intermediate : {
+                 DbmRangeTransition::Range{-165, 2.5f}, {-127.5f, -35}}) {
+            QVector<float> decoded = physical;
+            for (float& bin : decoded) {
+                const float fraction = (intermediate.maxDbm - bin)
+                    / (intermediate.maxDbm - intermediate.minDbm);
+                bin = -35 - fraction * 130;
+            }
+            const auto partial = frames.evaluate(decoded, physical, {-165, -35, 3}, 1250);
+            CHECK(partial.useRebasedBins && !partial.newEncodingObserved);
+            CHECK(std::abs(partial.rebasedBins.front() + 104) < 0.001f);
+        }
+        CHECK(!frames.evaluate(wrong, physical, {-127.5f, 2.5f, 2}, 3201).useRebasedBins);
+        frames.clear();
+        CHECK(!frames.evaluate(wrong, physical, {-127.5f, 2.5f, 2}, 1203).useRebasedBins);
+    }
 
     // A single radio-authoritative mismatch must survive until the timeout.
     // PanadapterModel emits levelChanged only when the values change, so there

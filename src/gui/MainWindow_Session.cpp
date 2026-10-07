@@ -1799,7 +1799,8 @@ void MainWindow::wirePanLifecycle()
     connect(&m_radioModel, &RadioModel::panFeedSpectrumReady,
             this, [this, profileLoadFrameReady, capturePanFrame](quint32 streamId,
                                                 const QVector<float>& bins,
-                                                qint64 emittedNs) {
+                                                qint64 emittedNs,
+                                                const SpectrumDecodeScale& decodeScale) {
         if (m_shuttingDown || !m_panStack) {
             return;
         }
@@ -1812,7 +1813,7 @@ void MainWindow::wirePanLifecycle()
         deferReceivePresentation(
             ReceivePresentationSource::Flex,
             ReceivePresentationSurface::Spectrum,
-            [this, profileLoadFrameReady, streamId, bins, frameGuard]() {
+            [this, profileLoadFrameReady, streamId, bins, decodeScale, frameGuard]() {
                 if (m_shuttingDown || !m_panStack || !frameGuard.isCurrent()) {
                     return;
                 }
@@ -1823,7 +1824,7 @@ void MainWindow::wirePanLifecycle()
                                                        bins.size())) {
                                 return;
                             }
-                            sw->updateSpectrum(bins);
+                            sw->updateSpectrum(bins, decodeScale);
                             finishPanadapterConnectionAnimation();
                         }
                         return;
@@ -1837,7 +1838,7 @@ void MainWindow::wirePanLifecycle()
                 if (m_radioModel.panadapters().isEmpty()
                     && !profileLoadRadioStateWritesHeld()) {
                     if (auto* sw = spectrum()) {
-                        sw->updateSpectrum(bins);
+                        sw->updateSpectrum(bins, decodeScale);
                         finishPanadapterConnectionAnimation();
                     }
                 } else {

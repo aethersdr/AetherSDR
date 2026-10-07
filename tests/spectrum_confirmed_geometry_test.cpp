@@ -25,6 +25,17 @@ using namespace AetherSDR;
 
 namespace AetherSDR {
 struct SpectrumOffscreenTestAccess {
+    static void release(SpectrumWidget& widget, DbmRangeTransition::Range old,
+                        DbmRangeTransition::Range target, quint64 generation) {
+        widget.m_refLevel = target.maxDbm;
+        widget.m_dynamicRange = target.maxDbm - target.minDbm;
+        widget.beginDbmRangeTransition(old.minDbm, old.maxDbm, target.minDbm, target.maxDbm);
+        widget.setEncoderDbmRange(target.minDbm, target.maxDbm, generation);
+    }
+    static const QVector<float>& corrected(const SpectrumWidget& widget) { return widget.m_bins; }
+    static bool releasePending(const SpectrumWidget& widget) {
+        return widget.m_dbmReleaseRebaseUntilMs > 0;
+    }
     static void finishSettleWindow(SpectrumWidget& widget) {
         const qint64 now = QDateTime::currentMSecsSinceEpoch();
         widget.m_noiseFloorScaleSettlingUntilMs = now - 1;
@@ -114,6 +125,105 @@ int main(int argc, char** argv)
         std::printf("[%s] %s\n", ok ? "OK" : "FAIL", name);
         failures += !ok;
     };
+    // Deterministic replay of the captured decode-before-release / ingest-after-
+    // release ordering, including both shifts and a span change. The production
+    // widget must correct inputs before smoothing and keep late apertures valid.
+    const auto encodeThenDecode = [](const QVector<float>& physical,
+                                     DbmRangeTransition::Range wire,
+                                     SpectrumDecodeScale decoder) {
+        QVector<float> bins = physical;
+        for (float& bin : bins) {
+            const float fraction = (wire.maxDbm - bin) / (wire.maxDbm - wire.minDbm);
+            bin = decoder.maxDbm - fraction * (decoder.maxDbm - decoder.minDbm);
+        }
+        return bins;
+    };
+    const QVector<float> physical(256, -104.0f);
+    const DbmRangeTransition::Range original{-165, -35};
+    for (const DbmRangeTransition::Range target : {
+             DbmRangeTransition::Range{-127.5f, 2.5f}, {-180, -50}, {-170, -90}}) {
+        SpectrumWidget trace;
+        trace.setNoiseFloorEnable(false);
+        trace.setDbmRange(original.minDbm, original.maxDbm);
+        trace.setEncoderDbmRange(original.minDbm, original.maxDbm, 1);
+        const SpectrumDecodeScale old{original.minDbm, original.maxDbm, 1};
+        const SpectrumDecodeScale next{target.minDbm, target.maxDbm, 2};
+        trace.updateSpectrum(physical, old);
+        SpectrumOffscreenTestAccess::release(trace, original, target, 2);
+        trace.updateSpectrum(physical, old); // Decoded before mouse-up, queued.
+        check(SpectrumOffscreenTestAccess::releasePending(trace),
+              "a queued pre-release decode cannot complete a new range transition");
+        // A matching reply (including a rounded endpoint) confirms the command,
+        // without discarding the guard needed by subsequent old-wire frames.
+        trace.setDbmRange(target.minDbm + 0.004f, target.maxDbm + 0.004f);
+        check(SpectrumOffscreenTestAccess::releasePending(trace),
+              "a matching or rounded reply preserves the FFT frame guard");
+        for (int frame = 0; frame < 3; ++frame) {
+            trace.updateSpectrum(encodeThenDecode(physical, original, next), next);
+            check(std::abs(SpectrumOffscreenTestAccess::trace(trace).front() + 104) < 0.01f,
+                  "old-wire frames decoded under the new aperture never enter averaging with a false level");
+        }
+        trace.updateSpectrum(physical, next);
+        check(!SpectrumOffscreenTestAccess::releasePending(trace),
+              "an FFT with the requested decode and wire aperture completes the transition");
+        trace.updateSpectrum(encodeThenDecode(physical, original, next), next);
+        check(std::abs(SpectrumOffscreenTestAccess::trace(trace).front() + 104) < 0.01f,
+              "a late old-wire frame remains corrected after target encoding was observed");
+        trace.prepareForShutdown();
+    }
+    for (const bool gainChange : {true, false}) {
+        SpectrumWidget trace;
+        trace.setNoiseFloorEnable(false);
+        trace.setDbmRange(-165, -35);
+        trace.setEncoderDbmRange(-165, -35, 1);
+        trace.updateSpectrum(physical, {-165, -35, 1});
+        const DbmRangeTransition::Range target{-127.5f, 2.5f};
+        SpectrumOffscreenTestAccess::release(trace, original, target, 2);
+        trace.updateSpectrum(physical, {-127.5f, 2.5f, 2});
+        if (gainChange) {
+            trace.setRfGain(32);
+        } else {
+            trace.setFrequencyRangeImmediate(14.224, 0.2);
+        }
+        const QVector<float> changedScene(256, -72);
+        trace.updateSpectrum(changedScene, {-127.5f, 2.5f, 2});
+        check(std::abs(SpectrumOffscreenTestAccess::corrected(trace).front() + 72) < 0.01f,
+              "a changed RF gain or frequency discards prior-aperture comparisons and preserves genuine RF levels");
+        trace.prepareForShutdown();
+    }
+    {
+        SpectrumWidget trace;
+        trace.setNoiseFloorEnable(false);
+        trace.setDbmRange(-165, -35);
+        trace.setEncoderDbmRange(-165, -35, 1);
+        trace.updateSpectrum(physical, {-165, -35, 1});
+        const DbmRangeTransition::Range intermediate{-127.5f, 2.5f};
+        const SpectrumDecodeScale middle{intermediate.minDbm, intermediate.maxDbm, 2};
+        SpectrumOffscreenTestAccess::release(trace, original, intermediate, 2);
+        SpectrumOffscreenTestAccess::release(trace, intermediate, original, 3);
+        const SpectrumDecodeScale latest{original.minDbm, original.maxDbm, 3};
+        trace.setDbmRange(-165, -35); // Unchanged-model successful reply.
+        trace.updateSpectrum(encodeThenDecode(physical, original, middle), middle);
+        check(SpectrumOffscreenTestAccess::releasePending(trace)
+              && std::abs(SpectrumOffscreenTestAccess::trace(trace).front() + 104) < 0.01f,
+              "a rapid reversal corrects the original wire aperture decoded under an intermediate request");
+        trace.updateSpectrum(physical, {-165, -35, 1});
+        check(SpectrumOffscreenTestAccess::releasePending(trace),
+              "an A-to-B-to-A reversal cannot complete using an earlier A decode generation");
+        trace.updateSpectrum(encodeThenDecode(physical, intermediate, latest), latest);
+        check(std::abs(SpectrumOffscreenTestAccess::trace(trace).front() + 104) < 0.01f,
+              "an intermediate wire aperture remains a candidate under the latest decoder");
+        for (const DbmRangeTransition::Range intermediateEndpoint : {
+                 DbmRangeTransition::Range{-165, 2.5f}, {-127.5f, -35}}) {
+            trace.updateSpectrum(encodeThenDecode(physical, intermediateEndpoint, latest), latest);
+            check(std::abs(SpectrumOffscreenTestAccess::trace(trace).front() + 104) < 0.01f,
+                  "an intermediate single-endpoint aperture cannot inject a partial-scale dip into averaging");
+        }
+        trace.updateSpectrum(physical, latest);
+        check(!SpectrumOffscreenTestAccess::releasePending(trace),
+              "the latest decoder generation converges after rapid reversals");
+        trace.prepareForShutdown();
+    }
     {
         SpectrumWidget trace;
         trace.resize(1000, 900);
