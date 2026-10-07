@@ -20,6 +20,19 @@
 
 namespace AetherSDR {
 
+namespace {
+
+// The level the operator hears, which a control surface's AF dial mirrors;
+// RadioModel holds the one rule. Without a model, the PC sink's saved level.
+int activeOutputVolumePercent(const RadioModel* model)
+{
+    return model ? model->activeOutputVolumePercent()
+                 : AppSettings::instance()
+                       .value(QStringLiteral("MasterVolume"), QStringLiteral("100")).toInt();
+}
+
+}  // namespace
+
 int TciProtocol::tciTrxForSlice(RadioModel* model, const SliceModel* slice)
 {
     if (!model || !slice)
@@ -406,8 +419,7 @@ QString TciProtocol::generateInitBurst()
         // instead of the radio's real level (Ulanzi/Elgato/StreamController
         // gain steppers).
         burst += QStringLiteral("volume:%1;")
-                     .arg(volumeDbFromPercent(
-                         AppSettings::instance().value("MasterVolume", "100").toInt()));
+                     .arg(volumeDbFromPercent(activeOutputVolumePercent(m_model)));
 
         // Which slice holds GUI focus (#4160) — AetherSDR extension. Without
         // it a control surface learns focus only from the next change event,
@@ -1200,10 +1212,8 @@ int TciProtocol::volumePercentFromDb(double db)
 QString TciProtocol::cmdVolume(const QStringList& args, bool /*isSet*/)
 {
     if (args.isEmpty()) {
-        // GET — current master volume from saved settings (the same value
-        // the title bar slider reads on startup), reported in dB.
-        int pct = AppSettings::instance()
-                      .value("MasterVolume", "100").toInt();
+        // GET — the level of the output the operator hears, in dB.
+        const int pct = activeOutputVolumePercent(m_model);
         return QStringLiteral("volume:%1;").arg(volumeDbFromPercent(pct));
     }
 

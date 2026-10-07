@@ -1147,6 +1147,41 @@ add_test(NAME anan_speaker_audio_test COMMAND anan_speaker_audio_test)
 # Without this property that is a green pass with zero checks.
 set_tests_properties(anan_speaker_audio_test PROPERTIES SKIP_RETURN_CODE 77)
 
+# ANAN transport counters -> IRadioBackend::LinkStats -- what the status bar's
+# "Network:" field reads: bytes from every radio datagram, packets from DDC
+# frames only, nothing from another host. SOCKET: binds one UDP socket on
+# AnyIPv4, ephemeral port (P2Client::start()), and sends its startup sequence to
+# 127.0.0.1. No listener, no fake peer, no radio.
+add_executable(anan_link_telemetry_test tests/anan_link_telemetry_test.cpp)
+target_include_directories(anan_link_telemetry_test PRIVATE src tests)
+target_link_libraries(anan_link_telemetry_test
+    PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME anan_link_telemetry_test COMMAND anan_link_telemetry_test)
+# Exit 77 == no local UDP socket could be bound, so nothing could be observed.
+set_tests_properties(anan_link_telemetry_test PROPERTIES SKIP_RETURN_CODE 77)
+
+# The three-state noise blanker at the model boundary: SliceModel only, no
+# radio, no backend and no DSP. Pins that nbOn() keeps its old meaning for the
+# bool consumers (rigctl/SmartCat/TCI/MIDI), that one intent carries kind+level+
+# fill, and that a radio's bool echo cannot downgrade a host NB2 to NB.
+add_executable(noise_blanker_kind_model_test tests/noise_blanker_kind_model_test.cpp)
+target_include_directories(noise_blanker_kind_model_test PRIVATE src tests)
+target_link_libraries(noise_blanker_kind_model_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME noise_blanker_kind_model_test COMMAND noise_blanker_kind_model_test)
+set_tests_properties(noise_blanker_kind_model_test PROPERTIES TIMEOUT 120)
+
+# The NB2 write path is capability-gated like its read counterpart. `get hostnb`
+# already refuses without RadioCapabilities::hasHostNoiseBlanker; without the
+# same check on `slice dsp nb2` a bridge caller puts a Flex or Icom slice into
+# Advanced, where it sticks (a radio's bool echo cannot downgrade a host kind)
+# and relabels the NB button "NB2" on a radio that has none. Socket-free: stub
+# backend, injected slice, dispatcher called directly.
+add_executable(automation_nb2_capability_test tests/automation_nb2_capability_test.cpp)
+target_include_directories(automation_nb2_capability_test PRIVATE src tests)
+target_link_libraries(automation_nb2_capability_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME automation_nb2_capability_test COMMAND automation_nb2_capability_test)
+set_tests_properties(automation_nb2_capability_test PROPERTIES TIMEOUT 120)
+
 # IcomCIV wire layers — pure encode/decode, standalone (no Qt / aethercore).
 # An Icom networked radio is two protocols stacked: CI-V is the command plane
 # and RS-BA1 is the UDP transport it travels inside. Both halves unit-test
@@ -2036,6 +2071,25 @@ target_include_directories(theme_manager_test PRIVATE src)
 target_link_libraries(theme_manager_test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
 add_test(NAME theme_manager_test COMMAND theme_manager_test)
 set_tests_properties(theme_manager_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# CanonWindow (RFC #6226): the title-bar-less window falls back to the manual
+# move when startSystemMove() is unavailable, and closes on QKeySequence::Close.
+add_executable(canon_window_test
+    tests/canon_window_test.cpp
+    src/gui/CanonWindow.cpp
+    src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
+    $<TARGET_OBJECTS:aether_test_settings>
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
+    ${THEME_TEST_RESOURCES}
+)
+target_include_directories(canon_window_test PRIVATE src)
+target_link_libraries(canon_window_test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
+set_target_properties(canon_window_test PROPERTIES AUTOMOC ON)
+add_test(NAME canon_window_test COMMAND canon_window_test)
+set_tests_properties(canon_window_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # Compiled-in theme seed (#3184).  DELIBERATELY has no ${THEME_TEST_RESOURCES}:
@@ -7346,6 +7400,68 @@ target_include_directories(client_display_settings_test PRIVATE src tests)
 target_link_libraries(client_display_settings_test PRIVATE aethercore Qt6::Core)
 add_test(NAME client_display_settings_test COMMAND client_display_settings_test)
 
+# FFT FPS and the dBm range in the same ClientDisplay document.
+# Socket-free: the real settings store in a TestSettingsProfile, and four
+# backends constructed only to read capabilities() (Qt6::Network for their
+# headers, as noise_floor_auto_adjust_gate_test). AETHER_SOURCE_DIR because the
+# last block reads the MainWindow wiring and SpectrumWidget as text: neither
+# links into a test.
+add_executable(client_display_pan_settings_test
+    tests/client_display_pan_settings_test.cpp)
+target_include_directories(client_display_pan_settings_test PRIVATE src tests)
+target_link_libraries(client_display_pan_settings_test PRIVATE
+    aethercore Qt6::Core Qt6::Network)
+target_compile_definitions(client_display_pan_settings_test PRIVATE
+    AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+add_test(NAME client_display_pan_settings_test
+         COMMAND client_display_pan_settings_test)
+
+# RadioModel's own client-owned state on an ANAN: the master-volume read-back,
+# the restored line-out level, and the Tuning-domain step. Socket-free, through
+# setBackendForTest() and a TestSettingsProfile store.
+add_executable(radio_model_client_state_test tests/radio_model_client_state_test.cpp)
+target_include_directories(radio_model_client_state_test PRIVATE src tests)
+target_link_libraries(radio_model_client_state_test PRIVATE
+    aethercore Qt6::Core Qt6::Network)
+add_test(NAME radio_model_client_state_test COMMAND radio_model_client_state_test)
+set_tests_properties(radio_model_client_state_test PROPERTIES TIMEOUT 120)
+
+# The Display panel's FFT FPS slider runs the bounds ClientDisplaySettings
+# stores. Same link set and shape as spectrum_overlay_dax_availability_test.
+add_executable(spectrum_overlay_fft_fps_bounds_test
+    tests/spectrum_overlay_fft_fps_bounds_test.cpp
+    src/gui/SpectrumOverlayMenu.cpp
+    src/gui/FrontEndOverloadIndicator.cpp
+    src/gui/SpectrumOverlayWheelGuard.cpp
+    src/gui/MemoryBrowsePanel.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/DspParamPopup.cpp
+)
+target_include_directories(spectrum_overlay_fft_fps_bounds_test PRIVATE src tests)
+if(DEBIAN_GPU_FIX_REQUIRED)
+    target_include_directories(spectrum_overlay_fft_fps_bounds_test PRIVATE
+        "${DEBIAN_PRIVATE_INC}"
+        "${DEBIAN_PRIVATE_INC}/QtGui"
+    )
+endif()
+if(QT_FRAMEWORK_PRIVATE_INC)
+    target_include_directories(spectrum_overlay_fft_fps_bounds_test PRIVATE
+        "${QT_FRAMEWORK_PRIVATE_INC}"
+        "${QT_FRAMEWORK_PRIVATE_INC}/QtGui"
+    )
+endif()
+target_link_libraries(spectrum_overlay_fft_fps_bounds_test PRIVATE
+    aethercore Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test
+)
+if(TARGET Qt6::GuiPrivate)
+    target_link_libraries(spectrum_overlay_fft_fps_bounds_test PRIVATE Qt6::GuiPrivate)
+endif()
+set_target_properties(spectrum_overlay_fft_fps_bounds_test PROPERTIES AUTOMOC ON)
+add_test(NAME spectrum_overlay_fft_fps_bounds_test
+         COMMAND spectrum_overlay_fft_fps_bounds_test)
+set_tests_properties(spectrum_overlay_fft_fps_bounds_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # Socket-free injection into real SliceModel/RxApplet/VfoWidget objects.
 # RadioModel supplies identity only; no connectRadio call or firmware peer.
 add_executable(rx_applet_squelch_reconciliation_test
@@ -7601,6 +7717,24 @@ add_test(NAME phone_cw_level_meter_state_test
 set_tests_properties(phone_cw_level_meter_state_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# The Phone and CW ALC bars end at the tick of the value they show (#6228).
+# Rendered offscreen and read back by pixel: filledFraction() cannot tell a
+# left-anchored bar from a right-anchored one.
+add_executable(phone_cw_alc_gauge_fill_test
+    tests/phone_cw_alc_gauge_fill_test.cpp
+    src/gui/PhoneCwApplet.cpp
+    src/gui/DragValuePopup.cpp
+)
+target_include_directories(phone_cw_alc_gauge_fill_test PRIVATE src)
+target_link_libraries(phone_cw_alc_gauge_fill_test PRIVATE
+    aethercore Qt6::Core Qt6::Gui Qt6::Widgets
+)
+set_target_properties(phone_cw_alc_gauge_fill_test PROPERTIES AUTOMOC ON)
+add_test(NAME phone_cw_alc_gauge_fill_test
+         COMMAND phone_cw_alc_gauge_fill_test)
+set_tests_properties(phone_cw_alc_gauge_fill_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # +ACC dims with an announced reason where the radio's inputs cannot be
 # selected (hasSelectableMicInputs=false). Same link set as the level-meter test.
 add_executable(phone_cw_acc_availability_test
@@ -7686,10 +7820,13 @@ target_link_libraries(CAT_Flex_test PRIVATE Qt6::Core Qt6::Network)
 # Conditional targets are guarded with if(TARGET ...).
 set(AETHER_SETTINGS_CONSUMERS
     reroute_dead_controls_test
+    radio_model_client_state_test
     squelch_level_scale_test
     hl2_pan_create_async_test
     anan_backend_test
     anan_noise_blanker_readback_test
+    noise_blanker_kind_model_test
+    automation_nb2_capability_test
     tci_rx_audio_test
     bandscope_trace_render_test
     decoder_audio_routing_test
@@ -7726,6 +7863,8 @@ set(AETHER_SETTINGS_CONSUMERS
     waterfall_time_marker_settings_test
     extended_tnf_settings_test
     client_display_settings_test
+    client_display_pan_settings_test
+    spectrum_overlay_fft_fps_bounds_test
     gui_nested_lifetime_test
     rx_applet_squelch_reconciliation_test
     fm_filter_controls_test
@@ -7769,6 +7908,7 @@ set(AETHER_SETTINGS_CONSUMERS
     aether_tx_profiles_test
     aether_rx_profiles_test
     theme_manager_test
+    canon_window_test
     theme_seed_test
     panadapter_message_overlay_test
     app_settings_safety_test
@@ -7873,6 +8013,7 @@ set(AETHER_AUTOMATION_SERVER_TESTS
     automation_nnr_probe_test
     connect_state_model_test
     automation_dsp_backend_readback_test
+    automation_nb2_capability_test
     backend_slice_lifecycle_test
     tci_automation_test
     reroute_dead_controls_test
@@ -8433,7 +8574,8 @@ if(ENABLE_DEEPFIST_EXPERIMENT)
     add_test(NAME deepfist_cw_model_test COMMAND deepfist_cw_model_test)
     add_test(NAME deepfist_carrier_regression_test COMMAND deepfist_cw_model_test --carrier)
     add_test(NAME deepfist_cw_churn_test COMMAND deepfist_cw_model_test --churn)
-    set_tests_properties(deepfist_cw_churn_test deepfist_carrier_regression_test PROPERTIES
+    add_test(NAME deepfist_weak_signal_test COMMAND deepfist_cw_model_test --weak)
+    set_tests_properties(deepfist_cw_churn_test deepfist_carrier_regression_test deepfist_weak_signal_test PROPERTIES
         SKIP_RETURN_CODE 77 TIMEOUT 120)
     add_test(NAME deepfist_cw_model_inference_test COMMAND deepfist_cw_model_test --infer)
     add_test(NAME deepfist_cw_model_download_inference_test COMMAND deepfist_cw_model_test --download-infer)

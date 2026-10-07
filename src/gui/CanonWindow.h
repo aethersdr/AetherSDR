@@ -1,0 +1,133 @@
+#pragma once
+
+#include <QDialog>
+#include <QPixmap>
+
+class QTimer;
+class QToolButton;
+
+namespace AetherSDR {
+
+// A window in the AetherSDR style guide, replacing the FramelessWindowTitleBar
+// chrome for windows that adopt it: no title bar, 16 px rounded corners, the
+// guide's ambient ground (color.canon.ground with a blue and a teal bloom and a
+// fading 64 px grid) and a hairline color.canon.lineHi border. A round close
+// button sits in the top-right corner; the window moves by dragging any empty
+// part of it (through FramelessMoveHelper, like the frameless title bar), and
+// Escape or the platform Close shortcut (⌘W, Ctrl+W) closes it. The title is
+// still set for the taskbar and screen readers.
+//
+// Always frameless: it does not follow the View → Frameless Window setting,
+// and it asks to open centred on its parent rather than restoring a saved
+// geometry (see docs/style/dialog-patterns.md). Wayland compositors place
+// top-level windows themselves, so there the request may be ignored.
+//
+// Corners are transparent, so the rounding needs a compositing window manager
+// (always on macOS, Windows and Wayland; an X11 session without a compositor
+// shows square black corners).
+class CanonWindow : public QDialog {
+    Q_OBJECT
+
+public:
+    explicit CanonWindow(const QString& title, QWidget* parent = nullptr);
+
+    // Content goes here; install a layout on it.
+    QWidget* bodyWidget() const { return m_body; }
+
+    static constexpr int kRadius = 16;
+    static constexpr int kInset = 1;   // hairline border; the body sits inside it
+
+protected:
+    void paintEvent(QPaintEvent* event) override;
+    void mousePressEvent(QMouseEvent* event) override;
+    void mouseMoveEvent(QMouseEvent* event) override;
+    void mouseReleaseEvent(QMouseEvent* event) override;
+    void resizeEvent(QResizeEvent* event) override;
+    void showEvent(QShowEvent* event) override;
+
+private:
+    void paintGround(QPaintDevice& device) const;
+
+    QWidget*     m_body{nullptr};
+    QToolButton* m_close{nullptr};
+    bool         m_placed{false};
+    QPixmap      m_ground;   // the painted ground, rebuilt on resize, DPR or theme change
+};
+
+// The guide's spark: a point of light circling a path, with a bright tip and a
+// tail that fades to nothing, over a wider faint glow. The base owns the
+// animation: it runs only while the widget is visible, ticks slowly while its
+// window is not exposed (minimised or covered), and holds still when the OS
+// asks for reduced motion (QAccessibilityHints::motionPreference).
+class SparkWidget : public QWidget {
+    Q_OBJECT
+
+public:
+    // Follows the OS preference; public so a test can apply one the platform
+    // does not report.
+    void setMotionPreference(Qt::MotionPreference preference);
+    bool isAnimating() const;
+
+protected:
+    SparkWidget(int lapMs, QWidget* parent);
+
+    void showEvent(QShowEvent* event) override;
+    void hideEvent(QHideEvent* event) override;
+
+    // Strokes `path` with the spark centred on `centre` at the current angle:
+    // a `glowWidth` pass at `glowAlpha`, then a `coreWidth` pass at full
+    // strength.
+    void paintSpark(QPainter& p, const QPainterPath& path, const QPointF& centre,
+                    const QColor& body, const QColor& tip,
+                    qreal glowWidth, qreal glowAlpha, qreal coreWidth) const;
+
+private:
+    void tick();
+
+    int     m_lapMs;
+    qreal   m_angle{90.0};
+    bool    m_motionReduced{false};
+    QTimer* m_timer{nullptr};
+};
+
+// A circular image (a logo, an avatar) with a contrast ring and a cyan spark
+// (color.canon.cyan with a color.canon.sparkHot tip) circling it once every
+// seven seconds. The image is scaled at paint time for the screen's device
+// pixel ratio, so it stays sharp when the window moves between screens.
+class SparkRing : public SparkWidget {
+    Q_OBJECT
+
+public:
+    SparkRing(const QPixmap& image, int diameter, QWidget* parent = nullptr);
+    QSize sizeHint() const override;
+
+protected:
+    void paintEvent(QPaintEvent* event) override;
+
+private:
+    QPixmap m_source;
+    QPixmap m_scaled;
+    qreal   m_scaledDpr{0.0};
+    int     m_diameter;
+};
+
+// Wraps one widget (a button) and draws a gold spark (color.canon.sparkGold
+// with a color.canon.sparkGoldHot tip) around it, circling a rounded border
+// once every three seconds, like the Contributor Logbook's award cards. Gold
+// marks recognition.
+class SparkBorder : public SparkWidget {
+    Q_OBJECT
+
+public:
+    // radius: the wrapped widget's corner radius; the spark runs just outside it.
+    SparkBorder(QWidget* child, int radius, QWidget* parent = nullptr);
+
+protected:
+    void paintEvent(QPaintEvent* event) override;
+
+private:
+    QWidget* m_child;
+    int      m_radius;
+};
+
+} // namespace AetherSDR

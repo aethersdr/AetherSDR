@@ -121,28 +121,42 @@ void BrandMark::paintEvent(QPaintEvent* ev)
     }
 
     const QFont font = wordmarkFont();
-    p.setFont(font);
     const QFontMetricsF fm(font);
-    const qreal baseline = (height() + fm.capHeight()) / 2.0;
+    paintWordmark(p, this, font, x, (height() + fm.capHeight()) / 2.0, height());
+}
 
+qreal BrandMark::wordmarkWidth(const QFont& font)
+{
+    const QFontMetricsF fm(font);
+    return fm.horizontalAdvance(kWordOne) + fm.horizontalAdvance(kWordTwo);
+}
+
+void BrandMark::paintWordmark(QPainter& p, const QWidget* scope, const QFont& font,
+                              qreal x, qreal baseline, qreal height)
+{
     auto& theme = ThemeManager::instance();
+    const QFontMetricsF fm(font);
+    p.save();
+    p.setRenderHint(QPainter::Antialiasing, true);
+    p.setRenderHint(QPainter::TextAntialiasing, true);
+    p.setFont(font);
 
     // "Aether" — flat brand ink.
-    p.setPen(theme.color(this, QStringLiteral("color.brand.wordmark")));
+    p.setPen(theme.color(scope, QStringLiteral("color.brand.wordmark")));
     p.drawText(QPointF(x, baseline), kWordOne);
     x += fm.horizontalAdvance(kWordOne);
 
     // "SDR" — gradient fill.  Painting through a QPainterPath of the glyph
     // outlines is what lets the gradient run *inside* the letterforms; setting
     // a gradient pen would only stroke them.
-    const QRectF gradientBounds(x, 0, fm.horizontalAdvance(kWordTwo),
-                                qreal(height()));
+    const QRectF gradientBounds(x, 0, fm.horizontalAdvance(kWordTwo), height);
     QPainterPath glyphs;
     glyphs.addText(QPointF(x, baseline), font, kWordTwo);
     p.setPen(Qt::NoPen);
-    p.setBrush(theme.brush(this, QStringLiteral("color.brand.gradient"),
+    p.setBrush(theme.brush(scope, QStringLiteral("color.brand.gradient"),
                            gradientBounds.toRect()));
     p.drawPath(glyphs);
+    p.restore();
 }
 
 } // namespace AetherSDR

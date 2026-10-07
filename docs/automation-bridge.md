@@ -1666,12 +1666,28 @@ state from the slice button.
 
 ```
 slice dsp nb on 80          # drive the control the operator drives
-get hostnb                  # DSP agrees: on=true, level=80, threshold≈7.6,
-                            #   and requestedOn/requestedLevel match it
+get hostnb                  # DSP agrees: on=true, kind=1, level=80,
+                            #   threshold≈7.6, and requested* match it
 get slice active nb         # model agrees too
 slice dsp nb off
 get hostnb                  # on=false everywhere
 ```
+
+**The second blanker (NB2):**
+
+```
+slice dsp nb2 on 80 4       # WDSP's NOB, level 80, fill 4 (interpolate)
+get hostnb                  # kind=2, fill=4; `on` is still true, so a script
+                            #   that only reads `on` keeps working
+slice dsp nb2 on            # switch to NB2 without touching level or fill
+slice dsp nb on             # back to the first blanker; at most one ever runs
+```
+
+`kind` is 0 off, 1 NB (WDSP's ANB, which silences the blanked window) and 2 NB2
+(its NOB, which reconstructs it). `fill` is WDSP's own numbering for that
+reconstruction — 0 zero, 1 sample-hold, 2 mean-hold, 3 hold-sample,
+4 interpolate — and applies to NB2 only. Only `nb2` accepts it; `slice dsp nb on
+80 4` is an error rather than a silently ignored argument.
 
 ### `tune`
 Set a slice's frequency in MHz — the most fundamental control the
@@ -1815,7 +1831,7 @@ re-poll `get slices`.
 | `filter` | `<lowHz> <highHz>` e.g. `-3000 -150` | set the active slice passband through `SliceModel::setFilterWidth`, which emits a typed `receiveFilterRequested` with Operator origin and reaches `IRadioBackend::requestSliceFilter`. Mode normalization emits a separately tagged request: host DSP applies it, while Flex preserves its radio-owned mode-filter memory. Assert the passband before measuring the audio path. Returns requested edges and post-normalization `filterLow`/`filterHigh`; desktop model readback alone does not prove hardware application. Use `-4000 4000` for a carrier-straddling AM passband |
 | `filterpreset` | `<FIL1\|FIL2\|FIL3>` | select a stable radio-owned RX filter slot without conflating it with a passband-width edit. Returns the requested slot; re-poll `get slice active filterPreset` and the filter edges for radio-authoritative readback |
 | `agc` | `<off\|slow\|med\|fast> [threshold 0..100]` | set receive AGC through `SliceModel` operator setters and typed `receiveAgcRequested` requests. Applies threshold before mode; each changed field dispatches independently. Flex writes only that field; the default backend adapter passes the current mode/threshold pair to host DSP for either edit. HL2 maps this to WDSP RXA AGC mode and ceiling in dB. This is not an atomic paired command. Use `off` with a low threshold for a linear measurement path |
-| `dsp` | `<nr\|nb\|anf\|squelch> <on\|off> [level]` | drive the receive DSP controls an operator drives — noise blanker, noise reduction, auto-notch, and squelch (with an optional 0..100 level). `slice dsp squelch` is the squelch path; there is deliberately no separate squelch verb (#5102) |
+| `dsp` | `<nr\|nb\|nb2\|anf\|squelch> <on\|off> [level] [fill]` | drive the receive DSP controls an operator drives — noise blanker, noise reduction, auto-notch, and squelch (with an optional 0..100 level). `nb2` selects WDSP's second impulse blanker and takes an optional fill mode 0..4; at most one blanker runs, so `nb2 on` replaces `nb`. `slice dsp squelch` is the squelch path; there is deliberately no separate squelch verb (#5102) |
 | `tone` | `<off\|ctcss_tx> [freq]` | set the FM CTCSS encode mode and tone. The value is applied before the mode, so enabling CTCSS never keys on the previous tone for a round trip. The mode pair is what a FlexRadio slice carries |
 | `offset` | `<simplex\|up\|down> [mhz]` | set repeater duplex. The magnitude is unsigned (0..100 MHz — the GUI spinboxes' own bound); the direction carries the sign. Writes all three radio fields — `repeater_offset_dir`, `fm_repeater_offset_freq` **and** the signed `tx_offset_freq` that actually moves the transmitter — then reports `txOffsetFreq` so the applied split can be asserted rather than assumed |
 | `diversity` | `<sliceId> <on\|off>` | enable or disable diversity through the slice model; re-poll `get slices` for parent/child state |

@@ -267,6 +267,8 @@ RadioCapabilities FlexBackend::capabilities() const
     // engaged (gui/PanZoomModeGate.h).
     caps.panZoomModes = RadioCapabilities::PanZoomModes{
         QStringLiteral("display pan set")};
+    // The radio stores a pan's FFT frame rate and reports it on connect.
+    caps.panFrameRateShaping = std::nullopt;
     // A Flex blanks impulses in its OWN DDC, so NB is already the radio's under
     // hasRadioSideDsp above and the host has nothing to add. This flag says
     // where the blanker runs, not whether the radio has one.
@@ -502,6 +504,12 @@ ReceiveDispatch FlexBackend::requestSliceDsp(int sliceId, const SliceDspRequest&
     case SliceDspRequest::Feature::Anfl: key = QStringLiteral("lms_anf"); break;
     case SliceDspRequest::Feature::Anft: key = QStringLiteral("anft"); break;
     case SliceDspRequest::Feature::Mn: return ReceiveDispatch::Unsupported;
+    }
+    // The blanker fill belongs to a host-side blanker; a Flex has no command
+    // for it. (A change of blanker arrives as Enabled, which a Flex reads as
+    // its one blanker on or off.)
+    if (request.field == SliceDspRequest::Field::Fill) {
+        return ReceiveDispatch::Unsupported;
     }
     if (request.field == SliceDspRequest::Field::Level) {
         if (request.feature == SliceDspRequest::Feature::Rnn

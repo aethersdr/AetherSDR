@@ -26,6 +26,13 @@ which is why `supportsExpandedClientArea()` keys off the platform name.
 `View → Frameless Window` turns the whole policy off on every platform and
 returns the window to system decorations.
 
+This policy is the **main window's**. Windows built on `CanonWindow` (the
+visual canon, RFC #6226) are a deliberate split from it: frameless and
+translucent on all three platforms, with no `FramelessWindow` opt-out. See
+[`../style/aethersdr-style-guide.md`](../style/aethersdr-style-guide.md) and
+the `CanonWindow` section of
+[`../style/dialog-patterns.md`](../style/dialog-patterns.md).
+
 `TitleBar` draws the same 52-logical-pixel content everywhere. It opts out of
 QWidget's automatic top-level safe-area margin and instead reserves horizontal
 control gutters from `QWindow::safeAreaMargins()` and, on macOS, the measured

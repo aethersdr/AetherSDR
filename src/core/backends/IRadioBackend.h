@@ -22,6 +22,7 @@
 #include "core/backends/GpsDelta.h"
 #include "core/backends/MemoryDelta.h"
 #include "core/backends/MeterDef.h"
+#include "core/backends/NoiseBlankerKind.h"
 #include "core/backends/NotchDelta.h"
 #include "core/backends/ProfileDelta.h"
 #include "core/backends/FrontEndOverload.h"
@@ -655,9 +656,14 @@ public:
     {
         Q_UNUSED(sliceId); Q_UNUSED(on); Q_UNUSED(level);
     }
-    virtual void setSliceNoiseBlanker(int sliceId, bool on, int level)
+    // Three-state: WDSP has two impulse blankers. Kind, level and fill arrive
+    // together so no ordering between them exists; `fill` is Advanced's only.
+    // A radio with its own single blanker treats anything but Off as on, since
+    // Advanced is reachable only where hasHostNoiseBlanker is published.
+    virtual void setSliceNoiseBlanker(int sliceId, AetherSDR::NoiseBlankerKind kind,
+                                      int level, AetherSDR::NoiseBlankerFill fill)
     {
-        Q_UNUSED(sliceId); Q_UNUSED(on); Q_UNUSED(level);
+        Q_UNUSED(sliceId); Q_UNUSED(kind); Q_UNUSED(level); Q_UNUSED(fill);
     }
     virtual void setSliceAutoNotch(int sliceId, bool on)
     {

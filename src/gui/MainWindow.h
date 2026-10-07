@@ -132,9 +132,9 @@ class AetherClockApplet;
 class AetherClockEngine;
 class AetherClockModel;
 class AutomationServer;
+class CanonWindow;
 class ConnectionPanel;
 class Ctr2ProxyModel;
-class ContributeDialog;
 class TitleBar;
 class KiwiSdrManager;
 struct KiwiSdrAntennaProfile;
@@ -389,6 +389,10 @@ private slots:
     // See issue #1764.
     void applyMasterVolume(int pct);
     void syncTitleBarOutput();
+
+    // A deliberate operator step change from the STEP buttons or the cycle
+    // shortcuts. Radio-driven syncs must not come here; see the connect site.
+    void applyOperatorTuningStep(int stepHz);
 
 private:
     enum class TuneIntent {
@@ -838,6 +842,15 @@ private:
     int cloneDisplaySettingsToAllPans(PanadapterApplet* source);
     AetherSDR::DeferredSettingsWrites m_pendingDisplayWrites;
     void scheduleClientWaterfallRateSave(int panIndex, int rate);
+    // FFT FPS and the dBm scale, which a Flex stores for a pan and a radio
+    // with no display engine does not. Same store and deferral as the
+    // waterfall rate, only where the backend declares the client the owner.
+    bool clientPersistsFftFps() const;
+    void scheduleClientFftFpsSave(int panIndex, int fps);
+    bool clientOwnsPanDbmRange() const;
+    void adoptClientOwnedDbmRange(const QString& panId, int panIndex,
+                                  float minDbm, float maxDbm);
+    void restoreClientOwnedDbmRange(PanadapterModel* pan, int panIndex);
     void scheduleClientFftAverageSave(int panIndex, int average, bool weighted);
     void wirePanDisplayStatus(PanadapterApplet* applet, PanadapterModel* pan);
     void reassertUnmutedSliceAudioForPan(const QString& panId);
@@ -1649,7 +1662,7 @@ private:
     QPointer<GpsLocationDialog> m_gpsLocationDialog;
     QPointer<FlexControlDialog> m_flexControlDialog;
     QPointer<WhatsNewDialog> m_whatsNewDialog;
-    QPointer<ContributeDialog> m_contributeDialog;
+    QPointer<CanonWindow> m_aboutWindow;
     QPointer<AetherRxDialog> m_rxDialog;
     QPointer<QDialog> m_nr2WisdomDialog;
 #ifdef HAVE_MQTT
@@ -1752,6 +1765,13 @@ private:
     QTimer* m_cpuTimer{nullptr};
     QLabel* m_paTempLabel{nullptr};
     QLabel* m_supplyVoltLabel{nullptr};
+    // The container holding the two labels above. Held so the whole stack can
+    // come down when BOTH its rows are withdrawn: reserveTelemetryStack() pins
+    // its minimum width, so hiding only the children would leave a reserved
+    // empty gap between two separators. The separator after it hides with it,
+    // or the two would sit back to back.
+    QWidget* m_paStack{nullptr};
+    QLabel*  m_paSeparator{nullptr};
     QLabel* m_networkLabel{nullptr};
     QTimer m_networkTooltipRefreshTimer;
     QTimer m_perfHeartbeatTimer;

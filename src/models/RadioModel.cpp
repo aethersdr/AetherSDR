@@ -464,6 +464,9 @@ void RadioModel::persistOperatingState(bool force)
             RadioCapabilities::ClientSettingsDomain::Cw)) {
         captureClientOwnedCwState(state);
     }
+    if (m_clientStepHz > 0 && clientOwnsSliceStep()) {
+        state.tuningStepHz = m_clientStepHz;
+    }
     if (!m_backend->storeOperatingState(settingsScope(), state).has_value()) {
         RadioStateMemory::store(settingsScope(), caps, state);
     }
@@ -540,6 +543,25 @@ void RadioModel::restoreClientOwnedCwState(const RestoredRadioState& state)
     delta.monPanCw =
         rangedOrDefault(state.monPanCw, -1, 0, 100, 50, "sidetone pan");
     m_transmitModel.applyChanges(delta);
+}
+
+bool RadioModel::clientOwnsSliceStep() const
+{
+    return m_backend && !hasCommandPlane()
+        && m_backend->capabilities().clientSettingsDomains.testFlag(
+            RadioCapabilities::ClientSettingsDomain::Tuning);
+}
+
+void RadioModel::restoreClientOwnedStep(const RestoredRadioState& state)
+{
+    // Refused, not clamped, outside 1 Hz..1 MHz. Seeded into each slice as it
+    // is created; with nothing stored the slice keeps its own default.
+    const int hz = state.tuningStepHz;
+    if (hz >= 1 && hz <= 1'000'000) {
+        m_clientStepHz = hz;
+    } else if (hz != 0) {
+        qWarning() << "RadioModel: dropping invalid restored tuning step" << hz;
+    }
 }
 
 void RadioModel::flushPendingOperatingState()
@@ -640,6 +662,7 @@ void RadioModel::handRestoredStateToBackend()
         return;
     }
     m_backend->configureSettingsScope(settingsScope(), m_lastInfo.serialIdentity);
+    m_clientStepHz = 0;   // never carry radio A's step onto radio B
     const RadioCapabilities caps = m_backend->capabilities();
     if (!RadioStateMemory::shouldEngage(caps)) {
         return;
@@ -656,6 +679,18 @@ void RadioModel::handRestoredStateToBackend()
     if (caps.clientSettingsDomains.testFlag(
             RadioCapabilities::ClientSettingsDomain::Cw)) {
         restoreClientOwnedCwState(state);
+    }
+    if (clientOwnsSliceStep()) {
+        restoreClientOwnedStep(state);
+    }
+    // The model's copy of the restored level, which the title-bar slider shows
+    // with PC Audio off (#6124); applyRestoredState() below sets the backend's.
+    // Not setLineoutGain(), which would push it down a second time.
+    if (caps.clientSettingsDomains.testFlag(
+            RadioCapabilities::ClientSettingsDomain::ReceiveOutputLevel)
+        && state.receiveOutputLevelPct >= 0) {
+        m_lineoutGain = state.receiveOutputLevelPct;
+        emit audioOutputChanged();
     }
     // UNCONDITIONALLY — an empty state is the reset that stops a same-family
     // backend reuse leaking radio A's maps and live members into radio B
@@ -1647,9 +1682,21 @@ void RadioModel::wireBackendReceiverState()
                 m_backend->setSliceXitOffset(s->sliceId(), hz);
             });
 
+            // Tuning capture of the client-owned step, whatever moved it.
+            connect(s, &SliceModel::stepChanged, this, [this](int hz) {
+                if (hz > 0 && hz != m_clientStepHz && clientOwnsSliceStep()) {
+                    m_clientStepHz = hz;
+                    scheduleOperatingStateSave();
+                }
+            });
+
             wireSliceObservationsAndTxIntentToBackend(s);
             m_slices.append(s);
             s->applyChanges(mapped);
+            // Before sliceAdded, so the UI never shows the default first.
+            if (m_clientStepHz > 0 && clientOwnsSliceStep()) {
+                s->applyRecalledStepHz(m_clientStepHz);
+            }
             m_meterModel.setActiveTxSlice(activeTxSliceNum());
             refreshTxPowerLimit();
             emit sliceAdded(s);
@@ -11833,6 +11880,19 @@ void RadioModel::applyRadioChanges(const RadioDelta& d)
     if (changed) emit infoChanged();
 }
 
+int RadioModel::activeOutputVolumePercent() const
+{
+    // No capability gate: applyMasterVolume() drives setLineoutGain() on every
+    // family with PC Audio off, so that is the level being heard.
+    const bool pcAudio =
+        AppSettings::instance().value("PcAudioEnabled", "True").toString() == "True";
+    if (!pcAudio) {
+        return m_lineoutGain;
+    }
+    return AppSettings::instance()
+        .value(QStringLiteral("MasterVolume"), QStringLiteral("100")).toInt();
+}
+
 void RadioModel::setLineoutGain(int v)
 {
     v = std::clamp(v, 0, 100);
@@ -13090,7 +13150,13 @@ QJsonObject RadioModel::troubleshootingSnapshot() const
         QJsonObject dsp;
         dsp["agc_mode"] = sliceModel->agcMode();
         dsp["agc_threshold"] = sliceModel->agcThreshold();
-        dsp["nb"] = QJsonObject{{"enabled", sliceModel->nbOn()}, {"level", sliceModel->nbLevel()}};
+        // "kind" and "fill" alongside "enabled", not instead of it: this
+        // snapshot is read by scripts and by the resource dump, and the bool is
+        // the field they already read.
+        dsp["nb"] = QJsonObject{{"enabled", sliceModel->nbOn()},
+                                {"kind", static_cast<int>(sliceModel->nbKind())},
+                                {"fill", static_cast<int>(sliceModel->nbFill())},
+                                {"level", sliceModel->nbLevel()}};
         dsp["nr"] = QJsonObject{{"enabled", sliceModel->nrOn()}, {"level", sliceModel->nrLevel()}};
         dsp["anf"] = QJsonObject{{"enabled", sliceModel->anfOn()}, {"level", sliceModel->anfLevel()}};
         dsp["lms_nr"] = QJsonObject{{"enabled", sliceModel->nrlOn()}, {"level", sliceModel->nrlLevel()}};

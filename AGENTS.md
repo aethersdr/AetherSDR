@@ -68,7 +68,10 @@ When helping with AetherSDR:
   exposed to the UI through models — never via a new gui→core header include.
 - **Adding or changing UI?** Every colour is a ThemeManager token, and a
   control the radio lacks is dimmed with a stated reason, never hidden — see
-  [`docs/agents/gui.md`](docs/agents/gui.md).
+  [`docs/agents/gui.md`](docs/agents/gui.md). New or reworked surfaces follow
+  the visual canon in
+  [`docs/style/aethersdr-style-guide.md`](docs/style/aethersdr-style-guide.md);
+  apply it only to UI your issue already changes.
 - **Read `CONTRIBUTING.md`** for contribution policy (what we accept, who
   reviews what) and `docs/DEVELOPER-GUIDE.md` for the contributor-facing
   coding conventions and the AI-to-AI debugging protocol (open a GitHub issue
