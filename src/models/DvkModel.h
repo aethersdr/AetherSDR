@@ -18,26 +18,44 @@ class DvkModel : public QObject {
 public:
     explicit DvkModel(QObject* parent = nullptr);
 
+    // The radio keeps slots 1-12 and stops a recording at 10 s (SmartSDR API
+    // wiki, TCPIP-dvk). A name is at most 63 bytes including its quotes.
+    static constexpr int kSlotCount = 12;
+    static constexpr int kMaxRecordingMs = 10'000;
+    static constexpr int kMaxNameBytes = 61;
+
     // State
     enum Status { Unknown, Disabled, Idle, Recording, Preview, Playback };
     Status status() const { return m_status; }
     int activeId() const { return m_activeId; }
     bool enabled() const { return m_enabled; }
+    // The radio does not refuse overlapping operations, so a new one may only
+    // start from idle. Unknown (no status yet) fails open.
+    bool canStartOperation() const { return m_status == Idle || m_status == Unknown; }
+    // The radio answered a dvk command with 50004001 (feature not licensed).
+    bool licenseRefused() const { return m_licenseRefused; }
     const QVector<DvkRecording>& recordings() const { return m_recordings; }
+
+    static QString defaultName(int id);
+    // Drops the characters the radio cannot carry in a quoted name (`"`, `'`,
+    // `|`), collapses spaces as the radio does, and trims to kMaxNameBytes.
+    static QString sanitizeName(const QString& name);
 
     // Commands
     void recStart(int id);
-    void recStop(int id);
+    void recStop();
     void previewStart(int id);
-    void previewStop(int id);
+    void previewStop();
     void playbackStart(int id);
-    void playbackStop(int id);
+    void playbackStop();
     void clear(int id);
-    void remove(int id);
     void setName(int id, const QString& name);
 
     // Status parsing (called from RadioModel)
     void applyStatus(const QString& object, const QMap<QString, QString>& kvs);
+
+    // Connection-scoped state goes with the connection.
+    void reset();
 
     // Called by RadioModel when a reply to a DVK command arrives.  Non-zero
     // codes are forwarded as commandFailed() so the UI can surface them
@@ -61,11 +79,15 @@ signals:
     // DvkPanel maps this to its status label and re-syncs button state so
     // the user sees the failure instead of a stuck "checked" REC button.
     void commandFailed(const QString& verb, int id, uint code, const QString& message);
+    void licenseRefusedChanged(bool refused);
 
 private:
+    static constexpr uint kNotLicensed = 0x50004001u;
+
     Status m_status{Unknown};
     int m_activeId{-1};
     bool m_enabled{false};
+    bool m_licenseRefused{false};
     QVector<DvkRecording> m_recordings;
 
     DvkRecording* findRecording(int id);

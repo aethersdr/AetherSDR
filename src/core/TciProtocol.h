@@ -133,7 +133,7 @@ private:
     QString cmdRxNrEnable(const QStringList& args, bool isSet);
     QString cmdRxAnfEnable(const QStringList& args, bool isSet);
     QString cmdRxApfEnable(const QStringList& args, bool isSet);
-    // AetherSDR extensions (DVK record/play)
+    // AetherSDR extensions (slice quick-record record/play)
     QString cmdRxRecord(const QStringList& args, bool isSet);
     QString cmdRxPlay(const QStringList& args, bool isSet);
     QString cmdActiveSlice(const QStringList& args);

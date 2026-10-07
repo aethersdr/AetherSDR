@@ -66,6 +66,8 @@ private:
     QVector<QShortcut*> m_shortcuts;
 
     void selectSlot(int id);
+    void togglePlayback(int id);
+    void stopActiveOperation();
     void showContextMenu(int id, const QPoint& globalPos);
     void startRename(int id);
     void commitRename();

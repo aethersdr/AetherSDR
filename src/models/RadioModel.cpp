@@ -8152,6 +8152,7 @@ void RadioModel::onDisconnected()
 
     m_tnfModel.clear();
     m_flexWaveformModel.clear();
+    m_dvkModel.reset();
     if (!m_licenseFeatures.isEmpty()) {
         m_licenseFeatures.clear();
         emit licenseFeaturesChanged();

@@ -12,14 +12,19 @@
 // calls QTcpServer::listen().
 #include <QCoreApplication>
 #include <QEventLoop>
+#include <QFile>
+#include <QStringList>
 #include <QTcpSocket>
+#include <QTemporaryDir>
 #include <QTimer>
+#include <QtEndian>
 
 #include "core/DvkWavTransfer.h"
 
 #include <functional>
 #include <iostream>
 #include <memory>
+#include <vector>
 
 namespace AetherSDR {
 
@@ -58,6 +63,19 @@ public:
         transfer.finish(false, message, false);
     }
 
+    using Reply = std::function<void(int, const QString&)>;
+    // Records each command and keeps its reply so the test plays the radio.
+    static void recordCommands(DvkWavTransfer& transfer, QStringList& sent,
+                               std::vector<Reply>& replies)
+    {
+        transfer.m_commandSender = [&sent, &replies](const QString& command, Reply reply) {
+            sent << command;
+            replies.push_back(std::move(reply));
+        };
+    }
+
+    static qint64 uploadSize(const DvkWavTransfer& transfer) { return transfer.m_uploadData.size(); }
+
     static QTcpSocket* client(const DvkWavTransfer& transfer) { return transfer.m_client; }
     static QTcpServer* server(const DvkWavTransfer& transfer) { return transfer.m_server; }
 };
@@ -65,6 +83,34 @@ public:
 } // namespace AetherSDR
 
 namespace {
+
+// 0.5 s of 48 kHz stereo 16-bit silence: the converter's 24 kHz mono output is
+// 24 000 bytes of samples plus a 44-byte header.
+QByteArray stereo48kWav()
+{
+    const quint32 dataBytes = 24'000 * 4;
+    QByteArray wav("RIFF");
+    char b[4];
+    qToLittleEndian<quint32>(36 + dataBytes, b); wav.append(b, 4);
+    wav += "WAVEfmt ";
+    qToLittleEndian<quint32>(16, b); wav.append(b, 4);
+    const quint16 fmt[] = {1, 2};
+    for (quint16 v : fmt) { qToLittleEndian(v, b); wav.append(b, 2); }
+    qToLittleEndian<quint32>(48'000, b); wav.append(b, 4);
+    qToLittleEndian<quint32>(48'000 * 4, b); wav.append(b, 4);
+    const quint16 tail[] = {4, 16};
+    for (quint16 v : tail) { qToLittleEndian(v, b); wav.append(b, 2); }
+    wav += "data";
+    qToLittleEndian(dataBytes, b); wav.append(b, 4);
+    wav.append(QByteArray(static_cast<qsizetype>(dataBytes), '\0'));
+    return wav;
+}
+
+bool writeFile(const QString& path, const QByteArray& bytes)
+{
+    QFile file(path);
+    return file.open(QIODevice::WriteOnly) && file.write(bytes) == bytes.size();
+}
 
 bool expect(bool condition, const char* message)
 {
@@ -241,6 +287,84 @@ int main(int argc, char* argv[])
                      "a replacement started from the finished handler survives");
         ok &= expect(TA::client(transfer) == nullptr && TA::server(transfer) == nullptr,
                      "the replacement starts from a clean transport state");
+    }
+
+    {
+        // #6244: the wiki's two-step upload. `dvk upload` only names the slot
+        // and replies with no body; the bytes go through `file upload <size>
+        // dvk_recording`, whose reply carries the port.
+        QTemporaryDir dir;
+        const QString path = dir.filePath(QStringLiteral("cq.wav"));
+        ok &= expect(writeFile(path, stereo48kWav()), "fixture WAV written");
+
+        AetherSDR::DvkWavTransfer transfer(nullptr);
+        QStringList sent;
+        std::vector<TA::Reply> replies;
+        TA::recordCommands(transfer, sent, replies);
+
+        transfer.upload(3, path);
+        ok &= expect(sent == QStringList{QStringLiteral("dvk upload id=3")},
+                     "upload first names the slot with dvk upload");
+        ok &= expect(TA::uploadSize(transfer) == 44 + 24'000,
+                     "the queued bytes are the 24 kHz mono conversion");
+
+        replies.at(0)(0, QString());
+        ok &= expect(sent.size() == 2
+                         && sent.at(1) == QStringLiteral("file upload 24044 dvk_recording"),
+                     "an accepted slot is followed by file upload <size> dvk_recording");
+        ok &= expect(TA::client(transfer) == nullptr,
+                     "no socket opens before the file server names its port");
+
+        replies.at(1)(0, QStringLiteral("42607"));
+        ok &= expect(TA::client(transfer) != nullptr && transfer.isTransferring(),
+                     "the file-upload port reply opens the upload socket");
+    }
+
+    {
+        // A refused slot ends the upload with the wiki's meaning, not hex.
+        QTemporaryDir dir;
+        const QString path = dir.filePath(QStringLiteral("cq.wav"));
+        ok &= expect(writeFile(path, stereo48kWav()), "fixture WAV written");
+
+        AetherSDR::DvkWavTransfer transfer(nullptr);
+        QStringList sent;
+        std::vector<TA::Reply> replies;
+        TA::recordCommands(transfer, sent, replies);
+        QString message;
+        QObject::connect(&transfer, &AetherSDR::DvkWavTransfer::finished, &transfer,
+                         [&message](bool, const QString& m) { message = m; });
+
+        transfer.upload(3, path);
+        replies.at(0)(static_cast<int>(0xE2000000u), QString());
+        ok &= expect(!transfer.isTransferring() && sent.size() == 1,
+                     "a refused dvk upload sends no file upload");
+        ok &= expect(message.contains(QStringLiteral("upload is already pending")),
+                     "the refusal is described, not shown as bare hex");
+    }
+
+    {
+        // An empty port body falls back to the file server's 42607.
+        AetherSDR::DvkWavTransfer transfer(nullptr);
+        TA::begin(transfer, TA::Direction::Upload, 1);
+        auto reply = TA::armUploadPortReply(transfer);
+        reply(0, QString());
+        ok &= expect(TA::client(transfer) != nullptr && transfer.isTransferring(),
+                     "an empty file-upload reply still opens the upload socket");
+    }
+
+    {
+        // A file the converter refuses never reaches the radio.
+        QTemporaryDir dir;
+        const QString path = dir.filePath(QStringLiteral("junk.wav"));
+        ok &= expect(writeFile(path, QByteArray("not a wav file at all")), "fixture written");
+
+        AetherSDR::DvkWavTransfer transfer(nullptr);
+        QStringList sent;
+        std::vector<TA::Reply> replies;
+        TA::recordCommands(transfer, sent, replies);
+        transfer.upload(3, path);
+        ok &= expect(sent.isEmpty() && !transfer.isTransferring(),
+                     "an unreadable WAV sends nothing to the radio");
     }
 
     {

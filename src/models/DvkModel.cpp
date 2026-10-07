@@ -2,6 +2,8 @@
 #include <QRegularExpression>
 #include <QDebug>
 
+#include <utility>
+
 namespace AetherSDR {
 
 DvkModel::DvkModel(QObject* parent) : QObject(parent) {}
@@ -19,39 +21,57 @@ void DvkModel::recStart(int id)
 {
     emit replyCommandReady(QString("dvk rec_start id=%1").arg(id), "rec_start", id);
 }
-void DvkModel::recStop(int id)
+void DvkModel::recStop()
 {
-    emit replyCommandReady(QString("dvk rec_stop id=%1").arg(id), "rec_stop", id);
+    emit replyCommandReady(QStringLiteral("dvk rec_stop"), "rec_stop", m_activeId);
 }
 void DvkModel::previewStart(int id)
 {
     emit replyCommandReady(QString("dvk preview_start id=%1").arg(id), "preview_start", id);
 }
-void DvkModel::previewStop(int id)
+void DvkModel::previewStop()
 {
-    emit replyCommandReady(QString("dvk preview_stop id=%1").arg(id), "preview_stop", id);
+    emit replyCommandReady(QStringLiteral("dvk preview_stop"), "preview_stop", m_activeId);
 }
 void DvkModel::playbackStart(int id)
 {
     emit replyCommandReady(QString("dvk playback_start id=%1").arg(id), "playback_start", id);
 }
-void DvkModel::playbackStop(int id)
+void DvkModel::playbackStop()
 {
-    emit replyCommandReady(QString("dvk playback_stop id=%1").arg(id), "playback_stop", id);
+    emit replyCommandReady(QStringLiteral("dvk playback_stop"), "playback_stop", m_activeId);
 }
 void DvkModel::clear(int id)
 {
     emit replyCommandReady(QString("dvk clear id=%1").arg(id), "clear", id);
 }
-void DvkModel::remove(int id)
-{
-    emit replyCommandReady(QString("dvk remove id=%1").arg(id), "remove", id);
-}
 void DvkModel::setName(int id, const QString& name)
 {
+    const QString clean = sanitizeName(name);
+    if (clean.isEmpty()) {
+        return;
+    }
     emit replyCommandReady(
-        QString("dvk set_name name=\"%1\" id=%2").arg(name).arg(id),
+        QString("dvk set_name name=\"%1\" id=%2").arg(clean).arg(id),
         "set_name", id);
+}
+
+QString DvkModel::defaultName(int id)
+{
+    return QStringLiteral("Recording %1").arg(id);
+}
+
+QString DvkModel::sanitizeName(const QString& name)
+{
+    QString clean = name;
+    clean.remove(QLatin1Char('"'));
+    clean.remove(QLatin1Char('\''));
+    clean.remove(QLatin1Char('|'));
+    clean = clean.simplified();
+    while (clean.toUtf8().size() > kMaxNameBytes) {
+        clean.chop(1);
+    }
+    return clean.trimmed();
 }
 
 // ── Reply handling ──────────────────────────────────────────────────────────
@@ -60,7 +80,19 @@ void DvkModel::handleCommandResponse(const QString& verb, int id, uint code,
                                      const QString& body)
 {
     Q_UNUSED(body);
-    if (code == 0) return;  // success path: status broadcast drives UI
+    if (code == 0) {
+        // fw 4.2.20 `clear` erases the audio but keeps the name; the wiki says
+        // the slot returns to its default name, so ask for that once it lands.
+        if (verb == QLatin1String("clear")) {
+            setName(id, defaultName(id));
+        }
+        return;  // status broadcast drives the UI
+    }
+
+    if (code == kNotLicensed && !m_licenseRefused) {
+        m_licenseRefused = true;
+        emit licenseRefusedChanged(true);
+    }
 
     qWarning() << "DvkModel: command" << verb << "id=" << id
                << "failed with code 0x" << QString::number(code, 16);
@@ -69,12 +101,14 @@ void DvkModel::handleCommandResponse(const QString& verb, int id, uint code,
 
 QString DvkModel::dvkErrorString(uint code)
 {
-    // Known codes from FlexLib's SsdrErrors enum (reference/FlexLib/FlexLib/
-    // SsdrErrors.cs) and SmartSDR command-error conventions.  Per
-    // Principle I, do not invent labels for codes that are not documented
-    // upstream — render those as bare hex so the user can report them.
+    // Labels come from the SmartSDR API wiki (TCPIP-dvk) and FlexLib. Codes
+    // documented in neither render as bare hex so the user can report them.
     switch (code) {
-    case 0x500000A9u: return QStringLiteral("port already in use on radio");
+    case kNotLicensed:  return QStringLiteral("DVK requires an active SmartSDR+ subscription");
+    case 0x50001000u:   return QStringLiteral("radio could not parse the command");
+    case 0xE2000000u:   return QStringLiteral("no such slot, or an upload is already pending");
+    case 0x50000053u:   return QStringLiteral("radio file server busy, try again in a moment");
+    case 0x500000A9u:   return QStringLiteral("port already in use on radio");
     default: break;
     }
     return QStringLiteral("error 0x%1").arg(code, 0, 16);
@@ -108,6 +142,11 @@ void DvkModel::applyStatus(const QString& object, const QMap<QString, QString>& 
 
         if (kvs.contains("enabled"))
             m_enabled = kvs["enabled"] == "1";
+        // FlexLib DVKStatus: enabled=0 means disabled, and the id is void.
+        if (kvs.value("enabled") == "0") {
+            newStatus = Disabled;
+            id = -1;
+        }
 
         if (newStatus != m_status || id != m_activeId) {
             m_status = newStatus;
@@ -139,12 +178,12 @@ void DvkModel::applyStatus(const QString& object, const QMap<QString, QString>& 
     int id = kvs["id"].toInt();
     if (id <= 0) return;
 
-    // Name: may be truncated by KV parser (quotes + spaces).
-    // Strip quotes and use default if empty.
+    // The name is always quoted and may contain spaces; parseKVs keeps a
+    // quoted value whole, quotes included.
     QString name = kvs.value("name", "");
     name.remove('"');
-    if (name.isEmpty() || name.startsWith("Recording"))
-        name = QString("Recording %1").arg(id);
+    if (name.isEmpty())
+        name = defaultName(id);
 
     int duration = kvs.value("duration", "0").toInt();
 
@@ -165,6 +204,23 @@ void DvkModel::applyStatus(const QString& object, const QMap<QString, QString>& 
     // If we have all 12 slots, signal loaded
     if (m_recordings.size() >= 12)
         emit recordingsLoaded();
+}
+
+void DvkModel::reset()
+{
+    const bool wasRefused = m_licenseRefused;
+    m_status = Unknown;
+    m_activeId = -1;
+    m_enabled = false;
+    m_licenseRefused = false;
+    const QVector<DvkRecording> gone = std::exchange(m_recordings, {});
+    emit statusChanged(m_status, m_activeId);
+    for (const DvkRecording& r : gone) {
+        emit recordingChanged(r.id);
+    }
+    if (wasRefused) {
+        emit licenseRefusedChanged(false);
+    }
 }
 
 } // namespace AetherSDR

@@ -122,10 +122,7 @@ DvkPanel::DvkPanel(DvkModel* model, QWidget* parent)
         // F-key button click → playback toggle (only if slot has a recording)
         connect(fkeyBtn, &QPushButton::clicked, this, [this, id]() {
             selectSlot(id);
-            if (m_model->status() == DvkModel::Playback && m_model->activeId() == id)
-                m_model->playbackStop(id);
-            else if (durationForSlot(id) > 0)
-                m_model->playbackStart(id);
+            togglePlayback(id);
         });
     }
 
@@ -165,38 +162,41 @@ DvkPanel::DvkPanel(DvkModel* model, QWidget* parent)
     outerVbox->addWidget(m_statusLabel);
 
     // Wire buttons
+    // A button that cannot start re-syncs to the current status, so it never
+    // latches "checked" for an operation that was not sent.
     connect(m_recBtn, &QPushButton::clicked, this, [this](bool checked) {
         if (m_selectedSlot < 1) return;
-        if (checked) m_model->recStart(m_selectedSlot);
-        else         m_model->recStop(m_selectedSlot);
-    });
-
-    connect(m_stopBtn, &QPushButton::clicked, this, [this]() {
-        int id = m_model->activeId();
-        if (id < 0) id = m_selectedSlot;
-        if (id < 1) return;
-        switch (m_model->status()) {
-        case DvkModel::Recording: m_model->recStop(id); break;
-        case DvkModel::Playback:  m_model->playbackStop(id); break;
-        case DvkModel::Preview:   m_model->previewStop(id); break;
-        default: break;
+        if (!checked) {
+            m_model->recStop();
+        } else if (m_model->canStartOperation()) {
+            m_model->recStart(m_selectedSlot);
+        } else {
+            onStatusChanged(static_cast<int>(m_model->status()), m_model->activeId());
         }
     });
 
+    connect(m_stopBtn, &QPushButton::clicked, this, &DvkPanel::stopActiveOperation);
+
     connect(m_playBtn, &QPushButton::clicked, this, [this](bool checked) {
         if (m_selectedSlot < 1) return;
-        if (checked && durationForSlot(m_selectedSlot) > 0)
+        if (!checked) {
+            m_model->playbackStop();
+        } else if (m_model->canStartOperation() && durationForSlot(m_selectedSlot) > 0) {
             m_model->playbackStart(m_selectedSlot);
-        else if (checked) { m_playBtn->blockSignals(true); m_playBtn->setChecked(false); m_playBtn->blockSignals(false); }
-        else m_model->playbackStop(m_selectedSlot);
+        } else {
+            onStatusChanged(static_cast<int>(m_model->status()), m_model->activeId());
+        }
     });
 
     connect(m_prevBtn, &QPushButton::clicked, this, [this](bool checked) {
         if (m_selectedSlot < 1) return;
-        if (checked && durationForSlot(m_selectedSlot) > 0)
+        if (!checked) {
+            m_model->previewStop();
+        } else if (m_model->canStartOperation() && durationForSlot(m_selectedSlot) > 0) {
             m_model->previewStart(m_selectedSlot);
-        else if (checked) { m_prevBtn->blockSignals(true); m_prevBtn->setChecked(false); m_prevBtn->blockSignals(false); }
-        else m_model->previewStop(m_selectedSlot);
+        } else {
+            onStatusChanged(static_cast<int>(m_model->status()), m_model->activeId());
+        }
     });
 
     // Wire model signals
@@ -231,10 +231,7 @@ DvkPanel::DvkPanel(DvkModel* model, QWidget* parent)
         connect(sc, &QShortcut::activated, this, [this, i]() {
             int id = i + 1;
             selectSlot(id);
-            if (m_model->status() == DvkModel::Playback && m_model->activeId() == id)
-                m_model->playbackStop(id);
-            else if (durationForSlot(id) > 0)
-                m_model->playbackStart(id);
+            togglePlayback(id);
         });
     }
 
@@ -248,14 +245,7 @@ DvkPanel::DvkPanel(DvkModel* model, QWidget* parent)
             cancelRename();
             return;
         }
-        int id = m_model->activeId();
-        if (id < 0) return;
-        switch (m_model->status()) {
-        case DvkModel::Recording: m_model->recStop(id); break;
-        case DvkModel::Playback:  m_model->playbackStop(id); break;
-        case DvkModel::Preview:   m_model->previewStop(id); break;
-        default: break;
-        }
+        stopActiveOperation();
     });
 
     // Elapsed timer for recording/playback/preview progress
@@ -265,6 +255,26 @@ DvkPanel::DvkPanel(DvkModel* model, QWidget* parent)
 
     m_selectedSlot = 1;
     selectSlot(1);
+}
+
+void DvkPanel::togglePlayback(int id)
+{
+    if (m_model->status() == DvkModel::Playback && m_model->activeId() == id) {
+        m_model->playbackStop();
+    } else if (m_model->canStartOperation() && durationForSlot(id) > 0) {
+        // An empty slot can leave the radio keyed, so only a recorded one plays.
+        m_model->playbackStart(id);
+    }
+}
+
+void DvkPanel::stopActiveOperation()
+{
+    switch (m_model->status()) {
+    case DvkModel::Recording: m_model->recStop(); break;
+    case DvkModel::Playback:  m_model->playbackStop(); break;
+    case DvkModel::Preview:   m_model->previewStop(); break;
+    default: break;
+    }
 }
 
 void DvkPanel::setShortcutsEnabled(bool enabled)
@@ -338,12 +348,16 @@ void DvkPanel::onStatusChanged(int status, int id)
                     "QProgressBar { background: transparent; border: none; }"
                     "QProgressBar::chunk { background: %1; border-radius: 1px; }").arg(color));
 
-                if (totalMs > 0 && s != DvkModel::Recording) {
+                if (s == DvkModel::Recording) {
+                    // The radio stops recording on its own at the limit.
+                    bar->setRange(0, DvkModel::kMaxRecordingMs);
+                    bar->setValue(0);
+                    bar->show();
+                } else if (totalMs > 0) {
                     bar->setRange(0, totalMs);
                     bar->setValue(0);
                     bar->show();
                 } else {
-                    // Recording: indeterminate — show as full bar that stays visible
                     bar->setRange(0, 0);
                     bar->show();
                 }
@@ -375,17 +389,22 @@ void DvkPanel::onRecordingChanged(int id)
 {
     if (id < 1 || id > 12) return;
     int idx = id - 1;
-    const auto& recs = m_model->recordings();
-    for (const auto& r : recs) {
+    // A slot the model no longer holds (deleted, or the connection reset)
+    // shows as the radio's default empty slot, not its last known contents.
+    QString name = DvkModel::defaultName(id);
+    int durationMs = 0;
+    for (const auto& r : m_model->recordings()) {
         if (r.id == id) {
-            m_nameLabels[idx]->setText(r.name);
-            m_durLabels[idx]->setText(r.durationMs > 0 ? formatDuration(r.durationMs) : "Empty");
-            m_nameLabels[idx]->setStyleSheet(r.durationMs > 0
-                ? kNameStyle
-                : "QLabel { color: #505060; font-size: 10px; }");
+            name = r.name;
+            durationMs = r.durationMs;
             break;
         }
     }
+    m_nameLabels[idx]->setText(name);
+    m_durLabels[idx]->setText(durationMs > 0 ? formatDuration(durationMs) : "Empty");
+    m_nameLabels[idx]->setStyleSheet(durationMs > 0
+        ? kNameStyle
+        : "QLabel { color: #505060; font-size: 10px; }");
 }
 
 void DvkPanel::onElapsedTick()
@@ -415,8 +434,13 @@ void DvkPanel::onElapsedTick()
     }
 
     // Update progress bar
-    if (m_timerSlotId >= 1 && m_timerSlotId <= 12 && totalMs > 0 && s != DvkModel::Recording) {
-        m_progressBars[m_timerSlotId - 1]->setValue(qMin(m_elapsedMs, totalMs));
+    if (m_timerSlotId >= 1 && m_timerSlotId <= 12) {
+        if (s == DvkModel::Recording) {
+            m_progressBars[m_timerSlotId - 1]->setValue(
+                qMin(m_elapsedMs, DvkModel::kMaxRecordingMs));
+        } else if (totalMs > 0) {
+            m_progressBars[m_timerSlotId - 1]->setValue(qMin(m_elapsedMs, totalMs));
+        }
     }
 }
 
@@ -482,7 +506,6 @@ void DvkPanel::showContextMenu(int id, const QPoint& globalPos)
     auto* renameAct = menu.addAction("Rename…");
     menu.addSeparator();
     auto* clearAct = menu.addAction("Clear");
-    auto* deleteAct = menu.addAction("Delete");
     menu.addSeparator();
     auto* importAct = menu.addAction("Import WAV…");
     auto* exportAct = menu.addAction("Export WAV…");
@@ -490,14 +513,14 @@ void DvkPanel::showContextMenu(int id, const QPoint& globalPos)
     int dur = durationForSlot(id);
     bool hasRecording = dur > 0;
     bool notBusy = m_wavTransfer && !m_wavTransfer->isTransferring();
-    clearAct->setEnabled(hasRecording);
-    deleteAct->setEnabled(hasRecording);
-    importAct->setEnabled(notBusy);
+    // Clearing or loading a slot mid-operation can leave the DVK inconsistent.
+    const bool idle = m_model->canStartOperation();
+    clearAct->setEnabled(hasRecording && idle && notBusy);
+    importAct->setEnabled(notBusy && idle);
     exportAct->setEnabled(notBusy && hasRecording);
 
     connect(renameAct, &QAction::triggered, this, [this, id]() { startRename(id); });
     connect(clearAct, &QAction::triggered, this, [this, id]() { m_model->clear(id); });
-    connect(deleteAct, &QAction::triggered, this, [this, id]() { m_model->remove(id); });
 
     connect(importAct, &QAction::triggered, this, [this, id]() {
         QString path = QFileDialog::getOpenFileName(this,
@@ -552,7 +575,7 @@ void DvkPanel::startRename(int id)
         "border-radius: 2px; font-size: 10px; padding: 0px 2px; }");
     m_renameEdit->setText(label->text());
     m_renameEdit->selectAll();
-    m_renameEdit->setMaxLength(40);
+    m_renameEdit->setMaxLength(DvkModel::kMaxNameBytes);
 
     // Swap label out, edit in (same layout position)
     int labelIdx = rowLayout->indexOf(label);
@@ -569,14 +592,7 @@ void DvkPanel::commitRename()
     if (!m_renameEdit || m_renameSlot < 1) return;
 
     int idx = m_renameSlot - 1;
-    QString name = m_renameEdit->text().trimmed();
-
-    // Strip forbidden chars (quotes break protocol parsing)
-    name.remove('\'');
-    name.remove('"');
-
-    if (!name.isEmpty())
-        m_model->setName(m_renameSlot, name);
+    m_model->setName(m_renameSlot, m_renameEdit->text());
 
     m_nameLabels[idx]->show();
     m_renameEdit->deleteLater();

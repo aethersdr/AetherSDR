@@ -13,10 +13,11 @@ inline constexpr QLatin1String kDvkLicenseFeature{"digital_voice_keyer"};
 
 // Why the status-bar DVK indicator is dimmed, or None. TxModeNotVoice: DVK
 // keys the TX slice and follows its mode like CWX (#4173). NotLicensed: the
-// radio reports "license feature name=digital_voice_keyer enabled=0". Fails
-// OPEN while the entitlement is unknown (`licenseSeen` false: no status yet,
-// firmware that never sends one, non-Flex backend) — the radio must say no
-// before the UI does (#4210).
+// radio reports "license feature name=digital_voice_keyer enabled=0", or it
+// answered a `dvk` command with 50004001 (`radioRefused`) — the wiki's reliable
+// signal, since `dvk … enabled=` is always 1. Fails OPEN while the entitlement
+// is unknown (no status yet, firmware that never sends one, non-Flex backend)
+// — the radio must say no before the UI does (#4210).
 enum class DvkIndicatorBlocker {
     None,           // live
     NotLicensed,    // radio reports the DVK feature disabled
@@ -25,12 +26,13 @@ enum class DvkIndicatorBlocker {
 
 inline DvkIndicatorBlocker dvkIndicatorBlocker(bool txModeIsVoice,
                                                bool licenseSeen,
-                                               bool licenseEnabled)
+                                               bool licenseEnabled,
+                                               bool radioRefused)
 {
     // Entitlement outranks mode: a radio without the feature never gains it by
     // switching to USB, so the operator gets the durable reason, not a
     // transient one that implies a mode change would help.
-    if (licenseSeen && !licenseEnabled) {
+    if (radioRefused || (licenseSeen && !licenseEnabled)) {
         return DvkIndicatorBlocker::NotLicensed;
     }
     if (!txModeIsVoice) {
