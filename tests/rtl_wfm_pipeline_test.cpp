@@ -1,6 +1,8 @@
 #include "core/backends/rtl/RtlReceivePipeline.h"
 #include "core/backends/rtl/RtlRfExtractor.h"
+#ifdef AETHER_BACKEND_RTL
 #include "core/backends/rtl/RtlSdrDdc.h"
+#endif
 #include "core/dsp/WdspChannel.h"
 
 #include <QCoreApplication>
@@ -441,6 +443,9 @@ void workerUnderrunTrace()
     }
     pipeline->stop();
 }
+#ifdef AETHER_BACKEND_RTL
+// RtlSdrDdc is compiled only with the RTL backend (librtlsdr + fftw3f), so the
+// DDC benchmark is too; the pipeline checks above run on every build.
 void boundedBenchmark()
 {
     // Opt-in pipeline plus production DDC/spectrum throughput qualification.
@@ -601,6 +606,7 @@ void boundedBenchmark()
     check(output[0].stereo, "benchmark preserves actual WFM pilot acquisition under the faster RF clock");
     pipeline->stop();
 }
+#endif
 void admission()
 {
     auto legacy = std::make_unique<Pipeline>();
@@ -631,7 +637,13 @@ int main(int argc, char** argv)
     admission();
     nativeRouting();
     workerUnderrunTrace();
-    if (qEnvironmentVariableIntValue("AETHER_WFM_BENCHMARK") == 1) { boundedBenchmark(); }
+    if (qEnvironmentVariableIntValue("AETHER_WFM_BENCHMARK") == 1) {
+#ifdef AETHER_BACKEND_RTL
+        boundedBenchmark();
+#else
+        std::printf("rtl_wfm_pipeline_test: benchmark skipped, this build has no RTL backend\n");
+#endif
+    }
     QThreadPool::globalInstance()->waitForDone();
     std::printf("rtl_wfm_pipeline_test: %d failures\n", failures);
     return failures == 0 ? 0 : 1;
