@@ -371,6 +371,7 @@ AnanBackend::~AnanBackend()
 RadioCapabilities AnanBackend::capabilities() const
 {
     RadioCapabilities c;
+    c.broadcastFmReceive = std::nullopt;
     c.family = QStringLiteral("anan");
     // No setTune() implementation, so no tune generator to select a mode on.
     c.twoToneGenerator = std::nullopt;

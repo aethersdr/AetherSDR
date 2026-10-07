@@ -1623,6 +1623,12 @@ add_executable(wdsp_allocation_scope_test tests/wdsp_allocation_scope_test.cpp)
 target_link_libraries(wdsp_allocation_scope_test PRIVATE aether_wdsp Threads::Threads)
 add_test(NAME wdsp_allocation_scope_test COMMAND wdsp_allocation_scope_test)
 
+add_executable(rtl_wfm_pipeline_test tests/rtl_wfm_pipeline_test.cpp)
+target_include_directories(rtl_wfm_pipeline_test PRIVATE src)
+target_link_libraries(rtl_wfm_pipeline_test PRIVATE aethercore aether_wdsp Qt6::Core)
+add_test(NAME rtl_wfm_pipeline_test COMMAND rtl_wfm_pipeline_test)
+set_tests_properties(rtl_wfm_pipeline_test PROPERTIES TIMEOUT 120)
+
 add_executable(rtl_receive_pipeline_test tests/rtl_receive_pipeline_test.cpp)
 target_include_directories(rtl_receive_pipeline_test PRIVATE src)
 target_link_libraries(rtl_receive_pipeline_test PRIVATE aethercore aether_wdsp Qt6::Core)
@@ -7400,6 +7406,36 @@ add_test(NAME fm_filter_controls_test
 set_tests_properties(fm_filter_controls_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+add_executable(wfm_controls_test
+    tests/wfm_controls_test.cpp
+    src/gui/WfmApplet.cpp
+    src/gui/WfmLockScope.cpp
+    src/gui/RxApplet.cpp
+    src/gui/ControlAvailabilityRegistry.cpp
+    src/gui/VfoWidget.cpp
+    src/gui/ModeFilterPresets.cpp
+    src/gui/VfoDisplayDefaults.cpp
+    src/gui/FrequencyEntryParser.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/FilterPassbandWidget.cpp
+    src/gui/SliceColorManager.cpp
+    src/gui/SliceLabel.cpp
+    src/gui/PhaseKnob.cpp
+    src/gui/SmartMtrWidget.cpp
+    src/gui/SmartMtrConfig.cpp
+    src/gui/MeterViewController.cpp
+    src/gui/AdaptiveFilterControls.cpp
+    src/gui/GuardedSlider.h
+)
+target_include_directories(wfm_controls_test PRIVATE src)
+target_link_libraries(wfm_controls_test PRIVATE
+    aethercore Qt6::Widgets Qt6::Test
+)
+add_test(NAME wfm_controls_test
+         COMMAND wfm_controls_test)
+set_tests_properties(wfm_controls_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # The VFO flag's AetherRX / AetherTX launchers stay the same width on every
 # mode's DSP grid. Same socket-free build as the squelch test above.
 add_executable(vfo_dsp_launcher_width_test
@@ -7693,6 +7729,7 @@ set(AETHER_SETTINGS_CONSUMERS
     gui_nested_lifetime_test
     rx_applet_squelch_reconciliation_test
     fm_filter_controls_test
+    wfm_controls_test
     spectrum_confirmed_geometry_test
     flex_slice_mode_intent_test
     rtl_slice_settings_test

@@ -55,6 +55,12 @@ semantics see [local frequency control](../aetherd-local-slice-frequency-control
 
 ## Wired and consumed
 
+### Broadcast FM receiver controls
+
+| Record | Flex | HL2 | Sim | Icom | ANAN | RTL-SDR | Consumers |
+|---|---|---|---|---|---|---|---|
+| `broadcastFmReceive` | absent | absent | absent | absent | absent | de-emphasis 50/75 µs, force Mono, measured reception diagnostics | `WfmApplet` availability; `RadioModel::dispatchSliceWfm` validates the capability and routes `requestSliceWfm`, with explicit refusal reporting |
+
 ### Local receive-control records
 
 The optional `receiveModeControl`, `receiveFilterControl`, `receiveAudioControl`,

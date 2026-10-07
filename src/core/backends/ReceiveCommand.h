@@ -74,6 +74,18 @@ struct SliceAudioRequest {
     }
 };
 
+struct SliceWfmRequest {
+    enum class Field { ForceMono, Deemphasis };
+    Field field{Field::ForceMono};
+    int value{0};
+
+    bool valid() const
+    {
+        return (field == Field::ForceMono && (value == 0 || value == 1))
+            || (field == Field::Deemphasis && (value == 50 || value == 75));
+    }
+};
+
 struct SliceSquelchRequest {
     bool enabled{false};
     int level{0};
@@ -91,3 +103,4 @@ Q_DECLARE_METATYPE(AetherSDR::SliceAgcRequest)
 Q_DECLARE_METATYPE(AetherSDR::SliceDspRequest)
 Q_DECLARE_METATYPE(AetherSDR::SliceAudioRequest)
 Q_DECLARE_METATYPE(AetherSDR::SliceSquelchRequest)
+Q_DECLARE_METATYPE(AetherSDR::SliceWfmRequest)

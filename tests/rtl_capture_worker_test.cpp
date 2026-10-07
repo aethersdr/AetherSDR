@@ -27,7 +27,8 @@ struct RtlCaptureBackendTestAccess {
     static void start(RtlSdrBackend& backend, std::unique_ptr<RtlSdrWorker::Device> device, int capacity = 1)
     {
         backend.m_requested.hardware = {100'000'000, 2'400'000, 0, 0, 0, 240};
-        backend.m_requested.receivers = {{{0, 100'000'000, -100'000, 100'000, 0, 0, 0}, T::Mode::Wfm}};
+        const double wfmGuard = RtlReceivePipeline::kQualifiedWfmEnabled ? 3000 : 0;
+        backend.m_requested.receivers = {{{0, 100'000'000, -100'000, 100'000, 0, wfmGuard, wfmGuard}, T::Mode::Wfm}};
         if (capacity > 1) {
             backend.m_receiverCapacity = capacity;
             backend.m_capture = RtlCaptureTransaction({8, static_cast<std::size_t>(capacity)});
@@ -112,12 +113,25 @@ static void sustainedPanProgress(bool narrow)
         const int beforeFrames = frames;
         const int beforeWrites = device->writes;
         const int beforeCallbacks = device->callbacks;
-        for (int block = 0; block < 7; ++block) { device->block(); }
+        // Each injected block represents real sample time (3.4 ms here).
+        // Bursting all seven drains native WFM's nonblocking WDSP output ring
+        // and correctly requests receiver repair, superseding this pan. Pace
+        // the fixture so it tests held-pan ordering through the native graph.
+        const unsigned long callbackMicroseconds = static_cast<unsigned long>(std::ceil(
+            1.0e6 * (device->callbackBytes.load() / 2.0) / accepted.hardware.sampleRateHz));
+        const auto clockBlock = [&] {
+            const int completed = device->callbacks + 1;
+            device->block();
+            check(waitFor([&] { return device->callbacks >= completed; }),
+                  "paced capture callback completes");
+            QThread::usleep(callbackMicroseconds);
+        };
+        for (int block = 0; block < 7; ++block) { clockBlock(); }
         check(waitFor([&] { return device->callbacks >= beforeCallbacks + 7; }),
               "fresh capture receives seven partial FFT blocks");
         check(frames == beforeFrames && device->writes == beforeWrites,
               "next pan waits for a whole fresh observation, not a partial window");
-        device->block();
+        clockBlock();
         check(waitFor([&] { return frames > beforeFrames; }),
               "fresh RF frame escapes while continuous pointer motion is pending");
         check(std::abs(framedCenter - accepted.hardware.centerHz) < 1,
@@ -332,7 +346,7 @@ int main(int argc, char** argv)
     const int beforeFilter = changes;
     backend.setSliceFilter(0, -8000, 8000);
     check(changes == beforeFilter && !rtl::RtlCaptureBackendTestAccess::busy(backend),
-          "unimplemented WFM filter request neither publishes nor queues work");
+          "invalid narrow WFM filter request neither publishes nor queues work");
     const int beforeMode = changes;
     backend.setSliceMode(0, QStringLiteral("FM"));
     check(waitFor([&] { state->block(); QThread::msleep(5); return changes > beforeMode; }), "mode adopted at callback boundary");

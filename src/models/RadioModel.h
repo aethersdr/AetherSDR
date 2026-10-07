@@ -1746,6 +1746,9 @@ private:
     void dispatchSliceAgc(const SliceAgcRequest& request);
     void dispatchSliceDsp(const SliceDspRequest& request);
     void dispatchSliceAudio(const SliceAudioRequest& request);
+    void dispatchSliceWfmForceMono(bool forceMono);
+    void dispatchSliceWfmDeemphasis(int microseconds);
+    void dispatchSliceWfm(const SliceWfmRequest& request);
     void dispatchSliceSquelch(const SliceSquelchRequest& request);
     void dispatchSliceRxAntenna(const QString& antenna);
     void dispatchSliceLock(bool locked);

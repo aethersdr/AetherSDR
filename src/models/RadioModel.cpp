@@ -2003,12 +2003,15 @@ RadioModel::RadioModel(QObject* parent)
     qRegisterMetaType<TxCoordinator::StopRequest>();
     qRegisterMetaType<TxStopEvidence>();
     qRegisterMetaType<SliceDelta>();
+    qRegisterMetaType<WfmStereoStatus>();
+    qRegisterMetaType<WfmReceptionDiagnostics>();
     qRegisterMetaType<SliceTuneRequest>();
     qRegisterMetaType<SliceFilterRequest>();
     qRegisterMetaType<SliceAgcRequest>();
     qRegisterMetaType<SliceDspRequest>();
     qRegisterMetaType<SliceAudioRequest>();
     qRegisterMetaType<SliceSquelchRequest>();
+    qRegisterMetaType<SliceWfmRequest>();
     qRegisterMetaType<TransmitDelta>();
     qRegisterMetaType<MeterDef>();
     qRegisterMetaType<RadioDelta>();
@@ -6942,6 +6945,10 @@ void RadioModel::stageSessionModelsForReconnect()
         if (slice) {
             slice->invalidateSquelchState();
             slice->invalidateFrequencyObservation();
+            SliceDelta unavailableWfm;
+            unavailableWfm.wfmStereoStatus = WfmStereoStatus::Unavailable;
+            unavailableWfm.wfmReceptionDiagnostics = WfmReceptionDiagnostics{};
+            slice->applyChanges(unavailableWfm);
             m_staleSlices.insert(slice->sliceId(), slice);
         }
     }
@@ -9839,6 +9846,10 @@ void RadioModel::wireSliceReceiveIntentsToBackend(SliceModel* s)
             this, &RadioModel::dispatchSliceDsp, type);
     connect(s, &SliceModel::receiveAudioRequested,
             this, &RadioModel::dispatchSliceAudio, type);
+    connect(s, &SliceModel::wfmForceMonoRequested,
+            this, &RadioModel::dispatchSliceWfmForceMono, type);
+    connect(s, &SliceModel::wfmDeemphasisRequested,
+            this, &RadioModel::dispatchSliceWfmDeemphasis, type);
     connect(s, &SliceModel::receiveSquelchRequested,
             this, &RadioModel::dispatchSliceSquelch, type);
     connect(s, &SliceModel::receiveRxAntennaRequested,
@@ -9928,6 +9939,31 @@ void RadioModel::dispatchSliceAudio(const SliceAudioRequest& request)
         reportReceiveDispatch(m_backend->requestSliceAudio(source->sliceId(), request),
                               QStringLiteral("receive audio"),
                               request.origin == SliceAudioRequest::Origin::Operator);
+    }
+}
+
+void RadioModel::dispatchSliceWfmForceMono(bool forceMono)
+{
+    dispatchSliceWfm({SliceWfmRequest::Field::ForceMono, int(forceMono)});
+}
+
+void RadioModel::dispatchSliceWfmDeemphasis(int microseconds)
+{
+    dispatchSliceWfm({SliceWfmRequest::Field::Deemphasis, microseconds});
+}
+
+void RadioModel::dispatchSliceWfm(const SliceWfmRequest& request)
+{
+    if (SliceModel* source = receiveCommandSource()) {
+        const std::optional<BroadcastFmReceive> feature = m_backend->capabilities().broadcastFmReceive;
+        const bool available = request.valid() && feature
+            && source->mode() == QLatin1String("WFM")
+            && !source->externalReceiveReplacementActive()
+            && (request.field == SliceWfmRequest::Field::ForceMono
+                ? feature->forceMonoControl : feature->deemphasisUs.contains(request.value));
+        reportReceiveDispatch(available
+            ? m_backend->requestSliceWfm(source->sliceId(), request)
+            : ReceiveDispatch::Unsupported, QStringLiteral("broadcast FM"));
     }
 }
 

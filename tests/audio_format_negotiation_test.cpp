@@ -83,6 +83,83 @@ DeviceCaps dev(QList<int> rates,
     return c;
 }
 
+// The RX speaker caller can supply a native 48 kHz producer. Device preference
+// is not proof that an open succeeds: retain a 24 kHz fallback even when the
+// device advertises 48 kHz but accepts only 24 kHz. All inputs remain injected.
+void native48OutputPolicy()
+{
+    const auto floatRates = [](TargetOs os, Direction direction,
+                               const DeviceCaps& caps, int internalRate,
+                               ResamplerPolicy policy = ResamplerPolicy::PreservePan) {
+        QList<int> rates;
+        for (const FormatCandidate& candidate : buildLadder(
+                 os, direction, caps, policy, internalRate)) {
+            if (candidate.fmt == SampleFmt::Float32) {
+                rates.append(candidate.rate);
+            }
+        }
+        return rates;
+    };
+    for (TargetOs os : {TargetOs::Windows, TargetOs::MacOS, TargetOs::Linux}) {
+        const std::string prefix = std::string("native48 output / ") + toString(os);
+        DeviceCaps caps = dev({48000, 44100, 24000});
+        caps.preferredRate = 48000;
+        report(prefix + " Float open order retains 48 -> 44.1 -> 24 without retrying preferred48",
+               floatRates(os, Direction::Output, caps, 48000)
+                   == QList<int>{48000, 44100, 24000});
+
+        // Exercise reliable capability checks and the try-at-open policy used
+        // by WASAPI. Each row removes the previous successful rate while the
+        // advertised preferred format remains 48 kHz throughout.
+        for (bool reliable : {true, false}) {
+            caps.isFormatSupportedReliable = reliable;
+            for (int workingRate : {48000, 44100, 24000}) {
+                caps.supportedRates = workingRate == 48000
+                    ? QList<int>{24000, 44100, 48000}
+                    : workingRate == 44100 ? QList<int>{24000, 44100}
+                                          : QList<int>{24000};
+                const NegotiatedFormat selected = negotiate(
+                    os, Direction::Output, caps, ResamplerPolicy::PreservePan, 48000);
+                const ResamplerKind expectedResampler = workingRate == 48000
+                    ? ResamplerKind::None : ResamplerKind::PreservePan;
+                report(prefix + (reliable ? " reliable" : " try-at-open")
+                           + " chooses " + std::to_string(workingRate)
+                           + " with advertised preferred48",
+                       selected.ok && selected.rate == workingRate
+                           && selected.fmt == SampleFmt::Float32 && selected.channels == 2
+                           && selected.resampler == expectedResampler
+                           && selected.fellBack == (workingRate != 48000),
+                       fmtOf(selected));
+            }
+        }
+
+        // Freeze the existing orders outside this narrow output case. In
+        // particular, passing internalRate=48000 must not give input capture
+        // the new output fallback sequence.
+        const QList<int> legacyOutput = os == TargetOs::Linux
+            ? QList<int>{24000, 48000, 44100} : QList<int>{48000, 24000, 44100};
+        report(prefix + " preserves default24 output order",
+               floatRates(os, Direction::Output, caps, kInternalRate) == legacyOutput);
+        for (ResamplerPolicy policy : {ResamplerPolicy::RegenerateAtRate,
+                                       ResamplerPolicy::MonoCollapse}) {
+            const std::string policyName = policy == ResamplerPolicy::RegenerateAtRate
+                ? "RegenerateAtRate" : "MonoCollapse";
+            report(prefix + " preserves native48 " + policyName + " output order",
+                   floatRates(os, Direction::Output, caps, 48000, policy)
+                       == QList<int>{48000, 44100});
+        }
+        for (int internalRate : {24000, 48000}) {
+            const QList<int> inputOrder = os == TargetOs::Linux
+                ? (internalRate == 24000 ? QList<int>{48000, 24000, 44100}
+                                         : QList<int>{48000, 44100})
+                : (internalRate == 24000 ? QList<int>{48000, 44100, 24000, 16000}
+                                         : QList<int>{48000, 44100, 16000});
+            report(prefix + " preserves input" + std::to_string(internalRate) + " order",
+                   floatRates(os, Direction::Input, caps, internalRate) == inputOrder);
+        }
+    }
+}
+
 } // namespace
 
 int main()
@@ -97,6 +174,8 @@ int main()
     const auto Win = TargetOs::Windows;
     const auto Mac = TargetOs::MacOS;
     const auto Lin = TargetOs::Linux;
+
+    native48OutputPolicy();
 
     // ── Standard 48k-only DAC, RX speaker (PreservePan) ───────────────────────
     runRow({"std 48k DAC / Win / RX",  Win, Out, Pan, dev({48000}),
