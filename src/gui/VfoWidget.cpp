@@ -761,6 +761,13 @@ VfoWidget::~VfoWidget()
     delete m_lockVfoBtn.data();
     delete m_recordBtn.data();
     delete m_playBtn.data();
+    // The label still routes its own teardown events through eventFilter(),
+    // whose `obj == m_collapsedFreqLabel` downcasts through QPointer<QLabel> --
+    // undefined once ~QLabel has run and the object is only a QWidget (UBSan,
+    // #6154). Detach the filter before deleting it.
+    if (m_collapsedFreqLabel) {
+        m_collapsedFreqLabel->removeEventFilter(this);
+    }
     delete m_collapsedFreqLabel.data();
 }
 
@@ -7079,7 +7086,13 @@ bool VfoWidget::eventFilter(QObject* obj, QEvent* event)
     // deliberately not mirrored here: m_freqStack (which holds the edit
     // box) is hidden/mouse-transparent while collapsed and would need
     // real repositioning work to become usable — left as a follow-up.
-    if ((obj == m_freqLabel || obj == m_collapsedFreqLabel) && event->type() == QEvent::MouseButtonPress) {
+    // Event type FIRST: comparing against the QPointer<QLabel> downcasts
+    // through it, which is undefined for the collapsed label's own teardown
+    // events once it is only a QWidget. A parent can destroy that sibling
+    // before this VFO (e.g. after beginDirectEntry() raise()s us), so the
+    // destructor's removeEventFilter() alone does not cover it (#6154).
+    if (event->type() == QEvent::MouseButtonPress
+        && (obj == m_freqLabel || obj == m_collapsedFreqLabel)) {
         auto* me = static_cast<QMouseEvent*>(event);
         if (me->button() == Qt::RightButton && m_slice) {
             ScopedChildWidget<QMenu> menuOwner(this);

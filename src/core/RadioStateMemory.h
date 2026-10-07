@@ -17,7 +17,7 @@ namespace RadioStateMemory {
 
 // The feature document name in radio_settings, and its current schema.
 inline QString featureName() { return QStringLiteral("OperatingState"); }
-constexpr int kSchemaVersion = 2;
+constexpr int kSchemaVersion = 3;   // 3: tuningStepHz, receiveOutputLevelPct
 
 // The single engagement predicate: restore/capture happen only for declared
 // domains. Deliberately a function so tests and call sites share one truth.

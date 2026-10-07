@@ -30,6 +30,24 @@
 #include <memory>
 #include <optional>
 
+namespace AetherSDR::anan {
+// AnanBackend's friend: drives the client-snapshot handler with no client and
+// no socket, which is the only deterministic way to reach LinkStats::alive.
+class AnanLinkStatsTestAccess {
+public:
+    static void setConnected(AnanBackend& backend, bool connected)
+    {
+        backend.m_connected = connected;
+    }
+    static void snapshot(AnanBackend& backend, quint64 rxBytes)
+    {
+        P2Client::LinkCounters counters;
+        counters.rxBytes = rxBytes;
+        backend.onLinkCounters(counters);
+    }
+};
+}  // namespace AetherSDR::anan
+
 using namespace AetherSDR;
 using namespace AetherSDR::anan;
 
@@ -64,6 +82,10 @@ int main(int argc, char** argv)
         check(gain.value(QStringLiteral("adc0AttenuationDb")).toInt() == 12
                   && gain.value(QStringLiteral("adc1AttenuationDb")).toInt() == 20,
               "both ADC attenuations survive a process boundary");
+        check(backend.restoredFrequencyHzForTest() == 7'074'000.0,
+              "the dial survives a process boundary");
+        check(backend.restoredModeForTest() == QStringLiteral("DIGU"),
+              "the mode survives a process boundary too");
         return g_failures == 0 ? 0 : 1;
     }
 
@@ -87,6 +109,39 @@ int main(int argc, char** argv)
               "radiocert tune's mode-map stage falling through to the USB fallback below");
         check(AnanBackend::modeFromString("bogus") == WdspChannel::Mode::Usb,
               "unknown mode falls back to USB, not silently undefined behaviour");
+    }
+
+    // ---- restore-boundary vocabulary ----
+    // modeFromString() answers USB for anything unknown, so it cannot judge.
+    {
+        for (const char* m : {"LSB", "USB", "DSB", "CWU", "CW", "CWL", "FM", "NFM",
+                              "AM", "DIGU", "DIGL", "RTTY", "SAM", "DRM", "WBFM", "WFM"}) {
+            check(AnanBackend::isKnownModeString(QString::fromLatin1(m)),
+                  "every spelling modeFromString() maps is accepted at restore");
+        }
+        check(AnanBackend::isKnownModeString("usb"), "the accept test is case-insensitive");
+        check(!AnanBackend::isKnownModeString("bogus"),
+              "a mode modeFromString() does not map is REFUSED, not silently demodulated as SSB");
+        check(!AnanBackend::isKnownModeString(""), "an empty mode is not a mode");
+    }
+
+    // ---- restorable frequency: bounded by the DDS encoding, Nyquist ----
+    {
+        check(AnanBackend::isRestorableFrequencyHz(14'175'000.0), "20 m phone is restorable");
+        check(AnanBackend::isRestorableFrequencyHz(1.0), "just above zero is restorable");
+        check(!AnanBackend::isRestorableFrequencyHz(0.0),
+              "zero is the not-restored sentinel, never a frequency");
+        check(!AnanBackend::isRestorableFrequencyHz(-1.0), "a negative frequency is refused");
+        check(!AnanBackend::isRestorableFrequencyHz(kDspClockHz / 2.0),
+              "Nyquist itself is refused -- it aliases rather than tuning");
+        check(!AnanBackend::isRestorableFrequencyHz(200'000'000.0),
+              "far past Nyquist is refused, NOT clamped: the document is wrong, not nearly right");
+        check(!AnanBackend::isRestorableFrequencyHz(
+                  std::numeric_limits<double>::quiet_NaN()),
+              "NaN is refused");
+        check(!AnanBackend::isRestorableFrequencyHz(
+                  std::numeric_limits<double>::infinity()),
+              "infinity is refused");
     }
 
     // ---- default passbands ----
@@ -139,8 +194,12 @@ int main(int argc, char** argv)
               "backendPanAveraging engaged, 10 ms per FFT AVG step -- the WDSP analyzer averages");
         check(c.tuningMinHz == 0.0 && c.tuningMaxHz == 0.0,
               "tuning range not reported -- no verified G2 range yet, not a guess");
-        check(c.clientSettingsDomains == RadioCapabilities::ClientSettingsDomain::RfGain,
-              "only RF gain restore is declared");
+        check(c.clientSettingsDomains
+                  == (RadioCapabilities::ClientSettingsDomain::RfGain
+                      | RadioCapabilities::ClientSettingsDomain::Tuning
+                      | RadioCapabilities::ClientSettingsDomain::ReceiveOutputLevel),
+              "RF gain, tuning AND radio output level restore are declared -- "
+              "this radio reports none of them, so the client is its only memory");
         check(c.sampleRatesHz.size() == 6, "six DDC rates advertised");
         check(c.hasHostNoiseBlanker,
               "hasHostNoiseBlanker true -- WDSP ANB runs in AnanRxDsp, so the "
@@ -376,6 +435,23 @@ int main(int argc, char** argv)
             {QStringLiteral("adc1AttenuationDb"), 20}}}};
         backend.applyRestoredState(state);
         backend.setPanRfGain(QStringLiteral("anan-0"), -12);
+        // Set the dial BEFORE radio A's store so the child reads it off disk.
+        backend.setSliceFrequency(0, 7'074'000.0);
+        backend.setSliceMode(0, QStringLiteral("DIGU"));
+        check(backend.currentOperatingState().rfFrequencyHz == 7'074'000.0
+                  && backend.currentOperatingState().mode == QStringLiteral("DIGU"),
+              "capture reports the LIVE dial, not the restored one");
+        // The level and its signal: nothing else tells the engine it moved.
+        QSignalSpy levelChanges(&backend, &IRadioBackend::operatingStateChanged);
+        backend.setLineoutGain(35);
+        check(backend.currentOperatingState().receiveOutputLevelPct == 35,
+              "capture reports the live radio output level");
+        check(levelChanges.count() == 1,
+              "a changed output level announces itself for capture");
+        backend.setLineoutGain(35);
+        check(levelChanges.count() == 1,
+              "setting the SAME level again announces nothing -- this arrives "
+              "per step while the operator drags the slider");
         check(RadioStateMemory::store(radioA, caps, backend.currentOperatingState()),
               "ANAN capture persists through OperatingState");
         backend.applyRestoredState(RadioStateMemory::load(radioB, caps));
@@ -384,7 +460,16 @@ int main(int argc, char** argv)
         check(emptyGain.value(QStringLiteral("adc0AttenuationDb")).toInt() == 0
                   && emptyGain.value(QStringLiteral("adc1AttenuationDb")).toInt() == 0,
               "a radio with no document resets both ADCs rather than inheriting radio A");
+        check(backend.restoredFrequencyHzForTest() == 0.0
+                  && backend.restoredModeForTest().isEmpty(),
+              "a radio with no document clears the restored dial too -- radio A's "
+              "frequency must not be carried onto radio B by a reused backend");
+        // Two G2s on one profile: radio B starts at the default, not at 35.
+        check(backend.lineoutGainPercentForTest() == 50,
+              "a radio with no document starts at the default output level, "
+              "not at the previous radio's");
         backend.setPanRfGain(QStringLiteral("anan-0"), -5);
+        backend.setLineoutGain(20);
         check(RadioStateMemory::store(radioB, caps, backend.currentOperatingState()),
               "radio B gets its own operating-state document");
         backend.applyRestoredState(RadioStateMemory::load(radioA, caps));
@@ -393,6 +478,9 @@ int main(int argc, char** argv)
         check(gain.value(QStringLiteral("adc0AttenuationDb")).toInt() == 12
                   && gain.value(QStringLiteral("adc1AttenuationDb")).toInt() == 20,
               "radio A preserves both ADC values independently of radio B");
+        check(backend.lineoutGainPercentForTest() == 35,
+              "radio A's output level comes back as 35 after radio B stored 20 -- "
+              "each radio keeps its own");
         check(!AppSettings::instance().contains(QStringLiteral("Anan")),
               "live attenuation never writes the global connect-options document");
         QProcess child;
@@ -412,6 +500,30 @@ int main(int argc, char** argv)
         check(clamped.value(QStringLiteral("adc0AttenuationDb")).toInt() == 31
                   && clamped.value(QStringLiteral("adc1AttenuationDb")).toInt() == 0,
               "restored attenuation is clamped at both protocol bounds");
+        // Tuning is refused, not clamped, field by field.
+        {
+            RestoredRadioState bad;
+            bad.rfFrequencyHz = 900'000'000.0;
+            bad.mode = QStringLiteral("bogus");
+            backend.applyRestoredState(bad);
+            check(backend.restoredFrequencyHzForTest() == 0.0,
+                  "an out-of-range stored frequency is dropped, not clamped to Nyquist");
+            check(backend.restoredModeForTest().isEmpty(),
+                  "an unmappable stored mode is dropped rather than demodulating as SSB");
+            RestoredRadioState half;
+            half.rfFrequencyHz = 10'000'000.0;
+            half.mode = QStringLiteral("nonsense");
+            backend.applyRestoredState(half);
+            check(backend.restoredFrequencyHzForTest() == 10'000'000.0
+                      && backend.restoredModeForTest().isEmpty(),
+                  "a bad mode does not take a good frequency down with it");
+            RestoredRadioState cased;
+            cased.rfFrequencyHz = 14'175'000.0;
+            cased.mode = QStringLiteral("digu");
+            backend.applyRestoredState(cased);
+            check(backend.restoredModeForTest() == QStringLiteral("DIGU"),
+                  "an accepted mode is normalised to the spelling the rest of the backend uses");
+        }
         state.extension = QJsonObject{{QStringLiteral("rfGain"), QJsonObject{
             {QStringLiteral("adc0AttenuationDb"), QStringLiteral("bad")},
             {QStringLiteral("adc1AttenuationDb"), 1e30}}}};
@@ -506,6 +618,62 @@ int main(int argc, char** argv)
         // future field cannot be added without this test being revisited.
         backend.setSliceAudioPan(0, 0);
         check(!last.has_value(), "balance publishes nothing, having no delta field");
+    }
+
+    // ---- PA telemetry capability: the readout is withdrawn, not blanked ----
+    {
+        AnanBackend backend;
+        const auto caps = backend.capabilities();
+        check(caps.paTelemetryAudit.has_value(),
+              "ANAN declares a PA telemetry audit");
+        check(caps.paTelemetryAudit && caps.paTelemetryAudit->temperatureAbsent,
+              "the audit states PA temperature is ABSENT FROM THE PROTOCOL -- the"
+              " claim the status bar withdraws its readout on");
+        check(!caps.hasPaTemperatureTelemetry,
+              "and no temperature is claimed as received");
+        // The radio DOES send a supply count, but no known scale fits it (a
+        // 13.8 V rail read as ~40 V on a G2 bench), so the row stays withdrawn.
+        check(!caps.hasSupplyVoltageTelemetry,
+              "no supply voltage is claimed while no scale for its counts is known");
+        check(!caps.hasPaCurrentTelemetry,
+              "no PA drain current is claimed");
+    }
+
+    // ---- LinkStats: silence before the first snapshot, never a zeroed one ----
+    {
+        AnanBackend backend;
+        const auto idle = backend.linkStats();
+        check(!idle.reported,
+              "an unconnected backend reports NO transport, so the consumer keeps"
+              " its own source instead of being handed zeros");
+        check(idle.rttMs < 0 && idle.jitterMs < 0 && idle.gapMs < 0
+                  && idle.gapMaxMs < 0,
+              "every timing field defaults to the struct's negative"
+              " \"not measured\" sentinel, which must not render as zero");
+    }
+
+    // ---- LinkStats::alive: this snapshot's bytes against the last one's ----
+    {
+        AnanBackend backend;
+        AnanLinkStatsTestAccess::setConnected(backend, true);
+
+        AnanLinkStatsTestAccess::snapshot(backend, 1000);
+        check(backend.linkStats().reported && backend.linkStats().alive,
+              "a session's first snapshot compares against zero, so a link that"
+              " carried bytes reads alive on its first tick");
+
+        AnanLinkStatsTestAccess::snapshot(backend, 1000);
+        check(!backend.linkStats().alive, "a second with no new bytes reads dead");
+
+        AnanLinkStatsTestAccess::snapshot(backend, 5000);
+        check(backend.linkStats().alive, "bytes resuming read alive again");
+
+        // A restart that skipped disconnectRadio(), or a dead session's snapshot
+        // delivered after its reset: the new session's total is below the cache.
+        AnanLinkStatsTestAccess::snapshot(backend, 300);
+        check(backend.linkStats().alive && backend.linkStats().rxBytes == 300,
+              "a backward jump is a new session, compared against zero and not"
+              " against the dead session's total");
     }
 
     if (g_failures == 0)

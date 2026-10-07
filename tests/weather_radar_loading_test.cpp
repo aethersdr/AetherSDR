@@ -398,12 +398,15 @@ private slots:
 
     void globePlaybackOverviewKeepsFullAtlasResolution()
     {
+        ControlledRadarNetwork network;
+        QGV::setNetworkManager(&network);
         GlobeMapView globe;
         const QRectF world(-kRadarMercatorExtent,-kRadarMercatorExtent,kRadarWorldWidth,kRadarWorldWidth);
         globe.resize(640,480);
         QCOMPARE(globe.weatherRadarPlaybackSize(world),QSize(2048,2048));
         globe.resize(3840,2160);
         QCOMPARE(globe.weatherRadarPlaybackSize(world),QSize(2048,2048));
+        QGV::setNetworkManager(nullptr);
     }
 
     void regionalCompositeKeepsIndependentCoverage()
@@ -494,6 +497,10 @@ private slots:
 
     void legendPositionTracksMapAndSourceSize()
     {
+        // Like every other map-building case here: without it MapView installs
+        // the real tile manager and this test fetched live OSM tiles (#6156).
+        ControlledRadarNetwork network;
+        QGV::setNetworkManager(&network);
         MapDisplayWidget map;
         map.resize(800, 600);
         map.show();
@@ -516,6 +523,7 @@ private slots:
         QTRY_COMPARE(map.m_radarLegend->y(), map.height() - map.m_radarLegend->height() - 12);
         map.m_radarLegend->setProviders(0);
         QVERIFY(map.m_radarLegend->isHidden());
+        QGV::setNetworkManager(nullptr);
     }
 
     void compositeObservationNeverUsesFutureOrStaleWeather()
@@ -532,6 +540,8 @@ private slots:
 
     void changingRegionsRetiresPreviousProduct()
     {
+        ControlledRadarNetwork network;
+        QGV::setNetworkManager(&network);
         MapDisplayWidget map;
         map.setWeatherRadarRegions(7);
         map.m_weatherRadar->m_weatherRadarTimelineCache = QByteArrayLiteral("old catalog");
@@ -543,6 +553,7 @@ private slots:
         QVERIFY(WeatherRadarSource::composite(7).frameId() != WeatherRadarSource::composite(4).frameId());
         QCOMPARE(map.m_weatherRadar->m_weatherRadarSource.latestFrame().enabledProviders(),4);
         QCOMPARE(map.m_weatherRadar->m_weatherRadarSource.historicalFrame(QDateTime::currentDateTimeUtc()).enabledProviders(),4);
+        QGV::setNetworkManager(nullptr);
     }
 
     void noRegionsReturnsTransparentPixelsWithoutNetwork()

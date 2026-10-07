@@ -24,6 +24,11 @@
 // cycle so Metal binds to the new NSView. The backing-store notification is sent
 // before the actual reparent; sending it again here can make QRhiWidget remove a
 // stale cleanup callback from the wrong QRhi during startup floating restore.
+//
+// macOS only, as on main.  The pan float/dock paths that call this predate the
+// unified title bar, and the stale-drawable fault refreshAfterLayoutShift()
+// reuses it for was measured on Metal only; widening it to D3D/GL would change
+// four existing reparent paths on Windows and Linux without a reproduction.
 static void refreshAfterReparent(AetherSDR::SpectrumWidget* sw)
 {
     if (!sw) return;
@@ -345,6 +350,32 @@ static void equalizeSplitter(QSplitter* splitter)
 void PanadapterStack::equalizeSizes()
 {
     equalizeSplitter(m_splitter);
+}
+
+void PanadapterStack::refreshAfterLayoutShift()
+{
+#if defined(Q_OS_MAC) && defined(AETHER_GPU_SPECTRUM)
+    // Re-realize each spectrum's NATIVE window, not just its GPU pipelines.
+    // Measured on Metal: after the flip the native surface keeps its pre-flip
+    // width (short by the panel's 260 px), so re-rendering into it — even
+    // continuously — never paints the strip.  Destroying the native window is
+    // what re-establishes the geometry; it costs one Metal re-bind per flip.
+    // macOS only: nothing reproduced this on D3D/GL, so elsewhere the flip
+    // pays nothing beyond the repaint sweep below.
+    for (PanadapterApplet* applet : std::as_const(m_pans)) {
+        if (!applet) continue;
+        // A dock/visibility change in this window cannot move a panadapter
+        // hosted by a floating pan window or an additional canvas window.
+        if (applet->window() != window()) continue;
+        if (SpectrumWidget* sw = applet->spectrumWidget()) {
+            refreshAfterReparent(sw);
+        }
+    }
+#endif
+    // The non-native siblings (band-stack strip, splitter handles) repaint
+    // from the ordinary damage path, but the move can leave their old
+    // footprint un-invalidated, so sweep the stack.
+    update();
 }
 
 int PanadapterStack::layoutRequiredPanCount(const QString& layoutId)

@@ -1796,6 +1796,9 @@ RadioCapabilities Hl2Backend::capabilities() const
     // SpectrumWidget's noise-floor auto-adjust converges without a dBm range
     // echo. See PanAmplitudeModel::binsAbsolute.
     amplitude.binsAbsolute = true;
+    // No register holds a display range and nothing reports one: the client
+    // is the only memory the operator's dBm range has.
+    amplitude.clientPersistsDbmRange = true;
     c.panAmplitude = amplitude;
 
     // radioOwnsDbmScale is not declared: this radio cannot be commanded a dBm
@@ -1888,6 +1891,9 @@ RadioCapabilities Hl2Backend::capabilities() const
     // AVG (setPanAverage). SpectrumWidget skips its own fixed SMOOTH_ALPHA EMA
     // while this is set, so the two never stack (RFC #5782).
     c.backendPanAveraging = BackendPanAveraging{kMsPerAverageStep, false, {}, {}};
+    // The pan's frame rate is paced on this host and the radio stores no
+    // display state: the client is the only memory FFT FPS has.
+    c.panFrameRateShaping = PanFrameRateShaping{/*clientPersistsFrameRate*/ true};
     // No band/segment zoom: this backend vends no command plane at all, so
     // `display pan set ... band_zoom=` is dropped inside RadioModel::sendCmd.
     // Declaring absence is what makes the control refuse rather than lie.

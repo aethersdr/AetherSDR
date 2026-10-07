@@ -20,6 +20,19 @@
 
 namespace AetherSDR {
 
+namespace {
+
+// The level the operator hears, which a control surface's AF dial mirrors;
+// RadioModel holds the one rule. Without a model, the PC sink's saved level.
+int activeOutputVolumePercent(const RadioModel* model)
+{
+    return model ? model->activeOutputVolumePercent()
+                 : AppSettings::instance()
+                       .value(QStringLiteral("MasterVolume"), QStringLiteral("100")).toInt();
+}
+
+}  // namespace
+
 int TciProtocol::tciTrxForSlice(RadioModel* model, const SliceModel* slice)
 {
     if (!model || !slice)
@@ -396,6 +409,7 @@ QString TciProtocol::generateInitBurst()
         burst += QStringLiteral("tune_drive:%1,%2;").arg(txTrxIndex).arg(tx.tunePower());
         burst += QStringLiteral("mic_level:%1;").arg(tx.micLevel());
         burst += QStringLiteral("trx:%1,%2;").arg(txTrxIndex).arg(isTx ? "true" : "false");
+        burst += QStringLiteral("tune:%1,%2;").arg(txTrxIndex).arg(tx.isTuning() ? "true" : "false");
 
         // Master AF volume — whole-radio (no trx prefix), same saved value
         // cmdVolume's GET returns, reported in dB per the TCI spec
@@ -405,8 +419,7 @@ QString TciProtocol::generateInitBurst()
         // instead of the radio's real level (Ulanzi/Elgato/StreamController
         // gain steppers).
         burst += QStringLiteral("volume:%1;")
-                     .arg(volumeDbFromPercent(
-                         AppSettings::instance().value("MasterVolume", "100").toInt()));
+                     .arg(volumeDbFromPercent(activeOutputVolumePercent(m_model)));
 
         // Which slice holds GUI focus (#4160) — AetherSDR extension. Without
         // it a control surface learns focus only from the next change event,
@@ -589,6 +602,13 @@ std::optional<TciProtocol::TrxRequest> TciProtocol::takeTrxRequest()
     return request;
 }
 
+std::optional<TciProtocol::TuneRequest> TciProtocol::takeTuneRequest()
+{
+    std::optional<TuneRequest> request = std::move(m_tuneRequest);
+    m_tuneRequest.reset();
+    return request;
+}
+
 // ── Command implementations ────────────────────────────────────────────────
 
 QString TciProtocol::cmdStart()
@@ -730,13 +750,17 @@ QString TciProtocol::cmdTune(const QStringList& args, bool isSet)
     // so "anything that is not the word true" has to keep meaning STOP.
     // Fail closed, not silent — Constitution VI. (#4867 review)
     const bool tune = (args[1].trimmed().toLower() == QLatin1String("true"));
-    QMetaObject::invokeMethod(m_model, [model = m_model, tune]() {
-        if (tune)
-            model->transmitModel().startTune(TransmitModel::PttSource::Dax);
-        else
-            model->transmitModel().stopTune();
-    }, Qt::QueuedConnection);
-
+    if (trx < 0 && tune) {
+        // A malformed start keys nothing; it is answered with the real state.
+        const bool tuning = m_model && m_model->transmitModel().isTuning();
+        return QStringLiteral("tune:%1,%2;").arg(txTrx()).arg(tuning ? "true" : "false");
+    }
+    if (trx < 0) {
+        trx = txTrx();
+    }
+    // TciServer applies it, so the requester is answered with the state the
+    // model reached — a refused start included.
+    m_tuneRequest = TuneRequest{trx, tune};
     return {};
 }
 
@@ -1188,10 +1212,8 @@ int TciProtocol::volumePercentFromDb(double db)
 QString TciProtocol::cmdVolume(const QStringList& args, bool /*isSet*/)
 {
     if (args.isEmpty()) {
-        // GET — current master volume from saved settings (the same value
-        // the title bar slider reads on startup), reported in dB.
-        int pct = AppSettings::instance()
-                      .value("MasterVolume", "100").toInt();
+        // GET — the level of the output the operator hears, in dB.
+        const int pct = activeOutputVolumePercent(m_model);
         return QStringLiteral("volume:%1;").arg(volumeDbFromPercent(pct));
     }
 

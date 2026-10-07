@@ -6,6 +6,8 @@
 #include "gui/Theme.h"
 
 #include <QApplication>
+#include <QBrush>
+#include <QGradient>
 #include <QHoverEvent>
 #include <QLabel>
 #include <QSlider>
@@ -20,6 +22,8 @@
 #include <QJsonObject>
 #include <QJsonValue>
 #include <QStringList>
+#include <algorithm>
+#include <cmath>
 #include <cstdio>
 
 using namespace AetherSDR;
@@ -1391,6 +1395,85 @@ int main(int argc, char** argv)
         EXPECT_TRUE(tm.setActiveTheme("Default Dark"));
         EXPECT_EQ(tm.factoryColor("color.background.0").name().toLower(),
                   QString("#0f0f1a"));
+    }
+
+    // ---- the color.canon.* group (RFC #6226) resolves in BOTH bundled
+    //      themes, and its text and focus pairs meet docs/a11y.md ----
+    //
+    // The theme seed covers default-dark.json only, so a typo'd alias in
+    // default-light.json would otherwise ship unnoticed. The pairs are the
+    // ones the About window draws: link text on the ground, the Logbook
+    // button's text on its fill and hover fill, card keys on the nested card,
+    // and the gold focus ring on the button fill.
+    {
+        const QStringList canonTokens = {
+            "ground", "raised", "nested", "control", "ink", "inkSoft", "muted",
+            "line", "lineHi", "cyan", "aqua", "onAccent", "sparkHot", "sparkGold",
+            "sparkGoldHot", "bloom.blue", "bloom.teal", "grid",
+        };
+        auto contrast = [](const QColor& a, const QColor& b) {
+            auto lum = [](const QColor& c) {
+                auto lin = [](double v) {
+                    return v <= 0.04045 ? v / 12.92 : std::pow((v + 0.055) / 1.055, 2.4);
+                };
+                return 0.2126 * lin(c.redF()) + 0.7152 * lin(c.greenF()) + 0.0722 * lin(c.blueF());
+            };
+            const double la = lum(a), lb = lum(b);
+            return (std::max(la, lb) + 0.05) / (std::min(la, lb) + 0.05);
+        };
+        for (const QString theme : {QStringLiteral("Default Dark"), QStringLiteral("Default Light")}) {
+            EXPECT_TRUE(tm.setActiveTheme(theme));
+            for (const QString& t : canonTokens) {
+                const QColor c = tm.factoryColor("color.canon." + t);
+                if (!c.isValid()) {
+                    std::fprintf(stderr, "  %s: color.canon.%s does not resolve\n",
+                                 qPrintable(theme), qPrintable(t));
+                }
+                EXPECT_TRUE(c.isValid());
+            }
+            auto canon = [&](const char* t) { return tm.factoryColor(QStringLiteral("color.canon.") + t); };
+            EXPECT_TRUE(canon("ink") != canon("inkSoft"));
+            const struct { const char* fg; const char* bg; double floor; } pairs[] = {
+                {"cyan", "ground", 4.5},      // footer links; close button focus ring
+                {"cyan", "control", 4.5},     // Logbook button text
+                {"aqua", "nested", 4.5},      // Logbook button text, hovered
+                {"muted", "nested", 4.5},     // build-card keys
+                {"inkSoft", "nested", 4.5},   // build-card values
+                {"muted", "ground", 4.5},     // version line, close button
+                {"sparkGold", "control", 3.0},  // Logbook button focus ring
+            };
+            for (const auto& pr : pairs) {
+                const double r = contrast(canon(pr.fg), canon(pr.bg));
+                if (r < pr.floor) {
+                    std::fprintf(stderr, "  %s: canon.%s on canon.%s is %.2f:1, floor %.1f:1\n",
+                                 qPrintable(theme), pr.fg, pr.bg, r, pr.floor);
+                }
+                EXPECT_TRUE(r >= pr.floor);
+            }
+
+            // The primary action: onAccent text on every brand-gradient
+            // stop. Dark clears the 4.5:1 text floor. Light does not (white
+            // measures 3.7 and 3.3:1 on the middle and teal stops), which
+            // RFC #6226 accepts for About's OK pending a brand-gradient
+            // ruling (#6239); 3.0:1 records that, so neither side drifts
+            // without this test noticing.
+            const QBrush gradient = tm.brush(QStringLiteral("color.brand.gradient"),
+                                             QRect(0, 0, 100, 10));
+            EXPECT_TRUE(gradient.gradient() != nullptr);
+            if (const QGradient* g = gradient.gradient()) {
+                const double floor = theme == QStringLiteral("Default Dark") ? 4.5 : 3.0;
+                EXPECT_TRUE(g->stops().size() >= 2);
+                for (const QGradientStop& stop : g->stops()) {
+                    const double r = contrast(canon("onAccent"), stop.second);
+                    if (r < floor) {
+                        std::fprintf(stderr, "  %s: canon.onAccent on gradient stop %s is %.2f:1, floor %.1f:1\n",
+                                     qPrintable(theme), qPrintable(stop.second.name()), r, floor);
+                    }
+                    EXPECT_TRUE(r >= floor);
+                }
+            }
+        }
+        EXPECT_TRUE(tm.setActiveTheme("Default Dark"));
     }
 
     // ---- a USER theme resets to the base it descends from, and keeps

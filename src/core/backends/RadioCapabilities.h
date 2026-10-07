@@ -97,6 +97,16 @@ struct PanSpanModel {
     bool radioWide = false;
 };
 
+// The FFT frame rate of a pan whose frames this engine paces (Display, FFT
+// FPS). Absent: no owner is declared for it and the client stores nothing,
+// which is every family's existing behavior (a Flex stores and reports its own).
+struct PanFrameRateShaping {
+    // Explicit client persistence owner for the FFT frame rate. False preserves
+    // a family's existing settings behavior. No default: an engaging backend
+    // must state its own value.
+    bool clientPersistsFrameRate;
+};
+
 // Engaged when the backend averages its own pan frames per the operator's FFT
 // AVG (ANAN: WDSP's display analyzer, AnanPanAnalyzer). The widget then skips
 // its client-side EMA (SpectrumWidget::SMOOTH_ALPHA), which would add ~90 ms of
@@ -137,6 +147,11 @@ struct PanAmplitudeModel {
     // noiseFloorAutoAdjustAllowed() (NoiseFloorAutoAdjustGate.h): echo OR absolute
     // bins. Declare true only after reading the backend's bin path.
     bool binsAbsolute = false;
+
+    // Explicit client persistence owner for the pan's dBm range (the axis
+    // limits the operator sets). False preserves a family's existing settings
+    // behavior. Read through RadioCapabilities::clientPersistsDbmRange().
+    bool clientPersistsDbmRange = false;
 };
 
 // Wideband converter view: raw ADC output before the DDC, spanning the
@@ -245,6 +260,8 @@ struct RadioCapabilities {
     std::optional<PanAmplitudeModel> panAmplitude;
     // See BackendPanAveraging. Absent = the widget averages client-side.
     std::optional<BackendPanAveraging> backendPanAveraging;
+    // See PanFrameRateShaping. Absent = the client keeps no FFT frame rate.
+    std::optional<PanFrameRateShaping> panFrameRateShaping;
 
     // A backend nobody has read labelled its axis dBm and was consumed as
     // though it meant it. ABSENT KEEPS THAT CLAIM, so this is the legacy shape
@@ -262,6 +279,22 @@ struct RadioCapabilities {
     [[nodiscard]] bool panBinsAbsolute() const
     {
         return panAmplitude && panAmplitude->binsAbsolute;
+    }
+
+    // The one predicate for storing and for restoring the FFT frame rate.
+    // Absent is "not declared", and an undeclared backend owns nothing here.
+    [[nodiscard]] bool clientPersistsPanFrameRate() const
+    {
+        return panFrameRateShaping && panFrameRateShaping->clientPersistsFrameRate;
+    }
+
+    // The one predicate for storing and for restoring the pan's dBm range. The
+    // declaration counts only with absolute bins: the client writes the range
+    // into the pan model, which is safe only where no bin is scaled by it.
+    [[nodiscard]] bool clientPersistsDbmRange() const
+    {
+        return panAmplitude && panAmplitude->clientPersistsDbmRange
+            && panAmplitude->binsAbsolute;
     }
 
 
@@ -433,7 +466,7 @@ struct RadioCapabilities {
     // (Flex) never has radio-owned values re-asserted (#2465/#4126/#4261). Restore
     // never keys transmit: TxSetpoints covers drive setpoints only.
     enum class ClientSettingsDomain : quint32 {
-        Tuning      = 1u << 0,  // RF frequency + demod mode
+        Tuning      = 1u << 0,  // RF frequency + demod mode (+ step, no command plane)
         Passband    = 1u << 1,  // filter low/high edges
         SpanRate    = 1u << 2,  // span / IQ sample rate
         RfGain      = 1u << 3,  // LNA/preamp gain (per band — see RFC PR 3)
@@ -442,6 +475,9 @@ struct RadioCapabilities {
         Agc         = 1u << 6,  // AGC mode + threshold (client-side WDSP AGC)
         Cw          = 1u << 7,  // client-side keyer/sidetone setpoints; never keying
         RtlSlices   = 1u << 8,  // accepted RTL capture and stable receiver documents
+        // The radio's own receive output level. Not the PC sink's, which is
+        // app-global and stays the flat MasterVolume key.
+        ReceiveOutputLevel = 1u << 9,
     };
     Q_DECLARE_FLAGS(ClientSettingsDomains, ClientSettingsDomain)
     ClientSettingsDomains clientSettingsDomains;   // default: empty — restore nothing
@@ -543,6 +579,28 @@ struct RadioCapabilities {
     // PA temperature is unavailable; the capability is deliberately separate
     // because some radios define PACURRENT with an unusable/clipped range.
     bool hasPaCurrentTelemetry = false;
+
+    // A PROTOCOL audit of the PA telemetry the radio's wire format can carry at
+    // all, as distinct from the three flags above, which report what a session
+    // has so far RECEIVED. Engaged means the payload was read field by field and
+    // the absence is a property of the protocol rather than of a radio that has
+    // simply not sent one yet -- so a readout may be WITHDRAWN instead of left
+    // printing a placeholder that can never resolve.
+    //
+    // std::nullopt (the default) means NOT AUDITED, and every consumer keeps its
+    // historical presentation. That is deliberate: it holds a family that has
+    // made no such claim at its existing behaviour instead of quietly
+    // reclassifying a default `false` above as "proven absent" -- the
+    // all-defaults-false trap check_capability_records.py was written to stop.
+    //
+    // A record rather than another bool because RadioCapabilities is AT its
+    // frozen boolean count and shrink-only (#5262 M2); per-feature records are
+    // the sanctioned shape for a new capability.
+    struct PaTelemetryAudit {
+        // The protocol defines no PA temperature field anywhere in its payload.
+        bool temperatureAbsent = false;
+    };
+    std::optional<PaTelemetryAudit> paTelemetryAudit;
 
     // The radio reports main-fan speed as live telemetry. False means the
     // Radio Vitals applet omits the fan gauge instead of presenting an

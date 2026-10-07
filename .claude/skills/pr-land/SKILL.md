@@ -440,9 +440,18 @@ A fix without evidence is not landable, and the evidence is what you paste
 into the thread reply and the dismissal. Per item:
 
 - **Build and run the tests** in your worktree — every commit, not just the
-  last. `cmake --build build --parallel`, which is portable; drop to an
-  explicit lower job count when `pgrep -lf ninja` shows another build already
-  running.
+  last. Configure the lean build from `/pr-review` step 7 (shared core and
+  `-g1` on Linux/macOS), then build named targets, never the default `all`:
+  `cmake --build build --parallel --target AetherSDR <test_a> <test_b>`, then
+  `ctest --test-dir build -R '^(test_a|test_b)$' --no-tests=error`. The tests
+  are the ones the PR adds or modifies, the ones covering the findings you
+  fixed, and the ones selected from the files the branch touches, chosen as
+  `/pr-review` step 7 describes (including its `OBJECT`-library and
+  `add_test` name caveats). The full tree is several hundred test
+  executables, each with its own debug info — tens of gigabytes for binaries
+  the landing never runs; build it only when the fix is to the CMake or link
+  contract itself. Drop to an explicit lower job count when `pgrep -lf ninja`
+  shows another build already running.
 - **Run the static gates before the push**, merge base versus head (step 2).
   A boundary regression caught here costs a rebuild; caught by `Static checks`
   it costs a CI cycle; inside a tracked baseline it is not caught at all.

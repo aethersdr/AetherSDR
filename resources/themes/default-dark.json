@@ -72,6 +72,71 @@
             "accent": "{color.blue.500}",
             "tx":     "#5a4a28"
           },
+          "titlebar": {
+            "background":             "#eb0d1624",
+            "border":                 "#2978bee6",
+            "tab": {
+              "hover":            "#12ffffff",
+              "active.background": "#1a00b4d8",
+              "active.border":     "#7300b4d8"
+            },
+            "status": {
+              "connected": "{color.green.500}",
+              "available": "{color.gray.500}",
+              "inUse":     "{color.amber.500}"
+            },
+            "menu": {
+              "background": "#eb0f0f1a"
+            },
+            "otherTx": {
+              "background": "#ffffff"
+            },
+            "caption": {
+              "glyph":       "{color.gray.400}",
+              "glyph.hover": "{color.gray.50}",
+              "hover":       "#14ffffff",
+              "close.hover": "#c42b1c",
+              "close.glyph": "#ffffff",
+              "semantic": {
+                "close":    "#ff5f57",
+                "minimize": "#febc2e",
+                "maximize": "#28c840",
+                "inactive": "#565a60",
+                "glyph":    "#a0000000"
+              }
+            }
+          },
+          "brand": {
+            "wordmark": "#eaf2fb",
+            "gradient": {
+              "type": "linear-gradient",
+              "angle": 100,
+              "stops": [
+                { "at": 0.00, "color": "#3aa7ff" },
+                { "at": 0.42, "color": "#5de3ff" },
+                { "at": 1.00, "color": "#8ef7e6" }
+              ]
+            }
+          },
+          "canon": {
+            "ground":   "#060b13",
+            "raised":   "#0a121e",
+            "nested":   "#0e1a2a",
+            "control":  "#12233a",
+            "ink":      "#eaf2fb",
+            "inkSoft":  "#c4d4e8",
+            "muted":    "#8598b4",
+            "line":     "#1f78a5d2",
+            "lineHi":   "#4778bee6",
+            "cyan":     "#5de3ff",
+            "aqua":     "#8ef7e6",
+            "onAccent": "#041019",
+            "sparkHot": "#e6fdff",
+            "sparkGold": "#ffd970",
+            "sparkGoldHot": "#fff6d8",
+            "bloom": { "blue": "#293aa7ff", "teal": "#1a7bf2dc" },
+            "grid":     "#0978aad2"
+          },
           "meter": {
             "crst":   "{color.red.500}",
             "rms":    "{color.blue.500}",
