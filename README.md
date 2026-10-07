@@ -132,6 +132,8 @@ MIDI, and generic USB-serial adapters:
 - Griffin PowerMate USB knob
 - Contour ShuttleXpress and ShuttlePro v2 jog controllers
 - MIDI controllers with learn mode, manual mapping entry, importable/exportable profiles (including vendor-supplied SmartSDR `.map` files), and relative-encoder support
+- AetherPad — an Arduino Giga R1 running the [aether-pad](https://github.com/nigelfenton/aether-pad) RC-28 emulator firmware; over USB HID (hidapi builds) it drives the same RC-28 controls and LEDs
+- Ulanzi Dial Bluetooth HID dial on Linux, Windows (hidapi builds) and macOS, its rotary and buttons mapped in Settings → Ulanzi Dial Mapping...
 - Elgato Stream Deck+ natively over USB HID (hidapi builds), driving the LCD keys and the four encoder dials
 - ELAD/WoodBoxRadio TMate 2 over USB HID (hidapi builds): three encoders, nine keys, and the LCD and backlight
 - Other Stream Deck models, on any platform, through the TCI server or the automation bridge using the control-surface software of your choice — AetherSDR provides the protocol, not the button layer
