@@ -1,4 +1,28 @@
 {
+ "core/TailnetShimClient.h": {
+  "tag": "peripheral(tailnet-shim)",
+  "note": "Provisioning API client for the in-radio tailnet shim, a FLEX-8000/Aurora Docker waveform container (RFC #6271). Not SmartSDR wire: AetherSDR's own HTTP API to a separate service (the shim) that happens to run in the radio's container runtime, so a direct-transport peripheral, NOT behind the IRadioBackend radio seam (same shape as core/PgxlConnection.h).",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/TailnetShimDownloader.h": {
+  "tag": "peripheral(tailnet-shim)",
+  "note": "Pinned, SHA-256-verified download of the tailnet shim's Docker waveform image for FLEX-8000/Aurora radios (RFC #6271 D2). Not SmartSDR wire: AetherSDR's own HTTP API to a separate service (the shim) that happens to run in the radio's container runtime, so a direct-transport peripheral, NOT behind the IRadioBackend radio seam (same shape as core/PgxlConnection.h).",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/TailnetShimRelease.h": {
+  "tag": "peripheral(tailnet-shim)",
+  "note": "Pinned version, URL, size and SHA-256 of the tailnet shim Docker waveform image (RFC #6271 D2). Not SmartSDR wire: AetherSDR's own HTTP API to a separate service (the shim) that happens to run in the radio's container runtime, so a direct-transport peripheral, NOT behind the IRadioBackend radio seam (same shape as core/PgxlConnection.h).",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/TailnetShimTokenStore.h": {
+  "tag": "peripheral(tailnet-shim)",
+  "note": "OS-keychain storage of the tailnet shim's admin token, keyed by the Flex chassis serial (RFC #6271). Not SmartSDR wire: AetherSDR's own HTTP API to a separate service (the shim) that happens to run in the radio's container runtime, so a direct-transport peripheral, NOT behind the IRadioBackend radio seam (same shape as core/PgxlConnection.h).",
+  "split": "",
+  "confidence": "high"
+ },
  "core/control/RadioConnectionTarget.h": {
   "tag": "universal",
   "note": "Typed non-TX connection lifecycle seam; trusted target receives only catalogue observations after service authorization.",
