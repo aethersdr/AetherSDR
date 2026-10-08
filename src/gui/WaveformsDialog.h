@@ -31,6 +31,7 @@ public:
 private slots:
     void onInstallLegacyClicked();
     void onInstallDockerClicked();
+    void onInstallRemoteAccessClicked();
     void onDStarStartStopClicked();
     void onDStarBrowseClicked();
 
@@ -49,6 +50,8 @@ private:
                              const QString& filter,
                              bool docker,
                              const QString& initialPath = {});
+    // Everything after the file is chosen: WFP gate, installer, progress.
+    void installWaveformPath(bool docker, const QString& path, RadioModel* model);
 
     RadioModel*        m_radioModel{nullptr};
     QLabel*            m_wfpSupportPill{nullptr};
@@ -59,6 +62,8 @@ private:
     QLabel*            m_connectedRadioSerialLabel{nullptr};
     QToolButton*       m_installBtn{nullptr};
     QAction*           m_installDockerAction{nullptr};
+    QAction*           m_installRemoteAccessAction{nullptr};
+    class TailnetShimDownloader* m_shimDownloader{nullptr};
     QWidget*           m_listContainer{nullptr};
     QVBoxLayout*       m_listLayout{nullptr};
     WaveformInstaller* m_installer{nullptr};

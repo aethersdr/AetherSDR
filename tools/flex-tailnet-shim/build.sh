@@ -29,3 +29,7 @@ go build -trimpath -ldflags='-s -w' -o flex-tailnet-shim .
   cat "$(go env GOROOT)/LICENSE"
 } > LICENSES
 echo "built flex-tailnet-shim ($(wc -c < flex-tailnet-shim) bytes) and LICENSES ($(grep -c '^====' LICENSES) separators)"
+
+# The container image, reproducibly (RFC #6271 D2: AetherSDR pins its SHA-256).
+VERSION="$(sed -n 's/^const shimVersion = "\(.*\)"$/\1/p' main.go)"
+python3 -I mkimage.py flex-tailnet-shim LICENSES "$VERSION" "flex-tailnet-shim-$VERSION.tar.gz"

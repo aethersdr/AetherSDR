@@ -6,6 +6,10 @@
 
 #include "core/TailnetAddress.h"
 #include "core/TailnetShimClient.h"
+#include "core/TailnetShimDownloader.h"
+
+#include <QCryptographicHash>
+#include <QTemporaryDir>
 
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -108,6 +112,31 @@ int main()
     ok &= expect(!isTailnetAddress(QHostAddress(QStringLiteral("fd00::1"))), "other ULA is not");
     ok &= expect(isTailnetAddress(QHostAddress(QStringLiteral("::ffff:100.64.1.2"))), "v4-mapped tailnet");
     ok &= expect(!isTailnetAddress(QHostAddress()), "null address is not");
+
+    // Pinned-image verification (RFC #6271 D2): exact bytes only.
+    {
+        QTemporaryDir dir;
+        const QByteArray image("an image payload");
+        const QByteArray sha = QCryptographicHash::hash(image, QCryptographicHash::Sha256).toHex();
+        const QString path = dir.filePath(QStringLiteral("image.tar.gz"));
+        QFile f(path);
+        ok &= expect(f.open(QIODevice::WriteOnly) && f.write(image) == image.size(), "fixture written");
+        f.close();
+        ok &= expect(TailnetShimDownloader::verifyFile(path, sha, image.size()).isEmpty(),
+                     "exact bytes verify");
+        ok &= expect(TailnetShimDownloader::verifyFile(path, sha.toUpper(), image.size()).isEmpty(),
+                     "hex case doesn't matter");
+        ok &= expect(!TailnetShimDownloader::verifyFile(path, sha, image.size() + 1).isEmpty(),
+                     "wrong size refused");
+        QByteArray other = image;
+        other[0] = 'A';
+        const QByteArray otherSha = QCryptographicHash::hash(other, QCryptographicHash::Sha256).toHex();
+        ok &= expect(!TailnetShimDownloader::verifyFile(path, otherSha, image.size()).isEmpty(),
+                     "same size, different bytes refused");
+        ok &= expect(!TailnetShimDownloader::verifyFile(dir.filePath(QStringLiteral("missing")), sha,
+                                                        image.size()).isEmpty(),
+                     "missing file refused");
+    }
 
     return ok ? 0 : 1;
 }

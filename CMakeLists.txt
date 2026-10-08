@@ -1060,6 +1060,7 @@ set(CORE_SOURCES
     src/core/WaveformInstaller.cpp
     src/core/TailnetShimClient.cpp    # in-radio tailnet shim provisioning API (prototype)
     src/core/TailnetShimTokenStore.cpp
+    src/core/TailnetShimDownloader.cpp  # pinned, SHA-256-verified image download (RFC #6271 D2)
     src/core/WaveformUploadState.cpp
     src/core/LegacyWaveformPackage.cpp
     src/core/DigitalVoiceModeRegistry.cpp

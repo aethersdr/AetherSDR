@@ -5,6 +5,8 @@
 #include "core/ThemeManager.h"
 #include "core/WaveformInstaller.h"
 #include "core/TailnetShimClient.h"
+#include "core/TailnetShimRelease.h"
+#include "core/TailnetShimDownloader.h"
 #include "TailnetShimDialog.h"
 #include "FramelessResizer.h"
 #include "PersistentDialog.h"   // its small pop-up dialogs keep the persistent pattern
@@ -34,6 +36,7 @@
 #include <QPixmap>
 #include <QProgressBar>
 #include <QPointer>
+#include <memory>
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QRegularExpressionValidator>
@@ -1394,6 +1397,11 @@ WaveformsDialog::WaveformsDialog(RadioModel* model, QWidget* parent)
     // that string has no other outlet in the UI.  Qt drops per-action tooltips
     // unless the menu opts in (#5546).
     installMenu->setToolTipsVisible(true);
+    // RFC #6271 D2: the remote-access container, downloaded from the release
+    // this AetherSDR pins and verified by SHA-256 before it is installed.
+    m_installRemoteAccessAction = installMenu->addAction(
+        tr("Remote Access (Tailscale)"), this, &WaveformsDialog::onInstallRemoteAccessClicked);
+    installMenu->addSeparator();
     installMenu->addAction(tr("Legacy Waveform (.ssdr_waveform)..."),
                            this, &WaveformsDialog::onInstallLegacyClicked);
     m_installDockerAction = installMenu->addAction(tr("Docker Waveform Image..."),
@@ -1496,6 +1504,17 @@ void WaveformsDialog::updateInstallButtonState()
         : tr("Connect to a radio before installing Docker waveform images.");
     const bool dockerReady = connected && dockerBlocker.isEmpty();
     m_installDockerAction->setEnabled(!busy && dockerReady);
+    if (m_installRemoteAccessAction) {
+        const bool downloading = m_shimDownloader && m_shimDownloader->isRunning();
+        m_installRemoteAccessAction->setEnabled(!busy && !downloading && dockerReady);
+        // The reason goes on the accessible channel too, not just the tooltip (#4896).
+        const QString remoteTip = dockerReady
+            ? tr("Download the remote-access container (version %1), verify it, and install it.")
+                  .arg(QString::fromLatin1(TailnetShimRelease::kVersion))
+            : (busy ? tr("A waveform install is already in progress.") : dockerBlocker);
+        m_installRemoteAccessAction->setToolTip(remoteTip);
+        m_installRemoteAccessAction->setStatusTip(remoteTip);
+    }
     if (busy) {
         m_installDockerAction->setToolTip(tr("A waveform install is already in progress."));
     } else if (dockerReady) {
@@ -1532,6 +1551,85 @@ void WaveformsDialog::onInstallDockerClicked()
         true);
 }
 
+void WaveformsDialog::onInstallRemoteAccessClicked()
+{
+    if (!m_radioModel || !m_radioModel->isConnected()) {
+        return;
+    }
+    const QString blocker = dockerInstallBlockerText(m_radioModel, m_radioModel->flexWaveformModel());
+    if (!blocker.isEmpty()) {
+        showDockerWfpNotReadyDialog(this, blocker);
+        return;
+    }
+    if (!m_shimDownloader) {
+        m_shimDownloader = new TailnetShimDownloader(this);
+    }
+    if (m_shimDownloader->isRunning()) {
+        return;
+    }
+
+    auto* progress = new PersistentDialog(tr("Downloading Remote Access"), QString(), this);
+    theme::setContainer(progress, QStringLiteral("dialog/waveforms/installProgress"));
+    progress->setWindowModality(Qt::WindowModal);
+    progress->setMinimumWidth(420);
+    auto* root = new QVBoxLayout(progress->bodyWidget());
+    root->setSpacing(10);
+    auto* label = new QLabel(tr("Downloading the remote-access container %1 and checking it "
+                                "against the release this AetherSDR expects...")
+                                 .arg(QString::fromLatin1(TailnetShimRelease::kVersion)));
+    label->setWordWrap(true);
+    label->setAccessibleName(tr("Remote access download progress"));
+    root->addWidget(label);
+    auto* bar = new QProgressBar;
+    bar->setRange(0, 100);
+    bar->setAccessibleName(tr("Remote access download progress value"));
+    root->addWidget(bar);
+    auto* buttons = new QHBoxLayout;
+    buttons->addStretch();
+    auto* cancel = new QPushButton(tr("Cancel"));
+    cancel->setAccessibleName(tr("Cancel remote access download"));
+    buttons->addWidget(cancel);
+    root->addLayout(buttons);
+    connect(cancel, &QPushButton::clicked, progress, &QDialog::reject);
+    connect(progress, &QDialog::rejected, m_shimDownloader, &TailnetShimDownloader::cancel);
+    connect(m_shimDownloader, &TailnetShimDownloader::progress, progress,
+            [bar](qint64 got, qint64 total) {
+        bar->setValue(total > 0 ? int(got * 100 / total) : 0);
+    });
+
+    const QPointer<RadioModel> modelGuard(m_radioModel);
+    // Each signal fires once per attempt; whichever fires first closes the
+    // window and disconnects the other.
+    auto finish = [progress]() {
+        progress->close();
+        progress->deleteLater();
+    };
+    auto readyConn = std::make_shared<QMetaObject::Connection>();
+    auto failConn = std::make_shared<QMetaObject::Connection>();
+    *readyConn = connect(m_shimDownloader, &TailnetShimDownloader::ready, this,
+                         [this, finish, modelGuard, readyConn, failConn](const QString& path) {
+        disconnect(*readyConn);
+        disconnect(*failConn);
+        finish();
+        updateInstallButtonState();
+        if (modelGuard) {
+            installWaveformPath(true, path, modelGuard);
+        }
+    });
+    *failConn = connect(m_shimDownloader, &TailnetShimDownloader::failed, this,
+                        [this, finish, readyConn, failConn](const QString& message) {
+        disconnect(*readyConn);
+        disconnect(*failConn);
+        finish();
+        updateInstallButtonState();
+        showWaveformInstallResultDialog(this, tr("Download Failed"), message);
+    });
+
+    progress->show();
+    m_shimDownloader->start();
+    updateInstallButtonState();
+}
+
 void WaveformsDialog::installWaveformFile(const QString& title,
                                           const QString& filter,
                                           bool docker,
@@ -1550,6 +1648,16 @@ void WaveformsDialog::installWaveformFile(const QString& title,
         filter);
 
     if (!self || !modelGuard || self->m_radioModel != modelGuard.data() || path.isEmpty()) {
+        return;
+    }
+
+    installWaveformPath(docker, path, modelGuard);
+}
+
+void WaveformsDialog::installWaveformPath(bool docker, const QString& path, RadioModel* model)
+{
+    const QPointer<RadioModel> modelGuard(model);
+    if (!modelGuard || m_radioModel != modelGuard.data() || !modelGuard->isConnected()) {
         return;
     }
 
