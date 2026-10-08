@@ -221,6 +221,16 @@ func (n *Node) start(authKey string, timeout time.Duration) error {
 		Authorize: n.authorizer(lc),
 		MaxMTU:    n.MaxMTU,
 	}
+	fwd := &Forwarder{
+		Listen: func(port int) (net.Listener, error) {
+			return srv.Listen("tcp", fmt.Sprintf(":%d", port))
+		},
+		DialRadio: func(port int) (net.Conn, error) {
+			return net.DialTimeout("tcp", net.JoinHostPort(n.RadioAddr, fmt.Sprint(port)), 5*time.Second)
+		},
+		Authorize: n.authorizer(lc),
+	}
+	relay.OpenForward = fwd.Open
 	go func() {
 		err := relay.Serve(ln)
 		log.Printf("relay stopped: %v", err)
@@ -397,6 +407,9 @@ type Status struct {
 	Allow       []string `json:"allow"`
 	Sessions    int      `json:"sessions"`
 	LastError   string   `json:"last_error"`
+	// Command verbs relayed so far (never arguments), for diagnosing what a
+	// client such as a Maestro asks the radio for.
+	RecentCommands []string `json:"recent_commands"`
 }
 
 func (n *Node) Status() Status {
@@ -413,8 +426,10 @@ func (n *Node) Status() Status {
 	if n.ip.IsValid() {
 		st.TailnetIP = n.ip.String()
 	}
+	st.RecentCommands = []string{}
 	if n.relay != nil {
 		st.Sessions = n.relay.SessionCount()
+		st.RecentCommands = n.relay.RecentCommands()
 	}
 	return st
 }

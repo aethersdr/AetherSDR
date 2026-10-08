@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"net"
 	"strings"
 	"testing"
@@ -41,6 +42,25 @@ func newFakeRadio(t *testing.T) *fakeRadio {
 		for sc.Scan() {
 			l := sc.Text()
 			fr.lines <- l
+			// file download: open a side-channel port, announce it, serve data.
+			var seq int
+			if _, err := fmt.Sscanf(l, "C%d|file download", &seq); err == nil && strings.Contains(l, "|file download") {
+				side, err := net.Listen("tcp", "127.0.0.1:0")
+				if err == nil {
+					go func() {
+						sc, err := side.Accept()
+						if err == nil {
+							sc.Write([]byte("FILEDATA"))
+							sc.Close()
+						}
+						side.Close()
+					}()
+					fmt.Fprintf(c, "R%d|0|%d\n", seq, side.Addr().(*net.TCPAddr).Port)
+				}
+			}
+			if _, err := fmt.Sscanf(l, "C%d|info", &seq); err == nil {
+				fmt.Fprintf(c, "R%d|0|5000\n", seq) // a number that is NOT a port announcement
+			}
 			if i := strings.Index(l, "client udpport "); i >= 0 {
 				var port int
 				fmt.Sscanf(l[i+len("client udpport "):], "%d", &port)
@@ -192,5 +212,70 @@ func TestRewriteLeavesOtherLinesAlone(t *testing.T) {
 		if string(out) != in || port != 0 {
 			t.Errorf("rewrote %q to %q (port %d)", in, out, port)
 		}
+	}
+}
+
+func TestSideChannelForwarding(t *testing.T) {
+	fr := newFakeRadio(t)
+	var opened []int
+	fwd := &Forwarder{
+		Listen: func(port int) (net.Listener, error) {
+			opened = append(opened, port)
+			// Stand-in for the tailnet address: a different loopback IP,
+			// so the forwarder's port can equal the radio's.
+			return net.Listen("tcp", fmt.Sprintf("127.0.0.2:%d", port))
+		},
+		DialRadio: func(port int) (net.Conn, error) {
+			return net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+		},
+	}
+	relay := &Relay{
+		RadioAddr: "127.0.0.1",
+		DialRadio: func() (net.Conn, error) { return net.Dial("tcp", fr.api.Addr().String()) },
+		HostUDP: func() (*net.UDPConn, error) {
+			return net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+		},
+		ClientTX: loopUDP(t), ClientPrime: loopUDP(t), ClientOut: loopUDP(t),
+		OpenForward: fwd.Open,
+	}
+	ln, _ := net.Listen("tcp", "127.0.0.1:0")
+	defer ln.Close()
+	go relay.Serve(ln)
+
+	ctl, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ctl.Close()
+	rd := bufio.NewReader(ctl)
+	rd.ReadString('\n') // V
+	rd.ReadString('\n') // H
+
+	fmt.Fprint(ctl, "C3|info\n")
+	if l, _ := rd.ReadString('\n'); l != "R3|0|5000\n" {
+		t.Fatalf("reply not forwarded verbatim: %q", l)
+	}
+	fmt.Fprint(ctl, "C4|file download db_package\n")
+	l, _ := rd.ReadString('\n')
+	var seq, port int
+	if _, err := fmt.Sscanf(l, "R%d|0|%d", &seq, &port); err != nil || seq != 4 {
+		t.Fatalf("file download reply: %q", l)
+	}
+	if len(opened) != 1 || opened[0] != port {
+		t.Fatalf("forwarders opened %v, want only [%d] (an unrelated reply must not open one)", opened, port)
+	}
+	side, err := net.Dial("tcp", fmt.Sprintf("127.0.0.2:%d", port))
+	if err != nil {
+		t.Fatalf("side channel not forwarded: %v", err)
+	}
+	defer side.Close()
+	side.SetReadDeadline(time.Now().Add(3 * time.Second))
+	got, _ := io.ReadAll(side)
+	if string(got) != "FILEDATA" {
+		t.Fatalf("side channel carried %q", got)
+	}
+	verbs := strings.Join(relay.RecentCommands(), ",")
+	if !strings.Contains(verbs, "file download") || strings.Contains(verbs, "db_package") {
+		t.Fatalf("verb log %q must name verbs but never arguments", verbs)
 	}
 }

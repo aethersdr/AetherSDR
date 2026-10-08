@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
-	"io"
 	"log"
 	"net"
 	"net/netip"
@@ -49,10 +48,15 @@ type Relay struct {
 	// Radio UDP ports; zero means the SmartSDR defaults (tests override).
 	RadioTXPort, RadioPrimePort int
 
+	// OpenForward opens a tailnet listener on port for a radio side channel
+	// (see forward.go). Nil disables side-channel forwarding.
+	OpenForward func(port int) error
+
 	mu       sync.Mutex
 	byClient map[netip.AddrPort]*Session // client UDP address -> session
 	sessions map[uint64]*Session
 	nextID   atomic.Uint64
+	verbs    verbLog
 }
 
 // Session is one AetherSDR control connection relayed to the radio.
@@ -69,6 +73,9 @@ type Session struct {
 	done      chan struct{}
 
 	rxPackets, txPackets atomic.Uint64
+
+	pendingMu sync.Mutex
+	pending   map[string]bool // sequence numbers of file upload/download commands
 }
 
 func (r *Relay) init() {
@@ -185,10 +192,78 @@ func (s *Session) close(reason string) {
 	})
 }
 
-// Radio -> client control bytes are forwarded verbatim.
+// Radio -> client control bytes are forwarded verbatim, line by line, so
+// replies that announce a side-channel port can open a tailnet forwarder
+// before the client acts on them.
 func (s *Session) radioToClientTCP() {
-	_, err := io.Copy(s.client, s.radio)
-	s.close(fmt.Sprintf("radio side ended: %v", err))
+	br := bufio.NewReaderSize(s.radio, 64*1024)
+	for {
+		line, err := br.ReadBytes('\n')
+		if len(line) > 0 {
+			if port := s.sideChannelPort(line); port > 0 && s.relay.OpenForward != nil {
+				if ferr := s.relay.OpenForward(port); ferr != nil {
+					log.Printf("session %d: cannot forward radio port %d: %v", s.id, port, ferr)
+				} else {
+					log.Printf("session %d: forwarding radio side channel on TCP %d", s.id, port)
+				}
+			}
+			if _, werr := s.client.Write(line); werr != nil {
+				s.close(fmt.Sprintf("client write failed: %v", werr))
+				return
+			}
+		}
+		if err != nil {
+			s.close(fmt.Sprintf("radio side ended: %v", err))
+			return
+		}
+	}
+}
+
+var (
+	fileCmdRe = regexp.MustCompile(`^C[A-Z]*(\d+)\|file (upload|download)\b`)
+	replyRe   = regexp.MustCompile(`^R(\d+)\|0+\|(\d+)\s*$`)
+	verbRe    = regexp.MustCompile(`^C[A-Z]*\d+\|([a-z_]+)(?: ([a-z_]+))?`)
+)
+
+// noteCommand remembers file transfer commands, whose replies name a port,
+// and records the command verb for diagnostics.
+func (s *Session) noteCommand(line []byte) {
+	if m := verbRe.FindSubmatch(line); m != nil {
+		v := string(m[1])
+		if len(m[2]) > 0 {
+			v += " " + string(m[2])
+		}
+		s.relay.verbs.add(v)
+	}
+	if m := fileCmdRe.FindSubmatch(line); m != nil {
+		s.pendingMu.Lock()
+		if s.pending == nil {
+			s.pending = map[string]bool{}
+		}
+		s.pending[string(m[1])] = true
+		s.pendingMu.Unlock()
+	}
+}
+
+// sideChannelPort returns the port in a successful reply to a pending file
+// transfer command (`R<seq>|0|<port>`), or 0.
+func (s *Session) sideChannelPort(line []byte) int {
+	m := replyRe.FindSubmatch(bytes.TrimRight(line, "\r\n"))
+	if m == nil {
+		return 0
+	}
+	s.pendingMu.Lock()
+	ok := s.pending[string(m[1])]
+	delete(s.pending, string(m[1]))
+	s.pendingMu.Unlock()
+	if !ok {
+		return 0
+	}
+	port, err := strconv.Atoi(string(m[2]))
+	if err != nil || port < 1024 || port > 65535 || port == radioAPIPort {
+		return 0
+	}
+	return port
 }
 
 var (
@@ -233,6 +308,7 @@ func (s *Session) clientToRadioTCP() {
 	for {
 		line, err := br.ReadBytes('\n')
 		if len(line) > 0 {
+			s.noteCommand(line)
 			out, clientPort := s.rewriteLine(line)
 			if clientPort > 0 {
 				s.bindClientUDP(netip.AddrPortFrom(s.clientIP, uint16(clientPort)))
@@ -317,6 +393,9 @@ func (s *Session) waitClosed(d time.Duration) bool {
 		return false
 	}
 }
+
+// RecentCommands reports recently seen command verbs (no arguments).
+func (r *Relay) RecentCommands() []string { return r.verbs.snapshot() }
 
 // SessionCount reports how many AetherSDR sessions are being relayed.
 func (r *Relay) SessionCount() int {
