@@ -35,6 +35,24 @@ std::optional<TailnetShimStatus> statusFromObject(const QJsonObject& o)
     }
     st.sessions = o.value(QStringLiteral("sessions")).toInt();
     st.lastError = o.value(QStringLiteral("last_error")).toString();
+    for (const QJsonValue& v : o.value(QStringLiteral("routes")).toArray()) {
+        st.routes << v.toString();
+    }
+    st.shareDiscovered = o.value(QStringLiteral("share_discovered")).toBool(true);
+    for (const QJsonValue& v : o.value(QStringLiteral("discovered_devices")).toArray()) {
+        const QJsonObject d = v.toObject();
+        TailnetShimDevice dev;
+        dev.kind = d.value(QStringLiteral("kind")).toString();
+        dev.name = d.value(QStringLiteral("name")).toString();
+        dev.ip = d.value(QStringLiteral("ip")).toString();
+        dev.port = d.value(QStringLiteral("port")).toInt();
+        if (!dev.ip.isEmpty()) {
+            st.discovered << dev;
+        }
+    }
+    for (const QJsonValue& v : o.value(QStringLiteral("advertised_routes")).toArray()) {
+        st.advertisedRoutes << v.toString();
+    }
     return st;
 }
 
@@ -75,12 +93,23 @@ QString parseError(const QByteArray& json)
 }
 
 QByteArray provisionBody(const QString& authKey, const QString& hostname,
-                         const QStringList& allow)
+                         const QStringList& allow, const QStringList& routes,
+                         bool shareDiscovered)
 {
     QJsonObject o;
     o.insert(QStringLiteral("auth_key"), authKey.trimmed());
     o.insert(QStringLiteral("hostname"), hostname.trimmed());
     o.insert(QStringLiteral("allow"), QJsonArray::fromStringList(allow));
+    o.insert(QStringLiteral("routes"), QJsonArray::fromStringList(routes));
+    o.insert(QStringLiteral("share_discovered"), shareDiscovered);
+    return QJsonDocument(o).toJson(QJsonDocument::Compact);
+}
+
+QByteArray sharingBody(const QStringList& routes, bool shareDiscovered)
+{
+    QJsonObject o;
+    o.insert(QStringLiteral("routes"), QJsonArray::fromStringList(routes));
+    o.insert(QStringLiteral("share_discovered"), shareDiscovered);
     return QJsonDocument(o).toJson(QJsonDocument::Compact);
 }
 
@@ -192,11 +221,21 @@ void TailnetShimClient::fetchStatus()
 }
 
 void TailnetShimClient::provision(const QString& authKey, const QString& hostname,
-                                  const QStringList& allow, const QString& adminToken)
+                                  const QStringList& allow, const QStringList& routes,
+                                  bool shareDiscovered, const QString& adminToken)
 {
     handle(send(QStringLiteral("POST"), QStringLiteral("/v1/provision"),
-                tailnetshim::provisionBody(authKey, hostname, allow), adminToken),
+                tailnetshim::provisionBody(authKey, hostname, allow, routes, shareDiscovered),
+                adminToken),
            QStringLiteral("provision"));
+}
+
+void TailnetShimClient::setSharing(const QStringList& routes, bool shareDiscovered,
+                                   const QString& adminToken)
+{
+    handle(send(QStringLiteral("PUT"), QStringLiteral("/v1/routes"),
+                tailnetshim::sharingBody(routes, shareDiscovered), adminToken),
+           QStringLiteral("sharing"));
 }
 
 void TailnetShimClient::setAllow(const QStringList& allow, const QString& adminToken)

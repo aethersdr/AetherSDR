@@ -4,6 +4,7 @@
 #include "core/ThemeManager.h"
 #include "models/RadioModel.h"
 
+#include <QCheckBox>
 #include <QClipboard>
 #include <QFormLayout>
 #include <QGuiApplication>
@@ -143,6 +144,40 @@ TailnetShimDialog::TailnetShimDialog(RadioModel* model, QWidget* parent)
     form->addRow(tr("Who may connect"), m_allowEdit);
     layout->addLayout(form);
 
+    // Station devices: 4O3A accessories the container hears on the radio's
+    // LAN are shared as tailnet subnet routes, so a remote AetherSDR reaches
+    // them at their LAN addresses (set as manual hosts in their applets).
+    auto* devicesTitle = new QLabel(tr("Station devices"), bodyWidget());
+    devicesTitle->setAccessibleName(tr("Station devices"));
+    ThemeManager::instance().applyStyleSheet(devicesTitle, "QLabel { font-weight: 600; }");
+    layout->addWidget(devicesTitle);
+    m_devicesLabel = new QLabel(tr("Looking for Antenna Genius, Power Genius XL and Tuner Genius XL…"),
+                                bodyWidget());
+    m_devicesLabel->setWordWrap(true);
+    m_devicesLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    m_devicesLabel->setAccessibleName(tr("Station devices found on the radio's network"));
+    layout->addWidget(m_devicesLabel);
+    m_shareDiscoveredCheck = new QCheckBox(tr("Share the devices found here over the tailnet"),
+                                           bodyWidget());
+    m_shareDiscoveredCheck->setChecked(true);
+    m_shareDiscoveredCheck->setAccessibleName(tr("Share discovered station devices over the tailnet"));
+    layout->addWidget(m_shareDiscoveredCheck);
+    auto* sharingForm = new QFormLayout;
+    sharingForm->setHorizontalSpacing(14);
+    m_extraDevicesEdit = new QLineEdit(bodyWidget());
+    m_extraDevicesEdit->setPlaceholderText(tr("192.168.1.40, 192.168.1.41 (devices that aren't found automatically)"));
+    m_extraDevicesEdit->setAccessibleName(tr("Other LAN devices to share"));
+    m_extraDevicesEdit->setAccessibleDescription(
+        tr("Local network addresses of other devices to reach over the tailnet, separated by commas."));
+    sharingForm->addRow(tr("Other devices"), m_extraDevicesEdit);
+    layout->addLayout(sharingForm);
+    m_sharingNote = new QLabel(bodyWidget());
+    m_sharingNote->setWordWrap(true);
+    m_sharingNote->setAccessibleName(tr("Device sharing status"));
+    ThemeManager::instance().applyStyleSheet(m_sharingNote, "QLabel { color: {{color.text.secondary}}; }");
+    layout->addWidget(m_sharingNote);
+    connect(m_shareDiscoveredCheck, &QCheckBox::toggled, this, &TailnetShimDialog::updateControls);
+
     m_tokenNote = new QLabel(bodyWidget());
     m_tokenNote->setWordWrap(true);
     m_tokenNote->setAccessibleName(tr("Admin token note"));
@@ -157,6 +192,8 @@ TailnetShimDialog::TailnetShimDialog(RadioModel* model, QWidget* parent)
     m_refreshButton->setAccessibleName(tr("Refresh remote access status"));
     m_signOutButton = new QPushButton(tr("Sign Out of Tailnet"), bodyWidget());
     m_signOutButton->setAccessibleName(tr("Sign the radio out of the tailnet"));
+    m_saveSharingButton = new QPushButton(tr("Save Sharing"), bodyWidget());
+    m_saveSharingButton->setAccessibleName(tr("Save which station devices are shared"));
     m_saveAllowButton = new QPushButton(tr("Save Access List"), bodyWidget());
     m_saveAllowButton->setAccessibleName(tr("Save who may connect"));
     m_joinButton = new QPushButton(tr("Join Tailnet"), bodyWidget());
@@ -165,6 +202,7 @@ TailnetShimDialog::TailnetShimDialog(RadioModel* model, QWidget* parent)
     buttons->addWidget(m_refreshButton);
     buttons->addWidget(m_signOutButton);
     buttons->addStretch(1);
+    buttons->addWidget(m_saveSharingButton);
     buttons->addWidget(m_saveAllowButton);
     buttons->addWidget(m_joinButton);
     layout->addLayout(buttons);
@@ -172,6 +210,7 @@ TailnetShimDialog::TailnetShimDialog(RadioModel* model, QWidget* parent)
     connect(m_refreshButton, &QPushButton::clicked, this, &TailnetShimDialog::refresh);
     connect(m_joinButton, &QPushButton::clicked, this, &TailnetShimDialog::join);
     connect(m_saveAllowButton, &QPushButton::clicked, this, &TailnetShimDialog::saveAllowList);
+    connect(m_saveSharingButton, &QPushButton::clicked, this, &TailnetShimDialog::saveSharing);
     connect(m_signOutButton, &QPushButton::clicked, this, &TailnetShimDialog::signOut);
 
     connect(&m_client, &TailnetShimClient::statusReceived, this,
@@ -287,6 +326,30 @@ void TailnetShimDialog::showStatus(const TailnetShimStatus& st)
     if (!m_allowEdit->hasFocus()) {
         m_allowEdit->setText(st.allow.join(QStringLiteral(", ")));
     }
+    QStringList found;
+    for (const TailnetShimDevice& d : st.discovered) {
+        found << tr("%1 \u201c%2\u201d at %3").arg(d.kind, d.name, d.ip);
+    }
+    m_devicesLabel->setText(found.isEmpty()
+        ? tr("No Antenna Genius, Power Genius XL or Tuner Genius XL has announced itself on "
+             "the radio's network yet.")
+        : found.join(QStringLiteral("\n")));
+    if (!m_shareDiscoveredCheck->hasFocus()) {
+        m_shareDiscoveredCheck->setChecked(st.shareDiscovered);
+    }
+    if (!m_extraDevicesEdit->hasFocus()) {
+        m_extraDevicesEdit->setText(st.routes.join(QStringLiteral(", ")));
+    }
+    if (st.state == QLatin1String("running")) {
+        m_sharingNote->setText(st.advertisedRoutes.isEmpty()
+            ? tr("No devices are shared.")
+            : tr("Offered to the tailnet: %1. Approve these routes once in the Tailscale admin "
+                 "console (Machines \u2192 this radio \u2192 Edit route settings). Then, remotely, "
+                 "set each device's applet to its LAN address.")
+                  .arg(st.advertisedRoutes.join(QStringLiteral(", "))));
+    } else {
+        m_sharingNote->setText(tr("Devices are shared once the radio is on the tailnet."));
+    }
     if (st.state == QLatin1String("error") && !st.lastError.isEmpty()) {
         showError(st.lastError);
     }
@@ -316,6 +379,9 @@ void TailnetShimDialog::updateControls()
         : tr("Join the tailnet with this auth key"));
     m_joinButton->setEnabled(mayChange && !m_keyEdit->text().trimmed().isEmpty());
     m_saveAllowButton->setEnabled(provisioned && haveToken);
+    m_saveSharingButton->setEnabled(provisioned && haveToken);
+    m_shareDiscoveredCheck->setEnabled(mayChange);
+    m_extraDevicesEdit->setEnabled(mayChange);
     m_signOutButton->setEnabled(provisioned && haveToken);
     m_copyButton->setEnabled(m_status && !m_status->tailnetIp.isEmpty());
 
@@ -341,7 +407,9 @@ void TailnetShimDialog::join()
     m_messageLabel->hide();
     setBusy(true, tr("Joining the tailnet…"));
     m_client.provision(key, m_hostnameEdit->text().trimmed(),
-                       tailnetshim::splitAllowList(m_allowEdit->text()), m_adminToken);
+                       tailnetshim::splitAllowList(m_allowEdit->text()),
+                       tailnetshim::splitAllowList(m_extraDevicesEdit->text()),
+                       m_shareDiscoveredCheck->isChecked(), m_adminToken);
     // The key leaves this process in the request above and is kept nowhere.
     m_keyEdit->clear();
 }
@@ -351,6 +419,14 @@ void TailnetShimDialog::saveAllowList()
     m_messageLabel->hide();
     setBusy(true, tr("Saving…"));
     m_client.setAllow(tailnetshim::splitAllowList(m_allowEdit->text()), m_adminToken);
+}
+
+void TailnetShimDialog::saveSharing()
+{
+    m_messageLabel->hide();
+    setBusy(true, tr("Saving…"));
+    m_client.setSharing(tailnetshim::splitAllowList(m_extraDevicesEdit->text()),
+                        m_shareDiscoveredCheck->isChecked(), m_adminToken);
 }
 
 void TailnetShimDialog::signOut()

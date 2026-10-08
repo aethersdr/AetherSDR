@@ -9,6 +9,7 @@ import (
 	"net/netip"
 	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -64,6 +65,7 @@ type Session struct {
 	id        uint64
 	relay     *Relay
 	who       string
+	peer      string
 	client    net.Conn
 	radio     net.Conn
 	host      *net.UDPConn
@@ -76,6 +78,15 @@ type Session struct {
 
 	pendingMu sync.Mutex
 	pending   map[string]bool // sequence numbers of file upload/download commands
+
+	// UDP diagnostics, reported in /v1/status.
+	fromRadio, toClientErrs, maxDatagram atomic.Uint64
+	lastSendErr                          atomic.Pointer[string]
+
+	// The shim's own MTU clamp, sent once after `client gui` with a sequence
+	// number the client never uses; its reply is not forwarded.
+	mtuInjected bool
+	mtuSeq      string
 }
 
 func (r *Relay) init() {
@@ -155,7 +166,7 @@ func (r *Relay) handle(c net.Conn) {
 		return
 	}
 	s := &Session{
-		id: r.nextID.Add(1), relay: r, who: who, client: c, radio: radio,
+		id: r.nextID.Add(1), relay: r, who: who, peer: peerName(who), client: c, radio: radio,
 		host: host, clientIP: clientAP.Addr(), done: make(chan struct{}),
 	}
 	log.Printf("session %d: %s from %s -> radio %s, host UDP %s", s.id, who, c.RemoteAddr(), radio.RemoteAddr(), host.LocalAddr())
@@ -206,6 +217,12 @@ func (s *Session) radioToClientTCP() {
 				} else {
 					log.Printf("session %d: forwarding radio side channel on TCP %d", s.id, port)
 				}
+			}
+			if ours, accepted := s.injectedReply(line); ours {
+				if !accepted {
+					log.Printf("session %d: radio refused the MTU clamp: %s", s.id, bytes.TrimSpace(line))
+				}
+				continue
 			}
 			if _, werr := s.client.Write(line); werr != nil {
 				s.close(fmt.Sprintf("client write failed: %v", werr))
@@ -317,12 +334,48 @@ func (s *Session) clientToRadioTCP() {
 				s.close(fmt.Sprintf("radio write failed: %v", werr))
 				return
 			}
+			if inj := s.mtuInjection(line); inj != nil {
+				if _, werr := s.radio.Write(inj); werr != nil {
+					s.close(fmt.Sprintf("radio write failed: %v", werr))
+					return
+				}
+			}
 		}
 		if err != nil {
 			s.close(fmt.Sprintf("client side ended: %v", err))
 			return
 		}
 	}
+}
+
+var clientGuiRe = regexp.MustCompile(`^C[A-Z]*\d+\|client gui\b`)
+
+// mtuInjection returns the shim's own `client set network_mtu=` command to
+// send right after the client's `client gui`, so VITA-49 fits the tunnel even
+// when the client (SmartSDR, for one) never sets an MTU itself.
+func (s *Session) mtuInjection(line []byte) []byte {
+	if s.mtuInjected || s.relay.MaxMTU <= 0 || !clientGuiRe.Match(line) {
+		return nil
+	}
+	s.mtuInjected = true
+	s.pendingMu.Lock()
+	s.mtuSeq = strconv.FormatUint(990000000+s.id, 10)
+	s.pendingMu.Unlock()
+	log.Printf("session %d: clamping radio network MTU to %d", s.id, s.relay.MaxMTU)
+	return []byte(fmt.Sprintf("C%s|client set enforce_network_mtu=1 network_mtu=%d\n", s.mtuSeq, s.relay.MaxMTU))
+}
+
+// injectedReply reports whether line answers the shim's own command, and if
+// so whether the radio accepted it.
+func (s *Session) injectedReply(line []byte) (ours, accepted bool) {
+	s.pendingMu.Lock()
+	seq := s.mtuSeq
+	s.pendingMu.Unlock()
+	if seq == "" || !bytes.HasPrefix(line, []byte("R"+seq+"|")) {
+		return false, false
+	}
+	m := regexp.MustCompile(`^R\d+\|0+\|`).Match(line)
+	return true, m
 }
 
 func (s *Session) bindClientUDP(ap netip.AddrPort) {
@@ -343,12 +396,20 @@ func (s *Session) radioToClientUDP() {
 			s.close(fmt.Sprintf("host UDP ended: %v", err))
 			return
 		}
+		s.fromRadio.Add(1)
+		if uint64(n) > s.maxDatagram.Load() {
+			s.maxDatagram.Store(uint64(n))
+		}
 		dst := s.udpClient.Load()
 		if dst == nil {
 			continue // radio is early; the client hasn't registered yet
 		}
 		if _, err := s.relay.ClientOut.WriteTo(buf[:n], net.UDPAddrFromAddrPort(*dst)); err == nil {
 			s.rxPackets.Add(1)
+		} else {
+			s.toClientErrs.Add(1)
+			msg := err.Error()
+			s.lastSendErr.Store(&msg)
 		}
 	}
 }
@@ -397,6 +458,45 @@ func (s *Session) waitClosed(d time.Duration) bool {
 // RecentCommands reports recently seen command verbs (no arguments).
 func (r *Relay) RecentCommands() []string { return r.verbs.snapshot() }
 
+// SessionInfo is one relayed session's UDP picture, for /v1/status.
+type SessionInfo struct {
+	ID            uint64 `json:"id"`
+	Peer          string `json:"peer"` // tailnet machine name, never a login
+	ClientUDP     string `json:"client_udp"`
+	FromRadio     uint64 `json:"from_radio"`
+	ToClient      uint64 `json:"to_client"`
+	ToClientFails uint64 `json:"to_client_failures"`
+	FromClient    uint64 `json:"from_client"`
+	MaxDatagram   uint64 `json:"max_datagram"`
+	LastSendError string `json:"last_send_error"`
+}
+
+// Sessions reports every relayed session's UDP counters.
+func (r *Relay) Sessions() []SessionInfo {
+	r.mu.Lock()
+	all := make([]*Session, 0, len(r.sessions))
+	for _, s := range r.sessions {
+		all = append(all, s)
+	}
+	r.mu.Unlock()
+	out := make([]SessionInfo, 0, len(all))
+	for _, s := range all {
+		info := SessionInfo{
+			ID: s.id, Peer: s.peer, FromRadio: s.fromRadio.Load(), ToClient: s.rxPackets.Load(),
+			ToClientFails: s.toClientErrs.Load(), FromClient: s.txPackets.Load(),
+			MaxDatagram: s.maxDatagram.Load(),
+		}
+		if ap := s.udpClient.Load(); ap != nil {
+			info.ClientUDP = ap.String()
+		}
+		if e := s.lastSendErr.Load(); e != nil {
+			info.LastSendError = *e
+		}
+		out = append(out, info)
+	}
+	return out
+}
+
 // SessionCount reports how many AetherSDR sessions are being relayed.
 func (r *Relay) SessionCount() int {
 	r.mu.Lock()
@@ -416,4 +516,12 @@ func (r *Relay) CloseAll(reason string) {
 	for _, s := range all {
 		s.close(reason)
 	}
+}
+
+// peerName drops the login from "login on machine", keeping the machine name.
+func peerName(who string) string {
+	if i := strings.LastIndex(who, " on "); i >= 0 {
+		return who[i+len(" on "):]
+	}
+	return who
 }

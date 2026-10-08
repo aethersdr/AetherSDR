@@ -3,6 +3,7 @@
 #include "PersistentDialog.h"
 #include "core/TailnetShimClient.h"
 
+class QCheckBox;
 class QLabel;
 class QLineEdit;
 class QPushButton;
@@ -31,6 +32,7 @@ private:
     void updateControls();
     void join();
     void saveAllowList();
+    void saveSharing();
     void signOut();
 
     RadioModel* m_model{nullptr};
@@ -59,6 +61,13 @@ private:
     QPushButton* m_signOutButton{nullptr};
     QPushButton* m_saveAllowButton{nullptr};
     QPushButton* m_joinButton{nullptr};
+
+    // Station devices (4O3A accessories) shared over the tailnet.
+    QLabel* m_devicesLabel{nullptr};
+    QCheckBox* m_shareDiscoveredCheck{nullptr};
+    QLineEdit* m_extraDevicesEdit{nullptr};
+    QPushButton* m_saveSharingButton{nullptr};
+    QLabel* m_sharingNote{nullptr};
 };
 
 }  // namespace AetherSDR

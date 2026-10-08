@@ -52,15 +52,34 @@ int main()
     ok &= expect(!tailnetshim::parseProvisionReply(running).has_value(),
                  "provision reply without a token is rejected");
 
+    const QByteArray withDevices = R"({"version":"0.3.0","provisioned":true,"state":"running",
+        "routes":["192.168.50.120"],"share_discovered":false,
+        "discovered_devices":[{"kind":"Antenna Genius","name":"Antenna_Genius","ip":"192.168.50.103","port":9007},
+                              {"kind":"Tuner Genius XL","name":"KK7GWY_-_TGXL","ip":"192.168.50.101","port":9010}],
+        "advertised_routes":["192.168.50.120/32"]})";
+    const auto sd = tailnetshim::parseStatus(withDevices);
+    ok &= expect(sd && sd->discovered.size() == 2 && sd->discovered[1].kind == QStringLiteral("Tuner Genius XL")
+                 && sd->discovered[0].ip == QStringLiteral("192.168.50.103"), "discovered devices parse");
+    ok &= expect(sd && !sd->shareDiscovered && sd->routes == QStringList({QStringLiteral("192.168.50.120")})
+                 && sd->advertisedRoutes.size() == 1, "sharing settings parse");
+    ok &= expect(st && st->shareDiscovered, "share_discovered defaults to on when absent");
+    const QJsonObject sharing = QJsonDocument::fromJson(tailnetshim::sharingBody(
+        {QStringLiteral("192.168.50.120")}, false)).object();
+    ok &= expect(sharing.keys() == QStringList({QStringLiteral("routes"), QStringLiteral("share_discovered")})
+                 && !sharing.value(QStringLiteral("share_discovered")).toBool(true),
+                 "sharing body has exactly the API's fields");
+
     ok &= expect(tailnetshim::parseError(R"({"error":"admin token required"})")
                  == QStringLiteral("admin token required"), "error message parses");
+
     ok &= expect(tailnetshim::parseError("<html>").isEmpty(), "non-JSON error is empty");
 
     const QJsonObject body = QJsonDocument::fromJson(tailnetshim::provisionBody(
         QStringLiteral("  tskey-auth-k123  "), QStringLiteral("flex-8600"),
         {QStringLiteral("tag:ops")})).object();
     ok &= expect(body.keys() == QStringList({QStringLiteral("allow"), QStringLiteral("auth_key"),
-                                             QStringLiteral("hostname")}),
+                                             QStringLiteral("hostname"), QStringLiteral("routes"),
+                                             QStringLiteral("share_discovered")}),
                  "provision body has exactly the API's fields");
     ok &= expect(body.value(QStringLiteral("auth_key")).toString()
                  == QStringLiteral("tskey-auth-k123"), "auth key trimmed");

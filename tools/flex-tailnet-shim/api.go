@@ -33,6 +33,26 @@ type provisionRequest struct {
 	AuthKey  string   `json:"auth_key"`
 	Hostname string   `json:"hostname"`
 	Allow    []string `json:"allow"`
+	Routes   []string `json:"routes"`
+	// Optional; absent means share discovered devices (the default).
+	ShareDiscovered *bool `json:"share_discovered"`
+}
+
+type routesRequest struct {
+	Routes          []string `json:"routes"`
+	ShareDiscovered *bool    `json:"share_discovered"`
+}
+
+func validRoutes(routes []string) error {
+	if len(routes) > 16 {
+		return errors.New("at most 16 shared LAN devices")
+	}
+	for _, r := range routes {
+		if _, err := parseRoute(r); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 type allowRequest struct {
@@ -139,8 +159,12 @@ func NewAPI(n *Node) http.Handler {
 			writeJSON(w, http.StatusBadRequest, apiError{"allowlist entries must be tailnet logins or tag:names"})
 			return
 		}
+		if err := validRoutes(req.Routes); err != nil {
+			writeJSON(w, http.StatusBadRequest, apiError{"shared LAN devices: " + err.Error()})
+			return
+		}
 		log.Printf("api: provisioning requested by %s (hostname %q)", r.RemoteAddr, req.Hostname)
-		token, err := n.Provision(req.AuthKey, req.Hostname, req.Allow)
+		token, err := n.Provision(req.AuthKey, req.Hostname, req.Allow, req.Routes, req.ShareDiscovered)
 		if err != nil {
 			writeJSON(w, http.StatusBadGateway, apiError{"could not join the tailnet: " + err.Error()})
 			return
@@ -161,6 +185,26 @@ func NewAPI(n *Node) http.Handler {
 			return
 		}
 		if err := n.SetAllow(req.Allow); err != nil {
+			writeJSON(w, http.StatusInternalServerError, apiError{err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, n.Status())
+	})
+
+	mux.HandleFunc("PUT /v1/routes", func(w http.ResponseWriter, r *http.Request) {
+		if !requireToken(w, r) {
+			return
+		}
+		var req routesRequest
+		if err := decode(r, &req); err != nil {
+			writeJSON(w, http.StatusBadRequest, apiError{"malformed request"})
+			return
+		}
+		if err := validRoutes(req.Routes); err != nil {
+			writeJSON(w, http.StatusBadRequest, apiError{"shared LAN devices: " + err.Error()})
+			return
+		}
+		if err := n.SetSharing(req.Routes, req.ShareDiscovered); err != nil {
 			writeJSON(w, http.StatusInternalServerError, apiError{err.Error()})
 			return
 		}

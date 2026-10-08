@@ -58,6 +58,13 @@ func newFakeRadio(t *testing.T) *fakeRadio {
 					fmt.Fprintf(c, "R%d|0|%d\n", seq, side.Addr().(*net.TCPAddr).Port)
 				}
 			}
+			if strings.Contains(l, "|client set enforce_network_mtu=1") {
+				var iseq string
+				if i := strings.Index(l, "|"); i > 1 {
+					iseq = l[1:i]
+				}
+				fmt.Fprintf(c, "R%s|0|\n", iseq)
+			}
 			if _, err := fmt.Sscanf(l, "C%d|info", &seq); err == nil {
 				fmt.Fprintf(c, "R%d|0|5000\n", seq) // a number that is NOT a port announcement
 			}

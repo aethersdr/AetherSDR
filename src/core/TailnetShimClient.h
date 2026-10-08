@@ -20,6 +20,14 @@ inline constexpr const char* kTailnetShimContainerName = "flex-tailnet-shim";
 // (tools/flex-tailnet-shim/api.go: ProvisionPort).
 inline constexpr quint16 kTailnetShimApiPort = 48992;
 
+// A 4O3A station accessory the container heard on the radio's LAN.
+struct TailnetShimDevice {
+    QString kind;   // "Antenna Genius", "Power Genius XL", "Tuner Genius XL"
+    QString name;
+    QString ip;
+    int port{0};
+};
+
 // What GET /v1/status returns. Never contains a secret.
 struct TailnetShimStatus {
     QString version;
@@ -31,6 +39,10 @@ struct TailnetShimStatus {
     QStringList allow;
     int sessions{0};
     QString lastError;
+    QStringList routes;              // extra LAN devices the operator listed
+    bool shareDiscovered{true};      // share discovered station devices
+    QList<TailnetShimDevice> discovered;
+    QStringList advertisedRoutes;    // what the tailnet is offered now
 };
 
 // Pure helpers, separated from the transport so they can be unit-tested
@@ -41,8 +53,10 @@ std::optional<TailnetShimStatus> parseStatus(const QByteArray& json);
 std::optional<std::pair<QString, TailnetShimStatus>> parseProvisionReply(const QByteArray& json);
 QString parseError(const QByteArray& json);
 QByteArray provisionBody(const QString& authKey, const QString& hostname,
-                         const QStringList& allow);
+                         const QStringList& allow, const QStringList& routes = {},
+                         bool shareDiscovered = true);
 QByteArray allowBody(const QStringList& allow);
+QByteArray sharingBody(const QStringList& routes, bool shareDiscovered);
 // "KK7GWY FLEX-8600" -> "kk7gwy-flex-8600": a valid tailnet hostname.
 QString suggestedHostname(const QString& nickname);
 // Splits a comma- or whitespace-separated allowlist into entries.
@@ -62,14 +76,16 @@ public:
 
     void fetchStatus();
     void provision(const QString& authKey, const QString& hostname,
-                   const QStringList& allow, const QString& adminToken);
+                   const QStringList& allow, const QStringList& routes,
+                   bool shareDiscovered, const QString& adminToken);
     void setAllow(const QStringList& allow, const QString& adminToken);
+    void setSharing(const QStringList& routes, bool shareDiscovered, const QString& adminToken);
     void signOut(const QString& adminToken);
 
 signals:
     void statusReceived(const AetherSDR::TailnetShimStatus& status);
     void provisioned(const QString& adminToken, const AetherSDR::TailnetShimStatus& status);
-    // operation is "status", "provision", "allow" or "signout". unauthorized
+    // operation is "status", "provision", "allow", "sharing" or "signout". unauthorized
     // is true when the shim refused the admin token.
     void requestFailed(const QString& operation, const QString& message, bool unauthorized);
 
