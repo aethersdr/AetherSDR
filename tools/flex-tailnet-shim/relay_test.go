@@ -1,0 +1,196 @@
+package main
+
+import (
+	"bufio"
+	"fmt"
+	"net"
+	"strings"
+	"testing"
+	"time"
+)
+
+// fakeRadio is a loopback stand-in for the SmartSDR API: it records control
+// lines, sends VITA-49-sized datagrams to whatever `client udpport` names, and
+// records datagrams arriving on its TX port.
+type fakeRadio struct {
+	api   net.Listener
+	tx    *net.UDPConn
+	vita  *net.UDPConn
+	lines chan string
+	txIn  chan *net.UDPAddr
+	eof   chan struct{}
+}
+
+func newFakeRadio(t *testing.T) *fakeRadio {
+	t.Helper()
+	api, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, _ := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	vita, _ := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	fr := &fakeRadio{api: api, tx: tx, vita: vita, lines: make(chan string, 64),
+		txIn: make(chan *net.UDPAddr, 64), eof: make(chan struct{})}
+	go func() {
+		c, err := api.Accept()
+		if err != nil {
+			return
+		}
+		fmt.Fprint(c, "V1.4.0.0\nH12345678\n")
+		sc := bufio.NewScanner(c)
+		for sc.Scan() {
+			l := sc.Text()
+			fr.lines <- l
+			if i := strings.Index(l, "client udpport "); i >= 0 {
+				var port int
+				fmt.Sscanf(l[i+len("client udpport "):], "%d", &port)
+				go func() {
+					dst := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: port}
+					for k := 0; k < 20; k++ {
+						vita.WriteToUDP(make([]byte, 1200), dst)
+						time.Sleep(5 * time.Millisecond)
+					}
+				}()
+			}
+		}
+		close(fr.eof)
+	}()
+	go func() {
+		buf := make([]byte, 2048)
+		for {
+			_, src, err := tx.ReadFromUDP(buf)
+			if err != nil {
+				return
+			}
+			fr.txIn <- src
+		}
+	}()
+	t.Cleanup(func() { api.Close(); tx.Close(); vita.Close() })
+	return fr
+}
+
+func loopUDP(t *testing.T) *net.UDPConn {
+	t.Helper()
+	c, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { c.Close() })
+	return c
+}
+
+func TestRelayEndToEnd(t *testing.T) {
+	fr := newFakeRadio(t)
+	clientTX, clientPrime, clientOut := loopUDP(t), loopUDP(t), loopUDP(t)
+	var hostPort int
+	relay := &Relay{
+		RadioAddr: "127.0.0.1",
+		DialRadio: func() (net.Conn, error) { return net.Dial("tcp", fr.api.Addr().String()) },
+		HostUDP: func() (*net.UDPConn, error) {
+			c, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+			if err == nil {
+				hostPort = c.LocalAddr().(*net.UDPAddr).Port
+			}
+			return c, err
+		},
+		ClientTX: clientTX, ClientPrime: clientPrime, ClientOut: clientOut,
+		MaxMTU:         1200,
+		RadioTXPort:    fr.tx.LocalAddr().(*net.UDPAddr).Port,
+		RadioPrimePort: fr.tx.LocalAddr().(*net.UDPAddr).Port,
+	}
+	ln, _ := net.Listen("tcp", "127.0.0.1:0")
+	defer ln.Close()
+	go relay.Serve(ln)
+
+	// The "AetherSDR" side.
+	ctl, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	greet := bufio.NewReader(ctl)
+	if l, _ := greet.ReadString('\n'); l != "V1.4.0.0\n" {
+		t.Fatalf("greeting not forwarded verbatim: %q", l)
+	}
+	myUDP := loopUDP(t)
+	myPort := myUDP.LocalAddr().(*net.UDPAddr).Port
+	fmt.Fprintf(ctl, "C1|client program AetherSDR\n")
+	fmt.Fprintf(ctl, "C2|client set enforce_network_mtu=1 network_mtu=1450\n")
+	fmt.Fprintf(ctl, "C3|client udpport %d\n", myPort)
+
+	want := []string{
+		"C1|client program AetherSDR",
+		"C2|client set enforce_network_mtu=1 network_mtu=1200",
+		"", // udpport, checked below
+	}
+	for i, w := range want {
+		select {
+		case l := <-fr.lines:
+			if i == 2 {
+				if l != fmt.Sprintf("C3|client udpport %d", hostPort) {
+					t.Fatalf("udpport not rewritten to host port %d: %q", hostPort, l)
+				}
+			} else if l != w {
+				t.Fatalf("line %d: got %q want %q", i, l, w)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("radio never received line %d", i)
+		}
+	}
+
+	// Radio -> client VITA-49 arrives on the client's own port, from ClientOut.
+	myUDP.SetReadDeadline(time.Now().Add(2 * time.Second))
+	buf := make([]byte, 2048)
+	n, src, err := myUDP.ReadFromUDP(buf)
+	if err != nil || n != 1200 {
+		t.Fatalf("no VITA-49 relayed to client: n=%d err=%v", n, err)
+	}
+	if src.Port != clientOut.LocalAddr().(*net.UDPAddr).Port {
+		t.Fatalf("VITA-49 came from %v, want the relay's out socket", src)
+	}
+
+	// Client -> radio TX leaves from the session's host socket.
+	myUDP.WriteToUDP([]byte("vita-tx"), clientTX.LocalAddr().(*net.UDPAddr))
+	select {
+	case from := <-fr.txIn:
+		if from.Port != hostPort {
+			t.Fatalf("TX reached radio from port %d, want host port %d", from.Port, hostPort)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("TX datagram never reached the radio")
+	}
+
+	// A stranger's datagram is dropped.
+	stranger := loopUDP(t)
+	stranger.WriteToUDP([]byte("evil"), clientTX.LocalAddr().(*net.UDPAddr))
+	select {
+	case from := <-fr.txIn:
+		t.Fatalf("unregistered sender reached the radio via %v", from)
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	// Principle VI: when the client goes away, the radio connection closes.
+	ctl.Close()
+	select {
+	case <-fr.eof:
+	case <-time.After(2 * time.Second):
+		t.Fatal("radio connection stayed open after the client disconnected")
+	}
+}
+
+func TestRewriteLeavesOtherLinesAlone(t *testing.T) {
+	host, _ := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	defer host.Close()
+	s := &Session{relay: &Relay{MaxMTU: 1200}, host: host}
+	for _, in := range []string{
+		"C9|slice tune 0 14.074\n",
+		"C10|client set network_mtu=1000\n", // already below the clamp
+		"C11|xmit 0\r\n",
+		"C12|client udpport notaport\n",
+		"binary\x00bytes\n",
+	} {
+		out, port := s.rewriteLine([]byte(in))
+		if string(out) != in || port != 0 {
+			t.Errorf("rewrote %q to %q (port %d)", in, out, port)
+		}
+	}
+}
