@@ -12,13 +12,13 @@ When something isn't working, AetherSDR has several built-in tools for capturing
 - **Help → Slice Troubleshooting...**: a guided check for slice problems
 - **Tools → Runtime Monitor...**, **Tools → Network Diagnostics...** and **Tools → Radio Health...**: see [Runtime Monitor](./runtime-monitor.md)
 
-Before you file a report, drop your log or support bundle on the [Log Analyzer](/log-analyzer). It checks for known problems and links the fix for each one it finds. It runs in your browser; the file is never uploaded.
+Before you file a report, drop your log or support bundle on the [Log Analyzer](/log-analyzer). It checks for known problems and links the fix for each one it finds. It runs in your browser; the file is never uploaded. **Help → Log Analyzer** and the **Log Analyzer** button in **Help → Support & Diagnostics...** open it.
 
-The Help menu also has **Getting Started...**, **AetherSDR Help...**, **What's New...**, three how-to guides (**Understanding Noise Cancellation...**, **Configuring AetherSDR Controls...**, **Configuring Data Modes...**), **AetherSDR Website**, **Donate to AetherSDR**, **Contributing to AetherSDR...**, **Check for Updates...** and **About AetherSDR**. On Windows and Linux the menus are behind the **☰** button at the left of the title bar; on macOS they are in the system menu bar.
+The Help menu starts with **AetherSDR Documentation** (this site), **Printable Manual (PDF)** and **Log Analyzer**, which open in your browser. It also has **Getting Started...**, **AetherSDR Help...**, **What's New...**, three how-to guides (**Understanding Noise Cancellation...**, **Configuring AetherSDR Controls...**, **Configuring Data Modes...**), **AetherSDR Website**, **Donate to AetherSDR**, **Contributing to AetherSDR...**, **Check for Updates...** and **About AetherSDR**. On Windows and Linux the menus are behind the **☰** button at the left of the title bar; on macOS they are in the system menu bar.
 
 ## Using Support & Diagnostics
 
-**Help → Support & Diagnostics...** has two parts.
+**Help → Support & Diagnostics...** has two parts, followed by two buttons that open these docs in your browser: **Troubleshooting Guide** opens [Troubleshooting](./troubleshooting.md) and **Log Analyzer** opens the [Log Analyzer](/log-analyzer).
 
 ### Diagnostic Logging
 

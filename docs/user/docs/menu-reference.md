@@ -125,8 +125,11 @@ The Minimize and Full Screen keys can be rebound in **Settings → Configure Sho
 
 | Item | What it does |
 |------|-------------|
-| **Getting Started...**, **AetherSDR Help...**, **What's New...** | Built-in guides, each in its own window. |
-| **Understanding Noise Cancellation...**, **Configuring AetherSDR Controls...**, **Configuring Data Modes...** | Topic guides. |
+| **AetherSDR Documentation** | Opens this documentation site in your browser. |
+| **Printable Manual (PDF)** | Opens the [printable manual](pathname:///AetherSDR-Manual.pdf), all of these pages in one PDF. |
+| **Log Analyzer** | Opens the [Log Analyzer](/log-analyzer), which checks a log or support bundle for known problems in your browser. |
+| **Getting Started...**, **AetherSDR Help...**, **What's New...** | Built-in guides, each in its own window. They work offline, and each guide links its page on this site. |
+| **Understanding Noise Cancellation...**, **Configuring AetherSDR Controls...**, **Configuring Data Modes...** | Topic guides, also offline. |
 | **AetherSDR Website**, **Donate to AetherSDR** | Open the web pages. |
 | **Submit your Idea... 💡** | The AI-assisted feature-request helper. |
 | **File an Issue...** | Opens a GitHub issue pre-filled with a redacted log tail. |

@@ -19,6 +19,7 @@
 #include "AetherialAudioStrip.h"
 #include "AppletPanel.h"
 #include "DaxApplet.h"
+#include "DocsLinks.h"
 #include "PanadapterApplet.h"
 #include "PanadapterStack.h"
 #include "RadioSetupDialog.h"
@@ -1633,6 +1634,12 @@ void MainWindow::buildMenuBar()
     refreshWindowMenu();
 
     auto* helpMenu = menuBar()->addMenu("&Help");
+
+    // ── Documentation ─────────────────────────────────────────────────────
+    // The online manual (docs.aethersdr.com), its printable PDF, and the Log
+    // Analyzer. These open the browser; the bundled guides below work offline.
+    DocsLinks::addHelpMenuActions(helpMenu);
+    helpMenu->addSeparator();
 
     // ── Learn & news ──────────────────────────────────────────────────────
     // Orientation first: how to get going, the full manual, and what changed.

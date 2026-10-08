@@ -42,7 +42,7 @@ Every verb except `ping` is refused without the matching token. The token is kep
 
 To give it to an MCP client, set `AETHER_MCP_TOKEN` **only in the environment of the shell that launches your assistant**, using a method that does not record it in shell history. The MCP server inherits it from there.
 
-> **Keep the token out of shared configs.** Do not put the literal token in a shell profile, in `.mcp.json`, or in any other MCP config file: that puts a live credential on disk and risks it landing in a commit or a backup. The token field's tooltip in Radio Setup suggests pasting it into the MCP config; follow this page and the docs instead.
+> **Keep the token out of shared configs.** Do not put the literal token in a shell profile, in `.mcp.json`, or in any other MCP config file: that puts a live credential on disk and risks it landing in a commit or a backup. The token field's tooltip in Radio Setup gives the same advice and links this page, as do the tooltips on the other bridge controls.
 
 Headless or CI runs can pass `AETHER_MCP_TOKEN` to AetherSDR directly; it overrides the keychain.
 

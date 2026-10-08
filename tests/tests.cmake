@@ -6581,10 +6581,29 @@ add_executable(help_dialog_test
     $<TARGET_OBJECTS:aether_test_async_log_writer>
 )
 target_include_directories(help_dialog_test PRIVATE src)
+# AETHER_SOURCE_DIR: the link test opens the real resources/help page.
+target_compile_definitions(help_dialog_test PRIVATE
+    AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(help_dialog_test PRIVATE
     Qt6::Core Qt6::Widgets Qt6::Test
 )
 set_target_properties(help_dialog_test PROPERTIES AUTOMOC ON)
+add_test(NAME help_dialog_test COMMAND help_dialog_test)
+set_tests_properties(help_dialog_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
+
+# In-app links to docs.aethersdr.com (src/gui/DocsLinks.h, header-only): the
+# Help menu's documentation block, the docs pages the app links to, and the
+# "Full documentation:" line in each bundled resources/help page. Reads
+# docs/user/ and resources/help/ as text; a URL handler stands in for the
+# browser, so nothing opens.
+add_executable(docs_links_test tests/docs_links_test.cpp)
+target_include_directories(docs_links_test PRIVATE src)
+target_compile_definitions(docs_links_test PRIVATE
+    AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(docs_links_test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets)
+set_target_properties(docs_links_test PROPERTIES AUTOMOC ON)
+add_test(NAME docs_links_test COMMAND docs_links_test)
+set_tests_properties(docs_links_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
 
 # FreeDV Reporter status-message row (#4231). Guarded like the dialog
 # itself — FreeDvReporterDialog only exists when WebSockets are available.
