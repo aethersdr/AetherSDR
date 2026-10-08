@@ -107,6 +107,10 @@ For any MQTT-connected antenna switch (Node-RED, ESP32, Raspberry Pi, …):
 
 **Broker**
 
+<img src="/img/screens/mqtt-settings-dialog.png" width="620" alt="MQTT Settings window with tabs Broker, Subscriptions and Publish Buttons, on Broker. Host is localhost, Port 1883, User and Password are empty, TLS has a Use TLS option and CA cert is optional, blank = system CA bundle with a Browse… button. OK, Cancel and Apply buttons sit at the bottom." />
+
+*The MQTT Settings window with the default broker fields.*
+
 | Field | Notes |
 |-------|-------|
 | **Host** / **Port** | Broker address; port defaults to 1883 |

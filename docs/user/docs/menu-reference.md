@@ -11,9 +11,9 @@ The top-level menus are **File · Settings · Profiles · Tools · View · Windo
 - **Windows and Linux:** the menus sit behind the **☰** button at the far left of the title bar. Alt+letter mnemonics (Alt+F, Alt+S, …) still open each menu under the button, and every menu shortcut keeps working.
 - **macOS:** the menus are in the system menu bar at the top of the screen. **Radio Setup…** appears as **AetherSDR → Preferences…**.
 
-![The AetherSDR title bar. From left: the menu button, the AetherSDR logo, a radio tab for the demo reading Simulator (not on the air), AetherSDR Demo, connected, DEMO, and a plus button to add a radio. On the right: a PC Audio button, a speaker icon and volume slider at 100, a headphone icon and slider at 50, three panel layout buttons, and minimise, maximise and close buttons.](/img/screens/title-bar.png)
+<img src="/img/screens/title-bar.png" width="1600" alt="The AetherSDR title bar. From left: the menu button, the AetherSDR logo, three radio tabs reading Hermes-Lite 2 available, FLX8600 FLEX-8600 connected KK7GWY (highlighted, with a green dot) and Simulator (not on the air) AetherSDR Demo available DEMO, and a plus button. On the right: a green PC Audio button, a speaker icon and slider at 100, a headphone icon and slider at 100, three panel layout buttons, and minimise, maximise and close buttons." />
 
-*The title bar: the menu button, radio tabs, PC Audio and volume controls, panel layout buttons and window controls.*
+*The title bar: the menu button, one tab per radio, PC Audio and volume controls, panel layout buttons and window controls.*
 
 ## File
 
@@ -60,6 +60,10 @@ Items that depend on optional build features (MQTT, MIDI, serial controllers) on
 See [Profile Management](./profile-management.md).
 
 ## Tools
+
+<img src="/img/screens/menu-tools.png" width="285" alt="Tools menu: Add Panadapter..., AetherTX..., CW Keyer, Copy Assist, AetherModem..., Configure KiwiSDR...; Start SWR Scan..., Pre-tune ATU Bands..., Clear ATU Memories..., Calibrate AGC-T...; Callsign Lookup... (Ctrl+Shift+L), PSK Reporter..., FreeDV Reporter...; Net Scheduler..., Memory..., Waveforms..., Wideband Bandscope...; Radio Health..., GPS Dashboard..., Network Diagnostics... and Runtime Monitor...." />
+
+*The Tools menu, connected to a FLEX-8600.*
 
 | Item | What it does |
 |------|-------------|
@@ -123,6 +127,10 @@ The Minimize and Full Screen keys can be rebound in **Settings → Configure Sho
 
 ## Help
 
+<img src="/img/screens/menu-help.png" width="281" alt="Help menu: Getting Started..., AetherSDR Help..., What's New...; Understanding Noise Cancellation..., Configuring AetherSDR Controls..., Configuring Data Modes...; AetherSDR Website, Donate to AetherSDR, Submit your Idea... (with a light-bulb icon), File an Issue..., Contributing to AetherSDR...; Support &amp; Diagnostics..., Slice Troubleshooting..., Check for Updates...; and About AetherSDR." />
+
+*The Help menu.*
+
 | Item | What it does |
 |------|-------------|
 | **AetherSDR Documentation** | Opens this documentation site in your browser. |
@@ -160,6 +168,10 @@ The main window has one 52 px title bar. From left to right:
 
 ### Radio tabs
 
+<img src="/img/screens/radio-list-popup.png" width="380" alt="Discovered radios popup with a Search name, address, or status field. Three rows, each with an Actions button: FLX8600, connected; Hermes-Lite 2, available; and Simulator (not on the air), 127.0.0.1, available, with the first two addresses blacked out. Connect manually... and Rescan radios sit at the bottom." />
+
+*The radio list, opened from the plus button beside the radio tabs. Addresses are blacked out.*
+
 - Line one is the radio's name; line two is its state in words (for example "link lost"), so colour is never the only signal.
 - The dot on the active tab is the **radio-link indicator**. It pulses once per discovery heartbeat, turns amber while discovering and red after three missed heartbeats (blinking, or solid if **View → Blink Status Indicator** is off). The alarm stays on the radio that dropped until you disconnect on purpose, start a new session or remove the tab. A deliberate disconnect never raises it. Right-click the tabs to toggle blinking.
 - When the tabs no longer fit, scroll them with the mouse wheel or drag them sideways.
@@ -195,6 +207,10 @@ In **Minimal Mode** the bar shrinks to the active radio tab and status badges; t
 ## About AetherSDR
 
 **Help → About AetherSDR** opens a rounded, borderless window showing:
+
+<img src="/img/screens/about-window.png" width="400" alt="About AetherSDR window. Below the AetherSDR logo it shows the version v26.10.1 and commit, the tagline Cross-platform SmartSDR-compatible client for FlexRadio transceivers, and a box listing Built with Qt 6.12.0 and C++20, the compile date and the GPU QRhi (OpenGL) renderer. A Contributor Logbook button, the copyright and GPLv3 licence, the GitHub link, trademark notices and an OK button follow." />
+
+*The About AetherSDR window: version, build and renderer details.*
 
 - the version and commit;
 - a **build details** card (Qt version, compile date, and the spectrum renderer in use). The text is selectable, so you can paste it into a bug report;

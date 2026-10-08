@@ -27,6 +27,10 @@ Each request is one line (a bare command or a JSON object) and each reply is one
 
 Open **Settings → Radio Setup... → Network** and find the **Advanced** group:
 
+<img src="/img/screens/radio-setup-network-advanced.png" width="643" alt="Advanced group of the Network page. Enforce Private IP Connections and Agent Automation (MCP) both read Enabled. The Access Token field is blacked out, beside Copy and Rotate buttons. Below are the Allow TX via MCP checkbox (Enable transmit control), the Observe only checkbox (Read-only, block all driving), Network MTU at 1450 bytes and a VITA-49 RX buffer slider at 4 MB, granted 8 MB." />
+
+*The Advanced group on the Network page, with the agent automation (MCP) switch. The access token is blacked out.*
+
 | Control | What it does |
 |---------|--------------|
 | **Agent Automation (MCP):** Enabled / Disabled | Starts or stops the bridge. Off by default. Enabling it with no token creates one. The setting is saved, so the bridge comes back at the next launch. |

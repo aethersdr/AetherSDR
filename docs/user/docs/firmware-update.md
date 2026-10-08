@@ -25,6 +25,10 @@ AetherSDR can upload new firmware to a FlexRadio on Linux, macOS and Windows, us
 
 Open **Settings → Radio Setup...** (on macOS: **AetherSDR → Preferences...**), choose the **Radio** page, and find the **Firmware Update** group. It shows the radio's current **FW Version** and three buttons: **Check for Update**, **Select Installer...** and **Upload Firmware**.
 
+<img src="/img/screens/firmware-update-group.png" width="643" alt="Firmware Update group showing FW Version: 4.2.20.41343 with a copy button, and three buttons: Check for Update, Select Installer... and a dimmed Upload Firmware." />
+
+*The Firmware Update group on the Radio page.*
+
 ## Updating the Firmware
 
 ### Check for updates

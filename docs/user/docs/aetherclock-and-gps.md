@@ -17,6 +17,10 @@ Two tools help you know where you are and what time it is. **AetherClock** decod
 
 AetherClock is an applet (applet-tray button **CLK**, title **AetherClock**, Station category). It is off by default.
 
+<img src="/img/screens/aetherclock-applet.png" width="248" alt="AetherClock applet. An empty display reads no signal, above a status row with placeholder time fields. Below are Enable, Settings (expanded) and a DAX 1 selector, then the settings drawer with Station: WWV 10 MHz, a Tune slice → WWV 10 MHz button, the note dial 9.999 MHz USB, 1 kHz below carrier, and a Debug expander." />
+
+*The AetherClock applet with its settings drawer open, before it is enabled.*
+
 1. Open the applet and its settings drawer.
 2. Pick a **Station:** preset: **WWV 2.5 / 5 / 10 / 15 / 20 MHz** or **WWVB 60 kHz**.
 3. Press **Tune slice → *preset*** to put the bound slice on the right frequency (USB, 1 kHz below the carrier). This works while the decoder is stopped.

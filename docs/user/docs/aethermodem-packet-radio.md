@@ -26,6 +26,10 @@ The window has six tabs: **APRS**, **Digipeater**, **KISS TNC**, **Terminal**, *
 
 All AetherModem transmissions share one queue and key the radio one at a time, so the APRS client, digipeater, KISS clients, terminal and mailbox never talk over each other.
 
+<img src="/img/screens/aethermodem-aprs.png" width="1102" alt="AetherModem window with tabs APRS (selected), Digipeater, KISS TNC, Terminal, Mailbox and D-STAR. Rows of settings cover the baud rate (300 or 1200), Enable Modem and Autostart at launch, then My Callsign (placeholder N0CALL-9), Symbol Home, Path WIDE1-1,WIDE2-1 and a Beacon every 30 min, the Position line (blacked out) with manual grid, latitude and longitude fields, a message composer with Send APRS Msg, and an empty table of heard stations with columns Time, Station, Symbol, Age, Pkts, Grid, Dist, CRS/SPD and Status / Comment. The status bar reads Modem Standby and No audio yet." />
+
+*AetherModem on the APRS tab. The station's GPS position is blacked out.*
+
 ### Modem and profiles
 
 The modem controls are on the **APRS** tab:

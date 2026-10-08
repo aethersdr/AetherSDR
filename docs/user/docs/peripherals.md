@@ -29,6 +29,14 @@ The **Devices** list sits on the left and the selected device's settings on
 the right. Each row shows the device name, its address, and where its data is
 coming from:
 
+<img src="/img/screens/radio-setup-peripherals.png" width="679" alt="Peripherals page. The Devices list is empty, with Add and a dimmed Remove button below it, a Reconnect automatically checkbox and a Connection Help button. The right side reads No peripherals added. Choose Add to configure a device." />
+
+*Radio Setup, Peripherals page, before any device is added.*
+
+<img src="/img/screens/radio-setup-peripherals-add.png" width="180" alt="Peripherals Add menu: Tuner Genius XL, Power Genius XL, Antenna Genius, ShackSwitch, ACOM Amplifier, SPE Expert Amplifier, VK3AMP Amplifier, Elecraft KPA1500 and LP-100A Meter." />
+
+*The Add menu on the Peripherals page: every device type AetherSDR can configure.*
+
 | Word | Meaning |
 |---|---|
 | `● DIRECT` | Connected directly to the device |

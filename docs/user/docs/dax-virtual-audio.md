@@ -93,6 +93,10 @@ AetherSDR offers **up to eight RX channels plus one TX channel**. The number of 
 
 Each RX row shows **DAX n:**, the slice currently assigned to that channel (or "—"), and a combined **level meter and gain slider**. The **TX:** row shows which slice holds transmit and the gain applied to audio coming from your program. Gains are saved per channel.
 
+<img src="/img/screens/dax-applet.png" width="248" alt="DAX Audio applet. Level bars for DAX 1, assigned to Slice A, DAX 2 to DAX 4, unassigned, and TX, assigned to Slice A, above a DAX row with a Disabled button." />
+
+*The DAX Audio applet on Linux: one level bar per DAX channel and the button that starts DAX.*
+
 ## Known issues
 
 - On macOS, a digital-mode program's transmit audio can reach the **AetherSDR TX** meter while the radio sends no RF ([#4554](https://github.com/aethersdr/AetherSDR/issues/4554)).

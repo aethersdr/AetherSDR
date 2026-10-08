@@ -16,7 +16,7 @@ SpotHub is AetherSDR's spot manager. It gathers spots from DX clusters, the Reve
 
 All spot sources run on a worker thread, and spots are forwarded to the radio in batches once a second.
 
-![SpotHub window with tabs Cluster, RBN, WSJT-X, SpotCollector, POTA, EiBi, N1MM, FreeDV and Spot List, with Cluster selected. The Connection group has Server, Port and Callsign fields, Auto-Connect and Startup Commands buttons, a Disconnected status and a Connect button. Below is an empty Cluster Console with a spot colour swatch, and a command field with Send and Clear buttons.](/img/screens/spothub.png)
+<img src="/img/screens/spothub.png" width="760" alt="SpotHub window with tabs Cluster, RBN, WSJT-X, SpotCollector, POTA, EiBi, N1MM, FreeDV and Spot List, with Cluster selected. The Connection group has Server dxc.nc7j.com, Port 7300, an empty Callsign field, Auto-Connect: OFF and Startup Commands… buttons, a Disconnected status and a Connect button. Below is an empty Cluster Console with a spot colour swatch, and a command field with Send and Clear buttons." />
 
 *SpotHub, open on the Cluster tab. Each tab is one spot source.*
 
@@ -146,6 +146,10 @@ A sortable table of every spot from every source.
 
 Controls how spots look on the panadapter. A row of toggle buttons sits at the top:
 
+<img src="/img/screens/spothub-display-tab.png" width="760" alt="SpotHub window on the Display tab. Toggle buttons across the top read Spots, Passive, Memories, Kiwi DX, Auto, Signals, QRM and Clear All. Sliders set Levels, Position, Font Size and Spot Lifetime, followed by Override Colors, Override Background, Background Opacity, Spot Lines and a Total Spots count. DXCC Coloring and Signal History groups sit side by side at the bottom." />
+
+*SpotHub's Display tab: how spots are drawn on the panadapter.*
+
 ```
 [Spots] [Passive] [Memories] [Kiwi DX] [Auto] [Signals] [QRM] [Clear All]
 ```
@@ -220,6 +224,10 @@ When more spots overlap than **Levels** allows, they collapse into an amber **+N
 | **Remove Spot** | Removes the spot |
 
 ### Adding a spot by hand
+
+<img src="/img/screens/spothub-add-spot.png" width="318" alt="Add Spot dialog: Frequency (MHz) 14.288000 MHz, an empty Callsign (required) field, an empty Optional comment field, Lifetime 30 minutes, a Forward to DX Cluster checkbox, unticked, and OK and Cancel buttons." />
+
+*The Add Spot dialog, opened from the panadapter's right-click menu.*
 
 1. Right-click an empty part of the panadapter and choose **Add Spot at X.XXX MHz…**
 2. Fill in **Frequency (MHz)** (pre-filled and snapped to the tuning step), **Callsign** (required), **Comment** (optional) and **Lifetime** (5 minutes to 2 hours).

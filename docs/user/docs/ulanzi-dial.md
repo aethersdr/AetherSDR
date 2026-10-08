@@ -38,6 +38,10 @@ Windows cannot take exclusive control of the dial, so each key press also still 
 
 Open **Settings → Ulanzi Dial Mapping...** ("Ulanzi Dial — Control Mapping"). The dialog shows a picture of the dial with a drop-down "pill" on each physical control, plus:
 
+<img src="/img/screens/ulanzi-mapper.png" width="640" alt="Ulanzi Dial Control Mapping window. A picture of the dial sits in the centre with a label beside each of its controls: three top buttons (unassigned, RIT/XIT toggle, unassigned), two side buttons on each side (unassigned and Next Slice), the Tuning knob set to Frequency Tune Slice and its Single tap set to Audio Mute Toggle. The status at the bottom left reads Disconnected, beside Last event, Reset to Defaults and Close." />
+
+*The Ulanzi Dial mapping window with no dial connected.*
+
 - a status line (**Connected — …**, **Disconnected**, or **Turned off in Radio Setup → Serial & Controllers**);
 - a **Last event** readout that names the last key or rotation the dial sent and the action it ran;
 - **Reset to Defaults**.

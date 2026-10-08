@@ -25,6 +25,10 @@ The decoder works on every radio family that has a CW mode: FlexRadio, the [Herm
 
 Decoding is controlled in **Settings → Radio Setup... → Phone & CW**, next to **Decode:**
 
+<img src="/img/screens/radio-setup-phone-cw.png" width="679" alt="Phone &amp; CW page headed FLEX-8600. Microphone has Mic Bias Voltage (BIAS), Mic +20 dB Boost and Level Meter During Receive (Enabled). CW has Iambic Enabled with modes A and B (B selected), Swap Dot/Dash, Sideband CWU (selected) or CWL, CWX Sync, and Decode RX (selected) or TX. Digital has RTTY Mark Default 2125 and RTTY Decode Enabled." />
+
+*Radio Setup, Phone & CW page on a FLEX-8600: microphone, CW and digital settings.*
+
 | Toggle | Default | What it decodes |
 |---|---|---|
 | **RX** | On | The received CW on the selected slice |
@@ -37,6 +41,10 @@ Both appear in the same panel. Your own sending is shown in **cyan**, so it stan
 When the selected slice is in **CW** or **CWL**, the decode panel appears below the waterfall, and it hides again when you switch to another mode.
 
 Drag the grip on the panel's edge to resize it; the height is remembered. Right-click the text for font size and Clear.
+
+<img src="/img/screens/cw-decoder-panel.png" width="1340" alt="The bottom of the panadapter in CW mode. The lower part of the waterfall shows CW signals as dotted vertical lines. Below it, the decoder pane's control row reads CW, (selected slice), the detected tone and speed, a Sens slider with two lock buttons, Pitch 500 to 700 Hz and WPM 15 to 40 range sliders, and CPY ALL, CPY VIS, A-, A+, CLR and close buttons, above the decoded-text line." />
+
+*The CW decoder pane under the waterfall, with its sensitivity, pitch and speed controls.*
 
 ### How it works
 

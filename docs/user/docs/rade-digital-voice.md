@@ -46,6 +46,10 @@ You can also start RADE from **Tools → FreeDV Reporter...**: double-clicking a
 
 While RADE is active, the VFO flag shows:
 
+<img src="/img/screens/rade-vfo-badge.png" width="316" alt="VFO flag in RADE mode. A RADE label with a hollow sync dot sits left of the frequency 14.250.000, with --- below it in place of the SNR, a 1.5K filter width, and the mode tab reading DIGU." />
+
+*A slice in RADE, before any RADE signal is decoded: the sync dot is hollow and the SNR reads ---.*
+
 - a **RADE** badge with a sync LED next to the frequency — **green ●** when the modem is synchronised, grey ○ when it is not;
 - a **RADE info row** below the frequency with the far-end **callsign** (when received), the decoded **SNR** and the **frequency offset**.
 

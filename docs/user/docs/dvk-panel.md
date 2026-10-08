@@ -28,6 +28,10 @@ Click the **DVK** indicator in the status bar at the bottom of the screen. The p
 
 The DVK panel and the [CWX Panel](./cwx-panel.md) share the same space — opening one closes the other.
 
+<img src="/img/screens/dvk-panel.png" width="370" alt="Digital Voice Keyer panel along the left edge of the window, status Idle. Twelve slots, F1 Recording 1 to F12 Recording 12, each read Empty. REC, STOP, PLAY and PREV buttons run along the bottom." />
+
+*The DVK panel, opened from DVK in the status bar.*
+
 ### Recording
 
 1. Click a slot to select it (blue highlight).

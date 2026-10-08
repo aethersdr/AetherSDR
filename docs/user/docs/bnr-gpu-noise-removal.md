@@ -31,6 +31,10 @@ If no runtime pack has been published for your GPU's architecture, BNR disables 
 
 ## Setup
 
+<img src="/img/screens/bnr-panel.png" width="720" alt="AetherRX window with the BNR tab open. The NVIDIA AFX panel describes GPU-accelerated AI noise removal, shows Status Not installed, an Intensity slider at 100 and a Download (~1 GB) button, with an empty Installed Components list below and the status line No method running." />
+
+*AetherRX with BNR selected on a computer without the NVIDIA AFX runtime installed.*
+
 1. Open **Settings → AetherRX...** (or click the **AetherRX** button on the VFO flag's DSP tab) and go to the **AetherNR** tab.
 2. Select **BNR** in the method row. The BNR page shows the **NVIDIA AFX** panel.
 3. Click **Download (~1 GB)**. AetherSDR detects your GPU's architecture and fetches the matching pack, verifying every file by SHA-256. The **Installed components** list shows progress, then the installed versions.

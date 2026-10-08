@@ -30,7 +30,7 @@ compact view of both chains (see [Using the docked applet](#using-the-docked-app
 > - **BYPASS** is remembered across restarts.
 > - The compressor's **Drive** and **Phase** are saved in AetherTX profiles.
 
-![AetherTX window. The left column lists the transmit chain stages Gate, EQ, De-esser, Compressor, Tube, Exciter, Reverb and Final Output, with Gate selected, and MIC and TX indicators, REC, PLAY and BYPASS at the bottom. The right side shows the gate's level graph with View and Mode buttons, and six knobs below it: Thresh, Return, Hold, Release, Floor and Ratio.](/img/screens/aethertx.png)
+<img src="/img/screens/aethertx.png" width="720" alt="AetherTX window. The left column lists the transmit chain stages Gate (selected), EQ, De-esser, Compressor, Tube, Exciter, Reverb and Final Output, with MIC and TX indicators, REC, PLAY, a settings gear and BYPASS at the bottom. The right side shows the gate's level graph with View (Level, Curve), Mode (Gate, Expander), RN2 and Peek controls, and six knobs: Thresh, Return, Hold, Release, Floor and Ratio." />
 
 *The AetherTX window: the transmit processing chain on the left, the selected stage's controls on the right.*
 
@@ -194,6 +194,10 @@ The **Settings** gear at the foot of each window opens its profile library
 every stage's settings, which stages are on, and their order. An AetherRX
 profile also records the active noise-reduction method.
 
+<img src="/img/screens/aetherrx-profiles.png" width="460" alt="AetherRX Profiles dialog. It explains that a profile is the receive chain, every stage's settings, which are on, their order and the noise reduction method, and that loading one leaves the transmit side alone. An empty profile list sits above Save..., Load, Delete, Import... and Export... buttons, with the note No profiles yet, Save... stores the chain you have set up now, and a Close button." />
+
+*The AetherRX Profiles dialog, opened from the gear button at the foot of the stage column.*
+
 | Button | Action |
 |---|---|
 | **Save…** | Store the chain as it is now under a name (asks before replacing an existing name) |
@@ -211,6 +215,10 @@ them with **Settings → Settings Browser...** (see [Settings and Backups](./set
 
 The **Aetherial Audio** applet in the applet panel (button **TXDSP**) is the
 compact companion to the two windows:
+
+<img src="/img/screens/txdsp-docked-applet.png" width="248" alt="Aetherial Audio applet. The top row has TX (selected), RX, a record button, a play button and BYPASS. Below, the transmit chain is drawn as connected boxes: an unlabelled green input stage, GATE, EQ, DESS, COMP, TUBE, EVO, VERB and TX, with the hint Click to bypass, Double click to edit, Drag to reorder. Under the strip is the Aetherial TX Gate tile with its transfer curve and knobs for Thresh, Ratio, Return, Release and Floor." />
+
+*The docked Aetherial Audio applet (button VUDU) on the TX side: the chain strip, with the first stage tile below it.*
 
 - **TX / RX** selects which chain is shown, and **BYPASS** bypasses that chain.
 - The chain strip shows each stage as a box. Single-click a box to switch the
@@ -268,6 +276,10 @@ handles on the response curve, or select a band and type values.
 
 Toolbar controls:
 
+<img src="/img/screens/aethertx-eq.png" width="720" alt="AetherTX window with EQ selected in the stage column. Ref:, Smoothing, Peak Hold and Reset controls run along the top, above a row of filter-shape buttons. The main area plots the live microphone spectrum with ten band handles on a flat line, over a frequency scale from 20 Hz to 20 kHz with the E-SSB, SSB and AM / FM ranges marked, and the band frequencies and gains listed beneath. An output level meter runs along the bottom." />
+
+*AetherTX with the EQ stage selected.*
+
 - **Ref:** overlays an amber reference target curve: Off, AT&T 1959, Heil DX,
   Astatic D-104, Shure 444 or Heil HC-5. It is a visual guide only; it does
   not change the audio.
@@ -311,6 +323,10 @@ low a threshold leaves the de-esser working all the time and dulls the voice.
 ### Compressor
 
 Levels the signal: brings quiet syllables up and holds loud ones back.
+
+<img src="/img/screens/aethertx-compressor.png" width="720" alt="AetherTX window with Compressor selected in the stage column. A Limiter button and a Ceiling slider sit at the top. The compressor's transfer curve fills the centre, between an input meter with a threshold marker on the left and gain-reduction and output meters on the right. Six knobs along the bottom read Ratio, Attack, Release, Knee, Drive and Phase." />
+
+*AetherTX with the Compressor stage selected.*
 
 - **Threshold:** the vertical fader on the left, which doubles as the input
   meter, so you can set the threshold against your own voice peaks.

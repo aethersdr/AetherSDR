@@ -112,6 +112,10 @@ accept shared routes automatically.
 Do this **at the station**, with AetherSDR connected to the radio over its
 local network.
 
+<img src="/img/screens/waveforms-dialog.png" width="980" alt="Waveforms window. A Connected Radio card reads FLEX-8600 FLX8600 with its serial blacked out, beside WFP Support Supported, WFP Power ON, WFP Ready READY and WFP IP (blacked out). Radio Waveform Processor explains legacy and Docker waveform packages. Installed Waveforms has an Install... button and one entry, flex-tailnet-shim 0.4.0, with Docker, Configure..., Restart and Remove buttons." />
+
+*The Waveforms window, listing the waveforms installed on the radio. The serial number and the waveform processor's address are blacked out.*
+
 1. Open **File → Waveforms…**.
 2. Click **Install…** and choose **Remote Access (Tailscale)**.
 3. AetherSDR downloads the container image (about 8 MB) and checks its
@@ -133,6 +137,10 @@ AetherSDR has its own RADE digital voice, so it doesn't need the FreeDV
 container (see [RADE Digital Voice](./rade-digital-voice.md)).
 
 ## Part 4 — Join the radio to your tailnet
+
+<img src="/img/screens/tailnet-remote-access.png" width="600" alt="Remote Access window. The status line reads On your tailnet, container 0.4.0, 0 remote session(s), above an explanation of remote access over Tailscale. The Tailnet group shows the tailnet name and address (both blacked out) with a Copy button, Remote sessions 0 and Container version 0.4.0. Join your tailnet has an Auth key field (placeholder tskey-auth-...), Machine name flx8600, a Who may connect field (placeholder you@example.com, tag:operators), a note on single-use keys, and Save Access List and Change Key buttons. Station devices lists the devices found on the radio's network (blacked out) with a Share the devices found here over the tailnet checkbox, an Other devices field and Save Sharing. An amber note about the admin token and Refresh, Sign Out of Tailnet and Done buttons close the window." />
+
+*The Remote Access window for the flex-tailnet-shim container. Tailnet names, addresses and station device addresses are blacked out.*
 
 ### Create an auth key
 

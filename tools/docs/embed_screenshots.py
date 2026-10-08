@@ -10,14 +10,20 @@ tools/docs/capture_screenshots.py writes each shot in screens.json to
 docs/user/static/img/screens/<id>.png. This script puts each one on its page
 (the shot's "page", a file in docs/user/docs/) as
 
-    ![<alt>](/img/screens/<id>.png)
+    <img src="/img/screens/<id>.png" width="<logical px>" alt="<alt>" />
 
     *<caption>*
 
-By default the image goes at the end of the page's introduction, just before
-its first "## " heading. A shot with "section": "<heading text>" goes at the
-start of that section instead, after the section's opening paragraphs: use it
-for the second shot on a page.
+The shots are captured on a HiDPI display, so each PNG is
+device_pixel_ratio (screens.json) times its logical size; the width attribute
+makes the browser show it at its logical size, sharp on HiDPI screens. (The
+pages are CommonMark, format 'md', which Docusaurus renders HTML in;
+tools/docs/build_pdf.py turns the tag back into a Markdown image.)
+
+A shot's "anchor_heading" says where it goes: "intro" puts it at the end of
+the page's introduction, just before its first "## " heading; a heading's
+text puts it at the start of that section, after the section's opening
+paragraphs.
 
 It is idempotent. An image line already pointing at /img/screens/<id>.png is
 replaced in place together with its caption, so re-shooting or rewording a
@@ -33,6 +39,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import struct
 import sys
 from pathlib import Path
 
@@ -43,7 +50,8 @@ SCREENS_JSON = SITE / "screens.json"
 SHOTS_DIR = SITE / "static" / "img" / "screens"
 URL_PREFIX = "/img/screens/"
 
-IMAGE_RE = re.compile(r"^!\[.*\]\(" + re.escape(URL_PREFIX) + r"([A-Za-z0-9._-]+)\.png\)\s*$")
+IMAGE_RE = re.compile(r"^(?:!\[.*\]\(" + re.escape(URL_PREFIX) + r"([A-Za-z0-9._-]+)\.png\)"
+                      r"|<img src=\"" + re.escape(URL_PREFIX) + r"([A-Za-z0-9._-]+)\.png\"[^>]*/?>)\s*$")
 CAPTION_RE = re.compile(r"^\*.*\*\s*$")
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.*?)\s*(?:\{#[^}]*\})?\s*$")
 FENCE_RE = re.compile(r"^\s*(`{3,}|~{3,})")
@@ -54,8 +62,17 @@ def fail(msg: str) -> None:
     sys.exit(2)
 
 
-def escape_alt(text: str) -> str:
-    return text.replace("\\", "\\\\").replace("[", "\\[").replace("]", "\\]")
+def escape_attr(text: str) -> str:
+    return (text.replace("&", "&amp;").replace('"', "&quot;")
+            .replace("<", "&lt;").replace(">", "&gt;"))
+
+
+def png_width(path: Path) -> int:
+    with path.open("rb") as f:
+        head = f.read(24)
+    if head[:8] != b"\x89PNG\r\n\x1a\n":
+        fail(f"{path} is not a PNG")
+    return struct.unpack(">I", head[16:20])[0]
 
 
 def escape_caption(text: str) -> str:
@@ -63,8 +80,10 @@ def escape_caption(text: str) -> str:
 
 
 def block_for(shot: dict) -> list[str]:
+    width = round(png_width(SHOTS_DIR / f"{shot['id']}.png") / shot["_dpr"])
     return [
-        f"![{escape_alt(shot['alt'])}]({URL_PREFIX}{shot['id']}.png)",
+        f'<img src="{URL_PREFIX}{shot["id"]}.png" width="{width}" '
+        f'alt="{escape_attr(shot["alt"])}" />',
         "",
         f"*{escape_caption(shot['caption'])}*",
     ]
@@ -117,8 +136,8 @@ def remove_block(lines: list[str], i: int) -> tuple[list[str], int]:
 def insertion_point(lines: list[str], shot: dict, page: str) -> int:
     mask = code_mask(lines)
     start = body_start(lines)
-    section = shot.get("section")
-    if not section:
+    section = shot.get("anchor_heading", "intro")
+    if section == "intro":
         for i in range(start, len(lines)):
             if not mask[i] and lines[i].startswith("## "):
                 return i
@@ -138,7 +157,7 @@ def insertion_point(lines: list[str], shot: dict, page: str) -> int:
         if not s:
             j += 1
             continue
-        if mask[j] or re.match(r"^(#|[-*+] |\d+[.)] |\||:::|>|!\[)", s):
+        if mask[j] or re.match(r"^(#|[-*+] |\d+[.)] |\||:::|>|!\[|<img )", s):
             break
         while j < len(lines) and lines[j].strip():
             j += 1
@@ -171,15 +190,20 @@ def embed(text: str, shots: list[dict], page: str) -> str:
         if not m or code_mask(lines)[i]:
             i += 1
             continue
+        shot_id = m.group(1) or m.group(2)
         lines, at = remove_block(lines, i)
-        if m.group(1) in wanted and m.group(1) not in anchors:
-            anchors[m.group(1)] = at
+        if shot_id in wanted and shot_id not in anchors:
+            anchors[shot_id] = at
         i = at
     # Put them back where they were, last first so the indexes hold.
-    for shot_id, at in sorted(anchors.items(), key=lambda kv: -kv[1]):
+    # Adjacent images share an anchor once removed; among those, re-insert
+    # the later one first so the original order survives.
+    order = {shot_id: n for n, shot_id in enumerate(anchors)}
+    for shot_id, at in sorted(anchors.items(), key=lambda kv: (-kv[1], -order[kv[0]])):
         lines = place(lines, at, block_for(wanted[shot_id]))
-    # Place the new ones.
-    for shot in shots:
+    # Place the new ones. Last first: each goes to the top of its section,
+    # so this keeps two shots in one section in manifest order.
+    for shot in reversed(shots):
         if shot["id"] not in anchors:
             lines = place(lines, insertion_point(lines, shot, page), block_for(shot))
     out = "\n".join(lines)
@@ -194,8 +218,10 @@ def main() -> int:
 
     config = json.loads(SCREENS_JSON.read_text(encoding="utf-8"))
     shots = config["shots"]
+    dpr = float(config.get("device_pixel_ratio", 1.0))
     by_page: dict[str, list[dict]] = {}
     for shot in shots:
+        shot["_dpr"] = dpr
         for key in ("id", "page", "alt", "caption"):
             if not shot.get(key):
                 fail(f"screens.json: shot {shot.get('id', '?')} has no {key!r}")

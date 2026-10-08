@@ -14,9 +14,9 @@ applies_to: ["FlexRadio"]
 
 This page walks through connecting to a FlexRadio for the first time. AetherSDR also connects to other radio families, and has a demo mode that needs no radio at all; see [Supported Radios](./supported-radios.md) and [Demo Mode](./demo-mode.md).
 
-![AetherSDR main window in the default dark theme. The title bar shows a tab for the demo radio labelled Simulator (not on the air). The panadapter shows a green spectrum trace around 14.100 MHz with the slice A VFO flag at 14.100.000 USB, and the waterfall below it scrolls in blue. The right-hand applet panel shows the S-Meter, RX Controls, Demo Noise and TX Controls applets.](/img/screens/main-window.png)
+<img src="/img/screens/main-window.png" width="1600" alt="AetherSDR main window in the default dark theme. The title bar has three radio tabs, Hermes-Lite 2 available, FLX8600 connected with callsign KK7GWY, and the Simulator, then PC Audio and two volume sliders. The panadapter spans 14.150 to 14.350 MHz with several SSB signals in the trace, the slice A VFO flag at 14.250.000 and band-plan bars marking Phone Extra and Phone General; the waterfall below shows the SSB signals as speckled vertical columns. The applet panel on the right shows the S-Meter, RX Controls, TX Controls, Phone and Phone/CW applets. The status bar along the bottom shows the radio model and firmware, the nickname FLX8600, GPS lock, CPU and memory, PA temperature and voltage, network quality, and the UTC clock." />
 
-*The AetherSDR main window connected to the demo simulator: title bar along the top, panadapter and waterfall on the left, applet panel on the right, status bar along the bottom.*
+*The AetherSDR main window connected to a FLEX-8600 on 20 m: title bar along the top, panadapter and waterfall on the left, applet panel on the right, status bar along the bottom.*
 
 ## Requirements
 
@@ -26,9 +26,9 @@ This page walks through connecting to a FlexRadio for the first time. AetherSDR 
 
 ## Setup
 
-![Connect to Radio window. Three cards across the top read On This Network, Remote with SmartLink and Connect by IP, with On This Network selected. The Available radios list has one highlighted entry: AetherSDR Demo, Simulator (not on the air), DEMO, ready on your local network at 127.0.0.1. Below are a Connect Selected Radio button and checkboxes for the adaptive frame-rate throttle, connecting to the last radio on start-up, waking an Icom on connect and showing the AetherSDR demo simulator, with a Disconnect button at the bottom.](/img/screens/connect-dialog.png)
+<img src="/img/screens/connect-dialog.png" width="760" alt="Connect to Radio window. Three cards across the top read On This Network (selected), Remote with SmartLink and Connect by IP. The Available radios list holds three entries: Hermes-Lite 2, ready on your local network, highlighted, with its address blacked out; FLEX-8600 FLX8600 KK7GWY, shared radio on your network via multiFLEX at AetherSDR, USA; and AetherSDR Demo, Simulator (not on the air), DEMO, ready on your local network at 127.0.0.1. A Connect Selected Radio button and checkboxes for the adaptive frame-rate throttle, connecting to the last radio on start-up, waking an Icom on connect and showing the demo simulator follow, with Connected and a Disconnect button at the bottom." />
 
-*The Connect to Radio window with the AetherSDR demo simulator listed under On This Network.*
+*The Connect to Radio window, On This Network: every radio discovery found on the LAN. The addresses are blacked out.*
 
 1. **Launch AetherSDR.** The **Connect to Radio** window opens. You can reopen it at any time with **File → Connect to Radio...**, or from the **+** button beside the title bar's radio tabs.
 2. Choose **On This Network** ("Recommended for new users when the radio and computer are on the same LAN").

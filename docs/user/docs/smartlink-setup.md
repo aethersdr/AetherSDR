@@ -36,6 +36,10 @@ At the station, using SmartSDR for Windows:
 
 ## Connecting with SmartLink
 
+<img src="/img/screens/connect-smartlink-card.png" width="760" alt="Connect to Radio window with the Remote with SmartLink card selected. The SmartLink account group has empty Email and Password fields and a Sign In button, with the note Sign in to see radios at remote stations. The Remote radios group reads Remote radios appear here after SmartLink sign-in. Connection options for slower links with Use low bandwidth mode sits below." />
+
+*The Remote with SmartLink card, before signing in.*
+
 1. Open the connect panel (**File → Connect to Radio...**, or the **+** on the title bar's radio tabs).
 2. Choose **Remote with SmartLink**.
 3. In **SmartLink account**, enter your FlexRadio account email and password and click **Sign In**.

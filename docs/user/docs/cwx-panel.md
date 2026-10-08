@@ -28,6 +28,10 @@ Click the **CWX** indicator in the status bar at the bottom of the screen (or us
 
 The CWX panel and the [DVK Panel](./dvk-panel.md) share the same space — opening one closes the other.
 
+<img src="/img/screens/cwx-panel.png" width="250" alt="CWX panel along the left edge of the window: a large empty message area, a Type CW message... field, and Send, Live and Setup buttons with a Speed box at 30." />
+
+*The CWX panel, opened from CWX in the status bar with the TX slice in CW.*
+
 ### Sending text
 
 The panel has three views, chosen with the buttons at its top: **Send**, **Live** and **Setup** (see [Views](#views)). In **Send**, type text and send it; sent text appears as history bubbles above the entry line. In **Live**, characters are keyed as you type them.

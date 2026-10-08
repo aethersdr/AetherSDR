@@ -6,7 +6,7 @@ description: "Demo mode runs the full AetherSDR interface against a built-in sim
 
 Demo mode runs the full AetherSDR interface against a built-in simulator, so you can explore the app with no radio attached. It generates its own receive audio and a matching panadapter. **It cannot transmit.**
 
-![Demo Noise applet. Preset buttons birdie-hell, cw-in-noise, night-40m, noisy-qth, quiet-20m and storm sit above a list of noise sources, each with a toggle and level slider: CW tone, Voice (speech), White / AWGN, Pink / hiss, QRN crackle, Power-line, Static crash, Birdie carrier, SMPS hash and Woodpecker. A Fault Injection row below has High SWR, Drop Slice, Stall Scope, Disconnect, Malformed and Clear buttons.](/img/screens/demo-noise-applet.png)
+<img src="/img/screens/demo-noise-applet.png" width="248" alt="Demo Noise applet. Preset buttons birdie-hell, cw-in-noise, night-40m, noisy-qth, quiet-20m and storm sit above a list of noise sources, each with a toggle, a level slider and, for some, a second value: CW tone, Voice (speech), White / AWGN, Pink / hiss (lit), QRN crackle, Power-line, Static crash, Birdie carrier (lit), SMPS hash and Woodpecker. A Fault Injection row below has High SWR, Drop Slice, Stall Scope, Disconnect, Malformed and Clear buttons." />
 
 *The Demo Noise applet, shown only while connected to the demo simulator.*
 

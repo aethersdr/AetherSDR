@@ -41,6 +41,10 @@ press **Start**.
 
 The **Mode** selector offers **Wi-Fi (TCP)** and **USB**.
 
+<img src="/img/screens/ctr2-applet.png" width="248" alt="CTR2 Proxy applet. Mode is set to USB with a Rescan button, the USB selector reads Select CTR2 USB device, and the Radio row (blacked out here) sits beside a dimmed Start button. An amber hint reads Select the CTR2 USB device, followed by State: Stopped and traffic counters of 0 B to the radio and to the CTR2." />
+
+*The CTR2 Proxy applet before a CTR2 is selected. The radio's address is blacked out.*
+
 > **Check the mode every time.** On builds with USB support, USB is the
 > default and the choice is not saved. USB mode waits on a CTR2 USB firmware
 > release, so with current CTR2 firmware pick **Wi-Fi (TCP)** at every launch.

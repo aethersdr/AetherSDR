@@ -27,6 +27,10 @@ bandwidth marked.
 
 ### Running a sweep
 
+<img src="/img/screens/ant-panel-sweep.png" width="292" alt="The ANT panel open beside the overlay menu, with the ANT button lit. It shows RX ANT: ANT1, an RF Gain slider at 8 dB, a WNB button with its level at 90, then the AetherSweep buttons Start Sweep, Clear Sweep and Save CSV in amber, and a Limit range option with From and To frequency fields." />
+
+*The ANT panel: receive antenna, RF gain and wideband noise blanker, with the AetherSweep controls below.*
+
 1. Make the slice on the band you want to sweep the **TX slice**, with its
    panadapter visible.
 2. Open the panadapter overlay's **ANT** panel.

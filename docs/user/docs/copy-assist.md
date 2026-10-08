@@ -69,6 +69,10 @@ Choose **Remote server…** in the model picker and enter the endpoint URL (for 
 
 ### Opening Copy Assist
 
+<img src="/img/screens/copy-assist-panel.png" width="1340" alt="The bottom of the panadapter with the Copy Assist panel open below the waterfall. Its control row has a Disabled button, a settings gear, Buffer 20 s, Sens 80% and Silence 300 ms sliders, and A-, A+, a line-break button, Context and Clear. The transcript area is empty, with Disabled and Queue: 0.0 s at the bottom." />
+
+*The Copy Assist panel under the waterfall, before it is enabled.*
+
 - Click the **ASR** toggle in the status bar (between **CWX** and **DVK**), or
 - **Tools → Copy Assist**.
 
