@@ -5,6 +5,8 @@
 // licensed AGPL-3.0. AetherSDR is GPL-3.0; GPLv3 §13 permits the combination.
 // The ported code ships in the binary; the trained weights do not (download-on-
 // demand, SHA-256 pinned). See THIRD_PARTY_LICENSES for the AGPL-3.0 entry.
+// Modified for AetherSDR, 2026-09: per-character emissions with frame timing
+// (inferLogProbs, greedyEmissions); decode() is unchanged.
 
 #include <string>
 #include <vector>

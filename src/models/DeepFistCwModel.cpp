@@ -77,7 +77,7 @@ DeepFistCwModel::~DeepFistCwModel()
 }
 QString DeepFistCwModel::modelDirectory()
 {
-    // Development-only override in this opt-in prototype. No file picker or installer.
+    // Development override: a local verified bundle instead of the download.
     const QString overridePath = qEnvironmentVariable("AETHER_DEEPFIST_MODEL_DIR");
     return overridePath.isEmpty()
         ? QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)

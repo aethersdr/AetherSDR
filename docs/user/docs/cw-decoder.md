@@ -1,7 +1,7 @@
 ---
 title: "CW Decoder"
 slug: "/cw-decoder"
-description: "AetherSDR includes a built-in CW (Morse code) decoder powered by ggmorse (MIT license)."
+description: "AetherSDR includes a built-in CW (Morse code) decoder: ggmorse by default, with two optional neural decoders, DeepFist and DeepCW."
 status: "Supported"
 applies_to: ["FlexRadio", "Hermes-Lite 2 (experimental)", "Networked Icom (early; IC-7300MK2 supported)"]
 ---
@@ -13,6 +13,8 @@ applies_to: ["FlexRadio", "Hermes-Lite 2 (experimental)", "Networked Icom (early
 :::
 
 AetherSDR includes a built-in CW (Morse code) decoder powered by [ggmorse](https://github.com/ggerganov/ggmorse) (MIT license). It automatically detects the CW tone pitch and keying speed, and displays decoded text in real time in a panel below the waterfall. It can decode what you receive, what you send, or both.
+
+On Apple Silicon Macs, Linux and Windows you can also choose one of two neural decoders, **DeepFist** or **DeepCW**, which can copy weak or irregular signals that ggmorse misses. See [Choosing a decoder](#choosing-a-decoder).
 
 The decoder works on every radio family that has a CW mode: FlexRadio, the [Hermes-Lite 2](./hermes-lite-2.md), and [Networked Icom](./networked-icom.md) radios (it opens when an Icom slice is in CW).
 
@@ -37,6 +39,29 @@ Both appear in the same panel. Your own sending is shown in **cyan**, so it stan
 When the selected slice is in **CW** or **CWL**, the decode panel appears below the waterfall, and it hides again when you switch to another mode.
 
 Drag the grip on the panel's edge to resize it; the height is remembered. Right-click the text for font size and Clear.
+
+### Choosing a decoder
+
+The decoder selector in the panel's toolbar picks which decoder reads the received CW. Only the selected decoder runs. Your own sending (the **TX** toggle) is always decoded by ggmorse.
+
+| Decoder | Text appears | Typical use | Model |
+|---|---|---|---|
+| **ggmorse** (default) | About half a second after each character | Clean, steady signals | None; built in |
+| **DeepFist** | About 2 seconds behind the signal | Weak and hand-sent CW | Downloaded on first use, about 13 MB |
+| **DeepCW** | About 6–8 seconds behind the signal, a few characters at a time; it holds text back so later audio can correct it | Weak signals | Downloaded on first use, about 15 MB |
+
+No decoder is best on every signal. Try each on the signals you work.
+
+The neural decoders' models are not part of the AetherSDR download. The first time you select one, AetherSDR downloads its model from the model's own published source and checks it before use; the status beside the selector shows the progress. **Cancel** stops a download, and **Retry** appears if it fails. Once downloaded, the model is kept and works offline. If a model cannot be downloaded, the decoder shows **Model unavailable** and you can switch back to ggmorse.
+
+With a neural decoder selected:
+
+- **Sens**, the lock buttons and the Pitch and WPM ranges are unavailable; they apply to ggmorse only.
+- Characters are coloured by the model's own confidence, on the same green-to-red scale, and are never hidden.
+- Callsign contact cards come from ggmorse only.
+- **Zero Beat** is unavailable with DeepFist, which reports no pitch.
+
+The neural decoders are not available on Intel Macs; there the selector does not appear and ggmorse decodes as before.
 
 ### How it works
 
@@ -83,7 +108,8 @@ Decoded text is published to the MQTT topic `aethersdr/cw/decode`, one JSON mess
 
 | Control | What it does |
 |---|---|
-| **Stats** | Detected pitch (Hz) and speed (WPM) |
+| **Decoder** | ggmorse, DeepFist or DeepCW (Apple Silicon, Linux and Windows); see [Choosing a decoder](#choosing-a-decoder) |
+| **Stats** | Detected pitch (Hz) and speed (WPM); with a neural decoder, its status |
 | **Sens** | 0–100 (default 30). Hides low-confidence characters: 0 shows everything, higher values show only confident decodes. |
 | **🔒P** | Lock the decoder's pitch at the current value |
 | **🔒S** | Lock the decoder's speed at the current WPM |
@@ -108,6 +134,7 @@ Colours are based on ggmorse's cost function:
 ### Technical details
 
 - Library: [ggmorse](https://github.com/ggerganov/ggmorse) by Georgi Gerganov (MIT license)
+- Neural decoders: DeepFist ([n9bc/DeepFist](https://github.com/n9bc/DeepFist)) and DeepCW ([e04/deepcw-engine](https://github.com/e04/deepcw-engine), AGPL-3.0); both run with ONNX Runtime, and their models are downloaded, not bundled
 - Bundled directly — no external dependency
 - Runs on a dedicated worker thread — does not block audio playback
 - CPU usage: negligible

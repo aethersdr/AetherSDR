@@ -58,15 +58,16 @@ alone. MSVC flags and `Release` builds are unaffected.
 
 | Option | Default | Purpose and prerequisites |
 |---|---|---|
-| `ENABLE_DEEPFIST_EXPERIMENT` | OFF | Build the experimental DeepFist CW receive decoder. Requires ONNX Runtime at configure time (configuration fails without it) and a separate verified model bundle at runtime; see below. |
 | `ENABLE_RTL` | ON | Build the experimental receive-only RTL-SDR USB backend when both `librtlsdr` and single-precision FFTW (`fftw3f`) are found. Missing either disables the backend. |
 | `AETHER_HL2_TX_TXA` | ON | Select WDSP's TXA chain for the Hermes-Lite 2 SSB transmit modulator. OFF builds the in-tree phasing modulator. This choice has no runtime toggle. |
 
-**DeepFist:** enabling `-DENABLE_DEEPFIST_EXPERIMENT=ON` alone does not supply its
-model. The configured model-download URL defaults to empty. For developer
-qualification, the runtime environment variable `AETHER_DEEPFIST_MODEL_DIR`
-can point to the exact verified bundle; it is not a CMake switch. The required
-assets and distribution prerequisite are described in
+**Neural CW decoders:** DeepFist and DeepCW build whenever ONNX Runtime is
+found at configure time (Apple Silicon macOS, Linux and Windows; the pinned
+runtime has no Intel-macOS build), with no separate option. Neither model is
+bundled: each downloads on first use from its upstream source at a pinned size
+and SHA-256. For developer qualification, the runtime environment variables
+`AETHER_DEEPFIST_MODEL_DIR` and `AETHER_DEEPCW_MODEL_DIR` point at a local
+copy instead; they are not CMake switches. See
 [the DeepFist guide](docs/deepfist-cw-backend.md). ggmorse remains the default
 CW receive decoder.
 
@@ -148,7 +149,7 @@ the ASR library (`aetherasr`) sees.
 | `HAVE_NVIDIA_AFX` | `ENABLE_NVIDIA_AFX` on x86-64 Linux or Windows. |
 | `HAVE_MQTT` | `ENABLE_MQTT`. |
 | `HAVE_MQTT_TLS` | `MQTT_TLS`, and for the bundled library OpenSSL is found. |
-| `HAVE_DEEPFIST` | `ENABLE_DEEPFIST_EXPERIMENT`. |
+| `HAVE_DEEPFIST`, `HAVE_DEEPCW`, `HAVE_CW_RX_BACKENDS` | ONNX Runtime is found. |
 | `HAVE_MIDI` | Always; RtMidi is bundled. |
 | `HAVE_SERIALPORT`, `HAVE_WEBSOCKETS`, `HAVE_KEYCHAIN` | The Qt SerialPort, Qt WebSockets or QtKeychain package is found. |
 | `HAVE_DBUS` | Qt DBus is found on Linux or another non-Apple Unix; it is never looked for on macOS or Windows. |
@@ -176,7 +177,7 @@ Additional cache values accept a value rather than ON/OFF:
 | Setting | Default | Values and purpose |
 |---|---|---|
 | `AETHERSDR_SANITIZER` | `none` | `none`, `address`, `undefined`, `address,undefined`, or `thread`. Instruments the main CMake tree with a GNU-driver GCC/Clang build; MSVC and clang-cl are rejected, and so is combining `address` with `thread`. Adds `-g3 -fno-omit-frame-pointer` to every configuration, Release included. ExternalProject children need separate sanitizer flags. |
-| `DEEPFIST_MODEL_BASE_URL` | Empty | Published, versioned HTTPS directory for the exact DeepFist assets. See the distribution prerequisite in [the DeepFist guide](docs/deepfist-cw-backend.md). |
+| `DEEPFIST_MODEL_BASE_URL` | N9BC's `exp27_bt-champion` release | Versioned HTTPS directory holding the exact DeepFist model assets. The LICENSE asset carries its own pinned source. See [the DeepFist guide](docs/deepfist-cw-backend.md). |
 | `RADE_TAP_DIR` | `<build-directory>/rade_taps` | Directory for RADE WAV diagnostics; available when RADE and its taps are enabled. |
 | `AETHER_TEST_FFTW_TIMELIMIT` | `0.001` | Seconds FFTW may spend measuring each plan under test; an empty value allows unbounded measurement. |
 | `AETHER_SANITIZER_TIMEOUT_SCALE` | `4` | Positive integer. Multiplier applied to every test `TIMEOUT` when the build is sanitizer-instrumented (`AETHERSDR_SANITIZER` set, or `-fsanitize=` in the global C/C++ flags or in any configuration's `CMAKE_<LANG>_FLAGS_<CONFIG>`). An uninstrumented build keeps every limit exactly as written. |
