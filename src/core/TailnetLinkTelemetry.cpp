@@ -20,6 +20,8 @@ constexpr int kPollIntervalMs = 2000;
 constexpr int kTransferTimeoutMs = 3000;
 // Three missed polls: the shim stopped answering, or the tunnel went away.
 constexpr qint64 kStaleAfterMs = 6500;
+// A report is a few KB; a shim that sends more is not trusted to.
+constexpr qint64 kMaxReplyBytes = 256 * 1024;
 }  // namespace
 
 namespace tailnetshim {
@@ -37,12 +39,12 @@ std::optional<TailnetSessionReport> parseSessionReport(const QByteArray& json)
         return std::nullopt;
     }
     TailnetSessionReport r;
-    r.version = o.value(QStringLiteral("version")).toString();
-    r.path = o.value(QStringLiteral("path")).toString();
-    r.endpoint = o.value(QStringLiteral("endpoint")).toString();
-    r.relay = o.value(QStringLiteral("relay")).toString();
+    r.version = o.value(QStringLiteral("version")).toString().left(128);
+    r.path = o.value(QStringLiteral("path")).toString().left(128);
+    r.endpoint = o.value(QStringLiteral("endpoint")).toString().left(128);
+    r.relay = o.value(QStringLiteral("relay")).toString().left(128);
     r.rttMs = o.value(QStringLiteral("rtt_ms")).toDouble(-1.0);
-    r.rttVia = o.value(QStringLiteral("rtt_via")).toString();
+    r.rttVia = o.value(QStringLiteral("rtt_via")).toString().left(128);
     r.rttAgeS = o.value(QStringLiteral("rtt_age_s")).toDouble();
     r.pathChanges = o.value(QStringLiteral("path_changes")).toInt();
     r.pathSinceS = o.value(QStringLiteral("path_since_s")).toDouble();
@@ -90,6 +92,7 @@ TailnetLinkTelemetry::TailnetLinkTelemetry(QObject* parent)
     : QObject(parent)
 {
     m_nam.setTransferTimeout(kTransferTimeoutMs);
+    m_nam.setRedirectPolicy(QNetworkRequest::ManualRedirectPolicy);
     m_timer.setInterval(kPollIntervalMs);
     connect(&m_timer, &QTimer::timeout, this, &TailnetLinkTelemetry::poll);
 }
@@ -140,6 +143,12 @@ void TailnetLinkTelemetry::poll()
     url.setPort(kTailnetShimTelemetryPort);
     url.setPath(QStringLiteral("/v1/session"));
     m_reply = m_nam.get(QNetworkRequest(url));
+    connect(m_reply, &QNetworkReply::downloadProgress, m_reply.data(),
+            [reply = m_reply.data()](qint64 received, qint64) {
+        if (received > kMaxReplyBytes) {
+            reply->abort();
+        }
+    });
     connect(m_reply, &QNetworkReply::finished, this, [this, reply = m_reply.data()] {
         if (reply != m_reply) {
             return;

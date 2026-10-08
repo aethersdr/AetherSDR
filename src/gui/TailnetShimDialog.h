@@ -1,6 +1,8 @@
 #pragma once
 
 #include "CanonWindow.h"
+
+#include <QHostAddress>
 #include "core/TailnetShimClient.h"
 
 class QCheckBox;
@@ -39,12 +41,15 @@ private:
     void saveAllowList();
     void saveSharing();
     void signOut();
+    void onProvisioned(const QString& token, const TailnetShimStatus& status);
+    void onRequestFailed(const QString& operation, const QString& message, bool unauthorized);
 
     RadioModel* m_model{nullptr};
     TailnetShimClient m_client;
     QTimer* m_pollTimer{nullptr};
 
     QString m_radioSerial;
+    QHostAddress m_apiAddress;   // the radio's LAN address, where the API listens
     QString m_adminToken;
     QString m_tokenSaveError;   // why the keychain refused the token, if it did
     bool m_tokenLoaded{false};

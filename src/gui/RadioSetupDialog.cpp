@@ -4800,7 +4800,13 @@ QWidget* RadioSetupDialog::buildAudioTab()
         auto* compLayout = new QHBoxLayout(compGroup);
         compLayout->setSpacing(4);
 
+        // Never chosen: show what applies to this connection (Opus over a
+        // tailnet, uncompressed otherwise; RFC #6271 D4) without saving it.
         QString current = AppSettings::instance().value("AudioCompression", "None").toString();
+        if (!AppSettings::instance().contains(QStringLiteral("AudioCompression"))) {
+            current = (m_model->isConnected() && m_model->audioCompressionParam() == "opus")
+                ? QStringLiteral("Opus") : QStringLiteral("None");
+        }
 
         const QString btnStyle =
             "QPushButton { background: #1a2a3a; color: #c8d8e8; border: 1px solid #304050; "
@@ -4836,7 +4842,7 @@ QWidget* RadioSetupDialog::buildAudioTab()
         compLayout->addWidget(opusBtn);
         compLayout->addStretch();
 
-        auto* hint = new QLabel("Auto = Opus on SmartLink, uncompressed on LAN");
+        auto* hint = new QLabel("Auto = Opus on SmartLink or a tailnet, uncompressed on LAN");
         AetherSDR::ThemeManager::instance().applyStyleSheet(hint, "QLabel { color: {{color.text.label}}; font-size: 10px; }");
         compLayout->addWidget(hint);
 

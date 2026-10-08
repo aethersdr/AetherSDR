@@ -551,6 +551,7 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model,
     // The radio side's own view of a tailnet link, under the client's RTT.
     if (QVBoxLayout* latencyLayout = diagnosticsPanelLayout(latencyCard.first)) {
         m_overviewTunnelLatencyLabel = new QLabel;
+        m_overviewTunnelLatencyLabel->setTextFormat(Qt::PlainText);
         m_overviewTunnelLatencyLabel->setWordWrap(true);
         m_overviewTunnelLatencyLabel->setAccessibleName(QStringLiteral("Tunnel latency"));
         AetherSDR::ThemeManager::instance().applyStyleSheet(
@@ -843,6 +844,7 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model,
     auto addTunnelRow = [&](const QString& name, QLabel** label) {
         tunnelGrid->addWidget(new QLabel(name), tunnelRow, 0);
         *label = makeVal(QStringLiteral("--"));
+        (*label)->setTextFormat(Qt::PlainText);   // path, relay and version come from the shim
         (*label)->setAccessibleName(name.chopped(1));
         tunnelGrid->addWidget(*label, tunnelRow++, 1);
     };

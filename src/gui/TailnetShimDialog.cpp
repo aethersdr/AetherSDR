@@ -13,6 +13,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
+#include <QPointer>
 #include <QPushButton>
 #include <QStyle>
 #include <QTimer>
@@ -329,34 +330,8 @@ TailnetShimDialog::TailnetShimDialog(RadioModel* model, QWidget* parent)
         setBusy(false);
         showStatus(st);
     });
-    connect(&m_client, &TailnetShimClient::provisioned, this,
-            [this](const QString& token, const TailnetShimStatus& st) {
-        m_adminToken = token;
-        TailnetShimTokenStore::save(m_radioSerial, token, this,
-                                    [this](bool persisted, const QString& error) {
-            m_tokenSaveError = persisted ? QString() : error;
-            updateControls();
-        });
-        setBusy(false);
-        showStatus(st);
-        showMessage(tr("Joined. Connect remotely with Connect → Manual and the address %1.")
-                        .arg(st.tailnetIp),
-                    QStringLiteral("ok"));
-    });
-    connect(&m_client, &TailnetShimClient::requestFailed, this,
-            [this](const QString& operation, const QString& message, bool unauthorized) {
-        setBusy(false);
-        if (unauthorized) {
-            showError(tr("The container rejected this computer's admin token. To start over, "
-                         "remove and reinstall the remote-access container from the Waveforms "
-                         "list."));
-            return;
-        }
-        showError(message);
-        if (operation != QLatin1String("signout") && operation != QLatin1String("status")) {
-            refresh();
-        }
-    });
+    connect(&m_client, &TailnetShimClient::requestFailed,
+            this, &TailnetShimDialog::onRequestFailed);
 
     m_pollTimer = new QTimer(this);
     m_pollTimer->setInterval(3000);
@@ -365,6 +340,12 @@ TailnetShimDialog::TailnetShimDialog(RadioModel* model, QWidget* parent)
             m_client.fetchStatus();
         }
     });
+
+    // Status, errors and device names come from whatever answers on the
+    // radio's LAN address: never let Qt read them as rich text.
+    for (QLabel* label : findChildren<QLabel*>()) {
+        label->setTextFormat(Qt::PlainText);
+    }
 
     // Reachability: the provisioning API listens only on the radio's LAN
     // address. A radio reached over the tailnet itself (or any routed path
@@ -391,7 +372,22 @@ TailnetShimDialog::TailnetShimDialog(RadioModel* model, QWidget* parent)
         return;
     }
 
+    m_apiAddress = address;
     m_client.setRadioAddress(address);
+    // The window is for the radio it opened on. If that connection goes
+    // (or is replaced by another radio, which disconnects first), stop
+    // offering changes rather than send them to whatever is there now. A
+    // join already under way still finishes and saves its token.
+    connect(m_model, &RadioModel::connectionStateChanged, this, [this](bool connected) {
+        if (connected || !m_lanReachable) {
+            return;
+        }
+        m_lanReachable = false;
+        m_pollTimer->stop();
+        setStatusLine(tr("Unavailable"), QStringLiteral("idle"));
+        showError(tr("The radio disconnected. Reopen this window once it is connected again."));
+        updateControls();
+    });
     TailnetShimTokenStore::load(m_radioSerial, this, [this](const QString& token) {
         m_adminToken = token;
         m_tokenLoaded = true;
@@ -574,12 +570,77 @@ void TailnetShimDialog::join()
     }
     m_messageLabel->hide();
     setBusy(true, tr("Joining the tailnet…"));
-    m_client.provision(key, m_hostnameEdit->text().trimmed(),
-                       tailnetshim::splitAllowList(m_allowEdit->text()),
-                       tailnetshim::splitAllowList(m_extraDevicesEdit->text()),
-                       m_shareDiscoveredCheck->isChecked(), m_adminToken);
+    // The join can take a minute and rotates the admin token, so it must
+    // not depend on this window: closing it (or the Waveforms window that
+    // owns it) mid-join would otherwise drop the only copy of the new token
+    // and leave the container unchangeable until it is reinstalled. The
+    // request and the keychain save belong to the application; the window
+    // hears the outcome only if it is still open.
+    auto* transaction = new TailnetShimClient(qApp);
+    transaction->setRadioAddress(m_apiAddress);
+    const QPointer<TailnetShimDialog> window(this);
+    const QString serial = m_radioSerial;
+    connect(transaction, &TailnetShimClient::provisioned, qApp,
+            [transaction, window, serial](const QString& token, const TailnetShimStatus& st) {
+        TailnetShimTokenStore::save(serial, token, qApp,
+                                    [window](bool persisted, const QString& error) {
+            if (!persisted) {
+                qWarning("Remote access: the new admin token was not saved to the keychain: %s",
+                         qPrintable(error));
+            }
+            if (window) {
+                window->m_tokenSaveError = persisted ? QString() : error;
+                window->updateControls();
+            }
+        });
+        if (window) {
+            window->onProvisioned(token, st);
+        }
+        transaction->deleteLater();
+    });
+    connect(transaction, &TailnetShimClient::requestFailed, qApp,
+            [transaction, window](const QString& operation, const QString& message,
+                                  bool unauthorized) {
+        if (window) {
+            window->onRequestFailed(operation, message, unauthorized);
+        }
+        transaction->deleteLater();
+    });
+    transaction->provision(key, m_hostnameEdit->text().trimmed(),
+                           tailnetshim::splitAllowList(m_allowEdit->text()),
+                           tailnetshim::splitAllowList(m_extraDevicesEdit->text()),
+                           m_shareDiscoveredCheck->isChecked(), m_adminToken);
     // The key leaves this process in the request above and is kept nowhere.
     m_keyEdit->clear();
+}
+
+void TailnetShimDialog::onProvisioned(const QString& token, const TailnetShimStatus& st)
+{
+    m_adminToken = token;
+    setBusy(false);
+    showStatus(st);
+    showMessage(tr("Joined. Connect remotely with Connect → Manual and the address %1.")
+                    .arg(st.tailnetIp),
+                QStringLiteral("ok"));
+}
+
+void TailnetShimDialog::onRequestFailed(const QString& operation, const QString& message,
+                                        bool unauthorized)
+{
+    setBusy(false);
+    if (unauthorized) {
+        showError(tr("The container rejected this computer's admin token. To start over, "
+                     "remove and reinstall the remote-access container from the Waveforms "
+                     "list."));
+        return;
+    }
+    showError(message);
+    // After a failed sign-out the status says whether anything changed:
+    // still provisioned means the container kept the token, so this
+    // computer keeps it too (see signOut()).
+    if (operation != QLatin1String("status")) {
+        refresh();
+    }
 }
 
 void TailnetShimDialog::saveAllowList()

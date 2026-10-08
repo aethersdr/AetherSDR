@@ -4,6 +4,7 @@
 #include "models/AprsDigipeaterModel.h"
 #include <QPointer>
 #include <QScopeGuard>
+#include "core/AudioCompressionPolicy.h"
 #include "core/TailnetAddress.h"
 #include "core/GuiClientIdentityPolicy.h"
 #include "AntennaAliasStore.h"
@@ -5195,21 +5196,11 @@ void RadioModel::syncDigitalVoiceTxSelection(bool force)
 
 QString RadioModel::audioCompressionParam() const
 {
-    // A radio reached at a tailnet address is remote, often over a relayed,
-    // rate-limited path: it gets Opus by default, as SmartLink does under
-    // Auto (RFC #6271 ruling D4). An explicit choice always wins.
-    const bool tailnet = !isWan() && isTailnetAddress(radioAddress());
     auto& settings = AppSettings::instance();
-    if (!settings.contains(QStringLiteral("AudioCompression"))) {
-        // Never chosen: Opus over a tailnet, uncompressed otherwise (the
-        // long-standing default, SmartLink included).
-        return tailnet ? "opus" : "none";
-    }
-    const QString setting = settings.value("AudioCompression", "None").toString();
-    if (setting == "Opus") return "opus";
-    if (setting == "None") return "none";
-    // Auto: Opus when remote (SmartLink or a tailnet), uncompressed on the LAN
-    return (isWan() || tailnet) ? "opus" : "none";
+    const QString saved = settings.contains(QStringLiteral("AudioCompression"))
+        ? settings.value(QStringLiteral("AudioCompression"), QStringLiteral("None")).toString()
+        : QString();
+    return audioCompressionFor(saved, isWan(), !isWan() && isTailnetAddress(radioAddress()));
 }
 
 void RadioModel::sendCwKey(bool down, const QString& debugSource,

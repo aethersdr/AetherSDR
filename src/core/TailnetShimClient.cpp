@@ -14,9 +14,38 @@ namespace {
 // Provisioning waits for the shim's tailnet login, which takes seconds and
 // up to the shim's own 90 s limit; status is quick. One bound covers both.
 constexpr int kTransferTimeoutMs = 100'000;
+// A status or provisioning reply is a few KB. Anything that answers on the
+// radio's LAN address could send more; QNAM would buffer all of it before
+// it reaches the parser.
+constexpr qint64 kMaxReplyBytes = 256 * 1024;
 }  // namespace
 
 namespace tailnetshim {
+
+namespace {
+// Status strings are shown in the window. Real ones are short; the caps
+// keep a misbehaving or spoofed peer from filling it.
+constexpr int kMaxField = 256;
+constexpr int kMaxMessage = 512;
+constexpr int kMaxEntries = 64;
+
+QString field(const QJsonObject& o, const QString& key, int max = kMaxField)
+{
+    return o.value(key).toString().left(max);
+}
+
+QStringList fieldList(const QJsonObject& o, const QString& key)
+{
+    QStringList out;
+    for (const QJsonValue& v : o.value(key).toArray()) {
+        if (out.size() == kMaxEntries) {
+            break;
+        }
+        out << v.toString().left(kMaxField);
+    }
+    return out;
+}
+}  // namespace
 
 std::optional<TailnetShimStatus> statusFromObject(const QJsonObject& o)
 {
@@ -24,38 +53,33 @@ std::optional<TailnetShimStatus> statusFromObject(const QJsonObject& o)
         return std::nullopt;
     }
     TailnetShimStatus st;
-    st.version = o.value(QStringLiteral("version")).toString();
+    st.version = field(o, QStringLiteral("version"));
     st.provisioned = o.value(QStringLiteral("provisioned")).toBool();
-    st.state = o.value(QStringLiteral("state")).toString();
-    st.hostname = o.value(QStringLiteral("hostname")).toString();
-    st.tailnetIp = o.value(QStringLiteral("tailnet_ip")).toString();
-    st.dnsName = o.value(QStringLiteral("dns_name")).toString();
-    for (const QJsonValue& v : o.value(QStringLiteral("allow")).toArray()) {
-        st.allow << v.toString();
-    }
+    st.state = field(o, QStringLiteral("state"));
+    st.hostname = field(o, QStringLiteral("hostname"));
+    st.tailnetIp = field(o, QStringLiteral("tailnet_ip"));
+    st.dnsName = field(o, QStringLiteral("dns_name"));
+    st.allow = fieldList(o, QStringLiteral("allow"));
     st.sessions = o.value(QStringLiteral("sessions")).toInt();
-    st.lastError = o.value(QStringLiteral("last_error")).toString();
-    for (const QJsonValue& v : o.value(QStringLiteral("routes")).toArray()) {
-        st.routes << v.toString();
-    }
+    st.lastError = field(o, QStringLiteral("last_error"), kMaxMessage);
+    st.routes = fieldList(o, QStringLiteral("routes"));
     st.shareDiscovered = o.value(QStringLiteral("share_discovered")).toBool(true);
     for (const QJsonValue& v : o.value(QStringLiteral("discovered_devices")).toArray()) {
+        if (st.discovered.size() == kMaxEntries) {
+            break;
+        }
         const QJsonObject d = v.toObject();
         TailnetShimDevice dev;
-        dev.kind = d.value(QStringLiteral("kind")).toString();
-        dev.name = d.value(QStringLiteral("name")).toString();
-        dev.ip = d.value(QStringLiteral("ip")).toString();
+        dev.kind = field(d, QStringLiteral("kind"));
+        dev.name = field(d, QStringLiteral("name"));
+        dev.ip = field(d, QStringLiteral("ip"));
         dev.port = d.value(QStringLiteral("port")).toInt();
         if (!dev.ip.isEmpty()) {
             st.discovered << dev;
         }
     }
-    for (const QJsonValue& v : o.value(QStringLiteral("advertised_routes")).toArray()) {
-        st.advertisedRoutes << v.toString();
-    }
-    for (const QJsonValue& v : o.value(QStringLiteral("approved_routes")).toArray()) {
-        st.approvedRoutes << v.toString();
-    }
+    st.advertisedRoutes = fieldList(o, QStringLiteral("advertised_routes"));
+    st.approvedRoutes = fieldList(o, QStringLiteral("approved_routes"));
     return st;
 }
 
@@ -87,7 +111,7 @@ QString parseError(const QByteArray& json)
 {
     const QJsonDocument doc = QJsonDocument::fromJson(json);
     if (doc.isObject()) {
-        const QString e = doc.object().value(QStringLiteral("error")).toString();
+        const QString e = field(doc.object(), QStringLiteral("error"), kMaxMessage);
         if (!e.isEmpty()) {
             return e;
         }
@@ -153,6 +177,9 @@ TailnetShimClient::TailnetShimClient(QObject* parent)
     : QObject(parent)
 {
     m_nam.setTransferTimeout(kTransferTimeoutMs);
+    // The API never redirects; following one would carry the admin token
+    // in its Authorization header to wherever it pointed.
+    m_nam.setRedirectPolicy(QNetworkRequest::ManualRedirectPolicy);
 }
 
 QNetworkReply* TailnetShimClient::send(const QString& method, const QString& path,
@@ -179,6 +206,11 @@ QNetworkReply* TailnetShimClient::send(const QString& method, const QString& pat
 
 void TailnetShimClient::handle(QNetworkReply* reply, const QString& operation)
 {
+    connect(reply, &QNetworkReply::downloadProgress, reply, [reply](qint64 received, qint64) {
+        if (received > kMaxReplyBytes) {
+            reply->abort();
+        }
+    });
     connect(reply, &QNetworkReply::finished, this, [this, reply, operation] {
         reply->deleteLater();
         const int code = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();

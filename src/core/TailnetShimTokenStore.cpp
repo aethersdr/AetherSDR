@@ -91,6 +91,10 @@ void TailnetShimTokenStore::save(const QString& radioSerial, const QString& toke
 void TailnetShimTokenStore::load(const QString& radioSerial, QObject* context,
                                  std::function<void(const QString&)> callback)
 {
+    // As save() does: with no context the callback still runs, on the app.
+    if (!context) {
+        context = QCoreApplication::instance();
+    }
     const QString key = keyFor(radioSerial);
     const QString session = sessionTokens().value(key);
 #ifdef HAVE_KEYCHAIN

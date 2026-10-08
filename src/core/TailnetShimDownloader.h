@@ -26,6 +26,11 @@ public:
     static QString verifyFile(const QString& path, const QByteArray& expectedSha256,
                               qint64 expectedSize);
 
+    // Moves a finished download (`part`) to `target` only if the bytes on
+    // disk verify; otherwise deletes it. Empty on success, otherwise why not.
+    static QString promoteVerified(const QString& part, const QString& target,
+                                   const QByteArray& expectedSha256, qint64 expectedSize);
+
     // Where the verified image is cached.
     static QString cachePath();
 

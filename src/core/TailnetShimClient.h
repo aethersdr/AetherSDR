@@ -67,8 +67,10 @@ QStringList splitAllowList(const QString& text);
 
 // Talks to the shim's provisioning API over the LAN. The auth key passes
 // through provision() and is not retained anywhere. The admin token is
-// returned to the caller to store (TailnetShimTokenStore), and is only
-// placed in the Authorization header of a request.
+// returned to the caller to store (TailnetShimTokenStore). Both cross the LAN
+// in the clear (plain HTTP to the radio's LAN address, as RFC #6271 §6 and
+// ruling D3 accept): the key is single-use and spent within seconds, and the
+// API refuses callers that aren't on a private LAN.
 class TailnetShimClient : public QObject {
     Q_OBJECT
 public:

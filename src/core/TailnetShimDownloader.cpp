@@ -96,7 +96,9 @@ void TailnetShimDownloader::onReadyRead()
         return;
     }
     m_hash.addData(chunk);
-    m_part.write(chunk);
+    if (m_part.write(chunk) != chunk.size()) {
+        fail(tr("Cannot write the downloaded image: %1.").arg(m_part.errorString()));
+    }
 }
 
 void TailnetShimDownloader::onFinished()
@@ -123,8 +125,15 @@ void TailnetShimDownloader::onFinished()
         }
         return;
     }
+    const bool flushed = m_part.flush();
+    const QString flushError = m_part.errorString();
     m_part.close();
     const QString part = m_part.fileName();
+    if (!flushed) {
+        QFile::remove(part);
+        emit failed(tr("Cannot write the downloaded image: %1.").arg(flushError));
+        return;
+    }
     if (m_received != TailnetShimRelease::kSize
         || m_hash.result().toHex() != QByteArray(TailnetShimRelease::kSha256)) {
         QFile::remove(part);
@@ -132,15 +141,35 @@ void TailnetShimDownloader::onFinished()
                        "(size or SHA-256), so it was discarded and nothing was installed."));
         return;
     }
-    const QString target = cachePath();
+    const QString error = promoteVerified(part, cachePath(),
+                                          QByteArray(TailnetShimRelease::kSha256),
+                                          TailnetShimRelease::kSize);
+    if (!error.isEmpty()) {
+        emit failed(error);
+        return;
+    }
+    emit ready(cachePath());
+}
+
+QString TailnetShimDownloader::promoteVerified(const QString& part, const QString& target,
+                                               const QByteArray& expectedSha256,
+                                               qint64 expectedSize)
+{
+    // The network bytes were hashed as they arrived; this checks the bytes
+    // that actually reached the disk, which a full disk or an I/O error can
+    // make differ.
+    const QString why = verifyFile(part, expectedSha256, expectedSize);
+    if (!why.isEmpty()) {
+        QFile::remove(part);
+        return tr("The saved image does not match the release AetherSDR expects (%1), so it "
+                  "was discarded and nothing was installed.").arg(why);
+    }
     QFile::remove(target);
     if (!QFile::rename(part, target)) {
         QFile::remove(part);
-        emit failed(tr("Cannot save the verified image to %1.")
-                        .arg(QDir::toNativeSeparators(target)));
-        return;
+        return tr("Cannot save the verified image to %1.").arg(QDir::toNativeSeparators(target));
     }
-    emit ready(target);
+    return {};
 }
 
 void TailnetShimDownloader::cancel()

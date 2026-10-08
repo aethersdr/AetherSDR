@@ -4,6 +4,7 @@
 // that turn operator text into a hostname and an allowlist stay in the
 // shim's accepted alphabet (tools/flex-tailnet-shim/api.go).
 
+#include "core/AudioCompressionPolicy.h"
 #include "core/TailnetAddress.h"
 #include "core/TailnetLinkTelemetry.h"
 #include "core/TailnetShimClient.h"
@@ -13,6 +14,7 @@
 #include <QCryptographicHash>
 #include <QTemporaryDir>
 
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 
@@ -185,7 +187,11 @@ int main(int argc, char** argv)
         ok &= expect(qFuzzyCompare(tailnetshim::tunnelBreakPercent(200, 2, 0, 0), 1.0),
                      "no radio count: everything the client saw");
 
-        // Polling follows the radio's address: tailnet only.
+        // Polling follows the radio's address: tailnet only. Starting the
+        // poller issues one request, but nothing here runs an event loop, so
+        // it never leaves the process and is aborted when the address
+        // clears. Keep it that way: a processEvents() above this would make
+        // this a network test.
         TailnetLinkTelemetry poller;
         poller.setRadioAddress(QHostAddress(QStringLiteral("192.168.1.20")));
         ok &= expect(!poller.isPolling() && !poller.current(), "LAN radio: idle");
@@ -193,6 +199,63 @@ int main(int argc, char** argv)
         ok &= expect(poller.isPolling(), "tailnet radio: polling");
         poller.setRadioAddress(QHostAddress());
         ok &= expect(!poller.isPolling() && !poller.current(), "disconnect: idle and cleared");
+    }
+
+    // A finished download reaches the cache only if the bytes on disk verify
+    // (a full disk can leave fewer than the network delivered).
+    {
+        QTemporaryDir dir;
+        const QByteArray image("the pinned image bytes");
+        const QByteArray sha = QCryptographicHash::hash(image, QCryptographicHash::Sha256).toHex();
+        const QString part = dir.filePath(QStringLiteral("image.part"));
+        const QString target = dir.filePath(QStringLiteral("image.tar.gz"));
+        auto writeFile = [](const QString& path, const QByteArray& bytes) {
+            QFile f(path);
+            return f.open(QIODevice::WriteOnly) && f.write(bytes) == bytes.size();
+        };
+        ok &= expect(writeFile(part, image.left(5)), "truncated part written");
+        ok &= expect(!TailnetShimDownloader::promoteVerified(part, target, sha, image.size()).isEmpty(),
+                     "a short write on disk is refused");
+        ok &= expect(!QFile::exists(part) && !QFile::exists(target),
+                     "the refused part is deleted and nothing is cached");
+        ok &= expect(writeFile(part, image), "complete part written");
+        ok &= expect(TailnetShimDownloader::promoteVerified(part, target, sha, image.size()).isEmpty(),
+                     "verified bytes are promoted");
+        ok &= expect(QFile::exists(target) && !QFile::exists(part), "promoted to the cache path");
+    }
+
+    // RFC #6271 D4: which compression a session asks for.
+    {
+        const QString none = QStringLiteral("none");
+        const QString opus = QStringLiteral("opus");
+        ok &= expect(audioCompressionFor({}, false, false) == none, "never chosen, LAN: uncompressed");
+        ok &= expect(audioCompressionFor({}, true, false) == none, "never chosen, SmartLink: uncompressed");
+        ok &= expect(audioCompressionFor({}, false, true) == opus, "never chosen, tailnet: Opus");
+        ok &= expect(audioCompressionFor(QStringLiteral("None"), false, true) == none,
+                     "an explicit Uncompressed wins over a tailnet");
+        ok &= expect(audioCompressionFor(QStringLiteral("Opus"), false, false) == opus,
+                     "an explicit Opus wins on the LAN");
+        ok &= expect(audioCompressionFor(QStringLiteral("Auto"), false, false) == none, "Auto, LAN");
+        ok &= expect(audioCompressionFor(QStringLiteral("Auto"), true, false) == opus, "Auto, SmartLink");
+        ok &= expect(audioCompressionFor(QStringLiteral("Auto"), false, true) == opus, "Auto, tailnet");
+    }
+
+    // Strings from the container are capped before they reach the window.
+    {
+        const QString huge(10000, QLatin1Char('x'));
+        QJsonObject o{{QStringLiteral("version"), QStringLiteral("0.4.0")},
+                      {QStringLiteral("state"), QStringLiteral("running")},
+                      {QStringLiteral("hostname"), huge},
+                      {QStringLiteral("last_error"), huge}};
+        QJsonArray allow;
+        for (int i = 0; i < 500; ++i) {
+            allow.append(QStringLiteral("tag:t%1").arg(i));
+        }
+        o.insert(QStringLiteral("allow"), allow);
+        const auto capped = tailnetshim::parseStatus(QJsonDocument(o).toJson());
+        ok &= expect(capped && capped->hostname.size() <= 256 && capped->lastError.size() <= 512
+                         && capped->allow.size() <= 64,
+                     "oversized status strings and lists are capped");
     }
 
     return ok ? 0 : 1;
