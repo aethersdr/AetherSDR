@@ -4,6 +4,7 @@
 // panFollowVfo()/revealFrequencyIfNeeded().
 
 #include "MainWindow.h"
+#include "StatusIndicator.h"
 #include "models/CwDecodeSettings.h"
 #include "PeripheralAuthStore.h"
 #include "core/backends/AutoRfGainControl.h"
@@ -4373,6 +4374,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             m_tnfIndicator->setStyleSheet(on
                 ? "QLabel { color: #00b4d8; font-weight: bold; font-size: 24px; }"
                 : "QLabel { color: #404858; font-weight: bold; font-size: 24px; }");
+            StatusIndicator::setCheckedFor(m_tnfIndicator, on);
         });
 
     // FDX indicator style update
@@ -4383,6 +4385,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             m_fdxIndicator->setStyleSheet(fdx
                 ? "QLabel { color: #00b4d8; font-weight: bold; font-size: 24px; }"
                 : "QLabel { color: #404858; font-weight: bold; font-size: 24px; }");
+            StatusIndicator::setCheckedFor(m_fdxIndicator, fdx);
         });
     connect(sw, &SpectrumWidget::tnfCreateRequested,   tnf, &TnfModel::createTnf,
             Qt::UniqueConnection);
@@ -7305,6 +7308,16 @@ void MainWindow::wireMeters()
         stateLbl->setStyleSheet(
             QString("QLabel { color: %1; font-size:11px; }").arg(color));
         stateLbl->setText(state);
+        // The TUN/AMP container is the keyboard target; its description leads
+        // with the state, which the colour alone otherwise carries.
+        if (QWidget* container = stateLbl->parentWidget()) {
+            const QString cycle = container->property("aetherStateCycle").toString();
+            const QString described = cycle.isEmpty() ? state
+                                                      : QStringLiteral("%1. %2").arg(state, cycle);
+            if (container->accessibleDescription() != described) {
+                container->setAccessibleDescription(described);
+            }
+        }
     };
 
     auto updateTgxlStyle = [this, setIndicatorHtml]() {

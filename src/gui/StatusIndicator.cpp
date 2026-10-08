@@ -25,6 +25,16 @@ public:
     {
     }
 
+    QAccessible::State state() const override
+    {
+        QAccessible::State s = QAccessibleWidget::state();
+        if (const StatusIndicator* helper = StatusIndicator::of(widget())) {
+            s.checkable = helper->isCheckable();
+            s.checked = helper->isCheckable() && helper->isChecked();
+        }
+        return s;
+    }
+
     QStringList actionNames() const override
     {
         return QStringList{pressAction()} + QAccessibleWidget::actionNames();
@@ -42,8 +52,14 @@ public:
     }
 };
 
-QAccessibleInterface* statusIndicatorFactory(const QString&, QObject* object)
+QAccessibleInterface* statusIndicatorFactory(const QString& className, QObject* object)
 {
+    // Qt asks every factory once per level of the object's class chain; only
+    // the most-derived level can be an indicator, so every other level (and
+    // every other object in the app) skips the property lookup.
+    if (!object || className != QLatin1String(object->metaObject()->className())) {
+        return nullptr;
+    }
     auto* widget = qobject_cast<QWidget*>(object);
     if (widget && StatusIndicator::of(widget)) {
         return new StatusIndicatorAccessible(widget);
@@ -70,11 +86,15 @@ StatusIndicator* StatusIndicator::attach(QWidget* widget)
     // With accessibility already active, Qt may have created and cached the
     // widget's plain interface (setAccessibleName() does so). The cache is
     // consulted before factories, so drop it; the next query builds the
-    // Button. ObjectCreated tells an assistive client that already saw the
-    // old object to look again.
+    // Button. ObjectDestroyed then ObjectCreated tell an assistive client that
+    // already saw the old object to let it go and look again.
     if (QAccessible::isActive()) {
         if (QAccessibleInterface* cached = QAccessible::queryAccessibleInterface(widget)) {
             if (cached->role() != QAccessible::Button) {
+                // Retire the old object for clients holding its id, then
+                // announce the Button that replaces it.
+                QAccessibleEvent destroyed(cached, QAccessible::ObjectDestroyed);
+                QAccessible::updateAccessibility(&destroyed);
                 QAccessible::deleteAccessibleInterface(QAccessible::uniqueId(cached));
                 QAccessibleEvent created(widget, QAccessible::ObjectCreated);
                 QAccessible::updateAccessibility(&created);
@@ -114,6 +134,32 @@ void StatusIndicator::activate()
     }
 }
 
+void StatusIndicator::setCheckable(bool checkable)
+{
+    m_checkable = checkable;
+}
+
+void StatusIndicator::setChecked(bool checked)
+{
+    if (m_checked == checked) {
+        return;
+    }
+    m_checked = checked;
+    if (m_checkable && QAccessible::isActive()) {
+        QAccessible::State changed;
+        changed.checked = true;
+        QAccessibleStateChangeEvent event(m_widget, changed);
+        QAccessible::updateAccessibility(&event);
+    }
+}
+
+void StatusIndicator::setCheckedFor(QWidget* widget, bool checked)
+{
+    if (StatusIndicator* helper = of(widget)) {
+        helper->setChecked(checked);
+    }
+}
+
 void StatusIndicator::placeFocusBar()
 {
     m_focusBar->setGeometry(0, m_widget->height() - kFocusBarHeight,
@@ -130,7 +176,9 @@ bool StatusIndicator::eventFilter(QObject* watched, QEvent* event)
     case QEvent::KeyPress: {
         const auto* keyEvent = static_cast<QKeyEvent*>(event);
         const int key = keyEvent->key();
-        if (key == Qt::Key_Return || key == Qt::Key_Enter || key == Qt::Key_Space) {
+        // Not Space: MainWindow's app-level filter binds it to PTT (Hold), and
+        // it runs before this one, so Space would key the radio, not this.
+        if (key == Qt::Key_Return || key == Qt::Key_Enter) {
             // One action per press: these toggle panels and cycle TUN/AMP, so
             // a held key's auto-repeat is consumed, not acted on.
             if (!keyEvent->isAutoRepeat()) {
