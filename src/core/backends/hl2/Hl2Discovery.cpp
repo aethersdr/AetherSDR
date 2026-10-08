@@ -48,38 +48,34 @@ void enableBroadcast(QUdpSocket& s) noexcept
 
 }  // namespace
 
-void DiscoveryNotices::beginRefresh()
-{
-    m_bindFailuresNow.clear();
-}
-
 void DiscoveryNotices::bindFailed(const QString& interfaceName,
                                   const QHostAddress& address,
                                   const QString& error)
 {
     const QString key = interfaceName + QLatin1Char(' ') + address.toString();
-    if (m_bindFailuresNow.contains(key))
-        return;
-    m_bindFailuresNow.insert(key);
     if (m_bindFailures.contains(key))
         return;   // already reported, and it has not bound since
+    m_bindFailures.insert(key);
     qCWarning(lcDiscovery).noquote()
         << QStringLiteral("HL2 discovery: cannot bind %1 %2: %3")
                .arg(interfaceName, address.toString(), error);
 }
 
+void DiscoveryNotices::bindSucceeded(const QString& interfaceName,
+                                     const QHostAddress& address)
+{
+    m_bindFailures.remove(interfaceName + QLatin1Char(' ') + address.toString());
+}
+
 void DiscoveryNotices::endRefresh(int socketCount, int interfaceCount)
 {
-    // A failure absent from this refresh is forgotten, so a recurrence logs.
-    m_bindFailures = m_bindFailuresNow;
     m_interfaceCount = interfaceCount;
     if (socketCount > 0) {
         m_noSocketReported = false;
     } else if (!m_noSocketReported) {
         m_noSocketReported = true;
         qCWarning(lcDiscovery).noquote()
-            << QStringLiteral("HL2 discovery: no usable IPv4 interface; "
-                              "no probe can be sent");
+            << QStringLiteral("HL2 discovery: no usable IPv4 interface; no probe can be sent");
     }
 }
 
@@ -91,7 +87,8 @@ void DiscoveryNotices::sweepClosed(bool answered)
     }
     if (++m_silentSweeps != kSilentSweepsBeforeWarning)
         return;
-    qCWarning(lcDiscovery).noquote()
+    // Info, not a warning: an install without an HL2 is silent by design.
+    qCInfo(lcDiscovery).noquote()
         << QStringLiteral("HL2 discovery: no Hermes-Lite 2 answered %1 sweeps on %2 %3")
                .arg(kSilentSweepsBeforeWarning)
                .arg(m_interfaceCount)
@@ -277,7 +274,6 @@ void Hl2Discovery::refreshSockets()
         socket->deleteLater();
     }
     m_sockets.clear();
-    m_notices.beginRefresh();
     QSet<QString> boundInterfaces;
 
     for (const QNetworkInterface& iface : QNetworkInterface::allInterfaces()) {
@@ -304,7 +300,8 @@ void Hl2Discovery::refreshSockets()
             connect(socket, &QUdpSocket::readyRead,
                     this, &Hl2Discovery::onReadyRead);
             m_sockets.append(socket);
-            boundInterfaces.insert(iface.name());
+            m_notices.bindSucceeded(iface.humanReadableName(), local);
+            boundInterfaces.insert(iface.humanReadableName());
         }
     }
     m_notices.endRefresh(static_cast<int>(m_sockets.size()),

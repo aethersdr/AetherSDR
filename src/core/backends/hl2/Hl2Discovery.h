@@ -26,17 +26,17 @@ public:
     // 3 sweeps at Hl2Discovery's default 5000 ms interval: 15 s of silence.
     static constexpr int kSilentSweepsBeforeWarning = 3;
 
-    void beginRefresh();
     void bindFailed(const QString& interfaceName, const QHostAddress& address,
                     const QString& error);
+    // A logged failure logs again only after this pair has bound once.
+    void bindSucceeded(const QString& interfaceName, const QHostAddress& address);
     void endRefresh(int socketCount, int interfaceCount);
     // A sweep's interval ended; `answered` is true if any HL2 replied to it.
     void sweepClosed(bool answered);
     void reset();
 
 private:
-    QSet<QString> m_bindFailures;       // failures already logged
-    QSet<QString> m_bindFailuresNow;    // failures in the refresh under way
+    QSet<QString> m_bindFailures;       // failures logged and not bound since
     int m_interfaceCount = 0;
     int m_silentSweeps = 0;
     bool m_noSocketReported = false;
