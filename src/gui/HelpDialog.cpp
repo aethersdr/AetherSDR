@@ -10,7 +10,9 @@
 #include <QPushButton>
 #include <QShortcut>
 #include <QTextBrowser>
+#include <QTextBlock>
 #include <QTextCursor>
+#include <QTextDocument>
 #include <QVBoxLayout>
 #include "core/ThemeManager.h"
 
@@ -181,6 +183,12 @@ void HelpDialog::buildUI(const QString& resourcePath)
         "code { color: #d8e4ee; background-color: #152230; }"
         "a { color: #00b4d8; text-decoration: none; }");
     m_browser->setMarkdown(loadMarkdown(resourcePath));
+    // The Markdown importer colours links from the palette, not the default
+    // stylesheet, which left them dark blue on the dark page. Use the theme's
+    // link colour, as the About window does, and follow theme changes.
+    applyLinkColour();
+    connect(&AetherSDR::ThemeManager::instance(), &AetherSDR::ThemeManager::themeChanged,
+            this, &HelpDialog::applyLinkColour);
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_browser, "QTextBrowser {"
         "  background: {{color.background.0}};"
         "  color: #d8e4ee;"
@@ -272,6 +280,34 @@ void HelpDialog::buildUI(const QString& resourcePath)
     layout->addWidget(footer);
 
     AetherSDR::ThemeManager::instance().applyStyleSheet(this, "HelpDialog { background: {{color.background.0}}; }");
+}
+
+void HelpDialog::applyLinkColour()
+{
+    if (!m_browser)
+        return;
+
+    QTextDocument* doc = m_browser->document();
+    // Collect first: merging a format can split or join the fragments being
+    // iterated.
+    QList<QPair<int, int>> anchors;
+    for (QTextBlock block = doc->begin(); block.isValid(); block = block.next()) {
+        for (auto it = block.begin(); !it.atEnd(); ++it) {
+            const QTextFragment fragment = it.fragment();
+            if (fragment.isValid() && fragment.charFormat().isAnchor())
+                anchors.append({fragment.position(), fragment.length()});
+        }
+    }
+
+    QTextCharFormat linkFormat;
+    linkFormat.setForeground(AetherSDR::ThemeManager::instance().color(
+        m_browser, QStringLiteral("color.canon.cyan")));
+    for (const auto& [position, length] : anchors) {
+        QTextCursor cursor(doc);
+        cursor.setPosition(position);
+        cursor.setPosition(position + length, QTextCursor::KeepAnchor);
+        cursor.mergeCharFormat(linkFormat);
+    }
 }
 
 void HelpDialog::focusFindField()
