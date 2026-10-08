@@ -116,6 +116,11 @@ QTreeWidget#networkDiagnosticsNavigation::branch {
     border-image: none;
     background: transparent;
 }
+QTreeWidget#networkDiagnosticsNavigation::branch:selected {
+    /* No indicator in the indent: the row's selection is painted under the
+       branch, so a transparent branch would show it as a notch. */
+    background: {{color.canon.nested}};
+}
 QTreeWidget#networkDiagnosticsNavigation::item {
     min-height: 38px;
     padding: 3px 9px;
@@ -375,8 +380,7 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model,
     navigation->setObjectName(QStringLiteral("networkDiagnosticsNavigation"));
     navigation->setHeaderHidden(true);
     navigation->setRootIsDecorated(false);
-    // Match Radio Setup's hierarchy cue: the child indent leaves a narrow
-    // accent notch at the leading edge of the selected page.
+    // Pages sit indented under their category headers.
     navigation->setIndentation(14);
     navigation->setMinimumWidth(220);
     navigation->setMaximumWidth(310);
