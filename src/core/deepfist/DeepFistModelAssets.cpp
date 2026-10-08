@@ -1,4 +1,5 @@
 #include "DeepFistModelAssets.h"
+#include "core/NetworkDiagnostics.h"
 
 #include <QCryptographicHash>
 #include <QDir>
@@ -144,6 +145,7 @@ void DeepFistModelAssets::download()
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
     request.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("AetherSDR-DeepFist"));
     m_reply = m_network->get(request);
+    NetworkDiagnostics::watch(m_reply, "DeepFist model download");
     m_reply->setReadBufferSize(64 * 1024);
     connect(m_reply, &QNetworkReply::readyRead, this, &DeepFistModelAssets::readAvailable);
     connect(m_reply, &QNetworkReply::finished, this, &DeepFistModelAssets::finishDownload);

@@ -56,9 +56,14 @@ Name: "{autodesktop}\AetherSDR"; Filename: "{app}\AetherSDR.exe"; Tasks: desktop
 
 [Run]
 ; Keep the established per-user install scope. Elevate only this program-scoped
-; firewall update, replacing any prior rule in one UAC operation.
-Filename: "{cmd}"; Parameters: "/D /C ""netsh advfirewall firewall delete rule name=""AetherSDR D-STAR Waveform RX"" >NUL 2>&1 & netsh advfirewall firewall add rule name=""AetherSDR D-STAR Waveform RX"" dir=in action=allow program=""{app}\aether-dv-waveform.exe"" enable=yes profile=any protocol=UDP"""; WorkingDir: "{sys}"; Verb: "runas"; StatusMsg: "Configuring Windows Firewall for D-STAR reception..."; Flags: shellexec runhidden waituntilterminated; Check: FileExists(ExpandConstant('{app}\aether-dv-waveform.exe'))
+; firewall update, replacing any prior rules in one UAC operation. Deleting
+; every rule for AetherSDR.exe first also removes the block rule Windows leaves
+; behind when its firewall prompt was dismissed: a block rule beats an allow.
+; netsh does not require the program to exist, so the D-STAR rule needs no
+; separate check.
+Filename: "{cmd}"; Parameters: "/D /C ""netsh advfirewall firewall delete rule name=""AetherSDR D-STAR Waveform RX"" >NUL 2>&1 & netsh advfirewall firewall add rule name=""AetherSDR D-STAR Waveform RX"" dir=in action=allow program=""{app}\aether-dv-waveform.exe"" enable=yes profile=any protocol=UDP & netsh advfirewall firewall delete rule name=all program=""{app}\AetherSDR.exe"" >NUL 2>&1 & netsh advfirewall firewall add rule name=""AetherSDR (TCP-In)"" dir=in action=allow program=""{app}\AetherSDR.exe"" enable=yes profile=any protocol=TCP & netsh advfirewall firewall add rule name=""AetherSDR (UDP-In)"" dir=in action=allow program=""{app}\AetherSDR.exe"" enable=yes profile=any protocol=UDP"""; WorkingDir: "{sys}"; Verb: "runas"; StatusMsg: "Configuring Windows Firewall for AetherSDR..."; Flags: shellexec runhidden waituntilterminated
 Filename: "{app}\AetherSDR.exe"; Description: "Launch AetherSDR"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
 Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""AetherSDR D-STAR Waveform RX"""; Verb: "runas"; Flags: shellexec runhidden waituntilterminated; RunOnceId: "RemoveDStarWaveformFirewallRule"
+Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=all program=""{app}\AetherSDR.exe"""; Verb: "runas"; Flags: shellexec runhidden waituntilterminated; RunOnceId: "RemoveAetherSdrFirewallRules"

@@ -50,6 +50,7 @@ These are the logging categories listed in **Help → Support & Diagnostics...**
 | ANAN Protocol 2 | `aether.anan.p2` | ANAN/Saturn Protocol 2 wire session: DDC sequence gaps, speaker-audio FIFO level and underflow reports, unexpected sender ports |
 | KiwiSDR Audio/DSP | `aether.kiwisdr.audio` | Verbose KiwiSDR receive audio: frame decode, resampler, jitter/FIFO under/overrun, mixing (high-rate; off by default) |
 | Automation Bridge | `aether.automation` | Agent-drivable test bridge (#3646): QLocalServer verbs, widget snapshots, captures (AETHER\_AUTOMATION only) |
+| External Services | `aether.network` | Failed requests to external services (update check, QRZ, maps, propagation, radar), once per host and error, with TLS errors and the TLS backend in use |
 | QRZ Lookup | `aether.qrz` | QRZ.com callsign lookups: session, cache, CW callsign spotting, photos |
 | AetherClock | `aether.clock` | WWV/WWVB time-signal decoder: state transitions, per-second alignment, frame decodes, voter verdicts |
 | Hermes-Lite 2 | `aether.hl2` | HL2 backend: band changes, J16 companion-filter selection, LNA gain, and radio health telemetry |

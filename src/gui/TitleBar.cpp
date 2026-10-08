@@ -8,6 +8,7 @@
 #include "PersistentDialog.h"
 #include "RadioTabBar.h"
 #include "WindowCaptionButtons.h"
+#include "core/NetworkDiagnostics.h"
 #include "core/AppSettings.h"
 
 #include <QFrame>
@@ -1434,6 +1435,7 @@ void TitleBar::showFeatureRequestDialog()
     nam->setTransferTimeout(kTransferTimeoutMs);
     auto* reply = nam->get(QNetworkRequest(
         QUrl("https://api.github.com/repos/aethersdr/AetherSDR/releases/latest")));
+    NetworkDiagnostics::watch(reply, "update check");
     connect(reply, &QNetworkReply::finished, this, [this, reply, nam] {
         reply->deleteLater();
         nam->deleteLater();

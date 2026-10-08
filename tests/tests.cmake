@@ -2365,7 +2365,7 @@ set_tests_properties(dark_basemap_test PROPERTIES
 
 # Injected HTTP replies and virtual time: no sockets, provider traffic or minute-long waits.
 add_executable(map_provider_retry_test tests/map_provider_retry_test.cpp
-    src/gui/map/MapProviderNetworkAccessManager.cpp)
+    src/gui/map/MapProviderNetworkAccessManager.cpp src/core/NetworkDiagnostics.cpp)
 target_include_directories(map_provider_retry_test PRIVATE src)
 target_link_libraries(map_provider_retry_test PRIVATE Qt6::Core Qt6::Network Qt6::Test)
 add_test(NAME map_provider_retry_test COMMAND map_provider_retry_test)
@@ -2374,6 +2374,7 @@ set_tests_properties(map_provider_retry_test PROPERTIES TIMEOUT 30)
 # Injected public HTTP replies; this test binds no sockets and contacts no provider.
 add_executable(city_lights_source_test tests/city_lights_source_test.cpp
     src/gui/map/MapProviderNetworkAccessManager.cpp
+    src/core/NetworkDiagnostics.cpp
     src/gui/map/CityLightsSource.cpp)
 target_include_directories(city_lights_source_test PRIVATE src)
 target_link_libraries(city_lights_source_test PRIVATE
@@ -4971,6 +4972,7 @@ add_executable(qrz_callsign_test
     src/core/CallsignInfo.cpp
     src/core/CtyDatParser.cpp
     src/core/QrzClient.cpp
+    src/core/NetworkDiagnostics.cpp
     # LogManager provides lcQrz (spotter's qCDebug category); it drags
     # AsyncLogWriter + AppSettings for its writer/ctor chain at link time.
     $<TARGET_OBJECTS:aether_test_log_manager>
@@ -6354,6 +6356,22 @@ endif()
 set_target_properties(log_manager_filter_rules_test PROPERTIES AUTOMOC ON)
 add_test(NAME log_manager_filter_rules_test COMMAND log_manager_filter_rules_test)
 
+# Windows Firewall verdicts and Fix command, and failed external-request
+# logging (aether.network). Pure logic; the COM inspection compiles on Windows
+# only, so this runs everywhere.
+add_executable(windows_firewall_network_diagnostics_test
+    tests/windows_firewall_network_diagnostics_test.cpp
+    src/core/WindowsFirewall.cpp
+    src/core/NetworkDiagnostics.cpp
+)
+target_include_directories(windows_firewall_network_diagnostics_test PRIVATE src)
+target_link_libraries(windows_firewall_network_diagnostics_test PRIVATE Qt6::Core Qt6::Network)
+if(WIN32)
+    target_link_libraries(windows_firewall_network_diagnostics_test PRIVATE ole32 oleaut32 shell32)
+endif()
+add_test(NAME windows_firewall_network_diagnostics_test
+         COMMAND windows_firewall_network_diagnostics_test)
+
 # Pre-filled GitHub issue body + redaction-at-render guarantee (#3705).
 # IssueReport.cpp depends only on redactPii (AsyncLogWriter.cpp) — no
 # RadioModel — so the redaction contract is unit-testable in isolation.
@@ -7298,6 +7316,7 @@ set_tests_properties(mini_pan_widget_test PROPERTIES
 add_executable(hl2_pc_audio_lock_test
     tests/hl2_pc_audio_lock_test.cpp
     src/gui/TitleBar.cpp
+    src/core/NetworkDiagnostics.cpp
     src/gui/RoundedMenu.cpp
     src/gui/BrandMark.cpp
     src/gui/RadioTabBar.cpp
@@ -7330,6 +7349,7 @@ set_tests_properties(hl2_pc_audio_lock_test PROPERTIES
 add_executable(titlebar_headphone_mute_test
     tests/titlebar_headphone_mute_test.cpp
     src/gui/TitleBar.cpp
+    src/core/NetworkDiagnostics.cpp
     src/gui/RoundedMenu.cpp
     src/gui/BrandMark.cpp
     src/gui/RadioTabBar.cpp
@@ -7364,6 +7384,7 @@ set_tests_properties(titlebar_headphone_mute_test PROPERTIES
 add_executable(mixer_control_availability_test
     tests/mixer_control_availability_test.cpp
     src/gui/TitleBar.cpp
+    src/core/NetworkDiagnostics.cpp
     src/gui/RoundedMenu.cpp
     src/gui/BrandMark.cpp
     src/gui/RadioTabBar.cpp
@@ -7391,6 +7412,7 @@ set_tests_properties(mixer_control_availability_test PROPERTIES
 add_executable(unified_title_bar_test
     tests/unified_title_bar_test.cpp
     src/gui/TitleBar.cpp
+    src/core/NetworkDiagnostics.cpp
     src/gui/RoundedMenu.cpp
     src/gui/BrandMark.cpp
     src/gui/RadioTabBar.cpp
@@ -8625,7 +8647,7 @@ set_tests_properties(radar_coverage_test opera_radar_image_test regional_radar_s
 # Production tile adapter and primary/fallback controller; injected replies, no sockets.
 add_executable(libre_radar_test tests/libre_radar_test.cpp
     src/gui/map/LibreRadarNetwork.cpp src/gui/map/RegionalRadarComposite.cpp
-    src/gui/map/WeatherRadarSource.cpp src/gui/map/MapProviderNetworkAccessManager.cpp)
+    src/gui/map/WeatherRadarSource.cpp src/gui/map/MapProviderNetworkAccessManager.cpp src/core/NetworkDiagnostics.cpp)
 target_include_directories(libre_radar_test PRIVATE src)
 target_link_libraries(libre_radar_test PRIVATE Qt6::Core Qt6::Gui Qt6::Network Qt6::Concurrent Qt6::Test)
 add_test(NAME libre_radar_test COMMAND libre_radar_test)
@@ -8646,7 +8668,7 @@ add_test(NAME deepfist_committer_test COMMAND deepfist_committer_test)
 set_tests_properties(deepfist_committer_test PROPERTIES TIMEOUT 20)
 add_executable(deepfist_model_assets_test
     tests/deepfist_model_assets_test.cpp
-    src/core/deepfist/DeepFistModelAssets.cpp src/core/deepfist/DeepFistModelAssets.h)
+    src/core/deepfist/DeepFistModelAssets.cpp src/core/deepfist/DeepFistModelAssets.h src/core/NetworkDiagnostics.cpp)
 target_include_directories(deepfist_model_assets_test PRIVATE src tests)
 target_compile_definitions(deepfist_model_assets_test PRIVATE DEEPFIST_MODEL_BASE_URL="")
 target_link_libraries(deepfist_model_assets_test PRIVATE Qt6::Core Qt6::Network Qt6::Concurrent)

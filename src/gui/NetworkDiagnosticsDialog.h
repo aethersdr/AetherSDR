@@ -169,6 +169,11 @@ private:
     void updateCharts();
     QWidget* buildLogsTab();
     QWidget* buildTciTab();
+#ifdef Q_OS_WIN
+    QWidget* buildFirewallPage();
+    void     inspectFirewall();
+    void     fixFirewall();
+#endif
     void     refreshTciClientTable();
     void     appendTciMessage(const QString& direction, const QString& text);
     void     onTciSaveLog();
@@ -203,6 +208,13 @@ private:
     QComboBox*  m_rangeCombo{nullptr};
     QWidget* m_digitalVoiceWaveformTab{nullptr};
     QTreeWidgetItem* m_digitalVoiceWaveformNavigationItem{nullptr};
+#ifdef Q_OS_WIN
+    QLabel*      m_firewallSummary{nullptr};
+    QLabel*      m_firewallDetails{nullptr};
+    QPushButton* m_firewallFixButton{nullptr};
+    QPushButton* m_firewallRecheckButton{nullptr};
+    bool         m_firewallBusy{false};
+#endif
 
     QLabel* m_statusLabel;
     QLabel* m_targetIpLabel;

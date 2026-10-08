@@ -1,4 +1,16 @@
 {
+ "core/NetworkDiagnostics.h": {
+  "tag": "ui-support",
+  "note": "Logs failed external-service requests (update check, QRZ, map/radar, propagation) to aether.network with their TLS errors and the TLS backend. Diagnostic plumbing, not radio state; the map/radar manager, title-bar update check and propagation dashboard watch their replies with it.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/WindowsFirewall.h": {
+  "tag": "ui-support",
+  "note": "Reads Windows Defender Firewall's rules for the AetherSDR executable and runs the UAC netsh fix. Host-OS plumbing, not radio state; read only by the Network Diagnostics Windows Firewall page.",
+  "split": "",
+  "confidence": "high"
+ },
  "core/TailnetShimClient.h": {
   "tag": "peripheral(tailnet-shim)",
   "note": "Provisioning API client for the in-radio tailnet shim, a FLEX-8000/Aurora Docker waveform container (RFC #6271). Not SmartSDR wire: AetherSDR's own HTTP API to a separate service (the shim) that happens to run in the radio's container runtime, so a direct-transport peripheral, NOT behind the IRadioBackend radio seam (same shape as core/PgxlConnection.h).",

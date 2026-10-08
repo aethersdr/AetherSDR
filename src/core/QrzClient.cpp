@@ -2,6 +2,7 @@
 
 #include "CallsignUtils.h"
 #include "LogManager.h"
+#include "NetworkDiagnostics.h"
 
 #include <QCoreApplication>
 #include <QNetworkReply>
@@ -47,7 +48,9 @@ QNetworkReply* QrzClient::getUrl(const QString& query)
     req.setHeader(QNetworkRequest::UserAgentHeader,
                   QStringLiteral("AetherSDR/%1").arg(QCoreApplication::applicationVersion()));
     req.setTransferTimeout(kTimeoutMs);
-    return m_nam.get(req);
+    QNetworkReply* reply = m_nam.get(req);
+    NetworkDiagnostics::watch(reply, "QRZ");
+    return reply;
 }
 
 void QrzClient::lookup(const QString& call)

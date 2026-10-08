@@ -1078,6 +1078,8 @@ set(CORE_SOURCES
     src/core/QsoWavPlayback.cpp
     src/core/FirmwareStager.cpp
     src/core/UpdateChecker.cpp
+    src/core/NetworkDiagnostics.cpp
+    src/core/WindowsFirewall.cpp
     src/core/OleCompoundFile.cpp
     src/core/CabExtractor.cpp
     src/core/RNNoiseFilter.cpp
@@ -1705,7 +1707,9 @@ target_link_libraries(aetherd PRIVATE
     Qt6::Network
 )
 if(WIN32)
-    target_link_libraries(aethercore PRIVATE advapi32)
+    # ole32/oleaut32: WindowsFirewall reads the firewall policy over COM;
+    # shell32: its Fix runs netsh through a UAC prompt.
+    target_link_libraries(aethercore PRIVATE advapi32 ole32 oleaut32 shell32)
 endif()
 
 # --- ASR engine: vendored whisper.cpp (RFC #4333, Phase 1) -------------------
