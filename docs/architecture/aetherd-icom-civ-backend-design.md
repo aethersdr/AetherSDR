@@ -1289,7 +1289,7 @@ their own right (CERTIFICATION.md §1.29):
 | | NR | ✅ **verified** — `16 40 01` + `14 06 01 53` (60 % = 153) |
 | | NB | ✅ **verified** — `16 22 01` + `14 12 01 40` (55 % = 140) |
 | | ANF | ✅ **verified** — `16 41 01` |
-| | squelch | ✅ **verified** — `14 03 01 02` (40 % = 102). No enable exists: the threshold IS the control. Off writes zero; a zero readback is off unless it echoes AetherSDR's own on-at-0 write (#6172) |
+| | squelch | ✅ **verified** — `14 03 01 02` (40 % = 102). No enable exists: the threshold IS the control. Off writes zero; a zero readback is off unless it echoes AetherSDR's own on-at-0 write, and an off readback publishes no level, so the remembered manual threshold survives (#6172) |
 | | manual notch | ✅ `setSliceManualNotch` (`16 48` + `14 0D`); state is polled |
 | | FM repeater TONE + frequency | ✅ **live-verified on IC-705** — `16 42` + `1B 00`; radio readback owns the control |
 | | FM duplex + offset | ✅ **live-verified on IC-705** — `0F 10/11/12` + `0C`/`0D`; local-memory recall verified for `+`, `-`, and simplex/off |

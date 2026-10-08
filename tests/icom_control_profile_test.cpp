@@ -161,6 +161,11 @@ struct IcomCivBackendTestAccess {
         backend.onCivFrame(frame, 1);
     }
 
+    static void setConnected(IcomCivBackend& backend, bool connected)
+    {
+        backend.m_connected = connected;
+    }
+
     static std::size_t queuedRequestCount(const IcomCivBackend& backend)
     {
         return backend.m_civScheduler.m_queue.size();
@@ -446,7 +451,8 @@ int main(int argc, char** argv)
             if (delta.squelchLevel) { level = *delta.squelchLevel; }
         });
         IcomCivBackendTestAccess::deliverSquelch(b, 0);
-        check(on == false && level == 0, "a connect-time 0 threshold reads as squelch off");
+        check(on == false && !level,
+              "a connect-time 0 threshold reads as squelch off and publishes no level");
         b.setSliceSquelch(0, true, 0);
         IcomCivBackendTestAccess::deliverSquelch(b, 0);
         check(on == true && level == 0,
@@ -462,6 +468,13 @@ int main(int argc, char** argv)
         b.setSliceSquelch(0, false, 40);
         IcomCivBackendTestAccess::deliverSquelch(b, 0);
         check(on == false, "an explicit Off write reads back as off");
+        b.setSliceSquelch(0, true, 40);
+        IcomCivBackendTestAccess::deliverSquelch(b, 102);
+        check(on == true && level == 40, "an on write at 40 reads back on at 40");
+        b.setSliceSquelch(0, false, 40);
+        IcomCivBackendTestAccess::deliverSquelch(b, 0);
+        check(on == false && level == 40,
+              "an Off readback publishes no level, so the remembered 40 survives");
 
         // The controls scrub re-asserts on-at-0 as on, so it cannot re-arm the trap.
         const ControlSpec* squelchSpec = nullptr;
@@ -476,6 +489,30 @@ int main(int argc, char** argv)
             IcomCivBackendTestAccess::deliverSquelch(b, 0);
             check(on == true, "scrubbing an on-at-0 squelch keeps it on");
         }
+
+        // The on/off decision reads the raw threshold: raw 1..2 round to 0 %
+        // but the radio is gating, and that value ends an on-at-0 write.
+        b.setSliceSquelch(0, true, 0);
+        IcomCivBackendTestAccess::deliverSquelch(b, 1);
+        check(on == true && level == 0, "a raw 1 threshold reads as squelch on at 0 %");
+        IcomCivBackendTestAccess::deliverSquelch(b, 0);
+        check(on == false, "a radio-side 0 after a raw 1 threshold reads as off");
+        IcomCivBackendTestAccess::deliverSquelch(b, 2);
+        if (squelchSpec) {
+            check(b.scrubDrive(*squelchSpec), "a raw 2 squelch row can be scrubbed");
+            IcomCivBackendTestAccess::deliverSquelch(b, 0);
+            check(on == true, "scrubbing a raw 2 squelch re-asserts it as on");
+        }
+
+        // A write while the session is not connected never reaches the radio,
+        // so it must not make the next real 0 readback read as on.
+        b.setSliceSquelch(0, false, 0);
+        IcomCivBackendTestAccess::deliverSquelch(b, 0);
+        IcomCivBackendTestAccess::setConnected(b, false);
+        b.setSliceSquelch(0, true, 0);
+        IcomCivBackendTestAccess::setConnected(b, true);
+        IcomCivBackendTestAccess::deliverSquelch(b, 0);
+        check(on == false, "an on-at-0 write dropped while disconnected leaves a 0 readback off");
 
         // An operator disconnect (stop(), no disconnected() signal) forgets
         // the flag: the next session's connect-time 0 is not our write.

@@ -521,6 +521,9 @@ private:
     // Our last 14 03 write was "on" at threshold 0. Icom has no squelch
     // enable, so only this tells that write's own 0 readback from an Off.
     bool    m_squelchOnAtZero = false;
+    // The on/off the last 14 03 readback published; the controls scrub
+    // re-asserts exactly this rather than re-deriving it.
+    bool    m_squelchOn = false;
     int     m_micGainPercent = 0;
     int     m_compLevelPercent = 0;
     bool    m_compEnable = false;
