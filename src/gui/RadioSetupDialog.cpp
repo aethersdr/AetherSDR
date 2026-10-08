@@ -4788,7 +4788,11 @@ QWidget* RadioSetupDialog::buildAudioTab()
 
     // ── Audio Compression ────────────────────────────────────────────────
     {
-        auto* compGroup = new QGroupBox("Audio Compression (SmartLink)");
+        auto* compGroup = new QGroupBox("Audio Compression (SmartLink / tailnet)");
+        compGroup->setToolTip(QStringLiteral(
+            "Auto uses Opus for SmartLink and for a radio reached over a tailnet, and "
+            "uncompressed audio on the local network. Until you choose, a radio reached "
+            "over a tailnet gets Opus."));
         m_audioCompressionGroup = compGroup;
         compGroup->setVisible(!m_model->isConnected()
                               || m_model->backendCapabilities().hasAudioCompression);

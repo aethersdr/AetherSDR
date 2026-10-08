@@ -4,6 +4,7 @@
 // that turn operator text into a hostname and an allowlist stay in the
 // shim's accepted alphabet (tools/flex-tailnet-shim/api.go).
 
+#include "core/TailnetAddress.h"
 #include "core/TailnetShimClient.h"
 
 #include <QJsonDocument>
@@ -97,6 +98,16 @@ int main()
                  == QStringList({QStringLiteral("a@b.com"), QStringLiteral("tag:ops"),
                                  QStringLiteral("c@d.org")}),
                  "allowlist split, trimmed and de-duplicated");
+
+    // Tailnet address classification (RFC #6271 D4: Opus by default there).
+    ok &= expect(isTailnetAddress(QHostAddress(QStringLiteral("100.64.16.34"))), "100.64.x is tailnet");
+    ok &= expect(isTailnetAddress(QHostAddress(QStringLiteral("100.127.255.254"))), "top of 100.64/10");
+    ok &= expect(!isTailnetAddress(QHostAddress(QStringLiteral("100.128.0.1"))), "100.128 is not");
+    ok &= expect(!isTailnetAddress(QHostAddress(QStringLiteral("192.168.50.100"))), "LAN is not");
+    ok &= expect(isTailnetAddress(QHostAddress(QStringLiteral("fd7a:115c:a1e0::1234"))), "tailnet IPv6");
+    ok &= expect(!isTailnetAddress(QHostAddress(QStringLiteral("fd00::1"))), "other ULA is not");
+    ok &= expect(isTailnetAddress(QHostAddress(QStringLiteral("::ffff:100.64.1.2"))), "v4-mapped tailnet");
+    ok &= expect(!isTailnetAddress(QHostAddress()), "null address is not");
 
     return ok ? 0 : 1;
 }
