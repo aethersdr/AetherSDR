@@ -30,6 +30,13 @@ DisableWelcomePage=no
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
+#ifdef SIGN
+; Authenticode (#6288). CI passes /DSIGN plus /Saethersign=<signtool command>.
+; The directive signs the setup exe and, via SignedUninstaller, unins000.exe,
+; which Inno generates from an embedded stub that no post-build pass can reach.
+SignTool=aethersign
+SignedUninstaller=yes
+#endif
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
