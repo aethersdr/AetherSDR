@@ -123,3 +123,46 @@ func TestMTUClampInjectedAndReplySwallowed(t *testing.T) {
 		t.Fatalf("client saw %q (%v); the injected command's reply must not reach it", l, err)
 	}
 }
+
+func TestSubnetFlowsAreForwardedAndMarkRoutesInUse(t *testing.T) {
+	// A stand-in station device on loopback that greets each client.
+	dev, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dev.Close()
+	go func() {
+		for {
+			c, err := dev.Accept()
+			if err != nil {
+				return
+			}
+			c.Write([]byte("AG hello"))
+			c.Close()
+		}
+	}()
+	devAP := netip.MustParseAddrPort(dev.Addr().String())
+	route := netip.PrefixFrom(devAP.Addr(), 32)
+	n := &Node{advertised: []netip.Prefix{route}}
+
+	src := netip.MustParseAddrPort("100.64.0.9:40000")
+	if h, intercept := n.subnetTCP(src, netip.MustParseAddrPort("192.0.2.7:9007")); h != nil || intercept {
+		t.Fatal("a flow outside the advertised routes must be left alone")
+	}
+	h, intercept := n.subnetTCP(src, devAP)
+	if h == nil || !intercept {
+		t.Fatal("a flow to an advertised route must be handled")
+	}
+	client, server := net.Pipe()
+	go h(server)
+	client.SetReadDeadline(time.Now().Add(3 * time.Second))
+	buf := make([]byte, 32)
+	k, _ := client.Read(buf)
+	client.Close()
+	if string(buf[:k]) != "AG hello" {
+		t.Fatalf("device greeting not spliced through: %q", buf[:k])
+	}
+	if got := n.approvedRoutes(); len(got) != 1 || got[0] != route.String() {
+		t.Fatalf("a route that carried traffic must count as approved, got %v", got)
+	}
+}

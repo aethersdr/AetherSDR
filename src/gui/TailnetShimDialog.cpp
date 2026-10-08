@@ -485,12 +485,14 @@ void TailnetShimDialog::showStatus(const TailnetShimStatus& st)
             }
             QStringList lines;
             if (!approved.isEmpty()) {
-                lines << tr("Approved, reachable over the tailnet: %1.")
+                lines << tr("Confirmed in use over the tailnet: %1.")
                              .arg(approved.join(QStringLiteral(", ")));
             }
             if (!waiting.isEmpty()) {
-                lines << tr("Waiting for approval: %1. Approve them once in the Tailscale admin "
-                            "console (Machines \u2192 this radio \u2192 Edit route settings).")
+                lines << tr("Offered, not yet confirmed: %1. If you haven't already, approve them "
+                            "once in the Tailscale admin console (Machines \u2192 this radio "
+                            "\u2192 Edit route settings). A route is confirmed the first time a "
+                            "remote device connects through it.")
                              .arg(waiting.join(QStringLiteral(", ")));
             }
             lines << tr("Remotely, set each device's applet to its LAN address.");

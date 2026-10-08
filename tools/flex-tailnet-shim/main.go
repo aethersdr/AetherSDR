@@ -25,7 +25,7 @@ import (
 	_ "golang.org/x/crypto/x509roots/fallback"
 )
 
-const shimVersion = "0.3.1"
+const shimVersion = "0.3.2"
 
 func env(k, def string) string {
 	if v := strings.TrimSpace(os.Getenv(k)); v != "" {

@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/netip"
@@ -76,6 +77,11 @@ type Node struct {
 	ip         netip.Addr
 	dnsName    string
 	advertised []netip.Prefix
+	// Routes a remote connection has actually travelled through. Peers only
+	// send traffic for a route once the tailnet has approved it, so this is
+	// first-hand evidence of approval (a node's own status doesn't carry its
+	// approved routes).
+	routesInUse map[netip.Prefix]bool
 }
 
 func (n *Node) cfgPath() string   { return filepath.Join(n.StateDir, "provision.json") }
@@ -253,6 +259,12 @@ func (n *Node) start(authKey string, timeout time.Duration) error {
 		log.Printf("relay stopped: %v", err)
 	}()
 
+	// tsnet drops TCP flows that no listener claims, including flows to our
+	// own advertised subnet routes. Forward those out through the radio's
+	// network; the tailnet's ACLs have already admitted the sender.
+	unregister := srv.RegisterFallbackTCPHandler(n.subnetTCP)
+	closers = append(closers, func() error { unregister(); return nil })
+
 	n.mu.Lock()
 	n.srv, n.relay, n.closers, n.ip = srv, relay, closers, ip4
 	n.dnsName = strings.TrimSuffix(st.Self.DNSName, ".")
@@ -356,6 +368,7 @@ func (n *Node) stop(logout bool) {
 	n.mu.Lock()
 	srv, relay, closers := n.srv, n.relay, n.closers
 	n.srv, n.relay, n.closers, n.ip, n.dnsName, n.lc = nil, nil, nil, netip.Addr{}, "", nil
+	n.routesInUse = nil
 	n.mu.Unlock()
 	if relay != nil {
 		relay.CloseAll("tailnet node stopping")
@@ -539,18 +552,24 @@ func (n *Node) Status() Status {
 func (n *Node) approvedRoutes() []string {
 	n.mu.Lock()
 	lc, ip := n.lc, n.ip
-	n.mu.Unlock()
 	out := []string{}
+	seen := map[string]bool{}
+	for p := range n.routesInUse {
+		seen[p.String()] = true
+		out = append(out, p.String())
+	}
+	n.mu.Unlock()
 	if lc == nil {
+		sort.Strings(out)
 		return out
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	st, err := lc.Status(ctx)
 	if err != nil || st.Self == nil {
+		sort.Strings(out)
 		return out
 	}
-	seen := map[string]bool{}
 	add := func(p netip.Prefix) {
 		if (p.Bits() == p.Addr().BitLen() && p.Addr() == ip) || p.Addr().Is6() && p.Bits() == 128 {
 			return // the node's own tailnet addresses
@@ -653,4 +672,43 @@ func parseRoute(s string) (netip.Prefix, error) {
 		}
 	}
 	return netip.Prefix{}, fmt.Errorf("%q is not private LAN space", s)
+}
+
+// subnetTCP handles a TCP flow addressed to one of this node's advertised
+// subnet routes (a station device): dial it from the radio's network and
+// splice. Flows to anything else are left alone.
+func (n *Node) subnetTCP(src, dst netip.AddrPort) (handler func(net.Conn), intercept bool) {
+	n.mu.Lock()
+	var route netip.Prefix
+	for _, p := range n.advertised {
+		if p.Contains(dst.Addr()) {
+			route = p
+			break
+		}
+	}
+	n.mu.Unlock()
+	if !route.IsValid() {
+		return nil, false
+	}
+	return func(c net.Conn) {
+		defer c.Close()
+		n.mu.Lock()
+		if n.routesInUse == nil {
+			n.routesInUse = map[netip.Prefix]bool{}
+		}
+		n.routesInUse[route] = true
+		n.mu.Unlock()
+		r, err := net.DialTimeout("tcp", dst.String(), 5*time.Second)
+		if err != nil {
+			log.Printf("subnet %s -> %s: %v", src, dst, err)
+			return
+		}
+		defer r.Close()
+		log.Printf("subnet %s -> %s: connected", src, dst)
+		done := make(chan struct{}, 2)
+		go func() { io.Copy(r, c); closeWrite(r); done <- struct{}{} }()
+		go func() { io.Copy(c, r); closeWrite(c); done <- struct{}{} }()
+		<-done
+		<-done
+	}, true
 }
