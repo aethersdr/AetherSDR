@@ -106,6 +106,8 @@ public:
     int throttleSessionCount() const { return m_throttleSessionCount; }
     bool hasDigitalVoiceWaveformTelemetry() const { return m_hasDigitalVoiceWaveformTelemetry; }
     bool hasTunnelTelemetry() const { return m_hasTunnelTelemetry; }
+    // Whether this session is reached over the tailnet right now.
+    bool isTunnelPolling() const { return m_tunnel.isPolling(); }
     // The latest report from the in-radio shim, when it is current.
     std::optional<TailnetSessionReport> tunnelReport() const { return m_tunnel.current(); }
 

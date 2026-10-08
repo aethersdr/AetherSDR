@@ -8,7 +8,9 @@ namespace AetherSDR {
 // #6271 ruling D2). AetherSDR downloads exactly this file and refuses any
 // other bytes. The image is reproducible: `tools/flex-tailnet-shim/build.sh`
 // at the shim's release tag rebuilds the identical file, so anyone can check
-// this hash against the source.
+// this hash against the source. The gzip bytes depend on the zlib build, so
+// the check needs the toolchain the hash was made with: Go 1.27.1 (go.mod)
+// and CPython 3.14 with zlib 1.3.2.
 //
 // Bump all four together when a new shim release is published.
 struct TailnetShimRelease {

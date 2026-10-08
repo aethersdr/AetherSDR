@@ -2989,8 +2989,10 @@ void NetworkDiagnosticsDialog::refreshTunnel(const NetworkDiagnosticsSample& sam
     if (!m_tunnelSection || !m_history) {
         return;
     }
-    m_tunnelSection->setVisible(m_history->hasTunnelTelemetry());
-    if (!m_history->hasTunnelTelemetry()) {
+    // The trend traces keep the history; the panel describes this session only.
+    const bool show = m_history->hasTunnelTelemetry() && m_history->isTunnelPolling();
+    m_tunnelSection->setVisible(show);
+    if (!show) {
         return;
     }
     const std::optional<TailnetSessionReport> report = m_history->tunnelReport();
@@ -3029,10 +3031,17 @@ void NetworkDiagnosticsDialog::refreshTunnel(const NetworkDiagnosticsSample& sam
         ? QStringLiteral("%1 (%2 changes)").arg(formatTunnelDuration(report->pathSinceS))
               .arg(report->pathChanges)
         : formatTunnelDuration(report->pathSinceS));
-    m_tunnelRttLabel->setText(report->rttMs >= 0.0
-        ? QStringLiteral("%1 ms (%2)").arg(report->rttMs, 0, 'f', 1)
-              .arg(report->rttVia.isEmpty() ? QStringLiteral("disco") : report->rttVia)
-        : QStringLiteral("--"));
+    // The shim keeps its last successful ping; past a minute it says nothing
+    // about the link now, and past 10 s it says how old it is.
+    if (report->rttMs < 0.0 || report->rttAgeS > 60.0) {
+        m_tunnelRttLabel->setText(QStringLiteral("--"));
+    } else {
+        const QString via = report->rttVia.isEmpty() ? QStringLiteral("disco") : report->rttVia;
+        m_tunnelRttLabel->setText(report->rttAgeS > 10.0
+            ? QStringLiteral("%1 ms (%2, %3 s ago)").arg(report->rttMs, 0, 'f', 1).arg(via)
+                  .arg(static_cast<int>(report->rttAgeS))
+            : QStringLiteral("%1 ms (%2)").arg(report->rttMs, 0, 'f', 1).arg(via));
+    }
     m_tunnelRatesLabel->setText(QStringLiteral("%1 / %2 kbps")
         .arg(report->toClientKbps, 0, 'f', 0).arg(report->fromClientKbps, 0, 'f', 0));
     m_tunnelRadioBreaksLabel->setText(
@@ -3188,9 +3197,11 @@ void NetworkDiagnosticsDialog::updateCharts()
     latencySeries.push_back(buildSeriesWithUnit("Jitter", QColor("#eb5757"), " ms", [](const NetworkDiagnosticsSample& s) { return static_cast<double>(s.audioJitterMs); }));
     // The radio side's own ping to this client over the tailnet, drawn only
     // where the shim reported one, for the same reason as the RTT trace.
+    const QColor tunnelColor =
+        AetherSDR::ThemeManager::instance().color(this, "color.canon.aqua");
     if (m_history && m_history->hasTunnelTelemetry()) {
         latencySeries.push_back(buildWaveformSeries(
-            "Tunnel RTT", QColor("#9b51e0"), " ms",
+            "Tunnel RTT", tunnelColor, " ms",
             [](const NetworkDiagnosticsSample& s) { return s.tunnelValid && s.tunnelRttMs >= 0.0; },
             [](const NetworkDiagnosticsSample& s) { return s.tunnelRttMs; }));
     }
@@ -3214,7 +3225,7 @@ void NetworkDiagnosticsDialog::updateCharts()
     };
     if (m_history && m_history->hasTunnelTelemetry()) {
         lossSeries.push_back(buildWaveformSeries(
-            "Added by tunnel", QColor("#9b51e0"), "%",
+            "Added by tunnel", tunnelColor, "%",
             [](const NetworkDiagnosticsSample& s) { return s.tunnelValid; },
             [](const NetworkDiagnosticsSample& s) { return s.tunnelAddedBreakPct; }));
     }

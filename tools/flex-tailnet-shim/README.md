@@ -115,7 +115,10 @@ reproducibly: no Docker daemon, no base image, fixed timestamps, owners and
 file order, and a binary built with `-trimpath -buildvcs=false`, so it records
 neither the build path nor the commit. AetherSDR pins the image's SHA-256
 (`src/core/TailnetShimRelease.h`, RFC #6271 ruling D2); running `build.sh` at
-the `flex-tailnet-shim-v<version>` tag reproduces that hash.
+the `flex-tailnet-shim-v<version>` tag reproduces that hash, given the same
+toolchain: gzip output differs between zlib builds, so the pinned hash was made
+with Go 1.27.1 (from `go.mod`) and CPython 3.14 with zlib 1.3.2. The image's
+`diff_id`, the SHA-256 of the uncompressed layer, does not depend on zlib.
 
 The image is `FROM scratch`: the static binary, the `LICENSES` bundle and the
 two radio labels (`com.flexradio.waveform.name`,
