@@ -516,6 +516,9 @@ type Status struct {
 	ShareDiscovered bool     `json:"share_discovered"`
 	Discovered      []Device `json:"discovered_devices"`
 	Advertised      []string `json:"advertised_routes"` // what the tailnet is offered now
+	// Approved: advertised routes the tailnet's admin console (or an
+	// autoApprovers rule) has approved, so peers can actually use them.
+	Approved []string `json:"approved_routes"`
 	// Per-session UDP counters: where VITA-49 stops, if it does.
 	SessionDetail []SessionInfo `json:"session_detail"`
 	LastError     string        `json:"last_error"`
@@ -525,6 +528,64 @@ type Status struct {
 }
 
 func (n *Node) Status() Status {
+	st := n.statusLocked()
+	st.Approved = n.approvedRoutes()
+	return st
+}
+
+// approvedRoutes asks the local tailnet backend which of this node's routes
+// the control plane has approved (they appear in its AllowedIPs; PrimaryRoutes
+// marks the ones it is currently routing).
+func (n *Node) approvedRoutes() []string {
+	n.mu.Lock()
+	lc, ip := n.lc, n.ip
+	n.mu.Unlock()
+	out := []string{}
+	if lc == nil {
+		return out
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	st, err := lc.Status(ctx)
+	if err != nil || st.Self == nil {
+		return out
+	}
+	seen := map[string]bool{}
+	add := func(p netip.Prefix) {
+		if (p.Bits() == p.Addr().BitLen() && p.Addr() == ip) || p.Addr().Is6() && p.Bits() == 128 {
+			return // the node's own tailnet addresses
+		}
+		if !seen[p.String()] {
+			seen[p.String()] = true
+			out = append(out, p.String())
+		}
+	}
+	if st.Self.PrimaryRoutes != nil {
+		for _, p := range st.Self.PrimaryRoutes.All() {
+			add(p)
+		}
+	}
+	if st.Self.AllowedIPs != nil {
+		for _, p := range st.Self.AllowedIPs.All() {
+			if !containsTailscaleIP(st.TailscaleIPs, p) {
+				add(p)
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func containsTailscaleIP(ips []netip.Addr, p netip.Prefix) bool {
+	for _, a := range ips {
+		if p.Bits() == a.BitLen() && p.Addr() == a {
+			return true
+		}
+	}
+	return false
+}
+
+func (n *Node) statusLocked() Status {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	st := Status{

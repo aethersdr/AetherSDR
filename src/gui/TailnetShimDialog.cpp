@@ -476,12 +476,26 @@ void TailnetShimDialog::showStatus(const TailnetShimStatus& st)
         m_extraDevicesEdit->setText(st.routes.join(QStringLiteral(", ")));
     }
     if (st.state == QLatin1String("running")) {
-        setWrapped(m_sharingNote, st.advertisedRoutes.isEmpty()
-            ? tr("No devices are shared.")
-            : tr("Offered to the tailnet: %1. Approve these routes once in the Tailscale admin "
-                 "console (Machines → this radio → Edit route settings). Then, remotely, "
-                 "set each device's applet to its LAN address.")
-                  .arg(st.advertisedRoutes.join(QStringLiteral(", "))), m_cardTextWidth);
+        if (st.advertisedRoutes.isEmpty()) {
+            setWrapped(m_sharingNote, tr("No devices are shared."), m_cardTextWidth);
+        } else {
+            QStringList approved, waiting;
+            for (const QString& r : st.advertisedRoutes) {
+                (st.approvedRoutes.contains(r) ? approved : waiting) << r;
+            }
+            QStringList lines;
+            if (!approved.isEmpty()) {
+                lines << tr("Approved, reachable over the tailnet: %1.")
+                             .arg(approved.join(QStringLiteral(", ")));
+            }
+            if (!waiting.isEmpty()) {
+                lines << tr("Waiting for approval: %1. Approve them once in the Tailscale admin "
+                            "console (Machines \u2192 this radio \u2192 Edit route settings).")
+                             .arg(waiting.join(QStringLiteral(", ")));
+            }
+            lines << tr("Remotely, set each device's applet to its LAN address.");
+            setWrapped(m_sharingNote, lines.join(QStringLiteral("\n")), m_cardTextWidth);
+        }
     } else {
         setWrapped(m_sharingNote, tr("Devices are shared once the radio is on the tailnet."),
                    m_cardTextWidth);

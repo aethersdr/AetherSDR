@@ -44,6 +44,7 @@ struct TailnetShimStatus {
     bool shareDiscovered{true};      // share discovered station devices
     QList<TailnetShimDevice> discovered;
     QStringList advertisedRoutes;    // what the tailnet is offered now
+    QStringList approvedRoutes;      // what the admin console has approved
 };
 
 // Pure helpers, separated from the transport so they can be unit-tested

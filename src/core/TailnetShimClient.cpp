@@ -53,6 +53,9 @@ std::optional<TailnetShimStatus> statusFromObject(const QJsonObject& o)
     for (const QJsonValue& v : o.value(QStringLiteral("advertised_routes")).toArray()) {
         st.advertisedRoutes << v.toString();
     }
+    for (const QJsonValue& v : o.value(QStringLiteral("approved_routes")).toArray()) {
+        st.approvedRoutes << v.toString();
+    }
     return st;
 }
 

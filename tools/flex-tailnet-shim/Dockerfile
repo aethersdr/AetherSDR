@@ -8,5 +8,5 @@ FROM scratch
 COPY flex-tailnet-shim /flex-tailnet-shim
 COPY LICENSES /LICENSES
 LABEL com.flexradio.waveform.name=flex-tailnet-shim
-LABEL com.flexradio.waveform.version=0.3.0
+LABEL com.flexradio.waveform.version=0.3.1
 ENTRYPOINT ["/flex-tailnet-shim"]

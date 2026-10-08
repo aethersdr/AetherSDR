@@ -56,12 +56,14 @@ int main()
         "routes":["192.168.50.120"],"share_discovered":false,
         "discovered_devices":[{"kind":"Antenna Genius","name":"Antenna_Genius","ip":"192.168.50.103","port":9007},
                               {"kind":"Tuner Genius XL","name":"KK7GWY_-_TGXL","ip":"192.168.50.101","port":9010}],
-        "advertised_routes":["192.168.50.120/32"]})";
+        "advertised_routes":["192.168.50.120/32"],"approved_routes":["192.168.50.120/32"]})";
     const auto sd = tailnetshim::parseStatus(withDevices);
     ok &= expect(sd && sd->discovered.size() == 2 && sd->discovered[1].kind == QStringLiteral("Tuner Genius XL")
                  && sd->discovered[0].ip == QStringLiteral("192.168.50.103"), "discovered devices parse");
     ok &= expect(sd && !sd->shareDiscovered && sd->routes == QStringList({QStringLiteral("192.168.50.120")})
-                 && sd->advertisedRoutes.size() == 1, "sharing settings parse");
+                 && sd->advertisedRoutes.size() == 1
+                 && sd->approvedRoutes == QStringList({QStringLiteral("192.168.50.120/32")}),
+                 "sharing settings and route approval parse");
     ok &= expect(st && st->shareDiscovered, "share_discovered defaults to on when absent");
     const QJsonObject sharing = QJsonDocument::fromJson(tailnetshim::sharingBody(
         {QStringLiteral("192.168.50.120")}, false)).object();
