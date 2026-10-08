@@ -108,7 +108,12 @@ bool UlanziDialWindowsManager::rescan()
                       static_cast<unsigned short>(kUlanziProductId));
     for (auto* info = infos; info; info = info->next) {
         if (!info->product_string) continue;
-        if (wcsstr(info->product_string, kProductMatch) == nullptr) continue;
+        if (wcsstr(info->product_string, kProductMatch) == nullptr) {
+            qCDebug(lcDevices) << "UlanziDialWindowsManager: ignoring"
+                               << QString::fromWCharArray(info->product_string)
+                               << "at the dial's VID/PID (#3485)";
+            continue;
+        }
         hid_device* h = hid_open_path(info->path);
         if (!h) continue;
         hid_set_nonblocking(h, 1);
