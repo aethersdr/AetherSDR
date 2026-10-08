@@ -19,7 +19,8 @@ namespace AetherSDR {
 class DeepFistModelAssets final : public QObject {
     Q_OBJECT
 public:
-    struct Asset { QString name; qint64 bytes; QByteArray sha256; };
+    // url, when set, is the asset's absolute HTTPS source instead of baseUrl + name.
+    struct Asset { QString name; qint64 bytes; QByteArray sha256; QString url = {}; };
     static QVector<Asset> manifest();
     static QString releaseBaseUrl();
     // Network injection and an explicit catalog make socket-free tests possible.
