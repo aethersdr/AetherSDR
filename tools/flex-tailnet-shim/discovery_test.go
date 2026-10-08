@@ -55,7 +55,7 @@ func TestParseRoute(t *testing.T) {
 		}
 	}
 	for _, bad := range []string{"0.0.0.0/0", "192.168.0.0/8", "8.8.8.8", "172.30.1.1", "172.30.0.0/16",
-		"100.84.212.113", "::1", "fd00::/64", "nonsense", "10.0.0.0/12"} {
+		"100.100.1.2", "::1", "fd00::/64", "nonsense", "10.0.0.0/12"} {
 		if p, err := parseRoute(bad); err == nil {
 			t.Errorf("%s accepted as %v", bad, p)
 		}

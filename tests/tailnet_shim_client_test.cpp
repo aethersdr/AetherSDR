@@ -34,14 +34,14 @@ int main()
     bool ok = true;
 
     const QByteArray running = R"({"version":"0.2.0","provisioned":true,"state":"running",
-        "hostname":"kk7gwy-flex-8600","tailnet_ip":"100.78.16.123",
+        "hostname":"kk7gwy-flex-8600","tailnet_ip":"100.100.1.2",
         "dns_name":"kk7gwy-flex-8600.tail1234.ts.net","allow":["tag:ops","me@example.com"],
         "sessions":1,"last_error":""})";
     const auto st = tailnetshim::parseStatus(running);
     ok &= expect(st.has_value(), "status parses");
     if (st) {
         ok &= expect(st->provisioned && st->state == QStringLiteral("running"), "state fields");
-        ok &= expect(st->tailnetIp == QStringLiteral("100.78.16.123"), "tailnet ip");
+        ok &= expect(st->tailnetIp == QStringLiteral("100.100.1.2"), "tailnet ip");
         ok &= expect(st->allow == QStringList({QStringLiteral("tag:ops"),
                                                QStringLiteral("me@example.com")}), "allowlist");
         ok &= expect(st->sessions == 1, "session count");
@@ -104,7 +104,7 @@ int main()
                  "allowlist split, trimmed and de-duplicated");
 
     // Tailnet address classification (RFC #6271 D4: Opus by default there).
-    ok &= expect(isTailnetAddress(QHostAddress(QStringLiteral("100.64.16.34"))), "100.64.x is tailnet");
+    ok &= expect(isTailnetAddress(QHostAddress(QStringLiteral("100.64.0.10"))), "100.64.x is tailnet");
     ok &= expect(isTailnetAddress(QHostAddress(QStringLiteral("100.127.255.254"))), "top of 100.64/10");
     ok &= expect(!isTailnetAddress(QHostAddress(QStringLiteral("100.128.0.1"))), "100.128 is not");
     ok &= expect(!isTailnetAddress(QHostAddress(QStringLiteral("192.168.50.100"))), "LAN is not");
