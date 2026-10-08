@@ -66,7 +66,22 @@ StatusIndicator* StatusIndicator::attach(QWidget* widget)
         return true;
     }();
     Q_UNUSED(factoryInstalled);
-    return new StatusIndicator(widget);
+    auto* helper = new StatusIndicator(widget);
+    // With accessibility already active, Qt may have created and cached the
+    // widget's plain interface (setAccessibleName() does so). The cache is
+    // consulted before factories, so drop it; the next query builds the
+    // Button. ObjectCreated tells an assistive client that already saw the
+    // old object to look again.
+    if (QAccessible::isActive()) {
+        if (QAccessibleInterface* cached = QAccessible::queryAccessibleInterface(widget)) {
+            if (cached->role() != QAccessible::Button) {
+                QAccessible::deleteAccessibleInterface(QAccessible::uniqueId(cached));
+                QAccessibleEvent created(widget, QAccessible::ObjectCreated);
+                QAccessible::updateAccessibility(&created);
+            }
+        }
+    }
+    return helper;
 }
 
 StatusIndicator* StatusIndicator::of(const QWidget* widget)
@@ -113,9 +128,14 @@ bool StatusIndicator::eventFilter(QObject* watched, QEvent* event)
     }
     switch (event->type()) {
     case QEvent::KeyPress: {
-        const int key = static_cast<QKeyEvent*>(event)->key();
+        const auto* keyEvent = static_cast<QKeyEvent*>(event);
+        const int key = keyEvent->key();
         if (key == Qt::Key_Return || key == Qt::Key_Enter || key == Qt::Key_Space) {
-            activate();
+            // One action per press: these toggle panels and cycle TUN/AMP, so
+            // a held key's auto-repeat is consumed, not acted on.
+            if (!keyEvent->isAutoRepeat()) {
+                activate();
+            }
             return true;
         }
         break;

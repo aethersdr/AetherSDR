@@ -866,10 +866,18 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
 
 bool MainWindow::isStatusIndicator(const QObject* obj) const
 {
-    return obj && (obj == m_asrIndicator || obj == m_cwxIndicator || obj == m_tnfIndicator
+    if (!obj) {
+        return false;
+    }
+#ifdef AETHER_ASR_ENABLED
+    if (obj == m_asrIndicator) {
+        return true;
+    }
+#endif
+    return obj == m_cwxIndicator || obj == m_tnfIndicator
         || obj == m_fdxIndicator || obj == m_bandStackIndicator || obj == m_tgxlContainer
         || obj == m_pgxlContainer || obj == m_txIndicator || obj == m_addPanLabel
-        || obj == m_dvkIndicator);
+        || obj == m_dvkIndicator;
 }
 
 void MainWindow::activateStatusIndicator(QObject* obj)

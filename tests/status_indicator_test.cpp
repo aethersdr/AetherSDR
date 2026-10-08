@@ -37,6 +37,14 @@ void press(QWidget* widget, int key)
     QApplication::sendEvent(widget, &down);
 }
 
+int g_objectCreated = 0;
+void countObjectCreated(QAccessibleEvent* event)
+{
+    if (event->type() == QAccessible::ObjectCreated) {
+        ++g_objectCreated;
+    }
+}
+
 QWidget* focusBar(QWidget* widget)
 {
     return widget->findChild<QWidget*>(QStringLiteral("statusIndicatorFocusBar"));
@@ -85,6 +93,10 @@ int main(int argc, char** argv)
     press(dvk, Qt::Key_A);
     press(dvk, Qt::Key_Tab);
     report("other keys do not", dvkActivations == 3);
+    QKeyEvent held(QEvent::KeyPress, Qt::Key_Space, Qt::NoModifier, QString(), true);
+    const bool consumed = QApplication::sendEvent(dvk, &held) && held.isAccepted();
+    report("a held key's auto-repeat is consumed without acting again",
+           dvkActivations == 3 && consumed);
 
     press(stack, Qt::Key_Space);
     report("a container of labels activates the same way", stackActivations == 1);
@@ -127,6 +139,48 @@ int main(int argc, char** argv)
     report("the underline never takes focus or clicks",
            underline && underline->focusPolicy() == Qt::NoFocus
                && underline->testAttribute(Qt::WA_TransparentForMouseEvents));
+
+    // Review #6267: with accessibility already active when the indicator is
+    // built and named (as MainWindow does), Qt caches the plain interface
+    // before attach(). The helper must replace it with the Button.
+    {
+        QAccessible::installUpdateHandler(countObjectCreated);
+        auto* late = new QLabel(QStringLiteral("FDX"));
+        layout->addWidget(late);
+        late->setAccessibleName(QStringLiteral("Full duplex"));
+        QAccessibleInterface* before = QAccessible::queryAccessibleInterface(late);
+        report("active accessibility: the named label starts as plain text",
+               before && before->role() != QAccessible::Button);
+        auto* lateStack = new QWidget;
+        lateStack->setAccessibleName(QStringLiteral("Power Genius XL status"));
+        layout->addWidget(lateStack);
+        QAccessible::queryAccessibleInterface(lateStack);
+
+        g_objectCreated = 0;
+        StatusIndicator* lateHelper = StatusIndicator::attach(late);
+        StatusIndicator::attach(lateStack);
+        int lateActivations = 0;
+        QObject::connect(lateHelper, &StatusIndicator::activated, [&] { ++lateActivations; });
+        QAccessibleInterface* after = QAccessible::queryAccessibleInterface(late);
+        QAccessibleActionInterface* lateActions = after ? after->actionInterface() : nullptr;
+        report("attach replaces the cached interface with a Button",
+               after && after->role() == QAccessible::Button);
+        report("the replacement keeps the accessible name",
+               after && after->text(QAccessible::Name) == QStringLiteral("Full duplex"));
+        report("and offers Press, which activates it",
+               lateActions
+                   && lateActions->actionNames().contains(QAccessibleActionInterface::pressAction()));
+        if (lateActions) {
+            lateActions->doAction(QAccessibleActionInterface::pressAction());
+        }
+        report("Press on the replacement activates it", lateActivations == 1);
+        QAccessibleInterface* stackAfter = QAccessible::queryAccessibleInterface(lateStack);
+        report("a cached container is replaced with a Button too",
+               stackAfter && stackAfter->role() == QAccessible::Button);
+        report("each replacement tells assistive clients about the new object",
+               g_objectCreated == 2);
+        QAccessible::installUpdateHandler(nullptr);
+    }
 
     std::printf("\n%d/%d passed\n", g_total - g_failed, g_total);
     return g_failed == 0 ? 0 : 1;
