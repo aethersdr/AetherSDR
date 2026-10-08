@@ -120,7 +120,10 @@ void DeepCwRxBackend::stop()
         m_assets->cancel();
         m_preparing = false;
     }
+    m_canRetry = false;
+    m_detail.clear();
     stopWorker();
+    setStatus({});
 }
 
 void DeepCwRxBackend::cancelPreparation()
@@ -162,14 +165,12 @@ void DeepCwRxBackend::stopWorker()
     m_worker->wait();
     delete m_worker;
     m_worker = nullptr;
-    m_pitch = 0.0f;  // no estimate outlives the decoder (#5213)
     QMutexLocker lock(&m_ringMutex);
     m_ring.clear();
 }
 
 void DeepCwRxBackend::reset()
 {
-    m_pitch = 0.0f;
     QMutexLocker lock(&m_ringMutex);
     m_ring.clear();
     m_resetRequested = true;
@@ -194,8 +195,7 @@ void DeepCwRxBackend::feedFixed24(const DecoderPcmBlock& block)
 // 24 kHz mono ring: resample to the model's 3200 Hz with an anti-aliased
 // r8brain SRC (a 7.5x decimation; a naive resample folds energy into the
 // 400-1200 Hz analysis band), then DeepCwCommitter: a sliding window re-decoded
-// every 2 s whose characters are shown once they are holdSec behind the live edge.
-// AETHER_DEEPCW_HOLD_S overrides the 5 s hold (local bench knob).
+// every 2 s whose characters are shown once they are 5 s behind the live edge.
 void DeepCwRxBackend::decodeLoop(quint64 runId, const QString& modelPath)
 {
     if (!m_loaded) {
@@ -211,10 +211,7 @@ void DeepCwRxBackend::decodeLoop(quint64 runId, const QString& modelPath)
     postStatus(runId, tr("DeepCW ready"), false);
 
     constexpr int kRate = DeepCwEngine::kModelSampleRate;
-    double holdSec = 5.0;
-    bool holdOk = false;
-    const double envHold = qEnvironmentVariable("AETHER_DEEPCW_HOLD_S").toDouble(&holdOk);
-    if (holdOk && envHold >= 1.0 && envHold <= 14.0) { holdSec = envHold; }
+    constexpr double holdSec = 5.0;
 
     // Worker-local: neither the resampler nor the committer is thread-safe.
     auto resampler = std::make_unique<Resampler>(24000.0, static_cast<double>(kRate));
@@ -235,8 +232,6 @@ void DeepCwRxBackend::decodeLoop(quint64 runId, const QString& modelPath)
             const auto* r = reinterpret_cast<const float*>(out.constData());
             const auto m = static_cast<std::size_t>(out.size() / static_cast<int>(sizeof(float)));
             const DeepCwCommitter::Result res = committer->push(r, m, *m_engine);
-            // Dominant-tone pitch feeds Zero Beat; a CTC model has no speed estimate.
-            if (res.decoded && res.pitchHz > 0.0f) { m_pitch = res.pitchHz; }
             // One colour per committed chunk: 1 - mean CTC confidence (lower is better).
             if (!res.text.empty()) {
                 emit coloredTextDecoded(QString::fromStdString(res.text), 1.0f - res.meanConf);

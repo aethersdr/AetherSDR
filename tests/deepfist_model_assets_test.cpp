@@ -118,6 +118,32 @@ void lifecycle()
     QObject::connect(&unavailable, &DeepFistModelAssets::failed, &unavailable, [&](const QString&) { failed = true; });
     unavailable.ensure(); expect(wait([&] { return failed; }), "unpublished source fails explicitly");
 }
+void perAssetSource()
+{
+    QTemporaryDir dir;
+    DeepFistTestNetwork network;
+    auto assets = catalog(network);
+    assets.last().url = QStringLiteral("https://pinned.invalid/commit/license");
+    DeepFistModelAssets manager(dir.path(), "https://fixture.invalid/v1", assets, &network);
+    bool ready = false, failed = false;
+    QObject::connect(&manager, &DeepFistModelAssets::ready, &manager, [&] { ready = true; });
+    QObject::connect(&manager, &DeepFistModelAssets::failed, &manager, [&](const QString&) { failed = true; });
+    manager.ensure();
+    expect(wait([&] { return ready || failed; }) && ready && !failed, "bundle with a per-asset source completes");
+    expect(network.urls.contains("https://pinned.invalid/commit/license")
+               && !network.urls.contains("https://fixture.invalid/v1/license"),
+           "asset with its own source is fetched from that source");
+
+    QTemporaryDir other;
+    DeepFistTestNetwork plain;
+    auto insecure = catalog(plain);
+    insecure.first().url = QStringLiteral("http://pinned.invalid/model");
+    DeepFistModelAssets refused(other.path(), "https://fixture.invalid/v1", insecure, &plain);
+    bool refusedFailed = false;
+    QObject::connect(&refused, &DeepFistModelAssets::failed, &refused, [&](const QString&) { refusedFailed = true; });
+    refused.ensure();
+    expect(wait([&] { return refusedFailed; }) && plain.requests == 0, "non-HTTPS asset source is refused");
+}
 void progressLifetime(bool finishOnly, bool destroy)
 {
     QTemporaryDir dir;
@@ -206,6 +232,7 @@ int main(int argc, char** argv)
     successAndCancel();
     for (int i = 0; i < 5; ++i) { rejection(i); }
     lifecycle();
+    perAssetSource();
     oversizeIsRefusedMidStream();
     for (bool finishOnly : {false, true}) {
         progressLifetime(finishOnly, true);
