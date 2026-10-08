@@ -726,3 +726,27 @@ tools/docs/pdf/fonts/OFL.txt.
   Copyright: Copyright 2022 The Noto Project Authors
   License:   SIL Open Font License, Version 1.1
   Source:    https://github.com/notofonts/symbols
+
+
+29. DeepCW — Neural CW Decoder (ported code in-binary + model download-on-demand)
+---------------------------------------------------------------------------------
+The optional neural CW decode backend (DeepCwEngine, RFC #4817). Unlike the
+download-only ASR entries above, this has TWO distinct AGPL-3.0 obligations:
+
+  a) Ported code (compiled into the binary). src/core/DeepCwEngine.{h,cpp} is a
+     C++ port of decode_morse.py from e04/deepcw-engine — the spectrogram build
+     (256-pt FFT, hop 48, periodic Hann, 400-1200 Hz -> 65 bins, log1p) and the
+     greedy-CTC decode. A faithful port of AGPL-3.0 source is a derivative of it,
+     so this code ships AGPL-3.0 in every binary regardless of whether a user
+     ever downloads the weights. AetherSDR is GPL-3.0-or-later; GPLv3 §13
+     permits the combination (its only added obligation, AGPL's network clause,
+     affects hosting the combined work as a network service — desktop use is
+     unaffected, and AetherSDR source is already public).
+
+  b) Model weights (NOT bundled). Downloaded on first enable of the DeepCW
+     backend (source: the e04/deepcw-engine repository), SHA-256-verified,
+     cached under the user's data dir. Run by ONNX Runtime (entry 11).
+
+  Attribution: "deepcw-engine" by e04.
+  License: AGPL-3.0-or-later (both the ported code and the model)
+  Source:  https://github.com/e04/deepcw-engine

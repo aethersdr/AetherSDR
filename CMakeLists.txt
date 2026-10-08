@@ -3376,6 +3376,17 @@ endforeach()
 # it keep resolving against the repository root. The header of that file explains
 # why that matters and why it should not be "tidied up" into a subdirectory.
 enable_testing()
+# DeepCW offline replay harness (RFC #4817 regression take): not built by default.
+# Declared above the tests include: executables declared after it fail configure.
+if(ORT_FOUND)
+    add_executable(deepcw_replay EXCLUDE_FROM_ALL
+        tools/deepcw_replay.cpp src/core/DeepCwEngine.cpp src/core/DeepCwCommitter.cpp
+        src/core/Resampler.cpp)
+    target_compile_definitions(deepcw_replay PRIVATE HAVE_ONNX)
+    target_include_directories(deepcw_replay PRIVATE src
+        ${CMAKE_SOURCE_DIR}/third_party/r8brain ${ORT_INCLUDE_DIRS})
+    target_link_libraries(deepcw_replay PRIVATE Qt6::Widgets ${ORT_LIBRARIES})
+endif()
 include(tests/tests.cmake)
 
 
