@@ -678,16 +678,18 @@ void PanadapterApplet::setSliceId(int id, const QString& perClientLetter)
 {
     m_titleLabel->setText(
         QString("Slice %1").arg(SliceLabel::richText(id, perClientLetter)));
+    m_sliceTitle = QString("Slice %1").arg(SliceLabel::unicodeForm(id, perClientLetter));
 }
 
 void PanadapterApplet::clearSliceTitle()
 {
     m_titleLabel->clear();
+    m_sliceTitle.clear();
 }
 
 QString PanadapterApplet::sliceTitle() const
 {
-    return m_titleLabel->text();
+    return m_sliceTitle;
 }
 
 void PanadapterApplet::setCwPanelVisible(bool visible)

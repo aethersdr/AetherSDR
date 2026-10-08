@@ -41,6 +41,7 @@ public:
 
     void setSliceId(int id, const QString& perClientLetter = QString());
     void clearSliceTitle();
+    // Plain text ("Slice A₁"), for window titles; the header label is HTML.
     QString sliceTitle() const;
 
     void setMultiPanMode(bool multi);
@@ -154,6 +155,7 @@ private:
     SpectrumWidget* m_spectrum{nullptr};
     QWidget*        m_titleBar{nullptr};
     QLabel*         m_titleLabel{nullptr};
+    QString         m_sliceTitle{QStringLiteral("Slice A")};
     QPushButton*    m_popOutBtn{nullptr};
     QPushButton*    m_maxBtn{nullptr};
     QPushButton*    m_closeBtn{nullptr};
