@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -210,7 +211,7 @@ func (s *Session) close(reason string) {
 func (s *Session) radioToClientTCP() {
 	br := bufio.NewReaderSize(s.radio, 64*1024)
 	for {
-		line, err := br.ReadBytes('\n')
+		line, err := readLine(br, maxControlLine)
 		if len(line) > 0 {
 			if port := s.sideChannelPort(line); port > 0 && s.relay.OpenForward != nil {
 				if ferr := s.relay.OpenForward(port); ferr != nil {
@@ -319,12 +320,37 @@ func (s *Session) rewriteLine(line []byte) ([]byte, int) {
 	return line, 0
 }
 
+// maxControlLine bounds one SmartSDR control line in either direction. The
+// longest real ones (radio status and list replies) are a few KB; the cap
+// only stops a peer from making the shim, which shares the radio's memory
+// and has no container limit, buffer an endless line.
+const maxControlLine = 1 << 20
+
+var errLineTooLong = errors.New("control line longer than 1 MiB")
+
+// readLine reads through the next '\n' like ReadBytes, but fails with
+// errLineTooLong instead of growing past max. A final line without '\n' is
+// returned with the reader's error, as ReadBytes does.
+func readLine(br *bufio.Reader, max int) ([]byte, error) {
+	var line []byte
+	for {
+		frag, err := br.ReadSlice('\n')
+		if len(line)+len(frag) > max {
+			return nil, errLineTooLong
+		}
+		line = append(line, frag...)
+		if err != bufio.ErrBufferFull {
+			return line, err
+		}
+	}
+}
+
 // Client -> radio control text, line by line so the two transport commands
 // can be rewritten. All other bytes pass through unchanged.
 func (s *Session) clientToRadioTCP() {
 	br := bufio.NewReaderSize(s.client, 64*1024)
 	for {
-		line, err := br.ReadBytes('\n')
+		line, err := readLine(br, maxControlLine)
 		if len(line) > 0 {
 			s.noteCommand(line)
 			out, clientPort := s.rewriteLine(line)

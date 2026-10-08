@@ -66,6 +66,14 @@ type Node struct {
 	Discovery *Discovery
 
 	opMu sync.Mutex // serializes provision / sign-out / start
+	// routeMu serializes RefreshRoutes, so a refresh that read an older
+	// configuration can never apply it after a newer one.
+	routeMu sync.Mutex
+
+	// Seams for socket-free tests: nil means the real tailnet. startFn
+	// replaces start; applyRoutes replaces advertising through tsnet.
+	startFn     func(authKey string, timeout time.Duration) error
+	applyRoutes func([]netip.Prefix) error
 
 	mu         sync.Mutex
 	cfg        provisionConfig
@@ -326,22 +334,34 @@ func (n *Node) effectiveRoutes(cfg provisionConfig) []netip.Prefix {
 // They take effect once approved in the tailnet's admin console (or by an
 // autoApprovers rule).
 func (n *Node) RefreshRoutes() {
+	// Held from the snapshot to the assignment: discovery callbacks and
+	// SetSharing refresh concurrently, and without this a refresh that read
+	// "sharing on" could finish after one that withdrew the routes.
+	n.routeMu.Lock()
+	defer n.routeMu.Unlock()
 	n.mu.Lock()
 	lc, cfg, prev := n.lc, n.cfg, n.advertised
 	n.mu.Unlock()
-	if lc == nil {
+	if lc == nil && n.applyRoutes == nil {
 		return
 	}
 	want := n.effectiveRoutes(cfg)
 	if slices.Equal(want, prev) && prev != nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if _, err := lc.EditPrefs(ctx, &ipn.MaskedPrefs{
-		Prefs:              ipn.Prefs{AdvertiseRoutes: want},
-		AdvertiseRoutesSet: true,
-	}); err != nil {
+	apply := n.applyRoutes
+	if apply == nil {
+		apply = func(routes []netip.Prefix) error {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			_, err := lc.EditPrefs(ctx, &ipn.MaskedPrefs{
+				Prefs:              ipn.Prefs{AdvertiseRoutes: routes},
+				AdvertiseRoutesSet: true,
+			})
+			return err
+		}
+	}
+	if err := apply(want); err != nil {
 		log.Printf("advertising LAN routes %v: %v", want, err)
 		return
 	}
@@ -356,8 +376,12 @@ func (n *Node) RefreshRoutes() {
 
 // SetSharing changes which LAN devices are shared, without leaving the
 // tailnet. shareDiscovered nil leaves that setting unchanged.
-func (n *Node) SetSharing(routes []string, shareDiscovered *bool) error {
+func (n *Node) SetSharing(presented string, routes []string, shareDiscovered *bool) error {
 	n.opMu.Lock()
+	if !n.checkToken(presented) {
+		n.opMu.Unlock()
+		return errUnauthorized
+	}
 	n.mu.Lock()
 	cfg := n.cfg
 	n.mu.Unlock()
@@ -378,8 +402,9 @@ func (n *Node) SetSharing(routes []string, shareDiscovered *bool) error {
 }
 
 // stop leaves the relay and tailnet. With logout it also deregisters the
-// node, so the next start needs a new auth key. Caller holds opMu.
-func (n *Node) stop(logout bool) {
+// node and deletes its tailnet state, so the next start needs a new auth
+// key; the error says what could not be undone. Caller holds opMu.
+func (n *Node) stop(logout bool) error {
 	n.mu.Lock()
 	srv, relay, closers := n.srv, n.relay, n.closers
 	n.srv, n.relay, n.closers, n.ip, n.dnsName, n.lc = nil, nil, nil, netip.Addr{}, "", nil
@@ -394,12 +419,14 @@ func (n *Node) stop(logout bool) {
 	for _, c := range closers {
 		c()
 	}
+	var errs []error
 	if srv != nil {
 		if logout {
 			if lc, err := srv.LocalClient(); err == nil {
 				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 				if err := lc.Logout(ctx); err != nil {
 					log.Printf("logout: %v", err)
+					errs = append(errs, fmt.Errorf("the tailnet did not confirm the logout (remove the machine in the admin console): %w", err))
 				}
 				cancel()
 			}
@@ -407,8 +434,11 @@ func (n *Node) stop(logout bool) {
 		srv.Close()
 	}
 	if logout {
-		os.RemoveAll(n.tsnetDir())
+		if err := os.RemoveAll(n.tsnetDir()); err != nil {
+			errs = append(errs, fmt.Errorf("could not delete the tailnet state: %w", err))
+		}
 	}
+	return errors.Join(errs...)
 }
 
 // authorizer checks each tailnet caller with WhoIs against the current
@@ -474,38 +504,63 @@ func newToken() (token, hash string) {
 // call needs no token (trust on first use, matching the radio API's own LAN
 // trust); later calls must present the admin token returned by the first.
 // It returns a new admin token on success.
-func (n *Node) Provision(authKey, hostname string, allow, routes []string, shareDiscovered *bool) (string, error) {
+//
+// The token is checked here, under opMu, not by the caller: checked before
+// the lock, two first-use requests could both see an unprovisioned node and
+// the second would replace the first's node without its token.
+func (n *Node) Provision(presented, authKey, hostname string, allow, routes []string, shareDiscovered *bool) (string, error) {
 	n.opMu.Lock()
 	defer n.opMu.Unlock()
+	n.mu.Lock()
+	provisioned := n.provisioned()
+	n.mu.Unlock()
+	if provisioned && !n.checkToken(presented) {
+		return "", errUnauthorized
+	}
 
-	n.stop(true)
 	token, hash := newToken()
 	cfg := provisionConfig{TokenSHA256: hash, Hostname: hostname, Allow: allow, Routes: routes,
 		ShareDiscovered: shareDiscovered}
+	// Saved before anything changes, so a full or read-only state directory
+	// fails here with the old node, token and settings intact.
+	if err := n.save(cfg); err != nil {
+		return "", fmt.Errorf("could not save settings: %w", err)
+	}
+	if err := n.stop(true); err != nil {
+		log.Printf("provision: leaving the previous tailnet: %v", err)
+	}
 	n.mu.Lock()
 	n.cfg = cfg
 	n.mu.Unlock()
 
-	if err := n.start(authKey, 90*time.Second); err != nil {
+	start := n.startFn
+	if start == nil {
+		start = n.start
+	}
+	if err := start(authKey, 90*time.Second); err != nil {
 		// A rejected key leaves the node unprovisioned rather than half-joined.
-		n.stop(true)
+		if serr := n.stop(true); serr != nil {
+			log.Printf("provision: cleaning up after a failed join: %v", serr)
+		}
 		n.mu.Lock()
 		n.cfg = provisionConfig{}
 		n.state = stateError
 		n.mu.Unlock()
-		os.Remove(n.cfgPath())
+		if rerr := os.Remove(n.cfgPath()); rerr != nil && !errors.Is(rerr, os.ErrNotExist) {
+			return "", errors.Join(err, fmt.Errorf("could not delete the saved settings, so they return after a restart: %w", rerr))
+		}
 		return "", err
-	}
-	if err := n.save(cfg); err != nil {
-		return "", fmt.Errorf("joined the tailnet but could not save settings: %w", err)
 	}
 	return token, nil
 }
 
 // SetAllow changes who may connect, without leaving the tailnet.
-func (n *Node) SetAllow(allow []string) error {
+func (n *Node) SetAllow(presented string, allow []string) error {
 	n.opMu.Lock()
 	defer n.opMu.Unlock()
+	if !n.checkToken(presented) {
+		return errUnauthorized
+	}
 	n.mu.Lock()
 	cfg := n.cfg
 	cfg.Allow = allow
@@ -521,16 +576,35 @@ func (n *Node) SetAllow(allow []string) error {
 
 // SignOut leaves the tailnet, deregisters the node and forgets the admin
 // token, returning the shim to its unprovisioned state.
-func (n *Node) SignOut() {
+//
+// The saved settings are deleted first: if that fails nothing has changed,
+// the node stays provisioned and the caller's token stays valid, so the
+// client keeps it. Once they are gone a restart can't revive the old token,
+// and any later failure (logout, tailnet state) is returned but leaves the
+// node signed out.
+func (n *Node) SignOut(presented string) error {
 	n.opMu.Lock()
 	defer n.opMu.Unlock()
-	n.stop(true)
+	if !n.checkToken(presented) {
+		return errUnauthorized
+	}
+	if err := os.Remove(n.cfgPath()); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("could not delete the saved settings, so nothing was changed: %w", err)
+	}
+	err := n.stop(true)
 	n.mu.Lock()
 	n.cfg = provisionConfig{}
 	n.state, n.lastError = stateUnprovisioned, ""
 	n.mu.Unlock()
-	os.Remove(n.cfgPath())
+	if err != nil {
+		return fmt.Errorf("signed out, but %w", err)
+	}
+	return nil
 }
+
+// errUnauthorized: the presented admin token doesn't match (or a first-use
+// provision lost the race to another).
+var errUnauthorized = errors.New("admin token required")
 
 // Status is what GET /v1/status returns. It never contains a secret.
 type Status struct {

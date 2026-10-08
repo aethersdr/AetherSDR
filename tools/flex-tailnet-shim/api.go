@@ -121,13 +121,12 @@ func decode(r *http.Request, v any) error {
 // NewAPI returns the provisioning HTTP handler for n.
 func NewAPI(n *Node) http.Handler {
 	mux := http.NewServeMux()
-	requireToken := func(w http.ResponseWriter, r *http.Request) bool {
-		if n.checkToken(bearer(r)) {
-			return true
-		}
+	// The token is checked by the Node, inside the same lock as the change
+	// it authorizes; checked here, a token rotated by a concurrent provision
+	// could still authorize a queued change.
+	unauthorized := func(w http.ResponseWriter) {
 		time.Sleep(500 * time.Millisecond)
-		writeJSON(w, http.StatusUnauthorized, apiError{"admin token required"})
-		return false
+		writeJSON(w, http.StatusUnauthorized, apiError{errUnauthorized.Error()})
 	}
 
 	mux.HandleFunc("GET /v1/status", func(w http.ResponseWriter, r *http.Request) {
@@ -135,9 +134,6 @@ func NewAPI(n *Node) http.Handler {
 	})
 
 	mux.HandleFunc("POST /v1/provision", func(w http.ResponseWriter, r *http.Request) {
-		if n.Status().Provisioned && !requireToken(w, r) {
-			return
-		}
 		var req provisionRequest
 		if err := decode(r, &req); err != nil {
 			writeJSON(w, http.StatusBadRequest, apiError{"malformed request"})
@@ -164,7 +160,11 @@ func NewAPI(n *Node) http.Handler {
 			return
 		}
 		log.Printf("api: provisioning requested by %s (hostname %q)", r.RemoteAddr, req.Hostname)
-		token, err := n.Provision(req.AuthKey, req.Hostname, req.Allow, req.Routes, req.ShareDiscovered)
+		token, err := n.Provision(bearer(r), req.AuthKey, req.Hostname, req.Allow, req.Routes, req.ShareDiscovered)
+		if errors.Is(err, errUnauthorized) {
+			unauthorized(w)
+			return
+		}
 		if err != nil {
 			writeJSON(w, http.StatusBadGateway, apiError{"could not join the tailnet: " + err.Error()})
 			return
@@ -176,15 +176,15 @@ func NewAPI(n *Node) http.Handler {
 	})
 
 	mux.HandleFunc("PUT /v1/allow", func(w http.ResponseWriter, r *http.Request) {
-		if !requireToken(w, r) {
-			return
-		}
 		var req allowRequest
 		if err := decode(r, &req); err != nil || !validAllow(req.Allow) {
 			writeJSON(w, http.StatusBadRequest, apiError{"allowlist entries must be tailnet logins or tag:names"})
 			return
 		}
-		if err := n.SetAllow(req.Allow); err != nil {
+		if err := n.SetAllow(bearer(r), req.Allow); errors.Is(err, errUnauthorized) {
+			unauthorized(w)
+			return
+		} else if err != nil {
 			writeJSON(w, http.StatusInternalServerError, apiError{err.Error()})
 			return
 		}
@@ -192,9 +192,6 @@ func NewAPI(n *Node) http.Handler {
 	})
 
 	mux.HandleFunc("PUT /v1/routes", func(w http.ResponseWriter, r *http.Request) {
-		if !requireToken(w, r) {
-			return
-		}
 		var req routesRequest
 		if err := decode(r, &req); err != nil {
 			writeJSON(w, http.StatusBadRequest, apiError{"malformed request"})
@@ -204,7 +201,10 @@ func NewAPI(n *Node) http.Handler {
 			writeJSON(w, http.StatusBadRequest, apiError{"shared LAN devices: " + err.Error()})
 			return
 		}
-		if err := n.SetSharing(req.Routes, req.ShareDiscovered); err != nil {
+		if err := n.SetSharing(bearer(r), req.Routes, req.ShareDiscovered); errors.Is(err, errUnauthorized) {
+			unauthorized(w)
+			return
+		} else if err != nil {
 			writeJSON(w, http.StatusInternalServerError, apiError{err.Error()})
 			return
 		}
@@ -212,11 +212,19 @@ func NewAPI(n *Node) http.Handler {
 	})
 
 	mux.HandleFunc("POST /v1/signout", func(w http.ResponseWriter, r *http.Request) {
-		if !requireToken(w, r) {
+		log.Printf("api: sign-out requested by %s", r.RemoteAddr)
+		if err := n.SignOut(bearer(r)); errors.Is(err, errUnauthorized) {
+			unauthorized(w)
+			return
+		} else if err != nil {
+			// The status says whether the node is still provisioned: if it
+			// is, nothing changed and the client keeps its token.
+			writeJSON(w, http.StatusInternalServerError, struct {
+				Error  string `json:"error"`
+				Status Status `json:"status"`
+			}{err.Error(), n.Status()})
 			return
 		}
-		log.Printf("api: sign-out requested by %s", r.RemoteAddr)
-		n.SignOut()
 		writeJSON(w, http.StatusOK, n.Status())
 	})
 	return lanOnly(mux)
