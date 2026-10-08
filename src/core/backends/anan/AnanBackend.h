@@ -148,6 +148,8 @@ public:
     // The AGC-T knob (0..100) as WDSP gain in dB: the AGC's maximum gain, or
     // the fixed gain with AGC off. -20..120 dB is the range of deskHPSDR's AGC
     // gain slider and of Thetis's AGC-T, which sets both gains the same way.
+    // With AGC on, the AGC reaches its maximum only on weak signals, so a high
+    // setting cannot clip a strong one. With AGC off, the knob is the gain.
     static constexpr double kAgcKnobMinDb = -20.0;
     static constexpr double kAgcKnobDbPerStep = 1.4;
     [[nodiscard]] static constexpr double agcKnobDb(int level) noexcept
@@ -166,7 +168,7 @@ public:
     // WdspChannel's own *ForTest accessor convention), not part of the
     // operator-facing seam.
     [[nodiscard]] int agcModeForTest() const noexcept { return m_agcMode; }
-    [[nodiscard]] double agcCeilingDbForTest() const noexcept { return agcKnobDb(m_agcThreshold); }
+    [[nodiscard]] double agcMaxGainDbForTest() const noexcept { return agcKnobDb(m_agcThreshold); }
     [[nodiscard]] double agcFixedGainDbForTest() const noexcept { return agcKnobDb(m_agcOffLevel); }
     [[nodiscard]] int attenuationDbForTest() const noexcept { return m_attenuationDb; }
     [[nodiscard]] bool noiseBlankerOnForTest() const noexcept
@@ -375,8 +377,10 @@ private:
     QString m_restoredMode;
     // Live AGC state in AGC-T knob units (agcKnobDb() converts). Both
     // connectRadio() and beginRateChange() build the DSP config from it, so
-    // it survives a reconnect, and emitSliceState() publishes it so the knob
-    // shows what the DSP runs.
+    // it survives a reconnect. RadioModel rebuilds the backend only on a
+    // family switch, so connecting another ANAN keeps it too, as it keeps the
+    // noise blanker below. emitSliceState() publishes it so the knob shows
+    // what the DSP runs.
     int m_agcMode = 3;
     int m_agcThreshold = kDefaultAgcThreshold;
     int m_agcOffLevel = kDefaultAgcOffLevel;

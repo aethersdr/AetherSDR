@@ -289,13 +289,13 @@ int main(int argc, char** argv)
         QObject::connect(&backend, &IRadioBackend::sliceChanged,
                          [&last](int, const SliceDelta& d) { last = d; });
         check(backend.agcModeForTest() == 3
-                  && backend.agcCeilingDbForTest() == AnanBackend::agcKnobDb(AnanBackend::kDefaultAgcThreshold)
+                  && backend.agcMaxGainDbForTest() == AnanBackend::agcKnobDb(AnanBackend::kDefaultAgcThreshold)
                   && backend.agcFixedGainDbForTest() == AnanBackend::agcKnobDb(AnanBackend::kDefaultAgcOffLevel),
               "AGC starts at medium with the default gain and AGC-off gain");
 
         backend.setSliceAgc(0, QStringLiteral("fast"), 50);
         check(backend.agcModeForTest() == 4, "\"fast\" maps to WDSP AGC mode 4");
-        check(backend.agcCeilingDbForTest() == AnanBackend::agcKnobDb(50),
+        check(backend.agcMaxGainDbForTest() == AnanBackend::agcKnobDb(50),
               "the threshold sets the AGC gain through the knob scale");
         check(last.has_value() && last->agcMode.value_or(QString()) == QStringLiteral("fast")
                   && last->agcThreshold.value_or(-1) == 50
@@ -313,14 +313,14 @@ int main(int argc, char** argv)
                                     100, 40, SliceAgcRequest::Origin::Operator});
         check(backend.agcFixedGainDbForTest() == AnanBackend::agcKnobDb(40),
               "the AGC-off level sets the fixed gain through the knob scale");
-        check(backend.agcModeForTest() == 0 && backend.agcCeilingDbForTest() == AnanBackend::agcKnobDb(100),
+        check(backend.agcModeForTest() == 0 && backend.agcMaxGainDbForTest() == AnanBackend::agcKnobDb(100),
               "an AGC-off level edit leaves the mode and threshold alone");
         check(last.has_value() && last->agcOffLevel.value_or(-1) == 40,
               "an AGC-off level edit is published");
 
         backend.requestSliceAgc(0, {SliceAgcRequest::Field::Threshold, QStringLiteral("slow"),
                                     30, 40, SliceAgcRequest::Origin::Operator});
-        check(backend.agcModeForTest() == 2 && backend.agcCeilingDbForTest() == AnanBackend::agcKnobDb(30),
+        check(backend.agcModeForTest() == 2 && backend.agcMaxGainDbForTest() == AnanBackend::agcKnobDb(30),
               "a threshold request still reaches setSliceAgc() with its mode");
     }
 
@@ -342,7 +342,7 @@ int main(int argc, char** argv)
                       && slice->agcOffLevel() == AnanBackend::kDefaultAgcOffLevel,
                   "the knob shows the backend's AGC, not the slice model's own defaults");
             slice->setAgcThreshold(60);
-            check(backend->agcCeilingDbForTest() == AnanBackend::agcKnobDb(60),
+            check(backend->agcMaxGainDbForTest() == AnanBackend::agcKnobDb(60),
                   "a knob edit reaches the backend");
             slice->setAgcMode(QStringLiteral("off"));
             slice->setAgcOffLevel(35);
