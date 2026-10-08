@@ -521,13 +521,27 @@ func (n *Node) Provision(presented, authKey, hostname string, allow, routes []st
 	token, hash := newToken()
 	cfg := provisionConfig{TokenSHA256: hash, Hostname: hostname, Allow: allow, Routes: routes,
 		ShareDiscovered: shareDiscovered}
-	// Saved before anything changes, so a full or read-only state directory
-	// fails here with the old node, token and settings intact.
-	if err := n.save(cfg); err != nil {
-		return "", fmt.Errorf("could not save settings: %w", err)
-	}
+	// Leave the previous tailnet first and fail closed if its state can't be
+	// deleted: tsnet ignores a new auth key while a stored node exists, so
+	// starting on top of it would keep the old identity while reporting a
+	// new join. On that failure the saved settings and token are untouched,
+	// so the caller's token still works for another try. (A logout the
+	// tailnet didn't confirm is only logged: the state is gone either way.)
 	if err := n.stop(true); err != nil {
 		log.Printf("provision: leaving the previous tailnet: %v", err)
+	}
+	if _, err := os.Stat(n.tsnetDir()); !errors.Is(err, os.ErrNotExist) {
+		n.setState(stateError, "could not delete the previous tailnet state")
+		if err == nil {
+			err = errors.New("it is still there")
+		}
+		return "", fmt.Errorf("could not delete the previous tailnet state, so the key was not used: %w", err)
+	}
+	// Then save, so a full or read-only state directory fails with the old
+	// settings and token intact.
+	if err := n.save(cfg); err != nil {
+		n.setState(stateError, "could not save settings")
+		return "", fmt.Errorf("could not save settings: %w", err)
 	}
 	n.mu.Lock()
 	n.cfg = cfg

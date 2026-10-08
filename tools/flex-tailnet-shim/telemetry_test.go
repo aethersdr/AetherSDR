@@ -27,7 +27,7 @@ func TestVitaGapCounting(t *testing.T) {
 	}
 	// The last count was 1; jumping to 5 skips 2, 3 and 4: three gaps.
 	v.note(vitaPacket(5, 0x40000000))
-	// A repeated count is not 15 lost packets.
+	// A repeated count is a break (as AetherSDR counts it), not 15 lost packets.
 	v.note(vitaPacket(5, 0x40000000))
 	// A second stream, and a packet type without a stream ID (ignored).
 	v.note(vitaPacket(9, 0x42000000))
@@ -40,8 +40,8 @@ func TestVitaGapCounting(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("streams %+v, want two", got)
 	}
-	if got[0].StreamID != "0x40000000" || got[0].Packets != 19 || got[0].Gaps != 3 || got[0].Breaks != 1 {
-		t.Fatalf("pan stream %+v, want 19 packets, 3 gaps in 1 break", got[0])
+	if got[0].StreamID != "0x40000000" || got[0].Packets != 20 || got[0].Gaps != 3 || got[0].Breaks != 2 {
+		t.Fatalf("pan stream %+v, want 20 packets, 3 gaps, 2 breaks", got[0])
 	}
 	if got[1].Packets != 1 || got[1].Gaps != 0 {
 		t.Fatalf("second stream %+v", got[1])
@@ -96,5 +96,20 @@ func TestSessionReportShowsOnlyTheCallersSessions(t *testing.T) {
 	}
 	if got.Endpoint == "203.0.113.7:41641" {
 		t.Fatal("another peer's endpoint leaked")
+	}
+}
+
+// The shim's counters must match AetherSDR's PanadapterStream accounting
+// (every datagram is a packet; any count but last+1 is a break), or Network
+// Diagnostics reports loss that never happened. 0,1,1,2 reaches the client
+// unchanged as 4 packets and 1 break, so the radio side must say the same.
+func TestVitaCountsMatchTheClientsAccounting(t *testing.T) {
+	var v vitaStats
+	for _, c := range []int{0, 1, 1, 2} {
+		v.note(vitaPacket(c, 0x40000000))
+	}
+	got := v.snapshot()[0]
+	if got.Packets != 4 || got.Breaks != 1 || got.Gaps != 0 {
+		t.Fatalf("0,1,1,2 counted %+v; AetherSDR counts 4 packets, 1 break", got)
 	}
 }

@@ -204,3 +204,41 @@ func TestReadLineIsBounded(t *testing.T) {
 		t.Fatalf("final unterminated line = %q, %v", got, err)
 	}
 }
+
+// Re-keying must not start on top of tailnet state it couldn't delete: tsnet
+// would keep the old node and ignore the new key. The old token stays valid.
+func TestProvisionFailsClosedWhenOldStateRemains(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	const token = "test-admin-token"
+	n := newTestNode(t, token)
+	started := false
+	n.startFn = func(string, time.Duration) error { started = true; return nil }
+	state := n.tsnetDir()
+	if err := os.MkdirAll(state, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(state+"/tailscaled.state", []byte("old node"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(state, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(state, 0o700) })
+
+	newToken, err := n.Provision(token, "tskey-auth-new", "flex-test", nil, nil, nil)
+	if err == nil || newToken != "" || started {
+		t.Fatalf("provision over undeletable state: token %q, err %v, started %v", newToken, err, started)
+	}
+	if !n.checkToken(token) {
+		t.Fatal("the failed re-key invalidated the caller's token")
+	}
+	reloaded := &Node{StateDir: n.StateDir}
+	if err := reloaded.load(); err != nil {
+		t.Fatal(err)
+	}
+	if !reloaded.checkToken(token) {
+		t.Fatal("after a restart the saved token no longer matches the caller's")
+	}
+}

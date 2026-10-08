@@ -6,6 +6,7 @@
 #include <QPointer>
 #include <QString>
 #include <QTimer>
+#include <QVector>
 
 #include <optional>
 
@@ -16,6 +17,18 @@ namespace AetherSDR {
 // TCP port of the shim's link-telemetry endpoint, served on the tailnet only
 // (tools/flex-tailnet-shim/telemetry.go: TelemetryPort).
 inline constexpr quint16 kTailnetShimTelemetryPort = 48993;
+
+// One relay session's counters, as datagrams leave the radio, before the
+// tunnel. A computer can hold several sessions (two AetherSDR instances, or
+// AetherSDR and SmartSDR), so each keeps its identity.
+struct TailnetRelaySession {
+    QString clientUdp;          // "100.x.y.z:port" the radio streams to
+    quint16 clientUdpPort{0};   // the client's local VITA-49 port
+    quint64 radioPackets{0};
+    quint64 radioBreaks{0};     // sequence discontinuities
+    quint64 radioGaps{0};       // missed packets
+    quint64 sendFailures{0};    // datagrams the shim could not send to the client
+};
 
 // What GET /v1/session returns: the radio side's view of this client's
 // tailnet link. The shim answers each caller with only its own sessions.
@@ -35,17 +48,20 @@ struct TailnetSessionReport {
     double shimCpuPct{0.0};
     qint64 shimRssKb{0};
     int mtuClamp{0};
-    int sessions{0};
-    // Summed over this client's sessions and streams, counted as datagrams
-    // leave the radio, before the tunnel.
-    quint64 radioPackets{0};
-    quint64 radioBreaks{0};     // sequence discontinuities
-    quint64 radioGaps{0};       // missed packets
-    quint64 sendFailures{0};    // datagrams the shim could not send to the client
+    QVector<TailnetRelaySession> sessions;
+
+    // The session this AetherSDR is streaming on, matched by its local
+    // VITA-49 port; null when none matches (not streaming yet, or the
+    // report is for another of this computer's clients).
+    const TailnetRelaySession* sessionForUdpPort(quint16 port) const;
 };
 
 namespace tailnetshim {
 std::optional<TailnetSessionReport> parseSessionReport(const QByteArray& json);
+
+// The port of an "address:port" endpoint ("100.64.1.2:4993",
+// "[fd7a::1]:4993"); 0 when there is none ("Not bound").
+quint16 portOfEndpoint(const QString& endpoint);
 
 // Sequence breaks per 100 packets the tunnel added: what the client saw over
 // a window, less what the radio had already lost before the tunnel. Both

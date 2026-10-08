@@ -151,10 +151,10 @@ int main(int argc, char** argv)
             "path_changes":2,"path_since_s":95,"to_client_kbps":812.4,
             "from_client_kbps":31.0,"last_handshake_s":40,"shim_cpu_pct":3.5,
             "shim_rss_kb":24576,"mtu_clamp":1200,"sessions":[
-              {"id":1,"peer":"laptop","to_client_failures":2,"streams":[
+              {"id":1,"peer":"laptop","client_udp":"100.64.0.5:4993","to_client_failures":2,"streams":[
                 {"stream_id":"0x40000000","packets":1000,"gaps":3,"breaks":1},
                 {"stream_id":"0x42000000","packets":500,"gaps":0,"breaks":0}]},
-              {"id":2,"peer":"laptop","to_client_failures":1,"streams":[
+              {"id":2,"peer":"laptop","client_udp":"100.64.0.5:51234","to_client_failures":1,"streams":[
                 {"stream_id":"0x04000008","packets":200,"gaps":2,"breaks":2}]}]})json";
         const auto r = tailnetshim::parseSessionReport(report);
         ok &= expect(r.has_value(), "session report parses");
@@ -164,18 +164,51 @@ int main(int argc, char** argv)
             ok &= expect(r->rttMs == 41.5 && r->rttVia == QLatin1String("DERP(sea)"), "rtt");
             ok &= expect(r->pathChanges == 2 && r->mtuClamp == 1200 && r->shimRssKb == 24576,
                          "scalars");
-            ok &= expect(r->sessions == 2 && r->sendFailures == 3, "sessions summed");
-            ok &= expect(r->radioPackets == 1700 && r->radioBreaks == 3 && r->radioGaps == 5,
-                         "streams summed across sessions");
+            ok &= expect(r->sessions.size() == 2, "both sessions kept");
+            const TailnetRelaySession* first = r->sessionForUdpPort(4993);
+            const TailnetRelaySession* second = r->sessionForUdpPort(51234);
+            ok &= expect(first && first->radioPackets == 1500 && first->radioBreaks == 1
+                             && first->radioGaps == 3 && first->sendFailures == 2,
+                         "a session's streams are summed within that session only");
+            ok &= expect(second && second->radioPackets == 200 && second->radioBreaks == 2
+                             && second->sendFailures == 1,
+                         "the second session keeps its own counters");
+            ok &= expect(!r->sessionForUdpPort(9999) && !r->sessionForUdpPort(0),
+                         "no session for a port that isn't streaming");
         }
         const auto none = tailnetshim::parseSessionReport(
             R"({"version":"0.4.0","rtt_ms":-1,"sessions":[]})");
-        ok &= expect(none && none->rttMs < 0 && none->sessions == 0,
+        ok &= expect(none && none->rttMs < 0 && none->sessions.isEmpty(),
                      "no RTT yet stays -1, no sessions is valid");
         ok &= expect(!tailnetshim::parseSessionReport("not json"), "garbage refused");
         ok &= expect(!tailnetshim::parseSessionReport(R"({"sessions":[]})"), "no version refused");
         ok &= expect(!tailnetshim::parseSessionReport(R"({"version":"0.4.0"})"),
                      "no sessions array refused");
+
+        ok &= expect(tailnetshim::portOfEndpoint(QStringLiteral("192.168.50.236:34733")) == 34733
+                         && tailnetshim::portOfEndpoint(QStringLiteral("[fd7a:115c:a1e0::5]:4993")) == 4993
+                         && tailnetshim::portOfEndpoint(QStringLiteral("Not bound")) == 0,
+                     "endpoint ports parse, IPv6 included");
+
+        // Two clients on one computer (Ozy311's case on PR #6273): this
+        // session lost 10 of 1000 in the tunnel, the other session lost 20
+        // inside the radio. Comparing only this session's counters shows the
+        // tunnel's loss; summing both sessions' radio counters hid it.
+        {
+            const QByteArray two = R"json({"version":"0.4.0","rtt_ms":-1,"sessions":[
+                {"client_udp":"100.64.0.5:4993","streams":[{"packets":1000,"gaps":0,"breaks":0}]},
+                {"client_udp":"100.64.0.5:51234","streams":[{"packets":1000,"gaps":20,"breaks":20}]}]})json";
+            const auto rep = tailnetshim::parseSessionReport(two);
+            const TailnetRelaySession* ours = rep ? rep->sessionForUdpPort(4993) : nullptr;
+            ok &= expect(ours != nullptr, "our session found by port");
+            if (ours) {
+                const double added = tailnetshim::tunnelBreakPercent(
+                    990, 10, static_cast<qint64>(ours->radioPackets),
+                    static_cast<qint64>(ours->radioBreaks));
+                ok &= expect(added > 1.0 && added < 1.02,
+                             "the tunnel's 1% loss shows, not the 0.01% the two sessions summed to");
+            }
+        }
 
         // Breaks the tunnel added: the client's rate less the radio's.
         ok &= expect(qFuzzyCompare(tailnetshim::tunnelBreakPercent(1000, 5, 1000, 1), 0.4),

@@ -2264,6 +2264,8 @@ NetworkDiagnosticsHistory::NetworkDiagnosticsHistory(RadioModel* model, AudioEng
         m_tunnel.setRadioAddress(connected && !m_model->isWan() ? m_model->radioAddress()
                                                                 : QHostAddress());
         m_tunnelClientPackets = -1;
+        m_tunnelSessionPort = 0;
+        m_tunnelSendFailures = -1;
     };
     connect(m_model, &RadioModel::connectionStateChanged, this, followRadio);
     followRadio(m_model->isConnected());
@@ -2465,8 +2467,27 @@ void NetworkDiagnosticsHistory::sampleTunnel(NetworkDiagnosticsSample& sample)
 
     // Break rates over the window between two shim reports, so the radio's
     // count and this client's cover the same packets (to within one RTT).
+    // Only this AetherSDR's own relay session is compared with its own
+    // stream counters: the report also carries any other client on this
+    // computer (a second AetherSDR, SmartSDR), whose losses aren't ours.
     if (m_tunnel.reportSerial() != m_tunnelSerial) {
         m_tunnelSerial = m_tunnel.reportSerial();
+        const quint16 ourPort = tailnetshim::portOfEndpoint(m_model->localUdpEndpoint());
+        const TailnetRelaySession* ours = report->sessionForUdpPort(ourPort);
+        m_tunnelSendFailures = ours ? static_cast<qint64>(ours->sendFailures) : -1;
+        if (!ours || ourPort != m_tunnelSessionPort) {
+            // Not streaming yet, or a different session than last time:
+            // its counters start a new baseline.
+            m_tunnelSessionPort = ours ? ourPort : 0;
+            m_tunnelClientPackets = -1;
+        }
+        if (!ours) {
+            m_tunnelRadioBreakPct = 0.0;
+            m_tunnelAddedBreakPct = 0.0;
+            sample.tunnelRadioBreakPct = 0.0;
+            sample.tunnelAddedBreakPct = 0.0;
+            return;
+        }
         qint64 clientPackets = 0;
         qint64 clientBreaks = 0;
         for (int i = 0; i < PanadapterStream::CatCount; ++i) {
@@ -2475,8 +2496,8 @@ void NetworkDiagnosticsHistory::sampleTunnel(NetworkDiagnosticsSample& sample)
             clientPackets += cs.packets;
             clientBreaks += cs.errors;
         }
-        const qint64 radioPackets = static_cast<qint64>(report->radioPackets);
-        const qint64 radioBreaks = static_cast<qint64>(report->radioBreaks);
+        const qint64 radioPackets = static_cast<qint64>(ours->radioPackets);
+        const qint64 radioBreaks = static_cast<qint64>(ours->radioBreaks);
         // A new session (or a restarted shim or stream) resets a counter:
         // take a fresh baseline rather than a negative window.
         const bool reset = m_tunnelClientPackets < 0 || clientPackets < m_tunnelClientPackets
@@ -3196,7 +3217,9 @@ void NetworkDiagnosticsDialog::refreshTunnel(const NetworkDiagnosticsSample& sam
         QStringLiteral("%1%").arg(sample.tunnelRadioBreakPct, 0, 'f', 2));
     m_tunnelAddedBreaksLabel->setText(
         QStringLiteral("%1%").arg(sample.tunnelAddedBreakPct, 0, 'f', 2));
-    m_tunnelSendFailuresLabel->setText(QString::number(report->sendFailures));
+    const qint64 failures = m_history->tunnelSendFailures();
+    m_tunnelSendFailuresLabel->setText(failures >= 0 ? QString::number(failures)
+                                                     : QStringLiteral("--"));
     m_tunnelShimLabel->setText(QStringLiteral("v%1, %2% CPU, %3 MB, MTU %4")
         .arg(report->version)
         .arg(report->shimCpuPct, 0, 'f', 1)

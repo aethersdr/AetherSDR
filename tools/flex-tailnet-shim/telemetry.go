@@ -67,13 +67,15 @@ func (v *vitaStats) note(b []byte) {
 		s = &streamGaps{last: -1}
 		v.streams[id] = s
 	}
-	if s.last >= 0 {
-		if count == s.last {
-			return // a repeat, not 15 lost packets
-		}
-		if missed := uint64((count - s.last - 1) & 0xF); missed > 0 {
-			s.gaps += missed
-			s.breaks++
+	// Packets and breaks are counted exactly as AetherSDR counts them
+	// (PanadapterStream: every datagram is a packet, and any count other
+	// than last+1 is a break), because Network Diagnostics subtracts one
+	// from the other. A repeated count is therefore a break, but not 15
+	// missed packets.
+	if s.last >= 0 && count != (s.last+1)&0xF {
+		s.breaks++
+		if count != s.last {
+			s.gaps += uint64((count - s.last - 1) & 0xF)
 		}
 	}
 	s.last = count

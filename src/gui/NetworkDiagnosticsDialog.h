@@ -108,6 +108,9 @@ public:
     bool hasTunnelTelemetry() const { return m_hasTunnelTelemetry; }
     // Whether this session is reached over the tailnet right now.
     bool isTunnelPolling() const { return m_tunnel.isPolling(); }
+    // Datagrams the shim couldn't send on this AetherSDR's own session;
+    // -1 until that session appears in a report.
+    qint64 tunnelSendFailures() const { return m_tunnelSendFailures; }
     // The latest report from the in-radio shim, when it is current.
     std::optional<TailnetSessionReport> tunnelReport() const { return m_tunnel.current(); }
 
@@ -134,6 +137,8 @@ private:
     TailnetLinkTelemetry m_tunnel;
     bool m_hasTunnelTelemetry{false};
     quint64 m_tunnelSerial{0};
+    quint16 m_tunnelSessionPort{0};     // our relay session's client UDP port
+    qint64 m_tunnelSendFailures{-1};
     qint64 m_tunnelClientPackets{-1};   // -1: no baseline yet
     qint64 m_tunnelClientBreaks{0};
     qint64 m_tunnelRadioPackets{0};

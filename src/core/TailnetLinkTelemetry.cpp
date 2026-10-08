@@ -54,23 +54,38 @@ std::optional<TailnetSessionReport> parseSessionReport(const QByteArray& json)
     r.shimCpuPct = o.value(QStringLiteral("shim_cpu_pct")).toDouble();
     r.shimRssKb = o.value(QStringLiteral("shim_rss_kb")).toInteger();
     r.mtuClamp = o.value(QStringLiteral("mtu_clamp")).toInt();
-    const QJsonArray sessions = o.value(QStringLiteral("sessions")).toArray();
-    r.sessions = sessions.size();
-    for (const QJsonValue& sv : sessions) {
+    auto count = [](const QJsonObject& o, const char* key) {
+        return static_cast<quint64>(std::max<qint64>(0, o.value(QLatin1String(key)).toInteger()));
+    };
+    for (const QJsonValue& sv : o.value(QStringLiteral("sessions")).toArray()) {
+        if (r.sessions.size() == 16) {
+            break;   // a computer has a client or two, not dozens
+        }
         const QJsonObject s = sv.toObject();
-        r.sendFailures += static_cast<quint64>(
-            std::max<qint64>(0, s.value(QStringLiteral("to_client_failures")).toInteger()));
+        TailnetRelaySession session;
+        session.clientUdp = s.value(QStringLiteral("client_udp")).toString().left(64);
+        session.clientUdpPort = portOfEndpoint(session.clientUdp);
+        session.sendFailures = count(s, "to_client_failures");
         for (const QJsonValue& stv : s.value(QStringLiteral("streams")).toArray()) {
             const QJsonObject st = stv.toObject();
-            r.radioPackets += static_cast<quint64>(
-                std::max<qint64>(0, st.value(QStringLiteral("packets")).toInteger()));
-            r.radioBreaks += static_cast<quint64>(
-                std::max<qint64>(0, st.value(QStringLiteral("breaks")).toInteger()));
-            r.radioGaps += static_cast<quint64>(
-                std::max<qint64>(0, st.value(QStringLiteral("gaps")).toInteger()));
+            session.radioPackets += count(st, "packets");
+            session.radioBreaks += count(st, "breaks");
+            session.radioGaps += count(st, "gaps");
         }
+        r.sessions.append(session);
     }
     return r;
+}
+
+quint16 portOfEndpoint(const QString& endpoint)
+{
+    const int colon = endpoint.lastIndexOf(QLatin1Char(':'));
+    if (colon <= 0) {
+        return 0;
+    }
+    bool ok = false;
+    const uint port = endpoint.mid(colon + 1).toUInt(&ok);
+    return ok && port <= 65535 ? static_cast<quint16>(port) : 0;
 }
 
 double tunnelBreakPercent(qint64 clientPackets, qint64 clientBreaks,
@@ -87,6 +102,19 @@ double tunnelBreakPercent(qint64 clientPackets, qint64 clientBreaks,
 }
 
 }  // namespace tailnetshim
+
+const TailnetRelaySession* TailnetSessionReport::sessionForUdpPort(quint16 port) const
+{
+    if (port == 0) {
+        return nullptr;
+    }
+    for (const TailnetRelaySession& s : sessions) {
+        if (s.clientUdpPort == port) {
+            return &s;
+        }
+    }
+    return nullptr;
+}
 
 TailnetLinkTelemetry::TailnetLinkTelemetry(QObject* parent)
     : QObject(parent)
