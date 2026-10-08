@@ -101,6 +101,7 @@ AnanRxDsp::RebuildResult AnanRxDsp::buildChannel(const Config& config)
     wc.filterHighHz = config.filterHighHz;
     wc.agcMode = config.agcMode;
     wc.maximumAgcGainDb = config.maximumAgcGainDb;
+    wc.agcFixedGainDb = config.agcFixedGainDb;
     wc.blockForOutput = config.blockForOutput;
     wc.noiseBlanker = config.noiseBlanker;
     wc.noiseBlankerLevel = config.noiseBlankerLevel;
@@ -206,6 +207,7 @@ void AnanRxDsp::installChannel(RebuildResult result)
     // buildChannel() actually built from.
     result.channel->setMode(m_config.mode);
     result.channel->setFilter(m_config.filterLowHz, m_config.filterHighHz);
+    result.channel->setAgcFixedGain(m_config.agcFixedGainDb);
     result.channel->setAgc(m_config.agcMode, m_config.maximumAgcGainDb);
     // A rebuild creates a fresh channel; restore the operator's current
     // slice offset rather than silently snapping the slice to centre.
@@ -271,6 +273,13 @@ void AnanRxDsp::setAgc(int agcMode, double maximumGainDb)
     m_config.maximumAgcGainDb = maximumGainDb;
     if (m_channel && !m_rebuildInFlight)
         m_channel->setAgc(agcMode, maximumGainDb);
+}
+
+void AnanRxDsp::setAgcFixedGain(double fixedGainDb)
+{
+    m_config.agcFixedGainDb = fixedGainDb;
+    if (m_channel && !m_rebuildInFlight)
+        m_channel->setAgcFixedGain(fixedGainDb);
 }
 
 void AnanRxDsp::setAudioMuted(bool muted)

@@ -13,6 +13,7 @@
 #include <QThread>
 #include <QTimer>
 
+#include <algorithm>
 #include <memory>
 #include <utility>
 #include <vector>
@@ -58,6 +59,9 @@ public:
     void setSliceMode(int sliceId, const QString& mode) override;
     void setSliceFilter(int sliceId, int lowHz, int highHz) override;
     void setSliceAgc(int sliceId, const QString& mode, int thresholdDb) override;
+    // The AGC-off level, which the base class drops. Mode and threshold edits
+    // go to setSliceAgc() as before.
+    void requestSliceAgc(int sliceId, const SliceAgcRequest& request) override;
     void setSliceNoiseBlanker(int sliceId, AetherSDR::NoiseBlankerKind kind,
                               int level, AetherSDR::NoiseBlankerFill fill) override;
     ReceiveDispatch requestSliceDsp(int sliceId, const SliceDspRequest& request) override;
@@ -141,14 +145,29 @@ public:
     // fixed rates.
     [[nodiscard]] static int nearestDdc0RateKsps(int requestedKsps) noexcept;
 
-    // Live operator AGC state as setSliceAgc() last stored it -- see the
-    // member declaration comment for why beginRateChange() needs this
-    // rather than reading connectRadio()'s connect-time snapshot. Exposed
-    // read-only for testing without a live radio (matches WdspChannel's
-    // own *ForTest accessor convention), not part of the operator-facing
-    // seam.
+    // The AGC-T knob (0..100) as WDSP gain in dB: the AGC's maximum gain, or
+    // the fixed gain with AGC off. -20..120 dB is the range of deskHPSDR's AGC
+    // gain slider and of Thetis's AGC-T, which sets both gains the same way.
+    static constexpr double kAgcKnobMinDb = -20.0;
+    static constexpr double kAgcKnobDbPerStep = 1.4;
+    [[nodiscard]] static constexpr double agcKnobDb(int level) noexcept
+    {
+        return kAgcKnobMinDb + kAgcKnobDbPerStep * std::clamp(level, 0, 100);
+    }
+    // 71 = 79.4 dB, the step nearest deskHPSDR's 80 dB AGC gain default.
+    static constexpr int kDefaultAgcThreshold = 71;
+    // 29 = 20.6 dB, the step nearest Thetis's 20 dB fixed gain default
+    // (deskHPSDR has no AGC-off gain control).
+    static constexpr int kDefaultAgcOffLevel = 29;
+
+    // Live operator AGC state as setSliceAgc()/requestSliceAgc() last stored
+    // it, which connectRadio() and beginRateChange() build the DSP config
+    // from. Exposed read-only for testing without a live radio (matches
+    // WdspChannel's own *ForTest accessor convention), not part of the
+    // operator-facing seam.
     [[nodiscard]] int agcModeForTest() const noexcept { return m_agcMode; }
-    [[nodiscard]] double agcCeilingDbForTest() const noexcept { return m_agcCeilingDb; }
+    [[nodiscard]] double agcCeilingDbForTest() const noexcept { return agcKnobDb(m_agcThreshold); }
+    [[nodiscard]] double agcFixedGainDbForTest() const noexcept { return agcKnobDb(m_agcOffLevel); }
     [[nodiscard]] int attenuationDbForTest() const noexcept { return m_attenuationDb; }
     [[nodiscard]] bool noiseBlankerOnForTest() const noexcept
     {
@@ -354,23 +373,24 @@ private:
     // from the live m_sliceFreqHz/m_mode. Zero/empty: nothing restored.
     double m_restoredFreqHz = 0.0;
     QString m_restoredMode;
-    // Live AGC state, so beginRateChange() rebuilds the DSP config from CURRENT
-    // state rather than connect-time defaults (which these match).
+    // Live AGC state in AGC-T knob units (agcKnobDb() converts). Both
+    // connectRadio() and beginRateChange() build the DSP config from it, so
+    // it survives a reconnect, and emitSliceState() publishes it so the knob
+    // shows what the DSP runs.
     int m_agcMode = 3;
-    double m_agcCeilingDb = 60.0;
+    int m_agcThreshold = kDefaultAgcThreshold;
+    int m_agcOffLevel = kDefaultAgcOffLevel;
     // Noise blanker as setSliceNoiseBlanker() last stored it. Both
-    // connectRadio() and beginRateChange() build the DSP config from it. This
-    // differs from the AGC pair, which only beginRateChange() reads:
-    // connectRadio() re-defaults AGC, but carries the blanker across a
-    // reconnect. emitSliceState() also publishes the pair when a different
-    // radio gets a fresh slice, keeping its NB button in agreement with the
-    // retained setting. Defaults match AnanRxDsp::Config's.
+    // connectRadio() and beginRateChange() build the DSP config from it, as
+    // they do the AGC above. emitSliceState() also publishes the pair when a
+    // different radio gets a fresh slice, keeping its NB button in agreement
+    // with the retained setting. Defaults match AnanRxDsp::Config's.
     AetherSDR::NoiseBlankerKind m_nbKind = AetherSDR::NoiseBlankerKind::Off;
     int m_nbLevel = 50;
     AetherSDR::NoiseBlankerFill m_nbFill = AetherSDR::kDefaultNoiseBlankerFill;
 
     // The receiver audio stage as last set; emitSliceState() publishes these.
-    // Retained across rate changes and reconnects (like the blanker, unlike AGC).
+    // Retained across rate changes and reconnects (like the blanker and AGC).
     // 100/50 = unity, centred.
     bool m_sliceAudioMuted = false;
     int m_sliceAudioGainPercent = 100;

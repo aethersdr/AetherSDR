@@ -518,8 +518,9 @@ void hostConfiguration()
                   "HL2 publishes its accepted AGC configuration");
         } else {
             const auto& anan = static_cast<const anan::AnanBackend&>(*backend);
-            check(anan.agcModeForTest() == 4 && std::abs(anan.agcCeilingDbForTest() - 30.0) < 1e-9,
-                  "ANAN retains WDSP AGC configuration without claiming a radio readback");
+            check(last(observations).agcMode == QStringLiteral("fast") && last(observations).agcThreshold == 50
+                      && anan.agcModeForTest() == 4 && std::abs(anan.agcCeilingDbForTest() - 50.0) < 1e-9,
+                  "ANAN publishes the WDSP AGC configuration it retains");
         }
         check(affinity.violations().isEmpty(), "driven host backend signals stay on the owner thread");
     }

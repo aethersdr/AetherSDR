@@ -53,6 +53,18 @@ QByteArray floatBytes(const std::vector<float>& v)
            static_cast<qsizetype>(v.size() * sizeof(float))};
 }
 
+// The slice model's name for a WDSP AGC mode, the inverse of setSliceAgc()'s
+// parse. WDSP's "long" (1) is never set here.
+QString agcModeName(int wdspMode)
+{
+    switch (wdspMode) {
+    case 0: return QStringLiteral("off");
+    case 2: return QStringLiteral("slow");
+    case 4: return QStringLiteral("fast");
+    default: return QStringLiteral("med");
+    }
+}
+
 }  // namespace
 
 WdspChannel::Mode AnanBackend::modeFromString(const QString& mode) noexcept
@@ -671,14 +683,12 @@ void AnanBackend::connectRadio(const RadioConnectRequest& request)
     m_pendingDspConfig.mode = modeFromString(m_mode);
     m_pendingDspConfig.filterLowHz = static_cast<double>(m_filterLowHz) + cwBfoHz();
     m_pendingDspConfig.filterHighHz = static_cast<double>(m_filterHighHz) + cwBfoHz();
-    m_pendingDspConfig.agcMode = 3;
-    // 60 dB, not Hl2RxDsp's 39 dB: on the G2 bench audio was too quiet until the
-    // ceiling slider reached 100 (= 60 dB via setSliceAgc()'s *0.6 mapping); this
-    // chain's uncalibrated gain sits lower than the HL2's. AGC only applies up to
-    // the ceiling on weak signals, so this cannot clip a strong one.
-    m_pendingDspConfig.maximumAgcGainDb = 60.0;
-    // This backend retains the NB request across reconnects. emitSliceState()
-    // also supplies that pair if a different radio requires a fresh slice.
+    // This backend retains the AGC and NB requests across reconnects.
+    // emitSliceState() also supplies them if a different radio requires a
+    // fresh slice.
+    m_pendingDspConfig.agcMode = m_agcMode;
+    m_pendingDspConfig.maximumAgcGainDb = agcKnobDb(m_agcThreshold);
+    m_pendingDspConfig.agcFixedGainDb = agcKnobDb(m_agcOffLevel);
     m_pendingDspConfig.noiseBlanker = AetherSDR::toWdsp(m_nbKind);
     m_pendingDspConfig.noiseBlankerLevel = m_nbLevel;
     m_pendingDspConfig.noiseBlankerFill = AetherSDR::toWdsp(m_nbFill);
@@ -911,23 +921,35 @@ void AnanBackend::setSliceFilter(int sliceId, int lowHz, int highHz)
 void AnanBackend::setSliceAgc(int sliceId, const QString& mode, int thresholdDb)
 {
     Q_UNUSED(sliceId);
-    // 0..100 operator units -> 0..60 dB ceiling, same map the HL2 uses
-    // (Hl2DbReference::kAgcCeilingDbPerUnit = 0.6) -- a WDSP-range fact, not an
-    // HL2 fact. The HL2 additionally REFERS this ceiling to its LNA gain, which
-    // is an HL2 fact and deliberately not copied here.
+    // thresholdDb is the AGC-T knob's 0..100, not dB: agcKnobDb() maps it.
     const QString m = mode.trimmed().toLower();
     int wdspMode = 3;   // medium, WDSP's own default
     if (m == QLatin1String("off"))  wdspMode = 0;
     else if (m == QLatin1String("slow")) wdspMode = 2;
     else if (m == QLatin1String("fast")) wdspMode = 4;
-    const double ceilingDb = static_cast<double>(thresholdDb) * 0.6;
-    // Live state for beginRateChange() to refresh m_pendingDspConfig from --
-    // see the member declaration comment.
+    // Live state for connectRadio() and beginRateChange() -- see the member
+    // declaration comment.
     m_agcMode = wdspMode;
-    m_agcCeilingDb = ceilingDb;
+    m_agcThreshold = std::clamp(thresholdDb, 0, 100);
     if (m_dsp) {
         QMetaObject::invokeMethod(m_dsp, "setAgc", Qt::QueuedConnection,
-            Q_ARG(int, wdspMode), Q_ARG(double, ceilingDb));
+            Q_ARG(int, wdspMode), Q_ARG(double, agcKnobDb(m_agcThreshold)));
+    }
+    emitSliceState();
+}
+
+void AnanBackend::requestSliceAgc(int sliceId, const SliceAgcRequest& request)
+{
+    if (request.field != SliceAgcRequest::Field::OffLevel) {
+        IRadioBackend::requestSliceAgc(sliceId, request);
+        return;
+    }
+    // Sent in every AGC mode: WDSP applies the fixed gain only with AGC off
+    // (wcpAGC.c xwcpagc), so a level set first takes effect when AGC goes off.
+    m_agcOffLevel = std::clamp(request.offLevel, 0, 100);
+    if (m_dsp) {
+        QMetaObject::invokeMethod(m_dsp, "setAgcFixedGain", Qt::QueuedConnection,
+            Q_ARG(double, agcKnobDb(m_agcOffLevel)));
     }
     emitSliceState();
 }
@@ -1117,7 +1139,8 @@ void AnanBackend::beginRateChange(int newRateKsps)
     m_pendingDspConfig.filterLowHz = static_cast<double>(m_filterLowHz) + cwBfoHz();
     m_pendingDspConfig.filterHighHz = static_cast<double>(m_filterHighHz) + cwBfoHz();
     m_pendingDspConfig.agcMode = m_agcMode;
-    m_pendingDspConfig.maximumAgcGainDb = m_agcCeilingDb;
+    m_pendingDspConfig.maximumAgcGainDb = agcKnobDb(m_agcThreshold);
+    m_pendingDspConfig.agcFixedGainDb = agcKnobDb(m_agcOffLevel);
     m_pendingDspConfig.noiseBlanker = AetherSDR::toWdsp(m_nbKind);
     m_pendingDspConfig.noiseBlankerLevel = m_nbLevel;
     m_pendingDspConfig.noiseBlankerFill = AetherSDR::toWdsp(m_nbFill);
@@ -1569,6 +1592,12 @@ void AnanBackend::emitSliceState()
     d.nbKind = m_nbKind;
     d.nbLevel = m_nbLevel;
     d.nbFill = m_nbFill;
+    // The AGC as the DSP runs it. Without this the knob showed the slice
+    // model's own default while the DSP ran this backend's, and the first
+    // touch or bookmark recall replaced one with the other.
+    d.agcMode = agcModeName(m_agcMode);
+    d.agcThreshold = m_agcThreshold;
+    d.agcOffLevel = m_agcOffLevel;
     // The audio stage as APPLIED. Both are required, not cosmetic: the receive
     // control gate refuses an operation whose observation is absent, so without
     // these two the mute and the fader are offered and then rejected.

@@ -661,6 +661,7 @@ int main(int argc, char** argv)
         cfg.filterHighHz = 2900.0;
         cfg.agcMode = 3;
         cfg.maximumAgcGainDb = 40.0;
+        cfg.agcFixedGainDb = 33.0;
         cfg.blockForOutput = true;
         cfg.noiseBlanker = WdspChannel::NoiseBlanker::Impulse;
         cfg.noiseBlankerLevel = 50;
@@ -671,10 +672,13 @@ int main(int argc, char** argv)
         check(initial.channel != nullptr,
               initial.error.empty() ? "initial background build succeeds" : initial.error.c_str());
         // Read BEFORE the install: installChannel() re-applies m_config's
-        // blanker anyway, so only the built channel shows buildChannel() did.
+        // blanker and AGC-off gain anyway, so only the built channel shows
+        // buildChannel() did.
         check(initial.channel && initial.channel->noiseBlankerEnabled()
                   && initial.channel->config().noiseBlankerLevel == 50,
               "buildChannel() opens the channel with the requested noise blanker");
+        check(initial.channel && initial.channel->config().agcFixedGainDb == 33.0,
+              "buildChannel() opens the channel with the requested AGC-off gain");
         check(dsp.installRebuiltChannel(std::move(initial)),
               "first-connect installs its asynchronously built channel");
         check(dsp.channelForTest()->config().mode == cfg.mode,
@@ -694,6 +698,9 @@ int main(int argc, char** argv)
         dsp.setMode(WdspChannel::Mode::Lsb);
         dsp.setFilter(-2900.0, -100.0);
         dsp.setAgc(2, 25.0);
+        dsp.setAgcFixedGain(15.0);
+        check(dsp.channelForTest()->config().agcFixedGainDb == 15.0,
+              "setAgcFixedGain() reaches the live channel");
 
         // installRebuiltChannel() on a failed/null result must be a clean
         // no-op: old channel untouched, false returned.
@@ -711,6 +718,10 @@ int main(int argc, char** argv)
         // Deferred, not pushed: the swap below has to apply it.
         dsp.setNoiseBlanker(WdspChannel::NoiseBlanker::Off, 80,
                             WdspChannel::NoiseBlankerFill::Zero);
+        // And the AGC-off gain, likewise deferred.
+        dsp.setAgcFixedGain(44.0);
+        check(dsp.channelForTest()->config().agcFixedGainDb == 15.0,
+              "setAgcFixedGain() during a build leaves the live channel alone");
 
         // buildChannel() is static and thread-agnostic -- built here from a
         // config that does NOT reflect the operator's LSB/filter/AGC change
@@ -734,6 +745,8 @@ int main(int argc, char** argv)
         check(installed->config().agcMode == 2
               && installed->config().maximumAgcGainDb == 25.0,
               "installRebuiltChannel() re-applies the operator's CURRENT AGC setting");
+        check(installed->config().agcFixedGainDb == 44.0,
+              "installRebuiltChannel() re-applies an AGC-off gain change made during the build");
         check(!installed->noiseBlankerEnabled()
                   && installed->config().noiseBlankerLevel == 80,
               "installRebuiltChannel() re-applies a noise blanker change made "
