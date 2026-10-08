@@ -238,6 +238,7 @@ private:
     QLabel* m_audioStreamsDetailLabel;
     QLabel* m_overviewStatusValue{nullptr};
     QLabel* m_overviewLatencyValue{nullptr};
+    QLabel* m_overviewTunnelLatencyLabel{nullptr};  // tailnet sessions only
     QLabel* m_overviewLossValue{nullptr};
     QLabel* m_overviewAudioValue{nullptr};
     QLabel* m_digitalVoiceWaveformModeLabel{nullptr};

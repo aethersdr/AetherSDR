@@ -471,6 +471,17 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model,
     overviewLayout->addWidget(statusCard.first, 0, 0);
     const auto latencyCard = makeHealthCard("Latency", "Round-trip time");
     m_overviewLatencyValue = latencyCard.second;
+    // The radio side's own view of a tailnet link, under the client's RTT.
+    if (QVBoxLayout* latencyLayout = diagnosticsPanelLayout(latencyCard.first)) {
+        m_overviewTunnelLatencyLabel = new QLabel;
+        m_overviewTunnelLatencyLabel->setWordWrap(true);
+        m_overviewTunnelLatencyLabel->setAccessibleName(QStringLiteral("Tunnel latency"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(
+            m_overviewTunnelLatencyLabel,
+            "QLabel { color: {{color.text.primary}}; font-weight: 600; font-size: 12px; }");
+        m_overviewTunnelLatencyLabel->setVisible(false);
+        latencyLayout->insertWidget(latencyLayout->count() - 1, m_overviewTunnelLatencyLabel);
+    }
     overviewLayout->addWidget(latencyCard.first, 0, 1);
     const auto lossCard = makeHealthCard("Packet Loss", "Recent sequence gaps");
     m_overviewLossValue = lossCard.second;
@@ -2992,10 +3003,40 @@ void NetworkDiagnosticsDialog::refreshTunnel(const NetworkDiagnosticsSample& sam
     // The trend traces keep the history; the panel describes this session only.
     const bool show = m_history->hasTunnelTelemetry() && m_history->isTunnelPolling();
     m_tunnelSection->setVisible(show);
+    if (m_overviewTunnelLatencyLabel) {
+        m_overviewTunnelLatencyLabel->setVisible(show);
+    }
     if (!show) {
         return;
     }
     const std::optional<TailnetSessionReport> report = m_history->tunnelReport();
+    if (m_overviewTunnelLatencyLabel) {
+        QString where;
+        if (report) {
+            if (report->path == QLatin1String("direct")) {
+                where = QStringLiteral("direct");
+            } else if (report->path == QLatin1String("peer-relay")) {
+                where = QStringLiteral("peer relay");
+            } else if (report->path == QLatin1String("relay")) {
+                where = report->relay.isEmpty() ? QStringLiteral("DERP")
+                                                : QStringLiteral("DERP %1").arg(report->relay);
+            }
+        }
+        QString text;
+        if (!report) {
+            text = QStringLiteral("Tunnel: no report");
+        } else if (report->rttMs >= 0.0 && report->rttAgeS <= 60.0) {
+            text = where.isEmpty()
+                ? QStringLiteral("Tunnel %1 ms").arg(report->rttMs, 0, 'f', 0)
+                : QStringLiteral("Tunnel %1 ms, %2").arg(report->rttMs, 0, 'f', 0).arg(where);
+        } else {
+            text = where.isEmpty() ? QStringLiteral("Tunnel: measuring")
+                                   : QStringLiteral("Tunnel: %1, measuring").arg(where);
+        }
+        m_overviewTunnelLatencyLabel->setText(text);
+        m_overviewTunnelLatencyLabel->setAccessibleDescription(
+            QStringLiteral("Round trip measured by the radio's remote-access container"));
+    }
     if (!report) {
         const QString dash = QStringLiteral("--");
         m_tunnelPathLabel->setText(QStringLiteral("No report"));
