@@ -8654,7 +8654,7 @@ add_test(NAME deepfist_model_assets_test COMMAND deepfist_model_assets_test)
 set_tests_properties(deepfist_model_assets_test PROPERTIES TIMEOUT 20)
 
 # Opt-in real backend: file/PCM tests only; no sockets or sound devices.
-if(ENABLE_DEEPFIST_EXPERIMENT)
+if(ORT_FOUND)
     add_executable(deepfist_cw_model_test tests/deepfist_cw_model_test.cpp)
     target_include_directories(deepfist_cw_model_test PRIVATE src third_party/deepfist)
     target_link_libraries(deepfist_cw_model_test PRIVATE aethercore Qt6::Core)

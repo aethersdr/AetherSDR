@@ -3014,34 +3014,31 @@ endif()
 
 target_sources(aethercore PRIVATE src/models/CwRxModel.cpp src/models/CwRxModel.h)
 
-option(ENABLE_DEEPFIST_EXPERIMENT "Build the local DeepFist CW prototype" OFF)
-set(DEEPFIST_MODEL_BASE_URL "" CACHE STRING "Published, versioned HTTPS DeepFist asset directory (empty before publication)")
+# Neural CW receive decoders (RFC #4817): built wherever ONNX Runtime is found
+# (Apple Silicon, Linux, Windows; the pinned runtime has no Intel-macOS build).
+# Their models are never shipped: each downloads on first use from its upstream
+# release at a pinned size and SHA-256.
+set(DEEPFIST_MODEL_BASE_URL "https://github.com/n9bc/DeepFist/releases/download/exp27_bt-champion/"
+    CACHE STRING "Published, versioned HTTPS DeepFist asset directory")
 target_compile_definitions(aethercore PRIVATE DEEPFIST_MODEL_BASE_URL="${DEEPFIST_MODEL_BASE_URL}")
-if(ENABLE_DEEPFIST_EXPERIMENT)
-    if(NOT ORT_FOUND)
-        message(FATAL_ERROR "The DeepFist prototype requires the packaged ONNX Runtime")
-    endif()
-    target_compile_definitions(aethercore PUBLIC HAVE_DEEPFIST)
+
+if(ORT_FOUND)
+    target_compile_definitions(aethercore PUBLIC HAVE_ONNX)
+    # Every CW receive backend beyond ggmorse needs ONNX Runtime, so this one
+    # gate decides whether the CW panel offers a decoder selector (RFC #4817).
+    target_compile_definitions(aethercore PUBLIC HAVE_DEEPFIST HAVE_DEEPCW HAVE_CW_RX_BACKENDS)
     target_sources(aethercore PRIVATE
         src/models/DeepFistCwModel.cpp src/models/DeepFistCwModel.h
         src/core/deepfist/DeepFistStream.cpp
         third_party/deepfist/DeepFistConditioner.cpp
         third_party/deepfist/DeepFistSpectrogram.cpp
         third_party/deepfist/DeepFistCtc.cpp
-        third_party/deepfist/DeepFistModel.cpp)
-    target_include_directories(aethercore PRIVATE "${CMAKE_SOURCE_DIR}/third_party/deepfist")
-endif()
-
-if(ORT_FOUND)
-    target_compile_definitions(aethercore PUBLIC HAVE_ONNX)
-    # Every CW receive backend beyond ggmorse needs ONNX Runtime, so this one
-    # gate decides whether the CW panel offers a decoder selector (RFC #4817).
-    target_compile_definitions(aethercore PUBLIC HAVE_DEEPCW HAVE_CW_RX_BACKENDS)
-    target_sources(aethercore PRIVATE
+        third_party/deepfist/DeepFistModel.cpp
         src/core/DeepCwEngine.cpp src/core/DeepCwEngine.h
         src/core/DeepCwCommitter.cpp src/core/DeepCwCommitter.h
         src/models/DeepCwRxBackend.cpp src/models/DeepCwRxBackend.h
         src/core/deepfist/DeepFistModelAssets.cpp src/core/deepfist/DeepFistModelAssets.h)
+    target_include_directories(aethercore PRIVATE "${CMAKE_SOURCE_DIR}/third_party/deepfist")
     # PUBLIC include dir: core/SignalClassifier.h includes onnxruntime under
     # HAVE_ONNX (PUBLIC) and is pulled in by gui/MainWindow.h. Same transitive
     # leak as FFTW3 above. Library link stays PRIVATE (transitive via the lib).
