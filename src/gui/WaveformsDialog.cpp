@@ -2010,8 +2010,16 @@ void WaveformsDialog::refreshWaveformList()
             configureBtn = new QPushButton(tr("Configure…"), actionWidget);
             configureBtn->setAccessibleName(tr("Configure remote access for waveform %1").arg(name));
             connect(configureBtn, &QPushButton::clicked, this, [this]() {
+                // A CanonWindow: one at a time; a second click raises it.
+                static QPointer<TailnetShimDialog> open;
+                if (open) {
+                    open->raise();
+                    open->activateWindow();
+                    return;
+                }
                 auto* dialog = new TailnetShimDialog(m_radioModel, this);
                 dialog->setAttribute(Qt::WA_DeleteOnClose);
+                open = dialog;
                 dialog->show();
             });
         }

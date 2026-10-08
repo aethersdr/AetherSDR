@@ -1,6 +1,6 @@
 #pragma once
 
-#include "PersistentDialog.h"
+#include "CanonWindow.h"
 #include "core/TailnetShimClient.h"
 
 class QCheckBox;
@@ -19,7 +19,7 @@ class RadioModel;
 // edits who may connect, and signs the radio out. Opened from the shim's row
 // in the Waveforms dialog. Works only over the radio's LAN, because that is
 // the only place the container's provisioning API listens.
-class TailnetShimDialog : public PersistentDialog {
+class TailnetShimDialog : public CanonWindow {
     Q_OBJECT
 public:
     explicit TailnetShimDialog(RadioModel* model, QWidget* parent = nullptr);
@@ -28,6 +28,11 @@ private:
     void refresh();
     void showStatus(const TailnetShimStatus& status);
     void showError(const QString& message);
+    void showMessage(const QString& message, const QString& tone);
+    void setStatusLine(const QString& text, const QString& state);
+    // Sets wrapped text and reserves its height: a fixed-width CanonWindow
+    // under-reports wrapped labels' height (the About window does the same).
+    void setWrapped(QLabel* label, const QString& text, int width);
     void setBusy(bool busy, const QString& what = {});
     void updateControls();
     void join();
@@ -46,6 +51,7 @@ private:
     bool m_busy{false};
     std::optional<TailnetShimStatus> m_status;
 
+    QLabel* m_statusDot{nullptr};
     QLabel* m_stateLabel{nullptr};
     QLabel* m_nameLabel{nullptr};
     QLabel* m_addressLabel{nullptr};
@@ -68,6 +74,9 @@ private:
     QLineEdit* m_extraDevicesEdit{nullptr};
     QPushButton* m_saveSharingButton{nullptr};
     QLabel* m_sharingNote{nullptr};
+
+    int m_bodyTextWidth{0};   // full-width text in the window body
+    int m_cardTextWidth{0};   // full-width text inside a card
 };
 
 }  // namespace AetherSDR

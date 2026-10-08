@@ -7,6 +7,7 @@
 #include <QStringList>
 
 #include <optional>
+#include <utility>
 
 class QNetworkReply;
 
