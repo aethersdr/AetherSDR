@@ -127,6 +127,9 @@ RUN python3 -m venv /tmp/aqt-venv \
 #
 # LIBSECRET_SUPPORT=ON for the same reason it is there: without libsecret,
 # qtkeychain has no backend on Secret-Service-only desktops (RFC #6271).
+# qtkeychain loads libsecret at runtime, so with Ubuntu's --as-needed the
+# library has no NEEDED entry for it; the check below looks for the backend
+# itself (the libsecret function names it resolves) instead.
 #
 # The version, commit pin and flags below are hand-duplicated from
 # scripts/setup/setup-qtkeychain.sh rather than sourced from it: this image is
@@ -150,7 +153,7 @@ RUN git clone --depth 1 --branch "${QTKEYCHAIN_VERSION}" \
     && cmake --build /tmp/qtkeychain-build -j"$(nproc)" \
     && cmake --install /tmp/qtkeychain-build \
     && test -f "${QTKEYCHAIN_ROOT}/lib/cmake/Qt6Keychain/Qt6KeychainConfig.cmake" \
-    && readelf -d "${QTKEYCHAIN_ROOT}"/lib/libqt6keychain.so.* | grep -q libsecret-1 \
+    && grep -aq secret_password_lookup "${QTKEYCHAIN_ROOT}"/lib/libqt6keychain.so.0.* \
     && rm -rf /tmp/qtkeychain-src /tmp/qtkeychain-build
 
 # CMake reads CMAKE_PREFIX_PATH from the environment, so ci.yml / codeql.yml /

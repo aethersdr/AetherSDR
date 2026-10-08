@@ -22,9 +22,10 @@
 # silently live only for the session (measured on Hyprland + GNOME Keyring,
 # RFC #6271). The build therefore requires libsecret-1 (libsecret-1-dev);
 # the check below fails loudly rather than letting qtkeychain quietly fall
-# back to building without it. linuxdeploy bundles libsecret for the
-# AppImage. The flag has no effect on macOS, where qtkeychain always uses
-# the native Keychain backend.
+# back to building without it. qtkeychain loads libsecret at runtime
+# (QLibrary "secret-1"), so the library comes from the user's system, where
+# every Secret Service desktop has it. The flag has no effect on macOS, where
+# qtkeychain always uses the native Keychain backend.
 #
 # Requires: cmake, ninja, a C++ compiler, git, and a discoverable Qt6.
 #
@@ -166,15 +167,18 @@ JOBS="$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1)"
 cmake --build "$BUILD_DIR" -j"$JOBS"
 cmake --install "$BUILD_DIR"
 
-# Linux: prove the library really links libsecret, so a silent fallback can
-# never ship again.
+# Linux: prove the libsecret backend is compiled in, so a silent fallback
+# can never ship again. qtkeychain resolves libsecret's functions at runtime,
+# so a linker that drops unused libraries (--as-needed, Ubuntu's default)
+# leaves no NEEDED entry to look for. The names it resolves are in the
+# library only when the backend was built.
 if [ "$LIBSECRET_FLAG" = "ON" ]; then
     LIB="$(ls "$OUT_DIR_ABS"/lib*/libqt6keychain.so.* 2>/dev/null | head -1)"
-    if [ -z "$LIB" ] || ! (readelf -d "$LIB" 2>/dev/null || ldd "$LIB") | grep -q 'libsecret-1'; then
-        echo "ERROR: $LIB does not link libsecret-1." >&2
+    if [ -z "$LIB" ] || ! grep -aq 'secret_password_lookup' "$LIB"; then
+        echo "ERROR: $LIB was built without its libsecret backend." >&2
         exit 1
     fi
-    echo "Verified: qtkeychain links libsecret-1"
+    echo "Verified: qtkeychain has its libsecret backend"
 fi
 
 # ── Cleanup ──────────────────────────────────────────────────────────────
