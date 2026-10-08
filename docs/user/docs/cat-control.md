@@ -8,7 +8,7 @@ AetherSDR has a built-in CAT server, so logging and digital-mode programs can re
 
 CAT works with WSJT-X, JTDX, fldigi, JS8Call, Winlink/VARA, N1MM+, DXLog and most other Hamlib- or Kenwood-aware programs. For audio, pair it with [DAX Virtual Audio](./dax-virtual-audio.md), or use the [TCI Server](./tci-server.md), which carries CAT and audio over one connection.
 
-![CAT Control applet in its own window. A Disabled button at the top with the hint Enable before configuring ports. Below is a table of CAT channels with the columns Enabled, Port, Dialect, VFO A, VFO B, PTY and Clients: the first row is port 4532 using the Rigctld dialect, the second is port 5001 using the Flex dialect, and the remaining rows are unassigned Flex channels.](/img/screens/cat-applet.png)
+<img src="/img/screens/cat-applet.png" width="368" alt="CAT Control applet in its own window. A Disabled button at the top with the hint Enable before configuring ports. Below is a table of CAT channels with the columns Enabled, Port, Dialect, VFO A, VFO B, PTY and Clients: the first row is port 4532 using the Rigctld dialect, the second is port 5001 using the Flex dialect with VFO B set to B, and the remaining six rows are unassigned Flex channels." />
 
 *The CAT Control applet popped out of the applet panel, showing the full channel table.*
 

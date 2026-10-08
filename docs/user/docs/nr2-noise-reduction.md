@@ -46,6 +46,10 @@ NR2 is less effective against impulse noise (clicks, pops, lightning crashes); u
 
 The first time you enable NR2, AetherSDR optimizes the FFT plans it uses (FFTW "wisdom"). An **AetherSDR — FFTW Wisdom** window appears while this runs:
 
+<img src="/img/screens/fftw-wisdom-window.png" width="500" alt="AetherSDR FFTW Wisdom window. It reads Computing COMPLEX FORWARD FFT size 2048... and This window will automatically close when wisdom generation is complete, above a progress bar at 38%, Working..., an elapsed time of 0:09 and a Cancel button." />
+
+*The FFTW Wisdom window, shown the first time NR2 starts on a computer.*
+
 - It shows progress, a **Working** activity indicator and an **Elapsed** time counter. Planning can take several minutes on some systems; if the progress pauses, the window says it is still working.
 - The window is modeless — keep operating while it runs. On macOS it stays visible when AetherSDR is not the frontmost app.
 - Clicking NR2 again while it runs brings the same window forward instead of starting a second run.

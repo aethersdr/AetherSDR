@@ -42,6 +42,10 @@ AetherSDR handles this automatically:
 
 **Settings → multiFLEX...** opens the **multiFLEX Dashboard**, a live list of every connected station:
 
+<img src="/img/screens/multiflex-dashboard.png" width="760" alt="multiFLEX Dashboard window headed multiFLEX Stations with a green Enabled indicator. A table with columns Local PTT, Station, TX Ant and TX Freq (MHz) lists one row: a tick, AetherSDR, ANT1 and 14.250. A Close button sits at the bottom right." />
+
+*The multiFLEX Dashboard: every station sharing the radio.*
+
 | Column | Meaning |
 |--------|---------|
 | **LOCAL PTT** | A check mark shows which station holds PTT authority |

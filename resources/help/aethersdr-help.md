@@ -1,5 +1,7 @@
 # AetherSDR Help
 
+Full documentation: [docs.aethersdr.com](https://docs.aethersdr.com/)
+
 ## The Main Window at a Glance
 
 If you only remember one mental map of AetherSDR, make it this:

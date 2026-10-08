@@ -16,6 +16,10 @@ Open the map from **Tools → PSK Reporter…** Type your callsign in **Call:** 
 
 The **Reports** group at the top of the left sidebar chooses what is shown:
 
+<img src="/img/screens/psk-reporter-sidebar.png" width="300" alt="PSK Reporter sidebar. WSPR beacon: TX call KK7GWY, Grid (blacked out), Band 20m, Reported 30 dBm, Offset 1500.0 Hz, Level -20 dBFS, a Transmit once button and an Idle status. Reports: Call KK7GWY, Band All, Mode All, Lookback 1 hour, All Callsigns unticked and Active monitors ticked. Band conditions: 80-40m Good, 30-20m Good, 17-15m Fair, 12-10m Poor. Map: Globe, Paths, Day/night (ticked), Dark map and a Map brightness slider at 100%, then City lights." />
+
+*The PSK Reporter window's sidebar: WSPR beacon, report filters, band conditions and map options. The grid square is blacked out.*
+
 | Control | What it does |
 |---|---|
 | **Call:** | A callsign whose sent and received reports you want to see (normally your own) |

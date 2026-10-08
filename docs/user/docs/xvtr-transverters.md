@@ -19,6 +19,10 @@ the FlexRadio's XVTR configuration and its XVTA / XVTB antenna ports.
 
 ### Configuring a transverter
 
+<img src="/img/screens/radio-setup-transverters.png" width="679" alt="Transverters page headed FLEX-8600, with tabs 2m, 70cm, 23cm and a plus tab. The 2m tab shows Name 2m, RF Freq 144.000 MHz, IF Freq 28.000 MHz, LO Freq 116.000 MHz, LO Error 0.000000, RX Gain 0.0 dB, RX Only Disabled, Max Power 10.0 dBm, a green Valid status and a red Remove button." />
+
+*Radio Setup, Transverters page, showing a transverter already set up on the radio.*
+
 1. Open **Settings → Radio Setup... → Transverters** (or click **XVTR** in the
    panadapter's Band panel, which jumps there).
 2. Click **Create New Transverter**.

@@ -6,6 +6,8 @@
 #include "gui/HelpDialog.h"
 
 #include <QApplication>
+#include <QDesktopServices>
+#include <QFile>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMetaObject>
@@ -13,6 +15,8 @@
 #include <QTemporaryFile>
 #include <QTextBrowser>
 #include <QTextCursor>
+#include <QTest>
+#include <QUrl>
 #include <cstdio>
 #include <string>
 
@@ -177,6 +181,76 @@ void testEmptyQueryDisablesFind()
     report("find button disables when query clears", !widgets.button->isEnabled());
 }
 
+// Stands in for the system browser: QDesktopServices hands it every https URL.
+class UrlCatcher : public QObject {
+    Q_OBJECT
+public:
+    QList<QUrl> urls;
+public slots:
+    void handle(const QUrl& url) { urls.append(url); }
+};
+
+// Click the anchor whose visible text contains `linkText` in the browser, the
+// way an operator would, and return what the browser asked the OS to open.
+QList<QUrl> clickLink(QTextBrowser* browser, UrlCatcher& catcher, const QString& linkText)
+{
+    catcher.urls.clear();
+    QTextCursor cursor = browser->document()->find(linkText);
+    if (cursor.isNull())
+        return {};
+    const int mid = (cursor.selectionStart() + cursor.selectionEnd()) / 2;
+    cursor.setPosition(mid);
+    browser->ensureCursorVisible();
+    browser->setTextCursor(cursor);
+    browser->ensureCursorVisible();
+    QCoreApplication::processEvents();
+    const QPoint pos = browser->cursorRect(cursor).center();
+    QTest::mouseClick(browser->viewport(), Qt::LeftButton, Qt::NoModifier, pos);
+    QCoreApplication::processEvents();
+    return catcher.urls;
+}
+
+// HelpDialog's QTextBrowser has openExternalLinks on: an http(s) link opens in
+// the system browser and the dialog stays on its guide. Uses the real bundled
+// page, which carries both a docs.aethersdr.com and a GitHub link.
+void testExternalLinksOpenInSystemBrowser()
+{
+    const QString page = QStringLiteral(AETHER_SOURCE_DIR)
+                         + QStringLiteral("/resources/help/contributing-to-aethersdr.md");
+    report("bundled contributing page exists", QFile::exists(page));
+
+    UrlCatcher catcher;
+    QDesktopServices::setUrlHandler(QStringLiteral("https"), &catcher, "handle");
+
+    HelpDialog dialog("Contributing to AetherSDR", page);
+    dialog.show();
+    QCoreApplication::processEvents();
+    HelpWidgets widgets = findWidgets(dialog);
+    if (!requireWidgets(widgets)) {
+        QDesktopServices::unsetUrlHandler(QStringLiteral("https"));
+        return;
+    }
+    const QString before = widgets.browser->toPlainText();
+
+    const QList<QUrl> docs = clickLink(widgets.browser, catcher,
+                                       QStringLiteral("docs.aethersdr.com/contributing-guide"));
+    report("docs link opens in the system browser",
+           docs == QList<QUrl>{QUrl(QStringLiteral("https://docs.aethersdr.com/contributing-guide"))},
+           docs.isEmpty() ? "(nothing opened)" : docs.first().toString().toStdString());
+
+    const QList<QUrl> github = clickLink(widgets.browser, catcher,
+                                         QStringLiteral("github.com/aethersdr/AetherSDR"));
+    report("GitHub link opens in the system browser",
+           github == QList<QUrl>{QUrl(QStringLiteral("https://github.com/aethersdr/AetherSDR"))},
+           github.isEmpty() ? "(nothing opened)" : github.first().toString().toStdString());
+
+    report("dialog did not navigate away from the guide",
+           widgets.browser->source().isEmpty() && widgets.browser->toPlainText() == before,
+           widgets.browser->source().toString().toStdString());
+
+    QDesktopServices::unsetUrlHandler(QStringLiteral("https"));
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -193,6 +267,7 @@ int main(int argc, char** argv)
     testNoMatchClearsSelectionAndRecovers();
     testReturnPressedFindsNext();
     testEmptyQueryDisablesFind();
+    testExternalLinksOpenInSystemBrowser();
 
     std::printf("\n%s\n",
                 g_failed == 0
@@ -200,3 +275,5 @@ int main(int argc, char** argv)
                     : (std::to_string(g_failed) + " test(s) failed.").c_str());
     return g_failed == 0 ? 0 : 1;
 }
+
+#include "help_dialog_test.moc"

@@ -23,6 +23,10 @@ Open **Tools → Configure KiwiSDR...**. It opens **Settings → Radio Setup... 
 
 Each receiver has:
 
+<img src="/img/screens/radio-setup-kiwi.png" width="649" alt="KiwiSDR RX Antennas group. A note says passwords are kept only for the current session. Configured Receivers reads No KiwiSDR receivers configured. Under Add Receiver, the Name field holds Example Kiwi, the Server field kiwi.example.org:8073, the Password field is empty and Type is KiwiSDR, with an Auto-connect checkbox and Browse public… and Add receiver buttons. Import… and Export… buttons sit at the bottom right." />
+
+*The KiwiSDR RX Antennas group on the Antennas page, with a receiver typed in but not yet added.*
+
 | Field | Use |
 |-------|-----|
 | **Name** | Required display name. It is how the receiver appears in antenna menus. |

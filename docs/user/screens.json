@@ -1,221 +1,4666 @@
 {
-  "description": "Scripted documentation screenshots. Regenerate with: python3 tools/docs/capture_screenshots.py --build-dir build-docs (see the script's docstring). Every shot runs against the built-in DEMO simulator (serial DEMO-0001) in a fresh settings profile with the default dark theme. Steps are raw automation-bridge requests (docs/automation-bridge.md) plus a few script helpers: click_text, wait_visible, wait_floors, close_windows, sleep.",
+  "description": "Scripted documentation screenshots; see the docstring of tools/docs/capture_screenshots.py for how to run them. Shots tagged \"radio\": \"demo\" (the pages that teach the simulator) run against the built-in DEMO simulator (serial DEMO-0001) in a private network namespace; every other shot runs against a real FlexRadio given with --radio-serial and --no-netns, on 20 m. Shots tagged \"offscreen\" are popup menus and run in a separate --platform offscreen pass. Each shot sits under its anchor_heading on its page (\"intro\" means before the first section). Crop boxes and redact boxes are in logical pixels; device_pixel_ratio is the capture display's scale, used to size the embedded images. Steps are raw automation-bridge requests (docs/automation-bridge.md) plus a few script helpers: click_text, wait_visible, wait_floors, wait_slice, close_windows, sleep.",
+  "device_pixel_ratio": 1.6667,
   "hostname": "aethersdr-demo",
   "settle": 0.8,
   "setup": [
-    {"wait_slice": true, "timeout": 30},
-    {"cmd": "invoke", "target": "Default Dark", "action": "trigger", "_allow_fail": true},
-    {"cmd": "resize", "value": "1600 1000"},
-    {"cmd": "station", "value": "AetherSDR", "_allow_fail": true},
-    {"cmd": "tune", "value": "14.100"},
-    {"cmd": "slice", "action": "mode", "value": "USB"},
-    {"wait_floors": true, "timeout": 30},
-    {"sleep": 30}
+    {
+      "wait_slice": true,
+      "timeout": 30
+    },
+    {
+      "cmd": "invoke",
+      "target": "Default Dark",
+      "action": "trigger",
+      "_allow_fail": true
+    },
+    {
+      "cmd": "resize",
+      "value": "1600 1000"
+    },
+    {
+      "cmd": "station",
+      "value": "AetherSDR",
+      "_allow_fail": true
+    },
+    {
+      "cmd": "invoke",
+      "target": "pan 0/panMenuBandBtn",
+      "action": "click",
+      "_sleep": 0.8
+    },
+    {
+      "click_text": "20",
+      "scope": "bandPanel",
+      "_sleep": 3
+    },
+    {
+      "wait_slice": true,
+      "timeout": 30
+    },
+    {
+      "cmd": "pan",
+      "action": "center",
+      "value": "14.250"
+    },
+    {
+      "cmd": "tune",
+      "value": "14.250"
+    },
+    {
+      "cmd": "slice",
+      "action": "mode",
+      "value": "USB"
+    },
+    {
+      "wait_floors": true,
+      "timeout": 30
+    },
+    {
+      "sleep": 60
+    }
   ],
   "before_each": [
-    {"close_windows": true},
-    {"cmd": "tune", "value": "14.100"},
-    {"cmd": "slice", "action": "mode", "value": "USB"}
+    {
+      "close_windows": true
+    },
+    {
+      "cmd": "resize",
+      "value": "1600 1000"
+    },
+    {
+      "cmd": "tune",
+      "value": "14.250"
+    },
+    {
+      "cmd": "slice",
+      "action": "mode",
+      "value": "USB"
+    }
+  ],
+  "setup_offscreen": [
+    {
+      "wait_slice": true,
+      "timeout": 30
+    },
+    {
+      "cmd": "invoke",
+      "target": "Default Dark",
+      "action": "trigger",
+      "_allow_fail": true
+    },
+    {
+      "cmd": "resize",
+      "value": "1600 1000"
+    },
+    {
+      "cmd": "station",
+      "value": "AetherSDR",
+      "_allow_fail": true
+    },
+    {
+      "cmd": "pan",
+      "action": "center",
+      "value": "14.250"
+    },
+    {
+      "cmd": "tune",
+      "value": "14.250"
+    },
+    {
+      "cmd": "slice",
+      "action": "mode",
+      "value": "USB"
+    },
+    {
+      "sleep": 3
+    }
+  ],
+  "setup_demo": [
+    {
+      "wait_slice": true,
+      "timeout": 30
+    },
+    {
+      "cmd": "invoke",
+      "target": "Default Dark",
+      "action": "trigger",
+      "_allow_fail": true
+    },
+    {
+      "cmd": "resize",
+      "value": "1600 1000"
+    },
+    {
+      "cmd": "station",
+      "value": "AetherSDR",
+      "_allow_fail": true
+    },
+    {
+      "cmd": "tune",
+      "value": "14.100"
+    },
+    {
+      "cmd": "slice",
+      "action": "mode",
+      "value": "USB"
+    },
+    {
+      "wait_floors": true,
+      "timeout": 30
+    },
+    {
+      "sleep": 60
+    }
+  ],
+  "before_each_demo": [
+    {
+      "close_windows": true
+    },
+    {
+      "cmd": "resize",
+      "value": "1600 1000"
+    },
+    {
+      "cmd": "tune",
+      "value": "14.100"
+    },
+    {
+      "cmd": "slice",
+      "action": "mode",
+      "value": "USB"
+    }
   ],
   "shots": [
     {
       "id": "main-window",
       "page": "first-connection",
+      "anchor_heading": "intro",
       "quantize": true,
-      "grab": {"target": "MainWindow"},
-      "caption": "The AetherSDR main window connected to the demo simulator: title bar along the top, panadapter and waterfall on the left, applet panel on the right, status bar along the bottom.",
-      "alt": "AetherSDR main window in the default dark theme. The title bar shows a tab for the demo radio labelled Simulator (not on the air). The panadapter shows a green spectrum trace around 14.100 MHz with the slice A VFO flag at 14.100.000 USB, and the waterfall below it scrolls in blue. The right-hand applet panel shows the S-Meter, RX Controls, Demo Noise and TX Controls applets."
+      "grab": {
+        "target": "MainWindow"
+      },
+      "caption": "The AetherSDR main window connected to a FLEX-8600 on 20 m: title bar along the top, panadapter and waterfall on the left, applet panel on the right, status bar along the bottom.",
+      "alt": "AetherSDR main window in the default dark theme. The title bar has three radio tabs, Hermes-Lite 2 available, FLX8600 connected with callsign KK7GWY, and the Simulator, then PC Audio and two volume sliders. The panadapter spans 14.150 to 14.350 MHz with several SSB signals in the trace, the slice A VFO flag at 14.250.000 and band-plan bars marking Phone Extra and Phone General; the waterfall below shows the SSB signals as speckled vertical columns. The applet panel on the right shows the S-Meter, RX Controls, TX Controls, Phone and Phone/CW applets. The status bar along the bottom shows the radio model and firmware, the nickname FLX8600, GPS lock, CPU and memory, PA temperature and voltage, network quality, and the UTC clock."
     },
     {
       "id": "panadapter",
       "page": "panadapter-controls",
+      "anchor_heading": "intro",
       "quantize": true,
-      "grab": {"target": "pan-visible", "selector": "0"},
-      "caption": "A panadapter with its waterfall, the slice A VFO flag and the overlay menu down the left edge.",
-      "alt": "Panadapter centred near 14.100 MHz. A green spectrum trace with a dBm scale on the right, a frequency scale from 14.096 to 14.103 MHz, band-plan segments along the bottom of the spectrum, and a blue waterfall below with a time scale in seconds. The slice A VFO flag reads 14.100.000 USB and the overlay buttons on the left read +RX, Band, ANT, Display and Memory."
+      "grab": {
+        "target": "pan-visible",
+        "selector": "0"
+      },
+      "caption": "A panadapter on 20 m with its waterfall, the slice A VFO flag and the overlay menu down the left edge.",
+      "alt": "Panadapter covering 14.150 to 14.350 MHz. A blue spectrum trace with a dBm scale on the right shows SSB signals across the phone band, and band-plan segments run along the bottom of the spectrum. The slice A VFO flag reads 14.250.000 with its passband marked by the cyan line. The overlay buttons on the left read back arrow, +RX, +TNF, Band, ANT, Display, Memory and DAX, and the waterfall below shows the voice signals as speckled vertical columns against a dark blue background, with a time scale in seconds on the right and the zoom buttons S, B, minus and plus at the bottom left."
     },
     {
       "id": "vfo-flag",
       "page": "vfo-widget",
-      "grab": {"target": "pan-visible", "selector": "0"},
-      "crop": {"frame": "PanadapterApplet", "union": ["VfoFlagShadow"], "pad": 0},
-      "caption": "The VFO flag for slice A, with its close, lock and record buttons on the left edge.",
-      "alt": "VFO flag for slice A on the panadapter. The top row shows the RX antenna ANT1, the TX antenna ANT1, the filter width 2.8K, SPLIT, TX and the slice letter A. The large frequency readout reads 14.100.000, above a signal meter. The bottom row has audio, DSP, USB and X/RIT tabs. A column of small close, lock, record and play buttons sits to the left of the flag."
+      "anchor_heading": "intro",
+      "grab": {
+        "target": "pan-visible",
+        "selector": "0"
+      },
+      "crop": {
+        "union": [
+          "VfoFlagShadow"
+        ],
+        "pad": 4
+      },
+      "caption": "The VFO flag for slice A, with its close, lock, record and play buttons on the left edge.",
+      "alt": "VFO flag for slice A. The top row shows the RX antenna ANT1, the TX antenna ANT1, the filter width 2.7K, SPLIT, a red TX badge and the slice letter A. The large frequency readout reads 14.250.000, above a signal meter with a dBm reading. The bottom row has the speaker, DSP, USB, X/RIT and DAX tabs. A column of small close, lock, record and play buttons sits to the left of the flag."
+    },
+    {
+      "id": "vfo-mode-tab",
+      "page": "vfo-widget",
+      "anchor_heading": "Mode tab",
+      "steps": [
+        {
+          "cmd": "invoke",
+          "target": "Mode settings",
+          "action": "click",
+          "_sleep": 0.8
+        }
+      ],
+      "grab": {
+        "target": "pan-visible",
+        "selector": "0"
+      },
+      "crop": {
+        "union": [
+          "VfoFlagShadow"
+        ],
+        "pad": 4
+      },
+      "cleanup": [
+        {
+          "cmd": "invoke",
+          "target": "Mode settings",
+          "action": "click",
+          "_sleep": 0.8
+        }
+      ],
+      "caption": "The VFO flag with the mode tab (USB) open: mode selector, mode buttons, filter presets and the Adaptive RX filter switch.",
+      "alt": "VFO flag with the USB tab open below the frequency. It shows a mode drop-down set to USB, quick mode buttons USB (lit), CW and AM, filter presets 1.8K, 2.1K, 2.4K, 2.7K (lit), 2.9K, 3.3K, 4K and 6K, a Marker: 3px button, a lit Filter Edge button and an Adaptive RX filter checkbox, unticked."
+    },
+    {
+      "id": "vfo-audio-tab",
+      "page": "vfo-widget",
+      "anchor_heading": "🔊 Audio",
+      "steps": [
+        {
+          "cmd": "invoke",
+          "target": "Audio settings",
+          "action": "click",
+          "_sleep": 0.8
+        }
+      ],
+      "grab": {
+        "target": "pan-visible",
+        "selector": "0"
+      },
+      "crop": {
+        "union": [
+          "VfoFlagShadow"
+        ],
+        "pad": 4
+      },
+      "cleanup": [
+        {
+          "cmd": "invoke",
+          "target": "Audio settings",
+          "action": "click",
+          "_sleep": 0.8
+        }
+      ],
+      "caption": "The VFO flag with the audio tab open.",
+      "alt": "VFO flag with the speaker tab open below the frequency. It holds an AF slider at 50, a SQL slider at 20, an AGC mode selector set to Med with its threshold slider at 65, and a DIV button next to a left-right pan slider."
+    },
+    {
+      "id": "vfo-dsp-tab",
+      "page": "vfo-widget",
+      "anchor_heading": "DSP",
+      "steps": [
+        {
+          "cmd": "invoke",
+          "target": "DSP settings",
+          "action": "click",
+          "_sleep": 0.8
+        }
+      ],
+      "grab": {
+        "target": "pan-visible",
+        "selector": "0"
+      },
+      "crop": {
+        "union": [
+          "VfoFlagShadow"
+        ],
+        "pad": 4
+      },
+      "cleanup": [
+        {
+          "cmd": "invoke",
+          "target": "DSP settings",
+          "action": "click",
+          "_sleep": 0.8
+        }
+      ],
+      "caption": "The VFO flag with the DSP tab open on a FlexRadio: the radio's noise filters plus the AetherRX and AetherTX launchers.",
+      "alt": "VFO flag with the DSP tab open below the frequency. A grid of toggle buttons reads NR, NB, ANF, NRL, NRS, RNN, NRF, ANFL, ANFT, and two launcher buttons, AetherRX and AetherTX."
     },
     {
       "id": "display-panel",
       "page": "panadapter-controls",
-      "section": "Display panel",
+      "anchor_heading": "Display panel",
       "steps": [
-        {"cmd": "invoke", "target": "pan 0/panMenuDisplayBtn", "action": "click"},
-        {"wait_visible": "displayPanel"}
+        {
+          "cmd": "invoke",
+          "target": "pan 0/panMenuDisplayBtn",
+          "action": "click",
+          "_sleep": 0.8
+        },
+        {
+          "wait_visible": "displayPanel"
+        }
       ],
-      "grab": {"target": "pan-visible", "selector": "0"},
-      "crop": {"frame": "PanadapterApplet", "union": ["SpectrumOverlayMenu", "displayPanel"], "pad": 6},
+      "grab": {
+        "target": "pan-visible",
+        "selector": "0"
+      },
+      "crop": {
+        "union": [
+          "SpectrumOverlayMenu",
+          "displayPanel"
+        ],
+        "pad": 6
+      },
       "cleanup": [
-        {"cmd": "invoke", "target": "pan 0/panMenuDisplayBtn", "action": "click", "_allow_fail": true}
+        {
+          "cmd": "invoke",
+          "target": "pan 0/panMenuDisplayBtn",
+          "action": "click",
+          "_sleep": 0.8
+        }
       ],
       "caption": "The Display panel, opened from the Display button on the panadapter overlay menu.",
-      "alt": "The Display panel open over the left edge of the panadapter. It lists spectrum settings (heat map, grid, weighted average, FFT averaging, FPS, line and fill colours, noise floor), waterfall settings (blanker, auto black, colour gain, rate), background image, grid spacing, scale text and colour scheme, the render mode and 3D settings, the renderer, and buttons to clone display settings to all panadapters or reset them."
+      "alt": "The Display panel open beside the overlay menu, with the Display button lit. It has sections Panadapter (Heat Map and Grid on, Wt Avg off, FFT averaging, FPS, line and fill colours and floor), Waterfall (NB blanker, black level, gain and rate), Background (Choose, Clear, Off, opacity and colour), Appearance (grid, scale text and scheme), 3D View (Spectrum set to 2D Waterfall, 3D floor, gain and span), and System (GPU set to Auto (system default)), with Clone to all Pans and Reset to Defaults buttons at the bottom."
     },
     {
-      "id": "rx-applet",
-      "page": "rx-controls",
-      "grab": {"target": "RX"},
-      "caption": "The RX Controls applet for the active slice.",
-      "alt": "RX Controls applet. It shows the slice letter A with a lock button, RX antenna ANT1 and TX antenna ANT1, filter width 2.8K, a TX button, the mode selector set to USB and the frequency 14.100.000. Below are the tuning step selector set to 100, filter preset buttons from 1.8K to 3.3K with 2.7K selected, a filter passband graphic from 100 to 2900 Hz, and sliders for AF gain, pan, squelch and AGC with AGC set to Med, plus RIT and XIT offsets."
-    },
-    {
-      "id": "tx-applet",
-      "page": "tx-controls",
-      "grab": {"target": "TX"},
-      "caption": "The TX Controls applet.",
-      "alt": "TX Controls applet. An RF power meter scaled 0 to 120 and an SWR meter scaled 1 to 3 sit above the RF Power slider at 100 and the Tune Power slider at 10. Below are a TX profile selector, Success, Byp and Mem ATU indicators, and the TUNE, MOX, ATU and MEM buttons."
-    },
-    {
-      "id": "demo-noise-applet",
-      "page": "demo-mode",
-      "grab": {"target": "DEMO"},
-      "caption": "The Demo Noise applet, shown only while connected to the demo simulator.",
-      "alt": "Demo Noise applet. Preset buttons birdie-hell, cw-in-noise, night-40m, noisy-qth, quiet-20m and storm sit above a list of noise sources, each with a toggle and level slider: CW tone, Voice (speech), White / AWGN, Pink / hiss, QRN crackle, Power-line, Static crash, Birdie carrier, SMPS hash and Woodpecker. A Fault Injection row below has High SWR, Drop Slice, Stall Scope, Disconnect, Malformed and Clear buttons."
-    },
-    {
-      "id": "connect-dialog",
-      "page": "first-connection",
-      "section": "Setup",
+      "id": "pan-band-panel",
+      "page": "panadapter-controls",
+      "anchor_heading": "Screen layout",
       "steps": [
-        {"cmd": "connect", "action": "show"},
-        {"wait_visible": "connectionPanel"}
+        {
+          "cmd": "invoke",
+          "target": "pan 0/panMenuBandBtn",
+          "action": "click",
+          "_sleep": 0.8
+        },
+        {
+          "wait_visible": "bandPanel"
+        }
       ],
-      "grab": {"target": "connectionPanel"},
-      "cleanup": [{"cmd": "connect", "action": "hide", "_allow_fail": true}],
-      "caption": "The Connect to Radio window with the AetherSDR demo simulator listed under On This Network.",
-      "alt": "Connect to Radio window. Three cards across the top read On This Network, Remote with SmartLink and Connect by IP, with On This Network selected. The Available radios list has one highlighted entry: AetherSDR Demo, Simulator (not on the air), DEMO, ready on your local network at 127.0.0.1. Below are a Connect Selected Radio button and checkboxes for the adaptive frame-rate throttle, connecting to the last radio on start-up, waking an Icom on connect and showing the AetherSDR demo simulator, with a Disconnect button at the bottom."
+      "grab": {
+        "target": "pan-visible",
+        "selector": "0"
+      },
+      "crop": {
+        "union": [
+          "SpectrumOverlayMenu",
+          "bandPanel"
+        ],
+        "pad": 6,
+        "pad_top": 0,
+        "pad_right": 60,
+        "pad_bottom": 40
+      },
+      "cleanup": [
+        {
+          "cmd": "invoke",
+          "target": "pan 0/panMenuBandBtn",
+          "action": "click",
+          "_sleep": 0.8
+        }
+      ],
+      "caption": "The Band panel, opened from the Band button on the overlay menu. The current band, 20 m, is outlined.",
+      "alt": "The Band panel open beside the overlay menu, with the Band button lit. A grid of band buttons reads 160, 80, 60, 40, 30, 20 (outlined), 17, 15, 12, 10 and 6, then 2m, 70cm and 23cm in cyan, then WWV, GEN, 2200, 630 and XVTR."
     },
     {
-      "id": "radio-setup",
-      "page": "radio-setup",
+      "id": "ant-panel-sweep",
+      "page": "aethersweep",
+      "anchor_heading": "Running a sweep",
       "steps": [
-        {"cmd": "invoke", "target": "Radio Setup...", "action": "trigger"},
-        {"wait_visible": "RadioSetupDialog"}
+        {
+          "cmd": "invoke",
+          "target": "pan 0/panMenuAntBtn",
+          "action": "click",
+          "_sleep": 0.8
+        },
+        {
+          "wait_visible": "antPanel"
+        }
       ],
-      "settle": 1.5,
-      "grab": {"target": "RadioSetupDialog"},
-      "caption": "Radio Setup, open on the Radio page. The settings tree on the left groups the pages; the search box at the top finds any setting.",
-      "alt": "Radio Setup window. A search settings box spans the top. The left tree lists the sections RADIO (Radio, Network), RECEIVE & TRANSMIT (Audio, Transmit, Phone & CW, Receive) and CONTROLLERS & HARDWARE (Antennas, Transverters, USB Cables, Peripherals), with Radio selected. The Radio page on the right shows Radio Information (serial DEMO-0001, hardware version, options, a Reboot Radio button, region and Remote On) and Radio Identification (model AetherSDR Demo, callsign DEMO, nickname and station name)."
+      "grab": {
+        "target": "pan-visible",
+        "selector": "0"
+      },
+      "crop": {
+        "union": [
+          "SpectrumOverlayMenu",
+          "antPanel"
+        ],
+        "pad": 6,
+        "pad_top": 0,
+        "pad_right": 40
+      },
+      "cleanup": [
+        {
+          "cmd": "invoke",
+          "target": "pan 0/panMenuAntBtn",
+          "action": "click",
+          "_sleep": 0.8
+        }
+      ],
+      "caption": "The ANT panel: receive antenna, RF gain and wideband noise blanker, with the AetherSweep controls below.",
+      "alt": "The ANT panel open beside the overlay menu, with the ANT button lit. It shows RX ANT: ANT1, an RF Gain slider at 8 dB, a WNB button with its level at 90, then the AetherSweep buttons Start Sweep, Clear Sweep and Save CSV in amber, and a Limit range option with From and To frequency fields."
     },
     {
-      "id": "aetherrx",
-      "page": "dsp-noise-mitigation",
-      "steps": [
-        {"cmd": "invoke", "target": "AetherRX...", "action": "trigger"},
-        {"wait_visible": "AetherRxDialog"}
-      ],
-      "settle": 1.5,
-      "grab": {"target": "AetherRxDialog"},
-      "caption": "The AetherRX window: the receive processing chain on the left, the selected stage's settings on the right.",
-      "alt": "AetherRX window. The left column lists the receive chain stages AetherNR, Gate, EQ, Compressor, Tube, Exciter and Final Output, each with an enable box, with AetherNR selected, and REC, PLAY and BYPASS controls at the bottom. The right side shows the noise-reduction method tabs NR2, NR4, MNR, DFNR, RN2, BNR and NNR, gain method and noise estimation options, post-processing toggles and mask sliders, and a status line reading No method running."
-    },
-    {
-      "id": "aethertx",
-      "page": "aetherial-audio",
-      "steps": [
-        {"cmd": "invoke", "target": "AetherTX...", "action": "trigger"},
-        {"wait_visible": "AetherialAudioStrip"}
-      ],
-      "settle": 1.5,
-      "grab": {"target": "AetherialAudioStrip"},
-      "caption": "The AetherTX window: the transmit processing chain on the left, the selected stage's controls on the right.",
-      "alt": "AetherTX window. The left column lists the transmit chain stages Gate, EQ, De-esser, Compressor, Tube, Exciter, Reverb and Final Output, with Gate selected, and MIC and TX indicators, REC, PLAY and BYPASS at the bottom. The right side shows the gate's level graph with View and Mode buttons, and six knobs below it: Thresh, Return, Hold, Release, Floor and Ratio."
-    },
-    {
-      "id": "spothub",
-      "page": "spothub",
-      "steps": [
-        {"cmd": "invoke", "target": "SpotHub...", "action": "trigger"},
-        {"wait_visible": "DxClusterDialog"}
-      ],
-      "settle": 1.5,
-      "grab": {"target": "DxClusterDialog"},
-      "caption": "SpotHub, open on the Cluster tab. Each tab is one spot source.",
-      "alt": "SpotHub window with tabs Cluster, RBN, WSJT-X, SpotCollector, POTA, EiBi, N1MM, FreeDV and Spot List, with Cluster selected. The Connection group has Server, Port and Callsign fields, Auto-Connect and Startup Commands buttons, a Disconnected status and a Connect button. Below is an empty Cluster Console with a spot colour swatch, and a command field with Send and Clear buttons."
-    },
-    {
-      "id": "memory-dialog",
-      "page": "memory-channels",
-      "steps": [
-        {"cmd": "invoke", "target": "Memory...", "action": "trigger"},
-        {"wait_visible": "MemoryDialog"},
-        {"cmd": "tune", "value": "14.074"},
-        {"cmd": "invoke", "target": "MemoryDialog/Add", "action": "click", "_sleep": 1.0},
-        {"cmd": "tune", "value": "14.200"},
-        {"cmd": "invoke", "target": "MemoryDialog/Add", "action": "click", "_sleep": 1.0},
-        {"cmd": "slice", "action": "mode", "value": "CW"},
-        {"cmd": "tune", "value": "14.030"},
-        {"cmd": "invoke", "target": "MemoryDialog/Add", "action": "click", "_sleep": 1.0},
-        {"cmd": "invoke", "target": "MemoryDialog/QTableWidget", "action": "selectRow", "value": "0", "_sleep": 0.5}
-      ],
-      "settle": 1.5,
-      "grab": {"target": "MemoryDialog"},
-      "caption": "The Memory Channels window with three memories added from the demo slice.",
-      "alt": "Memory Channels window with a search box and a Group filter set to All Memories. The table has columns Group, Owner, Frequency, Name, Mode, Step, Offset Dir, Repeater Offset and Tone Mode and holds three memories owned by DEMO: 14.074000 USB (selected), 14.200000 USB and 14.030000 CW. A tip line explains how to tune and edit, and the buttons along the bottom are Add, Tune, Select All, Import, Export and Remove, with 1 of 3 selected."
-    },
-    {
-      "id": "keyboard-shortcuts",
-      "page": "keyboard-shortcuts",
-      "steps": [
-        {"cmd": "invoke", "target": "Configure Shortcuts...", "action": "trigger"},
-        {"wait_visible": "ShortcutDialog"}
-      ],
-      "settle": 1.5,
-      "grab": {"target": "ShortcutDialog"},
-      "caption": "The keyboard shortcuts editor. Bound keys are coloured by category on the keyboard map; the table below lists every action.",
-      "alt": "Keyboard shortcuts editor. A full keyboard map fills the top half, with bound keys coloured by category, for example T for MOX toggle and Space for PTT in red, G for go to frequency in blue, and the arrow keys for tuning and AF gain. A colour legend lists the categories. Below are Key and Action fields with Clear and Reset to Default buttons, a filter box and category selector, and a table of actions with their category, current key and default key, starting with Tune Up (1 step) on Right."
+      "id": "pan-status-bar",
+      "page": "panadapter-controls",
+      "anchor_heading": "Status bar",
+      "grab": {
+        "target": "MainWindow"
+      },
+      "crop": {
+        "box": [
+          170,
+          952,
+          1430,
+          48
+        ]
+      },
+      "caption": "The status bar on a FlexRadio: feature indicators, radio and firmware, nickname, GPS, CPU, PA telemetry, network quality, TUN and TX indicators and the UTC clock.",
+      "alt": "The status bar. From left: the add-panadapter icon, the indicators TNF, CWX, ASR, DVK and FDX, the radio model FLEX-8600 with firmware 4.2.20.41343, the nickname FLX8600 in a box, the GPS satellite count with Fine Lock, CPU and memory use, the PA temperature and supply voltage, Network: [Excellent], a TUN STANDBY indicator, a TX indicator and the date and UTC time."
     },
     {
       "id": "title-bar",
       "page": "menu-reference",
-      "grab": {"target": "MainWindow"},
-      "crop": {"box": [0, 0, 0, 52]},
-      "caption": "The title bar: the menu button, radio tabs, PC Audio and volume controls, panel layout buttons and window controls.",
-      "alt": "The AetherSDR title bar. From left: the menu button, the AetherSDR logo, a radio tab for the demo reading Simulator (not on the air), AetherSDR Demo, connected, DEMO, and a plus button to add a radio. On the right: a PC Audio button, a speaker icon and volume slider at 100, a headphone icon and slider at 50, three panel layout buttons, and minimise, maximise and close buttons."
+      "anchor_heading": "intro",
+      "grab": {
+        "target": "MainWindow"
+      },
+      "crop": {
+        "box": [
+          0,
+          0,
+          1600,
+          52
+        ]
+      },
+      "caption": "The title bar: the menu button, one tab per radio, PC Audio and volume controls, panel layout buttons and window controls.",
+      "alt": "The AetherSDR title bar. From left: the menu button, the AetherSDR logo, three radio tabs reading Hermes-Lite 2 available, FLX8600 FLEX-8600 connected KK7GWY (highlighted, with a green dot) and Simulator (not on the air) AetherSDR Demo available DEMO, and a plus button. On the right: a green PC Audio button, a speaker icon and slider at 100, a headphone icon and slider at 100, three panel layout buttons, and minimise, maximise and close buttons."
+    },
+    {
+      "id": "customize-button-bar",
+      "page": "panadapter-controls",
+      "anchor_heading": "The button bar",
+      "settle": 1.0,
+      "steps": [
+        {
+          "cmd": "contextMenu",
+          "target": "barContainer/PWR",
+          "_sleep": 1.5
+        },
+        {
+          "wait_visible": "FavoritesPickerDialog"
+        }
+      ],
+      "grab": {
+        "target": "FavoritesPickerDialog"
+      },
+      "caption": "Customize Button Bar: choose which applet buttons are favourites and which go in the drawer.",
+      "alt": "Customize Button Bar dialog. A note explains that the top five active buttons fill the row and the rest live in the drawer, while hidden buttons and their applets are disabled. The Active list holds VU, PWR, RX, TX and P/CW, a Favorites divider, then LOCK, PHN, EQ, WAV, VUDU, CAT, DAX, TCI, IQ, MTR, PROF, SS, MQTT and CTR2. The Hidden list is empty, with arrow buttons between the lists and OK and Cancel at the bottom."
+    },
+    {
+      "id": "applet-button-bar-drawer",
+      "page": "panadapter-controls",
+      "anchor_heading": "The button bar",
+      "steps": [
+        {
+          "click_text": "▼",
+          "scope": "appletPanel"
+        }
+      ],
+      "grab": {
+        "target": "appletPanel"
+      },
+      "crop": {
+        "box": [
+          0,
+          0,
+          260,
+          114
+        ]
+      },
+      "cleanup": [
+        {
+          "click_text": "▲",
+          "scope": "appletPanel",
+          "optional": true
+        }
+      ],
+      "caption": "The applet button bar with its drawer open. Lit buttons are applets that are showing.",
+      "alt": "The top of the applet panel. The first row holds VU, PWR, RX, TX, P/CW and the drawer button, now an up arrow. The open drawer below lists LOCK, PHN, EQ, WAV, VUDU, CAT, DAX, TCI, IQ, MTR, PROF, MQTT, CTR2, CLK, MINI, KSDR, RADE, HLTH, GHE, AG and TUN, with VU, RX, TX, P/CW, PHN, EQ and WAV lit."
+    },
+    {
+      "id": "rx-applet",
+      "page": "rx-controls",
+      "anchor_heading": "intro",
+      "grab": {
+        "target": "RX"
+      },
+      "caption": "The RX Controls applet for the active slice.",
+      "alt": "RX Controls applet. The top row shows the slice buttons A (lit), B, C and D, a lock button, RX antenna ANT1, TX antenna ANT1 and filter width 2.7K. Below are a red TX badge, the mode selector set to USB and the frequency 14.250.000, then the tuning step selector at 500 and the AF gain and pan sliders, filter preset buttons 1.8K, 2.1K, 2.4K, 2.7K (lit), 2.9K and 3.3K beside the SQL and AGC (Med) controls, a passband graphic reading 100, 2.7K and 2800, and RIT and XIT offsets of +0 Hz."
+    },
+    {
+      "id": "tx-applet",
+      "page": "tx-controls",
+      "anchor_heading": "intro",
+      "grab": {
+        "target": "TX"
+      },
+      "caption": "The TX Controls applet.",
+      "alt": "TX Controls applet. An RF power meter scaled 0 to 120 and an SWR meter scaled 1 to 3 sit above the RF Power slider at 100 and the Tune Power slider at 15. Below are a TX profile selector reading Default, Success, Byp and Mem ATU indicators, the TUNE, MOX, ATU and MEM buttons, and an APD button with Active, Cal and Avail indicators."
+    },
+    {
+      "id": "pcw-applet",
+      "page": "tx-controls",
+      "anchor_heading": "Using the P/CW applet (Phone/CW)",
+      "grab": {
+        "target": "P/CW"
+      },
+      "caption": "The P/CW (Phone/CW) applet: microphone level, compression and ALC meters with the microphone source and processor controls.",
+      "alt": "Phone/CW applet. Three bar meters read Level (-40 to +10 dB), Compression (-25 to 0 dB) and ALC. Below are a mic profile selector reading Default, a mic source selector set to PC with its level slider at 100 and a +ACC button, a PROC button with a NOR / DX / DX+ processor slider, a DAX button, and a MON button with its monitor level slider at 13."
+    },
+    {
+      "id": "phone-applet",
+      "page": "tx-controls",
+      "anchor_heading": "Using the Phone applet",
+      "grab": {
+        "target": "PHNE"
+      },
+      "caption": "The Phone applet: AM carrier, VOX, downward expander and transmit filter.",
+      "alt": "Phone applet. Sliders for AM Carrier at 34, VOX level at 0 beside a VOX button, Delay at 5, and DEXP at 50 beside a DEXP button, then TX Low Cut 50 and High Cut 4000 with arrow buttons to step them."
+    },
+    {
+      "id": "eq-applet",
+      "page": "tx-controls",
+      "anchor_heading": "Using the EQ applet",
+      "grab": {
+        "target": "EQ"
+      },
+      "caption": "The Equalizer applet, here showing the transmit equaliser.",
+      "alt": "Equalizer applet. ON and reset buttons sit at the top left and RX and TX buttons at the top right, with TX selected. Eight vertical sliders for 63, 125, 250, 500, 1k, 2k, 4k and 8k Hz sit at 0 on a scale from -10 to +10."
+    },
+    {
+      "id": "pwr-cross-needle",
+      "page": "meters",
+      "anchor_heading": "Power & SWR cross-needle meter (PWR)",
+      "settle": 1.5,
+      "steps": [
+        {
+          "click_text": "▼",
+          "scope": "appletPanel",
+          "optional": true
+        },
+        {
+          "click_text": "PWR",
+          "scope": "appletPanel",
+          "checked": true
+        },
+        {
+          "wait_visible": "PWR"
+        }
+      ],
+      "grab": {
+        "target": "PWR"
+      },
+      "cleanup": [
+        {
+          "click_text": "▼",
+          "scope": "appletPanel",
+          "optional": true
+        },
+        {
+          "click_text": "PWR",
+          "scope": "appletPanel",
+          "checked": false,
+          "optional": true
+        },
+        {
+          "click_text": "▲",
+          "scope": "appletPanel",
+          "optional": true
+        }
+      ],
+      "caption": "The Power & SWR cross-needle meter.",
+      "alt": "Power & SWR applet: an analogue cross-needle meter face in amber, with a FORWARD power scale on the left, a REFLECTED power scale on the right and curved SWR lines where the needles cross, labelled SWR at the bottom. Both needles rest at zero."
+    },
+    {
+      "id": "mini-pan-applet",
+      "page": "panadapter-controls",
+      "anchor_heading": "Mini-Pan",
+      "settle": 4,
+      "steps": [
+        {
+          "click_text": "▼",
+          "scope": "appletPanel",
+          "optional": true
+        },
+        {
+          "click_text": "MINI",
+          "scope": "appletPanel",
+          "checked": true
+        },
+        {
+          "wait_visible": "MPAN"
+        }
+      ],
+      "grab": {
+        "target": "MPAN"
+      },
+      "cleanup": [
+        {
+          "click_text": "▼",
+          "scope": "appletPanel",
+          "optional": true
+        },
+        {
+          "click_text": "MINI",
+          "scope": "appletPanel",
+          "checked": false,
+          "optional": true
+        },
+        {
+          "click_text": "▲",
+          "scope": "appletPanel",
+          "optional": true
+        }
+      ],
+      "caption": "The Mini-Pan applet: a small spectrum view of the slice's passband.",
+      "alt": "Mini-Pan applet. A small spectrum display spans -5.0 kHz to +5.0 kHz around the slice frequency 14.250000, with the receive passband shaded in teal and a spectrum trace along the bottom."
+    },
+    {
+      "id": "radio-vitals",
+      "page": "meters",
+      "anchor_heading": "Radio Vitals (MTR)",
+      "settle": 3,
+      "steps": [
+        {
+          "click_text": "▼",
+          "scope": "appletPanel",
+          "optional": true
+        },
+        {
+          "click_text": "MTR",
+          "scope": "appletPanel",
+          "checked": true
+        },
+        {
+          "wait_visible": "MTR"
+        }
+      ],
+      "grab": {
+        "target": "MTR"
+      },
+      "cleanup": [
+        {
+          "click_text": "▼",
+          "scope": "appletPanel",
+          "optional": true
+        },
+        {
+          "click_text": "MTR",
+          "scope": "appletPanel",
+          "checked": false,
+          "optional": true
+        },
+        {
+          "click_text": "▲",
+          "scope": "appletPanel",
+          "optional": true
+        }
+      ],
+      "caption": "The Radio Vitals applet on a FLEX-8600: PA temperature, supply voltage and fan speed.",
+      "alt": "Radio Vitals applet headed Radio Hardware, with a °C unit button. Three bar gauges read the PA temperature, about 20°C on a 0 to 120 scale, the supply voltage, about 13.7 V on a 10.5 to 15 scale, and the fan speed, about 1100 rpm on a 0 to 3k scale."
+    },
+    {
+      "id": "antenna-health",
+      "page": "meters",
+      "anchor_heading": "Antenna Health (HLTH)",
+      "settle": 1.5,
+      "steps": [
+        {
+          "click_text": "▼",
+          "scope": "appletPanel",
+          "optional": true
+        },
+        {
+          "click_text": "HLTH",
+          "scope": "appletPanel",
+          "checked": true
+        },
+        {
+          "wait_visible": "HLTH"
+        }
+      ],
+      "grab": {
+        "target": "HLTH"
+      },
+      "cleanup": [
+        {
+          "click_text": "▼",
+          "scope": "appletPanel",
+          "optional": true
+        },
+        {
+          "click_text": "HLTH",
+          "scope": "appletPanel",
+          "checked": false,
+          "optional": true
+        },
+        {
+          "click_text": "▲",
+          "scope": "appletPanel",
+          "optional": true
+        }
+      ],
+      "caption": "The Antenna Health applet on receive: the trend lines fill in when you transmit.",
+      "alt": "Antenna Health applet. A green OK badge, SRC TUN and a score of 100 sit at the top. Below, a chart has three flat trend lanes labelled SWR, RL and PWR, and a footer reads SWR 1.00, RL 45dB, PWR 1.00 W and VAR 0.00."
+    },
+    {
+      "id": "aetherclock-applet",
+      "page": "aetherclock-and-gps",
+      "anchor_heading": "Setting up AetherClock",
+      "settle": 1.5,
+      "steps": [
+        {
+          "click_text": "▼",
+          "scope": "appletPanel",
+          "optional": true
+        },
+        {
+          "click_text": "CLK",
+          "scope": "appletPanel",
+          "checked": true
+        },
+        {
+          "wait_visible": "CLOCK"
+        },
+        {
+          "click_text": "▸ Settings",
+          "scope": "CLOCK",
+          "_sleep": 1.0
+        }
+      ],
+      "grab": {
+        "target": "CLOCK"
+      },
+      "cleanup": [
+        {
+          "click_text": "▼",
+          "scope": "appletPanel",
+          "optional": true
+        },
+        {
+          "click_text": "CLK",
+          "scope": "appletPanel",
+          "checked": false,
+          "optional": true
+        },
+        {
+          "click_text": "▲",
+          "scope": "appletPanel",
+          "optional": true
+        }
+      ],
+      "caption": "The AetherClock applet with its settings drawer open, before it is enabled.",
+      "alt": "AetherClock applet. An empty display reads no signal, above a status row with placeholder time fields. Below are Enable, Settings (expanded) and a DAX 1 selector, then the settings drawer with Station: WWV 10 MHz, a Tune slice → WWV 10 MHz button, the note dial 9.999 MHz USB, 1 kHz below carrier, and a Debug expander."
+    },
+    {
+      "id": "txdsp-docked-applet",
+      "page": "aetherial-audio",
+      "anchor_heading": "Using the docked applet",
+      "settle": 1.5,
+      "steps": [
+        {
+          "click_text": "▼",
+          "scope": "appletPanel",
+          "optional": true
+        },
+        {
+          "click_text": "VUDU",
+          "scope": "appletPanel",
+          "checked": true
+        },
+        {
+          "wait_visible": "tx_dsp"
+        }
+      ],
+      "grab": {
+        "target": "tx_dsp"
+      },
+      "crop": {
+        "box": [
+          0,
+          0,
+          0,
+          345
+        ]
+      },
+      "cleanup": [
+        {
+          "click_text": "▼",
+          "scope": "appletPanel",
+          "optional": true
+        },
+        {
+          "click_text": "VUDU",
+          "scope": "appletPanel",
+          "checked": false,
+          "optional": true
+        },
+        {
+          "click_text": "▲",
+          "scope": "appletPanel",
+          "optional": true
+        }
+      ],
+      "caption": "The docked Aetherial Audio applet (button VUDU) on the TX side: the chain strip, with the first stage tile below it.",
+      "alt": "Aetherial Audio applet. The top row has TX (selected), RX, a record button, a play button and BYPASS. Below, the transmit chain is drawn as connected boxes: an unlabelled green input stage, GATE, EQ, DESS, COMP, TUBE, EVO, VERB and TX, with the hint Click to bypass, Double click to edit, Drag to reorder. Under the strip is the Aetherial TX Gate tile with its transfer curve and knobs for Thresh, Ratio, Return, Release and Floor."
     },
     {
       "id": "cat-applet",
       "page": "cat-control",
-      "steps": [
-        {"click_text": "▼", "scope": "appletPanel", "optional": true},
-        {"click_text": "CAT", "scope": "appletPanel", "checked": true},
-        {"wait_visible": "CatControlApplet"},
-        {"cmd": "invoke", "target": "CAT/containerFloatToggle", "action": "click", "_sleep": 1.0},
-        {"wait_visible": "CatControlApplet"}
-      ],
+      "anchor_heading": "intro",
       "settle": 1.5,
-      "grab": {"target": "CAT"},
+      "steps": [
+        {
+          "click_text": "▼",
+          "scope": "appletPanel",
+          "optional": true
+        },
+        {
+          "click_text": "CAT",
+          "scope": "appletPanel",
+          "checked": true
+        },
+        {
+          "wait_visible": "CatControlApplet"
+        },
+        {
+          "cmd": "invoke",
+          "target": "CAT/containerFloatToggle",
+          "action": "click",
+          "_sleep": 1.5
+        },
+        {
+          "wait_visible": "CatControlApplet"
+        }
+      ],
+      "grab": {
+        "target": "CAT"
+      },
       "cleanup": [
-        {"cmd": "invoke", "target": "CAT/containerFloatToggle", "action": "click", "_allow_fail": true, "_sleep": 1.0},
-        {"click_text": "CAT", "scope": "appletPanel", "checked": false, "optional": true},
-        {"click_text": "▲", "scope": "appletPanel", "optional": true}
+        {
+          "cmd": "invoke",
+          "target": "CAT/containerFloatToggle",
+          "action": "click",
+          "_sleep": 1.5
+        },
+        {
+          "click_text": "▼",
+          "scope": "appletPanel",
+          "optional": true
+        },
+        {
+          "click_text": "CAT",
+          "scope": "appletPanel",
+          "checked": false,
+          "optional": true
+        },
+        {
+          "click_text": "▲",
+          "scope": "appletPanel",
+          "optional": true
+        }
       ],
       "caption": "The CAT Control applet popped out of the applet panel, showing the full channel table.",
-      "alt": "CAT Control applet in its own window. A Disabled button at the top with the hint Enable before configuring ports. Below is a table of CAT channels with the columns Enabled, Port, Dialect, VFO A, VFO B, PTY and Clients: the first row is port 4532 using the Rigctld dialect, the second is port 5001 using the Flex dialect, and the remaining rows are unassigned Flex channels."
+      "alt": "CAT Control applet in its own window. A Disabled button at the top with the hint Enable before configuring ports. Below is a table of CAT channels with the columns Enabled, Port, Dialect, VFO A, VFO B, PTY and Clients: the first row is port 4532 using the Rigctld dialect, the second is port 5001 using the Flex dialect with VFO B set to B, and the remaining six rows are unassigned Flex channels."
     },
     {
       "id": "tci-applet",
       "page": "tci-server",
+      "anchor_heading": "intro",
+      "settle": 1.5,
       "steps": [
-        {"click_text": "▼", "scope": "appletPanel", "optional": true},
-        {"click_text": "TCI", "scope": "appletPanel", "checked": true},
-        {"wait_visible": "TciApplet"}
+        {
+          "click_text": "▼",
+          "scope": "appletPanel",
+          "optional": true
+        },
+        {
+          "click_text": "TCI",
+          "scope": "appletPanel",
+          "checked": true
+        },
+        {
+          "wait_visible": "TCI"
+        }
       ],
-      "settle": 1.0,
-      "grab": {"target": "TCI"},
+      "grab": {
+        "target": "TCI"
+      },
       "cleanup": [
-        {"click_text": "TCI", "scope": "appletPanel", "checked": false, "optional": true},
-        {"click_text": "▲", "scope": "appletPanel", "optional": true}
+        {
+          "click_text": "▼",
+          "scope": "appletPanel",
+          "optional": true
+        },
+        {
+          "click_text": "TCI",
+          "scope": "appletPanel",
+          "checked": false,
+          "optional": true
+        },
+        {
+          "click_text": "▲",
+          "scope": "appletPanel",
+          "optional": true
+        }
       ],
       "caption": "The TCI Server applet in the applet panel.",
-      "alt": "TCI Server applet. RX1 and TX level bars sit above the port field set to 50001, marked stopped, and a Disabled button that starts the server."
+      "alt": "TCI Server applet. Level bars for RX1, assigned to Slice A, RX2 to RX4, unassigned, and TX, assigned to Slice A, sit above the port field set to 50001, marked stopped, and a Disabled button that starts the server."
+    },
+    {
+      "id": "dax-applet",
+      "page": "dax-virtual-audio",
+      "anchor_heading": "The DAX Audio applet",
+      "settle": 1.5,
+      "steps": [
+        {
+          "click_text": "▼",
+          "scope": "appletPanel",
+          "optional": true
+        },
+        {
+          "click_text": "DAX",
+          "scope": "appletPanel",
+          "checked": true
+        },
+        {
+          "wait_visible": "DAX"
+        }
+      ],
+      "grab": {
+        "target": "DAX"
+      },
+      "cleanup": [
+        {
+          "click_text": "▼",
+          "scope": "appletPanel",
+          "optional": true
+        },
+        {
+          "click_text": "DAX",
+          "scope": "appletPanel",
+          "checked": false,
+          "optional": true
+        },
+        {
+          "click_text": "▲",
+          "scope": "appletPanel",
+          "optional": true
+        }
+      ],
+      "caption": "The DAX Audio applet on Linux: one level bar per DAX channel and the button that starts DAX.",
+      "alt": "DAX Audio applet. Level bars for DAX 1, assigned to Slice A, DAX 2 to DAX 4, unassigned, and TX, assigned to Slice A, above a DAX row with a Disabled button."
+    },
+    {
+      "id": "dax-iq-applet",
+      "page": "dax-iq-streaming",
+      "anchor_heading": "The DAX IQ applet",
+      "settle": 1.5,
+      "steps": [
+        {
+          "click_text": "▼",
+          "scope": "appletPanel",
+          "optional": true
+        },
+        {
+          "click_text": "IQ",
+          "scope": "appletPanel",
+          "checked": true
+        },
+        {
+          "wait_visible": "IQ"
+        }
+      ],
+      "grab": {
+        "target": "IQ"
+      },
+      "cleanup": [
+        {
+          "click_text": "▼",
+          "scope": "appletPanel",
+          "optional": true
+        },
+        {
+          "click_text": "IQ",
+          "scope": "appletPanel",
+          "checked": false,
+          "optional": true
+        },
+        {
+          "click_text": "▲",
+          "scope": "appletPanel",
+          "optional": true
+        }
+      ],
+      "caption": "The DAX IQ applet: four IQ channels, each with a sample rate and an on/off button.",
+      "alt": "DAX IQ applet. Four rows, IQ 1 to IQ 4, each with a sample-rate selector set to 48k, an empty level bar and an Off button."
+    },
+    {
+      "id": "ctr2-applet",
+      "page": "ctr2-proxy",
+      "anchor_heading": "Setup",
+      "settle": 1.5,
+      "steps": [
+        {
+          "click_text": "▼",
+          "scope": "appletPanel",
+          "optional": true
+        },
+        {
+          "click_text": "CTR2",
+          "scope": "appletPanel",
+          "checked": true
+        },
+        {
+          "wait_visible": "CTR2"
+        }
+      ],
+      "grab": {
+        "target": "CTR2"
+      },
+      "cleanup": [
+        {
+          "click_text": "▼",
+          "scope": "appletPanel",
+          "optional": true
+        },
+        {
+          "click_text": "CTR2",
+          "scope": "appletPanel",
+          "checked": false,
+          "optional": true
+        },
+        {
+          "click_text": "▲",
+          "scope": "appletPanel",
+          "optional": true
+        }
+      ],
+      "caption": "The CTR2 Proxy applet before a CTR2 is selected. The radio's address is blacked out.",
+      "alt": "CTR2 Proxy applet. Mode is set to USB with a Rescan button, the USB selector reads Select CTR2 USB device, and the Radio row (blacked out here) sits beside a dimmed Start button. An amber hint reads Select the CTR2 USB device, followed by State: Stopped and traffic counters of 0 B to the radio and to the CTR2."
+    },
+    {
+      "id": "ghe-applet",
+      "page": "green-heron-everyware",
+      "anchor_heading": "Setup",
+      "settle": 1.5,
+      "steps": [
+        {
+          "click_text": "▼",
+          "scope": "appletPanel",
+          "optional": true
+        },
+        {
+          "click_text": "GHE",
+          "scope": "appletPanel",
+          "checked": true
+        },
+        {
+          "wait_visible": "GHE"
+        }
+      ],
+      "grab": {
+        "target": "GHE"
+      },
+      "cleanup": [
+        {
+          "click_text": "▼",
+          "scope": "appletPanel",
+          "optional": true
+        },
+        {
+          "click_text": "GHE",
+          "scope": "appletPanel",
+          "checked": false,
+          "optional": true
+        },
+        {
+          "click_text": "▲",
+          "scope": "appletPanel",
+          "optional": true
+        }
+      ],
+      "caption": "The Green Heron applet before a server is configured.",
+      "alt": "Green Heron applet. An IP field showing the placeholder 192.0.2.10, an empty Port field, an empty Switch field with a Connect button, and the status Not connected."
+    },
+    {
+      "id": "tgxl-applet",
+      "page": "tgxl-tuner-control",
+      "anchor_heading": "Using the tuner applet",
+      "settle": 1.5,
+      "steps": [
+        {
+          "click_text": "▼",
+          "scope": "appletPanel",
+          "optional": true
+        },
+        {
+          "click_text": "TUN",
+          "scope": "appletPanel",
+          "checked": true
+        },
+        {
+          "wait_visible": "TUN"
+        }
+      ],
+      "grab": {
+        "target": "TUN"
+      },
+      "cleanup": [
+        {
+          "click_text": "▼",
+          "scope": "appletPanel",
+          "optional": true
+        },
+        {
+          "click_text": "TUN",
+          "scope": "appletPanel",
+          "checked": false,
+          "optional": true
+        },
+        {
+          "click_text": "▲",
+          "scope": "appletPanel",
+          "optional": true
+        }
+      ],
+      "caption": "The TGXL applet with a Tuner Genius XL connected.",
+      "alt": "TGXL applet. PWR and SWR bar meters at the top, then C1, L and C2 bars reading 8, 16 and 24 beside TUNE and STANDBY buttons, and a green DIRECT status at the bottom right."
+    },
+    {
+      "id": "radio-setup",
+      "page": "radio-setup",
+      "anchor_heading": "intro",
+      "settle": 1.5,
+      "steps": [
+        {
+          "cmd": "invoke",
+          "target": "Radio Setup...",
+          "action": "trigger"
+        },
+        {
+          "wait_visible": "RadioSetupDialog"
+        },
+        {
+          "cmd": "resize",
+          "target": "RadioSetupDialog",
+          "value": "960 680"
+        },
+        {
+          "cmd": "invoke",
+          "target": "radioSetupNavigation",
+          "action": "setCurrentText",
+          "value": "Radio",
+          "_sleep": 1.5
+        }
+      ],
+      "grab": {
+        "target": "RadioSetupDialog"
+      },
+      "caption": "Radio Setup, open on the Radio page. The settings tree on the left groups the pages; the search box at the top finds any setting. The serial number, radio ID and station name are blacked out here.",
+      "alt": "Radio Setup window. A Search settings box spans the top. The left tree lists RADIO (Radio, Network, GPS), RECEIVE & TRANSMIT (Audio, Transmit, Phone & CW, Receive, Filters) and CONTROLLERS & HARDWARE (Antennas, Transverters), with Radio selected. The Radio page shows Radio Information (serial blacked out, HW version v4.2.20.41343, options GPS, a Reboot Radio button, region USA, Remote On disabled, FlexControl and multiFLEX enabled), Radio Identification (model FLEX-8600, callsign KK7GWY, nickname FLX8600, station name blacked out), License Info (SmartSDR+ Early Access subscription, its expiration date, radio ID blacked out, licensed version v4) and Firmware Update (FW version 4.2.20.41343, with Check for Update, Select Installer and a dimmed Upload Firmware button)."
+    },
+    {
+      "id": "radio-setup-search",
+      "page": "radio-setup",
+      "anchor_heading": "Finding a setting",
+      "settle": 1.5,
+      "steps": [
+        {
+          "cmd": "invoke",
+          "target": "Radio Setup...",
+          "action": "trigger"
+        },
+        {
+          "wait_visible": "RadioSetupDialog"
+        },
+        {
+          "cmd": "resize",
+          "target": "RadioSetupDialog",
+          "value": "960 680"
+        },
+        {
+          "cmd": "invoke",
+          "target": "radioSetupNavigation",
+          "action": "setCurrentText",
+          "value": "Radio",
+          "_sleep": 1.5
+        },
+        {
+          "cmd": "invoke",
+          "target": "radioSetupSearch",
+          "action": "setText",
+          "value": "latency",
+          "_sleep": 1.0
+        }
+      ],
+      "grab": {
+        "target": "RadioSetupDialog"
+      },
+      "cleanup": [
+        {
+          "cmd": "invoke",
+          "target": "radioSetupSearch",
+          "action": "setText",
+          "value": ""
+        }
+      ],
+      "caption": "Typing in the search box filters the page list: here, latency matches the Audio page.",
+      "alt": "Radio Setup with latency typed in the search box. The left tree now shows only RECEIVE & TRANSMIT with the Audio page under it, while the right side still shows the Radio page, with the serial number, radio ID and station name blacked out."
+    },
+    {
+      "id": "firmware-update-group",
+      "page": "firmware-update",
+      "anchor_heading": "Setup",
+      "steps": [
+        {
+          "cmd": "invoke",
+          "target": "Radio Setup...",
+          "action": "trigger"
+        },
+        {
+          "wait_visible": "RadioSetupDialog"
+        },
+        {
+          "cmd": "resize",
+          "target": "RadioSetupDialog",
+          "value": "960 680"
+        },
+        {
+          "cmd": "invoke",
+          "target": "radioSetupNavigation",
+          "action": "setCurrentText",
+          "value": "Radio",
+          "_sleep": 1.5
+        }
+      ],
+      "grab": {
+        "target": "RadioSetupDialog"
+      },
+      "crop": {
+        "union": [
+          "group:FW Version:"
+        ],
+        "pad": 6
+      },
+      "caption": "The Firmware Update group on the Radio page.",
+      "alt": "Firmware Update group showing FW Version: 4.2.20.41343 with a copy button, and three buttons: Check for Update, Select Installer... and a dimmed Upload Firmware."
+    },
+    {
+      "id": "radio-setup-network-advanced",
+      "page": "automation-bridge-and-mcp",
+      "anchor_heading": "Setup",
+      "steps": [
+        {
+          "cmd": "invoke",
+          "target": "Radio Setup...",
+          "action": "trigger"
+        },
+        {
+          "wait_visible": "RadioSetupDialog"
+        },
+        {
+          "cmd": "resize",
+          "target": "RadioSetupDialog",
+          "value": "960 680"
+        },
+        {
+          "cmd": "invoke",
+          "target": "radioSetupNavigation",
+          "action": "setCurrentText",
+          "value": "Network",
+          "_sleep": 1.5
+        }
+      ],
+      "grab": {
+        "target": "RadioSetupDialog"
+      },
+      "crop": {
+        "union": [
+          "group:Agent Automation (MCP):"
+        ],
+        "pad": 6
+      },
+      "caption": "The Advanced group on the Network page, with the agent automation (MCP) switch. The access token is blacked out.",
+      "alt": "Advanced group of the Network page. Enforce Private IP Connections and Agent Automation (MCP) both read Enabled. The Access Token field is blacked out, beside Copy and Rotate buttons. Below are the Allow TX via MCP checkbox (Enable transmit control), the Observe only checkbox (Read-only, block all driving), Network MTU at 1450 bytes and a VITA-49 RX buffer slider at 4 MB, granted 8 MB."
+    },
+    {
+      "id": "radio-setup-audio",
+      "page": "audio-settings",
+      "anchor_heading": "Setup",
+      "settle": 1.5,
+      "steps": [
+        {
+          "cmd": "invoke",
+          "target": "Radio Setup...",
+          "action": "trigger"
+        },
+        {
+          "wait_visible": "RadioSetupDialog"
+        },
+        {
+          "cmd": "resize",
+          "target": "RadioSetupDialog",
+          "value": "960 680"
+        },
+        {
+          "cmd": "invoke",
+          "target": "radioSetupNavigation",
+          "action": "setCurrentText",
+          "value": "Audio",
+          "_sleep": 1.5
+        }
+      ],
+      "grab": {
+        "target": "RadioSetupDialog"
+      },
+      "caption": "Radio Setup, Audio page: the radio's audio outputs, audio compression, the PC audio devices and recording.",
+      "alt": "Radio Setup on the Audio page. Radio Audio Outputs has Line Out at 53 and Headphone at 100, each with a Mute button. Audio Compression (SmartLink / tailnet) has Auto, Uncompressed (selected) and Opus. Below are checkboxes to smooth packet loss and prevent system sleep, then PC Audio Devices with Input and Output both set to Built-in Audio Analog Stereo, a prompt-on-device-change checkbox, Audio Boost disabled and an audio buffer of 100 ms. The Recording group at the bottom has Record Mode Radio Side and Client Side (selected), a Save to path (blacked out) and Auto-record on TX."
+    },
+    {
+      "id": "radio-setup-recording",
+      "page": "audio-settings",
+      "anchor_heading": "Recording QSOs",
+      "steps": [
+        {
+          "cmd": "invoke",
+          "target": "Radio Setup...",
+          "action": "trigger"
+        },
+        {
+          "wait_visible": "RadioSetupDialog"
+        },
+        {
+          "cmd": "resize",
+          "target": "RadioSetupDialog",
+          "value": "960 680"
+        },
+        {
+          "cmd": "invoke",
+          "target": "radioSetupNavigation",
+          "action": "setCurrentText",
+          "value": "Audio",
+          "_sleep": 1.5
+        }
+      ],
+      "grab": {
+        "target": "RadioSetupDialog"
+      },
+      "crop": {
+        "union": [
+          "group:Record Mode:"
+        ],
+        "pad": 6
+      },
+      "caption": "The Recording group on the Audio page. The save path is blacked out.",
+      "alt": "Recording group. Record Mode has Radio Side and Client Side buttons, with Client Side selected. The Save to field is blacked out, beside a browse button. Below are an Auto-record on TX checkbox and an Idle timeout of 120 sec."
+    },
+    {
+      "id": "radio-setup-phone-cw",
+      "page": "cw-decoder",
+      "anchor_heading": "Setup",
+      "steps": [
+        {
+          "cmd": "invoke",
+          "target": "Radio Setup...",
+          "action": "trigger"
+        },
+        {
+          "wait_visible": "RadioSetupDialog"
+        },
+        {
+          "cmd": "resize",
+          "target": "RadioSetupDialog",
+          "value": "960 680"
+        },
+        {
+          "cmd": "invoke",
+          "target": "radioSetupNavigation",
+          "action": "setCurrentText",
+          "value": "Phone & CW",
+          "_sleep": 1.5
+        }
+      ],
+      "grab": {
+        "target": "RadioSetupDialog"
+      },
+      "crop": {
+        "union": [
+          "Current settings page",
+          "radioSetupPages"
+        ],
+        "pad": 8
+      },
+      "caption": "Radio Setup, Phone & CW page on a FLEX-8600: microphone, CW and digital settings.",
+      "alt": "Phone & CW page headed FLEX-8600. Microphone has Mic Bias Voltage (BIAS), Mic +20 dB Boost and Level Meter During Receive (Enabled). CW has Iambic Enabled with modes A and B (B selected), Swap Dot/Dash, Sideband CWU (selected) or CWL, CWX Sync, and Decode RX (selected) or TX. Digital has RTTY Mark Default 2125 and RTTY Decode Enabled."
+    },
+    {
+      "id": "radio-setup-qrz",
+      "page": "callsign-lookup",
+      "anchor_heading": "QRZ.com Account",
+      "steps": [
+        {
+          "cmd": "invoke",
+          "target": "Radio Setup...",
+          "action": "trigger"
+        },
+        {
+          "wait_visible": "RadioSetupDialog"
+        },
+        {
+          "cmd": "resize",
+          "target": "RadioSetupDialog",
+          "value": "960 680"
+        },
+        {
+          "cmd": "invoke",
+          "target": "radioSetupNavigation",
+          "action": "setCurrentText",
+          "value": "QRZ & Callsigns",
+          "_sleep": 1.5
+        }
+      ],
+      "grab": {
+        "target": "RadioSetupDialog"
+      },
+      "crop": {
+        "union": [
+          "Current settings page",
+          "radioSetupPages"
+        ],
+        "pad": 8
+      },
+      "caption": "Radio Setup, QRZ & Callsigns page, with no account entered.",
+      "alt": "QRZ & Callsigns page. The QRZ.com Account group explains what an account adds, with Enable QRZ callsign lookups ticked, empty Username (callsign) and Password fields and a Test Login button. The Lookup Cache group explains that looked-up callsigns are cached for 7 days and shows 0 cached callsign(s) with a Clear Cache button."
+    },
+    {
+      "id": "radio-setup-peripherals",
+      "page": "peripherals",
+      "anchor_heading": "Layout",
+      "steps": [
+        {
+          "cmd": "invoke",
+          "target": "Radio Setup...",
+          "action": "trigger"
+        },
+        {
+          "wait_visible": "RadioSetupDialog"
+        },
+        {
+          "cmd": "resize",
+          "target": "RadioSetupDialog",
+          "value": "960 680"
+        },
+        {
+          "cmd": "invoke",
+          "target": "radioSetupNavigation",
+          "action": "setCurrentText",
+          "value": "Peripherals",
+          "_sleep": 1.5
+        }
+      ],
+      "grab": {
+        "target": "RadioSetupDialog"
+      },
+      "crop": {
+        "union": [
+          "Current settings page",
+          "radioSetupPages"
+        ],
+        "pad": 8
+      },
+      "caption": "Radio Setup, Peripherals page, before any device is added.",
+      "alt": "Peripherals page. The Devices list is empty, with Add and a dimmed Remove button below it, a Reconnect automatically checkbox and a Connection Help button. The right side reads No peripherals added. Choose Add to configure a device."
+    },
+    {
+      "id": "radio-setup-serial",
+      "page": "usb-control-surfaces",
+      "anchor_heading": "Setup",
+      "steps": [
+        {
+          "cmd": "invoke",
+          "target": "Radio Setup...",
+          "action": "trigger"
+        },
+        {
+          "wait_visible": "RadioSetupDialog"
+        },
+        {
+          "cmd": "resize",
+          "target": "RadioSetupDialog",
+          "value": "960 1000"
+        },
+        {
+          "cmd": "invoke",
+          "target": "radioSetupNavigation",
+          "action": "setCurrentText",
+          "value": "Serial & Controllers",
+          "_sleep": 1.5
+        }
+      ],
+      "grab": {
+        "target": "RadioSetupDialog"
+      },
+      "crop": {
+        "union": [
+          "Current settings page",
+          "radioSetupPages"
+        ],
+        "pad": 8
+      },
+      "caption": "Radio Setup, Serial & Controllers page: USB control surfaces, the serial port and the FlexControl knob.",
+      "alt": "Serial & Controllers page. USB Control Surfaces has Use a Ulanzi Dial when detected and Enable HID encoders / StreamDeck+ (RC-28, PowerMate, ShuttleXpress). Port Configuration shows a port, 9600 baud, 8 data bits, no parity and 1 stop bit with a Refresh button. Pin Assignment maps DTR, RTS, CTS, DSR and DCD to a function (all None) and a polarity (Active High), with Paddle Swap below. Open and Close buttons sit above an Auto-open serial port on startup checkbox. FlexControl Tuning Knob shows Status Not detected with Detect and Close buttons and tap and double-tap actions for buttons 1 to 3 and the knob button, plus Auto-detect on startup and Invert tuning direction."
+    },
+    {
+      "id": "usb-cables-page",
+      "page": "usb-cable-management",
+      "anchor_heading": "Cable list",
+      "steps": [
+        {
+          "cmd": "invoke",
+          "target": "Radio Setup...",
+          "action": "trigger"
+        },
+        {
+          "wait_visible": "RadioSetupDialog"
+        },
+        {
+          "cmd": "resize",
+          "target": "RadioSetupDialog",
+          "value": "960 680"
+        },
+        {
+          "cmd": "invoke",
+          "target": "radioSetupNavigation",
+          "action": "setCurrentText",
+          "value": "USB Cables",
+          "_sleep": 1.5
+        }
+      ],
+      "grab": {
+        "target": "RadioSetupDialog"
+      },
+      "crop": {
+        "union": [
+          "Current settings page",
+          "radioSetupPages"
+        ],
+        "pad": 8
+      },
+      "caption": "Radio Setup, USB Cables page, on a radio with no USB cable plugged in.",
+      "alt": "USB Cables page. An empty Cables list on the left; the right side reads No USB cables detected. Plug a USB-serial adapter into the radio's rear USB port."
+    },
+    {
+      "id": "radio-setup-transverters",
+      "page": "xvtr-transverters",
+      "anchor_heading": "Configuring a transverter",
+      "steps": [
+        {
+          "cmd": "invoke",
+          "target": "Radio Setup...",
+          "action": "trigger"
+        },
+        {
+          "wait_visible": "RadioSetupDialog"
+        },
+        {
+          "cmd": "resize",
+          "target": "RadioSetupDialog",
+          "value": "960 680"
+        },
+        {
+          "cmd": "invoke",
+          "target": "radioSetupNavigation",
+          "action": "setCurrentText",
+          "value": "Transverters",
+          "_sleep": 1.5
+        }
+      ],
+      "grab": {
+        "target": "RadioSetupDialog"
+      },
+      "crop": {
+        "union": [
+          "Current settings page",
+          "radioSetupPages"
+        ],
+        "pad": 8
+      },
+      "caption": "Radio Setup, Transverters page, showing a transverter already set up on the radio.",
+      "alt": "Transverters page headed FLEX-8600, with tabs 2m, 70cm, 23cm and a plus tab. The 2m tab shows Name 2m, RF Freq 144.000 MHz, IF Freq 28.000 MHz, LO Freq 116.000 MHz, LO Error 0.000000, RX Gain 0.0 dB, RX Only Disabled, Max Power 10.0 dBm, a green Valid status and a red Remove button."
+    },
+    {
+      "id": "radio-setup-appearance",
+      "page": "slice-colors",
+      "anchor_heading": "Using custom slice colours",
+      "steps": [
+        {
+          "cmd": "invoke",
+          "target": "Radio Setup...",
+          "action": "trigger"
+        },
+        {
+          "wait_visible": "RadioSetupDialog"
+        },
+        {
+          "cmd": "resize",
+          "target": "RadioSetupDialog",
+          "value": "960 1000"
+        },
+        {
+          "cmd": "invoke",
+          "target": "radioSetupNavigation",
+          "action": "setCurrentText",
+          "value": "Appearance & Behavior",
+          "_sleep": 1.5
+        },
+        {
+          "cmd": "invoke",
+          "target": "Custom colors",
+          "action": "setChecked",
+          "value": "true",
+          "_sleep": 1.0
+        }
+      ],
+      "grab": {
+        "target": "RadioSetupDialog"
+      },
+      "crop": {
+        "union": [
+          "Current settings page",
+          "radioSetupPages"
+        ],
+        "pad": 8
+      },
+      "cleanup": [
+        {
+          "cmd": "invoke",
+          "target": "Use Aether defaults",
+          "action": "setChecked",
+          "value": "true",
+          "_allow_fail": true
+        }
+      ],
+      "caption": "Radio Setup, Appearance & Behavior page with Custom colors chosen, so each slice letter's colour can be changed.",
+      "alt": "Appearance & Behavior page. Slice Letter Display offers Global slot index (selected) or Radio-assigned letter with global subscript. Slice Colors offers Use Aether defaults or Custom colors (selected), with eight colour buttons A to H in cyan, magenta, green, yellow, orange, teal, pink and purple and a Reset All to Defaults button. Further down, Single-click delay is 400 ms with a Reset button, and Mouse wheel has a Reverse mouse-wheel tuning direction checkbox."
+    },
+    {
+      "id": "radio-setup-kiwi",
+      "page": "kiwisdr-and-web-888",
+      "anchor_heading": "Adding a receiver",
+      "steps": [
+        {
+          "cmd": "invoke",
+          "target": "Radio Setup...",
+          "action": "trigger"
+        },
+        {
+          "wait_visible": "RadioSetupDialog"
+        },
+        {
+          "cmd": "resize",
+          "target": "RadioSetupDialog",
+          "value": "960 1000"
+        },
+        {
+          "cmd": "invoke",
+          "target": "radioSetupNavigation",
+          "action": "setCurrentText",
+          "value": "Antennas",
+          "_sleep": 1.5
+        },
+        {
+          "cmd": "invoke",
+          "target": "New KiwiSDR antenna name",
+          "action": "setText",
+          "value": "Example Kiwi"
+        },
+        {
+          "cmd": "invoke",
+          "target": "New KiwiSDR server",
+          "action": "setText",
+          "value": "kiwi.example.org:8073",
+          "_sleep": 0.5
+        }
+      ],
+      "grab": {
+        "target": "RadioSetupDialog"
+      },
+      "crop": {
+        "union": [
+          "KiwiSDR receiver configuration help",
+          "KiwiSDR RX antennas"
+        ],
+        "pad": 12,
+        "pad_top": 34,
+        "pad_bottom": 46
+      },
+      "cleanup": [
+        {
+          "cmd": "invoke",
+          "target": "New KiwiSDR antenna name",
+          "action": "setText",
+          "value": ""
+        },
+        {
+          "cmd": "invoke",
+          "target": "New KiwiSDR server",
+          "action": "setText",
+          "value": ""
+        }
+      ],
+      "caption": "The KiwiSDR RX Antennas group on the Antennas page, with a receiver typed in but not yet added.",
+      "alt": "KiwiSDR RX Antennas group. A note says passwords are kept only for the current session. Configured Receivers reads No KiwiSDR receivers configured. Under Add Receiver, the Name field holds Example Kiwi, the Server field kiwi.example.org:8073, the Password field is empty and Type is KiwiSDR, with an Auto-connect checkbox and Browse public… and Add receiver buttons. Import… and Export… buttons sit at the bottom right."
+    },
+    {
+      "id": "aetherrx",
+      "page": "dsp-noise-mitigation",
+      "anchor_heading": "intro",
+      "settle": 1.5,
+      "steps": [
+        {
+          "cmd": "invoke",
+          "target": "AetherRX...",
+          "action": "trigger"
+        },
+        {
+          "wait_visible": "AetherRxDialog"
+        }
+      ],
+      "grab": {
+        "target": "AetherRxDialog"
+      },
+      "caption": "The AetherRX window: the receive processing chain on the left, the selected stage's settings on the right.",
+      "alt": "AetherRX window. The left column lists the receive chain stages AetherNR (selected), Gate, EQ, Compressor, Tube, Exciter and Final Output, each with an enable box, with REC, PLAY, a settings gear and BYPASS at the bottom. The right side shows the noise-reduction method tabs NR2, NR4, MNR, DFNR, RN2, BNR and NNR, the NR2 gain method and noise estimation options, post-processing toggles, mask sliders, and a status line reading METHOD No method running."
+    },
+    {
+      "id": "bnr-panel",
+      "page": "bnr-gpu-noise-removal",
+      "anchor_heading": "Setup",
+      "settle": 1.5,
+      "steps": [
+        {
+          "cmd": "invoke",
+          "target": "AetherRX...",
+          "action": "trigger"
+        },
+        {
+          "wait_visible": "AetherRxDialog"
+        },
+        {
+          "cmd": "invoke",
+          "target": "dspMethodBtnBNR",
+          "action": "click",
+          "_sleep": 1.5
+        }
+      ],
+      "grab": {
+        "target": "AetherRxDialog"
+      },
+      "caption": "AetherRX with BNR selected on a computer without the NVIDIA AFX runtime installed.",
+      "alt": "AetherRX window with the BNR tab open. The NVIDIA AFX panel describes GPU-accelerated AI noise removal, shows Status Not installed, an Intensity slider at 100 and a Download (~1 GB) button, with an empty Installed Components list below and the status line No method running."
+    },
+    {
+      "id": "aetherrx-profiles",
+      "page": "aetherial-audio",
+      "anchor_heading": "Using profiles",
+      "settle": 1.5,
+      "steps": [
+        {
+          "cmd": "invoke",
+          "target": "AetherRX...",
+          "action": "trigger"
+        },
+        {
+          "wait_visible": "AetherRxDialog"
+        },
+        {
+          "cmd": "invoke",
+          "target": "aetherRxSettingsButton",
+          "action": "click",
+          "_sleep": 1.5
+        },
+        {
+          "wait_visible": "aetherRxSettingsDialog"
+        }
+      ],
+      "grab": {
+        "target": "aetherRxSettingsDialog"
+      },
+      "caption": "The AetherRX Profiles dialog, opened from the gear button at the foot of the stage column.",
+      "alt": "AetherRX Profiles dialog. It explains that a profile is the receive chain, every stage's settings, which are on, their order and the noise reduction method, and that loading one leaves the transmit side alone. An empty profile list sits above Save..., Load, Delete, Import... and Export... buttons, with the note No profiles yet, Save... stores the chain you have set up now, and a Close button."
+    },
+    {
+      "id": "aethertx",
+      "page": "aetherial-audio",
+      "anchor_heading": "intro",
+      "settle": 1.5,
+      "steps": [
+        {
+          "cmd": "invoke",
+          "target": "AetherTX...",
+          "action": "trigger"
+        },
+        {
+          "wait_visible": "AetherialAudioStrip"
+        }
+      ],
+      "grab": {
+        "target": "AetherialAudioStrip"
+      },
+      "caption": "The AetherTX window: the transmit processing chain on the left, the selected stage's controls on the right.",
+      "alt": "AetherTX window. The left column lists the transmit chain stages Gate (selected), EQ, De-esser, Compressor, Tube, Exciter, Reverb and Final Output, with MIC and TX indicators, REC, PLAY, a settings gear and BYPASS at the bottom. The right side shows the gate's level graph with View (Level, Curve), Mode (Gate, Expander), RN2 and Peek controls, and six knobs: Thresh, Return, Hold, Release, Floor and Ratio."
+    },
+    {
+      "id": "aethertx-compressor",
+      "page": "aetherial-audio",
+      "anchor_heading": "Compressor",
+      "settle": 1.5,
+      "steps": [
+        {
+          "cmd": "invoke",
+          "target": "AetherTX...",
+          "action": "trigger"
+        },
+        {
+          "wait_visible": "AetherialAudioStrip"
+        },
+        {
+          "cmd": "invoke",
+          "target": "aetherTxTabCompressor",
+          "action": "click",
+          "_sleep": 1.0
+        }
+      ],
+      "grab": {
+        "target": "AetherialAudioStrip"
+      },
+      "caption": "AetherTX with the Compressor stage selected.",
+      "alt": "AetherTX window with Compressor selected in the stage column. A Limiter button and a Ceiling slider sit at the top. The compressor's transfer curve fills the centre, between an input meter with a threshold marker on the left and gain-reduction and output meters on the right. Six knobs along the bottom read Ratio, Attack, Release, Knee, Drive and Phase."
+    },
+    {
+      "id": "aethertx-eq",
+      "page": "aetherial-audio",
+      "anchor_heading": "EQ",
+      "settle": 1.5,
+      "steps": [
+        {
+          "cmd": "invoke",
+          "target": "AetherTX...",
+          "action": "trigger"
+        },
+        {
+          "wait_visible": "AetherialAudioStrip"
+        },
+        {
+          "cmd": "invoke",
+          "target": "aetherTxTabEQ",
+          "action": "click",
+          "_sleep": 1.0
+        }
+      ],
+      "grab": {
+        "target": "AetherialAudioStrip"
+      },
+      "caption": "AetherTX with the EQ stage selected.",
+      "alt": "AetherTX window with EQ selected in the stage column. Ref:, Smoothing, Peak Hold and Reset controls run along the top, above a row of filter-shape buttons. The main area plots the live microphone spectrum with ten band handles on a flat line, over a frequency scale from 20 Hz to 20 kHz with the E-SSB, SSB and AM / FM ranges marked, and the band frequencies and gains listed beneath. An output level meter runs along the bottom."
+    },
+    {
+      "id": "spothub",
+      "page": "spothub",
+      "anchor_heading": "intro",
+      "settle": 1.5,
+      "steps": [
+        {
+          "cmd": "invoke",
+          "target": "SpotHub...",
+          "action": "trigger"
+        },
+        {
+          "wait_visible": "DxClusterDialog"
+        }
+      ],
+      "grab": {
+        "target": "DxClusterDialog"
+      },
+      "caption": "SpotHub, open on the Cluster tab. Each tab is one spot source.",
+      "alt": "SpotHub window with tabs Cluster, RBN, WSJT-X, SpotCollector, POTA, EiBi, N1MM, FreeDV and Spot List, with Cluster selected. The Connection group has Server dxc.nc7j.com, Port 7300, an empty Callsign field, Auto-Connect: OFF and Startup Commands… buttons, a Disconnected status and a Connect button. Below is an empty Cluster Console with a spot colour swatch, and a command field with Send and Clear buttons."
+    },
+    {
+      "id": "spothub-display-tab",
+      "page": "spothub",
+      "anchor_heading": "Using the Display tab",
+      "settle": 1.5,
+      "steps": [
+        {
+          "cmd": "invoke",
+          "target": "SpotHub...",
+          "action": "trigger"
+        },
+        {
+          "wait_visible": "DxClusterDialog"
+        },
+        {
+          "cmd": "invoke",
+          "target": "DxClusterDialog/qt_tabwidget_tabbar",
+          "action": "setCurrentText",
+          "value": "Display",
+          "_sleep": 1.0
+        }
+      ],
+      "grab": {
+        "target": "DxClusterDialog"
+      },
+      "caption": "SpotHub's Display tab: how spots are drawn on the panadapter.",
+      "alt": "SpotHub window on the Display tab. Toggle buttons across the top read Spots, Passive, Memories, Kiwi DX, Auto, Signals, QRM and Clear All. Sliders set Levels, Position, Font Size and Spot Lifetime, followed by Override Colors, Override Background, Background Opacity, Spot Lines and a Total Spots count. DXCC Coloring and Signal History groups sit side by side at the bottom."
+    },
+    {
+      "id": "memory-dialog",
+      "page": "memory-channels",
+      "anchor_heading": "intro",
+      "settle": 1.5,
+      "steps": [
+        {
+          "cmd": "invoke",
+          "target": "Memory...",
+          "action": "trigger"
+        },
+        {
+          "wait_visible": "MemoryDialog"
+        }
+      ],
+      "grab": {
+        "target": "MemoryDialog"
+      },
+      "caption": "The Memory Channels window, listing the memories stored in the radio.",
+      "alt": "Memory Channels window with a search box and a Profile filter set to All Memories. The table has columns Group, Owner, Frequency, Name, Mode, Step, Offset Dir, Repeater Offset and Tone Mode and lists five memories owned by KK7GWY, two FM repeater channels on 146 MHz with CTCSS, and 20 m and AM broadcast entries in DIGU, RTTY and AM. A tip line explains how to tune and edit, and the buttons along the bottom are Add, Tune, Select All, Import…, Export… and Remove, with 1 of 5 selected."
+    },
+    {
+      "id": "keyboard-shortcuts",
+      "page": "keyboard-shortcuts",
+      "anchor_heading": "intro",
+      "settle": 1.5,
+      "steps": [
+        {
+          "cmd": "invoke",
+          "target": "Configure Shortcuts...",
+          "action": "trigger"
+        },
+        {
+          "wait_visible": "ShortcutDialog"
+        }
+      ],
+      "grab": {
+        "target": "ShortcutDialog"
+      },
+      "caption": "The keyboard shortcuts editor. Bound keys are coloured by category on the keyboard map; the table below lists every action.",
+      "alt": "Keyboard shortcuts editor. A full keyboard map fills the top half, with bound keys coloured by category, for example T for MOX and Space for PTT in red, G for go to frequency, and the arrow keys for tuning. A colour legend lists the categories. Below are Key and Action fields with Clear and Reset to Default buttons, a filter box and category selector, and a table of actions with their category, current key and default key, starting with Tune Up (1 step) on Right, and Import…, Export…, Reset All to Defaults and Close buttons."
+    },
+    {
+      "id": "theme-editor",
+      "page": "themes-and-theme-editor",
+      "anchor_heading": "Using the Theme Editor",
+      "settle": 1.5,
+      "steps": [
+        {
+          "cmd": "invoke",
+          "target": "Theme Editor…",
+          "action": "trigger"
+        },
+        {
+          "wait_visible": "ThemeEditorDialog"
+        }
+      ],
+      "grab": {
+        "target": "ThemeEditorDialog"
+      },
+      "caption": "The Theme Editor, editing the built-in Default Dark theme.",
+      "alt": "Theme Editor window for Profile: Default Dark. A colour picker with Flat color and Gradient types, a hue strip, RGB and hex fields and recent colours fills the top, beside a gradient stops preview. Font controls sit below, then a Scope selector with Inspect and Reset to default, a token filter, and a list of colour tokens with their values, such as color.accent #00b4d8. Theme actions, Save As… and Close buttons run along the bottom."
+    },
+    {
+      "id": "support-diagnostics-dialog",
+      "page": "support-and-logging",
+      "anchor_heading": "Using Support & Diagnostics",
+      "settle": 1.5,
+      "steps": [
+        {
+          "cmd": "invoke",
+          "target": "Support & Diagnostics...",
+          "action": "trigger"
+        },
+        {
+          "wait_visible": "SupportDialog"
+        }
+      ],
+      "grab": {
+        "target": "SupportDialog"
+      },
+      "caption": "Support & Diagnostics: per-module diagnostic logging and the log file. The log path is blacked out.",
+      "alt": "Support & Diagnostics window. Diagnostic Logging lists modules in three columns with checkboxes, Discovery, Connection / Commands, Protocol / Status, Audio Summary, KiwiSDR and System Info ticked. Below are the log file path (blacked out) and size, a log tail, Refresh, Clear Log and Open Log Folder buttons, and four numbered steps for reporting an issue."
+    },
+    {
+      "id": "settings-browser",
+      "page": "settings-and-backups",
+      "anchor_heading": "Using the Settings Browser",
+      "settle": 1.5,
+      "steps": [
+        {
+          "cmd": "invoke",
+          "target": "Settings Browser...",
+          "action": "trigger"
+        },
+        {
+          "wait_visible": "SettingsBrowserDialog"
+        },
+        {
+          "cmd": "invoke",
+          "target": "Settings scopes",
+          "action": "selectRow",
+          "value": "0",
+          "_sleep": 1.0
+        },
+        {
+          "cmd": "invoke",
+          "target": "Settings filter",
+          "action": "setText",
+          "value": "Spot",
+          "_sleep": 1.0
+        }
+      ],
+      "grab": {
+        "target": "SettingsBrowserDialog"
+      },
+      "caption": "The Settings Browser, filtered to keys that contain Spot.",
+      "alt": "Settings Browser window. An amber warning reads Advanced, edits apply immediately and bypass each feature's own validation. The left list holds App Settings (selected) and Station: AetherSDR. The right side has a filter box containing Spot and a Key and Value table with IsSpotsEnabled True, PassiveSpotsMode False, SpotFontSize 16 and SpotsMaxLevel 3. Add Key…, Delete, Refresh, Export Sanitized… and Close buttons run along the bottom."
+    },
+    {
+      "id": "aethercontrol-window",
+      "page": "flexcontrol-tuning-knob",
+      "anchor_heading": "Using AetherControl (virtual FlexControl)",
+      "settle": 1.5,
+      "steps": [
+        {
+          "cmd": "invoke",
+          "target": "AetherControl...",
+          "action": "trigger"
+        },
+        {
+          "wait_visible": "FlexControlDialog"
+        }
+      ],
+      "grab": {
+        "target": "FlexControlDialog"
+      },
+      "caption": "AetherControl, the on-screen FlexControl knob.",
+      "alt": "AetherControl window headed Virtual Tuning Controller, with Detect, Settings… and Compact buttons. MODE, ON/OFF and TOGGLE indicators sit above three buttons Aux1, Aux2 and Aux3, with their Single Tap actions Step Up, MOX and Toggle Mute and Double Tap actions Step Down, Toggle Tune and Toggle Lock. A large tuning knob fills the bottom."
+    },
+    {
+      "id": "ulanzi-mapper",
+      "page": "ulanzi-dial",
+      "anchor_heading": "Using the mapper",
+      "settle": 1.5,
+      "steps": [
+        {
+          "cmd": "invoke",
+          "target": "Ulanzi Dial Mapping...",
+          "action": "trigger"
+        },
+        {
+          "wait_visible": "UlanziDialMapperDialog"
+        }
+      ],
+      "grab": {
+        "target": "UlanziDialMapperDialog"
+      },
+      "caption": "The Ulanzi Dial mapping window with no dial connected.",
+      "alt": "Ulanzi Dial Control Mapping window. A picture of the dial sits in the centre with a label beside each of its controls: three top buttons (unassigned, RIT/XIT toggle, unassigned), two side buttons on each side (unassigned and Next Slice), the Tuning knob set to Frequency Tune Slice and its Single tap set to Audio Mute Toggle. The status at the bottom left reads Disconnected, beside Last event, Reset to Defaults and Close."
+    },
+    {
+      "id": "midi-mapping-dialog",
+      "page": "midi-controller-mapping",
+      "anchor_heading": "Using the mapping dialog",
+      "settle": 1.5,
+      "steps": [
+        {
+          "cmd": "invoke",
+          "target": "MIDI Mapping...",
+          "action": "trigger"
+        },
+        {
+          "wait_visible": "MidiMappingDialog"
+        }
+      ],
+      "grab": {
+        "target": "MidiMappingDialog"
+      },
+      "caption": "The MIDI Controller Mapping window, before any control is bound.",
+      "alt": "MIDI Controller Mapping window. The MIDI Device group has a Port selector, Refresh and Connect buttons, a Disconnected status and Auto-connect on startup ticked. The Parameter Bindings table, with columns Parameter, MIDI Source, Channel, Invert and Relative, is empty. Below are a category filter, a parameter selector set to [RX] AF Gain with Learn and Manual… buttons, and Clear All, Profile, Save, Load, Import… and Export… controls, with Close at the bottom."
+    },
+    {
+      "id": "mqtt-settings-dialog",
+      "page": "mqtt-station-automation",
+      "anchor_heading": "MQTT Settings dialog",
+      "settle": 1.5,
+      "steps": [
+        {
+          "cmd": "invoke",
+          "target": "MQTT...",
+          "action": "trigger"
+        },
+        {
+          "wait_visible": "MqttSettingsDialog"
+        }
+      ],
+      "grab": {
+        "target": "MqttSettingsDialog"
+      },
+      "caption": "The MQTT Settings window with the default broker fields.",
+      "alt": "MQTT Settings window with tabs Broker, Subscriptions and Publish Buttons, on Broker. Host is localhost, Port 1883, User and Password are empty, TLS has a Use TLS option and CA cert is optional, blank = system CA bundle with a Browse… button. OK, Cancel and Apply buttons sit at the bottom."
+    },
+    {
+      "id": "callsign-lookup-prefix",
+      "page": "callsign-lookup",
+      "anchor_heading": "The Callsign Lookup window",
+      "settle": 1.5,
+      "steps": [
+        {
+          "cmd": "invoke",
+          "target": "Callsign Lookup...",
+          "action": "trigger"
+        },
+        {
+          "wait_visible": "CallsignLookupDialog"
+        },
+        {
+          "cmd": "invoke",
+          "target": "callsignLookupInput",
+          "action": "setText",
+          "value": "N0CALL"
+        },
+        {
+          "cmd": "invoke",
+          "target": "callsignLookupGo",
+          "action": "click",
+          "_sleep": 3.0
+        }
+      ],
+      "grab": {
+        "target": "CallsignLookupDialog"
+      },
+      "caption": "The Callsign Lookup window without a QRZ account: the card shows country-level prefix data.",
+      "alt": "Callsign Lookup window with N0CALL in the search field beside Lookup and Refresh buttons. The result card shows a placeholder silhouette, N0CALL marked prefix, United States, and NA, CQ 5 with a distance and bearing. A note below reads QRZ.com unavailable, showing country-level prefix data (cty.dat); full details will replace this if QRZ answers."
+    },
+    {
+      "id": "aethermodem-aprs",
+      "page": "aethermodem-packet-radio",
+      "anchor_heading": "Window layout",
+      "settle": 1.5,
+      "steps": [
+        {
+          "cmd": "invoke",
+          "target": "AetherModem...",
+          "action": "trigger"
+        },
+        {
+          "wait_visible": "Ax25HfPacketDecodeDialog"
+        },
+        {
+          "click_text": "APRS",
+          "scope": "Ax25HfPacketDecodeDialog",
+          "optional": true
+        }
+      ],
+      "grab": {
+        "target": "Ax25HfPacketDecodeDialog"
+      },
+      "caption": "AetherModem on the APRS tab. The station's GPS position is blacked out.",
+      "alt": "AetherModem window with tabs APRS (selected), Digipeater, KISS TNC, Terminal, Mailbox and D-STAR. Rows of settings cover the baud rate (300 or 1200), Enable Modem and Autostart at launch, then My Callsign (placeholder N0CALL-9), Symbol Home, Path WIDE1-1,WIDE2-1 and a Beacon every 30 min, the Position line (blacked out) with manual grid, latitude and longitude fields, a message composer with Send APRS Msg, and an empty table of heard stations with columns Time, Station, Symbol, Age, Pkts, Grid, Dist, CRS/SPD and Status / Comment. The status bar reads Modem Standby and No audio yet."
+    },
+    {
+      "id": "rx-agc-calibration",
+      "page": "rx-controls",
+      "anchor_heading": "AGC",
+      "settle": 1.5,
+      "steps": [
+        {
+          "cmd": "invoke",
+          "target": "Calibrate AGC-T...",
+          "action": "trigger"
+        },
+        {
+          "wait_visible": "AgcCalibrationDialog"
+        }
+      ],
+      "grab": {
+        "target": "AgcCalibrationDialog"
+      },
+      "caption": "The AGC-T Calibration window.",
+      "alt": "AGC-T Calibration window. The heading reads AGC: MED, finding the knee (agc_threshold) just above the noise floor, with a warning that a signal is in the passband and you should tune to a clear spot. An empty plot with an AGC-T axis from 0 to 100 and a dashed marker fills the centre, above Auto Sweep and Apply buttons and a hint: tune to a clear spot, then Auto Sweep, or move the AGC-T slider and watch where the noise bends."
+    },
+    {
+      "id": "about-window",
+      "page": "menu-reference",
+      "anchor_heading": "About AetherSDR",
+      "settle": 3,
+      "steps": [
+        {
+          "cmd": "invoke",
+          "target": "About AetherSDR",
+          "action": "trigger"
+        },
+        {
+          "wait_visible": "CanonWindow"
+        }
+      ],
+      "grab": {
+        "target": "CanonWindow"
+      },
+      "caption": "The About AetherSDR window: version, build and renderer details.",
+      "alt": "About AetherSDR window. Below the AetherSDR logo it shows the version v26.10.1 and commit, the tagline Cross-platform SmartSDR-compatible client for FlexRadio transceivers, and a box listing Built with Qt 6.12.0 and C++20, the compile date and the GPU QRhi (OpenGL) renderer. A Contributor Logbook button, the copyright and GPLv3 licence, the GitHub link, trademark notices and an OK button follow."
+    },
+    {
+      "id": "multiflex-dashboard",
+      "page": "multi-flex",
+      "anchor_heading": "Using the multiFLEX Dashboard",
+      "settle": 1.5,
+      "steps": [
+        {
+          "cmd": "invoke",
+          "target": "multiFLEX...",
+          "action": "trigger"
+        },
+        {
+          "wait_visible": "MultiFlexDialog"
+        }
+      ],
+      "grab": {
+        "target": "MultiFlexDialog"
+      },
+      "caption": "The multiFLEX Dashboard: every station sharing the radio.",
+      "alt": "multiFLEX Dashboard window headed multiFLEX Stations with a green Enabled indicator. A table with columns Local PTT, Station, TX Ant and TX Freq (MHz) lists one row: a tick, AetherSDR, ANT1 and 14.250. A Close button sits at the bottom right."
+    },
+    {
+      "id": "profile-manager",
+      "page": "profile-management",
+      "anchor_heading": "Using the Profile Manager",
+      "settle": 1.5,
+      "steps": [
+        {
+          "cmd": "invoke",
+          "target": "Profile Manager...",
+          "action": "trigger"
+        },
+        {
+          "wait_visible": "ProfileManagerDialog"
+        }
+      ],
+      "grab": {
+        "target": "ProfileManagerDialog"
+      },
+      "caption": "The Profile Manager, listing the global profiles stored in the radio.",
+      "alt": "Profile Manager window with tabs Global, Transmit, Microphone and Auto-Save, on Global. A New Profile Name field sits above Load, Save and Delete buttons, and a list of the radio's global profiles: 20m CW, 20m Phone, 40m Phone, 80m Phone, BCSO, macOS_default_Profile, NIRG, SO2RDefault and VHF. A Close button sits at the bottom."
+    },
+    {
+      "id": "profile-import-export",
+      "page": "profile-management",
+      "anchor_heading": "Importing and exporting profiles (`.ssdr_cfg`)",
+      "settle": 1.5,
+      "steps": [
+        {
+          "cmd": "invoke",
+          "target": "Import/Export Profiles...",
+          "action": "trigger"
+        },
+        {
+          "wait_visible": "ProfileImportExportDialog"
+        }
+      ],
+      "grab": {
+        "target": "ProfileImportExportDialog"
+      },
+      "caption": "The Import/Export Profiles window, on the Export tab. The destination path is blacked out.",
+      "alt": "Import/Export Profiles window on the Export tab. A note explains that export is radio-driven. Radio Database Categories has Select All and checkboxes for Global Profiles, TX Profiles and MIC Profiles (ticked), and Memories, Preferences, TNF, XVTR and USB Cables. The Destination field is blacked out beside Browse…, with an Export button below, a status line, a 0% progress bar and Cancel and Close buttons."
+    },
+    {
+      "id": "runtime-monitor-overview",
+      "page": "runtime-monitor",
+      "anchor_heading": "Overview",
+      "settle": 65,
+      "steps": [
+        {
+          "cmd": "invoke",
+          "target": "Runtime Monitor...",
+          "action": "trigger"
+        },
+        {
+          "wait_visible": "SystemInfoDialog"
+        }
+      ],
+      "grab": {
+        "target": "SystemInfoDialog"
+      },
+      "caption": "The Runtime Monitor's Overview tab after a few minutes of running.",
+      "alt": "Runtime Monitor window on the Overview tab, with a 5 minutes timeframe. Four summary cards show CPU Total, Max Thread, Memory and GUI Tick Lag. Below are line charts of CPU (process and busiest thread), Memory (resident and peak), Top threads and GUI tick lag, each over the last 5 minutes."
+    },
+    {
+      "id": "network-diagnostics",
+      "page": "runtime-monitor",
+      "anchor_heading": "Using Network Diagnostics",
+      "settle": 65,
+      "steps": [
+        {
+          "cmd": "invoke",
+          "target": "Network Diagnostics...",
+          "action": "trigger"
+        },
+        {
+          "wait_visible": "NetworkDiagnosticsDialog"
+        }
+      ],
+      "grab": {
+        "target": "NetworkDiagnosticsDialog"
+      },
+      "caption": "Network Diagnostics, Overview page, on a local-network connection.",
+      "alt": "Network Diagnostics window. A sidebar lists Status (Overview, Connection Details), Trends (Latency & Jitter, Stream Rates, Packet Loss, Audio Health) and Support (Application Logs, TCI Clients). The Overview page shows cards for Status Excellent, Latency in ms, Packet Loss 0.00% and Audio Buffer, above charts of Latency and Jitter, Recent Packet Loss, Total Stream Rates and RX Audio Timing over the last minute."
+    },
+    {
+      "id": "net-scheduler-window",
+      "page": "net-scheduler",
+      "anchor_heading": "The schedule list",
+      "settle": 1.5,
+      "steps": [
+        {
+          "cmd": "invoke",
+          "target": "Net Scheduler...",
+          "action": "trigger"
+        },
+        {
+          "wait_visible": "NetSchedulerDialog"
+        },
+        {
+          "cmd": "invoke",
+          "target": "NetSchedulerDialog/Add…",
+          "action": "click",
+          "_sleep": 1.5
+        },
+        {
+          "wait_visible": "QDialog"
+        },
+        {
+          "cmd": "invoke",
+          "target": "QDialog/QLineEdit",
+          "action": "setText",
+          "value": "Tuesday 20 m Net"
+        },
+        {
+          "cmd": "invoke",
+          "target": "QDialog/Thursday",
+          "action": "setChecked",
+          "value": "false",
+          "_allow_fail": true
+        },
+        {
+          "cmd": "invoke",
+          "target": "QDialog/Tuesday",
+          "action": "setChecked",
+          "value": "true"
+        },
+        {
+          "cmd": "invoke",
+          "target": "QDialog/QDoubleSpinBox",
+          "action": "setValue",
+          "value": "14.250"
+        },
+        {
+          "cmd": "invoke",
+          "target": "QDialog/OK",
+          "action": "click",
+          "_sleep": 1.0
+        },
+        {
+          "cmd": "invoke",
+          "target": "NetSchedulerDialog/Add…",
+          "action": "click",
+          "_sleep": 1.5
+        },
+        {
+          "wait_visible": "QDialog"
+        },
+        {
+          "cmd": "invoke",
+          "target": "QDialog/QLineEdit",
+          "action": "setText",
+          "value": "Sunday 20 m Net"
+        },
+        {
+          "cmd": "invoke",
+          "target": "QDialog/Thursday",
+          "action": "setChecked",
+          "value": "false",
+          "_allow_fail": true
+        },
+        {
+          "cmd": "invoke",
+          "target": "QDialog/Sunday",
+          "action": "setChecked",
+          "value": "true"
+        },
+        {
+          "cmd": "invoke",
+          "target": "QDialog/QDoubleSpinBox",
+          "action": "setValue",
+          "value": "14.300"
+        },
+        {
+          "cmd": "invoke",
+          "target": "QDialog/OK",
+          "action": "click",
+          "_sleep": 1.0
+        }
+      ],
+      "grab": {
+        "target": "NetSchedulerDialog"
+      },
+      "caption": "The Net Scheduler with two weekly nets added.",
+      "alt": "Net Scheduler window. A table with columns On, Name, Repeats, Next, Frequency and Mode lists two nets: Tuesday 20 m Net, weekly, 14.2500 MHz USB, and Sunday 20 m Net, weekly, 14.3000 MHz USB, the second selected. Add…, Edit…, Remove, Disable, Tune Now, Import… and Export… buttons run along the bottom."
+    },
+    {
+      "id": "net-scheduler-add-net",
+      "page": "net-scheduler",
+      "anchor_heading": "Adding a net",
+      "settle": 1.5,
+      "steps": [
+        {
+          "cmd": "invoke",
+          "target": "Net Scheduler...",
+          "action": "trigger"
+        },
+        {
+          "wait_visible": "NetSchedulerDialog"
+        },
+        {
+          "cmd": "invoke",
+          "target": "NetSchedulerDialog/Add…",
+          "action": "click",
+          "_sleep": 1.5
+        },
+        {
+          "wait_visible": "QDialog"
+        },
+        {
+          "cmd": "invoke",
+          "target": "QDialog/QLineEdit",
+          "action": "setText",
+          "value": "Tuesday 20 m Net"
+        },
+        {
+          "cmd": "invoke",
+          "target": "QDialog/Thursday",
+          "action": "setChecked",
+          "value": "false",
+          "_allow_fail": true
+        },
+        {
+          "cmd": "invoke",
+          "target": "QDialog/Tuesday",
+          "action": "setChecked",
+          "value": "true"
+        },
+        {
+          "cmd": "invoke",
+          "target": "QDialog/QDoubleSpinBox",
+          "action": "setValue",
+          "value": "14.250"
+        }
+      ],
+      "grab": {
+        "target": "QDialog"
+      },
+      "cleanup": [
+        {
+          "cmd": "invoke",
+          "target": "QDialog/Cancel",
+          "action": "click",
+          "_sleep": 1.0
+        }
+      ],
+      "caption": "Adding a net: name, repeat pattern, time, reminder and frequency.",
+      "alt": "Add Net dialog. Name: Tuesday 20 m Net. Repeats Weekly every 1 week(s), On with day buttons M, T, W, T, F, S, S. At 8:00 PM, Etc/UTC. Remind me 10 minutes before. Frequency 14.250000 MHz, USB, with a Capture current VFO button. Filter 100 Hz to 2800 Hz, an empty Notes field, the next occurrence in blue, and OK and Cancel buttons."
+    },
+    {
+      "id": "connect-dialog",
+      "page": "first-connection",
+      "anchor_heading": "Setup",
+      "settle": 1.5,
+      "steps": [
+        {
+          "cmd": "connect",
+          "action": "show"
+        },
+        {
+          "wait_visible": "connectionPanel"
+        },
+        {
+          "cmd": "resize",
+          "target": "connectionPanel",
+          "value": "760 800",
+          "_sleep": 0.8
+        }
+      ],
+      "grab": {
+        "target": "connectionPanel"
+      },
+      "cleanup": [
+        {
+          "cmd": "invoke",
+          "target": "connectionLocalModeButton",
+          "action": "click",
+          "_sleep": 0.5
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionManualRadioType",
+          "action": "setCurrentText",
+          "value": "FlexRadio",
+          "_allow_fail": true
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionManualIp",
+          "action": "setText",
+          "value": "",
+          "_allow_fail": true
+        },
+        {
+          "cmd": "connect",
+          "action": "hide",
+          "_allow_fail": true
+        }
+      ],
+      "caption": "The Connect to Radio window, On This Network: every radio discovery found on the LAN. The addresses are blacked out.",
+      "alt": "Connect to Radio window. Three cards across the top read On This Network (selected), Remote with SmartLink and Connect by IP. The Available radios list holds three entries: Hermes-Lite 2, ready on your local network, highlighted, with its address blacked out; FLEX-8600 FLX8600 KK7GWY, shared radio on your network via multiFLEX at AetherSDR, USA; and AetherSDR Demo, Simulator (not on the air), DEMO, ready on your local network at 127.0.0.1. A Connect Selected Radio button and checkboxes for the adaptive frame-rate throttle, connecting to the last radio on start-up, waking an Icom on connect and showing the demo simulator follow, with Connected and a Disconnect button at the bottom.",
+      "redact": [
+        [
+          212,
+          318,
+          130,
+          22
+        ]
+      ]
+    },
+    {
+      "id": "connect-by-ip-card",
+      "page": "manual-connection",
+      "anchor_heading": "Setup",
+      "settle": 1.0,
+      "steps": [
+        {
+          "cmd": "connect",
+          "action": "show"
+        },
+        {
+          "wait_visible": "connectionPanel"
+        },
+        {
+          "cmd": "resize",
+          "target": "connectionPanel",
+          "value": "760 800",
+          "_sleep": 0.8
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionManualModeButton",
+          "action": "click",
+          "_sleep": 1.0
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionManualRadioType",
+          "action": "setCurrentText",
+          "value": "FlexRadio",
+          "_sleep": 1.0
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionManualIp",
+          "action": "setText",
+          "value": "192.0.2.25"
+        }
+      ],
+      "grab": {
+        "target": "connectionPanel"
+      },
+      "cleanup": [
+        {
+          "cmd": "invoke",
+          "target": "connectionLocalModeButton",
+          "action": "click",
+          "_sleep": 0.5
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionManualRadioType",
+          "action": "setCurrentText",
+          "value": "FlexRadio",
+          "_allow_fail": true
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionManualIp",
+          "action": "setText",
+          "value": "",
+          "_allow_fail": true
+        },
+        {
+          "cmd": "connect",
+          "action": "hide",
+          "_allow_fail": true
+        }
+      ],
+      "caption": "The Connect by IP card, with a documentation address typed in.",
+      "alt": "Connect to Radio window with the Connect by IP card selected. The Radio IP address group has Radio type: FlexRadio, Radio IP: 192.0.2.25, Network Diagnostics and Connect by IP buttons, and an Advanced: choose the VPN source path expander. Below are Connection options for slower links with a Use low bandwidth mode checkbox, and the shared checkboxes for the adaptive frame-rate throttle, connecting to the last radio, waking an Icom and showing the demo simulator."
+    },
+    {
+      "id": "connect-smartlink-card",
+      "page": "smartlink-setup",
+      "anchor_heading": "Connecting with SmartLink",
+      "settle": 1.5,
+      "steps": [
+        {
+          "cmd": "connect",
+          "action": "show"
+        },
+        {
+          "wait_visible": "connectionPanel"
+        },
+        {
+          "cmd": "resize",
+          "target": "connectionPanel",
+          "value": "760 800",
+          "_sleep": 0.8
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionSmartLinkModeButton",
+          "action": "click",
+          "_sleep": 1.0
+        }
+      ],
+      "grab": {
+        "target": "connectionPanel"
+      },
+      "cleanup": [
+        {
+          "cmd": "invoke",
+          "target": "connectionLocalModeButton",
+          "action": "click",
+          "_sleep": 0.5
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionManualRadioType",
+          "action": "setCurrentText",
+          "value": "FlexRadio",
+          "_allow_fail": true
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionManualIp",
+          "action": "setText",
+          "value": "",
+          "_allow_fail": true
+        },
+        {
+          "cmd": "connect",
+          "action": "hide",
+          "_allow_fail": true
+        }
+      ],
+      "caption": "The Remote with SmartLink card, before signing in.",
+      "alt": "Connect to Radio window with the Remote with SmartLink card selected. The SmartLink account group has empty Email and Password fields and a Sign In button, with the note Sign in to see radios at remote stations. The Remote radios group reads Remote radios appear here after SmartLink sign-in. Connection options for slower links with Use low bandwidth mode sits below."
+    },
+    {
+      "id": "connect-icom-rows",
+      "page": "networked-icom",
+      "anchor_heading": "Connecting",
+      "settle": 1.0,
+      "steps": [
+        {
+          "cmd": "connect",
+          "action": "show"
+        },
+        {
+          "wait_visible": "connectionPanel"
+        },
+        {
+          "cmd": "resize",
+          "target": "connectionPanel",
+          "value": "760 800",
+          "_sleep": 0.8
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionManualModeButton",
+          "action": "click",
+          "_sleep": 1.0
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionManualRadioType",
+          "action": "setCurrentText",
+          "value": "Icom (network)",
+          "_sleep": 1.0
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionManualIp",
+          "action": "setText",
+          "value": "192.0.2.30"
+        }
+      ],
+      "grab": {
+        "target": "connectionPanel"
+      },
+      "crop": {
+        "union": [
+          "group:Radio type:"
+        ],
+        "pad": 6
+      },
+      "cleanup": [
+        {
+          "cmd": "invoke",
+          "target": "connectionLocalModeButton",
+          "action": "click",
+          "_sleep": 0.5
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionManualRadioType",
+          "action": "setCurrentText",
+          "value": "FlexRadio",
+          "_allow_fail": true
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionManualIp",
+          "action": "setText",
+          "value": "",
+          "_allow_fail": true
+        },
+        {
+          "cmd": "connect",
+          "action": "hide",
+          "_allow_fail": true
+        }
+      ],
+      "caption": "Connect by IP with Radio type set to Icom (network): the Icom user, password, ports and CI-V rows appear.",
+      "alt": "Radio IP address group with Radio type: Icom (network), Radio IP: 192.0.2.30, empty Icom user and Icom password fields, Icom ports: Standard (50001–50003), Icom CI-V: Auto-detect (recommended), Network Diagnostics and Connect by IP buttons, and an Advanced: choose the VPN source path expander."
+    },
+    {
+      "id": "runtime-monitor-threads",
+      "page": "runtime-monitor",
+      "anchor_heading": "Threads",
+      "settle": 65,
+      "steps": [
+        {
+          "cmd": "invoke",
+          "target": "Runtime Monitor...",
+          "action": "trigger"
+        },
+        {
+          "wait_visible": "SystemInfoDialog"
+        },
+        {
+          "cmd": "invoke",
+          "target": "SystemInfoDialog/qt_tabwidget_tabbar",
+          "action": "setCurrentText",
+          "value": "Threads"
+        }
+      ],
+      "grab": {
+        "target": "SystemInfoDialog"
+      },
+      "caption": "The Runtime Monitor's Threads tab: every thread with its CPU use.",
+      "alt": "Runtime Monitor window on the Threads tab. A summary line gives the thread count and the busiest thread. The table lists threads with columns Thread, TID, State, CPU %, Peak 60 s, Total CPU (s) and a sparkline, led by AetherSDR, SystemInfoCollector, AudioEngine, PanadapterStream and several data-loop threads."
+    },
+    {
+      "id": "vfo-meter-selector",
+      "page": "vfo-widget",
+      "anchor_heading": "Meter",
+      "steps": [
+        {
+          "cmd": "clickAt",
+          "target": "Signal meter",
+          "value": "120 11",
+          "_sleep": 1.0
+        }
+      ],
+      "grab": {
+        "target": "pan-visible",
+        "selector": "0"
+      },
+      "crop": {
+        "union": [
+          "VfoFlagShadow"
+        ],
+        "pad": 4
+      },
+      "cleanup": [
+        {
+          "cmd": "clickAt",
+          "target": "Signal meter",
+          "value": "120 11",
+          "_sleep": 1.0
+        }
+      ],
+      "caption": "Clicking the meter under the frequency opens the meter selector on the flag.",
+      "alt": "VFO flag with the meter selector open below the tab row: S-Meter (selected) and SmartMTR buttons, a Show extremes checkbox, Extremes speed Medium, Show values None, TX meter None and a Show meter type checkbox."
+    },
+    {
+      "id": "smartmtr-flag",
+      "page": "meters",
+      "anchor_heading": "Meter on the VFO flag (S-Meter and SmartMTR)",
+      "steps": [
+        {
+          "cmd": "clickAt",
+          "target": "Signal meter",
+          "value": "120 11",
+          "_sleep": 1.0
+        },
+        {
+          "cmd": "invoke",
+          "target": "SmartMTR view",
+          "action": "click",
+          "_sleep": 0.8
+        },
+        {
+          "cmd": "invoke",
+          "target": "Show extremes",
+          "action": "setChecked",
+          "value": "true"
+        },
+        {
+          "cmd": "clickAt",
+          "target": "Signal meter",
+          "value": "120 11",
+          "_sleep": 1.0
+        },
+        {
+          "sleep": 10
+        }
+      ],
+      "grab": {
+        "target": "pan-visible",
+        "selector": "0"
+      },
+      "crop": {
+        "union": [
+          "VfoFlagShadow"
+        ],
+        "pad": 4
+      },
+      "cleanup": [
+        {
+          "cmd": "clickAt",
+          "target": "Signal meter",
+          "value": "120 11",
+          "_sleep": 1.0
+        },
+        {
+          "cmd": "invoke",
+          "target": "Show extremes",
+          "action": "setChecked",
+          "value": "false"
+        },
+        {
+          "cmd": "invoke",
+          "target": "Standard S-Meter view",
+          "action": "click",
+          "_sleep": 0.8
+        },
+        {
+          "cmd": "clickAt",
+          "target": "Signal meter",
+          "value": "120 11",
+          "_sleep": 1.0
+        }
+      ],
+      "caption": "The VFO flag with SmartMTR selected: a bar meter with an S-unit and dB-over-S9 scale.",
+      "alt": "VFO flag showing the SmartMTR bar meter under the frequency, with a scale from 1 to 9 and +20, +40 and +60, and a red bar for the current signal level."
+    },
+    {
+      "id": "pan-3d-stacked-trace",
+      "page": "panadapter-controls",
+      "anchor_heading": "3D Stacked Trace",
+      "quantize": true,
+      "steps": [
+        {
+          "cmd": "invoke",
+          "target": "pan 0/panMenuDisplayBtn",
+          "action": "click",
+          "_sleep": 0.8
+        },
+        {
+          "wait_visible": "displayPanel"
+        },
+        {
+          "cmd": "invoke",
+          "target": "spectrumRenderModeCombo",
+          "action": "setCurrentText",
+          "value": "3D Stacked Trace"
+        },
+        {
+          "cmd": "invoke",
+          "target": "pan 0/panMenuDisplayBtn",
+          "action": "click",
+          "_sleep": 0.8
+        },
+        {
+          "sleep": 12
+        }
+      ],
+      "grab": {
+        "target": "pan-visible",
+        "selector": "0"
+      },
+      "crop": {
+        "box": [
+          0,
+          0,
+          0,
+          385
+        ]
+      },
+      "cleanup": [
+        {
+          "cmd": "invoke",
+          "target": "pan 0/panMenuDisplayBtn",
+          "action": "click",
+          "_sleep": 0.8
+        },
+        {
+          "cmd": "invoke",
+          "target": "spectrumRenderModeCombo",
+          "action": "setCurrentText",
+          "value": "2D Waterfall"
+        },
+        {
+          "cmd": "invoke",
+          "target": "pan 0/panMenuDisplayBtn",
+          "action": "click",
+          "_sleep": 0.8
+        }
+      ],
+      "caption": "The panadapter with Spectrum set to 3D Stacked Trace: recent sweeps are drawn as a receding landscape.",
+      "alt": "Panadapter in 3D Stacked Trace mode. Above the frequency scale from 14.150 to 14.350 MHz, successive spectrum traces are stacked into a blue landscape that recedes towards the top, with SSB signals standing out as green ridges running back in time. The slice A VFO flag sits at 14.250.000."
+    },
+    {
+      "id": "cw-decoder-panel",
+      "page": "cw-decoder",
+      "anchor_heading": "Using the CW decoder",
+      "steps": [
+        {
+          "cmd": "pan",
+          "action": "center",
+          "value": "14.050"
+        },
+        {
+          "cmd": "tune",
+          "value": "14.0455"
+        },
+        {
+          "cmd": "slice",
+          "action": "mode",
+          "value": "CW"
+        },
+        {
+          "wait_visible": "cwDecodePanel"
+        },
+        {
+          "sleep": 40
+        },
+        {
+          "cmd": "invoke",
+          "target": "cwDecodePanel/CLR",
+          "action": "click",
+          "_allow_fail": true,
+          "_sleep": 1.0
+        }
+      ],
+      "grab": {
+        "target": "pan-visible",
+        "selector": "0"
+      },
+      "crop": {
+        "union": [
+          "cwDecodePanel"
+        ],
+        "pad": 0,
+        "pad_top": 220
+      },
+      "cleanup": [
+        {
+          "cmd": "slice",
+          "action": "mode",
+          "value": "USB"
+        },
+        {
+          "cmd": "pan",
+          "action": "center",
+          "value": "14.250"
+        },
+        {
+          "cmd": "tune",
+          "value": "14.250",
+          "_sleep": 1.0
+        }
+      ],
+      "caption": "The CW decoder pane under the waterfall, with its sensitivity, pitch and speed controls.",
+      "alt": "The bottom of the panadapter in CW mode. The lower part of the waterfall shows CW signals as dotted vertical lines. Below it, the decoder pane's control row reads CW, (selected slice), the detected tone and speed, a Sens slider with two lock buttons, Pitch 500 to 700 Hz and WPM 15 to 40 range sliders, and CPY ALL, CPY VIS, A-, A+, CLR and close buttons, above the decoded-text line."
+    },
+    {
+      "id": "rtty-ms-lines",
+      "page": "rtty-operation",
+      "anchor_heading": "Tuning with the Mark and Space lines",
+      "steps": [
+        {
+          "cmd": "pan",
+          "action": "center",
+          "value": "14.0835"
+        },
+        {
+          "cmd": "tune",
+          "value": "14.0835"
+        },
+        {
+          "cmd": "slice",
+          "action": "mode",
+          "value": "RTTY"
+        },
+        {
+          "cmd": "invoke",
+          "target": "panZoomInBtn",
+          "action": "click",
+          "_sleep": 0.7
+        },
+        {
+          "cmd": "invoke",
+          "target": "panZoomInBtn",
+          "action": "click",
+          "_sleep": 0.7
+        },
+        {
+          "cmd": "invoke",
+          "target": "panZoomInBtn",
+          "action": "click",
+          "_sleep": 0.7
+        },
+        {
+          "cmd": "invoke",
+          "target": "panZoomInBtn",
+          "action": "click",
+          "_sleep": 0.7
+        },
+        {
+          "cmd": "invoke",
+          "target": "panZoomInBtn",
+          "action": "click",
+          "_sleep": 0.7
+        },
+        {
+          "cmd": "invoke",
+          "target": "panZoomInBtn",
+          "action": "click",
+          "_sleep": 0.7
+        },
+        {
+          "cmd": "invoke",
+          "target": "panZoomInBtn",
+          "action": "click",
+          "_sleep": 0.7
+        },
+        {
+          "cmd": "invoke",
+          "target": "panZoomInBtn",
+          "action": "click",
+          "_sleep": 0.7
+        },
+        {
+          "sleep": 15
+        }
+      ],
+      "grab": {
+        "target": "pan-visible",
+        "selector": "0"
+      },
+      "crop": {
+        "box": [
+          330,
+          0,
+          680,
+          350
+        ]
+      },
+      "cleanup": [
+        {
+          "cmd": "invoke",
+          "target": "panZoomOutBtn",
+          "action": "click",
+          "_sleep": 0.7
+        },
+        {
+          "cmd": "invoke",
+          "target": "panZoomOutBtn",
+          "action": "click",
+          "_sleep": 0.7
+        },
+        {
+          "cmd": "invoke",
+          "target": "panZoomOutBtn",
+          "action": "click",
+          "_sleep": 0.7
+        },
+        {
+          "cmd": "invoke",
+          "target": "panZoomOutBtn",
+          "action": "click",
+          "_sleep": 0.7
+        },
+        {
+          "cmd": "invoke",
+          "target": "panZoomOutBtn",
+          "action": "click",
+          "_sleep": 0.7
+        },
+        {
+          "cmd": "invoke",
+          "target": "panZoomOutBtn",
+          "action": "click",
+          "_sleep": 0.7
+        },
+        {
+          "cmd": "invoke",
+          "target": "panZoomOutBtn",
+          "action": "click",
+          "_sleep": 0.7
+        },
+        {
+          "cmd": "invoke",
+          "target": "panZoomOutBtn",
+          "action": "click",
+          "_sleep": 0.7
+        },
+        {
+          "cmd": "slice",
+          "action": "mode",
+          "value": "USB"
+        },
+        {
+          "cmd": "pan",
+          "action": "center",
+          "value": "14.250"
+        },
+        {
+          "cmd": "tune",
+          "value": "14.250",
+          "_sleep": 1.0
+        }
+      ],
+      "caption": "RTTY mode on a narrow span: the red S (space) and green M (mark) lines sit inside the passband.",
+      "alt": "Panadapter zoomed to a few kilohertz in RTTY mode. A shaded passband holds a dashed red line marked S and a dashed green line marked M, 170 Hz apart, beside the VFO flag reading 14.083.500 in RTTY mode."
+    },
+    {
+      "id": "rtty-decoder-pane",
+      "page": "rtty-operation",
+      "anchor_heading": "Built-in RTTY decoder",
+      "steps": [
+        {
+          "cmd": "pan",
+          "action": "center",
+          "value": "14.0835"
+        },
+        {
+          "cmd": "tune",
+          "value": "14.0835"
+        },
+        {
+          "cmd": "slice",
+          "action": "mode",
+          "value": "RTTY"
+        },
+        {
+          "cmd": "invoke",
+          "target": "panZoomInBtn",
+          "action": "click",
+          "_sleep": 0.7
+        },
+        {
+          "cmd": "invoke",
+          "target": "panZoomInBtn",
+          "action": "click",
+          "_sleep": 0.7
+        },
+        {
+          "cmd": "invoke",
+          "target": "panZoomInBtn",
+          "action": "click",
+          "_sleep": 0.7
+        },
+        {
+          "cmd": "invoke",
+          "target": "panZoomInBtn",
+          "action": "click",
+          "_sleep": 0.7
+        },
+        {
+          "cmd": "invoke",
+          "target": "panZoomInBtn",
+          "action": "click",
+          "_sleep": 0.7
+        },
+        {
+          "cmd": "invoke",
+          "target": "panZoomInBtn",
+          "action": "click",
+          "_sleep": 0.7
+        },
+        {
+          "cmd": "invoke",
+          "target": "panZoomInBtn",
+          "action": "click",
+          "_sleep": 0.7
+        },
+        {
+          "cmd": "invoke",
+          "target": "panZoomInBtn",
+          "action": "click",
+          "_sleep": 0.7
+        },
+        {
+          "sleep": 30
+        }
+      ],
+      "grab": {
+        "target": "pan-visible",
+        "selector": "0"
+      },
+      "crop": {
+        "union": [
+          "rttyDecodeText",
+          "rttyInputHint"
+        ],
+        "pad": 0,
+        "pad_top": 220
+      },
+      "cleanup": [
+        {
+          "cmd": "invoke",
+          "target": "panZoomOutBtn",
+          "action": "click",
+          "_sleep": 0.7
+        },
+        {
+          "cmd": "invoke",
+          "target": "panZoomOutBtn",
+          "action": "click",
+          "_sleep": 0.7
+        },
+        {
+          "cmd": "invoke",
+          "target": "panZoomOutBtn",
+          "action": "click",
+          "_sleep": 0.7
+        },
+        {
+          "cmd": "invoke",
+          "target": "panZoomOutBtn",
+          "action": "click",
+          "_sleep": 0.7
+        },
+        {
+          "cmd": "invoke",
+          "target": "panZoomOutBtn",
+          "action": "click",
+          "_sleep": 0.7
+        },
+        {
+          "cmd": "invoke",
+          "target": "panZoomOutBtn",
+          "action": "click",
+          "_sleep": 0.7
+        },
+        {
+          "cmd": "invoke",
+          "target": "panZoomOutBtn",
+          "action": "click",
+          "_sleep": 0.7
+        },
+        {
+          "cmd": "invoke",
+          "target": "panZoomOutBtn",
+          "action": "click",
+          "_sleep": 0.7
+        },
+        {
+          "cmd": "slice",
+          "action": "mode",
+          "value": "USB"
+        },
+        {
+          "cmd": "pan",
+          "action": "center",
+          "value": "14.250"
+        },
+        {
+          "cmd": "tune",
+          "value": "14.250",
+          "_sleep": 1.0
+        }
+      ],
+      "caption": "The RTTY decoder pane under the waterfall.",
+      "alt": "The bottom of a zoomed panadapter in RTTY mode. Under the waterfall, the decoder pane's control row reads RTTY, (selected slice), Mark: Auto, Shift: 170, Baud: 45.45, a REV button, a Sens slider, a green tuning bar with a lock status, and CPY ALL, CLR and close buttons, above an empty text area."
+    },
+    {
+      "id": "offscreen-vfo-indicator",
+      "page": "panadapter-controls",
+      "anchor_heading": "Off-screen VFO indicator",
+      "steps": [
+        {
+          "cmd": "tune",
+          "value": "14.400",
+          "_sleep": 2.0
+        },
+        {
+          "cmd": "pan",
+          "action": "center",
+          "value": "14.200",
+          "_sleep": 3.0
+        }
+      ],
+      "grab": {
+        "target": "pan-visible",
+        "selector": "0"
+      },
+      "crop": {
+        "box": [
+          940,
+          14,
+          400,
+          220
+        ]
+      },
+      "cleanup": [
+        {
+          "cmd": "slice",
+          "action": "mode",
+          "value": "USB"
+        },
+        {
+          "cmd": "pan",
+          "action": "center",
+          "value": "14.250"
+        },
+        {
+          "cmd": "tune",
+          "value": "14.250",
+          "_sleep": 1.0
+        }
+      ],
+      "caption": "When the slice is outside the visible span, an arrow at the edge of the spectrum points to it.",
+      "alt": "The top right corner of the panadapter. Under the +8 dB gain label, an indicator reads TX A > and 14.400, showing that slice A is off to the right of the visible span."
+    },
+    {
+      "id": "split-pair",
+      "page": "split-operation",
+      "anchor_heading": "Starting and ending a split",
+      "steps": [
+        {
+          "cmd": "invoke",
+          "target": "Split mode",
+          "action": "click",
+          "_sleep": 3.0
+        }
+      ],
+      "grab": {
+        "target": "pan-visible",
+        "selector": "0"
+      },
+      "crop": {
+        "box": [
+          300,
+          0,
+          760,
+          385
+        ]
+      },
+      "cleanup": [
+        {
+          "remove_extra_slices": true
+        }
+      ],
+      "caption": "A split pair: the receive slice's SPLIT badge turns red and the new transmit slice shows SWAP and TX.",
+      "alt": "Two VFO flags on one panadapter. Slice A at 14.250.000 has a red SPLIT badge and a dimmed TX badge. Slice B at 14.255.000, 5 kHz up, has a SWAP badge, the red TX badge and a magenta B, with its own magenta marker line in the spectrum."
+    },
+    {
+      "id": "multi-slice-two-slices",
+      "page": "multi-slice-operation",
+      "anchor_heading": "Adding a slice",
+      "quantize": true,
+      "steps": [
+        {
+          "cmd": "invoke",
+          "target": "pan 0/panMenuAddRxBtn",
+          "action": "click",
+          "_sleep": 3.0
+        },
+        {
+          "cmd": "tune",
+          "value": "14.2185",
+          "id": "1",
+          "_allow_fail": true,
+          "_sleep": 2
+        }
+      ],
+      "grab": {
+        "target": "pan-visible",
+        "selector": "0"
+      },
+      "crop": {
+        "box": [
+          0,
+          0,
+          1340,
+          385
+        ]
+      },
+      "cleanup": [
+        {
+          "remove_extra_slices": true
+        }
+      ],
+      "caption": "Two slices on one panadapter, each with its own coloured VFO flag.",
+      "alt": "Panadapter with two VFO flags. Slice B in magenta sits on an SSB signal near 14.2185 MHz, and slice A in cyan at 14.250.000 carries the TX badge. Each has its own passband marker in the spectrum."
+    },
+    {
+      "id": "diversity-esc",
+      "page": "diversity-and-esc",
+      "anchor_heading": "ESC controls",
+      "steps": [
+        {
+          "cmd": "invoke",
+          "target": "Audio settings",
+          "action": "click",
+          "_sleep": 0.8
+        },
+        {
+          "cmd": "invoke",
+          "target": "Diversity receive",
+          "action": "click",
+          "_sleep": 3.0
+        },
+        {
+          "cmd": "invoke",
+          "target": "Enhanced signal clarity",
+          "action": "click",
+          "_sleep": 2.0
+        }
+      ],
+      "grab": {
+        "target": "pan-visible",
+        "selector": "0"
+      },
+      "crop": {
+        "union": [
+          "VfoFlagShadow"
+        ],
+        "pad": 4,
+        "pad_right": 300
+      },
+      "cleanup": [
+        {
+          "cmd": "invoke",
+          "target": "Enhanced signal clarity",
+          "action": "click",
+          "_sleep": 0.8
+        },
+        {
+          "cmd": "invoke",
+          "target": "Diversity receive",
+          "action": "click",
+          "_sleep": 3.0
+        },
+        {
+          "cmd": "invoke",
+          "target": "Audio settings",
+          "action": "click",
+          "_sleep": 0.8
+        },
+        {
+          "remove_extra_slices": true
+        }
+      ],
+      "caption": "Diversity on a FLEX-8600: the DIV button adds a child slice on the second antenna, and ESC opens the beam-steering controls.",
+      "alt": "Two VFO flags. Slice A has its audio tab open, with DIV and ESC lit green, a phase slider at 0° with a +180 button, a gain slider at 1.00, a polar display of the ESC phase and gain, and an ESC level meter. To its right, the diversity child slice D on ANT2 shows the same frequency, 14.250.000."
+    },
+    {
+      "id": "rade-vfo-badge",
+      "page": "rade-digital-voice",
+      "anchor_heading": "Read sync and SNR",
+      "steps": [
+        {
+          "cmd": "invoke",
+          "target": "Operating mode",
+          "action": "setCurrentText",
+          "value": "RADE",
+          "_sleep": 6
+        }
+      ],
+      "grab": {
+        "target": "pan-visible",
+        "selector": "0"
+      },
+      "crop": {
+        "union": [
+          "VfoFlagShadow"
+        ],
+        "pad": 4
+      },
+      "cleanup": [
+        {
+          "cmd": "invoke",
+          "target": "Operating mode",
+          "action": "setCurrentText",
+          "value": "USB",
+          "_sleep": 2
+        }
+      ],
+      "caption": "A slice in RADE, before any RADE signal is decoded: the sync dot is hollow and the SNR reads ---.",
+      "alt": "VFO flag in RADE mode. A RADE label with a hollow sync dot sits left of the frequency 14.250.000, with --- below it in place of the SNR, a 1.5K filter width, and the mode tab reading DIGU."
+    },
+    {
+      "id": "tnf-markers",
+      "page": "tnf-tracking-notch-filters",
+      "anchor_heading": "Creating a TNF",
+      "steps": [
+        {
+          "notch_snapshot": true
+        },
+        {
+          "cmd": "notch",
+          "action": "add",
+          "value": "14.3035",
+          "_sleep": 1.0
+        },
+        {
+          "cmd": "notch",
+          "action": "add",
+          "value": "14.2765",
+          "_sleep": 6.0
+        }
+      ],
+      "grab": {
+        "target": "pan-visible",
+        "selector": "0"
+      },
+      "crop": {
+        "box": [
+          700,
+          14,
+          640,
+          470
+        ]
+      },
+      "cleanup": [
+        {
+          "notch_remove_new": true
+        }
+      ],
+      "caption": "Two tracking notch filters on the panadapter, each drawn as a hatched amber line.",
+      "alt": "Right-hand part of the panadapter, 14.260 to 14.350 MHz, with two tracking notch filters drawn as hatched amber vertical lines with triangle handles at the top, near 14.2765 and 14.3035 MHz, among SSB signals."
+    },
+    {
+      "id": "cwx-panel",
+      "page": "cwx-panel",
+      "anchor_heading": "Opening CWX",
+      "steps": [
+        {
+          "cmd": "slice",
+          "action": "mode",
+          "value": "CW",
+          "_sleep": 1.0
+        },
+        {
+          "cmd": "clickAt",
+          "target": "CW keyer",
+          "value": "30 20",
+          "_sleep": 1.5
+        },
+        {
+          "wait_visible": "CwxPanel"
+        }
+      ],
+      "grab": {
+        "target": "MainWindow"
+      },
+      "crop": {
+        "union": [
+          "CwxPanel"
+        ],
+        "pad": 0
+      },
+      "cleanup": [
+        {
+          "cmd": "clickAt",
+          "target": "CW keyer",
+          "value": "30 20",
+          "_sleep": 1.0
+        }
+      ],
+      "caption": "The CWX panel, opened from CWX in the status bar with the TX slice in CW.",
+      "alt": "CWX panel along the left edge of the window: a large empty message area, a Type CW message... field, and Send, Live and Setup buttons with a Speed box at 30."
+    },
+    {
+      "id": "dvk-panel",
+      "page": "dvk-panel",
+      "anchor_heading": "Opening DVK",
+      "steps": [
+        {
+          "cmd": "clickAt",
+          "target": "Digital Voice Keyer",
+          "value": "25 20",
+          "_sleep": 1.5
+        },
+        {
+          "wait_visible": "dvkPanel"
+        }
+      ],
+      "grab": {
+        "target": "MainWindow"
+      },
+      "crop": {
+        "union": [
+          "dvkPanel"
+        ],
+        "pad": 0,
+        "pad_right": 120
+      },
+      "cleanup": [
+        {
+          "cmd": "clickAt",
+          "target": "Digital Voice Keyer",
+          "value": "25 20",
+          "_sleep": 1.0
+        }
+      ],
+      "caption": "The DVK panel, opened from DVK in the status bar.",
+      "alt": "Digital Voice Keyer panel along the left edge of the window, status Idle. Twelve slots, F1 Recording 1 to F12 Recording 12, each read Empty. REC, STOP, PLAY and PREV buttons run along the bottom."
+    },
+    {
+      "id": "memory-browse-panel",
+      "page": "memory-channels",
+      "anchor_heading": "Memory browse panel",
+      "steps": [
+        {
+          "cmd": "invoke",
+          "target": "pan 0/panMenuMemoryBtn",
+          "action": "click",
+          "_sleep": 0.8
+        },
+        {
+          "wait_visible": "MemoryBrowsePanel"
+        }
+      ],
+      "grab": {
+        "target": "pan-visible",
+        "selector": "0"
+      },
+      "crop": {
+        "box": [
+          0,
+          14,
+          380,
+          250
+        ]
+      },
+      "cleanup": [
+        {
+          "cmd": "invoke",
+          "target": "pan 0/panMenuMemoryBtn",
+          "action": "click",
+          "_sleep": 0.8
+        }
+      ],
+      "caption": "The Memory panel, opened from the Memory button on the overlay menu.",
+      "alt": "Memory panel beside the overlay menu, with the Memory button lit. An Add Memory button sits above a Frequency and Name list: 0.670000 AM News, 14.085000 RTTY 20m, 14.236000 FreeDV 20m, 146.780000 and 146.960000, two repeater memories named by their callsign and club."
+    },
+    {
+      "id": "copy-assist-panel",
+      "page": "copy-assist",
+      "anchor_heading": "Opening Copy Assist",
+      "steps": [
+        {
+          "cmd": "clickAt",
+          "target": "Speech-to-text (Copy Assist)",
+          "value": "24 20",
+          "_sleep": 1.5
+        },
+        {
+          "wait_visible": "copyAssistDock"
+        }
+      ],
+      "grab": {
+        "target": "pan-visible",
+        "selector": "0"
+      },
+      "crop": {
+        "union": [
+          "copyAssistDock"
+        ],
+        "pad": 0,
+        "pad_top": 160
+      },
+      "cleanup": [
+        {
+          "cmd": "clickAt",
+          "target": "Speech-to-text (Copy Assist)",
+          "value": "24 20",
+          "_sleep": 1.0
+        }
+      ],
+      "caption": "The Copy Assist panel under the waterfall, before it is enabled.",
+      "alt": "The bottom of the panadapter with the Copy Assist panel open below the waterfall. Its control row has a Disabled button, a settings gear, Buffer 20 s, Sens 80% and Silence 300 ms sliders, and A-, A+, a line-break button, Context and Clear. The transcript area is empty, with Disabled and Queue: 0.0 s at the bottom."
+    },
+    {
+      "id": "fftw-wisdom-window",
+      "page": "nr2-noise-reduction",
+      "anchor_heading": "FFTW wisdom (first use)",
+      "settle": 2,
+      "steps": [
+        {
+          "cmd": "invoke",
+          "target": "AetherRX...",
+          "action": "trigger"
+        },
+        {
+          "wait_visible": "AetherRxDialog"
+        },
+        {
+          "cmd": "invoke",
+          "target": "dspMethodBtnNR2",
+          "action": "click",
+          "_sleep": 1.0
+        },
+        {
+          "wait_visible": "nr2WisdomDialog",
+          "timeout": 5
+        }
+      ],
+      "grab": {
+        "target": "nr2WisdomDialog"
+      },
+      "cleanup": [
+        {
+          "sleep": 60
+        },
+        {
+          "cmd": "invoke",
+          "target": "dspMethodBtnNR2",
+          "action": "click",
+          "_sleep": 1.0
+        }
+      ],
+      "caption": "The FFTW Wisdom window, shown the first time NR2 starts on a computer.",
+      "alt": "AetherSDR FFTW Wisdom window. It reads Computing COMPLEX FORWARD FFT size 2048... and This window will automatically close when wisdom generation is complete, above a progress bar at 38%, Working..., an elapsed time of 0:09 and a Cancel button."
+    },
+    {
+      "id": "psk-reporter-sidebar",
+      "page": "psk-reporter-map",
+      "anchor_heading": "Choosing reports",
+      "settle": 3,
+      "steps": [
+        {
+          "cmd": "invoke",
+          "target": "PSK Reporter...",
+          "action": "trigger"
+        },
+        {
+          "wait_visible": "PskReporterMapDialog"
+        }
+      ],
+      "grab": {
+        "target": "PskReporterMapDialog"
+      },
+      "crop": {
+        "union": [
+          "pskReporterSidebar"
+        ],
+        "pad": 0
+      },
+      "caption": "The PSK Reporter window's sidebar: WSPR beacon, report filters, band conditions and map options. The grid square is blacked out.",
+      "alt": "PSK Reporter sidebar. WSPR beacon: TX call KK7GWY, Grid (blacked out), Band 20m, Reported 30 dBm, Offset 1500.0 Hz, Level -20 dBFS, a Transmit once button and an Idle status. Reports: Call KK7GWY, Band All, Mode All, Lookback 1 hour, All Callsigns unticked and Active monitors ticked. Band conditions: 80-40m Good, 30-20m Good, 17-15m Fair, 12-10m Poor. Map: Globe, Paths, Day/night (ticked), Dark map and a Map brightness slider at 100%, then City lights.",
+      "redact": [
+        [
+          72,
+          53,
+          108,
+          18
+        ]
+      ]
+    },
+    {
+      "id": "tailnet-remote-access",
+      "page": "tailscale-remote-access",
+      "anchor_heading": "Part 4 — Join the radio to your tailnet",
+      "settle": 2,
+      "steps": [
+        {
+          "cmd": "invoke",
+          "target": "Waveforms...",
+          "action": "trigger"
+        },
+        {
+          "wait_visible": "WaveformsDialog"
+        },
+        {
+          "cmd": "invoke",
+          "target": "Configure remote access for waveform flex-tailnet-shim",
+          "action": "click",
+          "_sleep": 3.0
+        },
+        {
+          "wait_visible": "TailnetShimDialog"
+        }
+      ],
+      "grab": {
+        "target": "TailnetShimDialog"
+      },
+      "caption": "The Remote Access window for the flex-tailnet-shim container. Tailnet names, addresses and station device addresses are blacked out.",
+      "alt": "Remote Access window. The status line reads On your tailnet, container 0.4.0, 0 remote session(s), above an explanation of remote access over Tailscale. The Tailnet group shows the tailnet name and address (both blacked out) with a Copy button, Remote sessions 0 and Container version 0.4.0. Join your tailnet has an Auth key field (placeholder tskey-auth-...), Machine name flx8600, a Who may connect field (placeholder you@example.com, tag:operators), a note on single-use keys, and Save Access List and Change Key buttons. Station devices lists the devices found on the radio's network (blacked out) with a Share the devices found here over the tailnet checkbox, an Other devices field and Save Sharing. An amber note about the admin token and Refresh, Sign Out of Tailnet and Done buttons close the window.",
+      "redact": [
+        [
+          150,
+          716,
+          400,
+          22
+        ]
+      ]
+    },
+    {
+      "id": "waveforms-dialog",
+      "page": "tailscale-remote-access",
+      "anchor_heading": "Part 3 — Install the container on the radio",
+      "settle": 2,
+      "steps": [
+        {
+          "cmd": "invoke",
+          "target": "Waveforms...",
+          "action": "trigger"
+        },
+        {
+          "wait_visible": "WaveformsDialog"
+        }
+      ],
+      "grab": {
+        "target": "WaveformsDialog"
+      },
+      "caption": "The Waveforms window, listing the waveforms installed on the radio. The serial number and the waveform processor's address are blacked out.",
+      "alt": "Waveforms window. A Connected Radio card reads FLEX-8600 FLX8600 with its serial blacked out, beside WFP Support Supported, WFP Power ON, WFP Ready READY and WFP IP (blacked out). Radio Waveform Processor explains legacy and Docker waveform packages. Installed Waveforms has an Install... button and one entry, flex-tailnet-shim 0.4.0, with Docker, Configure..., Restart and Remove buttons."
+    },
+    {
+      "id": "default-light-theme",
+      "page": "themes-and-theme-editor",
+      "anchor_heading": "Choosing a theme",
+      "quantize": true,
+      "steps": [
+        {
+          "cmd": "invoke",
+          "target": "Default Light",
+          "action": "trigger"
+        },
+        {
+          "sleep": 3
+        }
+      ],
+      "grab": {
+        "target": "MainWindow"
+      },
+      "cleanup": [
+        {
+          "cmd": "invoke",
+          "target": "Default Dark",
+          "action": "trigger"
+        },
+        {
+          "sleep": 2
+        }
+      ],
+      "caption": "The main window in the Default Light theme.",
+      "alt": "AetherSDR main window in the Default Light theme: a light title bar and status bar, with the panadapter, waterfall and applets."
+    },
+    {
+      "id": "minimal-mode",
+      "page": "keyboard-shortcuts",
+      "anchor_heading": "Minimal Mode",
+      "quantize": true,
+      "steps": [
+        {
+          "cmd": "invoke",
+          "target": "Minimal Mode",
+          "action": "trigger"
+        },
+        {
+          "sleep": 3
+        }
+      ],
+      "grab": {
+        "target": "MainWindow"
+      },
+      "cleanup": [
+        {
+          "cmd": "invoke",
+          "target": "Minimal Mode",
+          "action": "trigger"
+        },
+        {
+          "sleep": 2
+        },
+        {
+          "cmd": "resize",
+          "value": "1600 1000"
+        }
+      ],
+      "caption": "Minimal Mode: the window shrinks to the applet column.",
+      "alt": "AetherSDR in Minimal Mode, a narrow window holding a compact radio tab and the applet column: the button bar, S-Meter, RX Controls, TX Controls, Phone and Phone/CW."
+    },
+    {
+      "id": "pan-right-click-menu",
+      "page": "panadapter-controls",
+      "anchor_heading": "Right-click menu",
+      "offscreen": true,
+      "settle": 1.0,
+      "steps": [
+        {
+          "cmd": "rightClick",
+          "target": "Panadapter spectrum display",
+          "value": "900 300",
+          "_sleep": 1.5
+        },
+        {
+          "wait_visible": "QMenu"
+        }
+      ],
+      "grab": {
+        "target": "QMenu"
+      },
+      "cleanup": [
+        {
+          "cmd": "close",
+          "target": "QMenu",
+          "_allow_fail": true,
+          "_sleep": 0.5
+        }
+      ],
+      "caption": "The panadapter's right-click menu. The frequency in the first items is the point you clicked.",
+      "alt": "Panadapter context menu: Add Spot at 14.288000 MHz..., Add TNF at 14.288000 MHz, Add Slice at 14.288000 MHz, Move capture away from DC, Center Lock Slice A, Waterfall Time Markers (submenu), Show Tune Guides, Extended Frequency Line, Extended Passband, Extended TNF and Pop out."
+    },
+    {
+      "id": "smeter-applet-menu",
+      "page": "meters",
+      "anchor_heading": "S-Meter applet (VU)",
+      "offscreen": true,
+      "settle": 1.0,
+      "steps": [
+        {
+          "cmd": "contextMenu",
+          "target": "SMeterWidget",
+          "_sleep": 1.5
+        },
+        {
+          "wait_visible": "QMenu"
+        }
+      ],
+      "grab": {
+        "target": "QMenu"
+      },
+      "cleanup": [
+        {
+          "cmd": "close",
+          "target": "QMenu",
+          "_allow_fail": true,
+          "_sleep": 0.5
+        }
+      ],
+      "caption": "The S-Meter applet's right-click menu.",
+      "alt": "S-Meter context menu with sections Face theme (Aether default ticked, Classic warm, Dark-room uplight, Graphite dark), TX Select (Power ticked, SWR, Level, Compression), RX Select (S-Meter ticked, S-Meter Peak), Peak Hold (Enabled), Decay speed (Fast, Medium ticked, Slow) and Reset Peak Hold."
+    },
+    {
+      "id": "menu-tools",
+      "page": "menu-reference",
+      "anchor_heading": "Tools",
+      "offscreen": true,
+      "settle": 1.0,
+      "steps": [
+        {
+          "cmd": "menu",
+          "action": "open",
+          "value": "Tools",
+          "_sleep": 1.5
+        },
+        {
+          "wait_visible": "QMenu"
+        }
+      ],
+      "grab": {
+        "target": "QMenu"
+      },
+      "cleanup": [
+        {
+          "cmd": "close",
+          "target": "QMenu",
+          "_allow_fail": true,
+          "_sleep": 0.5
+        }
+      ],
+      "caption": "The Tools menu, connected to a FLEX-8600.",
+      "alt": "Tools menu: Add Panadapter..., AetherTX..., CW Keyer, Copy Assist, AetherModem..., Configure KiwiSDR...; Start SWR Scan..., Pre-tune ATU Bands..., Clear ATU Memories..., Calibrate AGC-T...; Callsign Lookup... (Ctrl+Shift+L), PSK Reporter..., FreeDV Reporter...; Net Scheduler..., Memory..., Waveforms..., Wideband Bandscope...; Radio Health..., GPS Dashboard..., Network Diagnostics... and Runtime Monitor...."
+    },
+    {
+      "id": "menu-help",
+      "page": "menu-reference",
+      "anchor_heading": "Help",
+      "offscreen": true,
+      "settle": 1.0,
+      "steps": [
+        {
+          "cmd": "menu",
+          "action": "open",
+          "value": "Help",
+          "_sleep": 1.5
+        },
+        {
+          "wait_visible": "QMenu"
+        }
+      ],
+      "grab": {
+        "target": "QMenu"
+      },
+      "cleanup": [
+        {
+          "cmd": "close",
+          "target": "QMenu",
+          "_allow_fail": true,
+          "_sleep": 0.5
+        }
+      ],
+      "caption": "The Help menu.",
+      "alt": "Help menu: Getting Started..., AetherSDR Help..., What's New...; Understanding Noise Cancellation..., Configuring AetherSDR Controls..., Configuring Data Modes...; AetherSDR Website, Donate to AetherSDR, Submit your Idea... (with a light-bulb icon), File an Issue..., Contributing to AetherSDR...; Support & Diagnostics..., Slice Troubleshooting..., Check for Updates...; and About AetherSDR."
+    },
+    {
+      "id": "split-badge-menu",
+      "page": "split-operation",
+      "anchor_heading": "The badge menu",
+      "offscreen": true,
+      "settle": 1.0,
+      "steps": [
+        {
+          "cmd": "invoke",
+          "target": "Split mode",
+          "action": "click",
+          "_sleep": 3.0
+        },
+        {
+          "cmd": "contextMenu",
+          "target": "Split mode",
+          "_sleep": 1.5
+        },
+        {
+          "wait_visible": "QMenu"
+        }
+      ],
+      "grab": {
+        "target": "QMenu"
+      },
+      "cleanup": [
+        {
+          "remove_extra_slices": true
+        },
+        {
+          "cmd": "close",
+          "target": "QMenu",
+          "_allow_fail": true,
+          "_sleep": 0.5
+        }
+      ],
+      "caption": "Right-clicking the SPLIT badge: preset offsets and the split options.",
+      "alt": "SPLIT badge context menu: Split Up 1 kHz, Split Up 5 kHz, Split Up 10 kHz, Split QSY Option (submenu), Monitor TX (submenu), Nothing remembered yet and Forget remembered audio."
+    },
+    {
+      "id": "radio-setup-peripherals-add",
+      "page": "peripherals",
+      "anchor_heading": "Layout",
+      "offscreen": true,
+      "settle": 1.0,
+      "steps": [
+        {
+          "cmd": "invoke",
+          "target": "Radio Setup...",
+          "action": "trigger"
+        },
+        {
+          "wait_visible": "RadioSetupDialog"
+        },
+        {
+          "cmd": "resize",
+          "target": "RadioSetupDialog",
+          "value": "960 680"
+        },
+        {
+          "cmd": "invoke",
+          "target": "radioSetupNavigation",
+          "action": "setCurrentText",
+          "value": "Peripherals",
+          "_sleep": 1.5
+        },
+        {
+          "cmd": "showMenu",
+          "target": "RadioSetupDialog/Add",
+          "_sleep": 1.5
+        },
+        {
+          "wait_visible": "QMenu"
+        }
+      ],
+      "grab": {
+        "target": "QMenu"
+      },
+      "cleanup": [
+        {
+          "cmd": "close",
+          "target": "QMenu",
+          "_allow_fail": true,
+          "_sleep": 0.5
+        }
+      ],
+      "caption": "The Add menu on the Peripherals page: every device type AetherSDR can configure.",
+      "alt": "Peripherals Add menu: Tuner Genius XL, Power Genius XL, Antenna Genius, ShackSwitch, ACOM Amplifier, SPE Expert Amplifier, VK3AMP Amplifier, Elecraft KPA1500 and LP-100A Meter."
+    },
+    {
+      "id": "radio-list-popup",
+      "page": "menu-reference",
+      "anchor_heading": "Radio tabs",
+      "offscreen": true,
+      "settle": 1.0,
+      "steps": [
+        {
+          "cmd": "titlebar",
+          "action": "showDiscovery",
+          "_sleep": 1.5
+        },
+        {
+          "wait_visible": "discoveredRadiosPopover"
+        }
+      ],
+      "grab": {
+        "target": "discoveredRadiosPopover"
+      },
+      "cleanup": [
+        {
+          "cmd": "close",
+          "target": "discoveredRadiosPopover",
+          "_allow_fail": true
+        },
+        {
+          "cmd": "close",
+          "target": "QMenu",
+          "_allow_fail": true,
+          "_sleep": 0.5
+        }
+      ],
+      "caption": "The radio list, opened from the plus button beside the radio tabs. Addresses are blacked out.",
+      "alt": "Discovered radios popup with a Search name, address, or status field. Three rows, each with an Actions button: FLX8600, connected; Hermes-Lite 2, available; and Simulator (not on the air), 127.0.0.1, available, with the first two addresses blacked out. Connect manually... and Rescan radios sit at the bottom.",
+      "redact": [
+        [
+          14,
+          86,
+          98,
+          20
+        ],
+        [
+          14,
+          143,
+          98,
+          20
+        ]
+      ],
+      "widget_redact": false
+    },
+    {
+      "id": "spothub-add-spot",
+      "page": "spothub",
+      "anchor_heading": "Adding a spot by hand",
+      "offscreen": true,
+      "settle": 1.0,
+      "steps": [
+        {
+          "cmd": "rightClick",
+          "target": "Panadapter spectrum display",
+          "value": "900 300",
+          "_sleep": 1.5
+        },
+        {
+          "wait_visible": "QMenu"
+        },
+        {
+          "cmd": "invoke",
+          "target": "Add Spot at 14.288000 MHz...",
+          "action": "trigger",
+          "_sleep": 1.5
+        },
+        {
+          "wait_visible": "QDialog"
+        }
+      ],
+      "grab": {
+        "target": "QDialog"
+      },
+      "cleanup": [
+        {
+          "cmd": "invoke",
+          "target": "QDialog/Cancel",
+          "action": "click",
+          "_sleep": 1.0
+        },
+        {
+          "cmd": "close",
+          "target": "QMenu",
+          "_allow_fail": true,
+          "_sleep": 0.5
+        }
+      ],
+      "caption": "The Add Spot dialog, opened from the panadapter's right-click menu.",
+      "alt": "Add Spot dialog: Frequency (MHz) 14.288000 MHz, an empty Callsign (required) field, an empty Optional comment field, Lifetime 30 minutes, a Forward to DX Cluster checkbox, unticked, and OK and Cancel buttons."
+    },
+    {
+      "id": "first-session-main-window",
+      "page": "your-first-session",
+      "anchor_heading": "Step 2: Connect to the demo",
+      "radio": "demo",
+      "quantize": true,
+      "grab": {
+        "target": "MainWindow"
+      },
+      "caption": "The main window just after connecting to the demo: panadapter and waterfall on the left, applets on the right.",
+      "alt": "AetherSDR main window connected to the demo. The title bar has a tab reading Simulator (not on the air). The panadapter shows a narrow spectrum around 14.100 MHz with the slice A VFO flag reading 14.100.000 USB and a speckled blue waterfall below. The applet panel on the right shows the S-Meter, RX Controls, Demo Noise and TX Controls applets; in Demo Noise, Pink / hiss and Birdie carrier are lit."
+    },
+    {
+      "id": "demo-noise-applet",
+      "page": "demo-mode",
+      "anchor_heading": "Demo Noise applet",
+      "radio": "demo",
+      "grab": {
+        "target": "DEMO"
+      },
+      "caption": "The Demo Noise applet, shown only while connected to the demo simulator.",
+      "alt": "Demo Noise applet. Preset buttons birdie-hell, cw-in-noise, night-40m, noisy-qth, quiet-20m and storm sit above a list of noise sources, each with a toggle, a level slider and, for some, a second value: CW tone, Voice (speech), White / AWGN, Pink / hiss (lit), QRN crackle, Power-line, Static crash, Birdie carrier (lit), SMPS hash and Woodpecker. A Fault Injection row below has High SWR, Drop Slice, Stall Scope, Disconnect, Malformed and Clear buttons."
+    },
+    {
+      "id": "first-session-rx-freq-entry",
+      "page": "your-first-session",
+      "anchor_heading": "Step 3: Tune",
+      "radio": "demo",
+      "steps": [
+        {
+          "cmd": "doubleClick",
+          "target": "RX/Frequency display",
+          "_allow_fail": true,
+          "_sleep": 1.0
+        }
+      ],
+      "grab": {
+        "target": "RX"
+      },
+      "crop": {
+        "box": [
+          0,
+          0,
+          0,
+          80
+        ]
+      },
+      "caption": "Double-click the frequency in RX Controls to type a new one.",
+      "alt": "The top of the RX Controls applet: slice A, a lock button, ANT1 and ANT1, filter width 2.8K, a TX badge, USB, and the frequency 14.100000 highlighted for editing in a blue box."
+    },
+    {
+      "id": "first-session-lsb-passband",
+      "page": "your-first-session",
+      "anchor_heading": "Step 4: Change the mode",
+      "radio": "demo",
+      "steps": [
+        {
+          "cmd": "slice",
+          "action": "mode",
+          "value": "LSB",
+          "_sleep": 2
+        }
+      ],
+      "grab": {
+        "target": "pan-visible",
+        "selector": "0"
+      },
+      "crop": {
+        "box": [
+          200,
+          0,
+          760,
+          385
+        ]
+      },
+      "caption": "In LSB the passband (shaded) moves below the VFO line.",
+      "alt": "Demo panadapter in LSB around 14.100 MHz. The slice A VFO flag reads 14.100.000 with LSB on its mode tab, and the shaded passband lies just below the VFO line."
+    },
+    {
+      "id": "first-session-layout-dialog",
+      "page": "your-first-session",
+      "anchor_heading": "Step 6: Add a panadapter",
+      "radio": "demo",
+      "settle": 1.5,
+      "steps": [
+        {
+          "cmd": "invoke",
+          "target": "Add Panadapter...",
+          "action": "trigger"
+        },
+        {
+          "wait_visible": "PanLayoutDialog"
+        }
+      ],
+      "grab": {
+        "target": "PanLayoutDialog"
+      },
+      "caption": "The Panadapter Layout window. The demo can show up to four panadapters, so larger layouts are dimmed.",
+      "alt": "Panadapter Layout window headed Choose panadapter layout. A grid of layout thumbnails, each labelled with its arrangement and pan count: A / B (2 pans), A | B (2 pans), A|B / C (3 pans), A / B|C (3 pans), A / B / C (3 pans), A|B / C|D (4 pans), A/B/C/D (4 pans) and Single (1 pan), highlighted. Layouts for five to eight pans are dimmed. A Cancel button sits at the bottom."
+    },
+    {
+      "id": "first-session-demo-noise-noisy",
+      "page": "your-first-session",
+      "anchor_heading": "Step 7: Clean up a noisy band",
+      "radio": "demo",
+      "steps": [
+        {
+          "click_text": "noisy-qth",
+          "scope": "DEMO",
+          "_sleep": 1.0
+        },
+        {
+          "click_text": "Voice (speech)",
+          "scope": "DEMO",
+          "checked": true,
+          "_sleep": 1.0
+        }
+      ],
+      "grab": {
+        "target": "DEMO"
+      },
+      "cleanup": [
+        {
+          "click_text": "quiet-20m",
+          "scope": "DEMO",
+          "optional": true
+        },
+        {
+          "click_text": "Voice (speech)",
+          "scope": "DEMO",
+          "checked": false,
+          "optional": true
+        }
+      ],
+      "caption": "Demo Noise after choosing noisy-qth and turning on Voice (speech).",
+      "alt": "Demo Noise applet with Voice (speech), Pink / hiss, Power-line and SMPS hash lit, after the noisy-qth preset and the Voice toggle."
+    },
+    {
+      "id": "first-session-aetherrx-nnr",
+      "page": "your-first-session",
+      "anchor_heading": "Step 7: Clean up a noisy band",
+      "radio": "demo",
+      "steps": [
+        {
+          "click_text": "noisy-qth",
+          "scope": "DEMO",
+          "_sleep": 1.0
+        },
+        {
+          "click_text": "Voice (speech)",
+          "scope": "DEMO",
+          "checked": true,
+          "_sleep": 1.0
+        },
+        {
+          "cmd": "invoke",
+          "target": "AetherRX...",
+          "action": "trigger"
+        },
+        {
+          "wait_visible": "AetherRxDialog"
+        },
+        {
+          "cmd": "invoke",
+          "target": "dspMethodBtnNNR",
+          "action": "click",
+          "_sleep": 4.0
+        }
+      ],
+      "grab": {
+        "target": "AetherRxDialog"
+      },
+      "cleanup": [
+        {
+          "cmd": "invoke",
+          "target": "dspMethodBtnNNR",
+          "action": "click",
+          "_sleep": 1.0
+        },
+        {
+          "click_text": "quiet-20m",
+          "scope": "DEMO",
+          "optional": true
+        },
+        {
+          "click_text": "Voice (speech)",
+          "scope": "DEMO",
+          "checked": false,
+          "optional": true
+        }
+      ],
+      "caption": "AetherRX with NNR running: the NNR tab is lit and the AetherNR stage is ticked.",
+      "alt": "AetherRX window. AetherNR is selected in the stage column and its enable box is green. The NNR method tab is highlighted, showing Neural NR with a description, a Strength slider at 38, Model Standard or Premium, and Advanced sliders for Alpha, Knee, Tau, Max gain, Attack and Release. The status line reads METHOD NNR, Standard, floor 38, with an NR GAIN trace."
+    },
+    {
+      "id": "first-session-save-memory-dialog",
+      "page": "your-first-session",
+      "anchor_heading": "Step 9: Save and recall a memory",
+      "radio": "demo",
+      "steps": [
+        {
+          "cmd": "invoke",
+          "target": "pan 0/panMenuMemoryBtn",
+          "action": "click",
+          "_sleep": 0.8
+        },
+        {
+          "cmd": "invoke",
+          "target": "memoryAddButton",
+          "action": "click",
+          "_sleep": 1.5
+        },
+        {
+          "wait_visible": "QDialog"
+        },
+        {
+          "cmd": "invoke",
+          "target": "QDialog/QLineEdit",
+          "action": "setText",
+          "value": "My first memory"
+        }
+      ],
+      "grab": {
+        "target": "QDialog"
+      },
+      "cleanup": [
+        {
+          "cmd": "invoke",
+          "target": "QDialog/Cancel",
+          "action": "click",
+          "_sleep": 0.5
+        }
+      ],
+      "caption": "The Save Memory dialog, opened with Add Memory on the Memory panel.",
+      "alt": "Save Memory dialog: Name My first memory, Current Frequency: 14.100000 MHz, USB, Filter 100 to 2900 Hz, and Cancel and Save buttons."
+    },
+    {
+      "id": "first-session-file-menu",
+      "page": "your-first-session",
+      "anchor_heading": "Step 10: Disconnect",
+      "radio": "demo",
+      "offscreen": true,
+      "steps": [
+        {
+          "cmd": "menu",
+          "action": "open",
+          "value": "File",
+          "_sleep": 1.5
+        },
+        {
+          "wait_visible": "QMenu"
+        }
+      ],
+      "grab": {
+        "target": "QMenu"
+      },
+      "cleanup": [
+        {
+          "cmd": "close",
+          "target": "QMenu",
+          "_allow_fail": true
+        }
+      ],
+      "caption": "The File menu.",
+      "alt": "File menu: Connect to Radio..., Disconnect and Quit."
+    },
+    {
+      "id": "first-session-two-pans",
+      "page": "your-first-session",
+      "anchor_heading": "Step 6: Add a panadapter",
+      "radio": "demo",
+      "quantize": true,
+      "steps": [
+        {
+          "cmd": "invoke",
+          "target": "Add Panadapter...",
+          "action": "trigger"
+        },
+        {
+          "wait_visible": "PanLayoutDialog"
+        },
+        {
+          "cmd": "clickAt",
+          "target": "PanLayoutDialog",
+          "value": "108 100",
+          "_sleep": 4
+        },
+        {
+          "cmd": "resize",
+          "value": "1600 1000"
+        },
+        {
+          "wait_floors": true,
+          "timeout": 20
+        },
+        {
+          "sleep": 60
+        }
+      ],
+      "grab": {
+        "target": "MainWindow"
+      },
+      "crop": {
+        "union": [
+          "PanadapterStack"
+        ],
+        "pad": 0
+      },
+      "cleanup": [
+        {
+          "cmd": "invoke",
+          "target": "Add Panadapter...",
+          "action": "trigger"
+        },
+        {
+          "wait_visible": "PanLayoutDialog"
+        },
+        {
+          "cmd": "clickAt",
+          "target": "PanLayoutDialog",
+          "value": "452 470",
+          "_sleep": 3
+        },
+        {
+          "cmd": "resize",
+          "value": "1600 1000"
+        }
+      ],
+      "caption": "Two panadapters stacked after choosing A / B (2 pans).",
+      "alt": "Two demo panadapters stacked one above the other, both tuned around 14.100 MHz with a green spectrum trace. The top one carries the slice A VFO flag at 14.100.000 and a speckled blue waterfall; the new panadapter below has its own overlay menu and spectrum."
+    },
+    {
+      "id": "first-session-saved-status",
+      "page": "your-first-session",
+      "anchor_heading": "Step 9: Save and recall a memory",
+      "radio": "demo",
+      "settle": 0.3,
+      "steps": [
+        {
+          "cmd": "invoke",
+          "target": "pan 0/panMenuMemoryBtn",
+          "action": "click",
+          "_sleep": 0.8
+        },
+        {
+          "cmd": "invoke",
+          "target": "memoryAddButton",
+          "action": "click",
+          "_sleep": 1.5
+        },
+        {
+          "wait_visible": "QDialog"
+        },
+        {
+          "cmd": "invoke",
+          "target": "QDialog/QLineEdit",
+          "action": "setText",
+          "value": "My first memory"
+        },
+        {
+          "cmd": "invoke",
+          "target": "QDialog/Save",
+          "action": "click",
+          "_sleep": 0.3
+        },
+        {
+          "cmd": "resize",
+          "value": "1600 1000"
+        }
+      ],
+      "grab": {
+        "target": "MainWindow"
+      },
+      "crop": {
+        "union": [
+          "QStatusBar"
+        ],
+        "pad": 0,
+        "max_w": 520
+      },
+      "caption": "After Save, the status bar confirms the memory.",
+      "alt": "The left end of the status bar reading Saved \"My first memory\" to memories."
     }
   ]
 }

@@ -61,6 +61,19 @@ EXPLICIT_ID_RE = re.compile(r"\s*\{#([^}\s]+)\}\s*$")
 # [text](target) and ![alt](target); the text may hold one level of brackets.
 LINK_RE = re.compile(r"(!?)\[((?:[^\[\]\\]|\\.|\[[^\[\]]*\])*)\]\(\s*<?([^)\s>]+)>?(\s+\"[^\"]*\")?\s*\)")
 ADMONITION_OPEN_RE = re.compile(r"^:::(\w+)(?:\[(.*)\])?\s*$")
+# A screenshot embedded by tools/docs/embed_screenshots.py as a sized HTML
+# <img> (the PDF is built with raw HTML off, so it becomes a Markdown image).
+HTML_IMG_RE = re.compile(r'^\s*<img src="([^"]+)"[^>]*?\balt="([^"]*)"[^>]*/?>\s*$')
+
+
+def html_img_to_markdown(line: str) -> str:
+    m = HTML_IMG_RE.match(line)
+    if not m:
+        return line
+    alt = (m.group(2).replace("&quot;", '"').replace("&lt;", "<").replace("&gt;", ">")
+           .replace("&amp;", "&"))
+    alt = alt.replace("\\", "\\\\").replace("[", "\\[").replace("]", "\\]")
+    return f"![{alt}]({m.group(1)})"
 
 
 def fail(msg: str) -> None:
@@ -338,7 +351,7 @@ class Book:
                 kind, title = a.group(1), (a.group(2) or "").replace('"', "'")
                 out.append(f'::: {{.admonition .{kind} title="{title}"}}')
                 continue
-            out.append(self.rewrite_links(page, line))
+            out.append(self.rewrite_links(page, html_img_to_markdown(line)))
         out.append("")
         return "\n".join(out)
 

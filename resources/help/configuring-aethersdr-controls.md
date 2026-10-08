@@ -1,5 +1,7 @@
 # Configuring AetherSDR Controls
 
+Full documentation: [docs.aethersdr.com/keyboard-shortcuts](https://docs.aethersdr.com/keyboard-shortcuts)
+
 AetherSDR can be operated in several different ways. You can click and drag with a mouse, tune with a trackpad, use the built-in keyboard shortcuts, and add external control hardware such as FlexControl, MIDI controllers, USB tuning knobs, Stream Deck buttons, and serial PTT or CW accessories.
 
 The good news is that you do **not** need to learn everything at once. Most operators start with the mouse and a few shortcuts, then add one external controller later when they know what they want to do more quickly.

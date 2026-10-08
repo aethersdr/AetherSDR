@@ -10,6 +10,10 @@ Audio settings control the radio's own audio outputs, the computer's speaker and
 
 Audio settings live on the **Audio** page of Radio Setup:
 
+<img src="/img/screens/radio-setup-audio.png" width="960" alt="Radio Setup on the Audio page. Radio Audio Outputs has Line Out at 53 and Headphone at 100, each with a Mute button. Audio Compression (SmartLink / tailnet) has Auto, Uncompressed (selected) and Opus. Below are checkboxes to smooth packet loss and prevent system sleep, then PC Audio Devices with Input and Output both set to Built-in Audio Analog Stereo, a prompt-on-device-change checkbox, Audio Boost disabled and an audio buffer of 100 ms. The Recording group at the bottom has Record Mode Radio Side and Client Side (selected), a Save to path (blacked out) and Auto-record on TX." />
+
+*Radio Setup, Audio page: the radio's audio outputs, audio compression, the PC audio devices and recording.*
+
 - **Windows and Linux:** **Settings → Radio Setup... → RECEIVE & TRANSMIT → Audio**
 - **macOS:** **AetherSDR → Preferences...**, then **Audio**
 
@@ -46,6 +50,10 @@ When the operating system adds or removes an audio device, an **Audio Device Det
 ## Recording QSOs
 
 The **Recording** group controls QSO recording from the record and play buttons on the VFO flag and in AetherRX/AetherTX.
+
+<img src="/img/screens/radio-setup-recording.png" width="643" alt="Recording group. Record Mode has Radio Side and Client Side buttons, with Client Side selected. The Save to field is blacked out, beside a browse button. Below are an Auto-record on TX checkbox and an Idle timeout of 120 sec." />
+
+*The Recording group on the Audio page. The save path is blacked out.*
 
 - Client-side recordings include the CW you send, so a QSO that switches between voice and CW stays in one file.
 - Each recording is a 24 kHz or 48 kHz WAV, depending on the source, and never overwrites an existing file.

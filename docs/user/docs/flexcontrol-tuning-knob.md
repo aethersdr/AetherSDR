@@ -45,6 +45,10 @@ Actions whose name starts with **Wheel** do not fire once: they change what the 
 
 **Settings → AetherControl...** opens **AetherControl**, a "Virtual Tuning Controller" window laid out like the FlexControl. It shares its button assignments with the physical knob and mirrors it when one is connected.
 
+<img src="/img/screens/aethercontrol-window.png" width="515" alt="AetherControl window headed Virtual Tuning Controller, with Detect, Settings… and Compact buttons. MODE, ON/OFF and TOGGLE indicators sit above three buttons Aux1, Aux2 and Aux3, with their Single Tap actions Step Up, MOX and Toggle Mute and Double Tap actions Step Down, Toggle Tune and Toggle Lock. A large tuning knob fills the bottom." />
+
+*AetherControl, the on-screen FlexControl knob.*
+
 - **Wheel:** double-click the knob to capture the mouse for circular tuning; double-click again to release (Esc also releases). A single fast mouse jump moves the wheel by at most 15°, and the wheel only coasts after a real flick.
 - **Aux1–Aux3** and **PUSH**, each with a **Single Tap** and **Double Tap** action, from the action list below.
 - **Wheel Tightness** (Tight ↔ Loose, default 45) and **Mouse Sensitivity** (Less ↔ More, default 50).

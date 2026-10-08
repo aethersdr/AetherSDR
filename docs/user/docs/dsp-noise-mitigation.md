@@ -16,7 +16,7 @@ AetherSDR gives you two layers of noise mitigation. The **radio-side** filters r
 
 The in-app guide **Help → Understanding Noise Cancellation...** covers the same ground for newcomers.
 
-![AetherRX window. The left column lists the receive chain stages AetherNR, Gate, EQ, Compressor, Tube, Exciter and Final Output, each with an enable box, with AetherNR selected, and REC, PLAY and BYPASS controls at the bottom. The right side shows the noise-reduction method tabs NR2, NR4, MNR, DFNR, RN2, BNR and NNR, gain method and noise estimation options, post-processing toggles and mask sliders, and a status line reading No method running.](/img/screens/aetherrx.png)
+<img src="/img/screens/aetherrx.png" width="720" alt="AetherRX window. The left column lists the receive chain stages AetherNR (selected), Gate, EQ, Compressor, Tube, Exciter and Final Output, each with an enable box, with REC, PLAY, a settings gear and BYPASS at the bottom. The right side shows the noise-reduction method tabs NR2, NR4, MNR, DFNR, RN2, BNR and NNR, the NR2 gain method and noise estimation options, post-processing toggles, mask sliders, and a status line reading METHOD No method running." />
 
 *The AetherRX window: the receive processing chain on the left, the selected stage's settings on the right.*
 

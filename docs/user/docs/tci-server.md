@@ -19,7 +19,7 @@ TCI was created by Expert Electronics for ExpertSDR3 and is now widely supported
 | Spots | Separate DX cluster connection | Same WebSocket |
 | CW keying | Serial DTR/RTS or rigctld | Same WebSocket |
 
-![TCI Server applet. RX1 and TX level bars sit above the port field set to 50001, marked stopped, and a Disabled button that starts the server.](/img/screens/tci-applet.png)
+<img src="/img/screens/tci-applet.png" width="248" alt="TCI Server applet. Level bars for RX1, assigned to Slice A, RX2 to RX4, unassigned, and TX, assigned to Slice A, sit above the port field set to 50001, marked stopped, and a Disabled button that starts the server." />
 
 *The TCI Server applet in the applet panel.*
 

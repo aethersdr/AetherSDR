@@ -15,6 +15,10 @@ Use **Connect by IP** for:
 
 ## Setup
 
+<img src="/img/screens/connect-by-ip-card.png" width="760" alt="Connect to Radio window with the Connect by IP card selected. The Radio IP address group has Radio type: FlexRadio, Radio IP: 192.0.2.25, Network Diagnostics and Connect by IP buttons, and an Advanced: choose the VPN source path expander. Below are Connection options for slower links with a Use low bandwidth mode checkbox, and the shared checkboxes for the adaptive frame-rate throttle, connecting to the last radio, waking an Icom and showing the demo simulator." />
+
+*The Connect by IP card, with a documentation address typed in.*
+
 1. Open the **Connect to Radio** window: **File → Connect to Radio...**, or the **+** button beside the title bar's radio tabs → **Connect manually…**.
 2. Choose the **Connect by IP** card ("Best for VPN or routed station access when you already know the radio IP").
 

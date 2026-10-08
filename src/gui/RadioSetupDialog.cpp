@@ -7,6 +7,7 @@
 #include "ScopedChildWidget.h"
 #include "GuardedSlider.h"
 #include "ComboStyle.h"
+#include "DocsLinks.h"
 #include "SliceColorManager.h"
 #include "models/RadioModel.h"
 #include "models/XvtrPolicy.h"
@@ -2008,7 +2009,7 @@ QWidget* RadioSetupDialog::buildNetworkTab()
             "Never put it in an MCP config file or a shell profile.\n"
             "Only a client holding this token can drive the radio.\n"
             "Stored in your OS secret store. See\n"
-            "https://github.com/aethersdr/AetherSDR/blob/main/docs/automation-bridge.md");
+            + DocsLinks::automationBridge());
         AetherSDR::ThemeManager::instance().applyStyleSheet(tokenEdit,
             "QLineEdit { background: {{color.background.0}}; border: 1px solid {{color.background.2}}; "
             "border-radius: 3px; color: {{color.text.primary}}; font-family: monospace; "
@@ -2045,7 +2046,7 @@ QWidget* RadioSetupDialog::buildNetworkTab()
                 "drive this app to validate changes. Off by default. Transmit-"
                 "keying controls stay blocked unless the app is launched with\n"
                 "AETHER_AUTOMATION_ALLOW_TX. See\n"
-                "https://github.com/aethersdr/AetherSDR/blob/main/docs/automation-bridge.md");
+                + DocsLinks::automationBridge());
             // Env-var force-enable wins and can't be turned off from the UI —
             // make that visible rather than letting a toggle silently no-op.
             if (AutomationBridgeSettings::envForced()) {
@@ -2140,7 +2141,7 @@ QWidget* RadioSetupDialog::buildNetworkTab()
                 "OFF by default — the bridge blocks all transmit-keying otherwise.\n"
                 "Bridge-originated TX is limited by a force-unkey watchdog. You are\n"
                 "responsible for anything transmitted. See\n"
-                "https://github.com/aethersdr/AetherSDR/blob/main/docs/automation-bridge.md");
+                + DocsLinks::automationBridge());
             AetherSDR::ThemeManager::instance().applyStyleSheet(txCheck,
                 "QCheckBox { color: {{color.text.primary}}; font-size: 11px; }"
                 "QCheckBox::indicator { width: 14px; height: 14px; }");
@@ -2218,7 +2219,7 @@ QWidget* RadioSetupDialog::buildNetworkTab()
                 "but every mutating verb is refused. Enforced in the app, so a\n"
                 "client cannot bypass it. Toggle takes effect immediately on the\n"
                 "running bridge. See\n"
-                "https://github.com/aethersdr/AetherSDR/blob/main/docs/automation-bridge.md");
+                + DocsLinks::automationBridge());
             AetherSDR::ThemeManager::instance().applyStyleSheet(roCheck,
                 "QCheckBox { color: {{color.text.primary}}; font-size: 11px; }"
                 "QCheckBox::indicator { width: 14px; height: 14px; }");

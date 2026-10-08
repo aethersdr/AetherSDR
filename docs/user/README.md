@@ -84,22 +84,40 @@ appends, so a snapshot carries it too.
 ## Screenshots
 
 `static/img/screens/` holds screenshots captured by
-`tools/docs/capture_screenshots.py` from the steps in `screens.json`, against
-the built-in demo simulator in a fresh settings profile. They come from the
-2D build (`-DAETHER_GPU_SPECTRUM=OFF`), whose spectrum renders offscreen.
-To regenerate them:
+`tools/docs/capture_screenshots.py` from the steps in `screens.json`, each in
+a fresh settings profile with the default dark theme. Most are taken on a real
+FlexRadio on 20 m, so they show real signals; the pages that teach the demo
+simulator (`your-first-session`, `demo-mode`) are shot against the demo. Popup
+menus need a focused window on Wayland, so they are a separate offscreen
+pass. Three passes, from a GPU build on a HiDPI display (Linux):
 
 ```sh
-cmake -S . -B build-docs -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DAETHER_GPU_SPECTRUM=OFF
-cmake --build build-docs --target AetherSDR
-python3 tools/docs/capture_screenshots.py --build-dir build-docs   # --only id1,id2 for a subset
+# Real radio (shots without "radio": "demo"); --no-netns so it can reach the LAN.
+python3 tools/docs/capture_screenshots.py --build-dir build --allow-gpu-build \
+    --platform wayland --no-netns --radio-serial <serial>
+# The same radio, popup menus ("offscreen": true).
+python3 tools/docs/capture_screenshots.py --build-dir build --allow-gpu-build \
+    --platform offscreen --dpr 1.6667 --no-netns --radio-serial <serial>
+# The demo pages ("radio": "demo"), in a private network namespace.
+python3 tools/docs/capture_screenshots.py --build-dir build --allow-gpu-build --platform wayland
+python3 tools/docs/capture_screenshots.py --build-dir build --allow-gpu-build \
+    --platform offscreen --dpr 1.6667
 python3 tools/docs/embed_screenshots.py
 ```
 
-`tools/docs/embed_screenshots.py` puts each shot on its `page` with its alt
-text and caption: after the introduction, or at the start of the section
-named by `section`. It is idempotent, so re-shooting never duplicates an
-image; `--check` reports a page that is out of step.
+`--only id1,id2` re-shoots a subset. The script never transmits, connects only
+to the serial it is given, and blacks out anything that identifies the station
+in every image: IP and MAC addresses, the serial number, tailnet names, GPS
+positions, the bridge token and the scratch paths, found from the widget tree
+and by OCR (`tesseract`), plus any `redact` boxes in the manifest. It then
+OCRs the result again and reports anything that still looks like one; look at
+every image before committing it all the same.
+
+`tools/docs/embed_screenshots.py` puts each shot on its `page` under its
+`anchor_heading` (`intro` is the end of the introduction) as an `<img>` sized
+to its logical width, so the HiDPI PNG stays sharp, with its alt text and
+caption. It is idempotent, so re-shooting never duplicates an image; `--check`
+reports a page that is out of step.
 
 ## PDF manual
 

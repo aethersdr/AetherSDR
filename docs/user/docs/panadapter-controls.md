@@ -6,9 +6,9 @@ description: "The panadapter is the main display: the FFT spectrum on top and th
 
 The panadapter is the main display: the FFT spectrum on top and the scrolling waterfall below. AetherSDR can show up to 8 panadapters (as many as the connected radio allows), stacked in the main window or popped out into their own windows.
 
-![Panadapter centred near 14.100 MHz. A green spectrum trace with a dBm scale on the right, a frequency scale from 14.096 to 14.103 MHz, band-plan segments along the bottom of the spectrum, and a blue waterfall below with a time scale in seconds. The slice A VFO flag reads 14.100.000 USB and the overlay buttons on the left read +RX, Band, ANT, Display and Memory.](/img/screens/panadapter.png)
+<img src="/img/screens/panadapter.png" width="1340" alt="Panadapter covering 14.150 to 14.350 MHz. A blue spectrum trace with a dBm scale on the right shows SSB signals across the phone band, and band-plan segments run along the bottom of the spectrum. The slice A VFO flag reads 14.250.000 with its passband marked by the cyan line. The overlay buttons on the left read back arrow, +RX, +TNF, Band, ANT, Display, Memory and DAX, and the waterfall below shows the voice signals as speckled vertical columns against a dark blue background, with a time scale in seconds on the right and the zoom buttons S, B, minus and plus at the bottom left." />
 
-*A panadapter with its waterfall, the slice A VFO flag and the overlay menu down the left edge.*
+*A panadapter on 20 m with its waterfall, the slice A VFO flag and the overlay menu down the left edge.*
 
 ## Using the panadapter
 
@@ -33,6 +33,10 @@ The panadapter is the main display: the FFT spectrum on top and the scrolling wa
 ### Right-click menu
 
 Right-click the spectrum or waterfall:
+
+<img src="/img/screens/pan-right-click-menu.png" width="238" alt="Panadapter context menu: Add Spot at 14.288000 MHz..., Add TNF at 14.288000 MHz, Add Slice at 14.288000 MHz, Move capture away from DC, Center Lock Slice A, Waterfall Time Markers (submenu), Show Tune Guides, Extended Frequency Line, Extended Passband, Extended TNF and Pop out." />
+
+*The panadapter's right-click menu. The frequency in the first items is the point you clicked.*
 
 | Item | What it does |
 |------|-------------|
@@ -82,6 +86,10 @@ Drag the divider between the spectrum and the waterfall to resize them. The spli
 
 **Display → 3D VIEW → Spectrum: 3D Stacked Trace** turns the spectrum into a perspective surface built from recent traces receding into the distance. Ridge height is measured from the noise floor and coloured from floor to peak, and single-frame impulse bursts are rejected. The waterfall, scales and every overlay (spots, memories, markers, band plan) still draw as normal, and the dBm scale stays on the right as a full-height axis. It works on KiwiSDR sources too, and uses the GPU where available (see [GPU Rendering](./gpu-rendering.md)).
 
+<img src="/img/screens/pan-3d-stacked-trace.png" width="1340" alt="Panadapter in 3D Stacked Trace mode. Above the frequency scale from 14.150 to 14.350 MHz, successive spectrum traces are stacked into a blue landscape that recedes towards the top, with SSB signals standing out as green ridges running back in time. The slice A VFO flag sits at 14.250.000." />
+
+*The panadapter with Spectrum set to 3D Stacked Trace: recent sweeps are drawn as a receding landscape.*
+
 ### Band plan overlay
 
 The strip along the bottom of the spectrum shows band segments, coloured by use. In the ARRL (US) plan, for example: blue for CW, red for data, orange for phone/SSB, cyan for beacons, purple for satellite, green for weak-signal SSB, and yellow for mixed or experimental segments. Dots mark spot frequencies (FT8, WSPR, QRP calling and so on); hover for a tooltip.
@@ -98,11 +106,19 @@ The ARRL and RAC plans mark licence classes by brightness. The ARRL plan's 60 m 
 
 When a slice is outside the visible span, an indicator at the edge shows its letter, TX status, a chevron and its frequency. **Click** it once to make that slice active and bring it into view. Right-click it for the slice menu.
 
+<img src="/img/screens/offscreen-vfo-indicator.png" width="400" alt="The top right corner of the panadapter. Under the +8 dB gain label, an indicator reads TX A &gt; and 14.400, showing that slice A is off to the right of the visible span." />
+
+*When the slice is outside the visible span, an arrow at the edge of the spectrum points to it.*
+
 ### Mini-Pan
 
 **Mini-Pan** is a narrow, K4-style spectrum of the active slice in an applet (button **MINI**, off by default). It shows a ±5 kHz window by default, or ±10 kHz; right-click it to choose. The window is centred on the slice's passband (on SSB that is offset from the carrier); a hairline and readout mark the carrier.
 
 It re-uses the main panadapter's data, so it uses no extra radio panadapter or slice, and its detail follows the main pan's zoom. It is an applet rather than a menu item so it is available in Minimal Mode; float it from its title bar to keep it on top of a logging program.
+
+<img src="/img/screens/mini-pan-applet.png" width="248" alt="Mini-Pan applet. A small spectrum display spans -5.0 kHz to +5.0 kHz around the slice frequency 14.250000, with the receive passband shaded in teal and a spectrum trace along the bottom." />
+
+*The Mini-Pan applet: a small spectrum view of the slice's passband.*
 
 ### Multiple and detached panadapters
 
@@ -121,6 +137,10 @@ The status bar at the bottom of the window starts with the band-stack indicator 
 
 **View → FPS Meters** (Ctrl+F) adds spectrum and waterfall frame-rate readouts to each pan.
 
+<img src="/img/screens/pan-status-bar.png" width="1430" alt="The status bar. From left: the add-panadapter icon, the indicators TNF, CWX, ASR, DVK and FDX, the radio model FLEX-8600 with firmware 4.2.20.41343, the nickname FLX8600 in a box, the GPS satellite count with Fine Lock, CPU and memory use, the PA temperature and supply voltage, Network: [Excellent], a TUN STANDBY indicator, a TX indicator and the date and UTC time." />
+
+*The status bar on a FlexRadio: feature indicators, radio and firmware, nickname, GPS, CPU, PA telemetry, network quality, TUN and TX indicators and the UTC clock.*
+
 ## Using the applet panel
 
 The applet panel holds the radio controls (S-Meter, RX, TX, Phone, P/CW, EQ and many more).
@@ -136,12 +156,24 @@ Use the icons at the right of the title bar:
 
 The top row of the panel holds **five favourite buttons** (by default VU, PWR, RX, TX and P/CW) and a **▼/▲** drawer button that shows the rest. Right-click the bar (or the drawer button) and choose **Customize Button Bar** to pick your favourites and hide buttons you don't use; the first five active entries fill the bar and the rest go in the drawer. Hiding a button also closes its applet. Buttons for accessories you don't have (tuner, amplifier, Antenna Genius and so on) appear only when that hardware is present.
 
+<img src="/img/screens/customize-button-bar.png" width="440" alt="Customize Button Bar dialog. A note explains that the top five active buttons fill the row and the rest live in the drawer, while hidden buttons and their applets are disabled. The Active list holds VU, PWR, RX, TX and P/CW, a Favorites divider, then LOCK, PHN, EQ, WAV, VUDU, CAT, DAX, TCI, IQ, MTR, PROF, SS, MQTT and CTR2. The Hidden list is empty, with arrow buttons between the lists and OK and Cancel at the bottom." />
+
+*Customize Button Bar: choose which applet buttons are favourites and which go in the drawer.*
+
+<img src="/img/screens/applet-button-bar-drawer.png" width="260" alt="The top of the applet panel. The first row holds VU, PWR, RX, TX, P/CW and the drawer button, now an up arrow. The open drawer below lists LOCK, PHN, EQ, WAV, VUDU, CAT, DAX, TCI, IQ, MTR, PROF, MQTT, CTR2, CLK, MINI, KSDR, RADE, HLTH, GHE, AG and TUN, with VU, RX, TX, P/CW, PHN, EQ and WAV lit." />
+
+*The applet button bar with its drawer open. Lit buttons are applets that are showing.*
+
 ### Reordering applets
 
 Drag an applet by its title bar (⋮⋮ grip) to reorder it. The order is remembered. **View → Reset Applet Order** restores the default.
 ## Reference
 
 ### Screen layout
+
+<img src="/img/screens/pan-band-panel.png" width="284" alt="The Band panel open beside the overlay menu, with the Band button lit. A grid of band buttons reads 160, 80, 60, 40, 30, 20 (outlined), 17, 15, 12, 10 and 6, then 2m, 70cm and 23cm in cyan, then WWV, GEN, 2200, 630 and XVTR." />
+
+*The Band panel, opened from the Band button on the overlay menu. The current band, 20 m, is outlined.*
 
 - **FFT spectrum** — real-time signal strength across the displayed span
 - **Frequency scale** — between spectrum and waterfall, in MHz
@@ -155,7 +187,7 @@ Drag an applet by its title bar (⋮⋮ grip) to reorder it. The order is rememb
 
 Click **Display** in the overlay menu. The panel is divided into sections and scrolls when the window is short. Settings apply to the panadapter you opened it from.
 
-![The Display panel open over the left edge of the panadapter. It lists spectrum settings (heat map, grid, weighted average, FFT averaging, FPS, line and fill colours, noise floor), waterfall settings (blanker, auto black, colour gain, rate), background image, grid spacing, scale text and colour scheme, the render mode and 3D settings, the renderer, and buttons to clone display settings to all panadapters or reset them.](/img/screens/display-panel.png)
+<img src="/img/screens/display-panel.png" width="381" alt="The Display panel open beside the overlay menu, with the Display button lit. It has sections Panadapter (Heat Map and Grid on, Wt Avg off, FFT averaging, FPS, line and fill colours and floor), Waterfall (NB blanker, black level, gain and rate), Background (Choose, Clear, Off, opacity and colour), Appearance (grid, scale text and scheme), 3D View (Spectrum set to 2D Waterfall, 3D floor, gain and span), and System (GPU set to Auto (system default)), with Clone to all Pans and Reset to Defaults buttons at the bottom." />
 
 *The Display panel, opened from the Display button on the panadapter overlay menu.*
 

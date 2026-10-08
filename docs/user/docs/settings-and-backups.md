@@ -74,6 +74,10 @@ Radio-specific state for radios that do not remember it themselves (for example 
 
 **Settings → Settings Browser...** lets you look through and edit the whole store from inside the app.
 
+<img src="/img/screens/settings-browser.png" width="760" alt="Settings Browser window. An amber warning reads Advanced, edits apply immediately and bypass each feature's own validation. The left list holds App Settings (selected) and Station: AetherSDR. The right side has a filter box containing Spot and a Key and Value table with IsSpotsEnabled True, PassiveSpotsMode False, SpotFontSize 16 and SpotsMaxLevel 3. Add Key…, Delete, Refresh, Export Sanitized… and Close buttons run along the bottom." />
+
+*The Settings Browser, filtered to keys that contain Spot.*
+
 - The left tree lists the scopes: **App Settings**, the **Station** section, and under **Radios** each radio's stored feature documents.
 - **Filter keys and values...** narrows the table as you type (case-insensitive).
 - **Add Key...**, **Delete**, **Refresh** and **Export Sanitized...** sit below the table.

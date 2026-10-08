@@ -9,7 +9,7 @@ applets, with the client-side voice chain in **Tools → AetherTX...** (see
 [Aetherial Audio](./aetherial-audio.md)). Receive-only radios (ANAN-G2 and RTL-SDR) do not
 transmit. Before you key up for the first time, read [Before You Transmit](./before-you-transmit.md).
 
-![TX Controls applet. An RF power meter scaled 0 to 120 and an SWR meter scaled 1 to 3 sit above the RF Power slider at 100 and the Tune Power slider at 10. Below are a TX profile selector, Success, Byp and Mem ATU indicators, and the TUNE, MOX, ATU and MEM buttons.](/img/screens/tx-applet.png)
+<img src="/img/screens/tx-applet.png" width="248" alt="TX Controls applet. An RF power meter scaled 0 to 120 and an SWR meter scaled 1 to 3 sit above the RF Power slider at 100 and the Tune Power slider at 15. Below are a TX profile selector reading Default, Success, Byp and Mem ATU indicators, the TUNE, MOX, ATU and MEM buttons, and an APD button with Active, Cal and Avail indicators." />
 
 *The TX Controls applet.*
 
@@ -83,6 +83,10 @@ confirmation.
 
 ## Using the P/CW applet (Phone/CW)
 
+<img src="/img/screens/pcw-applet.png" width="248" alt="Phone/CW applet. Three bar meters read Level (-40 to +10 dB), Compression (-25 to 0 dB) and ALC. Below are a mic profile selector reading Default, a mic source selector set to PC with its level slider at 100 and a +ACC button, a PROC button with a NOR / DX / DX+ processor slider, a DAX button, and a MON button with its monitor level slider at 13." />
+
+*The P/CW (Phone/CW) applet: microphone level, compression and ALC meters with the microphone source and processor controls.*
+
 - **Mic level gauge** (−40 to +10 dB) with peak hold
 - **Compression gauge**
 - **ALC gauge** — reads the software ALC meter; it appears in both the Phone
@@ -101,6 +105,10 @@ applet switches to keyer controls, including the APF toggle and level.
 
 ## Using the Phone applet
 
+<img src="/img/screens/phone-applet.png" width="248" alt="Phone applet. Sliders for AM Carrier at 34, VOX level at 0 beside a VOX button, Delay at 5, and DEXP at 50 beside a DEXP button, then TX Low Cut 50 and High Cut 4000 with arrow buttons to step them." />
+
+*The Phone applet: AM carrier, VOX, downward expander and transmit filter.*
+
 - **AM Carrier slider** (0–100)
 - **VOX** toggle + level + delay
 - **DEXP** — downward expansion (noise gate on the radio's mic path)
@@ -116,6 +124,10 @@ matters most in DIGU/DIGL, where WSJT-X reports a normal cycle at zero power.
 CW is excluded, and the card is not available on the Hermes-Lite 2.
 
 ## Using the EQ applet
+
+<img src="/img/screens/eq-applet.png" width="248" alt="Equalizer applet. ON and reset buttons sit at the top left and RX and TX buttons at the top right, with TX selected. Eight vertical sliders for 63, 125, 250, 500, 1k, 2k, 4k and 8k Hz sit at 0 on a scale from -10 to +10." />
+
+*The Equalizer applet, here showing the transmit equaliser.*
 
 - 8-band graphic equalizer (63 Hz – 8 kHz)
 - ±10 dB vertical sliders per band

@@ -21,6 +21,10 @@ The demo is a simulator that generates its own receive audio and spectrum. **It 
 
 ## Step 2: Connect to the demo
 
+<img src="/img/screens/first-session-main-window.png" width="1600" alt="AetherSDR main window connected to the demo. The title bar has a tab reading Simulator (not on the air). The panadapter shows a narrow spectrum around 14.100 MHz with the slice A VFO flag reading 14.100.000 USB and a speckled blue waterfall below. The applet panel on the right shows the S-Meter, RX Controls, Demo Noise and TX Controls applets; in Demo Noise, Pink / hiss and Birdie carrier are lit." />
+
+*The main window just after connecting to the demo: panadapter and waterfall on the left, applets on the right.*
+
 1. In the Connect to Radio window, choose **On This Network**.
 2. Under **Available radios**, find **AetherSDR Demo**, labelled **"Simulator (not on the air)"**. It always sorts below any real radios.
 3. Select it and click **Connect Selected Radio**.
@@ -40,6 +44,10 @@ The demo panadapter is a narrow 8 kHz window that follows your frequency. A real
 
 ## Step 3: Tune
 
+<img src="/img/screens/first-session-rx-freq-entry.png" width="248" alt="The top of the RX Controls applet: slice A, a lock button, ANT1 and ANT1, filter width 2.8K, a TX badge, USB, and the frequency 14.100000 highlighted for editing in a blue box." />
+
+*Double-click the frequency in RX Controls to type a new one.*
+
 1. Point at the spectrum and turn the mouse wheel one notch.
 
    **You should see** the frequency change by **100 Hz**, the slice's step size.
@@ -51,6 +59,10 @@ The demo panadapter is a narrow 8 kHz window that follows your frequency. A real
 You can also double-click anywhere on the spectrum or waterfall to tune there. See [Panadapter Controls](./panadapter-controls.md) for every mouse action.
 
 ## Step 4: Change the mode
+
+<img src="/img/screens/first-session-lsb-passband.png" width="760" alt="Demo panadapter in LSB around 14.100 MHz. The slice A VFO flag reads 14.100.000 with LSB on its mode tab, and the shaded passband lies just below the VFO line." />
+
+*In LSB the passband (shaded) moves below the VFO line.*
 
 1. On the VFO, open the mode list (it shows **USB**) and choose **LSB**.
 
@@ -76,6 +88,14 @@ See [RX Controls](./rx-controls.md) for the presets in each mode.
 
 The demo has a single slice, so the **+RX** button does not add a second one here. On a real radio it does; see [Multi-Slice Operation](./multi-slice-operation.md). The demo can show up to four panadapters, so add one instead.
 
+<img src="/img/screens/first-session-layout-dialog.png" width="560" alt="Panadapter Layout window headed Choose panadapter layout. A grid of layout thumbnails, each labelled with its arrangement and pan count: A / B (2 pans), A | B (2 pans), A|B / C (3 pans), A / B|C (3 pans), A / B / C (3 pans), A|B / C|D (4 pans), A/B/C/D (4 pans) and Single (1 pan), highlighted. Layouts for five to eight pans are dimmed. A Cancel button sits at the bottom." />
+
+*The Panadapter Layout window. The demo can show up to four panadapters, so larger layouts are dimmed.*
+
+<img src="/img/screens/first-session-two-pans.png" width="1340" alt="Two demo panadapters stacked one above the other, both tuned around 14.100 MHz with a green spectrum trace. The top one carries the slice A VFO flag at 14.100.000 and a speckled blue waterfall; the new panadapter below has its own overlay menu and spectrum." />
+
+*Two panadapters stacked after choosing A / B (2 pans).*
+
 1. Choose **Tools → Add Panadapter...**.
 
    **You should see** the **Panadapter Layout** window with **Choose panadapter layout:** and a set of layout buttons.
@@ -89,6 +109,14 @@ The demo has a single slice, so the **+RX** button does not add a second one her
 ## Step 7: Clean up a noisy band
 
 Make some noise, add a voice to listen to, then let AetherSDR's noise reduction work on it.
+
+<img src="/img/screens/first-session-demo-noise-noisy.png" width="248" alt="Demo Noise applet with Voice (speech), Pink / hiss, Power-line and SMPS hash lit, after the noisy-qth preset and the Voice toggle." />
+
+*Demo Noise after choosing noisy-qth and turning on Voice (speech).*
+
+<img src="/img/screens/first-session-aetherrx-nnr.png" width="720" alt="AetherRX window. AetherNR is selected in the stage column and its enable box is green. The NNR method tab is highlighted, showing Neural NR with a description, a Strength slider at 38, Model Standard or Premium, and Advanced sliders for Alpha, Knee, Tau, Max gain, Attack and Release. The status line reads METHOD NNR, Standard, floor 38, with an NR GAIN trace." />
+
+*AetherRX with NNR running: the NNR tab is lit and the AetherNR stage is ticked.*
 
 1. In the **Demo Noise** applet, click the **noisy-qth** preset.
 
@@ -124,6 +152,14 @@ See [Panadapter Controls](./panadapter-controls.md) and [Themes and Theme Editor
 
 ## Step 9: Save and recall a memory
 
+<img src="/img/screens/first-session-save-memory-dialog.png" width="360" alt="Save Memory dialog: Name My first memory, Current Frequency: 14.100000 MHz, USB, Filter 100 to 2900 Hz, and Cancel and Save buttons." />
+
+*The Save Memory dialog, opened with Add Memory on the Memory panel.*
+
+<img src="/img/screens/first-session-saved-status.png" width="520" alt="The left end of the status bar reading Saved &quot;My first memory&quot; to memories." />
+
+*After Save, the status bar confirms the memory.*
+
 1. In the same button column, click **Memory**, then **Add Memory**.
 
    **You should see** a **Save Memory** window showing the current frequency, mode and filter.
@@ -140,6 +176,10 @@ See [Panadapter Controls](./panadapter-controls.md) and [Themes and Theme Editor
 The demo keeps its memories on this computer. A FlexRadio keeps them on the radio. See [Memory Channels](./memory-channels.md).
 
 ## Step 10: Disconnect
+
+<img src="/img/screens/first-session-file-menu.png" width="177" alt="File menu: Connect to Radio..., Disconnect and Quit." />
+
+*The File menu.*
 
 1. Choose **File → Disconnect**.
 
