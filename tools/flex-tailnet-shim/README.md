@@ -147,3 +147,11 @@ toolchain (≥ 1.27.1, Tailscale's minimum) is needed. Go requires the vendor
 tree beside `go.mod`, which is why it is here rather than under `third_party/`.
 To update a dependency: `go get <module>@<version> && go mod tidy && go mod vendor`,
 then refresh section 27 of `THIRD_PARTY_LICENSES`.
+
+## Proving a remote path: `cmd/tailnet-probe`
+
+`go run ./cmd/tailnet-probe -authkey-file key.txt 100.x.y.z:4992 192.168.50.103:9007`
+joins the tailnet as an ephemeral node with its own userspace network stack,
+accepts subnet routes, reports which peer routes each LAN target, and dials
+every target. Its traffic can only cross the tailnet, so it gives an honest
+answer even when run on the radio's own LAN.
