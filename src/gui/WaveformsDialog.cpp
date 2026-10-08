@@ -727,6 +727,22 @@ int installedWaveformActionButtonWidth(const QPushButton* first,
     });
 }
 
+// Width a row action button needs once kWaveformsDialogStyle applies (bold
+// text, 14 px side padding, 1 px border). Rows are sized while detached, so
+// sizeHint() still measures the unstyled button and clips longer labels.
+int styledWaveformActionButtonWidth(const QPushButton* button)
+{
+    if (!button) {
+        return 0;
+    }
+    QFont font = button->font();
+    font.setWeight(QFont::DemiBold);
+    constexpr int kStylePaddingAndBorder = (14 + 1) * 2;
+    constexpr int kSlack = 6;
+    return QFontMetrics(font).horizontalAdvance(button->text())
+        + kStylePaddingAndBorder + kSlack;
+}
+
 int installedWaveformTypeBadgeWidth(const QLabel* label,
                                     const QString& first,
                                     const QString& second)
@@ -2021,9 +2037,11 @@ void WaveformsDialog::refreshWaveformList()
             }
         });
 
-        const int actionButtonWidth = std::max(
+        const int actionButtonWidth = std::max({
             installedWaveformActionButtonWidth(restartBtn, removeBtn),
-            configureBtn ? configureBtn->sizeHint().width() : 0);
+            styledWaveformActionButtonWidth(restartBtn),
+            styledWaveformActionButtonWidth(removeBtn),
+            styledWaveformActionButtonWidth(configureBtn)});
         const int actionButtonCount = configureBtn ? 3 : 2;
         if (configureBtn) {
             configureBtn->setFixedWidth(actionButtonWidth);
