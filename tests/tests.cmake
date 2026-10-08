@@ -3468,6 +3468,15 @@ else()
 endif()
 add_test(NAME legacy_waveform_package_test COMMAND legacy_waveform_package_test)
 
+# In-radio tailnet shim client: wire parsing and request bodies, socket-free.
+add_executable(tailnet_shim_client_test
+    tests/tailnet_shim_client_test.cpp
+    src/core/TailnetShimClient.cpp
+)
+target_include_directories(tailnet_shim_client_test PRIVATE src)
+target_link_libraries(tailnet_shim_client_test PRIVATE Qt6::Core Qt6::Network)
+add_test(NAME tailnet_shim_client_test COMMAND tailnet_shim_client_test)
+
 # Pins the filter-before-merge invariant on the license-class-aware overload
 # of BandPlanManager::contiguousRegionsForBand (PR #3050, closing #2649). (#3060)
 add_executable(band_plan_license_filter_test

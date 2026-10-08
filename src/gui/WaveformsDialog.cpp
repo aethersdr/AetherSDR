@@ -4,6 +4,8 @@
 #include "core/DigitalVoiceFeature.h"
 #include "core/ThemeManager.h"
 #include "core/WaveformInstaller.h"
+#include "core/TailnetShimClient.h"
+#include "TailnetShimDialog.h"
 #include "models/FlexWaveformModel.h"
 #include "models/RadioModel.h"
 #include "gui/WaveformInstallGate.h"   // #4210 pure Docker-install gate policy
@@ -1985,6 +1987,19 @@ void WaveformsDialog::refreshWaveformList()
         actionLayout->setContentsMargins(0, 0, 0, 0);
         actionLayout->setSpacing(kInstalledWaveformActionButtonSpacing);
 
+        // The remote-access container gets a Configure… button that opens its
+        // Tailscale settings; every other waveform keeps Restart / Remove only.
+        QPushButton* configureBtn = nullptr;
+        if (isContainer && name == QLatin1String(kTailnetShimContainerName)) {
+            configureBtn = new QPushButton(tr("Configure…"), actionWidget);
+            configureBtn->setAccessibleName(tr("Configure remote access for waveform %1").arg(name));
+            connect(configureBtn, &QPushButton::clicked, this, [this]() {
+                auto* dialog = new TailnetShimDialog(m_radioModel, this);
+                dialog->setAttribute(Qt::WA_DeleteOnClose);
+                dialog->show();
+            });
+        }
+
         auto* restartBtn = new QPushButton(tr("Restart"), actionWidget);
         restartBtn->setAccessibleName(tr("Restart waveform %1").arg(name));
         connect(restartBtn, &QPushButton::clicked, this, [this, name]() {
@@ -2006,12 +2021,21 @@ void WaveformsDialog::refreshWaveformList()
             }
         });
 
-        const int actionButtonWidth = installedWaveformActionButtonWidth(restartBtn, removeBtn);
+        const int actionButtonWidth = std::max(
+            installedWaveformActionButtonWidth(restartBtn, removeBtn),
+            configureBtn ? configureBtn->sizeHint().width() : 0);
+        const int actionButtonCount = configureBtn ? 3 : 2;
+        if (configureBtn) {
+            configureBtn->setFixedWidth(actionButtonWidth);
+            configureBtn->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+            actionLayout->addWidget(configureBtn);
+        }
         restartBtn->setFixedWidth(actionButtonWidth);
         restartBtn->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
         removeBtn->setFixedWidth(actionButtonWidth);
         removeBtn->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
-        actionWidget->setFixedWidth((actionButtonWidth * 2) + kInstalledWaveformActionButtonSpacing);
+        actionWidget->setFixedWidth((actionButtonWidth * actionButtonCount)
+                                    + (kInstalledWaveformActionButtonSpacing * (actionButtonCount - 1)));
         actionLayout->addWidget(restartBtn);
         actionLayout->addWidget(removeBtn);
         rowLayout->addWidget(actionWidget, 0, Qt::AlignRight | Qt::AlignVCenter);

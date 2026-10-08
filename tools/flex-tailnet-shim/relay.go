@@ -51,6 +51,7 @@ type Relay struct {
 
 	mu       sync.Mutex
 	byClient map[netip.AddrPort]*Session // client UDP address -> session
+	sessions map[uint64]*Session
 	nextID   atomic.Uint64
 }
 
@@ -74,6 +75,9 @@ func (r *Relay) init() {
 	r.mu.Lock()
 	if r.byClient == nil {
 		r.byClient = map[netip.AddrPort]*Session{}
+	}
+	if r.sessions == nil {
+		r.sessions = map[uint64]*Session{}
 	}
 	r.mu.Unlock()
 }
@@ -148,6 +152,9 @@ func (r *Relay) handle(c net.Conn) {
 		host: host, clientIP: clientAP.Addr(), done: make(chan struct{}),
 	}
 	log.Printf("session %d: %s from %s -> radio %s, host UDP %s", s.id, who, c.RemoteAddr(), radio.RemoteAddr(), host.LocalAddr())
+	r.mu.Lock()
+	r.sessions[s.id] = s
+	r.mu.Unlock()
 
 	go s.radioToClientTCP()
 	go s.clientToRadioTCP()
@@ -167,6 +174,7 @@ func (s *Session) close(reason string) {
 		s.client.Close()
 		s.host.Close()
 		s.relay.mu.Lock()
+		delete(s.relay.sessions, s.id)
 		for k, v := range s.relay.byClient {
 			if v == s {
 				delete(s.relay.byClient, k)
@@ -307,5 +315,26 @@ func (s *Session) waitClosed(d time.Duration) bool {
 		return true
 	case <-time.After(d):
 		return false
+	}
+}
+
+// SessionCount reports how many AetherSDR sessions are being relayed.
+func (r *Relay) SessionCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.sessions)
+}
+
+// CloseAll ends every session; each one closes its radio connection, so the
+// radio drops those clients (Principle VI). Used when the tailnet goes away.
+func (r *Relay) CloseAll(reason string) {
+	r.mu.Lock()
+	all := make([]*Session, 0, len(r.sessions))
+	for _, s := range r.sessions {
+		all = append(all, s)
+	}
+	r.mu.Unlock()
+	for _, s := range all {
+		s.close(reason)
 	}
 }

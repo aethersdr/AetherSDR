@@ -1058,6 +1058,8 @@ set(CORE_SOURCES
     src/core/LpMeterConnection.cpp
     src/core/FirmwareUploader.cpp
     src/core/WaveformInstaller.cpp
+    src/core/TailnetShimClient.cpp    # in-radio tailnet shim provisioning API (prototype)
+    src/core/TailnetShimTokenStore.cpp
     src/core/WaveformUploadState.cpp
     src/core/LegacyWaveformPackage.cpp
     src/core/DigitalVoiceModeRegistry.cpp
@@ -1301,6 +1303,7 @@ set(GUI_SOURCES
     src/gui/ModemChrome.cpp
     src/gui/NrGainStrip.cpp
     src/gui/WaveformsDialog.cpp
+    src/gui/TailnetShimDialog.cpp
     src/gui/ClientRxDspApplet.cpp
     src/gui/DragValuePopup.cpp
     src/gui/DspParamPopup.cpp

@@ -9,8 +9,10 @@ SmartSDR session to the radio. Both ends make only outbound connections, so it
 works when the radio and the operator are both behind CGNAT. In that case
 traffic goes through Tailscale's DERP relays.
 
-AetherSDR needs no changes. Run Tailscale on the operator's machine and use the
-existing manual/routed connect with the shim's tailnet IP.
+Remote connections need no new AetherSDR code: run Tailscale on the operator's
+machine and use the existing manual/routed connect with the shim's tailnet IP.
+AetherSDR's only addition is the Configure… dialog that provisions the
+container over the LAN (see "Setup from AetherSDR").
 
 ```text
 AetherSDR (tailnet peer)                       radio container (host network namespace)
@@ -56,35 +58,81 @@ AetherSDR (tailnet peer)                       radio container (host network nam
 | Clean disconnect | The shim closed the radio connection in the same second |
 | Client goes silent (process frozen) | The radio's keepalive dropped the client after ~15 s, and the shim closed in the same second |
 
+## Setup from AetherSDR
+
+The image is generic and contains no secret.
+
+1. **Install:** in AetherSDR, open File → Waveforms → Install… and pick
+   `flex-tailnet-shim-<version>.tar.gz`. The radio starts the container. It
+   stays unprovisioned until it receives an auth key.
+2. **Provision:** the container's row in the Waveforms list has a
+   **Configure…** button. Paste a single-use Tailscale auth key, choose a
+   machine name and, optionally, who may connect, then press **Join Tailnet**.
+   AetherSDR sends the key to the container over the LAN and does not keep it.
+   The container joins the tailnet and returns an admin token, which AetherSDR
+   stores in the OS keychain, one entry per radio.
+3. **Connect remotely:** from anywhere on the tailnet, use Connect → Manual
+   with the address shown in the dialog.
+
+The node's tailnet state survives radio reboots, so the key is needed only
+once. Removing or reinstalling the container wipes that state.
+
+## Provisioning API
+
+The API is plain HTTP on the radio's LAN address, TCP 48992. It is never on
+the tailnet: tsnet's listeners are in their own network stack. Callers on the
+radio's internal container network (172.30.0.0/16) and non-private addresses
+are refused.
+
+| Method | Path | Token needed | Does |
+|---|---|---|---|
+| GET | `/v1/status` | no | State, tailnet IP and DNS name, allowlist, session count, version, last error. Never a secret. |
+| POST | `/v1/provision` | only once provisioned | `{auth_key, hostname, allow[]}`: joins (or, with the token, re-joins) the tailnet and returns `{admin_token, status}` |
+| PUT | `/v1/allow` | yes | `{allow[]}`: changes who may connect without leaving the tailnet |
+| POST | `/v1/signout` | yes | Logs out, deletes the node state and forgets the token |
+
+**Trust model:** the first provisioning is open to the LAN. That matches the
+radio itself: its API on 4992 and its image upload on 42607 are
+unauthenticated on the LAN, so any LAN host could already install or remove
+containers. After the first use, every change needs the admin token issued
+then. Only its SHA-256 is stored in the container. A lost token means removing
+and reinstalling the container, which is visible in the Waveforms list. The
+auth key crosses the LAN in the clear, but it is single-use and spent by the
+tailnet login within seconds; it is never stored or logged.
+
+Keys are changed in-process (logout, then a new tsnet server with the same
+state directory). Nothing is known to restart a container whose process exits.
+
 ## Build
 
 ```sh
-CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags='-s -w' -o flex-tailnet-shim .
+./build.sh          # static linux/arm64 binary + LICENSES (third-party attribution)
+docker buildx build --platform linux/arm64 \
+  --output type=oci,compression=gzip,dest=flex-tailnet-shim-0.2.0.tar.gz .
 go test -race .
 ```
 
-The container image is a standard OCI image for `linux/arm64`. It needs the
-labels `com.flexradio.waveform.name` and `com.flexradio.waveform.version`, and
-an entrypoint that runs the binary. It needs no base-image CA bundle, because
-the Mozilla roots are compiled in.
+The image is `FROM scratch`: the static binary, the `LICENSES` bundle and the
+two radio labels (`com.flexradio.waveform.name`,
+`com.flexradio.waveform.version`). It has no shell and no BusyBox, so it
+carries no GPLv2 source obligation, and it has no CA bundle, because the
+Mozilla roots are compiled in. It is about 8 MB compressed.
 
 ## Configuration
 
 | Flag / environment | Default | Meaning |
 |---|---|---|
-| `-authkey-file` / `SHIM_AUTHKEY_FILE`, or `TS_AUTHKEY` | `/etc/flex-tailnet-shim/authkey` | Tailscale auth key, needed only on first start |
-| `-hostname` / `SHIM_HOSTNAME` | `flex-radio` | Tailnet node name |
-| `-state` / `SHIM_STATE_DIR` | `/var/lib/flex-tailnet-shim` | tsnet state; survives reboots, lost on reinstall |
-| `-allow` / `SHIM_ALLOW` | any tailnet peer | Comma-separated logins or tags |
+| `-state` / `SHIM_STATE_DIR` | `/var/lib/flex-tailnet-shim` | Settings, token hash and tsnet state; survives reboots, lost on reinstall |
+| `-api` / `SHIM_API_ADDR` | `:48992` | Provisioning API listen address |
 | `-max-mtu` | 1200 | Clamp for `network_mtu=` |
 | `SSDR_RADIO_ADDRESS` | set by the radio | Radio API address, normally 172.30.1.1 |
 | `SHIM_LOG_URL` | unset | Development only: POST recent log lines to a listener every 15 s (the radio gives containers no log channel) |
 
 ## Open items
 
-- Auth-key delivery for real users. The image must not carry a secret when
-  published, so the installer would add a per-user config layer at install
-  time.
+- Distribution: AetherSDR could download a pinned release asset, checked
+  against a checksum built into the app, instead of the operator picking the
+  file.
 - Bandwidth controls for the relay path: Opus by default when the radio is
   reached over a tailnet, `low_bw_connect`, and a lower FFT rate.
 - Behaviour with two simultaneous AetherSDR clients, which uses both of the
