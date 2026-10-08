@@ -502,9 +502,6 @@ private:
     // falling back to the freshly-loaded background's luminance where not.
     QString resolveThemeBase(const QJsonObject& root) const;
 
-    // Tell Qt whether the theme is dark or light, from color.background.app.
-    void applyPlatformColorScheme();
-
     // Smart-invalidation hint — set transiently by setColor / setGradient
     // / setSizing / setString to the token that just changed, then
     // cleared after the synchronous themeChanged emission.  Lets

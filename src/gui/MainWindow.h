@@ -365,6 +365,7 @@ protected:
     void restoreNativeClientRect(const QString& role);
     // Windows 11: colour the DWM window border to color.background.app.
     void applyWindowsFrameColor();
+    bool nativeEvent(const QByteArray& eventType, void* message, qintptr* result) override;
 #endif
     void closeEvent(QCloseEvent* event) override;
     void changeEvent(QEvent* event) override;

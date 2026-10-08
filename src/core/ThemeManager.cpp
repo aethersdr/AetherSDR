@@ -7,7 +7,6 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
-#include <QGuiApplication>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -15,7 +14,6 @@
 #include <QLinearGradient>
 #include <QRadialGradient>
 #include <QRegularExpression>
-#include <QStyleHints>
 #include <QWidget>
 #include <QtMath>
 #include <cmath>
@@ -620,25 +618,8 @@ bool ThemeManager::setActiveTheme(const QString& name)
     m_activeTheme = name;
     AppSettings::instance().setValue("ActiveTheme", name);
     AppSettings::instance().save();
-    applyPlatformColorScheme();
     emit themeChanged();
     return true;
-}
-
-void ThemeManager::applyPlatformColorScheme()
-{
-    // What the OS draws for us (the Windows frame border, native dialogs)
-    // follows Qt's colour scheme, not our stylesheets. Without this it follows
-    // the OS light/dark setting and a dark theme gets a light border (#6266).
-    if (!qGuiApp) {
-        return;
-    }
-    const QColor bg = color(QStringLiteral("color.background.app"));
-    if (!bg.isValid()) {
-        return;
-    }
-    QGuiApplication::styleHints()->setColorScheme(
-        bg.lightness() > 127 ? Qt::ColorScheme::Light : Qt::ColorScheme::Dark);
 }
 
 QStringList ThemeManager::allTokenKeys() const
@@ -661,9 +642,6 @@ void ThemeManager::setColor(const QString& token, const QColor& color)
     const auto it = m_tokens.constFind(token);
     if (it != m_tokens.constEnd() && it.value().toString() == hex) return;
     m_tokens.insert(token, QVariant(hex));
-    if (token == QLatin1String("color.background.app")) {
-        applyPlatformColorScheme();
-    }
     // Smart-invalidation hint scope — reapplyAllTrackedStyleSheets reads
     // this during the synchronous themeChanged dispatch and skips every
     // tracked widget whose template doesn't reference `token`.  Cleared

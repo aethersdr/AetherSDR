@@ -3864,8 +3864,8 @@ void MainWindow::restoreNativeClientRect(const QString& role)
 
 void MainWindow::applyWindowsFrameColor()
 {
-    // DWMWA_BORDER_COLOR exists from Windows 11 (build 22000); Windows 10 gets
-    // only the dark/light border from ThemeManager's colour scheme (#6266).
+    // DWMWA_BORDER_COLOR exists from Windows 11 (build 22000). Windows 10 has
+    // no visible border once nativeEvent makes the whole window client area.
     constexpr DWORD kDwmBorderColor = 34;
     if (QOperatingSystemVersion::current() < QOperatingSystemVersion::Windows11
         || !windowHandle()) {
@@ -3878,6 +3878,32 @@ void MainWindow::applyWindowsFrameColor()
     const COLORREF border = RGB(bg.red(), bg.green(), bg.blue());
     DwmSetWindowAttribute(reinterpret_cast<HWND>(winId()), kDwmBorderColor,
                           &border, sizeof(border));
+}
+
+bool MainWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr* result)
+{
+    // Qt's expanded client area leaves a resize border on the left, right and
+    // bottom as non-client. Windows 11 draws it invisibly; Windows 10 paints it
+    // as a light strip (#6266). There, the whole window is client area, inset
+    // only while maximized. Qt's WM_NCHITTEST still resizes from the edges.
+    auto* msg = static_cast<MSG*>(message);
+    if (msg && result && msg->message == WM_NCCALCSIZE && msg->wParam
+        && windowFlags().testFlag(Qt::ExpandedClientAreaHint)
+        && QOperatingSystemVersion::current() < QOperatingSystemVersion::Windows11) {
+        if (IsZoomed(msg->hwnd) && !isFullScreen()) {
+            const UINT dpi = GetDpiForWindow(msg->hwnd);
+            const int border = GetSystemMetricsForDpi(SM_CXSIZEFRAME, dpi)
+                + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+            RECT& client = reinterpret_cast<NCCALCSIZE_PARAMS*>(msg->lParam)->rgrc[0];
+            client.left += border;
+            client.top += border;
+            client.right -= border;
+            client.bottom -= border;
+        }
+        *result = 0;
+        return true;
+    }
+    return QMainWindow::nativeEvent(eventType, message, result);
 }
 #endif
 
