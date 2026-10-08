@@ -4441,14 +4441,22 @@ void MainWindow::captureLocalCwPaddleInput(bool held)
 // handleCwMomentaryShortcut() lives in MainWindow_Shortcuts.cpp (#3351 Phase 1c).
 void MainWindow::showNetworkDiagnosticsDialog()
 {
+    // A CanonWindow (style guide, RFC #6226): always frameless, so it is not a
+    // tracked persistent dialog; it saves its own geometry.
+    if (!m_networkDiagnosticsDialog) {
 #ifdef HAVE_WEBSOCKETS
-    showOrRaisePersistent(m_networkDiagnosticsDialog,
-                          &m_radioModel, m_audio, m_networkDiagnosticsHistory,
-                          tciServer());
+        auto* dlg = new NetworkDiagnosticsDialog(&m_radioModel, m_audio,
+                                                 m_networkDiagnosticsHistory, tciServer(), this);
 #else
-    showOrRaisePersistent(m_networkDiagnosticsDialog,
-                          &m_radioModel, m_audio, m_networkDiagnosticsHistory);
+        auto* dlg = new NetworkDiagnosticsDialog(&m_radioModel, m_audio,
+                                                 m_networkDiagnosticsHistory, nullptr, this);
 #endif
+        dlg->setAttribute(Qt::WA_DeleteOnClose);
+        m_networkDiagnosticsDialog = dlg;
+    }
+    m_networkDiagnosticsDialog->show();
+    m_networkDiagnosticsDialog->raise();
+    m_networkDiagnosticsDialog->activateWindow();
 }
 
 void MainWindow::showSystemInfoDialog()

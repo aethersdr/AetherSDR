@@ -57,7 +57,7 @@ global `FramelessWindow` setting unless there is a specific reason not to:
 - Add a `FramelessWindowTitleBar` at the top of the dialog/window layout.
 - Install `FramelessResizer::install(this)` for resizable popouts.
 - Add `setFramelessMode(bool on)` using the same pattern as
-  `NetworkDiagnosticsDialog`: capture geometry, toggle
+  `PersistentDialog::setFramelessMode()`: capture geometry, toggle
   `Qt::FramelessWindowHint`, restore geometry only if the window was already
   visible, show again only if it was already visible, and hide/show the custom
   title bar based on the setting.

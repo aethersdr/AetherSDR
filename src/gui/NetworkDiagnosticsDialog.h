@@ -1,6 +1,6 @@
 #pragma once
 
-#include "PersistentDialog.h"
+#include "CanonWindow.h"
 #include "core/TailnetLinkTelemetry.h"
 #include "core/backends/flex/PanadapterStream.h"
 #include "models/DigitalVoiceWaveformHistory.h"
@@ -142,7 +142,7 @@ private:
     double m_tunnelAddedBreakPct{0.0};
 };
 
-class NetworkDiagnosticsDialog : public PersistentDialog {
+class NetworkDiagnosticsDialog : public CanonWindow {
     Q_OBJECT
 
 public:
@@ -160,6 +160,7 @@ private:
 
     void refresh();
     void refreshTunnel(const NetworkDiagnosticsSample& sample);
+    void applyCanonChartColors();
     void updateCharts();
     QWidget* buildLogsTab();
     QWidget* buildTciTab();

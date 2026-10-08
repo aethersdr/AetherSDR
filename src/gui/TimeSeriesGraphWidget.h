@@ -2,7 +2,7 @@
 
 // Extracted verbatim from NetworkDiagnosticsDialog.cpp (#2554): the System Info
 // dialog needs the same time-series chart, and a file-private class cannot be
-// shared. Nothing about the widget changed in the move.
+// shared.
 
 #include <optional>
 
@@ -47,6 +47,21 @@ public:
         QString label;
     };
 
+    // The chart's own chrome. The defaults are the original dark palette,
+    // which System Info still uses; Network Diagnostics passes the style
+    // guide's canon tokens (RFC #6226), with rounder corners to match its
+    // panels.
+    struct ChartColors {
+        QColor ground{QStringLiteral("#050b13")};
+        QColor line{QStringLiteral("#233246")};       // frame and grid
+        QColor title{QStringLiteral("#d4deea")};      // title, selected legend
+        QColor text{QStringLiteral("#8d99ad")};       // range, ticks, empty state
+        QColor legendOff{QStringLiteral("#6e7a8d")};  // a hidden series' name
+        QColor legendLineOff{QStringLiteral("#25364d")};
+        qreal  radius{7.0};
+        bool   roundGround{false};   // fill only inside the rounded frame
+    };
+
     explicit TimeSeriesGraphWidget(QString title, QString suffix, QWidget* parent = nullptr)
         : QWidget(parent)
         , m_title(std::move(title))
@@ -74,6 +89,12 @@ public:
                 }
             }
         }
+        update();
+    }
+
+    void setChartColors(const ChartColors& colors)
+    {
+        m_colors = colors;
         update();
     }
 
@@ -122,7 +143,15 @@ protected:
     {
         QPainter painter(this);
         painter.setRenderHint(QPainter::Antialiasing);
-        painter.fillRect(rect(), QColor("#050b13"));
+        const QRectF frame = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
+        if (m_colors.roundGround) {
+            // The corners show what is behind the chart.
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(m_colors.ground);
+            painter.drawRoundedRect(frame, m_colors.radius, m_colors.radius);
+        } else {
+            painter.fillRect(rect(), m_colors.ground);
+        }
 
         // The legend wraps onto further rows instead of dropping entries, and
         // the plot gives up one row's height per extra row (#2554: a five-line
@@ -131,18 +160,22 @@ protected:
         const int legendRows = legendRowCount(QFontMetrics(font()));
         const QRectF plot =
             rect().adjusted(84, 30, -14, -42 - (legendRows - 1) * kLegendRowHeight);
-        painter.setPen(QPen(QColor("#233246"), 1));
+        painter.setPen(QPen(m_colors.line, 1));
         painter.setBrush(Qt::NoBrush);
-        painter.drawRoundedRect(rect().adjusted(0, 0, -1, -1), 7, 7);
+        if (m_colors.roundGround) {
+            painter.drawRoundedRect(frame, m_colors.radius, m_colors.radius);
+        } else {
+            painter.drawRoundedRect(rect().adjusted(0, 0, -1, -1), 7, 7);
+        }
 
-        painter.setPen(QColor("#d4deea"));
+        painter.setPen(m_colors.title);
         const QFont normalFont = painter.font();
         QFont titleFont = painter.font();
         titleFont.setBold(true);
         painter.setFont(titleFont);
         painter.drawText(QRectF(10, 6, width() - 190, 18), Qt::AlignLeft | Qt::AlignVCenter, m_title);
         painter.setFont(normalFont);
-        painter.setPen(QColor("#8d99ad"));
+        painter.setPen(m_colors.text);
         painter.drawText(QRectF(width() - 180, 6, 166, 18),
                          Qt::AlignRight | Qt::AlignVCenter, rangeLabel());
 
@@ -151,7 +184,7 @@ protected:
             return !series.points.isEmpty();
         });
         if (!hasPoints || plot.width() < 20 || plot.height() < 20) {
-            painter.setPen(QColor("#8d99ad"));
+            painter.setPen(m_colors.text);
             painter.drawText(plot, Qt::AlignCenter, "Collecting graph data");
             return;
         }
@@ -243,7 +276,7 @@ protected:
         const int yTicks = m_logScale
             ? std::max(1, static_cast<int>(std::round(std::log10(maxY / minY))))
             : 4;
-        painter.setPen(QPen(QColor("#233246"), 1));
+        painter.setPen(QPen(m_colors.line, 1));
         for (int i = 0; i <= yTicks; ++i) {
             const double y = plot.bottom() - (plot.height() * i / yTicks);
             painter.drawLine(QPointF(plot.left(), y), QPointF(plot.right(), y));
@@ -266,10 +299,10 @@ protected:
                     return QRectF(4, h.y - 10, 74, 20).intersects(tickRect);
                 });
             if (!underHint) {
-                painter.setPen(QColor("#8d99ad"));
+                painter.setPen(m_colors.text);
                 painter.drawText(tickRect, Qt::AlignRight | Qt::AlignVCenter, label);
             }
-            painter.setPen(QPen(QColor("#233246"), 1));
+            painter.setPen(QPen(m_colors.line, 1));
         }
         for (int i = 0; i <= 4; ++i) {
             const double x = plot.left() + (plot.width() * i / 4.0);
@@ -387,7 +420,7 @@ protected:
             // loop — so nothing ghosts out past the opaque band.)
             QLinearGradient bgGrad(rect.center().x(), rect.top(),
                                    rect.center().x(), rect.bottom());
-            const QColor bgSolid("#050b13");
+            const QColor bgSolid = m_colors.ground;
             QColor bgEdge = bgSolid;
             bgEdge.setAlpha(0);
             // 20 px total: 6 px fully-opaque centre band, 7 px fade
@@ -605,8 +638,8 @@ private:
             const int x = slot.x;
             const int y = top + slot.row * kLegendRowHeight;
             const bool selected = m_selectedLabels.isEmpty() || m_selectedLabels.contains(series.label);
-            const QColor textColor = selected ? QColor("#d4deea") : QColor("#6e7a8d");
-            const QColor lineColor = selected ? series.color : QColor("#25364d");
+            const QColor textColor = selected ? m_colors.title : m_colors.legendOff;
+            const QColor lineColor = selected ? series.color : m_colors.legendLineOff;
             const QRect hitRect(x, y, slot.labelWidth + 24, 18);
 
             painter->setPen(QPen(lineColor, selected ? 2 : 1));
@@ -629,6 +662,7 @@ private:
     std::optional<double> m_fixedMinY;
     std::optional<double> m_fixedMaxY;
     QVector<QPair<double,double>> m_throttleSpans;
+    ChartColors m_colors;
 };
 
 } // namespace AetherSDR

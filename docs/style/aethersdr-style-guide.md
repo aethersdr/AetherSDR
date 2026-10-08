@@ -100,15 +100,18 @@ The canon does not change control geometry.
 Canon windows are **frameless and translucent on every platform**. That is
 a deliberate split from the main window, which follows the per-platform
 policy in [`../architecture/window-chrome.md`](../architecture/window-chrome.md)
-(#6198). A `CanonWindow` does not follow `View → Frameless Window`, does not
-restore a saved geometry, and is not tracked by `trackPersistentDialog()`.
+(#6198). A `CanonWindow` does not follow `View → Frameless Window` and is not
+tracked by `trackPersistentDialog()`. It restores no saved geometry unless it
+opts in with `setGeometryKey()`, as Network Diagnostics does.
 [`dialog-patterns.md`](dialog-patterns.md) §"The exception: `CanonWindow`
 windows" lists what it keeps (the `FramelessMoveHelper` drag, Escape and
 ⌘W, `WA_DeleteOnClose` plus a `QPointer` so a second open raises it).
 Which windows the canon covers: short-lived, informational windows (About,
-and the candidates listed on #6239, once the maintainer picks them). Tool
-and workspace dialogs keep `PersistentDialog` and `FramelessWindowTitleBar`
-as `docs/agents/gui.md` describes. For windows the canon covers,
+Remote Access, and the candidates listed on #6239, once the maintainer picks
+them), and the tool windows the maintainer has moved to it (Waveforms,
+Network Diagnostics). Other tool and workspace dialogs keep
+`PersistentDialog` and `FramelessWindowTitleBar` as `docs/agents/gui.md`
+describes. For windows the canon covers,
 `FramelessWindowTitleBar` is deprecated: those dialogs move to
 `CanonWindow` one at a time, each in its own PR.
 

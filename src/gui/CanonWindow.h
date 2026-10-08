@@ -34,6 +34,12 @@ public:
     // Content goes here; install a layout on it.
     QWidget* bodyWidget() const { return m_body; }
 
+    // Opt in to saving size and position under an AppSettings key, for a
+    // canon window that is a workspace tool rather than a short-lived one
+    // (Network Diagnostics). The saved geometry replaces the centred
+    // placement; with no key, or nothing saved yet, the window centres.
+    void setGeometryKey(const QString& key) { m_geometryKey = key; }
+
     static constexpr int kRadius = 16;
     static constexpr int kInset = 1;   // hairline border; the body sits inside it
 
@@ -43,14 +49,20 @@ protected:
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
+    void moveEvent(QMoveEvent* event) override;
     void showEvent(QShowEvent* event) override;
+    void closeEvent(QCloseEvent* event) override;
 
 private:
     void paintGround(QPaintDevice& device) const;
+    void saveGeometryToSettings();
+    bool restoreGeometryFromSettings();
 
     QWidget*     m_body{nullptr};
     QToolButton* m_close{nullptr};
     bool         m_placed{false};
+    QString      m_geometryKey;
+    bool         m_restoringGeometry{false};
     QPixmap      m_ground;   // the painted ground, rebuilt on resize, DPR or theme change
 };
 
