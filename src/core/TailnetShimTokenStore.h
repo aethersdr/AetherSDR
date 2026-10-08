@@ -22,8 +22,12 @@ public:
     // string when none is stored or the keychain is unavailable.
     static void load(const QString& radioSerial, QObject* context,
                      std::function<void(const QString&)> callback);
-    // An empty token deletes the entry.
-    static void save(const QString& radioSerial, const QString& token);
+    // An empty token deletes the entry. `done` (optional) runs on context's
+    // thread with whether the token reached persistent storage and, if not,
+    // why: losing the only admin token without a word is worse than saying so.
+    static void save(const QString& radioSerial, const QString& token,
+                     QObject* context = nullptr,
+                     std::function<void(bool persisted, const QString& error)> done = {});
     [[nodiscard]] static bool persistentStoreAvailable();
 };
 

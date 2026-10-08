@@ -332,7 +332,11 @@ TailnetShimDialog::TailnetShimDialog(RadioModel* model, QWidget* parent)
     connect(&m_client, &TailnetShimClient::provisioned, this,
             [this](const QString& token, const TailnetShimStatus& st) {
         m_adminToken = token;
-        TailnetShimTokenStore::save(m_radioSerial, token);
+        TailnetShimTokenStore::save(m_radioSerial, token, this,
+                                    [this](bool persisted, const QString& error) {
+            m_tokenSaveError = persisted ? QString() : error;
+            updateControls();
+        });
         setBusy(false);
         showStatus(st);
         showMessage(tr("Joined. Connect remotely with Connect → Manual and the address %1.")
@@ -370,7 +374,12 @@ TailnetShimDialog::TailnetShimDialog(RadioModel* model, QWidget* parent)
     m_lanReachable = m_model && m_model->isConnected() && !address.isNull()
         && address.protocol() == QAbstractSocket::IPv4Protocol
         && (address.isPrivateUse() || address.isLinkLocal());
-    m_radioSerial = info.serial;
+    // Key the admin token by the radio's own serial (from its `info` reply):
+    // the discovery serial is the IP address for a manual/routed connection,
+    // which would make one radio look like two.
+    m_radioSerial = m_model && !m_model->chassisSerial().trimmed().isEmpty()
+        ? m_model->chassisSerial().trimmed()
+        : info.serial;
     m_hostnameEdit->setText(tailnetshim::suggestedHostname(
         m_model ? m_model->nickname() : QString()));
 
@@ -543,6 +552,10 @@ void TailnetShimDialog::updateControls()
                   "remote-access container, so it can't change the key, access list or "
                   "shared devices. To start over, remove and reinstall the container from the "
                   "Waveforms list.");
+    } else if (haveToken && !m_tokenSaveError.isEmpty()) {
+        note = tr("Note: the admin token couldn't be saved to the system keychain (%1), so it "
+                  "is kept only until AetherSDR quits. Change the key or sharing settings now, or "
+                  "fix the keychain and rejoin with a new key.").arg(m_tokenSaveError);
     } else if (haveToken && !TailnetShimTokenStore::persistentStoreAvailable()) {
         note = tr("Note: this build of AetherSDR can't use the system keychain, so the admin "
                   "token is kept only until AetherSDR quits.");

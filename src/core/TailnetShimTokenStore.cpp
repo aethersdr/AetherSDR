@@ -1,5 +1,7 @@
 #include "TailnetShimTokenStore.h"
 
+#include <QCoreApplication>
+#include <QDebug>
 #include <QHash>
 #include <QObject>
 #include <QPointer>
@@ -43,7 +45,9 @@ bool TailnetShimTokenStore::persistentStoreAvailable()
 #endif
 }
 
-void TailnetShimTokenStore::save(const QString& radioSerial, const QString& token)
+void TailnetShimTokenStore::save(const QString& radioSerial, const QString& token,
+                                 QObject* context,
+                                 std::function<void(bool persisted, const QString& error)> done)
 {
     const QString key = keyFor(radioSerial);
     if (token.isEmpty()) {
@@ -62,7 +66,25 @@ void TailnetShimTokenStore::save(const QString& radioSerial, const QString& toke
     }
     job->setKey(key);
     job->setAutoDelete(true);
+    QPointer<QObject> guard(context);
+    QObject::connect(job, &QKeychain::Job::finished, job,
+                     [guard, hasContext = context != nullptr, done = std::move(done)](QKeychain::Job* finished) {
+        const bool ok = finished->error() == QKeychain::NoError
+            || finished->error() == QKeychain::EntryNotFound;
+        if (!ok) {
+            qWarning() << "TailnetShimTokenStore: keychain write failed:" << finished->errorString();
+        }
+        if (done && (!hasContext || guard)) {
+            done(ok, ok ? QString() : finished->errorString());
+        }
+    });
     job->start();
+#else
+    if (done) {
+        QTimer::singleShot(0, context ? context : QCoreApplication::instance(), [done = std::move(done)] {
+            done(false, QStringLiteral("this build has no system keychain support"));
+        });
+    }
 #endif
 }
 

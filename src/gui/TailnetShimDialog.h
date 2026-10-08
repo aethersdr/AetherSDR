@@ -46,6 +46,7 @@ private:
 
     QString m_radioSerial;
     QString m_adminToken;
+    QString m_tokenSaveError;   // why the keychain refused the token, if it did
     bool m_tokenLoaded{false};
     bool m_lanReachable{false};
     bool m_busy{false};
