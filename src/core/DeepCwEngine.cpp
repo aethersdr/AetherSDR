@@ -1,5 +1,7 @@
 // Provenance: ported from decode_morse.py in e04/deepcw-engine (AGPL-3.0).
 // See the header and THIRD_PARTY_LICENSES for the attribution.
+// Modified for AetherSDR, 2026-09: per-character emissions with frame timing
+// (inferLogProbs, greedyEmissions); decode() is unchanged.
 #include "DeepCwEngine.h"
 
 #include <algorithm>
