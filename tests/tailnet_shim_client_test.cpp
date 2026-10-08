@@ -5,9 +5,11 @@
 // shim's accepted alphabet (tools/flex-tailnet-shim/api.go).
 
 #include "core/TailnetAddress.h"
+#include "core/TailnetLinkTelemetry.h"
 #include "core/TailnetShimClient.h"
 #include "core/TailnetShimDownloader.h"
 
+#include <QCoreApplication>
 #include <QCryptographicHash>
 #include <QTemporaryDir>
 
@@ -28,8 +30,9 @@ bool expect(bool condition, const char* message)
 
 }  // namespace
 
-int main()
+int main(int argc, char** argv)
 {
+    QCoreApplication app(argc, argv);
     using namespace AetherSDR;
     bool ok = true;
 
@@ -136,6 +139,60 @@ int main()
         ok &= expect(!TailnetShimDownloader::verifyFile(dir.filePath(QStringLiteral("missing")), sha,
                                                         image.size()).isEmpty(),
                      "missing file refused");
+    }
+
+    // Link telemetry (/v1/session): the shape tools/flex-tailnet-shim
+    // telemetry.go encodes, summed over this client's sessions and streams.
+    {
+        const QByteArray report = R"json({"version":"0.4.0","path":"relay","endpoint":"",
+            "relay":"sea","rtt_ms":41.5,"rtt_via":"DERP(sea)","rtt_age_s":1.2,
+            "path_changes":2,"path_since_s":95,"to_client_kbps":812.4,
+            "from_client_kbps":31.0,"last_handshake_s":40,"shim_cpu_pct":3.5,
+            "shim_rss_kb":24576,"mtu_clamp":1200,"sessions":[
+              {"id":1,"peer":"laptop","to_client_failures":2,"streams":[
+                {"stream_id":"0x40000000","packets":1000,"gaps":3,"breaks":1},
+                {"stream_id":"0x42000000","packets":500,"gaps":0,"breaks":0}]},
+              {"id":2,"peer":"laptop","to_client_failures":1,"streams":[
+                {"stream_id":"0x04000008","packets":200,"gaps":2,"breaks":2}]}]})json";
+        const auto r = tailnetshim::parseSessionReport(report);
+        ok &= expect(r.has_value(), "session report parses");
+        if (r) {
+            ok &= expect(r->version == QLatin1String("0.4.0") && r->path == QLatin1String("relay")
+                             && r->relay == QLatin1String("sea"), "path fields");
+            ok &= expect(r->rttMs == 41.5 && r->rttVia == QLatin1String("DERP(sea)"), "rtt");
+            ok &= expect(r->pathChanges == 2 && r->mtuClamp == 1200 && r->shimRssKb == 24576,
+                         "scalars");
+            ok &= expect(r->sessions == 2 && r->sendFailures == 3, "sessions summed");
+            ok &= expect(r->radioPackets == 1700 && r->radioBreaks == 3 && r->radioGaps == 5,
+                         "streams summed across sessions");
+        }
+        const auto none = tailnetshim::parseSessionReport(
+            R"({"version":"0.4.0","rtt_ms":-1,"sessions":[]})");
+        ok &= expect(none && none->rttMs < 0 && none->sessions == 0,
+                     "no RTT yet stays -1, no sessions is valid");
+        ok &= expect(!tailnetshim::parseSessionReport("not json"), "garbage refused");
+        ok &= expect(!tailnetshim::parseSessionReport(R"({"sessions":[]})"), "no version refused");
+        ok &= expect(!tailnetshim::parseSessionReport(R"({"version":"0.4.0"})"),
+                     "no sessions array refused");
+
+        // Breaks the tunnel added: the client's rate less the radio's.
+        ok &= expect(qFuzzyCompare(tailnetshim::tunnelBreakPercent(1000, 5, 1000, 1), 0.4),
+                     "0.5% seen, 0.1% before the tunnel: 0.4% added");
+        ok &= expect(tailnetshim::tunnelBreakPercent(1000, 1, 1000, 3) == 0.0,
+                     "radio worse than client (window skew) reads 0, not negative");
+        ok &= expect(tailnetshim::tunnelBreakPercent(0, 0, 1000, 0) == 0.0,
+                     "no client packets in the window: 0");
+        ok &= expect(qFuzzyCompare(tailnetshim::tunnelBreakPercent(200, 2, 0, 0), 1.0),
+                     "no radio count: everything the client saw");
+
+        // Polling follows the radio's address: tailnet only.
+        TailnetLinkTelemetry poller;
+        poller.setRadioAddress(QHostAddress(QStringLiteral("192.168.1.20")));
+        ok &= expect(!poller.isPolling() && !poller.current(), "LAN radio: idle");
+        poller.setRadioAddress(QHostAddress(QStringLiteral("100.101.102.103")));
+        ok &= expect(poller.isPolling(), "tailnet radio: polling");
+        poller.setRadioAddress(QHostAddress());
+        ok &= expect(!poller.isPolling() && !poller.current(), "disconnect: idle and cleared");
     }
 
     return ok ? 0 : 1;

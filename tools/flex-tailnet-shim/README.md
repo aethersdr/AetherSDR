@@ -106,17 +106,43 @@ state directory). Nothing is known to restart a container whose process exits.
 ## Build
 
 ```sh
-./build.sh          # static linux/arm64 binary + LICENSES (third-party attribution)
-docker buildx build --platform linux/arm64 \
-  --output type=oci,compression=gzip,dest=flex-tailnet-shim-0.2.0.tar.gz .
+./build.sh          # static linux/arm64 binary, LICENSES, and flex-tailnet-shim-<version>.tar.gz
 go test -race .
 ```
+
+`build.sh` assembles the OCI image itself (`mkimage.py`), byte-for-byte
+reproducibly: no Docker daemon, no base image, fixed timestamps, owners and
+file order, and a binary built with `-trimpath -buildvcs=false`, so it records
+neither the build path nor the commit. AetherSDR pins the image's SHA-256
+(`src/core/TailnetShimRelease.h`, RFC #6271 ruling D2); running `build.sh` at
+the `flex-tailnet-shim-v<version>` tag reproduces that hash.
 
 The image is `FROM scratch`: the static binary, the `LICENSES` bundle and the
 two radio labels (`com.flexradio.waveform.name`,
 `com.flexradio.waveform.version`). It has no shell and no BusyBox, so it
 carries no GPLv2 source obligation, and it has no CA bundle, because the
 Mozilla roots are compiled in. It is about 8 MB compressed.
+
+## Link telemetry
+
+Each AetherSDR client reached over the tailnet can ask the shim how its link
+looks from the radio side: `GET /v1/session` on the shim's tailnet address,
+TCP 48993. This listener is on the tailnet only, applies the same allowlist
+as the relay (403 otherwise), and answers each caller with only its own
+sessions. AetherSDR polls it every 2 s for the Network Diagnostics window.
+
+| Field | Meaning |
+|---|---|
+| `path`, `endpoint`, `relay` | `direct` (with the client's address), `peer-relay`, `relay` (with the DERP region) or `unknown` |
+| `path_changes`, `path_since_s` | How often the path has changed, and how long it has held |
+| `rtt_ms`, `rtt_via`, `rtt_age_s` | The shim's own disco ping to the client, every 4 s; `-1` until one succeeds |
+| `to_client_kbps`, `from_client_kbps`, `last_handshake_s` | WireGuard throughput and handshake age for this peer |
+| `shim_cpu_pct`, `shim_rss_kb`, `mtu_clamp` | The container's own load, and the `network_mtu` it injects |
+| `sessions[].streams[]` | Per VITA-49 stream, counted as datagrams leave the radio, before the tunnel: `packets`, `gaps` (missed packets) and `breaks` (sequence discontinuities, the unit AetherSDR's own stream counters use) |
+| `sessions[].to_client_failures` | Datagrams the shim could not send into the tunnel |
+
+AetherSDR subtracts the radio-side break rate from the rate it sees itself,
+so the remainder is what the tunnel added.
 
 ## Configuration
 
@@ -130,11 +156,6 @@ Mozilla roots are compiled in. It is about 8 MB compressed.
 
 ## Open items
 
-- Distribution: AetherSDR could download a pinned release asset, checked
-  against a checksum built into the app, instead of the operator picking the
-  file.
-- Bandwidth controls for the relay path: Opus by default when the radio is
-  reached over a tailnet, `low_bw_connect`, and a lower FFT rate.
 - Behaviour with two simultaneous AetherSDR clients, which uses both of the
   radio's GUI slots.
 - FLEX-8400 and Aurora have not been tested.

@@ -5,6 +5,12 @@
   "split": "",
   "confidence": "high"
  },
+ "core/TailnetLinkTelemetry.h": {
+  "tag": "peripheral(tailnet-shim)",
+  "note": "Polls the in-radio tailnet shim's link-telemetry endpoint (GET /v1/session on the tailnet, RFC #6271) for Network Diagnostics: path, radio-side RTT, throughput and VITA sequence breaks before the tunnel. Not SmartSDR wire: AetherSDR's own HTTP API to a separate service (the shim) that happens to run in the radio's container runtime, so a direct-transport peripheral, NOT behind the IRadioBackend radio seam (same shape as core/PgxlConnection.h).",
+  "split": "",
+  "confidence": "high"
+ },
  "core/TailnetShimDownloader.h": {
   "tag": "peripheral(tailnet-shim)",
   "note": "Pinned, SHA-256-verified download of the tailnet shim's Docker waveform image for FLEX-8000/Aurora radios (RFC #6271 D2). Not SmartSDR wire: AetherSDR's own HTTP API to a separate service (the shim) that happens to run in the radio's container runtime, so a direct-transport peripheral, NOT behind the IRadioBackend radio seam (same shape as core/PgxlConnection.h).",

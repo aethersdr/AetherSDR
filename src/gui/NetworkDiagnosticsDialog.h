@@ -1,6 +1,7 @@
 #pragma once
 
 #include "PersistentDialog.h"
+#include "core/TailnetLinkTelemetry.h"
 #include "core/backends/flex/PanadapterStream.h"
 #include "models/DigitalVoiceWaveformHistory.h"
 
@@ -78,6 +79,15 @@ struct NetworkDiagnosticsSample {
     quint32 digitalVoiceTxQueueMax{0};
     quint32 digitalVoiceTxTailSamples{0};
     quint64 digitalVoiceTxTailUs{0};
+    // The radio side's view of a tailnet link, from the in-radio shim
+    // (TailnetLinkTelemetry). Only valid while the radio is reached over the
+    // tailnet and the shim is answering.
+    bool tunnelValid{false};
+    double tunnelRttMs{-1.0};          // -1: no disco ping has succeeded yet
+    double tunnelToClientKbps{0.0};
+    double tunnelFromClientKbps{0.0};
+    double tunnelRadioBreakPct{0.0};   // sequence breaks before the tunnel
+    double tunnelAddedBreakPct{0.0};   // breaks the tunnel added on the way here
 };
 
 class NetworkDiagnosticsHistory : public QObject {
@@ -95,9 +105,13 @@ public:
     const QVector<ThrottleEvent>& throttleEvents() const { return m_throttleEvents; }
     int throttleSessionCount() const { return m_throttleSessionCount; }
     bool hasDigitalVoiceWaveformTelemetry() const { return m_hasDigitalVoiceWaveformTelemetry; }
+    bool hasTunnelTelemetry() const { return m_hasTunnelTelemetry; }
+    // The latest report from the in-radio shim, when it is current.
+    std::optional<TailnetSessionReport> tunnelReport() const { return m_tunnel.current(); }
 
 private:
     void sampleNow();
+    void sampleTunnel(NetworkDiagnosticsSample& sample);
     void pruneSamples(qint64 nowMs);
 
     RadioModel* m_model{nullptr};
@@ -115,6 +129,15 @@ private:
     int    m_currentFpsCap{0};  // tracks latest state for sampleNow()
     DigitalVoiceWaveformHistoryTracker m_digitalVoiceWaveformHistory;
     bool m_hasDigitalVoiceWaveformTelemetry{false};
+    TailnetLinkTelemetry m_tunnel;
+    bool m_hasTunnelTelemetry{false};
+    quint64 m_tunnelSerial{0};
+    qint64 m_tunnelClientPackets{-1};   // -1: no baseline yet
+    qint64 m_tunnelClientBreaks{0};
+    qint64 m_tunnelRadioPackets{0};
+    qint64 m_tunnelRadioBreaks{0};
+    double m_tunnelRadioBreakPct{0.0};
+    double m_tunnelAddedBreakPct{0.0};
 };
 
 class NetworkDiagnosticsDialog : public PersistentDialog {
@@ -134,6 +157,7 @@ private:
     };
 
     void refresh();
+    void refreshTunnel(const NetworkDiagnosticsSample& sample);
     void updateCharts();
     QWidget* buildLogsTab();
     QWidget* buildTciTab();
@@ -245,6 +269,17 @@ private:
     QLabel* m_throttleStateLabel{nullptr};
     QLabel* m_throttleDwellLabel{nullptr};
     QLabel* m_throttleSessionLabel{nullptr};
+
+    // Remote link (Tailscale), from the in-radio shim
+    QFrame* m_tunnelSection{nullptr};
+    QLabel* m_tunnelPathLabel{nullptr};
+    QLabel* m_tunnelPathAgeLabel{nullptr};
+    QLabel* m_tunnelRttLabel{nullptr};
+    QLabel* m_tunnelRatesLabel{nullptr};
+    QLabel* m_tunnelRadioBreaksLabel{nullptr};
+    QLabel* m_tunnelAddedBreaksLabel{nullptr};
+    QLabel* m_tunnelSendFailuresLabel{nullptr};
+    QLabel* m_tunnelShimLabel{nullptr};
 
     QPlainTextEdit* m_logViewer{nullptr};
     QLabel* m_logPathLabel{nullptr};

@@ -4,7 +4,7 @@
 
 Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine-design.md) §2, §10). One row per engine header the UI includes; converting a touchpoint means the UI reaches that surface through the versioned protocol instead of the header.
 
-**Totals:** 244 touchpoint headers (205 core, 39 models) — 244/244 tagged, 0/244 converted.
+**Totals:** 245 touchpoint headers (206 core, 39 models) — 245/245 tagged, 0/245 converted.
 
 | Header | Includers | Tag | Status |
 |---|---:|---|---|
@@ -148,6 +148,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/SystemInfo.h` | 2 | ui-support — Process-local per-thread CPU diagnostics and sampling math for the Runtime Monitor. Host observability plumbing, not radio state. | unconverted |
 | `core/SystemInfoCollector.h` | 1 | ui-support — Worker that samples host thread CPU use for the Runtime Monitor dialog. Desktop diagnostics plumbing, not radio state. | unconverted |
 | `core/SystemInventory.h` | 1 | ui-support — Startup and support-bundle inventory of host CPU, SIMD and RAM capabilities. Process diagnostics, not radio state. | unconverted |
+| `core/TailnetLinkTelemetry.h` | 1 | peripheral(tailnet-shim) — Polls the in-radio tailnet shim's link-telemetry endpoint (GET /v1/session on the tailnet, RFC #6271) for Network Diagnostics: path, radio-side RTT, throughput and VITA sequence breaks before the tunnel. Not SmartSDR wire: AetherSDR's own HTTP API to a separate service (the shim) that happens to run in the radio's container runtime, so a direct-transport peripheral, NOT behind the IRadioBackend radio seam (same shape as core/PgxlConnection.h). | unconverted |
 | `core/TailnetShimClient.h` | 2 | peripheral(tailnet-shim) — Provisioning API client for the in-radio tailnet shim, a FLEX-8000/Aurora Docker waveform container (RFC #6271). Not SmartSDR wire: AetherSDR's own HTTP API to a separate service (the shim) that happens to run in the radio's container runtime, so a direct-transport peripheral, NOT behind the IRadioBackend radio seam (same shape as core/PgxlConnection.h). | unconverted |
 | `core/TailnetShimDownloader.h` | 1 | peripheral(tailnet-shim) — Pinned, SHA-256-verified download of the tailnet shim's Docker waveform image for FLEX-8000/Aurora radios (RFC #6271 D2). Not SmartSDR wire: AetherSDR's own HTTP API to a separate service (the shim) that happens to run in the radio's container runtime, so a direct-transport peripheral, NOT behind the IRadioBackend radio seam (same shape as core/PgxlConnection.h). | unconverted |
 | `core/TailnetShimRelease.h` | 1 | peripheral(tailnet-shim) — Pinned version, URL, size and SHA-256 of the tailnet shim Docker waveform image (RFC #6271 D2). Not SmartSDR wire: AetherSDR's own HTTP API to a separate service (the shim) that happens to run in the radio's container runtime, so a direct-transport peripheral, NOT behind the IRadioBackend radio seam (same shape as core/PgxlConnection.h). | unconverted |

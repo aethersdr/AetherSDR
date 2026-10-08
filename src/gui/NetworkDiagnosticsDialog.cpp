@@ -736,6 +736,39 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model,
 
     contentLayout->addWidget(m_throttleSection, 2, 0, 1, 2);
 
+    // ── Remote Link (Tailscale) subsection ───────────────────────────────
+    m_tunnelSection = makeDiagnosticsPanel("Remote Link (Tailscale)");
+    m_tunnelSection->setVisible(false);
+    auto* tunnelGrid = new QGridLayout;
+    tunnelGrid->setContentsMargins(0, 0, 0, 0);
+    tunnelGrid->setColumnStretch(1, 1);
+    tunnelGrid->setVerticalSpacing(2);
+    tunnelGrid->setHorizontalSpacing(12);
+    addDiagnosticsPanelContent(m_tunnelSection, tunnelGrid);
+
+    int tunnelRow = 0;
+    tunnelGrid->addWidget(makeNote(
+        "Reported by the remote-access container in the radio. Breaks before the tunnel "
+        "happened inside the radio; breaks added by the tunnel happened between the radio "
+        "and this computer."), tunnelRow++, 0, 1, 2);
+
+    auto addTunnelRow = [&](const QString& name, QLabel** label) {
+        tunnelGrid->addWidget(new QLabel(name), tunnelRow, 0);
+        *label = makeVal(QStringLiteral("--"));
+        (*label)->setAccessibleName(name.chopped(1));
+        tunnelGrid->addWidget(*label, tunnelRow++, 1);
+    };
+    addTunnelRow(QStringLiteral("Path:"), &m_tunnelPathLabel);
+    addTunnelRow(QStringLiteral("On This Path:"), &m_tunnelPathAgeLabel);
+    addTunnelRow(QStringLiteral("Radio-Side RTT:"), &m_tunnelRttLabel);
+    addTunnelRow(QStringLiteral("To / From This Client:"), &m_tunnelRatesLabel);
+    addTunnelRow(QStringLiteral("Breaks Before Tunnel:"), &m_tunnelRadioBreaksLabel);
+    addTunnelRow(QStringLiteral("Breaks Added by Tunnel:"), &m_tunnelAddedBreaksLabel);
+    addTunnelRow(QStringLiteral("Send Failures:"), &m_tunnelSendFailuresLabel);
+    addTunnelRow(QStringLiteral("Container:"), &m_tunnelShimLabel);
+
+    contentLayout->addWidget(m_tunnelSection, 3, 0, 1, 2);
+
     m_overviewLatencyGraph = new TimeSeriesGraphWidget("Latency and Jitter", " ms");
     m_overviewLossGraph = new TimeSeriesGraphWidget("Recent Packet Loss", "%");
     m_overviewRatesGraph = new TimeSeriesGraphWidget("Total Stream Rates", " kbps");
@@ -2111,6 +2144,16 @@ NetworkDiagnosticsHistory::NetworkDiagnosticsHistory(RadioModel* model, AudioEng
     });
     m_sampleTimer.start(1000);
 
+    // The in-radio shim's view of the link, polled only while the radio is
+    // reached over the tailnet; a LAN or SmartLink session leaves it idle.
+    auto followRadio = [this](bool connected) {
+        m_tunnel.setRadioAddress(connected && !m_model->isWan() ? m_model->radioAddress()
+                                                                : QHostAddress());
+        m_tunnelClientPackets = -1;
+    };
+    connect(m_model, &RadioModel::connectionStateChanged, this, followRadio);
+    followRadio(m_model->isConnected());
+
     connect(m_model, &RadioModel::adaptiveThrottleChanged,
             this, [this](bool active, int fpsCap) {
         m_currentFpsCap = active ? fpsCap : 0;
@@ -2286,10 +2329,63 @@ void NetworkDiagnosticsHistory::sampleNow()
         m_hasDigitalVoiceWaveformTelemetry = true;
     }
 
+    sampleTunnel(sample);
+
     m_lastSampleMs = nowMs;
 
     m_samples.push_back(sample);
     pruneSamples(nowMs);
+}
+
+void NetworkDiagnosticsHistory::sampleTunnel(NetworkDiagnosticsSample& sample)
+{
+    const std::optional<TailnetSessionReport> report = m_tunnel.current();
+    if (!report) {
+        return;
+    }
+    m_hasTunnelTelemetry = true;
+    sample.tunnelValid = true;
+    sample.tunnelRttMs = report->rttMs;
+    sample.tunnelToClientKbps = report->toClientKbps;
+    sample.tunnelFromClientKbps = report->fromClientKbps;
+
+    // Break rates over the window between two shim reports, so the radio's
+    // count and this client's cover the same packets (to within one RTT).
+    if (m_tunnel.reportSerial() != m_tunnelSerial) {
+        m_tunnelSerial = m_tunnel.reportSerial();
+        qint64 clientPackets = 0;
+        qint64 clientBreaks = 0;
+        for (int i = 0; i < PanadapterStream::CatCount; ++i) {
+            const PanadapterStream::CategoryStats cs =
+                m_model->categoryStats(static_cast<PanadapterStream::StreamCategory>(i));
+            clientPackets += cs.packets;
+            clientBreaks += cs.errors;
+        }
+        const qint64 radioPackets = static_cast<qint64>(report->radioPackets);
+        const qint64 radioBreaks = static_cast<qint64>(report->radioBreaks);
+        // A new session (or a restarted shim or stream) resets a counter:
+        // take a fresh baseline rather than a negative window.
+        const bool reset = m_tunnelClientPackets < 0 || clientPackets < m_tunnelClientPackets
+            || radioPackets < m_tunnelRadioPackets || clientBreaks < m_tunnelClientBreaks
+            || radioBreaks < m_tunnelRadioBreaks;
+        if (reset) {
+            m_tunnelRadioBreakPct = 0.0;
+            m_tunnelAddedBreakPct = 0.0;
+        } else {
+            const qint64 dRadioPackets = radioPackets - m_tunnelRadioPackets;
+            const qint64 dRadioBreaks = radioBreaks - m_tunnelRadioBreaks;
+            m_tunnelRadioBreakPct = dRadioPackets > 0 ? dRadioBreaks * 100.0 / dRadioPackets : 0.0;
+            m_tunnelAddedBreakPct = tailnetshim::tunnelBreakPercent(
+                clientPackets - m_tunnelClientPackets, clientBreaks - m_tunnelClientBreaks,
+                dRadioPackets, dRadioBreaks);
+        }
+        m_tunnelClientPackets = clientPackets;
+        m_tunnelClientBreaks = clientBreaks;
+        m_tunnelRadioPackets = radioPackets;
+        m_tunnelRadioBreaks = radioBreaks;
+    }
+    sample.tunnelRadioBreakPct = m_tunnelRadioBreakPct;
+    sample.tunnelAddedBreakPct = m_tunnelAddedBreakPct;
 }
 
 void NetworkDiagnosticsHistory::pruneSamples(qint64 nowMs)
@@ -2362,6 +2458,28 @@ void NetworkDiagnosticsHistory::pruneSamples(qint64 nowMs)
             bucket.audioLastPacketAgeMs = sample.audioLastPacketAgeMs;
             bucket.audioPacketClassCode = sample.audioPacketClassCode;
             bucket.audioStreamCount = sample.audioStreamCount;
+            if (sample.tunnelValid) {
+                // Rates average over the minute; RTT and breaks keep the worst case,
+                // like the link RTT and loss above.
+                if (!bucket.tunnelValid) {
+                    bucket.tunnelValid = true;
+                    bucket.tunnelRttMs = sample.tunnelRttMs;
+                    bucket.tunnelToClientKbps = sample.tunnelToClientKbps;
+                    bucket.tunnelFromClientKbps = sample.tunnelFromClientKbps;
+                    bucket.tunnelRadioBreakPct = sample.tunnelRadioBreakPct;
+                    bucket.tunnelAddedBreakPct = sample.tunnelAddedBreakPct;
+                } else {
+                    bucket.tunnelRttMs = std::max(bucket.tunnelRttMs, sample.tunnelRttMs);
+                    bucket.tunnelToClientKbps = mergeAverage(
+                        bucket.tunnelToClientKbps, sample.tunnelToClientKbps, bucketSampleCount);
+                    bucket.tunnelFromClientKbps = mergeAverage(
+                        bucket.tunnelFromClientKbps, sample.tunnelFromClientKbps, bucketSampleCount);
+                    bucket.tunnelRadioBreakPct = std::max(bucket.tunnelRadioBreakPct,
+                                                          sample.tunnelRadioBreakPct);
+                    bucket.tunnelAddedBreakPct = std::max(bucket.tunnelAddedBreakPct,
+                                                          sample.tunnelAddedBreakPct);
+                }
+            }
             if (sample.digitalVoiceRxValid) {
                 const int incomingCount =
                     std::max(1, sample.digitalVoiceWaveformObservationCount);
@@ -2850,7 +2968,83 @@ void NetworkDiagnosticsDialog::refresh()
         }
     }
 
+    refreshTunnel(sample);
     updateCharts();
+}
+
+static QString formatTunnelDuration(double seconds)
+{
+    const qint64 s = static_cast<qint64>(std::max(0.0, seconds));
+    if (s < 60) {
+        return QStringLiteral("%1 s").arg(s);
+    }
+    if (s < 3600) {
+        return QStringLiteral("%1 min").arg(s / 60);
+    }
+    return QStringLiteral("%1 h %2 min").arg(s / 3600).arg((s % 3600) / 60);
+}
+
+void NetworkDiagnosticsDialog::refreshTunnel(const NetworkDiagnosticsSample& sample)
+{
+    if (!m_tunnelSection || !m_history) {
+        return;
+    }
+    m_tunnelSection->setVisible(m_history->hasTunnelTelemetry());
+    if (!m_history->hasTunnelTelemetry()) {
+        return;
+    }
+    const std::optional<TailnetSessionReport> report = m_history->tunnelReport();
+    if (!report) {
+        const QString dash = QStringLiteral("--");
+        m_tunnelPathLabel->setText(QStringLiteral("No report"));
+        m_tunnelPathLabel->setToolTip(
+            QStringLiteral("The radio's remote-access container has stopped answering, "
+                           "or this session no longer runs over the tailnet."));
+        for (QLabel* l : {m_tunnelPathAgeLabel, m_tunnelRttLabel, m_tunnelRatesLabel,
+                          m_tunnelRadioBreaksLabel, m_tunnelAddedBreaksLabel,
+                          m_tunnelSendFailuresLabel, m_tunnelShimLabel}) {
+            l->setText(dash);
+        }
+        return;
+    }
+    QString path;
+    if (report->path == QLatin1String("direct")) {
+        path = report->endpoint.isEmpty()
+            ? QStringLiteral("Direct")
+            : QStringLiteral("Direct (%1)").arg(report->endpoint);
+    } else if (report->path == QLatin1String("peer-relay")) {
+        path = QStringLiteral("Peer relay");
+    } else if (report->path == QLatin1String("relay")) {
+        path = report->relay.isEmpty() ? QStringLiteral("Relayed (DERP)")
+                                       : QStringLiteral("Relayed (DERP %1)").arg(report->relay);
+    } else {
+        path = QStringLiteral("Unknown");
+    }
+    m_tunnelPathLabel->setText(path);
+    m_tunnelPathLabel->setToolTip(report->path == QLatin1String("relay")
+        ? QStringLiteral("Traffic goes through a Tailscale relay server; a direct path is "
+                         "usually faster. Opening UDP on either side's firewall can help.")
+        : QString());
+    m_tunnelPathAgeLabel->setText(report->pathChanges > 0
+        ? QStringLiteral("%1 (%2 changes)").arg(formatTunnelDuration(report->pathSinceS))
+              .arg(report->pathChanges)
+        : formatTunnelDuration(report->pathSinceS));
+    m_tunnelRttLabel->setText(report->rttMs >= 0.0
+        ? QStringLiteral("%1 ms (%2)").arg(report->rttMs, 0, 'f', 1)
+              .arg(report->rttVia.isEmpty() ? QStringLiteral("disco") : report->rttVia)
+        : QStringLiteral("--"));
+    m_tunnelRatesLabel->setText(QStringLiteral("%1 / %2 kbps")
+        .arg(report->toClientKbps, 0, 'f', 0).arg(report->fromClientKbps, 0, 'f', 0));
+    m_tunnelRadioBreaksLabel->setText(
+        QStringLiteral("%1%").arg(sample.tunnelRadioBreakPct, 0, 'f', 2));
+    m_tunnelAddedBreaksLabel->setText(
+        QStringLiteral("%1%").arg(sample.tunnelAddedBreakPct, 0, 'f', 2));
+    m_tunnelSendFailuresLabel->setText(QString::number(report->sendFailures));
+    m_tunnelShimLabel->setText(QStringLiteral("v%1, %2% CPU, %3 MB, MTU %4")
+        .arg(report->version)
+        .arg(report->shimCpuPct, 0, 'f', 1)
+        .arg(report->shimRssKb / 1024)
+        .arg(report->mtuClamp));
 }
 
 int NetworkDiagnosticsDialog::selectedRangeSeconds() const
@@ -2992,6 +3186,14 @@ void NetworkDiagnosticsDialog::updateCharts()
     }
     latencySeries.push_back(buildSeriesWithUnit("Arrival gap", QColor("#f2c94c"), " ms", [](const NetworkDiagnosticsSample& s) { return static_cast<double>(s.audioGapMs); }));
     latencySeries.push_back(buildSeriesWithUnit("Jitter", QColor("#eb5757"), " ms", [](const NetworkDiagnosticsSample& s) { return static_cast<double>(s.audioJitterMs); }));
+    // The radio side's own ping to this client over the tailnet, drawn only
+    // where the shim reported one, for the same reason as the RTT trace.
+    if (m_history && m_history->hasTunnelTelemetry()) {
+        latencySeries.push_back(buildWaveformSeries(
+            "Tunnel RTT", QColor("#9b51e0"), " ms",
+            [](const NetworkDiagnosticsSample& s) { return s.tunnelValid && s.tunnelRttMs >= 0.0; },
+            [](const NetworkDiagnosticsSample& s) { return s.tunnelRttMs; }));
+    }
 
     // Same reasoning for the per-category rate traces: five flat zero lines
     // would claim five dead streams on a transport that never had five.
@@ -3010,6 +3212,12 @@ void NetworkDiagnosticsDialog::updateCharts()
     QVector<TimeSeriesGraphWidget::Series> lossSeries{
         buildSeriesWithUnit("Recent total", QColor("#eb5757"), "%", [](const NetworkDiagnosticsSample& s) { return s.packetLossPct; })
     };
+    if (m_history && m_history->hasTunnelTelemetry()) {
+        lossSeries.push_back(buildWaveformSeries(
+            "Added by tunnel", QColor("#9b51e0"), "%",
+            [](const NetworkDiagnosticsSample& s) { return s.tunnelValid; },
+            [](const NetworkDiagnosticsSample& s) { return s.tunnelAddedBreakPct; }));
+    }
     if (m_model->hasStreamCategoryStats()) {
         lossSeries.push_back(buildSeriesWithUnit("Audio", QColor("#6fcf97"), "%", [](const NetworkDiagnosticsSample& s) { return s.audioLossPct; }));
         lossSeries.push_back(buildSeriesWithUnit("FFT", QColor("#bb6bd9"), "%", [](const NetworkDiagnosticsSample& s) { return s.fftLossPct; }));

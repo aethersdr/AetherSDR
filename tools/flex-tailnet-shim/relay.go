@@ -79,8 +79,9 @@ type Session struct {
 	pendingMu sync.Mutex
 	pending   map[string]bool // sequence numbers of file upload/download commands
 
-	// UDP diagnostics, reported in /v1/status.
+	// UDP diagnostics, reported in /v1/status and the caller's /v1/session.
 	fromRadio, toClientErrs, maxDatagram atomic.Uint64
+	vita                                 vitaStats
 	lastSendErr                          atomic.Pointer[string]
 
 	// The shim's own MTU clamp, sent once after `client gui` with a sequence
@@ -167,7 +168,7 @@ func (r *Relay) handle(c net.Conn) {
 	}
 	s := &Session{
 		id: r.nextID.Add(1), relay: r, who: who, peer: peerName(who), client: c, radio: radio,
-		host: host, clientIP: clientAP.Addr(), done: make(chan struct{}),
+		host: host, clientIP: clientAP.Addr().Unmap(), done: make(chan struct{}),
 	}
 	log.Printf("session %d: %s from %s -> radio %s, host UDP %s", s.id, who, c.RemoteAddr(), radio.RemoteAddr(), host.LocalAddr())
 	r.mu.Lock()
@@ -397,6 +398,7 @@ func (s *Session) radioToClientUDP() {
 			return
 		}
 		s.fromRadio.Add(1)
+		s.vita.note(buf[:n])
 		if uint64(n) > s.maxDatagram.Load() {
 			s.maxDatagram.Store(uint64(n))
 		}
@@ -469,6 +471,11 @@ type SessionInfo struct {
 	FromClient    uint64 `json:"from_client"`
 	MaxDatagram   uint64 `json:"max_datagram"`
 	LastSendError string `json:"last_send_error"`
+	// Per-stream packets and sequence gaps as datagrams leave the radio,
+	// before the tunnel.
+	Streams []StreamInfo `json:"streams"`
+
+	clientIP netip.Addr // matches /v1/session callers; never serialized
 }
 
 // Sessions reports every relayed session's UDP counters.
@@ -485,6 +492,8 @@ func (r *Relay) Sessions() []SessionInfo {
 			ID: s.id, Peer: s.peer, FromRadio: s.fromRadio.Load(), ToClient: s.rxPackets.Load(),
 			ToClientFails: s.toClientErrs.Load(), FromClient: s.txPackets.Load(),
 			MaxDatagram: s.maxDatagram.Load(),
+			Streams:     s.vita.snapshot(),
+			clientIP:    s.clientIP,
 		}
 		if ap := s.udpClient.Load(); ap != nil {
 			info.ClientUDP = ap.String()

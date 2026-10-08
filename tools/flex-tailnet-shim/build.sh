@@ -4,7 +4,9 @@
 set -eu
 cd "$(dirname "$0")"
 export CGO_ENABLED=0 GOOS=linux GOARCH=arm64
-go build -trimpath -ldflags='-s -w' -o flex-tailnet-shim .
+# -buildvcs=false: the binary must not record the commit or a dirty tree, or
+# the pinned image could only be rebuilt from the exact checkout it came from.
+go build -trimpath -buildvcs=false -ldflags='-s -w' -o flex-tailnet-shim .
 {
   echo "flex-tailnet-shim is part of AetherSDR and is licensed under the GNU GPL v3."
   echo "It includes the following third-party Go modules, under their own licenses."

@@ -13,6 +13,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/http"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -82,6 +83,8 @@ type Node struct {
 	// first-hand evidence of approval (a node's own status doesn't carry its
 	// approved routes).
 	routesInUse map[netip.Prefix]bool
+
+	telemetry linkTelemetry // per-peer path, RTT and throughput (telemetry.go)
 }
 
 func (n *Node) cfgPath() string   { return filepath.Join(n.StateDir, "provision.json") }
@@ -265,6 +268,18 @@ func (n *Node) start(authKey string, timeout time.Duration) error {
 	unregister := srv.RegisterFallbackTCPHandler(n.subnetTCP)
 	closers = append(closers, func() error { unregister(); return nil })
 
+	// Link telemetry for AetherSDR's Network Diagnostics: tailnet-only, and
+	// each caller sees only its own sessions.
+	tl, err := srv.Listen("tcp", fmt.Sprintf(":%d", TelemetryPort))
+	if err != nil {
+		return fail(err)
+	}
+	closers = append(closers, tl.Close)
+	go http.Serve(tl, n.telemetryHandler(n.authorizer(lc)))
+	tctx, tcancel := context.WithCancel(context.Background())
+	closers = append(closers, func() error { tcancel(); return nil })
+	go n.runTelemetry(tctx, lc)
+
 	n.mu.Lock()
 	n.srv, n.relay, n.closers, n.ip = srv, relay, closers, ip4
 	n.dnsName = strings.TrimSuffix(st.Self.DNSName, ".")
@@ -369,6 +384,9 @@ func (n *Node) stop(logout bool) {
 	srv, relay, closers := n.srv, n.relay, n.closers
 	n.srv, n.relay, n.closers, n.ip, n.dnsName, n.lc = nil, nil, nil, netip.Addr{}, "", nil
 	n.routesInUse = nil
+	n.telemetry.mu.Lock()
+	n.telemetry.peers = nil
+	n.telemetry.mu.Unlock()
 	n.mu.Unlock()
 	if relay != nil {
 		relay.CloseAll("tailnet node stopping")

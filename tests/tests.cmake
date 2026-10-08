@@ -3473,6 +3473,7 @@ add_executable(tailnet_shim_client_test
     tests/tailnet_shim_client_test.cpp
     src/core/TailnetShimClient.cpp
     src/core/TailnetShimDownloader.cpp
+    src/core/TailnetLinkTelemetry.cpp
 )
 target_include_directories(tailnet_shim_client_test PRIVATE src)
 target_link_libraries(tailnet_shim_client_test PRIVATE Qt6::Core Qt6::Network)
