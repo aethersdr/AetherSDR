@@ -131,11 +131,11 @@ void CanonWindow::saveGeometryToSettings()
         .arg(g.x()).arg(g.y()).arg(g.width()).arg(g.height()));
 }
 
-bool CanonWindow::restoreGeometryFromSettings()
+CanonWindow::Restored CanonWindow::restoreGeometryFromSettings()
 {
     const QString saved = AppSettings::instance().value(m_geometryKey).toString();
     if (saved.isEmpty()) {
-        return false;
+        return Restored::Nothing;
     }
     const QStringList parts = saved.split(QLatin1Char(','));
     if (parts.size() == 4) {
@@ -145,18 +145,22 @@ bool CanonWindow::restoreGeometryFromSettings()
         const int w = parts[2].toInt(&ok[2]);
         const int h = parts[3].toInt(&ok[3]);
         if (!(ok[0] && ok[1] && ok[2] && ok[3]) || w <= 0 || h <= 0) {
-            return false;
+            return Restored::Nothing;
         }
         resize(QSize(w, h).expandedTo(minimumSize()));
-        // Wayland places top-level windows itself and ignores this.
+        // A position on a screen that's gone (an unplugged monitor) is not
+        // restored: the window keeps its size and centres instead. Wayland
+        // places top-level windows itself and ignores the move either way.
         if (const QScreen* s = QGuiApplication::screenAt(QPoint(x, y) + QPoint(w / 2, h / 2))) {
             if (s->availableGeometry().intersects(QRect(x, y, w, h))) {
                 move(x, y);
+                return Restored::SizeAndPosition;
             }
         }
-        return true;
+        return Restored::SizeOnly;
     }
-    return restoreGeometry(QByteArray::fromBase64(saved.toLatin1()));
+    return restoreGeometry(QByteArray::fromBase64(saved.toLatin1()))
+        ? Restored::SizeAndPosition : Restored::Nothing;
 }
 
 void CanonWindow::showEvent(QShowEvent* event)
@@ -169,9 +173,9 @@ void CanonWindow::showEvent(QShowEvent* event)
     // PersistentDialog does, so the window maps at its saved size.
     if (!m_geometryKey.isEmpty()) {
         m_restoringGeometry = true;
-        const bool restored = restoreGeometryFromSettings();
+        const Restored restored = restoreGeometryFromSettings();
         m_restoringGeometry = false;
-        if (restored) {
+        if (restored == Restored::SizeAndPosition) {
             m_placed = true;
             QDialog::showEvent(event);
             return;

@@ -652,8 +652,9 @@ tools/flex-tailnet-shim/ (RFC #6271) is a separate Go program that runs inside
 a FLEX-8000/Aurora radio as a Docker waveform container. It is never linked
 into AetherSDR. Its Go modules are vendored at tools/flex-tailnet-shim/vendor/
 (Go requires the vendor tree beside go.mod, so it cannot live under
-third_party/); each module's license text is in its vendored directory, and
-build.sh assembles every one into the LICENSES file shipped inside the image.
+third_party/); each module's license text is in its vendored directory.
+build.sh assembles the license of every module linked into the linux/arm64
+image into the LICENSES file shipped inside it.
 The image is built FROM scratch: no BusyBox or other base-image software.
 All modules are permissive and GPLv3-compatible; none ships a NOTICE file.
 
@@ -700,3 +701,14 @@ All modules are permissive and GPLv3-compatible; none ships a NOTICE file.
   golang.org/x/time                                v0.16.0                            BSD-3-Clause
   gvisor.dev/gvisor                                v0.0.0-20260915211658-a6f909f08a72 Apache-2.0
   tailscale.com                                    v1.104.1                           BSD-3-Clause
+
+  Vendored but not linked into the image (Windows- or test-only dependencies of
+  tailscale.com, redistributed in the source tree):
+  github.com/akutz/memconn                         v0.1.0                             Apache-2.0
+  github.com/alexbrainman/sspi                     v0.0.0-20250919150558-7d374ff0d59e BSD-3-Clause
+  github.com/dblohm7/wingoes                       v0.0.0-20260526185140-fb298caac7ca BSD-3-Clause
+  github.com/google/go-cmp                         v0.7.0                             BSD-3-Clause
+  github.com/tailscale/certstore                   v0.1.1-0.20260409135935-3638fb84b77d MIT
+  github.com/tailscale/go-winio                    v0.0.0-20231025203758-c4f33415bf55 MIT
+  golang.zx2c4.com/wintun                          v0.0.0-20230126152724-0fa3db229ce2 MIT
+  golang.zx2c4.com/wireguard/windows               v1.0.1                             MIT

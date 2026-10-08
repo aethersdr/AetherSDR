@@ -118,6 +118,18 @@ int main(int argc, char** argv)
     ok &= expect(isTailnetAddress(QHostAddress(QStringLiteral("::ffff:100.64.1.2"))), "v4-mapped tailnet");
     ok &= expect(!isTailnetAddress(QHostAddress()), "null address is not");
 
+    // The admin token is capped like every other string from the container.
+    {
+        const QString status = QStringLiteral(R"({"version":"0.4.0","state":"running"})");
+        auto reply = [&](const QString& token) {
+            return QStringLiteral(R"({"admin_token":"%1","status":%2})").arg(token, status).toUtf8();
+        };
+        ok &= expect(tailnetshim::parseProvisionReply(reply(QString(43, QLatin1Char('a')))).has_value(),
+                     "a real-length admin token is accepted");
+        ok &= expect(!tailnetshim::parseProvisionReply(reply(QString(300, QLatin1Char('a')))),
+                     "an oversized admin token is refused");
+    }
+
     // Pinned-image verification (RFC #6271 D2): exact bytes only.
     {
         QTemporaryDir dir;

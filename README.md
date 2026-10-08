@@ -180,7 +180,7 @@ corresponding features disabled.
 # Arch / CachyOS / Manjaro
 sudo pacman -S cmake ninja pkgconf autoconf automake libtool python curl git \
   fftw rtl-sdr portaudio hidapi \
-  libpulse libglvnd fontconfig wayland libxkbcommon-x11 pipewire \
+  libpulse libglvnd fontconfig libsecret wayland libxkbcommon-x11 pipewire \
   xcb-util-cursor xcb-util-image xcb-util-keysyms xcb-util-renderutil xcb-util-wm
 
 # Debian / Ubuntu / Linux Mint
@@ -188,7 +188,7 @@ sudo apt install cmake ninja-build pkg-config autoconf automake libtool \
   python3 python3-venv curl git \
   libfftw3-dev librtlsdr-dev portaudio19-dev libhidapi-dev \
   libgl1-mesa-dev libpulse-dev libasound2-dev libpipewire-0.3-dev pipewire-bin \
-  libdbus-1-dev libglib2.0-dev libfontconfig1-dev libfreetype6-dev \
+  libdbus-1-dev libglib2.0-dev libsecret-1-dev libfontconfig1-dev libfreetype6-dev \
   libx11-dev libx11-xcb-dev libxcb1-dev libxkbcommon-dev libxkbcommon-x11-dev \
   libxcb-cursor0 libxcb-glx0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
   libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-sync1 libxcb-util1 \
@@ -199,7 +199,7 @@ sudo apt install cmake ninja-build pkg-config autoconf automake libtool \
 sudo dnf install cmake ninja-build autoconf automake libtool python3 curl git \
   fftw3-devel rtl-sdr-devel portaudio-devel hidapi-devel \
   libglvnd-devel pulseaudio-libs-devel fontconfig-devel freetype-devel \
-  dbus-devel glib2-devel libX11-devel libxcb-devel \
+  dbus-devel glib2-devel libsecret-devel libX11-devel libxcb-devel \
   libxkbcommon-devel libxkbcommon-x11-devel \
   xcb-util-cursor xcb-util-image xcb-util-keysyms xcb-util-renderutil xcb-util-wm
 

@@ -49,6 +49,17 @@ void TailnetShimTokenStore::save(const QString& radioSerial, const QString& toke
                                  QObject* context,
                                  std::function<void(bool persisted, const QString& error)> done)
 {
+    // Without a serial every radio would share one entry, and one radio's
+    // token would be offered to another. Refuse, and say why.
+    if (radioSerial.trimmed().isEmpty()) {
+        if (done) {
+            QTimer::singleShot(0, context ? context : QCoreApplication::instance(),
+                               [done = std::move(done)] {
+                done(false, QStringLiteral("the radio's serial number isn't known yet"));
+            });
+        }
+        return;
+    }
     const QString key = keyFor(radioSerial);
     if (token.isEmpty()) {
         sessionTokens().remove(key);
@@ -94,6 +105,11 @@ void TailnetShimTokenStore::load(const QString& radioSerial, QObject* context,
     // As save() does: with no context the callback still runs, on the app.
     if (!context) {
         context = QCoreApplication::instance();
+    }
+    if (radioSerial.trimmed().isEmpty()) {
+        // No serial, no entry to read: never another radio's token.
+        QTimer::singleShot(0, context, [callback = std::move(callback)] { callback(QString()); });
+        return;
     }
     const QString key = keyFor(radioSerial);
     const QString session = sessionTokens().value(key);

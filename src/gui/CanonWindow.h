@@ -56,7 +56,8 @@ protected:
 private:
     void paintGround(QPaintDevice& device) const;
     void saveGeometryToSettings();
-    bool restoreGeometryFromSettings();
+    enum class Restored { Nothing, SizeOnly, SizeAndPosition };
+    Restored restoreGeometryFromSettings();
 
     QWidget*     m_body{nullptr};
     QToolButton* m_close{nullptr};

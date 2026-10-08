@@ -358,9 +358,12 @@ TailnetShimDialog::TailnetShimDialog(RadioModel* model, QWidget* parent)
     // Key the admin token by the radio's own serial (from its `info` reply):
     // the discovery serial is the IP address for a manual/routed connection,
     // which would make one radio look like two.
-    m_radioSerial = m_model && !m_model->chassisSerial().trimmed().isEmpty()
-        ? m_model->chassisSerial().trimmed()
-        : info.serial;
+    m_radioSerial = m_model ? m_model->chassisSerial().trimmed() : QString();
+    if (m_radioSerial.isEmpty() && QHostAddress(info.serial.trimmed()).isNull()) {
+        // Discovery's serial is the real one for a discovered radio; for a
+        // manual connection it is the address, which must never key a token.
+        m_radioSerial = info.serial.trimmed();
+    }
     m_hostnameEdit->setText(tailnetshim::suggestedHostname(
         m_model ? m_model->nickname() : QString()));
 

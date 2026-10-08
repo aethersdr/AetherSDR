@@ -3,6 +3,7 @@
 #include <QHostAddress>
 #include <QNetworkAccessManager>
 #include <QObject>
+#include <QPointer>
 #include <QString>
 #include <QStringList>
 
@@ -100,6 +101,7 @@ private:
 
     QNetworkAccessManager m_nam;
     QHostAddress m_address;
+    QPointer<QNetworkReply> m_statusReply;   // the status request in flight, if any
 };
 
 }  // namespace AetherSDR
