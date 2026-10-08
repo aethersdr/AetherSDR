@@ -2,10 +2,9 @@
 
 #include <QDir>
 
-#include <utility>
-
 #ifdef Q_OS_WIN
 #include <windows.h>
+#include <appmodel.h>
 #include <netfw.h>
 #include <shellapi.h>
 #endif
@@ -74,35 +73,20 @@ bool allowed(const QList<Rule>& rules, bool inbound, int profile, int protocol)
 
 } // namespace
 
-Assessment assess(const Status& status)
+namespace {
+
+constexpr int kTcpProfiles = kProfileDomain | kProfilePrivate;
+
+// The protocols an enabled profile needs AetherSDR allowed in on.
+QList<int> inboundNeeds(int profile)
+{
+    return (profile & kTcpProfiles) ? QList<int>{kProtocolTcp, kProtocolUdp}
+                                    : QList<int>{kProtocolUdp};
+}
+
+Assessment assessDefender(const Status& status, const QList<Profile>& enabled)
 {
     Assessment a;
-    if (!status.inspected) {
-        a.summary = status.error.isEmpty()
-            ? QStringLiteral("Windows Firewall status is not available on this system.")
-            : QStringLiteral("Windows Firewall could not be read: %1").arg(status.error);
-        return a;
-    }
-    if (!status.thirdPartyFirewalls.isEmpty()) {
-        a.verdict = Verdict::ThirdParty;
-        a.summary = QStringLiteral(
-            "%1 manages the firewall on this PC. AetherSDR cannot read its rules; if "
-            "external services or radio discovery fail, allow AetherSDR in %1.")
-            .arg(status.thirdPartyFirewalls.join(QStringLiteral(" and ")));
-        a.details = status.thirdPartyFirewalls;
-        return a;
-    }
-
-    QList<Profile> enabled;
-    for (const Profile& p : status.activeProfiles) {
-        if (p.enabled) enabled << p;
-    }
-    if (enabled.isEmpty()) {
-        a.verdict = Verdict::Disabled;
-        a.summary = QStringLiteral("Windows Defender Firewall is off for the active networks.");
-        return a;
-    }
-
     bool outboundBlockRule = false;
     for (const Rule& r : status.rules) {
         if (r.allow) continue;
@@ -146,8 +130,11 @@ Assessment assess(const Status& status)
 
     for (const Profile& p : enabled) {
         QStringList missing;
-        if (!allowed(status.rules, true, p.bit, kProtocolTcp)) missing << QStringLiteral("TCP");
-        if (!allowed(status.rules, true, p.bit, kProtocolUdp)) missing << QStringLiteral("UDP");
+        for (int protocol : inboundNeeds(p.bit)) {
+            if (!allowed(status.rules, true, p.bit, protocol)) {
+                missing << protocolName(protocol);
+            }
+        }
         if (!missing.isEmpty()) {
             a.details << QStringLiteral("%1 network: no rule allows incoming %2")
                              .arg(profileNames(p.bit), missing.join(QStringLiteral(" or ")));
@@ -167,21 +154,118 @@ Assessment assess(const Status& status)
         a.details << describe(r);
     }
     a.summary = QStringLiteral(
-        "AetherSDR's own Windows Defender Firewall rules allow it on every active network. "
-        "Rules for ports or services rather than programs are not checked.");
+        "AetherSDR's own Windows Defender Firewall rules allow it on every active network "
+        "(incoming TCP on private and domain networks only). Rules for ports or services "
+        "rather than programs are not checked.");
     return a;
 }
 
-QString fixCommandLine(const QString& programPath)
+} // namespace
+
+Assessment assess(const Status& status)
+{
+    Assessment a;
+    if (!status.inspected) {
+        a.summary = status.error.isEmpty()
+            ? QStringLiteral("Windows Firewall status is not available on this system.")
+            : QStringLiteral("Windows Firewall could not be read: %1").arg(status.error);
+        return a;
+    }
+    if (status.activeProfiles.isEmpty()) {
+        a.verdict = Verdict::NoNetwork;
+        a.summary = QStringLiteral("No network is active, so no firewall profile applies yet.");
+        return a;
+    }
+
+    QList<Profile> enabled;
+    for (const Profile& p : status.activeProfiles) {
+        if (p.enabled) enabled << p;
+    }
+    if (!enabled.isEmpty()) {
+        a = assessDefender(status, enabled);
+    }
+
+    // A registered firewall product does not stop Windows Defender Firewall's
+    // own rules from applying. When those rules are the problem, say so and
+    // name the product too; otherwise the product is what to look at.
+    const bool defenderProblem = a.verdict == Verdict::Blocked
+        || a.verdict == Verdict::OutboundBlocked;
+    if (!status.thirdPartyFirewalls.isEmpty()) {
+        const QString products = status.thirdPartyFirewalls.join(QStringLiteral(" and "));
+        if (defenderProblem) {
+            a.details << QStringLiteral("%1 also manages the firewall on this PC.").arg(products);
+        } else {
+            a = {};
+            a.verdict = Verdict::ThirdParty;
+            a.summary = QStringLiteral(
+                "%1 manages the firewall on this PC. AetherSDR cannot read its rules; if "
+                "external services or radio discovery fail, allow AetherSDR in %1.")
+                .arg(products);
+            a.details = status.thirdPartyFirewalls;
+            return a;
+        }
+    } else if (enabled.isEmpty()) {
+        a.verdict = Verdict::Disabled;
+        a.summary = QStringLiteral("Windows Defender Firewall is off for the active networks.");
+        return a;
+    }
+
+    // A Store install's rules come from its package and follow its versioned
+    // path; Fix would pin rules to this version's path that no later update or
+    // removal cleans up. Report, but do not offer Fix.
+    if (status.packaged && a.fixable) {
+        a.fixable = false;
+        a.summary += QStringLiteral(
+            " This is a Store install: Windows manages the firewall rules its package "
+            "declares, so remove a block rule in Windows Defender Firewall's own settings.");
+        if (a.verdict == Verdict::NoAllowRule) {
+            a.summary = QStringLiteral(
+                "This is a Store install: Windows manages the firewall rules its package "
+                "declares, and they are not listed per program, so they cannot be checked here.");
+        }
+    }
+    return a;
+}
+
+QList<Rule> fixRules()
+{
+    Rule udp;
+    udp.name = QStringLiteral("AetherSDR (UDP-In)");
+    udp.protocol = kProtocolUdp;
+    udp.profiles = kAllProfiles;
+    Rule tcp;
+    tcp.name = QStringLiteral("AetherSDR (TCP-In)");
+    tcp.protocol = kProtocolTcp;
+    tcp.profiles = kTcpProfiles;
+    return {udp, tcp};
+}
+
+QString fixCommandLine(const QString& programPath, const QString& systemDirectory)
 {
     const QString program = QDir::toNativeSeparators(programPath);
-    const QString add = QStringLiteral(
-        "netsh advfirewall firewall add rule name=\"AetherSDR (%1-In)\" dir=in action=allow "
-        "program=\"%2\" enable=yes profile=any protocol=%1");
-    return QStringLiteral("/D /C \"netsh advfirewall firewall delete rule name=all dir=in "
-                          "program=\"%1\" >NUL 2>&1 & %2 & %3\"")
-        .arg(program, add.arg(QStringLiteral("TCP"), program),
-             add.arg(QStringLiteral("UDP"), program));
+    const QString netsh = systemDirectory.isEmpty()
+        ? QStringLiteral("netsh")
+        : QStringLiteral("\"%1\\netsh.exe\"").arg(QDir::toNativeSeparators(systemDirectory));
+    QStringList adds;
+    for (const Rule& r : fixRules()) {
+        QStringList profiles;
+        if ((r.profiles & kAllProfiles) == kAllProfiles) {
+            profiles << QStringLiteral("any");
+        } else {
+            if (r.profiles & kProfileDomain) profiles << QStringLiteral("domain");
+            if (r.profiles & kProfilePrivate) profiles << QStringLiteral("private");
+            if (r.profiles & kProfilePublic) profiles << QStringLiteral("public");
+        }
+        adds << QStringLiteral("%1 advfirewall firewall add rule name=\"%2\" dir=in action=allow "
+                               "program=\"%3\" enable=yes profile=%4 protocol=%5")
+                    .arg(netsh, r.name, program, profiles.join(QLatin1Char(',')),
+                         protocolName(r.protocol));
+    }
+    // The delete exits non-zero when nothing matched, so it is chained with &;
+    // the adds are chained with && so a failed one fails the whole command.
+    return QStringLiteral("/D /C \"%1 advfirewall firewall delete rule name=all dir=in "
+                          "program=\"%2\" >NUL 2>&1 & %3\"")
+        .arg(netsh, program, adds.join(QStringLiteral(" && ")));
 }
 
 Status afterFix(const Status& status)
@@ -191,14 +275,7 @@ Status afterFix(const Status& status)
     for (const Rule& r : status.rules) {
         if (!r.inbound) out.rules << r;
     }
-    for (const auto& [name, protocol] : {std::pair{QStringLiteral("AetherSDR (TCP-In)"), kProtocolTcp},
-                                         std::pair{QStringLiteral("AetherSDR (UDP-In)"), kProtocolUdp}}) {
-        Rule r;
-        r.name = name;
-        r.profiles = 0x7fffffff;
-        r.protocol = protocol;
-        out.rules << r;
-    }
+    out.rules << fixRules();
     return out;
 }
 
@@ -341,6 +418,11 @@ Status inspect(const QString& programPath)
 
     readThirdParty(status);
 
+    // APPMODEL_ERROR_NO_PACKAGE: an installer or portable build. Anything else
+    // (ERROR_INSUFFICIENT_BUFFER for a zero-length probe) means a package.
+    UINT32 nameLength = 0;
+    status.packaged = GetCurrentPackageFullName(&nameLength, nullptr) != APPMODEL_ERROR_NO_PACKAGE;
+
     ComPtr<INetFwRules> rules;
     if (FAILED(policy->get_Rules(rules.out()))) {
         status.error = QStringLiteral("firewall rules unavailable");
@@ -400,11 +482,21 @@ Status inspect(const QString& programPath)
 
 bool runFix(const QString& programPath, QString* error)
 {
+    // The elevated cmd.exe runs from System32 and calls netsh by its full
+    // path: inheriting AetherSDR's working directory (a user-writable install
+    // folder) would let a planted netsh.exe run as administrator.
     wchar_t systemDir[MAX_PATH] = {};
-    GetSystemDirectoryW(systemDir, MAX_PATH);
-    const QString cmd = QString::fromWCharArray(systemDir) + QStringLiteral("\\cmd.exe");
-    const std::wstring file = cmd.toStdWString();
-    const std::wstring params = fixCommandLine(programPath).toStdWString();
+    const UINT length = GetSystemDirectoryW(systemDir, MAX_PATH);
+    if (length == 0 || length >= MAX_PATH) {
+        if (error) {
+            *error = QStringLiteral("Windows did not report its system directory.");
+        }
+        return false;
+    }
+    const QString system32 = QString::fromWCharArray(systemDir, int(length));
+    const std::wstring file = (system32 + QStringLiteral("\\cmd.exe")).toStdWString();
+    const std::wstring directory = system32.toStdWString();
+    const std::wstring params = fixCommandLine(programPath, system32).toStdWString();
 
     SHELLEXECUTEINFOW info{};
     info.cbSize = sizeof(info);
@@ -412,6 +504,7 @@ bool runFix(const QString& programPath, QString* error)
     info.lpVerb = L"runas";
     info.lpFile = file.c_str();
     info.lpParameters = params.c_str();
+    info.lpDirectory = directory.c_str();
     info.nShow = SW_HIDE;
     if (!ShellExecuteExW(&info)) {
         if (error) {

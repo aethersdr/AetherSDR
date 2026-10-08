@@ -60,10 +60,11 @@ Name: "{autodesktop}\AetherSDR"; Filename: "{app}\AetherSDR.exe"; Tasks: desktop
 ; AetherSDR.exe's INBOUND rules first also removes the block rule Windows leaves
 ; behind when its firewall prompt was dismissed: a block rule beats an allow.
 ; Outbound rules are left alone, so an administrator's outbound allows on an
-; outbound-blocking PC survive an install or update.
-; netsh does not require the program to exist, so the D-STAR rule needs no
-; separate check.
-Filename: "{cmd}"; Parameters: "/D /C ""netsh advfirewall firewall delete rule name=""AetherSDR D-STAR Waveform RX"" >NUL 2>&1 & netsh advfirewall firewall add rule name=""AetherSDR D-STAR Waveform RX"" dir=in action=allow program=""{app}\aether-dv-waveform.exe"" enable=yes profile=any protocol=UDP & netsh advfirewall firewall delete rule name=all dir=in program=""{app}\AetherSDR.exe"" >NUL 2>&1 & netsh advfirewall firewall add rule name=""AetherSDR (TCP-In)"" dir=in action=allow program=""{app}\AetherSDR.exe"" enable=yes profile=any protocol=TCP & netsh advfirewall firewall add rule name=""AetherSDR (UDP-In)"" dir=in action=allow program=""{app}\AetherSDR.exe"" enable=yes profile=any protocol=UDP"""; WorkingDir: "{sys}"; Verb: "runas"; StatusMsg: "Configuring Windows Firewall for AetherSDR..."; Flags: shellexec runhidden waituntilterminated
+; outbound-blocking PC survive an install or update. UDP (radio discovery and
+; streams) is allowed on every network; TCP (TCI, CAT and the other listeners,
+; unauthenticated on all interfaces, and TCI can key the transmitter) only on
+; domain and private networks, so on a Public network Windows still asks.
+Filename: "{cmd}"; Parameters: "/D /C ""netsh advfirewall firewall delete rule name=""AetherSDR D-STAR Waveform RX"" >NUL 2>&1 & netsh advfirewall firewall add rule name=""AetherSDR D-STAR Waveform RX"" dir=in action=allow program=""{app}\aether-dv-waveform.exe"" enable=yes profile=any protocol=UDP & netsh advfirewall firewall delete rule name=all dir=in program=""{app}\AetherSDR.exe"" >NUL 2>&1 & netsh advfirewall firewall add rule name=""AetherSDR (TCP-In)"" dir=in action=allow program=""{app}\AetherSDR.exe"" enable=yes profile=domain,private protocol=TCP & netsh advfirewall firewall add rule name=""AetherSDR (UDP-In)"" dir=in action=allow program=""{app}\AetherSDR.exe"" enable=yes profile=any protocol=UDP"""; WorkingDir: "{sys}"; Verb: "runas"; StatusMsg: "Configuring Windows Firewall for AetherSDR..."; Flags: shellexec runhidden waituntilterminated; Check: FileExists(ExpandConstant('{app}\aether-dv-waveform.exe'))
 Filename: "{app}\AetherSDR.exe"; Description: "Launch AetherSDR"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]

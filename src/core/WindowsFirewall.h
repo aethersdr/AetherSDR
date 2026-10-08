@@ -44,45 +44,58 @@ struct Status {
     QString error;                    // why inspection failed, when it did
     QString programPath;
     QStringList thirdPartyFirewalls;  // products that have taken over the firewall
+    bool packaged{false};             // a Store (MSIX) install: Windows owns its rules
     QList<Profile> activeProfiles;
     QList<Rule> rules;                // rules whose program is programPath
 };
 
 enum class Verdict {
     NotInspected,       // not Windows, or the firewall could not be read
+    NoNetwork,          // no network profile is active
     ThirdParty,         // another product manages the firewall; we cannot see its rules
     Disabled,           // the firewall is off for every active network
     Blocked,            // an enabled block rule for this program covers an active network
     OutboundBlocked,    // an active profile blocks outbound by default and nothing allows us out
-    NoAllowRule,        // nothing blocks, but an active network lacks an inbound TCP+UDP allow
-    Allowed,            // every active network has the TCP and UDP allows it needs
+    NoAllowRule,        // nothing blocks, but an active network lacks an inbound allow it needs
+    Allowed,            // every active network has the allows it needs
 };
 
 struct Assessment {
     Verdict verdict{Verdict::NotInspected};
     QString summary;      // one sentence for the operator
     QStringList details;  // the rules or products behind the verdict
-    bool fixable{false};  // Fix resolves it: an inbound problem in Windows Defender Firewall
+    bool fixable{false};  // Fix resolves it: an inbound problem in Windows Defender Firewall,
+                          // on an install that is not a Store package
 };
 
 Status inspect(const QString& programPath);
+
+// Inbound needs differ by network: UDP everywhere (radio discovery and the
+// radio's streams), TCP only on Domain and Private networks. AetherSDR's TCP
+// listeners (TCI, CAT, KISS, transfers) bind every interface without
+// authentication, and TCI can key the transmitter, so on a Public network
+// TCP is left to Windows' own prompt and the operator's choice.
 Assessment assess(const Status& status);
+
+// The inbound allow rules Fix and the installer add, with the profiles above.
+// fixCommandLine() renders exactly these, and afterFix() applies them.
+QList<Rule> fixRules();
 
 // The netsh commands Fix runs, elevated, in one cmd.exe: delete the program's
 // INBOUND rules (including a block rule left by a dismissed prompt — block
-// beats allow) and add inbound TCP and UDP allow rules on all profiles.
-// Outbound rules are never touched: an administrator's outbound allows on an
-// outbound-blocking PC must survive a repair. The rule names match the
-// installer's, so uninstall removes them.
-QString fixCommandLine(const QString& programPath);
+// beats allow), then add fixRules(). Outbound rules are never touched: an
+// administrator's outbound allows on an outbound-blocking PC must survive a
+// repair. The rule names match the installer's, so uninstall removes them.
+// netsh is called by its full path in systemDirectory when one is given.
+QString fixCommandLine(const QString& programPath, const QString& systemDirectory = QString());
 
-// The rule set fixCommandLine() leaves behind, for checking a repair before
-// running it: inbound rules replaced, everything else kept.
+// The rule set fixCommandLine() leaves behind: inbound rules replaced by
+// fixRules(), everything else kept.
 Status afterFix(const Status& status);
 
-// Runs fixCommandLine() through a UAC prompt and waits for it. Blocking: call
-// it off the GUI thread. Returns false with error set when the operator
-// declined, or on any other failure.
+// Runs fixCommandLine() through a UAC prompt from the system directory and
+// waits for it. Blocking: call it off the GUI thread. Returns false with
+// error set when the operator declined, or on any other failure.
 bool runFix(const QString& programPath, QString* error);
 
 } // namespace AetherSDR::WindowsFirewall

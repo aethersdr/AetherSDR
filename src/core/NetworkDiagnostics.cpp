@@ -42,8 +42,8 @@ QString origin(const QUrl& url)
 // Qt's error text quotes the request URL in full ("Error transferring <url> -
 // server replied: ..."), and QRZ carries credentials in the query. Every URL
 // in it becomes scheme://host: first the reply's own URLs in each spelling Qt
-// may use (a decoded query can hold spaces, which a pattern would stop at),
-// then anything else that looks like a URL.
+// may use (its default spelling decodes a %20 back to a space, which a pattern
+// would stop at), then anything else that looks like a URL.
 QString scrubUrls(QString text, const QNetworkReply* reply)
 {
     QList<QUrl> urls{reply->url(), reply->request().url()};
@@ -54,8 +54,7 @@ QString scrubUrls(QString text, const QNetworkReply* reply)
     for (const QUrl& url : urls) {
         if (!url.isValid()) continue;
         for (const QString& spelling : {url.toString(), url.toString(QUrl::FullyEncoded),
-                                        url.toString(QUrl::FullyDecoded), url.toDisplayString(),
-                                        url.toString(QUrl::RemoveUserInfo)}) {
+                                        url.toDisplayString(), url.toString(QUrl::RemoveUserInfo)}) {
             if (!spelling.isEmpty()) {
                 text.replace(spelling, origin(url));
             }
@@ -76,13 +75,18 @@ QString scrubUrls(QString text, const QNetworkReply* reply)
 
 } // namespace
 
+QString safeErrorString(const QNetworkReply* reply)
+{
+    return scrubUrls(reply->errorString(), reply);
+}
+
 QString describeFailure(const QNetworkReply* reply, const char* what)
 {
     const QUrl url = reply->url();
     QString line = QStringLiteral("%1: %2://%3 failed, error %4 (%5)")
         .arg(QLatin1String(what), url.scheme(), url.host())
         .arg(int(reply->error()))
-        .arg(scrubUrls(reply->errorString(), reply));
+        .arg(safeErrorString(reply));
     const QVariant status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute);
     if (status.isValid()) {
         line += QStringLiteral(", HTTP %1").arg(status.toInt());

@@ -6,6 +6,7 @@
 #include "core/WindowsFirewall.h"
 
 #include <QCoreApplication>
+#include <QDir>
 #include <QNetworkReply>
 #include <QSslError>
 #include <QStringList>
@@ -172,6 +173,49 @@ void testVerdicts()
     Status any = windows();
     any.rules << rule(true, kProtocolAny, kAll);
     check(assess(any).verdict == Verdict::Allowed, "an any-protocol allow covers TCP and UDP");
+
+    // Review 2 of #6289: TCP is pre-allowed on domain and private networks
+    // only; on a Public network only UDP is needed.
+    Status publicUdp = windows({kProfilePublic});
+    publicUdp.rules << rule(true, kProtocolUdp, kAll);
+    check(assess(publicUdp).verdict == Verdict::Allowed,
+          "on a Public network a UDP allow is enough; TCP stays with the prompt");
+    Status privateUdp = windows({kProfilePrivate});
+    privateUdp.rules << rule(true, kProtocolUdp, kAll);
+    check(assess(privateUdp).verdict == Verdict::NoAllowRule,
+          "on a Private network TCP is still needed");
+
+    check(assess(windows({})).verdict == Verdict::NoNetwork,
+          "no active network reads as no network, not as the firewall being off");
+
+    Status suiteAndBlock = windows();
+    suiteAndBlock.thirdPartyFirewalls << QStringLiteral("Bitdefender Firewall");
+    suiteAndBlock.rules << rule(false, kProtocolAny, kAll);
+    const Assessment sb = assess(suiteAndBlock);
+    check(sb.verdict == Verdict::Blocked && sb.fixable
+              && sb.details.join(QLatin1Char(' ')).contains(QStringLiteral("Bitdefender")),
+          "a readable Defender block rule is reported and fixable even with a suite registered");
+    Status suiteOnly = windows();
+    suiteOnly.thirdPartyFirewalls << QStringLiteral("Bitdefender Firewall");
+    check(assess(suiteOnly).verdict == Verdict::ThirdParty,
+          "with nothing wrong in Defender's rules, the suite is what to look at");
+    Status suiteDefenderOff = windows();
+    suiteDefenderOff.activeProfiles[0].enabled = false;
+    suiteDefenderOff.thirdPartyFirewalls << QStringLiteral("Bitdefender Firewall");
+    check(assess(suiteDefenderOff).verdict == Verdict::ThirdParty,
+          "a suite that turned Defender off is named rather than reported as no firewall");
+
+    Status store = windows();
+    store.packaged = true;
+    store.rules << rule(false, kProtocolAny, kAll);
+    const Assessment st = assess(store);
+    check(st.verdict == Verdict::Blocked && !st.fixable,
+          "a Store install is not offered Fix, which would pin rules to this version's path");
+    Status storeNoRule = windows();
+    storeNoRule.packaged = true;
+    const Assessment sn = assess(storeNoRule);
+    check(!sn.fixable && sn.summary.contains(QStringLiteral("Store install")),
+          "a Store install's package-declared rules are not reported as missing and fixable");
 }
 
 void testFixKeepsOutbound()
@@ -193,15 +237,37 @@ void testFixKeepsOutbound()
     check(assess(after).verdict == Verdict::Allowed,
           "after Fix the outbound-blocking PC is allowed in and still allowed out");
 
-    const QString cmd = fixCommandLine(QStringLiteral("C:/Users/Op/AetherSDR/AetherSDR.exe"));
+    Status publicAfter = afterFix(windows({kProfilePublic}));
+    check(assess(publicAfter).verdict == Verdict::Allowed,
+          "after Fix a Public network is covered by the UDP allow alone");
+
+    const QString program = QStringLiteral("C:/Users/Op Name/A&B (x86)/AetherSDR.exe");
+    const QString cmd = fixCommandLine(program);
     check(cmd.contains(QStringLiteral("delete rule name=all dir=in program=")),
           "Fix deletes inbound rules only");
     check(!cmd.contains(QStringLiteral("dir=out")) && cmd.count(QStringLiteral("delete rule")) == 1,
           "Fix never deletes outbound rules");
-    check(cmd.contains(QStringLiteral("name=\"AetherSDR (TCP-In)\" dir=in action=allow"))
-              && cmd.contains(QStringLiteral("name=\"AetherSDR (UDP-In)\" dir=in action=allow"))
-              && cmd.count(QStringLiteral("profile=any")) == 2,
-          "Fix adds inbound TCP and UDP allows on all profiles, named as the installer names them");
+    check(cmd.contains(QStringLiteral(
+              "name=\"AetherSDR (UDP-In)\" dir=in action=allow program=\"%1\" enable=yes "
+              "profile=any protocol=UDP").arg(QDir::toNativeSeparators(program)))
+              && cmd.contains(QStringLiteral(
+              "name=\"AetherSDR (TCP-In)\" dir=in action=allow program=\"%1\" enable=yes "
+              "profile=domain,private protocol=TCP").arg(QDir::toNativeSeparators(program))),
+          "Fix adds UDP on all networks and TCP on domain and private only, quoting the path");
+    check(cmd.count(QStringLiteral(" && ")) == 1 && cmd.count(QStringLiteral(">NUL 2>&1 & ")) == 1,
+          "a failed add fails the command; only the no-match delete is allowed to fail");
+
+    const QString qualified = fixCommandLine(program, QStringLiteral("C:\\Windows\\System32"));
+    check(qualified.count(QStringLiteral("\"C:\\Windows\\System32\\netsh.exe\" advfirewall")) == 3
+              && !qualified.contains(QStringLiteral(" netsh advfirewall"))
+              && !qualified.startsWith(QStringLiteral("/D /C \"netsh")),
+          "with the system directory, every netsh is called by its full path");
+
+    QList<Rule> planned = fixRules();
+    check(planned.size() == 2 && planned[0].protocol == kProtocolUdp
+              && (planned[0].profiles & 0x7) == 0x7 && planned[1].protocol == kProtocolTcp
+              && planned[1].profiles == (kProfileDomain | kProfilePrivate),
+          "the planned rules are UDP on every profile and TCP on domain and private");
 }
 
 void testFailureLogging()
@@ -262,7 +328,7 @@ void testFailureLogging()
     query.addQueryItem(QStringLiteral("username"), QStringLiteral("K1ABC"));
     query.addQueryItem(QStringLiteral("password"), QStringLiteral("alpha;SECRET TAIL&x=y"));
     qrz.setQuery(query);
-    for (const QString& spelling : {qrz.toString(), qrz.toString(QUrl::FullyDecoded)}) {
+    for (const QString& spelling : {qrz.toString(), qrz.toString(QUrl::FullyEncoded)}) {
         const QString qtText = QStringLiteral("Error transferring %1 - server replied: Forbidden")
                                    .arg(spelling);
         auto* forbidden = new FakeReply(qrz, QNetworkReply::ContentAccessDenied, qtText, 403);
@@ -277,6 +343,12 @@ void testFailureLogging()
                   && !leak.contains(QStringLiteral("SECRET")) && !leak.contains(QStringLiteral("TAIL"))
                   && !leak.contains(QStringLiteral("/xml/")),
               "no credential, query or path survives in the HTTP error line");
+        if (spelling == qrz.toString()) {
+            const QString shown = NetworkDiagnostics::safeErrorString(forbidden);
+            check(shown == QStringLiteral(
+                      "Error transferring https://xmldata.qrz.com - server replied: Forbidden"),
+                  "safeErrorString, which QRZ now logs and shows, carries no credential");
+        }
         delete forbidden;
     }
 

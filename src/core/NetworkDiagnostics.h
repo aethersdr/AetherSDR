@@ -14,6 +14,10 @@ namespace AetherSDR::NetworkDiagnostics {
 // scheme://host, including the ones Qt quotes inside its error text.
 void watch(QNetworkReply* reply, const char* what);
 
+// The reply's error text with every URL cut to scheme://host. Use it wherever
+// Qt's errorString() would otherwise reach a log or the screen.
+QString safeErrorString(const QNetworkReply* reply);
+
 // The failure line watch() writes, without the dedup or the backend line.
 QString describeFailure(const QNetworkReply* reply, const char* what);
 

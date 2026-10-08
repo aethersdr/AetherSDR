@@ -71,8 +71,10 @@ Values that need maintainer choice:
   - `microphone`: recommended because AetherSDR captures PC mic audio for TX.
 - Desktop extension disclosure:
   - [`windows.firewallRules`](https://learn.microsoft.com/windows/apps/desktop/modernize/desktop-to-uwp-extensions):
-    adds all-profile inbound exceptions scoped to `AetherSDR.exe` (TCP and
-    UDP: radio discovery, VITA-49 streams, and the TCI/CAT listeners) and to
+    adds inbound exceptions scoped to `AetherSDR.exe` (UDP on all profiles for
+    radio discovery and VITA-49 streams; TCP on domain and private profiles
+    only, because the TCI/CAT listeners are unauthenticated and TCI can key the
+    transmitter, so on a Public network Windows still asks) and to
     `aether-dv-waveform.exe` (UDP). Windows owns the packaged rule lifecycle, so
     package installation and updates retain it and package removal deletes it
     without a separate elevation prompt.
