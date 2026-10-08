@@ -1,6 +1,6 @@
 #pragma once
 
-#include "PersistentDialog.h"
+#include "CanonWindow.h"
 #include <QPointer>
 
 class QLabel;
@@ -22,7 +22,7 @@ class WaveformInstaller;
 // waveform with Restart and Remove. Installs .ssdr_waveform packages and Docker
 // images via WaveformInstaller; Docker install is gated by live WFP state
 // (WaveformInstallGate.h). Takes RadioModel* to construct WaveformInstaller.
-class WaveformsDialog : public PersistentDialog {
+class WaveformsDialog : public CanonWindow {
     Q_OBJECT
 
 public:

@@ -310,7 +310,16 @@ void MainWindow::buildMenuBar()
                                        // on a radio with no installable waveforms
     waveformsAct->setMenuRole(QAction::NoRole);
     connect(waveformsAct, &QAction::triggered, this, [this] {
-        showOrRaisePersistent(m_waveformsDialog, &m_radioModel);
+        // A CanonWindow (style guide, RFC #6226): it isn't a persistent
+        // dialog, so it's created or raised directly, like About.
+        if (!m_waveformsDialog) {
+            auto* dlg = new WaveformsDialog(&m_radioModel, this);
+            dlg->setAttribute(Qt::WA_DeleteOnClose);
+            m_waveformsDialog = dlg;
+        }
+        m_waveformsDialog->show();
+        m_waveformsDialog->raise();
+        m_waveformsDialog->activateWindow();
     });
 
     fileMenu->addSeparator();

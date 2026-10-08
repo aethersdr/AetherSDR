@@ -6,6 +6,9 @@
 #include "core/WaveformInstaller.h"
 #include "core/TailnetShimClient.h"
 #include "TailnetShimDialog.h"
+#include "FramelessResizer.h"
+#include "PersistentDialog.h"   // its small pop-up dialogs keep the persistent pattern
+#include "RoundedMenu.h"
 #include "models/FlexWaveformModel.h"
 #include "models/RadioModel.h"
 #include "gui/WaveformInstallGate.h"   // #4210 pure Docker-install gate policy
@@ -220,10 +223,17 @@ QString legacyWaveformDialogInitialPath()
     return QDir::homePath();
 }
 
+// AetherSDR style guide (docs/style/aethersdr-style-guide.md, RFC #6226):
+// the Waveforms window is a CanonWindow, so the ground is painted for it and
+// every colour here is a color.canon.* token. Top-level panels sit on the
+// raised surface, cards inside them on the nested surface, with hairlines;
+// titles in ink, labels in muted, values in ink-soft; controls on the canon
+// secondary recipe with cyan as the single accent. Rules are scoped by object
+// name, so a panel rule never reaches the QLabels inside it.
 constexpr const char* kWaveformsDialogStyle = R"(
 QWidget#waveformsBody {
-    color: #aeb9cc;
-    background: #07101c;
+    color: {{color.canon.inkSoft}};
+    background: transparent;
     font-size: 14px;
 }
 QWidget#StatusColumn,
@@ -238,35 +248,44 @@ QWidget#DStarExecutableRow {
 QLabel {
     background: transparent;
 }
+QLabel#WaveformsWindowTitle {
+    color: {{color.canon.ink}};
+    font-size: 20px;
+    font-weight: 700;
+}
+QFrame#WaveformsHeaderRule {
+    background: {{color.canon.line}};
+    border: none;
+    min-height: 1px;
+    max-height: 1px;
+}
 QFrame#WaveformsStatusFrame,
 QFrame#localDigitalVoicePanel,
 QFrame#installedWaveformsPanel {
-    background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
-        stop:0 #111d2c, stop:1 #0a1421);
-    border: 1px solid #233246;
-    border-radius: 7px;
+    background: {{color.canon.raised}};
+    border: 1px solid {{color.canon.line}};
+    border-radius: 12px;
 }
 QFrame#LocalWaveformServiceCard {
-    background: #0b1625;
-    border-color: #26374e;
-    border: 1px solid #26374e;
-    border-radius: 7px;
+    background: {{color.canon.nested}};
+    border: 1px solid {{color.canon.line}};
+    border-radius: 12px;
 }
 QFrame#ActiveServiceStrip {
-    background: #8294a8;
+    background: {{color.canon.muted}};
     border: none;
     border-radius: 2px;
     min-width: 4px;
     max-width: 4px;
 }
 QFrame#PanelSeparator {
-    background: #26374e;
+    background: {{color.canon.line}};
     border: none;
     min-height: 1px;
     max-height: 1px;
 }
 QFrame#StatusSegmentDivider {
-    background: #26374e;
+    background: {{color.canon.line}};
     border: none;
     min-width: 1px;
     max-width: 1px;
@@ -274,65 +293,58 @@ QFrame#StatusSegmentDivider {
 QLabel#StatusStripTitle,
 QLabel#SectionLabel,
 QLabel#StatusColumnTitle {
-    color: #8d99ad;
+    color: {{color.canon.muted}};
     font-size: 11px;
     font-weight: 700;
 }
 QLabel#PanelTitle {
-    color: #d4deea;
+    color: {{color.canon.ink}};
     font-size: 15px;
     font-weight: 700;
 }
 QLabel#ConnectedRadioName {
-    color: #e1e8f1;
+    color: {{color.canon.ink}};
     font-size: 15px;
     font-weight: 700;
 }
 QLabel#ConnectedRadioSerial,
 QLabel#ServiceSubtitle,
 QLabel#EmptyStateSubtext {
-    color: #8d99ad;
+    color: {{color.canon.muted}};
 }
 QLabel#ServiceSubtitle {
     min-height: 18px;
 }
 QLabel#digitalVoiceWaveformDetail {
-    color: #9fb0c6;
+    color: {{color.canon.inkSoft}};
     font-size: 12px;
 }
 QLabel#ServiceTitle {
-    color: #e1e8f1;
+    color: {{color.canon.ink}};
     font-size: 15px;
     font-weight: 700;
 }
 QLabel#StatusPill,
 QLabel#digitalVoiceWaveformStatus,
-QLabel#ValuePill {
-    color: #c8d8e8;
-    background: #0b1625;
-    border: 1px solid #26374e;
-    border-radius: 5px;
-    padding: 4px 9px;
-    font-weight: 600;
-}
+QLabel#ValuePill,
 QLabel#CapabilityPill {
-    color: #c8d8e8;
-    background: #0b1625;
-    border: 1px solid #26374e;
+    color: {{color.canon.inkSoft}};
+    background: {{color.canon.nested}};
+    border: 1px solid {{color.canon.lineHi}};
     border-radius: 5px;
     padding: 4px 9px;
     font-weight: 600;
 }
 QLabel#ValuePill {
-    color: #d4deea;
-    background: #0c1b28;
+    color: {{color.canon.ink}};
+    background: {{color.canon.control}};
 }
 QLabel#MutedLabel,
 QLabel#EmptyStateText {
-    color: #8d99ad;
+    color: {{color.canon.muted}};
 }
 QLabel#EmptyStateText {
-    color: #9bb0c4;
+    color: {{color.canon.inkSoft}};
     font-size: 14px;
     font-weight: 700;
 }
@@ -353,19 +365,22 @@ QLabel#ProtocolIcon {
     max-height: 56px;
 }
 QFrame#WaveformListFrame {
-    background: #07101c;
-    border: 1px dashed #31455c;
-    border-radius: 7px;
+    background: transparent;
+    border: 1px dashed {{color.canon.lineHi}};
+    border-radius: 12px;
 }
 QFrame#RadioWaveformRow {
-    background: #0b1625;
-    border: 1px solid #1d2a3c;
-    border-radius: 6px;
+    background: {{color.canon.nested}};
+    border: 1px solid {{color.canon.line}};
+    border-radius: 8px;
+}
+QFrame#RadioWaveformRow:hover {
+    border-color: {{color.canon.lineHi}};
 }
 QLabel#WaveformTypeBadge {
-    color: #9ab2c8;
-    background: #0d1c20;
-    border: 1px solid #26374e;
+    color: {{color.canon.cyan}};
+    background: {{color.canon.control}};
+    border: 1px solid {{color.canon.lineHi}};
     border-radius: 5px;
     padding: 3px 8px;
     font-size: 12px;
@@ -373,120 +388,107 @@ QLabel#WaveformTypeBadge {
 }
 QCheckBox {
     background: transparent;
-    color: #aeb9cc;
+    color: {{color.canon.inkSoft}};
     spacing: 9px;
 }
 QCheckBox::indicator {
     width: 20px;
     height: 20px;
     border-radius: 4px;
-    border: 1px solid #34533c;
-    background: #0d1a18;
+    border: 1px solid {{color.canon.lineHi}};
+    background: {{color.canon.control}};
 }
 QCheckBox::indicator:checked {
-    background: #5ebd69;
-    border-color: #65d379;
+    background: {{color.canon.cyan}};
+    border-color: {{color.canon.aqua}};
 }
 QCheckBox::indicator:disabled {
-    border-color: #26374e;
-    background: #08111d;
+    border-color: {{color.canon.line}};
+    background: transparent;
 }
 QPushButton,
 QToolButton {
-    color: #c8d8e8;
-    background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
-        stop:0 #17314a, stop:1 #0d2134);
-    border: 1px solid #2d4d66;
-    border-radius: 6px;
+    color: {{color.canon.cyan}};
+    background: {{color.canon.control}};
+    border: 1px solid {{color.canon.lineHi}};
+    border-radius: 4px;
     padding: 7px 14px;
     font-weight: 600;
 }
 QPushButton:hover,
 QToolButton:hover {
-    border-color: #4f7390;
-    color: #e2edf7;
+    background: {{color.canon.nested}};
+    color: {{color.canon.aqua}};
+}
+QPushButton:focus,
+QToolButton:focus {
+    border-color: {{color.canon.aqua}};
 }
 QPushButton:disabled,
 QToolButton:disabled {
-    color: #68778a;
-    border-color: #1d2a3c;
-    background: #0b1522;
+    color: {{color.canon.muted}};
+    border-color: {{color.canon.line}};
+    background: transparent;
 }
 QToolButton#DStarAdvancedButton {
-    color: #aeb9cc;
+    color: {{color.canon.inkSoft}};
     background: transparent;
     border: 1px solid transparent;
     padding: 3px 6px;
     text-align: left;
 }
 QToolButton#DStarAdvancedButton:hover {
-    border-color: #26374e;
-    background: #0b1625;
+    border-color: {{color.canon.line}};
+    background: {{color.canon.nested}};
 }
 QToolButton#ThumbDvDeviceMenu {
     padding: 0;
 }
 QComboBox {
-    color: #c4cedd;
-    background: #0b1625;
-    border: 1px solid #26374e;
-    border-radius: 5px;
+    color: {{color.canon.ink}};
+    background: {{color.canon.control}};
+    border: 1px solid {{color.canon.lineHi}};
+    border-radius: 4px;
     padding: 6px 28px 6px 10px;
-    selection-background-color: #1b3650;
+    selection-background-color: {{color.canon.cyan}};
+    selection-color: {{color.canon.onAccent}};
 }
 QComboBox:focus {
-    border-color: #54c768;
+    border-color: {{color.canon.aqua}};
 }
 QLineEdit {
-    color: #c4cedd;
-    background: #050b13;
-    border: 1px solid #26374e;
-    border-radius: 6px;
+    color: {{color.canon.ink}};
+    background: {{color.canon.control}};
+    border: 1px solid {{color.canon.lineHi}};
+    border-radius: 4px;
     padding: 6px 10px;
     min-height: 20px;
-    selection-background-color: #1b3650;
+    selection-background-color: {{color.canon.cyan}};
+    selection-color: {{color.canon.onAccent}};
     font-family: "SF Mono", "Menlo", "Consolas", monospace;
     font-size: 13px;
 }
 QLineEdit:focus {
-    border-color: #54c768;
+    border-color: {{color.canon.aqua}};
 }
 QScrollArea {
     background: transparent;
     border: none;
 }
 QScrollBar:vertical {
-    background: #07101c;
+    background: transparent;
     width: 12px;
     margin: 8px 2px 8px 2px;
     border-radius: 6px;
 }
 QScrollBar::handle:vertical {
-    background: #25364d;
+    background: {{color.canon.lineHi}};
     border-radius: 5px;
     min-height: 34px;
 }
 QScrollBar::add-line:vertical,
 QScrollBar::sub-line:vertical {
     height: 0px;
-}
-)";
-
-constexpr const char* kWaveformsInstallMenuStyle = R"(
-QMenu {
-    color: #c8d8e8;
-    background: #07101c;
-    border: 1px solid #26374e;
-}
-QMenu::item {
-    padding: 6px 28px 6px 14px;
-}
-QMenu::item:selected:enabled {
-    color: #e2edf7;
-    background: #17314a;
-}
-QMenu::item:disabled {
-    color: #596779;
 }
 )";
 
@@ -912,17 +914,32 @@ void showWaveformInstallResultDialog(QWidget* parent,
 } // namespace
 
 WaveformsDialog::WaveformsDialog(RadioModel* model, QWidget* parent)
-    : PersistentDialog(tr("Waveforms"), QStringLiteral("WaveformsDialogGeometry"), parent)
+    : CanonWindow(tr("Waveforms"), parent)
     , m_radioModel(model)
 {
     theme::setContainer(this, QStringLiteral("dialog/waveforms"));
-    setMinimumSize(900, 620);
+    setMinimumSize(900, 660);
+    resize(980, 720);
+    // A tool window that holds lists: keep it resizable from every edge, as
+    // the frameless main window is (CanonWindow itself only moves).
+    FramelessResizer::install(this);
     bodyWidget()->setObjectName(QStringLiteral("waveformsBody"));
-    bodyWidget()->setStyleSheet(QString::fromLatin1(kWaveformsDialogStyle));
+    ThemeManager::instance().applyStyleSheet(bodyWidget(), kWaveformsDialogStyle);
 
     auto* root = new QVBoxLayout(bodyWidget());
-    root->setSpacing(10);
-    root->setContentsMargins(12, 10, 12, 12);
+    root->setSpacing(12);
+    root->setContentsMargins(22, 18, 22, 20);
+
+    // Canon header in place of a title bar: the title in ink over a hairline.
+    // The right margin keeps it clear of CanonWindow's corner close button.
+    auto* windowTitleLabel = new QLabel(tr("Waveforms"), bodyWidget());
+    windowTitleLabel->setObjectName(QStringLiteral("WaveformsWindowTitle"));
+    windowTitleLabel->setAccessibleName(tr("Waveforms"));
+    windowTitleLabel->setContentsMargins(0, 0, 40, 0);
+    root->addWidget(windowTitleLabel);
+    auto* headerRule = new QFrame(bodyWidget());
+    headerRule->setObjectName(QStringLiteral("WaveformsHeaderRule"));
+    root->addWidget(headerRule);
 
     // Radio and WFP capability/status strip.
     auto* statusFrame = makePanel(QStringLiteral("WaveformsStatusFrame"), bodyWidget());
@@ -1367,7 +1384,11 @@ WaveformsDialog::WaveformsDialog(RadioModel* model, QWidget* parent)
     m_installBtn->setFixedWidth(104);
     m_installBtn->setEnabled(false);  // updated after installer state is known
     auto* installMenu = new QMenu(m_installBtn);
-    installMenu->setStyleSheet(QString::fromLatin1(kWaveformsInstallMenuStyle));
+    // The title bar's rounded menu, as every menu in the canon; disabled
+    // items (a blocked Docker install) take canon.muted.
+    ThemeManager::instance().applyStyleSheet(installMenu,
+        kRoundedMenuRules + QStringLiteral("QMenu::item:disabled { color: {{color.canon.muted}}; }"));
+    roundMenuTree(installMenu);
     // updateInstallButtonState() puts dockerInstallBlockerText()'s per-blocker
     // reason on the Docker entry's tooltip when it greys the entry out, and
     // that string has no other outlet in the UI.  Qt drops per-action tooltips
