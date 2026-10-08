@@ -1,0 +1,248 @@
+name: Docs
+
+# Builds the user documentation site (docs/user, Docusaurus) and, on main,
+# deploys it to Cloudflare Pages at https://docs.aethersdr.com.
+#
+# It also typesets the printable PDF manual (tools/docs/build_pdf.py: Pandoc
+# + Typst). On a pull request the PDF is a render check and a downloadable
+# artifact; on main it is deployed with the site as
+# https://docs.aethersdr.com/AetherSDR-Manual.pdf; and when a release is
+# published it is attached to that release as AetherSDR-Manual-<tag>.pdf,
+# with a detached signature (.pdf.asc) made with the release key.
+#
+# The build is the link check: docusaurus.config.js sets onBrokenLinks,
+# onBrokenAnchors and onBrokenMarkdownLinks to 'throw', so a page that links
+# to a missing page or heading fails this workflow.
+#
+# This is NOT a required status check, which is what makes the `paths:`
+# filter safe here. A required check that a PR never triggers blocks that PR
+# forever (see the note in static-checks.yml); keep the filter only while
+# this workflow stays out of branch protection.
+
+on:
+  pull_request:
+    paths:
+      - 'docs/user/**'
+      - 'tools/docs/**'
+      - '.github/workflows/docs.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'docs/user/**'
+      - 'tools/docs/**'
+      - '.github/workflows/docs.yml'
+  workflow_dispatch:
+  release:
+    types: [published]
+
+# Superseded PR runs are cancelled; every main run completes so a deploy is
+# never cut off half-way (same expression as ci.yml / static-checks.yml).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}${{ github.ref == 'refs/heads/main' && format('-{0}', github.run_id) || '' }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+# Pinned PDF toolchain, installed from the upstream release archives and
+# checked against these SHA-256 sums (the digests GitHub records for the
+# release assets). Bump version and checksum together.
+env:
+  PANDOC_VERSION: '3.12.1'
+  PANDOC_SHA256: 'd0c90410e90204c9ca83b8539fac5c7aed01fd537207e4585849f8abc5df20b8'  # pandoc-3.12.1-linux-amd64.tar.gz
+  TYPST_VERSION: '0.15.1'
+  TYPST_SHA256: 'a6d077d0a95eed5a2eba715b2dae06be954f624ccbf85758a03f389ded33118c'  # typst-x86_64-unknown-linux-musl.tar.xz
+
+jobs:
+  build:
+    name: Build docs site
+    if: ${{ github.event_name != 'release' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      # Mapped from the secret so steps can be gated on its presence: the
+      # `secrets` context is not available in step `if:` conditions.
+      CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+    defaults:
+      run:
+        working-directory: docs/user
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: docs/user/package-lock.json
+
+      - name: Docs tools compile
+        working-directory: .
+        run: python3 -m py_compile tools/docs/*.py
+
+      - name: Log Analyzer rules
+        working-directory: .
+        run: node tools/docs/test_log_rules.mjs
+
+      - name: Generated reference pages are current
+        working-directory: .
+        run: python3 tools/docs/gen_reference.py --check
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build (fails on any broken link or anchor)
+        run: npm run build
+
+      - name: Install Pandoc and Typst
+        working-directory: ${{ runner.temp }}
+        run: |
+          set -euo pipefail
+          curl -fsSLo pandoc.tar.gz "https://github.com/jgm/pandoc/releases/download/${PANDOC_VERSION}/pandoc-${PANDOC_VERSION}-linux-amd64.tar.gz"
+          curl -fsSLo typst.tar.xz "https://github.com/typst/typst/releases/download/v${TYPST_VERSION}/typst-x86_64-unknown-linux-musl.tar.xz"
+          echo "${PANDOC_SHA256}  pandoc.tar.gz" | sha256sum -c -
+          echo "${TYPST_SHA256}  typst.tar.xz" | sha256sum -c -
+          mkdir -p bin
+          tar -xzf pandoc.tar.gz --strip-components=2 -C bin "pandoc-${PANDOC_VERSION}/bin/pandoc"
+          tar -xJf typst.tar.xz --strip-components=1 -C bin typst-x86_64-unknown-linux-musl/typst
+          echo "$PWD/bin" >> "$GITHUB_PATH"
+          bin/pandoc --version | head -1
+          bin/typst --version
+
+      # After the site build, which empties build/: the PDF lands in the
+      # site's root and is deployed with it on main.
+      - name: Build PDF manual
+        working-directory: .
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          if [ -n "$PR_NUMBER" ]; then
+            version="PR #${PR_NUMBER} @ ${HEAD_SHA::9}"
+          else
+            version="${GITHUB_REF_NAME} @ ${HEAD_SHA::9}"
+          fi
+          python3 tools/docs/build_pdf.py --version "$version" \
+            --output docs/user/build/AetherSDR-Manual.pdf
+
+      - name: Upload PDF manual
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: AetherSDR-Manual
+          path: docs/user/build/AetherSDR-Manual.pdf
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Check deploy configuration
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && env.CF_TOKEN == '' }}
+        run: |
+          echo "::notice::CLOUDFLARE_API_TOKEN not set — skipping deploy."
+          echo "Add CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID repo secrets to enable it."
+
+      # First run creates the project; later runs no-op (hence continue-on-error).
+      - name: Ensure Pages project exists
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && env.CF_TOKEN != '' }}
+        continue-on-error: true
+        uses: cloudflare/wrangler-action@953926a2e2182532811c01a25e53647d93bf07c0 # v4.1.3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages project create aethersdr-docs --production-branch main
+
+      - name: Deploy to Cloudflare Pages
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && env.CF_TOKEN != '' }}
+        uses: cloudflare/wrangler-action@953926a2e2182532811c01a25e53647d93bf07c0 # v4.1.3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy docs/user/build --project-name=aethersdr-docs --branch=main --commit-dirty=true
+
+  # A published release gets the manual for its tag. Only this job can write
+  # to the repository (release assets); the site build above cannot.
+  release-pdf:
+    name: Attach PDF manual to release
+    if: ${{ github.event_name == 'release' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ github.event.release.tag_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Check the tag has the docs
+        id: docs
+        run: |
+          if [ -f tools/docs/build_pdf.py ] && [ -f docs/user/sidebars.js ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::$TAG has no docs/user site or tools/docs/build_pdf.py; no PDF manual to attach."
+          fi
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: ${{ steps.docs.outputs.present == 'true' }}
+        with:
+          node-version: 24
+
+      - name: Install Pandoc and Typst
+        if: ${{ steps.docs.outputs.present == 'true' }}
+        working-directory: ${{ runner.temp }}
+        run: |
+          set -euo pipefail
+          curl -fsSLo pandoc.tar.gz "https://github.com/jgm/pandoc/releases/download/${PANDOC_VERSION}/pandoc-${PANDOC_VERSION}-linux-amd64.tar.gz"
+          curl -fsSLo typst.tar.xz "https://github.com/typst/typst/releases/download/v${TYPST_VERSION}/typst-x86_64-unknown-linux-musl.tar.xz"
+          echo "${PANDOC_SHA256}  pandoc.tar.gz" | sha256sum -c -
+          echo "${TYPST_SHA256}  typst.tar.xz" | sha256sum -c -
+          mkdir -p bin
+          tar -xzf pandoc.tar.gz --strip-components=2 -C bin "pandoc-${PANDOC_VERSION}/bin/pandoc"
+          tar -xJf typst.tar.xz --strip-components=1 -C bin typst-x86_64-unknown-linux-musl/typst
+          echo "$PWD/bin" >> "$GITHUB_PATH"
+          bin/pandoc --version | head -1
+          bin/typst --version
+
+      - name: Build PDF manual
+        if: ${{ steps.docs.outputs.present == 'true' }}
+        run: |
+          python3 tools/docs/build_pdf.py --version "$TAG" \
+            --output "${RUNNER_TEMP}/AetherSDR-Manual-${TAG}.pdf"
+
+      # Signed with the release key, as sign-release.yml signs the binaries.
+      # The PDF is not in SHA256SUMS.txt; its .asc is its own check.
+      - name: Import GPG key
+        if: ${{ steps.docs.outputs.present == 'true' }}
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          echo "$GPG_PRIVATE_KEY" | gpg --batch --import
+          KEY_FP=$(gpg --list-secret-keys --with-colons | grep fpr | head -1 | cut -d: -f10)
+          echo "${KEY_FP}:6:" | gpg --import-ownertrust
+
+      - name: Sign PDF manual (detached .asc)
+        if: ${{ steps.docs.outputs.present == 'true' }}
+        env:
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        working-directory: ${{ runner.temp }}
+        run: |
+          gpg --batch --yes --pinentry-mode loopback \
+            --passphrase "$GPG_PASSPHRASE" \
+            --detach-sign --armor "AetherSDR-Manual-${TAG}.pdf"
+          echo "Signed: AetherSDR-Manual-${TAG}.pdf -> AetherSDR-Manual-${TAG}.pdf.asc"
+
+      - name: Verify the signature
+        if: ${{ steps.docs.outputs.present == 'true' }}
+        working-directory: ${{ runner.temp }}
+        run: gpg --batch --verify "AetherSDR-Manual-${TAG}.pdf.asc" "AetherSDR-Manual-${TAG}.pdf"
+
+      # One upload, so the PDF and its signature carry the same timestamp.
+      - name: Upload to the release
+        if: ${{ steps.docs.outputs.present == 'true' }}
+        run: |
+          gh release upload "$TAG" \
+            "${RUNNER_TEMP}/AetherSDR-Manual-${TAG}.pdf" \
+            "${RUNNER_TEMP}/AetherSDR-Manual-${TAG}.pdf.asc" \
+            --clobber --repo "$GITHUB_REPOSITORY"

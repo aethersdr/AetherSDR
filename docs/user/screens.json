@@ -1,0 +1,221 @@
+{
+  "description": "Scripted documentation screenshots. Regenerate with: python3 tools/docs/capture_screenshots.py --build-dir build-docs (see the script's docstring). Every shot runs against the built-in DEMO simulator (serial DEMO-0001) in a fresh settings profile with the default dark theme. Steps are raw automation-bridge requests (docs/automation-bridge.md) plus a few script helpers: click_text, wait_visible, wait_floors, close_windows, sleep.",
+  "hostname": "aethersdr-demo",
+  "settle": 0.8,
+  "setup": [
+    {"wait_slice": true, "timeout": 30},
+    {"cmd": "invoke", "target": "Default Dark", "action": "trigger", "_allow_fail": true},
+    {"cmd": "resize", "value": "1600 1000"},
+    {"cmd": "station", "value": "AetherSDR", "_allow_fail": true},
+    {"cmd": "tune", "value": "14.100"},
+    {"cmd": "slice", "action": "mode", "value": "USB"},
+    {"wait_floors": true, "timeout": 30},
+    {"sleep": 30}
+  ],
+  "before_each": [
+    {"close_windows": true},
+    {"cmd": "tune", "value": "14.100"},
+    {"cmd": "slice", "action": "mode", "value": "USB"}
+  ],
+  "shots": [
+    {
+      "id": "main-window",
+      "page": "first-connection",
+      "quantize": true,
+      "grab": {"target": "MainWindow"},
+      "caption": "The AetherSDR main window connected to the demo simulator: title bar along the top, panadapter and waterfall on the left, applet panel on the right, status bar along the bottom.",
+      "alt": "AetherSDR main window in the default dark theme. The title bar shows a tab for the demo radio labelled Simulator (not on the air). The panadapter shows a green spectrum trace around 14.100 MHz with the slice A VFO flag at 14.100.000 USB, and the waterfall below it scrolls in blue. The right-hand applet panel shows the S-Meter, RX Controls, Demo Noise and TX Controls applets."
+    },
+    {
+      "id": "panadapter",
+      "page": "panadapter-controls",
+      "quantize": true,
+      "grab": {"target": "pan-visible", "selector": "0"},
+      "caption": "A panadapter with its waterfall, the slice A VFO flag and the overlay menu down the left edge.",
+      "alt": "Panadapter centred near 14.100 MHz. A green spectrum trace with a dBm scale on the right, a frequency scale from 14.096 to 14.103 MHz, band-plan segments along the bottom of the spectrum, and a blue waterfall below with a time scale in seconds. The slice A VFO flag reads 14.100.000 USB and the overlay buttons on the left read +RX, Band, ANT, Display and Memory."
+    },
+    {
+      "id": "vfo-flag",
+      "page": "vfo-widget",
+      "grab": {"target": "pan-visible", "selector": "0"},
+      "crop": {"frame": "PanadapterApplet", "union": ["VfoFlagShadow"], "pad": 0},
+      "caption": "The VFO flag for slice A, with its close, lock and record buttons on the left edge.",
+      "alt": "VFO flag for slice A on the panadapter. The top row shows the RX antenna ANT1, the TX antenna ANT1, the filter width 2.8K, SPLIT, TX and the slice letter A. The large frequency readout reads 14.100.000, above a signal meter. The bottom row has audio, DSP, USB and X/RIT tabs. A column of small close, lock, record and play buttons sits to the left of the flag."
+    },
+    {
+      "id": "display-panel",
+      "page": "panadapter-controls",
+      "section": "Display panel",
+      "steps": [
+        {"cmd": "invoke", "target": "pan 0/panMenuDisplayBtn", "action": "click"},
+        {"wait_visible": "displayPanel"}
+      ],
+      "grab": {"target": "pan-visible", "selector": "0"},
+      "crop": {"frame": "PanadapterApplet", "union": ["SpectrumOverlayMenu", "displayPanel"], "pad": 6},
+      "cleanup": [
+        {"cmd": "invoke", "target": "pan 0/panMenuDisplayBtn", "action": "click", "_allow_fail": true}
+      ],
+      "caption": "The Display panel, opened from the Display button on the panadapter overlay menu.",
+      "alt": "The Display panel open over the left edge of the panadapter. It lists spectrum settings (heat map, grid, weighted average, FFT averaging, FPS, line and fill colours, noise floor), waterfall settings (blanker, auto black, colour gain, rate), background image, grid spacing, scale text and colour scheme, the render mode and 3D settings, the renderer, and buttons to clone display settings to all panadapters or reset them."
+    },
+    {
+      "id": "rx-applet",
+      "page": "rx-controls",
+      "grab": {"target": "RX"},
+      "caption": "The RX Controls applet for the active slice.",
+      "alt": "RX Controls applet. It shows the slice letter A with a lock button, RX antenna ANT1 and TX antenna ANT1, filter width 2.8K, a TX button, the mode selector set to USB and the frequency 14.100.000. Below are the tuning step selector set to 100, filter preset buttons from 1.8K to 3.3K with 2.7K selected, a filter passband graphic from 100 to 2900 Hz, and sliders for AF gain, pan, squelch and AGC with AGC set to Med, plus RIT and XIT offsets."
+    },
+    {
+      "id": "tx-applet",
+      "page": "tx-controls",
+      "grab": {"target": "TX"},
+      "caption": "The TX Controls applet.",
+      "alt": "TX Controls applet. An RF power meter scaled 0 to 120 and an SWR meter scaled 1 to 3 sit above the RF Power slider at 100 and the Tune Power slider at 10. Below are a TX profile selector, Success, Byp and Mem ATU indicators, and the TUNE, MOX, ATU and MEM buttons."
+    },
+    {
+      "id": "demo-noise-applet",
+      "page": "demo-mode",
+      "grab": {"target": "DEMO"},
+      "caption": "The Demo Noise applet, shown only while connected to the demo simulator.",
+      "alt": "Demo Noise applet. Preset buttons birdie-hell, cw-in-noise, night-40m, noisy-qth, quiet-20m and storm sit above a list of noise sources, each with a toggle and level slider: CW tone, Voice (speech), White / AWGN, Pink / hiss, QRN crackle, Power-line, Static crash, Birdie carrier, SMPS hash and Woodpecker. A Fault Injection row below has High SWR, Drop Slice, Stall Scope, Disconnect, Malformed and Clear buttons."
+    },
+    {
+      "id": "connect-dialog",
+      "page": "first-connection",
+      "section": "Setup",
+      "steps": [
+        {"cmd": "connect", "action": "show"},
+        {"wait_visible": "connectionPanel"}
+      ],
+      "grab": {"target": "connectionPanel"},
+      "cleanup": [{"cmd": "connect", "action": "hide", "_allow_fail": true}],
+      "caption": "The Connect to Radio window with the AetherSDR demo simulator listed under On This Network.",
+      "alt": "Connect to Radio window. Three cards across the top read On This Network, Remote with SmartLink and Connect by IP, with On This Network selected. The Available radios list has one highlighted entry: AetherSDR Demo, Simulator (not on the air), DEMO, ready on your local network at 127.0.0.1. Below are a Connect Selected Radio button and checkboxes for the adaptive frame-rate throttle, connecting to the last radio on start-up, waking an Icom on connect and showing the AetherSDR demo simulator, with a Disconnect button at the bottom."
+    },
+    {
+      "id": "radio-setup",
+      "page": "radio-setup",
+      "steps": [
+        {"cmd": "invoke", "target": "Radio Setup...", "action": "trigger"},
+        {"wait_visible": "RadioSetupDialog"}
+      ],
+      "settle": 1.5,
+      "grab": {"target": "RadioSetupDialog"},
+      "caption": "Radio Setup, open on the Radio page. The settings tree on the left groups the pages; the search box at the top finds any setting.",
+      "alt": "Radio Setup window. A search settings box spans the top. The left tree lists the sections RADIO (Radio, Network), RECEIVE & TRANSMIT (Audio, Transmit, Phone & CW, Receive) and CONTROLLERS & HARDWARE (Antennas, Transverters, USB Cables, Peripherals), with Radio selected. The Radio page on the right shows Radio Information (serial DEMO-0001, hardware version, options, a Reboot Radio button, region and Remote On) and Radio Identification (model AetherSDR Demo, callsign DEMO, nickname and station name)."
+    },
+    {
+      "id": "aetherrx",
+      "page": "dsp-noise-mitigation",
+      "steps": [
+        {"cmd": "invoke", "target": "AetherRX...", "action": "trigger"},
+        {"wait_visible": "AetherRxDialog"}
+      ],
+      "settle": 1.5,
+      "grab": {"target": "AetherRxDialog"},
+      "caption": "The AetherRX window: the receive processing chain on the left, the selected stage's settings on the right.",
+      "alt": "AetherRX window. The left column lists the receive chain stages AetherNR, Gate, EQ, Compressor, Tube, Exciter and Final Output, each with an enable box, with AetherNR selected, and REC, PLAY and BYPASS controls at the bottom. The right side shows the noise-reduction method tabs NR2, NR4, MNR, DFNR, RN2, BNR and NNR, gain method and noise estimation options, post-processing toggles and mask sliders, and a status line reading No method running."
+    },
+    {
+      "id": "aethertx",
+      "page": "aetherial-audio",
+      "steps": [
+        {"cmd": "invoke", "target": "AetherTX...", "action": "trigger"},
+        {"wait_visible": "AetherialAudioStrip"}
+      ],
+      "settle": 1.5,
+      "grab": {"target": "AetherialAudioStrip"},
+      "caption": "The AetherTX window: the transmit processing chain on the left, the selected stage's controls on the right.",
+      "alt": "AetherTX window. The left column lists the transmit chain stages Gate, EQ, De-esser, Compressor, Tube, Exciter, Reverb and Final Output, with Gate selected, and MIC and TX indicators, REC, PLAY and BYPASS at the bottom. The right side shows the gate's level graph with View and Mode buttons, and six knobs below it: Thresh, Return, Hold, Release, Floor and Ratio."
+    },
+    {
+      "id": "spothub",
+      "page": "spothub",
+      "steps": [
+        {"cmd": "invoke", "target": "SpotHub...", "action": "trigger"},
+        {"wait_visible": "DxClusterDialog"}
+      ],
+      "settle": 1.5,
+      "grab": {"target": "DxClusterDialog"},
+      "caption": "SpotHub, open on the Cluster tab. Each tab is one spot source.",
+      "alt": "SpotHub window with tabs Cluster, RBN, WSJT-X, SpotCollector, POTA, EiBi, N1MM, FreeDV and Spot List, with Cluster selected. The Connection group has Server, Port and Callsign fields, Auto-Connect and Startup Commands buttons, a Disconnected status and a Connect button. Below is an empty Cluster Console with a spot colour swatch, and a command field with Send and Clear buttons."
+    },
+    {
+      "id": "memory-dialog",
+      "page": "memory-channels",
+      "steps": [
+        {"cmd": "invoke", "target": "Memory...", "action": "trigger"},
+        {"wait_visible": "MemoryDialog"},
+        {"cmd": "tune", "value": "14.074"},
+        {"cmd": "invoke", "target": "MemoryDialog/Add", "action": "click", "_sleep": 1.0},
+        {"cmd": "tune", "value": "14.200"},
+        {"cmd": "invoke", "target": "MemoryDialog/Add", "action": "click", "_sleep": 1.0},
+        {"cmd": "slice", "action": "mode", "value": "CW"},
+        {"cmd": "tune", "value": "14.030"},
+        {"cmd": "invoke", "target": "MemoryDialog/Add", "action": "click", "_sleep": 1.0},
+        {"cmd": "invoke", "target": "MemoryDialog/QTableWidget", "action": "selectRow", "value": "0", "_sleep": 0.5}
+      ],
+      "settle": 1.5,
+      "grab": {"target": "MemoryDialog"},
+      "caption": "The Memory Channels window with three memories added from the demo slice.",
+      "alt": "Memory Channels window with a search box and a Group filter set to All Memories. The table has columns Group, Owner, Frequency, Name, Mode, Step, Offset Dir, Repeater Offset and Tone Mode and holds three memories owned by DEMO: 14.074000 USB (selected), 14.200000 USB and 14.030000 CW. A tip line explains how to tune and edit, and the buttons along the bottom are Add, Tune, Select All, Import, Export and Remove, with 1 of 3 selected."
+    },
+    {
+      "id": "keyboard-shortcuts",
+      "page": "keyboard-shortcuts",
+      "steps": [
+        {"cmd": "invoke", "target": "Configure Shortcuts...", "action": "trigger"},
+        {"wait_visible": "ShortcutDialog"}
+      ],
+      "settle": 1.5,
+      "grab": {"target": "ShortcutDialog"},
+      "caption": "The keyboard shortcuts editor. Bound keys are coloured by category on the keyboard map; the table below lists every action.",
+      "alt": "Keyboard shortcuts editor. A full keyboard map fills the top half, with bound keys coloured by category, for example T for MOX toggle and Space for PTT in red, G for go to frequency in blue, and the arrow keys for tuning and AF gain. A colour legend lists the categories. Below are Key and Action fields with Clear and Reset to Default buttons, a filter box and category selector, and a table of actions with their category, current key and default key, starting with Tune Up (1 step) on Right."
+    },
+    {
+      "id": "title-bar",
+      "page": "menu-reference",
+      "grab": {"target": "MainWindow"},
+      "crop": {"box": [0, 0, 0, 52]},
+      "caption": "The title bar: the menu button, radio tabs, PC Audio and volume controls, panel layout buttons and window controls.",
+      "alt": "The AetherSDR title bar. From left: the menu button, the AetherSDR logo, a radio tab for the demo reading Simulator (not on the air), AetherSDR Demo, connected, DEMO, and a plus button to add a radio. On the right: a PC Audio button, a speaker icon and volume slider at 100, a headphone icon and slider at 50, three panel layout buttons, and minimise, maximise and close buttons."
+    },
+    {
+      "id": "cat-applet",
+      "page": "cat-control",
+      "steps": [
+        {"click_text": "▼", "scope": "appletPanel", "optional": true},
+        {"click_text": "CAT", "scope": "appletPanel", "checked": true},
+        {"wait_visible": "CatControlApplet"},
+        {"cmd": "invoke", "target": "CAT/containerFloatToggle", "action": "click", "_sleep": 1.0},
+        {"wait_visible": "CatControlApplet"}
+      ],
+      "settle": 1.5,
+      "grab": {"target": "CAT"},
+      "cleanup": [
+        {"cmd": "invoke", "target": "CAT/containerFloatToggle", "action": "click", "_allow_fail": true, "_sleep": 1.0},
+        {"click_text": "CAT", "scope": "appletPanel", "checked": false, "optional": true},
+        {"click_text": "▲", "scope": "appletPanel", "optional": true}
+      ],
+      "caption": "The CAT Control applet popped out of the applet panel, showing the full channel table.",
+      "alt": "CAT Control applet in its own window. A Disabled button at the top with the hint Enable before configuring ports. Below is a table of CAT channels with the columns Enabled, Port, Dialect, VFO A, VFO B, PTY and Clients: the first row is port 4532 using the Rigctld dialect, the second is port 5001 using the Flex dialect, and the remaining rows are unassigned Flex channels."
+    },
+    {
+      "id": "tci-applet",
+      "page": "tci-server",
+      "steps": [
+        {"click_text": "▼", "scope": "appletPanel", "optional": true},
+        {"click_text": "TCI", "scope": "appletPanel", "checked": true},
+        {"wait_visible": "TciApplet"}
+      ],
+      "settle": 1.0,
+      "grab": {"target": "TCI"},
+      "cleanup": [
+        {"click_text": "TCI", "scope": "appletPanel", "checked": false, "optional": true},
+        {"click_text": "▲", "scope": "appletPanel", "optional": true}
+      ],
+      "caption": "The TCI Server applet in the applet panel.",
+      "alt": "TCI Server applet. RX1 and TX level bars sit above the port field set to 50001, marked stopped, and a Disabled button that starts the server."
+    }
+  ]
+}

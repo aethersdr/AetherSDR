@@ -72,6 +72,10 @@ When helping with AetherSDR:
   the visual canon in
   [`docs/style/aethersdr-style-guide.md`](docs/style/aethersdr-style-guide.md);
   apply it only to UI your issue already changes.
+- **User documentation lives in `docs/user/docs/`** (Docusaurus,
+  docs.aethersdr.com; [`docs/user/README.md`](docs/user/README.md)) and follows
+  its Docs Style Guide. A PR that changes user-visible behaviour updates the
+  matching page in the same PR. The rest of `docs/` is for contributors.
 - **Read `CONTRIBUTING.md`** for contribution policy (what we accept, who
   reviews what) and `docs/DEVELOPER-GUIDE.md` for the contributor-facing
   coding conventions and the AI-to-AI debugging protocol (open a GitHub issue

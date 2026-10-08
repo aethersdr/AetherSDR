@@ -712,3 +712,17 @@ All modules are permissive and GPLv3-compatible; none ships a NOTICE file.
   github.com/tailscale/go-winio                    v0.0.0-20231025203758-c4f33415bf55 MIT
   golang.zx2c4.com/wintun                          v0.0.0-20230126152724-0fa3db229ce2 MIT
   golang.zx2c4.com/wireguard/windows               v1.0.1                             MIT
+
+
+28. Noto Sans Symbols 2 — PDF manual font (vendored, documentation build only)
+-------------------------------------------------------------------------------
+tools/docs/pdf/fonts/NotoSansSymbols2-Regular.ttf is used by
+tools/docs/build_pdf.py when it typesets the printable user manual, for the
+UI symbols the docs quote (such as the menu and close icons) that the
+manual's body fonts lack. It is embedded in the generated PDF and is never
+linked into or shipped with AetherSDR itself. The full license text is in
+tools/docs/pdf/fonts/OFL.txt.
+
+  Copyright: Copyright 2022 The Noto Project Authors
+  License:   SIL Open Font License, Version 1.1
+  Source:    https://github.com/notofonts/symbols

@@ -1,0 +1,2 @@
+# Root .gitignore ignores *.log; these are test fixtures for tools/docs/test_log_rules.mjs.
+!*.log

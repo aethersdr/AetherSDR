@@ -1,0 +1,110 @@
+/*
+ * AetherSDR docs theme: the www.aethersdr.com palette mapped onto Infima.
+ *
+ * Website tokens (aetherweb styles.css):
+ *   bg #060b13 · ink #eaf2fb · ink-soft #c4d4e8 · muted #8598b4
+ *   cyan #5de3ff · cyan-deep #3aa7ff · teal #7bf2dc
+ *   gradient 100deg #3aa7ff -> #5de3ff -> #8ef7e6
+ *
+ * Dark mode is the default and uses the brand colours directly. Light mode
+ * keeps the same hue but a deeper primary, because brand cyan on white is
+ * well under WCAG AA. Contrast (text on background):
+ *   dark:  ink 17.5:1, ink-soft 13.1:1, muted 6.7:1, cyan links 13.1:1
+ *   light: primary #0a6aa8 on #ffffff 5.8:1, on #f4f8fc 5.4:1;
+ *          body #0b1622 18.2:1; secondary #3d4f66 8.4:1
+ */
+
+:root {
+  --aether-bg: #060b13;
+  --aether-ink: #eaf2fb;
+  --aether-ink-soft: #c4d4e8;
+  --aether-muted: #8598b4;
+  --aether-cyan: #5de3ff;
+  --aether-cyan-deep: #3aa7ff;
+  --aether-teal: #7bf2dc;
+  --aether-gradient: linear-gradient(100deg, #3aa7ff 0%, #5de3ff 50%, #8ef7e6 100%);
+
+  /* Light mode */
+  --ifm-color-primary: #0a6aa8;
+  --ifm-color-primary-dark: #095f97;
+  --ifm-color-primary-darker: #08598f;
+  --ifm-color-primary-darkest: #074a76;
+  --ifm-color-primary-light: #0b75b9;
+  --ifm-color-primary-lighter: #0c7bc1;
+  --ifm-color-primary-lightest: #0d8bda;
+  --ifm-background-color: #ffffff;
+  --ifm-background-surface-color: #f4f8fc;
+  --ifm-font-color-base: #0b1622;
+  --ifm-font-color-secondary: #3d4f66;
+  --ifm-heading-color: #0b1622;
+  --ifm-link-color: var(--ifm-color-primary);
+  --ifm-code-font-size: 92%;
+  --ifm-navbar-background-color: #ffffff;
+  --ifm-toc-border-color: #dbe4ee;
+  --docusaurus-highlighted-code-line-bg: rgba(10, 106, 168, 0.12);
+}
+
+[data-theme='dark'] {
+  --ifm-color-primary: #5de3ff;
+  --ifm-color-primary-dark: #3ddeff;
+  --ifm-color-primary-darker: #2ddcff;
+  --ifm-color-primary-darkest: #00cbf5;
+  --ifm-color-primary-light: #7de8ff;
+  --ifm-color-primary-lighter: #8deaff;
+  --ifm-color-primary-lightest: #bdf4ff;
+  --ifm-background-color: var(--aether-bg);
+  --ifm-background-surface-color: #0c1520;
+  --ifm-font-color-base: var(--aether-ink);
+  --ifm-font-color-secondary: var(--aether-ink-soft);
+  --ifm-heading-color: var(--aether-ink);
+  --ifm-color-emphasis-600: var(--aether-muted);
+  --ifm-link-color: var(--aether-cyan);
+  --ifm-navbar-background-color: rgba(6, 11, 19, 0.92);
+  --ifm-footer-background-color: #04080e;
+  --ifm-toc-border-color: #1a2636;
+  --ifm-hr-background-color: #1a2636;
+  --ifm-table-stripe-background: rgba(93, 227, 255, 0.04);
+  --ifm-code-background: #0f1b2a;
+  --docusaurus-highlighted-code-line-bg: rgba(93, 227, 255, 0.12);
+}
+
+/* The website's signature gradient as a hairline under the navbar. */
+.navbar {
+  border-bottom: 1px solid transparent;
+  border-image: var(--aether-gradient) 1;
+}
+
+[data-theme='dark'] .navbar__title {
+  background: var(--aether-gradient);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+[data-theme='dark'] .footer--dark {
+  --ifm-footer-background-color: #04080e;
+  --ifm-footer-link-color: var(--aether-ink-soft);
+  --ifm-footer-title-color: var(--aether-ink);
+  --ifm-footer-color: var(--aether-muted);
+}
+
+/*
+ * Info admonitions carry the converted wiki status banner
+ * (:::info[Status]); give them the brand accent in both modes.
+ */
+.theme-admonition-info {
+  --ifm-alert-border-color: var(--aether-cyan-deep);
+  border-left-width: 5px;
+}
+
+[data-theme='dark'] .theme-admonition-info {
+  --ifm-alert-background-color: rgba(58, 167, 255, 0.10);
+  --ifm-alert-foreground-color: var(--aether-ink);
+  --ifm-alert-border-color: var(--aether-cyan);
+}
+
+[data-theme='light'] .theme-admonition-info {
+  --ifm-alert-background-color: #eaf4fc;
+  --ifm-alert-foreground-color: #0b1622;
+  --ifm-alert-border-color: #0a6aa8;
+}
