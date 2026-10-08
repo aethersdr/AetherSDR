@@ -177,7 +177,7 @@ Additional cache values accept a value rather than ON/OFF:
 | Setting | Default | Values and purpose |
 |---|---|---|
 | `AETHERSDR_SANITIZER` | `none` | `none`, `address`, `undefined`, `address,undefined`, or `thread`. Instruments the main CMake tree with a GNU-driver GCC/Clang build; MSVC and clang-cl are rejected, and so is combining `address` with `thread`. Adds `-g3 -fno-omit-frame-pointer` to every configuration, Release included. ExternalProject children need separate sanitizer flags. |
-| `DEEPFIST_MODEL_BASE_URL` | N9BC's `exp27_bt-champion` release | Versioned HTTPS directory holding the exact DeepFist model assets. The LICENSE asset carries its own pinned source. See [the DeepFist guide](docs/deepfist-cw-backend.md). |
+| `DEEPFIST_MODEL_BASE_URL` | Empty (N9BC's `exp27_bt-champion` release) | Replaces the HTTPS directory holding the exact DeepFist model assets; empty uses the published release. The LICENSE asset carries its own pinned source. See [the DeepFist guide](docs/deepfist-cw-backend.md). |
 | `RADE_TAP_DIR` | `<build-directory>/rade_taps` | Directory for RADE WAV diagnostics; available when RADE and its taps are enabled. |
 | `AETHER_TEST_FFTW_TIMELIMIT` | `0.001` | Seconds FFTW may spend measuring each plan under test; an empty value allows unbounded measurement. |
 | `AETHER_SANITIZER_TIMEOUT_SCALE` | `4` | Positive integer. Multiplier applied to every test `TIMEOUT` when the build is sanitizer-instrumented (`AETHERSDR_SANITIZER` set, or `-fsanitize=` in the global C/C++ flags or in any configuration's `CMAKE_<LANG>_FLAGS_<CONFIG>`). An uninstrumented build keeps every limit exactly as written. |

@@ -36,7 +36,6 @@ public:
     void reset() override;
     void feedFixed24(const DecoderPcmBlock& block) override;
     bool isRunning() const override { return m_started; }
-    float estimatedPitch() const override { return m_pitch.load(); }
     QString status() const override { return m_status; }
     QString detail() const override { return m_detail; }
     bool preparing() const override { return m_preparing; }
@@ -68,7 +67,6 @@ private:
     std::atomic<bool> m_loaded{false};
     std::atomic<bool> m_workerRun{false};
     std::atomic<bool> m_resetRequested{false};
-    std::atomic<float> m_pitch{0.0f};
     QThread* m_worker{nullptr};
 
     // Mono float32 @24 kHz handoff ring, capped at kRingCapacity samples.

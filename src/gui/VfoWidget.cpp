@@ -6188,10 +6188,10 @@ void VfoWidget::rebuildFilterButtons()
 void VfoWidget::refreshCwDecoderControls()
 {
     if (!m_zeroBeatBtn) { return; }
-    const bool selected = CwDecodeSettings::deepFistSelected();
+    const bool selected = CwDecodeSettings::neuralSelected();
     m_zeroBeatBtn->setEnabled(!selected);
     const QString reason = selected
-        ? tr("DeepFist does not provide a pitch estimate for Zero Beat") : QString{};
+        ? tr("Zero Beat needs ggmorse's pitch estimate; the neural CW decoders provide none") : QString{};
     m_zeroBeatBtn->setToolTip(reason);
     m_zeroBeatBtn->setAccessibleDescription(reason);
 }

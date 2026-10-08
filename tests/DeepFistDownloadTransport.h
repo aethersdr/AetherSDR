@@ -59,11 +59,13 @@ private:
 class DeepFistTestNetwork final : public QNetworkAccessManager {
 public:
     QHash<QString, DeepFistReplySpec> files;
+    QStringList urls;
     int requests = 0;
 protected:
     QNetworkReply* createRequest(Operation, const QNetworkRequest& request, QIODevice*) override
     {
         ++requests;
+        urls.append(request.url().toString());
         const QString name = request.url().fileName();
         return new DeepFistTestReply(request, files.value(name, {{}, 404, QNetworkReply::ContentNotFoundError}), this);
     }

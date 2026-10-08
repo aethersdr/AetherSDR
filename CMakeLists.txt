@@ -3018,9 +3018,14 @@ target_sources(aethercore PRIVATE src/models/CwRxModel.cpp src/models/CwRxModel.
 # (Apple Silicon, Linux, Windows; the pinned runtime has no Intel-macOS build).
 # Their models are never shipped: each downloads on first use from its upstream
 # release at a pinned size and SHA-256.
-set(DEEPFIST_MODEL_BASE_URL "https://github.com/n9bc/DeepFist/releases/download/exp27_bt-champion/"
-    CACHE STRING "Published, versioned HTTPS DeepFist asset directory")
-target_compile_definitions(aethercore PRIVATE DEEPFIST_MODEL_BASE_URL="${DEEPFIST_MODEL_BASE_URL}")
+# Empty selects the published release; a value replaces it. Not a cache default,
+# so build directories configured before the release keep downloading.
+set(DEEPFIST_MODEL_BASE_URL "" CACHE STRING "DeepFist asset directory override (empty = the published release)")
+set(_deepfist_model_url "https://github.com/n9bc/DeepFist/releases/download/exp27_bt-champion/")
+if(DEEPFIST_MODEL_BASE_URL)
+    set(_deepfist_model_url "${DEEPFIST_MODEL_BASE_URL}")
+endif()
+target_compile_definitions(aethercore PRIVATE DEEPFIST_MODEL_BASE_URL="${_deepfist_model_url}")
 
 if(ORT_FOUND)
     target_compile_definitions(aethercore PUBLIC HAVE_ONNX)

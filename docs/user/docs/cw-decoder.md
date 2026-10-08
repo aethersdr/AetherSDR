@@ -58,8 +58,8 @@ With a neural decoder selected:
 
 - **Sens**, the lock buttons and the Pitch and WPM ranges are unavailable; they apply to ggmorse only.
 - Characters are coloured by the model's own confidence, on the same green-to-red scale, and are never hidden.
-- Callsign contact cards come from ggmorse only.
-- **Zero Beat** is unavailable with DeepFist, which reports no pitch.
+- Callsign contact cards and the MQTT text stream come from ggmorse only.
+- AetherSDR's **Zero Beat** button is unavailable; it needs ggmorse's pitch estimate. A FlexRadio's own **Autotune** (on radios with SmartSDR+) works with any decoder.
 
 The neural decoders are not available on Intel Macs; there the selector does not appear and ggmorse decodes as before.
 
@@ -90,7 +90,7 @@ When the decoder copies a station identifying itself (`DE <call>`), and QRZ.com 
 
 ### MQTT
 
-Decoded text is published to the MQTT topic `aethersdr/cw/decode`, one JSON message per character, with `"rx": false` marking text from the TX decoder. See [MQTT Station Automation](./mqtt-station-automation.md).
+Decoded text is published to the MQTT topic `aethersdr/cw/decode`, one JSON message per character, with `"rx": false` marking text from the TX decoder. Received text is published only while ggmorse is the selected decoder. See [MQTT Station Automation](./mqtt-station-automation.md).
 
 ### Tips for best results
 
