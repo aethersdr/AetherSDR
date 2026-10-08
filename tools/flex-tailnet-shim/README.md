@@ -138,3 +138,12 @@ Mozilla roots are compiled in. It is about 8 MB compressed.
 - Behaviour with two simultaneous AetherSDR clients, which uses both of the
   radio's GUI slots.
 - FLEX-8400 and Aurora have not been tested.
+
+## Vendored modules
+
+Every Go module the shim links is vendored in `vendor/` (RFC #6271 ruling D1),
+so the image builds from this tree with no module downloads; only the Go
+toolchain (≥ 1.27.1, Tailscale's minimum) is needed. Go requires the vendor
+tree beside `go.mod`, which is why it is here rather than under `third_party/`.
+To update a dependency: `go get <module>@<version> && go mod tidy && go mod vendor`,
+then refresh section 27 of `THIRD_PARTY_LICENSES`.

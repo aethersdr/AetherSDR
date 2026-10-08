@@ -8,9 +8,12 @@ go build -trimpath -ldflags='-s -w' -o flex-tailnet-shim .
 {
   echo "flex-tailnet-shim is part of AetherSDR and is licensed under the GNU GPL v3."
   echo "It includes the following third-party Go modules, under their own licenses."
-  go list -deps -f '{{if .Module}}{{.Module.Path}} {{.Module.Version}} {{.Module.Dir}}{{end}}' . |
-    sort -u | while read -r path version dir; do
+  # Modules come from vendor/ (RFC #6271 D1), where Go reports no module
+  # directory; read each module's license from its vendored copy.
+  go list -deps -f '{{if .Module}}{{.Module.Path}} {{.Module.Version}}{{end}}' . |
+    sort -u | while read -r path version; do
       [ "$path" = "github.com/aethersdr/AetherSDR/tools/flex-tailnet-shim" ] && continue
+      dir="vendor/$path"
       lic=$(ls "$dir" | grep -i -E '^(licen[cs]e|copying)' | head -1)
       echo
       echo "================================================================"
