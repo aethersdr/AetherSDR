@@ -2,6 +2,8 @@
 
 #include <QDir>
 
+#include <utility>
+
 #ifdef Q_OS_WIN
 #include <windows.h>
 #include <netfw.h>
@@ -12,13 +14,11 @@ namespace AetherSDR::WindowsFirewall {
 
 namespace {
 
-constexpr int kProtocolTcp = 6;
-constexpr int kProtocolUdp = 17;
-constexpr int kProtocolAny = 256;
+constexpr int kAllProfiles = kProfileDomain | kProfilePrivate | kProfilePublic;
 
 QString profileNames(int profiles)
 {
-    if ((profiles & 0x7) == 0x7) {
+    if ((profiles & kAllProfiles) == kAllProfiles) {
         return QStringLiteral("all networks");
     }
     QStringList names;
@@ -40,23 +40,36 @@ QString protocolName(int protocol)
 
 QString describe(const Rule& r)
 {
-    return QStringLiteral("\"%1\": %2 %3 %4, %5%6")
+    return QStringLiteral("\"%1\": %2 %3 %4, %5%6%7")
         .arg(r.name,
              r.allow ? QStringLiteral("allow") : QStringLiteral("block"),
              r.inbound ? QStringLiteral("inbound") : QStringLiteral("outbound"),
              protocolName(r.protocol),
              profileNames(r.profiles),
+             r.restricted ? QStringLiteral(", limited to some ports or addresses") : QString(),
              r.enabled ? QString() : QStringLiteral(" (disabled)"));
 }
 
-bool covers(const Rule& r, int profiles)
+bool appliesTo(const Rule& r, int profile)
 {
-    return r.enabled && (r.profiles & profiles) != 0;
+    return r.enabled && (r.profiles & profile) != 0;
 }
 
-bool coversProtocol(const Rule& r, int protocol)
+bool carries(const Rule& r, int protocol)
 {
     return r.protocol == kProtocolAny || r.protocol == protocol;
+}
+
+// An enabled, unrestricted allow in this direction covers this profile and protocol.
+bool allowed(const QList<Rule>& rules, bool inbound, int profile, int protocol)
+{
+    for (const Rule& r : rules) {
+        if (r.allow && !r.restricted && r.inbound == inbound && appliesTo(r, profile)
+            && carries(r, protocol)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 } // namespace
@@ -79,59 +92,83 @@ Assessment assess(const Status& status)
         a.details = status.thirdPartyFirewalls;
         return a;
     }
-    if (!status.enabledOnCurrent) {
+
+    QList<Profile> enabled;
+    for (const Profile& p : status.activeProfiles) {
+        if (p.enabled) enabled << p;
+    }
+    if (enabled.isEmpty()) {
         a.verdict = Verdict::Disabled;
-        a.summary = QStringLiteral("Windows Defender Firewall is off for the active network.");
+        a.summary = QStringLiteral("Windows Defender Firewall is off for the active networks.");
         return a;
     }
-    const int active = status.currentProfiles;
+
+    bool outboundBlockRule = false;
     for (const Rule& r : status.rules) {
-        if (!r.allow && covers(r, active)) {
-            a.details << describe(r);
+        if (r.allow) continue;
+        for (const Profile& p : enabled) {
+            if (appliesTo(r, p.bit)) {
+                a.details << describe(r);
+                outboundBlockRule |= !r.inbound;
+                break;
+            }
         }
     }
     if (!a.details.isEmpty()) {
         a.verdict = Verdict::Blocked;
-        a.fixable = true;
-        a.summary = QStringLiteral(
-            "Windows Defender Firewall is blocking AetherSDR on the active network. "
-            "This usually follows a dismissed firewall prompt after an update.");
+        a.fixable = !outboundBlockRule;
+        a.summary = outboundBlockRule
+            ? QStringLiteral("A Windows Defender Firewall rule blocks AetherSDR's outgoing "
+                             "connections on an active network. Ask whoever manages this PC to "
+                             "remove it; Fix only repairs incoming rules.")
+            : QStringLiteral("Windows Defender Firewall is blocking AetherSDR on an active "
+                             "network. This usually follows a dismissed firewall prompt after "
+                             "an update.");
         return a;
     }
-    bool outboundAllow = false;
-    bool inTcp = false;
-    bool inUdp = false;
-    for (const Rule& r : status.rules) {
-        if (!r.allow || !covers(r, active)) {
-            continue;
-        }
-        if (!r.inbound) {
-            outboundAllow = true;
-        } else {
-            inTcp |= coversProtocol(r, kProtocolTcp);
-            inUdp |= coversProtocol(r, kProtocolUdp);
+
+    for (const Profile& p : enabled) {
+        if (p.outboundBlockedByDefault
+            && (!allowed(status.rules, false, p.bit, kProtocolTcp)
+                || !allowed(status.rules, false, p.bit, kProtocolUdp))) {
+            a.details << QStringLiteral("%1 network: outgoing connections blocked by default, "
+                                        "no rule allows AetherSDR out over both TCP and UDP")
+                             .arg(profileNames(p.bit));
         }
     }
-    if (status.outboundBlockedByDefault && !outboundAllow) {
+    if (!a.details.isEmpty()) {
         a.verdict = Verdict::OutboundBlocked;
         a.summary = QStringLiteral(
-            "The active network's firewall profile blocks outgoing connections by default, "
-            "and no rule allows AetherSDR out. Ask whoever manages this PC to allow it.");
+            "An active network's firewall profile blocks outgoing connections by default, and "
+            "AetherSDR is not allowed out. Ask whoever manages this PC to allow it.");
         return a;
     }
-    for (const Rule& r : status.rules) {
-        a.details << describe(r);
+
+    for (const Profile& p : enabled) {
+        QStringList missing;
+        if (!allowed(status.rules, true, p.bit, kProtocolTcp)) missing << QStringLiteral("TCP");
+        if (!allowed(status.rules, true, p.bit, kProtocolUdp)) missing << QStringLiteral("UDP");
+        if (!missing.isEmpty()) {
+            a.details << QStringLiteral("%1 network: no rule allows incoming %2")
+                             .arg(profileNames(p.bit), missing.join(QStringLiteral(" or ")));
+        }
     }
-    if (!inTcp || !inUdp) {
+    if (!a.details.isEmpty()) {
         a.verdict = Verdict::NoAllowRule;
         a.fixable = true;
         a.summary = QStringLiteral(
-            "No firewall rule allows AetherSDR in on the active network yet, so Windows "
+            "No firewall rule allows AetherSDR in on every active network yet, so Windows "
             "will ask the first time it listens. Fix adds the rules now.");
         return a;
     }
+
     a.verdict = Verdict::Allowed;
-    a.summary = QStringLiteral("Windows Defender Firewall allows AetherSDR on the active network.");
+    for (const Rule& r : status.rules) {
+        a.details << describe(r);
+    }
+    a.summary = QStringLiteral(
+        "AetherSDR's own Windows Defender Firewall rules allow it on every active network. "
+        "Rules for ports or services rather than programs are not checked.");
     return a;
 }
 
@@ -141,10 +178,28 @@ QString fixCommandLine(const QString& programPath)
     const QString add = QStringLiteral(
         "netsh advfirewall firewall add rule name=\"AetherSDR (%1-In)\" dir=in action=allow "
         "program=\"%2\" enable=yes profile=any protocol=%1");
-    return QStringLiteral("/D /C \"netsh advfirewall firewall delete rule name=all program=\"%1\" "
-                          ">NUL 2>&1 & %2 & %3\"")
+    return QStringLiteral("/D /C \"netsh advfirewall firewall delete rule name=all dir=in "
+                          "program=\"%1\" >NUL 2>&1 & %2 & %3\"")
         .arg(program, add.arg(QStringLiteral("TCP"), program),
              add.arg(QStringLiteral("UDP"), program));
+}
+
+Status afterFix(const Status& status)
+{
+    Status out = status;
+    out.rules.clear();
+    for (const Rule& r : status.rules) {
+        if (!r.inbound) out.rules << r;
+    }
+    for (const auto& [name, protocol] : {std::pair{QStringLiteral("AetherSDR (TCP-In)"), kProtocolTcp},
+                                         std::pair{QStringLiteral("AetherSDR (UDP-In)"), kProtocolUdp}}) {
+        Rule r;
+        r.name = name;
+        r.profiles = 0x7fffffff;
+        r.protocol = protocol;
+        out.rules << r;
+    }
+    return out;
 }
 
 #ifdef Q_OS_WIN
@@ -184,6 +239,38 @@ QString normalisePath(const QString& path)
 QString hresultText(HRESULT hr)
 {
     return QStringLiteral("0x%1").arg(quint32(hr), 8, 16, QLatin1Char('0'));
+}
+
+// A rule limited to some ports, addresses or interface types does not cover
+// every connection the program makes.
+bool isRestricted(INetFwRule* rule)
+{
+    auto limited = [](HRESULT hr, BSTR value, const wchar_t* wildcard) {
+        const QString v = SUCCEEDED(hr) ? fromBstr(value).trimmed() : QString();
+        SysFreeString(value);
+        return !v.isEmpty() && v.compare(QString::fromWCharArray(wildcard), Qt::CaseInsensitive) != 0;
+    };
+    BSTR value = nullptr;
+    HRESULT hr = rule->get_LocalPorts(&value);
+    if (limited(hr, value, L"*")) return true;
+    value = nullptr;
+    hr = rule->get_RemotePorts(&value);
+    if (limited(hr, value, L"*")) return true;
+    value = nullptr;
+    hr = rule->get_LocalAddresses(&value);
+    if (limited(hr, value, L"*")) return true;
+    value = nullptr;
+    hr = rule->get_RemoteAddresses(&value);
+    if (limited(hr, value, L"*")) return true;
+    value = nullptr;
+    hr = rule->get_InterfaceTypes(&value);
+    if (limited(hr, value, L"All")) return true;
+    VARIANT interfaces;
+    VariantInit(&interfaces);
+    const bool namedInterfaces = SUCCEEDED(rule->get_Interfaces(&interfaces))
+        && interfaces.vt != VT_EMPTY && interfaces.vt != VT_NULL;
+    VariantClear(&interfaces);
+    return namedInterfaces;
 }
 
 void readThirdParty(Status& status)
@@ -234,21 +321,22 @@ Status inspect(const QString& programPath)
         status.error = QStringLiteral("active network profile unavailable");
         return status;
     }
-    status.currentProfiles = int(profiles);
     for (const int bit : {kProfileDomain, kProfilePrivate, kProfilePublic}) {
         if (!(profiles & bit)) {
             continue;
         }
         const auto type = static_cast<NET_FW_PROFILE_TYPE2>(bit);
-        VARIANT_BOOL on = VARIANT_FALSE;
-        if (SUCCEEDED(policy->get_FirewallEnabled(type, &on)) && on == VARIANT_TRUE) {
-            status.enabledOnCurrent = true;
+        Profile p;
+        p.bit = bit;
+        VARIANT_BOOL on = VARIANT_TRUE;
+        if (SUCCEEDED(policy->get_FirewallEnabled(type, &on))) {
+            p.enabled = on == VARIANT_TRUE;
         }
         NET_FW_ACTION action = NET_FW_ACTION_ALLOW;
-        if (SUCCEEDED(policy->get_DefaultOutboundAction(type, &action))
-            && action == NET_FW_ACTION_BLOCK) {
-            status.outboundBlockedByDefault = true;
+        if (SUCCEEDED(policy->get_DefaultOutboundAction(type, &action))) {
+            p.outboundBlockedByDefault = action == NET_FW_ACTION_BLOCK;
         }
+        status.activeProfiles << p;
     }
 
     readThirdParty(status);
@@ -299,6 +387,7 @@ Status inspect(const QString& programPath)
                 long protocol = kProtocolAny;
                 rule->get_Protocol(&protocol);
                 r.protocol = int(protocol);
+                r.restricted = isRestricted(rule.p);
                 status.rules << r;
             }
             SysFreeString(app);

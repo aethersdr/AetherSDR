@@ -443,6 +443,8 @@ $manifest = @"
       <desktop2:FirewallRules Executable="aether-dv-waveform.exe">
         <desktop2:Rule Direction="in" IPProtocol="UDP" Profile="all" />
       </desktop2:FirewallRules>
+    </desktop2:Extension>
+    <desktop2:Extension Category="windows.firewallRules">
       <desktop2:FirewallRules Executable="AetherSDR.exe">
         <desktop2:Rule Direction="in" IPProtocol="TCP" Profile="all" />
         <desktop2:Rule Direction="in" IPProtocol="UDP" Profile="all" />

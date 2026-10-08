@@ -114,7 +114,7 @@ LogManager::LogManager()
         {"aether.anan.p2",    "ANAN Protocol 2", "ANAN/Saturn Protocol 2 wire session: DDC sequence gaps, speaker-audio FIFO level and underflow reports, unexpected sender ports"},
         {"aether.kiwisdr.audio", "KiwiSDR Audio/DSP", "Verbose KiwiSDR receive audio: frame decode, resampler, jitter/FIFO under/overrun, mixing (high-rate; off by default)"},
         {"aether.automation", "Automation Bridge", "Agent-drivable test bridge (#3646): QLocalServer verbs, widget snapshots, captures (AETHER_AUTOMATION only)"},
-        {"aether.network",    "External Services", "Failed requests to external services (update check, QRZ, maps, propagation, radar), once per host and error, with TLS errors and the TLS backend in use"},
+        {"aether.network",    "External Services", "Failed requests to external services (update check, QRZ, maps, propagation, radar), once per service, host and error, with TLS errors and the TLS backend in use; URLs are logged as scheme://host only"},
         {"aether.qrz",        "QRZ Lookup",   "QRZ.com callsign lookups: session, cache, CW callsign spotting, photos"},
         {"aether.clock",      "AetherClock",  "WWV/WWVB time-signal decoder: state transitions, per-second alignment, frame decodes, voter verdicts"},
         {"aether.hl2",        "Hermes-Lite 2", "HL2 backend: band changes, J16 companion-filter selection, LNA gain, and radio health telemetry"},

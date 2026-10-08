@@ -1257,8 +1257,8 @@ QWidget* NetworkDiagnosticsDialog::buildFirewallPage()
     m_firewallFixButton->setObjectName(QStringLiteral("networkDiagnosticsFirewallFix"));
     m_firewallFixButton->setAccessibleName(QStringLiteral("Fix Windows Firewall rules"));
     m_firewallFixButton->setAccessibleDescription(QStringLiteral(
-        "Asks Windows for permission, removes AetherSDR's firewall rules including any block "
-        "rule, and adds rules that allow AetherSDR on all networks."));
+        "Asks Windows for permission, replaces AetherSDR's incoming firewall rules, including "
+        "any block rule, with rules that allow it in on all networks. Outgoing rules are kept."));
     m_firewallFixButton->setToolTip(m_firewallFixButton->accessibleDescription());
     m_firewallFixButton->setEnabled(false);
     m_firewallRecheckButton = new QPushButton(QStringLiteral("Check again"));

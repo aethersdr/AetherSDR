@@ -1,5 +1,5 @@
-// WindowsFirewall's verdicts and Fix command, and NetworkDiagnostics' failure
-// logging. Both are pure enough to pin on any platform: assess() reads a
+// WindowsFirewall's verdicts and Fix, and NetworkDiagnostics' failure logging.
+// Both are pure enough to pin on any platform: assess() and afterFix() read a
 // Status a test can build, and watch() reads a QNetworkReply a test can fake.
 
 #include "core/NetworkDiagnostics.h"
@@ -9,7 +9,7 @@
 #include <QNetworkReply>
 #include <QSslError>
 #include <QStringList>
-#include <QTimer>
+#include <QUrlQuery>
 
 #include <cstdio>
 
@@ -53,13 +53,19 @@ protected:
     qint64 readData(char*, qint64) override { return -1; }
 };
 
-Status windows(int profiles = kProfilePrivate)
+constexpr int kAll = 0x7fffffff;
+
+Status windows(QList<int> profiles = {kProfilePrivate}, bool outboundBlocked = false)
 {
     Status s;
     s.inspected = true;
     s.programPath = QStringLiteral("C:\\Program Files\\AetherSDR\\AetherSDR.exe");
-    s.currentProfiles = profiles;
-    s.enabledOnCurrent = true;
+    for (int bit : profiles) {
+        Profile p;
+        p.bit = bit;
+        p.outboundBlockedByDefault = outboundBlocked;
+        s.activeProfiles << p;
+    }
     return s;
 }
 
@@ -87,67 +93,115 @@ void testVerdicts()
           "a third-party firewall is named and not offered Fix");
 
     Status off = windows();
-    off.enabledOnCurrent = false;
-    check(assess(off).verdict == Verdict::Disabled, "firewall off for the active network");
+    off.activeProfiles[0].enabled = false;
+    check(assess(off).verdict == Verdict::Disabled, "firewall off for every active network");
 
-    Status blocked = windows(kProfilePublic);
-    blocked.rules << rule(false, 17, kProfilePublic) << rule(true, 256, 0x7fffffff);
+    Status blocked = windows({kProfilePublic});
+    blocked.rules << rule(false, kProtocolUdp, kProfilePublic) << rule(true, kProtocolAny, kAll);
     const Assessment b = assess(blocked);
     check(b.verdict == Verdict::Blocked && b.fixable && b.details.size() == 1,
-          "a block rule on the active profile beats an allow rule and is fixable");
+          "an inbound block on an active profile beats an allow and is fixable");
 
-    Status otherProfile = windows(kProfilePrivate);
-    otherProfile.rules << rule(false, 17, kProfilePublic)
-                       << rule(true, 6, kProfilePrivate) << rule(true, 17, kProfilePrivate);
+    Status outBlock = windows();
+    outBlock.rules << rule(false, kProtocolTcp, kAll, false) << rule(true, kProtocolAny, kAll);
+    const Assessment ob = assess(outBlock);
+    check(ob.verdict == Verdict::Blocked && !ob.fixable,
+          "an outbound block rule is reported but not offered Fix (Fix only repairs inbound)");
+
+    Status otherProfile = windows({kProfilePrivate});
+    otherProfile.rules << rule(false, kProtocolUdp, kProfilePublic)
+                       << rule(true, kProtocolTcp, kProfilePrivate)
+                       << rule(true, kProtocolUdp, kProfilePrivate);
     check(assess(otherProfile).verdict == Verdict::Allowed,
           "a block rule on an inactive profile does not block");
 
+    Status offProfileBlock = windows({kProfilePrivate, kProfilePublic});
+    offProfileBlock.activeProfiles[1].enabled = false;
+    offProfileBlock.rules << rule(false, kProtocolAny, kProfilePublic)
+                          << rule(true, kProtocolAny, kProfilePrivate);
+    check(assess(offProfileBlock).verdict == Verdict::Allowed,
+          "a block rule on an active profile whose firewall is off does not block");
+
     Status disabledBlock = windows();
-    disabledBlock.rules << rule(false, 256, 0x7fffffff, true, false);
+    disabledBlock.rules << rule(false, kProtocolAny, kAll, true, false);
     check(assess(disabledBlock).verdict == Verdict::NoAllowRule,
           "a disabled block rule does not block");
 
-    Status outbound = windows();
-    outbound.outboundBlockedByDefault = true;
-    outbound.rules << rule(true, 256, 0x7fffffff);
-    check(assess(outbound).verdict == Verdict::OutboundBlocked,
-          "outbound-blocked default with no outbound allow is reported");
-    outbound.rules << rule(true, 256, 0x7fffffff, false);
-    check(assess(outbound).verdict == Verdict::Allowed,
-          "an outbound allow rule satisfies an outbound-blocked default");
+    // Review of #6289: two active profiles are judged one by one.
+    Status twoProfiles = windows({kProfilePrivate, kProfilePublic});
+    twoProfiles.rules << rule(true, kProtocolTcp, kProfilePrivate)
+                      << rule(true, kProtocolUdp, kProfilePrivate);
+    const Assessment tp = assess(twoProfiles);
+    check(tp.verdict == Verdict::NoAllowRule && tp.fixable
+              && tp.details.join(QLatin1Char(' ')).contains(QStringLiteral("public")),
+          "Private-only allows leave an active Public network uncovered");
 
-    Status none = windows();
-    const Assessment n = assess(none);
+    // Review of #6289: an outbound allow must carry TCP and UDP, not any protocol number.
+    Status icmpOnly = windows({kProfilePrivate}, true);
+    icmpOnly.rules << rule(true, kProtocolAny, kAll) << rule(true, 1, kAll, false);
+    check(assess(icmpOnly).verdict == Verdict::OutboundBlocked,
+          "an ICMP-only outbound allow does not satisfy an outbound-blocked default");
+    Status tcpOut = windows({kProfilePrivate}, true);
+    tcpOut.rules << rule(true, kProtocolAny, kAll) << rule(true, kProtocolTcp, kAll, false);
+    check(assess(tcpOut).verdict == Verdict::OutboundBlocked,
+          "TCP-only outbound leaves the radio's UDP blocked");
+    tcpOut.rules << rule(true, kProtocolUdp, kAll, false);
+    check(assess(tcpOut).verdict == Verdict::Allowed,
+          "outbound TCP and UDP allows satisfy an outbound-blocked default");
+
+    Status portLimited = windows();
+    Rule limited = rule(true, kProtocolAny, kAll);
+    limited.restricted = true;
+    portLimited.rules << limited;
+    check(assess(portLimited).verdict == Verdict::NoAllowRule,
+          "a port- or address-limited allow is not counted as coverage");
+    Status limitedBlock = windows();
+    Rule limitedB = rule(false, kProtocolUdp, kAll);
+    limitedB.restricted = true;
+    limitedBlock.rules << limitedB << rule(true, kProtocolAny, kAll);
+    check(assess(limitedBlock).verdict == Verdict::Blocked,
+          "a port-limited block still counts as blocking");
+
+    const Assessment n = assess(windows());
     check(n.verdict == Verdict::NoAllowRule && n.fixable, "no rules yet: fixable pre-approval");
 
     Status tcpOnly = windows();
-    tcpOnly.rules << rule(true, 6, 0x7fffffff);
+    tcpOnly.rules << rule(true, kProtocolTcp, kAll);
     check(assess(tcpOnly).verdict == Verdict::NoAllowRule, "TCP alone leaves UDP to the prompt");
 
     Status any = windows();
-    any.rules << rule(true, 256, 0x7fffffff);
+    any.rules << rule(true, kProtocolAny, kAll);
     check(assess(any).verdict == Verdict::Allowed, "an any-protocol allow covers TCP and UDP");
 }
 
-void testFixCommand()
+void testFixKeepsOutbound()
 {
+    // Review of #6289: an outbound-blocking PC whose administrator allowed
+    // AetherSDR out, plus a dismissed prompt's inbound block.
+    Status before = windows({kProfilePrivate}, true);
+    before.rules << rule(true, kProtocolTcp, kAll, false) << rule(true, kProtocolUdp, kAll, false)
+                 << rule(false, kProtocolAny, kAll);
+    const Assessment pre = assess(before);
+    check(pre.verdict == Verdict::Blocked && pre.fixable, "before Fix: inbound block, fixable");
+
+    const Status after = afterFix(before);
+    int outbound = 0;
+    for (const Rule& r : after.rules) {
+        outbound += r.inbound ? 0 : 1;
+    }
+    check(outbound == 2, "Fix keeps the administrator's outbound allows");
+    check(assess(after).verdict == Verdict::Allowed,
+          "after Fix the outbound-blocking PC is allowed in and still allowed out");
+
     const QString cmd = fixCommandLine(QStringLiteral("C:/Users/Op/AetherSDR/AetherSDR.exe"));
-    const QString expected = QStringLiteral(
-        "/D /C \"netsh advfirewall firewall delete rule name=all "
-        "program=\"C:\\Users\\Op\\AetherSDR\\AetherSDR.exe\" >NUL 2>&1 & "
-        "netsh advfirewall firewall add rule name=\"AetherSDR (TCP-In)\" dir=in action=allow "
-        "program=\"C:\\Users\\Op\\AetherSDR\\AetherSDR.exe\" enable=yes profile=any protocol=TCP & "
-        "netsh advfirewall firewall add rule name=\"AetherSDR (UDP-In)\" dir=in action=allow "
-        "program=\"C:\\Users\\Op\\AetherSDR\\AetherSDR.exe\" enable=yes profile=any protocol=UDP\"");
-#ifdef Q_OS_WIN
-    check(cmd == expected, "Fix deletes every program rule, then adds TCP and UDP allows");
-#else
-    // toNativeSeparators keeps '/' off Windows; the command shape is the same.
-    QString posix = expected;
-    posix.replace(QStringLiteral("C:\\Users\\Op\\AetherSDR\\AetherSDR.exe"),
-                 QStringLiteral("C:/Users/Op/AetherSDR/AetherSDR.exe"));
-    check(cmd == posix, "Fix deletes every program rule, then adds TCP and UDP allows");
-#endif
+    check(cmd.contains(QStringLiteral("delete rule name=all dir=in program=")),
+          "Fix deletes inbound rules only");
+    check(!cmd.contains(QStringLiteral("dir=out")) && cmd.count(QStringLiteral("delete rule")) == 1,
+          "Fix never deletes outbound rules");
+    check(cmd.contains(QStringLiteral("name=\"AetherSDR (TCP-In)\" dir=in action=allow"))
+              && cmd.contains(QStringLiteral("name=\"AetherSDR (UDP-In)\" dir=in action=allow"))
+              && cmd.count(QStringLiteral("profile=any")) == 2,
+          "Fix adds inbound TCP and UDP allows on all profiles, named as the installer names them");
 }
 
 void testFailureLogging()
@@ -174,7 +228,7 @@ void testFailureLogging()
                                 QNetworkReply::SslHandshakeFailedError, QStringLiteral("x"));
     NetworkDiagnostics::watch(again, "QRZ");
     again->finish();
-    check(g_lines.size() == 2, "the same host and error is logged once per session");
+    check(g_lines.size() == 2, "the same service, host and error is logged once per session");
 
     auto* tile = new FakeReply(QUrl(QStringLiteral("https://tile.openstreetmap.org/1/0/0.png")),
                                QNetworkReply::ConnectionRefusedError,
@@ -201,8 +255,45 @@ void testFailureLogging()
     ok->finish();
     check(g_lines.size() == 4, "cancelled and successful replies log nothing");
 
+    // Review of #6289: Qt's HTTP error text quotes the full request URL, and
+    // QRZ's query carries the credentials, delimiters and spaces included.
+    QUrl qrz(QStringLiteral("https://xmldata.qrz.com/xml/current/"));
+    QUrlQuery query;
+    query.addQueryItem(QStringLiteral("username"), QStringLiteral("K1ABC"));
+    query.addQueryItem(QStringLiteral("password"), QStringLiteral("alpha;SECRET TAIL&x=y"));
+    qrz.setQuery(query);
+    for (const QString& spelling : {qrz.toString(), qrz.toString(QUrl::FullyDecoded)}) {
+        const QString qtText = QStringLiteral("Error transferring %1 - server replied: Forbidden")
+                                   .arg(spelling);
+        auto* forbidden = new FakeReply(qrz, QNetworkReply::ContentAccessDenied, qtText, 403);
+        NetworkDiagnostics::watch(forbidden, spelling == qrz.toString() ? "QRZ login" : "QRZ lookup");
+        forbidden->finish();
+        const QString leak = g_lines.last();
+        check(leak.contains(QStringLiteral(
+                  "Error transferring https://xmldata.qrz.com - server replied: Forbidden"))
+                  && leak.contains(QStringLiteral("HTTP 403")),
+              "Qt's quoted request URL is cut to scheme://host");
+        check(!leak.contains(QStringLiteral("K1ABC")) && !leak.contains(QStringLiteral("alpha"))
+                  && !leak.contains(QStringLiteral("SECRET")) && !leak.contains(QStringLiteral("TAIL"))
+                  && !leak.contains(QStringLiteral("/xml/")),
+              "no credential, query or path survives in the HTTP error line");
+        delete forbidden;
+    }
+
+    const QString foreign = QStringLiteral(
+        "Error transferring https://user:hunter2@mirror.example/dl?token=abc123 - redirected");
+    auto* other = new FakeReply(QUrl(QStringLiteral("https://cdn.example/start")),
+                                QNetworkReply::ProtocolFailure, foreign);
+    NetworkDiagnostics::watch(other, "DeepFist model download");
+    other->finish();
+    const QString otherLine = g_lines.last();
+    check(otherLine.contains(QStringLiteral("https://mirror.example - redirected"))
+              && !otherLine.contains(QStringLiteral("hunter2"))
+              && !otherLine.contains(QStringLiteral("abc123")),
+          "any other URL in the error text loses its userinfo, path and query");
+
     qInstallMessageHandler(g_previous);
-    for (auto* r : {a, again, tile, http, cancelled, ok}) delete r;
+    for (auto* r : {a, again, tile, http, cancelled, ok, other}) delete r;
 }
 
 } // namespace
@@ -211,7 +302,7 @@ int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
     testVerdicts();
-    testFixCommand();
+    testFixKeepsOutbound();
     testFailureLogging();
     std::printf("%s\n", g_failed ? "FAILED" : "all checks passed");
     return g_failed ? 1 : 0;
