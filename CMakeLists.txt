@@ -3016,16 +3016,15 @@ target_sources(aethercore PRIVATE src/models/CwRxModel.cpp src/models/CwRxModel.
 
 option(ENABLE_DEEPFIST_EXPERIMENT "Build the local DeepFist CW prototype" OFF)
 set(DEEPFIST_MODEL_BASE_URL "" CACHE STRING "Published, versioned HTTPS DeepFist asset directory (empty before publication)")
+target_compile_definitions(aethercore PRIVATE DEEPFIST_MODEL_BASE_URL="${DEEPFIST_MODEL_BASE_URL}")
 if(ENABLE_DEEPFIST_EXPERIMENT)
     if(NOT ORT_FOUND)
         message(FATAL_ERROR "The DeepFist prototype requires the packaged ONNX Runtime")
     endif()
     target_compile_definitions(aethercore PUBLIC HAVE_DEEPFIST)
-    target_compile_definitions(aethercore PRIVATE DEEPFIST_MODEL_BASE_URL="${DEEPFIST_MODEL_BASE_URL}")
     target_sources(aethercore PRIVATE
         src/models/DeepFistCwModel.cpp src/models/DeepFistCwModel.h
         src/core/deepfist/DeepFistStream.cpp
-        src/core/deepfist/DeepFistModelAssets.cpp src/core/deepfist/DeepFistModelAssets.h
         third_party/deepfist/DeepFistConditioner.cpp
         third_party/deepfist/DeepFistSpectrogram.cpp
         third_party/deepfist/DeepFistCtc.cpp
@@ -3035,6 +3034,14 @@ endif()
 
 if(ORT_FOUND)
     target_compile_definitions(aethercore PUBLIC HAVE_ONNX)
+    # Every CW receive backend beyond ggmorse needs ONNX Runtime, so this one
+    # gate decides whether the CW panel offers a decoder selector (RFC #4817).
+    target_compile_definitions(aethercore PUBLIC HAVE_DEEPCW HAVE_CW_RX_BACKENDS)
+    target_sources(aethercore PRIVATE
+        src/core/DeepCwEngine.cpp src/core/DeepCwEngine.h
+        src/core/DeepCwCommitter.cpp src/core/DeepCwCommitter.h
+        src/models/DeepCwRxBackend.cpp src/models/DeepCwRxBackend.h
+        src/core/deepfist/DeepFistModelAssets.cpp src/core/deepfist/DeepFistModelAssets.h)
     # PUBLIC include dir: core/SignalClassifier.h includes onnxruntime under
     # HAVE_ONNX (PUBLIC) and is pulled in by gui/MainWindow.h. Same transitive
     # leak as FFTW3 above. Library link stays PRIVATE (transitive via the lib).

@@ -1293,7 +1293,7 @@ private:
     VkampConnection   m_vkampConn;       // VK3AMP amplifier, TCP control/status + UDP telemetry
     Kpa1500Connection m_kpa1500Conn;     // Elecraft KPA1500 amplifier, TCP control/status on port 1500 (#4097)
     BandPlanManager*  m_bandPlanMgr{nullptr};
-#ifdef HAVE_DEEPFIST
+#ifdef HAVE_CW_RX_BACKENDS
     void selectCwRxBackend(const QString& backend);
     void cwRxModelAction();
     void refreshCwRxStatus();

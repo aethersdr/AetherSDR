@@ -229,13 +229,15 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
         });
     cwBar->addWidget(m_cwSensSlider);
 
-#ifdef HAVE_DEEPFIST
+#ifdef HAVE_CW_RX_BACKENDS
     m_cwEngineCombo = new GuardedComboBox(this);
     m_cwEngineCombo->setObjectName("cwRxEngine");
     m_cwEngineCombo->setAccessibleName(tr("CW receive decoder"));
-    m_cwEngineCombo->setAccessibleDescription(tr("Select ggmorse or the experimental DeepFist decoder for the selected slice"));
+    m_cwEngineCombo->setAccessibleDescription(tr("Select ggmorse or a neural decoder for the selected slice"));
     for (const QString& key : CwRxModel::availableBackends()) {
-        m_cwEngineCombo->addItem(key == "deepfist" ? tr("DeepFist") : key, key);
+        const QString label = key == "deepfist" ? tr("DeepFist")
+                            : key == "deepcw"   ? tr("DeepCW") : key;
+        m_cwEngineCombo->addItem(label, key);
     }
     m_cwEngineCombo->setToolTip(tr("Receive decoder; transmit sidetone continues to use ggmorse"));
     cwBar->addWidget(m_cwEngineCombo);
@@ -837,8 +839,8 @@ QString PanadapterApplet::cwCostColor(float cost)
 
 void PanadapterApplet::appendCwText(const QString& text, float cost)
 {
-#ifdef HAVE_DEEPFIST
-    if (deepFistEngineSelected()) { return; }
+#ifdef HAVE_CW_RX_BACKENDS
+    if (neuralEngineSelected()) { return; }
 #endif
     // Filter by sensitivity threshold — drop low-confidence decodes
     if (cost >= m_cwCostThreshold) return;
@@ -863,14 +865,15 @@ void PanadapterApplet::appendCwText(const QString& text, float cost)
     emit cwRxTextDisplayed(clean);
 }
 
-#ifdef HAVE_DEEPFIST
-bool PanadapterApplet::deepFistEngineSelected() const
+#ifdef HAVE_CW_RX_BACKENDS
+bool PanadapterApplet::neuralEngineSelected() const
 {
+    // Every backend other than ggmorse is a neural one with its own text path.
     // Compare the stored key, never the row: findData() returns -1 for a key
     // this build does not offer, and the catalog is meant to grow.
-    return m_cwEngineCombo
-        && m_cwEngineCombo->itemData(m_cwEngineCombo->currentIndex()).toString()
-               == QLatin1String("deepfist");
+    if (!m_cwEngineCombo || m_cwEngineCombo->currentIndex() < 0) { return false; }
+    return m_cwEngineCombo->itemData(m_cwEngineCombo->currentIndex()).toString()
+           != QLatin1String("ggmorse");
 }
 void PanadapterApplet::setCwBackendState(const QString& key, bool tuning, const QString& status,
     bool preparing, bool canRetry, const QString& detail)
@@ -972,9 +975,9 @@ void PanadapterApplet::setCwInputHint(const QString& hint, const QString& reason
 
 void PanadapterApplet::setCwStats(float pitchHz, float speedWpm)
 {
-#ifdef HAVE_DEEPFIST
+#ifdef HAVE_CW_RX_BACKENDS
     // ggmorse may still have queued deliveries after the engine selector changes.
-    if (deepFistEngineSelected()) { return; }
+    if (neuralEngineSelected()) { return; }
 #endif
     if (pitchHz > 0 && speedWpm > 0)
         m_cwStatsLabel->setText(QString("%1 Hz  %2 WPM").arg(pitchHz, 0, 'f', 0).arg(speedWpm, 0, 'f', 0));
