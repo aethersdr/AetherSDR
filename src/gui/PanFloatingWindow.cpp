@@ -35,11 +35,9 @@ void PanFloatingWindow::adoptApplet(PanadapterApplet* applet)
     if (!applet) return;
     m_applet = applet;
 
-    // Use the user-facing slice title (e.g. "Slice A") instead of raw hex pan ID
-    QString title = applet->sliceTitle();
-    if (title.isEmpty())
-        title = QString("Pan %1").arg(applet->panId());
-    setWindowTitle(QString("AetherSDR — %1").arg(title));
+    refreshWindowTitle();
+    connect(m_applet, &PanadapterApplet::sliceTitleChanged,
+            this, &PanFloatingWindow::refreshWindowTitle);
 
     // Reparent directly into this window — addWidget() calls setParent()
     // internally, so the widget goes straight from the splitter to the
@@ -54,6 +52,16 @@ void PanFloatingWindow::adoptApplet(PanadapterApplet* applet)
     });
 }
 
+void PanFloatingWindow::refreshWindowTitle()
+{
+    if (!m_applet) return;
+    // Use the user-facing slice title (e.g. "Slice A") instead of raw hex pan ID
+    QString title = m_applet->sliceTitle();
+    if (title.isEmpty())
+        title = QString("Pan %1").arg(m_applet->panId());
+    setWindowTitle(QString("AetherSDR — %1").arg(title));
+}
+
 QString PanFloatingWindow::panId() const
 {
     return m_applet ? m_applet->panId() : QString();
@@ -63,6 +71,8 @@ PanadapterApplet* PanFloatingWindow::takeApplet()
 {
     if (!m_applet) return nullptr;
     auto* a = m_applet;
+    disconnect(a, &PanadapterApplet::sliceTitleChanged,
+               this, &PanFloatingWindow::refreshWindowTitle);
     m_layout->removeWidget(a);
     a->setParent(nullptr);
     m_applet = nullptr;

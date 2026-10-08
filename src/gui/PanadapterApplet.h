@@ -123,6 +123,7 @@ signals:
     void closeRequested(const QString& panId);
     void popOutClicked();
     void dockClicked();
+    void sliceTitleChanged();
     void maximizeRequested(const QString& panId);
 
     // CW

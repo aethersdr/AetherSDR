@@ -678,13 +678,21 @@ void PanadapterApplet::setSliceId(int id, const QString& perClientLetter)
 {
     m_titleLabel->setText(
         QString("Slice %1").arg(SliceLabel::richText(id, perClientLetter)));
-    m_sliceTitle = QString("Slice %1").arg(SliceLabel::unicodeForm(id, perClientLetter));
+    const QString title =
+        QString("Slice %1").arg(SliceLabel::unicodeForm(id, perClientLetter));
+    if (title != m_sliceTitle) {
+        m_sliceTitle = title;
+        emit sliceTitleChanged();
+    }
 }
 
 void PanadapterApplet::clearSliceTitle()
 {
     m_titleLabel->clear();
-    m_sliceTitle.clear();
+    if (!m_sliceTitle.isEmpty()) {
+        m_sliceTitle.clear();
+        emit sliceTitleChanged();
+    }
 }
 
 QString PanadapterApplet::sliceTitle() const
