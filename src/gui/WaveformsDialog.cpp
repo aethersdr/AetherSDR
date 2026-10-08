@@ -36,6 +36,7 @@
 #include <QPixmap>
 #include <QProgressBar>
 #include <QPointer>
+#include <QTimer>
 #include <memory>
 #include <QPushButton>
 #include <QRegularExpression>
@@ -379,6 +380,16 @@ QFrame#RadioWaveformRow {
 }
 QFrame#RadioWaveformRow:hover {
     border-color: {{color.canon.lineHi}};
+}
+QLabel#RowNotice {
+    color: {{color.canon.muted}};
+    font-size: 12px;
+}
+QLabel#RowNotice[tone="ok"] {
+    color: {{color.accent.success}};
+}
+QLabel#RowNotice[tone="error"] {
+    color: {{color.accent.danger}};
 }
 QLabel#WaveformTypeBadge {
     color: {{color.canon.cyan}};
@@ -1439,6 +1450,8 @@ WaveformsDialog::WaveformsDialog(RadioModel* model, QWidget* parent)
             this, &WaveformsDialog::updateInstallButtonState);
     connect(&wfModel, &FlexWaveformModel::waveformsChanged,
             this, &WaveformsDialog::refreshWaveformList);
+    connect(&wfModel, &FlexWaveformModel::commandFinished,
+            this, &WaveformsDialog::onWaveformCommandFinished);
     connect(&ThemeManager::instance(), &ThemeManager::themeChanged,
             this, &WaveformsDialog::refreshStatus);
     connect(&ThemeManager::instance(), &ThemeManager::themeChanged,
@@ -2112,6 +2125,18 @@ void WaveformsDialog::refreshWaveformList()
         nameLabel->setToolTip(QStringLiteral("%1 %2").arg(name, entry.version).trimmed());
         rowLayout->addWidget(nameLabel, 1);
 
+        const auto notice = m_rowNotices.constFind(name);
+        const bool rowPending = notice != m_rowNotices.constEnd() && notice->pending;
+        if (notice != m_rowNotices.constEnd()) {
+            auto* noticeLabel = new QLabel(notice->text, row);
+            noticeLabel->setObjectName(QStringLiteral("RowNotice"));
+            noticeLabel->setProperty("tone", notice->tone);
+            noticeLabel->setTextFormat(Qt::PlainText);
+            noticeLabel->setAccessibleName(tr("Waveform %1 status: %2").arg(name, notice->text));
+            noticeLabel->setToolTip(notice->text);
+            rowLayout->addWidget(noticeLabel, 0, Qt::AlignVCenter);
+        }
+
         // Type badge
         const QString dockerBadgeText = tr("Docker");
         const QString legacyBadgeText = tr("Legacy");
@@ -2156,6 +2181,7 @@ void WaveformsDialog::refreshWaveformList()
         auto* restartBtn = new QPushButton(tr("Restart"), actionWidget);
         restartBtn->setAccessibleName(tr("Restart waveform %1").arg(name));
         connect(restartBtn, &QPushButton::clicked, this, [this, name]() {
+            setRowNotice(name, tr("Restarting…"), QStringLiteral("pending"), true);
             m_radioModel->flexWaveformModel().requestRestart(name);
         });
 
@@ -2167,6 +2193,8 @@ void WaveformsDialog::refreshWaveformList()
             if (!confirmRadioWaveformRemoval(this, name, isContainer)) {
                 return;
             }
+            setRowNotice(name, isContainer ? tr("Removing…") : tr("Uninstalling…"),
+                         QStringLiteral("pending"), true);
             if (isContainer) {
                 m_radioModel->flexWaveformModel().requestRemoveContainer(name);
             } else {
@@ -2174,6 +2202,8 @@ void WaveformsDialog::refreshWaveformList()
             }
         });
 
+        restartBtn->setEnabled(!rowPending);
+        removeBtn->setEnabled(!rowPending);
         const int actionButtonWidth = std::max({
             installedWaveformActionButtonWidth(restartBtn, removeBtn),
             styledWaveformActionButtonWidth(restartBtn),
@@ -2196,6 +2226,40 @@ void WaveformsDialog::refreshWaveformList()
         rowLayout->addWidget(actionWidget, 0, Qt::AlignRight | Qt::AlignVCenter);
 
         m_listLayout->insertWidget(m_listLayout->count() - 1, row);
+    }
+}
+
+void WaveformsDialog::setRowNotice(const QString& name, const QString& text,
+                                   const QString& tone, bool pending)
+{
+    const quint64 serial = ++m_rowNoticeSerial;
+    m_rowNotices.insert(name, RowNotice{text, tone, pending, serial});
+    refreshWaveformList();
+    if (!pending) {
+        // A finished outcome stays long enough to read, then clears.
+        QTimer::singleShot(8000, this, [this, name, serial] {
+            const auto it = m_rowNotices.constFind(name);
+            if (it != m_rowNotices.constEnd() && it->serial == serial) {
+                m_rowNotices.remove(name);
+                refreshWaveformList();
+            }
+        });
+    }
+}
+
+void WaveformsDialog::onWaveformCommandFinished(const QString& action, const QString& name,
+                                                bool ok, const QString& message)
+{
+    const QString why = message.isEmpty() ? tr("the radio refused it") : message;
+    if (action == QLatin1String("restart")) {
+        setRowNotice(name, ok ? tr("Restarted") : tr("Restart failed: %1").arg(why),
+                     ok ? QStringLiteral("ok") : QStringLiteral("error"), false);
+    } else if (!ok) {
+        // A successful removal takes the row away; only a failure needs words.
+        setRowNotice(name, tr("Remove failed: %1").arg(why), QStringLiteral("error"), false);
+    } else {
+        m_rowNotices.remove(name);
+        refreshWaveformList();
     }
 }
 

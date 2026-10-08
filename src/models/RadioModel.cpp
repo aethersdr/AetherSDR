@@ -2581,7 +2581,9 @@ RadioModel::RadioModel(QObject* parent)
         });
     });
     connect(&m_flexWaveformModel, &FlexWaveformModel::commandReady, this, [this](const QString& cmd){
-        sendCmd(cmd);
+        sendCmd(cmd, [this, cmd](int code, const QString& body) {
+            m_flexWaveformModel.handleCommandReply(cmd, code, body);
+        });
     });
     connect(&m_navtexModel, &NavtexModel::commandReady, this, [this](const QString& cmd){
         sendCmd(cmd);

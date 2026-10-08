@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CanonWindow.h"
+#include <QHash>
 #include <QPointer>
 
 class QLabel;
@@ -52,6 +53,11 @@ private:
                              const QString& initialPath = {});
     // Everything after the file is chosen: WFP gate, installer, progress.
     void installWaveformPath(bool docker, const QString& path, RadioModel* model);
+    // Row feedback for Restart / Remove: a restart changes nothing visible,
+    // so the row says what was asked and what the radio answered.
+    void setRowNotice(const QString& name, const QString& text, const QString& tone, bool pending);
+    void onWaveformCommandFinished(const QString& action, const QString& name, bool ok,
+                                   const QString& message);
 
     RadioModel*        m_radioModel{nullptr};
     QLabel*            m_wfpSupportPill{nullptr};
@@ -63,6 +69,14 @@ private:
     QToolButton*       m_installBtn{nullptr};
     QAction*           m_installDockerAction{nullptr};
     QAction*           m_installRemoteAccessAction{nullptr};
+    struct RowNotice {
+        QString text;
+        QString tone;      // "pending", "ok" or "error"
+        bool    pending{false};
+        quint64 serial{0};
+    };
+    QHash<QString, RowNotice> m_rowNotices;
+    quint64 m_rowNoticeSerial{0};
     class TailnetShimDownloader* m_shimDownloader{nullptr};
     QWidget*           m_listContainer{nullptr};
     QVBoxLayout*       m_listLayout{nullptr};
