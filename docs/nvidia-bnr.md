@@ -25,8 +25,8 @@ The AFX runtime (the NVIDIA AFX libs, the CUDA/TensorRT runtime, and the
 per-GPU denoiser model) is **not shipped** in the app — it's fetched on first
 use via the **Download** button in the panel and cached under the app data dir:
 
-- **Linux:** `~/.local/share/AetherSDR/nvidia-afx/current/`
-- **Windows:** `%LOCALAPPDATA%\AetherSDR\nvidia-afx\current\`
+- **Linux:** `~/.local/share/AetherSDR/AetherSDR/nvidia-afx/current/`
+- **Windows:** `%LOCALAPPDATA%\AetherSDR\AetherSDR\nvidia-afx\current\`
 
 The arch is auto-detected (`nvidia-smi` compute capability → `sm_XX`), and the
 matching pack is fetched as a GitHub Release asset pinned by sha256.
