@@ -14,11 +14,17 @@
 # guarantees the library matches the exact Qt the AppImage links (aqt Qt
 # 6.12.0 on x86_64), avoiding an ABI mismatch with the distro's Qt.
 #
-# LIBSECRET_SUPPORT is OFF on purpose: that selects qtkeychain's pure
-# Qt-D-Bus Secret Service backend, which talks to KDE Wallet (kwalletd) and
-# GNOME Keyring over the session bus with no extra native runtime deps to
-# bundle — only Qt6 D-Bus, which linuxdeploy already carries. It has no effect
-# on macOS, where qtkeychain always uses the native Keychain backend.
+# LIBSECRET_SUPPORT is ON for Linux. Without libsecret, qtkeychain 0.16 has
+# no backend for a desktop whose only keychain is the freedesktop Secret
+# Service (GNOME Keyring, KeePassXC and similar): it reaches KWallet over
+# D-Bus or a dlopen'd libgnome-keyring, and neither exists on most non-KDE
+# desktops, so every write fails with "Unknown error" and credentials
+# silently live only for the session (measured on Hyprland + GNOME Keyring,
+# RFC #6271). The build therefore requires libsecret-1 (libsecret-1-dev);
+# the check below fails loudly rather than letting qtkeychain quietly fall
+# back to building without it. linuxdeploy bundles libsecret for the
+# AppImage. The flag has no effect on macOS, where qtkeychain always uses
+# the native Keychain backend.
 #
 # Requires: cmake, ninja, a C++ compiler, git, and a discoverable Qt6.
 #
@@ -69,7 +75,9 @@ echo "Using Qt from: $QT_PREFIX"
 # one) must rebuild, or the library left behind is an ABI mismatch against the
 # new Qt. Only the first prefix entry is the Qt; the rest are search paths.
 STAMP="$OUT_DIR/.build-stamp"
-STAMP_CONTENT="version=$QTKEYCHAIN_VERSION target=${MACOS_DEPLOYMENT_TARGET:-host} qt=${QT_PREFIX%%[:;]*}"
+# backend=secret: a tree built before libsecret became required (RFC #6271)
+# has no working backend on Secret-Service-only desktops, so it must rebuild.
+STAMP_CONTENT="version=$QTKEYCHAIN_VERSION target=${MACOS_DEPLOYMENT_TARGET:-host} qt=${QT_PREFIX%%[:;]*} backend=secret"
 if [ -f "$OUT_DIR/lib/cmake/Qt6Keychain/Qt6KeychainConfig.cmake" ] &&
    [ -f "$STAMP" ] && [ "$(cat "$STAMP")" = "$STAMP_CONTENT" ]; then
     echo "qtkeychain already set up in $OUT_DIR ($STAMP_CONTENT)"
@@ -126,6 +134,18 @@ if [ "$(uname -s)" = "Darwin" ]; then
     fi
 fi
 
+# Linux: libsecret is required (see the header). qtkeychain's own CMake
+# quietly builds without it when pkg-config can't find it, so check first.
+LIBSECRET_FLAG=OFF
+if [ "$(uname -s)" = "Linux" ]; then
+    if ! pkg-config --exists libsecret-1; then
+        echo "ERROR: libsecret-1 not found (install libsecret-1-dev / libsecret)." >&2
+        echo "       Without it qtkeychain has no Secret Service backend on non-KDE desktops." >&2
+        exit 1
+    fi
+    LIBSECRET_FLAG=ON
+fi
+
 echo "Building qtkeychain $QTKEYCHAIN_VERSION from source..."
 cmake -B "$BUILD_DIR" -S "$SRC_DIR" -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
@@ -133,7 +153,7 @@ cmake -B "$BUILD_DIR" -S "$SRC_DIR" -G Ninja \
     -DBUILD_WITH_QT6=ON \
     -DBUILD_SHARED_LIBS=ON \
     -DBUILD_TRANSLATIONS=OFF \
-    -DLIBSECRET_SUPPORT=OFF \
+    -DLIBSECRET_SUPPORT="$LIBSECRET_FLAG" \
     -DCMAKE_PREFIX_PATH="$QT_PREFIX" \
     -DCMAKE_INSTALL_PREFIX="$OUT_DIR_ABS" \
     -DCMAKE_INSTALL_LIBDIR=lib
@@ -145,6 +165,17 @@ cmake -B "$BUILD_DIR" -S "$SRC_DIR" -G Ninja \
 JOBS="$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1)"
 cmake --build "$BUILD_DIR" -j"$JOBS"
 cmake --install "$BUILD_DIR"
+
+# Linux: prove the library really links libsecret, so a silent fallback can
+# never ship again.
+if [ "$LIBSECRET_FLAG" = "ON" ]; then
+    LIB="$(ls "$OUT_DIR_ABS"/lib*/libqt6keychain.so.* 2>/dev/null | head -1)"
+    if [ -z "$LIB" ] || ! (readelf -d "$LIB" 2>/dev/null || ldd "$LIB") | grep -q 'libsecret-1'; then
+        echo "ERROR: $LIB does not link libsecret-1." >&2
+        exit 1
+    fi
+    echo "Verified: qtkeychain links libsecret-1"
+fi
 
 # ── Cleanup ──────────────────────────────────────────────────────────────
 rm -rf "$SRC_DIR" "$BUILD_DIR"
