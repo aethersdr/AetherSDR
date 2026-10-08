@@ -116,9 +116,10 @@ QTreeWidget#networkDiagnosticsNavigation::branch {
     border-image: none;
     background: transparent;
 }
-QTreeWidget#networkDiagnosticsNavigation::branch:selected {
-    /* No indicator in the indent: the row's selection is painted under the
-       branch, so a transparent branch would show it as a notch. */
+QTreeWidget#networkDiagnosticsNavigation::branch:selected,
+QTreeWidget#networkDiagnosticsNavigation::branch:hover {
+    /* No indicator in the indent: the row's selection and hover are painted
+       under the branch, so a transparent branch would show them as a notch. */
     background: {{color.canon.nested}};
 }
 QTreeWidget#networkDiagnosticsNavigation::item {
