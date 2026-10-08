@@ -1883,7 +1883,7 @@ private:
     // tabs on LAN discovery events too and SmartLink only pushes on change.
     QList<WanRadioInfo> m_smartLinkRadios;
     // The last session's radio, as its tab read while connected.  It keeps a
-    // visible tab after an unexpected drop, so the "link lost" alarm always has
+    // visible tab after an unexpected drop, so the "Link lost" alarm always has
     // somewhere to show; cleared when the operator disconnects on purpose or
     // removes that tab.
     RadioTabEntry m_lastSessionTab;

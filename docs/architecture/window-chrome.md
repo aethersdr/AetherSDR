@@ -125,12 +125,14 @@ window resize.
 
 Each tab shows the radio's name on line one and `[model ·] status [· detail]`
 on line two — the model only when a nickname hides it, the state always in
-words (WCAG 1.4.1; the dot's colour is never the only carrier). The active
+words (WCAG 1.4.1; the dot's colour is never the only carrier), in sentence
+case: "Connected", "Available", "In use". The automation bridge's `status`
+field keeps the lower-case token those labels are rendered from. The active
 tab's dot is also the radio-link indicator: it swells once per discovery
 heartbeat, turns amber while discovering and red after three missed beats
 (blinking, or solid when the operator has blinking off). An operator
 disconnect stops the miss timer and clears the alarm; an unexpected loss
-raises it. While the alarm is up the tab says "link lost" in words too, and the
+raises it. While the alarm is up the tab says "Link lost" in words too, and the
 alarm stays on the radio that dropped (not on whichever tab comes first) until
 a different session starts. The strip takes the bar's free width and scrolls
 only once that runs out; then a vertical mouse wheel scrolls it, and dragging

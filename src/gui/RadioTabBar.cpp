@@ -3,6 +3,7 @@
 #include "core/ThemeManager.h"
 
 #include <QApplication>
+#include <QCoreApplication>
 #include <QEnterEvent>
 #include <QFontMetricsF>
 #include <QFocusEvent>
@@ -119,6 +120,23 @@ QString radioTabStatusText(RadioTabStatus status)
     }
 }
 
+QString radioTabStatusLabel(RadioTabStatus status)
+{
+    // Sentence case, first letter only: the tab, its tooltip and its accessible
+    // name are prose an operator reads, not the bridge token above.  The two
+    // deliberately differ — capitalizing radioTabStatusText() instead would
+    // break every driver matching on `status`.
+    switch (status) {
+        case RadioTabStatus::Connected:
+            return QCoreApplication::translate("RadioTab", "Connected");
+        case RadioTabStatus::InUse:
+            return QCoreApplication::translate("RadioTab", "In use");
+        case RadioTabStatus::Available:
+        default:
+            return QCoreApplication::translate("RadioTab", "Available");
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // RadioTab
 // ─────────────────────────────────────────────────────────────────────────────
@@ -159,7 +177,7 @@ QString RadioTab::statusWord() const
 {
     // The alarm is the one state the dot exists to show, so it must be in
     // words too (WCAG 1.4.1) — it speaks over the radio's own status.
-    return m_alarm ? tr("link lost") : radioTabStatusText(m_entry.status);
+    return m_alarm ? tr("Link lost") : radioTabStatusLabel(m_entry.status);
 }
 
 QString RadioTab::descriptionLine() const
@@ -1010,7 +1028,11 @@ void RadioTabBar::showDiscoveryPopover()
         auto* container = new QWidget(list);
         container->setProperty("radioSearchText", entry.name + ' ' + entry.model
             + ' ' + entry.transport
-            + ' ' + entry.id + ' ' + radioTabStatusText(entry.status));
+            + ' ' + entry.id + ' ' + radioTabStatusText(entry.status)
+            // Both spellings: the filter is case-insensitive, so the token
+            // already covers a typed "Connected" in English, but a translated
+            // label is a different word and has to be searchable too.
+            + ' ' + radioTabStatusLabel(entry.status));
         auto* rowLayout = new QHBoxLayout(container);
         rowLayout->setContentsMargins(0, 0, 0, 0);
         rowLayout->setSpacing(4);
@@ -1023,7 +1045,7 @@ void RadioTabBar::showDiscoveryPopover()
         QFont rowFont = ThemeManager::instance().font(row, QStringLiteral("font.family.ui"));
         rowFont.setPixelSize(12);
         row->setFont(rowFont);
-        const QString status = entry.transport + middleDot() + radioTabStatusText(entry.status);
+        const QString status = entry.transport + middleDot() + radioTabStatusLabel(entry.status);
         const QFontMetrics metrics(rowFont);
         row->setText(metrics.elidedText(entry.name, Qt::ElideRight, 240)
             + '\n' + metrics.elidedText(status, Qt::ElideRight, 240));
