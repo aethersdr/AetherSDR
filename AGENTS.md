@@ -72,10 +72,8 @@ When helping with AetherSDR:
   the visual canon in
   [`docs/style/aethersdr-style-guide.md`](docs/style/aethersdr-style-guide.md);
   apply it only to UI your issue already changes.
-- **User documentation lives in `docs/user/docs/`** (Docusaurus,
-  docs.aethersdr.com; [`docs/user/README.md`](docs/user/README.md)) and follows
-  its Docs Style Guide. A PR that changes user-visible behaviour updates the
-  matching page in the same PR. The rest of `docs/` is for contributors.
+- **Every user-visible change updates the user docs in the same PR** — see
+  [User documentation](#user-documentation) below.
 - **Read `CONTRIBUTING.md`** for contribution policy (what we accept, who
   reviews what) and `docs/DEVELOPER-GUIDE.md` for the contributor-facing
   coding conventions and the AI-to-AI debugging protocol (open a GitHub issue
@@ -156,6 +154,38 @@ AI agents must **NOT** autonomously change:
 When in doubt, the agent should implement the fix and note in the PR that
 design decisions need maintainer review. The project maintainer (Jeremy/KK7GWY)
 is the sole authority on visual design and UX direction.
+
+## User documentation
+
+The user guide is docs-as-code in `docs/user/` (Docusaurus, served at
+docs.aethersdr.com). Almost every change touches it: a PR that changes what a
+user sees or does updates the matching page **in the same PR**, never in a
+follow-up. The rest of `docs/` is for contributors.
+
+- **Edit `docs/user/docs/` only.** `versioned_docs/` is the Stable snapshot;
+  `/release-prep` replaces it with `tools/docs/snapshot_stable.py`. Never
+  hand-edit it.
+- **Follow the Docs Style Guide** (`docs/user/docs/docs-style-guide.md`): fixed
+  section order, a status banner where support varies by radio, *Known issues*
+  citing open GitHub issues, *Troubleshooting* as symptom → fix. State current
+  behaviour, never history. Use exact UI labels and menu paths from the source.
+- **New page?** Add it to `docs/user/sidebars.js`; link pages with relative
+  `./slug.md` links.
+- **Generated pages** (`docs/user/docs/generated/`: shortcuts, MIDI and
+  controller actions, log categories, TCI commands) come from source. After
+  touching those registries, run `python3 tools/docs/gen_reference.py` and
+  commit the output.
+- **Log messages** cited by the Log Analyzer
+  (`docs/user/src/components/LogAnalyzer/rules.json`): rewording one means
+  updating its rule; moved lines refresh with
+  `node tools/docs/test_log_rules.mjs --update`.
+- **Screenshots** (`docs/user/screens.json`): if your UI change makes a shot
+  stale, re-shoot it with `tools/docs/capture_screenshots.py --only <id>` (see
+  `docs/user/README.md`; never transmit, redact IP/MAC/serial) or say so in
+  the PR.
+- **Before pushing:** `cd docs/user && npm ci && npm run build` — the build is
+  the link and anchor check. Static checks run `gen_reference.py --check` and
+  `test_log_rules.mjs` on every PR.
 
 ## C++ Style Guide
 
