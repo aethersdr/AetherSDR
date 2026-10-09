@@ -50,16 +50,21 @@ QStringList QtPlatformChoice::logLines(const QString& requested, QpaRequestSourc
         lines << QStringLiteral("Platform: Qt platform plugin \"%1\" (-platform %2, on the command line)")
                      .arg(platformName, requested);
     } else {
-        QString origin;
+        QString request;
         switch (source) {
-            case QpaRequestSource::Unset:       origin = QStringLiteral("unset, Qt default"); break;
-            case QpaRequestSource::User:        origin = QStringLiteral("set by the user"); break;
-            case QpaRequestSource::AetherSDR:   origin = QStringLiteral("set by AetherSDR"); break;
-            case QpaRequestSource::CommandLine: break;
+            case QpaRequestSource::Unset:
+                request = QStringLiteral("QT_QPA_PLATFORM unset, Qt default");
+                break;
+            case QpaRequestSource::User:
+                request = QStringLiteral("QT_QPA_PLATFORM=%1, set by the user").arg(requested);
+                break;
+            case QpaRequestSource::AetherSDR:
+                request = QStringLiteral("QT_QPA_PLATFORM=%1, set by AetherSDR").arg(requested);
+                break;
+            case QpaRequestSource::CommandLine:
+                break;
         }
-        const QString value = source == QpaRequestSource::Unset ? QString() : requested;
-        lines << QStringLiteral("Platform: Qt platform plugin \"%1\" (QT_QPA_PLATFORM=%2, %3)")
-                     .arg(platformName, value, origin);
+        lines << QStringLiteral("Platform: Qt platform plugin \"%1\" (%2)").arg(platformName, request);
     }
     if (source != QpaRequestSource::Unset && fellBack(requested, platformName)) {
         lines << QStringLiteral("Platform: Qt fell back from \"%1\" to \"%2\"; "

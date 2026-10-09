@@ -63,7 +63,7 @@ int main()
         const QStringList l = QtPlatformChoice::logLines("", QpaRequestSource::Unset, "cocoa");
         report("unset: text",
                l.size() == 1
-               && l.value(0) == "Platform: Qt platform plugin \"cocoa\" (QT_QPA_PLATFORM=, unset, Qt default)");
+               && l.value(0) == "Platform: Qt platform plugin \"cocoa\" (QT_QPA_PLATFORM unset, Qt default)");
     }
 
     {
