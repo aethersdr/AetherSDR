@@ -11,32 +11,46 @@ on:
         default: false
         type: boolean
 
+# Each job grants itself what it needs. Only package-windows can mint the
+# Azure token that signs as the AetherSDR publisher (#6288), and it runs no
+# third-party build code: build-windows compiles everything unprivileged and
+# hands package-windows the unsigned payload.
 permissions:
-  contents: write
-  # Azure OIDC login for Authenticode signing (#6288). No stored credential:
-  # the federated credential on the Azure app trusts only this repository's
-  # windows-signing environment.
-  id-token: write
+  contents: read
 
 jobs:
   build-windows:
     runs-on: windows-latest
-    # Tag runs on this repository sign with Azure Artifact Signing (#6288).
-    # The windows-signing environment holds the Azure IDs and admits only v*
-    # tags, so a branch dispatch runs with no environment and ships unsigned.
-    environment: ${{ (github.ref_type == 'tag' && github.repository == 'aethersdr/AetherSDR') && 'windows-signing' || '' }}
     env:
       # ninja reads this on the two cmake --build steps below and stamps
       # elapsed seconds per line, so the long-pole targets are visible in
       # the log; the other steps ignore it.
       NINJA_STATUS: "[%f/%t %es] "
-      # Must agree with the environment condition above.
-      AETHER_SIGN: ${{ github.ref_type == 'tag' && github.repository == 'aethersdr/AetherSDR' }}
     outputs:
       publish-flight: ${{ steps.store-plan.outputs.publishFlight }}
+      release-artifacts: ${{ steps.store-plan.outputs.releaseArtifacts }}
+      production-draft: ${{ steps.store-plan.outputs.productionDraft }}
+      store-eligible: ${{ steps.store-plan.outputs.storeEligible }}
+      msix-version: ${{ steps.store-plan.outputs.msixVersion }}
+      sign: ${{ steps.sign-plan.outputs.sign }}
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      # The one place the signing decision is made; package-windows reads it
+      # for both its environment and its signing steps. Release tags (v*) on
+      # this repository sign. So do signtest-* tags: the maintainer's signing
+      # dry run, dispatched by hand, which reaches the signing identity only
+      # while a temporary signtest-* rule is on the windows-signing
+      # environment (docs/VERIFYING-RELEASES.md). Anything else, a branch or
+      # another tag, runs with no environment and ships unsigned.
+      - name: Plan Authenticode signing
+        id: sign-plan
+        env:
+          SIGN: ${{ github.ref_type == 'tag' && (startsWith(github.ref_name, 'v') || startsWith(github.ref_name, 'signtest-')) && github.repository == 'aethersdr/AetherSDR' }}
+        run: |
+          "sign=$env:SIGN" >> $env:GITHUB_OUTPUT
+          Write-Host "Authenticode signing: $env:SIGN"
 
       # Resolve publication intent before building or authenticating. A manual
       # tag dispatch is still manual: it cannot attach public release assets
@@ -60,7 +74,7 @@ jobs:
           foreach ($name in @('releaseArtifacts', 'productionDraft', 'publishFlight', 'storeEligible')) {
             "$name=$($plan.$name.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
           }
-          "AETHERSDR_MSIX_VERSION=$($plan.msixVersion)" >> $env:GITHUB_ENV
+          "msixVersion=$($plan.msixVersion)" >> $env:GITHUB_OUTPUT
           if (-not $plan.storeEligible) {
             # A plain Write-Warning stays inside this step's collapsed log; the
             # annotation puts the reason on the run summary where it is seen.
@@ -112,8 +126,10 @@ jobs:
           # existing windeployqt --no-system-d3d-compiler flag below.
           archives: 'opengl32sw qtbase qtsvg'
 
-      - name: Install Ninja, Inno Setup, and LLVM
-        run: choco install ninja innosetup llvm -y
+      # Inno Setup is used by package-windows, which takes the copy on the
+      # runner image rather than installing anything.
+      - name: Install Ninja and LLVM
+        run: choco install ninja llvm -y
 
       # zlib is bundled under third_party/zlib (1.3.1) — no vcpkg install
       # needed; CMake builds zlibstatic from source.  (#2651)
@@ -449,16 +465,110 @@ jobs:
       - name: Verify deploy payload is self-contained
         run: powershell -NoProfile -ExecutionPolicy Bypass -File packaging\windows\check-deploy-dependencies.ps1 -DeployDir deploy
 
-      # ----------------------------------------------------------------------
-      # Authenticode signing (#6288). Every unsigned exe/dll in deploy\ is
-      # signed here, before the portable ZIP, so the ZIP, the Inno installer
-      # and the MSIX all ship the same signed payload. Inno then signs its own
-      # setup exe and uninstaller through the SignTool directive.
-      #
-      # Artifact Signing certificates are valid for three days, so every
-      # signature is RFC 3161 timestamped; an untimestamped one would stop
-      # validating once the certificate expires.
-      # ----------------------------------------------------------------------
+      # The staging step above is a hard gate: it verifies every deployed Qt
+      # DLL/plugin has its same-named PDB before removing symbols from deploy/.
+      # Re-check the high-value symbols independently so a packaging refactor
+      # cannot silently shrink the Store symbol surface. Keep this list in sync
+      # with check-symbol-package.ps1's default RequiredPdbs list.
+      - name: Verify required debug symbols present
+        run: |
+          $required = @("AetherSDR.pdb", "Qt6Core.pdb", "Qt6Gui.pdb", "Qt6Multimedia.pdb", "Qt6Network.pdb", "Qt6Widgets.pdb", "qwindows.pdb", "windowsmediaplugin.pdb")
+          foreach ($pdb in $required) {
+            if (-not (Test-Path (Join-Path "symbols" $pdb))) {
+              throw "Required Store symbol is missing: symbols\$pdb"
+            }
+          }
+          $symbolCount = @(Get-ChildItem symbols -File -Filter "*.pdb").Count
+          Write-Host "Required symbols present; $symbolCount PDBs staged."
+
+      # Complete application + Qt PDB set, kept separately from .msixupload so
+      # maintainers can symbolize local dumps without unpacking Store assets.
+      - name: Upload debug symbols
+        if: hashFiles('symbols/AetherSDR.pdb') != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: Windows-Symbols
+          path: symbols/
+          retention-days: 90
+
+      # The same PDB set, kept with the release so it outlives the 90-day
+      # artifact (docs/debugging-crashes.md), plus the waveform helper's PDB.
+      # Staged in a copy because symbols/ is what the .appxsym check verifies.
+      # .tar.xz on purpose: sign-release.yml downloads and checksums *.zip, so
+      # a .zip here would change SHA256SUMS.txt.
+      - name: Package debug symbols
+        # Symbols are for us, not users: a failure here must not cost the release
+        # its installers. A missing archive surfaces as /tag-release's WARN.
+        continue-on-error: true
+        if: hashFiles('symbols/AetherSDR.pdb') != ''
+        run: |
+          $safeRefName = "${{ github.ref_name }}" -replace '[\\/:*?"<>|]', '_'
+          $archive = "AetherSDR-$safeRefName-Windows-x64-symbols.tar.xz"
+          New-Item -ItemType Directory -Force symbols-release | Out-Null
+          Copy-Item symbols\* symbols-release\ -Recurse -Force
+          if (Test-Path build\aether-dv-waveform.pdb) {
+            Copy-Item build\aether-dv-waveform.pdb symbols-release\
+          }
+          7z a -ttar symbols-release.tar .\symbols-release\* | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "7z tar failed ($LASTEXITCODE)" }
+          7z a -txz -mmt=on $archive symbols-release.tar | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "7z xz failed ($LASTEXITCODE)" }
+          Remove-Item symbols-release.tar
+          Get-Item $archive | Format-Table Name, Length
+
+      - name: Upload symbol archive
+        if: hashFiles('AetherSDR-*-symbols.tar.xz') != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: Windows-Symbols-archive
+          path: AetherSDR-*-symbols.tar.xz
+
+      # Everything package-windows needs, unsigned. The handoff is the trust
+      # boundary: nothing in this job can sign, and nothing in package-windows
+      # builds or fetches third-party code.
+      - name: Upload unsigned payload for packaging
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: Windows-Payload
+          path: |
+            deploy/
+            installer-runtime/
+            symbols/
+          retention-days: 1
+          if-no-files-found: error
+
+  # ----------------------------------------------------------------------
+  # Packaging and Authenticode signing (#6288). On release tags this is the
+  # only job that can request the Azure OIDC token that signs as the AetherSDR
+  # publisher. It runs our own scripts, the hash-pinned signing tools and the
+  # Inno Setup already on the runner image; it compiles nothing and installs
+  # no package, so build dependencies never run where that token is reachable.
+  #
+  # Every unsigned exe/dll in deploy\ and installer-runtime\ is signed before
+  # the portable ZIP, so the ZIP, the Inno installer and the MSIX all ship the
+  # same signed payload. Inno then signs its own setup exe and uninstaller
+  # through the SignTool directive. Artifact Signing certificates are valid
+  # for three days, so every signature is RFC 3161 timestamped.
+  # ----------------------------------------------------------------------
+  package-windows:
+    needs: build-windows
+    runs-on: windows-latest
+    environment: ${{ needs.build-windows.outputs.sign == 'true' && 'windows-signing' || '' }}
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AETHER_SIGN: ${{ needs.build-windows.outputs.sign }}
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Download unsigned payload
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: Windows-Payload
+          path: .
+
       - name: Azure login for Authenticode signing
         if: env.AETHER_SIGN == 'true'
         uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
@@ -508,34 +618,47 @@ jobs:
               'AzurePowerShellCredential', 'AzureDeveloperCliCredential', 'InteractiveBrowserCredential'
             )
           } | ConvertTo-Json | Set-Content -Path $metadata -Encoding utf8
-          # RUNNER_TEMP has no spaces, so these paths also go unquoted into
-          # Inno's SignTool command line below.
-          "AETHER_SIGNTOOL=$signtool" >> $env:GITHUB_ENV
-          "AETHER_SIGN_DLIB=$dlib" >> $env:GITHUB_ENV
-          "AETHER_SIGN_METADATA=$metadata" >> $env:GITHUB_ENV
-
-      - name: Sign deploy payload
-        if: env.AETHER_SIGN == 'true'
-        run: |
+          # The one signtool argument list, shared by the payload step and
+          # Inno's SignTool command so the two can never sign differently.
           # /d and /du name the program in the signature itself: UAC shows
           # "Program name: AetherSDR" with the website as its link, since the
           # individual certificate can only carry the publisher's own name.
-          # Leave files that already carry a valid vendor signature (the
-          # Microsoft-signed MSVC runtime, for one) as they are; sign the rest,
+          # RUNNER_TEMP has no spaces, so nothing here needs quoting.
+          $signArgs = "sign /fd SHA256 /d AetherSDR /du https://www.aethersdr.com/ /tr http://timestamp.acs.microsoft.com /td SHA256 /dlib $dlib /dmdf $metadata"
+          "AETHER_SIGNTOOL=$signtool" >> $env:GITHUB_ENV
+          "AETHER_SIGN_ARGS=$signArgs" >> $env:GITHUB_ENV
+
+      - name: Sign payload
+        if: env.AETHER_SIGN == 'true'
+        run: |
+          # Keep a vendor signature only when it is embedded and timestamped,
+          # which is what the gate below requires; sign everything else,
           # including the third-party and vendored DLLs that otherwise have no
-          # publisher identity at all.
+          # publisher identity at all. installer-runtime\ is what the setup
+          # packs (VC_RUNTIME_DIR), so it is signed and verified as well.
           $toSign = @()
-          foreach ($f in Get-ChildItem -Path deploy -Recurse -File -Include *.exe, *.dll) {
+          $files = @(Get-ChildItem -Path deploy -Recurse -File -Include *.exe, *.dll) +
+                   @(Get-ChildItem -Path installer-runtime -File -Filter *.dll)
+          foreach ($f in $files) {
             $sig = Get-AuthenticodeSignature -FilePath $f.FullName
-            if ($sig.Status -eq 'Valid') {
+            if ($sig.Status -eq 'Valid' -and $sig.SignatureType -eq 'Authenticode' -and $sig.TimeStamperCertificate) {
               Write-Host "Keeping existing signature: $($f.Name) ($($sig.SignerCertificate.Subject))"
             } else {
               $toSign += $f.FullName
             }
           }
           Write-Host "Signing $($toSign.Count) files"
-          & $env:AETHER_SIGNTOOL sign /fd SHA256 /d AetherSDR /du https://www.aethersdr.com/ /tr http://timestamp.acs.microsoft.com /td SHA256 /dlib $env:AETHER_SIGN_DLIB /dmdf $env:AETHER_SIGN_METADATA @toSign
-          if ($LASTEXITCODE -ne 0) { throw "signtool sign failed ($LASTEXITCODE)" }
+          # A timestamp-server blip must not fail a multi-hour tag build.
+          # Re-signing an already signed file replaces its signature, so a
+          # retry over the whole list is safe.
+          $signArgs = $env:AETHER_SIGN_ARGS -split ' '
+          for ($attempt = 1; $attempt -le 3; $attempt++) {
+            & $env:AETHER_SIGNTOOL @signArgs @toSign
+            if ($LASTEXITCODE -eq 0) { break }
+            if ($attempt -eq 3) { throw "signtool sign failed ($LASTEXITCODE) after 3 attempts" }
+            Write-Host "::warning::signtool sign failed ($LASTEXITCODE); retrying in 30 s"
+            Start-Sleep -Seconds 30
+          }
 
       - name: Create portable ZIP
         run: |
@@ -551,6 +674,11 @@ jobs:
 
       - name: Create installer (Inno Setup)
         run: |
+          # Inno Setup ships on the windows-latest image. It is not installed
+          # here: this job must not run a package installer where the signing
+          # token is reachable.
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { throw "Inno Setup is no longer on the runner image: $iscc" }
           # Same sanitization as the portable ZIP step — Inno also pukes on
           # filesystem-unsafe characters in /DAPP_VERSION.
           $version = "${{ github.ref_name }}" -replace '^v', '' -replace '[\\/:*?"<>|]', '_'
@@ -560,21 +688,56 @@ jobs:
             # Inno substitutes the quoted output path for $f. Signing through
             # the directive is what covers unins000.exe, which Inno builds from
             # an embedded stub; a signtool pass over the output would miss it.
+            # Inno retries a failed SignTool call on its own.
             $isccArgs += '/DSIGN'
-            $isccArgs += "/Saethersign=$env:AETHER_SIGNTOOL sign /fd SHA256 /d AetherSDR /du https://www.aethersdr.com/ /tr http://timestamp.acs.microsoft.com /td SHA256 /dlib $env:AETHER_SIGN_DLIB /dmdf $env:AETHER_SIGN_METADATA `$f"
+            $isccArgs += "/Saethersign=$env:AETHER_SIGNTOOL $env:AETHER_SIGN_ARGS `$f"
           }
-          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" @isccArgs packaging\windows\installer.iss
+          & $iscc @isccArgs packaging\windows\installer.iss
 
-      # Release gate for #6288: every exe/dll the portable ZIP and installer
-      # carry, and the setup exe itself, must validate under the default
-      # Authenticode policy and be timestamped. The binaries we build must be
-      # signed by our certificate, not merely by someone's.
+      # MSIX runs AFTER the portable ZIP + Inno installer steps and is
+      # gated with continue-on-error so a future MSIX hiccup (missing SDK
+      # tool on a runner image bump, signtool flake, etc.) can't gate the
+      # established portable-zip + Inno installer delivery path that real
+      # users depend on.  When MSIX matures we can promote it back into
+      # the hard-required artifact set.
+      - name: Create MSIX package
+        if: needs.build-windows.outputs.store-eligible == 'true'
+        continue-on-error: true
+        env:
+          AETHERSDR_MSIX_VERSION: ${{ needs.build-windows.outputs.msix-version }}
+          AETHERSDR_MSIX_IDENTITY_NAME: ${{ vars.AETHERSDR_MSIX_IDENTITY_NAME }}
+          AETHERSDR_MSIX_PUBLISHER: ${{ vars.AETHERSDR_MSIX_PUBLISHER }}
+          AETHERSDR_MSIX_DISPLAY_NAME: ${{ vars.AETHERSDR_MSIX_DISPLAY_NAME }}
+          AETHERSDR_MSIX_PUBLISHER_DISPLAY_NAME: ${{ vars.AETHERSDR_MSIX_PUBLISHER_DISPLAY_NAME }}
+          AETHERSDR_MSIX_DESCRIPTION: ${{ vars.AETHERSDR_MSIX_DESCRIPTION }}
+          AETHERSDR_MSIX_BACKGROUND_COLOR: ${{ vars.AETHERSDR_MSIX_BACKGROUND_COLOR }}
+          AETHERSDR_MSIX_INSTALLER_ACCENT_COLOR: ${{ vars.AETHERSDR_MSIX_INSTALLER_ACCENT_COLOR }}
+          AETHERSDR_MSIX_INSTALLER_BACKGROUND_COLOR: ${{ vars.AETHERSDR_MSIX_INSTALLER_BACKGROUND_COLOR }}
+        run: |
+          . .\packaging\windows\store-identity.ps1
+          powershell -NoProfile -ExecutionPolicy Bypass -File packaging\windows\create-msix.ps1 -DeployDir deploy -OutputDir . -PdbPath symbols\AetherSDR.pdb -SymbolDir symbols -CreateUpload -SkipSign -ExcludeDfnrModel -RequirePdb
+
+      # Release gate for #6288: every exe/dll the portable ZIP, the installer
+      # and the MSIX carry, and the setup exe itself, must validate under the
+      # default Authenticode policy and be timestamped. The binaries we build
+      # must be signed by our certificate, not merely by someone's.
       - name: Verify Authenticode signatures
         if: env.AETHER_SIGN == 'true'
         run: |
           $setup = @(Get-ChildItem -File -Filter 'AetherSDR-*-setup.exe')
           if ($setup.Count -ne 1) { throw "Expected exactly one setup exe, found $($setup.Count)" }
-          $targets = @(Get-ChildItem -Path deploy -Recurse -File -Include *.exe, *.dll) + $setup
+          $targets = @(Get-ChildItem -Path deploy -Recurse -File -Include *.exe, *.dll) +
+                     @(Get-ChildItem -Path installer-runtime -File -Filter *.dll) + $setup
+          # The MSIX is built from deploy\, so check that what it actually
+          # packed is the signed payload, not just that deploy\ is signed.
+          $msix = @(Get-ChildItem -File -Filter 'AetherSDR-*.msix')
+          if ($msix.Count -eq 1) {
+            $msixDir = Join-Path $env:RUNNER_TEMP 'msix-check'
+            Copy-Item $msix[0].FullName "$msixDir.zip"
+            Expand-Archive -Path "$msixDir.zip" -DestinationPath $msixDir -Force
+            $targets += @(Get-ChildItem -Path $msixDir -Recurse -File -Include *.exe, *.dll)
+            Write-Host "Including $($msix[0].Name) contents"
+          }
           & $env:AETHER_SIGNTOOL verify /pa /q @($targets.FullName)
           if ($LASTEXITCODE -ne 0) { throw "signtool verify /pa failed ($LASTEXITCODE)" }
           foreach ($t in $targets) {
@@ -594,43 +757,15 @@ jobs:
           }
           Write-Host "$($targets.Count) files carry valid, timestamped Authenticode signatures."
 
-      # MSIX runs AFTER the portable ZIP + Inno installer steps and is
-      # gated with continue-on-error so a future MSIX hiccup (missing SDK
-      # tool on a runner image bump, signtool flake, etc.) can't gate the
-      # established portable-zip + Inno installer delivery path that real
-      # users depend on.  When MSIX matures we can promote it back into
-      # the hard-required artifact set.
-      - name: Create MSIX package
-        if: steps.store-plan.outputs.storeEligible == 'true'
-        continue-on-error: true
-        env:
-          AETHERSDR_MSIX_IDENTITY_NAME: ${{ vars.AETHERSDR_MSIX_IDENTITY_NAME }}
-          AETHERSDR_MSIX_PUBLISHER: ${{ vars.AETHERSDR_MSIX_PUBLISHER }}
-          AETHERSDR_MSIX_DISPLAY_NAME: ${{ vars.AETHERSDR_MSIX_DISPLAY_NAME }}
-          AETHERSDR_MSIX_PUBLISHER_DISPLAY_NAME: ${{ vars.AETHERSDR_MSIX_PUBLISHER_DISPLAY_NAME }}
-          AETHERSDR_MSIX_DESCRIPTION: ${{ vars.AETHERSDR_MSIX_DESCRIPTION }}
-          AETHERSDR_MSIX_BACKGROUND_COLOR: ${{ vars.AETHERSDR_MSIX_BACKGROUND_COLOR }}
-          AETHERSDR_MSIX_INSTALLER_ACCENT_COLOR: ${{ vars.AETHERSDR_MSIX_INSTALLER_ACCENT_COLOR }}
-          AETHERSDR_MSIX_INSTALLER_BACKGROUND_COLOR: ${{ vars.AETHERSDR_MSIX_INSTALLER_BACKGROUND_COLOR }}
+      # Signing is over; drop the session so no later step holds it.
+      - name: End the signing session
+        if: always() && env.AETHER_SIGN == 'true'
         run: |
-          . .\packaging\windows\store-identity.ps1
-          powershell -NoProfile -ExecutionPolicy Bypass -File packaging\windows\create-msix.ps1 -DeployDir deploy -OutputDir . -PdbPath symbols\AetherSDR.pdb -SymbolDir symbols -CreateUpload -SkipSign -ExcludeDfnrModel -RequirePdb
-
-      # The staging step above is a hard gate: it verifies every deployed Qt
-      # DLL/plugin has its same-named PDB before removing symbols from deploy/.
-      # Re-check the high-value symbols independently so a packaging refactor
-      # cannot silently shrink the Store symbol surface. Keep this list in sync
-      # with check-symbol-package.ps1's default RequiredPdbs list.
-      - name: Verify required debug symbols present
-        run: |
-          $required = @("AetherSDR.pdb", "Qt6Core.pdb", "Qt6Gui.pdb", "Qt6Multimedia.pdb", "Qt6Network.pdb", "Qt6Widgets.pdb", "qwindows.pdb", "windowsmediaplugin.pdb")
-          foreach ($pdb in $required) {
-            if (-not (Test-Path (Join-Path "symbols" $pdb))) {
-              throw "Required Store symbol is missing: symbols\$pdb"
-            }
-          }
-          $symbolCount = @(Get-ChildItem symbols -File -Filter "*.pdb").Count
-          Write-Host "Required symbols present; $symbolCount PDBs staged."
+          az logout 2>$null
+          az account clear 2>$null
+          "AETHER_SIGNTOOL=" >> $env:GITHUB_ENV
+          "AETHER_SIGN_ARGS=" >> $env:GITHUB_ENV
+          exit 0
 
       - name: Verify Store symbol package topology
         if: hashFiles('AetherSDR-*.appxsym') != ''
@@ -655,50 +790,35 @@ jobs:
             AetherSDR-*.msixupload
             AetherSDR-*.appxsym
 
-      # Complete application + Qt PDB set, kept separately from .msixupload so
-      # maintainers can symbolize local dumps without unpacking Store assets.
-      - name: Upload debug symbols
-        if: hashFiles('symbols/AetherSDR.pdb') != ''
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+  # Publishing, apart from the signing identity: attaching to the GitHub
+  # release needs contents: write, and the Store CLI is a third-party action.
+  release-windows:
+    needs: [build-windows, package-windows]
+    if: needs.build-windows.outputs.release-artifacts == 'true' || needs.build-windows.outputs.production-draft == 'true'
+    runs-on: windows-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Download signed packages
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          name: Windows-Symbols
-          path: symbols/
-          retention-days: 90
+          name: Windows-Installer
+          path: .
 
-      # The same PDB set, kept with the release so it outlives the 90-day
-      # artifact (docs/debugging-crashes.md), plus the waveform helper's PDB.
-      # Staged in a copy because symbols/ is what the .appxsym check verifies.
-      # .tar.xz on purpose: sign-release.yml downloads and checksums *.zip, so
-      # a .zip here would change SHA256SUMS.txt.
-      - name: Package debug symbols
-        # Symbols are for us, not users: a failure here must not cost the release
-        # its installers. A missing archive surfaces as /tag-release's WARN.
+      # Package debug symbols is continue-on-error, so the archive may not
+      # exist; a missing one is /tag-release's WARN, not a failed release.
+      - name: Download symbol archive
         continue-on-error: true
-        if: hashFiles('symbols/AetherSDR.pdb') != ''
-        run: |
-          $safeRefName = "${{ github.ref_name }}" -replace '[\\/:*?"<>|]', '_'
-          $archive = "AetherSDR-$safeRefName-Windows-x64-symbols.tar.xz"
-          New-Item -ItemType Directory -Force symbols-release | Out-Null
-          Copy-Item symbols\* symbols-release\ -Recurse -Force
-          if (Test-Path build\aether-dv-waveform.pdb) {
-            Copy-Item build\aether-dv-waveform.pdb symbols-release\
-          }
-          7z a -ttar symbols-release.tar .\symbols-release\* | Out-Null
-          if ($LASTEXITCODE -ne 0) { throw "7z tar failed ($LASTEXITCODE)" }
-          7z a -txz -mmt=on $archive symbols-release.tar | Out-Null
-          if ($LASTEXITCODE -ne 0) { throw "7z xz failed ($LASTEXITCODE)" }
-          Remove-Item symbols-release.tar
-          Get-Item $archive | Format-Table Name, Length
-
-      - name: Upload symbol archive
-        if: hashFiles('AetherSDR-*-symbols.tar.xz') != ''
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: Windows-Symbols-archive
-          path: AetherSDR-*-symbols.tar.xz
+          path: .
 
       - name: Attach to release
-        if: steps.store-plan.outputs.releaseArtifacts == 'true'
+        if: needs.build-windows.outputs.release-artifacts == 'true'
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64
         with:
           # .msixupload is the Partner Center upload artifact (manual Store
@@ -733,13 +853,13 @@ jobs:
       # docs/WINDOWS-STORE-MSIX.md.
       # ----------------------------------------------------------------------
       - name: Setup Microsoft Store Developer CLI
-        if: steps.store-plan.outputs.productionDraft == 'true'
+        if: needs.build-windows.outputs.production-draft == 'true'
         uses: microsoft/microsoft-store-apppublisher@cc9910a8d59f2eb55cbb83df0a3800cf3b5300e0
         with:
           version: v0.4.2
 
       - name: Stage Microsoft Store submission (draft)
-        if: steps.store-plan.outputs.productionDraft == 'true'
+        if: needs.build-windows.outputs.production-draft == 'true'
         env:
           AZURE_AD_TENANT_ID: ${{ secrets.AZURE_AD_TENANT_ID }}
           AZURE_AD_APPLICATION_CLIENT_ID: ${{ secrets.AZURE_AD_APPLICATION_CLIENT_ID }}
@@ -761,7 +881,7 @@ jobs:
   # secret, and it never changes or attaches anything to a GitHub release.
   publish-store-flight:
     name: Fully submit developer Store flight
-    needs: build-windows
+    needs: [build-windows, package-windows]
     if: needs.build-windows.outputs.publish-flight == 'true'
     runs-on: windows-latest
     permissions:

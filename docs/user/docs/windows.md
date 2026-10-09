@@ -23,7 +23,7 @@ AetherSDR runs natively on 64-bit Windows, as an installer or as a portable ZIP.
 
 1. Download the installer or the portable ZIP from [GitHub Releases](https://github.com/aethersdr/AetherSDR/releases/latest).
 2. Run the installer, or extract the ZIP and run `AetherSDR.exe`.
-3. The Windows builds are GPG-signed but not Authenticode-signed, so **Windows SmartScreen** may warn the first time you run them. Verifying the signature confirms the download is genuine; see [Installation](./installation.md) and [docs/VERIFYING-RELEASES.md](https://github.com/aethersdr/AetherSDR/blob/main/docs/VERIFYING-RELEASES.md).
+3. The Windows builds are Authenticode-signed (publisher: Jeremy Fielder) and GPG-signed. **Windows SmartScreen** may still warn about a new release until it has built download reputation. Verifying the signature confirms the download is genuine; see [Installation](./installation.md) and [docs/VERIFYING-RELEASES.md](https://github.com/aethersdr/AetherSDR/blob/main/docs/VERIFYING-RELEASES.md).
 4. The **Connect to Radio** window opens. Continue with [First Connection](./first-connection.md), or try [Your First Session](./your-first-session.md) with no radio.
 
 Both packages keep your settings in the same place, `%LOCALAPPDATA%\AetherSDR\`, so you can switch between them.
@@ -89,9 +89,9 @@ Set these in **System Properties → Environment Variables**, or in a Command Pr
 
 ### Windows SmartScreen warns about AetherSDR
 
-The Windows builds are GPG-signed but not Authenticode-signed, so SmartScreen does not recognise the publisher.
+The Windows builds are Authenticode-signed (publisher: Jeremy Fielder), but SmartScreen can still warn about a new release until it has built download reputation.
 
-1. Verify the download's GPG signature, following [docs/VERIFYING-RELEASES.md](https://github.com/aethersdr/AetherSDR/blob/main/docs/VERIFYING-RELEASES.md).
+1. Check the publisher: right-click the file, choose **Properties → Digital Signatures**, and confirm the signer is Jeremy Fielder. You can also verify the download's GPG signature, following [docs/VERIFYING-RELEASES.md](https://github.com/aethersdr/AetherSDR/blob/main/docs/VERIFYING-RELEASES.md).
 2. If the signature is good, run AetherSDR anyway from the SmartScreen prompt.
 
 ### WSJT-X or another digital-mode program gets no audio

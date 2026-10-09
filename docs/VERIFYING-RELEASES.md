@@ -90,6 +90,27 @@ gpg --import RELEASE-SIGNING-KEY.pub.asc
 gpg --verify AetherSDR-vX.Y.Z-Windows-x64-setup.exe.asc AetherSDR-vX.Y.Z-Windows-x64-setup.exe
 ```
 
+## Signing dry run (maintainers)
+
+To prove a change to Windows signing without cutting a release, dispatch the
+Windows Installer workflow on a `signtest-*` tag. Pushing a `v*` tag would
+start every release workflow instead.
+
+```sh
+gh api -X POST repos/aethersdr/AetherSDR/environments/windows-signing/deployment-branch-policies \
+  -f name='signtest-*' -f type=tag          # note the returned id
+git tag -m "signing dry run" signtest-<n> <commit> && git push origin refs/tags/signtest-<n>
+gh workflow run windows-installer.yml --ref signtest-<n>
+```
+
+When the run finishes, delete the tag and the rule. While the rule exists,
+any `signtest-*` tag can sign.
+
+```sh
+git push origin :refs/tags/signtest-<n>
+gh api -X DELETE repos/aethersdr/AetherSDR/environments/windows-signing/deployment-branch-policies/<id>
+```
+
 ## Commit Signing
 
 All commits on `main` must be GPG-signed by their author. GitHub displays

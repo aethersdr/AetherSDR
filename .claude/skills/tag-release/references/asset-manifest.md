@@ -12,7 +12,7 @@ from the first release cut after the docs site landed. Names substitute the vers
 | 4 | `AetherSDR-vX.Y.Z-aarch64.AppImage.asc` | Sign Release Artifacts | — | — | — |
 | 5 | `AetherSDR-vX.Y.Z-macOS-apple-silicon.dmg` | macOS DMG (`build-dmg`, apple-silicon) | no | yes — "Sign DMG" + "Notarize DMG" steps | no |
 | 6 | `AetherSDR-vX.Y.Z-macOS-intel.dmg` | macOS DMG (intel) | no | yes — same steps | no |
-| 7 | `AetherSDR-vX.Y.Z-Windows-x64-setup.exe` | Windows Installer (`build-windows`) | yes (8) | — | yes |
+| 7 | `AetherSDR-vX.Y.Z-Windows-x64-setup.exe` | Windows Installer (`package-windows`) | yes (8) | — | yes |
 | 8 | `AetherSDR-vX.Y.Z-Windows-x64-setup.exe.asc` | Sign Release Artifacts | — | — | — |
 | 9 | `AetherSDR-vX.Y.Z-Windows-x64-portable.zip` | Windows Installer | yes (10) | — | yes |
 | 10 | `AetherSDR-vX.Y.Z-Windows-x64-portable.zip.asc` | Sign Release Artifacts | — | — | — |

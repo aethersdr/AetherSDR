@@ -451,11 +451,18 @@ def check_store(repo: str, windows_run: dict[str, Any] | None, hotfix: bool) -> 
         report("SKIP", "Microsoft Store staging step", "no Windows Installer run")
         return
     view = gh_json("run", "view", "--repo", repo, str(windows_run["databaseId"]), "--json", "jobs") or {}
-    job = next((j for j in view.get("jobs", []) if j["name"] == "build-windows"), None)
-    if not job:
-        report("FAIL", "Windows build-windows job found")
+    # The MSIX is built in package-windows and attached and staged in
+    # release-windows (#6288), so collect steps across the run's jobs and
+    # remember which job owns each.
+    jobs = view.get("jobs", [])
+    if not any(j["name"] == "release-windows" for j in jobs):
+        report("FAIL", "Windows release-windows job found")
         return
-    steps = {s["name"]: s for s in job.get("steps", [])}
+    steps, owner = {}, {}
+    for j in jobs:
+        for s in j.get("steps", []):
+            steps.setdefault(s["name"], s)
+            owner.setdefault(s["name"], j)
     for name in ("Create MSIX package", "Attach to release"):
         s = steps.get(name)
         c = s["conclusion"] if s else None
@@ -468,6 +475,7 @@ def check_store(repo: str, windows_run: dict[str, Any] | None, hotfix: bool) -> 
     if c == "skipped" or s is None:
         report("WARN", f"Windows step: {STORE_STEP}", f"{c or 'not present'} — AETHERSDR_STORE_PRODUCT_ID unset, or the plan marked the version Store-ineligible (check the run's warning annotation)")
         return
+    job = owner[STORE_STEP]
     log = run([_tool("gh"), "run", "view", "--repo", repo, "--job", str(job["databaseId"]), "--log"], check=False).stdout
     lines = [re.sub(r"^[^\t]*\t[^\t]*\t", "", ln) for ln in log.splitlines()]
     lines = [re.sub(r"\x1b\[[0-9;]*m", "", ln) for ln in lines]
