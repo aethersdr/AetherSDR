@@ -8,9 +8,11 @@
 #include <QApplication>
 #include <QBrush>
 #include <QGradient>
+#include <QHeaderView>
 #include <QHoverEvent>
 #include <QImage>
 #include <QLabel>
+#include <QRegularExpression>
 #include <QSlider>
 #include <QStackedWidget>
 #include <QTreeWidget>
@@ -1687,7 +1689,37 @@ int main(int argc, char** argv)
         EXPECT_TRUE(alternate.rgb() == tm.color(QStringLiteral("color.background.1")).rgb());
         // Selection stays with the palette: a fixed text colour on the accent
         // is unreadable when a custom theme's accent is dark.
-        EXPECT_TRUE(!appStylesheetTemplate().contains(QStringLiteral("QTreeView::item:selected")));
+        EXPECT_TRUE(!appStylesheetTemplate().contains(
+            QRegularExpression(QStringLiteral(R"(QTreeView[^{]*::item[^{]*:selected)"))));
+    }
+
+    // ── App stylesheet: tree-view header sections keep their separators ──
+    // The header shares color.background.1 with the alternate rows, so the
+    // right and bottom section borders are what set it apart.
+    {
+        auto& tm = ThemeManager::instance();
+        QWidget host;
+        applyAppTheme(&host);
+        auto* tree = new QTreeWidget(&host);
+        tree->setColumnCount(2);
+        tree->setHeaderLabels({QStringLiteral("Object"), QStringLiteral("Value")});
+        tree->header()->setStretchLastSection(false);
+        tree->header()->resizeSection(0, 100);
+        tree->header()->resizeSection(1, 100);
+        tree->setGeometry(0, 0, 240, 140);
+        host.resize(240, 140);
+        host.show();
+        QApplication::processEvents();
+
+        const QImage header = tree->header()->grab().toImage();
+        const QRgb border = tm.color(QStringLiteral("color.border.strong")).rgb();
+        const int midY = header.height() / 2;
+        const int sectionRight = tree->header()->sectionViewportPosition(0)
+                               + tree->header()->sectionSize(0) - 1;
+        EXPECT_TRUE(header.pixelColor(sectionRight, midY).rgb() == border);
+        EXPECT_TRUE(header.pixelColor(50, header.height() - 1).rgb() == border);
+        EXPECT_TRUE(header.pixelColor(sectionRight - 3, 1).rgb()
+                    == tm.color(QStringLiteral("color.background.1")).rgb());
     }
 
     if (g_failures == 0) {

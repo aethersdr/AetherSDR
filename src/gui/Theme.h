@@ -102,6 +102,8 @@ inline QString appStylesheetTemplate()
             background-color: {{color.background.1}};
             color: {{color.text.primary}};
             border: none;
+            border-right: 1px solid {{color.border.strong}};
+            border-bottom: 1px solid {{color.border.strong}};
             padding: 3px 6px;
         }
         QSlider {

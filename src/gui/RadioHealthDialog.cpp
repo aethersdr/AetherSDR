@@ -59,6 +59,7 @@ RadioHealthDialog::RadioHealthDialog(RadioModel* model, QWidget* parent)
     m_table->setShowGrid(false);
     ThemeManager::instance().applyStyleSheet(m_table, "QTableWidget {"
         "  background: {{color.background.0}};"
+        "  alternate-background-color: {{color.background.1}};"
         "  color: {{color.text.primary}};"
         "  border: 1px solid {{color.background.2}};"
         "  font-size: 11px;"
