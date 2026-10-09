@@ -72,7 +72,7 @@ Choose either:
 
 Both carry the Microsoft Visual C++ runtime with the application. **No Visual C++ Redistributable install is needed**, and repairing or removing the system redistributable does not affect AetherSDR.
 
-The Windows setup and every program file in the setup and the portable ZIP are Authenticode-signed (publisher: Jeremy Fielder), and the downloads are also GPG-signed. SmartScreen may still warn about a new release until it has built download reputation; verifying the signature (below) confirms the download is genuine.
+The Windows builds are Authenticode-signed: the setup, `AetherSDR.exe` and the other AetherSDR files by Jeremy Fielder, and bundled components such as Qt and the Microsoft Visual C++ runtime by their own makers. The downloads are also GPG-signed. SmartScreen may still warn about a new release until it has built download reputation; verifying the signature (below) confirms the download is genuine.
 
 Your settings live in `%LOCALAPPDATA%\AetherSDR\` whichever package you use. See [Settings and Backups](./settings-and-backups.md).
 
@@ -140,7 +140,7 @@ The PipeWire library is installed but PipeWire's client configuration is not. Ae
 
 The Windows builds are Authenticode-signed (publisher: Jeremy Fielder), but SmartScreen can still warn about a new release until it has built download reputation.
 
-1. Check the publisher: right-click the file, choose **Properties → Digital Signatures**, and confirm the signer is Jeremy Fielder. You can also verify the download's signature as described in [Verifying downloads](#verifying-downloads) and [docs/VERIFYING-RELEASES.md](https://github.com/aethersdr/AetherSDR/blob/main/docs/VERIFYING-RELEASES.md).
+1. Check the publisher: right-click the setup `.exe` or `AetherSDR.exe`, choose **Properties → Digital Signatures**, and confirm the signer is Jeremy Fielder. You can also verify the download's signature as described in [Verifying downloads](#verifying-downloads) and [docs/VERIFYING-RELEASES.md](https://github.com/aethersdr/AetherSDR/blob/main/docs/VERIFYING-RELEASES.md).
 2. If the signature is good, the download is genuine and you can let it run.
 
 ## See also

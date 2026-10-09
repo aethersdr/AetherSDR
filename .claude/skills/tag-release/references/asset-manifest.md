@@ -12,15 +12,15 @@ from the first release cut after the docs site landed. Names substitute the vers
 | 4 | `AetherSDR-vX.Y.Z-aarch64.AppImage.asc` | Sign Release Artifacts | — | — | — |
 | 5 | `AetherSDR-vX.Y.Z-macOS-apple-silicon.dmg` | macOS DMG (`build-dmg`, apple-silicon) | no | yes — "Sign DMG" + "Notarize DMG" steps | no |
 | 6 | `AetherSDR-vX.Y.Z-macOS-intel.dmg` | macOS DMG (intel) | no | yes — same steps | no |
-| 7 | `AetherSDR-vX.Y.Z-Windows-x64-setup.exe` | Windows Installer (`package-windows`) | yes (8) | — | yes |
+| 7 | `AetherSDR-vX.Y.Z-Windows-x64-setup.exe` | Windows Installer (built and signed in `package-windows`, attached by `release-windows`) | yes (8) | — | yes |
 | 8 | `AetherSDR-vX.Y.Z-Windows-x64-setup.exe.asc` | Sign Release Artifacts | — | — | — |
-| 9 | `AetherSDR-vX.Y.Z-Windows-x64-portable.zip` | Windows Installer | yes (10) | — | yes |
+| 9 | `AetherSDR-vX.Y.Z-Windows-x64-portable.zip` | Windows Installer (built and signed in `package-windows`, attached by `release-windows`) | yes (10) | — | yes |
 | 10 | `AetherSDR-vX.Y.Z-Windows-x64-portable.zip.asc` | Sign Release Artifacts | — | — | — |
 | 11 | `AetherSDR-vX.Y.Z-source.tar.gz` | Sign Release Artifacts (`git archive` of the **tag**) | yes (12) | — | yes |
 | 12 | `AetherSDR-vX.Y.Z-source.tar.gz.asc` | Sign Release Artifacts | — | — | — |
 | 13 | `SHA256SUMS.txt` | Sign Release Artifacts (`sha256sum *` over 1, 3, 7, 9, 11) | yes (14) | — | — |
 | 14 | `SHA256SUMS.txt.asc` | Sign Release Artifacts | — | — | — |
-| 15 | `AetherSDR-X.Y.Z.0-Windows-x64.msixupload` | Windows Installer ("Create MSIX package") | no | — | no |
+| 15 | `AetherSDR-X.Y.Z.0-Windows-x64.msixupload` | Windows Installer (`package-windows` "Create MSIX package", attached by `release-windows`) | no | — | no |
 | 16 | `AetherSDR-Manual-vX.Y.Z.pdf` | Docs (`release-pdf`, on `release: published`; `tools/docs/build_pdf.py` from the tag) | yes (17) | — | no |
 | 17 | `AetherSDR-Manual-vX.Y.Z.pdf.asc` | Docs (`release-pdf`, the release key, verified in the job) | — | — | — |
 

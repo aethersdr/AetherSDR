@@ -36,6 +36,10 @@ PrivilegesRequiredOverridesAllowed=dialog
 ; which Inno generates from an embedded stub that no post-build pass can reach.
 SignTool=aethersign
 SignedUninstaller=yes
+; Match the payload step's tolerance for a timestamp-server blip: three
+; retries 30 s apart, not Inno's default two retries half a second apart.
+SignToolRetryCount=3
+SignToolRetryDelay=30000
 #endif
 
 [Languages]

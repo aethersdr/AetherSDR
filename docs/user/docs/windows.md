@@ -91,7 +91,7 @@ Set these in **System Properties → Environment Variables**, or in a Command Pr
 
 The Windows builds are Authenticode-signed (publisher: Jeremy Fielder), but SmartScreen can still warn about a new release until it has built download reputation.
 
-1. Check the publisher: right-click the file, choose **Properties → Digital Signatures**, and confirm the signer is Jeremy Fielder. You can also verify the download's GPG signature, following [docs/VERIFYING-RELEASES.md](https://github.com/aethersdr/AetherSDR/blob/main/docs/VERIFYING-RELEASES.md).
+1. Check the publisher: right-click the setup `.exe` or `AetherSDR.exe`, choose **Properties → Digital Signatures**, and confirm the signer is Jeremy Fielder. You can also verify the download's GPG signature, following [docs/VERIFYING-RELEASES.md](https://github.com/aethersdr/AetherSDR/blob/main/docs/VERIFYING-RELEASES.md).
 2. If the signature is good, run AetherSDR anyway from the SmartScreen prompt.
 
 ### WSJT-X or another digital-mode program gets no audio
