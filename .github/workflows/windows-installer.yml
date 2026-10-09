@@ -517,6 +517,9 @@ jobs:
       - name: Sign deploy payload
         if: env.AETHER_SIGN == 'true'
         run: |
+          # /d and /du name the program in the signature itself: UAC shows
+          # "Program name: AetherSDR" with the website as its link, since the
+          # individual certificate can only carry the publisher's own name.
           # Leave files that already carry a valid vendor signature (the
           # Microsoft-signed MSVC runtime, for one) as they are; sign the rest,
           # including the third-party and vendored DLLs that otherwise have no
@@ -531,7 +534,7 @@ jobs:
             }
           }
           Write-Host "Signing $($toSign.Count) files"
-          & $env:AETHER_SIGNTOOL sign /fd SHA256 /tr http://timestamp.acs.microsoft.com /td SHA256 /dlib $env:AETHER_SIGN_DLIB /dmdf $env:AETHER_SIGN_METADATA @toSign
+          & $env:AETHER_SIGNTOOL sign /fd SHA256 /d AetherSDR /du https://www.aethersdr.com/ /tr http://timestamp.acs.microsoft.com /td SHA256 /dlib $env:AETHER_SIGN_DLIB /dmdf $env:AETHER_SIGN_METADATA @toSign
           if ($LASTEXITCODE -ne 0) { throw "signtool sign failed ($LASTEXITCODE)" }
 
       - name: Create portable ZIP
@@ -558,7 +561,7 @@ jobs:
             # the directive is what covers unins000.exe, which Inno builds from
             # an embedded stub; a signtool pass over the output would miss it.
             $isccArgs += '/DSIGN'
-            $isccArgs += "/Saethersign=$env:AETHER_SIGNTOOL sign /fd SHA256 /tr http://timestamp.acs.microsoft.com /td SHA256 /dlib $env:AETHER_SIGN_DLIB /dmdf $env:AETHER_SIGN_METADATA `$f"
+            $isccArgs += "/Saethersign=$env:AETHER_SIGNTOOL sign /fd SHA256 /d AetherSDR /du https://www.aethersdr.com/ /tr http://timestamp.acs.microsoft.com /td SHA256 /dlib $env:AETHER_SIGN_DLIB /dmdf $env:AETHER_SIGN_METADATA `$f"
           }
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" @isccArgs packaging\windows\installer.iss
 
