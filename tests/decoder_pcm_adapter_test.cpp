@@ -411,6 +411,16 @@ int main(int argc, char** argv)
     passthroughAndAdmission(receiver);
     sharedRxDemodLane();
     continuousConversion();
+    const auto hdInput = tone(44100, 1100, 44100);
+    const auto hdRegular = convert(hdInput, 44100, PcmLayout::Stereo, {4096});
+    const auto hdSplit = convert(hdInput, 44100, PcmLayout::Stereo, {1, 17, 257, 511});
+    check(hdRegular == hdSplit && hdRegular.size() > 23800 && hdRegular.size() <= 24000,
+          "HD 44.1-to24 conversion preserves rational duration and arbitrary chunk equivalence");
+    check(hdRegular.size() > 2048 && std::abs(rms(hdRegular, 2048) - std::sqrt(0.5)) < 0.005,
+          "HD one-sided stereo is properly averaged before conversion");
+    const auto hdRejected = convert(tone(44100, 16000, 44100), 44100, PcmLayout::Stereo, {257, 4095});
+    check(hdRejected.size() > 2048 && rms(hdRejected, 2048) < 0.0001,
+          "HD 44.1-to24 conversion rejects out-of-band energy before aliasing");
     transitionHistoryAndBounds();
     independentConsumers();
     extremeInputAndOrdering();

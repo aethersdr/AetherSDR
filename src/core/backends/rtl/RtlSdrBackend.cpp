@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <cmath>
 #include <chrono>
+#include <limits>
 #include <utility>
 
 namespace AetherSDR::rtl {
@@ -23,6 +24,12 @@ namespace AetherSDR::rtl {
 namespace {
 
 Q_LOGGING_CATEGORY(lcRtlReceive, "aether.rtl.receive", QtWarningMsg)
+
+std::uint64_t hdMonotonicMs()
+{
+    return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count());
+}
 
 constexpr double kMinTuneHz = 24'000.0;
 constexpr double kMaxTuneHz = 1'766'000'000.0;
@@ -32,7 +39,7 @@ bool supportsAnalogBank(const RtlCaptureTransaction::Receiver& receiver)
     return receiver.mode == RtlCaptureTransaction::Mode::Fm
         || receiver.mode == RtlCaptureTransaction::Mode::Fmn
         || (RtlReceivePipeline::kQualifiedWfmEnabled
-            && receiver.mode == RtlCaptureTransaction::Mode::Wfm);
+            && receiver.mode == RtlCaptureTransaction::Mode::Wfm && !receiver.wfmHdStereo);
 }
 
 bool hasReceivingNarrowFm(const RtlCaptureTransaction::State& state)
@@ -238,9 +245,15 @@ RadioCapabilities RtlSdrBackend::capabilities() const
         c.receiveFilterControl->modes.append({QStringLiteral("WFM"),
             -100000, -15000, 15000, 100000, 30000, 200000});
         c.broadcastFmReceive = BroadcastFmReceive{{50, 75}, true, true};
+#ifdef AETHER_ENABLE_NRSC5
+        c.broadcastFmReceive->hdStereo = true;
+#endif
     }
     c.receiveAudioControl = ReceiveAudioControl{SliceFrequencyControl::Authority::Engine};
     c.receiveAudioExport = ReceiveAudioExport{{24000, 48000}, m_receiverCapacity};
+#ifdef AETHER_ENABLE_NRSC5
+    c.receiveAudioExport->sampleRatesHz.append(44100);
+#endif
     c.panSpanModel = PanSpanModel{false, false};
     if (m_lastPublished && hasReceivingNarrowFm(*m_lastPublished)) {
         c.receiveCapturePlacement = ReceiveCapturePlacement{
@@ -440,6 +453,12 @@ void RtlSdrBackend::startCapture(std::unique_ptr<RtlSdrWorker> worker)
     m_pcmDiagnostics.fill({});
     m_wfmStatus.fill(WfmStereoStatus::Unavailable);
     m_wfmReception.fill({});
+    m_hdReception.fill({}); m_hdIdentity.fill({});
+    m_hdDiagnosticsObserved = false; m_hdDiagnosticTotals.fill(0); m_hdPriorCounters.fill({});
+    m_hdObservationProducedMs.fill(0); m_hdAudioProducedMs.fill(0);
+    for (auto& age : m_hdObservationAge) { age.invalidate(); }
+    for (auto& age : m_hdAudioAge) { age.invalidate(); }
+    for (auto& age : m_hdPublicationAge) { age.invalidate(); }
     m_wfmLastObservation.fill(std::nullopt);
     for (auto& age : m_wfmPublicationAge) { age.invalidate(); }
     for (auto& age : m_wfmObservationAge) { age.invalidate(); }
@@ -517,6 +536,12 @@ void RtlSdrBackend::disconnectRadio()
     retireNativeAudio();
     m_wfmStatus.fill(WfmStereoStatus::Unavailable);
     m_wfmReception.fill({});
+    m_hdReception.fill({}); m_hdIdentity.fill({});
+    m_hdDiagnosticsObserved = false; m_hdDiagnosticTotals.fill(0); m_hdPriorCounters.fill({});
+    m_hdObservationProducedMs.fill(0); m_hdAudioProducedMs.fill(0);
+    for (auto& age : m_hdObservationAge) { age.invalidate(); }
+    for (auto& age : m_hdAudioAge) { age.invalidate(); }
+    for (auto& age : m_hdPublicationAge) { age.invalidate(); }
     m_wfmLastObservation.fill(std::nullopt);
     for (auto& age : m_wfmPublicationAge) { age.invalidate(); }
     for (auto& age : m_wfmObservationAge) { age.invalidate(); }
@@ -653,6 +678,7 @@ IRadioBackend::HealthSnapshot RtlSdrBackend::healthSnapshot() const
             recipe.insert(QStringLiteral("filterLowHz"), receiver.passband.filterLowHz);
             recipe.insert(QStringLiteral("filterHighHz"), receiver.passband.filterHighHz);
             recipe.insert(QStringLiteral("wfmForceMono"), receiver.wfmForceMono);
+            recipe.insert(QStringLiteral("wfmHdStereo"), receiver.wfmHdStereo);
             recipe.insert(QStringLiteral("wfmDeemphasisUs"), receiver.wfmDeemphasisUs);
             recipe.insert(QStringLiteral("audioGain"), receiver.audioGain);
             recipe.insert(QStringLiteral("audioPan"), receiver.audioPan);
@@ -689,6 +715,18 @@ IRadioBackend::HealthSnapshot RtlSdrBackend::healthSnapshot() const
     for (const auto& row : diagnosticRows) {
         snapshot.order.append(row.first);
         snapshot.labels.insert(row.first, row.second);
+    }
+    if (m_hdDiagnosticsObserved) {
+        const QStringList keys{QStringLiteral("rtlHdIqDrops"), QStringLiteral("rtlHdPcmDrops"),
+            QStringLiteral("rtlHdPlayoutUnderruns")};
+        snapshot.order.append(keys);
+        snapshot.sections.insert(keys.front(), tr("Digital processing (since connect)"));
+        snapshot.labels.insert(keys[0], tr("Digital IQ blocks dropped"));
+        snapshot.labels.insert(keys[1], tr("Digital PCM blocks dropped"));
+        snapshot.labels.insert(keys[2], tr("Digital speaker playout underruns"));
+        for (qsizetype i = 0; i < keys.size(); ++i) {
+            snapshot.values.insert(keys[i], QVariant::fromValue<qulonglong>(m_hdDiagnosticTotals[i]));
+        }
     }
     if (m_lastPublished) {
         const auto& capture = m_lastPublished->capture;
@@ -735,7 +773,7 @@ bool RtlSdrBackend::createSlice(const QString& panId, double frequencyHz)
         || (panId != QStringLiteral("0xe1000000") && !panId.isEmpty())
         || m_requested.receivers.size() >= static_cast<std::size_t>(m_receiverCapacity)) { return false; }
     if (!std::ranges::all_of(m_requested.receivers, supportsAnalogBank)) {
-        emit configurationWarning(tr("Additional RTL slices support FM, FM-N and analog WFM only. AM/SSB/CW require a single configured receiver."));
+        emit configurationWarning(tr("Additional RTL slices support FM, FM-N and analog WFM only. HD and AM/SSB/CW require a single configured receiver."));
         return false;
     }
     auto desired = m_requested;
@@ -907,14 +945,75 @@ void RtlSdrBackend::setSliceFilter(int sliceId, int lowHz, int highHz)
 
 void RtlSdrBackend::setSliceWfmForceMono(int sliceId, bool forceMono)
 {
-    if (!RtlReceivePipeline::kQualifiedWfmEnabled || !hasAcceptedSlice(sliceId)) { return; }
+    setSliceWfmAudioMode(sliceId, forceMono ? WfmAudioMode::Mono : WfmAudioMode::Stereo);
+}
+
+void RtlSdrBackend::setSliceWfmAudioMode(int sliceId, WfmAudioMode mode)
+{
+    requestWfmAudioMode(sliceId, mode);
+}
+
+ReceiveDispatch RtlSdrBackend::requestWfmAudioMode(int sliceId, WfmAudioMode mode)
+{
+    if (!validWfmAudioMode(mode)) { return ReceiveDispatch::Unsupported; }
+#ifndef AETHER_ENABLE_NRSC5
+    if (mode == WfmAudioMode::HdStereo) { return ReceiveDispatch::Unsupported; }
+#endif
+    const bool hd = mode == WfmAudioMode::HdStereo;
+    const bool forceMono = mode == WfmAudioMode::Mono;
+    if (!RtlReceivePipeline::kQualifiedWfmEnabled || !hasAcceptedSlice(sliceId)) { return ReceiveDispatch::Unsupported; }
+    auto desired = m_requested;
+    if (hd && desired.receivers.size() != 1) {
+        emit configurationWarning(tr("HD reception currently requires a single configured RTL receiver. Select Mono or Stereo for multiple analog receivers."));
+        return ReceiveDispatch::Unsupported;
+    }
+    const auto receiver = std::ranges::find_if(desired.receivers,
+        [sliceId](const auto& value) { return value.passband.stableId == sliceId; });
+    if (receiver == desired.receivers.end() || receiver->mode != RtlCaptureTransaction::Mode::Wfm) {
+        return ReceiveDispatch::Unsupported;
+    }
+    if (receiver->wfmForceMono == forceMono && receiver->wfmHdStereo == hd) {
+        return ReceiveDispatch::Dispatched;
+    }
+    receiver->wfmForceMono = forceMono;
+    receiver->wfmHdStereo = hd;
+    if (hd) { desired.followReceiverId = sliceId; } // complete HD sidebands or refuse
+    requestCapture(desired); // Same prepare/adopt/rollback contract as the filter.
+    return ReceiveDispatch::Dispatched;
+}
+
+void RtlSdrBackend::setSliceHdProgram(int sliceId, int program)
+{
+    requestHdProgram(sliceId, program);
+}
+
+ReceiveDispatch RtlSdrBackend::requestHdProgram(int sliceId, int program)
+{
+#ifdef AETHER_ENABLE_NRSC5
+    if (!hasAcceptedSlice(sliceId) || program < 0 || program > 7) { return ReceiveDispatch::Unsupported; }
+    const HdFmReception& reception = m_hdReception[sliceId];
+    const auto now = hdMonotonicMs();
+    const auto produced = m_hdObservationProducedMs[sliceId];
+    if (!produced || produced > now || now - produced > 500
+        || m_hdIdentity[sliceId].expired || !acceptsFrame(reception.sessionId, reception.revision)
+        || !reception.valid || !reception.synced
+        || std::ranges::none_of(reception.services, [program](const HdFmService& service) {
+            return service.program == program && service.audioAvailable;
+        })) { return ReceiveDispatch::Unsupported; }
     auto desired = m_requested;
     const auto receiver = std::ranges::find_if(desired.receivers,
         [sliceId](const auto& value) { return value.passband.stableId == sliceId; });
     if (receiver == desired.receivers.end() || receiver->mode != RtlCaptureTransaction::Mode::Wfm
-        || receiver->wfmForceMono == forceMono) { return; }
-    receiver->wfmForceMono = forceMono;
-    requestCapture(desired); // Same prepare/adopt/rollback contract as the filter.
+        || !receiver->wfmHdStereo
+        || std::abs(receiver->passband.carrierHz - reception.frequencyHz) > 0.5) { return ReceiveDispatch::Unsupported; }
+    if (receiver->hdProgram != program) {
+        receiver->hdProgram = program; requestCapture(desired);
+    }
+    return ReceiveDispatch::Dispatched;
+#else
+    Q_UNUSED(sliceId); Q_UNUSED(program);
+    return ReceiveDispatch::Unsupported;
+#endif
 }
 
 void RtlSdrBackend::setSliceWfmDeemphasis(int sliceId, int microseconds)
@@ -1105,12 +1204,18 @@ ReceiveDispatch RtlSdrBackend::requestSliceWfm(int sliceId, const SliceWfmReques
         || receiver->mode != RtlCaptureTransaction::Mode::Wfm) {
         return ReceiveDispatch::Unsupported;
     }
-    if (request.field == SliceWfmRequest::Field::ForceMono) {
-        setSliceWfmForceMono(sliceId, request.value != 0);
-    } else {
+    switch (request.field) {
+    case SliceWfmRequest::Field::ForceMono:
+        return requestWfmAudioMode(sliceId, request.value ? WfmAudioMode::Mono : WfmAudioMode::Stereo);
+    case SliceWfmRequest::Field::AudioMode:
+        return requestWfmAudioMode(sliceId, static_cast<WfmAudioMode>(request.value));
+    case SliceWfmRequest::Field::HdProgram:
+        return requestHdProgram(sliceId, request.value);
+    case SliceWfmRequest::Field::Deemphasis:
         setSliceWfmDeemphasis(sliceId, request.value);
+        return ReceiveDispatch::Dispatched;
     }
-    return ReceiveDispatch::Dispatched;
+    return ReceiveDispatch::Unsupported;
 }
 
 ReceiveDispatch RtlSdrBackend::requestSliceSquelch(int sliceId, const SliceSquelchRequest& request)
@@ -1299,6 +1404,8 @@ QVector<RtlSliceSettings::Slice> RtlSdrBackend::acceptedSettings() const
         slice.automaticSquelchMarginDb = receiver.automaticSquelchMarginDb;
         slice.wfmDeemphasisUs = receiver.wfmDeemphasisUs;
         slice.wfmForceMono = receiver.wfmForceMono;
+        slice.wfmHdStereo = receiver.wfmHdStereo;
+        slice.hdProgram = receiver.hdProgram;
         output.append(slice);
     }
     return output;
@@ -1357,18 +1464,22 @@ void RtlSdrBackend::restoreAcceptedSlices()
             || !isKnownMode(slice.mode)
             || desired.receivers.size() >= static_cast<std::size_t>(m_receiverCapacity)) { continue; }
         seen.insert(slice.id);
+#ifndef AETHER_ENABLE_NRSC5
+        if (nativeWfm && slice.wfmHdStereo) { continue; }
+#endif
         if (nativeWfm && (slice.filterLowHz < -100000 || slice.filterHighHz > 100000
             || slice.filterLowHz > -15000 || slice.filterHighHz < 15000)) {
             unsupportedWfmFilter = true;
             continue;
         }
-        const bool bankCompatible = !wide || nativeWfm;
+        const bool bankCompatible = !wide || (nativeWfm && !slice.wfmHdStereo);
         if ((!wide && (slice.filterLowHz < -21600 || slice.filterHighHz > 21600
             || slice.filterLowHz >= 0 || slice.filterHighHz <= 0))
             || (!desired.receivers.empty() && (!bankCompatible
                 || !std::ranges::all_of(desired.receivers, supportsAnalogBank)))) { continue; }
         desired.receivers.push_back({descriptor, captureMode(slice.mode), slice.audioGain, slice.audioPan,
             slice.audioMute, !wide && slice.squelchEnabled, slice.squelchLevel, slice.wfmDeemphasisUs, slice.wfmForceMono,
+            slice.wfmHdStereo, slice.hdProgram,
             !wide && slice.automaticSquelch, slice.automaticSquelchMarginDb});
     }
     // Preserve a valid configured receiver even when it is parked. The
@@ -1698,7 +1809,7 @@ void RtlSdrBackend::drainAudio()
     const QPointer<RtlSdrWorker> worker(m_worker.get());
     RtlReceivePipeline::RfObservation rf;
     while (worker && worker.data() == m_worker.get() && worker->takeRfObservation(rf)) {
-        const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+        const auto now = hdMonotonicMs();
         if (!m_receiveMetersEnabled || !acceptsFrame(rf.token.session, rf.token.revision) || !rf.producedMs
             || rf.producedMs > now || now - rf.producedMs > 500) { continue; }
         for (int id = 0; id < 8; ++id) {
@@ -1710,26 +1821,58 @@ void RtlSdrBackend::drainAudio()
             }
         }
     }
+    drainHdObservations();
+    expireHdObservations();
     if (!worker || worker.data() != m_worker.get()) { return; }
     RtlReceivePipeline::Packet packet;
     for (int count = 0; count < 128 && worker && worker.data() == m_worker.get()
          && worker->takeAudio(packet); ++count) {
         if (!acceptsFrame(packet.token.session, packet.token.revision)
             || packet.frames == 0 || packet.frames > 1024 || packet.slot < -1 || packet.slot >= 8
-            || packet.sampleRateHz != 48000 || packet.channelCount != 2) { continue; }
+            || (packet.sampleRateHz != 48000 && !(packet.slot >= 0 && packet.sampleRateHz == 44100))
+            || packet.channelCount != 2) { continue; }
         if (!m_lastPublished || m_lastPublished->receivingIds.empty()
             || (packet.slot >= 0 && std::ranges::find(m_lastPublished->receivingIds, packet.slot)
                 == m_lastPublished->receivingIds.end())) { continue; }
+        const auto hdReceiver = std::ranges::find_if(m_lastPublished->receivers, [this](const auto& receiver) {
+            return receiver.mode == RtlCaptureTransaction::Mode::Wfm && receiver.wfmHdStereo
+                && std::ranges::find(m_lastPublished->receivingIds, receiver.passband.stableId)
+                    != m_lastPublished->receivingIds.end();
+        });
+        const bool hd = hdReceiver != m_lastPublished->receivers.end();
+        if (packet.sampleRateHz == 44100) {
+            if (!hd || packet.slot != hdReceiver->passband.stableId) { continue; }
+            const auto& identity = m_hdIdentity[packet.slot];
+            const auto now = hdMonotonicMs();
+            if (!m_hdReception[packet.slot].audioValid || !packet.producedMonotonicMs
+                || packet.producedMonotonicMs > now || now - packet.producedMonotonicMs > 500
+                || identity.instance != packet.instance || identity.receiverEpoch != packet.receiverEpoch
+                || identity.audioEpoch != packet.audioEpoch) { continue; }
+        } else if (hd) {
+            // Only the explicit playout conversion can supply HD speaker PCM.
+            if (packet.slot >= 0) { continue; }
+            const auto& identity = m_hdIdentity[hdReceiver->passband.stableId];
+            const auto now = hdMonotonicMs();
+            if (identity.expired || packet.audioEpoch == 0 || packet.audioEpoch != identity.audioEpoch
+                || packet.captureEpoch != identity.captureEpoch
+                || (packet.producedMonotonicMs && (packet.producedMonotonicMs > now
+                    || now - packet.producedMonotonicMs > 500))
+                || (packet.producedMonotonicMs && !m_hdReception[hdReceiver->passband.stableId].audioValid)
+                || (!packet.producedMonotonicMs && m_hdReception[hdReceiver->passband.stableId].audioValid)) { continue; }
+        } else if (packet.audioEpoch != 0) { continue; }
         NativeAudio& output = packet.slot < 0 ? m_speakerAudio : m_sliceAudio[packet.slot];
         if (!output.producer
             || (packet.slot < 0 && output.captureEpoch != packet.captureEpoch)
-            || output.instance != packet.instance || output.receiverEpoch != packet.receiverEpoch) {
+            || output.instance != packet.instance || output.receiverEpoch != packet.receiverEpoch
+            || output.audioEpoch != packet.audioEpoch
+            || output.sampleRateHz != packet.sampleRateHz) {
             output = {};
             output.producer = std::make_unique<PcmProducer>();
             output.producer->start(packet.slot < 0 ? PcmPurpose::Speaker : PcmPurpose::Slice,
                 packet.slot, {packet.sampleRateHz, PcmLayout::Stereo}, packet.token.session, packet.instance);
             output.captureEpoch = packet.captureEpoch; output.instance = packet.instance;
-            output.receiverEpoch = packet.receiverEpoch;
+            output.receiverEpoch = packet.receiverEpoch; output.audioEpoch = packet.audioEpoch;
+            output.sampleRateHz = packet.sampleRateHz;
         }
         QVector<float> samples(static_cast<qsizetype>(2 * packet.frames));
         std::copy_n(packet.samples.begin(), samples.size(), samples.begin());
@@ -1772,6 +1915,132 @@ void RtlSdrBackend::drainAudio()
         }
     }
 }
+void RtlSdrBackend::drainHdObservations()
+{
+    const QPointer<RtlSdrWorker> worker(m_worker.get());
+    RtlReceivePipeline::HdFmObservation observation;
+    for (int count = 0; count < 64 && worker && worker.data() == m_worker.get()
+         && worker->takeHdObservation(observation); ++count) {
+        observeHd(observation);
+    }
+}
+
+void RtlSdrBackend::observeHd(const RtlReceivePipeline::HdFmObservation& observation)
+{
+    const int id = observation.slot;
+    const auto& raw = observation.reception;
+    const auto now = hdMonotonicMs();
+    if (id < 0 || id >= 8 || !m_lastPublished
+        || !acceptsFrame(observation.token.session, observation.token.revision)
+        || raw.sessionId != observation.token.session || raw.revision != observation.token.revision
+        || raw.receiverEpoch != observation.receiverEpoch || raw.audioEpoch != observation.audioEpoch
+        || !observation.instance || !observation.receiverEpoch || !observation.audioEpoch
+        || !raw.publicationSequence
+        || (raw.valid && (!raw.observationSequence || !raw.observationMonotonicMs
+            || raw.observationMonotonicMs > now || now - raw.observationMonotonicMs > 500))
+        || std::ranges::find(m_lastPublished->receivingIds, id) == m_lastPublished->receivingIds.end()) { return; }
+    const auto receiver = std::ranges::find_if(m_lastPublished->receivers,
+        [id](const auto& value) { return value.passband.stableId == id; });
+    if (receiver == m_lastPublished->receivers.end() || receiver->mode != RtlCaptureTransaction::Mode::Wfm
+        || !receiver->wfmHdStereo || raw.selectedProgram != receiver->hdProgram
+        || std::abs(receiver->passband.carrierHz - raw.frequencyHz) > 0.5) { return; }
+    auto& previous = m_hdIdentity[id];
+    const bool newReceiver = previous.instance != observation.instance
+        || previous.receiverEpoch != observation.receiverEpoch;
+    const bool newAudio = newReceiver || previous.audioEpoch != observation.audioEpoch;
+    if (!newReceiver && (raw.publicationSequence <= previous.publicationSequence
+        || observation.audioEpoch < previous.audioEpoch
+        || (raw.valid && raw.observationSequence < previous.observationSequence))) { return; }
+    if (!newAudio && raw.valid && raw.audioSequence < previous.audioSequence) { return; }
+    quint64 producedAudioMs = 0;
+    if (raw.audioValid && raw.synced && raw.audioSequence && raw.audioMonotonicMs
+        && raw.audioMonotonicMs <= now && now - raw.audioMonotonicMs <= 500) {
+        producedAudioMs = raw.audioMonotonicMs;
+    }
+    HdFmReception value;
+    value.valid = raw.valid; value.sessionId = raw.sessionId;
+    value.receiverEpoch = raw.receiverEpoch; value.revision = raw.revision;
+    value.frequencyHz = raw.frequencyHz; value.selectedProgram = raw.selectedProgram;
+    value.synced = raw.synced;
+    value.audioValid = raw.audioValid && raw.synced && producedAudioMs
+        && producedAudioMs <= now && now - producedAudioMs <= 500;
+    const auto text = [](const auto& bytes) {
+        const auto end = std::find(bytes.begin(), bytes.end(), '\0');
+        return QString::fromUtf8(bytes.data(), std::distance(bytes.begin(), end));
+    };
+    for (const auto& service : raw.services) {
+        if (service.program < -1) { return; }
+        if (service.program >= 0) { value.services.append({service.program, text(service.name), service.audioAvailable}); }
+    }
+    value.stationName = text(raw.stationName); value.title = text(raw.title); value.artist = text(raw.artist);
+    value.merLowerDb = raw.merLowerDb; value.merUpperDb = raw.merUpperDb;
+    value.cber = raw.cber; value.frequencyOffsetHz = raw.frequencyOffsetHz;
+    value.observationSequence = raw.observationSequence;
+    value.syncLossCount = raw.syncLossCount; value.reacquisitionCount = raw.reacquisitionCount;
+    value.syncDurationMs = raw.syncDurationMs;
+    value = normalizedHdFmReception(std::move(value));
+    // Malformed measurements cannot consume an identity or retire accepted PCM.
+    // A deliberate current-lifetime invalid publication is a withdrawal barrier.
+    if (raw.valid && !value.valid) { return; }
+    const std::array<quint64, 3> counters{raw.iqDrops, raw.pcmDrops, raw.playoutUnderruns};
+    auto& priorCounters = m_hdPriorCounters[id];
+    if (newReceiver) { priorCounters.fill(0); }
+    for (std::size_t i = 0; i < counters.size(); ++i) {
+        const quint64 current = std::max(priorCounters[i], counters[i]);
+        const quint64 increment = current - priorCounters[i];
+        m_hdDiagnosticTotals[i] += std::min(increment,
+            std::numeric_limits<quint64>::max() - m_hdDiagnosticTotals[i]);
+        priorCounters[i] = current;
+    }
+    m_hdDiagnosticsObserved = true;
+    if (newAudio || !raw.valid) {
+        m_sliceAudio[id] = {}; m_speakerAudio = {};
+        m_hdAudioAge[id].invalidate();
+    }
+    m_hdAudioProducedMs[id] = raw.valid ? producedAudioMs : 0;
+    const bool transition = newAudio || value.valid != m_hdReception[id].valid
+        || value.synced != m_hdReception[id].synced || value.audioValid != m_hdReception[id].audioValid
+        || value.services != m_hdReception[id].services || value.stationName != m_hdReception[id].stationName
+        || value.title != m_hdReception[id].title || value.artist != m_hdReception[id].artist;
+    if (!value.audioValid && m_hdReception[id].audioValid) {
+        m_sliceAudio[id] = {}; m_speakerAudio = {};
+    }
+    previous = {observation.instance, observation.receiverEpoch, observation.audioEpoch,
+        observation.captureEpoch, raw.publicationSequence,
+        newReceiver ? raw.observationSequence : std::max<quint64>(previous.observationSequence, raw.observationSequence),
+        newAudio ? raw.audioSequence : std::max<quint64>(previous.audioSequence, raw.audioSequence), !raw.valid};
+    m_hdObservationProducedMs[id] = raw.observationMonotonicMs;
+    m_hdObservationAge[id].restart();
+    m_hdReception[id] = std::move(value);
+    if (!transition && m_hdPublicationAge[id].isValid() && m_hdPublicationAge[id].elapsed() < 250) { return; }
+    m_hdPublicationAge[id].restart();
+    SliceDelta delta; delta.hdFmReception = m_hdReception[id];
+    emit sliceChanged(id, delta);
+}
+
+void RtlSdrBackend::expireHdObservations()
+{
+    for (int id = 0; id < 8; ++id) {
+        const auto now = hdMonotonicMs();
+        const bool stale = !m_hdIdentity[id].expired && m_hdObservationProducedMs[id]
+            && (m_hdObservationProducedMs[id] > now || now - m_hdObservationProducedMs[id] > 500);
+        const bool staleAudio = m_hdReception[id].audioValid
+            && (!m_hdAudioProducedMs[id] || m_hdAudioProducedMs[id] > now
+                || now - m_hdAudioProducedMs[id] > 500);
+        if (!stale && !staleAudio) { continue; }
+        m_sliceAudio[id] = {}; m_speakerAudio = {};
+        m_hdAudioAge[id].invalidate();
+        if (stale) {
+            m_hdReception[id] = {}; m_hdObservationAge[id].invalidate();
+            m_hdAudioProducedMs[id] = 0;
+            // Keep epoch/order high-water marks while withdrawing publication.
+            m_hdIdentity[id].expired = true;
+        } else { m_hdReception[id].audioValid = false; }
+        SliceDelta delta; delta.hdFmReception = m_hdReception[id];
+        emit sliceChanged(id, delta);
+    }
+}
+
 // Decoder observations travel with accepted PCM. A requested mode or a stale
 // packet can never light the stereo indicator. Silence or a stopped producer
 // expires the observation; there is no indefinitely retained pilot claim.
@@ -1850,6 +2119,10 @@ void RtlSdrBackend::emitSliceState(const RtlCaptureTransaction::Receiver& receiv
         != m_lastPublished->receivingIds.end();
     delta.wfmDeemphasisUs = receiver.wfmDeemphasisUs;
     delta.wfmForceMono = receiver.wfmForceMono;
+    delta.wfmAudioMode = receiver.wfmHdStereo ? WfmAudioMode::HdStereo
+        : (receiver.wfmForceMono ? WfmAudioMode::Mono : WfmAudioMode::Stereo);
+    delta.hdProgram = receiver.hdProgram;
+    delta.hdFmReception = m_hdReception[id];
     delta.wfmReceptionDiagnostics = m_wfmReception[id];
     delta.wfmStereoStatus = m_wfmStatus[id];
     delta.modeList = capabilities().receiveModeControl->modes;
@@ -1886,7 +2159,9 @@ void RtlSdrBackend::publishCapture()
             const auto current = std::ranges::find_if(state.receivers, [id](const auto& value) { return value.passband.stableId == id; });
             if (current == state.receivers.end() || current->passband != previous.passband || current->mode != previous.mode
                 || current->wfmDeemphasisUs != previous.wfmDeemphasisUs
-                || current->wfmForceMono != previous.wfmForceMono) { m_sliceAudio[id] = {}; }
+                || current->wfmForceMono != previous.wfmForceMono
+                || current->wfmHdStereo != previous.wfmHdStereo
+                || current->hdProgram != previous.hdProgram) { m_sliceAudio[id] = {}; }
         }
         if (std::ranges::any_of(state.receivers, [&state](const auto& value) {
                 return std::ranges::find(state.receivingIds, value.passband.stableId)
@@ -1940,6 +2215,10 @@ void RtlSdrBackend::publishCapture()
         // never carry a pilot claim across that publication boundary.
         m_wfmStatus[id] = active ? WfmStereoStatus::Acquiring : WfmStereoStatus::Unavailable;
         m_wfmReception[id] = {};
+        m_hdReception[id] = {};
+        m_hdObservationAge[id].invalidate(); m_hdAudioAge[id].invalidate();
+        m_hdObservationProducedMs[id] = 0; m_hdAudioProducedMs[id] = 0;
+        m_hdPublicationAge[id].invalidate();
         // Retain the last observed decoder identity across control-only
         // revisions: cached credits must not refresh a stalled decoder.
         // A new prepared graph differs by instance/epoch even if its local

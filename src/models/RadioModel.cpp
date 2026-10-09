@@ -2069,6 +2069,8 @@ RadioModel::RadioModel(QObject* parent)
     qRegisterMetaType<SliceDelta>();
     qRegisterMetaType<WfmStereoStatus>();
     qRegisterMetaType<WfmReceptionDiagnostics>();
+    qRegisterMetaType<WfmAudioMode>();
+    qRegisterMetaType<HdFmReception>();
     qRegisterMetaType<SliceTuneRequest>();
     qRegisterMetaType<SliceFilterRequest>();
     qRegisterMetaType<SliceAgcRequest>();
@@ -7066,6 +7068,7 @@ void RadioModel::stageSessionModelsForReconnect()
             SliceDelta unavailableWfm;
             unavailableWfm.wfmStereoStatus = WfmStereoStatus::Unavailable;
             unavailableWfm.wfmReceptionDiagnostics = WfmReceptionDiagnostics{};
+            unavailableWfm.hdFmReception = HdFmReception{};
             slice->applyChanges(unavailableWfm);
             m_staleSlices.insert(slice->sliceId(), slice);
         }
@@ -9983,6 +9986,10 @@ void RadioModel::wireSliceReceiveIntentsToBackend(SliceModel* s)
             this, &RadioModel::dispatchSliceDsp, type);
     connect(s, &SliceModel::receiveAudioRequested,
             this, &RadioModel::dispatchSliceAudio, type);
+    connect(s, &SliceModel::wfmAudioModeRequested,
+            this, &RadioModel::dispatchSliceWfmAudioMode, type);
+    connect(s, &SliceModel::hdProgramRequested,
+            this, &RadioModel::dispatchSliceHdProgram, type);
     connect(s, &SliceModel::wfmForceMonoRequested,
             this, &RadioModel::dispatchSliceWfmForceMono, type);
     connect(s, &SliceModel::wfmDeemphasisRequested,
@@ -10079,6 +10086,16 @@ void RadioModel::dispatchSliceAudio(const SliceAudioRequest& request)
     }
 }
 
+void RadioModel::dispatchSliceWfmAudioMode(WfmAudioMode mode)
+{
+    dispatchSliceWfm({SliceWfmRequest::Field::AudioMode, int(mode)});
+}
+
+void RadioModel::dispatchSliceHdProgram(int program)
+{
+    dispatchSliceWfm({SliceWfmRequest::Field::HdProgram, program});
+}
+
 void RadioModel::dispatchSliceWfmForceMono(bool forceMono)
 {
     dispatchSliceWfm({SliceWfmRequest::Field::ForceMono, int(forceMono)});
@@ -10093,11 +10110,32 @@ void RadioModel::dispatchSliceWfm(const SliceWfmRequest& request)
 {
     if (SliceModel* source = receiveCommandSource()) {
         const std::optional<BroadcastFmReceive> feature = m_backend->capabilities().broadcastFmReceive;
-        const bool available = request.valid() && feature
+        bool available = request.valid() && feature
             && source->mode() == QLatin1String("WFM")
-            && !source->externalReceiveReplacementActive()
-            && (request.field == SliceWfmRequest::Field::ForceMono
-                ? feature->forceMonoControl : feature->deemphasisUs.contains(request.value));
+            && !source->externalReceiveReplacementActive();
+        if (available) {
+            switch (request.field) {
+            case SliceWfmRequest::Field::ForceMono:
+                available = feature->forceMonoControl;
+                break;
+            case SliceWfmRequest::Field::Deemphasis:
+                available = feature->deemphasisUs.contains(request.value);
+                break;
+            case SliceWfmRequest::Field::AudioMode:
+                available = (feature->forceMonoControl || feature->hdStereo)
+                    && (request.value != int(WfmAudioMode::HdStereo) || feature->hdStereo);
+                break;
+            case SliceWfmRequest::Field::HdProgram: {
+                const HdFmReception& reception = source->hdFmReception();
+                available = feature->hdStereo && source->wfmAudioMode() == WfmAudioMode::HdStereo
+                    && reception.valid && reception.synced
+                    && std::ranges::any_of(reception.services, [&request](const HdFmService& service) {
+                        return service.program == request.value && service.audioAvailable;
+                    });
+                break;
+            }
+            }
+        }
         reportReceiveDispatch(available
             ? m_backend->requestSliceWfm(source->sliceId(), request)
             : ReceiveDispatch::Unsupported, QStringLiteral("broadcast FM"));

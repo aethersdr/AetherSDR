@@ -726,3 +726,26 @@ tools/docs/pdf/fonts/OFL.txt.
   Copyright: Copyright 2022 The Noto Project Authors
   License:   SIL Open Font License, Version 1.1
   Source:    https://github.com/notofonts/symbols
+
+Experimental native HD FM — nrsc5 and FAAD2 HDC
+---------------------------------------------
+Enabled only by ENABLE_HD_FM for Linux/GNU C, macOS/AppleClang and
+Windows/MSVC evaluation builds. Both libraries are linked statically,
+with no decoder command-line application or download
+fallback. AetherSDR retains sole ownership of RTL USB capture.
+
+nrsc5 is pinned to theori-io/nrsc5 commit
+0225922b6f68109df39d07391f4d855464598ab8, GPL-3.0-or-later.
+Source: https://github.com/theori-io/nrsc5
+Original license and complete GPLv3 text: third_party/nrsc5/upstream/LICENSE
+and third_party/nrsc5/COPYING.GPL-3.0. Per-file copyrights remain in the sources.
+
+FAAD2 is pinned to knik0/faad2 tag 2.11.2, commit
+673a22a3c7c33e96e2ff7aae7c4d2bc190dfbf92, GPL-2.0-or-later, with exactly the
+HDC-support patch shipped by the nrsc5 revision above.
+Source: https://github.com/knik0/faad2
+Code from FAAD2 is copyright (c) Nero AG, www.nero.com
+Preserved original notices: third_party/faad_hdc/upstream/COPYING and README.
+
+Both directories contain README.aethersdr.md and SOURCE-MANIFEST.json with
+exact upstream and vendored file hashes, patch provenance and omitted paths.
