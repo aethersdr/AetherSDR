@@ -3911,11 +3911,47 @@ void MainWindow::applyWindowsFrameColor()
                           &border, sizeof(border));
 }
 
+static LRESULT frameHitCode(WindowChrome::FrameHit hit)
+{
+    switch (hit) {
+    case WindowChrome::FrameHit::Left:        return HTLEFT;
+    case WindowChrome::FrameHit::Right:       return HTRIGHT;
+    case WindowChrome::FrameHit::Top:         return HTTOP;
+    case WindowChrome::FrameHit::Bottom:      return HTBOTTOM;
+    case WindowChrome::FrameHit::TopLeft:     return HTTOPLEFT;
+    case WindowChrome::FrameHit::TopRight:    return HTTOPRIGHT;
+    case WindowChrome::FrameHit::BottomLeft:  return HTBOTTOMLEFT;
+    case WindowChrome::FrameHit::BottomRight: return HTBOTTOMRIGHT;
+    case WindowChrome::FrameHit::Client:      break;
+    }
+    return HTCLIENT;
+}
+
 bool MainWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr* result)
 {
-    // The whole window is client area, inset only while maximized so nothing
-    // sits past the screen edge. Qt's WM_NCHITTEST still resizes from the edges.
     auto* msg = static_cast<MSG*>(message);
+    // Under the expanded client area Qt 6.12 answers WM_NCHITTEST by turning
+    // the live mouse-button state into synthetic presses, which doubles real
+    // clicks and closes menus as they open (#6272). Answer it here instead:
+    // the resize band at the edges, client area everywhere else.
+    if (msg && result && msg->message == WM_NCHITTEST
+        && windowFlags().testFlag(Qt::ExpandedClientAreaHint)) {
+        RECT window{};
+        GetWindowRect(msg->hwnd, &window);
+        int border = 0;
+        if (!IsZoomed(msg->hwnd) && !isFullScreen()) {
+            const UINT dpi = GetDpiForWindow(msg->hwnd);
+            border = GetSystemMetricsForDpi(SM_CXSIZEFRAME, dpi)
+                + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+        }
+        const QPoint point(GET_X_LPARAM(msg->lParam), GET_Y_LPARAM(msg->lParam));
+        const QRect rect(window.left, window.top,
+                         window.right - window.left, window.bottom - window.top);
+        *result = frameHitCode(WindowChrome::expandedFrameHit(point, rect, border));
+        return true;
+    }
+    // The whole window is client area, inset only while maximized so nothing
+    // sits past the screen edge; the WM_NCHITTEST above keeps the edges resizable.
     if (msg && result && msg->message == WM_NCCALCSIZE && msg->wParam
         && WindowChrome::claimsWholeWindowAsClient(windowFlags(),
                                                    QOperatingSystemVersion::current())) {

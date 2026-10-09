@@ -88,10 +88,16 @@ item (`syncMenuCheckColumn()`, refreshed before each show).
   Windows 11 draws it invisibly, but Windows 10 paints it as a light strip
   (#6266), so on Windows 10 only `MainWindow::nativeEvent` answers
   `WM_NCCALCSIZE` with the whole window as client area (inset on all four
-  sides while maximized). Edge resize then rests entirely on Qt 6.12's own
-  `WM_NCHITTEST`, which still answers the border codes from the client edges;
-  `FramelessResizer` is off on this path, so recheck edge resize after a Qt
-  bump. On Windows 11 `MainWindow::applyWindowsFrameColor()` sets the DWM
+  sides while maximized).
+  `MainWindow::nativeEvent` also answers `WM_NCHITTEST` itself on Windows 10
+  and 11: the resize codes on a band of `SM_CXSIZEFRAME + SM_CXPADDEDBORDER`
+  at the window edges (none while maximized or fullscreen), `HTCLIENT`
+  everywhere else (`WindowChrome::expandedFrameHit`). Qt 6.12's own answer for
+  these flags turns the live button state into synthetic mouse presses, which
+  doubled real clicks and closed menus as they opened (#6272). Edge resize
+  rests on that handler; `FramelessResizer` is off on this path. Popped-out
+  panadapters use plain `FramelessWindowHint` and keep Qt's hit test.
+  On Windows 11 `MainWindow::applyWindowsFrameColor()` sets the DWM
   border to `color.background.app`, with Frameless Window on or off.
 - **Linux:** Qt's desktop Linux backends do not advertise expanded client
   areas. The fallback uses the shared caption cluster and `FramelessResizer`
