@@ -2800,10 +2800,15 @@ MainWindow::~MainWindow()
             }, Qt::BlockingQueuedConnection);
         }
         audio->deleteLater();
+        // The joins wait without a ceiling while any thread holds an FFTW
+        // planner lock (a cold WdspChannel::open(), Hl2Spectrum,
+        // AnanPanAnalyzer, wisdom): ~AudioEngine needs it, and destroying a
+        // running QThread aborts (#6287). Otherwise 3 s each, as before.
         {
             ShutdownTrace trace("audio.thread.join");
             m_audioThread->quit();
-            if (!m_audioThread->wait(3000))
+            if (!AudioEngine::joinThreadWhilePlannerBusy(*m_audioThread, 3000,
+                                                         "audio.thread.join"))
                 trace.fail("thread_join_timeout");
         }
     } else {
@@ -2812,7 +2817,8 @@ MainWindow::~MainWindow()
     if (m_audioThread && m_audioThread->isRunning()) {
         ShutdownTrace trace("audio.thread.join_retry");
         m_audioThread->quit();
-        if (!m_audioThread->wait(3000))
+        if (!AudioEngine::joinThreadWhilePlannerBusy(*m_audioThread, 3000,
+                                                     "audio.thread.join_retry"))
             trace.fail("thread_join_timeout");
     }
     m_audio = nullptr;

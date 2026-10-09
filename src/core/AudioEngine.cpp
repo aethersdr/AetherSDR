@@ -10,6 +10,7 @@
 #include "CwSidetoneStartPolicy.h"
 #include "TxCaptureBuffer.h"
 #include "ShutdownTrace.h"
+#include "core/dsp/FftwPlannerLock.h"
 #include "ClientEq.h"
 #include "ClientComp.h"
 #include "ClientGate.h"
@@ -7541,6 +7542,49 @@ bool AudioEngine::needsWisdomGeneration()
 
     return false;
 #endif
+}
+
+namespace {
+
+// True while another thread holds either FFTW planner lock. Never called with
+// one of them held by this thread (try_lock on an owned std::mutex is UB).
+bool fftwPlannerHeldElsewhere()
+{
+    for (std::mutex* m : {&fftwPlannerMutex(), &fftwfPlannerMutex()}) {
+        if (!m->try_lock()) {
+            return true;
+        }
+        m->unlock();
+    }
+    return false;
+}
+
+} // namespace
+
+bool AudioEngine::joinThreadWhilePlannerBusy(QThread& thread, int idleBudgetMs,
+                                             const char* phase)
+{
+    constexpr int kSliceMs = 250;
+    constexpr qint64 kLogEveryMs = 5000;
+    QElapsedTimer elapsed;
+    elapsed.start();
+    qint64 nextLogMs = kLogEveryMs;
+    int idleMs = 0;
+    while (!thread.wait(kSliceMs)) {
+        if (fftwPlannerHeldElsewhere()) {
+            idleMs = 0;
+            if (elapsed.elapsed() >= nextLogMs) {
+                QMessageLogger(__FILE__, __LINE__, Q_FUNC_INFO, "aether.shutdown").info()
+                    .noquote().nospace()
+                    << "phase=" << phase << " event=waiting planner=held elapsed_ms="
+                    << elapsed.elapsed();
+                nextLogMs += kLogEveryMs;
+            }
+        } else if ((idleMs += kSliceMs) >= idleBudgetMs) {
+            return false;
+        }
+    }
+    return true;
 }
 
 SpectralNR::WisdomResult AudioEngine::generateWisdom(
