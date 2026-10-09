@@ -3792,6 +3792,9 @@ void MainWindow::applyWindowsCaptionStyles()
     }
     const LONG_PTR style = GetWindowLongPtr(hwnd, GWL_STYLE);
     const LONG_PTR desired = style | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX;
+    // On Windows 10 this frame change is also what routes WM_NCCALCSIZE
+    // through nativeEvent() before setFramelessWindow() and the startup
+    // re-apply measure the client rect; Qt answered it at creation.
     if (style != desired) {
         SetWindowLongPtr(hwnd, GWL_STYLE, desired);
         SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
