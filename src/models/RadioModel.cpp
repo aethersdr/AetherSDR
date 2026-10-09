@@ -2458,7 +2458,12 @@ RadioModel::RadioModel(QObject* parent)
             return;
         }
 
-        sendCmd(cmd);
+        // The reply goes back to the model: some transmit state is never
+        // echoed in a status (this radio never repeats vox_enable), so for
+        // those the response code is the only confirmation there is.
+        sendCmd(cmd, [this, cmd](int respVal, const QString&){
+            m_transmitModel.handleCommandResponse(cmd, static_cast<uint>(respVal));
+        });
     });
 
     // Forward equalizer model commands to the radio

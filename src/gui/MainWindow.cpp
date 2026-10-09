@@ -133,6 +133,7 @@
 #include "FlexControlDialog.h"
 #include "CwxPanel.h"
 #include "DvkAvailabilityGate.h"
+#include "models/VoiceKeyerController.h"
 #include "VoiceModeGate.h"
 #include "DvkPanel.h"
 #include "StatusIndicator.h"
@@ -939,6 +940,32 @@ void MainWindow::requestWanReconnect()
     m_wanReconnectTimer.start();
 }
 
+// Live RX leaves the shared sink while something plays audio back through it.
+// The mute holds while ANY owner wants it: the QSO recorder, the PUDU monitor
+// and a voice keyer preview are independent and can overlap, and the one that
+// finishes first must not unmute under the others.
+//
+// Flex mutes by dropping PanadapterStream::pcmFrameReady; a seam backend has no
+// such connection, so m_rxMutedForPlayback is what its relay consults. The
+// reconnect is skipped for a backend that supplies its own seam audio (the
+// demo, RFC #4288 Route A): it never had this connection, and Qt permits
+// duplicates, so re-adding it would stack another copy of the feed
+// wirePanStreamRxAudioSinks() deliberately skips.
+void MainWindow::setRxPlaybackMute(const QString& owner, bool mute)
+{
+    const RxPlaybackMuteOwners::Edge edge = m_rxPlaybackMuters.set(owner, mute);
+    if (edge == RxPlaybackMuteOwners::Edge::None)
+        return;
+    m_rxMutedForPlayback = m_rxPlaybackMuters.muted();
+    if (edge == RxPlaybackMuteOwners::Edge::Mute) {
+        disconnect(m_radioModel.panStream(), &PanadapterStream::pcmFrameReady,
+                   m_audio, &AudioEngine::feedPcmFrame);
+    } else if (!backendFeedsEngineDirectly()) {
+        connect(m_radioModel.panStream(), &PanadapterStream::pcmFrameReady,
+                m_audio, &AudioEngine::feedPcmFrame, Qt::UniqueConnection);
+    }
+}
+
 void MainWindow::showForcedDisconnectDialog(bool wasWan,
                                             const RadioInfo& radioInfo,
                                             const WanRadioInfo& wanInfo)
@@ -1252,26 +1279,7 @@ MainWindow::MainWindow(QWidget* parent)
     m_qsoRecorder = new QsoRecorder(this);
     // During playback, block live RX audio from entering the buffer
     connect(m_qsoRecorder, &QsoRecorder::muteRxRequested, this, [this](bool mute) {
-        // Covers BOTH producers. The disconnect below is the Flex path and is
-        // left exactly as it was; the flag is what mutes a seam backend, whose
-        // audio reaches the engine through RadioModel::backendAudioFrameReady
-        // and so has no stream connection to drop. (PR #4537 review.)
-        m_rxMutedForPlayback = mute;
-        if (mute) {
-            disconnect(m_radioModel.panStream(), &PanadapterStream::pcmFrameReady,
-                       m_audio, &AudioEngine::feedPcmFrame);
-        } else {
-            // Only restore the stream→sink feed for backends that actually use it.
-            // A backend that emits its own seam audio (the demo, RFC #4288 Route A)
-            // never had this connection — re-adding it here would resurrect the
-            // double-feed that wirePanStreamRxAudioSinks() deliberately skips, and
-            // Qt permits duplicates, so every unmute would stack another copy.
-            if (!backendFeedsEngineDirectly()) {
-                connect(m_radioModel.panStream(), &PanadapterStream::pcmFrameReady,
-                        m_audio, &AudioEngine::feedPcmFrame,
-                        Qt::UniqueConnection);
-            }
-        }
+        setRxPlaybackMute(QStringLiteral("qso-recorder"), mute);
     });
 
     // A backend that demodulates in-process (HL2, the sim) feeds the recorder
@@ -1363,6 +1371,7 @@ MainWindow::MainWindow(QWidget* parent)
     m_outputRouter->setCurrentDevice(m_audio->outputDevice());
     m_outputRouter->addFollower(m_finalMonitor);
     m_outputRouter->addFollower(m_qsoRecorder);
+    wireLocalVoiceKeyer();
 
     // Wire the Quindar tone coordinator (#2262).  TransmitModel needs
     // the DSP module (to drive intro/outro phases) and a TX-mode
@@ -1437,27 +1446,12 @@ MainWindow::MainWindow(QWidget* parent)
     // feedDecodedSpeech routing, no timer pacing.  Keeps playback
     // glitch-free on macOS/Windows where QTimer jitter was starving
     // the shared RX sink.
-    // Disconnect live RX audio while the monitor is recording or
-    // playing so the user hears ONLY the captured PooDoo audio.
-    // Mirrors QsoRecorder's muteRxRequested handling — merely setting
-    // the sink volume to 0 would mute our playback too.
+    // Live RX leaves the sink while the monitor is recording or playing, so the
+    // user hears ONLY the captured PooDoo audio; setting the sink volume to 0
+    // would mute that playback too.
     connect(m_finalMonitor, &ClientPuduMonitor::muteRxRequested,
             this, [this](bool mute) {
-        m_rxMutedForPlayback = mute;   // seam backends — see the recorder handler
-        if (mute) {
-            disconnect(m_radioModel.panStream(),
-                       &PanadapterStream::pcmFrameReady,
-                       m_audio, &AudioEngine::feedPcmFrame);
-        } else {
-            // Same rule as the QSO-recorder unmute above: never resurrect the
-            // stream→sink feed for a backend that supplies its own seam audio.
-            if (!backendFeedsEngineDirectly()) {
-                connect(m_radioModel.panStream(),
-                        &PanadapterStream::pcmFrameReady,
-                        m_audio, &AudioEngine::feedPcmFrame,
-                        Qt::UniqueConnection);
-            }
-        }
+        setRxPlaybackMute(QStringLiteral("pudu-monitor"), mute);
     });
 
     // Band plan manager — must be created before buildMenuBar() which references it
@@ -5494,11 +5488,26 @@ void MainWindow::buildUI()
     splitter->addWidget(m_cwxPanel);
     m_cwxPanel->hide();
 
-    // DVK panel — left of spectrum, hidden by default (mutually exclusive with CWX)
-    m_dvkPanel = new DvkPanel(&m_radioModel.dvkModel(), splitter);
+    // DVK panel — left of spectrum, hidden by default (mutually exclusive with CWX).
+    // The panel drives a VoiceKeyer. The radio DVK asks for WAV import/export by
+    // signal; the Flex transfer that carries it is wired here, where that wire
+    // code is already in reach.
+    auto& dvkModel = m_radioModel.dvkModel();
     auto* dvkTransfer = new DvkWavTransfer(&m_radioModel, this);
-    m_dvkPanel->setWavTransfer(dvkTransfer);
+    connect(&dvkModel, &DvkModel::wavUploadRequested, dvkTransfer, &DvkWavTransfer::upload);
+    connect(&dvkModel, &DvkModel::wavDownloadRequested, dvkTransfer, &DvkWavTransfer::download);
+    connect(dvkTransfer, &DvkWavTransfer::statusChanged, &dvkModel, &VoiceKeyer::transferStatusChanged);
+    connect(dvkTransfer, &DvkWavTransfer::finished, &dvkModel, &VoiceKeyer::transferFinished);
+    // isBusy(), not isTransferring(): the radio's file server answers 50000053
+    // for ~2.2 s after an upload's socket closes (fw 4.2.20), and re-enabling
+    // Import/Export/Clear inside that window is what the panel's old guard
+    // prevented.
+    dvkModel.setWavTransferBusyProbe([transfer = QPointer<DvkWavTransfer>(dvkTransfer)] {
+        return transfer && transfer->isBusy();
+    });
+    m_dvkPanel = new DvkPanel(m_voiceKeyer->bound(), splitter);
     splitter->addWidget(m_dvkPanel);
+    applyVoiceKeyerSource();  // Local may already be the saved choice
     m_dvkPanel->hide();
 
     // Centre — panadapter stack (one or more FFT + waterfall panes)
@@ -8146,7 +8155,9 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
     // The CWX/DVK panels hide with their buttons, since they survive a
     // reconnect.
     const bool cwx = !connected || caps.hasRadioSideCwKeyer;
-    const bool dvk = !connected || caps.hasVoiceKeyer;
+    // The keyer surface serves the radio DVK and the client-side keyer, so it
+    // survives a radio that has no DVK of its own as long as it can transmit.
+    const bool dvk = !connected || caps.hasVoiceKeyer || caps.canTransmit;
     const bool fdx = !connected || caps.hasFullDuplex;
 
     const QString cwKeyerName = connected ? caps.cwTextKeyerName
@@ -10702,16 +10713,28 @@ void MainWindow::updateKeyerAvailability()
     // evaluated once here and applied to the indicator, the panel and the
     // F1-F12 shortcuts alike — otherwise the keys stay armed and each keypress
     // is refused by the radio (the "silently does nothing" report).
-    const DvkIndicatorBlocker dvkBlocker = dvkIndicatorBlocker(
+    // Radio vs Local keyer (RFC #4214) follows the same licence statuses, so
+    // re-resolve it here; with Local selected the entitlement stops gating.
+    applyVoiceKeyerSource();
+    // Local playback is voice audio: if the TX slice leaves a voice mode
+    // mid-message, unkey rather than feed speech into CW or data (Principle VI).
+    if (m_voiceKeyer && m_voiceKeyer->isTransmitting() && txSlice && !txIsSsb) {
+        m_voiceKeyer->abortTransmission(QStringLiteral("The transmit slice left voice mode."));
+    }
+    const DvkIndicatorBlocker dvkBlocker = voiceKeyerIndicatorBlocker(
+        voiceKeyerSource(),
         txIsSsb,
         m_radioModel.licenseFeatureSeen(kDvkLicenseFeature),
         m_radioModel.licenseFeatureEnabled(kDvkLicenseFeature),
         m_radioModel.dvkLicenseRefused());
-    // hasVoiceKeyer is ANDed in HERE rather than into the mode test, because
+    // The usable test is ANDed in HERE rather than into the mode test, because
     // isVoiceMode() is shared with the ASR indicator below and Copy Assist is
-    // host-side — folding a radio-side voice-keyer capability into the shared
-    // predicate would take a working transcription feature down with the keyer.
-    const bool dvkAvailable = hasVoiceKeyer
+    // host-side — folding a voice-keyer capability into the shared predicate
+    // would take a working transcription feature down with the keyer. Which
+    // capability matters depends on the keyer being driven: the radio's own DVK
+    // for Radio, merely the ability to transmit for Local.
+    const bool dvkAvailable = voiceKeyerUsable(voiceKeyerSource(), hasVoiceKeyer,
+                                               m_radioModel.backendCapabilities().canTransmit)
                               && (dvkBlocker == DvkIndicatorBlocker::None);
     const bool dvkUnlicensed = (dvkBlocker == DvkIndicatorBlocker::NotLicensed);
 

@@ -194,9 +194,9 @@ int main(int argc, char* argv[])
         DvkModel model;
         Sent sent;
         capture(model, sent);
-        model.recStop();
-        model.previewStop();
-        model.playbackStop();
+        model.recStop(3);
+        model.previewStop(3);
+        model.playbackStop(3);
         report("stop verbs carry no id",
                sent.commands == QStringList{QStringLiteral("dvk rec_stop"),
                                             QStringLiteral("dvk preview_stop"),
@@ -277,8 +277,9 @@ int main(int argc, char* argv[])
             }
         });
         model.recStart(4);
-        model.recStop();
-        report("a stop before the echo carries the pending start's slot", stopId == 4);
+        model.recStop(7);
+        report("a stop before the echo carries the pending start's slot, "
+               "not the slot the caller named", stopId == 4);
     }
     {
         // The radio's licensed status outranks an earlier 50004001 refusal.

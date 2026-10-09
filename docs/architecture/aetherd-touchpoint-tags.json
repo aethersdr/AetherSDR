@@ -566,8 +566,8 @@
  "core/PeripheralRemovalGuard.h": {
   "tag": "peripheral(4o3a)",
   "note": "Transient main-thread removal lease checked by TGXL, PGXL and Antenna Genius connection entry points. No GUI dependency, persisted state, radio-family wire or TX authority.",
- "split": "",
- "confidence": "high"
+  "split": "",
+  "confidence": "high"
  },
  "core/PeripheralEndpointFallback.h": {
   "tag": "peripheral(4o3a)",
@@ -1249,7 +1249,7 @@
  },
  "core/backends/FrontEndOverload.h": {
   "tag": "universal",
-  "note": "What the receive front end is doing, as seam vocabulary: an already-classified level, whether an automatic loop is armed, how far below the operator's setting it is holding, and the backend's own words for why. Universal because no family name and no wire concept appear above the seam \u2014 a family that cannot observe its converter never emits frontEndOverloadChanged and the indicator never appears, the same shape as autoRfGainControl() returning nullptr. Carries the ANSWER rather than the evidence: deciding when a converter is clipping 'occasionally' rather than 'most of the time' depends on what the flag means on a particular front end (on the HL2 a three-event threshold sampled at 10 Hz, not a rate), so that judgement stays in the family beside the register it reads. Exists because RFC #5535 approved an automatic RF-gain loop only on the condition that both the clipping and the regulator's own action are visible.",
+  "note": "What the receive front end is doing, as seam vocabulary: an already-classified level, whether an automatic loop is armed, how far below the operator's setting it is holding, and the backend's own words for why. Universal because no family name and no wire concept appear above the seam — a family that cannot observe its converter never emits frontEndOverloadChanged and the indicator never appears, the same shape as autoRfGainControl() returning nullptr. Carries the ANSWER rather than the evidence: deciding when a converter is clipping 'occasionally' rather than 'most of the time' depends on what the flag means on a particular front end (on the HL2 a three-event threshold sampled at 10 Hz, not a rate), so that judgement stays in the family beside the register it reads. Exists because RFC #5535 approved an automatic RF-gain loop only on the condition that both the clipping and the regulator's own action are visible.",
   "split": "",
   "confidence": "high"
  },
@@ -1381,7 +1381,7 @@
  },
  "core/backends/hl2/Hl2HardwareOptions.h": {
   "tag": "vendor(hl2)",
-  "note": "Which HL2-compatible board is on the other end \u2014 local audio codec, what the dither bit switches on each board, companion filter board, CL1 reference, gateware ATU. Protocol 1 reports none of it, so it is an operator declaration; every rule in it is an HL2 gateware quirk with no generic half to split out.",
+  "note": "Which HL2-compatible board is on the other end — local audio codec, what the dither bit switches on each board, companion filter board, CL1 reference, gateware ATU. Protocol 1 reports none of it, so it is an operator declaration; every rule in it is an HL2 gateware quirk with no generic half to split out.",
   "split": "",
   "confidence": "high"
  },
@@ -1556,6 +1556,54 @@
  "core/SpectrumDecodeScale.h": {
   "tag": "universal",
   "note": "Immutable sample decode aperture and local generation carried through the existing spectrum feed. No commands, vendor types or backend access; queued observations retain the scale that produced their levels.",
+  "split": "",
+  "confidence": "high"
+ },
+ "models/ModeVocabulary.h": {
+  "tag": "universal",
+  "note": "Canonical mode vocabulary: which slice modes count as voice (SSB, AM/SAM, the FM family) and which as CW (CW/CWU/CWL). Radio-family-neutral state and validation data - every backend reports these spellings - split out of gui/VoiceModeGate.h so the engine can answer the question without reaching into the UI. Same precedent as core/CtcssTones.h. The panel-policy half (shouldAutoHideCopyAssist) stayed in gui.",
+  "split": "",
+  "confidence": "high"
+ },
+ "models/VoiceKeyerController.h": {
+  "tag": "universal",
+  "note": "Owns the client-side voice keyer and everything it needs to run (RFC #4214): the keyer, its transmit route, the on-air transmitter, the preview player and the persisted source choice. Resolves which keyer the panel drives - radio DVK or local - so the UI needs only the VoiceKeyer interface. This is where the radio enters; LocalVoiceKeyer itself stays free of RadioModel/AudioEngine so it unit-tests on its own. Engine feature state, no vendor wire.",
+  "split": "",
+  "confidence": "high"
+ },
+ "models/VoiceKeyerSource.h": {
+  "tag": "ui-support",
+  "note": "Header-only vocabulary for which voice keyer the DVK panel drives (RFC #4214) - Radio or Local - plus the operator's persisted Auto/Radio/Local choice and its fail-open resolution against the radio's DVK entitlement. An operator preference the GUI shell owns, not radio-owned state, and no vendor wire; the keyer implementations behind it carry the engine state. Moved from core/ so the engine side owns the vocabulary it resolves.",
+  "split": "",
+  "confidence": "high"
+ },
+ "models/VoiceKeyer.h": {
+  "tag": "universal",
+  "note": "Voice-keyer contract the DVK panel drives (RFC #4214): numbered slots, status, and record/preview/on-air-playback intent, with 1-based slot ids matching the radio DVK and F1-F12. This IS the core-profile half that models/DvkModel.h's split already names; two implementations sit behind it (the radio-hosted DVK and the client-side keyer). Vendor-neutral by construction - no protocol verbs, no vendor status parsing - same precedent as models/CwxModel.h being universal despite the Flex 'CWX' name.",
+  "split": "",
+  "confidence": "high"
+ },
+ "models/LocalVoiceKeyer.h": {
+  "tag": "universal",
+  "note": "Client-side voice keyer (RFC #4214): slot state, recording from the TX mic tap (AudioEngine::txFinalMonitorPcmReady, after the voice chain, so it never keys - Principle VI), preview, and on-air playback handed to core/GeneratedAudioTransmitter.h. Recordings live on this computer, so no licence and no radio storage; no vendor wire at all. Engine-side feature state, same precedent as core/QsoRecorder.h and core/ClientPuduMonitor.h.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/GeneratedAudioTransmitter.h": {
+  "tag": "universal",
+  "note": "Keys the transmitter, paces one finite block of generated audio in real time and unkeys, over an abstract TxAudioRoute rather than any vendor stream class. Shared by the client-side voice keyer (RFC #4214); works over any radio's TX audio path, same precedent as core/ClientQuindarTone.h. Tagged universal on its surface, not its prose: the header names dax_tx three times, but only in comments explaining that a Flex route must create a stream before the keyed edge while HL2 and Icom bypass DAX entirely (txAudioBypassesDax, #4812) - the route abstraction exists precisely to keep that difference out of this class. No Flex type, verb or wire format appears in the interface; the vendor half lives in the route implementations.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/LocalWavPlayer.h": {
+  "tag": "ui-support",
+  "note": "Plays a voice-keyer slot's WAV on this computer's speakers (RFC #4214 PREV) through the output device the operator chose, fed via core/AudioOutputRouter.h. Never touches the radio or the transmitter: OS playback-device plumbing, no radio state, same precedent as core/AudioOutputRouter.h itself.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/VoiceKeyerSettings.h": {
+  "tag": "ui-support",
+  "note": "Client-side voice-keyer persistence (RFC #4214) - slot labels and the keyer-source choice in one nested JSON object under a single AppSettings key (Principle V). Deliberately NOT keyed to a radio, so an operator's slots follow them between radios; scoped to the OS user account instead. Config plumbing, not radio state, same precedent as core/AetherClockSettings.h.",
   "split": "",
   "confidence": "high"
  }

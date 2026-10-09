@@ -382,6 +382,26 @@ public:
 
     // ── VOX commands ────────────────────────────────────────────────────────
     void setVoxEnable(bool on);
+    // Ask the radio to change VOX and report whether it agreed, rather than
+    // assuming it did. A FLEX-6500 on 4.2.20 answers `transmit set vox_enable`
+    // with R<seq>|0| in ~30 ms and then never repeats vox_enable in a transmit
+    // status, so the reply is the only confirmation there is: this routes the
+    // command through the reply-aware path and emits voxEnableAcknowledged()
+    // once the radio has answered, applying the state only on success. For a
+    // caller that must not act until VOX really is off; a control that only
+    // reflects an operator click wants setVoxEnable().
+    void requestVoxEnable(bool on);
+
+private:
+    // The single place `transmit set vox_enable` goes on the wire, shared by
+    // the optimistic setter and the reply-aware request.
+    void sendVoxEnable(bool on);
+
+public:
+
+    // The radio's response to a command this model emitted. Routed back by
+    // RadioModel; commands whose reply says nothing new are ignored here.
+    void handleCommandResponse(const QString& cmd, uint code);
     void setVoxLevel(int level);
     void setVoxDelay(int delay);
     void setMicBoost(bool on);
@@ -419,6 +439,9 @@ public:
 
 signals:
     void stateChanged();
+    // The radio's answer to requestVoxEnable(): true when it applied the
+    // change, false when it refused or the command failed.
+    void voxEnableAcknowledged(bool applied);
     // (rfPowerChanged is declared once below — main already has it for the
     // external-surface mirror path; backends that set drive through the seam
     // reuse that same signal rather than a duplicate. #4449 recovery.)

@@ -1,20 +1,23 @@
 #pragma once
 
-#include <QObject>
-#include <QString>
-#include <QVector>
+#include "VoiceKeyer.h"
+
 #include <QLatin1String>
 #include <QMap>
+#include <QString>
+#include <QVector>
+
+#include <functional>
 
 namespace AetherSDR {
 
-struct DvkRecording {
-    int id{0};
-    QString name;
-    int durationMs{0};  // milliseconds
-};
+// The recording record is shared with the client-side keyer; the historical
+// name stays for existing callers.
+using DvkRecording = VoiceKeyerRecording;
 
-class DvkModel : public QObject {
+// The radio-hosted voice keyer: SmartSDR `dvk` verbs, recordings stored on the
+// radio (SmartSDR+ required). The panel drives it through VoiceKeyer.
+class DvkModel : public VoiceKeyer {
     Q_OBJECT
 public:
     explicit DvkModel(QObject* parent = nullptr);
@@ -26,16 +29,15 @@ public:
     static constexpr int kMaxNameBytes = 61;
 
     // State
-    enum Status { Unknown, Disabled, Idle, Recording, Preview, Playback };
-    Status status() const { return m_status; }
-    int activeId() const { return m_activeId; }
+    Status status() const override { return m_status; }
+    int activeId() const override { return m_activeId; }
     bool enabled() const { return m_enabled; }
     // The radio does not refuse overlapping operations, so a new one may only
     // start from idle (Unknown, before any status, fails open), with no start
     // of ours still awaiting its reply and no WAV transfer running.
-    bool canStartOperation() const;
+    bool canStartOperation() const override;
     // The start we sent and are still waiting on, or Unknown for none.
-    Status pendingOperation() const { return m_pending; }
+    Status pendingOperation() const override { return m_pending; }
     // DvkWavTransfer reports a running import or export here.
     void setTransferActive(bool active);
     // The radio answered a dvk command with 50004001 (feature not licensed).
@@ -47,7 +49,15 @@ public:
     void clearRefusal();
     // The radio's name for the DVK entitlement in `license feature` status.
     static constexpr QLatin1String kLicenseFeature{"digital_voice_keyer"};
-    const QVector<DvkRecording>& recordings() const { return m_recordings; }
+    const QVector<VoiceKeyerRecording>& recordings() const override { return m_recordings; }
+
+    // Per-keyer limits the panel shows and enforces. The radio caps a
+    // recording itself and names an empty slot its own way, so these report
+    // the radio's values; the statics stay because this class and its tests
+    // use them directly.
+    int maxRecordingMs() const override { return kMaxRecordingMs; }
+    int maxNameBytes() const override { return kMaxNameBytes; }
+    QString defaultSlotName(int id) const override { return defaultName(id); }
 
     static QString defaultName(int id);
     // Drops the characters the radio cannot carry in a quoted name (`"`, `'`,
@@ -55,14 +65,28 @@ public:
     static QString sanitizeName(const QString& name);
 
     // Commands
-    void recStart(int id);
-    void recStop();
-    void previewStart(int id);
-    void previewStop();
-    void playbackStart(int id);
-    void playbackStop();
-    void clear(int id);
-    void setName(int id, const QString& name);
+    void recStart(int id) override;
+    void recStop(int id) override;
+    void previewStart(int id) override;
+    void previewStop(int id) override;
+    void playbackStart(int id) override;
+    void playbackStop(int id) override;
+    void clear(int id) override;
+    void remove(int id) override;
+    void setName(int id, const QString& name) override;
+
+    // WAV import/export. The transfer itself (DvkWavTransfer) is Flex wire
+    // code this model must not reach, so the model asks for it by signal and
+    // MainWindow connects the transfer — see wavUploadRequested. The busy
+    // probe reports whether that transfer is mid-flight; with none installed,
+    // import/export is unavailable.
+    void importWav(int id, const QString& path) override;
+    void exportWav(int id, const QString& path) override;
+    bool canTransferWav() const override { return static_cast<bool>(m_transferBusyProbe); }
+    bool isTransferring() const override { return m_transferBusyProbe && m_transferBusyProbe(); }
+    void setWavTransferBusyProbe(std::function<bool()> probe) { m_transferBusyProbe = std::move(probe); }
+
+    QString sourceLabel() const override { return QStringLiteral("Radio"); }
 
     // Status parsing (called from RadioModel)
     void applyStatus(const QString& object, const QMap<QString, QString>& kvs);
@@ -85,17 +109,11 @@ signals:
     // attaches a callback that invokes handleCommandResponse() with the
     // verb + slot id captured here. (#3377)
     void replyCommandReady(const QString& cmd, const QString& verb, int id);
-    void statusChanged(Status status, int id);
-    void recordingChanged(int id);
-    void recordingsLoaded();
-    // Fired when the radio rejects a DVK command (non-zero response code).
-    // DvkPanel maps this to its status label and re-syncs button state so
-    // the user sees the failure instead of a stuck "checked" REC button.
-    void commandFailed(const QString& verb, int id, uint code, const QString& message);
     void licenseRefusedChanged(bool refused);
-    // canStartOperation() may have changed (a start sent or answered, a
-    // transfer begun or ended).
-    void admissionChanged();
+    // The operator asked to import or export a slot's WAV; MainWindow routes
+    // these to DvkWavTransfer.
+    void wavUploadRequested(int id, const QString& path);
+    void wavDownloadRequested(int id, const QString& path);
 
 private:
     static constexpr uint kNotLicensed = 0x50004001u;
@@ -109,9 +127,10 @@ private:
     bool m_transferActive{false};
 
     void setPending(Status pending);
-    QVector<DvkRecording> m_recordings;
+    QVector<VoiceKeyerRecording> m_recordings;
+    std::function<bool()> m_transferBusyProbe;
 
-    DvkRecording* findRecording(int id);
+    VoiceKeyerRecording* findRecording(int id);
 };
 
 } // namespace AetherSDR

@@ -4129,6 +4129,16 @@ target_include_directories(dvk_availability_gate_test PRIVATE src)
 target_link_libraries(dvk_availability_gate_test PRIVATE Qt6::Core)
 add_test(NAME dvk_availability_gate_test COMMAND dvk_availability_gate_test)
 
+# Who is holding live RX off the shared sink while audio plays back through it
+# (the QSO recorder, the PUDU monitor, a voice keyer preview). Header-only
+# policy, no radio and no audio device.
+add_executable(rx_playback_mute_owners_test
+    tests/rx_playback_mute_owners_test.cpp
+)
+target_include_directories(rx_playback_mute_owners_test PRIVATE src)
+target_link_libraries(rx_playback_mute_owners_test PRIVATE Qt6::Core)
+add_test(NAME rx_playback_mute_owners_test COMMAND rx_playback_mute_owners_test)
+
 add_executable(digital_voice_waveform_process_test
     tests/digital_voice_waveform_process_test.cpp
     src/core/DigitalVoiceWaveformTelemetry.cpp
@@ -5476,6 +5486,108 @@ add_test(NAME cwx_panel_test COMMAND cwx_panel_test)
 set_tests_properties(cwx_panel_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# DvkModel behind the VoiceKeyer interface (RFC #4214): SmartSDR wire
+# text unchanged, radio status reaches listeners through the interface's
+# signals, WAV import/export goes out as requests gated by the busy probe.
+add_executable(voice_keyer_dvk_model_test
+    tests/voice_keyer_dvk_model_test.cpp
+    src/models/DvkModel.cpp
+    src/models/DvkModel.h
+    src/models/VoiceKeyer.cpp
+    src/models/VoiceKeyer.h
+)
+target_include_directories(voice_keyer_dvk_model_test PRIVATE src)
+target_link_libraries(voice_keyer_dvk_model_test PRIVATE Qt6::Core)
+add_test(NAME voice_keyer_dvk_model_test COMMAND voice_keyer_dvk_model_test)
+
+# DVK panel against a fake VoiceKeyer (RFC #4214): F-key playback only
+# on a recorded slot, a second press stops, REC acts on the selected slot, the
+# status / refusal / transfer text, and the F-key shortcuts.
+add_executable(dvk_panel_test
+    tests/dvk_panel_test.cpp
+    src/gui/DvkPanel.cpp
+    src/gui/DvkPanel.h
+    # The slot context menu goes through roundMenuTree().
+    src/gui/RoundedMenu.cpp
+    src/models/VoiceKeyer.cpp
+    src/models/VoiceKeyer.h
+    # DvkPanel.cpp applies theme stylesheets through ThemeManager; pull in the
+    # manager + its logging deps so the test links (as cwx_panel_test does).
+    src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_settings>
+)
+target_include_directories(dvk_panel_test PRIVATE src)
+target_link_libraries(dvk_panel_test PRIVATE
+    Qt6::Core Qt6::Widgets
+)
+add_test(NAME dvk_panel_test COMMAND dvk_panel_test)
+set_tests_properties(dvk_panel_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# dk4dj's #957 WAV decoder, carried into RFC #4214: the untrusted-input boundary
+# for imported and dropped-in voice keyer recordings.
+add_executable(voice_keyer_wav_decoder_test
+    tests/voice_keyer_wav_decoder_test.cpp
+    src/core/VoiceKeyerWavDecoder.cpp
+    src/core/Resampler.cpp
+)
+target_include_directories(voice_keyer_wav_decoder_test PRIVATE
+    src
+    ${CMAKE_SOURCE_DIR}/third_party/r8brain
+)
+target_link_libraries(voice_keyer_wav_decoder_test PRIVATE Qt6::Core)
+add_test(NAME voice_keyer_wav_decoder_test COMMAND voice_keyer_wav_decoder_test)
+
+# Radio vs Local voice keyer selection (RFC #4214). Header-only, pure logic.
+add_executable(voice_keyer_source_test
+    tests/voice_keyer_source_test.cpp
+)
+target_include_directories(voice_keyer_source_test PRIVATE src)
+target_link_libraries(voice_keyer_source_test PRIVATE Qt6::Core)
+add_test(NAME voice_keyer_source_test COMMAND voice_keyer_source_test)
+
+# Client-side voice keyer (RFC #4214): recording from the mic tap, preview,
+# slot management, WAV import/export, labels persisted in AppSettings.
+add_executable(local_voice_keyer_test
+    tests/local_voice_keyer_test.cpp
+    src/models/LocalVoiceKeyer.cpp
+    src/models/LocalVoiceKeyer.h
+    src/models/VoiceKeyer.cpp
+    src/models/VoiceKeyer.h
+    src/core/LocalVoiceKeyerStore.cpp
+    src/core/VoiceKeyerSettings.cpp
+    src/core/VoiceKeyerWavDecoder.cpp
+    src/core/Resampler.cpp
+    src/core/GeneratedAudioTransmitter.cpp
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_settings>
+)
+target_include_directories(local_voice_keyer_test PRIVATE
+    src
+    tests
+    ${CMAKE_SOURCE_DIR}/third_party/r8brain
+)
+target_link_libraries(local_voice_keyer_test PRIVATE Qt6::Core)
+add_test(NAME local_voice_keyer_test COMMAND local_voice_keyer_test)
+
+# Shared generated-audio transmitter (RFC #4214): key/send/drain/unkey
+# sequencing for Flex, HL2 and Icom route shapes, against a scripted route.
+add_executable(generated_audio_transmitter_test
+    tests/generated_audio_transmitter_test.cpp
+    tests/FakeTxAudioRoute.h
+    src/core/GeneratedAudioTransmitter.cpp
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_settings>
+)
+target_include_directories(generated_audio_transmitter_test PRIVATE src tests)
+target_link_libraries(generated_audio_transmitter_test PRIVATE Qt6::Core)
+add_test(NAME generated_audio_transmitter_test COMMAND generated_audio_transmitter_test)
+
 add_executable(meter_model_test
     tests/meter_model_test.cpp
     src/models/MeterModel.cpp
@@ -6625,6 +6737,29 @@ add_executable(tx_operation_integration_test tests/tx_operation_integration_test
 target_include_directories(tx_operation_integration_test PRIVATE src tests)
 target_link_libraries(tx_operation_integration_test PRIVATE aethercore Qt6::Core)
 add_test(NAME tx_operation_integration_test COMMAND tx_operation_integration_test)
+
+# Ownership/cancellation for the real VoiceKeyerTxRoute (RFC #4214), which
+# FakeTxAudioRoute stands in for in generated_audio_transmitter_test. Links
+# aethercore and drives the route directly; no socket is opened.
+add_executable(voice_keyer_tx_route_test tests/voice_keyer_tx_route_test.cpp)
+target_include_directories(voice_keyer_tx_route_test PRIVATE src tests)
+target_link_libraries(voice_keyer_tx_route_test PRIVATE aethercore Qt6::Core)
+add_test(NAME voice_keyer_tx_route_test COMMAND voice_keyer_tx_route_test)
+
+# Which keyer the panel is bound to, and RFC #4214's condition that a source
+# change never retargets a running operation. Socket-free: a bare RadioModel,
+# no AudioEngine. QSignalSpy needs Qt6::Test.
+# Why REC refuses: VOX would key the radio (measured on a FLEX-6600), or the
+# radio's mic source is not the PC. Header-only policy, no radio.
+add_executable(voice_keyer_record_gate_test tests/voice_keyer_record_gate_test.cpp)
+target_include_directories(voice_keyer_record_gate_test PRIVATE src)
+target_link_libraries(voice_keyer_record_gate_test PRIVATE Qt6::Core)
+add_test(NAME voice_keyer_record_gate_test COMMAND voice_keyer_record_gate_test)
+
+add_executable(voice_keyer_controller_test tests/voice_keyer_controller_test.cpp)
+target_include_directories(voice_keyer_controller_test PRIVATE src tests)
+target_link_libraries(voice_keyer_controller_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME voice_keyer_controller_test COMMAND voice_keyer_controller_test)
 
 # Socket-free: inject PCM into AudioEngine, collect its output signals only.
 add_executable(tx_audio_context_test tests/tx_audio_context_test.cpp)
@@ -8164,6 +8299,9 @@ set(AETHER_SETTINGS_CONSUMERS
     cwx_speed_modifier_test
     cwx_drain_watch_test
     cwx_panel_test
+    dvk_panel_test
+    local_voice_keyer_test
+    generated_audio_transmitter_test
     meter_model_test
     health_applet_test
     meter_applet_capability_test

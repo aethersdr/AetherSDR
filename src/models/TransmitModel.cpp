@@ -763,12 +763,47 @@ void TransmitModel::loadMicProfile(const QString& name)
 
 // ── VOX commands ────────────────────────────────────────────────────────────
 
+namespace {
+// The one place this command's text is written, so requesting it and
+// recognising its reply cannot drift apart.
+QString voxEnableCommand(bool on)
+{
+    return QString("transmit set vox_enable=%1").arg(on ? 1 : 0);
+}
+}  // namespace
+
+void TransmitModel::sendVoxEnable(bool on)
+{
+    emit commandReady(voxEnableCommand(on));
+}
+
 void TransmitModel::setVoxEnable(bool on)
 {
     m_voxEnable = on;  // optimistic update — radio may not echo
     emit phoneStateChanged();
-    emit commandReady(QString("transmit set vox_enable=%1").arg(on ? 1 : 0));
+    sendVoxEnable(on);
     emit voxCommandIssued(on, m_voxLevel, m_voxDelay);
+}
+
+void TransmitModel::requestVoxEnable(bool on)
+{
+    // No optimistic write: the radio's answer decides, and until it arrives the
+    // model keeps saying what the radio last reported.
+    sendVoxEnable(on);
+}
+
+void TransmitModel::handleCommandResponse(const QString& cmd, uint code)
+{
+    const QString trimmed = cmd.trimmed();
+    if (trimmed != voxEnableCommand(true) && trimmed != voxEnableCommand(false))
+        return;   // nothing else here needs its reply
+    const bool wantOn = trimmed == voxEnableCommand(true);
+    const bool applied = code == 0;
+    if (applied && m_voxEnable != wantOn) {
+        m_voxEnable = wantOn;
+        emit phoneStateChanged();
+    }
+    emit voxEnableAcknowledged(applied);
 }
 
 void TransmitModel::setVoxLevel(int level)

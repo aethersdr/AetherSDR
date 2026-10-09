@@ -349,6 +349,15 @@ void MainWindow::buildMenuBar()
         openRadioSetupPage();
     });
 
+    // The keyer-source chooser is otherwise only on the DVK indicator's
+    // right-click, which no keyboard or screen-reader operator can reach
+    // (docs/a11y.md: every interactive widget needs a non-mouse activation
+    // path). Same menu, same handler.
+    auto* voiceKeyerSourceAct = settingsMenu->addAction("Voice Keyer Source...");
+    connect(voiceKeyerSourceAct, &QAction::triggered, this, [this] {
+        showVoiceKeyerSourceMenu(voiceKeyerSourceMenuAnchor());
+    });
+
     auto* flexControlAction = settingsMenu->addAction("AetherControl...");
     m_aetherControlAction = flexControlAction;
     flexControlAction->setVisible(true); // host controller, independent of radio capabilities

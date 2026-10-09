@@ -92,6 +92,56 @@ int main()
            dvkIndicatorTooltip(B::None)
                == QStringLiteral("Digital Voice Keyer — click to toggle"));
 
+    // ── RFC #4214: the client-side keyer ignores the radio's entitlement ────
+    using VS = VoiceKeyerSource;
+    report("local keyer + unlicensed + voice -> None (no licence needed)",
+           voiceKeyerIndicatorBlocker(VS::Local, true, true, false, false) == B::None);
+    report("local keyer + unlicensed + non-voice -> TxModeNotVoice",
+           voiceKeyerIndicatorBlocker(VS::Local, false, true, false, false) == B::TxModeNotVoice);
+    report("radio keyer + unlicensed + voice -> NotLicensed (unchanged)",
+           voiceKeyerIndicatorBlocker(VS::Radio, true, true, false, false) == B::NotLicensed);
+    report("radio keyer + unseen entitlement + voice -> None (still fails open)",
+           voiceKeyerIndicatorBlocker(VS::Radio, true, false, false, false) == B::None);
+    // A refusal (#6262) is the reliable not-licensed signal, and it must not
+    // follow the operator to the client-side keyer: Local never asks the radio
+    // to store or play anything, so a refused `dvk` command cannot gate it.
+    report("radio keyer + refusal + voice -> NotLicensed",
+           voiceKeyerIndicatorBlocker(VS::Radio, true, false, true, true) == B::NotLicensed);
+    report("local keyer + refusal + voice -> None (refusal does not reach Local)",
+           voiceKeyerIndicatorBlocker(VS::Local, true, false, true, true) == B::None);
+    report("local keyer + refusal + non-voice -> TxModeNotVoice (mode still gates)",
+           voiceKeyerIndicatorBlocker(VS::Local, false, false, true, true) == B::TxModeNotVoice);
+
+    // ── Keyer-source menu: the Radio DVK choice follows the same gate ───────
+    report("radio choice open when licensed",
+           radioVoiceKeyerUnavailableReason(true, true, true, false).isEmpty());
+    report("radio choice open while the entitlement is unreported (fails open)",
+           radioVoiceKeyerUnavailableReason(true, false, false, false).isEmpty());
+    report("radio choice closed when the radio reports no entitlement",
+           radioVoiceKeyerUnavailableReason(true, true, false, false).contains(QStringLiteral("SmartSDR+")));
+    report("radio choice closed on a radio with no DVK, whatever the licence says",
+           radioVoiceKeyerUnavailableReason(false, true, true, false)
+               == QStringLiteral("not available on this radio"));
+    // The case the refusal flag exists for: a refusing radio still reports
+    // enabled=1, so without it the menu would offer Radio DVK on a radio that
+    // cannot store a recording and the operator would get silence.
+    report("radio choice closed after the radio refuses a dvk command",
+           radioVoiceKeyerUnavailableReason(true, true, true, true)
+               .contains(QStringLiteral("SmartSDR+")));
+
+    // ── Which capability gates which keyer ──────────────────────────────────
+    // The radio's own DVK is required only when the operator drives it. Local
+    // stores and plays everything on this computer, so it needs the radio to
+    // transmit and nothing else — this is what made the feature Flex-only.
+    report("local keyer on a radio with no DVK is usable",
+           voiceKeyerUsable(VS::Local, false, true));
+    report("radio keyer on a radio with no DVK is not",
+           !voiceKeyerUsable(VS::Radio, false, true));
+    report("local keyer on a receive-only radio is not usable",
+           !voiceKeyerUsable(VS::Local, true, false));
+    report("radio keyer with a DVK is usable",
+           voiceKeyerUsable(VS::Radio, true, true));
+
     // ── The feature name is the FlexLib one ─────────────────────────────────
     report("license feature name matches FlexLib's digital_voice_keyer",
            QString(kDvkLicenseFeature) == QStringLiteral("digital_voice_keyer"));

@@ -330,6 +330,13 @@ void testDaxTxPolicy()
     check(daxTxRequestReasonName(DaxTxRequestReason::RxPlaybackTx)
               == QStringLiteral("rx_playback_tx"),
           "RxPlaybackTx has a diagnostic name");
+    DaxTxPolicyContext windowsVoiceKeyer = windowsExternalRoute;
+    windowsVoiceKeyer.reason = DaxTxRequestReason::ClientVoiceKeyerTx;
+    check(evaluateDaxTxPolicy(windowsVoiceKeyer).allowed,
+          "client voice keyer creates its own dax_tx stream independently of DAX2 (RFC #4214)");
+    check(daxTxRequestReasonName(DaxTxRequestReason::ClientVoiceKeyerTx)
+              == QStringLiteral("client_voice_keyer_tx"),
+          "client voice keyer reason has its own log name");
 }
 
 void testUdpRegistrationPolicy()

@@ -1,6 +1,5 @@
 #include "DvkPanel.h"
-#include "models/DvkModel.h"
-#include "core/DvkWavTransfer.h"
+#include "models/VoiceKeyer.h"
 #include <QAccessible>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -93,8 +92,8 @@ void setStyleProperty(QWidget* widget, const char* name, const QVariant& value)
 
 }  // namespace
 
-DvkPanel::DvkPanel(DvkModel* model, QWidget* parent)
-    : QWidget(parent), m_model(model)
+DvkPanel::DvkPanel(VoiceKeyer* keyer, QWidget* parent)
+    : QWidget(parent), m_model(keyer)
 {
     theme::setContainer(this, QStringLiteral("panel/dvk"));
     setObjectName(QStringLiteral("dvkPanel"));
@@ -106,9 +105,9 @@ DvkPanel::DvkPanel(DvkModel* model, QWidget* parent)
 
     // Header, laid out like a title-bar radio tab: name over a status line
     // led by a status dot. The dot is decoration; the words carry the state.
-    auto* title = new QLabel("Digital Voice Keyer");
-    title->setObjectName(QStringLiteral("dvkTitle"));
-    outerVbox->addWidget(title);
+    m_titleLabel = new QLabel("Digital Voice Keyer");
+    m_titleLabel->setObjectName(QStringLiteral("dvkTitle"));
+    outerVbox->addWidget(m_titleLabel);
 
     auto* statusRow = new QHBoxLayout;
     statusRow->setContentsMargins(0, 0, 0, 0);
@@ -204,7 +203,7 @@ DvkPanel::DvkPanel(DvkModel* model, QWidget* parent)
         m_nameLabels.append(nameLabel);
         m_durLabels.append(durLabel);
         m_progressBars.append(progressBar);
-        updateSlotAccessibility(id, DvkModel::defaultName(id), 0);
+        updateSlotAccessibility(id, m_model->defaultSlotName(id), 0);
 
         // Right-click context menu on row
         rowFrame->setContextMenuPolicy(Qt::CustomContextMenu);
@@ -281,7 +280,7 @@ DvkPanel::DvkPanel(DvkModel* model, QWidget* parent)
     connect(m_recBtn, &QPushButton::clicked, this, [this](bool checked) {
         if (m_selectedSlot < 1) return;
         if (!checked) {
-            m_model->recStop();
+            m_model->recStop(activeOrSelected());
         } else if (m_model->canStartOperation()) {
             m_model->recStart(m_selectedSlot);
         } else {
@@ -294,7 +293,7 @@ DvkPanel::DvkPanel(DvkModel* model, QWidget* parent)
     connect(m_playBtn, &QPushButton::clicked, this, [this](bool checked) {
         if (m_selectedSlot < 1) return;
         if (!checked) {
-            m_model->playbackStop();
+            m_model->playbackStop(activeOrSelected());
         } else if (m_model->canStartOperation() && durationForSlot(m_selectedSlot) > 0) {
             m_model->playbackStart(m_selectedSlot);
         } else {
@@ -305,7 +304,7 @@ DvkPanel::DvkPanel(DvkModel* model, QWidget* parent)
     connect(m_prevBtn, &QPushButton::clicked, this, [this](bool checked) {
         if (m_selectedSlot < 1) return;
         if (!checked) {
-            m_model->previewStop();
+            m_model->previewStop(activeOrSelected());
         } else if (m_model->canStartOperation() && durationForSlot(m_selectedSlot) > 0) {
             m_model->previewStart(m_selectedSlot);
         } else {
@@ -313,24 +312,7 @@ DvkPanel::DvkPanel(DvkModel* model, QWidget* parent)
         }
     });
 
-    // Wire model signals
-    connect(m_model, &DvkModel::statusChanged, this, &DvkPanel::onStatusChanged);
-    connect(m_model, &DvkModel::recordingChanged, this, &DvkPanel::onRecordingChanged);
-    connect(m_model, &DvkModel::admissionChanged, this, &DvkPanel::refreshTransport);
-
-    // Surface radio rejections instead of silently toggling buttons.  Without
-    // this the REC button latched "checked" on a rejected rec_start. (#3377)
-    connect(m_model, &DvkModel::commandFailed, this,
-            [this](const QString& verb, int id, uint /*code*/, const QString& message) {
-        // Re-drive the buttons from the current (unchanged) status so the
-        // failed momentary press is visually released.  This must run *first*:
-        // onStatusChanged() rewrites m_statusLabel ("Idle"), so set the
-        // failure text afterwards or it gets clobbered before the event loop
-        // returns and the user never sees the rejection. (#3377)
-        onStatusChanged(static_cast<int>(m_model->status()), m_model->activeId());
-        announceStatus(QString("%1 failed (slot %2): %3")
-                           .arg(verbLabel(verb)).arg(id).arg(message), true);
-    });
+    connectKeyer();
 
     // F1-F12 hotkeys (only play if slot has a recording).  Registered as
     // Qt::ApplicationShortcut on window() and created disabled — MainWindow
@@ -370,6 +352,11 @@ DvkPanel::DvkPanel(DvkModel* model, QWidget* parent)
 
     m_selectedSlot = 1;
     selectSlot(1);
+
+    // Last: this reaches onStatusChanged(), which drives m_elapsedTimer, so it
+    // must run after that timer exists. It is what puts the keyer's source in
+    // the title and its recordings in the rows on a freshly built panel.
+    refreshFromKeyer();
 }
 
 QString DvkPanel::verbLabel(const QString& verb)
@@ -412,6 +399,37 @@ void DvkPanel::updateSlotAccessibility(int id, const QString& name, int duration
         : QStringLiteral("Empty slot, nothing to play."));
 }
 
+void DvkPanel::setVoxHeldOff(bool held)
+{
+    m_voxHeldOff = held;
+}
+
+void DvkPanel::setPendingSourceNotice(const QString& text)
+{
+    if (m_pendingSourceNotice == text)
+        return;
+    m_pendingSourceNotice = text;
+    // Idle shows it on its own; an operation in flight carries it as a suffix
+    // from the next tick, which is 100 ms away at most.
+    if (!text.isEmpty() && m_model && m_model->status() == VoiceKeyer::Idle)
+        announceStatus(text);
+}
+
+QString DvkPanel::statusSuffix() const
+{
+    QString suffix;
+    if (m_voxHeldOff)
+        suffix += QStringLiteral(" · VOX held off");
+    if (!m_pendingSourceNotice.isEmpty())
+        suffix += QStringLiteral(" · ") + m_pendingSourceNotice;
+    return suffix;
+}
+
+void DvkPanel::showNotice(const QString& text, bool error)
+{
+    announceStatus(text, error);
+}
+
 void DvkPanel::announceStatus(const QString& text, bool error)
 {
     setStyleProperty(m_statusLabel, "tone", error ? QStringLiteral("error") : QString());
@@ -424,8 +442,8 @@ void DvkPanel::announceStatus(const QString& text, bool error)
 
 void DvkPanel::togglePlayback(int id)
 {
-    if (m_model->status() == DvkModel::Playback && m_model->activeId() == id) {
-        m_model->playbackStop();
+    if (m_model->status() == VoiceKeyer::Playback && m_model->activeId() == id) {
+        m_model->playbackStop(id);
     } else if (m_model->canStartOperation() && durationForSlot(id) > 0) {
         // An empty slot can leave the radio keyed, so only a recorded one plays.
         m_model->playbackStart(id);
@@ -436,15 +454,16 @@ void DvkPanel::stopActiveOperation()
 {
     // Before the radio has echoed a start (or before any status at all), stop
     // what we asked for: STOP must never be weaker than the start it follows.
-    DvkModel::Status active = m_model->status();
-    if (active != DvkModel::Recording && active != DvkModel::Playback
-        && active != DvkModel::Preview) {
+    const int stopId = activeOrSelected();
+    VoiceKeyer::Status active = m_model->status();
+    if (active != VoiceKeyer::Recording && active != VoiceKeyer::Playback
+        && active != VoiceKeyer::Preview) {
         active = m_model->pendingOperation();
     }
     switch (active) {
-    case DvkModel::Recording: m_model->recStop(); break;
-    case DvkModel::Playback:  m_model->playbackStop(); break;
-    case DvkModel::Preview:   m_model->previewStop(); break;
+    case VoiceKeyer::Recording: m_model->recStop(stopId); break;
+    case VoiceKeyer::Playback:  m_model->playbackStop(stopId); break;
+    case VoiceKeyer::Preview:   m_model->previewStop(stopId); break;
     default: break;
     }
 }
@@ -468,12 +487,12 @@ void DvkPanel::refreshTransport()
     // Only what can act now is enabled: a start control while idle (PLAY and
     // PREV need audio in the selected slot), the running one to stop itself,
     // and STOP while something runs.
-    const DvkModel::Status s = m_model->status();
+    const VoiceKeyer::Status s = m_model->status();
     const bool idle = m_model->canStartOperation();
     const bool hasAudio = durationForSlot(m_selectedSlot) > 0;
-    m_recBtn->setEnabled(idle || s == DvkModel::Recording);
-    m_playBtn->setEnabled((idle && hasAudio) || s == DvkModel::Playback);
-    m_prevBtn->setEnabled((idle && hasAudio) || s == DvkModel::Preview);
+    m_recBtn->setEnabled(idle || s == VoiceKeyer::Recording);
+    m_playBtn->setEnabled((idle && hasAudio) || s == VoiceKeyer::Playback);
+    m_prevBtn->setEnabled((idle && hasAudio) || s == VoiceKeyer::Preview);
     m_stopBtn->setEnabled(!idle);
 }
 
@@ -484,24 +503,24 @@ int DvkPanel::selectedSlot() const
 
 void DvkPanel::onStatusChanged(int status, int id)
 {
-    auto s = static_cast<DvkModel::Status>(status);
+    auto s = static_cast<VoiceKeyer::Status>(status);
 
     m_recBtn->blockSignals(true);
     m_playBtn->blockSignals(true);
     m_prevBtn->blockSignals(true);
 
-    m_recBtn->setChecked(s == DvkModel::Recording);
-    m_playBtn->setChecked(s == DvkModel::Playback);
-    m_prevBtn->setChecked(s == DvkModel::Preview);
+    m_recBtn->setChecked(s == VoiceKeyer::Recording);
+    m_playBtn->setChecked(s == VoiceKeyer::Playback);
+    m_prevBtn->setChecked(s == VoiceKeyer::Preview);
 
     m_recBtn->blockSignals(false);
     m_playBtn->blockSignals(false);
     m_prevBtn->blockSignals(false);
 
-    bool isActive = (s == DvkModel::Recording || s == DvkModel::Playback || s == DvkModel::Preview);
+    bool isActive = (s == VoiceKeyer::Recording || s == VoiceKeyer::Playback || s == VoiceKeyer::Preview);
     // On air is MOX amber; recording and preview are live but not keyed.
     const QString live = !isActive ? QString()
-                       : (s == DvkModel::Playback ? QStringLiteral("air") : QStringLiteral("live"));
+                       : (s == VoiceKeyer::Playback ? QStringLiteral("air") : QStringLiteral("live"));
 
     for (int i = 0; i < m_fkeyBtns.size(); ++i) {
         setStyleProperty(m_fkeyBtns[i], "live", i + 1 == id ? live : QString());
@@ -526,9 +545,9 @@ void DvkPanel::onStatusChanged(int status, int id)
 
                 setStyleProperty(bar, "mode", live);
 
-                if (s == DvkModel::Recording) {
+                if (s == VoiceKeyer::Recording) {
                     // The radio stops recording on its own at the limit.
-                    bar->setRange(0, DvkModel::kMaxRecordingMs);
+                    bar->setRange(0, m_model->maxRecordingMs());
                     bar->setValue(0);
                     bar->show();
                 } else if (totalMs > 0) {
@@ -561,7 +580,7 @@ void DvkPanel::onStatusChanged(int status, int id)
         for (auto* bar : m_progressBars) bar->hide();
 
         switch (s) {
-        case DvkModel::Disabled: announceStatus("Disabled · SmartSDR+ required"); break;
+        case VoiceKeyer::Disabled: announceStatus("Disabled · SmartSDR+ required"); break;
         default:                 announceStatus("Idle"); break;
         }
     }
@@ -573,7 +592,7 @@ void DvkPanel::onRecordingChanged(int id)
     int idx = id - 1;
     // A slot the model no longer holds (deleted, or the connection reset)
     // shows as the radio's default empty slot, not its last known contents.
-    QString name = DvkModel::defaultName(id);
+    QString name = m_model->defaultSlotName(id);
     int durationMs = 0;
     for (const auto& r : m_model->recordings()) {
         if (r.id == id) {
@@ -596,21 +615,22 @@ void DvkPanel::onElapsedTick()
 {
     m_elapsedMs += 100;
 
-    auto s = static_cast<DvkModel::Status>(m_timerStatus);
+    auto s = static_cast<VoiceKeyer::Status>(m_timerStatus);
     QString elapsed = formatDuration(m_elapsedMs);
     int totalMs = durationForSlot(m_timerSlotId);
 
     switch (s) {
-    case DvkModel::Recording:
-        m_statusLabel->setText(QString("Recording · slot %1 · %2 of %3")
-            .arg(m_timerSlotId).arg(elapsed, formatDuration(DvkModel::kMaxRecordingMs)));
+    case VoiceKeyer::Recording:
+        m_statusLabel->setText(QString("Recording · slot %1 · %2 of %3%4")
+            .arg(m_timerSlotId).arg(elapsed, formatDuration(m_model->maxRecordingMs()),
+                 statusSuffix()));
         break;
-    case DvkModel::Playback:
-    case DvkModel::Preview: {
-        const QString label = (s == DvkModel::Playback) ? "On air" : "Previewing";
+    case VoiceKeyer::Playback:
+    case VoiceKeyer::Preview: {
+        const QString label = (s == VoiceKeyer::Playback) ? "On air" : "Previewing";
         const QString of = totalMs > 0 ? QString(" of %1").arg(formatDuration(totalMs)) : QString();
-        m_statusLabel->setText(QString("%1 · slot %2 · %3%4")
-            .arg(label).arg(m_timerSlotId).arg(elapsed, of));
+        m_statusLabel->setText(QString("%1 · slot %2 · %3%4%5")
+            .arg(label).arg(m_timerSlotId).arg(elapsed, of, statusSuffix()));
         break;
     }
     default: break;
@@ -618,9 +638,9 @@ void DvkPanel::onElapsedTick()
 
     // Update progress bar
     if (m_timerSlotId >= 1 && m_timerSlotId <= 12) {
-        if (s == DvkModel::Recording) {
+        if (s == VoiceKeyer::Recording) {
             m_progressBars[m_timerSlotId - 1]->setValue(
-                qMin(m_elapsedMs, DvkModel::kMaxRecordingMs));
+                qMin(m_elapsedMs, m_model->maxRecordingMs()));
         } else if (totalMs > 0) {
             m_progressBars[m_timerSlotId - 1]->setValue(qMin(m_elapsedMs, totalMs));
         }
@@ -671,17 +691,67 @@ bool DvkPanel::eventFilter(QObject* obj, QEvent* event)
 
 // ── Context menu ───────────────────────────────────────────────────────────
 
-void DvkPanel::setWavTransfer(DvkWavTransfer* transfer)
+int DvkPanel::activeOrSelected() const
 {
-    m_wavTransfer = transfer;
-    connect(m_wavTransfer, &DvkWavTransfer::statusChanged, this, [this](const QString& text) {
+    const int active = m_model->activeId();
+    return active >= 1 ? active : m_selectedSlot;
+}
+
+void DvkPanel::connectKeyer()
+{
+    connect(m_model, &VoiceKeyer::statusChanged, this, &DvkPanel::onStatusChanged);
+    connect(m_model, &VoiceKeyer::recordingChanged, this, &DvkPanel::onRecordingChanged);
+    connect(m_model, &VoiceKeyer::recordingsLoaded, this, &DvkPanel::refreshFromKeyer);
+    connect(m_model, &VoiceKeyer::admissionChanged, this, &DvkPanel::refreshTransport);
+
+    // Surface refusals instead of silently toggling buttons.  Without this the
+    // REC button latched "checked" on a rejected rec_start. (#3377)
+    connect(m_model, &VoiceKeyer::commandFailed, this,
+            [this](const QString& verb, int id, uint /*code*/, const QString& message) {
+        // Re-drive the buttons from the current (unchanged) status so the
+        // failed momentary press is visually released.  This must run *first*:
+        // onStatusChanged() rewrites m_statusLabel ("Idle"), so set the
+        // failure text afterwards or it gets clobbered before the event loop
+        // returns and the user never sees the rejection. (#3377)
+        onStatusChanged(static_cast<int>(m_model->status()), m_model->activeId());
+        announceStatus(QString("%1 failed (slot %2): %3")
+                           .arg(verbLabel(verb)).arg(id).arg(message), true);
+    });
+
+    // Import/export progress. The transfer itself is the keyer's business —
+    // for the radio DVK it is DvkWavTransfer, wired to these signals by
+    // MainWindow — so the panel never names it.
+    connect(m_model, &VoiceKeyer::transferStatusChanged, this, [this](const QString& text) {
         setStyleProperty(m_statusLabel, "tone", QString());
         m_statusLabel->setText(text);
     });
-    connect(m_wavTransfer, &DvkWavTransfer::finished,
+    connect(m_model, &VoiceKeyer::transferFinished,
             this, [this](bool success, const QString& msg) {
         announceStatus(success ? msg : QString("Transfer failed: %1").arg(msg), !success);
     });
+}
+
+void DvkPanel::setKeyer(VoiceKeyer* keyer)
+{
+    if (!keyer || keyer == m_model) {
+        return;
+    }
+    // Drop every connection from the outgoing keyer first: left in place, its
+    // status would keep driving this panel after the swap.
+    disconnect(m_model, nullptr, this, nullptr);
+    m_model = keyer;
+    connectKeyer();
+    refreshFromKeyer();
+}
+
+void DvkPanel::refreshFromKeyer()
+{
+    m_titleLabel->setText(QStringLiteral("Digital Voice Keyer (%1)")
+                              .arg(m_model->sourceLabel()));
+    for (int id = 1; id <= 12; ++id) {
+        onRecordingChanged(id);
+    }
+    onStatusChanged(static_cast<int>(m_model->status()), m_model->activeId());
 }
 
 void DvkPanel::showContextMenu(int id, const QPoint& globalPos)
@@ -697,7 +767,7 @@ void DvkPanel::showContextMenu(int id, const QPoint& globalPos)
 
     int dur = durationForSlot(id);
     bool hasRecording = dur > 0;
-    bool notBusy = m_wavTransfer && !m_wavTransfer->isBusy();
+    bool notBusy = m_model->canTransferWav() && !m_model->isTransferring();
     // Clearing or loading a slot mid-operation can leave the DVK inconsistent.
     const bool idle = m_model->canStartOperation();
     clearAct->setEnabled(hasRecording && idle && notBusy);
@@ -714,7 +784,7 @@ void DvkPanel::showContextMenu(int id, const QPoint& globalPos)
             "WAV Files (*.wav)");
         if (path.isEmpty()) return;
 
-        m_wavTransfer->upload(id, path);
+        m_model->importWav(id, path);
     });
 
     connect(exportAct, &QAction::triggered, this, [this, id]() {
@@ -731,7 +801,7 @@ void DvkPanel::showContextMenu(int id, const QPoint& globalPos)
             "WAV Files (*.wav)");
         if (path.isEmpty()) return;
 
-        m_wavTransfer->download(id, path);
+        m_model->exportWav(id, path);
     });
 
     // The title bar's menu, so every menu in the canon reads the same. Its
@@ -762,7 +832,7 @@ void DvkPanel::startRename(int id)
     m_renameEdit->setFixedHeight(22);
     m_renameEdit->setText(label->text());
     m_renameEdit->selectAll();
-    m_renameEdit->setMaxLength(DvkModel::kMaxNameBytes);
+    m_renameEdit->setMaxLength(m_model->maxNameBytes());
     m_renameEdit->setAccessibleName(QString("Slot %1 name").arg(id));
     m_renameEdit->setAccessibleDescription(QStringLiteral(
         "Up to 61 UTF-8 bytes (61 plain letters, fewer with accents or symbols). "

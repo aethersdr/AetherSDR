@@ -12,6 +12,7 @@ enum class DaxTxRequestReason {
     AetherModemAx25Tx,
     WsprBeacon,
     RxPlaybackTx,
+    ClientVoiceKeyerTx,
     ExternalDaxRouteOnly,
     GenericAudioRecreate
 };
@@ -51,6 +52,7 @@ inline QString daxTxRequestReasonName(DaxTxRequestReason reason)
     case DaxTxRequestReason::AetherModemAx25Tx:   return QStringLiteral("aethermodem_ax25_tx");
     case DaxTxRequestReason::WsprBeacon:           return QStringLiteral("wspr_beacon");
     case DaxTxRequestReason::RxPlaybackTx:         return QStringLiteral("rx_playback_tx");
+    case DaxTxRequestReason::ClientVoiceKeyerTx:   return QStringLiteral("client_voice_keyer_tx");
     case DaxTxRequestReason::ExternalDaxRouteOnly:return QStringLiteral("external_dax_route_only");
     case DaxTxRequestReason::GenericAudioRecreate:return QStringLiteral("generic_audio_recreate");
     }
@@ -171,6 +173,12 @@ inline DaxTxPolicyDecision evaluateDaxTxPolicy(const DaxTxPolicyContext& context
         // AX.25 modem. No OS DAX audio device is claimed, so it needs its own
         // dax_tx stream on every platform.
         return {true, QStringLiteral("rx_playback_sends_vita49_directly")};
+    case DaxTxRequestReason::ClientVoiceKeyerTx:
+        // The client-side voice keyer (RFC #4214) plays recordings stored on
+        // this computer through AudioEngine::sendModemTxAudio(), like the
+        // modems above. No OS DAX audio device is involved, so it registers
+        // its own dax_tx stream on every platform.
+        return {true, QStringLiteral("voice_keyer_sends_vita49_directly")};
 
     case DaxTxRequestReason::ExternalDaxRouteOnly:
         if (context.mode == DaxTxMode::ExternalDax2) {
