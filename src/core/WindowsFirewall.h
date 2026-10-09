@@ -74,7 +74,9 @@ Status inspect(const QString& programPath);
 // radio's streams), TCP only on Domain and Private networks. AetherSDR's TCP
 // listeners (TCI, CAT, KISS, transfers) bind every interface without
 // authentication, and TCI can key the transmitter, so on a Public network
-// TCP is left to Windows' own prompt and the operator's choice.
+// incoming TCP stays blocked unless the operator allows it in Windows Defender
+// Firewall. An inbound TCP block there is that choice, not a fault: it is not
+// reported as Blocked, and the Allowed verdict says TCP is not pre-allowed.
 Assessment assess(const Status& status);
 
 // The inbound allow rules Fix and the installer add, with the profiles above.

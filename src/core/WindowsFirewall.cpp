@@ -21,9 +21,15 @@ QString profileNames(int profiles)
         return QStringLiteral("all networks");
     }
     QStringList names;
-    if (profiles & kProfileDomain) names << QStringLiteral("domain");
-    if (profiles & kProfilePrivate) names << QStringLiteral("private");
-    if (profiles & kProfilePublic) names << QStringLiteral("public");
+    if (profiles & kProfileDomain) {
+        names << QStringLiteral("domain");
+    }
+    if (profiles & kProfilePrivate) {
+        names << QStringLiteral("private");
+    }
+    if (profiles & kProfilePublic) {
+        names << QStringLiteral("public");
+    }
     return names.isEmpty() ? QStringLiteral("no networks") : names.join(QStringLiteral(", "));
 }
 
@@ -87,11 +93,23 @@ QList<int> inboundNeeds(int profile)
 Assessment assessDefender(const Status& status, const QList<Profile>& enabled)
 {
     Assessment a;
+    // An inbound block counts only where it blocks something that network
+    // needs: an inbound TCP block on a Public network is the operator's choice
+    // the policy leaves them, not a fault for Fix to undo.
     bool outboundBlockRule = false;
     for (const Rule& r : status.rules) {
-        if (r.allow) continue;
+        if (r.allow) {
+            continue;
+        }
         for (const Profile& p : enabled) {
-            if (appliesTo(r, p.bit)) {
+            if (!appliesTo(r, p.bit)) {
+                continue;
+            }
+            bool blocksNeed = !r.inbound;
+            for (int protocol : inboundNeeds(p.bit)) {
+                blocksNeed |= carries(r, protocol);
+            }
+            if (blocksNeed) {
                 a.details << describe(r);
                 outboundBlockRule |= !r.inbound;
                 break;
@@ -153,6 +171,14 @@ Assessment assessDefender(const Status& status, const QList<Profile>& enabled)
     for (const Rule& r : status.rules) {
         a.details << describe(r);
     }
+    for (const Profile& p : enabled) {
+        if (!(p.bit & kTcpProfiles)) {
+            a.details << QStringLiteral(
+                "%1 network: incoming TCP (TCI, CAT) is not pre-allowed here; allow AetherSDR "
+                "in Windows Defender Firewall's settings to use them on this network")
+                             .arg(profileNames(p.bit));
+        }
+    }
     a.summary = QStringLiteral(
         "AetherSDR's own Windows Defender Firewall rules allow it on every active network "
         "(incoming TCP on private and domain networks only). Rules for ports or services "
@@ -179,7 +205,9 @@ Assessment assess(const Status& status)
 
     QList<Profile> enabled;
     for (const Profile& p : status.activeProfiles) {
-        if (p.enabled) enabled << p;
+        if (p.enabled) {
+            enabled << p;
+        }
     }
     if (!enabled.isEmpty()) {
         a = assessDefender(status, enabled);
@@ -252,9 +280,15 @@ QString fixCommandLine(const QString& programPath, const QString& systemDirector
         if ((r.profiles & kAllProfiles) == kAllProfiles) {
             profiles << QStringLiteral("any");
         } else {
-            if (r.profiles & kProfileDomain) profiles << QStringLiteral("domain");
-            if (r.profiles & kProfilePrivate) profiles << QStringLiteral("private");
-            if (r.profiles & kProfilePublic) profiles << QStringLiteral("public");
+            if (r.profiles & kProfileDomain) {
+                profiles << QStringLiteral("domain");
+            }
+            if (r.profiles & kProfilePrivate) {
+                profiles << QStringLiteral("private");
+            }
+            if (r.profiles & kProfilePublic) {
+                profiles << QStringLiteral("public");
+            }
         }
         adds << QStringLiteral("%1 advfirewall firewall add rule name=\"%2\" dir=in action=allow "
                                "program=\"%3\" enable=yes profile=%4 protocol=%5")
@@ -273,7 +307,9 @@ Status afterFix(const Status& status)
     Status out = status;
     out.rules.clear();
     for (const Rule& r : status.rules) {
-        if (!r.inbound) out.rules << r;
+        if (!r.inbound) {
+            out.rules << r;
+        }
     }
     out.rules << fixRules();
     return out;
@@ -286,7 +322,12 @@ namespace {
 template <typename T>
 struct ComPtr {
     T* p{nullptr};
-    ~ComPtr() { if (p) p->Release(); }
+    ~ComPtr()
+    {
+        if (p) {
+            p->Release();
+        }
+    }
     T** out() { return &p; }
     T* operator->() const { return p; }
 };
@@ -300,7 +341,12 @@ struct ComScope {
         // which is still usable; only a successful init needs a matching uninit.
         release = SUCCEEDED(hr);
     }
-    ~ComScope() { if (release) CoUninitialize(); }
+    ~ComScope()
+    {
+        if (release) {
+            CoUninitialize();
+        }
+    }
 };
 
 QString fromBstr(BSTR b)
@@ -325,29 +371,43 @@ bool isRestricted(INetFwRule* rule)
     auto limited = [](HRESULT hr, BSTR value, const wchar_t* wildcard) {
         const QString v = SUCCEEDED(hr) ? fromBstr(value).trimmed() : QString();
         SysFreeString(value);
-        return !v.isEmpty() && v.compare(QString::fromWCharArray(wildcard), Qt::CaseInsensitive) != 0;
+        return !v.isEmpty()
+            && v.compare(QString::fromWCharArray(wildcard), Qt::CaseInsensitive) != 0;
     };
-    BSTR value = nullptr;
-    HRESULT hr = rule->get_LocalPorts(&value);
-    if (limited(hr, value, L"*")) return true;
-    value = nullptr;
-    hr = rule->get_RemotePorts(&value);
-    if (limited(hr, value, L"*")) return true;
-    value = nullptr;
-    hr = rule->get_LocalAddresses(&value);
-    if (limited(hr, value, L"*")) return true;
-    value = nullptr;
-    hr = rule->get_RemoteAddresses(&value);
-    if (limited(hr, value, L"*")) return true;
-    value = nullptr;
-    hr = rule->get_InterfaceTypes(&value);
-    if (limited(hr, value, L"All")) return true;
+    struct Field {
+        HRESULT (STDMETHODCALLTYPE INetFwRule::*get)(BSTR*);
+        const wchar_t* wildcard;
+    };
+    for (const Field& f : {Field{&INetFwRule::get_LocalPorts, L"*"},
+                           Field{&INetFwRule::get_RemotePorts, L"*"},
+                           Field{&INetFwRule::get_LocalAddresses, L"*"},
+                           Field{&INetFwRule::get_RemoteAddresses, L"*"},
+                           Field{&INetFwRule::get_InterfaceTypes, L"All"}}) {
+        BSTR value = nullptr;
+        const HRESULT hr = (rule->*f.get)(&value);
+        if (limited(hr, value, f.wildcard)) {
+            return true;
+        }
+    }
+    // Interfaces is a VARIANT array of interface names; empty, or an array
+    // with no elements, means every interface.
     VARIANT interfaces;
     VariantInit(&interfaces);
-    const bool namedInterfaces = SUCCEEDED(rule->get_Interfaces(&interfaces))
-        && interfaces.vt != VT_EMPTY && interfaces.vt != VT_NULL;
+    bool named = false;
+    if (SUCCEEDED(rule->get_Interfaces(&interfaces))) {
+        if ((interfaces.vt & VT_ARRAY) && interfaces.parray) {
+            LONG lower = 0;
+            LONG upper = -1;
+            if (SUCCEEDED(SafeArrayGetLBound(interfaces.parray, 1, &lower))
+                && SUCCEEDED(SafeArrayGetUBound(interfaces.parray, 1, &upper))) {
+                named = upper >= lower;
+            }
+        } else {
+            named = interfaces.vt != VT_EMPTY && interfaces.vt != VT_NULL;
+        }
+    }
     VariantClear(&interfaces);
-    return namedInterfaces;
+    return named;
 }
 
 void readThirdParty(Status& status)
@@ -515,23 +575,28 @@ bool runFix(const QString& programPath, QString* error)
         }
         return false;
     }
-    if (info.hProcess) {
-        const DWORD waited = WaitForSingleObject(info.hProcess, 60000);
-        DWORD code = 0;
-        GetExitCodeProcess(info.hProcess, &code);
-        CloseHandle(info.hProcess);
-        if (waited != WAIT_OBJECT_0) {
-            if (error) {
-                *error = QStringLiteral("The firewall update did not finish within a minute.");
-            }
-            return false;
+    if (!info.hProcess) {
+        if (error) {
+            *error = QStringLiteral("Windows started the firewall update but gave no way to "
+                                    "follow it; check again in a moment.");
         }
-        if (code != 0) {
-            if (error) {
-                *error = QStringLiteral("netsh reported an error (exit code %1).").arg(code);
-            }
-            return false;
+        return false;
+    }
+    const DWORD waited = WaitForSingleObject(info.hProcess, 60000);
+    DWORD code = 0;
+    GetExitCodeProcess(info.hProcess, &code);
+    CloseHandle(info.hProcess);
+    if (waited != WAIT_OBJECT_0) {
+        if (error) {
+            *error = QStringLiteral("The firewall update did not finish within a minute.");
         }
+        return false;
+    }
+    if (code != 0) {
+        if (error) {
+            *error = QStringLiteral("netsh reported an error (exit code %1).").arg(code);
+        }
+        return false;
     }
     return true;
 }

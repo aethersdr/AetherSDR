@@ -214,6 +214,7 @@ private:
     QPushButton* m_firewallFixButton{nullptr};
     QPushButton* m_firewallRecheckButton{nullptr};
     bool         m_firewallBusy{false};
+    QString      m_firewallFixError;   // a failed Fix, shown with the re-read state
 #endif
 
     QLabel* m_statusLabel;

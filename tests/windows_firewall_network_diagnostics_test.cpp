@@ -185,6 +185,26 @@ void testVerdicts()
     check(assess(privateUdp).verdict == Verdict::NoAllowRule,
           "on a Private network TCP is still needed");
 
+    // Automated pass on #6289: a TCP block on a Public network is the
+    // operator's choice under the policy, not a fault for Fix to undo.
+    Status publicTcpBlock = windows({kProfilePublic});
+    publicTcpBlock.rules << rule(false, kProtocolTcp, kProfilePublic)
+                         << rule(true, kProtocolUdp, kAll);
+    const Assessment ptb = assess(publicTcpBlock);
+    check(ptb.verdict == Verdict::Allowed && !ptb.fixable
+              && ptb.details.join(QLatin1Char(' ')).contains(QStringLiteral("not pre-allowed")),
+          "a Public TCP block is not reported as Blocked, and the page says TCP is not pre-allowed");
+    Status publicAnyBlock = windows({kProfilePublic});
+    publicAnyBlock.rules << rule(false, kProtocolAny, kProfilePublic)
+                         << rule(true, kProtocolUdp, kAll);
+    check(assess(publicAnyBlock).verdict == Verdict::Blocked,
+          "a Public block that also stops UDP is reported as Blocked");
+    Status privateTcpBlock = windows({kProfilePrivate});
+    privateTcpBlock.rules << rule(false, kProtocolTcp, kProfilePrivate)
+                          << rule(true, kProtocolAny, kAll);
+    check(assess(privateTcpBlock).verdict == Verdict::Blocked,
+          "a TCP block on a Private network is still a fault");
+
     check(assess(windows({})).verdict == Verdict::NoNetwork,
           "no active network reads as no network, not as the firewall being off");
 
@@ -321,6 +341,22 @@ void testFailureLogging()
     ok->finish();
     check(g_lines.size() == 4, "cancelled and successful replies log nothing");
 
+    // Automated pass on #6289: Qt reports an expired transfer timeout as
+    // TimeoutError, which is logged; a different HTTP status from the same
+    // service and host is a different failure.
+    auto* timedOut = new FakeReply(QUrl(QStringLiteral("https://api.github.com/y")),
+                                   QNetworkReply::TimeoutError, QStringLiteral("Operation timed out"));
+    NetworkDiagnostics::watch(timedOut, "update check");
+    timedOut->finish();
+    check(g_lines.size() == 5 && g_lines.last().contains(QStringLiteral("Operation timed out")),
+          "a transfer timeout is logged");
+    auto* gone = new FakeReply(QUrl(QStringLiteral("https://api.github.com/z")),
+                               QNetworkReply::ContentNotFoundError, QStringLiteral("Gone"), 410);
+    NetworkDiagnostics::watch(gone, "update check");
+    gone->finish();
+    check(g_lines.size() == 6 && g_lines.last().contains(QStringLiteral("HTTP 410")),
+          "the same error with a different HTTP status is logged again");
+
     // Review of #6289: Qt's HTTP error text quotes the full request URL, and
     // QRZ's query carries the credentials, delimiters and spaces included.
     QUrl qrz(QStringLiteral("https://xmldata.qrz.com/xml/current/"));
@@ -365,7 +401,9 @@ void testFailureLogging()
           "any other URL in the error text loses its userinfo, path and query");
 
     qInstallMessageHandler(g_previous);
-    for (auto* r : {a, again, tile, http, cancelled, ok, other}) delete r;
+    for (auto* r : {a, again, tile, http, cancelled, ok, timedOut, gone, other}) {
+        delete r;
+    }
 }
 
 } // namespace

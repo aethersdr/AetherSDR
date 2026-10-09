@@ -1293,7 +1293,10 @@ void NetworkDiagnosticsDialog::inspectFirewall()
         watcher->deleteLater();
         m_firewallBusy = false;
         const auto a = watcher->result();
-        m_firewallSummary->setText(a.summary);
+        const QString fixError = std::exchange(m_firewallFixError, QString());
+        m_firewallSummary->setText(fixError.isEmpty()
+            ? a.summary
+            : QStringLiteral("Fix did not complete: %1 Now: %2").arg(fixError, a.summary));
         m_firewallDetails->setText(a.details.join(QLatin1Char('\n')));
         m_firewallDetails->setVisible(!a.details.isEmpty());
         m_firewallFixButton->setEnabled(a.fixable);
@@ -1318,13 +1321,10 @@ void NetworkDiagnosticsDialog::fixFirewall()
     connect(watcher, &QFutureWatcherBase::finished, this, [this, watcher] {
         watcher->deleteLater();
         m_firewallBusy = false;
-        const QString error = watcher->result();
-        if (!error.isEmpty()) {
-            m_firewallSummary->setText(error);
-            m_firewallFixButton->setEnabled(true);
-            m_firewallRecheckButton->setEnabled(true);
-            return;
-        }
+        // Re-read the firewall either way: a failed or timed-out Fix may
+        // already have deleted the inbound rules, and the page must show
+        // what is there now, with the failure in front of it.
+        m_firewallFixError = watcher->result();
         inspectFirewall();
     });
     watcher->setFuture(QtConcurrent::run([program] {

@@ -3873,6 +3873,7 @@ add_test(NAME receive_presentation_sync_test COMMAND receive_presentation_sync_t
 add_executable(kiwi_public_directory_test
     tests/kiwi_public_directory_test.cpp
     src/core/KiwiPublicDirectory.cpp
+    src/core/NetworkDiagnostics.cpp
 )
 target_include_directories(kiwi_public_directory_test PRIVATE src)
 target_link_libraries(kiwi_public_directory_test PRIVATE Qt6::Core Qt6::Network)
@@ -3885,6 +3886,7 @@ add_test(NAME kiwi_public_directory_test COMMAND kiwi_public_directory_test)
 add_executable(kiwi_directory_poc
     tools/kiwi_directory_poc.cpp
     src/core/KiwiPublicDirectory.cpp
+    src/core/NetworkDiagnostics.cpp
 )
 target_include_directories(kiwi_directory_poc PRIVATE src)
 target_link_libraries(kiwi_directory_poc PRIVATE Qt6::Core Qt6::Network)

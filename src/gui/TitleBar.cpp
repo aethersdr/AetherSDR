@@ -1435,7 +1435,7 @@ void TitleBar::showFeatureRequestDialog()
     nam->setTransferTimeout(kTransferTimeoutMs);
     auto* reply = nam->get(QNetworkRequest(
         QUrl("https://api.github.com/repos/aethersdr/AetherSDR/releases/latest")));
-    NetworkDiagnostics::watch(reply, "update check");
+    NetworkDiagnostics::watch(reply, "feature request release lookup");
     connect(reply, &QNetworkReply::finished, this, [this, reply, nam] {
         reply->deleteLater();
         nam->deleteLater();

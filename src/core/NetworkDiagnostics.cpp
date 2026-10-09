@@ -52,7 +52,9 @@ QString scrubUrls(QString text, const QNetworkReply* reply)
         urls << reply->url().resolved(redirect);
     }
     for (const QUrl& url : urls) {
-        if (!url.isValid()) continue;
+        if (!url.isValid()) {
+            continue;
+        }
         for (const QString& spelling : {url.toString(), url.toString(QUrl::FullyEncoded),
                                         url.toDisplayString(), url.toString(QUrl::RemoveUserInfo)}) {
             if (!spelling.isEmpty()) {
@@ -117,8 +119,12 @@ void watch(QNetworkReply* reply, const char* what)
         if (error == QNetworkReply::NoError || error == QNetworkReply::OperationCanceledError) {
             return;
         }
-        const QString key = QStringLiteral("%1|%2|%3")
-            .arg(QLatin1String(what), reply->url().host()).arg(int(error));
+        // The HTTP status is part of the key: a 429 and a later 410 from the
+        // same host share one NetworkError and are different failures.
+        const QString key = QStringLiteral("%1|%2|%3|%4")
+            .arg(QLatin1String(what), reply->url().host())
+            .arg(int(error))
+            .arg(reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt());
         bool logBackend = false;
         {
             QMutexLocker lock(&g_mutex);
