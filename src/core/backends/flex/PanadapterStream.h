@@ -87,6 +87,12 @@ public:
     void unregisterPanStream(quint32 streamId);
     void unregisterWfStream(quint32 streamId);
     void clearRegisteredStreams();
+    // The stream's next packet starts a new instance: no sequence error
+    // against the previous instance's last count, and the log line's counts
+    // and window start over. The unregister*() calls and clearRegisteredStreams()
+    // do this; a stream with no registration here (remote_audio_rx) is
+    // restarted by its owner when it is removed or created. Takes m_statsMutex.
+    void restartStreamSequence(quint32 streamId);
 
     // Layer A radio-side orphan detector (#3856): processDatagram() records any
     // FFT/waterfall packet whose stream id was registered earlier this session but
@@ -306,6 +312,7 @@ private:
     // status bar and Network Diagnostics totals). The rest describes the
     // current instance of the stream and is restarted when the stream is torn
     // down, because the radio can reuse the id: see restartStreamSequence().
+    void restartAllStreamSequences();
     struct StreamStats {
         int  lastSeq{-1};
         int  errorCount{0};
@@ -315,11 +322,6 @@ private:
         int  startTotalCount{0};   // totalCount before its first packet
         VitaSequenceLossLimiter lossLog;
     };
-    // The stream's next packet starts a new instance: no sequence error
-    // against the previous instance's last count, and the log line's counts
-    // and window start over. Takes m_statsMutex.
-    void restartStreamSequence(quint32 streamId);
-    void restartAllStreamSequences();
 
 public:
     // Per-category network statistics

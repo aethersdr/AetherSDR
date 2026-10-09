@@ -58,7 +58,8 @@ needs an entry in `sidebars.js`.
 There is one snapshot. Edit `docs/` only: the snapshot is replaced, never
 edited, by `tools/docs/snapshot_stable.py`, which `/release-prep` runs for
 every release. It copies `docs/` and the evaluated `sidebars.js` into the
-snapshot and sets the label:
+snapshot, sets the label, and points the Log Analyzer's `/next/` rule links
+at Stable for every page the snapshot now has:
 
 ```sh
 python3 tools/docs/snapshot_stable.py 26.10.2
@@ -139,11 +140,10 @@ every release with a detached signature made with the release key.
 checks a log or support bundle in the browser against
 `src/components/LogAnalyzer/rules.json`. Each rule cites the source line that
 writes the message it matches and links the fix: `/<page>#<heading>` on
-Stable, or `/next/<page>#<heading>` for a page only Next has. A Stable
-snapshot copies Next, so after `snapshot_stable.py` every `/next/` link has a
-Stable page too: change those links to `/<page>#<heading>` in the same commit,
-or users of the release land on the unreleased docs. Test the rules
-with:
+Stable, or `/next/<page>#<heading>` for a page only Next has.
+`snapshot_stable.py` turns each `/next/` link whose page is in the new Stable
+snapshot into a Stable link, so users of the release land on its docs. Test the
+rules with:
 
 ```sh
 node tools/docs/test_log_rules.mjs

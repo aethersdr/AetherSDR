@@ -2879,6 +2879,14 @@ target_include_directories(vita_sequence_loss_log_test PRIVATE src)
 target_link_libraries(vita_sequence_loss_log_test PRIVATE aethercore Qt6::Core)
 add_test(NAME vita_sequence_loss_log_test COMMAND vita_sequence_loss_log_test)
 
+# RadioModel restarts remote_audio_rx's VITA-49 sequence tracking when the radio
+# reports the stream adopted or removed (#6285). Socket-free: status lines go to
+# the model's router and packets straight to processDatagram().
+add_executable(remote_audio_rx_sequence_restart_test tests/remote_audio_rx_sequence_restart_test.cpp)
+target_include_directories(remote_audio_rx_sequence_restart_test PRIVATE src tests)
+target_link_libraries(remote_audio_rx_sequence_restart_test PRIVATE aethercore Qt6::Core)
+add_test(NAME remote_audio_rx_sequence_restart_test COMMAND remote_audio_rx_sequence_restart_test)
+
 # The start-up "Platform: Qt platform plugin" line and its fallback line (#6285).
 # Pure: no QGuiApplication.
 add_executable(qt_platform_choice_test

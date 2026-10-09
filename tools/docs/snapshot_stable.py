@@ -19,6 +19,9 @@ makes the current docs the new Stable:
   * versions.json is ["stable"];
   * stable-version.json's label becomes the version, which the version menu
     shows;
+  * every Log Analyzer rule link (src/components/LogAnalyzer/rules.json)
+    to /next/<page> whose page is in the new snapshot becomes /<page>, so
+    users of the release land on its docs, not on Next;
   * each translation's i18n/<locale>/docusaurus-plugin-content-docs/current/
     is copied to version-stable/ beside it. Re-run
     `npm run write-translations -- --locale <locale>` afterwards for the
@@ -49,6 +52,7 @@ VERSIONED_DOCS = SITE / "versioned_docs" / f"version-{VERSION}"
 VERSIONED_SIDEBARS = SITE / "versioned_sidebars" / f"version-{VERSION}-sidebars.json"
 VERSIONS_JSON = SITE / "versions.json"
 LABEL_JSON = SITE / "stable-version.json"
+RULES_JSON = SITE / "src" / "components" / "LogAnalyzer" / "rules.json"
 I18N = SITE / "i18n"
 
 
@@ -85,6 +89,48 @@ def replace_tree(src: Path, dest: Path) -> None:
     tmp.rename(dest)
 
 
+def page_slugs(docs_dir: Path) -> set[str]:
+    """The page slugs Docusaurus serves from a docs tree's top level: the
+    front-matter slug, else /<file stem>. tools/docs/test_log_rules.mjs reads
+    the same pages to check rule links."""
+    slugs = set()
+    for f in docs_dir.iterdir():
+        if f.suffix not in (".md", ".mdx"):
+            continue
+        slug = "/" + f.stem
+        text = f.read_text(encoding="utf-8")
+        fm = re.match(r"^---\n(.*?)\n---", text, re.S)
+        if fm:
+            m = re.search(r'^slug:\s*"?([^"\n]+)"?\s*$', fm.group(1), re.M)
+            if m:
+                slug = m.group(1) if m.group(1).startswith("/") else "/" + m.group(1)
+        slugs.add(slug)
+    return slugs
+
+
+def stabilise_rule_links(rules_json: Path, stable_slugs: set[str]) -> list[str]:
+    """Rewrite "docs": "/next/<page>[#anchor]" to "/<page>[#anchor]" for each
+    page the Stable snapshot now has. The snapshot is a copy of Next, so its
+    anchors are there too. Edits the text in place to keep the file's layout.
+    Returns the links it rewrote."""
+    if not rules_json.is_file():
+        return []
+    changed = []
+
+    def swap(m: re.Match) -> str:
+        page, anchor = m.group(2), m.group(3) or ""
+        if page not in stable_slugs:
+            return m.group(0)
+        changed.append(f"/next{page}{anchor}")
+        return f'{m.group(1)}{page}{anchor}"'
+
+    text = rules_json.read_text(encoding="utf-8")
+    new = re.sub(r'("docs":\s*")/next(/[^"#]*)(#[^"]*)?"', swap, text)
+    if new != text:
+        rules_json.write_text(new, encoding="utf-8")
+    return changed
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("version", help="the release the snapshot describes, e.g. 26.10.2")
@@ -105,6 +151,10 @@ def main() -> int:
                                   encoding="utf-8")
     VERSIONS_JSON.write_text(json.dumps([VERSION]) + "\n", encoding="utf-8")
     LABEL_JSON.write_text(json.dumps({"label": label}, indent=2) + "\n", encoding="utf-8")
+
+    moved = stabilise_rule_links(RULES_JSON, page_slugs(VERSIONED_DOCS))
+    for link in moved:
+        print(f"Log Analyzer rule link {link} -> Stable")
 
     pages = sum(1 for _ in VERSIONED_DOCS.rglob("*.md"))
     print(f"stable snapshot ({label}): {pages} pages -> {VERSIONED_DOCS.relative_to(REPO)}")

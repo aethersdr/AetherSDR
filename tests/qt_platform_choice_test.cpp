@@ -4,6 +4,7 @@
 // the -platform argument Qt prefers to it), no QGuiApplication.
 
 #include "QtPlatformChoice.h"
+#include "core/GpuSelector.h"
 
 #include <QString>
 #include <QStringList>
@@ -91,6 +92,28 @@ int main()
         report("-platform with no value is ignored", !QtPlatformChoice::platformArgument(2, dangling).has_value());
         const char* other[] = {"AetherSDR", "-platformtheme", "gtk3"};
         report("-platformtheme is not -platform", !QtPlatformChoice::platformArgument(3, other).has_value());
+    }
+
+    {
+        // GpuSelector's GLX/EGL choice reads the same request Qt will use: the
+        // -platform argument when there is one, so `-platform xcb` in a Wayland
+        // session is X11 (GLX).
+        const auto request = [](const char* const* argv, int argc) {
+            return QtPlatformChoice::platformArgument(argc, argv).value_or(QString()).toLocal8Bit();
+        };
+        const char* xcb[] = {"AetherSDR", "-platform", "xcb"};
+        report("-platform xcb in a Wayland session is X11",
+               !GpuSelector::requestPicksWayland(request(xcb, 3), true));
+        const char* wl[] = {"AetherSDR", "--platform", "wayland"};
+        report("--platform wayland in an X11 session is Wayland",
+               GpuSelector::requestPicksWayland(request(wl, 3), false));
+        report("xcb;wayland runs on xcb", !GpuSelector::requestPicksWayland("xcb;wayland", true));
+        report("wayland-egl is Wayland", GpuSelector::requestPicksWayland("wayland-egl", false));
+        report("offscreen falls back to the session",
+               GpuSelector::requestPicksWayland("offscreen", true)
+                   && !GpuSelector::requestPicksWayland("offscreen", false));
+        report("no request: the session decides",
+               GpuSelector::requestPicksWayland("", true) && !GpuSelector::requestPicksWayland("", false));
     }
 
     std::printf("%s\n", g_failed ? "FAILED" : "PASSED");

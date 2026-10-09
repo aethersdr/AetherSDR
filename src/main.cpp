@@ -288,10 +288,11 @@ int main(int argc, char* argv[])
     // "wayland;xcb" is an ordered fallback list, so a host without the Wayland
     // plugin lands on xcb instead of failing to start (#1389); appimage.yml deploys
     // the Wayland plugin. Skipped when the user sets QT_QPA_PLATFORM (xcb is the
-    // documented escape hatch, README next to AETHER_NO_GPU).
+    // documented escape hatch, README next to AETHER_NO_GPU), and when the user
+    // passes -platform, which Qt prefers to QT_QPA_PLATFORM anyway.
     g_qpaPlatformUserSet = qEnvironmentVariableIsSet("QT_QPA_PLATFORM");
     g_qpaPlatformArgument = AetherSDR::QtPlatformChoice::platformArgument(argc, argv);
-    if (!g_qpaPlatformUserSet) {
+    if (!g_qpaPlatformUserSet && !g_qpaPlatformArgument) {
         const QByteArray session = qgetenv("XDG_SESSION_TYPE");
         if (session == "wayland" && qEnvironmentVariableIsSet("WAYLAND_DISPLAY")) {
             // Override to xcb only when the session is affirmatively headless (DRM
@@ -319,7 +320,7 @@ int main(int argc, char* argv[])
     // or QT_D3D_ADAPTER_INDEX (Windows) from the persisted Display-menu choice.
     // Runs AFTER the QT_QPA_PLATFORM block above so GpuSelector::willUseWayland()
     // reads the platform we actually chose (see the ORDER note above).
-    AetherSDR::GpuSelector::applyAtStartup();
+    AetherSDR::GpuSelector::applyAtStartup(g_qpaPlatformArgument.value_or(QString()));
 
     // Qt 6.12's QtMultimedia defaults to its PipeWire audio backend and
     // segfaults enumerating devices when it cannot create a PipeWire context
