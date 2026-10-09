@@ -1922,7 +1922,7 @@
         "target": "DxClusterDialog"
       },
       "caption": "SpotHub, open on the Cluster tab. Each tab is one spot source.",
-      "alt": "SpotHub window with tabs Cluster, RBN, WSJT-X, SpotCollector, POTA, EiBi, N1MM, FreeDV and Spot List, with Cluster selected. The Connection group has Server dxc.nc7j.com, Port 7300, an empty Callsign field, Auto-Connect: OFF and Startup Commands… buttons, a Disconnected status and a Connect button. Below is an empty Cluster Console with a spot colour swatch, and a command field with Send and Clear buttons."
+      "alt": "SpotHub window with tabs Cluster, RBN, WSJT-X, SpotCollector, POTA, EiBi, N1MM, FreeDV and Spot List, with Cluster selected. The Connection group has Server dxc.nc7j.com, Port 7300, an empty Callsign field, Auto-Connect: OFF, Startup Commands… and Hide Unverified: OFF buttons, a Disconnected status and a Connect button. Below is an empty Cluster Console with a spot colour swatch, and a command field with Send and Clear buttons."
     },
     {
       "id": "spothub-display-tab",

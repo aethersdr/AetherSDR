@@ -1,4 +1,16 @@
 {
+ "core/DxSpotLineParser.h": {
+  "tag": "universal",
+  "note": "Parses DX-cluster `DX de` lines (DXSpider/AR/CC/RBN/GoCluster) into DxSpot, including the GoCluster fixed-column tail and SNR report, and replays saved spot logs with per-session provenance. Pure line-to-value logic; no vendor radio ties.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/GoClusterSettings.h": {
+  "tag": "ui-support",
+  "note": "AppSettings-backed per-feed GoCluster Hide-Unverified policy (nested `GoCluster` object); no radio state.",
+  "split": "",
+  "confidence": "high"
+ },
  "core/NetworkDiagnostics.h": {
   "tag": "ui-support",
   "note": "Logs failed external-service requests (update check, QRZ, map/radar, propagation) to aether.network with their TLS errors and the TLS backend. Diagnostic plumbing, not radio state; the map/radar manager, title-bar update check and propagation dashboard watch their replies with it.",

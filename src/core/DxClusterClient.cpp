@@ -104,10 +104,7 @@ void DxClusterClient::sendCommand(const QString& cmd)
 {
     if (!m_connected) return;
     qCDebug(lcDxCluster) << "DxClusterClient TX:" << cmd;
-    if (m_logFile.isOpen()) {
-        m_logFile.write(("> " + cmd + "\n").toUtf8());
-        m_logFile.flush();
-    }
+    appendLog("> " + cmd);
     m_socket->write((cmd + "\r\n").toLatin1());
 }
 
@@ -123,12 +120,10 @@ void DxClusterClient::onConnected()
     m_logFile.close();
     m_logFile.setFileName(logFilePath());
     QDir().mkpath(QFileInfo(m_logFile).absolutePath());
+    m_connectedAtUtc = QDateTime::currentDateTimeUtc().toString("yyyy-MM-dd HH:mm:ss UTC");
+    m_logNeedsHeader = false;
     if (m_logFile.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
-        m_logFile.write(QString("--- Connected to %1:%2 at %3 ---\n")
-            .arg(m_host).arg(m_port)
-            .arg(QDateTime::currentDateTimeUtc().toString("yyyy-MM-dd HH:mm:ss UTC"))
-            .toUtf8());
-        m_logFile.flush();
+        writeLogSessionHeader();
     }
 
     emit connected();
@@ -249,16 +244,14 @@ void DxClusterClient::onReadyRead()
                 if (!isControl(c))
                     cleaned.append(c);
             }
-            line = cleaned;
+            // Trim again: "…1830Z <BEL>" leaves "…1830Z " once BEL is gone.
+            line = cleaned.trimmed();
         }
 
         if (line.isEmpty()) continue;
 
         // Write to log file
-        if (m_logFile.isOpen()) {
-            m_logFile.write((line + "\n").toUtf8());
-            m_logFile.flush();
-        }
+        appendLog(line);
 
         emit rawLineReceived(line);
         handleLine(line);
@@ -270,6 +263,7 @@ void DxClusterClient::handleLine(const QString& line)
     if (!m_loggedIn && !m_goCluster && DxSpotLineParser::isGoClusterBanner(line)) {
         qCDebug(lcDxCluster) << "DxClusterClient: GoCluster node, parsing its spot tail";
         m_goCluster = true;
+        appendLog(DxSpotLineParser::logGoClusterMarker());
     }
 
     // Login prompt detection (line-based)
@@ -294,6 +288,46 @@ void DxClusterClient::handleLine(const QString& line)
                  << spot.freqMhz << "MHz de" << spot.spotterCall;
         emit spotReceived(spot);
     }
+}
+
+// ── Spot log ────────────────────────────────────────────────────────────────
+
+void DxClusterClient::writeLogSessionHeader()
+{
+    m_logFile.write(QString("--- Connected to %1:%2 at %3 ---\n")
+                        .arg(m_host).arg(m_port).arg(m_connectedAtUtc)
+                        .toUtf8());
+    if (m_goCluster) {
+        m_logFile.write((DxSpotLineParser::logGoClusterMarker() + "\n").toUtf8());
+    }
+    m_logFile.flush();
+}
+
+void DxClusterClient::appendLog(const QString& line)
+{
+    if (!m_logFile.isOpen()) {
+        return;
+    }
+    if (m_logNeedsHeader) {
+        m_logNeedsHeader = false;
+        writeLogSessionHeader();
+    }
+    m_logFile.write((line + "\n").toUtf8());
+    m_logFile.flush();
+}
+
+void DxClusterClient::clearLog()
+{
+    if (!m_logFile.isOpen()) {
+        QFile f(logFilePath());
+        if (f.exists()) {
+            f.resize(0);
+        }
+        return;
+    }
+    m_logFile.resize(0);
+    m_logFile.seek(0);
+    m_logNeedsHeader = true;
 }
 
 // ── Startup commands replay ─────────────────────────────────────────────────

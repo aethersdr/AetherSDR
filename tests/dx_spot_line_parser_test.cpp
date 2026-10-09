@@ -167,6 +167,12 @@ void testGoCluster()
     expectTrue("gocluster fallback: no GoCluster fields",
                s.dxGrid.isEmpty() && s.confidence.isNull() && s.pathGlyph.isNull());
 
+    // Trailing whitespace (a stripped BEL) does not hide the anchored tail.
+    s = parse("DX de KM3T-#:     14074.0  W1AW        FT8 +3 dB              = fn42 ? 2359Z  ", true, &ok);
+    expectTrue("gocluster trailing space: parses", ok);
+    expectTrue("gocluster trailing space: confidence", s.confidence == QLatin1Char('?'));
+    expectEqual("gocluster trailing space: comment", s.comment, "FT8 +3 dB");
+
     // Same line, gate off: the tail stays in the comment, like before.
     s = parse("DX de W1ABC:     14074.00  K1XYZ       FT8 -12 dB             > FN31 V 1830Z", false, &ok);
     expectTrue("gocluster line ungated: parses", ok);
@@ -178,6 +184,64 @@ void testGoCluster()
     expectTrue("banner: default welcome", DxSpotLineParser::isGoClusterBanner("GoCluster"));
     expectTrue("banner: DXSpider is not", !DxSpotLineParser::isGoClusterBanner(
                    "Hello, this is W3LPL-2 running DXSpider V1.57 build 594"));
+}
+
+// Saved-log replay: provenance comes from the GoCluster marker the client
+// logs at the start of the session, never from whether the banner survived
+// the tail, and never from server text later in the log.
+void testReplay()
+{
+    const QString verified =
+        "DX de W1ABC:     14074.00  K1XYZ       FT8 -12 dB             > FN31 V 1830Z";
+    const QString unverified =
+        "DX de KM3T-#:     14074.0  W1AW        FT8 +3 dB              = fn42 ? 2359Z";
+    const QString header = "--- Connected to cluster.n2wq.com:8300 at 2026-10-09 02:56:16 UTC ---";
+    const QString marker = DxSpotLineParser::logGoClusterMarker();
+    const QStringList goHead = {header, "N2WQ-2 GoCluster DX Cluster", marker,
+                                "Hello KK7GWY, this is N2WQ-2"};
+
+    // The head holds the marker; the 500-line tail holds only spots.
+    QVector<DxSpot> spots = DxSpotLineParser::replayLog(goHead, {verified, unverified}, true);
+    expectInt("replay banner outside tail: '?' hidden", spots.size(), 1);
+    if (spots.size() == 1) {
+        expectEqual("replay banner outside tail: kept call", spots[0].dxCall, "K1XYZ");
+        expectEqual("replay banner outside tail: clean comment", spots[0].comment, "FT8 -12 dB");
+    }
+
+    spots = DxSpotLineParser::replayLog(goHead, {verified, unverified}, false);
+    expectInt("replay hide off: both kept", spots.size(), 2);
+    if (spots.size() == 2) {
+        expectTrue("replay hide off: confidence kept", spots[1].confidence == QLatin1Char('?'));
+    }
+
+    // A small file: head and tail are the same lines.
+    const QStringList whole = goHead + QStringList{verified, unverified};
+    spots = DxSpotLineParser::replayLog(whole, whole, true);
+    expectInt("replay whole file: '?' hidden", spots.size(), 1);
+
+    // Server text in the tail that looks like a session header or the marker
+    // cannot reset or set provenance.
+    spots = DxSpotLineParser::replayLog(
+        goHead, {verified, "--- Connected to evil:1 at 2026-10-09 04:00:00 UTC ---", unverified}, true);
+    expectInt("replay forged header in tail: '?' still hidden", spots.size(), 1);
+    const QStringList dxspiderHead = {"--- Connected to dxc.nc7j.com:7300 at 2026-10-09 04:00:00 UTC ---",
+                                      "Hello KK7GWY, this is NC7J"};
+    spots = DxSpotLineParser::replayLog(dxspiderHead, {marker, unverified}, true);
+    expectInt("replay forged marker in tail: generic parse", spots.size(), 1);
+    if (spots.size() == 1) {
+        expectTrue("replay forged marker in tail: not GoCluster", spots[0].confidence.isNull());
+    }
+
+    // A marker after the first spot is server output, not the client's gate.
+    spots = DxSpotLineParser::replayLog(dxspiderHead + QStringList{verified, marker}, {unverified}, true);
+    expectInt("replay marker after first spot: ignored", spots.size(), 1);
+
+    // Banner text alone (no marker) is not provenance.
+    spots = DxSpotLineParser::replayLog({header, "N2WQ-2 GoCluster DX Cluster"}, {unverified}, true);
+    expectInt("replay without marker: generic parse", spots.size(), 1);
+
+    spots = DxSpotLineParser::replayLog({}, {}, true);
+    expectInt("replay empty log", spots.size(), 0);
 }
 
 void testReportSnr()
@@ -200,6 +264,7 @@ int main()
 {
     testGenericServers();
     testGoCluster();
+    testReplay();
     testReportSnr();
 
     if (g_failed == 0) {

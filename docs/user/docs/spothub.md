@@ -16,7 +16,7 @@ SpotHub is AetherSDR's spot manager. It gathers spots from DX clusters, the Reve
 
 All spot sources run on a worker thread, and spots are forwarded to the radio in batches once a second.
 
-<img src="/img/screens/spothub.png" width="760" alt="SpotHub window with tabs Cluster, RBN, WSJT-X, SpotCollector, POTA, EiBi, N1MM, FreeDV and Spot List, with Cluster selected. The Connection group has Server dxc.nc7j.com, Port 7300, an empty Callsign field, Auto-Connect: OFF and Startup Commands… buttons, a Disconnected status and a Connect button. Below is an empty Cluster Console with a spot colour swatch, and a command field with Send and Clear buttons." />
+<img src="/img/screens/spothub.png" width="760" alt="SpotHub window with tabs Cluster, RBN, WSJT-X, SpotCollector, POTA, EiBi, N1MM, FreeDV and Spot List, with Cluster selected. The Connection group has Server dxc.nc7j.com, Port 7300, an empty Callsign field, Auto-Connect: OFF, Startup Commands… and Hide Unverified: OFF buttons, a Disconnected status and a Connect button. Below is an empty Cluster Console with a spot colour swatch, and a command field with Send and Clear buttons." />
 
 *SpotHub, open on the Cluster tab. Each tab is one spot source.*
 
@@ -37,7 +37,7 @@ Connects to a DX cluster node over telnet (DX Spider, AR-Cluster, CC Cluster, Go
 - **Server / Port / Callsign** — default `dxc.nc7j.com:7300`
 - **Auto-Connect** — connect when the radio connects
 - **Startup Commands…** — cluster commands sent automatically after every login, one per line (for example `SET/NAME`, `SET/QTH`, `ACCEPT/SPOT`)
-- **Hide Unverified** — on a GoCluster node, hides spots whose callsign GoCluster tags `?` (little supporting evidence, often a busted call). Other servers send no confidence tag, so it has no effect on them. It applies to new spots straight away, without reconnecting
+- **Hide Unverified** — on a GoCluster node, hides spots whose callsign GoCluster tags `?` (little supporting evidence, often a busted call). It applies to spots that arrive after you switch it on, without reconnecting; spots already listed stay until they expire. Other servers send no confidence tag, so it has no effect on them
 - **Cluster Console** — live output with a command line (`sh/dx 20`, `set/filter`, `bye` …)
 - **Spot Color** — default tan
 
@@ -50,7 +50,7 @@ Skimmer spots from the Reverse Beacon Network, over the same telnet protocol.
 - **Server / Port** — default `telnet.reversebeacon.net:7000`
 - **Callsign** — falls back to the cluster callsign when empty
 - **Rate Limit** — maximum spots per second sent to the radio (default 10), so contests don't flood the display. Extra spots are queued for the next batch.
-- **Startup Commands…**, **Auto-Connect**, **RBN Console** and **Spot Color** (default blue) as on the Cluster tab
+- **Startup Commands…**, **Auto-Connect**, **Hide Unverified**, **RBN Console** and **Spot Color** (default blue) as on the Cluster tab
 
 ### WSJT-X (decode spotter)
 
@@ -274,7 +274,7 @@ Some useful setting keys, for the **Settings Browser** (**Settings → Settings 
 | `SmartSpotFilterMatchHz` | `1000` | Smart Spot Filtering match window (Hz) |
 | `ManualSpotLifetime` | `1800` | Default lifetime of hand-added spots (s) |
 | `SpotForwardToCluster` | `False` | Forward hand-added spots to the cluster |
-| `GoCluster` | `{}` | GoCluster options: `{"hideUnverified": {"cluster": false, "rbn": false}}` hides `?` spots on the Cluster / RBN tab (RBN has no button) |
+| `GoCluster` | `{}` | GoCluster options: `{"hideUnverified": {"cluster": false, "rbn": false}}` is **Hide Unverified** on the Cluster / RBN tab |
 
 ## Known issues
 

@@ -84,8 +84,11 @@ bool isGoClusterBanner(const QString& line)
     return line.contains(QStringLiteral("GoCluster"), Qt::CaseInsensitive);
 }
 
-bool parseSpotLine(const QString& line, DxSpot& spot, bool goCluster)
+bool parseSpotLine(const QString& rawLine, DxSpot& spot, bool goCluster)
 {
+    // GoCluster's tail is anchored to the last column; trailing whitespace
+    // (a stripped BEL, a padded relay) would misplace every field.
+    const QString line = rawLine.trimmed();
     QString head;
     if (goCluster && splitGoClusterTail(line, head, spot)) {
         static const QRegularExpression headRx(
@@ -122,6 +125,41 @@ bool parseSpotLine(const QString& line, DxSpot& spot, bool goCluster)
     parseHhmm(match.captured(5), spot.utcTime);
 
     return spot.freqMhz > 0.0 && !spot.dxCall.isEmpty();
+}
+
+QString logGoClusterMarker()
+{
+    return QStringLiteral("--- GoCluster node ---");
+}
+
+QVector<DxSpot> replayLog(const QStringList& head, const QStringList& tail,
+                          bool hideUnverified)
+{
+    const QString marker = logGoClusterMarker();
+    bool goCluster = false;
+    for (const QString& line : head) {
+        if (line == marker) {
+            goCluster = true;
+            break;
+        }
+        DxSpot probe;
+        if (parseSpotLine(line, probe)) {
+            break;
+        }
+    }
+
+    QVector<DxSpot> spots;
+    for (const QString& line : tail) {
+        DxSpot spot;
+        if (!parseSpotLine(line, spot, goCluster)) {
+            continue;
+        }
+        if (hideUnverified && spot.confidence == QLatin1Char('?')) {
+            continue;
+        }
+        spots.append(spot);
+    }
+    return spots;
 }
 
 bool extractReportSnr(const QString& comment, int& snr)
