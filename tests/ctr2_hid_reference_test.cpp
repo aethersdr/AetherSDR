@@ -294,8 +294,13 @@ void testExtensionsAgree()
     check(edgesAgree, "the reference and the application agree on every band edge");
     ctr2_rx masked{};
     ctr2_rx_set_extensions(&masked, 0xFFFFFFFFu);
-    check(masked.extensions == CTR2_CAP(CTR2_EXT_AUDIO_SPECTRUM),
+    check(masked.extensions
+              == (CTR2_CAP(CTR2_EXT_AUDIO_SPECTRUM) | CTR2_CAP(CTR2_EXT_RELAY_UDP_PORT)),
           "the reference keeps only defined extension types");
+    check(CTR2_EXT_RELAY_UDP_PORT == static_cast<int>(MessageType::RelayUdpPort)
+              && ctr2_ext_max_length(CTR2_EXT_RELAY_UDP_PORT)
+                     == extensionMaxLength(MessageType::RelayUdpPort),
+          "RelayUdpPort agrees: type 0x41, 2 bytes");
     const std::uint8_t big[CTR2_SPECTRUM_HEADER + CTR2_SPECTRUM_MAX_BARS + 1] = {};
     std::vector<Report> none;
     ctr2_tx t{};

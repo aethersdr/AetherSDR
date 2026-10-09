@@ -1017,6 +1017,47 @@ void testAudioSpectrumExtension()
     }
 }
 
+// A device that negotiated RelayUdpPort is told the relay's UDP port right
+// after READY; one that did not is never sent it.
+void testRelayUdpPortExtension()
+{
+    const quint32 both = capabilityBit(MessageType::AudioSpectrum)
+        | capabilityBit(MessageType::RelayUdpPort);
+    {
+        Rig rig;
+        rig.port->negotiate(both);
+        rig.dev.rx.setExtensions(both);
+        rig.start();
+        check(rig.linkUp(), "link up (RelayUdpPort negotiated)");
+        check(waitUntil([&] { return rig.dev.count(MessageType::RelayUdpPort) == 1; }),
+              "the device is told the relay's UDP port once");
+        int readyAt = -1, portAt = -1;
+        quint16 port = 0;
+        for (int i = 0; i < static_cast<int>(rig.dev.messages.size()); ++i) {
+            const Message& m = rig.dev.messages[i];
+            if (m.type == MessageType::Ready && readyAt < 0) {
+                readyAt = i;
+            }
+            if (m.type == MessageType::RelayUdpPort) {
+                portAt = i;
+                port = quint16((quint8(m.payload[0]) << 8) | quint8(m.payload[1]));
+            }
+        }
+        check(readyAt >= 0 && portAt == readyAt + 1, "it follows READY directly");
+        check(port != 0 && !rig.dev.rxError, "it carries a real port, in valid framing");
+    }
+    {
+        Rig rig;  // spectrum only
+        rig.port->negotiate(capabilityBit(MessageType::AudioSpectrum));
+        rig.dev.rx.setExtensions(capabilityBit(MessageType::AudioSpectrum));
+        rig.start();
+        check(rig.linkUp(), "link up (RelayUdpPort not negotiated)");
+        rig.dev.pump();
+        check(rig.dev.count(MessageType::RelayUdpPort) == 0 && !rig.dev.rxError,
+              "a device that did not negotiate it is never sent the port");
+    }
+}
+
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
@@ -1041,6 +1082,7 @@ int main(int argc, char** argv)
     testRetryBacksOffAfterRadioFailure();
     testNoHelloWhileDraining();
     testAudioSpectrumExtension();
+    testRelayUdpPortExtension();
     if (g_failures) {
         std::fprintf(stderr, "%d check(s) failed\n", g_failures);
         return 1;

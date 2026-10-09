@@ -44,7 +44,8 @@ enum class MessageType : std::uint8_t {
     Closed = 0x03,  // either direction: link ended; device restarts with Hello
     Datagram = 0x04,  // one UDP datagram: [radio port hi][radio port lo][bytes]
     // Extensions, only where negotiated:
-    AudioSpectrum = 0x40,  // host -> device: [bars N][span Hz hi][span Hz lo][N levels]
+    AudioSpectrum = 0x40,  // host -> device: [bars N][low Hz][span Hz][N levels]
+    RelayUdpPort = 0x41,   // host -> device: [port hi][port lo], this link's UDP endpoint
 };
 
 constexpr std::uint8_t kExtensionFirst = 0x40;
@@ -56,7 +57,8 @@ constexpr std::uint32_t capabilityBit(MessageType type)
 // Largest payload each extension type may carry; 0 for one not defined.
 int extensionMaxLength(MessageType type);
 // Extensions this build of AetherSDR uses.
-constexpr std::uint32_t kHostCapabilities = capabilityBit(MessageType::AudioSpectrum);
+constexpr std::uint32_t kHostCapabilities = capabilityBit(MessageType::AudioSpectrum)
+    | capabilityBit(MessageType::RelayUdpPort);
 
 // HID Feature report 0x02, exactly 8 bytes after the report ID (9 in all):
 //   ['C']['X'][extension version 0x01][0x00][capabilities, 32 bits MSB first]

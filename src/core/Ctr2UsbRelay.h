@@ -102,7 +102,7 @@ private:
     void sendControl(ctr2hid::MessageType type);
     void sendData(const QByteArray& payload);
     bool sendDatagram(quint16 port, const QByteArray& datagram);
-    void sessionConnected(quint64 generation);
+    void sessionConnected(quint64 generation, quint16 udpPort);
     void sessionDraining(quint64 generation);
     void sessionEnded(quint64 generation, const QString& message, bool error, bool sendClosed);
     void endSession();

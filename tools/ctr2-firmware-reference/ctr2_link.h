@@ -68,6 +68,13 @@ extern "C" {
 #define CTR2_SPECTRUM_FLOOR_DB  (-90)
 #define CTR2_SPECTRUM_HEADER    5u
 
+/* RELAY_UDP_PORT, host -> device, sent once right after the host's READY:
+ * [port hi][port lo], the host's UDP endpoint for this link. On a LAN the
+ * radio sends UDP to the TCP peer (the host) at the port named by
+ * `client udpport <port>`, and ignores `client udp_register`, so a device
+ * registers for UDP by sending that command with this port. */
+#define CTR2_EXT_RELAY_UDP_PORT 0x41u
+
 /* Lower edge in Hz of bar i of n (i == n gives span_hz, the top edge). */
 float ctr2_spectrum_band_edge(uint16_t low_hz, uint16_t span_hz, uint8_t n, uint8_t i);
 

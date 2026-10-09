@@ -53,6 +53,8 @@ int extensionMaxLength(MessageType type)
     switch (type) {
     case MessageType::AudioSpectrum:
         return spectrum::kHeaderBytes + spectrum::kMaxBars;
+    case MessageType::RelayUdpPort:
+        return 2;
     default:
         return 0;
     }
