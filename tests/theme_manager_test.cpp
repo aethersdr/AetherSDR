@@ -1677,11 +1677,12 @@ int main(int argc, char** argv)
         QApplication::processEvents();
 
         const QImage rows = tree->viewport()->grab().toImage();
-        const QRect row0 = tree->visualItemRect(tree->topLevelItem(0));
-        const QRect row1 = tree->visualItemRect(tree->topLevelItem(1));
-        // Sample the right end of each row, clear of the text.
-        const QColor base = rows.pixelColor(row0.right() - 4, row0.center().y());
-        const QColor alternate = rows.pixelColor(row1.right() - 4, row1.center().y());
+        // Rows 2 and 3, not 0 and 1: row 0 is the current item and carries
+        // the style's focus tint. Sample the right end, clear of the text.
+        const QRect row2 = tree->visualItemRect(tree->topLevelItem(2));
+        const QRect row3 = tree->visualItemRect(tree->topLevelItem(3));
+        const QColor base = rows.pixelColor(row2.right() - 4, row2.center().y());
+        const QColor alternate = rows.pixelColor(row3.right() - 4, row3.center().y());
         EXPECT_TRUE(base.rgb() == tm.color(QStringLiteral("color.background.0")).rgb());
         EXPECT_TRUE(alternate.rgb() == tm.color(QStringLiteral("color.background.1")).rgb());
         // Selection stays with the palette: a fixed text colour on the accent
