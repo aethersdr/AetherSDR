@@ -1,4 +1,5 @@
 #include "NetworkDiagnosticsDialog.h"
+#include "FramelessResizer.h"
 #include "ScopedChildWidget.h"
 #include "LogSyntaxHighlighter.h"
 #include "TimeSeriesGraphWidget.h"
@@ -7,6 +8,7 @@
 #include "core/LogManager.h"
 #include "core/AppSettings.h"
 #include "core/TciServer.h"   // self-guards on HAVE_WEBSOCKETS
+#include "core/WindowsFirewall.h"
 #include "models/RadioModel.h"
 
 #include <algorithm>
@@ -58,6 +60,9 @@
 #include <QAbstractItemView>
 #include <QTextCharFormat>
 #include <QVBoxLayout>
+#include <QCoreApplication>
+#include <QFutureWatcher>
+#include <QtConcurrent/QtConcurrentRun>
 #include "core/ThemeManager.h"
 
 namespace AetherSDR {
@@ -68,26 +73,45 @@ namespace AetherSDR {
 // nothing and the absence of a measurement are different claims about the link.
 const QString kNotMeasuredOnLink = QStringLiteral("not measured on this link");
 
+// The AetherSDR style guide's canon vocabulary (RFC #6226), as the Waveforms
+// window uses it: everything is transparent over CanonWindow's painted ground
+// except the surfaces that hold content, which sit on canon raised / nested /
+// control in that order of depth.
 constexpr const char* kNetworkDiagnosticsStyle = R"(
 QWidget {
-    color: #aeb9cc;
-    background: #07101c;
+    color: {{color.canon.inkSoft}};
+    background: transparent;
     font-size: 13px;
 }
 QLabel {
     background: transparent;
 }
+QLabel#networkDiagnosticsWindowTitle {
+    color: {{color.canon.ink}};
+    font-size: 20px;
+    font-weight: 700;
+}
+QFrame#networkDiagnosticsHeaderRule {
+    background: {{color.canon.line}};
+    border: none;
+    min-height: 1px;
+    max-height: 1px;
+}
 QFrame#DiagnosticsPanel {
-    background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
-        stop:0 #111d2c, stop:1 #0a1421);
-    border: 1px solid #233246;
-    border-radius: 7px;
+    background: {{color.canon.raised}};
+    border: 1px solid {{color.canon.line}};
+    border-radius: 12px;
+}
+QLabel#DiagnosticsPanelTitle {
+    color: {{color.canon.muted}};
+    font-size: 13px;
+    font-weight: 700;
 }
 QTreeWidget#networkDiagnosticsNavigation {
-    color: {{color.text.primary}};
-    background: {{color.background.1}};
-    border: 1px solid {{color.background.2}};
-    border-radius: 7px;
+    color: {{color.canon.inkSoft}};
+    background: {{color.canon.nested}};
+    border: 1px solid {{color.canon.line}};
+    border-radius: 12px;
     padding: 6px;
     outline: none;
 }
@@ -96,145 +120,183 @@ QTreeWidget#networkDiagnosticsNavigation::branch {
     border-image: none;
     background: transparent;
 }
+QTreeWidget#networkDiagnosticsNavigation::branch:selected,
+QTreeWidget#networkDiagnosticsNavigation::branch:hover {
+    /* No indicator in the indent: the row's selection and hover are painted
+       under the branch, so a transparent branch would show them as a notch. */
+    background: {{color.canon.nested}};
+}
 QTreeWidget#networkDiagnosticsNavigation::item {
     min-height: 38px;
     padding: 3px 9px;
-    border-radius: 5px;
+    border-radius: 6px;
 }
 QTreeWidget#networkDiagnosticsNavigation::item:selected {
-    color: {{color.background.0}};
-    background: {{color.accent.bright}};
+    color: {{color.canon.onAccent}};
+    background: {{color.canon.cyan}};
 }
 QTreeWidget#networkDiagnosticsNavigation::item:hover:!selected {
-    color: {{color.text.primary}};
-    background: {{color.background.2}};
+    color: {{color.canon.ink}};
+    background: {{color.canon.control}};
 }
 QLineEdit#networkDiagnosticsSearch {
-    color: {{color.text.primary}};
-    background: {{color.background.1}};
-    border: 2px solid {{color.background.2}};
-    border-radius: 7px;
+    color: {{color.canon.ink}};
+    background: {{color.canon.control}};
+    border: 1px solid {{color.canon.lineHi}};
+    border-radius: 8px;
     padding: 8px 11px;
     font-size: 13px;
+    selection-background-color: {{color.canon.cyan}};
+    selection-color: {{color.canon.onAccent}};
 }
 QLineEdit#networkDiagnosticsSearch:focus {
-    border-color: {{color.accent.bright}};
+    border-color: {{color.canon.aqua}};
 }
 QLabel#networkDiagnosticsPageTitle {
-    color: {{color.text.primary}};
+    color: {{color.canon.ink}};
     font-size: 20px;
     font-weight: 700;
 }
-QLabel#DiagnosticsPanelTitle {
-    background: transparent;
-    color: #8d99ad;
-    font-size: 13px;
-    font-weight: 700;
-}
 QPushButton {
-    color: #aeb9cc;
-    background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
-        stop:0 #142235, stop:1 #0b1625);
-    border: 1px solid #26374e;
-    border-radius: 7px;
-    padding: 8px 16px;
+    color: {{color.canon.cyan}};
+    background: {{color.canon.control}};
+    border: 1px solid {{color.canon.lineHi}};
+    border-radius: 4px;
+    padding: 7px 14px;
     font-weight: 600;
 }
 QPushButton:hover {
-    border-color: #3c526d;
-    color: #d6dfeb;
+    background: {{color.canon.nested}};
+    color: {{color.canon.aqua}};
+}
+QPushButton:focus {
+    border-color: {{color.canon.aqua}};
 }
 QPushButton:checked {
-    color: #d4deea;
-    border-color: #54c768;
-    background: #0d1c20;
+    color: {{color.canon.aqua}};
+    border-color: {{color.canon.aqua}};
+    background: {{color.canon.nested}};
 }
 QPushButton:disabled {
-    color: #6e7a8d;
-    border-color: #1d2a3c;
-    background: #0b1522;
+    color: {{color.canon.muted}};
+    border-color: {{color.canon.line}};
+    background: transparent;
 }
 QComboBox {
-    color: #aeb9cc;
-    background: #0b1625;
-    border: 1px solid #26374e;
-    border-radius: 5px;
+    color: {{color.canon.ink}};
+    background: {{color.canon.control}};
+    border: 1px solid {{color.canon.lineHi}};
+    border-radius: 4px;
     padding: 6px 28px 6px 10px;
 }
-QComboBox:hover {
-    border-color: #3c526d;
+QComboBox:focus {
+    border-color: {{color.canon.aqua}};
 }
 QComboBox::drop-down {
     border: none;
     width: 20px;
 }
 QComboBox QAbstractItemView {
-    background: #0b1625;
-    color: #aeb9cc;
-    border: 1px solid #26374e;
-    selection-background-color: #1b3650;
-    selection-color: #d4deea;
+    color: {{color.canon.inkSoft}};
+    background: {{color.canon.nested}};
+    border: 1px solid {{color.canon.lineHi}};
+    selection-background-color: {{color.canon.cyan}};
+    selection-color: {{color.canon.onAccent}};
 }
 QCheckBox {
     background: transparent;
-    color: #aeb9cc;
+    color: {{color.canon.inkSoft}};
     spacing: 9px;
 }
 QCheckBox::indicator {
     width: 18px;
     height: 18px;
     border-radius: 4px;
-    border: 1px solid #34533c;
-    background: #0d1a18;
+    border: 1px solid {{color.canon.lineHi}};
+    background: {{color.canon.control}};
 }
 QCheckBox::indicator:checked {
-    background: #5ebd69;
-    border-color: #65d379;
+    background: {{color.canon.cyan}};
+    border-color: {{color.canon.aqua}};
 }
-QPlainTextEdit,
-QTableWidget {
-    color: #c2ccdb;
-    background: #050b13;
-    border: 1px solid #233246;
-    selection-background-color: #1b3650;
+QLineEdit {
+    color: {{color.canon.ink}};
+    background: {{color.canon.control}};
+    border: 1px solid {{color.canon.lineHi}};
+    border-radius: 4px;
+    padding: 6px 10px;
+}
+QLineEdit:focus {
+    border-color: {{color.canon.aqua}};
+}
+QWidget#networkDiagnosticsBody QPlainTextEdit,
+QWidget#networkDiagnosticsBody QTableWidget {
+    color: {{color.canon.inkSoft}};
+    background: {{color.canon.nested}};
+    border: 1px solid {{color.canon.line}};
+    border-radius: 8px;
+    selection-background-color: {{color.canon.control}};
+    selection-color: {{color.canon.ink}};
     font-family: "SF Mono", "Menlo", "Consolas", monospace;
     font-size: 12px;
 }
 QTableWidget {
-    gridline-color: #233246;
+    gridline-color: {{color.canon.line}};
 }
 QTableWidget::item {
     padding: 4px;
 }
 QTableWidget::item:alternate {
-    background: #0b1625;
+    background: {{color.canon.raised}};
+}
+QTableWidget::item:selected {
+    color: {{color.canon.ink}};
+    background: {{color.canon.control}};
 }
 QHeaderView::section {
-    background: #111d2c;
-    color: #8d99ad;
-    border: 1px solid #233246;
+    color: {{color.canon.muted}};
+    background: {{color.canon.raised}};
+    border: none;
+    border-bottom: 1px solid {{color.canon.line}};
     padding: 5px;
     font-weight: 700;
 }
-QScrollArea,
-QScrollArea > QWidget > QWidget {
+QScrollArea {
     background: transparent;
     border: none;
 }
+QSplitter::handle {
+    background: transparent;
+}
 QScrollBar:vertical {
-    background: #07101c;
+    background: transparent;
     width: 12px;
     margin: 8px 2px 8px 2px;
     border-radius: 6px;
 }
 QScrollBar::handle:vertical {
-    background: #25364d;
+    background: {{color.canon.lineHi}};
     border-radius: 5px;
     min-height: 34px;
 }
 QScrollBar::add-line:vertical,
 QScrollBar::sub-line:vertical {
     height: 0px;
+}
+QScrollBar:horizontal {
+    background: transparent;
+    height: 12px;
+    margin: 2px 8px 2px 8px;
+    border-radius: 6px;
+}
+QScrollBar::handle:horizontal {
+    background: {{color.canon.lineHi}};
+    border-radius: 5px;
+    min-width: 34px;
+}
+QScrollBar::add-line:horizontal,
+QScrollBar::sub-line:horizontal {
+    width: 0px;
 }
 )";
 
@@ -273,17 +335,37 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model,
                                                    NetworkDiagnosticsHistory* history,
                                                    TciServer* tci,
                                                    QWidget* parent)
-    : PersistentDialog("Network Diagnostics", "NetworkDiagnosticsDialogGeometry", parent),
+    : CanonWindow(QStringLiteral("Network Diagnostics"), parent),
       m_model(model), m_audio(audio), m_history(history), m_tci(tci)
 {
     theme::setContainer(this, QStringLiteral("dialog/networkDiag"));
+    // A workspace tool on the style guide's CanonWindow: unlike About it keeps
+    // its size and position (the key it used as a PersistentDialog, so saved
+    // geometry carries over), and it resizes from every edge.
+    setGeometryKey(QStringLiteral("NetworkDiagnosticsDialogGeometry"));
     setMinimumSize(920, 680);
-    resize(980, 760);
+    // Wide enough that Connection Details' two 430 px columns sit beside the
+    // navigation without a horizontal scroll inside the canon margins.
+    resize(1200, 820);
+    FramelessResizer::install(this);
+    bodyWidget()->setObjectName(QStringLiteral("networkDiagnosticsBody"));
     AetherSDR::ThemeManager::instance().applyStyleSheet(
         bodyWidget(), QString::fromLatin1(kNetworkDiagnosticsStyle));
 
     auto* body = new QVBoxLayout(bodyWidget());
-    body->setSpacing(8);
+    body->setSpacing(10);
+    body->setContentsMargins(22, 18, 22, 20);
+
+    // Canon header in place of a title bar: the title in ink over a hairline.
+    // The right margin keeps it clear of CanonWindow's corner close button.
+    auto* windowTitleLabel = new QLabel(QStringLiteral("Network Diagnostics"), bodyWidget());
+    windowTitleLabel->setObjectName(QStringLiteral("networkDiagnosticsWindowTitle"));
+    windowTitleLabel->setAccessibleName(QStringLiteral("Network Diagnostics"));
+    windowTitleLabel->setContentsMargins(0, 0, 40, 0);
+    body->addWidget(windowTitleLabel);
+    auto* headerRule = new QFrame(bodyWidget());
+    headerRule->setObjectName(QStringLiteral("networkDiagnosticsHeaderRule"));
+    body->addWidget(headerRule);
 
     auto* search = new QLineEdit;
     search->setObjectName(QStringLiteral("networkDiagnosticsSearch"));
@@ -303,8 +385,7 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model,
     navigation->setObjectName(QStringLiteral("networkDiagnosticsNavigation"));
     navigation->setHeaderHidden(true);
     navigation->setRootIsDecorated(false);
-    // Match Radio Setup's hierarchy cue: the child indent leaves a narrow
-    // accent notch at the leading edge of the selected page.
+    // Pages sit indented under their category headers.
     navigation->setIndentation(14);
     navigation->setMinimumWidth(220);
     navigation->setMaximumWidth(310);
@@ -360,7 +441,7 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model,
     // QSS rule sets no colour, so this per-item foreground is honoured for the
     // non-selected header rows.
     const QColor categoryTextColor =
-        AetherSDR::ThemeManager::instance().color("color.text.secondary");
+        AetherSDR::ThemeManager::instance().color("color.canon.muted");
     auto addCategory = [navigation, categoryTextColor](const QString& name) {
         auto* item = new QTreeWidgetItem(navigation, {name});
         item->setFlags(Qt::ItemIsEnabled);
@@ -422,7 +503,7 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model,
         l->setMaximumWidth(kValueColumnWidth);
         l->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Preferred);
         l->setMinimumHeight(l->fontMetrics().height() + 1);
-        l->setStyleSheet("QLabel { color: #b9c4d7; font-weight: 600; }");
+        AetherSDR::ThemeManager::instance().applyStyleSheet(l, "QLabel { color: {{color.canon.inkSoft}}; font-weight: 600; }");
         return l;
     };
 
@@ -433,7 +514,7 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model,
     auto makeNote = [](const QString& text) {
         auto* l = new QLabel(text);
         l->setWordWrap(true);
-        AetherSDR::ThemeManager::instance().applyStyleSheet(l, "QLabel { color: {{color.text.secondary}}; font-size: 10px; line-height: 1.1; }");
+        AetherSDR::ThemeManager::instance().applyStyleSheet(l, "QLabel { color: {{color.canon.muted}}; font-size: 10px; line-height: 1.1; }");
         return l;
     };
 
@@ -444,10 +525,10 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model,
         auto* value = new QLabel("--");
         value->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
         value->setMinimumHeight(value->fontMetrics().height() + 4);
-        AetherSDR::ThemeManager::instance().applyStyleSheet(value, "QLabel { color: {{color.text.primary}}; font-weight: 700; font-size: 18px; }");
+        AetherSDR::ThemeManager::instance().applyStyleSheet(value, "QLabel { color: {{color.canon.ink}}; font-weight: 700; font-size: 18px; }");
         auto* hint = new QLabel(subtitle);
         hint->setWordWrap(true);
-        AetherSDR::ThemeManager::instance().applyStyleSheet(hint, "QLabel { color: {{color.text.secondary}}; font-size: 11px; }");
+        AetherSDR::ThemeManager::instance().applyStyleSheet(hint, "QLabel { color: {{color.canon.muted}}; font-size: 11px; }");
         layout->addWidget(value);
         layout->addWidget(hint);
         layout->addStretch();
@@ -471,6 +552,18 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model,
     overviewLayout->addWidget(statusCard.first, 0, 0);
     const auto latencyCard = makeHealthCard("Latency", "Round-trip time");
     m_overviewLatencyValue = latencyCard.second;
+    // The radio side's own view of a tailnet link, under the client's RTT.
+    if (QVBoxLayout* latencyLayout = diagnosticsPanelLayout(latencyCard.first)) {
+        m_overviewTunnelLatencyLabel = new QLabel;
+        m_overviewTunnelLatencyLabel->setTextFormat(Qt::PlainText);
+        m_overviewTunnelLatencyLabel->setWordWrap(true);
+        m_overviewTunnelLatencyLabel->setAccessibleName(QStringLiteral("Tunnel latency"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(
+            m_overviewTunnelLatencyLabel,
+            "QLabel { color: {{color.canon.ink}}; font-weight: 600; font-size: 12px; }");
+        m_overviewTunnelLatencyLabel->setVisible(false);
+        latencyLayout->insertWidget(latencyLayout->count() - 1, m_overviewTunnelLatencyLabel);
+    }
     overviewLayout->addWidget(latencyCard.first, 0, 1);
     const auto lossCard = makeHealthCard("Packet Loss", "Recent sequence gaps");
     m_overviewLossValue = lossCard.second;
@@ -606,7 +699,7 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model,
     m_droppedLabel->setAlignment(Qt::AlignCenter);
     m_droppedLabel->setWordWrap(true);
     m_droppedLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
-    m_droppedLabel->setStyleSheet("QLabel { color: #b9c4d7; font-weight: 600; }");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_droppedLabel, "QLabel { color: {{color.canon.inkSoft}}; font-weight: 600; }");
     dropGrid->addWidget(m_droppedLabel, row++, 0, 1, 2);
 
     // ── Audio Playback group ──────────────────────────────────────────────
@@ -669,7 +762,7 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model,
     m_audioStreamsDetailLabel->setWordWrap(true);
     m_audioStreamsDetailLabel->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
     m_audioStreamsDetailLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_audioStreamsDetailLabel, "QLabel { color: {{color.text.secondary}}; font-size: 10px; }");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_audioStreamsDetailLabel, "QLabel { color: {{color.canon.muted}}; font-size: 10px; }");
     m_audioStreamsDetailLabel->setToolTip(
         "The radio normally sends one mixed PC speaker stream. Use the Audio Health page for per-stream timing rows.");
     audioGrid->addWidget(m_audioStreamsDetailLabel, row++, 1);
@@ -736,6 +829,40 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model,
 
     contentLayout->addWidget(m_throttleSection, 2, 0, 1, 2);
 
+    // ── Remote Link (Tailscale) subsection ───────────────────────────────
+    m_tunnelSection = makeDiagnosticsPanel("Remote Link (Tailscale)");
+    m_tunnelSection->setVisible(false);
+    auto* tunnelGrid = new QGridLayout;
+    tunnelGrid->setContentsMargins(0, 0, 0, 0);
+    tunnelGrid->setColumnStretch(1, 1);
+    tunnelGrid->setVerticalSpacing(2);
+    tunnelGrid->setHorizontalSpacing(12);
+    addDiagnosticsPanelContent(m_tunnelSection, tunnelGrid);
+
+    int tunnelRow = 0;
+    tunnelGrid->addWidget(makeNote(
+        "Reported by the remote-access container in the radio. Breaks before the tunnel "
+        "happened inside the radio; breaks added by the tunnel happened between the radio "
+        "and this computer."), tunnelRow++, 0, 1, 2);
+
+    auto addTunnelRow = [&](const QString& name, QLabel** label) {
+        tunnelGrid->addWidget(new QLabel(name), tunnelRow, 0);
+        *label = makeVal(QStringLiteral("--"));
+        (*label)->setTextFormat(Qt::PlainText);   // path, relay and version come from the shim
+        (*label)->setAccessibleName(name.chopped(1));
+        tunnelGrid->addWidget(*label, tunnelRow++, 1);
+    };
+    addTunnelRow(QStringLiteral("Path:"), &m_tunnelPathLabel);
+    addTunnelRow(QStringLiteral("On This Path:"), &m_tunnelPathAgeLabel);
+    addTunnelRow(QStringLiteral("Radio-Side RTT:"), &m_tunnelRttLabel);
+    addTunnelRow(QStringLiteral("To / From This Client:"), &m_tunnelRatesLabel);
+    addTunnelRow(QStringLiteral("Breaks Before Tunnel:"), &m_tunnelRadioBreaksLabel);
+    addTunnelRow(QStringLiteral("Breaks Added by Tunnel:"), &m_tunnelAddedBreaksLabel);
+    addTunnelRow(QStringLiteral("Send Failures:"), &m_tunnelSendFailuresLabel);
+    addTunnelRow(QStringLiteral("Container:"), &m_tunnelShimLabel);
+
+    contentLayout->addWidget(m_tunnelSection, 3, 0, 1, 2);
+
     m_overviewLatencyGraph = new TimeSeriesGraphWidget("Latency and Jitter", " ms");
     m_overviewLossGraph = new TimeSeriesGraphWidget("Recent Packet Loss", "%");
     m_overviewRatesGraph = new TimeSeriesGraphWidget("Total Stream Rates", " kbps");
@@ -789,7 +916,7 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model,
             audioPage);
         audioNote->setWordWrap(true);
         AetherSDR::ThemeManager::instance().applyStyleSheet(
-            audioNote, "QLabel { color: {{color.text.secondary}}; font-size: 11px; }");
+            audioNote, "QLabel { color: {{color.canon.muted}}; font-size: 11px; }");
         audioLayout->insertWidget(0, audioNote);
 
         m_audioStreamsTable = new QTableWidget(0, 9, audioPage);
@@ -853,14 +980,14 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model,
         auto* titleLabel = new QLabel(title);
         AetherSDR::ThemeManager::instance().applyStyleSheet(
             titleLabel,
-            "QLabel { color: {{color.text.secondary}}; font-size: 11px; }");
+            "QLabel { color: {{color.canon.muted}}; font-size: 11px; }");
         *valueLabel = new QLabel(QStringLiteral("--"));
         (*valueLabel)->setAccessibleName(accessibleName);
         (*valueLabel)->setMinimumHeight(
             (*valueLabel)->fontMetrics().lineSpacing() * valueLines + 2);
         AetherSDR::ThemeManager::instance().applyStyleSheet(
             *valueLabel,
-            "QLabel { color: {{color.text.primary}}; font-weight: 700; }");
+            "QLabel { color: {{color.canon.ink}}; font-weight: 700; }");
         const int row = metricRow * 2;
         waveformSummaryGrid->addWidget(titleLabel, row, column);
         waveformSummaryGrid->addWidget(*valueLabel, row + 1, column);
@@ -903,6 +1030,12 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model,
         QStringLiteral("Digital Voice"),
         QStringLiteral("digital voice d-star waveform vita samples gaps delivery rx tx thumbdv"));
     m_digitalVoiceWaveformNavigationItem->setHidden(true);
+
+#ifdef Q_OS_WIN
+    addPage(statusCategory, buildFirewallPage(), QStringLiteral("Windows Firewall"),
+        QStringLiteral("windows defender firewall blocked block allow rule prompt update "
+                       "discovery qrz map kiwisdr update check external services norton antivirus"));
+#endif
 
     QWidget* logsTab = buildLogsTab();
     addPage(supportCategory, logsTab, QStringLiteral("Application Logs"),
@@ -1004,7 +1137,32 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model,
     connect(&m_logRefreshTimer, &QTimer::timeout, this, &NetworkDiagnosticsDialog::appendNewLogData);
     m_logRefreshTimer.start(500);
     initializeLogTail();
+    applyCanonChartColors();
+    connect(&AetherSDR::ThemeManager::instance(), &AetherSDR::ThemeManager::themeChanged,
+            this, &NetworkDiagnosticsDialog::applyCanonChartColors);
     refresh();
+}
+
+// The charts paint their own chrome; give every one the canon palette, so
+// they sit on the window's ground like the panels around them.
+void NetworkDiagnosticsDialog::applyCanonChartColors()
+{
+    auto& tm = AetherSDR::ThemeManager::instance();
+    TimeSeriesGraphWidget::ChartColors colors;
+    colors.ground = tm.color(this, QStringLiteral("color.canon.nested"));
+    colors.line = tm.color(this, QStringLiteral("color.canon.line"));
+    colors.title = tm.color(this, QStringLiteral("color.canon.ink"));
+    colors.text = tm.color(this, QStringLiteral("color.canon.muted"));
+    colors.legendOff = colors.text;
+    colors.legendLineOff = colors.line;
+    colors.radius = 12.0;
+    colors.roundGround = true;
+    // TimeSeriesGraphWidget has no Q_OBJECT, so findChildren<T> can't name it.
+    for (QWidget* w : findChildren<QWidget*>()) {
+        if (auto* graph = dynamic_cast<TimeSeriesGraphWidget*>(w)) {
+            graph->setChartColors(colors);
+        }
+    }
 }
 
 #ifdef HAVE_WEBSOCKETS
@@ -1058,6 +1216,124 @@ static void tciAliasSet(const QString& ip, const QString& name)
     AppSettings::instance().save();
 }
 
+#ifdef Q_OS_WIN
+QWidget* NetworkDiagnosticsDialog::buildFirewallPage()
+{
+    auto* page = new QWidget(this);
+    auto* layout = new QVBoxLayout(page);
+    layout->setContentsMargins(8, 8, 8, 8);
+    layout->setSpacing(10);
+
+    auto* intro = new QLabel(QStringLiteral(
+        "Windows Defender Firewall keeps rules per program. After an update, a dismissed "
+        "firewall prompt can leave a rule that blocks AetherSDR, which stops radio discovery "
+        "and streams. Another security product that manages the firewall can also block "
+        "external services such as QRZ, maps, KiwiSDR and the update check."));
+    intro->setWordWrap(true);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(
+        intro, "QLabel { color: {{color.canon.muted}}; }");
+    layout->addWidget(intro);
+
+    m_firewallSummary = new QLabel(QStringLiteral("Checking Windows Firewall\u2026"));
+    m_firewallSummary->setObjectName(QStringLiteral("networkDiagnosticsFirewallSummary"));
+    m_firewallSummary->setWordWrap(true);
+    m_firewallSummary->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    m_firewallSummary->setAccessibleName(QStringLiteral("Windows Firewall status"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(
+        m_firewallSummary, "QLabel { color: {{color.canon.ink}}; font-weight: bold; }");
+    layout->addWidget(m_firewallSummary);
+
+    m_firewallDetails = new QLabel;
+    m_firewallDetails->setObjectName(QStringLiteral("networkDiagnosticsFirewallDetails"));
+    m_firewallDetails->setWordWrap(true);
+    m_firewallDetails->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    m_firewallDetails->setAccessibleName(QStringLiteral("Windows Firewall rules for AetherSDR"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(
+        m_firewallDetails, "QLabel { color: {{color.canon.muted}}; }");
+    layout->addWidget(m_firewallDetails);
+
+    auto* buttons = new QHBoxLayout;
+    m_firewallFixButton = new QPushButton(QStringLiteral("Fix\u2026"));
+    m_firewallFixButton->setObjectName(QStringLiteral("networkDiagnosticsFirewallFix"));
+    m_firewallFixButton->setAccessibleName(QStringLiteral("Fix Windows Firewall rules"));
+    m_firewallFixButton->setAccessibleDescription(QStringLiteral(
+        "Asks Windows for permission, then replaces AetherSDR's incoming firewall rules, "
+        "including any block rule: UDP is allowed on every network, TCP on private and domain "
+        "networks only. Outgoing rules are kept."));
+    m_firewallFixButton->setToolTip(m_firewallFixButton->accessibleDescription());
+    m_firewallFixButton->setEnabled(false);
+    m_firewallRecheckButton = new QPushButton(QStringLiteral("Check again"));
+    m_firewallRecheckButton->setObjectName(QStringLiteral("networkDiagnosticsFirewallRecheck"));
+    m_firewallRecheckButton->setAccessibleName(QStringLiteral("Check Windows Firewall again"));
+    buttons->addWidget(m_firewallFixButton);
+    buttons->addWidget(m_firewallRecheckButton);
+    buttons->addStretch();
+    layout->addLayout(buttons);
+    layout->addStretch();
+
+    connect(m_firewallFixButton, &QPushButton::clicked, this, &NetworkDiagnosticsDialog::fixFirewall);
+    connect(m_firewallRecheckButton, &QPushButton::clicked,
+            this, &NetworkDiagnosticsDialog::inspectFirewall);
+    inspectFirewall();
+    return page;
+}
+
+void NetworkDiagnosticsDialog::inspectFirewall()
+{
+    if (m_firewallBusy) {
+        return;
+    }
+    m_firewallBusy = true;
+    m_firewallFixButton->setEnabled(false);
+    m_firewallRecheckButton->setEnabled(false);
+    m_firewallSummary->setText(QStringLiteral("Checking Windows Firewall\u2026"));
+    const QString program = QCoreApplication::applicationFilePath();
+    auto* watcher = new QFutureWatcher<AetherSDR::WindowsFirewall::Assessment>(this);
+    connect(watcher, &QFutureWatcherBase::finished, this, [this, watcher] {
+        watcher->deleteLater();
+        m_firewallBusy = false;
+        const auto a = watcher->result();
+        const QString fixError = std::exchange(m_firewallFixError, QString());
+        m_firewallSummary->setText(fixError.isEmpty()
+            ? a.summary
+            : QStringLiteral("Fix did not complete: %1 Now: %2").arg(fixError, a.summary));
+        m_firewallDetails->setText(a.details.join(QLatin1Char('\n')));
+        m_firewallDetails->setVisible(!a.details.isEmpty());
+        m_firewallFixButton->setEnabled(a.fixable);
+        m_firewallRecheckButton->setEnabled(true);
+    });
+    watcher->setFuture(QtConcurrent::run([program] {
+        return AetherSDR::WindowsFirewall::assess(AetherSDR::WindowsFirewall::inspect(program));
+    }));
+}
+
+void NetworkDiagnosticsDialog::fixFirewall()
+{
+    if (m_firewallBusy) {
+        return;
+    }
+    m_firewallBusy = true;
+    m_firewallFixButton->setEnabled(false);
+    m_firewallRecheckButton->setEnabled(false);
+    m_firewallSummary->setText(QStringLiteral("Waiting for Windows permission\u2026"));
+    const QString program = QCoreApplication::applicationFilePath();
+    auto* watcher = new QFutureWatcher<QString>(this);
+    connect(watcher, &QFutureWatcherBase::finished, this, [this, watcher] {
+        watcher->deleteLater();
+        m_firewallBusy = false;
+        // Re-read the firewall either way: a failed or timed-out Fix may
+        // already have deleted the inbound rules, and the page must show
+        // what is there now, with the failure in front of it.
+        m_firewallFixError = watcher->result();
+        inspectFirewall();
+    });
+    watcher->setFuture(QtConcurrent::run([program] {
+        QString error;
+        return AetherSDR::WindowsFirewall::runFix(program, &error) ? QString() : error;
+    }));
+}
+#endif
+
 QWidget* NetworkDiagnosticsDialog::buildTciTab()
 {
     auto* page = new QWidget(this);
@@ -1072,16 +1348,16 @@ QWidget* NetworkDiagnosticsDialog::buildTciTab()
         "client has subscribed to. You can type your own label in the "
         "Name column — it is saved locally, keyed by IP address.");
     intro->setWordWrap(true);
-    AetherSDR::ThemeManager::instance().applyStyleSheet(intro, "QLabel { color: {{color.text.secondary}}; }");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(intro, "QLabel { color: {{color.canon.muted}}; }");
     layout->addWidget(intro);
 
     auto* clientsHdr = new QLabel(QStringLiteral("Connected clients"));
-    AetherSDR::ThemeManager::instance().applyStyleSheet(clientsHdr, "QLabel { color: {{color.text.secondary}}; font-weight: bold; "
+    AetherSDR::ThemeManager::instance().applyStyleSheet(clientsHdr, "QLabel { color: {{color.canon.muted}}; font-weight: bold; "
         "letter-spacing: 0.06em; }");
     layout->addWidget(clientsHdr);
 
     m_tciClientSummary = new QLabel;
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_tciClientSummary, "QLabel { color: {{color.text.primary}}; font-weight: bold; }");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_tciClientSummary, "QLabel { color: {{color.canon.ink}}; font-weight: bold; }");
     layout->addWidget(m_tciClientSummary);
 
     m_tciClientTable = new QTableWidget(0, 7, this);
@@ -1105,11 +1381,11 @@ QWidget* NetworkDiagnosticsDialog::buildTciTab()
     hh->setSectionResizeMode(2, QHeaderView::Stretch);            // Likely role
     for (int c = 3; c < 7; ++c)
         hh->setSectionResizeMode(c, QHeaderView::ResizeToContents);
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_tciClientTable, "QTableWidget { background: {{color.background.0}}; color: {{color.text.primary}}; "
-        "gridline-color: {{color.background.1}}; border: 1px solid {{color.background.1}}; }"
-        "QTableWidget::item:selected { background: #173049; }"
-        "QHeaderView::section { background: {{color.background.0}}; color: {{color.text.secondary}}; "
-        "border: 1px solid {{color.background.1}}; padding: 3px 6px; font-weight: bold; }");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_tciClientTable, "QTableWidget { background: {{color.canon.nested}}; color: {{color.canon.ink}}; "
+        "gridline-color: {{color.canon.line}}; border: 1px solid {{color.canon.line}}; }"
+        "QTableWidget::item:selected { background: {{color.canon.control}}; }"
+        "QHeaderView::section { background: {{color.canon.nested}}; color: {{color.canon.muted}}; "
+        "border: 1px solid {{color.canon.line}}; padding: 3px 6px; font-weight: bold; }");
     // Keep the roster compact (~6 rows then scroll) so the monitor below
     // gets the bulk of the page.
     m_tciClientTable->setSizePolicy(QSizePolicy::Expanding,
@@ -1140,7 +1416,7 @@ QWidget* NetworkDiagnosticsDialog::buildTciTab()
 
     // ── Live traffic monitor ──────────────────────────────────────────────
     auto* monHdr = new QLabel(QStringLiteral("TCI traffic monitor"));
-    AetherSDR::ThemeManager::instance().applyStyleSheet(monHdr, "QLabel { color: {{color.text.secondary}}; font-weight: bold; "
+    AetherSDR::ThemeManager::instance().applyStyleSheet(monHdr, "QLabel { color: {{color.canon.muted}}; font-weight: bold; "
         "letter-spacing: 0.06em; }");
     layout->addWidget(monHdr);
 
@@ -1149,22 +1425,21 @@ QWidget* NetworkDiagnosticsDialog::buildTciTab()
         "to suppress all messages of that command — same as the standalone "
         "TCI Monitor."));
     mHelp->setWordWrap(true);
-    AetherSDR::ThemeManager::instance().applyStyleSheet(mHelp, "QLabel { color: {{color.text.secondary}}; }");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(mHelp, "QLabel { color: {{color.canon.muted}}; }");
     layout->addWidget(mHelp);
 
+    // Compact canon buttons; a checked one (Pause) reads as a warning.
     const QString btnStyle = QStringLiteral(
-        "QPushButton { background: #111120; border: 1px solid #203040; "
-        "border-radius: 3px; color: #c8d8e8; padding: 3px 12px; }"
-        "QPushButton:hover { border-color: #00b4d8; }"
-        "QPushButton:checked { background: #003040; border-color: #ffaa00; "
-        "color: #ffaa00; }");
+        "QPushButton { padding: 3px 12px; }"
+        "QPushButton:checked { color: {{color.accent.warning}}; "
+        "border-color: {{color.accent.warning}}; }");
 
     auto* tools = new QHBoxLayout;
     tools->setSpacing(6);
 
     m_tciPauseBtn = new QPushButton(QStringLiteral("Pause"));
     m_tciPauseBtn->setCheckable(true);
-    m_tciPauseBtn->setStyleSheet(btnStyle);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_tciPauseBtn, btnStyle);
     connect(m_tciPauseBtn, &QPushButton::toggled, this, [this](bool on) {
         m_tciMonitorPaused = on;
         m_tciPauseBtn->setText(on ? QStringLiteral("Paused")
@@ -1173,24 +1448,24 @@ QWidget* NetworkDiagnosticsDialog::buildTciTab()
     tools->addWidget(m_tciPauseBtn);
 
     auto* clearBtn = new QPushButton(QStringLiteral("Clear"));
-    clearBtn->setStyleSheet(btnStyle);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(clearBtn, btnStyle);
     connect(clearBtn, &QPushButton::clicked, this, [this] {
         if (m_tciLogTable) m_tciLogTable->setRowCount(0);
     });
     tools->addWidget(clearBtn);
 
     auto* saveBtn = new QPushButton(QStringLiteral("Save log…"));
-    saveBtn->setStyleSheet(btnStyle);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(saveBtn, btnStyle);
     connect(saveBtn, &QPushButton::clicked,
             this, &NetworkDiagnosticsDialog::onTciSaveLog);
     tools->addWidget(saveBtn);
 
     tools->addStretch(1);
     m_tciSuppressLabel = new QLabel;
-    m_tciSuppressLabel->setStyleSheet("QLabel { color: #ffaa00; }");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_tciSuppressLabel, "QLabel { color: {{color.accent.warning}}; }");
     tools->addWidget(m_tciSuppressLabel);
     auto* clrSupBtn = new QPushButton(QStringLiteral("Clear suppressions"));
-    clrSupBtn->setStyleSheet(btnStyle);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(clrSupBtn, btnStyle);
     connect(clrSupBtn, &QPushButton::clicked, this, [this] {
         m_tciSuppressed.clear();
         AppSettings::instance().setValue(
@@ -1225,12 +1500,12 @@ QWidget* NetworkDiagnosticsDialog::buildTciTab()
     m_tciLogTable->horizontalHeader()->setStretchLastSection(true);
     m_tciLogTable->setColumnWidth(0, 96);
     m_tciLogTable->setColumnWidth(1, 150);
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_tciLogTable, "QTableWidget { background: #07070e; color: #dde6f0; "
-        "border: 1px solid {{color.background.1}}; font-family: Consolas, monospace; "
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_tciLogTable, "QTableWidget { background: {{color.canon.nested}}; color: {{color.canon.inkSoft}}; "
+        "border: 1px solid {{color.canon.line}}; font-family: Consolas, monospace; "
         "font-size: 11px; gridline-color: transparent; }"
-        "QTableWidget::item:selected { background: #173049; }"
-        "QHeaderView::section { background: {{color.background.0}}; color: {{color.text.secondary}}; "
-        "border: 1px solid {{color.background.1}}; padding: 2px 6px; }");
+        "QTableWidget::item:selected { background: {{color.canon.control}}; }"
+        "QHeaderView::section { background: {{color.canon.nested}}; color: {{color.canon.muted}}; "
+        "border: 1px solid {{color.canon.line}}; padding: 2px 6px; }");
     m_tciLogTable->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(m_tciLogTable, &QTableWidget::customContextMenuRequested,
             this, &NetworkDiagnosticsDialog::onTciLogContextMenu);
@@ -1593,7 +1868,7 @@ QWidget* NetworkDiagnosticsDialog::buildLogsTab()
     auto* infoRow = new QHBoxLayout;
     m_logPathLabel = new QLabel(page);
     m_logPathLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_logPathLabel, "QLabel { color: {{color.text.secondary}}; font-size: 11px; }");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_logPathLabel, "QLabel { color: {{color.canon.muted}}; font-size: 11px; }");
     infoRow->addWidget(m_logPathLabel, 1);
 
     m_logLiveToggle = new QPushButton("Live", page);
@@ -2078,19 +2353,19 @@ static QString audioHealthStyle(AudioHealthState state)
 {
     switch (state) {
     case AudioHealthState::Healthy:
-        return "QLabel { color: #64d36e; font-weight: 700; }";
+        return "QLabel { color: {{color.accent.success}}; font-weight: 700; }";
     case AudioHealthState::SlowDelivery:
     case AudioHealthState::PacketGaps:
-        return "QLabel { color: #ff6b6b; font-weight: 700; }";
+        return "QLabel { color: {{color.accent.danger}}; font-weight: 700; }";
     case AudioHealthState::Waiting:
     case AudioHealthState::NoRecentAudio:
     case AudioHealthState::Measuring:
-        return "QLabel { color: #8d99ad; font-weight: 700; }";
+        return "QLabel { color: {{color.canon.muted}}; font-weight: 700; }";
     case AudioHealthState::RepeatedLatePackets:
     case AudioHealthState::BufferLow:
-        return "QLabel { color: #e8b977; font-weight: 700; }";
+        return "QLabel { color: {{color.accent.warning}}; font-weight: 700; }";
     }
-    return "QLabel { color: #8d99ad; font-weight: 700; }";
+    return "QLabel { color: {{color.canon.muted}}; font-weight: 700; }";
 }
 
 NetworkDiagnosticsHistory::NetworkDiagnosticsHistory(RadioModel* model, AudioEngine* audio, QObject* parent)
@@ -2110,6 +2385,18 @@ NetworkDiagnosticsHistory::NetworkDiagnosticsHistory(RadioModel* model, AudioEng
         sampleNow();
     });
     m_sampleTimer.start(1000);
+
+    // The in-radio shim's view of the link, polled only while the radio is
+    // reached over the tailnet; a LAN or SmartLink session leaves it idle.
+    auto followRadio = [this](bool connected) {
+        m_tunnel.setRadioAddress(connected && !m_model->isWan() ? m_model->radioAddress()
+                                                                : QHostAddress());
+        m_tunnelClientPackets = -1;
+        m_tunnelSessionPort = 0;
+        m_tunnelSendFailures = -1;
+    };
+    connect(m_model, &RadioModel::connectionStateChanged, this, followRadio);
+    followRadio(m_model->isConnected());
 
     connect(m_model, &RadioModel::adaptiveThrottleChanged,
             this, [this](bool active, int fpsCap) {
@@ -2286,10 +2573,82 @@ void NetworkDiagnosticsHistory::sampleNow()
         m_hasDigitalVoiceWaveformTelemetry = true;
     }
 
+    sampleTunnel(sample);
+
     m_lastSampleMs = nowMs;
 
     m_samples.push_back(sample);
     pruneSamples(nowMs);
+}
+
+void NetworkDiagnosticsHistory::sampleTunnel(NetworkDiagnosticsSample& sample)
+{
+    const std::optional<TailnetSessionReport> report = m_tunnel.current();
+    if (!report) {
+        return;
+    }
+    m_hasTunnelTelemetry = true;
+    sample.tunnelValid = true;
+    sample.tunnelRttMs = report->rttMs;
+    sample.tunnelToClientKbps = report->toClientKbps;
+    sample.tunnelFromClientKbps = report->fromClientKbps;
+
+    // Break rates over the window between two shim reports, so the radio's
+    // count and this client's cover the same packets (to within one RTT).
+    // Only this AetherSDR's own relay session is compared with its own
+    // stream counters: the report also carries any other client on this
+    // computer (a second AetherSDR, SmartSDR), whose losses aren't ours.
+    if (m_tunnel.reportSerial() != m_tunnelSerial) {
+        m_tunnelSerial = m_tunnel.reportSerial();
+        const quint16 ourPort = tailnetshim::portOfEndpoint(m_model->localUdpEndpoint());
+        const TailnetRelaySession* ours = report->sessionForUdpPort(ourPort);
+        m_tunnelSendFailures = ours ? static_cast<qint64>(ours->sendFailures) : -1;
+        if (!ours || ourPort != m_tunnelSessionPort) {
+            // Not streaming yet, or a different session than last time:
+            // its counters start a new baseline.
+            m_tunnelSessionPort = ours ? ourPort : 0;
+            m_tunnelClientPackets = -1;
+        }
+        if (!ours) {
+            m_tunnelRadioBreakPct = 0.0;
+            m_tunnelAddedBreakPct = 0.0;
+            sample.tunnelRadioBreakPct = 0.0;
+            sample.tunnelAddedBreakPct = 0.0;
+            return;
+        }
+        qint64 clientPackets = 0;
+        qint64 clientBreaks = 0;
+        for (int i = 0; i < PanadapterStream::CatCount; ++i) {
+            const PanadapterStream::CategoryStats cs =
+                m_model->categoryStats(static_cast<PanadapterStream::StreamCategory>(i));
+            clientPackets += cs.packets;
+            clientBreaks += cs.errors;
+        }
+        const qint64 radioPackets = static_cast<qint64>(ours->radioPackets);
+        const qint64 radioBreaks = static_cast<qint64>(ours->radioBreaks);
+        // A new session (or a restarted shim or stream) resets a counter:
+        // take a fresh baseline rather than a negative window.
+        const bool reset = m_tunnelClientPackets < 0 || clientPackets < m_tunnelClientPackets
+            || radioPackets < m_tunnelRadioPackets || clientBreaks < m_tunnelClientBreaks
+            || radioBreaks < m_tunnelRadioBreaks;
+        if (reset) {
+            m_tunnelRadioBreakPct = 0.0;
+            m_tunnelAddedBreakPct = 0.0;
+        } else {
+            const qint64 dRadioPackets = radioPackets - m_tunnelRadioPackets;
+            const qint64 dRadioBreaks = radioBreaks - m_tunnelRadioBreaks;
+            m_tunnelRadioBreakPct = dRadioPackets > 0 ? dRadioBreaks * 100.0 / dRadioPackets : 0.0;
+            m_tunnelAddedBreakPct = tailnetshim::tunnelBreakPercent(
+                clientPackets - m_tunnelClientPackets, clientBreaks - m_tunnelClientBreaks,
+                dRadioPackets, dRadioBreaks);
+        }
+        m_tunnelClientPackets = clientPackets;
+        m_tunnelClientBreaks = clientBreaks;
+        m_tunnelRadioPackets = radioPackets;
+        m_tunnelRadioBreaks = radioBreaks;
+    }
+    sample.tunnelRadioBreakPct = m_tunnelRadioBreakPct;
+    sample.tunnelAddedBreakPct = m_tunnelAddedBreakPct;
 }
 
 void NetworkDiagnosticsHistory::pruneSamples(qint64 nowMs)
@@ -2362,6 +2721,28 @@ void NetworkDiagnosticsHistory::pruneSamples(qint64 nowMs)
             bucket.audioLastPacketAgeMs = sample.audioLastPacketAgeMs;
             bucket.audioPacketClassCode = sample.audioPacketClassCode;
             bucket.audioStreamCount = sample.audioStreamCount;
+            if (sample.tunnelValid) {
+                // Rates average over the minute; RTT and breaks keep the worst case,
+                // like the link RTT and loss above.
+                if (!bucket.tunnelValid) {
+                    bucket.tunnelValid = true;
+                    bucket.tunnelRttMs = sample.tunnelRttMs;
+                    bucket.tunnelToClientKbps = sample.tunnelToClientKbps;
+                    bucket.tunnelFromClientKbps = sample.tunnelFromClientKbps;
+                    bucket.tunnelRadioBreakPct = sample.tunnelRadioBreakPct;
+                    bucket.tunnelAddedBreakPct = sample.tunnelAddedBreakPct;
+                } else {
+                    bucket.tunnelRttMs = std::max(bucket.tunnelRttMs, sample.tunnelRttMs);
+                    bucket.tunnelToClientKbps = mergeAverage(
+                        bucket.tunnelToClientKbps, sample.tunnelToClientKbps, bucketSampleCount);
+                    bucket.tunnelFromClientKbps = mergeAverage(
+                        bucket.tunnelFromClientKbps, sample.tunnelFromClientKbps, bucketSampleCount);
+                    bucket.tunnelRadioBreakPct = std::max(bucket.tunnelRadioBreakPct,
+                                                          sample.tunnelRadioBreakPct);
+                    bucket.tunnelAddedBreakPct = std::max(bucket.tunnelAddedBreakPct,
+                                                          sample.tunnelAddedBreakPct);
+                }
+            }
             if (sample.digitalVoiceRxValid) {
                 const int incomingCount =
                     std::max(1, sample.digitalVoiceWaveformObservationCount);
@@ -2502,13 +2883,17 @@ static void updateAudioStreamTable(QTableWidget* table,
         return;
     }
 
-    auto makeItem = [](const QString& text, const QColor& color = QColor("#c2ccdb")) {
+    auto& tm = AetherSDR::ThemeManager::instance();
+    const QColor itemColor = tm.color(table, QStringLiteral("color.canon.inkSoft"));
+    const QColor warnColor = tm.color(table, QStringLiteral("color.accent.warning"));
+    const QColor dimColor = tm.color(table, QStringLiteral("color.canon.muted"));
+    auto makeItem = [itemColor](const QString& text, const QColor& color = QColor()) {
         auto* item = new QTableWidgetItem(text);
-        item->setForeground(color);
+        item->setForeground(color.isValid() ? color : itemColor);
         return item;
     };
     auto makeNumberItem = [&](const QString& text, bool warning = false) {
-        auto* item = makeItem(text, warning ? QColor("#e8b977") : QColor("#c2ccdb"));
+        auto* item = makeItem(text, warning ? warnColor : itemColor);
         item->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
         return item;
     };
@@ -2521,9 +2906,9 @@ static void updateAudioStreamTable(QTableWidget* table,
 
     if (audioStreams.isEmpty()) {
         table->setItem(0, 0, makeItem("Waiting"));
-        table->setItem(0, 1, makeItem(formatAudioStreamSource(sliceLabels), QColor("#8d99ad")));
+        table->setItem(0, 1, makeItem(formatAudioStreamSource(sliceLabels), dimColor));
         for (int col = 2; col < table->columnCount(); ++col) {
-            table->setItem(0, col, makeItem("--", QColor("#6e7a8d")));
+            table->setItem(0, col, makeItem("--", dimColor));
         }
         table->resizeRowsToContents();
         return;
@@ -2577,7 +2962,7 @@ void NetworkDiagnosticsDialog::refresh()
         } else {
             AetherSDR::ThemeManager::instance().applyStyleSheet(
                 m_digitalVoiceWaveformHealthLabel,
-                "QLabel { color: {{color.text.primary}}; font-weight: 700; }");
+                "QLabel { color: {{color.canon.ink}}; font-weight: 700; }");
         }
 
         if (sample.digitalVoiceRxValid) {
@@ -2767,7 +3152,7 @@ void NetworkDiagnosticsDialog::refresh()
                                                         sample.audioLatePacketsPerSecond));
         const AudioHealthStatus audioHealth = formatAudioHealth(sample);
         m_audioStreamHealthLabel->setText(audioHealth.text);
-        m_audioStreamHealthLabel->setStyleSheet(audioHealthStyle(audioHealth.state));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_audioStreamHealthLabel, audioHealthStyle(audioHealth.state));
         m_audioStreamsDetailLabel->setText(formatAudioSupportDetails(sample.audioStreamCount,
                                                                      sliceLabels));
         updateAudioStreamTable(m_audioStreamsTable, m_model, audioStreams);
@@ -2784,7 +3169,7 @@ void NetworkDiagnosticsDialog::refresh()
         m_audioFeedDeficitLabel->setText("Unavailable");
         m_audioLateGapLabel->setText("Unavailable");
         m_audioStreamHealthLabel->setText("Unavailable");
-        AetherSDR::ThemeManager::instance().applyStyleSheet(m_audioStreamHealthLabel, "QLabel { color: {{color.text.secondary}}; font-weight: 700; }");
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_audioStreamHealthLabel, "QLabel { color: {{color.canon.muted}}; font-weight: 700; }");
         m_audioStreamsDetailLabel->setText("Unavailable");
         updateAudioStreamTable(m_audioStreamsTable, m_model, {});
         m_overviewAudioValue->setText("Unavailable");
@@ -2793,11 +3178,11 @@ void NetworkDiagnosticsDialog::refresh()
     // Color the status label
     const QString q = m_model->networkQuality();
     if (q == "Excellent" || q == "Very Good") {
-        m_statusLabel->setStyleSheet("QLabel { color: #64d36e; font-weight: 700; }");
-        m_overviewStatusValue->setStyleSheet("QLabel { color: #64d36e; font-weight: 700; font-size: 18px; }");
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_statusLabel, "QLabel { color: {{color.accent.success}}; font-weight: 700; }");
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_overviewStatusValue, "QLabel { color: {{color.accent.success}}; font-weight: 700; font-size: 18px; }");
     } else if (q == "Good") {
-        m_statusLabel->setStyleSheet("QLabel { color: #80ed91; font-weight: 700; }");
-        m_overviewStatusValue->setStyleSheet("QLabel { color: #80ed91; font-weight: 700; font-size: 18px; }");
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_statusLabel, "QLabel { color: {{color.canon.aqua}}; font-weight: 700; }");
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_overviewStatusValue, "QLabel { color: {{color.canon.aqua}}; font-weight: 700; font-size: 18px; }");
     } else if (q == "Fair") {
         AetherSDR::ThemeManager::instance().applyStyleSheet(m_statusLabel, "QLabel { color: {{color.accent.warning}}; font-weight: 700; }");
         AetherSDR::ThemeManager::instance().applyStyleSheet(m_overviewStatusValue, "QLabel { color: {{color.accent.warning}}; font-weight: 700; font-size: 18px; }");
@@ -2805,8 +3190,8 @@ void NetworkDiagnosticsDialog::refresh()
         AetherSDR::ThemeManager::instance().applyStyleSheet(m_statusLabel, "QLabel { color: {{color.accent.danger}}; font-weight: 700; }");
         AetherSDR::ThemeManager::instance().applyStyleSheet(m_overviewStatusValue, "QLabel { color: {{color.accent.danger}}; font-weight: 700; font-size: 18px; }");
     } else {
-        AetherSDR::ThemeManager::instance().applyStyleSheet(m_statusLabel, "QLabel { color: {{color.text.primary}}; font-weight: 700; }");
-        AetherSDR::ThemeManager::instance().applyStyleSheet(m_overviewStatusValue, "QLabel { color: {{color.text.primary}}; font-weight: 700; font-size: 18px; }");
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_statusLabel, "QLabel { color: {{color.canon.ink}}; font-weight: 700; }");
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_overviewStatusValue, "QLabel { color: {{color.canon.ink}}; font-weight: 700; font-size: 18px; }");
     }
 
     // ── Adaptive throttle badge and Details subsection ───────────────────
@@ -2840,7 +3225,7 @@ void NetworkDiagnosticsDialog::refresh()
                         QStringLiteral("QLabel { color: %1; font-weight: 600; }").arg(kThrottleAmber));
                 } else {
                     m_throttleStateLabel->setText("Inactive");
-                    m_throttleStateLabel->setStyleSheet("QLabel { color: #b9c4d7; font-weight: 600; }");
+                    AetherSDR::ThemeManager::instance().applyStyleSheet(m_throttleStateLabel, "QLabel { color: {{color.canon.inkSoft}}; font-weight: 600; }");
                 }
             }
             if (m_throttleDwellLabel)
@@ -2850,7 +3235,124 @@ void NetworkDiagnosticsDialog::refresh()
         }
     }
 
+    refreshTunnel(sample);
     updateCharts();
+}
+
+static QString formatTunnelDuration(double seconds)
+{
+    const qint64 s = static_cast<qint64>(std::max(0.0, seconds));
+    if (s < 60) {
+        return QStringLiteral("%1 s").arg(s);
+    }
+    if (s < 3600) {
+        return QStringLiteral("%1 min").arg(s / 60);
+    }
+    return QStringLiteral("%1 h %2 min").arg(s / 3600).arg((s % 3600) / 60);
+}
+
+void NetworkDiagnosticsDialog::refreshTunnel(const NetworkDiagnosticsSample& sample)
+{
+    if (!m_tunnelSection || !m_history) {
+        return;
+    }
+    // The trend traces keep the history; the panel describes this session only.
+    const bool show = m_history->hasTunnelTelemetry() && m_history->isTunnelPolling();
+    m_tunnelSection->setVisible(show);
+    if (m_overviewTunnelLatencyLabel) {
+        m_overviewTunnelLatencyLabel->setVisible(show);
+    }
+    if (!show) {
+        return;
+    }
+    const std::optional<TailnetSessionReport> report = m_history->tunnelReport();
+    if (m_overviewTunnelLatencyLabel) {
+        QString where;
+        if (report) {
+            if (report->path == QLatin1String("direct")) {
+                where = QStringLiteral("direct");
+            } else if (report->path == QLatin1String("peer-relay")) {
+                where = QStringLiteral("peer relay");
+            } else if (report->path == QLatin1String("relay")) {
+                where = report->relay.isEmpty() ? QStringLiteral("DERP")
+                                                : QStringLiteral("DERP %1").arg(report->relay);
+            }
+        }
+        QString text;
+        if (!report) {
+            text = QStringLiteral("Tunnel: no report");
+        } else if (report->rttMs >= 0.0 && report->rttAgeS <= 60.0) {
+            text = where.isEmpty()
+                ? QStringLiteral("Tunnel %1 ms").arg(report->rttMs, 0, 'f', 0)
+                : QStringLiteral("Tunnel %1 ms, %2").arg(report->rttMs, 0, 'f', 0).arg(where);
+        } else {
+            text = where.isEmpty() ? QStringLiteral("Tunnel: measuring")
+                                   : QStringLiteral("Tunnel: %1, measuring").arg(where);
+        }
+        m_overviewTunnelLatencyLabel->setText(text);
+        m_overviewTunnelLatencyLabel->setAccessibleDescription(
+            QStringLiteral("Round trip measured by the radio's remote-access container"));
+    }
+    if (!report) {
+        const QString dash = QStringLiteral("--");
+        m_tunnelPathLabel->setText(QStringLiteral("No report"));
+        m_tunnelPathLabel->setToolTip(
+            QStringLiteral("The radio's remote-access container has stopped answering, "
+                           "or this session no longer runs over the tailnet."));
+        for (QLabel* l : {m_tunnelPathAgeLabel, m_tunnelRttLabel, m_tunnelRatesLabel,
+                          m_tunnelRadioBreaksLabel, m_tunnelAddedBreaksLabel,
+                          m_tunnelSendFailuresLabel, m_tunnelShimLabel}) {
+            l->setText(dash);
+        }
+        return;
+    }
+    QString path;
+    if (report->path == QLatin1String("direct")) {
+        path = report->endpoint.isEmpty()
+            ? QStringLiteral("Direct")
+            : QStringLiteral("Direct (%1)").arg(report->endpoint);
+    } else if (report->path == QLatin1String("peer-relay")) {
+        path = QStringLiteral("Peer relay");
+    } else if (report->path == QLatin1String("relay")) {
+        path = report->relay.isEmpty() ? QStringLiteral("Relayed (DERP)")
+                                       : QStringLiteral("Relayed (DERP %1)").arg(report->relay);
+    } else {
+        path = QStringLiteral("Unknown");
+    }
+    m_tunnelPathLabel->setText(path);
+    m_tunnelPathLabel->setToolTip(report->path == QLatin1String("relay")
+        ? QStringLiteral("Traffic goes through a Tailscale relay server; a direct path is "
+                         "usually faster. Opening UDP on either side's firewall can help.")
+        : QString());
+    m_tunnelPathAgeLabel->setText(report->pathChanges > 0
+        ? QStringLiteral("%1 (%2 changes)").arg(formatTunnelDuration(report->pathSinceS))
+              .arg(report->pathChanges)
+        : formatTunnelDuration(report->pathSinceS));
+    // The shim keeps its last successful ping; past a minute it says nothing
+    // about the link now, and past 10 s it says how old it is.
+    if (report->rttMs < 0.0 || report->rttAgeS > 60.0) {
+        m_tunnelRttLabel->setText(QStringLiteral("--"));
+    } else {
+        const QString via = report->rttVia.isEmpty() ? QStringLiteral("disco") : report->rttVia;
+        m_tunnelRttLabel->setText(report->rttAgeS > 10.0
+            ? QStringLiteral("%1 ms (%2, %3 s ago)").arg(report->rttMs, 0, 'f', 1).arg(via)
+                  .arg(static_cast<int>(report->rttAgeS))
+            : QStringLiteral("%1 ms (%2)").arg(report->rttMs, 0, 'f', 1).arg(via));
+    }
+    m_tunnelRatesLabel->setText(QStringLiteral("%1 / %2 kbps")
+        .arg(report->toClientKbps, 0, 'f', 0).arg(report->fromClientKbps, 0, 'f', 0));
+    m_tunnelRadioBreaksLabel->setText(
+        QStringLiteral("%1%").arg(sample.tunnelRadioBreakPct, 0, 'f', 2));
+    m_tunnelAddedBreaksLabel->setText(
+        QStringLiteral("%1%").arg(sample.tunnelAddedBreakPct, 0, 'f', 2));
+    const qint64 failures = m_history->tunnelSendFailures();
+    m_tunnelSendFailuresLabel->setText(failures >= 0 ? QString::number(failures)
+                                                     : QStringLiteral("--"));
+    m_tunnelShimLabel->setText(QStringLiteral("v%1, %2% CPU, %3 MB, MTU %4")
+        .arg(report->version)
+        .arg(report->shimCpuPct, 0, 'f', 1)
+        .arg(report->shimRssKb / 1024)
+        .arg(report->mtuClamp));
 }
 
 int NetworkDiagnosticsDialog::selectedRangeSeconds() const
@@ -2992,6 +3494,16 @@ void NetworkDiagnosticsDialog::updateCharts()
     }
     latencySeries.push_back(buildSeriesWithUnit("Arrival gap", QColor("#f2c94c"), " ms", [](const NetworkDiagnosticsSample& s) { return static_cast<double>(s.audioGapMs); }));
     latencySeries.push_back(buildSeriesWithUnit("Jitter", QColor("#eb5757"), " ms", [](const NetworkDiagnosticsSample& s) { return static_cast<double>(s.audioJitterMs); }));
+    // The radio side's own ping to this client over the tailnet, drawn only
+    // where the shim reported one, for the same reason as the RTT trace.
+    const QColor tunnelColor =
+        AetherSDR::ThemeManager::instance().color(this, "color.canon.aqua");
+    if (m_history && m_history->hasTunnelTelemetry()) {
+        latencySeries.push_back(buildWaveformSeries(
+            "Tunnel RTT", tunnelColor, " ms",
+            [](const NetworkDiagnosticsSample& s) { return s.tunnelValid && s.tunnelRttMs >= 0.0; },
+            [](const NetworkDiagnosticsSample& s) { return s.tunnelRttMs; }));
+    }
 
     // Same reasoning for the per-category rate traces: five flat zero lines
     // would claim five dead streams on a transport that never had five.
@@ -3010,6 +3522,12 @@ void NetworkDiagnosticsDialog::updateCharts()
     QVector<TimeSeriesGraphWidget::Series> lossSeries{
         buildSeriesWithUnit("Recent total", QColor("#eb5757"), "%", [](const NetworkDiagnosticsSample& s) { return s.packetLossPct; })
     };
+    if (m_history && m_history->hasTunnelTelemetry()) {
+        lossSeries.push_back(buildWaveformSeries(
+            "Added by tunnel", tunnelColor, "%",
+            [](const NetworkDiagnosticsSample& s) { return s.tunnelValid; },
+            [](const NetworkDiagnosticsSample& s) { return s.tunnelAddedBreakPct; }));
+    }
     if (m_model->hasStreamCategoryStats()) {
         lossSeries.push_back(buildSeriesWithUnit("Audio", QColor("#6fcf97"), "%", [](const NetworkDiagnosticsSample& s) { return s.audioLossPct; }));
         lossSeries.push_back(buildSeriesWithUnit("FFT", QColor("#bb6bd9"), "%", [](const NetworkDiagnosticsSample& s) { return s.fftLossPct; }));

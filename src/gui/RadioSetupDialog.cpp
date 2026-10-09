@@ -7,6 +7,7 @@
 #include "ScopedChildWidget.h"
 #include "GuardedSlider.h"
 #include "ComboStyle.h"
+#include "DocsLinks.h"
 #include "SliceColorManager.h"
 #include "models/RadioModel.h"
 #include "models/XvtrPolicy.h"
@@ -701,7 +702,7 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
         "border: 1px solid {{color.background.2}}; border-radius: 6px; padding: 6px; outline: none; }"
         "QTreeWidget::branch { image: none; border-image: none; background: transparent; }"
         "QTreeWidget::item { min-height: 36px; padding: 3px 8px; border-radius: 4px; }"
-        "QTreeWidget::item:selected { background: {{color.accent.bright}}; color: {{color.background.0}}; }"
+        "QTreeWidget::item:selected { background: palette(highlight); color: palette(highlighted-text); }"
         "QTreeWidget::item:hover:!selected { background: {{color.background.2}}; }");
     content->addWidget(m_navigation);
 
@@ -2003,9 +2004,12 @@ QWidget* RadioSetupDialog::buildNetworkTab()
         tokenEdit->setReadOnly(true);
         tokenEdit->setPlaceholderText("(loading…)");
         tokenEdit->setToolTip(
-            "Paste this into your AI assistant's MCP server config as the\n"
-            "AETHER_MCP_TOKEN environment variable. Only a client holding\n"
-            "this token can drive the radio. Stored in your OS secret store.");
+            "Export this as AETHER_MCP_TOKEN only in the shell session that\n"
+            "launches your AI assistant, without recording it in shell history.\n"
+            "Never put it in an MCP config file or a shell profile.\n"
+            "Only a client holding this token can drive the radio.\n"
+            "Stored in your OS secret store. See\n"
+            + DocsLinks::automationBridge());
         AetherSDR::ThemeManager::instance().applyStyleSheet(tokenEdit,
             "QLineEdit { background: {{color.background.0}}; border: 1px solid {{color.background.2}}; "
             "border-radius: 3px; color: {{color.text.primary}}; font-family: monospace; "
@@ -2041,7 +2045,8 @@ QWidget* RadioSetupDialog::buildNetworkTab()
                 "(via the MCP server, tools/aether_mcp.py) can introspect and\n"
                 "drive this app to validate changes. Off by default. Transmit-"
                 "keying controls stay blocked unless the app is launched with\n"
-                "AETHER_AUTOMATION_ALLOW_TX. See docs/automation-bridge.md.");
+                "AETHER_AUTOMATION_ALLOW_TX. See\n"
+                + DocsLinks::automationBridge());
             // Env-var force-enable wins and can't be turned off from the UI —
             // make that visible rather than letting a toggle silently no-op.
             if (AutomationBridgeSettings::envForced()) {
@@ -2135,7 +2140,8 @@ QWidget* RadioSetupDialog::buildNetworkTab()
                 "Let an MCP client key the transmitter (MOX/PTT/TUNE/ATU/CWX).\n"
                 "OFF by default — the bridge blocks all transmit-keying otherwise.\n"
                 "Bridge-originated TX is limited by a force-unkey watchdog. You are\n"
-                "responsible for anything transmitted. See docs/automation-bridge.md.");
+                "responsible for anything transmitted. See\n"
+                + DocsLinks::automationBridge());
             AetherSDR::ThemeManager::instance().applyStyleSheet(txCheck,
                 "QCheckBox { color: {{color.text.primary}}; font-size: 11px; }"
                 "QCheckBox::indicator { width: 14px; height: 14px; }");
@@ -2212,7 +2218,8 @@ QWidget* RadioSetupDialog::buildNetworkTab()
                 "actions, floors, and hitTest)\n"
                 "but every mutating verb is refused. Enforced in the app, so a\n"
                 "client cannot bypass it. Toggle takes effect immediately on the\n"
-                "running bridge. See docs/automation-bridge.md.");
+                "running bridge. See\n"
+                + DocsLinks::automationBridge());
             AetherSDR::ThemeManager::instance().applyStyleSheet(roCheck,
                 "QCheckBox { color: {{color.text.primary}}; font-size: 11px; }"
                 "QCheckBox::indicator { width: 14px; height: 14px; }");
@@ -2231,15 +2238,21 @@ QWidget* RadioSetupDialog::buildNetworkTab()
         m_networkMtuLabel = new QLabel("Network MTU:");
         grid->addWidget(m_networkMtuLabel, 5, 0);
         auto* mtuSpin = new QSpinBox;
-        mtuSpin->setRange(576, 9000);
-        mtuSpin->setValue(AppSettings::instance().value("NetworkMtu", "1450").toInt());
+        mtuSpin->setRange(kMinNetworkMtu, kMaxNetworkMtu);
+        mtuSpin->setValue(m_model->networkMtuSetting());
         mtuSpin->setSuffix(" bytes");
-        mtuSpin->setToolTip("Maximum Transmission Unit for VITA-49 UDP packets.\nDefault: 1450 (compatible with most VPN/SD-WAN tunnels).");
+        mtuSpin->setToolTip(QString("Maximum Transmission Unit for VITA-49 UDP packets.\n"
+                                    "Default: %1 (compatible with most VPN/SD-WAN tunnels).\n"
+                                    "Over Tailscale the radio is sent at most %2.")
+                                .arg(kDefaultNetworkMtu)
+                                .arg(kTailnetNetworkMtu));
         connect(mtuSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, [this](int val) {
-            m_model->sendCommand(
-                QString("client set enforce_network_mtu=1 network_mtu=%1").arg(val));
             AppSettings::instance().setValue("NetworkMtu", QString::number(val));
             AppSettings::instance().save();
+            // Over Tailscale the radio gets the capped value (#5949), never
+            // more than the tunnel carries.
+            m_model->sendCommand(QString("client set enforce_network_mtu=1 network_mtu=%1")
+                                     .arg(m_model->networkMtuParam(val)));
         });
         m_networkMtuControl = mtuSpin;
         grid->addWidget(mtuSpin, 5, 1);
@@ -4782,7 +4795,11 @@ QWidget* RadioSetupDialog::buildAudioTab()
 
     // ── Audio Compression ────────────────────────────────────────────────
     {
-        auto* compGroup = new QGroupBox("Audio Compression (SmartLink)");
+        auto* compGroup = new QGroupBox("Audio Compression (SmartLink / tailnet)");
+        compGroup->setToolTip(QStringLiteral(
+            "Auto uses Opus for SmartLink and for a radio reached over a tailnet, and "
+            "uncompressed audio on the local network. Until you choose, a radio reached "
+            "over a tailnet gets Opus."));
         m_audioCompressionGroup = compGroup;
         compGroup->setVisible(!m_model->isConnected()
                               || m_model->backendCapabilities().hasAudioCompression);
@@ -4790,7 +4807,13 @@ QWidget* RadioSetupDialog::buildAudioTab()
         auto* compLayout = new QHBoxLayout(compGroup);
         compLayout->setSpacing(4);
 
+        // Never chosen: show what applies to this connection (Opus over a
+        // tailnet, uncompressed otherwise; RFC #6271 D4) without saving it.
         QString current = AppSettings::instance().value("AudioCompression", "None").toString();
+        if (!AppSettings::instance().contains(QStringLiteral("AudioCompression"))) {
+            current = (m_model->isConnected() && m_model->audioCompressionParam() == "opus")
+                ? QStringLiteral("Opus") : QStringLiteral("None");
+        }
 
         const QString btnStyle =
             "QPushButton { background: #1a2a3a; color: #c8d8e8; border: 1px solid #304050; "
@@ -4826,7 +4849,7 @@ QWidget* RadioSetupDialog::buildAudioTab()
         compLayout->addWidget(opusBtn);
         compLayout->addStretch();
 
-        auto* hint = new QLabel("Auto = Opus on SmartLink, uncompressed on LAN");
+        auto* hint = new QLabel("Auto = Opus on SmartLink or a tailnet, uncompressed on LAN");
         AetherSDR::ThemeManager::instance().applyStyleSheet(hint, "QLabel { color: {{color.text.label}}; font-size: 10px; }");
         compLayout->addWidget(hint);
 
@@ -6749,7 +6772,7 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
     AetherSDR::ThemeManager::instance().applyStyleSheet(cableList, "QListWidget { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.1}}; "
         "font-size: 11px; }"
         "QListWidget::item { padding: 4px; }"
-        "QListWidget::item:selected { background: {{color.accent}}; color: {{color.background.0}}; }");
+        "QListWidget::item:selected { background: palette(highlight); color: palette(highlighted-text); }");
     listLayout->addWidget(cableList);
     hbox->addWidget(listGroup);
 
@@ -7139,7 +7162,7 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
             "QListWidget { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.1}}; "
             "font-size: 11px; }"
             "QListWidget::item { padding: 4px; }"
-            "QListWidget::item:selected { background: {{color.accent}}; color: {{color.background.0}}; }");
+            "QListWidget::item:selected { background: palette(highlight); color: palette(highlighted-text); }");
         for (int b = 0; b < 8; ++b)
             bitIndexList->addItem(QString("Bit %1").arg(b));
         bitListVbox->addWidget(bitIndexList);
@@ -9468,7 +9491,8 @@ QWidget* RadioSetupDialog::buildQrzTab()
     auto* desc = new QLabel(
         "AetherSDR uses your QRZ.com account to look up station details — "
         "name, location, grid, and photo — for callsigns heard in the CW "
-        "decoder and entered in Tools → Callsign Lookup. An XML Logbook Data "
+        "decoder and entered in View → Callsign Lookup. Enable View → Show live CW "
+        "contacts to see decoded stations in a separate window. An XML Logbook Data "
         "subscription returns full details; a free account returns limited "
         "fields. Your password is stored in the operating system keychain, "
         "never in the settings file.");

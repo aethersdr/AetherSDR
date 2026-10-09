@@ -245,16 +245,17 @@ void testAdditionalClientRejected()
 
 void testUnavailableUpstream()
 {
-    quint16 deadPort = 0;
-    {
-        QTcpServer probe;
-        if (!probe.listen(QHostAddress::LocalHost, 0)) {
-            std::exit(kSkip);
-        }
-        deadPort = probe.serverPort();
+    QTcpServer probe;
+    if (!probe.listen(QHostAddress::LocalHost, 0)) {
+        std::exit(kSkip);
     }
+    const quint16 deadPort = probe.serverPort();
+    // Hold the probe while the proxy binds its ephemeral listener: once freed,
+    // the kernel may hand deadPort straight back to the proxy, whose
+    // self-connect guard then rightly refuses the config (#6290).
     TcpByteProxy proxy;
     startOrSkip(proxy, loopbackConfig(deadPort));
+    probe.close();
     Client client;
     check(client.connectTo(proxy.listeningPort()), "client connects");
     client.socket.write("lost");

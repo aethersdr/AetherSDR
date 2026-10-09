@@ -3966,7 +3966,7 @@ is applied automatically on connect and the user's real name is restored when th
 bridge stops.
 
 ### `qrz`
-QRZ.com callsign-lookup subsystem (CW decoder contact card + Tools → Callsign
+QRZ.com callsign-lookup subsystem (live CW contacts window + View → Callsign
 Lookup). Four actions; none touch the radio and none key TX.
 
 ```json
@@ -3995,9 +3995,16 @@ Lookup). Four actions; none touch the radio and none key TX.
   network only on miss/stale). Async: poll `qrz cached <call>` for arrival.
 - `spottext <text>` — feed text into the **CW callsign spotter** as if the CW
   decoder produced it. Drives the real detection path ("DE <call> <call>" →
-  service → contact card on the CW decode panel), so an agent can prove the
-  end-to-end screen-pop with no radio, no live CW, and — with a seeded cache —
-  no QRZ account. Verify with `grab callsignCard` / `dumpTree`.
+  service → live contacts window), so an agent can prove the
+  end-to-end display with no radio, no live CW, and — with a seeded cache —
+  no QRZ account. First enable View → **Show live CW contacts** (below
+  **Smart Spot Filtering**), or invoke the `showLiveCwContacts` action.
+  This defaults off independently of the QRZ account setting. When off, spots
+  remember the last heard callsign without opening a window or starting a
+  lookup. Enabling shows that station immediately; closing the window or its
+  **Close live contacts** button unchecks the action and keeps it off. Verify
+  with `grab liveCwContactsDialog` / `dumpTree`. The decoded-text pane keeps
+  its full width. Changes of decoder input clear the old live contact.
 
 Bare-line forms: `qrz status`, `qrz cached KI6BCJ`, `qrz lookup W1AW`,
 `qrz spottext CQ CQ DE KI6BCJ KI6BCJ K`.

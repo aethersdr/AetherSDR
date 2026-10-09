@@ -22,10 +22,12 @@
     the SDK the Linux/macOS GPU builds target when practical.
 
 .NOTES
-    The SDK installer is a large (~400 MB) code-signed LunarG executable with no
-    vendor-published checksum sidecar, so — unlike the other pinned deps — it is
-    version-pinned but not SHA-verified. The SPIRV-Headers tarball (tiny) is
-    SHA-256 pinned as usual.
+    Both downloads are SHA-256 pinned. The installer's hash is LunarG's own,
+    published at https://sdk.lunarg.com/sdk/sha/<version>/windows/<installer>.txt;
+    bumping $Version means updating $SdkSha from there. This matters beyond the
+    build: vulkan-1.dll from the SDK ships in the Windows payload, and the
+    release workflow Authenticode-signs any payload DLL that arrives without a
+    vendor signature (#6288).
 
 .EXAMPLE
     pwsh scripts/setup/setup-vulkan-sdk.ps1
@@ -38,6 +40,7 @@ $Version    = "1.4.350.0"
 $InstallDir = "C:\VulkanSDK\$Version"
 $Installer  = "vulkansdk-windows-X64-$Version.exe"
 $SdkUrl     = "https://sdk.lunarg.com/sdk/download/$Version/windows/$Installer"
+$SdkSha     = "855b27ba05d2d8119c5114c5d4ff870ca38f2c632b11e1bb9923b9b7e6ecfe7b"
 
 # SPIRV-Headers matching the SDK tag (header-only; installs a CMake config so
 # ggml-vulkan's find_package(SPIRV-Headers CONFIG REQUIRED) resolves).
@@ -71,6 +74,9 @@ if (-not (Test-Path "$InstallDir\Bin\glslc.exe")) {
     if (-not (Test-Path $Installer)) {
         Invoke-WebRequest -Uri $SdkUrl -OutFile $Installer
     }
+    # Checked even when a previous run left the installer here: it is about to
+    # be executed.
+    Confirm-Sha256 -Path $Installer -Expected $SdkSha
     Write-Host "Installing Vulkan SDK (silent) ..." -ForegroundColor Cyan
     # LunarG's Qt Installer Framework CLI: headless install of the default
     # components to $InstallDir.

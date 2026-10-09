@@ -4,6 +4,9 @@
 #include "models/AprsDigipeaterModel.h"
 #include <QPointer>
 #include <QScopeGuard>
+#include "core/AudioCompressionPolicy.h"
+#include "core/NetworkMtuPolicy.h"
+#include "core/TailnetAddress.h"
 #include "core/GuiClientIdentityPolicy.h"
 #include "AntennaAliasStore.h"
 #include "BandDefs.h"
@@ -2571,6 +2574,8 @@ RadioModel::RadioModel(QObject* parent)
     // responses to DvkPanel as commandFailed.  Before #3377 these were
     // fire-and-forget — the REC button toggled "checked" while the radio
     // had refused rec_start, leaving the user with no feedback.
+    connect(&m_dvkModel, &DvkModel::licenseRefusedChanged, this,
+            [this](bool) { emit licenseFeaturesChanged(); });
     connect(&m_dvkModel, &DvkModel::replyCommandReady, this,
             [this](const QString& cmd, const QString& verb, int id){
         sendCmd(cmd, [this, verb, id](int respVal, const QString& body){
@@ -2578,7 +2583,9 @@ RadioModel::RadioModel(QObject* parent)
         });
     });
     connect(&m_flexWaveformModel, &FlexWaveformModel::commandReady, this, [this](const QString& cmd){
-        sendCmd(cmd);
+        sendCmd(cmd, [this, cmd](int code, const QString& body) {
+            m_flexWaveformModel.handleCommandReply(cmd, code, body);
+        });
     });
     connect(&m_navtexModel, &NavtexModel::commandReady, this, [this](const QString& cmd){
         sendCmd(cmd);
@@ -5190,11 +5197,43 @@ void RadioModel::syncDigitalVoiceTxSelection(bool force)
 
 QString RadioModel::audioCompressionParam() const
 {
-    QString setting = AppSettings::instance().value("AudioCompression", "None").toString();
-    if (setting == "Opus") return "opus";
-    if (setting == "None") return "none";
-    // Auto: use Opus on WAN, uncompressed on LAN
-    return isWan() ? "opus" : "none";
+    auto& settings = AppSettings::instance();
+    const QString saved = settings.contains(QStringLiteral("AudioCompression"))
+        ? settings.value(QStringLiteral("AudioCompression"), QStringLiteral("None")).toString()
+        : QString();
+    return audioCompressionFor(saved, isWan(), !isWan() && isTailnetAddress(radioAddress()));
+}
+
+int RadioModel::networkMtuSetting() const
+{
+    return networkMtuFor(AppSettings::instance()
+                             .value("NetworkMtu", QString::number(kDefaultNetworkMtu))
+                             .toInt(),
+                         false);
+}
+
+int RadioModel::networkMtuParam() const
+{
+    const int saved = AppSettings::instance()
+                          .value("NetworkMtu", QString::number(kDefaultNetworkMtu))
+                          .toInt();
+    const int valid = networkMtuFor(saved, false);
+    if (valid != saved) {
+        qCWarning(lcProtocol) << "RadioModel: NetworkMtu setting" << saved
+                              << "is out of range; using" << valid;
+    }
+    const int mtu = networkMtuParam(valid);
+    if (mtu != valid) {
+        qCInfo(lcProtocol) << "RadioModel: network MTU" << valid << "capped at" << mtu
+                           << "because the path to the radio runs over Tailscale";
+    }
+    return mtu;
+}
+
+int RadioModel::networkMtuParam(int requested) const
+{
+    // SmartLink's socket is never on a tailnet.
+    return networkMtuFor(requested, !isWan() && m_pathOverTailnet);
 }
 
 void RadioModel::sendCwKey(bool down, const QString& debugSource,
@@ -7527,8 +7566,14 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
 
         sendCmd(QString("client station %1").arg(ourStationName()));
         sendCmd("client set send_reduced_bw_dax=1");
-        // Set network MTU for VITA-49 packets (matches FlexLib behavior)
-        int mtu = AppSettings::instance().value("NetworkMtu", "1450").toInt();
+        // Set network MTU for VITA-49 packets (matches FlexLib behavior),
+        // capped when the path runs over Tailscale. Decide that here, once:
+        // the connection's local address is written on its own thread, and
+        // this reply is ordered after the socket connected, so reading it now
+        // is safe where reading it later from Radio Setup would not be.
+        m_pathOverTailnet = reachedOverTailnet(
+            radioAddress(), m_connection ? m_connection->localAddress() : QHostAddress());
+        const int mtu = networkMtuParam();
         sendCmd(QString("client set enforce_network_mtu=1 network_mtu=%1").arg(mtu));
         // Enable keepalive (matches FlexLib behavior) — ping timer starts in startNetworkMonitor()
         sendCmd("keepalive enable");
@@ -8177,6 +8222,7 @@ void RadioModel::onDisconnected()
 
     m_tnfModel.clear();
     m_flexWaveformModel.clear();
+    m_dvkModel.reset();
     if (!m_licenseFeatures.isEmpty()) {
         m_licenseFeatures.clear();
         emit licenseFeaturesChanged();
@@ -9669,6 +9715,8 @@ bool RadioModel::handleRemoteAudioRxStreamStatus(const QString& object,
     case RadioStatusOwnership::RemoteAudioRxAction::Removed:
         qCDebug(lcProtocol) << "RadioModel: owned remote_audio_rx removed"
                             << streamText;
+        // Its VITA-49 sequence tracking restarts in handleDaxRxStreamRegistry(),
+        // which does that for every removed stream id.
         resetAudioStreamDiagnostics();
         logRemoteAudioRxSummary(QStringLiteral("status removed"));
         break;
@@ -10683,6 +10731,12 @@ void RadioModel::handleDaxRxStreamRegistry(const QString& object,
         // The removed form carries no type= (state-machines.md §7.6) — route
         // by id; a non-dax_rx id is a harmless no-op in the registry.
         m_panStream->unregisterDaxStream(stream.streamId);
+        // Every removed stream, whatever its type (remote_audio_rx has no
+        // registration in PanadapterStream): the radio can give a re-created
+        // stream the same id, and its first packet must not be measured
+        // against the old stream's last sequence count. Restarting only on
+        // removal never hides a gap in a stream that is still flowing.
+        m_panStream->restartStreamSequence(stream.streamId);
         // Re-arm the #1439 nudge one-shot (#4383): a genuine `stream remove`
         // (band switch / re-create) means the next create for a reused id must
         // be allowed to nudge again. The transient unbind echo does NOT reach
@@ -10952,6 +11006,10 @@ void RadioModel::onStatusReceived(const QString& object,
         if (changed) {
             m_licenseFeatures.insert(name, next);
             emit licenseFeaturesChanged();
+        }
+        // The radio's licensed status outranks an earlier 50004001 refusal.
+        if (next.enabled && name == DvkModel::kLicenseFeature) {
+            m_dvkModel.clearRefusal();
         }
         emit infoChanged();
         return;

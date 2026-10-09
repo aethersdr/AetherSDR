@@ -4,7 +4,9 @@
 #include <QPointer>
 #include <QTcpServer>
 #include <QTcpSocket>
+#include <QElapsedTimer>
 #include <QFile>
+#include <QHostAddress>
 #include <QTimer>
 
 class QSaveFile;
@@ -14,13 +16,16 @@ class QSaveFile;
 
 namespace AetherSDR {
 
+class DvkModel;
 class RadioModel;
 
-// Transfers DVK recordings between the radio and local WAV files.
+// Transfers DVK recordings between the radio and local WAV files (SmartSDR API
+// wiki, TCPIP-dvk).
 // Download: "dvk download id=N" -> radio replies with a TCP port; client listens
 // on it and the radio connects and streams the WAV.
-// Upload: "dvk upload id=N" -> port; client connects to radio:<port> and streams.
-// WAV: 2-channel, 32-bit float, 48 kHz, max 5 MB.
+// Upload: "dvk upload id=N" -> 0 (names the slot), then
+// "file upload <size> dvk_recording" -> port; client connects to radio:<port>
+// and streams. Imports are converted to 24 kHz mono 16-bit (DvkWavConverter).
 
 class DvkWavTransferTestAccess;
 
@@ -35,10 +40,13 @@ public:
     void upload(int slotId, const QString& filePath);
     void cancel();
     bool isTransferring() const { return m_transferring; }
+    // Transferring, or inside the radio file server's busy window after an
+    // upload (fw 4.2.20 answers 50000053 for ~2.2 s after the upload closes).
+    bool isBusy() const;
 
-    // Validate WAV file format without starting a transfer.
-    // Returns true if valid; on failure, sets error with details.
-    static bool validateWavFile(const QString& filePath, QString& error);
+    // Export accepts a connection only from the radio. An unknown radio
+    // address (not connected) accepts any peer.
+    static bool isRadioPeer(const QHostAddress& peer, const QHostAddress& radio);
 
 signals:
     void statusChanged(const QString& message);
@@ -72,6 +80,15 @@ private:
     void finalizeDownload();
 
     // Upload (client → radio)
+    std::function<void(int, const QString&)> makeUploadSlotCallback(quint64 generation,
+                                                                    quint64 requestId);
+    void handleUploadSlotAccepted(quint64 generation, quint64 requestId, int code);
+    void openUploadSocket(quint64 generation, int port);
+    // One retry on 42607 for a named port that refused or never answered,
+    // before any connection was made. False when it does not apply.
+    bool retryUploadOnDefaultPort(quint64 generation);
+    // A refusal on any transfer leg also reaches the DVK license latch.
+    void reportRefusal(int code);
     std::function<void(int, const QString&)> makeUploadPortCallback(quint64 generation,
                                                                     quint64 requestId);
     void handleUploadPortReceived(quint64 generation, quint64 requestId,
@@ -92,7 +109,19 @@ private:
     // Re-entrant calls (e.g. a second socket signal during teardown) are no-ops.
     void finish(bool success, const QString& message, bool discardDownload);
 
+    using ReplyCallback = std::function<void(int, const QString&)>;
+    bool canSendCommands() const;
+    // Every DVK transfer verb leaves through this one call.
+    void sendCommand(const QString& command, ReplyCallback callback);
+
     QPointer<RadioModel> m_model;
+    // Set only by tests, to observe the command sequence without a radio.
+    std::function<void(const QString&, ReplyCallback)> m_commandSender;
+    // The `file upload … dvk_recording` leg goes through RadioModel's
+    // requestFileUploadPort(); tests replace it here.
+    std::function<void(qint64, ReplyCallback)> m_uploadPortRequester;
+    // Admission and the license latch live on the DVK model.
+    QPointer<DvkModel> m_dvk;
     QTcpServer*  m_server{nullptr};    // download: we listen
     QTcpSocket*  m_client{nullptr};    // download: accepted socket / upload: our socket
     QSaveFile*   m_file{nullptr};      // download: staged output file
@@ -103,6 +132,10 @@ private:
     QByteArray   m_uploadData;
     qint64       m_bytesSent{0};      // bytes confirmed drained by QTcpSocket
     qint64       m_bytesAccepted{0};  // bytes accepted by QTcpSocket::write()
+    int          m_uploadPort{0};
+    bool         m_uploadFallbackTried{false};
+    bool         m_uploadConnected{false};
+    QElapsedTimer m_sinceUpload;      // started when an upload ends
     Direction    m_direction{None};
     bool         m_transferring{false};
     bool         m_cancelled{false};
@@ -114,6 +147,9 @@ private:
     quint64      m_connectTimeoutGeneration{0};
 
     static constexpr qint64 MAX_FILE_SIZE = 5'000'000;  // 5MB per FlexLib
+    static constexpr qint64 MAX_IMPORT_FILE_SIZE = 64'000'000;  // source WAV, pre-conversion
+    static constexpr quint16 DEFAULT_UPLOAD_PORT = 42607;
+    static constexpr qint64 FILE_SERVER_SETTLE_MS = 3000;
     static constexpr int CONNECT_TIMEOUT_MS = 10'000;
     static constexpr int UPLOAD_CHUNK_SIZE = 65536;      // 64KB chunks
 };

@@ -480,8 +480,20 @@ public:
     // channelId(); this spelling says only "a test wrote it first".
     [[nodiscard]] int channelIdForTest() const noexcept { return channelId(); }
 
+    // Tests reach WDSP only through this class: under AETHER_SHARED_CORE
+    // libaethercore.so exports none of WDSP's symbols, and a test that links
+    // aether_wdsp itself gets a second WDSP copy the core never touches.
     static uint64_t allocationSequenceForTest() noexcept;
     static uint64_t outstandingAllocationsForTest() noexcept;
+    // This thread's WDSP allocation count (wdspPortThreadAllocationSequence).
+    static uint64_t threadAllocationSequenceForTest() noexcept;
+    // Test only, a refusal probe: WDSP's OpenChannelWithExchangeDepth with the
+    // prepared-WBFM geometry, under the same lock and setup as open(). A call
+    // WDSP would accept (id 0..31 with depth 2..8) would open a channel nothing
+    // owns or rebuild a live one, so it returns kOpenProbeWouldOpen without
+    // reaching WDSP. Otherwise returns WDSP's result, 0 for its refusal.
+    static constexpr int kOpenProbeWouldOpen = -1;
+    [[nodiscard]] static int openWithExchangeDepthForTest(int channelId, int exchangeDepth) noexcept;
     // Process-global, test only (#5734, AetherSDR WDSP patch 13): the DSP
     // worker sleeps this long right after it has released a blocked
     // processIq(). That is the window in which, before patch 13, the host

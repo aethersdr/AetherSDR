@@ -1,5 +1,4 @@
 #include "core/dsp/WdspChannel.h"
-#include "../third_party/wdsp/include/aether_wdsp.h"
 
 #include <algorithm>
 #include <array>
@@ -607,14 +606,21 @@ bool exchangePreparation()
     bool ok = true;
     const std::uint64_t allocations = WdspChannel::allocationSequenceForTest();
     for (const int depth : {-1, 0, 1, 9, std::numeric_limits<int>::max()}) {
-        ok = require(OpenChannelWithExchangeDepth(channel->channelId(), 2048, 1024,
-                         384000, 192000, 48000, 0, 0, 0.01, 0.025, 0.0, 0.01, 0, depth) == 0,
+        ok = require(WdspChannel::openWithExchangeDepthForTest(channel->channelId(), depth) == 0,
                      "invalid prepared depth refuses before changing a live channel") && ok;
     }
     for (const int id : {-1, 32}) {
-        ok = require(OpenChannelWithExchangeDepth(id, 2048, 1024,
-                         384000, 192000, 48000, 0, 0, 0.01, 0.025, 0.0, 0.01, 0, 8) == 0,
+        ok = require(WdspChannel::openWithExchangeDepthForTest(id, 8) == 0,
                      "prepared creation rejects invalid channel identity") && ok;
+    }
+    // A probe WDSP would accept never reaches it: neither the live channel's
+    // slot nor a free one is opened or rebuilt.
+    for (const int id : {channel->channelId(), 31}) {
+        for (const int depth : {2, 8}) {
+            ok = require(WdspChannel::openWithExchangeDepthForTest(id, depth)
+                             == WdspChannel::kOpenProbeWouldOpen,
+                         "test probe refuses a preparation WDSP would accept") && ok;
+        }
     }
     ok = require(WdspChannel::allocationSequenceForTest() == allocations
                  && channel->outputSamplesReadyForTest() == 7 * 256,

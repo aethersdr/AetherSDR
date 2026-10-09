@@ -9,7 +9,32 @@ QMap<QString, QString> CommandParser::parseKVs(const QString& body)
 {
     QMap<QString, QString> result;
     // Body may look like: "freq=14.225000 mode=USB filter_lo=-1500 filter_hi=1500"
-    for (const QString& token : body.split(' ', Qt::SkipEmptyParts)) {
+    // A quoted value may contain spaces (`dvk … name="CQ Contest"`) and is kept
+    // whole, quotes included, up to the token that closes it: the next token
+    // holding a quote, unless that token opens another quoted field
+    // (`key="text…`). A token whose only quote is its last character always
+    // closes, so a name may end in '=' (`name="CQ a="`); on a malformed line
+    // that same shape (`label="` alone) is read as the close. A quote left
+    // open splits as before, so it cannot swallow the keys after it.
+    const auto closesQuotedValue = [](const QString& token) {
+        return !token.contains(QLatin1String("=\""))
+            || (token.endsWith(QLatin1Char('"')) && token.count(QLatin1Char('"')) == 1);
+    };
+    const QStringList tokens = body.split(' ', Qt::SkipEmptyParts);
+    for (qsizetype i = 0; i < tokens.size(); ++i) {
+        QString token = tokens[i];
+        if (token.contains(QLatin1String("=\"")) && token.count('"') == 1) {
+            qsizetype end = i + 1;
+            while (end < tokens.size() && !tokens[end].contains('"')) {
+                ++end;
+            }
+            if (end < tokens.size() && closesQuotedValue(tokens[end])) {
+                for (qsizetype j = i + 1; j <= end; ++j) {
+                    token += QLatin1Char(' ') + tokens[j];
+                }
+                i = end;
+            }
+        }
         const int eq = token.indexOf('=');
         if (eq < 0) {
             // bare word — store with empty value so callers can detect presence

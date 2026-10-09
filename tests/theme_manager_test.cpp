@@ -8,10 +8,15 @@
 #include <QApplication>
 #include <QBrush>
 #include <QGradient>
+#include <QHeaderView>
 #include <QHoverEvent>
+#include <QImage>
 #include <QLabel>
+#include <QRegularExpression>
 #include <QSlider>
 #include <QStackedWidget>
+#include <QTreeWidget>
+#include <QTreeWidgetItem>
 #include <QVBoxLayout>
 #include <QSignalSpy>
 #include <QStandardPaths>
@@ -1653,6 +1658,80 @@ int main(int argc, char** argv)
         sendHoverEnter(styled);
         EXPECT_TRUE(styled->hoverEventsSeen == 0);
         tm.setActiveTheme("Default Dark");
+    }
+
+    // ── App stylesheet: tree-view rows use the theme's backgrounds (#5934) ──
+    // Without alternate-background-color, every other row kept the native
+    // AlternateBase (near-white) under the theme's light text.
+    {
+        auto& tm = ThemeManager::instance();
+        QWidget host;
+        applyAppTheme(&host);
+        auto* tree = new QTreeWidget(&host);
+        tree->setAlternatingRowColors(true);
+        tree->setHeaderHidden(true);
+        for (int i = 0; i < 4; ++i) {
+            new QTreeWidgetItem(tree, {QStringLiteral("row %1").arg(i)});
+        }
+        tree->setGeometry(0, 0, 240, 140);
+        host.resize(240, 140);
+        host.show();
+        QApplication::processEvents();
+
+        const QImage rows = tree->viewport()->grab().toImage();
+        // Rows 2 and 3, not 0 and 1: row 0 is the current item and carries
+        // the style's focus tint. Sample the right end, clear of the text.
+        const QRect row2 = tree->visualItemRect(tree->topLevelItem(2));
+        const QRect row3 = tree->visualItemRect(tree->topLevelItem(3));
+        const QColor base = rows.pixelColor(row2.right() - 4, row2.center().y());
+        const QColor alternate = rows.pixelColor(row3.right() - 4, row3.center().y());
+        EXPECT_TRUE(base.rgb() == tm.color(QStringLiteral("color.background.0")).rgb());
+        EXPECT_TRUE(alternate.rgb() == tm.color(QStringLiteral("color.background.1")).rgb());
+        // Selection stays with the palette: a fixed text colour on the accent
+        // is unreadable when a custom theme's accent is dark.
+        EXPECT_TRUE(!appStylesheetTemplate().contains(QRegularExpression(
+            QStringLiteral(R"((QTreeView|QTreeWidget|QListView|QListWidget)[^{]*::item[^{]*:selected)"))));
+    }
+
+    // ── Theme drops: only local .aethertheme / .json files are importable ──
+    // dropEvent re-checks this, since a drop need not follow an accepted
+    // dragEnter.
+    {
+        const QString dir = QDir::tempPath();
+        EXPECT_TRUE(ThemeManager::isImportableThemeFile(QUrl::fromLocalFile(dir + "/a.aethertheme")));
+        EXPECT_TRUE(ThemeManager::isImportableThemeFile(QUrl::fromLocalFile(dir + "/a.JSON")));
+        EXPECT_TRUE(!ThemeManager::isImportableThemeFile(QUrl::fromLocalFile(dir + "/a.png")));
+        EXPECT_TRUE(!ThemeManager::isImportableThemeFile(QUrl::fromLocalFile(dir + "/aethertheme")));
+        EXPECT_TRUE(!ThemeManager::isImportableThemeFile(QUrl(QStringLiteral("https://example.com/a.aethertheme"))));
+    }
+
+    // ── App stylesheet: tree-view header sections keep their separators ──
+    // The header shares color.background.1 with the alternate rows, so the
+    // right and bottom section borders are what set it apart.
+    {
+        auto& tm = ThemeManager::instance();
+        QWidget host;
+        applyAppTheme(&host);
+        auto* tree = new QTreeWidget(&host);
+        tree->setColumnCount(2);
+        tree->setHeaderLabels({QStringLiteral("Object"), QStringLiteral("Value")});
+        tree->header()->setStretchLastSection(false);
+        tree->header()->resizeSection(0, 100);
+        tree->header()->resizeSection(1, 100);
+        tree->setGeometry(0, 0, 240, 140);
+        host.resize(240, 140);
+        host.show();
+        QApplication::processEvents();
+
+        const QImage header = tree->header()->grab().toImage();
+        const QRgb border = tm.color(QStringLiteral("color.border.strong")).rgb();
+        const int midY = header.height() / 2;
+        const int sectionRight = tree->header()->sectionViewportPosition(0)
+                               + tree->header()->sectionSize(0) - 1;
+        EXPECT_TRUE(header.pixelColor(sectionRight, midY).rgb() == border);
+        EXPECT_TRUE(header.pixelColor(50, header.height() - 1).rgb() == border);
+        EXPECT_TRUE(header.pixelColor(sectionRight - 3, 1).rgb()
+                    == tm.color(QStringLiteral("color.background.1")).rgb());
     }
 
     if (g_failures == 0) {

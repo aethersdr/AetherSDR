@@ -1,0 +1,8 @@
+[09:14:02.101] INF default: GpuSelector: render GPU -> Auto (system default — no override)
+[09:14:02.101] INF default: QtAudioBackendGuard: PipeWire context OK; Qt's default backend left in place
+[09:14:02.140] INF aether.sysinfo: OS: Ubuntu 24.04.3 LTS kernel 6.8.0-85-generic arch x86_64
+[09:14:02.140] INF aether.sysinfo: CPU: AMD Ryzen 7 5800X 8-Core Processor features: SSE42 AVX AVX2 FMA F16C BMI2
+[09:14:02.140] INF aether.sysinfo: RAM: 32012 MB
+[09:14:02.141] INF aether.sysinfo: Speech engine CPU baseline: x86-64-v3
+[09:14:02.152] DBG default: Starting AetherSDR 26.10.1
+[09:14:05.140] INF aether.vita49: PanadapterStream: VITA UDP receive buffer requested=8388608 granted=425984 (capped by net.core.rmem_max — raise it for more headroom)

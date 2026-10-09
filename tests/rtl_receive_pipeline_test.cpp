@@ -1,6 +1,6 @@
 #include "core/backends/rtl/RtlReceivePipeline.h"
+#include "core/dsp/WdspChannel.h"
 #include "CallbackAllocationProbe.h"
-#include <aether_wdsp.h>
 #include <QCoreApplication>
 #include <QThreadPool>
 #include <array>
@@ -522,7 +522,7 @@ int main(int argc, char** argv)
     std::array<std::uint64_t, 4> next{};
     std::uint64_t speakerNext = 0;
     Pipeline::Packet packet;
-    (void)wdspPortThreadAllocationSequence(); // materialize TLS before measurement
+    (void)WdspChannel::threadAllocationSequenceForTest(); // materialize the core WDSP's TLS before measurement
     const auto start = std::chrono::steady_clock::now();
     for (std::size_t first = 0; first < total;) {
         const std::size_t size = std::min<std::size_t>(8192, total - first);

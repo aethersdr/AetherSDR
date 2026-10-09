@@ -1,4 +1,5 @@
 #include "UpdateChecker.h"
+#include "NetworkDiagnostics.h"
 #include "VersionNumber.h"
 
 #include <QCoreApplication>
@@ -30,6 +31,7 @@ void UpdateChecker::checkNow()
     req.setTransferTimeout(15000);
 
     auto* reply = m_nam.get(req);
+    NetworkDiagnostics::watch(reply, "update check");
     connect(reply, &QNetworkReply::finished, this, [this, reply]() {
         reply->deleteLater();
         m_inFlight = false;

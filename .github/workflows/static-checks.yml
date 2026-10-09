@@ -229,6 +229,24 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/test_gen_seam_probe_table.py
 
+      # ── The user docs' Generated Reference pages (docs/user/docs/generated/)
+      # are parsed from the C++ source: shortcuts, MIDI/FlexControl/Ulanzi/HID
+      # actions, log categories, TCI commands. docs.yml only runs on PRs that
+      # touch docs/user/, so a source change that renames an action would
+      # leave the page stale with no signal; this step is that signal. The fix
+      # is to re-run the generator and commit the pages with the change.
+      - name: User docs generated reference
+        if: ${{ !cancelled() }}
+        run: python tools/docs/gen_reference.py --check
+
+      # ── The docs site's Log Analyzer rules each cite the source line that
+      # writes the log message they match. A reworded or moved message fails
+      # here, for the same reason as the step above. Node is preinstalled on
+      # ubuntu-latest; the test is stdlib-only.
+      - name: Log Analyzer rules cite live log messages
+        if: ${{ !cancelled() }}
+        run: node tools/docs/test_log_rules.mjs
+
       # ── Test registration stays in tests/tests.cmake. The root CMakeLists.txt
       # was 6,357 lines, over half of it 300+ test-target declarations; the split
       # cut it to ~2,780. tests/tests.cmake fails the CONFIGURE step if a test
@@ -239,6 +257,21 @@ jobs:
       - name: Test registration location
         if: ${{ !cancelled() }}
         run: python tools/check_test_registration.py --strict
+
+      # Tests reach WDSP only through core/dsp/WdspChannel.h: no test source
+      # includes a WDSP header and no test links aether_wdsp, bar a commented
+      # allowlist of pure WDSP unit tests. With AETHER_SHARED_CORE=ON (the
+      # sanitizer lanes) libaethercore.so keeps WDSP's symbols hidden, so a
+      # direct call only links in the static build every PR uses (#6283/#6284),
+      # and linking aether_wdsp gives the test a second WDSP the core never
+      # touches. Stdlib-only, sub-second.
+      - name: WDSP test links
+        if: ${{ !cancelled() }}
+        run: python tools/check_wdsp_test_links.py --strict
+
+      - name: WDSP test-links checker self-test
+        if: ${{ !cancelled() }}
+        run: python tools/test_check_wdsp_test_links.py
 
       # ── #5262 M2: the capability descriptor's boolean population is FROZEN.
       # A new capability lands as a per-feature record (std::optional<Record>:

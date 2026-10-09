@@ -57,7 +57,7 @@ global `FramelessWindow` setting unless there is a specific reason not to:
 - Add a `FramelessWindowTitleBar` at the top of the dialog/window layout.
 - Install `FramelessResizer::install(this)` for resizable popouts.
 - Add `setFramelessMode(bool on)` using the same pattern as
-  `NetworkDiagnosticsDialog`: capture geometry, toggle
+  `PersistentDialog::setFramelessMode()`: capture geometry, toggle
   `Qt::FramelessWindowHint`, restore geometry only if the window was already
   visible, show again only if it was already visible, and hide/show the custom
   title bar based on the setting.
@@ -109,8 +109,8 @@ PR in `Static checks` and emits inline diff annotations; it is warning-only.
   (`src/gui/MeterSmoother.h`). Don't write new envelope-follower code.
 - **User-facing names match the on-screen labels.** In prose (issue comments,
   README, What's-New strings, error toasts, support requests) call a control
-  by the label the user sees — e.g. the **DIGI applet** (class `CatApplet`),
-  Help → Support logging **Discovery / Commands / Status**.
+  by the label the user sees — e.g. the **CAT applet** (class `CatControlApplet`),
+  Help → Support & Diagnostics… → **Discovery**, **Connection / Commands**, **Protocol / Status**.
 - **Region-aware band data — read from `BandPlanManager`, not `BandDefs.h`.**
   Band edges, segment sizes, and per-band metadata come from the active plan
   (`AppSettings["BandPlanName"]` + `resources/bandplans/`). `BandDefs.h::kBands[]`

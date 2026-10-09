@@ -2,6 +2,7 @@
 
 #include "FramelessMoveHelper.h"
 
+#include "core/AppSettings.h"
 #include "core/ThemeManager.h"
 
 #include <QConicalGradient>
@@ -89,14 +90,98 @@ void CanonWindow::resizeEvent(QResizeEvent* event)
     m_ground = QPixmap();
     m_close->move(width() - kCloseSize - kCloseMargin, kCloseMargin);
     m_close->raise();
+    // Native-window creation on first show() delivers move and resize events
+    // before showEvent(); saving those would overwrite the last session's
+    // geometry with the default one, so nothing is saved until placed.
+    if (m_placed && !m_restoringGeometry) {
+        saveGeometryToSettings();
+    }
+}
+
+void CanonWindow::moveEvent(QMoveEvent* event)
+{
+    QDialog::moveEvent(event);
+    if (m_placed && !m_restoringGeometry) {
+        saveGeometryToSettings();
+    }
+}
+
+void CanonWindow::closeEvent(QCloseEvent* event)
+{
+    // Move and resize saves are in memory; closing flushes them to disk.
+    if (!m_geometryKey.isEmpty()) {
+        saveGeometryToSettings();
+        AppSettings::instance().save();
+    }
+    QDialog::closeEvent(event);
+}
+
+// Saved as "x,y,width,height" and applied with move() and resize():
+// QWidget::restoreGeometry() reports success on Wayland without applying the
+// size, so a window resized there came back at its constructed size. A value
+// in the older saveGeometry() form (from before Network Diagnostics was a
+// CanonWindow) is read once and replaced on the next save.
+void CanonWindow::saveGeometryToSettings()
+{
+    if (m_geometryKey.isEmpty()) {
+        return;
+    }
+    const QRect g = geometry();
+    AppSettings::instance().setValue(m_geometryKey, QStringLiteral("%1,%2,%3,%4")
+        .arg(g.x()).arg(g.y()).arg(g.width()).arg(g.height()));
+}
+
+CanonWindow::Restored CanonWindow::restoreGeometryFromSettings()
+{
+    const QString saved = AppSettings::instance().value(m_geometryKey).toString();
+    if (saved.isEmpty()) {
+        return Restored::Nothing;
+    }
+    const QStringList parts = saved.split(QLatin1Char(','));
+    if (parts.size() == 4) {
+        bool ok[4]{};
+        const int x = parts[0].toInt(&ok[0]);
+        const int y = parts[1].toInt(&ok[1]);
+        const int w = parts[2].toInt(&ok[2]);
+        const int h = parts[3].toInt(&ok[3]);
+        if (!(ok[0] && ok[1] && ok[2] && ok[3]) || w <= 0 || h <= 0) {
+            return Restored::Nothing;
+        }
+        resize(QSize(w, h).expandedTo(minimumSize()));
+        // A position on a screen that's gone (an unplugged monitor) is not
+        // restored: the window keeps its size and centres instead. Wayland
+        // places top-level windows itself and ignores the move either way.
+        if (const QScreen* s = QGuiApplication::screenAt(QPoint(x, y) + QPoint(w / 2, h / 2))) {
+            if (s->availableGeometry().intersects(QRect(x, y, w, h))) {
+                move(x, y);
+                return Restored::SizeAndPosition;
+            }
+        }
+        return Restored::SizeOnly;
+    }
+    return restoreGeometry(QByteArray::fromBase64(saved.toLatin1()))
+        ? Restored::SizeAndPosition : Restored::Nothing;
 }
 
 void CanonWindow::showEvent(QShowEvent* event)
 {
-    QDialog::showEvent(event);
     if (m_placed) {
+        QDialog::showEvent(event);
         return;
     }
+    // A saved geometry is applied before QDialog::showEvent(), as
+    // PersistentDialog does, so the window maps at its saved size.
+    if (!m_geometryKey.isEmpty()) {
+        m_restoringGeometry = true;
+        const Restored restored = restoreGeometryFromSettings();
+        m_restoringGeometry = false;
+        if (restored == Restored::SizeAndPosition) {
+            m_placed = true;
+            QDialog::showEvent(event);
+            return;
+        }
+    }
+    QDialog::showEvent(event);
     m_placed = true;
     // Centre over the parent window (or the screen) the first time it opens.
     QRect anchor;

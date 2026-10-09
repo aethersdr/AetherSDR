@@ -7098,7 +7098,7 @@ bool VfoWidget::eventFilter(QObject* obj, QEvent* event)
             ScopedChildWidget<QMenu> menuOwner(this);
             QMenu& menu = *menuOwner.get();
             AetherSDR::ThemeManager::instance().applyStyleSheet(&menu, "QMenu { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid #304060; }"
-                "QMenu::item:selected { background: {{color.accent}}; color: {{color.background.0}}; }");
+                "QMenu::item:selected { background: palette(highlight); color: palette(highlighted-text); }");
             const QPointer<SliceModel> slice(m_slice);
             menu.addAction("Add Spot", this, [this, slice] {
                 if (!slice || m_slice != slice.data()) {

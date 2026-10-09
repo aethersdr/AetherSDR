@@ -1,4 +1,5 @@
 #include "KiwiPublicDirectory.h"
+#include "NetworkDiagnostics.h"
 
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -290,6 +291,7 @@ void KiwiPublicDirectory::fetch()
     req.setHeader(QNetworkRequest::UserAgentHeader, userAgent());
     req.setTransferTimeout(kDirectoryFetchTimeoutMs);
     QNetworkReply* reply = m_net->get(req);
+    NetworkDiagnostics::watch(reply, "KiwiSDR public list");
 
     // Bound the transfer where the bytes actually enter (Principle VII):
     // QNetworkReply buffers the whole response, so a cap checked only in

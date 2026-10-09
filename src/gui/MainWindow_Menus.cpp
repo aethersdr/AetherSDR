@@ -8,6 +8,7 @@
 // window links to.
 
 #include "MainWindow.h"
+#include "models/CwDecodeSettings.h"
 #include "AetherBuildIdentity.h"   // generated at build time (#5804)
 
 #include "workspace/WorkspaceController.h"
@@ -19,6 +20,7 @@
 #include "AetherialAudioStrip.h"
 #include "AppletPanel.h"
 #include "DaxApplet.h"
+#include "DocsLinks.h"
 #include "PanadapterApplet.h"
 #include "PanadapterStack.h"
 #include "RadioSetupDialog.h"
@@ -310,7 +312,16 @@ void MainWindow::buildMenuBar()
                                        // on a radio with no installable waveforms
     waveformsAct->setMenuRole(QAction::NoRole);
     connect(waveformsAct, &QAction::triggered, this, [this] {
-        showOrRaisePersistent(m_waveformsDialog, &m_radioModel);
+        // A CanonWindow (style guide, RFC #6226): it isn't a persistent
+        // dialog, so it's created or raised directly, like About.
+        if (!m_waveformsDialog) {
+            auto* dlg = new WaveformsDialog(&m_radioModel, this);
+            dlg->setAttribute(Qt::WA_DeleteOnClose);
+            m_waveformsDialog = dlg;
+        }
+        m_waveformsDialog->show();
+        m_waveformsDialog->raise();
+        m_waveformsDialog->activateWindow();
     });
 
     fileMenu->addSeparator();
@@ -1401,6 +1412,16 @@ void MainWindow::buildMenuBar()
         AppSettings::instance().save();
     });
 
+    m_liveCwContactsAction = viewMenu->addAction(tr("Show live CW contacts"));
+    m_liveCwContactsAction->setObjectName(QStringLiteral("showLiveCwContacts"));
+    m_liveCwContactsAction->setMenuRole(QAction::NoRole);
+    m_liveCwContactsAction->setCheckable(true);
+    m_liveCwContactsAction->setChecked(CwDecodeSettings::liveContactsEnabled());
+    m_liveCwContactsAction->setToolTip(tr("Show station information heard in CW in a separate window."));
+    m_liveCwContactsAction->setStatusTip(tr("Show live CW contacts without covering decoded text. Close the contacts window to turn this off."));
+    connect(m_liveCwContactsAction, &QAction::toggled,
+            this, &MainWindow::setLiveCwContactsVisible);
+
     auto* fpsMetersAct = viewMenu->addAction("FPS Meters");
     fpsMetersAct->setCheckable(true);
     fpsMetersAct->setShortcut(QKeySequence("Ctrl+F"));
@@ -1624,6 +1645,12 @@ void MainWindow::buildMenuBar()
     refreshWindowMenu();
 
     auto* helpMenu = menuBar()->addMenu("&Help");
+
+    // ── Documentation ─────────────────────────────────────────────────────
+    // The online manual (docs.aethersdr.com), its printable PDF, and the Log
+    // Analyzer. These open the browser; the bundled guides below work offline.
+    DocsLinks::addHelpMenuActions(helpMenu);
+    helpMenu->addSeparator();
 
     // ── Learn & news ──────────────────────────────────────────────────────
     // Orientation first: how to get going, the full manual, and what changed.

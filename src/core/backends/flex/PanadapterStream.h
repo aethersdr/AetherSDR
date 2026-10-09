@@ -5,6 +5,7 @@
 
 #include "core/PacketLossConcealment.h"
 #include "core/VitaBinCoverage.h"
+#include "core/backends/flex/VitaSequenceLossReport.h"
 
 #include <QObject>
 #include <QUdpSocket>
@@ -86,6 +87,13 @@ public:
     void unregisterPanStream(quint32 streamId);
     void unregisterWfStream(quint32 streamId);
     void clearRegisteredStreams();
+    // The stream's next packet starts a new instance: no sequence error
+    // against the previous instance's last count, and the log line's counts
+    // and window start over. The unregister*() calls and clearRegisteredStreams()
+    // do this; RadioModel calls it for every stream the radio reports removed,
+    // which covers streams with no registration here (remote_audio_rx). Takes
+    // m_statsMutex.
+    void restartStreamSequence(quint32 streamId);
 
     // Layer A radio-side orphan detector (#3856): processDatagram() records any
     // FFT/waterfall packet whose stream id was registered earlier this session but
@@ -216,6 +224,7 @@ private slots:
 
 private:
     friend class PcmCompatibilityTestAccess;
+    friend class VitaSequenceLossLogTestAccess;
     PcmProducer m_pcmProducer;
     std::map<quint32, std::unique_ptr<PcmProducer>> m_daxPcm;
     void publishLegacyDaxAudio(quint32 streamId, int channel, const QByteArray& pcm);
@@ -300,10 +309,19 @@ private:
     QMap<quint32, WaterfallFrame> m_wfFrames;  // per-stream waterfall frame assembly
 
     // Per-stream packet sequence tracking (4-bit count in VITA-49 word0 bits 19:16)
+    // errorCount/totalCount are cumulative for the life of the process (the
+    // status bar and Network Diagnostics totals). The rest describes the
+    // current instance of the stream and is restarted when the stream is torn
+    // down, because the radio can reuse the id: see restartStreamSequence().
+    void restartAllStreamSequences();
     struct StreamStats {
         int  lastSeq{-1};
         int  errorCount{0};
         int  totalCount{0};
+        bool started{false};       // this instance has seen its first packet
+        int  startErrorCount{0};   // errorCount when this instance started
+        int  startTotalCount{0};   // totalCount before its first packet
+        VitaSequenceLossLimiter lossLog;
     };
 
 public:
@@ -364,6 +382,8 @@ private:
     QMap<quint32, FrameAssembler> m_frames;  // per-stream FFT frame assembly
     QMap<quint32, StreamStats> m_streamStats;  // keyed by stream ID
     mutable QMutex m_statsMutex;
+    QElapsedTimer m_seqLossClock;  // time base for StreamStats::lossLog; read only on new streams and errors
+    VitaSequenceLossBudget m_seqLossBudget;  // all streams' lines together; under m_statsMutex
     CategoryStats m_catStats[CatCount]{};
 
     struct AudioStreamTracker {

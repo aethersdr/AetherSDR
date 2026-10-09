@@ -1,7 +1,11 @@
 #pragma once
 
 #include <QGuiApplication>
+#include <QJsonObject>
 #include <QMargins>
+#include <QOperatingSystemVersion>
+#include <QRect>
+#include <QString>
 #include <QWidget>
 #include <QWindow>
 #include <QtMath>
@@ -69,6 +73,78 @@ inline bool usesNativeCaption(Qt::WindowFlags flags, const QString& platform)
 inline bool usesNativeCaption(const QWidget* window)
 {
     return usesNativeCaption(window->windowFlags(), QGuiApplication::platformName());
+}
+
+// Windows 10 only: Qt's expanded client area leaves a resize border on the
+// left, right and bottom as non-client, which Windows 10 paints as a light
+// strip (#6266), so MainWindow::nativeEvent claims the whole window as client
+// area. Windows 11 draws that border invisibly and keeps Qt's answer.
+inline bool claimsWholeWindowAsClient(Qt::WindowFlags flags, const QOperatingSystemVersion& os)
+{
+    return flags.testFlag(Qt::ExpandedClientAreaHint) && os < QOperatingSystemVersion::Windows11;
+}
+
+// Windows: the native window rect that gives `client`, keeping the frame the
+// window has now (`windowNow` around `clientNow`). All in physical pixels, as
+// GetWindowRect / GetClientRect report them. (#6303)
+inline QRect windowRectForClient(const QRect& client, const QRect& windowNow, const QRect& clientNow)
+{
+    const int left = clientNow.x() - windowNow.x();
+    const int top = clientNow.y() - windowNow.y();
+    const int right = (windowNow.x() + windowNow.width()) - (clientNow.x() + clientNow.width());
+    const int bottom = (windowNow.y() + windowNow.height()) - (clientNow.y() + clientNow.height());
+    return QRect(client.x() - left, client.y() - top,
+                 client.width() + left + right, client.height() + top + bottom);
+}
+
+// Windows: the main window's native client rects, one per window role
+// ("main", "fullMode", "minimalMode"), each with the device pixel ratio it
+// was measured at. Persisted as one object under kNativeGeometryKey
+// (Principle V). Reading gives an invalid rect when the role is missing or
+// malformed, out of range, or measured at another ratio (UI or display scale
+// changed), so the caller falls back to Qt's own restore. (#6303)
+inline const QString kNativeGeometryKey = QStringLiteral("MainWindowNativeGeometry");
+inline constexpr int kNativeGeometrySchemaVersion = 1;
+// Win32 window coordinates are 16-bit signed (GDI); beyond that the saved
+// value is corrupt, not a real window.
+inline constexpr int kMaxNativeCoordinate = 32767;
+
+inline QJsonObject withNativeClientRect(QJsonObject doc, const QString& role,
+                                        const QRect& client, qreal dpr)
+{
+    doc.insert(QStringLiteral("schemaVersion"), kNativeGeometrySchemaVersion);
+    doc.insert(role, QJsonObject{
+        {QStringLiteral("x"), client.x()},
+        {QStringLiteral("y"), client.y()},
+        {QStringLiteral("width"), client.width()},
+        {QStringLiteral("height"), client.height()},
+        {QStringLiteral("dpr"), dpr},
+    });
+    return doc;
+}
+
+inline QRect savedNativeClientRect(const QJsonObject& doc, const QString& role, qreal dpr)
+{
+    if (doc.value(QStringLiteral("schemaVersion")).toInt() != kNativeGeometrySchemaVersion) {
+        return {};
+    }
+    const QJsonObject r = doc.value(role).toObject();
+    const QJsonValue savedDpr = r.value(QStringLiteral("dpr"));
+    if (!savedDpr.isDouble() || !qFuzzyCompare(savedDpr.toDouble(), dpr)) {
+        return {};
+    }
+    int n[4] = {};
+    const char* const fields[4] = {"x", "y", "width", "height"};
+    for (int i = 0; i < 4; ++i) {
+        const QJsonValue v = r.value(QLatin1String(fields[i]));
+        const double d = v.toDouble();
+        if (!v.isDouble() || d != qFloor(d)
+            || d < -kMaxNativeCoordinate || d > kMaxNativeCoordinate) {
+            return {};
+        }
+        n[i] = int(d);
+    }
+    return QRect(n[0], n[1], n[2], n[3]);  // invalid when empty
 }
 
 inline QMargins contentInsets(const QWidget* window)

@@ -5,8 +5,8 @@
 | Platform | Signing Method |
 |----------|---------------|
 | Linux AppImage | GPG detached signature (`.asc`) |
-| Windows .exe | GPG detached signature (`.asc`) |
-| Windows .zip | GPG detached signature (`.asc`) |
+| Windows .exe | Authenticode + GPG detached signature (`.asc`) |
+| Windows .zip | Authenticode (every exe/dll inside) + GPG detached signature (`.asc`) |
 | Source archive | GPG detached signature (`.asc`) |
 | macOS DMG | Apple codesign + notarization |
 | macOS .pkg | Apple codesign + notarization |
@@ -66,15 +66,49 @@ signature automatically — no manual steps required.
 
 ## Windows Users
 
-The Windows `.exe` installer and `.zip` portable build are GPG-signed.
-Windows SmartScreen may still show a warning because the binaries are
-not Authenticode-signed. This is expected for open-source projects
-without an EV code signing certificate. To verify the download:
+The Windows setup `.exe`, its uninstaller, and every `.exe` and `.dll` in
+the setup and the portable `.zip` are Authenticode-signed with Azure Artifact
+Signing. The publisher is **Jeremy Fielder**. Files that already carry a vendor
+signature, such as the Microsoft Visual C++ runtime, keep it.
+
+Windows checks the signature automatically. To check it yourself, open the
+file's **Properties → Digital Signatures**, or run:
+
+```powershell
+Get-AuthenticodeSignature .\AetherSDR-vX.Y.Z-Windows-x64-setup.exe | Format-List Status, SignerCertificate, TimeStamperCertificate
+```
+
+`Status` should be `Valid`. SmartScreen can still warn about a new release
+until it builds download reputation; signing every release with the same
+identity is what lets that reputation carry over.
+
+The setup `.exe` and `.zip` are also GPG-signed:
 
 ```powershell
 # Install Gpg4win from https://gpg4win.org/
 gpg --import RELEASE-SIGNING-KEY.pub.asc
-gpg --verify AetherSDR-Setup-vX.Y.Z.exe.asc AetherSDR-Setup-vX.Y.Z.exe
+gpg --verify AetherSDR-vX.Y.Z-Windows-x64-setup.exe.asc AetherSDR-vX.Y.Z-Windows-x64-setup.exe
+```
+
+## Signing dry run (maintainers)
+
+To prove a change to Windows signing without cutting a release, dispatch the
+Windows Installer workflow on a `signtest-*` tag. Pushing a `v*` tag would
+start every release workflow instead.
+
+```sh
+gh api -X POST repos/aethersdr/AetherSDR/environments/windows-signing/deployment-branch-policies \
+  -f name='signtest-*' -f type=tag          # note the returned id
+git tag -m "signing dry run" signtest-<n> <commit> && git push origin refs/tags/signtest-<n>
+gh workflow run windows-installer.yml --ref signtest-<n>
+```
+
+When the run finishes, delete the tag and the rule. While the rule exists,
+any `signtest-*` tag can sign.
+
+```sh
+git push origin :refs/tags/signtest-<n>
+gh api -X DELETE repos/aethersdr/AetherSDR/environments/windows-signing/deployment-branch-policies/<id>
 ```
 
 ## Commit Signing

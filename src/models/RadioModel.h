@@ -21,6 +21,7 @@
 #include "core/backends/flex/PanadapterStream.h"
 #include "core/SleepInhibitor.h"
 #include "core/DaxTxPolicy.h"
+#include "core/NetworkMtuPolicy.h"  // networkMtuParam(); Radio Setup's MTU range
 #include "core/LocalMemoryBank.h"   // memory channels for a radio that has none
 #include "core/DigitalVoiceWaveformTelemetry.h"
 #include <QThread>
@@ -246,6 +247,10 @@ public:
     QString licenseSubscription()   const { return m_licenseSubscription; }
     LicenseFeatureState licenseFeature(const QString& name) const;
     bool licenseFeatureSeen(const QString& name) const;
+    // The radio refused a dvk command as unlicensed (50004001); the reliable
+    // DVK entitlement signal, since `dvk … enabled=` is always 1. Changes emit
+    // licenseFeaturesChanged() like the other entitlement inputs.
+    bool dvkLicenseRefused() const { return m_dvkModel.licenseRefused(); }
     bool licenseFeatureEnabled(const QString& name) const;
     QString licenseFeatureReason(const QString& name) const;
 
@@ -901,6 +906,15 @@ public:
     void cancelLocalTransmit();
     void setDigitalVoiceTxSlice(int sliceId);
     QString audioCompressionParam() const;        // "none" or "opus" based on settings
+    // The network_mtu to send for this session: the NetworkMtu setting (or
+    // `requested`), out-of-range values replaced by the default, capped at
+    // 1200 when the path to the radio runs over Tailscale (NetworkMtuPolicy.h,
+    // #5949). The no-argument form logs when it caps or repairs the setting.
+    int networkMtuParam() const;
+    int networkMtuParam(int requested) const;
+    // The NetworkMtu setting as Radio Setup should show it: an out-of-range
+    // stored value reads as the default it is sent as.
+    int networkMtuSetting() const;
     void sendCwKey(bool down, const QString& debugSource = {},
                    quint64 debugTraceId = 0, quint64 debugSourceMs = 0); // straight key via netcw stream
     void sendCwPaddle(bool dit, bool dah, const QString& debugSource = {},
@@ -1732,6 +1746,9 @@ private:
     // callbacks. sendCmd() refuses for the duration so an expiring callback
     // cannot repopulate the map being drained. (#5653 review)
     bool m_expiringPendingCallbacks{false};
+    // Whether this session's path to the radio runs over Tailscale, decided
+    // once at GUI-client registration on this thread (networkMtuParam).
+    bool m_pathOverTailnet{false};
     // Bumped at every session end. Captured by deferred work (the multiFLEX
     // peek window) so a timer armed in one session cannot fire into the next.
     quint64 m_sessionGeneration{0};

@@ -223,25 +223,25 @@ replace these with a single `QSet<QPointer<PersistentDialog>>` walk.
 
 ## Existing dialogs that follow this pattern (look at these for reference)
 
-- `src/gui/NetworkDiagnosticsDialog.{h,cpp}` — most complete reference, has all the patterns
 - `src/gui/MemoryDialog.{h,cpp}`
 - `src/gui/AetherDspDialog.{h,cpp}`
 - `src/gui/DxClusterDialog.{h,cpp}` (SpotHub)
 - `src/gui/MultiFlexDialog.{h,cpp}`
 - `src/gui/MidiMappingDialog.{h,cpp}`
 - `src/gui/PanLayoutDialog.{h,cpp}`
-- `src/gui/ProfileManagerDialog.{h,cpp}` — most recent example; has the move/resize event saving
+- `src/gui/ProfileManagerDialog.{h,cpp}` — most complete reference; has the move/resize event saving
 
 ## The exception: `CanonWindow` windows
 
 A window built on `CanonWindow` (`src/gui/CanonWindow.{h,cpp}`, RFC #6226)
-deliberately opts out of two of the four concerns above. About AetherSDR is
-the first one.
+deliberately opts out of frameless chrome integration, and by default of
+geometry persistence too. About AetherSDR, Remote Access (Tailscale),
+Waveforms and Network Diagnostics are built on it.
 
 | Concern | `CanonWindow` | Why |
 |---|---|---|
 | Frameless chrome integration | Always frameless; ignores `FramelessWindow` and is not tracked by `trackPersistentDialog()` | The style guide's rounded, title-bar-less window *is* the design; native chrome would put a title bar over it |
-| Geometry persistence | None; asks to open centred on its parent every time (Wayland compositors place top-level windows themselves and may ignore it) | It is a short-lived window, not a workspace tool |
+| Geometry persistence | None by default: asks to open centred on its parent every time (Wayland compositors place top-level windows themselves and may ignore it). `setGeometryKey()` opts in: size and position are saved under that AppSettings key on move and resize (in memory) and on close (flushed), and restored in place of the centring. Network Diagnostics opts in | A short-lived window has nothing to restore; a workspace tool keeps the size its operator gave it |
 
 What it keeps:
 
@@ -261,8 +261,10 @@ What it keeps:
 
 It is translucent, so the rounded corners need a compositor; an X11 session
 without one shows square black corners. Use `CanonWindow` only for windows the
-style guide covers. Tool and workspace dialogs keep the persistent pattern
-above.
+style guide covers: short-lived windows, and the tool windows the maintainer
+has moved to it (Waveforms, Network Diagnostics). A tool window on it also
+installs `FramelessResizer`, since `CanonWindow` itself only moves. Other tool
+and workspace dialogs keep the persistent pattern above.
 
 ## Common pitfalls
 

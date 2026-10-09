@@ -1145,9 +1145,9 @@ QString TciProtocol::cmdSqlEnable(const QStringList& args, bool isSet)
     if (args.size() < 2) return {};
     bool on = false;
     if (!argToBool(args, 1, on)) return {};
-    int level = s->receiveSquelchLevel();
-    QMetaObject::invokeMethod(s, [s, on, level]() { s->setSquelch(on, level); },
-                              Qt::QueuedConnection);
+    auto& pending = (*m_pendingSquelch)[trx];
+    pending.on = on;
+    queueSquelch(s, trx, on, pending.level.value_or(s->receiveSquelchLevel()));
 
     m_pendingNotification = QStringLiteral("sql_enable:%1,%2;")
                                 .arg(trx).arg(on ? "true" : "false");
@@ -1170,13 +1170,21 @@ QString TciProtocol::cmdSqlLevel(const QStringList& args, bool isSet)
     if (args.size() < 2) return {};
     int level = 0;
     if (!argToInt(args, 1, level)) return {};
-    bool on = s->receiveSquelchOn();
-    QMetaObject::invokeMethod(s, [s, on, level]() { s->setSquelch(on, level); },
-                              Qt::QueuedConnection);
+    auto& pending = (*m_pendingSquelch)[trx];
+    pending.level = level;
+    queueSquelch(s, trx, pending.on.value_or(s->receiveSquelchOn()), level);
 
     m_pendingNotification = QStringLiteral("sql_level:%1,%2;")
                                 .arg(trx).arg(level);
     return {};
+}
+
+void TciProtocol::queueSquelch(SliceModel* s, int trx, bool on, int level)
+{
+    QMetaObject::invokeMethod(s, [s, on, level, trx, pending = m_pendingSquelch]() {
+        pending->erase(trx);
+        s->setSquelch(on, level);
+    }, Qt::QueuedConnection);
 }
 
 // ── Volume / Mute ──────────────────────────────────────────────────────────
@@ -1424,7 +1432,7 @@ QString TciProtocol::cmdRxApfEnable(const QStringList& args, bool isSet)
     return {};
 }
 
-// ── AetherSDR extensions (DVK record/play) ─────────────────────────────────
+// ── AetherSDR extensions (slice quick-record record/play) ──────────────────
 
 QString TciProtocol::cmdRxRecord(const QStringList& args, bool isSet)
 {

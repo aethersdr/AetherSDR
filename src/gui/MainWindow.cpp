@@ -40,6 +40,7 @@
 #include "CopyAssistController.h"
 #endif
 #include "PanadapterStack.h"
+#include "PanSliceTitle.h"
 #include "gui/MiniPanApplet.h"
 #include "gui/MiniPanScope.h"
 #include "gui/MiniPanReslice.h"
@@ -133,6 +134,7 @@
 #include "DvkAvailabilityGate.h"
 #include "VoiceModeGate.h"
 #include "DvkPanel.h"
+#include "StatusIndicator.h"
 #include "core/DvkWavTransfer.h"
 #include "AmpApplet.h"
 #include "MeterApplet.h"
@@ -280,6 +282,8 @@
 #include <windows.h>
 #include <windowsx.h>
 #include <psapi.h>
+#include <dwmapi.h>
+#include <QOperatingSystemVersion>
 #else
 #include <sys/resource.h>
 #ifdef Q_OS_MAC
@@ -1140,6 +1144,10 @@ MainWindow::MainWindow(QWidget* parent)
         setAutoFillBackground(false);
         connect(&ThemeManager::instance(), &ThemeManager::themeChanged,
                 this, qOverload<>(&QWidget::update));
+#ifdef Q_OS_WIN
+        connect(&ThemeManager::instance(), &ThemeManager::themeChanged,
+                this, &MainWindow::applyWindowsFrameColor);
+#endif
 
         // 8-axis edge resize in frameless mode; app-wide filter because
         // MainWindow's children are native windows (see FramelessResizer, #4827).
@@ -2766,6 +2774,27 @@ MainWindow::~MainWindow()
     }
 #endif
 
+    // AudioEngine teardown (NnrFilter, SpectralNR) takes the FFTW planner
+    // lock, which the NR2 wisdom worker holds for one FFTW_PATIENT plan at a
+    // time. Cancel and join it first, so that wait happens here rather than
+    // past the audio-thread join below (#6287). Cancel lands between plans.
+    if (m_nr2WisdomThread) {
+        ShutdownTrace trace("nr2.wisdom.join");
+        if (m_nr2WisdomCancel) {
+            m_nr2WisdomCancel->store(true);
+        }
+        QThread* wisdomThread = m_nr2WisdomThread;
+        QObject::disconnect(wisdomThread, nullptr, this, nullptr);
+        // Unbounded, unlike the 3 s joins below: a running FFTW plan can't be
+        // interrupted, and deleting a running QThread aborts. 1 s only
+        // decides whether the log marks the wait as an in-flight plan.
+        if (!wisdomThread->wait(1000)) {
+            trace.fail("fftw_plan_in_flight");
+            wisdomThread->wait();
+        }
+        delete wisdomThread;
+    }
+
     // Stop audio processing on the worker thread before destruction (#502).
     // Use BlockingQueuedConnection to ensure completion before we proceed.
     if (m_audio && m_audioThread && m_audioThread->isRunning()) {
@@ -2782,10 +2811,15 @@ MainWindow::~MainWindow()
             }, Qt::BlockingQueuedConnection);
         }
         audio->deleteLater();
+        // The joins wait without a ceiling while any thread holds an FFTW
+        // planner lock (a cold WdspChannel::open(), Hl2Spectrum,
+        // AnanPanAnalyzer, wisdom): ~AudioEngine needs it, and destroying a
+        // running QThread aborts (#6287). Otherwise 3 s each, as before.
         {
             ShutdownTrace trace("audio.thread.join");
             m_audioThread->quit();
-            if (!m_audioThread->wait(3000))
+            if (!AudioEngine::joinThreadWhilePlannerBusy(*m_audioThread, 3000,
+                                                         "audio.thread.join"))
                 trace.fail("thread_join_timeout");
         }
     } else {
@@ -2794,7 +2828,8 @@ MainWindow::~MainWindow()
     if (m_audioThread && m_audioThread->isRunning()) {
         ShutdownTrace trace("audio.thread.join_retry");
         m_audioThread->quit();
-        if (!m_audioThread->wait(3000))
+        if (!AudioEngine::joinThreadWhilePlannerBusy(*m_audioThread, 3000,
+                                                     "audio.thread.join_retry"))
             trace.fail("thread_join_timeout");
     }
     m_audio = nullptr;
@@ -3789,12 +3824,120 @@ void MainWindow::applyWindowsCaptionStyles()
     }
     const LONG_PTR style = GetWindowLongPtr(hwnd, GWL_STYLE);
     const LONG_PTR desired = style | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX;
+    // On Windows 10 this frame change is also what routes WM_NCCALCSIZE
+    // through nativeEvent() before setFramelessWindow() and the startup
+    // re-apply measure the client rect; Qt answered it at creation.
     if (style != desired) {
         SetWindowLongPtr(hwnd, GWL_STYLE, desired);
         SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
                      SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER
                      | SWP_NOACTIVATE | SWP_FRAMECHANGED);
     }
+}
+
+QRect MainWindow::nativeClientRect() const
+{
+    HWND hwnd = reinterpret_cast<HWND>(winId());
+    RECT client{};
+    if (!hwnd || !GetClientRect(hwnd, &client)) {
+        return {};
+    }
+    POINT origin{0, 0};
+    ClientToScreen(hwnd, &origin);
+    return QRect(origin.x, origin.y, client.right - client.left, client.bottom - client.top);
+}
+
+void MainWindow::setNativeClientRect(const QRect& client)
+{
+    HWND hwnd = reinterpret_cast<HWND>(winId());
+    RECT window{};
+    const QRect clientNow = nativeClientRect();
+    if (!hwnd || !client.isValid() || !clientNow.isValid() || !GetWindowRect(hwnd, &window)) {
+        return;
+    }
+    const QRect windowNow(window.left, window.top,
+                          window.right - window.left, window.bottom - window.top);
+    const QRect target = WindowChrome::windowRectForClient(client, windowNow, clientNow);
+    SetWindowPos(hwnd, nullptr, target.x(), target.y(), target.width(), target.height(),
+                 SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_NOACTIVATE);
+}
+
+bool MainWindow::nativeClientRectRestorable() const
+{
+    return isVisible() && windowFlags().testFlag(Qt::ExpandedClientAreaHint)
+        && !(windowState() & (Qt::WindowMinimized | Qt::WindowMaximized | Qt::WindowFullScreen));
+}
+
+void MainWindow::saveNativeClientRect(const QString& role)
+{
+    auto& s = AppSettings::instance();
+    QJsonObject doc = QJsonDocument::fromJson(
+        s.value(WindowChrome::kNativeGeometryKey).toString().toUtf8()).object();
+    const QRect client = nativeClientRectRestorable() ? nativeClientRect() : QRect();
+    if (client.isValid()) {
+        doc = WindowChrome::withNativeClientRect(doc, role, client, devicePixelRatioF());
+    } else {
+        doc.remove(role);
+    }
+    s.setValue(WindowChrome::kNativeGeometryKey,
+               QString::fromUtf8(QJsonDocument(doc).toJson(QJsonDocument::Compact)));
+}
+
+void MainWindow::restoreNativeClientRect(const QString& role)
+{
+    if (!nativeClientRectRestorable()) {
+        return;
+    }
+    const QJsonObject doc = QJsonDocument::fromJson(
+        AppSettings::instance().value(WindowChrome::kNativeGeometryKey).toString().toUtf8())
+        .object();
+    const QRect saved = WindowChrome::savedNativeClientRect(doc, role, devicePixelRatioF());
+    if (saved.isValid()) {
+        setNativeClientRect(saved);
+    }
+}
+
+void MainWindow::applyWindowsFrameColor()
+{
+    // DWMWA_BORDER_COLOR exists from Windows 11 (build 22000). Windows 10 has
+    // no visible border once nativeEvent makes the whole window client area.
+    constexpr DWORD kDwmBorderColor = 34;
+    if (QOperatingSystemVersion::current() < QOperatingSystemVersion::Windows11
+        || !windowHandle()) {
+        return;
+    }
+    const QColor bg = ThemeManager::instance().color("color.background.app");
+    if (!bg.isValid()) {
+        return;
+    }
+    const COLORREF border = RGB(bg.red(), bg.green(), bg.blue());
+    DwmSetWindowAttribute(reinterpret_cast<HWND>(winId()), kDwmBorderColor,
+                          &border, sizeof(border));
+}
+
+bool MainWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr* result)
+{
+    // The whole window is client area, inset only while maximized so nothing
+    // sits past the screen edge. Qt's WM_NCHITTEST still resizes from the edges.
+    auto* msg = static_cast<MSG*>(message);
+    if (msg && result && msg->message == WM_NCCALCSIZE && msg->wParam
+        && WindowChrome::claimsWholeWindowAsClient(windowFlags(),
+                                                   QOperatingSystemVersion::current())) {
+        if (IsZoomed(msg->hwnd) && !isFullScreen()) {
+            const UINT dpi = GetDpiForWindow(msg->hwnd);
+            const int padded = GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+            const int borderX = GetSystemMetricsForDpi(SM_CXSIZEFRAME, dpi) + padded;
+            const int borderY = GetSystemMetricsForDpi(SM_CYSIZEFRAME, dpi) + padded;
+            RECT& client = reinterpret_cast<NCCALCSIZE_PARAMS*>(msg->lParam)->rgrc[0];
+            client.left += borderX;
+            client.top += borderY;
+            client.right -= borderX;
+            client.bottom -= borderY;
+        }
+        *result = 0;
+        return true;
+    }
+    return QMainWindow::nativeEvent(eventType, message, result);
 }
 #endif
 
@@ -3808,6 +3951,7 @@ void MainWindow::showEvent(QShowEvent* event)
     // Every show: setWindowFlags() (View -> Frameless Window) re-creates the
     // native window with Qt's own style set.
     applyWindowsCaptionStyles();
+    applyWindowsFrameColor();
 #endif
 
     // The caption controls are keyboard-reachable, which puts them first in the
@@ -3849,6 +3993,12 @@ void MainWindow::reapplyStartupGeometryAfterShow()
     // Re-apply the main-window geometry after this window is mapped so Qt
     // honors the saved monitor instead of the last pop-out's screen. (#3319)
     restoreGeometry(m_startupGeometryForFirstShow);
+#ifdef Q_OS_WIN
+    // Qt 6.12's frame margins under the expanded client area do not match the
+    // window, so neither restoreGeometry() nor geometry() round-trips its size.
+    // Put back the client rect Windows reported at exit, if the scale matches.
+    restoreNativeClientRect(QStringLiteral("main"));
+#endif
 
     // Test the frame's center against each screen's full geometry rather than
     // the top-left against availableGeometry().  A top-left landing in a
@@ -4058,6 +4208,13 @@ void MainWindow::closeEvent(QCloseEvent* event)
     auto& s = AppSettings::instance();
     s.setValue("MainWindowGeometry", saveGeometry().toBase64());
     s.setValue("MainWindowState",   saveState().toBase64());
+#ifdef Q_OS_WIN
+    // Read back on the next launch by reapplyStartupGeometryAfterShow(). A
+    // maximized close keeps the last normal rect rather than erasing it.
+    if (nativeClientRectRestorable()) {
+        saveNativeClientRect(QStringLiteral("main"));
+    }
+#endif
 
     // Refresh MinimalModeGeometry on close so a user who launches in
     // Minimal Mode, drags the window, and quits without ever toggling
@@ -4071,6 +4228,9 @@ void MainWindow::closeEvent(QCloseEvent* event)
     if (m_minimalMode &&
         !(windowState() & (Qt::WindowMaximized | Qt::WindowFullScreen))) {
         s.setValue("MinimalModeGeometry", saveGeometry().toBase64());
+#ifdef Q_OS_WIN
+        saveNativeClientRect(QStringLiteral("minimalMode"));
+#endif
     }
 
     // Close the applet-panel pop-out window if it's floating.  We
@@ -4168,6 +4328,15 @@ void MainWindow::closeEvent(QCloseEvent* event)
         deactivateRADE();
 #endif
 
+    // Stop NR2 wisdom generation from starting another plan: the disconnect
+    // below can rebuild NNR on the audio thread, which waits for the planner.
+    // Rejecting the dialog runs its own cancel path (flag, text, announcement).
+    if (m_nr2WisdomDialog) {
+        m_nr2WisdomDialog->reject();
+    }
+    if (m_nr2WisdomCancel) {
+        m_nr2WisdomCancel->store(true);
+    }
     {
         ShutdownTrace trace("radio.disconnect");
         m_radioModel.disconnectFromRadio();
@@ -4445,14 +4614,22 @@ void MainWindow::captureLocalCwPaddleInput(bool held)
 // handleCwMomentaryShortcut() lives in MainWindow_Shortcuts.cpp (#3351 Phase 1c).
 void MainWindow::showNetworkDiagnosticsDialog()
 {
+    // A CanonWindow (style guide, RFC #6226): always frameless, so it is not a
+    // tracked persistent dialog; it saves its own geometry.
+    if (!m_networkDiagnosticsDialog) {
 #ifdef HAVE_WEBSOCKETS
-    showOrRaisePersistent(m_networkDiagnosticsDialog,
-                          &m_radioModel, m_audio, m_networkDiagnosticsHistory,
-                          tciServer());
+        auto* dlg = new NetworkDiagnosticsDialog(&m_radioModel, m_audio,
+                                                 m_networkDiagnosticsHistory, tciServer(), this);
 #else
-    showOrRaisePersistent(m_networkDiagnosticsDialog,
-                          &m_radioModel, m_audio, m_networkDiagnosticsHistory);
+        auto* dlg = new NetworkDiagnosticsDialog(&m_radioModel, m_audio,
+                                                 m_networkDiagnosticsHistory, nullptr, this);
 #endif
+        dlg->setAttribute(Qt::WA_DeleteOnClose);
+        m_networkDiagnosticsDialog = dlg;
+    }
+    m_networkDiagnosticsDialog->show();
+    m_networkDiagnosticsDialog->raise();
+    m_networkDiagnosticsDialog->activateWindow();
 }
 
 void MainWindow::showSystemInfoDialog()
@@ -5292,7 +5469,7 @@ void MainWindow::buildUI()
     // Centre — panadapter stack (one or more FFT + waterfall panes)
     m_panStack = new PanadapterStack(splitter);
     m_panApplet = nullptr;  // ensure setActivePanApplet sees a change
-    setActivePanApplet(m_panStack->addPanadapter("default"));
+    setActivePanApplet(m_panStack->addPanadapter(PanSliceTitle::kPlaceholderPanId));
     splitter->addWidget(m_panStack);
 
     // A panadapter created AFTER the initial connect (Add Panadapter, layout
@@ -5660,6 +5837,15 @@ void MainWindow::buildUI()
     const QString redInd    = "QLabel { color: #e04040; font-weight: bold; font-size: 21px; }";
     const QString greyIndLg = "QLabel { color: #404858; font-weight: bold; font-size: 24px; }";
     const QString greenIndLg= "QLabel { color: #00e060; font-weight: bold; font-size: 24px; }";
+    // Tab, Return/Enter and the accessible Press action reach the same action
+    // as a click (#6257, docs/a11y.md interactive-QLabel rule). On/off
+    // indicators are checkable, so their state is not colour alone.
+    const auto keyboardOperable = [this](QWidget* indicator, bool onOff = false) {
+        StatusIndicator* helper = StatusIndicator::attach(indicator);
+        helper->setCheckable(onOff);
+        connect(helper, &StatusIndicator::activated, this,
+                [this, indicator] { activateStatusIndicator(indicator); });
+    };
 
     // Use a container with HBoxLayout for 3-section layout:
     // [left items] → stretch → [STATION centered] → stretch → [right items]
@@ -5737,7 +5923,9 @@ void MainWindow::buildUI()
             m_bandStackIndicator->setPixmap(buildBandStackIndicatorPixmap(false));
             m_bandStackIndicator->setCursor(Qt::PointingHandCursor);
             m_bandStackIndicator->setToolTip("Open band stack panel");
+            m_bandStackIndicator->setAccessibleName(QStringLiteral("Band stack panel"));
             m_bandStackIndicator->installEventFilter(this);
+            keyboardOperable(m_bandStackIndicator, true);
             hbox->addWidget(m_bandStackIndicator);
         }
 
@@ -5750,6 +5938,7 @@ void MainWindow::buildUI()
         addPanBtn->setCursor(Qt::PointingHandCursor);
         addPanBtn->setToolTip("Add Panadapter");
         addPanBtn->installEventFilter(this);
+        keyboardOperable(addPanBtn);
         hbox->addWidget(addPanBtn);
         m_addPanLabel = addPanBtn;
     }
@@ -5760,7 +5949,9 @@ void MainWindow::buildUI()
     m_tnfIndicator->setStyleSheet(greyIndLg);
     m_tnfIndicator->setCursor(Qt::PointingHandCursor);
     m_tnfIndicator->setToolTip(buildTnfTooltip(m_radioModel.tnfModel()));
+    m_tnfIndicator->setAccessibleName(QStringLiteral("Tracking notch filters"));
     m_tnfIndicator->installEventFilter(this);
+    keyboardOperable(m_tnfIndicator, true);
     hbox->addWidget(m_tnfIndicator);
     auto updateTnfTooltip = [this]() {
         if (m_tnfIndicator) {
@@ -5776,7 +5967,9 @@ void MainWindow::buildUI()
     m_cwxIndicator->setStyleSheet(greyIndLg);
     m_cwxIndicator->setCursor(Qt::PointingHandCursor);
     m_cwxIndicator->setToolTip("CW Keyer — click to toggle");
+    m_cwxIndicator->setAccessibleName(QStringLiteral("CW keyer"));
     m_cwxIndicator->installEventFilter(this);
+    keyboardOperable(m_cwxIndicator, true);
     hbox->addWidget(m_cwxIndicator);
 
 #ifdef AETHER_ASR_ENABLED
@@ -5784,22 +5977,30 @@ void MainWindow::buildUI()
     m_asrIndicator->setStyleSheet(greyIndLg);
     m_asrIndicator->setCursor(Qt::PointingHandCursor);
     m_asrIndicator->setToolTip("Speech-to-text (Copy Assist) — click to toggle");
+    m_asrIndicator->setAccessibleName(QStringLiteral("Speech-to-text (Copy Assist)"));
     m_asrIndicator->installEventFilter(this);
+    keyboardOperable(m_asrIndicator, true);
     hbox->addWidget(m_asrIndicator);
 #endif
 
     m_dvkIndicator = new QLabel("DVK");
+    m_dvkIndicator->setObjectName(QStringLiteral("dvkIndicator"));
+    m_dvkIndicator->setAccessibleName(QStringLiteral("Digital Voice Keyer"));
     m_dvkIndicator->setStyleSheet(greyIndLg);
     m_dvkIndicator->setCursor(Qt::PointingHandCursor);
-    m_dvkIndicator->setToolTip("Digital Voice Keyer — click to toggle");
+    m_dvkIndicator->setToolTip(dvkIndicatorTooltip(DvkIndicatorBlocker::None));
+    m_dvkIndicator->setAccessibleDescription(dvkIndicatorTooltip(DvkIndicatorBlocker::None));
     m_dvkIndicator->installEventFilter(this);
+    keyboardOperable(m_dvkIndicator, true);
     hbox->addWidget(m_dvkIndicator);
 
     m_fdxIndicator = new QLabel("FDX");
     m_fdxIndicator->setStyleSheet(greyIndLg);
     m_fdxIndicator->setCursor(Qt::PointingHandCursor);
     m_fdxIndicator->setToolTip("Full Duplex — RX stays active during TX (click to toggle)");
+    m_fdxIndicator->setAccessibleName(QStringLiteral("Full duplex"));
     m_fdxIndicator->installEventFilter(this);
+    keyboardOperable(m_fdxIndicator, true);
     hbox->addWidget(m_fdxIndicator);
 
     addSep();
@@ -6112,7 +6313,10 @@ void MainWindow::buildUI()
     m_tgxlContainer->setToolTip("Tuner Genius XL\nClick to cycle OPERATE / BYPASS / STANDBY");
     m_tgxlContainer->setAccessibleName("Tuner Genius XL status");
     m_tgxlContainer->setAccessibleDescription("Click to cycle between OPERATE, BYPASS, and STANDBY");
+    m_tgxlContainer->setProperty("aetherStateCycle",
+        QStringLiteral("Press to cycle between OPERATE, BYPASS, and STANDBY"));
     m_tgxlContainer->installEventFilter(this);
+    keyboardOperable(m_tgxlContainer);
     m_tgxlContainer->setVisible(false);
     {
         auto* vbox = new QVBoxLayout(m_tgxlContainer);
@@ -6149,7 +6353,10 @@ void MainWindow::buildUI()
     m_pgxlContainer->setToolTip("Power Genius XL\nClick to cycle OPERATE / STANDBY");
     m_pgxlContainer->setAccessibleName("Power Genius XL status");
     m_pgxlContainer->setAccessibleDescription("Click to cycle between OPERATE and STANDBY");
+    m_pgxlContainer->setProperty("aetherStateCycle",
+        QStringLiteral("Press to cycle between OPERATE and STANDBY"));
     m_pgxlContainer->installEventFilter(this);
+    keyboardOperable(m_pgxlContainer);
     m_pgxlContainer->setVisible(false);
     {
         auto* vbox = new QVBoxLayout(m_pgxlContainer);
@@ -6184,6 +6391,7 @@ void MainWindow::buildUI()
     m_txIndicator->setAccessibleName("Cancel transmit");
     m_txIndicator->setAccessibleDescription("Click to send key up, PTT off, Tune off, and MOX off.");
     m_txIndicator->installEventFilter(this);
+    keyboardOperable(m_txIndicator);
     m_txIndicator->setStyleSheet("QLabel { color: rgba(255,255,255,128); font-weight: bold; font-size: 21px; }");
     hbox->addWidget(m_txIndicator);
 
@@ -7357,6 +7565,7 @@ void MainWindow::updateBandStackIndicator()
     m_bandStackIndicator->setPixmap(buildBandStackIndicatorPixmap(visible));
     m_bandStackIndicator->setToolTip(visible ? "Close band stack panel"
                                              : "Open band stack panel");
+    StatusIndicator::setCheckedFor(m_bandStackIndicator, visible);
 }
 
 bool MainWindow::activateMemorySpot(int memoryIndex, const QString& preferredPanId)
@@ -9164,6 +9373,7 @@ void MainWindow::routeCwDecoderOutput()
     // Text from the old applet's stream must never concatenate with the
     // new one's — a station boundary, as far as the spotter is concerned.
     m_cwCallsignSpotter.clear();
+    clearLiveCwContact();
 
     m_cwDecoderApplet = target;
 
@@ -9542,9 +9752,12 @@ void MainWindow::enableNr2WithWisdom()
                 [cancelled]() { return cancelled->load(); });
             result->store(static_cast<int>(wisdomResult));
         });
+        m_nr2WisdomThread = thread;
+        m_nr2WisdomCancel = cancelled;
         connect(thread, &QThread::finished, this, [this, dlg, progress, label, thread, result,
                                                      activityTimer, activityLabel, reassuranceLabel,
                                                      announceLabel]() {
+            m_nr2WisdomCancel.reset();
             const auto wisdomResult =
                 static_cast<SpectralNR::WisdomResult>(result->load());
             const bool ready = wisdomResult == SpectralNR::WisdomResult::Ready
@@ -9889,11 +10102,23 @@ void MainWindow::setFramelessWindow(bool on)
     // geometry so the window stays where the user put it.
     const QRect geom = geometry();
     const bool wasVisible = isVisible();
+#ifdef Q_OS_WIN
+    // On one side of this switch geometry() is off by Qt's expanded-frame
+    // margin error; keep the client area Windows reports instead.
+    const QRect nativeClient = wasVisible
+            && !(windowState() & (Qt::WindowMinimized | Qt::WindowMaximized | Qt::WindowFullScreen))
+        ? nativeClientRect() : QRect();
+#endif
     WindowChrome::configure(this, on);
     setGeometry(geom);
     if (wasVisible) {
         show();
     }
+#ifdef Q_OS_WIN
+    if (nativeClient.isValid()) {
+        setNativeClientRect(nativeClient);
+    }
+#endif
 
     // Keep the bottom-right size grip in sync — only useful when frameless.
     if (m_sizeGrip) m_sizeGrip->setVisible(on);
@@ -10042,6 +10267,9 @@ void MainWindow::toggleMinimalMode(bool on)
         // Save full-mode geometry (preserves the Maximized/FullScreen bit so
         // exit can restore the user's pre-minimal window).
         s.setValue("FullModeGeometry", saveGeometry().toBase64());
+#ifdef Q_OS_WIN
+        saveNativeClientRect(QStringLiteral("fullMode"));
+#endif
 
         // Drop maximized/fullscreen state before forcing the applet width.
         // Without this, macOS keeps the bit set through setFixedWidth(260)
@@ -10081,6 +10309,9 @@ void MainWindow::toggleMinimalMode(bool on)
             s.value("MinimalModeGeometry", "").toByteArray());
         if (!geom.isEmpty()) {
             restoreGeometry(geom);
+#ifdef Q_OS_WIN
+            restoreNativeClientRect(QStringLiteral("minimalMode"));
+#endif
         }
         // Defer clearing the guard so any AppKit-deferred WindowStateChange
         // queued by the showNormal() / setFixedWidth() calls above is drained
@@ -10108,6 +10339,10 @@ void MainWindow::toggleMinimalMode(bool on)
             showNormal();
         else
             s.setValue("MinimalModeGeometry", saveGeometry().toBase64());
+#ifdef Q_OS_WIN
+        if (!abnormalState)
+            saveNativeClientRect(QStringLiteral("minimalMode"));
+#endif
 
         // Reparent applet panel back into the splitter and restore layout
         m_splitter->addWidget(m_appletPanel);
@@ -10161,6 +10396,10 @@ void MainWindow::toggleMinimalMode(bool on)
         // Belt-and-suspenders: if FullModeGeometry encoded a state, ensure
         // we land windowed.
         showNormal();
+#ifdef Q_OS_WIN
+        if (!geom.isEmpty())
+            restoreNativeClientRect(QStringLiteral("fullMode"));
+#endif
 
         // Now show the spectrum, one turn later (see the note above the
         // splitter restore).  Queued BEFORE the canvas re-entry below, which
@@ -10302,9 +10541,11 @@ void MainWindow::updateToolsMenuState()
 
     if (m_swrScanAction) {
         m_swrScanAction->setEnabled(txReady);
-        m_swrScanAction->setToolTip(txReady ? QString()
+        const QString reason = txReady ? QString()
             : tr("Requires an idle, TX-capable radio with this client holding "
-                 "the interlock"));
+                 "the interlock");
+        m_swrScanAction->setToolTip(reason);
+        m_swrScanAction->setStatusTip(reason);  // a tooltip is never announced
     }
 
     // Every disabling condition names itself. A greyed control with no stated
@@ -10312,7 +10553,7 @@ void MainWindow::updateToolsMenuState()
     if (m_preTuneAction) {
         m_preTuneAction->setEnabled(txReady && memories && tx.memoriesEnabled()
             && hasTxApplet);
-        m_preTuneAction->setToolTip(
+        const QString reason =
             !caps.hasTunerMemories
                 ? tr("ATU memory controls are unavailable for this radio")
             : tgxlOperate
@@ -10324,11 +10565,13 @@ void MainWindow::updateToolsMenuState()
             : !txReady
                 ? tr("Requires an idle, TX-capable radio with this client "
                      "holding the interlock")
-            : QString());
+            : QString();
+        m_preTuneAction->setToolTip(reason);
+        m_preTuneAction->setStatusTip(reason);
     }
     if (m_clearAtuAction) {
         m_clearAtuAction->setEnabled(connected && memories && hasTxApplet);
-        m_clearAtuAction->setToolTip(
+        const QString reason =
             !caps.hasTunerMemories
                 ? tr("ATU memory controls are unavailable for this radio")
             : tgxlOperate
@@ -10337,7 +10580,9 @@ void MainWindow::updateToolsMenuState()
                 ? tr("The transmit applet is unavailable in this build")
             : !connected
                 ? tr("Connect to a radio first")
-            : QString());
+            : QString();
+        m_clearAtuAction->setToolTip(reason);
+        m_clearAtuAction->setStatusTip(reason);
     }
 
     if (m_gpsDashboardAction) {
@@ -10350,7 +10595,7 @@ void MainWindow::updateToolsMenuState()
         const bool externalRx = active
             && active->externalReceiveReplacementActive();
         m_agcTCalibrationMenuAction->setEnabled(connected && active && !externalRx);
-        m_agcTCalibrationMenuAction->setToolTip(
+        const QString reason =
             !connected
                 ? tr("Connect to a radio first")
             : !active
@@ -10358,7 +10603,9 @@ void MainWindow::updateToolsMenuState()
             : externalRx
                 ? tr("Not available while an external receive source "
                      "replaces this slice's RX")
-            : QString());
+            : QString();
+        m_agcTCalibrationMenuAction->setToolTip(reason);
+        m_agcTCalibrationMenuAction->setStatusTip(reason);
     }
 }
 
@@ -10423,7 +10670,8 @@ void MainWindow::updateKeyerAvailability()
     const DvkIndicatorBlocker dvkBlocker = dvkIndicatorBlocker(
         txIsSsb,
         m_radioModel.licenseFeatureSeen(kDvkLicenseFeature),
-        m_radioModel.licenseFeatureEnabled(kDvkLicenseFeature));
+        m_radioModel.licenseFeatureEnabled(kDvkLicenseFeature),
+        m_radioModel.dvkLicenseRefused());
     // hasVoiceKeyer is ANDed in HERE rather than into the mode test, because
     // isVoiceMode() is shared with the ASR indicator below and Copy Assist is
     // host-side — folding a radio-side voice-keyer capability into the shared
@@ -10453,6 +10701,7 @@ void MainWindow::updateKeyerAvailability()
         setIndicatorStyle(m_cwxIndicator, txIsCw ? kAvail : kDisabled);
     }
     m_cwxIndicator->setCursor(txIsCw ? Qt::PointingHandCursor : Qt::ArrowCursor);
+    StatusIndicator::setCheckedFor(m_cwxIndicator, m_cwxPanel->isVisible());
 
     // DVK: available in voice modes (SSB, AM, FM — not DIGU/DIGL), and only on
     // a radio that reports the DVK entitlement (see dvkIndicatorBlocker).
@@ -10470,10 +10719,13 @@ void MainWindow::updateKeyerAvailability()
     }
     m_dvkIndicator->setCursor(dvkAvailable ? Qt::PointingHandCursor
                                            : Qt::ArrowCursor);
+    StatusIndicator::setCheckedFor(m_dvkIndicator, m_dvkPanel->isVisible());
     // An unlicensed radio gets a tooltip naming the missing subscription; the
     // mode gate keeps the normal one, since the panel's own title and the F-key
     // rows already make "wrong mode" obvious once it opens.
     m_dvkIndicator->setToolTip(dvkIndicatorTooltip(dvkBlocker));
+    // A tooltip is never announced, so the reason also rides the description.
+    m_dvkIndicator->setAccessibleDescription(dvkIndicatorTooltip(dvkBlocker));
 
 #ifdef AETHER_ASR_ENABLED
     // ASR (Copy Assist): available in voice modes only (dimmed in CW and
@@ -10531,6 +10783,7 @@ void MainWindow::updateKeyerAvailability()
         setIndicatorStyle(m_asrIndicator,
                           asrVisible ? kActive
                                      : (asrIsVoice ? kAvail : kDisabled));
+        StatusIndicator::setCheckedFor(m_asrIndicator, asrVisible);
         // Cursor tracks the ENABLED state, not the mode, so the hand appears on
         // exactly the clicks that do something — including the close-an-open-
         // panel case where the mode gate says no.
@@ -10832,7 +11085,7 @@ void MainWindow::applyPanLayout(const QString& layoutId)
         int toRemove = existing - needed;
         for (int i = removalCandidates.size() - 1; i >= 0 && toRemove > 0; --i) {
             const QString panId = removalCandidates.at(i);
-            if (panId == "default") continue;
+            if (panId == PanSliceTitle::kPlaceholderPanId) continue;
             qDebug() << "applyPanLayout: closing pan" << panId;
             // Route through removePanadapter so a layout-shrink tears down the
             // waterfall too ("display pan remove" + "display panafall remove"),

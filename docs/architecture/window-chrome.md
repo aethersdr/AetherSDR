@@ -84,6 +84,15 @@ item (`syncMenuCheckColumn()`, refreshed before each show).
   taskbar minimize, Win+Up and snap-to-maximize need them. **The Snap Layouts
   hover flyout does not appear** (nothing returns `HTMAXBUTTON` on hover);
   that is tracked in #6224.
+  Qt keeps a resize-border inset on the left, right and bottom as non-client.
+  Windows 11 draws it invisibly, but Windows 10 paints it as a light strip
+  (#6266), so on Windows 10 only `MainWindow::nativeEvent` answers
+  `WM_NCCALCSIZE` with the whole window as client area (inset on all four
+  sides while maximized). Edge resize then rests entirely on Qt 6.12's own
+  `WM_NCHITTEST`, which still answers the border codes from the client edges;
+  `FramelessResizer` is off on this path, so recheck edge resize after a Qt
+  bump. On Windows 11 `MainWindow::applyWindowsFrameColor()` sets the DWM
+  border to `color.background.app`, with Frameless Window on or off.
 - **Linux:** Qt's desktop Linux backends do not advertise expanded client
   areas. The fallback uses the shared caption cluster and `FramelessResizer`
   (6 px edge band; no top-edge resize under the bar, #4886). Title dragging
@@ -94,7 +103,7 @@ item (`syncMenuCheckColumn()`, refreshed before each show).
   preference negotiation is not implemented. Wayland/X11 snap and
   fractional-scale resize are native test items.
 
-The previous custom Windows `nativeEvent`/DWM frame and the macOS corner and
+The previous full custom Windows `nativeEvent`/DWM frame and the macOS corner and
 shadow shim are gone. The window is **opaque** (`WA_TranslucentBackground`
 off): cheaper to composite, and it avoids the earlier disappearing header and
 status-bar regressions. There is no system-blur promise and no custom corner
