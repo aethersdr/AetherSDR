@@ -10,6 +10,7 @@
 #include <QListWidget>
 
 #include <cstdio>
+#include <cstdlib>
 
 using namespace AetherSDR;
 
@@ -46,8 +47,23 @@ int main(int argc, char** argv)
     QApplication::processEvents();
 
     const QRect row = active->visualItemRect(active->item(1));
-    const QColor selected = active->viewport()->grab().toImage().pixelColor(
-        row.right() - 4, row.center().y());
+    const QImage shot = active->viewport()->grab().toImage();
+    const QColor selected = shot.pixelColor(row.right() - 4, row.center().y());
+
+    // The glyph pixel that stands furthest from the row background is the
+    // text colour, anti-aliasing aside.
+    auto distance = [](const QColor& a, const QColor& b) {
+        return std::abs(a.red() - b.red()) + std::abs(a.green() - b.green())
+             + std::abs(a.blue() - b.blue());
+    };
+    QColor text = selected;
+    for (int y = row.top(); y <= row.bottom(); ++y) {
+        for (int x = row.left(); x < row.right() - 4; ++x) {
+            const QColor c = shot.pixelColor(x, y);
+            if (distance(c, selected) > distance(text, selected))
+                text = c;
+        }
+    }
     const QColor accent = ThemeManager::instance().color(QStringLiteral("color.accent"));
 
     int failures = 0;
@@ -62,6 +78,12 @@ int main(int argc, char** argv)
         std::fprintf(stderr, "FAIL: selected row %s is not the palette highlight %s\n",
                      qPrintable(selected.name()),
                      qPrintable(pal.color(QPalette::Highlight).name()));
+        ++failures;
+    }
+    const QColor highlightedText = pal.color(QPalette::Active, QPalette::HighlightedText);
+    if (distance(text, highlightedText) > 60) {
+        std::fprintf(stderr, "FAIL: selected row text %s is not the palette highlighted text %s\n",
+                     qPrintable(text.name()), qPrintable(highlightedText.name()));
         ++failures;
     }
 
