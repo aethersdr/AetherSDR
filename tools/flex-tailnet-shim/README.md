@@ -35,9 +35,10 @@ AetherSDR (tailnet peer)                       radio container (host network nam
   from the same host socket P, so the radio sees one address per client, as on
   a LAN. Datagrams from unregistered senders are dropped.
   - Host socket P is bound to the address the shim's own radio connection
-    comes from (normally 172.30.1.1), where the radio sends VITA-49, so the
-    station LAN can't reach it.
-  - P also relays only datagrams from the radio: `SSDR_RADIO_ADDRESS` or
+    comes from (normally 172.30.1.1), where the radio sends VITA-49, so it
+    doesn't listen on the radio's LAN address. Linux still delivers a
+    datagram a LAN host deliberately routes to 172.30.1.1.
+  - So P also relays only datagrams from the radio: `SSDR_RADIO_ADDRESS` or
     another of the host's own addresses. Others are dropped and counted (see
     Link telemetry).
 - **Identity:** every connection is checked with Tailscale `WhoIs`. `-allow`
@@ -151,7 +152,7 @@ sessions. AetherSDR polls it every 2 s for the Network Diagnostics window.
 | `shim_cpu_pct`, `shim_rss_kb`, `mtu_clamp` | The container's own load, and the `network_mtu` it injects |
 | `sessions[].streams[]` | Per VITA-49 stream, counted as datagrams leave the radio, before the tunnel: `packets`, `gaps` (missed packets) and `breaks` (sequence discontinuities, the unit AetherSDR's own stream counters use) |
 | `sessions[].to_client_failures` | Datagrams the shim could not send into the tunnel |
-| `sessions[].from_other_sources`, `last_rejected_source` | Datagrams that reached the session's radio-side socket from anything but the radio, dropped. Nonzero on a session with no VITA-49 means the radio's own source address went unrecognised |
+| `sessions[].from_other_sources` | Datagrams that reached the session's radio-side socket from anything but the radio, dropped. Nonzero on a session with no VITA-49 means the radio's own source address went unrecognised. `/v1/status` on the LAN also names a recent sender (`last_rejected_source`); the tailnet report doesn't |
 
 AetherSDR subtracts the radio-side break rate from the rate it sees itself,
 so the remainder is what the tunnel added.

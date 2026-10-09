@@ -25,53 +25,84 @@ type Forwarder struct {
 	Listen    func(port int) (net.Listener, error) // on the tailnet
 	DialRadio func(port int) (net.Conn, error)
 	Authorize func(remote net.Addr) (string, bool)
+	// Window overrides sideChannelWindow (tests).
+	Window time.Duration
 
-	mu sync.Mutex
-	// active maps each open port to the tailnet addresses allowed on it.
-	active map[int]map[netip.Addr]bool
+	mu     sync.Mutex
+	active map[int]*sideChannel
 }
 
-// Open starts forwarding port for client, the tailnet address of the session
-// whose file transfer the radio announced it for; only that address may
-// connect. If the port is already open, client is added to it. The listener
-// accepts connections for sideChannelWindow after the last connection ends,
-// then closes.
-func (f *Forwarder) Open(port int, client netip.Addr) error {
-	f.mu.Lock()
-	if f.active == nil {
-		f.active = map[int]map[netip.Addr]bool{}
+func (f *Forwarder) window() time.Duration {
+	if f.Window > 0 {
+		return f.Window
 	}
-	if set, ok := f.active[port]; ok {
-		set[client] = true
-		f.mu.Unlock()
-		return nil
-	}
-	f.active[port] = map[netip.Addr]bool{client: true}
-	f.mu.Unlock()
+	return sideChannelWindow
+}
 
-	ln, err := f.Listen(port)
-	if err != nil {
-		f.mu.Lock()
-		delete(f.active, port)
-		f.mu.Unlock()
-		return err
+// sideChannel is one open port and the sessions whose transfers opened it.
+type sideChannel struct {
+	ln       net.Listener
+	clients  map[uint64]netip.Addr // session ID -> that session's tailnet address
+	deadline *time.Timer           // shuts the channel sideChannelWindow after it goes idle
+}
+
+// Open starts forwarding port for session, whose file transfer the radio
+// announced it for; only that session's tailnet address, client, may
+// connect. If the port is already open, the session is added to it and the
+// window starts again, so the new transfer gets its full minute. closed
+// reports whether the session has ended: a reply still in flight when its
+// session closes must not leave the port open to a computer with no session.
+// The listener accepts connections for sideChannelWindow after the last
+// announcement or connection, then closes.
+func (f *Forwarder) Open(port int, session uint64, client netip.Addr, closed func() bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.active == nil {
+		f.active = map[int]*sideChannel{}
 	}
-	go f.serve(port, ln)
+	sc := f.active[port]
+	if sc == nil {
+		// A channel shutting down has already left f.active with its
+		// listener closed (shut), so the port is free to listen on again.
+		ln, err := f.Listen(port)
+		if err != nil {
+			return err
+		}
+		sc = &sideChannel{ln: ln, clients: map[uint64]netip.Addr{}}
+		sc.deadline = time.AfterFunc(f.window(), func() { f.shut(port, sc) })
+		f.active[port] = sc
+		go f.serve(port, sc)
+	} else {
+		sc.deadline.Reset(f.window())
+	}
+	sc.clients[session] = client
+	// The session sets its closed flag before calling Forget, and both run
+	// under f.mu here or there: either Forget removes this entry, or the
+	// flag is already visible.
+	if closed != nil && closed() {
+		delete(sc.clients, session)
+	}
 	return nil
 }
 
-func (f *Forwarder) serve(port int, ln net.Listener) {
-	defer func() {
-		ln.Close()
-		f.mu.Lock()
+// shut closes a side channel and removes it, both under f.mu, so a
+// concurrent Open sees either the open channel or a free port, never a
+// closing one it could add a session to.
+func (f *Forwarder) shut(port int, sc *sideChannel) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.active[port] == sc {
 		delete(f.active, port)
-		f.mu.Unlock()
-	}()
+	}
+	sc.deadline.Stop()
+	sc.ln.Close()
+}
+
+func (f *Forwarder) serve(port int, sc *sideChannel) {
+	defer f.shut(port, sc)
 	var wg sync.WaitGroup
-	deadline := time.AfterFunc(sideChannelWindow, func() { ln.Close() })
-	defer deadline.Stop()
 	for {
-		c, err := ln.Accept()
+		c, err := sc.ln.Accept()
 		if err != nil {
 			wg.Wait()
 			return
@@ -88,28 +119,27 @@ func (f *Forwarder) serve(port int, ln net.Listener) {
 				continue
 			}
 		}
-		deadline.Stop()
+		sc.deadline.Stop()
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			f.splice(port, c)
-			deadline.Reset(sideChannelWindow)
+			sc.deadline.Reset(f.window())
 		}()
 	}
 }
 
-// Forget withdraws client from every open side channel, once its last
-// session has closed; a port no session can use stays shut until its window
-// lapses.
-func (f *Forwarder) Forget(client netip.Addr) {
+// Forget withdraws a closed session from every open side channel. A port no
+// session can use stays shut until its window lapses.
+func (f *Forwarder) Forget(session uint64) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	for _, set := range f.active {
-		delete(set, client)
+	for _, sc := range f.active {
+		delete(sc.clients, session)
 	}
 }
 
-// admits reports whether remote is a session the port was opened for.
+// admits reports whether remote belongs to a session the port was opened for.
 func (f *Forwarder) admits(port int, remote net.Addr) bool {
 	ap, ok := addrPortOf(remote)
 	if !ok {
@@ -117,7 +147,16 @@ func (f *Forwarder) admits(port int, remote net.Addr) bool {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.active[port][ap.Addr()]
+	sc := f.active[port]
+	if sc == nil {
+		return false
+	}
+	for _, c := range sc.clients {
+		if c == ap.Addr() {
+			return true
+		}
+	}
+	return false
 }
 
 func (f *Forwarder) splice(port int, c net.Conn) {

@@ -387,7 +387,7 @@ func TestFailedAddressListingKeepsThePreviousSet(t *testing.T) {
 		t.Fatal("a host address must be recognised")
 	}
 	addrs = nil
-	r.localAt = time.Now().Add(-2 * time.Second) // due for a refresh
+	r.locals.at = time.Now().Add(-2 * time.Second) // due for a refresh
 	if r.fromRadio(netip.MustParseAddr("192.168.50.99")) {
 		t.Fatal("an unknown source must be refused")
 	}
@@ -396,13 +396,13 @@ func TestFailedAddressListingKeepsThePreviousSet(t *testing.T) {
 	}
 }
 
-// Side-channel access is withdrawn when a computer's last session closes,
-// not while another session from it is still open.
-func TestClosingTheLastSessionWithdrawsSideChannels(t *testing.T) {
+// Closing a session withdraws its side-channel access and nobody else's,
+// including another session from the same computer.
+func TestClosingASessionWithdrawsItsSideChannels(t *testing.T) {
 	r := &Relay{}
 	r.init()
-	var forgotten []netip.Addr
-	r.ForgetForward = func(a netip.Addr) { forgotten = append(forgotten, a) }
+	var forgotten []uint64
+	r.ForgetForward = func(id uint64) { forgotten = append(forgotten, id) }
 	ip := netip.MustParseAddr("100.64.0.9")
 	mk := func(id uint64) *Session {
 		a, b := net.Pipe()
@@ -413,20 +413,100 @@ func TestClosingTheLastSessionWithdrawsSideChannels(t *testing.T) {
 	}
 	first, second := mk(1), mk(2)
 	first.close("test")
-	if len(forgotten) != 0 {
-		t.Fatalf("withdrew access while another session from %v was open", ip)
-	}
-	second.close("test")
-	if len(forgotten) != 1 || forgotten[0] != ip {
-		t.Fatalf("withdrawn: %v, want [%v]", forgotten, ip)
+	if len(forgotten) != 1 || forgotten[0] != 1 || !first.closed.Load() || second.closed.Load() {
+		t.Fatalf("withdrawn %v after closing session 1", forgotten)
 	}
 
-	f := &Forwarder{}
-	f.active = map[int]map[netip.Addr]bool{5000: {ip: true}}
-	f.Forget(ip)
-	if f.admits(5000, &net.TCPAddr{IP: net.IPv4(100, 64, 0, 9), Port: 1}) {
-		t.Fatal("a forgotten client is still admitted")
+	f := &Forwarder{Listen: func(int) (net.Listener, error) { return net.Listen("tcp", "127.0.0.1:0") }}
+	open := func(sess uint64, closed bool) {
+		if err := f.Open(5000, sess, ip, func() bool { return closed }); err != nil {
+			t.Fatal(err)
+		}
 	}
+	from := &net.TCPAddr{IP: net.IPv4(100, 64, 0, 9), Port: 1}
+	open(1, false)
+	open(2, false)
+	f.Forget(1)
+	if !f.admits(5000, from) {
+		t.Fatal("session 2 from the same computer lost its transfer when session 1 closed")
+	}
+	f.Forget(2)
+	if f.admits(5000, from) {
+		t.Fatal("a computer with no session is still admitted")
+	}
+	// A reply that arrives after its session closed (and after Forget ran)
+	// must not leave the port open to that computer.
+	open(3, true)
+	if f.admits(5000, from) {
+		t.Fatal("a closed session's late reply opened the port")
+	}
+	f.mu.Lock()
+	sc := f.active[5000]
+	f.mu.Unlock()
+	f.shut(5000, sc)
+}
+
+// A second transfer announced on an open port gets the full window again.
+func TestANewTransferRestartsTheWindow(t *testing.T) {
+	f := &Forwarder{
+		Listen: func(int) (net.Listener, error) { return net.Listen("tcp", "127.0.0.1:0") },
+		Window: time.Second,
+	}
+	ip := netip.MustParseAddr("100.64.0.9")
+	if err := f.Open(5000, 1, ip, nil); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(700 * time.Millisecond)
+	if err := f.Open(5000, 2, ip, nil); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(700 * time.Millisecond) // past the first window, inside the second
+	f.mu.Lock()
+	sc := f.active[5000]
+	f.mu.Unlock()
+	if sc == nil {
+		t.Fatal("the port closed on the first transfer's window")
+	}
+	time.Sleep(time.Second)
+	f.mu.Lock()
+	sc = f.active[5000]
+	f.mu.Unlock()
+	if sc != nil {
+		t.Fatal("the port outlived its window")
+	}
+}
+
+// A side channel that is shutting down is replaced, not joined: a new
+// transfer on the same port gets a working listener.
+func TestReopeningAShutSideChannelListensAgain(t *testing.T) {
+	var opened int
+	f := &Forwarder{Listen: func(port int) (net.Listener, error) {
+		opened++
+		return net.Listen("tcp", "127.0.0.1:0")
+	}}
+	ip := netip.MustParseAddr("100.64.0.9")
+	if err := f.Open(5000, 1, ip, nil); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	old := f.active[5000]
+	f.mu.Unlock()
+	f.shut(5000, old) // what the window's deadline does
+	if err := f.Open(5000, 2, ip, nil); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	cur := f.active[5000]
+	f.mu.Unlock()
+	if opened != 2 || cur == nil || cur == old {
+		t.Fatalf("listeners opened %d; the new transfer joined the closing channel", opened)
+	}
+	if c, err := net.Dial("tcp", cur.ln.Addr().String()); err != nil {
+		t.Fatalf("the replacement listener doesn't accept: %v", err)
+	} else {
+		c.Close()
+	}
+	f.shut(5000, cur)
 }
 
 // AetherSDR re-sends `client udpport` after a collision; the first port must

@@ -267,6 +267,9 @@ func (n *Node) sessionReport(caller netip.Addr) SessionReport {
 	if relay != nil {
 		for _, s := range relay.Sessions() {
 			if s.clientIP == caller {
+				// A station-LAN address isn't the tailnet caller's to learn;
+				// /v1/status on the LAN still names it.
+				s.LastRejected = ""
 				rep.Sessions = append(rep.Sessions, s)
 			}
 		}

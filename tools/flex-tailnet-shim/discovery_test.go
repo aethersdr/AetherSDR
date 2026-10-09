@@ -259,27 +259,37 @@ func TestSubnetFlowsNeverReachTheRadioItself(t *testing.T) {
 	}()
 	radioAP := netip.MustParseAddrPort(radio.Addr().String())
 	route := netip.MustParsePrefix("127.0.0.0/24")
-	n := &Node{advertised: []netip.Prefix{route}}
-	n.authorize = func(net.Addr) (string, bool) { return "ops@example.com on laptop", true }
-	n.localAddrs = func() []netip.Addr { return []netip.Addr{radioAP.Addr()} }
+	for _, tc := range []struct {
+		name      string
+		radioAddr string
+		local     []netip.Addr
+	}{
+		{"one of the host's addresses", "172.30.1.1", []netip.Addr{radioAP.Addr()}},
+		{"RadioAddr", radioAP.Addr().String(), []netip.Addr{netip.MustParseAddr("192.0.2.1")}},
+	} {
+		n := &Node{advertised: []netip.Prefix{route}, RadioAddr: tc.radioAddr}
+		n.authorize = func(net.Addr) (string, bool) { return "ops@example.com on laptop", true }
+		local := tc.local
+		n.localAddrs = func() []netip.Addr { return local }
 
-	h, intercept := n.subnetTCP(netip.MustParseAddrPort("100.64.0.9:40000"), radioAP)
-	if h == nil || !intercept {
-		t.Fatal("a flow to an advertised route must be intercepted, not left to tsnet")
-	}
-	client, server := net.Pipe()
-	done := make(chan struct{})
-	go func() { h(server); close(done) }()
-	client.SetReadDeadline(time.Now().Add(3 * time.Second))
-	client.Read(make([]byte, 8))
-	client.Close()
-	<-done
-	select {
-	case <-accepted:
-		t.Fatal("a station-device flow reached the radio's own address")
-	case <-time.After(200 * time.Millisecond):
-	}
-	if got := n.approvedRoutes(); len(got) != 0 {
-		t.Fatalf("a refused flow marked routes in use: %v", got)
+		h, intercept := n.subnetTCP(netip.MustParseAddrPort("100.64.0.9:40000"), radioAP)
+		if h == nil || !intercept {
+			t.Fatalf("%s: a flow to an advertised route must be intercepted, not left to tsnet", tc.name)
+		}
+		client, server := net.Pipe()
+		done := make(chan struct{})
+		go func() { h(server); close(done) }()
+		client.SetReadDeadline(time.Now().Add(3 * time.Second))
+		client.Read(make([]byte, 8))
+		client.Close()
+		<-done
+		select {
+		case <-accepted:
+			t.Fatalf("%s: a station-device flow reached the radio", tc.name)
+		case <-time.After(200 * time.Millisecond):
+		}
+		if got := n.approvedRoutes(); len(got) != 0 {
+			t.Fatalf("%s: a refused flow marked routes in use: %v", tc.name, got)
+		}
 	}
 }

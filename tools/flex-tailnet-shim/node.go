@@ -103,8 +103,9 @@ type Node struct {
 	// the node runs. Nil refuses every flow.
 	authorize func(net.Addr) (string, bool)
 	// localAddrs lists the radio's own addresses (interfaceAddrs when nil);
-	// a test seam.
+	// a test seam. locals caches them.
 	localAddrs func() []netip.Addr
+	locals     localAddrCache
 }
 
 func (n *Node) cfgPath() string   { return filepath.Join(n.StateDir, "provision.json") }
@@ -449,18 +450,9 @@ func (n *Node) RefreshRoutes() {
 // SetSharing changes which LAN devices are shared, without leaving the
 // tailnet. shareDiscovered nil leaves that setting unchanged.
 func (n *Node) SetSharing(presented string, routes []string, shareDiscovered *bool) error {
-	// Refuse before interrupting a boot attempt, so a caller without the
-	// token can't keep restarting it. Checked again under opMu.
-	if !n.checkToken(presented) {
-		return errUnauthorized
-	}
-	if n.interruptBoot() {
-		defer n.Boot()
-	}
-	n.opMu.Lock()
-	if !n.checkToken(presented) {
-		n.opMu.Unlock()
-		return errUnauthorized
+	end, err := n.beginOp(presented, false)
+	if err != nil {
+		return err
 	}
 	n.mu.Lock()
 	cfg := n.cfg
@@ -470,15 +462,49 @@ func (n *Node) SetSharing(presented string, routes []string, shareDiscovered *bo
 		cfg.ShareDiscovered = shareDiscovered
 	}
 	if err := n.save(cfg); err != nil {
-		n.opMu.Unlock()
+		end()
 		return err
 	}
 	n.mu.Lock()
 	n.cfg = cfg
 	n.mu.Unlock()
-	n.opMu.Unlock()
+	end()
 	n.RefreshRoutes()
 	return nil
+}
+
+// beginOp admits an operator request and serializes it: the admin token is
+// checked (unless firstUse allows an unprovisioned node), then any pending
+// boot attempt is interrupted and opMu taken, then the token is checked
+// again under opMu, where it can't be rotated underneath. Checking before
+// the interrupt means a caller without the token can't keep restarting the
+// boot; interrupting before taking opMu means a request never waits behind a
+// tailnet login. end releases opMu and resumes the interrupted boot if the
+// node still needs one (Boot does nothing for a node that is up or
+// unprovisioned). Every operator request goes through here.
+func (n *Node) beginOp(presented string, firstUse bool) (end func(), err error) {
+	refused := func() bool {
+		n.mu.Lock()
+		needsToken := !firstUse || n.provisioned()
+		n.mu.Unlock()
+		return needsToken && !n.checkToken(presented)
+	}
+	if refused() {
+		return nil, errUnauthorized
+	}
+	resume := n.interruptBoot()
+	n.opMu.Lock()
+	end = func() {
+		n.opMu.Unlock()
+		if resume {
+			n.Boot()
+		}
+	}
+	if refused() {
+		end()
+		return nil, errUnauthorized
+	}
+	return end, nil
 }
 
 // stop leaves the relay and tailnet. With logout it also deregisters the
@@ -590,28 +616,12 @@ func newToken() (token, hash string) {
 // the lock, two first-use requests could both see an unprovisioned node and
 // the second would replace the first's node without its token.
 func (n *Node) Provision(presented, authKey, hostname string, allow, routes []string, shareDiscovered *bool) (string, error) {
-	// Refuse before interrupting a boot attempt, so a caller without the
-	// token can't keep restarting it (first use needs none). Checked again
-	// under opMu. A request refused there resumes the boot it interrupted; a
-	// successful or failed join replaces it (Boot does nothing for a node
-	// that is up or unprovisioned).
-	n.mu.Lock()
-	needsToken := n.provisioned()
-	n.mu.Unlock()
-	if needsToken && !n.checkToken(presented) {
-		return "", errUnauthorized
+	// First use needs no token (beginOp).
+	end, err := n.beginOp(presented, true)
+	if err != nil {
+		return "", err
 	}
-	if n.interruptBoot() {
-		defer n.Boot()
-	}
-	n.opMu.Lock()
-	defer n.opMu.Unlock()
-	n.mu.Lock()
-	provisioned := n.provisioned()
-	n.mu.Unlock()
-	if provisioned && !n.checkToken(presented) {
-		return "", errUnauthorized
-	}
+	defer end()
 
 	token, hash := newToken()
 	cfg := provisionConfig{TokenSHA256: hash, Hostname: hostname, Allow: allow, Routes: routes,
@@ -665,18 +675,11 @@ func (n *Node) Provision(presented, authKey, hostname string, allow, routes []st
 
 // SetAllow changes who may connect, without leaving the tailnet.
 func (n *Node) SetAllow(presented string, allow []string) error {
-	// Refuse before interrupting a boot attempt (see SetSharing).
-	if !n.checkToken(presented) {
-		return errUnauthorized
+	end, err := n.beginOp(presented, false)
+	if err != nil {
+		return err
 	}
-	if n.interruptBoot() {
-		defer n.Boot()
-	}
-	n.opMu.Lock()
-	defer n.opMu.Unlock()
-	if !n.checkToken(presented) {
-		return errUnauthorized
-	}
+	defer end()
 	n.mu.Lock()
 	cfg := n.cfg
 	cfg.Allow = allow
@@ -699,22 +702,15 @@ func (n *Node) SetAllow(presented string, allow []string) error {
 // and any later failure (logout, tailnet state) is returned but leaves the
 // node signed out.
 func (n *Node) SignOut(presented string) error {
-	// Refuse before interrupting a boot attempt (see SetSharing).
-	if !n.checkToken(presented) {
-		return errUnauthorized
+	end, err := n.beginOp(presented, false)
+	if err != nil {
+		return err
 	}
-	if n.interruptBoot() {
-		defer n.Boot()
-	}
-	n.opMu.Lock()
-	defer n.opMu.Unlock()
-	if !n.checkToken(presented) {
-		return errUnauthorized
-	}
+	defer end()
 	if err := os.Remove(n.cfgPath()); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("could not delete the saved settings, so nothing was changed: %w", err)
 	}
-	err := n.stop(true)
+	err = n.stop(true)
 	n.mu.Lock()
 	n.cfg = provisionConfig{}
 	n.state, n.lastError = stateUnprovisioned, ""
@@ -889,6 +885,19 @@ func parseRoute(s string) (netip.Prefix, error) {
 	return netip.Prefix{}, fmt.Errorf("%q is not private LAN space", s)
 }
 
+// isRadio reports whether a is the radio: RadioAddr, or any address of the
+// host the container shares with it.
+func (n *Node) isRadio(a netip.Addr) bool {
+	a = a.Unmap()
+	if ra, err := netip.ParseAddr(n.RadioAddr); err == nil && ra.Unmap() == a {
+		return true
+	}
+	n.mu.Lock()
+	list := n.localAddrs
+	n.mu.Unlock()
+	return n.locals.has(a, list)
+}
+
 // subnetTCP handles a TCP flow addressed to one of this node's advertised
 // subnet routes (a station device): check the caller against the allowlist,
 // then dial the device from the radio's network and splice. The tailnet's
@@ -913,7 +922,7 @@ func (n *Node) subnetTCP(src, dst netip.AddrPort) (handler func(net.Conn), inter
 	return func(c net.Conn) {
 		defer c.Close()
 		n.mu.Lock()
-		authorize, local := n.authorize, n.localAddrs
+		authorize := n.authorize
 		n.mu.Unlock()
 		if authorize == nil {
 			log.Printf("subnet %s -> %s: refused, the node is not running", src, dst)
@@ -923,10 +932,7 @@ func (n *Node) subnetTCP(src, dst netip.AddrPort) (handler func(net.Conn), inter
 			log.Printf("subnet %s -> %s: refused %s", src, dst, who)
 			return
 		}
-		if local == nil {
-			local = interfaceAddrs
-		}
-		if slices.Contains(local(), dst.Addr().Unmap()) {
+		if n.isRadio(dst.Addr()) {
 			log.Printf("subnet %s -> %s: refused, that is the radio itself", src, dst)
 			return
 		}

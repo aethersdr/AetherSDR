@@ -322,8 +322,12 @@ container.
   in the admin console.
 - Shared devices never reach the radio itself. A route wide enough to
   include the radio's own address doesn't make the radio's ports reachable
-  through it. A discovered device is shared at the address its announcement
-  came from, so a LAN computer can't get a different address shared.
+  through it.
+- A discovered device is shared at the address its announcement came from,
+  not an address the announcement names. Discovery trusts the station LAN,
+  as the radio itself does: a computer there can still announce fake
+  devices, up to 16. If a real device is missing, list it under **OTHER
+  DEVICES**.
 - On the tailnet the container exposes only the radio's own ports, its
   forwarded side channels, shared station devices, and the diagnostics
   report. Its setup interface listens only on the radio's local network.

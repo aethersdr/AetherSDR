@@ -29,9 +29,12 @@ var discoveryPorts = []int{9007, 9008, 9010}
 // deviceStale is how long a device stays listed after its last announcement.
 const deviceStale = 2 * time.Minute
 
-// maxDevices bounds the discovered set, and so the routes it can advertise:
+// maxDevices bounds the discovered set, and so the routes discovery can add:
 // a station has a handful of accessories, and every one becomes a subnet
-// route offered to the tailnet. It matches the operator's own limit of 16.
+// route offered to the tailnet. Devices are admitted first come and stay
+// while they keep announcing, so the LAN can still crowd out a real device
+// (D3: the station LAN is trusted); the operator can list it under Other
+// devices, which this cap doesn't count.
 const maxDevices = 16
 
 // Device is one discovered station accessory.
@@ -47,9 +50,11 @@ type Device struct {
 
 // parseAnnouncement turns a 4O3A discovery datagram into a Device at the
 // packet's source address, which must be private LAN. The announced ip= is
-// not trusted: anyone on the LAN can send an announcement, and taking its
-// ip= would let them have any private address shared over the tailnet. A
-// sender can only ever have its own address shared.
+// not used: taking it would let any LAN host have any private address
+// shared just by naming it. The source address is better evidence, though
+// not proof: a LAN host that forges its UDP source can still name another
+// address (D3: the station LAN is trusted), but not the radio's own, which
+// subnetTCP refuses.
 func parseAnnouncement(b []byte, src netip.Addr, port int) (Device, bool) {
 	text := strings.TrimSpace(strings.TrimRight(string(b), "\x00"))
 	fields := strings.Fields(text)

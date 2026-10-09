@@ -56,6 +56,9 @@ func TestSessionReportShowsOnlyTheCallersSessions(t *testing.T) {
 	for i, ip := range []netip.Addr{mine, theirs, mine} {
 		s := &Session{id: uint64(i + 1), relay: r, clientIP: ip, peer: "node"}
 		s.vita.note(vitaPacket(0, 0x40000000))
+		lan := "192.168.50.77:5000"
+		s.lastRejected.Store(&lan)
+		s.fromOthers.Store(1)
 		r.sessions[s.id] = s
 	}
 	n := &Node{MaxMTU: 1200, relay: r}
@@ -72,6 +75,14 @@ func TestSessionReportShowsOnlyTheCallersSessions(t *testing.T) {
 	}
 	if len(rep.Sessions[0].Streams) != 1 {
 		t.Fatalf("streams not reported: %+v", rep.Sessions[0])
+	}
+	// The count reaches the tailnet caller; the station-LAN sender's address
+	// stays on the LAN (/v1/status).
+	if rep.Sessions[0].FromOthers != 1 || rep.Sessions[0].LastRejected != "" {
+		t.Fatalf("tailnet report carries %+v", rep.Sessions[0])
+	}
+	if lan := n.relay.Sessions(); lan[0].LastRejected == "" {
+		t.Fatal("/v1/status lost the rejected sender")
 	}
 
 	allow := func(a net.Addr) (string, bool) {

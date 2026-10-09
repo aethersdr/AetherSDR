@@ -20,8 +20,8 @@ struct TailnetShimRelease {
         "https://github.com/aethersdr/AetherSDR/releases/download/"
         "flex-tailnet-shim-v0.4.1/flex-tailnet-shim-0.4.1.tar.gz";
     static constexpr const char* kSha256 =
-        "43e56deaba65a83fd33ea32a5c09e170371f1f33395c65b88434415abeffc7b4";
-    static constexpr qint64 kSize = 8049814;
+        "5d3120b976b19e42467d433b12c3ce43ddb6c4d391a8d330715b876c0f19b771";
+    static constexpr qint64 kSize = 8048989;
 };
 
 }  // namespace AetherSDR
