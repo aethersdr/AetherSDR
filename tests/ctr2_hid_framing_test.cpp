@@ -7,6 +7,7 @@
 #include <QByteArray>
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
 #include <cstdio>
 #include <random>
@@ -304,7 +305,7 @@ void testMidMessageHeld()
 // Extensions: rejected unless negotiated, sequenced like Data when they are.
 void testExtensions()
 {
-    const QByteArray payload = spectrum::encode(4000, std::vector<float>(32, -45.0f));
+    const QByteArray payload = spectrum::encode(67, 4000, std::vector<float>(32, -45.0f));
     FrameEncoder enc;
     std::vector<Report> reports;
     enc.encodeControl(MessageType::Ready, &reports);
@@ -352,11 +353,11 @@ void testExtensions()
 // can be enabled.
 void testExtensionLengths()
 {
-    check(extensionMaxLength(MessageType::AudioSpectrum) == 3 + spectrum::kMaxBars,
-          "AudioSpectrum carries at most 67 bytes");
+    check(extensionMaxLength(MessageType::AudioSpectrum) == 5 + spectrum::kMaxBars,
+          "AudioSpectrum carries at most 69 bytes");
     FrameEncoder enc;
     std::vector<Report> out;
-    check(!enc.encodeExtension(MessageType::AudioSpectrum, QByteArray(68, '\x01'), &out)
+    check(!enc.encodeExtension(MessageType::AudioSpectrum, QByteArray(70, '\x01'), &out)
               && out.empty(),
           "the encoder refuses an over-long spectrum");
 
@@ -404,18 +405,18 @@ void testCapabilitiesAndSpectrum()
     bad[2] = 0x02;
     check(capabilities::decode(bad) == 0, "an unknown extension version offers nothing");
 
-    const QByteArray p = spectrum::encode(4000, {-90.0f, 0.0f, -45.0f, 5.0f, -200.0f,
-                                                 std::numeric_limits<float>::quiet_NaN()});
-    check(p.size() == 3 + 6 && static_cast<std::uint8_t>(p[0]) == 6, "bar count leads the payload");
-    check(static_cast<std::uint8_t>(p[1]) == 0x0F && static_cast<std::uint8_t>(p[2]) == 0xA0,
-          "span 4000 Hz, MSB first");
-    check(static_cast<std::uint8_t>(p[3]) == 0 && static_cast<std::uint8_t>(p[4]) == 255
-              && static_cast<std::uint8_t>(p[5]) == 128,
+    const QByteArray p = spectrum::encode(67, 4000, {-90.0f, 0.0f, -45.0f, 5.0f, -200.0f,
+                                                     std::numeric_limits<float>::quiet_NaN()});
+    auto u = [&](int i) { return static_cast<std::uint8_t>(p[i]); };
+    check(p.size() == 5 + 6 && u(0) == 6, "bar count leads the payload");
+    check(u(1) == 0x00 && u(2) == 67, "then the log axis's low edge, 67 Hz, MSB first");
+    check(u(3) == 0x0F && u(4) == 0xA0, "then the span, 4000 Hz, MSB first");
+    check(u(5) == 0 && u(6) == 255 && u(7) == 128,
           "-90 dB is 0, 0 dBFS is 255, -45 dB is mid-scale");
-    check(static_cast<std::uint8_t>(p[6]) == 255 && static_cast<std::uint8_t>(p[7]) == 0
-              && static_cast<std::uint8_t>(p[8]) == 0,
+    check(u(8) == 255 && u(9) == 0 && u(10) == 0,
           "levels clamp, and a non-finite level reads as the floor");
-    check(spectrum::encode(4000, std::vector<float>(100, -10.0f)).size() == 3 + spectrum::kMaxBars,
+    check(spectrum::encode(67, 4000, std::vector<float>(100, -10.0f)).size()
+              == 5 + spectrum::kMaxBars,
           "at most 64 bars are sent");
 }
 
@@ -433,6 +434,21 @@ void testDisplaySpan()
           "AM +/-10 kHz is capped at 12 kHz, the Nyquist frequency of 24 kHz audio");
     check(spectrum::displaySpanHz(-10000, 10000, 48000) == 20000, "48 kHz audio allows 20 kHz");
     check(spectrum::displaySpanHz(0, 0, 24000) == spectrum::kDefaultSpanHz, "no passband: default");
+
+    // The frequency axis is logarithmic from a low edge of span / 60, kept
+    // within 20..100 Hz.
+    check(spectrum::displayLowHz(6000) == 100 && spectrum::displayLowHz(3000) == 50
+              && spectrum::displayLowHz(600) == 20 && spectrum::displayLowHz(12000) == 100,
+          "low edges: 6 kHz -> 100 Hz, 3 kHz -> 50 Hz, 600 Hz -> 20 Hz, capped at 100 Hz");
+    check(spectrum::bandEdgeHz(100, 6000, 32, 0) == 100 && spectrum::bandEdgeHz(100, 6000, 32, 32) == 6000,
+          "the bars run from the low edge to the span");
+    const double r0 = spectrum::bandEdgeHz(100, 6000, 32, 1) / spectrum::bandEdgeHz(100, 6000, 32, 0);
+    const double r1 = spectrum::bandEdgeHz(100, 6000, 32, 20) / spectrum::bandEdgeHz(100, 6000, 32, 19);
+    check(std::abs(r0 - r1) < 1e-9 && r0 > 1.13 && r0 < 1.14,
+          "every bar covers the same frequency ratio (log spacing)");
+    check(std::abs(spectrum::bandEdgeHz(100, 6000, 32, 16) - 774.6) < 0.1,
+          "the middle bar edge is the geometric mean, 775 Hz, not 3 kHz");
+    check(spectrum::bandEdgeHz(0, 4000, 32, 8) == 1000, "a low edge of 0 means linear spacing");
 }
 
 int main()

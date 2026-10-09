@@ -6,6 +6,8 @@
  */
 #include "ctr2_link.h"
 
+#include <math.h>
+
 static uint16_t packets_for(uint16_t len)
 {
     return (uint16_t)(1u + (len + CTR2_DATA_PER_REPORT - 1u) / CTR2_DATA_PER_REPORT);
@@ -114,11 +116,25 @@ int ctr2_caps_decode(const uint8_t *in, size_t len, uint32_t *caps)
     return 1;
 }
 
+float ctr2_spectrum_band_edge(uint16_t low_hz, uint16_t span_hz, uint8_t n, uint8_t i)
+{
+    if (n == 0 || i == 0) {
+        return (float)low_hz;
+    }
+    if (i >= n) {
+        return (float)span_hz;
+    }
+    if (low_hz == 0 || low_hz >= span_hz) {
+        return (float)span_hz * (float)i / (float)n;
+    }
+    return (float)low_hz * powf((float)span_hz / (float)low_hz, (float)i / (float)n);
+}
+
 uint16_t ctr2_ext_max_length(uint8_t type)
 {
     switch (type) {
     case CTR2_EXT_AUDIO_SPECTRUM:
-        return (uint16_t)(3u + CTR2_SPECTRUM_MAX_BARS);
+        return (uint16_t)(CTR2_SPECTRUM_HEADER + CTR2_SPECTRUM_MAX_BARS);
     default:
         return 0;
     }

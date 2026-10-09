@@ -52,7 +52,7 @@ int extensionMaxLength(MessageType type)
 {
     switch (type) {
     case MessageType::AudioSpectrum:
-        return 3 + spectrum::kMaxBars;
+        return spectrum::kHeaderBytes + spectrum::kMaxBars;
     default:
         return 0;
     }
@@ -94,12 +94,14 @@ std::uint32_t capabilities::decode(const QByteArray& r)
     return caps;
 }
 
-QByteArray spectrum::encode(int spanHz, const std::vector<float>& barsDb)
+QByteArray spectrum::encode(int lowHz, int spanHz, const std::vector<float>& barsDb)
 {
     const int n = std::min<int>(kMaxBars, static_cast<int>(barsDb.size()));
     QByteArray p;
-    p.reserve(3 + n);
+    p.reserve(kHeaderBytes + n);
     p.append(static_cast<char>(n));
+    p.append(static_cast<char>((lowHz >> 8) & 0xFF));
+    p.append(static_cast<char>(lowHz & 0xFF));
     p.append(static_cast<char>((spanHz >> 8) & 0xFF));
     p.append(static_cast<char>(spanHz & 0xFF));
     for (int i = 0; i < n; ++i) {
@@ -108,6 +110,25 @@ QByteArray spectrum::encode(int spanHz, const std::vector<float>& barsDb)
         p.append(static_cast<char>(std::clamp<int>(std::lround(scaled), 0, 255)));
     }
     return p;
+}
+
+double spectrum::bandEdgeHz(int lowHz, int spanHz, int n, int i)
+{
+    if (n <= 0 || i <= 0) {
+        return lowHz > 0 ? lowHz : 0.0;
+    }
+    if (i >= n) {
+        return spanHz;
+    }
+    if (lowHz <= 0 || lowHz >= spanHz) {
+        return double(spanHz) * i / n;   // linear
+    }
+    return lowHz * std::pow(double(spanHz) / lowHz, double(i) / n);
+}
+
+int spectrum::displayLowHz(int spanHz)
+{
+    return std::clamp(spanHz / 60, 20, 100);
 }
 
 int spectrum::displaySpanHz(int filterLo, int filterHi, double sampleRate)

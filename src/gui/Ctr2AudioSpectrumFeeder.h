@@ -15,7 +15,8 @@ class AudioEngine;
 class Ctr2ProxyModel;
 
 // Feeds a controller on the CTR2 USB relay an audio spectrum, about 20 times
-// a second, as bars over 0..the filter width (see Source).
+// a second, as bars log-spaced in frequency up to the filter width (see
+// Source).
 //  - Receiving: what the operator hears, from the RX tap the Client EQ panels
 //    use (AudioEngine::copyRecentClientEqRxSamples): after the radio's DSP,
 //    client NR and the RX chain up to and including the EQ. Stages placed
@@ -51,10 +52,12 @@ public:
     Ctr2AudioSpectrumFeeder(Ctr2ProxyModel* model, AudioEngine* audio, SourceFn source,
                             QObject* parent = nullptr);
 
-    // Bars in dBFS from FFT magnitudes (dB, bin i at i * sampleRate / 2048):
-    // the strongest bin in each of kBars equal bands over 0..spanHz.
+    // Bars in dBFS from FFT magnitudes (dB, bin i at i * sampleRate / 2048),
+    // one per log-spaced band from lowHz to spanHz: the strongest bin in the
+    // band, or, for a band narrower than a bin, the magnitude interpolated at
+    // its centre, so the low bars do not repeat one bin as flat steps.
     static std::vector<float> barsFromBins(const std::vector<float>& binsDb, double sampleRate,
-                                           int spanHz, float correctionDb);
+                                           int lowHz, int spanHz, float correctionDb);
 
 private:
     void follow();

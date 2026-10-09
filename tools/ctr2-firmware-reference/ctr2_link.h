@@ -2,9 +2,9 @@
  * Copyright (c) 2026 Jeremy Fielder (KK7GWY)
  *
  * CTR2 USB link, wire format version 0 -- portable reference implementation
- * for the controller firmware. C99, no heap, depends only on <stdint.h> and
- * <stddef.h>. MIT-licensed (unlike the rest of AetherSDR) so it can be copied
- * into closed firmware. Specification: docs/ctr2-usb-relay-design.md.
+ * for the controller firmware. C99, no heap, depends only on <stdint.h>,
+ * <stddef.h> and (for the optional spectrum helper) <math.h>. MIT-licensed
+ * (unlike the rest of AetherSDR) so it can be copied into closed firmware. Specification: docs/ctr2-usb-relay-design.md.
  *
  * A "report" is the 8 bytes after HID report ID 0x01.
  *
@@ -56,13 +56,20 @@ extern "C" {
 #define CTR2_EXT_LAST           0x5Fu
 #define CTR2_CAP(type)          (1ul << ((type) - CTR2_EXT_FIRST))
 
-/* AUDIO_SPECTRUM, host -> device: what the operator is hearing, as bars.
- * Payload: [bar count N, 1..64][span Hz hi][span Hz lo][N levels], each
- * level 0..255 linear in dB from CTR2_SPECTRUM_FLOOR_DB (0) to 0 dBFS (255).
- * Bars split 0..span Hz evenly. Sent at most ~20 times a second. */
+/* AUDIO_SPECTRUM, host -> device: the audio spectrum as bars (receive audio,
+ * or the transmit audio while transmitting). Payload:
+ *   [bar count N, 1..64][low Hz hi][low Hz lo][span Hz hi][span Hz lo][N levels]
+ * Each level is 0..255, linear in dB from CTR2_SPECTRUM_FLOOR_DB (0) to
+ * 0 dBFS (255). With low > 0 the bars are log-spaced from low to span Hz
+ * (ctr2_spectrum_band_edge); with low 0 they split 0..span Hz evenly. Sent
+ * at most ~20 times a second. */
 #define CTR2_EXT_AUDIO_SPECTRUM 0x40u
 #define CTR2_SPECTRUM_MAX_BARS  64u
 #define CTR2_SPECTRUM_FLOOR_DB  (-90)
+#define CTR2_SPECTRUM_HEADER    5u
+
+/* Lower edge in Hz of bar i of n (i == n gives span_hz, the top edge). */
+float ctr2_spectrum_band_edge(uint16_t low_hz, uint16_t span_hz, uint8_t n, uint8_t i);
 
 /* Largest payload each extension type may carry; 0 for a type not defined
  * yet. A longer message is a framing error (CTR2_ERR_BAD_LENGTH). */

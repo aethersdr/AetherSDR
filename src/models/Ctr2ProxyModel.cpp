@@ -437,10 +437,20 @@ bool Ctr2ProxyModel::audioSpectrumWanted() const
         && (m_usb->extensions() & ctr2hid::capabilityBit(ctr2hid::MessageType::AudioSpectrum));
 }
 
-bool Ctr2ProxyModel::sendAudioSpectrum(int spanHz, const std::vector<float>& barsDb)
+bool Ctr2ProxyModel::sendAudioSpectrum(int lowHz, int spanHz, const std::vector<float>& barsDb)
 {
     return audioSpectrumWanted()
-        && m_usb->sendAudioSpectrum(ctr2hid::spectrum::encode(spanHz, barsDb));
+        && m_usb->sendAudioSpectrum(ctr2hid::spectrum::encode(lowHz, spanHz, barsDb));
+}
+
+int Ctr2ProxyModel::audioSpectrumLowHz(int spanHz)
+{
+    return ctr2hid::spectrum::displayLowHz(spanHz);
+}
+
+double Ctr2ProxyModel::audioSpectrumBandEdgeHz(int lowHz, int spanHz, int n, int i)
+{
+    return ctr2hid::spectrum::bandEdgeHz(lowHz, spanHz, n, i);
 }
 
 int Ctr2ProxyModel::audioSpectrumSpanHz(int filterLo, int filterHi, double sampleRate)

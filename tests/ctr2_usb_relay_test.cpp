@@ -962,7 +962,7 @@ void testNoHelloWhileDraining()
 void testAudioSpectrumExtension()
 {
     const quint32 bit = capabilityBit(MessageType::AudioSpectrum);
-    const QByteArray payload = spectrum::encode(4000, std::vector<float>(32, -40.0f));
+    const QByteArray payload = spectrum::encode(67, 4000, std::vector<float>(32, -40.0f));
     {
         Rig rig;  // a stock CTR2: nothing negotiated
         rig.start();
@@ -1008,7 +1008,7 @@ void testAudioSpectrumExtension()
         for (int i = 0; i < 60; ++i) {
             accepted += rig.relay.sendAudioSpectrum(payload) ? 1 : 0;
         }
-        // 6 reports a frame: ~22 fit under the ~128-report allowance.
+        // 7 reports a frame: ~19 fit under the ~128-report allowance.
         check(accepted >= 15 && accepted < 30, "frames stop once ~130 ms of output is queued");
         rig.port->autoAck = true;
         rig.port->ack(rig.port->pending());  // acknowledged asynchronously, like the real port

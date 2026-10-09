@@ -2,7 +2,8 @@
 
 `ctr2_link.h` and `ctr2_link.c` implement both ends of the CTR2 USB link
 (wire format version 0) in portable C99. They have no heap use and no
-dependencies beyond `<stdint.h>` and `<stddef.h>`.
+dependencies beyond `<stdint.h>` and `<stddef.h>`, plus `<math.h>` for the
+optional spectrum band-edge helper.
 
 These two files are **MIT-licensed**, unlike the rest of AetherSDR (GPLv3), so
 they can be copied into the controller firmware as-is or used as a guide.

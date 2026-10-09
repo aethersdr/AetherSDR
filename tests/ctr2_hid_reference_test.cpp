@@ -12,6 +12,7 @@ extern "C" {
 #include <QByteArray>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <random>
 #include <vector>
@@ -274,15 +275,28 @@ void testExtensionsAgree()
               && CTR2_FEATURE_BYTES == capabilities::kBytes
               && CTR2_SPECTRUM_MAX_BARS == spectrum::kMaxBars
               && CTR2_SPECTRUM_FLOOR_DB == spectrum::kFloorDb
+              && CTR2_SPECTRUM_HEADER == spectrum::kHeaderBytes
               && ctr2_ext_max_length(CTR2_EXT_AUDIO_SPECTRUM)
                      == extensionMaxLength(MessageType::AudioSpectrum)
               && ctr2_ext_max_length(0x45) == 0,
           "extension constants and maximum lengths agree");
+    // Both sides place the bars on the same log axis.
+    bool edgesAgree = true;
+    for (int span : {600, 3000, 6000, 12000}) {
+        const int low = spectrum::displayLowHz(span);
+        for (int i = 0; i <= 32; ++i) {
+            const double cpp = spectrum::bandEdgeHz(low, span, 32, i);
+            const double c = ctr2_spectrum_band_edge(std::uint16_t(low), std::uint16_t(span), 32,
+                                                     std::uint8_t(i));
+            edgesAgree = edgesAgree && std::abs(cpp - c) < 0.01 * cpp + 0.01;
+        }
+    }
+    check(edgesAgree, "the reference and the application agree on every band edge");
     ctr2_rx masked{};
     ctr2_rx_set_extensions(&masked, 0xFFFFFFFFu);
     check(masked.extensions == CTR2_CAP(CTR2_EXT_AUDIO_SPECTRUM),
           "the reference keeps only defined extension types");
-    const std::uint8_t big[CTR2_SPECTRUM_MAX_BARS + 4] = {};
+    const std::uint8_t big[CTR2_SPECTRUM_HEADER + CTR2_SPECTRUM_MAX_BARS + 1] = {};
     std::vector<Report> none;
     ctr2_tx t{};
     check(ctr2_tx_send_extension(&t, CTR2_EXT_AUDIO_SPECTRUM, big, sizeof big, collect, &none) == 0,
@@ -300,7 +314,7 @@ void testExtensionsAgree()
           "the C decoder reads the application's report");
     check(!ctr2_caps_decode(c, CTR2_FEATURE_BYTES - 1, &back), "the C decoder refuses a short report");
 
-    const QByteArray payload = spectrum::encode(4000, std::vector<float>(32, -30.0f));
+    const QByteArray payload = spectrum::encode(67, 4000, std::vector<float>(32, -30.0f));
 
     // Application -> C reference (host to device).
     FrameEncoder enc;

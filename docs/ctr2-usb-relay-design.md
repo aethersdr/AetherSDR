@@ -299,12 +299,12 @@ messages only while the link is relaying (after its READY). It drops them
 rather than queue them when about 130 queued reports (~130 ms; one meter
 datagram plus headroom) are already waiting, so they never delay the radio
 stream. Their reports carry no TCP cost, so the backlog statistic still
-counts radio bytes only. Each AUDIO_SPECTRUM frame of 32 bars is 6 reports
-(header + 5 data), so 20 frames a second use about 12% of the link.
+counts radio bytes only. Each AUDIO_SPECTRUM frame of 32 bars is 7 reports
+(header + 6 data), so 20 frames a second use about 14% of the link.
 
 | Type | Bit | Direction | Payload (max length) |
 | --- | --- | --- | --- |
-| `0x40` AUDIO_SPECTRUM | 0 | host → device | (67 bytes) `[bars N, 1..64][span Hz hi][span Hz lo][N levels]`: receiving: what the operator hears (the Client EQ RX tap: after the radio's DSP, client NR and the RX chain up to and including the EQ; not stages after the EQ, output conversion or volume) over the active slice's passband width; transmitting: the transmit audio (the TX EQ tap) over the TX filter width. Bars split 0..span Hz evenly, the span being that filter width rounded up to a clean step (500 Hz–20 kHz, capped at the audio's Nyquist frequency: 12 kHz for 24 kHz audio), each level 0..255 linear in dB from -90 dB (0) to 0 dBFS (255); about 20 a second |
+| `0x40` AUDIO_SPECTRUM | 0 | host → device | (69 bytes) `[bars N, 1..64][low Hz hi][low Hz lo][span Hz hi][span Hz lo][N levels]`. Receiving: what the operator hears (the Client EQ RX tap: after the radio's DSP, client NR and the RX chain up to and including the EQ; not stages after the EQ, output conversion or volume) over the active slice's passband width. Transmitting: the transmit audio (the TX EQ tap) over the TX filter width. The span is that width rounded up to a clean step (500 Hz–20 kHz, capped at the audio's Nyquist frequency: 12 kHz for 24 kHz audio). With low > 0 the bars are log-spaced from low to span Hz, bar *i* covering low·(span/low)^(i/N) to low·(span/low)^((i+1)/N); AetherSDR sends low = span/60 within 20–100 Hz. With low = 0 they split 0..span evenly. Each level is 0..255, linear in dB from −90 dB (0) to 0 dBFS (255). About 20 a second. |
 
 The reference implementation in `tools/ctr2-firmware-reference` covers the
 Feature report layout (`ctr2_caps_encode` / `ctr2_caps_decode`), sending
