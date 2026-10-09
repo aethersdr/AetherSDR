@@ -271,7 +271,7 @@
       "source": [
         {
           "file": "src/core/backends/flex/VitaSequenceLossReport.h",
-          "line": 62,
+          "line": 115,
           "text": "PanadapterStream: VITA-49 sequence errors on %1 stream 0x%2: "
         }
       ]
@@ -457,7 +457,7 @@
         },
         {
           "file": "src/core/backends/flex/PanadapterStream.cpp",
-          "line": 1756,
+          "line": 1762,
           "text": "stream create failed/dropped"
         }
       ]
@@ -779,32 +779,32 @@
         },
         {
           "file": "src/core/NvidiaAfxPack.cpp",
-          "line": 387,
+          "line": 388,
           "text": "NvidiaAfxPack: install failed:"
         },
         {
           "file": "src/core/NvidiaAfxPack.cpp",
-          "line": 715,
+          "line": 716,
           "text": "download failed (%1): %2"
         },
         {
           "file": "src/core/NvidiaAfxPack.cpp",
-          "line": 636,
+          "line": 637,
           "text": "PyPI lookup failed for %1"
         },
         {
           "file": "src/core/NvidiaAfxPack.cpp",
-          "line": 588,
+          "line": 589,
           "text": "simple-index lookup failed for %1"
         },
         {
           "file": "src/core/NvidiaAfxPack.cpp",
-          "line": 712,
+          "line": 713,
           "text": "write failed for %1 (disk full?)"
         },
         {
           "file": "src/core/NvidiaAfxPack.cpp",
-          "line": 667,
+          "line": 668,
           "text": "cannot write cache"
         }
       ]
@@ -821,12 +821,12 @@
       "source": [
         {
           "file": "src/core/NvidiaAfxPack.cpp",
-          "line": 387,
+          "line": 388,
           "text": "NvidiaAfxPack: install failed:"
         },
         {
           "file": "src/core/NvidiaAfxPack.cpp",
-          "line": 722,
+          "line": 723,
           "text": "checksum mismatch for %1 (corrupt or stale mirror)"
         }
       ]
@@ -843,37 +843,37 @@
       "source": [
         {
           "file": "src/core/NvidiaAfxPack.cpp",
-          "line": 387,
+          "line": 388,
           "text": "NvidiaAfxPack: install failed:"
         },
         {
           "file": "src/core/NvidiaAfxPack.cpp",
-          "line": 774,
+          "line": 775,
           "text": "wheel extract failed: %1"
         },
         {
           "file": "src/core/NvidiaAfxPack.cpp",
-          "line": 813,
+          "line": 814,
           "text": "extract failed: %1"
         },
         {
           "file": "src/core/NvidiaAfxPack.cpp",
-          "line": 789,
+          "line": 790,
           "text": "wheel %1 contained no DLLs"
         },
         {
           "file": "src/core/NvidiaAfxPack.cpp",
-          "line": 824,
+          "line": 825,
           "text": "assembled pack missing %1"
         },
         {
           "file": "src/core/NvidiaAfxPack.cpp",
-          "line": 834,
+          "line": 835,
           "text": "could not install into %1"
         },
         {
           "file": "src/core/NvidiaAfxPack.cpp",
-          "line": 855,
+          "line": 856,
           "text": "install verification failed"
         }
       ]

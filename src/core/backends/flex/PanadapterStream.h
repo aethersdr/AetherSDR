@@ -383,6 +383,7 @@ private:
     QMap<quint32, StreamStats> m_streamStats;  // keyed by stream ID
     mutable QMutex m_statsMutex;
     QElapsedTimer m_seqLossClock;  // time base for StreamStats::lossLog; read only on new streams and errors
+    VitaSequenceLossBudget m_seqLossBudget;  // all streams' lines together; under m_statsMutex
     CategoryStats m_catStats[CatCount]{};
 
     struct AudioStreamTracker {

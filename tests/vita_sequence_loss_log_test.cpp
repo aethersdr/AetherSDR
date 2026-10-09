@@ -123,6 +123,26 @@ int main(int argc, char** argv)
     }
 
     {
+        // All streams together: at most kLinesPerInterval lines per interval,
+        // and the next line logged after that says how many were held back.
+        VitaSequenceLossBudget b;
+        int allowed = 0;
+        for (int i = 0; i < 20; ++i) {
+            if (b.allow(1000 + i)) {
+                ++allowed;
+            }
+        }
+        report("budget: 8 lines in an interval", allowed == VitaSequenceLossBudget::kLinesPerInterval);
+        report("budget: the next interval allows again", b.allow(11000));
+        report("budget: it reports the lines held back", b.takeSuppressed() == 12);
+        report("budget: the count resets", b.takeSuppressed() == 0);
+        report("budget: held-back text",
+               formatVitaSequenceLossSuppressed(12)
+                   == QStringLiteral("PanadapterStream: 12 VITA-49 sequence-error line(s) held back: "
+                                     "more than 8 in 10 s across all streams"));
+    }
+
+    {
         // A stream that never saw start() still reports a sane window.
         VitaSequenceLossLimiter l;
         report("no start(): reports", l.recordError(7000));
@@ -219,6 +239,23 @@ int main(int argc, char** argv)
         VitaSequenceLossLogTestAccess::feedMeter(stream, id, 4);
         report("unregister IQ: a re-created stream counts no sequence error",
                stream.packetErrorCount() == errorsBefore);
+        qInstallMessageHandler(nullptr);
+    }
+
+    {
+        // Many new stream ids with a gap each, as from a burst of stray
+        // datagrams: the first error of each id is due at once, but the lines
+        // stop at the shared budget.
+        g_warnings.clear();
+        qInstallMessageHandler(capture);
+        PanadapterStream stream;  // no init(), no socket
+        for (quint32 i = 0; i < 20; ++i) {
+            VitaSequenceLossLogTestAccess::feedMeter(stream, 0x71000000u + i, 0);
+            VitaSequenceLossLogTestAccess::feedMeter(stream, 0x71000000u + i, 5);
+        }
+        report("burst of new ids: lines stop at the shared budget",
+               g_warnings.size() == VitaSequenceLossBudget::kLinesPerInterval);
+        report("burst of new ids: every error is still counted", stream.packetErrorCount() == 20);
         qInstallMessageHandler(nullptr);
     }
 

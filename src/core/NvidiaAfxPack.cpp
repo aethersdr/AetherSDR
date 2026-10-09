@@ -334,7 +334,8 @@ QString NvidiaAfxPack::withoutUrlQueries(const QString& text)
     // The query runs to the next whitespace, less any closing punctuation that
     // ends it: "(https://h/x?sig=1)." keeps its ")." and loses "?sig=1".
     static const QRegularExpression re(QStringLiteral(
-        "(\\bhttps?://[^\\s?#]+)[?#]\\S*?([)\\]}>\"',.;:]*)(?=\\s|$)"));
+        "(\\bhttps?://[^\\s?#]+)[?#]\\S*?([)\\]}>\"',.;:]*)(?=\\s|$)"),
+        QRegularExpression::CaseInsensitiveOption);
     QString out = text;
     return out.replace(re, QStringLiteral("\\1\\2"));
 }

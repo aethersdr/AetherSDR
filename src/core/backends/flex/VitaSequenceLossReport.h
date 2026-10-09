@@ -49,6 +49,59 @@ private:
     qint64 m_reportWindowMs{0};
 };
 
+// A bound on the sequence-error lines of all streams together: at most
+// kLinesPerInterval per kIntervalMs. The per-stream limiter lets the first error
+// of every stream id log at once, and the VITA socket does not filter by sender,
+// so without this a burst of new stream ids (many streams on a lossy link, or
+// stray datagrams) could log one line per id and push the cause out of a
+// support log's tail. Lines over the budget are counted, and the next line
+// logged says how many were held back.
+class VitaSequenceLossBudget {
+public:
+    static constexpr int kLinesPerInterval = 8;
+    static constexpr qint64 kIntervalMs = 10000;
+
+    // True when a line may be logged now; otherwise the line is counted as
+    // suppressed.
+    bool allow(qint64 nowMs)
+    {
+        if (m_windowStartMs < 0 || nowMs - m_windowStartMs >= kIntervalMs) {
+            m_windowStartMs = nowMs;
+            m_used = 0;
+        }
+        if (m_used >= kLinesPerInterval) {
+            ++m_suppressed;
+            return false;
+        }
+        ++m_used;
+        return true;
+    }
+
+    // Lines suppressed since the last call; resets the count.
+    int takeSuppressed()
+    {
+        const int n = m_suppressed;
+        m_suppressed = 0;
+        return n;
+    }
+
+private:
+    qint64 m_windowStartMs{-1};
+    int m_used{0};
+    int m_suppressed{0};
+};
+
+// Logged before the next line that gets through the budget, when some were
+// held back. Not matched by the analyzer rule: the lines around it are.
+inline QString formatVitaSequenceLossSuppressed(int lines)
+{
+    return QStringLiteral("PanadapterStream: %1 VITA-49 sequence-error line(s) held back: "
+                          "more than %2 in %3 s across all streams")
+        .arg(lines)
+        .arg(VitaSequenceLossBudget::kLinesPerInterval)
+        .arg(VitaSequenceLossBudget::kIntervalMs / 1000);
+}
+
 // The log line the docs Log Analyzer matches on its fixed prefix. A sequence
 // error is a gap in the 4-bit VITA-49 packet count, so it counts packets that
 // were lost and packets that arrived out of order alike, and one gap is one

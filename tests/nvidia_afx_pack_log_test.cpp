@@ -86,6 +86,8 @@ int main(int argc, char** argv)
            NvidiaAfxPack::withoutUrlQueries("at https://h/x?a=(1)&sig=abc end") == "at https://h/x end");
     report("a query at the end of the text is removed",
            NvidiaAfxPack::withoutUrlQueries("from https://h/x?sig=abc") == "from https://h/x");
+    report("an upper-case scheme is stripped too",
+           NvidiaAfxPack::withoutUrlQueries("from HTTPS://h/x?sig=abc") == "from HTTPS://h/x");
     report("text without URLs unchanged",
            NvidiaAfxPack::withoutUrlQueries("checksum mismatch for AFX (corrupt or stale mirror)")
                == "checksum mismatch for AFX (corrupt or stale mirror)");
