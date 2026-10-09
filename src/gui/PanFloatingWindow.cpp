@@ -56,8 +56,10 @@ void PanFloatingWindow::adoptApplet(PanadapterApplet* applet)
 void PanFloatingWindow::refreshWindowTitle()
 {
     if (!m_applet) return;
-    setWindowTitle(QString("AetherSDR — %1").arg(
-        PanSliceTitle::displayName(m_applet->sliceTitle(), m_applet->panId())));
+    const QString name =
+        PanSliceTitle::displayName(m_applet->sliceTitle(), m_applet->panId());
+    setWindowTitle(name.isEmpty() ? QStringLiteral("AetherSDR")
+                                  : QString("AetherSDR — %1").arg(name));
 }
 
 QString PanFloatingWindow::panId() const

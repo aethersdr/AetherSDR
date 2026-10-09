@@ -31,11 +31,20 @@ inline int pick(const QString& panId, int activeSliceId, int shownSliceId,
     return shownHere ? shownSliceId : first;
 }
 
+// The id of the panadapter the window shows before any radio connects; the
+// first real pan takes it over.
+inline const QString kPlaceholderPanId = QStringLiteral("default");
+
 // The plain-text name for a pan: its slice title, or "Pan <id>" when it has
-// no slice. The docked header and the floating window title both use it.
+// no slice. The pre-connect placeholder has no name. The docked header and the
+// floating window title both use it.
 inline QString displayName(const QString& sliceTitle, const QString& panId)
 {
-    return sliceTitle.isEmpty() ? QStringLiteral("Pan %1").arg(panId) : sliceTitle;
+    if (!sliceTitle.isEmpty())
+        return sliceTitle;
+    if (panId.isEmpty() || panId == kPlaceholderPanId)
+        return {};
+    return QStringLiteral("Pan %1").arg(panId);
 }
 
 } // namespace AetherSDR::PanSliceTitle

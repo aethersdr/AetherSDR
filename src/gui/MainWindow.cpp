@@ -40,6 +40,7 @@
 #include "CopyAssistController.h"
 #endif
 #include "PanadapterStack.h"
+#include "PanSliceTitle.h"
 #include "gui/MiniPanApplet.h"
 #include "gui/MiniPanScope.h"
 #include "gui/MiniPanReslice.h"
@@ -5375,7 +5376,7 @@ void MainWindow::buildUI()
     // Centre — panadapter stack (one or more FFT + waterfall panes)
     m_panStack = new PanadapterStack(splitter);
     m_panApplet = nullptr;  // ensure setActivePanApplet sees a change
-    setActivePanApplet(m_panStack->addPanadapter("default"));
+    setActivePanApplet(m_panStack->addPanadapter(PanSliceTitle::kPlaceholderPanId));
     splitter->addWidget(m_panStack);
 
     // A panadapter created AFTER the initial connect (Add Panadapter, layout
@@ -10987,7 +10988,7 @@ void MainWindow::applyPanLayout(const QString& layoutId)
         int toRemove = existing - needed;
         for (int i = removalCandidates.size() - 1; i >= 0 && toRemove > 0; --i) {
             const QString panId = removalCandidates.at(i);
-            if (panId == "default") continue;
+            if (panId == PanSliceTitle::kPlaceholderPanId) continue;
             qDebug() << "applyPanLayout: closing pan" << panId;
             // Route through removePanadapter so a layout-shrink tears down the
             // waterfall too ("display pan remove" + "display panafall remove"),

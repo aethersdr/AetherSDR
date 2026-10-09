@@ -53,6 +53,7 @@
 #include "TciApplet.h"
 #include "PanadapterStack.h"
 #include "PanSpanControlGate.h"
+#include "PanSliceTitle.h"
 #include "workspace/WorkspaceController.h"
 #include "gui/MiniPanApplet.h"
 #include "gui/MiniPanScope.h"
@@ -2167,10 +2168,10 @@ void MainWindow::wirePanLifecycle()
             applet = m_panStack->panadapter(pan->panId());
         }
         // Reuse the "default" placeholder for the first real pan
-        else if (m_panStack->panadapter("default")) {
-            applet = m_panStack->panadapter("default");
+        else if (m_panStack->panadapter(PanSliceTitle::kPlaceholderPanId)) {
+            applet = m_panStack->panadapter(PanSliceTitle::kPlaceholderPanId);
             applet->setPanId(pan->panId());
-            m_panStack->rekey("default", pan->panId());
+            m_panStack->rekey(PanSliceTitle::kPlaceholderPanId, pan->panId());
         } else {
             applet = m_panStack->addPanadapter(pan->panId());
         }

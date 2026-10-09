@@ -690,10 +690,16 @@ void PanadapterApplet::setSliceId(int id, const QString& perClientLetter)
 
 void PanadapterApplet::setPanId(const QString& id)
 {
+    if (id == m_panId)
+        return;
     m_panId = id;
-    if (m_titleSliceId < 0)
+    if (m_titleSliceId < 0) {
         m_titleLabel->setText(
             PanSliceTitle::displayName(QString(), m_panId).toHtmlEscaped());
+        // A pan with no slice is named by its id, so the floating title
+        // follows the id too (the placeholder taking over the first real pan).
+        emit sliceTitleChanged();
+    }
 }
 
 void PanadapterApplet::clearSliceTitle()

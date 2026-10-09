@@ -57,6 +57,11 @@ int main()
                QString::fromUtf8("Slice A\u2081"));
     EXPECT_STR(displayName(QString(), p2), QStringLiteral("Pan 0x40000001"));
 
+    // The pre-connect placeholder is not a radio pan and has no name.
+    EXPECT_STR(displayName(QString(), AetherSDR::PanSliceTitle::kPlaceholderPanId),
+               QString());
+    EXPECT_STR(displayName(QString(), QString()), QString());
+
     if (g_failures == 0)
         std::printf("pan_slice_title_test: all checks passed\n");
     return g_failures == 0 ? 0 : 1;
