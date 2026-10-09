@@ -26,6 +26,19 @@ constexpr float kMinSpectrumDbm = -180.0f;
 constexpr int kAudioSampleRate = AudioEngine::DEFAULT_SAMPLE_RATE;
 constexpr int kOpusFramesPerPacket = 240;
 
+QString streamCategoryName(PanadapterStream::StreamCategory cat)
+{
+    switch (cat) {
+        case PanadapterStream::CatAudio:     return QStringLiteral("audio");
+        case PanadapterStream::CatFFT:       return QStringLiteral("FFT");
+        case PanadapterStream::CatWaterfall: return QStringLiteral("waterfall");
+        case PanadapterStream::CatMeter:     return QStringLiteral("meter");
+        case PanadapterStream::CatDAX:       return QStringLiteral("DAX");
+        case PanadapterStream::CatCount:     break;
+    }
+    return QStringLiteral("other");
+}
+
 QHostAddress chooseLanBindAddress(RadioConnection* conn,
                                   QString* chosenReason,
                                   QHostAddress* chosenAddress,
@@ -730,12 +743,19 @@ void PanadapterStream::processDatagram(const QByteArray& data)
     // Only track owned/routed streams — skip uncategorized packets. (#455)
     bool sequenceError = false;
     int  audioMissedThisPacket = 0;
+    QString sequenceLossLine;  // logged after the stats lock is released
     if (cat != CatCount) {
         QMutexLocker statsLock(&m_statsMutex);
         m_catStats[cat].bytes += data.size();
         m_catStats[cat].packets++;
         auto& stats = m_streamStats[streamId];
         stats.totalCount++;
+        if (stats.totalCount == 1) {
+            if (!m_seqLossClock.isValid()) {
+                m_seqLossClock.start();
+            }
+            stats.lossLog.start(m_seqLossClock.elapsed());
+        }
         if (stats.lastSeq >= 0) {
             const int expected = (stats.lastSeq + 1) & 0x0F;
             if (vitaSeq != expected) {
@@ -746,6 +766,11 @@ void PanadapterStream::processDatagram(const QByteArray& data)
                     // 4-bit modular distance, minus the one packet we just got. (#2731)
                     audioMissedThisPacket =
                         ((vitaSeq - stats.lastSeq - 1) & 0x0F);
+                }
+                if (stats.lossLog.recordError(m_seqLossClock.elapsed())) {
+                    sequenceLossLine = formatVitaSequenceLoss(
+                        streamCategoryName(cat), streamId, stats.lossLog.reportErrors(),
+                        stats.lossLog.reportWindowMs(), stats.errorCount, stats.totalCount);
                 }
             }
         }
@@ -771,6 +796,9 @@ void PanadapterStream::processDatagram(const QByteArray& data)
                 m_audioPacketTimerStarted = true;
             }
         }
+    }
+    if (!sequenceLossLine.isEmpty()) {
+        qCWarning(lcVita49).noquote() << sequenceLossLine;
     }
     if ((cat == CatFFT || cat == CatWaterfall) && PerfTelemetry::instance().enabled()) {
         PerfTelemetry::instance().recordStreamPacket(

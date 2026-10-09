@@ -165,6 +165,15 @@ Network jitter or lost packets are reaching the audio buffer.
 2. Leave **Smooth packet loss** on.
 3. Use Opus compression and low bandwidth mode.
 
+### Audio drops out or the waterfall has gaps
+
+Packets from the radio are lost, or arrive out of order, on the way to the computer. Wi-Fi, a busy switch or a VPN are the usual causes. The log then shows `PanadapterStream: VITA-49 sequence errors on <stream> stream`, at most once every 10 seconds for each stream.
+
+1. Open **Tools → Network Diagnostics...** to see which streams lose packets.
+2. Connect the computer to the network by cable instead of Wi-Fi.
+3. If the VITA-49 RX buffer says it was capped, raise `net.core.rmem_max` (see [The VITA-49 RX buffer says it was capped](#the-vita-49-rx-buffer-says-it-was-capped)).
+4. On a remote link, use Opus compression and low bandwidth mode.
+
 ### Low bandwidth mode has no effect
 
 It takes effect only when you connect, and never on a FlexRadio found **On This Network**.

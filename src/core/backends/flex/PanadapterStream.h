@@ -5,6 +5,7 @@
 
 #include "core/PacketLossConcealment.h"
 #include "core/VitaBinCoverage.h"
+#include "core/backends/flex/VitaSequenceLossReport.h"
 
 #include <QObject>
 #include <QUdpSocket>
@@ -216,6 +217,7 @@ private slots:
 
 private:
     friend class PcmCompatibilityTestAccess;
+    friend class VitaSequenceLossLogTestAccess;
     PcmProducer m_pcmProducer;
     std::map<quint32, std::unique_ptr<PcmProducer>> m_daxPcm;
     void publishLegacyDaxAudio(quint32 streamId, int channel, const QByteArray& pcm);
@@ -304,6 +306,7 @@ private:
         int  lastSeq{-1};
         int  errorCount{0};
         int  totalCount{0};
+        VitaSequenceLossLimiter lossLog;
     };
 
 public:
@@ -364,6 +367,7 @@ private:
     QMap<quint32, FrameAssembler> m_frames;  // per-stream FFT frame assembly
     QMap<quint32, StreamStats> m_streamStats;  // keyed by stream ID
     mutable QMutex m_statsMutex;
+    QElapsedTimer m_seqLossClock;  // time base for StreamStats::lossLog; read only on new streams and errors
     CategoryStats m_catStats[CatCount]{};
 
     struct AudioStreamTracker {

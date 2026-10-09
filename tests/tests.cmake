@@ -2862,7 +2862,32 @@ if(ENABLE_NVIDIA_AFX AND ((UNIX AND NOT APPLE) OR WIN32) AND CMAKE_SYSTEM_PROCES
         target_link_libraries(nvidia_afx_filter_test PRIVATE ${CMAKE_DL_LIBS})
     endif()
     add_test(NAME nvidia_afx_filter_test COMMAND nvidia_afx_filter_test)
+
+    # The BNR pack's failure lines on aether.nvafx that the docs Log Analyzer
+    # matches (#6285). Socket-free: imports a missing archive, never install().
+    add_executable(nvidia_afx_pack_log_test tests/nvidia_afx_pack_log_test.cpp)
+    target_include_directories(nvidia_afx_pack_log_test PRIVATE src)
+    target_link_libraries(nvidia_afx_pack_log_test PRIVATE aethercore Qt6::Core)
+    add_test(NAME nvidia_afx_pack_log_test COMMAND nvidia_afx_pack_log_test)
 endif()
+
+# PanadapterStream's rate-limited VITA-49 sequence-error line and its text, which
+# the docs Log Analyzer matches (#6285). Socket-free: meter packets are fed to
+# processDatagram() on a stream that never binds.
+add_executable(vita_sequence_loss_log_test tests/vita_sequence_loss_log_test.cpp)
+target_include_directories(vita_sequence_loss_log_test PRIVATE src)
+target_link_libraries(vita_sequence_loss_log_test PRIVATE aethercore Qt6::Core)
+add_test(NAME vita_sequence_loss_log_test COMMAND vita_sequence_loss_log_test)
+
+# The start-up "Platform: Qt platform plugin" line and its fallback line (#6285).
+# Pure: no QGuiApplication.
+add_executable(qt_platform_choice_test
+    tests/qt_platform_choice_test.cpp
+    src/QtPlatformChoice.cpp
+)
+target_include_directories(qt_platform_choice_test PRIVATE src)
+target_link_libraries(qt_platform_choice_test PRIVATE Qt6::Core)
+add_test(NAME qt_platform_choice_test COMMAND qt_platform_choice_test)
 
 # Pure, headless, hardware-free golden matrix for the consolidated audio
 # format/rate negotiation policy (#3306). TargetOs is data, so this one binary

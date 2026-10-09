@@ -150,6 +150,7 @@ for (const f of fs.readdirSync(ruleSampleDir)) {
   check(s.os && s.os.startsWith('Ubuntu'), `clean.log summary os: ${s.os}`);
   check(s.radioModel === 'FLEX-8600', `clean.log summary radio model: ${s.radioModel}`);
   check(s.firmware && s.firmware.startsWith('4.'), `clean.log summary firmware: ${s.firmware}`);
+  check(s.qtPlatform === 'xcb', `clean.log summary Qt platform plugin: ${s.qtPlatform}`);
 }
 
 function summaryPatterns() {

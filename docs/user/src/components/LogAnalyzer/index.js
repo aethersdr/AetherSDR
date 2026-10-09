@@ -25,6 +25,7 @@ const SUMMARY_FIELDS = [
   ['cpu', 'CPU'],
   ['ram', 'Memory'],
   ['gpu', 'Render GPU'],
+  ['qtPlatform', 'Qt platform plugin'],
   ['radioModel', 'Radio model'],
   ['firmware', 'Radio firmware'],
 ];

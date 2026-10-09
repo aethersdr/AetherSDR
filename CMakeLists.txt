@@ -1688,6 +1688,7 @@ target_link_libraries(aetherdesktop_support PUBLIC
 
 add_executable(AetherSDR
     src/main.cpp
+    src/QtPlatformChoice.cpp  # start-up log lines: the Qt platform plugin and any fallback
     ${GUI_SOURCES}
     ${RESOURCES}
     ${DFNR_RESOURCES}

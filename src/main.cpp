@@ -19,6 +19,7 @@
 #include "core/SystemInventory.h"
 #include "core/MacMicPermission.h"
 #include "core/AutomationServer.h"
+#include "QtPlatformChoice.h"
 
 #ifdef Q_OS_MAC
 #include "MacStartupAbortGuard.h"
@@ -27,6 +28,8 @@
 #include "core/backends/hl2/Hl2EmergencyStop.h"
 
 #include <QApplication>
+#include <QGuiApplication>
+#include <QStringList>
 #include <QSurfaceFormat>
 #include <memory>
 #include <QStyleFactory>
@@ -238,6 +241,9 @@ static int runConfigCli(int argc, char* argv[])
 // QT_QPA_PLATFORM already). The presence itself lives in DisplayPresence.h's
 // accessor (setDetectedDisplayPresence) so SpectrumWidget can read it too.
 static const char* g_qpaPlatformChoice = nullptr;
+// Whether the user's environment set QT_QPA_PLATFORM, read before main() may set
+// it, so the start-up platform line can say who chose the value Qt started with.
+static bool g_qpaPlatformUserSet = false;
 
 static const char* displayPresenceName(AetherSDR::DisplayPresence p)
 {
@@ -279,7 +285,8 @@ int main(int argc, char* argv[])
     // plugin lands on xcb instead of failing to start (#1389); appimage.yml deploys
     // the Wayland plugin. Skipped when the user sets QT_QPA_PLATFORM (xcb is the
     // documented escape hatch, README next to AETHER_NO_GPU).
-    if (!qEnvironmentVariableIsSet("QT_QPA_PLATFORM")) {
+    g_qpaPlatformUserSet = qEnvironmentVariableIsSet("QT_QPA_PLATFORM");
+    if (!g_qpaPlatformUserSet) {
         const QByteArray session = qgetenv("XDG_SESSION_TYPE");
         if (session == "wayland" && qEnvironmentVariableIsSet("WAYLAND_DISPLAY")) {
             // Override to xcb only when the session is affirmatively headless (DRM
@@ -627,6 +634,18 @@ int main(int argc, char* argv[])
                 << "Platform: Wayland session, display presence"
                 << displayPresenceName(AetherSDR::detectedDisplayPresence())
                 << "-> QT_QPA_PLATFORM" << g_qpaPlatformChoice;
+        }
+        {
+            using AetherSDR::QpaRequestSource;
+            const QpaRequestSource source = g_qpaPlatformUserSet ? QpaRequestSource::User
+                : g_qpaPlatformChoice                            ? QpaRequestSource::AetherSDR
+                                                                 : QpaRequestSource::Unset;
+            const QStringList lines = AetherSDR::QtPlatformChoice::logLines(
+                qEnvironmentVariable("QT_QPA_PLATFORM"), source, QGuiApplication::platformName());
+            qInfo().noquote() << lines.value(0);
+            if (lines.size() > 1) {
+                qWarning().noquote() << lines.at(1);
+            }
         }
 
         // Symlink aethersdr.log → latest timestamped file (for Support dialog)

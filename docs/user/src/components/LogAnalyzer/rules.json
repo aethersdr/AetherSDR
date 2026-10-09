@@ -25,6 +25,18 @@
           "text": "else if (key == \"software_ver\")"
         }
       ]
+    },
+    {
+      "key": "qtPlatform",
+      "regex": "Platform: Qt platform plugin \"([^\"]+)\"",
+      "last": false,
+      "source": [
+        {
+          "file": "src/QtPlatformChoice.cpp",
+          "line": 33,
+          "text": "Platform: Qt platform plugin"
+        }
+      ]
     }
   ],
   "rules": [
@@ -215,7 +227,7 @@
         },
         {
           "file": "src/core/backends/flex/PanadapterStream.cpp",
-          "line": 221,
+          "line": 234,
           "text": "PanadapterStream: failed to bind UDP socket:"
         },
         {
@@ -237,8 +249,25 @@
       "source": [
         {
           "file": "src/core/backends/flex/PanadapterStream.cpp",
-          "line": 175,
+          "line": 188,
           "text": "capped by net.core.rmem_max"
+        }
+      ]
+    },
+    {
+      "id": "vita-sequence-errors",
+      "severity": "warning",
+      "title": "Packets from the radio were lost or arrived out of order",
+      "explanation": "AetherSDR counted gaps in the VITA-49 packet sequence of a stream from the radio (audio, FFT, waterfall, meter or DAX). Lost or reordered packets cause audio dropouts and gaps in the waterfall. Wi-Fi, a busy switch or a VPN between the radio and the computer are the usual causes.",
+      "match": {
+        "substring": "PanadapterStream: VITA-49 sequence errors on"
+      },
+      "docs": "/next/low-bandwidth-connections#audio-drops-out-or-the-waterfall-has-gaps",
+      "source": [
+        {
+          "file": "src/core/backends/flex/VitaSequenceLossReport.h",
+          "line": 57,
+          "text": "PanadapterStream: VITA-49 sequence errors on %1 stream 0x%2: "
         }
       ]
     },
@@ -423,7 +452,7 @@
         },
         {
           "file": "src/core/backends/flex/PanadapterStream.cpp",
-          "line": 1686,
+          "line": 1714,
           "text": "stream create failed/dropped"
         }
       ]
@@ -546,6 +575,23 @@
       ]
     },
     {
+      "id": "qt-platform-fallback",
+      "severity": "warning",
+      "title": "Qt fell back to another platform plugin",
+      "explanation": "Qt could not load the first platform plugin in QT_QPA_PLATFORM and started with the next one. In a Wayland session that usually means the Qt Wayland plugin is missing, so AetherSDR runs on XWayland. Qt's reason is printed in the terminal, not in AetherSDR's log.",
+      "match": {
+        "substring": "Platform: Qt fell back from"
+      },
+      "docs": "/next/gpu-rendering#aethersdr-runs-on-xwayland-in-a-wayland-session",
+      "source": [
+        {
+          "file": "src/QtPlatformChoice.cpp",
+          "line": 36,
+          "text": "Platform: Qt fell back from"
+        }
+      ]
+    },
+    {
       "id": "x11-error",
       "severity": "warning",
       "title": "X11 errors were suppressed (XWayland)",
@@ -557,7 +603,7 @@
       "source": [
         {
           "file": "src/main.cpp",
-          "line": 80,
+          "line": 83,
           "text": "Non-fatal X11 error suppressed (error_code="
         }
       ]
@@ -703,6 +749,127 @@
           "file": "src/core/NvidiaAfxFilter.cpp",
           "line": 280,
           "text": "denoiser_48k.trtpkg) not found"
+        }
+      ]
+    },
+    {
+      "id": "bnr-download-failed",
+      "severity": "warning",
+      "title": "BNR: the runtime pack download failed",
+      "explanation": "Downloading the BNR runtime pack failed: the connection dropped, a server or package index could not be reached, the transfer stalled for 30 seconds, or the pack could not be written to disk. Components that finished are kept, so clicking Download again resumes.",
+      "match": {
+        "regex": "NvidiaAfxPack: (transfer failed: |transfer timed out \\(stall limit |install failed: (download failed \\(|PyPI lookup failed for |simple-index lookup failed for |write failed for |cannot write cache))"
+      },
+      "docs": "/bnr-gpu-noise-removal#the-download-fails",
+      "source": [
+        {
+          "file": "src/core/NvidiaAfxPack.cpp",
+          "line": 81,
+          "text": "NvidiaAfxPack: transfer failed: %1: %2"
+        },
+        {
+          "file": "src/core/NvidiaAfxPack.cpp",
+          "line": 76,
+          "text": "NvidiaAfxPack: transfer timed out (stall limit %1 s): %2"
+        },
+        {
+          "file": "src/core/NvidiaAfxPack.cpp",
+          "line": 381,
+          "text": "NvidiaAfxPack: install failed:"
+        },
+        {
+          "file": "src/core/NvidiaAfxPack.cpp",
+          "line": 709,
+          "text": "download failed (%1): %2"
+        },
+        {
+          "file": "src/core/NvidiaAfxPack.cpp",
+          "line": 630,
+          "text": "PyPI lookup failed for %1"
+        },
+        {
+          "file": "src/core/NvidiaAfxPack.cpp",
+          "line": 582,
+          "text": "simple-index lookup failed for %1"
+        },
+        {
+          "file": "src/core/NvidiaAfxPack.cpp",
+          "line": 706,
+          "text": "write failed for %1 (disk full?)"
+        },
+        {
+          "file": "src/core/NvidiaAfxPack.cpp",
+          "line": 661,
+          "text": "cannot write cache"
+        }
+      ]
+    },
+    {
+      "id": "bnr-checksum-mismatch",
+      "severity": "problem",
+      "title": "BNR: a downloaded file failed its checksum",
+      "explanation": "A file of the BNR runtime pack did not match the SHA-256 this version of AetherSDR pins, so it was rejected. Downloading again fetches the same file; a proxy or security software altering downloads, or a changed file on the server, is the cause.",
+      "match": {
+        "regex": "NvidiaAfxPack: install failed: checksum mismatch for "
+      },
+      "docs": "/next/bnr-gpu-noise-removal#the-download-fails-with-checksum-mismatch",
+      "source": [
+        {
+          "file": "src/core/NvidiaAfxPack.cpp",
+          "line": 381,
+          "text": "NvidiaAfxPack: install failed:"
+        },
+        {
+          "file": "src/core/NvidiaAfxPack.cpp",
+          "line": 716,
+          "text": "checksum mismatch for %1 (corrupt or stale mirror)"
+        }
+      ]
+    },
+    {
+      "id": "bnr-install-failed",
+      "severity": "problem",
+      "title": "BNR: the runtime pack downloaded but did not install",
+      "explanation": "AetherSDR could not unpack the BNR runtime pack, or the unpacked pack was incomplete, so BNR stays unavailable. On Linux the pack is unpacked with unzip and tar --zstd, which must be installed.",
+      "match": {
+        "regex": "NvidiaAfxPack: install failed: (wheel extract failed: |extract failed: |wheel \\S+ contained no DLLs|assembled pack missing |could not install into |install verification failed)"
+      },
+      "docs": "/next/bnr-gpu-noise-removal#the-download-finishes-but-bnr-is-not-installed",
+      "source": [
+        {
+          "file": "src/core/NvidiaAfxPack.cpp",
+          "line": 381,
+          "text": "NvidiaAfxPack: install failed:"
+        },
+        {
+          "file": "src/core/NvidiaAfxPack.cpp",
+          "line": 768,
+          "text": "wheel extract failed: %1"
+        },
+        {
+          "file": "src/core/NvidiaAfxPack.cpp",
+          "line": 807,
+          "text": "extract failed: %1"
+        },
+        {
+          "file": "src/core/NvidiaAfxPack.cpp",
+          "line": 783,
+          "text": "wheel %1 contained no DLLs"
+        },
+        {
+          "file": "src/core/NvidiaAfxPack.cpp",
+          "line": 818,
+          "text": "assembled pack missing %1"
+        },
+        {
+          "file": "src/core/NvidiaAfxPack.cpp",
+          "line": 828,
+          "text": "could not install into %1"
+        },
+        {
+          "file": "src/core/NvidiaAfxPack.cpp",
+          "line": 849,
+          "text": "install verification failed"
         }
       ]
     },
