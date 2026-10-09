@@ -149,8 +149,8 @@ int main(int argc, char** argv)
         report("budget: the count resets", b.takeSuppressed() == 0);
         report("budget: held-back text",
                formatVitaSequenceLossSuppressed(12)
-                   == QStringLiteral("PanadapterStream: 12 VITA-49 sequence-error line(s) held back: "
-                                     "more than 8 in 10 s across all streams"));
+                   == QStringLiteral("PanadapterStream: 12 VITA-49 sequence error(s) held back: "
+                                     "more than 8 line(s) in 10 s across all streams"));
     }
 
     {

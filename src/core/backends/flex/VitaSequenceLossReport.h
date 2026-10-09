@@ -63,15 +63,16 @@ private:
 // of every stream id log at once, and the VITA socket does not filter by sender,
 // so without this a burst of new stream ids (many streams on a lossy link, or
 // stray datagrams) could log one line per id and push the cause out of a
-// support log's tail. Lines over the budget are counted, and the next line
-// logged says how many were held back.
+// support log's tail. Errors whose line the budget refuses are counted (a
+// refused stream asks again on each error), and the next line logged says how
+// many were held back.
 class VitaSequenceLossBudget {
 public:
     static constexpr int kLinesPerInterval = 8;
     static constexpr qint64 kIntervalMs = 10000;
 
-    // True when a line may be logged now; otherwise the line is counted as
-    // suppressed.
+    // True when a line may be logged now; otherwise the error asking is
+    // counted as held back.
     bool allow(qint64 nowMs)
     {
         if (m_windowStartMs < 0 || nowMs - m_windowStartMs >= kIntervalMs) {
@@ -86,7 +87,7 @@ public:
         return true;
     }
 
-    // Lines suppressed since the last call; resets the count.
+    // Errors held back since the last call; resets the count.
     int takeSuppressed()
     {
         const int n = m_suppressed;
@@ -102,11 +103,11 @@ private:
 
 // Logged before the next line that gets through the budget, when some were
 // held back. Not matched by the analyzer rule: the lines around it are.
-inline QString formatVitaSequenceLossSuppressed(int lines)
+inline QString formatVitaSequenceLossSuppressed(int errors)
 {
-    return QStringLiteral("PanadapterStream: %1 VITA-49 sequence-error line(s) held back: "
-                          "more than %2 in %3 s across all streams")
-        .arg(lines)
+    return QStringLiteral("PanadapterStream: %1 VITA-49 sequence error(s) held back: "
+                          "more than %2 line(s) in %3 s across all streams")
+        .arg(errors)
         .arg(VitaSequenceLossBudget::kLinesPerInterval)
         .arg(VitaSequenceLossBudget::kIntervalMs / 1000);
 }

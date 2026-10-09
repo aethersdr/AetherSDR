@@ -774,7 +774,7 @@ void PanadapterStream::processDatagram(const QByteArray& data)
     int  audioMissedThisPacket = 0;
     // Filled under the stats lock; formatted and logged after it is released.
     bool reportSequenceLoss = false;
-    int lossSuppressedLines = 0;
+    int lossHeldBackErrors = 0;
     int lossErrors = 0;
     qint64 lossWindowMs = 0;
     int lossStreamErrors = 0;
@@ -812,7 +812,7 @@ void PanadapterStream::processDatagram(const QByteArray& data)
                     !stats.lossLog.due(nowMs) || m_seqLossBudget.allow(nowMs);
                 if (stats.lossLog.recordError(nowMs, mayReport)) {
                     reportSequenceLoss = true;
-                    lossSuppressedLines = m_seqLossBudget.takeSuppressed();
+                    lossHeldBackErrors = m_seqLossBudget.takeSuppressed();
                     lossErrors = stats.lossLog.reportErrors();
                     lossWindowMs = stats.lossLog.reportWindowMs();
                     lossStreamErrors = stats.errorCount - stats.startErrorCount;
@@ -844,8 +844,8 @@ void PanadapterStream::processDatagram(const QByteArray& data)
         }
     }
     if (reportSequenceLoss) {
-        if (lossSuppressedLines > 0) {
-            qCWarning(lcVita49).noquote() << formatVitaSequenceLossSuppressed(lossSuppressedLines);
+        if (lossHeldBackErrors > 0) {
+            qCWarning(lcVita49).noquote() << formatVitaSequenceLossSuppressed(lossHeldBackErrors);
         }
         qCWarning(lcVita49).noquote()
             << formatVitaSequenceLoss(streamCategoryName(cat), streamId, lossErrors,
