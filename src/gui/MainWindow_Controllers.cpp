@@ -2632,7 +2632,10 @@ void MainWindow::setupCtr2Proxy()
     connect(&m_radioModel, &RadioModel::infoChanged, m_ctr2ProxyModel, pushRadio);
     pushRadio();
     // Controllers that negotiate it get the audio spectrum (AetherKnob).
-    new Ctr2AudioSpectrumFeeder(m_ctr2ProxyModel, m_audio, this);
+    new Ctr2AudioSpectrumFeeder(m_ctr2ProxyModel, m_audio, [this] {
+        const SliceModel* s = activeSlice();
+        return s ? std::pair<int, int>{s->filterLow(), s->filterHigh()} : std::pair<int, int>{0, 0};
+    }, this);
     if (m_appletPanel) {
         if (auto* applet = m_appletPanel->ctr2ProxyApplet()) {
             applet->setModel(m_ctr2ProxyModel);

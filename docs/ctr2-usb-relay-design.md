@@ -298,7 +298,7 @@ meter datagram plus headroom), so they never delay the radio stream.
 
 | Type | Bit | Direction | Payload |
 | --- | --- | --- | --- |
-| `0x40` AUDIO_SPECTRUM | 0 | host → device | `[bars N, 1..64][span Hz hi][span Hz lo][N levels]`: what the operator hears (AetherSDR's post-DSP RX audio), bars splitting 0..span Hz evenly, each level 0..255 linear in dB from -90 dB (0) to 0 dBFS (255); about 20 a second |
+| `0x40` AUDIO_SPECTRUM | 0 | host → device | `[bars N, 1..64][span Hz hi][span Hz lo][N levels]`: what the operator hears (AetherSDR's post-DSP RX audio), bars splitting 0..span Hz evenly, the span being the active slice's passband width rounded up to a clean step (500 Hz–20 kHz, capped at the audio's Nyquist frequency: 12 kHz for 24 kHz audio), each level 0..255 linear in dB from -90 dB (0) to 0 dBFS (255); about 20 a second |
 
 The reference implementation in `tools/ctr2-firmware-reference` covers the
 Feature report layout (`ctr2_caps_encode` / `ctr2_caps_decode`), sending

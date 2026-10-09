@@ -13,10 +13,11 @@
 namespace AetherSDR {
 
 Ctr2AudioSpectrumFeeder::Ctr2AudioSpectrumFeeder(Ctr2ProxyModel* model, AudioEngine* audio,
-                                                 QObject* parent)
+                                                 PassbandSource passband, QObject* parent)
     : QObject(parent)
     , m_model(model)
     , m_audio(audio)
+    , m_passband(std::move(passband))
     , m_timer(new QTimer(this))
 {
     m_timer->setInterval(kIntervalMs);
@@ -39,10 +40,11 @@ void Ctr2AudioSpectrumFeeder::follow()
 }
 
 std::vector<float> Ctr2AudioSpectrumFeeder::barsFromBins(const std::vector<float>& binsDb,
-                                                         double sampleRate, float correctionDb)
+                                                         double sampleRate, int spanHz,
+                                                         float correctionDb)
 {
     std::vector<float> bars(kBars, -INFINITY);   // an empty band reads as silence
-    const double barHz = double(kSpanHz) / kBars;
+    const double barHz = double(spanHz) / kBars;
     for (int i = 1; i < static_cast<int>(binsDb.size()); ++i) {
         const double hz = ClientEqFftAnalyzer::binFreq(i, sampleRate);
         const int bar = static_cast<int>(hz / barHz);
@@ -67,18 +69,20 @@ void Ctr2AudioSpectrumFeeder::tick()
     }
     // The tap is not written while transmitting, and copy returns its last
     // block regardless; an unchanged block means nothing new is heard.
+    const ClientEq* eq = m_audio->clientEqRx();
+    const double fs = eq ? eq->sampleRate() : 24000.0;
+    const std::pair<int, int> pb = m_passband ? m_passband() : std::pair<int, int>{0, 0};
+    const int span = Ctr2ProxyModel::audioSpectrumSpanHz(pb.first, pb.second, fs);
     if (samples == m_lastBlock) {
         m_fft.reset();
-        m_model->sendAudioSpectrum(kSpanHz, std::vector<float>(kBars, -INFINITY));
+        m_model->sendAudioSpectrum(span, std::vector<float>(kBars, -INFINITY));
         return;
     }
     m_lastBlock = samples;
     m_fft.update(samples.data(), ClientEqFftAnalyzer::kFftSize);
-    const ClientEq* eq = m_audio->clientEqRx();
-    const double fs = eq ? eq->sampleRate() : 24000.0;
     const std::vector<float> bars =
-        barsFromBins(m_fft.magnitudesDb(), fs, m_fft.coherentGainCorrectionDb());
-    m_model->sendAudioSpectrum(kSpanHz, bars);
+        barsFromBins(m_fft.magnitudesDb(), fs, span, m_fft.coherentGainCorrectionDb());
+    m_model->sendAudioSpectrum(span, bars);
 }
 
 } // namespace AetherSDR

@@ -443,6 +443,11 @@ bool Ctr2ProxyModel::sendAudioSpectrum(int spanHz, const std::vector<float>& bar
         && m_usb->sendAudioSpectrum(ctr2hid::spectrum::encode(spanHz, barsDb));
 }
 
+int Ctr2ProxyModel::audioSpectrumSpanHz(int filterLo, int filterHi, double sampleRate)
+{
+    return ctr2hid::spectrum::displaySpanHz(filterLo, filterHi, sampleRate);
+}
+
 TcpByteProxy::Stats Ctr2ProxyModel::stats() const
 {
     return usbActive() ? m_usb->stats() : m_proxy->stats();

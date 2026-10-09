@@ -99,6 +99,9 @@ public:
     // non-finite bar reads as silence). False if not wanted now or the link
     // is busy.
     bool sendAudioSpectrum(int spanHz, const std::vector<float>& barsDb);
+    // The span to send for a passband: its width, rounded up to a clean
+    // scale step, capped at the audio's Nyquist frequency.
+    static int audioSpectrumSpanHz(int filterLo, int filterHi, double sampleRate);
 
 signals:
     void configurationChanged();

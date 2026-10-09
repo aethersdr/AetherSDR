@@ -68,11 +68,17 @@ QByteArray encode(std::uint32_t caps);
 std::uint32_t decode(const QByteArray& report);
 }
 
-// AudioSpectrum payload. Levels are 0..255, linear in dB from kFloorDb to 0 dBFS.
+// AudioSpectrum payload. Levels are 0..255, linear in dB from kFloorDb to 0
+// dBFS; the bars split 0..span Hz evenly.
 namespace spectrum {
 constexpr int kMaxBars = 64;
 constexpr int kFloorDb = -90;
 QByteArray encode(int spanHz, const std::vector<float>& barsDb);
+// The span the bars cover: the passband width (filterHi - filterLo), up to a
+// clean scale step (500 Hz .. 12 kHz), and never above the audio's Nyquist
+// frequency. kDefaultSpanHz when there is no passband.
+constexpr int kDefaultSpanHz = 4000;
+int displaySpanHz(int filterLo, int filterHi, double sampleRate);
 }
 
 struct Message {

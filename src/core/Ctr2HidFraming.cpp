@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iterator>
 
 namespace AetherSDR::ctr2hid {
 
@@ -86,6 +87,25 @@ QByteArray spectrum::encode(int spanHz, const std::vector<float>& barsDb)
         p.append(static_cast<char>(std::clamp<int>(std::lround(scaled), 0, 255)));
     }
     return p;
+}
+
+int spectrum::displaySpanHz(int filterLo, int filterHi, double sampleRate)
+{
+    static constexpr int kSteps[] = {500, 600, 800, 1000, 1200, 1500, 2000, 2500, 3000,
+                                     4000, 5000, 6000, 8000, 10000, 12000, 16000, 20000};
+    const int width = filterHi - filterLo;
+    const int nyquist = sampleRate > 0 ? static_cast<int>(sampleRate / 2) : 12000;
+    if (width <= 0) {
+        return std::min(kDefaultSpanHz, nyquist);
+    }
+    int span = kSteps[std::size(kSteps) - 1];
+    for (int step : kSteps) {
+        if (step >= width) {
+            span = step;
+            break;
+        }
+    }
+    return std::min(span, nyquist);
 }
 
 void FrameEncoder::encodeMessage(MessageType type, const char* data, int size,

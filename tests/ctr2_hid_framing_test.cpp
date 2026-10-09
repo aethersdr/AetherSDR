@@ -378,6 +378,22 @@ void testCapabilitiesAndSpectrum()
           "at most 64 bars are sent");
 }
 
+// The bars span the passband width, rounded up to a clean step, capped at
+// the audio's Nyquist frequency; there is no per-mode rule.
+void testDisplaySpan()
+{
+    check(spectrum::displaySpanHz(100, 2800, 24000) == 3000, "SSB 100-2800 spans 0-3 kHz");
+    check(spectrum::displaySpanHz(0, 6000, 24000) == 6000, "a 6 kHz SSB filter spans 0-6 kHz");
+    check(spectrum::displaySpanHz(-2800, -100, 24000) == 3000, "LSB is the same width");
+    check(spectrum::displaySpanHz(-300, 300, 24000) == 600, "a 600 Hz CW filter spans 0-600 Hz");
+    check(spectrum::displaySpanHz(-50, 50, 24000) == 500, "very narrow filters span at least 500 Hz");
+    check(spectrum::displaySpanHz(-5000, 5000, 24000) == 10000, "AM +/-5 kHz spans 0-10 kHz");
+    check(spectrum::displaySpanHz(-10000, 10000, 24000) == 12000,
+          "AM +/-10 kHz is capped at 12 kHz, the Nyquist frequency of 24 kHz audio");
+    check(spectrum::displaySpanHz(-10000, 10000, 48000) == 20000, "48 kHz audio allows 20 kHz");
+    check(spectrum::displaySpanHz(0, 0, 24000) == spectrum::kDefaultSpanHz, "no passband: default");
+}
+
 int main()
 {
     testKnownAnswerVectors();
@@ -389,6 +405,7 @@ int main()
     testMidMessageHeld();
     testExtensions();
     testCapabilitiesAndSpectrum();
+    testDisplaySpan();
     if (g_failures) {
         std::fprintf(stderr, "%d check(s) failed\n", g_failures);
         return 1;
