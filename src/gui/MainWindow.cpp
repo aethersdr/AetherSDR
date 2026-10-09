@@ -3938,16 +3938,18 @@ bool MainWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr
         && windowFlags().testFlag(Qt::ExpandedClientAreaHint)) {
         RECT window{};
         GetWindowRect(msg->hwnd, &window);
-        int border = 0;
+        int borderX = 0;
+        int borderY = 0;
         if (!IsZoomed(msg->hwnd) && !isFullScreen()) {
             const UINT dpi = GetDpiForWindow(msg->hwnd);
-            border = GetSystemMetricsForDpi(SM_CXSIZEFRAME, dpi)
-                + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+            const int padded = GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+            borderX = GetSystemMetricsForDpi(SM_CXSIZEFRAME, dpi) + padded;
+            borderY = GetSystemMetricsForDpi(SM_CYSIZEFRAME, dpi) + padded;
         }
         const QPoint point(GET_X_LPARAM(msg->lParam), GET_Y_LPARAM(msg->lParam));
         const QRect rect(window.left, window.top,
                          window.right - window.left, window.bottom - window.top);
-        *result = frameHitCode(WindowChrome::expandedFrameHit(point, rect, border));
+        *result = frameHitCode(WindowChrome::expandedFrameHit(point, rect, borderX, borderY));
         return true;
     }
     // The whole window is client area, inset only while maximized so nothing

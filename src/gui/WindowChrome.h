@@ -88,18 +88,19 @@ inline bool claimsWholeWindowAsClient(Qt::WindowFlags flags, const QOperatingSys
 // Windows expanded client area: the part of the window a point is on, for the
 // main window's own WM_NCHITTEST. Qt 6.12's answer for these flags turns the
 // live mouse-button state into synthetic presses, doubling real clicks (#6272).
-// Physical pixels; `border` is the resize band (0 while maximized).
+// Physical pixels; `borderX` / `borderY` are the resize bands on the left/right
+// and top/bottom edges (0 while maximized).
 enum class FrameHit { Client, Left, Right, Top, Bottom, TopLeft, TopRight, BottomLeft, BottomRight };
 
-inline FrameHit expandedFrameHit(const QPoint& point, const QRect& window, int border)
+inline FrameHit expandedFrameHit(const QPoint& point, const QRect& window, int borderX, int borderY)
 {
-    if (border <= 0 || !window.contains(point)) {
+    if (borderX <= 0 || borderY <= 0 || !window.contains(point)) {
         return FrameHit::Client;
     }
-    const bool left = point.x() < window.left() + border;
-    const bool right = point.x() > window.right() - border;
-    const bool top = point.y() < window.top() + border;
-    const bool bottom = point.y() > window.bottom() - border;
+    const bool left = point.x() < window.left() + borderX;
+    const bool right = point.x() > window.right() - borderX;
+    const bool top = point.y() < window.top() + borderY;
+    const bool bottom = point.y() > window.bottom() - borderY;
     if (left) {
         return top ? FrameHit::TopLeft : bottom ? FrameHit::BottomLeft : FrameHit::Left;
     }

@@ -170,32 +170,37 @@ int main(int argc, char** argv)
         const int band = 8;
         // Where the title bar's controls, menus and the panadapter sit: client,
         // so Windows delivers the click to the app untouched.
-        check(WindowChrome::expandedFrameHit(QPoint(120, 70), win, band) == Hit::Client,
+        check(WindowChrome::expandedFrameHit(QPoint(120, 70), win, band, band) == Hit::Client,
               "the hamburger's corner of the title bar is client area");
-        check(WindowChrome::expandedFrameHit(QPoint(600, 350), win, band) == Hit::Client,
+        check(WindowChrome::expandedFrameHit(QPoint(600, 350), win, band, band) == Hit::Client,
               "the middle of the window is client area");
-        check(WindowChrome::expandedFrameHit(QPoint(108, 350), win, band) == Hit::Client,
+        check(WindowChrome::expandedFrameHit(QPoint(108, 350), win, band, band) == Hit::Client,
               "the first pixel past the band is client area");
         // The band resizes from every edge and corner.
-        check(WindowChrome::expandedFrameHit(QPoint(100, 350), win, band) == Hit::Left
-                  && WindowChrome::expandedFrameHit(QPoint(107, 350), win, band) == Hit::Left,
+        check(WindowChrome::expandedFrameHit(QPoint(100, 350), win, band, band) == Hit::Left
+                  && WindowChrome::expandedFrameHit(QPoint(107, 350), win, band, band) == Hit::Left,
               "the left band is 8 px wide");
-        check(WindowChrome::expandedFrameHit(QPoint(1099, 350), win, band) == Hit::Right,
+        check(WindowChrome::expandedFrameHit(QPoint(1099, 350), win, band, band) == Hit::Right,
               "the right edge resizes");
-        check(WindowChrome::expandedFrameHit(QPoint(600, 50), win, band) == Hit::Top,
+        check(WindowChrome::expandedFrameHit(QPoint(600, 50), win, band, band) == Hit::Top,
               "the top edge resizes");
-        check(WindowChrome::expandedFrameHit(QPoint(600, 649), win, band) == Hit::Bottom,
+        check(WindowChrome::expandedFrameHit(QPoint(600, 649), win, band, band) == Hit::Bottom,
               "the bottom edge resizes");
-        check(WindowChrome::expandedFrameHit(QPoint(101, 51), win, band) == Hit::TopLeft
-                  && WindowChrome::expandedFrameHit(QPoint(1098, 51), win, band) == Hit::TopRight
-                  && WindowChrome::expandedFrameHit(QPoint(101, 648), win, band) == Hit::BottomLeft
-                  && WindowChrome::expandedFrameHit(QPoint(1098, 648), win, band) == Hit::BottomRight,
+        check(WindowChrome::expandedFrameHit(QPoint(101, 51), win, band, band) == Hit::TopLeft
+                  && WindowChrome::expandedFrameHit(QPoint(1098, 51), win, band, band) == Hit::TopRight
+                  && WindowChrome::expandedFrameHit(QPoint(101, 648), win, band, band) == Hit::BottomLeft
+                  && WindowChrome::expandedFrameHit(QPoint(1098, 648), win, band, band) == Hit::BottomRight,
               "the corners resize diagonally");
         // Maximized or fullscreen: no band, all client.
-        check(WindowChrome::expandedFrameHit(QPoint(100, 50), win, 0) == Hit::Client,
+        check(WindowChrome::expandedFrameHit(QPoint(100, 50), win, 0, 0) == Hit::Client,
               "no resize band while maximized");
-        check(WindowChrome::expandedFrameHit(QPoint(20, 20), win, band) == Hit::Client,
+        check(WindowChrome::expandedFrameHit(QPoint(20, 20), win, band, band) == Hit::Client,
               "a point outside the window is not an edge");
+        // Horizontal and vertical bands are separate metrics (SM_CX/SM_CYSIZEFRAME).
+        check(WindowChrome::expandedFrameHit(QPoint(105, 350), win, 8, 4) == Hit::Left
+                  && WindowChrome::expandedFrameHit(QPoint(600, 53), win, 8, 4) == Hit::Top
+                  && WindowChrome::expandedFrameHit(QPoint(600, 55), win, 8, 4) == Hit::Client,
+              "the left/right band and the top/bottom band follow their own widths");
     }
 
     // ── Native client-rect save/restore for the Windows expanded frame (#6303) ──

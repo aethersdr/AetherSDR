@@ -90,13 +90,18 @@ item (`syncMenuCheckColumn()`, refreshed before each show).
   `WM_NCCALCSIZE` with the whole window as client area (inset on all four
   sides while maximized).
   `MainWindow::nativeEvent` also answers `WM_NCHITTEST` itself on Windows 10
-  and 11: the resize codes on a band of `SM_CXSIZEFRAME + SM_CXPADDEDBORDER`
-  at the window edges (none while maximized or fullscreen), `HTCLIENT`
-  everywhere else (`WindowChrome::expandedFrameHit`). Qt 6.12's own answer for
-  these flags turns the live button state into synthetic mouse presses, which
-  doubled real clicks and closed menus as they opened (#6272). Edge resize
-  rests on that handler; `FramelessResizer` is off on this path. Popped-out
-  panadapters use plain `FramelessWindowHint` and keep Qt's hit test.
+  and 11: the resize codes on a band at the window edges
+  (`SM_CXSIZEFRAME` / `SM_CYSIZEFRAME` + `SM_CXPADDEDBORDER` for the
+  left/right and top/bottom edges; none while maximized or fullscreen),
+  `HTCLIENT` everywhere else (`WindowChrome::expandedFrameHit`). Qt 6.12's own
+  answer for these flags turns the live button state into synthetic mouse
+  presses, which doubled real clicks and closed menus as they opened (#6272).
+  Edge resize rests on that handler; `FramelessResizer` is off on this path.
+  The top band also covers the top few pixels of the bar, as Qt's did. Snap
+  Layouts (#6224) is therefore fixed in that handler too: return
+  `HTMAXBUTTON` over the bar's maximize button, from `expandedFrameHit`, not a
+  Qt change. Popped-out panadapters use plain `FramelessWindowHint` and keep
+  Qt's hit test.
   On Windows 11 `MainWindow::applyWindowsFrameColor()` sets the DWM
   border to `color.background.app`, with Frameless Window on or off.
 - **Linux:** Qt's desktop Linux backends do not advertise expanded client
