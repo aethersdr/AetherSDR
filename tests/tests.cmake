@@ -1872,6 +1872,13 @@ target_include_directories(slice_label_test PRIVATE src)
 target_link_libraries(slice_label_test PRIVATE Qt6::Gui)
 add_test(NAME slice_label_test COMMAND slice_label_test)
 
+add_executable(pan_slice_title_test
+    tests/pan_slice_title_test.cpp
+)
+target_include_directories(pan_slice_title_test PRIVATE src)
+target_link_libraries(pan_slice_title_test PRIVATE Qt6::Core)
+add_test(NAME pan_slice_title_test COMMAND pan_slice_title_test)
+
 add_executable(vfo_display_defaults_test
     tests/vfo_display_defaults_test.cpp
     src/gui/VfoDisplayDefaults.cpp

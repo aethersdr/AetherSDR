@@ -53,6 +53,7 @@
 #include "core/KiwiSdrManager.h"
 #include "core/KiwiSdrProtocol.h"
 #include "SliceLabel.h"
+#include "PanSliceTitle.h"
 #include "SpectrumOverlayMenu.h"
 #include "SpectrumWidget.h"
 #include "core/AdaptiveFilterEngine.h"
@@ -1613,6 +1614,25 @@ void MainWindow::wireVfoTelemetry(VfoWidget* vfo, SliceModel* s)
 }
 
 
+void MainWindow::refreshPanSliceTitle(PanadapterApplet* applet)
+{
+    if (!applet) {
+        return;
+    }
+    QList<PanSliceTitle::SliceOnPan> slices;
+    for (auto* sl : m_radioModel.slices()) {
+        slices.append({sl->sliceId(), sl->panId()});
+    }
+    const int id = PanSliceTitle::pick(applet->panId(), m_activeSliceId,
+                                       applet->titleSliceId(), slices);
+    SliceModel* sl = id >= 0 ? m_radioModel.slice(id) : nullptr;
+    if (sl) {
+        applet->setSliceId(id, sl->letter());
+    } else {
+        applet->clearSliceTitle();
+    }
+}
+
 bool MainWindow::reattachSliceVisualsToPanadapter(SliceModel* s)
 {
     // (No m_applyingLayout guard: that flag is never set anywhere — a dead
@@ -1944,6 +1964,13 @@ void MainWindow::onSliceAdded(SliceModel* s)
             [this, s](const QString& letter) {
         if (auto* sw = spectrumForSlice(s))
             sw->setSliceOverlayLetter(s->sliceId(), letter);
+        // Also fires when the slice-letter display mode is toggled.
+        if (m_panStack) {
+            for (auto* applet : m_panStack->allApplets()) {
+                if (applet && applet->titleSliceId() == s->sliceId())
+                    applet->setSliceId(s->sliceId(), letter);
+            }
+        }
         if (centerLockActiveForSlice(s)) {
             persistCenterLockForSlice(s);
         } else {
@@ -2249,6 +2276,14 @@ void MainWindow::onSliceAdded(SliceModel* s)
         // superseded by #4037's reattachSliceVisualsToPanadapter.
         clearCenterLockForSlice(s->sliceId(), /*clearPersistedIntent=*/true);
         reattachSliceVisualsToPanadapter(s);
+        // The pan the slice left must stop naming it.
+        if (m_panStack) {
+            for (auto* applet : m_panStack->allApplets()) {
+                if (applet && applet->panId() != s->panId()
+                    && applet->titleSliceId() == s->sliceId())
+                    refreshPanSliceTitle(applet);
+            }
+        }
         // The TX slice moving pane moves a radio-wide span control (#5750).
         syncPanSpanControlPlacement();
         updateKiwiSdrVirtualTrackingForSlice(s);
@@ -2585,21 +2620,9 @@ void MainWindow::onSliceRemoved(int id)
         a->spectrumWidget()->removeVfoWidget(id);
     }
 
-    // Update pan title bars — show the first remaining slice on each pan,
-    // or clear the title if the pan has no slices left.
     if (m_panStack) {
-        for (auto* applet : m_panStack->allApplets()) {
-            bool found = false;
-            for (auto* sl : m_radioModel.slices()) {
-                if (sl->panId() == applet->panId()) {
-                    applet->setSliceId(sl->sliceId(), sl->letter());
-                    found = true;
-                    break;
-                }
-            }
-            if (!found)
-                applet->clearSliceTitle();
-        }
+        for (auto* applet : m_panStack->allApplets())
+            refreshPanSliceTitle(applet);
     }
 
     // Reset panadapter state so display settings re-sync after profile load

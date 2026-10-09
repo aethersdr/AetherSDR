@@ -540,6 +540,7 @@ private:
     void centerActiveSliceInPanadapter(bool forceRadioCenter, double centerMhz = -1.0);
     void pushSliceOverlay(SliceModel* s);
     bool reattachSliceVisualsToPanadapter(SliceModel* s);
+    void refreshPanSliceTitle(PanadapterApplet* applet);
     void syncTxWaterfallSliceToSpectrums();
     // #5750: on a radio whose span is one register for the whole board, keep
     // the -/+ span pair live on ONE pane (the TX slice's, else the first

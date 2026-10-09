@@ -676,6 +676,7 @@ void PanadapterApplet::setFloatingState(bool floating)
 
 void PanadapterApplet::setSliceId(int id, const QString& perClientLetter)
 {
+    m_titleSliceId = id;
     m_titleLabel->setText(
         QString("Slice %1").arg(SliceLabel::richText(id, perClientLetter)));
     const QString title =
@@ -689,6 +690,7 @@ void PanadapterApplet::setSliceId(int id, const QString& perClientLetter)
 void PanadapterApplet::clearSliceTitle()
 {
     m_titleLabel->clear();
+    m_titleSliceId = -1;
     if (!m_sliceTitle.isEmpty()) {
         m_sliceTitle.clear();
         emit sliceTitleChanged();
