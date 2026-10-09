@@ -288,6 +288,8 @@ public:
     void setNoiseFloorEnable(bool on);
     void prepareForFftScaleChange();
     void setEncoderDbmRange(float minDbm, float maxDbm);
+    // A y_pixels change re-scales the encoder rows but needs no settle of its
+    // own here: the pixel-scale path (prepareForFftPixelScaleChange) owns that.
     void setEncoderYPixels(int yPixels) {
         if (yPixels > 1 && m_encoderYPixels != yPixels) {
             m_encoderYPixels = yPixels;
@@ -375,6 +377,18 @@ public:
     // again, forever. Kept separate from m_noiseFloorEnable, which is the
     // OPERATOR's toggle — clobbering that would fight the overlay menu and
     // persist to the next radio. See RadioCapabilities::radioOwnsDbmScale.
+    // Each wirePanadapter() pass takes a new epoch; replies and timers armed
+    // by an earlier pass compare theirs and stand down.
+    quint64 advanceDbmRangeWireEpoch() { return ++m_dbmRangeWireEpoch; }
+    quint64 dbmRangeWireEpoch() const { return m_dbmRangeWireEpoch; }
+    // Whether this session may command the pan's dBm range (it owns the pan).
+    // Unset means yes, matching PanadapterModel::ownedByClient's fail-open.
+    void setDbmRangeCommandEligibility(std::function<bool()> eligible) {
+        m_dbmRangeCommandEligible = std::move(eligible);
+    }
+    bool canCommandDbmRange() const {
+        return !m_dbmRangeCommandEligible || m_dbmRangeCommandEligible();
+    }
     void setRadioOwnsDbmScale(bool on) {
         m_radioOwnsDbmScale = on;
         if (!on) {
@@ -1401,6 +1415,8 @@ private:
     void applyNoiseFloorAutoAdjust(qint64 nowMs);
     bool noiseFloorAutoAdjustHeld(qint64 nowMs);
     void recordRenderedTrace(float floorDbm);
+    bool flexHeadroomRecoveryAllowed() const;
+    bool flexFloorClipAwaitsRecovery() const;
     void armNoiseFloorFastLock(int freshFrames, int snapFrames);
     void moveRefLevelToward(float targetRef, qint64 nowMs);
     void sendNoiseFloorRangeCommand(qint64 nowMs, bool force);
@@ -1594,6 +1610,8 @@ private:
     bool m_encoderRangeValid{false};
     int m_encoderYPixels{700};
     quint64 m_encoderRangeGeneration{0};
+    quint64 m_dbmRangeWireEpoch{0};
+    std::function<bool()> m_dbmRangeCommandEligible;
     qint64 m_encoderRangeChangedMs{0};
     quint64 m_fftFrameSequence{0};
     quint64 m_renderedFftFrameSequence{0};

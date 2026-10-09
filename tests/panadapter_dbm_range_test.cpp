@@ -159,7 +159,8 @@ int main(int argc, char** argv)
     handshake.observeRadioRange(-130.0f, -20.0f, 800, 2000);
     const DbmRangeTransition::HandshakeDecision reportedReply =
         handshake.completeReply(supersedingGeneration, true, previousRange);
-    CHECK(reportedReply.range.minDbm == -128.0f && reportedReply.range.maxDbm == -10.0f);
+    // Principle II: status received after the write wins over the accepted request.
+    CHECK(reportedReply.range.minDbm == -130.0f && reportedReply.range.maxDbm == -20.0f);
     const DbmRangeTransition::HandshakeDecision laterStatus =
         handshake.observeRadioRange(-130.0f, -20.0f, 850, 2000);
     CHECK(laterStatus.action == DbmRangeTransition::HandshakeAction::ApplyRadioRange);

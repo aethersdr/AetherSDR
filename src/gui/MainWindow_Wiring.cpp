@@ -3675,9 +3675,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
 {
     auto* sw = applet->spectrumWidget();
     auto* menu = sw->overlayMenu();
-    const quint64 rangeWiringEpoch =
-        sw->property("_aetherDbmRangeWireEpoch").toULongLong() + 1;
-    sw->setProperty("_aetherDbmRangeWireEpoch", QVariant::fromValue(rangeWiringEpoch));
+    const quint64 rangeWiringEpoch = sw->advanceDbmRangeWireEpoch();
     if (!sw->capturePlacementAction()) {
         sw->setCapturePlacementAction(new ReceiveCaptureAction(m_radioModel,
             [applet] { return applet->panId(); }, sw));
@@ -3694,6 +3692,14 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     auto encoderDbmRange =
         std::make_shared<DbmRangeTransition::Range>();
     auto encoderRecoveryPending = std::make_shared<bool>(false);
+    // Whether this session may command the pan's range right now (#3977).
+    // Read live: ownership can move to another client mid-session.
+    auto sessionCommandsPan = [this, applet]() {
+        auto* pan = m_radioModel.panadapter(applet->panId());
+        return pan && m_radioModel.isConnected()
+            && pan->ownedByClient(m_radioModel.ourClientHandle());
+    };
+    sw->setDbmRangeCommandEligibility(sessionCommandsPan);
     if (auto* pan = m_radioModel.panadapter(applet->panId())) {
         *encoderDbmRange = {pan->minDbm(), pan->maxDbm()};
         sw->setEncoderDbmRange(pan->minDbm(), pan->maxDbm());
@@ -3775,7 +3781,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             minDbm, maxDbm, QDateTime::currentMSecsSinceEpoch());
         QTimer::singleShot(kDbmRangeHandshakeTimeoutMs, sw,
             [sw, pendingDbm, finishDbmRangeHandshake, generation, rangeWiringEpoch]() {
-                if (sw->property("_aetherDbmRangeWireEpoch").toULongLong() != rangeWiringEpoch) {
+                if (sw->dbmRangeWireEpoch() != rangeWiringEpoch) {
                     return;
                 }
                 finishDbmRangeHandshake(generation);
@@ -3784,7 +3790,8 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     };
     auto sendDbmRangeCommand =
         [this, applet, sw, pendingDbm, encoderDbmRange, encoderRecoveryPending,
-         armDbmRangeHandshake, setStreamDbmRange, applyAuthoritativeDbmRange, rangeWiringEpoch]
+         armDbmRangeHandshake, setStreamDbmRange, applyAuthoritativeDbmRange, rangeWiringEpoch,
+         sessionCommandsPan]
         (float minDbm, float maxDbm, bool encoderOnly = false) {
         // Commit decoder/handshake state only after validation and dispatch.
         if (!m_radioModel.backendCapabilities().radioOwnsDbmScale) {
@@ -3799,11 +3806,12 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             return false;
         }
         QPointer<PanadapterModel> pan = m_radioModel.panadapter(applet->panId());
-        if (!pan || !m_radioModel.isConnected()
-            || !pan->ownedByClient(m_radioModel.ourClientHandle())) {
+        if (!pan || !sessionCommandsPan()) {
             return false;
         }
-        const DbmRangeTransition::Range previousRange = *encoderDbmRange;
+        // A rejection falls back to the range the radio last confirmed, never
+        // to an earlier request still in flight.
+        const DbmRangeTransition::Range previousRange{pan->minDbm(), pan->maxDbm()};
         const auto generation = std::make_shared<quint64>(0);
         const QPointer<SpectrumWidget> guard(sw);
         return DbmRangeTransition::dispatchValidatedRange({minDbm, maxDbm}, [&]() {
@@ -3813,12 +3821,11 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
                 .arg(static_cast<double>(minDbm), 0, 'f', 2)
                 .arg(static_cast<double>(maxDbm), 0, 'f', 2),
             [this, guard, pan, pendingDbm, generation, previousRange,
-             applyAuthoritativeDbmRange, rangeWiringEpoch](int code, const QString&) {
+             applyAuthoritativeDbmRange, rangeWiringEpoch, sessionCommandsPan](int code, const QString&) {
                 if (!guard || !pan
-                    || !m_radioModel.isConnected()
-                    || guard->property("_aetherDbmRangeWireEpoch").toULongLong() != rangeWiringEpoch
+                    || guard->dbmRangeWireEpoch() != rangeWiringEpoch
                     || pan != m_radioModel.panadapter(pan->panId())
-                    || !pan->ownedByClient(m_radioModel.ourClientHandle())) {
+                    || !sessionCommandsPan()) {
                     return;
                 }
                 const DbmRangeTransition::HandshakeDecision decision =
@@ -4303,9 +4310,9 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             return;
         }
 
-        if (!sendDbmRangeCommand(minDbm, maxDbm)) {
-            return;
-        }
+        // A dropped dispatch is expected where the client owns the range (HL2:
+        // no command plane); the adopt below is a no-op on a radio-owned range.
+        sendDbmRangeCommand(minDbm, maxDbm);
         // After the handshake is armed: when the range moves, the model's
         // levelChanged reads as the echo of this request and completes it. A
         // request for the range the model already holds emits nothing, and the
@@ -4380,9 +4387,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             return;
         }
 
-        if (!sendDbmRangeCommand(minDbm, maxDbm)) {
-            return;
-        }
+        sendDbmRangeCommand(minDbm, maxDbm);
         adoptClientOwnedDbmRange(applet->panId(), sw->panIndex(), minDbm, maxDbm);
     });
 

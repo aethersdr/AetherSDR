@@ -162,8 +162,19 @@ int main(int argc, char** argv)
         QVector<float> sparse(256, -115);
         sparse[25] = -88.05f;
         trace.updateSpectrum(sparse);
+        check(requests == 0,
+              "with auto floor off a clipped peak never rewrites the radio's stored ceiling");
+        QVector<float> clippedFloor(256, -178);
+        clippedFloor[25] = -120;
+        SpectrumOffscreenTestAccess::allowHeadroom(trace);
+        trace.updateSpectrum(clippedFloor);
+        check(requests == 0,
+              "with auto floor off a clipped floor never rewrites the radio's stored floor");
+        trace.setNoiseFloorEnable(true);
+        SpectrumOffscreenTestAccess::allowHeadroom(trace);
+        trace.updateSpectrum(sparse);
         check(requests == 1 && lower == 0 && upper == 24,
-              "a sparse clipped peak requests upper headroom even with auto floor disabled");
+              "with auto floor on a sparse clipped peak requests upper headroom");
         trace.setPanBinsAbsolute(true);
         SpectrumOffscreenTestAccess::allowHeadroom(trace);
         trace.updateSpectrum(sparse);
@@ -213,6 +224,53 @@ int main(int argc, char** argv)
         check(SpectrumOffscreenTestAccess::baselineValid(trace)
               && !SpectrumOffscreenTestAccess::acquiring(trace),
               "unclipped settled input completes floor recovery");
+    }
+    {
+        // A pan another client owns: this session cannot request headroom, so
+        // holding the baseline would stall auto floor for the whole session.
+        SpectrumWidget trace;
+        trace.setDbmRange(-100, -16);
+        trace.setEncoderDbmRange(-100, -16);
+        trace.setNoiseFloorPosition(25);
+        trace.setNoiseFloorEnable(true);
+        trace.setDbmRangeCommandEligibility([] { return false; });
+        check(!SpectrumOffscreenTestAccess::baselineValid(trace),
+              "the foreign-pan case starts with no baseline");
+        QVector<float> clipped(256, -100);
+        clipped[25] = -40;
+        SpectrumOffscreenTestAccess::finishSettleWindow(trace);
+        trace.updateSpectrum(clipped);
+        wait(60);
+        trace.updateSpectrum(clipped);
+        wait(60);
+        trace.updateSpectrum(clipped);
+        check(SpectrumOffscreenTestAccess::baselineValid(trace),
+              "a clipped floor on a pan another client owns still acquires a baseline");
+    }
+    {
+        // The floor already sits at Flex's -180 dBm limit: no recovery can
+        // come, so holding the baseline would stall auto floor for good.
+        SpectrumWidget trace;
+        trace.setDbmRange(-180, -90);
+        trace.setEncoderDbmRange(-180, -90);
+        trace.setNoiseFloorPosition(25);
+        trace.setNoiseFloorEnable(true);
+        int requests = 0;
+        QObject::connect(&trace, &SpectrumWidget::radioDbmHeadroomRecoveryRequested,
+                         &trace, [&](float, float) { ++requests; });
+        check(!SpectrumOffscreenTestAccess::baselineValid(trace),
+              "the floor-at-limit case starts with no baseline");
+        QVector<float> clipped(256, -180);
+        clipped[25] = -120;
+        SpectrumOffscreenTestAccess::finishSettleWindow(trace);
+        SpectrumOffscreenTestAccess::allowHeadroom(trace);
+        trace.updateSpectrum(clipped);
+        wait(60);
+        trace.updateSpectrum(clipped);
+        wait(60);
+        trace.updateSpectrum(clipped);
+        check(requests == 0 && SpectrumOffscreenTestAccess::baselineValid(trace),
+              "a floor already at -180 dBm is not held for a recovery that cannot come");
     }
     {
         SpectrumWidget trace;

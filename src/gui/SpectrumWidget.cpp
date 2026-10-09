@@ -3670,10 +3670,35 @@ bool SpectrumWidget::flexInputFloorLooksClipped() const
         stats.longestMinRunBins);
 }
 
+namespace {
+constexpr float kFlexRecoveryHeadroomDb = 24.0f;
+} // namespace
+
+// Headroom recovery rewrites the radio's min_dbm/max_dbm, which Flex stores per
+// band, so it runs only for Auto Floor and only on a pan this session owns.
+bool SpectrumWidget::flexHeadroomRecoveryAllowed() const
+{
+    return m_radioOwnsDbmScale && m_noiseFloorEnable && canCommandDbmRange()
+        && !m_panBinsAbsolute && m_encoderRangeValid && !m_kiwiSdrWaterfallActive;
+}
+
+// True when a clipped encoder floor can still be recovered: recovery is
+// allowed and the -180 dBm / 180 dB-span limits leave room to move the floor.
+// Only then is it worth holding the floor estimate for a fresh frame.
+bool SpectrumWidget::flexFloorClipAwaitsRecovery() const
+{
+    if (!flexHeadroomRecoveryAllowed() || !flexInputFloorLooksClipped()) {
+        return false;
+    }
+    const DbmRangeTransition::Range current{m_encoderMinDbm, m_encoderMaxDbm};
+    return DbmRangeTransition::materiallyDifferent(
+        current, DbmRangeTransition::clippedFloorRecoveryRange(
+                     current.minDbm, current.maxDbm, kFlexRecoveryHeadroomDb));
+}
+
 bool SpectrumWidget::requestFlexRadioHeadroom(qint64 nowMs)
 {
-    if (!m_radioOwnsDbmScale || m_panBinsAbsolute || !m_encoderRangeValid
-        || m_kiwiSdrWaterfallActive || m_bins.isEmpty() || m_transmitting
+    if (!flexHeadroomRecoveryAllowed() || m_bins.isEmpty() || m_transmitting
         || flexDssFftScaleSettling()
         || isDraggingDbmScale()
         || m_pendingDbmRangeEcho
@@ -3683,12 +3708,12 @@ bool SpectrumWidget::requestFlexRadioHeadroom(qint64 nowMs)
         return false;
     }
 
-    const bool floorClipped = flexInputFloorLooksClipped();
+    const bool floorRecoverable = flexFloorClipAwaitsRecovery();
     const float rowStepDb = (m_encoderMaxDbm - m_encoderMinDbm)
         / (m_encoderYPixels - 1);
     const bool peakClipped = fftPeakTouchesEncoderCeiling(
         std::span<const float>(m_bins.constData(), m_bins.size()), m_encoderMaxDbm, rowStepDb);
-    if (!floorClipped && !peakClipped) {
+    if (!floorRecoverable && !peakClipped) {
         return false;
     }
 
@@ -3696,25 +3721,25 @@ bool SpectrumWidget::requestFlexRadioHeadroom(qint64 nowMs)
     // is merely the radio encoder's lower endpoint. Do not let it move the
     // presentation axis. Ask the radio for enough lower headroom in one step,
     // then let a fresh, unclipped frame drive the normal client-side floor.
+    // A floor already at its limit is not held: nothing can recover it.
     constexpr qint64 kRecoveryRequestIntervalMs = 1000;
-    constexpr float kRecoveryHeadroomDb = 24.0f;
     const DbmRangeTransition::Range current{m_encoderMinDbm, m_encoderMaxDbm};
     DbmRangeTransition::Range candidate = DbmRangeTransition::clippedFloorRecoveryRange(
-        current.minDbm, current.maxDbm, floorClipped ? kRecoveryHeadroomDb : 0.0f);
+        current.minDbm, current.maxDbm, floorRecoverable ? kFlexRecoveryHeadroomDb : 0.0f);
     candidate = DbmRangeTransition::clippedPeakRecoveryRange(
-        candidate.minDbm, candidate.maxDbm, peakClipped ? kRecoveryHeadroomDb : 0.0f);
+        candidate.minDbm, candidate.maxDbm, peakClipped ? kFlexRecoveryHeadroomDb : 0.0f);
     if (!DbmRangeTransition::materiallyDifferent(current, candidate)) {
-        return floorClipped;
+        return false;
     }
     if (m_lastDssRadioHeadroomRequestMs <= 0
         || nowMs - m_lastDssRadioHeadroomRequestMs
             >= kRecoveryRequestIntervalMs) {
         m_lastDssRadioHeadroomRequestMs = nowMs;
         emit radioDbmHeadroomRecoveryRequested(
-            floorClipped ? kRecoveryHeadroomDb : 0.0f,
-            peakClipped ? kRecoveryHeadroomDb : 0.0f);
+            floorRecoverable ? kFlexRecoveryHeadroomDb : 0.0f,
+            peakClipped ? kFlexRecoveryHeadroomDb : 0.0f);
     }
-    return floorClipped;
+    return floorRecoverable;
 }
 
 void SpectrumWidget::clearDbmReleaseRebase()
@@ -3975,9 +4000,11 @@ bool SpectrumWidget::updateNoiseFloorBaseline(const QVector<float>& bins, bool f
         return false;
     }
 
-    // A clipped encoder floor cannot supply a physical noise-floor baseline.
-    // Recovery remains eligible after settling even while acquisition waits.
-    if (m_radioOwnsDbmScale && flexInputFloorLooksClipped()) {
+    // A clipped encoder floor cannot supply a physical noise-floor baseline,
+    // so wait for the recovery request to land. Where no recovery can come
+    // (Auto Floor off, a pan another client owns, the floor at its limit),
+    // acquire anyway rather than stall auto floor for the session.
+    if (flexFloorClipAwaitsRecovery()) {
         return false;
     }
 

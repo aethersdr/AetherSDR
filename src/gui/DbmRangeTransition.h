@@ -118,10 +118,12 @@ public:
         if (!m_active || m_generation != expectedGeneration) {
             return {};
         }
-        // A successful reply confirms this write after preceding status. A
-        // rejection retains intervening radio authority, or the prior range.
-        const Range range = accepted
-            ? m_requestedRange : m_authoritativeRange.value_or(previousRange);
+        // Principle II: a radio status received after the write is the truth,
+        // accepted or not, as in FlexLib (an accepted reply changes nothing).
+        // With no intervening status an accepted write stands; a rejected one
+        // falls back to the prior range.
+        const Range range = m_authoritativeRange.value_or(
+            accepted ? m_requestedRange : previousRange);
         clear();
         return {HandshakeAction::ReconcileRadioRange, range};
     }
@@ -205,8 +207,8 @@ inline Range clippedFloorRecoveryRange(float currentMinDbm,
     }
     // Keep the opposite endpoint: floor recovery must not clip existing peaks.
     // Flex's lower endpoint is -180 dBm; the supported aperture is <=180 dB.
-    const float minDbm = std::max(
-        {currentMinDbm - headroomStepDb, -180.0f, currentMaxDbm - 180.0f});
+    const float minDbm = std::min(currentMinDbm, std::max(
+        {currentMinDbm - headroomStepDb, -180.0f, currentMaxDbm - 180.0f}));
     return {minDbm, currentMaxDbm};
 }
 
@@ -218,8 +220,8 @@ inline Range clippedPeakRecoveryRange(float currentMinDbm,
         return {currentMinDbm, currentMaxDbm};
     }
     // FlexLib Panadapter.HighDbm caps the radio encoder ceiling at +20 dBm.
-    const float maxDbm = std::min(
-        {currentMaxDbm + headroomStepDb, 20.0f, currentMinDbm + 180.0f});
+    const float maxDbm = std::max(currentMaxDbm, std::min(
+        {currentMaxDbm + headroomStepDb, 20.0f, currentMinDbm + 180.0f}));
     return {currentMinDbm, maxDbm};
 }
 
