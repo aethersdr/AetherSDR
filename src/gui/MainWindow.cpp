@@ -2774,7 +2774,10 @@ MainWindow::~MainWindow()
         }
         QThread* wisdomThread = m_nr2WisdomThread;
         QObject::disconnect(wisdomThread, nullptr, this, nullptr);
-        wisdomThread->wait();
+        if (!wisdomThread->wait(QDeadlineTimer(1000))) {
+            trace.fail("fftw_plan_in_flight");   // a plan can't be interrupted
+            wisdomThread->wait();
+        }
         delete wisdomThread;
     }
 
@@ -4182,6 +4185,10 @@ void MainWindow::closeEvent(QCloseEvent* event)
 
     // Stop NR2 wisdom generation from starting another plan: the disconnect
     // below can rebuild NNR on the audio thread, which waits for the planner.
+    // Rejecting the dialog runs its own cancel path (flag, text, announcement).
+    if (m_nr2WisdomDialog) {
+        m_nr2WisdomDialog->reject();
+    }
     if (m_nr2WisdomCancel) {
         m_nr2WisdomCancel->store(true);
     }
@@ -9604,6 +9611,7 @@ void MainWindow::enableNr2WithWisdom()
         connect(thread, &QThread::finished, this, [this, dlg, progress, label, thread, result,
                                                      activityTimer, activityLabel, reassuranceLabel,
                                                      announceLabel]() {
+            m_nr2WisdomCancel.reset();
             const auto wisdomResult =
                 static_cast<SpectralNR::WisdomResult>(result->load());
             const bool ready = wisdomResult == SpectralNR::WisdomResult::Ready
