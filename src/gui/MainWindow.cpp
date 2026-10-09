@@ -3885,23 +3885,22 @@ void MainWindow::applyWindowsFrameColor()
 
 bool MainWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr* result)
 {
-    // Qt's expanded client area leaves a resize border on the left, right and
-    // bottom as non-client. Windows 11 draws it invisibly; Windows 10 paints it
-    // as a light strip (#6266). There, the whole window is client area, inset
-    // only while maximized. Qt's WM_NCHITTEST still resizes from the edges.
+    // The whole window is client area, inset only while maximized so nothing
+    // sits past the screen edge. Qt's WM_NCHITTEST still resizes from the edges.
     auto* msg = static_cast<MSG*>(message);
     if (msg && result && msg->message == WM_NCCALCSIZE && msg->wParam
-        && windowFlags().testFlag(Qt::ExpandedClientAreaHint)
-        && QOperatingSystemVersion::current() < QOperatingSystemVersion::Windows11) {
+        && WindowChrome::claimsWholeWindowAsClient(windowFlags(),
+                                                   QOperatingSystemVersion::current())) {
         if (IsZoomed(msg->hwnd) && !isFullScreen()) {
             const UINT dpi = GetDpiForWindow(msg->hwnd);
-            const int border = GetSystemMetricsForDpi(SM_CXSIZEFRAME, dpi)
-                + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+            const int padded = GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+            const int borderX = GetSystemMetricsForDpi(SM_CXSIZEFRAME, dpi) + padded;
+            const int borderY = GetSystemMetricsForDpi(SM_CYSIZEFRAME, dpi) + padded;
             RECT& client = reinterpret_cast<NCCALCSIZE_PARAMS*>(msg->lParam)->rgrc[0];
-            client.left += border;
-            client.top += border;
-            client.right -= border;
-            client.bottom -= border;
+            client.left += borderX;
+            client.top += borderY;
+            client.right -= borderX;
+            client.bottom -= borderY;
         }
         *result = 0;
         return true;

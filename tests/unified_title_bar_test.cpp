@@ -46,6 +46,7 @@
 #include <QMenu>
 #include <QMouseEvent>
 #include <QMenuBar>
+#include <QOperatingSystemVersion>
 #include <QPointer>
 #include <QPushButton>
 #include <QScrollArea>
@@ -137,6 +138,26 @@ int main(int argc, char** argv)
         check(linuxOn.testFlag(Qt::FramelessWindowHint)
                   && !WindowChrome::usesNativeCaption(linuxOn, QStringLiteral("wayland")),
               "Linux frameless draws the bar's caption buttons");
+    }
+
+    // ── Windows 10 whole-window client area (#6266) ──
+    {
+        using OSV = QOperatingSystemVersion;
+        const Qt::WindowFlags expanded = WindowChrome::chromeFlags({}, true, QStringLiteral("windows"));
+        const Qt::WindowFlags system = WindowChrome::chromeFlags({}, false, QStringLiteral("windows"));
+        const OSV win10(OSV::Windows, 10, 0, 19045);
+        check(WindowChrome::claimsWholeWindowAsClient(expanded, win10),
+              "Windows 10 under the expanded chrome claims the whole window as client");
+        check(!WindowChrome::claimsWholeWindowAsClient(expanded, OSV(OSV::Windows, 10, 0, 22000)),
+              "Windows 11's first build keeps Qt's non-client border");
+        check(!WindowChrome::claimsWholeWindowAsClient(system, win10),
+              "Frameless Window off keeps the system frame on Windows 10");
+        // With the whole window as client the frame is zero, so restoring a
+        // client rect sets the window to exactly that rect (#6303 over #6266).
+        const QRect whole(157, 44, 1115, 348);
+        check(WindowChrome::windowRectForClient(QRect(300, 200, 1000, 300), whole, whole)
+                  == QRect(300, 200, 1000, 300),
+              "a zero frame restores the client rect as the window rect");
     }
 
     // ── Native client-rect save/restore for the Windows expanded frame (#6303) ──

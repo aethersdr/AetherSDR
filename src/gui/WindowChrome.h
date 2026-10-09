@@ -3,6 +3,7 @@
 #include <QGuiApplication>
 #include <QJsonObject>
 #include <QMargins>
+#include <QOperatingSystemVersion>
 #include <QRect>
 #include <QString>
 #include <QWidget>
@@ -72,6 +73,15 @@ inline bool usesNativeCaption(Qt::WindowFlags flags, const QString& platform)
 inline bool usesNativeCaption(const QWidget* window)
 {
     return usesNativeCaption(window->windowFlags(), QGuiApplication::platformName());
+}
+
+// Windows 10 only: Qt's expanded client area leaves a resize border on the
+// left, right and bottom as non-client, which Windows 10 paints as a light
+// strip (#6266), so MainWindow::nativeEvent claims the whole window as client
+// area. Windows 11 draws that border invisibly and keeps Qt's answer.
+inline bool claimsWholeWindowAsClient(Qt::WindowFlags flags, const QOperatingSystemVersion& os)
+{
+    return flags.testFlag(Qt::ExpandedClientAreaHint) && os < QOperatingSystemVersion::Windows11;
 }
 
 // Windows: the native window rect that gives `client`, keeping the frame the
