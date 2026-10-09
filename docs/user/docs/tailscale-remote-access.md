@@ -220,7 +220,8 @@ their applets work remotely too.
    connection actually travels through a route; after that it shows
    **Confirmed in use over the tailnet**.
 4. Remotely, set each device's applet to its **LAN address** (for example
-   `192.168.1.40`), exactly as at home. See [Amplifiers](./amplifiers.md) and
+   `192.168.1.40`), exactly as at home. **WHO MAY CONNECT** applies to the
+   devices as well as the radio (container 0.4.1 and later). See [Amplifiers](./amplifiers.md) and
    [TGXL Tuner Control](./tgxl-tuner-control.md).
 
 Remember `--accept-routes` on Linux computers (Part 2).
@@ -312,7 +313,9 @@ container.
   the tailnet (family, club members), list the people or tags who may
   operate.
 - The container checks every connection with Tailscale's identity service
-  (`WhoIs`) against that list before passing it to the radio.
+  (`WhoIs`) against that list before passing it to the radio or to a shared
+  station device. A file transfer's side channel is open only to the
+  computer that asked for the transfer.
 - On the tailnet the container exposes only the radio's own ports, its
   forwarded side channels, shared station devices, and the diagnostics
   report. Its setup interface listens only on the radio's local network.

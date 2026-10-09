@@ -144,6 +144,7 @@ func TestSubnetFlowsAreForwardedAndMarkRoutesInUse(t *testing.T) {
 	devAP := netip.MustParseAddrPort(dev.Addr().String())
 	route := netip.PrefixFrom(devAP.Addr(), 32)
 	n := &Node{advertised: []netip.Prefix{route}}
+	n.authorize = func(net.Addr) (string, bool) { return "ops@example.com on laptop", true }
 
 	src := netip.MustParseAddrPort("100.64.0.9:40000")
 	if h, intercept := n.subnetTCP(src, netip.MustParseAddrPort("192.0.2.7:9007")); h != nil || intercept {
@@ -164,5 +165,54 @@ func TestSubnetFlowsAreForwardedAndMarkRoutesInUse(t *testing.T) {
 	}
 	if got := n.approvedRoutes(); len(got) != 1 || got[0] != route.String() {
 		t.Fatalf("a route that carried traffic must count as approved, got %v", got)
+	}
+}
+
+// A tailnet peer the allowlist refuses never reaches a station device, even
+// though the tailnet's ACLs routed its flow here.
+func TestSubnetFlowsFromRefusedPeersNeverReachTheDevice(t *testing.T) {
+	dev, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dev.Close()
+	accepted := make(chan struct{}, 1)
+	go func() {
+		if c, err := dev.Accept(); err == nil {
+			accepted <- struct{}{}
+			c.Close()
+		}
+	}()
+	devAP := netip.MustParseAddrPort(dev.Addr().String())
+	n := &Node{advertised: []netip.Prefix{netip.PrefixFrom(devAP.Addr(), 32)}}
+	src := netip.MustParseAddrPort("100.64.0.9:40000")
+	var asked net.Addr
+	n.authorize = func(a net.Addr) (string, bool) { asked = a; return "guest on phone", false }
+
+	for _, tc := range []struct {
+		name string
+		node *Node
+	}{{"refused by the allowlist", n}, {"node not running", &Node{advertised: n.advertised}}} {
+		h, intercept := tc.node.subnetTCP(src, devAP)
+		if h == nil || !intercept {
+			t.Fatalf("%s: a flow to an advertised route must be intercepted, not left to tsnet", tc.name)
+		}
+		client, server := net.Pipe()
+		done := make(chan struct{})
+		go func() { h(server); close(done) }()
+		client.SetReadDeadline(time.Now().Add(3 * time.Second))
+		if k, err := client.Read(make([]byte, 8)); err == nil {
+			t.Fatalf("%s: the refused caller read %d bytes", tc.name, k)
+		}
+		client.Close()
+		<-done
+	}
+	if asked == nil || asked.String() != src.String() {
+		t.Fatalf("the allowlist was asked about %v, want the flow's source %v", asked, src)
+	}
+	select {
+	case <-accepted:
+		t.Fatal("a refused caller's flow reached the station device")
+	case <-time.After(200 * time.Millisecond):
 	}
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"io"
 	"net/netip"
@@ -15,8 +16,8 @@ import (
 // Socket-free regressions for the Node's serialized operations: no tsnet,
 // no radio. startFn and applyRoutes stand in for the tailnet.
 
-func inertStart(n *Node) func(string, time.Duration) error {
-	return func(string, time.Duration) error {
+func inertStart(n *Node) func(context.Context, string, time.Duration) error {
+	return func(context.Context, string, time.Duration) error {
 		n.setState(stateRunning, "")
 		return nil
 	}
@@ -27,7 +28,7 @@ func TestConcurrentFirstUseProvisionNeedsTheFirstToken(t *testing.T) {
 	n := newTestNode(t, "")
 	release := make(chan struct{})
 	entered := make(chan struct{}, 2)
-	n.startFn = func(string, time.Duration) error {
+	n.startFn = func(context.Context, string, time.Duration) error {
 		entered <- struct{}{}
 		<-release
 		n.setState(stateRunning, "")
@@ -214,7 +215,7 @@ func TestProvisionFailsClosedWhenOldStateRemains(t *testing.T) {
 	const token = "test-admin-token"
 	n := newTestNode(t, token)
 	started := false
-	n.startFn = func(string, time.Duration) error { started = true; return nil }
+	n.startFn = func(context.Context, string, time.Duration) error { started = true; return nil }
 	state := n.tsnetDir()
 	if err := os.MkdirAll(state, 0o700); err != nil {
 		t.Fatal(err)
@@ -240,5 +241,76 @@ func TestProvisionFailsClosedWhenOldStateRemains(t *testing.T) {
 	}
 	if !reloaded.checkToken(token) {
 		t.Fatal("after a restart the saved token no longer matches the caller's")
+	}
+}
+
+// A boot attempt waiting on a tailnet login that never comes (the node was
+// removed in the admin console, or the radio is offline) must not hold the
+// operator's requests hostage: AetherSDR gives sign-out, the allowlist and
+// shared devices 8 seconds.
+func TestOperatorRequestsInterruptAStuckBoot(t *testing.T) {
+	const token = "test-admin-token"
+	n := newTestNode(t, token)
+	n.applyRoutes = func([]netip.Prefix) error { return nil }
+	attempts := make(chan struct{}, 16)
+	n.startFn = func(ctx context.Context, authKey string, _ time.Duration) error {
+		if authKey != "" {
+			n.setState(stateRunning, "")
+			return nil
+		}
+		attempts <- struct{}{}
+		<-ctx.Done() // srv.Up waiting for a login
+		n.setState(stateStarting, "")
+		return ctx.Err()
+	}
+	waitAttempt := func(what string) {
+		t.Helper()
+		select {
+		case <-attempts:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("%s: no boot attempt", what)
+		}
+	}
+	within := func(what string, f func() error) {
+		t.Helper()
+		done := make(chan error, 1)
+		go func() { done <- f() }()
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("%s: %v", what, err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("%s queued behind the boot attempt", what)
+		}
+	}
+
+	n.Boot()
+	waitAttempt("first boot")
+	within("SetAllow", func() error { return n.SetAllow(token, []string{"tag:ops"}) })
+	waitAttempt("boot after SetAllow") // a provisioned node keeps trying to rejoin
+	within("SetSharing", func() error { return n.SetSharing(token, nil, nil) })
+	waitAttempt("boot after SetSharing")
+	if !errors.Is(n.SetAllow("wrong", nil), errUnauthorized) {
+		t.Fatal("a wrong token must still be refused")
+	}
+	waitAttempt("boot after a refused request")
+
+	var fresh string
+	within("re-provision", func() (err error) {
+		fresh, err = n.Provision(token, "tskey-auth-fresh", "flex-test", nil, nil, nil)
+		return err
+	})
+	if !n.checkToken(fresh) || n.Status().State != stateRunning {
+		t.Fatalf("re-provision did not take: %+v", n.Status())
+	}
+	within("sign-out", func() error { return n.SignOut(fresh) })
+	if st := n.Status(); st.Provisioned || st.State != stateUnprovisioned {
+		t.Fatalf("sign-out left %+v", st)
+	}
+	select {
+	case <-attempts:
+		t.Fatal("a signed-out node kept booting")
+	case <-time.After(200 * time.Millisecond):
 	}
 }

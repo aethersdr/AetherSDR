@@ -66,13 +66,18 @@ type Node struct {
 	Discovery *Discovery
 
 	opMu sync.Mutex // serializes provision / sign-out / start
+	// The background boot loop, while one runs (under mu). Operator requests
+	// cancel it rather than queue behind a tailnet login that can take
+	// minutes.
+	bootCancel context.CancelFunc
+	bootDone   chan struct{}
 	// routeMu serializes RefreshRoutes, so a refresh that read an older
 	// configuration can never apply it after a newer one.
 	routeMu sync.Mutex
 
 	// Seams for socket-free tests: nil means the real tailnet. startFn
 	// replaces start; applyRoutes replaces advertising through tsnet.
-	startFn     func(authKey string, timeout time.Duration) error
+	startFn     func(ctx context.Context, authKey string, timeout time.Duration) error
 	applyRoutes func([]netip.Prefix) error
 
 	mu         sync.Mutex
@@ -93,6 +98,10 @@ type Node struct {
 	routesInUse map[netip.Prefix]bool
 
 	telemetry linkTelemetry // per-peer path, RTT and throughput (telemetry.go)
+
+	// authorize is the allowlist check for station-device flows, set while
+	// the node runs. Nil refuses every flow.
+	authorize func(net.Addr) (string, bool)
 }
 
 func (n *Node) cfgPath() string   { return filepath.Join(n.StateDir, "provision.json") }
@@ -139,38 +148,81 @@ func (n *Node) setState(state, lastErr string) {
 
 // Boot resumes a provisioned node after a restart or radio reboot. The
 // container starts before the radio API listens and before NTP sets the
-// clock, so it keeps retrying in the background.
+// clock, so it keeps retrying in the background. An attempt holds opMu while
+// it waits for the tailnet, which can take minutes (a node removed in the
+// admin console waits for a login that never comes), so operator requests
+// interrupt it with interruptBoot instead of waiting their turn.
 func (n *Node) Boot() {
 	n.mu.Lock()
 	provisioned := n.provisioned()
-	n.mu.Unlock()
-	if !provisioned {
-		log.Printf("unprovisioned: waiting for AetherSDR to supply a Tailscale auth key")
+	if !provisioned || n.bootCancel != nil {
+		n.mu.Unlock()
+		if !provisioned {
+			log.Printf("unprovisioned: waiting for AetherSDR to supply a Tailscale auth key")
+		}
 		return
 	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	n.bootCancel, n.bootDone = cancel, done
+	n.mu.Unlock()
+	start := n.startFn
+	if start == nil {
+		start = n.start
+	}
 	go func() {
+		defer close(done)
+		defer func() {
+			n.mu.Lock()
+			if n.bootDone == done {
+				n.bootCancel, n.bootDone = nil, nil
+			}
+			n.mu.Unlock()
+			cancel()
+		}()
 		for attempt := 1; ; attempt++ {
 			n.opMu.Lock()
 			n.mu.Lock()
-			still := n.provisioned() && n.srv == nil
+			still := n.provisioned() && n.srv == nil && n.state != stateRunning && ctx.Err() == nil
 			n.mu.Unlock()
 			if !still {
 				n.opMu.Unlock()
 				return
 			}
-			err := n.start("", 2*time.Minute)
+			err := start(ctx, "", 2*time.Minute)
 			n.opMu.Unlock()
-			if err == nil {
+			if err == nil || ctx.Err() != nil {
 				return
 			}
 			log.Printf("tailnet start attempt %d failed: %v", attempt, err)
-			time.Sleep(min(time.Duration(attempt)*10*time.Second, 2*time.Minute))
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(min(time.Duration(attempt)*10*time.Second, 2*time.Minute)):
+			}
 		}
 	}()
 }
 
+// interruptBoot cancels a running boot attempt and waits until it has let go
+// of opMu. Call it before taking opMu; it returns whether a boot was running,
+// so a request that leaves the node provisioned can call Boot again.
+func (n *Node) interruptBoot() bool {
+	n.mu.Lock()
+	cancel, done := n.bootCancel, n.bootDone
+	n.bootCancel, n.bootDone = nil, nil
+	n.mu.Unlock()
+	if cancel == nil {
+		return false
+	}
+	cancel()
+	<-done
+	return true
+}
+
 // start brings the tailnet up and the relay on it. Caller holds opMu.
-func (n *Node) start(authKey string, timeout time.Duration) error {
+// Cancelling ctx abandons the attempt and leaves the state "starting".
+func (n *Node) start(parent context.Context, authKey string, timeout time.Duration) error {
 	n.mu.Lock()
 	cfg := n.cfg
 	n.mu.Unlock()
@@ -183,12 +235,16 @@ func (n *Node) start(authKey string, timeout time.Duration) error {
 		Logf:     func(string, ...any) {},
 		UserLogf: log.Printf,
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(parent, timeout)
 	st, err := srv.Up(ctx)
 	cancel()
 	if err != nil {
 		srv.Close()
-		n.setState(stateError, err.Error())
+		if parent.Err() != nil {
+			n.setState(stateStarting, "")
+		} else {
+			n.setState(stateError, err.Error())
+		}
 		return err
 	}
 	var ip4 netip.Addr
@@ -283,7 +339,17 @@ func (n *Node) start(authKey string, timeout time.Duration) error {
 		return fail(err)
 	}
 	closers = append(closers, tl.Close)
-	go http.Serve(tl, n.telemetryHandler(n.authorizer(lc)))
+	// Timeouts as on the provisioning API, so a peer that opens connections
+	// and stalls can't pile up goroutines in the radio's memory.
+	telemetrySrv := &http.Server{
+		Handler:           n.telemetryHandler(n.authorizer(lc)),
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    8 << 10,
+	}
+	go telemetrySrv.Serve(tl)
 	tctx, tcancel := context.WithCancel(context.Background())
 	closers = append(closers, func() error { tcancel(); return nil })
 	go n.runTelemetry(tctx, lc)
@@ -296,6 +362,7 @@ func (n *Node) start(authKey string, timeout time.Duration) error {
 	log.Printf("tailnet node %q up at %s (%s)", cfg.Hostname, ip4, n.dnsName)
 	n.mu.Lock()
 	n.lc = lc
+	n.authorize = n.authorizer(lc)
 	n.advertised = nil
 	n.mu.Unlock()
 	n.RefreshRoutes()
@@ -377,6 +444,9 @@ func (n *Node) RefreshRoutes() {
 // SetSharing changes which LAN devices are shared, without leaving the
 // tailnet. shareDiscovered nil leaves that setting unchanged.
 func (n *Node) SetSharing(presented string, routes []string, shareDiscovered *bool) error {
+	if n.interruptBoot() {
+		defer n.Boot()
+	}
 	n.opMu.Lock()
 	if !n.checkToken(presented) {
 		n.opMu.Unlock()
@@ -408,6 +478,7 @@ func (n *Node) stop(logout bool) error {
 	n.mu.Lock()
 	srv, relay, closers := n.srv, n.relay, n.closers
 	n.srv, n.relay, n.closers, n.ip, n.dnsName, n.lc = nil, nil, nil, netip.Addr{}, "", nil
+	n.authorize = nil
 	n.routesInUse = nil
 	n.telemetry.mu.Lock()
 	n.telemetry.peers = nil
@@ -509,6 +580,12 @@ func newToken() (token, hash string) {
 // the lock, two first-use requests could both see an unprovisioned node and
 // the second would replace the first's node without its token.
 func (n *Node) Provision(presented, authKey, hostname string, allow, routes []string, shareDiscovered *bool) (string, error) {
+	// A refused request resumes the boot it interrupted; a successful or
+	// failed join replaces it (Boot does nothing for a node that is up or
+	// unprovisioned).
+	if n.interruptBoot() {
+		defer n.Boot()
+	}
 	n.opMu.Lock()
 	defer n.opMu.Unlock()
 	n.mu.Lock()
@@ -551,7 +628,7 @@ func (n *Node) Provision(presented, authKey, hostname string, allow, routes []st
 	if start == nil {
 		start = n.start
 	}
-	if err := start(authKey, 90*time.Second); err != nil {
+	if err := start(context.Background(), authKey, 90*time.Second); err != nil {
 		// A rejected key leaves the node unprovisioned rather than half-joined.
 		if serr := n.stop(true); serr != nil {
 			log.Printf("provision: cleaning up after a failed join: %v", serr)
@@ -570,6 +647,9 @@ func (n *Node) Provision(presented, authKey, hostname string, allow, routes []st
 
 // SetAllow changes who may connect, without leaving the tailnet.
 func (n *Node) SetAllow(presented string, allow []string) error {
+	if n.interruptBoot() {
+		defer n.Boot()
+	}
 	n.opMu.Lock()
 	defer n.opMu.Unlock()
 	if !n.checkToken(presented) {
@@ -597,6 +677,9 @@ func (n *Node) SetAllow(presented string, allow []string) error {
 // and any later failure (logout, tailnet state) is returned but leaves the
 // node signed out.
 func (n *Node) SignOut(presented string) error {
+	if n.interruptBoot() {
+		defer n.Boot()
+	}
 	n.opMu.Lock()
 	defer n.opMu.Unlock()
 	if !n.checkToken(presented) {
@@ -781,8 +864,11 @@ func parseRoute(s string) (netip.Prefix, error) {
 }
 
 // subnetTCP handles a TCP flow addressed to one of this node's advertised
-// subnet routes (a station device): dial it from the radio's network and
-// splice. Flows to anything else are left alone.
+// subnet routes (a station device): check the caller against the allowlist,
+// then dial the device from the radio's network and splice. The tailnet's
+// ACLs admitting the sender is not enough: the allowlist governs station
+// devices exactly as it governs the radio. Flows to anything else are left
+// alone.
 func (n *Node) subnetTCP(src, dst netip.AddrPort) (handler func(net.Conn), intercept bool) {
 	n.mu.Lock()
 	var route netip.Prefix
@@ -803,7 +889,16 @@ func (n *Node) subnetTCP(src, dst netip.AddrPort) (handler func(net.Conn), inter
 			n.routesInUse = map[netip.Prefix]bool{}
 		}
 		n.routesInUse[route] = true
+		authorize := n.authorize
 		n.mu.Unlock()
+		if authorize == nil {
+			log.Printf("subnet %s -> %s: refused, the node is not running", src, dst)
+			return
+		}
+		if who, ok := authorize(net.TCPAddrFromAddrPort(src)); !ok {
+			log.Printf("subnet %s -> %s: refused %s", src, dst, who)
+			return
+		}
 		r, err := net.DialTimeout("tcp", dst.String(), 5*time.Second)
 		if err != nil {
 			log.Printf("subnet %s -> %s: %v", src, dst, err)

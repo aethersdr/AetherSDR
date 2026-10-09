@@ -143,6 +143,7 @@ sessions. AetherSDR polls it every 2 s for the Network Diagnostics window.
 | `shim_cpu_pct`, `shim_rss_kb`, `mtu_clamp` | The container's own load, and the `network_mtu` it injects |
 | `sessions[].streams[]` | Per VITA-49 stream, counted as datagrams leave the radio, before the tunnel: `packets`, `gaps` (missed packets) and `breaks` (sequence discontinuities, the unit AetherSDR's own stream counters use) |
 | `sessions[].to_client_failures` | Datagrams the shim could not send into the tunnel |
+| `sessions[].from_other_sources`, `last_rejected_source` | Datagrams that reached the session's radio-side socket from anything but the radio, dropped. Nonzero on a session with no VITA-49 means the radio's own source address went unrecognised |
 
 AetherSDR subtracts the radio-side break rate from the rate it sees itself,
 so the remainder is what the tunnel added.

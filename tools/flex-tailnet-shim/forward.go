@@ -5,6 +5,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/netip"
 	"sort"
 	"sync"
 	"time"
@@ -25,23 +26,27 @@ type Forwarder struct {
 	DialRadio func(port int) (net.Conn, error)
 	Authorize func(remote net.Addr) (string, bool)
 
-	mu     sync.Mutex
-	active map[int]bool
+	mu sync.Mutex
+	// active maps each open port to the tailnet addresses allowed on it.
+	active map[int]map[netip.Addr]bool
 }
 
-// Open starts forwarding port, unless a forwarder for it is already open.
-// The listener accepts connections for sideChannelWindow after the last
-// connection ends, then closes.
-func (f *Forwarder) Open(port int) error {
+// Open starts forwarding port for client, the tailnet address of the session
+// whose file transfer the radio announced it for; only that address may
+// connect. If the port is already open, client is added to it. The listener
+// accepts connections for sideChannelWindow after the last connection ends,
+// then closes.
+func (f *Forwarder) Open(port int, client netip.Addr) error {
 	f.mu.Lock()
 	if f.active == nil {
-		f.active = map[int]bool{}
+		f.active = map[int]map[netip.Addr]bool{}
 	}
-	if f.active[port] {
+	if set, ok := f.active[port]; ok {
+		set[client] = true
 		f.mu.Unlock()
 		return nil
 	}
-	f.active[port] = true
+	f.active[port] = map[netip.Addr]bool{client: true}
 	f.mu.Unlock()
 
 	ln, err := f.Listen(port)
@@ -71,6 +76,11 @@ func (f *Forwarder) serve(port int, ln net.Listener) {
 			wg.Wait()
 			return
 		}
+		if !f.admits(port, c.RemoteAddr()) {
+			log.Printf("side channel %d: refused %s: not the session that asked for it", port, c.RemoteAddr())
+			c.Close()
+			continue
+		}
 		if f.Authorize != nil {
 			if who, ok := f.Authorize(c.RemoteAddr()); !ok {
 				log.Printf("side channel %d: refused %s (%s)", port, c.RemoteAddr(), who)
@@ -86,6 +96,17 @@ func (f *Forwarder) serve(port int, ln net.Listener) {
 			deadline.Reset(sideChannelWindow)
 		}()
 	}
+}
+
+// admits reports whether remote is a session the port was opened for.
+func (f *Forwarder) admits(port int, remote net.Addr) bool {
+	ap, ok := addrPortOf(remote)
+	if !ok {
+		return false
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.active[port][ap.Addr()]
 }
 
 func (f *Forwarder) splice(port int, c net.Conn) {
