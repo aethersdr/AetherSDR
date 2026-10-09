@@ -158,16 +158,19 @@ is the sole authority on visual design and UX direction.
 ## User documentation
 
 The user guide is docs-as-code in `docs/user/` (Docusaurus, served at
-docs.aethersdr.com). Almost every change touches it: a PR that changes what a
-user sees or does updates the matching page **in the same PR**, never in a
-follow-up. The rest of `docs/` is for contributors.
+docs.aethersdr.com); [`docs/user/README.md`](docs/user/README.md) is the full
+workflow. Most feature and fix PRs touch it: a PR that changes what a user sees
+or does updates the matching page **in the same PR**, never in a follow-up.
+Test, CI and internal-refactor PRs usually don't. The rest of `docs/` is for
+contributors.
 
-- **Edit `docs/user/docs/` only.** `versioned_docs/` is the Stable snapshot;
-  `/release-prep` replaces it with `tools/docs/snapshot_stable.py`. Never
-  hand-edit it.
+- **Never hand-edit `versioned_docs/`.** It is the Stable snapshot, replaced
+  wholesale by `tools/docs/snapshot_stable.py`, which `/release-prep` runs;
+  page edits go in `docs/user/docs/`.
 - **Follow the Docs Style Guide** (`docs/user/docs/docs-style-guide.md`): fixed
-  section order, a status banner where support varies by radio, *Known issues*
-  citing open GitHub issues, *Troubleshooting* as symptom → fix. State current
+  section order; where support varies by radio, the `status` / `applies_to`
+  front matter and the `:::info[Status]` callout, kept in step; *Known issues*
+  citing open GitHub issues; *Troubleshooting* as symptom → fix. State current
   behaviour, never history. Use exact UI labels and menu paths from the source.
 - **New page?** Add it to `docs/user/sidebars.js`; link pages with relative
   `./slug.md` links.
@@ -180,9 +183,10 @@ follow-up. The rest of `docs/` is for contributors.
   updating its rule; moved lines refresh with
   `node tools/docs/test_log_rules.mjs --update`.
 - **Screenshots** (`docs/user/screens.json`): if your UI change makes a shot
-  stale, re-shoot it with `tools/docs/capture_screenshots.py --only <id>` (see
-  `docs/user/README.md`; never transmit, redact IP/MAC/serial) or say so in
-  the PR.
+  stale, re-shoot it with `tools/docs/capture_screenshots.py --only <id>`
+  (never transmit; IP/MAC/serial are redacted), then place it with
+  `tools/docs/embed_screenshots.py` (`--check` reports a page out of step), or
+  say in the PR which shot is stale.
 - **Before pushing:** `cd docs/user && npm ci && npm run build` — the build is
   the link and anchor check. Static checks run `gen_reference.py --check` and
   `test_log_rules.mjs` on every PR.
