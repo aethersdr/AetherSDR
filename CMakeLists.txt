@@ -1019,6 +1019,8 @@ set(CORE_SOURCES
     src/core/ReceivePresentationSync.cpp
     src/core/KiwiPublicDirectory.cpp
     src/core/DxClusterClient.cpp
+    src/core/DxSpotLineParser.cpp
+    src/core/GoClusterSettings.cpp
     src/core/WsjtxClient.cpp
     src/core/SpotCollectorClient.cpp
     src/core/PotaClient.cpp

@@ -5,24 +5,14 @@
 #include <QTimer>
 #include <QFile>
 #include <QString>
-#include <QTime>
 #include <atomic>
+
+#include "core/DxSpot.h"
+#include "core/GoClusterSettings.h"
 
 namespace AetherSDR {
 
-struct DxSpot {
-    QString spotterCall;    // W3LPL
-    double  freqMhz{0.0};  // 14.025 (converted from kHz)
-    QString dxCall;         // JA1ABC
-    QString comment;        // "CW big signal"
-    QTime   utcTime;        // 18:24 UTC
-    QString source;         // "Cluster", "RBN", "WSJT-X"
-    QString color;          // #AARRGGBB for radio spot color (optional)
-    int     snr{0};         // signal-to-noise ratio (dB), for WSJT-X decodes
-    int     lifetimeSec{0}; // 0 = use source default from AppSettings
-};
-
-// Telnet client for DX cluster nodes (DX Spider, AR-Cluster, CC Cluster).
+// Telnet client for DX cluster nodes (DX Spider, AR-Cluster, CC Cluster, GoCluster).
 // Connects, logs in with callsign, parses "DX de" spot lines, and emits
 // spotReceived() for each parsed spot.
 class DxClusterClient : public QObject {
@@ -49,6 +39,10 @@ public:
     // to "RbnStartupCommands" so the two tabs persist independently (#2683).
     void setStartupCommandsKey(const QString& key) { m_startupCommandsKey = key; }
 
+    // Which GoClusterSettings feed's "hide unverified" flag applies to this
+    // instance. Defaults to the Cluster tab; MainWindow points RBN at its own.
+    void setGoClusterFeed(const QString& feed) { m_goClusterFeed = feed; }
+
 public slots:
     // Defer socket + timer construction to the worker thread (#1929). On Windows,
     // QTcpSocket creates a QSocketNotifier whose Win32 message-loop affinity is
@@ -73,7 +67,6 @@ private slots:
     void onReconnectTimer();
 
 private:
-    bool parseDxSpotLine(const QString& line, DxSpot& spot) const;
     bool isLoginPrompt(const QString& line) const;
     void handleLine(const QString& line);
     void stripTelnetIAC();
@@ -93,11 +86,13 @@ private:
 
     QString m_logFileName{"dxcluster.log"};
     QString m_startupCommandsKey{"DxClusterStartupCommands"};
+    QString m_goClusterFeed{GoClusterSettings::kFeedCluster};
     QString m_host;
     quint16 m_port{7300};
     QString m_callsign;
     std::atomic<bool> m_connected{false};
     bool    m_loggedIn{false};
+    bool    m_goCluster{false};  // pre-login banner named GoCluster; reset per connection
     bool    m_intentionalDisconnect{false};
     int     m_reconnectAttempts{0};
     int     m_connectEpoch{0};  // incremented each connectToCluster(); guards stale timeouts

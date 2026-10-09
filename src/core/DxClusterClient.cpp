@@ -1,8 +1,8 @@
 #include "DxClusterClient.h"
+#include "DxSpotLineParser.h"
 #include "AppSettings.h"
 #include "LogManager.h"
 
-#include <QRegularExpression>
 #include <QStandardPaths>
 #include <QDateTime>
 #include <QDir>
@@ -68,6 +68,7 @@ void DxClusterClient::connectToCluster(const QString& host, quint16 port, const 
     m_port = port;
     m_callsign = callsign;
     m_loggedIn = false;
+    m_goCluster = false;
     m_intentionalDisconnect = false;
     m_readBuffer.clear();
 
@@ -266,6 +267,11 @@ void DxClusterClient::onReadyRead()
 
 void DxClusterClient::handleLine(const QString& line)
 {
+    if (!m_loggedIn && !m_goCluster && DxSpotLineParser::isGoClusterBanner(line)) {
+        qCDebug(lcDxCluster) << "DxClusterClient: GoCluster node, parsing its spot tail";
+        m_goCluster = true;
+    }
+
     // Login prompt detection (line-based)
     if (!m_loggedIn && isLoginPrompt(line)) {
         qCDebug(lcDxCluster) << "DxClusterClient: login prompt:" << line;
@@ -278,7 +284,12 @@ void DxClusterClient::handleLine(const QString& line)
 
     // Try to parse as a DX spot
     DxSpot spot;
-    if (parseDxSpotLine(line, spot)) {
+    if (DxSpotLineParser::parseSpotLine(line, spot, m_goCluster)) {
+        if (spot.confidence == QLatin1Char('?')
+                && GoClusterSettings::hideUnverified(m_goClusterFeed)) {
+            qCDebug(lcDxCluster) << "DxClusterClient: hiding unverified spot" << spot.dxCall;
+            return;
+        }
         qCDebug(lcDxCluster) << "DxClusterClient: spot" << spot.dxCall
                  << spot.freqMhz << "MHz de" << spot.spotterCall;
         emit spotReceived(spot);
@@ -311,34 +322,6 @@ bool DxClusterClient::isLoginPrompt(const QString& line) const
     if (lower.contains("enter your call") || lower.contains("your call"))
         return true;
     return false;
-}
-
-// ── DX spot line parser ─────────────────────────────────────────────────────
-
-bool DxClusterClient::parseDxSpotLine(const QString& line, DxSpot& spot) const
-{
-    // Standard format: DX de W3LPL:     14025.0  JA1ABC       CW big signal       1824Z
-    // Z is the terminator — ignore any trailing chars (some nodes append BEL/NUL)
-    static const QRegularExpression rx(
-        R"(^DX\s+de\s+(\S+?):\s+(\d+\.?\d*)\s+(\S+)\s+(.*?)\s+(\d{4})Z)",
-        QRegularExpression::CaseInsensitiveOption);
-
-    auto match = rx.match(line);
-    if (!match.hasMatch())
-        return false;
-
-    spot.spotterCall = match.captured(1);
-    double freqKhz   = match.captured(2).toDouble();
-    spot.freqMhz     = freqKhz / 1000.0;
-    spot.dxCall       = match.captured(3);
-    spot.comment      = match.captured(4).trimmed();
-
-    QString timeStr = match.captured(5);
-    int hh = timeStr.left(2).toInt();
-    int mm = timeStr.mid(2, 2).toInt();
-    spot.utcTime = QTime(hh, mm);
-
-    return spot.freqMhz > 0.0 && !spot.dxCall.isEmpty();
 }
 
 } // namespace AetherSDR

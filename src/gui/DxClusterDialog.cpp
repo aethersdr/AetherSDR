@@ -8,6 +8,8 @@
 #include "GuardedSlider.h"
 #include "SpotAutoScroll.h"
 #include "core/DxClusterClient.h"
+#include "core/DxSpotLineParser.h"
+#include "core/GoClusterSettings.h"
 #include "core/AppSettings.h"
 #include "core/N1MMSpotParser.h"
 #include "core/SpotCommandPolicy.h"
@@ -785,26 +787,24 @@ void DxClusterDialog::loadLogFiles(const QString& clusterLog, const QString& rbn
                                     const QString& wsjtxLog, const QString& potaLog,
                                     const QString& freedvLog)
 {
-    static const QRegularExpression rx(
-        R"(^DX\s+de\s+(\S+?):\s+(\d+\.?\d*)\s+(\S+)\s+(.*?)\s+(\d{4})Z)",
-        QRegularExpression::CaseInsensitiveOption);
-
-    auto parseSpots = [&](const QStringList& lines, const QString& source) {
+    // Same parser and GoCluster banner gate as DxClusterClient, so a reopened
+    // SpotHub shows the spots the live feed showed. A log tail that has lost
+    // the banner falls back to the generic layout.
+    auto parseSpots = [&](const QStringList& lines, const QString& source,
+                          const QString& goClusterFeed) {
+        const bool hideUnverified = GoClusterSettings::hideUnverified(goClusterFeed);
+        bool goCluster = false;
         QVector<DxSpot> spots;
         for (const auto& line : lines) {
-            auto match = rx.match(line);
-            if (match.hasMatch()) {
-                DxSpot spot;
-                spot.spotterCall = match.captured(1);
-                spot.freqMhz = match.captured(2).toDouble() / 1000.0;
-                spot.dxCall = match.captured(3);
-                spot.comment = match.captured(4).trimmed();
-                QString timeStr = match.captured(5);
-                spot.utcTime = QTime(timeStr.left(2).toInt(), timeStr.mid(2, 2).toInt());
-                if (spot.freqMhz > 0.0 && !spot.dxCall.isEmpty()) {
-                    spot.source = source;
-                    spots.append(spot);
+            DxSpot spot;
+            if (DxSpotLineParser::parseSpotLine(line, spot, goCluster)) {
+                if (hideUnverified && spot.confidence == QLatin1Char('?')) {
+                    continue;
                 }
+                spot.source = source;
+                spots.append(spot);
+            } else if (!goCluster && DxSpotLineParser::isGoClusterBanner(line)) {
+                goCluster = true;
             }
         }
         return spots;
@@ -820,12 +820,12 @@ void DxClusterDialog::loadLogFiles(const QString& clusterLog, const QString& rbn
     // Cluster log — parse spots + display in console
     auto clusterLines = tailFile(clusterLog);
     loadConsole(m_console, clusterLines);
-    auto clusterSpots = parseSpots(clusterLines, "Cluster");
+    auto clusterSpots = parseSpots(clusterLines, "Cluster", GoClusterSettings::kFeedCluster);
 
     // RBN log — parse spots + display in console
     auto rbnLines = tailFile(rbnLog);
     loadConsole(m_rbnConsole, rbnLines);
-    auto rbnSpots = parseSpots(rbnLines, "RBN");
+    auto rbnSpots = parseSpots(rbnLines, "RBN", GoClusterSettings::kFeedRbn);
 
     // WSJT-X log — display only (no DX de format)
     loadConsole(m_wsjtxConsole, tailFile(wsjtxLog));
@@ -925,6 +925,25 @@ void DxClusterDialog::buildClusterTab(QTabWidget* tabs)
             "DxClusterStartupCommands", this);
     });
     btnRow->addWidget(startupBtn);
+
+    // Read by DxClusterClient on every '?' spot, so it takes effect without
+    // a reconnect.
+    const bool hideUnverified =
+        GoClusterSettings::hideUnverified(GoClusterSettings::kFeedCluster);
+    auto* hideUnverifiedBtn = new QPushButton(
+        hideUnverified ? "Hide Unverified: ON" : "Hide Unverified: OFF");
+    hideUnverifiedBtn->setCheckable(true);
+    hideUnverifiedBtn->setChecked(hideUnverified);
+    hideUnverifiedBtn->setToolTip(
+        "GoCluster nodes only: hide spots whose callsign GoCluster tags '?'\n"
+        "(little supporting evidence — often a busted call).\n"
+        "Other cluster servers send no confidence tag and are unaffected.");
+    hideUnverifiedBtn->setStyleSheet(kSpotHubToggle);
+    connect(hideUnverifiedBtn, &QPushButton::toggled, this, [hideUnverifiedBtn](bool on) {
+        hideUnverifiedBtn->setText(on ? "Hide Unverified: ON" : "Hide Unverified: OFF");
+        GoClusterSettings::setHideUnverified(GoClusterSettings::kFeedCluster, on);
+    });
+    btnRow->addWidget(hideUnverifiedBtn);
     btnRow->addStretch();
 
     m_statusLabel = new QLabel("Disconnected");

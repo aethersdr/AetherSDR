@@ -32,13 +32,16 @@ Every source tab has an **Auto-Start** (or **Auto-Connect**) toggle that starts 
 
 ### Cluster (DX Cluster)
 
-Connects to a DX cluster node over telnet (DX Spider, AR-Cluster, CC Cluster).
+Connects to a DX cluster node over telnet (DX Spider, AR-Cluster, CC Cluster, GoCluster).
 
 - **Server / Port / Callsign** — default `dxc.nc7j.com:7300`
 - **Auto-Connect** — connect when the radio connects
 - **Startup Commands…** — cluster commands sent automatically after every login, one per line (for example `SET/NAME`, `SET/QTH`, `ACCEPT/SPOT`)
+- **Hide Unverified** — on a GoCluster node, hides spots whose callsign GoCluster tags `?` (little supporting evidence, often a busted call). Other servers send no confidence tag, so it has no effect on them. It applies to new spots straight away, without reconnecting
 - **Cluster Console** — live output with a command line (`sh/dx 20`, `set/filter`, `bye` …)
 - **Spot Color** — default tan
+
+On a GoCluster node, AetherSDR recognises the server from its login banner and removes the grid, confidence and path symbols from the end of each spot, so the comment reads `FT8 -12 dB` rather than `FT8 -12 dB > FN31 V`. The console still shows the full line. A node whose operator has removed "GoCluster" from the banner keeps those symbols in the comment.
 
 ### RBN (Reverse Beacon Network)
 
@@ -271,6 +274,7 @@ Some useful setting keys, for the **Settings Browser** (**Settings → Settings 
 | `SmartSpotFilterMatchHz` | `1000` | Smart Spot Filtering match window (Hz) |
 | `ManualSpotLifetime` | `1800` | Default lifetime of hand-added spots (s) |
 | `SpotForwardToCluster` | `False` | Forward hand-added spots to the cluster |
+| `GoCluster` | `{}` | GoCluster options: `{"hideUnverified": {"cluster": false, "rbn": false}}` hides `?` spots on the Cluster / RBN tab (RBN has no button) |
 
 ## Known issues
 

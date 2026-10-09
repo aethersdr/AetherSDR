@@ -4005,6 +4005,16 @@ target_include_directories(n1mm_spot_client_test PRIVATE src)
 target_link_libraries(n1mm_spot_client_test PRIVATE Qt6::Core)
 add_test(NAME n1mm_spot_client_test COMMAND n1mm_spot_client_test)
 
+# DX-cluster "DX de" line parsing: DXSpider/AR-Cluster/CC Cluster/RBN must
+# parse as before; GoCluster's fixed tail splits off only behind its banner gate.
+add_executable(dx_spot_line_parser_test
+    tests/dx_spot_line_parser_test.cpp
+    src/core/DxSpotLineParser.cpp
+)
+target_include_directories(dx_spot_line_parser_test PRIVATE src)
+target_link_libraries(dx_spot_line_parser_test PRIVATE Qt6::Core)
+add_test(NAME dx_spot_line_parser_test COMMAND dx_spot_line_parser_test)
+
 add_executable(eibi_client_test
     tests/eibi_client_test.cpp
 )
