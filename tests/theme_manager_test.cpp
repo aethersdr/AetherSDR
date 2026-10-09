@@ -9,9 +9,12 @@
 #include <QBrush>
 #include <QGradient>
 #include <QHoverEvent>
+#include <QImage>
 #include <QLabel>
 #include <QSlider>
 #include <QStackedWidget>
+#include <QTreeWidget>
+#include <QTreeWidgetItem>
 #include <QVBoxLayout>
 #include <QSignalSpy>
 #include <QStandardPaths>
@@ -1653,6 +1656,37 @@ int main(int argc, char** argv)
         sendHoverEnter(styled);
         EXPECT_TRUE(styled->hoverEventsSeen == 0);
         tm.setActiveTheme("Default Dark");
+    }
+
+    // ── App stylesheet: tree-view rows use the theme's backgrounds (#5934) ──
+    // Without alternate-background-color, every other row kept the native
+    // AlternateBase (near-white) under the theme's light text.
+    {
+        auto& tm = ThemeManager::instance();
+        QWidget host;
+        applyAppTheme(&host);
+        auto* tree = new QTreeWidget(&host);
+        tree->setAlternatingRowColors(true);
+        tree->setHeaderHidden(true);
+        for (int i = 0; i < 4; ++i) {
+            new QTreeWidgetItem(tree, {QStringLiteral("row %1").arg(i)});
+        }
+        tree->setGeometry(0, 0, 240, 140);
+        host.resize(240, 140);
+        host.show();
+        QApplication::processEvents();
+
+        const QImage rows = tree->viewport()->grab().toImage();
+        const QRect row0 = tree->visualItemRect(tree->topLevelItem(0));
+        const QRect row1 = tree->visualItemRect(tree->topLevelItem(1));
+        // Sample the right end of each row, clear of the text.
+        const QColor base = rows.pixelColor(row0.right() - 4, row0.center().y());
+        const QColor alternate = rows.pixelColor(row1.right() - 4, row1.center().y());
+        EXPECT_TRUE(base.rgb() == tm.color(QStringLiteral("color.background.0")).rgb());
+        EXPECT_TRUE(alternate.rgb() == tm.color(QStringLiteral("color.background.1")).rgb());
+        // Selection stays with the palette: a fixed text colour on the accent
+        // is unreadable when a custom theme's accent is dark.
+        EXPECT_TRUE(!appStylesheetTemplate().contains(QStringLiteral("QTreeView::item:selected")));
     }
 
     if (g_failures == 0) {

@@ -7,6 +7,7 @@
 #include "core/ThemeManager.h"
 
 #include <QAction>
+#include <QBrush>
 #include <QComboBox>
 #include <QCursor>
 #include <QTimer>
@@ -108,6 +109,18 @@ QString colorToTokenHex(const QColor& c)
 {
     return c.alpha() == 255 ? c.name(QColor::HexRgb)
                             : c.name(QColor::HexArgb);
+}
+
+// A scope column that inherits from an ancestor shows this placeholder.
+QString inheritedCellText()
+{
+    return QStringLiteral("inherited");
+}
+
+// The placeholder follows the theme, so it reads on light and dark themes.
+QBrush inheritedCellBrush()
+{
+    return QBrush(ThemeManager::instance().color(QStringLiteral("color.text.secondary")));
 }
 
 // Mini left-to-right preview of a gradient for the token list row.
@@ -479,9 +492,9 @@ void ThemeEditorDialog::populateRow(QTreeWidgetItem* item)
             item->setFont(col, normalFont);
             item->setForeground(col, QBrush());
         } else {
-            item->setText(col, QStringLiteral("inherited"));
+            item->setText(col, inheritedCellText());
             item->setFont(col, inheritedFont);
-            item->setForeground(col, QBrush(QColor(0x60, 0x70, 0x80)));
+            item->setForeground(col, inheritedCellBrush());
         }
     }
 
@@ -1127,6 +1140,22 @@ void ThemeEditorDialog::onActiveThemeChanged()
         m_lastRenderedTheme = current;
         refreshContainerCombo();
         refreshTokenList();
+        return;
+    }
+    // An in-place edit keeps every row, but the "inherited" cells carry
+    // color.text.secondary, which may be the token just edited. Repaint them
+    // without rebuilding the list.
+    if (!m_tokenList) {
+        return;
+    }
+    const QBrush inherited = inheritedCellBrush();
+    const int lastCol = m_tokenList->columnCount() - 1;
+    for (QTreeWidgetItemIterator rows(m_tokenList); *rows; ++rows) {
+        for (int col = 1; col < lastCol; ++col) {
+            if ((*rows)->text(col) == inheritedCellText()) {
+                (*rows)->setForeground(col, inherited);
+            }
+        }
     }
 }
 
