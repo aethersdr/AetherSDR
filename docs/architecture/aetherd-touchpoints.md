@@ -4,7 +4,7 @@
 
 Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine-design.md) §2, §10). One row per engine header the UI includes; converting a touchpoint means the UI reaches that surface through the versioned protocol instead of the header.
 
-**Totals:** 245 touchpoint headers (206 core, 39 models) — 245/245 tagged, 0/245 converted.
+**Totals:** 247 touchpoint headers (208 core, 39 models) — 247/247 tagged, 0/247 converted.
 
 | Header | Includers | Tag | Status |
 |---|---:|---|---|
@@ -100,6 +100,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/NetRecurrence.h` | 1 | ui-support — Pure RRULE math for net reminders; NetEntry is operator-scoped client state, so aligns with NetScheduler/NetEntry | unconverted |
 | `core/NetScheduleStore.h` | 2 | ui-support — Local JSON persistence of NetEntry, which its header calls operator-scoped client state — not radio state | unconverted |
 | `core/NetScheduler.h` | 1 | ui-support — Timer engine firing net-reminder alerts from NetEntry list; pure client calendar plumbing, no radio state. | unconverted |
+| `core/NetworkDiagnostics.h` | 3 | ui-support — Logs failed external-service requests (update check, QRZ, map/radar, propagation) to aether.network with their TLS errors and the TLS backend. Diagnostic plumbing, not radio state; the map/radar manager, title-bar update check and propagation dashboard watch their replies with it. | unconverted |
 | `core/NetworkPathResolver.h` | 1 | ui-support — Local NIC/IPv4 enumeration + interface-pick helper for connection setup; host networking plumbing, not radio state | unconverted |
 | `core/NetworkSettings.h` | 1 | ui-support — AppSettings JSON wrapper persisting VITA-49 SO_RCVBUF tuning; settings storage, not radio state — engine config knob, no protocol msg | unconverted |
 | `core/NnrControls.h` | 1 | ui-support — Compile-time NNR control ranges and default-marker positions read out of WDSP 2.10; no state and no WDSP include, shared by the ADSP tab and the filter | unconverted |
@@ -172,6 +173,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/WaveformInstaller.h` | 1 | vendor(flex) — Uploads Docker waveform images via SmartSDR fw 4.2.18 'file upload' TCP protocol — Flex-only ecosystem. | unconverted |
 | `core/WfmDemodulator.h` | 1 | mixed(flex) — WFM demod around WfmDsp: demod/Doppler-offset intent is core; IQ source is DAX IQ + SmartSDR cmds (flex) | unconverted |
 | `core/WfmSettings.h` | 1 | ui-support — Client-side settings blob (AppSettings JSON) storing WFM audio output device id + legacy-key migration. | unconverted |
+| `core/WindowsFirewall.h` | 1 | ui-support — Reads Windows Defender Firewall's rules for the AetherSDR executable and runs the UAC netsh fix. Host-OS plumbing, not radio state; read only by the Network Diagnostics Windows Firewall page. | unconverted |
 | `core/WsjtxClient.h` | 2 | ui-support — UDP listener for local WSJT-X app decodes/status; desktop-side integration feeding the universal spot surface | unconverted |
 | `core/WsprBeacon.h` | 1 | universal — WSPR type-1 message encoder and sample-accurate continuous-phase 4-FSK generator (lock-free, allocation-free on the audio thread). Radio-agnostic engine DSP. | unconverted |
 | `core/aprs/AprsBeacon.h` | 1 | universal — APRS position/status beacon composition; radio-agnostic packet operating feature. | unconverted |

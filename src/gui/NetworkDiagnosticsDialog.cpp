@@ -8,6 +8,7 @@
 #include "core/LogManager.h"
 #include "core/AppSettings.h"
 #include "core/TciServer.h"   // self-guards on HAVE_WEBSOCKETS
+#include "core/WindowsFirewall.h"
 #include "models/RadioModel.h"
 
 #include <algorithm>
@@ -59,6 +60,9 @@
 #include <QAbstractItemView>
 #include <QTextCharFormat>
 #include <QVBoxLayout>
+#include <QCoreApplication>
+#include <QFutureWatcher>
+#include <QtConcurrent/QtConcurrentRun>
 #include "core/ThemeManager.h"
 
 namespace AetherSDR {
@@ -1027,6 +1031,12 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model,
         QStringLiteral("digital voice d-star waveform vita samples gaps delivery rx tx thumbdv"));
     m_digitalVoiceWaveformNavigationItem->setHidden(true);
 
+#ifdef Q_OS_WIN
+    addPage(statusCategory, buildFirewallPage(), QStringLiteral("Windows Firewall"),
+        QStringLiteral("windows defender firewall blocked block allow rule prompt update "
+                       "discovery qrz map kiwisdr update check external services norton antivirus"));
+#endif
+
     QWidget* logsTab = buildLogsTab();
     addPage(supportCategory, logsTab, QStringLiteral("Application Logs"),
         QStringLiteral("logs errors warnings commands status discovery support export follow live filter"));
@@ -1205,6 +1215,124 @@ static void tciAliasSet(const QString& ip, const QString& name)
         QString::fromUtf8(QJsonDocument(o).toJson(QJsonDocument::Compact)));
     AppSettings::instance().save();
 }
+
+#ifdef Q_OS_WIN
+QWidget* NetworkDiagnosticsDialog::buildFirewallPage()
+{
+    auto* page = new QWidget(this);
+    auto* layout = new QVBoxLayout(page);
+    layout->setContentsMargins(8, 8, 8, 8);
+    layout->setSpacing(10);
+
+    auto* intro = new QLabel(QStringLiteral(
+        "Windows Defender Firewall keeps rules per program. After an update, a dismissed "
+        "firewall prompt can leave a rule that blocks AetherSDR, which stops radio discovery "
+        "and streams. Another security product that manages the firewall can also block "
+        "external services such as QRZ, maps, KiwiSDR and the update check."));
+    intro->setWordWrap(true);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(
+        intro, "QLabel { color: {{color.canon.muted}}; }");
+    layout->addWidget(intro);
+
+    m_firewallSummary = new QLabel(QStringLiteral("Checking Windows Firewall\u2026"));
+    m_firewallSummary->setObjectName(QStringLiteral("networkDiagnosticsFirewallSummary"));
+    m_firewallSummary->setWordWrap(true);
+    m_firewallSummary->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    m_firewallSummary->setAccessibleName(QStringLiteral("Windows Firewall status"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(
+        m_firewallSummary, "QLabel { color: {{color.canon.ink}}; font-weight: bold; }");
+    layout->addWidget(m_firewallSummary);
+
+    m_firewallDetails = new QLabel;
+    m_firewallDetails->setObjectName(QStringLiteral("networkDiagnosticsFirewallDetails"));
+    m_firewallDetails->setWordWrap(true);
+    m_firewallDetails->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    m_firewallDetails->setAccessibleName(QStringLiteral("Windows Firewall rules for AetherSDR"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(
+        m_firewallDetails, "QLabel { color: {{color.canon.muted}}; }");
+    layout->addWidget(m_firewallDetails);
+
+    auto* buttons = new QHBoxLayout;
+    m_firewallFixButton = new QPushButton(QStringLiteral("Fix\u2026"));
+    m_firewallFixButton->setObjectName(QStringLiteral("networkDiagnosticsFirewallFix"));
+    m_firewallFixButton->setAccessibleName(QStringLiteral("Fix Windows Firewall rules"));
+    m_firewallFixButton->setAccessibleDescription(QStringLiteral(
+        "Asks Windows for permission, then replaces AetherSDR's incoming firewall rules, "
+        "including any block rule: UDP is allowed on every network, TCP on private and domain "
+        "networks only. Outgoing rules are kept."));
+    m_firewallFixButton->setToolTip(m_firewallFixButton->accessibleDescription());
+    m_firewallFixButton->setEnabled(false);
+    m_firewallRecheckButton = new QPushButton(QStringLiteral("Check again"));
+    m_firewallRecheckButton->setObjectName(QStringLiteral("networkDiagnosticsFirewallRecheck"));
+    m_firewallRecheckButton->setAccessibleName(QStringLiteral("Check Windows Firewall again"));
+    buttons->addWidget(m_firewallFixButton);
+    buttons->addWidget(m_firewallRecheckButton);
+    buttons->addStretch();
+    layout->addLayout(buttons);
+    layout->addStretch();
+
+    connect(m_firewallFixButton, &QPushButton::clicked, this, &NetworkDiagnosticsDialog::fixFirewall);
+    connect(m_firewallRecheckButton, &QPushButton::clicked,
+            this, &NetworkDiagnosticsDialog::inspectFirewall);
+    inspectFirewall();
+    return page;
+}
+
+void NetworkDiagnosticsDialog::inspectFirewall()
+{
+    if (m_firewallBusy) {
+        return;
+    }
+    m_firewallBusy = true;
+    m_firewallFixButton->setEnabled(false);
+    m_firewallRecheckButton->setEnabled(false);
+    m_firewallSummary->setText(QStringLiteral("Checking Windows Firewall\u2026"));
+    const QString program = QCoreApplication::applicationFilePath();
+    auto* watcher = new QFutureWatcher<AetherSDR::WindowsFirewall::Assessment>(this);
+    connect(watcher, &QFutureWatcherBase::finished, this, [this, watcher] {
+        watcher->deleteLater();
+        m_firewallBusy = false;
+        const auto a = watcher->result();
+        const QString fixError = std::exchange(m_firewallFixError, QString());
+        m_firewallSummary->setText(fixError.isEmpty()
+            ? a.summary
+            : QStringLiteral("Fix did not complete: %1 Now: %2").arg(fixError, a.summary));
+        m_firewallDetails->setText(a.details.join(QLatin1Char('\n')));
+        m_firewallDetails->setVisible(!a.details.isEmpty());
+        m_firewallFixButton->setEnabled(a.fixable);
+        m_firewallRecheckButton->setEnabled(true);
+    });
+    watcher->setFuture(QtConcurrent::run([program] {
+        return AetherSDR::WindowsFirewall::assess(AetherSDR::WindowsFirewall::inspect(program));
+    }));
+}
+
+void NetworkDiagnosticsDialog::fixFirewall()
+{
+    if (m_firewallBusy) {
+        return;
+    }
+    m_firewallBusy = true;
+    m_firewallFixButton->setEnabled(false);
+    m_firewallRecheckButton->setEnabled(false);
+    m_firewallSummary->setText(QStringLiteral("Waiting for Windows permission\u2026"));
+    const QString program = QCoreApplication::applicationFilePath();
+    auto* watcher = new QFutureWatcher<QString>(this);
+    connect(watcher, &QFutureWatcherBase::finished, this, [this, watcher] {
+        watcher->deleteLater();
+        m_firewallBusy = false;
+        // Re-read the firewall either way: a failed or timed-out Fix may
+        // already have deleted the inbound rules, and the page must show
+        // what is there now, with the failure in front of it.
+        m_firewallFixError = watcher->result();
+        inspectFirewall();
+    });
+    watcher->setFuture(QtConcurrent::run([program] {
+        QString error;
+        return AetherSDR::WindowsFirewall::runFix(program, &error) ? QString() : error;
+    }));
+}
+#endif
 
 QWidget* NetworkDiagnosticsDialog::buildTciTab()
 {
