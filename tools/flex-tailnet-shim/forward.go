@@ -98,6 +98,17 @@ func (f *Forwarder) serve(port int, ln net.Listener) {
 	}
 }
 
+// Forget withdraws client from every open side channel, once its last
+// session has closed; a port no session can use stays shut until its window
+// lapses.
+func (f *Forwarder) Forget(client netip.Addr) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, set := range f.active {
+		delete(set, client)
+	}
+}
+
 // admits reports whether remote is a session the port was opened for.
 func (f *Forwarder) admits(port int, remote net.Addr) bool {
 	ap, ok := addrPortOf(remote)

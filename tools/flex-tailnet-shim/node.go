@@ -102,6 +102,9 @@ type Node struct {
 	// authorize is the allowlist check for station-device flows, set while
 	// the node runs. Nil refuses every flow.
 	authorize func(net.Addr) (string, bool)
+	// localAddrs lists the radio's own addresses (interfaceAddrs when nil);
+	// a test seam.
+	localAddrs func() []netip.Addr
 }
 
 func (n *Node) cfgPath() string   { return filepath.Join(n.StateDir, "provision.json") }
@@ -304,8 +307,8 @@ func (n *Node) start(parent context.Context, authKey string, timeout time.Durati
 		DialRadio: func() (net.Conn, error) {
 			return net.DialTimeout("tcp", net.JoinHostPort(n.RadioAddr, fmt.Sprint(radioAPIPort)), 5*time.Second)
 		},
-		HostUDP: func() (*net.UDPConn, error) {
-			return net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero})
+		HostUDP: func(local netip.Addr) (*net.UDPConn, error) {
+			return net.ListenUDP("udp4", net.UDPAddrFromAddrPort(netip.AddrPortFrom(local, 0)))
 		},
 		ClientTX: tx, ClientPrime: prime, ClientOut: out,
 		Authorize: n.authorizer(lc),
@@ -321,6 +324,7 @@ func (n *Node) start(parent context.Context, authKey string, timeout time.Durati
 		Authorize: n.authorizer(lc),
 	}
 	relay.OpenForward = fwd.Open
+	relay.ForgetForward = fwd.Forget
 	go func() {
 		err := relay.Serve(ln)
 		log.Printf("relay stopped: %v", err)
@@ -349,6 +353,7 @@ func (n *Node) start(parent context.Context, authKey string, timeout time.Durati
 		IdleTimeout:       60 * time.Second,
 		MaxHeaderBytes:    8 << 10,
 	}
+	closers = append(closers, telemetrySrv.Close)
 	go telemetrySrv.Serve(tl)
 	tctx, tcancel := context.WithCancel(context.Background())
 	closers = append(closers, func() error { tcancel(); return nil })
@@ -444,6 +449,11 @@ func (n *Node) RefreshRoutes() {
 // SetSharing changes which LAN devices are shared, without leaving the
 // tailnet. shareDiscovered nil leaves that setting unchanged.
 func (n *Node) SetSharing(presented string, routes []string, shareDiscovered *bool) error {
+	// Refuse before interrupting a boot attempt, so a caller without the
+	// token can't keep restarting it. Checked again under opMu.
+	if !n.checkToken(presented) {
+		return errUnauthorized
+	}
 	if n.interruptBoot() {
 		defer n.Boot()
 	}
@@ -580,9 +590,17 @@ func newToken() (token, hash string) {
 // the lock, two first-use requests could both see an unprovisioned node and
 // the second would replace the first's node without its token.
 func (n *Node) Provision(presented, authKey, hostname string, allow, routes []string, shareDiscovered *bool) (string, error) {
-	// A refused request resumes the boot it interrupted; a successful or
-	// failed join replaces it (Boot does nothing for a node that is up or
-	// unprovisioned).
+	// Refuse before interrupting a boot attempt, so a caller without the
+	// token can't keep restarting it (first use needs none). Checked again
+	// under opMu. A request refused there resumes the boot it interrupted; a
+	// successful or failed join replaces it (Boot does nothing for a node
+	// that is up or unprovisioned).
+	n.mu.Lock()
+	needsToken := n.provisioned()
+	n.mu.Unlock()
+	if needsToken && !n.checkToken(presented) {
+		return "", errUnauthorized
+	}
 	if n.interruptBoot() {
 		defer n.Boot()
 	}
@@ -647,6 +665,10 @@ func (n *Node) Provision(presented, authKey, hostname string, allow, routes []st
 
 // SetAllow changes who may connect, without leaving the tailnet.
 func (n *Node) SetAllow(presented string, allow []string) error {
+	// Refuse before interrupting a boot attempt (see SetSharing).
+	if !n.checkToken(presented) {
+		return errUnauthorized
+	}
 	if n.interruptBoot() {
 		defer n.Boot()
 	}
@@ -677,6 +699,10 @@ func (n *Node) SetAllow(presented string, allow []string) error {
 // and any later failure (logout, tailnet state) is returned but leaves the
 // node signed out.
 func (n *Node) SignOut(presented string) error {
+	// Refuse before interrupting a boot attempt (see SetSharing).
+	if !n.checkToken(presented) {
+		return errUnauthorized
+	}
 	if n.interruptBoot() {
 		defer n.Boot()
 	}
@@ -867,8 +893,10 @@ func parseRoute(s string) (netip.Prefix, error) {
 // subnet routes (a station device): check the caller against the allowlist,
 // then dial the device from the radio's network and splice. The tailnet's
 // ACLs admitting the sender is not enough: the allowlist governs station
-// devices exactly as it governs the radio. Flows to anything else are left
-// alone.
+// devices exactly as it governs the radio. A route wide enough to contain
+// the radio's own address never reaches the radio itself: its API would be
+// spliced with no relay in front, and its provisioning API would see a LAN
+// caller. Flows to anything else are left alone.
 func (n *Node) subnetTCP(src, dst netip.AddrPort) (handler func(net.Conn), intercept bool) {
 	n.mu.Lock()
 	var route netip.Prefix
@@ -885,11 +913,7 @@ func (n *Node) subnetTCP(src, dst netip.AddrPort) (handler func(net.Conn), inter
 	return func(c net.Conn) {
 		defer c.Close()
 		n.mu.Lock()
-		if n.routesInUse == nil {
-			n.routesInUse = map[netip.Prefix]bool{}
-		}
-		n.routesInUse[route] = true
-		authorize := n.authorize
+		authorize, local := n.authorize, n.localAddrs
 		n.mu.Unlock()
 		if authorize == nil {
 			log.Printf("subnet %s -> %s: refused, the node is not running", src, dst)
@@ -899,6 +923,20 @@ func (n *Node) subnetTCP(src, dst netip.AddrPort) (handler func(net.Conn), inter
 			log.Printf("subnet %s -> %s: refused %s", src, dst, who)
 			return
 		}
+		if local == nil {
+			local = interfaceAddrs
+		}
+		if slices.Contains(local(), dst.Addr().Unmap()) {
+			log.Printf("subnet %s -> %s: refused, that is the radio itself", src, dst)
+			return
+		}
+		// Only an admitted flow counts as evidence that the route is in use.
+		n.mu.Lock()
+		if n.routesInUse == nil {
+			n.routesInUse = map[netip.Prefix]bool{}
+		}
+		n.routesInUse[route] = true
+		n.mu.Unlock()
 		r, err := net.DialTimeout("tcp", dst.String(), 5*time.Second)
 		if err != nil {
 			log.Printf("subnet %s -> %s: %v", src, dst, err)

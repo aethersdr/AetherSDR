@@ -291,10 +291,22 @@ func TestOperatorRequestsInterruptAStuckBoot(t *testing.T) {
 	waitAttempt("boot after SetAllow") // a provisioned node keeps trying to rejoin
 	within("SetSharing", func() error { return n.SetSharing(token, nil, nil) })
 	waitAttempt("boot after SetSharing")
-	if !errors.Is(n.SetAllow("wrong", nil), errUnauthorized) {
+	// A caller without the token is refused without touching the boot
+	// attempt: otherwise a LAN host could keep the radio off the tailnet by
+	// restarting it in a loop.
+	if !errors.Is(n.SetAllow("wrong", nil), errUnauthorized) ||
+		!errors.Is(n.SetSharing("wrong", nil, nil), errUnauthorized) ||
+		!errors.Is(n.SignOut("wrong"), errUnauthorized) {
 		t.Fatal("a wrong token must still be refused")
 	}
-	waitAttempt("boot after a refused request")
+	if _, err := n.Provision("wrong", "tskey-auth-x", "flex-test", nil, nil, nil); !errors.Is(err, errUnauthorized) {
+		t.Fatalf("re-provision with a wrong token: %v", err)
+	}
+	select {
+	case <-attempts:
+		t.Fatal("a refused request restarted the boot attempt")
+	case <-time.After(200 * time.Millisecond):
+	}
 
 	var fresh string
 	within("re-provision", func() (err error) {
@@ -308,9 +320,40 @@ func TestOperatorRequestsInterruptAStuckBoot(t *testing.T) {
 	if st := n.Status(); st.Provisioned || st.State != stateUnprovisioned {
 		t.Fatalf("sign-out left %+v", st)
 	}
+}
+
+// Sign-out on its own, while the boot attempt is parked waiting for a login.
+func TestSignOutInterruptsAStuckBoot(t *testing.T) {
+	const token = "test-admin-token"
+	n := newTestNode(t, token)
+	attempts := make(chan struct{}, 4)
+	n.startFn = func(ctx context.Context, _ string, _ time.Duration) error {
+		attempts <- struct{}{}
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	n.Boot()
+	select {
+	case <-attempts:
+	case <-time.After(2 * time.Second):
+		t.Fatal("no boot attempt")
+	}
+	done := make(chan error, 1)
+	go func() { done <- n.SignOut(token) }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("sign-out queued behind the boot attempt")
+	}
+	if st := n.Status(); st.Provisioned || st.State != stateUnprovisioned {
+		t.Fatalf("sign-out left %+v", st)
+	}
 	select {
 	case <-attempts:
 		t.Fatal("a signed-out node kept booting")
-	case <-time.After(200 * time.Millisecond):
+	case <-time.After(300 * time.Millisecond):
 	}
 }

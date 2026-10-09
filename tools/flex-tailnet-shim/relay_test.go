@@ -115,7 +115,7 @@ func TestRelayEndToEnd(t *testing.T) {
 	relay := &Relay{
 		RadioAddr: "127.0.0.1",
 		DialRadio: func() (net.Conn, error) { return net.Dial("tcp", fr.api.Addr().String()) },
-		HostUDP: func() (*net.UDPConn, error) {
+		HostUDP: func(netip.Addr) (*net.UDPConn, error) {
 			c, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
 			if err == nil {
 				hostPort = c.LocalAddr().(*net.UDPAddr).Port
@@ -241,7 +241,7 @@ func TestSideChannelForwarding(t *testing.T) {
 	relay := &Relay{
 		RadioAddr: "127.0.0.1",
 		DialRadio: func() (net.Conn, error) { return net.Dial("tcp", fr.api.Addr().String()) },
-		HostUDP: func() (*net.UDPConn, error) {
+		HostUDP: func(netip.Addr) (*net.UDPConn, error) {
 			return net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
 		},
 		ClientTX: loopUDP(t), ClientPrime: loopUDP(t), ClientOut: loopUDP(t),
@@ -301,7 +301,18 @@ func TestSideChannelForwarding(t *testing.T) {
 
 // A LAN host that finds a session's host socket cannot feed the remote
 // client: only the radio's datagrams are relayed, and the rest are counted.
+// The radio is recognised either as RadioAddr or, when it sends from another
+// of the host's own addresses, through LocalAddrs.
 func TestHostSocketRelaysOnlyTheRadio(t *testing.T) {
+	for _, tc := range []struct{ name, radioAddr string }{
+		{"radio at RadioAddr", "127.0.0.1"},
+		{"radio at another host address", "192.0.2.1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) { hostSocketRelaysOnlyTheRadio(t, tc.radioAddr) })
+	}
+}
+
+func hostSocketRelaysOnlyTheRadio(t *testing.T, radioAddr string) {
 	stranger, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 2)})
 	if err != nil {
 		t.Skipf("needs a second loopback address: %v", err)
@@ -310,18 +321,22 @@ func TestHostSocketRelaysOnlyTheRadio(t *testing.T) {
 	fr := newFakeRadio(t)
 	clientTX, clientPrime, clientOut := loopUDP(t), loopUDP(t), loopUDP(t)
 	var hostPort atomic.Int64
+	var boundTo atomic.Pointer[netip.Addr]
 	relay := &Relay{
-		RadioAddr: "127.0.0.1",
+		RadioAddr: radioAddr,
 		DialRadio: func() (net.Conn, error) { return net.Dial("tcp", fr.api.Addr().String()) },
-		HostUDP: func() (*net.UDPConn, error) {
-			c, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+		HostUDP: func(local netip.Addr) (*net.UDPConn, error) {
+			boundTo.Store(&local)
+			c, err := net.ListenUDP("udp4", net.UDPAddrFromAddrPort(netip.AddrPortFrom(local, 0)))
 			if err == nil {
 				hostPort.Store(int64(c.LocalAddr().(*net.UDPAddr).Port))
 			}
 			return c, err
 		},
-		LocalAddrs: func() []netip.Addr { return []netip.Addr{netip.MustParseAddr("127.0.0.1")} },
-		ClientTX:   clientTX, ClientPrime: clientPrime, ClientOut: clientOut,
+		LocalAddrs:     func() []netip.Addr { return []netip.Addr{netip.MustParseAddr("127.0.0.1")} },
+		ClientTX:       clientTX,
+		ClientPrime:    clientPrime,
+		ClientOut:      clientOut,
 		RadioTXPort:    fr.tx.LocalAddr().(*net.UDPAddr).Port,
 		RadioPrimePort: fr.tx.LocalAddr().(*net.UDPAddr).Port,
 	}
@@ -341,6 +356,9 @@ func TestHostSocketRelaysOnlyTheRadio(t *testing.T) {
 	if n, _, err := myUDP.ReadFromUDP(buf); err != nil || n != 1200 {
 		t.Fatalf("the radio's own VITA-49 must still be relayed: n=%d err=%v", n, err)
 	}
+	if b := boundTo.Load(); b == nil || *b != netip.MustParseAddr("127.0.0.1") {
+		t.Fatalf("host socket bound to %v, want the radio connection's local address", b)
+	}
 	stranger.WriteToUDP([]byte("forged"), &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: int(hostPort.Load())})
 	deadline := time.Now().Add(500 * time.Millisecond)
 	for time.Now().Before(deadline) {
@@ -356,6 +374,58 @@ func TestHostSocketRelaysOnlyTheRadio(t *testing.T) {
 	ss := relay.Sessions()
 	if len(ss) != 1 || ss[0].FromOthers != 1 || !strings.HasPrefix(ss[0].LastRejected, "127.0.0.2:") {
 		t.Fatalf("the dropped datagram must be counted and named: %+v", ss)
+	}
+}
+
+// A failed address listing keeps the radio recognised rather than dropping
+// its datagrams until the next refresh.
+func TestFailedAddressListingKeepsThePreviousSet(t *testing.T) {
+	addrs := []netip.Addr{netip.MustParseAddr("192.168.50.20")}
+	r := &Relay{LocalAddrs: func() []netip.Addr { return addrs }}
+	r.init()
+	if !r.fromRadio(netip.MustParseAddr("192.168.50.20")) {
+		t.Fatal("a host address must be recognised")
+	}
+	addrs = nil
+	r.localAt = time.Now().Add(-2 * time.Second) // due for a refresh
+	if r.fromRadio(netip.MustParseAddr("192.168.50.99")) {
+		t.Fatal("an unknown source must be refused")
+	}
+	if !r.fromRadio(netip.MustParseAddr("192.168.50.20")) {
+		t.Fatal("a failed listing dropped the radio's address")
+	}
+}
+
+// Side-channel access is withdrawn when a computer's last session closes,
+// not while another session from it is still open.
+func TestClosingTheLastSessionWithdrawsSideChannels(t *testing.T) {
+	r := &Relay{}
+	r.init()
+	var forgotten []netip.Addr
+	r.ForgetForward = func(a netip.Addr) { forgotten = append(forgotten, a) }
+	ip := netip.MustParseAddr("100.64.0.9")
+	mk := func(id uint64) *Session {
+		a, b := net.Pipe()
+		t.Cleanup(func() { a.Close(); b.Close() })
+		s := &Session{id: id, relay: r, client: a, radio: b, host: loopUDP(t), clientIP: ip, done: make(chan struct{})}
+		r.sessions[id] = s
+		return s
+	}
+	first, second := mk(1), mk(2)
+	first.close("test")
+	if len(forgotten) != 0 {
+		t.Fatalf("withdrew access while another session from %v was open", ip)
+	}
+	second.close("test")
+	if len(forgotten) != 1 || forgotten[0] != ip {
+		t.Fatalf("withdrawn: %v, want [%v]", forgotten, ip)
+	}
+
+	f := &Forwarder{}
+	f.active = map[int]map[netip.Addr]bool{5000: {ip: true}}
+	f.Forget(ip)
+	if f.admits(5000, &net.TCPAddr{IP: net.IPv4(100, 64, 0, 9), Port: 1}) {
+		t.Fatal("a forgotten client is still admitted")
 	}
 }
 

@@ -32,8 +32,10 @@ type Relay struct {
 	// DialRadio opens the radio API connection (net.Dial in production).
 	DialRadio func() (net.Conn, error)
 	// HostUDP opens the per-session UDP socket in the radio's network
-	// namespace; the radio sends this session's VITA-49 to it.
-	HostUDP func() (*net.UDPConn, error)
+	// namespace, bound to local: the address the shim's own radio connection
+	// comes from, which is where the radio sends this session's VITA-49. A
+	// socket bound there is out of reach of the station LAN.
+	HostUDP func(local netip.Addr) (*net.UDPConn, error)
 
 	// Tailnet-side UDP sockets: TX in (4991), primes in (4992), VITA out (4993).
 	ClientTX    net.PacketConn
@@ -54,13 +56,20 @@ type Relay struct {
 	// that only client may use (see forward.go). Nil disables side-channel
 	// forwarding.
 	OpenForward func(port int, client netip.Addr) error
+	// ForgetForward withdraws client's access to every side channel, once
+	// its last session has closed. Nil when side channels are disabled.
+	ForgetForward func(client netip.Addr)
 
 	// LocalAddrs lists this host's own addresses (net.InterfaceAddrs when
-	// nil). A session's host socket listens on every interface, but only the
-	// radio may feed it: the container shares the radio's network namespace,
-	// so the radio's datagrams carry one of these addresses, and the kernel
-	// drops anything arriving from outside with a local source address.
+	// nil). Only the radio may feed a session's host socket: the container
+	// shares the radio's network namespace, so the radio's datagrams carry
+	// one of these addresses. This is a second layer behind binding the
+	// socket to the radio-facing address; the kernel normally drops a packet
+	// arriving from outside with a local source address, but that depends on
+	// the radio's rp_filter and accept_local settings.
 	LocalAddrs func() []netip.Addr
+
+	radioIP netip.Addr // RadioAddr, parsed once in init
 
 	localMu sync.Mutex
 	local   map[netip.Addr]bool
@@ -113,6 +122,9 @@ func (r *Relay) init() {
 	}
 	if r.sessions == nil {
 		r.sessions = map[uint64]*Session{}
+	}
+	if a, err := netip.ParseAddr(r.RadioAddr); err == nil {
+		r.radioIP = a.Unmap()
 	}
 	r.mu.Unlock()
 }
@@ -175,7 +187,14 @@ func (r *Relay) handle(c net.Conn) {
 		c.Close()
 		return
 	}
-	host, err := r.HostUDP()
+	local, okLocal := addrPortOf(radio.LocalAddr())
+	if !okLocal {
+		log.Printf("radio connection for %s has no local address: %v", who, radio.LocalAddr())
+		radio.Close()
+		c.Close()
+		return
+	}
+	host, err := r.HostUDP(local.Addr())
 	if err != nil {
 		log.Printf("host UDP socket failed for %s: %v", who, err)
 		radio.Close()
@@ -215,7 +234,17 @@ func (s *Session) close(reason string) {
 				delete(s.relay.byClient, k)
 			}
 		}
+		lastFromClient := true
+		for _, o := range s.relay.sessions {
+			if o.clientIP == s.clientIP {
+				lastFromClient = false
+				break
+			}
+		}
 		s.relay.mu.Unlock()
+		if lastFromClient && s.relay.ForgetForward != nil {
+			s.relay.ForgetForward(s.clientIP)
+		}
 		close(s.done)
 	})
 }
@@ -477,7 +506,7 @@ func (s *Session) radioToClientUDP() {
 // re-read at most once a second, when an unknown source arrives.
 func (r *Relay) fromRadio(a netip.Addr) bool {
 	a = a.Unmap()
-	if ra, err := netip.ParseAddr(r.RadioAddr); err == nil && ra.Unmap() == a {
+	if r.radioIP.IsValid() && r.radioIP == a {
 		return true
 	}
 	r.localMu.Lock()
@@ -487,9 +516,13 @@ func (r *Relay) fromRadio(a netip.Addr) bool {
 		if list == nil {
 			list = interfaceAddrs
 		}
-		r.local = map[netip.Addr]bool{}
-		for _, l := range list() {
-			r.local[l.Unmap()] = true
+		// A failed listing keeps the previous set rather than dropping
+		// every datagram for the next second.
+		if addrs := list(); len(addrs) > 0 || r.local == nil {
+			r.local = map[netip.Addr]bool{}
+			for _, l := range addrs {
+				r.local[l.Unmap()] = true
+			}
 		}
 		r.localAt = time.Now()
 	}

@@ -4,6 +4,10 @@
 set -eu
 cd "$(dirname "$0")"
 export CGO_ENABLED=0 GOOS=linux GOARCH=arm64
+# The image bytes must not depend on the builder's machine. `sort` orders the
+# LICENSES sections by locale, so pin it; and `go list` must not try to stamp
+# VCS details from whatever checkout (or none) the tree sits in.
+export LC_ALL=C GOFLAGS=-buildvcs=false
 # -buildvcs=false: the binary must not record the commit or a dirty tree, or
 # the pinned image could only be rebuilt from the exact checkout it came from.
 go build -trimpath -buildvcs=false -ldflags='-s -w' -o flex-tailnet-shim .

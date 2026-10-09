@@ -29,6 +29,11 @@ var discoveryPorts = []int{9007, 9008, 9010}
 // deviceStale is how long a device stays listed after its last announcement.
 const deviceStale = 2 * time.Minute
 
+// maxDevices bounds the discovered set, and so the routes it can advertise:
+// a station has a handful of accessories, and every one becomes a subnet
+// route offered to the tailnet. It matches the operator's own limit of 16.
+const maxDevices = 16
+
 // Device is one discovered station accessory.
 type Device struct {
 	Kind     string    `json:"kind"` // "Antenna Genius", "Power Genius XL", "Tuner Genius XL"
@@ -40,8 +45,11 @@ type Device struct {
 	LastSeen time.Time `json:"last_seen"`
 }
 
-// parseAnnouncement turns a 4O3A discovery datagram into a Device. The
-// announced ip= wins over the packet source; either must be private LAN.
+// parseAnnouncement turns a 4O3A discovery datagram into a Device at the
+// packet's source address, which must be private LAN. The announced ip= is
+// not trusted: anyone on the LAN can send an announcement, and taking its
+// ip= would let them have any private address shared over the tailnet. A
+// sender can only ever have its own address shared.
 func parseAnnouncement(b []byte, src netip.Addr, port int) (Device, bool) {
 	text := strings.TrimSpace(strings.TrimRight(string(b), "\x00"))
 	fields := strings.Fields(text)
@@ -65,12 +73,12 @@ func parseAnnouncement(b []byte, src netip.Addr, port int) (Device, bool) {
 	default:
 		return Device{}, false
 	}
-	ip := src
-	if a, err := netip.ParseAddr(kv["ip"]); err == nil {
-		ip = a
-	}
+	ip := src.Unmap()
 	if !ip.Is4() || !ip.IsPrivate() || containerNet.Contains(ip) {
 		return Device{}, false
+	}
+	if a, err := netip.ParseAddr(kv["ip"]); err == nil && a != ip {
+		log.Printf("discovery: %s from %s announces ip=%s; using the sender's address", d.Kind, ip, a)
 	}
 	d.IP = ip.String()
 	d.Port = port
@@ -174,6 +182,11 @@ func (d *Discovery) note(dev Device) {
 		d.devices = map[string]Device{}
 	}
 	prev, existed := d.devices[dev.IP]
+	if !existed && len(d.devices) >= maxDevices {
+		d.mu.Unlock()
+		log.Printf("discovery: ignoring %s at %s: already %d devices", dev.Kind, dev.IP, maxDevices)
+		return
+	}
 	d.devices[dev.IP] = dev
 	changed := !existed || prev.Kind != dev.Kind
 	d.mu.Unlock()

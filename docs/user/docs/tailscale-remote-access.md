@@ -316,6 +316,14 @@ container.
   (`WhoIs`) against that list before passing it to the radio or to a shared
   station device. A file transfer's side channel is open only to the
   computer that asked for the transfer.
+- The list is checked when a connection opens. Removing someone with **Save
+  Access List** stops their next connection, not one already open. To cut
+  off a session now, use **Sign Out of Tailnet**, or remove their machine
+  in the admin console.
+- Shared devices never reach the radio itself. A route wide enough to
+  include the radio's own address doesn't make the radio's ports reachable
+  through it. A discovered device is shared at the address its announcement
+  came from, so a LAN computer can't get a different address shared.
 - On the tailnet the container exposes only the radio's own ports, its
   forwarded side channels, shared station devices, and the diagnostics
   report. Its setup interface listens only on the radio's local network.

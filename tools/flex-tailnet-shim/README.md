@@ -34,10 +34,18 @@ AetherSDR (tailnet peer)                       radio container (host network nam
   tailnet address. Client datagrams (TX audio, DAX TX, netcw, primes) leave
   from the same host socket P, so the radio sees one address per client, as on
   a LAN. Datagrams from unregistered senders are dropped.
+  - Host socket P is bound to the address the shim's own radio connection
+    comes from (normally 172.30.1.1), where the radio sends VITA-49, so the
+    station LAN can't reach it.
+  - P also relays only datagrams from the radio: `SSDR_RADIO_ADDRESS` or
+    another of the host's own addresses. Others are dropped and counted (see
+    Link telemetry).
 - **Identity:** every connection is checked with Tailscale `WhoIs`. `-allow`
-  limits access to listed logins or tags. The shim listens only on its own
-  tailnet ports, so the radio's other services, such as its SSH, are not
-  exposed.
+  limits access to listed logins or tags, on the radio, station devices and
+  side channels alike; a side channel is open only to the computer whose
+  transfer opened it. The shim listens only on its own tailnet ports, so the
+  radio's other services, such as its SSH, are not exposed, and a shared
+  route never splices into the radio's own addresses.
 - **Teardown (Principle VI):** when either side ends, the shim closes the radio
   connection at once. The radio drops the GUI client and unkeys anything that
   client owned. The shim never keeps a radio session alive for a client it
