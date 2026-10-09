@@ -431,6 +431,17 @@ QString Ctr2ProxyModel::radioEndpoint() const
     return usbActive() ? m_usb->radioDescription() : m_proxy->upstreamDescription();
 }
 
+bool Ctr2ProxyModel::audioSpectrumWanted() const
+{
+    return usbActive() && m_usb->state() == TcpByteProxy::State::Relaying
+        && (m_usb->extensions() & ctr2hid::capabilityBit(ctr2hid::MessageType::AudioSpectrum));
+}
+
+bool Ctr2ProxyModel::sendAudioSpectrum(const QByteArray& payload)
+{
+    return audioSpectrumWanted() && m_usb->sendAudioSpectrum(payload);
+}
+
 TcpByteProxy::Stats Ctr2ProxyModel::stats() const
 {
     return usbActive() ? m_usb->stats() : m_proxy->stats();

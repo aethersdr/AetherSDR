@@ -7,6 +7,7 @@
 #include <QByteArray>
 
 #include <algorithm>
+#include <limits>
 #include <cstdio>
 #include <random>
 #include <vector>
@@ -300,6 +301,83 @@ void testMidMessageHeld()
 
 } // namespace
 
+// Extensions: rejected unless negotiated, sequenced like Data when they are.
+void testExtensions()
+{
+    const QByteArray payload = spectrum::encode(4000, std::vector<float>(32, -45.0f));
+    FrameEncoder enc;
+    std::vector<Report> reports;
+    enc.encodeControl(MessageType::Ready, &reports);
+    check(enc.encodeExtension(MessageType::AudioSpectrum, payload, &reports),
+          "an extension message encodes");
+    check(!enc.encodeExtension(MessageType::Data, payload, &reports),
+          "encodeExtension refuses a version-0 type");
+    check(!enc.encodeExtension(MessageType::AudioSpectrum, {}, &reports),
+          "encodeExtension refuses an empty payload");
+    check(reports.size() == 1 + static_cast<size_t>(packetsFor(payload.size())),
+          "READY plus one extension message were emitted");
+    check(reports[1][3] == 0x40, "AudioSpectrum is type 0x40");
+
+    FrameReassembler plain;
+    std::vector<Message> out;
+    bool ok = true;
+    for (const Report& r : reports) {
+        ok = plain.feed(r, &out) && ok;
+    }
+    check(!ok && plain.error() == FrameReassembler::Error::BadType,
+          "an extension the receiver did not negotiate is a framing error (stock CTR2 view)");
+
+    FrameReassembler negotiated;
+    negotiated.setExtensions(capabilityBit(MessageType::AudioSpectrum));
+    negotiated.reset();  // the negotiated set survives a link restart
+    out.clear();
+    ok = true;
+    for (const Report& r : reports) {
+        ok = negotiated.feed(r, &out) && ok;
+    }
+    check(ok && out.size() == 2 && out[1].type == MessageType::AudioSpectrum
+              && out[1].payload == payload,
+          "a negotiated extension arrives whole with its type");
+
+    // Data after an extension keeps the shared counter sequence.
+    std::vector<Report> more;
+    enc.encodeData(QByteArray("ping\n"), &more);
+    for (const Report& r : more) {
+        ok = negotiated.feed(r, &out) && ok;
+    }
+    check(ok && out.back().type == MessageType::Data, "Data follows an extension in sequence");
+}
+
+void testCapabilitiesAndSpectrum()
+{
+    const std::uint32_t caps = capabilityBit(MessageType::AudioSpectrum) | (1u << 31);
+    const QByteArray r = capabilities::encode(caps);
+    check(r.size() == 8 && r[0] == 'C' && r[1] == 'X' && r[2] == 0x01,
+          "capabilities report starts 'C' 'X' version 1");
+    check(capabilities::decode(r) == caps, "capabilities round-trip");
+    QByteArray bad = r;
+    bad[0] = 'Z';
+    check(capabilities::decode(bad) == 0, "a report without the magic offers nothing");
+    check(capabilities::decode(r.left(7)) == 0, "a short report offers nothing");
+    bad = r;
+    bad[2] = 0x02;
+    check(capabilities::decode(bad) == 0, "an unknown extension version offers nothing");
+
+    const QByteArray p = spectrum::encode(4000, {-90.0f, 0.0f, -45.0f, 5.0f, -200.0f,
+                                                 std::numeric_limits<float>::quiet_NaN()});
+    check(p.size() == 3 + 6 && static_cast<std::uint8_t>(p[0]) == 6, "bar count leads the payload");
+    check(static_cast<std::uint8_t>(p[1]) == 0x0F && static_cast<std::uint8_t>(p[2]) == 0xA0,
+          "span 4000 Hz, MSB first");
+    check(static_cast<std::uint8_t>(p[3]) == 0 && static_cast<std::uint8_t>(p[4]) == 255
+              && static_cast<std::uint8_t>(p[5]) == 128,
+          "-90 dB is 0, 0 dBFS is 255, -45 dB is mid-scale");
+    check(static_cast<std::uint8_t>(p[6]) == 255 && static_cast<std::uint8_t>(p[7]) == 0
+              && static_cast<std::uint8_t>(p[8]) == 0,
+          "levels clamp, and a non-finite level reads as the floor");
+    check(spectrum::encode(4000, std::vector<float>(100, -10.0f)).size() == 3 + spectrum::kMaxBars,
+          "at most 64 bars are sent");
+}
+
 int main()
 {
     testKnownAnswerVectors();
@@ -309,6 +387,8 @@ int main()
     testDatagrams();
     testFailClosed();
     testMidMessageHeld();
+    testExtensions();
+    testCapabilitiesAndSpectrum();
     if (g_failures) {
         std::fprintf(stderr, "%d check(s) failed\n", g_failures);
         return 1;

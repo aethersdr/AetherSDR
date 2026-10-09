@@ -83,6 +83,41 @@ size_t ctr2_tx_send_datagram(ctr2_tx *tx, uint16_t port, const uint8_t *data, ui
     return tx_emit(tx, CTR2_TYPE_DATAGRAM, prefix, 2, data, len, sink, ctx);
 }
 
+size_t ctr2_tx_send_extension(ctr2_tx *tx, uint8_t type, const uint8_t *payload, uint16_t len,
+                              ctr2_report_sink sink, void *ctx)
+{
+    if (type < CTR2_EXT_FIRST || type > CTR2_EXT_LAST || len == 0 || len > CTR2_MAX_PAYLOAD) {
+        return 0;
+    }
+    return tx_emit(tx, type, NULL, 0, payload, len, sink, ctx);
+}
+
+void ctr2_caps_encode(uint32_t caps, uint8_t out[CTR2_FEATURE_BYTES])
+{
+    out[0] = 'C';
+    out[1] = 'X';
+    out[2] = CTR2_EXT_VERSION;
+    out[3] = 0x00u;
+    out[4] = (uint8_t)(caps >> 24);
+    out[5] = (uint8_t)(caps >> 16);
+    out[6] = (uint8_t)(caps >> 8);
+    out[7] = (uint8_t)caps;
+}
+
+int ctr2_caps_decode(const uint8_t *in, size_t len, uint32_t *caps)
+{
+    if (len < CTR2_FEATURE_BYTES || in[0] != 'C' || in[1] != 'X' || in[2] != CTR2_EXT_VERSION) {
+        return 0;
+    }
+    *caps = ((uint32_t)in[4] << 24) | ((uint32_t)in[5] << 16) | ((uint32_t)in[6] << 8) | in[7];
+    return 1;
+}
+
+void ctr2_rx_set_extensions(ctr2_rx *rx, uint32_t caps)
+{
+    rx->extensions = caps;
+}
+
 void ctr2_rx_reset(ctr2_rx *rx)
 {
     rx->started = 0;
@@ -141,12 +176,14 @@ ctr2_rx_result ctr2_rx_feed(ctr2_rx *rx, const uint8_t report[CTR2_REPORT_BYTES]
     if (report[2] > CTR2_COUNTER_MASK) {
         return rx_fail(rx, CTR2_ERR_BAD_COUNTER);
     }
-    if (report[3] > CTR2_TYPE_DATAGRAM) {
+    if (report[3] > CTR2_TYPE_DATAGRAM
+        && (report[3] < CTR2_EXT_FIRST || report[3] > CTR2_EXT_LAST
+            || !(rx->extensions & CTR2_CAP(report[3])))) {
         return rx_fail(rx, CTR2_ERR_BAD_TYPE);
     }
     packets = (uint16_t)((report[4] << 8) | report[5]);
     length = (uint16_t)((report[6] << 8) | report[7]);
-    if (report[3] == CTR2_TYPE_DATA) {
+    if (report[3] == CTR2_TYPE_DATA || report[3] >= CTR2_EXT_FIRST) {
         if (length == 0 || length > CTR2_MAX_PAYLOAD) {
             return rx_fail(rx, CTR2_ERR_BAD_LENGTH);
         }
@@ -161,7 +198,7 @@ ctr2_rx_result ctr2_rx_feed(ctr2_rx *rx, const uint8_t report[CTR2_REPORT_BYTES]
         return rx_fail(rx, CTR2_ERR_PACKET_COUNT);
     }
 
-    if (report[3] != CTR2_TYPE_DATA && report[3] != CTR2_TYPE_DATAGRAM) {
+    if (report[3] >= CTR2_TYPE_HELLO && report[3] <= CTR2_TYPE_CLOSED) {
         /* Control messages (re)synchronize the counter. */
         rx->started = 1;
         rx->expected = (uint8_t)((report[2] + 1u) & CTR2_COUNTER_MASK);

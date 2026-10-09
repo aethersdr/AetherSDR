@@ -75,6 +75,11 @@ needs CTR2 firmware with USB mode, which has not been released yet.
   (`/etc/udev/rules.d/70-aethersdr-ctr2.rules`) through `pkexec`, asking for
   your administrator password once. The rule only opens CTR2 controllers to
   whoever is logged in at the computer.
+- **AetherKnob** (an AetherSDR controller on the Elecrow CrowPanel 2.1"
+  rotary display) uses USB mode the same way. It appears in the list as
+  **AetherKnob**. While it is relaying, AetherSDR also sends it a 32-bar
+  spectrum of the receive audio you are hearing, after all DSP, for its
+  centre display. A CTR2 never receives this.
 
 ## Reference
 

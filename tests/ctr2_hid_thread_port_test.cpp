@@ -56,6 +56,9 @@ struct FakeDevice {
     std::atomic<bool> failWrites{false};
     std::atomic<bool> closed{false};
     std::function<void()> onWritten;   // after a write completes, on the I/O thread
+    QByteArray featureReply;           // Get Feature 0x02 answer, ID first; empty = stall
+    std::vector<QByteArray> featureSets;
+    std::atomic<bool> provideFeatureIo{true};
 
     Ctr2HidDeviceIo io()
     {
@@ -86,6 +89,22 @@ struct FakeDevice {
             }
             return size;
         };
+        if (provideFeatureIo) {
+            ops.getFeature = [this](unsigned char* buffer, int size) {
+                std::lock_guard<std::mutex> g(lock);
+                if (featureReply.isEmpty() || buffer[0] != 0x02) {
+                    return -1;  // what hidapi reports for a stalled request
+                }
+                const int n = std::min<int>(size, static_cast<int>(featureReply.size()));
+                std::copy(featureReply.constBegin(), featureReply.constBegin() + n, buffer);
+                return n;
+            };
+            ops.setFeature = [this](const unsigned char* buffer, int size) {
+                std::lock_guard<std::mutex> g(lock);
+                featureSets.emplace_back(reinterpret_cast<const char*>(buffer), size);
+                return size;
+            };
+        }
         ops.close = [this] { closed = true; };
         ops.lastError = [] { return QStringLiteral("injected failure"); };
         return ops;
@@ -277,6 +296,70 @@ void testIdleDestructorDoesNotHang()
 
 } // namespace
 
+QByteArray featureReport(const QByteArray& body)
+{
+    return QByteArray(1, char(capabilities::kReportId)) + body;
+}
+
+// Extensions are negotiated on the I/O thread before the first report, and
+// only with a device that answers Feature report 0x02 properly.
+void testNegotiation()
+{
+    const quint32 spectrumBit = capabilityBit(MessageType::AudioSpectrum);
+    struct Case {
+        const char* name;
+        QByteArray reply;
+        bool featureIo;
+        quint32 expect;
+    };
+    const Case cases[] = {
+        {"a stock CTR2 (no Feature report) stays version 0", {}, true, 0},
+        {"a build without Feature report access stays version 0", {}, false, 0},
+        {"a device answering with something else offers nothing",
+         featureReport(QByteArray("NOTCAPS!")), true, 0},
+        {"an offer is narrowed to what the host uses",
+         featureReport(capabilities::encode(spectrumBit | (1u << 9))), true, spectrumBit},
+    };
+    for (const Case& c : cases) {
+        auto dev = std::make_shared<FakeDevice>();
+        dev->featureReply = c.reply;
+        dev->provideFeatureIo = c.featureIo;
+        // A report already waiting: it must arrive after the negotiation result.
+        QByteArray header(1, char(kReportId));
+        header.append(QByteArray(8, char(0xFF)));
+        dev->reads.push_back(header);
+
+        auto* port = new Ctr2HidThreadPort(dev->io(), QStringLiteral("fake"));
+        bool negotiatedFirst = false, gotReports = false, negotiated = false;
+        quint32 result = 0xFFFFFFFF;
+        QObject::connect(port, &Ctr2HidPort::extensionsNegotiated, [&](quint32 ext) {
+            negotiated = true;
+            result = ext;
+            negotiatedFirst = !gotReports;
+        });
+        QObject::connect(port, &Ctr2HidPort::reportsReceived, [&](const QByteArray&) {
+            gotReports = true;
+        });
+        check(waitUntil([&] { return negotiated && gotReports; }), c.name);
+        check(result == c.expect && port->extensions() == c.expect, c.name);
+        check(negotiatedFirst, "the negotiation result arrives before any report");
+        std::vector<QByteArray> sets;
+        {
+            std::lock_guard<std::mutex> g(dev->lock);
+            sets = dev->featureSets;
+        }
+        if (c.expect) {
+            check(sets.size() == 1
+                      && sets[0] == featureReport(capabilities::encode(c.expect)),
+                  "the host tells the device exactly the extensions it will use");
+        } else {
+            check(sets.empty(), "a device offering nothing is never written a Feature report");
+        }
+        port->shutdown({});
+        waitUntil([&] { return dev->closed.load(); });
+    }
+}
+
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
@@ -285,6 +368,7 @@ int main(int argc, char** argv)
     testReadsAndFailures();
     testIdleDestructorDoesNotHang();
     testReopenWaitsForTheOldPort();
+    testNegotiation();
     if (g_failures) {
         std::fprintf(stderr, "%d check(s) failed\n", g_failures);
         return 1;

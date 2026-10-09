@@ -395,9 +395,12 @@ bool Ctr2UsbRelay::start(Ctr2HidPort* port, const QHostAddress& radioAddress, qu
     connect(m_port, &Ctr2HidPort::reportsReceived, this, &Ctr2UsbRelay::onReportsReceived);
     connect(m_port, &Ctr2HidPort::reportsSent, this, &Ctr2UsbRelay::onReportsSent);
     connect(m_port, &Ctr2HidPort::failed, this, &Ctr2UsbRelay::onPortFailed);
+    connect(m_port, &Ctr2HidPort::extensionsNegotiated, this,
+            &Ctr2UsbRelay::onExtensionsNegotiated);
     m_radioAddress = QHostAddress(radioAddress.toIPv4Address());
     m_radioPort = radioPort;
     m_rx.reset();
+    m_rx.setExtensions(m_port->extensions());
     m_tx.reset();
     m_reportCosts.clear();
     m_unsentPayload = 0;
@@ -571,6 +574,9 @@ void Ctr2UsbRelay::onMessage(const Message& message)
             scheduleHello(m_helloDelayMs);
         }
         return;
+    case MessageType::AudioSpectrum:
+        // Host-to-device only; a device has nothing to tell the host with it.
+        return;
     case MessageType::Ready:
         // The CTR2's answer to a HELLO sent since the last link ended. Any
         // other READY is a late answer to an earlier HELLO and changes nothing:
@@ -714,6 +720,41 @@ bool Ctr2UsbRelay::sendDatagram(quint16 port, const QByteArray& datagram)
     }
     m_reportCosts.push_back({0, static_cast<int>(datagram.size())});
     m_unsentDatagramBytes += datagram.size();
+    m_port->send(reports);
+    return true;
+}
+
+quint32 Ctr2UsbRelay::extensions() const
+{
+    return m_port ? m_port->extensions() : 0;
+}
+
+void Ctr2UsbRelay::onExtensionsNegotiated(quint32 extensions)
+{
+    m_rx.setExtensions(extensions);
+    if (extensions) {
+        qCInfo(lcDevices) << "CTR2 USB:" << deviceDescription() << "link extensions"
+                          << Qt::hex << extensions;
+    }
+}
+
+bool Ctr2UsbRelay::sendAudioSpectrum(const QByteArray& payload)
+{
+    const quint32 bit = ctr2hid::capabilityBit(MessageType::AudioSpectrum);
+    // The link moves about one report per millisecond; past ~30 ms of queued
+    // output the frame would be stale on arrival and would crowd the radio.
+    constexpr size_t kMaxQueuedReportsForSpectrum = 32;
+    if (!m_port || m_state != State::Relaying || !(m_port->extensions() & bit)
+        || m_reportCosts.size() > kMaxQueuedReportsForSpectrum) {
+        return false;
+    }
+    std::vector<ctr2hid::Report> reports;
+    if (!m_tx.encodeExtension(MessageType::AudioSpectrum, payload, &reports)) {
+        return false;
+    }
+    for (size_t i = 0; i < reports.size(); ++i) {
+        m_reportCosts.push_back({});
+    }
     m_port->send(reports);
     return true;
 }

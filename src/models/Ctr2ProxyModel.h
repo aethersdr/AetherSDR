@@ -91,6 +91,13 @@ public:
     QString radioEndpoint() const;
     TcpByteProxy::Stats stats() const;
 
+    // True while the USB relay is up with a device that negotiated the
+    // AudioSpectrum link extension (AetherKnob; never a stock CTR2).
+    bool audioSpectrumWanted() const;
+    // One AudioSpectrum payload (ctr2hid::spectrum::encode); false if not
+    // wanted now or the link is busy.
+    bool sendAudioSpectrum(const QByteArray& payload);
+
 signals:
     void configurationChanged();
     void listenAddressesChanged();   // also covers the USB device list

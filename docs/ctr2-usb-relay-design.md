@@ -260,6 +260,52 @@ Device behavior:
   and resynchronize as above; the host answers with a fresh radio connection
   and READY (or CLOSED).
 
+### Extensions (negotiated per device)
+
+Version 0 above is complete on its own, and a CTR2 never needs anything in
+this section. Controllers that want more than the relayed radio stream can
+offer link extensions. AetherSDR uses them only with a device that offers
+them, so new extensions never need a change to the CTR2 or to version 0.
+
+**Discovery.** Right after opening the device, before the first report is
+read, the host sends GET_REPORT for HID Feature report `0x02`. The device
+answers with 8 bytes after the report ID:
+
+```text
+['C'] ['X'] [extension version 0x01] [0x00] [capabilities, 32 bits MSB first]
+```
+
+Capability bit *n* stands for extension message type `0x40 + n`. A device
+without this Feature report (every CTR2) fails the request. So does a reply
+that is not exactly this shape. Either way the device offers nothing and the
+link is plain version 0.
+
+**Acceptance.** When the offer shares bits with what the host supports, the
+host sends SET_REPORT for Feature report `0x02` in the same layout. It
+carries only the shared bits: the extensions the host will use. Those bits,
+and no others, are allowed on the link in either direction. They stay in
+force until the device leaves the bus (unplugged, reset or re-enumerated),
+across any number of HELLO/READY link restarts. If the SET fails, the host
+uses no extensions.
+
+**Messages.** Extension types `0x40`–`0x5F` use the version 0 header and
+data reports with 1..512 payload bytes. They are sequenced like DATA and
+share its counter. A receiver treats a type that was not accepted exactly
+like any other unknown type: a framing error. The host sends extension
+messages only while the link is relaying (after its READY). It drops them
+rather than queue them when about 30 ms of output is already waiting, so
+they never delay the radio stream.
+
+| Type | Bit | Direction | Payload |
+| --- | --- | --- | --- |
+| `0x40` AUDIO_SPECTRUM | 0 | host → device | `[bars N, 1..64][span Hz hi][span Hz lo][N levels]`: what the operator hears (AetherSDR's post-DSP RX audio), bars splitting 0..span Hz evenly, each level 0..255 linear in dB from -90 dB (0) to 0 dBFS (255); about 20 a second |
+
+The reference implementation in `tools/ctr2-firmware-reference` covers the
+Feature report layout (`ctr2_caps_encode` / `ctr2_caps_decode`), sending
+(`ctr2_tx_send_extension`) and the accepted set
+(`ctr2_rx_set_extensions`). AetherSDR's tests cross-check it against the
+application in both directions.
+
 ### Test vectors
 
 Each line is one 8-byte report (after the report ID), in hex.
@@ -327,6 +373,8 @@ USB a complete replacement for Wi-Fi.
 | HID device access on its own I/O thread (hidapi) | `src/core/Ctr2HidPort.{h,cpp}` |
 | Link state machine, radio TCP connection and per-link UDP socket | `src/core/Ctr2UsbRelay.{h,cpp}` |
 | Applet: Wi-Fi or USB, device list; radio follows AetherSDR's connection | `src/models/Ctr2ProxyModel`, `src/gui/Ctr2ProxyApplet` |
+| Extension negotiation (Feature report `0x02`), on the HID I/O thread | `src/core/Ctr2HidThreadPort.cpp`, `src/core/Ctr2HidapiPort.cpp` |
+| AUDIO_SPECTRUM producer: the Client EQ post-DSP RX tap, 2048-point FFT, 32 bars at 20 Hz, only while a negotiating device is relaying | `src/gui/Ctr2AudioSpectrumFeeder` |
 
 HID I/O runs on one dedicated worker thread because hidapi reads and writes
 block; a stalled controller can then never freeze the UI or other

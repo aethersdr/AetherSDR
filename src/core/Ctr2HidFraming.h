@@ -20,6 +20,11 @@ namespace AetherSDR::ctr2hid {
 //
 // Counters are 7-bit (0x00-0x7F, wrapping 0x7F -> 0x00), so a data report
 // never starts with the 0xFF header marker.
+//
+// Extension types 0x40-0x5F are negotiated per device through HID Feature
+// report 0x02 (see Capabilities below). They are sequenced like Data, and a
+// receiver accepts only the ones negotiated; a CTR2 that offers none never
+// sees them.
 constexpr int kReportBytes = 8;
 constexpr int kDataBytesPerReport = 7;
 constexpr std::uint8_t kReportId = 0x01;
@@ -38,7 +43,37 @@ enum class MessageType : std::uint8_t {
     Ready = 0x02,   // device: answering HELLO; host: radio connection open
     Closed = 0x03,  // either direction: link ended; device restarts with Hello
     Datagram = 0x04,  // one UDP datagram: [radio port hi][radio port lo][bytes]
+    // Extensions, only where negotiated:
+    AudioSpectrum = 0x40,  // host -> device: [bars N][span Hz hi][span Hz lo][N levels]
 };
+
+constexpr std::uint8_t kExtensionFirst = 0x40;
+constexpr std::uint8_t kExtensionLast = 0x5F;
+constexpr std::uint32_t capabilityBit(MessageType type)
+{
+    return 1u << (static_cast<std::uint8_t>(type) - kExtensionFirst);
+}
+// Extensions this build of AetherSDR uses.
+constexpr std::uint32_t kHostCapabilities = capabilityBit(MessageType::AudioSpectrum);
+
+// HID Feature report 0x02, 8 bytes after the report ID:
+//   ['C']['X'][extension version 0x01][0x00][capabilities, 32 bits MSB first]
+// Get returns the device's offer; Set tells it the subset the host will use.
+namespace capabilities {
+constexpr std::uint8_t kReportId = 0x02;
+constexpr int kBytes = 8;
+constexpr std::uint8_t kVersion = 0x01;
+QByteArray encode(std::uint32_t caps);
+// The offer in a Get reply (report ID stripped), or 0 for anything else.
+std::uint32_t decode(const QByteArray& report);
+}
+
+// AudioSpectrum payload. Levels are 0..255, linear in dB from kFloorDb to 0 dBFS.
+namespace spectrum {
+constexpr int kMaxBars = 64;
+constexpr int kFloorDb = -90;
+QByteArray encode(int spanHz, const std::vector<float>& barsDb);
+}
 
 struct Message {
     MessageType type{MessageType::Data};
@@ -65,6 +100,9 @@ public:
     // One datagram of 1..kMaxDatagramBytes; returns false (and emits
     // nothing) when it does not fit.
     bool encodeDatagram(std::uint16_t port, const QByteArray& datagram, std::vector<Report>* out);
+    // One extension message of 1..kMaxPayloadBytes; false (nothing emitted)
+    // for a non-extension type or a bad size. Send only negotiated types.
+    bool encodeExtension(MessageType type, const QByteArray& payload, std::vector<Report>* out);
     // Sending Hello or Ready starts the counter again at 0.
     void reset() { m_counter = 0; }
     std::uint8_t counter() const { return m_counter; }
@@ -101,6 +139,8 @@ public:
     bool feed(const std::uint8_t* data, int size, std::vector<Message>* out);
 
     void reset();
+    // Extension types accepted (capabilityBit mask); kept across reset().
+    void setExtensions(std::uint32_t caps) { m_extensions = caps; }
     bool failed() const { return m_error != Error::None; }
     Error error() const { return m_error; }
     QString errorText() const;
@@ -113,6 +153,7 @@ private:
     bool feedData(const Report& r, std::vector<Message>* out);
 
     Error m_error{Error::None};
+    std::uint32_t m_extensions{0};
     bool m_started{false};
     std::uint8_t m_expected{0};
     std::uint8_t m_messageCounter{0};

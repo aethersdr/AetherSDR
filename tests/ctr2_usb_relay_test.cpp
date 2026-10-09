@@ -104,6 +104,8 @@ public:
         deleteLater();
     }
     QString description() const override { return QStringLiteral("Fake CTR2"); }
+    // What the HID thread port reports after Feature report 0x02.
+    void negotiate(quint32 extensions) { setExtensions(extensions); }
 
     // Delivers up to n queued reports; the acknowledgement arrives later and
     // is dropped if a fence happened in between, as the interface requires.
@@ -957,6 +959,63 @@ void testNoHelloWhileDraining()
 
 } // namespace
 
+void testAudioSpectrumExtension()
+{
+    const quint32 bit = capabilityBit(MessageType::AudioSpectrum);
+    const QByteArray payload = spectrum::encode(4000, std::vector<float>(32, -40.0f));
+    {
+        Rig rig;  // a stock CTR2: nothing negotiated
+        rig.start();
+        check(rig.linkUp(), "link up (no extensions)");
+        const size_t before = rig.port->sent.size();
+        check(!rig.relay.sendAudioSpectrum(payload) && rig.port->sent.size() == before,
+              "a device that negotiated nothing is never sent a spectrum");
+        std::vector<Report> r;
+        rig.dev.tx.encodeExtension(MessageType::AudioSpectrum, payload, &r);
+        rig.port->deliver(r);
+        check(waitUntil([&] { return rig.dev.count(MessageType::Closed) >= 1; }),
+              "an extension the host did not negotiate is still a link fault");
+    }
+    {
+        Rig rig;
+        rig.port->negotiate(bit);
+        rig.dev.rx.setExtensions(bit);
+        rig.start();
+        check(rig.relay.extensions() == bit, "the relay reports the negotiated extensions");
+        check(!rig.relay.sendAudioSpectrum(payload), "no spectrum before the link is relaying");
+        check(rig.linkUp(), "link up (spectrum negotiated)");
+        check(rig.relay.sendAudioSpectrum(payload), "a spectrum is sent while relaying");
+        check(waitUntil([&] { return rig.dev.count(MessageType::AudioSpectrum) == 1; }),
+              "the device receives one AudioSpectrum message");
+        bool same = false;
+        for (const Message& m : rig.dev.messages) {
+            same = same || (m.type == MessageType::AudioSpectrum && m.payload == payload);
+        }
+        check(same && !rig.dev.rxError, "its payload arrives unchanged, in valid framing");
+
+        // A device-sent extension of a negotiated type is accepted and ignored.
+        std::vector<Report> r;
+        rig.dev.tx.encodeExtension(MessageType::AudioSpectrum, payload, &r);
+        rig.port->deliver(r);
+        rig.dev.send(QByteArray("C1|ping\n"));
+        check(waitUntil([&] { return rig.radio.conns[0]->received.endsWith("C1|ping\n"); }),
+              "the link stays up and later data still reaches the radio");
+        check(rig.relay.state() == State::Relaying, "still relaying");
+
+        // A backed-up link drops frames instead of queueing them.
+        rig.port->autoAck = false;
+        int accepted = 0;
+        for (int i = 0; i < 20; ++i) {
+            accepted += rig.relay.sendAudioSpectrum(payload) ? 1 : 0;
+        }
+        check(accepted > 0 && accepted < 20, "frames stop once ~30 ms of output is queued");
+        rig.port->autoAck = true;
+        rig.port->ack(rig.port->pending());  // acknowledged asynchronously, like the real port
+        check(waitUntil([&] { return rig.relay.sendAudioSpectrum(payload); }),
+              "frames resume once the link drains");
+    }
+}
+
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
@@ -980,6 +1039,7 @@ int main(int argc, char** argv)
     testHostCallsAndDeviceAnswers();
     testRetryBacksOffAfterRadioFailure();
     testNoHelloWhileDraining();
+    testAudioSpectrumExtension();
     if (g_failures) {
         std::fprintf(stderr, "%d check(s) failed\n", g_failures);
         return 1;

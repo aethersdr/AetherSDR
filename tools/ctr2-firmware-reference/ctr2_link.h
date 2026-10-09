@@ -17,6 +17,10 @@
  * CLOSED 0x03 (either direction),
  * DATAGRAM 0x04 (one UDP datagram: [radio port hi][radio port lo][bytes]).
  * Counters are 0x00-0x7F and wrap 0x7F -> 0x00.
+ *
+ * Optional extensions (types 0x40-0x5F) are negotiated outside the link,
+ * through HID Feature report 0x02, and are never sent to a device that did
+ * not offer them. A device without that Feature report is plain version 0.
  */
 #ifndef CTR2_LINK_H
 #define CTR2_LINK_H
@@ -43,6 +47,37 @@ extern "C" {
 #define CTR2_TYPE_READY         0x02u
 #define CTR2_TYPE_CLOSED        0x03u
 #define CTR2_TYPE_DATAGRAM      0x04u
+
+/* ---- Extensions ------------------------------------------------------- */
+
+/* Extension message types: 0x40-0x5F, one capability bit each. They carry
+ * 1..CTR2_MAX_PAYLOAD bytes and are sequenced like DATA. */
+#define CTR2_EXT_FIRST          0x40u
+#define CTR2_EXT_LAST           0x5Fu
+#define CTR2_CAP(type)          (1ul << ((type) - CTR2_EXT_FIRST))
+
+/* AUDIO_SPECTRUM, host -> device: what the operator is hearing, as bars.
+ * Payload: [bar count N, 1..64][span Hz hi][span Hz lo][N levels], each
+ * level 0..255 linear in dB from CTR2_SPECTRUM_FLOOR_DB (0) to 0 dBFS (255).
+ * Bars split 0..span Hz evenly. Sent at most ~20 times a second. */
+#define CTR2_EXT_AUDIO_SPECTRUM 0x40u
+#define CTR2_SPECTRUM_MAX_BARS  64u
+#define CTR2_SPECTRUM_FLOOR_DB  (-90)
+
+/* Capability negotiation: HID Feature report CTR2_FEATURE_REPORT_ID,
+ * CTR2_FEATURE_BYTES after the report ID:
+ *   ['C']['X'][extension version 0x01][0x00][capabilities, 32 bits MSB first]
+ * Get: the device's offer. Set: the subset the host will use, which the
+ * device may send and should expect; it lasts until the device leaves the
+ * bus. A device answering Get with anything else, or not at all, offers
+ * nothing. */
+#define CTR2_FEATURE_REPORT_ID  0x02u
+#define CTR2_FEATURE_BYTES      8u
+#define CTR2_EXT_VERSION        0x01u
+
+void ctr2_caps_encode(uint32_t caps, uint8_t out[CTR2_FEATURE_BYTES]);
+/* Returns 1 and the capabilities for a well-formed report, else 0. */
+int ctr2_caps_decode(const uint8_t *in, size_t len, uint32_t *caps);
 
 /* Called once per outgoing 8-byte report, in order. Prepend report ID 0x01
  * if your USB stack needs it in the buffer. */
@@ -71,6 +106,12 @@ size_t ctr2_tx_send(ctr2_tx *tx, uint8_t type, const uint8_t *payload, uint16_t 
 size_t ctr2_tx_send_datagram(ctr2_tx *tx, uint16_t port, const uint8_t *data, uint16_t len,
                              ctr2_report_sink sink, void *ctx);
 
+/* Sends one extension message (type CTR2_EXT_FIRST..CTR2_EXT_LAST, payload
+ * 1..CTR2_MAX_PAYLOAD). Only for types the peer enabled. Returns the number
+ * of reports sent, or 0 if invalid. */
+size_t ctr2_tx_send_extension(ctr2_tx *tx, uint8_t type, const uint8_t *payload, uint16_t len,
+                              ctr2_report_sink sink, void *ctx);
+
 /* ---- Receiving -------------------------------------------------------- */
 
 typedef enum {
@@ -84,7 +125,7 @@ typedef enum {
     CTR2_ERR_BAD_MARKER,      /* expected a header (0xFF) */
     CTR2_ERR_BAD_VERSION,
     CTR2_ERR_BAD_COUNTER,     /* header counter above 0x7F */
-    CTR2_ERR_BAD_TYPE,
+    CTR2_ERR_BAD_TYPE,        /* unknown type, or an extension not enabled */
     CTR2_ERR_BAD_LENGTH,      /* too long, or wrong for the message type */
     CTR2_ERR_PACKET_COUNT,    /* packets != 1 + ceil(len / 7) */
     CTR2_ERR_NOT_STARTED,     /* DATA/DATAGRAM before any HELLO/READY/CLOSED */
@@ -101,10 +142,15 @@ typedef struct {
     uint16_t length;
     uint16_t received;
     ctr2_rx_error error;      /* sticky until ctr2_rx_reset() */
+    uint32_t extensions;      /* accepted extension types; kept by ctr2_rx_reset() */
     uint8_t  buffer[CTR2_MAX_MESSAGE];
 } ctr2_rx;
 
 void ctr2_rx_reset(ctr2_rx *rx);
+
+/* Extension types (CTR2_CAP bits) this receiver accepts; others stay
+ * framing errors. Zero (the default) is plain version 0. */
+void ctr2_rx_set_extensions(ctr2_rx *rx, uint32_t caps);
 
 /* Feed every received 8-byte report, in order. On CTR2_RX_MESSAGE the
  * payload points into rx->buffer and stays valid until the next call.

@@ -1,6 +1,7 @@
 #include "Ctr2HidFraming.h"
 
 #include <algorithm>
+#include <cmath>
 
 namespace AetherSDR::ctr2hid {
 
@@ -32,6 +33,59 @@ bool FrameEncoder::encodeDatagram(std::uint16_t port, const QByteArray& datagram
     payload.append(datagram);
     encodeMessage(MessageType::Datagram, payload.constData(), static_cast<int>(payload.size()), out);
     return true;
+}
+
+bool FrameEncoder::encodeExtension(MessageType type, const QByteArray& payload,
+                                   std::vector<Report>* out)
+{
+    const auto t = static_cast<std::uint8_t>(type);
+    if (t < kExtensionFirst || t > kExtensionLast || payload.isEmpty()
+        || payload.size() > kMaxPayloadBytes) {
+        return false;
+    }
+    encodeMessage(type, payload.constData(), static_cast<int>(payload.size()), out);
+    return true;
+}
+
+QByteArray capabilities::encode(std::uint32_t caps)
+{
+    QByteArray r(kBytes, '\0');
+    r[0] = 'C';
+    r[1] = 'X';
+    r[2] = static_cast<char>(kVersion);
+    for (int i = 0; i < 4; ++i) {
+        r[4 + i] = static_cast<char>((caps >> (24 - 8 * i)) & 0xFF);
+    }
+    return r;
+}
+
+std::uint32_t capabilities::decode(const QByteArray& r)
+{
+    if (r.size() < kBytes || r[0] != 'C' || r[1] != 'X'
+        || static_cast<std::uint8_t>(r[2]) != kVersion) {
+        return 0;
+    }
+    std::uint32_t caps = 0;
+    for (int i = 0; i < 4; ++i) {
+        caps = (caps << 8) | static_cast<std::uint8_t>(r[4 + i]);
+    }
+    return caps;
+}
+
+QByteArray spectrum::encode(int spanHz, const std::vector<float>& barsDb)
+{
+    const int n = std::min<int>(kMaxBars, static_cast<int>(barsDb.size()));
+    QByteArray p;
+    p.reserve(3 + n);
+    p.append(static_cast<char>(n));
+    p.append(static_cast<char>((spanHz >> 8) & 0xFF));
+    p.append(static_cast<char>(spanHz & 0xFF));
+    for (int i = 0; i < n; ++i) {
+        const float db = std::isfinite(barsDb[i]) ? barsDb[i] : float(kFloorDb);
+        const float scaled = (db - kFloorDb) * 255.0f / -kFloorDb;
+        p.append(static_cast<char>(std::clamp<int>(std::lround(scaled), 0, 255)));
+    }
+    return p;
 }
 
 void FrameEncoder::encodeMessage(MessageType type, const char* data, int size,
@@ -108,7 +162,9 @@ bool FrameReassembler::feedHeader(const Report& r, std::vector<Message>* out)
     if (r[2] > kCounterMask) {
         return fail(Error::BadCounter);
     }
-    if (r[3] > static_cast<std::uint8_t>(MessageType::Datagram)) {
+    const bool extension = r[3] >= kExtensionFirst && r[3] <= kExtensionLast;
+    if (r[3] > static_cast<std::uint8_t>(MessageType::Datagram)
+        && !(extension && (m_extensions & (1u << (r[3] - kExtensionFirst))))) {
         return fail(Error::BadType);
     }
     const auto type = static_cast<MessageType>(r[3]);
@@ -117,8 +173,8 @@ bool FrameReassembler::feedHeader(const Report& r, std::vector<Message>* out)
     const bool control = type == MessageType::Hello || type == MessageType::Ready
         || type == MessageType::Closed;
     const bool lengthOk = control ? length == 0
-        : type == MessageType::Data ? (length >= 1 && length <= kMaxPayloadBytes)
-                                    : (length >= 3 && length <= kMaxMessageBytes);
+        : (type == MessageType::Data || extension) ? (length >= 1 && length <= kMaxPayloadBytes)
+                                                   : (length >= 3 && length <= kMaxMessageBytes);
     if (!lengthOk) {
         return fail(Error::BadLength);
     }
@@ -161,7 +217,7 @@ bool FrameReassembler::feedData(const Report& r, std::vector<Message>* out)
             out->push_back(Message{MessageType::Datagram, m_partial.mid(2),
                                    static_cast<std::uint16_t>((hi << 8) | lo)});
         } else {
-            out->push_back(Message{MessageType::Data, m_partial, 0});
+            out->push_back(Message{m_messageType, m_partial, 0});
         }
         m_partial.clear();
         m_expected = nextCounter(m_messageCounter);
@@ -176,7 +232,7 @@ QString FrameReassembler::errorText() const
     case Error::BadReportSize:       return QStringLiteral("HID report is not 8 bytes");
     case Error::BadMarker:           return QStringLiteral("Expected a message header (0xFF)");
     case Error::BadVersion:          return QStringLiteral("Unsupported link version");
-    case Error::BadType:             return QStringLiteral("Unknown message type");
+    case Error::BadType:             return QStringLiteral("Unknown or unnegotiated message type");
     case Error::BadCounter:          return QStringLiteral("Message counter above 0x7F");
     case Error::BadLength:           return QStringLiteral("Payload length invalid for this message type");
     case Error::PacketCountMismatch: return QStringLiteral("Packet count does not match payload length");

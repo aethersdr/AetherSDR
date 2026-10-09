@@ -78,6 +78,7 @@ public:
         if (m_previousRelease.valid()) {
             m_previousRelease.wait_for(kPreviousReleaseWait);
         }
+        negotiate();
         m_timer = new QTimer(this);
         m_timer->setTimerType(Qt::PreciseTimer);
         m_timer->setInterval(kPollIntervalMs);
@@ -117,6 +118,36 @@ public:
     }
 
 private:
+    // Asks the device which link extensions it offers (Feature report 0x02)
+    // and tells it the ones this host will use. A device without that report
+    // (any stock CTR2) fails the Get and stays plain link version 0. Runs
+    // before the first read, so the result reaches the port before any report.
+    void negotiate()
+    {
+        quint32 enabled = 0;
+        if (m_io.getFeature && m_io.setFeature) {
+            std::array<unsigned char, 1 + ctr2hid::capabilities::kBytes> buf{};
+            buf[0] = ctr2hid::capabilities::kReportId;
+            const int n = m_io.getFeature(buf.data(), static_cast<int>(buf.size()));
+            if (n == static_cast<int>(buf.size()) && buf[0] == ctr2hid::capabilities::kReportId) {
+                const QByteArray offer(reinterpret_cast<const char*>(buf.data() + 1),
+                                       ctr2hid::capabilities::kBytes);
+                enabled = ctr2hid::capabilities::decode(offer) & ctr2hid::kHostCapabilities;
+            }
+            if (enabled) {
+                const QByteArray accept = ctr2hid::capabilities::encode(enabled);
+                buf[0] = ctr2hid::capabilities::kReportId;
+                std::copy(accept.begin(), accept.end(), buf.begin() + 1);
+                if (m_io.setFeature(buf.data(), static_cast<int>(buf.size())) < 0) {
+                    enabled = 0;   // the device was not told, so use nothing
+                }
+            }
+        }
+        QMetaObject::invokeMethod(m_port, [port = m_port, enabled] {
+            port->deliverExtensions(enabled);
+        }, Qt::QueuedConnection);
+    }
+
     bool writeReport(const char* report)
     {
         std::array<unsigned char, 1 + ctr2hid::kReportBytes> out{};
@@ -303,6 +334,13 @@ void Ctr2HidThreadPort::deliverReceived(const QByteArray& reports)
 {
     if (m_open) {
         emit reportsReceived(reports);
+    }
+}
+
+void Ctr2HidThreadPort::deliverExtensions(quint32 extensions)
+{
+    if (m_open) {
+        setExtensions(extensions);
     }
 }
 

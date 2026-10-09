@@ -32,6 +32,7 @@
 #include "TitleBar.h"
 #include "models/SliceModel.h"
 #include "Ctr2ProxyApplet.h"
+#include "Ctr2AudioSpectrumFeeder.h"
 #include "models/Ctr2ProxyModel.h"
 
 #include <QHostAddress>
@@ -2630,6 +2631,8 @@ void MainWindow::setupCtr2Proxy()
             [pushRadio](bool) { pushRadio(); });
     connect(&m_radioModel, &RadioModel::infoChanged, m_ctr2ProxyModel, pushRadio);
     pushRadio();
+    // Controllers that negotiate it get the audio spectrum (AetherKnob).
+    new Ctr2AudioSpectrumFeeder(m_ctr2ProxyModel, m_audio, this);
     if (m_appletPanel) {
         if (auto* applet = m_appletPanel->ctr2ProxyApplet()) {
             applet->setModel(m_ctr2ProxyModel);
