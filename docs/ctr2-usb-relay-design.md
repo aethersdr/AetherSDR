@@ -275,7 +275,8 @@ answers with 8 bytes after the report ID:
 ['C'] ['X'] [extension version 0x01] [0x00] [capabilities, 32 bits MSB first]
 ```
 
-Capability bit *n* stands for extension message type `0x40 + n`. A device
+The report is exactly 8 bytes after the report ID (9 with it). Capability
+bit *n* stands for extension message type `0x40 + n`. A device
 without this Feature report (every CTR2) fails the request. So does a reply
 that is not exactly this shape. Either way the device offers nothing and the
 link is plain version 0.
@@ -289,16 +290,21 @@ across any number of HELLO/READY link restarts. If the SET fails, the host
 uses no extensions.
 
 **Messages.** Extension types `0x40`–`0x5F` use the version 0 header and
-data reports with 1..512 payload bytes. They are sequenced like DATA and
-share its counter. A receiver treats a type that was not accepted exactly
+data reports. Each type has its own maximum length (the table below); a
+longer header is a framing error, and so is any type with no defined
+length, even when its bit was negotiated. They are sequenced like DATA and
+DATAGRAM and share their counter: one counter, one receiver state machine. A receiver treats a type that was not accepted exactly
 like any other unknown type: a framing error. The host sends extension
 messages only while the link is relaying (after its READY). It drops them
-rather than queue them when about 130 ms of output is already waiting (one
-meter datagram plus headroom), so they never delay the radio stream.
+rather than queue them when about 130 queued reports (~130 ms; one meter
+datagram plus headroom) are already waiting, so they never delay the radio
+stream. Their reports carry no TCP cost, so the backlog statistic still
+counts radio bytes only. Each AUDIO_SPECTRUM frame of 32 bars is 6 reports
+(header + 5 data), so 20 frames a second use about 12% of the link.
 
-| Type | Bit | Direction | Payload |
+| Type | Bit | Direction | Payload (max length) |
 | --- | --- | --- | --- |
-| `0x40` AUDIO_SPECTRUM | 0 | host → device | `[bars N, 1..64][span Hz hi][span Hz lo][N levels]`: what the operator hears (AetherSDR's post-DSP RX audio), bars splitting 0..span Hz evenly, the span being the active slice's passband width rounded up to a clean step (500 Hz–20 kHz, capped at the audio's Nyquist frequency: 12 kHz for 24 kHz audio), each level 0..255 linear in dB from -90 dB (0) to 0 dBFS (255); about 20 a second |
+| `0x40` AUDIO_SPECTRUM | 0 | host → device | (67 bytes) `[bars N, 1..64][span Hz hi][span Hz lo][N levels]`: what the operator hears (the Client EQ RX tap: after the radio's DSP, client NR and the RX chain up to and including the EQ; not stages after the EQ, output conversion or volume), bars splitting 0..span Hz evenly, the span being the active slice's passband width rounded up to a clean step (500 Hz–20 kHz, capped at the audio's Nyquist frequency: 12 kHz for 24 kHz audio), each level 0..255 linear in dB from -90 dB (0) to 0 dBFS (255); about 20 a second |
 
 The reference implementation in `tools/ctr2-firmware-reference` covers the
 Feature report layout (`ctr2_caps_encode` / `ctr2_caps_decode`), sending
@@ -374,7 +380,7 @@ USB a complete replacement for Wi-Fi.
 | Link state machine, radio TCP connection and per-link UDP socket | `src/core/Ctr2UsbRelay.{h,cpp}` |
 | Applet: Wi-Fi or USB, device list; radio follows AetherSDR's connection | `src/models/Ctr2ProxyModel`, `src/gui/Ctr2ProxyApplet` |
 | Extension negotiation (Feature report `0x02`), on the HID I/O thread | `src/core/Ctr2HidThreadPort.cpp`, `src/core/Ctr2HidapiPort.cpp` |
-| AUDIO_SPECTRUM producer: the Client EQ post-DSP RX tap, 2048-point FFT, 32 bars at 20 Hz, only while a negotiating device is relaying | `src/gui/Ctr2AudioSpectrumFeeder` |
+| AUDIO_SPECTRUM producer: the Client EQ RX tap (post-EQ), its own 2048-point analyzer, 32 bars at 20 Hz, floor-level bars while the tap is not being written, only while a negotiating device is relaying | `src/gui/Ctr2AudioSpectrumFeeder` |
 
 HID I/O runs on one dedicated worker thread because hidapi reads and writes
 block; a stalled controller can then never freeze the UI or other

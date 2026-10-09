@@ -15,13 +15,19 @@ class AudioEngine;
 class Ctr2ProxyModel;
 
 // Feeds a controller on the CTR2 USB relay the audio spectrum the operator
-// is hearing: the post-DSP RX audio tap the Client EQ panels use
-// (AudioEngine::copyRecentClientEqRxSamples), as bars about 20 times a
+// is hearing: the RX tap the Client EQ panels use
+// (AudioEngine::copyRecentClientEqRxSamples), which is after the radio's DSP,
+// client NR and the RX chain up to and including the EQ; stages the operator
+// placed after the EQ, output conversion and volume are not in it. Bars
+// about 20 times a
 // second, over 0..the active slice's passband width. It runs only while the
 // relay is up with a device that
 // negotiated the AudioSpectrum extension, so a stock CTR2 costs nothing.
-// While no new audio reaches the tap (transmitting, or no RX audio) it sends
-// floor-level bars rather than the tap's last, frozen block.
+// The tap has no freshness signal and copies return its last block forever
+// once writes stop (transmitting, no output device, or another source owning
+// the display), so an unchanged block means nothing new is heard: the feeder
+// then sends floor-level bars rather than a frozen spectrum. It keeps its own
+// analyzer; the EQ editor's smoothing and reset-on-hide stay the editor's.
 class Ctr2AudioSpectrumFeeder : public QObject {
     Q_OBJECT
 

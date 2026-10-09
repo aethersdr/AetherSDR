@@ -273,8 +273,20 @@ void testExtensionsAgree()
               && CTR2_FEATURE_REPORT_ID == capabilities::kReportId
               && CTR2_FEATURE_BYTES == capabilities::kBytes
               && CTR2_SPECTRUM_MAX_BARS == spectrum::kMaxBars
-              && CTR2_SPECTRUM_FLOOR_DB == spectrum::kFloorDb,
-          "extension constants agree");
+              && CTR2_SPECTRUM_FLOOR_DB == spectrum::kFloorDb
+              && ctr2_ext_max_length(CTR2_EXT_AUDIO_SPECTRUM)
+                     == extensionMaxLength(MessageType::AudioSpectrum)
+              && ctr2_ext_max_length(0x45) == 0,
+          "extension constants and maximum lengths agree");
+    ctr2_rx masked{};
+    ctr2_rx_set_extensions(&masked, 0xFFFFFFFFu);
+    check(masked.extensions == CTR2_CAP(CTR2_EXT_AUDIO_SPECTRUM),
+          "the reference keeps only defined extension types");
+    const std::uint8_t big[CTR2_SPECTRUM_MAX_BARS + 4] = {};
+    std::vector<Report> none;
+    ctr2_tx t{};
+    check(ctr2_tx_send_extension(&t, CTR2_EXT_AUDIO_SPECTRUM, big, sizeof big, collect, &none) == 0,
+          "the reference refuses an over-long spectrum");
 
     const std::uint32_t caps = capabilityBit(MessageType::AudioSpectrum) | (1u << 7);
     std::uint8_t c[CTR2_FEATURE_BYTES];

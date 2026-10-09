@@ -78,7 +78,8 @@ needs CTR2 firmware with USB mode, which has not been released yet.
 - **AetherKnob** (an AetherSDR controller on the Elecrow CrowPanel 2.1"
   rotary display) uses USB mode the same way. It appears in the list as
   **AetherKnob**. While it is relaying, AetherSDR also sends it a 32-bar
-  spectrum of the receive audio you are hearing, after all DSP, for its
+  spectrum of the receive audio you are hearing (after the radio's DSP,
+  AetherSDR's noise reduction and the RX chain up to the EQ) for its
   centre display. The bars span the active slice's filter width (for
   example 0–600 Hz for a 600 Hz CW filter), up to 12 kHz. A CTR2 never receives this.
 

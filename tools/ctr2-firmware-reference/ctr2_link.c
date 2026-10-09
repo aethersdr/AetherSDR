@@ -86,7 +86,8 @@ size_t ctr2_tx_send_datagram(ctr2_tx *tx, uint16_t port, const uint8_t *data, ui
 size_t ctr2_tx_send_extension(ctr2_tx *tx, uint8_t type, const uint8_t *payload, uint16_t len,
                               ctr2_report_sink sink, void *ctx)
 {
-    if (type < CTR2_EXT_FIRST || type > CTR2_EXT_LAST || len == 0 || len > CTR2_MAX_PAYLOAD) {
+    if (type < CTR2_EXT_FIRST || type > CTR2_EXT_LAST || len == 0
+        || len > ctr2_ext_max_length(type)) {
         return 0;
     }
     return tx_emit(tx, type, NULL, 0, payload, len, sink, ctx);
@@ -113,9 +114,26 @@ int ctr2_caps_decode(const uint8_t *in, size_t len, uint32_t *caps)
     return 1;
 }
 
+uint16_t ctr2_ext_max_length(uint8_t type)
+{
+    switch (type) {
+    case CTR2_EXT_AUDIO_SPECTRUM:
+        return (uint16_t)(3u + CTR2_SPECTRUM_MAX_BARS);
+    default:
+        return 0;
+    }
+}
+
 void ctr2_rx_set_extensions(ctr2_rx *rx, uint32_t caps)
 {
-    rx->extensions = caps;
+    uint32_t defined = 0;
+    uint8_t t;
+    for (t = CTR2_EXT_FIRST; t <= CTR2_EXT_LAST; ++t) {
+        if (ctr2_ext_max_length(t)) {
+            defined |= CTR2_CAP(t);
+        }
+    }
+    rx->extensions = caps & defined;
 }
 
 void ctr2_rx_reset(ctr2_rx *rx)
@@ -183,7 +201,11 @@ ctr2_rx_result ctr2_rx_feed(ctr2_rx *rx, const uint8_t report[CTR2_REPORT_BYTES]
     }
     packets = (uint16_t)((report[4] << 8) | report[5]);
     length = (uint16_t)((report[6] << 8) | report[7]);
-    if (report[3] == CTR2_TYPE_DATA || report[3] >= CTR2_EXT_FIRST) {
+    if (report[3] >= CTR2_EXT_FIRST) {
+        if (length == 0 || length > ctr2_ext_max_length(report[3])) {
+            return rx_fail(rx, CTR2_ERR_BAD_LENGTH);
+        }
+    } else if (report[3] == CTR2_TYPE_DATA) {
         if (length == 0 || length > CTR2_MAX_PAYLOAD) {
             return rx_fail(rx, CTR2_ERR_BAD_LENGTH);
         }

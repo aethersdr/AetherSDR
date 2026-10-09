@@ -41,11 +41,32 @@ bool FrameEncoder::encodeExtension(MessageType type, const QByteArray& payload,
 {
     const auto t = static_cast<std::uint8_t>(type);
     if (t < kExtensionFirst || t > kExtensionLast || payload.isEmpty()
-        || payload.size() > kMaxPayloadBytes) {
+        || payload.size() > extensionMaxLength(type)) {
         return false;
     }
     encodeMessage(type, payload.constData(), static_cast<int>(payload.size()), out);
     return true;
+}
+
+int extensionMaxLength(MessageType type)
+{
+    switch (type) {
+    case MessageType::AudioSpectrum:
+        return 3 + spectrum::kMaxBars;
+    default:
+        return 0;
+    }
+}
+
+void FrameReassembler::setExtensions(std::uint32_t caps)
+{
+    std::uint32_t defined = 0;
+    for (int t = kExtensionFirst; t <= kExtensionLast; ++t) {
+        if (extensionMaxLength(static_cast<MessageType>(t)) > 0) {
+            defined |= 1u << (t - kExtensionFirst);
+        }
+    }
+    m_extensions = caps & defined;
 }
 
 QByteArray capabilities::encode(std::uint32_t caps)
@@ -193,8 +214,9 @@ bool FrameReassembler::feedHeader(const Report& r, std::vector<Message>* out)
     const bool control = type == MessageType::Hello || type == MessageType::Ready
         || type == MessageType::Closed;
     const bool lengthOk = control ? length == 0
-        : (type == MessageType::Data || extension) ? (length >= 1 && length <= kMaxPayloadBytes)
-                                                   : (length >= 3 && length <= kMaxMessageBytes);
+        : extension ? (length >= 1 && length <= extensionMaxLength(type))
+        : type == MessageType::Data ? (length >= 1 && length <= kMaxPayloadBytes)
+                                    : (length >= 3 && length <= kMaxMessageBytes);
     if (!lengthOk) {
         return fail(Error::BadLength);
     }

@@ -69,8 +69,13 @@ void Ctr2AudioSpectrumFeeder::tick()
     }
     // The tap is not written while transmitting, and copy returns its last
     // block regardless; an unchanged block means nothing new is heard.
+    // The EQ runs at the producer rate, which is not always 24 kHz; read it
+    // every tick. Too low a rate (or none yet) has no useful spectrum.
     const ClientEq* eq = m_audio->clientEqRx();
     const double fs = eq ? eq->sampleRate() : 24000.0;
+    if (!(fs >= 8000.0)) {
+        return;
+    }
     const std::pair<int, int> pb = m_passband ? m_passband() : std::pair<int, int>{0, 0};
     const int span = Ctr2ProxyModel::audioSpectrumSpanHz(pb.first, pb.second, fs);
     if (samples == m_lastBlock) {

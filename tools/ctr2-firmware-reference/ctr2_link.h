@@ -51,7 +51,7 @@ extern "C" {
 /* ---- Extensions ------------------------------------------------------- */
 
 /* Extension message types: 0x40-0x5F, one capability bit each. They carry
- * 1..CTR2_MAX_PAYLOAD bytes and are sequenced like DATA. */
+ * 1..ctr2_ext_max_length(type) bytes and are sequenced like DATA. */
 #define CTR2_EXT_FIRST          0x40u
 #define CTR2_EXT_LAST           0x5Fu
 #define CTR2_CAP(type)          (1ul << ((type) - CTR2_EXT_FIRST))
@@ -64,13 +64,19 @@ extern "C" {
 #define CTR2_SPECTRUM_MAX_BARS  64u
 #define CTR2_SPECTRUM_FLOOR_DB  (-90)
 
+/* Largest payload each extension type may carry; 0 for a type not defined
+ * yet. A longer message is a framing error (CTR2_ERR_BAD_LENGTH). */
+uint16_t ctr2_ext_max_length(uint8_t type);
+
 /* Capability negotiation: HID Feature report CTR2_FEATURE_REPORT_ID,
  * CTR2_FEATURE_BYTES after the report ID:
  *   ['C']['X'][extension version 0x01][0x00][capabilities, 32 bits MSB first]
+ * Exactly CTR2_FEATURE_BYTES (8) bytes follow the report ID; 9 in all.
  * Get: the device's offer. Set: the subset the host will use, which the
  * device may send and should expect; it lasts until the device leaves the
  * bus. A device answering Get with anything else, or not at all, offers
- * nothing. */
+ * nothing. Extension messages share the version 0 counter sequence with
+ * DATA and DATAGRAM: one counter, one state machine. */
 #define CTR2_FEATURE_REPORT_ID  0x02u
 #define CTR2_FEATURE_BYTES      8u
 #define CTR2_EXT_VERSION        0x01u
@@ -106,9 +112,9 @@ size_t ctr2_tx_send(ctr2_tx *tx, uint8_t type, const uint8_t *payload, uint16_t 
 size_t ctr2_tx_send_datagram(ctr2_tx *tx, uint16_t port, const uint8_t *data, uint16_t len,
                              ctr2_report_sink sink, void *ctx);
 
-/* Sends one extension message (type CTR2_EXT_FIRST..CTR2_EXT_LAST, payload
- * 1..CTR2_MAX_PAYLOAD). Only for types the peer enabled. Returns the number
- * of reports sent, or 0 if invalid. */
+/* Sends one extension message (a defined type, payload
+ * 1..ctr2_ext_max_length(type)). Only for types the peer enabled. Returns
+ * the number of reports sent, or 0 if invalid. */
 size_t ctr2_tx_send_extension(ctr2_tx *tx, uint8_t type, const uint8_t *payload, uint16_t len,
                               ctr2_report_sink sink, void *ctx);
 
@@ -149,7 +155,10 @@ typedef struct {
 void ctr2_rx_reset(ctr2_rx *rx);
 
 /* Extension types (CTR2_CAP bits) this receiver accepts; others stay
- * framing errors. Zero (the default) is plain version 0. */
+ * framing errors. Zero (the default) is plain version 0. Pass exactly the
+ * negotiated set: what the device offered, intersected with what the host
+ * accepted (a device stores the host's SET masked by its own offer). A bit
+ * for a type with no defined length is ignored. */
 void ctr2_rx_set_extensions(ctr2_rx *rx, uint32_t caps);
 
 /* Feed every received 8-byte report, in order. On CTR2_RX_MESSAGE the

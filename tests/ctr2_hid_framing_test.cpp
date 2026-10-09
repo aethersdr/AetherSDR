@@ -348,6 +348,47 @@ void testExtensions()
     check(ok && out.back().type == MessageType::Data, "Data follows an extension in sequence");
 }
 
+// Each extension type has its own maximum length, and only defined types
+// can be enabled.
+void testExtensionLengths()
+{
+    check(extensionMaxLength(MessageType::AudioSpectrum) == 3 + spectrum::kMaxBars,
+          "AudioSpectrum carries at most 67 bytes");
+    FrameEncoder enc;
+    std::vector<Report> out;
+    check(!enc.encodeExtension(MessageType::AudioSpectrum, QByteArray(68, '\x01'), &out)
+              && out.empty(),
+          "the encoder refuses an over-long spectrum");
+
+    FrameReassembler rx;
+    rx.setExtensions(0xFFFFFFFFu);  // every bit offered
+    std::vector<Message> msgs;
+    enc.encodeControl(MessageType::Ready, &out);
+    for (const Report& r : out) {
+        rx.feed(r, &msgs);
+    }
+    // A hand-built header: AudioSpectrum claiming 1474 bytes.
+    const int len = 1474;
+    const int packets = packetsFor(len);
+    const Report big{kMarker, kVersion, 1, 0x40, std::uint8_t(packets >> 8),
+                     std::uint8_t(packets & 0xFF), std::uint8_t(len >> 8), std::uint8_t(len & 0xFF)};
+    check(!rx.feed(big, &msgs) && rx.error() == FrameReassembler::Error::BadLength,
+          "an over-long extension header is a framing error");
+
+    FrameReassembler undefined;
+    undefined.setExtensions(1u << 5);  // type 0x45: not defined
+    out.clear();
+    msgs.clear();
+    enc.reset();
+    enc.encodeControl(MessageType::Ready, &out);
+    for (const Report& r : out) {
+        undefined.feed(r, &msgs);
+    }
+    const Report undef{kMarker, kVersion, 1, 0x45, 0, 2, 0, 1};
+    check(!undefined.feed(undef, &msgs) && undefined.error() == FrameReassembler::Error::BadType,
+          "enabling a type with no defined length does not make it acceptable");
+}
+
 void testCapabilitiesAndSpectrum()
 {
     const std::uint32_t caps = capabilityBit(MessageType::AudioSpectrum) | (1u << 31);
@@ -406,6 +447,7 @@ int main()
     testExtensions();
     testCapabilitiesAndSpectrum();
     testDisplaySpan();
+    testExtensionLengths();
     if (g_failures) {
         std::fprintf(stderr, "%d check(s) failed\n", g_failures);
         return 1;

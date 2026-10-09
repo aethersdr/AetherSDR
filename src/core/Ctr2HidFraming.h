@@ -53,10 +53,12 @@ constexpr std::uint32_t capabilityBit(MessageType type)
 {
     return 1u << (static_cast<std::uint8_t>(type) - kExtensionFirst);
 }
+// Largest payload each extension type may carry; 0 for one not defined.
+int extensionMaxLength(MessageType type);
 // Extensions this build of AetherSDR uses.
 constexpr std::uint32_t kHostCapabilities = capabilityBit(MessageType::AudioSpectrum);
 
-// HID Feature report 0x02, 8 bytes after the report ID:
+// HID Feature report 0x02, exactly 8 bytes after the report ID (9 in all):
 //   ['C']['X'][extension version 0x01][0x00][capabilities, 32 bits MSB first]
 // Get returns the device's offer; Set tells it the subset the host will use.
 namespace capabilities {
@@ -106,8 +108,9 @@ public:
     // One datagram of 1..kMaxDatagramBytes; returns false (and emits
     // nothing) when it does not fit.
     bool encodeDatagram(std::uint16_t port, const QByteArray& datagram, std::vector<Report>* out);
-    // One extension message of 1..kMaxPayloadBytes; false (nothing emitted)
-    // for a non-extension type or a bad size. Send only negotiated types.
+    // One extension message of 1..extensionMaxLength(type) bytes; false
+    // (nothing emitted) for an undefined type or a bad size. Send only
+    // negotiated types.
     bool encodeExtension(MessageType type, const QByteArray& payload, std::vector<Report>* out);
     // Sending Hello or Ready starts the counter again at 0.
     void reset() { m_counter = 0; }
@@ -146,7 +149,8 @@ public:
 
     void reset();
     // Extension types accepted (capabilityBit mask); kept across reset().
-    void setExtensions(std::uint32_t caps) { m_extensions = caps; }
+    // Bits for types with no defined length are dropped.
+    void setExtensions(std::uint32_t caps);
     bool failed() const { return m_error != Error::None; }
     Error error() const { return m_error; }
     QString errorText() const;
