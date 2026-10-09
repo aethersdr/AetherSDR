@@ -10,6 +10,7 @@
 #include <QStringList>
 
 #include <functional>
+#include <vector>
 
 class QTimer;
 
@@ -94,9 +95,10 @@ public:
     // True while the USB relay is up with a device that negotiated the
     // AudioSpectrum link extension (AetherKnob; never a stock CTR2).
     bool audioSpectrumWanted() const;
-    // One AudioSpectrum payload (ctr2hid::spectrum::encode); false if not
-    // wanted now or the link is busy.
-    bool sendAudioSpectrum(const QByteArray& payload);
+    // One AudioSpectrum frame: bars in dBFS evenly over 0..spanHz (a
+    // non-finite bar reads as silence). False if not wanted now or the link
+    // is busy.
+    bool sendAudioSpectrum(int spanHz, const std::vector<float>& barsDb);
 
 signals:
     void configurationChanged();

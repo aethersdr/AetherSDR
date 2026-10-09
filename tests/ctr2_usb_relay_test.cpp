@@ -1005,10 +1005,11 @@ void testAudioSpectrumExtension()
         // A backed-up link drops frames instead of queueing them.
         rig.port->autoAck = false;
         int accepted = 0;
-        for (int i = 0; i < 20; ++i) {
+        for (int i = 0; i < 60; ++i) {
             accepted += rig.relay.sendAudioSpectrum(payload) ? 1 : 0;
         }
-        check(accepted > 0 && accepted < 20, "frames stop once ~30 ms of output is queued");
+        // 6 reports a frame: ~22 fit under the ~128-report allowance.
+        check(accepted >= 15 && accepted < 30, "frames stop once ~130 ms of output is queued");
         rig.port->autoAck = true;
         rig.port->ack(rig.port->pending());  // acknowledged asynchronously, like the real port
         check(waitUntil([&] { return rig.relay.sendAudioSpectrum(payload); }),

@@ -741,9 +741,10 @@ void Ctr2UsbRelay::onExtensionsNegotiated(quint32 extensions)
 bool Ctr2UsbRelay::sendAudioSpectrum(const QByteArray& payload)
 {
     const quint32 bit = ctr2hid::capabilityBit(MessageType::AudioSpectrum);
-    // The link moves about one report per millisecond; past ~30 ms of queued
-    // output the frame would be stale on arrival and would crowd the radio.
-    constexpr size_t kMaxQueuedReportsForSpectrum = 32;
+    // The link moves about one report per millisecond. One meter datagram
+    // alone can take ~60 reports, so allow that plus headroom (~130 ms);
+    // beyond it a frame would be stale on arrival and would crowd the radio.
+    constexpr size_t kMaxQueuedReportsForSpectrum = 128;
     if (!m_port || m_state != State::Relaying || !(m_port->extensions() & bit)
         || m_reportCosts.size() > kMaxQueuedReportsForSpectrum) {
         return false;

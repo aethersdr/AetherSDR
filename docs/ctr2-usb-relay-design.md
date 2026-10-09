@@ -293,8 +293,8 @@ data reports with 1..512 payload bytes. They are sequenced like DATA and
 share its counter. A receiver treats a type that was not accepted exactly
 like any other unknown type: a framing error. The host sends extension
 messages only while the link is relaying (after its READY). It drops them
-rather than queue them when about 30 ms of output is already waiting, so
-they never delay the radio stream.
+rather than queue them when about 130 ms of output is already waiting (one
+meter datagram plus headroom), so they never delay the radio stream.
 
 | Type | Bit | Direction | Payload |
 | --- | --- | --- | --- |

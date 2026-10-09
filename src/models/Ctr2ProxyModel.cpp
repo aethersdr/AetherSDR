@@ -437,9 +437,10 @@ bool Ctr2ProxyModel::audioSpectrumWanted() const
         && (m_usb->extensions() & ctr2hid::capabilityBit(ctr2hid::MessageType::AudioSpectrum));
 }
 
-bool Ctr2ProxyModel::sendAudioSpectrum(const QByteArray& payload)
+bool Ctr2ProxyModel::sendAudioSpectrum(int spanHz, const std::vector<float>& barsDb)
 {
-    return audioSpectrumWanted() && m_usb->sendAudioSpectrum(payload);
+    return audioSpectrumWanted()
+        && m_usb->sendAudioSpectrum(ctr2hid::spectrum::encode(spanHz, barsDb));
 }
 
 TcpByteProxy::Stats Ctr2ProxyModel::stats() const

@@ -2,12 +2,12 @@
 
 #include "core/AudioEngine.h"
 #include "core/ClientEq.h"
-#include "core/Ctr2HidFraming.h"
 #include "models/Ctr2ProxyModel.h"
 
 #include <QTimer>
 
 #include <algorithm>
+#include <cmath>
 #include <vector>
 
 namespace AetherSDR {
@@ -30,6 +30,7 @@ void Ctr2AudioSpectrumFeeder::follow()
     if (m_model->audioSpectrumWanted()) {
         if (!m_timer->isActive()) {
             m_fft.reset();
+            m_lastBlock.clear();
             m_timer->start();
         }
     } else {
@@ -40,7 +41,7 @@ void Ctr2AudioSpectrumFeeder::follow()
 std::vector<float> Ctr2AudioSpectrumFeeder::barsFromBins(const std::vector<float>& binsDb,
                                                          double sampleRate, float correctionDb)
 {
-    std::vector<float> bars(kBars, float(ctr2hid::spectrum::kFloorDb));
+    std::vector<float> bars(kBars, -INFINITY);   // an empty band reads as silence
     const double barHz = double(kSpanHz) / kBars;
     for (int i = 1; i < static_cast<int>(binsDb.size()); ++i) {
         const double hz = ClientEqFftAnalyzer::binFreq(i, sampleRate);
@@ -64,12 +65,20 @@ void Ctr2AudioSpectrumFeeder::tick()
                                                          ClientEqFftAnalyzer::kFftSize)) {
         return;
     }
+    // The tap is not written while transmitting, and copy returns its last
+    // block regardless; an unchanged block means nothing new is heard.
+    if (samples == m_lastBlock) {
+        m_fft.reset();
+        m_model->sendAudioSpectrum(kSpanHz, std::vector<float>(kBars, -INFINITY));
+        return;
+    }
+    m_lastBlock = samples;
     m_fft.update(samples.data(), ClientEqFftAnalyzer::kFftSize);
     const ClientEq* eq = m_audio->clientEqRx();
     const double fs = eq ? eq->sampleRate() : 24000.0;
     const std::vector<float> bars =
         barsFromBins(m_fft.magnitudesDb(), fs, m_fft.coherentGainCorrectionDb());
-    m_model->sendAudioSpectrum(ctr2hid::spectrum::encode(kSpanHz, bars));
+    m_model->sendAudioSpectrum(kSpanHz, bars);
 }
 
 } // namespace AetherSDR

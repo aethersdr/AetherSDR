@@ -16,6 +16,8 @@ class Ctr2ProxyModel;
 // (AudioEngine::copyRecentClientEqRxSamples), as bars over 0..4 kHz about 20
 // times a second. It runs only while the relay is up with a device that
 // negotiated the AudioSpectrum extension, so a stock CTR2 costs nothing.
+// While no new audio reaches the tap (transmitting, or no RX audio) it sends
+// floor-level bars rather than the tap's last, frozen block.
 class Ctr2AudioSpectrumFeeder : public QObject {
     Q_OBJECT
 
@@ -39,6 +41,7 @@ private:
     AudioEngine* m_audio;
     QTimer* m_timer;
     ClientEqFftAnalyzer m_fft;
+    std::vector<float> m_lastBlock;
 };
 
 } // namespace AetherSDR
