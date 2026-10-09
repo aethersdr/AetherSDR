@@ -1216,6 +1216,15 @@ bool ThemeManager::exportThemeToFile(const QString& themeName,
     return true;
 }
 
+bool ThemeManager::isImportableThemeFile(const QUrl& url)
+{
+    if (!url.isLocalFile()) {
+        return false;
+    }
+    const QString suffix = QFileInfo(url.toLocalFile()).suffix().toLower();
+    return suffix == QStringLiteral("aethertheme") || suffix == QStringLiteral("json");
+}
+
 QString ThemeManager::importThemeFromFile(const QString& filePath,
                                           QString* errorMessage)
 {

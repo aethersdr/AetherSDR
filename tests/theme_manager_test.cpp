@@ -1689,8 +1689,20 @@ int main(int argc, char** argv)
         EXPECT_TRUE(alternate.rgb() == tm.color(QStringLiteral("color.background.1")).rgb());
         // Selection stays with the palette: a fixed text colour on the accent
         // is unreadable when a custom theme's accent is dark.
-        EXPECT_TRUE(!appStylesheetTemplate().contains(
-            QRegularExpression(QStringLiteral(R"(QTreeView[^{]*::item[^{]*:selected)"))));
+        EXPECT_TRUE(!appStylesheetTemplate().contains(QRegularExpression(
+            QStringLiteral(R"((QTreeView|QTreeWidget|QListView|QListWidget)[^{]*::item[^{]*:selected)"))));
+    }
+
+    // ── Theme drops: only local .aethertheme / .json files are importable ──
+    // dropEvent re-checks this, since a drop need not follow an accepted
+    // dragEnter.
+    {
+        const QString dir = QDir::tempPath();
+        EXPECT_TRUE(ThemeManager::isImportableThemeFile(QUrl::fromLocalFile(dir + "/a.aethertheme")));
+        EXPECT_TRUE(ThemeManager::isImportableThemeFile(QUrl::fromLocalFile(dir + "/a.JSON")));
+        EXPECT_TRUE(!ThemeManager::isImportableThemeFile(QUrl::fromLocalFile(dir + "/a.png")));
+        EXPECT_TRUE(!ThemeManager::isImportableThemeFile(QUrl::fromLocalFile(dir + "/aethertheme")));
+        EXPECT_TRUE(!ThemeManager::isImportableThemeFile(QUrl(QStringLiteral("https://example.com/a.aethertheme"))));
     }
 
     // ── App stylesheet: tree-view header sections keep their separators ──

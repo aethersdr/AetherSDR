@@ -679,13 +679,7 @@ void ThemeEditorDialog::dragEnterEvent(QDragEnterEvent* event)
     // the drop is the cleanest signal that an arbitrary file isn't valid.
     const auto urls = event->mimeData()->urls();
     for (const QUrl& u : urls) {
-        if (!u.isLocalFile()) {
-            PersistentDialog::dragEnterEvent(event);
-            return;
-        }
-        const QString suffix = QFileInfo(u.toLocalFile()).suffix().toLower();
-        if (suffix != QStringLiteral("aethertheme")
-            && suffix != QStringLiteral("json")) {
+        if (!ThemeManager::isImportableThemeFile(u)) {
             PersistentDialog::dragEnterEvent(event);
             return;
         }
@@ -700,8 +694,9 @@ void ThemeEditorDialog::dropEvent(QDropEvent* event)
         return;
     }
     const auto urls = event->mimeData()->urls();
+    // Re-check here: a drop is not guaranteed to follow an accepted dragEnter.
     for (const QUrl& u : urls) {
-        if (u.isLocalFile()) importThemeFromPath(u.toLocalFile());
+        if (ThemeManager::isImportableThemeFile(u)) importThemeFromPath(u.toLocalFile());
     }
     event->acceptProposedAction();
 }

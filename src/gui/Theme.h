@@ -87,11 +87,10 @@ inline QString appStylesheetTemplate()
             border: 1px solid {{color.border.strong}};
             alternate-background-color: {{color.background.1}};
         }
-        QListWidget::item:selected { background-color: {{color.accent}}; color: #000; }
         /* Without alternate-background-color a tree view keeps the native
            AlternateBase (near-white on Windows) under color.text.primary,
-           so every other row is unreadable (#5934). Selection is left to
-           the palette so it stays readable with any accent. */
+           so every other row is unreadable (#5934). Lists and trees leave
+           selection to the palette so it stays readable with any accent. */
         QTreeView {
             background-color: {{color.background.0}};
             alternate-background-color: {{color.background.1}};

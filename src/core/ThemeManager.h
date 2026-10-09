@@ -13,6 +13,7 @@
 #include <QList>
 #include <QPointF>
 #include <QRect>
+#include <QUrl>
 #include <QVariant>
 #include <QVector>
 
@@ -346,6 +347,8 @@ public:
     //   "name" (else file stem), copies it into ~/.config/AetherSDR/themes/,
     //   registers and activates it. Returns the display name, or empty with
     //   `errorMessage` set.
+    // True for a local .aethertheme / .json path — the files a drop may import.
+    static bool isImportableThemeFile(const QUrl& url);
     bool    exportThemeToFile(const QString& themeName,
                               const QString& filePath,
                               QString* errorMessage = nullptr) const;
