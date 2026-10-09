@@ -56,11 +56,10 @@ NnrFilter::NnrFilter(int sampleRate)
         // to match the xnnr() call below; there is only one call site here.
         // cmode=1 zeroes Q, which we discard anyway.
         //
-        // create_nnr() plans two FFTW_PATIENT double-precision transforms
-        // (nnr.c calc_nnr), so it takes the process-global planner lock like
-        // every other fftw_* user (#6287). Without it this raced NR2 wisdom
-        // generation and segfaulted inside libfftw3. Guarded here rather than
-        // in vendored WDSP. The wait is as long as the other holder's plan.
+        // Each create_nnr() plans two FFTW_PATIENT double-precision transforms
+        // (nnr.c calc_nnr), four per filter, and FFTW's planner is not
+        // thread-safe, so it holds the process-global planner lock (#6287).
+        // Guarded here, not in vendored WDSP; it may wait out another plan.
         {
             auto lock = fftwPlannerLock();
             m_nnr[channel] = create_nnr(1, 0, m_blockFrames, m_blockIn[channel].data(),
@@ -84,6 +83,10 @@ NnrFilter::NnrFilter(int sampleRate)
 
 NnrFilter::~NnrFilter()
 {
+    // Nothing was created (unsupported rate): don't wait on the global lock.
+    if (!m_nnr[0] && !m_nnr[1]) {
+        return;
+    }
     // destroy_nnr() destroys both plans (nnr.c decalc_nnr): same lock (#6287).
     auto lock = fftwPlannerLock();
     for (void* nnr : m_nnr) {

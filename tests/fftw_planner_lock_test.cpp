@@ -99,11 +99,10 @@ int main()
 #endif
 
     // NNR plans FFTW_PATIENT transforms inside WDSP's create_nnr(), outside
-    // any WdspChannel, so its wrapper has to take the lock itself (#6287: it
-    // didn't, and raced NR2 wisdom generation into a libfftw3 SIGSEGV).
-    // Built unconditionally, like the WDSP it wraps. The warm-up puts its
-    // plans in FFTW's in-process wisdom so the control below times the
-    // construction, not a cold FFTW_PATIENT search.
+    // any WdspChannel, so its wrapper takes the lock itself (#6287). Built
+    // unconditionally, like the WDSP it wraps. The warm-up puts its plans in
+    // FFTW's in-process wisdom so the control below times the construction,
+    // not a cold FFTW_PATIENT search.
     {
         AetherSDR::NnrFilter warm(48000);
         ok &= warm.isValid();
@@ -120,6 +119,29 @@ int main()
         [] { return std::make_unique<AetherSDR::NnrFilter>(48000); },
         [](std::unique_ptr<AetherSDR::NnrFilter>& nnr) { nnr.reset(); },
         [] { return AetherSDR::fftwPlannerLock(); });
+    {
+        // An unsupported rate creates nothing, so its destructor has nothing
+        // to destroy and must not wait on another thread's plan.
+        auto held = AetherSDR::fftwPlannerLock();
+        std::atomic<bool> completed {false};
+        std::thread worker([&] {
+            { AetherSDR::NnrFilter unsupported(44100); }
+            completed.store(true);
+        });
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (!completed.load() && std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        const bool unblocked = completed.load();
+        held.unlock();
+        worker.join();
+        if (unblocked) {
+            std::cout << "PASS: NNR with nothing to destroy skips the lock\n";
+        } else {
+            std::cerr << "FAIL: NNR with nothing to destroy waited for the lock\n";
+            ok = false;
+        }
+    }
 
 #ifdef HAVE_SPECBLEACH
     {
