@@ -702,7 +702,7 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
         "border: 1px solid {{color.background.2}}; border-radius: 6px; padding: 6px; outline: none; }"
         "QTreeWidget::branch { image: none; border-image: none; background: transparent; }"
         "QTreeWidget::item { min-height: 36px; padding: 3px 8px; border-radius: 4px; }"
-        "QTreeWidget::item:selected { background: {{color.accent.bright}}; color: {{color.background.0}}; }"
+        "QTreeWidget::item:selected { background: palette(highlight); color: palette(highlighted-text); }"
         "QTreeWidget::item:hover:!selected { background: {{color.background.2}}; }");
     content->addWidget(m_navigation);
 
@@ -6768,7 +6768,7 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
     AetherSDR::ThemeManager::instance().applyStyleSheet(cableList, "QListWidget { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.1}}; "
         "font-size: 11px; }"
         "QListWidget::item { padding: 4px; }"
-        "QListWidget::item:selected { background: {{color.accent}}; color: {{color.background.0}}; }");
+        "QListWidget::item:selected { background: palette(highlight); color: palette(highlighted-text); }");
     listLayout->addWidget(cableList);
     hbox->addWidget(listGroup);
 
@@ -7158,7 +7158,7 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
             "QListWidget { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.1}}; "
             "font-size: 11px; }"
             "QListWidget::item { padding: 4px; }"
-            "QListWidget::item:selected { background: {{color.accent}}; color: {{color.background.0}}; }");
+            "QListWidget::item:selected { background: palette(highlight); color: palette(highlighted-text); }");
         for (int b = 0; b < 8; ++b)
             bitIndexList->addItem(QString("Bit %1").arg(b));
         bitListVbox->addWidget(bitIndexList);

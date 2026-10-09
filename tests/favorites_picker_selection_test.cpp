@@ -1,18 +1,48 @@
-// The Customize Button Bar lists draw selection from the palette, not as a
-// fixed colour on the theme's accent (follow-up to #6312).
+// Selection draws from the palette, not as a fixed colour on the theme's
+// accent (follow-up to #6312): the Customize Button Bar lists are rendered and
+// sampled, and no stylesheet in src/ may put a selected item on the accent.
 #include "TestSettingsProfile.h"
 #include "core/ThemeManager.h"
 #include "gui/FavoritesPickerDialog.h"
 
 #include <QApplication>
 #include <QColor>
+#include <QDirIterator>
+#include <QFile>
 #include <QImage>
 #include <QListWidget>
+#include <QRegularExpression>
 
 #include <cstdio>
 #include <cstdlib>
 
 using namespace AetherSDR;
+
+namespace {
+
+// Every selected-item rule in src/ whose background is a color.accent token.
+// Adjacent string literals are joined first, since rules span lines.
+QStringList accentSelectionRules()
+{
+    static const QRegularExpression literalJoin(QStringLiteral(R"("\s*\n\s*")"));
+    static const QRegularExpression rule(QStringLiteral(
+        R"([^\s"{}]*:selected[^{}"]*\{[^}]*background(-color)?\s*:\s*\{\{color\.accent[^}]*\})"));
+    QStringList hits;
+    QDirIterator it(QStringLiteral(AETHER_SOURCE_DIR "/src"),
+                    {QStringLiteral("*.cpp"), QStringLiteral("*.h")},
+                    QDir::Files, QDirIterator::Subdirectories);
+    while (it.hasNext()) {
+        QFile file(it.next());
+        if (!file.open(QIODevice::ReadOnly))
+            continue;
+        const QString text = QString::fromUtf8(file.readAll()).replace(literalJoin, QString());
+        for (auto m = rule.globalMatch(text); m.hasNext();)
+            hits << QStringLiteral("%1: %2").arg(file.fileName(), m.next().captured(0));
+    }
+    return hits;
+}
+
+} // namespace
 
 int main(int argc, char** argv)
 {
@@ -72,7 +102,10 @@ int main(int argc, char** argv)
                      qPrintable(accent.name()));
         ++failures;
     }
-    const QPalette pal = active->palette();
+    // The application's palette, not the list's own: a dialog stylesheet's
+    // selection-color / selection-background-color rewrites the widget
+    // palette, so reading that back would only compare the list with itself.
+    const QPalette pal = QApplication::palette(active);
     if (selected.rgb() != pal.color(QPalette::Active, QPalette::Highlight).rgb()
         && selected.rgb() != pal.color(QPalette::Inactive, QPalette::Highlight).rgb()) {
         std::fprintf(stderr, "FAIL: selected row %s is not the palette highlight %s\n",
@@ -86,6 +119,11 @@ int main(int argc, char** argv)
                      qPrintable(text.name()), qPrintable(highlightedText.name()));
         ++failures;
     }
+
+    const QStringList accentRules = accentSelectionRules();
+    for (const QString& hit : accentRules)
+        std::fprintf(stderr, "FAIL: selection drawn on the accent: %s\n", qPrintable(hit));
+    failures += accentRules.size();
 
     if (failures == 0)
         std::printf("favorites_picker_selection_test: all checks passed\n");

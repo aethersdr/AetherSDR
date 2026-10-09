@@ -859,7 +859,7 @@ bool AetherSDR::CwxPanel::eventFilter(QObject* obj, QEvent* event)
             // the nested menu loop. All follow-up work checks its receiver.
             auto menu = std::make_unique<QMenu>();
             AetherSDR::ThemeManager::instance().applyStyleSheet(menu.get(), "QMenu { background: {{color.background.1}}; color: {{color.text.primary}}; border: 1px solid {{color.background.2}}; }"
-                "QMenu::item:selected { background: {{color.accent}}; color: {{color.background.spectrum}}; }"
+                "QMenu::item:selected { background: palette(highlight); color: palette(highlighted-text); }"
                 "QMenu::separator { height: 1px; background: {{color.background.2}}; margin: 4px 8px; }");
             QAction* resendAction = menu->addAction("Resend");
             menu->addSeparator();
