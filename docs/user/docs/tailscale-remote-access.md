@@ -246,9 +246,9 @@ session, and the radio sees an ordinary client.
   always wins. See [Audio Settings](./audio-settings.md).
 - **MTU.** The container sets the radio's network MTU to 1200 bytes for its
   sessions, so VITA-49 packets fit inside the WireGuard tunnel without
-  fragmenting. AetherSDR asks for the same 1200 itself over any Tailscale
-  path, including a subnet router in front of a radio that can't run the
-  container.
+  fragmenting. AetherSDR asks for the same 1200 itself whenever this
+  computer or the radio has a Tailscale address, including a subnet router
+  in front of a radio that can't run the container.
 - **Measured on a relayed path** (both ends forced through a DERP relay):
   connection in under a second, a median round trip of 67 ms, and about
   3.5 Mbit/s uncompressed or 1.9 Mbit/s with Opus. A direct path is faster.

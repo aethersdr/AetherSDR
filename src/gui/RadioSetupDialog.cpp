@@ -2238,19 +2238,21 @@ QWidget* RadioSetupDialog::buildNetworkTab()
         m_networkMtuLabel = new QLabel("Network MTU:");
         grid->addWidget(m_networkMtuLabel, 5, 0);
         auto* mtuSpin = new QSpinBox;
-        mtuSpin->setRange(576, 9000);
-        mtuSpin->setValue(AppSettings::instance().value("NetworkMtu", "1450").toInt());
+        mtuSpin->setRange(kMinNetworkMtu, kMaxNetworkMtu);
+        mtuSpin->setValue(m_model->networkMtuSetting());
         mtuSpin->setSuffix(" bytes");
-        mtuSpin->setToolTip("Maximum Transmission Unit for VITA-49 UDP packets.\nDefault: 1450 (compatible with most VPN/SD-WAN tunnels).\nOver Tailscale the radio is sent at most 1200.");
+        mtuSpin->setToolTip(QString("Maximum Transmission Unit for VITA-49 UDP packets.\n"
+                                    "Default: %1 (compatible with most VPN/SD-WAN tunnels).\n"
+                                    "Over Tailscale the radio is sent at most %2.")
+                                .arg(kDefaultNetworkMtu)
+                                .arg(kTailnetNetworkMtu));
         connect(mtuSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, [this](int val) {
-            // Save first: networkMtuParam() re-reads the setting, so sending
-            // before the write would put the previous value on the wire.
             AppSettings::instance().setValue("NetworkMtu", QString::number(val));
             AppSettings::instance().save();
             // Over Tailscale the radio gets the capped value (#5949), never
             // more than the tunnel carries.
             m_model->sendCommand(QString("client set enforce_network_mtu=1 network_mtu=%1")
-                                     .arg(m_model->networkMtuParam()));
+                                     .arg(m_model->networkMtuParam(val)));
         });
         m_networkMtuControl = mtuSpin;
         grid->addWidget(mtuSpin, 5, 1);

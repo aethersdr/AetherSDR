@@ -74,12 +74,14 @@ VITA-49 FFT and waterfall packets are about 1436 bytes at an MTU of 1500. Tunnel
 
 AetherSDR sends `client set enforce_network_mtu=1 network_mtu=<value>` to the radio on each connect. It applies to this client's session only and does not permanently change the radio or affect other clients.
 
-**Over Tailscale, AetherSDR sends at most 1200 bytes**, whatever the setting says. A tailnet carries 1280-byte packets, so larger VITA-49 packets can't cross it. This applies whenever the path to the radio runs over Tailscale:
+**Over Tailscale, AetherSDR sends at most 1200 bytes**, whatever the setting says. A tailnet carries 1280-byte packets, so larger VITA-49 packets can't cross it. AetherSDR does this automatically when either end of the connection has a Tailscale address:
 
 - the radio is at a tailnet address (see [Tailscale Remote Access](./tailscale-remote-access.md)), or
-- your computer reaches the radio's LAN address through a Tailscale subnet router.
+- your computer runs Tailscale and reaches the radio's LAN address through a Tailscale subnet router.
 
 A smaller setting is kept. The setting itself doesn't change, so a LAN connection still uses the full value.
+
+If Tailscale runs only on routers at each end (site to site), or you reach the radio through a proxy, neither end has a Tailscale address and AetherSDR can't tell. Set **Network MTU** to 1200 yourself.
 
 ### VITA-49 RX buffer
 
@@ -140,7 +142,8 @@ You can reduce traffic further from the panadapter's **Display** panel (right-cl
 |------------|-------------|
 | Home LAN | 1500 (or leave at 1450) |
 | VPN / SD-WAN | 1450 (default) |
-| Tailscale | Any; AetherSDR sends at most 1200 |
+| Tailscale on this computer or the radio | Any; AetherSDR sends at most 1200 |
+| Tailscale on routers only (site to site) | 1200 |
 | Satellite / high-overhead tunnels | 1300–1400 |
 
 ## Known issues
@@ -155,7 +158,7 @@ You can reduce traffic further from the panadapter's **Display** panel (right-cl
 Spectrum and waterfall packets are larger than the tunnel's MTU, so they are dropped while the smaller audio packets get through.
 
 1. Open **Settings → Radio Setup... → Network → Advanced**.
-2. Lower **Network MTU** to suit your tunnel (see [Recommended MTU settings](#recommended-mtu-settings)). Over Tailscale this is automatic.
+2. Lower **Network MTU** to suit your tunnel (see [Recommended MTU settings](#recommended-mtu-settings)). This is automatic when this computer or the radio has a Tailscale address.
 3. Reconnect; AetherSDR sends the MTU to the radio on each connect.
 
 ### The VITA-49 RX buffer says it was capped
