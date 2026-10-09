@@ -3846,6 +3846,18 @@ void MainWindow::reapplyStartupGeometryAfterShow()
     // Re-apply the main-window geometry after this window is mapped so Qt
     // honors the saved monitor instead of the last pop-out's screen. (#3319)
     restoreGeometry(m_startupGeometryForFirstShow);
+#ifdef Q_OS_WIN
+    // Qt 6.12's frame margins under the expanded client area do not match the
+    // window, so restoreGeometry() rebuilds a different size from the blob's
+    // frame rect on every launch. Put back the client rect that was saved.
+    if (windowFlags().testFlag(Qt::ExpandedClientAreaHint)
+        && windowState() == Qt::WindowNoState) {
+        const QRect saved = WindowChrome::savedNormalGeometry(m_startupGeometryForFirstShow);
+        if (saved.isValid() && saved != geometry()) {
+            setGeometry(saved);
+        }
+    }
+#endif
 
     // Test the frame's center against each screen's full geometry rather than
     // the top-left against availableGeometry().  A top-left landing in a

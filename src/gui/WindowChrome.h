@@ -1,7 +1,10 @@
 #pragma once
 
+#include <QByteArray>
+#include <QDataStream>
 #include <QGuiApplication>
 #include <QMargins>
+#include <QRect>
 #include <QWidget>
 #include <QWindow>
 #include <QtMath>
@@ -69,6 +72,26 @@ inline bool usesNativeCaption(Qt::WindowFlags flags, const QString& platform)
 inline bool usesNativeCaption(const QWidget* window)
 {
     return usesNativeCaption(window->windowFlags(), QGuiApplication::platformName());
+}
+
+// The client rect a QWidget::saveGeometry() blob recorded ("normal geometry"),
+// read without going through the platform's frame margins the way
+// restoreGeometry() does. Invalid for a blob this cannot read. (#6303)
+inline QRect savedNormalGeometry(const QByteArray& blob)
+{
+    constexpr quint32 kGeometryMagic = 0x1D9D0CB;
+    QDataStream stream(blob);
+    stream.setVersion(QDataStream::Qt_4_0);
+    quint32 magic = 0;
+    quint16 major = 0;
+    quint16 minor = 0;
+    QRect frame;
+    QRect normal;
+    stream >> magic >> major >> minor >> frame >> normal;
+    if (stream.status() != QDataStream::Ok || magic != kGeometryMagic || major < 1) {
+        return {};
+    }
+    return normal;
 }
 
 inline QMargins contentInsets(const QWidget* window)

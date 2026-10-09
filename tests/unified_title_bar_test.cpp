@@ -36,7 +36,10 @@
 
 #include <QAbstractButton>
 #include <QApplication>
+#include <QByteArray>
+#include <QDataStream>
 #include <QFocusEvent>
+#include <QIODevice>
 #include <QFrame>
 #include <QImage>
 #include <QLabel>
@@ -135,6 +138,28 @@ int main(int argc, char** argv)
         check(linuxOn.testFlag(Qt::FramelessWindowHint)
                   && !WindowChrome::usesNativeCaption(linuxOn, QStringLiteral("wayland")),
               "Linux frameless draws the bar's caption buttons");
+    }
+
+    // ── Saved client rect read straight from a saveGeometry() blob (#6303) ──
+    {
+        // Frame and normal rects differ, as they do under a wrong frame margin.
+        QByteArray blob;
+        QDataStream out(&blob, QIODevice::WriteOnly);
+        out.setVersion(QDataStream::Qt_4_0);
+        out << quint32(0x1D9D0CB) << quint16(3) << quint16(0)
+            << QRect(200, 55, 1389, 391) << QRect(191, 55, 1407, 400);
+        check(WindowChrome::savedNormalGeometry(blob) == QRect(191, 55, 1407, 400),
+              "the saved client rect is the blob's normal geometry, not its frame");
+
+        QWidget probe;
+        probe.setGeometry(120, 90, 640, 360);
+        check(WindowChrome::savedNormalGeometry(probe.saveGeometry()) == probe.geometry(),
+              "a real saveGeometry() blob reads back the widget's geometry");
+
+        check(!WindowChrome::savedNormalGeometry(QByteArray()).isValid(),
+              "an empty blob gives no rect");
+        check(!WindowChrome::savedNormalGeometry(QByteArray("not a geometry blob")).isValid(),
+              "a foreign blob gives no rect");
     }
 
     WindowChrome::configure(&host, true);
