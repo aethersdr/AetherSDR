@@ -18,6 +18,11 @@ on:
 permissions:
   contents: read
 
+# A tag name may contain ", ; $ and backticks, so it reaches scripts only as an
+# environment variable, never by ${{ }} substitution into the script text.
+env:
+  REF_NAME: ${{ github.ref_name }}
+
 jobs:
   build-windows:
     runs-on: windows-latest
@@ -502,7 +507,7 @@ jobs:
         continue-on-error: true
         if: hashFiles('symbols/AetherSDR.pdb') != ''
         run: |
-          $safeRefName = "${{ github.ref_name }}" -replace '[\\/:*?"<>|]', '_'
+          $safeRefName = $env:REF_NAME -replace '[\\/:*?"<>|]', '_'
           $archive = "AetherSDR-$safeRefName-Windows-x64-symbols.tar.xz"
           New-Item -ItemType Directory -Force symbols-release | Out-Null
           Copy-Item symbols\* symbols-release\ -Recurse -Force
@@ -674,7 +679,7 @@ jobs:
           # character so ad-hoc dispatch runs (e.g. validating new packaging
           # work on a branch) reach the later Inno + MSIX steps instead of
           # exiting 1 at the very first artifact-creation step.
-          $safeRefName = "${{ github.ref_name }}" -replace '[\\/:*?"<>|]', '_'
+          $safeRefName = $env:REF_NAME -replace '[\\/:*?"<>|]', '_'
           Compress-Archive -Path deploy\* -DestinationPath "AetherSDR-$safeRefName-Windows-x64-portable.zip"
 
       - name: Create installer (Inno Setup)
@@ -686,7 +691,7 @@ jobs:
           if (-not (Test-Path $iscc)) { throw "Inno Setup is no longer on the runner image: $iscc" }
           # Same sanitization as the portable ZIP step — Inno also pukes on
           # filesystem-unsafe characters in /DAPP_VERSION.
-          $version = "${{ github.ref_name }}" -replace '^v', '' -replace '[\\/:*?"<>|]', '_'
+          $version = $env:REF_NAME -replace '^v', '' -replace '[\\/:*?"<>|]', '_'
           $runtimeDir = (Resolve-Path "installer-runtime").Path
           $isccArgs = @("/DAPP_VERSION=$version", "/DVC_RUNTIME_DIR=$runtimeDir")
           if ($env:AETHER_SIGN -eq 'true') {
@@ -756,10 +761,18 @@ jobs:
             (Get-Item deploy\aether-dv-waveform.exe),
             $setup[0]
           )
+          # A subject name alone is not unique, so the issuer is pinned too:
+          # Artifact Signing's identity-verified intermediates. Microsoft
+          # numbers and rotates them (AOC CA 03 issued the first certificate),
+          # and the leaf itself rotates every three days, so neither a
+          # thumbprint nor a single intermediate can be pinned. A change to
+          # the legal name or to Microsoft's CA naming fails the release
+          # closed; update these two patterns then.
           foreach ($t in $ours) {
-            $subject = (Get-AuthenticodeSignature -FilePath $t.FullName).SignerCertificate.Subject
-            if ($subject -notmatch '^CN=Jeremy Fielder,') { throw "$($t.Name): signed by '$subject', not the AetherSDR certificate" }
-            Write-Host "$($t.Name): $subject"
+            $cert = (Get-AuthenticodeSignature -FilePath $t.FullName).SignerCertificate
+            if ($cert.Subject -notmatch '^CN=Jeremy Fielder,') { throw "$($t.Name): signed by '$($cert.Subject)', not the AetherSDR certificate" }
+            if ($cert.Issuer -notmatch '^CN=Microsoft ID Verified CS [AE]OC CA \d+, O=Microsoft Corporation, C=US$') { throw "$($t.Name): issued by '$($cert.Issuer)', not Artifact Signing's identity-verified CA" }
+            Write-Host "$($t.Name): $($cert.Subject) / $($cert.Issuer)"
           }
           Write-Host "$($targets.Count) files carry valid, timestamped Authenticode signatures."
 

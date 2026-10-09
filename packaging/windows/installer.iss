@@ -9,8 +9,8 @@
 AppName=AetherSDR
 AppVersion={#APP_VERSION}
 AppPublisher=AetherSDR Project
-AppPublisherURL=https://github.com/ten9876/AetherSDR
-AppSupportURL=https://github.com/ten9876/AetherSDR/issues
+AppPublisherURL=https://www.aethersdr.com/
+AppSupportURL=https://github.com/aethersdr/AetherSDR/issues
 AppCopyright=Copyright (C) AetherSDR contributors
 LicenseFile=..\..\LICENSE
 DefaultDirName={autopf}\AetherSDR
