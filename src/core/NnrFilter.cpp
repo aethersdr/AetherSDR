@@ -43,6 +43,12 @@ NnrFilter::NnrFilter(int sampleRate)
     }
 
     m_blockFrames = kBlockFrames;
+    // Each create_nnr() plans two FFTW_PATIENT double-precision transforms
+    // (nnr.c calc_nnr), four per filter, and FFTW's planner is not
+    // thread-safe, so this holds the process-global planner lock (#6287): once
+    // for both channels, so it waits out another holder at most once. Guarded
+    // here, not in vendored WDSP.
+    auto lock = fftwPlannerLock();
     for (int channel = 0; channel < 2; ++channel) {
         if (sampleRate == 24000) {
             m_up[channel] = std::make_unique<Resampler>(24000, kProcessingRate);
@@ -55,23 +61,17 @@ NnrFilter::NnrFilter(int sampleRate)
         // stays set and AudioEngine simply stops calling process(). position=0
         // to match the xnnr() call below; there is only one call site here.
         // cmode=1 zeroes Q, which we discard anyway.
-        //
-        // Each create_nnr() plans two FFTW_PATIENT double-precision transforms
-        // (nnr.c calc_nnr), four per filter, and FFTW's planner is not
-        // thread-safe, so it holds the process-global planner lock (#6287).
-        // Guarded here, not in vendored WDSP; it may wait out another plan.
-        {
-            auto lock = fftwPlannerLock();
-            m_nnr[channel] = create_nnr(1, 0, m_blockFrames, m_blockIn[channel].data(),
-                                        m_blockOut[channel].data(), kProcessingRate,
-                                        kNetworkRate, kFftSize, kOverlap, kLookahead,
-                                        Nnr::maskFloorForStrength(m_strength.load()), 1);
-        }
+        m_nnr[channel] = create_nnr(1, 0, m_blockFrames, m_blockIn[channel].data(),
+                                    m_blockOut[channel].data(), kProcessingRate,
+                                    kNetworkRate, kFftSize, kOverlap, kLookahead,
+                                    Nnr::maskFloorForStrength(m_strength.load()), 1);
         if (!m_nnr[channel]) {
+            lock.unlock();
             qWarning() << "NnrFilter: create_nnr() failed";
             return;
         }
     }
+    lock.unlock();
 
     m_appliedModel.store(getModel_nnr(static_cast<NNR>(m_nnr[0])));
     qDebug() << "NnrFilter: initialized at" << sampleRate << "Hz, model slot"
