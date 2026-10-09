@@ -1,3 +1,4 @@
+#include "core/NnrFilter.h"
 #include "core/dsp/FftwPlannerLock.h"
 #include "core/dsp/WdspChannel.h"
 #ifdef HAVE_FFTW3
@@ -96,6 +97,29 @@ int main()
         },
         [] { return WdspChannel::fftwSetupLock(); });
 #endif
+
+    // NNR plans FFTW_PATIENT transforms inside WDSP's create_nnr(), outside
+    // any WdspChannel, so its wrapper has to take the lock itself (#6287: it
+    // didn't, and raced NR2 wisdom generation into a libfftw3 SIGSEGV).
+    // Built unconditionally, like the WDSP it wraps. The warm-up puts its
+    // plans in FFTW's in-process wisdom so the control below times the
+    // construction, not a cold FFTW_PATIENT search.
+    {
+        AetherSDR::NnrFilter warm(48000);
+        ok &= warm.isValid();
+    }
+    ok &= requiresLock(
+        "NNR construction takes the double-precision lock",
+        [] { return std::unique_ptr<AetherSDR::NnrFilter> {}; },
+        [](std::unique_ptr<AetherSDR::NnrFilter>& nnr) {
+            nnr = std::make_unique<AetherSDR::NnrFilter>(48000);
+        },
+        [] { return AetherSDR::fftwPlannerLock(); });
+    ok &= requiresLock(
+        "NNR destruction takes the double-precision lock",
+        [] { return std::make_unique<AetherSDR::NnrFilter>(48000); },
+        [](std::unique_ptr<AetherSDR::NnrFilter>& nnr) { nnr.reset(); },
+        [] { return AetherSDR::fftwPlannerLock(); });
 
 #ifdef HAVE_SPECBLEACH
     {

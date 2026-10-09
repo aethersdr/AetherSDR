@@ -4,6 +4,7 @@
 #include "Resampler.h"
 
 #include "aether_wdsp.h"
+#include "core/dsp/FftwPlannerLock.h"
 
 #include <QDebug>
 
@@ -54,10 +55,19 @@ NnrFilter::NnrFilter(int sampleRate)
         // stays set and AudioEngine simply stops calling process(). position=0
         // to match the xnnr() call below; there is only one call site here.
         // cmode=1 zeroes Q, which we discard anyway.
-        m_nnr[channel] = create_nnr(1, 0, m_blockFrames, m_blockIn[channel].data(),
-                                    m_blockOut[channel].data(), kProcessingRate,
-                                    kNetworkRate, kFftSize, kOverlap, kLookahead,
-                                    Nnr::maskFloorForStrength(m_strength.load()), 1);
+        //
+        // create_nnr() plans two FFTW_PATIENT double-precision transforms
+        // (nnr.c calc_nnr), so it takes the process-global planner lock like
+        // every other fftw_* user (#6287). Without it this raced NR2 wisdom
+        // generation and segfaulted inside libfftw3. Guarded here rather than
+        // in vendored WDSP. The wait is as long as the other holder's plan.
+        {
+            auto lock = fftwPlannerLock();
+            m_nnr[channel] = create_nnr(1, 0, m_blockFrames, m_blockIn[channel].data(),
+                                        m_blockOut[channel].data(), kProcessingRate,
+                                        kNetworkRate, kFftSize, kOverlap, kLookahead,
+                                        Nnr::maskFloorForStrength(m_strength.load()), 1);
+        }
         if (!m_nnr[channel]) {
             qWarning() << "NnrFilter: create_nnr() failed";
             return;
@@ -74,6 +84,8 @@ NnrFilter::NnrFilter(int sampleRate)
 
 NnrFilter::~NnrFilter()
 {
+    // destroy_nnr() destroys both plans (nnr.c decalc_nnr): same lock (#6287).
+    auto lock = fftwPlannerLock();
     for (void* nnr : m_nnr) {
         if (nnr) {
             destroy_nnr(static_cast<NNR>(nnr));
