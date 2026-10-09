@@ -13,11 +13,11 @@
 namespace AetherSDR {
 
 Ctr2AudioSpectrumFeeder::Ctr2AudioSpectrumFeeder(Ctr2ProxyModel* model, AudioEngine* audio,
-                                                 PassbandSource passband, QObject* parent)
+                                                 SourceFn source, QObject* parent)
     : QObject(parent)
     , m_model(model)
     , m_audio(audio)
-    , m_passband(std::move(passband))
+    , m_source(std::move(source))
     , m_timer(new QTimer(this))
 {
     m_timer->setInterval(kIntervalMs);
@@ -31,7 +31,8 @@ void Ctr2AudioSpectrumFeeder::follow()
     if (m_model->audioSpectrumWanted()) {
         if (!m_timer->isActive()) {
             m_fft.reset();
-            m_lastBlock.clear();
+            m_lastRxBlock.clear();
+            m_lastTxBlock.clear();
             m_timer->start();
         }
     } else {
@@ -62,28 +63,37 @@ void Ctr2AudioSpectrumFeeder::tick()
         m_timer->stop();
         return;
     }
-    std::vector<float> samples(ClientEqFftAnalyzer::kFftSize, 0.0f);
-    if (!m_audio || !m_audio->copyRecentClientEqRxSamples(samples.data(),
-                                                         ClientEqFftAnalyzer::kFftSize)) {
+    if (!m_audio) {
         return;
     }
-    // The tap is not written while transmitting, and copy returns its last
-    // block regardless; an unchanged block means nothing new is heard.
-    // The EQ runs at the producer rate, which is not always 24 kHz; read it
-    // every tick. Too low a rate (or none yet) has no useful spectrum.
-    const ClientEq* eq = m_audio->clientEqRx();
+    const Source src = m_source ? m_source() : Source{};
+    if (src.transmitting != m_transmitting) {
+        m_transmitting = src.transmitting;   // RX smoothing must not bleed into TX
+        m_fft.reset();
+    }
+    std::vector<float> samples(ClientEqFftAnalyzer::kFftSize, 0.0f);
+    const bool ok = src.transmitting
+        ? m_audio->copyRecentClientEqTxSamples(samples.data(), ClientEqFftAnalyzer::kFftSize)
+        : m_audio->copyRecentClientEqRxSamples(samples.data(), ClientEqFftAnalyzer::kFftSize);
+    if (!ok) {
+        return;
+    }
+    // Each EQ runs at its producer's rate, which is not always 24 kHz; read
+    // it every tick. Too low a rate (or none yet) has no useful spectrum.
+    const ClientEq* eq = src.transmitting ? m_audio->clientEqTx() : m_audio->clientEqRx();
     const double fs = eq ? eq->sampleRate() : 24000.0;
     if (!(fs >= 8000.0)) {
         return;
     }
-    const std::pair<int, int> pb = m_passband ? m_passband() : std::pair<int, int>{0, 0};
-    const int span = Ctr2ProxyModel::audioSpectrumSpanHz(pb.first, pb.second, fs);
-    if (samples == m_lastBlock) {
+    const int span = Ctr2ProxyModel::audioSpectrumSpanHz(src.filterLow, src.filterHigh, fs);
+    // An unchanged block means the tap is not being written: nothing new.
+    std::vector<float>& last = src.transmitting ? m_lastTxBlock : m_lastRxBlock;
+    if (samples == last) {
         m_fft.reset();
         m_model->sendAudioSpectrum(span, std::vector<float>(kBars, -INFINITY));
         return;
     }
-    m_lastBlock = samples;
+    last = samples;
     m_fft.update(samples.data(), ClientEqFftAnalyzer::kFftSize);
     const std::vector<float> bars =
         barsFromBins(m_fft.magnitudesDb(), fs, span, m_fft.coherentGainCorrectionDb());

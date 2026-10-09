@@ -2631,10 +2631,21 @@ void MainWindow::setupCtr2Proxy()
             [pushRadio](bool) { pushRadio(); });
     connect(&m_radioModel, &RadioModel::infoChanged, m_ctr2ProxyModel, pushRadio);
     pushRadio();
-    // Controllers that negotiate it get the audio spectrum (AetherKnob).
+    // Controllers that negotiate it get the audio spectrum: the TX audio over
+    // the TX filter while transmitting, else the RX audio over the active
+    // slice's passband.
     new Ctr2AudioSpectrumFeeder(m_ctr2ProxyModel, m_audio, [this] {
-        const SliceModel* s = activeSlice();
-        return s ? std::pair<int, int>{s->filterLow(), s->filterHigh()} : std::pair<int, int>{0, 0};
+        Ctr2AudioSpectrumFeeder::Source src;
+        const TransmitModel& tx = m_radioModel.transmitModel();
+        if (tx.isTransmitting()) {
+            src.transmitting = true;
+            src.filterLow = tx.txFilterLow();
+            src.filterHigh = tx.txFilterHigh();
+        } else if (const SliceModel* s = activeSlice()) {
+            src.filterLow = s->filterLow();
+            src.filterHigh = s->filterHigh();
+        }
+        return src;
     }, this);
     if (m_appletPanel) {
         if (auto* applet = m_appletPanel->ctr2ProxyApplet()) {

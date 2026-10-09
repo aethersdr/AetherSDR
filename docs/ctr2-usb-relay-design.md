@@ -304,7 +304,7 @@ counts radio bytes only. Each AUDIO_SPECTRUM frame of 32 bars is 6 reports
 
 | Type | Bit | Direction | Payload (max length) |
 | --- | --- | --- | --- |
-| `0x40` AUDIO_SPECTRUM | 0 | host → device | (67 bytes) `[bars N, 1..64][span Hz hi][span Hz lo][N levels]`: what the operator hears (the Client EQ RX tap: after the radio's DSP, client NR and the RX chain up to and including the EQ; not stages after the EQ, output conversion or volume), bars splitting 0..span Hz evenly, the span being the active slice's passband width rounded up to a clean step (500 Hz–20 kHz, capped at the audio's Nyquist frequency: 12 kHz for 24 kHz audio), each level 0..255 linear in dB from -90 dB (0) to 0 dBFS (255); about 20 a second |
+| `0x40` AUDIO_SPECTRUM | 0 | host → device | (67 bytes) `[bars N, 1..64][span Hz hi][span Hz lo][N levels]`: receiving: what the operator hears (the Client EQ RX tap: after the radio's DSP, client NR and the RX chain up to and including the EQ; not stages after the EQ, output conversion or volume) over the active slice's passband width; transmitting: the transmit audio (the TX EQ tap) over the TX filter width. Bars split 0..span Hz evenly, the span being that filter width rounded up to a clean step (500 Hz–20 kHz, capped at the audio's Nyquist frequency: 12 kHz for 24 kHz audio), each level 0..255 linear in dB from -90 dB (0) to 0 dBFS (255); about 20 a second |
 
 The reference implementation in `tools/ctr2-firmware-reference` covers the
 Feature report layout (`ctr2_caps_encode` / `ctr2_caps_decode`), sending
@@ -380,7 +380,7 @@ USB a complete replacement for Wi-Fi.
 | Link state machine, radio TCP connection and per-link UDP socket | `src/core/Ctr2UsbRelay.{h,cpp}` |
 | Applet: Wi-Fi or USB, device list; radio follows AetherSDR's connection | `src/models/Ctr2ProxyModel`, `src/gui/Ctr2ProxyApplet` |
 | Extension negotiation (Feature report `0x02`), on the HID I/O thread | `src/core/Ctr2HidThreadPort.cpp`, `src/core/Ctr2HidapiPort.cpp` |
-| AUDIO_SPECTRUM producer: the Client EQ RX tap (post-EQ), its own 2048-point analyzer, 32 bars at 20 Hz, floor-level bars while the tap is not being written, only while a negotiating device is relaying | `src/gui/Ctr2AudioSpectrumFeeder` |
+| AUDIO_SPECTRUM producer: the Client EQ RX tap (post-EQ), or the TX EQ tap while transmitting, its own 2048-point analyzer (reset on each RX/TX switch), 32 bars at 20 Hz, floor-level bars while the tap in use is not being written, only while a negotiating device is relaying | `src/gui/Ctr2AudioSpectrumFeeder` |
 
 HID I/O runs on one dedicated worker thread because hidapi reads and writes
 block; a stalled controller can then never freeze the UI or other
