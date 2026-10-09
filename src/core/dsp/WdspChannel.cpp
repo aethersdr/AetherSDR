@@ -12,6 +12,7 @@
 #include <limits>
 #include <mutex>
 #include <new>
+#include <optional>
 #include <string>
 #include <thread>
 #include <utility>
@@ -37,6 +38,26 @@ long long currentProcessId()
 constexpr int kWdspChannelCount = 32;
 constexpr int kRxChannelType = 0;
 constexpr int kTxChannelType = 1;
+
+// The prepared-WBFM geometry. validateConfig() refuses a wbfmReceive Config
+// with any other, so open() hands exactly these to WDSP, and
+// openWithExchangeDepthForTest() builds its call from the same constants.
+constexpr int kWbfmInputSampleRate = 384000;
+constexpr int kWbfmDspSampleRate = 192000;
+constexpr int kWbfmOutputSampleRate = 48000;
+constexpr std::size_t kWbfmInputBlockSize = 2048;
+constexpr std::size_t kWbfmDspBlockSize = 1024;
+// OpenChannelWithExchangeDepth's contract (aether_wdsp.h): depth 2..8, and
+// channel.c refuses anything else before touching the channel.
+constexpr int kMinExchangeDepth = 2;
+constexpr int kMaxExchangeDepth = 8;
+// Seven exchanges can emerge from one approved 8192-sample RTL callback.
+// Depth 8 prepares seven output credits plus the existing worker stage:
+// 2048 frames / 42.667 ms exchange-stage delay, 32 ms more than depth 2.
+// It does not cover arbitrary starvation; every non-OK still withdraws.
+constexpr int kPreparedWbfmExchangeDepth = 8;
+static_assert(kPreparedWbfmExchangeDepth >= kMinExchangeDepth
+              && kPreparedWbfmExchangeDepth <= kMaxExchangeDepth);
 
 std::mutex g_channelMutex;
 // Binds the single FFTW planner lock (FftwPlannerLock.h), shared with
@@ -210,6 +231,38 @@ bool filterTapsArePartitionable(int taps, std::size_t dspBlockSize) noexcept
 } // namespace
 
 namespace {
+
+// The one place a Config becomes an OpenChannel call, shared by open() and
+// openWithExchangeDepthForTest(). No exchangeDepth is the legacy OpenChannel
+// (explicit depth 2, including reused slots). Returns WDSP's verdict: 0 is a
+// refusal that left the channel untouched. Caller holds g_setupMutex.
+int openWdspChannel(int channelId, const WdspChannel::Config& config,
+                    std::optional<int> exchangeDepth) noexcept
+{
+    const int inputBlock = static_cast<int>(config.inputBlockSize);
+    const int dspBlock = static_cast<int>(config.dspBlockSize);
+    const int type = config.direction == WdspChannel::Direction::Receive
+        ? kRxChannelType : kTxChannelType;
+    // Open STOPPED. Every reference client configures mode, filters and AGC
+    // after OpenChannel, and opening in state 1 means any samples arriving
+    // during that window are demodulated by a default-configured channel --
+    // wrong mode, wrong passband, AGC wide open. open() starts it with
+    // SetChannelState once it is set up.
+    constexpr int state = 0;
+    const int blockForOutput = config.blockForOutput ? 1 : 0;
+    if (exchangeDepth) {
+        return OpenChannelWithExchangeDepth(channelId, inputBlock, dspBlock,
+            config.inputSampleRate, config.dspSampleRate, config.outputSampleRate,
+            type, state, config.muteDelayUpSec, config.muteSlewUpSec,
+            config.muteDelayDownSec, config.muteSlewDownSec, blockForOutput,
+            *exchangeDepth);
+    }
+    OpenChannel(channelId, inputBlock, dspBlock,
+        config.inputSampleRate, config.dspSampleRate, config.outputSampleRate,
+        type, state, config.muteDelayUpSec, config.muteSlewUpSec,
+        config.muteDelayDownSec, config.muteSlewDownSec, blockForOutput);
+    return 1;
+}
 
 // Apply the full AGC surface, mirroring pihpsdr's set_agc(). SetRXAAGCMode on
 // its own leaves slope and the time constants at WDSP's defaults, and the
@@ -1156,10 +1209,33 @@ uint64_t WdspChannel::outstandingAllocationsForTest() noexcept
     return wdspPortOutstandingAllocations();
 }
 
+uint64_t WdspChannel::threadAllocationSequenceForTest() noexcept
+{
+    return wdspPortThreadAllocationSequence();
+}
+
 int WdspChannel::openWithExchangeDepthForTest(int channelId, int exchangeDepth) noexcept
 {
-    return OpenChannelWithExchangeDepth(channelId, 2048, 1024, 384000, 192000, 48000,
-                                        0, 0, 0.01, 0.025, 0.0, 0.01, 0, exchangeDepth);
+    // A refusal probe only. A call WDSP would accept would open a channel
+    // nothing owns or closes, or rebuild one a live WdspChannel owns, so it is
+    // refused here and never reaches WDSP.
+    if (channelId >= 0 && channelId < kWdspChannelCount
+        && exchangeDepth >= kMinExchangeDepth && exchangeDepth <= kMaxExchangeDepth) {
+        return kOpenProbeWouldOpen;
+    }
+    Config config;
+    config.mode = Mode::Wbfm;
+    config.wbfmReceive.emplace();
+    config.blockForOutput = false;
+    config.inputSampleRate = kWbfmInputSampleRate;
+    config.dspSampleRate = kWbfmDspSampleRate;
+    config.outputSampleRate = kWbfmOutputSampleRate;
+    config.inputBlockSize = kWbfmInputBlockSize;
+    config.dspBlockSize = kWbfmDspBlockSize;
+    // The same lock and setup order as open().
+    const std::scoped_lock setupLock(g_setupMutex);
+    loadWisdomOnce();
+    return openWdspChannel(channelId, config, exchangeDepth);
 }
 
 void WdspChannel::setWorkerHandoffPauseForTest(unsigned microseconds) noexcept
@@ -1240,9 +1316,11 @@ bool WdspChannel::validateConfig(const Config& config, std::string* error) noexc
         return false;
     }
     if (config.wbfmReceive && (config.fmReceive || config.direction != Direction::Receive
-        || config.mode != Mode::Wbfm || config.inputSampleRate != 384000
-        || config.dspSampleRate != 192000 || config.outputSampleRate != 48000
-        || config.inputBlockSize != 2048 || config.dspBlockSize != 1024
+        || config.mode != Mode::Wbfm || config.inputSampleRate != kWbfmInputSampleRate
+        || config.dspSampleRate != kWbfmDspSampleRate
+        || config.outputSampleRate != kWbfmOutputSampleRate
+        || config.inputBlockSize != kWbfmInputBlockSize
+        || config.dspBlockSize != kWbfmDspBlockSize
         || config.filterLowHz < -0.45 * config.inputSampleRate
         || config.filterHighHz > 0.45 * config.inputSampleRate
         || !std::isfinite(config.wbfmReceive->outputGain)
@@ -1429,32 +1507,10 @@ bool WdspChannel::open() noexcept
 {
     const std::scoped_lock setupLock(g_setupMutex);
     loadWisdomOnce();   // import cached FFTW wisdom so PATIENT plans don't re-measure
-    // Seven exchanges can emerge from one approved 8192-sample RTL callback.
-    // Depth 8 prepares seven output credits plus the existing worker stage:
-    // 2048 frames / 42.667 ms exchange-stage delay, 32 ms more than depth 2.
-    // It does not cover arbitrary starvation; every non-OK still withdraws.
     const bool preparedWbfm = m_config.wbfmReceive && !m_config.blockForOutput;
-    const auto openChannel = [preparedWbfm](auto... args) {
-        if (preparedWbfm) { return OpenChannelWithExchangeDepth(args..., 8) != 0; }
-        OpenChannel(args...); // Explicit legacy depth 2, including reused slots.
-        return true;
-    };
-    if (!openChannel(m_channelId,
-                static_cast<int>(m_config.inputBlockSize),
-                static_cast<int>(m_config.dspBlockSize),
-                m_config.inputSampleRate,
-                m_config.dspSampleRate,
-                m_config.outputSampleRate,
-                m_config.direction == Direction::Receive ? kRxChannelType : kTxChannelType,
-                // Open STOPPED. Every reference client configures mode, filters
-                // and AGC after OpenChannel, and opening in state 1 means any
-                // samples arriving during that window are demodulated by a
-                // default-configured channel -- wrong mode, wrong passband, AGC
-                // wide open. SetChannelState below starts it once it is set up.
-                0,
-                m_config.muteDelayUpSec, m_config.muteSlewUpSec,
-                m_config.muteDelayDownSec, m_config.muteSlewDownSec,
-                m_config.blockForOutput ? 1 : 0)) {
+    if (openWdspChannel(m_channelId, m_config,
+                        preparedWbfm ? std::optional<int>(kPreparedWbfmExchangeDepth)
+                                     : std::nullopt) == 0) {
         return false;
     }
     if (m_config.direction == Direction::Receive) {

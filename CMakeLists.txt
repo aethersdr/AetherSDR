@@ -155,9 +155,9 @@ if(AETHER_SHARED_CORE)
     endif()
     # Vendored static libraries end up inside the shared core, and their
     # symbols do not reach its consumers (PRIVATE dependency, hidden
-    # visibility). A test goes through core/dsp/WdspChannel.h; one that
-    # includes a WDSP header links aether_wdsp itself, which
-    # tools/check_wdsp_test_links.py enforces.
+    # visibility). A test goes through core/dsp/WdspChannel.h: linking
+    # aether_wdsp instead would give it a second WDSP the core never touches.
+    # tools/check_wdsp_test_links.py enforces that.
     set(CMAKE_POSITION_INDEPENDENT_CODE ON)
     set(_aether_core_library_type SHARED)
     message(STATUS "AetherSDR: libaethercore built SHARED (AETHER_SHARED_CORE)")

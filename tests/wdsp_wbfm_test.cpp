@@ -613,6 +613,15 @@ bool exchangePreparation()
         ok = require(WdspChannel::openWithExchangeDepthForTest(id, 8) == 0,
                      "prepared creation rejects invalid channel identity") && ok;
     }
+    // A probe WDSP would accept never reaches it: neither the live channel's
+    // slot nor a free one is opened or rebuilt.
+    for (const int id : {channel->channelId(), 31}) {
+        for (const int depth : {2, 8}) {
+            ok = require(WdspChannel::openWithExchangeDepthForTest(id, depth)
+                             == WdspChannel::kOpenProbeWouldOpen,
+                         "test probe refuses a preparation WDSP would accept") && ok;
+        }
+    }
     ok = require(WdspChannel::allocationSequenceForTest() == allocations
                  && channel->outputSamplesReadyForTest() == 7 * 256,
                  "refused preparation leaves existing ring and allocations intact") && ok;
