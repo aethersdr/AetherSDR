@@ -258,13 +258,20 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/check_test_registration.py --strict
 
-      # A test that includes a WDSP header must link aether_wdsp: with
-      # AETHER_SHARED_CORE=ON (the sanitizer lanes) libaethercore.so keeps
-      # WDSP's symbols hidden, so such a test only links in the static build
-      # every PR uses (#6283/#6284). Stdlib-only, sub-second.
+      # Tests reach WDSP only through core/dsp/WdspChannel.h: no test source
+      # includes a WDSP header and no test links aether_wdsp, bar a commented
+      # allowlist of pure WDSP unit tests. With AETHER_SHARED_CORE=ON (the
+      # sanitizer lanes) libaethercore.so keeps WDSP's symbols hidden, so a
+      # direct call only links in the static build every PR uses (#6283/#6284),
+      # and linking aether_wdsp gives the test a second WDSP the core never
+      # touches. Stdlib-only, sub-second.
       - name: WDSP test links
         if: ${{ !cancelled() }}
         run: python tools/check_wdsp_test_links.py --strict
+
+      - name: WDSP test-links checker self-test
+        if: ${{ !cancelled() }}
+        run: python tools/test_check_wdsp_test_links.py
 
       # ── #5262 M2: the capability descriptor's boolean population is FROZEN.
       # A new capability lands as a per-feature record (std::optional<Record>:

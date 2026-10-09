@@ -4817,6 +4817,12 @@ if(PYTHON3_EXECUTABLE)
     add_test(NAME seam_probe_table_scanner
              COMMAND ${PYTHON3_EXECUTABLE}
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_gen_seam_probe_table.py)
+    # tools/check_wdsp_test_links.py, the Static checks gate that keeps tests
+    # off WDSP's C API (#6283): include cycles, transitive headers, the
+    # aether_wdsp link rule and its allowlist, on synthetic trees.
+    add_test(NAME wdsp_test_links_checker
+             COMMAND ${PYTHON3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_check_wdsp_test_links.py)
     # tools/hl2/spectrum.py draws a signal on the side of the tuned frequency
     # it is on (#4265). Runs the probe's real capture() with the socket replaced
     # by an object that returns EP6 packets built in the test: nothing is bound,
