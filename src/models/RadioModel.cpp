@@ -5,6 +5,7 @@
 #include <QPointer>
 #include <QScopeGuard>
 #include "core/AudioCompressionPolicy.h"
+#include "core/NetworkMtuPolicy.h"
 #include "core/TailnetAddress.h"
 #include "core/GuiClientIdentityPolicy.h"
 #include "AntennaAliasStore.h"
@@ -5203,6 +5204,22 @@ QString RadioModel::audioCompressionParam() const
     return audioCompressionFor(saved, isWan(), !isWan() && isTailnetAddress(radioAddress()));
 }
 
+int RadioModel::networkMtuParam() const
+{
+    const int saved = AppSettings::instance().value("NetworkMtu", "1450").toInt();
+    // SmartLink's socket is never on a tailnet; only the direct connection's
+    // local address can say this computer reaches the radio through one.
+    const bool overTailnet = !isWan()
+        && reachedOverTailnet(radioAddress(),
+                              m_connection ? m_connection->localAddress() : QHostAddress());
+    const int mtu = networkMtuFor(saved, overTailnet);
+    if (mtu != saved) {
+        qCInfo(lcProtocol) << "RadioModel: network MTU" << saved << "capped at" << mtu
+                           << "because the path to the radio runs over Tailscale";
+    }
+    return mtu;
+}
+
 void RadioModel::sendCwKey(bool down, const QString& debugSource,
                            quint64 debugTraceId, quint64 debugSourceMs)
 {
@@ -7529,8 +7546,9 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
 
         sendCmd(QString("client station %1").arg(ourStationName()));
         sendCmd("client set send_reduced_bw_dax=1");
-        // Set network MTU for VITA-49 packets (matches FlexLib behavior)
-        int mtu = AppSettings::instance().value("NetworkMtu", "1450").toInt();
+        // Set network MTU for VITA-49 packets (matches FlexLib behavior),
+        // capped when the path runs over Tailscale.
+        const int mtu = networkMtuParam();
         sendCmd(QString("client set enforce_network_mtu=1 network_mtu=%1").arg(mtu));
         // Enable keepalive (matches FlexLib behavior) — ping timer starts in startNetworkMonitor()
         sendCmd("keepalive enable");

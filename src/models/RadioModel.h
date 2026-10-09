@@ -905,6 +905,9 @@ public:
     void cancelLocalTransmit();
     void setDigitalVoiceTxSlice(int sliceId);
     QString audioCompressionParam() const;        // "none" or "opus" based on settings
+    // The network_mtu to send: the NetworkMtu setting, capped at 1200 when the
+    // path to the radio runs over Tailscale (NetworkMtuPolicy.h, #5949).
+    int networkMtuParam() const;
     void sendCwKey(bool down, const QString& debugSource = {},
                    quint64 debugTraceId = 0, quint64 debugSourceMs = 0); // straight key via netcw stream
     void sendCwPaddle(bool dit, bool dah, const QString& debugSource = {},

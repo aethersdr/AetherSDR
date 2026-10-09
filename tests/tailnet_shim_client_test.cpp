@@ -5,6 +5,7 @@
 // shim's accepted alphabet (tools/flex-tailnet-shim/api.go).
 
 #include "core/AudioCompressionPolicy.h"
+#include "core/NetworkMtuPolicy.h"
 #include "core/TailnetAddress.h"
 #include "core/TailnetLinkTelemetry.h"
 #include "core/TailnetShimClient.h"
@@ -283,6 +284,27 @@ int main(int argc, char** argv)
         ok &= expect(audioCompressionFor(QStringLiteral("Auto"), false, false) == none, "Auto, LAN");
         ok &= expect(audioCompressionFor(QStringLiteral("Auto"), true, false) == opus, "Auto, SmartLink");
         ok &= expect(audioCompressionFor(QStringLiteral("Auto"), false, true) == opus, "Auto, tailnet");
+    }
+
+    // The network MTU is capped whenever the path runs over Tailscale (#5949):
+    // a radio at a tailnet address (the in-radio shim), or one on its LAN
+    // reached from this computer's tailnet address (a subnet router).
+    {
+        const QHostAddress lan(QStringLiteral("192.168.50.20"));
+        const QHostAddress ourLan(QStringLiteral("192.168.50.10"));
+        const QHostAddress shim(QStringLiteral("100.101.102.103"));
+        const QHostAddress ourTailnet(QStringLiteral("100.88.1.2"));
+        ok &= expect(!reachedOverTailnet(lan, ourLan), "LAN to LAN is not a tailnet path");
+        ok &= expect(reachedOverTailnet(shim, ourTailnet), "the in-radio shim is a tailnet path");
+        ok &= expect(reachedOverTailnet(lan, ourTailnet),
+                     "a LAN radio reached from a tailnet address is a tailnet path");
+        ok &= expect(reachedOverTailnet(lan, QHostAddress(QStringLiteral("fd7a:115c:a1e0::9"))),
+                     "an IPv6 tailnet source is a tailnet path");
+        ok &= expect(!reachedOverTailnet(lan, QHostAddress()), "no local address yet");
+        ok &= expect(networkMtuFor(1450, true) == kTailnetNetworkMtu, "the default is capped");
+        ok &= expect(networkMtuFor(9000, true) == kTailnetNetworkMtu, "jumbo is capped");
+        ok &= expect(networkMtuFor(1100, true) == 1100, "a smaller saved value is kept");
+        ok &= expect(networkMtuFor(1450, false) == 1450, "off a tailnet the setting is sent as is");
     }
 
     // Strings from the container are capped before they reach the window.
