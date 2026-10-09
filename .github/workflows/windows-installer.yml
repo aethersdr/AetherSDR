@@ -631,18 +631,23 @@ jobs:
       - name: Sign payload
         if: env.AETHER_SIGN == 'true'
         run: |
-          # Keep a vendor signature only when it is embedded and timestamped,
-          # which is what the gate below requires; sign everything else,
-          # including the third-party and vendored DLLs that otherwise have no
-          # publisher identity at all. installer-runtime\ is what the setup
-          # packs (VC_RUNTIME_DIR), so it is signed and verified as well.
+          # Keep a vendor signature only when it is embedded, valid and
+          # timestamped, which is what the gate below requires; sign everything
+          # else, including the third-party and vendored DLLs that otherwise
+          # have no publisher identity at all. The check reads the embedded
+          # signature (authenticode.ps1 says why Get-AuthenticodeSignature
+          # can't), so a Microsoft DLL also listed in a system catalog keeps
+          # Microsoft's signature. installer-runtime\ is what the setup packs
+          # (VC_RUNTIME_DIR), so it is signed and verified as well.
+          . .\packaging\windows\authenticode.ps1
           $toSign = @()
           $files = @(Get-ChildItem -Path deploy -Recurse -File -Include *.exe, *.dll) +
                    @(Get-ChildItem -Path installer-runtime -File -Filter *.dll)
           foreach ($f in $files) {
-            $sig = Get-AuthenticodeSignature -FilePath $f.FullName
-            if ($sig.Status -eq 'Valid' -and $sig.SignatureType -eq 'Authenticode' -and $sig.TimeStamperCertificate) {
-              Write-Host "Keeping existing signature: $($f.Name) ($($sig.SignerCertificate.Subject))"
+            $state = Get-EmbeddedSignatureState -SignTool $env:AETHER_SIGNTOOL -Path $f.FullName
+            if ($state.Valid -and $state.Timestamped) {
+              $subject = (Get-AuthenticodeSignature -FilePath $f.FullName).SignerCertificate.Subject
+              Write-Host "Keeping existing signature: $($f.Name) ($subject)"
             } else {
               $toSign += $f.FullName
             }
@@ -740,10 +745,11 @@ jobs:
           }
           & $env:AETHER_SIGNTOOL verify /pa /q @($targets.FullName)
           if ($LASTEXITCODE -ne 0) { throw "signtool verify /pa failed ($LASTEXITCODE)" }
+          . .\packaging\windows\authenticode.ps1
           foreach ($t in $targets) {
-            $sig = Get-AuthenticodeSignature -FilePath $t.FullName
-            if ($sig.Status -ne 'Valid') { throw "$($t.Name): signature status $($sig.Status)" }
-            if (-not $sig.TimeStamperCertificate) { throw "$($t.Name): signature is not timestamped" }
+            $state = Get-EmbeddedSignatureState -SignTool $env:AETHER_SIGNTOOL -Path $t.FullName
+            if (-not $state.Valid) { throw "$($t.Name): embedded signature does not validate" }
+            if (-not $state.Timestamped) { throw "$($t.Name): embedded signature is not timestamped" }
           }
           $ours = @(
             (Get-Item deploy\AetherSDR.exe),
