@@ -1,5 +1,4 @@
 #include "core/dsp/WdspChannel.h"
-#include "../third_party/wdsp/include/aether_wdsp.h"
 
 #include <algorithm>
 #include <array>
@@ -606,19 +605,12 @@ bool exchangePreparation()
     if (!require(channel != nullptr, error.c_str())) { return false; }
     bool ok = true;
     const std::uint64_t allocations = WdspChannel::allocationSequenceForTest();
-    // These calls reach the WDSP linked into this executable. Under
-    // AETHER_SHARED_CORE that is the test's own copy, not the core's: the
-    // refusals are still proved, but the "existing ring intact" check below
-    // then observes a copy the calls never touched. The static-core build has
-    // one copy, and there the check is real.
     for (const int depth : {-1, 0, 1, 9, std::numeric_limits<int>::max()}) {
-        ok = require(OpenChannelWithExchangeDepth(channel->channelId(), 2048, 1024,
-                         384000, 192000, 48000, 0, 0, 0.01, 0.025, 0.0, 0.01, 0, depth) == 0,
+        ok = require(WdspChannel::openWithExchangeDepthForTest(channel->channelId(), depth) == 0,
                      "invalid prepared depth refuses before changing a live channel") && ok;
     }
     for (const int id : {-1, 32}) {
-        ok = require(OpenChannelWithExchangeDepth(id, 2048, 1024,
-                         384000, 192000, 48000, 0, 0, 0.01, 0.025, 0.0, 0.01, 0, 8) == 0,
+        ok = require(WdspChannel::openWithExchangeDepthForTest(id, 8) == 0,
                      "prepared creation rejects invalid channel identity") && ok;
     }
     ok = require(WdspChannel::allocationSequenceForTest() == allocations

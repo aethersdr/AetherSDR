@@ -482,6 +482,11 @@ public:
 
     static uint64_t allocationSequenceForTest() noexcept;
     static uint64_t outstandingAllocationsForTest() noexcept;
+    // Test only: WDSP's OpenChannelWithExchangeDepth with the prepared-WBFM
+    // geometry, on the WDSP this class drives (a test cannot reach it under
+    // AETHER_SHARED_CORE). A refusal probe: a valid id and depth opens a
+    // channel nothing owns or closes.
+    [[nodiscard]] static int openWithExchangeDepthForTest(int channelId, int exchangeDepth) noexcept;
     // Process-global, test only (#5734, AetherSDR WDSP patch 13): the DSP
     // worker sleeps this long right after it has released a blocked
     // processIq(). That is the window in which, before patch 13, the host

@@ -1156,6 +1156,12 @@ uint64_t WdspChannel::outstandingAllocationsForTest() noexcept
     return wdspPortOutstandingAllocations();
 }
 
+int WdspChannel::openWithExchangeDepthForTest(int channelId, int exchangeDepth) noexcept
+{
+    return OpenChannelWithExchangeDepth(channelId, 2048, 1024, 384000, 192000, 48000,
+                                        0, 0, 0.01, 0.025, 0.0, 0.01, 0, exchangeDepth);
+}
+
 void WdspChannel::setWorkerHandoffPauseForTest(unsigned microseconds) noexcept
 {
     wdspPortSetHandoffPauseForTest(microseconds);

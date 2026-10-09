@@ -961,9 +961,7 @@ endif()
 # the same toolchain and warning flags. Run manually with ./build/<target>.
 
 add_executable(wdsp_wbfm_test tests/wdsp_wbfm_test.cpp)
-# aether_wdsp too: the test calls OpenChannelWithExchangeDepth directly, and
-# under AETHER_SHARED_CORE the core does not export WDSP's symbols.
-target_link_libraries(wdsp_wbfm_test PRIVATE aethercore aether_wdsp)
+target_link_libraries(wdsp_wbfm_test PRIVATE aethercore)
 add_test(NAME wdsp_wbfm_test COMMAND wdsp_wbfm_test)
 set_tests_properties(wdsp_wbfm_test PROPERTIES TIMEOUT 120)
 
