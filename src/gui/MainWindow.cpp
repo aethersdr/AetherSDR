@@ -2763,6 +2763,21 @@ MainWindow::~MainWindow()
     }
 #endif
 
+    // AudioEngine teardown (NnrFilter, SpectralNR) takes the FFTW planner
+    // lock, which the NR2 wisdom worker holds for one FFTW_PATIENT plan at a
+    // time. Cancel and join it first, so that wait happens here rather than
+    // past the audio-thread join below (#6287). Cancel lands between plans.
+    if (m_nr2WisdomThread) {
+        ShutdownTrace trace("nr2.wisdom.join");
+        if (m_nr2WisdomCancel) {
+            m_nr2WisdomCancel->store(true);
+        }
+        QThread* wisdomThread = m_nr2WisdomThread;
+        QObject::disconnect(wisdomThread, nullptr, this, nullptr);
+        wisdomThread->wait();
+        delete wisdomThread;
+    }
+
     // Stop audio processing on the worker thread before destruction (#502).
     // Use BlockingQueuedConnection to ensure completion before we proceed.
     if (m_audio && m_audioThread && m_audioThread->isRunning()) {
@@ -4165,6 +4180,11 @@ void MainWindow::closeEvent(QCloseEvent* event)
         deactivateRADE();
 #endif
 
+    // Stop NR2 wisdom generation from starting another plan: the disconnect
+    // below can rebuild NNR on the audio thread, which waits for the planner.
+    if (m_nr2WisdomCancel) {
+        m_nr2WisdomCancel->store(true);
+    }
     {
         ShutdownTrace trace("radio.disconnect");
         m_radioModel.disconnectFromRadio();
@@ -9579,6 +9599,8 @@ void MainWindow::enableNr2WithWisdom()
                 [cancelled]() { return cancelled->load(); });
             result->store(static_cast<int>(wisdomResult));
         });
+        m_nr2WisdomThread = thread;
+        m_nr2WisdomCancel = cancelled;
         connect(thread, &QThread::finished, this, [this, dlg, progress, label, thread, result,
                                                      activityTimer, activityLabel, reassuranceLabel,
                                                      announceLabel]() {
