@@ -427,17 +427,17 @@ func TestClosingASessionWithdrawsItsSideChannels(t *testing.T) {
 	open(1, false)
 	open(2, false)
 	f.Forget(1)
-	if !f.admits(5000, from) {
+	if !f.claim(5000, from) {
 		t.Fatal("session 2 from the same computer lost its transfer when session 1 closed")
 	}
-	f.Forget(2)
-	if f.admits(5000, from) {
-		t.Fatal("a computer with no session is still admitted")
+	// Each announced transfer admits one connection.
+	if f.claim(5000, from) {
+		t.Fatal("one grant admitted a second connection")
 	}
 	// A reply that arrives after its session closed (and after Forget ran)
 	// must not leave the port open to that computer.
 	open(3, true)
-	if f.admits(5000, from) {
+	if f.claim(5000, from) {
 		t.Fatal("a closed session's late reply opened the port")
 	}
 	f.mu.Lock()

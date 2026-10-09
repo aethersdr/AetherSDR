@@ -667,6 +667,26 @@ func (r *Relay) SessionCount() int {
 	return len(r.sessions)
 }
 
+// Revoke ends every session whose caller authorize now refuses; each closes
+// its radio connection, so the radio drops that client and unkeys anything it
+// owned (Principle VI). It reports how many it ended.
+func (r *Relay) Revoke(authorize func(net.Addr) (string, bool)) int {
+	r.mu.Lock()
+	all := make([]*Session, 0, len(r.sessions))
+	for _, s := range r.sessions {
+		all = append(all, s)
+	}
+	r.mu.Unlock()
+	n := 0
+	for _, s := range all {
+		if who, ok := authorize(s.client.RemoteAddr()); !ok {
+			s.close(fmt.Sprintf("%s is no longer on the allowlist", who))
+			n++
+		}
+	}
+	return n
+}
+
 // CloseAll ends every session; each one closes its radio connection, so the
 // radio drops those clients (Principle VI). Used when the tailnet goes away.
 func (r *Relay) CloseAll(reason string) {

@@ -71,6 +71,8 @@ type Node struct {
 	// minutes.
 	bootCancel context.CancelFunc
 	bootDone   chan struct{}
+	// interruptWait overrides bootInterruptWait (tests).
+	interruptWait time.Duration
 	// routeMu serializes RefreshRoutes, so a refresh that read an older
 	// configuration can never apply it after a newer one.
 	routeMu sync.Mutex
@@ -106,6 +108,9 @@ type Node struct {
 	// a test seam. locals caches them.
 	localAddrs func() []netip.Addr
 	locals     localAddrCache
+
+	fwd     *Forwarder  // side channels, while the node runs
+	splices liveSplices // station-device splices in progress, for revocation
 }
 
 func (n *Node) cfgPath() string   { return filepath.Join(n.StateDir, "provision.json") }
@@ -208,20 +213,42 @@ func (n *Node) Boot() {
 	}()
 }
 
+// bootInterruptWait bounds how long an operator request waits for a
+// cancelled boot attempt to let go, inside AetherSDR's 8 s request timeout.
+const bootInterruptWait = 5 * time.Second
+
+// errBusy: a cancelled boot attempt is still shutting its tailnet down.
+var errBusy = errors.New("the tailnet connection is still shutting down; try again in a moment")
+
 // interruptBoot cancels a running boot attempt and waits until it has let go
 // of opMu. Call it before taking opMu; it returns whether a boot was running,
-// so a request that leaves the node provisioned can call Boot again.
-func (n *Node) interruptBoot() bool {
+// so a request that leaves the node provisioned can call Boot again. If the
+// attempt takes longer than the wait to unwind (tsnet's teardown is not
+// ours to bound), it returns errBusy rather than outlast the caller, and
+// boot resumes by itself once the attempt is gone.
+func (n *Node) interruptBoot() (bool, error) {
 	n.mu.Lock()
 	cancel, done := n.bootCancel, n.bootDone
 	n.bootCancel, n.bootDone = nil, nil
+	wait := n.interruptWait
 	n.mu.Unlock()
 	if cancel == nil {
-		return false
+		return false, nil
+	}
+	if wait <= 0 {
+		wait = bootInterruptWait
 	}
 	cancel()
-	<-done
-	return true
+	select {
+	case <-done:
+		return true, nil
+	case <-time.After(wait):
+		go func() {
+			<-done
+			n.Boot()
+		}()
+		return false, errBusy
+	}
 }
 
 // start brings the tailnet up and the relay on it. Caller holds opMu.
@@ -326,6 +353,9 @@ func (n *Node) start(parent context.Context, authKey string, timeout time.Durati
 	}
 	relay.OpenForward = fwd.Open
 	relay.ForgetForward = fwd.Forget
+	n.mu.Lock()
+	n.fwd = fwd
+	n.mu.Unlock()
 	go func() {
 		err := relay.Serve(ln)
 		log.Printf("relay stopped: %v", err)
@@ -492,7 +522,10 @@ func (n *Node) beginOp(presented string, firstUse bool) (end func(), err error) 
 	if refused() {
 		return nil, errUnauthorized
 	}
-	resume := n.interruptBoot()
+	resume, err := n.interruptBoot()
+	if err != nil {
+		return nil, err
+	}
 	n.opMu.Lock()
 	end = func() {
 		n.opMu.Unlock()
@@ -515,6 +548,7 @@ func (n *Node) stop(logout bool) error {
 	srv, relay, closers := n.srv, n.relay, n.closers
 	n.srv, n.relay, n.closers, n.ip, n.dnsName, n.lc = nil, nil, nil, netip.Addr{}, "", nil
 	n.authorize = nil
+	n.fwd = nil
 	n.routesInUse = nil
 	n.telemetry.mu.Lock()
 	n.telemetry.peers = nil
@@ -673,24 +707,50 @@ func (n *Node) Provision(presented, authKey, hostname string, allow, routes []st
 	return token, nil
 }
 
-// SetAllow changes who may connect, without leaving the tailnet.
+// SetAllow changes who may connect, without leaving the tailnet, and ends
+// every open connection the new list refuses (revokeDisallowed).
 func (n *Node) SetAllow(presented string, allow []string) error {
 	end, err := n.beginOp(presented, false)
 	if err != nil {
 		return err
 	}
-	defer end()
 	n.mu.Lock()
 	cfg := n.cfg
 	cfg.Allow = allow
 	n.mu.Unlock()
 	if err := n.save(cfg); err != nil {
+		end()
 		return err
 	}
 	n.mu.Lock()
 	n.cfg = cfg
 	n.mu.Unlock()
+	end()
+	n.revokeDisallowed()
 	return nil
+}
+
+// revokeDisallowed ends every open connection the allowlist no longer
+// admits: relay sessions (the radio drops the client and unkeys anything it
+// owned, Principle VI), side-channel transfers and station-device splices.
+// The authorizer reads the list live, so this applies a just-saved change.
+func (n *Node) revokeDisallowed() {
+	n.mu.Lock()
+	authorize, relay, fwd := n.authorize, n.relay, n.fwd
+	n.mu.Unlock()
+	if authorize == nil {
+		return
+	}
+	ended := n.splices.revoke(authorize)
+	if relay != nil {
+		ended += relay.Revoke(authorize)
+	}
+	if fwd != nil {
+		ended += fwd.splices.revoke(authorize)
+	}
+	if ended > 0 {
+		log.Printf("allowlist changed: ended %d connection(s) it no longer admits", ended)
+	}
 }
 
 // SignOut leaves the tailnet, deregisters the node and forgets the admin
@@ -949,6 +1009,7 @@ func (n *Node) subnetTCP(src, dst netip.AddrPort) (handler func(net.Conn), inter
 			return
 		}
 		defer r.Close()
+		defer n.splices.add(net.TCPAddrFromAddrPort(src), c, r)()
 		log.Printf("subnet %s -> %s: connected", src, dst)
 		done := make(chan struct{}, 2)
 		go func() { io.Copy(r, c); closeWrite(r); done <- struct{}{} }()

@@ -46,6 +46,8 @@ type Device struct {
 	Serial   string    `json:"serial"`
 	Version  string    `json:"version"`
 	LastSeen time.Time `json:"last_seen"`
+
+	announced netip.Addr // an ip= that differs from the sender, logged once
 }
 
 // parseAnnouncement turns a 4O3A discovery datagram into a Device at the
@@ -83,7 +85,7 @@ func parseAnnouncement(b []byte, src netip.Addr, port int) (Device, bool) {
 		return Device{}, false
 	}
 	if a, err := netip.ParseAddr(kv["ip"]); err == nil && a != ip {
-		log.Printf("discovery: %s from %s announces ip=%s; using the sender's address", d.Kind, ip, a)
+		d.announced = a // logged by note when the device is first listed
 	}
 	d.IP = ip.String()
 	d.Port = port
@@ -197,6 +199,9 @@ func (d *Discovery) note(dev Device) {
 	d.mu.Unlock()
 	if changed {
 		log.Printf("discovery: %s %q at %s", dev.Kind, dev.Name, dev.IP)
+		if dev.announced.IsValid() {
+			log.Printf("discovery: %s at %s announces ip=%s; using the sender's address", dev.Kind, dev.IP, dev.announced)
+		}
 		if d.OnChange != nil {
 			d.OnChange()
 		}

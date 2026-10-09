@@ -30,6 +30,8 @@ type Forwarder struct {
 
 	mu     sync.Mutex
 	active map[int]*sideChannel
+
+	splices liveSplices // transfers in progress, for revocation
 }
 
 func (f *Forwarder) window() time.Duration {
@@ -107,7 +109,7 @@ func (f *Forwarder) serve(port int, sc *sideChannel) {
 			wg.Wait()
 			return
 		}
-		if !f.admits(port, c.RemoteAddr()) {
+		if !f.claim(port, c.RemoteAddr()) {
 			log.Printf("side channel %d: refused %s: not the session that asked for it", port, c.RemoteAddr())
 			c.Close()
 			continue
@@ -139,8 +141,11 @@ func (f *Forwarder) Forget(session uint64) {
 	}
 }
 
-// admits reports whether remote belongs to a session the port was opened for.
-func (f *Forwarder) admits(port int, remote net.Addr) bool {
+// claim admits remote if a session at its address has an unused grant on
+// the port, and uses that grant up: each announced transfer admits one
+// connection, so when the radio reuses a port for another computer's
+// transfer, the first can't take the second's.
+func (f *Forwarder) claim(port int, remote net.Addr) bool {
 	ap, ok := addrPortOf(remote)
 	if !ok {
 		return false
@@ -151,8 +156,9 @@ func (f *Forwarder) admits(port int, remote net.Addr) bool {
 	if sc == nil {
 		return false
 	}
-	for _, c := range sc.clients {
+	for id, c := range sc.clients {
 		if c == ap.Addr() {
+			delete(sc.clients, id)
 			return true
 		}
 	}
@@ -175,6 +181,7 @@ func (f *Forwarder) splice(port int, c net.Conn) {
 		return
 	}
 	defer r.Close()
+	defer f.splices.add(c.RemoteAddr(), c, r)()
 	done := make(chan struct{}, 2)
 	var up, down int64
 	go func() { up, _ = io.Copy(r, c); closeWrite(r); done <- struct{}{} }()
@@ -182,6 +189,55 @@ func (f *Forwarder) splice(port int, c net.Conn) {
 	<-done
 	<-done
 	log.Printf("side channel %d: %s done (%d bytes to radio, %d from radio)", port, c.RemoteAddr(), up, down)
+}
+
+// liveSplices tracks open splices by the tailnet caller that opened them,
+// so a narrowed allowlist can end the ones it no longer admits.
+type liveSplices struct {
+	mu sync.Mutex
+	m  map[*liveSplice]struct{}
+}
+
+type liveSplice struct {
+	from  net.Addr
+	conns []net.Conn
+}
+
+// add records a splice and returns the func that forgets it.
+func (l *liveSplices) add(from net.Addr, conns ...net.Conn) (remove func()) {
+	sp := &liveSplice{from: from, conns: conns}
+	l.mu.Lock()
+	if l.m == nil {
+		l.m = map[*liveSplice]struct{}{}
+	}
+	l.m[sp] = struct{}{}
+	l.mu.Unlock()
+	return func() {
+		l.mu.Lock()
+		delete(l.m, sp)
+		l.mu.Unlock()
+	}
+}
+
+// revoke closes every splice whose caller authorize now refuses, and
+// reports how many it closed.
+func (l *liveSplices) revoke(authorize func(net.Addr) (string, bool)) int {
+	l.mu.Lock()
+	all := make([]*liveSplice, 0, len(l.m))
+	for sp := range l.m {
+		all = append(all, sp)
+	}
+	l.mu.Unlock()
+	n := 0
+	for _, sp := range all {
+		if _, ok := authorize(sp.from); !ok {
+			for _, c := range sp.conns {
+				c.Close()
+			}
+			n++
+		}
+	}
+	return n
 }
 
 func closeWrite(c net.Conn) {

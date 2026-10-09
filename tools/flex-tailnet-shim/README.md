@@ -43,8 +43,9 @@ AetherSDR (tailnet peer)                       radio container (host network nam
     Link telemetry).
 - **Identity:** every connection is checked with Tailscale `WhoIs`. `-allow`
   limits access to listed logins or tags, on the radio, station devices and
-  side channels alike; a side channel is open only to the computer whose
-  transfer opened it. The shim listens only on its own tailnet ports, so the
+  side channels alike. Each announced side channel admits one connection,
+  from the computer whose transfer opened it. Saving a narrower list ends the
+  open sessions, transfers and device connections it no longer admits. The shim listens only on its own tailnet ports, so the
   radio's other services, such as its SSH, are not exposed, and a shared
   route never splices into the radio's own addresses.
 - **Teardown (Principle VI):** when either side ends, the shim closes the radio
@@ -152,7 +153,7 @@ sessions. AetherSDR polls it every 2 s for the Network Diagnostics window.
 | `shim_cpu_pct`, `shim_rss_kb`, `mtu_clamp` | The container's own load, and the `network_mtu` it injects |
 | `sessions[].streams[]` | Per VITA-49 stream, counted as datagrams leave the radio, before the tunnel: `packets`, `gaps` (missed packets) and `breaks` (sequence discontinuities, the unit AetherSDR's own stream counters use) |
 | `sessions[].to_client_failures` | Datagrams the shim could not send into the tunnel |
-| `sessions[].from_other_sources` | Datagrams that reached the session's radio-side socket from anything but the radio, dropped. Nonzero on a session with no VITA-49 means the radio's own source address went unrecognised. `/v1/status` on the LAN also names a recent sender (`last_rejected_source`); the tailnet report doesn't |
+| `sessions[].from_other_sources` | Datagrams that reached the session's radio-side socket from anything but the radio, dropped. Nonzero on a session with no VITA-49 means the radio's own source address went unrecognised. AetherSDR doesn't display it; read it from this report or `/v1/status`, which on the LAN also names a recent sender (`last_rejected_source`) |
 
 AetherSDR subtracts the radio-side break rate from the rate it sees itself,
 so the remainder is what the tunnel added.

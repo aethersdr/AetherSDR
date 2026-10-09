@@ -316,10 +316,10 @@ container.
   (`WhoIs`) against that list before passing it to the radio or to a shared
   station device. A file transfer's side channel is open only to the
   computer that asked for the transfer.
-- The list is checked when a connection opens. Removing someone with **Save
-  Access List** stops their next connection, not one already open. To cut
-  off a session now, use **Sign Out of Tailnet**, or remove their machine
-  in the admin console.
+- **Save Access List** takes effect at once. Anyone no longer on the list
+  is disconnected from the radio, which ends anything they were
+  transmitting, and their file transfers and station-device connections
+  are closed. (Container 0.4.1 and later.)
 - Shared devices never reach the radio itself. A route wide enough to
   include the radio's own address doesn't make the radio's ports reachable
   through it.
