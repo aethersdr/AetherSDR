@@ -2774,8 +2774,11 @@ MainWindow::~MainWindow()
         }
         QThread* wisdomThread = m_nr2WisdomThread;
         QObject::disconnect(wisdomThread, nullptr, this, nullptr);
-        if (!wisdomThread->wait(QDeadlineTimer(1000))) {
-            trace.fail("fftw_plan_in_flight");   // a plan can't be interrupted
+        // Unbounded, unlike the 3 s joins below: a running FFTW plan can't be
+        // interrupted, and deleting a running QThread aborts. 1 s only
+        // decides whether the log marks the wait as an in-flight plan.
+        if (!wisdomThread->wait(1000)) {
+            trace.fail("fftw_plan_in_flight");
             wisdomThread->wait();
         }
         delete wisdomThread;
