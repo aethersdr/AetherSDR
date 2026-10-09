@@ -14,17 +14,9 @@ applies_to: ["RTL-SDR"]
 
 AetherSDR can use an RTL-SDR USB dongle as a receiver. Support is **experimental and receive-only**: one slice on one panadapter, demodulated on this computer. FlexRadio remains the supported target (see [Supported Radios](./supported-radios.md)).
 
-## Where to go next
-
-- [Panadapter Controls](./panadapter-controls.md): FFT AVG, Black Level and NB Blank on the dongle's panadapter.
-- [RX Controls](./rx-controls.md): modes, filters and squelch.
-- [DSP Noise Mitigation](./dsp-noise-mitigation.md): client-side noise reduction.
-- [Memory Channels](./memory-channels.md): stored on this computer.
-- [Building from Source](./building-from-source.md): building with the RTL-SDR backend.
-
 ## Requirements
 
-The RTL-SDR backend is built only when the `librtlsdr` library is available, so whether your copy of AetherSDR has it depends on the package. If **Connect by IP → Radio type:** has no **RTL-SDR (USB)** entry, and no dongle ever appears in the radio list, your build does not include it. The Windows installer is built without it ([#5800](https://github.com/aethersdr/AetherSDR/issues/5800)).
+Official AppImage, macOS DMG and Windows release packages require the RTL-SDR backend and bundle its RTL-SDR, USB and FFTW libraries. A developer build can omit it. If **Connect by IP → Radio type:** has no **RTL-SDR (USB)** entry, and no dongle ever appears in the radio list, your build does not include it. Packaging does not install a USB driver or Linux device-access rules.
 
 Building from source: the `ENABLE_RTL` option is on by default and takes effect when both `librtlsdr` and single-precision FFTW (`fftw3f`) are found. See [Building from Source](./building-from-source.md).
 
@@ -41,12 +33,32 @@ Building from source: the `ENABLE_RTL` option is on by default and takes effect 
 - **Sample rates** up to 3.0 MS/s; 2.4 MS/s is the default.
 - **Browsing the capture:** pan around the captured bandwidth and your slice keeps its frequency and settings. A slice that falls outside the usable capture is parked (silent) and resumes when it fits again.
 - **Zoom** uses a continuous 65,536-point FFT, which gives 36.6 Hz bins at 2.4 MS/s.
-- **FM and FM-N** have symmetric filters, 48 kHz audio and their own squelch. Squelch exists only in FM and FM-N; its level is a signal-level gate in dBFS per bin, not calibrated dBm.
+- **FM and FM-N** have symmetric filters, 48 kHz audio and their own squelch. Squelch exists only in FM and FM-N; its manual threshold is a signal-level gate in dBFS per 2048-point detector bin, not calibrated dBm. **AUTO** follows a nearby noise estimate inside each receiver, independently of display zoom and FFT averaging. Its margin is 5–20 dB (default 10 dB). The SQL threshold line is not drawn against the differently scaled display FFT.
 - **Confirmed settings:** a change is shown only after the dongle confirms it, so a refused setting never becomes a saved one.
 - Manual **Black Level**, waterfall **NB Blank** and **FFT AVG** work on the panadapter. See [Panadapter Controls](./panadapter-controls.md).
 - **Tools → Radio Health...** shows the dongle's status.
 
-Only one receiver is available, even though the capture is wide.
+Normal launches admit **one receiver**, even though the capture is wide.
+
+### Broadcast FM
+
+Select **WFM** to use the **Broadcast FM** applet. It shows the selected slice letter and confirmed frequency. **Mono / Auto Stereo**, **De-emphasis** (50 or 75 µs) and **Bandwidth** belong to that receiver. **Auto Stereo** falls back to mono without a detected stereo pilot. The observed pilot status is separate from your selected audio mode; parking clears observations while retaining the controls.
+
+### Receive meters
+
+The RTL receive meter reports relative RF peak-bin level in **dBFS**, not calibrated antenna dBm or audio level. **Settings → Radio Setup... → RTL Receiver → Enable receive meters** turns these updates on or off. Turning them off clears the readout; reception, squelch and audio continue.
+
+### Sending receive audio to another program
+
+Use the [TCI Server](./tci-server.md) on Linux, macOS or Windows. On Linux and macOS, [DAX Virtual Audio](./dax-virtual-audio.md) can also export receive audio when the build includes WebSockets support. DAX input 1 follows TCI receiver 0, and the applet shows its slice assignment. Linux DAX is mono; macOS DAX and stereo TCI retain left and right WFM audio. Speaker volume and mute do not change either export; receiver squelch still applies.
+
+[AetherModem](./aethermodem-packet-radio.md) can decode packets from the selected RTL slice. For VHF APRS, choose **FM** or **FM-N** and **1200 baud**. The modem follows slice selection; it has no fixed-source selector or APRS-IS gateway.
+
+### Multi-receiver evaluation
+
+The process-only evaluation setting admits 2, 4 or 8 receivers on Linux x86-64, Windows x64 and macOS arm64. It requires both `AETHER_AUTOMATION=1` and `AETHER_RTL_EVALUATION_RECEIVERS=2`, `4` or `8` at launch; it is not saved and cannot resize a running session. Use an isolated settings profile for evaluation. It does **not** change the one-receiver production limit or qualify a platform for sustained multi-receiver use.
+
+FM, FM-N and analog WFM can share the capture in this evaluation. Each receiver retains its frequency, filter, squelch and audio controls when parked. Selecting another slice does not retune the capture or change its audio settings. AM, SAM, USB, LSB, CW and CW-R remain singleton configurations, even if another configured receiver is parked. See the [evaluation procedure](https://github.com/aethersdr/AetherSDR/blob/main/docs/rtl-multirx-analog.md) for the validation boundaries.
 
 ## Reference
 
@@ -58,6 +70,7 @@ Only one receiver is available, even though the capture is wide.
 |---------|-----|
 | **Frequency correction:** | Your dongle's crystal error in ppm (−1000 to +1000). Click **Apply frequency correction** to send it. |
 | **Suppress IQ DC** | Removes the spike at the centre of the capture. Off by default. |
+| **Enable receive meters** | Enables relative RF meter updates. On by default. |
 | **Device serial** | The serial number the dongle reports. |
 
 The page shows the values the dongle actually applied and whether they were saved. Corrections are saved per dongle serial number. A dongle that reports no serial keeps its corrections for the current session only.
@@ -71,8 +84,8 @@ Frequency, mode, passband, sample rate and RF gain are saved per dongle, keyed b
 ### Not available on an RTL-SDR
 
 - Transmit.
-- DAX, SmartLink or Multi-Flex.
-- More than one slice or panadapter.
+- DAX transmit, DAX IQ, SmartLink or Multi-Flex.
+- More than one receiver in a normal launch, or more than one panadapter.
 
 ## Known issues
 
@@ -111,6 +124,10 @@ The dongle's crystal is off.
 
 ## See also
 
+- [RX Controls](./rx-controls.md)
+- [DAX Virtual Audio](./dax-virtual-audio.md)
+- [TCI Server](./tci-server.md)
+- [AetherModem Packet Radio](./aethermodem-packet-radio.md)
 - [Supported Radios](./supported-radios.md)
 - [Building from Source](./building-from-source.md)
 - [Panadapter Controls](./panadapter-controls.md)

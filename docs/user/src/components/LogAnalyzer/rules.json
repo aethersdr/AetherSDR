@@ -9,7 +9,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7713,
+          "line": 7770,
           "text": "else if (key == \"model\")"
         }
       ]
@@ -21,7 +21,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7722,
+          "line": 7779,
           "text": "else if (key == \"software_ver\")"
         }
       ]
@@ -94,7 +94,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7451,
+          "line": 7502,
           "text": "\"RadioModel: terminal GUI client registration failure\""
         }
       ]
@@ -111,12 +111,12 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7381,
+          "line": 7432,
           "text": "RadioModel: this GUI client was force-disconnected by another client"
         },
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7425,
+          "line": 7476,
           "text": "RadioModel: radio disconnected this session because another GUI client used the same ID"
         }
       ]
@@ -133,7 +133,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7291,
+          "line": 7342,
           "text": "RadioModel: multiFLEX disabled, other clients present"
         }
       ]
@@ -167,7 +167,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 8416,
+          "line": 8473,
           "text": "consecutive pings unanswered — forcing disconnect"
         }
       ]
@@ -193,7 +193,7 @@
         },
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7722,
+          "line": 7779,
           "text": "else if (key == \"software_ver\")"
         }
       ]
@@ -210,7 +210,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7610,
+          "line": 7667,
           "text": "RadioModel: no VITA-49 UDP data received after 10s"
         }
       ]
@@ -227,7 +227,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7588,
+          "line": 7645,
           "text": "RadioModel: UDP stream setup failed"
         },
         {
@@ -237,7 +237,7 @@
         },
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7663,
+          "line": 7720,
           "text": "RadioModel: client udpport collision"
         }
       ]
@@ -354,12 +354,12 @@
       "source": [
         {
           "file": "src/core/AudioEngine.cpp",
-          "line": 4279,
+          "line": 4280,
           "text": "AudioEngine: failed to open RX audio sink on any negotiated format"
         },
         {
           "file": "src/core/AudioEngine.cpp",
-          "line": 4315,
+          "line": 4316,
           "text": "AudioEngine: QAudioSink stopped with error, not auto-restarting RX"
         }
       ]
@@ -376,17 +376,17 @@
       "source": [
         {
           "file": "src/core/AudioEngine.cpp",
-          "line": 8767,
+          "line": 8876,
           "text": "AudioEngine: no audio input device available"
         },
         {
           "file": "src/core/AudioEngine.cpp",
-          "line": 8998,
+          "line": 9107,
           "text": "AudioEngine: failed to open audio source at"
         },
         {
           "file": "src/core/AudioEngine.cpp",
-          "line": 9050,
+          "line": 9159,
           "text": "AudioEngine: all TX source formats failed"
         }
       ]
@@ -425,12 +425,12 @@
         },
         {
           "file": "src/core/PipeWireAudioBridge.cpp",
-          "line": 232,
+          "line": 236,
           "text": "PipeWireAudioBridge: pactl failed:"
         },
         {
           "file": "src/core/PipeWireAudioBridge.cpp",
-          "line": 146,
+          "line": 147,
           "text": "PipeWireAudioBridge: failed to create RX pipe"
         },
         {
@@ -452,12 +452,12 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 1334,
+          "line": 1335,
           "text": "RadioModel: dax_rx stream create for channel"
         },
         {
           "file": "src/core/backends/flex/PanadapterStream.cpp",
-          "line": 1766,
+          "line": 1790,
           "text": "stream create failed/dropped"
         }
       ]
@@ -474,7 +474,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 12671,
+          "line": 12733,
           "text": "RadioModel: DAX TX create failed"
         }
       ]
@@ -491,12 +491,12 @@
       "source": [
         {
           "file": "src/models/DaxIqModel.cpp",
-          "line": 351,
+          "line": 353,
           "text": "DaxIqWorker: pactl load-module failed for IQ ch"
         },
         {
           "file": "src/models/DaxIqModel.cpp",
-          "line": 360,
+          "line": 362,
           "text": "DaxIqWorker: cannot open IQ pipe"
         }
       ]
@@ -547,7 +547,7 @@
       "source": [
         {
           "file": "src/gui/SpectrumWidget.cpp",
-          "line": 12879,
+          "line": 13049,
           "text": "\"SpectrumWidget: QRhi failure:\""
         },
         {
@@ -574,7 +574,7 @@
       "source": [
         {
           "file": "src/gui/SpectrumWidget.cpp",
-          "line": 1977,
+          "line": 1995,
           "text": "SpectrumWidget: AETHER_NO_GPU/QT_OPENGL=software"
         }
       ]
@@ -608,7 +608,7 @@
       "source": [
         {
           "file": "src/main.cpp",
-          "line": 84,
+          "line": 85,
           "text": "Non-fatal X11 error suppressed (error_code="
         }
       ]
@@ -713,7 +713,7 @@
       "source": [
         {
           "file": "src/core/AudioEngine.cpp",
-          "line": 7603,
+          "line": 7712,
           "text": "AudioEngine: NR2 FFTW wisdom unavailable on enable;"
         }
       ]
@@ -890,7 +890,7 @@
       "source": [
         {
           "file": "src/core/backends/hl2/Hl2Backend.cpp",
-          "line": 2731,
+          "line": 2736,
           "text": "HL2: could not open the UDP socket"
         }
       ]

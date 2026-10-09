@@ -102,9 +102,9 @@ The **SQL** button cycles through three states:
   own scale. On radios where Auto SQL is not available, a slice set to AUTO
   drops to manual at its manual level.
 
-> **Upgrading from an older version:** AetherSDR no longer saves the squelch
-> level between sessions. On connect, each slice uses the level the radio
-> reports.
+On RTL-SDR FM/FM-N, **AUTO** uses each receiver's own detector noise estimate, independently of panadapter zoom, FFT averaging or whether the applet is visible. Manual SQL uses dBFS per 2048-point detector bin; its threshold line is suppressed because the display FFT has a different scale. Manual and Auto settings are saved per RTL receiver, and Auto does not overwrite the manual threshold. WFM does not expose this FM/FM-N squelch control.
+
+> **Upgrading from an older version:** FlexRadio squelch levels come from the radio at connection. For RTL-SDR, explicitly choose **AUTO** after upgrading to enable the receiver-owned Auto policy; an older display-Auto preference does not enable it.
 
 ### AGC
 

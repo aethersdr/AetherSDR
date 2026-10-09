@@ -127,11 +127,39 @@ int main(int argc, char** argv)
     check(!caps.canCreateSlices, "RTL-SDR retains its fixed single receiver in P01");
     check(caps.family == "rtl", "capabilities.family is rtl");
     check(!caps.canTransmit, "RTL-SDR cannot transmit");
+    check(caps.receiveAudioExport && caps.receiveAudioExport->maximumReceivers == caps.maxSlices
+              && caps.receiveAudioExport->sampleRatesHz.contains(24000)
+              && caps.receiveAudioExport->sampleRatesHz.contains(48000),
+          "RTL declares its typed native receive audio export independently of TX/IQ");
+    check(!caps.hasDaxStreams,"native receive export does not advertise Flex DAX/IQ streams");
+
     check(caps.txPowerMaxWatts == 0.0, "RTL-SDR max TX power is 0");
     check(!caps.hostModulates, "RTL-SDR does not modulate on host");
     check(caps.maxSlices == 1, "RTL-SDR maxSlices is 1");
     check(caps.maxPanadapters == 1, "RTL-SDR maxPanadapters is 1");
     check(!caps.persistsMemories, "RTL-SDR does not persist memories on device");
+
+#if (defined(Q_OS_LINUX) && defined(Q_PROCESSOR_X86_64)) \
+    || (defined(Q_OS_MAC) && defined(Q_PROCESSOR_ARM_64)) \
+    || (defined(Q_OS_WIN) && defined(Q_PROCESSOR_X86_64))
+    qputenv("AETHER_RTL_EVALUATION_RECEIVERS", "8");
+    qunsetenv("AETHER_AUTOMATION");
+    { rtl::RtlSdrBackend normal; check(normal.capabilities().maxSlices == 1, "eight requires explicit evaluation environment"); }
+    qputenv("AETHER_AUTOMATION", "1");
+    {
+        rtl::RtlSdrBackend eight;
+        const auto evaluationCaps = eight.capabilities();
+        check(evaluationCaps.maxSlices == 8 && evaluationCaps.canCreateSlices,
+              "eight-receiver evaluation is advertised");
+        check(evaluationCaps.receiveAudioExport && evaluationCaps.receiveAudioExport->maximumReceivers == 8,
+              "eight-receiver native DAX export is advertised");
+        check(!evaluationCaps.canTransmit, "eight-receiver evaluation remains receive-only");
+    }
+    qputenv("AETHER_RTL_EVALUATION_RECEIVERS", "9");
+    { rtl::RtlSdrBackend invalid; check(invalid.capabilities().maxSlices == 1, "unsupported evaluation capacity is refused"); }
+    qunsetenv("AETHER_RTL_EVALUATION_RECEIVERS");
+    qunsetenv("AETHER_AUTOMATION");
+#endif
 
     // Check ClientSettingsDomains
     check(caps.clientSettingsDomains.testFlag(RadioCapabilities::ClientSettingsDomain::Tuning),

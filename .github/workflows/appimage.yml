@@ -112,7 +112,7 @@ jobs:
             libgstreamer-plugins-bad1.0-0 \
             libfuse2 file desktop-file-utils imagemagick \
             python3-pip autoconf automake libtool libasound2-dev \
-            libfftw3-dev libhidapi-dev portaudio19-dev \
+            libfftw3-dev libudev-dev libhidapi-dev portaudio19-dev \
             libsecret-1-dev
 
       # glslc — the SPIR-V shader compiler whisper's Vulkan backend needs at
@@ -251,6 +251,9 @@ jobs:
         # pure Qt-D-Bus backend talks to KDE Wallet / GNOME Keyring at runtime.
         run: bash scripts/setup/setup-qtkeychain.sh
 
+      - name: Build pinned RTL dependencies (including float FFTW)
+        run: bash scripts/setup/setup-rtl-deps.sh
+
       - name: Configure
         run: |
           # Without pipefail the step's exit status is tee's, so a cmake failure
@@ -258,6 +261,7 @@ jobs:
           # (which also implies -eo pipefail) so the guard is self-contained and
           # survives anyone editing the step's shell.
           set -o pipefail
+          export PKG_CONFIG_PATH="$PWD/third_party/rtl-deps/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
           # -g on top of Release's -O3: GCC's code generation does not depend
           # on it, so the shipped code is unchanged. The DWARF is split off
           # before packaging and attached to the release as its own archive
@@ -266,6 +270,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             "-DCMAKE_C_FLAGS_RELEASE=-O3 -DNDEBUG -g" \
             "-DCMAKE_CXX_FLAGS_RELEASE=-O3 -DNDEBUG -g" \
+            -DENABLE_RTL=ON -DREQUIRE_RTL=ON \
             -DCMAKE_INSTALL_PREFIX=/usr \
             -DREQUIRE_SERIALPORT=ON \
             -DREQUIRE_KEYCHAIN=ON \
@@ -275,7 +280,7 @@ jobs:
             -DAETHER_GPU_SPECTRUM=${{ matrix.gpu_spectrum }} \
             -DMQTT_TLS=OFF \
             -DENABLE_NVIDIA_AFX=ON \
-            -DCMAKE_PREFIX_PATH="$QT_ROOT" 2>&1 | tee configure.log
+            -DCMAKE_PREFIX_PATH="$PWD/third_party/rtl-deps;$QT_ROOT" 2>&1 | tee configure.log
 
       # AETHER_GPU_SPECTRUM=ON is a request, not a guarantee: CMake silently
       # flips it back OFF if Qt6GuiPrivate can't be located, and CMakeLists.txt
@@ -321,6 +326,8 @@ jobs:
           convert AppDir/usr/share/icons/hicolor/256x256/apps/aethersdr.png \
             -resize 256x256 AppDir/usr/share/icons/hicolor/256x256/apps/aethersdr.png
 
+          mkdir -p AppDir/usr/share/aethersdr
+          cp -R third_party/rtl-deps/share/aethersdr-rtl-sources AppDir/usr/share/aethersdr/
           # Bundle DeepFilterNet3 model for DFNR
           if [ -f third_party/deepfilter/models/DeepFilterNet3_onnx.tar.gz ]; then
             cp third_party/deepfilter/models/DeepFilterNet3_onnx.tar.gz \
@@ -389,7 +396,7 @@ jobs:
           wget -q https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-${{ matrix.arch }}.AppImage
           chmod +x linuxdeploy-${{ matrix.arch }}.AppImage linuxdeploy-plugin-qt-${{ matrix.arch }}.AppImage
 
-      - name: Build AppImage
+      - name: Deploy AppDir dependencies
         env:
           QT_SELECT: qt6
           # EXTRA_QT_PLUGINS is the deprecated alias of EXTRA_QT_MODULES and
@@ -406,13 +413,6 @@ jobs:
           # which the "Install to AppDir" step above does.
           EXTRA_PLATFORM_PLUGINS: libqwayland.so
         run: |
-          # Sanitize the ref for the output filename: a workflow_dispatch on a
-          # branch like "ci/appimage-qtkeychain" puts a '/' in github.ref_name,
-          # which breaks mksquashfs ("Could not create destination file"). Tag
-          # pushes (v26.6.x) are already slash-free; this mirrors the
-          # sanitization windows-installer.yml already applies.
-          SAFE_REF="${GITHUB_REF_NAME//[^A-Za-z0-9._-]/_}"
-          export LDAI_OUTPUT="AetherSDR-${SAFE_REF}-${{ matrix.arch }}.AppImage"
           # linuxdeploy-plugin-qt locates the Qt to bundle via $QMAKE. This is
           # the third place that used to hardcode the x86_64 ".../gcc_64" path;
           # it now reuses the QT_ROOT exported by the aqt step, so there is one
@@ -423,13 +423,18 @@ jobs:
           # libsherpa-onnx-c-api.so, and libonnxruntime.so (the app links sherpa's
           # copy). Qt6 DBus, which the keychain backend needs at runtime, is pulled
           # in transitively.
-          export LD_LIBRARY_PATH="${{ github.workspace }}/third_party/qtkeychain/lib:${{ github.workspace }}/third_party/onnxruntime/lib:${{ github.workspace }}/third_party/sherpa-onnx/lib:${LD_LIBRARY_PATH:-}"
+          export LD_LIBRARY_PATH="${{ github.workspace }}/third_party/rtl-deps/lib:${{ github.workspace }}/third_party/qtkeychain/lib:${{ github.workspace }}/third_party/onnxruntime/lib:${{ github.workspace }}/third_party/sherpa-onnx/lib:${LD_LIBRARY_PATH:-}"
+          # Official RTL builds ship the pinned libusb despite linuxdeploy's
+          # excludelist. Stage its matching SONAME before the dependency walk.
+          python3 tools/stage_rtl_appimage.py third_party/rtl-deps AppDir
           ./linuxdeploy-${{ matrix.arch }}.AppImage \
             --appdir AppDir \
             --plugin qt \
             --desktop-file AppDir/usr/share/applications/AetherSDR.desktop \
-            --icon-file AppDir/usr/share/icons/hicolor/256x256/apps/aethersdr.png \
-            --output appimage
+            --icon-file AppDir/usr/share/icons/hicolor/256x256/apps/aethersdr.png
+
+      - name: Validate RTL AppDir runtime closure
+        run: python3 tools/check_rtl_package.py AppDir --platform linux
 
       # Nothing else in the build would notice these plugins going missing: Qt
       # dlopen()s them at runtime rather than linking them, so no dependency walk
@@ -486,6 +491,28 @@ jobs:
           fi
           echo "Wayland integration plugin dirs:"
           find "$plugins" -maxdepth 1 -type d -name 'wayland-*' | sort
+
+      - name: Build AppImage
+        run: |
+          # Branch refs contain slashes, which cannot appear in the output name.
+          SAFE_REF="${GITHUB_REF_NAME//[^A-Za-z0-9._-]/_}"
+          export LDAI_OUTPUT="AetherSDR-${SAFE_REF}-${{ matrix.arch }}.AppImage"
+          # linuxdeploy scans dependencies again when generating the image.
+          # Prefer the staged closure and retain the original build prefixes.
+          export LD_LIBRARY_PATH="$PWD/AppDir/usr/lib:$PWD/third_party/rtl-deps/lib:$PWD/third_party/qtkeychain/lib:$PWD/third_party/onnxruntime/lib:$PWD/third_party/sherpa-onnx/lib:${LD_LIBRARY_PATH:-}"
+          ./linuxdeploy-${{ matrix.arch }}.AppImage --appdir AppDir --output appimage
+
+      - name: Validate RTL runtime in the completed AppImage
+        run: |
+          set -euo pipefail
+          SAFE_REF="${GITHUB_REF_NAME//[^A-Za-z0-9._-]/_}"
+          image="$PWD/AetherSDR-${SAFE_REF}-${{ matrix.arch }}.AppImage"
+          audit_dir=$(mktemp -d)
+          trap 'rm -rf "$audit_dir"' EXIT
+          (cd "$audit_dir" && "$image" --appimage-extract > /dev/null)
+          python3 tools/check_rtl_package.py "$audit_dir/squashfs-root" --platform linux
+          cmp AppDir/usr/lib/libusb-1.0.so.0 "$audit_dir/squashfs-root/usr/lib/libusb-1.0.so.0"
+          sha256sum "$audit_dir/squashfs-root/usr/lib/libusb-1.0.so.0"
 
       # The archive is only worth attaching if its build IDs are the ones the
       # AppImage actually ships, so read them back from the packaged binaries.

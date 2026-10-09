@@ -127,6 +127,7 @@ TCI audio is sent and received as binary frames on the same WebSocket.
 
 - **Audio doesn't flow until the client asks for it** with `audio_start:<receiver>;`.
 - **PC Audio does not need to be on.** On a FlexRadio, TCI receive audio comes from DAX channels that the TCI server claims for itself; your speaker volume and mute don't affect it. On other radios it comes straight from the slice.
+- RTL-SDR receive audio follows the stable receiver map and remains independent of speaker gain and mute; receiver squelch still applies. Normal launches offer one RTL receiver. Extra receivers belong to the [process-only evaluation](./rtl-sdr.md#multi-receiver-evaluation), not a higher production limit. RTL has no transmit or IQ export.
 - If a client reconnects more than 10 seconds later, its receive audio is re-bound to the right DAX channels automatically.
 - TX audio from a client is resampled from the rate the client declares, so 8, 12 and 24 kHz programs are not mis-pitched.
 

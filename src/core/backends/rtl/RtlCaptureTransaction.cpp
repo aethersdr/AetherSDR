@@ -242,6 +242,8 @@ RtlCaptureTransaction::Submission RtlCaptureTransaction::submit(const Desired& d
             || receiver.audioGain < 0 || receiver.audioGain > 100
             || receiver.audioPan < 0 || receiver.audioPan > 100
             || receiver.squelchLevel < 0 || receiver.squelchLevel > 100
+            || receiver.automaticSquelchMarginDb < 5 || receiver.automaticSquelchMarginDb > 20
+            || (receiver.automaticSquelch && !receiver.squelchEnabled)
             || (receiver.wfmDeemphasisUs != 50 && receiver.wfmDeemphasisUs != 75)
             || (receiver.squelchEnabled && receiver.mode != Mode::Fm && receiver.mode != Mode::Fmn)) {
             return {{}, Policy::Error::InvalidNumber};

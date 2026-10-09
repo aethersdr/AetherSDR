@@ -92,6 +92,10 @@ public:
     // local automation bridge's `tci routes` action.
     QJsonObject routingSnapshot() const;
 
+    // Owner-thread projection of the live native receive route. Valid while
+    // its revocation token is current, independently of listener state.
+    TciRxBinding sliceRxBinding(int sliceId) const;
+
     // (ownsDaxChannel() and the cross-consumer peeking it existed for were
     // replaced by per-consumer holds in PanadapterStream's centralized DAX
     // channel manager — see acquireDaxChannel/releaseDaxChannel. #3305)
@@ -162,6 +166,7 @@ public slots:
 
 signals:
     void clientCountChanged(int count);
+    void rxBindingsChanged();
     // Fired whenever the client list or any client's subscriptions change
     // (connect, disconnect, audio start/stop). The TCI tab repopulates on
     // this signal.

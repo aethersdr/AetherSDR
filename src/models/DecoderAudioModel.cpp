@@ -41,6 +41,16 @@ struct DecoderAudioModel::Impl {
     std::shared_ptr<Inbox> inbox;
     DecoderPcmAdapter adapter;
 
+    const char* consumerName() const
+    {
+        switch (consumer) {
+        case Consumer::Cw: return "CW";
+        case Consumer::Rtty: return "RTTY";
+        case Consumer::Ax25: return "AX.25";
+        }
+        return "Decoder";
+    }
+
     void setRouteStatus(RouteStatus status)
     {
         if (routeStatus == status) {
@@ -58,19 +68,23 @@ struct DecoderAudioModel::Impl {
         if (status == RouteStatus::SharedRxAudio) {
             // Not a warning: with no DAX assignment this is the ordinary Flex
             // path and the decoder still runs, just on the shared mix.
-            qCInfo(lcDsp) << (consumer == Consumer::Cw ? "CW" : "RTTY")
+            qCInfo(lcDsp) << consumerName()
                             << "receive decoder: no DAX RX channel assigned to the selected slice;"
                             << "decoding the shared receive audio (speaker gain and mute apply)";
         } else if (status == RouteStatus::DaxTransportUnavailable) {
-            qCWarning(lcDsp) << (consumer == Consumer::Cw ? "CW" : "RTTY")
+            qCWarning(lcDsp) << consumerName()
                             << "receive decoder: selected DAX transport unavailable; no input route";
         }
     }
 
     PanadapterStream::DaxConsumer daxConsumer() const
     {
-        return consumer == Consumer::Cw ? PanadapterStream::DaxConsumer::CwDecoder
-                                        : PanadapterStream::DaxConsumer::RttyDecoder;
+        switch (consumer) {
+        case Consumer::Cw: return PanadapterStream::DaxConsumer::CwDecoder;
+        case Consumer::Rtty: return PanadapterStream::DaxConsumer::RttyDecoder;
+        case Consumer::Ax25: return PanadapterStream::DaxConsumer::Ax25Decoder;
+        }
+        Q_UNREACHABLE();
     }
 
     void closeInbox()

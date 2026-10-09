@@ -1837,6 +1837,7 @@ RadioCapabilities Hl2Backend::capabilities() const
         {QStringLiteral("AM"), -12000, -10, 10, 12000, 20, 24000},
         {QStringLiteral("SAM"), -12000, -10, 10, 12000, 20, 24000}}};
     c.receiveAudioControl = ReceiveAudioControl{SliceFrequencyControl::Authority::Engine};
+    c.receiveAudioExport = std::nullopt; // native DAX export not qualified for this backend
     c.receivePanCenterControl = ReceivePanRangeControl{SliceFrequencyControl::Authority::Engine,
                                                       100'000, 38'400'000};
     c.receivePanBandwidthControl = std::nullopt; // radio-wide rate can retire other receivers
@@ -3154,6 +3155,9 @@ ReceiveDispatch Hl2Backend::requestSliceDsp(int sliceId, const SliceDspRequest& 
 
 ReceiveDispatch Hl2Backend::requestSliceSquelch(int sliceId, const SliceSquelchRequest& request)
 {
+    if (request.kind != SliceSquelchRequest::Kind::Manual) {
+        return ReceiveDispatch::Unsupported;
+    }
     if (!request.valid() || !rx(ddcForSlice(sliceId))) {
         return ReceiveDispatch::Unsupported;
     }

@@ -1,5 +1,6 @@
 #include "DaxApplet.h"
 #include "MeterSlider.h"
+#include "ControlAvailabilityRegistry.h"
 #include "SliceLabel.h"
 #include "core/AppSettings.h"
 #include "core/ThemeManager.h"
@@ -117,6 +118,7 @@ void DaxApplet::buildUI()
         row->addWidget(chLabel);
 
         m_daxRxStatus[i] = new QLabel(QStringLiteral("\u2014"));
+        m_daxRxStatus[i]->setObjectName(QStringLiteral("daxRxStatus%1").arg(i+1));
         m_daxRxStatus[i]->setStyleSheet(kStatusLabel);
         m_daxRxStatus[i]->setFixedWidth(40);
         m_daxRxStatus[i]->setTextFormat(Qt::RichText);  // slice letter may be HTML (#2606)
@@ -202,9 +204,16 @@ void DaxApplet::setRadioModel(RadioModel* model)
         return;
     }
 
+    auto* availability = new ControlAvailabilityRegistry(*model,this);
+    availability->registerWidget(m_daxTxMeter,tr("DAX transmit audio is unavailable on this receive-only radio."),
+        [](bool connected,const RadioCapabilities& caps) {
+            return !connected || (caps.canTransmit && caps.hasDaxStreams);
+        });
+
     // Wire slice add/remove for DAX channel tracking
     connect(model, &RadioModel::sliceAdded, this, [this](SliceModel* s) {
         connect(s, &SliceModel::daxChannelChanged, this, [this]() {
+            if (m_nativeReceiveRouting) { return; }
             // Update DAX status labels
             for (int i = 0; i < kChannels; ++i) {
                 m_daxRxStatus[i]->setText(QStringLiteral("\u2014"));
@@ -244,6 +253,23 @@ void DaxApplet::setRadioModel(RadioModel* model)
         updateTxLabel();
     });
     updateTxLabel();
+}
+
+void DaxApplet::setNativeReceiveRouting(bool native)
+{
+    if (m_nativeReceiveRouting == native) { return; }
+    m_nativeReceiveRouting = native;
+    for (int channel = 1; channel <= kChannels; ++channel) {
+        setReceiveChannelSlice(channel,nullptr);
+    }
+}
+
+void DaxApplet::setReceiveChannelSlice(int channel, SliceModel* slice)
+{
+    if (channel < 1 || channel > kChannels || !m_daxRxStatus[channel-1]) { return; }
+    m_daxRxStatus[channel-1]->setText(slice
+        ? tr("Slice %1").arg(SliceLabel::richText(slice->sliceId(),slice->letter()))
+        : QStringLiteral("—"));
 }
 
 void DaxApplet::setDaxEnabled(bool on)

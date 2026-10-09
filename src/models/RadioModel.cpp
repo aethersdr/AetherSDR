@@ -10107,8 +10107,13 @@ void RadioModel::dispatchSliceWfm(const SliceWfmRequest& request)
 void RadioModel::dispatchSliceSquelch(const SliceSquelchRequest& request)
 {
     if (SliceModel* source = receiveCommandSource()) {
-        reportReceiveDispatch(m_backend->requestSliceSquelch(source->sliceId(), request),
-                              QStringLiteral("receive squelch"));
+        const std::optional<SquelchLevelScale> sql = m_backend->capabilities().squelchLevelScale;
+        const bool automaticAllowed = request.kind != SliceSquelchRequest::Kind::Automatic
+            || (sql && sql->automaticInEngine && sql->appliesTo(source->mode())
+                && !source->externalReceiveReplacementActive());
+        reportReceiveDispatch(automaticAllowed
+            ? m_backend->requestSliceSquelch(source->sliceId(), request)
+            : ReceiveDispatch::Unsupported, QStringLiteral("receive squelch"));
     }
 }
 
@@ -10160,8 +10165,8 @@ void RadioModel::wireSliceObservationsAndTxIntentToBackend(SliceModel* s)
     // a Flex arrives as a status echo and here has no other way of happening.
     connect(s, &SliceModel::activeSliceCommandIssued, this,
             [this, s]() {
-        if (m_backend) m_backend->setActiveSlice(s->sliceId());
-    });
+        if (receiveCommandSource() == s) { m_backend->setActiveSlice(s->sliceId()); }
+    }, Qt::DirectConnection);
 }
 
 void RadioModel::setBackendForTest(std::unique_ptr<IRadioBackend> backend,

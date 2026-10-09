@@ -64,5 +64,10 @@ third_party/qtkeychain-build/
 # never be tracked or show up as untracked noise in the parent checkout.
 .worktrees/
 
+# Built pinned RTL dependency prefix and intermediate files
+third_party/rtl-deps/
+third_party/macos-deps/
+.rtl-deps-build/
+
 # macOS Finder metadata
 .DS_Store

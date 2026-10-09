@@ -3,19 +3,19 @@ title: "DAX Virtual Audio"
 slug: "/dax-virtual-audio"
 description: "DAX (Digital Audio eXchange) creates virtual audio devices on your computer that digital-mode programs (WSJT-X, fldigi, JS8Call, VARA and others) use as their sound card."
 status: "Supported"
-applies_to: ["FlexRadio"]
+applies_to: ["FlexRadio", "RTL-SDR (experimental, receive-only)"]
 platforms: ["Linux", "macOS"]
 ---
 
 :::info[Status]
 
-**Status:** Supported · **Applies to:** FlexRadio · **Platforms:** Linux, macOS
+**Status:** Supported · **Applies to:** FlexRadio, RTL-SDR (experimental, receive-only) · **Platforms:** Linux, macOS
 
 :::
 
 DAX (Digital Audio eXchange) creates virtual audio devices on your computer that digital-mode programs (WSJT-X, fldigi, JS8Call, VARA and others) use as their sound card. Receive audio flows from a slice to the program, and the program's transmit audio flows back to the radio, all through AetherSDR with no cables.
 
-DAX is a **FlexRadio** feature. On other radio families the DAX applet, menu entry and overlay button are hidden; use the [TCI Server](./tci-server.md) for audio there.
+FlexRadio provides receive and transmit DAX. RTL-SDR provides experimental **receive-only** DAX on Linux and macOS; see [RTL-SDR receive audio](#rtl-sdr-receive-audio). On radios without an audio-export route, use the [TCI Server](./tci-server.md).
 
 ## Requirements
 
@@ -34,7 +34,7 @@ DAX is a **FlexRadio** feature. On other radio families the DAX applet, menu ent
 
 ### Assigning a slice to a DAX channel
 
-The radio sends a slice's audio to the DAX channel set on that slice. Choose it on the slice's **VFO widget → DAX tab** (**DAX Ch**). The channel list follows the radio's capacity, and a slice on a channel the radio cannot back shows **Off**.
+On FlexRadio, the radio sends a slice's audio to the DAX channel set on that slice. Choose it on the slice's **VFO widget → DAX tab** (**DAX Ch**). The channel list follows the radio's capacity, and a slice on a channel the radio cannot back shows **Off**.
 
 The panadapter overlay's **DAX** flyout is for IQ instead: it holds **IQ Ch** and the **WFM** button (see [DAX IQ Streaming](./dax-iq-streaming.md)).
 
@@ -49,11 +49,21 @@ Stale devices left by a crash are cleaned up the next time DAX starts.
 
 ## Using DAX
 
+### RTL-SDR receive audio
+
+Turn on **DAX Audio** and select the matching **AetherSDR DAX n** input in your program. Native receive export requires a build with WebSockets support. Input 1 follows TCI receiver 0, input 2 follows receiver 1, and so on; the applet displays the assigned slice. These assignments do not use the FlexRadio **DAX Ch** selector, and neither a running TCI listener nor a connected TCI client is required.
+
+Speaker gain and mute do not alter exported audio. Receiver squelch still applies, and the DAX row has its own gain. Linux exports mono at 48 kHz; macOS exports stereo at 24 kHz through the installed DAX driver. Use stereo TCI when stereo WFM is required on Linux. RTL creates no TX endpoint and the TX control is unavailable.
+
+The normal RTL limit remains one receiver. Additional inputs are for the process-only [multi-receiver evaluation](./rtl-sdr.md#multi-receiver-evaluation). An older four-input macOS driver must be updated separately before evaluating all eight inputs; building AetherSDR does not update an installed driver.
+
 ### Transmit audio
 
-When a digital program transmits in a digital mode (DIGU, DIGL), its audio from **AetherSDR TX** goes to the radio. Voice modes use your microphone. You don't switch anything by hand.
+On FlexRadio, when a digital program transmits in a digital mode (DIGU, DIGL), its audio from **AetherSDR TX** goes to the radio. Voice modes use your microphone. You don't switch anything by hand.
 
 ### Wiring WSJT-X (Linux and macOS)
+
+This transmit-capable setup applies to FlexRadio.
 
 1. Put the slice in **DIGU** and set its DAX channel to **1**.
 2. Turn DAX on, and turn on a **Rigctld** CAT port (see [CAT Control](./cat-control.md)).
@@ -82,7 +92,7 @@ Give each program its own DAX channel and its own CAT port (with a different **V
 
 ### Devices
 
-AetherSDR offers **up to eight RX channels plus one TX channel**. The number of RX channels follows the connected radio's slice capacity (for example 8 on a FLEX-6700, 4 on a FLEX-6600 or 8600, 2 on a FLEX-6300 or 6400). Rows and devices above that number are not shown.
+For FlexRadio, AetherSDR offers **up to eight RX channels plus one TX channel**. The number of RX channels follows the connected radio's slice capacity (for example 8 on a FLEX-6700, 4 on a FLEX-6600 or 8600, 2 on a FLEX-6300 or 6400). Rows and devices above that number are not shown.
 
 | Device | Direction | Purpose |
 |---|---|---|
@@ -109,7 +119,7 @@ Each RX row shows **DAX n:**, the slice currently assigned to that channel (or "
 
 The slice has no DAX channel, or the program is reading a different device.
 
-1. On the slice's **VFO widget → DAX tab**, set a **DAX Ch**.
+1. On FlexRadio, set a **DAX Ch** on the slice's **VFO widget → DAX tab**. On RTL-SDR, check the automatic slice assignment shown in the DAX applet.
 2. In the program, choose the matching **AetherSDR DAX n** input.
 3. On Linux, `pactl list source-outputs` shows which device each program is reading.
 

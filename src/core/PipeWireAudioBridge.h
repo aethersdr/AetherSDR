@@ -25,6 +25,7 @@ class PipeWireNativeRxSource;
 // Works with both PulseAudio and PipeWire (via pipewire-pulse).
 class PipeWireAudioBridge : public QObject {
     Q_OBJECT
+    friend class PipeWireRxBridgeTest;
 
 public:
     static constexpr int NUM_CHANNELS    = 8;
@@ -32,6 +33,7 @@ public:
     static constexpr int PIPE_RATE       = 48000;  // matches PipeWire graph rate — avoids in-graph resampler
     static constexpr int PIPE_CHANNELS   = 1;      // mono — ham radio DAX is single-channel
     static constexpr int PIPE_KERNEL_BUF = 4096;   // ~21 ms at 48 kHz mono float32 — bounds kernel FIFO buffering
+    static constexpr int NATIVE_RX_KERNEL_BUF = 65536; // ~341 ms: bounded decoded-audio bursts
     static constexpr int TX_RATE         = 24000;  // TX sink stays at radio-native rate (s16le mono)
     static constexpr int TX_CHANNELS     = 1;
 
@@ -43,12 +45,14 @@ public:
     // NUM_CHANNELS stays the compile-time array bound; this only bounds the
     // open loop so the device list follows the radio (#4854). Dynamic resize
     // after connect is a follow-up (issue #4935).
-    bool open(int activeChannels = NUM_CHANNELS);
+    // receiveOnly opens no TX endpoint and never polls application TX audio.
+    bool open(int activeChannels = NUM_CHANNELS, bool receiveOnly = false);
+    bool isReceiveOnly() const { return m_receiveOnly; }
     void close();
     bool isOpen() const { return m_open; }
 
     void setGain(float g);                     // global gain (all RX channels)
-    void setChannelGain(int channel, float g);  // per-channel RX gain (1-4)
+    void setChannelGain(int channel, float g);  // per-channel RX gain (1-8)
     void setTxGain(float g);                    // TX gain
     float gain() const { return m_gain; }
     void setTxContext(const TxCoordinator::Context& context);
@@ -56,6 +60,7 @@ public:
 public slots:
     void feedDaxAudio(int channel, const QByteArray& pcm);
     void setTransmitting(bool tx);
+    void resetRxChannel(int channel);
 
 signals:
     void txAudioReady(const QByteArray& pcm, const AetherSDR::TxCoordinator::Context& context);
@@ -64,12 +69,14 @@ signals:
 
 private:
     bool loadPipeSource(int index);
+    bool openRxDrain(int index, const QString& pipePath);
     bool loadPipeSink();
     void unloadModules();
 
-    // RX: we write int16 mono PCM to these pipes → PulseAudio reads them
+    // RX: we write float32 mono PCM to these pipes → PulseAudio reads them
     struct RxPipe {
         int fd{-1};
+        int drainFd{-1};
         uint32_t moduleIndex{0};
         QString pipePath;
     };
@@ -98,6 +105,7 @@ private:
     // Teardown loops still walk the full NUM_CHANNELS bound — closing an
     // unopened slot is a no-op. (#4854)
     int m_activeChannels{NUM_CHANNELS};
+    bool m_receiveOnly{false};
     float m_gain{0.5f};
     // m_channelGain is read on PanadapterStream's network thread (DirectConnection
     // fast path) and written from the main thread (DaxApplet slider).  Float

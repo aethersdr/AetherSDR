@@ -193,7 +193,7 @@ jobs:
           # bakes in that nothing downstream can correct, so a 14.0 tree must
           # never restore into a 12.0 build — that would silently recreate the
           # bug this change exists to remove.
-          key: macos-deps-${{ matrix.label }}-deploy${{ matrix.deploy_target }}-${{ hashFiles('scripts/setup/setup-macos-deps.sh') }}
+          key: macos-deps-${{ matrix.label }}-deploy${{ matrix.deploy_target }}-${{ hashFiles('scripts/setup/setup-macos-deps.sh', 'scripts/setup/setup-rtl-deps.sh', 'scripts/setup/rtl-dependencies.json') }}
 
       # ~8 min cold, then cached until the script or the target changes — the
       # same deal third_party/qtkeychain already has. That cost buys the DMG a
@@ -371,6 +371,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             "-DCMAKE_C_FLAGS_RELEASE=-O3 -DNDEBUG -g" \
             "-DCMAKE_CXX_FLAGS_RELEASE=-O3 -DNDEBUG -g" \
+            -DENABLE_RTL=ON -DREQUIRE_RTL=ON \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DCMAKE_OSX_DEPLOYMENT_TARGET="${{ matrix.deploy_target }}" \
@@ -487,6 +488,9 @@ jobs:
           "$DEPLOYQT" build/AetherSDR.app \
             -verbose=1 \
             -always-overwrite
+          mkdir -p build/AetherSDR.app/Contents/Resources
+          cp -R third_party/macos-deps/share/aethersdr-rtl-sources build/AetherSDR.app/Contents/Resources/
+          python3 tools/check_rtl_package.py build/AetherSDR.app --platform macos
 
       # The artifact-side half of the pin. Everything upstream of here asserts
       # what we *asked* for; this asserts what the DMG actually carries, which
@@ -667,6 +671,12 @@ jobs:
 
           echo "DAX driver PKG v${APP_VERSION} built and signed"
 
+      - name: Name DMG artifact
+        run: |
+          # Branch dispatches contain slashes; preserve release tag filenames.
+          SAFE_REF="${GITHUB_REF_NAME//[^A-Za-z0-9._-]/_}"
+          echo "DMG_FILENAME=AetherSDR-${SAFE_REF}-macOS-${{ matrix.label }}.dmg" >> "$GITHUB_ENV"
+
       - name: Create DMG
         run: |
           mkdir -p dmg-stage
@@ -692,7 +702,7 @@ jobs:
             --hide-extension "AetherSDR.app" \
             --app-drop-link 450 120 \
             --icon "AetherSDR DAX Drivers.pkg" 450 290 \
-            "AetherSDR-${{ github.ref_name }}-macOS-${{ matrix.label }}.dmg" \
+            "$DMG_FILENAME" \
             "dmg-stage/" \
           || true
 
@@ -705,7 +715,7 @@ jobs:
           # no DMG on disk, and we surface that immediately instead of
           # letting Sign DMG fail confusingly one step later. See the v26.6.1
           # release-build chain for the exact symptom this guard catches.
-          DMG="AetherSDR-${{ github.ref_name }}-macOS-${{ matrix.label }}.dmg"
+          DMG="$DMG_FILENAME"
           if [ ! -f "$DMG" ]; then
             echo "::error::create-dmg did not produce $DMG"
             exit 1
@@ -717,7 +727,7 @@ jobs:
         run: |
           codesign --force --timestamp \
             --sign "Developer ID Application" \
-            AetherSDR-${{ github.ref_name }}-macOS-${{ matrix.label }}.dmg
+            "$DMG_FILENAME"
 
       - name: Notarize DMG
         env:
@@ -726,7 +736,7 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           xcrun notarytool submit \
-            AetherSDR-${{ github.ref_name }}-macOS-${{ matrix.label }}.dmg \
+            "$DMG_FILENAME" \
             --apple-id "$APPLE_ID" \
             --password "$APPLE_APP_PASSWORD" \
             --team-id "$APPLE_TEAM_ID" \
@@ -744,7 +754,7 @@ jobs:
           fi
 
           xcrun stapler staple \
-            AetherSDR-${{ github.ref_name }}-macOS-${{ matrix.label }}.dmg
+            "$DMG_FILENAME"
           echo "Notarization and stapling complete"
 
       # Read the UUIDs back from the signed bundle the DMG was made from: the

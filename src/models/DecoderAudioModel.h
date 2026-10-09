@@ -18,7 +18,7 @@ class SliceModel;
 class DecoderAudioModel final : public QObject {
     Q_OBJECT
 public:
-    enum class Consumer { Cw, Rtty };
+    enum class Consumer { Cw, Rtty, Ax25 };
     // Bound means an input subscription exists, not that PCM has arrived.
     // SharedRxAudio is bound too: a DAX-capable radio with no channel assigned
     // to the selected slice decodes the radio's shared receive stream instead,
