@@ -151,6 +151,7 @@ threshold is never replaced with a computed Auto threshold by the new engine.
 
 TCI already consumes the typed per-slice 48 kHz PCM route for RTL. This is a
 source-level route audit, not eight-client throughput or RadioReference service
-qualification. RTL does not advertise Flex DAX streams; its virtual DAX and
-DAX-IQ paths are not supplied by this change. RadioReference/Broadcastify
+qualification. RTL does not advertise Flex DAX streams or DAX-IQ. Its native receive-only
+DAX export on Linux/macOS follows the shared TCI receiver map; see
+[native DAX receive](native-dax-receive.md). RadioReference/Broadcastify
 publishing still requires a separately validated external streaming workflow.

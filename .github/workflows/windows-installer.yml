@@ -290,7 +290,7 @@ jobs:
           # native command), so a configure failure still fails this step —
           # the reason the bash legs need `set -o pipefail` and this one does
           # not.
-          cmake -B build -G "Ninja" -DCMAKE_BUILD_TYPE=RelWithDebInfo -DENABLE_HD_FM=OFF -DENABLE_RTL=ON -DREQUIRE_RTL=ON -DMQTT_TLS=OFF -DREQUIRE_KEYCHAIN=ON -DREQUIRE_SERIALPORT=ON -DREQUIRE_ASR_ONNX=ON -DREQUIRE_ASR_SHERPA=ON -DREQUIRE_ASR_GPU=ON -DAETHER_GPU_SPECTRUM=ON -DCMAKE_PREFIX_PATH="$env:VULKAN_SDK" -DENABLE_NVIDIA_AFX=ON -DCMAKE_TOOLCHAIN_FILE="$env:CMAKE_TOOLCHAIN_FILE" -DVCPKG_TARGET_TRIPLET="$env:VCPKG_TARGET_TRIPLET" | Tee-Object -FilePath configure.log
+          cmake -B build -G "Ninja" -DCMAKE_BUILD_TYPE=RelWithDebInfo -DENABLE_RTL=ON -DREQUIRE_RTL=ON -DMQTT_TLS=OFF -DREQUIRE_KEYCHAIN=ON -DREQUIRE_SERIALPORT=ON -DREQUIRE_ASR_ONNX=ON -DREQUIRE_ASR_SHERPA=ON -DREQUIRE_ASR_GPU=ON -DAETHER_GPU_SPECTRUM=ON -DCMAKE_PREFIX_PATH="$env:VULKAN_SDK" -DENABLE_NVIDIA_AFX=ON -DCMAKE_TOOLCHAIN_FILE="$env:CMAKE_TOOLCHAIN_FILE" -DVCPKG_TARGET_TRIPLET="$env:VCPKG_TARGET_TRIPLET" | Tee-Object -FilePath configure.log
 
       # AETHER_GPU_SPECTRUM=ON is a request, not a guarantee: CMake flips it
       # back OFF without failing when Qt6GuiPrivate can't be located, and

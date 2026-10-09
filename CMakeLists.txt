@@ -2819,17 +2819,10 @@ else()
     message(STATUS "RTL-SDR ... disabled — librtlsdr not found")
 endif()
 
-# The optional decoder is a separate feature proposal (RFC #6079).
-# Reserve the explicitly OFF option name for the separate experimental Digital FM PR.
-option(ENABLE_HD_FM "Build experimental embedded digital FM" OFF)
-if(ENABLE_HD_FM)
-    message(FATAL_ERROR "Digital FM is not included in the analog RTL submission. See RFC #6079; configure with -DENABLE_HD_FM=OFF.")
-endif()
-
 include(cmake/AetherRequireRtl.cmake)
 aether_require_rtl()
 
-# Stage RTL independently of the optional NR4 and Digital FM features.
+# Stage RTL independently of the optional NR4 feature.
 if(WIN32 AND AETHER_BACKEND_RTL)
     foreach(_rtl_dll
             "${CMAKE_SOURCE_DIR}/third_party/rtl-deps/bin/rtlsdr.dll"

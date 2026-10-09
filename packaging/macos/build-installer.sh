@@ -15,7 +15,7 @@ echo "=== Building AetherSDR macOS installer v${VERSION} ==="
 export MACOS_DEPLOYMENT_TARGET="${MACOS_DEPLOYMENT_TARGET:-14.0}"
 bash scripts/setup/setup-macos-deps.sh
 export PKG_CONFIG_PATH="$PWD/third_party/macos-deps/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
-cmake -B "${BUILD_DIR}" -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DENABLE_HD_FM=OFF -DENABLE_RTL=ON -DREQUIRE_RTL=ON -DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOS_DEPLOYMENT_TARGET" -DCMAKE_PREFIX_PATH="$PWD/third_party/macos-deps;${CMAKE_PREFIX_PATH:-}"
+cmake -B "${BUILD_DIR}" -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DENABLE_RTL=ON -DREQUIRE_RTL=ON -DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOS_DEPLOYMENT_TARGET" -DCMAKE_PREFIX_PATH="$PWD/third_party/macos-deps;${CMAKE_PREFIX_PATH:-}"
 cmake --build "${BUILD_DIR}" -j$(sysctl -n hw.ncpu)
 
 # 1b. Build HAL plugin (separate build because libASPL FetchContent conflicts with main Ninja build)

@@ -270,7 +270,6 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             "-DCMAKE_C_FLAGS_RELEASE=-O3 -DNDEBUG -g" \
             "-DCMAKE_CXX_FLAGS_RELEASE=-O3 -DNDEBUG -g" \
-            -DENABLE_HD_FM=OFF \
             -DENABLE_RTL=ON -DREQUIRE_RTL=ON \
             -DCMAKE_INSTALL_PREFIX=/usr \
             -DREQUIRE_SERIALPORT=ON \
@@ -502,6 +501,18 @@ jobs:
           # Prefer the staged closure and retain the original build prefixes.
           export LD_LIBRARY_PATH="$PWD/AppDir/usr/lib:$PWD/third_party/rtl-deps/lib:$PWD/third_party/qtkeychain/lib:$PWD/third_party/onnxruntime/lib:$PWD/third_party/sherpa-onnx/lib:${LD_LIBRARY_PATH:-}"
           ./linuxdeploy-${{ matrix.arch }}.AppImage --appdir AppDir --output appimage
+
+      - name: Validate RTL runtime in the completed AppImage
+        run: |
+          set -euo pipefail
+          SAFE_REF="${GITHUB_REF_NAME//[^A-Za-z0-9._-]/_}"
+          image="$PWD/AetherSDR-${SAFE_REF}-${{ matrix.arch }}.AppImage"
+          audit_dir=$(mktemp -d)
+          trap 'rm -rf "$audit_dir"' EXIT
+          (cd "$audit_dir" && "$image" --appimage-extract > /dev/null)
+          python3 tools/check_rtl_package.py "$audit_dir/squashfs-root" --platform linux
+          cmp AppDir/usr/lib/libusb-1.0.so.0 "$audit_dir/squashfs-root/usr/lib/libusb-1.0.so.0"
+          sha256sum "$audit_dir/squashfs-root/usr/lib/libusb-1.0.so.0"
 
       # The archive is only worth attaching if its build IDs are the ones the
       # AppImage actually ships, so read them back from the packaged binaries.

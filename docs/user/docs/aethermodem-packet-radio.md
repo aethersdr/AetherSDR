@@ -3,12 +3,12 @@ title: "AetherModem Packet Radio"
 slug: "/aethermodem-packet-radio"
 description: "AetherModem is AetherSDR's built-in AX.25 packet modem."
 status: "Supported"
-applies_to: ["FlexRadio", "Hermes-Lite 2 (experimental)", "Networked Icom (early; IC-7300MK2 supported)"]
+applies_to: ["FlexRadio", "Hermes-Lite 2 (experimental)", "Networked Icom (early; IC-7300MK2 supported)", "RTL-SDR (experimental, receive-only)"]
 ---
 
 :::info[Status]
 
-**Status:** Supported · **Applies to:** FlexRadio, Hermes-Lite 2 (experimental), Networked Icom (early; IC-7300MK2 supported)
+**Status:** Supported · **Applies to:** FlexRadio, Hermes-Lite 2 (experimental), Networked Icom (early; IC-7300MK2 supported), RTL-SDR (experimental, receive-only)
 
 :::
 
@@ -45,6 +45,12 @@ The 1200-baud receiver uses a Direwolf-derived AFSK demodulator. The 300-baud HF
 Packet length, retry timing and preamble are derived from the baud rate, not fixed values sized for VHF. On HF the packet length defaults to 64 bytes. The 1200-baud preamble is shorter than the HF one; raise it if a transverter's T/R switching clips the start of a burst.
 
 **Tips for receive level:** avoid clipping (peaks around −10 dBFS are fine) and don't chase every missed decode with AF gain once the tones are clearly visible.
+
+### RTL-SDR receive-only packets
+
+On [RTL-SDR](./rtl-sdr.md), the modem decodes the selected slice's audio. For VHF APRS, choose **FM** or **FM-N**, select **1200 baud** and enable **Enable Modem**. The status reports **RX: selected slice**. Speaker mute and volume do not affect this source, but receiver squelch does. Slice selection changes the modem's receive source; there is no fixed-source selector.
+
+Parking, removing or reconfiguring that receiver clears stale decoder input. Decoded packets can populate the APRS table and reach receive consumers such as KISS and MQTT. RTL remains receive-only: beacons, acknowledgements, digipeating and packet transmit are unavailable. APRS-IS gateway operation is not provided.
 
 ## Using AetherModem
 
