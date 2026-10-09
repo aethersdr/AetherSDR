@@ -103,7 +103,7 @@
  },
  "core/AppActivity.h": {
   "tag": "ui-support",
-  "note": "Process-lifetime power/activity hold (App Nap + idle-sleep suppression on macOS, PowerSetRequest + process power-throttling opt-out on Windows); app plumbing, not radio state.",
+  "note": "Process-lifetime activity hold (App Nap opt-out on macOS, process power-throttling opt-out on Windows; never blocks sleep) and startStreamThread(), the High-QoS thread start for stream threads; app plumbing, not radio state.",
   "split": "",
   "confidence": "high"
  },

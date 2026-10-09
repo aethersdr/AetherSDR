@@ -103,7 +103,9 @@ Over SmartLink the radio's audio can be Opus-compressed to save bandwidth.
 
 ### Prevent system sleep
 
-**Prevent system sleep while connected** (off by default) stops the computer idling into sleep while a radio is connected, so long sessions keep their network and audio streams alive.
+**Prevent system sleep while connected** (on by default) stops the computer idling into sleep while a radio is connected, so long sessions keep their network and audio streams alive. It never stops the screen blanking or locking, and closing the lid still sleeps the computer. If you turned it off before, it stays off.
+
+On Linux, GNOME and KDE block only automatic sleep, so choosing **Sleep** from the menu still works. Other desktops, such as Hyprland or Sway, use systemd-logind instead: there, choosing **Sleep** while connected asks for an administrator password, or untick this setting first.
 
 ### Recording settings
 

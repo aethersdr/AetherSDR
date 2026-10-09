@@ -1,4 +1,5 @@
 #include "core/backends/anan/AnanBackend.h"
+#include "core/AppActivity.h"
 #include "core/backends/anan/AnanDroopCalibrator.h"
 #include "core/backends/anan/AnanDroopDefaults.h"
 #include "core/backends/WdspNoiseBlanker.h"
@@ -197,11 +198,7 @@ AnanBackend::AnanBackend(QObject* parent)
     m_ioThread->setObjectName(QStringLiteral("anan-io"));
     m_client->moveToThread(m_ioThread);
     m_dsp->moveToThread(m_ioThread);
-    // High QoS: performance cores, no power throttling (macOS/Windows; no-op
-    // on Linux). Never add setPriority()/start(priority) to this thread — on
-    // macOS an explicit priority silently cancels the QoS class.
-    m_ioThread->setServiceLevel(QThread::QualityOfService::High);
-    m_ioThread->start();
+    AetherSDR::startStreamThread(m_ioThread);   // High QoS; see AppActivity.h
 
     // Build-only thread for a rate change's background DSP rebuild -- see
     // the member declaration comment. m_dspBuildContext owns no state; it
@@ -211,11 +208,10 @@ AnanBackend::AnanBackend(QObject* parent)
     m_dspBuildThread->setObjectName(QStringLiteral("anan-dsp-build"));
     m_dspBuildContext = new QObject();   // nullptr parent: moveToThread requires it
     m_dspBuildContext->moveToThread(m_dspBuildThread);
-    // Same High QoS as the io thread: this thread holds the FFTW planner mutex
-    // the io thread takes in WdspChannel::setShift, so a lower class here would
-    // be a priority inversion. Idle except during a rebuild.
-    m_dspBuildThread->setServiceLevel(QThread::QualityOfService::High);
-    m_dspBuildThread->start();
+    // Same High QoS as the io thread: this one holds the FFTW planner mutex the
+    // io thread takes in WdspChannel::setShift, so lower would be a priority
+    // inversion. Idle except during a rebuild.
+    AetherSDR::startStreamThread(m_dspBuildThread);
 
     // Both live on the I/O thread -- a same-thread call either way, but
     // explicit to document intent and match Hl2Backend's own explicit

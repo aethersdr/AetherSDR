@@ -1,4 +1,5 @@
 #include "core/backends/flex/FlexBackend.h"
+#include "core/AppActivity.h"
 
 #include <algorithm>
 #include <limits>
@@ -47,11 +48,7 @@ FlexBackend::FlexBackend(QObject* parent)
     m_panStream = new PanadapterStream;   // no parent — moved to thread
     m_panStream->moveToThread(m_networkThread);
     connect(m_networkThread, &QThread::started, m_panStream, &PanadapterStream::init);
-    // High QoS: performance cores, no power throttling (macOS/Windows; no-op
-    // on Linux). Never add setPriority()/start(priority) to this thread (RX audio, DAX, IQ) — on
-    // macOS an explicit priority silently cancels the QoS class.
-    m_networkThread->setServiceLevel(QThread::QualityOfService::High);
-    m_networkThread->start();
+    AetherSDR::startStreamThread(m_networkThread);   // High QoS; see AppActivity.h
 
     m_connThread = new QThread(this);
     m_connThread->setObjectName("RadioConnection");

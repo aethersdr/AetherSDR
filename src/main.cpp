@@ -495,9 +495,9 @@ int main(int argc, char* argv[])
     // Shows the system prompt on first launch so it's ready before PTT.
     requestMicrophonePermission();
 
-    // For the life of the app: no idle system sleep, no App Nap (macOS), no
-    // power throttling (Windows), so audio/DAX/TCI keep flowing while the
-    // window is hidden or muted.
+    // For the life of the app: no App Nap (macOS), no power throttling
+    // (Windows), so audio/DAX/TCI keep flowing while the window is hidden or
+    // muted. Sleep stays with "Prevent system sleep while connected".
     AetherSDR::keepAppActive();
 
     // One-shot migration from the double-nested AppConfigLocation

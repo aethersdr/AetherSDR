@@ -5,6 +5,7 @@
 
 #include "MainWindow.h"
 #include "DStarAvailabilityGate.h"
+#include "core/AppActivity.h"
 
 #include "AppletPanel.h"
 #include "Ax25HfPacketDecodeDialog.h"
@@ -503,11 +504,7 @@ void MainWindow::activateRADE(int sliceId)
         m_radeThread->setObjectName("RADEEngine");
         m_radeEngine->moveToThread(m_radeThread);
         connect(m_radeThread, &QThread::finished, m_radeEngine, &QObject::deleteLater);
-        // High QoS: performance cores, no power throttling (macOS/Windows; no-op
-        // on Linux). Never add setPriority()/start(priority) to this thread — on
-        // macOS an explicit priority silently cancels the QoS class.
-        m_radeThread->setServiceLevel(QThread::QualityOfService::High);
-        m_radeThread->start();
+        AetherSDR::startStreamThread(m_radeThread);   // High QoS; see AppActivity.h
     }
     // start() must be invoked on the worker thread
     bool ok = false;

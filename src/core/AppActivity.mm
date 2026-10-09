@@ -11,13 +11,13 @@ void keepAppActive()
     if (activity) {
         return;
     }
-    // NSActivityUserInitiated = no App Nap + no idle system sleep. Shows in
-    // `pmset -g assertions` as PreventUserIdleSystemSleep with this reason.
+    // No App Nap, but idle system sleep is still allowed: sleep is governed
+    // only by "Prevent system sleep while connected" (SleepInhibitor).
     activity = [[[NSProcessInfo processInfo]
-        beginActivityWithOptions:NSActivityUserInitiated
+        beginActivityWithOptions:NSActivityUserInitiatedAllowingIdleSystemSleep
                           reason:@"AetherSDR audio, DAX and TCI streaming"] retain];
     if (activity) {
-        qCInfo(lcAudio) << "AppActivity: App Nap and idle system sleep disabled";
+        qCInfo(lcAudio) << "AppActivity: App Nap disabled (idle sleep still allowed)";
     } else {
         qCWarning(lcAudio) << "AppActivity: beginActivityWithOptions returned nil";
     }

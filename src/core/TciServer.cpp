@@ -1,5 +1,6 @@
 #ifdef HAVE_WEBSOCKETS
 #include "TciServer.h"
+#include "AppActivity.h"
 #include "TciProtocol.h"
 #include "StreamStatus.h"
 #include "AudioEngine.h"
@@ -570,11 +571,7 @@ bool TciServer::start(quint16 requestedPort)
     m_ioThread = std::make_unique<QThread>();
     m_ioThread->setObjectName(QStringLiteral("TciIo"));
     m_io->moveToThread(m_ioThread.get());
-    // High QoS: performance cores, no power throttling (macOS/Windows; no-op
-    // on Linux). Never add setPriority()/start(priority) to this thread — on
-    // macOS an explicit priority silently cancels the QoS class.
-    m_ioThread->setServiceLevel(QThread::QualityOfService::High);
-    m_ioThread->start();
+    AetherSDR::startStreamThread(m_ioThread.get());   // High QoS; see AppActivity.h
     bool started = false;
     quint16 bound = 0;
     QMetaObject::invokeMethod(m_io.get(), [&] {

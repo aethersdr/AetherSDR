@@ -36,28 +36,8 @@ void keepAppActive()
     }
     done = true;
 
-    // No idle system sleep. A power request is its own object (visible in
-    // `powercfg /requests`), so SleepInhibitor's SetThreadExecutionState
-    // reset on disconnect cannot clear it. Never closed: held until exit.
-    // Idle sleep only, and only until the first sleep: Windows ends power
-    // requests on user-initiated sleep (lid, Start > Sleep) and may end them
-    // on Modern Standby laptops on battery. Not re-taken after resume.
-    REASON_CONTEXT reason{};
-    reason.Version = POWER_REQUEST_CONTEXT_VERSION;
-    reason.Flags = POWER_REQUEST_CONTEXT_SIMPLE_STRING;
-    reason.Reason.SimpleReasonString =
-        const_cast<LPWSTR>(L"AetherSDR audio, DAX and TCI streaming");
-    static const HANDLE request = PowerCreateRequest(&reason);
-    bool noSleep = false;
-    if (request == INVALID_HANDLE_VALUE) {
-        qCWarning(lcAudio) << "AppActivity: PowerCreateRequest failed, error"
-                           << GetLastError();
-    } else if (!PowerSetRequest(request, PowerRequestSystemRequired)) {
-        qCWarning(lcAudio) << "AppActivity: PowerSetRequest failed, error"
-                           << GetLastError();
-    } else {
-        noSleep = true;
-    }
+    // Sleep is not touched here: "Prevent system sleep while connected"
+    // (SleepInhibitor) is the only idle-sleep block.
 
     // HighQoS: never run as EcoQoS (efficiency cores, reduced clocks).
     // Each call REPLACES the control mask, so the second call must carry
@@ -79,8 +59,7 @@ void keepAppActive()
     }
 
     // Either call carrying EXECUTION_SPEED leaves HighQoS in effect.
-    qCInfo(lcAudio) << "AppActivity: idle sleep blocked" << noSleep
-                    << "HighQoS" << (speedError == 0 || timerError == 0)
+    qCInfo(lcAudio) << "AppActivity: HighQoS" << (speedError == 0 || timerError == 0)
                     << "timer resolution honoured" << (timerError == 0);
 }
 

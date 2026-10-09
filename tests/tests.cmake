@@ -8806,3 +8806,20 @@ target_include_directories(cw_rx_model_test PRIVATE src)
 target_link_libraries(cw_rx_model_test PRIVATE aethercore Qt6::Core)
 add_test(NAME cw_rx_model_test COMMAND cw_rx_model_test)
 set_tests_properties(cw_rx_model_test PROPERTIES TIMEOUT 15)
+
+# SleepInhibitor Linux backend order (#6192): GNOME/KDE suspend-only inhibit
+# before logind's sleep block; never a screensaver inhibit. No D-Bus calls.
+add_executable(sleep_inhibitor_backend_test
+    tests/sleep_inhibitor_backend_test.cpp
+    src/core/SleepInhibitor.cpp
+)
+target_include_directories(sleep_inhibitor_backend_test PRIVATE src)
+target_link_libraries(sleep_inhibitor_backend_test PRIVATE Qt6::Core)
+if(Qt6DBus_FOUND)
+    target_compile_definitions(sleep_inhibitor_backend_test PRIVATE HAVE_DBUS)
+    target_link_libraries(sleep_inhibitor_backend_test PRIVATE Qt6::DBus)
+endif()
+if(APPLE)
+    target_link_libraries(sleep_inhibitor_backend_test PRIVATE "-framework IOKit" "-framework CoreFoundation")
+endif()
+add_test(NAME sleep_inhibitor_backend_test COMMAND sleep_inhibitor_backend_test)

@@ -169,6 +169,12 @@ public:
     QString versionLabel() const { return m_versionLabel; }
     bool isConnected() const;
 
+    // "Prevent system sleep while connected" (#1420), on unless the operator
+    // turned it off (#6192). Setting it takes or drops the sleep block on the
+    // session already connected, not only from the next connect.
+    static bool sleepInhibitWhileConnected();
+    void setSleepInhibitWhileConnected(bool on);
+
     // Firmware-upload retry barrier (#5572). A dispatched firmware upload has
     // no attempt identifier in the `file update` status, so a late failure from
     // a previous attempt cannot be told apart from a fresh one on the same
