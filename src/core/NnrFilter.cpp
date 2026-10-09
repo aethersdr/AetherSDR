@@ -43,12 +43,6 @@ NnrFilter::NnrFilter(int sampleRate)
     }
 
     m_blockFrames = kBlockFrames;
-    // Each create_nnr() plans two FFTW_PATIENT double-precision transforms
-    // (nnr.c calc_nnr), four per filter, and FFTW's planner is not
-    // thread-safe, so this holds the process-global planner lock (#6287): once
-    // for both channels, so it waits out another holder at most once. Guarded
-    // here, not in vendored WDSP.
-    auto lock = fftwPlannerLock();
     for (int channel = 0; channel < 2; ++channel) {
         if (sampleRate == 24000) {
             m_up[channel] = std::make_unique<Resampler>(24000, kProcessingRate);
@@ -56,22 +50,33 @@ NnrFilter::NnrFilter(int sampleRate)
         }
         m_blockIn[channel].assign(static_cast<std::size_t>(m_blockFrames) * 2, 0.0);
         m_blockOut[channel].assign(static_cast<std::size_t>(m_blockFrames) * 2, 0.0);
+    }
 
-        // run=1: this object's existence IS the enable, so WDSP's own run flag
-        // stays set and AudioEngine simply stops calling process(). position=0
-        // to match the xnnr() call below; there is only one call site here.
-        // cmode=1 zeroes Q, which we discard anyway.
-        m_nnr[channel] = create_nnr(1, 0, m_blockFrames, m_blockIn[channel].data(),
-                                    m_blockOut[channel].data(), kProcessingRate,
-                                    kNetworkRate, kFftSize, kOverlap, kLookahead,
-                                    Nnr::maskFloorForStrength(m_strength.load()), 1);
-        if (!m_nnr[channel]) {
-            lock.unlock();
-            qWarning() << "NnrFilter: create_nnr() failed";
-            return;
+    // Each create_nnr() plans two FFTW_PATIENT double-precision transforms
+    // (nnr.c calc_nnr), four per filter, and FFTW's planner is not
+    // thread-safe, so both calls run under one hold of the process-global
+    // planner lock (#6287): one acquisition per filter, not one per channel.
+    // Guarded here, not in vendored WDSP.
+    //
+    // run=1: this object's existence IS the enable, so WDSP's own run flag
+    // stays set and AudioEngine simply stops calling process(). position=0
+    // to match the xnnr() call below; there is only one call site here.
+    // cmode=1 zeroes Q, which we discard anyway.
+    bool created = true;
+    {
+        auto lock = fftwPlannerLock();
+        for (int channel = 0; channel < 2 && created; ++channel) {
+            m_nnr[channel] = create_nnr(1, 0, m_blockFrames, m_blockIn[channel].data(),
+                                        m_blockOut[channel].data(), kProcessingRate,
+                                        kNetworkRate, kFftSize, kOverlap, kLookahead,
+                                        Nnr::maskFloorForStrength(m_strength.load()), 1);
+            created = m_nnr[channel] != nullptr;
         }
     }
-    lock.unlock();
+    if (!created) {
+        qWarning() << "NnrFilter: create_nnr() failed";
+        return;
+    }
 
     m_appliedModel.store(getModel_nnr(static_cast<NNR>(m_nnr[0])));
     qDebug() << "NnrFilter: initialized at" << sampleRate << "Hz, model slot"

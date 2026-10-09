@@ -42,8 +42,9 @@ namespace AetherSDR {
 // Hold it over allocations as well as plans (#5424's frames were memalign and
 // free). Never around fftw_execute(): thread-safe and on the real-time path.
 // Holds are long (#5895): hundreds of ms for SpectralNR construction, ~0.6 s
-// for a cold NnrFilter (its hold spans calc_nnr's allocations and every model
-// slot it builds, not just the plans), tens of seconds for a cold WdspChannel::open(),
+// for a cold NnrFilter (one hold over both channels' create_nnr, spanning
+// calc_nnr's allocations and every model slot it builds, not just the plans),
+// tens of seconds for a cold WdspChannel::open(),
 // 38.5 s for the worst FFTW_PATIENT plan in generateWisdom(); every other FFTW
 // user waits.
 [[nodiscard]] std::unique_lock<std::mutex> fftwPlannerLock();
