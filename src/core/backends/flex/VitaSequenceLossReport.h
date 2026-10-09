@@ -19,15 +19,24 @@ public:
     // stream torn down and re-created over and over logs no more often.
     void start(qint64 nowMs) { m_windowStartMs = nowMs; m_pending = 0; }
 
-    // Count one sequence error. Returns true when a line is due; the line's
-    // values are then reportErrors() and reportWindowMs().
-    bool recordError(qint64 nowMs)
+    // Whether the next error would report (the interval since the last report
+    // has passed).
+    bool due(qint64 nowMs) const
+    {
+        return m_lastReportMs < 0 || nowMs - m_lastReportMs >= kIntervalMs;
+    }
+
+    // Count one sequence error. Returns true when a line is due and
+    // `mayReport` allows it; the line's values are then reportErrors() and
+    // reportWindowMs(). When `mayReport` is false the error is held like any
+    // other, so it reaches the next line that is logged.
+    bool recordError(qint64 nowMs, bool mayReport = true)
     {
         if (m_windowStartMs < 0) {
             m_windowStartMs = nowMs;
         }
         ++m_pending;
-        if (m_lastReportMs >= 0 && nowMs - m_lastReportMs < kIntervalMs) {
+        if (!due(nowMs) || !mayReport) {
             return false;
         }
         m_reportErrors = m_pending;

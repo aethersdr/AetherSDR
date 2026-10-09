@@ -123,6 +123,17 @@ int main(int argc, char** argv)
     }
 
     {
+        // A line the shared budget refuses is not spent: the error is held and
+        // reaches this stream's next line, which is still due at once.
+        VitaSequenceLossLimiter l;
+        l.start(0);
+        report("refused: a due line is not reported", !l.recordError(100, false));
+        report("refused: the stream's next line is still due", l.due(200));
+        report("refused: the next line reports at once", l.recordError(200));
+        report("refused: it carries the refused error", l.reportErrors() == 2);
+    }
+
+    {
         // All streams together: at most kLinesPerInterval lines per interval,
         // and the next line logged after that says how many were held back.
         VitaSequenceLossBudget b;

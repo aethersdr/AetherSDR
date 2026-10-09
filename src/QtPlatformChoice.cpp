@@ -1,5 +1,7 @@
 #include "QtPlatformChoice.h"
 
+#include <QRegularExpression>
+
 #include <cstring>
 
 namespace AetherSDR {
@@ -11,7 +13,8 @@ QString QtPlatformChoice::firstRequested(const QString& requested)
 }
 
 // "wayland" loads as "wayland" or "wayland-egl", and "wayland-egl" reports
-// itself as "wayland", so a prefix match either way is a hit.
+// itself as "wayland", so a prefix match either way is a hit. The cost: a list
+// such as "minimalegl;minimal" landing on "minimal" is not reported.
 bool QtPlatformChoice::fellBack(const QString& requested, const QString& platformName)
 {
     const QString first = firstRequested(requested);
@@ -42,9 +45,13 @@ std::optional<QString> QtPlatformChoice::platformArgument(int argc, const char* 
     return value;
 }
 
-QStringList QtPlatformChoice::logLines(const QString& requested, QpaRequestSource source,
+QStringList QtPlatformChoice::logLines(const QString& rawRequested, QpaRequestSource source,
                                        const QString& platformName)
 {
+    // The request comes from argv or the environment: a CR or LF in it would
+    // write a second, forged line into the log the Log Analyzer reads.
+    static const QRegularExpression newlines(QStringLiteral("[\\r\\n]+"));
+    const QString requested = QString(rawRequested).replace(newlines, QStringLiteral(" "));
     QStringList lines;
     if (source == QpaRequestSource::CommandLine) {
         lines << QStringLiteral("Platform: Qt platform plugin \"%1\" (-platform %2, on the command line)")

@@ -805,8 +805,12 @@ void PanadapterStream::processDatagram(const QByteArray& data)
                     audioMissedThisPacket =
                         ((vitaSeq - stats.lastSeq - 1) & 0x0F);
                 }
-                if (stats.lossLog.recordError(m_seqLossClock.elapsed())
-                    && m_seqLossBudget.allow(m_seqLossClock.elapsed())) {
+                // The shared budget is asked only when this stream's line is
+                // due; when it says no, the error stays held for the next line.
+                const qint64 nowMs = m_seqLossClock.elapsed();
+                const bool mayReport =
+                    !stats.lossLog.due(nowMs) || m_seqLossBudget.allow(nowMs);
+                if (stats.lossLog.recordError(nowMs, mayReport)) {
                     reportSequenceLoss = true;
                     lossSuppressedLines = m_seqLossBudget.takeSuppressed();
                     lossErrors = stats.lossLog.reportErrors();

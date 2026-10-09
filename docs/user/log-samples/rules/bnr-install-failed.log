@@ -5,4 +5,4 @@
 [09:14:02.140] INF aether.sysinfo: RAM: 32012 MB
 [09:14:02.141] INF aether.sysinfo: Speech engine CPU baseline: x86-64-v3
 [09:14:02.152] DBG default: Starting AetherSDR 26.10.1
-[10:05:37.920] WRN aether.nvafx: NvidiaAfxPack: install failed: extract failed: 
+[10:05:37.920] WRN aether.nvafx: NvidiaAfxPack: install failed: extract failed: tar: unrecognized option '--zstd'

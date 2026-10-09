@@ -33,12 +33,12 @@
       "source": [
         {
           "file": "src/QtPlatformChoice.cpp",
-          "line": 67,
+          "line": 74,
           "text": "Platform: Qt platform plugin \\\"%1\\\" (%2)"
         },
         {
           "file": "src/QtPlatformChoice.cpp",
-          "line": 50,
+          "line": 57,
           "text": "Platform: Qt platform plugin \\\"%1\\\" (-platform"
         }
       ]
@@ -271,7 +271,7 @@
       "source": [
         {
           "file": "src/core/backends/flex/VitaSequenceLossReport.h",
-          "line": 115,
+          "line": 124,
           "text": "PanadapterStream: VITA-49 sequence errors on %1 stream 0x%2: "
         }
       ]
@@ -457,7 +457,7 @@
         },
         {
           "file": "src/core/backends/flex/PanadapterStream.cpp",
-          "line": 1762,
+          "line": 1766,
           "text": "stream create failed/dropped"
         }
       ]
@@ -591,7 +591,7 @@
       "source": [
         {
           "file": "src/QtPlatformChoice.cpp",
-          "line": 70,
+          "line": 77,
           "text": "Platform: Qt fell back from"
         }
       ]

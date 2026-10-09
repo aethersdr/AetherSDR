@@ -67,6 +67,14 @@ int main()
     }
 
     {
+        // A CR or LF in the request cannot forge a second log line.
+        const QStringList l = QtPlatformChoice::logLines(
+            "xcb\n[09:14:02.101] WRN default: forged", QpaRequestSource::User, "xcb");
+        report("newline in the request: one line, no line break",
+               l.size() == 1 && !l.value(0).contains(QLatin1Char('\n'))
+                   && !l.value(0).contains(QLatin1Char('\r')));
+    }
+    {
         // Qt prefers -platform to QT_QPA_PLATFORM: an explicit override is not a fallback.
         const QStringList l = QtPlatformChoice::logLines("minimal", QpaRequestSource::CommandLine, "minimal");
         report("command line override: one line", l.size() == 1);
