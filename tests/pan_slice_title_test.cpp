@@ -5,9 +5,19 @@
 #include <cstdio>
 
 using AetherSDR::PanSliceTitle::SliceOnPan;
+using AetherSDR::PanSliceTitle::displayName;
 using AetherSDR::PanSliceTitle::pick;
 
 static int g_failures = 0;
+
+#define EXPECT_STR(actual, expected) do { \
+    const QString a_ = (actual); const QString e_ = (expected); \
+    if (a_ != e_) { \
+        std::fprintf(stderr, "FAIL %s:%d  expected \"%s\", got \"%s\"\n", \
+                     __FILE__, __LINE__, qPrintable(e_), qPrintable(a_)); \
+        ++g_failures; \
+    } \
+} while (0)
 
 #define EXPECT_EQ(actual, expected) do { \
     const int a_ = (actual); const int e_ = (expected); \
@@ -40,6 +50,12 @@ int main()
     // No slice left on the pan: the title is cleared.
     EXPECT_EQ(pick(p1, 2, 0, {{2, p2}}), -1);
     EXPECT_EQ(pick(p1, -1, -1, {}), -1);
+
+    // The name the docked header and the floating title share: the slice
+    // title when there is one, "Pan <id>" when the pan has no slice.
+    EXPECT_STR(displayName(QString::fromUtf8("Slice A\u2081"), p1),
+               QString::fromUtf8("Slice A\u2081"));
+    EXPECT_STR(displayName(QString(), p2), QStringLiteral("Pan 0x40000001"));
 
     if (g_failures == 0)
         std::printf("pan_slice_title_test: all checks passed\n");

@@ -31,4 +31,11 @@ inline int pick(const QString& panId, int activeSliceId, int shownSliceId,
     return shownHere ? shownSliceId : first;
 }
 
+// The plain-text name for a pan: its slice title, or "Pan <id>" when it has
+// no slice. The docked header and the floating window title both use it.
+inline QString displayName(const QString& sliceTitle, const QString& panId)
+{
+    return sliceTitle.isEmpty() ? QStringLiteral("Pan %1").arg(panId) : sliceTitle;
+}
+
 } // namespace AetherSDR::PanSliceTitle

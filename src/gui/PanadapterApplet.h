@@ -37,7 +37,7 @@ public:
     SpectrumWidget* spectrumWidget() const { return m_spectrum; }
 
     QString panId() const { return m_panId; }
-    void setPanId(const QString& id) { m_panId = id; }
+    void setPanId(const QString& id);
 
     void setSliceId(int id, const QString& perClientLetter = QString());
     void clearSliceTitle();

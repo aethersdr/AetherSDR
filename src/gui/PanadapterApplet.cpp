@@ -1,4 +1,5 @@
 #include "PanadapterApplet.h"
+#include "PanSliceTitle.h"
 #include "models/CwRxModel.h"
 #include "RttyDecodeSettings.h"
 #include "RttyDecoderSensitivity.h"
@@ -101,7 +102,7 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
     AetherSDR::ThemeManager::instance().applyStyleSheet(grip, "QLabel { background: transparent; color: {{color.text.label}}; font-size: 10px; }");
     barLayout->addWidget(grip);
 
-    m_titleLabel = new QLabel("Slice A");
+    m_titleLabel = new QLabel;
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_titleLabel, "QLabel { background: transparent; color: {{color.text.secondary}}; "
                                 "font-size: 10px; font-weight: bold; }");
     m_titleLabel->setTextFormat(Qt::RichText);  // slice letter may be HTML (#2606)
@@ -687,10 +688,19 @@ void PanadapterApplet::setSliceId(int id, const QString& perClientLetter)
     }
 }
 
+void PanadapterApplet::setPanId(const QString& id)
+{
+    m_panId = id;
+    if (m_titleSliceId < 0)
+        m_titleLabel->setText(
+            PanSliceTitle::displayName(QString(), m_panId).toHtmlEscaped());
+}
+
 void PanadapterApplet::clearSliceTitle()
 {
-    m_titleLabel->clear();
     m_titleSliceId = -1;
+    m_titleLabel->setText(
+        PanSliceTitle::displayName(QString(), m_panId).toHtmlEscaped());
     if (!m_sliceTitle.isEmpty()) {
         m_sliceTitle.clear();
         emit sliceTitleChanged();

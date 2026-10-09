@@ -1,4 +1,5 @@
 #include "PanFloatingWindow.h"
+#include "PanSliceTitle.h"
 #include "FramelessResizer.h"
 #include "PanadapterApplet.h"
 #include "Theme.h"
@@ -55,11 +56,8 @@ void PanFloatingWindow::adoptApplet(PanadapterApplet* applet)
 void PanFloatingWindow::refreshWindowTitle()
 {
     if (!m_applet) return;
-    // Use the user-facing slice title (e.g. "Slice A") instead of raw hex pan ID
-    QString title = m_applet->sliceTitle();
-    if (title.isEmpty())
-        title = QString("Pan %1").arg(m_applet->panId());
-    setWindowTitle(QString("AetherSDR — %1").arg(title));
+    setWindowTitle(QString("AetherSDR — %1").arg(
+        PanSliceTitle::displayName(m_applet->sliceTitle(), m_applet->panId())));
 }
 
 QString PanFloatingWindow::panId() const
