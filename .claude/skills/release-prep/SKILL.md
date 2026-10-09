@@ -347,7 +347,11 @@ time:
   ```
 
   It replaces the snapshot, its sidebar and the version label
-  (`docs/user/stable-version.json`); the build is its check. It is its own
+  (`docs/user/stable-version.json`); the build is its check. Every Log
+  Analyzer rule in `docs/user/src/components/LogAnalyzer/rules.json` whose
+  `docs` link starts `/next/` now has a Stable page: drop the `/next` prefix
+  in the same commit (`node tools/docs/test_log_rules.mjs` checks the links),
+  so users of the release land on its docs. It is its own
   commit (`docs(user): Stable docs snapshot for vX.Y.Z. Principle VIII.`),
   and its paths show up as `WARN` extras in step 5: list them in the scope
   table as "docs snapshot". Re-run it when you fold in a PR that changed

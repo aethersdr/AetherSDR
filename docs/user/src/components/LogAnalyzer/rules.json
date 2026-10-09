@@ -33,8 +33,13 @@
       "source": [
         {
           "file": "src/QtPlatformChoice.cpp",
-          "line": 33,
-          "text": "Platform: Qt platform plugin"
+          "line": 59,
+          "text": "Platform: Qt platform plugin \\\"%1\\\" (QT_QPA_PLATFORM="
+        },
+        {
+          "file": "src/QtPlatformChoice.cpp",
+          "line": 48,
+          "text": "Platform: Qt platform plugin \\\"%1\\\" (-platform"
         }
       ]
     }
@@ -266,7 +271,7 @@
       "source": [
         {
           "file": "src/core/backends/flex/VitaSequenceLossReport.h",
-          "line": 57,
+          "line": 62,
           "text": "PanadapterStream: VITA-49 sequence errors on %1 stream 0x%2: "
         }
       ]
@@ -452,7 +457,7 @@
         },
         {
           "file": "src/core/backends/flex/PanadapterStream.cpp",
-          "line": 1714,
+          "line": 1756,
           "text": "stream create failed/dropped"
         }
       ]
@@ -578,7 +583,7 @@
       "id": "qt-platform-fallback",
       "severity": "warning",
       "title": "Qt fell back to another platform plugin",
-      "explanation": "Qt could not load the first platform plugin in QT_QPA_PLATFORM and started with the next one. In a Wayland session that usually means the Qt Wayland plugin is missing, so AetherSDR runs on XWayland. Qt's reason is printed in the terminal, not in AetherSDR's log.",
+      "explanation": "Qt could not load the first platform plugin requested (in QT_QPA_PLATFORM, or in the -platform argument when AetherSDR is started with one) and started with the next one. In a Wayland session that usually means the Qt Wayland plugin is missing, so AetherSDR runs on XWayland. Qt's reason is printed in the terminal, not in AetherSDR's log.",
       "match": {
         "substring": "Platform: Qt fell back from"
       },
@@ -586,7 +591,7 @@
       "source": [
         {
           "file": "src/QtPlatformChoice.cpp",
-          "line": 36,
+          "line": 63,
           "text": "Platform: Qt fell back from"
         }
       ]
@@ -603,7 +608,7 @@
       "source": [
         {
           "file": "src/main.cpp",
-          "line": 83,
+          "line": 84,
           "text": "Non-fatal X11 error suppressed (error_code="
         }
       ]
@@ -774,32 +779,32 @@
         },
         {
           "file": "src/core/NvidiaAfxPack.cpp",
-          "line": 381,
+          "line": 387,
           "text": "NvidiaAfxPack: install failed:"
         },
         {
           "file": "src/core/NvidiaAfxPack.cpp",
-          "line": 709,
+          "line": 715,
           "text": "download failed (%1): %2"
         },
         {
           "file": "src/core/NvidiaAfxPack.cpp",
-          "line": 630,
+          "line": 636,
           "text": "PyPI lookup failed for %1"
         },
         {
           "file": "src/core/NvidiaAfxPack.cpp",
-          "line": 582,
+          "line": 588,
           "text": "simple-index lookup failed for %1"
         },
         {
           "file": "src/core/NvidiaAfxPack.cpp",
-          "line": 706,
+          "line": 712,
           "text": "write failed for %1 (disk full?)"
         },
         {
           "file": "src/core/NvidiaAfxPack.cpp",
-          "line": 661,
+          "line": 667,
           "text": "cannot write cache"
         }
       ]
@@ -816,12 +821,12 @@
       "source": [
         {
           "file": "src/core/NvidiaAfxPack.cpp",
-          "line": 381,
+          "line": 387,
           "text": "NvidiaAfxPack: install failed:"
         },
         {
           "file": "src/core/NvidiaAfxPack.cpp",
-          "line": 716,
+          "line": 722,
           "text": "checksum mismatch for %1 (corrupt or stale mirror)"
         }
       ]
@@ -838,37 +843,37 @@
       "source": [
         {
           "file": "src/core/NvidiaAfxPack.cpp",
-          "line": 381,
+          "line": 387,
           "text": "NvidiaAfxPack: install failed:"
         },
         {
           "file": "src/core/NvidiaAfxPack.cpp",
-          "line": 768,
+          "line": 774,
           "text": "wheel extract failed: %1"
         },
         {
           "file": "src/core/NvidiaAfxPack.cpp",
-          "line": 807,
+          "line": 813,
           "text": "extract failed: %1"
         },
         {
           "file": "src/core/NvidiaAfxPack.cpp",
-          "line": 783,
+          "line": 789,
           "text": "wheel %1 contained no DLLs"
         },
         {
           "file": "src/core/NvidiaAfxPack.cpp",
-          "line": 818,
+          "line": 824,
           "text": "assembled pack missing %1"
         },
         {
           "file": "src/core/NvidiaAfxPack.cpp",
-          "line": 828,
+          "line": 834,
           "text": "could not install into %1"
         },
         {
           "file": "src/core/NvidiaAfxPack.cpp",
-          "line": 849,
+          "line": 855,
           "text": "install verification failed"
         }
       ]

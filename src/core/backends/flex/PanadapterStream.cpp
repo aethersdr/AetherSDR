@@ -448,18 +448,43 @@ void PanadapterStream::registerWfStream(quint32 streamId)
 
 void PanadapterStream::unregisterPanStream(quint32 streamId)
 {
-    QMutexLocker lock(&m_streamMutex);
-    m_knownPanStreams.remove(streamId);
-    m_frames.remove(streamId);
-    m_dbmRanges.remove(streamId);
-    m_pendingDbmRanges.remove(streamId);
+    {
+        QMutexLocker lock(&m_streamMutex);
+        m_knownPanStreams.remove(streamId);
+        m_frames.remove(streamId);
+        m_dbmRanges.remove(streamId);
+        m_pendingDbmRanges.remove(streamId);
+    }
+    restartStreamSequence(streamId);
 }
 
 void PanadapterStream::unregisterWfStream(quint32 streamId)
 {
-    QMutexLocker lock(&m_streamMutex);
-    m_knownWfStreams.remove(streamId);
-    m_wfFrames.remove(streamId);
+    {
+        QMutexLocker lock(&m_streamMutex);
+        m_knownWfStreams.remove(streamId);
+        m_wfFrames.remove(streamId);
+    }
+    restartStreamSequence(streamId);
+}
+
+void PanadapterStream::restartStreamSequence(quint32 streamId)
+{
+    QMutexLocker statsLock(&m_statsMutex);
+    const auto it = m_streamStats.find(streamId);
+    if (it != m_streamStats.end()) {
+        it->lastSeq = -1;
+        it->started = false;
+    }
+}
+
+void PanadapterStream::restartAllStreamSequences()
+{
+    QMutexLocker statsLock(&m_statsMutex);
+    for (auto it = m_streamStats.begin(); it != m_streamStats.end(); ++it) {
+        it->lastSeq = -1;
+        it->started = false;
+    }
 }
 
 void PanadapterStream::clearRegisteredStreams()
@@ -484,6 +509,10 @@ void PanadapterStream::clearRegisteredStreams()
     m_everRegisteredPanStreams.clear();   // new session — re-arm from scratch (#3856)
     m_everRegisteredWfStreams.clear();
     resetAudioStreamStats();
+    // Sequence tracking is keyed by stream id too, and a reconnect can reuse
+    // an id: without this, its first packet is measured against the previous
+    // session's last count and logged as a sequence error.
+    restartAllStreamSequences();
     qCDebug(lcVita49) << "PanadapterStream: cleared all registered streams";
 }
 
@@ -743,14 +772,22 @@ void PanadapterStream::processDatagram(const QByteArray& data)
     // Only track owned/routed streams — skip uncategorized packets. (#455)
     bool sequenceError = false;
     int  audioMissedThisPacket = 0;
-    QString sequenceLossLine;  // logged after the stats lock is released
+    // Filled under the stats lock; formatted and logged after it is released.
+    bool reportSequenceLoss = false;
+    int lossErrors = 0;
+    qint64 lossWindowMs = 0;
+    int lossStreamErrors = 0;
+    int lossStreamPackets = 0;
     if (cat != CatCount) {
         QMutexLocker statsLock(&m_statsMutex);
         m_catStats[cat].bytes += data.size();
         m_catStats[cat].packets++;
         auto& stats = m_streamStats[streamId];
         stats.totalCount++;
-        if (stats.totalCount == 1) {
+        if (!stats.started) {
+            stats.started = true;
+            stats.startErrorCount = stats.errorCount;
+            stats.startTotalCount = stats.totalCount - 1;
             if (!m_seqLossClock.isValid()) {
                 m_seqLossClock.start();
             }
@@ -768,9 +805,11 @@ void PanadapterStream::processDatagram(const QByteArray& data)
                         ((vitaSeq - stats.lastSeq - 1) & 0x0F);
                 }
                 if (stats.lossLog.recordError(m_seqLossClock.elapsed())) {
-                    sequenceLossLine = formatVitaSequenceLoss(
-                        streamCategoryName(cat), streamId, stats.lossLog.reportErrors(),
-                        stats.lossLog.reportWindowMs(), stats.errorCount, stats.totalCount);
+                    reportSequenceLoss = true;
+                    lossErrors = stats.lossLog.reportErrors();
+                    lossWindowMs = stats.lossLog.reportWindowMs();
+                    lossStreamErrors = stats.errorCount - stats.startErrorCount;
+                    lossStreamPackets = stats.totalCount - stats.startTotalCount;
                 }
             }
         }
@@ -797,8 +836,10 @@ void PanadapterStream::processDatagram(const QByteArray& data)
             }
         }
     }
-    if (!sequenceLossLine.isEmpty()) {
-        qCWarning(lcVita49).noquote() << sequenceLossLine;
+    if (reportSequenceLoss) {
+        qCWarning(lcVita49).noquote()
+            << formatVitaSequenceLoss(streamCategoryName(cat), streamId, lossErrors,
+                                      lossWindowMs, lossStreamErrors, lossStreamPackets);
     }
     if ((cat == CatFFT || cat == CatWaterfall) && PerfTelemetry::instance().enabled()) {
         PerfTelemetry::instance().recordStreamPacket(
@@ -1584,6 +1625,7 @@ void PanadapterStream::unregisterDaxStream(quint32 streamId)
         }
         qCDebug(lcVita49) << "PanadapterStream: unregistered DAX stream" << Qt::hex << streamId;
     }
+    restartStreamSequence(streamId);
     if (channel)
         emit daxStreamUnregistered(channel, streamId);
 }
@@ -1835,10 +1877,13 @@ void PanadapterStream::registerIqStream(quint32 streamId, int channel)
 
 void PanadapterStream::unregisterIqStream(quint32 streamId)
 {
-    QMutexLocker lock(&m_streamMutex);
-    m_iqStreamIds.remove(streamId);
-    m_loggedIqPacketStreams.remove(streamId);
-    qCDebug(lcVita49) << "PanadapterStream: unregistered IQ stream" << Qt::hex << streamId;
+    {
+        QMutexLocker lock(&m_streamMutex);
+        m_iqStreamIds.remove(streamId);
+        m_loggedIqPacketStreams.remove(streamId);
+        qCDebug(lcVita49) << "PanadapterStream: unregistered IQ stream" << Qt::hex << streamId;
+    }
+    restartStreamSequence(streamId);
 }
 
 void PanadapterStream::sendToRadio(const QByteArray& packet)

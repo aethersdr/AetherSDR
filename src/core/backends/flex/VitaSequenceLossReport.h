@@ -13,8 +13,11 @@ class VitaSequenceLossLimiter {
 public:
     static constexpr qint64 kIntervalMs = 10000;
 
-    // Call on the stream's first packet: the first report's window starts here.
-    void start(qint64 nowMs) { m_windowStartMs = nowMs; m_lastReportMs = -1; m_pending = 0; }
+    // Call on the first packet of each instance of the stream: the next
+    // report's window starts here, and errors held from a previous instance
+    // are dropped. The interval since the last report still applies, so a
+    // stream torn down and re-created over and over logs no more often.
+    void start(qint64 nowMs) { m_windowStartMs = nowMs; m_pending = 0; }
 
     // Count one sequence error. Returns true when a line is due; the line's
     // values are then reportErrors() and reportWindowMs().
@@ -48,14 +51,17 @@ private:
 
 // The log line the docs Log Analyzer matches on its fixed prefix. A sequence
 // error is a gap in the 4-bit VITA-49 packet count, so it counts packets that
-// were lost and packets that arrived out of order alike.
+// were lost and packets that arrived out of order alike, and one gap is one
+// error however many packets it skipped: the counts are errors, and the packet
+// count is the packets received.
 inline QString formatVitaSequenceLoss(const QString& category, quint32 streamId,
                                       int errors, qint64 windowMs,
                                       int totalErrors, int totalPackets)
 {
     const qint64 seconds = (windowMs + 500) / 1000;
     return QStringLiteral("PanadapterStream: VITA-49 sequence errors on %1 stream 0x%2: "
-                          "%3 in the last %4 s, %5 of %6 packets since the stream started")
+                          "%3 in the last %4 s, %5 since the stream started "
+                          "(%6 packets received)")
         .arg(category, QString::number(streamId, 16))
         .arg(errors)
         .arg(seconds)

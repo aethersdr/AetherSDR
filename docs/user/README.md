@@ -139,7 +139,10 @@ every release with a detached signature made with the release key.
 checks a log or support bundle in the browser against
 `src/components/LogAnalyzer/rules.json`. Each rule cites the source line that
 writes the message it matches and links the fix: `/<page>#<heading>` on
-Stable, or `/next/<page>#<heading>` for a page only Next has. Test the rules
+Stable, or `/next/<page>#<heading>` for a page only Next has. A Stable
+snapshot copies Next, so after `snapshot_stable.py` every `/next/` link has a
+Stable page too: change those links to `/<page>#<heading>` in the same commit,
+or users of the release land on the unreleased docs. Test the rules
 with:
 
 ```sh

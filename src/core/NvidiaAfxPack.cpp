@@ -331,9 +331,12 @@ QList<NvidiaAfxPack::Component> NvidiaAfxPack::manifest(const QString& arch) con
 
 QString NvidiaAfxPack::withoutUrlQueries(const QString& text)
 {
-    static const QRegularExpression re(QStringLiteral("(\\bhttps?://[^\\s?#]+)[?#][^\\s]*"));
+    // The query runs to the next whitespace, less any closing punctuation that
+    // ends it: "(https://h/x?sig=1)." keeps its ")." and loses "?sig=1".
+    static const QRegularExpression re(QStringLiteral(
+        "(\\bhttps?://[^\\s?#]+)[?#]\\S*?([)\\]}>\"',.;:]*)(?=\\s|$)"));
     QString out = text;
-    return out.replace(re, QStringLiteral("\\1"));
+    return out.replace(re, QStringLiteral("\\1\\2"));
 }
 
 // ─── Lifecycle ───────────────────────────────────────────────────────────────
@@ -375,12 +378,15 @@ void NvidiaAfxPack::fail(const QString& msg)
     if (m_dlFile) { m_dlFile->close(); delete m_dlFile; m_dlFile = nullptr; }
     if (!m_tmpFile.isEmpty()) { QFile::remove(m_tmpFile); m_tmpFile.clear(); }
     m_busy = false;
-    if (msg == QLatin1String("cancelled")) {
+    // Stripped for the panel's "Failed:" text as well as for the log: a message
+    // can carry a URL (a redirected download, an index URL) with a signed query.
+    const QString shown = withoutUrlQueries(msg);
+    if (shown == QLatin1String("cancelled")) {
         qCInfo(lcNvAfx) << "NvidiaAfxPack: install cancelled";
     } else {
-        qCWarning(lcNvAfx).noquote() << "NvidiaAfxPack: install failed:" << withoutUrlQueries(msg);
+        qCWarning(lcNvAfx).noquote() << "NvidiaAfxPack: install failed:" << shown;
     }
-    emit finished(false, msg);
+    emit finished(false, shown);
 }
 
 QList<NvidiaAfxPack::ComponentInfo> NvidiaAfxPack::plannedComponents() const

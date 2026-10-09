@@ -302,12 +302,24 @@ private:
     QMap<quint32, WaterfallFrame> m_wfFrames;  // per-stream waterfall frame assembly
 
     // Per-stream packet sequence tracking (4-bit count in VITA-49 word0 bits 19:16)
+    // errorCount/totalCount are cumulative for the life of the process (the
+    // status bar and Network Diagnostics totals). The rest describes the
+    // current instance of the stream and is restarted when the stream is torn
+    // down, because the radio can reuse the id: see restartStreamSequence().
     struct StreamStats {
         int  lastSeq{-1};
         int  errorCount{0};
         int  totalCount{0};
+        bool started{false};       // this instance has seen its first packet
+        int  startErrorCount{0};   // errorCount when this instance started
+        int  startTotalCount{0};   // totalCount before its first packet
         VitaSequenceLossLimiter lossLog;
     };
+    // The stream's next packet starts a new instance: no sequence error
+    // against the previous instance's last count, and the log line's counts
+    // and window start over. Takes m_statsMutex.
+    void restartStreamSequence(quint32 streamId);
+    void restartAllStreamSequences();
 
 public:
     // Per-category network statistics

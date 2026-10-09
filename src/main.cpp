@@ -32,6 +32,7 @@
 #include <QStringList>
 #include <QSurfaceFormat>
 #include <memory>
+#include <optional>
 #include <QStyleFactory>
 #include <QDir>
 #include <QDebug>
@@ -244,6 +245,9 @@ static const char* g_qpaPlatformChoice = nullptr;
 // Whether the user's environment set QT_QPA_PLATFORM, read before main() may set
 // it, so the start-up platform line can say who chose the value Qt started with.
 static bool g_qpaPlatformUserSet = false;
+// The -platform argument, which Qt prefers to QT_QPA_PLATFORM; read before
+// QApplication removes it from argv.
+static std::optional<QString> g_qpaPlatformArgument;
 
 static const char* displayPresenceName(AetherSDR::DisplayPresence p)
 {
@@ -286,6 +290,7 @@ int main(int argc, char* argv[])
     // the Wayland plugin. Skipped when the user sets QT_QPA_PLATFORM (xcb is the
     // documented escape hatch, README next to AETHER_NO_GPU).
     g_qpaPlatformUserSet = qEnvironmentVariableIsSet("QT_QPA_PLATFORM");
+    g_qpaPlatformArgument = AetherSDR::QtPlatformChoice::platformArgument(argc, argv);
     if (!g_qpaPlatformUserSet) {
         const QByteArray session = qgetenv("XDG_SESSION_TYPE");
         if (session == "wayland" && qEnvironmentVariableIsSet("WAYLAND_DISPLAY")) {
@@ -637,11 +642,15 @@ int main(int argc, char* argv[])
         }
         {
             using AetherSDR::QpaRequestSource;
-            const QpaRequestSource source = g_qpaPlatformUserSet ? QpaRequestSource::User
-                : g_qpaPlatformChoice                            ? QpaRequestSource::AetherSDR
-                                                                 : QpaRequestSource::Unset;
+            const QpaRequestSource source = g_qpaPlatformArgument ? QpaRequestSource::CommandLine
+                : g_qpaPlatformUserSet                            ? QpaRequestSource::User
+                : g_qpaPlatformChoice                             ? QpaRequestSource::AetherSDR
+                                                                  : QpaRequestSource::Unset;
+            const QString requested = g_qpaPlatformArgument
+                ? *g_qpaPlatformArgument
+                : qEnvironmentVariable("QT_QPA_PLATFORM");
             const QStringList lines = AetherSDR::QtPlatformChoice::logLines(
-                qEnvironmentVariable("QT_QPA_PLATFORM"), source, QGuiApplication::platformName());
+                requested, source, QGuiApplication::platformName());
             qInfo().noquote() << lines.value(0);
             if (lines.size() > 1) {
                 qWarning().noquote() << lines.at(1);

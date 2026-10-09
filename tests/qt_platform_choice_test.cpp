@@ -1,6 +1,7 @@
 // The start-up "Platform: Qt platform plugin" lines (#6285): which plugin is
 // running, who asked for it, and whether Qt fell back from the first choice.
-// Pure: QtPlatformChoice takes the values main.cpp reads, no QGuiApplication.
+// Pure: QtPlatformChoice takes the values main.cpp reads (QT_QPA_PLATFORM and
+// the -platform argument Qt prefers to it), no QGuiApplication.
 
 #include "QtPlatformChoice.h"
 
@@ -60,6 +61,36 @@ int main()
         report("unset: text",
                l.size() == 1
                && l.value(0) == "Platform: Qt platform plugin \"cocoa\" (QT_QPA_PLATFORM=, unset, Qt default)");
+    }
+
+    {
+        // Qt prefers -platform to QT_QPA_PLATFORM: an explicit override is not a fallback.
+        const QStringList l = QtPlatformChoice::logLines("minimal", QpaRequestSource::CommandLine, "minimal");
+        report("command line override: one line", l.size() == 1);
+        report("command line override: text",
+               l.value(0) == "Platform: Qt platform plugin \"minimal\" (-platform minimal, on the command line)");
+    }
+    {
+        const QStringList l = QtPlatformChoice::logLines("nosuchplugin;offscreen", QpaRequestSource::CommandLine,
+                                                         "offscreen");
+        report("command line fallback: two lines", l.size() == 2);
+        report("command line fallback: text",
+               l.value(1) == "Platform: Qt fell back from \"nosuchplugin\" to \"offscreen\"; the first plugin in -platform did not load");
+    }
+    {
+        const char* none[] = {"AetherSDR", "--profile", "x"};
+        report("no -platform argument", !QtPlatformChoice::platformArgument(3, none).has_value());
+        const char* one[] = {"AetherSDR", "-platform", "minimal"};
+        report("-platform value", QtPlatformChoice::platformArgument(3, one).value_or("") == "minimal");
+        const char* dashes[] = {"AetherSDR", "--platform", "xcb"};
+        report("--platform value", QtPlatformChoice::platformArgument(3, dashes).value_or("") == "xcb");
+        const char* twice[] = {"AetherSDR", "-platform", "xcb", "-platform", "wayland;xcb"};
+        report("the last -platform wins",
+               QtPlatformChoice::platformArgument(5, twice).value_or("") == "wayland;xcb");
+        const char* dangling[] = {"AetherSDR", "-platform"};
+        report("-platform with no value is ignored", !QtPlatformChoice::platformArgument(2, dangling).has_value());
+        const char* other[] = {"AetherSDR", "-platformtheme", "gtk3"};
+        report("-platformtheme is not -platform", !QtPlatformChoice::platformArgument(3, other).has_value());
     }
 
     std::printf("%s\n", g_failed ? "FAILED" : "PASSED");

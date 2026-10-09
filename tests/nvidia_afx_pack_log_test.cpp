@@ -79,6 +79,13 @@ int main(int argc, char** argv)
                == "Error transferring https://objects.example.com/a/b.tar.zst - server replied: Forbidden");
     report("fragment removed",
            NvidiaAfxPack::withoutUrlQueries("see http://h/x#sha256=deadbeef now") == "see http://h/x now");
+    report("closing punctuation after a query is kept",
+           NvidiaAfxPack::withoutUrlQueries("failed (https://h/x?sig=abc). Retry")
+               == "failed (https://h/x). Retry");
+    report("a query with brackets inside is removed whole",
+           NvidiaAfxPack::withoutUrlQueries("at https://h/x?a=(1)&sig=abc end") == "at https://h/x end");
+    report("a query at the end of the text is removed",
+           NvidiaAfxPack::withoutUrlQueries("from https://h/x?sig=abc") == "from https://h/x");
     report("text without URLs unchanged",
            NvidiaAfxPack::withoutUrlQueries("checksum mismatch for AFX (corrupt or stale mirror)")
                == "checksum mismatch for AFX (corrupt or stale mirror)");

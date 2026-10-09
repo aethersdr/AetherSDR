@@ -6,6 +6,6 @@
 [09:14:02.141] INF aether.sysinfo: Speech engine CPU baseline: x86-64-v3
 [09:14:02.152] DBG default: Starting AetherSDR 26.10.1
 [09:14:05.130] INF aether.vita49: PanadapterStream: VITA UDP receive buffer requested=8388608 granted=8388608
-[09:20:41.502] WRN aether.vita49: PanadapterStream: VITA-49 sequence errors on FFT stream 0x40000000: 1 in the last 376 s, 1 of 9402 packets since the stream started
-[09:20:51.733] WRN aether.vita49: PanadapterStream: VITA-49 sequence errors on FFT stream 0x40000000: 12 in the last 10 s, 13 of 9658 packets since the stream started
-[09:20:52.004] WRN aether.vita49: PanadapterStream: VITA-49 sequence errors on audio stream 0x04000008: 7 in the last 377 s, 7 of 17890 packets since the stream started
+[09:20:41.502] WRN aether.vita49: PanadapterStream: VITA-49 sequence errors on FFT stream 0x40000000: 1 in the last 396 s, 1 since the stream started (9402 packets received)
+[09:20:51.733] WRN aether.vita49: PanadapterStream: VITA-49 sequence errors on FFT stream 0x40000000: 12 in the last 10 s, 13 since the stream started (9658 packets received)
+[09:20:52.004] WRN aether.vita49: PanadapterStream: VITA-49 sequence errors on audio stream 0x04000008: 7 in the last 407 s, 7 since the stream started (17890 packets received)
