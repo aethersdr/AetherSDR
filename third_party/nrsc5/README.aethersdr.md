@@ -13,7 +13,6 @@ in `COPYING.GPL-3.0`, with its source/hash in `LICENSE-SOURCE.json`. Preserve
 per-file notices, including Ettus Research's GPLv3 convolutional decoder,
 Phil Karn's GPL Reed-Solomon code, and rxi's MIT notice in `src/log.c` (not built).
 The HDC patch has its own author/commit header and is preserved byte-for-byte.
-These source licenses are not a patent clearance or a product certification.
 
 ## Build and target use
 

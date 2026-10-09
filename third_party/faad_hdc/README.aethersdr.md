@@ -25,10 +25,6 @@ copyright notice. The required acknowledgment is:
 
 **Code from FAAD2 is copyright (c) Nero AG, www.nero.com**
 
-The original notices discuss separate commercial licensing and possible patent
-royalties. Vendoring does not provide patent clearance. No proprietary binary,
-decoder decompilation, or dynamically downloaded runtime is included.
-
 ## Build and reproduction
 
 `cmake/AetherHdFm.cmake` builds only static `aether_faad_hdc`, with
