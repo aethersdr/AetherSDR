@@ -166,8 +166,14 @@ class ControlsRun:
                 if not self.identity:
                     radio = snapshot.get('radio', {})
                     self.identity = {'family': snapshot.get('family'), 'model': radio.get('model')}
-                    if self.serial:
-                        self.identity['serial'] = self.serial
+                    # Pin the session serial on every path, Icom included (its
+                    # endpoint-derived icom:<host>), so a reconnect to another
+                    # same-model radio is refused rather than mutated.
+                    serial = self.serial or radio.get('serial')
+                    if not isinstance(serial, str) or not serial:
+                        self.identity = {}
+                        raise StopRun('radio has no stable session identity')
+                    self.identity['serial'] = serial
                     self.journal.event('identity-pinned', identity=self.identity)
                 ready_controls(snapshot, self.identity)
                 stable_since = stable_since or time.monotonic()

@@ -783,7 +783,11 @@ void RadioCertification::stageFrontEndInterlock()
     const int preampWas = pan->preampStep();
     const int attWas = pan->attenuatorStep();
     const QPointer<PanadapterModel> watched(pan);
+    // Every write follows an event-loop wait, so the radio or its pan can be
+    // gone by then (disconnect, teardown): never write through either.
     auto write = [&](bool preamp, int step) {
+        if (!m_radio || !watched)
+            return;
         if (preamp)
             m_radio->setPanPreampFor(panId, step);
         else
@@ -811,6 +815,8 @@ void RadioCertification::stageFrontEndInterlock()
         std::vector<certmath::TimedSample> other;
         for (int ms = kControlSampleMs; ms <= kInterlockWatchMs && watched; ms += kControlSampleMs) {
             spin(kControlSampleMs);
+            if (!m_radio || !watched)
+                break;
             own.push_back({ms, t.preamp ? watched->preampStep() : watched->attenuatorStep()});
             other.push_back({ms, t.preamp ? watched->attenuatorStep() : watched->preampStep()});
         }

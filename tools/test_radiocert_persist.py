@@ -553,6 +553,34 @@ class ControlContractPolicyTest(unittest.TestCase):
             with self.assertRaises(StopRun):
                 ready_controls(data, {'family': 'icom', 'model': 'IC-7300MK2'})
 
+    def wait_ready_on(self, directory, data):
+        run = ControlsRun(Mock(), Journal(Path(directory) / 'j.json', {}), icom_host='192.0.2.1')
+        run.snapshot = Mock(return_value=data)
+        clock = iter(range(10_000))
+        with patch('radiocert_persist_controls.time.sleep'), \
+                patch('radiocert_persist_controls.time.monotonic', side_effect=lambda: next(clock)):
+            run.wait_ready()
+        return run
+
+    def test_icom_pins_the_session_serial(self):
+        # A reconnect to another same-model Icom must not be seeded or restored.
+        first = self.icom()
+        first['radio']['serial'] = 'icom:192.0.2.1'
+        with tempfile.TemporaryDirectory() as directory:
+            run = self.wait_ready_on(directory, first)
+        self.assertEqual(run.identity.get('serial'), 'icom:192.0.2.1')
+        other = self.icom()
+        other['radio']['serial'] = 'icom:192.0.2.2'
+        with self.assertRaises(StopRun):
+            ready_controls(other, run.identity)
+
+    def test_radio_without_a_session_serial_is_refused(self):
+        data = self.icom()
+        data['radio'].pop('serial', None)
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaises(StopRun):
+                self.wait_ready_on(directory, data)
+
     def test_on_at_zero_read_back_as_off_is_a_concern(self):
         # #6175: the confirmation read of "on at 0" published Off.
         good, bad = self.icom(), self.icom()
