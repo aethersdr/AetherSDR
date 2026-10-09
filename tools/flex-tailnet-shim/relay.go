@@ -211,6 +211,15 @@ func (r *Relay) handle(c net.Conn) {
 	r.mu.Lock()
 	r.sessions[s.id] = s
 	r.mu.Unlock()
+	// Check again now that the session is registered: an allowlist saved
+	// during the radio dial above either finds this session (Revoke) or is
+	// already in force for this check, so a connection can't slip between.
+	if r.Authorize != nil {
+		if who, ok := r.Authorize(c.RemoteAddr()); !ok {
+			s.close(fmt.Sprintf("%s is no longer on the allowlist", who))
+			return
+		}
+	}
 
 	go s.radioToClientTCP()
 	go s.clientToRadioTCP()
@@ -279,9 +288,10 @@ func (s *Session) radioToClientTCP() {
 }
 
 var (
-	fileCmdRe = regexp.MustCompile(`^C[A-Z]*(\d+)\|file (upload|download)\b`)
-	replyRe   = regexp.MustCompile(`^R(\d+)\|0+\|(\d+)\s*$`)
-	verbRe    = regexp.MustCompile(`^C[A-Z]*\d+\|([a-z_]+)(?: ([a-z_]+))?`)
+	fileCmdRe  = regexp.MustCompile(`^C[A-Z]*(\d+)\|file (upload|download)\b`)
+	replyRe    = regexp.MustCompile(`^R(\d+)\|0+\|(\d+)\s*$`)
+	anyReplyRe = regexp.MustCompile(`^R(\d+)\|`)
+	verbRe     = regexp.MustCompile(`^C[A-Z]*\d+\|([a-z_]+)(?: ([a-z_]+))?`)
 )
 
 // noteCommand remembers file transfer commands, whose replies name a port,
@@ -299,23 +309,36 @@ func (s *Session) noteCommand(line []byte) {
 		if s.pending == nil {
 			s.pending = map[string]bool{}
 		}
-		s.pending[string(m[1])] = true
+		// Bounded: a client that never reads its replies can't grow it.
+		if len(s.pending) < maxPendingTransfers {
+			s.pending[string(m[1])] = true
+		}
 		s.pendingMu.Unlock()
 	}
 }
 
+// maxPendingTransfers bounds file transfer commands awaiting a reply.
+const maxPendingTransfers = 64
+
 // sideChannelPort returns the port in a successful reply to a pending file
-// transfer command (`R<seq>|0|<port>`), or 0.
+// transfer command (`R<seq>|0|<port>`), or 0. Any reply to that sequence
+// number, failed ones included, ends its wait, so a stale entry can never
+// open a port for a later reply.
 func (s *Session) sideChannelPort(line []byte) int {
-	m := replyRe.FindSubmatch(bytes.TrimRight(line, "\r\n"))
-	if m == nil {
+	body := bytes.TrimRight(line, "\r\n")
+	r := anyReplyRe.FindSubmatch(body)
+	if r == nil {
 		return 0
 	}
 	s.pendingMu.Lock()
-	ok := s.pending[string(m[1])]
-	delete(s.pending, string(m[1]))
+	ok := s.pending[string(r[1])]
+	delete(s.pending, string(r[1]))
 	s.pendingMu.Unlock()
 	if !ok {
+		return 0
+	}
+	m := replyRe.FindSubmatch(body)
+	if m == nil {
 		return 0
 	}
 	port, err := strconv.Atoi(string(m[2]))
@@ -526,18 +549,24 @@ type localAddrCache struct {
 func (c *localAddrCache) has(a netip.Addr, list func() []netip.Addr) bool {
 	a = a.Unmap()
 	c.mu.Lock()
+	known, stale := c.set[a], c.set == nil || time.Since(c.at) > time.Second
+	if known || !stale {
+		c.mu.Unlock()
+		return known
+	}
+	c.at = time.Now() // one refresh at a time; others answer from the old set
+	c.mu.Unlock()
+	if list == nil {
+		list = interfaceAddrs
+	}
+	addrs := list() // a netlink dump, outside the lock
+	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.set == nil || (!c.set[a] && time.Since(c.at) > time.Second) {
-		if list == nil {
-			list = interfaceAddrs
+	if len(addrs) > 0 || c.set == nil {
+		c.set = map[netip.Addr]bool{}
+		for _, l := range addrs {
+			c.set[l.Unmap()] = true
 		}
-		if addrs := list(); len(addrs) > 0 || c.set == nil {
-			c.set = map[netip.Addr]bool{}
-			for _, l := range addrs {
-				c.set[l.Unmap()] = true
-			}
-		}
-		c.at = time.Now()
 	}
 	return c.set[a]
 }

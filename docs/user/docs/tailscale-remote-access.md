@@ -211,15 +211,17 @@ their applets work remotely too.
 
 1. In **Remote Access**, the **Station devices** card lists what it found.
    **Share the devices found here over the tailnet** is on by default.
-2. To share other devices on the station network (for example an amplifier
+2. Turning sharing off for a device, or removing it, ends any remote
+   connection to it at once.
+3. To share other devices on the station network (for example an amplifier
    with a web page), list their LAN addresses in **OTHER DEVICES**, separated
    by commas, then click **Save Sharing**.
-3. **Approve the routes once** in the admin console: **Machines →** the
+4. **Approve the routes once** in the admin console: **Machines →** the
    radio **→ Subnets → Edit → Edit route settings**, tick the routes and
    **Save**. The window shows **Offered, not yet confirmed** until a remote
    connection actually travels through a route; after that it shows
    **Confirmed in use over the tailnet**.
-4. Remotely, set each device's applet to its **LAN address** (for example
+5. Remotely, set each device's applet to its **LAN address** (for example
    `192.168.1.40`), exactly as at home. **WHO MAY CONNECT** applies to the
    devices as well as the radio (container 0.4.1 and later). See [Amplifiers](./amplifiers.md) and
    [TGXL Tuner Control](./tgxl-tuner-control.md).

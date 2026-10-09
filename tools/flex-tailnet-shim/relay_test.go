@@ -424,20 +424,21 @@ func TestClosingASessionWithdrawsItsSideChannels(t *testing.T) {
 		}
 	}
 	from := &net.TCPAddr{IP: net.IPv4(100, 64, 0, 9), Port: 1}
+	claimed := func() bool { _, ok := f.claim(5000, from); return ok }
 	open(1, false)
 	open(2, false)
 	f.Forget(1)
-	if !f.claim(5000, from) {
+	if !claimed() {
 		t.Fatal("session 2 from the same computer lost its transfer when session 1 closed")
 	}
 	// Each announced transfer admits one connection.
-	if f.claim(5000, from) {
+	if claimed() {
 		t.Fatal("one grant admitted a second connection")
 	}
 	// A reply that arrives after its session closed (and after Forget ran)
 	// must not leave the port open to that computer.
 	open(3, true)
-	if f.claim(5000, from) {
+	if claimed() {
 		t.Fatal("a closed session's late reply opened the port")
 	}
 	f.mu.Lock()
@@ -530,4 +531,112 @@ func TestRepeatedUDPPortReplacesTheOldMapping(t *testing.T) {
 	if r.byClient[first] != s {
 		t.Fatalf("a session removed another's mapping: %v", r.byClient)
 	}
+}
+
+// A connection that passes the allowlist, then has the list narrowed while
+// its radio dial is still in flight, is ended once it registers.
+func TestSessionConnectingDuringSaveIsEnded(t *testing.T) {
+	fr := newFakeRadio(t)
+	var allowed atomic.Bool
+	allowed.Store(true)
+	dialing, release := make(chan struct{}), make(chan struct{})
+	relay := &Relay{
+		RadioAddr: "127.0.0.1",
+		DialRadio: func() (net.Conn, error) {
+			close(dialing)
+			<-release
+			return net.Dial("tcp", fr.api.Addr().String())
+		},
+		HostUDP: func(netip.Addr) (*net.UDPConn, error) {
+			return net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+		},
+		ClientTX: loopUDP(t), ClientPrime: loopUDP(t), ClientOut: loopUDP(t),
+		Authorize: func(net.Addr) (string, bool) { return "guest", allowed.Load() },
+	}
+	ln, _ := net.Listen("tcp", "127.0.0.1:0")
+	defer ln.Close()
+	go relay.Serve(ln)
+	ctl, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ctl.Close()
+	<-dialing
+	allowed.Store(false) // Save Access List, while the dial is in flight
+	if n := relay.Revoke(relay.Authorize); n != 0 {
+		t.Fatalf("revocation found %d sessions before registration", n)
+	}
+	close(release)
+	select {
+	case <-fr.eof:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the session registered after the save kept its radio connection")
+	}
+}
+
+// A failed file-transfer reply ends that command's wait, so a later reply
+// with the same sequence number can't open a port; the wait list is bounded.
+func TestFailedTransferReplyClearsItsWait(t *testing.T) {
+	s := &Session{relay: &Relay{}}
+	s.noteCommand([]byte("C7|file download db_package\n"))
+	if p := s.sideChannelPort([]byte("R7|50000015|\n")); p != 0 {
+		t.Fatalf("a failed reply opened port %d", p)
+	}
+	if p := s.sideChannelPort([]byte("R7|0|42607\n")); p != 0 {
+		t.Fatalf("a stale wait opened port %d", p)
+	}
+	for i := 0; i < 2*maxPendingTransfers; i++ {
+		s.noteCommand([]byte(fmt.Sprintf("C%d|file upload x\n", 100+i)))
+	}
+	if len(s.pending) > maxPendingTransfers {
+		t.Fatalf("%d waits pending, want at most %d", len(s.pending), maxPendingTransfers)
+	}
+}
+
+// A grant whose caller WhoIs then refuses isn't used up: the computer that
+// asked can still connect.
+func TestRefusedCallerKeepsTheGrant(t *testing.T) {
+	radio, _ := net.Listen("tcp", "127.0.0.1:0")
+	defer radio.Close()
+	go func() {
+		for {
+			c, err := radio.Accept()
+			if err != nil {
+				return
+			}
+			c.Write([]byte("FILEDATA"))
+			c.Close()
+		}
+	}()
+	var refuseOnce atomic.Bool
+	refuseOnce.Store(true)
+	f := &Forwarder{
+		Listen:    func(int) (net.Listener, error) { return net.Listen("tcp", "127.0.0.1:0") },
+		DialRadio: func(int) (net.Conn, error) { return net.Dial("tcp", radio.Addr().String()) },
+		Authorize: func(net.Addr) (string, bool) { return "x", !refuseOnce.Swap(false) },
+	}
+	if err := f.Open(5000, 1, netip.MustParseAddr("127.0.0.1"), nil); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	addr := f.active[5000].ln.Addr().String()
+	f.mu.Unlock()
+	first, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if got, _ := io.ReadAll(first); len(got) != 0 {
+		t.Fatalf("the refused caller read %q", got)
+	}
+	first.Close()
+	second, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if got, _ := io.ReadAll(second); string(got) != "FILEDATA" {
+		t.Fatalf("after a refusal the grant was gone: read %q", got)
+	}
+	second.Close()
 }

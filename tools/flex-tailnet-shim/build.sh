@@ -10,6 +10,9 @@ export CGO_ENABLED=0 GOOS=linux GOARCH=arm64
 # the pinned image could only be rebuilt from the exact checkout it came
 # from.
 export LC_ALL=C GOFLAGS=-buildvcs=false
+# The exact toolchain the pin was made with: a newer local Go would build
+# different bytes, and go.mod's `go 1.27.1` only sets a minimum.
+export GOTOOLCHAIN=go1.27.1
 go build -trimpath -ldflags='-s -w' -o flex-tailnet-shim .
 {
   echo "flex-tailnet-shim is part of AetherSDR and is licensed under the GNU GPL v3."

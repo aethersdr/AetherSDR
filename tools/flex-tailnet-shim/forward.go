@@ -109,7 +109,8 @@ func (f *Forwarder) serve(port int, sc *sideChannel) {
 			wg.Wait()
 			return
 		}
-		if !f.claim(port, c.RemoteAddr()) {
+		grant, ok := f.claim(port, c.RemoteAddr())
+		if !ok {
 			log.Printf("side channel %d: refused %s: not the session that asked for it", port, c.RemoteAddr())
 			c.Close()
 			continue
@@ -117,6 +118,7 @@ func (f *Forwarder) serve(port int, sc *sideChannel) {
 		if f.Authorize != nil {
 			if who, ok := f.Authorize(c.RemoteAddr()); !ok {
 				log.Printf("side channel %d: refused %s (%s)", port, c.RemoteAddr(), who)
+				f.restore(port, sc, grant) // a refused caller doesn't use up the transfer
 				c.Close()
 				continue
 			}
@@ -141,28 +143,45 @@ func (f *Forwarder) Forget(session uint64) {
 	}
 }
 
+// grant is one session's permission to make one connection to a port.
+type grant struct {
+	session uint64
+	client  netip.Addr
+}
+
 // claim admits remote if a session at its address has an unused grant on
 // the port, and uses that grant up: each announced transfer admits one
 // connection, so when the radio reuses a port for another computer's
-// transfer, the first can't take the second's.
-func (f *Forwarder) claim(port int, remote net.Addr) bool {
+// transfer, the first can't take the second's. Grants are matched by
+// address: two sessions on one computer share an address, so either may
+// take either's grant (same tailnet identity, nothing crosses).
+func (f *Forwarder) claim(port int, remote net.Addr) (grant, bool) {
 	ap, ok := addrPortOf(remote)
 	if !ok {
-		return false
+		return grant{}, false
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	sc := f.active[port]
 	if sc == nil {
-		return false
+		return grant{}, false
 	}
 	for id, c := range sc.clients {
 		if c == ap.Addr() {
 			delete(sc.clients, id)
-			return true
+			return grant{id, c}, true
 		}
 	}
-	return false
+	return grant{}, false
+}
+
+// restore puts back a grant whose caller was then refused.
+func (f *Forwarder) restore(port int, sc *sideChannel, g grant) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.active[port] == sc {
+		sc.clients[g.session] = g.client
+	}
 }
 
 func (f *Forwarder) splice(port int, c net.Conn) {
@@ -181,7 +200,15 @@ func (f *Forwarder) splice(port int, c net.Conn) {
 		return
 	}
 	defer r.Close()
-	defer f.splices.add(c.RemoteAddr(), c, r)()
+	defer f.splices.add(c.RemoteAddr(), netip.Addr{}, c, r)()
+	// Check again now that the transfer is registered, so an allowlist
+	// saved during the dial above can't miss it (see Relay.handle).
+	if f.Authorize != nil {
+		if who, ok := f.Authorize(c.RemoteAddr()); !ok {
+			log.Printf("side channel %d: %s is no longer on the allowlist", port, who)
+			return
+		}
+	}
 	done := make(chan struct{}, 2)
 	var up, down int64
 	go func() { up, _ = io.Copy(r, c); closeWrite(r); done <- struct{}{} }()
@@ -200,12 +227,13 @@ type liveSplices struct {
 
 type liveSplice struct {
 	from  net.Addr
+	to    netip.Addr // the station device, for a station-device splice
 	conns []net.Conn
 }
 
 // add records a splice and returns the func that forgets it.
-func (l *liveSplices) add(from net.Addr, conns ...net.Conn) (remove func()) {
-	sp := &liveSplice{from: from, conns: conns}
+func (l *liveSplices) add(from net.Addr, to netip.Addr, conns ...net.Conn) (remove func()) {
+	sp := &liveSplice{from: from, to: to, conns: conns}
 	l.mu.Lock()
 	if l.m == nil {
 		l.m = map[*liveSplice]struct{}{}
@@ -231,6 +259,27 @@ func (l *liveSplices) revoke(authorize func(net.Addr) (string, bool)) int {
 	n := 0
 	for _, sp := range all {
 		if _, ok := authorize(sp.from); !ok {
+			for _, c := range sp.conns {
+				c.Close()
+			}
+			n++
+		}
+	}
+	return n
+}
+
+// unshare closes every splice to a device keep no longer covers, and
+// reports how many it closed.
+func (l *liveSplices) unshare(keep func(netip.Addr) bool) int {
+	l.mu.Lock()
+	all := make([]*liveSplice, 0, len(l.m))
+	for sp := range l.m {
+		all = append(all, sp)
+	}
+	l.mu.Unlock()
+	n := 0
+	for _, sp := range all {
+		if sp.to.IsValid() && !keep(sp.to) {
 			for _, c := range sp.conns {
 				c.Close()
 			}

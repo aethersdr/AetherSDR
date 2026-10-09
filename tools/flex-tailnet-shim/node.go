@@ -73,6 +73,9 @@ type Node struct {
 	bootDone   chan struct{}
 	// interruptWait overrides bootInterruptWait (tests).
 	interruptWait time.Duration
+	// bootUnwinding is a cancelled attempt still shutting down after a
+	// request gave up waiting on it (errBusy).
+	bootUnwinding chan struct{}
 	// routeMu serializes RefreshRoutes, so a refresh that read an older
 	// configuration can never apply it after a newer one.
 	routeMu sync.Mutex
@@ -102,8 +105,11 @@ type Node struct {
 	telemetry linkTelemetry // per-peer path, RTT and throughput (telemetry.go)
 
 	// authorize is the allowlist check for station-device flows, set while
-	// the node runs. Nil refuses every flow.
+	// the node runs. Nil refuses every flow. check is the same verdict with
+	// "couldn't tell" kept apart, for revocation; nil means authorize's
+	// answers are all definite (tests).
 	authorize func(net.Addr) (string, bool)
+	check     identityCheck
 	// localAddrs lists the radio's own addresses (interfaceAddrs when nil);
 	// a test seam. locals caches them.
 	localAddrs func() []netip.Addr
@@ -228,23 +234,42 @@ var errBusy = errors.New("the tailnet connection is still shutting down; try aga
 // boot resumes by itself once the attempt is gone.
 func (n *Node) interruptBoot() (bool, error) {
 	n.mu.Lock()
-	cancel, done := n.bootCancel, n.bootDone
+	cancel, done, unwinding := n.bootCancel, n.bootDone, n.bootUnwinding
 	n.bootCancel, n.bootDone = nil, nil
 	wait := n.interruptWait
 	n.mu.Unlock()
-	if cancel == nil {
-		return false, nil
-	}
 	if wait <= 0 {
 		wait = bootInterruptWait
+	}
+	if cancel == nil {
+		// A request that already answered errBusy left the attempt
+		// unwinding; a retry waits for it the same bounded way rather than
+		// queuing behind it on opMu.
+		if unwinding == nil {
+			return false, nil
+		}
+		select {
+		case <-unwinding:
+			return false, nil
+		case <-time.After(wait):
+			return false, errBusy
+		}
 	}
 	cancel()
 	select {
 	case <-done:
 		return true, nil
 	case <-time.After(wait):
+		n.mu.Lock()
+		n.bootUnwinding = done
+		n.mu.Unlock()
 		go func() {
 			<-done
+			n.mu.Lock()
+			if n.bootUnwinding == done {
+				n.bootUnwinding = nil
+			}
+			n.mu.Unlock()
 			n.Boot()
 		}()
 		return false, errBusy
@@ -398,7 +423,8 @@ func (n *Node) start(parent context.Context, authKey string, timeout time.Durati
 	log.Printf("tailnet node %q up at %s (%s)", cfg.Hostname, ip4, n.dnsName)
 	n.mu.Lock()
 	n.lc = lc
-	n.authorize = n.authorizer(lc)
+	n.check = n.checker(lc)
+	n.authorize = admitOnly(n.check)
 	n.advertised = nil
 	n.mu.Unlock()
 	n.RefreshRoutes()
@@ -475,6 +501,11 @@ func (n *Node) RefreshRoutes() {
 	n.advertised = want
 	n.mu.Unlock()
 	log.Printf("advertising LAN routes %v", want)
+	// Un-sharing takes effect at once, like the allowlist: end connections
+	// to a device no longer offered.
+	if ended := n.splices.unshare(n.shared); ended > 0 {
+		log.Printf("ended %d connection(s) to devices no longer shared", ended)
+	}
 }
 
 // SetSharing changes which LAN devices are shared, without leaving the
@@ -547,7 +578,7 @@ func (n *Node) stop(logout bool) error {
 	n.mu.Lock()
 	srv, relay, closers := n.srv, n.relay, n.closers
 	n.srv, n.relay, n.closers, n.ip, n.dnsName, n.lc = nil, nil, nil, netip.Addr{}, "", nil
-	n.authorize = nil
+	n.authorize, n.check = nil, nil
 	n.fwd = nil
 	n.routesInUse = nil
 	n.telemetry.mu.Lock()
@@ -584,13 +615,33 @@ func (n *Node) stop(logout bool) error {
 
 // authorizer checks each tailnet caller with WhoIs against the current
 // allowlist (logins or tags). An empty allowlist admits any tailnet peer.
+// It fails closed: a caller whose identity can't be established is refused.
 func (n *Node) authorizer(lc *local.Client) func(net.Addr) (string, bool) {
+	return admitOnly(n.checker(lc))
+}
+
+// identityCheck is the allowlist verdict with its uncertainty kept: err is
+// set when the caller's identity couldn't be established at all.
+type identityCheck func(net.Addr) (who string, allowed bool, err error)
+
+// admitOnly turns a check into an admission decision, refusing on error.
+func admitOnly(check identityCheck) func(net.Addr) (string, bool) {
 	return func(remote net.Addr) (string, bool) {
+		who, ok, err := check(remote)
+		if err != nil {
+			return "unknown peer: " + err.Error(), false
+		}
+		return who, ok
+	}
+}
+
+func (n *Node) checker(lc *local.Client) identityCheck {
+	return func(remote net.Addr) (string, bool, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		who, err := lc.WhoIs(ctx, remote.String())
 		if err != nil {
-			return "unknown peer: " + err.Error(), false
+			return "", false, err
 		}
 		id := who.Node.ComputedName
 		if who.UserProfile != nil && !who.Node.IsTagged() {
@@ -600,19 +651,19 @@ func (n *Node) authorizer(lc *local.Client) func(net.Addr) (string, bool) {
 		allow := append([]string{}, n.cfg.Allow...)
 		n.mu.Unlock()
 		if len(allow) == 0 {
-			return id, true
+			return id, true, nil
 		}
 		for _, a := range allow {
 			if who.UserProfile != nil && !who.Node.IsTagged() && a == who.UserProfile.LoginName {
-				return id, true
+				return id, true, nil
 			}
 			for _, t := range who.Node.Tags {
 				if a == t {
-					return id, true
+					return id, true, nil
 				}
 			}
 		}
-		return id, false
+		return id, false, nil
 	}
 }
 
@@ -734,19 +785,34 @@ func (n *Node) SetAllow(presented string, allow []string) error {
 // admits: relay sessions (the radio drops the client and unkeys anything it
 // owned, Principle VI), side-channel transfers and station-device splices.
 // The authorizer reads the list live, so this applies a just-saved change.
+//
+// Only a definite refusal ends a connection. Admission fails closed, but a
+// WhoIs that couldn't answer (a tailscaled hiccup, a timeout) is no
+// evidence that someone still on the list should be cut off mid-contact.
 func (n *Node) revokeDisallowed() {
 	n.mu.Lock()
-	authorize, relay, fwd := n.authorize, n.relay, n.fwd
+	authorize, check, relay, fwd := n.authorize, n.check, n.relay, n.fwd
 	n.mu.Unlock()
 	if authorize == nil {
 		return
 	}
-	ended := n.splices.revoke(authorize)
+	refused := authorize
+	if check != nil {
+		refused = func(a net.Addr) (string, bool) {
+			who, ok, err := check(a)
+			if err != nil {
+				log.Printf("allowlist changed: keeping %s, its identity is unavailable: %v", a, err)
+				return who, true
+			}
+			return who, ok
+		}
+	}
+	ended := n.splices.revoke(refused)
 	if relay != nil {
-		ended += relay.Revoke(authorize)
+		ended += relay.Revoke(refused)
 	}
 	if fwd != nil {
-		ended += fwd.splices.revoke(authorize)
+		ended += fwd.splices.revoke(refused)
 	}
 	if ended > 0 {
 		log.Printf("allowlist changed: ended %d connection(s) it no longer admits", ended)
@@ -945,6 +1011,18 @@ func parseRoute(s string) (netip.Prefix, error) {
 	return netip.Prefix{}, fmt.Errorf("%q is not private LAN space", s)
 }
 
+// shared reports whether a is inside a route the node advertises now.
+func (n *Node) shared(a netip.Addr) bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	for _, p := range n.advertised {
+		if p.Contains(a) {
+			return true
+		}
+	}
+	return false
+}
+
 // isRadio reports whether a is the radio: RadioAddr, or any address of the
 // host the container shares with it.
 func (n *Node) isRadio(a netip.Addr) bool {
@@ -1009,7 +1087,19 @@ func (n *Node) subnetTCP(src, dst netip.AddrPort) (handler func(net.Conn), inter
 			return
 		}
 		defer r.Close()
-		defer n.splices.add(net.TCPAddrFromAddrPort(src), c, r)()
+		defer n.splices.add(net.TCPAddrFromAddrPort(src), dst.Addr(), c, r)()
+		// Check again now that the splice is registered, so an allowlist
+		// saved during the dial above can't miss it (see Relay.handle); and
+		// the route must still be shared (RefreshRoutes closes splices to
+		// routes it withdraws, and this one may have registered just after).
+		if who, ok := authorize(net.TCPAddrFromAddrPort(src)); !ok {
+			log.Printf("subnet %s -> %s: %s is no longer on the allowlist", src, dst, who)
+			return
+		}
+		if !n.shared(dst.Addr()) {
+			log.Printf("subnet %s -> %s: no longer shared", src, dst)
+			return
+		}
 		log.Printf("subnet %s -> %s: connected", src, dst)
 		done := make(chan struct{}, 2)
 		go func() { io.Copy(r, c); closeWrite(r); done <- struct{}{} }()

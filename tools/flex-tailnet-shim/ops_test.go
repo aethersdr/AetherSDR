@@ -404,8 +404,8 @@ func TestSaveAccessListEndsRemovedConnections(t *testing.T) {
 	sideA, sideB := net.Pipe()
 	defer devB.Close()
 	defer sideB.Close()
-	n.splices.add(removedFrom, devA)
-	n.fwd.splices.add(removedFrom, sideA)
+	n.splices.add(removedFrom, netip.MustParseAddr("192.168.50.103"), devA)
+	n.fwd.splices.add(removedFrom, netip.Addr{}, sideA)
 
 	if err := n.SetAllow(token, []string{"tag:ops"}); err != nil {
 		t.Fatal(err)
@@ -458,4 +458,95 @@ func TestSlowBootTeardownAnswersBusy(t *testing.T) {
 	n.cfg = provisionConfig{} // stop the loop
 	n.mu.Unlock()
 	n.interruptBoot()
+}
+
+// Revocation acts only on a definite refusal: a WhoIs that couldn't answer
+// keeps the session, so a tailscaled hiccup during Save Access List doesn't
+// cut off operators still on the list.
+func TestRevocationKeepsSessionsWhoseIdentityIsUnavailable(t *testing.T) {
+	r := &Relay{}
+	r.init()
+	a, b := net.Pipe()
+	ra, rb := net.Pipe()
+	defer a.Close()
+	defer b.Close()
+	defer ra.Close()
+	defer rb.Close()
+	s := &Session{id: 1, relay: r, client: a, radio: ra, host: loopUDP(t),
+		clientIP: netip.MustParseAddr("100.64.0.9"), done: make(chan struct{})}
+	r.sessions[1] = s
+	n := &Node{relay: r, fwd: &Forwarder{}}
+	n.authorize = func(net.Addr) (string, bool) { return "unknown peer", false }
+	n.check = func(net.Addr) (string, bool, error) { return "", false, errors.New("whois timed out") }
+	n.revokeDisallowed()
+	if s.waitClosed(200 * time.Millisecond) {
+		t.Fatal("a session was ended because its identity couldn't be checked")
+	}
+	n.check = func(net.Addr) (string, bool, error) { return "guest on phone", false, nil }
+	n.revokeDisallowed()
+	if !s.waitClosed(2 * time.Second) {
+		t.Fatal("a definite refusal didn't end the session")
+	}
+}
+
+// A retry after errBusy, while the cancelled attempt is still unwinding,
+// is answered the same bounded way instead of queuing behind it.
+func TestRetryWhileBootStillUnwindingAnswersBusy(t *testing.T) {
+	const token = "test-admin-token"
+	n := newTestNode(t, token)
+	n.interruptWait = 100 * time.Millisecond
+	attempts := make(chan struct{}, 4)
+	n.startFn = func(ctx context.Context, _ string, _ time.Duration) error {
+		attempts <- struct{}{}
+		<-ctx.Done()
+		time.Sleep(600 * time.Millisecond)
+		return ctx.Err()
+	}
+	n.Boot()
+	<-attempts
+	for i := 0; i < 2; i++ {
+		res := make(chan error, 1)
+		go func() { res <- n.SetAllow(token, nil) }()
+		select {
+		case err := <-res:
+			if !errors.Is(err, errBusy) {
+				t.Fatalf("request %d: %v, want errBusy", i+1, err)
+			}
+		case <-time.After(400 * time.Millisecond):
+			t.Fatalf("request %d queued behind the unwinding boot attempt", i+1)
+		}
+	}
+	select {
+	case <-attempts:
+	case <-time.After(3 * time.Second):
+		t.Fatal("boot didn't resume")
+	}
+	n.mu.Lock()
+	n.cfg = provisionConfig{}
+	n.mu.Unlock()
+	n.interruptBoot()
+}
+
+// Withdrawing a route ends connections already open to that device.
+func TestUnsharingADeviceEndsItsConnections(t *testing.T) {
+	n := &Node{advertised: []netip.Prefix{netip.MustParsePrefix("192.168.50.103/32"), netip.MustParsePrefix("192.168.50.101/32")}}
+	n.applyRoutes = func([]netip.Prefix) error { return nil }
+	from := &net.TCPAddr{IP: net.IPv4(100, 64, 0, 9), Port: 1}
+	agA, agB := net.Pipe()
+	tgA, tgB := net.Pipe()
+	defer agB.Close()
+	defer tgB.Close()
+	n.splices.add(from, netip.MustParseAddr("192.168.50.103"), agA)
+	n.splices.add(from, netip.MustParseAddr("192.168.50.101"), tgA)
+	off := false
+	n.cfg = provisionConfig{Routes: []string{"192.168.50.101"}, ShareDiscovered: &off}
+	n.RefreshRoutes()
+	agB.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, err := agB.Read(make([]byte, 1)); err == nil || errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("a connection to an unshared device stayed open: %v", err)
+	}
+	tgB.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+	if _, err := tgB.Read(make([]byte, 1)); !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("a connection to a still-shared device was closed: %v", err)
+	}
 }
