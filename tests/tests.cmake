@@ -462,6 +462,16 @@ set_tests_properties(tcp_byte_proxy_test PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 
 # the radio-facing loopback address, and loopback UDP peers on 127.0.0.1 and
 # 127.0.0.2. No radio protocol or firmware stand-in. Exit 77 when loopback
 # cannot be bound.
+# The AetherKnob audio spectrum: real FFT data through the feeder's band
+# mapping; a tone must light the bar whose log band holds it.
+add_executable(ctr2_audio_spectrum_feeder_test
+    tests/ctr2_audio_spectrum_feeder_test.cpp
+    src/gui/Ctr2AudioSpectrumFeeder.cpp
+    src/gui/ClientEqFftAnalyzer.cpp)
+target_include_directories(ctr2_audio_spectrum_feeder_test PRIVATE src)
+target_link_libraries(ctr2_audio_spectrum_feeder_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME ctr2_audio_spectrum_feeder_test COMMAND ctr2_audio_spectrum_feeder_test)
+
 add_executable(ctr2_usb_relay_test tests/ctr2_usb_relay_test.cpp)
 target_include_directories(ctr2_usb_relay_test PRIVATE src)
 target_link_libraries(ctr2_usb_relay_test PRIVATE aethercore Qt6::Core Qt6::Network)
