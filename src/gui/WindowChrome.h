@@ -1,10 +1,10 @@
 #pragma once
 
 #include <QGuiApplication>
+#include <QJsonObject>
 #include <QMargins>
 #include <QRect>
 #include <QString>
-#include <QStringList>
 #include <QWidget>
 #include <QWindow>
 #include <QtMath>
@@ -87,42 +87,54 @@ inline QRect windowRectForClient(const QRect& client, const QRect& windowNow, co
                  client.width() + left + right, client.height() + top + bottom);
 }
 
-// A native client rect saved with the device pixel ratio it was measured at,
-// "x,y,w,h@dpr". Parsing gives an invalid rect when the text is malformed or
-// the ratio differs (UI or display scale changed), so the caller falls back
-// to Qt's own restore. (#6303)
-inline QString formatNativeClientRect(const QRect& client, qreal dpr)
+// Windows: the main window's native client rects, one per window role
+// ("main", "fullMode", "minimalMode"), each with the device pixel ratio it
+// was measured at. Persisted as one object under kNativeGeometryKey
+// (Principle V). Reading gives an invalid rect when the role is missing or
+// malformed, out of range, or measured at another ratio (UI or display scale
+// changed), so the caller falls back to Qt's own restore. (#6303)
+inline const QString kNativeGeometryKey = QStringLiteral("MainWindowNativeGeometry");
+inline constexpr int kNativeGeometrySchemaVersion = 1;
+// Win32 window coordinates are 16-bit signed (GDI); beyond that the saved
+// value is corrupt, not a real window.
+inline constexpr int kMaxNativeCoordinate = 32767;
+
+inline QJsonObject withNativeClientRect(QJsonObject doc, const QString& role,
+                                        const QRect& client, qreal dpr)
 {
-    return QStringLiteral("%1,%2,%3,%4@%5")
-        .arg(client.x()).arg(client.y()).arg(client.width()).arg(client.height())
-        .arg(dpr, 0, 'g', 6);
+    doc.insert(QStringLiteral("schemaVersion"), kNativeGeometrySchemaVersion);
+    doc.insert(role, QJsonObject{
+        {QStringLiteral("x"), client.x()},
+        {QStringLiteral("y"), client.y()},
+        {QStringLiteral("width"), client.width()},
+        {QStringLiteral("height"), client.height()},
+        {QStringLiteral("dpr"), dpr},
+    });
+    return doc;
 }
 
-inline QRect parseNativeClientRect(const QString& text, qreal dpr)
+inline QRect savedNativeClientRect(const QJsonObject& doc, const QString& role, qreal dpr)
 {
-    const QStringList parts = text.split(QLatin1Char('@'));
-    if (parts.size() != 2) {
+    if (doc.value(QStringLiteral("schemaVersion")).toInt() != kNativeGeometrySchemaVersion) {
         return {};
     }
-    bool dprOk = false;
-    const qreal savedDpr = parts.at(1).toDouble(&dprOk);
-    if (!dprOk || !qFuzzyCompare(savedDpr, dpr)) {
-        return {};
-    }
-    const QStringList v = parts.at(0).split(QLatin1Char(','));
-    if (v.size() != 4) {
+    const QJsonObject r = doc.value(role).toObject();
+    const QJsonValue savedDpr = r.value(QStringLiteral("dpr"));
+    if (!savedDpr.isDouble() || !qFuzzyCompare(savedDpr.toDouble(), dpr)) {
         return {};
     }
     int n[4] = {};
+    const char* const fields[4] = {"x", "y", "width", "height"};
     for (int i = 0; i < 4; ++i) {
-        bool ok = false;
-        n[i] = v.at(i).toInt(&ok);
-        if (!ok) {
+        const QJsonValue v = r.value(QLatin1String(fields[i]));
+        const double d = v.toDouble();
+        if (!v.isDouble() || d != qFloor(d)
+            || d < -kMaxNativeCoordinate || d > kMaxNativeCoordinate) {
             return {};
         }
+        n[i] = int(d);
     }
-    const QRect client(n[0], n[1], n[2], n[3]);
-    return client.width() > 0 && client.height() > 0 ? client : QRect();
+    return QRect(n[0], n[1], n[2], n[3]);  // invalid when empty
 }
 
 inline QMargins contentInsets(const QWidget* window)

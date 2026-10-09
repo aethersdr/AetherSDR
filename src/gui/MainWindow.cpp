@@ -3820,6 +3820,41 @@ void MainWindow::setNativeClientRect(const QRect& client)
     SetWindowPos(hwnd, nullptr, target.x(), target.y(), target.width(), target.height(),
                  SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_NOACTIVATE);
 }
+
+bool MainWindow::nativeClientRectRestorable() const
+{
+    return isVisible() && windowFlags().testFlag(Qt::ExpandedClientAreaHint)
+        && !(windowState() & (Qt::WindowMinimized | Qt::WindowMaximized | Qt::WindowFullScreen));
+}
+
+void MainWindow::saveNativeClientRect(const QString& role)
+{
+    auto& s = AppSettings::instance();
+    QJsonObject doc = QJsonDocument::fromJson(
+        s.value(WindowChrome::kNativeGeometryKey).toString().toUtf8()).object();
+    const QRect client = nativeClientRectRestorable() ? nativeClientRect() : QRect();
+    if (client.isValid()) {
+        doc = WindowChrome::withNativeClientRect(doc, role, client, devicePixelRatioF());
+    } else {
+        doc.remove(role);
+    }
+    s.setValue(WindowChrome::kNativeGeometryKey,
+               QString::fromUtf8(QJsonDocument(doc).toJson(QJsonDocument::Compact)));
+}
+
+void MainWindow::restoreNativeClientRect(const QString& role)
+{
+    if (!nativeClientRectRestorable()) {
+        return;
+    }
+    const QJsonObject doc = QJsonDocument::fromJson(
+        AppSettings::instance().value(WindowChrome::kNativeGeometryKey).toString().toUtf8())
+        .object();
+    const QRect saved = WindowChrome::savedNativeClientRect(doc, role, devicePixelRatioF());
+    if (saved.isValid()) {
+        setNativeClientRect(saved);
+    }
+}
 #endif
 
 void MainWindow::showEvent(QShowEvent* event)
@@ -3877,15 +3912,7 @@ void MainWindow::reapplyStartupGeometryAfterShow()
     // Qt 6.12's frame margins under the expanded client area do not match the
     // window, so neither restoreGeometry() nor geometry() round-trips its size.
     // Put back the client rect Windows reported at exit, if the scale matches.
-    if (windowFlags().testFlag(Qt::ExpandedClientAreaHint)
-        && windowState() == Qt::WindowNoState) {
-        const QRect saved = WindowChrome::parseNativeClientRect(
-            AppSettings::instance().value("MainWindowNativeClientRect").toString(),
-            devicePixelRatioF());
-        if (saved.isValid()) {
-            setNativeClientRect(saved);
-        }
-    }
+    restoreNativeClientRect(QStringLiteral("main"));
 #endif
 
     // Test the frame's center against each screen's full geometry rather than
@@ -4097,13 +4124,11 @@ void MainWindow::closeEvent(QCloseEvent* event)
     s.setValue("MainWindowGeometry", saveGeometry().toBase64());
     s.setValue("MainWindowState",   saveState().toBase64());
 #ifdef Q_OS_WIN
-    // Read back on the next launch by reapplyStartupGeometryAfterShow().
-    const bool nativeRestorable = windowFlags().testFlag(Qt::ExpandedClientAreaHint)
-        && windowState() == Qt::WindowNoState;
-    s.setValue("MainWindowNativeClientRect",
-               nativeRestorable ? WindowChrome::formatNativeClientRect(
-                                      nativeClientRect(), devicePixelRatioF())
-                                : QString());
+    // Read back on the next launch by reapplyStartupGeometryAfterShow(). A
+    // maximized close keeps the last normal rect rather than erasing it.
+    if (nativeClientRectRestorable()) {
+        saveNativeClientRect(QStringLiteral("main"));
+    }
 #endif
 
     // Refresh MinimalModeGeometry on close so a user who launches in
@@ -4118,6 +4143,9 @@ void MainWindow::closeEvent(QCloseEvent* event)
     if (m_minimalMode &&
         !(windowState() & (Qt::WindowMaximized | Qt::WindowFullScreen))) {
         s.setValue("MinimalModeGeometry", saveGeometry().toBase64());
+#ifdef Q_OS_WIN
+        saveNativeClientRect(QStringLiteral("minimalMode"));
+#endif
     }
 
     // Close the applet-panel pop-out window if it's floating.  We
@@ -9979,7 +10007,8 @@ void MainWindow::setFramelessWindow(bool on)
 #ifdef Q_OS_WIN
     // On one side of this switch geometry() is off by Qt's expanded-frame
     // margin error; keep the client area Windows reports instead.
-    const QRect nativeClient = wasVisible && windowState() == Qt::WindowNoState
+    const QRect nativeClient = wasVisible
+            && !(windowState() & (Qt::WindowMinimized | Qt::WindowMaximized | Qt::WindowFullScreen))
         ? nativeClientRect() : QRect();
 #endif
     WindowChrome::configure(this, on);
@@ -10140,6 +10169,9 @@ void MainWindow::toggleMinimalMode(bool on)
         // Save full-mode geometry (preserves the Maximized/FullScreen bit so
         // exit can restore the user's pre-minimal window).
         s.setValue("FullModeGeometry", saveGeometry().toBase64());
+#ifdef Q_OS_WIN
+        saveNativeClientRect(QStringLiteral("fullMode"));
+#endif
 
         // Drop maximized/fullscreen state before forcing the applet width.
         // Without this, macOS keeps the bit set through setFixedWidth(260)
@@ -10179,6 +10211,9 @@ void MainWindow::toggleMinimalMode(bool on)
             s.value("MinimalModeGeometry", "").toByteArray());
         if (!geom.isEmpty()) {
             restoreGeometry(geom);
+#ifdef Q_OS_WIN
+            restoreNativeClientRect(QStringLiteral("minimalMode"));
+#endif
         }
         // Defer clearing the guard so any AppKit-deferred WindowStateChange
         // queued by the showNormal() / setFixedWidth() calls above is drained
@@ -10206,6 +10241,10 @@ void MainWindow::toggleMinimalMode(bool on)
             showNormal();
         else
             s.setValue("MinimalModeGeometry", saveGeometry().toBase64());
+#ifdef Q_OS_WIN
+        if (!abnormalState)
+            saveNativeClientRect(QStringLiteral("minimalMode"));
+#endif
 
         // Reparent applet panel back into the splitter and restore layout
         m_splitter->addWidget(m_appletPanel);
@@ -10259,6 +10298,10 @@ void MainWindow::toggleMinimalMode(bool on)
         // Belt-and-suspenders: if FullModeGeometry encoded a state, ensure
         // we land windowed.
         showNormal();
+#ifdef Q_OS_WIN
+        if (!geom.isEmpty())
+            restoreNativeClientRect(QStringLiteral("fullMode"));
+#endif
 
         // Now show the spectrum, one turn later (see the note above the
         // splitter restore).  Queued BEFORE the canvas re-entry below, which

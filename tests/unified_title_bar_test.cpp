@@ -39,6 +39,8 @@
 #include <QFocusEvent>
 #include <QFrame>
 #include <QImage>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
@@ -155,18 +157,62 @@ int main(int argc, char** argv)
                                                 QRect(165, 44, 1099, 340))
                   == QRect(157, 13, 1115, 379),
               "the caption height goes above the client rect");
+        // Left 3 px, right 11 px: swapping the two sides moves the window.
+        check(WindowChrome::windowRectForClient(QRect(100, 100, 500, 300),
+                                                QRect(0, 0, 614, 308), QRect(3, 0, 600, 300))
+                  == QRect(97, 100, 514, 308),
+              "the left and right borders are kept apart");
 
-        const QString saved = WindowChrome::formatNativeClientRect(expandedClient, 0.85);
-        check(WindowChrome::parseNativeClientRect(saved, 0.85) == expandedClient,
+        const qreal dpr = 0.85;
+        const QJsonObject doc = WindowChrome::withNativeClientRect({}, QStringLiteral("main"),
+                                                                   expandedClient, dpr);
+        // Through the store's compact JSON, as AppSettings round-trips it.
+        const QJsonObject stored = QJsonDocument::fromJson(
+            QJsonDocument(doc).toJson(QJsonDocument::Compact)).object();
+        check(WindowChrome::savedNativeClientRect(stored, QStringLiteral("main"), dpr)
+                  == expandedClient,
               "a saved native client rect reads back at the same scale");
-        check(!WindowChrome::parseNativeClientRect(saved, 1.0).isValid(),
+        check(!WindowChrome::savedNativeClientRect(stored, QStringLiteral("fullMode"), dpr).isValid(),
+              "another window role is not read from this one");
+        check(!WindowChrome::savedNativeClientRect(stored, QStringLiteral("main"), 1.0).isValid(),
               "a different scale falls back to Qt's restore");
-        check(!WindowChrome::parseNativeClientRect(QString(), 0.85).isValid(),
+        check(!WindowChrome::savedNativeClientRect({}, QStringLiteral("main"), dpr).isValid(),
               "nothing saved gives no rect");
-        check(!WindowChrome::parseNativeClientRect(QStringLiteral("1,2,three,4@0.85"), 0.85).isValid(),
-              "a malformed value gives no rect");
-        check(!WindowChrome::parseNativeClientRect(QStringLiteral("1,2,0,4@0.85"), 0.85).isValid(),
-              "an empty rect gives no rect");
+
+        // A custom 110 DPI under a 0.85 UI scale needs more than six digits.
+        const qreal oddDpr = 110.0 / 96.0 * 0.85;
+        const QJsonObject oddStored = QJsonDocument::fromJson(QJsonDocument(
+            WindowChrome::withNativeClientRect({}, QStringLiteral("main"), expandedClient, oddDpr))
+            .toJson(QJsonDocument::Compact)).object();
+        check(WindowChrome::savedNativeClientRect(oddStored, QStringLiteral("main"), oddDpr)
+                  == expandedClient,
+              "the scale survives storage at full precision");
+
+        const auto withMain = [&](const QJsonObject& rect) {
+            QJsonObject d = doc;
+            d.insert(QStringLiteral("main"), rect);
+            return WindowChrome::savedNativeClientRect(d, QStringLiteral("main"), dpr);
+        };
+        const QJsonObject good = doc.value(QStringLiteral("main")).toObject();
+        QJsonObject huge = good;
+        huge.insert(QStringLiteral("width"), 100000);
+        check(!withMain(huge).isValid(), "a width past the Win32 coordinate range gives no rect");
+        QJsonObject far = good;
+        far.insert(QStringLiteral("x"), -40000);
+        check(!withMain(far).isValid(), "a position past the Win32 coordinate range gives no rect");
+        QJsonObject text = good;
+        text.insert(QStringLiteral("y"), QStringLiteral("44"));
+        check(!withMain(text).isValid(), "a malformed value gives no rect");
+        QJsonObject fractional = good;
+        fractional.insert(QStringLiteral("height"), 340.5);
+        check(!withMain(fractional).isValid(), "a fractional pixel gives no rect");
+        QJsonObject future = doc;
+        future.insert(QStringLiteral("schemaVersion"), 2);
+        check(!WindowChrome::savedNativeClientRect(future, QStringLiteral("main"), dpr).isValid(),
+              "a document from a newer schema is not read");
+        QJsonObject empty = good;
+        empty.insert(QStringLiteral("width"), 0);
+        check(!withMain(empty).isValid(), "an empty rect gives no rect");
     }
 
     WindowChrome::configure(&host, true);

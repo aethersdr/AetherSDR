@@ -357,6 +357,12 @@ protected:
     // client area (#6303).
     QRect nativeClientRect() const;
     void setNativeClientRect(const QRect& client);
+    // Per window role ("main", "fullMode", "minimalMode") through the
+    // WindowChrome::kNativeGeometryKey document; only in the normal state
+    // under the expanded client area, the only place Qt's margins are wrong.
+    bool nativeClientRectRestorable() const;
+    void saveNativeClientRect(const QString& role);
+    void restoreNativeClientRect(const QString& role);
 #endif
     void closeEvent(QCloseEvent* event) override;
     void changeEvent(QEvent* event) override;
