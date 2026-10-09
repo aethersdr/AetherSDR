@@ -183,6 +183,29 @@ int main(int argc, char** argv)
         CHECK(std::abs(queuedBins.front() - (-35 - 350.0f / 699 * 130)) < 0.001f);
     }
 
+    // A stream that never took a range write (its status matched the -130/-40
+    // default) still decodes with a valid generation, and the first real write
+    // supersedes it.
+    {
+        constexpr quint32 kFreshStreamId = kStreamId + 1;
+        stream.registerPanStream(kFreshStreamId);
+        SpectrumDecodeScale first;
+        QObject receiver;
+        QObject::connect(&stream, &PanadapterStream::spectrumReady, &receiver,
+            [&](quint32 id, const QVector<float>&, qint64, const SpectrumDecodeScale& scale) {
+                if (id == kFreshStreamId) {
+                    first = scale;
+                }
+            }, Qt::QueuedConnection);
+        PanadapterDbmRangeTestAccess::fft(stream, kFreshStreamId);
+        app.processEvents();
+        CHECK(first.valid());
+        CHECK(first.minDbm == -130.0f && first.maxDbm == -40.0f);
+        const SpectrumDecodeScale written = stream.setDbmRange(kFreshStreamId, -100.0f, -10.0f);
+        CHECK(written.generation > first.generation);
+        stream.unregisterPanStream(kFreshStreamId);
+    }
+
     {
         DbmRangeTransition::FrameGuard frames;
         const DbmRangeTransition::Range first{-165, -35}, middle{-127.5f, 2.5f};

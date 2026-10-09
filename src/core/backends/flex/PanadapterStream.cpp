@@ -1051,7 +1051,14 @@ void PanadapterStream::decodeFFT(const uchar* raw, int totalBytes, bool hasTrail
     {
         QMutexLocker lock(&m_streamMutex);
         dbmRange = m_dbmRanges.value(streamId, {-130.0f, -40.0f});
-        decodeScale = {dbmRange.first, dbmRange.second, m_dbmRangeGenerations.value(streamId)};
+        // A stream whose range was never written (status matched the -130/-40
+        // default) still needs a nonzero generation, or its frames can't be told
+        // apart from a later write's and the release guard is bypassed.
+        quint64& generation = m_dbmRangeGenerations[streamId];
+        if (generation == 0) {
+            generation = ++m_nextDbmRangeGeneration;
+        }
+        decodeScale = {dbmRange.first, dbmRange.second, generation};
         yPixVal = m_yPixels.value(streamId, 700);
     }
     auto [minDbm, maxDbm] = dbmRange;
