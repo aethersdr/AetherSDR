@@ -2243,6 +2243,8 @@ QWidget* RadioSetupDialog::buildNetworkTab()
         mtuSpin->setSuffix(" bytes");
         mtuSpin->setToolTip("Maximum Transmission Unit for VITA-49 UDP packets.\nDefault: 1450 (compatible with most VPN/SD-WAN tunnels).\nOver Tailscale the radio is sent at most 1200.");
         connect(mtuSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, [this](int val) {
+            // Save first: networkMtuParam() re-reads the setting, so sending
+            // before the write would put the previous value on the wire.
             AppSettings::instance().setValue("NetworkMtu", QString::number(val));
             AppSettings::instance().save();
             // Over Tailscale the radio gets the capped value (#5949), never

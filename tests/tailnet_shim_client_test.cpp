@@ -305,6 +305,11 @@ int main(int argc, char** argv)
         ok &= expect(networkMtuFor(9000, true) == kTailnetNetworkMtu, "jumbo is capped");
         ok &= expect(networkMtuFor(1100, true) == 1100, "a smaller saved value is kept");
         ok &= expect(networkMtuFor(1450, false) == 1450, "off a tailnet the setting is sent as is");
+        ok &= expect(networkMtuFor(0, false) == kDefaultNetworkMtu,
+                     "an empty or damaged setting sends the default, never 0");
+        ok &= expect(networkMtuFor(0, true) == kTailnetNetworkMtu, "and is still capped");
+        ok &= expect(networkMtuFor(100000, false) == kDefaultNetworkMtu, "out of range above");
+        ok &= expect(networkMtuFor(kMinNetworkMtu, false) == kMinNetworkMtu, "the range's floor is kept");
     }
 
     // Strings from the container are capped before they reach the window.

@@ -5214,8 +5214,13 @@ int RadioModel::networkMtuParam() const
                               m_connection ? m_connection->localAddress() : QHostAddress());
     const int mtu = networkMtuFor(saved, overTailnet);
     if (mtu != saved) {
-        qCInfo(lcProtocol) << "RadioModel: network MTU" << saved << "capped at" << mtu
-                           << "because the path to the radio runs over Tailscale";
+        if (overTailnet && mtu == kTailnetNetworkMtu) {
+            qCInfo(lcProtocol) << "RadioModel: network MTU" << saved << "capped at" << mtu
+                               << "because the path to the radio runs over Tailscale";
+        } else {
+            qCWarning(lcProtocol) << "RadioModel: NetworkMtu setting" << saved
+                                  << "is out of range; sending" << mtu;
+        }
     }
     return mtu;
 }
