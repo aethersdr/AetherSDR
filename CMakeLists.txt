@@ -153,11 +153,11 @@ if(AETHER_SHARED_CORE)
     if(WIN32)
         message(FATAL_ERROR "AETHER_SHARED_CORE is not supported on Windows")
     endif()
-    # Vendored static libraries end up inside the shared core. Their symbols
-    # do not reach the core's consumers: a PRIVATE dependency stops at a
-    # shared library, and aether_wdsp is built with hidden visibility. A test
-    # that calls WDSP directly while linking only aethercore links against
-    # the static core and fails here; go through core/dsp/WdspChannel.h.
+    # Vendored static libraries end up inside the shared core, and their
+    # symbols do not reach its consumers (PRIVATE dependency, hidden
+    # visibility). A test calling WDSP directly goes through
+    # core/dsp/WdspChannel.h, or links aether_wdsp itself and so gets its own
+    # copy of WDSP's state, which cannot see the channels the core opened.
     set(CMAKE_POSITION_INDEPENDENT_CODE ON)
     set(_aether_core_library_type SHARED)
     message(STATUS "AetherSDR: libaethercore built SHARED (AETHER_SHARED_CORE)")
