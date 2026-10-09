@@ -1,7 +1,7 @@
 // remote_audio_rx has no registration in PanadapterStream, so RadioModel
-// restarts its VITA-49 sequence tracking when the radio reports the stream
-// (adopted) or its removal (every removed stream id reaches
-// PanadapterStream::unregisterDaxStream()) (#6285). The radio can give a re-created stream the same
+// restarts the VITA-49 sequence tracking of every stream the radio reports
+// removed (#6285), and of nothing else: a status for a stream still flowing
+// must not hide a gap. The radio can give a re-created stream the same
 // id; without the restart its first packet is measured against the old
 // stream's last count and counted (and logged) as a sequence error.
 // Socket-free: a backend with no transport, status lines fed to the model's
@@ -89,21 +89,22 @@ int main(int argc, char** argv)
     }
     report("in-order packets count no error", stream->packetErrorCount() == 0);
 
-    // The radio reports the stream (as after a create that reused the id).
+    // The radio reports the stream; it keeps flowing, so a gap across the
+    // status line is a real one.
     radio.handleStatusForTest(object, {{QStringLiteral("type"), QStringLiteral("remote_audio_rx")},
                                        {QStringLiteral("compression"), QStringLiteral("none")}});
-    VitaSequenceLossLogTestAccess::feedMeter(*stream, id, 9);  // old instance ended at 2
-    report("adopted: the stream's first packet counts no error", stream->packetErrorCount() == 0);
-    VitaSequenceLossLogTestAccess::feedMeter(*stream, id, 10);
+    VitaSequenceLossLogTestAccess::feedMeter(*stream, id, 5);  // 3..4 missing
+    report("adopted: a gap in a stream still flowing counts", stream->packetErrorCount() == 1);
+    VitaSequenceLossLogTestAccess::feedMeter(*stream, id, 6);
 
     // The radio removes it; the next stream with this id starts over.
     radio.handleStatusForTest(object + QStringLiteral(" removed"), {});
-    VitaSequenceLossLogTestAccess::feedMeter(*stream, id, 0);  // old instance ended at 10
+    VitaSequenceLossLogTestAccess::feedMeter(*stream, id, 0);  // old instance ended at 6
     report("removed: a re-created stream's first packet counts no error",
-           stream->packetErrorCount() == 0);
+           stream->packetErrorCount() == 1);
 
     VitaSequenceLossLogTestAccess::feedMeter(*stream, id, 4);  // 1..3 missing
-    report("a real gap still counts", stream->packetErrorCount() == 1);
+    report("a real gap still counts", stream->packetErrorCount() == 2);
 
     std::printf("%s\n", g_failed ? "FAILED" : "PASSED");
     return g_failed ? 1 : 0;

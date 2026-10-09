@@ -276,7 +276,8 @@ int main(int argc, char* argv[])
 
     // NOTE ON ORDER: the QT_QPA_PLATFORM block runs BEFORE
     // GpuSelector::applyAtStartup() below. GpuSelector::willUseWayland() reads
-    // QT_QPA_PLATFORM to decide whether to apply the X11/GLX NVIDIA vendor hint
+    // the -platform argument (passed in) or else QT_QPA_PLATFORM to decide
+    // whether to apply the X11/GLX NVIDIA vendor hint
     // (__GLX_VENDOR_LIBRARY_NAME), so our platform choice must be in the
     // environment before it runs — otherwise a headless box that we route to
     // XWayland/GLX would be mistaken for EGL/Wayland and lose PRIME offload.

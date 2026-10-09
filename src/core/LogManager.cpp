@@ -135,6 +135,7 @@ LogManager::LogManager()
         {"aether.icom.pan",     "Icom Scope",    "Icom spectrum scope: sweep frames, division reassembly, bounds"},
         {"aether.icom.link",    "Icom Link",     "Icom backend link state: connect/disconnect, model resolution, capability publication"},
         {"aether.icom.cred",    "Icom Credentials", "Icom credential storage and retrieval (no secret values are logged)"},
+        {"aether.nvafx",      "BNR (NVIDIA AFX)", "BNR GPU noise removal: runtime pack download and install failures, network transfer errors, filter load errors"},
         {"aether.sysinfo",    "System Info",  "Startup hardware/capability inventory: OS, CPU model + SIMD features, RAM, and the speech-engine ISA baseline check (#4986). A few lines once per launch"},
     };
 

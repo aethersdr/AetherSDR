@@ -10,14 +10,16 @@ QString QtPlatformChoice::firstRequested(const QString& requested)
     return first.section(QLatin1Char(':'), 0, 0).trimmed();
 }
 
-// "wayland" loads as "wayland" or "wayland-egl", so a prefix match is a hit.
+// "wayland" loads as "wayland" or "wayland-egl", and "wayland-egl" reports
+// itself as "wayland", so a prefix match either way is a hit.
 bool QtPlatformChoice::fellBack(const QString& requested, const QString& platformName)
 {
     const QString first = firstRequested(requested);
     if (first.isEmpty() || platformName.isEmpty()) {
         return false;
     }
-    return !platformName.startsWith(first, Qt::CaseInsensitive);
+    return !platformName.startsWith(first, Qt::CaseInsensitive)
+        && !first.startsWith(platformName, Qt::CaseInsensitive);
 }
 
 // Mirrors QGuiApplicationPrivate's argument loop: one leading '-' of "--" is

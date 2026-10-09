@@ -62,7 +62,7 @@ inline QString formatVitaSequenceLoss(const QString& category, quint32 streamId,
     return QStringLiteral("PanadapterStream: VITA-49 sequence errors on %1 stream 0x%2: "
                           "%3 in the last %4 s, %5 since the stream started "
                           "(%6 packets received)")
-        .arg(category, QString::number(streamId, 16))
+        .arg(category, QString::number(streamId, 16).rightJustified(8, QLatin1Char('0')))
         .arg(errors)
         .arg(seconds)
         .arg(totalErrors)

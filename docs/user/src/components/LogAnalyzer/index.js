@@ -132,9 +132,10 @@ export default function LogAnalyzer() {
       <div className={styles.privacy} role="note">
         <strong>Your log stays on your computer.</strong> The analysis runs entirely in
         your browser. The file is never uploaded, and this page sends nothing anywhere.
-        AetherSDR already masks these in its logs: IPv4 and MAC addresses (all but the last
-        part), IPv6 addresses, radio serial numbers (all but the last group), passwords,
-        tokens, email addresses and your home directory.
+        AetherSDR already masks personal details in its logs: IPv4 and MAC addresses (all but
+        the last part), IPv6 addresses, host names it connects to, radio serial numbers (all
+        but the last group), passwords, tokens and keys, names, email addresses, locations and
+        grid squares, and your home directory.
       </div>
 
       <h2>Find your log</h2>

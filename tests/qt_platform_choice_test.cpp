@@ -38,6 +38,8 @@ int main()
     report("xcb is a fallback from wayland;xcb", QtPlatformChoice::fellBack("wayland;xcb", "xcb"));
     report("wayland is a fallback from xcb;wayland", QtPlatformChoice::fellBack("xcb;wayland", "wayland"));
     report("unset is never a fallback", !QtPlatformChoice::fellBack("", "xcb"));
+    report("wayland is not a fallback from wayland-egl",
+           !QtPlatformChoice::fellBack("wayland-egl", "wayland"));
 
     {
         const QStringList l = QtPlatformChoice::logLines("wayland;xcb", QpaRequestSource::AetherSDR, "wayland");

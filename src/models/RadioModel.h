@@ -1378,7 +1378,6 @@ public:
     // PC Audio: create/remove remote_audio_rx stream
     void createRxAudioStream();
     void removeRxAudioStream();
-    void restartRxAudioSequence(quint32 streamId);
 
     // Send a command with a response callback (for firmware uploader, etc.)
     void sendCmdPublic(const QString& cmd, std::function<void(int code, const QString& body)> cb);

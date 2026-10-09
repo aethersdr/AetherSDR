@@ -136,6 +136,9 @@ int main(int argc, char** argv)
                line == QStringLiteral("PanadapterStream: VITA-49 sequence errors on FFT stream "
                                       "0x40000000: 12 in the last 10 s, 31 since the stream "
                                       "started (52310 packets received)"));
+        report("stream id padded to 8 hex digits, as the radio lists it",
+               formatVitaSequenceLoss(QStringLiteral("audio"), 0x04000008u, 1, 0, 1, 2)
+                   .contains(QStringLiteral(" stream 0x04000008: ")));
         report("analyzer prefix",
                line.startsWith(QStringLiteral("PanadapterStream: VITA-49 sequence errors on ")));
     }

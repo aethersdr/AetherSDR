@@ -33,12 +33,12 @@
       "source": [
         {
           "file": "src/QtPlatformChoice.cpp",
-          "line": 59,
+          "line": 61,
           "text": "Platform: Qt platform plugin \\\"%1\\\" (QT_QPA_PLATFORM="
         },
         {
           "file": "src/QtPlatformChoice.cpp",
-          "line": 48,
+          "line": 50,
           "text": "Platform: Qt platform plugin \\\"%1\\\" (-platform"
         }
       ]
@@ -591,7 +591,7 @@
       "source": [
         {
           "file": "src/QtPlatformChoice.cpp",
-          "line": 63,
+          "line": 65,
           "text": "Platform: Qt fell back from"
         }
       ]

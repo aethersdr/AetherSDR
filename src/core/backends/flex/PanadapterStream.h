@@ -90,8 +90,9 @@ public:
     // The stream's next packet starts a new instance: no sequence error
     // against the previous instance's last count, and the log line's counts
     // and window start over. The unregister*() calls and clearRegisteredStreams()
-    // do this; a stream with no registration here (remote_audio_rx) is
-    // restarted by its owner when it is removed or created. Takes m_statsMutex.
+    // do this; RadioModel calls it for every stream the radio reports removed,
+    // which covers streams with no registration here (remote_audio_rx). Takes
+    // m_statsMutex.
     void restartStreamSequence(quint32 streamId);
 
     // Layer A radio-side orphan detector (#3856): processDatagram() records any

@@ -9554,10 +9554,8 @@ void RadioModel::createRxAudioStream()
                                         << "with create response"
                                         << RadioStatusOwnership::hexId(streamId);
                     sendCmd(QString("stream remove %1").arg(RadioStatusOwnership::hexId(oldStreamId)));
-                    restartRxAudioSequence(oldStreamId);
                 }
 
-                restartRxAudioSequence(streamId);
                 m_rxAudio.streamId = streamId;
                 m_rxAudio.clientHandle = clientHandle();
                 m_rxAudio.compression = audioCompressionParam();
@@ -9573,18 +9571,6 @@ void RadioModel::createRxAudioStream()
                 logRemoteAudioRxSummary(QStringLiteral("create failed"));
             }
         });
-}
-
-// remote_audio_rx has no registration in PanadapterStream, so its sequence
-// tracking is restarted here when the stream is created, adopted or removed by
-// us: the radio can give a re-created stream the same id, and its first packet
-// must not be measured against the old stream's last count. A removal the
-// radio reports restarts it through handleDaxRxStreamRegistry().
-void RadioModel::restartRxAudioSequence(quint32 streamId)
-{
-    if (m_panStream && streamId != 0) {
-        m_panStream->restartStreamSequence(streamId);
-    }
 }
 
 void RadioModel::removeRxAudioStream()
@@ -9606,7 +9592,6 @@ void RadioModel::removeRxAudioStream()
     sendCmd(QString("radio set mute_local_audio_when_remote=%1")
                 .arg(m_muteLocalWhenRemote ? 1 : 0));
     sendCmd(QString("stream remove %1").arg(RadioStatusOwnership::hexId(streamId)));
-    restartRxAudioSequence(streamId);
     qCDebug(lcProtocol) << "RadioModel: removed remote_audio_rx stream"
                         << RadioStatusOwnership::hexId(streamId);
     m_rxAudio.streamId = 0;
@@ -9676,7 +9661,6 @@ bool RadioModel::handleRemoteAudioRxStreamStatus(const QString& object,
     case RadioStatusOwnership::RemoteAudioRxAction::Adopted:
         qCDebug(lcProtocol) << "RadioModel: adopted owned remote_audio_rx status"
                             << streamText;
-        restartRxAudioSequence(stream.streamId);
         resetAudioStreamDiagnostics();
         logRemoteAudioRxSummary(QStringLiteral("status adopted"));
         break;
@@ -9688,8 +9672,8 @@ bool RadioModel::handleRemoteAudioRxStreamStatus(const QString& object,
     case RadioStatusOwnership::RemoteAudioRxAction::Removed:
         qCDebug(lcProtocol) << "RadioModel: owned remote_audio_rx removed"
                             << streamText;
-        // Its sequence tracking restarts in handleDaxRxStreamRegistry(), which
-        // sends every removed stream id to PanadapterStream::unregisterDaxStream().
+        // Its VITA-49 sequence tracking restarts in handleDaxRxStreamRegistry(),
+        // which does that for every removed stream id.
         resetAudioStreamDiagnostics();
         logRemoteAudioRxSummary(QStringLiteral("status removed"));
         break;
@@ -10704,6 +10688,12 @@ void RadioModel::handleDaxRxStreamRegistry(const QString& object,
         // The removed form carries no type= (state-machines.md §7.6) — route
         // by id; a non-dax_rx id is a harmless no-op in the registry.
         m_panStream->unregisterDaxStream(stream.streamId);
+        // Every removed stream, whatever its type (remote_audio_rx has no
+        // registration in PanadapterStream): the radio can give a re-created
+        // stream the same id, and its first packet must not be measured
+        // against the old stream's last sequence count. Restarting only on
+        // removal never hides a gap in a stream that is still flowing.
+        m_panStream->restartStreamSequence(stream.streamId);
         // Re-arm the #1439 nudge one-shot (#4383): a genuine `stream remove`
         // (band switch / re-create) means the next create for a reused id must
         // be allowed to nudge again. The transient unbind echo does NOT reach
