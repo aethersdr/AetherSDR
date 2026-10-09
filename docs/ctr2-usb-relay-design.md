@@ -368,6 +368,7 @@ default for any ESP32-S3 and only the product string tells them apart:
 | `303A:1001` (Espressif) | `ESP32S3_DEV` | CTR2-Max, and the CTR2-Nano in development |
 | `303A:1001` (Espressif) | `M5STACK_DIAL` | CTR2 units based on the M5Stack M5Dial |
 | `2886:0056` (Seeed) | `XIAO_ESP32S3` | CTR2-MIDI (Seeed XIAO) |
+| `303A:1001` (Espressif) | `AETHER_KNOB` | AetherKnob (Elecrow CrowPanel 2.1" rotary display) |
 
 Still open: UDP registration through a DATAGRAM to port 4992 rather than
 `client udpport`, and, for CW testing, what the CTR2 does if CLOSED arrives

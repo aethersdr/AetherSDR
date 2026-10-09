@@ -10,6 +10,9 @@ const std::vector<Ctr2HidPort::KnownCtr2>& Ctr2HidPort::knownCtr2Devices()
         {0x303A, 0x1001, "M5STACK_DIAL", "CTR2 (M5Dial)"},
         {0x303A, 0x1001, "STAMP-S3", "CTR2 (M5Dial)"},
         {0x2886, 0x0056, "XIAO_ESP32S3", "CTR2-MIDI"},
+        // Elecrow CrowPanel 2.1" rotary display running AetherKnob firmware;
+        // it speaks the same link and radio protocol as a CTR2.
+        {0x303A, 0x1001, "AETHER_KNOB", "AetherKnob"},
     };
     return kDevices;
 }

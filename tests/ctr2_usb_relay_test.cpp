@@ -718,6 +718,7 @@ void testDeviceLabels()
                                 QStringLiteral("Espressif Systems"), QStringLiteral("ESP32S3_DEV"), {}};
     Ctr2HidPort::DeviceInfo dial{QStringLiteral("p"), 0x303A, 0x1001, {}, QStringLiteral("M5STACK_DIAL"), {}};
     Ctr2HidPort::DeviceInfo midi{QStringLiteral("p"), 0x2886, 0x0056, {}, QStringLiteral("XIAO_ESP32S3"), {}};
+    Ctr2HidPort::DeviceInfo knob{QStringLiteral("p"), 0x303A, 0x1001, {}, QStringLiteral("AETHER_KNOB"), {}};
     Ctr2HidPort::DeviceInfo devBoard{QStringLiteral("p"), 0x303A, 0x1001, {}, QStringLiteral("Some_S3_Gadget"), {}};
     Ctr2HidPort::DeviceInfo wrongVid{QStringLiteral("p"), 0x1234, 0x1001, {}, QStringLiteral("ESP32S3_DEV"), {}};
     Ctr2HidPort::DeviceInfo other{QStringLiteral("p"), 0x04F3, 0x32BC, {}, QStringLiteral("Touchpad"), {}};
@@ -725,6 +726,7 @@ void testDeviceLabels()
           "CTR2-Max/Nano product string is named");
     check(dial.ctr2Model() == QStringLiteral("CTR2 (M5Dial)") && midi.ctr2Model() == QStringLiteral("CTR2-MIDI"),
           "M5Dial and MIDI product strings are named");
+    check(knob.ctr2Model() == QStringLiteral("AetherKnob"), "the AetherKnob product string is named");
     check(other.ctr2Model().isEmpty() && other.label() == QStringLiteral("Touchpad (04f3:32bc)"),
           "other devices keep their plain label");
     check(devBoard.ctr2Model().isEmpty() && wrongVid.ctr2Model().isEmpty(),
