@@ -18,14 +18,14 @@ namespace {
 
 constexpr float kBallSmoothAlpha = 0.30f;
 
-inline QColor kBgColor() { return AetherSDR::ThemeManager::instance().color("color.background.0"); }
-inline QColor kGridColor() { return AetherSDR::ThemeManager::instance().color("color.background.1"); }
-inline QColor kGridMajorColor() { return AetherSDR::ThemeManager::instance().color("color.background.1"); }
-inline QColor kAxisLabelColor() { return AetherSDR::ThemeManager::instance().color("color.text.label"); }
-inline QColor kIdentityColor() { return AetherSDR::ThemeManager::instance().color("color.background.1"); }
-inline QColor kCurveColor() { return AetherSDR::ThemeManager::instance().color("color.accent.warning"); }  // amber — reads as gate/expander
-inline QColor kBallGlowColor() { return AetherSDR::ThemeManager::instance().color("color.accent.warning"); }
-inline QColor kBallCoreColor() { return AetherSDR::ThemeManager::instance().color("color.text.primary"); }  // -80..0 dB range with matching majors; gate can attenuate much
+inline QColor kBgColor(const QWidget* w) { return AetherSDR::ThemeManager::instance().color(w, "color.background.0"); }
+inline QColor kGridColor(const QWidget* w) { return AetherSDR::ThemeManager::instance().color(w, "color.background.1"); }
+inline QColor kGridMajorColor(const QWidget* w) { return AetherSDR::ThemeManager::instance().color(w, "color.background.1"); }
+inline QColor kAxisLabelColor(const QWidget* w) { return AetherSDR::ThemeManager::instance().color(w, "color.text.label"); }
+inline QColor kIdentityColor(const QWidget* w) { return AetherSDR::ThemeManager::instance().color(w, "color.background.1"); }
+inline QColor kCurveColor(const QWidget* w) { return AetherSDR::ThemeManager::instance().color(w, "color.accent.warning"); }  // amber — reads as gate/expander
+inline QColor kBallGlowColor(const QWidget* w) { return AetherSDR::ThemeManager::instance().color(w, "color.accent.warning"); }
+inline QColor kBallCoreColor(const QWidget* w) { return AetherSDR::ThemeManager::instance().color(w, "color.text.primary"); }  // -80..0 dB range with matching majors; gate can attenuate much
 // deeper than comp, so the grid needs to show the full -80 floor.
 const float kMajorTicks[] = { 0.0f, -20.0f, -40.0f, -60.0f, -80.0f };
 const float kMinorTicks[] = { -10.0f, -30.0f, -50.0f, -70.0f };
@@ -100,7 +100,7 @@ void ClientGateCurveWidget::paintEvent(QPaintEvent*)
     p.setRenderHint(QPainter::Antialiasing, true);
 
     const QRectF r = rect();
-    p.fillRect(r, kBgColor());
+    p.fillRect(r, kBgColor(this));
     drawGrid(p, r);
     drawHysteresisBand(p, r);
     drawCurve(p, r);
@@ -126,7 +126,7 @@ void ClientGateCurveWidget::drawHysteresisBand(QPainter& p, const QRectF& r) con
     p.save();
     p.setPen(Qt::NoPen);
     p.fillRect(QRectF(xL, r.top(), xR - xL, r.height()),
-               AetherSDR::theme::withAlpha("color.accent.dim", 45));   // soft cyan, low alpha
+               AetherSDR::theme::withAlpha(this, "color.accent.dim", 45));   // soft cyan, low alpha
     p.restore();
 }
 
@@ -134,8 +134,8 @@ void ClientGateCurveWidget::drawGrid(QPainter& p, const QRectF& r) const
 {
     p.save();
 
-    const QPen minorPen(kGridColor(), 1.0);
-    const QPen majorPen(kGridMajorColor(), 1.0);
+    const QPen minorPen(kGridColor(this), 1.0);
+    const QPen majorPen(kGridMajorColor(this), 1.0);
 
     p.setPen(minorPen);
     for (float db : kMinorTicks) {
@@ -172,7 +172,7 @@ void ClientGateCurveWidget::drawGrid(QPainter& p, const QRectF& r) const
 
         if (!m_compact && db != 0.0f && db != kMinDb) {
             m_axisLabels[i].prepare(p.transform(), f);
-            p.setPen(kAxisLabelColor());
+            p.setPen(kAxisLabelColor(this));
             p.drawStaticText(QPointF(x + 2.0f, r.bottom() - 2.0f - ascent),
                              m_axisLabels[i]);
             p.drawStaticText(QPointF(r.left() + 2.0f, y - 2.0f - ascent),
@@ -183,7 +183,7 @@ void ClientGateCurveWidget::drawGrid(QPainter& p, const QRectF& r) const
 
     // Identity diagonal — dim reference showing where the curve sits
     // when the gate is fully open (above threshold).
-    p.setPen(QPen(kIdentityColor(), 1.0, Qt::DashLine));
+    p.setPen(QPen(kIdentityColor(this), 1.0, Qt::DashLine));
     p.drawLine(QPointF(dbToX(kMinDb), dbToY(kMinDb)),
                QPointF(dbToX(kMaxDb), dbToY(kMaxDb)));
 
@@ -207,7 +207,7 @@ void ClientGateCurveWidget::drawCurve(QPainter& p, const QRectF& /* r */) const
         else        path.lineTo(pt);
     }
 
-    QPen curvePen(kCurveColor(), m_compact ? 1.5 : 2.0);
+    QPen curvePen(kCurveColor(this), m_compact ? 1.5 : 2.0);
     curvePen.setJoinStyle(Qt::RoundJoin);
     curvePen.setCapStyle(Qt::RoundCap);
     p.setPen(curvePen);
@@ -217,7 +217,7 @@ void ClientGateCurveWidget::drawCurve(QPainter& p, const QRectF& /* r */) const
     if (!m_compact) {
         const float T = m_gate->thresholdDb();
         const QPointF t(dbToX(T), dbToY(curveOutputDb(T)));
-        p.setBrush(kCurveColor());
+        p.setBrush(kCurveColor(this));
         p.setPen(Qt::NoPen);
         p.drawEllipse(t, 3.0, 3.0);
     }
@@ -235,7 +235,7 @@ void ClientGateCurveWidget::drawBall(QPainter& p, const QRectF& /* r */) const
     p.save();
     const float glow = m_compact ? 8.0f : 11.0f;
     QRadialGradient g(pt, glow);
-    QColor glowColor = kBallGlowColor();
+    QColor glowColor = kBallGlowColor(this);
     glowColor.setAlpha(200);
     g.setColorAt(0.0, glowColor);
     glowColor.setAlpha(0);
@@ -244,7 +244,7 @@ void ClientGateCurveWidget::drawBall(QPainter& p, const QRectF& /* r */) const
     p.setPen(Qt::NoPen);
     p.drawEllipse(pt, glow, glow);
 
-    p.setBrush(kBallCoreColor());
+    p.setBrush(kBallCoreColor(this));
     p.drawEllipse(pt, m_compact ? 2.5 : 3.5, m_compact ? 2.5 : 3.5);
     p.restore();
 }

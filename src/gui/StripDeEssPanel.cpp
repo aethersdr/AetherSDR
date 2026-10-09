@@ -32,8 +32,8 @@ constexpr int kDefaultHeight = 340;
 constexpr float kGrMaxDb    = 24.0f;   // bar full-scale (right-anchored)
 
 constexpr const char* kWindowStyle =
-    "QWidget { background: #08121d; color: #d7e7f2; }"
-    "QLabel  { background: transparent; color: #8aa8c0; font-size: 11px; }";
+    "QWidget { background: {{color.background.0}}; color: {{color.text.primary}}; }"
+    "QLabel  { background: transparent; color: {{color.text.secondary}}; font-size: 11px; }";
 
 // Gain-reduction bar mirroring ClientDeEssApplet's m_grBar — dark bg,
 // soft-red fill anchored on the right, -6 dB tick.  Uses the shared
@@ -68,16 +68,16 @@ protected:
     void paintEvent(QPaintEvent*) override {
         QPainter p(this);
         const QRectF r = rect();
-        p.fillRect(r, QColor("#0a1420"));
+        p.fillRect(r, ThemeManager::instance().color(this, "color.background.0"));
         const float frac = m_smooth.value();
         if (frac > 0.0f) {
             const float w = frac * r.width();
             QRectF fill(r.right() - w, r.top() + 1.0, w, r.height() - 2.0);
-            p.fillRect(fill, QColor("#d47272"));   // soft red
+            p.fillRect(fill, theme::withAlpha(this, "color.accent.danger", 190));   // soft red
         }
         // -6 dB tick (typical Amount setting).
         const float tickX = r.right() - (6.0f / kGrMaxDb) * r.width();
-        p.setPen(QPen(QColor("#2a4458"), 1.0));
+        p.setPen(QPen(ThemeManager::instance().color(this, "color.border.strong"), 1.0));
         p.drawLine(QPointF(tickX, r.top()), QPointF(tickX, r.bottom()));
     }
 private:
@@ -87,24 +87,6 @@ private:
     QElapsedTimer m_animElapsed;
 };
 
-const QString kBypassStyle = QStringLiteral(
-    "QPushButton {"
-    "  background: #0e1b28;"
-    "  color: #8aa8c0;"
-    "  border: 1px solid #243a4e;"
-    "  border-radius: 3px;"
-    "  font-size: 11px;"
-    "  font-weight: bold;"
-    "  padding: 3px 12px;"
-    "}"
-    "QPushButton:hover { background: #1a2a3a; }"
-    "QPushButton:checked {"
-    "  background: #3a2a0e;"
-    "  color: #f2c14e;"
-    "  border: 1px solid #f2c14e;"
-    "}"
-    "QPushButton:checked:hover { background: #4a3a1e; }");
-
 } // namespace
 
 StripDeEssPanel::StripDeEssPanel(AudioEngine* engine, QWidget* parent)
@@ -113,7 +95,7 @@ StripDeEssPanel::StripDeEssPanel(AudioEngine* engine, QWidget* parent)
 {
     const QString title = QString::fromUtf8("Aetherial De-Esser \xe2\x80\x94 TX");
     setWindowTitle(title);
-    setStyleSheet(kWindowStyle);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(this, kWindowStyle);
     resize(kDefaultWidth, kDefaultHeight);
 
     auto* root = new QVBoxLayout(this);
@@ -205,10 +187,10 @@ StripDeEssPanel::StripDeEssPanel(AudioEngine* engine, QWidget* parent)
     m_slopeBtn->setMaximumWidth(76);
     m_slopeBtn->setCursor(Qt::PointingHandCursor);
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_slopeBtn, "QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.1}};"
-        " border-radius: 3px; color: #b0c4d6; font-size: 11px;"
+        " border-radius: 3px; color: {{color.text.secondary}}; font-size: 11px;"
         " font-weight: bold; padding: 1px; }"
-        "QPushButton:hover { background: #243044; color: #e8e8e8; }"
-        "QPushButton:pressed { background: #2a3a52; }");
+        "QPushButton:hover { background: {{color.background.2}}; color: {{color.text.primary}}; }"
+        "QPushButton:pressed { background: {{color.background.2}}; }");
     m_slopeBtn->setToolTip(tr(
         "Sidechain / notch filter slope.\n\n"
         "Each click steps through 12 → 24 → 36 → 48 dB/oct (1 to 4 "

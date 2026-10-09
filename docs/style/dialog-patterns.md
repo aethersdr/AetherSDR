@@ -236,12 +236,12 @@ replace these with a single `QSet<QPointer<PersistentDialog>>` walk.
 A window built on `CanonWindow` (`src/gui/CanonWindow.{h,cpp}`, RFC #6226)
 deliberately opts out of frameless chrome integration, and by default of
 geometry persistence too. About AetherSDR, Remote Access (Tailscale),
-Waveforms and Network Diagnostics are built on it.
+Waveforms, Network Diagnostics, AetherRX and AetherTX are built on it.
 
 | Concern | `CanonWindow` | Why |
 |---|---|---|
 | Frameless chrome integration | Always frameless; ignores `FramelessWindow` and is not tracked by `trackPersistentDialog()` | The style guide's rounded, title-bar-less window *is* the design; native chrome would put a title bar over it |
-| Geometry persistence | None by default: asks to open centred on its parent every time (Wayland compositors place top-level windows themselves and may ignore it). `setGeometryKey()` opts in: size and position are saved under that AppSettings key on move and resize (in memory) and on close (flushed), and restored in place of the centring. Network Diagnostics opts in | A short-lived window has nothing to restore; a workspace tool keeps the size its operator gave it |
+| Geometry persistence | None by default: asks to open centred on its parent every time (Wayland compositors place top-level windows themselves and may ignore it). `setGeometryKey()` opts in: size and position are saved under that AppSettings key on move and resize (in memory) and on close (flushed), and restored in place of the centring. Network Diagnostics, AetherRX and AetherTX opt in (the last two still pin their size at open, for now) | A short-lived window has nothing to restore; a workspace tool keeps the size its operator gave it |
 
 What it keeps:
 
@@ -253,7 +253,9 @@ What it keeps:
 - **Closing:** the corner close button, Escape and `QKeySequence::Close`
   (⌘W, Ctrl+W) all close it.
 - **Deletion:** pair it with `WA_DeleteOnClose`, as About does, and hold it in
-  a `QPointer` so a second open raises the existing window.
+  a `QPointer` so a second open raises the existing window. AetherTX is the
+  exception: MainWindow keeps feeding it state while it is closed, so closing
+  hides it and the next open shows the same window.
 - **Motion:** `SparkRing` and `SparkBorder` follow the OS reduced-motion
   preference (`QAccessibilityHints::motionPreference`) and hold still when it
   is set. They animate only while visible and tick slowly while the window is
@@ -262,7 +264,7 @@ What it keeps:
 It is translucent, so the rounded corners need a compositor; an X11 session
 without one shows square black corners. Use `CanonWindow` only for windows the
 style guide covers: short-lived windows, and the tool windows the maintainer
-has moved to it (Waveforms, Network Diagnostics). A tool window on it also
+has moved to it (Waveforms, Network Diagnostics, AetherRX, AetherTX). A tool window on it also
 installs `FramelessResizer`, since `CanonWindow` itself only moves. Other tool
 and workspace dialogs keep the persistent pattern above.
 

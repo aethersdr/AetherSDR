@@ -30,30 +30,18 @@ constexpr int kDefaultWidth  = 640;
 constexpr int kDefaultHeight = 360;
 
 constexpr const char* kWindowStyle =
-    "QWidget { background: #08121d; color: #d7e7f2; }"
-    "QLabel  { background: transparent; color: #8aa8c0; font-size: 11px; }";
-
-const QString kBypassStyle = QStringLiteral(
-    "QPushButton {"
-    "  background: #0e1b28; color: #8aa8c0;"
-    "  border: 1px solid #243a4e; border-radius: 3px;"
-    "  font-size: 11px; font-weight: bold; padding: 3px 12px;"
-    "}"
-    "QPushButton:hover { background: #1a2a3a; }"
-    "QPushButton:checked {"
-    "  background: #3a2a0e; color: #f2c14e; border: 1px solid #f2c14e;"
-    "}"
-    "QPushButton:checked:hover { background: #4a3a1e; }");
+    "QWidget { background: {{color.background.0}}; color: {{color.text.primary}}; }"
+    "QLabel  { background: transparent; color: {{color.text.secondary}}; font-size: 11px; }";
 
 const QString kModeStyle = QStringLiteral(
     "QPushButton {"
-    "  background: #1a2a3a; border: 1px solid #2a4458; border-radius: 3px;"
-    "  color: #8aa8c0; font-size: 12px; font-weight: bold;"
+    "  background: {{color.background.1}}; border: 1px solid {{color.border.strong}}; border-radius: 3px;"
+    "  color: {{color.text.secondary}}; font-size: 12px; font-weight: bold;"
     "  padding: 4px 20px; min-width: 34px;"
     "}"
-    "QPushButton:hover { background: #24384e; }"
+    "QPushButton:hover { background: {{color.background.2}}; }"
     "QPushButton:checked {"
-    "  background: #3a2a0e; color: #f2c14e; border: 1px solid #f2c14e;"
+    "  background: {{color.background.tx}}; color: {{color.meter.gainReduction}}; border: 1px solid {{color.meter.gainReduction}};"
     "}");
 
 // "|─── text ───|" group label: horizontal line, centred text, horizontal line.
@@ -72,7 +60,7 @@ QWidget* makeBracketLabel(const QString& text)
     auto* leftLine = new QFrame;
     leftLine->setFrameShape(QFrame::HLine);
     leftLine->setFrameShadow(QFrame::Plain);
-    leftLine->setStyleSheet("QFrame { color: #5a6a7a; }");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(leftLine, "QFrame { color: {{color.border.strong}}; }");
 
     auto* lbl = new QLabel(text);
     AetherSDR::ThemeManager::instance().applyStyleSheet(lbl, "QLabel { color: {{color.text.primary}}; font-weight: bold; "
@@ -82,7 +70,7 @@ QWidget* makeBracketLabel(const QString& text)
     auto* rightLine = new QFrame;
     rightLine->setFrameShape(QFrame::HLine);
     rightLine->setFrameShadow(QFrame::Plain);
-    rightLine->setStyleSheet("QFrame { color: #5a6a7a; }");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(rightLine, "QFrame { color: {{color.border.strong}}; }");
 
     h->addWidget(leftLine, 1);
     h->addWidget(lbl);
@@ -97,7 +85,7 @@ StripPuduPanel::StripPuduPanel(AudioEngine* engine, QWidget* parent)
     , m_audio(engine)
 {
     setWindowTitle(QStringLiteral("Aetherial Voice Processor"));
-    setStyleSheet(kWindowStyle);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(this, kWindowStyle);
     resize(kDefaultWidth, kDefaultHeight);
 
     auto* root = new QVBoxLayout(this);
@@ -145,7 +133,7 @@ StripPuduPanel::StripPuduPanel(AudioEngine* engine, QWidget* parent)
         group->setExclusive(true);
         m_modeA = new QPushButton("Even");
         m_modeA->setCheckable(true);
-        m_modeA->setStyleSheet(kModeStyle);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_modeA, kModeStyle);
         m_modeA->setFixedHeight(24);
         m_modeA->setToolTip(
             "Aphex-lineage asymmetric shaping — predominantly even "
@@ -156,7 +144,7 @@ StripPuduPanel::StripPuduPanel(AudioEngine* engine, QWidget* parent)
 
         m_modeB = new QPushButton("Odd");
         m_modeB->setCheckable(true);
-        m_modeB->setStyleSheet(kModeStyle);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_modeB, kModeStyle);
         m_modeB->setFixedHeight(24);
         m_modeB->setToolTip(
             "Behringer-lineage symmetric tanh shaping — pure odd "

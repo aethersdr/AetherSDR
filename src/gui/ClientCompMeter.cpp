@@ -24,22 +24,22 @@ constexpr float kGrMaxMag   =  40.0f;    // GR range 0..-40 dB
 constexpr int   kPeakHoldMs =  700;
 constexpr float kPeakDecayDbPer100Ms = 1.0f;
 
-inline QColor kBarBg() { return AetherSDR::ThemeManager::instance().color("color.background.0"); }
-inline QColor kGrColor() { return AetherSDR::ThemeManager::instance().color("color.accent.warning"); }
-inline QColor kPeakLine() { return AetherSDR::ThemeManager::instance().color("color.text.primary"); }
-inline QColor kCeilingLine() { return AetherSDR::ThemeManager::instance().color("color.accent.warning"); }  // bright amber — matches LIMIT button
+inline QColor kBarBg(const QWidget* w) { return AetherSDR::ThemeManager::instance().color(w, "color.background.0"); }
+inline QColor kGrColor(const QWidget* w) { return AetherSDR::ThemeManager::instance().color(w, "color.accent.warning"); }
+inline QColor kPeakLine(const QWidget* w) { return AetherSDR::ThemeManager::instance().color(w, "color.text.primary"); }
+inline QColor kCeilingLine(const QWidget* w) { return AetherSDR::ThemeManager::instance().color(w, "color.accent.warning"); }  // bright amber — matches LIMIT button
 const QColor kCeilingZone("#3a1810");     // dim red tint for the "no-go" zone
 // Makeup fader furniture.  Amber, like the THRESH fader's handle, because
 // it is the same kind of thing: a value the operator sets, riding a bar
 // that reports a measurement.
-inline QColor kMakeupHandle() { return AetherSDR::ThemeManager::instance().color("color.accent.warning"); }
-inline QColor kMakeupStroke() { return AetherSDR::ThemeManager::instance().color("color.background.0"); }
+inline QColor kMakeupHandle(const QWidget* w) { return AetherSDR::ThemeManager::instance().color(w, "color.accent.warning"); }
+inline QColor kMakeupStroke(const QWidget* w) { return AetherSDR::ThemeManager::instance().color(w, "color.background.0"); }
 constexpr int kMakeupTickColW   = 22;
 constexpr int kMakeupHandleOver = 4;
 constexpr int kMakeupHandleH    = 3;
 constexpr int kMakeupCaretW     = 4;
 
-inline QColor kLimGrTick() { return AetherSDR::ThemeManager::instance().color("color.accent.dim"); }  // cyan, distinct from the white peak line
+inline QColor kLimGrTick(const QWidget* w) { return AetherSDR::ThemeManager::instance().color(w, "color.accent.dim"); }  // cyan, distinct from the white peak line
 
 } // namespace
 
@@ -211,14 +211,14 @@ void ClientCompMeter::paintEvent(QPaintEvent*)
         p.setFont(f);
         // Amber matches the THRESH fader's label colour so the paired
         // meters read as one consistent strip header.
-        p.setPen(AetherSDR::ThemeManager::instance().color("color.accent.warning"));
+        p.setPen(AetherSDR::ThemeManager::instance().color(this, "color.accent.warning"));
         p.drawText(QRectF(0, 0, w, labelH), Qt::AlignCenter, m_label);
     }
 
-    p.fillRect(bar, kBarBg());
+    p.fillRect(bar, kBarBg(this));
     // Border matches the THRESH fader so the paired meters read as
     // one visual idiom across the comp editor.
-    p.setPen(QPen(AetherSDR::ThemeManager::instance().color("color.background.1"), 1));
+    p.setPen(QPen(AetherSDR::ThemeManager::instance().color(this, "color.background.1"), 1));
     p.setBrush(Qt::NoBrush);
     p.drawRect(QRectF(bar.left(), bar.top(),
                       bar.width() - 1, bar.height() - 1));
@@ -259,7 +259,7 @@ void ClientCompMeter::paintEvent(QPaintEvent*)
             // Ceiling line — bright amber, slightly thicker than the
             // peak line so it reads as a structural limit, not a meter
             // value.
-            p.setPen(QPen(kCeilingLine(), 1.5));
+            p.setPen(QPen(kCeilingLine(this), 1.5));
             p.drawLine(QPointF(bar.left() - 2.0, cy),
                        QPointF(bar.right() + 2.0, cy));
 
@@ -271,7 +271,7 @@ void ClientCompMeter::paintEvent(QPaintEvent*)
                 const float grSpanDb = std::min(-m_limGrDb, 12.0f);
                 const float tickH =
                     (grSpanDb / (kLevelMaxDb - kLevelMinDb)) * bar.height();
-                p.setPen(QPen(kLimGrTick(), 2.0));
+                p.setPen(QPen(kLimGrTick(this), 2.0));
                 p.drawLine(QPointF(bar.center().x(), cy),
                            QPointF(bar.center().x(), cy + tickH));
             }
@@ -282,18 +282,18 @@ void ClientCompMeter::paintEvent(QPaintEvent*)
                 (m_peakDb - kLevelMinDb) / (kLevelMaxDb - kLevelMinDb),
                 0.0f, 1.0f);
             const float y = bar.bottom() - tp * bar.height();
-            p.setPen(QPen(kPeakLine(), 1.0));
+            p.setPen(QPen(kPeakLine(this), 1.0));
             p.drawLine(QPointF(bar.left(), y), QPointF(bar.right(), y));
         }
     } else {
         const float fillH = m_smooth.value() * bar.height();
         QRectF fill(bar.left(), bar.top(), bar.width(), fillH);
-        p.fillRect(fill, kGrColor());
+        p.fillRect(fill, kGrColor(this));
 
         const float peakMag = std::clamp(-m_peakDb, 0.0f, kGrMaxMag);
         if (peakMag > 0.0f) {
             const float y = bar.top() + (peakMag / kGrMaxMag) * bar.height();
-            p.setPen(QPen(kPeakLine(), 1.0));
+            p.setPen(QPen(kPeakLine(this), 1.0));
             p.drawLine(QPointF(bar.left(), y), QPointF(bar.right(), y));
         }
     }
@@ -336,7 +336,7 @@ void ClientCompMeter::paintEvent(QPaintEvent*)
             const float norm = (ticks[i].db - minDb) / (maxDb - minDb);
             const int y = static_cast<int>(bar.bottom() - norm * bar.height());
 
-            p.setPen(AetherSDR::ThemeManager::instance().color("color.text.secondary"));
+            p.setPen(AetherSDR::ThemeManager::instance().color(this, "color.text.secondary"));
             const QString s = QString::fromLatin1(ticks[i].label);
             const int tw = fm.horizontalAdvance(s);
             const int ty = std::clamp(y + fm.ascent() / 2 - 1,
@@ -344,14 +344,14 @@ void ClientCompMeter::paintEvent(QPaintEvent*)
                                       static_cast<int>(bar.bottom()) - 1);
             if (tickLeft) {
                 p.drawText(textRight - tw, ty, s);
-                p.setPen(AetherSDR::ThemeManager::instance().color("color.meter.bar.fill"));
+                p.setPen(AetherSDR::ThemeManager::instance().color(this, "color.meter.bar.fill"));
                 p.drawLine(textRight, y,
                            static_cast<int>(bar.left()) - 1, y);
             } else {
                 // Right side — labels grow from the bar outward.
                 const int textLeft = static_cast<int>(bar.right()) + kTickGap + 1;
                 p.drawText(textLeft, ty, s);
-                p.setPen(AetherSDR::ThemeManager::instance().color("color.meter.bar.fill"));
+                p.setPen(AetherSDR::ThemeManager::instance().color(this, "color.meter.bar.fill"));
                 p.drawLine(static_cast<int>(bar.right()), y,
                            textLeft - 1, y);
             }
@@ -378,7 +378,7 @@ void ClientCompMeter::paintEvent(QPaintEvent*)
         f.setPixelSize(10);
         f.setBold(true);
         p.setFont(f);
-        p.setPen(AetherSDR::ThemeManager::instance().color("color.text.primary"));
+        p.setPen(AetherSDR::ThemeManager::instance().color(this, "color.text.primary"));
         constexpr int kFooterRightPad = 3;
         const QRectF footer(0, h - valueH - makeupH,
                             w - kFooterRightPad, valueH);
@@ -412,7 +412,7 @@ void ClientCompMeter::paintEvent(QPaintEvent*)
             const int ty = std::clamp(y + fm.ascent() / 2 - 1,
                                       static_cast<int>(bar.top()) + fm.ascent() - 1,
                                       static_cast<int>(bar.bottom()) - 1);
-            QColor tick = kMakeupHandle();
+            QColor tick = kMakeupHandle(this);
             // 0 dB is the detent — unity makeup, the value the operator
             // returns to — so it is the one tick drawn at full strength,
             // and the only one carried across the bar.
@@ -422,7 +422,7 @@ void ClientCompMeter::paintEvent(QPaintEvent*)
             p.drawText(textRight - tw, ty, label);
             p.drawLine(textRight + 1, y, static_cast<int>(bar.left()) - 1, y);
             if (unity) {
-                QColor across = kMakeupHandle();
+                QColor across = kMakeupHandle(this);
                 across.setAlpha(70);
                 p.setPen(QPen(across, 1, Qt::DashLine));
                 p.drawLine(static_cast<int>(bar.left()) + 1, y,
@@ -437,7 +437,7 @@ void ClientCompMeter::paintEvent(QPaintEvent*)
             vf.setPixelSize(10);
             vf.setBold(true);
             p.setFont(vf);
-            p.setPen(kMakeupHandle());
+            p.setPen(kMakeupHandle(this));
             p.drawText(QRectF(0, h - makeupH, w - 3, makeupH),
                        Qt::AlignRight | Qt::AlignVCenter,
                        QString::asprintf("%+.1f dB", m_makeupDb));
@@ -452,8 +452,8 @@ void ClientCompMeter::paintEvent(QPaintEvent*)
                             hy - kMakeupHandleH / 2,
                             static_cast<int>(bar.width()) + kMakeupHandleOver,
                             kMakeupHandleH);
-        p.setPen(QPen(kMakeupStroke(), 1));
-        p.setBrush(kMakeupHandle());
+        p.setPen(QPen(kMakeupStroke(this), 1));
+        p.setBrush(kMakeupHandle(this));
         p.drawRect(handleR);
 
         QPainterPath caret;
@@ -463,12 +463,12 @@ void ClientCompMeter::paintEvent(QPaintEvent*)
         caret.lineTo(cx,     hy + 3);
         caret.closeSubpath();
         p.setPen(Qt::NoPen);
-        p.setBrush(kMakeupHandle());
+        p.setBrush(kMakeupHandle(this));
         p.drawPath(caret);
 
         // Focus ring, so keyboard operators can see where they are.
         if (hasFocus()) {
-            QColor ring = kMakeupHandle();
+            QColor ring = kMakeupHandle(this);
             ring.setAlpha(160);
             p.setPen(QPen(ring, 1, Qt::DotLine));
             p.setBrush(Qt::NoBrush);

@@ -3,21 +3,19 @@
 #include "ClientEqApplet.h"   // ClientEqApplet::Path enum
 #include "core/AudioEngine.h" // AudioEngine::TxChainStage in signal sig
 
-#include <QWidget>
+#include "CanonWindow.h"
 
 class QPushButton;
 class QComboBox;
 class QLabel;
 class QStackedWidget;
 class QTimer;
-class QVBoxLayout;
 
 namespace AetherSDR {
 
 
 class AudioEngine;
 class StageTabBar;
-class EditorFramelessTitleBar;
 class StripTubePanel;
 class StripDeEssPanel;
 class StripGatePanel;
@@ -28,11 +26,12 @@ class StripReverbPanel;
 class StripWaveformPanel;
 class StripFinalOutputPanel;
 
-// AetherTX — the transmit chain in one window (#2301): a top-level Qt::Window
-// embedding the client-side TX DSP stage panels, one per page, selected from a
-// tab column on the left. Geometry persists in "AetherialStripGeometry" and
-// visibility in "AetherialStripVisible", so it reopens where it was.
-class AetherialAudioStrip : public QWidget {
+// AetherTX — the transmit chain in one window (#2301): a CanonWindow tool
+// window (style guide, RFC #6226) embedding the client-side TX DSP stage
+// panels, one per page, selected from a tab column on the left. Position
+// persists in "AetherialStripGeometry2" and visibility in
+// "AetherialStripVisible", so it reopens where it was.
+class AetherialAudioStrip : public CanonWindow {
     Q_OBJECT
 
 public:
@@ -44,7 +43,6 @@ public:
     explicit AetherialAudioStrip(AudioEngine* engine, QWidget* parent = nullptr);
     ~AetherialAudioStrip() override;
 
-    void setFramelessMode(bool on);
     void setAudioPathNotice(const QString& text, bool warning);
     void closeSettingsIfOpen();
 
@@ -102,11 +100,8 @@ signals:
 
 protected:
     void closeEvent(QCloseEvent* ev) override;
-    void moveEvent(QMoveEvent* ev) override;
-    void resizeEvent(QResizeEvent* ev) override;
     void showEvent(QShowEvent* ev) override;
     void hideEvent(QHideEvent* ev) override;
-    bool eventFilter(QObject* obj, QEvent* ev) override;
 
 private:
     void refreshIndicators();
@@ -124,9 +119,6 @@ private:
     QLabel* m_txLabel{nullptr};
     bool    m_micReady{false};
     bool    m_txActive{false};
-
-    void saveGeometryToSettings();
-    void restoreGeometryFromSettings();
 
     // Master bypass — snapshot all enabled TX stages, then disable
     // them.  Restores the snapshot on uncheck.  Mirrors the docked
@@ -151,9 +143,6 @@ private:
     void refreshAllPanelsFromEngine();
 
     AudioEngine*         m_audio{nullptr};
-    QWidget*             m_titleBar{nullptr};   // custom inline ContainerTitleBar-styled bar
-    QVBoxLayout*         m_bodyLayout{nullptr};
-    QLabel*              m_titleLbl{nullptr};   // title text — toggles "— TX" / "— RX" suffix
     StageTabBar*         m_tabs{nullptr};
     QStackedWidget*      m_stack{nullptr};
     // Polls the engine so the enable boxes follow changes made elsewhere —
@@ -169,10 +158,6 @@ private:
     StripReverbPanel*  m_reverb{nullptr};
     StripWaveformPanel*    m_waveform{nullptr};
     StripFinalOutputPanel* m_finalOutput{nullptr};
-    // RX panel instances (#2425).  Same Strip*Panel classes as the TX
-    // grid above, but each one is pinned to its RX side via showForRx
-    // / showForPath(Rx) and bound to the engine's RX DSP instances.
-    bool               m_restoring{false};
 };
 
 } // namespace AetherSDR

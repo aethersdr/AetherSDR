@@ -46,7 +46,7 @@ namespace {
 // the panel's actual bg, which is the strip's group-box.  Just set
 // label cascade so text colour/size is consistent.
 constexpr const char* kWindowStyle =
-    "QLabel { background: transparent; color: #8aa8c0; font-size: 11px; }";
+    "QLabel { background: transparent; color: {{color.text.secondary}}; font-size: 11px; }";
 
 constexpr float kMeterMinDb = -60.0f;
 constexpr float kMeterMaxDb =   0.0f;
@@ -204,8 +204,8 @@ protected:
         const QRectF r = barRect();
 
         // Track background.
-        p.setPen(QPen(QColor("#1a2a3a"), 1));
-        p.setBrush(QColor("#0a0e16"));
+        p.setPen(QPen(ThemeManager::instance().color(this, "color.background.1"), 1));
+        p.setBrush(ThemeManager::instance().color(this, "color.canvas.background"));
         p.drawRoundedRect(r, 3, 3);
 
         // Input-peak bar — drawn first so the (brighter) output bar
@@ -216,7 +216,7 @@ protected:
             QRectF inR = r;
             inR.setWidth(inFill);
             p.setPen(Qt::NoPen);
-            p.setBrush(QColor(80, 110, 140, 110));
+            p.setBrush(theme::withAlpha(this, "color.background.3", 110));
             p.drawRoundedRect(inR, 3, 3);
         }
 
@@ -224,10 +224,10 @@ protected:
         const double outFill = dbToRatio(m_outPeakDb) * r.width();
         if (outFill > 0.0) {
             QLinearGradient g(r.left(), 0, r.right(), 0);
-            g.setColorAt(0.00, QColor("#30c060"));
-            g.setColorAt(dbToRatio(-12.0f), QColor("#a0c030"));
-            g.setColorAt(dbToRatio(-3.0f),  QColor("#d49030"));
-            g.setColorAt(1.00, QColor("#c03030"));
+            g.setColorAt(0.00, ThemeManager::instance().color(this, "color.accent.success"));
+            g.setColorAt(dbToRatio(-12.0f), ThemeManager::instance().color(this, "color.accent.success"));
+            g.setColorAt(dbToRatio(-3.0f),  ThemeManager::instance().color(this, "color.accent.warning"));
+            g.setColorAt(1.00, ThemeManager::instance().color(this, "color.accent.danger"));
             QRectF outR = r;
             outR.setWidth(outFill);
             p.setPen(Qt::NoPen);
@@ -240,7 +240,7 @@ protected:
         // ceiling so the latter still wins when they overlap.
         if (m_holdDb > -100.0f) {
             const double hx = r.left() + dbToRatio(m_holdDb) * r.width();
-            p.setPen(QPen(QColor("#a0e0ff"), 2.0));
+            p.setPen(QPen(ThemeManager::instance().color(this, "color.accent.bright"), 2.0));
             p.drawLine(QPointF(hx, r.top() + 1), QPointF(hx, r.bottom() - 1));
         }
 
@@ -255,14 +255,14 @@ protected:
             grR.setX(r.right() - grSpan);
             grR.setWidth(grSpan);
             p.setPen(Qt::NoPen);
-            p.setBrush(QColor(255, 80, 80, 110));
+            p.setBrush(theme::withAlpha(this, "color.accent.danger", 110));
             p.drawRoundedRect(grR, 3, 3);
         }
 
         // Ceiling notch — vertical hairline marking where the limiter
         // cuts in.  Amber matches the "limit" indicator's accent.
         const double cx = r.left() + dbToRatio(m_ceilingDb) * r.width();
-        p.setPen(QPen(QColor("#f2c14e"), 1.2, Qt::DashLine));
+        p.setPen(QPen(ThemeManager::instance().color(this, "color.meter.gainReduction"), 1.2, Qt::DashLine));
         p.drawLine(QPointF(cx, r.top() + 1), QPointF(cx, r.bottom() - 1));
 
         // dB scale — tick marks at every 12 dB step, drawn so they
@@ -279,7 +279,7 @@ protected:
             // 4 px above + 4 px below the bar bottom edge — the upper
             // half cuts into the gradient (bright contrast), the lower
             // half drops into the footer band.
-            p.setPen(QPen(QColor("#a0b4c8"), 1.2));
+            p.setPen(QPen(ThemeManager::instance().color(this, "color.text.secondary"), 1.2));
             p.drawLine(QPointF(tickX, r.bottom() - 4),
                        QPointF(tickX, r.bottom() + 4));
             // Label centred under the tick.  Use "0" for the right
@@ -295,7 +295,7 @@ protected:
             if (lblX < minX) lblX = minX;
             if (lblX > maxX) lblX = maxX;
             const QRectF labelR(lblX, r.bottom() + 5, lblW + 2, 12);
-            p.setPen(QColor("#7f93a5"));
+            p.setPen(ThemeManager::instance().color(this, "color.text.secondary"));
             p.drawText(labelR, Qt::AlignCenter, lbl);
         }
 
@@ -310,7 +310,7 @@ protected:
         handle.lineTo(hCx + 5, hY - 8);
         handle.closeSubpath();
         p.setPen(Qt::NoPen);
-        p.setBrush(QColor("#f2c14e"));
+        p.setBrush(ThemeManager::instance().color(this, "color.meter.gainReduction"));
         p.drawPath(handle);
 
         // Numeric readout centred horizontally on the triangle and
@@ -321,7 +321,7 @@ protected:
         vf.setPointSize(8);
         vf.setBold(true);
         p.setFont(vf);
-        p.setPen(QColor("#f2c14e"));
+        p.setPen(ThemeManager::instance().color(this, "color.meter.gainReduction"));
         const QString txt = QString::number(m_ceilingDb, 'f', 1) + " dB";
         const QFontMetrics fm(vf);
         const int tw = fm.horizontalAdvance(txt);
@@ -358,7 +358,7 @@ StripFinalOutputPanel::StripFinalOutputPanel(AudioEngine* engine, QWidget* paren
     const QString title = QString::fromUtf8(
         "Aetherial Final Output Stage \xe2\x80\x94 TX");
     setWindowTitle(title);
-    setStyleSheet(kWindowStyle);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(this, kWindowStyle);
 
     auto* root = new QVBoxLayout(this);
     root->setContentsMargins(8, 0, 8, 0);
@@ -387,28 +387,28 @@ StripFinalOutputPanel::StripFinalOutputPanel(AudioEngine* engine, QWidget* paren
     {
         const QString amberStyle =
             "QPushButton {"
-            "  background: #1a2230; border: 1px solid #2a3744;"
-            "  border-radius: 3px; color: #506070;"
+            "  background: {{color.background.1}}; border: 1px solid {{color.border.strong}};"
+            "  border-radius: 3px; color: {{color.text.label}};"
             "  font-size: 10px; font-weight: bold; padding: 1px;"
             "}"
-            "QPushButton:hover { color: #c8d8e8; }"
+            "QPushButton:hover { color: {{color.text.primary}}; }"
             "QPushButton:checked {"
-            "  background: #3a2a0e; color: #f2c14e;"
-            "  border: 1px solid #f2c14e;"
+            "  background: {{color.background.tx}}; color: {{color.meter.gainReduction}};"
+            "  border: 1px solid {{color.meter.gainReduction}};"
             "}"
-            "QPushButton:checked:hover { background: #4a3a18; }";
+            "QPushButton:checked:hover { background: {{color.background.warning}}; }";
         const QString redCheckStyle =
             "QPushButton {"
-            "  background: #1a2230; border: 1px solid #2a3744;"
-            "  border-radius: 3px; color: #506070;"
+            "  background: {{color.background.1}}; border: 1px solid {{color.border.strong}};"
+            "  border-radius: 3px; color: {{color.text.label}};"
             "  font-size: 10px; font-weight: bold; padding: 1px;"
             "}"
-            "QPushButton:hover { color: #c8d8e8; }"
+            "QPushButton:hover { color: {{color.text.primary}}; }"
             "QPushButton:checked {"
-            "  background: #4a1818; color: #ff8080;"
-            "  border: 1px solid #ff4040;"
+            "  background: {{color.toggle.footer.danger.background.checked}}; color: {{color.accent.danger}};"
+            "  border: 1px solid {{color.accent.danger}};"
             "}"
-            "QPushButton:checked:hover { background: #5a2828; }";
+            "QPushButton:checked:hover { background: {{color.toggle.footer.danger.background.hover}}; }";
 
         auto* col = new QVBoxLayout;
         col->setContentsMargins(0, 0, 0, 0);
@@ -417,7 +417,7 @@ StripFinalOutputPanel::StripFinalOutputPanel(AudioEngine* engine, QWidget* paren
         m_enable = new QPushButton("LIM", this);
         m_enable->setCheckable(true);
         m_enable->setFixedSize(56, 18);
-        m_enable->setStyleSheet(amberStyle);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_enable, amberStyle);
         m_enable->setToolTip("Enable the dedicated final-stage brickwall "
                              "limiter at the tail of the TX chain.");
         connect(m_enable, &QPushButton::toggled,
@@ -427,7 +427,7 @@ StripFinalOutputPanel::StripFinalOutputPanel(AudioEngine* engine, QWidget* paren
         m_dcBtn = new QPushButton("DC", this);
         m_dcBtn->setCheckable(true);
         m_dcBtn->setFixedSize(56, 18);
-        m_dcBtn->setStyleSheet(amberStyle);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_dcBtn, amberStyle);
         m_dcBtn->setToolTip(tr("25 Hz high-pass filter at the chain tail "
                                "to strip any DC offset before transmit."));
         connect(m_dcBtn, &QPushButton::toggled,
@@ -437,7 +437,7 @@ StripFinalOutputPanel::StripFinalOutputPanel(AudioEngine* engine, QWidget* paren
         m_toneBtn = new QPushButton("TONE", this);
         m_toneBtn->setCheckable(true);
         m_toneBtn->setFixedSize(56, 18);
-        m_toneBtn->setStyleSheet(redCheckStyle);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_toneBtn, redCheckStyle);
         m_toneBtn->setToolTip(tr("1 kHz test tone injected at the head of "
                                  "the chain.  Right-click for the freq/"
                                  "level editor."));
@@ -455,7 +455,7 @@ StripFinalOutputPanel::StripFinalOutputPanel(AudioEngine* engine, QWidget* paren
         m_quinBtn = new QPushButton("QUIN", this);
         m_quinBtn->setCheckable(true);
         m_quinBtn->setFixedSize(56, 18);
-        m_quinBtn->setStyleSheet(redCheckStyle);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_quinBtn, redCheckStyle);
         m_quinBtn->setToolTip(tr("Quindar tones on PTT engage/disengage. "
                                  "Right-click for the style/freq/WPM "
                                  "editor."));
@@ -505,19 +505,19 @@ StripFinalOutputPanel::StripFinalOutputPanel(AudioEngine* engine, QWidget* paren
     // the meter's gradient palette so the eye links bar to numbers.
     {
         const QString labelCss =
-            "QLabel { color: #506070; font-size: 9px; font-weight: bold;"
+            "QLabel { color: {{color.text.label}}; font-size: 9px; font-weight: bold;"
             " padding: 0; }";
         const QString valCssCyan =
-            "QLabel { color: #56ccf2; font-size: 11px; font-weight: bold;"
+            "QLabel { color: {{color.accent}}; font-size: 11px; font-weight: bold;"
             " padding: 0; }";
         const QString valCssGreen =
-            "QLabel { color: #6fcf97; font-size: 11px; font-weight: bold;"
+            "QLabel { color: {{color.accent.success}}; font-size: 11px; font-weight: bold;"
             " padding: 0; }";
         const QString valCssAmber =
-            "QLabel { color: #f2c14e; font-size: 11px; font-weight: bold;"
+            "QLabel { color: {{color.meter.gainReduction}}; font-size: 11px; font-weight: bold;"
             " padding: 0; }";
         const QString valCssWhite =
-            "QLabel { color: #d7e7f2; font-size: 11px; font-weight: bold;"
+            "QLabel { color: {{color.text.primary}}; font-size: 11px; font-weight: bold;"
             " padding: 0; }";
 
         auto* readGrid = new QGridLayout;
@@ -528,10 +528,10 @@ StripFinalOutputPanel::StripFinalOutputPanel(AudioEngine* engine, QWidget* paren
         auto addRow = [&](int r, const QString& tag, const QString& valCss,
                           QLabel*& outVal) {
             auto* lbl = new QLabel(tag, this);
-            lbl->setStyleSheet(labelCss);
+            AetherSDR::ThemeManager::instance().applyStyleSheet(lbl, labelCss);
             lbl->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
             outVal = new QLabel("--", this);
-            outVal->setStyleSheet(valCss);
+            AetherSDR::ThemeManager::instance().applyStyleSheet(outVal, valCss);
             outVal->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
             outVal->setMinimumWidth(44);
             readGrid->addWidget(lbl,    r, 0);
@@ -624,9 +624,9 @@ StripFinalOutputPanel::StripFinalOutputPanel(AudioEngine* engine, QWidget* paren
             " border-radius: 3px; color: {{color.background.3}}; font-size: 10px;"
             " font-weight: bold; padding: 1px; }"
             "QPushButton:hover { color: {{color.text.primary}}; }"
-            "QPushButton:checked { background: #183020; border: 1px solid #2eb872;"
-            " color: #2eb872; }"
-            "QPushButton:checked:hover { color: #6ffaa9; }");
+            "QPushButton:checked { background: {{color.toggle.footer.success.background.checked}}; border: 1px solid {{color.accent.success}};"
+            " color: {{color.accent.success}}; }"
+            "QPushButton:checked:hover { color: {{color.text.primary}}; }");
         m_holdBtn->setToolTip(tr(
             "Peak-hold. When engaged (green), the PK / RMS / GR / CRST "
             "readouts latch their worst-case value since this button was "
@@ -873,7 +873,7 @@ void StripFinalOutputPanel::showQuindarEditor()
         "QPushButton { background: {{color.background.1}}; color: {{color.text.primary}};"
         " border: 1px solid {{color.background.1}}; border-radius: 3px;"
         " padding: 4px 12px; font-size: 11px; }"
-        "QPushButton:hover { background: #243042; color: {{color.accent.warning}}; }"
+        "QPushButton:hover { background: {{color.background.2}}; color: {{color.accent.warning}}; }"
         "QPushButton:checked { background: {{color.background.tx}}; color: {{color.accent.warning}};"
         " border: 1px solid {{color.accent.warning}}; }"
         "QSpinBox { background: {{color.background.1}}; color: {{color.text.primary}};"
@@ -896,15 +896,15 @@ void StripFinalOutputPanel::showQuindarEditor()
     titleBar->setVisible(frameless);
     titleBar->setAttribute(Qt::WA_StyledBackground, true);
     AetherSDR::ThemeManager::instance().applyStyleSheet(titleBar, "QWidget { background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
-        "stop:0 #5a7494, stop:0.5 #384e68, stop:1 {{color.background.1}}); "
-        "border-bottom: 1px solid #0a1a28; }");
+        "stop:0 {{color.background.3}}, stop:0.5 {{color.background.2}}, stop:1 {{color.background.1}}); "
+        "border-bottom: 1px solid {{color.border.subtle}}; }");
     titleBar->setCursor(Qt::OpenHandCursor);
     auto* tbLayout = new QHBoxLayout(titleBar);
     tbLayout->setContentsMargins(6, 0, 2, 0);
     tbLayout->setSpacing(4);
     auto* tbTitle = new QLabel(tr("Quindar Tones"), titleBar);
-    tbTitle->setStyleSheet(
-        "QLabel { background: transparent; color: #e0ecf4;"
+    AetherSDR::ThemeManager::instance().applyStyleSheet(tbTitle,
+        "QLabel { background: transparent; color: {{color.text.primary}};"
         " font-size: 10px; font-weight: bold; }");
     tbLayout->addWidget(tbTitle);
     tbLayout->addStretch();
@@ -1216,25 +1216,25 @@ void StripFinalOutputPanel::tickMeters()
 
     // OVR + LIMIT styling.
     if (m_ovrLed) {
-        m_ovrLed->setStyleSheet(
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_ovrLed,
             ovrActive
-                ? "QPushButton { background: #4a1818; border: 1px solid #ff4040;"
-                  " border-radius: 3px; color: #ff4040; font-size: 10px;"
+                ? "QPushButton { background: {{color.toggle.footer.danger.background.checked}}; border: 1px solid {{color.accent.danger}};"
+                  " border-radius: 3px; color: {{color.accent.danger}}; font-size: 10px;"
                   " font-weight: bold; padding: 1px; }"
-                  "QPushButton:hover { color: #ffffff; }"
-                : "QPushButton { background: #1a2230; border: 1px solid #2a3744;"
-                  " border-radius: 3px; color: #506070; font-size: 10px;"
+                  "QPushButton:hover { color: {{color.text.primary}}; }"
+                : "QPushButton { background: {{color.background.1}}; border: 1px solid {{color.border.strong}};"
+                  " border-radius: 3px; color: {{color.text.label}}; font-size: 10px;"
                   " font-weight: bold; padding: 1px; }"
-                  "QPushButton:hover { color: #c8d8e8; }");
+                  "QPushButton:hover { color: {{color.text.primary}}; }");
     }
 
     if (m_activityLbl) {
         const int pct = static_cast<int>(std::clamp(activity, 0.0f, 1.0f) * 100.0f);
         m_activityLbl->setText(QString("Lim: %1%").arg(pct));
-        const QString tint = pct > 90 ? "#ff4040"
-                           : pct > 50 ? "#f2c14e"
-                                      : "#506070";
-        m_activityLbl->setStyleSheet(
+        const QString tint = pct > 90 ? "{{color.accent.danger}}"
+                           : pct > 50 ? "{{color.meter.gainReduction}}"
+                                      : "{{color.text.label}}";
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_activityLbl,
             QString("QLabel { background: transparent; color: %1;"
                     " font-size: 10px; font-weight: bold; padding: 1px; }")
                 .arg(tint));
@@ -1254,17 +1254,17 @@ void StripFinalOutputPanel::tickMeters()
         else          m_limitFlashOn = false;
         const char* css =
             !m_active
-                ? "QLabel { background: #1a2230; border: 1px solid #2a3744;"
-                  " border-radius: 3px; color: #506070; font-size: 10px;"
+                ? "QLabel { background: {{color.background.1}}; border: 1px solid {{color.border.strong}};"
+                  " border-radius: 3px; color: {{color.text.label}}; font-size: 10px;"
                   " font-weight: bold; padding: 1px; }"
             : m_limitFlashOn
-                ? "QLabel { background: #ff3030; border: 1px solid #ff8080;"
+                ? "QLabel { background: {{color.accent.danger}}; border: 1px solid {{color.accent.danger}};"
                   " border-radius: 3px; color: #ffffff; font-size: 10px;"
                   " font-weight: bold; padding: 1px; }"
-                : "QLabel { background: #4a1818; border: 1px solid #ff4040;"
-                  " border-radius: 3px; color: #ff8080; font-size: 10px;"
+                : "QLabel { background: {{color.toggle.footer.danger.background.checked}}; border: 1px solid {{color.accent.danger}};"
+                  " border-radius: 3px; color: {{color.accent.danger}}; font-size: 10px;"
                   " font-weight: bold; padding: 1px; }";
-        m_limitLed->setStyleSheet(css);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_limitLed, css);
     }
 }
 
@@ -1279,23 +1279,23 @@ void StripFinalOutputPanel::setQuindarActive(bool active)
     // end of intro = start of Live; same for outro).  No polling.
     const QString css = active
         ? "QPushButton {"
-          "  background: #ff3030; color: #ffffff;"
-          "  border: 1px solid #ff8080;"
+          "  background: {{color.accent.danger}}; color: #ffffff;"
+          "  border: 1px solid {{color.accent.danger}};"
           "  border-radius: 3px; font-size: 10px;"
           "  font-weight: bold; padding: 1px;"
           "}"
         : "QPushButton {"
-          "  background: #1a2230; border: 1px solid #2a3744;"
-          "  border-radius: 3px; color: #506070;"
+          "  background: {{color.background.1}}; border: 1px solid {{color.border.strong}};"
+          "  border-radius: 3px; color: {{color.text.label}};"
           "  font-size: 10px; font-weight: bold; padding: 1px;"
           "}"
-          "QPushButton:hover { color: #c8d8e8; }"
+          "QPushButton:hover { color: {{color.text.primary}}; }"
           "QPushButton:checked {"
-          "  background: #4a1818; color: #ff8080;"
-          "  border: 1px solid #ff4040;"
+          "  background: {{color.toggle.footer.danger.background.checked}}; color: {{color.accent.danger}};"
+          "  border: 1px solid {{color.accent.danger}};"
           "}"
-          "QPushButton:checked:hover { background: #5a2828; }";
-    m_quinBtn->setStyleSheet(css);
+          "QPushButton:checked:hover { background: {{color.toggle.footer.danger.background.hover}}; }";
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_quinBtn, css);
 }
 
 } // namespace AetherSDR

@@ -1960,6 +1960,7 @@ private:
     class ClientTubeEditor* m_clientTubeEditor{nullptr}; // lazy — created on first Edit… click
     class ClientPuduEditor* m_clientPuduEditor{nullptr}; // lazy — created on first Edit… click
     class AetherialAudioStrip* m_aetherialStrip{nullptr};    // lazy — created on first egg-nub click (#2301)
+    bool m_restoreAetherialStripOnShow{false};   // reopen AetherTX on first show
 
     // Applet-panel pop-out support (#1713 Phase 6).  When floating,
     // the panel lives inside m_appletPanelFloatWindow and its splitter

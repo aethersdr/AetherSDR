@@ -94,6 +94,7 @@ The canon does not change control geometry.
 | A primary action | `color.brand.gradient` fill with `color.canon.onAccent` text. Dark clears 4.5:1 on every gradient stop (7.5–15.2:1). Light measures 3.7:1 and 3.3:1 at the middle and teal stops; that is accepted for About's OK per the RFC approval. Get a ruling before using it on another surface (#6239). `theme_manager_test` checks both |
 | A secondary control | `color.canon.control` fill, `color.canon.lineHi` border, `color.canon.cyan` text; `color.canon.nested` + `color.canon.aqua` on hover |
 | A card of label / value rows | `color.canon.nested` fill, `color.canon.line` border, 12 px radius; keys in `muted`, values in `inkSoft` |
+| Canon colours on content that other, non-canon surfaces share (AetherRX's AetherNR page is the docked applet's widget) | Put the window under the `canon` theme scope (`theme::setContainer(this, "canon/<name>")`): it remaps the base `color.background.*`, `color.text.*`, `color.border.*`, `color.accent*`, `color.knob.*` and `color.slider.*` tokens to the canon palette inside that window only. Painted code must use the widget-aware lookups (`color(this, …)`, `theme::withAlpha(this, …)`) to see it |
 
 ### `CanonWindow` is a deliberate exception to the dialog pattern
 
@@ -109,7 +110,7 @@ windows" lists what it keeps (the `FramelessMoveHelper` drag, Escape and
 Which windows the canon covers: short-lived, informational windows (About,
 Remote Access, and the candidates listed on #6239, once the maintainer picks
 them), and the tool windows the maintainer has moved to it (Waveforms,
-Network Diagnostics). Other tool and workspace dialogs keep
+Network Diagnostics, AetherRX, AetherTX). Other tool and workspace dialogs keep
 `PersistentDialog` and `FramelessWindowTitleBar` as `docs/agents/gui.md`
 describes. For windows the canon covers,
 `FramelessWindowTitleBar` is deprecated: those dialogs move to

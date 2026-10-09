@@ -25,4 +25,17 @@ QWidget* makeStagePage(QWidget* panel);
 // both plates, because there the titles are what tell them apart.
 void tidyEmbeddedPanel(QWidget* panel, bool keepTitle = false);
 
+// The canon header AetherRX and AetherTX carry in place of a title bar, as
+// Network Diagnostics and Waveforms do: the title in canon ink over a
+// hairline, with a right margin that keeps it clear of CanonWindow's corner
+// close button. The empty part of it is a handle for moving the window.
+QWidget* makeCanonHeader(const QString& title);
+
+// The sheet AetherRX and AetherTX put on CanonWindow's body: every container
+// that paints nothing of its own stays transparent over the canon ground,
+// instead of taking MainWindow's window-wide background rule, and text
+// defaults to canon ink. Panels that set their own background keep it, and
+// popups (menus, combo lists) keep a raised panel.
+QString canonBodyStyleSheet();
+
 } // namespace AetherSDR
