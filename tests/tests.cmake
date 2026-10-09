@@ -2142,6 +2142,24 @@ add_test(NAME panadapter_message_overlay_test COMMAND panadapter_message_overlay
 set_tests_properties(panadapter_message_overlay_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# Customize Button Bar selection is drawn from the palette (follow-up to #6312).
+add_executable(favorites_picker_selection_test
+    tests/favorites_picker_selection_test.cpp
+    src/gui/FavoritesPickerDialog.cpp
+    src/gui/PersistentDialog.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+    ${THEME_TEST_RESOURCES}
+)
+target_include_directories(favorites_picker_selection_test PRIVATE src tests)
+target_link_libraries(favorites_picker_selection_test PRIVATE
+    aethercore Qt6::Core Qt6::Gui Qt6::Widgets
+)
+set_target_properties(favorites_picker_selection_test PROPERTIES AUTOMOC ON)
+add_test(NAME favorites_picker_selection_test COMMAND favorites_picker_selection_test)
+set_tests_properties(favorites_picker_selection_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # AppSettings persistence safety. Each scenario is a separate process because
 # AppSettings is a process-wide singleton and load state must not leak between
 # cases.
