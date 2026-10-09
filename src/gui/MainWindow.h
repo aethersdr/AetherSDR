@@ -352,6 +352,11 @@ protected:
     // Restore WS_MINIMIZEBOX / WS_MAXIMIZEBOX on the HWND under the expanded
     // client area, where WindowChrome drops Qt's caption-button hints.
     void applyWindowsCaptionStyles();
+    // The HWND's client rect in physical pixels, read and set through Windows
+    // rather than Qt's frame margins, which are wrong under the expanded
+    // client area (#6303).
+    QRect nativeClientRect() const;
+    void setNativeClientRect(const QRect& client);
 #endif
     void closeEvent(QCloseEvent* event) override;
     void changeEvent(QEvent* event) override;

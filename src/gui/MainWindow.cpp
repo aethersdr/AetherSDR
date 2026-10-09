@@ -3793,6 +3793,33 @@ void MainWindow::applyWindowsCaptionStyles()
                      | SWP_NOACTIVATE | SWP_FRAMECHANGED);
     }
 }
+
+QRect MainWindow::nativeClientRect() const
+{
+    HWND hwnd = reinterpret_cast<HWND>(winId());
+    RECT client{};
+    if (!hwnd || !GetClientRect(hwnd, &client)) {
+        return {};
+    }
+    POINT origin{0, 0};
+    ClientToScreen(hwnd, &origin);
+    return QRect(origin.x, origin.y, client.right - client.left, client.bottom - client.top);
+}
+
+void MainWindow::setNativeClientRect(const QRect& client)
+{
+    HWND hwnd = reinterpret_cast<HWND>(winId());
+    RECT window{};
+    const QRect clientNow = nativeClientRect();
+    if (!hwnd || !client.isValid() || !clientNow.isValid() || !GetWindowRect(hwnd, &window)) {
+        return;
+    }
+    const QRect windowNow(window.left, window.top,
+                          window.right - window.left, window.bottom - window.top);
+    const QRect target = WindowChrome::windowRectForClient(client, windowNow, clientNow);
+    SetWindowPos(hwnd, nullptr, target.x(), target.y(), target.width(), target.height(),
+                 SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_NOACTIVATE);
+}
 #endif
 
 void MainWindow::showEvent(QShowEvent* event)
@@ -3848,13 +3875,15 @@ void MainWindow::reapplyStartupGeometryAfterShow()
     restoreGeometry(m_startupGeometryForFirstShow);
 #ifdef Q_OS_WIN
     // Qt 6.12's frame margins under the expanded client area do not match the
-    // window, so restoreGeometry() rebuilds a different size from the blob's
-    // frame rect on every launch. Put back the client rect that was saved.
+    // window, so neither restoreGeometry() nor geometry() round-trips its size.
+    // Put back the client rect Windows reported at exit, if the scale matches.
     if (windowFlags().testFlag(Qt::ExpandedClientAreaHint)
         && windowState() == Qt::WindowNoState) {
-        const QRect saved = WindowChrome::savedNormalGeometry(m_startupGeometryForFirstShow);
-        if (saved.isValid() && saved != geometry()) {
-            setGeometry(saved);
+        const QRect saved = WindowChrome::parseNativeClientRect(
+            AppSettings::instance().value("MainWindowNativeClientRect").toString(),
+            devicePixelRatioF());
+        if (saved.isValid()) {
+            setNativeClientRect(saved);
         }
     }
 #endif
@@ -4067,6 +4096,15 @@ void MainWindow::closeEvent(QCloseEvent* event)
     auto& s = AppSettings::instance();
     s.setValue("MainWindowGeometry", saveGeometry().toBase64());
     s.setValue("MainWindowState",   saveState().toBase64());
+#ifdef Q_OS_WIN
+    // Read back on the next launch by reapplyStartupGeometryAfterShow().
+    const bool nativeRestorable = windowFlags().testFlag(Qt::ExpandedClientAreaHint)
+        && windowState() == Qt::WindowNoState;
+    s.setValue("MainWindowNativeClientRect",
+               nativeRestorable ? WindowChrome::formatNativeClientRect(
+                                      nativeClientRect(), devicePixelRatioF())
+                                : QString());
+#endif
 
     // Refresh MinimalModeGeometry on close so a user who launches in
     // Minimal Mode, drags the window, and quits without ever toggling
@@ -9938,11 +9976,22 @@ void MainWindow::setFramelessWindow(bool on)
     // geometry so the window stays where the user put it.
     const QRect geom = geometry();
     const bool wasVisible = isVisible();
+#ifdef Q_OS_WIN
+    // On one side of this switch geometry() is off by Qt's expanded-frame
+    // margin error; keep the client area Windows reports instead.
+    const QRect nativeClient = wasVisible && windowState() == Qt::WindowNoState
+        ? nativeClientRect() : QRect();
+#endif
     WindowChrome::configure(this, on);
     setGeometry(geom);
     if (wasVisible) {
         show();
     }
+#ifdef Q_OS_WIN
+    if (nativeClient.isValid()) {
+        setNativeClientRect(nativeClient);
+    }
+#endif
 
     // Keep the bottom-right size grip in sync — only useful when frameless.
     if (m_sizeGrip) m_sizeGrip->setVisible(on);

@@ -1,10 +1,10 @@
 #pragma once
 
-#include <QByteArray>
-#include <QDataStream>
 #include <QGuiApplication>
 #include <QMargins>
 #include <QRect>
+#include <QString>
+#include <QStringList>
 #include <QWidget>
 #include <QWindow>
 #include <QtMath>
@@ -74,24 +74,55 @@ inline bool usesNativeCaption(const QWidget* window)
     return usesNativeCaption(window->windowFlags(), QGuiApplication::platformName());
 }
 
-// The client rect a QWidget::saveGeometry() blob recorded ("normal geometry"),
-// read without going through the platform's frame margins the way
-// restoreGeometry() does. Invalid for a blob this cannot read. (#6303)
-inline QRect savedNormalGeometry(const QByteArray& blob)
+// Windows: the native window rect that gives `client`, keeping the frame the
+// window has now (`windowNow` around `clientNow`). All in physical pixels, as
+// GetWindowRect / GetClientRect report them. (#6303)
+inline QRect windowRectForClient(const QRect& client, const QRect& windowNow, const QRect& clientNow)
 {
-    constexpr quint32 kGeometryMagic = 0x1D9D0CB;
-    QDataStream stream(blob);
-    stream.setVersion(QDataStream::Qt_4_0);
-    quint32 magic = 0;
-    quint16 major = 0;
-    quint16 minor = 0;
-    QRect frame;
-    QRect normal;
-    stream >> magic >> major >> minor >> frame >> normal;
-    if (stream.status() != QDataStream::Ok || magic != kGeometryMagic || major < 1) {
+    const int left = clientNow.x() - windowNow.x();
+    const int top = clientNow.y() - windowNow.y();
+    const int right = (windowNow.x() + windowNow.width()) - (clientNow.x() + clientNow.width());
+    const int bottom = (windowNow.y() + windowNow.height()) - (clientNow.y() + clientNow.height());
+    return QRect(client.x() - left, client.y() - top,
+                 client.width() + left + right, client.height() + top + bottom);
+}
+
+// A native client rect saved with the device pixel ratio it was measured at,
+// "x,y,w,h@dpr". Parsing gives an invalid rect when the text is malformed or
+// the ratio differs (UI or display scale changed), so the caller falls back
+// to Qt's own restore. (#6303)
+inline QString formatNativeClientRect(const QRect& client, qreal dpr)
+{
+    return QStringLiteral("%1,%2,%3,%4@%5")
+        .arg(client.x()).arg(client.y()).arg(client.width()).arg(client.height())
+        .arg(dpr, 0, 'g', 6);
+}
+
+inline QRect parseNativeClientRect(const QString& text, qreal dpr)
+{
+    const QStringList parts = text.split(QLatin1Char('@'));
+    if (parts.size() != 2) {
         return {};
     }
-    return normal;
+    bool dprOk = false;
+    const qreal savedDpr = parts.at(1).toDouble(&dprOk);
+    if (!dprOk || !qFuzzyCompare(savedDpr, dpr)) {
+        return {};
+    }
+    const QStringList v = parts.at(0).split(QLatin1Char(','));
+    if (v.size() != 4) {
+        return {};
+    }
+    int n[4] = {};
+    for (int i = 0; i < 4; ++i) {
+        bool ok = false;
+        n[i] = v.at(i).toInt(&ok);
+        if (!ok) {
+            return {};
+        }
+    }
+    const QRect client(n[0], n[1], n[2], n[3]);
+    return client.width() > 0 && client.height() > 0 ? client : QRect();
 }
 
 inline QMargins contentInsets(const QWidget* window)

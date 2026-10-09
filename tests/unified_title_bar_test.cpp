@@ -36,10 +36,7 @@
 
 #include <QAbstractButton>
 #include <QApplication>
-#include <QByteArray>
-#include <QDataStream>
 #include <QFocusEvent>
-#include <QIODevice>
 #include <QFrame>
 #include <QImage>
 #include <QLabel>
@@ -140,26 +137,36 @@ int main(int argc, char** argv)
               "Linux frameless draws the bar's caption buttons");
     }
 
-    // ── Saved client rect read straight from a saveGeometry() blob (#6303) ──
+    // ── Native client-rect save/restore for the Windows expanded frame (#6303) ──
     {
-        // Frame and normal rects differ, as they do under a wrong frame margin.
-        QByteArray blob;
-        QDataStream out(&blob, QIODevice::WriteOnly);
-        out.setVersion(QDataStream::Qt_4_0);
-        out << quint32(0x1D9D0CB) << quint16(3) << quint16(0)
-            << QRect(200, 55, 1389, 391) << QRect(191, 55, 1407, 400);
-        check(WindowChrome::savedNormalGeometry(blob) == QRect(191, 55, 1407, 400),
-              "the saved client rect is the blob's normal geometry, not its frame");
+        // Rects measured on Windows 10: the expanded frame keeps an 8 px resize
+        // border left, right and bottom, none on top.
+        const QRect expandedWindow(157, 44, 1115, 348);
+        const QRect expandedClient(165, 44, 1099, 340);
+        check(WindowChrome::windowRectForClient(expandedClient, expandedWindow, expandedClient)
+                  == expandedWindow,
+              "the current client rect maps back to the current window rect");
+        check(WindowChrome::windowRectForClient(QRect(300, 200, 1000, 300),
+                                                expandedWindow, expandedClient)
+                  == QRect(292, 200, 1016, 308),
+              "a new client rect keeps the expanded frame's uneven borders");
+        // System decorations: 8 px sides and bottom, 31 px caption.
+        check(WindowChrome::windowRectForClient(expandedClient, QRect(157, 13, 1115, 379),
+                                                QRect(165, 44, 1099, 340))
+                  == QRect(157, 13, 1115, 379),
+              "the caption height goes above the client rect");
 
-        QWidget probe;
-        probe.setGeometry(120, 90, 640, 360);
-        check(WindowChrome::savedNormalGeometry(probe.saveGeometry()) == probe.geometry(),
-              "a real saveGeometry() blob reads back the widget's geometry");
-
-        check(!WindowChrome::savedNormalGeometry(QByteArray()).isValid(),
-              "an empty blob gives no rect");
-        check(!WindowChrome::savedNormalGeometry(QByteArray("not a geometry blob")).isValid(),
-              "a foreign blob gives no rect");
+        const QString saved = WindowChrome::formatNativeClientRect(expandedClient, 0.85);
+        check(WindowChrome::parseNativeClientRect(saved, 0.85) == expandedClient,
+              "a saved native client rect reads back at the same scale");
+        check(!WindowChrome::parseNativeClientRect(saved, 1.0).isValid(),
+              "a different scale falls back to Qt's restore");
+        check(!WindowChrome::parseNativeClientRect(QString(), 0.85).isValid(),
+              "nothing saved gives no rect");
+        check(!WindowChrome::parseNativeClientRect(QStringLiteral("1,2,three,4@0.85"), 0.85).isValid(),
+              "a malformed value gives no rect");
+        check(!WindowChrome::parseNativeClientRect(QStringLiteral("1,2,0,4@0.85"), 0.85).isValid(),
+              "an empty rect gives no rect");
     }
 
     WindowChrome::configure(&host, true);
