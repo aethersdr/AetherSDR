@@ -11,6 +11,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cerrno>
 #include <cstdio>
 #include <cstdlib>
 #include <iostream>
@@ -23,8 +24,6 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #endif
-
-extern "C" void PSRestoreCorr(int channel, char* filename);
 
 namespace {
 
@@ -65,7 +64,7 @@ int main()
     check(::mkfifo(fifo.c_str(), 0600) == 0, "premise: the FIFO is created");
 
     // The correction thread now blocks in fopen(fifo, "r") until a writer opens.
-    PSRestoreCorr(channel->channelId(), fifo.data());
+    channel->restorePureSignalCorrectionForTest(fifo.c_str());
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
     std::atomic<bool> closed{false};
@@ -80,7 +79,12 @@ int main()
 
     // Release the thread: a line that is no correction file, so the restore
     // fails and it moves on. Held open briefly so the reader sees a writer.
-    const int writer = ::open(fifo.c_str(), O_WRONLY);
+    // Non-blocking, so a thread that never opened the FIFO fails here (ENXIO)
+    // instead of hanging until the ctest timeout.
+    const int writer = ::open(fifo.c_str(), O_WRONLY | O_NONBLOCK);
+    if (writer < 0 && errno == ENXIO) {
+        check(false, "premise: the correction thread has the FIFO open for reading");
+    }
     check(writer >= 0, "premise: the writer end opens");
     if (writer >= 0) {
         const char junk[] = "not-a-correction-file x\n";

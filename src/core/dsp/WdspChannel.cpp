@@ -1273,6 +1273,12 @@ void WdspChannel::synchronizeWorkerForTest() const noexcept
     SynchronizeChannelWorkerForTest(m_channelId);
 }
 
+void WdspChannel::restorePureSignalCorrectionForTest(const char* path) const noexcept
+{
+    // PSRestoreCorr only copies the name; WDSP's signature is just not const.
+    PSRestoreCorr(m_channelId, const_cast<char*>(path));
+}
+
 std::unique_lock<std::mutex> WdspChannel::fftwSetupLock()
 {
     // Forwards, and keeps its name so Hl2Spectrum, AnanPanAnalyzer and

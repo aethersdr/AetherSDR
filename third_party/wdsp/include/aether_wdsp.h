@@ -527,6 +527,9 @@ int GetChannelOutputSamplesForTest(int channel);
 // After count readiness, wait for the previous handoff hook/DSP to finish.
 // Test/control only; never call with either worker hold armed or entered.
 void SynchronizeChannelWorkerForTest(int channel);
+// Queues a correction-file restore on a TX channel's PureSignal correction
+// thread. AetherSDR calls it only from wdsp_calcc_teardown_test (patch 22).
+void PSRestoreCorr(int channel, char* filename);
 
 #ifdef __cplusplus
 }

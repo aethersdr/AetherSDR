@@ -1269,7 +1269,9 @@ Now:
   (`mainExited == mainGen`). Those iqc setters take `ch[].csDSP`, which is
   free only once the worker has exited (patch 9). If patch 4's wait fell
   through its cap, a wedged worker may still hold `csDSP`, an unbounded wait
-  could then never end, and upstream's 500 ms bound stands instead. That path
+  could then never end, and a bound of 500 one-millisecond passes stands
+  instead: 500 ms on POSIX, up to ~8 s under Windows' default 15.6 ms timer
+  tick, since nothing in AetherSDR calls `timeBeginPeriod`. That path
   is already undefined on `main` (`post_main_destroy` deletes `csDSP` under a
   live holder); this patch does not make it worse.
 - A `WAIT_FAILED` return (an exit event `CreateEvent` failed to make) ends
@@ -1289,7 +1291,9 @@ sanitizer lanes'). `wdsp_calcc_teardown_test` holds the thread in
 thread, and opens the writer 1 s later. Before this patch `CloseChannel()`
 returned after ~500 ms while the thread was still blocked. With it,
 `CloseChannel()` returns only after the writer opens. POSIX only (`mkfifo`);
-skipped on Windows.
+skipped on Windows. The test queues the restore through
+`WdspChannel::restorePureSignalCorrectionForTest()`, so it links under
+`AETHER_SHARED_CORE` and the sanitizer lanes build it.
 
 **Upstream status.** Not reported.
 

@@ -1096,7 +1096,8 @@ void destroy_calcc (CALCC a)
 	// its util splines, the iqc stage, cs_update) is freed until it has exited.
 	// No time limit once patch 4 saw the DSP worker exit: csDSP, which the
 	// thread's iqc setters take, is then free, and iqc's busy bit they spin on
-	// is cleared each pass. If that wait fell through, upstream's 500 ms stands.
+	// is cleared each pass. If that wait fell through, 500 passes bound it
+	// (500 ms on POSIX, longer at Windows' default timer tick).
 	if (a->corrThreadStarted && a->hCorrChangeExited != NULL)
 	{
 		const int workerGone = _InterlockedAnd(&ch[a->channel].mainExited, ~0L)
