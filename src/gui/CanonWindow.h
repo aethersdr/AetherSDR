@@ -33,10 +33,8 @@ public:
     // Workspace: a tool the operator works in for a session (AetherRX,
     // AetherTX): an independent top-level window, with its own taskbar entry,
     // that minimises separately and can live on another monitor. In a
-    // workspace Return and Enter never click a default button: a page of
-    // controls is not a form, and QDialog would otherwise make every push
-    // button an auto-default, so Return in a knob's value field also pressed
-    // a stage tab.
+    // workspace Return and Enter never click a default button (see
+    // setReturnClicksDefault()).
     enum class Kind { Dialog, Workspace };
 
     explicit CanonWindow(const QString& title, QWidget* parent = nullptr,
@@ -55,6 +53,17 @@ public:
     // still restored and saved). Applied before the window centres, so a
     // window that cannot restore its position centres at this size.
     void setLaunchSize(const QSize& size);
+
+    // Whether Return and Enter in a field click the default button, as a
+    // QDialog's do. Off by default in a workspace, on in a dialog. A page of
+    // controls is not a form: QDialog makes every push button an
+    // auto-default, so Return in a field would also press the first button
+    // (a stage tab, a mode card). A focused button still takes Return itself.
+    void setReturnClicksDefault(bool on) { m_returnClicksDefault = on; }
+
+    // The owner positions the window before showing it (the Connect window,
+    // anchored above the status bar), so the first show does not centre it.
+    void setOwnerPlaced(bool on) { m_ownerPlaced = on; }
 
     static constexpr int kRadius = 16;
     static constexpr int kInset = 1;   // hairline border; the body sits inside it
@@ -76,7 +85,8 @@ private:
     enum class Restored { Nothing, SizeOnly, SizeAndPosition };
     Restored restoreGeometryFromSettings();
 
-    Kind         m_kind;
+    bool         m_returnClicksDefault;
+    bool         m_ownerPlaced{false};
     QWidget*     m_body{nullptr};
     QToolButton* m_close{nullptr};
     bool         m_placed{false};
@@ -85,6 +95,11 @@ private:
     bool         m_restoringGeometry{false};
     QPixmap      m_ground;   // the painted ground, rebuilt on resize, DPR or theme change
 };
+
+// The canon header a CanonWindow carries in place of a title bar: the title in
+// canon ink over a hairline, with a right margin that keeps it clear of the
+// corner close button. The empty part of it is a handle for moving the window.
+QWidget* makeCanonHeader(const QString& title);
 
 // The guide's spark: a point of light circling a path, with a bright tip and a
 // tail that fades to nothing, over a wider faint glow. The base owns the

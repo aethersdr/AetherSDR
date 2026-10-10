@@ -6804,6 +6804,7 @@ set_tests_properties(flex_control_dialog_size_test PROPERTIES
 add_executable(connection_panel_size_test
     tests/connection_panel_size_test.cpp
     src/gui/ConnectionPanel.cpp
+    src/gui/CanonWindow.cpp
     src/gui/PersistentDialog.cpp
     src/gui/FramelessResizer.cpp
     src/gui/FramelessWindowTitleBar.cpp
@@ -6841,8 +6842,8 @@ set_tests_properties(minimal_mode_exit_order_test PROPERTIES
 add_executable(startup_autoconnect_lockout_test
     tests/startup_autoconnect_lockout_test.cpp
     src/gui/ConnectionPanel.cpp
+    src/gui/CanonWindow.cpp
     src/gui/FramelessResizer.cpp
-    src/gui/FramelessWindowTitleBar.cpp
 )
 target_include_directories(startup_autoconnect_lockout_test PRIVATE src tests)
 target_link_libraries(startup_autoconnect_lockout_test PRIVATE

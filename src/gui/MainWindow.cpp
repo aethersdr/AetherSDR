@@ -5498,11 +5498,8 @@ void MainWindow::buildUI()
 
     auto* splitter = m_splitter;
 
-    // Connection panel — modeless dialog; follows View -> Frameless Window.
+    // Connection panel — a modeless CanonWindow dialog, always frameless.
     m_connPanel = new ConnectionPanel(this);
-    m_connPanel->setWindowTitle("Connect to Radio");
-    m_connPanel->setFramelessMode(
-        AppSettings::instance().value("FramelessWindow", "True").toString() == "True");
     // Sizing belongs to the panel now. It sets these same two values in its own
     // constructor and then adjusts them per screen in fitToScreen(), which
     // every show path here runs first — a hardcoded pair at this level went
@@ -10194,8 +10191,6 @@ void MainWindow::setFramelessWindow(bool on)
     if (m_panStack) m_panStack->setFramelessMode(on);
     if (m_appletPanel && m_appletPanel->containerManager())
         m_appletPanel->containerManager()->setFramelessMode(on);
-    if (m_connPanel)
-        m_connPanel->setFramelessMode(on);
     if (m_titleBar)
         m_titleBar->setChildDialogsFramelessMode(on);
     // RadioSetupDialog frameless propagation flows through the

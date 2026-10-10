@@ -4,7 +4,6 @@
 #include "CanonIndicators.h"
 #include "ComboStyle.h"
 #include "FramelessResizer.h"
-#include "StagePage.h"
 
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"

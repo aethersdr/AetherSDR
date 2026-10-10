@@ -295,8 +295,7 @@ void checkFooterReachable(QApplication& app,
         return;
     }
 
-    ConnectionPanel panel;
-    panel.setFramelessMode(frameless);
+    ConnectionPanel panel;   // a CanonWindow: always frameless
     panel.setMinimumSize(ConnectionPanel::kSafeMinimumWidth,
                          ConnectionPanel::kSafeMinimumHeight);
     panel.resize(ConnectionPanel::kSafeMinimumWidth,
@@ -548,14 +547,11 @@ int main(int argc, char** argv)
 
     const QFont originalFont = app.font();
     for (const qreal scale : {1.0, 1.25, 1.5}) {
-        for (const bool frameless : {true, false}) {
-            checkFooterReachable(app, originalFont, scale, frameless);
-        }
+        checkFooterReachable(app, originalFont, scale, true);
     }
     app.setFont(originalFont);
 
     ConnectionPanel oversizedPanel;
-    oversizedPanel.setFramelessMode(false);
     oversizedPanel.setMinimumSize(ConnectionPanel::kSafeMinimumWidth,
                                   ConnectionPanel::kSafeMinimumHeight);
     oversizedPanel.resize(760, 10000);
@@ -575,20 +571,9 @@ int main(int argc, char** argv)
     // there proves nothing about the branch that runs before the native window
     // exists, which is the one the first open on Windows depends on.
     {
-        ConnectionPanel unshownPanel;
-        unshownPanel.setFramelessMode(false);
-        const QMargins estimate = unshownPanel.screenFitFrameMargins();
-        const int titleBarHeight = unshownPanel.style()->pixelMetric(
-            QStyle::PM_TitleBarHeight, nullptr, &unshownPanel);
-        report("pre-show frame estimate reserves a title bar, not a border",
-               estimate.top() >= titleBarHeight && estimate.top() > estimate.bottom(),
-               "top=" + std::to_string(estimate.top())
-                   + " bottom=" + std::to_string(estimate.bottom())
-                   + " PM_TitleBarHeight=" + std::to_string(titleBarHeight));
-
+        // A CanonWindow has no native frame, so nothing is reserved for one.
         ConnectionPanel unshownFrameless;
-        unshownFrameless.setFramelessMode(true);
-        report("frameless mode reserves no frame at all",
+        report("a frameless panel reserves no frame at all",
                unshownFrameless.screenFitFrameMargins().isNull(),
                "top=" + std::to_string(
                             unshownFrameless.screenFitFrameMargins().top()));
@@ -600,7 +585,7 @@ int main(int argc, char** argv)
         const QPoint constrained =
             oversizedPanel.constrainedFrameTopLeft(preferred, available);
         const QSize frameSize = oversizedPanel.screenFitFrameSize();
-        report("constrained native frame remains inside available geometry",
+        report("constrained frame remains inside available geometry",
                available.contains(QRect(constrained, frameSize)),
                "frameX=" + std::to_string(constrained.x())
                    + " frameY=" + std::to_string(constrained.y())
@@ -608,11 +593,10 @@ int main(int argc, char** argv)
                    + " frameH=" + std::to_string(frameSize.height()));
 
         // fitAndClampToScreen() is the show path ConnectionPanel owns itself:
-        // the frameless toggle, the automation bridge, and the deferred re-fit
+        // the automation bridge and the deferred re-fit
         // after a screen/DPI/font change all land here. It must pull a window
         // back inside the work area without otherwise relocating it.
         ConnectionPanel strayPanel;
-        strayPanel.setFramelessMode(false);
         strayPanel.show();
         QApplication::processEvents();
         strayPanel.move(available.right() - 40, available.bottom() - 40);
@@ -641,7 +625,6 @@ int main(int argc, char** argv)
     // goes away — rather than assumed from a particular metric.
     {
         ConnectionPanel growPanel;
-        growPanel.setFramelessMode(true);
         growPanel.show();
         QApplication::processEvents();
         growPanel.fitToScreen(screen);
@@ -679,6 +662,10 @@ int main(int argc, char** argv)
                     QSizePolicy::Minimum,
                     QSizePolicy::Fixed);
                 bodyContent->layout()->addItem(spacer);
+                // Two turns: the body sits inside CanonWindow's own body
+                // widget, one layout deeper, so the scroll area hears about
+                // the new minimum a turn later.
+                QApplication::processEvents();
                 QApplication::processEvents();
             }
             report("growth setup overflows an auto-fit-owned height",
@@ -708,6 +695,7 @@ int main(int argc, char** argv)
             if (spacer && bodyContent && bodyContent->layout()) {
                 bodyContent->layout()->removeItem(spacer);
                 delete spacer;
+                QApplication::processEvents();   // two turns, as above
                 QApplication::processEvents();
             }
             growPanel.fitToScreen(screen);

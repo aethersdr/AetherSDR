@@ -20,7 +20,6 @@
 #include "gui/AprsMessagesDialog.h"
 #include "gui/CanonIndicators.h"
 #include "gui/FramelessResizer.h"
-#include "gui/StagePage.h"
 #include "gui/AprsRateGraph.h"
 #include "gui/AprsSymbolIcons.h"
 #include "core/tnc/Ax25.h"

@@ -236,7 +236,7 @@ replace these with a single `QSet<QPointer<PersistentDialog>>` walk.
 A window built on `CanonWindow` (`src/gui/CanonWindow.{h,cpp}`, RFC #6226)
 deliberately opts out of frameless chrome integration, and by default of
 geometry persistence too. About AetherSDR, Remote Access (Tailscale),
-Waveforms, Network Diagnostics, AetherRX, AetherTX, AetherModem, AetherMap and the AetherRX / AetherTX Settings (profile library) dialogs are built on it.
+Waveforms, Network Diagnostics, AetherRX, AetherTX, AetherModem, AetherMap, Connect to Radio (`ConnectionPanel`) and the AetherRX / AetherTX Settings (profile library) dialogs are built on it.
 
 | Concern | `CanonWindow` | Why |
 |---|---|---|
@@ -258,7 +258,9 @@ What it keeps:
   minimises on its own and does not keep the app alive (`WA_QuitOnClose`
   off). In a workspace, Return and Enter never click a default button:
   QDialog makes every push button an auto-default, so Return in a field would
-  otherwise press the first one.
+  otherwise press the first one. `setReturnClicksDefault(false)` gives a dialog
+  the same Return handling (Connect to Radio), and `setOwnerPlaced(true)` skips
+  the first-show centring for a window its owner positions itself.
 - **Deletion:** pair it with `WA_DeleteOnClose`, as About does, and hold it in
   a `QPointer` so a second open raises the existing window. AetherTX is the
   exception: MainWindow keeps feeding it state while it is closed, so closing

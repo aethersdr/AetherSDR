@@ -172,6 +172,34 @@ int main(int argc, char** argv)
         EXPECT_TRUE(w.pos() == screen.center() - w.rect().center());
     }
 
+    // ---- a dialog can opt out of Return clicking its default button (the
+    //      Connect window: Return in an IP field must not press a mode card),
+    //      and an owner-placed window is not centred on its first show ----
+    {
+        QWidget parent;
+        CanonWindow w(QStringLiteral("Canon"), &parent);
+        w.setReturnClicksDefault(false);
+        w.setOwnerPlaced(true);
+        EXPECT_TRUE(w.windowType() == Qt::Dialog);
+        auto* box = new QVBoxLayout(w.bodyWidget());
+        auto* card = new QPushButton(QStringLiteral("On This Network"));
+        auto* field = new QLineEdit;
+        box->addWidget(card);
+        box->addWidget(field);
+        int clicks = 0;
+        QObject::connect(card, &QPushButton::clicked, [&clicks] { ++clicks; });
+        w.resize(400, 300);
+        const QPoint ownerPos(23, 41);   // nowhere near a centred position
+        w.move(ownerPos);
+        w.show();
+        w.activateWindow();
+        EXPECT_TRUE(QTest::qWaitForWindowActive(&w));
+        EXPECT_TRUE(w.pos() == ownerPos);
+        field->setFocus();
+        QTest::keyClick(field, Qt::Key_Return);
+        EXPECT_TRUE(clicks == 0);
+    }
+
     // ---- a workspace is its own top-level window, and Return or Enter in a
     //      field never clicks a button (AetherTX: Return in a knob's value
     //      field pressed the Gate tab, QDialog's first auto-default) ----

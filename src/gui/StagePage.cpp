@@ -1,10 +1,7 @@
 #include "StagePage.h"
 #include "CompactMetrics.h"
 #include "EditorFramelessTitleBar.h"
-#include "core/ThemeManager.h"
 
-#include <QFrame>
-#include <QLabel>
 #include <QResizeEvent>
 #include <QShowEvent>
 #include <QVBoxLayout>
@@ -129,33 +126,6 @@ QString canonBodyStyleSheet()
         "QWidget#canonBody QMenu, QWidget#canonBody QComboBoxPrivateContainer,"
         " QWidget#canonBody QComboBox QAbstractItemView"
         " { background: {{color.canon.raised}}; }");
-}
-
-QWidget* makeCanonHeader(const QString& title)
-{
-    auto* header = new QWidget;
-    header->setObjectName(QStringLiteral("canonHeader"));
-    auto* col = new QVBoxLayout(header);
-    col->setContentsMargins(0, 0, 0, 0);
-    col->setSpacing(8);
-
-    auto* label = new QLabel(title, header);
-    label->setObjectName(QStringLiteral("canonHeaderTitle"));
-    label->setAccessibleName(title);
-    label->setContentsMargins(0, 0, 40, 0);
-    col->addWidget(label);
-
-    auto* rule = new QFrame(header);
-    rule->setObjectName(QStringLiteral("canonHeaderRule"));
-    col->addWidget(rule);
-
-    AetherSDR::ThemeManager::instance().applyStyleSheet(header,
-        "QWidget#canonHeader { background: transparent; }"
-        "QLabel#canonHeaderTitle { background: transparent; color: {{color.canon.ink}};"
-        " font-size: 17px; font-weight: 700; }"
-        "QFrame#canonHeaderRule { background: {{color.canon.line}}; border: none;"
-        " min-height: 1px; max-height: 1px; }");
-    return header;
 }
 
 } // namespace AetherSDR
