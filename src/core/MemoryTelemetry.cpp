@@ -18,7 +18,7 @@
 #endif
 #include <windows.h>
 #include <psapi.h>
-#elif defined(Q_OS_MAC)
+#elif defined(Q_OS_MACOS)
 #include <mach/mach.h>
 #include <mach/task.h>
 #include <mach/task_info.h>
@@ -89,7 +89,7 @@ ProcessMemorySnapshot ProcessMemorySnapshot::capture()
     if (GetProcessHandleCount(GetCurrentProcess(), &handles)) {
         snapshot.handleCount = static_cast<qint64>(handles);
     }
-#elif defined(Q_OS_MAC)
+#elif defined(Q_OS_MACOS)
     task_vm_info_data_t info{};
     mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
     if (task_info(mach_task_self(), TASK_VM_INFO,

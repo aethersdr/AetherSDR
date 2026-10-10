@@ -127,7 +127,7 @@ WaveformWidget::WaveformWidget(Profile profile, QWidget* parent)
                "-DAETHER_GPU_SPECTRUM=OFF for the QPainter path.";
     });
 #endif
-#if defined(AETHER_GPU_SPECTRUM) && defined(Q_OS_MAC)
+#if defined(AETHER_GPU_SPECTRUM) && defined(Q_OS_MACOS)
     // Unlike the panadapter, every waveform scope lives inside a QScrollArea.
     // Making that child a native NSView while deliberately keeping its
     // ancestors non-native disconnects the native surface from QWidget

@@ -197,7 +197,7 @@ void populateWindowMenu(QMenu* menu, QWidget* primaryWindow,
         }
     });
 
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
     const QString maximizeLabel = QObject::tr("Zoom");
 #else
     const QString maximizeLabel = target && target->isMaximized()
@@ -973,7 +973,7 @@ void MainWindow::buildMenuBar()
 #endif
     });
 
-#if !defined(Q_OS_MAC) && !defined(HAVE_PIPEWIRE)
+#if !defined(Q_OS_MACOS) && !defined(HAVE_PIPEWIRE)
     // DAX audio bridge requires macOS CoreAudio or Linux with PipeWire.
     // Force off and omit the menu entry on platforms without a bridge (#1556).
     {

@@ -55,7 +55,7 @@ public:
 private:
     bool m_held{false};
 
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
     uint32_t m_assertionId{0};
 #endif
 #if defined(Q_OS_LINUX) && defined(HAVE_DBUS)

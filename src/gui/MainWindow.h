@@ -195,7 +195,7 @@ class UlanziDialMapperDialog;
 class EvdevEncoderManager;
 #elif defined(Q_OS_WIN) && defined(HAVE_HIDAPI)
 class UlanziDialWindowsManager;
-#elif defined(Q_OS_MAC)
+#elif defined(Q_OS_MACOS)
 class UlanziDialMacOSManager;
 #else
 class UlanziDialBackend;
@@ -205,7 +205,7 @@ class DvkPanel;
 #ifdef HAVE_RADE
 class RADEEngine;
 #endif
-#if defined(Q_OS_MAC)
+#if defined(Q_OS_MACOS)
 class VirtualAudioBridge;
 using DaxBridge = VirtualAudioBridge;
 #elif defined(HAVE_PIPEWIRE)
@@ -1521,7 +1521,7 @@ private:
     EvdevEncoderManager*       m_dialBackend{nullptr};
 #elif defined(Q_OS_WIN) && defined(HAVE_HIDAPI)
     UlanziDialWindowsManager*  m_dialBackend{nullptr};
-#elif defined(Q_OS_MAC)
+#elif defined(Q_OS_MACOS)
     UlanziDialMacOSManager*    m_dialBackend{nullptr};
 #else
     UlanziDialBackend*         m_dialBackend{nullptr};
@@ -2240,7 +2240,7 @@ private:
     // mode change) toggled it.
     void reflectWfmButtons(bool on, int sliceId);
 
-#if defined(Q_OS_MAC) || defined(HAVE_PIPEWIRE)
+#if defined(Q_OS_MACOS) || defined(HAVE_PIPEWIRE)
     DaxBridge* m_daxBridge{nullptr};
     QString m_savedMicSelection;  // restore on stopDax
     bool startDax();

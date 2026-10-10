@@ -184,7 +184,7 @@ void FreeDvClient::handleEngineIO(const QString& raw)
             auth["rx_only"]          = false;
 #if defined(Q_OS_WIN)
             auth["os"]               = QString("windows");
-#elif defined(Q_OS_MAC)
+#elif defined(Q_OS_MACOS)
             auth["os"]               = QString("macos");
 #else
             auth["os"]               = QString("linux");

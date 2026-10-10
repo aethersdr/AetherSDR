@@ -510,7 +510,7 @@ def key_sequence(expr: str, where: str) -> str:
 
 def platform_keys(src: Source, name: str, where: str) -> dict:
     """{'macOS': ..., 'other': ...} for a QKeySequence variable declared in
-    an ``#ifdef Q_OS_MAC`` / ``#else`` block."""
+    an ``#ifdef Q_OS_MACOS`` / ``#else`` block."""
     found = {}
     for m in re.finditer(
         r"const\s+QKeySequence\s+%s\s*(\((?:[^;]*)\))?\s*;" % re.escape(name),
@@ -520,9 +520,9 @@ def platform_keys(src: Source, name: str, where: str) -> dict:
         if not conds:
             raise ParseError(f"{where}: {name} is not inside a platform #ifdef")
         last = conds[-1]
-        if last == "Q_OS_MAC":
+        if last == "Q_OS_MACOS":
             plat = "macOS"
-        elif last == "not (Q_OS_MAC)":
+        elif last == "not (Q_OS_MACOS)":
             plat = "other"
         else:
             raise ParseError(f"{where}: {name} is under unexpected #if {last!r}")

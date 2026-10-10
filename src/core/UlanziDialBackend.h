@@ -14,7 +14,7 @@
 #elif defined(Q_OS_WIN) && defined(HAVE_HIDAPI)
     #include "core/UlanziDialWindowsManager.h"
     namespace AetherSDR { using UlanziDialBackend = UlanziDialWindowsManager; }
-#elif defined(Q_OS_MAC)
+#elif defined(Q_OS_MACOS)
     #include "core/UlanziDialMacOSManager.h"
     namespace AetherSDR { using UlanziDialBackend = UlanziDialMacOSManager; }
 #else

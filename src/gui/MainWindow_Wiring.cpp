@@ -1887,7 +1887,7 @@ void MainWindow::onSliceAdded(SliceModel* s)
         // digital TX stays on the mic input (#2273). Not on Windows: SmartSDR
         // DAX2 owns `transmit dax`, and a `transmit set dax=0` from a mode change
         // parks its TX stream in Busy (#2315).
-#if defined(Q_OS_MAC) || defined(HAVE_PIPEWIRE)
+#if defined(Q_OS_MACOS) || defined(HAVE_PIPEWIRE)
         m_audio->setDaxTxMode(isDigital);
         // `transmit dax` and DAX TX streams belong to Flex's command plane.
         // Icom and the other typed-seam backends carry their audio through the
@@ -3074,7 +3074,7 @@ void MainWindow::runProfileLoadRecoveryPass(const QString& profileType,
     }
 #endif
 
-#if defined(Q_OS_MAC) || defined(HAVE_PIPEWIRE)
+#if defined(Q_OS_MACOS) || defined(HAVE_PIPEWIRE)
     if (m_daxBridge) {
         auto* panStream = m_radioModel.panStream();
         bool txSliceIsDigital = false;

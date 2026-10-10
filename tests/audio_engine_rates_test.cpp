@@ -762,7 +762,7 @@ bool enableEffect(AudioEngine& engine, Effect effect)
         engine.setDfnrEnabled(true);
         return engine.dfnrEnabled();
     case Effect::Mnr:
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
         engine.setMnrEnabled(true);
         return engine.mnrEnabled();
 #else

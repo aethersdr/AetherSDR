@@ -23,7 +23,7 @@ void expectShape(const char* name,
 
 int main()
 {
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
     expectShape("vertical split remains unchanged",
                 macSafeCursorShape(Qt::SplitVCursor),
                 Qt::SplitVCursor);

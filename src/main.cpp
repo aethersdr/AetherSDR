@@ -22,7 +22,7 @@
 #include "core/AutomationServer.h"
 #include "QtPlatformChoice.h"
 
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
 #include "MacStartupAbortGuard.h"
 #endif
 
@@ -370,7 +370,7 @@ int main(int argc, char* argv[])
             qputenv("QT_SCALE_FACTOR", QByteArray::number(pct / 100.0, 'f', 2));
     }
 
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
     // SpectrumWidget and WaveformWidget require native Metal child views, but
     // their surrounding raster-widget trees must not become native siblings.
     // Together with WA_DontCreateNativeAncestors on those leaves, this avoids
@@ -402,7 +402,7 @@ int main(int argc, char* argv[])
     // for ps and pgrep (ThreadName.cpp).
     AetherSDR::SystemInfo::setCurrentThreadName("AetherSDR-GUI");
 
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
     if (!startupAbortGuard.disarm()) {
         std::fputs("AetherSDR startup error: could not restore the SIGABRT "
                    "handler after GUI initialization; refusing to continue.\n",
