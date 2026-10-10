@@ -722,10 +722,12 @@ static void populateFamilyParams(RadioConnectRequest& req, const QString& family
     if (sessionBindAddress.protocol() == QAbstractSocket::IPv4Protocol)
         req.localBindAddress = sessionBindAddress;
 
-    // The DDC0 rate and ADC options are connect-time preferences selected in
-    // ConnectionPanel's ANAN-only manual-connect rows. Operating state such as
-    // frequency is deliberately absent until this backend participates in the
-    // radio-scoped RadioStateMemory contract.
+    // The DDC0 rate and the front-end options are preferences the operator sets
+    // in Radio Setup's "ANAN Front End" page. READ FROM AnanSettings, NOT FROM
+    // A WIDGET, which is what lets that page set them with no radio connected,
+    // before the first connect. Operating state such as frequency is
+    // deliberately absent until this backend participates in the radio-scoped
+    // RadioStateMemory contract.
     if (family.compare(QLatin1String("anan"), Qt::CaseInsensitive) == 0) {
         req.params.insert(QStringLiteral("anan.ddc0RateKsps"),
                           anan::AnanSettings::ddc0RateKsps());

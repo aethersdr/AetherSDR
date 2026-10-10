@@ -436,6 +436,10 @@ RadioCapabilities AnanBackend::capabilities() const
     c.hasAgcThreshold = true; // Host receiver DSP implements threshold/off gain.
     c.manufacturer = QStringLiteral("Apache Labs");
     c.model = QStringLiteral("ANAN-G2");
+    // The session takes its receive front-end options from AnanSettings
+    // (populateFamilyParams()), so the setup page that edits them applies.
+    c.adcFrontEnd = RadioCapabilities::AdcFrontEnd{};
+
     // ---- PA telemetry ----
     // hasSupplyVoltageTelemetry stays FALSE although the radio sends a
     // supply-rail count (P2Protocol decodes it): no known scale fits it. On a
