@@ -11,6 +11,11 @@ class QThread;
 
 namespace AetherSDR {
 
+// Reads FlexRadio's published release list. Forward-declared rather than
+// included: this header is scanned above the radio seam, and the include
+// belongs in the .cpp with the rest of the family's wire knowledge.
+class FirmwareStager;
+
 class RadioConnection;
 class PanadapterStream;
 
@@ -21,6 +26,8 @@ class PanadapterStream;
 // RadioModel holds non-owning pointers via connection()/panStream() and keeps
 // the command/WAN orchestration and sub-models. Core verbs build SmartSDR
 // command strings and emit them through the model-provided command sink.
+class FlexBackendTestAccess;
+
 class FlexBackend : public IRadioBackend {
     Q_OBJECT
 
@@ -65,6 +72,7 @@ public:
 
     // ---- IRadioBackend ----
     RadioCapabilities capabilities() const override;
+    void onRadioSessionEstablished() override;
     void connectRadio(const RadioConnectRequest& request) override;
     void disconnectRadio() override;
     bool isConnected() const override;
@@ -229,6 +237,39 @@ private:
     // Cleared by clearExtensionHandles() on disconnect: a reconnect to a
     // DIFFERENT radio must announce again.
     QString m_announcedModel;
+
+    // Lets a test drive a completed lookup without a network peer; the schema
+    // re-read in applyPublishedReleases() cannot be pinned any other way.
+    friend class FlexBackendTestAccess;
+
+    // The newest SmartSDR release FlexRadio publishes, empty until known.
+    // Reported through capabilities() so the status bar can say whether the
+    // connected radio is behind without any code above the seam knowing where
+    // SmartSDR releases are listed.
+    //
+    // ASKED ONLY ON CONNECT TO A FLEX, AND AT MOST ONCE A DAY. flexradio.com is
+    // contacted when this backend reaches a radio — never at launch, never for
+    // a station that connects to something else, never for one that only opens
+    // the app. The answer is cached in AppSettings as one family-wide feature
+    // document, so a disconnect and reconnect, a switch between radios, and a
+    // later launch all reuse it until it ages out (PR #6177 review, M2).
+    QMap<int, QString> m_publishedReleases;
+    FirmwareStager* m_firmwareVersions{nullptr};
+    bool m_firmwareLookupInFlight{false};
+
+    // Records a completed lookup: caches it under the schema read at that
+    // moment, and publishes it if it changed. Split out of the completion
+    // lambda so a test can drive it without a live HTTP peer.
+    void applyPublishedReleases(const QMap<int, QString>& releases);
+
+    // Loads the cached published releases, and looks them up again only if that
+    // cache is missing or stale. Driven by onRadioSessionEstablished(), so it
+    // covers a SmartLink session as well as a LAN one.
+    void refreshPublishedFirmwareVersion();
+
+    // The family-wide AppSettings feature document holding that cache.
+    static constexpr const char* kPublishedFirmwareFeature = "publishedFirmware";
+    static constexpr int kPublishedFirmwareSchema = 2;
 };
 
 }  // namespace AetherSDR

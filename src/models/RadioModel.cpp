@@ -6964,6 +6964,14 @@ void RadioModel::onConnected()
     qCDebug(lcProtocol) << "RadioModel: connected (family=" << m_family << ")";
     m_connectAttemptActive = false;  // the attempt landed (#4912)
     m_reconnectTimer.stop();
+    // Tell the backend a session is up, on the edge EVERY transport reaches.
+    // A Flex LAN session runs through the RadioConnection the backend owns, but
+    // connectViaWan() drives a WanConnection it never sees and skips
+    // connectRadio() for that family — so a backend with per-session work had no
+    // edge covering both. Default is a no-op; see IRadioBackend.
+    if (m_backend) {
+        m_backend->onRadioSessionEstablished();
+    }
     // Republish the declared capacity on the edge EVERY connect path reaches
     // (#5603 review). connectToRadio() seeds it, but connectViaWan() and the
     // LAN auto-reconnect timer never call that, and clearExtensionHandles() has

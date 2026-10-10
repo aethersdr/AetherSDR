@@ -4,8 +4,15 @@
 #include <algorithm>
 #include <limits>
 
+#include <QDateTime>
+#include <QJsonObject>
+#include <QJsonValue>
 #include <QThread>
+#include <QTimer>
 
+#include "core/AppSettings.h"
+#include "core/FirmwareCurrency.h"  // publishedVersionIsStale() — the one freshness rule
+#include "core/FirmwareStager.h"    // reads FlexRadio's published release list
 #include "core/LogManager.h"
 #include "core/backends/flex/RadioConnection.h"
 #include "core/backends/flex/PanadapterStream.h"
@@ -56,6 +63,16 @@ FlexBackend::FlexBackend(QObject* parent)
     m_connection->moveToThread(m_connThread);
     connect(m_connThread, &QThread::started, m_connection, &RadioConnection::init);
     m_connThread->start();
+
+    // Ask FlexRadio once, now, which SmartSDR release is published. This runs at
+    // app startup: RadioModel builds a backend in its own constructor, well
+    // before any radio is connected, and the answer is about what the vendor
+    // publishes rather than about any particular radio.
+    //
+    // A failure is not an error state and raises nothing. m_latestPublishedVersion
+    // simply stays empty, which is the "no verdict" every consumer already
+    // handles, and an operator with no route to the internet sees the status bar
+    // they have always seen. There is no retry; the next launch asks again.
 
     // Observe wire lifecycle and re-emit as the interface's own signals. Queued
     // (auto) connections: the connection lives on its worker thread.
@@ -192,6 +209,142 @@ void FlexBackend::setRadioReportedCapacity(int maxSlices, int maxPanadapters)
     emit capabilitiesChanged();
 }
 
+// Publish the newest SmartSDR release, looking it up only when we must.
+//
+// Called on every connect to a Flex. The cache is a family-wide AppSettings
+// feature document — not per-radio, because what FlexRadio publishes is the
+// same answer for every radio this backend will ever reach, and not in-memory,
+// because the point is that a later LAUNCH reuses it too. A whole-document
+// write is the atomic update (Principle V, XIV).
+//
+// Order matters: the cached answer is adopted first, so a station with no route
+// to the internet still shows a verdict from whatever it learned last, and the
+// status bar never blanks while a lookup is in flight.
+// Reaching a radio is the only thing that may contact flexradio.com, and even
+// then only if the cached answer has aged out. Hung off the seam's
+// session-established verb rather than this backend's own RadioConnection,
+// because a SmartLink session never dials that connection — RadioModel drives a
+// WanConnection the backend never sees, so the LAN-only hook left every WAN
+// operator without a verdict (PR #6177 review).
+void FlexBackend::onRadioSessionEstablished()
+{
+    refreshPublishedFirmwareVersion();
+}
+
+// Record a completed lookup: cache it, and publish it if it changed.
+//
+// Split out of the completion lambda so it can be driven directly in a test —
+// the schema re-read below is the whole point of the split, and pinning it
+// otherwise would need a live HTTP peer.
+void FlexBackend::applyPublishedReleases(const QMap<int, QString>& releases)
+{
+    m_firmwareLookupInFlight = false;
+
+    QJsonObject doc;
+    QJsonObject obj;
+    for (auto it = releases.constBegin(); it != releases.constEnd(); ++it)
+        obj.insert(QString::number(it.key()), it.value());
+    doc.insert(QLatin1String("releases"), obj);
+    doc.insert(QLatin1String("checkedAt"),
+               QDateTime::currentDateTimeUtc().toString(Qt::ISODate));
+    // RE-READ THE SCHEMA HERE, not at the start of the lookup. This
+    // connection is made once, when the stager is first created, so a
+    // schema captured then would be frozen for the life of the backend:
+    // every later session would judge its write against the first
+    // session's answer. The document can also change while a request is
+    // in flight. The only value worth trusting is the one read
+    // immediately before the write.
+    int storedSchema = 0;
+    AppSettings::instance().radioFeatureExact(
+        QStringLiteral("flex"), QString(),
+        QLatin1String(kPublishedFirmwareFeature), &storedSchema);
+
+    // Never overwrite a document a NEWER client wrote: its shape is
+    // one this build does not know, and replacing it would silently
+    // downgrade that client's cache (docs/agents/settings.md).
+    if (storedSchema > kPublishedFirmwareSchema) {
+        qCWarning(lcFirmware).nospace()
+            << "FlexBackend: published-release cache left alone; stored "
+               "schema " << storedSchema << " is newer than this build's "
+            << kPublishedFirmwareSchema;
+    } else if (!AppSettings::instance().setRadioFeature(
+                   QStringLiteral("flex"), QString(),
+                   QLatin1String(kPublishedFirmwareFeature),
+                   kPublishedFirmwareSchema, doc)) {
+        // A refused write is the worst shape to swallow: the verdict
+        // would repaint from memory while nothing persisted, and the
+        // next launch would silently ask again.
+        qCWarning(lcFirmware)
+            << "FlexBackend: published-release cache did not persist";
+    }
+
+    if (m_publishedReleases == releases)
+        return;
+    m_publishedReleases = releases;
+    // A real revision of the descriptor, announced like any other.
+    emit capabilitiesChanged();
+}
+
+void FlexBackend::refreshPublishedFirmwareVersion()
+{
+    // EXACT read, not the family-wide fallback: docs/agents/settings.md reserves
+    // the fallback for consumers, and a writer must judge the row it is about to
+    // replace. This read is for the cached RELEASES only — deliberately not for
+    // the schema, which is re-read at the write below. See there for why.
+    const QJsonObject cache = AppSettings::instance().radioFeatureExact(
+        QStringLiteral("flex"), QString(),
+        QLatin1String(kPublishedFirmwareFeature));
+    const QJsonObject cachedReleases =
+        cache.value(QLatin1String("releases")).toObject();
+    const QDateTime checkedAt = QDateTime::fromString(
+        cache.value(QLatin1String("checkedAt")).toString(), Qt::ISODate);
+
+    QMap<int, QString> fromCache;
+    for (auto it = cachedReleases.constBegin(); it != cachedReleases.constEnd(); ++it) {
+        bool ok = false;
+        const int major = it.key().toInt(&ok);
+        if (ok && it.value().isString())
+            fromCache.insert(major, it.value().toString());
+    }
+
+    if (!fromCache.isEmpty() && fromCache != m_publishedReleases) {
+        m_publishedReleases = fromCache;
+        emit capabilitiesChanged();
+    }
+
+    if (!FirmwareCurrency::publishedVersionIsStale(
+            fromCache.isEmpty() ? QString() : QStringLiteral("cached"),
+            checkedAt, QDateTime::currentDateTimeUtc())) {
+        return;
+    }
+    // One in flight is enough: a reconnect while the first is outstanding must
+    // not start a second.
+    if (m_firmwareLookupInFlight)
+        return;
+
+    if (!m_firmwareVersions) {
+        m_firmwareVersions = new FirmwareStager(this);
+        connect(m_firmwareVersions, &FirmwareStager::publishedReleasesKnown, this,
+                [this](const QMap<int, QString>& releases) {
+            applyPublishedReleases(releases);
+        });
+        connect(m_firmwareVersions, &FirmwareStager::latestVersionUnavailable, this,
+                [this](const QString& reason) {
+            // Not an error state: nothing is written, nothing is retried, and
+            // whatever was already cached stays. The next connect asks again.
+            m_firmwareLookupInFlight = false;
+            // Warning, not info: `aether.firmware` defaults to Warning, so an
+            // info line would not appear in the log the Known limits section
+            // points an operator at (PR #6177 review, N4).
+            qCWarning(lcFirmware)
+                << "FlexBackend: published SmartSDR releases unknown:" << reason;
+        });
+    }
+
+    m_firmwareLookupInFlight = true;
+    m_firmwareVersions->fetchLatestVersion();
+}
+
 RadioCapabilities FlexBackend::capabilities() const
 {
     RadioCapabilities caps;
@@ -224,6 +377,19 @@ RadioCapabilities FlexBackend::capabilities() const
     caps.twoToneGenerator = RadioCapabilities::TwoToneGenerator{
         QStringLiteral("transmit set tune_mode=two_tone")};
     caps.manufacturer = QStringLiteral("FlexRadio");
+    // A Flex reports a SmartSDR version, and SmartSDR versions are published on
+    // FlexRadio's software page — which FirmwareStager already reads. Declaring
+    // this is what lets the status bar say the firmware is behind without any
+    // part of the shared chrome knowing which family answered. The version is
+    // empty until a connect has filled it (refreshPublishedFirmwareVersion).
+    //
+    // Only the release-notes URL shape is family knowledge worth compiling in;
+    // the version itself is fetched, never hard-coded. The "%1" is the release
+    // with dots as dashes, verified against every release from 3.8.23 to 4.2.20.
+    caps.firmwareUpdateSource = FirmwareUpdateSource{
+        QStringLiteral(
+            "https://www.flexradio.com/documentation/smartsdr-v%1-release-notes/"),
+        m_publishedReleases};
     caps.model = m_modelProvider ? m_modelProvider() : QString();
     caps.fmTonePresentation = FmTonePresentation::Legacy;
     caps.fmDtcsCodes = {};

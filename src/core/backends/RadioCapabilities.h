@@ -2,6 +2,7 @@
 
 #include <QFlags>
 #include <QList>
+#include <QMap>
 #include <QString>
 #include <QStringList>
 #include <QVector>
@@ -180,6 +181,62 @@ struct WidebandConverterView {
     QString frameVerb;
 };
 
+// WHERE THIS RADIO'S FIRMWARE VERSIONS ARE PUBLISHED: declared by a backend
+// whose firmware version can be compared against a vendor's published release
+// list, and which can therefore be reported as out of date.
+//
+// Declared so that the shared chrome can tell an operator their firmware is
+// behind WITHOUT naming a family. The status bar already prints whatever
+// version word the connected backend reports, but those words are not on one
+// scale — a Flex reports a SmartSDR version, an HL2 or ANAN a gateware number,
+// an Icom nothing at all — so a consumer that measured them all against one
+// published list would be wrong about every radio but one.
+//
+// CONSTRAINT FOR WHOEVER DECLARES THE SECOND ONE: presence of this record
+// currently also means "compare me against the SmartSDR software page", because
+// that is the only published list AetherSDR reads. A backend from another
+// vendor must not simply declare a template — it needs its own fetch, and this
+// record then needs a field naming which list it belongs to. Absence is the
+// default and means "nobody has said"; it is not a claim the firmware is
+// current, nor that it cannot be checked.
+struct FirmwareUpdateSource {
+    // Release-notes page for a given release, with "%1" standing in for the
+    // release with its dots as dashes — "4.2.20" becomes "4-2-20". Verified
+    // against published releases from 3.8.23 to 4.2.20. Empty means the
+    // operator is shown the verdict with nowhere to click.
+    QString releaseNotesUrlTemplate;
+
+    // The newest release the vendor publishes FOR EACH MAJOR LINE, keyed by
+    // major: {2: "2.10.1", 3: "3.10.15", 4: "4.2.20"}. Empty when nobody has
+    // found out yet — nothing has asked, the ask failed, or the answer did not
+    // parse. Empty is the honest default and yields no verdict at all; it is
+    // NOT a claim that the connected radio is current.
+    //
+    // PER LINE, NOT ONE "LATEST", and this is the shape to keep. A vendor can
+    // offer several lines for download at once, and a radio belongs to exactly
+    // one of them: measuring it against the global maximum tells an operator on
+    // an older line to install a release from a line they are not on, and links
+    // release notes they cannot use. The consumer compares against the entry
+    // whose major matches the radio's own reported version, and shows nothing
+    // when the radio's line is not listed.
+    //
+    // DELIBERATELY NOT THE RADIO'S LICENSED VERSION. A radio's licence fields
+    // cannot carry this: measured on a FLEX-6500 running 4.2.20.41343, the
+    // discovery broadcast and the connected `license` status both reported a
+    // ceiling BELOW the firmware actually running, and disagreed with
+    // FlexRadio's own SmartLink record for the same radio. The line the radio
+    // is running is observable and self-consistent; what it is licensed for is
+    // not.
+    //
+    // FILLED IN BY THE BACKEND, not by whoever displays it. Finding out is
+    // family work: it means knowing which page lists this vendor's releases and
+    // how to read it, which is exactly the knowledge that must not climb above
+    // the radio seam (docs/HERMES.md §"For coding agents"; the engine-boundary
+    // gate enforces it). A consumer above the seam reads this record and asks
+    // no further questions.
+    QMap<int, QString> publishedReleases;
+};
+
 // A stable, radio-owned receive-filter preset. `id` is the identity used on
 // the wire (for example Icom FIL1/FIL2/FIL3); widthHz is mutable content of
 // that preset and must never be used as its identity.
@@ -333,6 +390,10 @@ struct RadioCapabilities {
     // Engaged when the radio can deliver a wideband converter view; see the
     // struct above for why absence is the right default and what it means.
     std::optional<WidebandConverterView> widebandConverterView;
+    // Where this radio's firmware versions are published, for the status bar's
+    // out-of-date indication. See the struct above for why a consumer asks for
+    // this record rather than testing the family name.
+    std::optional<FirmwareUpdateSource> firmwareUpdateSource;
 
     // Optional per-band native coverage. Empty means "not reported" and keeps
     // canonical band labels. This is distinct from txPowerBands: receive-only

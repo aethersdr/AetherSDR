@@ -170,6 +170,7 @@ RadioCapabilities RtlSdrBackend::capabilities() const
     c.hasFmRepeaterOffset = false;
     c.hasCwTune = false;
     c.twoToneGenerator = std::nullopt;  // receive only; there is no transmitter.
+    c.firmwareUpdateSource = std::nullopt;  // no published firmware list is read.
     c.panZoomModes = std::nullopt;      // no command plane, no per-pan zoom flags.
     c.hasAmCarrierLevel = false;
     c.voxControl = std::nullopt;  // receive only

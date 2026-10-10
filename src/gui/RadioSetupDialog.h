@@ -5,6 +5,8 @@
 #include "RadioSetupIpConfigPresentation.h"
 
 #include <QHash>
+#include <QPointer>
+#include <QStringList>
 #include <QVector>
 #include <array>
 #include <functional>
@@ -128,6 +130,12 @@ protected:
 
 private:
     friend class RadioSetupDialogTestAccess;
+    // Opens (or re-raises) the list of published releases returned by the
+    // "Check for Update" button. Lazy-constructed and non-modal per
+    // docs/style/dialog-patterns.md, so the operator can keep it open while
+    // staging an installer.
+    void showFirmwareReleases(const QStringList& releases);
+    QPointer<class FirmwareReleasesDialog> m_firmwareReleasesDialog;
     bool confirmFirmwareClose();
     bool m_firmwareClosePromptOpen{false};
     bool isFlexOnlyPage(const QTreeWidgetItem* item) const;

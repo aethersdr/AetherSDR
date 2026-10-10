@@ -4,7 +4,7 @@
 
 Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine-design.md) §2, §10). One row per engine header the UI includes; converting a touchpoint means the UI reaches that surface through the versioned protocol instead of the header.
 
-**Totals:** 251 touchpoint headers (212 core, 39 models) — 251/251 tagged, 0/251 converted.
+**Totals:** 252 touchpoint headers (213 core, 39 models) — 252/252 tagged, 0/252 converted.
 
 | Header | Includers | Tag | Status |
 |---|---:|---|---|
@@ -63,6 +63,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/DxSpotLineParser.h` | 1 | universal — Parses DX-cluster `DX de` lines (DXSpider/AR/CC/RBN/GoCluster) into DxSpot, including the GoCluster fixed-column tail and SNR report, and replays saved spot logs with per-session provenance. Pure line-to-value logic; no vendor radio ties. | unconverted |
 | `core/DxccColorProvider.h` | 2 | universal — DXCC worked-status from ADIF log, colors cluster spots by call/freq/mode; radio-agnostic spot/logging feature | unconverted |
 | `core/EibiClient.h` | 3 | universal — Radio-agnostic EiBi shortwave schedule downloader/parser that emits canonical DX spots; engine data service with no vendor protocol coupling. | unconverted |
+| `core/FirmwareCurrency.h` | 2 | universal — Pure release comparison and its operator-facing wording; names no family and holds no wire types — the published version and release-notes template both arrive from the backend's declared capability. | unconverted |
 | `core/FirmwareStager.h` | 1 | vendor(flex) — Downloads SmartSDR installers from flexradio.com, extracts .ssdr firmware for 6x00/9600 upload — pure Flex | unconverted |
 | `core/FirmwareUploader.h` | 1 | vendor(flex) — SmartSDR firmware upload: 'file upload' cmd, .ssdr files, Flex TCP ports 4995/42607 — pure Flex protocol | unconverted |
 | `core/FlexControlManager.h` | 2 | ui-support — FlexControl USB knob serial driver (VID 0x2192) — a desktop input-surface driver, the same class as HidEncoderManager (RC-28/TMate)/UlanziDialBackend/SerialPortController, all ui-support. Flex-branded hardware but client-side input, not radio-family wire; NOT behind the radio seam (reclassified from vendor(flex), #4089). | unconverted |
@@ -160,7 +161,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/TailnetShimTokenStore.h` | 1 | peripheral(tailnet-shim) — OS-keychain storage of the tailnet shim's admin token, keyed by the Flex chassis serial (RFC #6271). Not SmartSDR wire: AetherSDR's own HTTP API to a separate service (the shim) that happens to run in the radio's container runtime, so a direct-transport peripheral, NOT behind the IRadioBackend radio seam (same shape as core/PgxlConnection.h). | unconverted |
 | `core/TciServer.h` | 3 | mixed(flex) — TCI WebSocket server for WSJT-X et al: protocol surface is canonical radio state, but audio/IQ rides Flex DAX | unconverted |
 | `core/TgxlConnection.h` | 3 | peripheral(4o3a) — Direct TCP client for the 4O3A Tuner Genius XL (port 9010, relay/autotune), reverse-engineered from the 4O3A management app — a standalone accessory transport, not SmartSDR. Not radio-family wire; a peripheral accessory, NOT behind the IRadioBackend radio seam (reclassified from vendor(flex), #4087 follow-up). | unconverted |
-| `core/ThemeManager.h` | 172 | ui-support — Qt token-based theming singleton (colors/fonts/QSS, theme files, editor hooks) — pure client GUI plumbing, no radio state. | unconverted |
+| `core/ThemeManager.h` | 173 | ui-support — Qt token-based theming singleton (colors/fonts/QSS, theme files, editor hooks) — pure client GUI plumbing, no radio state. | unconverted |
 | `core/ThreadCpuRing.h` | 2 | ui-support — Short host-thread CPU history used by Runtime Monitor peak and sparkline presentation. Diagnostic UI support, not radio state. | unconverted |
 | `core/TimeFrameVoter.h` | 1 | universal — Shared AetherClock time-frame types plus confidence-weighted cross-frame bit voting over a sliding window. Map-agnostic pure DSP/logic — no Qt, no GUI, no vendor ties. | unconverted |
 | `core/TxKeyingMarker.h` | 15 | ui-support — QWidget property marker guarding TX-keying controls from the automation bridge; GUI-shell plumbing, no radio state. | unconverted |

@@ -13,7 +13,10 @@
 #include "core/IambicKeyer.h"
 
 #include <QApplication>
+#include <QDesktopServices>
 #include <QKeyEvent>
+#include <QMouseEvent>
+#include <QUrl>
 
 #include "MainWindowHelpers.h"
 #include "VoiceModeGate.h"   // isCwMode() — one CW-mode list, not thirteen
@@ -849,6 +852,37 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
     }
     if (obj == m_stationNickLabel && event->type() == QEvent::MouseButtonDblClick) {
         toggleConnectionDialog();
+        return true;
+    }
+    // The firmware version is a link to the release notes, but ONLY while it is
+    // showing an out-of-date version — that is the state the tooltip invites a
+    // click in. A current (green) version is plain text, so the press falls
+    // through and the status bar behaves as it always has.
+    // Left click or Return/Enter — NOT Space, which is application-level
+    // PTT-hold and is consumed above before any widget sees it. Restricting the
+    // mouse to the left button also stops a right- or middle-click from opening
+    // a browser out from under a context menu.
+    if (obj == m_radioVersionLabel
+        && ((event->type() == QEvent::MouseButtonPress
+             && static_cast<QMouseEvent*>(event)->button() == Qt::LeftButton)
+            || (event->type() == QEvent::KeyPress
+                && (static_cast<QKeyEvent*>(event)->key() == Qt::Key_Return
+                    || static_cast<QKeyEvent*>(event)->key() == Qt::Key_Enter)))) {
+        if (m_radioFirmwareCurrency != AetherSDR::FirmwareCurrency::Status::Outdated)
+            return false;
+        // The page is the newest release OF THE RADIO'S OWN LINE — never the
+        // newest overall. An operator on v3 must not be handed v4's notes for
+        // an upgrade that is not the one being recommended.
+        const auto& source = m_radioModel.backendCapabilities().firmwareUpdateSource;
+        if (!source.has_value())
+            return false;
+        const QString url = AetherSDR::FirmwareCurrency::releaseNotesUrl(
+            source->releaseNotesUrlTemplate,
+            AetherSDR::FirmwareCurrency::upgradeTargetFor(
+                source->publishedReleases, m_radioVersionLabel->text()));
+        if (url.isEmpty())
+            return false;
+        QDesktopServices::openUrl(QUrl(url));
         return true;
     }
     // Status-bar indicators: a press and the keyboard (StatusIndicator's

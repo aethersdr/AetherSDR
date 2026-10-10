@@ -203,6 +203,21 @@ public:
     virtual void disconnectRadio() = 0;
     virtual bool isConnected() const = 0;
 
+    // A session with the radio is up, WHATEVER TRANSPORT CARRIED IT.
+    //
+    // Exists because "connected" is not observable inside a backend on every
+    // path: a Flex LAN session runs through the RadioConnection the backend
+    // owns, but a SmartLink session is driven by RadioModel against a
+    // WanConnection the backend never sees, and connectRadio() is skipped for
+    // that family entirely. A backend with per-session work to do therefore had
+    // no edge to hang it on that covered both.
+    //
+    // Default is a no-op, so a backend that needs nothing is unaffected. It
+    // carries no argument on purpose: a backend that wants to know WHICH radio
+    // already has its own channels for that, and widening this verb would make
+    // every backend care about the transport it was told to ignore.
+    virtual void onRadioSessionEstablished() {}
+
     // ---- intents DOWN: canonical core-profile verbs (grow per burndown) ----
     // The backend translates each to its vendor wire protocol.
     // Opt-in for slice frequency/mode/filter, monitor gain/pan/mute and pan

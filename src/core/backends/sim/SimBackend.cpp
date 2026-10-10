@@ -276,6 +276,7 @@ RadioCapabilities SimBackend::capabilities() const
     caps.family = familyName();
     // The demo cannot key at all (Principle VI), let alone synthesise tones.
     caps.twoToneGenerator = std::nullopt;
+    caps.firmwareUpdateSource = std::nullopt;  // synthetic radio; nothing to compare.
     caps.manufacturer = QStringLiteral("AetherSDR");
     caps.model  = demoModelName();
     caps.fmTonePresentation = FmTonePresentation::Legacy;

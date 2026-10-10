@@ -422,6 +422,7 @@ RadioCapabilities AnanBackend::capabilities() const
     c.family = QStringLiteral("anan");
     // No setTune() implementation, so no tune generator to select a mode on.
     c.twoToneGenerator = std::nullopt;
+    c.firmwareUpdateSource = std::nullopt;  // gateware number; no published list covers it.
     // No VOX, monitor or speech-processor setters. PROC would be the host
     // ClientComp, but canTransmit is false below, so nothing serves it and the
     // drop notice correctly stands.

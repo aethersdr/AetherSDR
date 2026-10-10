@@ -317,6 +317,12 @@
   "split": "",
   "confidence": "high"
  },
+ "core/FirmwareCurrency.h": {
+  "tag": "universal",
+  "note": "Pure release comparison and its operator-facing wording; names no family and holds no wire types — the published version and release-notes template both arrive from the backend's declared capability.",
+  "split": "",
+  "confidence": "high"
+ },
  "core/FirmwareStager.h": {
   "tag": "vendor(flex)",
   "note": "Downloads SmartSDR installers from flexradio.com, extracts .ssdr firmware for 6x00/9600 upload — pure Flex",

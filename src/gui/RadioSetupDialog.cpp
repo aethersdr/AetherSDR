@@ -1,5 +1,6 @@
 #include "core/DroopCalibration.h"
 #include "RadioSetupDialog.h"
+#include "FirmwareReleasesDialog.h"
 #include "RtlReceiverSettingsWidget.h"
 #include "SerialPortCombo.h"
 #include "models/CwDecodeSettings.h"
@@ -1204,6 +1205,29 @@ void RadioSetupDialog::updateRadioCapabilityVisibility()
     }
 }
 
+void RadioSetupDialog::showFirmwareReleases(const QStringList& releases)
+{
+    if (releases.isEmpty())
+        return;
+
+    // The release-notes template comes from the backend's capability record,
+    // not from a family check here: a backend that publishes firmware says
+    // where its notes live, and one that does not leaves the rows unlinked.
+    QString notesTemplate;
+    if (const auto& source = m_model->backendCapabilities().firmwareUpdateSource)
+        notesTemplate = source->releaseNotesUrlTemplate;
+
+    if (!m_firmwareReleasesDialog) {
+        auto* dlg = new FirmwareReleasesDialog(
+            releases, m_model->softwareVersion(), notesTemplate, this);
+        dlg->setAttribute(Qt::WA_DeleteOnClose);
+        m_firmwareReleasesDialog = dlg;
+    }
+    m_firmwareReleasesDialog->show();
+    m_firmwareReleasesDialog->raise();
+    m_firmwareReleasesDialog->activateWindow();
+}
+
 bool RadioSetupDialog::confirmFirmwareClose()
 {
     // A nested close/reject must not destroy the owner underneath this prompt.
@@ -1717,18 +1741,21 @@ QWidget* RadioSetupDialog::buildRadioTab()
         });
 
         connect(m_stager, &FirmwareStager::updateCheckComplete, this,
-            [this, checkBtn](const QString& latest, bool avail) {
+            [this, checkBtn](const QString& latest, bool avail,
+                             const QStringList& published) {
             checkBtn->setEnabled(true);
             if (avail) {
                 m_fwStatusLabel->setStyleSheet("QLabel { color: #f0c040; font-size: 10px; }");
                 m_fwStatusLabel->setText(QString(
-                    "Update available: v%1\n"
-                    "Download the SmartSDR installer from flexradio.com,\n"
-                    "then click 'Select Installer...' to stage it.").arg(latest));
+                    "Update available: v%1").arg(latest));
             } else {
                 m_fwStatusLabel->setStyleSheet("QLabel { color: #80e080; font-size: 10px; }");
                 m_fwStatusLabel->setText("Firmware is up to date (v" + latest + ").");
             }
+            // The verdict is one line; the LIST is the answer. FlexRadio
+            // publishes several lines at once, so "newer firmware exists" on
+            // its own does not tell a v3 operator which release is theirs.
+            showFirmwareReleases(published);
         });
 
         connect(m_stager, &FirmwareStager::updateCheckFailed, this,

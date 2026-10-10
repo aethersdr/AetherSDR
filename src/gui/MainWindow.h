@@ -20,6 +20,7 @@
 #include "models/AntennaGeniusModel.h"
 #include "models/SliceLinkPolicy.h"
 #include "core/AppSettings.h"
+#include "core/FirmwareCurrency.h"
 #include "core/AetherDspModePolicy.h"
 #include "core/KiwiSdrTxMutePolicy.h"  // optimistic-unkey Kiwi mute latch
 #include "core/RadioMessageTypes.h"   // MessageSeverity for onRadioMessage slot
@@ -1783,7 +1784,16 @@ private:
     // capabilitiesChanged while the model and version arrive on infoChanged,
     // and every one of those edges has to repaint the same three labels.
     QString m_radioManufacturer;
+    // Verdict last painted onto m_radioVersionLabel. Cached so the click
+    // handler does not have to re-derive it: the label is only a link to the
+    // release notes while it is actually showing an out-of-date firmware, and
+    // the handler must agree with what the operator can see.
+    AetherSDR::FirmwareCurrency::Status m_radioFirmwareCurrency{
+        AetherSDR::FirmwareCurrency::Status::Unknown};
     void refreshRadioIdentityLabels();
+    // Repaints the version row from m_radioFirmwareCurrency. Called only by
+    // refreshRadioIdentityLabels(), which owns the whole identity stack.
+    void applyFirmwareCurrencyToVersionLabel();
     QLabel* m_stationLabel{nullptr};
     QLabel* m_stationNickLabel{nullptr};
     QLabel* m_automationChip{nullptr};    // shown only under AETHER_AUTOMATION (#3646)
