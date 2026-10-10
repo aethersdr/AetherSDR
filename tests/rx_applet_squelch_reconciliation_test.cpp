@@ -1,5 +1,7 @@
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
+#include "core/backends/RadioCapabilities.h"
+#include "core/backends/SquelchLevelScale.h"
 #include "core/backends/SliceDelta.h"
 #include "gui/RxApplet.h"
 #include "gui/VfoWidget.h"
@@ -383,6 +385,44 @@ private slots:
         QCOMPARE(slice.squelchLevel(), 45);
         QCOMPARE(slice.manualSquelchLevel(), 45);
         QCOMPARE(slider->value(), 45);
+    }
+
+    // #5859: the squelch button's own texts come back from the registry alone.
+    // With no slice, updateModeSettings never runs, so RxApplet re-sets nothing.
+    void squelchButtonTextsSurviveAvailability()
+    {
+        RadioModel radio;
+        RxApplet rx;
+        QPushButton* button = control<QPushButton>(rx, QStringLiteral("Squelch mode"));
+        QVERIFY(button);
+        const QString ownTip = button->toolTip();
+        const QString ownDescription = button->accessibleDescription();
+        QVERIFY(ownTip.startsWith(QStringLiteral("Click to cycle")));
+        QVERIFY(!ownDescription.isEmpty());
+        // Squelch is off, so the button is Inactive: the announcement is appended.
+        const QString trimmed = ownDescription.trimmed();
+        const QString inactive = trimmed
+            + (trimmed.endsWith(u'.') ? QStringLiteral(" ") : QStringLiteral(". "))
+            + QStringLiteral("Available, not currently active");
+        rx.setRadioModel(&radio);
+        QCOMPARE(button->toolTip(), ownTip);
+        QCOMPARE(button->accessibleDescription(), inactive);
+
+        RadioCapabilities exclusive;
+        SquelchLevelScale scale;
+        scale.modes = {QStringLiteral("FM")};
+        scale.modesExclusive = true;
+        exclusive.squelchLevelScale = scale;
+        emit radio.capabilitiesChanged(true, exclusive);
+        const QString reason = QStringLiteral("Squelch is unavailable in this receive mode");
+        QVERIFY(!button->isEnabled());
+        QCOMPARE(button->toolTip(), reason);
+        QCOMPARE(button->accessibleDescription(), reason);
+
+        emit radio.capabilitiesChanged(true, RadioCapabilities{});
+        QVERIFY(button->isEnabled());
+        QCOMPARE(button->toolTip(), ownTip);
+        QCOMPARE(button->accessibleDescription(), inactive);
     }
 
     // #6092: a radio that publishes no squelch-to-pan mapping has no Auto SQL.
