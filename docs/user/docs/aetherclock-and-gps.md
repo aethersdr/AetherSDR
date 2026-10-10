@@ -74,7 +74,7 @@ On radios that support it, this group shows and changes clock settings stored in
 
 ### Where your position is used
 
-The GPS page in **Radio Setup** holds the radio's GPS settings. Your position also feeds the [PSK Reporter Map](./psk-reporter-map.md) home location, the APRS beacon in [AetherModem Packet Radio](./aethermodem-packet-radio.md) and the distance and bearing on [Callsign Lookup](./callsign-lookup.md) cards.
+The GPS page in **Radio Setup** holds the radio's GPS settings. Your position also feeds the [AetherMap](./psk-reporter-map.md) home location, the APRS beacon in [AetherModem Packet Radio](./aethermodem-packet-radio.md) and the distance and bearing on [Callsign Lookup](./callsign-lookup.md) cards.
 
 ## Troubleshooting
 
@@ -106,6 +106,6 @@ The connected radio does not report GPS hardware. The GPS window only appears fo
 
 - [Radio Setup](./radio-setup.md)
 - [DAX Virtual Audio](./dax-virtual-audio.md)
-- [PSK Reporter Map](./psk-reporter-map.md)
+- [AetherMap](./psk-reporter-map.md)
 - [AetherModem Packet Radio](./aethermodem-packet-radio.md)
 - [Callsign Lookup](./callsign-lookup.md)

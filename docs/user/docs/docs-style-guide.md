@@ -94,7 +94,7 @@ The PC Audio path is off, or the wrong output device is selected.
 ## Writing Rules
 
 - **Describe current behaviour.** No "previously", no "as of v26.x", no history. A one-time behaviour change that existing users will notice goes in a callout that starts `> **Upgrading from an older version:**`.
-- **Use exact UI names in bold**, with menu paths written as **Tools → PSK Reporter...** and settings as **Settings → Radio Setup... → Peripherals**. Check them against `src/gui/MainWindow_Menus.cpp`.
+- **Use exact UI names in bold**, with menu paths written as **Tools → AetherMap...** and settings as **Settings → Radio Setup... → Peripherals**. Check them against `src/gui/MainWindow_Menus.cpp`.
 - **Links between pages** are relative file links with the page title as the text: `[CAT Control](./cat-control.md)`, or `[pinning](./smartlink-setup.md#certificate-pinning)` for a heading. The site build fails on a link to a page or heading that does not exist. Link source docs with full GitHub URLs, such as `https://github.com/aethersdr/AetherSDR/blob/main/docs/HERMES.md`.
 - **Placeholders** go in code: `` `<name>` ``. A bare `<name>` in prose is read as an HTML tag and disappears.
 - **Spelling and voice:** British spelling (colour, behaviour), second person, short sentences.

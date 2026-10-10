@@ -78,7 +78,7 @@ See [Profile Management](./profile-management.md).
 | **Clear ATU Memories...** | Clears the radio's ATU memories after confirmation. |
 | **Calibrate AGC-T...** | Noise-floor AGC-T calibration for the active slice. It listens only; it does not transmit. The same calibration is on the AGC-T slider's right-click menu. |
 | **Callsign Lookup...** | QRZ lookup (Ctrl+Shift+L). See [Callsign Lookup](./callsign-lookup.md). |
-| **PSK Reporter...** | See [PSK Reporter Map](./psk-reporter-map.md). |
+| **AetherMap...** | See [AetherMap](./psk-reporter-map.md). |
 | **FreeDV Reporter...** | FreeDV Reporter station list. |
 | **Net Scheduler...** | See [Net Scheduler](./net-scheduler.md). |
 | **Memory...** | See [Memory Channels](./memory-channels.md). |

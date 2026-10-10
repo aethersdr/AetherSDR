@@ -1324,7 +1324,7 @@ void MainWindow::buildMenuBar()
         m_appletPanel->resetOrder();
     });
 
-    auto* pskMapAction = viewMenu->addAction("PSK Reporter...");
+    auto* pskMapAction = viewMenu->addAction("AetherMap...");
     pskMapAction->setMenuRole(QAction::NoRole);
     connect(pskMapAction, &QAction::triggered,
             this, &MainWindow::showPskReporterMapDialog);

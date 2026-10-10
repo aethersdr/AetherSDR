@@ -1,14 +1,16 @@
 ---
-title: "PSK Reporter Map"
+title: "AetherMap"
 slug: "/psk-reporter-map"
-description: "The PSK Reporter map shows who is hearing your signal, and who you are hearing, using live reports from PSK Reporter."
+description: "AetherMap, the PSK Reporter map, shows who is hearing your signal, and who you are hearing, using live reports from PSK Reporter."
 ---
 
-The PSK Reporter map shows who is hearing your signal, and who you are hearing, using live reports from [PSK Reporter](https://pskreporter.info/). Reports are drawn on an OpenStreetMap world map or a 3D globe, coloured by mode, with optional great-circle paths, a day/night terminator, NASA night lights and weather radar. The same window also has a one-shot **WSPR beacon**.
+AetherMap, the PSK Reporter map, shows who is hearing your signal, and who you are hearing, using live reports from [PSK Reporter](https://pskreporter.info/). Reports are drawn on an OpenStreetMap world map or a 3D globe, coloured by mode, with optional great-circle paths, a day/night terminator, NASA night lights and weather radar. The same window also has a one-shot **WSPR beacon**.
 
 ## Setup
 
-Open the map from **Tools → PSK Reporter…** Type your callsign in **Call:** to see who is hearing you and who you are hearing.
+Open the map from **Tools → AetherMap…** Type your callsign in **Call:** to see who is hearing you and who you are hearing.
+
+The window has no title bar. Drag any empty part of it to move it, and drag an edge or corner to resize it. Close it with the round **✕** in the top-right corner, **Esc** or **Ctrl+W** (**⌘W** on macOS). It's a window of its own, with its own taskbar entry, so you can minimise it from the taskbar or park it on another monitor. **View → Frameless Window** does not apply to it. However you close it, the map stops fetching reports and weather radar, and a WSPR beacon that is armed or transmitting is cancelled.
 
 ## Using the map
 
@@ -18,7 +20,7 @@ The **Reports** group at the top of the left sidebar chooses what is shown:
 
 <img src="/img/screens/psk-reporter-sidebar.png" width="300" alt="PSK Reporter sidebar. WSPR beacon: TX call KK7GWY, Grid (blacked out), Band 20m, Reported 30 dBm, Offset 1500.0 Hz, Level -20 dBFS, a Transmit once button and an Idle status. Reports: Call KK7GWY, Band All, Mode All, Lookback 1 hour, All Callsigns unticked and Active monitors ticked. Band conditions: 80-40m Good, 30-20m Good, 17-15m Fair, 12-10m Poor. Map: Globe, Paths, Day/night (ticked), Dark map and a Map brightness slider at 100%, then City lights." />
 
-*The PSK Reporter window's sidebar: WSPR beacon, report filters, band conditions and map options. The grid square is blacked out.*
+*AetherMap's sidebar: WSPR beacon, report filters, band conditions and map options. The grid square is blacked out.*
 
 | Control | What it does |
 |---|---|

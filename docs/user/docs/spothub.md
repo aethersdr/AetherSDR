@@ -322,7 +322,7 @@ The list is sorted by a column other than **Time**, which stops auto-scroll.
 
 - [Panadapter Controls](./panadapter-controls.md)
 - [WSJT-X Integration](./wsjt-x-integration.md)
-- [PSK Reporter Map](./psk-reporter-map.md)
+- [AetherMap](./psk-reporter-map.md)
 - [Callsign Lookup](./callsign-lookup.md)
 - [TCI Server](./tci-server.md)
 - [RADE Digital Voice](./rade-digital-voice.md)

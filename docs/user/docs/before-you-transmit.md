@@ -28,7 +28,7 @@ The checks are written so you can do them without putting a signal on the air. W
 - [ ] **Your callsign is set** in **Settings → Radio Setup... → Radio → Callsign:** (on macOS, **AetherSDR → Preferences... → Radio**). AetherSDR uses it for PSK Reporter, WSPR and spotting; on a FlexRadio it is also stored on the radio. See [Radio Setup](./radio-setup.md).
 - [ ] **Your callsign and grid are set wherever a feature transmits them.** AetherSDR has no single station grid; each feature that sends one has its own fields:
   - [RADE Digital Voice](./rade-digital-voice.md) end-of-over frames and FreeDV Reporter: **SpotHub → FreeDV**, **Callsign** (or **Use radio**) and **Grid Square** (or **Use GPS**). See [SpotHub](./spothub.md).
-  - The WSPR beacon in **Tools → PSK Reporter...**: **TX call:** and **Grid:**. See [PSK Reporter Map](./psk-reporter-map.md).
+  - The WSPR beacon in **Tools → AetherMap...**: **TX call:** and **Grid:**. See [AetherMap](./psk-reporter-map.md).
   - APRS in [AetherModem Packet Radio](./aethermodem-packet-radio.md): **MY CALLSIGN**, and **GRID** when the radio has no GPS fix.
   - D-STAR: **MYCALL**, which defaults to the radio's callsign. See [D-STAR (ThumbDV)](./d-star-thumbdv.md).
   - Digital-mode programs such as WSJT-X use the callsign and grid in their own settings.

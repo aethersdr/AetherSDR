@@ -129,5 +129,5 @@ WSJT-X sends to the wrong device, or the TX slice is not in a digital mode.
 - [DAX Virtual Audio](./dax-virtual-audio.md)
 - [TCI Server](./tci-server.md)
 - [SpotHub](./spothub.md)
-- [PSK Reporter Map](./psk-reporter-map.md)
+- [AetherMap](./psk-reporter-map.md)
 - [WSJT-X home page](https://wsjt.sourceforge.io/wsjtx.html)

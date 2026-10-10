@@ -42,8 +42,9 @@ a widget subtree (for example, the `applet/tx` scope turns the
 checked-toggle accent red where the root theme has it blue — scope
 paths are slash-joined, and a widget opts in by carrying the path in
 its `themeContainer` property). The `canon` scope does the same for
-whole windows: AetherRX, AetherTX and AetherModem sit under
-`canon/aetherRx`, `canon/aetherTx` and `canon/aetherModem`, and it maps the base tokens onto the canon palette
+whole windows: AetherRX, AetherTX, AetherModem and AetherMap sit
+under `canon/aetherRx`, `canon/aetherTx`, `canon/aetherModem` and
+`canon/aetherMap`, and it maps the base tokens onto the canon palette
 there (see [`aethersdr-style-guide.md`](aethersdr-style-guide.md)). The
 widget-aware accessors below resolve scope automatically — prefer them
 inside applets and anything painted inside a scoped window.

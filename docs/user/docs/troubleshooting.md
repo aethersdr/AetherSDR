@@ -232,7 +232,7 @@ These pages have their own Troubleshooting section:
 - [Panadapter Controls](./panadapter-controls.md)
 - [Peripherals](./peripherals.md)
 - [Profile Management](./profile-management.md)
-- [PSK Reporter Map](./psk-reporter-map.md)
+- [AetherMap](./psk-reporter-map.md)
 - [RADE Digital Voice](./rade-digital-voice.md)
 - [Radio Setup](./radio-setup.md)
 - [RTL-SDR](./rtl-sdr.md)
