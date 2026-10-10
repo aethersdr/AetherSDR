@@ -171,6 +171,12 @@ private:
     void setCurrentMode(ConnectionMode mode);
     void updateLocalPageState();
     void updateSmartLinkUi();
+    // The SmartLink account line: a sign-in hint, the signed-in account, or a
+    // sign-in error. Its tone is kept here, not read back from the label's
+    // stylesheet, which holds the theme-resolved colors.
+    enum class AccountTone { Hint, Info, Error };
+    void setAccountLine(const QString& text, AccountTone tone);
+    friend struct ConnectionPanelSmartLinkTestAccess;
     // Right-click menu on a discovered radio row: set/clear a client-side
     // nickname (non-Flex families only). pos is in m_radioList viewport coords.
     void showRadioContextMenu(const QPoint& pos);
@@ -278,6 +284,7 @@ private:
     QPushButton* m_loginBtn{nullptr};
     QPushButton* m_logoutBtn{nullptr};
     QLabel*      m_slUserLabel{nullptr};
+    AccountTone  m_slUserTone{AccountTone::Hint};
     QListWidget* m_wanList{nullptr};
     QLabel*      m_smartLinkEmptyLabel{nullptr};
     QPushButton* m_wanDisconnectClientsBtn{nullptr};

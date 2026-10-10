@@ -655,7 +655,8 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     accountActionRow->addStretch();
     accountLayout->addWidget(accountActionBar);
 
-    m_slUserLabel = makeWrappedLabel("Sign in to see radios at remote stations.", kHintLabelStyle);
+    m_slUserLabel = makeWrappedLabel(QString());
+    setAccountLine(QStringLiteral("Sign in to see radios at remote stations."), AccountTone::Hint);
     accountLayout->addWidget(m_slUserLabel);
     smartLinkLayout->addWidget(accountGroup);
 
@@ -1354,8 +1355,7 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
         m_smartLink->logout();
         m_wanRadios.clear();
         m_wanList->clear();
-        m_slUserLabel->setText("Signed out of SmartLink.");
-        applyStyle(m_slUserLabel, QString::fromLatin1(kHintLabelStyle));
+        setAccountLine(QStringLiteral("Signed out of SmartLink."), AccountTone::Hint);
         updateSmartLinkUi();
         emit smartLinkSignedOut();
     });
@@ -1838,6 +1838,16 @@ void ConnectionPanel::updateLocalPageState()
     updateActionState();
 }
 
+void ConnectionPanel::setAccountLine(const QString& text, AccountTone tone)
+{
+    m_slUserTone = tone;
+    m_slUserLabel->setText(text);
+    const char* style = tone == AccountTone::Info  ? kInfoLabelStyle
+                      : tone == AccountTone::Error ? kErrorLabelStyle
+                                                   : kHintLabelStyle;
+    applyStyle(m_slUserLabel, QString::fromLatin1(style));
+}
+
 void ConnectionPanel::updateSmartLinkUi()
 {
     const bool authed = m_smartLink && m_smartLink->isAuthenticated();
@@ -1850,11 +1860,8 @@ void ConnectionPanel::updateSmartLinkUi()
     m_wanConnectBtn->setVisible(authed);
 
     if (authed) {
-        if (m_slUserLabel->text().trimmed().isEmpty()
-            || m_slUserLabel->styleSheet() == QString::fromLatin1(kHintLabelStyle)) {
-            m_slUserLabel->setText(smartLinkUserText(m_smartLink));
-            applyStyle(m_slUserLabel, QString::fromLatin1(kInfoLabelStyle));
-        }
+        if (m_slUserLabel->text().trimmed().isEmpty() || m_slUserTone == AccountTone::Hint)
+            setAccountLine(smartLinkUserText(m_smartLink), AccountTone::Info);
         if (hasWanRadios) {
             m_smartLinkEmptyLabel->setVisible(false);
         } else {
@@ -1865,9 +1872,7 @@ void ConnectionPanel::updateSmartLinkUi()
         }
     } else {
         if (m_slUserLabel->text().trimmed().isEmpty())
-            m_slUserLabel->setText("Sign in to see radios at remote stations.");
-        if (m_slUserLabel->styleSheet().isEmpty())
-            applyStyle(m_slUserLabel, QString::fromLatin1(kHintLabelStyle));
+            setAccountLine(QStringLiteral("Sign in to see radios at remote stations."), AccountTone::Hint);
         m_smartLinkEmptyLabel->setText("Remote radios appear here after SmartLink sign-in.");
         m_smartLinkEmptyLabel->setVisible(true);
     }
@@ -2217,16 +2222,14 @@ void ConnectionPanel::setSmartLinkClient(SmartLinkClient* client)
         m_passwordEdit->clear();
         m_loginBtn->setEnabled(true);
         m_loginBtn->setText("Sign In");
-        m_slUserLabel->setText(smartLinkUserText(m_smartLink));
-        applyStyle(m_slUserLabel, QString::fromLatin1(kInfoLabelStyle));
+        setAccountLine(smartLinkUserText(m_smartLink), AccountTone::Info);
         updateSmartLinkUi();
     });
 
     connect(client, &SmartLinkClient::serverConnected, this, [this] {
         QTimer::singleShot(500, this, [this] {
             if (m_smartLink && m_smartLink->isAuthenticated()) {
-                m_slUserLabel->setText(smartLinkUserText(m_smartLink));
-                applyStyle(m_slUserLabel, QString::fromLatin1(kInfoLabelStyle));
+                setAccountLine(smartLinkUserText(m_smartLink), AccountTone::Info);
                 updateSmartLinkUi();
             }
         });
@@ -2234,10 +2237,8 @@ void ConnectionPanel::setSmartLinkClient(SmartLinkClient* client)
 
     connect(client, &SmartLinkClient::serverDisconnected, this, [this] {
         if (!m_smartLink || !m_smartLink->isAuthenticated()) {
-            if (m_slUserLabel->text().trimmed().isEmpty()) {
-                m_slUserLabel->setText("Sign in to see radios at remote stations.");
-                applyStyle(m_slUserLabel, QString::fromLatin1(kHintLabelStyle));
-            }
+            if (m_slUserLabel->text().trimmed().isEmpty())
+                setAccountLine(QStringLiteral("Sign in to see radios at remote stations."), AccountTone::Hint);
         }
         updateSmartLinkUi();
     });
@@ -2246,8 +2247,7 @@ void ConnectionPanel::setSmartLinkClient(SmartLinkClient* client)
         m_passwordEdit->clear();
         m_loginBtn->setText("Sign In");
         m_loginBtn->setEnabled(true);
-        m_slUserLabel->setText("SmartLink sign-in failed: " + err);
-        applyStyle(m_slUserLabel, QString::fromLatin1(kErrorLabelStyle));
+        setAccountLine(QStringLiteral("SmartLink sign-in failed: ") + err, AccountTone::Error);
         updateSmartLinkUi();
     });
 
