@@ -636,6 +636,13 @@ Demo: `IcomCivBackend` (scope rows through `toDbm`) and `SimBackend`
 `binsAbsolute`, so Off on either keeps the tile law and draws every row black,
 and NB Blank keeps its tile ratio test, which never fires on a dB row.
 
+**The drop notice for Black Level and WtrFall Gain follows the same flag.**
+Without a command plane, `RadioModel::setWaterfallBlackLevelFor` withholds the
+Flex text only where `panBinsAbsolute()` is true, so on Icom the slider that
+draws nothing still raises the notice. `setWaterfallColorGainFor` withholds it
+where auto black is on or `panBinsAbsolute()` is true: with manual black on any
+other row every row is black, whatever the gain.
+
 **THE HL2 KEEPS THE PERMISSIVE DEFAULT, and that is deliberate rather than an
 omission.** `Hl2Backend::capabilities()` never assigns the field and says why at
 the point where it would: the flag answers two questions, and on this radio the
