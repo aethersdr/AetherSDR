@@ -129,7 +129,7 @@ void silenceIsLoggedOnceAfterThreshold()
           "no reply: two silent sweeps log nothing");
     check(logged([&n] { n.sweepClosed(false); }) == QStringList{QStringLiteral(
               "I|HL2 discovery: no Hermes-Lite 2 answered 3 sweeps on 2 interfaces")},
-          "no reply: the third silent sweep logs one warning with the interface count");
+          "no reply: the third silent sweep logs one Info line with the interface count");
     check(logged([&n] {
               for (int i = 0; i < 20; ++i)
                   n.sweepClosed(false);
