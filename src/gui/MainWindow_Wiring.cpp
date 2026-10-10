@@ -3166,17 +3166,27 @@ void MainWindow::runProfileLoadRecoveryPass(const QString& profileType,
     }
 }
 
+// May the client store and restore the waterfall rate for this radio? Only
+// where the engine paces the rows and the backend declares the client the
+// owner (RadioCapabilities::clientPersistsPanWaterfallRate). Read by the save
+// and by the restore, so the two cannot disagree.
+bool MainWindow::clientPersistsWaterfallRate() const
+{
+    return m_radioModel.shapesDisplayRatesLocally()
+        && m_radioModel.backendCapabilities().clientPersistsPanWaterfallRate();
+}
+
 void MainWindow::scheduleClientWaterfallRateSave(int panIndex, int rate)
 {
     const RadioSettingsScope scope = m_radioModel.settingsScope();
-    const bool shapedLocally = m_radioModel.shapesDisplayRatesLocally();
-    if (!shapedLocally || !scope.hasRadioIdentity() || panIndex < 0) {
+    const bool clientOwns = clientPersistsWaterfallRate();
+    if (!clientOwns || !scope.hasRadioIdentity() || panIndex < 0) {
         return;
     }
     // Include scope in the key so a radio switch cannot overwrite a pending edit.
     const QString key = ClientDisplaySettings::pendingWriteKey(scope, panIndex, "waterfallRate");
-    m_pendingDisplayWrites.schedule(key, [scope, panIndex, shapedLocally, rate] {
-        ClientDisplaySettings::saveWaterfallRate(scope, panIndex, shapedLocally, rate);
+    m_pendingDisplayWrites.schedule(key, [scope, panIndex, clientOwns, rate] {
+        ClientDisplaySettings::saveWaterfallRate(scope, panIndex, clientOwns, rate);
     });
 }
 
@@ -3354,9 +3364,12 @@ void MainWindow::wirePanDisplayStatus(PanadapterApplet* applet,
                 sw->setFftWeightedAvg(saved->weighted);
             }
         }
-        if (const auto savedRate = ClientDisplaySettings::waterfallRate(
-                m_radioModel.settingsScope(), sw->panIndex(), true)) {
-            sw->setWfLineDuration(*savedRate);
+        // The waterfall rate where the client is its declared owner.
+        if (clientPersistsWaterfallRate()) {
+            if (const auto savedRate = ClientDisplaySettings::waterfallRate(
+                    m_radioModel.settingsScope(), sw->panIndex(), true)) {
+                sw->setWfLineDuration(*savedRate);
+            }
         }
         // FFT FPS where the client is its declared owner. Restored into the
         // widget BEFORE the request below, which seeds the shaper and the pan

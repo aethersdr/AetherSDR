@@ -319,6 +319,9 @@ RadioCapabilities SimBackend::capabilities() const
     // case a bare hasCommandPlane() test would have got wrong.
     caps.panZoomModes = std::nullopt;
     caps.panFrameRateShaping = std::nullopt;  // demo; no client owner is declared for FFT FPS
+    // The demo radio stores no display state: the client keeps the waterfall rate.
+    caps.panWaterfallRateShaping =
+        PanWaterfallRateShaping{/*clientPersistsWaterfallRate*/ true};
     // The synthesised stream has no impulse noise in it, and the demo has no IQ
     // path this host demodulates — there is nothing to blank.
     caps.hasHostNoiseBlanker = false;

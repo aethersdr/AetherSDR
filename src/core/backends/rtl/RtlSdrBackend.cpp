@@ -175,6 +175,9 @@ RadioCapabilities RtlSdrBackend::capabilities() const
     amplitude.clientPersistsDbmRange = false;  // no client owner is declared
     c.panAmplitude = amplitude;
     c.panFrameRateShaping = std::nullopt;  // no client owner is declared for FFT FPS
+    // A dongle stores no display state: the client keeps the waterfall rate.
+    c.panWaterfallRateShaping =
+        PanWaterfallRateShaping{/*clientPersistsWaterfallRate*/ true};
     c.backendPanAveraging = BackendPanAveraging{SpectrumTemporalAverage::kMsPerStep, true,
         tr("Spectrum averaging time: 10 ms per step; 0 is off and 100 is one second. Higher values smooth changes but blur short signals. The decay time stays the same when FPS changes."),
         tr("Off averages signal power. On averages dB levels for a smoother trace, but varying signals and noise read lower. Both modes use the FFT AVG time setting.")};

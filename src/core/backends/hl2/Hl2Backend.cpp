@@ -1941,6 +1941,9 @@ RadioCapabilities Hl2Backend::capabilities() const
     // The pan's frame rate is paced on this host and the radio stores no
     // display state: the client is the only memory FFT FPS has.
     c.panFrameRateShaping = PanFrameRateShaping{/*clientPersistsFrameRate*/ true};
+    // Likewise the waterfall rate: no register holds it.
+    c.panWaterfallRateShaping =
+        PanWaterfallRateShaping{/*clientPersistsWaterfallRate*/ true};
     // No band/segment zoom: this backend vends no command plane at all, so
     // `display pan set ... band_zoom=` is dropped inside RadioModel::sendCmd.
     // Declaring absence is what makes the control refuse rather than lie.
