@@ -61,7 +61,7 @@ See [Profile Management](./profile-management.md).
 
 ## Tools
 
-<img src="/img/screens/menu-tools.png" width="285" alt="Tools menu: Add Panadapter..., AetherTX..., CW Keyer, Copy Assist, AetherModem..., Configure KiwiSDR...; Start SWR Scan..., Pre-tune ATU Bands..., Clear ATU Memories..., Calibrate AGC-T...; Callsign Lookup... (Ctrl+Shift+L), PSK Reporter..., FreeDV Reporter...; Net Scheduler..., Memory..., Waveforms..., Wideband Bandscope...; Radio Health..., GPS Dashboard..., Network Diagnostics... and Runtime Monitor...." />
+<img src="/img/screens/menu-tools.png" width="285" alt="Tools menu: Add Panadapter..., AetherTX..., CW Keyer, Copy Assist, AetherModem..., Configure KiwiSDR...; Start SWR Scan..., Pre-tune ATU Bands..., Clear ATU Memories..., Calibrate AGC-T...; Callsign Lookup... (Ctrl+Shift+L), AetherMap..., FreeDV Reporter...; Net Scheduler..., Memory..., Waveforms..., Wideband Bandscope...; Radio Health..., GPS Dashboard..., Network Diagnostics... and Runtime Monitor...." />
 
 *The Tools menu, connected to a FLEX-8600.*
 

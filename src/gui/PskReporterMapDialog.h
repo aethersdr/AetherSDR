@@ -45,12 +45,14 @@ public:
                                   QWidget* parent = nullptr);
     ~PskReporterMapDialog() override;
 
-protected:
-    void showEvent(QShowEvent* event) override;
     // Every way the window closes ends here: the close button and the window
     // manager (through QDialog::closeEvent()), Escape and Ctrl+W (through
-    // reject(), which sends no close event).
+    // reject(), which sends no close event), and MainWindow quitting. Public,
+    // as QDialog's is, so nothing is pushed toward a bare hide().
     void done(int result) override;
+
+protected:
+    void showEvent(QShowEvent* event) override;
 
 private:
     void rebuildMarkers();

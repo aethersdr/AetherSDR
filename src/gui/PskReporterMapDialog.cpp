@@ -206,7 +206,8 @@ QWidget {
 QLabel {
     background: transparent;
 }
-QMenu {
+QMenu,
+QComboBoxPrivateContainer {
     background: {{color.canon.raised}};
 }
 QGroupBox {
@@ -451,7 +452,7 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
                                            RadioModel* radioModel,
                                            PropForecastClient* propForecast,
                                            QWidget* parent)
-    : CanonWindow(tr("AetherMap"), parent, Kind::Workspace)
+    : CanonWindow(QStringLiteral("AetherMap"), parent, Kind::Workspace)
     , m_audioEngine(audioEngine)
     , m_radioModel(radioModel)
     , m_client(new PskReporterClient(this))
@@ -474,7 +475,7 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
     auto* root = new QVBoxLayout(bodyWidget());
     root->setContentsMargins(14, 12, 14, 14);
     root->setSpacing(8);
-    root->addWidget(makeCanonHeader(tr("AetherMap")));
+    root->addWidget(makeCanonHeader(QStringLiteral("AetherMap")));
 
     auto* reportsBox = new QGroupBox(tr("Reports"), bodyWidget());
     reportsBox->setAccessibleName(tr("PSK Reporter filters"));
@@ -1433,6 +1434,9 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
     connect(m_client, &PskReporterClient::connectionStateChanged,
             this, &PskReporterMapDialog::updateConnectionIndicator);
     connect(m_globalClient, &PskReporterClient::connectionStateChanged,
+            this, &PskReporterMapDialog::updateConnectionIndicator);
+    // The dot's colour is baked into rich text, so a theme change re-reads it.
+    connect(&ThemeManager::instance(), &ThemeManager::themeChanged,
             this, &PskReporterMapDialog::updateConnectionIndicator);
     updateConnectionIndicator();
 
@@ -2893,7 +2897,8 @@ void PskReporterMapDialog::showEvent(QShowEvent* event)
 
 void PskReporterMapDialog::done(int result)
 {
-    if (m_beaconArmed || m_beaconTransmitting) {
+    // The destructor's test: a held TX request counts, armed or not.
+    if (m_beaconRequest.valid() || m_beaconArmed || m_beaconTransmitting) {
         stopBeacon(tr("Stopped"), BeaconStopOutcome::Cancelled);
     }
     // Stop hitting the network while the window is closed.

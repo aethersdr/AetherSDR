@@ -130,6 +130,7 @@
 #include "FreeDvReporterDialog.h"
 #endif
 #include "Ax25HfPacketDecodeDialog.h"
+#include "PskReporterMapDialog.h"
 #include "FlexControlDialog.h"
 #include "CwxPanel.h"
 #include "DvkAvailabilityGate.h"
@@ -4298,6 +4299,14 @@ void MainWindow::closeEvent(QCloseEvent* event)
     // AppletPanelFloating stays True for restart persistence.
     if (m_appletPanelFloatWindow) {
         m_appletPanelFloatWindow->close();
+    }
+    // AetherMap is an independent window that Qt will not close either. Close
+    // it here, while the radio is still connected and RadioModel alive, so its
+    // done() cancels an armed or transmitting WSPR beacon and stops its
+    // clients. Otherwise only its destructor would, after ~MainWindow has
+    // already destroyed the RadioModel the beacon's PTT-off goes through.
+    if (m_pskReporterMapDialog && m_pskReporterMapDialog->isVisible()) {
+        m_pskReporterMapDialog->reject();
     }
     // SplitterState no longer saved (2-pane layout uses stretch factors)
     // ConnPanelCollapsed removed — panel is now a popup dialog
