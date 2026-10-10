@@ -570,7 +570,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Download unsigned payload
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: Windows-Payload
           path: .
@@ -578,7 +578,7 @@ jobs:
       # The MSIX's .appxsym needs the PDBs, which build-windows already
       # uploads on their own.
       - name: Download debug symbols
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: Windows-Symbols
           path: symbols
@@ -832,7 +832,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Download signed packages
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: Windows-Installer
           path: .
@@ -841,7 +841,7 @@ jobs:
       # exist; a missing one is /tag-release's WARN, not a failed release.
       - name: Download symbol archive
         continue-on-error: true
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: Windows-Symbols-archive
           path: .
@@ -927,7 +927,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Download verified Windows package
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: Windows-Installer
           path: flight-package
