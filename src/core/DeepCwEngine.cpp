@@ -10,6 +10,9 @@
 #include <cstdint>
 #include <cstdio>
 #include <utility>
+#ifdef _WIN32
+#include <filesystem>
+#endif
 
 namespace AetherSDR {
 
@@ -76,7 +79,9 @@ bool DeepCwEngine::loadModel(const std::string& path)
 #ifdef HAVE_ONNX
     try {
 #ifdef _WIN32
-        const std::wstring wpath(path.begin(), path.end());
+        // path is UTF-8 (QString::toStdString); widen it as UTF-8, not byte by byte.
+        const std::wstring wpath =
+            std::filesystem::path(std::u8string(path.begin(), path.end())).wstring();
         m_session = std::make_unique<Ort::Session>(m_env, wpath.c_str(), m_sessionOpts);
 #else
         m_session = std::make_unique<Ort::Session>(m_env, path.c_str(), m_sessionOpts);
