@@ -680,21 +680,26 @@ void AnanBackend::connectRadio(const RadioConnectRequest& request)
     // default until RadioModel pushes the operator's rate through
     // setPanFrameRate().
     m_pendingDspConfig.panPoints = m_panPoints;
-    m_pendingDspConfig.mode = modeFromString(m_mode);
-    m_pendingDspConfig.filterLowHz = static_cast<double>(m_filterLowHz) + cwBfoHz();
-    m_pendingDspConfig.filterHighHz = static_cast<double>(m_filterHighHz) + cwBfoHz();
     // This backend retains the AGC and NB requests across reconnects.
     // emitSliceState() also supplies them if a different radio requires a
     // fresh slice.
-    m_pendingDspConfig.agcMode = m_agcMode;
-    m_pendingDspConfig.maximumAgcGainDb = agcKnobDb(m_agcThreshold);
-    m_pendingDspConfig.agcFixedGainDb = agcKnobDb(m_agcOffLevel);
-    m_pendingDspConfig.noiseBlanker = AetherSDR::toWdsp(m_nbKind);
-    m_pendingDspConfig.noiseBlankerLevel = m_nbLevel;
-    m_pendingDspConfig.noiseBlankerFill = AetherSDR::toWdsp(m_nbFill);
+    applyLiveRxState(m_pendingDspConfig);
 
     ++m_connectGeneration;
     beginDspSetup();
+}
+
+void AnanBackend::applyLiveRxState(AnanRxDsp::Config& config) const
+{
+    config.mode = modeFromString(m_mode);
+    config.filterLowHz = static_cast<double>(m_filterLowHz) + cwBfoHz();
+    config.filterHighHz = static_cast<double>(m_filterHighHz) + cwBfoHz();
+    config.agcMode = m_agcMode;
+    config.maximumAgcGainDb = agcKnobDb(m_agcThreshold);
+    config.agcFixedGainDb = agcKnobDb(m_agcOffLevel);
+    config.noiseBlanker = AetherSDR::toWdsp(m_nbKind);
+    config.noiseBlankerLevel = m_nbLevel;
+    config.noiseBlankerFill = AetherSDR::toWdsp(m_nbFill);
 }
 
 void AnanBackend::beginDspSetup()
@@ -1135,15 +1140,7 @@ void AnanBackend::beginRateChange(int newRateKsps)
     // rate touched here, so a rate change silently reverted mode/filter/AGC
     // to whatever they were at connect. m_shiftHz is not part of Config --
     // AnanRxDsp::installChannel() re-applies it separately, after the swap.
-    m_pendingDspConfig.mode = modeFromString(m_mode);
-    m_pendingDspConfig.filterLowHz = static_cast<double>(m_filterLowHz) + cwBfoHz();
-    m_pendingDspConfig.filterHighHz = static_cast<double>(m_filterHighHz) + cwBfoHz();
-    m_pendingDspConfig.agcMode = m_agcMode;
-    m_pendingDspConfig.maximumAgcGainDb = agcKnobDb(m_agcThreshold);
-    m_pendingDspConfig.agcFixedGainDb = agcKnobDb(m_agcOffLevel);
-    m_pendingDspConfig.noiseBlanker = AetherSDR::toWdsp(m_nbKind);
-    m_pendingDspConfig.noiseBlankerLevel = m_nbLevel;
-    m_pendingDspConfig.noiseBlankerFill = AetherSDR::toWdsp(m_nbFill);
+    applyLiveRxState(m_pendingDspConfig);
 
     m_rateChanging = true;
     ++m_connectGeneration;   // orphans any in-flight prior connect/reconfigure/rebuild
@@ -1592,9 +1589,8 @@ void AnanBackend::emitSliceState()
     d.nbKind = m_nbKind;
     d.nbLevel = m_nbLevel;
     d.nbFill = m_nbFill;
-    // The AGC as the DSP runs it. Without this the knob showed the slice
-    // model's own default while the DSP ran this backend's, and the first
-    // touch or bookmark recall replaced one with the other.
+    // The AGC as the DSP runs it, so the slice's knob starts from this
+    // backend's values, not SliceModel's defaults.
     d.agcMode = agcModeName(m_agcMode);
     d.agcThreshold = m_agcThreshold;
     d.agcOffLevel = m_agcOffLevel;

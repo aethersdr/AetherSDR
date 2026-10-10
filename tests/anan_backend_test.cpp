@@ -324,10 +324,34 @@ int main(int argc, char** argv)
               "a threshold request still reaches setSliceAgc() with its mode");
     }
 
+    // ---- applyLiveRxState(): the receive state a connect or rate change builds ----
+    // connectRadio() and beginRateChange() both fill the DSP config with it.
+    {
+        AnanBackend backend;
+        backend.setSliceMode(0, QStringLiteral("LSB"));
+        backend.setSliceAgc(0, QStringLiteral("slow"), 40);
+        backend.requestSliceAgc(0, {SliceAgcRequest::Field::OffLevel, QStringLiteral("slow"),
+                                    40, 60, SliceAgcRequest::Origin::Operator});
+        backend.setSliceNoiseBlanker(0, AetherSDR::NoiseBlankerKind::Impulse, 70,
+                                     AetherSDR::NoiseBlankerFill::Interpolate);
+        const AnanRxDsp::Config config = backend.liveRxConfigForTest();
+        check(config.mode == WdspChannel::Mode::Lsb && config.filterLowHz == -2900.0
+                  && config.filterHighHz == -100.0,
+              "the DSP config carries the live mode and passband");
+        check(config.agcMode == 2 && config.maximumAgcGainDb == AnanBackend::agcKnobDb(40)
+                  && config.agcFixedGainDb == AnanBackend::agcKnobDb(60),
+              "and the live AGC mode, AGC gain and AGC-off gain");
+        check(static_cast<int>(config.noiseBlanker)
+                      == static_cast<int>(AetherSDR::NoiseBlankerKind::Impulse)
+                  && config.noiseBlankerLevel == 70
+                  && static_cast<int>(config.noiseBlankerFill)
+                      == static_cast<int>(AetherSDR::NoiseBlankerFill::Interpolate),
+              "and the live noise blanker");
+    }
+
     // ---- the knob shows what the DSP runs, through RadioModel (#5988) ----
-    // SliceModel starts at 65 on its own. While this backend published no AGC,
-    // the knob showed 65 and the DSP ran another gain, so the first touch or
-    // bookmark recall sent 65 and dropped the gain.
+    // SliceModel's own default is 65. The backend's published AGC replaces it,
+    // so a touch or bookmark recall starts from what the DSP runs.
     {
         RadioModel radio;
         auto owned = std::make_unique<ConnectedAnan>();

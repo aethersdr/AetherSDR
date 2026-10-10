@@ -6,6 +6,7 @@
 //      AGC-T knob and the calibrator) to requestSliceAgc(Field::OffLevel).
 //   4. A backend echo never comes back as a command (Principle II).
 //   5. The base verbs emit nothing and the base drops OffLevel.
+//   6. The calibrator's AGC-off sweep climbs from 0 and stops at its target.
 
 #include "TestSettingsProfile.h"
 #include "core/AgcTCalibrator.h"
@@ -19,6 +20,8 @@
 #include <QMetaObject>
 #include <QSignalSpy>
 
+#include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <memory>
 #include <utility>
@@ -183,7 +186,7 @@ void testRoutedThroughTheSeam()
     check(cal.strategy() == AgcTCalibrator::Strategy::TargetLevel,
           "with AGC Off the calibrator runs its target-level strategy");
     cal.startAutoSweep();   // first sweep point is written synchronously
-    check(backend->offLevel.size() == 3 && backend->offLevel.back().level == 100,
+    check(backend->offLevel.size() == 3 && backend->offLevel.back().level == 0,
           "the calibrator's AGC-off sweep reaches the backend");
     cal.stop();             // restores what it found
     check(backend->offLevel.size() == 4 && backend->offLevel.back().level == 47,
@@ -234,6 +237,43 @@ void testBaseVerbsAreNoOps()
     check(b.pairedAgcCalls == 0, "the base drops OffLevel rather than calling setSliceAgc");
 }
 
+void testCalibratorClimbsToTheTarget()
+{
+    std::printf("\n  6. The calibrator's AGC-off sweep\n");
+    // The off level is a fixed gain, and ANAN's 100 is 120 dB, past clipping on
+    // band noise alone. Here the audio is -60 dB at 0 and rises 0.6 dB per
+    // step, so the default -28 dB target is crossed at 53.
+    SliceModel s(0);
+    s.setAgcMode(QStringLiteral("off"));
+    s.setAgcOffLevel(47);
+    AgcTCalibrator cal;
+    cal.setSlice(&s);
+    cal.setSettleMs(1);
+    std::vector<int> applied;
+    QObject::connect(&s, &SliceModel::agcOffLevelChanged, &cal, [&](int level) {
+        applied.push_back(level);
+        const float rms = std::pow(10.0f, (-60.0f + 0.6f * static_cast<float>(level)) / 20.0f);
+        for (int i = 0; i < 40; ++i)   // past the detector's smoothing
+            cal.onAudioLevel(rms);
+    });
+    QSignalSpy finished(&cal, &AgcTCalibrator::finished);
+    cal.startAutoSweep();
+    check(finished.wait(5000), "the sweep finishes");
+    check(!applied.empty() && applied.front() == 0,
+          "with AGC Off the sweep starts at 0, not at 100");
+    check(!applied.empty() && *std::max_element(applied.begin(), applied.end()) == 56,
+          "and stops at the first step past the target");
+    check(cal.recommendedValue() == 53, "the recommendation is where the audio crosses the target");
+    cal.stop();
+
+    // With AGC on the AGC holds the level, so the knee sweep still starts at 100.
+    s.setAgcMode(QStringLiteral("med"));
+    s.setAgcThreshold(47);
+    cal.startAutoSweep();
+    check(s.agcThreshold() == 100, "with AGC on the sweep starts at 100");
+    cal.stop();
+}
+
 }  // namespace
 
 int main(int argc, char** argv)
@@ -245,6 +285,7 @@ int main(int argc, char** argv)
     testIntentsCarryBothHalves();
     testRoutedThroughTheSeam();
     testBaseVerbsAreNoOps();
+    testCalibratorClimbsToTheTarget();
     std::printf("\n  %s — %d failure(s)\n", failures ? "FAILED" : "PASSED", failures);
     return failures ? 1 : 0;
 }

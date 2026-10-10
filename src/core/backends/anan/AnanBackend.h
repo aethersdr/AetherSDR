@@ -170,6 +170,13 @@ public:
     [[nodiscard]] int agcModeForTest() const noexcept { return m_agcMode; }
     [[nodiscard]] double agcMaxGainDbForTest() const noexcept { return agcKnobDb(m_agcThreshold); }
     [[nodiscard]] double agcFixedGainDbForTest() const noexcept { return agcKnobDb(m_agcOffLevel); }
+    // The live receive state as applyLiveRxState() writes it into the DSP config.
+    [[nodiscard]] AnanRxDsp::Config liveRxConfigForTest() const
+    {
+        AnanRxDsp::Config config;
+        applyLiveRxState(config);
+        return config;
+    }
     [[nodiscard]] int attenuationDbForTest() const noexcept { return m_attenuationDb; }
     [[nodiscard]] bool noiseBlankerOnForTest() const noexcept
     {
@@ -294,6 +301,9 @@ private:
     // running when they stopped clicking.
     void retryPendingRateChange();
     [[nodiscard]] double cwBfoHz() const noexcept { return cwBfoOffsetHz(m_mode, m_cwPitchHz); }
+    // The operator's mode, passband, AGC and noise blanker, written into a DSP
+    // config. connectRadio() and beginRateChange() both build theirs with it.
+    void applyLiveRxState(AnanRxDsp::Config& config) const;
     // Re-push mode + filter (with the CW BFO folded in) + shift, in that
     // order, to m_dsp. HERMES.md §16.7: mode changes must re-push the
     // passband, every time, not only when its value changed.
