@@ -217,7 +217,14 @@ double quantizeIncrementalFollowDelta(double overshootMhz, double stepMhz)
 
 void MainWindow::showGpsLocationDialog()
 {
-    showOrRaisePersistent(m_gpsLocationDialog, &m_radioModel);
+    if (!m_gpsLocationDialog) {
+        auto* dlg = new GpsLocationDialog(&m_radioModel, this);
+        dlg->setAttribute(Qt::WA_DeleteOnClose);
+        m_gpsLocationDialog = dlg;
+    }
+    m_gpsLocationDialog->show();
+    m_gpsLocationDialog->raise();
+    m_gpsLocationDialog->activateWindow();
 }
 
 void MainWindow::noteBandRecallForPan(const QString& panId)

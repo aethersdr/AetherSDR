@@ -6149,7 +6149,7 @@ void MainWindow::buildUI()
     gpsStack->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Preferred);
     gpsStack->setCursor(Qt::PointingHandCursor);
     gpsStack->setFocusPolicy(Qt::TabFocus);
-    gpsStack->setToolTip(QStringLiteral("Open GPS & Station Location"));
+    gpsStack->setToolTip(QStringLiteral("Open AetherGPS"));
     gpsStack->setAccessibleName(QStringLiteral("GPS and station location"));
     gpsStack->setAccessibleDescription(
         QStringLiteral("Open the live GPS, map, satellite reception, and time dashboard"));
