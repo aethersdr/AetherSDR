@@ -236,12 +236,12 @@ replace these with a single `QSet<QPointer<PersistentDialog>>` walk.
 A window built on `CanonWindow` (`src/gui/CanonWindow.{h,cpp}`, RFC #6226)
 deliberately opts out of frameless chrome integration, and by default of
 geometry persistence too. About AetherSDR, Remote Access (Tailscale),
-Waveforms, Network Diagnostics, AetherRX and AetherTX are built on it.
+Waveforms, Network Diagnostics, AetherRX, AetherTX and AetherModem are built on it.
 
 | Concern | `CanonWindow` | Why |
 |---|---|---|
 | Frameless chrome integration | Always frameless; ignores `FramelessWindow` and is not tracked by `trackPersistentDialog()` | The style guide's rounded, title-bar-less window *is* the design; native chrome would put a title bar over it |
-| Geometry persistence | None by default: asks to open centred on its parent every time (Wayland compositors place top-level windows themselves and may ignore it). `setGeometryKey()` opts in: size and position are saved under that AppSettings key on move and resize (in memory) and whenever the window hides (flushed — Escape and ⌘W / Ctrl+W hide it without a close event), and restored in place of the centring. Network Diagnostics, AetherRX and AetherTX opt in. `setLaunchSize()` pins the size on every open while the position is still restored; AetherRX and AetherTX use it, for now | A short-lived window has nothing to restore; a workspace tool keeps the size its operator gave it |
+| Geometry persistence | None by default: asks to open centred on its parent every time (Wayland compositors place top-level windows themselves and may ignore it). `setGeometryKey()` opts in: size and position are saved under that AppSettings key on move and resize (in memory) and whenever the window hides (flushed — Escape and ⌘W / Ctrl+W hide it without a close event), and restored in place of the centring. Network Diagnostics, AetherRX, AetherTX and AetherModem opt in. `setLaunchSize()` pins the size on every open while the position is still restored; AetherRX and AetherTX use it, for now | A short-lived window has nothing to restore; a workspace tool keeps the size its operator gave it |
 
 What it keeps:
 
@@ -254,7 +254,7 @@ What it keeps:
   (⌘W, Ctrl+W) all close it.
 - **Kind:** `CanonWindow::Kind::Dialog` (the default) is a parented
   `Qt::Dialog` that sits over its parent. `Kind::Workspace` (AetherRX,
-  AetherTX) is an independent `Qt::Window`, with its own taskbar entry, that
+  AetherTX, AetherModem) is an independent `Qt::Window`, with its own taskbar entry, that
   minimises on its own and does not keep the app alive (`WA_QuitOnClose`
   off). In a workspace, Return and Enter never click a default button:
   QDialog makes every push button an auto-default, so Return in a field would
@@ -271,7 +271,7 @@ What it keeps:
 It is translucent, so the rounded corners need a compositor; an X11 session
 without one shows square black corners. Use `CanonWindow` only for windows the
 style guide covers: short-lived windows, and the tool windows the maintainer
-has moved to it (Waveforms, Network Diagnostics, AetherRX, AetherTX). A tool window on it also
+has moved to it (Waveforms, Network Diagnostics, AetherRX, AetherTX, AetherModem). A tool window on it also
 installs `FramelessResizer`, since `CanonWindow` itself only moves. Other tool
 and workspace dialogs keep the persistent pattern above.
 
