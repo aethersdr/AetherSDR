@@ -61,6 +61,8 @@ void pumpFor(double ms)
 struct Capture {
     std::vector<std::complex<float>> iq;
     unsigned long long faults = 0;
+    unsigned long long stallDrops = 0;   // the part of faults that is starvation
+    bool configured = false;
 };
 
 // One fresh over: `audio` at 24 kHz, fed in 10 ms deliveries at real time,
@@ -69,20 +71,19 @@ Capture runOnce(const std::vector<float>& audio, WdspChannel::Mode mode,
                 std::pair<int, int> passband)
 {
     TxTestAuthority authority;
+    Capture c;   // outlives tx: the iqReady slot writes into it
     Hl2TxDsp tx;
     Hl2TxDsp::Config cfg;
     cfg.mode = mode;
     cfg.filterLowHz = passband.first;
     cfg.filterHighHz = passband.second;
     cfg.alcEnabled = false;
-    Capture c;
     std::string err;
     if (!tx.configure(cfg, &err)) {
-        std::fprintf(stderr, "FAIL: configure: %s\n", err.c_str());
-        ++g_failures;
-        c.faults = ~0ull;
+        check(false, ("the modulator configures: " + err).c_str());
         return c;
     }
+    c.configured = true;
     QObject::connect(&tx, &Hl2TxDsp::iqReady, &tx,
                      [&](const std::vector<std::complex<float>>& iq,
                          const TxCoordinator::Context&) {
@@ -98,11 +99,14 @@ Capture runOnce(const std::vector<float>& audio, WdspChannel::Mode mode,
     }
     pumpFor(50.0);
     c.faults = tx.modulatorFaultBlocks();
+    c.stallDrops = tx.modulatorStallDrops();
     return c;
 }
 
-// Retried when a block missed the wire: that capture is not contiguous.
-// Still faulted after three tries is machine load, reported as inconclusive.
+// Retried when the worker was starved (a stall drop): that capture is not
+// contiguous. Still starved after three tries is machine load, reported as
+// inconclusive. A configure failure or any other fault is the exchange gate
+// failing (#5910): a failed check, never retried.
 bool g_starved = false;
 Capture run(const char* what, const std::vector<float>& audio, WdspChannel::Mode mode,
             std::pair<int, int> passband)
@@ -110,7 +114,11 @@ Capture run(const char* what, const std::vector<float>& audio, WdspChannel::Mode
     Capture c;
     for (int attempt = 0; attempt < 3; ++attempt) {
         c = runOnce(audio, mode, passband);
-        if (c.faults == 0) {
+        if (!c.configured || c.faults == 0) {
+            return c;
+        }
+        if (c.faults > c.stallDrops) {
+            check(false, (std::string(what) + ": no fault but a stall drop").c_str());
             return c;
         }
         std::fprintf(stderr, "starved in %s: %llu blocks missed the wire (attempt %d of 3)\n",
@@ -135,13 +143,13 @@ double bin(const std::vector<std::complex<float>>& iq, std::size_t from,
 
 double db(double ratio) { return 20.0 * std::log10(std::max(ratio, 1e-30)); }
 
-const std::vector<int> kTones = {100, 150, 200, 250, 300, 350, 400, 500, 700, 1000, 1300,
+const std::vector<int> kTones = {50, 100, 150, 200, 250, 300, 350, 400, 500, 700, 1000, 1300,
                                  1700, 2000, 2300, 2500, 2600, 2650, 2700, 2750, 2800,
                                  2900, 3000, 3100, 3500};
 constexpr double kToneAmp = 0.015;
 
 // Response of each tone's wanted bin relative to 1 kHz, in dB, in kTones order.
-// Schroeder phases keep the 24-tone sum's crest factor low.
+// Schroeder phases keep the multitone's crest factor low.
 std::vector<double> passbandResponse(const char* what, WdspChannel::Mode mode,
                                      std::pair<int, int> passband, bool lower)
 {
@@ -188,6 +196,7 @@ void checkShape(const char* what, const std::vector<double>& resp, int lo, int h
     double worstStop100 = -400.0;
     double worstStop150 = -400.0;
     int edges = 0;
+    int stop100 = 0;
     bool edgesOk = true;
     for (std::size_t t = 0; t < kTones.size(); ++t) {
         const int f = kTones[t];
@@ -195,6 +204,7 @@ void checkShape(const char* what, const std::vector<double>& resp, int lo, int h
             worstFlat = std::max(worstFlat, std::abs(resp[t]));
         }
         if (f == lo - 100 || f == hi + 100) {
+            ++stop100;
             worstStop100 = std::max(worstStop100, resp[t]);
         }
         if (f <= lo - 150 || f >= hi + 150) {
@@ -211,6 +221,7 @@ void checkShape(const char* what, const std::vector<double>& resp, int lo, int h
     check(edges == 2, (s + ": both edges are probed").c_str());
     check(worstFlat <= kFlatDb, (s + ": flat within 0.1 dB from edge+100 to edge-100 Hz").c_str());
     check(edgesOk, (s + ": each edge tone is -6 +/- 1 dB").c_str());
+    check(stop100 == 2, (s + ": both edges are probed 100 Hz outside").c_str());
     check(worstStop100 <= -kStop100Db, (s + ": 100 Hz outside an edge is 50 dB down").c_str());
     check(worstStop150 <= -kStop150Db, (s + ": 150 Hz and more outside is 100 dB down").c_str());
 }
@@ -332,13 +343,13 @@ int main(int argc, char** argv)
         checkMidOver(onset("mid-over", true));
     }
 
-    if (g_starved) {
-        std::fprintf(stderr, "INCONCLUSIVE: a capture stayed starved (machine load)\n");
-        return 77;
-    }
     if (g_failures != 0) {
         std::fprintf(stderr, "%d check(s) failed\n", g_failures);
         return 1;
+    }
+    if (g_starved) {
+        std::fprintf(stderr, "INCONCLUSIVE: a capture stayed starved (machine load)\n");
+        return 77;
     }
     std::fprintf(stderr, "all checks passed\n");
     return 0;
