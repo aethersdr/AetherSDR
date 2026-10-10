@@ -31,12 +31,10 @@
 namespace AetherSDR {
 
 // The ALC Gain gauge's face, named because two places need the SAME numbers
-// and one of them is "no reading".
-//
-// Not a display preference: the top is the HL2 modulator's makeup ceiling
-// (Hl2TxDsp::Config::alcMaxGainDb), so a reading pressed against it means the
-// ALC has run out of gain rather than that the face has run out of scale.
-// -20 covers the reductions this chain produces.
+// and one of them is "no reading" (resetAlcGain()). The HL2 ALC only reduces
+// (Hl2TxAlc caps its target at unity), so readings stay at or below 0 dB and
+// the face above 0 is never reached; Hl2Backend declares TX:ALCGAIN -20..0.
+// -20 is a presentation floor: a deeper reduction clamps to it.
 static constexpr float kAlcGainGaugeMinDb = -20.0f;
 static constexpr float kAlcGainGaugeMaxDb = 40.0f;
 
@@ -302,12 +300,10 @@ void PhoneCwApplet::buildPhonePanel()
     m_compGauge->setHoverValuePopupEnabled(true);
     vbox->addWidget(m_compGauge);
 
-    // ALC Gain gauge (-20..+40 dB), beside Compression: both show how much the
-    // chain changes the audio, while a post-ALC level meter sits near target
-    // even with a mic 30 dB too quiet. +40 is the HL2 modulator's makeup ceiling
-    // (Hl2TxDsp::Config::alcMaxGainDb), so top-of-scale means the ALC is out of
-    // gain. Yellow at +20 = half the makeup spent, red at +30 = three quarters
-    // (fix at the gain control); the reduction side is uncoloured.
+    // ALC Gain gauge, beside Compression: both show how much the chain changes
+    // the audio, while a post-ALC level meter sits near target. Readings stay
+    // at or below 0 dB (see kAlcGainGaugeMaxDb), so the yellow (+20) and red
+    // (+30) zones are not reached; the reduction side is uncoloured.
     m_alcGainGauge = new HGauge(kAlcGainGaugeMinDb, kAlcGainGaugeMaxDb, 30.0f,
         "ALC Gain", "dB",
         {{-20, "-20dB"}, {-10, "-10"}, {0, "0"}, {10, "+10"}, {20, "+20"},
@@ -320,8 +316,7 @@ void PhoneCwApplet::buildPhonePanel()
     m_alcGainGauge->setAccessibleDescription(
         "Gain the transmit ALC is applying, in dB; 0 is unity");
     m_alcGainGauge->setHoverValueFormatter([](float v) {
-        // Signed, unlike Compression's face below, because both directions are
-        // real here: the ALC both adds makeup and takes level away.
+        // Signed, unlike Compression's face: a reduction reads negative.
         return QStringLiteral("%1%2 dB")
             .arg(v > 0.0f ? QStringLiteral("+") : QString())
             .arg(QString::number(v, 'f', 1));
@@ -1450,10 +1445,8 @@ void PhoneCwApplet::updateAlcGain(float gainDb)
     if (!m_alcGainGauge) {
         return;
     }
-    // No clamp here: HGauge clamps to its own range, and clamping twice would
-    // hide the case worth seeing — a gain pressed against the modulator's
-    // ceiling, which reads as "the ALC has nothing left" rather than as a
-    // meter at the end of its travel.
+    // No clamp here: HGauge clamps to its own range, so a reduction deeper
+    // than the -20 dB floor renders as an empty bar.
     m_alcGainGauge->setValue(gainDb);
 }
 

@@ -232,10 +232,10 @@ public:
     // Legacy normalized ALC for TCI compatibility. Native percent meters are
     // mapped to -20..0 here; this is not a physical dBFS measurement on Icom.
     float swAlc() const { return m_swAlc; }
-    // Gain the TX ALC is applying, in dB (0 = unity, positive = makeup, negative =
-    // reduction). A different measurement from swAlc(), which is the post-ALC level
-    // and sits near target regardless. Not unit-converted: every radio reports it
-    // in dB.
+    // Gain the TX ALC is applying, in dB (0 = unity, negative = reduction). Only
+    // the HL2 publishes this meter, and its ALC caps at unity, so it is never
+    // positive. A different measurement from swAlc(), which is the post-ALC level
+    // and sits near target regardless. Not unit-converted: it arrives in dB.
     float alcGainDb() const { return m_alcGainDb; }
     // Whether a SAMPLE has landed, not merely whether the meter is defined.
     // Load-bearing here in a way it is not for a level: 0 dB is a real and
