@@ -490,7 +490,7 @@ jobs:
       # maintainers can symbolize local dumps without unpacking Store assets.
       - name: Upload debug symbols
         if: hashFiles('symbols/AetherSDR.pdb') != ''
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: Windows-Symbols
           path: symbols/
@@ -523,7 +523,7 @@ jobs:
 
       - name: Upload symbol archive
         if: hashFiles('AetherSDR-*-symbols.tar.xz') != ''
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: Windows-Symbols-archive
           path: AetherSDR-*-symbols.tar.xz
@@ -532,7 +532,7 @@ jobs:
       # boundary: nothing in this job can sign, and nothing in package-windows
       # builds or fetches third-party code.
       - name: Upload unsigned payload for packaging
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: Windows-Payload
           path: |
@@ -809,7 +809,7 @@ jobs:
           powershell -NoProfile -ExecutionPolicy Bypass -File packaging\windows\check-symbol-package.ps1 -AppxSymPath $appxSymPath -MsixUploadPath $msixUploadPath
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: Windows-Installer
           path: |
