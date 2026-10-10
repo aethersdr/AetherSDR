@@ -145,6 +145,12 @@ public:
     int attenuatorStep() const { return m_attenuatorStep; }
     void setAttenuatorLabels(const QStringList& labels);
     void setAttenuatorStep(int step);
+    // The radio's own scope mode (IRadioBackend::panScopeModesChanged). Empty
+    // labels = no choice to offer; index -1 = a mode outside the list.
+    QStringList scopeModeLabels() const { return m_scopeModeLabels; }
+    int scopeModeIndex() const { return m_scopeModeIndex; }
+    void setScopeModeLabels(const QStringList& labels);
+    void setScopeModeIndex(int index);
     // Normalized setters driven by the backend (aetherd RFC 2.3 — rfgain +
     // antenna promoted to universal typed signals). Each emits its existing
     // change-signal only on an actual change; the wire decode lives in
@@ -242,6 +248,8 @@ signals:
     void preampStepChanged(int step);
     void attenuatorLabelsChanged(const QStringList& labels);
     void attenuatorStepChanged(int step);
+    void scopeModeLabelsChanged(const QStringList& labels);
+    void scopeModeIndexChanged(int index);
     void wnbChanged(bool active, int level);
     void wnbStateChanged(bool active, int level, bool updating);
     void wideChanged(bool active);
@@ -294,6 +302,8 @@ private:
     int         m_preampStep{0};
     QStringList m_attenuatorLabels;
     int         m_attenuatorStep{0};
+    QStringList m_scopeModeLabels;
+    int         m_scopeModeIndex{-1};
     bool        m_wnbActive{false};
     bool        m_wnbUpdating{false};
     bool        m_wideActive{false};

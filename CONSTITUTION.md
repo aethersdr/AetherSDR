@@ -1,14 +1,14 @@
 <!--
 SYNC IMPACT REPORT — maintained by /speckit.constitution
 ═══════════════════════════════════════════════════════
-Version change   : 2.0.0 → 2.1.0  [MINOR: the orchestrator diff gate's documented scope is narrowed from every PR to the PRs AetherClaude opens; gate references reworded to name their source of truth.]
-Principles       : None added, removed or renumbered. VIII, IX, XI and XII reworded where they named specific CI jobs or a fixed count of required checks. Scope narrowed (MINOR): VIII's verification and the Development Workflow gate now require the orchestrator's diff gate only for PRs AetherClaude opens, matching where it can run. Every PR still needs every required status check and CODEOWNERS review.
-Sections changed : VIII, IX, XI, XII (gate references); Development Workflow (PR gate scope, CI requirement, build-time figure removed); Compliance review (mechanical check scope); Downstream artifacts table (agent-guide row now points at AGENTS.md and checks the summary, not a count).
+Version change   : 2.1.0 → 2.2.0 [MINOR: narrow the scope of II/III for the approved Icom scope presentation preference.]
+Principles       : II and III gain one named, bounded exception; no principles added or renumbered.
+Sections changed : II/III normative scope and rationale; all other requirements unchanged.
 Drift rule       : This file names the SOURCE OF TRUTH for anything that changes over time, never a copy of its current value. The required checks are whatever branch protection on `main` requires; the orchestrator's diff gate is identified by its role and location, and applies to the PRs that orchestrator opens. Downstream summaries describe the principles; they do not state a count or a version.
-Downstream re-check      : .specify/memory/constitution.md (byte mirror) ✓  AGENTS.md (summary names the principles, no count or version) ✓  CONTRIBUTING.md (still points contributors at this file; count and version removed) ✓  README.md / GEMINI.md / .github/copilot-instructions.md (count removed) ✓  aetherclaude/skills/implement-fix.md (its one citation, Principle I, still matches) ✓  aetherclaude/bin/codegraph-extract-docs.py (.specify/memory/constitution.md still in its corpus list) ✓
 Follow-up TODOs  : a future revision may renumber to retire the refilled-numeral ambiguity introduced in 2.0.0; pre-commit check to enforce .specify/memory/constitution.md ≡ CONSTITUTION.md byte-equality
-Last sync        : 2026-10-01
-Rationale        : The 2.0.0 text listed specific CI jobs and a fixed number of required checks; branch protection has since changed, and one listed job no longer exists. It also described AetherClaude's diff gate as the gate for every PR, though only that orchestrator's PRs pass through it. A constitution that copies operational facts goes stale silently, and agents then enforce the stale copy. Pointing at the authoritative source keeps every principle checkable without the text having to change when CI does.
+Downstream re-check : CONSTITUTION.md byte mirror; docs/agents/settings.md; docs/agents/backends.md; Icom scope architecture description.
+Last sync        : 2026-10-05
+Rationale        : Keeping the radio's persisted Center scope mode at connect defeats #6168's approved Flex-style pan/tune behavior. A saved scope-view preference is permitted for this presentation only, with explicit choices respected, dedicated-slot disclosure, firmware fallback and continued status reconciliation. No other radio-managed state is exempted.
 ═══════════════════════════════════════════════════════
 This block is regenerated on every constitution change; do not hand-edit below the rule.
 -->
@@ -17,7 +17,7 @@ This block is regenerated on every constitution change; do not hand-edit below t
 
 | Field | Value |
 |---|---|
-| **Version** | 2.1.0 |
+| **Version** | 2.2.0 |
 | **Status** | `STABLE` |
 | **Applies to** | All AetherSDR contributions: source code, documentation, automation, release artifacts |
 
@@ -76,6 +76,20 @@ subsequent status is the truth and supersedes the optimistic value if
 they differ. The command path runs client → radio; the truth path
 runs radio → client; the two must never form a feedback loop.
 
+**Narrow exception — Icom scope presentation (#6168).** AetherSDR may apply
+its saved Icom scope-view preference when connecting or activating a newly
+shown receiver scope. Scroll-F is the default for profiles without an explicit
+choice; an explicit Center or Fixed choice is respected. This is necessary
+because Center couples the displayed window to the VFO, so preserving it at
+connect prevents the approved Flex-style pan and tune behavior. The exception
+covers scope mode, selection of the disclosed dedicated edge slot, and gesture-
+driven writes to that slot's window presets only. Other preset slots are never
+rewritten, and unsupported models or firmware retain a supported fallback.
+After bounded command settling, reported scope state remains authoritative;
+a front-panel change is not continuously reasserted from the preference.
+This exception does not authorize restoring frequency, demodulation mode,
+filters, gain, transmit state, or any other radio-managed setting.
+
 *Why this is inviolable: when the client lets its own model override
 what the radio reports, the two form a feedback loop and the operator
 sees values fight or flicker. The sharper failure is Multi-Flex — a
@@ -96,6 +110,12 @@ and whatever the firmware adds later; the deciding test is simply
 appears on any list. The client persists only state the radio does not
 store at all — things like window geometry, layout, client-side-only
 DSP, and UI/display preferences.
+
+The Icom scope-presentation exception in Principle II also permits the single
+client-side scope-view preference needed to select that presentation on the
+next connection. It does not permit a second client-side copy of the radio's
+edge-preset table or any other persisted operating state. Its default applies
+to new and existing profiles only while no explicit scope choice is saved.
 
 *Why this is inviolable: when both the client and the radio persist
 the same setting, they fight on reconnect. The radio's GUIClientID

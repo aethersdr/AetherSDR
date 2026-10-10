@@ -1027,6 +1027,19 @@ void RadioModel::setupBackend(const QString& family)
             [this](const QString& panId, int step) {
         if (auto* pan = resolveBackendPan(panId)) pan->setAttenuatorStep(step);
     });
+    // The radio's scope mode: same pass-through shape as the stages above.
+    connect(m_backend.get(), &IRadioBackend::panScopeModesChanged, this,
+            [this](const QString& panId, const QStringList& labels) {
+        if (auto* pan = resolveBackendPan(panId)) {
+            pan->setScopeModeLabels(labels);
+        }
+    });
+    connect(m_backend.get(), &IRadioBackend::panScopeModeChanged, this,
+            [this](const QString& panId, int index) {
+        if (auto* pan = resolveBackendPan(panId)) {
+            pan->setScopeModeIndex(index);
+        }
+    });
     connect(m_backend.get(), &IRadioBackend::panRxAntennaChanged, this,
             [this](const QString& panId, const QString& ant) {
         if (auto* pan = resolveBackendPan(panId)) pan->setRxAntenna(ant);
@@ -6732,6 +6745,14 @@ void RadioModel::setPanAttenuatorFor(const QString& panId, int step)
 {
     if (panId.isEmpty() || !m_backend) return;
     m_backend->setPanAttenuator(backendPanIdFor(panId), step);
+}
+
+void RadioModel::setPanScopeModeFor(const QString& panId, int index)
+{
+    if (panId.isEmpty() || !m_backend) {
+        return;
+    }
+    m_backend->setPanScopeMode(backendPanIdFor(panId), index);
 }
 
 // ── Display controls — FFT ─────────────────────────────────────────────────

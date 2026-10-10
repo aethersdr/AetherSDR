@@ -13,7 +13,8 @@ namespace {
 // Single nested-JSON key holding this backend's config (Principle V).
 // Shape: {"username":string, "lastHost":string, "controlPort":int,
 //         "serialPort":int, "audioPort":int, "civAddress":int,
-//         "civSelection":"auto"|"model"|"custom"}
+//         "civSelection":"auto"|"model"|"custom", "wakeOnConnect":bool,
+//         "scopeView":"scrollF"|"center"|"fixed"}
 //
 // Deliberately NO password field. See the header.
 const QString kRootKey = QStringLiteral("Icom");
@@ -23,6 +24,7 @@ constexpr const char* kFieldLastHost    = "lastHost";
 constexpr const char* kFieldControlPort = "controlPort";
 constexpr const char* kFieldSerialPort  = "serialPort";
 constexpr const char* kFieldAudioPort   = "audioPort";
+constexpr const char* kFieldScopeView   = "scopeView";
 constexpr const char* kFieldCivAddress  = "civAddress";
 // WHICH of the three ways the address was chosen — see IcomSettings::CivSelection.
 // Absent means a pre-existing settings file, which civSelection() migrates.
@@ -76,6 +78,29 @@ void IcomSettings::setWakeOnConnect(bool enabled)
 {
     QJsonObject object = readObj();
     object.insert(QStringLiteral("wakeOnConnect"), enabled);
+    writeObj(object);
+}
+
+IcomSettings::ScopeView IcomSettings::scopeView()
+{
+    // An unknown value (from a newer build) reads as the default.
+    const QString stored = readObj().value(QLatin1String(kFieldScopeView)).toString();
+    if (stored == QLatin1String("center")) {
+        return ScopeView::Center;
+    }
+    if (stored == QLatin1String("fixed")) {
+        return ScopeView::Fixed;
+    }
+    return ScopeView::ScrollF;
+}
+
+void IcomSettings::setScopeView(ScopeView view)
+{
+    QJsonObject object = readObj();
+    object.insert(QLatin1String(kFieldScopeView),
+                  view == ScopeView::Center  ? QStringLiteral("center")
+                  : view == ScopeView::Fixed ? QStringLiteral("fixed")
+                                             : QStringLiteral("scrollF"));
     writeObj(object);
 }
 

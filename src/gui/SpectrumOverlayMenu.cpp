@@ -248,12 +248,15 @@ static void applyPanelStyle(QWidget* panel, const QString& objectName)
 // (label+control rows, the Display scroll area/viewport/content). Scoped
 // because an unscoped "QWidget { … }" cascades onto children and their tooltip
 // labels. QWidget# even for the QScrollArea: the name already pins one widget.
-static void applyTransparentStyle(QWidget* widget, const QString& objectName)
+// `childRules` styles the row's children through this one call (already scoped).
+static void applyTransparentStyle(QWidget* widget, const QString& objectName,
+                                  const QString& childRules = {})
 {
     widget->setObjectName(objectName);
     widget->setStyleSheet(
         QStringLiteral("QWidget#%1 { background: transparent; border: none; }")
-            .arg(objectName));
+            .arg(objectName)
+        + childRules);
 }
 
 static const QString kLabelStyle =
@@ -1803,6 +1806,38 @@ void SpectrumOverlayMenu::buildDisplayPanel()
         });
     }
 
+    // Scope mode, for a radio whose panadapter is its own scope (Icom). First in
+    // the group because it changes what every spectrum gesture does. Absent for
+    // every other family; dimmed with a reason on an Icom that has no choice.
+    {
+        m_scopeModeRow = new QWidget;
+        // The label and the buttons rebuilt per radio share the row's one
+        // stylesheet, scoped to it, with the panel's label and button looks.
+        const QString scoped = QStringLiteral("QWidget#displayScopeModeRow ");
+        applyTransparentStyle(m_scopeModeRow, QStringLiteral("displayScopeModeRow"),
+                              QString(labelStyle).replace(QStringLiteral("QLabel"),
+                                                          scoped + QStringLiteral("QLabel"))
+                                  + QString(btnStyle).replace(
+                                      QStringLiteral("QPushButton"),
+                                      scoped + QStringLiteral("QPushButton")));
+        m_scopeModeLayout = new QHBoxLayout(m_scopeModeRow);
+        m_scopeModeLayout->setContentsMargins(0, 2, 0, 2);
+        m_scopeModeLayout->setSpacing(3);
+        m_scopeModeLayout->addWidget(new QLabel(tr("Scope:")));
+        m_scopeModeRow->setToolTip(tr(
+            "How the radio's scope window follows the VFO.\n"
+            "Center: the window is centred on the VFO; dragging retunes.\n"
+            "Scroll-F: the window stays put; click to tune, drag to scroll.\n"
+            "  A drag stops before the VFO leaves the screen.\n"
+            "Fixed: as Scroll-F, but the window can be dragged away from\n"
+            "  the VFO; AetherSDR follows the VFO when you tune off-screen.\n"
+            "Scroll-F and Fixed use the radio's Fixed Edge slot 4;\n"
+            "slots 1-3 are left as you set them."));
+        rebuildScopeModeButtons();
+        grid->addWidget(m_scopeModeRow, row, 0, 1, 4);
+        ++row;
+    }
+
     // ── Sliders ───────────────────────────────────────────────────────────
 
     // AVG
@@ -3189,6 +3224,76 @@ void SpectrumOverlayMenu::refreshFrontEndButtons()
           QStringLiteral("preamp"));
     apply(m_attenuatorRow, m_attenuatorBtn, m_attenuatorLabels, m_attenuatorStep,
           QStringLiteral("attenuator"));
+}
+
+// The buttons do not own their state: a click emits the request and they
+// repaint from the index the backend reports.
+void SpectrumOverlayMenu::setScopeModeLabels(const QStringList& labels)
+{
+    if (labels == m_scopeModeLabels && m_scopeModeBtns.size() == labels.size()) {
+        return;
+    }
+    m_scopeModeLabels = labels;
+    rebuildScopeModeButtons();
+}
+
+void SpectrumOverlayMenu::setScopeModeIndex(int index)
+{
+    m_scopeModeIndex = index;
+    refreshScopeModeButtons();
+}
+
+void SpectrumOverlayMenu::rebuildScopeModeButtons()
+{
+    if (!m_scopeModeRow || !m_scopeModeLayout) {
+        return;
+    }
+    qDeleteAll(m_scopeModeBtns);
+    m_scopeModeBtns.clear();
+    const QStringList labels = m_scopeModeLabels.size() > 1
+        ? m_scopeModeLabels : QStringList{tr("Center"), tr("Scroll-F"), tr("Fixed")};
+    for (int i = 0; i < labels.size(); ++i) {
+        auto* btn = new QPushButton(labels.at(i));
+        btn->setCheckable(true);
+        btn->setFixedHeight(20);
+        QString slug = labels.at(i).toLower();
+        slug.remove(QLatin1Char('-'));
+        slug.remove(QLatin1Char(' '));
+        btn->setObjectName(QStringLiteral("displayScopeMode_%1").arg(slug));
+        btn->setAccessibleName(tr("Scope mode %1").arg(labels.at(i)));
+        m_scopeModeLayout->addWidget(btn, 1);
+        m_scopeModeBtns.append(btn);
+        connect(btn, &QPushButton::clicked, this, [this, i] {
+            // Undo the checked state Qt gave the click; the backend's answer lights it.
+            refreshScopeModeButtons();
+            if (i != m_scopeModeIndex) {
+                emit scopeModeChanged(i);
+            }
+        });
+    }
+    refreshScopeModeButtons();
+}
+
+void SpectrumOverlayMenu::refreshScopeModeButtons()
+{
+    if (!m_scopeModeRow) {
+        return;
+    }
+    // The backend's label list decides: empty = this radio has no scope mode
+    // (Flex, HL2, ...), so no row; one entry = an Icom without a choice (model
+    // or firmware), shown dimmed with the reason; two or more = a choice.
+    m_scopeModeRow->setVisible(!m_scopeModeLabels.isEmpty());
+    const bool available = m_scopeModeLabels.size() > 1;
+    const QString reason = available ? QString{}
+        : tr("Scope mode selection is unavailable for this radio or firmware.");
+    m_scopeModeRow->setEnabled(available);
+    m_scopeModeRow->setAccessibleDescription(reason);
+    for (int i = 0; i < m_scopeModeBtns.size(); ++i) {
+        QSignalBlocker b(m_scopeModeBtns[i]);
+        m_scopeModeBtns[i]->setChecked(available && i == m_scopeModeIndex);
+        m_scopeModeBtns[i]->setAccessibleDescription(reason);
+        m_scopeModeBtns[i]->setToolTip(available ? m_scopeModeRow->toolTip() : reason);
+    }
 }
 
 void SpectrumOverlayMenu::setLoopState(bool loopA, bool loopB)

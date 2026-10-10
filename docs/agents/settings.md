@@ -173,3 +173,14 @@ status straight to the display (a plain member + signal) and never call
 `AppSettings::setValue()` in its setter. A display setter that genuinely
 persists (e.g. waterfall *appearance*: color gain, black level) must hold a
 client-only value — never one the radio also echoes.
+
+### Icom scope-presentation exception
+
+Constitution II/III explicitly permit the `IcomSettings::scopeView` preference
+from #6168: Scroll-F when absent, with saved Center/Fixed selections respected.
+It is applied at connect or when activating a newly shown receiver scope on
+supported models/firmware. This is a presentation exception, not authority to
+persist or restore other radio state. Scope gestures write only the disclosed
+dedicated edge slot; other presets are untouched. Reported state reconciles
+normally after command settling, and front-panel changes are not continuously
+reasserted. Startup tests isolate settings with `TestSettingsProfile`.

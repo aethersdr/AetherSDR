@@ -316,12 +316,23 @@ struct SetMenuProfile {
     int civTransceiveItem = -1;
 };
 
+// Which Fixed Edges range table (CivCodec.h) a model uses.
+enum class ScopeEdgeTable : std::uint8_t { None, Hf, Ic705, Ic9700 };
+
 struct ScopeCommandProfile {
     bool center = false;
     bool fixed = false;
     bool scrollCenter = false;
     bool scrollFixed = false;
     bool hasSweepSpeed = false;
+    // The Fixed Edges slot (27 16 / 27 1E) AetherSDR owns in Fixed and
+    // SCROLL-F; the operator's other slots are never written. 0 = SCROLL-F is
+    // not offered. Slot 4 exists from IC-705 firmware 1.20 / IC-9700 1.30;
+    // older firmware answers FA to SCROLL-F and keeps Center.
+    int dedicatedEdgeSlot = 0;
+    ScopeEdgeTable edgeTable = ScopeEdgeTable::None;
+    // 27 12/14/15/16/17/19/1A and 27 00 carry 00 MAIN / 01 SUB (IC-9700).
+    bool mainSubSelector = false;
 };
 
 struct CwTextKeyerProfile {

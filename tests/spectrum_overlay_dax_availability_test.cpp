@@ -1,5 +1,6 @@
 // The overlay menu's DAX button stays hidden on a radio with no DAX plane,
-// across expand/collapse.
+// across expand/collapse; the Scope row appears only for a radio with a scope
+// mode (Icom).
 //
 // setDaxStreamsAvailable(false) hid the button with a bare setVisible(), and
 // updateLayout() -- which runs on every expand/collapse and assigns every menu
@@ -88,6 +89,25 @@ int main(int argc, char* argv[])
           "DAX becoming available on a COLLAPSED menu does not show it alone");
     setExpanded(addRx, true);
     check(!dax->isHidden(), "DAX available -> shown again on expand");
+
+    // The Scope row (Icom scope mode) follows the same capability rule: absent
+    // on a radio with no scope mode (Flex, HL2, ...), dimmed with a reason on an
+    // Icom that has no choice, enabled when the backend offers one (#6168).
+    auto* scopeRow = parent.findChild<QWidget*>(QStringLiteral("displayScopeModeRow"));
+    check(scopeRow != nullptr, "the Scope row is discoverable");
+    if (scopeRow) {
+        check(scopeRow->isHidden(), "no scope modes published (non-Icom) -> no Scope row");
+        menu.setScopeModeLabels({QStringLiteral("Center")});
+        check(!scopeRow->isHidden() && !scopeRow->isEnabled()
+                  && !scopeRow->accessibleDescription().isEmpty(),
+              "an Icom without a choice -> Scope row shown, dimmed, with a reason");
+        menu.setScopeModeLabels({QStringLiteral("Center"), QStringLiteral("Scroll-F"),
+                                 QStringLiteral("Fixed")});
+        check(!scopeRow->isHidden() && scopeRow->isEnabled(),
+              "an Icom offering modes -> Scope row shown and enabled");
+        menu.setScopeModeLabels({});
+        check(scopeRow->isHidden(), "the next radio without scope modes -> no Scope row again");
+    }
 
     std::printf("spectrum_overlay_dax_availability_test: %s\n",
                 g_failures == 0 ? "PASS" : "FAIL");

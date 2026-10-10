@@ -142,8 +142,9 @@ and it is the cleanest part of that codebase.
 | `setSliceMode` | CI-V `06` (mode + filter) |
 | `setSliceFilter` | CI-V `1A 03` (IF filter width) — **discrete FIL1/2/3, not continuous** |
 | `setSliceAgc` | CI-V `16 12` — FAST/MID/SLOW only; **no threshold**, ignore `thresholdDb` |
-| `setPanCenter` | CI-V `05` in Center mode; `27 1E` edges in Fixed mode |
-| `setPanBandwidth` | CI-V `27 15` — **snaps to one of eight spans**; report what was taken |
+| `setPanCenter` | Center: a drag retunes (CI-V `05`). SCROLL-F / Fixed: a drag scrolls and a range change (reveal, band, zoom anchor) moves the window — `27 1E` on the **dedicated edge slot** (slot 4), at most every 200 ms. Front-panel Fixed (an operator slot): refused |
+| `setPanBandwidth` | Center: CI-V `27 15` — **snaps to one of eight spans**; report what was taken. SCROLL-F / Fixed: `27 1E` width, continuous to 1 MHz. Front-panel Fixed: refused |
+| `setPanScopeMode` | CI-V `27 14` Center (`00`) / SCROLL-F (`03`) / Fixed (`01`), after the scope selector byte; offered where the profile has `scrollFixed` and a `dedicatedEdgeSlot` (IC-7300MK2, IC-705 ≥ fw 1.20, IC-9700 ≥ fw 1.30). An FA falls back to Center for the session. Persisted in `IcomSettings::scopeView`, default SCROLL-F |
 | `setPanRfGain` | CI-V `14 02`, continuous 0000–0255 BCD |
 | `setPanPreamp` | CI-V `16 02`, OFF/P.AMP1/P.AMP2 where the model supports them |
 | `setPanAttenuator` | CI-V `11`, OFF/20 dB on IC-705 and IC-7300MK2 |
@@ -961,13 +962,51 @@ The monitor button therefore opens at OUR default on a radio that may have the
 monitor on; VOX cannot be set at all, so its read is pure cost. Two decode cases
 and, for VOX, a seam verb that does not exist yet.
 
-**Five constants have no code path at all** — `14 09` CW pitch, `14 0C` keyer
-speed, `16 47` break-in, `16 57` manual-notch width, and
-`27 1E` scope fixed edges. Not all of them should be wired: the notch width
-is deliberately left to the operator's own choice, and the fixed edges are three
-saved presets per band that a pan drag must never overwrite. CW pitch is the one
+**Four constants have no code path at all** — `14 09` CW pitch, `14 0C` keyer
+speed, `16 47` break-in and `16 57` manual-notch width. Not all of them should
+be wired: the notch width is deliberately left to the operator's own choice.
+`27 1E` fixed edges are wired for one slot only (below). CW pitch is the one
 that costs something today — it decides where a CW filter sits, so the passband
 drawn in CW assumes the radio's default rather than reading it.
+
+**SCROLL-F and the dedicated edge slot (#6168).** SCROLL-F gives the Flex-style
+panadapter: the window holds still while a click tunes inside it. Its window is
+a Fixed Edges preset, and CI-V has no other way to scroll or zoom it, so
+AetherSDR owns **one** slot (`ScopeCommandProfile::dedicatedEdgeSlot`, slot 4 on
+the IC-7300MK2, IC-705 and IC-9700) and writes only that one; front-panel Fixed,
+which shows an operator slot, refuses drag and zoom. Edge ranges are per model
+(`ScopeCommandProfile::edgeTable`: 13 HF ranges, the IC-705's 17, the IC-9700's
+one per band); a window may not cross a range boundary (the radio answers FA),
+so near one it is shifted, not centred. The radio remembers the selected slot
+per band, so slot 4 is re-selected whenever the VFO enters a new range.
+
+Who moves the window:
+
+- **The GUI**, for every tune it sends: its reveal policy (`revealFrequencyIfNeeded`,
+  the same margins as on a Flex) arrives as a `PanCenterIntent::Range` request.
+  The slice announces its new frequency before it dispatches the tune, so a range
+  request waits one event-loop turn and is placed in the range of the newest
+  commanded tune; a zoom in the same turn absorbs it, so centre and width are
+  one write.
+- **The backend**, for VFO moves it did not command (the dial, a front-panel
+  recall, another CI-V client): entering the outer 10 % toward an edge pans so
+  the VFO sits 25 % inside it; a jump of more than one width re-centres.
+- **CAT / TCI** out-of-span tunes (`SliceTuneRequest::AllowRecenter`) re-centre.
+
+The radio's own SCROLL-F rule waits until the VFO is off screen and then pages a
+whole width (IC-7300MK2, measured); every window AetherSDR writes therefore keeps
+the VFO at least 2 % (≥ 2 kHz) inside, so the radio never pages away from a drag
+or a zoom. **Fixed** (`27 14 01`, same slot) is the third mode: the radio never
+pages, so a drag may leave the VFO off screen, exactly as on a Flex.
+
+Each `27 1E` is answered by one all-zero sweep (dropped), and while a write is
+queued or in flight sweeps are remapped into the requested window
+(`remapToWindow`); the 1 s hold starts when the write goes on the wire, since
+behind a memory recall's writes it can wait seconds. The IC-9700's scope
+commands carry a MAIN/SUB selector where the others have a fixed `00`; the
+backend addresses the scope the radio is streaming (`27 00` byte 1). Edge limits
+(inside the range, ≤ 1 MHz, whole kHz) are in the IC-7300MK2 Advanced Manual
+p. 3-5, the IC-705 CI-V guide ed. 6 p. 29 and the IC-9700 guide ed. 4 p. 26.
 
 `1C 02` XFC is no longer in that list for profiles that attest it. The IC-705,
 IC-7300MK2 and IC-9700 profiles expose it as a momentary transmit-frequency
@@ -979,6 +1018,15 @@ a front-panel edge.
 controls open at our defaults rather than the radio's. Unlike the above this is
 a *reconnect* problem, not a dead control: the operator sets RIT, reconnects, and
 the app shows zero on a radio that is still offset.
+
+**Scope preference ownership (#6168).** Constitution II/III permit the saved
+Icom scope-view preference to be applied at connect or to a newly shown receiver
+scope, where the model and firmware support it. Scroll-F is the default for
+new and existing profiles without an explicit choice; saved Center/Fixed choices
+are respected. Scope gestures may write only the disclosed dedicated edge slot,
+not the operator's other presets. Radio state reconciles after bounded command
+settling, and a front-panel change is not continuously reasserted. This exception
+does not permit restoring any other radio-managed state.
 
 ### Triage a connection hang by its last command
 
