@@ -53,6 +53,8 @@ QJsonObject encodeSlice(const RtlSliceSettings::Slice& slice, QJsonObject previo
     previous.insert(QStringLiteral("audioGain"), slice.audioGain);
     previous.insert(QStringLiteral("audioMute"), slice.audioMute);
     previous.insert(QStringLiteral("audioPan"), slice.audioPan);
+    previous.insert(QStringLiteral("wfmDeemphasisUs"), slice.wfmDeemphasisUs);
+    previous.insert(QStringLiteral("wfmForceMono"), slice.wfmForceMono);
     return previous;
 }
 
@@ -111,6 +113,16 @@ bool RtlSliceSettings::decode(const QJsonObject& object, Document& output, QStri
             || !entry.value(QStringLiteral("audioMute")).isBool()
             || !entry.value(QStringLiteral("squelch")).isObject()) {
             return false;
+        }
+        if (entry.contains(QStringLiteral("wfmDeemphasisUs"))) {
+            double microseconds = 0;
+            if (!number(entry, QStringLiteral("wfmDeemphasisUs"), 50, 75, microseconds, true)
+                || (microseconds != 50 && microseconds != 75)) { return false; }
+            slice.wfmDeemphasisUs = static_cast<int>(microseconds);
+        }
+        if (entry.contains(QStringLiteral("wfmForceMono"))) {
+            if (!entry.value(QStringLiteral("wfmForceMono")).isBool()) { return false; }
+            slice.wfmForceMono = entry.value(QStringLiteral("wfmForceMono")).toBool();
         }
         const QJsonObject squelch = entry.value(QStringLiteral("squelch")).toObject();
         if (!squelch.value(QStringLiteral("enabled")).isBool()

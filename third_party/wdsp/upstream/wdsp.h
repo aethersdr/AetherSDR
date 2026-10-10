@@ -786,7 +786,10 @@ WDSP_API int GetWDSPVersion (void);
 
 /*  ---- wbfm.c ------------------------------------------------------------ */
 
+#include "../include/aether_wbfm_observation.h"
 WDSP_API int GetRXAWBFMStereoIndicator (int channel);
+WDSP_API void SetRXAWBFMForceMono (int channel, int forceMono);
+WDSP_API int GetRXAWBFMReception (int channel, AetherWdspWbfmObservation* observation);
 WDSP_API void SetRXAWBFMdmph (int channel, int dmph_run, int dmph_continent);
 
 /*  ---- wcpAGC.c ---------------------------------------------------------- */

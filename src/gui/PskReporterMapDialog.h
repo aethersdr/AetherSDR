@@ -1,6 +1,6 @@
 #pragma once
 
-#include "PersistentDialog.h"
+#include "CanonWindow.h"
 #include "models/RadioModel.h"
 #include "models/TxController.h"
 
@@ -27,12 +27,13 @@ class PskReporterClient;
 class RadioModel;
 class TransmitModel;
 
-// PSK Reporter reception map (Tools menu). Shows who is hearing our
+// AetherMap, the PSK Reporter reception map (Tools menu): a CanonWindow
+// workspace (style guide, RFC #6226). Shows who is hearing our
 // callsign, centered on the radio's GPS fix (falling back to the reported
 // grid locator). Update cadence is fixed-interval only — PSK Reporter asks
 // clients not to poll more than once per five minutes, so there is no
 // manual-refresh button and the fastest non-live choice is five minutes.
-class PskReporterMapDialog : public PersistentDialog {
+class PskReporterMapDialog : public CanonWindow {
     Q_OBJECT
 
 public:
@@ -44,9 +45,14 @@ public:
                                   QWidget* parent = nullptr);
     ~PskReporterMapDialog() override;
 
+    // Every way the window closes ends here: the close button and the window
+    // manager (through QDialog::closeEvent()), Escape and Ctrl+W (through
+    // reject(), which sends no close event), and MainWindow quitting. Public,
+    // as QDialog's is, so nothing is pushed toward a bare hide().
+    void done(int result) override;
+
 protected:
     void showEvent(QShowEvent* event) override;
-    void closeEvent(QCloseEvent* event) override;
 
 private:
     void rebuildMarkers();

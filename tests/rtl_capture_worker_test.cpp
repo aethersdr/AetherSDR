@@ -27,7 +27,8 @@ struct RtlCaptureBackendTestAccess {
     static void start(RtlSdrBackend& backend, std::unique_ptr<RtlSdrWorker::Device> device, int capacity = 1)
     {
         backend.m_requested.hardware = {100'000'000, 2'400'000, 0, 0, 0, 240};
-        backend.m_requested.receivers = {{{0, 100'000'000, -100'000, 100'000, 0, 0, 0}, T::Mode::Wfm}};
+        const double wfmGuard = RtlReceivePipeline::kQualifiedWfmEnabled ? 3000 : 0;
+        backend.m_requested.receivers = {{{0, 100'000'000, -100'000, 100'000, 0, wfmGuard, wfmGuard}, T::Mode::Wfm}};
         if (capacity > 1) {
             backend.m_receiverCapacity = capacity;
             backend.m_capture = RtlCaptureTransaction({8, static_cast<std::size_t>(capacity)});
@@ -112,12 +113,25 @@ static void sustainedPanProgress(bool narrow)
         const int beforeFrames = frames;
         const int beforeWrites = device->writes;
         const int beforeCallbacks = device->callbacks;
-        for (int block = 0; block < 7; ++block) { device->block(); }
+        // Each injected block represents real sample time (3.4 ms here).
+        // Bursting all seven drains native WFM's nonblocking WDSP output ring
+        // and correctly requests receiver repair, superseding this pan. Pace
+        // the fixture so it tests held-pan ordering through the native graph.
+        const unsigned long callbackMicroseconds = static_cast<unsigned long>(std::ceil(
+            1.0e6 * (device->callbackBytes.load() / 2.0) / accepted.hardware.sampleRateHz));
+        const auto clockBlock = [&] {
+            const int completed = device->callbacks + 1;
+            device->block();
+            check(waitFor([&] { return device->callbacks >= completed; }),
+                  "paced capture callback completes");
+            QThread::usleep(callbackMicroseconds);
+        };
+        for (int block = 0; block < 7; ++block) { clockBlock(); }
         check(waitFor([&] { return device->callbacks >= beforeCallbacks + 7; }),
               "fresh capture receives seven partial FFT blocks");
         check(frames == beforeFrames && device->writes == beforeWrites,
               "next pan waits for a whole fresh observation, not a partial window");
-        device->block();
+        clockBlock();
         check(waitFor([&] { return frames > beforeFrames; }),
               "fresh RF frame escapes while continuous pointer motion is pending");
         check(std::abs(framedCenter - accepted.hardware.centerHz) < 1,
@@ -219,10 +233,30 @@ static void receiverTuneKeepsDisplayAverage()
     check(nextFrame(), "new gain emits complete frame");
     check(std::abs(lastDc - raw) < .02,
           "gain transition discards incompatible amplitude history");
+    const T::State beforePpm = rtl::RtlCaptureBackendTestAccess::state(receiver);
     device->iqLevel = 130;
     receiver.invokeExtension("rtl", "ppm.set", 1, 1);
     check(waitFor([&] { return !rtl::RtlCaptureBackendTestAccess::busy(receiver); }),
           "PPM change completes its hardware readback");
+    const T::State afterPpm = rtl::RtlCaptureBackendTestAccess::state(receiver);
+    SharedCapturePolicy::CaptureDescriptor expectedCapture = beforePpm.capture;
+    expectedCapture.generation = afterPpm.capture.generation;
+    T::Hardware expectedHardware = beforePpm.hardware;
+    expectedHardware.ppm = 1;
+    check(afterPpm.token.session == beforePpm.token.session
+        && afterPpm.token.revision > beforePpm.token.revision
+        && afterPpm.capture.generation > beforePpm.capture.generation
+        && afterPpm.capture == expectedCapture && afterPpm.hardware == expectedHardware
+        && afterPpm.receivers == beforePpm.receivers && afterPpm.receivingIds == beforePpm.receivingIds,
+          "PPM changes capture generation without changing WFM receiver or RF geometry");
+    const int beforePpmFrames = frames;
+    const QByteArray obsolete(rtl::RtlSdrDdc::kSpectrumBinCount * int(sizeof(float)), '\0');
+    rtl::RtlCaptureBackendTestAccess::spectrum(receiver, obsolete, beforePpm.token);
+    check(frames == beforePpmFrames,
+          "PPM adoption rejects queued spectrum from the old capture");
+    rtl::RtlCaptureBackendTestAccess::spectrum(receiver, obsolete, afterPpm.token);
+    check(frames == beforePpmFrames + 1,
+          "PPM adoption accepts the same spectrum payload with the current token");
     check(nextFrame(), "PPM change emits complete observation");
     const double weak = 20 * std::log10(std::sqrt(2.) * (130 - 127.5) / 127.5
                                        * .35875 * (65535. / 65536));
@@ -332,7 +366,7 @@ int main(int argc, char** argv)
     const int beforeFilter = changes;
     backend.setSliceFilter(0, -8000, 8000);
     check(changes == beforeFilter && !rtl::RtlCaptureBackendTestAccess::busy(backend),
-          "unimplemented WFM filter request neither publishes nor queues work");
+          "invalid narrow WFM filter request neither publishes nor queues work");
     const int beforeMode = changes;
     backend.setSliceMode(0, QStringLiteral("FM"));
     check(waitFor([&] { state->block(); QThread::msleep(5); return changes > beforeMode; }), "mode adopted at callback boundary");

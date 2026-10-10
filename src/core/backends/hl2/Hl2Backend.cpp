@@ -1,4 +1,6 @@
 #include "core/backends/hl2/Hl2Backend.h"
+#include "core/AppActivity.h"
+#include "core/backends/WdspNoiseBlanker.h"
 #include "core/backends/hl2/Hl2Bands.h"
 #include "core/backends/hl2/Hl2ModeVocabulary.h"
 
@@ -322,7 +324,7 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
     m_ioThread->setObjectName(QStringLiteral("hl2-io"));
     m_metis->moveToThread(m_ioThread);
     m_txDsp->moveToThread(m_ioThread);
-    m_ioThread->start();
+    AetherSDR::startStreamThread(m_ioThread);   // High QoS; see AppActivity.h
 
     // The rate-change build thread — see the member declarations. Started here
     // and never restarted: it is idle except during a pan-bandwidth crossing,
@@ -332,7 +334,10 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
     m_dspBuildThread->setObjectName(QStringLiteral("hl2-dsp-build"));
     m_dspBuildContext = new QObject();   // nullptr parent: moveToThread requires it
     m_dspBuildContext->moveToThread(m_dspBuildThread);
-    m_dspBuildThread->start();
+    // Same High QoS as the io thread: this one holds the FFTW planner mutex the
+    // io thread takes in WdspChannel::setShift, so lower would be a priority
+    // inversion. Idle except during a rebuild.
+    AetherSDR::startStreamThread(m_dspBuildThread);
 
     // THE UNKEY HOLD. Single-shot and parented here, so it lives and fires on
     // this object's thread — the same thread applyKeying() runs on, which is
@@ -1088,15 +1093,16 @@ void Hl2Backend::startReceiverDspBuild(int uiNumber)
     QMetaObject::invokeMethod(dsp, [this, metis, dsp, config, uiNumber, generation] {
         // Mirror control changes during the build; installation replays them.
         dsp->beginRebuild(config);
-        const bool nbOn = dsp->noiseBlankerEnabled();
+        const WdspChannel::NoiseBlanker nbKind = dsp->noiseBlankerKind();
         const int nbLevel = dsp->noiseBlankerLevel();
+        const WdspChannel::NoiseBlankerFill nbFill = dsp->noiseBlankerFill();
         QPointer<Hl2RxDsp> guard(dsp);
 
         QMetaObject::invokeMethod(m_dspBuildContext, [this, metis, guard, config,
                                                       uiNumber, generation,
-                                                      nbOn, nbLevel] {
+                                                      nbKind, nbLevel, nbFill] {
             Hl2RxDsp::RebuildResult built =
-                Hl2RxDsp::buildChannel(config, nbOn, nbLevel);
+                Hl2RxDsp::buildChannel(config, nbKind, nbLevel, nbFill);
 
             QMetaObject::invokeMethod(metis, [this, guard, config, uiNumber,
                                               generation,
@@ -1731,6 +1737,7 @@ AetherSDR::WidebandConverterView widebandConverterViewRecord() noexcept
 RadioCapabilities Hl2Backend::capabilities() const
 {
     RadioCapabilities c;
+    c.broadcastFmReceive = std::nullopt;
     c.canReboot = false;
     c.hasRemoteOnControl = false;
     c.canUpgradeFirmware = false;
@@ -2252,6 +2259,8 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
     MetisClient::Params mp;
     mp.host = host;
     mp.port = request.port ? request.port : kMetisPort;
+    if (request.localBindAddress.protocol() == QAbstractSocket::IPv4Protocol)
+        mp.localAddress = request.localBindAddress;
     mp.sampleRate = sampleRateEnum(m_sampleRateHz);
     // The connect handshake IS the first commit: this rate goes into
     // MetisClient's initial command bank, so from here the radio is running at
@@ -2271,11 +2280,23 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
     mp.numRx = rateLimited;
     m_boardMaxRx = request.params.value(QStringLiteral("boardMaxRx")).toInt();
     if (m_boardMaxRx <= 0) {
-        // Connecting by IP skips the broadcast sweep, so ask with a unicast
-        // discovery for byte 0x13. A count the gateware does not have makes it
-        // stream all-zero IQ slots. Short timeout; no answer keeps the default.
-        QMetaObject::invokeMethod(m_metis, [this, &host] {
+        // ASK THE RADIO. Connecting by IP skips the broadcast sweep, so nothing
+        // has read discovery byte 0x13 and the board's receiver count is
+        // unknown — which left the ceiling at whatever the register can encode
+        // (7) on a board that has 4. Sending a count the gateware does not have
+        // makes it stream slots with no DDC behind them: correctly framed,
+        // correctly paced, all-zero IQ on the receivers that do not exist.
+        //
+        // A UNICAST discovery to the host we are about to connect to answers it
+        // in one round trip, using the same parser the broadcast sweep uses.
+        // Short timeout: this is on the connect path, and a board that does not
+        // answer just leaves us with the conservative default below.
+        QMetaObject::invokeMethod(m_metis, [this, &host, &mp] {
             for (const auto& d : m_metis->discover(400, host, kMetisPort)) {
+                // Keep the interface even when an older/short discovery reply
+                // omits byte 20; it is still the route that reached the radio.
+                if (mp.localAddress.isNull())
+                    mp.localAddress = d.localAddress;
                 if (d.reply.numRx > 0) {
                     m_boardMaxRx = d.reply.numRx;
                     break;
@@ -3094,7 +3115,8 @@ void Hl2Backend::setSliceAgc(int sliceId, const QString& mode, int thresholdDb)
     notifyOperatingStateChanged();
 }
 
-void Hl2Backend::setSliceNoiseBlanker(int sliceId, bool on, int level)
+void Hl2Backend::setSliceNoiseBlanker(int sliceId, AetherSDR::NoiseBlankerKind kind,
+                                      int level, AetherSDR::NoiseBlankerFill fill)
 {
     const int ddc = ddcForSlice(sliceId);
     Receiver* r = rx(ddc);
@@ -3106,11 +3128,10 @@ void Hl2Backend::setSliceNoiseBlanker(int sliceId, bool on, int level)
     // bands can legitimately disagree. The slice model already holds it
     // per-slice, so honouring that is also what stops the second receiver's
     // toggle from moving the first one's.
-    r->nbOn = on;
+    r->nbKind = kind;
     r->nbLevel = qBound(0, level, 100);
-    if (r->dsp)
-        QMetaObject::invokeMethod(r->dsp, "setNoiseBlanker", Qt::QueuedConnection,
-            Q_ARG(bool, r->nbOn), Q_ARG(int, r->nbLevel));
+    r->nbFill = fill;
+    pushNoiseBlanker(*r);
 }
 
 ReceiveDispatch Hl2Backend::requestSliceDsp(int sliceId, const SliceDspRequest& request)
@@ -3120,7 +3141,7 @@ ReceiveDispatch Hl2Backend::requestSliceDsp(int sliceId, const SliceDspRequest& 
     }
     switch (request.feature) {
     case SliceDspRequest::Feature::Nb:
-        setSliceNoiseBlanker(sliceId, request.enabled, request.level);
+        setSliceNoiseBlanker(sliceId, request.requestedBlanker(), request.level, request.fill);
         break;
     case SliceDspRequest::Feature::Apf:
         setSliceApf(sliceId, request.enabled, request.level);
@@ -3170,12 +3191,23 @@ void Hl2Backend::setSliceApf(int sliceId, bool on, int level)
 
 void Hl2Backend::requestSliceAgc(int sliceId, const SliceAgcRequest& request)
 {
+    const int ddc = ddcForSlice(sliceId);
+    Receiver* r = rx(ddc);
     if (request.field != SliceAgcRequest::Field::OffLevel) {
+        // A recalled AGC mode is a stored value, not the operator's choice, so
+        // DIGU/DIGL keep the AGC they run (#6142). The slice optimistically
+        // shows the stored mode; the echo puts back what the receiver holds.
+        // The echo must stay synchronous: the threshold recall that follows
+        // reads the slice's mode, and a stale one would clear the held AGC.
+        if (r && request.field == SliceAgcRequest::Field::Mode
+            && request.origin == SliceAgcRequest::Origin::Recall
+            && isDigitalDataMode(r->mode)) {
+            emitSliceState(ddc);
+            return;
+        }
         IRadioBackend::requestSliceAgc(sliceId, request);
         return;
     }
-    const int ddc = ddcForSlice(sliceId);
-    Receiver* r = rx(ddc);
     if (!r)
         return;
     // Pushed in every AGC mode: WDSP applies the fixed gain only in its mode 0
@@ -3371,7 +3403,9 @@ void Hl2Backend::pushNoiseBlanker(const Receiver& r)
     // they turned it off during a previous connect is not necessarily, and an
     // unconditional push is the only version with no such case to reason about.
     QMetaObject::invokeMethod(r.dsp, "setNoiseBlanker", Qt::QueuedConnection,
-        Q_ARG(bool, r.nbOn), Q_ARG(int, r.nbLevel));
+        Q_ARG(WdspChannel::NoiseBlanker, AetherSDR::toWdsp(r.nbKind)),
+        Q_ARG(int, r.nbLevel),
+        Q_ARG(WdspChannel::NoiseBlankerFill, AetherSDR::toWdsp(r.nbFill)));
 }
 
 void Hl2Backend::pushApf(const Receiver& r)
@@ -3806,12 +3840,13 @@ void Hl2Backend::applyPanBandwidth(double hz)
         // I/O thread, turn 1. beginRebuild() first, so control calls arriving
         // during the build update the chain's mirrors instead of blocking on
         // WDSP's setup mutex; installRebuiltChannel() re-applies them at the
-        // swap. The NB pair is snapshotted because the channel opens with it
+        // swap. The NB triple is snapshotted because the channel opens with it
         // and it is not part of Config.
         struct BuildInput {
             Hl2RxDsp::Config cfg;
-            bool nbOn = false;
+            WdspChannel::NoiseBlanker nbKind = WdspChannel::NoiseBlanker::Off;
             int nbLevel = 50;
+            WdspChannel::NoiseBlankerFill nbFill = WdspChannel::NoiseBlankerFill::Zero;
         };
         std::vector<BuildInput> inputs;
         inputs.reserve(steps.size());
@@ -3820,8 +3855,9 @@ void Hl2Backend::applyPanBandwidth(double hz)
             in.cfg = st.next;
             if (st.dsp) {
                 st.dsp->beginRebuild(st.next);
-                in.nbOn = st.dsp->noiseBlankerEnabled();
+                in.nbKind = st.dsp->noiseBlankerKind();
                 in.nbLevel = st.dsp->noiseBlankerLevel();
+                in.nbFill = st.dsp->noiseBlankerFill();
             }
             inputs.push_back(in);
         }
@@ -3845,7 +3881,8 @@ void Hl2Backend::applyPanBandwidth(double hz)
             std::string err;
             for (std::size_t n = 0; n < inputs.size(); ++n) {
                 Hl2RxDsp::RebuildResult r = Hl2RxDsp::buildChannel(
-                    inputs[n].cfg, inputs[n].nbOn, inputs[n].nbLevel);
+                    inputs[n].cfg, inputs[n].nbKind, inputs[n].nbLevel,
+                    inputs[n].nbFill);
                 if (!r.channel) {
                     ok = false;
                     failedAt = n;
@@ -5076,7 +5113,7 @@ void Hl2Backend::setTune(bool on, int tunePowerPercent, const AetherSDR::TxCoord
             applyDrive(tunePowerPercent);
             m_rfDriveOwed = true;
         }
-        setTxTestTone(0.0, kTuneCarrierAmplitude, operation);
+        setTxTestTone(0.0, kHl2CarrierAmplitude, operation);
         m_toneFromTune = true;   // set AFTER: setTxTestTone clears the flag
         setKeying(true, operation, completion);
     } else {
@@ -5717,19 +5754,32 @@ void Hl2Backend::invokeExtension(const QString& ns, const QString& verb, quint64
                     const Receiver& r = m_rx[i];
                     const auto* ids = m_ids.byDdc(static_cast<int>(i));
                     // `on`/`level` are what the DSP has applied (Hl2RxDsp's
-                    // atomics), not the request in r.nbOn; requestedOn/
+                    // atomics), not the request in r.nbKind; requestedOn/
                     // requestedLevel are reported alongside so a mismatch shows.
                     // No chain means `on` is false.
-                    const bool appliedOn = r.dsp && r.dsp->appliedNoiseBlankerEnabled();
+                    const WdspChannel::NoiseBlanker appliedKind =
+                        r.dsp ? r.dsp->appliedNoiseBlankerKind()
+                              : WdspChannel::NoiseBlanker::Off;
+                    const bool appliedOn = appliedKind != WdspChannel::NoiseBlanker::Off;
                     const int appliedLevel =
                         r.dsp ? r.dsp->appliedNoiseBlankerLevel() : 0;
+                    const WdspChannel::NoiseBlankerFill appliedFill =
+                        r.dsp ? r.dsp->appliedNoiseBlankerFill()
+                              : WdspChannel::NoiseBlankerFill::Zero;
                     rxList.append(QVariantMap{
                         {QStringLiteral("ddc"), static_cast<int>(i)},
                         {QStringLiteral("panId"), ids ? ids->panId : QString()},
+                        // `on` first and unchanged: it is what existing scripts
+                        // read. `kind` is the same fact with NB2 in it.
                         {QStringLiteral("on"), appliedOn},
+                        {QStringLiteral("kind"), static_cast<int>(appliedKind)},
                         {QStringLiteral("level"), appliedLevel},
-                        {QStringLiteral("requestedOn"), r.nbOn},
+                        {QStringLiteral("fill"), static_cast<int>(appliedFill)},
+                        {QStringLiteral("requestedOn"),
+                         r.nbKind != AetherSDR::NoiseBlankerKind::Off},
+                        {QStringLiteral("requestedKind"), static_cast<int>(r.nbKind)},
                         {QStringLiteral("requestedLevel"), r.nbLevel},
+                        {QStringLiteral("requestedFill"), static_cast<int>(r.nbFill)},
                         {QStringLiteral("hasChain"), r.dsp != nullptr},
                         // The value the APPLIED level became inside WDSP. Now a
                         // real assertion rather than f(x) == f(x): it is

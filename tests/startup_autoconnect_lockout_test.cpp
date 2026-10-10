@@ -16,6 +16,7 @@
 #include "core/AppSettings.h"
 #include "core/backends/icom/IcomSettings.h"
 #include "core/backends/icom/IcomCredentials.h"
+#include "core/backends/flex/SmartLinkClient.h"
 #include "gui/ConnectionPanel.h"
 
 #include <QAbstractButton>
@@ -43,6 +44,22 @@ struct ConnectionPanelStartupTestAccess {
         info.family = QStringLiteral("hl2");
         info.serial = QStringLiteral("injected-probe-result");
         panel.finishManualProbe(info, routedOnly);
+    }
+};
+
+// A client that already holds a SmartLink session, as MainWindow hands one over
+// after a remembered sign-in. Only the two fields are set: nothing logs in or
+// opens the TLS socket.
+struct SmartLinkClientTestAccess {
+    static void signIn(SmartLinkClient& client, const QString& callsign) {
+        client.m_authenticated = true;
+        client.m_userCallsign = callsign;
+    }
+};
+
+struct ConnectionPanelSmartLinkTestAccess {
+    static QString accountLine(const ConnectionPanel& panel) {
+        return panel.m_slUserLabel->text();
     }
 };
 
@@ -254,6 +271,23 @@ void checkIcomDispatchDoesNotLeakIntoLaterFailure()
     report("later Icom credential failure does not inherit startup", failures.isEmpty());
 }
 
+// Attaching an already-signed-in client must replace the sign-in hint with the
+// account. The panel tells a hint from an account line by its own record of
+// the tone, never by the label's stylesheet, which holds resolved theme colors.
+void checkSignedInClientReplacesHint()
+{
+    ConnectionPanel panel;
+    const QString before = ConnectionPanelSmartLinkTestAccess::accountLine(panel);
+    SmartLinkClient client;
+    SmartLinkClientTestAccess::signIn(client, QStringLiteral("TEST"));
+    panel.setSmartLinkClient(&client);
+    const QString after = ConnectionPanelSmartLinkTestAccess::accountLine(panel);
+    report("signed-in SmartLink client replaces the sign-in hint",
+           after != before && after.contains(QStringLiteral("TEST")),
+           after.toStdString());
+    panel.setSmartLinkClient(nullptr);
+}
+
 }  // namespace
 
 int main(int argc, char** argv)
@@ -279,6 +313,7 @@ int main(int argc, char** argv)
     checkInteractiveBailStaysSilent();
     checkLatchDoesNotLeakIntoInteractiveProbe();
     checkIcomDispatchDoesNotLeakIntoLaterFailure();
+    checkSignedInClientReplacesHint();
 
     std::printf("\n%s\n", g_failed == 0 ? "All checks passed." : "FAILURES PRESENT.");
     return g_failed == 0 ? 0 : 1;

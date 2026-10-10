@@ -2,6 +2,7 @@
 
 #include "core/AppSettings.h"
 
+#include <QByteArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QString>
@@ -28,6 +29,25 @@ public:
     }
     static bool rxEnabled() { return readObj().value("rx").toString("True") == "True"; }
     static bool txEnabled() { return readObj().value("tx").toString("False") == "True"; }
+    static bool liveContactsEnabled()
+    {
+        return readObj().value("liveContacts").toString("False") == "True";
+    }
+    static QByteArray liveContactsGeometry()
+    {
+        return QByteArray::fromBase64(
+            readObj().value("liveContactsGeometry").toString().toLatin1());
+    }
+    static void setLiveContactsEnabled(bool on, const QByteArray& geometry = {})
+    {
+        QJsonObject o = readObj();
+        o["liveContacts"] = on ? QStringLiteral("True") : QStringLiteral("False");
+        if (!geometry.isEmpty()) {
+            o["liveContactsGeometry"] = QString::fromLatin1(geometry.toBase64());
+        }
+        ensureToggles(o);
+        write(o);
+    }
 
     static void setRxEnabled(bool on)
     {

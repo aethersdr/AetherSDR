@@ -36,6 +36,8 @@ protected:
     void closeEvent(QCloseEvent* ev) override;
 
 private:
+    void refreshWindowTitle();
+
     PanadapterApplet* m_applet{nullptr};
     QVBoxLayout* m_layout{nullptr};
     bool m_shuttingDown{false};

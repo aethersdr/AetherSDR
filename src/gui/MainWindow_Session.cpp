@@ -53,6 +53,7 @@
 #include "TciApplet.h"
 #include "PanadapterStack.h"
 #include "PanSpanControlGate.h"
+#include "PanSliceTitle.h"
 #include "workspace/WorkspaceController.h"
 #include "gui/MiniPanApplet.h"
 #include "gui/MiniPanScope.h"
@@ -1798,7 +1799,8 @@ void MainWindow::wirePanLifecycle()
     connect(&m_radioModel, &RadioModel::panFeedSpectrumReady,
             this, [this, profileLoadFrameReady, capturePanFrame](quint32 streamId,
                                                 const QVector<float>& bins,
-                                                qint64 emittedNs) {
+                                                qint64 emittedNs,
+                                                const SpectrumDecodeScale& decodeScale) {
         if (m_shuttingDown || !m_panStack) {
             return;
         }
@@ -1811,7 +1813,7 @@ void MainWindow::wirePanLifecycle()
         deferReceivePresentation(
             ReceivePresentationSource::Flex,
             ReceivePresentationSurface::Spectrum,
-            [this, profileLoadFrameReady, streamId, bins, frameGuard]() {
+            [this, profileLoadFrameReady, streamId, bins, decodeScale, frameGuard]() {
                 if (m_shuttingDown || !m_panStack || !frameGuard.isCurrent()) {
                     return;
                 }
@@ -1822,7 +1824,7 @@ void MainWindow::wirePanLifecycle()
                                                        bins.size())) {
                                 return;
                             }
-                            sw->updateSpectrum(bins);
+                            sw->updateSpectrum(bins, decodeScale);
                             finishPanadapterConnectionAnimation();
                         }
                         return;
@@ -1836,7 +1838,7 @@ void MainWindow::wirePanLifecycle()
                 if (m_radioModel.panadapters().isEmpty()
                     && !profileLoadRadioStateWritesHeld()) {
                     if (auto* sw = spectrum()) {
-                        sw->updateSpectrum(bins);
+                        sw->updateSpectrum(bins, decodeScale);
                         finishPanadapterConnectionAnimation();
                     }
                 } else {
@@ -2167,10 +2169,10 @@ void MainWindow::wirePanLifecycle()
             applet = m_panStack->panadapter(pan->panId());
         }
         // Reuse the "default" placeholder for the first real pan
-        else if (m_panStack->panadapter("default")) {
-            applet = m_panStack->panadapter("default");
+        else if (m_panStack->panadapter(PanSliceTitle::kPlaceholderPanId)) {
+            applet = m_panStack->panadapter(PanSliceTitle::kPlaceholderPanId);
             applet->setPanId(pan->panId());
-            m_panStack->rekey("default", pan->panId());
+            m_panStack->rekey(PanSliceTitle::kPlaceholderPanId, pan->panId());
         } else {
             applet = m_panStack->addPanadapter(pan->panId());
         }
@@ -2376,6 +2378,7 @@ void MainWindow::wirePanLifecycle()
         markProfileLoadPanDimensionsReady(panId, yPixels);
         if (auto* sw = m_panStack->spectrum(panId)) {
             sw->prepareForFftPixelScaleChange();
+            sw->setEncoderYPixels(yPixels);
         }
     });
 
@@ -2663,6 +2666,8 @@ void MainWindow::wireRxDemodAudioSinks()
             &m_cwDecoder, &CwRxModel::reset);
     connect(m_cwAudio.get(), &DecoderAudioModel::sourceReset,
             &m_cwCallsignSpotter, &CwCallsignSpotter::clear);
+    connect(m_cwAudio.get(), &DecoderAudioModel::sourceReset,
+            this, &MainWindow::clearLiveCwContact);
 
     // RFC #5468 A5: selected receiver/DAX tap, before speaker gain/mute/mix.
     m_rttyAudio = std::make_unique<DecoderAudioModel>(

@@ -248,17 +248,76 @@ Device behavior:
   uses. Commands the CTR2 sends may be one per message or batched; either
   works.
 - **UDP:** send each datagram for the radio as a DATAGRAM with the radio's
-  UDP port, exactly as the Wi-Fi path would send it. Register for the
-  radio's UDP by sending a datagram to radio port 4992 this way (the radio
-  learns the return address from it) rather than with the TCP
-  `client udpport` command: the host cannot see that command, and the
-  port it names would be on the PC, possibly AetherSDR's own. Datagrams
-  from the radio arrive as DATAGRAM messages, one per datagram.
+  UDP port, exactly as the Wi-Fi path would send it. Datagrams from the
+  radio arrive as DATAGRAM messages, one per datagram. On a LAN the radio
+  sends a client's UDP to the TCP peer's address, which here is the host,
+  at the port the client names with `client udpport <port>`. It does not
+  learn an endpoint from a registration datagram: `client udp_register`
+  sent to port 4992 got no UDP back on a FLEX-8600 (firmware 4.2.18). The
+  port to name is the host's own UDP socket for the link, which a device
+  learns by negotiating the RELAY_UDP_PORT extension (below). Then send
+  `client udpport <port>`, and a one-byte datagram to radio port 4992,
+  which covers firmware that rejects `udpport`, as AetherSDR's own LAN
+  connection does. Without that extension a device cannot register for UDP
+  over USB.
 - On CLOSED, behave as when the Wi-Fi socket drops, then wait: the host
   calls again with HELLO.
 - On a framing error in what it receives, or to force a restart, send HELLO
   and resynchronize as above; the host answers with a fresh radio connection
   and READY (or CLOSED).
+
+### Extensions (negotiated per device)
+
+Version 0 above is complete on its own, and a CTR2 never needs anything in
+this section. Controllers that want more than the relayed radio stream can
+offer link extensions. AetherSDR uses them only with a device that offers
+them, so new extensions never need a change to the CTR2 or to version 0.
+
+**Discovery.** Right after opening the device, before the first report is
+read, the host sends GET_REPORT for HID Feature report `0x02`. The device
+answers with 8 bytes after the report ID:
+
+```text
+['C'] ['X'] [extension version 0x01] [0x00] [capabilities, 32 bits MSB first]
+```
+
+The report is exactly 8 bytes after the report ID (9 with it). Capability
+bit *n* stands for extension message type `0x40 + n`. A device
+without this Feature report (every CTR2) fails the request. So does a reply
+that is not exactly this shape. Either way the device offers nothing and the
+link is plain version 0.
+
+**Acceptance.** When the offer shares bits with what the host supports, the
+host sends SET_REPORT for Feature report `0x02` in the same layout. It
+carries only the shared bits: the extensions the host will use. Those bits,
+and no others, are allowed on the link in either direction. They stay in
+force until the device leaves the bus (unplugged, reset or re-enumerated),
+across any number of HELLO/READY link restarts. If the SET fails, the host
+uses no extensions.
+
+**Messages.** Extension types `0x40`–`0x5F` use the version 0 header and
+data reports. Each type has its own maximum length (the table below); a
+longer header is a framing error, and so is any type with no defined
+length, even when its bit was negotiated. They are sequenced like DATA and
+DATAGRAM and share their counter: one counter, one receiver state machine. A receiver treats a type that was not accepted exactly
+like any other unknown type: a framing error. The host sends extension
+messages only while the link is relaying (after its READY). It drops them
+rather than queue them when about 130 queued reports (~130 ms; one meter
+datagram plus headroom) are already waiting, so they never delay the radio
+stream. Their reports carry no TCP cost, so the backlog statistic still
+counts radio bytes only. Each AUDIO_SPECTRUM frame of 32 bars is 7 reports
+(header + 6 data), so 20 frames a second use about 14% of the link.
+
+| Type | Bit | Direction | Payload (max length) |
+| --- | --- | --- | --- |
+| `0x40` AUDIO_SPECTRUM | 0 | host → device | (69 bytes) `[bars N, 1..64][low Hz hi][low Hz lo][span Hz hi][span Hz lo][N levels]`. Receiving: what the operator hears (the Client EQ RX tap: after the radio's DSP, client NR and the RX chain up to and including the EQ; not stages after the EQ, output conversion or volume) over the active slice's passband width. Transmitting: the transmit audio (the TX EQ tap) over the TX filter width. The span is that width rounded up to a clean step (500 Hz–20 kHz, capped at the audio's Nyquist frequency: 12 kHz for 24 kHz audio). With low > 0 the bars are log-spaced from low to span Hz, bar *i* covering low·(span/low)^(i/N) to low·(span/low)^((i+1)/N); AetherSDR sends low = span/60 within 20–100 Hz. With low = 0 they split 0..span evenly. Each level is 0..255, linear in dB from −90 dB (0) to 0 dBFS (255). About 20 a second. |
+| `0x41` RELAY_UDP_PORT | 1 | host → device | (2 bytes) `[port hi][port lo]`: the host's UDP socket for this link, sent once right after the host's READY. The device registers for UDP with `client udpport <port>` (and a one-byte datagram to radio port 4992). |
+
+The reference implementation in `tools/ctr2-firmware-reference` covers the
+Feature report layout (`ctr2_caps_encode` / `ctr2_caps_decode`), sending
+(`ctr2_tx_send_extension`) and the accepted set
+(`ctr2_rx_set_extensions`). AetherSDR's tests cross-check it against the
+application in both directions.
 
 ### Test vectors
 
@@ -327,6 +386,8 @@ USB a complete replacement for Wi-Fi.
 | HID device access on its own I/O thread (hidapi) | `src/core/Ctr2HidPort.{h,cpp}` |
 | Link state machine, radio TCP connection and per-link UDP socket | `src/core/Ctr2UsbRelay.{h,cpp}` |
 | Applet: Wi-Fi or USB, device list; radio follows AetherSDR's connection | `src/models/Ctr2ProxyModel`, `src/gui/Ctr2ProxyApplet` |
+| Extension negotiation (Feature report `0x02`), on the HID I/O thread | `src/core/Ctr2HidThreadPort.cpp`, `src/core/Ctr2HidapiPort.cpp` |
+| AUDIO_SPECTRUM producer: the Client EQ RX tap (post-EQ), or the TX EQ tap while transmitting, its own 2048-point analyzer (reset on each RX/TX switch), 32 bars at 20 Hz, floor-level bars while the tap in use is not being written, only while a negotiating device is relaying | `src/gui/Ctr2AudioSpectrumFeeder` |
 
 HID I/O runs on one dedicated worker thread because hidapi reads and writes
 block; a stalled controller can then never freeze the UI or other
@@ -368,10 +429,13 @@ default for any ESP32-S3 and only the product string tells them apart:
 | `303A:1001` (Espressif) | `ESP32S3_DEV` | CTR2-Max, and the CTR2-Nano in development |
 | `303A:1001` (Espressif) | `M5STACK_DIAL` | CTR2 units based on the M5Stack M5Dial |
 | `2886:0056` (Seeed) | `XIAO_ESP32S3` | CTR2-MIDI (Seeed XIAO) |
+| `303A:1001` (Espressif) | `AETHER_KNOB` | AetherKnob (Elecrow CrowPanel 2.1" rotary display) |
 
-Still open: UDP registration through a DATAGRAM to port 4992 rather than
-`client udpport`, and, for CW testing, what the CTR2 does if CLOSED arrives
-while it is keying.
+UDP registration is settled on hardware: the radio ignores a registration
+datagram on a LAN, so a device registers with `client udpport` naming the
+host's socket, learned through the RELAY_UDP_PORT extension (see "UDP" under
+Device behavior). Still open for CW testing: what the CTR2 does if CLOSED
+arrives while it is keying.
 
 ## Next steps and acceptance
 

@@ -12,6 +12,7 @@
 //     .arg() leaves a literal "%17" in the middle of a declaration, which Qt
 //     drops along with the rest of that rule.
 
+#include "gui/CanonIndicators.h"
 #include "gui/ModemChrome.h"
 #include "core/ThemeManager.h"
 
@@ -36,6 +37,7 @@ private slots:
     void compactIsSmallerButNotADifferentPalette();
     void everyThemeTokenInTheSheetResolves();
     void checkedLosesToDisabled();
+    void canonLookPaintsItsIndicators();
 };
 
 namespace {
@@ -103,14 +105,32 @@ void ModemChromeTest::tabsAreSelectedByPropertyNotObjectName()
 
 void ModemChromeTest::everyPlaceholderIsSubstituted()
 {
-    static const QRegularExpression leftover(QStringLiteral("%\\d"));
+    // %N arguments, and the @name@ colour slots each look fills.
+    static const QRegularExpression leftover(QStringLiteral("%\\d|@[A-Za-z]+@"));
+    for (const auto look : {ModemChrome::Look::Modem, ModemChrome::Look::Canon})
     for (const auto scale : {ModemChrome::Scale::Dialog, ModemChrome::Scale::Compact}) {
-        const QString sheet = ModemChrome::styleSheet(scale);
+        const QString sheet = ModemChrome::styleSheet(scale, look);
         const auto m = leftover.match(sheet);
         QVERIFY2(!m.hasMatch(),
                  qPrintable(QStringLiteral("unsubstituted placeholder %1 near: %2")
                                 .arg(m.captured(0))
                                 .arg(sheet.mid(qMax(0, m.capturedStart() - 60), 120))));
+    }
+}
+
+// The canon look carries the painted canon check boxes and radio buttons (a
+// tick, a dot); the modem look, which the docked applets wear, does not.
+void ModemChromeTest::canonLookPaintsItsIndicators()
+{
+    for (const auto scale : {ModemChrome::Scale::Dialog, ModemChrome::Scale::Compact}) {
+        const QString canon = ModemChrome::styleSheet(scale, ModemChrome::Look::Canon);
+        QVERIFY(canon.contains(QStringLiteral("canon-indicators/check_on_")));
+        QVERIFY(canon.contains(QStringLiteral("canon-indicators/radio_on_")));
+        QVERIFY(!ModemChrome::styleSheet(scale).contains(QStringLiteral("canon-indicators/")));
+        // Only the painted indicators style the indicators: none of the
+        // sheet's own rules survive to draw a border around the image.
+        QCOMPARE(canon.count(QStringLiteral("::indicator")),
+                 canonIndicatorRules().count(QStringLiteral("::indicator")));
     }
 }
 

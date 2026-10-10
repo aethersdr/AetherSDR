@@ -251,7 +251,7 @@ UlanziDialMapperDialog::UlanziDialMapperDialog(UlanziDialBackend* manager,
         // thread (Linux, Windows), so its state is only safe to read there.
         refreshStatus();
     } else {
-        m_statusLabel->setText(tr("Manager unavailable (Linux build only)"));
+        m_statusLabel->setText(tr("Ulanzi Dial manager unavailable"));
     }
 }
 

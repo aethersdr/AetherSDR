@@ -424,6 +424,27 @@ CopyAssistController::CopyAssistController(AudioEngine* audio, CopyAssistPanel* 
         }
     });
 
+    // Tap point (before or after client NR + RX effects) — a settings-dialog
+    // checkbox, per the naming agreed in RFC #4861. Seeded silently; applied
+    // live to the current tap, and buildEngine() applies the stored value to
+    // every tap it creates.
+    // An absent value reads as PostDsp, so a fresh profile transcribes after NR
+    // exactly as every earlier build did; every toggle is written (and saved)
+    // immediately, so the choice survives restart.
+    m_settings->setRawAudio(
+        asrTapPointFromSetting(
+            CopyAssistSettings::value(QStringLiteral("AsrTapPoint"),
+                                      asrTapPointToSetting(AsrTapPoint::PostDsp))
+                .toString())
+        == AsrTapPoint::PreDsp);
+    connect(m_settings, &CopyAssistSettingsDialog::rawAudioToggled, this, [this](bool raw) {
+        const AsrTapPoint point = raw ? AsrTapPoint::PreDsp : AsrTapPoint::PostDsp;
+        CopyAssistSettings::setValue(QStringLiteral("AsrTapPoint"), asrTapPointToSetting(point));
+        if (m_tap) {
+            m_tap->setTapPoint(point);
+        }
+    });
+
     // Model download → engine load (the handlers read m_asr at call time, so they
     // survive an engine rebuild on backend switch).
     connect(m_models, &AsrModelManager::progress, this, [this](qint64 got, qint64 total) {
@@ -466,7 +487,9 @@ CopyAssistController::CopyAssistController(AudioEngine* audio, CopyAssistPanel* 
         saveInt("AsrDecodeBufferMs", ms);
     });
     connect(m_panel, &CopyAssistPanel::sensitivityChanged, this, [this](int pct) {
-        m_asr->setSpeechRms(sensitivityToRms(pct));
+        // The tap scales this for the live tap point (RFC #4861); it is the
+        // operator's unscaled Sensitivity that gets stored and handed over.
+        applySensitivity(pct);
         saveInt("AsrSensitivity", pct);
     });
     connect(m_panel, &CopyAssistPanel::silenceMsChanged, this, [this](int ms) {
@@ -536,6 +559,21 @@ CopyAssistController::~CopyAssistController()
     }
     if (m_markers.discoveryFinished()) {
         clearFaultMarker(kAsrStageDiscovery);
+    }
+}
+
+void CopyAssistController::applySensitivity(int percent)
+{
+    const float rms = sensitivityToRms(percent);
+    if (m_tap) {
+        // The tap rescales for PreDsp and pushes to the engine itself.
+        m_tap->setBaseSpeechRms(rms);
+        return;
+    }
+    // No tap yet (ASR disabled): the engine still wants the operator's value,
+    // and buildEngine() hands it to the tap when one is created.
+    if (m_asr) {
+        m_asr->setSpeechRms(rms);
     }
 }
 
@@ -1020,6 +1058,11 @@ void CopyAssistController::buildEngine()
         break;
     }
     m_tap = new AsrAudioTap(m_audio, m_asr, this);
+    // Before any enable, so the first connection is already the right signal.
+    m_tap->setTapPoint(asrTapPointFromSetting(
+        CopyAssistSettings::value(QStringLiteral("AsrTapPoint"),
+                                  asrTapPointToSetting(AsrTapPoint::PostDsp))
+            .toString()));
 
     connect(m_asr, &AsrEngine::ready, this, [this] {
         loadSettled();
@@ -1093,8 +1136,10 @@ void CopyAssistController::buildEngine()
 void CopyAssistController::applyTuning()
 {
     m_asr->setDecodeBufferMs(CopyAssistSettings::value(QStringLiteral("AsrDecodeBufferMs"), QStringLiteral("20000")).toString().toInt());
-    m_asr->setSpeechRms(sensitivityToRms(
-        CopyAssistSettings::value(QStringLiteral("AsrSensitivity"), QStringLiteral("80")).toString().toInt()));
+    applySensitivity(
+        CopyAssistSettings::value(QStringLiteral("AsrSensitivity"), QStringLiteral("80"))
+            .toString()
+            .toInt());
     m_asr->setSilenceDurationMs(CopyAssistSettings::value(QStringLiteral("AsrSilenceMs"), QStringLiteral("300")).toString().toInt());
     m_asr->setOverlapMs(CopyAssistSettings::value(QStringLiteral("AsrBoundaryOverlapMs"), QStringLiteral("0")).toString().toInt());
 

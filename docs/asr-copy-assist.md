@@ -75,6 +75,38 @@ launch** button appear under **Compute** (see *GPU acceleration*).
     blank line) is written when ASR starts, whenever you retune, and at the top
     of each new day's file — so every block of decoded text is labeled with the
     frequency it came from.
+- **Transcribe from unprocessed audio (bypasses NR and RX effects)** — **off by
+  default**, and a fresh profile transcribes after noise reduction exactly as
+  every earlier build did. Ticked, the recogniser is fed the receive audio from
+  *before* AetherSDR's client-side NR and RX effects chain: NR is tuned for your
+  ears, and its artifacts — musical noise, spectral holes, transient smearing,
+  gain pumping — are out-of-distribution for a speech model trained mostly on
+  unprocessed audio. **What you hear does not change**, and anything the radio
+  itself did to the audio still applies — this bypasses only the processing
+  AetherSDR adds. Measured on an off-air 40 m SSB ragchew against a human
+  reference transcript, word error rate fell from 35.2% (NNR) to 22.7%
+  unprocessed, and the errors it removes are mostly substitutions — wrong words
+  read as fact, where a missing one is visibly missing.
+  - **Sensitivity keeps its meaning across the toggle.** The post-DSP feed
+    carries gain the unprocessed one never sees (RX boost, output trim, the EQ
+    master gain, compressor makeup and tube output gain), so the gate's
+    threshold is rescaled by exactly that much when you tick the box — a saved
+    Sensitivity stays calibrated instead of silently meaning something else.
+  - **On a noisy band, leave Sensitivity high.** The unprocessed feed has
+    little level difference between speech and the noise floor (0.2 dB
+    measured), so the energy gate admits nearly everything wherever the
+    threshold sits — and closing it down removes speech rather than noise.
+    Measured on an off-air 40 m SSB ragchew, the raw feed scored 28.3% WER with
+    the gate wide open and 30.0% at Sensitivity 63. **Silero VAD does not help
+    here** and makes it much worse (87.6% at its default threshold, admitting
+    44 s of speech out of 402): it is a learned detector trained on clean
+    speech, and an HF signal with a high noise floor is outside what it expects.
+    The same model handles clean speech correctly, so this is a property of the
+    signal, not a defect.
+  - Switching while enabled **starts transcription over** — the partial
+    utterance, the carried context, the speaker clusters and any audio already
+    queued for decoding are dropped, rather than splicing one over across two
+    chains with different level and latency.
 - **Use Silero VAD (ONNX)** — replaces the built-in energy voice-activity
   detector with the ~2 MB [Silero VAD](https://huggingface.co/onnx-community/silero-vad)
   neural model, which is far more robust in HF noise (it segments *actual speech*
@@ -246,7 +278,7 @@ whisper) — **not** in `libaethercore`, which stays whisper-free (verified: 0
 whisper symbols) so a thin UI / headless engine never links it.
 
 ```
-AudioEngine (aethercore, 24 kHz post-NR RX)
+AudioEngine (aethercore, 24 kHz post-NR RX, or pre-NR when opted in)
    └─ AsrAudioTap (gui)  ── mono → ──▶ AsrEngine (aetherasr)
                                           ├─ worker thread: resample 24k→16k (r8brain)
                                           ├─ AsrSegmenter (energy VAD → utterances)

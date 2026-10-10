@@ -20,6 +20,44 @@ bool nearlyEqual(double a, double b, double epsilon = 1.0e-12)
     return std::abs(a - b) <= epsilon;
 }
 
+int testNoiseFloorReacquisition()
+{
+    AetherSDR::NoiseFloorReacquisition gate;
+    gate.arm(750);
+    if (gate.observe(-120, 0) || gate.observe(-120, 100)
+        || gate.observe(-120, 200) || gate.observe(-105, 749)) {
+        return fail("early changing frames must not bypass the settle window");
+    }
+    if (gate.observe(-115, 750) || gate.observe(-114.5f, 790)
+        || gate.observe(-114.8f, 830)) {
+        return fail("a stable floor needs frames and elapsed time");
+    }
+    if (!gate.observe(-115.1f, 870) || gate.active()) {
+        return fail("a settled sequence must finish acquisition exactly once");
+    }
+    gate.arm(1500);
+    gate.arm(1400);
+    if (gate.observe(-100, 1499)) {
+        return fail("a second transition must not shorten the settle window");
+    }
+    if (gate.observe(-100, 1500) || gate.observe(-95, 1560)
+        || gate.observe(-100, 1620) || gate.observe(-100, 1680)) {
+        return fail("a changing sequence must restart the stable candidate");
+    }
+    if (!gate.observe(-100, 1740)) {
+        return fail("stable frames after a transient must still acquire");
+    }
+    gate.arm(2000);
+    if (gate.observe(std::numeric_limits<float>::quiet_NaN(), 2000)) {
+        return fail("nonfinite floors cannot acquire");
+    }
+    gate.cancel();
+    if (gate.active() || !gate.observe(-100, 0)) {
+        return fail("disabled or other-source acquisition must stay ungated");
+    }
+    return 0;
+}
+
 int testDssRowSpanSupported()
 {
     using namespace AetherSDR;
@@ -349,6 +387,15 @@ int testDssZoomFloorSyncGate()
 int testDssFrameFloorClipDetection()
 {
     using namespace AetherSDR;
+    std::array<float, 256> sparsePeak;
+    sparsePeak.fill(-110.0f);
+    sparsePeak[128] = -88.12875f;
+    if (!fftPeakTouchesEncoderCeiling(sparsePeak, -88.0f, 90.0f / 699.0f)
+        || fftPeakTouchesEncoderCeiling(sparsePeak, -40.0f, 138.0f / 699.0f)
+        || fftPeakTouchesEncoderCeiling(sparsePeak, std::nanf(""), 1.0f)
+        || fftPeakTouchesEncoderCeiling(sparsePeak, -88.0f, 0.0f)) {
+        return fail("sparse peaks must recover against encoder ceiling, not visible axis or floor occupancy");
+    }
     if (!dssFrameFloorLooksClipped(1600, 1558, 298)
         || dssFrameFloorLooksClipped(1600, 500, 19)
         || dssFrameFloorLooksClipped(768, 31, 31)
@@ -1147,6 +1194,9 @@ int testDssSupplementalCoverageCalibration()
 
 int main()
 {
+    if (const int result = testNoiseFloorReacquisition(); result != 0) {
+        return result;
+    }
     if (const int result = testDssRowSpanSupported(); result != 0) {
         return result;
     }

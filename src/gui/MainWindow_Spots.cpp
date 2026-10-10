@@ -68,6 +68,7 @@ void MainWindow::wireSpotSubsystem()
     m_rbnClient = new DxClusterClient;
     m_rbnClient->setLogFileName("rbn.log");
     m_rbnClient->setStartupCommandsKey("RbnStartupCommands");
+    m_rbnClient->setGoClusterFeed(GoClusterSettings::kFeedRbn);
     m_wsjtxClient = new WsjtxClient;
     m_spotCollectorClient = new SpotCollectorClient;
     m_potaClient = new PotaClient;

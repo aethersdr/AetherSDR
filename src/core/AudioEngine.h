@@ -37,6 +37,7 @@
 #include "OpusTxPacer.h"
 
 class QMediaDevices;
+class QThread;
 
 #include <functional>
 #include <algorithm>
@@ -165,6 +166,25 @@ public:
     // ClientFinalLimiter::outputTrimDb on the TX side.
     void  setRxOutputTrimDb(float db) { m_rxOutputTrimDb.store(db); }
     float rxOutputTrimDb() const { return m_rxOutputTrimDb.load(); }
+
+    // Total of the RX chain gains that are one number regardless of what the
+    // audio is doing: EQ master gain, compressor makeup and tube output gain.
+    // Counts a stage only when it is BOTH present in the operator's stored
+    // chain order and enabled, mirroring runRxChain()'s own walk, so a stage
+    // the operator removed from the chain contributes nothing. Read from the
+    // RX singletons, which RxClientEffects mirrors into each external source's
+    // own instances (syncParametersFrom), so the answer holds for every source.
+    //
+    // Deliberately EXCLUDES everything signal-dependent — EQ band shaping, the
+    // gate, compressor gain reduction, tube drive, pudu — because no single
+    // number describes those. Also excludes the output pan, which IS a scalar
+    // but applies only to external Kiwi sources and is held per source behind
+    // the DSP lock, so reading it at this function's call rate (per audio
+    // block) would contend with the audio thread; asrSpeechRmsForTapPoint()
+    // records why that is safe to leave. Copy Assist's pre-DSP tap uses this to
+    // keep a saved Sensitivity calibrated across the tap-point toggle
+    // (RFC #4861); see asrSpeechRmsForTapPoint(), which states the boundary.
+    float rxStaticChainMakeupDb() const;
 
     // Client-side RX pan (0=full-left, 50=centre, 100=full-right).
     // Normally the radio handles Flex panning. External single-source audio
@@ -642,6 +662,14 @@ public:
         SpectralNR::WisdomProgressCb progress = nullptr,
         SpectralNR::WisdomCancelCb shouldCancel = nullptr);
 
+    // Shutdown join for the audio thread (#6287). Teardown on that thread
+    // (NNR, NR2, NR4) waits for the FFTW planner locks, and a plan held by
+    // another thread can't be interrupted. So this keeps waiting while either
+    // planner lock is held, logging under `phase` every 5 s, and gives up only
+    // after `idleBudgetMs` of consecutive waiting with both locks free.
+    static bool joinThreadWhilePlannerBusy(QThread& thread, int idleBudgetMs,
+                                           const char* phase);
+
     // Device selection (restarts the stream if currently running)
     void setOutputDevice(const QAudioDevice& dev);
     void setInputDevice(const QAudioDevice& dev);
@@ -800,6 +828,25 @@ signals:
                                               const QByteArray& pcmFloat,
                                               int sampleRate,
                                               int channels);
+    // The same source-tagged, unthrottled stream, taken where each block
+    // ENTERS processMixedRxAudioData(): ahead of the client NR stage
+    // (NR2/RN2/NR4/DFNR/BNR/MNR), the RX effects chain, output resampling,
+    // boost, trim and pan. Whatever the radio or the Kiwi did to the audio is
+    // still in it — this is "before AetherSDR's DSP", not "off the antenna".
+    //
+    // `sampleRate` is the source's PRODUCER rate (the Flex stream's rate,
+    // 24 kHz for a Kiwi), not the output rate the post-DSP signal carries.
+    // The two differ whenever the sink runs at another rate, so a consumer
+    // that switches between them must read it rather than carry it over.
+    //
+    // Copy Assist listens here when the operator asks to transcribe ahead of
+    // noise reduction, whose artifacts can confuse a speech model more than
+    // the noise it removes.
+    void receivePresentationPreDspAudioReady(const QString& source,
+                                             const QString& sourceId,
+                                             const QByteArray& pcmFloat,
+                                             int sampleRate,
+                                             int channels);
     void receivePresentationOutputAudioReady(const QString& source,
                                              const QString& sourceId,
                                              const QByteArray& pcmStereoFloat,
@@ -1041,6 +1088,26 @@ private:
     // RX
     QAudioSink*   m_audioSink{nullptr};
     QPointer<QIODevice> m_audioDevice;   // sink-owned device, may vanish on hot-unplug
+    // A negotiated fallback still satisfies one producer-domain attempt. Keep
+    // this separate from m_rxOutputRate so a 48 -> 24 fallback cannot reopen on
+    // every packet or same-rate epoch. Zero means no managed speaker is open.
+    int m_rxSinkProducerRate{0};
+    quint64 m_rxSinkGeneration{0};
+    struct RxSinkRateRequest {
+        int producerRate{DEFAULT_SAMPLE_RATE};
+        quint64 sinkGeneration{0};
+        std::optional<PcmEpochLease> lease;
+    };
+    std::optional<RxSinkRateRequest> m_pendingRxSinkRate;
+    bool m_rxSinkRateChangeQueued{false};
+    // The existing friend fixture injects just the external device-open
+    // boundary. An empty callback uses the real QAudioSink opener below.
+    std::function<bool(int)> m_rxSinkOpener;
+    bool openRxSink(int producerRate);
+    bool openRxSinkDevice(int producerRate);
+    void closeRxSink();
+    void requestRxSinkRate();
+    void applyPendingRxSinkRate();
 
     // Dedicated low-latency sink for the local CW sidetone — kept separate
     // from the RX sink so the RX path keeps its 100 ms jitter cushion.

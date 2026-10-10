@@ -8,6 +8,7 @@
 #include "Theme.h"
 #include "core/AppSettings.h"
 
+#include <algorithm>
 #include <cmath>
 #include <QPushButton>
 #include <QAccessible>
@@ -338,7 +339,6 @@ void PhoneCwApplet::buildPhonePanel()
     // operators use to verify clean keying envelope shape.
     m_alcGaugePhone = new HGauge(kAlcGaugeFloorDbfs, 0.0f, -3.0f, "ALC", "dBFS",
         {{-20, "-20"}, {-15, "-15"}, {-10, "-10"}, {-5, "-5"}, {0, "0"}});
-    m_alcGaugePhone->setFillFromRight(true);  // empty at -20, fills leftward toward 0
     m_alcGaugePhone->setValueImmediate(kAlcGaugeFloorDbfs);
     m_alcGaugePhone->setAccessibleName("ALC gauge (Phone)");
     m_alcGaugePhone->setAccessibleDescription("Automatic level control — post-software-ALC SSB peak (dBFS)");
@@ -459,10 +459,13 @@ void PhoneCwApplet::buildPhonePanel()
         m_procLowLabel = new QLabel("NOR");
         m_procMidLabel = new QLabel("DX");
         m_procHighLabel = new QLabel("DX+");
+        m_procLowLabel->setObjectName("procTickLow");
+        m_procMidLabel->setObjectName("procTickMid");
+        m_procHighLabel->setObjectName("procTickHigh");
         const QString tickLabelStyle = "QLabel { color: #c8d8e8; font-size: 8px; }";
-        m_procLowLabel->setStyleSheet(tickLabelStyle);
-        m_procMidLabel->setStyleSheet(tickLabelStyle);
-        m_procHighLabel->setStyleSheet(tickLabelStyle);
+        for (QLabel* tick : {m_procLowLabel, m_procMidLabel, m_procHighLabel}) {
+            tick->setStyleSheet(tickLabelStyle);
+        }
         m_procLowLabel->setAlignment(Qt::AlignLeft | Qt::AlignBottom);
         m_procMidLabel->setAlignment(Qt::AlignCenter | Qt::AlignBottom);
         m_procHighLabel->setAlignment(Qt::AlignRight | Qt::AlignBottom);
@@ -484,6 +487,17 @@ void PhoneCwApplet::buildPhonePanel()
 
         row->addWidget(procGroup, 1);
 
+        // The radio's own COMP number, as its front panel shows it. The
+        // presets name themselves in the tick labels, so this stays hidden
+        // until a continuous presentation is selected.
+        m_procValueLabel = new QLabel("0");
+        m_procValueLabel->setStyleSheet(kLabelStyle);
+        m_procValueLabel->setFixedWidth(22);
+        m_procValueLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        m_procValueLabel->setAccessibleName("Compressor level value");
+        m_procValueLabel->setVisible(false);
+        row->addWidget(m_procValueLabel, 0, Qt::AlignBottom);
+
         m_daxBtn = new QPushButton("DAX");
         m_daxBtn->setCheckable(true);
         m_daxBtn->setFixedHeight(22);
@@ -499,6 +513,7 @@ void PhoneCwApplet::buildPhonePanel()
         });
 
         connect(m_procSlider, &QSlider::valueChanged, this, [this](int pos) {
+            m_procValueLabel->setText(QString::number(pos));
             if (!m_updatingFromModel && m_model) {
                 m_model->setSpeechProcessorLevel(pos);
             }
@@ -590,15 +605,21 @@ void PhoneCwApplet::setSpeechProcessorPresentation(const QString& label, int max
         }
     }
     const QSignalBlocker blocker(m_procSlider);
+    // A tenth of the range per page: one COMP step on the MK2's 0..10, ten
+    // percent on the IC-9700's 0..100, one preset on NOR/DX/DX+.
+    const int pageStep = std::max(1, maximum / 10);
     m_procSlider->setRange(0, maximum);
-    m_procSlider->setPageStep(maximum == 2 ? 1 : 10);
-    m_procSlider->setTickInterval(maximum == 2 ? 1 : 10);
+    m_procSlider->setPageStep(pageStep);
+    m_procSlider->setTickInterval(pageStep);
     m_procLowLabel->setText(maximum == 2 ? QStringLiteral("NOR") : QStringLiteral("0"));
-    m_procMidLabel->setText(maximum == 2 ? QStringLiteral("DX") : QStringLiteral("50"));
-    m_procHighLabel->setText(maximum == 2 ? QStringLiteral("DX+") : QStringLiteral("100"));
+    m_procMidLabel->setText(maximum == 2 ? QStringLiteral("DX")
+                                         : QString::number(maximum / 2));
+    m_procHighLabel->setText(maximum == 2 ? QStringLiteral("DX+")
+                                          : QString::number(maximum));
     const QString sliderDescription = maximum == 2
         ? tr("Speech processor level: Normal, DX, or DX+")
-        : tr("Speech compressor level from 0 to 100 percent");
+        : (maximum == 100 ? tr("Speech compressor level from 0 to 100 percent")
+                          : tr("Speech compressor level from 0 to %1").arg(maximum));
     if (m_procSlider->accessibleDescription() != sliderDescription) {
         m_procSlider->setAccessibleDescription(sliderDescription);
         if (QAccessible::isActive()) {
@@ -609,6 +630,9 @@ void PhoneCwApplet::setSpeechProcessorPresentation(const QString& label, int max
     if (m_model) {
         m_procSlider->setValue(m_model->speechProcessorLevel());
     }
+    // The blocker above swallowed valueChanged, so the readout follows here.
+    m_procValueLabel->setText(QString::number(m_procSlider->value()));
+    m_procValueLabel->setVisible(continuousCompressor);
 }
 
 // ── CW sub-panel ─────────────────────────────────────────────────────────────
@@ -653,7 +677,6 @@ void PhoneCwApplet::buildCwPanel()
     // window by default (-20…0 dBFS); capabilities select native percent.
     m_alcGaugeCw = new HGauge(kAlcGaugeFloorDbfs, 0.0f, -3.0f, "ALC", "dBFS",
         {{-20, "-20"}, {-15, "-15"}, {-10, "-10"}, {-5, "-5"}, {0, "0"}});
-    m_alcGaugeCw->setFillFromRight(true);  // empty at -20, fills leftward toward 0
     m_alcGaugeCw->setValueImmediate(kAlcGaugeFloorDbfs);
     m_alcGaugeCw->setAccessibleName("ALC gauge (CW)");
     m_alcGaugeCw->setAccessibleDescription("Automatic level control — post-software-ALC SSB peak (dBFS)");

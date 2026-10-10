@@ -2,6 +2,7 @@
 // output device. No QAudioSink, socket peer, radio connection, or RF is used.
 #include "TestSettingsProfile.h"
 #include "core/AudioEngine.h"
+#include "core/AudioFormatNegotiator.h"
 #include "core/ClientComp.h"
 #include "core/ClientDeEss.h"
 #include "core/ClientEq.h"
@@ -13,6 +14,7 @@
 
 #include <QBuffer>
 #include <QCoreApplication>
+#include <QEvent>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QTimer>
@@ -35,6 +37,20 @@ public:
         engine.setRxDeviceRate(deviceRate);
     }
     static void detach(AudioEngine& engine) { engine.m_audioDevice = nullptr; }
+    static void manageSink(AudioEngine& engine, std::function<bool(int)> opener)
+    {
+        engine.m_rxSinkOpener = std::move(opener);
+        engine.m_rxSinkProducerRate = 24000;
+        ++engine.m_rxSinkGeneration;
+    }
+    static void dispatchRateChange(AudioEngine& engine)
+    {
+        QCoreApplication::sendPostedEvents(&engine, QEvent::MetaCall);
+    }
+    static void closeSink(AudioEngine& engine) { engine.closeRxSink(); }
+    static void replaceSinkGeneration(AudioEngine& engine) { ++engine.m_rxSinkGeneration; }
+    static bool openSink(AudioEngine& engine, int rate) { return engine.openRxSink(rate); }
+    static bool hasSink(const AudioEngine& engine) { return engine.m_audioDevice != nullptr; }
     static void drain(AudioEngine& engine, qsizetype bytes) { engine.drainRxAudio(bytes); }
     static qsizetype rawBytes(const AudioEngine& engine)
     {
@@ -283,6 +299,7 @@ void bandwidthAndMono()
 {
     for (int deviceRate : {24000, 44100, 48000}) {
         Fixture fixture(deviceRate);
+        fixture.capture();
         PcmProducer producer;
         producer.start(PcmPurpose::Speaker, -1, {48000, PcmLayout::Stereo});
         for (int tick = 0; tick < 100; ++tick) {
@@ -290,14 +307,17 @@ void bandwidthAndMono()
             fixture.tick();
         }
         fixture.finish();
-        check(amplitude(fixture.output.data(), deviceRate, 1, 1000) > 0.15,
-              "wide producer preserves low-band stereo channel");
+        const QByteArray final = fixture.captured(QStringLiteral("final"), QStringLiteral("mix"));
+        check(!final.isEmpty() && final == fixture.output.data(),
+              "final wideband capture is the exact PCM written to the speaker device");
+        check(amplitude(final, deviceRate, 1, 1000) > 0.15,
+              "wide producer preserves low-band stereo channel at the final speaker output");
         if (deviceRate >= 44100) {
-            check(amplitude(fixture.output.data(), deviceRate, 0, 15000) > 0.27,
-                  "48 kHz producer retains 15 kHz audio bandwidth");
+            check(amplitude(final, deviceRate, 0, 15000) > 0.27,
+                  "48 kHz producer retains 15 kHz at the final speaker output");
         } else {
-            check(amplitude(fixture.output.data(), deviceRate, 0, 9000) < 0.003,
-                  "48 to 24 conversion rejects the 15 kHz alias");
+            check(amplitude(final, deviceRate, 0, 9000) < 0.003,
+                  "48 to 24 fallback rejects the 15 kHz alias at the final speaker output");
         }
     }
     for (int producerRate : {24000, 48000}) {
@@ -320,6 +340,253 @@ void bandwidthAndMono()
         check(identical && amplitude(output, 48000, 0, 1000) > 0.27,
               "mono producers duplicate into stereo at the producer domain");
     }
+}
+
+struct NegotiatingFixture : Fixture {
+    QList<int> supportedRates;
+    QList<int> requestedRates;
+    int streamEvents = 0;
+    int failedOpens = 0;
+
+    explicit NegotiatingFixture(QList<int> rates, int initialRate = 24000)
+        : Fixture(initialRate), supportedRates(std::move(rates))
+    {
+        QObject::connect(&engine, &AudioEngine::rxStarted, &engine,
+                         [this]() { ++streamEvents; });
+        QObject::connect(&engine, &AudioEngine::rxStopped, &engine,
+                         [this]() { ++streamEvents; });
+        AudioEngineRatesTestAccess::manageSink(engine, [this](int producerRate) {
+            requestedRates.append(producerRate);
+            if (failedOpens > 0) {
+                --failedOpens;
+                return false;
+            }
+            AudioFormatNegotiator::DeviceCaps caps;
+            caps.supportedRates = supportedRates;
+            caps.supportedFormats = {AudioFormatNegotiator::SampleFmt::Float32};
+            caps.preferredRate = 48000;
+            const auto selected = AudioFormatNegotiator::negotiate(
+                AudioFormatNegotiator::hostTargetOs(),
+                AudioFormatNegotiator::Direction::Output, caps,
+                AudioFormatNegotiator::ResamplerPolicy::PreservePan, producerRate);
+            if (!selected.ok) {
+                return false;
+            }
+            deviceRate = selected.rate;
+            AudioEngineRatesTestAccess::attach(engine, output, deviceRate);
+            return true;
+        });
+    }
+    ~NegotiatingFixture()
+    {
+        // AudioEngine stops streams in its destructor, after this fixture's
+        // counters have ended their lifetime.
+        QObject::disconnect(&engine, nullptr, &engine, nullptr);
+    }
+    void dispatch() { AudioEngineRatesTestAccess::dispatchRateChange(engine); }
+};
+
+void negotiatedSpeakerOutput()
+{
+    for (int workingRate : {48000, 44100, 24000}) {
+        NegotiatingFixture fixture({workingRate});
+        PcmProducer producer;
+        producer.start(PcmPurpose::Speaker, -1, {48000, PcmLayout::Stereo});
+        feed(fixture.engine, producer, QVector<float>(960, 0.0f));
+        check(fixture.requestedRates.isEmpty() && fixture.deviceRate == 24000,
+              "accepted native48 queues device negotiation without opening inline");
+        fixture.dispatch();
+        check(fixture.requestedRates == QList<int>{48000}
+              && fixture.deviceRate == workingRate
+              && AudioEngineRatesTestAccess::producerRate(fixture.engine) == 48000,
+              "accepted producer drives explicit native48 speaker negotiation and fallback");
+        fixture.finish();
+        fixture.output.buffer().clear();
+        fixture.output.seek(0);
+        fixture.capture();
+        for (int tick = 0; tick < 100; ++tick) {
+            feed(fixture.engine, producer, tone(48000, 480, tick * 480, 15000, 1000));
+            fixture.tick();
+        }
+        fixture.finish();
+        const QByteArray final = fixture.captured(QStringLiteral("final"), QStringLiteral("mix"));
+        check(final == fixture.output.data() && finite(final)
+              && std::abs(final.size() / kFrameBytes - workingRate) <= 512,
+              "negotiated speaker writes one second of finite PCM at its actual rate");
+        check(amplitude(final, workingRate, 1, 1000) > 0.15,
+              "negotiated speaker retains the independent right audio channel");
+        if (workingRate >= 44100) {
+            check(amplitude(final, workingRate, 0, 15000) > 0.27
+                  && amplitude(final, workingRate, 1, 15000) < 0.002,
+                  "native48 adoption retains 15 kHz at final speaker output without channel folding");
+        } else {
+            check(amplitude(final, workingRate, 0, 9000) < 0.003,
+                  "refused high-rate speaker falls back to24 with correct anti-aliasing");
+        }
+        // Same-rate discontinuities and fresh epochs are legitimate source
+        // transitions, but a refused 48 kHz sink must not be retried each time.
+        fixture.engine.feedPcmFrame(*producer.produce(QVector<float>(960, 0.0f),
+                                                      std::nullopt, true));
+        producer.start(PcmPurpose::Speaker, -1, {48000, PcmLayout::Stereo});
+        feed(fixture.engine, producer, QVector<float>(960, 0.0f));
+        fixture.dispatch();
+        check(fixture.requestedRates.size() == 1 && fixture.streamEvents == 0,
+              "same-rate epochs do not retry fallbacks or restart the whole RX stream");
+    }
+    NegotiatingFixture alreadyNative({48000}, 48000);
+    PcmProducer producer;
+    producer.start(PcmPurpose::Speaker, -1, {48000, PcmLayout::Stereo});
+    feed(alreadyNative.engine, producer, tone(48000, 480));
+    alreadyNative.dispatch();
+    check(alreadyNative.requestedRates.isEmpty() && alreadyNative.deviceRate == 48000,
+          "an already-native speaker is retained without a needless reopen");
+}
+
+void negotiationOpenFailure()
+{
+    for (bool recoverable : {true, false}) {
+        NegotiatingFixture fixture(recoverable ? QList<int>{24000} : QList<int>{});
+        fixture.failedOpens = recoverable ? 1 : 0;
+        PcmProducer producer;
+        producer.start(PcmPurpose::Speaker, -1, {48000, PcmLayout::Stereo});
+        feed(fixture.engine, producer, tone(48000, 480));
+        const qsizetype queued = AudioEngineRatesTestAccess::rawBytes(fixture.engine);
+        fixture.dispatch();
+        check(fixture.requestedRates == QList<int>({48000, 24000}),
+              "failed speaker renegotiation retries the previous policy exactly once");
+        check(AudioEngineRatesTestAccess::hasSink(fixture.engine) == recoverable
+              && AudioEngineRatesTestAccess::producerRate(fixture.engine) == 48000
+              && AudioEngineRatesTestAccess::rawBytes(fixture.engine) == queued
+              && fixture.engine.clientEqRx()->sampleRate() == 48000
+              && fixture.streamEvents == 0,
+              "speaker failure recovery preserves producer PCM, DSP and stream lifecycle");
+        if (recoverable) {
+            fixture.tick();
+            for (int tick = 1; tick < 100; ++tick) {
+                feed(fixture.engine, producer, tone(48000, 480, tick * 480));
+                fixture.tick();
+            }
+            fixture.finish();
+            check(finite(fixture.output.data())
+                  && amplitude(fixture.output.data(), 24000, 0, 1000) > 0.27
+                  && amplitude(fixture.output.data(), 24000, 1, 2300) > 0.15,
+                  "restored speaker renders the current producer at the actual device rate");
+        }
+        // Neither a working fallback nor a completely unavailable endpoint
+        // may turn each new source epoch into another reopen attempt.
+        producer.start(PcmPurpose::Speaker, -1, {48000, PcmLayout::Stereo});
+        feed(fixture.engine, producer, tone(48000, 480));
+        fixture.dispatch();
+        check(fixture.requestedRates.size() == 2,
+              "failed negotiation has no repeated retry on a same-rate source epoch");
+    }
+}
+
+void negotiationLifetimeAndCoalescing()
+{
+    for (int staleCase = 0; staleCase < 4; ++staleCase) {
+        NegotiatingFixture fixture({24000, 48000});
+        PcmProducer producer;
+        producer.start(PcmPurpose::Speaker, -1, {48000, PcmLayout::Stereo});
+        feed(fixture.engine, producer, tone(48000, 480));
+        if (staleCase == 0) {
+            producer.invalidate();
+        } else if (staleCase == 1) {
+            producer.setFormat({24000, PcmLayout::Stereo});
+        } else if (staleCase == 2) {
+            AudioEngineRatesTestAccess::replaceSinkGeneration(fixture.engine);
+        } else {
+            AudioEngineRatesTestAccess::closeSink(fixture.engine);
+        }
+        fixture.dispatch();
+        check(fixture.requestedRates.isEmpty(),
+              "revoked lease, changed format, replaced sink or stop cancels queued negotiation");
+    }
+    NegotiatingFixture fixture({24000, 48000});
+    PcmProducer producer;
+    producer.start(PcmPurpose::Speaker, -1, {48000, PcmLayout::Stereo});
+    feed(fixture.engine, producer, tone(48000, 480));
+    producer.setFormat({24000, PcmLayout::Stereo});
+    feed(fixture.engine, producer, tone(24000, 240));
+    producer.setFormat({48000, PcmLayout::Stereo});
+    feed(fixture.engine, producer, tone(48000, 480));
+    fixture.dispatch();
+    check(fixture.requestedRates == QList<int>{48000} && fixture.deviceRate == 48000,
+          "format churn coalesces to one current native48 request");
+
+    const qsizetype nativeAttempts = fixture.requestedRates.size();
+    producer.invalidate();
+    fixture.tick(); // actual retirement can precede the replacement by an event turn
+    fixture.dispatch();
+    fixture.engine.feedAudioData({});
+    fixture.dispatch();
+    check(fixture.deviceRate == 48000 && fixture.requestedRates.size() == nativeAttempts,
+          "retirement and empty ingress do not bounce a native48 speaker to24 during a source gap");
+    producer.start(PcmPurpose::Speaker, -1, {48000, PcmLayout::Stereo});
+    feed(fixture.engine, producer, tone(48000, 480));
+    fixture.dispatch();
+    check(fixture.deviceRate == 48000 && fixture.requestedRates.size() == nativeAttempts,
+          "replacement native48 epoch after a drained gap reuses the same speaker sink");
+
+    producer.invalidate();
+    fixture.engine.feedAudioData(bytes(tone(24000, 240)));
+    fixture.dispatch();
+    const auto legacy = AudioFormatNegotiator::buildLadder(
+        AudioFormatNegotiator::hostTargetOs(), AudioFormatNegotiator::Direction::Output,
+        {}, AudioFormatNegotiator::ResamplerPolicy::PreservePan).first().rate;
+    check(AudioEngineRatesTestAccess::producerRate(fixture.engine) == 24000
+          && fixture.deviceRate == legacy,
+          "retired native48 route returns to the unchanged legacy24 speaker policy");
+
+    AudioEngineRatesTestAccess::closeSink(fixture.engine);
+    producer.start(PcmPurpose::Speaker, -1, {48000, PcmLayout::Stereo});
+    const qsizetype attempts = fixture.requestedRates.size();
+    feed(fixture.engine, producer, tone(48000, 480));
+    fixture.dispatch();
+    check(fixture.requestedRates.size() == attempts,
+          "PCM arrival cannot reopen an explicitly stopped speaker");
+    check(AudioEngineRatesTestAccess::openSink(fixture.engine, 48000)
+          && fixture.deviceRate == 48000,
+          "an explicit fresh sink open can retry the accepted producer domain");
+}
+
+void auxiliaryAcrossNegotiation()
+{
+    NegotiatingFixture fixture({24000, 48000});
+    fixture.engine.setKiwiSdrAudioSourceEnabled(kKiwiId, true);
+    check(AudioEngineRatesTestAccess::prepareKiwi(fixture.engine),
+          "auxiliary processing initializes before speaker transition");
+    PcmProducer auxiliary;
+    auxiliary.start(PcmPurpose::Auxiliary);
+    quint64 offset = 0;
+    for (int packet = 0; packet < 40; ++packet) {
+        fixture.engine.feedKiwiPcmFrame(kKiwiId,
+            *auxiliary.produce(tone(24000, 240, offset, 700, 3200)));
+        offset += 240;
+    }
+    const qsizetype queued = AudioEngineRatesTestAccess::kiwiBytes(fixture.engine, kKiwiId);
+    PcmProducer main;
+    main.start(PcmPurpose::Speaker, -1, {48000, PcmLayout::Stereo});
+    feed(fixture.engine, main, QVector<float>(960, 0.0f));
+    fixture.dispatch();
+    check(queued > 0 && AudioEngineRatesTestAccess::kiwiBytes(fixture.engine, kKiwiId) == queued,
+          "speaker rate change preserves admitted auxiliary24 producer samples");
+    fixture.capture();
+    for (int tick = 0; tick < 100; ++tick) {
+        feed(fixture.engine, main, tone(48000, 480, tick * 480, 15000, 1000));
+        fixture.engine.feedKiwiPcmFrame(kKiwiId,
+            *auxiliary.produce(tone(24000, 240, offset, 700, 3200)));
+        offset += 240;
+        fixture.tick();
+    }
+    const QByteArray aux = fixture.captured(QStringLiteral("post"), QStringLiteral("kiwi"), kKiwiId);
+    check(finite(aux) && amplitude(aux, 48000, 0, 700) > 0.27
+          && amplitude(aux, 48000, 1, 3200) > 0.15
+          && amplitude(aux, 48000, 1, 700) < 0.002,
+          "admitted auxiliary24 retains stereo layout and frequencies at renegotiated48");
+    check(AudioEngineRatesTestAccess::recordedCwRate(fixture.engine) == 24000
+          && fixture.streamEvents == 0,
+          "speaker-only reopen leaves fixed CW recording and whole-stream lifecycle unchanged");
 }
 
 void transitionsAndRejection()
@@ -423,15 +690,17 @@ void queueBudgetsAndDeviceTransitions()
         check(fixture.engine.receivePresentationAudioQueues().flexRawBufferMs >= 100,
               "presentation delay retains the configured producer duration");
 
+        const qsizetype producerBytes = AudioEngineRatesTestAccess::rawBytes(fixture.engine);
         AudioEngineRatesTestAccess::deviceRate(fixture.engine, 24000);
         fixture.deviceRate = 24000;
-        check(AudioEngineRatesTestAccess::rawBytes(fixture.engine) == 0
+        check(AudioEngineRatesTestAccess::rawBytes(fixture.engine) == producerBytes
               && AudioEngineRatesTestAccess::outputBytes(fixture.engine) == 0,
-              "device format transition discards queued old-rate samples");
+              "device format transition preserves producer bytes and discards old device bytes");
         check(AudioEngineRatesTestAccess::producerRate(fixture.engine) == producerRate
               && AudioEngineRatesTestAccess::outputRate(fixture.engine) == 24000,
               "device renegotiation retains the producer rate");
         fixture.engine.setReceivePresentationDelays(0, 0);
+        fixture.finish(); // consume the producer-domain samples preserved above
         const qsizetype before = fixture.output.data().size();
         for (int tick = 0; tick < 100; ++tick) {
             feed(fixture.engine, producer, tone(producerRate, producerRate / 100,
@@ -831,6 +1100,10 @@ int main(int argc, char** argv)
     check(settings.isValid(), "isolated settings profile");
     rateMatrix();
     bandwidthAndMono();
+    negotiatedSpeakerOutput();
+    negotiationOpenFailure();
+    negotiationLifetimeAndCoalescing();
+    auxiliaryAcrossNegotiation();
     transitionsAndRejection();
     queueBudgetsAndDeviceTransitions();
     concurrentSourcesAndEffects();

@@ -1,0 +1,1 @@
+./AetherSDR-v26.10.1-x86_64.AppImage: error while loading shared libraries: libOpenGL.so.0: cannot open shared object file: No such file or directory

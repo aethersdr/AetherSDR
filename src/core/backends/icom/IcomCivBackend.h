@@ -98,7 +98,8 @@ public:
     void setTxAudioMonitor(bool on) override;
     void setTxMonitor(bool on, int level) override;
     void setSliceNoiseReduction(int sliceId, bool on, int level) override;
-    void setSliceNoiseBlanker(int sliceId, bool on, int level) override;
+    void setSliceNoiseBlanker(int sliceId, AetherSDR::NoiseBlankerKind kind,
+                              int level, AetherSDR::NoiseBlankerFill fill) override;
     void setSliceAutoNotch(int sliceId, bool on) override;
     void setSliceManualNotch(int sliceId, bool on, int position) override;
     void setSliceSquelch(int sliceId, bool on, int level) override;
@@ -521,8 +522,14 @@ private:
     int     m_nbLevelPercent = 0;
     int     m_notchPosPercent = 50;
     int     m_squelchPercent = 0;
+    // Our last 14 03 write was "on" at threshold 0. Icom has no squelch
+    // enable, so only this tells that write's own 0 readback from an Off.
+    bool    m_squelchOnAtZero = false;
+    // The on/off the last 14 03 readback published; the controls scrub
+    // re-asserts exactly this rather than re-deriving it.
+    bool    m_squelchOn = false;
     int     m_micGainPercent = 0;
-    int     m_compLevelPercent = 0;
+    int     m_compLevel = 0;
     bool    m_compEnable = false;
     bool    m_monitorOn = false;
     int     m_monitorLevelPercent = 0;

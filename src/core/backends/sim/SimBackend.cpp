@@ -1,4 +1,5 @@
 #include "core/backends/sim/SimBackend.h"
+#include "core/AppActivity.h"
 
 #include <QtEndian>
 #include <QThread>
@@ -23,7 +24,7 @@ SimBackend::SimBackend(QObject* parent) : IRadioBackend(parent)
     m_signalThread->setObjectName("SimSignalSource");
     m_signalSource = new SimSignalSource;   // no parent — moved to thread
     m_signalSource->moveToThread(m_signalThread);
-    m_signalThread->start();
+    AetherSDR::startStreamThread(m_signalThread);   // High QoS; see AppActivity.h
 
     // Gated on m_connected, not plain signal-to-signal: stop() reaches the
     // worker QUEUED, so frames it emitted before stopping can deliver here
@@ -247,6 +248,7 @@ QString SimBackend::familyName()    { return QStringLiteral("sim"); }
 RadioCapabilities SimBackend::capabilities() const
 {
     RadioCapabilities caps;
+    caps.broadcastFmReceive = std::nullopt;
     // Synthetic receiver: this is the API's bounded numeric domain, not an
     // advertised hardware tuning range. Off-scene signals simply become silent.
     caps.sliceFrequencyControl = {SliceFrequencyControl::Authority::Engine,

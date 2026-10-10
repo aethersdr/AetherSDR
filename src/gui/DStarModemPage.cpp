@@ -4,6 +4,7 @@
 
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
+#include "core/ThemeManager.h"
 
 #include <QCheckBox>
 #include <QColor>
@@ -40,20 +41,19 @@ namespace {
 
 constexpr const char* kDStarPageStyle = R"(
 QWidget#DStarModemPage {
-    background: #07101c;
+    background: transparent;
 }
 QFrame#DStarHeaderFrame,
 QFrame#DStarConfigFrame,
 QFrame#DStarTrafficFrame,
 QFrame#DStarStatusFrame {
-    background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
-        stop:0 #111d2c, stop:1 #0a1421);
-    border: 1px solid #233246;
+    background: {{color.canon.raised}};
+    border: 1px solid {{color.canon.line}};
     border-radius: 7px;
 }
 QLabel#DStarPageTitle,
 QLabel#DStarPanelTitle {
-    color: #d4deea;
+    color: {{color.canon.ink}};
     background: transparent;
     font-size: 16px;
     font-weight: 700;
@@ -62,18 +62,18 @@ QLabel#DStarModeLabel,
 QLabel#DStarMuted,
 QLabel#dstarSliceState,
 QLabel#DStarTrafficMeta {
-    color: #8d99ad;
+    color: {{color.canon.muted}};
     background: transparent;
 }
 QLabel#DStarFieldLabel,
 QLabel#DStarFooterLabel {
-    color: #8d99ad;
+    color: {{color.canon.muted}};
     background: transparent;
     font-size: 11px;
     font-weight: 700;
 }
 QLabel#DStarServiceDot {
-    background: #647187;
+    background: {{color.canon.muted}};
     border-radius: 6px;
     min-width: 12px;
     max-width: 12px;
@@ -81,33 +81,33 @@ QLabel#DStarServiceDot {
     max-height: 12px;
 }
 QLabel#DStarError {
-    color: #d2ad74;
-    background: #211a10;
-    border: 1px solid #4b3920;
+    color: {{color.accent.warning}};
+    background: {{color.background.warning}};
+    border: 1px solid {{color.accent.warning}};
     border-radius: 5px;
     padding: 7px 9px;
 }
 QLabel#DStarRouteSummary,
 QLabel#DStarActiveMessage,
 QLabel#DStarTrafficMessage {
-    color: #c4cedd;
+    color: {{color.canon.inkSoft}};
     background: transparent;
     font-family: "SF Mono", "Menlo", "Consolas", monospace;
     font-size: 13px;
 }
 QToolButton#DStarAdvancedButton {
-    color: #aeb9cc;
+    color: {{color.canon.inkSoft}};
     background: transparent;
     border: 1px solid transparent;
     padding: 6px 2px;
     text-align: left;
 }
 QToolButton#DStarAdvancedButton:hover {
-    color: #d6dfeb;
+    color: {{color.canon.ink}};
 }
 QListWidget#DStarTrafficList {
-    background: #050b13;
-    border: 1px solid #1c2a3b;
+    background: {{color.canon.nested}};
+    border: 1px solid {{color.canon.line}};
     border-radius: 5px;
     outline: none;
     padding: 8px;
@@ -117,25 +117,25 @@ QListWidget#DStarTrafficList::item {
     padding: 0px;
 }
 QListWidget#DStarTrafficList::item:selected {
-    background: #0d1c20;
+    background: {{color.canon.control}};
 }
 QFrame#DStarTrafficRx {
-    background: #0a1724;
-    border: 1px solid #31536b;
+    background: {{color.canon.raised}};
+    border: 1px solid {{color.canon.lineHi}};
     border-radius: 6px;
 }
 QFrame#DStarTrafficTx {
-    background: #0c1a20;
-    border: 1px solid #315b3b;
+    background: {{color.canon.nested}};
+    border: 1px solid {{color.canon.cyan}};
     border-radius: 6px;
 }
 QLabel#DStarDateDivider {
-    color: #8d99ad;
+    color: {{color.canon.muted}};
     background: transparent;
     font-size: 12px;
 }
 QFrame#DStarSeparator {
-    background: #233246;
+    background: {{color.canon.line}};
     border: none;
     min-height: 1px;
     max-height: 1px;
@@ -215,7 +215,7 @@ DStarModemPage::DStarModemPage(RadioModel* radio, QWidget* parent)
 {
     setObjectName(QStringLiteral("DStarModemPage"));
     setAccessibleName(tr("D-STAR modem"));
-    setStyleSheet(QString::fromLatin1(kDStarPageStyle));
+    ThemeManager::instance().applyStyleSheet(this, QString::fromLatin1(kDStarPageStyle));
 
     auto* root = new QVBoxLayout(this);
     root->setContentsMargins(0, 0, 0, 0);
@@ -766,15 +766,14 @@ void DStarModemPage::refreshService()
     m_serviceState->setText(noWaveformData ? tr("No RX UDP") : state);
     m_serviceState->setToolTip(detail);
     m_serviceDot->setToolTip(detail.isEmpty() ? state : detail);
-    if (noWaveformData) {
-        m_serviceDot->setStyleSheet(QStringLiteral("background:#d2ad74;"));
+    const char* dot = "{{color.canon.muted}}";
+    if (noWaveformData || state == QLatin1String("Failed")) {
+        dot = "{{color.accent.warning}}";
     } else if (state == QLatin1String("Running")) {
-        m_serviceDot->setStyleSheet(QStringLiteral("background:#64d36e;"));
-    } else if (state == QLatin1String("Failed")) {
-        m_serviceDot->setStyleSheet(QStringLiteral("background:#d2ad74;"));
-    } else {
-        m_serviceDot->setStyleSheet(QStringLiteral("background:#647187;"));
+        dot = "{{color.accent.success}}";
     }
+    ThemeManager::instance().applyStyleSheet(
+        m_serviceDot, QStringLiteral("background: %1;").arg(QLatin1String(dot)));
 
     m_startStopButton->setText(active ? tr("Stop") : tr("Start"));
     m_startStopButton->setAccessibleName(
@@ -1277,7 +1276,7 @@ void DStarModemPage::refreshTraffic()
         auto* empty = new QListWidgetItem(tr("No D-STAR traffic yet"), m_trafficList);
         empty->setFlags(Qt::NoItemFlags);
         empty->setTextAlignment(Qt::AlignCenter);
-        empty->setForeground(QColor(QStringLiteral("#8d99ad")));
+        empty->setForeground(ThemeManager::instance().color(this, QStringLiteral("color.canon.muted")));
     } else if (wasAtBottom) {
         m_trafficList->scrollToBottom();
     }

@@ -90,17 +90,20 @@ public:
     void setSliceFilter(int sliceId, int lowHz, int highHz) override;
     void setCwPitch(int hz) override;
     void setSliceAgc(int sliceId, const QString& mode, int thresholdDb) override;
-    // Impulse noise blanker, run in host WDSP (the HL2 has no firmware DSP). NR and
-    // ANF are deliberately not implemented and stay hidden.
-    void setSliceNoiseBlanker(int sliceId, bool on, int level) override;
+    // Impulse noise blankers, run in host WDSP (the HL2 has no firmware DSP); at
+    // most one of the two runs. NR and ANF are deliberately not implemented and
+    // stay hidden.
+    void setSliceNoiseBlanker(int sliceId, AetherSDR::NoiseBlankerKind kind,
+                              int level, AetherSDR::NoiseBlankerFill fill) override;
     ReceiveDispatch requestSliceDsp(int sliceId, const SliceDspRequest& request) override;
     ReceiveDispatch requestSliceAudio(int sliceId, const SliceAudioRequest& request) override;
     ReceiveDispatch requestSliceSquelch(int sliceId, const SliceSquelchRequest& request) override;
     void setSliceSquelch(int sliceId, bool on, int level) override;
     // Host-side CW APF and AGC-off level, per receiver; see Hl2RxDsp.
     void setSliceApf(int sliceId, bool on, int level) override;
-    // Handles SliceAgcRequest::Field::OffLevel (the WDSP fixed gain); every
-    // other field goes to the base, i.e. setSliceAgc().
+    // Handles SliceAgcRequest::Field::OffLevel (the WDSP fixed gain) and drops
+    // a recalled AGC mode in DIGU/DIGL; the rest goes to the base, i.e.
+    // setSliceAgc().
     void requestSliceAgc(int sliceId, const SliceAgcRequest& request) override;
     void setSliceAudioMute(int sliceId, bool mute) override;
     void setSliceAudioGain(int sliceId, int gainPercent) override;
@@ -528,9 +531,10 @@ private:
         QString agcModeBeforeDigital;
 
         // Authoritative noise-blanker state: nothing echoes it, and a rebuilt receiver
-        // must be told again. Defaults mirror SliceModel's (off, level 50).
-        bool nbOn = false;
+        // must be told again. Defaults mirror SliceModel's (off, level 50, zero fill).
+        AetherSDR::NoiseBlankerKind nbKind = AetherSDR::NoiseBlankerKind::Off;
         int  nbLevel = 50;
+        AetherSDR::NoiseBlankerFill nbFill = AetherSDR::kDefaultNoiseBlankerFill;
 
         // APF request and AGC-off level, held like the blanker: nothing echoes
         // them and a fresh chain must be told again. Literal defaults match
@@ -1054,9 +1058,6 @@ private:
     // what the transmitter runs. setTxFilter() is the one push that bypasses this;
     // see the definition.
     void pushTxPassband(const QString& mode);
-    // Tune-carrier amplitude, full scale. Radiated power is set by the TX drive
-    // register; scaling here too would make the power control non-linear.
-    static constexpr double kTuneCarrierAmplitude = 1.0;
     int m_lastFwdRaw = -1;
 
     // Meter ballistics: the S-meter's rate gate and EMA are SMeterSmoother's

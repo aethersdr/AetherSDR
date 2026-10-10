@@ -17,13 +17,13 @@ namespace {
 
 constexpr float kBallSmoothAlpha = 0.30f;
 
-inline QColor kBgColor() { return AetherSDR::ThemeManager::instance().color("color.background.0"); }
-inline QColor kFrameColor() { return AetherSDR::ThemeManager::instance().color("color.background.1"); }
-inline QColor kGridColor() { return AetherSDR::ThemeManager::instance().color("color.background.1"); }
-inline QColor kAxisColor() { return AetherSDR::ThemeManager::instance().color("color.background.1"); }
-inline QColor kCurveColor() { return AetherSDR::ThemeManager::instance().color("color.accent.dim"); }  // cyan
-inline QColor kBallGlowColor() { return AetherSDR::ThemeManager::instance().color("color.accent.warning"); }
-inline QColor kBallCoreColor() { return AetherSDR::ThemeManager::instance().color("color.text.primary"); }
+inline QColor kBgColor(const QWidget* w) { return AetherSDR::ThemeManager::instance().color(w, "color.background.0"); }
+inline QColor kFrameColor(const QWidget* w) { return AetherSDR::ThemeManager::instance().color(w, "color.background.1"); }
+inline QColor kGridColor(const QWidget* w) { return AetherSDR::ThemeManager::instance().color(w, "color.background.1"); }
+inline QColor kAxisColor(const QWidget* w) { return AetherSDR::ThemeManager::instance().color(w, "color.background.1"); }
+inline QColor kCurveColor(const QWidget* w) { return AetherSDR::ThemeManager::instance().color(w, "color.accent.dim"); }  // cyan
+inline QColor kBallGlowColor(const QWidget* w) { return AetherSDR::ThemeManager::instance().color(w, "color.accent.warning"); }
+inline QColor kBallCoreColor(const QWidget* w) { return AetherSDR::ThemeManager::instance().color(w, "color.text.primary"); }
 float dbToLin(float db) noexcept
 {
     return std::pow(10.0f, db * 0.05f);
@@ -104,17 +104,17 @@ void ClientTubeCurveWidget::paintEvent(QPaintEvent*)
     p.setRenderHint(QPainter::Antialiasing, true);
 
     const QRectF r = rect();
-    p.fillRect(r, kBgColor());
+    p.fillRect(r, kBgColor(this));
 
     // Grid — a few reference lines at ±0.5, ±1.0.
-    p.setPen(QPen(kGridColor(), 1.0));
+    p.setPen(QPen(kGridColor(this), 1.0));
     for (float v : { -1.0f, -0.5f, 0.5f, 1.0f }) {
         p.drawLine(QPointF(xToPx(v), r.top()), QPointF(xToPx(v), r.bottom()));
         p.drawLine(QPointF(r.left(), yToPx(v)), QPointF(r.right(), yToPx(v)));
     }
 
     // Centre axes — slightly brighter.
-    p.setPen(QPen(kAxisColor(), 1.0));
+    p.setPen(QPen(kAxisColor(this), 1.0));
     p.drawLine(QPointF(xToPx(0.0f), r.top()),  QPointF(xToPx(0.0f), r.bottom()));
     p.drawLine(QPointF(r.left(), yToPx(0.0f)), QPointF(r.right(), yToPx(0.0f)));
 
@@ -130,7 +130,7 @@ void ClientTubeCurveWidget::paintEvent(QPaintEvent*)
             if (i == 0) path.moveTo(pt);
             else        path.lineTo(pt);
         }
-        QPen curvePen(kCurveColor(), m_compact ? 1.5 : 2.0);
+        QPen curvePen(kCurveColor(this), m_compact ? 1.5 : 2.0);
         curvePen.setJoinStyle(Qt::RoundJoin);
         curvePen.setCapStyle(Qt::RoundCap);
         p.setPen(curvePen);
@@ -142,20 +142,20 @@ void ClientTubeCurveWidget::paintEvent(QPaintEvent*)
         const QPointF pt(xToPx(x), yToPx(y));
         const float glow = m_compact ? 7.0f : 10.0f;
         QRadialGradient g(pt, glow);
-        QColor gc = kBallGlowColor(); gc.setAlpha(200);
+        QColor gc = kBallGlowColor(this); gc.setAlpha(200);
         g.setColorAt(0.0, gc);
         gc.setAlpha(0);
         g.setColorAt(1.0, gc);
         p.setBrush(g);
         p.setPen(Qt::NoPen);
         p.drawEllipse(pt, glow, glow);
-        p.setBrush(kBallCoreColor());
+        p.setBrush(kBallCoreColor(this));
         p.drawEllipse(pt, m_compact ? 2.2 : 3.0,
                           m_compact ? 2.2 : 3.0);
     }
 
     // Frame.
-    p.setPen(QPen(kFrameColor(), 1.0));
+    p.setPen(QPen(kFrameColor(this), 1.0));
     p.setBrush(Qt::NoBrush);
     p.drawRect(r.adjusted(0.5, 0.5, -0.5, -0.5));
 }

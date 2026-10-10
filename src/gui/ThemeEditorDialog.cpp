@@ -7,6 +7,7 @@
 #include "core/ThemeManager.h"
 
 #include <QAction>
+#include <QBrush>
 #include <QComboBox>
 #include <QCursor>
 #include <QTimer>
@@ -108,6 +109,22 @@ QString colorToTokenHex(const QColor& c)
 {
     return c.alpha() == 255 ? c.name(QColor::HexRgb)
                             : c.name(QColor::HexArgb);
+}
+
+// A scope column that inherits from an ancestor shows this placeholder.
+QString inheritedCellText()
+{
+    return QStringLiteral("inherited");
+}
+
+// Marks a scope cell as inherited, so an override whose value happens to be
+// the placeholder text is never mistaken for one.
+constexpr int kInheritedCellRole = Qt::UserRole + 1;
+
+// The placeholder follows the theme, so it reads on light and dark themes.
+QBrush inheritedCellBrush()
+{
+    return QBrush(ThemeManager::instance().color(QStringLiteral("color.text.secondary")));
 }
 
 // Mini left-to-right preview of a gradient for the token list row.
@@ -300,6 +317,7 @@ ThemeEditorDialog::ThemeEditorDialog(QWidget* parent)
     refreshTokenList();
     updateTitle();
     m_lastRenderedTheme = ThemeManager::instance().activeTheme();
+    m_inheritedCellColor = inheritedCellBrush().color();
 
     // Selection-driven editing — `currentItemChanged` fires for both
     // mouse clicks and keyboard navigation so arrow-key walks through
@@ -478,10 +496,12 @@ void ThemeEditorDialog::populateRow(QTreeWidgetItem* item)
             item->setText(col, text);
             item->setFont(col, normalFont);
             item->setForeground(col, QBrush());
+            item->setData(col, kInheritedCellRole, QVariant());
         } else {
-            item->setText(col, QStringLiteral("inherited"));
+            item->setText(col, inheritedCellText());
             item->setFont(col, inheritedFont);
-            item->setForeground(col, QBrush(QColor(0x60, 0x70, 0x80)));
+            item->setForeground(col, inheritedCellBrush());
+            item->setData(col, kInheritedCellRole, true);
         }
     }
 
@@ -659,13 +679,7 @@ void ThemeEditorDialog::dragEnterEvent(QDragEnterEvent* event)
     // the drop is the cleanest signal that an arbitrary file isn't valid.
     const auto urls = event->mimeData()->urls();
     for (const QUrl& u : urls) {
-        if (!u.isLocalFile()) {
-            PersistentDialog::dragEnterEvent(event);
-            return;
-        }
-        const QString suffix = QFileInfo(u.toLocalFile()).suffix().toLower();
-        if (suffix != QStringLiteral("aethertheme")
-            && suffix != QStringLiteral("json")) {
+        if (!ThemeManager::isImportableThemeFile(u)) {
             PersistentDialog::dragEnterEvent(event);
             return;
         }
@@ -680,8 +694,9 @@ void ThemeEditorDialog::dropEvent(QDropEvent* event)
         return;
     }
     const auto urls = event->mimeData()->urls();
+    // Re-check here: a drop is not guaranteed to follow an accepted dragEnter.
     for (const QUrl& u : urls) {
-        if (u.isLocalFile()) importThemeFromPath(u.toLocalFile());
+        if (ThemeManager::isImportableThemeFile(u)) importThemeFromPath(u.toLocalFile());
     }
     event->acceptProposedAction();
 }
@@ -1125,8 +1140,26 @@ void ThemeEditorDialog::onActiveThemeChanged()
     updateTitle();
     if (current != m_lastRenderedTheme) {
         m_lastRenderedTheme = current;
+        m_inheritedCellColor = inheritedCellBrush().color();
         refreshContainerCombo();
         refreshTokenList();
+        return;
+    }
+    // An in-place edit keeps every row, but the "inherited" cells carry
+    // color.text.secondary, which may be the token just edited. Repaint them
+    // without rebuilding the list, and only when that colour moved.
+    const QBrush inherited = inheritedCellBrush();
+    if (!m_tokenList || inherited.color() == m_inheritedCellColor) {
+        return;
+    }
+    m_inheritedCellColor = inherited.color();
+    const int lastCol = m_tokenList->columnCount() - 1;
+    for (QTreeWidgetItemIterator rows(m_tokenList); *rows; ++rows) {
+        for (int col = 1; col < lastCol; ++col) {
+            if ((*rows)->data(col, kInheritedCellRole).toBool()) {
+                (*rows)->setForeground(col, inherited);
+            }
+        }
     }
 }
 

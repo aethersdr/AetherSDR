@@ -21,6 +21,8 @@ namespace AetherSDR::rtl {
 
 namespace {
 
+Q_LOGGING_CATEGORY(lcRtlReceive, "aether.rtl.receive", QtWarningMsg)
+
 constexpr double kMinTuneHz = 24'000.0;
 constexpr double kMaxTuneHz = 1'766'000'000.0;
 
@@ -210,6 +212,12 @@ RadioCapabilities RtlSdrBackend::capabilities() const
     c.receiveFilterControl = ReceiveFilterControl{SliceFrequencyControl::Authority::Engine,
         {{QStringLiteral("FM"), -21600, -1, 1, 21600, 2, 43200},
          {QStringLiteral("FMN"), -21600, -1, 1, 21600, 2, 43200}}};
+    c.broadcastFmReceive = std::nullopt;
+    if (RtlReceivePipeline::kQualifiedWfmEnabled) {
+        c.receiveFilterControl->modes.append({QStringLiteral("WFM"),
+            -100000, -15000, 15000, 100000, 30000, 200000});
+        c.broadcastFmReceive = BroadcastFmReceive{{50, 75}, true, true};
+    }
     c.receiveAudioControl = ReceiveAudioControl{SliceFrequencyControl::Authority::Engine};
     c.panSpanModel = PanSpanModel{false, false};
     if (m_lastPublished && hasReceivingNarrowFm(*m_lastPublished)) {
@@ -380,16 +388,34 @@ void RtlSdrBackend::connectRadio(const RadioConnectRequest& request)
         }
     }
     m_requested.hardware.gainTenths = nearestGainTenths(m_tunerGainsTenths, requestedGain * 10);
-    m_requested.receivers = {{{0, double(m_requested.hardware.centerHz),
-        double(m_sliceFilterLow), double(m_sliceFilterHigh), 0, 0, 0}, captureMode(m_sliceMode)}};
+    m_requested.receivers = {initialReceiver()};
     m_modelName = m_product;
     startCapture(std::make_unique<RtlSdrWorker>(m_device, nullptr, m_receiverCapacity));
+}
+
+RtlCaptureTransaction::Receiver RtlSdrBackend::initialReceiver() const
+{
+    const double guard = (m_sliceMode == QLatin1String("FM") || m_sliceMode == QLatin1String("FMN")
+        || (RtlReceivePipeline::kQualifiedWfmEnabled && m_sliceMode == QLatin1String("WFM"))) ? 3000.0 : 0.0;
+    RtlCaptureTransaction::Receiver receiver{{0, double(m_requested.hardware.centerHz),
+        double(m_sliceFilterLow), double(m_sliceFilterHigh), 0, guard, guard}, captureMode(m_sliceMode)};
+    // Saved receiver restoration prepares asynchronously after this provisional
+    // receiver connects. Keep its speaker muted until the actual saved monitor
+    // state adopts; a saved muted session must not briefly play bootstrap audio.
+    receiver.audioMute = m_savedSettings.status == RtlSliceSettings::ReadStatus::Ready
+        && !m_savedSettings.document.slices.isEmpty();
+    return receiver;
 }
 
 void RtlSdrBackend::startCapture(std::unique_ptr<RtlSdrWorker> worker)
 {
     m_worker = std::move(worker);
     m_diagnostics = {};
+    m_wfmStatus.fill(WfmStereoStatus::Unavailable);
+    m_wfmReception.fill({});
+    m_wfmLastObservation.fill(std::nullopt);
+    for (auto& age : m_wfmPublicationAge) { age.invalidate(); }
+    for (auto& age : m_wfmObservationAge) { age.invalidate(); }
     m_capture.beginSession();
     m_published = {};
     m_lastPublished.reset();
@@ -461,6 +487,11 @@ void RtlSdrBackend::disconnectRadio()
 {
     retirePcmStreams();
     retireNativeAudio();
+    m_wfmStatus.fill(WfmStereoStatus::Unavailable);
+    m_wfmReception.fill({});
+    m_wfmLastObservation.fill(std::nullopt);
+    for (auto& age : m_wfmPublicationAge) { age.invalidate(); }
+    for (auto& age : m_wfmObservationAge) { age.invalidate(); }
     m_captureTimer.stop();
     m_capture.endSession();
     m_published = {};
@@ -511,18 +542,20 @@ IRadioBackend::HealthSnapshot RtlSdrBackend::healthSnapshot() const
     if (!m_connected) { return {}; }
     HealthSnapshot snapshot;
     snapshot.order = {QStringLiteral("rtlQueueDrops"), QStringLiteral("rtlMixerLateFrames"),
-        QStringLiteral("rtlMixerRejectedBlocks"), QStringLiteral("rtlMixerConfigurationFailures")};
+        QStringLiteral("rtlMixerRejectedBlocks"), QStringLiteral("rtlMixerConfigurationFailures"),
+        QStringLiteral("rtlReceiveTraceDrops")};
     snapshot.sections.insert(snapshot.order.front(), tr("RTL receive pipeline (since connect)"));
     snapshot.labels = {{snapshot.order[0], tr("Audio queue dropped packets")},
         {snapshot.order[1], tr("Mixer missing receiver frames at deadline")},
         {snapshot.order[2], tr("Mixer rejected audio blocks")},
-        {snapshot.order[3], tr("Mixer configuration failures")}};
+        {snapshot.order[3], tr("Mixer configuration failures")},
+        {snapshot.order[4], tr("Receive diagnostic records dropped")}};
     // Legacy-only sessions have not observed this pipeline. Missing values
     // report "not reported", never a fabricated successful zero measurement.
     if (m_diagnostics.observed) {
-        const std::array<std::uint64_t, 4> counters{m_diagnostics.droppedPackets,
+        const std::array<std::uint64_t, 5> counters{m_diagnostics.droppedPackets,
             m_diagnostics.mixerLateFrames, m_diagnostics.mixerRejectedBlocks,
-            m_diagnostics.mixerConfigurationFailures};
+            m_diagnostics.mixerConfigurationFailures, m_diagnostics.droppedTraceEvents};
         for (int i = 0; i < snapshot.order.size(); ++i) {
             snapshot.values.insert(snapshot.order[i], QVariant::fromValue<qulonglong>(counters[i]));
         }
@@ -531,7 +564,9 @@ IRadioBackend::HealthSnapshot RtlSdrBackend::healthSnapshot() const
         const auto& capture = m_lastPublished->capture;
         const QStringList keys{QStringLiteral("rtlCaptureCenterHz"), QStringLiteral("rtlCaptureRateHz"),
             QStringLiteral("rtlCaptureLowHz"), QStringLiteral("rtlCaptureHighHz"),
-            QStringLiteral("rtlCaptureDcClear"), QStringLiteral("rtlCaptureRequest")};
+            QStringLiteral("rtlCaptureDcClear"), QStringLiteral("rtlCaptureRequest"),
+            QStringLiteral("rtlCaptureSession"), QStringLiteral("rtlCaptureRevision"),
+            QStringLiteral("rtlCaptureRequestedRevision")};
         snapshot.sections.insert(keys.front(), tr("RTL accepted capture"));
         snapshot.order.append(keys);
         snapshot.labels.insert(keys[0], tr("Capture center / converter DC (Hz)"));
@@ -540,6 +575,9 @@ IRadioBackend::HealthSnapshot RtlSdrBackend::healthSnapshot() const
         snapshot.labels.insert(keys[3], tr("Usable capture high edge (Hz)"));
         snapshot.labels.insert(keys[4], tr("FM receivers clear of converter DC"));
         snapshot.labels.insert(keys[5], tr("Last capture request"));
+        snapshot.labels.insert(keys[6], tr("Capture session"));
+        snapshot.labels.insert(keys[7], tr("Accepted capture revision"));
+        snapshot.labels.insert(keys[8], tr("Requested capture revision"));
         snapshot.values.insert(keys[0], capture.centerHz);
         snapshot.values.insert(keys[1], capture.achievedSampleRateHz);
         snapshot.values.insert(keys[2], std::max(0.0, capture.centerHz - capture.usableLeftHz));
@@ -548,6 +586,11 @@ IRadioBackend::HealthSnapshot RtlSdrBackend::healthSnapshot() const
             ? QVariant(RtlCaptureTransaction::dcClear(*m_lastPublished))
             : QVariant(tr("No receiving FM or FM-N slice")));
         snapshot.values.insert(keys[5], m_captureStatus);
+        // Read existing owner-thread tokens so steady-state validation can see
+        // repair requests/publications even when detailed logging is disabled.
+        snapshot.values.insert(keys[6], QVariant::fromValue<qulonglong>(m_published.session));
+        snapshot.values.insert(keys[7], QVariant::fromValue<qulonglong>(m_published.revision));
+        snapshot.values.insert(keys[8], QVariant::fromValue<qulonglong>(m_capture.requested().revision));
     }
     return snapshot;
 }
@@ -666,12 +709,21 @@ void RtlSdrBackend::setSliceMode(int sliceId, const QString& mode)
         // passband; restores and ordinary filter requests never resize it.
         receiver->passband.filterLowHz = -8000; receiver->passband.filterHighHz = 8000;
     }
+    const bool nativeWfm = RtlReceivePipeline::kQualifiedWfmEnabled
+        && modeValue == RtlCaptureTransaction::Mode::Wfm;
+    if (nativeWfm && (receiver->passband.filterLowHz > -15000
+        || receiver->passband.filterHighHz < 15000)) {
+        // Entering broadcast FM from a narrow mode selects its existing
+        // 200 kHz RF width. Ordinary edits and saved restores are never resized.
+        receiver->passband.filterLowHz = -100000;
+        receiver->passband.filterHighHz = 100000;
+    }
     receiver->mode = modeValue;
     desired.followReceiverId = sliceId;
     desired.avoidDc = narrowFm;
     if (!narrowFm) { receiver->squelchEnabled = false; }
-    receiver->passband.guardLowHz = narrowFm ? 3000 : 0;
-    receiver->passband.guardHighHz = narrowFm ? 3000 : 0;
+    receiver->passband.guardLowHz = (narrowFm || nativeWfm) ? 3000 : 0;
+    receiver->passband.guardHighHz = (narrowFm || nativeWfm) ? 3000 : 0;
     requestCapture(desired);
 }
 
@@ -682,9 +734,9 @@ void RtlSdrBackend::setSliceFilter(int sliceId, int lowHz, int highHz)
     const auto receiver = std::ranges::find_if(desired.receivers, [sliceId](const auto& value) { return value.passband.stableId == sliceId; });
     if (receiver == desired.receivers.end()) { return; }
     if (receiver->mode == RtlCaptureTransaction::Mode::Wfm) {
-        // Legacy WFM does not consume these edges. Do not acknowledge or save
-        // a cosmetic filter change while its qualified DSP path is deferred.
-        return;
+        if (!RtlReceivePipeline::kQualifiedWfmEnabled || lowHz > -15000 || highHz < 15000) {
+            return;
+        }
     }
     if ((receiver->mode == RtlCaptureTransaction::Mode::Fm
         || receiver->mode == RtlCaptureTransaction::Mode::Fmn)
@@ -692,6 +744,31 @@ void RtlSdrBackend::setSliceFilter(int sliceId, int lowHz, int highHz)
     receiver->passband.filterLowHz = lowHz;
     receiver->passband.filterHighHz = highHz;
     requestCapture(desired);
+}
+
+void RtlSdrBackend::setSliceWfmForceMono(int sliceId, bool forceMono)
+{
+    if (!RtlReceivePipeline::kQualifiedWfmEnabled || !hasAcceptedSlice(sliceId)) { return; }
+    auto desired = m_requested;
+    const auto receiver = std::ranges::find_if(desired.receivers,
+        [sliceId](const auto& value) { return value.passband.stableId == sliceId; });
+    if (receiver == desired.receivers.end() || receiver->mode != RtlCaptureTransaction::Mode::Wfm
+        || receiver->wfmForceMono == forceMono) { return; }
+    receiver->wfmForceMono = forceMono;
+    requestCapture(desired); // Same prepare/adopt/rollback contract as the filter.
+}
+
+void RtlSdrBackend::setSliceWfmDeemphasis(int sliceId, int microseconds)
+{
+    if (!RtlReceivePipeline::kQualifiedWfmEnabled || !hasAcceptedSlice(sliceId)
+        || (microseconds != 50 && microseconds != 75)) { return; }
+    auto desired = m_requested;
+    const auto receiver = std::ranges::find_if(desired.receivers,
+        [sliceId](const auto& value) { return value.passband.stableId == sliceId; });
+    if (receiver == desired.receivers.end() || receiver->mode != RtlCaptureTransaction::Mode::Wfm
+        || receiver->wfmDeemphasisUs == microseconds) { return; }
+    receiver->wfmDeemphasisUs = microseconds;
+    requestCapture(desired); // Only adopted state is published and persisted.
 }
 
 void RtlSdrBackend::setSliceAgc(int sliceId, const QString& mode, int thresholdDb)
@@ -834,6 +911,27 @@ ReceiveDispatch RtlSdrBackend::requestSliceAudio(int sliceId, const SliceAudioRe
     case SliceAudioRequest::Field::Gain: setSliceAudioGain(sliceId, request.value); break;
     case SliceAudioRequest::Field::Mute: setSliceAudioMute(sliceId, request.value != 0); break;
     case SliceAudioRequest::Field::Pan: setSliceAudioPan(sliceId, request.value); break;
+    }
+    return ReceiveDispatch::Dispatched;
+}
+
+ReceiveDispatch RtlSdrBackend::requestSliceWfm(int sliceId, const SliceWfmRequest& request)
+{
+    if (!request.valid() || !RtlReceivePipeline::kQualifiedWfmEnabled
+        || !hasAcceptedSlice(sliceId)) {
+        return ReceiveDispatch::Unsupported;
+    }
+    const auto receiver = std::ranges::find_if(m_requested.receivers, [sliceId](const auto& value) {
+        return value.passband.stableId == sliceId;
+    });
+    if (receiver == m_requested.receivers.end()
+        || receiver->mode != RtlCaptureTransaction::Mode::Wfm) {
+        return ReceiveDispatch::Unsupported;
+    }
+    if (request.field == SliceWfmRequest::Field::ForceMono) {
+        setSliceWfmForceMono(sliceId, request.value != 0);
+    } else {
+        setSliceWfmDeemphasis(sliceId, request.value);
     }
     return ReceiveDispatch::Dispatched;
 }
@@ -1000,6 +1098,8 @@ QVector<RtlSliceSettings::Slice> RtlSdrBackend::acceptedSettings() const
         }
         slice.audioGain = m_monitors[id].gain; slice.audioMute = m_monitors[id].mute; slice.audioPan = m_monitors[id].pan;
         slice.squelchEnabled = receiver.squelchEnabled; slice.squelchLevel = receiver.squelchLevel;
+        slice.wfmDeemphasisUs = receiver.wfmDeemphasisUs;
+        slice.wfmForceMono = receiver.wfmForceMono;
         output.append(slice);
     }
     return output;
@@ -1044,29 +1144,43 @@ void RtlSdrBackend::restoreAcceptedSlices()
     QSet<int> seen;
     auto desired = m_requested;
     desired.receivers.clear();
+    bool unsupportedWfmFilter = false;
     for (const auto& slice : saved.slices) {
         const bool wide = slice.mode != QLatin1String("FM") && slice.mode != QLatin1String("FMN");
+        const bool nativeWfm = RtlReceivePipeline::kQualifiedWfmEnabled
+            && slice.mode == QLatin1String("WFM");
+        const double guard = (!wide || nativeWfm) ? 3000.0 : 0.0;
         const SharedCapturePolicy::SliceDescriptor descriptor{slice.id, slice.frequencyHz,
-            slice.filterLowHz, slice.filterHighHz, 0, wide ? 0.0 : 3000.0,
-            wide ? 0.0 : 3000.0};
+            slice.filterLowHz, slice.filterHighHz, 0, guard, guard};
         m_omittedSettings.insert(slice.id);
         if (slice.id < 0 || slice.id >= 8 || seen.contains(slice.id)
             || !SharedCapturePolicy::occupiedInterval(descriptor).interval
             || !isKnownMode(slice.mode)
             || desired.receivers.size() >= static_cast<std::size_t>(m_receiverCapacity)) { continue; }
         seen.insert(slice.id);
+        if (nativeWfm && (slice.filterLowHz < -100000 || slice.filterHighHz > 100000
+            || slice.filterLowHz > -15000 || slice.filterHighHz < 15000)) {
+            unsupportedWfmFilter = true;
+            continue;
+        }
         if ((!wide && (slice.filterLowHz < -21600 || slice.filterHighHz > 21600
             || slice.filterLowHz >= 0 || slice.filterHighHz <= 0))
             || (wide && !desired.receivers.empty())
             || (!desired.receivers.empty() && desired.receivers.front().mode != RtlCaptureTransaction::Mode::Fm
                 && desired.receivers.front().mode != RtlCaptureTransaction::Mode::Fmn)) { continue; }
         desired.receivers.push_back({descriptor, captureMode(slice.mode), slice.audioGain, slice.audioPan,
-            slice.audioMute, !wide && slice.squelchEnabled, slice.squelchLevel});
+            slice.audioMute, !wide && slice.squelchEnabled, slice.squelchLevel, slice.wfmDeemphasisUs, slice.wfmForceMono});
     }
     // Preserve a valid configured receiver even when it is parked. The
     // transaction derives DSP membership from the confirmed capture; a
     // reconnect never silently retunes or loses an out-of-capture station.
-    if (desired.receivers.empty()) { return; }
+    if (desired.receivers.empty()) {
+        if (unsupportedWfmFilter) {
+            emit configurationWarning(tr("Saved WFM filter is not supported by the broadcast decoder. "
+                "The saved filter is preserved. Select a supported WFM filter and unmute to resume audio."));
+        }
+        return;
+    }
     if (requestCapture(desired)) { m_restoreToken = m_capture.requested(); }
 }
 
@@ -1128,10 +1242,19 @@ void RtlSdrBackend::applyRestoredState(const RestoredRadioState& state)
             m_sampleRateHz = static_cast<std::uint32_t>(saved.sampleRateHz);
         }
         m_sliceFreqHz = m_panCenterHz;
-        // Use a valid initial receiver before fitting the saved set. At VLF a
-        // 200 kHz wide initial receiver would extend through negative RF.
-        const bool narrowInitial = m_panCenterHz < 100000;
-        m_sliceMode = narrowInitial ? QStringLiteral("FM") : QStringLiteral("WFM");
+        // A saved native receiver may use a sparse ID. A provisional native
+        // ID 0 would consume the sole reservation and prevent preparing it.
+        // Bootstrap with a muted legacy receiver (an empty native bank), then
+        // adopt the original saved recipe/ID through the normal transaction.
+        // AM also avoids FM's automatic converter-DC capture displacement.
+        const bool nativeRestore = RtlReceivePipeline::kQualifiedWfmEnabled
+            && !saved.slices.isEmpty();
+        const double initialHalfWidth = RtlReceivePipeline::kQualifiedWfmEnabled ? 103000 : 100000;
+        const bool narrowInitial = nativeRestore || m_panCenterHz < initialHalfWidth
+            || 0.45 * m_sampleRateHz < initialHalfWidth;
+        m_sliceMode = narrowInitial
+            ? (RtlReceivePipeline::kQualifiedWfmEnabled ? QStringLiteral("AM") : QStringLiteral("FM"))
+            : QStringLiteral("WFM");
         m_sliceFilterLow = narrowInitial ? -8000 : -100000;
         m_sliceFilterHigh = narrowInitial ? 8000 : 100000;
     }
@@ -1232,7 +1355,35 @@ void RtlSdrBackend::serviceCapture()
     if (!m_worker) { return; }
     const QPointer<RtlSdrWorker> producer(m_worker.get());
     m_worker->serviceCancellation();
+    const std::uint64_t previousTraceDrops = m_diagnostics.droppedTraceEvents;
     m_diagnostics = m_worker->diagnostics();
+    if (m_diagnostics.droppedTraceEvents != previousTraceDrops) {
+        qCDebug(lcRtlReceive).nospace() << "RtlReceive ms=" << QDateTime::currentMSecsSinceEpoch()
+            << " kind=trace_overflow trace_drops=" << m_diagnostics.droppedTraceEvents;
+    }
+    RtlReceivePipeline::TraceEvent trace;
+    for (unsigned count = 0; count < RtlReceivePipeline::kTraceEvents
+         && m_worker->takeTraceEvent(trace); ++count) {
+        const auto failure = trace.failure.value_or(RtlReceiverRegistry::ProcessingFailure{});
+        const auto extraction = failure.extraction.value_or(RtlRfExtractor::Failure{});
+        qCDebug(lcRtlReceive).nospace() << "RtlReceive ms=" << QDateTime::currentMSecsSinceEpoch()
+            << " kind=" << (trace.kind == RtlReceivePipeline::TraceEvent::Kind::ReceiverFailure ? "failure" : "missing")
+            << " session=" << trace.token.session << " revision=" << trace.token.revision
+            << " generation=" << trace.hardwareGeneration << " capture_epoch=" << trace.captureEpoch
+            << " slot=" << trace.slot << " receiver=" << trace.stableId
+            << " instance=" << trace.instance << " receiver_epoch=" << trace.receiverEpoch
+            << " capture_first=" << trace.captureFirst << " capture_frames=" << trace.captureFrames
+            << " capture_clock=" << trace.captureClock << " quantum_first=" << trace.quantumFirst
+            << " missing_lo=" << QString::number(trace.missingMask[0], 16)
+            << " missing_hi=" << QString::number(trace.missingMask[1], 16)
+            << " has_failure=" << trace.failure.has_value() << " reason=" << int(failure.reason)
+            << " process_result=" << int(failure.processResult)
+            << " has_expected=" << failure.hasExpectedCaptureFirst << " expected_capture=" << failure.expectedCaptureFirst
+            << " has_iq=" << failure.hasIqFirst << " iq_first=" << failure.iqFirst << " iq_frames=" << failure.iqFrames
+            << " has_extraction=" << failure.extraction.has_value() << " extraction_reason=" << int(extraction.reason)
+            << " converted_i=" << extraction.convertedI << " converted_q=" << extraction.convertedQ
+            << " trace_drops=" << m_diagnostics.droppedTraceEvents;
+    }
     if (const auto result = m_worker->takeResult()) {
         const auto completion = m_capture.complete(*result);
         qCDebug(lcPerf).nospace() << "RtlCapture phase=complete ms=" << QDateTime::currentMSecsSinceEpoch()
@@ -1273,7 +1424,11 @@ void RtlSdrBackend::serviceCapture()
     }
     if (m_worker) {
         drainAudio();
+        if (!producer || producer.data() != m_worker.get()) { return; }
+        expireWfmObservations();
+        if (!producer || producer.data() != m_worker.get()) { return; }
         if (!m_capture.busy() && m_worker->needsRepair()) { requestCapture(m_requested); }
+        if (!producer || producer.data() != m_worker.get()) { return; }
         if (const auto work = m_capture.takeWork()) {
             if (!m_worker->submit(*work)) { qFatal("RTL-SDR transaction mailbox ownership violated"); }
         }
@@ -1295,7 +1450,9 @@ void RtlSdrBackend::publishLegacyPcm(const QByteArray& pcm, const QByteArray& pr
         || m_lastPublished->receivingIds.front()
             != m_lastPublished->receivers.front().passband.stableId
         || m_lastPublished->receivers.front().mode == RtlCaptureTransaction::Mode::Fm
-        || m_lastPublished->receivers.front().mode == RtlCaptureTransaction::Mode::Fmn) { return; }
+        || m_lastPublished->receivers.front().mode == RtlCaptureTransaction::Mode::Fmn
+        || (RtlReceivePipeline::kQualifiedWfmEnabled
+            && m_lastPublished->receivers.front().mode == RtlCaptureTransaction::Mode::Wfm)) { return; }
     const int id = m_lastPublished->receivers.front().passband.stableId;
     const auto token = m_published;
     for (int slot : {-1, id}) {
@@ -1320,7 +1477,8 @@ void RtlSdrBackend::drainAudio()
     for (int count = 0; count < 128 && worker && worker.data() == m_worker.get()
          && worker->takeAudio(packet); ++count) {
         if (!acceptsFrame(packet.token.session, packet.token.revision)
-            || packet.frames == 0 || packet.frames > 1024 || packet.slot < -1 || packet.slot >= 8) { continue; }
+            || packet.frames == 0 || packet.frames > 1024 || packet.slot < -1 || packet.slot >= 8
+            || packet.sampleRateHz != 48000 || packet.channelCount != 2) { continue; }
         if (!m_lastPublished || m_lastPublished->receivingIds.empty()
             || (packet.slot >= 0 && std::ranges::find(m_lastPublished->receivingIds, packet.slot)
                 == m_lastPublished->receivingIds.end())) { continue; }
@@ -1331,7 +1489,7 @@ void RtlSdrBackend::drainAudio()
             output = {};
             output.producer = std::make_unique<PcmProducer>();
             output.producer->start(packet.slot < 0 ? PcmPurpose::Speaker : PcmPurpose::Slice,
-                packet.slot, {48000, PcmLayout::Stereo}, packet.token.session, packet.instance);
+                packet.slot, {packet.sampleRateHz, PcmLayout::Stereo}, packet.token.session, packet.instance);
             output.captureEpoch = packet.captureEpoch; output.instance = packet.instance;
             output.receiverEpoch = packet.receiverEpoch;
         }
@@ -1341,11 +1499,76 @@ void RtlSdrBackend::drainAudio()
             packet.discontinuity || packet.firstSample != output.nextSample);
         output.nextSample = packet.firstSample + packet.frames;
         if (frame) {
+            observeWfm(packet);
+            if (!worker || worker.data() != m_worker.get()
+                || !acceptsFrame(packet.token.session, packet.token.revision)) { return; }
             if (packet.slot < 0) { emit audioFrameReady(*frame); }
             else { emit sliceAudioFrameReady(packet.slot, *frame); }
         }
     }
 }
+// Decoder observations travel with accepted PCM. A requested mode or a stale
+// packet can never light the stereo indicator. Silence or a stopped producer
+// expires the observation; there is no indefinitely retained pilot claim.
+void RtlSdrBackend::observeWfm(const RtlReceivePipeline::Packet& packet)
+{
+    if (!RtlReceivePipeline::kQualifiedWfmEnabled || !packet.wfmReception
+        || !packet.wfmReception->valid || !packet.wfmStereoDetected
+        || packet.slot < 0 || packet.slot >= 8 || !m_lastPublished
+        || !acceptsFrame(packet.token.session, packet.token.revision)) { return; }
+    const auto receiver = std::ranges::find_if(m_lastPublished->receivers,
+        [&packet](const auto& value) { return value.passband.stableId == packet.slot; });
+    if (receiver == m_lastPublished->receivers.end() || receiver->mode != RtlCaptureTransaction::Mode::Wfm
+        || std::ranges::find(m_lastPublished->receivingIds, packet.slot)
+            == m_lastPublished->receivingIds.end()) { return; }
+    const auto& reception = *packet.wfmReception;
+    if (!std::isfinite(reception.pilotMagnitude) || reception.pilotMagnitude < 0.0
+        || !std::isfinite(reception.pilotEngageThreshold) || !std::isfinite(reception.pilotReleaseThreshold)
+        || reception.pilotReleaseThreshold < 0.0
+        || reception.pilotEngageThreshold <= reception.pilotReleaseThreshold
+        || reception.engageBlocks == 0 || reception.releaseBlocks == 0
+        || reception.stableDurationMs > 5000
+        || reception.lockDurationMs > reception.observationDurationMs
+        || reception.stableDurationMs > reception.observationDurationMs
+        || (!reception.pilotLocked && reception.lockDurationMs != 0)
+        || (reception.pilotLocked && !receiver->wfmForceMono) != *packet.wfmStereoDetected) { return; }
+    const WfmObservationIdentity identity{packet.instance, packet.receiverEpoch, reception.observationSequence};
+    if (m_wfmLastObservation[packet.slot] == identity) { return; }
+    m_wfmLastObservation[packet.slot] = identity;
+    m_wfmObservationAge[packet.slot].restart();
+    const WfmStereoStatus status = *packet.wfmStereoDetected
+        ? WfmStereoStatus::Stereo : WfmStereoStatus::Mono;
+    const bool statusChanged = m_wfmStatus[packet.slot] != status
+        || (m_wfmReception[packet.slot].valid
+            && m_wfmReception[packet.slot].pilotLocked != reception.pilotLocked);
+    m_wfmStatus[packet.slot] = status;
+    if (packet.wfmReception && packet.wfmReception->valid) {
+        m_wfmReception[packet.slot] = *packet.wfmReception;
+    }
+    auto& publicationAge = m_wfmPublicationAge[packet.slot];
+    if (!statusChanged && publicationAge.isValid() && publicationAge.elapsed() < 250) { return; }
+    publicationAge.restart();
+    SliceDelta delta; delta.wfmStereoStatus = status;
+    delta.wfmReceptionDiagnostics = m_wfmReception[packet.slot];
+    emit sliceChanged(packet.slot, delta);
+}
+
+void RtlSdrBackend::expireWfmObservations()
+{
+    const auto token = m_published;
+    for (int id = 0; id < 8; ++id) {
+        if (!acceptsFrame(token.session, token.revision)) { return; }
+        if (!m_wfmObservationAge[id].isValid() || m_wfmObservationAge[id].elapsed() <= 500) { continue; }
+        m_wfmObservationAge[id].invalidate();
+        m_wfmStatus[id] = WfmStereoStatus::Acquiring;
+        m_wfmReception[id] = {};
+        m_wfmPublicationAge[id].invalidate();
+        SliceDelta delta; delta.wfmStereoStatus = WfmStereoStatus::Acquiring;
+        delta.wfmReceptionDiagnostics = WfmReceptionDiagnostics{};
+        emit sliceChanged(id, delta);
+    }
+}
+
 void RtlSdrBackend::emitSliceState(const RtlCaptureTransaction::Receiver& receiver)
 {
     const int id = receiver.passband.stableId;
@@ -1358,6 +1581,10 @@ void RtlSdrBackend::emitSliceState(const RtlCaptureTransaction::Receiver& receiv
     delta.panId = QStringLiteral("0xe1000000"); delta.active = id == m_requested.receivers.front().passband.stableId;
     delta.inCapture = m_lastPublished && std::ranges::find(m_lastPublished->receivingIds, id)
         != m_lastPublished->receivingIds.end();
+    delta.wfmDeemphasisUs = receiver.wfmDeemphasisUs;
+    delta.wfmForceMono = receiver.wfmForceMono;
+    delta.wfmReceptionDiagnostics = m_wfmReception[id];
+    delta.wfmStereoStatus = m_wfmStatus[id];
     delta.modeList = capabilities().receiveModeControl->modes;
     emit sliceChanged(id, delta);
 }
@@ -1383,13 +1610,17 @@ void RtlSdrBackend::publishCapture()
         for (const auto& previous : m_lastPublished->receivers) {
             const int id = previous.passband.stableId;
             const auto current = std::ranges::find_if(state.receivers, [id](const auto& value) { return value.passband.stableId == id; });
-            if (current == state.receivers.end() || current->passband != previous.passband || current->mode != previous.mode) { m_sliceAudio[id] = {}; }
+            if (current == state.receivers.end() || current->passband != previous.passband || current->mode != previous.mode
+                || current->wfmDeemphasisUs != previous.wfmDeemphasisUs
+                || current->wfmForceMono != previous.wfmForceMono) { m_sliceAudio[id] = {}; }
         }
         if (std::ranges::any_of(state.receivers, [&state](const auto& value) {
                 return std::ranges::find(state.receivingIds, value.passband.stableId)
                     != state.receivingIds.end()
                     && value.mode != RtlCaptureTransaction::Mode::Fm
-                    && value.mode != RtlCaptureTransaction::Mode::Fmn;
+                    && value.mode != RtlCaptureTransaction::Mode::Fmn
+                    && !(RtlReceivePipeline::kQualifiedWfmEnabled
+                        && value.mode == RtlCaptureTransaction::Mode::Wfm);
             })) { retireNativeAudio(); }
         else { retirePcmStreams(); }
     }
@@ -1418,6 +1649,24 @@ void RtlSdrBackend::publishCapture()
                 m_omittedSettings.remove(id);
             }
         }
+    }
+    for (int id = 0; id < 8; ++id) {
+        const auto receiver = std::ranges::find_if(state.receivers,
+            [id](const auto& value) { return value.passband.stableId == id; });
+        const bool active = RtlReceivePipeline::kQualifiedWfmEnabled
+            && receiver != state.receivers.end() && receiver->mode == RtlCaptureTransaction::Mode::Wfm
+            && std::ranges::find(state.receivingIds, id) != state.receivingIds.end();
+        // A newly accepted revision may repair an unchanged receiver recipe.
+        // Its first current-token PCM packet is the proof of decoder state;
+        // never carry a pilot claim across that publication boundary.
+        m_wfmStatus[id] = active ? WfmStereoStatus::Acquiring : WfmStereoStatus::Unavailable;
+        m_wfmReception[id] = {};
+        // Retain the last observed decoder identity across control-only
+        // revisions: cached credits must not refresh a stalled decoder.
+        // A new prepared graph differs by instance/epoch even if its local
+        // publication sequence restarts at the same value.
+        m_wfmPublicationAge[id].invalidate();
+        m_wfmObservationAge[id].invalidate();
     }
     m_lastPublished = state;
     for (const auto& receiver : state.receivers) {

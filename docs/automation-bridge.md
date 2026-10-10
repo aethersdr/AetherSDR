@@ -1079,6 +1079,20 @@ used by the stacked trace renderer.
   sources; useful for checking that hidden histories continue updating.
 - `kiwiFftTraceFloorDbm` versus `kiwiDisplayFloorDbm` — distinguishes the FFT
   trace floor used by 3D placement from the waterfall color floor.
+- `encoderMinDbm`, `encoderMaxDbm`, `encoderRangeGeneration` — the locally
+  applied native pixel-decoder range, separate from the display axis.
+- `noiseFloorReacquiring` — whether auto floor is waiting for a settled fresh
+  sequence after a native range, tuning, antenna, or RF-gain transition.
+- `nativeInputBins` — native FFT values delivered to the widget, before its
+  temporal display smoothing, including any active local range rebase. These
+  are decoded dBm, not raw VITA pixel rows.
+- `renderedTrace` — the last native 2D trace submitted by the GPU renderer (or painted
+  by the software renderer), with its axis, floor, time, local FFT sequence,
+  and locally applied encoder generation. `valid:false` means no trace has
+  rendered, or the visible source is Kiwi/3D. These generations are local
+  diagnostics, not VITA wire tags;
+  this snapshot does not certify scanout or exclude old UDP frames. Use a
+  native screenshot to confirm the visible result.
 
 `get meters` additionally reports `temperature` and `voltage` observations with
 `status`, `value`, `unit` and `ageMs`. `status` is one of `unsupported`,
@@ -1104,6 +1118,32 @@ accepting the verb there would certify two-tone RF that was never on the air.
 The refusal comes before the TX gate — it is about what the evidence would
 claim, so it applies even when `AETHER_AUTOMATION_ALLOW_TX=1`. Ordinary TUNE
 remains available in supported modes.
+
+### `radiocert meters`: control readback, interlock and the SQL line
+
+`radiocert meters [freqMhz] [sql=<MHz>]` runs three non-keying stages before its
+keyed ones. With bridge TX permission off, every key is refused and counted in
+`keyRefusals`, and these three still run:
+
+| Stage | What it does | Concern when |
+|---|---|---|
+| `control-domain` | Writes every published speech-processor level (enabling PROC for the sweep) and squelch level 0…100 through the operator's setters. Both ends are held 6.5 s, two IC-7300MK2 polls. The squelch sample carries the enable. | a value never reads back as written, or reads back and then moves |
+| `front-end-interlock` | On a pan publishing stepped preamp and attenuator labels, runs five transitions from both-off, timing when the stage *not* written settles. Restores the front end afterwards. | the radio moved the other stage and the pan showed it after more than 500 ms |
+| `squelch-scale` | Parks the dial 1.5 kHz below the `sql=` carrier (default: the RX reference carrier), finds the lowest level that drops the operator's audio by 20 dB, confirms it at ±1 level, and compares the published line there with the carrier's pan peak. If Auto SQL is published, it repeats the search on band noise 10 kHz away. | the line is more than 6 dB from the carrier, or Auto's widest margin is below the noise gate |
+
+`squelch-scale` is `INCONCLUSIVE` for a carrier above S9 (−73 dBm), for one that
+fades during the search, and when there is no audio with squelch open. Both squelch
+stages decline while the RX applet's SQL button reads AUTO, because Auto SQL rewrites
+the slice on every pan frame; when the button can't be found, the report says the
+state was not observable. `freqMhz` and `sql=` take `tune`'s validation (finite,
+0.001–105000 MHz), and a malformed argument is refused before anything runs.
+
+Together the three stages add about 1.5–2 minutes of nested event loops to every
+`radiocert meters` and `radiocert all`, and longer where Auto SQL is published
+and the noise gate is searched too. A two-minute `meters` run is not a hang. Use a steady
+groundwave carrier below S9, or the attenuator in front of a strong one. Each stage
+restores the slice, squelch, processor and front end it changed. See
+[CERTIFICATION.md](CERTIFICATION.md) §1.41–1.43.
 
 ### `radiocert persist`
 
@@ -1183,7 +1223,27 @@ python3 tools/radiocert_persist_multislice.py run --app build/AetherSDR.app \
   --serial EXACT_DISCOVERY_SERIAL
 ```
 
-It starts with one owned USB/LSB slice and requires advertised capacity for two.
+A third runner holds the control contracts that broke on the IC-7300MK2, for
+Flex, HL2 or Icom:
+
+```sh
+python3 tools/radiocert_persist_controls.py plan
+python3 tools/radiocert_persist_controls.py run --app build/AetherSDR.app \
+  --profile /tmp/persist-controls-profile --output /tmp/persist-controls-evidence \
+  --icom-host 192.168.1.90        # or --serial EXACT_DISCOVERY_SERIAL
+```
+
+It seeds the processor level at an interior value of the published maximum
+(`transmit.speechProcLevelMaximum` in the snapshot), sets manual SQL to threshold 0
+and requires Manual to hold through two polls, seeds a distinctive manual SQL
+level, then quits, relaunches and checks both values came back from the radio. An
+Icom connects by host. **The runner never handles credentials**: complete the
+Icom sign-in in the client window at each launch (twice per run). If SQL Manual
+cannot be re-entered after the boundary contract, that is recorded as a concern,
+not a stop. SQL at 0 across a restart is not asserted, because a radio with no
+squelch enable reads threshold 0 as Off.
+
+The two-slice runner starts with one owned USB/LSB slice and requires advertised capacity for two.
 Both 14.180 and 14.160 MHz RX seeds must fit inside the original pan span. The
 runner creates the additional slice, assigns distinct SQL, AGC, filter and audio
 values, switches the selected slice, exercises SQL on/off isolation and independent
@@ -1281,7 +1341,7 @@ values on context revisit and restart, including cleanup revisits.
 A real-app, no-radio restart smoke check is available with `smoke` instead of
 `run` (omit `--serial`); it uses Qt offscreen. The policy test
 `radiocert_persist_policy` uses only in-process data fixtures and no radio peer.
-Process supervision currently supports macOS/Linux. Icom mutation contracts,
+Process supervision currently supports macOS/Linux. Icom mutation contracts beyond the controls runner,
 additional antenna types, multiple slices/pans, MultiFlex, crash/power-cycle recovery,
 DSP, memory banks and layout/audio-device scenarios remain explicit gaps for
 subsequent iterations. The broader issue table and proposed contracts are in
@@ -1295,8 +1355,9 @@ retention result; peer changes, missing fields and unrelated drift stop the
 run. The expanded FM/AGC matrix is locally policy-tested but awaits a live run.
 See the [Flex-to-Icom handoff](research/persist-flex-to-icom-handoff-2026-09-08.md)
 for completed evidence, remaining gaps and the IC-7300MK2 receive-only plan.
-These mutation runners remain Flex-only; Icom AGC modes do not imply support
-for Flex's AGC threshold/off-level controls.
+The single- and two-slice mutation runners remain Flex-only; Icom AGC modes do
+not imply support for Flex's AGC threshold/off-level controls. The controls runner
+above is the Icom-capable one.
 
 ### `get display`
 Per-panadapter **Display panel** settings — every value the panel's PANADAPTER
@@ -1666,12 +1727,28 @@ state from the slice button.
 
 ```
 slice dsp nb on 80          # drive the control the operator drives
-get hostnb                  # DSP agrees: on=true, level=80, threshold≈7.6,
-                            #   and requestedOn/requestedLevel match it
+get hostnb                  # DSP agrees: on=true, kind=1, level=80,
+                            #   threshold≈7.6, and requested* match it
 get slice active nb         # model agrees too
 slice dsp nb off
 get hostnb                  # on=false everywhere
 ```
+
+**The second blanker (NB2):**
+
+```
+slice dsp nb2 on 80 4       # WDSP's NOB, level 80, fill 4 (interpolate)
+get hostnb                  # kind=2, fill=4; `on` is still true, so a script
+                            #   that only reads `on` keeps working
+slice dsp nb2 on            # switch to NB2 without touching level or fill
+slice dsp nb on             # back to the first blanker; at most one ever runs
+```
+
+`kind` is 0 off, 1 NB (WDSP's ANB, which silences the blanked window) and 2 NB2
+(its NOB, which reconstructs it). `fill` is WDSP's own numbering for that
+reconstruction — 0 zero, 1 sample-hold, 2 mean-hold, 3 hold-sample,
+4 interpolate — and applies to NB2 only. Only `nb2` accepts it; `slice dsp nb on
+80 4` is an error rather than a silently ignored argument.
 
 ### `tune`
 Set a slice's frequency in MHz — the most fundamental control the
@@ -1815,7 +1892,7 @@ re-poll `get slices`.
 | `filter` | `<lowHz> <highHz>` e.g. `-3000 -150` | set the active slice passband through `SliceModel::setFilterWidth`, which emits a typed `receiveFilterRequested` with Operator origin and reaches `IRadioBackend::requestSliceFilter`. Mode normalization emits a separately tagged request: host DSP applies it, while Flex preserves its radio-owned mode-filter memory. Assert the passband before measuring the audio path. Returns requested edges and post-normalization `filterLow`/`filterHigh`; desktop model readback alone does not prove hardware application. Use `-4000 4000` for a carrier-straddling AM passband |
 | `filterpreset` | `<FIL1\|FIL2\|FIL3>` | select a stable radio-owned RX filter slot without conflating it with a passband-width edit. Returns the requested slot; re-poll `get slice active filterPreset` and the filter edges for radio-authoritative readback |
 | `agc` | `<off\|slow\|med\|fast> [threshold 0..100]` | set receive AGC through `SliceModel` operator setters and typed `receiveAgcRequested` requests. Applies threshold before mode; each changed field dispatches independently. Flex writes only that field; the default backend adapter passes the current mode/threshold pair to host DSP for either edit. HL2 maps this to WDSP RXA AGC mode and ceiling in dB. This is not an atomic paired command. Use `off` with a low threshold for a linear measurement path |
-| `dsp` | `<nr\|nb\|anf\|squelch> <on\|off> [level]` | drive the receive DSP controls an operator drives — noise blanker, noise reduction, auto-notch, and squelch (with an optional 0..100 level). `slice dsp squelch` is the squelch path; there is deliberately no separate squelch verb (#5102) |
+| `dsp` | `<nr\|nb\|nb2\|anf\|squelch> <on\|off> [level] [fill]` | drive the receive DSP controls an operator drives — noise blanker, noise reduction, auto-notch, and squelch (with an optional 0..100 level). `nb2` selects WDSP's second impulse blanker and takes an optional fill mode 0..4; at most one blanker runs, so `nb2 on` replaces `nb`. `slice dsp squelch` is the squelch path; there is deliberately no separate squelch verb (#5102) |
 | `tone` | `<off\|ctcss_tx> [freq]` | set the FM CTCSS encode mode and tone. The value is applied before the mode, so enabling CTCSS never keys on the previous tone for a round trip. The mode pair is what a FlexRadio slice carries |
 | `offset` | `<simplex\|up\|down> [mhz]` | set repeater duplex. The magnitude is unsigned (0..100 MHz — the GUI spinboxes' own bound); the direction carries the sign. Writes all three radio fields — `repeater_offset_dir`, `fm_repeater_offset_freq` **and** the signed `tx_offset_freq` that actually moves the transmitter — then reports `txOffsetFreq` so the applied split can be asserted rather than assumed |
 | `diversity` | `<sliceId> <on\|off>` | enable or disable diversity through the slice model; re-poll `get slices` for parent/child state |
@@ -3950,7 +4027,7 @@ is applied automatically on connect and the user's real name is restored when th
 bridge stops.
 
 ### `qrz`
-QRZ.com callsign-lookup subsystem (CW decoder contact card + Tools → Callsign
+QRZ.com callsign-lookup subsystem (live CW contacts window + View → Callsign
 Lookup). Four actions; none touch the radio and none key TX.
 
 ```json
@@ -3979,9 +4056,16 @@ Lookup). Four actions; none touch the radio and none key TX.
   network only on miss/stale). Async: poll `qrz cached <call>` for arrival.
 - `spottext <text>` — feed text into the **CW callsign spotter** as if the CW
   decoder produced it. Drives the real detection path ("DE <call> <call>" →
-  service → contact card on the CW decode panel), so an agent can prove the
-  end-to-end screen-pop with no radio, no live CW, and — with a seeded cache —
-  no QRZ account. Verify with `grab callsignCard` / `dumpTree`.
+  service → live contacts window), so an agent can prove the
+  end-to-end display with no radio, no live CW, and — with a seeded cache —
+  no QRZ account. First enable View → **Show live CW contacts** (below
+  **Smart Spot Filtering**), or invoke the `showLiveCwContacts` action.
+  This defaults off independently of the QRZ account setting. When off, spots
+  remember the last heard callsign without opening a window or starting a
+  lookup. Enabling shows that station immediately; closing the window or its
+  **Close live contacts** button unchecks the action and keeps it off. Verify
+  with `grab liveCwContactsDialog` / `dumpTree`. The decoded-text pane keeps
+  its full width. Changes of decoder input clear the old live contact.
 
 Bare-line forms: `qrz status`, `qrz cached KI6BCJ`, `qrz lookup W1AW`,
 `qrz spottext CQ CQ DE KI6BCJ KI6BCJ K`.
@@ -4764,7 +4848,7 @@ still a separate radiocert task.
 | `liveness` | — | liveness — per-class data ages and the producer->consumer meter join |
 | `civ` | — | civ <wake <model-id-hex> <address-hex>\|send <hex>\|trace [all]\|session\|scheduler\|incident> — CI-V inject, frame trace, lease/scheduler health, or last incident (Icom; send is TX-gated) |
 | `controls` | — | controls <map\|meters\|scrub [id\|plane]> — the CI-V control and meter registry joined against what is actually wired, and a linkage check that drives every settable control without moving any of them (Icom) |
-| `radiocert` | — | radiocert <tune\|rx\|tx\|meters\|all\|persist> [freqMhz] — bring-up diagnostic; persist is a read-only snapshot for tools/radiocert_persist.py (tx/meters key) |
+| `radiocert` | — | radiocert <tune\|rx\|tx\|meters\|all\|persist> [freqMhz] [sql=<MHz>] — bring-up diagnostic; sql= is the steady carrier the meters squelch-scale stage measures; persist is a read-only snapshot for tools/radiocert_persist.py (tx/meters key) |
 | `transmit` | — | transmit <rfpower\|tunepower> <0..100> — transmit drive (TX-gated) |
 | `key` | — | key <ptt on\|off \| mox> — semantic keying (TX-gated) |
 | `station` | — | station <name> — set the GUI-client station name |

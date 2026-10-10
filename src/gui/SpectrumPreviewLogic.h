@@ -5,8 +5,54 @@
 #include <cmath>
 #include <limits>
 #include <optional>
+#include <span>
 
 namespace AetherSDR {
+
+// A range/gain transition must settle before one fresh baseline replaces the
+// previous lock. Frame counts alone would cold-acquire throughout the change.
+class NoiseFloorReacquisition {
+public:
+    void arm(std::int64_t untilMs)
+    {
+        m_untilMs = std::max(m_untilMs, untilMs);
+        m_active = true;
+        m_frames = 0;
+    }
+
+    void cancel() { m_active = false; }
+    bool active() const { return m_active; }
+
+    bool observe(float floorDbm, std::int64_t nowMs)
+    {
+        if (!m_active) {
+            return true;
+        }
+        if (nowMs < m_untilMs || !std::isfinite(floorDbm) || floorDbm <= -500.0f) {
+            m_frames = 0;
+            return false;
+        }
+        if (m_frames == 0 || std::abs(floorDbm - m_firstDbm) > 1.0f) {
+            m_firstDbm = floorDbm;
+            m_firstMs = nowMs;
+            m_frames = 1;
+            return false;
+        }
+        ++m_frames;
+        if (m_frames < 3 || nowMs - m_firstMs < 100) {
+            return false;
+        }
+        m_active = false;
+        return true;
+    }
+
+private:
+    bool m_active{false};
+    std::int64_t m_untilMs{0};
+    std::int64_t m_firstMs{0};
+    float m_firstDbm{0.0f};
+    int m_frames{0};
+};
 
 enum class DssOutlinePipelineMode {
     DedicatedRibbonPipeline,
@@ -370,6 +416,21 @@ inline bool flexFftFrameNeedsHeadroomRecovery(bool kiwiActive,
     return !kiwiActive
         && dssFrameFloorLooksClipped(
             finiteBins, minValueBins, longestMinRunBins);
+}
+
+inline bool fftPeakTouchesEncoderCeiling(std::span<const float> bins,
+                                        float encoderMaxDbm, float rowStepDb)
+{
+    if (!std::isfinite(encoderMaxDbm) || !std::isfinite(rowStepDb)
+        || rowStepDb <= 0.0f) {
+        return false;
+    }
+    // A narrow tone may saturate just one FFT bin. The first pixel row can be
+    // the ceiling or one row below it; occupancy is not a peak-clipping test.
+    return std::any_of(bins.begin(), bins.end(), [=](float value) {
+        return std::isfinite(value)
+            && value >= encoderMaxDbm - 1.5f * rowStepDb;
+    });
 }
 
 // Windows in which an FFT frame's dBm encoding does not correspond to the

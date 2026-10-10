@@ -179,6 +179,7 @@ class MqttSettingsDialog;
 class WaveformsDialog;
 class DxClusterDialog;
 class CallsignLookupDialog;
+class LiveCwContactsDialog;
 class Ax25HfPacketDecodeDialog;
 class PskReporterMapDialog;
 class GpsLocationDialog;
@@ -353,6 +354,20 @@ protected:
     // Restore WS_MINIMIZEBOX / WS_MAXIMIZEBOX on the HWND under the expanded
     // client area, where WindowChrome drops Qt's caption-button hints.
     void applyWindowsCaptionStyles();
+    // The HWND's client rect in physical pixels, read and set through Windows
+    // rather than Qt's frame margins, which are wrong under the expanded
+    // client area (#6303).
+    QRect nativeClientRect() const;
+    void setNativeClientRect(const QRect& client);
+    // Per window role ("main", "fullMode", "minimalMode") through the
+    // WindowChrome::kNativeGeometryKey document; only in the normal state
+    // under the expanded client area, the only place Qt's margins are wrong.
+    bool nativeClientRectRestorable() const;
+    void saveNativeClientRect(const QString& role);
+    void restoreNativeClientRect(const QString& role);
+    // Windows 11: colour the DWM window border to color.background.app.
+    void applyWindowsFrameColor();
+    bool nativeEvent(const QByteArray& eventType, void* message, qintptr* result) override;
 #endif
     void closeEvent(QCloseEvent* event) override;
     void changeEvent(QEvent* event) override;
@@ -390,6 +405,10 @@ private slots:
     // See issue #1764.
     void applyMasterVolume(int pct);
     void syncTitleBarOutput();
+
+    // A deliberate operator step change from the STEP buttons or the cycle
+    // shortcuts. Radio-driven syncs must not come here; see the connect site.
+    void applyOperatorTuningStep(int stepHz);
 
 private:
     enum class TuneIntent {
@@ -537,6 +556,7 @@ private:
     void centerActiveSliceInPanadapter(bool forceRadioCenter, double centerMhz = -1.0);
     void pushSliceOverlay(SliceModel* s);
     bool reattachSliceVisualsToPanadapter(SliceModel* s);
+    void refreshPanSliceTitle(PanadapterApplet* applet);
     void syncTxWaterfallSliceToSpectrums();
     // #5750: on a radio whose span is one register for the whole board, keep
     // the -/+ span pair live on ONE pane (the TX slice's, else the first
@@ -869,10 +889,12 @@ private:
     void refreshCwInputStatus();
     void stopCwRx();
     // QRZ callsign lookup (MainWindow_Callsign.cpp): CW-spotter → lookup
-    // service → contact card on the CW decode panel + lookup dialog.
+    // service → opt-in live contacts window + manual lookup dialog.
     void wireCallsignLookup();
     void onCwCallsignSpotted(const QString& call);
     void showCallsignLookupDialog(const QString& call = QString());
+    void setLiveCwContactsVisible(bool visible);
+    void clearLiveCwContact();
     void showGpsLocationDialog();
     void routeRttyDecoderOutput();
     void refreshRttyDecodeState();
@@ -902,6 +924,10 @@ private:
     // keyer panels mutually exclusive and restore the splitter identically.
     void toggleCwKeyerPanel();
     void toggleVoiceKeyerPanel();
+    // Status-bar indicators are click-handled labels and containers; a mouse
+    // press (eventFilter) and the keyboard (StatusIndicator) share one action.
+    bool isStatusIndicator(const QObject* obj) const;
+    void activateStatusIndicator(QObject* obj);
     // Shared by the status-bar +PAN affordance and Tools ▸ Add Panadapter… so
     // both route through PanLayoutDialog and the layout machinery.
     void showAddPanadapterDialog();
@@ -1291,6 +1317,7 @@ private:
     void cwRxModelAction();
     void refreshCwRxStatus();
     void appendUnscoredCwText(const QString& text);
+    void appendColoredCwText(const QString& text, float cost);
     void refreshCwRxBackend();
 #endif
     CwRxModel         m_cwDecoder;
@@ -1645,6 +1672,9 @@ private:
     // Modeless dialogs
     QPointer<DxClusterDialog> m_spotHubDialog;
     QPointer<CallsignLookupDialog> m_callsignLookupDialog;
+    QPointer<LiveCwContactsDialog> m_liveCwContactsDialog;
+    QAction* m_liveCwContactsAction{nullptr};
+    QString m_lastCwContactCall;
     QPointer<RadioSetupDialog> m_radioSetupDialog;
     QPointer<NetworkDiagnosticsDialog> m_networkDiagnosticsDialog;
     QPointer<SystemInfoDialog> m_systemInfoDialog;
@@ -1673,6 +1703,10 @@ private:
     QPointer<CanonWindow> m_aboutWindow;
     QPointer<AetherRxDialog> m_rxDialog;
     QPointer<QDialog> m_nr2WisdomDialog;
+    // The running NR2 wisdom worker and its cancel flag, so shutdown can stop
+    // it before AudioEngine teardown needs the FFTW planner lock (#6287).
+    QPointer<QThread> m_nr2WisdomThread;
+    std::shared_ptr<std::atomic_bool> m_nr2WisdomCancel;
 #ifdef HAVE_MQTT
     QPointer<MqttSettingsDialog> m_mqttSettingsDialog;
 #endif
@@ -1773,6 +1807,13 @@ private:
     QTimer* m_cpuTimer{nullptr};
     QLabel* m_paTempLabel{nullptr};
     QLabel* m_supplyVoltLabel{nullptr};
+    // The container holding the two labels above. Held so the whole stack can
+    // come down when BOTH its rows are withdrawn: reserveTelemetryStack() pins
+    // its minimum width, so hiding only the children would leave a reserved
+    // empty gap between two separators. The separator after it hides with it,
+    // or the two would sit back to back.
+    QWidget* m_paStack{nullptr};
+    QLabel*  m_paSeparator{nullptr};
     QLabel* m_networkLabel{nullptr};
     QTimer m_networkTooltipRefreshTimer;
     QTimer m_perfHeartbeatTimer;
@@ -1931,6 +1972,7 @@ private:
     class ClientTubeEditor* m_clientTubeEditor{nullptr}; // lazy — created on first Edit… click
     class ClientPuduEditor* m_clientPuduEditor{nullptr}; // lazy — created on first Edit… click
     class AetherialAudioStrip* m_aetherialStrip{nullptr};    // lazy — created on first egg-nub click (#2301)
+    bool m_restoreAetherialStripOnShow{false};   // reopen AetherTX on first show
 
     // Applet-panel pop-out support (#1713 Phase 6).  When floating,
     // the panel lives inside m_appletPanelFloatWindow and its splitter

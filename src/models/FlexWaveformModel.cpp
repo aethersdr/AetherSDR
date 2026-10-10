@@ -191,6 +191,16 @@ void FlexWaveformModel::requestRemoveContainer(const QString& name)
     emit commandReady(QStringLiteral("waveform remove_container ") + name);
 }
 
+void FlexWaveformModel::handleCommandReply(const QString& cmd, int code, const QString& body)
+{
+    // cmd is one this model emitted: "waveform <action> <name>".
+    const QStringList parts = cmd.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+    if (parts.size() != 3 || parts.at(0) != QLatin1String("waveform")) {
+        return;
+    }
+    emit commandFinished(parts.at(1), parts.at(2), code == 0, body.trimmed());
+}
+
 void FlexWaveformModel::requestRestart(const QString& name)
 {
     if (!isSafeWaveformCommandName(name)) {

@@ -104,6 +104,8 @@ public:
         deleteLater();
     }
     QString description() const override { return QStringLiteral("Fake CTR2"); }
+    // What the HID thread port reports after Feature report 0x02.
+    void negotiate(quint32 extensions) { setExtensions(extensions); }
 
     // Delivers up to n queued reports; the acknowledgement arrives later and
     // is dropped if a fence happened in between, as the interface requires.
@@ -718,6 +720,7 @@ void testDeviceLabels()
                                 QStringLiteral("Espressif Systems"), QStringLiteral("ESP32S3_DEV"), {}};
     Ctr2HidPort::DeviceInfo dial{QStringLiteral("p"), 0x303A, 0x1001, {}, QStringLiteral("M5STACK_DIAL"), {}};
     Ctr2HidPort::DeviceInfo midi{QStringLiteral("p"), 0x2886, 0x0056, {}, QStringLiteral("XIAO_ESP32S3"), {}};
+    Ctr2HidPort::DeviceInfo knob{QStringLiteral("p"), 0x303A, 0x1001, {}, QStringLiteral("AETHER_KNOB"), {}};
     Ctr2HidPort::DeviceInfo devBoard{QStringLiteral("p"), 0x303A, 0x1001, {}, QStringLiteral("Some_S3_Gadget"), {}};
     Ctr2HidPort::DeviceInfo wrongVid{QStringLiteral("p"), 0x1234, 0x1001, {}, QStringLiteral("ESP32S3_DEV"), {}};
     Ctr2HidPort::DeviceInfo other{QStringLiteral("p"), 0x04F3, 0x32BC, {}, QStringLiteral("Touchpad"), {}};
@@ -725,6 +728,7 @@ void testDeviceLabels()
           "CTR2-Max/Nano product string is named");
     check(dial.ctr2Model() == QStringLiteral("CTR2 (M5Dial)") && midi.ctr2Model() == QStringLiteral("CTR2-MIDI"),
           "M5Dial and MIDI product strings are named");
+    check(knob.ctr2Model() == QStringLiteral("AetherKnob"), "the AetherKnob product string is named");
     check(other.ctr2Model().isEmpty() && other.label() == QStringLiteral("Touchpad (04f3:32bc)"),
           "other devices keep their plain label");
     check(devBoard.ctr2Model().isEmpty() && wrongVid.ctr2Model().isEmpty(),
@@ -955,6 +959,105 @@ void testNoHelloWhileDraining()
 
 } // namespace
 
+void testAudioSpectrumExtension()
+{
+    const quint32 bit = capabilityBit(MessageType::AudioSpectrum);
+    const QByteArray payload = spectrum::encode(67, 4000, std::vector<float>(32, -40.0f));
+    {
+        Rig rig;  // a stock CTR2: nothing negotiated
+        rig.start();
+        check(rig.linkUp(), "link up (no extensions)");
+        const size_t before = rig.port->sent.size();
+        check(!rig.relay.sendAudioSpectrum(payload) && rig.port->sent.size() == before,
+              "a device that negotiated nothing is never sent a spectrum");
+        std::vector<Report> r;
+        rig.dev.tx.encodeExtension(MessageType::AudioSpectrum, payload, &r);
+        rig.port->deliver(r);
+        check(waitUntil([&] { return rig.dev.count(MessageType::Closed) >= 1; }),
+              "an extension the host did not negotiate is still a link fault");
+    }
+    {
+        Rig rig;
+        rig.port->negotiate(bit);
+        rig.dev.rx.setExtensions(bit);
+        rig.start();
+        check(rig.relay.extensions() == bit, "the relay reports the negotiated extensions");
+        check(!rig.relay.sendAudioSpectrum(payload), "no spectrum before the link is relaying");
+        check(rig.linkUp(), "link up (spectrum negotiated)");
+        check(rig.relay.sendAudioSpectrum(payload), "a spectrum is sent while relaying");
+        check(waitUntil([&] { return rig.dev.count(MessageType::AudioSpectrum) == 1; }),
+              "the device receives one AudioSpectrum message");
+        bool same = false;
+        for (const Message& m : rig.dev.messages) {
+            same = same || (m.type == MessageType::AudioSpectrum && m.payload == payload);
+        }
+        check(same && !rig.dev.rxError, "its payload arrives unchanged, in valid framing");
+
+        // A device-sent extension of a negotiated type is accepted and ignored.
+        std::vector<Report> r;
+        rig.dev.tx.encodeExtension(MessageType::AudioSpectrum, payload, &r);
+        rig.port->deliver(r);
+        rig.dev.send(QByteArray("C1|ping\n"));
+        check(waitUntil([&] { return rig.radio.conns[0]->received.endsWith("C1|ping\n"); }),
+              "the link stays up and later data still reaches the radio");
+        check(rig.relay.state() == State::Relaying, "still relaying");
+
+        // A backed-up link drops frames instead of queueing them.
+        rig.port->autoAck = false;
+        int accepted = 0;
+        for (int i = 0; i < 60; ++i) {
+            accepted += rig.relay.sendAudioSpectrum(payload) ? 1 : 0;
+        }
+        // 7 reports a frame: ~19 fit under the ~128-report allowance.
+        check(accepted >= 15 && accepted < 30, "frames stop once ~130 ms of output is queued");
+        rig.port->autoAck = true;
+        rig.port->ack(rig.port->pending());  // acknowledged asynchronously, like the real port
+        check(waitUntil([&] { return rig.relay.sendAudioSpectrum(payload); }),
+              "frames resume once the link drains");
+    }
+}
+
+// A device that negotiated RelayUdpPort is told the relay's UDP port right
+// after READY; one that did not is never sent it.
+void testRelayUdpPortExtension()
+{
+    const quint32 both = capabilityBit(MessageType::AudioSpectrum)
+        | capabilityBit(MessageType::RelayUdpPort);
+    {
+        Rig rig;
+        rig.port->negotiate(both);
+        rig.dev.rx.setExtensions(both);
+        rig.start();
+        check(rig.linkUp(), "link up (RelayUdpPort negotiated)");
+        check(waitUntil([&] { return rig.dev.count(MessageType::RelayUdpPort) == 1; }),
+              "the device is told the relay's UDP port once");
+        int readyAt = -1, portAt = -1;
+        quint16 port = 0;
+        for (int i = 0; i < static_cast<int>(rig.dev.messages.size()); ++i) {
+            const Message& m = rig.dev.messages[i];
+            if (m.type == MessageType::Ready && readyAt < 0) {
+                readyAt = i;
+            }
+            if (m.type == MessageType::RelayUdpPort) {
+                portAt = i;
+                port = quint16((quint8(m.payload[0]) << 8) | quint8(m.payload[1]));
+            }
+        }
+        check(readyAt >= 0 && portAt == readyAt + 1, "it follows READY directly");
+        check(port != 0 && !rig.dev.rxError, "it carries a real port, in valid framing");
+    }
+    {
+        Rig rig;  // spectrum only
+        rig.port->negotiate(capabilityBit(MessageType::AudioSpectrum));
+        rig.dev.rx.setExtensions(capabilityBit(MessageType::AudioSpectrum));
+        rig.start();
+        check(rig.linkUp(), "link up (RelayUdpPort not negotiated)");
+        rig.dev.pump();
+        check(rig.dev.count(MessageType::RelayUdpPort) == 0 && !rig.dev.rxError,
+              "a device that did not negotiate it is never sent the port");
+    }
+}
+
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
@@ -978,6 +1081,8 @@ int main(int argc, char** argv)
     testHostCallsAndDeviceAnswers();
     testRetryBacksOffAfterRadioFailure();
     testNoHelloWhileDraining();
+    testAudioSpectrumExtension();
+    testRelayUdpPortExtension();
     if (g_failures) {
         std::fprintf(stderr, "%d check(s) failed\n", g_failures);
         return 1;

@@ -23,6 +23,7 @@ public:
         std::uint64_t mixerLateFrames = 0;
         std::uint64_t mixerRejectedBlocks = 0;
         std::uint64_t mixerConfigurationFailures = 0;
+        std::uint64_t droppedTraceEvents = 0;
     };
     // Independently sampled lifetime counters, not one atomic point-in-time
     // transaction. The control owner caches these for healthSnapshot().
@@ -35,10 +36,42 @@ public:
         std::uint64_t firstSample = 0;
         int slot = -1;
         std::size_t frames = 0;
+        int sampleRateHz = 48000;
+        int channelCount = 2;
         bool discontinuity = false;
+        // Present only on the independent WFM slice packet. Travels with the
+        // same accepted session/revision and receiver epoch as its PCM.
+        std::optional<bool> wfmStereoDetected;
+        std::optional<AetherSDR::WfmReceptionDiagnostics> wfmReception;
         std::array<float, 2048> samples{};
     };
-    explicit RtlReceivePipeline(std::size_t capacity = 1);
+    // Bounded acquisition observations; no formatting, clock reads, allocation,
+    // or logging on the sample callback. The owner drains across bank adoption
+    // so repair cannot erase the fault that requested it.
+    struct TraceEvent {
+        enum class Kind { ReceiverFailure, MixerMissing };
+        Kind kind = Kind::ReceiverFailure;
+        Transaction::Token token;
+        std::uint64_t hardwareGeneration = 0;
+        std::uint64_t captureEpoch = 0;
+        int slot = -1;
+        int stableId = -1;
+        std::uint64_t instance = 0;
+        std::uint64_t receiverEpoch = 0;
+        std::uint64_t captureFirst = 0;
+        std::uint64_t captureFrames = 0;
+        std::uint64_t captureClock = 0; // end of current capture block, at 48 kHz
+        std::uint64_t quantumFirst = 0;
+        RtlAudioMixer::MissingMask missingMask{};
+        std::optional<RtlReceiverRegistry::ProcessingFailure> failure;
+    };
+    static constexpr unsigned kTraceEvents = 64;
+    bool takeTraceEvent(TraceEvent& output) noexcept;
+    // One internal build gate: qualification fixtures opt in explicitly. The
+    // backend uses the same constant for its controls and legacy publication.
+    static constexpr bool kQualifiedWfmEnabled = true;
+    explicit RtlReceivePipeline(std::size_t capacity = 1,
+                                bool enableWfm = kQualifiedWfmEnabled);
     enum class Submission { Accepted, RetryRetiringSlot, RetryPlannerBusy, Failed };
     Submission prepareDetailed(const Transaction::State& state, bool resetCapture = false,
                                bool verifiedRollback = false);
@@ -63,8 +96,15 @@ private:
     void process(const RtlReceiverRegistry::SampleBlock&, std::span<const RtlReceiverRegistry::ReceiverView>) noexcept override;
     void audioBlock(const RtlReceiverRegistry::ReceiverSpec&, std::uint64_t,
                     std::span<const float>, std::span<const float>, bool) noexcept override;
+    void audioBlockWithStatus(const RtlReceiverRegistry::ReceiverSpec&, std::uint64_t,
+                    std::span<const float>, std::span<const float>, bool, std::optional<AetherSDR::WfmReceptionDiagnostics>) noexcept override;
     void speakerBlock(std::uint64_t, std::span<const float>, bool) noexcept override;
     bool enqueue(const Packet&) noexcept;
+    void missingFrames(const RtlAudioMixer::Input&, std::uint64_t, std::uint64_t,
+                       const RtlAudioMixer::MissingMask&) noexcept override;
+    void enqueueTrace(const TraceEvent&) noexcept;
+    TraceEvent traceContext() const noexcept;
+    const bool m_enableWfm;
     RtlReceiverRegistry m_registry;
     RtlReceiverRegistry::SampleReader m_reader;
     std::uint64_t m_session = 0;
@@ -84,6 +124,18 @@ private:
     bool m_legacy = true;
     std::uint8_t m_receivingMask = 0;
     RtlAudioMixer m_mixer;
+    // Set on the first capture block of a new mixer epoch, then retained.
+    // Unchanged epochs must keep their existing sample coordinate and buffers.
+    std::optional<std::uint64_t> m_mixerOrigin;
+    std::array<int, 8> m_traceStableIds{};
+    std::uint64_t m_traceCaptureFirst = 0;
+    std::uint64_t m_traceCaptureFrames = 0;
+    std::uint64_t m_traceCaptureClock = 0;
+    // Independent SPSC trace queue: overflow is counted and never delays PCM.
+    std::array<TraceEvent, kTraceEvents> m_traceEvents;
+    alignas(64) std::atomic<unsigned> m_traceWrite{0};
+    alignas(64) std::atomic<unsigned> m_traceRead{0};
+    std::atomic<std::uint64_t> m_traceDrops{0};
     std::atomic<unsigned> m_faults{0};
     std::array<std::atomic<unsigned>, 8> m_monitor;
     std::array<unsigned, 8> m_nextMonitor{};

@@ -1,5 +1,7 @@
 # Configuring AetherSDR Controls
 
+Full documentation: [docs.aethersdr.com/keyboard-shortcuts](https://docs.aethersdr.com/keyboard-shortcuts)
+
 AetherSDR can be operated in several different ways. You can click and drag with a mouse, tune with a trackpad, use the built-in keyboard shortcuts, and add external control hardware such as FlexControl, MIDI controllers, USB tuning knobs, Stream Deck buttons, and serial PTT or CW accessories.
 
 The good news is that you do **not** need to learn everything at once. Most operators start with the mouse and a few shortcuts, then add one external controller later when they know what they want to do more quickly.
@@ -201,8 +203,9 @@ In practice, pinch-to-zoom is most commonly reliable on macOS trackpads. On Wind
 
 If a slice is currently outside the visible spectrum window:
 
-- **Single-click** its edge indicator to make that slice active.
-- **Double-click** its edge indicator to recenter the panadapter on that slice.
+- **Single-click** its edge indicator to make that slice active and recenter
+  the panadapter on it.
+- **Right-click** its edge indicator for that slice's context menu.
 
 ## Using the built-in VFO and native controls
 
@@ -452,6 +455,7 @@ Examples include:
 - CW speed
 - TX and RX EQ bands
 - Master and headphone volume
+- RADE modem on/off on the active slice (switches it to DIGU/DIGL and makes it the TX slice)
 - Next and previous slice
 
 ### The best way to map knobs

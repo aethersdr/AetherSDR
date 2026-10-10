@@ -20,6 +20,7 @@ public:
 
 private:
     void buildUI(const QString& resourcePath);
+    void applyLinkColour();
     void focusFindField();
     void findNext();
     void findPrevious();

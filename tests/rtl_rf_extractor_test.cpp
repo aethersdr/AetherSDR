@@ -1,11 +1,14 @@
 #include "core/backends/rtl/RtlRfExtractor.h"
 #include "CallbackAllocationProbe.h"
+#include "CDSPResampler.h"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdio>
 #include <limits>
 #include <numbers>
+#include <type_traits>
 #include <vector>
 
 using Extractor = AetherSDR::rtl::RtlRfExtractor;
@@ -58,8 +61,163 @@ static double toneMagnitude(std::span<const float> samples, double hz)
     }
     return std::abs(sum) / samples.size();
 }
+static void wfmUsbCallbackBursts()
+{
+    constexpr std::size_t kUsbIqFrames = 8192; // 16384 interleaved RTL U8 bytes.
+    constexpr std::size_t kWfmIqBlock = 2048;
+    constexpr int kWfmIqRate = 384000;
+    constexpr std::array<int, 9> rates{
+        225001, 250000, 300000, 1000000, 1536000, 1843200, 2000000, 2400000, 3000000};
+    static_assert(kUsbIqFrames % Extractor::kInputChunk == 0);
+    struct CountingSink final : Extractor::Sink {
+        std::size_t callbackBlocks = 0;
+        std::uint64_t next = 0;
+        bool continuous = true;
+        bool iqBlock(std::span<const float> i, std::span<const float> q,
+                     std::uint64_t first) noexcept override
+        {
+            if (i.size() != kWfmIqBlock || q.size() != i.size() || first != next || first % 8 != 0) {
+                continuous = false;
+                return false;
+            }
+            ++callbackBlocks;
+            next += i.size();
+            return true;
+        }
+    };
+    std::array<std::complex<float>, kUsbIqFrames> input;
+    input.fill({0.25f, -0.125f});
+    for (const int rate : rates) {
+        const Extractor::Config cfg{{1, 1, 100e6, double(rate), 0.45 * rate, 0.45 * rate},
+            {0, 100e6, -90000, 90000, 0, 1000, 1000}, kWfmIqRate, kWfmIqBlock, 48000};
+        Extractor extractor(cfg);
+        check(extractor.valid(), "WFM callback observation uses an admitted full passband");
+        if (!extractor.valid()) { continue; }
+
+        // Same converter recipe as the production extractor/Resampler. r8brain
+        // composes each stage's getMaxOutLen() into this prepared bound; it is
+        // independent of startup state and of the observations below. A full
+        // USB callback performs 32 conversions, even with a partial input
+        // chunk already staged, and can begin with 2047 staged output frames.
+        r8b::CDSPResampler24 converterBound(rate, kWfmIqRate, Extractor::kInputChunk, 10.0);
+        const int maxChunkOutput = converterBound.getMaxOutLen(Extractor::kInputChunk);
+        check(maxChunkOutput > 0 && maxChunkOutput <= 16384, "converter output bound fits extractor storage");
+        if (maxChunkOutput <= 0 || maxChunkOutput > 16384) { continue; }
+        const std::size_t boundBlocks = (kWfmIqBlock - 1
+            + (kUsbIqFrames / Extractor::kInputChunk) * std::size_t(maxChunkOutput)) / kWfmIqBlock;
+        CountingSink sink;
+        std::size_t callbacks = 0;
+        std::size_t maxBlocks = 0;
+        std::uint64_t maxCaptureFirst = 0;
+        std::uint64_t captureFrames = 0;
+        bool accepted = true;
+        // Two seconds rounded up to whole production USB callbacks. This is
+        // sample time, with no sleeps, elapsed-time assertions, WDSP or radio.
+        while (captureFrames < 2 * std::uint64_t(rate)) {
+            sink.callbackBlocks = 0;
+            inCallback = true;
+            accepted = extractor.process(cfg.capture, captureFrames, input, sink);
+            inCallback = false;
+            if (!accepted) { break; }
+            if (sink.callbackBlocks > maxBlocks) {
+                maxBlocks = sink.callbackBlocks;
+                maxCaptureFirst = captureFrames;
+            }
+            ++callbacks;
+            captureFrames += input.size();
+        }
+        check(accepted && sink.continuous && !extractor.withdrawn(),
+            "WFM USB callbacks preserve exact fixed-block IQ and final-audio positions");
+        check(sink.next > 0 && sink.next == extractor.outputFrames(), "WFM burst observation emitted real blocks");
+        check(maxBlocks <= boundBlocks, "observed callback burst respects composed converter bound");
+        // This bound covers ONE callback, not consecutive queued callbacks
+        // without WDSP progress, and is not a realtime/latency qualification.
+        std::printf("WFM_EXTRACTOR_BURST rate=%d callbacks=%zu captureFrames=%llu iqFrames=%llu "
+            "maxBlocks=%zu maxCaptureFirst=%llu chunkOutputBound=%d callbackBlockBound=%zu "
+            "maxAudioFrames=%zu audioFrameBound=%zu continuous=%d\n",
+            rate, callbacks, static_cast<unsigned long long>(captureFrames),
+            static_cast<unsigned long long>(sink.next), maxBlocks,
+            static_cast<unsigned long long>(maxCaptureFirst), maxChunkOutput, boundBlocks,
+            maxBlocks * 256, boundBlocks * 256, accepted && sink.continuous);
+    }
+}
+static void firstFailureObservation()
+{
+    static_assert(std::is_trivially_copyable_v<Extractor::Failure>);
+    static_assert(std::is_trivially_copyable_v<std::optional<Extractor::Failure>>);
+    struct RejectingSink final : Extractor::Sink {
+        int calls = 0;
+        bool iqBlock(std::span<const float>, std::span<const float>, std::uint64_t) noexcept override
+        { ++calls; return false; }
+    } sink;
+    const auto process = [&sink](Extractor& extractor, std::uint64_t first,
+                                std::span<const std::complex<float>> input, bool discontinuity = false) {
+        inCallback = true;
+        const bool result = extractor.process(config().capture, first, input, sink, discontinuity);
+        inCallback = false;
+        return result;
+    };
+    std::array<std::complex<float>, 64> shortInput{};
+    Extractor gap(config());
+    check(!gap.failure(), "new extractor has no failure observation");
+    check(process(gap, 25, shortInput), "nonzero origin starts without a complete DSP block");
+    check(!process(gap, 90, shortInput) && gap.withdrawn(), "one missing capture sample still withdraws");
+    const auto gapFailure = gap.failure();
+    check(gapFailure && gapFailure->reason == Extractor::FailureReason::CapturePositionMismatch
+        && gapFailure->hasExpectedCaptureFirst && gapFailure->expectedCaptureFirst == 89
+        && gapFailure->captureFirst == 90 && gapFailure->captureFrames == 64
+        && gapFailure->hasIqFirst && gapFailure->iqFirst == 1 && gapFailure->iqFrames == 0,
+        "gap observation names exact expected/actual capture and next IQ positions");
+    check(!process(gap, 89, shortInput) && gap.failure() == gapFailure,
+        "withdrawn retry cannot erase or replace the first gap");
+
+    Extractor discontinuous(config());
+    check(process(discontinuous, 25, shortInput), "explicit-discontinuity fixture starts");
+    check(!process(discontinuous, 89, shortInput, true), "explicit discontinuity remains a refusal");
+    check(discontinuous.failure()
+        && discontinuous.failure()->reason == Extractor::FailureReason::Discontinuity
+        && discontinuous.failure()->captureFirst == discontinuous.failure()->expectedCaptureFirst,
+        "explicit discontinuity differs from a positional gap");
+
+    Extractor invalid(config());
+    shortInput[3] = {std::numeric_limits<float>::quiet_NaN(), 0};
+    check(!process(invalid, 50, shortInput), "nonfinite input remains refused");
+    const auto invalidFailure = invalid.failure();
+    check(invalidFailure && invalidFailure->reason == Extractor::FailureReason::NonFiniteInput
+        && invalidFailure->captureFirst == 50 && invalidFailure->captureFrames == 64
+        && !invalidFailure->hasExpectedCaptureFirst && !invalidFailure->hasIqFirst,
+        "pre-conversion failure does not invent an IQ or previous capture position");
+    shortInput[3] = {};
+    check(!process(invalid, 50, shortInput) && invalid.failure() == invalidFailure,
+        "later finite input retains the nonfinite first cause");
+
+    Extractor overflow(config());
+    check(!process(overflow, std::numeric_limits<std::uint64_t>::max() - 31, shortInput),
+        "capture end overflow remains refused");
+    check(overflow.failure() && overflow.failure()->reason == Extractor::FailureReason::CapturePositionOverflow,
+        "capture overflow has its own precise reason");
+
+    Extractor empty(config());
+    check(!process(empty, 10, {}) && empty.failure()
+        && empty.failure()->reason == Extractor::FailureReason::EmptyInput,
+        "empty input has a distinct first-failure reason");
+
+    Extractor rejected(config());
+    std::vector<std::complex<float>> input(65536);
+    check(!process(rejected, 0, input) && rejected.withdrawn(), "sink rejection still withdraws immediately");
+    const auto rejectedFailure = rejected.failure();
+    check(rejectedFailure && rejectedFailure->reason == Extractor::FailureReason::SinkRejected
+        && rejectedFailure->captureFirst == 0 && rejectedFailure->captureFrames == input.size()
+        && rejectedFailure->hasIqFirst && rejectedFailure->iqFirst == 0 && rejectedFailure->iqFrames == 1024
+        && rejected.outputFrames() == 0 && sink.calls == 1,
+        "sink failure names the attempted full IQ block without counting it as emitted");
+    check(!process(rejected, input.size(), shortInput) && rejected.failure() == rejectedFailure && sink.calls == 1,
+        "withdrawal preserves sink cause and never calls it again");
+}
 int main()
 {
+    firstFailureObservation();
+    wfmUsbCallbackBursts();
     Extractor extractor(config());
     check(extractor.valid(), "valid readback and full passband prepare extraction");
     std::vector<std::complex<float>> input(65536, {0.5f, 0});
@@ -118,7 +276,11 @@ int main()
         auto stale = config().capture; ++stale.generation;
         check(!changed.process(stale, 0, input, output) && !changed.withdrawn(),
               "stale capture generation cannot consume current history");
+        const auto mismatch = changed.failure();
+        check(mismatch && mismatch->reason == Extractor::FailureReason::CaptureMismatch,
+              "non-withdrawing metadata rejection is observable");
         check(changed.process(config().capture, 0, input, output), "matching generation still works");
+        check(changed.failure() == mismatch, "success does not reset the first observation");
         check(!changed.process(config().capture, input.size() + 1, input, output) && changed.withdrawn(),
               "gap withdraws history without realtime reset");
         check(!changed.process(config().capture, input.size(), input, output), "withdrawn extractor cannot resume stale history");

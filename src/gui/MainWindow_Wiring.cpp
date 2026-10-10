@@ -4,6 +4,7 @@
 // panFollowVfo()/revealFrequencyIfNeeded().
 
 #include "MainWindow.h"
+#include "StatusIndicator.h"
 #include "models/CwDecodeSettings.h"
 #include "PeripheralAuthStore.h"
 #include "core/backends/AutoRfGainControl.h"
@@ -34,6 +35,7 @@
 #include "RadioSetupDialog.h"
 #include "GpsLocationDialog.h"
 #include "RxApplet.h"
+#include "WfmApplet.h"
 #include "AmpApplet.h"
 #include "AcomApplet.h"
 #include "SpeApplet.h"
@@ -52,6 +54,7 @@
 #include "core/KiwiSdrManager.h"
 #include "core/KiwiSdrProtocol.h"
 #include "SliceLabel.h"
+#include "PanSliceTitle.h"
 #include "SpectrumOverlayMenu.h"
 #include "SpectrumWidget.h"
 #include "core/AdaptiveFilterEngine.h"
@@ -1612,6 +1615,25 @@ void MainWindow::wireVfoTelemetry(VfoWidget* vfo, SliceModel* s)
 }
 
 
+void MainWindow::refreshPanSliceTitle(PanadapterApplet* applet)
+{
+    if (!applet) {
+        return;
+    }
+    QList<PanSliceTitle::SliceOnPan> slices;
+    for (auto* sl : m_radioModel.slices()) {
+        slices.append({sl->sliceId(), sl->panId()});
+    }
+    const int id = PanSliceTitle::pick(applet->panId(), m_activeSliceId,
+                                       applet->titleSliceId(), slices);
+    SliceModel* sl = id >= 0 ? m_radioModel.slice(id) : nullptr;
+    if (sl) {
+        applet->setSliceId(id, sl->letter());
+    } else {
+        applet->clearSliceTitle();
+    }
+}
+
 bool MainWindow::reattachSliceVisualsToPanadapter(SliceModel* s)
 {
     // (No m_applyingLayout guard: that flag is never set anywhere — a dead
@@ -1943,6 +1965,13 @@ void MainWindow::onSliceAdded(SliceModel* s)
             [this, s](const QString& letter) {
         if (auto* sw = spectrumForSlice(s))
             sw->setSliceOverlayLetter(s->sliceId(), letter);
+        // Also fires when the slice-letter display mode is toggled.
+        if (m_panStack) {
+            for (auto* applet : m_panStack->allApplets()) {
+                if (applet && applet->titleSliceId() == s->sliceId())
+                    applet->setSliceId(s->sliceId(), letter);
+            }
+        }
         if (centerLockActiveForSlice(s)) {
             persistCenterLockForSlice(s);
         } else {
@@ -2248,6 +2277,14 @@ void MainWindow::onSliceAdded(SliceModel* s)
         // superseded by #4037's reattachSliceVisualsToPanadapter.
         clearCenterLockForSlice(s->sliceId(), /*clearPersistedIntent=*/true);
         reattachSliceVisualsToPanadapter(s);
+        // The pan the slice left must stop naming it.
+        if (m_panStack) {
+            for (auto* applet : m_panStack->allApplets()) {
+                if (applet && applet->panId() != s->panId()
+                    && applet->titleSliceId() == s->sliceId())
+                    refreshPanSliceTitle(applet);
+            }
+        }
         // The TX slice moving pane moves a radio-wide span control (#5750).
         syncPanSpanControlPlacement();
         updateKiwiSdrVirtualTrackingForSlice(s);
@@ -2584,21 +2621,9 @@ void MainWindow::onSliceRemoved(int id)
         a->spectrumWidget()->removeVfoWidget(id);
     }
 
-    // Update pan title bars — show the first remaining slice on each pan,
-    // or clear the title if the pan has no slices left.
     if (m_panStack) {
-        for (auto* applet : m_panStack->allApplets()) {
-            bool found = false;
-            for (auto* sl : m_radioModel.slices()) {
-                if (sl->panId() == applet->panId()) {
-                    applet->setSliceId(sl->sliceId(), sl->letter());
-                    found = true;
-                    break;
-                }
-            }
-            if (!found)
-                applet->clearSliceTitle();
-        }
+        for (auto* applet : m_panStack->allApplets())
+            refreshPanSliceTitle(applet);
     }
 
     // Reset panadapter state so display settings re-sync after profile load
@@ -2882,6 +2907,7 @@ void MainWindow::sendPanDimensionsToRadio(const QString& panId,
                 m_radioModel.panStream()->setYPixels(streamId, ypix);
             }
             swGuard->prepareForFftPixelScaleChange();
+            swGuard->setEncoderYPixels(ypix);
         };
 
         if (updateLocalDecoderImmediately) {
@@ -3674,6 +3700,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
 {
     auto* sw = applet->spectrumWidget();
     auto* menu = sw->overlayMenu();
+    const quint64 rangeWiringEpoch = sw->advanceDbmRangeWireEpoch();
     if (!sw->capturePlacementAction()) {
         sw->setCapturePlacementAction(new ReceiveCaptureAction(m_radioModel,
             [applet] { return applet->panId(); }, sw));
@@ -3690,18 +3717,32 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     auto encoderDbmRange =
         std::make_shared<DbmRangeTransition::Range>();
     auto encoderRecoveryPending = std::make_shared<bool>(false);
+    // Whether this session may command the pan's range right now (#3977).
+    // Read live: ownership can move to another client mid-session.
+    auto sessionCommandsPan = [this, applet]() {
+        auto* pan = m_radioModel.panadapter(applet->panId());
+        return pan && m_radioModel.isConnected()
+            && pan->ownedByClient(m_radioModel.ourClientHandle());
+    };
+    sw->setDbmRangeCommandEligibility(sessionCommandsPan);
     if (auto* pan = m_radioModel.panadapter(applet->panId())) {
         *encoderDbmRange = {pan->minDbm(), pan->maxDbm()};
+        sw->setEncoderDbmRange(pan->minDbm(), pan->maxDbm());
+        sw->setEncoderYPixels(pan->fftYPixels());
     }
     auto setStreamDbmRange =
-        [this, applet, encoderDbmRange]
+        [this, applet, sw, encoderDbmRange]
         (float minDbm, float maxDbm, bool waitForEcho = false) {
         *encoderDbmRange = {minDbm, maxDbm};
+        SpectrumDecodeScale decodeScale;
         if (auto* pan = m_radioModel.panadapter(applet->panId())) {
+            sw->setEncoderYPixels(pan->fftYPixels());
             if (pan->panStreamId() && m_radioModel.panStream()) {
-                m_radioModel.panStream()->setDbmRange(pan->panStreamId(), minDbm, maxDbm, waitForEcho);
+                decodeScale = m_radioModel.panStream()->setDbmRange(
+                    pan->panStreamId(), minDbm, maxDbm, waitForEcho);
             }
         }
+        sw->setEncoderDbmRange(minDbm, maxDbm, decodeScale.generation);
     };
     auto applyAuthoritativeDbmRange =
         [this, applet, sw, setStreamDbmRange, encoderRecoveryPending]
@@ -3761,23 +3802,27 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             retireDbmRangeWithoutEcho();
         }
     };
-    auto armDbmRangeHandshake = [sw, pendingDbm, finishDbmRangeHandshake]
+    auto armDbmRangeHandshake = [sw, pendingDbm, finishDbmRangeHandshake, rangeWiringEpoch]
                                 (float minDbm, float maxDbm) {
         const quint64 generation = pendingDbm->arm(
             minDbm, maxDbm, QDateTime::currentMSecsSinceEpoch());
         QTimer::singleShot(kDbmRangeHandshakeTimeoutMs, sw,
-            [pendingDbm, finishDbmRangeHandshake, generation]() {
+            [sw, pendingDbm, finishDbmRangeHandshake, generation, rangeWiringEpoch]() {
+                if (sw->dbmRangeWireEpoch() != rangeWiringEpoch) {
+                    return;
+                }
                 finishDbmRangeHandshake(generation);
             });
+        return generation;
     };
-    auto sendDbmRangeCommand = [this, applet](float minDbm, float maxDbm) {
-        // BACKSTOP. The callers above gate this individually so each one can do
-        // the right local thing, but this is the one place every dBm range
-        // leaves for the radio — and a range sent to a backend with no command
-        // plane is silently dropped, which is precisely what starts the ratchet.
-        // A future fourth caller gets the protection without knowing to ask.
+    auto sendDbmRangeCommand =
+        [this, applet, sw, pendingDbm, encoderDbmRange, encoderRecoveryPending,
+         armDbmRangeHandshake, setStreamDbmRange, applyAuthoritativeDbmRange, rangeWiringEpoch,
+         sessionCommandsPan]
+        (float minDbm, float maxDbm, bool encoderOnly = false) {
+        // Commit decoder/handshake state only after validation and dispatch.
         if (!m_radioModel.backendCapabilities().radioOwnsDbmScale) {
-            return;
+            return false;
         }
         if (!dbmRangeLooksPlausible(minDbm, maxDbm)) {
             qCWarning(lcProtocol).noquote()
@@ -3785,17 +3830,62 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
                 << QStringLiteral("pan=%1").arg(applet->panId())
                 << QStringLiteral("min=%1").arg(minDbm, 0, 'f', 2)
                 << QStringLiteral("max=%1").arg(maxDbm, 0, 'f', 2);
-            return;
+            return false;
         }
-
-        // #3977 ownership note: foreign-owned pans are refused at the handler
-        // entry (before the local decoder commit) and again centrally in
-        // RadioModel::sendCommand — no per-command gate needed here.
-        m_radioModel.sendCommand(
-            QString("display pan set %1 min_dbm=%2 max_dbm=%3")
+        QPointer<PanadapterModel> pan = m_radioModel.panadapter(applet->panId());
+        if (!pan || !sessionCommandsPan()) {
+            return false;
+        }
+        // A rejection falls back to the range the radio last confirmed, never
+        // to an earlier request still in flight.
+        const DbmRangeTransition::Range previousRange{pan->minDbm(), pan->maxDbm()};
+        const auto generation = std::make_shared<quint64>(0);
+        const QPointer<SpectrumWidget> guard(sw);
+        return DbmRangeTransition::dispatchValidatedRange({minDbm, maxDbm}, [&]() {
+            return m_radioModel.sendCmdPublic(
+                QString("display pan set %1 min_dbm=%2 max_dbm=%3")
                 .arg(applet->panId())
                 .arg(static_cast<double>(minDbm), 0, 'f', 2)
-                .arg(static_cast<double>(maxDbm), 0, 'f', 2));
+                .arg(static_cast<double>(maxDbm), 0, 'f', 2),
+            [this, guard, pan, pendingDbm, generation, previousRange,
+             applyAuthoritativeDbmRange, setStreamDbmRange, encoderRecoveryPending,
+             rangeWiringEpoch, sessionCommandsPan](int code, const QString&) {
+                if (!guard || !pan
+                    || guard->dbmRangeWireEpoch() != rangeWiringEpoch
+                    || pan != m_radioModel.panadapter(pan->panId())
+                    || !sessionCommandsPan()) {
+                    return;
+                }
+                const DbmRangeTransition::HandshakeDecision decision =
+                    pendingDbm->completeReply(*generation, code == 0, previousRange);
+                if (decision.action == DbmRangeTransition::HandshakeAction::Ignore) {
+                    return;
+                }
+                // Accepted reply-only writes converge the same canonical model
+                // as status. Any later radio status remains authoritative.
+                if (!pan->setRange(decision.range.minDbm, decision.range.maxDbm)) {
+                    if (code == 0) {
+                        // A reply confirms command acceptance, not which aperture
+                        // the next queued FFT used. Keep its frame guard alive.
+                        setStreamDbmRange(decision.range.minDbm, decision.range.maxDbm);
+                        guard->setDbmRange(decision.range.minDbm, decision.range.maxDbm);
+                        if (*encoderRecoveryPending) {
+                            *encoderRecoveryPending = false;
+                            guard->reacquireNoiseFloorLock();
+                        }
+                    } else {
+                        applyAuthoritativeDbmRange(decision.range);
+                    }
+                }
+            });
+        }, [&]() {
+            *generation = armDbmRangeHandshake(minDbm, maxDbm);
+            *encoderRecoveryPending = encoderOnly;
+            if (encoderOnly) {
+                sw->cancelPendingDbmRangeChange();
+            }
+            setStreamDbmRange(minDbm, maxDbm, true);
+        });
     };
 
     // Guard: wirePanadapter() is called once at startup (for m_panApplet) and
@@ -4049,8 +4139,8 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
                 applyAuthoritativeDbmRange(decision.range);
                 return;
             }
+            setStreamDbmRange(minDbm, maxDbm);
             if (*encoderRecoveryPending) {
-                setStreamDbmRange(minDbm, maxDbm);
                 *encoderRecoveryPending = false;
                 sw->reacquireNoiseFloorLock();
                 return;
@@ -4199,8 +4289,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     });
 
     connect(sw, &SpectrumWidget::dbmRangeChangeRequested,
-            this, [this, applet, sw, armDbmRangeHandshake,
-                   setStreamDbmRange, sendDbmRangeCommand]
+            this, [this, applet, sw, setStreamDbmRange, sendDbmRangeCommand]
                   (float minDbm, float maxDbm) {
         if (sw->kiwiSdrWaterfallActive()) {
             sw->setDbmRange(minDbm, maxDbm);
@@ -4260,8 +4349,8 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             return;
         }
 
-        armDbmRangeHandshake(minDbm, maxDbm);
-        setStreamDbmRange(minDbm, maxDbm, true);
+        // A dropped dispatch is expected where the client owns the range (HL2:
+        // no command plane); the adopt below is a no-op on a radio-owned range.
         sendDbmRangeCommand(minDbm, maxDbm);
         // After the handshake is armed: when the range moves, the model's
         // levelChanged reads as the echo of this request and completes it. A
@@ -4275,8 +4364,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     });
     connect(sw, &SpectrumWidget::radioDbmHeadroomRecoveryRequested,
             this, [this, applet, sw, encoderDbmRange,
-                   encoderRecoveryPending, armDbmRangeHandshake,
-                   setStreamDbmRange, sendDbmRangeCommand](float headroomDb) {
+                   sendDbmRangeCommand](float lowerHeadroomDb, float upperHeadroomDb) {
         if (sw->kiwiSdrWaterfallActive()
             || profileLoadRadioStateWritesHeld()) {
             return;
@@ -4296,23 +4384,21 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             return;
         }
 
-        const DbmRangeTransition::Range recoveryRange =
+        DbmRangeTransition::Range recoveryRange =
             DbmRangeTransition::clippedFloorRecoveryRange(
                 encoderDbmRange->minDbm,
                 encoderDbmRange->maxDbm,
-                headroomDb);
-        *encoderRecoveryPending = true;
-        sw->cancelPendingDbmRangeChange();
-        armDbmRangeHandshake(
-            recoveryRange.minDbm, recoveryRange.maxDbm);
-        setStreamDbmRange(
-            recoveryRange.minDbm, recoveryRange.maxDbm, true);
-        sendDbmRangeCommand(
-            recoveryRange.minDbm, recoveryRange.maxDbm);
+                lowerHeadroomDb);
+        recoveryRange = DbmRangeTransition::clippedPeakRecoveryRange(
+            recoveryRange.minDbm, recoveryRange.maxDbm, upperHeadroomDb);
+        if (!DbmRangeTransition::materiallyDifferent(*encoderDbmRange, recoveryRange)) {
+            return;
+        }
+        sendDbmRangeCommand(recoveryRange.minDbm, recoveryRange.maxDbm, true);
     });
     connect(sw, &SpectrumWidget::dbmRangeDragFinished,
-            this, [this, applet, sw, armDbmRangeHandshake,
-                   setStreamDbmRange, sendDbmRangeCommand](float minDbm, float maxDbm) {
+            this, [this, applet, sw, setStreamDbmRange,
+                   sendDbmRangeCommand](float minDbm, float maxDbm) {
         if (sw->kiwiSdrWaterfallActive()) {
             sw->setDbmRange(minDbm, maxDbm);
             sw->prepareForFftScaleChange();
@@ -4340,8 +4426,6 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             return;
         }
 
-        armDbmRangeHandshake(minDbm, maxDbm);
-        setStreamDbmRange(minDbm, maxDbm, true);
         sendDbmRangeCommand(minDbm, maxDbm);
         adoptClientOwnedDbmRange(applet->panId(), sw->panIndex(), minDbm, maxDbm);
     });
@@ -4372,6 +4456,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             m_tnfIndicator->setStyleSheet(on
                 ? "QLabel { color: #00b4d8; font-weight: bold; font-size: 24px; }"
                 : "QLabel { color: #404858; font-weight: bold; font-size: 24px; }");
+            StatusIndicator::setCheckedFor(m_tnfIndicator, on);
         });
 
     // FDX indicator style update
@@ -4382,6 +4467,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             m_fdxIndicator->setStyleSheet(fdx
                 ? "QLabel { color: #00b4d8; font-weight: bold; font-size: 24px; }"
                 : "QLabel { color: #404858; font-weight: bold; font-size: 24px; }");
+            StatusIndicator::setCheckedFor(m_fdxIndicator, fdx);
         });
     connect(sw, &SpectrumWidget::tnfCreateRequested,   tnf, &TnfModel::createTnf,
             Qt::UniqueConnection);
@@ -7304,6 +7390,16 @@ void MainWindow::wireMeters()
         stateLbl->setStyleSheet(
             QString("QLabel { color: %1; font-size:11px; }").arg(color));
         stateLbl->setText(state);
+        // The TUN/AMP container is the keyboard target; its description leads
+        // with the state, which the colour alone otherwise carries.
+        if (QWidget* container = stateLbl->parentWidget()) {
+            const QString cycle = container->property("aetherStateCycle").toString();
+            const QString described = cycle.isEmpty() ? state
+                                                      : QStringLiteral("%1. %2").arg(state, cycle);
+            if (container->accessibleDescription() != described) {
+                container->setAccessibleDescription(described);
+            }
+        }
     };
 
     auto updateTgxlStyle = [this, setIndicatorHtml]() {
@@ -7421,6 +7517,7 @@ void MainWindow::wireMeters()
     m_appletPanel->txApplet()->setRadioModel(&m_radioModel);
     m_appletPanel->txApplet()->setBandPlanManager(m_bandPlanMgr);
     m_appletPanel->rxApplet()->setRadioModel(&m_radioModel);
+    m_appletPanel->wfmApplet()->setRadioModel(&m_radioModel);
     m_appletPanel->rxApplet()->setKiwiSdrManager(m_kiwiSdrManager);
     m_appletPanel->rxApplet()->setTransmitModel(&m_radioModel.transmitModel());
     connect(m_appletPanel->rxApplet(), &RxApplet::kiwiRxAntennaSelected,

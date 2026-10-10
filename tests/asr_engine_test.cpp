@@ -881,6 +881,39 @@ int main(int argc, char** argv)
         expect(!engine.isReady(), "engine not ready after load failure");
     }
 
+    // ---- restartSession() orders the cancel, the reset and the resume -----
+    // Copy Assist's tap-point switch needs the audio already queued to the
+    // worker dropped, because it came from the other chain. reset() alone
+    // cannot do that — it is queued, so it arrives BEHIND that backlog — which
+    // is why restartSession() raises the worker's cancel flag directly and then
+    // clears it with a THIRD queued call.
+    //
+    // The order of the two queued emissions is the whole mechanism and it fails
+    // silently if reversed: resume-then-reset would clear the flag before the
+    // backlog had been discarded, and the old chain's audio would be
+    // transcribed into the new session anyway. Nothing else pins it.
+    {
+        AsrEngine engine(factory(true));
+        QVector<QString> order;
+        QObject::connect(&engine, &AsrEngine::requestReset,
+                         [&order] { order.append(QStringLiteral("reset")); });
+        QObject::connect(&engine, &AsrEngine::requestResumeAfterCancel,
+                         [&order] { order.append(QStringLiteral("resume")); });
+
+        engine.restartSession();
+        expect(order.size() == 2, "restartSession() emits exactly two worker calls");
+        expect(order.size() == 2 && order[0] == QStringLiteral("reset")
+                   && order[1] == QStringLiteral("resume"),
+               "the reset is queued before the resume that re-enables processing");
+
+        // reset() on its own must stay what it was: no resume, so the
+        // ASR-disable path keeps its cancel flag latched as it always did.
+        order.clear();
+        engine.reset();
+        expect(order.size() == 1 && order[0] == QStringLiteral("reset"),
+               "a plain reset() does not emit a resume");
+    }
+
     std::printf(g_failures == 0 ? "\nASR engine: ALL PASS\n"
                                 : "\nASR engine: %d FAILURE(S)\n",
                 g_failures);

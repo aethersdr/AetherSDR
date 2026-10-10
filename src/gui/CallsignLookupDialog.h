@@ -10,9 +10,9 @@ namespace AetherSDR {
 
 class CallsignCard;
 
-// Tools → Callsign Lookup: type a callsign, get the large contact card.
+// View → Callsign Lookup: type a callsign, get the large contact card.
 // Results ride CallsignLookupService (same QRZ client + 7-day cache the
-// CW decoder card uses), so repeated lookups cost nothing and the two
+// live CW contacts window uses), so repeated lookups cost nothing and the two
 // surfaces always agree.
 class CallsignLookupDialog : public PersistentDialog {
     Q_OBJECT
@@ -33,6 +33,24 @@ private:
     CallsignCard* m_card{nullptr};
     QLabel*       m_status{nullptr};
     QString       m_pendingCall;
+};
+
+class LiveCwContactsDialog : public PersistentDialog {
+    Q_OBJECT
+
+public:
+    explicit LiveCwContactsDialog(int textFontPx, QWidget* parent = nullptr);
+    CallsignCard* card() const { return m_card; }
+    void showCallsign(const QString& call);
+    void clearContact();
+
+private:
+    void applyTheme();
+
+    CallsignCard* m_card{nullptr};
+    QLabel* m_waiting{nullptr};
+    QPushButton* m_closeBtn{nullptr};
+    int m_textFontPx{18};
 };
 
 } // namespace AetherSDR

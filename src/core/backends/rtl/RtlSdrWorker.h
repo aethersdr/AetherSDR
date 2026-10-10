@@ -46,6 +46,7 @@ public:
     void serviceCancellation();
     bool takeAudio(RtlReceivePipeline::Packet& packet) { return m_pipeline->takePacket(packet); }
     RtlReceivePipeline::Diagnostics diagnostics() const { return m_pipeline->diagnostics(); }
+    bool takeTraceEvent(RtlReceivePipeline::TraceEvent& event) { return m_pipeline->takeTraceEvent(event); }
     bool needsRepair() const { return m_pipeline->needsRepair(); }
     void setMonitor(int slot, int gain, int pan, bool mute) { m_pipeline->setMonitor(slot, gain, pan, mute); }
 

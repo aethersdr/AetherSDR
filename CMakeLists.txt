@@ -153,11 +153,11 @@ if(AETHER_SHARED_CORE)
     if(WIN32)
         message(FATAL_ERROR "AETHER_SHARED_CORE is not supported on Windows")
     endif()
-    # Vendored static libraries end up inside the shared core. Their symbols
-    # do not reach the core's consumers: a PRIVATE dependency stops at a
-    # shared library, and aether_wdsp is built with hidden visibility. A test
-    # that calls WDSP directly while linking only aethercore links against
-    # the static core and fails here; go through core/dsp/WdspChannel.h.
+    # Vendored static libraries end up inside the shared core, and their
+    # symbols do not reach its consumers (PRIVATE dependency, hidden
+    # visibility). A test goes through core/dsp/WdspChannel.h: linking
+    # aether_wdsp instead would give it a second WDSP the core never touches.
+    # tools/check_wdsp_test_links.py enforces that.
     set(CMAKE_POSITION_INDEPENDENT_CODE ON)
     set(_aether_core_library_type SHARED)
     message(STATUS "AetherSDR: libaethercore built SHARED (AETHER_SHARED_CORE)")
@@ -1019,6 +1019,8 @@ set(CORE_SOURCES
     src/core/ReceivePresentationSync.cpp
     src/core/KiwiPublicDirectory.cpp
     src/core/DxClusterClient.cpp
+    src/core/DxSpotLineParser.cpp
+    src/core/GoClusterSettings.cpp
     src/core/WsjtxClient.cpp
     src/core/SpotCollectorClient.cpp
     src/core/PotaClient.cpp
@@ -1058,11 +1060,16 @@ set(CORE_SOURCES
     src/core/LpMeterConnection.cpp
     src/core/FirmwareUploader.cpp
     src/core/WaveformInstaller.cpp
+    src/core/TailnetShimClient.cpp    # in-radio tailnet shim provisioning API (prototype)
+    src/core/TailnetShimTokenStore.cpp
+    src/core/TailnetShimDownloader.cpp  # pinned, SHA-256-verified image download (RFC #6271 D2)
+    src/core/TailnetLinkTelemetry.cpp   # link telemetry from the shim, for Network Diagnostics
     src/core/WaveformUploadState.cpp
     src/core/LegacyWaveformPackage.cpp
     src/core/DigitalVoiceModeRegistry.cpp
     src/core/DigitalVoiceWaveformTelemetry.cpp
     src/core/DigitalVoiceWaveformProcess.cpp
+    src/core/DvkWavConverter.cpp
     src/core/DvkWavTransfer.cpp
     src/core/weather/OperaRadarImage.cpp
     src/core/ZipArchive.cpp
@@ -1073,6 +1080,8 @@ set(CORE_SOURCES
     src/core/QsoWavPlayback.cpp
     src/core/FirmwareStager.cpp
     src/core/UpdateChecker.cpp
+    src/core/NetworkDiagnostics.cpp
+    src/core/WindowsFirewall.cpp
     src/core/OleCompoundFile.cpp
     src/core/CabExtractor.cpp
     src/core/RNNoiseFilter.cpp
@@ -1142,7 +1151,8 @@ set(CORE_SOURCES
 )
 
 if(APPLE)
-    list(APPEND CORE_SOURCES src/core/VirtualAudioBridge.cpp src/core/MacMicPermission.mm)
+    list(APPEND CORE_SOURCES src/core/VirtualAudioBridge.cpp src/core/MacMicPermission.mm
+                             src/core/AppActivity.mm)
 elseif(UNIX)
     # Linux DAX uses PulseAudio pipe modules via pactl (works with PipeWire too).
     # When libpipewire-0.3 dev headers are present we additionally compile a
@@ -1157,6 +1167,9 @@ elseif(UNIX)
         )
         set(HAVE_PIPEWIRE_NATIVE TRUE)
     endif()
+endif()
+if(WIN32)
+    list(APPEND CORE_SOURCES src/core/AppActivity_win.cpp)
 endif()
 
 set(MODEL_SOURCES
@@ -1300,6 +1313,7 @@ set(GUI_SOURCES
     src/gui/ModemChrome.cpp
     src/gui/NrGainStrip.cpp
     src/gui/WaveformsDialog.cpp
+    src/gui/TailnetShimDialog.cpp
     src/gui/ClientRxDspApplet.cpp
     src/gui/DragValuePopup.cpp
     src/gui/DspParamPopup.cpp
@@ -1367,6 +1381,8 @@ set(GUI_SOURCES
     src/gui/WaveformScopeModel.cpp
     src/gui/WaveformWidget.cpp
     src/gui/AetherClockApplet.cpp
+    src/gui/WfmApplet.cpp
+    src/gui/WfmLockScope.cpp
     src/gui/ClockAlignmentWidget.cpp
     src/gui/ClientEqApplet.cpp
     src/gui/ClientEqCurveWidget.cpp
@@ -1374,6 +1390,7 @@ set(GUI_SOURCES
     src/gui/ClientEqEditorCanvas.cpp
     src/gui/StripEqPanel.cpp
     src/gui/ClientEqFftAnalyzer.cpp
+    src/gui/Ctr2AudioSpectrumFeeder.cpp
     src/gui/ClientEqIconRow.cpp
     src/gui/ClientEqOutputFader.cpp
     src/gui/ClientLevelMeter.cpp
@@ -1442,6 +1459,8 @@ set(GUI_SOURCES
     src/gui/ShackSwitchApplet.cpp
     src/gui/GreenHeronApplet.cpp
     src/gui/TitleBar.cpp
+    src/gui/RoundedMenu.cpp
+    src/gui/StatusIndicator.cpp
     src/gui/BrandMark.cpp
     src/gui/RadioTabBar.cpp
     src/gui/WindowCaptionButtons.cpp
@@ -1676,6 +1695,7 @@ target_link_libraries(aetherdesktop_support PUBLIC
 
 add_executable(AetherSDR
     src/main.cpp
+    src/QtPlatformChoice.cpp  # start-up log lines: the Qt platform plugin and any fallback
     ${GUI_SOURCES}
     ${RESOURCES}
     ${DFNR_RESOURCES}
@@ -1695,7 +1715,9 @@ target_link_libraries(aetherd PRIVATE
     Qt6::Network
 )
 if(WIN32)
-    target_link_libraries(aethercore PRIVATE advapi32)
+    # ole32/oleaut32: WindowsFirewall reads the firewall policy over COM;
+    # shell32: its Fix runs netsh through a UAC prompt.
+    target_link_libraries(aethercore PRIVATE advapi32 ole32 oleaut32 shell32)
 endif()
 
 # --- ASR engine: vendored whisper.cpp (RFC #4333, Phase 1) -------------------
@@ -2341,6 +2363,8 @@ endif()
 # Windows: GUI app (no console window) + icon resource
 if(WIN32)
     set_target_properties(AetherSDR PROPERTIES WIN32_EXECUTABLE TRUE)
+    # MainWindow::applyWindowsFrameColor (DwmSetWindowAttribute).
+    target_link_libraries(AetherSDR PRIVATE dwmapi)
 endif()
 
 # macOS app bundle
@@ -2357,7 +2381,7 @@ if(APPLE)
         MACOSX_BUNDLE_ICON_FILE "AetherSDR.icns"
         MACOSX_BUNDLE_INFO_PLIST "${CMAKE_SOURCE_DIR}/packaging/macos/Info.plist.in"
     )
-    target_link_libraries(aethercore PRIVATE "-framework AVFoundation" "-framework Accelerate") # core: MacNRFilter/VirtualAudioBridge
+    target_link_libraries(aethercore PRIVATE "-framework AVFoundation" "-framework Accelerate" "-framework Foundation") # core: MacNRFilter/VirtualAudioBridge/AppActivity
     target_sources(aethercore PRIVATE src/core/MacNRFilter.cpp)
 
     # Generate AetherSDR.icns at build time from docs/assets/logo-circle.png so local
@@ -3372,6 +3396,11 @@ include(tests/tests.cmake)
 
 # ── Install rules ────────────────────────────────────────────────────────────
 include(GNUInstallDirs)
+
+if(LINUX AND NOT DEFINED CMAKE_INSTALL_RPATH_USE_LINK_PATH)
+    # Keep pinned or non-system Qt loadable after install; explicit builder overrides win.
+    set_property(TARGET AetherSDR PROPERTY INSTALL_RPATH_USE_LINK_PATH TRUE)
+endif()
 
 if(APPLE)
     install(TARGETS AetherSDR

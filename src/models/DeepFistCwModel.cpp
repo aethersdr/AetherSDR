@@ -222,6 +222,7 @@ void DeepFistCwModel::run(quint64 runId, const QString& directory)
         }
         const int channels = item.frame.stream().format.channels();
         QString output;
+        std::vector<DeepFistCommitter::Piece> pieces;
         for (qsizetype offset = 0; offset < item.frame.frameCount(); offset += 4096) {
             if (m_stopping.load() || generation != m_generation.load()) { break; }
             const int count = static_cast<int>(std::min<qsizetype>(4096, item.frame.frameCount() - offset));
@@ -232,7 +233,7 @@ void DeepFistCwModel::run(quint64 runId, const QString& directory)
             std::vector<float> mono(converted.size() / sizeof(float));
             std::memcpy(mono.data(), converted.constData(), converted.size());
             m_processing = true;
-            output += stream.process(mono.data(), static_cast<int>(mono.size()), model);
+            output += stream.process(mono.data(), static_cast<int>(mono.size()), model, nullptr, &pieces);
             m_processing = false;
             if (stream.failed()) {
                 m_acceptAudio = false;
@@ -242,9 +243,12 @@ void DeepFistCwModel::run(quint64 runId, const QString& directory)
         }
         if (output.isEmpty()) { continue; }
         const PcmFrame frame = item.frame;
-        QMetaObject::invokeMethod(this, [this, generation, frame, output] {
+        QMetaObject::invokeMethod(this, [this, generation, frame, output, pieces] {
             if (m_running && generation == m_generation.load() && frame.current()) {
                 emit textDecoded(output);
+                for (const DeepFistCommitter::Piece& piece : pieces) {
+                    emit scoredTextDecoded(piece.text, 1.f - piece.confidence);
+                }
             }
         }, Qt::QueuedConnection);
     }

@@ -1603,6 +1603,12 @@ QJsonObject sliceSnapshot(const SliceModel* s, int linkedTo,
         {QStringLiteral("diversityChild"), s->isDiversityChild()},
         {QStringLiteral("diversityIndex"), s->diversityIndex()},
         {QStringLiteral("nb"),         s->nbOn()},
+        // WHICH blanker, and NB2's fill. `nb` stays the bool it always was, so
+        // an existing script reads the same field; a script that cares about the
+        // second blanker reads these. This is the REQUEST — `get hostnb` is what
+        // the DSP actually took.
+        {QStringLiteral("nbKind"),     static_cast<int>(s->nbKind())},
+        {QStringLiteral("nbFill"),     static_cast<int>(s->nbFill())},
         {QStringLiteral("nbLevel"),    s->nbLevel()},
         {QStringLiteral("nr"),         s->nrOn()},
         {QStringLiteral("nrLevel"),    s->nrLevel()},
@@ -1875,6 +1881,9 @@ QJsonObject transmitSnapshot(const TransmitModel* t,
         {QStringLiteral("tx3Delay"),        t->tx3Delay()},
         {QStringLiteral("speechProc"),      t->speechProcessorEnable()},
         {QStringLiteral("speechProcLevel"), t->speechProcessorLevel()},
+        // The published top of that level (2 for NOR/DX/DX+): persist seeds
+        // its range contract from it rather than from Flex's presets.
+        {QStringLiteral("speechProcLevelMaximum"), t->speechProcessorLevelMaximum()},
         {QStringLiteral("dax"),             t->daxOn()},
         {QStringLiteral("monitor"),         t->sbMonitor()},
         {QStringLiteral("monGainSb"),       t->monGainSb()},
@@ -3634,8 +3643,10 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
             });
 
         add("radiocert", {},
-            "radiocert <tune|rx|tx|meters|all|persist> [freqMhz] — bring-up diagnostic; persist is a read-only snapshot for tools/radiocert_persist.py (tx/meters key)",
-            parseActionValue,
+            "radiocert <tune|rx|tx|meters|all|persist> [freqMhz] [sql=<MHz>] — bring-up diagnostic; sql= is the steady carrier the meters squelch-scale stage measures; persist is a read-only snapshot for tools/radiocert_persist.py (tx/meters key)",
+            // Rest, not Value: Value keeps one token and drops the rest, which
+            // lost `sql=` after a frequency in the line form.
+            parseActionRest,
             [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
                 return s.doRadioCert(a.action, a.value);
             });
@@ -7786,7 +7797,7 @@ QJsonObject AutomationServer::doSlice(const QString& action, const QString& arg)
                            {QStringLiteral("agcThreshold"), s->agcThreshold()}};
     }
     if (action == QLatin1String("dsp")) {
-        // "slice dsp <nr|nb|anf|squelch> <on|off> [level 0..100]"
+        // "slice dsp <nr|nb|nb2|anf|squelch> <on|off> [level 0..100] [fill 0..4]"
         //
         // Drives the same operator setters the applets use, so the change emits
         // the *CommandIssued intent and reaches the seam. Added because the
@@ -7800,13 +7811,31 @@ QJsonObject AutomationServer::doSlice(const QString& action, const QString& arg)
                                 Qt::SkipEmptyParts);
         if (parts.size() < 2)
             return err(QStringLiteral(
-                "slice dsp requires '<nr|nb|anf|squelch> <on|off> [level]'"));
+                "slice dsp requires '<nr|nb|nb2|anf|squelch> <on|off> [level] "
+                "[fill]'"));
         const QString which = parts[0].toLower();
+        // `nb2` is its own control name rather than a third state of `nb`,
+        // because the grammar here is <control> <on|off> and bending it into
+        // <control> <off|nb|nb2> would break every existing caller of `nb off`.
+        // Turning nb2 ON is what selects the second blanker; turning either off
+        // turns the blanker off, which is what the operator's button does too.
         static const QStringList kWhich{QStringLiteral("nr"), QStringLiteral("nb"),
+                                        QStringLiteral("nb2"),
                                         QStringLiteral("anf"), QStringLiteral("squelch")};
         if (!kWhich.contains(which))
             return err(QStringLiteral("slice dsp control must be one of: ")
                        + kWhich.join(QLatin1Char('/')));
+
+        // NB2 is a host-side stage: refuse it on a radio without one, before
+        // slice resolution, rather than let the slice reach Advanced and stick
+        // there (a radio's `nb=1` echo cannot downgrade a host kind). Reads the
+        // capability, not RadioModel::hasHostNoiseBlanker(), whose isConnected()
+        // gate is for the button; same read as `get hostnb`.
+        if (which == QLatin1String("nb2")
+            && !radio->backendCapabilities().hasHostNoiseBlanker)
+            return err(QStringLiteral(
+                "slice dsp nb2: this radio does not run a host-side noise "
+                "blanker (use 'nb' for its own — see get hostnb)"));
         const QString state = parts[1].toLower();
         if (state != QLatin1String("on") && state != QLatin1String("off"))
             return err(QStringLiteral("slice dsp state must be on or off"));
@@ -7817,6 +7846,21 @@ QJsonObject AutomationServer::doSlice(const QString& action, const QString& arg)
             level = parts[2].toInt(&okL);
             if (!okL || level < 0 || level > 100)
                 return err(QStringLiteral("slice dsp level must be an integer 0..100"));
+        }
+        // A FOURTH argument, and only nb2 has one: WDSP's fill mode, 0..4. Left
+        // alone when absent, so a script that only switches blankers does not
+        // silently reset the operator's choice of fill.
+        int fill = -1;
+        if (parts.size() >= 4) {
+            if (which != QLatin1String("nb2"))
+                return err(QStringLiteral("only 'nb2' takes a fill argument"));
+            bool okF = false;
+            fill = parts[3].toInt(&okF);
+            if (!okF || !AetherSDR::isValidNoiseBlankerFill(fill))
+                return err(QStringLiteral(
+                    "slice dsp nb2 fill must be an integer 0..4 "
+                    "(0 zero, 1 sample-hold, 2 mean-hold, 3 hold-sample, "
+                    "4 interpolate)"));
         }
 
         SliceModel* s = nullptr;
@@ -7841,9 +7885,14 @@ QJsonObject AutomationServer::doSlice(const QString& action, const QString& arg)
         if (which == QLatin1String("nr")) {
             if (level >= 0) s->setNrLevel(level);
             s->setNr(on);
-        } else if (which == QLatin1String("nb")) {
+        } else if (which == QLatin1String("nb") || which == QLatin1String("nb2")) {
             if (level >= 0) s->setNbLevel(level);
-            s->setNb(on);
+            if (fill >= 0)
+                s->setNbFill(static_cast<AetherSDR::NoiseBlankerFill>(fill));
+            const bool advanced = which == QLatin1String("nb2");
+            s->setNbKind(!on ? AetherSDR::NoiseBlankerKind::Off
+                             : advanced ? AetherSDR::NoiseBlankerKind::Advanced
+                                        : AetherSDR::NoiseBlankerKind::Impulse);
         } else if (which == QLatin1String("anf")) {
             s->setAnf(on);
         } else {
@@ -8842,15 +8891,8 @@ QJsonObject AutomationServer::doRadioCert(const QString& phaseArg, const QString
             {QStringLiteral("dsp"), doGet(QStringLiteral("dsp"), {}, {})},
         };
     }
-    if (!m_audioEngine)
-        return err(QStringLiteral("no audio engine available"));
-
-    // ONE AT A TIME. run() spins nested event loops for the whole diagnostic, so
-    // any bridge command arriving meanwhile — including a second radiocert — is
-    // dispatched INSIDE the run and mutates the same models mid-measurement.
-    if (m_certRunning)
-        return err(QStringLiteral("radiocert is already running"));
-
+    // Input first: a malformed request is refused for what it says, before
+    // any check of what this process has to run it with.
     RadioCertification::Options opts;
     const QString phase = phaseArg.trimmed().toLower();
     if (phase == QLatin1String("tune"))        opts.phase = RadioCertification::Phase::Tune;
@@ -8880,10 +8922,45 @@ QJsonObject AutomationServer::doRadioCert(const QString& phaseArg, const QString
             "blocked: this phase keys the transmitter — enable TX automation "
             "(or set AETHER_AUTOMATION_ALLOW_TX=1), or run 'radiocert tune' / 'radiocert rx'"));
 
-    bool okF = false;
-    const double mhz = freqArg.trimmed().toDouble(&okF);
-    if (okF && mhz > 0.0)
+    // [freqMhz] [sql=<MHz>]: the keyed stages' dial, and the steady carrier
+    // stage-squelch-scale measures the radio's gate on. Both are dial targets,
+    // so both take tune's validation: QString::toDouble() accepts nan and inf.
+    static const QRegularExpression certArgSep(QStringLiteral("\\s+"));
+    for (const QString& token : freqArg.trimmed().split(certArgSep, Qt::SkipEmptyParts)) {
+        double mhz = 0.0;
+        if (token.startsWith(QLatin1String("sql="), Qt::CaseInsensitive)) {
+            if (auto refusal = refuseUntunableMhz(QStringLiteral("radiocert sql="),
+                                                  token.mid(4), mhz))
+                return *refusal;
+            opts.squelchCarrierMhz = mhz;
+            continue;
+        }
+        if (auto refusal = refuseUntunableMhz(QStringLiteral("radiocert [freqMhz]"),
+                                              token, mhz))
+            return *refusal;
         opts.frequencyMhz = mhz;
+    }
+
+    // Auto SQL is RX-applet intent, held in no model. Read the operator's own
+    // SQL button — it says AUTO (an untranslated literal) while Auto runs. The
+    // applet follows the active slice; the stages use slice 0, which is the
+    // same receiver on every single-slice radio. Unknown when there is no button.
+    opts.autoSquelchEngaged = []() -> std::optional<bool> {
+        auto* button = qobject_cast<QAbstractButton*>(
+            resolveWidget(QStringLiteral("RxApplet/Squelch mode")));
+        if (!button)
+            return std::nullopt;
+        return button->text() == QLatin1String("AUTO");
+    };
+
+    if (!m_audioEngine)
+        return err(QStringLiteral("no audio engine available"));
+
+    // ONE AT A TIME. run() spins nested event loops for the whole diagnostic, so
+    // any bridge command arriving meanwhile — including a second radiocert — is
+    // dispatched INSIDE the run and mutates the same models mid-measurement.
+    if (m_certRunning)
+        return err(QStringLiteral("radiocert is already running"));
 
     // Hand the bridge's power ceiling to the run. The widget-setpoint clamp does
     // not cover this verb — radiocert keys through its own path — so without this

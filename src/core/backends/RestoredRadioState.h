@@ -16,6 +16,8 @@ struct RestoredRadioState {
     // Universal — gated per-domain by RadioCapabilities::clientSettingsDomains
     double rfFrequencyHz = 0.0;   // Tuning
     QString mode;                 // Tuning
+    int tuningStepHz = 0;         // Tuning — the client-side step on a radio with
+                                  // no command plane; 0 = not restored
     double filterLowHz = 0.0;     // Passband
     double filterHighHz = 0.0;    // Passband
     int sampleRateHz = 0;         // SpanRate
@@ -51,6 +53,11 @@ struct RestoredRadioState {
     int monGainCw = -1;           // Cw — 0..100; -1 = not restored
     int monPanCw = -1;            // Cw — 0..100; -1 = not restored
 
+    // ReceiveOutputLevel — the radio's own output level, 0..100. The sentinel
+    // is -1, not 0, as for agcThreshold: a silenced speaker is a choice that
+    // must survive a restart. Not restored = the backend's default.
+    int receiveOutputLevelPct = -1;
+
     // Per-family extension document (per-band gain/drive maps), versioned by its
     // owner. GATED PER DOMAIN: the engine hands over only the sub-objects named for
     // declared domains ("rfGain" for RfGain, "txSetpoints" for TxSetpoints); their
@@ -65,7 +72,8 @@ struct RestoredRadioState {
     // that is worth spelling out: its absent value is -1, not 0.
     bool isEmpty() const
     {
-        return rfFrequencyHz == 0.0 && mode.isEmpty() && filterLowHz == 0.0
+        return rfFrequencyHz == 0.0 && mode.isEmpty() && tuningStepHz == 0
+               && filterLowHz == 0.0
                && filterHighHz == 0.0 && sampleRateHz == 0
                && agcMode.isEmpty() && agcThreshold < 0
                && agcOffLevels.isEmpty()
@@ -73,6 +81,7 @@ struct RestoredRadioState {
                && cwDelay < 0 && cwSidetone < 0 && cwIambic < 0
                && cwIambicMode < 0 && cwSwapPaddles < 0 && cwlEnabled < 0
                && monGainCw < 0 && monPanCw < 0
+               && receiveOutputLevelPct < 0
                && extension.isEmpty();
     }
 };
