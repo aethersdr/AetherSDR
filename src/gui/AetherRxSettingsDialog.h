@@ -1,6 +1,6 @@
 #pragma once
 
-#include <QDialog>
+#include "CanonWindow.h"
 
 class QLabel;
 class QListWidget;
@@ -17,7 +17,9 @@ class AudioEngine;
 // one back; Export writes one to a JSON file to pass on; Import reads such a
 // file and asks what to save it as, rather than overwriting whatever shares
 // its name.
-class AetherRxSettingsDialog : public QDialog {
+// The profile library behind AetherRX's Settings gear: a short-lived
+// CanonWindow dialog (style guide, RFC #6226), modal over its window.
+class AetherRxSettingsDialog : public CanonWindow {
     Q_OBJECT
 
 public:

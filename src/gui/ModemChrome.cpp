@@ -393,9 +393,20 @@ QScrollBar::sub-line:vertical {
         sheet.replace(QLatin1String(slot), QLatin1String(value));
     }
     // The canon look's check boxes and radio buttons are the painted canon
-    // indicators; their rules are more specific than the ones above.
+    // indicators; their rules are more specific than the ones above. Lists
+    // (the AetherRX/AetherTX profile libraries) sit on a nested card; the
+    // modem look leaves them to the application sheet.
     if (look == Look::Canon) {
         sheet += canonIndicatorRules();
+        sheet += QStringLiteral(
+            "QListWidget { color: {{color.canon.inkSoft}}; background: {{color.canon.nested}};"
+            " border: 1px solid {{color.canon.line}}; border-radius: %1px; padding: 4px;"
+            " outline: none; }"
+            "QListWidget::item { padding: 4px 6px; border-radius: 4px; }"
+            "QListWidget::item:selected { color: {{color.canon.ink}};"
+            " background: {{color.canon.control}}; }"
+            "QListWidget::item:hover:!selected { background: {{color.canon.raised}}; }")
+            .arg(radius);
     }
     return sheet;
 }

@@ -236,7 +236,7 @@ replace these with a single `QSet<QPointer<PersistentDialog>>` walk.
 A window built on `CanonWindow` (`src/gui/CanonWindow.{h,cpp}`, RFC #6226)
 deliberately opts out of frameless chrome integration, and by default of
 geometry persistence too. About AetherSDR, Remote Access (Tailscale),
-Waveforms, Network Diagnostics, AetherRX, AetherTX and AetherModem are built on it.
+Waveforms, Network Diagnostics, AetherRX, AetherTX, AetherModem and the AetherRX / AetherTX Settings (profile library) dialogs are built on it.
 
 | Concern | `CanonWindow` | Why |
 |---|---|---|
