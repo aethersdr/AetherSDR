@@ -8047,6 +8047,24 @@ add_test(NAME phone_applet_dexp_visibility_test
 set_tests_properties(phone_applet_dexp_visibility_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# The bridge may switch VOX off with TX permission and never on (#6053): the
+# VOX button's disarm-only scoped action through the real invoke path, with
+# every refusal and the operator's own input pinned. Offscreen, no radio.
+add_executable(phone_applet_vox_disarm_test
+    tests/phone_applet_vox_disarm_test.cpp
+    src/gui/PhoneApplet.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/GuardedSlider.h      # Q_OBJECT in a header with no .cpp — AUTOMOC
+)
+target_include_directories(phone_applet_vox_disarm_test PRIVATE src tests)
+target_link_libraries(phone_applet_vox_disarm_test PRIVATE
+    aethercore Qt6::Core Qt6::Network Qt6::Widgets Qt6::Test
+)
+set_target_properties(phone_applet_vox_disarm_test PROPERTIES AUTOMOC ON)
+add_test(NAME phone_applet_vox_disarm_test COMMAND phone_applet_vox_disarm_test)
+set_tests_properties(phone_applet_vox_disarm_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # PhoneCwApplet — the APF row on the CW face (#4879). Widget-level, offscreen:
 # slice rebind must not stack handlers, the capability gate, and the model
 # round trip in both directions. No radio, no sockets.
@@ -8392,6 +8410,7 @@ set(AETHER_AUTOMATION_SERVER_TESTS
     automation_device_diagnostics_test
     automation_connect_family_test
     automation_tx_watchdog_test
+    phone_applet_vox_disarm_test
     automation_rn2_probe_test
     automation_nnr_probe_test
     connect_state_model_test
