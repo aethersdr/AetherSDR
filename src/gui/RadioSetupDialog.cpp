@@ -2763,8 +2763,13 @@ QWidget* RadioSetupDialog::buildTxTab()
             "border: 1px solid #20a040; }");
         connect(swBtn, &QPushButton::toggled, this, [this, swBtn](bool on) {
             swBtn->setText(on ? "Enabled" : "Disabled");
-            m_model->sendCommand(
-                QString("transmit set show_tx_in_waterfall=%1").arg(on ? 1 : 0));
+            // Where the backend declares the client owns this flag, the
+            // model takes it itself. Everywhere else that returns false and
+            // the wire text is sent, which only a Flex answers.
+            if (!m_model->requestLocalShowTxInWaterfall(on)) {
+                m_model->sendCommand(
+                    QString("transmit set show_tx_in_waterfall=%1").arg(on ? 1 : 0));
+            }
         });
         grid->addWidget(swBtn, 1, 1);
 

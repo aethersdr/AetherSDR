@@ -373,6 +373,7 @@ RadioCapabilities SimBackend::capabilities() const
     caps.voxControl = std::nullopt;
     caps.txMonitorControl = std::nullopt;
     caps.lineoutControl = std::nullopt;
+    caps.txWaterfallClientFlag = std::nullopt;  // RX-only demo; no owner declared
     caps.hasMainFanTelemetry = false;         // synthetic scene; no hardware fan
     // The demo radio regenerates its synthetic scene on every connect; there
     // is no operating state worth resurrecting across sessions.

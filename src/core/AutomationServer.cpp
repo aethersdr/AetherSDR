@@ -3594,10 +3594,10 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
         add("txwaterfall", {}, "txwaterfall <on|off> — show keyed TX in the waterfall",
             parseValueOnly,
             [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
-                // Radio-authoritative display flag (`transmit set show_tx_in_waterfall`)
-                // that gates whether keyed-up TX renders FFT-derived rows in the
-                // waterfall. Off by default; enabling it lets a test confirm CWX/tune/ATU
-                // energy appears in the waterfall, not just the FFT trace (#3646/#3804).
+                // Whether keyed-up TX renders rows in the waterfall: radio-held on a
+                // Flex (`transmit set show_tx_in_waterfall`), a client flag where the
+                // backend declares one (RadioCapabilities::txWaterfallClientFlag), by
+                // the same route as Radio Setup. Off by default (#3646/#3804).
                 if (!s.m_radioModel)
                     return err(QStringLiteral("no radio model available"));
                 const QString v = a.value.trimmed().toLower();
@@ -3607,6 +3607,14 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
                                   || v == QLatin1String("false") || v == QLatin1String("disable"));
                 if (!on && !off)
                     return err(QStringLiteral("txwaterfall requires on|off"));
+                if (s.m_radioModel->requestLocalShowTxInWaterfall(on)) {
+                    return QJsonObject{
+                        {QStringLiteral("ok"), true},
+                        {QStringLiteral("txwaterfall"), on},
+                        {QStringLiteral("note"),
+                         QStringLiteral("client-side flag on this radio, applied now; "
+                                        "get transmit showTxInWaterfall reads it")}};
+                }
                 s.m_radioModel->sendCommand(
                     QStringLiteral("transmit set show_tx_in_waterfall=%1").arg(on ? 1 : 0));
                 return QJsonObject{

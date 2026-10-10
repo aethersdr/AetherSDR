@@ -3677,6 +3677,31 @@ add_test(NAME radio_setup_recording_mode_dim_test COMMAND radio_setup_recording_
 set_tests_properties(radio_setup_recording_mode_dim_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
 
+# Radio Setup's Show TX in Waterfall button on the production dialog: a click
+# sets the model where the backend declares the client owns the flag (HL2) and
+# sends the wire text everywhere else. Real backends, never connected; no socket.
+add_executable(radio_setup_show_tx_waterfall_test
+    tests/radio_setup_show_tx_waterfall_test.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/RadioSetupDialog.cpp
+    src/gui/RtlReceiverSettingsWidget.cpp
+    src/gui/ControlAvailabilityRegistry.cpp
+    src/gui/RadioSetupDialog_Peripherals.cpp
+    src/gui/PersistentDialog.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+    src/gui/SliceColorManager.cpp
+    src/gui/KiwiPublicReceiverPicker.cpp
+    src/gui/GuardedSlider.h
+    ${THEME_TEST_RESOURCES}
+)
+target_include_directories(radio_setup_show_tx_waterfall_test PRIVATE src tests)
+target_link_libraries(radio_setup_show_tx_waterfall_test PRIVATE
+    aetherdesktop_support Qt6::Widgets Qt6::Test)
+add_test(NAME radio_setup_show_tx_waterfall_test COMMAND radio_setup_show_tx_waterfall_test)
+set_tests_properties(radio_setup_show_tx_waterfall_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
+
 
 add_executable(zip_archive_test
     tests/zip_archive_test.cpp
@@ -6413,6 +6438,18 @@ target_include_directories(rtl_device_settings_test PRIVATE src tests)
 target_link_libraries(rtl_device_settings_test PRIVATE aethercore Qt6::Core)
 add_test(NAME rtl_device_settings_test COMMAND rtl_device_settings_test)
 
+# "Show TX in Waterfall" as a client flag where the backend declares the client
+# its owner. Socket-free: a real RadioModel on each real backend, built but never
+# connected, the bridge verb through handleLine, the real settings store in a
+# TestSettingsProfile. Qt6::Widgets for AutomationServer.
+add_executable(show_tx_in_waterfall_client_flag_test
+    tests/show_tx_in_waterfall_client_flag_test.cpp)
+target_include_directories(show_tx_in_waterfall_client_flag_test PRIVATE src tests)
+target_link_libraries(show_tx_in_waterfall_client_flag_test PRIVATE
+    aethercore Qt6::Core Qt6::Network Qt6::Widgets)
+add_test(NAME show_tx_in_waterfall_client_flag_test
+         COMMAND show_tx_in_waterfall_client_flag_test)
+
 add_executable(radio_state_memory_test tests/radio_state_memory_test.cpp)
 target_include_directories(radio_state_memory_test PRIVATE src tests)
 target_link_libraries(radio_state_memory_test PRIVATE aethercore Qt6::Core Qt6::Test)
@@ -8257,6 +8294,7 @@ set(AETHER_SETTINGS_CONSUMERS
     radio_setup_label_theme_token_test
     radio_setup_max_power_field_test
     radio_setup_recording_mode_dim_test
+    radio_setup_show_tx_waterfall_test
     atu_seam_gate_test
     transmit_seam_drop_notice_test
     backend_capability_revision_test
@@ -8290,6 +8328,7 @@ set(AETHER_SETTINGS_CONSUMERS
     rtl_model_acceptance_test
     slice_apf_agc_off_seam_test
     hl2_apf_agc_off_test
+    show_tx_in_waterfall_client_flag_test
     automation_persist_diagnostics_test
     weather_radar_loading_test
     hl2_gain_restore_test
@@ -8428,6 +8467,7 @@ set(AETHER_AUTOMATION_SERVER_TESTS
     backend_slice_lifecycle_test
     tci_automation_test
     reroute_dead_controls_test
+    show_tx_in_waterfall_client_flag_test
 )
 foreach(_automation_test IN LISTS AETHER_AUTOMATION_SERVER_TESTS)
     if(TARGET ${_automation_test})

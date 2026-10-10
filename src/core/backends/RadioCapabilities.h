@@ -380,6 +380,26 @@ struct RadioCapabilities {
     };
     std::optional<TransmitDriveControl> transmitDriveControl;
 
+    // "Show TX in Waterfall" on a radio that neither stores nor echoes it.
+    // Absent: `transmit set show_tx_in_waterfall=` and its status echo own the
+    // flag (Flex), or no owner is declared and the client sets and stores
+    // nothing, which is every other family's existing behavior.
+    struct TxWaterfallClientFlag {
+        // Explicit client persistence owner for the flag: RadioModel applies
+        // it with no radio echo, stores it per radio and restores it on
+        // connect. False preserves a family's existing settings behavior. No
+        // default: an engaging backend must state its own value.
+        bool clientPersistsFlag;
+    };
+    std::optional<TxWaterfallClientFlag> txWaterfallClientFlag;
+
+    // The one predicate for the request, its store and the connect-time
+    // restore. Absent is "not declared", and an undeclared backend owns nothing.
+    [[nodiscard]] bool clientPersistsShowTxInWaterfall() const
+    {
+        return txWaterfallClientFlag && txWaterfallClientFlag->clientPersistsFlag;
+    }
+
     // Whether forward-power telemetry needs client-side attack/decay
     // ballistics. True preserves the established Flex presentation. A backend
     // whose telemetry already carries a stable indicated value can disable the

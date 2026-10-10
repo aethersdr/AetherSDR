@@ -39,6 +39,7 @@
 #include "core/StreamStatus.h"
 #include "core/UdpRegistrationPolicy.h"
 #include "core/WaterfallRate.h"
+#include "core/ClientDisplaySettings.h"  // per-radio client display state
 #include "ProfileLoadCommand.h"
 #include "RadioStatusOwnership.h"
 #include "SliceRecreatePolicy.h"
@@ -6239,6 +6240,40 @@ bool RadioModel::requestLocalPanWeightedAverage(const QString& panId, bool on)
     return true;
 }
 
+bool RadioModel::requestLocalShowTxInWaterfall(bool on)
+{
+    // Only where the backend declares the client owns the flag. Elsewhere
+    // the caller sends the show_tx_in_waterfall= wire text itself, which
+    // keeps a raw command out of this side of the seam (#5262 M4).
+    const bool clientOwns = backendCapabilities().clientPersistsShowTxInWaterfall();
+    if (!clientOwns) {
+        return false;
+    }
+    // Nothing echoes the flag here, so the model is written through
+    // applyChanges(), the path a radio echo takes: stateChanged reaches the
+    // same consumers.
+    TransmitDelta delta;
+    delta.showTxInWaterfall = on;
+    m_transmitModel.applyChanges(delta);
+    // Remembered, because TransmitModel::resetState() clears it on every
+    // disconnect and no radio status puts it back.
+    ClientDisplaySettings::saveShowTxInWaterfall(settingsScope(), clientOwns, on);
+    return true;
+}
+
+void RadioModel::restoreClientShowTxInWaterfall()
+{
+    // The same declared owner as the request above; undeclared restores nothing.
+    const std::optional<bool> saved = ClientDisplaySettings::showTxInWaterfall(
+        settingsScope(), backendCapabilities().clientPersistsShowTxInWaterfall());
+    if (!saved) {
+        return;
+    }
+    TransmitDelta delta;
+    delta.showTxInWaterfall = *saved;
+    m_transmitModel.applyChanges(delta);
+}
+
 bool RadioModel::requestLocalPanPixelWidth(const QString& panId, int points)
 {
     // Local-shaping backends only, as requestLocalPanWeightedAverage(): on
@@ -7008,6 +7043,13 @@ void RadioModel::onConnected()
     // unambiguous again: any `file update` status arriving now belongs to this
     // connection, not to an attempt dispatched before the radio rebooted (#5572).
     m_firmwareRetryBlocked = false;
+
+    // A Flex reports show_tx_in_waterfall in its transmit status. Where the
+    // backend declares the client the flag's persistence owner, nothing reports
+    // it and a disconnect clears the model, so the remembered value goes back in
+    // here: before connectionStateChanged and before a pan or slice is announced.
+    // No-op everywhere else.
+    restoreClientShowTxInWaterfall();
 
     emit connectionStateChanged(true);
     // A Flex dumps its memory slots as status during the handshake below. A

@@ -2291,6 +2291,39 @@ target producing 9 fps are only consistent with frames arriving every ~25 ms —
 40 fps, not the 375 the sample rate implied. The simulator was reporting a
 384 kHz span while delivering a 48 kHz stream.
 
+### 15.3.1 Show TX in Waterfall is a client flag here
+
+Radio Setup's **Show TX in Waterfall** is one setting on a Flex: `transmit set
+show_tx_in_waterfall=`, stored by the radio and echoed in its transmit status.
+The echo is the only thing that sets `TransmitModel::showTxInWaterfall()`, and
+that flag is what `SpectrumWidget` reads while keyed: true, the pane holding the
+TX passband draws its pan frames as waterfall rows; false, it drops every row
+for the whole over.
+
+The HL2 has no command plane and no display engine: the command has nowhere to
+go and nothing echoes. There is something to draw: `Hl2RxDsp::setAudioMuted`
+mutes the demodulator while keyed and the spectrum keeps running on real IQ, so
+pan frames keep arriving.
+
+The HL2 backend says so in its capabilities:
+`RadioCapabilities::txWaterfallClientFlag` is engaged with `clientPersistsFlag`
+true, which declares the client the owner of the flag. One accessor,
+`clientPersistsShowTxInWaterfall()`, reads it for the request, the store and
+the restore. `RadioModel::requestLocalShowTxInWaterfall` takes the flag only on
+that declaration: it writes the transmit model through the path an echo would
+take, and stores the value per radio in the `ClientDisplay` document, because a
+disconnect clears the model and nothing will report it again. `onConnected()`
+puts it back, on the same declaration.
+
+The HL2 is the only radio that declares it. A Flex owns the flag in the radio;
+ANAN, Icom, RTL-SDR and the demo simulator leave the record absent. On all of
+those the request declines, the caller sends the wire text, and nothing is
+stored or restored by the client.
+
+**Not measured:** what the HL2's own receive path reads while keyed, and
+therefore what colour those rows take. The keyed rows are coloured by
+`SpectrumWidget::dbmToWaterfallLevel`, the same law a Flex's keyed rows use.
+
 ### 15.4 Killing the client wedges the radio
 
 **Cost more time during this work than any code defect, so it goes first.**
