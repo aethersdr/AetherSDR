@@ -14,6 +14,7 @@ extern "C" {
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <random>
 #include <vector>
 
@@ -84,7 +85,7 @@ void testVectors()
         check(same, msg);
 
         ctr2_rx rx;
-        ctr2_rx_reset(&rx);
+        ctr2_rx_init(&rx);
         if (v.type == CTR2_TYPE_DATA || v.type == CTR2_TYPE_DATAGRAM) {
             const std::uint8_t ready[8] = {0xFF, 0x00,
                                            static_cast<std::uint8_t>((v.counter - 1) & 0x7F),
@@ -177,7 +178,7 @@ void testCrossInterop()
     }
     enc.encodeControl(MessageType::Closed, &down);
     ctr2_rx rx;
-    ctr2_rx_reset(&rx);
+    ctr2_rx_init(&rx);
     QByteArray rebuilt;
     std::vector<QByteArray> rebuiltDatagrams;
     bool dgPorts = true;
@@ -235,7 +236,7 @@ void testRejectSameInput()
             appRejected = appRejected || !app.feed(r, &msgs);
         }
         ctr2_rx rx;
-        ctr2_rx_reset(&rx);
+        ctr2_rx_init(&rx);
         std::uint8_t t;
         const std::uint8_t* p;
         std::uint16_t l;
@@ -318,6 +319,12 @@ void testExtensionsAgree()
               && back == caps,
           "the C decoder reads the application's report");
     check(!ctr2_caps_decode(c, CTR2_FEATURE_BYTES - 1, &back), "the C decoder refuses a short report");
+    check(!ctr2_caps_decode(c, CTR2_FEATURE_BYTES + 1, &back), "the C decoder refuses a long report");
+    std::uint8_t reserved[CTR2_FEATURE_BYTES];
+    std::copy(c, c + CTR2_FEATURE_BYTES, reserved);
+    reserved[3] = 0xFF;
+    check(!ctr2_caps_decode(reserved, CTR2_FEATURE_BYTES, &back),
+          "the C decoder refuses a nonzero reserved byte");
 
     const QByteArray payload = spectrum::encode(67, 4000, std::vector<float>(32, -30.0f));
 
@@ -326,8 +333,8 @@ void testExtensionsAgree()
     std::vector<Report> reports;
     enc.encodeControl(MessageType::Ready, &reports);
     enc.encodeExtension(MessageType::AudioSpectrum, payload, &reports);
-    ctr2_rx rx{};
-    ctr2_rx_reset(&rx);
+    ctr2_rx rx;
+    ctr2_rx_init(&rx);
     ctr2_rx_set_extensions(&rx, CTR2_CAP(CTR2_EXT_AUDIO_SPECTRUM));
     ctr2_rx_reset(&rx);  // negotiated set survives a link restart
     std::uint8_t type = 0;
@@ -348,8 +355,12 @@ void testExtensionsAgree()
     }
     check(messages == 2 && gotSpectrum, "the reference reassembles the spectrum unchanged");
 
-    ctr2_rx plain{};
-    ctr2_rx_reset(&plain);
+    // Init, not storage, makes a receiver plain version 0: dirty memory
+    // must not leave a stray extension accepted.
+    ctr2_rx plain;
+    std::memset(&plain, 0xFF, sizeof plain);
+    ctr2_rx_init(&plain);
+    check(plain.extensions == 0, "init clears the extension mask of dirty storage");
     bool rejected = false;
     for (const Report& r : reports) {
         rejected = rejected || ctr2_rx_feed(&plain, r.data(), &type, &data, &len) == CTR2_RX_ERROR;

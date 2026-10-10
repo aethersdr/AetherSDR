@@ -166,10 +166,17 @@ typedef struct {
     uint8_t  buffer[CTR2_MAX_MESSAGE];
 } ctr2_rx;
 
+/* First use: clears everything, including the accepted extensions, so the
+ * receiver starts on plain version 0 whatever the storage held. */
+void ctr2_rx_init(ctr2_rx *rx);
+
+/* Link restart (HELLO, READY, error): clears the framing state but keeps the
+ * accepted extensions, which belong to the USB session, not the link. Call
+ * ctr2_rx_init() first; reset alone never clears the extension mask. */
 void ctr2_rx_reset(ctr2_rx *rx);
 
 /* Extension types (CTR2_CAP bits) this receiver accepts; others stay
- * framing errors. Zero (the default) is plain version 0. Pass exactly the
+ * framing errors. Zero (after ctr2_rx_init) is plain version 0. Pass exactly the
  * negotiated set: what the device offered, intersected with what the host
  * accepted (a device stores the host's SET masked by its own offer). A bit
  * for a type with no defined length is ignored. */

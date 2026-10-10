@@ -3,6 +3,7 @@
 #include "ClientEqFftAnalyzer.h"
 
 #include <QObject>
+#include <QPointer>
 
 #include <functional>
 #include <utility>
@@ -64,7 +65,7 @@ private:
     void tick();
 
     Ctr2ProxyModel* m_model;
-    AudioEngine* m_audio;
+    QPointer<AudioEngine> m_audio;
     SourceFn m_source;
     QTimer* m_timer;
     ClientEqFftAnalyzer m_fft;

@@ -85,8 +85,8 @@ QByteArray capabilities::encode(std::uint32_t caps)
 
 std::uint32_t capabilities::decode(const QByteArray& r)
 {
-    if (r.size() < kBytes || r[0] != 'C' || r[1] != 'X'
-        || static_cast<std::uint8_t>(r[2]) != kVersion) {
+    if (r.size() != kBytes || r[0] != 'C' || r[1] != 'X'
+        || static_cast<std::uint8_t>(r[2]) != kVersion || r[3] != 0) {
         return 0;
     }
     std::uint32_t caps = 0;

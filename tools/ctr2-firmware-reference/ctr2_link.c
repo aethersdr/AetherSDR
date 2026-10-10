@@ -109,7 +109,8 @@ void ctr2_caps_encode(uint32_t caps, uint8_t out[CTR2_FEATURE_BYTES])
 
 int ctr2_caps_decode(const uint8_t *in, size_t len, uint32_t *caps)
 {
-    if (len < CTR2_FEATURE_BYTES || in[0] != 'C' || in[1] != 'X' || in[2] != CTR2_EXT_VERSION) {
+    if (len != CTR2_FEATURE_BYTES || in[0] != 'C' || in[1] != 'X' || in[2] != CTR2_EXT_VERSION
+        || in[3] != 0) {
         return 0;
     }
     *caps = ((uint32_t)in[4] << 24) | ((uint32_t)in[5] << 16) | ((uint32_t)in[6] << 8) | in[7];
@@ -152,6 +153,12 @@ void ctr2_rx_set_extensions(ctr2_rx *rx, uint32_t caps)
         }
     }
     rx->extensions = caps & defined;
+}
+
+void ctr2_rx_init(ctr2_rx *rx)
+{
+    rx->extensions = 0;
+    ctr2_rx_reset(rx);
 }
 
 void ctr2_rx_reset(ctr2_rx *rx)

@@ -317,6 +317,8 @@ void testNegotiation()
         {"a build without Feature report access stays version 0", {}, false, 0},
         {"a device answering with something else offers nothing",
          featureReport(QByteArray("NOTCAPS!")), true, 0},
+        {"an offer with a nonzero reserved byte offers nothing",
+         featureReport(QByteArray::fromHex("435801ff00000003")), true, 0},
         {"an offer is narrowed to what the host uses",
          featureReport(capabilities::encode(spectrumBit | (1u << 9))), true, spectrumBit},
     };

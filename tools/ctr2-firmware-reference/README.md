@@ -25,6 +25,12 @@ static ctr2_tx tx;
 static ctr2_rx rx;
 static int waiting_for_host = 1;  /* from power-up, and after answering, until the host's READY/CLOSED */
 
+void link_init(void)                        /* once, at power-up */
+{
+    ctr2_rx_init(&rx);                      /* plain version 0, no extensions */
+    ctr2_tx_reset(&tx);
+}
+
 static void send_report(void *ctx, const uint8_t r[CTR2_REPORT_BYTES])
 {
     uint8_t buf[1 + CTR2_REPORT_BYTES] = {CTR2_REPORT_ID};

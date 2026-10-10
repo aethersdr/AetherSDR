@@ -15,6 +15,7 @@ using namespace AetherSDR;
 namespace {
 
 int g_failures = 0;
+constexpr double kPi = 3.14159265358979323846;
 
 void check(bool condition, const char* message)
 {
@@ -28,7 +29,7 @@ int loudestBar(double toneHz, double fs, int low, int span)
 {
     std::vector<float> x(ClientEqFftAnalyzer::kFftSize);
     for (size_t i = 0; i < x.size(); ++i) {
-        x[i] = 0.25f * static_cast<float>(std::sin(2.0 * M_PI * toneHz * double(i) / fs));
+        x[i] = 0.25f * static_cast<float>(std::sin(2.0 * kPi * toneHz * double(i) / fs));
     }
     ClientEqFftAnalyzer fft;
     fft.update(x.data(), static_cast<int>(x.size()));
@@ -60,11 +61,27 @@ void testToneLandsInItsBand()
     }
 }
 
+// Too few bins for any band (DC plus one) reads as silence, not a bin
+// repeated across every bar.
+void testTooFewBinsIsSilence()
+{
+    for (size_t n : {size_t(0), size_t(1), size_t(2)}) {
+        const std::vector<float> bars = Ctr2AudioSpectrumFeeder::barsFromBins(
+            std::vector<float>(n, -10.0f), 48000.0, 67, 4000, 0.0f);
+        bool silent = bars.size() == size_t(Ctr2AudioSpectrumFeeder::kBars);
+        for (float b : bars) {
+            silent = silent && std::isinf(b) && b < 0;
+        }
+        check(silent, "fewer than three bins gives floor bars");
+    }
+}
+
 } // namespace
 
 int main()
 {
     testToneLandsInItsBand();
+    testTooFewBinsIsSilence();
     if (g_failures) {
         std::fprintf(stderr, "%d check(s) failed\n", g_failures);
         return 1;

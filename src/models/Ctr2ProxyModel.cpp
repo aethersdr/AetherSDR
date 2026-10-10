@@ -1,5 +1,6 @@
 #include "Ctr2ProxyModel.h"
 
+#include "core/Ctr2HidFraming.h"
 #include "core/Ctr2UsbRelay.h"
 #include "core/LogManager.h"
 #ifdef HAVE_HIDAPI
@@ -53,6 +54,7 @@ Ctr2ProxyModel::Ctr2ProxyModel(QObject* parent)
     connect(m_usb, &Ctr2UsbRelay::stateChanged, this, stateMoved);
     connect(m_usb, &Ctr2UsbRelay::endpointsChanged, this, &Ctr2ProxyModel::endpointsChanged);
     connect(m_usb, &Ctr2UsbRelay::lastErrorChanged, this, &Ctr2ProxyModel::lastErrorChanged);
+    connect(m_usb, &Ctr2UsbRelay::extensionsChanged, this, &Ctr2ProxyModel::extensionsChanged);
 #ifdef HAVE_HIDAPI
     m_usbDevices = [] { return Ctr2HidapiPort::enumerate(); };
     m_usbOpener = [](const Ctr2HidPort::DeviceInfo& device, QString* error) -> Ctr2HidPort* {

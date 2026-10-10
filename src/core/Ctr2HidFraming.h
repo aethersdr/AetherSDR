@@ -68,7 +68,8 @@ constexpr std::uint8_t kReportId = 0x02;
 constexpr int kBytes = 8;
 constexpr std::uint8_t kVersion = 0x01;
 QByteArray encode(std::uint32_t caps);
-// The offer in a Get reply (report ID stripped), or 0 for anything else.
+// The offer in a Get reply (report ID stripped), or 0 for anything else:
+// exactly kBytes, the magic, kVersion and a zero reserved byte.
 std::uint32_t decode(const QByteArray& report);
 }
 

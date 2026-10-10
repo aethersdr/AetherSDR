@@ -741,6 +741,7 @@ void Ctr2UsbRelay::onExtensionsNegotiated(quint32 extensions)
         qCInfo(lcDevices) << "CTR2 USB:" << deviceDescription() << "link extensions"
                           << Qt::hex << extensions;
     }
+    emit extensionsChanged(extensions);
 }
 
 bool Ctr2UsbRelay::sendAudioSpectrum(const QByteArray& payload)

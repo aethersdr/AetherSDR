@@ -114,6 +114,7 @@ signals:
     void endpointsChanged();
     void statsChanged();      // coalesced for display
     void lastErrorChanged();
+    void extensionsChanged();   // the USB device's link extensions; audioSpectrumWanted() may move
 
 private:
     static bool parsePort(const QString& text, quint16* port);

@@ -404,6 +404,10 @@ void testCapabilitiesAndSpectrum()
     bad = r;
     bad[2] = 0x02;
     check(capabilities::decode(bad) == 0, "an unknown extension version offers nothing");
+    check(capabilities::decode(r + QByteArray(1, '\0')) == 0, "a long report offers nothing");
+    bad = r;
+    bad[3] = char(0xFF);
+    check(capabilities::decode(bad) == 0, "a nonzero reserved byte offers nothing");
 
     const QByteArray p = spectrum::encode(67, 4000, {-90.0f, 0.0f, -45.0f, 5.0f, -200.0f,
                                                      std::numeric_limits<float>::quiet_NaN()});

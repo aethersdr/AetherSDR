@@ -82,6 +82,8 @@ signals:
     void statsChanged();
     void endpointsChanged();
     void lastErrorChanged(const QString& message);
+    // The device's negotiated link extensions arrived; extensions() changed.
+    void extensionsChanged(quint32 extensions);
 
 private:
     class Session;

@@ -81,7 +81,7 @@ needs CTR2 firmware with USB mode, which has not been released yet.
   spectrum for its centre display. While receiving it shows the audio you
   are hearing (after the radio's DSP, AetherSDR's noise reduction and the
   RX chain up to the EQ) across the active slice's filter width, for
-  example 0–600 Hz for a 600 Hz CW filter. While transmitting it shows your
+  example 20–600 Hz for a 600 Hz CW filter. While transmitting it shows your
   transmit audio across the TX filter width. Either way it reaches at most
   12 kHz, and the bars are spaced logarithmically in frequency, as on an
   audio analyser, so the low end gets more detail. A CTR2 never receives this.

@@ -23,6 +23,7 @@ Ctr2AudioSpectrumFeeder::Ctr2AudioSpectrumFeeder(Ctr2ProxyModel* model, AudioEng
     m_timer->setInterval(kIntervalMs);
     connect(m_timer, &QTimer::timeout, this, &Ctr2AudioSpectrumFeeder::tick);
     connect(m_model, &Ctr2ProxyModel::stateChanged, this, &Ctr2AudioSpectrumFeeder::follow);
+    connect(m_model, &Ctr2ProxyModel::extensionsChanged, this, &Ctr2AudioSpectrumFeeder::follow);
     follow();
 }
 
@@ -46,7 +47,7 @@ std::vector<float> Ctr2AudioSpectrumFeeder::barsFromBins(const std::vector<float
 {
     std::vector<float> bars(kBars, -INFINITY);   // an empty band reads as silence
     const int last = static_cast<int>(binsDb.size()) - 1;
-    if (last < 1 || sampleRate <= 0) {
+    if (last < 2 || sampleRate <= 0) {   // bin 0 is DC; a band needs two real bins
         return bars;
     }
     const double binHz = ClientEqFftAnalyzer::binFreq(1, sampleRate);
