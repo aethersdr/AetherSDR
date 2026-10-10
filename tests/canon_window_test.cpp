@@ -15,9 +15,13 @@
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
 #include "core/ThemeManager.h"
+#include "gui/CanonIndicators.h"
 #include "gui/CanonWindow.h"
 
 #include <QApplication>
+#include <QHash>
+#include <QImage>
+#include <QRegularExpression>
 #include <QGuiApplication>
 #include <QScreen>
 #include <QPushButton>
@@ -239,6 +243,45 @@ int main(int argc, char** argv)
         w.hide();
         ring->setMotionPreference(Qt::MotionPreference::NoPreference);
         EXPECT_TRUE(!ring->isAnimating());
+    }
+
+    // ---- the canon indicators show their state: a checked box carries a
+    //      tick and a selected radio a centre dot, not just a fill or ring ----
+    {
+        static const QRegularExpression url(QStringLiteral(
+            "(QCheckBox|QRadioButton)::indicator:(un)?checked \\{ image: url\\(([^)]+)\\)"));
+        const QString rules = canonIndicatorRules();
+        QHash<QString, QString> files;   // "QCheckBox:checked" -> path
+        for (auto it = url.globalMatch(rules); it.hasNext();) {
+            const auto m = it.next();
+            files.insert(m.captured(1) + (m.captured(2).isEmpty() ? QStringLiteral(":checked")
+                                                                  : QStringLiteral(":unchecked")),
+                         m.captured(3));
+        }
+        EXPECT_TRUE(files.size() == 4);
+        // Sampled at 3x, where the canvas is 54 px. The tick's corner sits at
+        // (7.9, 12.0) in the 18 px canvas; the dot is centred at (9, 9).
+        const auto at3x = [](const QString& path, QPoint p) {
+            QString big = path;
+            big.replace(QStringLiteral(".png"), QStringLiteral("@3x.png"));
+            const QImage img(big);
+            return img.isNull() ? QColor() : img.pixelColor(p);
+        };
+        const QColor onAccent = ThemeManager::instance().color(QStringLiteral("color.canon.onAccent"));
+        const QColor cyan = ThemeManager::instance().color(QStringLiteral("color.canon.cyan"));
+        const QPoint tick(24, 36), centre(27, 27);
+        const QColor checkOn = at3x(files.value(QStringLiteral("QCheckBox:checked")), tick);
+        const QColor checkOff = at3x(files.value(QStringLiteral("QCheckBox:unchecked")), tick);
+        const QColor radioOn = at3x(files.value(QStringLiteral("QRadioButton:checked")), centre);
+        const QColor radioOff = at3x(files.value(QStringLiteral("QRadioButton:unchecked")), centre);
+        const auto near = [](const QColor& a, const QColor& b) {
+            return std::abs(a.red() - b.red()) + std::abs(a.green() - b.green())
+                 + std::abs(a.blue() - b.blue()) < 40;
+        };
+        EXPECT_TRUE(near(checkOn, onAccent));    // the tick, in text-on-accent
+        EXPECT_TRUE(!near(checkOff, onAccent));  // unchecked: no tick there
+        EXPECT_TRUE(near(radioOn, cyan));        // the dot
+        EXPECT_TRUE(!near(radioOff, cyan));      // unselected: empty centre
     }
 
     if (g_failures == 0) {

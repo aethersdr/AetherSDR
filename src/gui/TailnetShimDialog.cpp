@@ -1,4 +1,5 @@
 #include "TailnetShimDialog.h"
+#include "CanonIndicators.h"
 
 #include "core/TailnetShimTokenStore.h"
 #include "core/ThemeManager.h"
@@ -128,7 +129,9 @@ TailnetShimDialog::TailnetShimDialog(RadioModel* model, QWidget* parent)
     m_bodyTextWidth = kWidth - 2 * CanonWindow::kInset - 2 * kSide;
     m_cardTextWidth = m_bodyTextWidth - 2 * kCardPad - 2;   // less the card's hairline
     bodyWidget()->setObjectName(QStringLiteral("tailnetBody"));
-    ThemeManager::instance().applyStyleSheet(bodyWidget(), kTailnetDialogStyle);
+    applyCanonSheet(bodyWidget(), [] {
+        return QString::fromLatin1(kTailnetDialogStyle) + canonIndicatorRules();
+    });
 
     auto* layout = new QVBoxLayout(bodyWidget());
     layout->setContentsMargins(kSide, 26, kSide, 22);

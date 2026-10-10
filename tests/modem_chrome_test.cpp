@@ -36,6 +36,7 @@ private slots:
     void compactIsSmallerButNotADifferentPalette();
     void everyThemeTokenInTheSheetResolves();
     void checkedLosesToDisabled();
+    void canonLookPaintsItsIndicators();
 };
 
 namespace {
@@ -103,14 +104,28 @@ void ModemChromeTest::tabsAreSelectedByPropertyNotObjectName()
 
 void ModemChromeTest::everyPlaceholderIsSubstituted()
 {
-    static const QRegularExpression leftover(QStringLiteral("%\\d"));
+    // %N arguments, and the @name@ colour slots each look fills.
+    static const QRegularExpression leftover(QStringLiteral("%\\d|@[A-Za-z]+@"));
+    for (const auto look : {ModemChrome::Look::Modem, ModemChrome::Look::Canon})
     for (const auto scale : {ModemChrome::Scale::Dialog, ModemChrome::Scale::Compact}) {
-        const QString sheet = ModemChrome::styleSheet(scale);
+        const QString sheet = ModemChrome::styleSheet(scale, look);
         const auto m = leftover.match(sheet);
         QVERIFY2(!m.hasMatch(),
                  qPrintable(QStringLiteral("unsubstituted placeholder %1 near: %2")
                                 .arg(m.captured(0))
                                 .arg(sheet.mid(qMax(0, m.capturedStart() - 60), 120))));
+    }
+}
+
+// The canon look carries the painted canon check boxes and radio buttons (a
+// tick, a dot); the modem look, which the docked applets wear, does not.
+void ModemChromeTest::canonLookPaintsItsIndicators()
+{
+    for (const auto scale : {ModemChrome::Scale::Dialog, ModemChrome::Scale::Compact}) {
+        const QString canon = ModemChrome::styleSheet(scale, ModemChrome::Look::Canon);
+        QVERIFY(canon.contains(QStringLiteral("aethersdr_canon_check_on")));
+        QVERIFY(canon.contains(QStringLiteral("aethersdr_canon_radio_on")));
+        QVERIFY(!ModemChrome::styleSheet(scale).contains(QStringLiteral("aethersdr_canon_")));
     }
 }
 

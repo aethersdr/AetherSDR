@@ -9,8 +9,8 @@
 // breaks into dashes around a circle. PNGs rather than SVG, because the SVG
 // image plugin is not deployed everywhere; each is written at 1x, 2x and 3x so
 // Qt picks the sharp one for the screen. Files are cached in the temp
-// directory keyed by their colours, so a theme switch gets its own set — call
-// canonIndicatorRules() again after ThemeManager::themeChanged.
+// directory keyed by their colours, so a theme switch gets its own set —
+// apply through applyCanonSheet(), which rebuilds the sheet on a theme change.
 
 #include "core/ThemeManager.h"
 
@@ -21,6 +21,7 @@
 #include <QPainterPath>
 #include <QPixmap>
 #include <QString>
+#include <QWidget>
 
 #include <functional>
 
@@ -35,8 +36,11 @@ inline QString canonIndicatorPath(const QString& name, const QString& colourKey,
                                   const IndicatorPainter& paint)
 {
     constexpr int kSize = 18;
+    // Bump when the drawing changes: the cache is keyed by colours, so an old
+    // file would otherwise outlive a new design.
+    constexpr int kDrawingVersion = 1;
     const QString base = QDir::temp().filePath(
-        QStringLiteral("aethersdr_canon_%1_%2").arg(name, colourKey));
+        QStringLiteral("aethersdr_canon_%1_v%2_%3").arg(name).arg(kDrawingVersion).arg(colourKey));
     const QString path = base + QStringLiteral(".png");
     if (QFile::exists(path) && QFile::exists(base + QStringLiteral("@3x.png"))) {
         return path;
@@ -137,6 +141,19 @@ inline QString canonIndicatorRules()
         "QRadioButton::indicator:checked:disabled { image: url(%8); }")
         .arg(checkOff, checkOn, checkOffDis, checkOnDis,
              radioOff, radioOn, radioOffDis, radioOnDis);
+}
+
+// Apply a sheet built by `build` (which embeds canonIndicatorRules()) to
+// `widget`, and rebuild it whenever the theme changes, so the painted
+// indicators follow the new theme's colours.
+inline void applyCanonSheet(QWidget* widget, std::function<QString()> build)
+{
+    auto& tm = ThemeManager::instance();
+    tm.applyStyleSheet(widget, build());
+    QObject::connect(&tm, &ThemeManager::themeChanged, widget,
+                     [widget, build] {
+        ThemeManager::instance().applyStyleSheet(widget, build());
+    });
 }
 
 } // namespace AetherSDR

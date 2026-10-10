@@ -958,14 +958,9 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
     m_heartbeatTimer->start();
     m_txPaceTimer = new QTimer(this);
     m_txPaceTimer->setInterval(kTxChunkMs);
-    // The indicators are painted images (a tick, a dot) whose files depend on
-    // the theme's colours, so the sheet is rebuilt when the theme changes.
-    const auto applyStyle = [this] {
-        ThemeManager::instance().applyStyleSheet(
-            bodyWidget(), QString::fromLatin1(kAetherModemStyle) + canonIndicatorRules());
-    };
-    applyStyle();
-    connect(&ThemeManager::instance(), &ThemeManager::themeChanged, this, applyStyle);
+    applyCanonSheet(bodyWidget(), [] {
+        return QString::fromLatin1(kAetherModemStyle) + canonIndicatorRules();
+    });
 
     auto* root = new QVBoxLayout(bodyWidget());
     root->setContentsMargins(14, 12, 14, 14);
