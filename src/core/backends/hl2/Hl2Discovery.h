@@ -33,8 +33,10 @@ public:
     void endRefresh(int socketCount, int interfaceCount);
     // A sweep's probe left no datagram from `local`; logs like a bind failure.
     void sendFailed(const QHostAddress& local, const QString& error);
+    // A probe left `local`: the sweep it belongs to can count as unanswered.
     void sendSucceeded(const QHostAddress& local);
     // A sweep's interval ended; `answered` is true if any HL2 replied to it.
+    // A sweep no probe left is not silence: sendFailed has named its cause.
     void sweepClosed(bool answered);
     void reset();
 
@@ -43,6 +45,7 @@ private:
     QSet<QString> m_sendFailures;       // local addresses logged, not sent from since
     int m_interfaceCount = 0;
     int m_silentSweeps = 0;
+    bool m_probeLeft = false;           // a probe left a socket in the open sweep
     bool m_noSocketReported = false;
 };
 
@@ -134,7 +137,6 @@ private:
     QTimer* m_timer = nullptr;
     QHash<QString, Seen> m_seen;   // keyed by serial (the MAC string)
     DiscoveryNotices m_notices;
-    bool m_probeSent = false;      // the last sweep had a socket to send on
     bool m_answered = false;       // an HL2 replied since the last sweep
 };
 
