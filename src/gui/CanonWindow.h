@@ -29,7 +29,18 @@ class CanonWindow : public QDialog {
     Q_OBJECT
 
 public:
-    explicit CanonWindow(const QString& title, QWidget* parent = nullptr);
+    // Dialog: a short-lived window on top of its parent (About, Waveforms).
+    // Workspace: a tool the operator works in for a session (AetherRX,
+    // AetherTX): an independent top-level window, with its own taskbar entry,
+    // that minimises separately and can live on another monitor. In a
+    // workspace Return and Enter never click a default button: a page of
+    // controls is not a form, and QDialog would otherwise make every push
+    // button an auto-default, so Return in a knob's value field also pressed
+    // a stage tab.
+    enum class Kind { Dialog, Workspace };
+
+    explicit CanonWindow(const QString& title, QWidget* parent = nullptr,
+                         Kind kind = Kind::Dialog);
 
     // Content goes here; install a layout on it.
     QWidget* bodyWidget() const { return m_body; }
@@ -52,6 +63,7 @@ protected:
     void moveEvent(QMoveEvent* event) override;
     void showEvent(QShowEvent* event) override;
     void closeEvent(QCloseEvent* event) override;
+    void keyPressEvent(QKeyEvent* event) override;
 
 private:
     void paintGround(QPaintDevice& device) const;
@@ -59,6 +71,7 @@ private:
     enum class Restored { Nothing, SizeOnly, SizeAndPosition };
     Restored restoreGeometryFromSettings();
 
+    Kind         m_kind;
     QWidget*     m_body{nullptr};
     QToolButton* m_close{nullptr};
     bool         m_placed{false};

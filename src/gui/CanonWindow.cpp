@@ -8,6 +8,7 @@
 #include <QConicalGradient>
 #include <QAccessibilityHints>
 #include <QGuiApplication>
+#include <QKeyEvent>
 #include <QKeySequence>
 #include <QLinearGradient>
 #include <QMouseEvent>
@@ -38,11 +39,18 @@ const QAccessibilityHints* accessibilityHints()
 }
 } // namespace
 
-CanonWindow::CanonWindow(const QString& title, QWidget* parent)
+CanonWindow::CanonWindow(const QString& title, QWidget* parent, Kind kind)
     : QDialog(parent)
+    , m_kind(kind)
 {
     setWindowTitle(title);
-    setWindowFlags(Qt::Dialog | Qt::FramelessWindowHint);
+    setWindowFlags((kind == Kind::Workspace ? Qt::Window : Qt::Dialog)
+                   | Qt::FramelessWindowHint);
+    // A secondary top-level window: an open workspace must not keep the app
+    // running once the main window has closed.
+    if (kind == Kind::Workspace) {
+        setAttribute(Qt::WA_QuitOnClose, false);
+    }
     setAttribute(Qt::WA_TranslucentBackground);
 
     // The app stylesheet gives dialogs an opaque background, which would fill
@@ -104,6 +112,22 @@ void CanonWindow::moveEvent(QMoveEvent* event)
     if (m_placed && !m_restoringGeometry) {
         saveGeometryToSettings();
     }
+}
+
+void CanonWindow::keyPressEvent(QKeyEvent* event)
+{
+    // QDialog::keyPressEvent() turns Return and Enter into a click on the
+    // default or first auto-default button. A workspace skips it; a focused
+    // button still takes Return itself, so keyboard activation is unchanged.
+    // Same test QDialog uses: no modifier, or the keypad's Enter.
+    const bool plainEnter = !event->modifiers()
+        || (event->modifiers() & Qt::KeypadModifier && event->key() == Qt::Key_Enter);
+    if (m_kind == Kind::Workspace && plainEnter
+        && (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter)) {
+        event->ignore();
+        return;
+    }
+    QDialog::keyPressEvent(event);
 }
 
 void CanonWindow::closeEvent(QCloseEvent* event)

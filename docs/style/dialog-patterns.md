@@ -252,6 +252,13 @@ What it keeps:
   build details stay selectable so they can be copied into a bug report.
 - **Closing:** the corner close button, Escape and `QKeySequence::Close`
   (⌘W, Ctrl+W) all close it.
+- **Kind:** `CanonWindow::Kind::Dialog` (the default) is a parented
+  `Qt::Dialog` that sits over its parent. `Kind::Workspace` (AetherRX,
+  AetherTX) is an independent `Qt::Window`, with its own taskbar entry, that
+  minimises on its own and does not keep the app alive (`WA_QuitOnClose`
+  off). In a workspace, Return and Enter never click a default button:
+  QDialog makes every push button an auto-default, so Return in a field would
+  otherwise press the first one.
 - **Deletion:** pair it with `WA_DeleteOnClose`, as About does, and hold it in
   a `QPointer` so a second open raises the existing window. AetherTX is the
   exception: MainWindow keeps feeding it state while it is closed, so closing

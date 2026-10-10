@@ -22,6 +22,7 @@
 #include <QVBoxLayout>
 #include <QKeyEvent>
 #include <QKeySequence>
+#include <QLineEdit>
 #include <QMouseEvent>
 #include <QPointer>
 #include <QTest>
@@ -124,6 +125,42 @@ int main(int argc, char** argv)
         EXPECT_TRUE(QTest::qWaitForWindowActive(&w));
         QTest::keyClick(&w, Qt::Key_Escape);
         EXPECT_TRUE(!w.isVisible());
+    }
+
+    // ---- a workspace is its own top-level window, and Return or Enter in a
+    //      field never clicks a button (AetherTX: Return in a knob's value
+    //      field pressed the Gate tab, QDialog's first auto-default) ----
+    {
+        QWidget parent;
+        for (const auto kind : {CanonWindow::Kind::Dialog, CanonWindow::Kind::Workspace}) {
+            const bool workspace = kind == CanonWindow::Kind::Workspace;
+            CanonWindow w(QStringLiteral("Canon"), &parent, kind);
+            EXPECT_TRUE(w.windowType() == (workspace ? Qt::Window : Qt::Dialog));
+            EXPECT_TRUE(w.testAttribute(Qt::WA_QuitOnClose) == !workspace);
+            auto* box = new QVBoxLayout(w.bodyWidget());
+            auto* tab = new QPushButton(QStringLiteral("Gate"));
+            auto* field = new QLineEdit;
+            box->addWidget(tab);
+            box->addWidget(field);
+            int clicks = 0;
+            QObject::connect(tab, &QPushButton::clicked, [&clicks] { ++clicks; });
+            w.resize(400, 300);
+            w.show();
+            w.activateWindow();
+            EXPECT_TRUE(QTest::qWaitForWindowActive(&w));
+            field->setFocus();
+            QTest::keyClick(field, Qt::Key_Return);
+            QTest::keyClick(field, Qt::Key_Enter, Qt::KeypadModifier);
+            // A dialog keeps QDialog's default-button behaviour (About's OK).
+            EXPECT_TRUE(clicks == (workspace ? 0 : 2));
+            EXPECT_TRUE(w.isVisible());
+            // A focused button still takes Return itself in a workspace.
+            if (workspace) {
+                tab->setFocus();
+                QTest::keyClick(tab, Qt::Key_Return);
+                EXPECT_TRUE(clicks == 1);
+            }
+        }
     }
 
     // ---- the sparks hold still under the OS reduced-motion preference ----

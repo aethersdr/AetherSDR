@@ -92,7 +92,7 @@ AetherialAudioStrip::Stage fromChainStage(AudioEngine::TxChainStage s)
 } // namespace
 
 AetherialAudioStrip::AetherialAudioStrip(AudioEngine* engine, QWidget* parent)
-    : CanonWindow(QStringLiteral("AetherTX"), parent)
+    : CanonWindow(QStringLiteral("AetherTX"), parent, Kind::Workspace)
     , m_audio(engine)
 {
     const QString title = QStringLiteral("AetherTX");

@@ -89,7 +89,7 @@ AetherRxDialog::Stage fromChainStage(AudioEngine::RxChainStage s)
 } // namespace
 
 AetherRxDialog::AetherRxDialog(AudioEngine* audio, QWidget* parent)
-    : CanonWindow(QStringLiteral("AetherRX"), parent)
+    : CanonWindow(QStringLiteral("AetherRX"), parent, Kind::Workspace)
     , m_audio(audio)
 {
     theme::setContainer(this, QStringLiteral("canon/aetherRx"));
