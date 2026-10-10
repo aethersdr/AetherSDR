@@ -79,6 +79,21 @@ void DiscoveryNotices::endRefresh(int socketCount, int interfaceCount)
     }
 }
 
+void DiscoveryNotices::sendFailed(const QHostAddress& local, const QString& error)
+{
+    const QString key = local.toString();
+    if (m_sendFailures.contains(key))
+        return;   // already reported, and nothing has left this address since
+    m_sendFailures.insert(key);
+    qCWarning(lcDiscovery).noquote()
+        << QStringLiteral("HL2 discovery: cannot send a probe from %1: %2").arg(key, error);
+}
+
+void DiscoveryNotices::sendSucceeded(const QHostAddress& local)
+{
+    m_sendFailures.remove(local.toString());
+}
+
 void DiscoveryNotices::sweepClosed(bool answered)
 {
     if (answered) {
@@ -252,17 +267,30 @@ void Hl2Discovery::sweepNow()
                 break;
         }
 
+        bool sent = false;
+        QString error;
+        const auto probe = [&](const QHostAddress& to) {
+            if (socket->writeDatagram(reinterpret_cast<const char*>(pkt.data()),
+                                      static_cast<qint64>(pkt.size()),
+                                      to, kMetisPort) >= 0) {
+                sent = true;
+            } else {
+                error = socket->errorString();
+            }
+        };
         if (!directedBroadcast.isNull()) {
-            socket->writeDatagram(reinterpret_cast<const char*>(pkt.data()),
-                                  static_cast<qint64>(pkt.size()),
-                                  directedBroadcast, kMetisPort);
+            probe(directedBroadcast);
         }
         // Keep the global broadcast as a compatibility fallback for networks
         // whose interface does not expose a usable directed broadcast.
         if (directedBroadcast != QHostAddress::Broadcast) {
-            socket->writeDatagram(reinterpret_cast<const char*>(pkt.data()),
-                                  static_cast<qint64>(pkt.size()),
-                                  QHostAddress::Broadcast, kMetisPort);
+            probe(QHostAddress::Broadcast);
+        }
+        // One of the two reaching the wire is a sent probe.
+        if (sent) {
+            m_notices.sendSucceeded(local);
+        } else {
+            m_notices.sendFailed(local, error);
         }
     }
 }

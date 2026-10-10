@@ -1,5 +1,6 @@
 // What HL2 discovery writes to the log when it cannot find a radio (#6285
-// item 3): a failed bind, no usable interface, and a run of unanswered sweeps.
+// item 3): a failed bind, no usable interface, a probe that could not be sent,
+// and a run of unanswered sweeps.
 //
 // Socket-free. DiscoveryNotices is the policy Hl2Discovery feeds from its
 // sweeps; the lines are captured off the real "aether.discovery" category,
@@ -156,12 +157,32 @@ void silenceIsLoggedOnceAfterThreshold()
           "no reply: an intermittent answer never reaches the threshold");
 }
 
+void sendFailureIsLoggedOncePerCondition()
+{
+    DiscoveryNotices n;
+    const auto failA = [&n] { n.sendFailed(kAddrA, QStringLiteral("Network unreachable")); };
+
+    check(logged(failA) == QStringList{QStringLiteral(
+              "W|HL2 discovery: cannot send a probe from 192.168.8.20: Network unreachable")},
+          "send failure: the first failed sweep logs one warning naming address and error");
+    check(logged(failA).isEmpty(),
+          "send failure: the same address failing on later sweeps logs nothing");
+
+    const QStringList other = logged([&n] { n.sendFailed(kAddrB, QStringLiteral("x")); });
+    check(other.size() == 1 && other.first().contains(QStringLiteral("from 169.254.1.5")),
+          "send failure: another address is its own condition");
+
+    check(logged([&n] { n.sendSucceeded(kAddrA); }).isEmpty() && logged(failA).size() == 1,
+          "send failure: a failure after a probe left that address is logged again");
+}
+
 void resetForgetsEverything()
 {
     DiscoveryNotices n;
     logged([&n] {
         n.bindFailed(QStringLiteral("en0"), kAddrA, QStringLiteral("x"));
         n.endRefresh(0, 0);
+        n.sendFailed(kAddrB, QStringLiteral("x"));
         for (int i = 0; i < 3; ++i)
             n.sweepClosed(false);
     });
@@ -169,11 +190,12 @@ void resetForgetsEverything()
     const QStringList again = logged([&n] {
         n.bindFailed(QStringLiteral("en0"), kAddrA, QStringLiteral("x"));
         n.endRefresh(0, 0);
+        n.sendFailed(kAddrB, QStringLiteral("x"));
         for (int i = 0; i < 3; ++i)
             n.sweepClosed(false);
     });
-    check(again.size() == 3,
-          "reset (Hl2Discovery::stop): all three conditions are logged again");
+    check(again.size() == 4,
+          "reset (Hl2Discovery::stop): all four conditions are logged again");
 }
 
 }  // namespace
@@ -197,6 +219,7 @@ int main(int argc, char** argv)
     bindFailureIsLoggedOncePerCondition();
     noSocketIsLoggedOncePerCondition();
     silenceIsLoggedOnceAfterThreshold();
+    sendFailureIsLoggedOncePerCondition();
     resetForgetsEverything();
 
     qInstallMessageHandler(previous);

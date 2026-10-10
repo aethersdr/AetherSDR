@@ -31,12 +31,16 @@ public:
     // A logged failure logs again only after this pair has bound once.
     void bindSucceeded(const QString& interfaceName, const QHostAddress& address);
     void endRefresh(int socketCount, int interfaceCount);
+    // A sweep's probe left no datagram from `local`; logs like a bind failure.
+    void sendFailed(const QHostAddress& local, const QString& error);
+    void sendSucceeded(const QHostAddress& local);
     // A sweep's interval ended; `answered` is true if any HL2 replied to it.
     void sweepClosed(bool answered);
     void reset();
 
 private:
     QSet<QString> m_bindFailures;       // failures logged and not bound since
+    QSet<QString> m_sendFailures;       // local addresses logged, not sent from since
     int m_interfaceCount = 0;
     int m_silentSweeps = 0;
     bool m_noSocketReported = false;
