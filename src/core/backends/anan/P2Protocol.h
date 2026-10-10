@@ -243,12 +243,10 @@ std::array<std::uint8_t, kSpeakerPacketBytes> buildSpeakerAudio(
 // while receiving (OutHighPriority.c).
 inline constexpr std::size_t kHighPriorityStatusBytes = 60;
 
-// Volts per count of HighPriorityStatus::supplyRailCounts: a 23.0/1.1 divider
-// into the 12-bit slow ADC at its 5 V reference, the scale in common use for
-// this input. MEASURED, NOT ASSUMED: on a G2, 2026-10-05, a meter at the DC
-// input jack read 13.65 V while the radio reported a median of 536 counts,
-// which this scale reads as 13.68 V. One rail voltage only (the supply was not
-// adjustable), so the point fixes the scale where it is used, not an offset.
+// Volts per count of HighPriorityStatus::supplyRailCounts: a (22+1)/1.1 divider
+// into the 12-bit slow ADC at 5 V, as Thetis (console.cs convertToVolts) and
+// deskHPSDR (rx_panadapter.c, Orion2/Saturn) scale the same input. Checked
+// against a meter at one rail voltage on a G2: docs/architecture/radio-capabilities-map.md.
 inline constexpr double kSupplyRailVoltsPerCount = (23.0 / 1.1) * (5.0 / 4095.0);
 
 struct HighPriorityStatus {
@@ -260,19 +258,10 @@ struct HighPriorityStatus {
     // "2 samples per location" doubling never reaches the send, OutHighPriority.c).
     // Not comparable to kSpeakerFramesPerPacket; use as a trend.
     std::uint16_t speakerFifoLevel = 0;
-    // Bytes 57-58: the DC supply rail, in RAW 12-bit ADC counts (0-4095).
-    // p2app labels this input "AIN3 user_analog1". That it carries the rail on
-    // a G2 is a bench measurement, not something the label says -- see
-    // kSupplyRailVoltsPerCount.
-    //
-    // NOT BYTES 49-50, which the spec and p2app call "supply voltage" (AIN6).
-    // On the same bench that input read 1589 counts against the meter's
-    // 13.65 V, which no published scale fits, so it is not decoded. Of the
-    // other analog fields, forward/reverse/exciter power are transmit-side and
-    // AIN4 (bytes 55-56) read 0-16 counts while receiving, with nothing here
-    // measuring what it carries. There is NO TEMPERATURE anywhere in the
-    // payload, which is why no client can populate a PA temperature readout
-    // for this radio.
+    // Bytes 57-58: the DC supply rail in raw 12-bit counts. p2app labels it
+    // "AIN3 user_analog1"; Thetis and deskHPSDR read the rail here. NOT bytes
+    // 49-50 (AIN6), which the spec calls "supply voltage" but which fits no
+    // published scale on a G2. No field in this payload is a temperature.
     std::uint16_t supplyRailCounts = 0;
 };
 

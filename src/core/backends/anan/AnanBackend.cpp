@@ -235,9 +235,7 @@ AnanBackend::AnanBackend(QObject* parent)
             m_sMeter.reset();
             // Likewise the rail's window: counts from before this session
             // must not ride into its first published voltage.
-            m_supplyRailWindowStartMs = -1;
-            m_supplyRailCountSum = 0;
-            m_supplyRailSamples = 0;
+            resetSupplyRailWindow();
         }
         emitSliceState();
         emitPanState();
@@ -818,6 +816,9 @@ void AnanBackend::disconnectRadio()
     m_linkCounters = {};
     m_linkCountersSeen = false;
     m_lastSnapshotRxBytes = 0;
+    // A status packet can arrive before the next session's linkUp, so the
+    // rail's window is emptied here as well as there.
+    resetSupplyRailWindow();
     // A genuine operator-initiated disconnect always fires disconnected(),
     // even one that lands mid-rate-change -- this is not the zoom case
     // m_rateChanging exists to hide.
@@ -1570,6 +1571,10 @@ void AnanBackend::onSupplyRailCounts(int counts)
 
 void AnanBackend::onSupplyRailCountsAt(int counts, qint64 nowMs)
 {
+    // A 12-bit ADC reads 0..4095. Anything else means the field is not this
+    // input, and no reading is better than a plausible wrong voltage.
+    if (counts < 0 || counts > 4095)
+        return;
     m_supplyRailCountSum += counts;
     ++m_supplyRailSamples;
     // The first window opens on its first count; each later one opens where the
@@ -1585,6 +1590,13 @@ void AnanBackend::onSupplyRailCountsAt(int counts, qint64 nowMs)
     m_supplyRailSamples = 0;
     m_supplyRailWindowStartMs = nowMs;
     emit meterUpdate(QStringLiteral("RAD:+13.8A"), meanCounts * kSupplyRailVoltsPerCount);
+}
+
+void AnanBackend::resetSupplyRailWindow()
+{
+    m_supplyRailWindowStartMs = -1;
+    m_supplyRailCountSum = 0;
+    m_supplyRailSamples = 0;
 }
 
 void AnanBackend::emitSliceState()

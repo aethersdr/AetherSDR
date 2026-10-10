@@ -56,6 +56,8 @@ public:
     {
         backend.onSupplyRailCountsAt(counts, nowMs);
     }
+    static P2Client* client(AnanBackend& backend) { return backend.m_client; }
+    static int samples(const AnanBackend& backend) { return backend.m_supplyRailSamples; }
 };
 }  // namespace AetherSDR::anan
 
@@ -697,6 +699,45 @@ int main(int argc, char** argv)
                   "averaging only its own packets, none of the first window's");
         }
         check(probe.violations().isEmpty(), "the rail's meter signals stay on the owner thread");
+    }
+
+    // ---- The rail's wiring and its resets, through P2Client's own signals ----
+    // Emitted on this thread, so the backend's AutoConnection runs the slot
+    // directly: no socket, no radio, no started session.
+    {
+        AnanBackend backend;
+        P2Client* client = AnanSupplyRailTestAccess::client(backend);
+        emit client->supplyRailSampled(536);
+        check(AnanSupplyRailTestAccess::samples(backend) == 1,
+              "P2Client's supplyRailSampled reaches the backend's rail window");
+
+        QSignalSpy meter(&backend, &IRadioBackend::meterUpdate);
+        AnanSupplyRailTestAccess::countsAt(backend, 4000, 0);   // the last session's count
+        emit client->linkUp();                                  // a new session
+        AnanSupplyRailTestAccess::countsAt(backend, 536, 5000);
+        int railPublishes = 0;
+        for (const auto& args : meter)
+            railPublishes += args.at(0).toString() == QStringLiteral("RAD:+13.8A");
+        check(railPublishes == 0,
+              "a new session's first count opens a window rather than closing the last one's");
+        AnanSupplyRailTestAccess::countsAt(backend, 536, 6000);
+        double last = -1;
+        for (const auto& args : meter)
+            if (args.at(0).toString() == QStringLiteral("RAD:+13.8A"))
+                last = args.at(1).toDouble();
+        check(qAbs(last - 536 * kSupplyRailVoltsPerCount) < 1e-9,
+              "and its first reading averages none of the last session's counts");
+
+        AnanSupplyRailTestAccess::countsAt(backend, 536, 6200);
+        backend.disconnectRadio();
+        check(AnanSupplyRailTestAccess::samples(backend) == 0,
+              "a disconnect empties the window, so a packet before the next linkUp starts afresh");
+
+        AnanSupplyRailTestAccess::countsAt(backend, 4096, 7000);
+        check(AnanSupplyRailTestAccess::samples(backend) == 0,
+              "a count past the 12-bit ADC's 4095 is dropped, not averaged in");
+        AnanSupplyRailTestAccess::countsAt(backend, 4095, 7200);
+        check(AnanSupplyRailTestAccess::samples(backend) == 1, "and full scale is kept");
     }
 
     // ---- LinkStats: silence before the first snapshot, never a zeroed one ----

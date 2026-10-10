@@ -238,9 +238,11 @@ private:
     // never reads as stale between publications, and about five packets at
     // p2app's 200 ms receive cadence.
     static constexpr qint64 kSupplyRailWindowMs = 1000;
+    // Empties the window. Called on disconnect and at linkUp, so a new session
+    // never averages in the last one's counts.
+    void resetSupplyRailWindow();
     QElapsedTimer m_supplyRailClock;
-    // -1 = no window open. Reset per session in the linkUp handler, like
-    // m_sMeter, so a new session never averages in the last one's counts.
+    // -1 = no window open.
     qint64 m_supplyRailWindowStartMs = -1;
     qint64 m_supplyRailCountSum = 0;
     int m_supplyRailSamples = 0;
