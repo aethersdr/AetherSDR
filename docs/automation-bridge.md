@@ -3143,10 +3143,10 @@ the radio tabs, the audio cluster, and the window controls on every platform.
              "popoverVisible":false,"pulseEnabled":true,
              "tabs":[{"id":"DEMO-0001","name":"Simulator (not on the air)",
                       "model":"FLEX-6600","status":"connected",
-                      "statusLine":"FLEX-6600 · connected · DEMO",
+                      "statusLine":"FLEX-6600 · Connected · DEMO",
                       "transport":"127.0.0.1","active":true,"linkCarrier":true,
                       "screenRect":[233,48,257,36],
-                      "accessibleName":"Radio Simulator (not on the air), connected"}],
+                      "accessibleName":"Radio Simulator (not on the air), Connected"}],
              "discovered":[…]},
    "audio":{"pcAudioEnabled":true,"pcAudioLocked":true,"lineoutMuted":false,
             "headphoneMuted":false,"masterVolume":100,"headphoneVolume":50,
@@ -3185,7 +3185,11 @@ currently clipping configured radios. `radios.tabs[].visibleInTabs` is the
 retained tab preference and `visible` is current widget visibility (which can
 also change in minimal mode). `radios.tabs[].linkCarrier` identifies
 the one tab carrying discovery/heartbeat state. `radios.tabs[].status` is one of `connected` / `available` /
-`in use`, and `statusLine` is the second line the tab actually renders —
+`in use` — a lower-case, untranslated token, and the field to match on.
+The text the tab *renders* is sentence case and translated (`Connected`,
+`Available`, `In use`, and `Link lost` while the link alarm is up), so
+`statusLine` and `accessibleName` deliberately disagree with `status` on
+casing; assert the token, not the prose. `statusLine` is the second line the tab actually renders —
 `[model ·] status [· detail]`, with the model shown only when a nickname hides
 it and the name (line one) never repeated. Assert against it rather than the
 dot colour, since [status is never encoded by colour alone](a11y.md); the
@@ -3804,6 +3808,13 @@ meter's display hold: a single key-edge ADC sample decays over seconds, so a
 script that asserts on it reads a transient from the start of the over as
 though it were the power now. It is reset at each key edge, which is right for
 a needle and wrong for a test.
+
+**`forwardPowerSkippedTotal` counts HL2 forward-power responses left out of the
+peak window** because their temperature word is 0, which no working sensor
+reads. It is a total since connect and absent until a forward-power response
+arrived, so `0` is a reading. A few per key-on is normal on gateware 74.2. A
+count that rises all the time means the radio's temperature word reads 0: the
+peak hold then runs on the last value alone and reads low on speech.
 
 On the HL2, `rfPowerPercent` / `txDriveRegister` / `txDriveGated` are the
 requested-versus-applied pair for transmit drive. `txDriveRegister` is the raw

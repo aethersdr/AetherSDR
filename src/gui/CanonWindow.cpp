@@ -8,6 +8,9 @@
 #include <QConicalGradient>
 #include <QAccessibilityHints>
 #include <QGuiApplication>
+#include <QFrame>
+#include <QLabel>
+#include <QKeyEvent>
 #include <QKeySequence>
 #include <QLinearGradient>
 #include <QMouseEvent>
@@ -38,11 +41,18 @@ const QAccessibilityHints* accessibilityHints()
 }
 } // namespace
 
-CanonWindow::CanonWindow(const QString& title, QWidget* parent)
+CanonWindow::CanonWindow(const QString& title, QWidget* parent, Kind kind)
     : QDialog(parent)
+    , m_returnClicksDefault(kind == Kind::Dialog)
 {
     setWindowTitle(title);
-    setWindowFlags(Qt::Dialog | Qt::FramelessWindowHint);
+    setWindowFlags((kind == Kind::Workspace ? Qt::Window : Qt::Dialog)
+                   | Qt::FramelessWindowHint);
+    // A secondary top-level window: an open workspace must not keep the app
+    // running once the main window has closed.
+    if (kind == Kind::Workspace) {
+        setAttribute(Qt::WA_QuitOnClose, false);
+    }
     setAttribute(Qt::WA_TranslucentBackground);
 
     // The app stylesheet gives dialogs an opaque background, which would fill
@@ -106,14 +116,33 @@ void CanonWindow::moveEvent(QMoveEvent* event)
     }
 }
 
-void CanonWindow::closeEvent(QCloseEvent* event)
+void CanonWindow::keyPressEvent(QKeyEvent* event)
 {
-    // Move and resize saves are in memory; closing flushes them to disk.
-    if (!m_geometryKey.isEmpty()) {
+    // QDialog::keyPressEvent() turns Return and Enter into a click on the
+    // default or first auto-default button. With setReturnClicksDefault(false)
+    // that is skipped; a focused button still takes Return itself, so keyboard
+    // activation is unchanged.
+    // Same test QDialog uses: no modifier, or the keypad's Enter.
+    const bool plainEnter = !event->modifiers()
+        || (event->modifiers() & Qt::KeypadModifier && event->key() == Qt::Key_Enter);
+    if (!m_returnClicksDefault && plainEnter
+        && (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter)) {
+        event->ignore();
+        return;
+    }
+    QDialog::keyPressEvent(event);
+}
+
+void CanonWindow::hideEvent(QHideEvent* event)
+{
+    // Move and resize saves are in memory; hiding flushes them to disk. Hide,
+    // not close: Escape and Ctrl+W go through QDialog::reject(), which hides
+    // the window without a close event.
+    if (!m_geometryKey.isEmpty() && m_placed) {
         saveGeometryToSettings();
         AppSettings::instance().save();
     }
-    QDialog::closeEvent(event);
+    QDialog::hideEvent(event);
 }
 
 // Saved as "x,y,width,height" and applied with move() and resize():
@@ -163,26 +192,37 @@ CanonWindow::Restored CanonWindow::restoreGeometryFromSettings()
         ? Restored::SizeAndPosition : Restored::Nothing;
 }
 
+void CanonWindow::setLaunchSize(const QSize& size)
+{
+    m_launchSize = size;
+    resize(size);
+}
+
 void CanonWindow::showEvent(QShowEvent* event)
 {
-    if (m_placed) {
+    // A saved geometry is applied before QDialog::showEvent(), as
+    // PersistentDialog does, so the window maps at its saved size.
+    Restored restored = Restored::Nothing;
+    if (!m_placed && !m_geometryKey.isEmpty()) {
+        m_restoringGeometry = true;
+        restored = restoreGeometryFromSettings();
+        m_restoringGeometry = false;
+    }
+    // The launch size wins over the saved one on every open, and is applied
+    // before centring so the centre is the pinned window's.
+    if (m_launchSize.isValid() && size() != m_launchSize) {
+        resize(m_launchSize.expandedTo(minimumSize()));
+    }
+    if (m_placed || restored == Restored::SizeAndPosition) {
+        m_placed = true;
         QDialog::showEvent(event);
         return;
     }
-    // A saved geometry is applied before QDialog::showEvent(), as
-    // PersistentDialog does, so the window maps at its saved size.
-    if (!m_geometryKey.isEmpty()) {
-        m_restoringGeometry = true;
-        const Restored restored = restoreGeometryFromSettings();
-        m_restoringGeometry = false;
-        if (restored == Restored::SizeAndPosition) {
-            m_placed = true;
-            QDialog::showEvent(event);
-            return;
-        }
-    }
     QDialog::showEvent(event);
     m_placed = true;
+    if (m_ownerPlaced) {
+        return;
+    }
     // Centre over the parent window (or the screen) the first time it opens.
     QRect anchor;
     if (parentWidget()) {
@@ -459,6 +499,33 @@ void SparkBorder::paintEvent(QPaintEvent*)
 
     paintSpark(p, outline, box.center(), tm.color(this, QStringLiteral("color.canon.sparkGold")),
                tm.color(this, QStringLiteral("color.canon.sparkGoldHot")), 5.0, 0.22, 1.5);
+}
+
+QWidget* makeCanonHeader(const QString& title)
+{
+    auto* header = new QWidget;
+    header->setObjectName(QStringLiteral("canonHeader"));
+    auto* col = new QVBoxLayout(header);
+    col->setContentsMargins(0, 0, 0, 0);
+    col->setSpacing(8);
+
+    auto* label = new QLabel(title, header);
+    label->setObjectName(QStringLiteral("canonHeaderTitle"));
+    label->setAccessibleName(title);
+    label->setContentsMargins(0, 0, 40, 0);
+    col->addWidget(label);
+
+    auto* rule = new QFrame(header);
+    rule->setObjectName(QStringLiteral("canonHeaderRule"));
+    col->addWidget(rule);
+
+    AetherSDR::ThemeManager::instance().applyStyleSheet(header,
+        "QWidget#canonHeader { background: transparent; }"
+        "QLabel#canonHeaderTitle { background: transparent; color: {{color.canon.ink}};"
+        " font-size: 17px; font-weight: 700; }"
+        "QFrame#canonHeaderRule { background: {{color.canon.line}}; border: none;"
+        " min-height: 1px; max-height: 1px; }");
+    return header;
 }
 
 } // namespace AetherSDR

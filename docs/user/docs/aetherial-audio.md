@@ -70,6 +70,15 @@ AetherTX and AetherRX share one layout:
 - Knobs accept typed values as well as dragging.
 - The foot of the tab column holds the live controls: a **REC / PLAY** pair,
   **BYPASS**, and a **Settings** gear for the profile library.
+- **The window itself.** Neither window has a title bar. Drag any empty
+  part of it to move it, and drag an edge or corner to resize it. Close it
+  with the round **✕** in the top-right corner, **Esc**, or **Ctrl+W**
+  (**⌘W** on macOS). Each is a window of its own, with its own taskbar entry,
+  so you can minimise it from the taskbar or park it on another monitor.
+  **View → Frameless Window** does not apply to them. Pressing **Return** in
+  a knob's value field only commits the value.
+- Both windows open at the same size every time. Where you leave them is
+  remembered.
 
 Right-clicking a DSP button elsewhere in the app (for example on the VFO flag)
 still opens a quick parameter popup without opening either window.

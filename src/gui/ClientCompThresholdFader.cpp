@@ -25,9 +25,9 @@ namespace {
 constexpr float kPeakAttack  = 0.6f;
 constexpr float kPeakRelease = 0.08f;
 
-inline QColor kHandleFill() { return AetherSDR::ThemeManager::instance().color("color.accent.warning"); }  // amber — same as threshold chevron
-inline QColor kHandleStroke() { return AetherSDR::ThemeManager::instance().color("color.background.0"); }
-inline QColor kHandleCenter() { return AetherSDR::ThemeManager::instance().color("color.background.tx"); }
+inline QColor kHandleFill(const QWidget* w) { return AetherSDR::ThemeManager::instance().color(w, "color.accent.warning"); }  // amber — same as threshold chevron
+inline QColor kHandleStroke(const QWidget* w) { return AetherSDR::ThemeManager::instance().color(w, "color.background.0"); }
+inline QColor kHandleCenter(const QWidget* w) { return AetherSDR::ThemeManager::instance().color(w, "color.background.tx"); }
 } // namespace
 
 ClientCompThresholdFader::ClientCompThresholdFader(QWidget* parent)
@@ -193,7 +193,7 @@ void ClientCompThresholdFader::paintEvent(QPaintEvent*)
     const int barLeft = kLabelColW + kGap + kHandleOverhang;
     const QRect barR(barLeft, stripTop, kBarW, m_stripH);
 
-    p.fillRect(barR, AetherSDR::ThemeManager::instance().color("color.background.0"));
+    p.fillRect(barR, AetherSDR::ThemeManager::instance().color(this, "color.background.0"));
 
     // Level fill — same green→amber→red gradient as the output fader so
     // the metering vocabulary is consistent across the app.
@@ -205,15 +205,15 @@ void ClientCompThresholdFader::paintEvent(QPaintEvent*)
         const QRect fill(barR.x(), barR.y() + m_stripH - fillH,
                          kBarW, fillH);
         QLinearGradient grad(0, barR.y() + m_stripH, 0, barR.y());
-        grad.setColorAt(0.0, AetherSDR::ThemeManager::instance().color("color.accent.success"));
-        grad.setColorAt(0.55, AetherSDR::ThemeManager::instance().color("color.accent.success"));
-        grad.setColorAt(0.80, AetherSDR::ThemeManager::instance().color("color.accent.warning"));
-        grad.setColorAt(0.95, AetherSDR::ThemeManager::instance().color("color.accent.danger"));
-        grad.setColorAt(1.0, AetherSDR::ThemeManager::instance().color("color.accent.danger"));
+        grad.setColorAt(0.0, AetherSDR::ThemeManager::instance().color(this, "color.accent.success"));
+        grad.setColorAt(0.55, AetherSDR::ThemeManager::instance().color(this, "color.accent.success"));
+        grad.setColorAt(0.80, AetherSDR::ThemeManager::instance().color(this, "color.accent.warning"));
+        grad.setColorAt(0.95, AetherSDR::ThemeManager::instance().color(this, "color.accent.danger"));
+        grad.setColorAt(1.0, AetherSDR::ThemeManager::instance().color(this, "color.accent.danger"));
         p.fillRect(fill, grad);
     }
 
-    p.setPen(QPen(AetherSDR::ThemeManager::instance().color("color.background.1"), 1));
+    p.setPen(QPen(AetherSDR::ThemeManager::instance().color(this, "color.background.1"), 1));
     p.setBrush(Qt::NoBrush);
     p.drawRect(barR.adjusted(0, 0, -1, -1));
 
@@ -236,7 +236,7 @@ void ClientCompThresholdFader::paintEvent(QPaintEvent*)
         const float norm = (t.db - kMeterMinDb) / (kMeterMaxDb - kMeterMinDb);
         const int y = stripTop + static_cast<int>((1.0f - norm) * m_stripH);
 
-        p.setPen(AetherSDR::ThemeManager::instance().color("color.text.secondary"));
+        p.setPen(AetherSDR::ThemeManager::instance().color(this, "color.text.secondary"));
         const QString s = QString::fromLatin1(t.label);
         const int tw = fm.horizontalAdvance(s);
         const int ty = std::clamp(y + fm.ascent() / 2 - 1,
@@ -244,7 +244,7 @@ void ClientCompThresholdFader::paintEvent(QPaintEvent*)
                                   stripTop + m_stripH - 1);
         p.drawText(textRight - tw, ty, s);
 
-        p.setPen(AetherSDR::ThemeManager::instance().color("color.meter.bar.fill"));
+        p.setPen(AetherSDR::ThemeManager::instance().color(this, "color.meter.bar.fill"));
         p.drawLine(textRight, y, barLeft - 1, y);
     }
 
@@ -258,10 +258,10 @@ void ClientCompThresholdFader::paintEvent(QPaintEvent*)
                         handleY - kHandleH / 2,
                         kBarW + kHandleOverhang * 2,
                         kHandleH);
-    p.setPen(QPen(kHandleStroke(), 1));
-    p.setBrush(kHandleFill());
+    p.setPen(QPen(kHandleStroke(this), 1));
+    p.setBrush(kHandleFill(this));
     p.drawRect(handleR);
-    p.setPen(kHandleCenter());
+    p.setPen(kHandleCenter(this));
     p.drawLine(handleR.left() + 1, handleY,
                handleR.right() - 1, handleY);
 
@@ -273,7 +273,7 @@ void ClientCompThresholdFader::paintEvent(QPaintEvent*)
     caret.lineTo(barLeft - kHandleOverhang,     cy - 3);
     caret.lineTo(barLeft - kHandleOverhang,     cy + 3);
     caret.closeSubpath();
-    p.setBrush(kHandleFill());
+    p.setBrush(kHandleFill(this));
     p.setPen(Qt::NoPen);
     p.drawPath(caret);
 }

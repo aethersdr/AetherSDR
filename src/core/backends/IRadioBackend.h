@@ -590,9 +590,10 @@ public:
     // rfpower drop notice.
     virtual void setTxPower(int percent) { Q_UNUSED(percent); }
 
-    // TUNE power (0..100) changed while the TUNE carrier may be up. NEVER keys:
-    // a backend generating its own carrier re-applies drive to one in progress
-    // and otherwise does nothing, since the next setTune() carries the value.
+    // TUNE power (0..100) changed: unkeyed, or on a carrier this client keyed.
+    // NEVER keys: a backend generating its own carrier re-applies drive to one in
+    // progress; otherwise it may only record the value (HL2 keeps it per band),
+    // since the next setTune() carries it.
     // Owner thread, like setTxPower(). Declaring
     // TransmitDriveControl::tunePowerAppliesLive promises it is implemented.
     virtual void setTunePower(int percent) { Q_UNUSED(percent); }

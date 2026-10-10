@@ -24,6 +24,11 @@
 // Master Volume knob takes that same path there; with PC Audio off there is no
 // output here and no mixer on the radio, and it refuses.
 //
+// LINE OUT: the radio's own line out exists on a Flex (command plane) and
+// wherever the backend declares RadioCapabilities::lineoutControl (ANAN). The
+// title-bar speaker mutes it beside this computer's output only there (#4665);
+// elsewhere Radio Setup's Line Out row is dimmed with its reason.
+//
 // Pure, no Qt and no engine type, so the test includes it directly; the
 // PanZoomModeGate.h shape.
 
@@ -33,6 +38,12 @@ namespace AetherSDR {
     bool connected, bool hasCommandPlane) noexcept
 {
     return !connected || hasCommandPlane;
+}
+
+[[nodiscard]] constexpr bool lineoutControlsAvailable(
+    bool connected, bool hasCommandPlane, bool declaresLineout) noexcept
+{
+    return !connected || hasCommandPlane || declaresLineout;
 }
 
 [[nodiscard]] constexpr bool masterKnobDrivesLocalOutput(

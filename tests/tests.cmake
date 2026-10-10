@@ -213,8 +213,17 @@ set_tests_properties(cw_decoder_pcm_lifecycle_test PROPERTIES TIMEOUT 60)
 # Socket/device-free production RX queue, processing-domain and output checks.
 add_executable(audio_engine_rates_test tests/audio_engine_rates_test.cpp)
 target_link_libraries(audio_engine_rates_test PRIVATE aethercore Qt6::Core)
-add_test(NAME audio_engine_rates_test COMMAND audio_engine_rates_test)
-set_tests_properties(audio_engine_rates_test PROPERTIES TIMEOUT 120)
+# Each invocation retains a bounded scenario instead of accumulating every
+# DSP initialization and effect comparison under one sanitizer timeout.
+foreach(_case IN ITEMS rateMatrix bandwidthAndMono negotiatedSpeakerOutput
+        negotiationOpenFailure negotiationLifetimeAndCoalescing auxiliaryAcrossNegotiation
+        transitionsAndRejection queueBudgetsAndDeviceTransitions effects-bypass effects-EQ
+        effects-NR2 effects-RN2 effects-NR4 effects-DFNR effects-MNR kiwiDeviceRateMatrix
+        processingStateReset legacyReplacementAndKiwiReset fixedProcessingDomains)
+    add_test(NAME audio_engine_rates_${_case}_test
+        COMMAND audio_engine_rates_test --case=${_case})
+    set_tests_properties(audio_engine_rates_${_case}_test PROPERTIES TIMEOUT 120)
+endforeach()
 
 # The pre-NR fan-out Copy Assist's "unprocessed audio" tap subscribes to
 # (RFC #4861). Same socket-free engine seam as audio_engine_rates_test; pins
@@ -477,6 +486,16 @@ set_tests_properties(tcp_byte_proxy_test PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 
 # the radio-facing loopback address, and loopback UDP peers on 127.0.0.1 and
 # 127.0.0.2. No radio protocol or firmware stand-in. Exit 77 when loopback
 # cannot be bound.
+# The AetherKnob audio spectrum: real FFT data through the feeder's band
+# mapping; a tone must light the bar whose log band holds it.
+add_executable(ctr2_audio_spectrum_feeder_test
+    tests/ctr2_audio_spectrum_feeder_test.cpp
+    src/gui/Ctr2AudioSpectrumFeeder.cpp
+    src/gui/ClientEqFftAnalyzer.cpp)
+target_include_directories(ctr2_audio_spectrum_feeder_test PRIVATE src)
+target_link_libraries(ctr2_audio_spectrum_feeder_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME ctr2_audio_spectrum_feeder_test COMMAND ctr2_audio_spectrum_feeder_test)
+
 add_executable(ctr2_usb_relay_test tests/ctr2_usb_relay_test.cpp)
 target_include_directories(ctr2_usb_relay_test PRIVATE src)
 target_link_libraries(ctr2_usb_relay_test PRIVATE aethercore Qt6::Core Qt6::Network)
@@ -1012,6 +1031,13 @@ target_link_libraries(wdsp_channel_reservation_test PRIVATE aethercore)
 add_test(NAME wdsp_channel_reservation_test COMMAND wdsp_channel_reservation_test)
 set_tests_properties(wdsp_channel_reservation_test PROPERTIES TIMEOUT 120)
 
+# Tearing down a TX channel waits for the PureSignal correction thread before
+# freeing what it uses (#6179, WDSP patch 22). POSIX FIFO; skips on Windows.
+add_executable(wdsp_calcc_teardown_test tests/wdsp_calcc_teardown_test.cpp)
+target_link_libraries(wdsp_calcc_teardown_test PRIVATE aethercore)
+add_test(NAME wdsp_calcc_teardown_test COMMAND wdsp_calcc_teardown_test)
+set_tests_properties(wdsp_calcc_teardown_test PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
+
 # Compiles src/core/NnrControls.h so its static_asserts are real, and pins the
 # default markers the NNR tab draws. Header-only: the WDSP cross-check needs the
 # facade that arrives with NnrFilter (RFC #5684 step 2).
@@ -1044,8 +1070,16 @@ set_tests_properties(nnr_filter_test PROPERTIES TIMEOUT 300)
 # two everywhere through stand-in C APIs).
 add_executable(nr_stereo_independence_test tests/nr_stereo_independence_test.cpp)
 target_link_libraries(nr_stereo_independence_test PRIVATE aethercore Qt6::Core)
-add_test(NAME nr_stereo_independence_test COMMAND nr_stereo_independence_test)
-set_tests_properties(nr_stereo_independence_test PROPERTIES TIMEOUT 300)
+# Every filter/rate still runs all four stereo checks. Isolate their compute
+# budgets so a slow neural filter cannot prevent later methods from running.
+foreach(_method IN ITEMS nr2 nr4 nnr dfnr bnr)
+    foreach(_rate IN ITEMS 24000 48000)
+        add_test(NAME nr_stereo_independence_${_method}_${_rate}_test
+            COMMAND nr_stereo_independence_test --method=${_method} --rate=${_rate})
+        set_tests_properties(nr_stereo_independence_${_method}_${_rate}_test
+            PROPERTIES TIMEOUT 300 SKIP_RETURN_CODE 77)
+    endforeach()
+endforeach()
 
 add_executable(rtl_receiver_registry_test tests/rtl_receiver_registry_test.cpp)
 target_link_libraries(rtl_receiver_registry_test PRIVATE aethercore Qt6::Core)
@@ -1495,6 +1529,13 @@ target_include_directories(hl2_rxdsp_unmute_return_test PRIVATE src)
 target_link_libraries(hl2_rxdsp_unmute_return_test PRIVATE aethercore Qt6::Core)
 add_test(NAME hl2_rxdsp_unmute_return_test COMMAND hl2_rxdsp_unmute_return_test)
 
+# #5942: the HL2 RX chain opens RXA's panel at unity, not WDSP's 4.0. A real
+# Hl2RxDsp fed a known tone; socket-free.
+add_executable(hl2_rx_panel_gain_test tests/hl2_rx_panel_gain_test.cpp)
+target_include_directories(hl2_rx_panel_gain_test PRIVATE src)
+target_link_libraries(hl2_rx_panel_gain_test PRIVATE aethercore Qt6::Core)
+add_test(NAME hl2_rx_panel_gain_test COMMAND hl2_rx_panel_gain_test)
+
 # #5578 / #5678 row 4.1: the RX bandpass length follows mode, passband and
 # notch count, so CW opens short and buys 8192 taps only when a notch or a
 # narrow filter needs them. Measures the magnitude response and onset latency
@@ -1599,6 +1640,14 @@ add_executable(hl2_pan_create_async_test tests/hl2_pan_create_async_test.cpp)
 target_include_directories(hl2_pan_create_async_test PRIVATE src tests)
 target_link_libraries(hl2_pan_create_async_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
 add_test(NAME hl2_pan_create_async_test COMMAND hl2_pan_create_async_test)
+
+# What an HL2 remembers beyond the flat operating state: TUNE power per band,
+# a chosen auto-RF-gain law and floor, each receiver's setpoints and the
+# receiver set (#5777), and the notches. Injected link edge, no socket.
+add_executable(hl2_session_memory_test tests/hl2_session_memory_test.cpp)
+target_include_directories(hl2_session_memory_test PRIVATE src tests)
+target_link_libraries(hl2_session_memory_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME hl2_session_memory_test COMMAND hl2_session_memory_test)
 
 # RFC #5535 approved the automatic RF-gain loop ON THE CONDITION that it is
 # visible -- the clipping AND the regulator's own action. This pins both, and
@@ -2221,6 +2270,9 @@ add_executable(app_settings_safety_test
     # + QUdpSocket; the test only calls its static helpers).
     src/core/backends/hl2/Hl2Discovery.cpp
     src/core/backends/hl2/MetisProtocol.cpp
+    # Hl2Discovery logs on lcDiscovery, which LogManager defines.
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
 )
 set_target_properties(app_settings_safety_test PROPERTIES AUTOMOC ON)
 target_include_directories(app_settings_safety_test PRIVATE src)
@@ -2264,6 +2316,22 @@ set_tests_properties(
     app_settings_safety_readonly-db-with-backup-fails-closed
     app_settings_safety_preserve-keeps-bytes-and-mode
     PROPERTIES SKIP_RETURN_CODE 77)
+
+# HL2 discovery's log lines (#6285 item 3): failed bind, no usable interface,
+# a run of unanswered sweeps, each once per occurrence. Socket-free: drives
+# DiscoveryNotices and captures the real aether.discovery category.
+add_executable(hl2_discovery_logging_test
+    tests/hl2_discovery_logging_test.cpp
+    src/core/backends/hl2/Hl2Discovery.cpp
+    src/core/backends/hl2/MetisProtocol.cpp
+    $<TARGET_OBJECTS:aether_test_settings>
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
+)
+set_target_properties(hl2_discovery_logging_test PROPERTIES AUTOMOC ON)
+target_include_directories(hl2_discovery_logging_test PRIVATE src)
+target_link_libraries(hl2_discovery_logging_test PRIVATE Qt6::Core Qt6::Network)
+add_test(NAME hl2_discovery_logging_test COMMAND hl2_discovery_logging_test)
 
 add_executable(nr2_settings_model_test
     tests/nr2_settings_model_test.cpp
@@ -2492,9 +2560,60 @@ target_include_directories(weather_radar_loading_test PRIVATE src)
 target_link_libraries(weather_radar_loading_test PRIVATE aethercore qgeoview
     Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network Qt6::Concurrent Qt6::Test
     Qt6::OpenGL Qt6::OpenGLWidgets)
-add_test(NAME weather_radar_loading_test COMMAND weather_radar_loading_test)
-set_tests_properties(weather_radar_loading_test PROPERTIES
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
+# QtTest runs every data row of the selected method. Give each independent
+# asynchronous loading scenario its own ceiling and verify the method inventory.
+set(_weather_radar_loading_cases
+        coverageTooltipClearsWhenLeavingOrDisabling
+        playbackCoverageRemainsPinnedDuringRebuffer
+        globeCoverageMovesWithRenderedSurface
+        globeAdmitsNativeRegionalLiveTiles
+        globePlaybackOverviewKeepsFullAtlasResolution
+        regionalCompositeKeepsIndependentCoverage
+        providerIdentitySurvivesPngCacheAndTexturePreparation
+        legendsFollowDisplayedSourcesAndCoverageNeedsNoNetwork
+        legendPositionTracksMapAndSourceSize
+        compositeObservationNeverUsesFutureOrStaleWeather
+        changingRegionsRetiresPreviousProduct
+        noRegionsReturnsTransparentPixelsWithoutNetwork
+        cityLightsGlobeDrawsAboveDetailAndBelowRadar
+        cityLightsFlatWrapAndOpacity
+        partialHistoryRetriesMissingOriginal
+        completedLiveTilesSurviveSmallPan
+        liveTilesRetryWithoutCameraMovement
+        liveTilesRetryDuringCameraMovement
+        completedCoverageDoesNotWaitForOldFailures
+        liveTileFailureReportsOnceAndRecovers
+        liveRadarAtCloseZoom
+        catalogRetiresExpiredFramesWithoutANewObservation
+        emptyExportRequiresAvailableRasters
+        flatControllerLoopRetainsEveryPaint
+        globeControllerLoopRetainsEveryPaint
+        conciseLoadingLifecycle
+        initialFailureRetriesWithoutLosingIntent
+        speedChangesRetainFramesAndFinalHold
+        globeRadarAboveDetailGeometry
+        failedLiveAtlasRetainsPixels
+        globePlaybackResidency
+        projectionAndRollingHistory
+        geometryAndPriority
+        queuedExportRetainsItsGeometryAfterCacheEviction
+        retainedTransparentTiles
+        overlayLoadingMessagesCoexist
+        progressiveZoomAndFailures
+)
+add_test(NAME weather_radar_loading_registration_test
+    COMMAND ${CMAKE_COMMAND}
+        "-DTEST_EXECUTABLE=$<TARGET_FILE:weather_radar_loading_test>"
+        "-DEXPECTED_METHODS=${_weather_radar_loading_cases}"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/verify_qttest_registration.cmake")
+set_tests_properties(weather_radar_loading_registration_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 15)
+foreach(_case IN LISTS _weather_radar_loading_cases)
+    add_test(NAME weather_radar_loading_${_case}_test
+        COMMAND weather_radar_loading_test ${_case})
+    set_tests_properties(weather_radar_loading_${_case}_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
+endforeach()
 
 # Opt-in: the native GPU radar upload and shader alpha-filtering contract. It
 # needs a real OpenGL 3.2 context, which no CI lane has. Enable on a machine
@@ -3519,6 +3638,31 @@ target_link_libraries(radio_setup_max_power_field_test PRIVATE
     aetherdesktop_support Qt6::Widgets Qt6::Test)
 add_test(NAME radio_setup_max_power_field_test COMMAND radio_setup_max_power_field_test)
 set_tests_properties(radio_setup_max_power_field_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
+
+# Radio Setup's Transmit timing fields on the production dialog: dimmed with
+# an announced reason, and silent, on a connected radio with no command plane;
+# the same `interlock set` text with one. Injected backend; no socket.
+add_executable(radio_setup_tx_timing_fields_test
+    tests/radio_setup_tx_timing_fields_test.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/RadioSetupDialog.cpp
+    src/gui/RtlReceiverSettingsWidget.cpp
+    src/gui/ControlAvailabilityRegistry.cpp
+    src/gui/RadioSetupDialog_Peripherals.cpp
+    src/gui/PersistentDialog.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+    src/gui/SliceColorManager.cpp
+    src/gui/KiwiPublicReceiverPicker.cpp
+    src/gui/GuardedSlider.h
+    ${THEME_TEST_RESOURCES}
+)
+target_include_directories(radio_setup_tx_timing_fields_test PRIVATE src tests)
+target_link_libraries(radio_setup_tx_timing_fields_test PRIVATE
+    aetherdesktop_support Qt6::Widgets Qt6::Test)
+add_test(NAME radio_setup_tx_timing_fields_test COMMAND radio_setup_tx_timing_fields_test)
+set_tests_properties(radio_setup_tx_timing_fields_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
 
 # Radio Setup's Record Mode pair on a connected radio with no command plane:
@@ -4696,9 +4840,13 @@ target_include_directories(peripheral_auth_dialog_test PRIVATE tests/fakes src t
 target_link_libraries(peripheral_auth_dialog_test PRIVATE
     aetherdesktop_support Qt6::Widgets Qt6::Test)
 set_target_properties(peripheral_auth_dialog_test PROPERTIES AUTOMOC ON)
-add_test(NAME peripheral_auth_dialog_test COMMAND peripheral_auth_dialog_test)
-set_tests_properties(peripheral_auth_dialog_test PROPERTIES
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
+foreach(_case IN ITEMS automatic removal auth-read manual-recovery external-ag
+        discovery availability discovered-recovery interaction)
+    add_test(NAME peripheral_auth_dialog_${_case}_test
+        COMMAND peripheral_auth_dialog_test --case=${_case})
+    set_tests_properties(peripheral_auth_dialog_${_case}_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
+endforeach()
 
 # Production Keychain adapter with an in-memory job double; no OS vault or socket.
 add_executable(peripheral_auth_keychain_test
@@ -5812,6 +5960,14 @@ add_test(NAME hl2_txdsp_capture_burst_test COMMAND hl2_txdsp_capture_burst_test)
 # inconclusive, not failed. An underrun still fails.
 set_tests_properties(hl2_txdsp_capture_burst_test PROPERTIES SKIP_RETURN_CODE 77)
 
+# What the operator's transmitted audio gets from TXA (#5911): passband shape
+# per mode and the onset. 77 = phasing build, or starved by machine load.
+add_executable(hl2_tx_passband_onset_test tests/hl2_tx_passband_onset_test.cpp)
+target_include_directories(hl2_tx_passband_onset_test PRIVATE src tests)
+target_link_libraries(hl2_tx_passband_onset_test PRIVATE aethercore Qt6::Core)
+add_test(NAME hl2_tx_passband_onset_test COMMAND hl2_tx_passband_onset_test)
+set_tests_properties(hl2_tx_passband_onset_test PROPERTIES SKIP_RETURN_CODE 77)
+
 # radiocert's measurement primitives. Header-only by design so this needs no
 # Qt and no link against aethercore — see the test's header comment for why it
 # exists at all (both shipped bugs in the diagnostic were in this arithmetic).
@@ -6811,6 +6967,7 @@ set_tests_properties(flex_control_dialog_size_test PROPERTIES
 add_executable(connection_panel_size_test
     tests/connection_panel_size_test.cpp
     src/gui/ConnectionPanel.cpp
+    src/gui/CanonWindow.cpp
     src/gui/PersistentDialog.cpp
     src/gui/FramelessResizer.cpp
     src/gui/FramelessWindowTitleBar.cpp
@@ -6848,8 +7005,8 @@ set_tests_properties(minimal_mode_exit_order_test PROPERTIES
 add_executable(startup_autoconnect_lockout_test
     tests/startup_autoconnect_lockout_test.cpp
     src/gui/ConnectionPanel.cpp
+    src/gui/CanonWindow.cpp
     src/gui/FramelessResizer.cpp
-    src/gui/FramelessWindowTitleBar.cpp
 )
 target_include_directories(startup_autoconnect_lockout_test PRIVATE src tests)
 target_link_libraries(startup_autoconnect_lockout_test PRIVATE
@@ -7222,6 +7379,14 @@ add_executable(hl2_tx_level_policy_test
 )
 target_include_directories(hl2_tx_level_policy_test PRIVATE src)
 add_test(NAME hl2_tx_level_policy_test COMMAND hl2_tx_level_policy_test)
+
+# Pure and sample-counted: links nothing, so it cannot starve like the
+# modulator cases in hl2_txdsp_test.
+add_executable(hl2_tx_alc_test
+    tests/hl2_tx_alc_test.cpp
+)
+target_include_directories(hl2_tx_alc_test PRIVATE src)
+add_test(NAME hl2_tx_alc_test COMMAND hl2_tx_alc_test)
 
 add_executable(hl2_dsp_readback_test
     tests/hl2_dsp_readback_test.cpp
@@ -8119,11 +8284,13 @@ endif()
 
 set(AETHER_SETTINGS_CONSUMERS
     dax_receive_applet_test
+    hl2_discovery_logging_test
     reroute_dead_controls_test
     hl2_bandstack_digital_agc_test
     radio_model_client_state_test
     squelch_level_scale_test
     hl2_pan_create_async_test
+    hl2_session_memory_test
     anan_backend_test
     anan_noise_blanker_readback_test
     noise_blanker_kind_model_test
@@ -8147,6 +8314,7 @@ set(AETHER_SETTINGS_CONSUMERS
     firmware_close_dialog_test
     flex_control_visibility_test
     radio_setup_region_field_test
+    radio_setup_tx_timing_fields_test
     radio_setup_label_theme_token_test
     radio_setup_max_power_field_test
     radio_setup_recording_mode_dim_test

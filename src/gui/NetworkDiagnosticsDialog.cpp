@@ -1,4 +1,5 @@
 #include "NetworkDiagnosticsDialog.h"
+#include "CanonIndicators.h"
 #include "FramelessResizer.h"
 #include "ScopedChildWidget.h"
 #include "LogSyntaxHighlighter.h"
@@ -208,17 +209,6 @@ QCheckBox {
     color: {{color.canon.inkSoft}};
     spacing: 9px;
 }
-QCheckBox::indicator {
-    width: 18px;
-    height: 18px;
-    border-radius: 4px;
-    border: 1px solid {{color.canon.lineHi}};
-    background: {{color.canon.control}};
-}
-QCheckBox::indicator:checked {
-    background: {{color.canon.cyan}};
-    border-color: {{color.canon.aqua}};
-}
 QLineEdit {
     color: {{color.canon.ink}};
     background: {{color.canon.control}};
@@ -349,8 +339,9 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model,
     resize(1200, 820);
     FramelessResizer::install(this);
     bodyWidget()->setObjectName(QStringLiteral("networkDiagnosticsBody"));
-    AetherSDR::ThemeManager::instance().applyStyleSheet(
-        bodyWidget(), QString::fromLatin1(kNetworkDiagnosticsStyle));
+    applyCanonSheet(bodyWidget(), [] {
+        return QString::fromLatin1(kNetworkDiagnosticsStyle) + canonIndicatorRules();
+    });
 
     auto* body = new QVBoxLayout(bodyWidget());
     body->setSpacing(10);

@@ -6,6 +6,7 @@
 #include "models/Nr2SettingsModel.h"
 #include "models/Rn2SettingsModel.h"
 #include "GuardedSlider.h"
+#include "CanonIndicators.h"
 #include "ModemChrome.h"
 #include "NrGainStrip.h"
 #include "Theme.h"
@@ -209,9 +210,9 @@ protected:
         QPainter p(this);
         p.setRenderHint(QPainter::TextAntialiasing);
         p.setRenderHint(QPainter::Antialiasing);
-        QColor c = ModemChrome::colour(ModemChrome::Colour::Section);
-        if (isDown())          c = ModemChrome::colour(ModemChrome::Colour::GreenBright);
-        else if (underMouse()) c = ModemChrome::colour(ModemChrome::Colour::TextBright);
+        QColor c = ModemChrome::colour(ModemChrome::Colour::Section, this);
+        if (isDown())          c = ModemChrome::colour(ModemChrome::Colour::GreenBright, this);
+        else if (underMouse()) c = ModemChrome::colour(ModemChrome::Colour::TextBright, this);
         p.setPen(c);
         QFont f = font();
         f.setPixelSize(std::min(18, qRound(height() * 0.58)));
@@ -545,7 +546,7 @@ void AetherDspWidget::refreshStatusStrip()
 
     // Grey is "nothing is running" — distinct from the green of a method that
     // is running but currently passing everything through.
-    QColor dotColour = ModemChrome::colour(ModemChrome::Colour::Green);
+    QColor dotColour = ModemChrome::colour(ModemChrome::Colour::Green, this);
     QString text;
     switch (active) {
     case NR2: {
@@ -599,7 +600,7 @@ void AetherDspWidget::refreshStatusStrip()
     }
     default:
         dotColour = ThemeManager::instance().color(
-            QStringLiteral("color.text.label"));
+            this, QStringLiteral("color.text.label"));
         text = QStringLiteral("No method running");
         break;
     }
@@ -700,11 +701,14 @@ void AetherDspWidget::setDialogMode(bool on)
 {
     if (!on) return;  // applet path is the default; one-way switch for the dialog
 
-    // Nothing left to do per-widget: the dialog scale IS the chrome sheet's
-    // Dialog scale, which the constructor already applied. This used to hunt
-    // down every checkable QPushButton and QLabel to bump inline font sizes,
-    // because each control carried its own stylesheet; the controls now
-    // inherit one sheet, so a second pass would only fight it.
+    // The dialog is AetherRX's AetherNR page, inside a canon window: the same
+    // Dialog-scale sheet, in the canon look (canon surfaces, cyan selection,
+    // the painted canon check boxes and radio buttons). The docked applet
+    // keeps the modem look. Labels and painted parts follow the window's
+    // canon theme scope through their token lookups.
+    applyCanonSheet(this, [] {
+        return ModemChrome::styleSheet(ModemChrome::Scale::Dialog, ModemChrome::Look::Canon);
+    });
 }
 
 void AetherDspWidget::setNr2Available(bool available, const QString& tooltip)
@@ -748,11 +752,11 @@ QWidget* AetherDspWidget::buildNr2Page()
     vbox->addWidget(methodFrame);
 
     auto labelStyle = QStringLiteral(
-        "QLabel { color: #8090a0; font-size: 11px; }"
-        "QLabel:disabled { color: #48515a; }");
+        "QLabel { color: {{color.text.secondary}}; font-size: 11px; }"
+        "QLabel:disabled { color: {{color.text.disabled}}; }");
     auto valStyle = QStringLiteral(
-        "QLabel { color: #c8d8e8; font-size: 11px; min-width: 40px; }"
-        "QLabel:disabled { color: #48515a; }");
+        "QLabel { color: {{color.text.primary}}; font-size: 11px; min-width: 40px; }"
+        "QLabel:disabled { color: {{color.text.disabled}}; }");
 
     // Every label on this page is styled through here rather than each one
     // calling setStyleSheet itself. That is what the hardcoded-colour ratchet
@@ -760,7 +764,7 @@ QWidget* AetherDspWidget::buildNr2Page()
     // calls are fourteen places to migrate when these two strings become
     // theme tokens, and this is one.
     const auto styled = [](QLabel* label, const QString& style) {
-        label->setStyleSheet(style);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(label, style);
         return label;
     };
 
@@ -1223,8 +1227,8 @@ QWidget* AetherDspWidget::buildNr4Page()
     vbox->setContentsMargins(0, 0, 0, 0);
     vbox->setSpacing(6);
 
-    auto labelStyle = QStringLiteral("QLabel { color: #8090a0; font-size: 11px; }");
-    auto valStyle   = QStringLiteral("QLabel { color: #c8d8e8; font-size: 11px; min-width: 40px; }");
+    auto labelStyle = QStringLiteral("QLabel { color: {{color.text.secondary}}; font-size: 11px; }");
+    auto valStyle   = QStringLiteral("QLabel { color: {{color.text.primary}}; font-size: 11px; min-width: 40px; }");
 
     auto* methodFrame = controlsFrame(page);
     auto* methodRow = new QHBoxLayout(methodFrame);
@@ -1309,7 +1313,7 @@ QWidget* AetherDspWidget::buildNr4Page()
 
     {
         auto* lbl = new QLabel("Reduction (dB):");
-        lbl->setStyleSheet(labelStyle);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(lbl, labelStyle);
         sliderGrid->addWidget(lbl, row, 0);
         m_nr4ReductionSlider = new GuardedSlider(Qt::Horizontal);
         m_nr4ReductionSlider->setRange(0, 400);
@@ -1318,7 +1322,7 @@ QWidget* AetherDspWidget::buildNr4Page()
         m_nr4ReductionSlider->setToolTip("Maximum noise reduction in dB. Higher values remove more noise but may affect speech.");
         sliderGrid->addWidget(m_nr4ReductionSlider, row, 1);
         m_nr4ReductionLabel = new QLabel("10.0");
-        m_nr4ReductionLabel->setStyleSheet(valStyle);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_nr4ReductionLabel, valStyle);
         m_nr4ReductionLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         sliderGrid->addWidget(m_nr4ReductionLabel, row, 2);
         connect(m_nr4ReductionSlider, &QSlider::valueChanged, this, [this](int v) {
@@ -1334,7 +1338,7 @@ QWidget* AetherDspWidget::buildNr4Page()
 
     {
         auto* lbl = new QLabel("Smoothing (%):");
-        lbl->setStyleSheet(labelStyle);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(lbl, labelStyle);
         sliderGrid->addWidget(lbl, row, 0);
         m_nr4SmoothingSlider = new GuardedSlider(Qt::Horizontal);
         m_nr4SmoothingSlider->setRange(0, 100);
@@ -1343,7 +1347,7 @@ QWidget* AetherDspWidget::buildNr4Page()
         m_nr4SmoothingSlider->setToolTip("Time-domain smoothing of the noise estimate. Higher values produce steadier but slower reduction.");
         sliderGrid->addWidget(m_nr4SmoothingSlider, row, 1);
         m_nr4SmoothingLabel = new QLabel("0");
-        m_nr4SmoothingLabel->setStyleSheet(valStyle);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_nr4SmoothingLabel, valStyle);
         m_nr4SmoothingLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         sliderGrid->addWidget(m_nr4SmoothingLabel, row, 2);
         connect(m_nr4SmoothingSlider, &QSlider::valueChanged, this, [this](int v) {
@@ -1358,7 +1362,7 @@ QWidget* AetherDspWidget::buildNr4Page()
 
     {
         auto* lbl = new QLabel("Whitening (%):");
-        lbl->setStyleSheet(labelStyle);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(lbl, labelStyle);
         sliderGrid->addWidget(lbl, row, 0);
         m_nr4WhiteningSlider = new GuardedSlider(Qt::Horizontal);
         m_nr4WhiteningSlider->setRange(0, 100);
@@ -1367,7 +1371,7 @@ QWidget* AetherDspWidget::buildNr4Page()
         m_nr4WhiteningSlider->setToolTip("Flattens the spectral shape of residual noise so it sounds more uniform.");
         sliderGrid->addWidget(m_nr4WhiteningSlider, row, 1);
         m_nr4WhiteningLabel = new QLabel("0");
-        m_nr4WhiteningLabel->setStyleSheet(valStyle);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_nr4WhiteningLabel, valStyle);
         m_nr4WhiteningLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         sliderGrid->addWidget(m_nr4WhiteningLabel, row, 2);
         connect(m_nr4WhiteningSlider, &QSlider::valueChanged, this, [this](int v) {
@@ -1382,7 +1386,7 @@ QWidget* AetherDspWidget::buildNr4Page()
 
     {
         auto* lbl = new QLabel("Masking Depth:");
-        lbl->setStyleSheet(labelStyle);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(lbl, labelStyle);
         sliderGrid->addWidget(lbl, row, 0);
         m_nr4MaskingSlider = new GuardedSlider(Qt::Horizontal);
         m_nr4MaskingSlider->setRange(0, 100);
@@ -1391,7 +1395,7 @@ QWidget* AetherDspWidget::buildNr4Page()
         m_nr4MaskingSlider->setToolTip("Depth of spectral masking. Higher values suppress more noise in masked frequency regions.");
         sliderGrid->addWidget(m_nr4MaskingSlider, row, 1);
         m_nr4MaskingLabel = new QLabel("0.50");
-        m_nr4MaskingLabel->setStyleSheet(valStyle);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_nr4MaskingLabel, valStyle);
         m_nr4MaskingLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         sliderGrid->addWidget(m_nr4MaskingLabel, row, 2);
         connect(m_nr4MaskingSlider, &QSlider::valueChanged, this, [this](int v) {
@@ -1407,7 +1411,7 @@ QWidget* AetherDspWidget::buildNr4Page()
 
     {
         auto* lbl = new QLabel("Suppression:");
-        lbl->setStyleSheet(labelStyle);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(lbl, labelStyle);
         sliderGrid->addWidget(lbl, row, 0);
         m_nr4SuppressionSlider = new GuardedSlider(Qt::Horizontal);
         m_nr4SuppressionSlider->setRange(0, 100);
@@ -1416,7 +1420,7 @@ QWidget* AetherDspWidget::buildNr4Page()
         m_nr4SuppressionSlider->setToolTip("Overall suppression strength. Higher values apply more aggressive noise removal.");
         sliderGrid->addWidget(m_nr4SuppressionSlider, row, 1);
         m_nr4SuppressionLabel = new QLabel("0.50");
-        m_nr4SuppressionLabel->setStyleSheet(valStyle);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_nr4SuppressionLabel, valStyle);
         m_nr4SuppressionLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         sliderGrid->addWidget(m_nr4SuppressionLabel, row, 2);
         connect(m_nr4SuppressionSlider, &QSlider::valueChanged, this, [this](int v) {
@@ -1455,8 +1459,8 @@ QWidget* AetherDspWidget::buildMnrPage()
     headerRow->addStretch(1);
     body->addLayout(headerRow);
 
-    auto labelStyle = QStringLiteral("QLabel { color: #8090a0; font-size: 11px; }");
-    auto valStyle   = QStringLiteral("QLabel { color: #c8d8e8; font-size: 11px; min-width: 40px; }");
+    auto labelStyle = QStringLiteral("QLabel { color: {{color.text.secondary}}; font-size: 11px; }");
+    auto valStyle   = QStringLiteral("QLabel { color: {{color.text.primary}}; font-size: 11px; min-width: 40px; }");
 
     {
         auto* hdrRow = new QHBoxLayout;
@@ -1471,7 +1475,7 @@ QWidget* AetherDspWidget::buildMnrPage()
     {
         auto* row = new QHBoxLayout;
         auto* lbl = new QLabel("Strength");
-        lbl->setStyleSheet(labelStyle);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(lbl, labelStyle);
         row->addWidget(lbl);
 
         m_mnrStrengthSlider = new GuardedSlider(Qt::Horizontal);
@@ -1486,7 +1490,7 @@ QWidget* AetherDspWidget::buildMnrPage()
         row->addWidget(m_mnrStrengthSlider, 1);
 
         m_mnrStrengthLabel = new QLabel("100%");
-        m_mnrStrengthLabel->setStyleSheet(valStyle);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_mnrStrengthLabel, valStyle);
         row->addWidget(m_mnrStrengthLabel);
         body->addLayout(row);
 
@@ -1967,7 +1971,10 @@ void AetherDspWidget::setBnrRowDetail(int i, const QString& version,
     // When the build pins a newer version, append a "→ x.y" update hint.
     QString text = QStringLiteral("<b>%1</b>").arg(version.toHtmlEscaped());
     if (!newVersion.isEmpty() && newVersion != version)
-        text += QStringLiteral(" <span style='color:#d8a000;'>→ %1</span>").arg(newVersion.toHtmlEscaped());
+        text += QStringLiteral(" <span style='color:%1;'>→ %2</span>")
+                    .arg(AetherSDR::ThemeManager::instance()
+                             .color(this, QStringLiteral("color.accent.warning")).name(),
+                         newVersion.toHtmlEscaped());
     r.detail->setText(text);
     if (!sha256.isEmpty())
         r.detail->setToolTip(QStringLiteral("%1\nsha256: %2").arg(version, sha256));
@@ -2028,7 +2035,7 @@ protected:
         // where it sits on top of the green fill, and a green-on-green tick
         // disappeared exactly where it matters — at a control left on its
         // default.
-        QColor c = ModemChrome::colour(ModemChrome::Colour::Amber);
+        QColor c = ModemChrome::colour(ModemChrome::Colour::Amber, this);
         c.setAlpha(230);
         p.setPen(QPen(c, 2));
         // Above the groove rather than below it: the handle is 14 px here and

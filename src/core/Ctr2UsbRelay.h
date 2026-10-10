@@ -21,7 +21,9 @@ class Ctr2HidPort;
 // HELLO; the device's READY (or its own HELLO, a restart request) gets a fresh
 // radio connection, and READY and CLOSED tell the device when that connection
 // opens and ends. Link faults close the radio connection and send CLOSED;
-// nothing is ever injected into either byte stream.
+// nothing is ever injected into either byte stream. Devices that negotiate
+// link extensions (Ctr2HidPort::extensions) can also be sent AetherSDR's own
+// messages beside the radio stream, such as the audio spectrum.
 // Specification: docs/ctr2-usb-relay-design.md ("USB link specification").
 class Ctr2UsbRelay : public QObject {
     Q_OBJECT
@@ -67,11 +69,21 @@ public:
     Stats stats() const;
     quint64 linkGeneration() const { return m_generation; }
 
+    // Link extensions the open device negotiated (ctr2hid::capabilityBit mask).
+    quint32 extensions() const;
+    // Sends one AudioSpectrum message while relaying, if the device took that
+    // extension. Returns false, sending nothing, otherwise or when ~130 ms of
+    // output is already queued: a late frame is worth less than a fresh one,
+    // and it must not delay the radio stream.
+    bool sendAudioSpectrum(const QByteArray& payload);
+
 signals:
     void stateChanged(AetherSDR::TcpByteProxy::State state);
     void statsChanged();
     void endpointsChanged();
     void lastErrorChanged(const QString& message);
+    // The device's negotiated link extensions arrived; extensions() changed.
+    void extensionsChanged(quint32 extensions);
 
 private:
     class Session;
@@ -82,6 +94,7 @@ private:
     void onReportsReceived(const QByteArray& reports);
     void onReportsSent(int count);
     void onPortFailed(const QString& message);
+    void onExtensionsNegotiated(quint32 extensions);
     void onMessage(const ctr2hid::Message& message);
     void onDeviceStart();
     void sendHello();
@@ -91,7 +104,7 @@ private:
     void sendControl(ctr2hid::MessageType type);
     void sendData(const QByteArray& payload);
     bool sendDatagram(quint16 port, const QByteArray& datagram);
-    void sessionConnected(quint64 generation);
+    void sessionConnected(quint64 generation, quint16 udpPort);
     void sessionDraining(quint64 generation);
     void sessionEnded(quint64 generation, const QString& message, bool error, bool sendClosed);
     void endSession();

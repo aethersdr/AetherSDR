@@ -1401,6 +1401,7 @@ set(GUI_SOURCES
     src/gui/ClientEqEditorCanvas.cpp
     src/gui/StripEqPanel.cpp
     src/gui/ClientEqFftAnalyzer.cpp
+    src/gui/Ctr2AudioSpectrumFeeder.cpp
     src/gui/ClientEqIconRow.cpp
     src/gui/ClientEqOutputFader.cpp
     src/gui/ClientLevelMeter.cpp

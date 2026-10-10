@@ -3,6 +3,7 @@
 #include "EditorFramelessTitleBar.h"
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
+#include "core/ThemeManager.h"
 #include "core/ClientReverb.h"
 
 #include <QCloseEvent>
@@ -24,8 +25,8 @@ namespace AetherSDR {
 namespace {
 
 constexpr const char* kWindowStyle =
-    "QWidget { background: #08121d; color: #d7e7f2; }"
-    "QLabel  { background: transparent; color: #8aa8c0; font-size: 11px; }";
+    "QWidget { background: {{color.background.0}}; color: {{color.text.primary}}; }"
+    "QLabel  { background: transparent; color: {{color.text.secondary}}; font-size: 11px; }";
 
 // Visualisation panel between the title bar and the knob row.
 // Draws three layered traces that respond to the reverb knobs:
@@ -51,11 +52,11 @@ protected:
         QPainter p(this);
         p.setRenderHint(QPainter::Antialiasing, true);
         const QRectF r = rect();
-        p.fillRect(r, QColor("#0a1420"));
+        p.fillRect(r, ThemeManager::instance().color(this, "color.background.0"));
 
         // Background grid.
-        const QColor gridColor("#1e3040");
-        const QColor axisColor("#2a4458");
+        const QColor gridColor = ThemeManager::instance().color(this, "color.border.subtle");
+        const QColor axisColor = ThemeManager::instance().color(this, "color.border.strong");
         p.setPen(QPen(gridColor, 1.0));
         for (float n : { 0.25f, 0.50f, 0.75f }) {
             const float x = r.left() + n * r.width();
@@ -121,7 +122,7 @@ protected:
             const float reflLen  = std::min(spacing * 0.85f, w * 0.10f);
             const float dampStep = 1.0f - m_damping * 0.45f;
             float amp = m_mix * maxAmp * 0.75f;
-            p.setPen(QPen(QColor("#ffd070"), 1.6));
+            p.setPen(QPen(ThemeManager::instance().color(this, "color.accent.warning"), 1.6));
             for (int i = 0; i < nRefl; ++i) {
                 const float startX = wetStart + i * spacing;
                 const float endX   = std::min(startX + reflLen, w - 2.0f);
@@ -159,7 +160,7 @@ protected:
                 path.lineTo(x, midY + dryAmp * std::sin(freq * t));
             }
             QLinearGradient grad(xStart, 0, dryEnd, 0);
-            QColor cyan("#4db8d4");
+            QColor cyan = ThemeManager::instance().color(this, "color.accent");
             QColor cyanFade = cyan;
             cyanFade.setAlpha(0);
             grad.setColorAt(0.0, cyan);
@@ -185,7 +186,7 @@ StripReverbPanel::StripReverbPanel(AudioEngine* engine, QWidget* parent)
 {
     const QString title = QString::fromUtf8("Aetherial FreeVerb \xe2\x80\x94 TX");
     setWindowTitle(title);
-    setStyleSheet(kWindowStyle);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(this, kWindowStyle);
     resize(480, 180);
 
     auto* root = new QVBoxLayout(this);

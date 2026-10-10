@@ -538,15 +538,14 @@ void Hl2TxDsp::setMicGain(double linear)
 
 double Hl2TxDsp::alcGainDb() const noexcept
 {
-    return 20.0 * std::log10(std::max(1e-9, m_alcGain));
+    return 20.0 * std::log10(std::max(1e-9, m_alc.gain()));
 }
 
 void Hl2TxDsp::reset()
 {
     // A new transmission starts from unity. It does not TRANSMIT at unity: the
-    // first block that needs reduction takes it straight there, because
-    // reduction in this stage is instantaneous.
-    m_alcGain = 1.0;
+    // first sample that needs reduction has it, with no attack constant.
+    m_alc.reset();
     m_inBuffer.clear();
     // Re-arm the mid-buffer source-change warning for the next transmission.
     m_sourceChangeWarned = false;
@@ -619,10 +618,7 @@ void Hl2TxDsp::processAudioBlock(const std::vector<float>& mono,
     m_iq.reserve(consumed * static_cast<std::size_t>(m_upsample));
     if (m_levelled.size() < consumed)
         m_levelled.resize(consumed);
-    float peak = 0.0f;
-    float postAlcPeak = 0.0f;
-
-    // ALC, protection only: peak tracking, instantaneous reduction, smoothed
+    // ALC, protection only: peak tracking, no attack constant, smoothed
     // release, unity ceiling on every path, then a hard limit below full scale.
     // No makeup gain and no hold: the operator's mic gain (+40 dB,
     // Hl2TxLevelPolicy.h) closes the speech gap, as WDSP's create_txa runs
@@ -632,54 +628,23 @@ void Hl2TxDsp::processAudioBlock(const std::vector<float>& mono,
     const double micGain =
         (source == TxAudioSource::EngineGenerated) ? 1.0 : m_micGain;
 
-    if (m_config.alcEnabled) {
-        float blockPeak = 0.0f;
-        for (std::size_t s = 0; s < consumed; ++s)
-            blockPeak = std::max(blockPeak, std::fabs(
-                static_cast<float>(m_inBuffer[s] * micGain)));
-
-        if (blockPeak > 1e-6f) {
-            const double wanted = m_config.alcTargetPeak / blockPeak;
-            // The unity ceiling, and the whole of what this stage promises.
-            const double target = std::min(wanted, 1.0);
-            const double blockSec = static_cast<double>(consumed)
-                                  / static_cast<double>(m_config.inputSampleRateHz);
-            // Reduction is instantaneous; only the release is smoothed. Any
-            // attack constant leaves part of a step above the hard clamp, and
-            // whether it is short enough depends on dspBlockSize and the input
-            // rate. hl2_txdsp_test pins speech shapes settling at 0.859 with
-            // nothing clipped. The slow release keeps it from pumping.
-            const bool reducing = target < m_alcGain;
-            if (reducing) {
-                m_alcGain = target;
-            } else {
-                const double a = 1.0 - std::exp(-blockSec
-                                    / std::max(1e-6, m_config.alcReleaseSec));
-                m_alcGain += a * (target - m_alcGain);
-            }
-        }
-    } else {
-        // ALC off: unity, and the hard clamp is the only over-level backstop.
-        m_alcGain = 1.0;
-    }
+    // One decision per call, applied as a path inside it (Hl2TxAlc.h) so a
+    // moving gain does not step at the block rate (#5912).
+    Hl2TxAlc::Settings alc;
+    alc.enabled = m_config.alcEnabled;
+    alc.targetPeak = m_config.alcTargetPeak;
+    alc.releaseSec = m_config.alcReleaseSec;
+    alc.sampleRateHz = static_cast<double>(m_config.inputSampleRateHz);
+    const Hl2TxAlc::Levels levels = m_alc.process(
+        std::span<const float>(m_inBuffer.data(), consumed), micGain, alc,
+        std::span<float>(m_levelled.data(), consumed));
+    // Mic peak is pre-ALC: a post-ALC meter would sit at the target. ALC
+    // effort is reported separately (TX:ALCGAIN).
+    const float peak = levels.micPeak;
+    const float postAlcPeak = levels.postPeak;
     // Published unconditionally (even a flat 0 dB) so TX:ALCGAIN never looks
     // stuck. TX:ALC is the post-ALC level, from alcPeak below.
     emit alcGain(static_cast<float>(alcGainDb()));
-
-    for (std::size_t s = 0; s < consumed; ++s) {
-        // Mic peak is pre-ALC: a post-ALC meter would sit at the target. ALC
-        // effort is reported separately (TX:ALCGAIN).
-        const float preAlc = static_cast<float>(m_inBuffer[s] * micGain);
-        peak = std::max(peak, std::fabs(preAlc));
-
-        // Hard limit after the ALC. With the ALC on, instantaneous reduction
-        // keeps the level at or below alcTargetPeak; this clamp is the backstop
-        // for the ALC-off path.
-        const float in = std::clamp(static_cast<float>(preAlc * m_alcGain),
-                                    -1.0f, 1.0f);
-        postAlcPeak = std::max(postAlcPeak, std::fabs(in));
-        m_levelled[s] = in;
-    }
 
     // Everything above is the level chain (mic gain, ALC, hard clamp, meters),
     // shared by both builds; the modulator below is the only thing

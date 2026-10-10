@@ -14,7 +14,7 @@ its coverage level, including an explicit `NOT BUILT` row for optional RTL.
 | Flex | Exact guarded slice-sink commands, pan intent, filter origin, individual AGC fields; separately decoded status; no command echo from decode | Firmware acceptance, pan creation through the compatibility adapter |
 | Icom | Real CI-V scheduler with an unstarted transport; separately injected frequency/mode/filter/AGC reports and stale-generation rejection | Actual RS-BA1 delivery or firmware behavior |
 | HL2 | Pre-connect receiver configuration plus a socket-free real RX worker: mode/filter ordering, CW passband translation and applied AGC pair | Live Metis delivery, RF convergence or completed tuning/shift application |
-| ANAN | Pre-connect receiver configuration and retained WDSP AGC values, owner-thread signals | Live Protocol 2 delivery or completed DSP application |
+| ANAN | Pre-connect receiver configuration and retained, published WDSP AGC values, owner-thread signals | Live Protocol 2 delivery or completed DSP application |
 | Demo | Production synthetic session state and refusal before/after the session | Hardware behavior; filter/AGC DSP that Demo does not implement |
 | RTL (optional) | Declaration and cold receive refusal, without opening USB | Connected USB/DDC dispatch |
 

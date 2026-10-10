@@ -389,6 +389,25 @@
         }
       },
       "scopes": {
+        "canon": {
+          "tokens": {
+            "color.background.0":      "#0a121e",
+            "color.background.1":      "#0e1a2a",
+            "color.background.2":      "#12233a",
+            "color.background.3":      "#4778bee6",
+            "color.text.primary":      "#eaf2fb",
+            "color.text.secondary":    "#c4d4e8",
+            "color.text.label":        "#8598b4",
+            "color.border.subtle":     "#1f78a5d2",
+            "color.border.strong":     "#4778bee6",
+            "color.accent":            "#5de3ff",
+            "color.accent.bright":     "#8ef7e6",
+            "color.knob.background":   "#12233a",
+            "color.knob.foreground":   "#5de3ff",
+            "color.slider.background": "#12233a",
+            "color.slider.foreground": "#5de3ff"
+          }
+        },
         "applet": {
           "tokens": {},
           "scopes": {

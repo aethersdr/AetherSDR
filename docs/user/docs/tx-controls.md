@@ -240,5 +240,5 @@ ATU busy, or a band the radio does not allow.
 - [Amplifiers](./amplifiers.md) and [TGXL Tuner Control](./tgxl-tuner-control.md) — external amplifier and tuner
   applets.
 - [Split Operation](./split-operation.md) — transmitting on a second slice.
-- [PSK Reporter Map](./psk-reporter-map.md) — includes a one-shot **WSPR beacon** that transmits a
+- [AetherMap](./psk-reporter-map.md) — includes a one-shot **WSPR beacon** that transmits a
   single WSPR frame.

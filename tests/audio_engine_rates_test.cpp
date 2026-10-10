@@ -14,6 +14,7 @@
 
 #include <QBuffer>
 #include <QCoreApplication>
+#include <QElapsedTimer>
 #include <QEvent>
 #include <QJsonArray>
 #include <QJsonObject>
@@ -846,11 +847,14 @@ bool samePcm(const QByteArray& lhs, const QByteArray& rhs)
     return true;
 }
 
-void concurrentSourcesAndEffects()
+void concurrentSourcesAndEffects(std::optional<Effect> selectedEffect = std::nullopt)
 {
     for (int mainRate : {24000, 48000}) {
         for (Effect effect : {Effect::None, Effect::Eq, Effect::Nr2, Effect::Rn2,
                               Effect::Nr4, Effect::Dfnr, Effect::Mnr}) {
+            if (selectedEffect && effect != *selectedEffect) {
+                continue;
+            }
             const Rendered mainOnly = renderSources(mainRate, effect, true, false);
             if (!mainOnly.enabled) {
                 const bool optional = effect == Effect::Nr4 || effect == Effect::Dfnr
@@ -1090,27 +1094,125 @@ void fixedProcessingDomains()
               "RADE resampler never adopts main producer's 48 kHz rate");
     }
 }
+
+struct AudioCase {
+    const char* name;
+    std::optional<Effect> effect;
+};
+
+void printUsage(const char* program)
+{
+    std::fprintf(stderr,
+        "usage: %s [--case=rateMatrix|bandwidthAndMono|negotiatedSpeakerOutput|"
+        "negotiationOpenFailure|negotiationLifetimeAndCoalescing|auxiliaryAcrossNegotiation|"
+        "transitionsAndRejection|queueBudgetsAndDeviceTransitions|concurrentSourcesAndEffects|"
+        "effects-bypass|effects-EQ|effects-NR2|effects-RN2|effects-NR4|"
+        "effects-DFNR|effects-MNR|kiwiDeviceRateMatrix|processingStateReset|"
+        "legacyReplacementAndKiwiReset|fixedProcessingDomains]\n", program);
+}
+
+std::optional<AudioCase> parseCase(int argc, char** argv, bool& valid)
+{
+    valid = true;
+    if (argc == 1) {
+        return std::nullopt;
+    }
+    if (argc != 2 || std::strncmp(argv[1], "--case=", 7) != 0) {
+        valid = false;
+        return std::nullopt;
+    }
+    const char* name = argv[1] + 7;
+    for (const AudioCase candidate : {
+             AudioCase{"rateMatrix", std::nullopt},
+             AudioCase{"bandwidthAndMono", std::nullopt},
+             AudioCase{"negotiatedSpeakerOutput", std::nullopt},
+             AudioCase{"negotiationOpenFailure", std::nullopt},
+             AudioCase{"negotiationLifetimeAndCoalescing", std::nullopt},
+             AudioCase{"auxiliaryAcrossNegotiation", std::nullopt},
+             AudioCase{"transitionsAndRejection", std::nullopt},
+             AudioCase{"queueBudgetsAndDeviceTransitions", std::nullopt},
+             AudioCase{"concurrentSourcesAndEffects", std::nullopt},
+             AudioCase{"effects-bypass", Effect::None},
+             AudioCase{"effects-EQ", Effect::Eq},
+             AudioCase{"effects-NR2", Effect::Nr2},
+             AudioCase{"effects-RN2", Effect::Rn2},
+             AudioCase{"effects-NR4", Effect::Nr4},
+             AudioCase{"effects-DFNR", Effect::Dfnr},
+             AudioCase{"effects-MNR", Effect::Mnr},
+             AudioCase{"kiwiDeviceRateMatrix", std::nullopt},
+             AudioCase{"processingStateReset", std::nullopt},
+             AudioCase{"legacyReplacementAndKiwiReset", std::nullopt},
+             AudioCase{"fixedProcessingDomains", std::nullopt},
+         }) {
+        if (std::strcmp(name, candidate.name) == 0) {
+            return candidate;
+        }
+    }
+    valid = false;
+    return std::nullopt;
+}
+
+template <class Function>
+void runStage(const char* name, Function function)
+{
+    QElapsedTimer elapsed;
+    elapsed.start();
+    std::fprintf(stderr, "STAGE start %s\n", name);
+    std::fflush(stderr);
+    function();
+    std::fprintf(stderr, "STAGE finish %s elapsed_ms=%lld\n", name,
+                 static_cast<long long>(elapsed.elapsed()));
+    std::fflush(stderr);
+}
 } // namespace
 
 int main(int argc, char** argv)
 {
+    bool validCase = false;
+    const std::optional<AudioCase> selectedCase = parseCase(argc, argv, validCase);
+    if (!validCase) {
+        printUsage(argv[0]);
+        return 2;
+    }
     TestSettingsProfile settings(QStringLiteral("audio-engine-rates"));
     qputenv("AETHER_AUTOMATION", "1");
     QCoreApplication application(argc, argv);
     check(settings.isValid(), "isolated settings profile");
-    rateMatrix();
-    bandwidthAndMono();
-    negotiatedSpeakerOutput();
-    negotiationOpenFailure();
-    negotiationLifetimeAndCoalescing();
-    auxiliaryAcrossNegotiation();
-    transitionsAndRejection();
-    queueBudgetsAndDeviceTransitions();
-    concurrentSourcesAndEffects();
-    kiwiDeviceRateMatrix();
-    processingStateReset();
-    legacyReplacementAndKiwiReset();
-    fixedProcessingDomains();
+    const auto selected = [&selectedCase](const char* name) {
+        return !selectedCase || std::strcmp(selectedCase->name, name) == 0;
+    };
+    if (selected("rateMatrix")) { runStage("rateMatrix", rateMatrix); }
+    if (selected("bandwidthAndMono")) { runStage("bandwidthAndMono", bandwidthAndMono); }
+    if (selected("negotiatedSpeakerOutput")) {
+        runStage("negotiatedSpeakerOutput", negotiatedSpeakerOutput);
+    }
+    if (selected("negotiationOpenFailure")) {
+        runStage("negotiationOpenFailure", negotiationOpenFailure);
+    }
+    if (selected("negotiationLifetimeAndCoalescing")) {
+        runStage("negotiationLifetimeAndCoalescing", negotiationLifetimeAndCoalescing);
+    }
+    if (selected("auxiliaryAcrossNegotiation")) {
+        runStage("auxiliaryAcrossNegotiation", auxiliaryAcrossNegotiation);
+    }
+    if (selected("transitionsAndRejection")) {
+        runStage("transitionsAndRejection", transitionsAndRejection);
+    }
+    if (selected("queueBudgetsAndDeviceTransitions")) {
+        runStage("queueBudgetsAndDeviceTransitions", queueBudgetsAndDeviceTransitions);
+    }
+    if (selected("concurrentSourcesAndEffects")
+        || (selectedCase && selectedCase->effect)) {
+        const std::optional<Effect> effect = selectedCase ? selectedCase->effect : std::nullopt;
+        runStage(selectedCase ? selectedCase->name : "concurrentSourcesAndEffects",
+                 [effect] { concurrentSourcesAndEffects(effect); });
+    }
+    if (selected("kiwiDeviceRateMatrix")) { runStage("kiwiDeviceRateMatrix", kiwiDeviceRateMatrix); }
+    if (selected("processingStateReset")) { runStage("processingStateReset", processingStateReset); }
+    if (selected("legacyReplacementAndKiwiReset")) {
+        runStage("legacyReplacementAndKiwiReset", legacyReplacementAndKiwiReset);
+    }
+    if (selected("fixedProcessingDomains")) { runStage("fixedProcessingDomains", fixedProcessingDomains); }
     std::printf("AudioEngine rates: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

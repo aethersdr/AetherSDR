@@ -13,7 +13,7 @@
 #include "core/NetworkPathResolver.h"
 #include "ComboStyle.h"   // shared themed combo look (painted arrow)
 #include "FramelessResizer.h"
-#include "FramelessWindowTitleBar.h"
+#include "CanonIndicators.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -39,7 +39,6 @@
 #include <QSignalBlocker>
 #include <QSizePolicy>
 #include <QSpinBox>
-#include <QStyle>
 #include <QTcpSocket>
 #include <QHostInfo>
 #include <QUdpSocket>
@@ -66,11 +65,97 @@ constexpr const char* kRecentManualIpsKey = "RecentConnectByIpAddresses";
 constexpr const char* kManualRadioFamilyKey = "ConnectByIpRadioFamily";
 
 const char* kHintLabelStyle =
-    "QLabel { color: #8aa8c0; font-size: 11px; background: transparent; border: none; }";
+    "QLabel { color: {{color.canon.muted}}; font-size: 11px; background: transparent; border: none; }";
 const char* kInfoLabelStyle =
-    "QLabel { color: #9bd1ff; font-size: 11px; background: transparent; border: none; }";
+    "QLabel { color: {{color.canon.cyan}}; font-size: 11px; background: transparent; border: none; }";
 const char* kErrorLabelStyle =
-    "QLabel { color: #ff8f8f; font-size: 11px; background: transparent; border: none; }";
+    "QLabel { color: {{color.accent.danger}}; font-size: 11px; background: transparent; border: none; }";
+
+// The style guide's canon vocabulary (RFC #6226), as Network Diagnostics and
+// AetherMap use it: transparent over CanonWindow's ground except the surfaces
+// that hold content. Groups are raised cards, lists nested, fields on
+// control; selection and focus are canon cyan.
+constexpr const char* kConnectionStyle = R"(
+QWidget {
+    color: {{color.canon.inkSoft}};
+    background: transparent;
+}
+QMenu,
+QComboBoxPrivateContainer {
+    background: {{color.canon.raised}};
+}
+QGroupBox {
+    background: {{color.canon.raised}};
+    border: 1px solid {{color.canon.line}};
+    border-radius: 7px;
+    margin-top: 10px;
+    color: {{color.canon.ink}};
+    font-weight: bold;
+}
+QGroupBox::title {
+    subcontrol-origin: margin;
+    left: 10px;
+    padding: 0 4px;
+    color: {{color.canon.muted}};
+}
+QListWidget {
+    color: {{color.canon.inkSoft}};
+    background: {{color.canon.nested}};
+    border: 1px solid {{color.canon.line}};
+    border-radius: 4px;
+    padding: 2px;
+    outline: none;
+}
+QListWidget::item:selected {
+    color: {{color.canon.ink}};
+    background: {{color.canon.control}};
+}
+QScrollBar:vertical {
+    background: transparent;
+    width: 12px;
+    margin: 0;
+}
+QScrollBar::handle:vertical {
+    background: {{color.canon.lineHi}};
+    border-radius: 5px;
+    min-height: 24px;
+}
+QScrollBar::add-line:vertical,
+QScrollBar::sub-line:vertical {
+    height: 0;
+}
+QPushButton {
+    color: {{color.canon.cyan}};
+    background: {{color.canon.control}};
+    border: 1px solid {{color.canon.lineHi}};
+    border-radius: 4px;
+    padding: 5px 12px;
+    font-weight: 600;
+}
+QPushButton:hover {
+    background: {{color.canon.nested}};
+    color: {{color.canon.aqua}};
+}
+QPushButton:focus {
+    border-color: {{color.canon.aqua}};
+}
+QPushButton:disabled {
+    color: {{color.canon.muted}};
+    border-color: {{color.canon.line}};
+    background: transparent;
+}
+QCheckBox {
+    background: transparent;
+    color: {{color.canon.inkSoft}};
+}
+)";
+
+// Labels and cards here carry {{token}} placeholders, so they go through the
+// theme rather than setStyleSheet(), which would resolve nothing.
+void applyStyle(QWidget* widget, const QString& style)
+{
+    AetherSDR::ThemeManager::instance().applyStyleSheet(widget, style);
+}
 
 QJsonObject loadRoutedProfiles()
 {
@@ -229,7 +314,7 @@ QLabel* makeWrappedLabel(const QString& text, const char* style = nullptr)
     auto* label = new QLabel(text);
     label->setWordWrap(true);
     if (style)
-        label->setStyleSheet(style);
+        applyStyle(label, QString::fromLatin1(style));
     return label;
 }
 
@@ -265,26 +350,24 @@ QString normalizedStatus(QString status)
 }
 
 ConnectionPanel::ConnectionPanel(QWidget* parent)
-    : QWidget(parent)
+    : CanonWindow(QStringLiteral("Connect to Radio"), parent)
 {
     setObjectName(QStringLiteral("connectionPanel"));
     setAccessibleName(tr("Connect to Radio"));
+    // MainWindow anchors it above the status bar before showing it, and Return
+    // in a field (an IP address, a SmartLink password) must not also press the
+    // first button on the page.
+    setOwnerPlaced(true);
+    setReturnClicksDefault(false);
 
-    theme::setContainer(this, QStringLiteral("panel/connection"));
-    AetherSDR::ThemeManager::instance().applyStyleSheet(this, "ConnectionPanel { background: {{color.background.0}}; }"
-        "QGroupBox { border: 1px solid {{color.background.2}}; border-radius: 7px; margin-top: 10px; "
-        "color: {{color.text.primary}}; font-weight: bold; }"
-        "QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }"
-        "QListWidget { background: #09111b; border: 1px solid {{color.background.2}}; border-radius: 4px; "
-        "color: {{color.text.primary}}; padding: 2px; }"
-        "QListWidget QScrollBar:vertical { background: #09111b; width: 12px; margin: 0; }"
-        "QListWidget QScrollBar::handle:vertical { background: #304050; border-radius: 5px; min-height: 24px; }"
-        "QListWidget QScrollBar::add-line:vertical, QListWidget QScrollBar::sub-line:vertical { height: 0; }"
-        "QPushButton { padding: 5px 12px; }");
-
+    theme::setContainer(this, QStringLiteral("canon/connection"));
+    applyCanonSheet(bodyWidget(), [] {
+        return QString::fromLatin1(kConnectionStyle) + canonIndicatorRules();
+    });
     const QString editStyle =
-        "QLineEdit { border: 1px solid #304050; border-radius: 4px; padding: 4px 6px; "
-        "background: #09111b; color: #d7e4f2; }";
+        "QLineEdit { border: 1px solid {{color.canon.lineHi}}; border-radius: 4px; padding: 4px 6px; "
+        "background: {{color.canon.control}}; color: {{color.canon.ink}}; }"
+        "QLineEdit:focus { border-color: {{color.canon.aqua}}; }";
     // Uses the shared ComboStyle (themed, real painted arrow). The override is
     // for row height: these rows are 30 px vs the 22 px applet combos the
     // template was shaped for, so the text needs a larger inset.
@@ -304,31 +387,28 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
         "color: {{color.text.primary}}; }"
         "QLineEdit:focus { border-color: {{color.accent.bright}}; }";
     const QString modeCardStyle =
-        "QCommandLinkButton { text-align: left; border: 1px solid #304050; border-radius: 8px; "
-        "padding: 10px 12px; background: #121a25; color: #d7e4f2; }"
-        "QCommandLinkButton:hover { border-color: #4e6a86; background: #172334; }"
-        "QCommandLinkButton:checked { border-color: #66a8ff; background: #1a3046; }";
+        "QCommandLinkButton { text-align: left; border: 1px solid {{color.canon.line}}; border-radius: 8px; "
+        "padding: 10px 12px; background: {{color.canon.raised}}; color: {{color.canon.ink}}; }"
+        "QCommandLinkButton:hover { border-color: {{color.canon.lineHi}}; background: {{color.canon.nested}}; }"
+        "QCommandLinkButton:checked { border-color: {{color.canon.cyan}}; background: {{color.canon.nested}}; }";
     const QString calloutStyle =
-        "QFrame#connectionCallout { border: 1px solid #304050; border-radius: 8px; "
-        "background: #121a25; }"
+        "QFrame#connectionCallout { border: 1px solid {{color.canon.line}}; border-radius: 8px; "
+        "background: {{color.canon.nested}}; }"
         "QFrame#connectionCallout QLabel { background: transparent; border: none; }"
         "QFrame#connectionCallout QCheckBox { background: transparent; border: none; }";
+    // The indicator is the canon one, from the body sheet.
     const QString lowBandwidthCheckStyle =
-        "QCheckBox { color: #d7e4f2; spacing: 8px; padding: 2px 0; "
-        "background: transparent; border: none; }"
-        "QCheckBox::indicator { width: 16px; height: 16px; "
-        "border: 2px solid #5d748d; border-radius: 3px; background: #0b1520; }"
-        "QCheckBox::indicator:hover { border-color: #81abd9; background: #142130; }"
-        "QCheckBox::indicator:checked { border: 2px solid #8cc8ff; background: #2f71b6; }"
-        "QCheckBox::indicator:disabled { border-color: #405262; background: #10161d; }";
+        "QCheckBox { color: {{color.canon.inkSoft}}; spacing: 8px; padding: 2px 0; "
+        "background: transparent; border: none; }";
 
-    auto* outer = new QVBoxLayout(this);
+    auto* outer = new QVBoxLayout(bodyWidget());
     outer->setContentsMargins(0, 0, 0, 0);
     outer->setSpacing(0);
 
-    auto* titleBar = new FramelessWindowTitleBar(QStringLiteral("Connect to Radio"), this);
-    m_titleBar = titleBar;
-    outer->addWidget(titleBar);
+    // Canon header in place of a title bar, fixed above the scrolling body.
+    auto* header = makeCanonHeader(tr("Connect to a Radio"));
+    header->setContentsMargins(14, 12, 14, 4);
+    outer->addWidget(header);
 
     auto* content = new QWidget(this);
     content->setObjectName(QStringLiteral("connectionBodyContent"));
@@ -336,7 +416,7 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     // No right margin: the 12 px band on that edge belongs to the scroll area
     // (see bodyContainer below), so adding one here would inset the body 24 px
     // from the right against 12 px on the left and 12 px on the footer.
-    root->setContentsMargins(12, 12, 0, 10);
+    root->setContentsMargins(12, 6, 0, 10);
     root->setSpacing(10);
     m_rootLayout = root;
     m_bodyContent = content;
@@ -360,11 +440,6 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     bodyContainerLayout->addWidget(bodyScroll);
     outer->addWidget(bodyContainer, 1);
 
-    auto* titleLabel = new QLabel("Connect to a Radio", this);
-    AetherSDR::ThemeManager::instance().applyStyleSheet(titleLabel, "QLabel { color: {{color.text.primary}}; font-size: 18px; font-weight: bold; "
-        "background: transparent; border: none; }");
-    root->addWidget(titleLabel);
-
     auto* introLabel = makeWrappedLabel(
         "Pick the simplest path for your station. Most first-time users should start with "
         "\"On This Network\" and only use the IP path for VPN or routed connections.",
@@ -381,7 +456,7 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
         button->setText(title);
         button->setDescription(description);
         button->setCheckable(true);
-        button->setStyleSheet(modeCardStyle);
+        applyStyle(button, modeCardStyle);
         button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
         button->setMinimumHeight(100);
         m_modeButtons->addButton(button, static_cast<int>(mode));
@@ -486,7 +561,7 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     emptyLayout->setSpacing(8);
     auto* emptyCallout = new QFrame(m_localEmptyState);
     emptyCallout->setObjectName("connectionCallout");
-    emptyCallout->setStyleSheet(calloutStyle);
+    applyStyle(emptyCallout, calloutStyle);
     auto* emptyCalloutLayout = new QVBoxLayout(emptyCallout);
     emptyCalloutLayout->setContentsMargins(14, 14, 14, 14);
     emptyCalloutLayout->setSpacing(8);
@@ -542,7 +617,7 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     m_loginForm->setAccessibleName(tr("SmartLink account login"));
 
     m_emailEdit = new QLineEdit(m_loginForm);
-    m_emailEdit->setStyleSheet(editStyle);
+    applyStyle(m_emailEdit, editStyle);
     m_emailEdit->setPlaceholderText("flexradio account email");
     m_emailEdit->setObjectName(QStringLiteral("smartlinkEmail"));
     m_emailEdit->setAccessibleName(tr("SmartLink account email"));
@@ -552,7 +627,7 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     if (!storedEmail.isEmpty())
         m_emailEdit->setText(QString::fromUtf8(QByteArray::fromBase64(storedEmail.toUtf8())));
     m_passwordEdit = new QLineEdit(m_loginForm);
-    m_passwordEdit->setStyleSheet(editStyle);
+    applyStyle(m_passwordEdit, editStyle);
     m_passwordEdit->setEchoMode(QLineEdit::Password);
     m_passwordEdit->setPlaceholderText("password");
     m_passwordEdit->setObjectName(QStringLiteral("smartlinkPassword"));
@@ -580,7 +655,8 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     accountActionRow->addStretch();
     accountLayout->addWidget(accountActionBar);
 
-    m_slUserLabel = makeWrappedLabel("Sign in to see radios at remote stations.", kHintLabelStyle);
+    m_slUserLabel = makeWrappedLabel(QString());
+    setAccountLine(QStringLiteral("Sign in to see radios at remote stations."), AccountTone::Hint);
     accountLayout->addWidget(m_slUserLabel);
     smartLinkLayout->addWidget(accountGroup);
 
@@ -1062,7 +1138,7 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     // ── Contextual options ────────────────────────────────────────────────
     m_linkOptionsWidget = new QFrame(this);
     m_linkOptionsWidget->setObjectName("connectionCallout");
-    m_linkOptionsWidget->setStyleSheet(calloutStyle);
+    applyStyle(m_linkOptionsWidget, calloutStyle);
     auto* optionsLayout = new QVBoxLayout(m_linkOptionsWidget);
     optionsLayout->setContentsMargins(12, 10, 12, 10);
     optionsLayout->setSpacing(6);
@@ -1078,7 +1154,7 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
         .toString();
     m_lowBwCheck->setChecked(remoteLowBandwidth == "True");
     m_lowBwCheck->setToolTip("Reduces FFT and waterfall traffic from the radio.");
-    m_lowBwCheck->setStyleSheet(lowBandwidthCheckStyle);
+    applyStyle(m_lowBwCheck, lowBandwidthCheckStyle);
     optionsLayout->addWidget(m_lowBwCheck);
     root->addWidget(m_linkOptionsWidget);
 
@@ -1091,7 +1167,7 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
         "reducing the chance of a disconnect on congested links. "
         "Toggling while connected takes effect at the next quality update; "
         "reconnect to lift an already-applied cap immediately.");
-    m_adaptiveThrottleCheck->setStyleSheet(lowBandwidthCheckStyle);
+    applyStyle(m_adaptiveThrottleCheck, lowBandwidthCheckStyle);
     connect(m_adaptiveThrottleCheck, &QCheckBox::toggled, this, [](bool on) {
         auto& s = AppSettings::instance();
         s.setValue("AdaptiveThrottleEnabled", on ? "True" : "False");
@@ -1102,7 +1178,7 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     m_autoConnectCheck = new QCheckBox("Connect to last radio on start up", this);
     m_autoConnectCheck->setChecked(
         AppSettings::instance().value("AutoConnectToLastRadio", "True").toString() == "True");
-    m_autoConnectCheck->setStyleSheet(lowBandwidthCheckStyle);
+    applyStyle(m_autoConnectCheck, lowBandwidthCheckStyle);
     connect(m_autoConnectCheck, &QCheckBox::toggled, this, [](bool on) {
         auto& s = AppSettings::instance();
         s.setValue("AutoConnectToLastRadio", on ? "True" : "False");
@@ -1135,7 +1211,7 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     m_showDemoCheck = new QCheckBox("Show the AetherSDR demo simulator", this);
     m_showDemoCheck->setChecked(
         AppSettings::instance().value("ShowDemoRadio", "True").toString() == "True");
-    m_showDemoCheck->setStyleSheet(lowBandwidthCheckStyle);
+    applyStyle(m_showDemoCheck, lowBandwidthCheckStyle);
     connect(m_showDemoCheck, &QCheckBox::toggled, this, [this](bool on) {
         auto& s = AppSettings::instance();
         s.setValue("ShowDemoRadio", on ? "True" : "False");
@@ -1279,8 +1355,7 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
         m_smartLink->logout();
         m_wanRadios.clear();
         m_wanList->clear();
-        m_slUserLabel->setText("Signed out of SmartLink.");
-        m_slUserLabel->setStyleSheet(kHintLabelStyle);
+        setAccountLine(QStringLiteral("Signed out of SmartLink."), AccountTone::Hint);
         updateSmartLinkUi();
         emit smartLinkSignedOut();
     });
@@ -1299,34 +1374,6 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     updateSmartLinkUi();
     updateManualAdvancedVisibility();
     FramelessResizer::install(this);
-    setFramelessMode(
-        AppSettings::instance().value("FramelessWindow", "True").toString() == "True");
-}
-
-void ConnectionPanel::setFramelessMode(bool on)
-{
-    const QRect geom = geometry();
-    const bool wasVisible = isVisible();
-
-    Qt::WindowFlags flags = (windowFlags() & ~Qt::WindowType_Mask) | Qt::Dialog;
-    flags.setFlag(Qt::FramelessWindowHint, on);
-    setWindowFlags(flags);
-    if (wasVisible)
-        setGeometry(geom);
-    if (m_titleBar)
-        m_titleBar->setVisible(on);
-    if (m_rootLayout)
-        m_rootLayout->setContentsMargins(12, on ? 10 : 12, 0, 10);
-    if (wasVisible) {
-        // Turning decorations back on wraps a native frame — a title bar and
-        // borders, ~24-31 px on Windows — around a client rect that was sized
-        // for a frameless window. Without a re-fit that pushes the frame, and
-        // the footer pinned at its bottom, straight back under the taskbar:
-        // #4515 again, reached through View -> Frameless Window instead of
-        // through a connect.
-        fitAndClampToScreen();
-        show();
-    }
 }
 
 bool ConnectionPanel::event(QEvent* e)
@@ -1352,7 +1399,7 @@ bool ConnectionPanel::event(QEvent* e)
     default:
         break;
     }
-    return QWidget::event(e);
+    return CanonWindow::event(e);
 }
 
 QScreen* ConnectionPanel::screenFitTarget(QScreen* preferredScreen) const
@@ -1435,21 +1482,11 @@ void ConnectionPanel::fitAndClampToScreen(QScreen* preferredScreen)
     move(constrainedFrameTopLeft(pos(), targetScreen->availableGeometry()));
 }
 
+// A CanonWindow is always frameless, so this is whatever the platform reports
+// once the window exists (nothing before), not a title-bar estimate.
 QMargins ConnectionPanel::screenFitFrameMargins() const
 {
-    QMargins frameMargins;
-    if (windowHandle()) {
-        frameMargins = windowHandle()->frameMargins();
-    }
-    if (frameMargins.isNull()
-        && !windowFlags().testFlag(Qt::FramelessWindowHint)) {
-        const int border =
-            style()->pixelMetric(QStyle::PM_DefaultFrameWidth, nullptr, this);
-        const int titleHeight =
-            style()->pixelMetric(QStyle::PM_TitleBarHeight, nullptr, this);
-        frameMargins = QMargins(border, titleHeight, border, border);
-    }
-    return frameMargins;
+    return windowHandle() ? windowHandle()->frameMargins() : QMargins();
 }
 
 QSize ConnectionPanel::screenFitFrameSize() const
@@ -1784,7 +1821,7 @@ void ConnectionPanel::setManualMessage(const QString& text, bool error)
     }
 
     m_manualResultLabel->setText(text);
-    m_manualResultLabel->setStyleSheet(error ? kErrorLabelStyle : kInfoLabelStyle);
+    applyStyle(m_manualResultLabel, QString::fromLatin1(error ? kErrorLabelStyle : kInfoLabelStyle));
     m_manualResultLabel->setVisible(true);
     // A long message wraps to more lines than the reserved height covers.
     refitToContent();
@@ -1801,6 +1838,16 @@ void ConnectionPanel::updateLocalPageState()
     updateActionState();
 }
 
+void ConnectionPanel::setAccountLine(const QString& text, AccountTone tone)
+{
+    m_slUserTone = tone;
+    m_slUserLabel->setText(text);
+    const char* style = tone == AccountTone::Info  ? kInfoLabelStyle
+                      : tone == AccountTone::Error ? kErrorLabelStyle
+                                                   : kHintLabelStyle;
+    applyStyle(m_slUserLabel, QString::fromLatin1(style));
+}
+
 void ConnectionPanel::updateSmartLinkUi()
 {
     const bool authed = m_smartLink && m_smartLink->isAuthenticated();
@@ -1813,11 +1860,8 @@ void ConnectionPanel::updateSmartLinkUi()
     m_wanConnectBtn->setVisible(authed);
 
     if (authed) {
-        if (m_slUserLabel->text().trimmed().isEmpty()
-            || m_slUserLabel->styleSheet() == QString::fromLatin1(kHintLabelStyle)) {
-            m_slUserLabel->setText(smartLinkUserText(m_smartLink));
-            m_slUserLabel->setStyleSheet(kInfoLabelStyle);
-        }
+        if (m_slUserLabel->text().trimmed().isEmpty() || m_slUserTone == AccountTone::Hint)
+            setAccountLine(smartLinkUserText(m_smartLink), AccountTone::Info);
         if (hasWanRadios) {
             m_smartLinkEmptyLabel->setVisible(false);
         } else {
@@ -1828,9 +1872,7 @@ void ConnectionPanel::updateSmartLinkUi()
         }
     } else {
         if (m_slUserLabel->text().trimmed().isEmpty())
-            m_slUserLabel->setText("Sign in to see radios at remote stations.");
-        if (m_slUserLabel->styleSheet().isEmpty())
-            m_slUserLabel->setStyleSheet(kHintLabelStyle);
+            setAccountLine(QStringLiteral("Sign in to see radios at remote stations."), AccountTone::Hint);
         m_smartLinkEmptyLabel->setText("Remote radios appear here after SmartLink sign-in.");
         m_smartLinkEmptyLabel->setVisible(true);
     }
@@ -2180,16 +2222,14 @@ void ConnectionPanel::setSmartLinkClient(SmartLinkClient* client)
         m_passwordEdit->clear();
         m_loginBtn->setEnabled(true);
         m_loginBtn->setText("Sign In");
-        m_slUserLabel->setText(smartLinkUserText(m_smartLink));
-        m_slUserLabel->setStyleSheet(kInfoLabelStyle);
+        setAccountLine(smartLinkUserText(m_smartLink), AccountTone::Info);
         updateSmartLinkUi();
     });
 
     connect(client, &SmartLinkClient::serverConnected, this, [this] {
         QTimer::singleShot(500, this, [this] {
             if (m_smartLink && m_smartLink->isAuthenticated()) {
-                m_slUserLabel->setText(smartLinkUserText(m_smartLink));
-                m_slUserLabel->setStyleSheet(kInfoLabelStyle);
+                setAccountLine(smartLinkUserText(m_smartLink), AccountTone::Info);
                 updateSmartLinkUi();
             }
         });
@@ -2197,10 +2237,8 @@ void ConnectionPanel::setSmartLinkClient(SmartLinkClient* client)
 
     connect(client, &SmartLinkClient::serverDisconnected, this, [this] {
         if (!m_smartLink || !m_smartLink->isAuthenticated()) {
-            if (m_slUserLabel->text().trimmed().isEmpty()) {
-                m_slUserLabel->setText("Sign in to see radios at remote stations.");
-                m_slUserLabel->setStyleSheet(kHintLabelStyle);
-            }
+            if (m_slUserLabel->text().trimmed().isEmpty())
+                setAccountLine(QStringLiteral("Sign in to see radios at remote stations."), AccountTone::Hint);
         }
         updateSmartLinkUi();
     });
@@ -2209,8 +2247,7 @@ void ConnectionPanel::setSmartLinkClient(SmartLinkClient* client)
         m_passwordEdit->clear();
         m_loginBtn->setText("Sign In");
         m_loginBtn->setEnabled(true);
-        m_slUserLabel->setText("SmartLink sign-in failed: " + err);
-        m_slUserLabel->setStyleSheet(kErrorLabelStyle);
+        setAccountLine(QStringLiteral("SmartLink sign-in failed: ") + err, AccountTone::Error);
         updateSmartLinkUi();
     });
 
@@ -2242,12 +2279,6 @@ void ConnectionPanel::setSmartLinkClient(SmartLinkClient* client)
 
     client->tryAutoLogin();
     updateSmartLinkUi();
-}
-
-void ConnectionPanel::paintEvent(QPaintEvent*)
-{
-    QPainter p(this);
-    p.fillRect(rect(), QColor(15, 15, 26));
 }
 
 void ConnectionPanel::refreshManualSourceOptions(const RadioBindSettings* selected)

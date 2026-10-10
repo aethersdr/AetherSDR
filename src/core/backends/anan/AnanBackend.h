@@ -8,11 +8,13 @@
 #include "core/backends/anan/P2Client.h"
 #include "core/dsp/WdspSMeter.h"
 
+#include <QElapsedTimer>
 #include <QMap>
 #include <QString>
 #include <QThread>
 #include <QTimer>
 
+#include <algorithm>
 #include <memory>
 #include <utility>
 #include <vector>
@@ -58,6 +60,9 @@ public:
     void setSliceMode(int sliceId, const QString& mode) override;
     void setSliceFilter(int sliceId, int lowHz, int highHz) override;
     void setSliceAgc(int sliceId, const QString& mode, int thresholdDb) override;
+    // The AGC-off level, which the base class drops. Mode and threshold edits
+    // go to setSliceAgc() as before.
+    void requestSliceAgc(int sliceId, const SliceAgcRequest& request) override;
     void setSliceNoiseBlanker(int sliceId, AetherSDR::NoiseBlankerKind kind,
                               int level, AetherSDR::NoiseBlankerFill fill) override;
     ReceiveDispatch requestSliceDsp(int sliceId, const SliceDspRequest& request) override;
@@ -141,14 +146,38 @@ public:
     // fixed rates.
     [[nodiscard]] static int nearestDdc0RateKsps(int requestedKsps) noexcept;
 
-    // Live operator AGC state as setSliceAgc() last stored it -- see the
-    // member declaration comment for why beginRateChange() needs this
-    // rather than reading connectRadio()'s connect-time snapshot. Exposed
-    // read-only for testing without a live radio (matches WdspChannel's
-    // own *ForTest accessor convention), not part of the operator-facing
-    // seam.
+    // The AGC-T knob (0..100) as WDSP gain in dB: the AGC's maximum gain, or
+    // the fixed gain with AGC off. -20..120 dB is the range of deskHPSDR's AGC
+    // gain slider and of Thetis's AGC-T, which sets both gains the same way.
+    // With AGC on, the AGC reaches its maximum only on weak signals, so a high
+    // setting cannot clip a strong one. With AGC off, the knob is the gain.
+    static constexpr double kAgcKnobMinDb = -20.0;
+    static constexpr double kAgcKnobDbPerStep = 1.4;
+    [[nodiscard]] static constexpr double agcKnobDb(int level) noexcept
+    {
+        return kAgcKnobMinDb + kAgcKnobDbPerStep * std::clamp(level, 0, 100);
+    }
+    // 71 = 79.4 dB, the step nearest deskHPSDR's 80 dB AGC gain default.
+    static constexpr int kDefaultAgcThreshold = 71;
+    // 29 = 20.6 dB, the step nearest Thetis's 20 dB fixed gain default
+    // (deskHPSDR has no AGC-off gain control).
+    static constexpr int kDefaultAgcOffLevel = 29;
+
+    // Live operator AGC state as setSliceAgc()/requestSliceAgc() last stored
+    // it, which connectRadio() and beginRateChange() build the DSP config
+    // from. Exposed read-only for testing without a live radio (matches
+    // WdspChannel's own *ForTest accessor convention), not part of the
+    // operator-facing seam.
     [[nodiscard]] int agcModeForTest() const noexcept { return m_agcMode; }
-    [[nodiscard]] double agcCeilingDbForTest() const noexcept { return m_agcCeilingDb; }
+    [[nodiscard]] double agcMaxGainDbForTest() const noexcept { return agcKnobDb(m_agcThreshold); }
+    [[nodiscard]] double agcFixedGainDbForTest() const noexcept { return agcKnobDb(m_agcOffLevel); }
+    // The live receive state as applyLiveRxState() writes it into the DSP config.
+    [[nodiscard]] AnanRxDsp::Config liveRxConfigForTest() const
+    {
+        AnanRxDsp::Config config;
+        applyLiveRxState(config);
+        return config;
+    }
     [[nodiscard]] int attenuationDbForTest() const noexcept { return m_attenuationDb; }
     [[nodiscard]] bool noiseBlankerOnForTest() const noexcept
     {
@@ -182,6 +211,7 @@ public:
 private:
     friend class AnanNoiseBlankerTestAccess;
     friend class AnanLinkStatsTestAccess;
+    friend class AnanSupplyRailTestAccess;
     void beginDspSetup();
     void finishDspSetup(quint64 generation, bool ok, const QString& error);
     // The "restart P2Client with m_pendingParams, then retune" half of what
@@ -213,8 +243,8 @@ private:
     // whenever the DSP is configured or rebuilt, because the rate is theirs to
     // follow and a rate change invalidates their filter state.
     void resetSpeakerResamplers();
-    // Declares SLC:LEVEL to the meter seam; on every connect, before the
-    // first reading can arrive. See its definition.
+    // Declares SLC:LEVEL and RAD:+13.8A to the meter seam; on every connect,
+    // before the first reading can arrive. See its definition.
     void defineMeters();
     // One client snapshot -> one LinkStats push. The FIXED cadence is the
     // client's timer, not ours: this runs on whatever the client published, and
@@ -236,6 +266,26 @@ private:
     // The same smoother Hl2Backend publishes through, so the two receivers'
     // needles move alike by construction -- see WdspSMeter.h.
     SMeterSmoother m_sMeter;
+    // One status packet's supply-rail count -> RAD:+13.8A, in volts, as the MEAN
+    // of every count since the last publication, once a second. A plain mean
+    // and not the S-meter's attack/decay: the readout wants the rail's level,
+    // and one packet alone wanders by about +/-11 counts (+/-0.3 V) on the bench.
+    void onSupplyRailCounts(int counts);
+    // The clocked half of the above, publication included, so the window and
+    // the meter it feeds are testable against an injected time.
+    void onSupplyRailCountsAt(int counts, qint64 nowMs);
+    // Every 1000 ms: under MeterModel::kVitalsFreshMs (1500), so a live rail
+    // never reads as stale between publications, and about five packets at
+    // p2app's 200 ms receive cadence.
+    static constexpr qint64 kSupplyRailWindowMs = 1000;
+    // Empties the window. Called on disconnect and at linkUp, so a new session
+    // never averages in the last one's counts.
+    void resetSupplyRailWindow();
+    QElapsedTimer m_supplyRailClock;
+    // -1 = no window open.
+    qint64 m_supplyRailWindowStartMs = -1;
+    qint64 m_supplyRailCountSum = 0;
+    int m_supplyRailSamples = 0;
     // Leading+trailing throttle around applyTuneToRadioAndPan() -- see
     // setSliceFrequency()'s comment for why an unthrottled click/drag-tune
     // gesture is a problem for this backend specifically.
@@ -273,6 +323,9 @@ private:
     // running when they stopped clicking.
     void retryPendingRateChange();
     [[nodiscard]] double cwBfoHz() const noexcept { return cwBfoOffsetHz(m_mode, m_cwPitchHz); }
+    // The operator's mode, passband, AGC and noise blanker, written into a DSP
+    // config. connectRadio() and beginRateChange() both build theirs with it.
+    void applyLiveRxState(AnanRxDsp::Config& config) const;
     // Re-push mode + filter (with the CW BFO folded in) + shift, in that
     // order, to m_dsp. HERMES.md §16.7: mode changes must re-push the
     // passband, every time, not only when its value changed.
@@ -354,23 +407,26 @@ private:
     // from the live m_sliceFreqHz/m_mode. Zero/empty: nothing restored.
     double m_restoredFreqHz = 0.0;
     QString m_restoredMode;
-    // Live AGC state, so beginRateChange() rebuilds the DSP config from CURRENT
-    // state rather than connect-time defaults (which these match).
+    // Live AGC state in AGC-T knob units (agcKnobDb() converts). Both
+    // connectRadio() and beginRateChange() build the DSP config from it, so
+    // it survives a reconnect. RadioModel rebuilds the backend only on a
+    // family switch, so connecting another ANAN keeps it too, as it keeps the
+    // noise blanker below. emitSliceState() publishes it so the knob shows
+    // what the DSP runs.
     int m_agcMode = 3;
-    double m_agcCeilingDb = 60.0;
+    int m_agcThreshold = kDefaultAgcThreshold;
+    int m_agcOffLevel = kDefaultAgcOffLevel;
     // Noise blanker as setSliceNoiseBlanker() last stored it. Both
-    // connectRadio() and beginRateChange() build the DSP config from it. This
-    // differs from the AGC pair, which only beginRateChange() reads:
-    // connectRadio() re-defaults AGC, but carries the blanker across a
-    // reconnect. emitSliceState() also publishes the pair when a different
-    // radio gets a fresh slice, keeping its NB button in agreement with the
-    // retained setting. Defaults match AnanRxDsp::Config's.
+    // connectRadio() and beginRateChange() build the DSP config from it, as
+    // they do the AGC above. emitSliceState() also publishes the pair when a
+    // different radio gets a fresh slice, keeping its NB button in agreement
+    // with the retained setting. Defaults match AnanRxDsp::Config's.
     AetherSDR::NoiseBlankerKind m_nbKind = AetherSDR::NoiseBlankerKind::Off;
     int m_nbLevel = 50;
     AetherSDR::NoiseBlankerFill m_nbFill = AetherSDR::kDefaultNoiseBlankerFill;
 
     // The receiver audio stage as last set; emitSliceState() publishes these.
-    // Retained across rate changes and reconnects (like the blanker, unlike AGC).
+    // Retained across rate changes and reconnects (like the blanker and AGC).
     // 100/50 = unity, centred.
     bool m_sliceAudioMuted = false;
     int m_sliceAudioGainPercent = 100;

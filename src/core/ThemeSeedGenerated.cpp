@@ -375,6 +375,23 @@ void ThemeManager::seedGeneratedDefaults()
     seedScopedToken(QStringLiteral("applet/tx"), "color.knob.foreground", QString("#ff4d4d"));
     seedScopedToken(QStringLiteral("applet/tx"), "color.slider.foreground", QString("#ff4d4d"));
     seedScopedToken(QStringLiteral("applet/tx"), "color.toggle.accent.background.checked", QString("#ff4d4d"));
+
+    // scope: canon
+    seedScopedToken(QStringLiteral("canon"), "color.accent", QString("#5de3ff"));
+    seedScopedToken(QStringLiteral("canon"), "color.accent.bright", QString("#8ef7e6"));
+    seedScopedToken(QStringLiteral("canon"), "color.background.0", QString("#0a121e"));
+    seedScopedToken(QStringLiteral("canon"), "color.background.1", QString("#0e1a2a"));
+    seedScopedToken(QStringLiteral("canon"), "color.background.2", QString("#12233a"));
+    seedScopedToken(QStringLiteral("canon"), "color.background.3", QString("#4778bee6"));
+    seedScopedToken(QStringLiteral("canon"), "color.border.strong", QString("#4778bee6"));
+    seedScopedToken(QStringLiteral("canon"), "color.border.subtle", QString("#1f78a5d2"));
+    seedScopedToken(QStringLiteral("canon"), "color.knob.background", QString("#12233a"));
+    seedScopedToken(QStringLiteral("canon"), "color.knob.foreground", QString("#5de3ff"));
+    seedScopedToken(QStringLiteral("canon"), "color.slider.background", QString("#12233a"));
+    seedScopedToken(QStringLiteral("canon"), "color.slider.foreground", QString("#5de3ff"));
+    seedScopedToken(QStringLiteral("canon"), "color.text.label", QString("#8598b4"));
+    seedScopedToken(QStringLiteral("canon"), "color.text.primary", QString("#eaf2fb"));
+    seedScopedToken(QStringLiteral("canon"), "color.text.secondary", QString("#c4d4e8"));
 }
 
 } // namespace AetherSDR

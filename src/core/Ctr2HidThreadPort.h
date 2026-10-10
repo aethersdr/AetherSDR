@@ -23,6 +23,10 @@ class Ctr2HidIoWorker;
 struct Ctr2HidDeviceIo {
     std::function<int(unsigned char* buffer, int size)> read;
     std::function<int(const unsigned char* buffer, int size)> write;
+    // Feature reports, report ID first in the buffer; <0 on error. Optional:
+    // without them the device is never asked for extensions.
+    std::function<int(unsigned char* buffer, int size)> getFeature;
+    std::function<int(const unsigned char* buffer, int size)> setFeature;
     std::function<void()> close;
     std::function<QString()> lastError;
 };
@@ -56,6 +60,7 @@ private:
     friend class detail::Ctr2HidIoWorker;
 
     void deliverReceived(const QByteArray& reports);
+    void deliverExtensions(quint32 extensions);
     void deliverSent(int count, quint64 generation);
     void deliverFailure(const QString& message);
 

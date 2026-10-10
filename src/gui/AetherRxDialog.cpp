@@ -2,7 +2,7 @@
 #include "AetherDspWidget.h"
 #include "AetherRxSettingsDialog.h"
 #include "ClientEqApplet.h"   // ClientEqApplet::Path
-#include "EditorFramelessTitleBar.h"
+#include "FramelessResizer.h"
 #include "CompactMetrics.h"
 #include "ModemChrome.h"
 #include "StagePage.h"
@@ -50,7 +50,7 @@ namespace AetherSDR {
 
 namespace {
 
-// The size this window opens at, every time — see showEvent().
+// The size this window opens at, every time — see setLaunchSize().
 constexpr QSize kLaunchSize(720, 480);
 
 // Stage <-> RxChainStage. Only five of the seven tabs are chain stages; the
@@ -89,28 +89,41 @@ AetherRxDialog::Stage fromChainStage(AudioEngine::RxChainStage s)
 } // namespace
 
 AetherRxDialog::AetherRxDialog(AudioEngine* audio, QWidget* parent)
-    // The geometry key carries a version because the default size changed
-    // after the window had shipped once: a stored geometry always wins over
-    // resize(), so anyone who had opened it would have kept the old 1420x900
-    // for ever and never seen the new default. Bumping the key retires those
-    // saved rectangles; the window persists its size again from here.
-    : PersistentDialog("AetherRX", "AetherRxDialogGeometry2", parent)
+    : CanonWindow(QStringLiteral("AetherRX"), parent, Kind::Workspace)
     , m_audio(audio)
 {
-    theme::setContainer(this, QStringLiteral("dialog/aetherRx"));
-    AetherSDR::ThemeManager::instance().applyStyleSheet(this, "QDialog { background: {{color.background.0}}; color: {{color.text.primary}}; }");
+    theme::setContainer(this, QStringLiteral("canon/aetherRx"));
+    // A workspace tool on the style guide's CanonWindow, like Network
+    // Diagnostics: it keeps its position under the key it used as a
+    // PersistentDialog (the saved geometry carries over), and resizes from
+    // every edge. The geometry key carries a version because the default size
+    // changed after the window had shipped once; bumping it retired the old
+    // 1420x900 rectangles.
+    setGeometryKey(QStringLiteral("AetherRxDialogGeometry2"));
     // Opens at a size that sits on the desktop rather than filling it. The EQ
     // and waveform pages are wider than this at their natural size and scroll
     // to fit; that is the trade for a window you can put somewhere. The
     // minimum is what the narrowest page (AetherNR's two-column radio row)
-    // needs beside the tab column, and geometry persists, so a window resized
-    // once reopens where it was left.
+    // needs beside the tab column.
     setMinimumSize(600, 400);
-    resize(kLaunchSize);
+    // The size is pinned while the size this window wants is still being
+    // settled: without it, the first size anyone happened to leave it at is
+    // the size they keep. The position is still restored and saved. To give
+    // the size back to the operator, drop this; the geometry key underneath
+    // has been recording it all along.
+    setLaunchSize(kLaunchSize);
+    FramelessResizer::install(this);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(bodyWidget(), canonBodyStyleSheet());
 
-    auto* body = new QHBoxLayout(bodyWidget());
-    body->setContentsMargins(8, 8, 8, 8);
+    auto* outer = new QVBoxLayout(bodyWidget());
+    outer->setContentsMargins(14, 12, 14, 14);
+    outer->setSpacing(10);
+    outer->addWidget(makeCanonHeader(QStringLiteral("AetherRX")));
+
+    auto* body = new QHBoxLayout;
+    body->setContentsMargins(0, 0, 0, 0);
     body->setSpacing(8);
+    outer->addLayout(body, 1);
 
     // -- Left tab column ------------------------------------------------
     m_tabs = new StageTabBar(QStringLiteral("aetherRx"), this);
@@ -397,27 +410,16 @@ void AetherRxDialog::addStage(Stage stage, const QString& label, QWidget* page)
     Q_UNUSED(index);
 }
 
-// Opens at kLaunchSize every time, whatever is stored.
-//
-// Deliberate and temporary: the size this window wants is still being settled,
-// and a restored geometry wins over the default in the constructor, so without
-// this the first size anyone happened to leave it at is the size they keep.
-// The position is still restored and still saved — only the size is pinned.
-// To give the size back to the operator, delete this override; the geometry
-// key underneath it has been recording all along.
 void AetherRxDialog::showEvent(QShowEvent* event)
 {
-    PersistentDialog::showEvent(event);
-    if (size() != kLaunchSize) {
-        resize(kLaunchSize);
-    }
+    CanonWindow::showEvent(event);
     m_tabs->refreshFromHost();
     if (m_checkTimer) m_checkTimer->start();
 }
 
 void AetherRxDialog::hideEvent(QHideEvent* event)
 {
-    PersistentDialog::hideEvent(event);
+    CanonWindow::hideEvent(event);
     if (m_checkTimer) m_checkTimer->stop();
 }
 

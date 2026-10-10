@@ -226,10 +226,7 @@ void MainWindow::showAx25HfPacketDecodeDialog()
     // MainWindow does and is just hidden on close.
     if (!m_ax25HfPacketDecodeDialog) {
         auto* dlg = new Ax25HfPacketDecodeDialog(m_audio, &m_radioModel, slice, this);
-        dlg->setFramelessMode(
-            AppSettings::instance().value("FramelessWindow", "True").toString() == "True");
         m_ax25HfPacketDecodeDialog = dlg;
-        trackPersistentDialog(dlg);
     }
     m_ax25HfPacketDecodeDialog->setAttachedSlice(slice);
 #ifdef HAVE_MQTT
@@ -259,10 +256,7 @@ void MainWindow::startKissTncOnStartupIfConfigured()
     // window being closed. The dialog's constructor auto-starts the TNC and
     // the modem per their respective settings.
     auto* dlg = new Ax25HfPacketDecodeDialog(m_audio, &m_radioModel, activeSlice(), this);
-    dlg->setFramelessMode(
-        AppSettings::instance().value("FramelessWindow", "True").toString() == "True");
     m_ax25HfPacketDecodeDialog = dlg;
-    trackPersistentDialog(dlg);
 #ifdef HAVE_MQTT
     m_ax25HfPacketDecodeDialog->setMqttClient(m_mqttClient);
 #endif
@@ -279,10 +273,7 @@ Ax25HfPacketDecodeDialog* MainWindow::ensureAx25HfPacketDecodeDialog()
     // the window; the dialog is a service host, not just a view.
     TncSettings::migrateLegacy();
     auto* dlg = new Ax25HfPacketDecodeDialog(m_audio, &m_radioModel, activeSlice(), this);
-    dlg->setFramelessMode(
-        AppSettings::instance().value("FramelessWindow", "True").toString() == "True");
     m_ax25HfPacketDecodeDialog = dlg;
-    trackPersistentDialog(dlg);
 #ifdef HAVE_MQTT
     dlg->setMqttClient(m_mqttClient);
 #endif
@@ -1667,10 +1658,7 @@ void MainWindow::showPskReporterMapDialog()
     if (!m_pskReporterMapDialog) {
         auto* dlg = new PskReporterMapDialog(
             m_audio, &m_radioModel, m_propForecast, this);
-        dlg->setFramelessMode(
-            AppSettings::instance().value("FramelessWindow", "True").toString() == "True");
         m_pskReporterMapDialog = dlg;
-        trackPersistentDialog(dlg);
     }
     m_pskReporterMapDialog->show();
     m_pskReporterMapDialog->raise();

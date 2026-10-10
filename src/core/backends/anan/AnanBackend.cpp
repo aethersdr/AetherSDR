@@ -54,6 +54,18 @@ QByteArray floatBytes(const std::vector<float>& v)
            static_cast<qsizetype>(v.size() * sizeof(float))};
 }
 
+// The slice model's name for a WDSP AGC mode, the inverse of setSliceAgc()'s
+// parse. WDSP's "long" (1) is never set here.
+QString agcModeName(int wdspMode)
+{
+    switch (wdspMode) {
+    case 0: return QStringLiteral("off");
+    case 2: return QStringLiteral("slow");
+    case 4: return QStringLiteral("fast");
+    default: return QStringLiteral("med");
+    }
+}
+
 }  // namespace
 
 WdspChannel::Mode AnanBackend::modeFromString(const QString& mode) noexcept
@@ -238,6 +250,9 @@ AnanBackend::AnanBackend(QObject* parent)
             // A new session's needle starts from its first reading, not from
             // where the last session's left off.
             m_sMeter.reset();
+            // Likewise the rail's window: counts from before this session
+            // must not ride into its first published voltage.
+            resetSupplyRailWindow();
         }
         emitSliceState();
         emitPanState();
@@ -288,6 +303,10 @@ AnanBackend::AnanBackend(QObject* parent)
     // link that has gone silent still reports.
     connect(m_client, &P2Client::linkCountersUpdated, this,
             &AnanBackend::onLinkCounters);
+    // Queued onto this thread, like the snapshot above: the meter seam's
+    // signals are emitted from the backend's own thread.
+    connect(m_client, &P2Client::supplyRailSampled, this,
+            &AnanBackend::onSupplyRailCounts);
     // Only DDC0 feeds this DSP. Like ddc0IqReady above, notification and
     // processing run directly on the I/O thread, with the DSP as context.
     // Invalidate its partial FFT before the discontinuous block arrives.
@@ -409,6 +428,9 @@ RadioCapabilities AnanBackend::capabilities() const
     c.voxControl = std::nullopt;
     c.speechProcessorControl = std::nullopt;
     c.txMonitorControl = std::nullopt;
+    // The radio's speaker output: setLineoutMute() sends it silence and
+    // setLineoutGain() scales the samples this host feeds it.
+    c.lineoutControl = RadioCapabilities::LineoutControl{};
     // The panadapter dBm axis is dBFS with a dBm label: kUncalibratedDbfsToDbmOffset
     // is 0.0f and bin levels depend on window/normalisation, unverified against a
     // known input. Internally consistent, but not comparable: never publish as a
@@ -437,11 +459,11 @@ RadioCapabilities AnanBackend::capabilities() const
     c.manufacturer = QStringLiteral("Apache Labs");
     c.model = QStringLiteral("ANAN-G2");
     // ---- PA telemetry ----
-    // hasSupplyVoltageTelemetry stays FALSE although the radio sends a
-    // supply-rail count (P2Protocol decodes it): no known scale fits it. On a
-    // G2 bench the 5 V-reference scale read a 13.8 V rail as ~40 V, 2.9x high,
-    // and the 3.3 V board's scale differs from it by only 1.5x, so no board
-    // choice fixes it. A volts readout waits for an operator calibration.
+    // The DC supply rail, published as RAD:+13.8A from every status packet's
+    // count (onSupplyRailCounts()). Claimed on a bench measurement, not on the
+    // input's label: see kSupplyRailVoltsPerCount for the reading and for why
+    // the input is not the one the spec calls "supply voltage".
+    c.hasSupplyVoltageTelemetry = true;
     //
     // There is NO PA temperature in this protocol. The radio's whole analog
     // payload is six fields and none of them is a temperature, so the readout
@@ -673,23 +695,26 @@ void AnanBackend::connectRadio(const RadioConnectRequest& request)
     // default until RadioModel pushes the operator's rate through
     // setPanFrameRate().
     m_pendingDspConfig.panPoints = m_panPoints;
-    m_pendingDspConfig.mode = modeFromString(m_mode);
-    m_pendingDspConfig.filterLowHz = static_cast<double>(m_filterLowHz) + cwBfoHz();
-    m_pendingDspConfig.filterHighHz = static_cast<double>(m_filterHighHz) + cwBfoHz();
-    m_pendingDspConfig.agcMode = 3;
-    // 60 dB, not Hl2RxDsp's 39 dB: on the G2 bench audio was too quiet until the
-    // ceiling slider reached 100 (= 60 dB via setSliceAgc()'s *0.6 mapping); this
-    // chain's uncalibrated gain sits lower than the HL2's. AGC only applies up to
-    // the ceiling on weak signals, so this cannot clip a strong one.
-    m_pendingDspConfig.maximumAgcGainDb = 60.0;
-    // This backend retains the NB request across reconnects. emitSliceState()
-    // also supplies that pair if a different radio requires a fresh slice.
-    m_pendingDspConfig.noiseBlanker = AetherSDR::toWdsp(m_nbKind);
-    m_pendingDspConfig.noiseBlankerLevel = m_nbLevel;
-    m_pendingDspConfig.noiseBlankerFill = AetherSDR::toWdsp(m_nbFill);
+    // This backend retains the AGC and NB requests across reconnects.
+    // emitSliceState() also supplies them if a different radio requires a
+    // fresh slice.
+    applyLiveRxState(m_pendingDspConfig);
 
     ++m_connectGeneration;
     beginDspSetup();
+}
+
+void AnanBackend::applyLiveRxState(AnanRxDsp::Config& config) const
+{
+    config.mode = modeFromString(m_mode);
+    config.filterLowHz = static_cast<double>(m_filterLowHz) + cwBfoHz();
+    config.filterHighHz = static_cast<double>(m_filterHighHz) + cwBfoHz();
+    config.agcMode = m_agcMode;
+    config.maximumAgcGainDb = agcKnobDb(m_agcThreshold);
+    config.agcFixedGainDb = agcKnobDb(m_agcOffLevel);
+    config.noiseBlanker = AetherSDR::toWdsp(m_nbKind);
+    config.noiseBlankerLevel = m_nbLevel;
+    config.noiseBlankerFill = AetherSDR::toWdsp(m_nbFill);
 }
 
 void AnanBackend::beginDspSetup()
@@ -817,6 +842,9 @@ void AnanBackend::disconnectRadio()
     m_linkCounters = {};
     m_linkCountersSeen = false;
     m_lastSnapshotRxBytes = 0;
+    // A status packet can arrive before the next session's linkUp, so the
+    // rail's window is emptied here as well as there.
+    resetSupplyRailWindow();
     // A genuine operator-initiated disconnect always fires disconnected(),
     // even one that lands mid-rate-change -- this is not the zoom case
     // m_rateChanging exists to hide.
@@ -916,23 +944,35 @@ void AnanBackend::setSliceFilter(int sliceId, int lowHz, int highHz)
 void AnanBackend::setSliceAgc(int sliceId, const QString& mode, int thresholdDb)
 {
     Q_UNUSED(sliceId);
-    // 0..100 operator units -> 0..60 dB ceiling, same map the HL2 uses
-    // (Hl2DbReference::kAgcCeilingDbPerUnit = 0.6) -- a WDSP-range fact, not an
-    // HL2 fact. The HL2 additionally REFERS this ceiling to its LNA gain, which
-    // is an HL2 fact and deliberately not copied here.
+    // thresholdDb is the AGC-T knob's 0..100, not dB: agcKnobDb() maps it.
     const QString m = mode.trimmed().toLower();
     int wdspMode = 3;   // medium, WDSP's own default
     if (m == QLatin1String("off"))  wdspMode = 0;
     else if (m == QLatin1String("slow")) wdspMode = 2;
     else if (m == QLatin1String("fast")) wdspMode = 4;
-    const double ceilingDb = static_cast<double>(thresholdDb) * 0.6;
-    // Live state for beginRateChange() to refresh m_pendingDspConfig from --
-    // see the member declaration comment.
+    // Live state for connectRadio() and beginRateChange() -- see the member
+    // declaration comment.
     m_agcMode = wdspMode;
-    m_agcCeilingDb = ceilingDb;
+    m_agcThreshold = std::clamp(thresholdDb, 0, 100);
     if (m_dsp) {
         QMetaObject::invokeMethod(m_dsp, "setAgc", Qt::QueuedConnection,
-            Q_ARG(int, wdspMode), Q_ARG(double, ceilingDb));
+            Q_ARG(int, wdspMode), Q_ARG(double, agcKnobDb(m_agcThreshold)));
+    }
+    emitSliceState();
+}
+
+void AnanBackend::requestSliceAgc(int sliceId, const SliceAgcRequest& request)
+{
+    if (request.field != SliceAgcRequest::Field::OffLevel) {
+        IRadioBackend::requestSliceAgc(sliceId, request);
+        return;
+    }
+    // Sent in every AGC mode: WDSP applies the fixed gain only with AGC off
+    // (wcpAGC.c xwcpagc), so a level set first takes effect when AGC goes off.
+    m_agcOffLevel = std::clamp(request.offLevel, 0, 100);
+    if (m_dsp) {
+        QMetaObject::invokeMethod(m_dsp, "setAgcFixedGain", Qt::QueuedConnection,
+            Q_ARG(double, agcKnobDb(m_agcOffLevel)));
     }
     emitSliceState();
 }
@@ -1118,14 +1158,7 @@ void AnanBackend::beginRateChange(int newRateKsps)
     // rate touched here, so a rate change silently reverted mode/filter/AGC
     // to whatever they were at connect. m_shiftHz is not part of Config --
     // AnanRxDsp::installChannel() re-applies it separately, after the swap.
-    m_pendingDspConfig.mode = modeFromString(m_mode);
-    m_pendingDspConfig.filterLowHz = static_cast<double>(m_filterLowHz) + cwBfoHz();
-    m_pendingDspConfig.filterHighHz = static_cast<double>(m_filterHighHz) + cwBfoHz();
-    m_pendingDspConfig.agcMode = m_agcMode;
-    m_pendingDspConfig.maximumAgcGainDb = m_agcCeilingDb;
-    m_pendingDspConfig.noiseBlanker = AetherSDR::toWdsp(m_nbKind);
-    m_pendingDspConfig.noiseBlankerLevel = m_nbLevel;
-    m_pendingDspConfig.noiseBlankerFill = AetherSDR::toWdsp(m_nbFill);
+    applyLiveRxState(m_pendingDspConfig);
 
     m_rateChanging = true;
     ++m_connectGeneration;   // orphans any in-flight prior connect/reconfigure/rebuild
@@ -1509,6 +1542,19 @@ void AnanBackend::defineMeters()
     d.high = 0.0;
     d.description = QStringLiteral("Receive signal level");
     emit meterDefined(d);
+
+    // The supply rail. "+13.8A" is the name MeterModel binds to the status bar
+    // and Meter applet voltage readouts, whatever the radio; unit and range as
+    // IcomMeters declares the same meter.
+    MeterDef rail;
+    rail.index = 2;
+    rail.source = QStringLiteral("RAD");
+    rail.name = QStringLiteral("+13.8A");
+    rail.unit = QStringLiteral("Volts");
+    rail.low = 0.0;
+    rail.high = 16.0;
+    rail.description = QStringLiteral("DC supply voltage");
+    emit meterDefined(rail);
 }
 
 IRadioBackend::LinkStats AnanBackend::linkStats() const
@@ -1560,6 +1606,43 @@ void AnanBackend::onDspMeter(float dbfs)
         emit meterUpdate(QStringLiteral("SLC:LEVEL"), *out);
 }
 
+void AnanBackend::onSupplyRailCounts(int counts)
+{
+    if (!m_supplyRailClock.isValid())
+        m_supplyRailClock.start();
+    onSupplyRailCountsAt(counts, m_supplyRailClock.elapsed());
+}
+
+void AnanBackend::onSupplyRailCountsAt(int counts, qint64 nowMs)
+{
+    // A 12-bit ADC reads 0..4095. Anything else means the field is not this
+    // input, and no reading is better than a plausible wrong voltage.
+    if (counts < 0 || counts > 4095)
+        return;
+    m_supplyRailCountSum += counts;
+    ++m_supplyRailSamples;
+    // The first window opens on its first count; each later one opens where the
+    // last closed, so publications stay a fixed window apart rather than
+    // drifting by a packet interval each time.
+    if (m_supplyRailWindowStartMs < 0)
+        m_supplyRailWindowStartMs = nowMs;
+    if (nowMs - m_supplyRailWindowStartMs < kSupplyRailWindowMs)
+        return;
+    const double meanCounts =
+        static_cast<double>(m_supplyRailCountSum) / m_supplyRailSamples;
+    m_supplyRailCountSum = 0;
+    m_supplyRailSamples = 0;
+    m_supplyRailWindowStartMs = nowMs;
+    emit meterUpdate(QStringLiteral("RAD:+13.8A"), meanCounts * kSupplyRailVoltsPerCount);
+}
+
+void AnanBackend::resetSupplyRailWindow()
+{
+    m_supplyRailWindowStartMs = -1;
+    m_supplyRailCountSum = 0;
+    m_supplyRailSamples = 0;
+}
+
 void AnanBackend::emitSliceState()
 {
     SliceDelta d;
@@ -1574,6 +1657,11 @@ void AnanBackend::emitSliceState()
     d.nbKind = m_nbKind;
     d.nbLevel = m_nbLevel;
     d.nbFill = m_nbFill;
+    // The AGC as the DSP runs it, so the slice's knob starts from this
+    // backend's values, not SliceModel's defaults.
+    d.agcMode = agcModeName(m_agcMode);
+    d.agcThreshold = m_agcThreshold;
+    d.agcOffLevel = m_agcOffLevel;
     // The audio stage as APPLIED. Both are required, not cosmetic: the receive
     // control gate refuses an operation whose observation is absent, so without
     // these two the mute and the fader are offered and then rejected.

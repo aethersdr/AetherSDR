@@ -606,6 +606,10 @@ convergence must be verified on real hardware through the automation bridge.
 - `SetRXAAGCTop` is the **maximum gain in dB**, and 120 dB is the top of WDSP's
   range. Inheriting that default ran the HL2 wide open: peak 3.186, **10.31% of
   samples at or beyond full scale**. At a 65 dB ceiling: peak 2.664, 0.27%.
+- Both peaks include RXA's panel gain of 4.0 after the AGC. The HL2 now opens
+  it at unity (`Hl2RxDsp::kRxPanelGain`, #5942): 12.04 dB quieter. The second
+  bandpass pass, speak and mpeak run between the AGC and the panel, so the
+  AGC's ceiling is not a bound on the output.
 - Mode vocabulary: `off/slow/med/fast` → WDSP RXA 0/2/3/4. WDSP's "long" (1)
   has no representation in the four-way UI control.
 - **The AGC is client-owned state and nothing on the radio can be asked for
@@ -2195,8 +2199,8 @@ The Display panel's FPS slider, Clone to all Pans and Reset to Defaults save;
 `MainWindow::wirePanDisplayStatus` restores into the widget before it seeds the
 shaper. FFT AVG and Wt Avg have a table of their own in that document
 (`fftAverages`), kept only for a backend that declares
-`BackendPanAveraging::clientPersistsAveraging`. The HL2 declares it false, so on
-this radio those two are not remembered.
+`BackendPanAveraging::clientPersistsAveraging`. The HL2 declares it, so the
+Display panel's FFT AVG slider and Wt Avg toggle are remembered per pan slot too.
 
 The dBm range is the odd one: the pan model, not the widget, is what every
 re-seed reads, so a scale the operator moves is put into the model
@@ -3696,7 +3700,10 @@ behavior is unchanged.
 
 The count was fixed at connect, from a persisted setting. It is now the
 operator's, at runtime: "Add Panadapter" and the pane close button. Connect
-always comes up with ONE receiver.
+always comes up with ONE receiver; the ones the operator had open come back
+after link-up through that same add (`Hl2Backend::replayRestoredSession`, from
+the `receivers` list of the `OperatingState` document), so the receiver
+ceiling at the current span still decides how many return (#5777).
 
 Retiring the persisted count mattered for a reason beyond tidiness: it made
 connect the only place the count could change, and a saved 4 was re-imposed on

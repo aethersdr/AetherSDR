@@ -104,6 +104,9 @@ public:
         Mode mode = Mode::Usb;
         std::optional<FmReceive> fmReceive;
         std::optional<WbfmReceive> wbfmReceive;
+        // RXA output panel gain, linear, applied after the AGC. Unset keeps
+        // WDSP's create_rxa() default of 4.0 (+12.04 dB, #5942).
+        std::optional<double> rxPanelGain;
         double filterLowHz = 150.0;
         double filterHighHz = 3000.0;
         int agcMode = 3;
@@ -515,6 +518,9 @@ public:
     // After output-count readiness, wait for the last hook and DSP body before
     // arming another hold. Test/control only; NEVER call while a hold is armed.
     void synchronizeWorkerForTest() const noexcept;
+    // Test only (#6179, WDSP patch 22): queue PSRestoreCorr(path) on this TX
+    // channel's PureSignal correction thread, on the WDSP the core drives.
+    void restorePureSignalCorrectionForTest(const char* path) const noexcept;
     // Test only: the next `count` control operations on THIS channel are
     // refused exactly as a racing processIq() callback would refuse them, so
     // a caller's refused-then-converges path can be driven deterministically.

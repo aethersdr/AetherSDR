@@ -606,6 +606,9 @@ public:
     // other family that takes typed intents through the IRadioBackend seam) —
     // there, Flex wire text has nowhere to go and is dropped at the sink.
     bool hasCommandPlane() const { return m_wanConn != nullptr || m_connection != nullptr; }
+    // A non-Flex backend that declares RadioCapabilities::lineoutControl, which
+    // takes setLineoutGain()/setLineoutMute() typed instead of as wire text.
+    bool lineoutThroughSeam() const;
 
     // The slice's tuning step, applied on the client when the radio has no
     // command plane to carry `slice set <n> step=`. Returns false, doing

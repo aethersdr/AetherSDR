@@ -3819,7 +3819,7 @@
       "steps": [
         {
           "cmd": "invoke",
-          "target": "PSK Reporter...",
+          "target": "AetherMap...",
           "action": "trigger"
         },
         {
@@ -3835,8 +3835,8 @@
         ],
         "pad": 0
       },
-      "caption": "The PSK Reporter window's sidebar: WSPR beacon, report filters, band conditions and map options. The grid square is blacked out.",
-      "alt": "PSK Reporter sidebar. WSPR beacon: TX call KK7GWY, Grid (blacked out), Band 20m, Reported 30 dBm, Offset 1500.0 Hz, Level -20 dBFS, a Transmit once button and an Idle status. Reports: Call KK7GWY, Band All, Mode All, Lookback 1 hour, All Callsigns unticked and Active monitors ticked. Band conditions: 80-40m Good, 30-20m Good, 17-15m Fair, 12-10m Poor. Map: Globe, Paths, Day/night (ticked), Dark map and a Map brightness slider at 100%, then City lights.",
+      "caption": "AetherMap's sidebar: WSPR beacon, report filters, band conditions and map options. The grid square is blacked out.",
+      "alt": "AetherMap sidebar. WSPR beacon: TX call KK7GWY, Grid (blacked out), Band 20m, Reported 30 dBm, Offset 1500.0 Hz, Level -20 dBFS, a Transmit once button and an Idle status. Reports: Call KK7GWY, Band All, Mode All, Lookback 1 hour, All Callsigns unticked and Active monitors ticked. Band conditions: 80-40m Good, 30-20m Good, 17-15m Fair, 12-10m Poor. Map: Globe, Paths, Day/night (ticked), Dark map and a Map brightness slider at 100%, then City lights.",
       "redact": [
         [
           72,
@@ -4061,7 +4061,7 @@
         }
       ],
       "caption": "The Tools menu, connected to a FLEX-8600.",
-      "alt": "Tools menu: Add Panadapter..., AetherTX..., CW Keyer, Copy Assist, AetherModem..., Configure KiwiSDR...; Start SWR Scan..., Pre-tune ATU Bands..., Clear ATU Memories..., Calibrate AGC-T...; Callsign Lookup... (Ctrl+Shift+L), PSK Reporter..., FreeDV Reporter...; Net Scheduler..., Memory..., Waveforms..., Wideband Bandscope...; Radio Health..., GPS Dashboard..., Network Diagnostics... and Runtime Monitor...."
+      "alt": "Tools menu: Add Panadapter..., AetherTX..., CW Keyer, Copy Assist, AetherModem..., Configure KiwiSDR...; Start SWR Scan..., Pre-tune ATU Bands..., Clear ATU Memories..., Calibrate AGC-T...; Callsign Lookup... (Ctrl+Shift+L), AetherMap..., FreeDV Reporter...; Net Scheduler..., Memory..., Waveforms..., Wideband Bandscope...; Radio Health..., GPS Dashboard..., Network Diagnostics... and Runtime Monitor...."
     },
     {
       "id": "menu-help",

@@ -353,6 +353,7 @@ bool MetisClient::start(const Params& params)
     m_fwdWindow.clear();
     m_telemetry.forwardPowerPeakRaw.reset();
     m_telemetry.forwardPowerSamples = 0;
+    m_telemetry.forwardPowerSkipped = 0;
     // This object OUTLIVES a connect: Hl2Backend builds it in its constructor
     // and deletes it in its destructor, so without this the dedupe would carry
     // a frequency across a disconnect and suppress the first push of the next
@@ -1859,6 +1860,7 @@ void MetisClient::handleDatagram(std::span<const std::uint8_t> bytes)
         m_adcWindowOverload = 0;
         m_telemetry.forwardPowerPeakRaw = m_fwdWindow.peak;
         m_telemetry.forwardPowerSamples = m_fwdWindow.samples;
+        m_telemetry.forwardPowerSkipped = m_fwdWindow.skipped;
         m_fwdWindow.clear();
         emit telemetryUpdated(m_telemetry);
     }

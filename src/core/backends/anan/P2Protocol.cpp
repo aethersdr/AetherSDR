@@ -218,7 +218,7 @@ std::optional<HighPriorityStatus> parseHighPriorityStatus(
     s.speakerUnderflow = (data[30] & 0b0000'1000) != 0;
     s.speakerFifoLevel = readU16be(data.data() + 37);
     // In bounds by the exact-size guard above, which admits only 60 bytes.
-    s.supplyVoltageRaw = readU16be(data.data() + 49);
+    s.supplyRailCounts = readU16be(data.data() + 57);
     return s;
 }
 

@@ -1945,7 +1945,8 @@ namespace {
 // setter is real (setters default to no-ops):
 //   rfpower, tunepower    canTransmit + transmitDriveControl (setTxPower;
 //                         tunepower rides setTune()'s tunePowerPercent at
-//                         key-down; while TUNE is keyed it is routed only to a
+//                         key-down and, unkeyed, setTunePower() where declared
+//                         live; while TUNE is keyed it is routed only to a
 //                         live carrier (tuneCarrierLive()) whose backend
 //                         declares tunePowerAppliesLive)
 //   miclevel              canTransmit (setMicGain)
@@ -2212,11 +2213,13 @@ RadioModel::RadioModel(QObject* parent)
             m_backend->setTxPower(percent);
     });
 
-    // TUNE power to a carrier already up, on a backend that declares it live.
-    // Not keyed: setTune() carries the value at the next key-down.
+    // TUNE power to a backend that declares it live: applied to a carrier this
+    // client keyed, recorded while unkeyed (the HL2 remembers it per band). A
+    // TUNE decoded off the radio is not this client's carrier. Never keys;
+    // setTune() still carries the value at the next key-down.
     connect(&m_transmitModel, &TransmitModel::tunePowerCommandIssued, this,
             [this](int percent) {
-        if (!m_backend || !tuneCarrierLive()) {
+        if (!m_backend || (m_transmitModel.isTuning() && !tuneCarrierLive())) {
             return;
         }
         const RadioCapabilities caps = backendCapabilities();
@@ -11998,6 +12001,12 @@ int RadioModel::activeOutputVolumePercent() const
         .value(QStringLiteral("MasterVolume"), QStringLiteral("100")).toInt();
 }
 
+bool RadioModel::lineoutThroughSeam() const
+{
+    return m_backend && !usesFlexCommandPlane()
+        && m_backend->capabilities().lineoutControl.has_value();
+}
+
 void RadioModel::setLineoutGain(int v)
 {
     v = std::clamp(v, 0, 100);
@@ -12006,15 +12015,13 @@ void RadioModel::setLineoutGain(int v)
     }
     m_lineoutGain = v;
     qCDebug(lcAudio) << "setLineoutGain:" << v;
-    sendCmd(QString("mixer lineout gain %1").arg(v));
-    // The same request, typed, for a backend with no command plane to receive the
-    // string on. Without it this control reached a Flex and nothing else, so on
-    // every other radio the master volume had no effect at all once PC Audio was
-    // off -- MainWindow::applyMasterVolume() routes here in exactly that case.
-    // Same shape as the rx-antenna and pan-dimension calls above: guarded on
-    // usesFlexCommandPlane() so a Flex is not told twice.
-    if (m_backend && !usesFlexCommandPlane()) {
+    // A backend that declares a line out takes the request typed; a Flex takes
+    // the wire text, and on a radio with neither the text's drop notice says
+    // that nothing applied it.
+    if (lineoutThroughSeam()) {
         m_backend->setLineoutGain(v);
+    } else {
+        sendCmd(QString("mixer lineout gain %1").arg(v));
     }
     emit audioOutputChanged();
 }
@@ -12028,12 +12035,11 @@ void RadioModel::setLineoutGain(int v)
 void RadioModel::setLineoutMute(bool m)
 {
     qCDebug(lcAudio) << "setLineoutMute:" << m;
-    sendCmd(QString("mixer lineout mute %1").arg(m ? 1 : 0));
-    // Sent unconditionally, like the command above and for the reason this
-    // function's own comment gives: a mute is a request, and a model that has
-    // drifted from the radio must stay recoverable from the UI.
-    if (m_backend && !usesFlexCommandPlane()) {
+    // Routed as in setLineoutGain(), but always sent, for the reason above.
+    if (lineoutThroughSeam()) {
         m_backend->setLineoutMute(m);
+    } else {
+        sendCmd(QString("mixer lineout mute %1").arg(m ? 1 : 0));
     }
     if (m_lineoutMute != m) {
         m_lineoutMute = m;

@@ -13,6 +13,7 @@
 #include "core/backends/AutoRfGainControl.h"
 
 #include "MainWindowHelpers.h"
+#include "MixerControlAvailability.h"
 #include "WindowGeometryRestore.h"
 
 #include "models/Ctr2ProxyModel.h"
@@ -130,6 +131,7 @@
 #include "FreeDvReporterDialog.h"
 #endif
 #include "Ax25HfPacketDecodeDialog.h"
+#include "PskReporterMapDialog.h"
 #include "FlexControlDialog.h"
 #include "CwxPanel.h"
 #include "DvkAvailabilityGate.h"
@@ -2052,7 +2054,23 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_titleBar, &TitleBar::headphoneVolumeChanged,
             &m_radioModel, &RadioModel::setHeadphoneGain);
     connect(m_titleBar, &TitleBar::lineoutMuteChanged, this, [this](bool muted) {
-        m_radioModel.setLineoutMute(muted);
+        // Both paths where the radio has a line out (#4665); a radio without
+        // one has only this computer's output to mute (MixerControlAvailability.h).
+        const bool lineout = lineoutControlsAvailable(
+            m_radioModel.isConnected(), m_radioModel.hasCommandPlane(),
+            m_radioModel.backendCapabilities().lineoutControl.has_value());
+        const bool pcAudio = AppSettings::instance()
+            .value("PcAudioEnabled", "True").toString() == "True";
+        if (!lineout && !pcAudio) {
+            // Neither output is ours to mute: refuse as the master knob does,
+            // and put the icon back.
+            showUnsupportedControlNotice();
+            syncTitleBarOutput();
+            return;
+        }
+        if (lineout) {
+            m_radioModel.setLineoutMute(muted);
+        }
         m_audio->setMuted(muted);
     });
     connect(m_audio, &AudioEngine::mutedChanged, this, [this](bool muted) {
@@ -2630,19 +2648,11 @@ MainWindow::MainWindow(QWidget* parent)
     }
 
     // Restore the Aetherial Audio Channel Strip if it was open on last
-    // exit (#2301). toggleAetherialStrip() lazy-creates and shows. Before a
-    // session connects the route is unknown, so restore is allowed; a later
-    // capability/mic update hides the editor silently if its route is blocked.
-    if (s.value("AetherialStripVisible", "False").toString() == "True") {
-        if (txAudioPathBlock() == TxAudioPathBlock::None) {
-            toggleAetherialStrip();
-        } else {
-            // Restore is automatic, not an operator attempt to open AetherTX.
-            // Leave the applet's callout to explain the route without a modal.
-            s.setValue("AetherialStripVisible", "False");
-            s.save();
-        }
-    }
+    // exit (#2301), once this window is shown: AetherTX is a CanonWindow
+    // dialog, and shown before its parent is mapped a tiling compositor
+    // takes it for a top-level window and tiles it (see showEvent()).
+    m_restoreAetherialStripOnShow =
+        s.value("AetherialStripVisible", "False").toString() == "True";
     // Clear stale splitter state — layout has changed across versions.
     s.remove("SplitterState");
     // Force 4-pane sizing: CWX=0, DVK=0 (hidden), applet=260px, center=stretch.
@@ -3307,9 +3317,19 @@ ClientPuduEditor* MainWindow::ensureClientPuduEditor()
 
 AetherRxDialog* MainWindow::ensureAetherRxDialog()
 {
+    // A CanonWindow (style guide, RFC #6226): always frameless and not a
+    // PersistentDialog, so it's created or raised directly, like Network
+    // Diagnostics.
     const bool wasFresh = !m_rxDialog;
-    showOrRaisePersistent(m_rxDialog, m_audio);
-    if (wasFresh && m_rxDialog) {
+    if (wasFresh) {
+        auto* dlg = new AetherRxDialog(m_audio, this);
+        dlg->setAttribute(Qt::WA_DeleteOnClose);
+        m_rxDialog = dlg;
+    }
+    m_rxDialog->show();
+    m_rxDialog->raise();
+    m_rxDialog->activateWindow();
+    if (wasFresh) {
         if (auto* w = m_rxDialog->widget()) wireAetherDspWidget(w);
         // The EQ page's width buttons: turn a labelled width into the passband
         // that width means in this mode, through the same rule the VFO's filter
@@ -3989,6 +4009,27 @@ void MainWindow::showEvent(QShowEvent* event)
     applyWindowsFrameColor();
 #endif
 
+    // AetherTX left open last session. toggleAetherialStrip() lazy-creates and
+    // shows. Before a session connects the route is unknown, so restore is
+    // allowed; a later capability/mic update hides the editor silently if its
+    // route is blocked.
+    if (m_restoreAetherialStripOnShow) {
+        m_restoreAetherialStripOnShow = false;
+        QTimer::singleShot(0, this, [this]() {
+            if (windowIsShowing(m_aetherialStrip)) return;
+            if (txAudioPathBlock() == TxAudioPathBlock::None) {
+                toggleAetherialStrip();
+            } else {
+                // Restore is automatic, not an operator attempt to open
+                // AetherTX. Leave the applet's callout to explain the route
+                // without a modal.
+                auto& s = AppSettings::instance();
+                s.setValue("AetherialStripVisible", "False");
+                s.save();
+            }
+        });
+    }
+
     // The caption controls are keyboard-reachable, which puts them first in the
     // window's tab order — so Qt hands them the initial focus and the window
     // opens with a focus ring drawn around a traffic light.  Drop it: a freshly
@@ -4275,6 +4316,14 @@ void MainWindow::closeEvent(QCloseEvent* event)
     // AppletPanelFloating stays True for restart persistence.
     if (m_appletPanelFloatWindow) {
         m_appletPanelFloatWindow->close();
+    }
+    // AetherMap is an independent window that Qt will not close either. Close
+    // it here, while the radio is still connected and RadioModel alive, so its
+    // done() cancels an armed or transmitting WSPR beacon and stops its
+    // clients. Otherwise only its destructor would, after ~MainWindow has
+    // already destroyed the RadioModel the beacon's PTT-off goes through.
+    if (m_pskReporterMapDialog && m_pskReporterMapDialog->isVisible()) {
+        m_pskReporterMapDialog->reject();
     }
     // SplitterState no longer saved (2-pane layout uses stretch factors)
     // ConnPanelCollapsed removed — panel is now a popup dialog
@@ -5466,11 +5515,8 @@ void MainWindow::buildUI()
 
     auto* splitter = m_splitter;
 
-    // Connection panel — modeless dialog; follows View -> Frameless Window.
+    // Connection panel — a modeless CanonWindow dialog, always frameless.
     m_connPanel = new ConnectionPanel(this);
-    m_connPanel->setWindowTitle("Connect to Radio");
-    m_connPanel->setFramelessMode(
-        AppSettings::instance().value("FramelessWindow", "True").toString() == "True");
     // Sizing belongs to the panel now. It sets these same two values in its own
     // constructor and then adjusts them per screen in fitToScreen(), which
     // every show path here runs first — a hardcoded pair at this level went
@@ -10161,8 +10207,6 @@ void MainWindow::setFramelessWindow(bool on)
     if (m_panStack) m_panStack->setFramelessMode(on);
     if (m_appletPanel && m_appletPanel->containerManager())
         m_appletPanel->containerManager()->setFramelessMode(on);
-    if (m_connPanel)
-        m_connPanel->setFramelessMode(on);
     if (m_titleBar)
         m_titleBar->setChildDialogsFramelessMode(on);
     // RadioSetupDialog frameless propagation flows through the
@@ -10171,8 +10215,6 @@ void MainWindow::setFramelessWindow(bool on)
     if (m_reconnectDlg && m_reconnectDlg->findChild<QWidget*>("framelessWindowTitleBar")) {
         setDialogFramelessMode(m_reconnectDlg, on);
     }
-    if (m_aetherialStrip)
-        m_aetherialStrip->setFramelessMode(on);
     // Propagate to every PersistentDialog-derived dialog created via
     // showOrRaisePersistent().  QPointer entries auto-null on dialog close
     // (WA_DeleteOnClose); prune those as we go so the list doesn't grow
@@ -10205,11 +10247,6 @@ void MainWindow::toggleAetherialStrip()
     if (!windowIsShowing(m_aetherialStrip) && showTxAudioPathErrorIfBlocked()) return;
     if (!m_aetherialStrip) {
         m_aetherialStrip = new AetherialAudioStrip(m_audio, this);
-        // Override the parent-window relationship so the strip behaves as
-        // an independent window (own taskbar entry, raisable separately).
-        m_aetherialStrip->setWindowFlag(Qt::Window, true);
-        // Secondary window — must not gate quitOnLastWindowClosed on Windows.
-        m_aetherialStrip->setAttribute(Qt::WA_QuitOnClose, false);
         // Seed the embedded EQ with the current TX filter cutoff values
         // so the dashed yellow guide lines render immediately rather than
         // waiting for the next txFilterCutoffChanged signal.

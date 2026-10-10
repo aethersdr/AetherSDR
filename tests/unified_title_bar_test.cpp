@@ -456,23 +456,61 @@ int main(int argc, char** argv)
         check(connectedTab->focusPolicy() != Qt::NoFocus,
               "radio tabs are keyboard-reachable");
 
-        // Status in words, not just in the dot's colour.
+        // Status in words, not just in the dot's colour — and in sentence case
+        // (#6280): what the tab renders is prose, so only the first letter is
+        // capitalized, even for the two-word state.
         check(connectedTab->accessibleDescription().contains(
-                  QLatin1String("connected")),
+                  QLatin1String("Connected")),
               "connected tab spells its state on the rendered status line");
-        check(connectedTab->accessibleName().contains(QLatin1String("connected")),
+        check(connectedTab->accessibleName().contains(QLatin1String("Connected")),
               "connected tab spells its state in its accessible name");
-        check(inUseTab->accessibleDescription().contains(QLatin1String("in use")),
+        check(inUseTab->accessibleDescription().contains(QLatin1String("In use")),
               "in-use tab spells its state on the rendered status line");
+        check(!inUseTab->accessibleDescription().contains(QLatin1String("In Use")),
+              "only the first letter of a multiword state is capitalized");
 
         // Line two is the state, not the name again: the name is line one, and
         // repeating it pushed the state off the end of every narrow tab.
         check(!connectedTab->statusLine().contains(connected.name),
               "rendered status line does not repeat the tab's name");
-        check(connectedTab->statusLine() == QLatin1String("connected"),
+        check(connectedTab->statusLine() == QLatin1String("Connected"),
               "status line with no model or detail is just the state");
         check(connectedTab->accessibleDescription().contains(connected.name),
               "accessible description still carries the name");
+
+        // #6280: the display casing changed, the bridge token did not.  Drivers
+        // match on `status`, which docs/automation-bridge.md pins to the
+        // lower-case spelling, so the two must be allowed to disagree.
+        if (RadioTabBar* strip = bar->radioTabBar()) {
+            const QVariantList stateTabs =
+                strip->state().value(QStringLiteral("tabs")).toList();
+            bool sawConnected = false;
+            for (const QVariant& entry : stateTabs) {
+                const QVariantMap tab = entry.toMap();
+                if (tab.value(QStringLiteral("id")).toString() != connected.id) {
+                    continue;
+                }
+                sawConnected = true;
+                check(tab.value(QStringLiteral("status")).toString()
+                          == QLatin1String("connected"),
+                      "the bridge status token stays lower-case");
+                check(tab.value(QStringLiteral("statusLine")).toString()
+                          == QLatin1String("Connected"),
+                      "the rendered status line is sentence case");
+                check(tab.value(QStringLiteral("accessibleName")).toString()
+                          == QStringLiteral("Radio %1, Connected").arg(connected.name),
+                      "the accessible name uses the display casing");
+            }
+            check(sawConnected, "the bridge reports the connected tab");
+            for (const QVariant& entry : stateTabs) {
+                const QVariantMap tab = entry.toMap();
+                if (tab.value(QStringLiteral("id")).toString() == inUse.id) {
+                    check(tab.value(QStringLiteral("status")).toString()
+                              == QLatin1String("in use"),
+                          "the two-word bridge token is unchanged");
+                }
+            }
+        }
 
         // Keep tabs 8 px clear of the bar's edges: Qt's Windows frame keeps a
         // ~8 px top resize border, and a tab there would start a resize.
@@ -542,7 +580,7 @@ int main(int argc, char** argv)
     check(tabWithId(*bar, connected.id) == connectedTab,
           "a status-only change reuses the tab widget");
     if (connectedTab) {
-        check(connectedTab->accessibleName().contains(QLatin1String("available")),
+        check(connectedTab->accessibleName().contains(QLatin1String("Available")),
               "the tab re-announces its new state");
     }
 
@@ -887,15 +925,19 @@ int main(int argc, char** argv)
             if (firstTab && droppedTab) {
                 check(droppedTab->isLinkCarrier(), "after a drop the link stays on the radio that dropped");
                 check(!firstTab->isLinkCarrier(), "the first tab does not inherit another radio's link");
-                check(droppedTab->statusLine().contains(QLatin1String("link lost")),
+                // Sentence case here too (#6280): the alarm speaks over the
+                // radio's own status, so it is the same kind of prose.
+                check(droppedTab->statusLine().contains(QLatin1String("Link lost")),
                       "a lost link is spelled out on the dropped radio's tab");
-                check(droppedTab->accessibleName().contains(QLatin1String("link lost")),
+                check(droppedTab->accessibleName().contains(QLatin1String("Link lost")),
                       "a lost link is in the dropped radio's accessible name");
-                check(!firstTab->statusLine().contains(QLatin1String("link lost")),
+                check(!firstTab->statusLine().contains(QLatin1String("Link lost")),
                       "an idle radio's tab never claims a lost link");
                 bar->clearLinkAlarm();
-                check(!droppedTab->statusLine().contains(QLatin1String("link lost")),
+                check(!droppedTab->statusLine().contains(QLatin1String("Link lost")),
                       "clearing the alarm restores the radio's own status word");
+                check(droppedTab->statusLine() == QLatin1String("Available"),
+                      "the restored status word is sentence case as well");
             }
         }
 

@@ -79,6 +79,9 @@ public:
         // default; AnanBackend (commit 4) owns the operator-facing mapping.
         int agcMode = 3;
         double maximumAgcGainDb = 39.0;
+        // The gain with AGC off (WDSP's fixed gain). WdspChannel's default;
+        // AnanBackend supplies the operator's.
+        double agcFixedGainDb = 10.0;
         // false (live): processIq is non-blocking. true: waits for each
         // output block (deterministic for an offline/burst feed -- what the
         // handedness test uses).
@@ -130,10 +133,10 @@ public:
     // made while the build is running still update m_config and win at install.
     Q_INVOKABLE void beginInitialBuild(const Config& config);
 
-    // Marks a rebuild in flight: setMode()/setFilter()/setAgc()/setShift() still
-    // update m_config/m_shiftHz but skip m_channel, because WDSP control calls take
-    // the setup mutex (WdspChannel.cpp's g_setupMutex) the background build holds
-    // for its FFTW planning -- pushing would block this thread.
+    // Marks a rebuild in flight: setMode()/setFilter()/setAgc()/setAgcFixedGain()/
+    // setShift() still update m_config/m_shiftHz but skip m_channel, because WDSP
+    // control calls take the setup mutex (WdspChannel.cpp's g_setupMutex) the
+    // background build holds for its FFTW planning -- pushing would block this thread.
     Q_INVOKABLE void beginRebuild();
 
     // Installs a built RebuildResult on this object's thread. Not Q_INVOKABLE: moc's
@@ -148,6 +151,9 @@ public:
     Q_INVOKABLE void setMode(WdspChannel::Mode mode);
     Q_INVOKABLE void setFilter(double lowHz, double highHz);
     Q_INVOKABLE void setAgc(int agcMode, double maximumGainDb);
+    // The gain with AGC off, in dB. Deferred like setAgc() while a rebuild is
+    // in flight; installChannel() re-applies it at the swap.
+    Q_INVOKABLE void setAgcFixedGain(double fixedGainDb);
     // RX frequency shift in Hz relative to the NCO -- how a single-DDC
     // backend tunes the slice inside the passband without moving the DDC.
     Q_INVOKABLE void setShift(double shiftHz);

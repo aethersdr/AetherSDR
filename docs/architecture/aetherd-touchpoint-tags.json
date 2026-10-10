@@ -979,7 +979,7 @@
  },
  "models/Ctr2ProxyModel.h": {
   "tag": "peripheral(ctr2)",
-  "note": "CTR2-Max controller relay: an operator-enabled opaque byte relay between the controller (TCP listener in Wi-Fi mode, USB HID link in USB mode) and a dedicated radio TCP connection. The CTR2 is an independent radio client; nothing passes RadioModel, a backend socket or IRadioBackend. A peripheral accessory transport, NOT behind the radio seam. See docs/ctr2-tcp-proxy-design.md and docs/ctr2-usb-relay-design.md (RFC #6091).",
+  "note": "CTR2-Max controller relay: an operator-enabled opaque byte relay between the controller (TCP listener in Wi-Fi mode, USB HID link in USB mode) and a dedicated radio TCP connection. The CTR2 is an independent radio client; nothing passes RadioModel, a backend socket or IRadioBackend. A device that negotiates link extensions (HID Feature report 0x02; never a stock CTR2) also receives AetherSDR's own audio spectrum, from the GUI's Ctr2AudioSpectrumFeeder, beside the relayed stream. A peripheral accessory transport, NOT behind the radio seam. See docs/ctr2-tcp-proxy-design.md and docs/ctr2-usb-relay-design.md (RFC #6091).",
   "split": "",
   "confidence": "high"
  },

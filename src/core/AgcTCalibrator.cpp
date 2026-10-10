@@ -162,8 +162,11 @@ void AgcTCalibrator::startAutoSweep()
     m_curve.clear();
     m_running = true;
     m_auto = true;
-    m_sweepStart = 100;
-    m_sweepValue = m_sweepStart;
+    // AGC off: the off level is a fixed gain, and the top of the range can clip
+    // band noise on its own (ANAN's is 120 dB), so sweep up from 0 and stop at
+    // the target. AGC on: the AGC holds the level, so sweep the whole range down.
+    m_sweepUp = strategy() == Strategy::TargetLevel;
+    m_sweepValue = m_sweepUp ? 0 : 100;
 
     applyValue(m_sweepValue);
     emit started(strategy(), m_originalValue);
@@ -180,15 +183,18 @@ void AgcTCalibrator::onSweepStep()
     // Sample the value currently applied (already settled).
     recordPoint(m_sweepValue);
 
-    const int span = std::max(1, m_sweepStart);
-    const int done = m_sweepStart - m_sweepValue;
-    emit progress(m_sweepValue, static_cast<int>(100.0 * done / span));
+    // The range is 0..100, so the distance swept is the percentage done.
+    emit progress(m_sweepValue, m_sweepUp ? m_sweepValue : 100 - m_sweepValue);
 
-    if (m_sweepValue <= 0) {
+    // recompute() needs three points.
+    const bool reachedTarget = m_sweepUp && m_curve.size() >= 3
+        && currentRmsDb() >= m_targetDb;
+    if (reachedTarget || m_sweepValue == (m_sweepUp ? 100 : 0)) {
         finishSweep();
         return;
     }
-    m_sweepValue = std::max(0, m_sweepValue - kSweepStep);
+    m_sweepValue = m_sweepUp ? std::min(100, m_sweepValue + kSweepStep)
+                             : std::max(0, m_sweepValue - kSweepStep);
     applyValue(m_sweepValue);
     m_stepTimer.start(m_settleMs);
 }

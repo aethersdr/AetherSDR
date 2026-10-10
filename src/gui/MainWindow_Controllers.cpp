@@ -32,6 +32,7 @@
 #include "TitleBar.h"
 #include "models/SliceModel.h"
 #include "Ctr2ProxyApplet.h"
+#include "Ctr2AudioSpectrumFeeder.h"
 #include "models/Ctr2ProxyModel.h"
 
 #include <QHostAddress>
@@ -2630,6 +2631,22 @@ void MainWindow::setupCtr2Proxy()
             [pushRadio](bool) { pushRadio(); });
     connect(&m_radioModel, &RadioModel::infoChanged, m_ctr2ProxyModel, pushRadio);
     pushRadio();
+    // Controllers that negotiate it get the audio spectrum: the TX audio over
+    // the TX filter while transmitting, else the RX audio over the active
+    // slice's passband.
+    new Ctr2AudioSpectrumFeeder(m_ctr2ProxyModel, m_audio, [this] {
+        Ctr2AudioSpectrumFeeder::Source src;
+        const TransmitModel& tx = m_radioModel.transmitModel();
+        if (tx.isTransmitting()) {
+            src.transmitting = true;
+            src.filterLow = tx.txFilterLow();
+            src.filterHigh = tx.txFilterHigh();
+        } else if (const SliceModel* s = activeSlice()) {
+            src.filterLow = s->filterLow();
+            src.filterHigh = s->filterHigh();
+        }
+        return src;
+    }, this);
     if (m_appletPanel) {
         if (auto* applet = m_appletPanel->ctr2ProxyApplet()) {
             applet->setModel(m_ctr2ProxyModel);

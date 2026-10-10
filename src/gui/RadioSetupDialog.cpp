@@ -6,6 +6,7 @@
 #include "RttyDecodeSettings.h"
 #include "ScopedChildWidget.h"
 #include "GuardedSlider.h"
+#include "MixerControlAvailability.h"
 #include "ComboStyle.h"
 #include "DocsLinks.h"
 #include "SliceColorManager.h"
@@ -62,6 +63,7 @@
 #include <QTableWidgetItem>
 #include <QLabel>
 #include <QLineEdit>
+#include <QList>
 #include <QPushButton>
 #include <QSlider>
 #include <QComboBox>
@@ -2554,22 +2556,39 @@ QWidget* RadioSetupDialog::buildTxTab()
         auto* grid = new QGridLayout(group);
         grid->setSpacing(6);
 
+        QList<QLineEdit*> timingEdits;
         auto addTimingField = [&](int row, int col, const QString& label, int value) {
             auto* lbl = new QLabel(label);
             applyLabelStyle(lbl);
             grid->addWidget(lbl, row, col * 2);
             auto* edit = new QLineEdit(QString::number(value));
-            applyEditStyle(edit);
+            AetherSDR::ThemeManager::instance().applyStyleSheet(edit,
+                kEditStyleTemplate
+                + "QLineEdit:disabled { color: {{color.control.unavailable}}; }");
             edit->setFixedWidth(60);
+            edit->setAccessibleName(QString(label).remove(QLatin1Char(':')));
             grid->addWidget(edit, row, col * 2 + 1);
+            timingEdits.append(edit);
             return edit;
+        };
+
+        // `interlock set` is Flex wire text, and nothing else reads these
+        // fields: a connected radio with no command plane takes no timing from
+        // here. By hand, not ControlAvailabilityRegistry: command-plane
+        // reachability is not in RadioCapabilities.
+        const auto timingFieldsAvailable = [this] {
+            return !m_model->isConnected() || m_model->hasCommandPlane();
         };
 
         // Scale factor lets the same helper drive both 1:1 ms fields and
         // the seconds-displayed timeout field which the radio still
         // expects in ms (FlexLib Radio.cs:7463 — "in milliseconds").
         auto connectTimingField = [&](QLineEdit* edit, const QString& key, int scale = 1) {
-            connect(edit, &QLineEdit::editingFinished, this, [this, edit, key, scale] {
+            connect(edit, &QLineEdit::editingFinished, this,
+                    [this, edit, key, scale, timingFieldsAvailable] {
+                if (!timingFieldsAvailable()) {
+                    return;
+                }
                 int val = qMax(0, edit->text().toInt());
                 edit->setText(QString::number(val));
                 m_model->sendCommand(QString("interlock set %1=%2").arg(key).arg(val * scale));
@@ -2617,6 +2636,24 @@ QWidget* RadioSetupDialog::buildTxTab()
 
         for (auto* lbl : group->findChildren<QLabel*>())
             if (lbl->styleSheet().isEmpty()) applyLabelStyle(lbl);
+
+        // Last in the group: the lambda copies timingEdits, so every field
+        // has to exist before this point.
+        const auto applyTimingAvailability = [timingEdits, timingFieldsAvailable]() {
+            const bool available = timingFieldsAvailable();
+            const QString why = available
+                ? QString()
+                : tr("Unavailable: this radio does not accept transmit timings "
+                     "from here. No delay or timeout set here is applied.");
+            for (QLineEdit* edit : timingEdits) {
+                edit->setEnabled(available);
+                edit->setToolTip(why);
+                edit->setAccessibleDescription(why);
+            }
+        };
+        applyTimingAvailability();
+        connect(m_model, &RadioModel::connectionStateChanged, group,
+                applyTimingAvailability);
 
         vbox->addWidget(group);
     }
@@ -4725,6 +4762,31 @@ QWidget* RadioSetupDialog::buildAudioTab()
         m_model->setLineoutGain(v);
     });
     connect(lineoutMute, &QPushButton::toggled, m_model, &RadioModel::setLineoutMute);
+    // Dimmed, never hidden, on a radio with no line out of its own; re-applied
+    // live because this dialog can stay open across a reconnect.
+    auto applyLineoutAvailability = [this, lineoutLabel, lineoutSlider,
+                                     lineoutValue, lineoutMute] {
+        const bool available = AetherSDR::lineoutControlsAvailable(
+            m_model->isConnected(), m_model->hasCommandPlane(),
+            m_model->backendCapabilities().lineoutControl.has_value());
+        const QString reason = available
+            ? QString()
+            : QStringLiteral("Unavailable: this radio has no line out "
+                             "AetherSDR can control.");
+        for (QWidget* w : {static_cast<QWidget*>(lineoutLabel),
+                           static_cast<QWidget*>(lineoutSlider),
+                           static_cast<QWidget*>(lineoutValue),
+                           static_cast<QWidget*>(lineoutMute)}) {
+            w->setEnabled(available);
+            w->setToolTip(reason);
+            w->setAccessibleDescription(reason);
+        }
+    };
+    applyLineoutAvailability();
+    connect(m_model, &RadioModel::connectionStateChanged, lineoutMute,
+            applyLineoutAvailability);
+    connect(m_model, &RadioModel::capabilitiesChanged, lineoutMute,
+            applyLineoutAvailability);
 
     // Headphone
     auto* hpRow = new QHBoxLayout;

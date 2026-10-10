@@ -263,9 +263,13 @@ private:
             end(text, error, error);
         });
 
-        // One UDP socket per link: the radio learns this endpoint from the
-        // CTR2's own registration datagram, so its UDP never reaches
-        // AetherSDR's sockets and no port needs negotiating.
+        // One UDP socket per link, so the radio's UDP for the controller never
+        // reaches AetherSDR's own sockets. On a LAN the radio sends to the TCP
+        // peer's address (this PC) at the port the client names with
+        // `client udpport`, and it ignores `client udp_register` (verified on
+        // a FLEX-8600, firmware 4.2.18). A device that negotiated
+        // RelayUdpPort is told this socket's port right after READY, so it
+        // can name it; others can only register by datagram.
         // Bound to the interface that reaches the radio, not every interface.
         m_udp = new QUdpSocket(this);
         if (!m_udp->bind(m_radio->localAddress(), 0)) {
@@ -276,7 +280,7 @@ private:
             connect(m_udp, &QUdpSocket::readyRead, this, [this] { onRadioDatagrams(); });
         }
 
-        m_owner->sessionConnected(m_generation);
+        m_owner->sessionConnected(m_generation, m_udp ? m_udp->localPort() : 0);
         if (!m_ended) {
             m_relay->start();
         }
@@ -395,9 +399,12 @@ bool Ctr2UsbRelay::start(Ctr2HidPort* port, const QHostAddress& radioAddress, qu
     connect(m_port, &Ctr2HidPort::reportsReceived, this, &Ctr2UsbRelay::onReportsReceived);
     connect(m_port, &Ctr2HidPort::reportsSent, this, &Ctr2UsbRelay::onReportsSent);
     connect(m_port, &Ctr2HidPort::failed, this, &Ctr2UsbRelay::onPortFailed);
+    connect(m_port, &Ctr2HidPort::extensionsNegotiated, this,
+            &Ctr2UsbRelay::onExtensionsNegotiated);
     m_radioAddress = QHostAddress(radioAddress.toIPv4Address());
     m_radioPort = radioPort;
     m_rx.reset();
+    m_rx.setExtensions(m_port->extensions());
     m_tx.reset();
     m_reportCosts.clear();
     m_unsentPayload = 0;
@@ -571,6 +578,10 @@ void Ctr2UsbRelay::onMessage(const Message& message)
             scheduleHello(m_helloDelayMs);
         }
         return;
+    case MessageType::AudioSpectrum:
+    case MessageType::RelayUdpPort:
+        // Host-to-device only; a device has nothing to tell the host with these.
+        return;
     case MessageType::Ready:
         // The CTR2's answer to a HELLO sent since the last link ended. Any
         // other READY is a late answer to an earlier HELLO and changes nothing:
@@ -718,13 +729,63 @@ bool Ctr2UsbRelay::sendDatagram(quint16 port, const QByteArray& datagram)
     return true;
 }
 
-void Ctr2UsbRelay::sessionConnected(quint64 generation)
+quint32 Ctr2UsbRelay::extensions() const
+{
+    return m_port ? m_port->extensions() : 0;
+}
+
+void Ctr2UsbRelay::onExtensionsNegotiated(quint32 extensions)
+{
+    m_rx.setExtensions(extensions);
+    if (extensions) {
+        qCInfo(lcDevices) << "CTR2 USB:" << deviceDescription() << "link extensions"
+                          << Qt::hex << extensions;
+    }
+    emit extensionsChanged(extensions);
+}
+
+bool Ctr2UsbRelay::sendAudioSpectrum(const QByteArray& payload)
+{
+    const quint32 bit = ctr2hid::capabilityBit(MessageType::AudioSpectrum);
+    // The link moves about one report per millisecond. One meter datagram
+    // alone can take ~60 reports, so allow that plus headroom (~130 ms);
+    // beyond it a frame would be stale on arrival and would crowd the radio.
+    constexpr size_t kMaxQueuedReportsForSpectrum = 128;
+    if (!m_port || m_state != State::Relaying || !(m_port->extensions() & bit)
+        || m_reportCosts.size() > kMaxQueuedReportsForSpectrum) {
+        return false;
+    }
+    std::vector<ctr2hid::Report> reports;
+    if (!m_tx.encodeExtension(MessageType::AudioSpectrum, payload, &reports)) {
+        return false;
+    }
+    for (size_t i = 0; i < reports.size(); ++i) {
+        m_reportCosts.push_back({});
+    }
+    m_port->send(reports);
+    return true;
+}
+
+void Ctr2UsbRelay::sessionConnected(quint64 generation, quint16 udpPort)
 {
     if (generation != m_generation) {
         return;
     }
     m_tx.reset();
     sendControl(MessageType::Ready);
+    const quint32 relayPortBit = ctr2hid::capabilityBit(MessageType::RelayUdpPort);
+    if (udpPort && m_port && (m_port->extensions() & relayPortBit)) {
+        std::vector<ctr2hid::Report> reports;
+        QByteArray payload;  // not QByteArray{hi, lo}: that is the (size, fill) constructor
+        payload.append(static_cast<char>(udpPort >> 8));
+        payload.append(static_cast<char>(udpPort & 0xFF));
+        if (m_tx.encodeExtension(MessageType::RelayUdpPort, payload, &reports)) {
+            for (size_t i = 0; i < reports.size(); ++i) {
+                m_reportCosts.push_back({});
+            }
+            m_port->send(reports);
+        }
+    }
     qCInfo(lcDevices) << "CTR2 USB: READY; relaying" << deviceDescription()
                       << "<->" << radioDescription();
     setState(State::Relaying);
