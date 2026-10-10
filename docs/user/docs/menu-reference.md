@@ -192,6 +192,8 @@ The speaker icon and master slider show the path you are actually hearing:
 
 With PC Audio off, a Line Out change made by another client (or in Radio Setup) shows up here too. See [Audio Settings](./audio-settings.md).
 
+On a radio with no Line Out AetherSDR can control (Hermes-Lite 2, Icom, RTL-SDR), the speaker mutes only this computer's output; with PC Audio off too, the click is refused with a notice.
+
 ### Per platform
 
 | Platform | Window frame and controls |
