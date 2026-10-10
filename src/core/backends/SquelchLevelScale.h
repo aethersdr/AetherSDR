@@ -59,7 +59,9 @@ struct SquelchLevelScale {
 // line and Auto SQL keep the behaviour they always had (#6127).
 [[nodiscard]] inline SquelchLevelScale legacyDbmSquelchScale()
 {
-    return SquelchLevelScale{-160.0, 1.0, {}, true};
+    // offsetDb, dbPerStep, modes, autoSquelch, unit, modesExclusive: every
+    // member is listed, since a shorter list warns in each includer.
+    return SquelchLevelScale{-160.0, 1.0, {}, true, {}, false};
 }
 
 // The published record as it applies to a slice in `mode`: nullopt when the
