@@ -4818,23 +4818,30 @@ QWidget* RadioSetupDialog::buildAudioTab()
     connect(hpMute, &QPushButton::toggled, m_model, &RadioModel::setHeadphoneMute);
 
     // Dimmed, never hidden, on a radio with no headphone output: the title
-    // bar's predicate (MixerControlAvailability.h) and its slider's reason.
+    // bar's predicate (MixerControlAvailability.h) and its two reasons, one
+    // for the level and one for the mute.
     auto applyHeadphoneAvailability = [this, hpLabel, hpSlider, hpValue, hpMute] {
         const bool available = AetherSDR::headphoneControlsAvailable(
             m_model->isConnected(), m_model->hasCommandPlane());
-        const QString reason = available
+        const QString prefix = QStringLiteral(
+            "Unavailable: this radio has no headphone output. "
+            "Its audio plays on this computer; ");
+        const QString levelReason = available
             ? QString()
-            : QStringLiteral("Unavailable: this radio has no headphone output. "
-                             "Its audio plays on this computer; set its level "
-                             "with the master volume slider.");
+            : prefix + QStringLiteral("set its level with the master volume slider.");
+        const QString muteReason = available
+            ? QString()
+            : prefix + QStringLiteral("mute it with the speaker button.");
         for (QWidget* w : {static_cast<QWidget*>(hpLabel),
                            static_cast<QWidget*>(hpSlider),
-                           static_cast<QWidget*>(hpValue),
-                           static_cast<QWidget*>(hpMute)}) {
+                           static_cast<QWidget*>(hpValue)}) {
             w->setEnabled(available);
-            w->setToolTip(reason);
-            w->setAccessibleDescription(reason);
+            w->setToolTip(levelReason);
+            w->setAccessibleDescription(levelReason);
         }
+        hpMute->setEnabled(available);
+        hpMute->setToolTip(muteReason);
+        hpMute->setAccessibleDescription(muteReason);
     };
     applyHeadphoneAvailability();
     connect(m_model, &RadioModel::connectionStateChanged, hpMute,

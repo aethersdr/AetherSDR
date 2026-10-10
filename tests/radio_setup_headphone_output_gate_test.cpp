@@ -130,13 +130,24 @@ bool rowHasNoReason(const OutputRow& r)
     return true;
 }
 
-bool announcesReason(QWidget* w)
+// The title bar's two sentences (TitleBar::setHeadphoneAvailable), verbatim.
+const QString kLevelReason = QStringLiteral(
+    "Unavailable: this radio has no headphone output. Its audio plays on "
+    "this computer; set its level with the master volume slider.");
+const QString kMuteReason = QStringLiteral(
+    "Unavailable: this radio has no headphone output. Its audio plays on "
+    "this computer; mute it with the speaker button.");
+
+bool announces(QWidget* w, const QString& reason)
 {
-    const QString d = w->accessibleDescription();
-    return d.startsWith(QLatin1String("Unavailable:"))
-        && d.contains(QLatin1String("no headphone output"))
-        && d.contains(QLatin1String("master volume"))
-        && w->toolTip() == d;
+    return w->accessibleDescription() == reason && w->toolTip() == reason;
+}
+
+// Label, slider and value say how to set the level; the mute says how to mute.
+bool rowAnnouncesItsReasons(const OutputRow& r)
+{
+    return announces(r.label, kLevelReason) && announces(r.slider, kLevelReason)
+        && announces(r.value, kLevelReason) && announces(r.mute, kMuteReason);
 }
 
 } // namespace
@@ -164,8 +175,8 @@ private slots:
         QVERIFY2(hp.slider->isVisible() && hp.mute->isVisible(), "dimmed, never hidden");
 
         QVERIFY2(rowDimmed(hp), "HL2: the whole Headphone row is dimmed");
-        QVERIFY2(announcesReason(hp.slider), "slider announces the reason");
-        QVERIFY2(announcesReason(hp.mute), "mute announces the reason");
+        QVERIFY2(rowAnnouncesItsReasons(hp),
+                 "level widgets and mute each carry the title bar's sentence");
         QCOMPARE(hp.slider->value(), gain);
         QCOMPARE(hp.mute->isChecked(), muted);
         QCOMPARE(model.headphoneGain(), gain);
@@ -186,6 +197,7 @@ private slots:
         RadioModel model;
         NoCommandPlaneBackend* backend = installConnected(model, QStringLiteral("anan"));
         QVERIFY2(backend->caps.family == QLatin1String("anan"), "real ANAN capabilities read");
+        QVERIFY2(model.isConnected(), "the injected radio reports connected");
         QVERIFY2(!model.hasCommandPlane(), "ANAN has no command plane");
 
         RadioSetupDialog dialog(&model);
@@ -197,6 +209,7 @@ private slots:
         QVERIFY2(line.label && line.slider && line.value && line.mute, "Line Out row found");
 
         QVERIFY2(rowDimmed(hp), "ANAN: the Headphone row is dimmed");
+        QVERIFY2(rowAnnouncesItsReasons(hp), "ANAN: the same two sentences");
         QVERIFY2(backend->caps.lineoutControl.has_value(), "ANAN declares a line out");
         QVERIFY2(rowLive(line), "ANAN: Line Out stays live");
         QVERIFY2(rowHasNoReason(line), "ANAN: Line Out carries no reason");
