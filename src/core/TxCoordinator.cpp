@@ -873,6 +873,25 @@ unsigned TxCoordinator::activeActivities(const Operation& operation) const
     return activities;
 }
 
+std::vector<TxCoordinator::Intent> TxCoordinator::intents(const Operation& operation,
+                                                          unsigned activities) const
+{
+    std::vector<Intent> found;
+    if (!onThread()) {
+        return found;
+    }
+    for (const std::shared_ptr<IntentState>& state : m_intents) {
+        if (state->operation.sameOperation(operation)
+            && (activities & static_cast<unsigned>(state->activity))
+            && !state->ended.load(std::memory_order_acquire)) {
+            Intent intent;
+            intent.m_state = state;
+            found.push_back(intent);
+        }
+    }
+    return found;
+}
+
 void TxCoordinator::endIntents(const Operation& operation)
 {
     std::erase_if(m_intents, [&operation](const std::shared_ptr<IntentState>& intent) {

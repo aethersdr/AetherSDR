@@ -251,7 +251,14 @@ under the exact radio scope, indexed by pan slot. Slider/scroll, clone and reset
 intents save it; pan wiring restores it before seeding the local rate shaper.
 Radio publications and adaptive throttle caps never write that document. Flex
 radio-owned cadence continues to use readback and is never restored from this
-client feature. Both documents use atomic radio-feature writes, retain unrelated
+client feature. FFT FPS (`fftFps`) and the pan's dBm range (`dbmRanges`) live in
+the same document, each only where the backend declares the client its
+persistence owner (`RadioCapabilities::clientPersistsPanFrameRate()`,
+`clientPersistsDbmRange()`). An Icom declares neither: its FFT FPS is not
+stored, and its range is published from the scope calibration
+(`panRangeChanged`), which a stored copy would fight. The two tables were added without a schema
+bump; each is optional and every writer is read-modify-write on the whole
+document. Both documents use atomic radio-feature writes, retain unrelated
 fields, reject invalid values and refuse unknown identities or future schemas.
 UI edits coalesce within 250 ms, capturing their original scope and values.
 Pending writes flush on disconnect, owner teardown and normal application quit;
@@ -1197,7 +1204,17 @@ two commands on Icom, not one. Legacy profiles retain the shared PROC preset
 surface; a model profile may expose an evidenced continuous COMP level:
 `16 44` controls on/off and `14 0E` (0000–0255 ⇒ 0–10) is the level register.
 Legacy profiles map that register to the three shared PROC presets; the IC-9700
-profile maps it bidirectionally to the continuous 0–100 COMP percentage.
+profile maps it bidirectionally to the continuous 0–100 COMP percentage; the
+IC-7300MK2 and IC-705 profiles map it to the radio's own COMP steps 0–10 (the IC-705 from its guide's `0000=0 ~ 0255=10`, with the MK2's bin readback assumed until validated on a live IC-705). The MK2 does not
+echo the raw it was sent: it splits 0–255 into eleven bins of 256/11, keeps the
+bin, and answers with the bin's centre, `floor((step + 0.5) · 256 / 11)` (live
+write → readback: `0000` → `0011`, `0076` → `0081`, `0153` → `0151`, `0255` →
+`0244`; a held `0221` is step 9). The readback therefore decodes by bin,
+`raw · 11 / 256`, not by the guide's linear `raw · 10 / 255`, which floors
+`0151` to 5 and leaves `0244` one count from step 9. Both directions use the
+profile's maximum (`speechProcessorRawLevel` / `speechProcessorLevelFromRaw`); a
+percent readback into a preset-domain model clamped every non-zero read to the
+top step.
 
 ### C.4 RIT / XIT (`21 xx`) — entirely unmapped
 
@@ -1289,7 +1306,7 @@ their own right (CERTIFICATION.md §1.29):
 | | NR | ✅ **verified** — `16 40 01` + `14 06 01 53` (60 % = 153) |
 | | NB | ✅ **verified** — `16 22 01` + `14 12 01 40` (55 % = 140) |
 | | ANF | ✅ **verified** — `16 41 01` |
-| | squelch | ✅ **verified** — `14 03 01 02` (40 % = 102). No enable exists: the threshold IS the control and off is zero |
+| | squelch | ✅ **verified** — `14 03 01 02` (40 % = 102). No enable exists: the threshold IS the control. Off writes zero; a zero readback is off unless it echoes AetherSDR's own on-at-0 write, and an off readback publishes no level, so the remembered manual threshold survives (#6172) |
 | | manual notch | ✅ `setSliceManualNotch` (`16 48` + `14 0D`); state is polled |
 | | FM repeater TONE + frequency | ✅ **live-verified on IC-705** — `16 42` + `1B 00`; radio readback owns the control |
 | | FM duplex + offset | ✅ **live-verified on IC-705** — `0F 10/11/12` + `0C`/`0D`; local-memory recall verified for `+`, `-`, and simplex/off |

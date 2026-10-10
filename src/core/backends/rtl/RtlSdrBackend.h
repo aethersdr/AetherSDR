@@ -13,6 +13,7 @@
 #include <QHash>
 #include <QString>
 #include <QTimer>
+#include <QElapsedTimer>
 #include <QVector>
 
 // librtlsdr forward
@@ -73,9 +74,14 @@ public:
     void setPanAverage(const QString& panId, int average) override;
     void setPanWeightedAverage(const QString& panId, bool on) override;
     void setSliceAudioMute(int sliceId, bool mute) override;
+    ReceiveDispatch requestSliceAudio(int sliceId, const SliceAudioRequest& request) override;
+    ReceiveDispatch requestSliceWfm(int sliceId, const SliceWfmRequest& request) override;
+    ReceiveDispatch requestSliceSquelch(int sliceId, const SliceSquelchRequest& request) override;
     void setSliceAudioGain(int sliceId, int gainPercent) override;
     void setSliceAudioPan(int sliceId, int panPercent) override;
     void setSliceSquelch(int sliceId, bool enabled, int level) override;
+    void setSliceWfmDeemphasis(int sliceId, int microseconds) override;
+    void setSliceWfmForceMono(int sliceId, bool forceMono) override;
     void setKeying(bool key, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {}) override;
     void invokeExtension(const QString& ns, const QString& verb,
                          quint64 requestId, const QVariant& arg = {}) override;
@@ -102,6 +108,9 @@ public:
 
 private:
     bool hasAcceptedSlice(int sliceId) const;
+    friend struct RtlSdrBackendTestAccess;
+    // Relay the current worker's token-qualified outputs to the seam once.
+    void wireWorker();
     // Emit the initial snapshot a freshly-connected device would report.
     void emitInitialState();
 
@@ -109,6 +118,7 @@ private:
     int deviceIndexFromParams(const QVariantMap& params) const;
     QString serialFromParams(const QVariantMap& params) const;
     friend struct RtlCaptureBackendTestAccess;
+    RtlCaptureTransaction::Receiver initialReceiver() const;
     void startCapture(std::unique_ptr<RtlSdrWorker> worker);
     void serviceCapture();
     bool requestCapture(const RtlCaptureTransaction::Desired& desired,
@@ -116,6 +126,8 @@ private:
                         bool fromDrag = false);
     void publishCapture();
     void drainAudio();
+    void observeWfm(const RtlReceivePipeline::Packet& packet);
+    void expireWfmObservations();
     void publishLegacyPcm(const QByteArray& pcm, const QByteArray& preMonitor);
     void retireNativeAudio();
     void emitSliceState(const RtlCaptureTransaction::Receiver& receiver);
@@ -213,6 +225,17 @@ private:
 
     // Worker thread (owns async USB reader & RtlSdrDdc engine)
     std::unique_ptr<RtlSdrWorker> m_worker;
+    std::array<WfmStereoStatus, 8> m_wfmStatus{};
+    std::array<QElapsedTimer, 8> m_wfmObservationAge;
+    std::array<QElapsedTimer, 8> m_wfmPublicationAge;
+    std::array<WfmReceptionDiagnostics, 8> m_wfmReception;
+    struct WfmObservationIdentity {
+        std::uint64_t instance = 0;
+        std::uint64_t epoch = 0;
+        std::uint32_t sequence = 0;
+        bool operator==(const WfmObservationIdentity&) const = default;
+    };
+    std::array<std::optional<WfmObservationIdentity>, 8> m_wfmLastObservation;
     RtlReceivePipeline::Diagnostics m_diagnostics; // owner-thread health cache
     RtlSdrDdc* ddc();
 };

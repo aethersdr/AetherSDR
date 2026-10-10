@@ -1,8 +1,8 @@
 #include "PanadapterApplet.h"
+#include "PanSliceTitle.h"
 #include "models/CwRxModel.h"
 #include "RttyDecodeSettings.h"
 #include "RttyDecoderSensitivity.h"
-#include "CallsignCard.h"
 #ifdef AETHER_ASR_ENABLED
 #include "CopyAssistPanel.h"
 #endif
@@ -101,7 +101,7 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
     AetherSDR::ThemeManager::instance().applyStyleSheet(grip, "QLabel { background: transparent; color: {{color.text.label}}; font-size: 10px; }");
     barLayout->addWidget(grip);
 
-    m_titleLabel = new QLabel("Slice A");
+    m_titleLabel = new QLabel;
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_titleLabel, "QLabel { background: transparent; color: {{color.text.secondary}}; "
                                 "font-size: 10px; font-weight: bold; }");
     m_titleLabel->setTextFormat(Qt::RichText);  // slice letter may be HTML (#2606)
@@ -369,25 +369,7 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
         menu->exec(m_cwText->mapToGlobal(pos));
         delete menu;
     });
-    // Decoded text + contact card side by side.  The card stays hidden
-    // until the QRZ wiring spots a station identifying itself in the RX
-    // stream ("DE <call> <call>") and fills it with the lookup result.
-    auto* cwTextRow = new QHBoxLayout;
-    cwTextRow->setContentsMargins(0, 0, 0, 0);
-    cwTextRow->setSpacing(4);
-    cwTextRow->addWidget(m_cwText, 1);
-    m_cwCallsignCard = new CallsignCard(CallsignCard::Variant::Compact, m_cwPanel);
-    m_cwCallsignCard->setCloseButtonVisible(true);
-    m_cwCallsignCard->setMinimumWidth(240);
-    m_cwCallsignCard->setMaximumWidth(320);
-    // Cap the height so the card stays card-shaped (not a full-height
-    // sidebar) when the operator drags the decode panel tall.
-    m_cwCallsignCard->setMaximumHeight(120);
-    m_cwCallsignCard->setVisible(false);
-    connect(m_cwCallsignCard, &CallsignCard::closeRequested,
-            m_cwCallsignCard, &QWidget::hide);
-    cwTextRow->addWidget(m_cwCallsignCard, 0, Qt::AlignTop);
-    cwLayout->addLayout(cwTextRow);
+    cwLayout->addWidget(m_cwText, 1);
 
 
     m_cwPanel->hide();
@@ -676,18 +658,45 @@ void PanadapterApplet::setFloatingState(bool floating)
 
 void PanadapterApplet::setSliceId(int id, const QString& perClientLetter)
 {
+    m_titleSliceId = id;
     m_titleLabel->setText(
         QString("Slice %1").arg(SliceLabel::richText(id, perClientLetter)));
+    const QString title =
+        QString("Slice %1").arg(SliceLabel::unicodeForm(id, perClientLetter));
+    if (title != m_sliceTitle) {
+        m_sliceTitle = title;
+        emit sliceTitleChanged();
+    }
+}
+
+void PanadapterApplet::setPanId(const QString& id)
+{
+    if (id == m_panId)
+        return;
+    m_panId = id;
+    if (m_titleSliceId < 0) {
+        m_titleLabel->setText(
+            PanSliceTitle::displayName(QString(), m_panId).toHtmlEscaped());
+        // A pan with no slice is named by its id, so the floating title
+        // follows the id too (the placeholder taking over the first real pan).
+        emit sliceTitleChanged();
+    }
 }
 
 void PanadapterApplet::clearSliceTitle()
 {
-    m_titleLabel->clear();
+    m_titleSliceId = -1;
+    m_titleLabel->setText(
+        PanSliceTitle::displayName(QString(), m_panId).toHtmlEscaped());
+    if (!m_sliceTitle.isEmpty()) {
+        m_sliceTitle.clear();
+        emit sliceTitleChanged();
+    }
 }
 
 QString PanadapterApplet::sliceTitle() const
 {
-    return m_titleLabel->text();
+    return m_sliceTitle;
 }
 
 void PanadapterApplet::setCwPanelVisible(bool visible)
@@ -822,6 +831,19 @@ int PanadapterApplet::pitchRangeHigh() const
     return m_pitchRangeSlider ? m_pitchRangeSlider->high() : 700;
 }
 
+QString PanadapterApplet::cwCostColor(float cost)
+{
+    // Color by confidence: lower cost = higher confidence
+    //   < 0.15  green   (high confidence)
+    //   < 0.35  yellow  (medium)
+    //   < 0.60  orange  (meh)
+    //   >= 0.60 red     (low confidence)
+    if (cost < 0.15f) { return QStringLiteral("#00ff88"); }
+    if (cost < 0.35f) { return QStringLiteral("#e0e040"); }
+    if (cost < 0.60f) { return QStringLiteral("#ff9020"); }
+    return QStringLiteral("#ff4040");
+}
+
 void PanadapterApplet::appendCwText(const QString& text, float cost)
 {
 #ifdef HAVE_DEEPFIST
@@ -835,16 +857,7 @@ void PanadapterApplet::appendCwText(const QString& text, float cost)
     QString clean = text;
     clean.replace('\n', ' ');
 
-    // Color by confidence: lower cost = higher confidence
-    //   < 0.15  green   (high confidence)
-    //   < 0.35  yellow  (medium)
-    //   < 0.60  orange  (meh)
-    //   >= 0.60 red     (low confidence)
-    QString color;
-    if (cost < 0.15f)      color = "#00ff88";
-    else if (cost < 0.35f) color = "#e0e040";
-    else if (cost < 0.60f) color = "#ff9020";
-    else                   color = "#ff4040";
+    const QString color = cwCostColor(cost);
 
     m_cwText->moveCursor(QTextCursor::End);
     // Switching back from TX → RX inserts a separator space so the [TX]
@@ -911,7 +924,27 @@ void PanadapterApplet::appendUnscoredCwText(const QString& text)
     QTextCursor cursor = m_cwText->textCursor();
     cursor.insertText(clean, format);
     m_cwText->moveCursor(QTextCursor::End);
-    // DeepFist does not provide a calibrated ggmorse confidence score.
+    // For a backend that reports no per-letter score.
+}
+void PanadapterApplet::appendColoredCwText(const QString& text, float cost)
+{
+    // The cost is 1 - the backend's own per-letter posterior. It picks the
+    // color (ggmorse's four bands, as theme tokens) and is never compared
+    // with the Sens threshold, which is on ggmorse's scale.
+    QString clean = text;
+    clean.replace('\n', ' ');
+    m_cwText->moveCursor(QTextCursor::End);
+    if (m_lastCwTextSource == CwTextSource::Tx) { m_cwText->insertPlainText(" "); }
+    m_lastCwTextSource = CwTextSource::Rx;
+    QTextCharFormat format;
+    const QString band = cost < 0.15f ? QStringLiteral("high")
+        : cost < 0.35f ? QStringLiteral("medium")
+        : cost < 0.60f ? QStringLiteral("fair") : QStringLiteral("low");
+    format.setForeground(AetherSDR::ThemeManager::instance().color(
+        m_cwText, QStringLiteral("color.cw.confidence.") + band));
+    QTextCursor cursor = m_cwText->textCursor();
+    cursor.insertText(clean, format);
+    m_cwText->moveCursor(QTextCursor::End);
 }
 #endif
 

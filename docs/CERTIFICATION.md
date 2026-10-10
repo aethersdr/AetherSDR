@@ -6,6 +6,11 @@ after the fact — which is the point of the tool, and a useful check on it: som
 of what follows is a defect radiocert found, and some is a gap in radiocert
 itself that only a second radio could expose.
 
+**1.41–1.43 came from the IC-7300MK2's PROC, squelch, front-end and SQL-line
+fixes** (#6174, #6175, #6183, #6184). Each was a backend that agreed with its own
+tests; each now has a `radiocert meters` stage, and the first two a persist
+contract, that fails against the unfixed code on the radio.
+
 **1.37–1.40 came from returning to the Hermes-Lite 2** on 2026-08-10 and running
 `radiocert meters` against it after the Icom work had reshaped the tool. All
 four are defects in the *tool*, not the radio, and all four are shapes this
@@ -797,6 +802,85 @@ retired the *spatial* form of this failure (a gate asserting something about the
 wrong radio); this is the *temporal* form, and it is harder to catch precisely
 because the assertion was true when it was written and is about the right radio.
 
+### 1.41 A scaled control reads back where it was written, across its whole range
+
+Two IC-7300MK2 controls broke in the same way, and each had a round-trip test
+that passed:
+
+* **PROC (#6174).** The backend wrote NOR/DX/DX+ as raw 76/153/229 and decoded
+  the confirmation read as a 0–100 percent, clamped to the published maximum 2.
+  NOR and DX snapped to DX+ on their own readback; DX+ held. A probe that only
+  tried the top of the range would have certified it.
+* **Squelch (#6175).** An Icom has no squelch enable: "on at threshold 0" writes
+  `0000`. The decode derived `on = level > 0`, so the radio's echo of our own
+  write published Off, the MK2's 3 s poll re-asserted it, and SQL Manual could
+  not be entered again. A sample of the level alone reads 0 back and certifies
+  the defect.
+
+Both are §1.1 one layer down: the encoder and the decoder agreed with their own
+tests and not with each other.
+
+**Consequence.** `stage-control-domain` writes every published value through the
+operator's setter (every step for a range of ten or less, else both ends, their
+neighbours and the quarters) and watches the model until the radio has answered.
+The ends are held through two periodic polls, because the boundary is where both
+defects lived. The sample carries the enable as well as the level. It waits for
+agreement, then fails on any later departure; a write never read back is a
+failure too. A model that never reads back also holds, so this proves only that
+no contradicting readback arrived. The independent half is persist's restart:
+after a relaunch the connect-time read is the only writer
+(`tools/radiocert_persist_controls.py`).
+
+### 1.42 A control the radio changes on its own must show at once
+
+The MK2 links its front-end stages: ATT on drops the preamp, preamp on drops ATT,
+ATT off restores the preamp. It reports none of this unsolicited, and the backend
+confirmed only the stage it wrote, so the other button kept its old position until
+the next 3 s poll (#6183).
+
+The trap for a check is the poll phase. Before the fix, one ATT → OFF transition
+measured 0.8 s, inside a generous budget, because the poll happened to land early.
+
+**Consequence.** `stage-front-end-interlock` runs five transitions from a known
+start (both stages off) and times when the stage *not* written reached its final
+value. Over 0.5 s is a concern: a read queued behind the write lands in ~0.2 s,
+and a poll lands anywhere up to 3 s. Against the reverted fix, three of four
+coupled changes were flagged and the fourth was early by luck — which is the
+reason for several transitions. No coupled change at all is reported, not judged:
+not every radio interlocks.
+
+### 1.43 The SQL line is checked against the gate, not against itself
+
+The SQL line and Auto SQL both read one published record, so nothing in the client
+can disagree with it. The Icom backend published Flex's `−160 + level`; the MK2
+gates at about `−195 + 1.5·level` on its pan, 7–10 dB away at the levels squelch
+is used at (#6184).
+
+**Consequence.** `stage-squelch-scale` finds the gate by its effect: it parks the
+dial 1.5 kHz below a steady carrier (`sql=<MHz>`), binary-searches the lowest level
+at which the operator's audio drops 20 dB, confirms it with a one-level bracket,
+and compares the line there with the carrier's pan peak. Three details came from
+running it:
+
+* **Bracket, not repeat.** At the gate the carrier sits on the threshold and the
+  gate chatters: closed, then open 6 dB down, at the same level. Requiring an
+  exact repeat declined good measurements.
+* **Below S9 only.** At 1480 kHz with P.AMP1 (−64 dBm) both scales landed within
+  6 dB of the gate. Above S9 a wrong scale passes too, so the stage declines.
+* **A fading carrier declines.** Night medium-wave moved 25 dB within one search;
+  the bracket failed and the stage said so. Use a groundwave carrier, or the
+  attenuator in front of a strong steady one.
+
+Both squelch stages decline while the operator's Auto SQL is engaged. Auto
+rewrites the slice on every pan frame, and its writes land on one level and hold,
+exactly like a decode in the wrong domain, so a sweep under it would report a
+confident, fabricated defect. The intent lives only in the RX applet, so the bridge
+reads the applet's SQL button and the report says when it could not.
+
+Where Auto SQL is published, the stage also finds the band-noise gate 10 kHz off
+the carrier. Auto picks pan floor + 5…20 dB, so a noise gate more than 20 dB above
+the floor means Auto leaves the noise open.
+
 ## 2. Next steps
 
 ### 2.1 The radio profile — highest leverage
@@ -1010,13 +1094,18 @@ need:
    then make an external radio-side change and allow two poll periods for
    wire → model → widget convergence. Repeat representative values after a full
    application restart.
-6. **Establish the TX safety envelope before keying.** Assert the exact live
+6. **`radiocert meters` with TX off, then `radiocert_persist_controls.py`.**
+   With bridge TX permission off every key is refused, and the three non-keying
+   stages still run: control readback over each published range, the front-end
+   interlock, and the SQL line against the gate on a steady sub-S9 carrier
+   (`sql=<MHz>`). Persist then repeats the readback across a restart.
+7. **Establish the TX safety envelope before keying.** Assert the exact live
    dummy-load port, tuner bypass, frequency/mode, Tune Power and RF Power, a
    percentage ceiling, a physical-watt ceiling, fresh calibrated telemetry,
    and an unconditional unkey watchdog.
-7. **`radiocert tx`** — keys. Modulation, sideband, lifecycle. Begin at the
+8. **`radiocert tx`** — keys. Modulation, sideband, lifecycle. Begin at the
    lowest authorized drive and stop on the first safety exception.
-8. **`radiocert meters`** — keys. Check the instruments against known stimuli,
+9. **`radiocert meters`** — keys. Check the instruments against known stimuli,
    including the actual gauge at startup, while keyed, immediately after unkey,
    and after late replies could arrive.
 

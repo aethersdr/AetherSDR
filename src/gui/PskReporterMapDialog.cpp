@@ -1,7 +1,9 @@
 #include "PskReporterMapDialog.h"
 #include "GuardedSlider.h"
 #include "PskBeaconLevelPolicy.h"
+#include "CanonIndicators.h"
 #include "ComboStyle.h"
+#include "FramelessResizer.h"
 
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
@@ -191,6 +193,158 @@ QString bandName(qint64 freqHz)
     return QStringLiteral("VHF+");
 }
 
+// The style guide's canon vocabulary (RFC #6226), as Network Diagnostics uses
+// it: everything is transparent over CanonWindow's ground except the surfaces
+// that hold content. Each sidebar section is a raised card; fields sit on
+// control; selection and focus are canon cyan. The map itself paints its own.
+constexpr const char* kAetherMapStyle = R"(
+QWidget {
+    color: {{color.canon.inkSoft}};
+    background: transparent;
+}
+QLabel {
+    background: transparent;
+}
+QMenu,
+QComboBoxPrivateContainer {
+    background: {{color.canon.raised}};
+}
+QGroupBox {
+    background: {{color.canon.raised}};
+    border: 1px solid {{color.canon.line}};
+    border-radius: 10px;
+    margin-top: 16px;
+    padding: 10px 8px 8px 8px;
+    font-weight: 700;
+}
+QGroupBox::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    left: 10px;
+    padding: 0 4px;
+    color: {{color.canon.muted}};
+}
+QCheckBox {
+    background: transparent;
+    color: {{color.canon.inkSoft}};
+    spacing: 8px;
+    font-weight: 400;
+}
+QPushButton,
+QToolButton {
+    color: {{color.canon.cyan}};
+    background: {{color.canon.control}};
+    border: 1px solid {{color.canon.lineHi}};
+    border-radius: 4px;
+    padding: 5px 12px;
+    font-weight: 600;
+}
+QPushButton:hover,
+QToolButton:hover {
+    background: {{color.canon.nested}};
+    color: {{color.canon.aqua}};
+}
+QPushButton:focus,
+QToolButton:focus {
+    border-color: {{color.canon.aqua}};
+}
+QPushButton:checked,
+QToolButton:checked {
+    color: {{color.canon.aqua}};
+    border-color: {{color.canon.aqua}};
+    background: {{color.canon.nested}};
+}
+QPushButton:disabled,
+QToolButton:disabled {
+    color: {{color.canon.muted}};
+    border-color: {{color.canon.line}};
+    background: transparent;
+}
+QLineEdit,
+QSpinBox,
+QDoubleSpinBox {
+    color: {{color.canon.ink}};
+    background: {{color.canon.control}};
+    border: 1px solid {{color.canon.lineHi}};
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-weight: 400;
+    selection-background-color: {{color.canon.cyan}};
+    selection-color: {{color.canon.onAccent}};
+}
+QLineEdit:focus,
+QSpinBox:focus,
+QDoubleSpinBox:focus {
+    border-color: {{color.canon.aqua}};
+}
+QSlider::groove:horizontal {
+    background: {{color.canon.control}};
+    border: 1px solid {{color.canon.lineHi}};
+    height: 4px;
+    border-radius: 2px;
+}
+QSlider::sub-page:horizontal {
+    background: {{color.canon.cyan}};
+    border-radius: 2px;
+}
+QSlider::handle:horizontal {
+    background: {{color.canon.ink}};
+    border: none;
+    width: 12px;
+    margin: -5px 0;
+    border-radius: 6px;
+}
+QSlider::sub-page:horizontal:disabled {
+    background: {{color.canon.line}};
+}
+QSlider::handle:horizontal:disabled {
+    background: {{color.canon.muted}};
+}
+QScrollArea {
+    background: transparent;
+    border: none;
+}
+QSplitter::handle {
+    background: transparent;
+}
+QScrollBar:vertical {
+    background: transparent;
+    width: 12px;
+    margin: 8px 2px 8px 2px;
+    border-radius: 6px;
+}
+QScrollBar::handle:vertical {
+    background: {{color.canon.lineHi}};
+    border-radius: 5px;
+    min-height: 34px;
+}
+QScrollBar::add-line:vertical,
+QScrollBar::sub-line:vertical {
+    height: 0px;
+}
+QScrollBar:horizontal {
+    background: transparent;
+    height: 12px;
+    margin: 2px 8px 2px 8px;
+    border-radius: 6px;
+}
+QScrollBar::handle:horizontal {
+    background: {{color.canon.lineHi}};
+    border-radius: 5px;
+    min-width: 34px;
+}
+QScrollBar::add-line:horizontal,
+QScrollBar::sub-line:horizontal {
+    width: 0px;
+}
+)";
+
+// A status token as "#rrggbb" for rich text, through the window's scope.
+QString statusHex(const QWidget* w, const char* token)
+{
+    return ThemeManager::instance().color(w, QLatin1String(token)).name();
+}
+
 // HF band-condition pill color, matching PropDashboardDialog's palette.
 QString bandConditionColor(const QString& condition)
 {
@@ -297,8 +451,7 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
                                            RadioModel* radioModel,
                                            PropForecastClient* propForecast,
                                            QWidget* parent)
-    : PersistentDialog(tr("PSK Reporter"),
-                       QStringLiteral("PskReporterMapGeometry"), parent)
+    : CanonWindow(QStringLiteral("AetherMap"), parent, Kind::Workspace)
     , m_audioEngine(audioEngine)
     , m_radioModel(radioModel)
     , m_client(new PskReporterClient(this))
@@ -308,11 +461,20 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
     // The callsign layer is MQTT-only. The independent all-stations client
     // owns the shared HTTP cadence and its reusable global cache.
     m_client->setHttpPollingEnabled(false);
-    setMinimumSize(720, 480);
+    theme::setContainer(this, QStringLiteral("canon/aetherMap"));
+    // Size and position persist under the key it used as a PersistentDialog,
+    // so saved geometry carries over; it resizes from every edge.
+    setGeometryKey(QStringLiteral("PskReporterMapGeometry"));
+    setMinimumSize(720, 520);
+    FramelessResizer::install(this);
+    applyCanonSheet(bodyWidget(), [] {
+        return QString::fromLatin1(kAetherMapStyle) + canonIndicatorRules();
+    });
 
     auto* root = new QVBoxLayout(bodyWidget());
-    root->setContentsMargins(6, 6, 6, 6);
-    root->setSpacing(6);
+    root->setContentsMargins(14, 12, 14, 14);
+    root->setSpacing(8);
+    root->addWidget(makeCanonHeader(QStringLiteral("AetherMap")));
 
     auto* reportsBox = new QGroupBox(tr("Reports"), bodyWidget());
     reportsBox->setAccessibleName(tr("PSK Reporter filters"));
@@ -919,6 +1081,7 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
     radarForm->addRow(m_weatherRadarFrameLabel);
     sections->addWidget(radarBox);
     sections->addStretch(1);
+    controls->setObjectName(QStringLiteral("pskReporterSidebarContent"));
     sidebar->setWidget(controls);
 
     auto* wheelGuard = new SidebarValueWheelGuard(sidebar);
@@ -1270,6 +1433,9 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
     connect(m_client, &PskReporterClient::connectionStateChanged,
             this, &PskReporterMapDialog::updateConnectionIndicator);
     connect(m_globalClient, &PskReporterClient::connectionStateChanged,
+            this, &PskReporterMapDialog::updateConnectionIndicator);
+    // The dot's colour is baked into rich text, so a theme change re-reads it.
+    connect(&ThemeManager::instance(), &ThemeManager::themeChanged,
             this, &PskReporterMapDialog::updateConnectionIndicator);
     updateConnectionIndicator();
 
@@ -2311,11 +2477,11 @@ void PskReporterMapDialog::updateConnectionIndicator()
                        || (callsignEnabled && m_client->sawError());
     QString color;
     if (!up) {
-        color = sawError ? QStringLiteral("#e74c3c")
-                         : QStringLiteral("#f4c20d");
+        color = sawError ? statusHex(this, "color.accent.danger")
+                         : statusHex(this, "color.accent.warning");
     } else {
-        color = hasData ? QStringLiteral("#2ecc71")
-                        : QStringLiteral("#f4c20d");
+        color = hasData ? statusHex(this, "color.accent.success")
+                        : statusHex(this, "color.accent.warning");
     }
 
     QStringList transports;
@@ -2710,7 +2876,7 @@ void PskReporterMapDialog::updateBandConditions()
 
 void PskReporterMapDialog::showEvent(QShowEvent* event)
 {
-    PersistentDialog::showEvent(event);
+    CanonWindow::showEvent(event);
     m_mapView->setWeatherRadarVisible(m_weatherRadarCheck->isChecked());
     m_mapView->setRadarCoverageVisible(m_radarCoverageCheck->isChecked());
     m_mapView->setWeatherRadarPlaybackSpeed(
@@ -2728,9 +2894,10 @@ void PskReporterMapDialog::showEvent(QShowEvent* event)
     }
 }
 
-void PskReporterMapDialog::closeEvent(QCloseEvent* event)
+void PskReporterMapDialog::done(int result)
 {
-    if (m_beaconArmed || m_beaconTransmitting) {
+    // The destructor's test: a held TX request counts, armed or not.
+    if (m_beaconRequest.valid() || m_beaconArmed || m_beaconTransmitting) {
         stopBeacon(tr("Stopped"), BeaconStopOutcome::Cancelled);
     }
     // Stop hitting the network while the window is closed.
@@ -2739,7 +2906,7 @@ void PskReporterMapDialog::closeEvent(QCloseEvent* event)
     m_mapView->setWeatherRadarVisible(false);
     m_mapView->setRadarCoverageVisible(false);
     m_started = false;
-    PersistentDialog::closeEvent(event);
+    CanonWindow::done(result);
 }
 
 } // namespace AetherSDR

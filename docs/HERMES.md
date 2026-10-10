@@ -606,6 +606,10 @@ convergence must be verified on real hardware through the automation bridge.
 - `SetRXAAGCTop` is the **maximum gain in dB**, and 120 dB is the top of WDSP's
   range. Inheriting that default ran the HL2 wide open: peak 3.186, **10.31% of
   samples at or beyond full scale**. At a 65 dB ceiling: peak 2.664, 0.27%.
+- Both peaks include RXA's panel gain of 4.0 after the AGC. The HL2 now opens
+  it at unity (`Hl2RxDsp::kRxPanelGain`, #5942): 12.04 dB quieter. The second
+  bandpass pass, speak and mpeak run between the AGC and the panel, so the
+  AGC's ceiling is not a bound on the output.
 - Mode vocabulary: `off/slow/med/fast` → WDSP RXA 0/2/3/4. WDSP's "long" (1)
   has no representation in the four-way UI control.
 - **The AGC is client-owned state and nothing on the radio can be asked for
@@ -2182,6 +2186,39 @@ Measured on the real HL2 at 96 kHz span, 25 fps pan:
 that the slider midpoint is the speed midpoint — the property whose absence was
 the second bug.
 
+#### What survives a restart, and where it is kept
+
+A Flex stores a pan's FFT FPS, FFT AVG, Wt Avg, waterfall rate and dBm range and
+reports them back on connect, which is why the client keeps no copy of them
+there (`SpectrumWidget::loadSettings` deletes the old flat keys; #2465, #4126).
+The HL2 stores none of them and nothing reports them.
+
+The waterfall rate, FFT FPS and the dBm range live in the per-radio
+`ClientDisplay` document, keyed by pan slot (`core/ClientDisplaySettings.h`).
+The Display panel's FPS slider, Clone to all Pans and Reset to Defaults save;
+`MainWindow::wirePanDisplayStatus` restores into the widget before it seeds the
+shaper. FFT AVG and Wt Avg have a table of their own in that document
+(`fftAverages`), kept only for a backend that declares
+`BackendPanAveraging::clientPersistsAveraging`. The HL2 declares it, so the
+Display panel's FFT AVG slider and Wt Avg toggle are remembered per pan slot too.
+
+The dBm range is the odd one: the pan model, not the widget, is what every
+re-seed reads, so a scale the operator moves is put into the model
+(`MainWindow::adoptClientOwnedDbmRange`) and the remembered one goes into the
+model before the first prime. FFT Floor Auto's own moves are not stored; with it
+on, the top is re-derived at every start and what survives is the dynamic range.
+
+Never as flat `AppSettings` keys, and FFT FPS and the range only where the
+backend declares the client their persistence owner:
+`PanFrameRateShaping::clientPersistsFrameRate` and
+`PanAmplitudeModel::clientPersistsDbmRange`, read by the save and the restore
+alike through `RadioCapabilities::clientPersistsPanFrameRate()` and
+`clientPersistsDbmRange()`. The HL2 declares both and no other family does;
+another family opts in with one declaration in its own backend. The range
+declaration counts only with absolute bins, because the client writes the range
+into the pan model. The waterfall rate keeps its own gate,
+`RadioModel::shapesDisplayRatesLocally()`.
+
 ### 15.2.3 There is no hardware black level to select
 
 The Display panel's **Black Level** button cycles the waterfall floor source:
@@ -3033,7 +3070,11 @@ RadioModel::rxAudioReady(RxAudioTap tap, int sliceId, QByteArray pcm, int rateHz
   need one: AGC off on the slice is that feed, and `Hl2Backend::followModeAgc`
   selects it whenever a receiver enters DIGU/DIGL or comes up in one (mode
   click, connect-time restore, a receiver seeded from another). The off is
-  never written to the remembered AGC. With AGC off the gain is the AGC-off
+  never written to the remembered AGC. A band-stack recall does not override
+  it: the bookmark's AGC mode arrives as `SliceAgcRequest::Origin::Recall`
+  and `Hl2Backend::requestSliceAgc` drops it in DIGU/DIGL, so a bookmark
+  cannot bring an AGC mode into a data mode; its threshold still applies.
+  With AGC off the gain is the AGC-off
   level: 10 dB at the default level of 10, against a 39 dB AGC ceiling at the
   default threshold and LNA gain. DIGU/DIGL are therefore up to 29 dB quieter
   on the speaker and on the TCI level meter (arithmetic on the two settings,
@@ -3692,7 +3733,10 @@ behavior is unchanged.
 
 The count was fixed at connect, from a persisted setting. It is now the
 operator's, at runtime: "Add Panadapter" and the pane close button. Connect
-always comes up with ONE receiver.
+always comes up with ONE receiver; the ones the operator had open come back
+after link-up through that same add (`Hl2Backend::replayRestoredSession`, from
+the `receivers` list of the `OperatingState` document), so the receiver
+ceiling at the current span still decides how many return (#5777).
 
 Retiring the persisted count mattered for a reason beyond tidiness: it made
 connect the only place the count could change, and a saved 4 was re-imposed on

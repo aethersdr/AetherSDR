@@ -1,0 +1,1016 @@
+{
+  "$comment": "AetherSDR Log Analyzer rules. Every rule cites the source line that writes the message it matches; tools/docs/test_log_rules.mjs checks the citations still hold, that each rule fires on docs/user/log-samples/rules/<id>.log and that none fire on clean.log. origin=external marks messages from the OS loader, cited from the docs page that quotes them.",
+  "version": 1,
+  "summary": [
+    {
+      "key": "radioModel",
+      "regex": "RX: \"R\\d+\\|0\\|.*?\\bmodel=\\\\\"([^\\\\\"]+)\\\\\"",
+      "last": true,
+      "source": [
+        {
+          "file": "src/models/RadioModel.cpp",
+          "line": 7713,
+          "text": "else if (key == \"model\")"
+        }
+      ]
+    },
+    {
+      "key": "firmware",
+      "regex": "RX: \"R\\d+\\|0\\|.*?\\bsoftware_ver=([0-9][0-9.]*)",
+      "last": true,
+      "source": [
+        {
+          "file": "src/models/RadioModel.cpp",
+          "line": 7722,
+          "text": "else if (key == \"software_ver\")"
+        }
+      ]
+    },
+    {
+      "key": "qtPlatform",
+      "regex": "Platform: Qt platform plugin \"([^\"]+)\"",
+      "last": false,
+      "source": [
+        {
+          "file": "src/QtPlatformChoice.cpp",
+          "line": 74,
+          "text": "Platform: Qt platform plugin \\\"%1\\\" (%2)"
+        },
+        {
+          "file": "src/QtPlatformChoice.cpp",
+          "line": 57,
+          "text": "Platform: Qt platform plugin \\\"%1\\\" (-platform"
+        }
+      ]
+    }
+  ],
+  "rules": [
+    {
+      "id": "discovery-bind-failed",
+      "severity": "problem",
+      "title": "Radio discovery could not listen on UDP port 4992",
+      "explanation": "Another program (often SmartSDR or a second AetherSDR) already holds UDP port 4992, or a firewall blocks it, so AetherSDR cannot hear radio discovery broadcasts and no radio appears under On This Network.",
+      "match": {
+        "substring": "RadioDiscovery: bind failed on UDP port"
+      },
+      "docs": "/troubleshooting#no-radio-appears-under-on-this-network",
+      "source": [
+        {
+          "file": "src/core/RadioDiscovery.cpp",
+          "line": 90,
+          "text": "RadioDiscovery: bind failed on UDP port"
+        }
+      ]
+    },
+    {
+      "id": "discovery-no-broadcasts",
+      "severity": "warning",
+      "title": "No discovery broadcasts were received",
+      "explanation": "AetherSDR listened for FlexRadio discovery broadcasts and none arrived. If you expected a radio under On This Network, it is on another subnet or VPN (broadcasts do not cross routers) or a firewall drops UDP 4992; Connect by IP works around it. If you only use SmartLink, a Hermes-Lite 2, an Icom or demo mode, you can ignore this.",
+      "match": {
+        "substring": "RadioDiscovery: giving up re-bind after"
+      },
+      "unless": {
+        "substring": "RadioDiscovery: found"
+      },
+      "docs": "/troubleshooting#no-radio-appears-under-on-this-network",
+      "source": [
+        {
+          "file": "src/core/RadioDiscovery.cpp",
+          "line": 67,
+          "text": "RadioDiscovery: giving up re-bind after"
+        }
+      ]
+    },
+    {
+      "id": "gui-registration-refused",
+      "severity": "problem",
+      "title": "The radio refused the connection (for example F3000001)",
+      "explanation": "The radio rejected AetherSDR's GUI-client registration. Code 0xf3000001 usually means every GUI client slot is taken: another SmartSDR or AetherSDR station must disconnect first, or the radio needs a restart. AetherSDR does not retry on its own.",
+      "match": {
+        "substring": "RadioModel: terminal GUI client registration failure"
+      },
+      "docs": "/troubleshooting#the-radio-refuses-the-connection",
+      "source": [
+        {
+          "file": "src/models/RadioModel.cpp",
+          "line": 7451,
+          "text": "\"RadioModel: terminal GUI client registration failure\""
+        }
+      ]
+    },
+    {
+      "id": "kicked-by-other-client",
+      "severity": "warning",
+      "title": "Another station disconnected this session",
+      "explanation": "The radio ended this session because another client disconnected it, or because a second client connected with the same client ID (for example two copies of AetherSDR sharing one settings folder).",
+      "match": {
+        "regex": "RadioModel: (this GUI client was force-disconnected by another client|radio disconnected this session because another GUI client used the same ID)"
+      },
+      "docs": "/multi-flex#troubleshooting",
+      "source": [
+        {
+          "file": "src/models/RadioModel.cpp",
+          "line": 7381,
+          "text": "RadioModel: this GUI client was force-disconnected by another client"
+        },
+        {
+          "file": "src/models/RadioModel.cpp",
+          "line": 7425,
+          "text": "RadioModel: radio disconnected this session because another GUI client used the same ID"
+        }
+      ]
+    },
+    {
+      "id": "multiflex-paused",
+      "severity": "info",
+      "title": "multiFLEX is off and other clients are connected",
+      "explanation": "The radio has multiFLEX turned off and another station is connected, so AetherSDR paused and showed the Connected Stations dialog. Disconnect one station to continue.",
+      "match": {
+        "substring": "RadioModel: multiFLEX disabled, other clients present"
+      },
+      "docs": "/troubleshooting#a-connected-stations-dialog-appears-when-you-connect",
+      "source": [
+        {
+          "file": "src/models/RadioModel.cpp",
+          "line": 7291,
+          "text": "RadioModel: multiFLEX disabled, other clients present"
+        }
+      ]
+    },
+    {
+      "id": "tcp-connect-failed",
+      "severity": "problem",
+      "title": "The connection to the radio failed",
+      "explanation": "The network connection to the radio was refused, timed out or found no route. Check the radio is on and reachable (ping its address), that no VPN or firewall is in the way, and that the address used for Connect by IP is right.",
+      "match": {
+        "regex": "RadioConnection: socket error: \"(Connection refused|.*[Tt]imed out|Network unreachable|Host unreachable|.*not found)"
+      },
+      "docs": "/manual-connection#the-probe-fails",
+      "source": [
+        {
+          "file": "src/core/backends/flex/RadioConnection.cpp",
+          "line": 607,
+          "text": "RadioConnection: socket error:"
+        }
+      ]
+    },
+    {
+      "id": "heartbeat-lost",
+      "severity": "warning",
+      "title": "The radio stopped answering and was disconnected",
+      "explanation": "Several pings in a row went unanswered, so AetherSDR dropped the connection. This points at a network that loses packets or stalls: Wi-Fi, a VPN, or an overloaded link.",
+      "match": {
+        "substring": "consecutive pings unanswered — forcing disconnect"
+      },
+      "docs": "/low-bandwidth-connections#troubleshooting",
+      "source": [
+        {
+          "file": "src/models/RadioModel.cpp",
+          "line": 8416,
+          "text": "consecutive pings unanswered — forcing disconnect"
+        }
+      ]
+    },
+    {
+      "id": "firmware-v3",
+      "severity": "problem",
+      "title": "Radio firmware v3.x is not supported",
+      "explanation": "The radio reports SmartSDR firmware 3.x. AetherSDR supports firmware 4.x; on v3.x many controls do not work. Update the radio to 4.x.",
+      "match": {
+        "regex": "RX: \"R\\d+\\|0\\|.*\\bsoftware_ver=3\\."
+      },
+      "levels": [
+        "DBG",
+        "INF"
+      ],
+      "docs": "/firmware-update#firmware-compatibility",
+      "source": [
+        {
+          "file": "src/core/backends/flex/RadioConnection.cpp",
+          "line": 668,
+          "text": "qCDebug(lcConnection) << \"RX:\" << line;"
+        },
+        {
+          "file": "src/models/RadioModel.cpp",
+          "line": 7722,
+          "text": "else if (key == \"software_ver\")"
+        }
+      ]
+    },
+    {
+      "id": "no-vita-udp",
+      "severity": "problem",
+      "title": "No spectrum data (VITA-49 UDP) arrived from the radio",
+      "explanation": "The control connection works but no UDP stream data reached AetherSDR within 10 seconds, so the panadapter and waterfall stay empty. A VPN, firewall or NAT is dropping the radio's UDP traffic.",
+      "match": {
+        "substring": "RadioModel: no VITA-49 UDP data received after 10s"
+      },
+      "docs": "/low-bandwidth-connections#audio-works-but-the-spectrum-and-waterfall-stay-empty-over-a-vpn",
+      "source": [
+        {
+          "file": "src/models/RadioModel.cpp",
+          "line": 7610,
+          "text": "RadioModel: no VITA-49 UDP data received after 10s"
+        }
+      ]
+    },
+    {
+      "id": "udp-port-problem",
+      "severity": "problem",
+      "title": "The local UDP stream port could not be opened",
+      "explanation": "AetherSDR could not bind or re-bind the UDP port the radio streams to, often because another program or a second copy of AetherSDR uses it. Spectrum, waterfall and audio may not arrive.",
+      "match": {
+        "regex": "RadioModel: UDP stream setup failed|PanadapterStream: (WAN — )?failed to (re)?bind UDP socket|RadioModel: client udpport collision"
+      },
+      "docs": "/manual-connection#audio-works-over-a-vpn-but-the-spectrum-and-waterfall-stay-empty",
+      "source": [
+        {
+          "file": "src/models/RadioModel.cpp",
+          "line": 7588,
+          "text": "RadioModel: UDP stream setup failed"
+        },
+        {
+          "file": "src/core/backends/flex/PanadapterStream.cpp",
+          "line": 234,
+          "text": "PanadapterStream: failed to bind UDP socket:"
+        },
+        {
+          "file": "src/models/RadioModel.cpp",
+          "line": 7663,
+          "text": "RadioModel: client udpport collision"
+        }
+      ]
+    },
+    {
+      "id": "rx-buffer-capped",
+      "severity": "info",
+      "title": "The UDP receive buffer was capped by the system",
+      "explanation": "Linux limited AetherSDR's VITA-49 receive buffer to net.core.rmem_max. On a busy or remote link a small buffer can drop packets. Raise net.core.rmem_max for more headroom.",
+      "match": {
+        "substring": "capped by net.core.rmem_max"
+      },
+      "docs": "/low-bandwidth-connections#the-vita-49-rx-buffer-says-it-was-capped",
+      "source": [
+        {
+          "file": "src/core/backends/flex/PanadapterStream.cpp",
+          "line": 188,
+          "text": "capped by net.core.rmem_max"
+        }
+      ]
+    },
+    {
+      "id": "vita-sequence-errors",
+      "severity": "warning",
+      "title": "Packets from the radio were lost or arrived out of order",
+      "explanation": "AetherSDR counted gaps in the VITA-49 packet sequence of a stream from the radio (audio, FFT, waterfall, meter or DAX). Lost or reordered packets cause audio dropouts and gaps in the waterfall. Wi-Fi, a busy switch or a VPN between the radio and the computer are the usual causes.",
+      "match": {
+        "substring": "PanadapterStream: VITA-49 sequence errors on"
+      },
+      "docs": "/next/low-bandwidth-connections#audio-drops-out-or-the-waterfall-has-gaps",
+      "source": [
+        {
+          "file": "src/core/backends/flex/VitaSequenceLossReport.h",
+          "line": 125,
+          "text": "PanadapterStream: VITA-49 sequence errors on %1 stream 0x%2: "
+        }
+      ]
+    },
+    {
+      "id": "smartlink-login-failed",
+      "severity": "problem",
+      "title": "SmartLink sign-in failed",
+      "explanation": "AetherSDR could not sign in to SmartLink, refresh its sign-in, or have its token accepted. Sign out and in again; check the computer's clock and internet connection.",
+      "match": {
+        "regex": "SmartLinkClient: (Auth0 login failed:|Auth0 refresh failed:|registration invalid — token rejected)"
+      },
+      "docs": "/smartlink-setup#the-radio-is-not-listed-after-you-sign-in",
+      "source": [
+        {
+          "file": "src/core/backends/flex/SmartLinkClient.cpp",
+          "line": 100,
+          "text": "SmartLinkClient: Auth0 login failed:"
+        },
+        {
+          "file": "src/core/backends/flex/SmartLinkClient.cpp",
+          "line": 154,
+          "text": "SmartLinkClient: Auth0 refresh failed:"
+        },
+        {
+          "file": "src/core/backends/flex/SmartLinkClient.cpp",
+          "line": 434,
+          "text": "SmartLinkClient: registration invalid"
+        }
+      ]
+    },
+    {
+      "id": "smartlink-cert-mismatch",
+      "severity": "problem",
+      "title": "SmartLink certificate does not match the pinned one",
+      "explanation": "The radio presented a different certificate from the one AetherSDR remembered. A firmware update or a replaced radio does this, but so would someone intercepting the connection. Read the certificate-pinning notes before accepting the new certificate.",
+      "match": {
+        "substring": "WanConnection: cert fingerprint MISMATCH for"
+      },
+      "docs": "/smartlink-setup#a-certificate-mismatch-warning-appears",
+      "source": [
+        {
+          "file": "src/core/backends/flex/WanConnection.cpp",
+          "line": 252,
+          "text": "WanConnection: cert fingerprint MISMATCH for"
+        }
+      ]
+    },
+    {
+      "id": "smartlink-connect-failed",
+      "severity": "problem",
+      "title": "The SmartLink connection to the radio failed",
+      "explanation": "The remote (WAN) connection to the radio, or the TLS connection to the SmartLink server, failed. Usually the radio's port forwarding (TCP 4994, UDP 4993) is missing or the router blocks it.",
+      "match": {
+        "regex": "WanConnection: socket error:|SmartLinkClient: SSL error:"
+      },
+      "docs": "/smartlink-setup#the-radio-is-listed-but-you-cannot-connect",
+      "source": [
+        {
+          "file": "src/core/backends/flex/WanConnection.cpp",
+          "line": 335,
+          "text": "WanConnection: socket error:"
+        },
+        {
+          "file": "src/core/backends/flex/SmartLinkClient.cpp",
+          "line": 371,
+          "text": "SmartLinkClient: SSL error:"
+        }
+      ]
+    },
+    {
+      "id": "rx-audio-failed",
+      "severity": "problem",
+      "title": "The speaker output failed",
+      "explanation": "The audio output device could not be opened in any format it offered, or it stopped with an error (unplugged, or the sound server restarted) and receive audio was not restarted. Pick or re-select the Output device under Radio Setup → Audio, or toggle PC Audio.",
+      "match": {
+        "regex": "AudioEngine: (failed to open RX audio sink on any negotiated format|QAudioSink stopped with error, not auto-restarting RX)"
+      },
+      "docs": "/troubleshooting#no-audio-from-the-speakers",
+      "source": [
+        {
+          "file": "src/core/AudioEngine.cpp",
+          "line": 4279,
+          "text": "AudioEngine: failed to open RX audio sink on any negotiated format"
+        },
+        {
+          "file": "src/core/AudioEngine.cpp",
+          "line": 4315,
+          "text": "AudioEngine: QAudioSink stopped with error, not auto-restarting RX"
+        }
+      ]
+    },
+    {
+      "id": "mic-open-failed",
+      "severity": "problem",
+      "title": "The microphone input could not be opened",
+      "explanation": "No input device was available, or none of its formats opened, so transmit audio from the PC microphone will be missing.",
+      "match": {
+        "regex": "AudioEngine: (no audio input device available|failed to open audio source at|all TX source formats failed)"
+      },
+      "docs": "/before-you-transmit#transmit-audio-is-missing-with-mic-source-set-to-pc",
+      "source": [
+        {
+          "file": "src/core/AudioEngine.cpp",
+          "line": 8767,
+          "text": "AudioEngine: no audio input device available"
+        },
+        {
+          "file": "src/core/AudioEngine.cpp",
+          "line": 8998,
+          "text": "AudioEngine: failed to open audio source at"
+        },
+        {
+          "file": "src/core/AudioEngine.cpp",
+          "line": 9050,
+          "text": "AudioEngine: all TX source formats failed"
+        }
+      ]
+    },
+    {
+      "id": "pipewire-client-config-missing",
+      "severity": "warning",
+      "title": "PipeWire is installed but its client configuration is missing",
+      "explanation": "The PipeWire library is present but a PipeWire connection could not be made, so AetherSDR switched Qt audio to the PulseAudio backend to avoid a crash. Install your distribution's pipewire (Arch) or pipewire-bin (Debian/Ubuntu) package.",
+      "match": {
+        "substring": "PipeWire context could not be created (no client configuration?)"
+      },
+      "docs": "/linux#pc-audio-misbehaves-on-a-pipewire-system",
+      "source": [
+        {
+          "file": "src/core/QtAudioBackendGuard.cpp",
+          "line": 77,
+          "text": "PipeWire context could not be created (no client configuration?)"
+        }
+      ]
+    },
+    {
+      "id": "dax-device-failed",
+      "severity": "problem",
+      "title": "A DAX audio device could not be created",
+      "explanation": "DAX virtual audio devices on Linux are made through PipeWire. No PipeWire daemon answered, or creating a DAX device or its stream failed, so a digital-mode program will not hear that DAX channel.",
+      "match": {
+        "regex": "PipeWireNativeContext: pw_context_connect failed|PipeWireAudioBridge: (pactl failed:|failed to create RX pipe)|PipeWireNativeRxSource: pw_stream_connect failed for ch"
+      },
+      "docs": "/dax-virtual-audio#the-program-hears-no-audio",
+      "source": [
+        {
+          "file": "src/core/PipeWireNativeContext.cpp",
+          "line": 76,
+          "text": "PipeWireNativeContext: pw_context_connect failed (no PipeWire daemon?)"
+        },
+        {
+          "file": "src/core/PipeWireAudioBridge.cpp",
+          "line": 232,
+          "text": "PipeWireAudioBridge: pactl failed:"
+        },
+        {
+          "file": "src/core/PipeWireAudioBridge.cpp",
+          "line": 146,
+          "text": "PipeWireAudioBridge: failed to create RX pipe"
+        },
+        {
+          "file": "src/core/PipeWireNativeRxSource.cpp",
+          "line": 152,
+          "text": "PipeWireNativeRxSource: pw_stream_connect failed for ch"
+        }
+      ]
+    },
+    {
+      "id": "dax-rx-stream-refused",
+      "severity": "problem",
+      "title": "The radio refused a DAX receive stream",
+      "explanation": "The radio rejected the request to stream a DAX channel, so the program on that channel hears nothing. Another client may own the channel, or the radio's stream limit is reached.",
+      "match": {
+        "regex": "RadioModel: dax_rx stream create for channel .* failed|PanadapterStream: DAX ch \\d+ stream create failed/dropped"
+      },
+      "docs": "/dax-virtual-audio#the-program-hears-no-audio",
+      "source": [
+        {
+          "file": "src/models/RadioModel.cpp",
+          "line": 1334,
+          "text": "RadioModel: dax_rx stream create for channel"
+        },
+        {
+          "file": "src/core/backends/flex/PanadapterStream.cpp",
+          "line": 1766,
+          "text": "stream create failed/dropped"
+        }
+      ]
+    },
+    {
+      "id": "dax-tx-failed",
+      "severity": "problem",
+      "title": "The DAX transmit stream could not be created",
+      "explanation": "The radio refused the DAX transmit stream, so transmit audio from a digital-mode program will not reach the radio.",
+      "match": {
+        "substring": "RadioModel: DAX TX create failed"
+      },
+      "docs": "/dax-virtual-audio#transmit-audio-does-not-reach-the-radio",
+      "source": [
+        {
+          "file": "src/models/RadioModel.cpp",
+          "line": 12671,
+          "text": "RadioModel: DAX TX create failed"
+        }
+      ]
+    },
+    {
+      "id": "dax-iq-failed",
+      "severity": "problem",
+      "title": "A DAX IQ device could not be created",
+      "explanation": "The virtual DAX IQ device or its pipe could not be set up, so IQ programs will not see the AetherSDR DAX IQ device.",
+      "match": {
+        "regex": "DaxIqWorker: (pactl load-module failed for IQ ch|cannot open IQ pipe)"
+      },
+      "docs": "/dax-iq-streaming#a-program-sees-no-aethersdr-dax-iq-device",
+      "source": [
+        {
+          "file": "src/models/DaxIqModel.cpp",
+          "line": 351,
+          "text": "DaxIqWorker: pactl load-module failed for IQ ch"
+        },
+        {
+          "file": "src/models/DaxIqModel.cpp",
+          "line": 360,
+          "text": "DaxIqWorker: cannot open IQ pipe"
+        }
+      ]
+    },
+    {
+      "id": "cat-port-in-use",
+      "severity": "problem",
+      "title": "A CAT port is already in use",
+      "explanation": "A CAT (rigctld or TCP) port could not be opened, usually because another program, or another copy of AetherSDR, already listens on that port number. The port shows no clients until you free it or choose another number.",
+      "match": {
+        "substring": "CatPort: failed to bind port"
+      },
+      "docs": "/cat-control#the-clients-column-shows-",
+      "source": [
+        {
+          "file": "src/core/CatPort.cpp",
+          "line": 71,
+          "text": "CatPort: failed to bind port"
+        }
+      ]
+    },
+    {
+      "id": "tci-port-in-use",
+      "severity": "problem",
+      "title": "The TCI server could not start",
+      "explanation": "The TCI server could not listen on its port, usually because another program (or another SDR application) already uses port 50001.",
+      "match": {
+        "substring": "TciServer: listen failed"
+      },
+      "docs": "/tci-server#the-server-wont-start-because-port-50001-is-in-use",
+      "source": [
+        {
+          "file": "src/core/TciIoWorker.cpp",
+          "line": 106,
+          "text": "TciServer: listen failed"
+        }
+      ]
+    },
+    {
+      "id": "qrhi-failure",
+      "severity": "problem",
+      "title": "The GPU renderer failed (\"Spectrum renderer unavailable\")",
+      "explanation": "The panadapter or scope could not draw with the GPU on this display or driver, which shows the \"Spectrum renderer unavailable\" card or a blank spectrum. Starting with AETHER_NO_GPU=1 forces software rendering. (Expected, and harmless, when AetherSDR runs with QT_QPA_PLATFORM=offscreen.)",
+      "match": {
+        "regex": "(SpectrumWidget|WaveformWidget): QRhi (failure:|initialization failed)"
+      },
+      "docs": "/gpu-rendering#a-spectrum-renderer-unavailable-card-covers-the-panadapter",
+      "source": [
+        {
+          "file": "src/gui/SpectrumWidget.cpp",
+          "line": 12879,
+          "text": "\"SpectrumWidget: QRhi failure:\""
+        },
+        {
+          "file": "src/gui/WaveformWidget.cpp",
+          "line": 124,
+          "text": "WaveformWidget: QRhi failure:"
+        },
+        {
+          "file": "src/gui/WaveformWidget.cpp",
+          "line": 1316,
+          "text": "WaveformWidget: QRhi initialization failed"
+        }
+      ]
+    },
+    {
+      "id": "software-renderer",
+      "severity": "info",
+      "title": "Software rendering is forced",
+      "explanation": "AETHER_NO_GPU or QT_OPENGL=software is set, so the spectrum is drawn on the CPU. That is correct but slower; remove the variable once your graphics driver is fixed.",
+      "match": {
+        "substring": "SpectrumWidget: AETHER_NO_GPU/QT_OPENGL=software"
+      },
+      "docs": "/gpu-rendering#the-display-is-correct-but-slow-and-about-says-cpu-qrhi",
+      "source": [
+        {
+          "file": "src/gui/SpectrumWidget.cpp",
+          "line": 1977,
+          "text": "SpectrumWidget: AETHER_NO_GPU/QT_OPENGL=software"
+        }
+      ]
+    },
+    {
+      "id": "qt-platform-fallback",
+      "severity": "warning",
+      "title": "Qt fell back to another platform plugin",
+      "explanation": "Qt could not load the first platform plugin requested (in QT_QPA_PLATFORM, or in the -platform argument when AetherSDR is started with one) and started with the next one. In a Wayland session that usually means the Qt Wayland plugin is missing, so AetherSDR runs on XWayland. Qt's reason is printed in the terminal, not in AetherSDR's log.",
+      "match": {
+        "substring": "Platform: Qt fell back from"
+      },
+      "docs": "/next/gpu-rendering#aethersdr-runs-on-xwayland-in-a-wayland-session",
+      "source": [
+        {
+          "file": "src/QtPlatformChoice.cpp",
+          "line": 77,
+          "text": "Platform: Qt fell back from"
+        }
+      ]
+    },
+    {
+      "id": "x11-error",
+      "severity": "warning",
+      "title": "X11 errors were suppressed (XWayland)",
+      "explanation": "The X server reported errors (such as GLX BadAccess) that AetherSDR caught instead of exiting. Often harmless (some FFmpeg builds probe X11 hardware acceleration), but if AetherSDR crashes when a dialog opens under XWayland, running natively on Wayland avoids it.",
+      "match": {
+        "substring": "Non-fatal X11 error suppressed (error_code="
+      },
+      "docs": "/troubleshooting#aethersdr-crashes-opening-a-dialog-under-xwayland-glx-badaccess",
+      "source": [
+        {
+          "file": "src/main.cpp",
+          "line": 84,
+          "text": "Non-fatal X11 error suppressed (error_code="
+        }
+      ]
+    },
+    {
+      "id": "settings-db-locked",
+      "severity": "problem",
+      "title": "The settings database is locked by another process",
+      "explanation": "Another process, usually a second copy of AetherSDR, holds AetherSDR.db, so this session runs read-only and changes are not saved. Close the other copy and restart.",
+      "match": {
+        "substring": "AppSettings: settings database is locked by another"
+      },
+      "docs": "/settings-and-backups#aethersdr-reports-that-it-cannot-save-settings",
+      "source": [
+        {
+          "file": "src/core/AppSettings.cpp",
+          "line": 262,
+          "text": "AppSettings: settings database is locked by another"
+        }
+      ]
+    },
+    {
+      "id": "settings-db-unwritable",
+      "severity": "problem",
+      "title": "The settings database cannot be opened or saved",
+      "explanation": "AetherSDR could not create, open or write AetherSDR.db. The settings folder may be read-only, owned by another user (for example after running with sudo), or the disk is full.",
+      "match": {
+        "regex": "AppSettings: (cannot create settings database at|could not establish a usable settings database|settings database could not be opened safely:|save failed:)|SettingsDatabase: cannot open"
+      },
+      "docs": "/settings-and-backups#aethersdr-reports-that-it-cannot-save-settings",
+      "source": [
+        {
+          "file": "src/core/AppSettings.cpp",
+          "line": 303,
+          "text": "AppSettings: cannot create settings database at"
+        },
+        {
+          "file": "src/core/AppSettings.cpp",
+          "line": 288,
+          "text": "AppSettings: could not establish a usable settings database"
+        },
+        {
+          "file": "src/core/AppSettings.cpp",
+          "line": 895,
+          "text": "AppSettings: save failed:"
+        },
+        {
+          "file": "src/core/SettingsDatabase.cpp",
+          "line": 181,
+          "text": "SettingsDatabase: cannot open"
+        }
+      ]
+    },
+    {
+      "id": "settings-newer-schema",
+      "severity": "warning",
+      "title": "Settings were written by a newer AetherSDR",
+      "explanation": "The settings database comes from a newer version, so this older version opens it read-only and does not save your changes.",
+      "match": {
+        "substring": "AppSettings: newer-schema database — read-only session"
+      },
+      "docs": "/settings-and-backups#an-older-version-of-aethersdr-doesnt-save-your-changes",
+      "source": [
+        {
+          "file": "src/core/AppSettings.cpp",
+          "line": 357,
+          "text": "AppSettings: newer-schema database — read-only session"
+        }
+      ]
+    },
+    {
+      "id": "settings-restored",
+      "severity": "warning",
+      "title": "The settings database was corrupt and was restored",
+      "explanation": "AetherSDR found AetherSDR.db damaged, moved it aside and restored from its most recent backup. Recent changes may be missing.",
+      "match": {
+        "regex": "AppSettings: (quarantined corrupt settings database to|restored settings from backup)"
+      },
+      "docs": "/settings-and-backups#how-the-store-protects-itself",
+      "source": [
+        {
+          "file": "src/core/AppSettings.cpp",
+          "line": 718,
+          "text": "AppSettings: quarantined corrupt settings database to"
+        },
+        {
+          "file": "src/core/AppSettings.cpp",
+          "line": 751,
+          "text": "AppSettings: restored settings from backup"
+        }
+      ]
+    },
+    {
+      "id": "fftw-wisdom-missing",
+      "severity": "info",
+      "title": "NR2 started without FFTW wisdom",
+      "explanation": "NR2 had no saved FFTW wisdom, so it planned its FFTs at runtime. The first NR2 use after an install can be slow; later uses reuse the saved wisdom.",
+      "match": {
+        "substring": "AudioEngine: NR2 FFTW wisdom unavailable on enable;"
+      },
+      "docs": "/nr2-noise-reduction#fftw-wisdom-first-use",
+      "source": [
+        {
+          "file": "src/core/AudioEngine.cpp",
+          "line": 7603,
+          "text": "AudioEngine: NR2 FFTW wisdom unavailable on enable;"
+        }
+      ]
+    },
+    {
+      "id": "bnr-gpu-unsupported",
+      "severity": "problem",
+      "title": "BNR: this GPU cannot run the NVIDIA denoiser",
+      "explanation": "The NVIDIA Maxine denoiser would not load on this GPU. BNR needs an NVIDIA RTX 40-series or later GPU with a supported driver.",
+      "match": {
+        "substring": "NvAFX_Load() failed (GPU unsupported or model incompatible)"
+      },
+      "docs": "/bnr-gpu-noise-removal#bnr-is-greyed-out-bnr-requires-an-nvidia-rtx-40-series-or-later-gpu",
+      "source": [
+        {
+          "file": "src/core/NvidiaAfxFilter.cpp",
+          "line": 303,
+          "text": "NvAFX_Load() failed (GPU unsupported or model incompatible)"
+        }
+      ]
+    },
+    {
+      "id": "bnr-pack-missing",
+      "severity": "warning",
+      "title": "BNR: the model pack for this GPU is missing",
+      "explanation": "The BNR model pack is not downloaded, or has no model for this GPU generation. Download it again from the BNR settings, or wait for a pack for your GPU.",
+      "match": {
+        "regex": "AFX pack directory not found: |denoiser model \\(sm_\\w+/denoiser_48k\\.trtpkg\\) not found"
+      },
+      "docs": "/bnr-gpu-noise-removal#bnr-is-greyed-out-no-bnr-pack-for-your-gpu--yet",
+      "source": [
+        {
+          "file": "src/core/NvidiaAfxFilter.cpp",
+          "line": 170,
+          "text": "AFX pack directory not found: "
+        },
+        {
+          "file": "src/core/NvidiaAfxFilter.cpp",
+          "line": 280,
+          "text": "denoiser_48k.trtpkg) not found"
+        }
+      ]
+    },
+    {
+      "id": "bnr-download-failed",
+      "severity": "warning",
+      "title": "BNR: the runtime pack download failed",
+      "explanation": "Downloading the BNR runtime pack failed: the connection dropped, a server or package index could not be reached, the transfer stalled for 30 seconds, or the pack could not be written to disk. Components that finished are kept, so clicking Download again resumes.",
+      "match": {
+        "regex": "NvidiaAfxPack: (transfer failed: |transfer timed out \\(stall limit |install failed: (download failed \\(|PyPI lookup failed for |simple-index lookup failed for |write failed for |cannot write cache))"
+      },
+      "docs": "/bnr-gpu-noise-removal#the-download-fails",
+      "source": [
+        {
+          "file": "src/core/NvidiaAfxPack.cpp",
+          "line": 81,
+          "text": "NvidiaAfxPack: transfer failed: %1: %2"
+        },
+        {
+          "file": "src/core/NvidiaAfxPack.cpp",
+          "line": 76,
+          "text": "NvidiaAfxPack: transfer timed out (stall limit %1 s): %2"
+        },
+        {
+          "file": "src/core/NvidiaAfxPack.cpp",
+          "line": 388,
+          "text": "NvidiaAfxPack: install failed:"
+        },
+        {
+          "file": "src/core/NvidiaAfxPack.cpp",
+          "line": 716,
+          "text": "download failed (%1): %2"
+        },
+        {
+          "file": "src/core/NvidiaAfxPack.cpp",
+          "line": 637,
+          "text": "PyPI lookup failed for %1"
+        },
+        {
+          "file": "src/core/NvidiaAfxPack.cpp",
+          "line": 589,
+          "text": "simple-index lookup failed for %1"
+        },
+        {
+          "file": "src/core/NvidiaAfxPack.cpp",
+          "line": 713,
+          "text": "write failed for %1 (disk full?)"
+        },
+        {
+          "file": "src/core/NvidiaAfxPack.cpp",
+          "line": 668,
+          "text": "cannot write cache"
+        }
+      ]
+    },
+    {
+      "id": "bnr-checksum-mismatch",
+      "severity": "problem",
+      "title": "BNR: a downloaded file failed its checksum",
+      "explanation": "A file of the BNR runtime pack did not match the SHA-256 this version of AetherSDR pins, so it was rejected. Downloading again fetches the same file; a proxy or security software altering downloads, or a changed file on the server, is the cause.",
+      "match": {
+        "regex": "NvidiaAfxPack: install failed: checksum mismatch for "
+      },
+      "docs": "/next/bnr-gpu-noise-removal#the-download-fails-with-checksum-mismatch",
+      "source": [
+        {
+          "file": "src/core/NvidiaAfxPack.cpp",
+          "line": 388,
+          "text": "NvidiaAfxPack: install failed:"
+        },
+        {
+          "file": "src/core/NvidiaAfxPack.cpp",
+          "line": 723,
+          "text": "checksum mismatch for %1 (corrupt or stale mirror)"
+        }
+      ]
+    },
+    {
+      "id": "bnr-install-failed",
+      "severity": "problem",
+      "title": "BNR: the runtime pack downloaded but did not install",
+      "explanation": "AetherSDR could not unpack the BNR runtime pack, or the unpacked pack was incomplete, so BNR stays unavailable. On Linux the pack is unpacked with unzip and tar --zstd, which must be installed.",
+      "match": {
+        "regex": "NvidiaAfxPack: install failed: (wheel extract failed: |extract failed: |wheel \\S+ contained no DLLs|assembled pack missing |could not install into |install verification failed)"
+      },
+      "docs": "/next/bnr-gpu-noise-removal#the-download-finishes-but-bnr-is-not-installed",
+      "source": [
+        {
+          "file": "src/core/NvidiaAfxPack.cpp",
+          "line": 388,
+          "text": "NvidiaAfxPack: install failed:"
+        },
+        {
+          "file": "src/core/NvidiaAfxPack.cpp",
+          "line": 775,
+          "text": "wheel extract failed: %1"
+        },
+        {
+          "file": "src/core/NvidiaAfxPack.cpp",
+          "line": 814,
+          "text": "extract failed: %1"
+        },
+        {
+          "file": "src/core/NvidiaAfxPack.cpp",
+          "line": 790,
+          "text": "wheel %1 contained no DLLs"
+        },
+        {
+          "file": "src/core/NvidiaAfxPack.cpp",
+          "line": 825,
+          "text": "assembled pack missing %1"
+        },
+        {
+          "file": "src/core/NvidiaAfxPack.cpp",
+          "line": 835,
+          "text": "could not install into %1"
+        },
+        {
+          "file": "src/core/NvidiaAfxPack.cpp",
+          "line": 856,
+          "text": "install verification failed"
+        }
+      ]
+    },
+    {
+      "id": "hl2-socket-failed",
+      "severity": "problem",
+      "title": "Hermes-Lite 2: the UDP socket could not be opened",
+      "explanation": "AetherSDR could not open the UDP socket used to talk to the HL2, so the connection failed. Another SDR program may hold the port; close it and connect again.",
+      "match": {
+        "substring": "HL2: could not open the UDP socket"
+      },
+      "docs": "/hermes-lite-2#connecting",
+      "source": [
+        {
+          "file": "src/core/backends/hl2/Hl2Backend.cpp",
+          "line": 2731,
+          "text": "HL2: could not open the UDP socket"
+        }
+      ]
+    },
+    {
+      "id": "hl2-stream-silent",
+      "severity": "warning",
+      "title": "Hermes-Lite 2: the receive stream went silent",
+      "explanation": "The HL2 stopped sending receive data and did not resume, which ends in link loss. Check the network cable or switch between the computer and the HL2, and that no other program is talking to it.",
+      "match": {
+        "substring": "MetisClient: no EP6 for"
+      },
+      "unless": {
+        "substring": "MetisClient: EP6 resumed after a silence recovery"
+      },
+      "docs": "/hermes-lite-2#connecting",
+      "source": [
+        {
+          "file": "src/core/backends/hl2/MetisClient.cpp",
+          "line": 508,
+          "text": "MetisClient: no EP6 for"
+        }
+      ]
+    },
+    {
+      "id": "icom-auth-rejected",
+      "severity": "problem",
+      "title": "Icom: the radio rejected the user name or password",
+      "explanation": "The networked Icom refused the login. Check Icom user and Icom password against the network user configured on the radio.",
+      "match": {
+        "regex": "session failed: .*(the radio rejected the username or password|authentication failed — check the user name and password)"
+      },
+      "docs": "/networked-icom#connect-by-ip-fails-with-a-handshake-error",
+      "source": [
+        {
+          "file": "src/core/backends/icom/IcomSession.cpp",
+          "line": 184,
+          "text": "session failed:"
+        },
+        {
+          "file": "src/core/backends/icom/IcomSession.cpp",
+          "line": 258,
+          "text": "the radio rejected the username or password"
+        }
+      ]
+    },
+    {
+      "id": "icom-no-answer",
+      "severity": "problem",
+      "title": "Icom: the radio did not answer",
+      "explanation": "Nothing answered the RS-BA1 network handshake on that address and port. The radio may be in standby, remote control may be off, or the ports are not forwarded.",
+      "match": {
+        "substring": "radio is not answering RS-BA1 on that port."
+      },
+      "docs": "/networked-icom#the-radio-is-in-standby-and-does-not-answer",
+      "source": [
+        {
+          "file": "src/core/backends/icom/IcomStream.cpp",
+          "line": 160,
+          "text": "radio is not answering RS-BA1 on that port."
+        }
+      ]
+    },
+    {
+      "id": "log-lines-dropped",
+      "severity": "info",
+      "title": "Some log lines were dropped",
+      "explanation": "The logger could not keep up and dropped lines, so this log may be missing detail around that time. Turn on only the log categories you need.",
+      "match": {
+        "regex": "Logging dropped (debug/info|warning/critical/fatal) lines count="
+      },
+      "docs": "/support-and-logging#the-log-has-no-detail-about-your-problem",
+      "source": [
+        {
+          "file": "src/core/AsyncLogWriter.cpp",
+          "line": 677,
+          "text": "Logging dropped debug/info lines count="
+        },
+        {
+          "file": "src/core/AsyncLogWriter.cpp",
+          "line": 683,
+          "text": "Logging dropped warning/critical/fatal lines count="
+        }
+      ]
+    },
+    {
+      "id": "missing-shared-library",
+      "severity": "problem",
+      "title": "A system library is missing (error while loading shared libraries)",
+      "explanation": "Linux could not start AetherSDR because a library it needs is not installed. This message comes from the system loader, so it appears in terminal output rather than in AetherSDR's own log. For libOpenGL.so.0, install libopengl0.",
+      "match": {
+        "substring": "error while loading shared libraries:"
+      },
+      "origin": "external",
+      "docs": "/troubleshooting#error-while-loading-shared-libraries-libopenglso0",
+      "source": [
+        {
+          "file": "docs/user/docs/troubleshooting.md",
+          "line": 91,
+          "text": "error while loading shared libraries: libOpenGL.so.0"
+        }
+      ]
+    },
+    {
+      "id": "glibc-too-old",
+      "severity": "problem",
+      "title": "The system C library (glibc) is too old",
+      "explanation": "The system loader reports that a required GLIBC version is not found, so this Linux release is too old for the AppImage. On a Raspberry Pi, use Raspberry Pi OS Trixie. This message comes from the system loader, not from AetherSDR's log.",
+      "match": {
+        "regex": "version [`']GLIBC_2\\.\\d+' not found"
+      },
+      "origin": "external",
+      "docs": "/troubleshooting#the-appimage-does-not-run-on-raspberry-pi-os-bookworm",
+      "source": [
+        {
+          "file": "docs/user/docs/troubleshooting.md",
+          "line": 101,
+          "text": "needs glibc 2.38 or newer"
+        }
+      ]
+    }
+  ]
+}

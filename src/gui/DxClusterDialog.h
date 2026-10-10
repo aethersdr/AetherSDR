@@ -170,6 +170,8 @@ private:
     // A right-aligned "Clear" button that wipes a console and zeroes the
     // matching log file. logPath points at one of the m_*LogPath members,
     // read at click time (members are assigned before any click). (#2022)
+    // Cluster/RBN "Hide Unverified" toggle for one GoClusterSettings feed.
+    QPushButton* makeHideUnverifiedButton(const QString& feed);
     QPushButton* makeConsoleClearButton(QPlainTextEdit* console,
                                         const QString* logPath,
                                         const QString& objectName);

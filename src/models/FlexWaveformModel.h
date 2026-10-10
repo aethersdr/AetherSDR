@@ -59,12 +59,19 @@ public:
     void requestRemoveContainer(const QString& name);  // waveform remove_container <name>
     void requestRestart(const QString& name);          // waveform restart <name>
 
+    // The radio's reply to a command emitted above, routed back by RadioModel
+    // so the UI can say what happened (a restart changes nothing visible).
+    void handleCommandReply(const QString& cmd, int code, const QString& body);
+
 signals:
     void waveformsChanged();
     void wfpStatusChanged();
     void statusReportsChanged();
     void genericStatusReceived(const QMap<QString, QString>& report);
     void commandReady(const QString& cmd);
+    // action: "restart", "remove_container" or "uninstall".
+    void commandFinished(const QString& action, const QString& name, bool ok,
+                         const QString& message);
 
 private:
     QList<FlexWaveformEntry> m_waveforms;

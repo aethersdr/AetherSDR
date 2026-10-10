@@ -396,6 +396,14 @@ struct NetworkConfigurationProfile {
     int networkNameItem = -1;
 };
 
+// A measured squelch threshold on the model's pan axis, independent of its
+// meter calibration. An absent facet keeps the unmeasured legacy mapping.
+struct SquelchScaleProfile {
+    double offsetDb;
+    double dbPerStep;
+    std::span<const std::string_view> modes;
+};
+
 // The immutable, backend-private capability profile from RFC #4984. IcomModel
 // remains transport/identity geometry; every command-table difference lives
 // here. Adding a radio is intentionally metadata-first and conservative: code
@@ -425,6 +433,7 @@ struct IcomModelProfile {
     SetMenuProfile setMenu;
     ScopeCommandProfile scope;
     MeterCalibrationProfile meters;
+    std::optional<SquelchScaleProfile> squelchScale;
     std::optional<PowerOnProfile> powerOn;
     std::optional<CivRecoveryProfile> civRecovery;
     std::optional<MemoryProfile> memory;

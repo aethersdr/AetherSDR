@@ -1,6 +1,7 @@
 #pragma once
 
-#include "PersistentDialog.h"
+#include "CanonWindow.h"
+#include <QHash>
 #include <QPointer>
 
 class QLabel;
@@ -22,7 +23,7 @@ class WaveformInstaller;
 // waveform with Restart and Remove. Installs .ssdr_waveform packages and Docker
 // images via WaveformInstaller; Docker install is gated by live WFP state
 // (WaveformInstallGate.h). Takes RadioModel* to construct WaveformInstaller.
-class WaveformsDialog : public PersistentDialog {
+class WaveformsDialog : public CanonWindow {
     Q_OBJECT
 
 public:
@@ -31,6 +32,7 @@ public:
 private slots:
     void onInstallLegacyClicked();
     void onInstallDockerClicked();
+    void onInstallRemoteAccessClicked();
     void onDStarStartStopClicked();
     void onDStarBrowseClicked();
 
@@ -49,6 +51,13 @@ private:
                              const QString& filter,
                              bool docker,
                              const QString& initialPath = {});
+    // Everything after the file is chosen: WFP gate, installer, progress.
+    void installWaveformPath(bool docker, const QString& path, RadioModel* model);
+    // Row feedback for Restart / Remove: a restart changes nothing visible,
+    // so the row says what was asked and what the radio answered.
+    void setRowNotice(const QString& name, const QString& text, const QString& tone, bool pending);
+    void onWaveformCommandFinished(const QString& action, const QString& name, bool ok,
+                                   const QString& message);
 
     RadioModel*        m_radioModel{nullptr};
     QLabel*            m_wfpSupportPill{nullptr};
@@ -59,6 +68,16 @@ private:
     QLabel*            m_connectedRadioSerialLabel{nullptr};
     QToolButton*       m_installBtn{nullptr};
     QAction*           m_installDockerAction{nullptr};
+    QAction*           m_installRemoteAccessAction{nullptr};
+    struct RowNotice {
+        QString text;
+        QString tone;      // "pending", "ok" or "error"
+        bool    pending{false};
+        quint64 serial{0};
+    };
+    QHash<QString, RowNotice> m_rowNotices;
+    quint64 m_rowNoticeSerial{0};
+    class TailnetShimDownloader* m_shimDownloader{nullptr};
     QWidget*           m_listContainer{nullptr};
     QVBoxLayout*       m_listLayout{nullptr};
     WaveformInstaller* m_installer{nullptr};

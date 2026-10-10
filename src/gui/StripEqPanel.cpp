@@ -35,29 +35,11 @@ constexpr int kDefaultWidth  = 900;
 constexpr int kDefaultHeight = 520;
 
 constexpr const char* kWindowStyle =
-    "QWidget { background: #08121d; color: #d7e7f2; }"
-    "QLabel  { background: transparent; color: #8aa8c0; font-size: 11px; }";
+    "QWidget { background: {{color.background.0}}; color: {{color.text.primary}}; }"
+    "QLabel  { background: transparent; color: {{color.text.secondary}}; font-size: 11px; }";
 
 // Bypass button visual: unchecked = EQ active (subtle), checked = bypass
 // engaged (amber, signals "this is muting your work").  Plugin convention.
-const QString kBypassStyle = QStringLiteral(
-    "QPushButton {"
-    "  background: #0e1b28;"
-    "  color: #8aa8c0;"
-    "  border: 1px solid #243a4e;"
-    "  border-radius: 3px;"
-    "  font-size: 11px;"
-    "  font-weight: bold;"
-    "  padding: 3px 12px;"
-    "}"
-    "QPushButton:hover { background: #1a2a3a; }"
-    "QPushButton:checked {"
-    "  background: #3a2a0e;"
-    "  color: #f2c14e;"
-    "  border: 1px solid #f2c14e;"
-    "}"
-    "QPushButton:checked:hover { background: #4a3a1e; }");
-
 
 // The interaction hint is prose, and at 460 px it is the widest single thing
 // in this panel -- 45% of a header row whose 1021 px minimum is what stops the
@@ -108,7 +90,7 @@ StripEqPanel::StripEqPanel(AudioEngine* engine, QWidget* parent)
     , m_audio(engine)
 {
     setWindowTitle("Aetherial Parametric EQ");
-    setStyleSheet(kWindowStyle);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(this, kWindowStyle);
     resize(kDefaultWidth, kDefaultHeight);
 
     auto* root = new QVBoxLayout(this);
@@ -236,10 +218,10 @@ StripEqPanel::StripEqPanel(AudioEngine* engine, QWidget* parent)
             "}"
             "QPushButton:hover { background: {{color.background.1}}; }"
             "QPushButton:checked {"
-            "  background: #c8a040; color: {{color.background.0}};"
-            "  border-color: #d4b050;"
+            "  background: {{color.accent.warning}}; color: {{color.background.0}};"
+            "  border-color: {{color.meter.gainReduction}};"
             "}"
-            "QPushButton:checked:hover { background: #d4b050; }");
+            "QPushButton:checked:hover { background: {{color.meter.gainReduction}}; }");
         connect(peakHoldBtn, &QPushButton::toggled, this, [this](bool on) {
             if (m_canvas) m_canvas->setPeakHoldFrozen(on);
         });

@@ -22,11 +22,18 @@ public:
         float pan = 0.5f;
         bool mute = false;
     };
+    using MissingMask = std::array<std::uint64_t, kQuantum / 64>;
+    static_assert(kQuantum == 128);
     class Sink {
     public:
         virtual ~Sink() = default;
         virtual void speakerBlock(std::uint64_t firstSample,
             std::span<const float> interleaved, bool discontinuity) noexcept = 0;
+        // Acquisition-owned fixed data only. Bit n names the exact missing
+        // contribution at firstSample+n; reporting cannot affect the deadline.
+        virtual void missingFrames(const Input&, std::uint64_t firstSample,
+            std::uint64_t captureClock, const MissingMask&) noexcept
+        { (void)firstSample; (void)captureClock; }
     };
     bool configure(std::uint64_t session, std::uint64_t captureGeneration,
                    std::span<const Input> inputs, std::uint64_t firstSample) noexcept;

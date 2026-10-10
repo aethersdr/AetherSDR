@@ -77,6 +77,10 @@ public:
     QString statusText() const;
     bool busy() const { return m_busy; }
 
+    // `text` with every URL's query and fragment removed, for the log: a
+    // redirected download URL can carry a signed, short-lived query string.
+    static QString withoutUrlQueries(const QString& text);
+
     void install();                       // v2 multi-source fetch + assemble
     void installFromFile(const QString& archivePath);  // offline single-tarball
     void cancel();

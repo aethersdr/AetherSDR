@@ -10,6 +10,11 @@
         <file alias="demo_voice.wav">demo_voice.wav</file>
         <file alias="dist.dx_community.json">dist.dx_community.json</file>
     </qresource>
+    <!-- CTR2 USB access rule, installed on demand from the CTR2 Proxy applet;
+         the same file packaging installs, so the two cannot drift. -->
+    <qresource prefix="/udev">
+        <file alias="70-aethersdr-ctr2.rules">../packaging/linux/70-aethersdr-ctr2.rules</file>
+    </qresource>
     <qresource prefix="/bandplans">
         <file alias="arrl-us.json">bandplans/arrl-us.json</file>
         <file alias="iaru-region1.json">bandplans/iaru-region1.json</file>
@@ -20,10 +25,13 @@
     </qresource>
     <qresource prefix="/sounds">
         <file alias="aetherial.wav">aetherial.wav</file>
-        <file alias="community-credits.wav">community-credits.wav</file>
     </qresource>
     <qresource prefix="/images">
-        <file alias="aurora-cutout.png">aurora-cutout.png</file>
+        <!-- Brand mark for the unified title bar.  The 96 px master is the
+             canonical logo PNG from the design system; the title bar scales it
+             to 22 px and clips it circular at paint time so HiDPI keeps the
+             full source resolution. -->
+        <file alias="logo-96.png">images/logo-96.png</file>
     </qresource>
     <qresource prefix="/themes">
         <file alias="default-dark.json">themes/default-dark.json</file>

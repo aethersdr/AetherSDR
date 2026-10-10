@@ -631,14 +631,16 @@ void MainWindow::finishSwrSweepAfterTuneStopped()
         return;
 
     if (m_radioModel.isConnected()) {
+        // TUNE power first, while still on the swept band: a radio that keeps
+        // TUNE power per band (HL2) records it under the band it is set on.
+        if (m_swrSweep.originalTunePower != m_swrSweep.sweepTunePower)
+            m_radioModel.transmitModel().setTunePower(m_swrSweep.originalTunePower);
         if (!m_swrSweep.preserveBandSwitchOnFinish) {
             if (auto* s = m_radioModel.slice(m_swrSweep.sliceId);
                 s && m_swrSweep.originalFreqMhz > 0.0) {
                 s->setFrequency(m_swrSweep.originalFreqMhz);
             }
         }
-        if (m_swrSweep.originalTunePower != m_swrSweep.sweepTunePower)
-            m_radioModel.transmitModel().setTunePower(m_swrSweep.originalTunePower);
 
         if (!m_swrSweep.preserveBandSwitchOnFinish
             && m_swrSweep.finalAborted && !m_swrSweep.panId.isEmpty()

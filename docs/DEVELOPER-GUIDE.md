@@ -153,8 +153,13 @@ Key files: `Slice.cs`, `Radio.cs`, `Panadapter.cs`, `Transmit.cs`,
 
 ### Widget Guidelines
 
-- All GUI follows the dark theme: `#0f0f1a` background, `#c8d8e8` text,
-  `#00b4d8` accent, `#203040` borders.
+- Every colour resolves through a `ThemeManager` token; never hard-code a
+  colour literal. Read
+  [`docs/style/theme-style-guide.md`](style/theme-style-guide.md) first —
+  CI's hardcoded-colour ratchet fails a PR that raises the count above its
+  base branch. New or reworked surfaces follow the visual canon in
+  [`docs/style/aethersdr-style-guide.md`](style/aethersdr-style-guide.md).
+  The full rule set is in [`docs/agents/gui.md`](agents/gui.md).
 - Use `GuardedSlider` (from `GuardedSlider.h`) instead of `QSlider` — it
   prevents wheel events from leaking to parent widgets.
 - Use `GuardedComboBox` for combo boxes in scrollable areas.
@@ -162,21 +167,13 @@ Key files: `Slice.cs`, `Radio.cs`, `Panadapter.cs`, `Transmit.cs`,
 
 ### Optional Dependencies
 
-Features gated behind compile-time flags:
+See [BUILD-OPTIONS.md](../BUILD-OPTIONS.md) for the CMake switches, defaults,
+platform requirements and dependency detection that control optional features.
 
-| Flag | Package | Feature |
-|------|---------|---------|
-| `HAVE_SERIALPORT` | `Qt6::SerialPort` | FlexControl, serial PTT/CW |
-| `HAVE_WEBSOCKETS` | `Qt6::WebSockets` | FreeDV Reporter, TCI server |
-| `HAVE_KEYCHAIN` | `Qt6Keychain` | SmartLink credential persistence |
-| `HAVE_MIDI` | Bundled RtMidi | MIDI controller mapping |
-| `HAVE_RADE` | Bundled RADE/Opus | FreeDV digital voice |
-| `HAVE_SPECBLEACH` | libspecbleach (clang-cl on Win) | NR4 spectral noise reduction |
-| `HAVE_DFNR` | Bundled DeepFilterNet3 | DFNR neural noise reduction |
-| `HAVE_BNR` | NVIDIA NIM container | GPU noise removal |
-| `HAVE_MQTT` | Bundled libmosquitto | MQTT applet |
-
-Use `#ifdef HAVE_*` guards. Features must degrade gracefully when unavailable.
+CMake generates compiler definitions such as `HAVE_SERIALPORT`,
+`HAVE_WEBSOCKETS` and `HAVE_DEEPFIST` from the resulting configuration; they are
+not user-facing CMake switches. Use the corresponding `#ifdef` guards in code.
+Features must degrade gracefully when unavailable.
 
 ### Commit Messages
 

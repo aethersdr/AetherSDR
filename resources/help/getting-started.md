@@ -1,5 +1,7 @@
 # Getting Started
 
+Full documentation: [docs.aethersdr.com/first-connection](https://docs.aethersdr.com/first-connection)
+
 ## Welcome to AetherSDR
 
 AetherSDR is a native SmartSDR-compatible desktop client for FlexRadio transceivers. It is built to let you discover a radio, create slices and panadapters, manage receive and transmit paths, and run daily operating tasks without relying on a browser or an always-online station computer.

@@ -10,7 +10,7 @@
 
 AetherSDR brings full FlexRadio operation to Linux, macOS, and Windows — each a native build, no Wine or virtual machines. A native aarch64 build also runs on Raspberry Pi and other embedded ARM devices. Built from the ground up with Qt6 and C++20, it speaks the SmartSDR protocol natively and aims to replicate the full SmartSDR experience.
 
-**Current version: 26.9.5** — CalVer (`YY.M.patch[.hotfix]`). | [Download](https://github.com/aethersdr/AetherSDR/releases/latest) | [Discussions](https://github.com/aethersdr/AetherSDR/discussions) | [What's New](https://github.com/aethersdr/AetherSDR/releases)
+**Current version: 26.10.1** — CalVer (`YY.M.patch[.hotfix]`). | [Download](https://github.com/aethersdr/AetherSDR/releases/latest) | [Discussions](https://github.com/aethersdr/AetherSDR/discussions) | [What's New](https://github.com/aethersdr/AetherSDR/releases)
 
 > **Native builds for Linux, macOS, and Windows** — Linux AppImage (x86-64 + aarch64), macOS DMG (Apple Silicon + Intel), Windows installer and portable ZIP. Every platform is built, tested in CI, and released together.
 
@@ -28,7 +28,7 @@ AetherSDR brings full FlexRadio operation to Linux, macOS, and Windows — each 
 - **AetherTX and AetherRX** — the transmit and receive chains, one window each. AetherTX is the channel strip (gate, EQ, compressor, de-esser, tube, AetherVoice exciter, reverb, brickwall limiter) with a preset library and scope; AetherRX puts noise reduction, gate, EQ, compressor, tube, AetherVoice and the output meter on tabs down its left edge
 - **Seven client-side noise-reduction engines**, each denoising left and right independently so pans and diversity survive them — NR2 (spectral), RN2 (RNNoise), NR4 (libspecbleach), NNR (WDSP's Neural Noise Reduction), DFNR (DeepFilterNet3), BNR (the NVIDIA Maxine denoiser, in-process on a local RTX/GeForce GPU, Linux + Windows — [`docs/nvidia-bnr.md`](docs/nvidia-bnr.md)) and MNR (macOS)
 - **DAX virtual audio + IQ** — up to 8 RX audio channels (radio-dependent) plus 1 TX, and 4 channels of raw I/Q at 24–192 kHz for WSJT-X / fldigi / VARA / JS8Call, with a per-slice **WFM demodulator** for satellite data
-- **AetherModem packet radio** — KISS-over-TCP TNC, connected-mode AX.25 BBS, a personal mailbox, a WIDE1-1 fill-in digipeater, and an **APRS client** (station map, GPS beacon, messaging) on a Direwolf-derived VHF demodulator
+- **AetherModem packet radio** — KISS-over-TCP TNC, connected-mode AX.25 BBS, a personal mailbox, a WIDE1-1 fill-in digipeater, and an **APRS client** (station table, GPS beacon, messaging) on a Direwolf-derived VHF demodulator
 - **AetherSweep** — in-panadapter SWR analyzer with log scale, threshold-band shading and interpolated bandwidth at SWR ≤ 1.5 / 2.0
 - **SpotHub** — DX Cluster, RBN, WSJT-X, POTA, FreeDV Reporter, N1MM+/DXLog contest bandmap, the EiBi shortwave schedule and the KiwiSDR DX Community database, with auto-mode switch and per-feed colouring
 - **CW operator suite** — real-time Morse decoder, MIDI/keyboard straight-key and iambic paddles with full QSK, optional Quindar tones
@@ -36,7 +36,7 @@ AetherSDR brings full FlexRadio operation to Linux, macOS, and Windows — each 
 - **FreeDV RADE** — AI digital-voice codec with a client-side neural encoder/decoder
 - **PSK Reporter map overlays** — optional global precipitation (LibreWXR, with NOAA, ECCC and EUMETNET OPERA regional radar backups and a per-provider legend), NOAA/NWS weather radar with observation playback ([`docs`](docs/psk-reporter-weather-radar.md)) and a NASA/GSFC VIIRS night-lights layer that fades through civil twilight ([`docs`](docs/psk-reporter-city-lights.md)), on both the 2D map and 3D globe
 - **SmartLink remote + TCI v2.0 server** — Auth0/TLS WAN operation, and CAT + audio + IQ + CW + spots over a single TCI WebSocket
-- **Broad hardware control** — rigctld and virtual-serial CAT, MIDI mapping, the FlexControl knob, serial PTT/CW keying, and Multi-Flex operation alongside SmartSDR/Maestro
+- **Broad hardware control** — rigctld and virtual-serial CAT, MIDI mapping, the FlexControl knob, serial PTT/CW keying, Multi-Flex operation alongside SmartSDR/Maestro, and a relay that puts a CTR2-Max controller on the radio over Wi-Fi (USB pending CTR2 firmware)
 - **Workspace canvas** — place pans and applets freely as resizable, layered items with edge and grid snapping, across several windows if you want them. Named workspaces recall which applets are open as well as where they sit, and bind to radio profiles. Off by default; the Classic shell is unchanged until you enable it
 - **Built-in demo mode** — a synthetic backend generating its own RX audio and matching panadapter, with a fault-injection harness, so you can explore the full UI with no radio attached (it cannot transmit)
 
@@ -78,7 +78,8 @@ Supported external devices include the 4O3A/FlexRadio PGXL (Power Genius XL)
 power amplifier and TGXL (Tuner Genius XL) antenna tuner, and — outside the
 radio seam entirely — ACOM S-series and SPE Expert (1.3K-FA / 1.5K-FA / 2K-FA)
 amplifiers over serial or ser2net TCP, and VK3AMP (600 W / 1000 W / 2000 W)
-amplifiers over TCP control with UDP telemetry.
+amplifiers over TCP control with UDP telemetry. Direct TGXL, PGXL and Antenna
+Genius connections authenticate with the device's access code.
 
 Active test target is FLEX-8600 firmware 4.2.18 (SmartSDR protocol v1.4.0.0);
 earlier 4.x firmware works; v3.x is unsupported.
@@ -93,7 +94,9 @@ FlexRadio remains the supported target:
   host-side impulse noise blanker, host frequency calibration, a derived dBm
   reference, an on-demand wideband bandscope, minimum-phase receive filtering
   outside CW, a declared board variant (bare HL2, AK4951 companion or
-  SquareSDR 2) and per-radio state restore (including AGC mode and threshold).
+  SquareSDR 2), receive squelch, the CW audio peaking filter, RIT and XIT per
+  receiver, backend-side FFT averaging, the CL1 external 10 MHz reference and
+  per-radio state restore (including AGC mode and threshold).
 - **Networked Icom** — **early**. CI-V over the RS-BA1 UDP transport, brought up
   on the IC-705 (receive, scope, transmit, FT8) and completed against a live
   IC-7300MK2 (controls, meters, ATU, WSPR, PC Audio routing and the CW decoder).
@@ -108,9 +111,13 @@ FlexRadio remains the supported target:
   rate changes, and DDC0 edge-droop compensation derived from the Saturn
   gateware (an in-app calibration can override it). The panadapter is computed
   by WDSP's display analyzer at one point per screen pixel, and the S-meter,
-  noise blanker and RF-gain attenuator work. Transmit is a future phase.
+  noise blanker and RF-gain attenuator work. The receiver's AF gain, mute and
+  balance apply, and receive audio also plays through the radio's own speaker.
+  Transmit is a future phase.
 - **RTL-SDR** — **experimental, receive-only**. Discovers supported USB dongles
-  through `librtlsdr` and provides one panadapter and one host-demodulated slice.
+  through `librtlsdr` and provides one panadapter and one host-demodulated slice,
+  publishing only the receive state the dongle confirmed, with capture browsing
+  and a 65,536-point zoom FFT.
 
 No radio at all? **Demo mode** runs the full UI against a synthetic backend
 that generates its own audio and spectrum.
@@ -125,7 +132,10 @@ MIDI, and generic USB-serial adapters:
 - Griffin PowerMate USB knob
 - Contour ShuttleXpress and ShuttlePro v2 jog controllers
 - MIDI controllers with learn mode, manual mapping entry, importable/exportable profiles (including vendor-supplied SmartSDR `.map` files), and relative-encoder support
+- AetherPad — an Arduino Giga R1 running the [aether-pad](https://github.com/nigelfenton/aether-pad) RC-28 emulator firmware; over USB HID (hidapi builds) it drives the same RC-28 controls and LEDs
+- Ulanzi Dial Bluetooth HID dial on Linux, Windows (hidapi builds) and macOS, its rotary and buttons mapped in Settings → Ulanzi Dial Mapping...
 - Elgato Stream Deck+ natively over USB HID (hidapi builds), driving the LCD keys and the four encoder dials
+- ELAD/WoodBoxRadio TMate 2 over USB HID (hidapi builds): three encoders, nine keys, and the LCD and backlight
 - Other Stream Deck models, on any platform, through the TCI server or the automation bridge using the control-surface software of your choice — AetherSDR provides the protocol, not the button layer
 - USB-serial PTT/CW interfaces for foot switches, straight keys, iambic paddles,
   amplifier keying lines, and external sequencers
@@ -157,6 +167,9 @@ already 6.12 or newer also works. See
 [`docs/BUILDING.md`](docs/BUILDING.md#the-release-qt-setup-qtsh) for what the
 script checks and where it installs.
 
+See [BUILD-OPTIONS.md](BUILD-OPTIONS.md) for compile-time switches, defaults and
+prerequisites, including optional decoders and experimental radio backends.
+
 ### Dependencies
 
 Everything except Qt and qtkeychain comes from the system. Optional packages
@@ -167,7 +180,7 @@ corresponding features disabled.
 # Arch / CachyOS / Manjaro
 sudo pacman -S cmake ninja pkgconf autoconf automake libtool python curl git \
   fftw rtl-sdr portaudio hidapi \
-  libpulse libglvnd fontconfig wayland libxkbcommon-x11 pipewire \
+  libpulse libglvnd fontconfig libsecret wayland libxkbcommon-x11 pipewire \
   xcb-util-cursor xcb-util-image xcb-util-keysyms xcb-util-renderutil xcb-util-wm
 
 # Debian / Ubuntu / Linux Mint
@@ -175,7 +188,7 @@ sudo apt install cmake ninja-build pkg-config autoconf automake libtool \
   python3 python3-venv curl git \
   libfftw3-dev librtlsdr-dev portaudio19-dev libhidapi-dev \
   libgl1-mesa-dev libpulse-dev libasound2-dev libpipewire-0.3-dev pipewire-bin \
-  libdbus-1-dev libglib2.0-dev libfontconfig1-dev libfreetype6-dev \
+  libdbus-1-dev libglib2.0-dev libsecret-1-dev libfontconfig1-dev libfreetype6-dev \
   libx11-dev libx11-xcb-dev libxcb1-dev libxkbcommon-dev libxkbcommon-x11-dev \
   libxcb-cursor0 libxcb-glx0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
   libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-sync1 libxcb-util1 \
@@ -186,7 +199,7 @@ sudo apt install cmake ninja-build pkg-config autoconf automake libtool \
 sudo dnf install cmake ninja-build autoconf automake libtool python3 curl git \
   fftw3-devel rtl-sdr-devel portaudio-devel hidapi-devel \
   libglvnd-devel pulseaudio-libs-devel fontconfig-devel freetype-devel \
-  dbus-devel glib2-devel libX11-devel libxcb-devel \
+  dbus-devel glib2-devel libsecret-devel libX11-devel libxcb-devel \
   libxkbcommon-devel libxkbcommon-x11-devel \
   xcb-util-cursor xcb-util-image xcb-util-keysyms xcb-util-renderutil xcb-util-wm
 
@@ -215,6 +228,10 @@ is required during configure or build.
 sudo cmake --install build
 ```
 
+Source installs depend on the Qt location used at build time. If that Qt
+generation is replaced, rebuild and reinstall AetherSDR before pruning the old
+Qt generation.
+
 > **Platform setup and troubleshooting** — Windows 11 and macOS step-by-step,
 > the dependency-to-feature table, GPU/QRhi rendering and its `AETHER_NO_GPU`
 > escape hatch, Wayland vs XWayland selection, and older-distro Qt: see
@@ -229,7 +246,8 @@ Currently in flight:
 - **aetherd** — splitting a headless engine from thin UI clients across the
   vendor-neutral `IRadioBackend` seam that six backends already ride. Local
   receive control, bounded telemetry and credential-bound transmit grants with
-  Flex PTT handoff have landed; per-client propagation, transmit for the other
+  Flex PTT handoff have landed, and the desktop's slice receive controls travel
+  as typed backend requests; per-client propagation, transmit for the other
   families and a thin client to replace direct model access have not.
 - **Non-Flex backends** — Hermes-Lite 2 (experimental), networked Icom (early;
   the IC-7300MK2 over RS-BA1 is supported), and ANAN-G2 and RTL-SDR
@@ -237,6 +255,9 @@ Currently in flight:
   remaining work for each is under [Supported Hardware](#supported-hardware).
 - **Workspace canvas** — an experimental alternative shell; remaining work is
   live cross-window drag and field time against the Classic shell.
+- **CTR2 controller relay** — Wi-Fi mode works with today's CTR2 firmware;
+  USB mode's host side is complete, has carried the radio's status stream to
+  development firmware, and waits on a CTR2 USB firmware release.
 - **AppSettings nested-JSON refactor** — storage is on SQLite with per-radio
   versioned feature documents; the legacy flat keys still need migrating.
 - **Flathub submission** — the AppStream metainfo and manpage are in; the
@@ -254,7 +275,7 @@ PRs, bug reports, and feature requests welcome! See [CONTRIBUTING.md](CONTRIBUTI
 
 **Development environment:** AetherSDR is developed using [Claude Code](https://claude.com/claude-code) as the primary development tool. We encourage contributors to use Claude Code for consistency. PRs must follow project conventions, pass CI, and include GPG-signed commits.
 
-**Not a developer?** Click the lightbulb button in AetherSDR's title bar to create an AI-assisted bug report or feature request.
+**Not a developer?** Choose **Help → Submit your Idea... 💡** in AetherSDR to create an AI-assisted bug report or feature request.
 
 ---
 

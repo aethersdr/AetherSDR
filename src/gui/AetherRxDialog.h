@@ -1,7 +1,7 @@
 #pragma once
 
 #include "ClientEqApplet.h"   // ClientEqApplet::Path
-#include "PersistentDialog.h"
+#include "CanonWindow.h"
 
 #include <QVector>
 
@@ -34,7 +34,8 @@ class StripWaveformPanel;
 // strip's click-to-bypass); Out has none. The five chain-stage rows have drag
 // grips that reorder AudioEngine's RX chain; AetherNR (runs ahead of the chain)
 // and Out (the end meter) aren't in RxChainStage and stay first and last.
-class AetherRxDialog : public PersistentDialog {
+// A CanonWindow tool window (style guide, RFC #6226), like AetherTX.
+class AetherRxDialog : public CanonWindow {
     Q_OBJECT
 
 public:

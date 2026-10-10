@@ -1,15 +1,17 @@
 // APF and AGC-off level reach the backend seam. Socket-free: a recording
 // IRadioBackend installed through RadioModel's production receiver bindings.
-//   1. Flex's APF wire text from SliceModel is unchanged.
-//   2. setApf/setApfLevel emit apfCommandIssued with enable and level together.
-//   3. RadioModel routes the APF to setSliceApf and the off level (also via the
+//   1. Flex's APF wire text from its typed adapter is unchanged.
+//   2. setApf/setApfLevel emit receiveDspRequested with enable and level together.
+//   3. RadioModel routes the APF to requestSliceDsp and the off level (also via the
 //      AGC-T knob and the calibrator) to requestSliceAgc(Field::OffLevel).
 //   4. A backend echo never comes back as a command (Principle II).
 //   5. The base verbs emit nothing and the base drops OffLevel.
+//   6. The calibrator's AGC-off sweep climbs from 0 and stops at its target.
 
 #include "TestSettingsProfile.h"
 #include "core/AgcTCalibrator.h"
 #include "core/backends/IRadioBackend.h"
+#include "core/backends/flex/FlexBackend.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
@@ -18,6 +20,8 @@
 #include <QMetaObject>
 #include <QSignalSpy>
 
+#include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <memory>
 #include <utility>
@@ -63,9 +67,13 @@ public:
     struct OffLevel { int slice; int level; };
     std::vector<Apf> apf;
     std::vector<OffLevel> offLevel;
-    void setSliceApf(int sliceId, bool on, int level) override
+    ReceiveDispatch requestSliceDsp(int sliceId, const SliceDspRequest& request) override
     {
-        apf.push_back({sliceId, on, level});
+        if (!request.valid() || request.feature != SliceDspRequest::Feature::Apf) {
+            return ReceiveDispatch::Unsupported;
+        }
+        apf.push_back({sliceId, request.enabled, request.level});
+        return ReceiveDispatch::Dispatched;
     }
     void requestSliceAgc(int sliceId, const SliceAgcRequest& request) override
     {
@@ -90,7 +98,11 @@ void testFlexWireTextUnchanged()
 {
     std::printf("\n  1. Flex wire text\n");
     SliceModel s(3);
+    FlexBackend backend;
     QStringList sent;
+    backend.setSliceCommandSink([&sent](const QString& cmd) { sent << cmd; });
+    QObject::connect(&s, &SliceModel::receiveDspRequested, &s,
+                     [&](const SliceDspRequest& request) { backend.requestSliceDsp(3, request); });
     QObject::connect(&s, &SliceModel::commandReady, &s,
                      [&sent](const QString& cmd) { sent << cmd; });
     s.setApf(true);
@@ -106,13 +118,19 @@ void testIntentsCarryBothHalves()
 {
     std::printf("\n  2. Typed intents\n");
     SliceModel s(0);
-    QSignalSpy apf(&s, &SliceModel::apfCommandIssued);
+    QSignalSpy apf(&s, &SliceModel::receiveDspRequested);
     s.setApfLevel(70);
-    check(apf.size() == 1 && apf.last().at(0).toBool() == false
-              && apf.last().at(1).toInt() == 70,
+    check(apf.size() == 1
+              && qvariant_cast<SliceDspRequest>(apf.last().at(0)).feature == SliceDspRequest::Feature::Apf
+              && qvariant_cast<SliceDspRequest>(apf.last().at(0)).field == SliceDspRequest::Field::Level
+              && !qvariant_cast<SliceDspRequest>(apf.last().at(0)).enabled
+              && qvariant_cast<SliceDspRequest>(apf.last().at(0)).level == 70,
           "a level change carries the current enable with it");
     s.setApf(true);
-    check(apf.size() == 2 && apf.last().at(0).toBool() && apf.last().at(1).toInt() == 70,
+    check(apf.size() == 2
+              && qvariant_cast<SliceDspRequest>(apf.last().at(0)).field == SliceDspRequest::Field::Enabled
+              && qvariant_cast<SliceDspRequest>(apf.last().at(0)).enabled
+              && qvariant_cast<SliceDspRequest>(apf.last().at(0)).level == 70,
           "an enable carries the current level with it");
     s.setApfLevel(70);
     check(apf.size() == 2, "an unchanged level is not re-issued");
@@ -168,7 +186,7 @@ void testRoutedThroughTheSeam()
     check(cal.strategy() == AgcTCalibrator::Strategy::TargetLevel,
           "with AGC Off the calibrator runs its target-level strategy");
     cal.startAutoSweep();   // first sweep point is written synchronously
-    check(backend->offLevel.size() == 3 && backend->offLevel.back().level == 100,
+    check(backend->offLevel.size() == 3 && backend->offLevel.back().level == 0,
           "the calibrator's AGC-off sweep reaches the backend");
     cal.stop();             // restores what it found
     check(backend->offLevel.size() == 4 && backend->offLevel.back().level == 47,
@@ -219,6 +237,43 @@ void testBaseVerbsAreNoOps()
     check(b.pairedAgcCalls == 0, "the base drops OffLevel rather than calling setSliceAgc");
 }
 
+void testCalibratorClimbsToTheTarget()
+{
+    std::printf("\n  6. The calibrator's AGC-off sweep\n");
+    // The off level is a fixed gain, and ANAN's 100 is 120 dB, past clipping on
+    // band noise alone. Here the audio is -60 dB at 0 and rises 0.6 dB per
+    // step, so the default -28 dB target is crossed at 53.
+    SliceModel s(0);
+    s.setAgcMode(QStringLiteral("off"));
+    s.setAgcOffLevel(47);
+    AgcTCalibrator cal;
+    cal.setSlice(&s);
+    cal.setSettleMs(1);
+    std::vector<int> applied;
+    QObject::connect(&s, &SliceModel::agcOffLevelChanged, &cal, [&](int level) {
+        applied.push_back(level);
+        const float rms = std::pow(10.0f, (-60.0f + 0.6f * static_cast<float>(level)) / 20.0f);
+        for (int i = 0; i < 40; ++i)   // past the detector's smoothing
+            cal.onAudioLevel(rms);
+    });
+    QSignalSpy finished(&cal, &AgcTCalibrator::finished);
+    cal.startAutoSweep();
+    check(finished.wait(5000), "the sweep finishes");
+    check(!applied.empty() && applied.front() == 0,
+          "with AGC Off the sweep starts at 0, not at 100");
+    check(!applied.empty() && *std::max_element(applied.begin(), applied.end()) == 56,
+          "and stops at the first step past the target");
+    check(cal.recommendedValue() == 53, "the recommendation is where the audio crosses the target");
+    cal.stop();
+
+    // With AGC on the AGC holds the level, so the knee sweep still starts at 100.
+    s.setAgcMode(QStringLiteral("med"));
+    s.setAgcThreshold(47);
+    cal.startAutoSweep();
+    check(s.agcThreshold() == 100, "with AGC on the sweep starts at 100");
+    cal.stop();
+}
+
 }  // namespace
 
 int main(int argc, char** argv)
@@ -230,6 +285,7 @@ int main(int argc, char** argv)
     testIntentsCarryBothHalves();
     testRoutedThroughTheSeam();
     testBaseVerbsAreNoOps();
+    testCalibratorClimbsToTheTarget();
     std::printf("\n  %s — %d failure(s)\n", failures ? "FAILED" : "PASSED", failures);
     return failures ? 1 : 0;
 }

@@ -126,6 +126,9 @@ to settle → record audio RMS → repeat*. Manual = the user is the stepper; Au
 2. **Coarse pass:** step AGC-T high→low (e.g. 100→0 in steps of ~5), with a
    per-step **settle delay** (~250–300 ms — the radio AGC needs time to react;
    FlexRadio explicitly warns to wait after each change). Record `(value, rms)`.
+   With AGC off the pass runs low→high instead and stops at the first point
+   past the target (step 5): the off level is a fixed gain, and the top of the
+   range can clip band noise on its own (on ANAN, 100 is 120 dB).
 3. **Knee detection (AGC on):** find the point of maximum downward curvature /
    where the slope first exceeds a threshold as noise starts dropping. Apply the
    documented "back off slightly" by nudging a couple of points toward higher

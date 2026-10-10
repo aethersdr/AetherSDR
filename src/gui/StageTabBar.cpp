@@ -1,4 +1,5 @@
 #include "StageTabBar.h"
+#include "CanonIndicators.h"
 #include "ModemChrome.h"
 #include "RxStageReorder.h"
 #include "core/ThemeManager.h"
@@ -55,7 +56,7 @@ protected:
         QPainter p(this);
         p.setRenderHint(QPainter::Antialiasing, true);
         p.setPen(Qt::NoPen);
-        p.setBrush(ModemChrome::colour(ModemChrome::Colour::TextDim));
+        p.setBrush(ModemChrome::colour(ModemChrome::Colour::TextDim, this));
         constexpr int kRows = 4;
         constexpr qreal kStep = 4.0;
         constexpr qreal kDot = 1.1;
@@ -158,9 +159,11 @@ StageTabBar::StageTabBar(const QString& objectPrefix, QWidget* parent)
     // stylesheet cascades to every descendant, and its 14 px base font reaches
     // inside the stage panels, which were drawn against the application font:
     // three points more is enough to push the minus sign out of a knob's 76 px
-    // value editor.
-    ThemeManager::instance().applyStyleSheet(
-        this, ModemChrome::styleSheet(ModemChrome::Scale::Dialog));
+    // value editor. The column lives only in the canon windows (AetherRX,
+    // AetherTX), so it wears the chrome's canon look.
+    applyCanonSheet(this, [] {
+        return ModemChrome::styleSheet(ModemChrome::Scale::Dialog, ModemChrome::Look::Canon);
+    });
     setFixedWidth(180);
     setAcceptDrops(true);
     installEventFilter(this);

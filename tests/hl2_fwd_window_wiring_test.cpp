@@ -175,6 +175,32 @@ int main(int argc, char** argv)
         }
     }
 
+    // ---- 5 · the skipped count rides the same emit and clears with the window ----
+    //
+    // A RADDR-1 word with a temperature half of 0 is not a measurement.
+    {
+        hold(raddr(0x01, 2944u), fwd(300));
+        due(raddr(0x01, 0u), fwd(450));
+        check(emitted.size() == 5, "the window with marked responses emits once");
+        if (emitted.size() == 5) {
+            const Hl2Telemetry& t = emitted.back();
+            check(t.forwardPowerSkipped == 2 && t.forwardPowerSamples == 2,
+                  "two marked responses are reported as skipped, beside the two kept");
+            check(t.forwardPowerPeakRaw.value_or(-1) == 450,
+                  "and the peak is over the kept ones (450), not the marked 2944");
+        }
+        due(fwd(100), raddr(0x02, 0));
+        check(emitted.size() == 6 && emitted.back().forwardPowerSkipped == 0
+                  && emitted.back().forwardPowerSamples == 1,
+              "the next window starts its skipped count at zero");
+        hold(raddr(0x01, 2944u), raddr(0x01, 5u));
+        due(raddr(0x01, 0u), raddr(0x02, 0));
+        check(emitted.size() == 7 && emitted.back().forwardPowerSkipped == 3
+                  && emitted.back().forwardPowerSamples == 0
+                  && !emitted.back().forwardPowerPeakRaw.has_value(),
+              "a window of marked responses only: a skipped count, no kept sample, no peak");
+    }
+
     if (g_failures == 0)
         std::printf("hl2_fwd_window_wiring_test: all checks passed\n");
     return g_failures == 0 ? 0 : 1;

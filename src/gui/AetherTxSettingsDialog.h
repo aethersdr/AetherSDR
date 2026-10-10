@@ -1,6 +1,6 @@
 #pragma once
 
-#include <QDialog>
+#include "CanonWindow.h"
 
 class QLabel;
 class QListWidget;
@@ -20,7 +20,9 @@ class AudioEngine;
 //
 // Nothing live is in here. Record, Play and BYPASS sit in the stage column
 // beside the Settings gear, where a modal is not in the way of them.
-class AetherTxSettingsDialog : public QDialog {
+// The profile library behind AetherTX's Settings gear: a short-lived
+// CanonWindow dialog (style guide, RFC #6226), modal over its window.
+class AetherTxSettingsDialog : public CanonWindow {
     Q_OBJECT
 
 public:

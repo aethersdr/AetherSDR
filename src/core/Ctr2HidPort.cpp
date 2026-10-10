@@ -2,25 +2,28 @@
 
 namespace AetherSDR {
 
+const std::vector<Ctr2HidPort::KnownCtr2>& Ctr2HidPort::knownCtr2Devices()
+{
+    // VID:PID and product string as the CTR2 firmware reports them.
+    static const std::vector<KnownCtr2> kDevices{
+        {0x303A, 0x1001, "ESP32S3_DEV", "CTR2-Max / Nano"},
+        {0x303A, 0x1001, "M5STACK_DIAL", "CTR2 (M5Dial)"},
+        {0x303A, 0x1001, "STAMP-S3", "CTR2 (M5Dial)"},
+        {0x2886, 0x0056, "XIAO_ESP32S3", "CTR2-MIDI"},
+        // Elecrow CrowPanel 2.1" rotary display running AetherKnob firmware;
+        // it speaks the same link and radio protocol as a CTR2.
+        {0x303A, 0x1001, "AETHER_KNOB", "AetherKnob"},
+    };
+    return kDevices;
+}
+
 QString Ctr2HidPort::DeviceInfo::ctr2Model() const
 {
-    // VID:PID and product string as the CTR2 firmware reports them. 303A:1001
-    // is Espressif's default for any ESP32-S3, so the product string decides.
-    constexpr quint16 kEspressif = 0x303A;
-    constexpr quint16 kEspressifS3 = 0x1001;
-    constexpr quint16 kSeeed = 0x2886;
-    constexpr quint16 kSeeedXiaoS3 = 0x0056;
-    if (vendorId == kEspressif && productId == kEspressifS3) {
-        if (product == QLatin1String("ESP32S3_DEV")) {
-            return QStringLiteral("CTR2-Max / Nano");
+    for (const KnownCtr2& known : knownCtr2Devices()) {
+        if (vendorId == known.vendorId && productId == known.productId
+            && product == QLatin1String(known.product)) {
+            return QString::fromLatin1(known.model);
         }
-        if (product == QLatin1String("M5STACK_DIAL") || product == QLatin1String("STAMP-S3")) {
-            return QStringLiteral("CTR2 (M5Dial)");
-        }
-    }
-    if (vendorId == kSeeed && productId == kSeeedXiaoS3
-        && product == QLatin1String("XIAO_ESP32S3")) {
-        return QStringLiteral("CTR2-MIDI");
     }
     return {};
 }

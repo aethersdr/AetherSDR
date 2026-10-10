@@ -1,4 +1,5 @@
 #include "AetherRxSettingsDialog.h"
+#include "CanonIndicators.h"
 #include "ModemChrome.h"
 #include "core/AetherRxProfiles.h"
 #include "core/ThemeManager.h"
@@ -24,18 +25,20 @@ constexpr const char* kFileFilter =
 }
 
 AetherRxSettingsDialog::AetherRxSettingsDialog(AudioEngine* audio, QWidget* parent)
-    : QDialog(parent)
+    : CanonWindow(tr("AetherRX Settings"), parent)
     , m_profiles(new AetherRxProfiles(audio, this))
 {
-    setWindowTitle(tr("AetherRX Settings"));
     setObjectName(QStringLiteral("aetherRxSettingsDialog"));
-    ThemeManager::instance().applyStyleSheet(
-        this, ModemChrome::styleSheet(ModemChrome::Scale::Dialog));
-    resize(460, 380);
+    // The canon header adds about 40 px to the old 460x380.
+    resize(460, 420);
+    applyCanonSheet(bodyWidget(), [] {
+        return ModemChrome::styleSheet(ModemChrome::Scale::Dialog, ModemChrome::Look::Canon);
+    });
 
-    auto* root = new QVBoxLayout(this);
-    root->setContentsMargins(12, 12, 12, 12);
+    auto* root = new QVBoxLayout(bodyWidget());
+    root->setContentsMargins(14, 12, 14, 14);
     root->setSpacing(8);
+    root->addWidget(makeCanonHeader(tr("AetherRX Settings")));
 
     auto* heading = new QLabel(tr("Profiles"));
     heading->setObjectName(QStringLiteral("SectionLabel"));

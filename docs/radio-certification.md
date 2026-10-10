@@ -322,6 +322,31 @@ radio's calibrated CI-V Po meter, and the run unkeyed immediately. It proves
 that a percentage ceiling is not a watt ceiling and that two-tone's drive comes
 from Tune Power, not RF Power.
 
+### Control readback, interlock and the SQL line, 2026-10-05 (IC-7300MK2, CI-V B6, RX only)
+
+`radiocert meters` from isolated, TX-off clients (every key refused, `keyRefusals: 3`),
+and `tools/radiocert_persist_controls.py`. Three builds of one branch: main
+(#6183 and #6184 merged, #6174 and #6175 open), main with #6183/#6184 reverted,
+and main with #6174/#6175 merged.
+
+| Check | Main | #6183/#6184 reverted | #6174/#6175 merged |
+|---|---|---|---|
+| `control-domain`, PROC (published max 2, then 10) | NOR and DX read back, then moved to DX+ 200 ms later | same | all 11 COMP steps held |
+| `control-domain`, squelch 0…100 | on-at-0 never read back on (sat Off) | same | every level held, on-at-0 included |
+| `front-end-interlock` | 4 coupled changes shown in 100–200 ms | 3 of 4 shown at the poll (2700 / 1300 / 1800 ms); one landed early at 300 ms | 4 shown in 100–200 ms |
+| `squelch-scale`, 1120 kHz, ATT 20 dB, −108…−112 dBm | gate 45 (unconfirmed), line −3.8 dB from the carrier | gate 41, confirmed: line **+7.5 dB** | carrier faded to S0: declined |
+| persist range: PROC seed mid-range | DX written, DX+ in model and slider from sample 1 | — | COMP 3 held, and came back from the connect read after restart |
+| persist boundary: manual SQL at 0 | `squelch: false`, applet Off, every sample | — | held on through two polls |
+
+Two other `squelch-scale` results belong in the record. On the fixed build at
+1210 kHz behind the ATT (−78 dBm), the gate was confirmed at level 63 and even the
+measured MK2 record sat **7.5 dB** above the carrier; Flex's would have been 11.5.
+That is the limit #6184 documents for a near-S9 carrier with ATT in or the
+preamp off, not a regression. At 1480 kHz with P.AMP1 (−64 dBm, above S9), both
+scales landed within 6 dB, which is why the stage now declines above S9.
+Night-to-dawn medium-wave carriers faded by up to 25 dB within a search; the
+stage declined each time rather than reporting a gate.
+
 ### Non-meter telemetry that still needs surfacing
 
 | Signal | HL2 source | Why it matters |
@@ -438,6 +463,10 @@ this table, which is the same rule the report itself follows.
 | `SliceModel::setSquelch` | on/off | **NOT WIRED** | — | — | n/a |
 | `setFilter(low, high)` | Hz | WDSP passband | tone outside the passband is rejected | ≥30 dB | no |
 | `setMode` | enum | WDSP mode + passband | sideband flips; passband follows the mode | — | partly — `rx` phase |
+| `TransmitModel::setSpeechProcessorLevel` | 0–published max | backend's level (Icom `14 0E`, written only while PROC is on) | every published value reads back where it was written; both ends held through two polls | must hold | **yes — `control-domain`** (readback, a necessary condition) |
+| `SliceModel::setManualSquelch` | 0–100, with the enable | backend's threshold (Icom `14 03`, no enable register) | on-at-0 stays on; every probed level reads back | must hold | **yes — `control-domain`** |
+| `RadioModel::setPanPreampFor` / `setPanAttenuatorFor` | published steps | Icom `16 02` / `11` | where the radio moves the other stage, the pan shows it promptly | ≤ 500 ms | **yes — `front-end-interlock`** |
+| `RadioCapabilities::squelchLevelScale` (the SQL line) | dB on the pan axis | — | the radio's gate closes on a steady carrier at the level where the line meets its pan peak | ±6 dB, below S9 only | **yes — `squelch-scale`** |
 
 ### Gaps this table makes visible
 

@@ -26,15 +26,22 @@ the RFC process for significant changes.
 
 ## Reporting Bugs
 
-- Use the **lightbulb button** in AetherSDR's title bar for AI-assisted bug
-  reports, or open a [GitHub issue](https://github.com/aethersdr/AetherSDR/issues/new) directly.
+- Use **Help → File an Issue...** or **Help → Submit your Idea... 💡** in
+  AetherSDR for AI-assisted bug reports, or open a
+  [GitHub issue](https://github.com/aethersdr/AetherSDR/issues/new) directly.
 - Include: OS/distro, AetherSDR version, radio model, firmware version.
-- Attach logs (`~/.config/AetherSDR/aethersdr.log`) or use Help → Support → Send to Support.
+- Attach the log. Logs live in `AetherSDR/logs/` under the config directory
+  (`~/.config/AetherSDR/logs/` on Linux, `~/Library/Preferences/AetherSDR/logs/`
+  on macOS, `%LOCALAPPDATA%\AetherSDR\logs\` on Windows): one timestamped
+  `aethersdr-YYYYMMDD-HHMMSS.log` per launch. Attach the newest one; on Linux
+  and macOS `aethersdr.log` is a link to it. **Help → Support & Diagnostics...** turns on extra logging per
+  module and opens the log folder; **Help → File an Issue...** packages the logs
+  and settings into a support bundle you can drag into the issue.
 - Check existing issues first to avoid duplicates.
 
 ## Suggesting Features
 
-- Open a GitHub issue or use the lightbulb button for an AI-assisted feature request.
+- Open a GitHub issue or use **Help → Submit your Idea... 💡** for an AI-assisted feature request.
 - Describe the problem you're solving, not just the solution.
 - Reference SmartSDR behavior where applicable — screenshots help.
 - One feature per issue.
@@ -168,8 +175,8 @@ policy, and how to recover a red `main` — see
 
 ## AI-Assisted Feature Requests
 
-**You don't need to be a developer to contribute.** Click the lightbulb
-button in AetherSDR's title bar — it copies a structured prompt to your
+**You don't need to be a developer to contribute.** Choose **Help → Submit
+your Idea... 💡** in AetherSDR — it copies a structured prompt to your
 clipboard and opens your choice of AI assistant. Describe your idea in
 plain English, and the AI generates a well-structured GitHub issue.
 

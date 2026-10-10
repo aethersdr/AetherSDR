@@ -689,6 +689,24 @@ int main()
               "unsupplied samples are transmit silence");
     }
 
+    // ---- TX IQ: a non-finite sample is transmit silence ----
+    {
+        // NaN fails both clamp comparisons; an infinity would clamp to a
+        // full-scale rail. Either one must reach the wire as zero.
+        constexpr float nan = std::numeric_limits<float>::quiet_NaN();
+        constexpr float inf = std::numeric_limits<float>::infinity();
+        auto pkt = ep2Packet(0, ccConfig(SampleRate::R48k, 1), ccRx1Freq(7'000'000));
+        std::vector<std::complex<float>> iq;
+        iq.emplace_back(nan, inf);
+        iq.emplace_back(-inf, 0.5f);
+        ep2WriteTxIq(pkt, iq);
+        const std::uint8_t* pay = pkt.data() + 8 + 8;
+        check(pay[4] == 0 && pay[5] == 0, "a NaN I sample is transmit silence");
+        check(pay[6] == 0 && pay[7] == 0, "an infinite Q sample is silence, not a full-scale rail");
+        check(pay[12] == 0 && pay[13] == 0, "a negative infinity is silence too");
+        check(pay[14] == 0x3F && pay[15] == 0xFF, "a finite neighbour is untouched");
+    }
+
     // ---- EP6 C&C response decoding (telemetry) ----
     {
         auto frame = [](std::uint8_t c0, std::uint32_t data) {
@@ -765,6 +783,78 @@ int main()
             w.clear();
             check(!w.peak.has_value() && w.samples == 0,
                   "clear() leaves no stale peak for the next window");
+        }
+
+        // A RADDR-1 response whose temperature word is 0 is not a measurement:
+        // its forward word is neither the peak nor counted. Nothing else is
+        // dropped: not the response after it, and not a lone high sample.
+        {
+            ForwardPowerWindow w;
+            w.observe(*parseEp6Response(frame(0x08, (1234u << 16) | 300u).data()));
+            w.observe(*parseEp6Response(frame(0x08, 2944u).data()));
+            check(w.peak.value_or(-1) == 300 && w.samples == 1,
+                  "a forward word beside a temperature word of 0 is not the peak, nor counted");
+            w.observe(*parseEp6Response(frame(0x08, (1234u << 16) | 3200u).data()));
+            check(w.peak.value_or(-1) == 3200 && w.samples == 2,
+                  "the response right after a marked one is kept");
+            w.clear();
+            w.observe(*parseEp6Response(frame(0x08, (1234u << 16) | 5u).data()));
+            w.observe(*parseEp6Response(frame(0x08, (1234u << 16) | 3200u).data()));
+            w.observe(*parseEp6Response(frame(0x08, (1234u << 16) | 5u).data()));
+            check(w.peak.value_or(-1) == 3200 && w.samples == 3,
+                  "a lone sample far above both neighbours is kept: it may be a real peak");
+            w.observe(*parseEp6Response(frame(0x08, (1u << 16) | 3300u).data()));
+            check(w.peak.value_or(-1) == 3300,
+                  "only a temperature word of exactly 0 marks a response");
+            w.clear();
+            w.observe(*parseEp6Response(frame(0x08, 2944u).data()));
+            check(!w.peak.has_value() && w.samples == 0,
+                  "a window of marked responses only has no peak, so the last value is used");
+        }
+
+        // The skipped count rises on a marked response and on nothing else.
+        {
+            ForwardPowerWindow w;
+            check(w.skipped == 0, "skipped count: an empty window has skipped nothing");
+            w.observe(*parseEp6Response(frame(0x08, (1234u << 16) | 300u).data()));
+            w.observe(*parseEp6Response(frame(0x08, (1u << 16) | 3300u).data()));
+            w.observe(*parseEp6Response(frame(0x10, 4095u).data()));
+            w.observe(*parseEp6Response(frame(0x80 | (0x01 << 1), 0x0FFFu).data()));
+            w.observe(*parseEp6Response(frame(0x00, 0x15u).data()));
+            check(w.skipped == 0 && w.samples == 2,
+                  "skipped count: kept responses, RADDR 0 and 2 and an ACK do not raise it");
+            w.observe(*parseEp6Response(frame(0x08, 2944u).data()));
+            w.observe(*parseEp6Response(frame(0x08, 0u).data()));
+            check(w.skipped == 2 && w.samples == 2 && w.peak.value_or(-1) == 3300,
+                  "skipped count: each marked response raises it by one and leaves the rest alone");
+            w.clear();
+            check(w.skipped == 0, "skipped count: clear() zeroes it for the next window");
+            w.observe(*parseEp6Response(frame(0x08, 2944u).data()));
+            w.observe(*parseEp6Response(frame(0x08, 7u).data()));
+            check(w.skipped == 2 && !w.peak.has_value() && w.samples == 0,
+                  "skipped count: a window of marked responses only shows a count and no peak");
+        }
+
+        // The rule itself, without the window: non-ACK, RADDR 1, DATA[31:16]
+        // exactly 0. An ACK's echo and the other response addresses are never
+        // marked, whatever their upper half holds.
+        {
+            static_assert(isNonMeasurementRaddr1(Ep6Response{false, 0x01, false, false, 2944u}));
+            static_assert(!isNonMeasurementRaddr1(Ep6Response{false, 0x01, false, false, 1u << 16}));
+            const auto marked = [&](std::uint8_t c0, std::uint32_t data) {
+                return isNonMeasurementRaddr1(*parseEp6Response(frame(c0, data).data()));
+            };
+            check(marked(0x08, 2944u),
+                  "non-measurement rule: RADDR 1 with a temperature word of 0 is marked");
+            check(marked(0x08, 0u) && marked(0x08 | 0x01, 0xFFFFu),
+                  "non-measurement rule: whatever the forward word or the PTT bit");
+            check(!marked(0x08, (1u << 16) | 2944u) && !marked(0x08, (1234u << 16) | 2944u)
+                      && !marked(0x08, 0x8000u << 16),
+                  "non-measurement rule: any non-zero temperature word is a measurement");
+            check(!marked(0x80 | (0x01 << 1), 2944u),
+                  "non-measurement rule: an ACK on command address 1 is not marked");
+            check(!marked(0x00, 0x15u) && !marked(0x10, 4095u) && !marked(0x18, 0u),
+                  "non-measurement rule: RADDR 0, 2 and 3 are not marked by a zero upper half");
         }
 
         // ---- TX FIFO status: RADDR 0, DATA[15:8] ----

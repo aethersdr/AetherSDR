@@ -22,6 +22,18 @@ bool matches(const QString& path, qint64 size, const QByteArray& digest)
     return hash.addData(&file) && hash.result().toHex() == digest;
 }
 }
+DeepFistStream::Parameters DeepFistCwModel::appParameters()
+{
+    DeepFistStream::Parameters parameters;
+    parameters.requireCompletedMark = true;
+    parameters.carryPending = true;
+    parameters.normalizeActivity = true;
+    // The stream default (12) sits between dead air and a tuned-in signal (n9bc/DeepFist
+    // tools/squelch.py); weak off-air CW scores in that gap and was gated out (#5950).
+    // Steady carriers are held off by the completed-mark guard above, not by this value.
+    parameters.activityThreshold = 3.f;
+    return parameters;
+}
 DeepFistCwModel::DeepFistCwModel(QObject* parent)
     : DeepFistCwModel(modelDirectory(), DeepFistModelAssets::releaseBaseUrl(), nullptr, parent) {}
 DeepFistCwModel::DeepFistCwModel(QString directory, QString baseUrl,
@@ -29,9 +41,7 @@ DeepFistCwModel::DeepFistCwModel(QString directory, QString baseUrl,
     : QObject(parent), m_assets(std::make_unique<DeepFistModelAssets>(directory, baseUrl,
           DeepFistModelAssets::manifest(), network)), m_directory(std::move(directory))
 {
-    m_parameters.requireCompletedMark = true;
-    m_parameters.carryPending = true;
-    m_parameters.normalizeActivity = true;
+    m_parameters = appParameters();
     connect(m_assets.get(), &DeepFistModelAssets::checking, this, [this] {
         setStatus(tr("Checking model…"));
     });
@@ -212,6 +222,7 @@ void DeepFistCwModel::run(quint64 runId, const QString& directory)
         }
         const int channels = item.frame.stream().format.channels();
         QString output;
+        std::vector<DeepFistCommitter::Piece> pieces;
         for (qsizetype offset = 0; offset < item.frame.frameCount(); offset += 4096) {
             if (m_stopping.load() || generation != m_generation.load()) { break; }
             const int count = static_cast<int>(std::min<qsizetype>(4096, item.frame.frameCount() - offset));
@@ -222,7 +233,7 @@ void DeepFistCwModel::run(quint64 runId, const QString& directory)
             std::vector<float> mono(converted.size() / sizeof(float));
             std::memcpy(mono.data(), converted.constData(), converted.size());
             m_processing = true;
-            output += stream.process(mono.data(), static_cast<int>(mono.size()), model);
+            output += stream.process(mono.data(), static_cast<int>(mono.size()), model, nullptr, &pieces);
             m_processing = false;
             if (stream.failed()) {
                 m_acceptAudio = false;
@@ -232,9 +243,12 @@ void DeepFistCwModel::run(quint64 runId, const QString& directory)
         }
         if (output.isEmpty()) { continue; }
         const PcmFrame frame = item.frame;
-        QMetaObject::invokeMethod(this, [this, generation, frame, output] {
+        QMetaObject::invokeMethod(this, [this, generation, frame, output, pieces] {
             if (m_running && generation == m_generation.load() && frame.current()) {
                 emit textDecoded(output);
+                for (const DeepFistCommitter::Piece& piece : pieces) {
+                    emit scoredTextDecoded(piece.text, 1.f - piece.confidence);
+                }
             }
         }, Qt::QueuedConnection);
     }

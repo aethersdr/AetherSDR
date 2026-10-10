@@ -112,7 +112,8 @@ jobs:
             libgstreamer-plugins-bad1.0-0 \
             libfuse2 file desktop-file-utils imagemagick \
             python3-pip autoconf automake libtool libasound2-dev \
-            libfftw3-dev libhidapi-dev portaudio19-dev
+            libfftw3-dev libhidapi-dev portaudio19-dev \
+            libsecret-1-dev
 
       # glslc — the SPIR-V shader compiler whisper's Vulkan backend needs at
       # BUILD time (CMake resolves it via find_package(Vulkan COMPONENTS glslc),
@@ -257,8 +258,14 @@ jobs:
           # (which also implies -eo pipefail) so the guard is self-contained and
           # survives anyone editing the step's shell.
           set -o pipefail
+          # -g on top of Release's -O3: GCC's code generation does not depend
+          # on it, so the shipped code is unchanged. The DWARF is split off
+          # before packaging and attached to the release as its own archive
+          # (docs/debugging-crashes.md).
           cmake -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
+            "-DCMAKE_C_FLAGS_RELEASE=-O3 -DNDEBUG -g" \
+            "-DCMAKE_CXX_FLAGS_RELEASE=-O3 -DNDEBUG -g" \
             -DCMAKE_INSTALL_PREFIX=/usr \
             -DREQUIRE_SERIALPORT=ON \
             -DREQUIRE_KEYCHAIN=ON \
@@ -297,6 +304,15 @@ jobs:
         # The default `all` target additionally builds ~200 unit-test executables
         # the AppImage never bundles and never runs — pure wasted build time.
         run: cmake --build build --target AetherSDR aether-dv-waveform -j$(nproc)
+
+      # Before Install: linuxdeploy strips everything it bundles. The build ID
+      # each debug file is keyed on survives install, patchelf and that strip;
+      # "Package debug symbols" below checks it on the AppImage itself.
+      - name: Split debug symbols
+        # Symbols are for us, not users: a failure here must not cost the release
+        # its installer. A missing archive surfaces as /tag-release's WARN.
+        continue-on-error: true
+        run: bash scripts/build/split-debug-symbols.sh symbols build/AetherSDR build/aether-dv-waveform
 
       - name: Install to AppDir
         run: |
@@ -471,14 +487,43 @@ jobs:
           echo "Wayland integration plugin dirs:"
           find "$plugins" -maxdepth 1 -type d -name 'wayland-*' | sort
 
+      # The archive is only worth attaching if its build IDs are the ones the
+      # AppImage actually ships, so read them back from the packaged binaries.
+      # .tar.xz on purpose: sign-release.yml downloads and checksums *.zip, so
+      # a .zip here would change SHA256SUMS.txt.
+      - name: Package debug symbols
+        continue-on-error: true   # never blocks the release; see "Split debug symbols"
+        run: |
+          set -euo pipefail
+          SAFE_REF="${GITHUB_REF_NAME//[^A-Za-z0-9._-]/_}"
+          "./AetherSDR-${SAFE_REF}-${{ matrix.arch }}.AppImage" --appimage-extract > /dev/null
+          while read -r name _ id _; do
+            shipped=$(find squashfs-root -type f -name "$name" -print -quit)
+            [ -n "$shipped" ] || { echo "::error::$name is not in the AppImage"; exit 1; }
+            notes=$(readelf -n "$shipped")
+            got=$(sed -n '/Build ID:/{s/^ *Build ID: *\([0-9a-f]*\)$/\1/p;q;}' <<< "$notes")
+            if [ "$got" != "$id" ]; then
+              echo "::error::$name in the AppImage has build ID '$got', symbols are for '$id'"
+              exit 1
+            fi
+            echo "$name: build ID $id matches the AppImage"
+          done < symbols/SYMBOLS.txt
+          rm -rf squashfs-root
+          tar -cJf "AetherSDR-${SAFE_REF}-${{ matrix.arch }}-symbols.tar.xz" -C symbols .
+          ls -l AetherSDR-*-symbols.tar.xz
+
       - name: Upload artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: AppImage-${{ matrix.arch }}
-          path: AetherSDR-*.AppImage
+          path: |
+            AetherSDR-*.AppImage
+            AetherSDR-*-symbols.tar.xz
 
       - name: Attach to release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64
         with:
-          files: AetherSDR-*.AppImage
+          files: |
+            AetherSDR-*.AppImage
+            AetherSDR-*-symbols.tar.xz

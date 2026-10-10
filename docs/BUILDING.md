@@ -5,6 +5,9 @@ The quick start — dependencies and the build itself — is in
 [`README.md`](../README.md#building-from-source). Everything here is what you
 need only on a specific platform, or when something goes wrong.
 
+Compile-time switches, defaults and prerequisites are listed in
+[BUILD-OPTIONS.md](../BUILD-OPTIONS.md).
+
 - [macOS: Qt and qtkeychain](#macos-qt-and-qtkeychain)
 - [Windows 11](#windows-11)
 - [What each dependency enables](#what-each-dependency-enables)
@@ -205,7 +208,7 @@ The CPU `QPainter` path is a **build-time alternative, not a runtime fallback**.
 
 Having no GPU is usually a non-event, because in practice "no GPU" means a software rasterizer rather than nothing. QRhi comes up on whatever the platform provides — llvmpipe or softpipe (Mesa), WARP or Microsoft Basic Render (D3D11), SwiftShader — and the app detects it and says so: **Help ▸ About** shows a `Renderer:` line reading `CPU QRhi (…)` rather than `GPU QRhi (…)`, naming the backend and device. Rendering is correct, just slow.
 
-If QRhi cannot initialise at all — no usable GL/D3D/Metal, as on a headless host, in some VMs, or behind a broken driver — there is nothing to fall back to. The spectrum does not draw, and the failure is reported by Qt rather than by AetherSDR: the log records `QRhiWidget: QRhi is not supported on this platform.` or `QRhiWidget: No QRhi`, and `QRhiWidget::renderFailed()` fires with nothing listening, so there is no notice in the UI. The rest of the app (controls, audio, radio I/O) is unaffected.
+If QRhi cannot initialise at all — no usable GL/D3D/Metal, as on a headless host, in some VMs, or behind a broken driver — there is nothing to fall back to, and the spectrum does not draw. AetherSDR says so: `SpectrumWidget` listens for `QRhiWidget::renderFailed()`, and also reports a missing QRhi backend or a waterfall pipeline that cannot be created, by showing a **Spectrum renderer unavailable** card on the panadapter. The card names the failure and suggests launching with `AETHER_NO_GPU=1` or rebuilding with `-DAETHER_GPU_SPECTRUM=OFF` (on macOS, only the rebuild). The log records `SpectrumWidget: QRhi failure:` with the same detail, alongside Qt's own `QRhiWidget: QRhi is not supported on this platform.` or `QRhiWidget: No QRhi`. The rest of the app (controls, audio, radio I/O) is unaffected.
 
 `AETHER_NO_GPU=1` forces software OpenGL on an already-built binary, without a rebuild:
 

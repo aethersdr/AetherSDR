@@ -5,6 +5,7 @@
 
 #include "MainWindow.h"
 #include "DStarAvailabilityGate.h"
+#include "core/AppActivity.h"
 
 #include "AppletPanel.h"
 #include "Ax25HfPacketDecodeDialog.h"
@@ -151,11 +152,19 @@ void MainWindow::appendUnscoredCwText(const QString& text)
         m_cwDecoderApplet->appendUnscoredCwText(text);
     }
 }
+void MainWindow::appendColoredCwText(const QString& text, float cost)
+{
+    if (m_cwDecoderApplet && m_cwDecoder.isRunning()) {
+        m_cwDecoderApplet->appendColoredCwText(text, cost);
+    }
+}
 void MainWindow::refreshCwRxBackend()
 {
     m_cwDecoder.selectBackend(CwDecodeSettings::backend());
     connect(&m_cwDecoder, &CwRxModel::unscoredTextDecoded,
         this, &MainWindow::appendUnscoredCwText, Qt::UniqueConnection);
+    connect(&m_cwDecoder, &CwRxModel::coloredTextDecoded,
+        this, &MainWindow::appendColoredCwText, Qt::UniqueConnection);
     connect(&m_cwDecoder, &CwRxModel::statusChanged,
         this, &MainWindow::refreshCwRxStatus, Qt::UniqueConnection);
     if (m_cwDecoderApplet) {
@@ -216,10 +225,7 @@ void MainWindow::showAx25HfPacketDecodeDialog()
     // MainWindow does and is just hidden on close.
     if (!m_ax25HfPacketDecodeDialog) {
         auto* dlg = new Ax25HfPacketDecodeDialog(m_audio, &m_radioModel, slice, this);
-        dlg->setFramelessMode(
-            AppSettings::instance().value("FramelessWindow", "True").toString() == "True");
         m_ax25HfPacketDecodeDialog = dlg;
-        trackPersistentDialog(dlg);
     }
     m_ax25HfPacketDecodeDialog->setAttachedSlice(slice);
 #ifdef HAVE_MQTT
@@ -249,10 +255,7 @@ void MainWindow::startKissTncOnStartupIfConfigured()
     // window being closed. The dialog's constructor auto-starts the TNC and
     // the modem per their respective settings.
     auto* dlg = new Ax25HfPacketDecodeDialog(m_audio, &m_radioModel, activeSlice(), this);
-    dlg->setFramelessMode(
-        AppSettings::instance().value("FramelessWindow", "True").toString() == "True");
     m_ax25HfPacketDecodeDialog = dlg;
-    trackPersistentDialog(dlg);
 #ifdef HAVE_MQTT
     m_ax25HfPacketDecodeDialog->setMqttClient(m_mqttClient);
 #endif
@@ -269,10 +272,7 @@ Ax25HfPacketDecodeDialog* MainWindow::ensureAx25HfPacketDecodeDialog()
     // the window; the dialog is a service host, not just a view.
     TncSettings::migrateLegacy();
     auto* dlg = new Ax25HfPacketDecodeDialog(m_audio, &m_radioModel, activeSlice(), this);
-    dlg->setFramelessMode(
-        AppSettings::instance().value("FramelessWindow", "True").toString() == "True");
     m_ax25HfPacketDecodeDialog = dlg;
-    trackPersistentDialog(dlg);
 #ifdef HAVE_MQTT
     dlg->setMqttClient(m_mqttClient);
 #endif
@@ -495,7 +495,7 @@ void MainWindow::activateRADE(int sliceId)
         m_radeThread->setObjectName("RADEEngine");
         m_radeEngine->moveToThread(m_radeThread);
         connect(m_radeThread, &QThread::finished, m_radeEngine, &QObject::deleteLater);
-        m_radeThread->start();
+        AetherSDR::startStreamThread(m_radeThread);   // High QoS; see AppActivity.h
     }
     // start() must be invoked on the worker thread
     bool ok = false;
@@ -1631,10 +1631,7 @@ void MainWindow::showPskReporterMapDialog()
     if (!m_pskReporterMapDialog) {
         auto* dlg = new PskReporterMapDialog(
             m_audio, &m_radioModel, m_propForecast, this);
-        dlg->setFramelessMode(
-            AppSettings::instance().value("FramelessWindow", "True").toString() == "True");
         m_pskReporterMapDialog = dlg;
-        trackPersistentDialog(dlg);
     }
     m_pskReporterMapDialog->show();
     m_pskReporterMapDialog->raise();

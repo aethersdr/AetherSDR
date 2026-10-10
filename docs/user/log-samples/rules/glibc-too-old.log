@@ -1,0 +1,1 @@
+/tmp/.mount_AetherXyz/usr/bin/AetherSDR: /lib/aarch64-linux-gnu/libc.so.6: version `GLIBC_2.38' not found (required by /tmp/.mount_AetherXyz/usr/bin/AetherSDR)

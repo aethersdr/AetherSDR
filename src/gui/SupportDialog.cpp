@@ -1,4 +1,5 @@
 #include "SupportDialog.h"
+#include "DocsLinks.h"
 #include "FramelessMessageBox.h"
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
@@ -133,6 +134,39 @@ void SupportDialog::buildUI()
     actionRow->addWidget(openBtn);
     actionRow->addStretch();
     layout->addLayout(actionRow);
+
+    // ── Online help ───────────────────────────────────────────────────────
+    // Self-help before a report: the troubleshooting symptom index and the
+    // Log Analyzer, which checks a log or support bundle in the browser.
+    auto* docsRow = new QHBoxLayout;
+    auto* docsLabel = new QLabel("Before you report:");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(docsLabel,
+        "QLabel { color: {{color.text.secondary}}; font-size: 11px; }");
+    docsRow->addWidget(docsLabel);
+    const auto addDocsButton = [this, docsRow](const QString& text,
+                                               const QString& objectName,
+                                               const QString& accessibleName,
+                                               const QString& docsUrl) {
+        auto* btn = new QPushButton(text);
+        btn->setObjectName(objectName);
+        btn->setAccessibleName(accessibleName);
+        btn->setToolTip(QStringLiteral("Opens %1 in your browser").arg(docsUrl));
+        btn->setFixedHeight(26);
+        connect(btn, &QPushButton::clicked, this, [docsUrl] { DocsLinks::open(docsUrl); });
+        docsRow->addWidget(btn);
+    };
+    addDocsButton(
+        QStringLiteral("Troubleshooting Guide"),
+        QStringLiteral("supportTroubleshootingGuideButton"),
+        QStringLiteral("Open the troubleshooting guide in your browser"),
+        DocsLinks::troubleshooting());
+    addDocsButton(
+        QStringLiteral("Log Analyzer"),
+        QStringLiteral("supportLogAnalyzerButton"),
+        QStringLiteral("Open the Log Analyzer in your browser"),
+        DocsLinks::logAnalyzer());
+    docsRow->addStretch();
+    layout->addLayout(docsRow);
 
     // ── Instructions ──────────────────────────────────────────────────────
     // "File an Issue" lives on Help and "Reset Settings" on Settings;
@@ -352,7 +386,7 @@ void SupportDialog::fileIssue(QWidget* parent, RadioModel* radioModel)
         "- OS: %3\n"
         "- Radio: %4\n\n"
         "Before writing the bug report, please read the AetherSDR project context at\n"
-        "https://raw.githubusercontent.com/aethersdr/AetherSDR/main/CLAUDE.md\n"
+        "https://raw.githubusercontent.com/aethersdr/AetherSDR/main/AGENTS.md\n"
         "for architecture overview, data flow, protocol details, and known issues.\n\n"
         "Based on my description below, write a complete GitHub bug report.\n"
         "Do NOT ask me follow-up questions — just write the best report you can\n"

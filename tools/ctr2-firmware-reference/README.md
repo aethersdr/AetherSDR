@@ -2,7 +2,8 @@
 
 `ctr2_link.h` and `ctr2_link.c` implement both ends of the CTR2 USB link
 (wire format version 0) in portable C99. They have no heap use and no
-dependencies beyond `<stdint.h>` and `<stddef.h>`.
+dependencies beyond `<stdint.h>` and `<stddef.h>`, plus `<math.h>` for the
+optional spectrum band-edge helper.
 
 These two files are **MIT-licensed**, unlike the rest of AetherSDR (GPLv3), so
 they can be copied into the controller firmware as-is or used as a guide.
@@ -23,6 +24,12 @@ opens the radio connection and sends READY (connected) or CLOSED (failed).
 static ctr2_tx tx;
 static ctr2_rx rx;
 static int waiting_for_host = 1;  /* from power-up, and after answering, until the host's READY/CLOSED */
+
+void link_init(void)                        /* once, at power-up */
+{
+    ctr2_rx_init(&rx);                      /* plain version 0, no extensions */
+    ctr2_tx_reset(&tx);
+}
 
 static void send_report(void *ctx, const uint8_t r[CTR2_REPORT_BYTES])
 {

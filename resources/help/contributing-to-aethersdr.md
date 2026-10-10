@@ -1,5 +1,7 @@
 # Contributing to AetherSDR
 
+Full documentation: [docs.aethersdr.com/contributing-guide](https://docs.aethersdr.com/contributing-guide)
+
 ## Why Feedback Matters
 
 AetherSDR grows through the ideas, bug reports, testing notes, and operating experience shared by the people who use it. The future of software defined radio is shaped by operators who take a moment to say what worked well, what felt confusing, and what would make the station experience even better.

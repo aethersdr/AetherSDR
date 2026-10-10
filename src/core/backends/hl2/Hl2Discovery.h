@@ -7,13 +7,44 @@
 
 #include <QHash>
 #include <QHostAddress>
+#include <QList>
 #include <QObject>
+#include <QSet>
 #include <QString>
 
 class QTimer;
 class QUdpSocket;
 
 namespace AetherSDR::hl2 {
+
+// Decides which discovery failures reach the log (category aether.discovery).
+// Sweeps repeat every few seconds, so each condition is logged once when it
+// starts and again only after it has cleared and come back. Socket-free, so
+// the policy is testable without a network (tests/hl2_discovery_logging_test).
+class DiscoveryNotices {
+public:
+    // 3 sweeps at Hl2Discovery's default 5000 ms interval: 15 s of silence.
+    static constexpr int kSilentSweepsBeforeWarning = 3;
+
+    void bindFailed(const QString& interfaceName, const QHostAddress& address,
+                    const QString& error);
+    // A logged failure logs again only after this pair has bound once.
+    void bindSucceeded(const QString& interfaceName, const QHostAddress& address);
+    void endRefresh(int socketCount, int interfaceCount);
+    // A sweep's probe left no datagram from `local`; logs like a bind failure.
+    void sendFailed(const QHostAddress& local, const QString& error);
+    void sendSucceeded(const QHostAddress& local);
+    // A sweep's interval ended; `answered` is true if any HL2 replied to it.
+    void sweepClosed(bool answered);
+    void reset();
+
+private:
+    QSet<QString> m_bindFailures;       // failures logged and not bound since
+    QSet<QString> m_sendFailures;       // local addresses logged, not sent from since
+    int m_interfaceCount = 0;
+    int m_silentSweeps = 0;
+    bool m_noSocketReported = false;
+};
 
 // HPSDR Protocol 1 ("Metis") discovery, shaped to feed the same picker as Flex
 // discovery: it emits RadioInfo with family="hl2" so ConnectionPanel's existing
@@ -84,6 +115,8 @@ private slots:
     void onSweepTimer();
 
 private:
+    void refreshSockets();
+
     // Radios not seen for this many consecutive sweeps are reported lost. Two
     // sweeps of slack absorbs a single dropped reply on a busy LAN.
     static constexpr int kMissedSweepsBeforeLost = 3;
@@ -93,9 +126,16 @@ private:
         int missedSweeps = 0;
     };
 
-    QUdpSocket* m_socket = nullptr;
+    // One socket per eligible local IPv4 address. Binding the discovery socket
+    // to the interface is important on multi-homed Windows hosts: a wildcard
+    // bind lets the route table choose an interface, which can leave a
+    // link-local HL2 invisible until another client has discovered it first.
+    QList<QUdpSocket*> m_sockets;
     QTimer* m_timer = nullptr;
     QHash<QString, Seen> m_seen;   // keyed by serial (the MAC string)
+    DiscoveryNotices m_notices;
+    bool m_probeSent = false;      // the last sweep had a socket to send on
+    bool m_answered = false;       // an HL2 replied since the last sweep
 };
 
 }  // namespace AetherSDR::hl2

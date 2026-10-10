@@ -3,11 +3,13 @@
 #include "gui/NetSchedulerDialog.h"
 #include "gui/RxApplet.h"
 #include "gui/ScopedChildWidget.h"
+#include "gui/VfoWidget.h"
 #include "models/SliceModel.h"
 
 #include <QAction>
 #include <QApplication>
 #include <QDialog>
+#include <QLabel>
 #include <QMenu>
 #include <QMetaObject>
 #include <QPointer>
@@ -76,6 +78,49 @@ class GuiNestedLifetimeTest : public QObject
     Q_OBJECT
 
 private slots:
+    // VfoWidget filters events on its collapsed-frequency label, a SIBLING
+    // (child of the VFO's parent) it tracks by QPointer<QLabel>. Parent
+    // teardown destroys children in order, so either can die first:
+    //  - VFO first (creation order): ~VfoWidget deletes the label itself;
+    //  - label first: beginDirectEntry() raise()s the VFO to the end of the
+    //    child list, so the parent deletes the label while the VFO and its
+    //    filter are alive.
+    // Either way the label's own teardown events reach eventFilter() once it
+    // is only a QWidget, and comparing them against the QPointer<QLabel> was
+    // an invalid downcast (UBSan, #6154). That only shows under the
+    // sanitizer lane, which aborts the process on it.
+    void vfoCollapsedLabelTeardownInEitherOrder_data()
+    {
+        QTest::addColumn<bool>("directEntryFirst");
+        QTest::newRow("vfo-dies-first") << false;
+        QTest::newRow("label-dies-first") << true;
+    }
+
+    void vfoCollapsedLabelTeardownInEitherOrder()
+    {
+        QFETCH(bool, directEntryFirst);
+        auto parent = std::make_unique<QWidget>();
+        auto* vfo = new VfoWidget(parent.get());
+        QLabel* label = nullptr;
+        for (QLabel* candidate :
+             parent->findChildren<QLabel*>(Qt::FindDirectChildrenOnly)) {
+            label = candidate;   // the only direct QLabel child of the parent
+        }
+        QVERIFY(label);
+        if (directEntryFirst) {
+            vfo->beginDirectEntry(QStringLiteral("lifetime-test"));
+        }
+        // The row must really exercise the order it names.
+        const QObjectList& order = parent->children();
+        QCOMPARE(order.indexOf(label) < order.indexOf(vfo), directEntryFirst);
+
+        QPointer<VfoWidget> vfoObserver(vfo);
+        QPointer<QLabel> labelObserver(label);
+        parent.reset();
+        QVERIFY(vfoObserver.isNull());
+        QVERIFY(labelObserver.isNull());
+    }
+
     void txAntennaMenuReturnsAfterAppletDeletion()
     {
         SliceModel slice(0);

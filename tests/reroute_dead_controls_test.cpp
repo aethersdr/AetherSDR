@@ -122,7 +122,15 @@ public:
     {
         agc.push_back({s, mode, threshold});
     }
-    void setSliceNoiseBlanker(int s, bool on, int level) override { nb.push_back({s, on, level}); }
+    // Records the kind as the bool every other consumer of this seam reads:
+    // anything but Off is on. These rows assert the intent reaches the backend,
+    // not which of the two blankers it picked.
+    void setSliceNoiseBlanker(int s, NoiseBlankerKind kind, int level,
+                              NoiseBlankerFill fill) override
+    {
+        Q_UNUSED(fill);
+        nb.push_back({s, kind != NoiseBlankerKind::Off, level});
+    }
     void setSliceNoiseReduction(int s, bool on, int level) override { nr.push_back({s, on, level}); }
     void setSliceAutoNotch(int s, bool on) override { anf.push_back({s, on, 0}); }
     // AGC and filter intents reach the backend as requests (#5904). The base
@@ -138,7 +146,25 @@ public:
         if (flex) flex->requestSliceAgc(s, r);
         IRadioBackend::requestSliceAgc(s, r);
     }
+    std::vector<Toggle> squelch;
+    ReceiveDispatch requestSliceSquelch(int s, const SliceSquelchRequest& r) override
+    {
+        squelch.push_back({s, r.enabled, r.level});
+        return ReceiveDispatch::Dispatched;
+    }
     std::unique_ptr<FlexBackend> flex;
+    ReceiveDispatch requestSliceDsp(int s, const SliceDspRequest& r) override
+    {
+        if (flex) { return flex->requestSliceDsp(s, r); }
+        switch (r.feature) {
+        case SliceDspRequest::Feature::Nb:
+            setSliceNoiseBlanker(s, r.requestedBlanker(), r.level, r.fill); break;
+        case SliceDspRequest::Feature::Nr: setSliceNoiseReduction(s, r.enabled, r.level); break;
+        case SliceDspRequest::Feature::Anf: setSliceAutoNotch(s, r.enabled); break;
+        default: return ReceiveDispatch::Unsupported;
+        }
+        return ReceiveDispatch::Dispatched;
+    }
     void setPanCenter(const QString&, double, PanCenterIntent) override {}
     void setKeying(bool, const TxCoordinator::Operation&,
                    const TxCoordinator::Completion&) override {}
@@ -299,17 +325,19 @@ void testRadioNrAndAnfRouteWhereTheRadioHasThem()
 
 void testAnfStillReachesTheDemoCommandPlane()
 {
-    // The Demo radio's shape: a (synthetic) command plane and no radio-side
-    // DSP. Its connection answers `anf=` with the generator's audible notch,
-    // so ANF must not be refused there; it has no NR, which still is.
+    // Demo's shape retains ANF availability without radio-side NR. The intent
+    // reaches the typed adapter; the receive-contract test pins its generator.
     Fixture f;
     RadioConnection unopened;
     RerouteDeadControlsTestAccess::useCommandPlane(f.radio, &unopened);
-    QSignalSpy wire(f.slice, &SliceModel::commandReady);
+    QSignalSpy intent(f.slice, &SliceModel::receiveDspRequested);
     check(f.radio.requestRadioAutoNotch(f.slice, true),
-          "ANF/demo: accepted where a command plane carries `anf=`");
-    check(wireOf(wire) == QStringList{QStringLiteral("slice set 0 anf=1")},
-          "ANF/demo: the same wire text as before");
+          "ANF/demo: remains available");
+    check(intent.size() == 1
+              && qvariant_cast<SliceDspRequest>(intent.first().at(0)).feature == SliceDspRequest::Feature::Anf
+              && qvariant_cast<SliceDspRequest>(intent.first().at(0)).enabled
+              && f.backend->anf.size() == 1 && f.backend->anf.back().on,
+          "ANF/demo: typed enable reaches the backend without a legacy wire path");
     check(!f.radio.requestRadioNoiseReduction(f.slice, true) && !f.slice->nrOn(),
           "NR/demo: still refused, no phantom");
     RerouteDeadControlsTestAccess::useCommandPlane(f.radio, nullptr);
@@ -390,6 +418,39 @@ void testRemoteSurfacesStillReachRadioNrWhereItExists()
           "remote/icom: NR reaches setSliceNoiseReduction");
     check(f.slice->anfOn() && !f.backend->anf.empty() && f.backend->anf.back().on,
           "remote/icom: ANF reaches setSliceAutoNotch");
+}
+
+// TCI sql_enable and sql_level each send the pair, applied on a queued hop. A
+// client that sends both in one burst must not have the second command read
+// the slice's old value for the first one's half and undo it (#6172).
+void testTciSquelchBurstKeepsBothHalves()
+{
+    Fixture f;
+    TciProtocol tci(&f.radio);
+    (void)tci.handleCommand(QStringLiteral("sql_enable:0,true"));
+    (void)tci.handleCommand(QStringLiteral("sql_level:0,20"));
+    QCoreApplication::processEvents();
+    const auto& sent = f.backend->squelch;
+    check(!sent.empty() && sent.back().on && sent.back().level == 20,
+          "TCI: sql_enable true then sql_level 20 in one burst requests on at 20");
+    check(std::all_of(sent.begin(), sent.end(),
+                      [](const LoggingBackend::Toggle& t) { return t.on; }),
+          "TCI: no request in that burst turns squelch off");
+
+    f.backend->squelch.clear();
+    (void)tci.handleCommand(QStringLiteral("sql_level:0,35"));
+    (void)tci.handleCommand(QStringLiteral("sql_enable:0,false"));
+    QCoreApplication::processEvents();
+    check(!sent.empty() && !sent.back().on && sent.back().level == 35,
+          "TCI: sql_level 35 then sql_enable false in one burst keeps level 35");
+
+    // The held half ends with its burst: a later command reads the slice again.
+    f.backend->squelch.clear();
+    const bool sliceOn = f.slice->receiveSquelchOn();
+    (void)tci.handleCommand(QStringLiteral("sql_level:0,50"));
+    QCoreApplication::processEvents();
+    check(!sent.empty() && sent.back().on == sliceOn && sent.back().level == 50,
+          "TCI: a lone sql_level after the burst uses the slice's own enable");
 }
 
 // ── Row 5: AM carrier ───────────────────────────────────────────────────────
@@ -663,6 +724,7 @@ int main(int argc, char** argv)
     testAnfStillReachesTheDemoCommandPlane();
     testRemoteSurfacesRefuseRadioNrAndAnfWithoutRadioDsp();
     testRemoteSurfacesStillReachRadioNrWhereItExists();
+    testTciSquelchBurstKeepsBothHalves();
     testAmCarrierFollowsTheCapability();
     testGraphicEqIsNotReportedAsUnsupported();
     testLevelFaceReadsMicPeakWhereThereIsNoMicMeter();

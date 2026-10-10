@@ -5,6 +5,7 @@
 #include <hidapi/hidapi.h>
 
 #include <algorithm>
+#include <cerrno>
 #include <utility>
 
 namespace AetherSDR {
@@ -63,11 +64,21 @@ Ctr2HidPort* Ctr2HidapiPort::open(const Ctr2HidPort::DeviceInfo& device, QString
         *error = QStringLiteral("USB HID support failed to initialize");
         return nullptr;
     }
+    errno = 0;
     hid_device* handle = hid_open_path(device.path.toUtf8().constData());
     if (!handle) {
+        const int openErrno = errno;
         const QString why = fromWide(hid_error(nullptr));
         *error = QStringLiteral("Cannot open %1: %2")
             .arg(device.label(), why.isEmpty() ? QStringLiteral("HID I/O error") : why);
+#ifdef Q_OS_LINUX
+        // hidraw nodes are root-only without a udev rule; name the fix.
+        if (openErrno == EACCES) {
+            *error += QStringLiteral(". Press Start to install the CTR2 access rule.");
+        }
+#else
+        Q_UNUSED(openErrno);
+#endif
         return nullptr;
     }
     hid_set_nonblocking(handle, 1);
@@ -78,6 +89,12 @@ Ctr2HidPort* Ctr2HidapiPort::open(const Ctr2HidPort::DeviceInfo& device, QString
     };
     io.write = [handle](const unsigned char* buffer, int size) {
         return hid_write(handle, buffer, static_cast<size_t>(size));
+    };
+    io.getFeature = [handle](unsigned char* buffer, int size) {
+        return hid_get_feature_report(handle, buffer, static_cast<size_t>(size));
+    };
+    io.setFeature = [handle](const unsigned char* buffer, int size) {
+        return hid_send_feature_report(handle, buffer, static_cast<size_t>(size));
     };
     io.close = [handle] { hid_close(handle); };
     io.lastError = [handle] { return fromWide(hid_error(handle)); };

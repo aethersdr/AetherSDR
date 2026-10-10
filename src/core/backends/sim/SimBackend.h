@@ -50,6 +50,7 @@ public:
     // them and echoes the slice state back so the UI reflects what the operator
     // set (Principle II — the radio is authoritative about its own state).
     void setSliceAgc(int sliceId, const QString& mode, int thresholdDb) override;
+    ReceiveDispatch requestSliceDsp(int sliceId, const SliceDspRequest& request) override;
     void setPanCenter(const QString& panId, double hz,
                       PanCenterIntent intent) override;
     // Multi-pan demo (#4887 phase 4). Create/remove run over the synthetic
@@ -109,6 +110,7 @@ public:
     SimSignalSource*  signalSourceForTest() const { return m_signalSource; }
 
 private:
+    friend struct SimReceiveContractTestAccess;
     // Emit the initial synthetic snapshot a freshly-connected radio would report:
     // the radio-global delta (model/nickname/slices) and one active slice on a
     // sensible default frequency/mode. Phase 2 grows this into the pan + meters.

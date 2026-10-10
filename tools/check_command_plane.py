@@ -76,7 +76,7 @@ from pathlib import Path
 BASELINE = {
     # ---- models ----
     "src/models/RadioModel.cpp": 135,
-    "src/models/SliceModel.cpp": 56,
+    "src/models/SliceModel.cpp": 25,
     "src/models/TransmitModel.cpp": 39,
     "src/models/CwxModel.cpp": 9,
     "src/models/DaxIqModel.cpp": 4,
@@ -104,7 +104,7 @@ BASELINE = {
     "src/core/TciServer.cpp": 11,
     "src/core/AutomationServer.cpp": 6,
     "src/core/WaveformInstaller.cpp": 3,
-    "src/core/DvkWavTransfer.cpp": 2,
+    "src/core/DvkWavTransfer.cpp": 1,
     "src/core/FirmwareUploader.cpp": 2,
     "src/core/RigctlProtocol.cpp": 2,
     "src/core/WfmDemodulator.cpp": 2,

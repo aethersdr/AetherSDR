@@ -14,7 +14,7 @@ its coverage level, including an explicit `NOT BUILT` row for optional RTL.
 | Flex | Exact guarded slice-sink commands, pan intent, filter origin, individual AGC fields; separately decoded status; no command echo from decode | Firmware acceptance, pan creation through the compatibility adapter |
 | Icom | Real CI-V scheduler with an unstarted transport; separately injected frequency/mode/filter/AGC reports and stale-generation rejection | Actual RS-BA1 delivery or firmware behavior |
 | HL2 | Pre-connect receiver configuration plus a socket-free real RX worker: mode/filter ordering, CW passband translation and applied AGC pair | Live Metis delivery, RF convergence or completed tuning/shift application |
-| ANAN | Pre-connect receiver configuration and retained WDSP AGC values, owner-thread signals | Live Protocol 2 delivery or completed DSP application |
+| ANAN | Pre-connect receiver configuration and retained, published WDSP AGC values, owner-thread signals | Live Protocol 2 delivery or completed DSP application |
 | Demo | Production synthetic session state and refusal before/after the session | Hardware behavior; filter/AGC DSP that Demo does not implement |
 | RTL (optional) | Declaration and cold receive refusal, without opening USB | Connected USB/DDC dispatch |
 
@@ -64,3 +64,67 @@ These tests are unconditional default CTests, registered in
 `tests/tests.cmake`; they run in the main full-suite and sanitizer lanes.
 The frozen per-PR CI allowlist is unchanged. None opens a network session,
 synthesizes third-party firmware or invokes keying.
+
+## Consolidated slice receive controls (#5917)
+
+The next M4 group uses typed DSP, audio and squelch requests plus slice-aware
+antenna and lock intents. `RadioModel` binds them once on both slice creation
+paths, checks the exact active object and owner thread, and rejects staged,
+disconnected or retired senders. Desktop notifications precede dispatch so a
+synchronous backend correction remains the final visible value. Nested edits
+retain the newest value, including the paired DSP state and squelch field mask.
+
+| Backend | Existing desktop behavior retained | Explicitly not added |
+| --- | --- | --- |
+| Flex | Independent DSP enable/level fields, AF gain/mute/balance, separate squelch writes, RX port and per-slice lock through the guarded sink | Slice manual notch (TNF is separate), new daemon audio capability |
+| Icom | Paired NB/NR, ANF enable, manual-notch position, AF gain, squelch threshold, profile-supported RX port and global dial lock | AF mute/balance, Flex extended DSP |
+| HL2 | Existing RX-worker NB, CW APF, mode-aware squelch and receiver mixer gain/mute/balance | Radio-side NR/ANF/manual notch |
+| RTL (optional) | Confirmed gain/mute/balance and FM/FM-N squelch for sparse configured receiver IDs | DSP or radio antenna controls; injected-USB model tests are offline |
+| Demo | NB and ANF affect the existing production signal generator | Independent AF mixer or new advertised DSP capabilities |
+| ANAN | Existing WDSP NB, slice mixer gain/mute/balance and client-only tune lock | Additional DSP or transport |
+
+`ReceiveDispatch` distinguishes a dispatched operation, a client-only lock, and
+an unsupported operation. It is not hardware acknowledgement. Unsupported
+requests feed the existing one-shot unsupported-control notice and log. Icom's
+mute/balance and Demo AF gain/mute/balance, squelch and NB level are explicitly
+refused; optimistic presentation alone is not evidence of backend dispatch.
+Changing these refusals to client-local success requires a maintainer decision
+and proof of the local effect; this migration does not invent that effect.
+Icom's global lock is distinct from Flex's slice lock; a family with neither retains
+the local tune lock. No `RadioCapabilities` fields or serialized feature records
+change. In particular, Flex and Icom desktop AF support does not authorize the
+daemon's guarded receive-audio methods.
+
+Kiwi replacement volume/balance/mute and squelch remain local. Its primary-Flex
+suppression mute, band-recall release and reassertion use an explicit compatibility
+origin. NRS firmware-default profile recall likewise carries a restore origin;
+normal observations remain passive. Existing Kiwi/squelch/APF/antenna tests now
+observe the typed dispatch surface, not retired raw-command signals.
+HL2, ANAN and RTL refuse the primary-native suppression origin: they did not
+mute native audio for Kiwi before this migration either. Typed compatibility
+requests do not add that missing handoff; only the existing Flex path is retained.
+
+The extended backend contract test checks all Flex field encodings and separate
+readback, Icom scheduler output, actual HL2 worker NB/APF/squelch configuration
+and mixer configuration, and Demo's worker blanker state and ANF effect on generated
+samples. The Demo worker is read through a test-only friend on its own thread;
+this is not a fake firmware peer. New model tests cover both construction paths,
+unique wiring, stale IDs, reconnect, off-thread refusal, nested edits, deletion,
+explicit unsupported results and NRS restore. These remain in the existing
+unconditional CTest targets; the frozen PR gate is unchanged.
+
+The landed `anan_noise_blanker_readback_test` additionally pins model dispatch
+across same/different-radio reconnect and typed NB requests through the actual
+ANAN worker, keeping requested and applied state separate during a DSP rebuild.
+The adapter delegates to #5824's existing NB implementation; it adds no DSP,
+transport, thread or capability.
+
+The landed split-audio preference recorder consumes typed operator audio intents,
+not radio readback or external-receive suppression. Its production translation
+helpers are shared by the socket-free `split_audio_profile_test`, which covers
+repeated apply/arm/restore cycles, non-operator writes, suppression/reassertion,
+and keeping everyday RX gain/mute outside split learning.
+
+TX controls, RIT/XIT, FM repeater and digital offsets, diversity, panadapter
+commands and DAX/PCM transport are outside this batch. The separate audio-path
+migration is not duplicated here.

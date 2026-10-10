@@ -157,6 +157,10 @@ private:
     // remote and rebuilding the engine only when the backend kind actually changes.
     void setBackend(AsrBackendKind kind, const QString& tierId);
 
+    // One place that turns the Sensitivity percentage into a threshold. The
+    // tap applies the tap-point scaling, so what goes in here is unscaled.
+    void applySensitivity(int percent);
+
     AudioEngine* m_audio = nullptr;
     CopyAssistPanel* m_panel = nullptr;
     CopyAssistSettingsDialog* m_settings = nullptr; // modeless model/GPU/options dialog

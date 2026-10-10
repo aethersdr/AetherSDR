@@ -14,6 +14,7 @@
 #include <complex>
 #include <cstdint>
 #include <cstdio>
+#include <limits>
 #include <span>
 #include <string>
 #include <vector>
@@ -493,12 +494,16 @@ int main()
         check(clipped[258] == 0x00 && clipped[259] == 0x09, "the packet fills to its last byte");
     }
 
-    // ---- High Priority Status: the two speaker fields ----
+    // ---- High Priority Status: the two speaker fields and the supply rail ----
     {
         std::vector<std::uint8_t> pkt(kHighPriorityStatusBytes, 0);
         pkt[0] = 0x00; pkt[1] = 0x00; pkt[2] = 0x01; pkt[3] = 0x02;  // seq 258
         pkt[30] = 0b0000'1000;            // speaker underflow, bit 3
         pkt[37] = 0x01; pkt[38] = 0x40;   // level 320, big-endian
+        pkt[57] = 0x02; pkt[58] = 0x18;   // AIN3 536 counts, big-endian
+        // AIN6, the input the spec calls "supply voltage", carrying what the
+        // same G2 sent there. It must not be what the rail decodes from.
+        pkt[49] = 0x06; pkt[50] = 0x35;   // 1589 counts
 
         const auto st = parseHighPriorityStatus(pkt);
         check(st.has_value(), "a 60-byte status packet parses");
@@ -506,7 +511,29 @@ int main()
             check(st->seq == 258, "the sequence is big-endian");
             check(st->speakerUnderflow, "byte 30 bit 3 is the speaker underflow");
             check(st->speakerFifoLevel == 320, "bytes 37-38 are the level, big-endian");
+            check(st->supplyRailCounts == 536,
+                  "bytes 57-58 are the supply rail in raw counts, big-endian --"
+                  " not bytes 49-50, whose 1589 counts read ~40 V on a 13.65 V rail");
         }
+
+        // The byte ORDER is the half a wrong decode gets silently right on small
+        // values: 536 is 0x0218, so a byte-swapped read gives 0x1802 = 6146. A
+        // single-byte read of 57 gives 2. Pinned so neither passes.
+        check(st && st->supplyRailCounts != 6146 && st->supplyRailCounts != 2,
+              "neither a byte-swapped nor a single-byte supply read passes");
+
+        // A rail the radio reports as zero is a REAL reading (a dead supply), not
+        // a missing one, and must decode as 0 rather than being treated as absent.
+        std::vector<std::uint8_t> zeroRail(kHighPriorityStatusBytes, 0);
+        const auto dead = parseHighPriorityStatus(zeroRail);
+        check(dead.has_value() && dead->supplyRailCounts == 0,
+              "a zero supply reading decodes as zero, not as no reading");
+
+        // The scale against the one bench point: 536 counts with a meter at the
+        // DC input reading 13.65 V. A 3.3 V reference would read 9.03 V here.
+        check(std::fabs(536 * kSupplyRailVoltsPerCount - 13.65) < 0.05,
+              "the bench median of 536 counts reads within 0.05 V of the 13.65 V"
+              " the meter showed");
 
         // Bit 3 only. Bit 2 is the DUC's underflow and must not read as ours --
         // that is the mistake the bitmask exists to prevent.
@@ -591,6 +618,20 @@ int main()
         float both[2] = {1.0f, 1.0f};
         applySliceAudioInPlace(both, 1, true, 50, 0);
         check(both[0] == 0.0f && both[1] == 0.0f, "mute wins over gain and balance");
+
+        // Quantising to the wire format. NaN is the case a clamp cannot catch;
+        // infinity pins the predicate as isfinite rather than isnan.
+        check(sliceAudioToInt16(0.0f) == 0, "silence quantises to zero");
+        check(sliceAudioToInt16(1.0f) == 32767, "full scale is the positive peak");
+        check(sliceAudioToInt16(-1.0f) == -32767, "negative full scale mirrors it");
+        check(sliceAudioToInt16(2.0f) == 32767, "an overshoot clamps, not wraps");
+        check(sliceAudioToInt16(-2.0f) == -32767, "and so does a negative overshoot");
+        check(sliceAudioToInt16(std::numeric_limits<float>::quiet_NaN()) == 0,
+              "a NaN quantises to silence, not to undefined behaviour");
+        check(sliceAudioToInt16(std::numeric_limits<float>::infinity()) == 0,
+              "an infinity quantises to silence, not a full-scale click");
+        check(sliceAudioToInt16(-std::numeric_limits<float>::infinity()) == 0,
+              "including a negative infinity");
 
         // Degenerate input must not walk off anything.
         applySliceAudioInPlace(nullptr, 4, false, 50, 50);

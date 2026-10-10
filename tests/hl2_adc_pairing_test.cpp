@@ -25,8 +25,10 @@
 
 #include "core/backends/hl2/Hl2AdcPairing.h"
 
+#include <cstdint>
 #include <cstdio>
 #include <limits>
+#include <optional>
 
 using AetherSDR::hl2::adcMeterReadingIsReal;
 using AetherSDR::hl2::AdcPairing;
@@ -34,6 +36,8 @@ using AetherSDR::hl2::adcPairing;
 using AetherSDR::hl2::kSliceHotHeadroomDb;
 using AetherSDR::hl2::kSliceStaleMs;
 using AetherSDR::hl2::sliceHeadroomDb;
+using AetherSDR::hl2::slicePeakAgeMs;
+using AetherSDR::hl2::slicePeakIsCurrent;
 
 namespace {
 
@@ -203,7 +207,7 @@ int main()
     // The case that case 7 could not express, and the reason the first fix
     // shipped with the fault still in it. At key-down the last receive block is
     // at most
-    // one block period old — 21.3 ms at 48 kHz — so `ago <= kSliceStaleMs` is
+    // one block period old — 21.3 ms at 48 kHz — so slicePeakIsCurrent() is
     // TRUE and stays true while the age climbs, for 129-150 ms depending on
     // where key-down fell inside a block. For that whole window the pre-transmit
     // peak, which is genuinely fresh, is paired against a live flag that is now
@@ -254,6 +258,39 @@ int main()
     // frozen reading if it does.
     check(kSliceStaleMs > 21, "longer than one output block, or receive goes stale");
     check(kSliceStaleMs < 200, "shorter than a PTT tap, or a transmission still lies");
+
+    // ---- 9b. The age gate's edges ------------------------------------------
+    //
+    // Hl2RxDsp forms the age with slicePeakAgeMs() and Hl2Backend gates the
+    // pairing with slicePeakIsCurrent(), so these are the product's expressions.
+    // Stamps and instants are plain numbers: no clock is read.
+    {
+        constexpr std::int64_t kNsPerMs = 1'000'000;
+        constexpr std::int64_t at = 5'000 * kNsPerMs;
+        constexpr std::int64_t limit = at + kSliceStaleMs * kNsPerMs;
+        check(!slicePeakAgeMs(0, limit).has_value(), "stamp 0 has no age: never sampled");
+        check(!slicePeakIsCurrent(0, limit), "and a never-sampled peak is not current");
+        check(!slicePeakIsCurrent(0, 0), "even at instant 0");
+        check(!slicePeakIsCurrent(std::nullopt), "no age is not current");
+        check(slicePeakAgeMs(at, at) == 0 && slicePeakIsCurrent(at, at),
+              "age 0 is current");
+        check(slicePeakAgeMs(at, at - 3 * kNsPerMs) == 0
+                  && slicePeakIsCurrent(at, at - 3 * kNsPerMs),
+              "an instant before the stamp reads as age 0, current");
+        check(slicePeakAgeMs(at, limit - 1) == kSliceStaleMs - 1,
+              "the age truncates to whole milliseconds");
+        check(slicePeakAgeMs(at, limit) == kSliceStaleMs && slicePeakIsCurrent(at, limit),
+              "exactly kSliceStaleMs old is still current");
+        check(slicePeakIsCurrent(at, limit + kNsPerMs - 1),
+              "and stays current until the next whole millisecond");
+        check(slicePeakAgeMs(at, limit + kNsPerMs) == kSliceStaleMs + 1
+                  && !slicePeakIsCurrent(at, limit + kNsPerMs),
+              "kSliceStaleMs + 1 is stale");
+        check(slicePeakIsCurrent(kSliceStaleMs) && !slicePeakIsCurrent(kSliceStaleMs + 1),
+              "the gate on an age alone has the same edge");
+        static_assert(slicePeakIsCurrent(at, limit) && !slicePeakIsCurrent(at, limit + kNsPerMs),
+                      "usable in a constant expression");
+    }
 
     // ---- 10. Headroom is the number the readout states ---------------------
     //

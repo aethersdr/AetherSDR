@@ -7,6 +7,8 @@
 #include <QByteArray>
 
 #include <algorithm>
+#include <cmath>
+#include <limits>
 #include <cstdio>
 #include <random>
 #include <vector>
@@ -300,6 +302,159 @@ void testMidMessageHeld()
 
 } // namespace
 
+// Extensions: rejected unless negotiated, sequenced like Data when they are.
+void testExtensions()
+{
+    const QByteArray payload = spectrum::encode(67, 4000, std::vector<float>(32, -45.0f));
+    FrameEncoder enc;
+    std::vector<Report> reports;
+    enc.encodeControl(MessageType::Ready, &reports);
+    check(enc.encodeExtension(MessageType::AudioSpectrum, payload, &reports),
+          "an extension message encodes");
+    check(!enc.encodeExtension(MessageType::Data, payload, &reports),
+          "encodeExtension refuses a version-0 type");
+    check(!enc.encodeExtension(MessageType::AudioSpectrum, {}, &reports),
+          "encodeExtension refuses an empty payload");
+    check(reports.size() == 1 + static_cast<size_t>(packetsFor(payload.size())),
+          "READY plus one extension message were emitted");
+    check(reports[1][3] == 0x40, "AudioSpectrum is type 0x40");
+
+    FrameReassembler plain;
+    std::vector<Message> out;
+    bool ok = true;
+    for (const Report& r : reports) {
+        ok = plain.feed(r, &out) && ok;
+    }
+    check(!ok && plain.error() == FrameReassembler::Error::BadType,
+          "an extension the receiver did not negotiate is a framing error (stock CTR2 view)");
+
+    FrameReassembler negotiated;
+    negotiated.setExtensions(capabilityBit(MessageType::AudioSpectrum));
+    negotiated.reset();  // the negotiated set survives a link restart
+    out.clear();
+    ok = true;
+    for (const Report& r : reports) {
+        ok = negotiated.feed(r, &out) && ok;
+    }
+    check(ok && out.size() == 2 && out[1].type == MessageType::AudioSpectrum
+              && out[1].payload == payload,
+          "a negotiated extension arrives whole with its type");
+
+    // Data after an extension keeps the shared counter sequence.
+    std::vector<Report> more;
+    enc.encodeData(QByteArray("ping\n"), &more);
+    for (const Report& r : more) {
+        ok = negotiated.feed(r, &out) && ok;
+    }
+    check(ok && out.back().type == MessageType::Data, "Data follows an extension in sequence");
+}
+
+// Each extension type has its own maximum length, and only defined types
+// can be enabled.
+void testExtensionLengths()
+{
+    check(extensionMaxLength(MessageType::AudioSpectrum) == 5 + spectrum::kMaxBars,
+          "AudioSpectrum carries at most 69 bytes");
+    FrameEncoder enc;
+    std::vector<Report> out;
+    check(!enc.encodeExtension(MessageType::AudioSpectrum, QByteArray(70, '\x01'), &out)
+              && out.empty(),
+          "the encoder refuses an over-long spectrum");
+
+    FrameReassembler rx;
+    rx.setExtensions(0xFFFFFFFFu);  // every bit offered
+    std::vector<Message> msgs;
+    enc.encodeControl(MessageType::Ready, &out);
+    for (const Report& r : out) {
+        rx.feed(r, &msgs);
+    }
+    // A hand-built header: AudioSpectrum claiming 1474 bytes.
+    const int len = 1474;
+    const int packets = packetsFor(len);
+    const Report big{kMarker, kVersion, 1, 0x40, std::uint8_t(packets >> 8),
+                     std::uint8_t(packets & 0xFF), std::uint8_t(len >> 8), std::uint8_t(len & 0xFF)};
+    check(!rx.feed(big, &msgs) && rx.error() == FrameReassembler::Error::BadLength,
+          "an over-long extension header is a framing error");
+
+    FrameReassembler undefined;
+    undefined.setExtensions(1u << 5);  // type 0x45: not defined
+    out.clear();
+    msgs.clear();
+    enc.reset();
+    enc.encodeControl(MessageType::Ready, &out);
+    for (const Report& r : out) {
+        undefined.feed(r, &msgs);
+    }
+    const Report undef{kMarker, kVersion, 1, 0x45, 0, 2, 0, 1};
+    check(!undefined.feed(undef, &msgs) && undefined.error() == FrameReassembler::Error::BadType,
+          "enabling a type with no defined length does not make it acceptable");
+}
+
+void testCapabilitiesAndSpectrum()
+{
+    const std::uint32_t caps = capabilityBit(MessageType::AudioSpectrum) | (1u << 31);
+    const QByteArray r = capabilities::encode(caps);
+    check(r.size() == 8 && r[0] == 'C' && r[1] == 'X' && r[2] == 0x01,
+          "capabilities report starts 'C' 'X' version 1");
+    check(capabilities::decode(r) == caps, "capabilities round-trip");
+    QByteArray bad = r;
+    bad[0] = 'Z';
+    check(capabilities::decode(bad) == 0, "a report without the magic offers nothing");
+    check(capabilities::decode(r.left(7)) == 0, "a short report offers nothing");
+    bad = r;
+    bad[2] = 0x02;
+    check(capabilities::decode(bad) == 0, "an unknown extension version offers nothing");
+    check(capabilities::decode(r + QByteArray(1, '\0')) == 0, "a long report offers nothing");
+    bad = r;
+    bad[3] = char(0xFF);
+    check(capabilities::decode(bad) == 0, "a nonzero reserved byte offers nothing");
+
+    const QByteArray p = spectrum::encode(67, 4000, {-90.0f, 0.0f, -45.0f, 5.0f, -200.0f,
+                                                     std::numeric_limits<float>::quiet_NaN()});
+    auto u = [&](int i) { return static_cast<std::uint8_t>(p[i]); };
+    check(p.size() == 5 + 6 && u(0) == 6, "bar count leads the payload");
+    check(u(1) == 0x00 && u(2) == 67, "then the log axis's low edge, 67 Hz, MSB first");
+    check(u(3) == 0x0F && u(4) == 0xA0, "then the span, 4000 Hz, MSB first");
+    check(u(5) == 0 && u(6) == 255 && u(7) == 128,
+          "-90 dB is 0, 0 dBFS is 255, -45 dB is mid-scale");
+    check(u(8) == 255 && u(9) == 0 && u(10) == 0,
+          "levels clamp, and a non-finite level reads as the floor");
+    check(spectrum::encode(67, 4000, std::vector<float>(100, -10.0f)).size()
+              == 5 + spectrum::kMaxBars,
+          "at most 64 bars are sent");
+}
+
+// The bars span the passband width, rounded up to a clean step, capped at
+// the audio's Nyquist frequency; there is no per-mode rule.
+void testDisplaySpan()
+{
+    check(spectrum::displaySpanHz(100, 2800, 24000) == 3000, "SSB 100-2800 spans 0-3 kHz");
+    check(spectrum::displaySpanHz(0, 6000, 24000) == 6000, "a 6 kHz SSB filter spans 0-6 kHz");
+    check(spectrum::displaySpanHz(-2800, -100, 24000) == 3000, "LSB is the same width");
+    check(spectrum::displaySpanHz(-300, 300, 24000) == 600, "a 600 Hz CW filter spans 0-600 Hz");
+    check(spectrum::displaySpanHz(-50, 50, 24000) == 500, "very narrow filters span at least 500 Hz");
+    check(spectrum::displaySpanHz(-5000, 5000, 24000) == 10000, "AM +/-5 kHz spans 0-10 kHz");
+    check(spectrum::displaySpanHz(-10000, 10000, 24000) == 12000,
+          "AM +/-10 kHz is capped at 12 kHz, the Nyquist frequency of 24 kHz audio");
+    check(spectrum::displaySpanHz(-10000, 10000, 48000) == 20000, "48 kHz audio allows 20 kHz");
+    check(spectrum::displaySpanHz(0, 0, 24000) == spectrum::kDefaultSpanHz, "no passband: default");
+
+    // The frequency axis is logarithmic from a low edge of span / 60, kept
+    // within 20..100 Hz.
+    check(spectrum::displayLowHz(6000) == 100 && spectrum::displayLowHz(3000) == 50
+              && spectrum::displayLowHz(600) == 20 && spectrum::displayLowHz(12000) == 100,
+          "low edges: 6 kHz -> 100 Hz, 3 kHz -> 50 Hz, 600 Hz -> 20 Hz, capped at 100 Hz");
+    check(spectrum::bandEdgeHz(100, 6000, 32, 0) == 100 && spectrum::bandEdgeHz(100, 6000, 32, 32) == 6000,
+          "the bars run from the low edge to the span");
+    const double r0 = spectrum::bandEdgeHz(100, 6000, 32, 1) / spectrum::bandEdgeHz(100, 6000, 32, 0);
+    const double r1 = spectrum::bandEdgeHz(100, 6000, 32, 20) / spectrum::bandEdgeHz(100, 6000, 32, 19);
+    check(std::abs(r0 - r1) < 1e-9 && r0 > 1.13 && r0 < 1.14,
+          "every bar covers the same frequency ratio (log spacing)");
+    check(std::abs(spectrum::bandEdgeHz(100, 6000, 32, 16) - 774.6) < 0.1,
+          "the middle bar edge is the geometric mean, 775 Hz, not 3 kHz");
+    check(spectrum::bandEdgeHz(0, 4000, 32, 8) == 1000, "a low edge of 0 means linear spacing");
+}
+
 int main()
 {
     testKnownAnswerVectors();
@@ -309,6 +464,10 @@ int main()
     testDatagrams();
     testFailClosed();
     testMidMessageHeld();
+    testExtensions();
+    testCapabilitiesAndSpectrum();
+    testDisplaySpan();
+    testExtensionLengths();
     if (g_failures) {
         std::fprintf(stderr, "%d check(s) failed\n", g_failures);
         return 1;

@@ -24,7 +24,7 @@ class CallsignCard : public QFrame {
     Q_OBJECT
 
 public:
-    enum class Variant { Compact, Large };
+    enum class Variant { Compact, Large, LiveCw };
 
     explicit CallsignCard(Variant variant, QWidget* parent = nullptr);
 
@@ -44,6 +44,7 @@ public:
 
     // Compact cards embed a ✕ button; the host hides the card on this.
     void setCloseButtonVisible(bool visible);
+    void setTextFontPx(int px);
 
 signals:
     void closeRequested();
@@ -54,6 +55,7 @@ private:
     int  photoEdge() const;
 
     Variant m_variant;
+    int m_textFontPx{18};
     QString m_call;
 
     QWidget*     m_accentBar{nullptr};

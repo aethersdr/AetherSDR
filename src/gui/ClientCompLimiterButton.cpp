@@ -14,15 +14,15 @@ namespace {
 //   - Armed (limiter enabled, not firing) — a dark, near-transparent wash
 //     of green, bright green text, full-strength green border
 //   - Active (firing, held 500 ms) — red body + halo, white text
-inline QColor kBgArmed() { return AetherSDR::ThemeManager::instance().color("color.accent.success"); }
-inline QColor kBgDisarmed() { return AetherSDR::ThemeManager::instance().color("color.background.0"); }
-inline QColor kBgActive() { return AetherSDR::ThemeManager::instance().color("color.accent.danger"); }
-inline QColor kBorderArm() { return AetherSDR::ThemeManager::instance().color("color.accent.success"); }
-inline QColor kBorderOff() { return AetherSDR::ThemeManager::instance().color("color.background.1"); }
-inline QColor kBorderHit() { return AetherSDR::ThemeManager::instance().color("color.accent.danger"); }
-inline QColor kTextArmed() { return AetherSDR::ThemeManager::instance().color("color.accent.success"); }
-inline QColor kTextOff() { return AetherSDR::ThemeManager::instance().color("color.text.label"); }
-inline QColor kTextActive() { return AetherSDR::ThemeManager::instance().color("color.text.primary"); }
+inline QColor kBgArmed(const QWidget* w) { return AetherSDR::ThemeManager::instance().color(w, "color.accent.success"); }
+inline QColor kBgDisarmed(const QWidget* w) { return AetherSDR::ThemeManager::instance().color(w, "color.background.0"); }
+inline QColor kBgActive(const QWidget* w) { return AetherSDR::ThemeManager::instance().color(w, "color.accent.danger"); }
+inline QColor kBorderArm(const QWidget* w) { return AetherSDR::ThemeManager::instance().color(w, "color.accent.success"); }
+inline QColor kBorderOff(const QWidget* w) { return AetherSDR::ThemeManager::instance().color(w, "color.background.1"); }
+inline QColor kBorderHit(const QWidget* w) { return AetherSDR::ThemeManager::instance().color(w, "color.accent.danger"); }
+inline QColor kTextArmed(const QWidget* w) { return AetherSDR::ThemeManager::instance().color(w, "color.accent.success"); }
+inline QColor kTextOff(const QWidget* w) { return AetherSDR::ThemeManager::instance().color(w, "color.text.label"); }
+inline QColor kTextActive(const QWidget* w) { return AetherSDR::ThemeManager::instance().color(w, "color.text.primary"); }
 } // namespace
 
 ClientCompLimiterButton::ClientCompLimiterButton(QWidget* parent)
@@ -66,9 +66,9 @@ void ClientCompLimiterButton::paintEvent(QPaintEvent*)
     QColor border;
     QColor textColor;
     if (m_active) {
-        bg = kBgActive();
-        border = kBorderHit();
-        textColor = kTextActive();
+        bg = kBgActive(this);
+        border = kBorderHit(this);
+        textColor = kTextActive(this);
     } else if (isChecked()) {
         // A near-transparent wash of the accent, not a slab of it. The label
         // is the same accent at full strength, so filling the body with the
@@ -77,14 +77,14 @@ void ClientCompLimiterButton::paintEvent(QPaintEvent*)
         // alpha, the body is barely more than a tint over whatever is behind
         // it and the text has the whole contrast range to itself; the border
         // stays at full strength, so "armed" still reads at a glance.
-        bg = kBgArmed().darker(300);
+        bg = kBgArmed(this).darker(300);
         bg.setAlpha(60);
-        border = kBorderArm();
-        textColor = kTextArmed();
+        border = kBorderArm(this);
+        textColor = kTextArmed(this);
     } else {
-        bg = kBgDisarmed();
-        border = kBorderOff();
-        textColor = kTextOff();
+        bg = kBgDisarmed(this);
+        border = kBorderOff(this);
+        textColor = kTextOff(this);
     }
 
     if (underMouse() && !m_active) {
@@ -100,7 +100,7 @@ void ClientCompLimiterButton::paintEvent(QPaintEvent*)
     // indicator on hardware gear.
     if (m_active) {
         QRadialGradient g(r.center(), r.width() * 0.6);
-        QColor glow = kBgActive();
+        QColor glow = kBgActive(this);
         glow.setAlpha(90);
         g.setColorAt(0.0, glow);
         glow.setAlpha(0);

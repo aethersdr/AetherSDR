@@ -73,6 +73,77 @@
             "accent": "{color.blue.500}",
             "tx":     "#b08840"
           },
+          "titlebar": {
+            "background":             "#ebf5f5f8",
+            "border":                 "#4d506e8c",
+            "tab": {
+              "hover":            "#0f000000",
+              "active.background": "#1a0088b0",
+              "active.border":     "#730088b0"
+            },
+            "status": {
+              "connected": "{color.green.500}",
+              "available": "{color.gray.300}",
+              "inUse":     "{color.amber.500}"
+            },
+            "menu": {
+              "background": "#ebf5f5f8"
+            },
+            "otherTx": {
+              "background": "#ffffff"
+            },
+            "caption": {
+              "glyph":       "{color.gray.100}",
+              "glyph.hover": "{color.gray.50}",
+              "hover":       "#14000000",
+              "close.hover": "#c42b1c",
+              "close.glyph": "#ffffff",
+              "semantic": {
+                "close":    "#ff5f57",
+                "minimize": "#febc2e",
+                "maximize": "#28c840",
+                "inactive": "#565a60",
+                "glyph":    "#a0000000"
+              }
+            }
+          },
+          "brand": {
+            "wordmark": "#0f2436",
+            "gradient": {
+              "type": "linear-gradient",
+              "angle": 100,
+              "stops": [
+                { "at": 0.00, "color": "#0b6bc4" },
+                { "at": 0.42, "color": "#0f8fb8" },
+                { "at": 1.00, "color": "#12a08c" }
+              ]
+            }
+          },
+          "canon": {
+            "ground":   "{color.gray.900}",
+            "raised":   "{color.gray.950}",
+            "nested":   "{color.gray.800}",
+            "control":  "{color.gray.750}",
+            "ink":      "{color.gray.50}",
+            "inkSoft":  "#3a4e62",
+            "muted":    "{color.gray.100}",
+            "line":     "{color.gray.700}",
+            "lineHi":   "#5a7288",
+            "cyan":     "#005f85",
+            "aqua":     "#00556f",
+            "onAccent": "{color.gray.950}",
+            "sparkHot": "{color.blue.300}",
+            "sparkGold": "#9a5c00",
+            "sparkGoldHot": "#e0a030",
+            "bloom": { "blue": "#140b6bc4", "teal": "#0f12a08c" },
+            "grid":     "#0a1a2a3a"
+          },
+          "cw": {
+            "confidence.high":   "{color.green.500}",
+            "confidence.medium": "#737313",
+            "confidence.fair":   "#ae5700",
+            "confidence.low":    "{color.red.500}"
+          },
           "meter": {
             "crst":   "{color.red.500}",
             "rms":    "{color.blue.500}",
@@ -319,6 +390,25 @@
         }
       },
       "scopes": {
+        "canon": {
+          "tokens": {
+            "color.background.0":      "{color.gray.950}",
+            "color.background.1":      "{color.gray.800}",
+            "color.background.2":      "{color.gray.750}",
+            "color.background.3":      "#5a7288",
+            "color.text.primary":      "{color.gray.50}",
+            "color.text.secondary":    "#3a4e62",
+            "color.text.label":        "{color.gray.100}",
+            "color.border.subtle":     "{color.gray.700}",
+            "color.border.strong":     "#5a7288",
+            "color.accent":            "#005f85",
+            "color.accent.bright":     "#00556f",
+            "color.knob.background":   "{color.gray.750}",
+            "color.knob.foreground":   "#005f85",
+            "color.slider.background": "{color.gray.750}",
+            "color.slider.foreground": "#005f85"
+          }
+        },
         "applet": {
           "tokens": {},
           "scopes": {

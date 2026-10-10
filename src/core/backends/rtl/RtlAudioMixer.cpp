@@ -83,13 +83,20 @@ void RtlAudioMixer::drain(std::uint64_t captureClock, Sink& sink) noexcept
             const float level = slot.input.mute ? 0 : slot.input.gain / static_cast<float>(m_count);
             const float leftGain = level * std::min(1.0f, 2 * (1 - slot.input.pan));
             const float rightGain = level * std::min(1.0f, 2 * slot.input.pan);
+            MissingMask missing{};
             for (std::size_t i = 0; i < kQuantum; ++i) {
                 Frame& frame = slot.frames[(m_next + i) % kCapacity];
                 if (frame.valid && frame.position == m_next + i) {
                     m_output[2 * i] += frame.left * leftGain;
                     m_output[2 * i + 1] += frame.right * rightGain;
                     frame.valid = false;
-                } else { ++m_late; }
+                } else {
+                    ++m_late;
+                    missing[i / 64] |= std::uint64_t{1} << (i % 64);
+                }
+            }
+            if (missing[0] != 0 || missing[1] != 0) {
+                sink.missingFrames(slot.input, m_next, captureClock, missing);
             }
         }
         for (float& value : m_output) { value = std::clamp(value, -1.0f, 1.0f); }

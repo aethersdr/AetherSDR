@@ -1,0 +1,5 @@
+flex-tailnet-shim
+LICENSES
+*.tar.gz
+# go:embed assets in a vendored module; the repo-wide build/ rule would drop them.
+!vendor/github.com/tailscale/web-client-prebuilt/build/

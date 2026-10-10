@@ -5,24 +5,14 @@
 #include <QTimer>
 #include <QFile>
 #include <QString>
-#include <QTime>
 #include <atomic>
+
+#include "core/DxSpot.h"
+#include "core/GoClusterSettings.h"
 
 namespace AetherSDR {
 
-struct DxSpot {
-    QString spotterCall;    // W3LPL
-    double  freqMhz{0.0};  // 14.025 (converted from kHz)
-    QString dxCall;         // JA1ABC
-    QString comment;        // "CW big signal"
-    QTime   utcTime;        // 18:24 UTC
-    QString source;         // "Cluster", "RBN", "WSJT-X"
-    QString color;          // #AARRGGBB for radio spot color (optional)
-    int     snr{0};         // signal-to-noise ratio (dB), for WSJT-X decodes
-    int     lifetimeSec{0}; // 0 = use source default from AppSettings
-};
-
-// Telnet client for DX cluster nodes (DX Spider, AR-Cluster, CC Cluster).
+// Telnet client for DX cluster nodes (DX Spider, AR-Cluster, CC Cluster, GoCluster).
 // Connects, logs in with callsign, parses "DX de" spot lines, and emits
 // spotReceived() for each parsed spot.
 class DxClusterClient : public QObject {
@@ -49,6 +39,10 @@ public:
     // to "RbnStartupCommands" so the two tabs persist independently (#2683).
     void setStartupCommandsKey(const QString& key) { m_startupCommandsKey = key; }
 
+    // Which GoClusterSettings feed's "hide unverified" flag applies to this
+    // instance. Defaults to the Cluster tab; MainWindow points RBN at its own.
+    void setGoClusterFeed(const QString& feed) { m_goClusterFeed = feed; }
+
 public slots:
     // Defer socket + timer construction to the worker thread (#1929). On Windows,
     // QTcpSocket creates a QSocketNotifier whose Win32 message-loop affinity is
@@ -57,6 +51,12 @@ public slots:
     // socket events delivered during a disconnect cascade trip QCoreApplication's
     // cross-thread sendEvent assert. Construct on the SpotClients thread instead.
     void initialize();
+
+    // Empty the spot log (SpotHub's Clear). Done here, on the client's own
+    // handle and thread, so no write can land between a truncate and the
+    // file position. The session header comes back with the next line, so
+    // a replay still knows the server, and a quiet feed's log stays empty.
+    void clearLog();
 
 signals:
     void connected();
@@ -73,7 +73,6 @@ private slots:
     void onReconnectTimer();
 
 private:
-    bool parseDxSpotLine(const QString& line, DxSpot& spot) const;
     bool isLoginPrompt(const QString& line) const;
     void handleLine(const QString& line);
     void stripTelnetIAC();
@@ -85,6 +84,10 @@ private:
     // (errorOccurred + timeout can both fire for one failed attempt). No-op when
     // m_intentionalDisconnect is set or the timer is already active (#2380).
     void scheduleReconnect();
+    // Append one line to the spot log, first rewriting the session header
+    // when clearLog() emptied it.
+    void appendLog(const QString& line);
+    void writeLogSessionHeader();
 
     QTcpSocket* m_socket{nullptr};
     QByteArray  m_readBuffer;
@@ -93,11 +96,15 @@ private:
 
     QString m_logFileName{"dxcluster.log"};
     QString m_startupCommandsKey{"DxClusterStartupCommands"};
+    QString m_goClusterFeed{GoClusterSettings::kFeedCluster};
     QString m_host;
     quint16 m_port{7300};
     QString m_callsign;
+    QString m_connectedAtUtc;  // session header timestamp, kept for rewrites
+    bool    m_logNeedsHeader{false};  // clearLog() emptied an open log
     std::atomic<bool> m_connected{false};
     bool    m_loggedIn{false};
+    bool    m_goCluster{false};  // pre-login banner named GoCluster; reset per connection
     bool    m_intentionalDisconnect{false};
     int     m_reconnectAttempts{0};
     int     m_connectEpoch{0};  // incremented each connectToCluster(); guards stale timeouts

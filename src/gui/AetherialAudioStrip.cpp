@@ -3,13 +3,11 @@
 #include <QGuiApplication>
 #include <QScreen>
 
-#include "FramelessMoveHelper.h"
 #include "FramelessResizer.h"
 #include "AetherTxSettingsDialog.h"
 #include "StagePage.h"
 #include "StageTabBar.h"
 #include "ClientEqApplet.h"
-#include "EditorFramelessTitleBar.h"
 #include "StripCompPanel.h"
 #include "StripDeEssPanel.h"
 #include "StripEqPanel.h"
@@ -31,7 +29,6 @@
 
 #include <QButtonGroup>
 #include <QByteArray>
-#include <QCloseEvent>
 #include <QComboBox>
 #include <QScrollArea>
 #include <QScrollBar>
@@ -47,9 +44,6 @@
 #include <QFrame>
 #include <QGridLayout>
 #include <QHideEvent>
-#include <QMouseEvent>
-#include <QMoveEvent>
-#include <QResizeEvent>
 #include <QShowEvent>
 #include <QStackedWidget>
 #include <QStandardPaths>
@@ -59,15 +53,9 @@
 namespace AetherSDR {
 
 namespace {
-// The size this window opens at, every time — see showEvent().
+// The size this window opens at, every time — see setLaunchSize().
 constexpr QSize kLaunchSize(720, 480);
 }  // namespace
-
-namespace {
-// Edge-to-edge title-bar height. Reserved from the frameless resize edge so a
-// title-bar grab starts a move, not a top-edge resize (#4266).
-constexpr int kTitleBarHeight = 18;
-}
 
 namespace {
 
@@ -103,122 +91,34 @@ AetherialAudioStrip::Stage fromChainStage(AudioEngine::TxChainStage s)
 } // namespace
 
 AetherialAudioStrip::AetherialAudioStrip(AudioEngine* engine, QWidget* parent)
-    : QWidget(parent, Qt::Window)
+    : CanonWindow(QStringLiteral("AetherTX"), parent, Kind::Workspace)
     , m_audio(engine)
 {
     const QString title = QStringLiteral("AetherTX");
-    setWindowTitle(title);
-    AetherSDR::ThemeManager::instance().applyStyleSheet(this, "QWidget { background: {{color.background.0}}; color: {{color.text.primary}}; }"
-        "QFrame#stripGroupBox { border: 1px solid {{color.background.1}};"
-        " border-radius: 4px; background: transparent; }");
-    setMinimumSize(1140, 900);
-    // The strip's natural content is ~1620 px tall and assumes a 4K
-    // (or larger) display.  On 1080p / 1440p, opening at 1620 puts the
-    // One stage to a page now, so the window no longer has to be tall enough
-    // for a nine-panel grid. Same size the receive window opens at, for the
-    // same reason: it sits on the desktop rather than filling it.
+    theme::setContainer(this, QStringLiteral("canon/aetherTx"));
+    // A workspace tool on the style guide's CanonWindow, like AetherRX: the
+    // position persists under the key it used before (the saved geometry
+    // carries over), and it resizes from every edge.
+    setGeometryKey(QStringLiteral("AetherialStripGeometry2"));
+    // One stage to a page, so the window does not have to be tall enough for
+    // a nine-panel grid. Same size the receive window opens at, for the same
+    // reason: it sits on the desktop rather than filling it.
     setMinimumSize(600, 400);
-    resize(kLaunchSize);
+    // Pinned on every open, as AetherRX's is; the position is still restored.
+    setLaunchSize(kLaunchSize);
+    FramelessResizer::install(this);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(bodyWidget(), canonBodyStyleSheet());
 
-    // Listen at the native-window boundary so edge presses still reach the
-    // resize handler when the child-heavy strip content covers every margin.
-    // Reserve the edge-to-edge title-bar strip for moves so a title-bar grab
-    // isn't stolen by the top-edge resize zone (#4266).
-    FramelessResizer::install(this, 6, kTitleBarHeight);
+    auto* outer = new QVBoxLayout(bodyWidget());
+    outer->setContentsMargins(14, 12, 14, 14);
+    outer->setSpacing(10);
+    outer->addWidget(makeCanonHeader(title));
 
-    // Outer layout has zero margins so the title bar can run edge-to-edge
-    // across the whole window (matching the applet ContainerTitleBar).
-    // The 6 px resize hit zone + 2 px breathing room lives on a nested
-    // content layout below the title bar.
-    auto* root = new QVBoxLayout(this);
-    root->setContentsMargins(0, 0, 0, 0);
-    root->setSpacing(0);
-
-    // Custom title bar styled to match the applet ContainerTitleBar:
-    // 18 px tall, blue-gradient background, 10 px bold title, trio of
-    // window-control buttons at the right.  Built inline rather than
-    // via EditorFramelessTitleBar because that widget is hard-wired to
-    // the editor look (20 px flat).  The strip wants the chrome family
-    // it shares with the docked applet panels.
-    {
-        m_titleBar = new QWidget(this);
-        m_titleBar->setFixedHeight(kTitleBarHeight);
-        m_titleBar->setAttribute(Qt::WA_StyledBackground, true);
-        AetherSDR::ThemeManager::instance().applyStyleSheet(m_titleBar, "QWidget { background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
-            "stop:0 #5a7494, stop:0.5 #384e68, stop:1 {{color.background.1}}); "
-            "border-bottom: 1px solid #0a1a28; }");
-        m_titleBar->installEventFilter(this);
-
-        auto* row = new QHBoxLayout(m_titleBar);
-        row->setContentsMargins(6, 0, 2, 0);
-        row->setSpacing(4);
-
-        // Drag grip on the left — matches ContainerTitleBar.  Decorative
-        // only; actual drag is handled on the bar as a whole via the
-        // event filter installed below.
-        auto* grip = new QLabel(QString::fromUtf8("\xe2\x8b\xae\xe2\x8b\xae"),
-                                m_titleBar);
-        AetherSDR::ThemeManager::instance().applyStyleSheet(grip, "QLabel { background: transparent; color: {{color.text.secondary}};"
-            " font-size: 10px; }");
-        row->addWidget(grip);
-
-        // No side suffix any more: this window is the transmit chain, and the
-        // receive chain is AetherRX.
-        m_titleLbl = new QLabel(title,
-                                m_titleBar);
-        m_titleLbl->setStyleSheet(
-            "QLabel { background: transparent; color: #e0ecf4;"
-            " font-size: 10px; font-weight: bold; }");
-        row->addWidget(m_titleLbl);
-        row->addStretch();
-
-        const QString btnStyle =
-            "QPushButton { background: transparent; border: none;"
-            " color: #c8d8e8; font-size: 11px; font-weight: bold;"
-            " padding: 0px 4px; }"
-            "QPushButton:hover { color: #ffffff; }";
-        const QString closeBtnStyle =
-            "QPushButton { background: transparent; border: none;"
-            " color: #c8d8e8; font-size: 11px; font-weight: bold;"
-            " padding: 0px 4px; }"
-            "QPushButton:hover { color: #ffffff; background: #cc2030; }";
-
-        auto* minBtn = new QPushButton(QString::fromUtf8("\xe2\x80\x94"), m_titleBar);  // —
-        minBtn->setFixedSize(16, 16);
-        minBtn->setCursor(Qt::ArrowCursor);
-        minBtn->setStyleSheet(btnStyle);
-        minBtn->setToolTip("Minimize");
-        connect(minBtn, &QPushButton::clicked, this, &QWidget::showMinimized);
-        row->addWidget(minBtn);
-
-        auto* maxBtn = new QPushButton(QString::fromUtf8("\xe2\x96\xa1"), m_titleBar); // □
-        maxBtn->setFixedSize(16, 16);
-        maxBtn->setCursor(Qt::ArrowCursor);
-        maxBtn->setStyleSheet(btnStyle);
-        maxBtn->setToolTip("Maximize");
-        connect(maxBtn, &QPushButton::clicked, this, [this]() {
-            if (isMaximized()) showNormal(); else showMaximized();
-        });
-        row->addWidget(maxBtn);
-
-        auto* closeBtn = new QPushButton(QString::fromUtf8("\xc3\x97"), m_titleBar); // ×
-        closeBtn->setFixedSize(16, 16);
-        closeBtn->setCursor(Qt::ArrowCursor);
-        closeBtn->setStyleSheet(closeBtnStyle);
-        closeBtn->setToolTip("Close");
-        connect(closeBtn, &QPushButton::clicked, this, &QWidget::close);
-        row->addWidget(closeBtn);
-    }
-    root->addWidget(m_titleBar);
-
-    // Content area below the title bar — has the 8 px resize-hit margin
-    // so the title bar can stay flush to the window edges above.
-    auto* content = new QWidget(this);
+    auto* content = new QWidget(bodyWidget());
     auto* body = new QVBoxLayout(content);
-    body->setContentsMargins(8, 0, 8, 8);
+    body->setContentsMargins(0, 0, 0, 0);
     body->setSpacing(8);
-    m_bodyLayout = body;
-    root->addWidget(content, 1);
+    outer->addWidget(content, 1);
 
     m_pcAudioNotice = new QLabel(content);
     m_pcAudioNotice->setObjectName(QStringLiteral("aetherTxPcAudioNotice"));
@@ -478,42 +378,6 @@ AetherialAudioStrip::AetherialAudioStrip(AudioEngine* engine, QWidget* parent)
     // floating ClientEqEditor.
     connect(m_eq, &StripEqPanel::cutoffsDragRequested,
             this, &AetherialAudioStrip::cutoffsDragRequested);
-
-
-    // Hide each embedded panel's min/max/close (the strip owns window controls);
-    // dynamic_cast because EditorFramelessTitleBar has no Q_OBJECT. Also rewrite
-    // each panel's own QSS from `#08121d` to `#0f0f1a` to match SMeterWidget /
-    // applet chrome: a child's stylesheet always beats a parent's, so a strip-level
-    // override can't reach them.
-    auto recolour = [](QWidget* w) {
-        QString s = w->styleSheet();
-        if (s.contains("#08121d")) {
-            s.replace("#08121d", "#0f0f1a");
-            w->setStyleSheet(s);
-        }
-    };
-    for (QWidget* p : { static_cast<QWidget*>(m_tube),
-                        static_cast<QWidget*>(m_gate),
-                        static_cast<QWidget*>(m_eq),
-                        static_cast<QWidget*>(m_comp),
-                        static_cast<QWidget*>(m_dess),
-                        static_cast<QWidget*>(m_pudu),
-                        static_cast<QWidget*>(m_reverb) }) {
-        if (!p) continue;
-        recolour(p);
-        for (QObject* child : p->children()) {
-            if (auto* tb = dynamic_cast<EditorFramelessTitleBar*>(child)) {
-                tb->setControlsVisible(false);
-                recolour(tb);
-                break;
-            }
-        }
-    }
-
-    restoreGeometryFromSettings();
-    setFramelessMode(
-        AppSettings::instance().value("FramelessWindow", "True").toString() == "True");
-
 }
 
 
@@ -625,28 +489,6 @@ void AetherialAudioStrip::setAudioPathNotice(const QString& text, bool warning)
     m_pcAudioNotice->setVisible(!text.isEmpty());
 }
 
-void AetherialAudioStrip::setFramelessMode(bool on)
-{
-    const QRect geom = geometry();
-    const bool wasVisible = isVisible();
-
-    Qt::WindowFlags flags = (windowFlags() & ~Qt::WindowType_Mask) | Qt::Window;
-    flags.setFlag(Qt::FramelessWindowHint, on);
-    setWindowFlags(flags);
-    if (wasVisible) {
-        setGeometry(geom);
-    }
-    if (m_titleBar) {
-        m_titleBar->setVisible(on);
-    }
-    if (m_bodyLayout) {
-        m_bodyLayout->setContentsMargins(8, on ? 0 : 8, 8, 8);
-    }
-    if (wasVisible) {
-        show();
-    }
-}
-
 void AetherialAudioStrip::setTxFilterCutoffs(int lowHz, int highHz)
 {
     if (m_eq) m_eq->setTxFilterCutoffs(lowHz, highHz);
@@ -722,59 +564,14 @@ void AetherialAudioStrip::refreshIndicators()
           QStringLiteral("{{color.accent.danger}}"));
 }
 
-void AetherialAudioStrip::saveGeometryToSettings()
-{
-    if (m_restoring) return;
-    auto& s = AppSettings::instance();
-    s.setValue("AetherialStripGeometry2", saveGeometry().toBase64());
-    s.save();
-}
-
-void AetherialAudioStrip::restoreGeometryFromSettings()
-{
-    auto& s = AppSettings::instance();
-    const QByteArray geom = QByteArray::fromBase64(
-        s.value("AetherialStripGeometry2").toString().toUtf8());
-    if (geom.isEmpty()) return;
-
-    m_restoring = true;
-    restoreGeometry(geom);
-    m_restoring = false;
-}
-
-void AetherialAudioStrip::closeEvent(QCloseEvent* ev)
-{
-    saveGeometryToSettings();
-    auto& s = AppSettings::instance();
-    s.setValue("AetherialStripVisible", "False");
-    s.save();
-    QWidget::closeEvent(ev);
-}
-
-void AetherialAudioStrip::moveEvent(QMoveEvent* ev)
-{
-    saveGeometryToSettings();
-    QWidget::moveEvent(ev);
-}
-
-void AetherialAudioStrip::resizeEvent(QResizeEvent* ev)
-{
-    saveGeometryToSettings();
-    QWidget::resizeEvent(ev);
-}
-
 void AetherialAudioStrip::showEvent(QShowEvent* ev)
 {
-    // Opens at kLaunchSize every time, whatever is stored — the same
-    // deliberate, temporary pin the receive window carries while the size is
-    // still being settled. Position is still restored and still saved.
-    if (size() != kLaunchSize) resize(kLaunchSize);
+    CanonWindow::showEvent(ev);
     if (m_tabs) m_tabs->refreshFromHost();
     if (m_checkTimer) m_checkTimer->start();
     auto& s = AppSettings::instance();
     s.setValue("AetherialStripVisible", "True");
     s.save();
-    QWidget::showEvent(ev);
 }
 
 void AetherialAudioStrip::hideEvent(QHideEvent* ev)
@@ -783,33 +580,7 @@ void AetherialAudioStrip::hideEvent(QHideEvent* ev)
     auto& s = AppSettings::instance();
     s.setValue("AetherialStripVisible", "False");
     s.save();
-    QWidget::hideEvent(ev);
-}
-
-bool AetherialAudioStrip::eventFilter(QObject* obj, QEvent* ev)
-{
-    if (obj == m_titleBar && ev->type() == QEvent::MouseMove) {
-        return FramelessMoveHelper::move(m_titleBar, static_cast<QMouseEvent*>(ev));
-    }
-    if (obj == m_titleBar && ev->type() == QEvent::MouseButtonRelease) {
-        return FramelessMoveHelper::finish(m_titleBar, static_cast<QMouseEvent*>(ev));
-    }
-
-    // Drag-to-move via the custom title bar.  The trio buttons are
-    // independent QPushButtons that consume the press themselves, so
-    // this only fires on the bare title-bar background between the
-    // title text and the trio.
-    if (obj == m_titleBar && ev->type() == QEvent::MouseButtonPress) {
-        auto* me = static_cast<QMouseEvent*>(ev);
-        return FramelessMoveHelper::start(m_titleBar, me);
-    }
-    if (obj == m_titleBar && ev->type() == QEvent::MouseButtonDblClick) {
-        if (isMaximized()) showNormal();
-        else               showMaximized();
-        ev->accept();
-        return true;
-    }
-    return QWidget::eventFilter(obj, ev);
+    CanonWindow::hideEvent(ev);
 }
 
 // ──────────────────────────────────────────────────────────────────

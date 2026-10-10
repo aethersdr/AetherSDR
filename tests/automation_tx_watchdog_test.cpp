@@ -5,6 +5,10 @@
 #include "core/QsoRecorder.h"
 #include "core/AutomationServer.h"
 #include "core/RadioCertification.h"
+#include "models/PanadapterModel.h"
+#include <QJsonArray>
+#include <QJsonObject>
+#include <QTimer>
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
@@ -52,6 +56,8 @@ public:
 class RadioCertificationTestAccess {
 public:
     static bool key(RadioCertification& cert, bool on) { return cert.keyViaOperatorPath(on); }
+    static void frontEndInterlock(RadioCertification& cert) { cert.stageFrontEndInterlock(); }
+    static QJsonArray stages(const RadioCertification& cert) { return cert.m_stages; }
 };
 } // namespace AetherSDR
 
@@ -541,6 +547,37 @@ void cleanupCanDestroyBridge()
 }
 } // namespace
 
+// The front-end interlock stage waits in the event loop between writes. A
+// radio torn down during one of those waits must end the stage INCONCLUSIVE,
+// not crash on the cleared radio or pan. No transport and no TX.
+void interlockSurvivesRadioTeardown()
+{
+    QStringList commands;
+    auto* radio = new RadioModel;
+    auto owned = std::make_unique<RecordingBackend>(commands);
+    RecordingBackend* backend = owned.get();
+    radio->setBackendForTest(std::move(owned), QStringLiteral("test"));
+    backend->panCenterBandwidthChanged(QStringLiteral("backend-pan-0"), 14.1, 0.2);
+    PanadapterModel* pan = radio->panadapter(radio->panId());
+    check(pan != nullptr, "teardown fixture: the radio has an active pan");
+    if (!pan) {
+        delete radio;
+        return;
+    }
+    pan->setPreampLabels({QStringLiteral("0"), QStringLiteral("1")});
+    pan->setAttenuatorLabels({QStringLiteral("0"), QStringLiteral("1")});
+    RadioCertification cert(radio, nullptr);
+    // Inside the first transition's sample wait (the stage settles 2.3 s first).
+    QTimer::singleShot(2350, [&radio] { delete radio; radio = nullptr; });
+    RadioCertificationTestAccess::frontEndInterlock(cert);
+    const QJsonArray stages = RadioCertificationTestAccess::stages(cert);
+    const QJsonObject stage = stages.isEmpty() ? QJsonObject() : stages.last().toObject();
+    check(radio == nullptr, "teardown fixture: the radio was destroyed mid-stage");
+    check(stage.value(QStringLiteral("id")).toString() == QStringLiteral("front-end-interlock")
+              && stage.value(QStringLiteral("concern")).toString().startsWith(QStringLiteral("INCONCLUSIVE")),
+          "a radio torn down mid-stage ends the interlock stage INCONCLUSIVE, not restored");
+}
+
 int main(int argc, char** argv)
 {
     TestSettingsProfile settings(QStringLiteral("automation-tx-watchdog"));
@@ -565,5 +602,6 @@ int main(int argc, char** argv)
     policingPrecedesBackendReentry();
     diagnosticCannotRenewAuthorization();
     cleanupCanDestroyBridge();
+    interlockSurvivesRadioTeardown();
     return failures == 0 ? 0 : 1;
 }

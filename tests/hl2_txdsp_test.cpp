@@ -1848,8 +1848,8 @@ int main(int argc, char** argv)
         // measured after the clamp.
         //
         // So this leg asserts on the whole run rather than the tail, and it is
-        // the key-on seed in processAudioBlock that makes it pass. Reverting
-        // that seed to the old `m_alcGain += a * (target - m_alcGain)` fails
+        // the key-on seed in Hl2TxAlc::process that makes it pass. Reverting
+        // that seed to the old `m_gain += a * (target - m_gain)` fails
         // this check and no other in the file, which is what makes it a guard
         // rather than a restatement.
         const double kSliderTopGain = micSliderToLinear(100);   // 100x, +40 dB

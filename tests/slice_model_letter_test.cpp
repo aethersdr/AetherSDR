@@ -34,6 +34,23 @@ static SliceDelta delta(F&& build)
     return d;
 }
 
+// Capture the typed payload, including compatibility origin. Raw commands are
+// still captured separately, so accidentally retaining the old route fails.
+static void trackReceiveRequests(SliceModel& slice, QStringList& requests)
+{
+    QObject::connect(&slice, &SliceModel::receiveAudioRequested, &slice,
+                     [&requests](const SliceAudioRequest& request) {
+        requests.append(QStringLiteral("audio field=%1 value=%2 origin=%3")
+            .arg(int(request.field)).arg(request.value).arg(int(request.origin)));
+    });
+    QObject::connect(&slice, &SliceModel::receiveSquelchRequested, &slice,
+                     [&requests](const SliceSquelchRequest& request) {
+        requests.append(QStringLiteral("squelch on=%1 level=%2 enableChanged=%3 levelChanged=%4")
+            .arg(int(request.enabled)).arg(request.level)
+            .arg(int(request.enabledChanged)).arg(int(request.levelChanged)));
+    });
+}
+
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
@@ -106,6 +123,7 @@ int main(int argc, char** argv)
         QStringList commands;
         QObject::connect(&s, &SliceModel::commandReady,
                          [&commands](const QString& cmd) { commands.append(cmd); });
+        trackReceiveRequests(s, commands);
         s.applyChanges(delta([](SliceDelta& d){ d.audioPan = 25; }));
         EXPECT_EQ(s.audioPan(), 25);
         EXPECT_EQ(s.flexAudioPan(), 25);
@@ -113,7 +131,7 @@ int main(int argc, char** argv)
         QSignalSpy panSpy(&s, &SliceModel::audioPanChanged);
         s.setExternalReceiveAudioReplacementMute(true);
         EXPECT_EQ(commands.join(QStringLiteral("|")),
-                  QStringLiteral("slice set 4 audio_mute=1"));
+                  QStringLiteral("audio field=1 value=1 origin=1"));
         EXPECT_EQ(s.audioPan(), 25);
         EXPECT_EQ(s.flexAudioPan(), 25);
         EXPECT_EQ(panSpy.count(), 0);
@@ -133,7 +151,7 @@ int main(int argc, char** argv)
 
         s.setExternalReceiveAudioReplacementMute(false, false);
         EXPECT_EQ(commands.join(QStringLiteral("|")),
-                  QStringLiteral("slice set 4 audio_mute=0"));
+                  QStringLiteral("audio field=1 value=0 origin=1"));
         EXPECT_EQ(s.audioPan(), 10);
         EXPECT_EQ(s.flexAudioPan(), 10);
         EXPECT_EQ(panSpy.count(), 1);
@@ -144,7 +162,7 @@ int main(int argc, char** argv)
         EXPECT_EQ(s.audioPan(), 60);
         EXPECT_EQ(s.flexAudioPan(), 60);
         EXPECT_EQ(commands.join(QStringLiteral("|")),
-                  QStringLiteral("slice set 4 audio_pan=60"));
+                  QStringLiteral("audio field=2 value=60 origin=0"));
     }
 
     // ── A KiwiSDR suppression mute must be lifted before a FLEX band-stack
@@ -156,10 +174,11 @@ int main(int argc, char** argv)
         QStringList commands;
         QObject::connect(&s, &SliceModel::commandReady,
                          [&commands](const QString& cmd) { commands.append(cmd); });
+        trackReceiveRequests(s, commands);
 
         s.setExternalReceiveAudioReplacementMute(true);
         EXPECT_EQ(commands.join(QStringLiteral("|")),
-                  QStringLiteral("slice set 6 audio_mute=1"));
+                  QStringLiteral("audio field=1 value=1 origin=1"));
         EXPECT_EQ(s.externalReceiveReplacementActive(), true);
         EXPECT_EQ(s.audioMute(), false);
         EXPECT_EQ(s.flexAudioMute(), true);
@@ -167,7 +186,7 @@ int main(int argc, char** argv)
 
         s.prepareExternalReceiveAudioReplacementBandRecall(false);
         EXPECT_EQ(commands.join(QStringLiteral("|")),
-                  QStringLiteral("slice set 6 audio_mute=0"));
+                  QStringLiteral("audio field=1 value=0 origin=1"));
         EXPECT_EQ(s.externalReceiveReplacementActive(), true);
         EXPECT_EQ(s.audioMute(), false);
         EXPECT_EQ(s.flexAudioMute(), false);
@@ -179,14 +198,14 @@ int main(int argc, char** argv)
 
         s.setExternalReceiveAudioReplacementMute(true);
         EXPECT_EQ(commands.join(QStringLiteral("|")),
-                  QStringLiteral("slice set 6 audio_mute=1"));
+                  QStringLiteral("audio field=1 value=1 origin=1"));
         EXPECT_EQ(s.audioMute(), false);
         EXPECT_EQ(s.flexAudioMute(), true);
         commands.clear();
 
         s.applyChanges(delta([](SliceDelta& d){ d.audioMute = false; }));
         EXPECT_EQ(commands.join(QStringLiteral("|")),
-                  QStringLiteral("slice set 6 audio_mute=1"));
+                  QStringLiteral("audio field=1 value=1 origin=1"));
         EXPECT_EQ(s.flexAudioMute(), true);
         commands.clear();
 
@@ -200,7 +219,7 @@ int main(int argc, char** argv)
 
         s.setExternalReceiveAudioReplacementMute(true);
         EXPECT_EQ(commands.join(QStringLiteral("|")),
-                  QStringLiteral("slice set 6 audio_mute=1"));
+                  QStringLiteral("audio field=1 value=1 origin=1"));
         EXPECT_EQ(s.flexAudioMute(), true);
     }
 
@@ -212,6 +231,7 @@ int main(int argc, char** argv)
         QSignalSpy agcRequests(&s, &SliceModel::receiveAgcRequested);
         QObject::connect(&s, &SliceModel::commandReady,
                          [&commands](const QString& cmd) { commands.append(cmd); });
+        trackReceiveRequests(s, commands);
         s.applyChanges(delta([](SliceDelta& d){
             d.agcMode = QStringLiteral("slow"); d.agcThreshold = 40;
             d.agcOffLevel = 12; d.squelchOn = true; d.squelchLevel = 35; }));
@@ -237,7 +257,7 @@ int main(int argc, char** argv)
             &s, &SliceModel::externalReceiveSquelchChanged);
         s.setExternalReceiveAudioReplacementMute(true);
         EXPECT_EQ(commands.join(QStringLiteral("|")),
-                  QStringLiteral("slice set 5 audio_mute=1"));
+                  QStringLiteral("audio field=1 value=1 origin=1"));
         EXPECT_EQ(s.agcMode(), QString("slow"));
         EXPECT_EQ(s.receiveAgcMode(), QString("med"));
         EXPECT_EQ(s.flexAgcMode(), QString("slow"));
@@ -344,7 +364,7 @@ int main(int argc, char** argv)
 
         s.setExternalReceiveAudioReplacementMute(false, false);
         EXPECT_EQ(commands.join(QStringLiteral("|")),
-                  QStringLiteral("slice set 5 audio_mute=0"));
+                  QStringLiteral("audio field=1 value=0 origin=1"));
         EXPECT_EQ(s.agcMode(), QString("fast"));
         EXPECT_EQ(s.agcThreshold(), 90);
         EXPECT_EQ(s.agcOffLevel(), 8);
@@ -371,8 +391,7 @@ int main(int argc, char** argv)
         s.setAgcOffLevel(30);
         s.setSquelch(false, 22);
         EXPECT_EQ(commands.join(QStringLiteral("|")),
-                  QStringLiteral("slice set 5 squelch=0|"
-                                 "slice set 5 squelch_level=22"));
+                  QStringLiteral("squelch on=0 level=22 enableChanged=1 levelChanged=1"));
         EXPECT_EQ(agcRequests.size(), 3);
         if (agcRequests.size() == 3) {
             const SliceAgcRequest mode = qvariant_cast<SliceAgcRequest>(agcRequests.at(0).at(0));

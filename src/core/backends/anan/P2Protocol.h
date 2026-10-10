@@ -237,10 +237,17 @@ std::array<std::uint8_t, kSpeakerPacketBytes> buildSpeakerAudio(
     std::uint32_t sequence, std::span<const std::int16_t> interleavedLr) noexcept;
 
 // ---- High Priority Status, radio -> PC (spec p.47) ----
-// 60 bytes: 4-byte BE sequence, then hardware state. Only the two speaker-stream
-// fields are decoded. Arrives on the same socket as DDC0 IQ (see
-// kDdc0DefaultPort); parseDdcFrame() rejects it.
+// 60 bytes: 4-byte BE sequence, then hardware state. The two speaker-stream
+// fields and the supply rail are decoded. Arrives on the same socket as DDC0 IQ (see
+// kDdc0DefaultPort); parseDdcFrame() rejects it. p2app sends one every 200 ms
+// while receiving (OutHighPriority.c).
 inline constexpr std::size_t kHighPriorityStatusBytes = 60;
+
+// Volts per count of HighPriorityStatus::supplyRailCounts: a (22+1)/1.1 divider
+// into the 12-bit slow ADC at 5 V, as Thetis (console.cs convertToVolts) and
+// deskHPSDR (rx_panadapter.c, Orion2/Saturn) scale the same input. Checked
+// against a meter at one rail voltage on a G2: docs/architecture/radio-capabilities-map.md.
+inline constexpr double kSupplyRailVoltsPerCount = (23.0 / 1.1) * (5.0 / 4095.0);
 
 struct HighPriorityStatus {
     std::uint32_t seq = 0;
@@ -251,6 +258,11 @@ struct HighPriorityStatus {
     // "2 samples per location" doubling never reaches the send, OutHighPriority.c).
     // Not comparable to kSpeakerFramesPerPacket; use as a trend.
     std::uint16_t speakerFifoLevel = 0;
+    // Bytes 57-58: the DC supply rail in raw 12-bit counts. p2app labels it
+    // "AIN3 user_analog1"; Thetis and deskHPSDR read the rail here. NOT bytes
+    // 49-50 (AIN6), which the spec calls "supply voltage" but which fits no
+    // published scale on a G2. No field in this payload is a temperature.
+    std::uint16_t supplyRailCounts = 0;
 };
 
 // Decode, or nullopt if this is not a status packet. Bounds-checked

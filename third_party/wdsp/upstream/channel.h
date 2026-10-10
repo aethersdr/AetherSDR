@@ -50,6 +50,7 @@ struct _ch
 	double tslewup;
 	double tdelaydown;
 	double tslewdown;
+	int exchangeDepth;			// AetherSDR patch 15: prepared ring slots; legacy Open resets to DSP_MULT
 	int bfo;					// 'block_for_output', block fexchange until output is available
 	volatile long flushflag;
 	struct	//io buffers
@@ -62,6 +63,8 @@ struct _ch
 extern struct _ch ch[];
 
 PORT void OpenChannel (int channel, int in_size, int dsp_size, int input_samplerate, int dsp_rate, int output_samplerate, int type, int state, double tdelayup, double tslewup, double tdelaydown, double tslewdown, int bfo);
+
+PORT int OpenChannelWithExchangeDepth (int channel, int in_size, int dsp_size, int input_samplerate, int dsp_rate, int output_samplerate, int type, int state, double tdelayup, double tslewup, double tdelaydown, double tslewdown, int bfo, int exchangeDepth);
 
 PORT void CloseChannel (int channel);
 

@@ -2,10 +2,8 @@
 
 The source snapshot is pinned to TAPR/OpenHPSDR-wdsp commit
 `b02d5bac675dd2f33ec2bab2b339f79a597c47dd` (`Release Version 2.10`).
-AetherSDR carries fifteen local changes in the otherwise exact `Source/*.[ch]`
-snapshot. The first ten are listed below — four teardown corrections, two
-null/lifetime fixes, one added accessor set, two channel-state fixes, and one
-performance change — and patches 11 to 15 follow in their own sections:
+AetherSDR carries the local changes documented below in the otherwise exact
+`Source/*.[ch]` snapshot:
 
 1. `upstream/nbp.c`: `destroy_notchdb()` now frees the `notchdb` object after
    its member allocations.
@@ -575,7 +573,7 @@ number, so the grep above does not find them; it is findable from this file
 and from `ensure_minphase` in `upstream/firmin.c`.
 
 When refreshing WDSP, first check whether upstream has made each change
-itself. The ten are different shapes, so grep for the shape, not for a free:
+itself. They are different shapes, so grep for the shape, not for a free:
 
 - **patches 1-2** -- a trailing `_aligned_free()` of the object itself at the
   end of `destroy_notchdb()` / `destroy_nurbs()`.
@@ -610,6 +608,22 @@ itself. The ten are different shapes, so grep for the shape, not for a free:
   `r2_inidx` advance) sits **before** the `r2_havesamps` increment; plus the
   added read-only `GetChannelOutputReady()` in `iobuffs.c` (declared in
   `iobuffs.h` and `include/aether_wdsp.h`).
+- **patch 16** -- `SetTXABandpassFreqs()` in `TXA.c` holding `ch[].csDSP`
+  around its body.
+- **patch 17** -- in `analyzer.c`: `stop` / `end_dispatcher` read and written
+  through `Interlocked*` (and `volatile LONG` in `analyzer.h`); the
+  `input_busy` release in `spectra()` / `Cspectra()` sitting **after**
+  `stitch(disp)`, not before it; and `sendbuf()`'s `IQO_idx` hand-off and
+  `IQout_index` advance inside its existing `BufferControlSection`.
+- **patch 18** -- in `destroy_calcc()`, the `SemsPSCorr` and
+  `hCorrChangeExited` closes, still only after the thread's exit event was
+  seen (`corrThreadGone`, patch 22). A thread that was never started has
+  nothing to wait for, so its handles are closed directly.
+- **patch 22** -- in `calcc.c`: the `corrThreadStarted` field set from
+  `_beginthread()`'s result in `create_calcc()`, and in `destroy_calcc()` the
+  `hCorrChangeExited` wait (clearing iqc's `busy` bit each pass, unbounded
+  once patch 4 saw the worker exit) with the six `util` spline frees moved
+  **after** it, not before.
 
 Drop any local patch upstream now carries. Otherwise reapply only these minimal
 changes and run the lifecycle test under AddressSanitizer on every supported
@@ -898,3 +912,394 @@ counts before it copies and has no readiness query.
 
 When updating WDSP, keep this unless upstream grows an equivalent query; keep
 the reorder unless upstream's `dexchange()` already copies before it counts.
+
+## Patch 16 — the TX bandpass setter takes the DSP lock (#6156)
+
+`upstream/TXA.c`: `SetTXABandpassFreqs()` now holds `ch[channel].csDSP` around
+its body, as `SetTXAMode()` already does around the same `TXASetupBPFilters()`
+call. So do `SetTXACompressorRun()` and `SetTXAosctrlRun()`;
+`SetTXABandpassFreqs()` was the only caller of it that took no lock.
+
+**Why it matters on air.** `TXASetupBPFilters()` clears `bp1` and `bp2`'s
+`run` first and sets them again only after `CalcBandpassFilter()` has
+redesigned the FIR. `xbandpass()` with `run` clear copies input to output. The
+DSP worker runs `xtxa()` under `csDSP`, so before this patch a filter change
+made while transmitting with the compressor (and CESSB) on could pass one or
+more TX blocks with the post-compressor bandpass bypassed: a burst of
+out-of-band splatter. The FIR coefficients themselves were never torn, since
+`fircore` double-buffers them under `a->update`; the `run` flags were the hole.
+
+**Found by** the TSan lane once it could run the full tree: `wdsp_channel_test`
+reported `TXASetupBPFilters` (`TXA.c` writes of `bp0/1/2.p->run`) racing
+`xbandpass` on the worker, with no lock in common. The port's critical
+sections are plain `pthread_mutex`, so the report was not a shim artefact.
+
+**Cost and lock order.** The worker waits for one FIR redesign per TX filter
+change, the cost upstream already accepts in `SetTXAMode()`. No new lock edge:
+`WdspChannel::setFilter()` holds `g_setupMutex` and now takes `csDSP` inside
+it, the same order `setMode()` and `open()` already use; `csDSP` is recursive.
+
+**Upstream status.** Not reported.
+
+When updating WDSP, keep this unless upstream's `SetTXABandpassFreqs()` takes
+`csDSP` itself.
+
+## Patch 17 — the panadapter analyzer's dispatcher hand-offs are synchronised (#6156)
+
+Three races in `upstream/analyzer.c`, all reported by the TSan lane against
+`AnanPanAnalyzer` (`anan_rxdsp_handedness_test`, `spectrum_sequence_gap_test`,
+`wdsp_process_tally_test`). The port's `Interlocked*` are `__atomic` seq_cst and
+its threads are `pthread_create`, so TSan saw these accurately.
+
+1. **`stop` and `end_dispatcher` are atomic.** Both were plain `int`, written
+   by `SetAnalyzer()` / `DestroyAnalyzer()` and polled by `sendbuf()`'s loop and
+   the workers' early-outs. The drain itself was already sound (the
+   `dispatcher` bit and `pnum_threads` are atomic), so this one is a formal
+   race rather than a symptom; it is fixed because it was most of the lane's
+   noise and an unsynchronised polled flag is undefined behaviour the compiler
+   may hoist. Now `volatile LONG`, written with `InterlockedExchange()` and
+   read with `InterlockedAnd(&x, 1)`, the idiom upstream already uses for
+   `dispatcher`.
+2. **`input_busy` is released after the stitch, not before.** When the last
+   FFT of a frame finished, `spectra()` / `Cspectra()` cleared every
+   `input_busy` bit and then called `stitch()`. `sendbuf()` could therefore
+   dispatch the next frame's workers while the stitch was still reading
+   `result[]` and `ss_bins` — `Celiminate()` writing what `stitch()` was
+   copying, i.e. a torn panadapter frame — and could let two `stitch()` calls
+   overlap on `w_pix_buff` / `last_pix_buff`. Clearing after `stitch()` makes
+   the next dispatch wait for it. **This is the only part that changes
+   timing:** the next frame's FFTs start one stitch later (tens of
+   microseconds). `stitch()` waits on nothing the dispatcher holds, so it
+   cannot deadlock.
+3. **`sendbuf()` hands off the read index under the buffer lock.**
+   `Spectrum0()` moves `IQout_index` under `BufferControlSection` when it skips
+   ahead on an overrun; `sendbuf()` read it into `IQO_idx` and advanced it
+   unlocked, a lost update that points one FFT at the wrong span of the
+   sample ring. The read, the advance and the existing `have_samples`
+   decrement now share one `BufferControlSection`, taken before the worker is
+   queued so the worker still sees its `IQO_idx` through the thread start.
+
+The `AnanPanAnalyzer` teardown (a `SetAnalyzer()` drain before
+`DestroyAnalyzer()`) is unchanged and was already correct.
+
+**Upstream status.** Not reported.
+
+When updating WDSP, keep all three unless upstream's analyzer synchronises the
+same hand-offs.
+
+## Patch 18 — the PureSignal correction thread's handles are closed (#6154)
+
+`upstream/calcc.c`: `create_calcc()` (called by `create_txa()` for every TX
+channel) creates five `SemsPSCorr` semaphores for the `doPSCorrChange()`
+thread, and `destroy_calcc()` never closed them. That leaked five port handles,
+each a mutex, condition variable and allocation, on every TXA channel
+destroy. LeakSanitizer reports 86 leak blocks across 17 tests (`wdsp_channel_test`,
+the `hl2_*` TX/DSP tests, the `radiomodel_*_null` tests).
+
+`destroy_calcc()` now closes the five semaphores and the exit event **only when
+the thread-exit wait succeeds**. `doPSCorrChange()`'s last act is
+`SetEvent(hCorrChangeExited)` and `return`, so once that event is seen nothing
+touches either again. If the 500 ms wait times out, the thread may still be
+blocked in `WaitForMultipleObjects` on those semaphores, so they are not freed
+under it; upstream closed the event unconditionally, which had the same hazard
+for a thread that later reached `SetEvent()`, and it is now under the same check.
+
+**This does not make the timeout path safe, and does not claim to.** After the
+wait, `destroy_calcc()` goes on to free `a` and its members, which a correction
+thread still running past the timeout would use. That use-after-free predates
+this patch (upstream frees `a` on the same path) and is tracked separately
+(#6179). Patch 18 only stops the normal, successful-exit path from
+leaking and avoids adding a second hazard on the timeout path. Patch 22 leaves
+the timeout path only behind a wedged DSP worker; there the handles stay open
+as above, and `a` is still freed, as on `main`.
+
+**Upstream status.** Not reported.
+
+When updating WDSP, keep this unless upstream's `destroy_calcc()` closes the
+semaphores itself.
+
+## Patch 19 — opt-in WFM reception and live decoder controls (RFC #5468)
+
+`upstream/wbfm.c` and `upstream/wbfm.h`, against the pinned 2.10 revision above.
+
+`SetRXAWBFMdmph()` previously changed only the parent fields used during
+construction. Existing `dmphL` and `dmphR` kept their original run flag, time
+constant and coefficients. A generated 1kHz/15kHz vector measured identical
+15kHz amplitude after requesting75us then50us (`0.0413053`, ratio1.0) on
+Nobara before this patch. The expected analog ratio at15kHz is approximately
+1.482. The setter now updates both active filters under the existing DSP
+critical section. It resets their history when the setting changes; no
+allocation, FIR planning or third-party dependency is introduced.
+
+The existing stereo-indicator getter acquired the DSP mutex. The RTL sample
+path must observe decoder state without waiting on that worker. A separate
+interlocked `stereoPublished` value is published after `xwbfm()` completes its
+L/R output and read with the port's existing atomic-load idiom. This is a
+latest completed decoder-block observation, not an exact timestamp for audio
+already buffered in the output ring. The caller still owns channel lifetime.
+
+`flush_wbfm()` previously cleared the nested pilot detector but retained its
+parent stereo/magnitude fields and internal squelch noise/gain histories. It
+now resets those histories and publishes no stereo immediately, so a new
+station cannot inherit the old station's pilot observation or squelch state.
+The decoder's existing automatic-squelch thresholds and50ms gain slew are
+unchanged; no new user threshold mapping is added.
+
+The optional `WdspChannel::WbfmReceive` recipe fixes its geometry at 384 kHz
+input (2048 complex frames), 192 kHz DSP (1024 frames), and paired 48 kHz audio
+(256 frames). It applies an existing 2049-tap Blackman-Harris overlap-save
+`BPS` FIR before WDSP's input conversion. WBFM disables RXA's normal RF
+bandpass, so configuring that dormant filter did not provide selectivity.
+The facade only exposes the existing BPS functions; vendor filter code is
+unchanged. The preallocated FFT output holds twice the input frame count.
+Filter setup, changes, and destruction use the existing planner/control fence;
+processing adds no acquisition allocation or mutex. Mathematical complex-IQ
+edges are negated/swapped to match WDSP's filter convention. A 3 kHz transition
+allowance is tested on both sides and on an asymmetric passband.
+
+`WbfmReceive::outputGain`, default 0.25, scales both output channels before
+receiver taps. WBFM bypasses RXA's output panel, so the usual panel-gain API
+could not supply this normalization. The pre-fix 90% mono fixture peaked at
+3.25825 with 76000 clipped frames; with normalization it peaked at 0.814467
+and no frames reached unity. This is scalar normalization, not a hidden clipper.
+
+`SetRXAWBFMDiscriminatorCompensation()` defaults off and is called only by
+this recipe. Adjacent phase differences average the continuous instantaneous
+frequency over one sample, producing sinc(omega/2) droop. At 38 kHz in the
+192 kHz decoder, that attenuated L-R enough to give 29.218/29.385 dB separation
+on analytically integrated 1/2 kHz stereo. A rectangular phase-sum fixture
+at the DSP rate accidentally cancels this error and must not be used as proof.
+
+The opt-in correction is a 13-tap linear-phase inverse-sinc approximation.
+Its coefficients are the polynomial sum for k=0..6 of
+`C(2k,k)/(4^k*(2k+1)) * ((2-z-z^-1)/4)^k`. It has unity DC gain, six samples
+of common delay, and less than 0.0047 dB residual response error through the
+53 kHz multiplex band. Its maximum gain is 1.356417, so it also raises
+high-frequency noise by up to 2.65 dB; this is the bounded noise tradeoff,
+not additional recovered information. The implementation uses only fixed
+history and arithmetic. Before the subsequent DC correction, measured 1/2 kHz
+separation increased to 42.23/47.95 dB and 14/15 kHz reached 51.16/47.87 dB.
+
+The same opt-in flag moves the existing DC blocker after the L/R matrix,
+with independent identical histories and the original 0.9995 pole. Leaving it
+before the split rotated low-frequency L+R while barely rotating L-R near
+38 kHz. The generated 300/500 Hz vector measured 31.8839/36.3027 dB before
+this change, matching the calculated phase error. Legacy owners retain the
+original MPX placement. Both paired histories reset on calculation, flush,
+and recipe selection.
+
+The 192 kHz pre-discriminator IQ conversion still limits the effective RF
+passband. A requested +/-100 kHz FIR does not mean a flat 200 kHz signal path:
+the generated carrier response was flat through +/-90 kHz, approximately
+-0.195 dB at 93 kHz and -6.02 dB at 96 kHz. Near-full stereo modulation loses
+some sidebands beyond that range. Its measured separation is reported by the
+test as a limitation; the RFC's >=40 dB requirement remains pinned on the
+explicit reference vectors. Moving discrimination before IQ conversion would
+address a different, broader change and is not part of this patch.
+
+The socket-free `wdsp_wbfm_test` exercises RF selection and envelope, normalized
+headroom, live regional response, reference separation at low/mid/high audio
+frequencies, pilot acquisition/loss, mono fallback, restart, per-channel
+isolation, and allocation-free processing. Additional diagnostic vectors cover
+near-full modulation, +/-100 ppm signal clock, coherent pilot/subcarrier
+offsets, seeded weak/marginal noise, and pilot-absent reception. They are
+synthetic DSP evidence, not hardware, on-air, or universal reception claims.
+The old WFM mode and other channel owners keep their existing configuration,
+gain, and discriminator/DC behavior.
+
+On refresh, retain the active-filter update until upstream applies both live
+filters, retain the complete flush, and retain atomic stereo publication unless
+upstream supplies an equivalent nonblocking observation. Do not restore a DSP
+mutex to the acquisition-side getter. Keep the discriminator/DC changes
+explicitly opt-in unless a separately reviewed upstream equivalent preserves
+both continuous-waveform response and low-frequency stereo phase. Regenerate
+the FIR from its polynomial and rerun analytic fixtures if its geometry changes.
+
+
+## Patch 20 — prepared WFM exchange headroom and output publication (RFC #5468)
+
+`upstream/channel.{h,c}` and `upstream/iobuffs.c` add an immutable prepared
+`exchangeDepth` per channel. `OpenChannelWithExchangeDepth()` rejects channel
+indices outside the table and depths outside 2..8 before modifying any state,
+then shares the existing construction body. Its other arguments retain the
+ordinary `OpenChannel()` contract. Every legacy `OpenChannel()` explicitly
+selects `DSP_MULT` (still 2), including a reused former WFM slot. Existing
+size/rate rebuilds retain the prepared field. Both creation and flush seed the
+same output prefix from `r2_active_buffsize - r2_size`.
+
+The facade selects 8 only for its opt-in nonblocking `WbfmReceive` recipe:
+384 kHz / 2048 IQ input, 192 kHz / 1024 DSP, 48 kHz / 256 paired output.
+Blocking WFM, legacy WBFM, other RX, and TX retain depth 2. Measured continuous
+8192-sample extraction callbacks realize a maximum of seven complete IQ
+exchanges at the lowest approved capture rates (225001 and 250000 Hz). The
+composed converter bound is seven; no wall-clock scheduler assumption is used
+to derive it. The tests-only RED against `2e44eb04` accepted two exchanges with
+the worker held after its first handoff, then reported the actual `Underrun`.
+Live first-fault telemetry had independently observed `Underrun` with continuous
+capture, so a missing capture packet is not needed to produce this failure.
+
+At this geometry the two rings occupy 288 KiB per depth-8 channel, versus
+72 KiB at depth 2: 216 KiB additional prepared memory. Seven seeded output
+blocks plus the existing previous-chain-output worker stage delay audio by
+2048 frames / 42.667 ms, exactly six blocks / 1536 frames / 32 ms more than
+blocking depth 2. These are exchange-stage costs only; RF filtering, rate
+conversion, decoder, mixer waiting and device buffering are additional. One
+callback's bound does not promise survival of arbitrary host starvation or
+multiple queued callbacks without worker progress. Depth 8 is not a relaxed
+mixer deadline and does not extend the existing 2048-frame hole-wait policy.
+
+For equal exchange/DSP transfers, S successful host calls and P worker
+handoffs satisfy S-P <= D-1. The worker has copied each input before publishing
+its corresponding credit. The next host write therefore cannot overwrite an
+unread input before the first failure. The failing call can occupy the final
+slot, so no further call is safe: every non-OK still withdraws that receiver,
+and repair prepares a new epoch off acquisition. No retries or substitute silence on underrun,
+callback allocations, new waits or new threads are introduced.
+
+A separate existing publication race incremented `r2_havesamps` before copying
+the output bytes. `dexchange()` now copies the output and advances its private
+write index first, then publishes credit under the existing count lock. The
+copy remains outside that lock. This shared correctness repair is not claimed
+as the established cause of the observed underrun.
+
+The default-inactive port rendezvous immediately before `copy_output_to_ring`
+copies bytes and the test/control-only locked output-count readback provide
+scheduler-independent regression barriers. A test-only `csDSP` rendezvous,
+after count readiness and before arming a hold, also lets the previous block's
+post-publication hook finish, so it cannot claim the next block's hold. The
+count query takes `csEXCH` then the count lock to cover asynchronous flush.
+Production calls none of these readiness helpers. Fixtures serialize the global
+holds, keep other workers idle, and release before teardown/reprepare.
+`wdsp_wbfm_test` compares nonzero paired output against the unchanged blocking
+reference through a warm eight-exchange held burst, wraparound, and release,
+with the exact six-block displacement removed. It checks repeated preparation,
+clocked flush, legacy slot reuse, bounded API refusal, and genuinely unpublished
+output: seven seeded calls succeed, the eighth must underrun while the copy is
+held. Moving publication before the helper must fail that assertion.
+`rtl_wfm_pipeline_test` acknowledges the first completed handoff, accepts eight
+calls total, then requires the ninth's actual underrun, one typed first fault,
+receiver withdrawal, no stale PCM, and a fresh nonzero stereo PCM repair epoch.
+These are socket-free deterministic DSP tests, not hardware latency proof.
+
+On upstream refresh, retain the explicit legacy depth reset, prepared field on
+all rebuilds, matching create/flush prefix, and bytes-before-credit edge unless
+upstream supplies equivalent semantics. Do not increase global `DSP_MULT`,
+weaken non-OK withdrawal, or move the test readiness query onto acquisition.
+
+
+## Patch 21 — selected WFM mono and bounded pilot reception snapshot
+
+Local changes to `upstream/wbfm.c`, `upstream/wbfm.h`, the public WDSP header,
+and the narrow `include/aether_wdsp.h` / `aether_wbfm_observation.h` facade,
+against the same pinned upstream 2.10 revision. This is an AetherSDR extension,
+not an upstream PLL or a calibrated signal-quality measurement.
+
+`SetRXAWBFMForceMono` selects the existing L+R-only matrix branch while leaving
+INDY and automatic squelch running. The default remains Auto Stereo. RTL sets
+this only while preparing an immutable receiver recipe; accepted state and
+persistence follow the matching receiver revision, including failure/rollback.
+A changed recipe retires both slice and speaker PCM epochs. Other WDSP owners
+retain the false default, and rebuilding a configured receiver reapplies its
+selection. Mono is real identical-channel audio, not merely a changed badge. Packet/model
+stereo status describes the actual selected output: forced mono remains Mono
+even when the independent reception diagnostics report an acquired pilot.
+
+`GetRXAWBFMReception` publishes one coherent latest-completed-block snapshot.
+The worker publishes a fixed sequence plus 17 interlocked 32-bit payload words;
+each exact double is copied into two words, never read nonatomically across
+threads. A reader makes at most four attempts and returns unavailable on a
+collision. No DSP mutex, wait, allocation, wall clock or logging enters the
+acquisition path. Both publication and reading use the port's existing
+sequentially consistent interlocked operations. The sequence advances only on
+completed blocks or an explicitly invalidating reset, allowing backend freshness
+to reject repeated cached observations while exchange credits are consumed.
+
+The amplitude is INDY's actual `sqrt(filtIstable^2 + filtQstable^2)` after the
+19 kHz filter and before pilot AGC, in FM-discriminator units normalized to
+75 kHz peak deviation. It is not RF power, dBm, dBFS, SNR, a quality percentage,
+or PLL phase/frequency/lock. Exact low/high thresholds and consecutive-low/high
+block counters plus their configured off/on block counts are included. At
+192 kHz / 1,024 frames those thresholds are 0.03/0.06 and the integer hysteresis
+counts are 187/93; readback uses the actual fields rather than duplicated UI
+constants. Absent pilot is ordinary mono fallback.
+
+Lock duration, observation duration and time since either indicator transition
+are computed from processed DSP samples. The recent stable duration is capped
+at 5,000 ms. Loss and reacquisition counts cover every completed block between
+UI updates; the first acquisition is excluded from reacquisitions. Durations
+and counts saturate at `INT32_MAX`. Construction, flush, rate/size rebuild and
+new receiver lifetimes invalidate/reset the measurements. These durations do
+not include audio-ring/device latency or assert wall-clock continuity.
+
+The RTL owner publishes diagnostics at most four times per second plus actual
+indicator transitions/invalidation, under the accepted PCM session/revision.
+Only a new valid decoder sequence refreshes its 500 ms freshness clock. Retune,
+park, mode/session changes and expiry clear the model's reception claim; raw
+measurements are never persisted. Processing health remains a separate surface.
+
+Generated `wdsp_wbfm_test` vectors cover exact nonzero paired Mono output with
+an honestly retained pilot, Auto Stereo restoration, measured hysteresis,
+loss/reacquisition and flush reset. `rtl_wfm_pipeline_test` checks both the
+independent tap and speaker with new epochs. Settings/model fixtures cover
+request-versus-adoption, strict boolean decoding, old-document defaults, replay
+freshness and retired observations. These tests are added validation obligations;
+their results must come from a subsequent exact-source Nobara run. On upstream
+refresh retain this extension unless equivalent typed, bounded, race-free
+semantics replace it, and do not label INDY as a PLL.
+
+## Patch 22 — `destroy_calcc()` frees nothing the correction thread still uses (#6179)
+
+`upstream/calcc.c`. `destroy_calcc()` waited at most 500 ms for the
+`doPSCorrChange()` thread to signal `hCorrChangeExited`, then freed `a` and its
+members anyway. The thread reads `a`, the six `util` splines, `txa[].iqc` and
+`txa[].calcc.cs_update`, all freed by `destroy_calcc()` / `destroy_txa()`
+right after. A thread in `calc()` or in correction-file I/O past the 500 ms
+went on using freed memory. Upstream also freed the six `util` splines
+**before** the wait, under a thread in `PSSaveCorr` / `PSRestoreCorr` work.
+
+Now:
+
+- `create_calcc()` records whether `_beginthread()` started the thread
+  (`corrThreadStarted`). A thread that never started is not waited for, which
+  is the reason patches 4 and 9 bound their waits.
+- `destroy_calcc()` waits for `hCorrChangeExited`, clearing iqc's `busy` bit
+  on each 1 ms pass, because `SetTXAiqcStart()` / `SetTXAiqcSwap()` spin on
+  it for a DSP worker that `CloseChannel()` has already stopped. With the four
+  work semaphores drained first, the exit token is the next one the thread
+  takes once its current work ends.
+- The wait has **no time limit only when patch 4's worker wait succeeded**
+  (`mainExited == mainGen`). Those iqc setters take `ch[].csDSP`, which is
+  free only once the worker has exited (patch 9). If patch 4's wait fell
+  through its cap, a wedged worker may still hold `csDSP`, an unbounded wait
+  could then never end, and a bound of 500 one-millisecond passes stands
+  instead: 500 ms on POSIX, up to ~8 s under Windows' default 15.6 ms timer
+  tick, since nothing in AetherSDR calls `timeBeginPeriod`. That path
+  is already undefined on `main` (`post_main_destroy` deletes `csDSP` under a
+  live holder); there the handles stay open as patch 18 had them, and `a` is
+  still freed as on `main`, so this patch does not make it worse.
+- A `WAIT_FAILED` return (an exit event `CreateEvent` failed to make) ends
+  the wait rather than spinning.
+- The `SemsPSCorr` / exit-event closes (patch 18) run only once the exit
+  event was seen, or when the thread never started. The six `util` spline
+  frees follow the wait.
+
+**What can still stall teardown.** The thread's own work, on the normal path:
+`calc()` is bounded CPU work. Correction-file I/O can block as long as the file system does.
+AetherSDR calls neither `PSSaveCorr` nor `PSRestoreCorr` today; a caller that
+adds them owns that stall.
+
+**Reproduced before fixing**, locally: no `ci.yml` filter runs the test, and
+it covers the wait, not the reordering of the frees after it (that half is the
+sanitizer lanes'). `wdsp_calcc_teardown_test` holds the thread in
+`PSRestoreCorr()` on a FIFO with no writer, closes the channel on another
+thread, and opens the writer 1 s later. Before this patch `CloseChannel()`
+returned after ~500 ms while the thread was still blocked. With it,
+`CloseChannel()` returns only after the writer opens. POSIX only (`mkfifo`);
+skipped on Windows. The test queues the restore through
+`WdspChannel::restorePureSignalCorrectionForTest()`, so it links under
+`AETHER_SHARED_CORE` and the sanitizer lanes build it.
+
+**Upstream status.** Not reported.
+
+When updating WDSP, keep this unless upstream's `destroy_calcc()` joins the
+correction thread before freeing.

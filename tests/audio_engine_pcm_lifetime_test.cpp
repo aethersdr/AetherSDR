@@ -137,19 +137,21 @@ public:
         engine.m_rxPackets.push_back(queued(producerRate, 3));
         engine.m_rxOutputBuffer = queued(deviceRate, 7);
         engine.m_kiwiSdrRxBuffer = queued(24000, 11);
-        engine.m_kiwiSdrRxPackets.push_back(queued(24000, 13));
+        // Each invocation replaces this synthetic snapshot. A sink-rate
+        // change correctly preserves producer packets and historical peaks.
+        engine.m_kiwiSdrRxPackets = {queued(24000, 13)};
         engine.m_kiwiSdrOutputBuffer = queued(deviceRate, 17);
         AudioEngine::ExternalRxAudioSourceState* first =
             engine.externalKiwiSource(QStringLiteral("duration-first"), true);
         first->enabled = true;
         first->rxBuffer = queued(24000, 19);
-        first->rxPackets.push_back(queued(24000, 23));
+        first->rxPackets = {queued(24000, 23)};
         first->outputBuffer = queued(deviceRate, 29);
         AudioEngine::ExternalRxAudioSourceState* second =
             engine.externalKiwiSource(QStringLiteral("duration-second"), true);
         second->enabled = true;
         second->rxBuffer = queued(24000, 31);
-        second->rxPackets.push_back(queued(24000, 37));
+        second->rxPackets = {queued(24000, 37)};
         second->outputBuffer = queued(deviceRate, 41);
         engine.m_radeRxBuffer = queued(deviceRate, 43);
         engine.updateRxBufferStats();

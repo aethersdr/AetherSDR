@@ -16,6 +16,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <vector>
 
@@ -284,6 +285,21 @@ public:
         const auto input=producer.produce({0.25f,-0.5f});
         f.feed(3,*input);
         check(floats(f.packets[monoFloat]) == QVector<float>({0.25f,-0.5f}), "typed mono input survives conversion and mono encoding");
+    }
+    static void nonFiniteInt16IsSilence()
+    {
+        // A NaN passes std::clamp and its int16 cast is undefined; an infinity
+        // would clamp to a rail. Both encode as silence, finite neighbours intact.
+        const float nan = std::numeric_limits<float>::quiet_NaN();
+        const float inf = std::numeric_limits<float>::infinity();
+        const QByteArray packet = TciIoWorker::encodeRxAudio(
+            0, 24000, 2, 0, QVector<float>({nan, inf, -inf, 0.5f}), 1.0f);
+        qint16 s[4]{};
+        check(packet.size() == 64 + 8, "non-finite int16 packet has every sample");
+        if (packet.size() != 64 + 8) { return; }
+        std::memcpy(s, packet.constData() + 64, 8);
+        check(s[0] == 0 && s[1] == 0 && s[2] == 0, "non-finite samples encode as int16 silence");
+        check(s[3] == 16384, "a finite neighbour is untouched");
     }
     static void replayAndEpochs()
     {
@@ -706,6 +722,27 @@ public:
               "a re-created slice resumes its DAX route without producer revocation");
     }
 
+    // A DAX stream that is removed and re-created while its slice keeps the
+    // same channel raises no slice event, so the unregister itself must leave
+    // the channel routable for the next stream (#6006). CONSTRUCTED frames.
+    static void daxRouteSurvivesStreamUnregister()
+    {
+        Fixture f; f.backend->add(3,2);
+        TciClient* client = f.client();
+        PcmProducer producer; producer.start(PcmPurpose::Auxiliary);
+        f.server.onDaxPcmReady(2, frame(producer,3));
+        check(f.packets[client].size() == 1, "DAX route delivers before the unregister");
+
+        f.server.onDaxStreamUnregistered(2,123);
+        f.server.onDaxPcmReady(2, frame(producer,3));
+        check(f.packets[client].size() == 1, "the unregistered stream's epoch stays refused");
+
+        producer.invalidate(); producer.start(PcmPurpose::Auxiliary);
+        f.server.onDaxPcmReady(2, frame(producer,3));
+        check(f.packets[client].size() == 2,
+              "a re-created DAX stream resumes its route without a slice event");
+    }
+
     static void refusalCloseDistinction()
     {
         // Backlog refusal MUST request close.
@@ -797,9 +834,9 @@ public:
 
     static int run()
     {
-        ingressOutlivesController(); rateMatrixAndStereo(); unsupportedRatePreservesStream(); sparseRoutingAndSingleFeed(); formatEncoding();
+        ingressOutlivesController(); rateMatrixAndStereo(); unsupportedRatePreservesStream(); sparseRoutingAndSingleFeed(); formatEncoding(); nonFiniteInt16IsSilence();
         replayAndEpochs(); resetIsolation(); subscriptionAndForwardGapStaging(); retiredRouteAndCapacity(); daxLifecycle(); daxOwnerTransition();
-        staleFinalCheckAndChurn(); levelCallbackRetirement(); negotiationClientChurn(); lifecycleChurnAndConcurrentRevocation(); failedSendIsolation(); failedSendSocketDeletion(); backlogDiagnostics(); refusalCloseDistinction(); daxRouteSurvivesSliceRecreate(); pressureAndReplacement();
+        staleFinalCheckAndChurn(); levelCallbackRetirement(); negotiationClientChurn(); lifecycleChurnAndConcurrentRevocation(); failedSendIsolation(); failedSendSocketDeletion(); backlogDiagnostics(); refusalCloseDistinction(); daxRouteSurvivesSliceRecreate(); daxRouteSurvivesStreamUnregister(); pressureAndReplacement();
         std::printf("TCI RX: %d checks, %d failures\n",checks,failures);
         return failures==0 ? 0 : 1;
     }

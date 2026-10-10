@@ -2,12 +2,11 @@
 // which receiver to follow, and how to collapse a post-DSP stereo block to the
 // mono float the ASR engine consumes. (#4486)
 //
-// These are unit-tested rather than driven end-to-end through AudioEngine
-// because AudioEngine cannot be constructed headless — it needs a live
-// QAudioSink, and no test in this suite instantiates one. What that leaves
-// unverified here is the connect() itself, which is a single line visible in
-// review; what it DOES verify is every rule that has state and can therefore
-// drift.
+// These are unit-tested here because they are pure decisions with no engine
+// in them. The emit they consume IS driven end-to-end against a real
+// AudioEngine in asr_pre_dsp_emit_test, on the socket-free friend seam
+// audio_engine_rates_test uses; what remains uncovered is the tap's own
+// connect(), a single line visible in review.
 
 #include "gui/AsrTapPolicy.h"
 
@@ -236,6 +235,129 @@ static void testNoSamplesAreDropped()
           "ten packets arriving in the same millisecond all reach the engine");
 }
 
+// ── Tap point setting ─────────────────────────────────────────────────────
+
+// The names are what operator profiles store under CopyAssist.AsrTapPoint, so
+// they are pinned literally: renaming one would silently move every operator
+// who chose the unprocessed tap point back to post-DSP on upgrade.
+static void testTapPointSettingNamesArePinned()
+{
+    check(asrTapPointToSetting(AsrTapPoint::PostDsp) == QLatin1String("PostDsp"),
+          "PostDsp is stored as \"PostDsp\"");
+    check(asrTapPointToSetting(AsrTapPoint::PreDsp) == QLatin1String("PreDsp"),
+          "PreDsp is stored as \"PreDsp\"");
+    check(asrTapPointFromSetting(asrTapPointToSetting(AsrTapPoint::PreDsp))
+              == AsrTapPoint::PreDsp,
+          "PreDsp round-trips through its stored name");
+    check(asrTapPointFromSetting(asrTapPointToSetting(AsrTapPoint::PostDsp))
+              == AsrTapPoint::PostDsp,
+          "PostDsp round-trips through its stored name");
+}
+
+// Every build before this setting transcribed post-DSP, so a missing, empty or
+// unrecognised value must mean exactly that — never the new behaviour.
+static void testUnknownTapPointFallsBackToPostDsp()
+{
+    check(asrTapPointFromSetting(QString()) == AsrTapPoint::PostDsp,
+          "an absent setting reads as PostDsp");
+    check(asrTapPointFromSetting(QStringLiteral("predsp")) == AsrTapPoint::PostDsp,
+          "a mis-cased value is not guessed at");
+    check(asrTapPointFromSetting(QStringLiteral("PostNr")) == AsrTapPoint::PostDsp,
+          "a point this build does not know reads as PostDsp");
+    check(asrTapPointFromSetting(QStringLiteral("True")) == AsrTapPoint::PostDsp,
+          "a bool-style value is not taken as PreDsp");
+}
+
+
+// Sensitivity must mean the same thing on both sides of the tap-point toggle
+// (RFC #4861). The post-DSP feed carries the operator's boost and trim; the
+// pre-DSP feed does not, so the THRESHOLD moves instead of the audio.
+static void testSpeechRmsTracksTheTapPointGain()
+{
+    const float base = 0.0193f;   // Sensitivity 63
+
+    check(asrSpeechRmsForTapPoint(base, AsrTapPoint::PostDsp, false, 0.0f) == base,
+          "PostDsp is the level the operator tuned against, unscaled");
+    check(asrSpeechRmsForTapPoint(base, AsrTapPoint::PostDsp, true, 12.0f) == base,
+          "PostDsp ignores boost and trim — they are already in that feed");
+
+    check(std::fabs(asrSpeechRmsForTapPoint(base, AsrTapPoint::PreDsp, false, 0.0f) - base)
+              < 1e-6f,
+          "PreDsp with no boost and no trim needs no adjustment");
+
+    // Boost on: the post-DSP feed is ~6 dB hotter, so the gate must come down
+    // by the same factor or speech falls under it after the toggle.
+    check(std::fabs(asrSpeechRmsForTapPoint(base, AsrTapPoint::PreDsp, true, 0.0f)
+                    - base / 2.0f) < 1e-6f,
+          "PreDsp with boost on halves the threshold");
+
+    // +12 dB trim is the strip's maximum: a factor of ~3.98.
+    const float trimmed = asrSpeechRmsForTapPoint(base, AsrTapPoint::PreDsp, false, 12.0f);
+    check(std::fabs(trimmed - base / 3.98107f) < 1e-5f,
+          "PreDsp divides by the trim's linear gain");
+
+    // Both together, the worst case the review measured at +18 dB.
+    const float both = asrSpeechRmsForTapPoint(base, AsrTapPoint::PreDsp, true, 12.0f);
+    check(std::fabs(both - base / (2.0f * 3.98107f)) < 1e-5f,
+          "boost and trim compound");
+    check(both < base, "the worst case lowers the threshold, never raises it");
+
+    // Negative trim makes the post-DSP feed quieter than pre-DSP, so the
+    // threshold goes UP. The sign must not be assumed.
+    check(asrSpeechRmsForTapPoint(base, AsrTapPoint::PreDsp, false, -12.0f) > base,
+          "a negative trim raises the threshold");
+
+    // A corrupt trim must not produce a non-finite or zero threshold, which
+    // would make the gate admit everything or nothing.
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    check(asrSpeechRmsForTapPoint(base, AsrTapPoint::PreDsp, false, nan) == base,
+          "a non-finite trim leaves the threshold alone");
+    check(asrSpeechRmsForTapPoint(base, AsrTapPoint::PreDsp, false, -1000.0f) > 0.0f,
+          "an absurd trim still yields a positive threshold");
+
+    // ---- The rest of the chain's static gain ------------------------------
+    // Boost and trim are not the only gain between the two taps: the EQ's
+    // master gain, the compressor's makeup and the tube's output gain are all
+    // signal-independent, and AudioEngine::rxStaticChainMakeupDb() sums them.
+    // Omitting them left a threshold wrong by exactly that amount for any
+    // operator running those stages.
+    check(std::fabs(asrSpeechRmsForTapPoint(base, AsrTapPoint::PreDsp, false, 0.0f, 0.0f)
+                    - base) < 1e-6f,
+          "a chain at unity gain leaves the threshold where the operator put it");
+
+    const float chained =
+        asrSpeechRmsForTapPoint(base, AsrTapPoint::PreDsp, false, 0.0f, 6.0206f);
+    check(std::fabs(chained - base / 2.0f) < 1e-4f,
+          "+6 dB of chain makeup halves the threshold");
+
+    // The three sources of gain are one product, not three cases.
+    const float all =
+        asrSpeechRmsForTapPoint(base, AsrTapPoint::PreDsp, true, 12.0f, 6.0206f);
+    check(std::fabs(all - base / (2.0f * 3.98107f * 2.0f)) < 1e-5f,
+          "boost, trim and chain makeup compound into one divisor");
+
+    // The chain can attenuate too (a negative makeup or a master gain below
+    // unity), which raises the threshold.
+    check(asrSpeechRmsForTapPoint(base, AsrTapPoint::PreDsp, false, 0.0f, -6.0206f) > base,
+          "negative chain makeup raises the threshold");
+
+    // PostDsp still ignores every one of them: that path is the level the
+    // operator tuned against, by definition.
+    check(asrSpeechRmsForTapPoint(base, AsrTapPoint::PostDsp, true, 12.0f, 6.0206f) == base,
+          "PostDsp ignores chain makeup as it ignores boost and trim");
+
+    // An EQ master gain of zero is -inf dB: the post-DSP feed is silent, and no
+    // threshold derived from it means anything. Fall back to the tuned value
+    // rather than emitting zero (gate admits everything) or inf (admits
+    // nothing).
+    // Boost is on here on purpose: without it this check passes even for an
+    // implementation that ignores chain makeup entirely, because the fallback
+    // and "no chain gain at all" give the same answer.
+    const float negInf = -std::numeric_limits<float>::infinity();
+    check(asrSpeechRmsForTapPoint(base, AsrTapPoint::PreDsp, true, 0.0f, negInf) == base,
+          "a silenced chain leaves the threshold alone, boost included");
+}
+
 }  // namespace AetherSDR
 
 int main(int argc, char** argv)
@@ -252,6 +374,9 @@ int main(int argc, char** argv)
     AetherSDR::testMonoPassthroughForMonoChannelCount();
     AetherSDR::testMalformedLengthIsRejectedNotReinterpreted();
     AetherSDR::testNoSamplesAreDropped();
+    AetherSDR::testTapPointSettingNamesArePinned();
+    AetherSDR::testUnknownTapPointFallsBackToPostDsp();
+    AetherSDR::testSpeechRmsTracksTheTapPointGain();
 
     if (AetherSDR::g_failures == 0)
         std::fprintf(stderr, "asr_tap_policy_test: all checks passed\n");

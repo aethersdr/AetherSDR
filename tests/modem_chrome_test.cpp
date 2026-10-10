@@ -12,17 +12,25 @@
 //     .arg() leaves a literal "%17" in the middle of a declaration, which Qt
 //     drops along with the rest of that rule.
 
+#include "gui/CanonIndicators.h"
 #include "gui/ModemChrome.h"
 #include "core/ThemeManager.h"
 
 #include "TestSettingsProfile.h"
 
 #include <QApplication>
+#include <QCheckBox>
+#include <QColor>
+#include <QImage>
+#include <QRadioButton>
+#include <QStyle>
+#include <QStyleOptionButton>
 #include <QRegularExpression>
 #include <QString>
 #include <QtTest>
 
 #include <cstdio>
+#include <type_traits>
 
 using namespace AetherSDR;
 
@@ -36,6 +44,9 @@ private slots:
     void compactIsSmallerButNotADifferentPalette();
     void everyThemeTokenInTheSheetResolves();
     void checkedLosesToDisabled();
+    void canonLookPaintsItsIndicators();
+    void canonSheetLeavesNoRuleFragments();
+    void canonIndicatorsRenderTheirImages();
 };
 
 namespace {
@@ -47,6 +58,29 @@ int baseFontSize(const QString& sheet)
     static const QRegularExpression re(QStringLiteral("font-size:\\s*(\\d+)px"));
     const auto m = re.match(sheet);
     return m.hasMatch() ? m.captured(1).toInt() : -1;
+}
+
+// The pixels of `button`'s indicator under `sheet` (theme-resolved), so two
+// sheets can be compared by what they draw rather than by their text.
+template <typename Button>
+QImage indicatorPixels(const QString& sheet, bool checked)
+{
+    Button button(QStringLiteral("x"));
+    button.setStyleSheet(ThemeManager::instance().resolve(sheet));
+    button.setChecked(checked);
+    button.ensurePolished();
+    button.resize(button.sizeHint());
+    QStyleOptionButton option;
+    option.initFrom(&button);
+    const auto element = std::is_same_v<Button, QCheckBox> ? QStyle::SE_CheckBoxIndicator
+                                                           : QStyle::SE_RadioButtonIndicator;
+    const QRect rect = button.style()->subElementRect(element, &option, &button);
+    // Over one fixed backdrop, without the widget's own background, so only
+    // what the indicator draws can differ.
+    QImage pixels(rect.size(), QImage::Format_ARGB32_Premultiplied);
+    pixels.fill(QColor(0x40, 0x20, 0x60));
+    button.render(&pixels, QPoint(), QRegion(rect), QWidget::DrawChildren);
+    return pixels;
 }
 
 } // namespace
@@ -103,14 +137,72 @@ void ModemChromeTest::tabsAreSelectedByPropertyNotObjectName()
 
 void ModemChromeTest::everyPlaceholderIsSubstituted()
 {
-    static const QRegularExpression leftover(QStringLiteral("%\\d"));
+    // %N arguments, and the @name@ colour slots each look fills.
+    static const QRegularExpression leftover(QStringLiteral("%\\d|@[A-Za-z]+@"));
+    for (const auto look : {ModemChrome::Look::Modem, ModemChrome::Look::Canon})
     for (const auto scale : {ModemChrome::Scale::Dialog, ModemChrome::Scale::Compact}) {
-        const QString sheet = ModemChrome::styleSheet(scale);
+        const QString sheet = ModemChrome::styleSheet(scale, look);
         const auto m = leftover.match(sheet);
         QVERIFY2(!m.hasMatch(),
                  qPrintable(QStringLiteral("unsubstituted placeholder %1 near: %2")
                                 .arg(m.captured(0))
                                 .arg(sheet.mid(qMax(0, m.capturedStart() - 60), 120))));
+    }
+}
+
+// The canon look carries the painted canon check boxes and radio buttons (a
+// tick, a dot); the modem look, which the docked applets wear, does not.
+void ModemChromeTest::canonLookPaintsItsIndicators()
+{
+    for (const auto scale : {ModemChrome::Scale::Dialog, ModemChrome::Scale::Compact}) {
+        const QString canon = ModemChrome::styleSheet(scale, ModemChrome::Look::Canon);
+        QVERIFY(canon.contains(QStringLiteral("canon-indicators/check_on_")));
+        QVERIFY(canon.contains(QStringLiteral("canon-indicators/radio_on_")));
+        QVERIFY(!ModemChrome::styleSheet(scale).contains(QStringLiteral("canon-indicators/")));
+        // Only the painted indicators style the indicators: none of the
+        // sheet's own rules survive to draw a border around the image.
+        QCOMPARE(canon.count(QStringLiteral("::indicator")),
+                 canonIndicatorRules().count(QStringLiteral("::indicator")));
+    }
+}
+
+// Taking the sheet's own indicator rules out must take each whole rule. Their
+// bodies hold {{token}} placeholders, and a rule cut at the first "}" leaves
+// "}};" fragments that break the sheet, so the painted indicators never apply.
+void ModemChromeTest::canonSheetLeavesNoRuleFragments()
+{
+    static const QRegularExpression token(QStringLiteral(R"(\{\{[^{}]*\}\})"));
+    for (const auto scale : {ModemChrome::Scale::Dialog, ModemChrome::Scale::Compact}) {
+        QString structure = ModemChrome::styleSheet(scale, ModemChrome::Look::Canon);
+        structure.replace(token, QStringLiteral("token"));
+        int depth = 0;
+        for (const QChar ch : structure) {
+            if (ch == QLatin1Char('{')) {
+                QVERIFY2(++depth == 1, "a rule opens inside another rule");
+            } else if (ch == QLatin1Char('}')) {
+                QVERIFY2(--depth == 0, "a closing brace has no rule to close");
+            }
+        }
+        QCOMPARE(depth, 0);
+    }
+}
+
+// In the canon look a check box and a radio button draw exactly what the
+// painted canon indicators draw on their own, checked and unchecked: the rest
+// of the sheet neither hides the images nor draws over them.
+void ModemChromeTest::canonIndicatorsRenderTheirImages()
+{
+    const QString indicators = canonIndicatorRules();
+    QVERIFY(!indicators.isEmpty());
+    const QString canon = ModemChrome::styleSheet(ModemChrome::Scale::Dialog,
+                                                  ModemChrome::Look::Canon);
+    for (const bool checked : {false, true}) {
+        const QImage box = indicatorPixels<QCheckBox>(canon, checked);
+        QVERIFY(!box.isNull());
+        QCOMPARE(box, indicatorPixels<QCheckBox>(indicators, checked));
+        const QImage radio = indicatorPixels<QRadioButton>(canon, checked);
+        QVERIFY(!radio.isNull());
+        QCOMPARE(radio, indicatorPixels<QRadioButton>(indicators, checked));
     }
 }
 

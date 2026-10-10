@@ -88,6 +88,26 @@ int main(int argc, char** argv) {
     check(persist.value("ok").toBool() && persist.value("backendDiagnostics").toObject()
         .value("result").toObject().value("stateFreshness").toObject().contains("trackedStateReady"),
         "persist carries backend confirmation evidence without replacing model state");
+    // RADIOCERT DIAL ARGUMENTS TAKE TUNE'S VALIDATION. QString::toDouble()
+    // accepts nan and inf, and NaN passes every comparison: `radiocert rx nan`
+    // tuned the slice to NaN while the control-plane stage, comparing against
+    // NaN, reported the dial verified (#6205 review). This harness has no audio
+    // engine, so an accepted request reaches that refusal instead.
+    const auto certRefusal = [&](const QByteArray& line) {
+        return request(line).value("error").toString();
+    };
+    for (const QByteArray line : {QByteArray("radiocert rx nan"), QByteArray("radiocert rx inf"),
+                                  QByteArray("radiocert rx 1e300"), QByteArray("radiocert rx -14.2"),
+                                  QByteArray("radiocert meters 14.2 sql=inf"),
+                                  QByteArray("radiocert meters sql=nan"),
+                                  QByteArray("radiocert meters sql="),
+                                  QByteArray("radiocert meters 14.2 bogus")}) {
+        const QString error = certRefusal(line);
+        check(error.startsWith("radiocert ") && !error.contains("audio engine"),
+              (QByteArray("refused before running: ") + line).constData());
+    }
+    check(certRefusal("radiocert meters 14.2 sql=1.12").contains("audio engine"),
+          "a finite dial and sql= carrier are accepted");
     const auto meters = [&]() { return request("get meters").value("meters").toObject(); };
     check(meters().value("paTemp").isNull()
         && meters().value("temperature").toObject().value("status") == "unsupported",

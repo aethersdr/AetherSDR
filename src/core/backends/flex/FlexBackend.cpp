@@ -1,4 +1,5 @@
 #include "core/backends/flex/FlexBackend.h"
+#include "core/AppActivity.h"
 
 #include <algorithm>
 #include <limits>
@@ -47,7 +48,7 @@ FlexBackend::FlexBackend(QObject* parent)
     m_panStream = new PanadapterStream;   // no parent — moved to thread
     m_panStream->moveToThread(m_networkThread);
     connect(m_networkThread, &QThread::started, m_panStream, &PanadapterStream::init);
-    m_networkThread->start();
+    AetherSDR::startStreamThread(m_networkThread);   // High QoS; see AppActivity.h
 
     m_connThread = new QThread(this);
     m_connThread->setObjectName("RadioConnection");
@@ -194,6 +195,7 @@ void FlexBackend::setRadioReportedCapacity(int maxSlices, int maxPanadapters)
 RadioCapabilities FlexBackend::capabilities() const
 {
     RadioCapabilities caps;
+    caps.broadcastFmReceive = std::nullopt;
     // FlexLib 4.2.18 Slice.Freq delegates range refusal to firmware; its old
     // bounds are commented out. Do not guess coverage (including transverters).
     caps.sliceFrequencyControl = {SliceFrequencyControl::Authority::Radio, 0, 0};
@@ -266,6 +268,8 @@ RadioCapabilities FlexBackend::capabilities() const
     // engaged (gui/PanZoomModeGate.h).
     caps.panZoomModes = RadioCapabilities::PanZoomModes{
         QStringLiteral("display pan set")};
+    // The radio stores a pan's FFT frame rate and reports it on connect.
+    caps.panFrameRateShaping = std::nullopt;
     // A Flex blanks impulses in its OWN DDC, so NB is already the radio's under
     // hasRadioSideDsp above and the host has nothing to add. This flag says
     // where the blanker runs, not whether the radio has one.
@@ -318,6 +322,7 @@ RadioCapabilities FlexBackend::capabilities() const
     caps.hasAmCarrierLevel = true;
     caps.voxControl = RadioCapabilities::VoxControl{/*hasDelay*/ true};
     caps.txMonitorControl = RadioCapabilities::TxMonitorControl{};
+    caps.lineoutControl = RadioCapabilities::LineoutControl{};
     // The radio stores "Show TX in Waterfall" and echoes it in transmit status.
     caps.txWaterfallClientFlag = std::nullopt;
 
@@ -481,6 +486,107 @@ void FlexBackend::requestSliceAgc(int sliceId, const SliceAgcRequest& request)
         sendSlice(QStringLiteral("slice set %1 agc_off_level=%2").arg(sliceId).arg(request.offLevel));
         break;
     }
+}
+
+ReceiveDispatch FlexBackend::requestSliceDsp(int sliceId, const SliceDspRequest& request)
+{
+    if (sliceId < 0 || !request.valid()) {
+        return ReceiveDispatch::Unsupported;
+    }
+    // FlexLib 4.2.18 Slice.cs: the enable and level setters are independent.
+    // Manual notch is not a Flex slice feature (TNF is a different resource).
+    QString key;
+    switch (request.feature) {
+    case SliceDspRequest::Feature::Nb: key = QStringLiteral("nb"); break;
+    case SliceDspRequest::Feature::Nr: key = QStringLiteral("nr"); break;
+    case SliceDspRequest::Feature::Anf: key = QStringLiteral("anf"); break;
+    case SliceDspRequest::Feature::Apf: key = QStringLiteral("apf"); break;
+    case SliceDspRequest::Feature::Nrl: key = QStringLiteral("lms_nr"); break;
+    case SliceDspRequest::Feature::Nrs: key = QStringLiteral("speex_nr"); break;
+    case SliceDspRequest::Feature::Rnn: key = QStringLiteral("rnnoise"); break;
+    case SliceDspRequest::Feature::Nrf: key = QStringLiteral("nrf"); break;
+    case SliceDspRequest::Feature::Anfl: key = QStringLiteral("lms_anf"); break;
+    case SliceDspRequest::Feature::Anft: key = QStringLiteral("anft"); break;
+    case SliceDspRequest::Feature::Mn: return ReceiveDispatch::Unsupported;
+    }
+    // The blanker fill belongs to a host-side blanker; a Flex has no command
+    // for it. (A change of blanker arrives as Enabled, which a Flex reads as
+    // its one blanker on or off.)
+    if (request.field == SliceDspRequest::Field::Fill) {
+        return ReceiveDispatch::Unsupported;
+    }
+    if (request.field == SliceDspRequest::Field::Level) {
+        if (request.feature == SliceDspRequest::Feature::Rnn
+            || request.feature == SliceDspRequest::Feature::Anft) {
+            return ReceiveDispatch::Unsupported;
+        }
+        key += QStringLiteral("_level");
+    }
+    sendSlice(QStringLiteral("slice set %1 %2=%3").arg(sliceId).arg(key)
+                  .arg(request.field == SliceDspRequest::Field::Enabled
+                           ? int(request.enabled) : request.level));
+    return ReceiveDispatch::Dispatched;
+}
+
+ReceiveDispatch FlexBackend::requestSliceAudio(int sliceId, const SliceAudioRequest& request)
+{
+    if (sliceId < 0 || !request.valid()) {
+        return ReceiveDispatch::Unsupported;
+    }
+    QString key;
+    switch (request.field) {
+    case SliceAudioRequest::Field::Gain: key = QStringLiteral("audio_level"); break;
+    case SliceAudioRequest::Field::Mute: key = QStringLiteral("audio_mute"); break;
+    case SliceAudioRequest::Field::Pan: key = QStringLiteral("audio_pan"); break;
+    }
+    sendSlice(QStringLiteral("slice set %1 %2=%3").arg(sliceId).arg(key).arg(request.value));
+    return ReceiveDispatch::Dispatched;
+}
+
+ReceiveDispatch FlexBackend::requestSliceSquelch(int sliceId, const SliceSquelchRequest& request)
+{
+    if (sliceId < 0 || !request.valid()) {
+        return ReceiveDispatch::Unsupported;
+    }
+    // FlexLib uses separate commands; a combined write is rejected by some
+    // firmware/mode combinations. Repeated UI intent need not rewrite either.
+    if (request.enabledChanged) {
+        sendSlice(QStringLiteral("slice set %1 squelch=%2").arg(sliceId).arg(int(request.enabled)));
+    }
+    if (request.levelChanged) {
+        sendSlice(QStringLiteral("slice set %1 squelch_level=%2").arg(sliceId).arg(request.level));
+    }
+    return ReceiveDispatch::Dispatched;
+}
+
+ReceiveDispatch FlexBackend::requestSliceRxAntenna(int sliceId, const QString& antenna)
+{
+    // Port names are a single protocol token, not caller-supplied wire text.
+    if (sliceId < 0 || antenna.isEmpty() || antenna.size() > 64) {
+        return ReceiveDispatch::Unsupported;
+    }
+    for (const QChar ch : antenna) {
+        if (!((ch >= QLatin1Char('A') && ch <= QLatin1Char('Z'))
+              || (ch >= QLatin1Char('a') && ch <= QLatin1Char('z'))
+              || (ch >= QLatin1Char('0') && ch <= QLatin1Char('9'))
+              || ch == QLatin1Char('_') || ch == QLatin1Char('-')
+              || ch == QLatin1Char('/'))) {
+            return ReceiveDispatch::Unsupported;
+        }
+    }
+    sendSlice(QStringLiteral("slice set %1 rxant=%2").arg(sliceId).arg(antenna));
+    return ReceiveDispatch::Dispatched;
+}
+
+ReceiveDispatch FlexBackend::requestSliceLock(int sliceId, bool locked)
+{
+    if (sliceId < 0) {
+        return ReceiveDispatch::Unsupported;
+    }
+    // Per-slice lock, NOT the radio-wide hasRadioDialLock capability.
+    sendSlice(QStringLiteral("slice %1 %2")
+                  .arg(locked ? QStringLiteral("lock") : QStringLiteral("unlock")).arg(sliceId));
+    return ReceiveDispatch::Dispatched;
 }
 
 void FlexBackend::setSliceMode(int sliceId, const QString& mode)

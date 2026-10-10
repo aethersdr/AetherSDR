@@ -12,10 +12,12 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <cstdio>
 #include <functional>
 #include <mutex>
+#include <numbers>
 #include <optional>
 #include <thread>
 
@@ -127,6 +129,23 @@ qint16 sampleAt(const QByteArray& wav, int frame, int channel)
     return qFromLittleEndian<qint16>(wav.constData() + offset);
 }
 
+double wavAmplitude(const QByteArray& wav, int rate, int channel, double frequency)
+{
+    const int frames = static_cast<int>((wav.size() - 44) / 4);
+    if (frames <= 0) {
+        return 0.0;
+    }
+    double real = 0.0;
+    double imaginary = 0.0;
+    for (int frame = 0; frame < frames; ++frame) {
+        const double angle = 2.0 * std::numbers::pi * frequency * frame / rate;
+        const double sample = sampleAt(wav, frame, channel) / 32767.0;
+        real += sample * std::cos(angle);
+        imaginary += sample * std::sin(angle);
+    }
+    return 2.0 * std::hypot(real, imaginary) / frames;
+}
+
 void verifyIsolatedSegment(const QByteArray& wav, int firstFrame, int frames,
                            int activeChannel, const char* message)
 {
@@ -202,6 +221,43 @@ void knownProducerRateAndDuration()
         check(stoppedDuration == 1, "stopped duration represents one second of captured audio");
         verifyWav(readFile(path), rate, rate);
     }
+}
+
+void writtenWideStereoSpectrum()
+{
+    // Inspect actual production WAV samples: a 48 kHz header alone cannot
+    // reveal a hidden 24 kHz bottleneck or a collapsed stereo recording path.
+    constexpr int kRate = 48000;
+    QTemporaryDir directory;
+    check(directory.isValid(), "create wide-stereo recording directory");
+    QsoRecorder recorder;
+    configure(recorder, directory.path());
+    PcmProducer producer;
+    check(producer.start(PcmPurpose::Speaker, -1, {kRate, PcmLayout::Stereo}),
+          "start current 48 kHz stereo recording source");
+    recorder.feedRxFrame(produce(producer, stereo(1, 0.0f, 0.0f)));
+    recorder.startRecording();
+    check(recorder.isRecording(), "wide-stereo recording starts after current metadata");
+    const QString path = recorder.recordingFilePath();
+    QVector<float> samples(kRate * 2);
+    for (int frame = 0; frame < kRate; ++frame) {
+        const double angle = 2.0 * std::numbers::pi * frame / kRate;
+        samples[2 * frame] = static_cast<float>(0.3 * std::sin(15000.0 * angle));
+        samples[2 * frame + 1] = static_cast<float>(0.17 * std::sin(1700.0 * angle));
+    }
+    recorder.feedRxFrame(produce(producer, std::move(samples)));
+    check(recorder.stopRecording() == 1, "written wide-stereo duration is one second");
+    const QByteArray wav = readFile(path);
+    verifyWav(wav, kRate, kRate);
+    check(std::abs(wavAmplitude(wav, kRate, 0, 15000) - 0.3) < 0.001,
+          "actual 48 kHz WAV retains the left 15 kHz tone amplitude");
+    check(std::abs(wavAmplitude(wav, kRate, 1, 1700) - 0.17) < 0.001,
+          "actual 48 kHz WAV retains the independent right tone amplitude");
+    check(wavAmplitude(wav, kRate, 0, 1700) < 0.001
+              && wavAmplitude(wav, kRate, 1, 15000) < 0.001,
+          "actual WAV preserves stereo without cross-channel tone leakage");
+    check(wavAmplitude(wav, kRate, 0, 9000) < 0.001,
+          "actual WAV does not contain a 9 kHz alias from a hidden 24 kHz path");
 }
 
 void legacyAndMonoQuantization()
@@ -660,6 +716,7 @@ int main(int argc, char** argv)
     AppSettings::instance().save();
     finalizedStopDuration();
     knownProducerRateAndDuration();
+    writtenWideStereoSpectrum();
     legacyAndMonoQuantization();
     earlyAndTxFirstRateSelection();
     replacementReconnectAndReplay();

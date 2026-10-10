@@ -34,6 +34,7 @@ body:
       description: |
         Describe the bug. If you used the AI-assisted tool, paste its output here.
         Screenshots, log excerpts, and Wireshark captures are welcome.
+        If AetherSDR crashed, attach the crash report your system kept — [where to find it](https://github.com/aethersdr/AetherSDR/blob/main/docs/debugging-crashes.md#for-users-what-to-attach-to-the-issue).
     validations:
       required: true
 

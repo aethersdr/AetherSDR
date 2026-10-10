@@ -33,36 +33,8 @@ constexpr int kDefaultWidth  = 860;
 constexpr int kDefaultHeight = 400;
 
 constexpr const char* kWindowStyle =
-    "QWidget { background: #08121d; color: #d7e7f2; }"
-    "QLabel  { background: transparent; color: #8aa8c0; font-size: 11px; }";
-
-const QString kBypassStyle = QStringLiteral(
-    "QPushButton {"
-    "  background: #0e1b28;"
-    "  color: #8aa8c0;"
-    "  border: 1px solid #243a4e;"
-    "  border-radius: 3px;"
-    "  font-size: 11px;"
-    "  font-weight: bold;"
-    "  padding: 3px 12px;"
-    "}"
-    "QPushButton:hover { background: #1a2a3a; }"
-    "QPushButton:checked {"
-    "  background: #3a2a0e;"
-    "  color: #f2c14e;"
-    "  border: 1px solid #f2c14e;"
-    "}"
-    "QPushButton:checked:hover { background: #4a3a1e; }");
-
-const QString kLimBtnStyle = QStringLiteral(
-    "QPushButton {"
-    "  background: #1a2a3a; border: 1px solid #205070; border-radius: 3px;"
-    "  color: #c8d8e8; font-size: 10px; font-weight: bold; padding: 3px 6px;"
-    "}"
-    "QPushButton:hover { background: #204060; }"
-    "QPushButton:checked {"
-    "  background: #006040; color: #00ff88; border: 1px solid #00a060;"
-    "}");
+    "QWidget { background: {{color.background.0}}; color: {{color.text.primary}}; }"
+    "QLabel  { background: transparent; color: {{color.text.secondary}}; font-size: 11px; }";
 
 } // namespace
 
@@ -71,7 +43,7 @@ StripCompPanel::StripCompPanel(AudioEngine* engine, QWidget* parent)
     , m_audio(engine)
 {
     setWindowTitle("Aetherial Compressor");
-    setStyleSheet(kWindowStyle);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(this, kWindowStyle);
     resize(kDefaultWidth, kDefaultHeight);
 
     auto* root = new QVBoxLayout(this);

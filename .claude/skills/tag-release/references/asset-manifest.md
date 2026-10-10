@@ -1,6 +1,7 @@
-# Asset manifest — the fifteen files, who makes them, who signs them
+# Asset manifest — the seventeen files, who makes them, who signs them
 
-v26.9.3 and v26.9.4 carry exactly this set. Names substitute the version;
+v26.9.3 and v26.9.4 carry rows 1–15; the manual (rows 16–17) is attached
+from the first release cut after the docs site landed. Names substitute the version;
 `X.Y.Z` is the bare version, `vX.Y.Z` the tag.
 
 | # | asset | produced by | GPG `.asc` | Apple notarized | in `SHA256SUMS.txt` |
@@ -11,26 +12,30 @@ v26.9.3 and v26.9.4 carry exactly this set. Names substitute the version;
 | 4 | `AetherSDR-vX.Y.Z-aarch64.AppImage.asc` | Sign Release Artifacts | — | — | — |
 | 5 | `AetherSDR-vX.Y.Z-macOS-apple-silicon.dmg` | macOS DMG (`build-dmg`, apple-silicon) | no | yes — "Sign DMG" + "Notarize DMG" steps | no |
 | 6 | `AetherSDR-vX.Y.Z-macOS-intel.dmg` | macOS DMG (intel) | no | yes — same steps | no |
-| 7 | `AetherSDR-vX.Y.Z-Windows-x64-setup.exe` | Windows Installer (`build-windows`) | yes (8) | — | yes |
+| 7 | `AetherSDR-vX.Y.Z-Windows-x64-setup.exe` | Windows Installer (built and signed in `package-windows`, attached by `release-windows`) | yes (8) | — | yes |
 | 8 | `AetherSDR-vX.Y.Z-Windows-x64-setup.exe.asc` | Sign Release Artifacts | — | — | — |
-| 9 | `AetherSDR-vX.Y.Z-Windows-x64-portable.zip` | Windows Installer | yes (10) | — | yes |
+| 9 | `AetherSDR-vX.Y.Z-Windows-x64-portable.zip` | Windows Installer (built and signed in `package-windows`, attached by `release-windows`) | yes (10) | — | yes |
 | 10 | `AetherSDR-vX.Y.Z-Windows-x64-portable.zip.asc` | Sign Release Artifacts | — | — | — |
 | 11 | `AetherSDR-vX.Y.Z-source.tar.gz` | Sign Release Artifacts (`git archive` of the **tag**) | yes (12) | — | yes |
 | 12 | `AetherSDR-vX.Y.Z-source.tar.gz.asc` | Sign Release Artifacts | — | — | — |
 | 13 | `SHA256SUMS.txt` | Sign Release Artifacts (`sha256sum *` over 1, 3, 7, 9, 11) | yes (14) | — | — |
 | 14 | `SHA256SUMS.txt.asc` | Sign Release Artifacts | — | — | — |
-| 15 | `AetherSDR-X.Y.Z.0-Windows-x64.msixupload` | Windows Installer ("Create MSIX package") | no | — | no |
+| 15 | `AetherSDR-X.Y.Z.0-Windows-x64.msixupload` | Windows Installer (`package-windows` "Create MSIX package", attached by `release-windows`) | no | — | no |
+| 16 | `AetherSDR-Manual-vX.Y.Z.pdf` | Docs (`release-pdf`, on `release: published`; `tools/docs/build_pdf.py` from the tag) | yes (17) | — | no |
+| 17 | `AetherSDR-Manual-vX.Y.Z.pdf.asc` | Docs (`release-pdf`, the release key, verified in the job) | — | — | — |
 
 **Hotfix delta** (nonzero fourth component): row 15 is absent —
 `get-store-build-plan.ps1` returns `storeEligible = false`, the MSIX step is
-skipped, nothing is staged. Fourteen assets. Everything else is identical.
+skipped, nothing is staged. Sixteen assets. Everything else is identical.
 v26.7.4.1 predates that rule and carries a `26.7.4.1` `.msixupload` that the
 Store cannot take; it also carries no `.asc` at all, because the signing
 trigger could not fire and nobody dispatched it.
 
 **Deliberately absent** from `SHA256SUMS.txt`: both DMGs (Apple-signed; the
-signing job neither waits for nor downloads them) and the `.msixupload` (a
-maintainer-only Partner Center package). A `SHA256SUMS.txt` with more or
+signing job neither waits for nor downloads them), the `.msixupload` (a
+maintainer-only Partner Center package) and the manual PDF (made by a
+different workflow on a different trigger; its own `.asc` covers it, and
+`.pdf` is outside the signing job's download patterns). A `SHA256SUMS.txt` with more or
 fewer than five lines was written over a partial set — the wait step timed
 out or the workflow changed.
 
@@ -38,15 +43,38 @@ out or the workflow changed.
 `streamcontroller-aethersdr.zip` (+ `.asc`), which every release through
 v26.9.2 carried. Their presence on a new release is a `WARN`.
 
+## Debug-symbol archives — outside the seventeen
+
+Each platform build also attaches one `.tar.xz` of debug symbols
+(`docs/debugging-crashes.md`). Users never download them, so they are not part
+of the set above:
+
+| asset | produced by | contents |
+|---|---|---|
+| `AetherSDR-vX.Y.Z-x86_64-symbols.tar.xz` | AppImage (x86_64) | `.build-id/` debug files + `SYMBOLS.txt` |
+| `AetherSDR-vX.Y.Z-aarch64-symbols.tar.xz` | AppImage (aarch64) | same |
+| `AetherSDR-vX.Y.Z-macOS-apple-silicon-symbols.tar.xz` | macOS DMG (apple-silicon) | `.dSYM` bundles + `SYMBOLS.txt` |
+| `AetherSDR-vX.Y.Z-macOS-intel-symbols.tar.xz` | macOS DMG (intel) | same |
+| `AetherSDR-vX.Y.Z-Windows-x64-symbols.tar.xz` | Windows Installer | AetherSDR, helper and Qt PDBs |
+
+They are neither GPG-signed nor in `SHA256SUMS.txt`. `.tar.xz` keeps them out
+of the signing job's `*.AppImage`/`*.exe`/`*.zip` download patterns, so
+`SHA256SUMS.txt` stays at five lines. `check_release_assets.py` reports them
+as a separate check: missing ones are a `WARN`, because that build's crashes
+cannot be symbolized; the release itself is unaffected. The workflows' symbol
+steps are `continue-on-error` for the same reason, so a missing archive means
+a symbol step failed on that build: read its annotations rather than
+re-running a green release job.
+
 ## Signature timing
 
 The four CI-built binaries (rows 1, 3, 7, 9) are attached by their build
 workflows before the signing job runs, so each `.asc` is minutes newer than
 its binary; a `.asc` older than its binary means the binary was re-attached
 (a re-run) after signing and the signature covers other bytes. The tarball
-and `SHA256SUMS.txt` (rows 11, 13) are produced by the signing job and go up
-in the same `gh release upload` as their `.asc`, so those timestamps tie
-within a second, in either order — v26.9.4's tarball is stamped one second
+and `SHA256SUMS.txt` (rows 11, 13) are produced by the signing job, and the
+manual (row 16) by Docs, and each goes up in the same `gh release upload` as
+its `.asc`, so those timestamps tie within a second, in either order — v26.9.4's tarball is stamped one second
 *after* its signature. Both signing runs upload with `--clobber`, so the
 second run's timestamps overwrite the first's when it is not skipped.
 

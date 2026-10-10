@@ -16,13 +16,20 @@ namespace AetherSDR {
 QWidget* makeStagePage(QWidget* panel);
 
 // The embedded panels each ship their own window chrome — a title bar with a
-// min/max/close trio, and a legacy band colour from when they were floating
-// editors. Inside a host window the trio does nothing, so strip it.
+// min/max/close trio from when they were floating editors. Inside a host
+// window the trio does nothing, so strip it.
 //
 // `keepTitle` decides whether the name plate goes too. A page showing one
 // panel has already named it in the tab, and a second copy of "EQ" above the
 // graph is a row of pixels saying nothing; a page stacking two panels keeps
 // both plates, because there the titles are what tell them apart.
 void tidyEmbeddedPanel(QWidget* panel, bool keepTitle = false);
+
+// The sheet AetherRX and AetherTX put on CanonWindow's body: every container
+// that paints nothing of its own stays transparent over the canon ground,
+// instead of taking MainWindow's window-wide background rule, and text
+// defaults to canon ink. Panels that set their own background keep it, and
+// popups (menus, combo lists) keep a raised panel.
+QString canonBodyStyleSheet();
 
 } // namespace AetherSDR

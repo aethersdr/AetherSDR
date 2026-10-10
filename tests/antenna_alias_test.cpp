@@ -71,6 +71,9 @@ int main(int argc, char** argv)
 
     SliceModel slice(3);
     QStringList commands;
+    QStringList receiveAntennas;
+    QObject::connect(&slice, &SliceModel::receiveRxAntennaRequested,
+                     [&receiveAntennas](const QString& antenna) { receiveAntennas.append(antenna); });
     QObject::connect(&slice, &SliceModel::commandReady,
                      [&commands](const QString& cmd) { commands.append(cmd); });
     // aetherd RFC 2.3: antenna-list splitting moved to FlexBackend::decodeSliceStatus;
@@ -96,7 +99,7 @@ int main(int argc, char** argv)
                  "slice stores rxAntennaList");
 
     slice.setRxAntenna(QStringLiteral("RX_B"));
-    ok &= expect(commands == QStringList({QStringLiteral("slice set 3 rxant=RX_B")}),
+    ok &= expect(receiveAntennas == QStringList{QStringLiteral("RX_B")} && commands.isEmpty(),
                  "slice RX antenna command keeps canonical token");
     commands.clear();
 
