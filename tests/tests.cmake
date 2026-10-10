@@ -3095,6 +3095,15 @@ target_include_directories(audio_output_router_test PRIVATE src)
 target_link_libraries(audio_output_router_test PRIVATE Qt6::Core Qt6::Multimedia)
 add_test(NAME audio_output_router_test COMMAND audio_output_router_test)
 
+# Saved PC audio device vs. the live one (#6040): a pure policy over device
+# ids. No QtMultimedia and no audio device, so it runs on every runner.
+add_executable(audio_device_preference_policy_test
+    tests/audio_device_preference_policy_test.cpp
+)
+target_include_directories(audio_device_preference_policy_test PRIVATE src)
+target_link_libraries(audio_device_preference_policy_test PRIVATE Qt6::Core)
+add_test(NAME audio_device_preference_policy_test COMMAND audio_device_preference_policy_test)
+
 # QtAudioBackendGuard: Qt 6.12's QtMultimedia segfaults enumerating audio
 # devices when its PipeWire backend cannot create a client context. One
 # executable, two scenarios, each in its own process. PipeWire is pointed at an

@@ -9934,15 +9934,16 @@ void AudioEngine::sendVoiceTxPacket(const QByteArray& pcmData, quint32 streamId,
     }
 }
 
-void AudioEngine::setOutputDevice(const QAudioDevice& dev)
+void AudioEngine::setOutputDevice(const QAudioDevice& dev, AudioDeviceSelection selection)
 {
     m_outputDevice = dev;
     qCDebug(lcAudio) << "AudioEngine: output device set to" << dev.description();
 
-    // Persist selection
-    auto& s = AppSettings::instance();
-    s.setValue("AudioOutputDeviceId", dev.id());
-    s.save();
+    if (persistsAudioDeviceSelection(selection)) {
+        auto& s = AppSettings::instance();
+        s.setValue("AudioOutputDeviceId", dev.id());
+        s.save();
+    }
 
     // Restart RX stream if running
     if (m_audioSink) {
@@ -9953,15 +9954,16 @@ void AudioEngine::setOutputDevice(const QAudioDevice& dev)
     emit outputDeviceChanged();
 }
 
-void AudioEngine::setInputDevice(const QAudioDevice& dev)
+void AudioEngine::setInputDevice(const QAudioDevice& dev, AudioDeviceSelection selection)
 {
     m_inputDevice = dev;
     qCDebug(lcAudio) << "AudioEngine: input device set to" << dev.description();
 
-    // Persist selection
-    auto& s = AppSettings::instance();
-    s.setValue("AudioInputDeviceId", dev.id());
-    s.save();
+    if (persistsAudioDeviceSelection(selection)) {
+        auto& s = AppSettings::instance();
+        s.setValue("AudioInputDeviceId", dev.id());
+        s.save();
+    }
 
     // Restart TX stream if running
     if (m_audioSource) {

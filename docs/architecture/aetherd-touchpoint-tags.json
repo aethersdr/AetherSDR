@@ -1564,5 +1564,11 @@
   "note": "Cepstral true envelope of a dB trace for the panadapter's FFT De-comb display option; pure DSP on the drawn trace, no radio state.",
   "split": "",
   "confidence": "high"
+ },
+ "core/AudioDevicePreferencePolicy.h": {
+  "tag": "ui-support",
+  "note": "Header-only policy over PC audio device ids: whether a device-list change keeps the engine's device, falls back to the system default or returns to the saved device, and whether a selection is written to the saved id (#6040). Host audio, no radio state.",
+  "split": "",
+  "confidence": "high"
  }
 }
