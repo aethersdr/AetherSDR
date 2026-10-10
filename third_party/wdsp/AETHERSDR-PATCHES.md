@@ -616,8 +616,9 @@ itself. They are different shapes, so grep for the shape, not for a free:
   `stitch(disp)`, not before it; and `sendbuf()`'s `IQO_idx` hand-off and
   `IQout_index` advance inside its existing `BufferControlSection`.
 - **patch 18** -- in `destroy_calcc()`, the `SemsPSCorr` and
-  `hCorrChangeExited` closes. Patch 22 replaced its `== WAIT_OBJECT_0` check:
-  the closes now follow the unbounded exit wait.
+  `hCorrChangeExited` closes, still only after the thread's exit event was
+  seen (`corrThreadGone`, patch 22). A thread that was never started has
+  nothing to wait for, so its handles are closed directly.
 - **patch 22** -- in `calcc.c`: the `corrThreadStarted` field set from
   `_beginthread()`'s result in `create_calcc()`, and in `destroy_calcc()` the
   `hCorrChangeExited` wait (clearing iqc's `busy` bit each pass, unbounded
@@ -1008,8 +1009,9 @@ wait, `destroy_calcc()` goes on to free `a` and its members, which a correction
 thread still running past the timeout would use. That use-after-free predates
 this patch (upstream frees `a` on the same path) and is tracked separately
 (#6179). Patch 18 only stops the normal, successful-exit path from
-leaking and avoids adding a second hazard on the timeout path. Patch 22 closes
-the timeout path by removing it.
+leaking and avoids adding a second hazard on the timeout path. Patch 22 leaves
+the timeout path only behind a wedged DSP worker; there the handles stay open
+as above, and `a` is still freed, as on `main`.
 
 **Upstream status.** Not reported.
 
@@ -1273,11 +1275,13 @@ Now:
   instead: 500 ms on POSIX, up to ~8 s under Windows' default 15.6 ms timer
   tick, since nothing in AetherSDR calls `timeBeginPeriod`. That path
   is already undefined on `main` (`post_main_destroy` deletes `csDSP` under a
-  live holder); this patch does not make it worse.
+  live holder); there the handles stay open as patch 18 had them, and `a` is
+  still freed as on `main`, so this patch does not make it worse.
 - A `WAIT_FAILED` return (an exit event `CreateEvent` failed to make) ends
   the wait rather than spinning.
-- The `SemsPSCorr` / exit-event closes (patch 18) and the six `util` spline
-  frees follow the exit.
+- The `SemsPSCorr` / exit-event closes (patch 18) run only once the exit
+  event was seen, or when the thread never started. The six `util` spline
+  frees follow the wait.
 
 **What can still stall teardown.** The thread's own work, on the normal path:
 `calc()` is bounded CPU work. Correction-file I/O can block as long as the file system does.

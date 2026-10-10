@@ -1021,7 +1021,7 @@ set_tests_properties(wdsp_channel_reservation_test PROPERTIES TIMEOUT 120)
 add_executable(wdsp_calcc_teardown_test tests/wdsp_calcc_teardown_test.cpp)
 target_link_libraries(wdsp_calcc_teardown_test PRIVATE aethercore)
 add_test(NAME wdsp_calcc_teardown_test COMMAND wdsp_calcc_teardown_test)
-set_tests_properties(wdsp_calcc_teardown_test PROPERTIES TIMEOUT 120)
+set_tests_properties(wdsp_calcc_teardown_test PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
 
 # Compiles src/core/NnrControls.h so its static_asserts are real, and pins the
 # default markers the NNR tab draws. Header-only: the WDSP cross-check needs the

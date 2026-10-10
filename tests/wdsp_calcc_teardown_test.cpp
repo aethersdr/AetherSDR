@@ -43,7 +43,7 @@ int main()
 {
 #ifdef _WIN32
     std::cout << "[SKIP] needs a POSIX FIFO\n";
-    return 0;
+    return 77;
 #else
     WdspChannel::Config tx;
     tx.direction = WdspChannel::Direction::Transmit;

@@ -1098,6 +1098,7 @@ void destroy_calcc (CALCC a)
 	// thread's iqc setters take, is then free, and iqc's busy bit they spin on
 	// is cleared each pass. If that wait fell through, 500 passes bound it
 	// (500 ms on POSIX, longer at Windows' default timer tick).
+	int corrThreadGone = !a->corrThreadStarted;
 	if (a->corrThreadStarted && a->hCorrChangeExited != NULL)
 	{
 		const int workerGone = _InterlockedAnd(&ch[a->channel].mainExited, ~0L)
@@ -1110,10 +1111,16 @@ void destroy_calcc (CALCC a)
 				break;
 			InterlockedBitTestAndReset(&b->busy, 0);
 		}
+		corrThreadGone = waitstat == WAIT_OBJECT_0;
 	}
-	for (int i = 0; i < 5; i++)
-		CloseHandle(a->SemsPSCorr[i]);
-	CloseHandle(a->hCorrChangeExited);
+	// AetherSDR patch 18: closed only once the thread is gone; past the
+	// bounded fallback it may still wait on them or set the event.
+	if (corrThreadGone)
+	{
+		for (int i = 0; i < 5; i++)
+			CloseHandle(a->SemsPSCorr[i]);
+		CloseHandle(a->hCorrChangeExited);
+	}
 	ns_free(a->util.m_spline_restore); a->util.m_spline_restore = NULL;
 	ns_free(a->util.c_spline_restore); a->util.c_spline_restore = NULL;
 	ns_free(a->util.s_spline_restore); a->util.s_spline_restore = NULL;
