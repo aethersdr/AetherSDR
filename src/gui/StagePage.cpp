@@ -1,7 +1,6 @@
 #include "StagePage.h"
 #include "CompactMetrics.h"
 #include "EditorFramelessTitleBar.h"
-#include "ModemChrome.h"
 #include "core/ThemeManager.h"
 
 #include <QFrame>
@@ -96,9 +95,8 @@ QWidget* makeStagePage(QWidget* panel)
 }
 
 // The embedded panels each ship their own window chrome -- a title bar with a
-// min/max/close trio, and a legacy band colour from when they were floating
-// editors. Inside a host window the trio does nothing, so strip it, the same
-// way the Aetherial strip does for its own embedded panels.
+// min/max/close trio from when they were floating editors. Inside a host
+// window the trio does nothing, so strip it.
 //
 // `keepTitle` decides whether the name plate goes too. A page showing one panel
 // has already named it in the tab, and a second copy of "EQ" above the graph is
@@ -107,25 +105,12 @@ QWidget* makeStagePage(QWidget* panel)
 void tidyEmbeddedPanel(QWidget* panel, bool keepTitle)
 {
     if (!panel) return;
-    const auto recolour = [](QWidget* w) {
-        QString sheet = w->styleSheet();
-        if (sheet.contains(QLatin1String("#08121d"))) {
-            sheet.replace(QLatin1String("#08121d"),
-                          QLatin1String(ModemChrome::Colour::Background));
-            // Through the theme, not setStyleSheet(): the replacement is a
-            // {{token}} placeholder and nothing else would resolve it.
-            AetherSDR::ThemeManager::instance().applyStyleSheet(w, sheet);
-        }
-    };
-    recolour(panel);
-
     for (QObject* child : panel->children()) {
         // dynamic_cast rather than findChild: EditorFramelessTitleBar has no
         // Q_OBJECT macro.
         if (auto* tb = dynamic_cast<EditorFramelessTitleBar*>(child)) {
             if (keepTitle) {
                 tb->setControlsVisible(false);
-                recolour(tb);
             } else {
                 tb->hide();
             }

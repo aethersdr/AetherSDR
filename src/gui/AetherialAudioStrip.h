@@ -99,7 +99,6 @@ signals:
     void stageEnabledChanged(AudioEngine::TxChainStage stage, bool enabled);
 
 protected:
-    void closeEvent(QCloseEvent* ev) override;
     void showEvent(QShowEvent* ev) override;
     void hideEvent(QHideEvent* ev) override;
 

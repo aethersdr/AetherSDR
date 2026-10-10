@@ -1128,6 +1128,20 @@ void StripFinalOutputPanel::showQuindarEditor()
     dlg->show();
 }
 
+namespace {
+// The meter tick restyles these indicators on every tick, but their state
+// changes rarely. Resolving a template is not free, so only re-apply when
+// it changed; ThemeManager re-resolves applied sheets itself on a theme
+// change.
+void applySheetIfChanged(QWidget* w, const QString& sheet)
+{
+    static const char* kAppliedSheet = "aetherAppliedSheet";
+    if (w->property(kAppliedSheet).toString() == sheet) return;
+    w->setProperty(kAppliedSheet, sheet);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(w, sheet);
+}
+} // namespace
+
 void StripFinalOutputPanel::tickMeters()
 {
     if (!m_audio) return;
@@ -1216,7 +1230,7 @@ void StripFinalOutputPanel::tickMeters()
 
     // OVR + LIMIT styling.
     if (m_ovrLed) {
-        AetherSDR::ThemeManager::instance().applyStyleSheet(m_ovrLed,
+        applySheetIfChanged(m_ovrLed,
             ovrActive
                 ? "QPushButton { background: {{color.toggle.footer.danger.background.checked}}; border: 1px solid {{color.accent.danger}};"
                   " border-radius: 3px; color: {{color.accent.danger}}; font-size: 10px;"
@@ -1234,7 +1248,7 @@ void StripFinalOutputPanel::tickMeters()
         const QString tint = pct > 90 ? "{{color.accent.danger}}"
                            : pct > 50 ? "{{color.meter.gainReduction}}"
                                       : "{{color.text.label}}";
-        AetherSDR::ThemeManager::instance().applyStyleSheet(m_activityLbl,
+        applySheetIfChanged(m_activityLbl,
             QString("QLabel { background: transparent; color: %1;"
                     " font-size: 10px; font-weight: bold; padding: 1px; }")
                 .arg(tint));
@@ -1264,7 +1278,7 @@ void StripFinalOutputPanel::tickMeters()
                 : "QLabel { background: {{color.toggle.footer.danger.background.checked}}; border: 1px solid {{color.accent.danger}};"
                   " border-radius: 3px; color: {{color.accent.danger}}; font-size: 10px;"
                   " font-weight: bold; padding: 1px; }";
-        AetherSDR::ThemeManager::instance().applyStyleSheet(m_limitLed, css);
+        applySheetIfChanged(m_limitLed, css);
     }
 }
 

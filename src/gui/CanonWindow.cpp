@@ -130,14 +130,16 @@ void CanonWindow::keyPressEvent(QKeyEvent* event)
     QDialog::keyPressEvent(event);
 }
 
-void CanonWindow::closeEvent(QCloseEvent* event)
+void CanonWindow::hideEvent(QHideEvent* event)
 {
-    // Move and resize saves are in memory; closing flushes them to disk.
-    if (!m_geometryKey.isEmpty()) {
+    // Move and resize saves are in memory; hiding flushes them to disk. Hide,
+    // not close: Escape and Ctrl+W go through QDialog::reject(), which hides
+    // the window without a close event.
+    if (!m_geometryKey.isEmpty() && m_placed) {
         saveGeometryToSettings();
         AppSettings::instance().save();
     }
-    QDialog::closeEvent(event);
+    QDialog::hideEvent(event);
 }
 
 // Saved as "x,y,width,height" and applied with move() and resize():
@@ -187,23 +189,31 @@ CanonWindow::Restored CanonWindow::restoreGeometryFromSettings()
         ? Restored::SizeAndPosition : Restored::Nothing;
 }
 
+void CanonWindow::setLaunchSize(const QSize& size)
+{
+    m_launchSize = size;
+    resize(size);
+}
+
 void CanonWindow::showEvent(QShowEvent* event)
 {
-    if (m_placed) {
-        QDialog::showEvent(event);
-        return;
-    }
     // A saved geometry is applied before QDialog::showEvent(), as
     // PersistentDialog does, so the window maps at its saved size.
-    if (!m_geometryKey.isEmpty()) {
+    Restored restored = Restored::Nothing;
+    if (!m_placed && !m_geometryKey.isEmpty()) {
         m_restoringGeometry = true;
-        const Restored restored = restoreGeometryFromSettings();
+        restored = restoreGeometryFromSettings();
         m_restoringGeometry = false;
-        if (restored == Restored::SizeAndPosition) {
-            m_placed = true;
-            QDialog::showEvent(event);
-            return;
-        }
+    }
+    // The launch size wins over the saved one on every open, and is applied
+    // before centring so the centre is the pinned window's.
+    if (m_launchSize.isValid() && size() != m_launchSize) {
+        resize(m_launchSize.expandedTo(minimumSize()));
+    }
+    if (m_placed || restored == Restored::SizeAndPosition) {
+        m_placed = true;
+        QDialog::showEvent(event);
+        return;
     }
     QDialog::showEvent(event);
     m_placed = true;

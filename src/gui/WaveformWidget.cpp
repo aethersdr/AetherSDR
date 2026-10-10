@@ -752,7 +752,14 @@ void WaveformWidget::drawBars(QPainter& painter, const QRectF& plotRect)
     painter.save();
     painter.setRenderHint(QPainter::Antialiasing, false);
 
+    // Resolved once: each scoped lookup walks the parent chain.
     const QColor wave = waveformColor(this);
+    const QColor barEmpty = kBarEmpty(this);
+    const QColor clip = kClipColor(this);
+    const QColor warn = AetherSDR::ThemeManager::instance().color(this, "color.accent.warning");
+    const QColor rmsColour = kRmsColor(this);
+    const QColor rmsLine = rmsColour.lighter(115);
+    const QColor peakHold = kBarPeakHold(this);
     const qreal slot = plotRect.width() / m_columns.size();
     const qreal barWidth = std::max<qreal>(2.0, slot - 1.5);
     const qreal bottom = plotRect.bottom();
@@ -762,7 +769,7 @@ void WaveformWidget::drawBars(QPainter& painter, const QRectF& plotRect)
         const WaveformScopeModel::ColumnStats& c = m_columns[i];
         const qreal x = plotRect.left() + i * slot + (slot - barWidth) * 0.5;
         const QRectF rail(x, plotRect.top(), barWidth, maxHeight);
-        painter.fillRect(rail, kBarEmpty(this));
+        painter.fillRect(rail, barEmpty);
 
         const qreal peak = std::clamp(c.peak * m_amplitudeZoom, 0.0f, 1.0f);
         const qreal rms = std::clamp(c.rms * m_amplitudeZoom, 0.0f, 1.0f);
@@ -771,11 +778,11 @@ void WaveformWidget::drawBars(QPainter& painter, const QRectF& plotRect)
 
         QColor fill = wave;
         if (c.clipped > 0 || peak >= 0.96)
-            fill = kClipColor(this);
+            fill = clip;
         else if (peak >= 0.78)
-            fill = AetherSDR::ThemeManager::instance().color(this, "color.accent.warning");
+            fill = warn;
         else if (peak < 0.42)
-            fill = kRmsColor(this);
+            fill = rmsColour;
 
         const qreal h = std::max<qreal>(1.0, peak * maxHeight);
         const QRectF bar(x, bottom - h, barWidth, h);
@@ -785,11 +792,11 @@ void WaveformWidget::drawBars(QPainter& painter, const QRectF& plotRect)
         painter.fillRect(bar, grad);
 
         const qreal rmsY = bottom - std::max<qreal>(1.0, rms * maxHeight);
-        painter.setPen(QPen(kRmsColor(this).lighter(115), 1.0));
+        painter.setPen(QPen(rmsLine, 1.0));
         painter.drawLine(QPointF(x, rmsY), QPointF(x + barWidth, rmsY));
 
         const qreal capY = std::max(plotRect.top(), bar.top() - 2.0);
-        painter.setPen(QPen(c.clipped > 0 ? kClipColor(this) : kBarPeakHold(this), 1.0));
+        painter.setPen(QPen(c.clipped > 0 ? clip : peakHold, 1.0));
         painter.drawLine(QPointF(x, capY), QPointF(x + barWidth, capY));
     }
 
@@ -875,22 +882,28 @@ void WaveformWidget::drawVerticalBars(QPainter& painter,
     const qreal barWidth = std::max<qreal>(4.0, slot - 3.0);
     const qreal bottom = plotRect.bottom();
     const qreal maxHeight = std::max<qreal>(1.0, plotRect.height() - 1.0);
+    // Resolved once: each scoped lookup walks the parent chain.
     const QColor wave = waveformColor(this);
+    const QColor barEmpty = kBarEmpty(this);
+    const QColor clip = kClipColor(this);
+    const QColor warn = AetherSDR::ThemeManager::instance().color(this, "color.accent.warning");
+    const QColor rmsColour = kRmsColor(this);
+    const QColor peakHold = kBarPeakHold(this);
 
     for (int band = 0; band < bandCount; ++band) {
         const qreal level = bands[band * 2];
         const qreal amplitude = bands[band * 2 + 1];
         const qreal x = plotRect.left() + band * slot + (slot - barWidth) * 0.5;
         const QRectF rail(x, plotRect.top(), barWidth, maxHeight);
-        painter.fillRect(rail, kBarEmpty(this));
+        painter.fillRect(rail, barEmpty);
 
         QColor fill = wave;
         if (amplitude >= 0.96)
-            fill = kClipColor(this);
+            fill = clip;
         else if (level >= 0.82)
-            fill = AetherSDR::ThemeManager::instance().color(this, "color.accent.warning");
+            fill = warn;
         else if (level < 0.42)
-            fill = kRmsColor(this);
+            fill = rmsColour;
 
         const qreal h = std::max<qreal>(1.0, level * maxHeight);
         const QRectF bar(x, bottom - h, barWidth, h);
@@ -901,7 +914,7 @@ void WaveformWidget::drawVerticalBars(QPainter& painter,
         painter.fillRect(bar, grad);
 
         const qreal capY = std::max(plotRect.top(), bar.top() - 2.0);
-        painter.setPen(QPen(amplitude >= 0.96 ? kClipColor(this) : kBarPeakHold(this), 1.0));
+        painter.setPen(QPen(amplitude >= 0.96 ? clip : peakHold, 1.0));
         painter.drawLine(QPointF(x, capY), QPointF(x + barWidth, capY));
     }
 

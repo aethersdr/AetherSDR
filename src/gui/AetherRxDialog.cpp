@@ -50,7 +50,7 @@ namespace AetherSDR {
 
 namespace {
 
-// The size this window opens at, every time — see showEvent().
+// The size this window opens at, every time — see setLaunchSize().
 constexpr QSize kLaunchSize(720, 480);
 
 // Stage <-> RxChainStage. Only five of the seven tabs are chain stages; the
@@ -106,7 +106,12 @@ AetherRxDialog::AetherRxDialog(AudioEngine* audio, QWidget* parent)
     // minimum is what the narrowest page (AetherNR's two-column radio row)
     // needs beside the tab column.
     setMinimumSize(600, 400);
-    resize(kLaunchSize);
+    // The size is pinned while the size this window wants is still being
+    // settled: without it, the first size anyone happened to leave it at is
+    // the size they keep. The position is still restored and saved. To give
+    // the size back to the operator, drop this; the geometry key underneath
+    // has been recording it all along.
+    setLaunchSize(kLaunchSize);
     FramelessResizer::install(this);
     AetherSDR::ThemeManager::instance().applyStyleSheet(bodyWidget(), canonBodyStyleSheet());
 
@@ -405,20 +410,9 @@ void AetherRxDialog::addStage(Stage stage, const QString& label, QWidget* page)
     Q_UNUSED(index);
 }
 
-// Opens at kLaunchSize every time, whatever is stored.
-//
-// Deliberate and temporary: the size this window wants is still being settled,
-// and a restored geometry wins over the default in the constructor, so without
-// this the first size anyone happened to leave it at is the size they keep.
-// The position is still restored and still saved — only the size is pinned.
-// To give the size back to the operator, delete this override; the geometry
-// key underneath it has been recording all along.
 void AetherRxDialog::showEvent(QShowEvent* event)
 {
     CanonWindow::showEvent(event);
-    if (size() != kLaunchSize) {
-        resize(kLaunchSize);
-    }
     m_tabs->refreshFromHost();
     if (m_checkTimer) m_checkTimer->start();
 }

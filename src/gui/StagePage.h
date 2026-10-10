@@ -16,8 +16,8 @@ namespace AetherSDR {
 QWidget* makeStagePage(QWidget* panel);
 
 // The embedded panels each ship their own window chrome — a title bar with a
-// min/max/close trio, and a legacy band colour from when they were floating
-// editors. Inside a host window the trio does nothing, so strip it.
+// min/max/close trio from when they were floating editors. Inside a host
+// window the trio does nothing, so strip it.
 //
 // `keepTitle` decides whether the name plate goes too. A page showing one
 // panel has already named it in the tab, and a second copy of "EQ" above the

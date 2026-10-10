@@ -18,6 +18,8 @@
 #include "gui/CanonWindow.h"
 
 #include <QApplication>
+#include <QGuiApplication>
+#include <QScreen>
 #include <QPushButton>
 #include <QVBoxLayout>
 #include <QKeyEvent>
@@ -125,6 +127,41 @@ int main(int argc, char** argv)
         EXPECT_TRUE(QTest::qWaitForWindowActive(&w));
         QTest::keyClick(&w, Qt::Key_Escape);
         EXPECT_TRUE(!w.isVisible());
+    }
+
+    // ---- closing with Escape flushes the saved geometry to disk: QDialog's
+    //      reject() hides the window without a close event ----
+    {
+        const QString key = QStringLiteral("CanonTestEscapeGeometry");
+        CanonWindow w(QStringLiteral("Canon"));
+        w.setGeometryKey(key);
+        w.resize(400, 300);
+        w.show();
+        w.activateWindow();
+        EXPECT_TRUE(QTest::qWaitForWindowActive(&w));
+        w.move(w.pos() + QPoint(30, 20));   // saved in memory only
+        const QString moved = AppSettings::instance().value(key).toString();
+        EXPECT_TRUE(!moved.isEmpty());
+        QTest::keyClick(&w, Qt::Key_Escape);
+        EXPECT_TRUE(!w.isVisible());
+        AppSettings::instance().load();     // drops memory, re-reads the disk
+        EXPECT_TRUE(AppSettings::instance().value(key).toString() == moved);
+    }
+
+    // ---- a pinned launch size wins over the saved size, and a window whose
+    //      saved position is unusable centres at the pinned size ----
+    {
+        const QString key = QStringLiteral("CanonTestLaunchGeometry");
+        // A size, and a position on no screen (an unplugged monitor).
+        AppSettings::instance().setValue(key, QStringLiteral("-30000,-30000,1420,900"));
+        CanonWindow w(QStringLiteral("Canon"));
+        w.setGeometryKey(key);
+        w.setLaunchSize(QSize(720, 480));
+        w.show();
+        EXPECT_TRUE(QTest::qWaitForWindowExposed(&w));
+        EXPECT_TRUE(w.size() == QSize(720, 480));
+        const QRect screen = QGuiApplication::primaryScreen()->availableGeometry();
+        EXPECT_TRUE(w.pos() == screen.center() - w.rect().center());
     }
 
     // ---- a workspace is its own top-level window, and Return or Enter in a

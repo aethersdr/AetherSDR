@@ -10189,8 +10189,6 @@ void MainWindow::toggleAetherialStrip()
     if (!windowIsShowing(m_aetherialStrip) && showTxAudioPathErrorIfBlocked()) return;
     if (!m_aetherialStrip) {
         m_aetherialStrip = new AetherialAudioStrip(m_audio, this);
-        // Secondary window — must not gate quitOnLastWindowClosed on Windows.
-        m_aetherialStrip->setAttribute(Qt::WA_QuitOnClose, false);
         // Seed the embedded EQ with the current TX filter cutoff values
         // so the dashed yellow guide lines render immediately rather than
         // waiting for the next txFilterCutoffChanged signal.

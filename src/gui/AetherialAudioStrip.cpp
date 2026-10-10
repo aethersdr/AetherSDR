@@ -29,7 +29,6 @@
 
 #include <QButtonGroup>
 #include <QByteArray>
-#include <QCloseEvent>
 #include <QComboBox>
 #include <QScrollArea>
 #include <QScrollBar>
@@ -54,7 +53,7 @@
 namespace AetherSDR {
 
 namespace {
-// The size this window opens at, every time — see showEvent().
+// The size this window opens at, every time — see setLaunchSize().
 constexpr QSize kLaunchSize(720, 480);
 }  // namespace
 
@@ -105,7 +104,8 @@ AetherialAudioStrip::AetherialAudioStrip(AudioEngine* engine, QWidget* parent)
     // a nine-panel grid. Same size the receive window opens at, for the same
     // reason: it sits on the desktop rather than filling it.
     setMinimumSize(600, 400);
-    resize(kLaunchSize);
+    // Pinned on every open, as AetherRX's is; the position is still restored.
+    setLaunchSize(kLaunchSize);
     FramelessResizer::install(this);
     AetherSDR::ThemeManager::instance().applyStyleSheet(bodyWidget(), canonBodyStyleSheet());
 
@@ -564,21 +564,9 @@ void AetherialAudioStrip::refreshIndicators()
           QStringLiteral("{{color.accent.danger}}"));
 }
 
-void AetherialAudioStrip::closeEvent(QCloseEvent* ev)
-{
-    // CanonWindow::closeEvent() saves the geometry and flushes the settings.
-    AppSettings::instance().setValue("AetherialStripVisible", "False");
-    CanonWindow::closeEvent(ev);
-}
-
 void AetherialAudioStrip::showEvent(QShowEvent* ev)
 {
-    // Opens at kLaunchSize every time, whatever is stored — the same
-    // deliberate, temporary pin the receive window carries while the size is
-    // still being settled. Position is still restored and still saved. After
-    // the base, which restores the saved geometry, size and all.
     CanonWindow::showEvent(ev);
-    if (size() != kLaunchSize) resize(kLaunchSize);
     if (m_tabs) m_tabs->refreshFromHost();
     if (m_checkTimer) m_checkTimer->start();
     auto& s = AppSettings::instance();

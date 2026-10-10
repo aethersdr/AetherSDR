@@ -241,7 +241,7 @@ Waveforms, Network Diagnostics, AetherRX and AetherTX are built on it.
 | Concern | `CanonWindow` | Why |
 |---|---|---|
 | Frameless chrome integration | Always frameless; ignores `FramelessWindow` and is not tracked by `trackPersistentDialog()` | The style guide's rounded, title-bar-less window *is* the design; native chrome would put a title bar over it |
-| Geometry persistence | None by default: asks to open centred on its parent every time (Wayland compositors place top-level windows themselves and may ignore it). `setGeometryKey()` opts in: size and position are saved under that AppSettings key on move and resize (in memory) and on close (flushed), and restored in place of the centring. Network Diagnostics, AetherRX and AetherTX opt in (the last two still pin their size at open, for now) | A short-lived window has nothing to restore; a workspace tool keeps the size its operator gave it |
+| Geometry persistence | None by default: asks to open centred on its parent every time (Wayland compositors place top-level windows themselves and may ignore it). `setGeometryKey()` opts in: size and position are saved under that AppSettings key on move and resize (in memory) and whenever the window hides (flushed — Escape and ⌘W / Ctrl+W hide it without a close event), and restored in place of the centring. Network Diagnostics, AetherRX and AetherTX opt in. `setLaunchSize()` pins the size on every open while the position is still restored; AetherRX and AetherTX use it, for now | A short-lived window has nothing to restore; a workspace tool keeps the size its operator gave it |
 
 What it keeps:
 

@@ -51,6 +51,11 @@ public:
     // placement; with no key, or nothing saved yet, the window centres.
     void setGeometryKey(const QString& key) { m_geometryKey = key; }
 
+    // Open at this size every time, whatever size was saved (the position is
+    // still restored and saved). Applied before the window centres, so a
+    // window that cannot restore its position centres at this size.
+    void setLaunchSize(const QSize& size);
+
     static constexpr int kRadius = 16;
     static constexpr int kInset = 1;   // hairline border; the body sits inside it
 
@@ -62,7 +67,7 @@ protected:
     void resizeEvent(QResizeEvent* event) override;
     void moveEvent(QMoveEvent* event) override;
     void showEvent(QShowEvent* event) override;
-    void closeEvent(QCloseEvent* event) override;
+    void hideEvent(QHideEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
 
 private:
@@ -76,6 +81,7 @@ private:
     QToolButton* m_close{nullptr};
     bool         m_placed{false};
     QString      m_geometryKey;
+    QSize        m_launchSize;
     bool         m_restoringGeometry{false};
     QPixmap      m_ground;   // the painted ground, rebuilt on resize, DPR or theme change
 };
