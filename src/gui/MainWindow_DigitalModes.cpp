@@ -101,7 +101,7 @@ void MainWindow::stopCwRx()
 }
 
 
-#ifdef HAVE_DEEPFIST
+#ifdef HAVE_CW_RX_BACKENDS
 void MainWindow::selectCwRxBackend(const QString& backend)
 {
     if (!m_cwDecoder.selectBackend(backend)) { return; }

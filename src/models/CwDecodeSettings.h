@@ -19,7 +19,7 @@ namespace AetherSDR {
 class CwDecodeSettings {
 public:
     static QString backend() { return readObj().value("backend").toString("ggmorse"); }
-    static bool deepFistSelected() { return backend() == "deepfist"; }
+    static bool neuralSelected() { return backend() != "ggmorse"; }
     static void setBackend(const QString& backend)
     {
         QJsonObject o = readObj();

@@ -8819,8 +8819,8 @@ target_link_libraries(deepfist_model_assets_test PRIVATE Qt6::Core Qt6::Network 
 add_test(NAME deepfist_model_assets_test COMMAND deepfist_model_assets_test)
 set_tests_properties(deepfist_model_assets_test PROPERTIES TIMEOUT 20)
 
-# Opt-in real backend: file/PCM tests only; no sockets or sound devices.
-if(ENABLE_DEEPFIST_EXPERIMENT)
+# Real backends (built with ONNX Runtime): file/PCM tests only; no sockets or sound devices.
+if(ORT_FOUND)
     add_executable(deepfist_cw_model_test tests/deepfist_cw_model_test.cpp)
     target_include_directories(deepfist_cw_model_test PRIVATE src third_party/deepfist)
     target_link_libraries(deepfist_cw_model_test PRIVATE aethercore Qt6::Core)
@@ -8835,6 +8835,11 @@ if(ENABLE_DEEPFIST_EXPERIMENT)
     set_tests_properties(deepfist_cw_model_test PROPERTIES TIMEOUT 15)
     set_tests_properties(deepfist_cw_model_inference_test deepfist_cw_model_download_inference_test PROPERTIES
         SKIP_RETURN_CODE 77 TIMEOUT 60)
+    add_executable(deepcw_rx_backend_test tests/deepcw_rx_backend_test.cpp)
+    target_include_directories(deepcw_rx_backend_test PRIVATE src tests)
+    target_link_libraries(deepcw_rx_backend_test PRIVATE aethercore Qt6::Core Qt6::Network)
+    add_test(NAME deepcw_rx_backend_test COMMAND deepcw_rx_backend_test)
+    set_tests_properties(deepcw_rx_backend_test PROPERTIES TIMEOUT 20)
 endif()
 
 

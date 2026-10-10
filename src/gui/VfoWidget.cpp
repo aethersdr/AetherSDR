@@ -4,7 +4,7 @@
 #include "AntennaChoiceGate.h"
 #include "SplitAudioProfile.h"
 #include "VfoDisplayDefaults.h"
-#ifdef HAVE_DEEPFIST
+#ifdef HAVE_CW_RX_BACKENDS
 #include "models/CwDecodeSettings.h"
 #endif
 #include "ScopedChildWidget.h"
@@ -6164,7 +6164,7 @@ void VfoWidget::rebuildFilterButtons()
         } else {
             m_zeroBeatBtn = new QPushButton("Zero Beat");
             m_zeroBeatBtn->setFixedHeight(26);
-#ifdef HAVE_DEEPFIST
+#ifdef HAVE_CW_RX_BACKENDS
             refreshCwDecoderControls();
 #endif
             m_zeroBeatBtn->setStyleSheet(btnStyle);
@@ -6184,14 +6184,14 @@ void VfoWidget::rebuildFilterButtons()
     updateFilterHighlight();
 }
 
-#ifdef HAVE_DEEPFIST
+#ifdef HAVE_CW_RX_BACKENDS
 void VfoWidget::refreshCwDecoderControls()
 {
     if (!m_zeroBeatBtn) { return; }
-    const bool selected = CwDecodeSettings::deepFistSelected();
+    const bool selected = CwDecodeSettings::neuralSelected();
     m_zeroBeatBtn->setEnabled(!selected);
     const QString reason = selected
-        ? tr("DeepFist does not provide a pitch estimate for Zero Beat") : QString{};
+        ? tr("Zero Beat needs ggmorse's pitch estimate; the neural CW decoders provide none") : QString{};
     m_zeroBeatBtn->setToolTip(reason);
     m_zeroBeatBtn->setAccessibleDescription(reason);
 }

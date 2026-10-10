@@ -3028,27 +3028,36 @@ endif()
 
 target_sources(aethercore PRIVATE src/models/CwRxModel.cpp src/models/CwRxModel.h)
 
-option(ENABLE_DEEPFIST_EXPERIMENT "Build the local DeepFist CW prototype" OFF)
-set(DEEPFIST_MODEL_BASE_URL "" CACHE STRING "Published, versioned HTTPS DeepFist asset directory (empty before publication)")
-if(ENABLE_DEEPFIST_EXPERIMENT)
-    if(NOT ORT_FOUND)
-        message(FATAL_ERROR "The DeepFist prototype requires the packaged ONNX Runtime")
-    endif()
-    target_compile_definitions(aethercore PUBLIC HAVE_DEEPFIST)
-    target_compile_definitions(aethercore PRIVATE DEEPFIST_MODEL_BASE_URL="${DEEPFIST_MODEL_BASE_URL}")
-    target_sources(aethercore PRIVATE
-        src/models/DeepFistCwModel.cpp src/models/DeepFistCwModel.h
-        src/core/deepfist/DeepFistStream.cpp
-        src/core/deepfist/DeepFistModelAssets.cpp src/core/deepfist/DeepFistModelAssets.h
-        third_party/deepfist/DeepFistConditioner.cpp
-        third_party/deepfist/DeepFistSpectrogram.cpp
-        third_party/deepfist/DeepFistCtc.cpp
-        third_party/deepfist/DeepFistModel.cpp)
-    target_include_directories(aethercore PRIVATE "${CMAKE_SOURCE_DIR}/third_party/deepfist")
+# Neural CW receive decoders (RFC #4817): built wherever ONNX Runtime is found
+# (Apple Silicon, Linux, Windows; the pinned runtime has no Intel-macOS build).
+# Their models are never shipped: each downloads on first use from its upstream
+# release at a pinned size and SHA-256.
+# Empty selects the published release; a value replaces it. Not a cache default,
+# so build directories configured before the release keep downloading.
+set(DEEPFIST_MODEL_BASE_URL "" CACHE STRING "DeepFist asset directory override (empty = the published release)")
+set(_deepfist_model_url "https://github.com/n9bc/DeepFist/releases/download/exp27_bt-champion/")
+if(DEEPFIST_MODEL_BASE_URL)
+    set(_deepfist_model_url "${DEEPFIST_MODEL_BASE_URL}")
 endif()
+target_compile_definitions(aethercore PRIVATE DEEPFIST_MODEL_BASE_URL="${_deepfist_model_url}")
 
 if(ORT_FOUND)
     target_compile_definitions(aethercore PUBLIC HAVE_ONNX)
+    # Every CW receive backend beyond ggmorse needs ONNX Runtime, so this one
+    # gate decides whether the CW panel offers a decoder selector (RFC #4817).
+    target_compile_definitions(aethercore PUBLIC HAVE_DEEPFIST HAVE_DEEPCW HAVE_CW_RX_BACKENDS)
+    target_sources(aethercore PRIVATE
+        src/models/DeepFistCwModel.cpp src/models/DeepFistCwModel.h
+        src/core/deepfist/DeepFistStream.cpp
+        third_party/deepfist/DeepFistConditioner.cpp
+        third_party/deepfist/DeepFistSpectrogram.cpp
+        third_party/deepfist/DeepFistCtc.cpp
+        third_party/deepfist/DeepFistModel.cpp
+        src/core/DeepCwEngine.cpp src/core/DeepCwEngine.h
+        src/core/DeepCwCommitter.cpp src/core/DeepCwCommitter.h
+        src/models/DeepCwRxBackend.cpp src/models/DeepCwRxBackend.h
+        src/core/deepfist/DeepFistModelAssets.cpp src/core/deepfist/DeepFistModelAssets.h)
+    target_include_directories(aethercore PRIVATE "${CMAKE_SOURCE_DIR}/third_party/deepfist")
     # PUBLIC include dir: core/SignalClassifier.h includes onnxruntime under
     # HAVE_ONNX (PUBLIC) and is pulled in by gui/MainWindow.h. Same transitive
     # leak as FFTW3 above. Library link stays PRIVATE (transitive via the lib).
@@ -3390,6 +3399,17 @@ endforeach()
 # it keep resolving against the repository root. The header of that file explains
 # why that matters and why it should not be "tidied up" into a subdirectory.
 enable_testing()
+# DeepCW offline replay harness (RFC #4817 regression take): not built by default.
+# Declared above the tests include: executables declared after it fail configure.
+if(ORT_FOUND)
+    add_executable(deepcw_replay EXCLUDE_FROM_ALL
+        tools/deepcw_replay.cpp src/core/DeepCwEngine.cpp src/core/DeepCwCommitter.cpp
+        src/core/Resampler.cpp)
+    target_compile_definitions(deepcw_replay PRIVATE HAVE_ONNX)
+    target_include_directories(deepcw_replay PRIVATE src
+        ${CMAKE_SOURCE_DIR}/third_party/r8brain ${ORT_INCLUDE_DIRS})
+    target_link_libraries(deepcw_replay PRIVATE Qt6::Widgets ${ORT_LIBRARIES})
+endif()
 include(tests/tests.cmake)
 
 

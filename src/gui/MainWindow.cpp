@@ -2679,7 +2679,7 @@ MainWindow::MainWindow(QWidget* parent)
 
 MainWindow::~MainWindow()
 {
-#ifdef HAVE_DEEPFIST
+#ifdef HAVE_CW_RX_BACKENDS
     m_cwDecoder.stop();
 #endif
     ShutdownTrace destructorTrace("main_window.destructor_body");
@@ -9396,7 +9396,7 @@ void MainWindow::routeCwDecoderOutput()
         // decoder target. Hide it before dropping ownership so a later refresh
         // cannot leave an orphaned CW dock on the old pan (#4409).
         m_cwDecoderApplet->setCwPanelVisible(false);
-#ifdef HAVE_DEEPFIST
+#ifdef HAVE_CW_RX_BACKENDS
         disconnect(m_cwDecoderApplet, &PanadapterApplet::cwEngineChanged,
                    this, &MainWindow::selectCwRxBackend);
         disconnect(m_cwDecoderApplet, &PanadapterApplet::cwModelActionRequested,
@@ -9515,7 +9515,7 @@ void MainWindow::refreshCwDecodeState()
     // RX decoder runs only when RX-decode is on and the operator is
     // listening to a CW slice.  Non-CW slices feed unrelated audio,
     // and the panel is hidden anyway.
-#ifdef HAVE_DEEPFIST
+#ifdef HAVE_CW_RX_BACKENDS
     refreshCwRxBackend();
 #endif
     const bool shouldRunRx = isCw && rxOn;

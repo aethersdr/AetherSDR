@@ -30,7 +30,10 @@ QVector<DeepFistModelAssets::Asset> DeepFistModelAssets::manifest()
     return {
         {"deepfist.onnx", 13051998, "6d2d4e3d66f9001d15e21a1b38b79150eae19ead86a310202900ee69d672b94d"},
         {"deepfist.onnx.json", 1257, "840ceb8dba9d46d04495547a8a3789968b1acd2f8ac3a3a5c631f84008ac2217"},
-        {"LICENSE", 1068, "9ad70a9ed30d58502e29f9e691a008ee7bccb6eba49d4384f2b7e675d68dc4f3"}
+        // The release publishes no LICENSE; these are the pinned bytes from the
+        // repository's first commit, fetched from that commit.
+        {"LICENSE", 1068, "9ad70a9ed30d58502e29f9e691a008ee7bccb6eba49d4384f2b7e675d68dc4f3",
+         "https://raw.githubusercontent.com/n9bc/DeepFist/061fc1d71f2b137b7b145b76cbc89c7e3d7a0d68/LICENSE"}
     };
 }
 QString DeepFistModelAssets::releaseBaseUrl()
@@ -128,19 +131,20 @@ void DeepFistModelAssets::next()
 }
 void DeepFistModelAssets::download()
 {
-    const QUrl base(m_baseUrl);
-    if (base.scheme() != "https" || base.host().isEmpty() || base.hasQuery() || base.hasFragment()) {
+    const Asset& asset = m_assets[m_index];
+    const QString prefix = m_baseUrl.endsWith('/') ? m_baseUrl : m_baseUrl + '/';
+    const QUrl source(asset.url.isEmpty() ? prefix + asset.name : asset.url);
+    if (source.scheme() != "https" || source.host().isEmpty() || source.hasQuery() || source.hasFragment()
+        || (asset.url.isEmpty() && m_baseUrl.isEmpty())) {
         fail(tr("Model unavailable: the download release has not been configured."));
         return;
     }
-    const Asset& asset = m_assets[m_index];
     m_received = 0;
     m_file = std::make_unique<QSaveFile>(QDir(m_directory).filePath(asset.name));
     m_file->setDirectWriteFallback(false);
     if (!m_file->open(QIODevice::WriteOnly)) { fail(tr("Cannot write the model cache")); return; }
     m_hash = std::make_unique<QCryptographicHash>(QCryptographicHash::Sha256);
-    const QString prefix = m_baseUrl.endsWith('/') ? m_baseUrl : m_baseUrl + '/';
-    QNetworkRequest request(QUrl(prefix + asset.name));
+    QNetworkRequest request(source);
     request.setTransferTimeout(30000);
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
     request.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("AetherSDR-DeepFist"));

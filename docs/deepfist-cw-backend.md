@@ -3,8 +3,7 @@
 This implementation supplies a shared `CwRxModel` receive-backend interface and
 an optional DeepFist backend. ggmorse remains the default receive decoder and
 continues to decode transmit sidetone. Only the selected receive backend runs.
-The RFC is #4817; DeepCW remains outside this change. The operator authorized
-preparing this PR before DeepCW, overriding the earlier implementation order.
+The RFC is #4817. DeepCW is the third backend, behind the same interface.
 
 DeepFist consumes selected-slice pre-monitor PCM through `PcmFrame`, resamples
 on its worker, and uses the pinned native Lyra frontend. Source changes, discontinuities,
@@ -25,26 +24,18 @@ DeepFist output does not feed automatic callsign spotting. Other monitored
 slices and speaker gain/mute do not alter the selected decoder input. This is
 an audio slice tap, not an RF separation claim.
 
-## Distribution prerequisite
+## Distribution
 
-**Not ready for general release:** no upstream standalone download directory
-has been established for this exact model bundle. As checked during PR
-preparation, n9bc/DeepFist publishes no release assets or committed weights;
-Lyra's releases expose Windows installers, not the three standalone files.
-The application must not download or execute an installer to obtain a model.
-
-`ENABLE_DEEPFIST_EXPERIMENT` is therefore default OFF and requires ONNX Runtime
-when enabled. `DEEPFIST_MODEL_BASE_URL` remains empty. A missing model produces
-an unavailable status, not a request to an invented endpoint. A developer can
-point `AETHER_DEEPFIST_MODEL_DIR` at the exact verified bundle for qualification.
-This override is not the intended end-user installation workflow.
-
-Before enabling the feature in released builds, the upstream author must
-publish the exact assets at a versioned HTTPS directory and confirm model
-redistribution provenance. Then configure that directory, exercise the real
-public download, and test fresh-cache, cancellation, retry and offline reuse
-on each supported platform. The RFC's upstream-only hosting decision remains
-in effect; this change does not publish an AetherSDR mirror.
+DeepFist builds whenever ONNX Runtime is found (Apple Silicon macOS, Linux and
+Windows); there is no separate option. The model is never bundled with the
+application. It downloads from N9BC's versioned `exp27_bt-champion` release
+(`https://github.com/n9bc/DeepFist/releases/download/exp27_bt-champion/`), whose
+`deepfist.onnx` and `deepfist.onnx.json` match the pinned lengths and hashes
+below; a non-empty `DEEPFIST_MODEL_BASE_URL` replaces that directory. That release publishes no LICENSE; the manifest's LICENSE asset carries
+its own source, the same pinned bytes from the DeepFist repository's first
+commit (`061fc1d7`). The RFC's upstream-only hosting decision remains in effect;
+there is no AetherSDR mirror. A developer can point `AETHER_DEEPFIST_MODEL_DIR`
+at a local verified bundle instead.
 
 The downloader verifies exact lengths and SHA-256 hashes, takes a cache lock,
 uses atomic file replacement, and checks the complete bundle before loading.
@@ -72,7 +63,7 @@ is disabled. The committer and injected model-assets tests also run in the
 default build, without ONNX Runtime or weights. Optional worker tests use
 injected PCM and download replies. Real inference tests require the pinned local
 bundle and return skip code 77 when absent; a skipped test is not model proof.
-Tests behind the default-OFF option do not run in the default CI graph.
+Tests that need ONNX Runtime do not run in the default CI graph, which installs none.
 
 Synthetic replay has shown useful gains from normalization and emission
 protection. Those measurements are not an accuracy estimate for arbitrary
