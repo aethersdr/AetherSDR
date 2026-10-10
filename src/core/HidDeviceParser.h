@@ -26,6 +26,13 @@ class HidDeviceParser {
 public:
     virtual ~HidDeviceParser() = default;
     virtual HidEvent parse(const uint8_t* buf, size_t len) = 0;
+    // Further events from the report last given to parse(); the caller drains
+    // this until None, so one report can carry several edges. Default: none.
+    virtual HidEvent nextPending() { return {}; }
+    // Contour shuttle ring position, -7..+7 (0 = centred). State, not an event:
+    // updated by every parse() and read after draining, so it is never dropped.
+    virtual bool hasShuttle() const { return false; }
+    virtual int shuttlePosition() const { return 0; }
     // KEEP THIS <= 64: it bounds hid_read() into HidEncoderManager::m_buf, a fixed
     // uint8_t[64], so a larger value overflows it. TMate2 already returns 64. A device
     // needing more must grow m_buf (or clamp at hid_read) in the same change.
@@ -61,26 +68,44 @@ private:
     uint8_t m_prevButton{0};
 };
 
-// Contour ShuttleXpress (VID 0x0B33, PID 0x0020)
-class ShuttleXpressParser : public HidDeviceParser {
+// Shared decoder for the Contour 5-byte report (ShuttleXpress, ShuttlePro v2).
+// Every button edge in a report, then the jog delta, is queued: parse()
+// returns the first and nextPending() the rest, so simultaneous changes are
+// never dropped.
+class ContourShuttleParser : public HidDeviceParser {
 public:
     HidEvent parse(const uint8_t* buf, size_t len) override;
+    HidEvent nextPending() override;
     size_t reportSize() const override { return 5; }
+    bool hasShuttle() const override { return true; }
+    int shuttlePosition() const override { return m_shuttle; }
+protected:
+    // Buttons packed into bits 0..buttonCount()-1 (1-based button = bit + 1).
+    virtual uint16_t buttonMask(const uint8_t* buf) const = 0;
+    virtual int buttonCount() const = 0;
 private:
+    static constexpr int kMaxEvents = 16 + 1;  // up to 16 button bits + jog
+    HidEvent m_pending[kMaxEvents];
+    int m_pendingHead{0};
+    int m_pendingCount{0};
+    uint16_t m_prevButtons{0};
     uint8_t m_prevJog{0};
-    uint8_t m_prevButtons{0};
     bool m_firstReport{true};
+    int m_shuttle{0};
+};
+
+// Contour ShuttleXpress (VID 0x0B33, PID 0x0020)
+class ShuttleXpressParser : public ContourShuttleParser {
+protected:
+    uint16_t buttonMask(const uint8_t* buf) const override;
+    int buttonCount() const override { return 5; }
 };
 
 // Contour ShuttlePro v2 (VID 0x0B33, PID 0x0030)
-class ShuttleProV2Parser : public HidDeviceParser {
-public:
-    HidEvent parse(const uint8_t* buf, size_t len) override;
-    size_t reportSize() const override { return 5; }
-private:
-    uint8_t m_prevJog{0};
-    uint16_t m_prevButtons{0};
-    bool m_firstReport{true};
+class ShuttleProV2Parser : public ContourShuttleParser {
+protected:
+    uint16_t buttonMask(const uint8_t* buf) const override;
+    int buttonCount() const override { return 15; }
 };
 
 // Elgato StreamDeck+ (VID 0x0FD9, PID 0x0084). 14-byte reports (the descriptor
