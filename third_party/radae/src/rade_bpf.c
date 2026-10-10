@@ -108,5 +108,7 @@ void rade_bpf_process(rade_bpf *bpf, RADE_COMP *y, const RADE_COMP *x, int n) {
     }
 
     /* Save phase state for next call */
+    float phase_mag = rade_cabs(phase);
+    phase = rade_cscale(phase, 1.0/phase_mag);
     bpf->phase = phase;
 }
