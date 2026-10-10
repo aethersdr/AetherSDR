@@ -396,12 +396,15 @@ QScrollBar::sub-line:vertical {
     // The canon look's check boxes and radio buttons are the painted canon
     // indicators alone: the sheet's own indicator rules come out first, since
     // its :checked ones are more specific than the generic indicator rule and
-    // would draw a border around the image. Lists (the AetherRX/AetherTX
-    // profile libraries) sit on a nested card; the modem look leaves them to
-    // the application sheet.
+    // would draw a border around the image. A rule body here holds {{token}}
+    // placeholders, so it ends at the first brace outside one: ending at the
+    // first "}" would stop inside a token and leave the rest of the rule
+    // behind, breaking the sheet so the painted indicators never apply. Lists
+    // (the AetherRX/AetherTX profile libraries) sit on a nested card; the
+    // modem look leaves them to the application sheet.
     if (look == Look::Canon) {
-        static const QRegularExpression ownIndicatorRules(
-            QStringLiteral(R"((?:QCheckBox|QRadioButton)::indicator[^{]*\{[^}]*\}\s*)"));
+        static const QRegularExpression ownIndicatorRules(QStringLiteral(
+            R"((?:QCheckBox|QRadioButton)::indicator[^{]*\{(?:\{\{[^{}]*\}\}|[^{}])*\}\s*)"));
         sheet.remove(ownIndicatorRules);
         sheet += canonIndicatorRules();
         sheet += QStringLiteral(
