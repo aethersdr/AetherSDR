@@ -56,6 +56,7 @@
 #include <QStackedWidget>
 #include <QUrl>
 #include <QVBoxLayout>
+#include <QVector>
 
 #include <memory>
 #include <optional>
@@ -119,6 +120,14 @@ struct PeripheralDeviceUi {
 
     // Serial-or-network presentation
     QString fixedBaud;
+    // Optional model picker for devices whose model decides the protocol and
+    // line speed (SPE). Stored under settingsGroup/"Model"; empty = no picker.
+    struct ModelChoice {
+        QString label;
+        QString key;
+        QString baud;
+    };
+    QVector<ModelChoice> modelChoices;
     QString networkPlaceholder;
     QString networkDescription;
     QString networkTooltip;
@@ -995,12 +1004,13 @@ void RadioSetupDialog::buildSerialNetworkDevice(PeripheralDeviceUi& ui, QWidget*
     ui.portStack = new QStackedWidget;
     ui.portStack->setObjectName(QStringLiteral("peripheralPort_%1").arg(ui.id));
     int serialBaudIdx = -1;
+    QLabel* fixedBaudLbl = nullptr;
 #ifdef HAVE_SERIALPORT
     {
-        auto* fixedLbl = new QLabel(ui.fixedBaud);
-        ThemeManager::instance().applyStyleSheet(fixedLbl,
+        fixedBaudLbl = new QLabel(ui.fixedBaud);
+        ThemeManager::instance().applyStyleSheet(fixedBaudLbl,
             "QLabel { color: {{color.text.secondary}}; font-size: 11px; }");
-        serialBaudIdx = ui.portStack->addWidget(fixedLbl);
+        serialBaudIdx = ui.portStack->addWidget(fixedBaudLbl);
     }
 #endif
     auto* netPortSpin = new QSpinBox;
@@ -1087,6 +1097,33 @@ void RadioSetupDialog::buildSerialNetworkDevice(PeripheralDeviceUi& ui, QWidget*
         refresh();
     });
 
+    if (!ui.modelChoices.isEmpty()) {
+        // The model fixes the protocol and the serial speed, so the speed
+        // label follows it. A change applies on the next Connect.
+        ui.modelCombo = new QComboBox;
+        ui.modelCombo->setObjectName(QStringLiteral("peripheralModel_%1").arg(ui.id));
+        ThemeManager::instance().applyStyleSheet(ui.modelCombo, kComboStyle);
+        ui.modelCombo->setAccessibleName(tr("%1 model").arg(ui.label));
+        ui.modelCombo->setAccessibleDescription(
+            tr("Selects the amplifier's protocol and serial speed. Takes effect on the next connect."));
+        for (const auto& choice : ui.modelChoices) {
+            ui.modelCombo->addItem(choice.label, choice.key);
+        }
+        const int idx = ui.modelCombo->findData(PeripheralSettings::deviceString(group, "Model"));
+        ui.modelCombo->setCurrentIndex(idx >= 0 ? idx : 0);
+        auto applyModel = [u, fixedBaudLbl](int i) {
+            if (fixedBaudLbl && i >= 0 && i < u->modelChoices.size()) {
+                fixedBaudLbl->setText(u->modelChoices.at(i).baud);
+            }
+        };
+        applyModel(ui.modelCombo->currentIndex());
+        connect(ui.modelCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+                [group, combo = ui.modelCombo, applyModel](int i) {
+            PeripheralSettings::setDeviceString(group, "Model", combo->itemData(i).toString());
+            applyModel(i);
+        });
+        addFormRow(detail, tr("Amplifier Model"), ui.modelCombo);
+    }
     addFormRow(detail, tr("Connection Type"), ui.modeCombo);
     addFormRow(detail, tr("Address/Serial Port"), ui.addressStack);
     addFormRow(detail, tr("TCP Port/Speed"), ui.portStack);
@@ -1594,15 +1631,40 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
             "    options:\n"
             "      kickolduser: true\n"
             "    connector: serialdev,\n"
-            "              /dev/ttyUSB0");
+            "              /dev/ttyUSB0\n"
+            "\n"
+            "Plain serial-to-Ethernet converters (e.g. Waveshare in\n"
+            "TCP-server mode) work for monitoring and control, but cannot\n"
+            "power the amplifier ON — they have no RFC 2217 support.\n"
+            "\n"
+            "Original 1K-FA: set the proxy's serial side to 9600 baud;\n"
+            "raw mode is preferred (its binary status suffers in telnet mode).");
         auto ui = serialDevice(QStringLiteral("spe"), tr("SPE Expert Amplifier"),
             QStringLiteral("SPE Expert amplifier"), QStringLiteral("SpeExpert"), 7000,
             QStringLiteral("115200 8N1"), QStringLiteral("ser2net host — e.g. 192.168.1.52"),
             tr("IP address or host name of the serial proxy"), ser2netTip);
+        ui->modelChoices = {
+            {tr("1.3K / 1.5K / 2K-FA"), Spe::variantKey(Spe::Variant::Expert),
+             QStringLiteral("115200 8N1")},
+            {tr("1K-FA (original, RS-232)"), Spe::variantKey(Spe::Variant::Legacy1k),
+             QStringLiteral("9600 8N1")},
+        };
+        // The variant is read at connect time so a model change made since
+        // the last connect is honoured.
+        auto applySpeVariant = [this]() {
+            m_spe->setVariant(Spe::variantFromKey(
+                PeripheralSettings::deviceString("SpeExpert", "Model")));
+        };
         ui->isConnected = [this]() { return m_spe->isConnected(); };
         ui->disconnectNow = [this]() { m_spe->disconnect(); };
-        ui->connectNetwork = [this](const QString& h, quint16 p) { m_spe->connectNetwork(h, p); };
-        ui->connectSerial = [this](const QString& port) { m_spe->connectSerial(port); };
+        ui->connectNetwork = [this, applySpeVariant](const QString& h, quint16 p) {
+            applySpeVariant();
+            m_spe->connectNetwork(h, p);
+        };
+        ui->connectSerial = [this, applySpeVariant](const QString& port) {
+            applySpeVariant();
+            m_spe->connectSerial(port);
+        };
         ui->description = [this]() { return m_spe->description(); };
         ui->afterRemoval = [this]() { m_spe->disconnect(); };
         buildSerialNetworkDevice(*ui, detailStack, refresh, serialReseeds);

@@ -129,7 +129,7 @@ private:
 // decoded to native types; raw characters kept where the spec enumerates
 // single-letter codes.
 struct Status {
-    QString id;              // "13K" (1.3K-FA), "15K" (1.5K-FA), "20K" (2K-FA)
+    QString id;              // "13K" (1.3K-FA), "15K" (1.5K-FA), "20K" (2K-FA), "10K" (1K-FA, synthetic)
     bool    operate{false};      // O = OPERATE, S = STANDBY
     bool    transmitting{false}; // T = TX, R = RX
     QChar   bank{u'x'};          // A/B on 1.3K/1.5K-FA; 2K-FA always reads x
@@ -149,6 +149,13 @@ struct Status {
     int     tempCombiner{0};     // 2K-FA combiner; 1.3K-FA always 0
     QChar   warning{u'N'};       // N = none; see warningText()
     QChar   alarm{u'N'};         // N = none; see alarmText()
+    // Plain-text faults from a protocol without letter codes (the original
+    // 1K-FA); when set they replace warningText()/alarmText() of the codes.
+    QString warningDetail;
+    QString alarmDetail;
+    // swrAnt was derived from forward/reverse power rather than reported by
+    // the amplifier's own meter; such a ratio typically reads low (#4436).
+    bool    swrEstimated{false};
 };
 
 // Decodes a Status frame's 67-character payload. Tolerates the payload
@@ -261,6 +268,10 @@ struct ModelSpec {
     float   midNominalW{0};    // rated output at the MID power level
     bool    hasMemoryBanks{false};  // A/B bank field is meaningful
     bool    hasCombiner{false};     // lower/combiner temperatures are real
+    bool    reportsAtuSwr{true};    // Status carries the before-ATU SWR
+    bool    hasLcdMirror{true};     // answers the 0x80 display request
+    bool    powerOnHoldsDtr{false}; // ON holds DTR high (else: RTS pulse)
+    bool    halfFullLevels{false};  // panel says HALF/FULL, not LOW/MID/HIGH
 };
 
 // 1.5K-FA is the entry validated against real hardware by this project
@@ -270,6 +281,22 @@ struct ModelSpec {
 // the 1.5K-FA entry.
 const ModelSpec& modelSpec(const QString& id);
 QStringList modelIds();
+
+// Which wire protocol a configured amplifier speaks. The 1.3K/1.5K/2K-FA
+// identify themselves in every Status; the original 1K-FA speaks an older,
+// incompatible protocol and cannot be detected, so the operator picks it.
+enum class Variant { Expert, Legacy1k };
+
+// Persisted spelling of a Variant (PeripheralSettings "SpeExpert"/"Model").
+// Anything unrecognised reads as Expert, the pre-existing behaviour.
+QString variantKey(Variant v);
+Variant variantFromKey(const QString& key);
+// Serial line settings the variant mandates, for display ("115200 8N1").
+int serialBaud(Variant v);
+
+// Model-aware variant: the original 1K-FA's panel names its two levels
+// HALF/FULL, so L/H read that way there; every other model as powerLevelName(QChar).
+QString powerLevelName(QChar code, const ModelSpec& spec);
 
 // Rated output for the currently selected power level (Status::powerLevel).
 // H (or an unknown letter) is the model's full nominalPowerW.

@@ -32,6 +32,9 @@ public:
     // moments on the glass field-tested as the mirror "switching off";
     // staleness gates the applet's menu keys, never this glass.
     void clear();
+    // Non-empty: the model has no display mirror, and the idle glass says
+    // so instead of "waiting for display…".
+    void setUnavailableText(const QString& text);
 
     QSize minimumSizeHint() const override;
     QSize sizeHint() const override;
@@ -44,6 +47,7 @@ private:
 
     Spe::Lcd::Frame m_frame;
     bool m_hasFrame{false};
+    QString m_unavailableText;
     QImage m_image;  // native-resolution render, integer-scaled at paint
 };
 

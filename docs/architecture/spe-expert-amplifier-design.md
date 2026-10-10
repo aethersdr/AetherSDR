@@ -431,3 +431,119 @@ the alignment out. Pacing from the reply folds the amplifier's variable
 response latency into the period, so no stable phase relationship can
 form — and it is also what makes the small 250 ms gap safe on slow links
 (see the request bullet above).
+
+## 12. The original 1K-FA (legacy protocol)
+
+The original Expert 1K-FA — the RS-232-only model that predates the
+1.3K/1.5K/2K-FA, not the later 1K-FA "Taurus" — speaks SPE's older
+"Expert 1K-FA Remote Control Protocol" Rev 2.0. Only the sync framing is
+shared with the newer family; everything a client depends on differs:
+
+| | 1.3K / 1.5K / 2K-FA | original 1K-FA |
+|---|---|---|
+| Line | 115200 8N1 (amp auto-adapts) | 9600 8N1 only |
+| Status | `0x90` poll → 67-char ASCII CSV, 16-bit checksum + CR LF | `0x80` RCU_ON → amp streams a 30-byte binary Status at 5–8 Hz, 8-bit checksum |
+| `0x80` | LCD display request | RCU_ON — so the LCD mirror must never be requested |
+| Keys | single byte `0x01`..`0x11` | `0x10` + key code (`0x18`..`0x34`) |
+| Model ID | in every Status | none — the operator picks the model |
+| Power ON | RTS pulse, DTR high at rest | DTR held high **is** the power switch |
+| Power level | LOW / MID / HIGH | HALF / FULL (MODE key) |
+
+Design: one connection class, two protocols. The operator picks
+**Amplifier Model** in the Peripherals row (persisted as
+`PeripheralSettings["SpeExpert"]["Model"]`, `Expert` or `1K-FA-Legacy`;
+absent reads as `Expert`, so existing installs are unchanged).
+`SpeConnection` latches the variant at connect and swaps parser, poll
+loop, key encoding and line handling; `Spe::Legacy::parseStatus()` maps
+the binary Status onto the shared `Spe::Status`, so `SpeApplet` and the
+wiring are reused. Mapping choices:
+
+- Model ID is the synthetic `10K`, keying a `1K-FA` row in the model
+  table (FULL 1000 W, HALF 500 W per the operator's manual; HALF → `L`,
+  FULL → `H`). The row's capability flags (`reportsAtuSwr` and
+  `hasLcdMirror` false, `powerOnHoldsDtr` true) drive
+  `SpeApplet::setModelCapabilities()`, which dims each missing readout
+  with its reason on tooltip and accessibleDescription and describes how
+  ON works.
+- Bands 0..9 (160..6 m, no 60 m) are translated onto the shared table.
+- SWR: STANDBY reports it directly; OPERATE reports PA gain in that field
+  instead, so SWR is derived from forward and reverse power and flagged
+  `Status::swrEstimated`; the applet shows it as `SWR ≈` with a tooltip,
+  because a power-ratio SWR reads low against the amp's own meter
+  (#4436). There is no before-ATU SWR — the ATU row is dimmed.
+- Warnings come from the Status's display-context byte, the alarm from its
+  ALARM flag, as plain text (`Status::warningDetail` / `alarmDetail`).
+- No LCD mirror (the amp's own display works as usual; there is just no
+  remote copy): `0x80` is never sent, the floating window's glass says
+  so instead of "waiting for display…", and the menu keys stay gated
+  off, exactly as when the mirror is stale on the newer family.
+- Power: DTR held high is the 1K-FA's power switch. ON raises DTR —
+  over ser2net via RFC 2217 SET-CONTROL, as in §4, so a raw-mode port or a
+  plain serial-to-Ethernet bridge cannot do it; powerOn() reports that in
+  the log and as a note under the applet's buttons.
+- Line policy, the same on every OS: **DTR is held only while AetherSDR
+  has the port open.** A connect never raises it (both lines go low right
+  after open()). SWITCH OFF sends the OFF key, then releases DTR 150 ms
+  later, once the key is on the wire. Disconnect, a reconnect, quitting
+  AetherSDR (the destructor) and a serial error all release it explicitly
+  before close(), so the amp powers off if ON had powered it; an amp
+  switched on from its front panel is not affected (DTR was never raised).
+  The ON tooltip says so. The release is explicit because close() is not
+  portable: Windows restores the DCB captured before open() (its DTR setting
+  predates AetherSDR) and then leaves the line to the driver, while Linux
+  and macOS restore the original termios and drop DTR via HUPCL. For the
+  1K-FA, `setSettingsRestoredOnClose(false)` keeps the Windows restore from
+  re-raising the line after the release. Over the network the release is
+  an RFC 2217 SET-CONTROL before the socket closes, sent only if ON raised
+  the line on that connection.
+- Not controllable in software: the OS asserts DTR inside open() itself.
+  Measured on macOS 27 (Apple Silicon) with an FTDI FT2232H dual-port
+  RS-232 adapter, port A's DTR wired to port B's DSR and port B polled at
+  about 6.6 kHz while port A was driven through QSerialPort exactly as
+  above. Every open() (14 of 14) raised DTR for 3.5–4.5 ms, until
+  AetherSDR's own setDataTerminalReady(false). ON then held the line
+  steadily, and the explicit release dropped it before close(). A close()
+  without the release also dropped DTR (HUPCL), with and without Qt's
+  settings restore. So on macOS the pre-policy code would have powered the
+  amp off on Disconnect, unlike the Windows bench. Linux is expected to
+  behave alike (unmeasured). Whether a ~4 ms DTR pulse starts a 1K-FA is
+  still an open bench question; ON's own boot took about 3 s with the line
+  held. If it does, the remedies are keeping the port open (one blip per
+  session) or an RC delay on the cable's DTR. A crash or a pulled adapter
+  leaves the line to the OS/driver.
+- Bench results so far, **Windows 11 only**, real 1K-FA on a local COM
+  port, from the build before the policy above (`7de6abec`..`72a971a5`
+  era): amp off, connect: stays off, ON powers it about 3 s later; amp on
+  from its front panel, connect: stays on; after ON, front-panel power
+  switch: refused ("Shutdown not allowed") while DTR is held; after ON,
+  quitting AetherSDR: powers off. Under the old behaviour Disconnect left
+  the amp on; under the policy above it powers off by design. Linux and
+  macOS, and the policy itself on all three, still need a bench.
+- RCU_ON is re-sent once a second while no Status arrives, which covers
+  the amp's boot after ON.
+- Every legacy frame is logged as hex at debug level (Help → Support
+  logging: Tuner/AGM) so field reports can pin the Status offsets.
+- Disconnect sends RCU_OFF so the amplifier stops streaming, and waits up
+  to 50 ms for it to leave (Qt's Windows close() discards unsent bytes).
+- ser2net: prefer **raw** mode. The Status is binary, and telnet mode
+  doubles every `0xFF` byte, so a Status that happens to contain one fails
+  its checksum and is dropped (the stream resyncs on the next frame).
+  Telnet with `rfc2217=true` still works — the price is an occasional lost
+  frame — and is needed only for power-ON over the network.
+- Plain serial-to-Ethernet converters (field report: a Waveshare RS232 TO
+  ETH in TCP-server mode, protocol "None") behave like a raw ser2net port:
+  monitoring, keys and SWITCH OFF work, but they never answer the RFC 2217
+  request and offer no remote DTR control, so ON cannot power the amp.
+  powerOn() names this case in its log warning; the operator powers on at
+  the front panel, or replaces the bridge with ser2net (`rfc2217=true`)
+  and a serial adapter that drives DTR.
+
+Unit tests: `tests/spe_legacy_protocol_test.cpp` (framing, parser resync,
+Status decode, key table, variant persistence). The fixture is built from
+the same offset table as the decoder, so the hardware evidence is a bench
+test on a real 1K-FA: readings matched the amp's own display, the keys and
+DTR power-ON worked. Two live Status captures (OPERATE + FULL, ANT1:
+receiving on 160 m, keyed on 80 m) are pinned as fixtures; STANDBY, HALF,
+ANT≠1 and IN2 captures are still to come (#6162), so the direct-SWR field,
+the HALF polarity, the antenna/input nibbles beyond 1, the display-context
+warning texts and the ALARM bit rest on the spec table until then.

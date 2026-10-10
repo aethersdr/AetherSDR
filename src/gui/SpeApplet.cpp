@@ -188,6 +188,15 @@ SpeApplet::SpeApplet(QWidget* parent)
     m_faultLabel->hide();
     vbox->addWidget(m_faultLabel);
 
+    // ── ON outcome note (own row, only while it applies). The log has the
+    //    detail; this is what the operator who pressed ON actually sees.
+    m_powerNoteLabel = new QLabel(this);
+    m_powerNoteLabel->setWordWrap(true);
+    theme.applyStyleSheet(m_powerNoteLabel,
+        "QLabel { color: {{color.accent.warning}}; font-size: 10px; }");
+    m_powerNoteLabel->hide();
+    vbox->addWidget(m_powerNoteLabel);
+
     // ── Button rows: OPER/STBY · power level · TUNE · OFF, then INPUT/ANT
     //    and the drive-power arrows. Every button is a literal front-panel
     //    keystroke.
@@ -208,10 +217,7 @@ SpeApplet::SpeApplet(QWidget* parent)
     // The family's operate-green (same pair as ACOM's engaged OPERATE) —
     // an "energize" affordance, not a new colour.
     theme.applyStyleSheet(m_onBtn, ampOperateActiveBtnStyle());
-    m_onBtn->setToolTip(tr("Power the amplifier ON — pulses the serial control"
-                           " lines (over the network this needs an"
-                           " rfc2217-enabled ser2net port; see the Radio Setup"
-                           " row's tooltip)."));
+    m_onBtn->setToolTip(onButtonTip(false));
     connect(m_onBtn, &QPushButton::clicked, this, &SpeApplet::powerOnClicked);
     // "OPER"/"STBY" rather than the full words — the row has 5 buttons and
     // the long labels clip at the applet's default width (hardware-tested).
@@ -347,6 +353,11 @@ SpeApplet::SpeApplet(QWidget* parent)
         fpGrid->addWidget(m_cPlusBtn,  1, 3);
 
         fpBox->addLayout(fpGrid);
+        // setModelCapabilities() appends a per-model reason to these.
+        for (QPushButton* btn : {m_bandDownBtn, m_bandUpBtn, m_setBtn,
+                                 m_lMinusBtn, m_lPlusBtn, m_cMinusBtn, m_cPlusBtn}) {
+            btn->setProperty("baseToolTip", btn->toolTip());
+        }
     }
     vbox->addWidget(m_frontPanel);
 
@@ -438,6 +449,9 @@ void SpeApplet::applyDensity()
     theme.applyStyleSheet(m_faultLabel, f
         ? "QLabel { color: {{color.accent.danger}}; font-size: 12px; font-weight: bold; }"
         : "QLabel { color: {{color.accent.danger}}; font-size: 10px; font-weight: bold; }");
+    theme.applyStyleSheet(m_powerNoteLabel, f
+        ? "QLabel { color: {{color.accent.warning}}; font-size: 12px; }"
+        : "QLabel { color: {{color.accent.warning}}; font-size: 10px; }");
 
     // Command buttons get a comfortable hit target in the window.
     for (auto* btn : {m_onBtn, m_operateBtn, m_pwrLevelBtn, m_tuneBtn, m_offBtn,
@@ -481,9 +495,18 @@ void SpeApplet::setForwardPower(float watts)
     // Peak marker: HGauge's sliding window, fed by setValue (canon).
 }
 
-void SpeApplet::setSwrAnt(float swr)
+void SpeApplet::setSwrAnt(float swr, bool estimated)
 {
     m_swrAntVal = swr;
+    if (estimated != m_swrEstimated) {
+        m_swrEstimated = estimated;
+        const QString note = estimated
+            ? tr("Estimated from forward and reverse power; the amplifier's own"
+                 " meter may read higher.")
+            : QString();
+        m_swrAntLabel->setToolTip(note);
+        m_swrAntGauge->setAccessibleDescription(note);
+    }
     // Without forward drive SWR is undefined (the amp reports 0.00 in RX,
     // which is below the gauge's 1.0 floor anyway) — hold the needle at 1.0,
     // same gate as the readout label.
@@ -493,7 +516,64 @@ void SpeApplet::setSwrAnt(float swr)
 void SpeApplet::setSwrAtu(float swr)
 {
     m_swrAtuVal = swr;
-    m_swrAtuGauge->setValue(m_fwdWatts >= 1.0f ? swr : 1.0f);
+    m_swrAtuGauge->setValue(m_atuSwrAvailable && m_fwdWatts >= 1.0f ? swr : 1.0f);
+}
+
+QString SpeApplet::onButtonTip(bool holdsDtr)
+{
+    if (holdsDtr) {
+        return tr("Power the amplifier ON — holds the serial DTR line high"
+                  " (over the network this needs an rfc2217-enabled ser2net"
+                  " port; plain serial-to-Ethernet converters cannot do it).\n"
+                  "The line is held only while AetherSDR is connected: OFF,"
+                  " Disconnect, quitting AetherSDR or losing the serial link"
+                  " releases it, and the amplifier then powers off.");
+    }
+    return tr("Power the amplifier ON — pulses the serial control"
+              " lines (over the network this needs an"
+              " rfc2217-enabled ser2net port; see the Radio Setup"
+              " row's tooltip).");
+}
+
+void SpeApplet::setModelCapabilities(const AetherSDR::Spe::ModelSpec& spec)
+{
+    m_onBtn->setToolTip(onButtonTip(spec.powerOnHoldsDtr));
+    m_pwrLevelBtn->setToolTip(spec.halfFullLevels
+        ? tr("Output power level — click to toggle HALF / FULL")
+        : tr("Output power level — click to cycle LOW / MID / HIGH"));
+
+    // Without a mirror the menu/manual-tuning keys never enable
+    // (updateCommandsEnabled gates them on a fresh mirror), so the reason
+    // goes on each key, for the mouse and for screen readers.
+    const QString fpReason = spec.hasLcdMirror
+        ? QString()
+        : tr("Not available on the %1: this key is only safe with the"
+             " amplifier's display mirrored beside it, and this model has no"
+             " remote display mirror.").arg(spec.displayName);
+    for (QPushButton* btn : {m_bandDownBtn, m_bandUpBtn, m_setBtn,
+                             m_lMinusBtn, m_lPlusBtn, m_cMinusBtn, m_cPlusBtn}) {
+        const QString base = btn->property("baseToolTip").toString();
+        btn->setToolTip(fpReason.isEmpty() ? base
+                                           : base + QStringLiteral("\n\n") + fpReason);
+        btn->setAccessibleDescription(fpReason);
+    }
+    m_lcd->setUnavailableText(spec.hasLcdMirror
+        ? QString()
+        : tr("The %1 has no remote display mirror").arg(spec.displayName));
+
+    const bool available = spec.reportsAtuSwr;
+    m_atuSwrAvailable = available;
+    const QString reason = available
+        ? QString()
+        : tr("This amplifier model does not report the SWR seen before the ATU.");
+    // Tooltip for the mouse, accessibleDescription for screen readers.
+    for (QWidget* w : {static_cast<QWidget*>(m_swrAtuLabel), static_cast<QWidget*>(m_swrAtuGauge)}) {
+        w->setEnabled(available);
+        w->setToolTip(reason);
+        w->setAccessibleDescription(reason);
+    }
+    m_swrAtuGauge->setValueImmediate(1.0f);
+    updateValueLabels();
 }
 
 void SpeApplet::setSupplyVoltage(float volts)
@@ -603,6 +683,13 @@ void SpeApplet::setFaultText(const QString& text)
     m_faultLabel->show();
 }
 
+void SpeApplet::setPowerOnNote(const QString& text)
+{
+    m_powerNoteLabel->setText(text);
+    m_powerNoteLabel->setAccessibleName(text);
+    m_powerNoteLabel->setHidden(text.isEmpty());
+}
+
 void SpeApplet::setSource(const QString& text)
 {
     m_sourceLabel->setText(QStringLiteral("● %1").arg(text));
@@ -710,9 +797,10 @@ void SpeApplet::updateValueLabels()
         ? QStringLiteral("PWR  %1").arg(static_cast<int>(m_fwdWatts))
         : QStringLiteral("PWR"));
     m_swrAntLabel->setText(m_fwdWatts >= 1.0f
-        ? QStringLiteral("SWR  %1:1").arg(m_swrAntVal, 0, 'f', 1)
+        ? (m_swrEstimated ? QStringLiteral("SWR ≈%1:1") : QStringLiteral("SWR  %1:1"))
+              .arg(m_swrAntVal, 0, 'f', 1)
         : QStringLiteral("SWR"));
-    m_swrAtuLabel->setText(m_fwdWatts >= 1.0f
+    m_swrAtuLabel->setText(m_atuSwrAvailable && m_fwdWatts >= 1.0f
         ? QStringLiteral("ATU  %1:1").arg(m_swrAtuVal, 0, 'f', 1)
         : QStringLiteral("ATU"));
 

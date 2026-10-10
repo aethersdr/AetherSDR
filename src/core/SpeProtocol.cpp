@@ -35,6 +35,10 @@ const QMap<QString, ModelSpec>& modelTable()
         {"13K", ModelSpec{"13K", "1.3K-FA", 1300.0f, 1400.0f, 1250.0f,  500.0f, 1000.0f, true,  false}},
         {"15K", ModelSpec{"15K", "1.5K-FA", 1500.0f, 1600.0f, 1450.0f,  500.0f, 1000.0f, true,  false}},
         {"20K", ModelSpec{"20K", "2K-FA",   2000.0f, 2100.0f, 1950.0f, 1000.0f, 1500.0f, false, true}},
+        // Original 1K-FA (Spe::Legacy): HALF 500 W -> L, FULL 1000 W -> H; no
+        // M level. DTR held high is its power switch.
+        {"10K", ModelSpec{"10K", "1K-FA",   1000.0f, 1100.0f,  950.0f,  500.0f,  500.0f,
+                          false, false, false, false, true, true}},
     };
     return table;
 }
@@ -369,6 +373,15 @@ QString powerLevelName(QChar code)
     }
 }
 
+QString powerLevelName(QChar code, const ModelSpec& spec)
+{
+    if (spec.halfFullLevels) {
+        if (code == u'L') { return QStringLiteral("HALF"); }
+        if (code == u'H') { return QStringLiteral("FULL"); }
+    }
+    return powerLevelName(code);
+}
+
 namespace Lcd {
 
 QByteArray buildRequest()
@@ -484,6 +497,21 @@ const ModelSpec& modelSpec(const QString& id)
 QStringList modelIds()
 {
     return modelTable().keys();
+}
+
+QString variantKey(Variant v)
+{
+    return v == Variant::Legacy1k ? QStringLiteral("1K-FA-Legacy") : QStringLiteral("Expert");
+}
+
+Variant variantFromKey(const QString& key)
+{
+    return key == QLatin1String("1K-FA-Legacy") ? Variant::Legacy1k : Variant::Expert;
+}
+
+int serialBaud(Variant v)
+{
+    return v == Variant::Legacy1k ? 9600 : 115200;
 }
 
 float levelNominalW(const ModelSpec& spec, QChar level)

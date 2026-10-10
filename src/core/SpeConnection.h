@@ -11,11 +11,13 @@
 #endif
 
 #include "SpeLcdScheduler.h"
+#include "SpeLegacyProtocol.h"
 #include "SpeProtocol.h"
 
 namespace AetherSDR {
 
-// Peripheral transport for SPE Expert amplifiers (1.3K/1.5K/2K-FA): an
+// Peripheral transport for SPE Expert amplifiers (1.3K/1.5K/2K-FA, and the
+// original 1K-FA via Spe::Variant::Legacy1k — see setVariant()): an
 // accessory alongside Acom/Pgxl/TgxlConnection, not an IRadioBackend. Design:
 // docs/architecture/spe-expert-amplifier-design.md. The same bytes flow over a
 // local COM port or a ser2net TCP proxy, so one Spe::FrameParser serves
@@ -26,6 +28,16 @@ class SpeConnection : public QObject {
 
 public:
     explicit SpeConnection(QObject* parent = nullptr);
+    // Releases the 1K-FA's DTR power line before the port closes — see
+    // teardownDevice(). Emits nothing.
+    ~SpeConnection() override;
+
+    // How the last powerOn() went, for the applet. Network only can fall
+    // short: a proxy that refuses RFC 2217 may not move the line, and a
+    // bridge that never answers (raw ser2net, plain serial-to-Ethernet
+    // converters such as a Waveshare) cannot move it at all.
+    enum class PowerOnResult { Sent, ProxyRefused, NoLineControl };
+    Q_ENUM(PowerOnResult)
 
     bool isConnected() const { return m_connected; }
     QString description() const;  // "COM4" or "192.168.1.52:64002", for status display
@@ -34,10 +46,17 @@ public:
     // (same divergence rationale as AcomConnection::sourceLabel()).
     QString sourceLabel() const;
 
+    // Selects the wire protocol. Takes effect on the next connect; the
+    // newer family self-identifies but the original 1K-FA cannot be
+    // detected, so the operator's Peripherals choice is passed in here.
+    void setVariant(Spe::Variant variant) { m_variant = variant; }
+    Spe::Variant variant() const { return m_variant; }
+    // The variant latched by the current (or last) connect.
+    Spe::Variant activeVariant() const { return m_activeVariant; }
+
 #ifdef HAVE_SERIALPORT
-    // 115200 8N1, no handshake — the amplifier auto-adapts to lower speeds
-    // (spec §1), so the maximum documented rate is used and not made
-    // user-configurable.
+    // 8N1, no handshake, at Spe::serialBaud(variant): 115200 for the newer
+    // family (it auto-adapts to lower speeds, spec §1), 9600 for the 1K-FA.
     void connectSerial(const QString& portName);
 #endif
     // Expects a ser2net proxy in raw or telnet mode (both verified on a 1.5K-FA);
@@ -77,7 +96,7 @@ public:
 
     const Spe::Status& lastStatus() const { return m_lastStatus; }
 
-    // Model ID from the last Status reply ("13K"/"15K"/"20K"), empty until
+    // Model ID from the last Status reply ("13K"/"15K"/"20K"/"10K"), empty until
     // the first reply arrives. The SPE reports its identity in every Status
     // string, so — unlike AcomConnection — there is no auto-ranging or
     // detection heuristic here at all.
@@ -103,6 +122,7 @@ signals:
     // switched off, so this — not disconnected() — is the "amp went away"
     // signal for that topology.
     void respondingChanged(bool responding);
+    void powerOnReported(AetherSDR::SpeConnection::PowerOnResult result);
 
 private slots:
     void onReadyRead();
@@ -114,12 +134,19 @@ private:
     void onTransportDown();
     void onTransportError(const QString& errorString);
     void onFrameReceived(const Spe::Frame& frame);
+    void onLegacyFrameReceived(const Spe::Legacy::Frame& frame);
+    void acceptStatus(const Spe::Status& status);
+    void reportPowerOnOutcome();
+    bool isLegacy() const { return m_activeVariant == Spe::Variant::Legacy1k; }
     void teardownDevice();
     void sendRaw(const QByteArray& packet);
     void armReconnect();
     void pollTick();
     void powerOnStep();
     void setControlLines(bool dtr, bool rts);  // transport-appropriate DTR/RTS
+    // Lets queued bytes (RCU_OFF, a key) reach the wire before a close
+    // discards them; bounded, as in FlexControlManager.
+    void drainWrites();
     // Executes a scheduler decision: send the 0x80 request and/or re-arm
     // m_lcdTimer with the interval for the role the scheduler assigned it.
     void applyLcdEffect(const Spe::LcdScheduler::Effect& effect);
@@ -132,7 +159,26 @@ private:
 #endif
 
     Spe::FrameParser m_parser;
+    Spe::Legacy::FrameParser m_legacyParser;
     Spe::Status      m_lastStatus;
+
+    // m_variant is the configured choice; m_activeVariant is latched at
+    // connect so a settings change mid-session cannot switch parsers under
+    // a live stream.
+    Spe::Variant m_variant{Spe::Variant::Expert};
+    Spe::Variant m_activeVariant{Spe::Variant::Expert};
+    // 1K-FA only: ON raised DTR on THIS connection's transport — always on
+    // a local port, over the network only if the proxy answered the RFC 2217
+    // request (a raw bridge moves no line). Network teardown releases the
+    // line only when this is set; a local port is released unconditionally.
+    // Cleared on every connect: the line policy (design note §12) is that
+    // DTR is held only while AetherSDR has the port open, so a serial
+    // connect always starts with DTR low and never powers the amp on.
+    bool m_legacyDtrRaised{false};
+    // SWITCH OFF sends the OFF key first and releases DTR this much later,
+    // so the key is on the wire (~7 ms at 9600 baud) before the line drops.
+    QTimer m_offReleaseTimer;
+    static constexpr int kLegacyOffReleaseMs = 150;
 
     Mode      m_mode{Mode::None};
     QString   m_lastSerialPort;
@@ -218,6 +264,10 @@ private:
     int  m_silentPolls{0};
     bool m_responding{false};
     static constexpr int kSilentPollLimit = 30;  // ~3 s at the 100 ms poll cadence
+    // The 1K-FA streams on its own once RCU_ON lands; while no Status has
+    // arrived for this many ticks (~1 s), RCU_ON is re-sent — it is lost
+    // if the amp is still booting or was power-cycled.
+    static constexpr int kLegacyRcuRetryTicks = 10;
 };
 
 }  // namespace AetherSDR

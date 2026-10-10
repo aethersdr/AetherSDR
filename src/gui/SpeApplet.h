@@ -36,8 +36,12 @@ public:
 
     // Telemetry
     void setForwardPower(float watts);
-    void setSwrAnt(float swr);
+    // estimated: derived from forward/reverse power, not the amp's own meter.
+    void setSwrAnt(float swr, bool estimated = false);
     void setSwrAtu(float swr);
+    // Dims what the model lacks (ATU SWR, LCD mirror) with the reason on
+    // tooltip and accessibleDescription, and describes how ON works for it.
+    void setModelCapabilities(const AetherSDR::Spe::ModelSpec& spec);
     void setSupplyVoltage(float volts);   // text readout, not a gauge
     void setSupplyCurrent(float amps);    // text readout, not a gauge
     // Heatsink temperatures. The amp reports degrees in whichever unit its
@@ -54,6 +58,9 @@ public:
     void setPowerLevel(const QString& levelName);
     void setMode(bool operate, bool transmitting); // drives pill + OPR/STBY button
     void setFaultText(const QString& text);        // empty clears/hides the banner
+    // Why the last ON may not have reached the amplifier (a network bridge
+    // without RFC 2217 line control); empty clears/hides it.
+    void setPowerOnNote(const QString& text);
     void setSource(const QString& text);           // "SERIAL" or "NETWORK"
     void setConnected(bool connected);   // shows/hides live controls, resets on disconnect
     // Transport up but the amplifier isn't answering polls (ser2net with the
@@ -100,6 +107,7 @@ signals:
     void lcdPollingWanted(bool wanted);
 
 private:
+    static QString onButtonTip(bool holdsDtr);
     void updateValueLabels();  // 10 Hz throttled label text refresh
     void updateCommandsEnabled();
     void applyModePill();
@@ -133,6 +141,7 @@ private:
     QLabel* m_inputLabel{nullptr};
 
     QLabel* m_faultLabel{nullptr};
+    QLabel* m_powerNoteLabel{nullptr};
 
     QPushButton* m_onBtn{nullptr};
     QPushButton* m_operateBtn{nullptr};
@@ -175,6 +184,8 @@ private:
     float m_fwdWatts{0.0f};
     float m_swrAntVal{1.0f};
     float m_swrAtuVal{1.0f};
+    bool  m_atuSwrAvailable{true};
+    bool  m_swrEstimated{false};
     float m_supplyVolts{0.0f};
     float m_supplyAmps{0.0f};
     bool  m_operate{false};
