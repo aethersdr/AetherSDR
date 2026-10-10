@@ -118,7 +118,7 @@ Capture run(const char* what, const std::vector<float>& audio, WdspChannel::Mode
             return c;
         }
         if (c.faults > c.stallDrops) {
-            check(false, (std::string(what) + ": no fault but a stall drop").c_str());
+            check(false, (std::string(what) + ": every modulator fault is a stall drop").c_str());
             return c;
         }
         std::fprintf(stderr, "starved in %s: %llu blocks missed the wire (attempt %d of 3)\n",
@@ -277,9 +277,10 @@ Onset onset(const char* what, bool warm)
     o.rise1090Ms = firstAbove(-0.9151) - firstAbove(-20.0);
     o.leadMs = o.halfMs - o.firstMs;
     const double halfAt = static_cast<double>(t0) + o.halfMs / kMsPerOut;
+    // Floor outside the capture: a level never reached puts halfAt far past it.
     const auto envDb = [&](double ms) {
         const double at = halfAt - ms / kMsPerOut;
-        return at < static_cast<double>(t0)
+        return at < static_cast<double>(t0) || at >= static_cast<double>(c.iq.size())
                    ? -400.0
                    : db(std::abs(c.iq[static_cast<std::size_t>(at)]) / steady);
     };
