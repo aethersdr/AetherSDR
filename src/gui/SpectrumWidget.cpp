@@ -503,7 +503,7 @@ static FftFloorClipStats fftFloorClipStats(const QVector<float>& bins)
 
 static Qt::CursorShape normalizedSpectrumCursorShape(Qt::CursorShape shape)
 {
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
     // Preserve SpectrumWidget's established vertical split appearance.
     if (shape == Qt::SplitVCursor) {
         return Qt::SizeVerCursor;
@@ -960,7 +960,7 @@ QVariantMap SpectrumWidget::automationRhiSnapshot() const
     m[QStringLiteral("widthPx")] = width();
     m[QStringLiteral("heightPx")] = height();
     m[QStringLiteral("dpr")] = dpr;
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
     appendNativeWidgetTopology(m, *this);
 #endif
 #ifdef AETHER_GPU_SPECTRUM
@@ -1934,7 +1934,7 @@ QVariantMap SpectrumWidget::traceDebugSnapshot()
 
 void SpectrumWidget::applyNativeWindowIsolationPolicy()
 {
-#if defined(AETHER_GPU_SPECTRUM) && defined(Q_OS_MAC)
+#if defined(AETHER_GPU_SPECTRUM) && defined(Q_OS_MACOS)
     if (nativeWindowPreferred()) {
         // Order matters: block ancestor promotion *before* requesting the native
         // window, so realizing the leaf's NSView can't drag its QWidget tree
@@ -1975,7 +1975,7 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
     });
 
     // Explicitly request Metal on macOS.
-#  ifdef Q_OS_MAC
+#  ifdef Q_OS_MACOS
     setApi(QRhiWidget::Api::Metal);
     // WA_NativeWindow gives this widget its own NSView; without it QRhiWidget
     // can't get a Metal QRhi when the parent's surface is RasterSurface (#714).
@@ -2398,7 +2398,7 @@ void SpectrumWidget::prepareForShutdown()
 
 #ifdef AETHER_GPU_SPECTRUM
     releaseResources();
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
     // Drop the native child window while its parent backing store is still
     // alive, so any remaining platform resources are gone before QWidgetWindow
     // destruction runs on app exit.
@@ -9933,7 +9933,7 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
         const QPoint pos = ev->position().toPoint();
         const Qt::KeyboardModifiers modifiers =
             ev->modifiers() | QGuiApplication::keyboardModifiers();
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
         const bool rateModifier = modifiers.testFlag(Qt::ControlModifier)
             || modifiers.testFlag(Qt::MetaModifier);
         const bool rateClick = rateModifier
@@ -9994,7 +9994,7 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
                 ev->modifiers() | QGuiApplication::keyboardModifiers();
             const bool primaryClick = ev->button() == Qt::LeftButton;
             const bool is3D = (m_spectrumRenderMode == SpectrumRenderMode::Mode3D);
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
             const bool rangeDrag = modifiers.testFlag(Qt::ControlModifier)
                 || modifiers.testFlag(Qt::MetaModifier);
             const bool controlClick = rangeDrag
@@ -11270,7 +11270,7 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
                 // rejects preprocessor directives inside macro arguments.
                 const QRect stripRect(stripX, 0, DBM_STRIP_W, specH);
                 const bool is3D = (m_spectrumRenderMode == SpectrumRenderMode::Mode3D);
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
                 const QString rangeDragTip =
                     "Ctrl-drag or &#8984;-drag &mdash; zoom span (anchor at bottom)<br>";
 #else
@@ -13048,7 +13048,7 @@ void SpectrumWidget::reportRhiFailure(const QString& reason)
 
     qCWarning(lcGui) << "SpectrumWidget: QRhi failure:" << detail;
 
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
     const QString messageDetail =
         tr("%1 Rebuild with -DAETHER_GPU_SPECTRUM=OFF.").arg(detail);
 #else

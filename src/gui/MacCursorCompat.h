@@ -9,7 +9,7 @@ namespace AetherSDR {
 // QImage::toCGImage(), so substitute the native open-hand cursor.
 inline Qt::CursorShape macSafeCursorShape(Qt::CursorShape shape)
 {
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
     if (shape == Qt::SizeAllCursor) {
         return Qt::OpenHandCursor;
     }

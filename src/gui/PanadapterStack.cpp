@@ -32,7 +32,7 @@
 static void refreshAfterReparent(AetherSDR::SpectrumWidget* sw)
 {
     if (!sw) return;
-#if defined(Q_OS_MAC) && defined(AETHER_GPU_SPECTRUM)
+#if defined(Q_OS_MACOS) && defined(AETHER_GPU_SPECTRUM)
     const bool wasVisible = sw->isVisible();
     sw->hide();
     sw->resetGpuResources();
@@ -354,7 +354,7 @@ void PanadapterStack::equalizeSizes()
 
 void PanadapterStack::refreshAfterLayoutShift()
 {
-#if defined(Q_OS_MAC) && defined(AETHER_GPU_SPECTRUM)
+#if defined(Q_OS_MACOS) && defined(AETHER_GPU_SPECTRUM)
     // Re-realize each spectrum's NATIVE window, not just its GPU pipelines.
     // Measured on Metal: after the flip the native surface keeps its pre-flip
     // width (short by the panel's 260 px), so re-rendering into it — even

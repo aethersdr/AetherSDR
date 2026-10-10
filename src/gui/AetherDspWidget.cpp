@@ -265,7 +265,7 @@ AetherDspWidget::AetherDspWidget(AudioEngine* audio, QWidget* parent)
         // MNR (MMSE-Wiener spectral NR) is implemented only on macOS —
         // dim the selector on Windows / Linux so users can see it exists
         // but can't enable a path the engine has no backend for.
-#ifndef Q_OS_MAC
+#ifndef Q_OS_MACOS
         if (i == MNR) {
             b->setEnabled(false);
             b->setToolTip("MNR is only available on macOS.");

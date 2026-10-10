@@ -41,7 +41,7 @@ bool requestSlicePanCenter(RadioModel& model, int sliceId, double centerMhz)
 
 bool macDaxDriverInstalled()
 {
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
     const QFileInfo driverBundle("/Library/Audio/Plug-Ins/HAL/AetherSDRDAX.driver");
     if (!driverBundle.exists() || !driverBundle.isDir())
         return false;

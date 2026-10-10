@@ -65,7 +65,7 @@ bool localServerIsCurrentUser(qintptr descriptor)
                                          &owner, nullptr, nullptr, nullptr, &security);
     const auto freeSecurity = qScopeGuard([security] { if (security) { LocalFree(security); } });
     return result == ERROR_SUCCESS && owner && IsValidSid(owner) && EqualSid(currentSid, owner);
-#elif defined(Q_OS_MAC) || defined(Q_OS_FREEBSD)
+#elif defined(Q_OS_MACOS) || defined(Q_OS_FREEBSD)
     if (descriptor < 0 || descriptor > std::numeric_limits<int>::max()) {
         return false;
     }

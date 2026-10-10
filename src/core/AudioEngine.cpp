@@ -56,7 +56,7 @@
 #include "Resampler.h"
 #include "TxVoiceProcessor.h"
 
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
 #include <CoreAudio/CoreAudio.h>
 #include <CoreFoundation/CoreFoundation.h>
 #endif
@@ -404,7 +404,7 @@ void logAudioOpenFailure(const QString& path,
     AudioSummaryLogger::logOpenFailure(summary);
 }
 
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
 AudioObjectPropertyAddress macAudioAddress(AudioObjectPropertySelector selector,
                                            AudioObjectPropertyScope scope = kAudioObjectPropertyScopeGlobal)
 {
@@ -2889,7 +2889,7 @@ QJsonArray AudioEngine::audioEndpointDiagnostics() const
     endpoints.append(rx);
 
     const bool txRunning = m_audioSource != nullptr;
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
     const bool txDeviceOpen = m_micBuffer && m_micBuffer->isOpen();
 #else
     const bool txDeviceOpen = !m_micDevice.isNull() && m_micDevice->isOpen();
@@ -4181,7 +4181,7 @@ bool AudioEngine::openRxSinkDevice(int producerRate)
         }
     }
 
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
     if (!m_allowBluetoothTelephonyOutput.load()) {
         // Only override devices that look like Bluetooth telephony routes.
         // Telephony-only (HFP/SCO) routes cap out at 8-16 kHz and cannot
@@ -8677,7 +8677,7 @@ TxCaptureHealthTracker::CaptureState AudioEngine::txCaptureState(QAudio::State s
 
 qint64 AudioEngine::txCaptureBufferedBytes() const
 {
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
     return m_micBuffer ? m_micBuffer->size() : 0;
 #else
     return m_micDevice ? m_micDevice->bytesAvailable() : 0;
@@ -8931,7 +8931,7 @@ bool AudioEngine::startTxStream(const QHostAddress& radioAddress, quint16 radioP
 #else
     bool txBluetoothHfp = false;
     int  txPreferredOverride = 0;
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
     // CoreAudio-HAL detection the factory can't derive from QAudioDevice: if this
     // is a Bluetooth-HFP capture route, put its native low rate first (#2615).
     if (const auto nativeRate = macBluetoothNativeInputRate(dev)) {
@@ -9022,7 +9022,7 @@ bool AudioEngine::startTxStream(const QHostAddress& radioAddress, quint16 radioP
              << (m_txInputRate != TxVoiceProcessor::kDspRate)
              << "RADE resample to 24k:" << m_radeTxNeedsResample;
 
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
     // macOS: QAudioSource pull mode broken — use push mode with QBuffer
     const quint64 txLifecycleGeneration = ++m_txLifecycleGeneration;
     m_micBuffer = new QBuffer(this);
@@ -9274,7 +9274,7 @@ void AudioEngine::stopTxStream()
         logTxCaptureHealthSummary(QStringLiteral("source lifecycle ended"), false);
     }
     ++m_txLifecycleGeneration;
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
     QTimer* pollTimer = m_txPollTimer;
     m_txPollTimer = nullptr;
     QBuffer* micBuffer = m_micBuffer;
@@ -9284,7 +9284,7 @@ void AudioEngine::stopTxStream()
     m_audioSource = nullptr;
     m_micDevice = nullptr;
 
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
     if (pollTimer) {
         pollTimer->stop();
         delete pollTimer;
@@ -9299,7 +9299,7 @@ void AudioEngine::stopTxStream()
         }
         delete audioSource;
     }
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
     if (micBuffer) {
         delete micBuffer;
     }
@@ -9466,7 +9466,7 @@ void AudioEngine::onTxAudioReady()
         }
         // Capture must keep being consumed while TCI owns TX audio, on every
         // platform — all three backends accumulate, just in different memory.
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
         // Push mode: QAudioSource writes into m_micBuffer, which only the
         // unsuppressed path below clears. Left alone it grows for the whole TCI
         // session (~192 KB/s at 48 kHz stereo Int16) — the same multi-GB
@@ -9505,7 +9505,7 @@ void AudioEngine::onTxAudioReady()
         }
         return;
     }
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
     if (!m_micBuffer || !m_audioSource) return;
     if (m_audioSource->state() == QAudio::StoppedState) return;
     if (!m_micBuffer->isOpen()) return;
@@ -9974,7 +9974,7 @@ void AudioEngine::setInputDevice(const QAudioDevice& dev)
     emit inputDeviceChanged();
 }
 
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
 void AudioEngine::setAllowBluetoothTelephonyOutput(bool on)
 {
     const bool changed = (m_allowBluetoothTelephonyOutput.exchange(on) != on);

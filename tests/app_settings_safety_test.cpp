@@ -1175,10 +1175,10 @@ int main(int argc, char** argv)
         expect(remaining.open(QIODevice::ReadOnly) && remaining.readAll() == bytes,
                "profile legacy source stays byte-identical");
     } else if (scenario == QStringLiteral("explicit-profile-path-isolation")) {
-#if defined(Q_OS_MAC) || defined(Q_OS_WIN)
+#if defined(Q_OS_MACOS) || defined(Q_OS_WIN)
         // Windows known folders do not honor HOME overrides. Keep Qt test
         // mode there, and skip rather than create a fixture outside our root.
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
         QStandardPaths::setTestModeEnabled(false);
 #endif
         const QString oldPath = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation)

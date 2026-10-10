@@ -271,7 +271,7 @@
 #include "core/backends/sim/SimBackend.h"  // dynamic_cast for demo noise controls
 #include "workspace/WorkspaceController.h"  // prepareShutdown (phase 7 canvas windows)
 #include "workspace/WorkspaceWindow.h"      // shutdown sweep of hidden windows (M1)
-#if defined(Q_OS_MAC)
+#if defined(Q_OS_MACOS)
 #include "core/VirtualAudioBridge.h"
 #include <QFileInfo>
 #elif defined(HAVE_PIPEWIRE)
@@ -289,7 +289,7 @@
 #include <QOperatingSystemVersion>
 #else
 #include <sys/resource.h>
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
 #include <mach/mach.h>
 #include <mach/task.h>
 #include <mach/task_info.h>
@@ -4200,7 +4200,7 @@ void MainWindow::closeEvent(QCloseEvent* event)
 {
     m_pendingDisplayWrites.flush();
     ShutdownTrace closeEventTrace("main_window.close_event");
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
     // Shared Ulanzi access temporarily remaps only the dial's system key
     // events. Restore that mapping while the macOS HID event system and Qt
     // event loop are still live; ~MainWindow runs only after app.exec().
@@ -6211,7 +6211,7 @@ void MainWindow::buildUI()
         m_memLabel->setAlignment(Qt::AlignCenter);
 #if defined(Q_OS_WIN)
         m_memLabel->setToolTip("AetherSDR process working set (matches Task Manager)");
-#elif defined(Q_OS_MAC)
+#elif defined(Q_OS_MACOS)
         m_memLabel->setToolTip("AetherSDR process physical footprint (matches Activity Monitor)");
 #else
         m_memLabel->setToolTip("AetherSDR process resident set (VmRSS from /proc/self/status)");
@@ -6282,7 +6282,7 @@ void MainWindow::buildUI()
             if (GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc))) {
                 memBytes = pmc.WorkingSetSize;
             }
-#elif defined(Q_OS_MAC)
+#elif defined(Q_OS_MACOS)
             task_vm_info_data_t info{};
             mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
             if (task_info(mach_task_self(), TASK_VM_INFO,
@@ -6869,7 +6869,7 @@ void MainWindow::onConnectionStateChanged(bool connected)
         // Apply saved display settings after panadapter is created
         m_displaySettingsPushed = false;
 
-#if defined(Q_OS_MAC) || defined(HAVE_PIPEWIRE)
+#if defined(Q_OS_MACOS) || defined(HAVE_PIPEWIRE)
         // Delay DAX bridge start until RadioModel's SmartConnect sequence
         // is fully complete (streams created, UDP bound, slices discovered).
         // Auto-start DAX bridge if enabled in settings.
@@ -7104,7 +7104,7 @@ void MainWindow::onConnectionStateChanged(bool connected)
         }
         updateTMate2Status();
 #endif
-#if defined(Q_OS_MAC) || defined(HAVE_PIPEWIRE)
+#if defined(Q_OS_MACOS) || defined(HAVE_PIPEWIRE)
         stopDax();
 #endif
         audioStopRx();
@@ -9650,7 +9650,7 @@ void MainWindow::enableNr2WithWisdom()
         // when the operator clicks back to the main UI.
         dlg->setWindowFlag(Qt::Tool, true);
         dlg->setAttribute(Qt::WA_ShowWithoutActivating, true);
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
         // Qt maps Qt::Tool to an NSPanel, which AppKit hides whenever the
         // application deactivates — fatal for a dialog that is modeless by
         // design and lives for minutes.  This attribute is what turns that
@@ -9912,7 +9912,7 @@ void MainWindow::applyUiScale(int pct)
         QString("UI scale changed to %1%. Restart AetherSDR now to apply?").arg(pct),
         QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
     if (answer == QMessageBox::Yes) {
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
         // On macOS, relaunch via 'open -n' so the .app bundle is activated through
         // Launch Services — direct binary exec bypasses the bundle, causing dock
         // duplication and incorrect activation policy in notarized builds.

@@ -199,7 +199,7 @@ contributors.
 - **Braces on all control flow** — even single-line `if`/`else`/`for`/`while`
 - **`auto` sparingly** — use explicit types unless the type is obvious from context (e.g. `auto* ptr = new Foo` is fine, `auto x = foo()` is not)
 - **Naming**: classes `PascalCase`, methods/variables `camelCase`, constants `kPascalCase`, member variables `m_camelCase`
-- **Platform guards**: prefer `Q_OS_WIN` / `Q_OS_MAC` / `Q_OS_LINUX` for new code. Existing `_WIN32`/`__APPLE__` guards can be migrated opportunistically — don't do a blanket rewrite.
+- **Platform guards**: prefer `Q_OS_WIN` / `Q_OS_MACOS` / `Q_OS_LINUX` for new code. Existing `_WIN32`/`__APPLE__` guards can be migrated opportunistically — don't do a blanket rewrite.
 - **Don't remove code you didn't add** — if rebasing, ensure upstream changes are preserved. Review the diff before submitting.
 - **Atomic parameters for cross-thread DSP** — main thread writes via `std::atomic`, audio thread reads. Never hold a mutex in the audio callback for parameter updates.
 - **Error handling**: log with `qCWarning(lcCategory)`, don't throw exceptions

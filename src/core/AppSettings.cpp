@@ -171,7 +171,7 @@ void AppSettings::migrateSettingsPath()
         return;  // already at the correct location
     }
 
-#if defined(Q_OS_WIN) || defined(Q_OS_MAC)
+#if defined(Q_OS_WIN) || defined(Q_OS_MACOS)
     // On Windows and macOS, Qt 6's ConfigLocation resolves to AppConfigLocation
     // (%LOCALAPPDATA%/AetherSDR/AetherSDR on Windows,
     //  ~/Library/Preferences/AetherSDR/AetherSDR on macOS), so appending

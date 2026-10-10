@@ -27,7 +27,7 @@
 #include "RadeApplet.h"
 #include "core/RADEEngine.h"
 #endif
-#if defined(Q_OS_MAC)
+#if defined(Q_OS_MACOS)
 #include "core/VirtualAudioBridge.h"
 #elif defined(HAVE_PIPEWIRE)
 #include "core/PipeWireAudioBridge.h"
@@ -1199,7 +1199,7 @@ void MainWindow::showFreeDvReporter()
 }
 #endif
 
-#if defined(Q_OS_MAC) || defined(HAVE_PIPEWIRE)
+#if defined(Q_OS_MACOS) || defined(HAVE_PIPEWIRE)
 bool MainWindow::startDax()
 {
     if (m_daxBridge) return true;
@@ -1215,7 +1215,7 @@ bool MainWindow::startDax()
         return false;
     }
 
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
     // Only start if the macOS HAL driver bundle is installed.
     if (!macDaxDriverInstalled()) {
         qWarning() << "MainWindow: DAX HAL plugin not installed";

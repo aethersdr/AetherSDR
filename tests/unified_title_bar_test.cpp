@@ -285,7 +285,7 @@ int main(int argc, char** argv)
     host.show();
     app.processEvents();
 
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
     QWidget uncreatedHost;
     mac::updateNativeTitleVisibility(&uncreatedHost);
     check(mac::nativeCaptionBounds(&uncreatedHost).isEmpty(), "uncreated window has no native caption bounds");
