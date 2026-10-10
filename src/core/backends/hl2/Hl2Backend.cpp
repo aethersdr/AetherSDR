@@ -1798,10 +1798,10 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.twoToneGenerator = std::nullopt;
     c.manufacturer = QStringLiteral("Hermes-Lite");
     c.model = QStringLiteral("Hermes-Lite 2");
-    // No repeater duplex and no tone encode: FM/NFM are receive-only below on
-    // every build, so these would imply FM transmit. hasFmRepeaterOffset
-    // defaults true and this backend overrides no repeater-offset setter;
-    // Hidden tone presentation since there is no CTCSS/DCS encoder.
+    // No repeater duplex and no tone encode, although the TXA build keys FM:
+    // hasFmRepeaterOffset defaults true and this backend overrides no
+    // repeater-offset setter, and no tone control reaches TXA's CTCSS encoder,
+    // which WdspChannel::open() forces off. Simplex FM without a tone.
     c.hasFmRepeaterOffset = false;
     c.fmTonePresentation = FmTonePresentation::Hidden;
     c.fmDtcsCodes = {};
@@ -1890,16 +1890,20 @@ RadioCapabilities Hl2Backend::capabilities() const
     // Reported from the gate, not hardcoded: the engine's TX guard keys off this,
     // so a build with transmit disabled must look RX-only from above the seam.
     c.canTransmit = m_txAllowed;
-    // Modes this radio demodulates but cannot modulate: Hl2TxDsp only
-    // distinguishes sidebands, so these would go out as USB. SSB family and CW
-    // (gateware-keyed at the TX NCO) are not listed. Both spellings are listed
-    // because refuseKeyInReceiveOnlyMode() compares the slice's string. This
-    // also refuses TUNE in these modes, since the list has no per-activity
-    // granularity (same on IC-705, #5040).
-    c.receiveOnlyModes = {QStringLiteral("AM"),   QStringLiteral("SAM"),
-                          QStringLiteral("DSB"),  QStringLiteral("FM"),
-                          QStringLiteral("NFM"),  QStringLiteral("WBFM"),
+    // Modes this radio demodulates but does not modulate. SAM is a receive
+    // detector (TXA would send plain AM), WDSP TX has no WBFM mode, and there
+    // is no DRM encoder. Both spellings of an alias are listed because
+    // refuseKeyInReceiveOnlyMode() compares the slice's string. The list also
+    // refuses TUNE in these modes: it has no per-activity granularity.
+    c.receiveOnlyModes = {QStringLiteral("SAM"),  QStringLiteral("WBFM"),
                           QStringLiteral("WFM"),  QStringLiteral("DRM")};
+    // AM, DSB and FM (NFM is the same TXA mode) are modulated by the TXA build
+    // only. The phasing modulator only distinguishes sidebands and would send
+    // them as USB, so that build keeps refusing them.
+    if (!AETHER_HL2_TX_TXA) {
+        c.receiveOnlyModes << QStringLiteral("AM")  << QStringLiteral("DSB")
+                           << QStringLiteral("FM")  << QStringLiteral("NFM");
+    }
     c.hostModulates = true;
     // Same tap, same seam — see RadioCapabilities::takesTxAudioOverSeam.
     c.takesTxAudioOverSeam = true;             // PC runs the modulator; no on-radio mic jacks

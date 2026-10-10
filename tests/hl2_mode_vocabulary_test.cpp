@@ -150,10 +150,16 @@ int main(int argc, char** argv)
     // review raised, answered against the declaration rather than by assertion.
     hl2::Hl2Backend backend;
     const RadioCapabilities caps = backend.capabilities();
-    static const QStringList kTransmittable = {
+    // AM, DSB and FM are transmittable in the TXA build only; SAM stays
+    // receive-only (see Hl2Backend::capabilities()).
+    QStringList kTransmittable = {
         QStringLiteral("LSB"), QStringLiteral("USB"), QStringLiteral("CW"),
         QStringLiteral("CWL"), QStringLiteral("DIGU"), QStringLiteral("DIGL"),
     };
+    if (AETHER_HL2_TX_TXA) {
+        kTransmittable << QStringLiteral("AM") << QStringLiteral("DSB")
+                       << QStringLiteral("FM");
+    }
     for (const QString& m : std::as_const(published)) {
         check(kTransmittable.contains(m) || caps.receiveOnlyModes.contains(m),
               QStringLiteral("%1 is offered and is either transmittable or "

@@ -149,6 +149,13 @@ public:
         static constexpr double kMinFmDeviationHz = 100.0;
         static constexpr double kMaxFmDeviationHz = 100000.0;
         double fmDeviationHz = 5000.0;
+        // Transmit-only: TXA's AM carrier level (ammod c_level, [0, 1]) and FM
+        // peak deviation for unit audio (fmmod; bounded by kMin/kMaxFmDeviationHz).
+        // Separate from fmDeviationHz above, which is the RXA detector's. open()
+        // pushes both on every transmit open; each is inert outside its mode.
+        // The defaults are create_txa()'s own.
+        double txAmCarrierLevel = 0.5;
+        double txFmDeviationHz = 5000.0;
         // true: fexchange waits for each output block. The r1/r2 buffer phase is
         // still set per channel open (flush_iobuffs() drains with a 1 ms timed
         // wait), so two opens fed the same burst can differ (#5629).

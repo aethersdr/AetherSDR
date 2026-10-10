@@ -1340,6 +1340,21 @@ bool WdspChannel::validateConfig(const Config& config, std::string* error) noexc
         setError(error, "WDSP TX does not define a WBFM mode");
         return false;
     }
+    // The TXA modulator settings open() pushes; a receive Config never uses them.
+    if (config.direction == Direction::Transmit &&
+        (!std::isfinite(config.txAmCarrierLevel) || config.txAmCarrierLevel < 0.0 ||
+         config.txAmCarrierLevel > 1.0)) {
+        setError(error, "WDSP TX AM carrier level must be within [0, 1]");
+        return false;
+    }
+    if (config.direction == Direction::Transmit &&
+        (!std::isfinite(config.txFmDeviationHz) ||
+         config.txFmDeviationHz < Config::kMinFmDeviationHz ||
+         config.txFmDeviationHz > Config::kMaxFmDeviationHz)) {
+        setError(error,
+            "WDSP TX FM deviation is outside Config::kMinFmDeviationHz..kMaxFmDeviationHz");
+        return false;
+    }
     // Receive only: filterTaps reaches WDSP solely through open()'s RXASetNC
     // and is read only by minimumNotchWidthHz(), both of which are RX-side. A
     // transmit channel has none of the six cores RXASetNC addresses, so
@@ -1577,6 +1592,14 @@ bool WdspChannel::open() noexcept
     } else {
         SetTXAMode(m_channelId, wdspMode(m_config.mode));
         SetTXABandpassFreqs(m_channelId, m_config.filterLowHz, m_config.filterHighHz);
+        // Pushed in every transmit mode: a later setMode() into AM or FM must
+        // find them set, and SetTXAMode touches neither.
+        SetTXAAMCarrierLevel(m_channelId, m_config.txAmCarrierLevel);
+        SetTXAFMDeviation(m_channelId, m_config.txFmDeviationHz);
+        // CTCSS encode off, unconditionally: create_txa() builds fmmod with
+        // ctcss_run = 1 (100 Hz, level 0.10), and no host-modulated radio here
+        // has a tone-encode control to carry a value in Config.
+        SetTXACTCSSRun(m_channelId, 0);
     }
     // Cache what this open measured, right now, while we still hold the setup
     // lock -- a kill or a crash before exit must not throw the measurement away.

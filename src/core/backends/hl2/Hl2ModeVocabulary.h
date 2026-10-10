@@ -6,8 +6,9 @@
 // aliases CWU/WFM/NFM; WBFM/WFM (RxApplet assumes "WFM" is never in m_modeCombo);
 // DRM (no decoder). canonicalOfferedMode() maps an alias to its offered spelling
 // at restore and in setSliceMode() so the combos match; display-only, no DSP
-// effect. receiveOnlyModes lists each alias pair both ways (modeIsReceiveOnly()
-// is a membership test), so canonicalising cannot weaken a TX refusal.
+// effect. receiveOnlyModes lists each alias pair both ways or neither
+// (modeIsReceiveOnly() is a membership test), so canonicalising cannot weaken a
+// TX refusal.
 
 #include <QString>
 #include <QStringList>

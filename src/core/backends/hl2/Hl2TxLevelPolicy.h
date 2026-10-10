@@ -107,4 +107,12 @@ defaultTxPassbandForModeName(std::string_view mode) noexcept
     return {300, 2700};   // USB/LSB and anything else: the voice default
 }
 
+// TXA's AM carrier level and FM peak deviation: create_txa()'s own values.
+// 0.5 makes full-scale audio exactly 100 % modulation at the PEP of a
+// full-scale SSB peak (carrier is a quarter of PEP). 5000 Hz matches the RX FM
+// detector; it is the deviation for unit audio after TXA's pre-emphasis, so
+// speech deviates less. No operator control reaches either value.
+inline constexpr double kTxAmCarrierLevel = 0.5;
+inline constexpr double kTxFmDeviationHz = 5000.0;
+
 }  // namespace AetherSDR::hl2

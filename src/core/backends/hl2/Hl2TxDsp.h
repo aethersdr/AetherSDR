@@ -2,6 +2,7 @@
 
 #include "core/backends/hl2/Hl2TxAlc.h"
 #include "core/dsp/WdspChannel.h"
+#include "core/backends/hl2/Hl2TxLevelPolicy.h"
 #include "core/TxCoordinator.h"
 
 #include <QElapsedTimer>
@@ -13,6 +14,7 @@
 #include <memory>
 #include <span>
 #include <string>
+#include <utility>
 #include <vector>
 #include "core/backends/TxAudioSource.h"
 
@@ -20,9 +22,11 @@ class QTimer;
 
 namespace AetherSDR::hl2 {
 
-// SSB transmit chain for the Hermes-Lite 2: processed TX audio in (AudioEngine
+// Transmit chain for the Hermes-Lite 2: processed TX audio in (AudioEngine
 // has already applied tone, compressor, EQ), baseband IQ out for EP2. 24 kHz
-// in, fixed 48 kHz out; WDSP's three-rate channel interpolates.
+// in, fixed 48 kHz out; WDSP's three-rate channel interpolates. SSB and digital
+// in both builds; AM, DSB and FM in the TXA build only (the phasing modulator
+// is SSB-only, and Hl2Backend declares those modes receive-only there).
 //
 // The modulator is chosen only at build time by AETHER_HL2_TX_TXA (no runtime
 // switch): 1 (default) = WDSP TXA channel; 0 = in-tree phasing modulator, not
@@ -36,8 +40,9 @@ namespace AetherSDR::hl2 {
 //     already has the wire's handedness. The passband SIGN carries the
 //     sideband, since TXASetupBPFilters treats TXA_LSB and TXA_USB identically.
 // Config::filterLowHz/filterHighHz stay positive audio-domain magnitudes; the
-// TXA build applies the sign in applyModeAndFilter(). Keep it there: Hl2Backend's
-// table feeds the readback and stored eSSB pair, which want magnitudes.
+// TXA build applies the sign in applyModeAndFilter(), from txaPassband(). Keep it
+// there: Hl2Backend's table feeds the readback and stored eSSB pair, which want
+// magnitudes.
 // The TXA build depends on caller cadence; see processAudioBlock.
 class Hl2TxDsp : public QObject {
     Q_OBJECT
@@ -55,6 +60,11 @@ public:
         // splatter outside this is other people's problem, not ours.
         double filterLowHz = 300.0;
         double filterHighHz = 2700.0;
+        // TXA's AM carrier level and FM peak deviation (Hl2TxLevelPolicy.h).
+        // Inert outside AM/DSB and FM, and in the phasing build. No operator
+        // control reaches either.
+        double amCarrierLevel = kTxAmCarrierLevel;
+        double fmDeviationHz = kTxFmDeviationHz;
 
         // ALC, reduction only: unity ceiling, never adds gain (as WDSP's
         // create_txa `alc`, max_gain=1.0; makeup gain is the separate leveler).
@@ -89,6 +99,14 @@ public:
 
     // Which modulator this binary was built with, for the health snapshot.
     [[nodiscard]] static const char* modulatorName() noexcept;
+
+    // Signed TXA passband for `mode` from the positive audio pair: [+lo, +hi]
+    // for USB/DIGU/CWU and unlisted modes, [-hi, -lo] for LSB/DIGL/CWL, and
+    // [-hi, +hi] for AM/SAM/DSB/FM. The symmetric band is an audio low-pass:
+    // bp0 runs before xammod/xfmmod, which read only I, so a one-sided band
+    // would halve the modulation. Pure; only the TXA build calls it.
+    [[nodiscard]] static std::pair<double, double>
+    txaPassband(WdspChannel::Mode mode, double lowHz, double highHz) noexcept;
 
     // The WDSP-allocated channel id, or -1 when this build has none.
     [[nodiscard]] int wdspChannelId() const noexcept;
@@ -164,7 +182,6 @@ private:
     // outputSampleRateHz to m_iq. Everything above it is shared between builds.
     void modulate(std::span<const float> audio);
     void resetModulatorState();
-    bool isLowerSideband() const;
 
     Config m_config;
     TxCoordinator::Context m_txContext;
@@ -224,6 +241,9 @@ private:
     // suppression for voice at a 300 Hz low edge, not at the digital modes'
     // 150 Hz (measured 22.06 dB on {150, 3000}), which is why TXA is the default.
     static constexpr std::size_t kTaps = 255;
+
+    // The phasing modulator's only reading of the mode: LSB, CWL and DIGL.
+    bool isLowerSideband() const;
 
     std::vector<float> m_bandpass;      // real bandpass
     std::vector<float> m_hilbert;       // quadrature half of the analytic bandpass

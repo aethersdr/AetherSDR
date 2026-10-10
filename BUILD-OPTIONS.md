@@ -60,7 +60,7 @@ alone. MSVC flags and `Release` builds are unaffected.
 |---|---|---|
 | `ENABLE_DEEPFIST_EXPERIMENT` | OFF | Build the experimental DeepFist CW receive decoder. Requires ONNX Runtime at configure time (configuration fails without it) and a separate verified model bundle at runtime; see below. |
 | `ENABLE_RTL` | ON | Build the experimental receive-only RTL-SDR USB backend when both `librtlsdr` and single-precision FFTW (`fftw3f`) are found. Missing either disables the backend. |
-| `AETHER_HL2_TX_TXA` | ON | Select WDSP's TXA chain for the Hermes-Lite 2 SSB transmit modulator. OFF builds the in-tree phasing modulator. This choice has no runtime toggle. |
+| `AETHER_HL2_TX_TXA` | ON | Select WDSP's TXA chain as the Hermes-Lite 2 transmit modulator: SSB, AM, DSB and FM. OFF builds the in-tree phasing modulator, which is SSB only; AM, DSB and FM then stay receive-only. This choice has no runtime toggle. |
 
 **DeepFist:** enabling `-DENABLE_DEEPFIST_EXPERIMENT=ON` alone does not supply its
 model. The configured model-download URL defaults to empty. For developer

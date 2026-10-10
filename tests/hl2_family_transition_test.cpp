@@ -90,36 +90,33 @@ int main(int argc, char** argv)
 
     // ---- The modes the LIVE HL2 backend declares it will not transmit in ----
     //
-    // hl2_txdsp_test proves the modulator half: AM/SAM/DSB/FM/WBFM/DRM each
-    // produce IQ bit-identical to USB, so none of them is a distinct
-    // modulation. What that test cannot see is the DECLARATION — delete a
-    // string from Hl2Backend::capabilities()'s receiveOnlyModes and it still
-    // passes. This is the live target that reads it, so the list and the
-    // evidence cannot part company unnoticed.
-    //
-    // EIGHT strings, SIX enumerators: modeFromString() maps NFM onto Mode::Fm
-    // and WFM onto Mode::Wbfm, and refuseKeyInReceiveOnlyMode() compares the
-    // string the SLICE holds rather than the enumerator this backend would have
-    // mapped it to — so dropping either alias leaves that spelling keying while
-    // its twin is refused. That is the load-bearing claim, and nothing asserted
-    // it before this block.
+    // This asserts the DECLARATION; hl2_txdsp_test holds the modulator half
+    // (TXA build: AM, DSB and FM measured off a real channel; phasing build:
+    // every mode on the list is bit-identical to USB). The guard compares the
+    // string the slice holds, so each alias pair is on the list both ways or
+    // neither: dropping one spelling would leave it keying.
     {
         const RadioCapabilities caps = model.backendCapabilities();
-        const QStringList declared = {
-            QStringLiteral("AM"),   QStringLiteral("SAM"),
-            QStringLiteral("DSB"),  QStringLiteral("FM"),
-            QStringLiteral("NFM"),  QStringLiteral("WBFM"),
+        // AM, DSB, FM and NFM transmit in the TXA build only.
+        const QStringList txaOnly = {
+            QStringLiteral("AM"),  QStringLiteral("DSB"),
+            QStringLiteral("FM"),  QStringLiteral("NFM"),
+        };
+        QStringList declared = {
+            QStringLiteral("SAM"),  QStringLiteral("WBFM"),
             QStringLiteral("WFM"),  QStringLiteral("DRM"),
         };
+        if (!AETHER_HL2_TX_TXA) {
+            declared += txaOnly;
+        }
         for (const QString& m : declared) {
             check(modeIsReceiveOnly(caps, m),
                   qPrintable(QStringLiteral("HL2 declares %1 receive-only").arg(m)));
         }
         // Exactly these. An ADDITION is a mode in which the operator silently
-        // loses MOX, CW keying and TUNE, so it must not arrive without the
-        // bit-identity evidence landing beside it.
+        // loses MOX, CW keying and TUNE.
         check(caps.receiveOnlyModes.size() == declared.size(),
-              "HL2 declares exactly the modes hl2_txdsp_test carries evidence for");
+              "HL2 declares exactly these modes receive-only in this build");
         // The deliberate exclusions: SSB modulates correctly, and CW keys the
         // gateware NCO through MetisClient::setCwKeyDown without ever reaching
         // Hl2TxDsp. If one of these ever appears on the list it takes an
@@ -130,6 +127,12 @@ int main(int argc, char** argv)
                                  QStringLiteral("CWL")}) {
             check(!modeIsReceiveOnly(caps, m),
                   qPrintable(QStringLiteral("HL2 still transmits in %1").arg(m)));
+        }
+        // Case-insensitively too: the guard compares whatever the slice holds.
+        for (const QString& m : txaOnly + QStringList{QStringLiteral("nfm")}) {
+            check(modeIsReceiveOnly(caps, m) == !AETHER_HL2_TX_TXA,
+                  qPrintable(QStringLiteral("HL2 transmits in %1 exactly when "
+                                            "the TXA modulator is built").arg(m)));
         }
     }
 
