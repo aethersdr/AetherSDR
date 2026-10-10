@@ -12,6 +12,7 @@
 //     .arg() leaves a literal "%17" in the middle of a declaration, which Qt
 //     drops along with the rest of that rule.
 
+#include "gui/CanonIndicators.h"
 #include "gui/ModemChrome.h"
 #include "core/ThemeManager.h"
 
@@ -123,9 +124,13 @@ void ModemChromeTest::canonLookPaintsItsIndicators()
 {
     for (const auto scale : {ModemChrome::Scale::Dialog, ModemChrome::Scale::Compact}) {
         const QString canon = ModemChrome::styleSheet(scale, ModemChrome::Look::Canon);
-        QVERIFY(canon.contains(QStringLiteral("aethersdr_canon_check_on")));
-        QVERIFY(canon.contains(QStringLiteral("aethersdr_canon_radio_on")));
-        QVERIFY(!ModemChrome::styleSheet(scale).contains(QStringLiteral("aethersdr_canon_")));
+        QVERIFY(canon.contains(QStringLiteral("canon-indicators/check_on_")));
+        QVERIFY(canon.contains(QStringLiteral("canon-indicators/radio_on_")));
+        QVERIFY(!ModemChrome::styleSheet(scale).contains(QStringLiteral("canon-indicators/")));
+        // Only the painted indicators style the indicators: none of the
+        // sheet's own rules survive to draw a border around the image.
+        QCOMPARE(canon.count(QStringLiteral("::indicator")),
+                 canonIndicatorRules().count(QStringLiteral("::indicator")));
     }
 }
 

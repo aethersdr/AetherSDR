@@ -1473,15 +1473,6 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
     if (AprsSettings::modemAutostart() && m_enableDecode)
         m_enableDecode->setChecked(true);
 
-    // No control button may be the dialog's default button — otherwise pressing
-    // Return in a text field would trigger it (Connect, Transmit, ...). Combined
-    // with the title-bar fix, this guarantees Enter never does anything unwanted
-    // in any AetherModem field; each field's own returnPressed still works.
-    for (QPushButton* button : bodyWidget()->findChildren<QPushButton*>()) {
-        button->setAutoDefault(false);
-        button->setDefault(false);
-    }
-
     // Apply the per-tab chrome (hide the shared log on the Terminal tab) now that
     // the layout is fully built.
     updateTabChrome(m_tabStack->currentIndex());

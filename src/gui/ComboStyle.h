@@ -4,11 +4,10 @@
 // Colours come from theme tokens and re-apply on theme change through
 // ThemeManager::applyStyleSheet; the arrow PNG is regenerated per theme.
 
+#include "ThemedImageCache.h"
 #include "core/ThemeManager.h"
 
 #include <QComboBox>
-#include <QDir>
-#include <QFile>
 #include <QPainter>
 #include <QPixmap>
 #include <QPointer>
@@ -17,40 +16,40 @@ namespace AetherSDR {
 
 namespace detail {
 
-// Generate (or reuse) the down-arrow PNG coloured by the current theme's
-// color.text.secondary token.  Cached under /tmp with the colour hex in
-// the filename so each theme's arrow gets its own cache entry — switching
-// themes back and forth doesn't re-encode the PNG every time.
+// The down-arrow PNG coloured by the current theme's color.text.secondary
+// token, cached per colour by ThemedImageCache.h so each theme gets its own
+// file. Empty if it could not be written.
 inline QString comboArrowPath()
 {
-    const QString colourHex = ThemeManager::instance()
-                                  .color("color.text.secondary")
-                                  .name(QColor::HexRgb)
-                                  .remove(QLatin1Char('#'));
-    const QString path = QDir::temp().filePath(
-        QStringLiteral("aethersdr_combo_arrow_%1.png").arg(colourHex));
-    if (QFile::exists(path)) return path;
-
-    QPixmap pm(8, 6);
-    pm.fill(Qt::transparent);
-    QPainter p(&pm);
-    p.setRenderHint(QPainter::Antialiasing);
-    p.setPen(Qt::NoPen);
-    p.setBrush(ThemeManager::instance().color("color.text.secondary"));
-    const QPointF tri[] = {{0, 0}, {8, 0}, {4, 6}};
-    p.drawPolygon(tri, 3);
-    p.end();
-    pm.save(path, "PNG");
-    return path;
+    const QColor colour = ThemeManager::instance().color("color.text.secondary");
+    return themedImagePath(QStringLiteral("combo-arrows"), QStringLiteral("arrow"),
+                           colour.name(QColor::HexRgb).remove(QLatin1Char('#')),
+                           QSize(8, 6), 1, [colour](QPainter& p) {
+        p.setPen(Qt::NoPen);
+        p.setBrush(colour);
+        const QPointF tri[] = {{0, 0}, {8, 0}, {4, 6}};
+        p.drawPolygon(tri, 3);
+    });
 }
 
 } // namespace detail
 
+// The down-arrow rule, or nothing if the arrow could not be written, so the
+// combo keeps Qt's own arrow rather than naming a missing file. Quoted: a
+// cache path can hold spaces.
+inline QString comboArrowRule()
+{
+    const QString path = detail::comboArrowPath();
+    return path.isEmpty() ? QString()
+        : QStringLiteral("QComboBox::down-arrow { image: url(\"%1\"); width: 8px; height: 6px; }")
+              .arg(path);
+}
+
 // Stylesheet template — references token placeholders rather than baked-in
 // hex.  ThemeManager::resolve() expands the {{...}} placeholders at apply
-// time.  The arrow URL is arg()ed in by the caller because it depends on
-// the active theme's text.secondary colour (cached PNG path varies per
-// theme).
+// time.  The arrow rule is arg()ed in because its image path depends on
+// the active theme's text.secondary colour (the cached PNG varies per theme),
+// and is left out if the PNG could not be written.
 // `extraRules` is appended verbatim, so a caller can override the base rules for
 // its own context — a taller field wants more padding than the compact applet
 // combos this was shaped for. Token placeholders work there too; the whole
@@ -69,7 +68,7 @@ inline QString comboStyleTemplate(const QString& extraRules = QString())
         "QComboBox:disabled { color: {{color.text.secondary}};"
         " border: 1px solid {{color.background.1}}; }"
         "QComboBox::drop-down { border: none; width: 14px; }"
-        "QComboBox::down-arrow { image: url(%1); width: 8px; height: 6px; }"
+        "%1"
         "QComboBox QAbstractItemView { background: {{color.background.1}};"
         " color: {{color.text.primary}};"
         " selection-background-color: {{color.accent}}; }"
@@ -79,7 +78,7 @@ inline QString comboStyleTemplate(const QString& extraRules = QString())
         // every editable combo has this problem and none of them wants it.
         "QComboBox QLineEdit { border: none; padding: 0; margin: 0;"
         " background: transparent; color: {{color.text.primary}}; }")
-        .arg(detail::comboArrowPath())
+        .arg(comboArrowRule())
         + extraRules;
 }
 

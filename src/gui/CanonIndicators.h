@@ -8,18 +8,19 @@
 // or a dot, and a translucent canon hairline drawn as a rounded QSS border
 // breaks into dashes around a circle. PNGs rather than SVG, because the SVG
 // image plugin is not deployed everywhere; each is written at 1x, 2x and 3x so
-// Qt picks the sharp one for the screen. Files are cached in the temp
-// directory keyed by their colours, so a theme switch gets its own set —
-// apply through applyCanonSheet(), which rebuilds the sheet on a theme change.
+// Qt picks the sharp one for the screen. They are cached by ThemedImageCache.h
+// (the user's own cache directory, atomic writes) keyed by every colour they
+// paint with, so a theme switch gets its own set; apply through
+// applyCanonSheet(), which rebuilds the sheet on a theme change. If they cannot
+// be written the rules come back empty and the window keeps Qt's own
+// indicators: a missing image would draw nothing at all.
 
+#include "ThemedImageCache.h"
 #include "core/ThemeManager.h"
 
 #include <QColor>
-#include <QDir>
-#include <QFile>
 #include <QPainter>
 #include <QPainterPath>
-#include <QPixmap>
 #include <QString>
 #include <QWidget>
 
@@ -30,32 +31,19 @@ namespace AetherSDR {
 namespace detail {
 
 // Draws one indicator on an 18x18 logical canvas.
-using IndicatorPainter = std::function<void(QPainter&)>;
+using IndicatorPainter = ThemedImagePainter;
 
+// One indicator: 18 px logical, written at 1x-3x through ThemedImageCache.h,
+// which fails closed (an empty path) if it cannot write. Bump the version when
+// the drawing changes: the cache is keyed by colours, so an old file would
+// otherwise outlive a new design.
 inline QString canonIndicatorPath(const QString& name, const QString& colourKey,
                                   const IndicatorPainter& paint)
 {
-    constexpr int kSize = 18;
-    // Bump when the drawing changes: the cache is keyed by colours, so an old
-    // file would otherwise outlive a new design.
     constexpr int kDrawingVersion = 1;
-    const QString base = QDir::temp().filePath(
-        QStringLiteral("aethersdr_canon_%1_v%2_%3").arg(name).arg(kDrawingVersion).arg(colourKey));
-    const QString path = base + QStringLiteral(".png");
-    if (QFile::exists(path) && QFile::exists(base + QStringLiteral("@3x.png"))) {
-        return path;
-    }
-    for (int scale = 1; scale <= 3; ++scale) {
-        QPixmap pm(kSize * scale, kSize * scale);
-        pm.fill(Qt::transparent);
-        QPainter p(&pm);
-        p.setRenderHint(QPainter::Antialiasing);
-        p.scale(scale, scale);
-        paint(p);
-        p.end();
-        pm.save(scale == 1 ? path : base + QStringLiteral("@%1x.png").arg(scale), "PNG");
-    }
-    return path;
+    return themedImagePath(QStringLiteral("canon-indicators"),
+                           QStringLiteral("%1_v%2").arg(name).arg(kDrawingVersion),
+                           colourKey, QSize(18, 18), 3, paint);
 }
 
 inline QColor canonColour(const char* token)
@@ -75,8 +63,10 @@ inline QString canonIndicatorRules()
     const QColor aqua    = canonColour("aqua");
     const QColor onAccent = canonColour("onAccent");
     const QColor muted   = canonColour("muted");
+    // Every colour painted below, so two themes never share a file.
     const QString key = QString(control.name(QColor::HexArgb) + lineHi.name(QColor::HexArgb)
-                                + cyan.name(QColor::HexArgb) + onAccent.name(QColor::HexArgb)
+                                + line.name(QColor::HexArgb) + cyan.name(QColor::HexArgb)
+                                + aqua.name(QColor::HexArgb) + onAccent.name(QColor::HexArgb)
                                 + muted.name(QColor::HexArgb)).remove(QLatin1Char('#'));
 
     const QRectF box(1.0, 1.0, 16.0, 16.0);
@@ -128,24 +118,35 @@ inline QString canonIndicatorRules()
     const QString radioOnDis = canonIndicatorPath(QStringLiteral("radio_on_dis"), key,
                                                   radio(muted, 1.5, &muted));
 
+    for (const QString* p : {&checkOff, &checkOn, &checkOffDis, &checkOnDis,
+                             &radioOff, &radioOn, &radioOffDis, &radioOnDis}) {
+        if (p->isEmpty()) {
+            return {};   // Qt's own indicators rather than blank ones
+        }
+    }
+
+    // Quoted: a cache path can hold spaces (a Windows profile name).
     return QStringLiteral(
         "QCheckBox::indicator, QRadioButton::indicator {"
         " width: 18px; height: 18px; border: none; background: transparent; }"
-        "QCheckBox::indicator:unchecked { image: url(%1); }"
-        "QCheckBox::indicator:checked { image: url(%2); }"
-        "QCheckBox::indicator:unchecked:disabled { image: url(%3); }"
-        "QCheckBox::indicator:checked:disabled { image: url(%4); }"
-        "QRadioButton::indicator:unchecked { image: url(%5); }"
-        "QRadioButton::indicator:checked { image: url(%6); }"
-        "QRadioButton::indicator:unchecked:disabled { image: url(%7); }"
-        "QRadioButton::indicator:checked:disabled { image: url(%8); }")
+        "QCheckBox::indicator:unchecked { image: url(\"%1\"); }"
+        "QCheckBox::indicator:checked { image: url(\"%2\"); }"
+        "QCheckBox::indicator:unchecked:disabled { image: url(\"%3\"); }"
+        "QCheckBox::indicator:checked:disabled { image: url(\"%4\"); }"
+        "QRadioButton::indicator:unchecked { image: url(\"%5\"); }"
+        "QRadioButton::indicator:checked { image: url(\"%6\"); }"
+        "QRadioButton::indicator:unchecked:disabled { image: url(\"%7\"); }"
+        "QRadioButton::indicator:checked:disabled { image: url(\"%8\"); }")
         .arg(checkOff, checkOn, checkOffDis, checkOnDis,
              radioOff, radioOn, radioOffDis, radioOnDis);
 }
 
 // Apply a sheet built by `build` (which embeds canonIndicatorRules()) to
 // `widget`, and rebuild it whenever the theme changes, so the painted
-// indicators follow the new theme's colours.
+// indicators follow the new theme's colours. ThemeManager re-resolves the
+// tracked sheet on themeChanged too, still carrying the old theme's image
+// paths; its connection is made in its constructor, so it runs first and this
+// rebuild lands last.
 inline void applyCanonSheet(QWidget* widget, std::function<QString()> build)
 {
     auto& tm = ThemeManager::instance();
