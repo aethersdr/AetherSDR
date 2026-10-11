@@ -8081,7 +8081,7 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
     //
     const bool dax = !connected || caps.hasDaxStreams;
     bool nativeDax = false;
-#if defined(HAVE_WEBSOCKETS) && (defined(Q_OS_MAC) || defined(HAVE_PIPEWIRE))
+#if defined(HAVE_WEBSOCKETS) && (defined(Q_OS_MACOS) || defined(HAVE_PIPEWIRE))
     nativeDax = connected && caps.receiveAudioExport.has_value();
 #endif
     if (m_appletPanel) {

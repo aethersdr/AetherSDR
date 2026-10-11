@@ -146,7 +146,7 @@ int main(int argc, char** argv)
     check(!caps.persistsMemories, "RTL-SDR does not persist memories on device");
 
 #if (defined(Q_OS_LINUX) && defined(Q_PROCESSOR_X86_64)) \
-    || (defined(Q_OS_MAC) && defined(Q_PROCESSOR_ARM_64)) \
+    || (defined(Q_OS_MACOS) && defined(Q_PROCESSOR_ARM_64)) \
     || (defined(Q_OS_WIN) && defined(Q_PROCESSOR_X86_64))
     qputenv("AETHER_RTL_EVALUATION_RECEIVERS", "8");
     qunsetenv("AETHER_AUTOMATION");
