@@ -1,6 +1,7 @@
 #include "TxCoordinator.h"
 
 #include <QScopeGuard>
+#include <QtGlobal>
 
 #include <algorithm>
 #include <chrono>
@@ -119,7 +120,11 @@ TxCoordinator::Operation TxCoordinator::Operation::heldActivities(unsigned activ
         if (!operation) {
             return false;
         }
+        // libc++ has no std::atomic<std::shared_ptr>, so the free functions stay.
+QT_WARNING_PUSH
+QT_WARNING_DISABLE_DEPRECATED
         const auto holds = std::atomic_load_explicit(&operation->holds, std::memory_order_acquire);
+QT_WARNING_POP
         if (!holds) {
             return false;
         }
@@ -818,9 +823,13 @@ TxCoordinator::Intent TxCoordinator::beginIntent(const Operation& operation,
             holds->push_back(entry);
         }
     }
+    // libc++ has no std::atomic<std::shared_ptr>, so the free functions stay.
+QT_WARNING_PUSH
+QT_WARNING_DISABLE_DEPRECATED
     std::atomic_store_explicit(&operation.m_state->holds,
         std::shared_ptr<const std::vector<std::weak_ptr<IntentState>>>(std::move(holds)),
         std::memory_order_release);
+QT_WARNING_POP
     return intent;
 }
 
