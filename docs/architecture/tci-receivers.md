@@ -30,11 +30,6 @@ The receiver-index policy is only one half of the routing contract. Channel
    a receiver a client is already using. Clients should still rediscover the
    mapping on a new radio session.
 
-   Receivers are announced as they come and go: a slice that takes a new
-   receiver sends `rx_enable:<trx>,true;`, and a genuine close sends
-   `rx_enable:<trx>,false;` once the settle window expires. A recreate inside
-   the window keeps its binding and sends neither.
-
 3. **Legacy-client fallback.**
    `TciProtocol::sliceForTrx()` includes a compatibility path: if the
    requested TRX index is out of the `0..N-1` range, it searches for a

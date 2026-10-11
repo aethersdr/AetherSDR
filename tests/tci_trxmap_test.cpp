@@ -77,6 +77,21 @@ int main()
                "count stays above a transient hole (trx 1 still bound)");
     }
 
+    // #6352: trxForSliceId() reads only the binding, so it still names a
+    // removed slice's receiver until the deferred release drops it.
+    {
+        TciTrxMap map;
+        expect(map.trxForSliceId(0) == -1, "unbound slice id answers -1");
+        map.acquire(0);
+        map.acquire(1);
+        expect(map.trxForSliceId(1) == 1, "bound slice id answers its trx");
+        map.release(1);
+        expect(map.trxForSliceId(1) == -1, "released slice id answers -1");
+        expect(map.trxForSliceId(0) == 0, "release leaves other bindings");
+        map.clear();
+        expect(map.trxForSliceId(0) == -1, "clear drops every binding");
+    }
+
     // Disconnect: everything resets; next session starts dense from 0.
     {
         TciTrxMap map;
