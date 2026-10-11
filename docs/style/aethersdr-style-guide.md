@@ -137,8 +137,9 @@ in its own PR.
 
 The panadapter (`PanadapterApplet`) is the first `CanonPan`. The GPU
 `SpectrumWidget` sits in its body unchanged (spectrum black, trace and
-waterfall stay as they are); the pan carries a 32 px canon header (grip,
-slice title in `color.canon.ink`, pop-out, maximize) with no rule under it:
+waterfall stay as they are); the pan carries a 16 px canon header (grip,
+slice title in `color.canon.ink`, and pop-out, maximize and close as 16 px
+round canon buttons) with no rule under it:
 the spectrum draws the header's bottom row of ground over its top 14 px,
 fading to clear (`SpectrumWidget::setTopFade()`), so the header runs into
 the spectrum without an edge on every platform, including macOS, where the

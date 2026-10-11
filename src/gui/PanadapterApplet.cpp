@@ -85,11 +85,12 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
     layout->setSpacing(0);
 
     // ── Canon header: grip, slice title, pop-out, maximize, close ────────
-    // Tall enough for the canon close button (26 px). No rule under it: the
-    // spectrum fades down out of the header's ground (refreshTopFade()).
+    // 16 px, as the old strip was, with 16 px round canon buttons. No rule
+    // under it: the spectrum fades down out of the header's ground
+    // (refreshTopFade()).
     m_titleBar = new QWidget(body);
     m_titleBar->setObjectName(QStringLiteral("panHeader"));
-    m_titleBar->setFixedHeight(32);
+    m_titleBar->setFixedHeight(16);
     m_titleBar->installEventFilter(this);  // drag-to-move when floating
     // Addressable for the automation bridge (#3646/#4864 pattern): the
     // canvas live-move stream starts here, and a drag the bridge cannot
@@ -99,15 +100,15 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
     AetherSDR::ThemeManager::instance().applyStyleSheet(titleBar,
         "QWidget#panHeader { background: transparent; }"
         "QLabel { background: transparent; }"
-        "QLabel#panHeaderGrip { color: {{color.canon.muted}}; font-size: 11px; }"
-        "QLabel#panHeaderTitle { color: {{color.canon.ink}}; font-size: 12px; font-weight: 700; }"
+        "QLabel#panHeaderGrip { color: {{color.canon.muted}}; font-size: 10px; }"
+        "QLabel#panHeaderTitle { color: {{color.canon.ink}}; font-size: 11px; font-weight: 700; }"
         "QPushButton { background: transparent; color: {{color.canon.muted}}; border: 1px solid transparent; "
-        "border-radius: 13px; font-size: 12px; padding: 0; }"
+        "border-radius: 8px; font-size: 10px; padding: 0; }"
         "QPushButton:hover { background: {{color.canon.nested}}; color: {{color.canon.ink}}; border-color: {{color.canon.lineHi}}; }"
-        "QPushButton:focus { border: 2px solid {{color.canon.cyan}}; }");
+        "QPushButton:focus { border: 1px solid {{color.canon.cyan}}; }");
 
     auto* barLayout = new QHBoxLayout(titleBar);
-    barLayout->setContentsMargins(8, 3, 4, 3);
+    barLayout->setContentsMargins(8, 0, 4, 0);
     barLayout->setSpacing(2);
 
     auto* grip = new QLabel(QString::fromUtf8("\xe2\x8b\xae\xe2\x8b\xae"));
@@ -125,7 +126,7 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
     m_popOutBtn = new QPushButton("\u2b08");  // ⬈
     m_popOutBtn->setObjectName(QStringLiteral("panFloatToggle"));
     m_popOutBtn->setAccessibleName(tr("Pop out panadapter"));
-    m_popOutBtn->setFixedSize(26, 26);
+    m_popOutBtn->setFixedSize(16, 16);
     m_popOutBtn->setCursor(Qt::PointingHandCursor);
     m_popOutBtn->setToolTip(tr("Pop out panadapter"));
     m_popOutBtn->hide();  // hidden in single-pan mode
@@ -141,7 +142,7 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
     // Maximize button (□)
     m_maxBtn = new QPushButton("\u25a1");  // □
     m_maxBtn->setAccessibleName(tr("Maximize panadapter"));
-    m_maxBtn->setFixedSize(26, 26);
+    m_maxBtn->setFixedSize(16, 16);
     m_maxBtn->setCursor(Qt::PointingHandCursor);
     m_maxBtn->setToolTip(tr("Maximize panadapter"));
     m_maxBtn->hide();  // hidden in single-pan mode
@@ -152,6 +153,13 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
 
     // The canon close button, moved into the header; hidden in single-pan mode.
     placeCloseButtonIn(barLayout);
+    // The canon close button at the header's 16 px (it is 26 px in a corner).
+    closeButton()->setFixedSize(16, 16);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(closeButton(),
+        "QToolButton { background: transparent; color: {{color.canon.muted}}; border: 1px solid transparent; "
+        "border-radius: 8px; font-size: 9px; padding: 0; }"
+        "QToolButton:hover { background: {{color.canon.nested}}; color: {{color.canon.ink}}; border-color: {{color.canon.lineHi}}; }"
+        "QToolButton:focus { border: 1px solid {{color.canon.cyan}}; }");
     closeButton()->setAccessibleName(tr("Close panadapter"));
     closeButton()->setToolTip(tr("Close panadapter"));
     setCloseButtonVisible(false);
