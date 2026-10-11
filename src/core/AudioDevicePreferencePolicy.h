@@ -83,30 +83,34 @@ inline QList<QByteArray> arrivalAudioDeviceIds(
 // One direction's change, from every enumerable id now and the arrival list of
 // the previous check. Presence reads the enumerable ids; arrivals and removals
 // read the arrival lists.
+struct AudioDeviceListSnapshot {
+    QList<QByteArray> enumeratedIds;    // every enumerable id now
+    QList<QByteArray> knownArrivalIds;  // the arrival list of the previous check
+    bool defaultChanged{false};
+    QByteArray liveId;
+    QByteArray preferredId;
+};
+
 inline AudioDeviceListChange audioDeviceListChange(
-    const QList<QByteArray>& enumeratedIds,
-    const QList<QByteArray>& knownArrivalIds,
-    bool defaultChanged,
-    const QByteArray& liveId,
-    const QByteArray& preferredId,
+    const AudioDeviceListSnapshot& now,
     AudioDeviceChurnRule rule = kHostAudioDeviceChurnRule)
 {
     AudioDeviceListChange change;
-    change.presentIds = enumeratedIds;
-    const QList<QByteArray> arrivalIds = arrivalAudioDeviceIds(enumeratedIds, rule);
+    change.presentIds = now.enumeratedIds;
+    const QList<QByteArray> arrivalIds = arrivalAudioDeviceIds(now.enumeratedIds, rule);
     for (const QByteArray& id : arrivalIds) {
-        if (!knownArrivalIds.contains(id)) {
+        if (!now.knownArrivalIds.contains(id)) {
             change.addedIds.append(id);
         }
     }
-    for (const QByteArray& id : knownArrivalIds) {
+    for (const QByteArray& id : now.knownArrivalIds) {
         if (!arrivalIds.contains(id)) {
             change.anyRemoved = true;
         }
     }
-    change.defaultChanged = defaultChanged;
-    change.liveId = liveId;
-    change.preferredId = preferredId;
+    change.defaultChanged = now.defaultChanged;
+    change.liveId = now.liveId;
+    change.preferredId = now.preferredId;
     return change;
 }
 

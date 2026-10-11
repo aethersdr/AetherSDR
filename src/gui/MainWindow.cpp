@@ -5281,12 +5281,18 @@ void MainWindow::handleAudioDeviceListChanged()
     const QByteArray preferredOutputId =
         savedChoice.value("AudioOutputDeviceId", "").toByteArray();
     // Presence is asked of every enumerable id; only arrivals skip the churn.
-    const AudioDeviceListChange inputChange = audioDeviceListChange(
-        presentInputIds, m_knownAudioInputIds, defaultInputChanged,
-        currentInput.id(), preferredInputId);
-    const AudioDeviceListChange outputChange = audioDeviceListChange(
-        presentOutputIds, m_knownAudioOutputIds, defaultOutputChanged,
-        currentOutput.id(), preferredOutputId);
+    const AudioDeviceListChange inputChange = audioDeviceListChange({
+        .enumeratedIds = presentInputIds,
+        .knownArrivalIds = m_knownAudioInputIds,
+        .defaultChanged = defaultInputChanged,
+        .liveId = currentInput.id(),
+        .preferredId = preferredInputId});
+    const AudioDeviceListChange outputChange = audioDeviceListChange({
+        .enumeratedIds = presentOutputIds,
+        .knownArrivalIds = m_knownAudioOutputIds,
+        .defaultChanged = defaultOutputChanged,
+        .liveId = currentOutput.id(),
+        .preferredId = preferredOutputId});
     const QList<QByteArray>& addedInputIds = inputChange.addedIds;
     const QList<QByteArray>& addedOutputIds = outputChange.addedIds;
     m_knownAudioInputIds = arrivalAudioDeviceIds(presentInputIds);

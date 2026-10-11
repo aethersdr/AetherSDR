@@ -233,8 +233,11 @@ int main()
 
         // A live echo-cancel device, and an ordinary device arrives.
         const AudioDeviceListChange arrival = audioDeviceListChange(
-            {kBuiltIn, kEchoCancel, kUsb}, /*knownArrivalIds*/ {kBuiltIn},
-            /*defaultChanged*/ false, /*liveId*/ kEchoCancel, /*preferredId*/ kEchoCancel,
+            {.enumeratedIds = {kBuiltIn, kEchoCancel, kUsb},
+             .knownArrivalIds = {kBuiltIn},
+             .defaultChanged = false,
+             .liveId = kEchoCancel,
+             .preferredId = kEchoCancel},
             linuxRule);
         expect(arrival.presentIds.contains(kEchoCancel),
                "the presence list contains a live churn id");
@@ -249,14 +252,21 @@ int main()
 
         // A saved churn device connecting is not an arrival: no live restore.
         const AudioDeviceListChange back = audioDeviceListChange(
-            {kBuiltIn, kEchoCancel}, /*knownArrivalIds*/ {kBuiltIn},
-            /*defaultChanged*/ false, /*liveId*/ {}, /*preferredId*/ kEchoCancel, linuxRule);
+            {.enumeratedIds = {kBuiltIn, kEchoCancel},
+             .knownArrivalIds = {kBuiltIn},
+             .defaultChanged = false,
+             .liveId = {},
+             .preferredId = kEchoCancel},
+            linuxRule);
         expect(back.addedIds.isEmpty()
                    && decideAudioDeviceChange(back).action == AudioDeviceAction::Keep,
                "Linux rule: a saved churn device connecting is not restored live");
         const AudioDeviceListChange backAnywhereElse = audioDeviceListChange(
-            {kBuiltIn, kEchoCancel}, /*knownArrivalIds*/ {kBuiltIn},
-            /*defaultChanged*/ false, /*liveId*/ {}, /*preferredId*/ kEchoCancel,
+            {.enumeratedIds = {kBuiltIn, kEchoCancel},
+             .knownArrivalIds = {kBuiltIn},
+             .defaultChanged = false,
+             .liveId = {},
+             .preferredId = kEchoCancel},
             AudioDeviceChurnRule::None);
         expect(decideAudioDeviceChange(backAnywhereElse).action
                    == AudioDeviceAction::RestorePreferred,
@@ -264,8 +274,12 @@ int main()
 
         // Arrivals and removals are judged against the previous arrival list.
         const AudioDeviceListChange swapped = audioDeviceListChange(
-            {kBuiltIn, kHeadphones}, /*knownArrivalIds*/ {kBuiltIn, kUsb},
-            /*defaultChanged*/ true, /*liveId*/ kBuiltIn, /*preferredId*/ kUsb, linuxRule);
+            {.enumeratedIds = {kBuiltIn, kHeadphones},
+             .knownArrivalIds = {kBuiltIn, kUsb},
+             .defaultChanged = true,
+             .liveId = kBuiltIn,
+             .preferredId = kUsb},
+            linuxRule);
         expect(swapped.addedIds == QList<QByteArray>{kHeadphones} && swapped.anyRemoved
                    && swapped.defaultChanged && swapped.liveId == kBuiltIn
                    && swapped.preferredId == kUsb,
