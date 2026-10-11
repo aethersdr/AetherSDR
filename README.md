@@ -10,7 +10,7 @@
 
 AetherSDR brings full FlexRadio operation to Linux, macOS, and Windows — each a native build, no Wine or virtual machines. A native aarch64 build also runs on Raspberry Pi and other embedded ARM devices. Built from the ground up with Qt6 and C++20, it speaks the SmartSDR protocol natively and aims to replicate the full SmartSDR experience.
 
-**Current version: 26.10.1** — CalVer (`YY.M.patch[.hotfix]`). | [Download](https://github.com/aethersdr/AetherSDR/releases/latest) | [Discussions](https://github.com/aethersdr/AetherSDR/discussions) | [What's New](https://github.com/aethersdr/AetherSDR/releases)
+**Current version: 26.10.2** — CalVer (`YY.M.patch[.hotfix]`). | [Download](https://github.com/aethersdr/AetherSDR/releases/latest) | [Discussions](https://github.com/aethersdr/AetherSDR/discussions) | [What's New](https://github.com/aethersdr/AetherSDR/releases)
 
 > **Native builds for Linux, macOS, and Windows** — Linux AppImage (x86-64 + aarch64), macOS DMG (Apple Silicon + Intel), Windows installer and portable ZIP. Every platform is built, tested in CI, and released together.
 
@@ -22,7 +22,7 @@ AetherSDR brings full FlexRadio operation to Linux, macOS, and Windows — each 
 
 ## Highlights
 
-- **GPU-accelerated spectrum & waterfall** — QRhi rendering (OpenGL/Metal/D3D11) with a per-pixel FFT trace at up to **60 fps**, an optional **3D stacked-trace** mode, ~71% less CPU than the paint path, GPU-composited slice flags and multi-GPU adapter selection
+- **GPU-accelerated spectrum & waterfall** — QRhi rendering (OpenGL/Metal/D3D11) with a per-pixel FFT trace at up to **60 fps**, optional FFT Smooth and De-comb trace shaping, an optional **3D stacked-trace** mode, ~71% less CPU than the paint path, GPU-composited slice flags and multi-GPU adapter selection
 - **Multi-slice & multi-panadapter** — colour-coded VFO overlays, independent TX assignment, diversity/ESC beamforming, and up to 8 detachable pans with native VITA-49 waterfall tiles and per-flag S-meter / **SmartMTR** views
 - **KiwiSDR and Web-888 public-receiver browser** — find and connect to public receivers worldwide through an API-policy-aware directory, with diversity receive and receive-only TX inhibit
 - **AetherTX and AetherRX** — the transmit and receive chains, one window each. AetherTX is the channel strip (gate, EQ, compressor, de-esser, tube, AetherVoice exciter, reverb, brickwall limiter) with a preset library and scope; AetherRX puts noise reduction, gate, EQ, compressor, tube, AetherVoice and the output meter on tabs down its left edge
@@ -32,12 +32,13 @@ AetherSDR brings full FlexRadio operation to Linux, macOS, and Windows — each 
 - **AetherSweep** — in-panadapter SWR analyzer with log scale, threshold-band shading and interpolated bandwidth at SWR ≤ 1.5 / 2.0
 - **SpotHub** — DX Cluster, RBN, WSJT-X, POTA, FreeDV Reporter, N1MM+/DXLog contest bandmap, the EiBi shortwave schedule and the KiwiSDR DX Community database, with auto-mode switch and per-feed colouring
 - **CW operator suite** — real-time Morse decoder, MIDI/keyboard straight-key and iambic paddles with full QSK, optional Quindar tones
-- **Copy Assist (speech-to-text)** — on-device transcription of received voice via whisper.cpp, docked under the waterfall with confidence colour-coding. CPU or GPU (Vulkan/Metal, auto-detected), download-on-demand models, optional remote OpenAI-compatible endpoint. Not in the Intel macOS build — see [`docs/asr-copy-assist.md`](docs/asr-copy-assist.md)
+- **Copy Assist (speech-to-text)** — on-device transcription of received voice via whisper.cpp, docked under the waterfall with confidence colour-coding, optionally from the audio before noise reduction. CPU or GPU (Vulkan/Metal, auto-detected), download-on-demand models, optional remote OpenAI-compatible endpoint. Not in the Intel macOS build — see [`docs/asr-copy-assist.md`](docs/asr-copy-assist.md)
 - **FreeDV RADE** — AI digital-voice codec with a client-side neural encoder/decoder
-- **PSK Reporter map overlays** — optional global precipitation (LibreWXR, with NOAA, ECCC and EUMETNET OPERA regional radar backups and a per-provider legend), NOAA/NWS weather radar with observation playback ([`docs`](docs/psk-reporter-weather-radar.md)) and a NASA/GSFC VIIRS night-lights layer that fades through civil twilight ([`docs`](docs/psk-reporter-city-lights.md)), on both the 2D map and 3D globe
-- **SmartLink remote + TCI v2.0 server** — Auth0/TLS WAN operation, and CAT + audio + IQ + CW + spots over a single TCI WebSocket
+- **AetherMap (PSK Reporter) overlays** — optional global precipitation (LibreWXR, with NOAA, ECCC and EUMETNET OPERA regional radar backups and a per-provider legend), NOAA/NWS weather radar with observation playback ([`docs`](docs/psk-reporter-weather-radar.md)) and a NASA/GSFC VIIRS night-lights layer that fades through civil twilight ([`docs`](docs/psk-reporter-city-lights.md)), on both the 2D map and 3D globe
+- **SmartLink remote, remote over CGNAT, and a TCI v2.0 server** — Auth0/TLS WAN operation; an in-radio Tailscale node that carries AetherSDR to a FLEX-8000 or Aurora radio behind CGNAT; and CAT + audio + IQ + CW + spots + tune and receiver events over a single TCI WebSocket
 - **Broad hardware control** — rigctld and virtual-serial CAT, MIDI mapping, the FlexControl knob, serial PTT/CW keying, Multi-Flex operation alongside SmartSDR/Maestro, and a relay that puts a CTR2-Max controller on the radio over Wi-Fi (USB pending CTR2 firmware)
 - **Workspace canvas** — place pans and applets freely as resizable, layered items with edge and grid snapping, across several windows if you want them. Named workspaces recall which applets are open as well as where they sit, and bind to radio profiles. Off by default; the Classic shell is unchanged until you enable it
+- **A user guide at [docs.aethersdr.com](https://docs.aethersdr.com)** — Stable and Next versions, a printable PDF manual signed with each release, and a Log Analyzer that reads a log or support bundle in your browser without uploading it
 - **Built-in demo mode** — a synthetic backend generating its own RX audio and matching panadapter, with a fault-injection harness, so you can explore the full UI with no radio attached (it cannot transmit)
 
 ---
@@ -78,8 +79,9 @@ Supported external devices include the 4O3A/FlexRadio PGXL (Power Genius XL)
 power amplifier and TGXL (Tuner Genius XL) antenna tuner, and — outside the
 radio seam entirely — ACOM S-series and SPE Expert (1.3K-FA / 1.5K-FA / 2K-FA)
 amplifiers over serial or ser2net TCP, and VK3AMP (600 W / 1000 W / 2000 W)
-amplifiers over TCP control with UDP telemetry. Direct TGXL, PGXL and Antenna
-Genius connections authenticate with the device's access code.
+amplifiers over TCP control with UDP telemetry, and the Elecraft KPA1500 over
+TCP (not yet validated on hardware). Direct TGXL, PGXL and Antenna Genius
+connections authenticate with the device's access code.
 
 Active test target is FLEX-8600 firmware 4.2.18 (SmartSDR protocol v1.4.0.0);
 earlier 4.x firmware works; v3.x is unsupported.
@@ -96,7 +98,9 @@ FlexRadio remains the supported target:
   outside CW, a declared board variant (bare HL2, AK4951 companion or
   SquareSDR 2), receive squelch, the CW audio peaking filter, RIT and XIT per
   receiver, backend-side FFT averaging, the CL1 external 10 MHz reference and
-  per-radio state restore (including AGC mode and threshold).
+  per-radio state restore (AGC mode and threshold, TUNE power per band, FFT
+  averaging, FPS and dBm range, receivers B–D with their own setpoints, and
+  manual notches).
 - **Networked Icom** — **early**. CI-V over the RS-BA1 UDP transport, brought up
   on the IC-705 (receive, scope, transmit, FT8) and completed against a live
   IC-7300MK2 (controls, meters, ATU, WSPR, PC Audio routing and the CW decoder).
@@ -113,11 +117,16 @@ FlexRadio remains the supported target:
   by WDSP's display analyzer at one point per screen pixel, and the S-meter,
   noise blanker and RF-gain attenuator work. The receiver's AF gain, mute and
   balance apply, and receive audio also plays through the radio's own speaker.
-  Transmit is a future phase.
-- **RTL-SDR** — **experimental, receive-only**. Discovers supported USB dongles
-  through `librtlsdr` and provides one panadapter and one host-demodulated slice,
-  publishing only the receive state the dongle confirmed, with capture browsing
-  and a 65,536-point zoom FFT.
+  AGC-T spans −20 to 120 dB, NB2 interpolates over impulses, the status bar
+  shows the supply voltage and link, and frequency, mode, step, output level
+  and dBm range are remembered per radio. Transmit is a future phase.
+- **RTL-SDR** — **experimental, receive-only**, bundled in every official
+  package. Discovers supported USB dongles through `librtlsdr` and provides one
+  panadapter and, at a normal launch, one host-demodulated slice, publishing
+  only the receive state the dongle confirmed, with capture browsing, a
+  65,536-point zoom FFT, WFM stereo, live PPM adjustment, per-receiver squelch
+  and relative meters, and receive DAX/TCI feeds. Two, four or eight receivers
+  are an explicit evaluation, not yet a production claim.
 
 No radio at all? **Demo mode** runs the full UI against a synthetic backend
 that generates its own audio and spectrum.
@@ -256,8 +265,10 @@ Currently in flight:
 - **Workspace canvas** — an experimental alternative shell; remaining work is
   live cross-window drag and field time against the Classic shell.
 - **CTR2 controller relay** — Wi-Fi mode works with today's CTR2 firmware;
-  USB mode's host side is complete, has carried the radio's status stream to
-  development firmware, and waits on a CTR2 USB firmware release.
+  USB mode's host side is complete, with per-device link extensions proven on
+  an AetherKnob, and the CTR2 itself waits on a USB firmware release.
+- **The visual canon** — the AetherSDR style guide (RFC #6226) is applied one
+  surface at a time; ten have moved, and a single base-token flip comes last.
 - **AppSettings nested-JSON refactor** — storage is on SQLite with per-radio
   versioned feature documents; the legacy flat keys still need migrating.
 - **Flathub submission** — the AppStream metainfo and manpage are in; the
