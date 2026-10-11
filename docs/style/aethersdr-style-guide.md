@@ -88,6 +88,7 @@ The canon does not change control geometry.
 | You want | Use |
 |---|---|
 | A window in the canon (no title bar, 16 px rounded corners, ambient ground, round close button, drag to move, Escape or ⌘W / Ctrl+W to close) | `CanonWindow`; put content in `bodyWidget()` |
+| A surface in the canon inside the main window: an applet, a panadapter, a canvas (the same ground, hairline and round close button, square corners) | `CanonApplet`, `CanonPan` or `CanonCanvas` from `gui/CanonSurface.h`; put content in `bodyWidget()` |
 | A logo or avatar with a contrast ring and a cyan spark | `SparkRing` |
 | A recognition control (gold spark around a button) | `SparkBorder` |
 | The "AetherSDR" wordmark ("Aether" in ink, "SDR" in the gradient) | `BrandMark::paintWordmark` |
@@ -117,6 +118,22 @@ Network Diagnostics, AetherRX, AetherTX, AetherModem, AetherMap, AetherGPS, Conn
 describes. For windows the canon covers,
 `FramelessWindowTitleBar` is deprecated: those dialogs move to
 `CanonWindow` one at a time, each in its own PR.
+
+### `CanonApplet`, `CanonPan` and `CanonCanvas`: the canon inside the main window
+
+Applets, panadapters and canvases live inside the main window's frame, so
+they are not windows. They share one base, `CanonSurface`, which paints the
+same ground as `CanonWindow` (`paintCanonGround()`: fill, blooms, fading
+grid, `color.canon.lineHi` hairline) with **square corners**, and carries
+the same round close button. What stays with `CanonWindow` is window
+behavior: a surface does not move when dragged, and Escape and ⌘W / Ctrl+W
+do not close it. Its close button only emits `closeRequested()`; the owner
+decides what closing means and hides the button with
+`setCloseButtonVisible(false)` where closing is not allowed, as the
+container and panadapter title bars do today. Pick the class by what the
+surface is, not by what it looks like today: the three are separate types
+so each can grow its own chrome. Surfaces move to them one at a time, each
+in its own PR.
 
 ### Motion
 
