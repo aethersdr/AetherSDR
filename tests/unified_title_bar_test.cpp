@@ -33,6 +33,7 @@
 #include "gui/WindowCaptionButtons.h"
 #include "gui/WindowChrome.h"
 #include "core/ThemeManager.h"
+#include "TestWindowActivation.h"
 
 #include <QAbstractButton>
 #include <QApplication>
@@ -979,7 +980,7 @@ int main(int argc, char** argv)
         QMenu* helpMenu = menuBar->addMenu(QStringLiteral("&Help"));   // added after the hand-off
         menuHost.resize(1400, 200);
         menuHost.show();
-        QApplication::setActiveWindow(&menuHost);
+        activateForTest(menuHost);
         app.processEvents();
 
         auto* menuBtn = menuBarHost->findChild<QPushButton*>(QStringLiteral("titleBarAppMenuButton"));

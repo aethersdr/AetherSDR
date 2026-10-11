@@ -90,7 +90,7 @@ void dropOnCanvas(WorkspaceCanvas* canvas, const QString& payload, QPointF norm)
                  payload.toUtf8());
     const QPointF pos(norm.x() * canvas->width(), norm.y() * canvas->height());
 
-    QDragEnterEvent enter(pos.toPoint(), Qt::MoveAction, &mime,
+    QDragEnterEvent enter(pos, Qt::MoveAction, &mime,
                           Qt::LeftButton, Qt::NoModifier);
     QApplication::sendEvent(canvas, &enter);
     QDropEvent drop(pos, Qt::MoveAction, &mime, Qt::LeftButton, Qt::NoModifier);
