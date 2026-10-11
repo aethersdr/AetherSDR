@@ -17,7 +17,6 @@
 #include "gui/CopyAssistSettings.h"
 #include "core/SettingsHelpers.h"
 
-#include <QFrame>
 #include <QToolButton>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -86,7 +85,8 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
     layout->setSpacing(0);
 
     // ── Canon header: grip, slice title, pop-out, maximize, close ────────
-    // Tall enough for the canon close button (26 px), over a canon hairline.
+    // Tall enough for the canon close button (26 px). No rule under it: the
+    // spectrum fades down out of the header's ground (refreshTopFade()).
     m_titleBar = new QWidget(body);
     m_titleBar->setObjectName(QStringLiteral("panHeader"));
     m_titleBar->setFixedHeight(32);
@@ -161,16 +161,11 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
 
     layout->addWidget(titleBar);
 
-    auto* headerRule = new QFrame(body);
-    headerRule->setObjectName(QStringLiteral("panHeaderRule"));
-    headerRule->setFixedHeight(1);
-    AetherSDR::ThemeManager::instance().applyStyleSheet(headerRule,
-        "QFrame#panHeaderRule { background: {{color.canon.line}}; border: none; }");
-    layout->addWidget(headerRule);
-
     // ── Spectrum widget (FFT + waterfall) ────────────────────────────────
     m_spectrum = new SpectrumWidget(body);
-    m_spectrum->installEventFilter(this);  // detect clicks for pan activation
+    m_spectrum->installEventFilter(this);  // pan activation; top fade on resize
+    connect(&AetherSDR::ThemeManager::instance(), &AetherSDR::ThemeManager::themeChanged,
+            this, &PanadapterApplet::refreshTopFade);
     layout->addWidget(m_spectrum, 1);
 
     // ── CW decode panel (hidden by default, shown in CW mode) ─────────
@@ -1011,8 +1006,28 @@ void PanadapterApplet::clearCwText()
     m_lastCwTextSource = CwTextSource::None;
 }
 
+void PanadapterApplet::refreshTopFade()
+{
+    constexpr int kTopFadeDepth = 14;
+    const QPoint at = m_spectrum->mapTo(this, QPoint(0, 0));
+    if (at.y() < 1 || m_spectrum->width() <= 0) {
+        m_spectrum->setTopFade(QImage(), 0);
+        return;
+    }
+    const QPixmap& g = ground();
+    const qreal dpr = g.devicePixelRatio();
+    const QImage strip = g.copy(qRound(at.x() * dpr), qRound((at.y() - 1) * dpr),
+                                qRound(m_spectrum->width() * dpr), qMax(1, qRound(dpr)))
+                             .toImage();
+    m_spectrum->setTopFade(strip, kTopFadeDepth);
+}
+
 bool PanadapterApplet::eventFilter(QObject* obj, QEvent* ev)
 {
+    if (obj == m_spectrum
+        && (ev->type() == QEvent::Resize || ev->type() == QEvent::Move)) {
+        refreshTopFade();
+    }
     // CW panel resize grip — drag the top edge to grow/shrink the decode
     // panel (and reveal more decoded-text history) (#3628).
     if (obj == m_cwGrip) {

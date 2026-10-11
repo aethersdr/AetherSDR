@@ -146,6 +146,9 @@ protected:
     bool eventFilter(QObject* obj, QEvent* ev) override;
 
 private:
+    // Hands the spectrum the header's bottom row of canon ground to fade
+    // down from, after anything that moves or repaints that row.
+    void refreshTopFade();
     // Re-apply the decoded-text stylesheet at the current font size (#3628).
     void applyCwFont();
     // Change the decoded-text font size by `delta` px, clamp, and persist (#3628).

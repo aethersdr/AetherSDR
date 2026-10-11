@@ -1,4 +1,5 @@
 #include "SpectrumWidget.h"
+#include "CanonSurface.h"
 #include "SpectrumSquelchLogic.h"
 #include "ScopedChildWidget.h"
 
@@ -14566,6 +14567,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
             m_overlayStatic.fill(Qt::transparent);
             QPainter p(&m_overlayStatic);
             p.setRenderHint(QPainter::Antialiasing, false);
+            drawTopFade(p, w);
 
             // Edge crop (panEdgeCropActive()) happens upstream now, at the
             // bin/coordinate level (croppedBinsForDisplay(), and
@@ -15720,6 +15722,8 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
         drawSpectrum(p, specContentRect);
         recordRenderedTrace(estimateNoiseFloorDbm(displaySpectrumBins()));
     }
+
+    drawTopFade(p, specRect.width());
 
     if (m_bandPlanFontSize > 0) drawBandPlan(p, specRect);
 
@@ -18065,6 +18069,31 @@ void SpectrumWidget::drawFreqScale(QPainter& p, const QRect& r)
 }
 
 // ─── dBm scale strip (right edge of FFT area) ────────────────────────────────
+
+void SpectrumWidget::setTopFade(const QImage& strip, int depth)
+{
+    if (strip == m_topFadeStrip && depth == m_topFadeDepth) {
+        return;
+    }
+    m_topFadeStrip = strip;
+    m_topFadeDepth = depth;
+    m_topFade = QImage();
+    markOverlayDirty("topFade");
+}
+
+void SpectrumWidget::drawTopFade(QPainter& p, int width)
+{
+    if (m_topFadeStrip.isNull() || m_topFadeDepth <= 0 || width <= 0) {
+        return;
+    }
+    const qreal dpr = p.device()->devicePixelRatioF();
+    const QSize px(qRound(width * dpr), qRound(m_topFadeDepth * dpr));
+    if (m_topFade.size() != px) {
+        m_topFade = canonFadeStrip(m_topFadeStrip, px);
+        m_topFade.setDevicePixelRatio(dpr);
+    }
+    p.drawImage(QPointF(0, 0), m_topFade);
+}
 
 void SpectrumWidget::drawDbmScaleChrome(QPainter& p, const QRect& specRect)
 {
