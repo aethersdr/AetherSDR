@@ -1948,11 +1948,12 @@ void RtlSdrBackend::publishCapture()
         m_wfmPublicationAge[id].invalidate();
         m_wfmObservationAge[id].invalidate();
     }
-    // Retire samples across every accepted capture revision, including parking,
-    // removal, retune and ID reuse. A definition alone is never a live sample.
+    // Retire samples a revision invalidates, including parking, removal, retune
+    // and ID reuse. A definition alone is never a live sample. A monitor-only
+    // revision keeps the sample, so an AF gain drag does not blank the meter.
     if (prior) {
-        for (const auto& receiver : prior->receivers) {
-            emit meterRemoved(700 + receiver.passband.stableId);
+        for (const int id : staleRfMeterIds(*prior, state)) {
+            emit meterRemoved(700 + id);
             if (!m_capture.confirmed() || m_capture.confirmed()->token != state.token) { return; }
         }
     }
@@ -2107,6 +2108,30 @@ void RtlSdrBackend::saveAcceptedDeviceSettings()
         m_deviceSettingsSaved = RtlDeviceSettings(m_settingsScope).saveAccepted(
             {m_ppmCorrection, m_dcSuppression, m_receiveMetersEnabled}, m_deviceSettingsReason);
     }
+}
+
+std::vector<int> RtlSdrBackend::staleRfMeterIds(const RtlCaptureTransaction::State& prior,
+                                                const RtlCaptureTransaction::State& next)
+{
+    const bool frontEndChanged = prior.token.session != next.token.session
+        || prior.hardware != next.hardware || prior.capture != next.capture
+        || prior.dcSuppression != next.dcSuppression;
+    const auto receiving = [](const RtlCaptureTransaction::State& state, int id) {
+        return std::ranges::find(state.receivingIds, id) != state.receivingIds.end();
+    };
+    std::vector<int> ids;
+    for (const auto& before : prior.receivers) {
+        const int id = before.passband.stableId;
+        const auto after = std::ranges::find_if(next.receivers, [id](const auto& receiver) {
+            return receiver.passband.stableId == id;
+        });
+        if (frontEndChanged || after == next.receivers.end()
+            || after->passband != before.passband || after->mode != before.mode
+            || receiving(prior, id) != receiving(next, id)) {
+            ids.push_back(id);
+        }
+    }
+    return ids;
 }
 
 void RtlSdrBackend::publishRfMeterDefinitions(bool retireValues)

@@ -140,6 +140,13 @@ private:
     void finishExtensions(bool success, RtlCaptureTransaction::Token token = {});
     QVariantMap deviceSettingsStatus() const;
     void publishRfMeterDefinitions(bool retireValues = false);
+    // Receivers whose SLC:LEVEL sample no longer describes them once `next`
+    // replaces `prior`: the level is the peak detector bin in the receiver's
+    // passband, so it depends on the session, front end, capture placement, DC
+    // suppression, and that receiver's passband, mode and membership. Monitor
+    // gain/pan/mute and squelch move none of these.
+    static std::vector<int> staleRfMeterIds(const RtlCaptureTransaction::State& prior,
+                                            const RtlCaptureTransaction::State& next);
     void saveAcceptedDeviceSettings();
     void verifyDeviceSettingsIdentity(const QString& serial);
     bool acceptsFrame(quint64 session, quint64 revision) const;
