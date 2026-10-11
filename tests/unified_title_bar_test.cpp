@@ -41,6 +41,7 @@
 #include <QImage>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QKeySequence>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
@@ -1050,9 +1051,15 @@ int main(int argc, char** argv)
         QMenu* lateSubmenu = fileMenu->addMenu(QStringLiteral("Recent"));
         check(!rounded(lateSubmenu), "a submenu added later is not rounded until its parent opens");
 
-        QTest::keyClick(&menuHost, Qt::Key_F, Qt::AltModifier);
-        check(QApplication::activePopupWidget() == fileMenu,
-              "Alt+F still opens the File menu with the menu bar hidden");
+        // Qt has no menu mnemonics on macOS, so there the menu is opened directly.
+        if (!QKeySequence::mnemonic(QStringLiteral("&File")).isEmpty()) {
+            QTest::keyClick(&menuHost, Qt::Key_F, Qt::AltModifier);
+            check(QApplication::activePopupWidget() == fileMenu,
+                  "Alt+F still opens the File menu with the menu bar hidden");
+        } else {
+            std::fprintf(stderr, "  mnemonics are off on this platform: Alt+F check skipped\n");
+            fileMenu->popup(menuBtn ? menuBtn->mapToGlobal(QPoint(0, menuBtn->height())) : QPoint());
+        }
         check(rounded(lateSubmenu), "opening a menu rounds the submenus added to it since");
         fileMenu->close();
         app.processEvents();
