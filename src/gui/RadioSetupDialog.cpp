@@ -142,11 +142,14 @@ static QLabel* makeValueLabel(const QString& text, const QString& extraRules = {
 
 // The unavailable look of a Radio Audio Outputs row (theme-style-guide.md,
 // Three-state controls): a disabled label, value or Mute button takes the
-// unavailable token; the enabled look is unchanged.
+// unavailable token; the enabled look is unchanged. An engaged Mute that is
+// unavailable keeps the row's unchecked background, not the engaged red.
 static const QString kUnavailableLabelRule =
     "QLabel:disabled { color: {{color.control.unavailable}}; }";
 static const QString kUnavailableButtonRule =
-    "QPushButton:disabled { color: {{color.control.unavailable}}; }";
+    "QPushButton:disabled { color: {{color.control.unavailable}}; }"
+    "QPushButton:checked:disabled { background: {{color.background.1}}; "
+    "color: {{color.control.unavailable}}; }";
 
 static const QString kKiwiRowStyle =
     "QFrame#kiwiAntennaRow { background: #101622; border: 1px solid #203040; "

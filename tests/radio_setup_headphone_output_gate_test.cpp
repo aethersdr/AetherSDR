@@ -13,7 +13,9 @@
 //   5. a connected radio with a command plane (the Demo) is unchanged;
 //   6. a dimmed row LOOKS dimmed: label, value and Mute of the Headphone and
 //      Line Out rows render differently on the HL2 than on the Demo, in the
-//      unavailable token's colour, under Default Dark and Default Light.
+//      unavailable token's colour, under Default Dark and Default Light;
+//   7. an engaged Mute on a dimmed row shows no engaged red: it renders as the
+//      same dimmed Mute not engaged, and not as the Demo's engaged Mute.
 //
 // No hardware and no transport: the no-command-plane radios are an injected
 // backend reporting connected with the capabilities the real backend declares;
@@ -186,6 +188,39 @@ int differingPixels(const QImage& a, const QImage& b)
     return n;
 }
 
+// Pixels of exactly `colour`; -1 for a null image.
+int pixelsOfColour(const QImage& image, const QColor& colour)
+{
+    if (image.isNull())
+        return -1;
+    int n = 0;
+    for (int y = 0; y < image.height(); ++y) {
+        for (int x = 0; x < image.width(); ++x) {
+            if (image.pixel(x, y) == colour.rgb())
+                ++n;
+        }
+    }
+    return n;
+}
+
+// Checks or unchecks a Mute with its toggled signal blocked, so the model's
+// setter never runs and no command is built: only the widget's state moves.
+void setCheckedSilently(QPushButton* button, bool checked)
+{
+    const QSignalBlocker blocker(button);
+    button->setChecked(checked);
+}
+
+// Returns the process to the theme it started on, on every exit from a slot.
+class ThemeRestore {
+public:
+    ThemeRestore() : m_theme(ThemeManager::instance().activeTheme()) {}
+    ~ThemeRestore() { ThemeManager::instance().setActiveTheme(m_theme); }
+    Q_DISABLE_COPY_MOVE(ThemeRestore)
+private:
+    const QString m_theme;
+};
+
 } // namespace
 
 class RadioSetupHeadphoneOutputGateTest : public QObject {
@@ -277,7 +312,8 @@ private slots:
     void dimmedRowsLookUnavailableInBothThemes()
     {
         auto& tm = ThemeManager::instance();
-        const QString startTheme = tm.activeTheme();
+        const ThemeRestore restoreTheme;
+        const QColor engagedRed(0x8b, 0x00, 0x00);
         QStringList failures;
         for (const char* theme : {"Default Dark", "Default Light"}) {
             QVERIFY2(tm.setActiveTheme(QLatin1String(theme)), theme);
@@ -286,6 +322,7 @@ private slots:
 
             RadioModel hl2;
             NoCommandPlaneBackend* backend = installConnected(hl2, QStringLiteral("hl2"));
+            QSignalSpy dropped(&hl2, &RadioModel::commandDropped);
             RadioSetupDialog dimmedDialog(&hl2);
             dimmedDialog.show();
             dimmedDialog.selectTab(QStringLiteral("Audio"));
@@ -330,12 +367,64 @@ private slots:
                     .arg(where).arg(diff).arg(total).arg(repeat);
                 if (total <= 0 || repeat != 0)
                     failures << where + QStringLiteral(": render is not repeatable");
-                if (diff <= 0)
+                if (diff < 0)
+                    failures << where + QStringLiteral(": regions differ in size");
+                else if (diff == 0)
                     failures << where + QStringLiteral(": dimmed renders as live");
                 if (!p.dimmed->styleSheet().contains(unavailable, Qt::CaseInsensitive))
                     failures << where + QStringLiteral(": not the unavailable token ")
                                     + unavailable;
             }
+
+            // An engaged Mute on a dimmed row. Only the two buttons' checked
+            // state moves; the models are not told and nothing is sent.
+            const bool hl2HpMute = hl2.headphoneMute();
+            const bool hl2LineMute = hl2.lineoutMute();
+            const bool demoHpMute = demo.headphoneMute();
+            const bool demoLineMute = demo.lineoutMute();
+            for (int i = 2; i < parts.size(); i += 3) {
+                const Part& p = parts.at(i);
+                const QString where = QStringLiteral("%1 | %2 engaged mute")
+                    .arg(QLatin1String(theme), QLatin1String(p.name));
+                auto* dimMute = qobject_cast<QPushButton*>(p.dimmed);
+                auto* liveMute = qobject_cast<QPushButton*>(p.live);
+                QVERIFY2(dimMute && liveMute, qPrintable(where));
+                setCheckedSilently(dimMute, true);
+                setCheckedSilently(liveMute, true);
+                QVERIFY2(dimMute->isChecked() && !dimMute->isEnabled(), qPrintable(where));
+                QVERIFY2(liveMute->isChecked() && liveMute->isEnabled(), qPrintable(where));
+                const QImage dimmedEngaged = rendered(dimMute);
+                const QImage liveEngaged = rendered(liveMute);
+                const int redDimmed = pixelsOfColour(dimmedEngaged, engagedRed);
+                const int redLive = pixelsOfColour(liveEngaged, engagedRed);
+                const int vsLive = differingPixels(dimmedEngaged, liveEngaged);
+                const int vsNotEngaged = differingPixels(dimmedEngaged, dimmedImages.at(i));
+                qInfo().noquote() << QStringLiteral(
+                    "PIXELS %1: engaged red, dimmed %2, live %3; dimmed vs live %4; "
+                    "dimmed engaged vs dimmed not engaged %5 / %6")
+                    .arg(where).arg(redDimmed).arg(redLive).arg(vsLive).arg(vsNotEngaged)
+                    .arg(dimmedEngaged.width() * dimmedEngaged.height());
+                // CONTROL: the live engaged Mute does show the engaged red.
+                if (redLive <= 0)
+                    failures << where + QStringLiteral(": the live Mute shows no engaged red");
+                if (redDimmed != 0)
+                    failures << where + QStringLiteral(": dimmed shows the engaged red in %1 pixels")
+                                    .arg(redDimmed);
+                if (vsLive < 0)
+                    failures << where + QStringLiteral(": regions differ in size");
+                else if (vsLive == 0)
+                    failures << where + QStringLiteral(": dimmed renders as live");
+                if (vsNotEngaged != 0)
+                    failures << where + QStringLiteral(": dimmed differs from not engaged by %1")
+                                    .arg(vsNotEngaged);
+                setCheckedSilently(dimMute, false);
+                setCheckedSilently(liveMute, false);
+            }
+            QCOMPARE(dropped.count(), 0);
+            QCOMPARE(hl2.headphoneMute(), hl2HpMute);
+            QCOMPARE(hl2.lineoutMute(), hl2LineMute);
+            QCOMPARE(demo.headphoneMute(), demoHpMute);
+            QCOMPARE(demo.lineoutMute(), demoLineMute);
 
             // Disconnect: the same widgets, live again, render as the Demo's.
             backend->connected = false;
@@ -355,7 +444,6 @@ private slots:
                     failures << where + QStringLiteral(": re-enabled renders as dimmed");
             }
         }
-        QVERIFY(tm.setActiveTheme(startTheme));
         QVERIFY2(failures.isEmpty(), qPrintable(failures.join(QStringLiteral("\n"))));
     }
 };
