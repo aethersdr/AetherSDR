@@ -24,7 +24,9 @@ constexpr bool persistsAudioDeviceSelection(AudioDeviceSelection selection)
 
 // One direction's view of a device-list change.
 struct AudioDeviceListChange {
-    QList<QByteArray> presentIds;  // enumerable now
+    // Every enumerable id, including the ones the hot-plug monitor ignores as
+    // churn; addedIds leaves those out.
+    QList<QByteArray> presentIds;
     QList<QByteArray> addedIds;    // enumerable now, not at the previous check
     bool anyRemoved{false};        // some id from the previous check is gone
     bool defaultChanged{false};    // the system default id moved

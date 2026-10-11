@@ -554,6 +554,17 @@ QList<QByteArray> audioDeviceIds(const QList<QAudioDevice>& devices)
     return ids;
 }
 
+// Every enumerable id, the churn audioDeviceIds() skips included: what is
+// PRESENT, as opposed to what counts as a new arrival.
+QList<QByteArray> enumeratedAudioDeviceIds(const QList<QAudioDevice>& devices)
+{
+    QList<QByteArray> ids;
+    ids.reserve(devices.size());
+    for (const QAudioDevice& device : devices)
+        ids.append(device.id());
+    return ids;
+}
+
 bool containsAudioDeviceId(const QList<QByteArray>& ids, const QByteArray& id)
 {
     return std::any_of(ids.cbegin(), ids.cend(),
@@ -5343,15 +5354,18 @@ void MainWindow::handleAudioDeviceListChanged()
         savedChoice.value("AudioInputDeviceId", "").toByteArray();
     const QByteArray preferredOutputId =
         savedChoice.value("AudioOutputDeviceId", "").toByteArray();
+    // Presence is asked of every enumerable id; only arrivals skip the churn.
+    const QList<QByteArray> presentInputIds = enumeratedAudioDeviceIds(inputDevices);
+    const QList<QByteArray> presentOutputIds = enumeratedAudioDeviceIds(outputDevices);
     const AudioDeviceDecision inputDecision = decideAudioDeviceChange({
-        .presentIds = currentInputIds,
+        .presentIds = presentInputIds,
         .addedIds = addedInputIds,
         .anyRemoved = !removedInputIds.isEmpty(),
         .defaultChanged = defaultInputChanged,
         .liveId = currentInput.id(),
         .preferredId = preferredInputId});
     const AudioDeviceDecision outputDecision = decideAudioDeviceChange({
-        .presentIds = currentOutputIds,
+        .presentIds = presentOutputIds,
         .addedIds = addedOutputIds,
         .anyRemoved = !removedOutputIds.isEmpty(),
         .defaultChanged = defaultOutputChanged,
@@ -5425,9 +5439,9 @@ void MainWindow::handleAudioDeviceListChanged()
             selectedInput,
             selectedOutput,
             acceptedAudioDeviceSelection(selectedInput.id(), preferredInputId,
-                                         currentInputIds),
+                                         presentInputIds),
             acceptedAudioDeviceSelection(selectedOutput.id(), preferredOutputId,
-                                         currentOutputIds),
+                                         presentOutputIds),
             reinitializePcInput);
     } else {
         applyFallback();

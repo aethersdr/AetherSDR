@@ -164,6 +164,27 @@ int main()
                "the saved device is restored after the dropout");
     }
 
+    // ── A live device the hot-plug monitor ignores as churn (Linux) ────────
+    // presentIds is every enumerable id; addedIds leaves the churn out. The
+    // caller that filtered presentIds too would report this device missing.
+    {
+        const QByteArray kEchoCancel("echo-cancel-source");
+        const AudioDeviceDecision d = decideAudioDeviceChange({
+            .presentIds = {kBuiltIn, kEchoCancel, kUsb},
+            .addedIds = {kUsb},
+            .anyRemoved = false,
+            .defaultChanged = false,
+            .liveId = kEchoCancel,
+            .preferredId = kEchoCancel});
+        expect(d.action == AudioDeviceAction::Keep && !d.liveMissing,
+               "an enumerable live device is present, whatever counts as an arrival");
+        expect(!audioDeviceChoiceRequired(true, d, d),
+               "and an unrelated arrival does not ask the operator to choose");
+        expect(acceptedAudioDeviceSelection({}, kEchoCancel, {kBuiltIn, kEchoCancel, kUsb})
+                   == AudioDeviceSelection::OperatorChoice,
+               "System default accepted beside a present saved device is a choice");
+    }
+
     // ── Removed while a different device is selected ────────────────────────
     {
         Session s = Session::launch(kUsb, {kBuiltIn, kUsb, kHeadphones});
