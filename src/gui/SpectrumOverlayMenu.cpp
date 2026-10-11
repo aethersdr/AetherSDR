@@ -10,6 +10,8 @@
 #include "SpectrumOverlayWheelGuard.h"
 #include "AutoBlackMode.h"
 #include "GuardedSlider.h"
+#include "FftTraceDecomb.h"
+#include "FftTraceSmoothing.h"
 #include "ComboStyle.h"
 #include "Theme.h"
 #include "core/GpuSelector.h"
@@ -1823,6 +1825,54 @@ void SpectrumOverlayMenu::buildDisplayPanel()
         emit fftFpsChanged(v);
     });
 
+    // Smooth — display-only smoothing across frequency, in linear power (the
+    // panadapter's counterpart of the AetherRX/TX EQ's Smoothing). The value
+    // is the half-width in pixels; the client applies it to every radio.
+    makeRow("FFT Smooth:", 0, AetherSDR::kFftSmoothingMaxHalfWidthPx, 0,
+            m_smoothSlider, m_smoothLabel);
+    m_smoothSlider->setObjectName("displayFftSmoothSlider");
+    m_smoothSlider->setAccessibleName(tr("FFT smoothing"));
+    m_smoothSlider->setToolTip(
+        tr("Smooths the spectrum trace across frequency, averaging each point "
+           "with its neighbors up to this many pixels either side.\n"
+           "Averages in linear power, so the noise floor stays put. "
+           "Waterfall and noise-floor readings are not affected. 0 = off."));
+    m_smoothSlider->setAccessibleDescription(
+        tr("Averages the spectrum trace across this many pixels either side. "
+           "Zero is off. The waterfall is not affected."));
+    m_smoothLabel->setText(tr("Off"));
+    connect(m_smoothSlider, &QSlider::valueChanged, this, [this](int v) {
+        m_smoothLabel->setText(v == 0 ? tr("Off") : QString::number(v));
+        emit fftSmoothingChanged(v);
+    });
+
+    // De-comb — replaces the trace with its cepstral true envelope, a smooth
+    // curve over the comb a zoomed-in pan draws across SSB voice (the
+    // speaker's pitch harmonics), keeping the signal's outline and peak level.
+    // The value is the widest harmonic spacing removed, in Hz; 0 is off.
+    makeRow("De-comb Hz:", 0, AetherSDR::kFftDecombMaxHz, 0,
+            m_decombHzSlider, m_decombHzLabel);
+    m_decombHzSlider->setObjectName("displayFftDecombHzSlider");
+    m_decombHzSlider->setSingleStep(10);
+    m_decombHzSlider->setPageStep(50);
+    m_decombHzSlider->setAccessibleName(tr("FFT de-comb width in hertz"));
+    m_decombHzSlider->setToolTip(
+        tr("Removes the comb of voice harmonics a zoomed-in panadapter draws "
+           "across an SSB signal, drawing a smooth curve over the harmonic peaks "
+           "so the signal keeps its outline and peak level.\n"
+           "The value is the widest harmonic spacing removed, in Hz. Voices are "
+           "about 100-250 Hz; 300 covers most. 0 = off.\n"
+           "Rounds a signal's steep edges by about half this width. "
+           "The noise floor and the waterfall are not changed."));
+    m_decombHzSlider->setAccessibleDescription(
+        tr("Removes the comb of voice harmonics from the spectrum trace, up to "
+           "this spacing in hertz. Zero is off. The waterfall is not changed."));
+    m_decombHzLabel->setText(tr("Off"));
+    connect(m_decombHzSlider, &QSlider::valueChanged, this, [this](int v) {
+        m_decombHzLabel->setText(v == 0 ? tr("Off") : QString::number(v));
+        emit fftDecombHzChanged(v);
+    });
+
     // Line Width
     {
         auto* lbl = new QLabel("FFT Line:");
@@ -2841,8 +2891,25 @@ void SpectrumOverlayMenu::syncExtraDisplaySettings(bool blankerOn, float blanker
                                                     int bgOpacity,
                                                     int freqGridSpacingKhz,
                                                     const QColor& bgFillColor,
-                                                    int freqScaleFontPt)
+                                                    int freqScaleFontPt,
+                                                    int fftSmoothing,
+                                                    int fftDecombHz)
 {
+    if (m_decombHzSlider) {
+        QSignalBlocker b(m_decombHzSlider);
+        m_decombHzSlider->setValue(fftDecombHz);
+        if (m_decombHzLabel) {
+            const int v = m_decombHzSlider->value();
+            m_decombHzLabel->setText(v == 0 ? tr("Off") : QString::number(v));
+        }
+    }
+    if (m_smoothSlider) {
+        QSignalBlocker b(m_smoothSlider);
+        m_smoothSlider->setValue(fftSmoothing);
+        if (m_smoothLabel)
+            m_smoothLabel->setText(fftSmoothing == 0 ? tr("Off")
+                                                     : QString::number(fftSmoothing));
+    }
     if (m_freqGridSpacingCmb) {
         QSignalBlocker b(m_freqGridSpacingCmb);
         int idx = m_freqGridSpacingCmb->findData(freqGridSpacingKhz);

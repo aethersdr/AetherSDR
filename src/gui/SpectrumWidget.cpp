@@ -5,6 +5,9 @@
 #include "SliceToneCues.h"
 #include "gui/FftHeatMap.h"
 #include "gui/FftLineWidth.h"
+#include "gui/FftTraceDecomb.h"
+#include "gui/FftTraceSmoothing.h"
+#include "core/dsp/SpectralEnvelope.h"
 #include "gui/SpectrumGrid.h"
 #include "DbmRangeTransition.h"
 #include "DssDcEdgeMath.h"
@@ -1031,6 +1034,8 @@ QVariantMap SpectrumWidget::panstatsSnapshot(bool reset)
     m[QStringLiteral("fftAverage")] = m_fftAverage;
     m[QStringLiteral("fftFps")] = m_fftFps;
     m[QStringLiteral("fftWeightedAverage")] = m_fftWeightedAvg;
+    m[QStringLiteral("fftSmoothing")] = m_fftSmoothing;
+    m[QStringLiteral("fftDecombHz")] = m_fftDecombHz;
     // The 1..100 rate control value, not milliseconds — the key used to say
     // Ms and carried a rate, which is the misreport #4606 exists to end.
     m[QStringLiteral("waterfallRate")] = m_wfLineDuration;
@@ -1762,6 +1767,8 @@ QVariantMap SpectrumWidget::automationDisplaySettingsSnapshot() const
     snap[QStringLiteral("fftHeatMap")] = m_fftHeatMap;
     snap[QStringLiteral("showGrid")] = m_showGrid;
     snap[QStringLiteral("fftLineWidth")] = m_fftLineWidth;
+    snap[QStringLiteral("fftSmoothing")] = m_fftSmoothing;
+    snap[QStringLiteral("fftDecombHz")] = m_fftDecombHz;
     snap[QStringLiteral("fftLineColor")] = m_fftLineColor.name();
     snap[QStringLiteral("fftFillAlpha")] = m_fftFillAlpha;
     snap[QStringLiteral("fftFillColor")] = m_fftFillColor.name();
@@ -2549,6 +2556,7 @@ void SpectrumWidget::loadSettings()
     m_freqScaleFontPt = std::clamp(
         s.value(settingsKey("DisplayFreqScaleFontPt"), "8").toInt(), 8, 14);
     m_fftLineWidth   = s.value(settingsKey("DisplayFftLineWidth"), "1.0").toFloat();
+    loadFftTraceShaping();
     m_noiseFloorEnable = s.value(settingsKey("DisplayNoiseFloorEnable"), "False").toString() == "True";
     const int legacyNoiseFloorPosition = std::clamp(
         s.value(settingsKey("DisplayNoiseFloorPosition"), "75").toInt(), 1, 99);
@@ -2609,7 +2617,7 @@ void SpectrumWidget::loadSettings()
             m_dssGain, m_fftLineColor, m_dssRowSpanPct);
         m_overlayMenu->syncExtraDisplaySettings(m_wfBlankerEnabled,
             m_wfBlankerThreshold, m_bgOpacity, m_freqGridSpacingKhz, m_bgFillColor,
-            m_freqScaleFontPt);
+            m_freqScaleFontPt, m_fftSmoothing, m_fftDecombHz);
     }
     // Refresh the noise-floor target so the slider position takes effect
     // even when the overlay menu is built but not yet shown.
@@ -2795,6 +2803,53 @@ void SpectrumWidget::setFftAverage(int frames) {
         m_overlayMenu->syncPanProcessingSettings(
             m_fftAverage, m_fftFps, m_fftWeightedAvg);
     }
+}
+
+QString SpectrumWidget::fftTraceShapingKey() const
+{
+    return settingsKey(QStringLiteral("DisplayFftTraceShaping"));
+}
+
+void SpectrumWidget::loadFftTraceShaping()
+{
+    // Defaults first: both off, so an absent or unreadable object leaves the
+    // trace exactly as drawn without them.
+    m_fftSmoothing = 0;
+    m_fftDecombHz = 0;
+
+    const QString raw = AppSettings::instance()
+        .value(fftTraceShapingKey(), QString()).toString();
+    if (raw.trimmed().isEmpty()) {
+        return;
+    }
+    QJsonParseError error;
+    const QJsonDocument doc = QJsonDocument::fromJson(raw.toUtf8(), &error);
+    if (error.error != QJsonParseError::NoError || !doc.isObject()) {
+        // Keep the defaults and do not overwrite: see loadDisplay3DSettings().
+        qCWarning(lcGui).noquote()
+            << "SpectrumWidget: ignoring invalid DisplayFftTraceShaping"
+            << fftTraceShapingKey() << error.errorString();
+        return;
+    }
+    const QJsonObject obj = doc.object();
+    m_fftSmoothing = std::clamp(obj.value(QStringLiteral("smoothPx")).toInt(0),
+                                0, AetherSDR::kFftSmoothingMaxHalfWidthPx);
+    m_fftDecombHz = std::clamp(obj.value(QStringLiteral("decombHz")).toInt(0),
+                               0, AetherSDR::kFftDecombMaxHz);
+}
+
+void SpectrumWidget::saveFftTraceShaping()
+{
+    QJsonObject obj;
+    obj.insert(QStringLiteral("version"), 1);
+    obj.insert(QStringLiteral("smoothPx"), m_fftSmoothing);
+    obj.insert(QStringLiteral("decombHz"), m_fftDecombHz);
+
+    // One setValue + save for the whole object (Principle XIV).
+    auto& s = AppSettings::instance();
+    s.setValue(fftTraceShapingKey(), QString::fromUtf8(
+        QJsonDocument(obj).toJson(QJsonDocument::Compact)));
+    s.save();
 }
 
 QString SpectrumWidget::display3DSettingsKey() const
@@ -4366,6 +4421,16 @@ void SpectrumWidget::setFftLineWidth(float w) {
     auto& s = AppSettings::instance();
     s.setValue(settingsKey("DisplayFftLineWidth"), QString::number(m_fftLineWidth, 'f', 1));
     s.save();
+    update();
+}
+void SpectrumWidget::setFftSmoothing(int halfWidthPx) {
+    m_fftSmoothing = std::clamp(halfWidthPx, 0, AetherSDR::kFftSmoothingMaxHalfWidthPx);
+    saveFftTraceShaping();
+    update();
+}
+void SpectrumWidget::setFftDecombHz(int hz) {
+    m_fftDecombHz = std::clamp(hz, 0, AetherSDR::kFftDecombMaxHz);
+    saveFftTraceShaping();
     update();
 }
 void SpectrumWidget::setFftFillAlpha(float a) {
@@ -9261,7 +9326,8 @@ const QVector<float>& SpectrumWidget::displaySpectrumBins() const
 }
 
 const QVector<float>& SpectrumWidget::buildFftDisplayTrace(const QVector<float>& bins,
-                                                           int targetPoints) const
+                                                           int targetPoints,
+                                                           int logicalWidthPx) const
 {
     const int srcCount = bins.size();
     if (srcCount < 2) {
@@ -9300,10 +9366,55 @@ const QVector<float>& SpectrumWidget::buildFftDisplayTrace(const QVector<float>&
         }
     }
 
+    // FFT De-comb, then FFT Smooth, last. De-comb's width is in Hz -- the
+    // voice comb it removes is a fixed spacing in Hz at any zoom -- so it
+    // needs this trace's Hz per point; at a span where the width is under two
+    // points there is no comb to remove and it does nothing. FFT Smooth's
+    // window is in logical pixels, scaled to this trace's points per pixel.
+    const auto applyFftSmoothing = [this, logicalWidthPx](QVector<float>& points)
+        -> const QVector<float>& {
+        const int n = points.size();
+        if (m_fftDecombHz > 0 && n >= 4) {
+            const double hzPerPoint =
+                effectiveBandwidthMhz() * 1.0e6 / static_cast<double>(n - 1);
+            const double windowPoints =
+                hzPerPoint > 0.0 ? static_cast<double>(m_fftDecombHz) / hzPerPoint : 0.0;
+            if (windowPoints >= 2.0) {
+                float* data = points.data();
+                const std::span<const float> in(data, static_cast<std::size_t>(n));
+                m_fftDecombOut.resize(static_cast<std::size_t>(n));
+                if (!m_fftDecombEnvelope) {
+                    m_fftDecombEnvelope = std::make_unique<AetherSDR::SpectralEnvelope>();
+                }
+                // False only on the first frame at a new trace length while
+                // another thread holds FFTW's planner lock: that frame draws
+                // raw, and the next tries again.
+                if (m_fftDecombEnvelope->compute(in, m_fftDecombOut, windowPoints)) {
+                    AetherSDR::decombFloorGate(in, m_fftDecombOut,
+                                               estimateNoiseFloorDbm(points));
+                    std::copy(m_fftDecombOut.begin(), m_fftDecombOut.end(), data);
+                }
+            }
+        }
+        if (m_fftSmoothing <= 0) {
+            return points;
+        }
+        const double pointsPerPx =
+            static_cast<double>(n) / static_cast<double>(std::max(1, logicalWidthPx));
+        const int halfPoints = static_cast<int>(
+            std::lround(static_cast<double>(m_fftSmoothing) * pointsPerPx));
+        float* data = points.data();
+        AetherSDR::smoothFftTraceLinearPower(
+            std::span<const float>(data, static_cast<std::size_t>(n)),
+            std::span<float>(data, static_cast<std::size_t>(n)),
+            halfPoints, m_fftSmoothLinearScratch);
+        return points;
+    };
+
     int dstCount = std::max(targetPoints, srcCount);
     dstCount = std::clamp(dstCount, 2, kMaxFftDisplayTracePoints);
     if (dstCount == srcCount) {
-        return displayBins;
+        return applyFftSmoothing(displayBins);
     }
 
     QVector<float>& trace = m_fftDisplayTraceScratch;
@@ -9325,7 +9436,7 @@ const QVector<float>& SpectrumWidget::buildFftDisplayTrace(const QVector<float>&
         const float p3 = displayBins[std::min(i1 + 2, srcCount - 1)];
         trace[dst] = clampedCatmullRom(p0, p1, p2, p3, t);
     }
-    return trace;
+    return applyFftSmoothing(trace);
 }
 
 const QVector<float>& SpectrumWidget::noiseFloorAutoLevelBins() const
@@ -15115,7 +15226,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
             const QVector<float> croppedBins =
                 croppedBinsForDisplay(displaySpectrumBins());
             const QVector<float>& trace =
-                buildFftDisplayTrace(croppedBins, cols);
+                buildFftDisplayTrace(croppedBins, cols, specContentW);
             const int n = trace.size();
             if (n >= 2) {
                 fftTracePointCount = n;
@@ -15919,7 +16030,8 @@ void SpectrumWidget::drawSpectrum(QPainter& p, const QRect& r)
     const QVector<float> croppedBins = croppedBinsForDisplay(displaySpectrumBins());
     const QVector<float>& fftBins =
         buildFftDisplayTrace(croppedBins,
-                             qMax(2, r.width() * kFftDisplayOversample));
+                             qMax(2, r.width() * kFftDisplayOversample),
+                             r.width());
     if (fftBins.isEmpty()) {
         p.setPen(AetherSDR::ThemeManager::instance().color("color.accent.dim"));
         p.drawText(r, Qt::AlignCenter, "No panadapter data — waiting for radio stream");

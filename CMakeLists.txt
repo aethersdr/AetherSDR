@@ -933,6 +933,7 @@ set(CORE_SOURCES
     src/core/backends/icom/IcomSettings.cpp  # owned config, "Icom" root key (Principle V)
     src/core/backends/icom/IcomCredentials.cpp # password -> keychain, NEVER settings
     src/core/dsp/FftwPlannerLock.cpp # the one process-global FFTW planner lock (#5895)
+    src/core/dsp/SpectralEnvelope.cpp # FFT De-comb (cepstral true envelope)
     src/core/dsp/WdspChannel.cpp
     src/core/backends/rtl/RtlCaptureTransaction.cpp
     src/core/backends/rtl/RtlReceivePipeline.cpp

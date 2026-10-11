@@ -3931,6 +3931,18 @@ add_executable(fft_line_width_test tests/fft_line_width_test.cpp)
 target_include_directories(fft_line_width_test PRIVATE src)
 add_test(NAME fft_line_width_test COMMAND fft_line_width_test)
 
+# FFT Smooth: linear-power, edge-clamped, off is bit-identical.
+add_executable(fft_trace_smoothing_test tests/fft_trace_smoothing_test.cpp)
+target_include_directories(fft_trace_smoothing_test PRIVATE src)
+add_test(NAME fft_trace_smoothing_test COMMAND fft_trace_smoothing_test)
+
+# FFT De-comb (cepstral true envelope) on a
+# synthetic 105/180 Hz voice comb: comb filled, outline and noise floor kept.
+add_executable(fft_trace_decomb_test tests/fft_trace_decomb_test.cpp)
+target_include_directories(fft_trace_decomb_test PRIVATE src ${FFTW3_INCLUDE_DIRS})
+target_link_libraries(fft_trace_decomb_test PRIVATE aethercore Qt6::Core ${FFTW3_LIBRARIES})
+add_test(NAME fft_trace_decomb_test COMMAND fft_trace_decomb_test)
+
 # Transient menu/dialog ownership under nested event-loop teardown (#5566).
 # Socket-free; also runs in the unfiltered full-suite and sanitizer lanes.
 add_executable(scoped_child_widget_test tests/scoped_child_widget_test.cpp)
