@@ -391,6 +391,9 @@ private:
     // released 500 ms after a genuine slice close (recreates reclaim their
     // number), cleared on disconnect. Injected into every TciProtocol.
     TciTrxMap m_trxMap;
+    // #6352: the newest removal per slice id. A close timer that finds a newer
+    // removal of the same id belongs to an earlier absence and stands down.
+    QHash<int, quint64> m_closeGeneration;
     struct PendingVfoBCreate
     {
         QPointer<TciClient> client;

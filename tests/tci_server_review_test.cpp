@@ -1188,6 +1188,91 @@ public:
         return true;
     }
 
+    // #6352 — two recreates of one slice in a row, each inside the 500 ms
+    // window, must stay silent. The first removal's timer ends while the second
+    // gap is open and used to announce a close the second recreate then undid.
+    static bool overlappingRecreatesStaySilent()
+    {
+        RadioModel model;
+        TciServer server(&model);
+
+        QStringList sent;
+        QObject::connect(&server, &TciServer::tciMessage,
+                         [&sent](const QString& dir, const QString& msg) {
+            if (dir == QLatin1String("tx")
+                && msg.startsWith(QLatin1String("rx_enable:")))
+                sent << msg.trimmed();
+        });
+
+        QString error;
+        if (!model.automationApplySliceFixture(0, QStringLiteral("A"), &error)
+            || !model.automationApplySliceFixture(1, QStringLiteral("B"),
+                                                  &error)) {
+            std::fprintf(stderr, "overlap fixtures failed: %s\n",
+                         error.toUtf8().constData());
+            return false;
+        }
+        sent.clear();
+
+        // remove 0 ms, add 200 ms, remove 400 ms, add 700 ms: the first timer
+        // fires at 500 ms inside the second gap.
+        if (!model.automationRemoveSliceFixture(0, &error)) {
+            std::fprintf(stderr, "first remove failed: %s\n",
+                         error.toUtf8().constData());
+            return false;
+        }
+        spin(200);
+        if (!model.automationApplySliceFixture(0, QStringLiteral("A"), &error)) {
+            std::fprintf(stderr, "first re-add failed: %s\n",
+                         error.toUtf8().constData());
+            return false;
+        }
+        spin(200);
+        if (!model.automationRemoveSliceFixture(0, &error)) {
+            std::fprintf(stderr, "second remove failed: %s\n",
+                         error.toUtf8().constData());
+            return false;
+        }
+        spin(300);
+        if (!sent.isEmpty()) {
+            std::fprintf(stderr, "stale timer announced '%s'\n",
+                         sent.join(' ').toUtf8().constData());
+            return false;
+        }
+        if (!model.automationApplySliceFixture(0, QStringLiteral("A"), &error)) {
+            std::fprintf(stderr, "second re-add failed: %s\n",
+                         error.toUtf8().constData());
+            return false;
+        }
+        spin(700);
+        if (!sent.isEmpty()) {
+            std::fprintf(stderr, "overlapping recreates announced '%s'\n",
+                         sent.join(' ').toUtf8().constData());
+            return false;
+        }
+        if (server.m_trxMap.trxForSliceId(0) != 0
+            || server.m_trxMap.trxForSliceId(1) != 1) {
+            std::fprintf(stderr, "bindings moved: %d/%d\n",
+                         server.m_trxMap.trxForSliceId(0),
+                         server.m_trxMap.trxForSliceId(1));
+            return false;
+        }
+
+        // A genuine close after the recreates is still announced.
+        if (!model.automationRemoveSliceFixture(0, &error)) {
+            std::fprintf(stderr, "final remove failed: %s\n",
+                         error.toUtf8().constData());
+            return false;
+        }
+        spin(600);
+        if (sent != QStringList{QStringLiteral("rx_enable:0,false;")}) {
+            std::fprintf(stderr, "final close: expected 'rx_enable:0,false;', got '%s'\n",
+                         sent.join(' ').toUtf8().constData());
+            return false;
+        }
+        return true;
+    }
+
     // #6352 — a slice reclaimed after a reconnect emits slotOccupancyChanged
     // but no sliceAdded, so the disconnect-cleared map left it unbound and its
     // close was never announced. The occupancy edge must rebind it quietly.
@@ -2326,6 +2411,8 @@ int main(int argc, char** argv)
         = AetherSDR::TciServerReviewTest::activeSliceFollowsSliceRemoval();
     const bool rxEnableLifecycle
         = AetherSDR::TciServerReviewTest::rxEnableFollowsSliceLifecycle();
+    const bool overlapSilent
+        = AetherSDR::TciServerReviewTest::overlappingRecreatesStaySilent();
     const bool reclaimCloseAnnounced
         = AetherSDR::TciServerReviewTest::closeAnnouncedForSliceReclaimedAfterReconnect();
     const bool trxStableRecreate
@@ -2393,6 +2480,8 @@ int main(int argc, char** argv)
                 trxStableRecreate ? "PASS" : "FAIL");
     std::printf("%s  rx_enable follows slice open/close, not recreate (#6352)\n",
                 rxEnableLifecycle ? "PASS" : "FAIL");
+    std::printf("%s  overlapping recreates stay silent (#6352)\n",
+                overlapSilent ? "PASS" : "FAIL");
     std::printf("%s  close of a slice reclaimed after reconnect is announced (#6352)\n",
                 reclaimCloseAnnounced ? "PASS" : "FAIL");
     std::printf("%s  live slices keep distinct trx after reconnect (#4577)\n",
@@ -2448,7 +2537,7 @@ int main(int argc, char** argv)
         && powerRateLimits && trxCacheHolds && cacheResets && flagSeedsDeDups
         && flagSeedSettled && txTrxResets
         && activeSliceSeed && activeSliceRemoval && trxStableRecreate
-        && rxEnableLifecycle && reclaimCloseAnnounced
+        && rxEnableLifecycle && overlapSilent && reclaimCloseAnnounced
         && trxDistinctReconnect && heldTrxRefuses
         && vfoConfirmsAccepted && vfoConfirmsRefusal && vfoAcksNoOp
         && vfoChannelZeroOnce

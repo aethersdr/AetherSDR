@@ -431,7 +431,13 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
             // the liveness guard holds. The close is announced here, not
             // synchronously, so a recreate never reports the receiver gone;
             // the trx is read while the binding is still held (#6352).
-            QTimer::singleShot(500, this, [this, sliceId]() {
+            const quint64 generation = ++m_closeGeneration[sliceId];
+            QTimer::singleShot(500, this, [this, sliceId, generation]() {
+                // A later removal of this id started its own window; this one
+                // would end inside it and report a live recreate as a close.
+                if (m_closeGeneration.value(sliceId) != generation)
+                    return;
+                m_closeGeneration.remove(sliceId);
                 if (m_model && !m_model->slice(sliceId)) {
                     const int trx = m_trxMap.trxForSliceId(sliceId);
                     if (trx >= 0 && !m_trxMap.trxHasLiveSlice(m_model, trx)) {
