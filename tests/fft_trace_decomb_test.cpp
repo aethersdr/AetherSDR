@@ -1,11 +1,11 @@
 #include "core/dsp/SpectralEnvelope.h"
 #include "gui/FftTraceDecomb.h"
-#include "gui/NoiseFloorEstimator.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <limits>
 #include <numbers>
 #include <vector>
 
@@ -71,13 +71,33 @@ std::vector<float> noiseFloor(int n, float floorDb, std::uint32_t seed)
     return v;
 }
 
+AetherSDR::DecombScratch scratch;
+
 std::vector<float> decomb(const std::vector<float>& in, AetherSDR::SpectralEnvelope& env)
 {
-    std::vector<float> out(in.size());
-    const bool done = env.compute(in, out, kDecombHz / kHzPerPoint);
+    std::vector<float> out = in;
+    const bool done = AetherSDR::decombTrace(out, kDecombHz / kHzPerPoint, env, scratch);
     check(done, "envelope plan available on an uncontended lock", 0);
-    AetherSDR::decombFloorGate(in, out, AetherSDR::estimateNoiseFloorDbm(in));
     return out;
+}
+
+// Voice comb `peakDb` at the top of its outline, mixed into seeded noise.
+std::vector<float> noisyVoice(double spacingHz, float peakDb, std::uint32_t seed)
+{
+    std::vector<float> in = voiceComb(spacingHz);
+    const auto noise = noiseFloor(kPoints, kFloor, seed);
+    for (int i = 0; i < kPoints; ++i) {
+        auto& x = in[static_cast<std::size_t>(i)];
+        const float sig = x == kFloor ? -400.0f : x + (peakDb - kPeak);
+        x = 10.0f * std::log10(std::pow(10.0f, sig / 10.0f)
+                               + std::pow(10.0f, noise[static_cast<std::size_t>(i)] / 10.0f));
+    }
+    return in;
+}
+
+float outlineAt(int i, float peakDb)
+{
+    return outline(i) + (peakDb - kPeak);
 }
 
 float median(std::vector<float> v)
@@ -93,14 +113,8 @@ int main()
     AetherSDR::SpectralEnvelope env;
     {
         for (const double spacing : {105.0, 180.0}) {
-            std::vector<float> in = voiceComb(spacing);
             // Real noise under and around the signal, so the gate is exercised.
-            const auto noise = noiseFloor(kPoints, kFloor, 12345u);
-            for (int i = 0; i < kPoints; ++i) {
-                auto& x = in[static_cast<std::size_t>(i)];
-                x = 10.0f * std::log10(std::pow(10.0f, x / 10.0f)
-                                       + std::pow(10.0f, noise[static_cast<std::size_t>(i)] / 10.0f));
-            }
+            const std::vector<float> in = noisyVoice(spacing, kPeak, 12345u);
             const auto out = decomb(in, env);
 
             // Inside the signal, one window in from each skirt, the comb is
@@ -148,6 +162,90 @@ int main()
             std::fprintf(stderr, "%3.0f Hz: floor median rise %+.2f dB\n", spacing, rise);
             check(rise < 1.0, "noise floor kept", rise);
         }
+    }
+
+    // A weaker voice, ~20 dB over the noise median, is still filled.
+    for (const double spacing : {105.0, 180.0}) {
+        constexpr float kWeakPeak = -112.0f;
+        const auto out = decomb(noisyVoice(spacing, kWeakPeak, 777u), env);
+        const int margin = static_cast<int>(kDecombHz / kHzPerPoint);
+        double worstBelow = 0.0;
+        for (int i = kSigLo + margin; i <= kSigHi - margin; ++i) {
+            worstBelow = std::min(worstBelow,
+                                  double(out[static_cast<std::size_t>(i)] - outlineAt(i, kWeakPeak)));
+        }
+        std::fprintf(stderr, "weak %3.0f Hz: in-signal worst %+.2f dB of outline\n", spacing,
+                     worstBelow);
+        check(worstBelow > -2.5, "weak voice comb filled", worstBelow);
+    }
+
+    // Over plain unaveraged noise the floor is left as drawn: across 50
+    // seeds, neither its median nor its points move. (An envelope keyed on
+    // its own level rode the noise peaks and lifted this floor ~5 dB.)
+    {
+        double worstRise = 0.0, sumRise = 0.0, worstMeanAbs = 0.0;
+        for (std::uint32_t seed = 1; seed <= 50; ++seed) {
+            std::vector<float> in = noiseFloor(2000, kFloor, seed * 2654435761u);
+            std::vector<float> out = in;
+            check(AetherSDR::decombTrace(out, kDecombHz / kHzPerPoint, env, scratch),
+                  "noise frame computed", 0);
+            const double rise = median(out) - median(in);
+            double meanAbs = 0.0;
+            for (std::size_t i = 0; i < in.size(); ++i) {
+                meanAbs += std::fabs(out[i] - in[i]);
+            }
+            meanAbs /= static_cast<double>(in.size());
+            worstRise = std::max(worstRise, rise);
+            sumRise += rise;
+            worstMeanAbs = std::max(worstMeanAbs, meanAbs);
+        }
+        std::fprintf(stderr, "noise: median rise mean %+.2f worst %+.2f, worst mean|change| %.2f dB\n",
+                     sumRise / 50.0, worstRise, worstMeanAbs);
+        check(sumRise / 50.0 < 0.25, "noise floor median kept (mean of 50 seeds)", sumRise / 50.0);
+        check(worstRise < 0.5, "noise floor median kept (worst seed)", worstRise);
+        check(worstMeanAbs < 0.5, "noise points kept", worstMeanAbs);
+    }
+
+    // No-data points stay no-data: De-comb never paints an envelope into them.
+    {
+        std::vector<float> in = noisyVoice(180.0, kPeak, 4242u);
+        for (int i = kSigHi + 2; i < kSigHi + 30; ++i) {
+            in[static_cast<std::size_t>(i)] = -std::numeric_limits<float>::infinity();
+        }
+        in[kSigLo + 50] = std::numeric_limits<float>::quiet_NaN();
+        const auto out = decomb(in, env);
+        bool kept = std::isnan(out[kSigLo + 50]);
+        for (int i = kSigHi + 2; i < kSigHi + 30; ++i) {
+            kept = kept && std::isinf(out[static_cast<std::size_t>(i)]);
+        }
+        check(kept, "non-finite points left as they are", 0);
+    }
+
+    // Whether De-comb runs follows the source bins: the width must span two.
+    // 512 bins over 200 kHz is ~390 Hz per bin, so 300 Hz cannot hold a comb.
+    {
+        using AetherSDR::decombWindowPoints;
+        check(decombWindowPoints(200e3 / 511.0, 300) == 0.0, "unresolvable width is off", 0);
+        const double w = decombWindowPoints(5e3 / 511.0, 300);
+        check(std::abs(w - 300.0 * 511.0 / 5e3) < 1e-9, "width in source bins", w);
+        check(decombWindowPoints(100.0, 200) > 0.0, "two source bins per width runs", 0);
+        check(decombWindowPoints(100.0, 199) == 0.0, "under two source bins is off", 0);
+        check(decombWindowPoints(5e3 / 511.0, 0) == 0.0, "zero width is off", 0);
+    }
+
+    // A drag-resize walks through many lengths; the bounded plan cache keeps
+    // computing correctly as old lengths are evicted and come back.
+    {
+        bool ok = true;
+        for (int round = 0; round < 2; ++round) {
+            for (int n = 300; n < 420; n += 7) {
+                std::vector<float> flat(static_cast<std::size_t>(n), -100.0f);
+                std::vector<float> out(flat.size());
+                ok = ok && env.compute(flat, out, 10.0)
+                     && std::fabs(out[static_cast<std::size_t>(n / 2)] + 100.0f) < 0.01f;
+            }
+        }
+        check(ok, "plan cache survives many lengths", 0);
     }
 
     // Too few points per window (a wide span) is a no-op.

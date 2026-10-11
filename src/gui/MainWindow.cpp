@@ -9113,7 +9113,8 @@ void MainWindow::feedMiniPanFromPanFrame(const PanadapterModel* pan,
     // properties ("display pan set … average=", requestPanDisplayRates), so
     // re-slicing this pan's frames already carries them.
     auto* scope = applet->scope();
-    if (auto* sw = m_panStack ? m_panStack->spectrum(pan->panId()) : nullptr) {
+    auto* sw = m_panStack ? m_panStack->spectrum(pan->panId()) : nullptr;
+    if (sw) {
         // The vertical window is the WIDGET's refLevel/dynamicRange, not the
         // pan's min_dbm/max_dbm. FFT Floor slides refLevel client-side
         // (applyNoiseFloorAutoAdjust) and only pushes a damped, thresholded
@@ -9143,9 +9144,16 @@ void MainWindow::feedMiniPanFromPanFrame(const PanadapterModel* pan,
         + AetherSDR::MiniPan::passbandCenterOffsetHz(s->filterLow(),
                                                      s->filterHigh()) / 1.0e6;
 
+    // FFT Smooth and De-comb, shaped on the whole frame exactly as the main
+    // trace is, so the magnifier shows the same trace the main pan draws.
+    QVector<float> shaped = bins;
+    if (sw) {
+        sw->shapeFftTraceForMirror(shaped, panBw * 1.0e6);
+    }
+
     scope->updateSpectrum(
         AetherSDR::MiniPan::resliceWindow(
-            bins,
+            shaped,
             pan->centerMhz() - panBw / 2.0, panBw,
             centerMhz - span / 2.0, span,
             AetherSDR::MiniPan::kResliceOutputBins, floorDbm));

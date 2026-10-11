@@ -10,6 +10,7 @@
 #include <array>
 #include <functional>
 #include <memory>
+#include <span>
 #include <vector>
 #include <QHash>
 #include <QWidget>
@@ -50,6 +51,7 @@ namespace AetherSDR {
 
 class SpectrumOverlayMenu;
 class SpectralEnvelope;
+struct DecombScratch;
 class VfoWidget;
 class PanadapterRenderScheduler;
 struct PanadapterOverlayMessage;
@@ -691,6 +693,9 @@ public:
     float fftLineWidth() const         { return m_fftLineWidth; }
     int   fftSmoothing() const         { return m_fftSmoothing; }
     int   fftDecombHz() const          { return m_fftDecombHz; }
+    // FFT Smooth + De-comb applied to a whole pan frame of `spanHz`, exactly as
+    // the main trace is shaped, so the mini-pan magnifies the same trace.
+    void shapeFftTraceForMirror(QVector<float>& bins, double spanHz) const;
     int   fftAverage() const           { return m_fftAverage; }
     int   fftFps() const               { return m_fftFps; }
     bool  fftWeightedAvg() const       { return m_fftWeightedAvg; }
@@ -1492,6 +1497,8 @@ private:
     const QVector<float>& buildFftDisplayTrace(const QVector<float>& bins,
                                                int targetPoints,
                                                int logicalWidthPx) const;
+    // FFT De-comb then FFT Smooth, in place on source bins.
+    void shapeFftTrace(std::span<float> bins, double hzPerBin, double hzPerPx) const;
     const QVector<float>& noiseFloorAutoLevelBins() const;
 
     void pushWaterfallRow(const QVector<float>& bins, int destWidth,
@@ -1567,7 +1574,7 @@ private:
     mutable QVector<float> m_fftDisplayTraceScratch;
     mutable std::vector<double> m_fftSmoothLinearScratch;
     mutable std::unique_ptr<SpectralEnvelope> m_fftDecombEnvelope;
-    mutable std::vector<float> m_fftDecombOut;
+    mutable std::unique_ptr<DecombScratch> m_fftDecombScratch;
     QVector<float> m_kiwiSdrFftTrace;  // Kiwi-derived FFT trace, kept separate from Flex FFT
     QVector<quint8> m_kiwiSdrFftFallbackSeedMask; // 1 = replace from next real Kiwi row
     bool m_shutdownPrepared{false};

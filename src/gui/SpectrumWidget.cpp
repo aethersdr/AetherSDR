@@ -7,7 +7,6 @@
 #include "gui/FftLineWidth.h"
 #include "gui/FftTraceDecomb.h"
 #include "gui/FftTraceSmoothing.h"
-#include "core/dsp/SpectralEnvelope.h"
 #include "gui/SpectrumGrid.h"
 #include "DbmRangeTransition.h"
 #include "DssDcEdgeMath.h"
@@ -4424,12 +4423,20 @@ void SpectrumWidget::setFftLineWidth(float w) {
     update();
 }
 void SpectrumWidget::setFftSmoothing(int halfWidthPx) {
-    m_fftSmoothing = std::clamp(halfWidthPx, 0, AetherSDR::kFftSmoothingMaxHalfWidthPx);
+    const int clamped = std::clamp(halfWidthPx, 0, AetherSDR::kFftSmoothingMaxHalfWidthPx);
+    if (clamped == m_fftSmoothing) {
+        return;
+    }
+    m_fftSmoothing = clamped;
     saveFftTraceShaping();
     update();
 }
 void SpectrumWidget::setFftDecombHz(int hz) {
-    m_fftDecombHz = std::clamp(hz, 0, AetherSDR::kFftDecombMaxHz);
+    const int clamped = std::clamp(hz, 0, AetherSDR::kFftDecombMaxHz);
+    if (clamped == m_fftDecombHz) {
+        return;
+    }
+    m_fftDecombHz = clamped;
     saveFftTraceShaping();
     update();
 }
@@ -9325,6 +9332,49 @@ const QVector<float>& SpectrumWidget::displaySpectrumBins() const
     return m_kiwiSdrWaterfallActive ? m_kiwiSdrFftTrace : m_smoothed;
 }
 
+void SpectrumWidget::shapeFftTrace(std::span<float> bins, double hzPerBin,
+                                   double hzPerPx) const
+{
+    // FFT De-comb, then FFT Smooth, on source bins: the source resolution is
+    // what can or cannot hold a comb, and shaping the source rather than the
+    // up-to-4x oversampled drawn trace keeps the per-frame UI-thread cost
+    // down. De-comb's width is in Hz -- the voice comb is a fixed spacing in Hz
+    // at any zoom; FFT Smooth's is in the main trace's logical pixels.
+    if (bins.size() < 4 || !(hzPerBin > 0.0)) {
+        return;
+    }
+    const double windowPoints = AetherSDR::decombWindowPoints(hzPerBin, m_fftDecombHz);
+    if (windowPoints > 0.0) {
+        if (!m_fftDecombEnvelope) {
+            m_fftDecombEnvelope = std::make_unique<AetherSDR::SpectralEnvelope>();
+            m_fftDecombScratch = std::make_unique<AetherSDR::DecombScratch>();
+        }
+        // At an uncached length, frames draw without De-comb until the planner
+        // lock becomes available; each frame retries.
+        AetherSDR::decombTrace(bins, windowPoints, *m_fftDecombEnvelope, *m_fftDecombScratch);
+    }
+    if (m_fftSmoothing > 0) {
+        const int halfPoints = static_cast<int>(
+            std::lround(static_cast<double>(m_fftSmoothing) * hzPerPx / hzPerBin));
+        AetherSDR::smoothFftTraceLinearPower(bins, bins, halfPoints, m_fftSmoothLinearScratch);
+    }
+}
+
+void SpectrumWidget::shapeFftTraceForMirror(QVector<float>& bins, double spanHz) const
+{
+    if ((m_fftDecombHz <= 0 && m_fftSmoothing <= 0) || bins.size() < 4) {
+        return;
+    }
+    // FFT Smooth is sized in the main trace's pixels; until the main pan has
+    // a width there is no pixel to size it by, so only De-comb runs.
+    const int widthPx = contentWidth();
+    const double hzPerPx = widthPx >= 2
+        ? effectiveBandwidthMhz() * 1.0e6 / static_cast<double>(widthPx)
+        : 0.0;
+    shapeFftTrace(std::span<float>(bins.data(), static_cast<std::size_t>(bins.size())),
+                  spanHz / static_cast<double>(bins.size() - 1), hzPerPx);
+}
+
 const QVector<float>& SpectrumWidget::buildFftDisplayTrace(const QVector<float>& bins,
                                                            int targetPoints,
                                                            int logicalWidthPx) const
@@ -9366,55 +9416,18 @@ const QVector<float>& SpectrumWidget::buildFftDisplayTrace(const QVector<float>&
         }
     }
 
-    // FFT De-comb, then FFT Smooth, last. De-comb's width is in Hz -- the
-    // voice comb it removes is a fixed spacing in Hz at any zoom -- so it
-    // needs this trace's Hz per point; at a span where the width is under two
-    // points there is no comb to remove and it does nothing. FFT Smooth's
-    // window is in logical pixels, scaled to this trace's points per pixel.
-    const auto applyFftSmoothing = [this, logicalWidthPx](QVector<float>& points)
-        -> const QVector<float>& {
-        const int n = points.size();
-        if (m_fftDecombHz > 0 && n >= 4) {
-            const double hzPerPoint =
-                effectiveBandwidthMhz() * 1.0e6 / static_cast<double>(n - 1);
-            const double windowPoints =
-                hzPerPoint > 0.0 ? static_cast<double>(m_fftDecombHz) / hzPerPoint : 0.0;
-            if (windowPoints >= 2.0) {
-                float* data = points.data();
-                const std::span<const float> in(data, static_cast<std::size_t>(n));
-                m_fftDecombOut.resize(static_cast<std::size_t>(n));
-                if (!m_fftDecombEnvelope) {
-                    m_fftDecombEnvelope = std::make_unique<AetherSDR::SpectralEnvelope>();
-                }
-                // False only on the first frame at a new trace length while
-                // another thread holds FFTW's planner lock: that frame draws
-                // raw, and the next tries again.
-                if (m_fftDecombEnvelope->compute(in, m_fftDecombOut, windowPoints)) {
-                    AetherSDR::decombFloorGate(in, m_fftDecombOut,
-                                               estimateNoiseFloorDbm(points));
-                    std::copy(m_fftDecombOut.begin(), m_fftDecombOut.end(), data);
-                }
-            }
-        }
-        if (m_fftSmoothing <= 0) {
-            return points;
-        }
-        const double pointsPerPx =
-            static_cast<double>(n) / static_cast<double>(std::max(1, logicalWidthPx));
-        const int halfPoints = static_cast<int>(
-            std::lround(static_cast<double>(m_fftSmoothing) * pointsPerPx));
-        float* data = points.data();
-        AetherSDR::smoothFftTraceLinearPower(
-            std::span<const float>(data, static_cast<std::size_t>(n)),
-            std::span<float>(data, static_cast<std::size_t>(n)),
-            halfPoints, m_fftSmoothLinearScratch);
-        return points;
-    };
+    // FFT De-comb and FFT Smooth on the source bins, before the resample.
+    if (m_fftDecombHz > 0 || m_fftSmoothing > 0) {
+        const double spanHz = effectiveBandwidthMhz() * 1.0e6;
+        shapeFftTrace(std::span<float>(displayBins.data(), static_cast<std::size_t>(srcCount)),
+                      spanHz / static_cast<double>(srcCount - 1),
+                      spanHz / static_cast<double>(std::max(1, logicalWidthPx)));
+    }
 
     int dstCount = std::max(targetPoints, srcCount);
     dstCount = std::clamp(dstCount, 2, kMaxFftDisplayTracePoints);
     if (dstCount == srcCount) {
-        return applyFftSmoothing(displayBins);
+        return displayBins;
     }
 
     QVector<float>& trace = m_fftDisplayTraceScratch;
@@ -9436,7 +9449,7 @@ const QVector<float>& SpectrumWidget::buildFftDisplayTrace(const QVector<float>&
         const float p3 = displayBins[std::min(i1 + 2, srcCount - 1)];
         trace[dst] = clampedCatmullRom(p0, p1, p2, p3, t);
     }
-    return applyFftSmoothing(trace);
+    return trace;
 }
 
 const QVector<float>& SpectrumWidget::noiseFloorAutoLevelBins() const

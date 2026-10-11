@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <deque>
 #include <map>
 #include <mutex>
 #include <numbers>
@@ -25,6 +26,10 @@ constexpr int kMaxIterations = 12;
 // (alpha = 1) still sits ~4 dB under an 18 dB voice comb's peaks after 6
 // passes and needs ~50 to close in; alpha = 3 is within ~1-1.5 dB in 12.
 constexpr double kRelaxation = 3.0;
+// The trace length follows the panel width, so a drag-resize walks through
+// many lengths. Keep only the most recent few; older plans are destroyed
+// while the lock is already held to create the new one.
+constexpr std::size_t kMaxCachedLengths = 4;
 // Raised-cosine lifter taper, as a fraction of the cutoff coefficient, so a
 // steep filter edge does not ring.
 constexpr double kTaperStart = 0.7;
@@ -55,6 +60,7 @@ struct Plans {
 
 struct SpectralEnvelope::Impl {
     std::map<int, Plans> plans;
+    std::deque<int> planOrder;  // oldest first
     std::vector<double> x;      // padded input, dB
     std::vector<double> a;      // max(x, v)
     std::vector<double> coeff;
@@ -102,6 +108,16 @@ struct SpectralEnvelope::Impl {
             if (p.inverse) fftw_destroy_plan(p.inverse);
             return nullptr;
         }
+        while (plans.size() >= kMaxCachedLengths && !planOrder.empty()) {
+            auto old = plans.find(planOrder.front());
+            planOrder.pop_front();
+            if (old != plans.end()) {
+                fftw_destroy_plan(old->second.forward);
+                fftw_destroy_plan(old->second.inverse);
+                plans.erase(old);
+            }
+        }
+        planOrder.push_back(m);
         return &plans.emplace(m, p).first->second;
     }
 };

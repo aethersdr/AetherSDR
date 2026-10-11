@@ -85,6 +85,12 @@ SliceModel* antennaTargetSliceForPan(RadioModel* radioModel,
     return currentSlice;
 }
 
+// FFT Smooth / De-comb value label: 0 is "Off", anything else the number.
+static QString offOrValueText(int value)
+{
+    return value == 0 ? SpectrumOverlayMenu::tr("Off") : QString::number(value);
+}
+
 static QString rateSliderLabelText(int sliderValue)
 {
     return QString::number(sliderValue);
@@ -1835,14 +1841,15 @@ void SpectrumOverlayMenu::buildDisplayPanel()
     m_smoothSlider->setToolTip(
         tr("Smooths the spectrum trace across frequency, averaging each point "
            "with its neighbors up to this many pixels either side.\n"
-           "Averages in linear power, so the noise floor stays put. "
+           "Averages in linear power, so the floor reads its true average "
+           "power, about 1-1.5 dB above the unsmoothed trace's middle. "
            "Waterfall and noise-floor readings are not affected. 0 = off."));
     m_smoothSlider->setAccessibleDescription(
         tr("Averages the spectrum trace across this many pixels either side. "
            "Zero is off. The waterfall is not affected."));
-    m_smoothLabel->setText(tr("Off"));
+    m_smoothLabel->setText(offOrValueText(0));
     connect(m_smoothSlider, &QSlider::valueChanged, this, [this](int v) {
-        m_smoothLabel->setText(v == 0 ? tr("Off") : QString::number(v));
+        m_smoothLabel->setText(offOrValueText(v));
         emit fftSmoothingChanged(v);
     });
 
@@ -1867,9 +1874,9 @@ void SpectrumOverlayMenu::buildDisplayPanel()
     m_decombHzSlider->setAccessibleDescription(
         tr("Removes the comb of voice harmonics from the spectrum trace, up to "
            "this spacing in hertz. Zero is off. The waterfall is not changed."));
-    m_decombHzLabel->setText(tr("Off"));
+    m_decombHzLabel->setText(offOrValueText(0));
     connect(m_decombHzSlider, &QSlider::valueChanged, this, [this](int v) {
-        m_decombHzLabel->setText(v == 0 ? tr("Off") : QString::number(v));
+        m_decombHzLabel->setText(offOrValueText(v));
         emit fftDecombHzChanged(v);
     });
 
@@ -2898,17 +2905,14 @@ void SpectrumOverlayMenu::syncExtraDisplaySettings(bool blankerOn, float blanker
     if (m_decombHzSlider) {
         QSignalBlocker b(m_decombHzSlider);
         m_decombHzSlider->setValue(fftDecombHz);
-        if (m_decombHzLabel) {
-            const int v = m_decombHzSlider->value();
-            m_decombHzLabel->setText(v == 0 ? tr("Off") : QString::number(v));
-        }
+        if (m_decombHzLabel)
+            m_decombHzLabel->setText(offOrValueText(m_decombHzSlider->value()));
     }
     if (m_smoothSlider) {
         QSignalBlocker b(m_smoothSlider);
         m_smoothSlider->setValue(fftSmoothing);
         if (m_smoothLabel)
-            m_smoothLabel->setText(fftSmoothing == 0 ? tr("Off")
-                                                     : QString::number(fftSmoothing));
+            m_smoothLabel->setText(offOrValueText(m_smoothSlider->value()));
     }
     if (m_freqGridSpacingCmb) {
         QSignalBlocker b(m_freqGridSpacingCmb);

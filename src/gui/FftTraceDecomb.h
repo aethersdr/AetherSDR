@@ -1,8 +1,12 @@
 #pragma once
 
+#include "core/dsp/SpectralEnvelope.h"
+
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <span>
+#include <vector>
 
 namespace AetherSDR {
 
@@ -17,20 +21,72 @@ namespace AetherSDR {
 // 0 is off; any positive width turns it on.
 constexpr int kFftDecombMaxHz = 600;
 
-// The envelope rides peaks, so over noise it would lift the floor toward its
-// own noise peaks. Keep the floor: `env` is blended back to `orig` where it
-// sits near the floor. A single unaveraged frame's noise peaks reach ~8-10 dB
-// over the median, so the ramp starts at 8 dB above `floorDbm` and is fully on
-// at 14 dB.
-inline void decombFloorGate(std::span<const float> orig, std::span<float> env, float floorDbm)
+// The De-comb width in source bins, or 0 when De-comb should not run: the
+// width must span at least two bins, or the spectrum cannot hold a comb at
+// that spacing. Applied to the source bins, before the drawn trace is
+// resampled, so the GPU and CPU paths and the device pixel ratio cannot
+// change whether it runs.
+inline double decombWindowPoints(double hzPerBin, int widthHz)
 {
-    constexpr float kRampStartDb = 8.0f;
-    constexpr float kRampSpanDb = 6.0f;
-    const std::size_t n = std::min(orig.size(), env.size());
-    for (std::size_t i = 0; i < n; ++i) {
-        const float w = std::clamp((env[i] - floorDbm - kRampStartDb) / kRampSpanDb, 0.0f, 1.0f);
-        env[i] = orig[i] + w * (env[i] - orig[i]);
+    if (widthHz <= 0 || !(hzPerBin > 0.0)) {
+        return 0.0;
     }
+    const double points = static_cast<double>(widthHz) / hzPerBin;
+    return points >= 2.0 ? points : 0.0;
+}
+
+struct DecombScratch {
+    std::vector<float> sorted;
+    std::vector<float> clipped;
+    std::vector<float> envelope;
+};
+
+// De-comb `trace` (dB) in place. The envelope rides peaks, so over noise it
+// would ride the noise peaks and lift the floor several dB. So the input is
+// first clipped from below at kClipDb over the trace's 20th percentile -- a
+// floor reference that holds while a signal fills up to ~80% of the span;
+// unaveraged noise crosses the clip ~0.1% of the time -- and the envelope is
+// blended in only where it rises clear of the clip. Over noise the trace is
+// left as it was; over a voice more than ~8 dB above the noise median the
+// comb is filled. Non-finite points (no data) are left as they are.
+// Returns false, trace untouched, when the envelope is unavailable this frame.
+inline bool decombTrace(std::span<float> trace, double windowPoints, SpectralEnvelope& env,
+                        DecombScratch& s)
+{
+    constexpr float kClipDb = 12.0f;
+    constexpr float kRampStartDb = 1.0f;
+    constexpr float kRampSpanDb = 5.0f;
+
+    s.sorted.clear();
+    for (const float v : trace) {
+        if (std::isfinite(v)) {
+            s.sorted.push_back(v);
+        }
+    }
+    if (s.sorted.size() < 4) {
+        return false;
+    }
+    const auto k = static_cast<std::ptrdiff_t>((s.sorted.size() - 1) / 5);
+    std::nth_element(s.sorted.begin(), s.sorted.begin() + k, s.sorted.end());
+    const float clip = s.sorted[static_cast<std::size_t>(k)] + kClipDb;
+
+    s.clipped.resize(trace.size());
+    for (std::size_t i = 0; i < trace.size(); ++i) {
+        s.clipped[i] = std::isfinite(trace[i]) ? std::max(trace[i], clip) : clip;
+    }
+    s.envelope.resize(trace.size());
+    if (!env.compute(s.clipped, s.envelope, windowPoints)) {
+        return false;
+    }
+    for (std::size_t i = 0; i < trace.size(); ++i) {
+        if (!std::isfinite(trace[i])) {
+            continue;
+        }
+        const float w =
+            std::clamp((s.envelope[i] - clip - kRampStartDb) / kRampSpanDb, 0.0f, 1.0f);
+        trace[i] += w * (s.envelope[i] - trace[i]);
+    }
+    return true;
 }
 
 } // namespace AetherSDR
