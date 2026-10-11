@@ -120,7 +120,9 @@ TxCoordinator::Operation TxCoordinator::Operation::heldActivities(unsigned activ
         if (!operation) {
             return false;
         }
-        // libc++ has no std::atomic<std::shared_ptr>, so the free functions stay.
+        // #6368: libc++ has no std::atomic<std::shared_ptr> (P0718R2), so the free
+        // functions stay; libstdc++ deprecates them, hence the suppression. Drop the
+        // push/pop once libc++ implements it.
 QT_WARNING_PUSH
 QT_WARNING_DISABLE_DEPRECATED
         const auto holds = std::atomic_load_explicit(&operation->holds, std::memory_order_acquire);
@@ -823,7 +825,9 @@ TxCoordinator::Intent TxCoordinator::beginIntent(const Operation& operation,
             holds->push_back(entry);
         }
     }
-    // libc++ has no std::atomic<std::shared_ptr>, so the free functions stay.
+    // #6368: libc++ has no std::atomic<std::shared_ptr> (P0718R2), so the free
+    // functions stay; libstdc++ deprecates them, hence the suppression. Drop the
+    // push/pop once libc++ implements it.
 QT_WARNING_PUSH
 QT_WARNING_DISABLE_DEPRECATED
     std::atomic_store_explicit(&operation.m_state->holds,
