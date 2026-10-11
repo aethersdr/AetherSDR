@@ -23,29 +23,31 @@ namespace AetherSDR::hl2 {
 // the policy is testable without a network (tests/hl2_discovery_logging_test).
 class DiscoveryNotices {
 public:
-    // 3 sweeps at Hl2Discovery's default 5000 ms interval: 15 s of silence.
+    // 3 sent, unanswered sweeps: at Hl2Discovery's default 5000 ms interval,
+    // at least 15 s of silence. A sweep no probe left adds time, not a count.
     static constexpr int kSilentSweepsBeforeWarning = 3;
 
     void bindFailed(const QString& interfaceName, const QHostAddress& address,
                     const QString& error);
     // A logged failure logs again only after this pair has bound once.
     void bindSucceeded(const QString& interfaceName, const QHostAddress& address);
-    void endRefresh(int socketCount, int interfaceCount);
+    void endRefresh(int socketCount);
     // A sweep's probe left no datagram from `local`; logs like a bind failure.
     void sendFailed(const QHostAddress& local, const QString& error);
     // A probe left `local`: the sweep it belongs to can count as unanswered.
     void sendSucceeded(const QHostAddress& local);
     // A sweep's interval ended; `answered` is true if any HL2 replied to it.
     // A sweep no probe left is not silence: sendFailed has named its cause.
+    // The silence line counts the interfaces a probe left in the sweep it closes.
     void sweepClosed(bool answered);
     void reset();
 
 private:
     QSet<QString> m_bindFailures;       // failures logged and not bound since
     QSet<QString> m_sendFailures;       // local addresses logged, not sent from since
-    int m_interfaceCount = 0;
+    QHash<QString, QString> m_interfaceOf;   // bound address -> its interface
+    QSet<QString> m_sentInterfaces;     // interfaces a probe left in the open sweep
     int m_silentSweeps = 0;
-    bool m_probeLeft = false;           // a probe left a socket in the open sweep
     bool m_noSocketReported = false;
 };
 
