@@ -25,7 +25,7 @@ See [Radio Setup](./radio-setup.md).
 
 Choose the computer's microphone (**Input**) and speaker (**Output**) devices. The selection is saved and restored at startup, and you can switch devices while connected.
 
-If the saved device is not connected, AetherSDR uses the system default device and keeps your saved choice. It switches back to the saved device when that device connects, without asking.
+If the saved device is not connected, AetherSDR uses the system default device and keeps your saved choice. It switches back to the saved device when that device connects, without asking. On Linux, a saved virtual device of the audio server, such as an echo-cancel or combined device, is used again the next time AetherSDR starts, not when it reappears.
 
 AetherSDR handles sample-rate conversion itself. The microphone is captured at whatever rate the device offers, processed at 48 kHz, and converted once to the radio's transport rate. The PC microphone is used for transmit when the radio's mic source is **PC** (see [Choosing the mic source](#choosing-the-mic-source)).
 
