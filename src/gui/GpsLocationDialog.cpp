@@ -1,5 +1,8 @@
 #include "GpsLocationDialog.h"
 
+#include "CanonIndicators.h"
+#include "FramelessResizer.h"
+
 #include "core/LocationAddressResolver.h"
 #include "core/ThemeManager.h"
 #include "core/aprs/AprsPacket.h"
@@ -35,6 +38,155 @@ namespace AetherSDR {
 namespace {
 
 constexpr double kAddressMovementThresholdDegrees = 0.001;
+
+// The style guide's canon vocabulary (RFC #6226), as AetherMap and Network
+// Diagnostics use it: transparent over CanonWindow's ground except the
+// surfaces that carry content. The header strip and each section are raised
+// cards, the metric tiles and the tip sit nested inside them, and fields sit
+// on control. Section titles and focus are cyan.
+constexpr const char* kAetherGpsStyle = R"(
+QWidget {
+    color: {{color.canon.inkSoft}};
+    background: transparent;
+}
+QLabel {
+    background: transparent;
+}
+QFrame[gpsHeader='true'],
+QGroupBox {
+    background: {{color.canon.raised}};
+    border: 1px solid {{color.canon.line}};
+    border-radius: 10px;
+}
+QFrame[gpsMetricCard='true'] {
+    background: {{color.canon.nested}};
+    border: 1px solid {{color.canon.line}};
+    border-radius: 7px;
+}
+QGroupBox QGroupBox {
+    background: {{color.canon.nested}};
+}
+QLabel[gpsRole='sectionTitle'] {
+    color: {{color.canon.cyan}};
+    font-size: 14px;
+    font-weight: 700;
+    padding-bottom: 4px;
+}
+QLabel[gpsRole='metricTitle'],
+QLabel[gpsRole='fieldTitle'] {
+    color: {{color.canon.muted}};
+    font-size: 11px;
+}
+QLabel[gpsRole='metricValue'] {
+    color: {{color.canon.ink}};
+    font-size: 18px;
+    font-weight: 700;
+}
+QLabel[gpsRole='value'] {
+    color: {{color.canon.ink}};
+    font-size: 13px;
+    font-weight: 600;
+}
+QLabel[gpsRole='muted'] {
+    color: {{color.canon.muted}};
+    font-size: 11px;
+}
+QLabel[gpsRole='tip'] {
+    color: {{color.canon.inkSoft}};
+    background: {{color.canon.nested}};
+    border: 1px solid {{color.canon.line}};
+    border-radius: 6px;
+    padding: 8px;
+    font-size: 12px;
+}
+QCheckBox {
+    background: transparent;
+    color: {{color.canon.inkSoft}};
+    spacing: 8px;
+}
+QPushButton {
+    color: {{color.canon.cyan}};
+    background: {{color.canon.control}};
+    border: 1px solid {{color.canon.lineHi}};
+    border-radius: 4px;
+    padding: 5px 12px;
+    font-weight: 600;
+}
+QPushButton:hover {
+    background: {{color.canon.nested}};
+    color: {{color.canon.aqua}};
+}
+QPushButton:focus {
+    border-color: {{color.canon.aqua}};
+}
+QPushButton:disabled {
+    color: {{color.canon.muted}};
+    border-color: {{color.canon.line}};
+    background: transparent;
+}
+QLineEdit {
+    color: {{color.canon.ink}};
+    background: {{color.canon.control}};
+    border: 1px solid {{color.canon.lineHi}};
+    border-radius: 4px;
+    padding: 4px 8px;
+    selection-background-color: {{color.canon.cyan}};
+    selection-color: {{color.canon.onAccent}};
+}
+QLineEdit:focus {
+    border-color: {{color.canon.aqua}};
+}
+QLineEdit:disabled {
+    color: {{color.canon.muted}};
+    border-color: {{color.canon.line}};
+}
+QProgressBar {
+    color: {{color.canon.ink}};
+    background: {{color.canon.control}};
+    border: 1px solid {{color.canon.lineHi}};
+    border-radius: 5px;
+    text-align: center;
+    min-height: 22px;
+}
+QProgressBar::chunk {
+    background: {{color.background.success}};
+    border-radius: 4px;
+}
+QScrollArea {
+    background: transparent;
+    border: none;
+}
+QScrollBar:vertical {
+    background: transparent;
+    width: 12px;
+    margin: 8px 2px 8px 2px;
+    border-radius: 6px;
+}
+QScrollBar::handle:vertical {
+    background: {{color.canon.lineHi}};
+    border-radius: 5px;
+    min-height: 34px;
+}
+QScrollBar::add-line:vertical,
+QScrollBar::sub-line:vertical {
+    height: 0px;
+}
+QScrollBar:horizontal {
+    background: transparent;
+    height: 12px;
+    margin: 2px 8px 2px 8px;
+    border-radius: 6px;
+}
+QScrollBar::handle:horizontal {
+    background: {{color.canon.lineHi}};
+    border-radius: 5px;
+    min-width: 34px;
+}
+QScrollBar::add-line:horizontal,
+QScrollBar::sub-line:horizontal {
+    width: 0px;
+}
+)";
 
 bool validNtpInput(const QString& value)
 {
@@ -169,42 +321,27 @@ QPushButton* makeActionButton(const QString& text, const QString& objectName,
 } // namespace
 
 GpsLocationDialog::GpsLocationDialog(RadioModel* radioModel, QWidget* parent)
-    : PersistentDialog(tr("GPS & Station Location"),
-                       QStringLiteral("GpsLocationDialogGeometry"), parent)
+    : CanonWindow(QStringLiteral("AetherGPS"), parent, Kind::Workspace)
     , m_radioModel(radioModel)
     , m_addressResolver(new LocationAddressResolver(this))
 {
     setObjectName(QStringLiteral("gpsLocationDialog"));
-    setMinimumSize(860, 600);
-    resize(1080, 720);
+    theme::setContainer(this, QStringLiteral("canon/aetherGps"));
+    // Size and position persist under the key it used as a PersistentDialog,
+    // so saved geometry carries over; it resizes from every edge.
+    setGeometryKey(QStringLiteral("GpsLocationDialogGeometry"));
+    setMinimumSize(860, 640);
+    resize(1080, 760);
+    FramelessResizer::install(this);
 
-    ThemeManager::instance().applyStyleSheet(this, QStringLiteral(
-        "QDialog { background: {{color.background.0}}; color: {{color.text.primary}}; }"
-        "QScrollArea, QScrollArea > QWidget > QWidget { background: {{color.background.0}}; border: none; }"
-        "QWidget#gpsAddressColumn { background: transparent; }"
-        "QLabel { background: transparent; }"
-        "QFrame[gpsHeader='true'] { background: {{color.background.1}}; border: 1px solid {{color.border.strong}}; border-radius: 10px; }"
-        "QFrame[gpsMetricCard='true'] { background: {{color.background.0}}; border: 1px solid {{color.border.subtle}}; border-radius: 7px; }"
-        "QGroupBox { color: {{color.text.primary}}; background: {{color.background.1}}; border: 1px solid {{color.border.strong}}; border-radius: 10px; }"
-        "QLabel[gpsRole='sectionTitle'] { color: {{color.accent}}; font-size: 14px; font-weight: 700; padding-bottom: 4px; }"
-        "QLabel[gpsRole='metricTitle'], QLabel[gpsRole='fieldTitle'] { color: {{color.text.secondary}}; font-size: 11px; }"
-        "QLabel[gpsRole='metricValue'] { color: {{color.text.primary}}; font-size: 18px; font-weight: 700; }"
-        "QLabel[gpsRole='value'] { color: {{color.text.primary}}; font-size: 13px; font-weight: 600; }"
-        "QLabel[gpsRole='muted'] { color: {{color.text.secondary}}; font-size: 11px; }"
-        "QLabel[gpsRole='tip'] { color: {{color.text.primary}}; background: {{color.background.2}}; border: 1px solid {{color.border.subtle}}; border-radius: 6px; padding: 8px; font-size: 12px; }"
-        "QCheckBox { color: {{color.text.primary}}; background-color: transparent; spacing: 7px; }"
-        "QLineEdit#gpsNtpServer { color: {{color.text.primary}}; background-color: {{color.background.1}}; border: 1px solid {{color.border.strong}}; border-radius: 5px; padding: 5px 7px; }"
-        "QLineEdit#gpsNtpServer:focus { border-color: {{color.border.accent}}; }"
-        "QLineEdit#gpsNtpServer:disabled { color: {{color.text.disabled}}; background-color: {{color.background.1}}; border-color: {{color.border.subtle}}; }"
-        "QPushButton { color: {{color.text.primary}}; background: {{color.background.2}}; border: 1px solid {{color.border.strong}}; border-radius: 5px; padding: 5px 10px; }"
-        "QPushButton:hover, QPushButton:focus { border-color: {{color.border.accent}}; }"
-        "QPushButton:pressed { background: {{color.background.3}}; }"
-        "QProgressBar { color: {{color.text.primary}}; selection-color: #ffffff; background: {{color.background.0}}; border: 1px solid {{color.border.strong}}; border-radius: 5px; text-align: center; min-height: 22px; }"
-        "QProgressBar::chunk { background: #17663f; border-radius: 4px; }"));
+    applyCanonSheet(bodyWidget(), [] {
+        return QString::fromLatin1(kAetherGpsStyle) + canonIndicatorRules();
+    });
 
     auto* outer = new QVBoxLayout(bodyWidget());
-    outer->setContentsMargins(8, 8, 8, 8);
+    outer->setContentsMargins(14, 12, 14, 14);
     outer->setSpacing(8);
+    outer->addWidget(makeCanonHeader(QStringLiteral("AetherGPS")));
 
     auto* scroll = new QScrollArea(bodyWidget());
     scroll->setObjectName(QStringLiteral("gpsLocationScrollArea"));
@@ -521,16 +658,6 @@ GpsLocationDialog::GpsLocationDialog(RadioModel* radioModel, QWidget* parent)
     timeLayout->addWidget(m_gpsTimeControlGroup, 8, 0, 1, 2);
     timeLayout->setRowStretch(9, 1);
     root->addWidget(timeGroup, 2, 1);
-
-    auto* footer = new QHBoxLayout;
-    footer->setContentsMargins(0, 0, 0, 0);
-    footer->addStretch();
-    auto* closeButton = makeActionButton(
-        tr("Close"), QStringLiteral("gpsCloseButton"),
-        tr("Close the GPS and station location window"), bodyWidget());
-    connect(closeButton, &QPushButton::clicked, this, &QDialog::close);
-    footer->addWidget(closeButton);
-    outer->addLayout(footer);
 
     connect(m_addressResolver, &LocationAddressResolver::resolved,
             this, [this](double latitude, double longitude, const QString& address) {

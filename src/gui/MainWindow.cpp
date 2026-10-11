@@ -4733,10 +4733,17 @@ void MainWindow::showAgcCalibrationDialog(int sliceId)
         SpectrumWidget* sw = s ? spectrumForSlice(s) : nullptr;
         return sw ? sw->noiseFloorDbm() : std::numeric_limits<float>::quiet_NaN();
     };
-    showOrRaisePersistent(m_agcCalibrationDialog, &m_radioModel, m_audio, floorFn);
-    if (m_agcCalibrationDialog) {
-        m_agcCalibrationDialog->setSlice(slice);
+    // A canon dialog, so not showOrRaisePersistent(): that applies View →
+    // Frameless Window, which a CanonWindow does not follow.
+    if (!m_agcCalibrationDialog) {
+        auto* dlg = new AgcCalibrationDialog(&m_radioModel, m_audio, floorFn, this);
+        dlg->setAttribute(Qt::WA_DeleteOnClose);
+        m_agcCalibrationDialog = dlg;
     }
+    m_agcCalibrationDialog->setSlice(slice);
+    m_agcCalibrationDialog->show();
+    m_agcCalibrationDialog->raise();
+    m_agcCalibrationDialog->activateWindow();
 }
 
 // AX.25 dialog + KISS TNC startup live in MainWindow_DigitalModes.cpp (#3351 Phase 1e).
@@ -6149,7 +6156,7 @@ void MainWindow::buildUI()
     gpsStack->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Preferred);
     gpsStack->setCursor(Qt::PointingHandCursor);
     gpsStack->setFocusPolicy(Qt::TabFocus);
-    gpsStack->setToolTip(QStringLiteral("Open GPS & Station Location"));
+    gpsStack->setToolTip(QStringLiteral("Open AetherGPS"));
     gpsStack->setAccessibleName(QStringLiteral("GPS and station location"));
     gpsStack->setAccessibleDescription(
         QStringLiteral("Open the live GPS, map, satellite reception, and time dashboard"));
@@ -9112,7 +9119,8 @@ void MainWindow::feedMiniPanFromPanFrame(const PanadapterModel* pan,
     // properties ("display pan set … average=", requestPanDisplayRates), so
     // re-slicing this pan's frames already carries them.
     auto* scope = applet->scope();
-    if (auto* sw = m_panStack ? m_panStack->spectrum(pan->panId()) : nullptr) {
+    auto* sw = m_panStack ? m_panStack->spectrum(pan->panId()) : nullptr;
+    if (sw) {
         // The vertical window is the WIDGET's refLevel/dynamicRange, not the
         // pan's min_dbm/max_dbm. FFT Floor slides refLevel client-side
         // (applyNoiseFloorAutoAdjust) and only pushes a damped, thresholded
@@ -9142,9 +9150,16 @@ void MainWindow::feedMiniPanFromPanFrame(const PanadapterModel* pan,
         + AetherSDR::MiniPan::passbandCenterOffsetHz(s->filterLow(),
                                                      s->filterHigh()) / 1.0e6;
 
+    // FFT Smooth and De-comb, shaped on the whole frame exactly as the main
+    // trace is, so the magnifier shows the same trace the main pan draws.
+    QVector<float> shaped = bins;
+    if (sw) {
+        sw->shapeFftTraceForMirror(shaped, panBw * 1.0e6);
+    }
+
     scope->updateSpectrum(
         AetherSDR::MiniPan::resliceWindow(
-            bins,
+            shaped,
             pan->centerMhz() - panBw / 2.0, panBw,
             centerMhz - span / 2.0, span,
             AetherSDR::MiniPan::kResliceOutputBins, floorDbm));

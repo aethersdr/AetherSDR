@@ -4,7 +4,7 @@
 
 Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine-design.md) §2, §10). One row per engine header the UI includes; converting a touchpoint means the UI reaches that surface through the versioned protocol instead of the header.
 
-**Totals:** 252 touchpoint headers (211 core, 41 models) — 252/252 tagged, 0/252 converted.
+**Totals:** 253 touchpoint headers (212 core, 41 models) — 253/253 tagged, 0/253 converted.
 
 | Header | Includers | Tag | Status |
 |---|---:|---|---|
@@ -160,10 +160,10 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/TailnetShimTokenStore.h` | 1 | peripheral(tailnet-shim) — OS-keychain storage of the tailnet shim's admin token, keyed by the Flex chassis serial (RFC #6271). Not SmartSDR wire: AetherSDR's own HTTP API to a separate service (the shim) that happens to run in the radio's container runtime, so a direct-transport peripheral, NOT behind the IRadioBackend radio seam (same shape as core/PgxlConnection.h). | unconverted |
 | `core/TciServer.h` | 3 | mixed(flex) — TCI WebSocket server for WSJT-X et al: protocol surface is canonical radio state, but audio/IQ rides Flex DAX | unconverted |
 | `core/TgxlConnection.h` | 3 | peripheral(4o3a) — Direct TCP client for the 4O3A Tuner Genius XL (port 9010, relay/autotune), reverse-engineered from the 4O3A management app — a standalone accessory transport, not SmartSDR. Not radio-family wire; a peripheral accessory, NOT behind the IRadioBackend radio seam (reclassified from vendor(flex), #4087 follow-up). | unconverted |
-| `core/ThemeManager.h` | 173 | ui-support — Qt token-based theming singleton (colors/fonts/QSS, theme files, editor hooks) — pure client GUI plumbing, no radio state. | unconverted |
+| `core/ThemeManager.h` | 174 | ui-support — Qt token-based theming singleton (colors/fonts/QSS, theme files, editor hooks) — pure client GUI plumbing, no radio state. | unconverted |
 | `core/ThreadCpuRing.h` | 2 | ui-support — Short host-thread CPU history used by Runtime Monitor peak and sparkline presentation. Diagnostic UI support, not radio state. | unconverted |
 | `core/TimeFrameVoter.h` | 1 | universal — Shared AetherClock time-frame types plus confidence-weighted cross-frame bit voting over a sliding window. Map-agnostic pure DSP/logic — no Qt, no GUI, no vendor ties. | unconverted |
-| `core/TxKeyingMarker.h` | 15 | ui-support — QWidget property marker guarding TX-keying controls from the automation bridge; GUI-shell plumbing, no radio state. | unconverted |
+| `core/TxKeyingMarker.h` | 16 | ui-support — QWidget property marker guarding TX-keying controls from the automation bridge; GUI-shell plumbing, no radio state. | unconverted |
 | `core/UlanziDialBackend.h` | 4 | ui-support — Platform alias for Ulanzi Dial HID knob backend (evdev/hidapi); physical input device for client, not radio state | unconverted |
 | `core/UlanziDialMacOSManager.h` | 1 | ui-support — macOS IOKit implementation of the Ulanzi Dial client input surface. Desktop hardware plumbing, not radio state. | unconverted |
 | `core/UlanziDialMappings.h` | 3 | ui-support — Owner of the Ulanzi Dial's pill→action bindings in one feature-owned document (Principle V). A control surface's own configuration — it belongs to the peripheral, not to any radio — same home decision as the FlexControl USB knob. | unconverted |
@@ -210,6 +210,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/backends/icom/IcomSettings.h` | 1 | ui-support — Client-side connection configuration for the Icom backend (host, username, ports and CI-V selection), with credentials explicitly excluded. Connection plumbing, not live radio state. | unconverted |
 | `core/backends/sim/NoiseMixer.h` | 1 | vendor(sim) — Demo-mode synthetic AUDIO engine (RFC #4288 Phase 2b) — additive HF-noise and signal channels feeding SimBackend's audioFrameReady. Backend-internal generator reached from DemoApplet.cpp; family-specific below-seam code, frozen into the EB3 baseline. Demo-mode controls should reach it through an extension namespace, not the concrete type. | unconverted |
 | `core/backends/sim/SimBackend.h` | 3 | vendor(sim) — The synthetic demo backend (#4473) — a concrete IRadioBackend implementor that generates its own audio and spectrum, RX-only by construction (Principle VI). Reached today from ConnectionPanel.cpp, MainWindow.cpp and MainWindow_Session.cpp; pre-existing coupling, frozen into the EB3 baseline. The UI should select it through RadioModel::makeBackend()'s family string, never the concrete type. | unconverted |
+| `core/dsp/SpectralEnvelope.h` | 1 | ui-support — Cepstral true envelope of a dB trace for the panadapter's FFT De-comb display option; pure DSP on the drawn trace, no radio state. | unconverted |
 | `core/pms/PmsMailbox.h` | 1 | universal — Packet personal-message-system mailbox store/logic; radio-agnostic operating feature. | unconverted |
 | `core/tnc/Ax25.h` | 1 | universal — AX.25 frame data types/constants; radio-agnostic protocol layer. | unconverted |
 | `core/tnc/Ax25AudioCapture.h` | 1 | universal — AX.25 Capture 3m diagnostics: capture-id/path naming and the shared float32 WAV writer for the RX, generated-TX and post-resample stages; radio-agnostic diagnostic I/O (#5311). | unconverted |

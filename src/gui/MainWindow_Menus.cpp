@@ -1617,7 +1617,7 @@ void MainWindow::buildMenuBar()
         dlg->raise();
         dlg->activateWindow();
     });
-    auto* gpsDashboardAction = toolsMenu->addAction("GPS Dashboard...", this, [this] {
+    auto* gpsDashboardAction = toolsMenu->addAction("AetherGPS...", this, [this] {
         showGpsLocationDialog();
     });
     toolsMenu->addAction(networkAction);

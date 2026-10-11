@@ -81,7 +81,9 @@ public:
                                   int bgOpacity,
                                   int freqGridSpacingKhz = 0,
                                   const QColor& bgFillColor = QColor(),
-                                  int freqScaleFontPt = 8);
+                                  int freqScaleFontPt = 8,
+                                  int fftSmoothing = 0,
+                                  int fftDecombHz = 0);
 
     // Set the panadapter ID this overlay belongs to (for +RX routing).
     void setPanId(const QString& id);
@@ -241,6 +243,8 @@ signals:
     void freqGridSpacingChanged(int khz);
     void freqScaleFontPtChanged(int pt);
     void fftLineWidthChanged(float width);
+    void fftSmoothingChanged(int halfWidthPx);
+    void fftDecombHzChanged(int hz);
     void wfColorGainChanged(int gain);
     void wfBlackLevelChanged(int level);
     void wfAutoBlackChanged(bool on);
@@ -460,6 +464,10 @@ private:
     QLabel*      m_avgLabel{nullptr};
     QSlider*     m_fpsSlider{nullptr};
     QLabel*      m_fpsLabel{nullptr};
+    QSlider*     m_smoothSlider{nullptr};
+    QLabel*      m_smoothLabel{nullptr};
+    QSlider*     m_decombHzSlider{nullptr};
+    QLabel*      m_decombHzLabel{nullptr};
     QSlider*     m_fillSlider{nullptr};
     QLabel*      m_fillLabel{nullptr};
     QPushButton* m_fillColorBtn{nullptr};
