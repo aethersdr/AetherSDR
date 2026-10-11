@@ -1,4 +1,5 @@
 #include "SpectrumWidget.h"
+#include "SpectrumChromeGeometry.h"
 #include "SpectrumSquelchLogic.h"
 #include "ScopedChildWidget.h"
 
@@ -10147,7 +10148,8 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
 
             if (primaryClick) {
                 // Arrow row (side by side: left = up, right = down)
-                if (y >= m_topInset && y < m_topInset + DBM_ARROW_H) {
+                const int arrowRowTop = dbmArrowRowTop(m_topInset, specH, DBM_ARROW_H);
+                if (y >= arrowRowTop && y < arrowRowTop + DBM_ARROW_H) {
                     const float bottom =
                         clampDbmBottom(m_refLevel - m_dynamicRange);
                     const float oldRefLevel = m_refLevel;
@@ -11383,7 +11385,8 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
 
             // Hovering over dBm scale strip
             if (mx >= stripX) {
-                if (y >= m_topInset && y < m_topInset + DBM_ARROW_H)
+                const int arrowRowTop = dbmArrowRowTop(m_topInset, specH, DBM_ARROW_H);
+                if (y >= arrowRowTop && y < arrowRowTop + DBM_ARROW_H)
                     setSpectrumCursor(Qt::PointingHandCursor);
                 else
                     setSpectrumCursor(Qt::SizeVerCursor);
@@ -18113,8 +18116,10 @@ void SpectrumWidget::drawDbmScaleChrome(QPainter& p, const QRect& specRect)
     const int halfW = DBM_STRIP_W / 2;
     const int upCx  = stripX + halfW / 2;       // left half center
     const int dnCx  = stripX + halfW + halfW / 2; // right half center
-    const int arrowTop = specRect.top() + m_topInset + 2;
-    const int arrowBot = specRect.top() + m_topInset + DBM_ARROW_H - 2;
+    const int arrowRowTop =
+        specRect.top() + dbmArrowRowTop(m_topInset, specRect.height(), DBM_ARROW_H);
+    const int arrowTop = arrowRowTop + 2;
+    const int arrowBot = arrowRowTop + DBM_ARROW_H - 2;
 
     p.setPen(Qt::NoPen);
     p.setBrush(AetherSDR::ThemeManager::instance().color("color.text.secondary"));
@@ -18149,7 +18154,8 @@ void SpectrumWidget::drawDbmScaleLabels(QPainter& p, const QRect& specRect,
     p.setFont(f);
     const QFontMetrics fm(f);
 
-    const int labelTop = specRect.top() + m_topInset + DBM_ARROW_H + 4;
+    const int labelTop = specRect.top()
+        + dbmArrowRowTop(m_topInset, specRect.height(), DBM_ARROW_H) + DBM_ARROW_H + 4;
 
     // Use adaptive step: aim for ~4-6 labels
     float rawStep = rangeDb / 5.0f;

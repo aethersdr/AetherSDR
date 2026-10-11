@@ -143,7 +143,8 @@ the spectrum renders underneath it: the grip and slice title (in
 `color.canon.ink`) at the left, and pop-out, maximize and close as 18 px
 round canon buttons at the right, the close button moved there with
 `placeCloseButtonIn()`. The empty middle belongs to the spectrum, so clicks
-there tune as anywhere else. `SpectrumWidget::setTopInset()` moves the
+there tune as anywhere else; the grip, title and buttons keep their own
+input (`PanadapterHeader`), so clicking them never tunes. `SpectrumWidget::setTopInset()` moves the
 spectrum's own top-anchored controls (overlay menu and its panels, CW and
 RIT/XIT marker labels, dBm arrows) below the header. The slice flags, the
 marks drawn with them (VFO triangle, center-lock target, slice-link label)
