@@ -1037,6 +1037,11 @@ void PanadapterApplet::layoutHeader()
     m_titleBar->setGeometry(0, 0, titleW, kPanHeaderHeight);
     const int buttonsW = m_headerButtons->sizeHint().width();
     m_headerButtons->setGeometry(w - buttonsW, 0, buttonsW, kPanHeaderHeight);
+    // The spectrum's top-right text (WNB, RF gain, propagation) rides the top
+    // beside the buttons, so it ends where the visible buttons begin.
+    const bool anyButton = !m_popOutBtn->isHidden() || !m_maxBtn->isHidden()
+        || isCloseButtonVisible();
+    m_spectrum->setTopRightReserve(anyButton ? buttonsW : 0);
     // Not raised: built after the spectrum's overlay menu, the header sits
     // above it, while the slice flags, created and raised later, ride over
     // the header at the top of the pan.

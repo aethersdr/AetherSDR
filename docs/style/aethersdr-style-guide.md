@@ -145,9 +145,11 @@ round canon buttons at the right, the close button moved there with
 `placeCloseButtonIn()`. The empty middle belongs to the spectrum, so clicks
 there tune as anywhere else. `SpectrumWidget::setTopInset()` moves the
 spectrum's own top-anchored controls (overlay menu and its panels, CW and
-RIT/XIT marker labels, dBm arrows, top-right indicators) below the header.
-The slice flags, and the marks drawn with them (VFO triangle, center-lock
-target, slice-link label), stay at the very top and ride over the header. The close button shows with more than one pan, and on a floating
+RIT/XIT marker labels, dBm arrows) below the header. The slice flags, the
+marks drawn with them (VFO triangle, center-lock target, slice-link label)
+and the top-right text (WNB, RF gain, propagation, MQTT values) stay at the
+very top and ride over the header; `setTopRightReserve()` ends that text
+left of the header's buttons when they show. The close button shows with more than one pan, and on a floating
 pan. These rules are the pan's own; `CanonApplet` and `CanonCanvas` keep
 the plain `CanonSurface` chrome.
 

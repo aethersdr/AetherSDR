@@ -14603,8 +14603,9 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
                     const QColor indicatorColor(0xc8, 0xd8, 0xe8, 180);
                     const QColor wnbDimColor(0xc8, 0xd8, 0xe8, 84);
                     const QFontMetrics fm(indFont);
-                    const int y = specRect.top() + m_topInset + fm.ascent() + 4;
-                    const int rightEdge = specRect.right() - DBM_STRIP_W - 8;
+                    const int y = specRect.top() + fm.ascent() + 4;
+                    const int rightEdge = specRect.right()
+                        - std::max(DBM_STRIP_W, m_topRightReserve) - 8;
                     int x = rightEdge;
                     int leftEdge = rightEdge;
                     auto drawSegment = [&](const QString& text, const QColor& color) {
@@ -14668,7 +14669,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
                         mqttLabel += it.key() + QStringLiteral(": ") + it.value();
                     }
                     int mx = specRect.right() - DBM_STRIP_W - 8 - fm2.horizontalAdvance(mqttLabel);
-                    int my = specRect.top() + m_topInset + fm2.ascent() + 22;
+                    int my = specRect.top() + fm2.ascent() + 22;
                     p.drawText(mx, my, mqttLabel);
                 }
             }
@@ -15782,8 +15783,9 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
             const QColor wnbDimColor(0xc8, 0xd8, 0xe8, 84);
 
             const QFontMetrics fm(indFont);
-            const int rightEdge = specRect.right() - DBM_STRIP_W - 6;
-            const int topY = specRect.top() + m_topInset + fm.ascent() + 2;
+            const int rightEdge = specRect.right()
+                - std::max(DBM_STRIP_W, m_topRightReserve) - 6;
+            const int topY = specRect.top() + fm.ascent() + 2;
 
             int x = rightEdge;
             int leftEdge = rightEdge;
@@ -18078,6 +18080,17 @@ void SpectrumWidget::setTopInset(int px)
         m_overlayMenu->setTopLimit(px);
     }
     markOverlayDirty("topInset");
+    update();
+}
+
+void SpectrumWidget::setTopRightReserve(int px)
+{
+    px = std::max(0, px);
+    if (px == m_topRightReserve) {
+        return;
+    }
+    m_topRightReserve = px;
+    markOverlayDirty("topRightReserve");
     update();
 }
 

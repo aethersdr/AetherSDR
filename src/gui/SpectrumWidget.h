@@ -666,11 +666,17 @@ public:
     // Space at the top of the spectrum covered by the host's header (a
     // CanonPan's transparent canon header). The background, grid, trace and
     // band plan still render under it; the controls anchored to the top edge
-    // (overlay menu, dBm arrows, top-right indicators) start below it. The
+    // (overlay menu, dBm arrows, CW / RIT / XIT labels) start below it. The
     // slice flags and the marks drawn with them (VFO triangle, center-lock
-    // target, slice-link label) stay at the very top, riding over the header.
+    // target, slice-link label) and the top-right text (WNB, RF gain,
+    // propagation, MQTT values) stay at the very top, riding over the header.
     void setTopInset(int px);
     int topInset() const { return m_topInset; }
+
+    // Width at the top right taken by the host's controls (the pan header's
+    // buttons): the top-right text ends left of it when it is wider than the
+    // dBm strip.
+    void setTopRightReserve(int px);
     QColor backgroundFillColor() const { return m_bgFillColor; }
     bool showBandPlan() const { return m_bandPlanFontSize > 0; }
     int  bandPlanFontSize() const { return m_bandPlanFontSize; }
@@ -2071,6 +2077,7 @@ private:
     QMap<QString, QString> m_mqttDisplayValues;
 
     int     m_topInset{0};   // setTopInset()
+    int     m_topRightReserve{0};   // setTopRightReserve()
 
     // Background image
     QImage  m_bgImage;
