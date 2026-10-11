@@ -34,6 +34,11 @@ void TciTrxMap::clear()
     m_trxBySliceId.clear();
 }
 
+int TciTrxMap::trxForSliceId(int sliceId) const
+{
+    return m_trxBySliceId.value(sliceId, -1);
+}
+
 int TciTrxMap::trxForSlice(RadioModel* model, const SliceModel* slice) const
 {
     if (!slice)

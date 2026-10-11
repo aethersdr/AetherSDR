@@ -677,7 +677,7 @@ public:
                          AudioDeviceSelection selection = AudioDeviceSelection::OperatorChoice);
     void setInputDevice(const QAudioDevice& dev,
                         AudioDeviceSelection selection = AudioDeviceSelection::OperatorChoice);
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
     void setAllowBluetoothTelephonyOutput(bool on);
 #endif
     QAudioDevice outputDevice() const { return m_outputDevice; }
@@ -1125,7 +1125,7 @@ private:
     QUdpSocket    m_txSocket;
     QAudioSource* m_audioSource{nullptr};
     QPointer<QIODevice> m_micDevice;
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
     QTimer*       m_txPollTimer{nullptr};
     QBuffer*      m_micBuffer{nullptr};
 #endif
@@ -1173,7 +1173,7 @@ private:
     // Channel count of the stage-0 open, so the ladder stays stable across
     // reopens even though fmt.channelCount() changes underneath it.
     int                m_txSilentOpenInitialChannels{2};
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
     std::atomic<bool>  m_allowBluetoothTelephonyOutput{false};
 #endif
     std::atomic<bool>  m_daxTxUseRadioRoute{false}; // false = low-latency route (dax=0)

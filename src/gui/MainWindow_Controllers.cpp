@@ -3161,7 +3161,7 @@ void MainWindow::wireExternalControllers()
     m_dialBackend = new UlanziDialBackend;
     const auto dialController = TxController::forNativeDevice(&m_radioModel, m_dialBackend);
     fenceDeviceDisconnect(m_dialBackend, &UlanziDialBackend::connectionChanged, this, dialController);
-#ifndef Q_OS_MAC
+#ifndef Q_OS_MACOS
     // macOS keeps the backend on the main thread: IOHIDManager schedules
     // its callbacks on a CFRunLoop, and only the main thread has one
     // integrated with Qt's event loop on macOS.  Linux + Windows

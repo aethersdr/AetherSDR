@@ -23,6 +23,7 @@
 #include <QHostAddress>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QList>
 #include <QStringList>
 #include <QTimer>
 #include <QPointer>
@@ -348,10 +349,19 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
             // lowest free number) and on an empty map reproduces positional numbering.
             // The added slice is already in the list here.
             if (s) {
+                // Only newly acquired bindings are announced: a recreate inside
+                // the settle window still holds its binding and stays silent (#6352).
+                QList<int> acquired;
                 for (SliceModel* live : m_model->slices()) {
-                    if (live)
-                        m_trxMap.acquire(live->sliceId());
+                    if (!live)
+                        continue;
+                    const bool wasBound = m_trxMap.trxForSliceId(live->sliceId()) >= 0;
+                    const int trx = m_trxMap.acquire(live->sliceId());
+                    if (!wasBound)
+                        acquired.append(trx);
                 }
+                for (int trx : acquired)
+                    broadcast(QStringLiteral("rx_enable:%1,true;").arg(trx));
             }
             for (const auto& cs : m_clients) {
                 if (cs.audioEnabled) {
@@ -366,6 +376,14 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
             // trx map has been rebound so every stream returns to the same
             // receiver/pan instead of silently following list position.
             reconcileIqStreams();
+        });
+        // A slice taken back after a reconnect emits no sliceAdded, only this edge.
+        // Bind it quietly: the client already knows it, but its close needs a trx (#6352).
+        connect(m_model, &RadioModel::slotOccupancyChanged, this, [this](int) {
+            for (SliceModel* live : m_model->slices()) {
+                if (live)
+                    m_trxMap.acquire(live->sliceId());
+            }
         });
         // A removed slice never fires daxChannelChanged, so without this the
         // Tci hold on its channel stays set forever and the dax_rx stream
@@ -410,9 +428,21 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
             // close leaves the id dead and frees the number for reuse.
             // The timer also fires during teardown after m_trxMap.clear() —
             // intentional no-op: release() of an absent key does nothing and
-            // the liveness guard holds.
-            QTimer::singleShot(500, this, [this, sliceId]() {
+            // the liveness guard holds. The close is announced here, not
+            // synchronously, so a recreate never reports the receiver gone;
+            // the trx is read while the binding is still held (#6352).
+            const quint64 generation = ++m_closeGeneration[sliceId];
+            QTimer::singleShot(500, this, [this, sliceId, generation]() {
+                // A later removal of this id started its own window; this one
+                // would end inside it and report a live recreate as a close.
+                if (m_closeGeneration.value(sliceId) != generation)
+                    return;
+                m_closeGeneration.remove(sliceId);
                 if (m_model && !m_model->slice(sliceId)) {
+                    const int trx = m_trxMap.trxForSliceId(sliceId);
+                    if (trx >= 0 && !m_trxMap.trxHasLiveSlice(m_model, trx)) {
+                        broadcast(QStringLiteral("rx_enable:%1,false;").arg(trx));
+                    }
                     m_trxMap.release(sliceId);
                 }
             });
