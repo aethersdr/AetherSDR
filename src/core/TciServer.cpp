@@ -23,6 +23,7 @@
 #include <QHostAddress>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QList>
 #include <QStringList>
 #include <QTimer>
 #include <QPointer>
@@ -348,10 +349,19 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
             // lowest free number) and on an empty map reproduces positional numbering.
             // The added slice is already in the list here.
             if (s) {
+                // Only newly acquired bindings are announced: a recreate inside
+                // the settle window still holds its binding and stays silent (#6352).
+                QList<int> acquired;
                 for (SliceModel* live : m_model->slices()) {
-                    if (live)
-                        m_trxMap.acquire(live->sliceId());
+                    if (!live)
+                        continue;
+                    const bool wasBound = m_trxMap.trxForSliceId(live->sliceId()) >= 0;
+                    const int trx = m_trxMap.acquire(live->sliceId());
+                    if (!wasBound)
+                        acquired.append(trx);
                 }
+                for (int trx : acquired)
+                    broadcast(QStringLiteral("rx_enable:%1,true;").arg(trx));
             }
             for (const auto& cs : m_clients) {
                 if (cs.audioEnabled) {
@@ -410,9 +420,15 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
             // close leaves the id dead and frees the number for reuse.
             // The timer also fires during teardown after m_trxMap.clear() —
             // intentional no-op: release() of an absent key does nothing and
-            // the liveness guard holds.
+            // the liveness guard holds. The close is announced here, not
+            // synchronously, so a recreate never reports the receiver gone;
+            // the trx is read while the binding is still held (#6352).
             QTimer::singleShot(500, this, [this, sliceId]() {
                 if (m_model && !m_model->slice(sliceId)) {
+                    const int trx = m_trxMap.trxForSliceId(sliceId);
+                    if (trx >= 0 && !m_trxMap.trxHasLiveSlice(m_model, trx)) {
+                        broadcast(QStringLiteral("rx_enable:%1,false;").arg(trx));
+                    }
                     m_trxMap.release(sliceId);
                 }
             });
