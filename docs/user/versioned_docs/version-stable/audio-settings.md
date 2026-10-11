@@ -10,6 +10,10 @@ Audio settings control the radio's own audio outputs, the computer's speaker and
 
 Audio settings live on the **Audio** page of Radio Setup:
 
+<img src="/img/screens/radio-setup-audio.png" width="960" alt="Radio Setup on the Audio page. Radio Audio Outputs has Line Out at 53 and Headphone at 100, each with a Mute button. Audio Compression (SmartLink / tailnet) has Auto, Uncompressed (selected) and Opus. Below are checkboxes to smooth packet loss and prevent system sleep, then PC Audio Devices with Input and Output both set to Built-in Audio Analog Stereo, a prompt-on-device-change checkbox, Audio Boost disabled and an audio buffer of 100 ms. The Recording group at the bottom has Record Mode Radio Side and Client Side (selected), a Save to path (blacked out) and Auto-record on TX." />
+
+*Radio Setup, Audio page: the radio's audio outputs, audio compression, the PC audio devices and recording.*
+
 - **Windows and Linux:** **Settings → Radio Setup... → RECEIVE & TRANSMIT → Audio**
 - **macOS:** **AetherSDR → Preferences...**, then **Audio**
 
@@ -21,11 +25,13 @@ See [Radio Setup](./radio-setup.md).
 
 Choose the computer's microphone (**Input**) and speaker (**Output**) devices. The selection is saved and restored at startup, and you can switch devices while connected.
 
+If the saved device is not connected, AetherSDR uses the system default device and keeps your saved choice. It switches back to the saved device when that device connects, without asking.
+
 AetherSDR handles sample-rate conversion itself. The microphone is captured at whatever rate the device offers, processed at 48 kHz, and converted once to the radio's transport rate. The PC microphone is used for transmit when the radio's mic source is **PC** (see [Choosing the mic source](#choosing-the-mic-source)).
 
 ### When a device is plugged in or removed
 
-When the operating system adds or removes an audio device, an **Audio Device Detected** dialog offers to switch PC audio to the new device or keep the current one, with a **Don't ask me again** option. It does not appear while your selected device is still available. Turn it on or off with **Prompt on Audio Device Changes** (on by default).
+When the operating system adds or removes an audio device, an **Audio Device Detected** dialog offers to switch PC audio to the new device or keep the current one, with a **Don't ask me again** option. It does not appear while your selected device is still available. In the dialog, leaving a direction on **System default** while its saved device is not connected uses the default for now and keeps the saved choice. Turn it on or off with **Prompt on Audio Device Changes** (on by default).
 
 ### Audio Boost
 
@@ -46,6 +52,10 @@ When the operating system adds or removes an audio device, an **Audio Device Det
 ## Recording QSOs
 
 The **Recording** group controls QSO recording from the record and play buttons on the VFO flag and in AetherRX/AetherTX.
+
+<img src="/img/screens/radio-setup-recording.png" width="643" alt="Recording group. Record Mode has Radio Side and Client Side buttons, with Client Side selected. The Save to field is blacked out, beside a browse button. Below are an Auto-record on TX checkbox and an Idle timeout of 120 sec." />
+
+*The Recording group on the Audio page. The save path is blacked out.*
 
 - Client-side recordings include the CW you send, so a QSO that switches between voice and CW stays in one file.
 - Each recording is a 24 kHz or 48 kHz WAV, depending on the source, and never overwrites an existing file.
@@ -95,7 +105,9 @@ Over SmartLink the radio's audio can be Opus-compressed to save bandwidth.
 
 ### Prevent system sleep
 
-**Prevent system sleep while connected** (off by default) stops the computer idling into sleep while a radio is connected, so long sessions keep their network and audio streams alive.
+**Prevent system sleep while connected** (on by default) stops the computer idling into sleep while a radio is connected, so long sessions keep their network and audio streams alive. It never stops the screen blanking or locking, and closing the lid still sleeps the computer. If you turned it off before, it stays off.
+
+On Linux, GNOME and KDE block only automatic sleep, so choosing **Sleep** from the menu still works. Other desktops, such as Hyprland or Sway, use systemd-logind instead: there, choosing **Sleep** while connected asks for an administrator password, or untick this setting first.
 
 ### Recording settings
 
@@ -118,7 +130,6 @@ Over SmartLink the radio's audio can be Opus-compressed to save bandwidth.
 
 ## Known issues
 
-- A saved PC audio device that is missing when AetherSDR starts, such as Bluetooth headphones that connect later, is forgotten at the next device change, so you have to select it again ([#6040](https://github.com/aethersdr/AetherSDR/issues/6040)).
 - On remote links that deliver packets out of order, received audio has short dropouts because late packets are treated as lost ([#6051](https://github.com/aethersdr/AetherSDR/issues/6051)).
 - Client-side recordings can sound noisier than the audio you hear when client-side noise reduction is on ([#6246](https://github.com/aethersdr/AetherSDR/issues/6246)).
 

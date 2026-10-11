@@ -23,6 +23,10 @@ Open the **USB Cables** page:
 
 The **Cables** list on the left shows every cable the radio reports, with its type in brackets (for example `[BCD]`) and "(unplugged)" when it is not plugged in:
 
+<img src="/img/screens/usb-cables-page.png" width="679" alt="USB Cables page. An empty Cables list on the left; the right side reads No USB cables detected. Plug a USB-serial adapter into the radio's rear USB port." />
+
+*Radio Setup, USB Cables page, on a radio with no USB cable plugged in.*
+
 | Colour | Meaning |
 |-------|---------|
 | **Green** | Enabled and plugged in |

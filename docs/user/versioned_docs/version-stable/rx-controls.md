@@ -14,7 +14,7 @@ Most of this page describes a FlexRadio. On other radio families, controls the
 radio cannot honour are dimmed with the reason in their tooltip, or refuse
 with a notice; see [Using the controls on other radios](#using-the-controls-on-other-radios) below.
 
-![RX Controls applet. It shows the slice letter A with a lock button, RX antenna ANT1 and TX antenna ANT1, filter width 2.8K, a TX button, the mode selector set to USB and the frequency 14.100.000. Below are the tuning step selector set to 100, filter preset buttons from 1.8K to 3.3K with 2.7K selected, a filter passband graphic from 100 to 2900 Hz, and sliders for AF gain, pan, squelch and AGC with AGC set to Med, plus RIT and XIT offsets.](/img/screens/rx-applet.png)
+<img src="/img/screens/rx-applet.png" width="248" alt="RX Controls applet. The top row shows the slice buttons A (lit), B, C and D, a lock button, RX antenna ANT1, TX antenna ANT1 and filter width 2.7K. Below are a red TX badge, the mode selector set to USB and the frequency 14.250.000, then the tuning step selector at 500 and the AF gain and pan sliders, filter preset buttons 1.8K, 2.1K, 2.4K, 2.7K (lit), 2.9K and 3.3K beside the SQL and AGC (Med) controls, a passband graphic reading 100, 2.7K and 2800, and RIT and XIT offsets of +0 Hz." />
 
 *The RX Controls applet for the active slice.*
 
@@ -102,11 +102,15 @@ The **SQL** button cycles through three states:
   own scale. On radios where Auto SQL is not available, a slice set to AUTO
   drops to manual at its manual level.
 
-> **Upgrading from an older version:** AetherSDR no longer saves the squelch
-> level between sessions. On connect, each slice uses the level the radio
-> reports.
+On RTL-SDR FM/FM-N, **AUTO** uses each receiver's own detector noise estimate, independently of panadapter zoom, FFT averaging or whether the applet is visible. Manual SQL uses dBFS per 2048-point detector bin; its threshold line is suppressed because the display FFT has a different scale. Manual and Auto settings are saved per RTL receiver, and Auto does not overwrite the manual threshold. WFM does not expose this FM/FM-N squelch control.
+
+> **Upgrading from an older version:** FlexRadio squelch levels come from the radio at connection. For RTL-SDR, explicitly choose **AUTO** after upgrading to enable the receiver-owned Auto policy; an older display-Auto preference does not enable it.
 
 ### AGC
+
+<img src="/img/screens/rx-agc-calibration.png" width="460" alt="AGC-T Calibration window. The heading reads AGC: MED, finding the knee (agc_threshold) just above the noise floor, with a warning that a signal is in the passband and you should tune to a clear spot. An empty plot with an AGC-T axis from 0 to 100 and a dashed marker fills the centre, above Auto Sweep and Apply buttons and a hint: tune to a clear spot, then Auto Sweep, or move the AGC-T slider and watch where the noise bends." />
+
+*The AGC-T Calibration window.*
 
 - **Mode** — Off, Slow, Med, Fast
 - **AGC-T slider** — the AGC threshold
@@ -114,6 +118,8 @@ The **SQL** button cycles through three states:
 **AGC-T calibration:** right-click the AGC-T slider, or use
 **Tools → Calibrate AGC-T...**, to calibrate the threshold against the
 measured noise floor on the active slice. It does not transmit.
+Close the window with the corner ✕, Esc or Ctrl+W; closing it during
+an Auto Sweep stops the sweep and puts back the AGC-T it started from.
 
 On the Hermes-Lite 2, AGC runs on the computer: with AGC **Off**, the AGC-T
 slider sets a fixed gain (4–64 dB, default 10 dB) remembered per receiver, and

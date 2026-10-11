@@ -47,6 +47,10 @@ doing nothing silently.
 
 Docked in the applet panel, the TUN applet (title "TGXL") shows:
 
+<img src="/img/screens/tgxl-applet.png" width="248" alt="TGXL applet. PWR and SWR bar meters at the top, then C1, L and C2 bars reading 8, 16 and 24 beside TUNE and STANDBY buttons, and a green DIRECT status at the bottom right." />
+
+*The TGXL applet with a Tuner Genius XL connected.*
+
 - **Fwd Power** gauge. It scales for barefoot, Aurora or PGXL power levels,
   and uses the tuner's own peak reading, so voice peaks read correctly.
 - **SWR** gauge (1.0–3.0).

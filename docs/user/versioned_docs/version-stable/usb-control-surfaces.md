@@ -32,6 +32,10 @@ Other Stream Deck models and other control-surface software can drive AetherSDR 
 
 The **USB Control Surfaces** group at the top of **Serial & Controllers** has the switches:
 
+<img src="/img/screens/radio-setup-serial.png" width="679" alt="Serial &amp; Controllers page. USB Control Surfaces has Use a Ulanzi Dial when detected and Enable HID encoders / StreamDeck+ (RC-28, PowerMate, ShuttleXpress). Port Configuration shows a port, 9600 baud, 8 data bits, no parity and 1 stop bit with a Refresh button. Pin Assignment maps DTR, RTS, CTS, DSR and DCD to a function (all None) and a polarity (Active High), with Paddle Swap below. Open and Close buttons sit above an Auto-open serial port on startup checkbox. FlexControl Tuning Knob shows Status Not detected with Detect and Close buttons and tap and double-tap actions for buttons 1 to 3 and the knob button, plus Auto-detect on startup and Invert tuning direction." />
+
+*Radio Setup, Serial & Controllers page: USB control surfaces, the serial port and the FlexControl knob.*
+
 | Setting | Default | Notes |
 |---------|---------|-------|
 | **Use a Ulanzi Dial when detected** | On | See [Ulanzi Dial](./ulanzi-dial.md). |

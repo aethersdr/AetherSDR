@@ -24,6 +24,10 @@ the same set of antenna ports.
 The GHE applet is in the **Antennas & Switching** category. It is configured
 in the applet itself, not in [Peripherals](./peripherals.md).
 
+<img src="/img/screens/ghe-applet.png" width="248" alt="Green Heron applet. An IP field showing the placeholder 192.0.2.10, an empty Port field, an empty Switch field with a Connect button, and the status Not connected." />
+
+*The Green Heron applet before a server is configured.*
+
 | Field | Meaning |
 |---|---|
 | **IP** | Address of the Everyware server |
