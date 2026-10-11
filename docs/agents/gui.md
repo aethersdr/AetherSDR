@@ -44,13 +44,20 @@ writing or modifying a `QDialog`: the canonical lazy-construct + non-modal +
 geometry-persist + frameless-chrome pattern, its pitfalls, and reference
 dialogs (cleanup tracked in #2605, `PersistentDialog` base class).
 
+A window the style guide covers is built on `CanonWindow` instead. It is a
+documented exception to two rules below: it is always frameless, whatever
+the `FramelessWindow` setting, and it centres itself on its parent on first
+show (once it has a valid size), because it has no saved geometry to
+restore. See the `CanonWindow` section of `dialog-patterns.md` and
+[`docs/style/aethersdr-style-guide.md`](../style/aethersdr-style-guide.md).
+
 Any new popout window, floating tool window, or `QDialog` must respect the
 global `FramelessWindow` setting unless there is a specific reason not to:
 
 - Add a `FramelessWindowTitleBar` at the top of the dialog/window layout.
 - Install `FramelessResizer::install(this)` for resizable popouts.
 - Add `setFramelessMode(bool on)` using the same pattern as
-  `NetworkDiagnosticsDialog`: capture geometry, toggle
+  `PersistentDialog::setFramelessMode()`: capture geometry, toggle
   `Qt::FramelessWindowHint`, restore geometry only if the window was already
   visible, show again only if it was already visible, and hide/show the custom
   title bar based on the setting.
@@ -69,6 +76,11 @@ required, do it after the dialog has a valid size and say why.
   Read [`docs/style/theme-style-guide.md`](../style/theme-style-guide.md)
   first. CI's hardcoded-colour ratchet fails a PR that raises the count above
   its base branch.
+- **New or reworked surfaces follow the visual canon** —
+  [`docs/style/aethersdr-style-guide.md`](../style/aethersdr-style-guide.md)
+  (RFC #6226): the `color.canon.*` tokens, `CanonWindow`, the sparks. Apply
+  it to UI your issue already changes; never restyle other screens on your
+  own, and never change a base token's value in a migration PR.
 - **Gating a control on a radio capability? Dim it, never hide it.** Controls
   render in one of three states — unavailable (the radio lacks it, dimmed
   **with a stated reason**), inactive (supported, not engaged), active. Hiding
@@ -97,8 +109,8 @@ PR in `Static checks` and emits inline diff annotations; it is warning-only.
   (`src/gui/MeterSmoother.h`). Don't write new envelope-follower code.
 - **User-facing names match the on-screen labels.** In prose (issue comments,
   README, What's-New strings, error toasts, support requests) call a control
-  by the label the user sees — e.g. the **DIGI applet** (class `CatApplet`),
-  Help → Support logging **Discovery / Commands / Status**.
+  by the label the user sees — e.g. the **CAT applet** (class `CatControlApplet`),
+  Help → Support & Diagnostics… → **Discovery**, **Connection / Commands**, **Protocol / Status**.
 - **Region-aware band data — read from `BandPlanManager`, not `BandDefs.h`.**
   Band edges, segment sizes, and per-band metadata come from the active plan
   (`AppSettings["BandPlanName"]` + `resources/bandplans/`). `BandDefs.h::kBands[]`
@@ -106,9 +118,9 @@ PR in `Static checks` and emits inline diff annotations; it is warning-only.
 - **TX DSP stages integrate with the CHAIN widget.** New TX DSP stages must be
   ordered, toggleable, and inspectable through the CHAIN widget rather than a
   parallel UI entry.
-- **The About-dialog Contributors list is auto-generated** at runtime from the
-  GitHub API. If someone is missing, fix the GitHub-side attribution, don't
-  patch the dialog string.
+- **Contributors are recognised in the Contributor Logbook**
+  (contributors.aethersdr.com), which the About window links to. The app
+  carries no contributor list; don't add names to the About window.
 - **PWR applet cross-needle geometry.** Before touching
   `CrossNeedleMeterGeometry`'s response model, SWR contours, or label
   placement, read

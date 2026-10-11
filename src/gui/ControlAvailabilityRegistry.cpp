@@ -60,13 +60,15 @@ ControlAvailabilityRegistry::ControlAvailabilityRegistry(RadioModel& model, QObj
 void ControlAvailabilityRegistry::registerWidget(QWidget* widget,
                                                  QString reason,
                                                  AvailabilityPredicate available,
-                                                 EngagedPredicate engaged)
+                                                 EngagedPredicate engaged,
+                                                 bool availableWhenDisconnected)
 {
     if (!widget || !available) {
         return;
     }
     Entry entry;
     entry.widget = widget;
+    entry.availableWhenDisconnected = availableWhenDisconnected;
     entry.reason = std::move(reason);
     entry.available = std::move(available);
     entry.engaged = std::move(engaged);
@@ -111,11 +113,10 @@ void ControlAvailabilityRegistry::applyOne(Entry& entry,
                                            bool connected,
                                            const RadioCapabilities& caps)
 {
-    // PERMISSIVE ON DISCONNECT, matching every gate in applyCapabilitiesToUi:
-    // with no radio attached there is nothing to be honest about, and leaving a
-    // control dimmed after unplugging reads as a fault rather than as an absent
-    // capability.
-    const bool available = !connected || entry.available(connected, caps);
+    // Preserve the historical disconnected treatment unless a control explicitly
+    // requires a live receiver (for example observed broadcast-FM settings).
+    const bool available = connected ? entry.available(connected, caps)
+                                     : entry.availableWhenDisconnected;
     const bool engaged = connected && available && entry.engaged && entry.engaged();
     entry.state = !available   ? ControlAvailability::Unavailable
                 : engaged      ? ControlAvailability::Active

@@ -27,6 +27,7 @@ warren@pratt.one
 #define _wbfm_h
 
 #include "firmin.h"
+#include <stdint.h>
 #include "wcpAGC.h"
 
 //Forward declarations:
@@ -62,6 +63,12 @@ typedef struct _wbfm
 	double dcbSave_x;
 	double dcbSave_y;
 	double disc_gain_comp;
+	// AetherSDR: opt-in continuous-FM discriminator response correction.
+	int disc_compensate;
+	double disc_history[13];
+	int disc_history_index;
+	double audio_dcb_x[2];
+	double audio_dcb_y[2];
 	
 	// filter:  0-15 kHz
 	FIRCORE pfil0_15;
@@ -102,6 +109,15 @@ typedef struct _wbfm
 
 	// Miscellaneous
 	int stereo;
+	// AetherSDR: lock-free publication of the last completed decoder block.
+	long stereoPublished;
+	// AetherSDR: all publication words use interlocked accesses. Word zero is
+	// a sequence, the remaining fixed words form one coherent bounded snapshot.
+	long receptionPublished[18];
+	uint64_t receptionSamples, lockedSamples, stableSamples;
+	uint32_t lockLossCount, reacquisitionCount;
+	int receptionPreviousStereo, receptionHadPilot;
+	int force_mono;
 	double sqgain;
 	double mag19;
 	int dmph;

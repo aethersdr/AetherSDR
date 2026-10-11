@@ -20,6 +20,19 @@
 
 namespace AetherSDR {
 
+namespace {
+
+// The level the operator hears, which a control surface's AF dial mirrors;
+// RadioModel holds the one rule. Without a model, the PC sink's saved level.
+int activeOutputVolumePercent(const RadioModel* model)
+{
+    return model ? model->activeOutputVolumePercent()
+                 : AppSettings::instance()
+                       .value(QStringLiteral("MasterVolume"), QStringLiteral("100")).toInt();
+}
+
+}  // namespace
+
 int TciProtocol::tciTrxForSlice(RadioModel* model, const SliceModel* slice)
 {
     if (!model || !slice)
@@ -406,8 +419,7 @@ QString TciProtocol::generateInitBurst()
         // instead of the radio's real level (Ulanzi/Elgato/StreamController
         // gain steppers).
         burst += QStringLiteral("volume:%1;")
-                     .arg(volumeDbFromPercent(
-                         AppSettings::instance().value("MasterVolume", "100").toInt()));
+                     .arg(volumeDbFromPercent(activeOutputVolumePercent(m_model)));
 
         // Which slice holds GUI focus (#4160) — AetherSDR extension. Without
         // it a control surface learns focus only from the next change event,
@@ -1133,9 +1145,9 @@ QString TciProtocol::cmdSqlEnable(const QStringList& args, bool isSet)
     if (args.size() < 2) return {};
     bool on = false;
     if (!argToBool(args, 1, on)) return {};
-    int level = s->receiveSquelchLevel();
-    QMetaObject::invokeMethod(s, [s, on, level]() { s->setSquelch(on, level); },
-                              Qt::QueuedConnection);
+    auto& pending = (*m_pendingSquelch)[trx];
+    pending.on = on;
+    queueSquelch(s, trx, on, pending.level.value_or(s->receiveSquelchLevel()));
 
     m_pendingNotification = QStringLiteral("sql_enable:%1,%2;")
                                 .arg(trx).arg(on ? "true" : "false");
@@ -1158,13 +1170,21 @@ QString TciProtocol::cmdSqlLevel(const QStringList& args, bool isSet)
     if (args.size() < 2) return {};
     int level = 0;
     if (!argToInt(args, 1, level)) return {};
-    bool on = s->receiveSquelchOn();
-    QMetaObject::invokeMethod(s, [s, on, level]() { s->setSquelch(on, level); },
-                              Qt::QueuedConnection);
+    auto& pending = (*m_pendingSquelch)[trx];
+    pending.level = level;
+    queueSquelch(s, trx, pending.on.value_or(s->receiveSquelchOn()), level);
 
     m_pendingNotification = QStringLiteral("sql_level:%1,%2;")
                                 .arg(trx).arg(level);
     return {};
+}
+
+void TciProtocol::queueSquelch(SliceModel* s, int trx, bool on, int level)
+{
+    QMetaObject::invokeMethod(s, [s, on, level, trx, pending = m_pendingSquelch]() {
+        pending->erase(trx);
+        s->setSquelch(on, level);
+    }, Qt::QueuedConnection);
 }
 
 // ── Volume / Mute ──────────────────────────────────────────────────────────
@@ -1200,10 +1220,8 @@ int TciProtocol::volumePercentFromDb(double db)
 QString TciProtocol::cmdVolume(const QStringList& args, bool /*isSet*/)
 {
     if (args.isEmpty()) {
-        // GET — current master volume from saved settings (the same value
-        // the title bar slider reads on startup), reported in dB.
-        int pct = AppSettings::instance()
-                      .value("MasterVolume", "100").toInt();
+        // GET — the level of the output the operator hears, in dB.
+        const int pct = activeOutputVolumePercent(m_model);
         return QStringLiteral("volume:%1;").arg(volumeDbFromPercent(pct));
     }
 
@@ -1414,7 +1432,7 @@ QString TciProtocol::cmdRxApfEnable(const QStringList& args, bool isSet)
     return {};
 }
 
-// ── AetherSDR extensions (DVK record/play) ─────────────────────────────────
+// ── AetherSDR extensions (slice quick-record record/play) ──────────────────
 
 QString TciProtocol::cmdRxRecord(const QStringList& args, bool isSet)
 {

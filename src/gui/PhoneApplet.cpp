@@ -12,6 +12,9 @@
 #include <QFrame>
 #include <QPainter>
 #include "core/ThemeManager.h"
+#include "core/TxKeyingMarker.h"
+
+#include <QPointer>
 
 namespace AetherSDR {
 
@@ -164,6 +167,27 @@ void PhoneApplet::buildUI()
         m_voxBtn->setStyleSheet(kBtnBase + kGreenActive);
         connect(m_voxBtn, &QPushButton::toggled, this, [this](bool on) {
             if (!m_updatingFromModel && m_model) m_model->setVoxEnable(on);
+        });
+        // The automation bridge may switch VOX off and never on: the scoped
+        // action exists for a disarm only, and it needs bridge TX permission.
+        // Arming verbs and pointer input have no action, so they stay refused.
+        registerTxKeyingAction(m_voxBtn, [this](const std::shared_ptr<TxController>&,
+                                                const QString& action,
+                                                const QString& value) -> TxKeyingAction::Prepared {
+            const QString v = value.trimmed().toLower();
+            const bool disarm = action == QLatin1String("setChecked")
+                && (v == QLatin1String("false") || v == QLatin1String("0")
+                    || v == QLatin1String("off") || v == QLatin1String("no")
+                    || v == QLatin1String("unchecked"));
+            if (!disarm) {
+                return {};
+            }
+            const QPointer<PhoneApplet> self(this);
+            return [self] {
+                if (self && self->m_model) {
+                    self->m_model->setVoxEnable(false);
+                }
+            };
         });
         row->addWidget(m_voxBtn);
         row->addSpacing(10);

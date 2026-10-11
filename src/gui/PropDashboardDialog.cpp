@@ -1,4 +1,5 @@
 #include "PropDashboardDialog.h"
+#include "core/NetworkDiagnostics.h"
 #include "core/AppSettings.h"
 
 #include <QColor>
@@ -832,6 +833,7 @@ void PropDashboardDialog::fetchImages()
     QNetworkRequest lReq{QUrl{QString("https://svs.gsfc.nasa.gov/api/dialamoon/%1").arg(ts)}};
     lReq.setHeader(QNetworkRequest::UserAgentHeader, "AetherSDR");
     auto* lr = m_nam->get(lReq);
+    NetworkDiagnostics::watch(lr, "propagation");
     connect(lr, &QNetworkReply::finished, this, [this, lr]() {
         lr->deleteLater();
         if (lr->error() != QNetworkReply::NoError) {
@@ -859,6 +861,7 @@ void PropDashboardDialog::fetchImages()
         QNetworkRequest ir{QUrl{imgUrl}};
         ir.setHeader(QNetworkRequest::UserAgentHeader, "AetherSDR");
         auto* imgR = m_nam->get(ir);
+        NetworkDiagnostics::watch(imgR, "propagation");
         connect(imgR, &QNetworkReply::finished, this, [this, imgR]() {
             imgR->deleteLater();
             if (imgR->error() == QNetworkReply::NoError) {
@@ -1099,6 +1102,7 @@ void PropDashboardDialog::fetchSolarImage()
     QNetworkRequest req{QUrl{url}};
     req.setHeader(QNetworkRequest::UserAgentHeader, "AetherSDR");
     auto* reply = m_nam->get(req);
+    NetworkDiagnostics::watch(reply, "propagation");
     connect(reply, &QNetworkReply::finished, this, [this, reply]() {
         reply->deleteLater();
         if (reply->error() == QNetworkReply::NoError) {

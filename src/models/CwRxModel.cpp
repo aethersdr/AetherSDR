@@ -47,7 +47,7 @@ private:
 class DeepFistRxBackend final : public CwRxBackend {
 public:
     DeepFistRxBackend() {
-        connect(&m_decoder, &DeepFistCwModel::textDecoded, this, &CwRxBackend::unscoredTextDecoded);
+        connect(&m_decoder, &DeepFistCwModel::scoredTextDecoded, this, &CwRxBackend::coloredTextDecoded);
         connect(&m_decoder, &DeepFistCwModel::statusChanged, this, &CwRxBackend::statusChanged);
     }
     ~DeepFistRxBackend() override { stop(); }
@@ -136,6 +136,10 @@ void CwRxModel::bind()
     connect(m_backend.get(), &CwRxBackend::unscoredTextDecoded, this,
         [this, generation](const QString& text) {
             if (generation == m_generation && isRunning()) { emit unscoredTextDecoded(text); }
+        });
+    connect(m_backend.get(), &CwRxBackend::coloredTextDecoded, this,
+        [this, generation](const QString& text, float cost) {
+            if (generation == m_generation && isRunning()) { emit coloredTextDecoded(text, cost); }
         });
     connect(m_backend.get(), &CwRxBackend::statsUpdated, this,
         [this, generation](float pitch, float speed) {

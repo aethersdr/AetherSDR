@@ -43,7 +43,7 @@ RadioCapabilities hl2Caps()
     caps.clientSettingsDomains = Domain::Tuning | Domain::Passband
                                  | Domain::SpanRate | Domain::RfGain
                                  | Domain::TxSetpoints | Domain::Agc
-                                 | Domain::Cw;
+                                 | Domain::Cw | Domain::ReceiveOutputLevel;
     caps.hasAgcThreshold = true;   // a writable threshold/off level, as HL2 declares
     return caps;
 }
@@ -53,6 +53,7 @@ RestoredRadioState sampleState()
     RestoredRadioState state;
     state.rfFrequencyHz = 7'074'000.0;
     state.mode = QStringLiteral("USB");
+    state.tuningStepHz = 2'500;
     state.filterLowHz = 100.0;
     state.filterHighHz = 2'900.0;
     state.sampleRateHz = 192'000;
@@ -70,6 +71,7 @@ RestoredRadioState sampleState()
     state.cwlEnabled = 1;
     state.monGainCw = 73;
     state.monPanCw = 22;
+    state.receiveOutputLevelPct = 35;
     state.extensionSchemaVersion = 1;
     // The extension's top level is domain sub-objects (the per-domain gate);
     // each sub-object's contents are backend-owned.
@@ -127,6 +129,7 @@ int main(int argc, char** argv)
         check(restored.rfFrequencyHz == 7'074'000.0
                   && restored.mode == QStringLiteral("USB"),
               "tuning round-trips");
+        check(restored.tuningStepHz == 2'500, "the client-owned tuning step round-trips");
         check(restored.filterLowHz == 100.0 && restored.filterHighHz == 2'900.0,
               "passband round-trips");
         check(restored.sampleRateHz == 192'000, "span/rate round-trips");
@@ -141,6 +144,8 @@ int main(int argc, char** argv)
                   && restored.cwlEnabled == 1 && restored.monGainCw == 73
                   && restored.monPanCw == 22,
               "the complete client-owned CW surface round-trips");
+        check(restored.receiveOutputLevelPct == 35,
+              "the radio's own output level round-trips");
         check(restored.extensionSchemaVersion == 1
                   && restored.extension.value(QStringLiteral("rfGain"))
                              .toObject()
@@ -173,8 +178,14 @@ int main(int argc, char** argv)
         tuningOnly.family = QStringLiteral("hl2");
         tuningOnly.clientSettingsDomains = Domain::Tuning;
         const RestoredRadioState gated = RadioStateMemory::load(radioA, tuningOnly);
-        check(gated.rfFrequencyHz == 7'074'000.0 && gated.mode == "USB",
-              "a declared domain loads");
+        check(gated.rfFrequencyHz == 7'074'000.0 && gated.mode == "USB"
+                  && gated.tuningStepHz == 2'500,
+              "a declared domain loads, the step with it");
+        RadioCapabilities noTuning;
+        noTuning.family = QStringLiteral("hl2");
+        noTuning.clientSettingsDomains = Domain::Passband;
+        check(RadioStateMemory::load(radioA, noTuning).tuningStepHz == 0,
+              "an undeclared Tuning domain hands over no step");
         check(gated.filterLowHz == 0.0 && gated.filterHighHz == 0.0
                   && gated.sampleRateHz == 0 && gated.extension.isEmpty(),
               "undeclared domains stay 'not restored' even though the stored "
@@ -190,6 +201,34 @@ int main(int argc, char** argv)
                   && gated.cwBreakIn == -1 && gated.cwDelay == -1
                   && gated.monGainCw == -1 && gated.monPanCw == -1,
               "an undeclared CW domain stays absent");
+        // As for the AGC threshold: gated out must not read as a chosen 0.
+        check(gated.receiveOutputLevelPct == -1,
+              "an undeclared ReceiveOutputLevel domain is absent, not a level of 0");
+    }
+
+    // ---- an output level of 0 is a choice, and survives -------------------
+    {
+        RadioCapabilities levelOnly;
+        levelOnly.family = QStringLiteral("hl2");
+        levelOnly.clientSettingsDomains = Domain::ReceiveOutputLevel;
+        const RadioSettingsScope silenced(
+            QStringLiteral("hl2"), QStringLiteral("00:00:00:00:00:D0"));
+        RestoredRadioState zero;
+        zero.receiveOutputLevelPct = 0;
+        check(!zero.isEmpty(),
+              "a stored level of 0 is not an empty state");
+        check(RadioStateMemory::store(silenced, levelOnly, zero),
+              "a level of 0 is written");
+        check(RadioStateMemory::load(silenced, levelOnly).receiveOutputLevelPct == 0,
+              "a level of 0 round-trips as 0, not as not-restored");
+
+        // Out of range reads as absent, not clamped.
+        RestoredRadioState tooLoud;
+        tooLoud.receiveOutputLevelPct = 101;
+        check(RadioStateMemory::store(silenced, levelOnly, tooLoud),
+              "an out-of-range level is written as given");
+        check(RadioStateMemory::load(silenced, levelOnly).receiveOutputLevelPct == -1,
+              "an out-of-range stored level reads back as not restored, not clamped");
     }
 
     // ---- deliberate false/zero CW values survive -------------------------
@@ -294,6 +333,9 @@ int main(int argc, char** argv)
         onlyLevels.agcOffLevels = {44};
         check(!onlyLevels.isEmpty(),
               "a state carrying only AGC-off levels is not 'nothing stored'");
+        RestoredRadioState onlyStep;
+        onlyStep.tuningStepHz = 100;
+        check(!onlyStep.isEmpty(), "a state carrying only a step is not 'nothing stored'");
     }
 
     // ---- per-domain gating on store ---------------------------------------

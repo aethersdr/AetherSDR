@@ -1,8 +1,8 @@
 // Phase 1 smoke tests for the container system — exercises the
 // ContainerWidget <-> FloatingContainerWindow float/dock cycle.
 //
-// Headless-ish: uses QApplication so the widgets can instantiate and
-// process signals, but never calls show() (no X11 / display needed).
+// Uses QApplication and the offscreen platform to exercise real show/hide
+// and reparent behavior without a radio, sound device or visible desktop.
 // Run:   ./build/container_widget_test
 
 #include "TestSettingsProfile.h"
@@ -91,6 +91,134 @@ void testVisibilitySignal()
            spy.count() == 0);
 }
 
+void testTransientPresentation()
+{
+    QWidget panel;
+    auto* layout = new QVBoxLayout(&panel);
+    ContainerWidget c("conditional", "Conditional");
+    c.setContent(new QLabel("payload"));
+    layout->addWidget(&c);
+    QSignalSpy visibility(&c, &ContainerWidget::visibilityChanged);
+
+    // makeEntry's default-open call is a logical no-op on a fresh container.
+    // The first availability transition must still retain that open intent.
+    c.setContainerVisible(true);
+    c.setPresentationAvailable(false);
+    panel.show();
+    c.setPresentationAvailable(true);
+    report("default logical open survives the first construction gate", c.isVisible());
+    c.setPresentationAvailable(false);
+    QWidget* generic = &c;
+    generic->show();
+    report("direct show cannot expose a suppressed docked container",
+           c.isContainerVisible() && c.isHidden() && !c.isVisible());
+    panel.hide();
+    panel.show();
+    report("ancestor show cannot bypass presentation suppression", c.isHidden());
+    c.setPresentationAvailable(true);
+    report("availability restores the requested docked presentation", c.isVisible());
+    panel.hide();
+    c.setPresentationAvailable(false);
+    c.setPresentationAvailable(true);
+    panel.show();
+    report("ancestor hiding does not become an explicit child hide", c.isVisible());
+    report("availability emits no logical close or open", visibility.isEmpty());
+
+    c.setPresentationAvailable(false);
+    generic->hide();
+    c.setPresentationAvailable(true);
+    report("explicit direct hide remains hidden after availability returns",
+           c.isHidden() && c.isContainerVisible());
+    c.setContainerVisible(false);
+    c.setPresentationAvailable(false);
+    c.setContainerVisible(true);
+    report("logical reopen under suppression stays physically hidden",
+           c.isContainerVisible() && c.isHidden());
+    c.setPresentationAvailable(true);
+    report("logical reopen restores when available", c.isVisible());
+    c.setContainerVisible(false);
+    c.setPresentationAvailable(false);
+    c.setPresentationAvailable(true);
+    report("logical close remains closed across availability changes",
+           !c.isContainerVisible() && c.isHidden());
+}
+
+void testFloatingPresentation()
+{
+    ContainerWidget c("conditional-float", "Conditional float");
+    c.setContent(new QLabel("payload"));
+    QSignalSpy visibility(&c, &ContainerWidget::visibilityChanged);
+    FloatingContainerWindow win;
+    c.setPresentationAvailable(false);
+    win.takeContainer(&c);
+    QWidget* generic = &win;
+    generic->show();
+    report("suppressed float hides its outer window but keeps content shown",
+           win.isHidden() && !c.isHidden() && c.isContainerVisible());
+    c.setPresentationAvailable(true);
+    report("float availability returns without blank content",
+           win.isVisible() && c.isVisible() && c.content()->isVisible());
+    c.setPresentationAvailable(false);
+    win.setAlwaysOnTop(true);
+    win.setFramelessMode(false);
+    report("window flag changes cannot reveal a suppressed float", win.isHidden());
+    c.setPresentationAvailable(true);
+    report("window flag recreation retains the suppressed show request",
+           win.isVisible() && c.content()->isVisible());
+    c.setPresentationAvailable(false);
+    generic->hide();
+    c.setPresentationAvailable(true);
+    report("explicitly hidden float is not reopened by availability", win.isHidden());
+    generic->show();
+    c.setPresentationAvailable(false);
+    c.setContainerVisible(false);
+    c.setPresentationAvailable(true);
+    report("logical close during suppressed float cannot restore a blank window",
+           win.isHidden() && !c.isContainerVisible());
+    generic->show();
+    report("unconditional restore show cannot override a managed logical close", win.isHidden());
+    c.setContainerVisible(true);
+    report("logical reopen restores both managed window and content",
+           win.isVisible() && c.isVisible() && c.content()->isVisible());
+    c.setContainerVisible(false);
+    report("logical close also suppresses an available managed float", win.isHidden());
+    c.setPresentationAvailable(false);
+    c.setContainerVisible(true);
+    report("logical reopen while unavailable remains suppressed", win.isHidden());
+    c.setPresentationAvailable(true);
+    report("availability then restores the new logical reopen", win.isVisible());
+    visibility.clear();
+    c.setPresentationAvailable(false);
+    win.releaseContainer();
+    generic->hide();
+    c.setPresentationAvailable(true);
+    report("released container cannot toggle its former window", win.isHidden());
+    c.setPresentationAvailable(false);
+    QWidget panel;
+    auto* layout = new QVBoxLayout(&panel);
+    layout->addWidget(&c);
+    c.show();
+    panel.show();
+    report("docking a suppressed float reapplies the container gate",
+           c.isPanelDocked() && c.isHidden() && c.isContainerVisible());
+    c.setPresentationAvailable(true);
+    report("docked content recovers without losing its body", c.content()->isVisible());
+    report("floating availability never emits a persisted visibility change",
+           visibility.isEmpty());
+    c.setParent(nullptr); // stack-owned; panel must not destroy it first
+
+    ContainerWidget replacement("replacement", "Replacement");
+    replacement.setContent(new QLabel("new payload"));
+    win.takeContainer(&c);
+    generic->show();
+    win.takeContainer(&replacement);
+    c.setPresentationAvailable(false);
+    report("replaced container cannot suppress the new window owner", win.isVisible());
+    replacement.setPresentationAvailable(false);
+    report("only the current hosted container gates its window", win.isHidden());
+    win.releaseContainer();
+}
+
 void testFloatDockCycle()
 {
     ContainerWidget c("id", "T");
@@ -115,6 +243,12 @@ void testFloatDockCycle()
            c.isFloating() && win.container() == &c);
     report("dockMode change signal fired",
            modeSpy.count() >= 1);
+
+    win.show();
+    c.setContainerVisible(false);
+    report("unmanaged float retains its existing outer-window behavior",
+           win.isVisible() && !c.isPresentationManaged());
+    c.setContainerVisible(true);
 
     // Release → back to docked state.
     ContainerWidget* released = win.releaseContainer();
@@ -222,6 +356,8 @@ int main(int argc, char** argv)
     testContainerBasics();
     testSetContent();
     testVisibilitySignal();
+    testTransientPresentation();
+    testFloatingPresentation();
     testFloatDockCycle();
     testFloatingWidthPolicy();
     testDefaultFloatingSize();

@@ -2,6 +2,7 @@
 
 #include "CallsignUtils.h"
 #include "LogManager.h"
+#include "NetworkDiagnostics.h"
 
 #include <QCoreApplication>
 #include <QNetworkReply>
@@ -47,7 +48,9 @@ QNetworkReply* QrzClient::getUrl(const QString& query)
     req.setHeader(QNetworkRequest::UserAgentHeader,
                   QStringLiteral("AetherSDR/%1").arg(QCoreApplication::applicationVersion()));
     req.setTransferTimeout(kTimeoutMs);
-    return m_nam.get(req);
+    QNetworkReply* reply = m_nam.get(req);
+    NetworkDiagnostics::watch(reply, "QRZ");
+    return reply;
 }
 
 void QrzClient::lookup(const QString& call)
@@ -117,7 +120,7 @@ void QrzClient::handleLoginReply(QNetworkReply* reply)
     };
 
     if (reply->error() != QNetworkReply::NoError) {
-        failAll(Error::Network, reply->errorString());
+        failAll(Error::Network, NetworkDiagnostics::safeErrorString(reply));
         return;
     }
 
@@ -143,7 +146,7 @@ void QrzClient::handleLookupReply(QNetworkReply* reply, const QString& call,
 
     if (reply->error() != QNetworkReply::NoError) {
         m_retriedAfterRelogin.remove(call);   // don't leak the retry flag (#3990)
-        emit lookupFailed(call, Error::Network, reply->errorString());
+        emit lookupFailed(call, Error::Network, NetworkDiagnostics::safeErrorString(reply));
         startNextLookup();
         return;
     }
@@ -188,7 +191,7 @@ void QrzClient::testLogin(const QString& username, const QString& password)
     connect(reply, &QNetworkReply::finished, this, [this, reply] {
         reply->deleteLater();
         if (reply->error() != QNetworkReply::NoError) {
-            emit loginTestFinished(false, reply->errorString());
+            emit loginTestFinished(false, NetworkDiagnostics::safeErrorString(reply));
             return;
         }
         const ParsedResponse resp = parseXml(reply->readAll());

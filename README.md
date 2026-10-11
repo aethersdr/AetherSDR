@@ -28,7 +28,7 @@ AetherSDR brings full FlexRadio operation to Linux, macOS, and Windows — each 
 - **AetherTX and AetherRX** — the transmit and receive chains, one window each. AetherTX is the channel strip (gate, EQ, compressor, de-esser, tube, AetherVoice exciter, reverb, brickwall limiter) with a preset library and scope; AetherRX puts noise reduction, gate, EQ, compressor, tube, AetherVoice and the output meter on tabs down its left edge
 - **Seven client-side noise-reduction engines**, each denoising left and right independently so pans and diversity survive them — NR2 (spectral), RN2 (RNNoise), NR4 (libspecbleach), NNR (WDSP's Neural Noise Reduction), DFNR (DeepFilterNet3), BNR (the NVIDIA Maxine denoiser, in-process on a local RTX/GeForce GPU, Linux + Windows — [`docs/nvidia-bnr.md`](docs/nvidia-bnr.md)) and MNR (macOS)
 - **DAX virtual audio + IQ** — up to 8 RX audio channels (radio-dependent) plus 1 TX, and 4 channels of raw I/Q at 24–192 kHz for WSJT-X / fldigi / VARA / JS8Call, with a per-slice **WFM demodulator** for satellite data
-- **AetherModem packet radio** — KISS-over-TCP TNC, connected-mode AX.25 BBS, a personal mailbox, a WIDE1-1 fill-in digipeater, and an **APRS client** (station map, GPS beacon, messaging) on a Direwolf-derived VHF demodulator
+- **AetherModem packet radio** — KISS-over-TCP TNC, connected-mode AX.25 BBS, a personal mailbox, a WIDE1-1 fill-in digipeater, and an **APRS client** (station table, GPS beacon, messaging) on a Direwolf-derived VHF demodulator
 - **AetherSweep** — in-panadapter SWR analyzer with log scale, threshold-band shading and interpolated bandwidth at SWR ≤ 1.5 / 2.0
 - **SpotHub** — DX Cluster, RBN, WSJT-X, POTA, FreeDV Reporter, N1MM+/DXLog contest bandmap, the EiBi shortwave schedule and the KiwiSDR DX Community database, with auto-mode switch and per-feed colouring
 - **CW operator suite** — real-time Morse decoder, MIDI/keyboard straight-key and iambic paddles with full QSK, optional Quindar tones
@@ -132,7 +132,10 @@ MIDI, and generic USB-serial adapters:
 - Griffin PowerMate USB knob
 - Contour ShuttleXpress and ShuttlePro v2 jog controllers
 - MIDI controllers with learn mode, manual mapping entry, importable/exportable profiles (including vendor-supplied SmartSDR `.map` files), and relative-encoder support
+- AetherPad — an Arduino Giga R1 running the [aether-pad](https://github.com/nigelfenton/aether-pad) RC-28 emulator firmware; over USB HID (hidapi builds) it drives the same RC-28 controls and LEDs
+- Ulanzi Dial Bluetooth HID dial on Linux, Windows (hidapi builds) and macOS, its rotary and buttons mapped in Settings → Ulanzi Dial Mapping...
 - Elgato Stream Deck+ natively over USB HID (hidapi builds), driving the LCD keys and the four encoder dials
+- ELAD/WoodBoxRadio TMate 2 over USB HID (hidapi builds): three encoders, nine keys, and the LCD and backlight
 - Other Stream Deck models, on any platform, through the TCI server or the automation bridge using the control-surface software of your choice — AetherSDR provides the protocol, not the button layer
 - USB-serial PTT/CW interfaces for foot switches, straight keys, iambic paddles,
   amplifier keying lines, and external sequencers
@@ -177,7 +180,7 @@ corresponding features disabled.
 # Arch / CachyOS / Manjaro
 sudo pacman -S cmake ninja pkgconf autoconf automake libtool python curl git \
   fftw rtl-sdr portaudio hidapi \
-  libpulse libglvnd fontconfig wayland libxkbcommon-x11 pipewire \
+  libpulse libglvnd fontconfig libsecret wayland libxkbcommon-x11 pipewire \
   xcb-util-cursor xcb-util-image xcb-util-keysyms xcb-util-renderutil xcb-util-wm
 
 # Debian / Ubuntu / Linux Mint
@@ -185,7 +188,7 @@ sudo apt install cmake ninja-build pkg-config autoconf automake libtool \
   python3 python3-venv curl git \
   libfftw3-dev librtlsdr-dev portaudio19-dev libhidapi-dev \
   libgl1-mesa-dev libpulse-dev libasound2-dev libpipewire-0.3-dev pipewire-bin \
-  libdbus-1-dev libglib2.0-dev libfontconfig1-dev libfreetype6-dev \
+  libdbus-1-dev libglib2.0-dev libsecret-1-dev libfontconfig1-dev libfreetype6-dev \
   libx11-dev libx11-xcb-dev libxcb1-dev libxkbcommon-dev libxkbcommon-x11-dev \
   libxcb-cursor0 libxcb-glx0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
   libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-sync1 libxcb-util1 \
@@ -196,7 +199,7 @@ sudo apt install cmake ninja-build pkg-config autoconf automake libtool \
 sudo dnf install cmake ninja-build autoconf automake libtool python3 curl git \
   fftw3-devel rtl-sdr-devel portaudio-devel hidapi-devel \
   libglvnd-devel pulseaudio-libs-devel fontconfig-devel freetype-devel \
-  dbus-devel glib2-devel libX11-devel libxcb-devel \
+  dbus-devel glib2-devel libsecret-devel libX11-devel libxcb-devel \
   libxkbcommon-devel libxkbcommon-x11-devel \
   xcb-util-cursor xcb-util-image xcb-util-keysyms xcb-util-renderutil xcb-util-wm
 
@@ -224,6 +227,10 @@ is required during configure or build.
 ```bash
 sudo cmake --install build
 ```
+
+Source installs depend on the Qt location used at build time. If that Qt
+generation is replaced, rebuild and reinstall AetherSDR before pruning the old
+Qt generation.
 
 > **Platform setup and troubleshooting** — Windows 11 and macOS step-by-step,
 > the dependency-to-feature table, GPU/QRhi rendering and its `AETHER_NO_GPU`
@@ -268,7 +275,7 @@ PRs, bug reports, and feature requests welcome! See [CONTRIBUTING.md](CONTRIBUTI
 
 **Development environment:** AetherSDR is developed using [Claude Code](https://claude.com/claude-code) as the primary development tool. We encourage contributors to use Claude Code for consistency. PRs must follow project conventions, pass CI, and include GPG-signed commits.
 
-**Not a developer?** Click the lightbulb button in AetherSDR's title bar to create an AI-assisted bug report or feature request.
+**Not a developer?** Choose **Help → Submit your Idea... 💡** in AetherSDR to create an AI-assisted bug report or feature request.
 
 ---
 

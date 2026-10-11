@@ -28,6 +28,8 @@ public:
     std::vector<TunePowerContext> contexts;
     QList<QPair<bool, int>> tunes;
     QList<int> cwPitches;
+    QList<int> lineoutGains;
+    QList<bool> lineoutMutes;
     int keyCalls{0};
     RadioCapabilities capabilities() const override { return caps; }
     bool isConnected() const override { return connected; }
@@ -43,6 +45,8 @@ public:
     { tunes.append({on, power}); }
     void invokeExtension(const QString&, const QString&, quint64, const QVariant&) override {}
     void setCwPitch(int hz) override { cwPitches.append(hz); }
+    void setLineoutGain(int percent) override { lineoutGains.append(percent); }
+    void setLineoutMute(bool mute) override { lineoutMutes.append(mute); }
     ReceiveDispatch requestTransmitControl(const TransmitControlRequest& request, TunePowerContext context) override
     {
         requests.push_back(request);
@@ -71,6 +75,26 @@ struct Fixture {
         emit backend->sliceChanged(0, delta);
     }
 };
+void lineoutRouting()
+{
+    Fixture f;
+    f.backend->caps.lineoutControl = RadioCapabilities::LineoutControl{};
+    f.radio.setLineoutMute(true);
+    f.radio.setLineoutMute(false);
+    f.radio.setLineoutGain(30);
+    check(f.backend->lineoutMutes == QList<bool>({true, false})
+              && f.backend->lineoutGains == QList<int>{30} && f.dropped.isEmpty(),
+          "declared line output receives each typed edit without a drop notice");
+
+    Fixture unsupported;
+    unsupported.radio.setLineoutMute(true);
+    unsupported.radio.setLineoutGain(30);
+    check(unsupported.backend->lineoutMutes.isEmpty()
+              && unsupported.backend->lineoutGains.isEmpty()
+              && unsupported.dropped.contains(QStringLiteral("mixer lineout mute 1"))
+              && unsupported.dropped.contains(QStringLiteral("mixer lineout gain 30")),
+          "absent line output receives no seam call and retains both drop notices");
+}
 void receipts()
 {
     Fixture f;
@@ -250,6 +274,7 @@ int main(int argc, char** argv)
     }
     QCoreApplication app(argc, argv);
     receipts();
+    lineoutRouting();
     tuneOwnership();
     filterWarningReentrancy();
     cwPitchBackendLifetime();

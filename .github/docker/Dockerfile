@@ -54,6 +54,7 @@ RUN apt-get update && apt-get install -y \
     ca-certificates \
     libdbus-1-dev \
     libglib2.0-dev \
+    libsecret-1-dev \
     libfontconfig1-dev \
     libfreetype6-dev \
     # libQt6Multimedia.so from aqt is linked against PulseAudio; without this,
@@ -124,8 +125,11 @@ RUN python3 -m venv /tmp/aqt-venv \
 # #3639 for what a missing keychain costs — SmartLink credential persistence
 # silently compiles out via find_package(Qt6Keychain QUIET)).
 #
-# LIBSECRET_SUPPORT=OFF selects the pure Qt-D-Bus Secret Service backend for the
-# same reason it does there.
+# LIBSECRET_SUPPORT=ON for the same reason it is there: without libsecret,
+# qtkeychain has no backend on Secret-Service-only desktops (RFC #6271).
+# qtkeychain loads libsecret at runtime, so with Ubuntu's --as-needed the
+# library has no NEEDED entry for it; the check below looks for the backend
+# itself (the libsecret function names it resolves) instead.
 #
 # The version, commit pin and flags below are hand-duplicated from
 # scripts/setup/setup-qtkeychain.sh rather than sourced from it: this image is
@@ -142,13 +146,14 @@ RUN git clone --depth 1 --branch "${QTKEYCHAIN_VERSION}" \
         -DBUILD_WITH_QT6=ON \
         -DBUILD_SHARED_LIBS=ON \
         -DBUILD_TRANSLATIONS=OFF \
-        -DLIBSECRET_SUPPORT=OFF \
+        -DLIBSECRET_SUPPORT=ON \
         -DCMAKE_PREFIX_PATH="${QT_ROOT}" \
         -DCMAKE_INSTALL_PREFIX="${QTKEYCHAIN_ROOT}" \
         -DCMAKE_INSTALL_LIBDIR=lib \
     && cmake --build /tmp/qtkeychain-build -j"$(nproc)" \
     && cmake --install /tmp/qtkeychain-build \
     && test -f "${QTKEYCHAIN_ROOT}/lib/cmake/Qt6Keychain/Qt6KeychainConfig.cmake" \
+    && grep -aq secret_password_lookup "${QTKEYCHAIN_ROOT}"/lib/libqt6keychain.so.0.* \
     && rm -rf /tmp/qtkeychain-src /tmp/qtkeychain-build
 
 # CMake reads CMAKE_PREFIX_PATH from the environment, so ci.yml / codeql.yml /

@@ -1,0 +1,64 @@
+#pragma once
+
+#include "core/backends/RadioCapabilities.h"
+#include <QPointer>
+#include <QVector>
+#include <QWidget>
+#include <memory>
+
+class QCheckBox;
+class QComboBox;
+class QFrame;
+class QLabel;
+class QPushButton;
+
+namespace AetherSDR {
+class ControlAvailabilityRegistry;
+class RadioModel;
+class SliceModel;
+class WfmLockScope;
+
+// Selected-slice broadcast FM controls. AppletPanel owns the visibility of
+// the complete tile and floating window; this widget never hides itself.
+class WfmApplet : public QWidget {
+    Q_OBJECT
+public:
+    explicit WfmApplet(QWidget* parent = nullptr);
+    ~WfmApplet() override;
+    void setRadioModel(RadioModel* model);
+    void setSlice(SliceModel* slice);
+    bool isAvailable() const { return m_available; }
+    QSize sizeHint() const override;
+    QSize minimumSizeHint() const override;
+signals:
+    void availabilityChanged(bool available);
+private:
+    bool ownsWfmSlice() const;
+    void refresh();
+    void refreshDiagnostics();
+    void appendScopeSample();
+    void registerControls();
+    void setSettingsExpanded(bool expanded);
+    void applyUiPreferences();
+    void saveUiPreferences();
+
+    QPointer<RadioModel> m_model;
+    QPointer<SliceModel> m_slice;
+    QVector<QMetaObject::Connection> m_modelConnections;
+    QVector<QMetaObject::Connection> m_sliceConnections;
+    std::unique_ptr<ControlAvailabilityRegistry> m_availability;
+    RadioCapabilities m_caps;
+    bool m_connected{false};
+    bool m_available{false};
+    WfmLockScope* m_scope{nullptr};
+    QPushButton* m_audioMode{nullptr};
+    QLabel* m_status{nullptr};
+    QComboBox* m_deemphasis{nullptr};
+    QComboBox* m_bandwidth{nullptr};
+    QPushButton* m_settingsToggle{nullptr};
+    QFrame* m_settingsDrawer{nullptr};
+    QCheckBox* m_showScope{nullptr};
+    QCheckBox* m_showDiagnostics{nullptr};
+    QLabel* m_diagnostics{nullptr};
+};
+} // namespace AetherSDR

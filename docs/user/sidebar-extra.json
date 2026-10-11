@@ -1,0 +1,15 @@
+[
+  {
+    "label": "Generated Reference",
+    "items": [
+      {"type": "doc", "id": "generated/index", "label": "About These Pages"},
+      "generated/default-shortcuts",
+      "generated/midi-actions",
+      "generated/flexcontrol-actions",
+      "generated/ulanzi-dial-actions",
+      "generated/hid-controller-actions",
+      "generated/log-categories",
+      "generated/tci-commands"
+    ]
+  }
+]

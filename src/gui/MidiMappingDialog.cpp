@@ -192,7 +192,7 @@ MidiMappingDialog::MidiMappingDialog(MidiControlManager* manager, QWidget* paren
         m_bindingTable->verticalHeader()->setVisible(false);
         AetherSDR::ThemeManager::instance().applyStyleSheet(m_bindingTable, "QTableWidget { background: {{color.background.0}}; color: {{color.text.primary}}; "
             "border: 1px solid {{color.background.1}}; font-size: 11px; gridline-color: {{color.background.1}}; }"
-            "QTableWidget::item:selected { background: {{color.accent}}; color: {{color.background.0}}; }"
+            "QTableWidget::item:selected { background: palette(highlight); color: palette(highlighted-text); }"
             "QHeaderView::section { background: {{color.background.0}}; color: {{color.text.secondary}}; "
             "border: 1px solid {{color.background.1}}; padding: 3px; font-size: 11px; }");
         vbox->addWidget(m_bindingTable, 1);

@@ -79,7 +79,8 @@ int main()
             T owner({8, 1}); owner.beginSession();
             T::Desired desired;
             desired.hardware = device.hardware;
-            desired.receivers = {{{0, 100'000'000, -100'000, 100'000, 0, 0, 0}, T::Mode::Wfm}};
+            const double wfmGuard = AetherSDR::rtl::RtlReceivePipeline::kQualifiedWfmEnabled ? 3000 : 0;
+            desired.receivers = {{{0, 100'000'000, -100'000, 100'000, 0, wfmGuard, wfmGuard}, T::Mode::Wfm}};
             check(bool(owner.submit(desired)), "initial request admitted");
             auto work = owner.takeWork();
             check(work && owner.complete(T::execute(*work, usb)) == T::Completion::Published,

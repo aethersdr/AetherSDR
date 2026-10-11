@@ -5,6 +5,7 @@
 #include "EditorFramelessTitleBar.h"
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
+#include "core/ThemeManager.h"
 
 #include <QDateTime>
 #include <QFontMetrics>
@@ -25,9 +26,9 @@ namespace {
 // Same dark panel chrome as the other strip cells — frameless title
 // bar on transparent background, dark inner fill.
 constexpr const char* kWindowStyle =
-    "AetherSDR--StripRxOutputPanel { background: #0e1b28;"
-    " border: 1px solid #2a3a4a; border-radius: 4px; }"
-    "QLabel { background: transparent; color: #8aa8c0; font-size: 11px; }";
+    "AetherSDR--StripRxOutputPanel { background: {{color.background.1}};"
+    " border: 1px solid {{color.border.strong}}; border-radius: 4px; }"
+    "QLabel { background: transparent; color: {{color.text.secondary}}; font-size: 11px; }";
 
 constexpr float kMeterMinDb = -60.0f;
 constexpr float kMeterMaxDb =   0.0f;
@@ -79,8 +80,8 @@ protected:
         const QRectF r = barRect();
 
         // Track background.
-        p.setPen(QPen(QColor("#1a2a3a"), 1));
-        p.setBrush(QColor("#0a0e16"));
+        p.setPen(QPen(AetherSDR::ThemeManager::instance().color(this, "color.background.1"), 1));
+        p.setBrush(AetherSDR::ThemeManager::instance().color(this, "color.canvas.background"));
         p.drawRoundedRect(r, 3, 3);
 
         // RMS bar — gradient green → amber → red across the full
@@ -89,10 +90,10 @@ protected:
         const float rmsFrac = dbToRatio(m_rms);
         if (rmsFrac > 0.0f) {
             QLinearGradient g(r.left(), 0, r.right(), 0);
-            g.setColorAt(0.00, QColor("#30c060"));
-            g.setColorAt(dbToRatio(-12.0f), QColor("#a0c030"));
-            g.setColorAt(dbToRatio(-3.0f),  QColor("#d49030"));
-            g.setColorAt(1.00, QColor("#c03030"));
+            g.setColorAt(0.00, AetherSDR::ThemeManager::instance().color(this, "color.accent.success"));
+            g.setColorAt(dbToRatio(-12.0f), AetherSDR::ThemeManager::instance().color(this, "color.accent.success"));
+            g.setColorAt(dbToRatio(-3.0f),  AetherSDR::ThemeManager::instance().color(this, "color.accent.warning"));
+            g.setColorAt(1.00, AetherSDR::ThemeManager::instance().color(this, "color.accent.danger"));
             QRectF outR = r;
             outR.setWidth(rmsFrac * r.width());
             p.setPen(Qt::NoPen);
@@ -101,7 +102,7 @@ protected:
             // Leading-edge tick — sits at the right edge of the fill so
             // the bar visually "follows" the line as RMS moves.
             const double rx = r.left() + rmsFrac * r.width();
-            p.setPen(QPen(QColor("#e0e0e0"), 1.5));
+            p.setPen(QPen(AetherSDR::ThemeManager::instance().color(this, "color.meter.peak"), 1.5));
             p.drawLine(QPointF(rx, r.top() + 1), QPointF(rx, r.bottom() - 1));
         }
 
@@ -111,7 +112,7 @@ protected:
         // audio quiets so the operator can see headroom usage.
         if (m_holdDb > -100.0f) {
             const double hx = r.left() + dbToRatio(m_holdDb) * r.width();
-            p.setPen(QPen(QColor("#a0e0ff"), 2.0));
+            p.setPen(QPen(AetherSDR::ThemeManager::instance().color(this, "color.accent.bright"), 2.0));
             p.drawLine(QPointF(hx, r.top() + 1), QPointF(hx, r.bottom() - 1));
         }
 
@@ -124,7 +125,7 @@ protected:
         for (int db = -60; db <= 0; db += 12) {
             const double tickX = r.left()
                 + dbToRatio(static_cast<float>(db)) * r.width();
-            p.setPen(QPen(QColor("#a0b4c8"), 1.2));
+            p.setPen(QPen(AetherSDR::ThemeManager::instance().color(this, "color.text.secondary"), 1.2));
             p.drawLine(QPointF(tickX, r.bottom() - 4),
                        QPointF(tickX, r.bottom() + 4));
             const QString lbl = (db == 0) ? "0" : QString::number(db);
@@ -135,7 +136,7 @@ protected:
             if (lblX < minX) lblX = minX;
             if (lblX > maxX) lblX = maxX;
             const QRectF labelR(lblX, r.bottom() + 5, lblW + 2, 12);
-            p.setPen(QColor("#7f93a5"));
+            p.setPen(AetherSDR::ThemeManager::instance().color(this, "color.text.secondary"));
             p.drawText(labelR, Qt::AlignCenter, lbl);
         }
     }
@@ -156,7 +157,7 @@ StripRxOutputPanel::StripRxOutputPanel(AudioEngine* engine, QWidget* parent)
 {
     const QString title = QString::fromUtf8("Aetherial Output \xe2\x80\x94 RX");
     setWindowTitle(title);
-    setStyleSheet(kWindowStyle);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(this, kWindowStyle);
 
     auto* root = new QVBoxLayout(this);
     root->setContentsMargins(8, 0, 8, 0);
@@ -207,16 +208,16 @@ StripRxOutputPanel::StripRxOutputPanel(AudioEngine* engine, QWidget* parent)
     // green RMS, white CRST.
     {
         const QString labelCss =
-            "QLabel { color: #506070; font-size: 9px; font-weight: bold;"
+            "QLabel { color: {{color.text.label}}; font-size: 9px; font-weight: bold;"
             " padding: 0; }";
         const QString valCssCyan =
-            "QLabel { color: #56ccf2; font-size: 11px; font-weight: bold;"
+            "QLabel { color: {{color.accent}}; font-size: 11px; font-weight: bold;"
             " padding: 0; }";
         const QString valCssGreen =
-            "QLabel { color: #6fcf97; font-size: 11px; font-weight: bold;"
+            "QLabel { color: {{color.accent.success}}; font-size: 11px; font-weight: bold;"
             " padding: 0; }";
         const QString valCssWhite =
-            "QLabel { color: #d7e7f2; font-size: 11px; font-weight: bold;"
+            "QLabel { color: {{color.text.primary}}; font-size: 11px; font-weight: bold;"
             " padding: 0; }";
 
         auto* readGrid = new QGridLayout;
@@ -227,10 +228,10 @@ StripRxOutputPanel::StripRxOutputPanel(AudioEngine* engine, QWidget* parent)
         auto addRow = [&](int r, const QString& tag, const QString& valCss,
                           QLabel*& outVal) {
             auto* lbl = new QLabel(tag, this);
-            lbl->setStyleSheet(labelCss);
+            AetherSDR::ThemeManager::instance().applyStyleSheet(lbl, labelCss);
             lbl->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
             outVal = new QLabel(QString::fromUtf8("-\xe2\x88\x9e"), this);
-            outVal->setStyleSheet(valCss);
+            AetherSDR::ThemeManager::instance().applyStyleSheet(outVal, valCss);
             outVal->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
             outVal->setMinimumWidth(44);
             readGrid->addWidget(lbl,    r, 0);
@@ -254,28 +255,28 @@ StripRxOutputPanel::StripRxOutputPanel(AudioEngine* engine, QWidget* parent)
     {
         const QString muteStyle =
             "QPushButton {"
-            "  background: #1a2230; border: 1px solid #2a3744;"
-            "  border-radius: 3px; color: #506070;"
+            "  background: {{color.background.1}}; border: 1px solid {{color.border.strong}};"
+            "  border-radius: 3px; color: {{color.text.label}};"
             "  font-size: 10px; font-weight: bold; padding: 1px;"
             "}"
-            "QPushButton:hover { color: #c8d8e8; }"
+            "QPushButton:hover { color: {{color.text.primary}}; }"
             "QPushButton:checked {"
-            "  background: #4a1818; color: #ff8080;"
-            "  border: 1px solid #ff4040;"
+            "  background: {{color.toggle.footer.danger.background.checked}}; color: {{color.accent.danger}};"
+            "  border: 1px solid {{color.accent.danger}};"
             "}"
-            "QPushButton:checked:hover { background: #5a2828; }";
+            "QPushButton:checked:hover { background: {{color.toggle.footer.danger.background.hover}}; }";
         const QString boostStyle =
             "QPushButton {"
-            "  background: #1a2230; border: 1px solid #2a3744;"
-            "  border-radius: 3px; color: #506070;"
+            "  background: {{color.background.1}}; border: 1px solid {{color.border.strong}};"
+            "  border-radius: 3px; color: {{color.text.label}};"
             "  font-size: 10px; font-weight: bold; padding: 1px;"
             "}"
-            "QPushButton:hover { color: #c8d8e8; }"
+            "QPushButton:hover { color: {{color.text.primary}}; }"
             "QPushButton:checked {"
-            "  background: #1a4a2a; color: #80ff80;"
-            "  border: 1px solid #40c060;"
+            "  background: {{color.toggle.footer.success.background.checked}}; color: {{color.accent.success}};"
+            "  border: 1px solid {{color.accent.success}};"
             "}"
-            "QPushButton:checked:hover { background: #285a38; }";
+            "QPushButton:checked:hover { background: {{color.toggle.footer.success.background.hover}}; }";
 
         auto* col = new QVBoxLayout;
         col->setContentsMargins(0, 0, 0, 0);
@@ -284,7 +285,7 @@ StripRxOutputPanel::StripRxOutputPanel(AudioEngine* engine, QWidget* parent)
         m_muteBtn = new QPushButton(QStringLiteral("MUTE"), this);
         m_muteBtn->setCheckable(true);
         m_muteBtn->setFixedSize(56, 18);
-        m_muteBtn->setStyleSheet(muteStyle);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_muteBtn, muteStyle);
         m_muteBtn->setToolTip(tr("Mute local audio output."));
         if (m_audio) m_muteBtn->setChecked(m_audio->isMuted());
         connect(m_muteBtn, &QPushButton::toggled, this, [this](bool on) {
@@ -295,7 +296,7 @@ StripRxOutputPanel::StripRxOutputPanel(AudioEngine* engine, QWidget* parent)
         m_boostBtn = new QPushButton(QStringLiteral("BOOST"), this);
         m_boostBtn->setCheckable(true);
         m_boostBtn->setFixedSize(56, 18);
-        m_boostBtn->setStyleSheet(boostStyle);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_boostBtn, boostStyle);
         m_boostBtn->setToolTip(
             tr("Soft-knee tanh boost on the RX output (~2× gain on quiet "
                "passages, no hard clipping on loud ones)."));

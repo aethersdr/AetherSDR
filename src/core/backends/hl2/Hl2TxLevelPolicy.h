@@ -29,7 +29,7 @@ namespace AetherSDR::hl2 {
 // The slider as the modulator's linear multiplier; level 0 mutes. Applies to
 // Microphone and ClientLeveled audio (voice, AX.25, TCI/DAX), not the WSPR
 // pump (Hl2TxDsp substitutes 1.0), so 0 does not silence a beacon. The ALC
-// only reduces, and reduction is instantaneous (`m_alcGain = target`), so a
+// only reduces, and reduction has no attack constant (Hl2TxAlc.h), so a
 // full-scale source at the slider top is limited by the ALC, not flat-topped
 // by the modulator clamp; hl2_txdsp_test's slider-top case asserts it.
 [[nodiscard]] inline double micSliderToLinear(int level) noexcept

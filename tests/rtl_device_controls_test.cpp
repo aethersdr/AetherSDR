@@ -19,10 +19,13 @@ struct RtlCaptureBackendTestAccess {
         backend.m_requested = {};
         backend.m_requested.hardware = {100000000, 2400000, 0, 0, backend.m_ppmCorrection, 240};
         backend.m_requested.dcSuppression = backend.m_dcSuppression;
-        backend.m_requested.receivers = {{{0, 100200000, -8000, 8000, 0, 3000, 3000}, T::Mode::Fm}};
+        backend.m_requested.receivers = {{{0, 100200000, -6500, 7500, 0, 3000, 3000},
+            T::Mode::Fmn, 37, 68, true, true, 43}};
         backend.startCapture(std::make_unique<RtlSdrWorker>(std::make_unique<test::InjectedDevice>(device)));
     }
     static bool busy(const RtlSdrBackend& backend) { return backend.m_capture.busy(); }
+    static T::State state(const RtlSdrBackend& backend) { return *backend.m_capture.confirmed(); }
+    static RtlViewport view(const RtlSdrBackend& backend) { return *backend.m_viewport; }
     static QVariantMap status(const RtlSdrBackend& backend) { return backend.deviceSettingsStatus(); }
     static void mismatch(RtlSdrBackend& backend) { backend.verifyDeviceSettingsIdentity(QStringLiteral("different-usb-device")); }
 };
@@ -32,6 +35,25 @@ int failures = 0;
 void check(bool value, const char* message)
 {
     if (!value) { ++failures; std::fprintf(stderr, "FAIL: %s\n", message); }
+}
+bool sameRfAndReceivers(const T::State& before, const T::State& after)
+{
+    // PPM and the capture generation are the only permitted changes here.
+    T::Hardware hardware = before.hardware;
+    hardware.ppm = after.hardware.ppm;
+    SharedCapturePolicy::CaptureDescriptor capture = before.capture;
+    capture.generation = after.capture.generation;
+    return hardware == after.hardware && capture == after.capture
+        && before.receivers == after.receivers && before.receivingIds == after.receivingIds
+        && before.automaticDirectSampling == after.automaticDirectSampling
+        && before.dcSuppression == after.dcSuppression;
+}
+bool sameView(const rtl::RtlViewport& before, const rtl::RtlViewport& after)
+{
+    return before.firstBin == after.firstBin && before.binCount == after.binCount
+        && before.sourceBinCount == after.sourceBinCount && before.centerHz == after.centerHz
+        && before.spanHz == after.spanHz && before.minimumSpanHz == after.minimumSpanHz
+        && before.maximumSpanHz == after.maximumSpanHz;
 }
 template<typename Predicate>
 bool waitFor(const std::shared_ptr<test::DeviceState>& device, Predicate ready)
@@ -89,6 +111,33 @@ int main(int argc, char** argv)
     const int correctedStart = displayFrames;
     check(waitFor(device, [&] { return displayFrames >= correctedStart + 12; }) && displayPeak < -110,
         "production worker sends genuinely DC-corrected IQ to the display after settling");
+    // Initial FM-N placement deliberately avoids converter DC. Anchor the
+    // narrowed view on that accepted capture, retaining its DC bin for the
+    // existing suppression check while keeping all three centers distinct.
+    const T::State original = Access::state(backend);
+    backend.setPanBandwidth({}, 300000);
+    backend.setPanCenter({}, original.capture.centerHz - 100000, IRadioBackend::PanCenterIntent::Range);
+    const rtl::RtlViewport originalView = Access::view(backend);
+    check(original.receivers.size() == 1 && original.receivers.front().mode == T::Mode::Fmn
+        && original.receivers.front().passband.carrierHz == 100200000
+        && original.receivers.front().passband.filterLowHz == -6500
+        && original.receivers.front().passband.filterHighHz == 7500
+        && original.receivers.front().audioGain == 37 && original.receivers.front().audioPan == 68
+        && original.receivers.front().audioMute && original.receivers.front().squelchEnabled
+        && original.receivers.front().squelchLevel == 43 && original.hardware.centerHz == original.capture.centerHz
+        && original.capture.centerHz != original.receivers.front().passband.carrierHz
+        && originalView.centerHz != original.capture.centerHz
+        && originalView.centerHz != original.receivers.front().passband.carrierHz
+        && originalView.spanHz < original.capture.achievedSampleRateHz
+        && original.capture.centerHz >= originalView.centerHz - originalView.spanHz / 2
+        && original.capture.centerHz < originalView.centerHz + originalView.spanHz / 2,
+        "PPM preservation fixture has nondefault receiver and independent narrowed view");
+    bool viewMoved = false;
+    const auto viewConnection = QObject::connect(&backend, &IRadioBackend::panCenterBandwidthChanged,
+        &app, [&](const QString&, double centerMhz, double spanMhz) {
+            viewMoved = viewMoved || centerMhz != originalView.centerHz / 1e6
+                || spanMhz != originalView.spanHz / 1e6;
+        });
     const int beforeInvalid = device->writes;
     quint64 invalid = 10;
     for (const QVariant& value : {QVariant(17.38), QVariant(true), QVariant("18"), QVariant(1001), QVariant(-1001)}) {
@@ -101,13 +150,27 @@ int main(int argc, char** argv)
     backend.invokeExtension("rtl", "ppm.set", 20, 18);
     check(settings.load().values.ppm == 17 && Access::status(backend).value("ppm").toInt() == 17,
         "pending PPM is neither displayed as applied nor persisted");
+    check(Access::state(backend).token == original.token
+        && sameRfAndReceivers(original, Access::state(backend))
+        && sameView(originalView, Access::view(backend)),
+        "pending PPM preserves accepted capture, receiver settings and displayed RF view");
     check(waitFor(device, [&] { return results.contains(20); }) && results[20].toInt() == 18
         && settings.load().values.ppm == 18, "hardware and DSP confirmation precede persistence and extension completion");
+    const T::State accepted = Access::state(backend);
+    check(accepted.token.session == original.token.session && accepted.token.revision > original.token.revision
+        && accepted.capture.generation > original.capture.generation
+        && sameRfAndReceivers(original, accepted) && sameView(originalView, Access::view(backend)),
+        "accepted PPM advances capture identity without moving RF, receiver settings or the view");
     device->failWriteAt = device->writes + 3;
     backend.invokeExtension("rtl", "ppm.set", 21, 19);
     check(waitFor(device, [&] { return errors.contains(21); }) && backend.isConnected()
         && settings.load().values.ppm == 18 && device->hardware.ppm == 18,
         "USB refusal rolls back complete capture and cannot save refused calibration");
+    const T::State rolledBack = Access::state(backend);
+    check(rolledBack.token == accepted.token && rolledBack.capture == accepted.capture
+        && rolledBack.hardware == accepted.hardware && sameRfAndReceivers(accepted, rolledBack)
+        && sameView(originalView, Access::view(backend)),
+        "failed PPM restores the exact accepted capture identity, receiver settings and view");
     device->failWriteAt = 0;
 
     {
@@ -117,10 +180,21 @@ int main(int argc, char** argv)
     check(waitFor(device, [&] { std::lock_guard lock(device->mutex); return device->inReadback; }), "hold first readback for deterministic coalescing");
     backend.invokeExtension("rtl", "ppm.set", 31, 20);
     check(errors.contains(30) && settings.load().values.ppm == 18, "superseded promise refused before any speculative save");
+    check(Access::state(backend).token == accepted.token
+        && sameRfAndReceivers(accepted, Access::state(backend))
+        && sameView(originalView, Access::view(backend)),
+        "coalesced PPM intent leaves accepted receiver and RF view unchanged while readback is held");
     device->releaseReadback();
     check(waitFor(device, [&] { return results.contains(31); }) && results[31].toInt() == 20
         && settings.load().values.ppm == 20 && device->hardware.ppm == 20,
         "coalesced latest correction survives compensation and is sole accepted save");
+    const T::State coalesced = Access::state(backend);
+    check(coalesced.token.session == accepted.token.session && coalesced.token.revision > accepted.token.revision
+        && coalesced.capture.generation > accepted.capture.generation
+        && sameRfAndReceivers(original, coalesced) && sameView(originalView, Access::view(backend))
+        && !viewMoved,
+        "coalesced PPM preserves receiver settings and fixed RF scale through compensation and adoption");
+    QObject::disconnect(viewConnection);
 
     const int beforeDc = device->writes;
     backend.invokeExtension("rtl", "dc_suppression.set", 40, false);

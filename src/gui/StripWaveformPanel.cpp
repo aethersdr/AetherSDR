@@ -19,8 +19,8 @@ namespace AetherSDR {
 
 namespace {
 constexpr const char* kWindowStyle =
-    "QWidget { background: #08121d; color: #d7e7f2; }"
-    "QLabel  { background: transparent; color: #8aa8c0; font-size: 11px; }";
+    "QWidget { background: {{color.background.0}}; color: {{color.text.primary}}; }"
+    "QLabel  { background: transparent; color: {{color.text.secondary}}; font-size: 11px; }";
 }
 
 StripWaveformPanel::StripWaveformPanel(AudioEngine* engine, QWidget* parent)
@@ -29,7 +29,7 @@ StripWaveformPanel::StripWaveformPanel(AudioEngine* engine, QWidget* parent)
 {
     const QString title = QString::fromUtf8("Aetherial Waveform \xe2\x80\x94 TX");
     setWindowTitle(title);
-    setStyleSheet(kWindowStyle);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(this, kWindowStyle);
 
     auto* root = new QVBoxLayout(this);
     root->setContentsMargins(8, 0, 8, 0);
@@ -55,10 +55,10 @@ StripWaveformPanel::StripWaveformPanel(AudioEngine* engine, QWidget* parent)
     m_modeBtn->setFixedSize(78, 18);
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_modeBtn, "QPushButton {"
         "  background: {{color.background.1}}; border: 1px solid {{color.background.1}};"
-        "  border-radius: 3px; color: #c8a070;"
+        "  border-radius: 3px; color: {{color.accent.warning}};"
         "  font-size: 10px; font-weight: bold; padding: 1px 6px;"
         "}"
-        "QPushButton:hover { background: #3a2818; color: {{color.accent.warning}};"
+        "QPushButton:hover { background: {{color.background.tx}}; color: {{color.accent.warning}};"
         "                    border: 1px solid {{color.accent.warning}}; }");
     m_modeBtn->setToolTip("Cycle waveform view: Scope → Envelope → History");
     connect(m_modeBtn, &QPushButton::clicked,
@@ -94,6 +94,9 @@ StripWaveformPanel::StripWaveformPanel(AudioEngine* engine, QWidget* parent)
     titleRow->addWidget(m_windowSlider);
     titleRow->addWidget(m_windowLbl);
     titleRow->addWidget(m_modeBtn);
+    // The scope has a fixed height, so spare room in a taller page goes
+    // above the title row rather than between the row and the scope.
+    root->addStretch(1);
     root->addLayout(titleRow);
 
     m_waveform = new WaveformWidget(WaveformWidget::Profile::Strip, this);
@@ -119,7 +122,7 @@ StripWaveformPanel::StripWaveformPanel(AudioEngine* engine, QWidget* parent)
     // initial paint is consistent.  showForRx() flips the pin and
     // re-wires the source tap to the RX-side scope signal.
     m_waveform->setTransmitting(true);
-    root->addWidget(m_waveform, 1);
+    root->addWidget(m_waveform);
 
     applyViewMode();
 

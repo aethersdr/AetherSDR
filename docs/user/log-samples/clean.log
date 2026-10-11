@@ -1,0 +1,22 @@
+[09:14:02.101] INF default: GpuSelector: render GPU -> Auto (system default — no override)
+[09:14:02.101] INF default: QtAudioBackendGuard: PipeWire context OK; Qt's default backend left in place
+[09:14:02.101] INF default: Platform: Qt platform plugin "xcb" (QT_QPA_PLATFORM unset, Qt default)
+[09:14:02.140] INF aether.sysinfo: OS: Ubuntu 24.04.3 LTS kernel 6.8.0-85-generic arch x86_64
+[09:14:02.140] INF aether.sysinfo: CPU: AMD Ryzen 7 5800X 8-Core Processor features: SSE42 AVX AVX2 FMA F16C BMI2
+[09:14:02.140] INF aether.sysinfo: RAM: 32012 MB
+[09:14:02.141] INF aether.sysinfo: Speech engine CPU baseline: x86-64-v3
+[09:14:02.152] DBG default: Starting AetherSDR 26.10.1
+[09:14:03.410] DBG aether.discovery: RadioDiscovery: found "FLEX-8600  KK7GWY-8600  KK7GWY\nAvailable (Local)"
+[09:14:05.002] DBG aether.connection: RadioConnection: connecting to "*.*.*. 121" : 4992
+[09:14:05.010] DBG aether.connection: RadioConnection: TCP connected
+[09:14:05.020] DBG aether.connection: RX: "V1.4.0.0"
+[09:14:05.021] DBG aether.connection: RX: "H2C6B1A07"
+[09:14:05.022] DBG aether.connection: RadioConnection: assigned handle "2c6b1a07"
+[09:14:05.120] DBG aether.connection: RX: "R3|0|model=\"FLEX-8600\",chassis_serial=****-****-****-7836,name=\"KK7GWY-8600\",callsign=KK7GWY,software_ver=4.2.18.41174,ip=*.*.*. 121,netmask=*.*.*. 0"
+[09:14:05.130] INF aether.vita49: PanadapterStream: VITA UDP receive buffer requested=8388608 granted=8388608
+[09:14:05.200] DBG aether.protocol: RadioModel: new panadapter created, pan_id = "0x40000000"
+[09:14:05.230] DBG aether.protocol: RadioModel: new slice created, index = "0"
+[09:14:05.400] INF aether.audio.summary: Audio NR2 wisdom summary: state=loaded
+[10:00:01.000] INF default: MetisClient: no EP6 for 500 ms — re-sending the run command before declaring link loss (this one, then up to 2 more)
+[10:00:01.200] INF default: MetisClient: EP6 resumed after a silence recovery ( 700 ms)
+[11:30:00.000] INF aether.connection: RadioConnection: disconnect summary handle=0x2C6B1A07 streamId=0x04000008 streamSeq=41 streamAck=yes streamMs=12 closeMs=3 totalMs=18

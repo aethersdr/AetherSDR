@@ -32,6 +32,7 @@ struct Hl2DspReadbackTestAccess {
     static int rfPower(const Hl2Backend& backend) { return backend.m_rfPowerPercent; }
     static int micLevel(const Hl2Backend& backend) { return backend.m_micLevel; }
     static int cwPitch(const Hl2Backend& backend) { return backend.m_cwPitchHz; }
+    static int tunePower(const Hl2Backend& backend) { return backend.m_tunePowerPercent; }
     static std::pair<int, int> txPassband(const Hl2Backend& backend)
     { return backend.effectiveTxPassband(QStringLiteral("USB")); }
     static std::array<double, 3> audio(Hl2Backend& backend)
@@ -354,6 +355,19 @@ void receiveControlContracts()
                   "Flex DSP preserves exact enable/level encoding without inventing manual notch");
         }
     }
+    // A Flex has one blanker: a host kind reaches it as `nb=1`, and the host
+    // blanker's fill has no Flex command at all.
+    commands.clear();
+    SliceDspRequest nb2{SliceDspRequest::Feature::Nb, SliceDspRequest::Field::Enabled, true, 47};
+    nb2.kind = NoiseBlankerKind::Advanced;
+    nb2.fill = NoiseBlankerFill::Interpolate;
+    check(flex.requestSliceDsp(3, nb2) == ReceiveDispatch::Dispatched
+              && commands == QStringList{QStringLiteral("slice set 3 nb=1")},
+          "Flex reads a host blanker kind as its one blanker on");
+    commands.clear();
+    nb2.field = SliceDspRequest::Field::Fill;
+    check(flex.requestSliceDsp(3, nb2) == ReceiveDispatch::Unsupported && commands.isEmpty(),
+          "Flex refuses the host blanker's fill without inventing wire text");
     commands.clear();
     check(!flex.capabilities().receiveAudioControl && !flex.capabilities().hasRadioDialLock,
           "Flex desktop audio and slice lock do not grow daemon or global-lock capabilities");
@@ -512,8 +526,10 @@ void hostConfiguration()
                   "HL2 publishes its accepted AGC configuration");
         } else {
             const auto& anan = static_cast<const anan::AnanBackend&>(*backend);
-            check(anan.agcModeForTest() == 4 && std::abs(anan.agcCeilingDbForTest() - 30.0) < 1e-9,
-                  "ANAN retains WDSP AGC configuration without claiming a radio readback");
+            check(last(observations).agcMode == QStringLiteral("fast") && last(observations).agcThreshold == 50
+                      && anan.agcModeForTest() == 4
+                      && anan.agcMaxGainDbForTest() == anan::AnanBackend::agcKnobDb(50),
+                  "ANAN publishes the WDSP AGC configuration it retains");
         }
         check(affinity.violations().isEmpty(), "driven host backend signals stay on the owner thread");
     }
@@ -623,6 +639,7 @@ void remainingModelControls()
               == ReceiveDispatch::Unsupported,
           "HL2 refuses a nonexistent physical mic input");
     QSignalSpy observations(&hl2, &IRadioBackend::sliceChanged);
+    QSignalSpy operatingChanges(&hl2, &IRadioBackend::operatingStateChanged);
     bool nested = false;
     QObject::connect(&hl2, &IRadioBackend::sliceChanged, &hl2,
                      [&](int, const SliceDelta& delta) {
@@ -634,12 +651,23 @@ void remainingModelControls()
     check(hl2.requestSliceControl(0, {SF::Rit, IncrementalTuning{true, 123}})
               == ReceiveDispatch::Dispatched && nested && last(observations).ritFreq == 456,
           "HL2 paired RIT commits before readback; a reentrant newer request wins");
+    check(operatingChanges.size() >= 2,
+          "both reentrant typed RIT edits notify the operating-state capture pipeline");
     const auto ritObservations = observations.size();
+    const auto ritOperatingChanges = operatingChanges.size();
     check(hl2.requestSliceControl(0, {SF::Rit, IncrementalTuning{true, 456}})
-              == ReceiveDispatch::Dispatched && observations.size() == ritObservations,
+              == ReceiveDispatch::Dispatched && observations.size() == ritObservations
+              && operatingChanges.size() == ritOperatingChanges,
           "an identical HL2 RIT pair publishes no redundant observation");
+    hl2.requestSliceControl(0, {SF::Rit, IncrementalTuning{false, 456}});
+    const auto beforeIdleRit = operatingChanges.size();
+    hl2.requestSliceControl(0, {SF::Rit, IncrementalTuning{false, 789}});
+    check(operatingChanges.size() == beforeIdleRit + 1 && last(observations).ritFreq == 789,
+          "editing a disabled RIT offset notifies capture even without an RX retune");
+    const auto beforeXit = operatingChanges.size();
     hl2.requestSliceControl(0, {SF::Xit, IncrementalTuning{true, 20000}});
-    check(last(observations).xitFreq == 9999, "HL2 typed XIT retains the production clamp");
+    check(last(observations).xitFreq == 9999 && operatingChanges.size() == beforeXit + 1,
+          "HL2 typed XIT retains the production clamp and notifies operating-state capture");
     const auto xitObservations = observations.size();
     hl2.requestSliceControl(0, {SF::Xit, IncrementalTuning{true, 9999}});
     check(observations.size() == xitObservations,
@@ -647,10 +675,21 @@ void remainingModelControls()
     hl2.requestSliceControl(0, {SF::Xit, IncrementalTuning{true, 20000}});
     check(observations.size() == xitObservations + 1 && last(observations).xitFreq == 9999,
           "an oversized repeated XIT intent still receives its corrective clamp observation");
+    const auto beforeTuneMemory = operatingChanges.size();
     check(hl2.requestTransmitControl({TF::TunePower, 20}) == ReceiveDispatch::LocalOnly
+              && Hl2Access::tunePower(hl2) == 20
+              && operatingChanges.size() == beforeTuneMemory + 1
+              && hl2.currentOperatingState().extension.value(QStringLiteral("txSetpoints"))
+                  .toObject().value(QStringLiteral("tuneDefaultPercent")).toInt(-1) == 20
               && hl2.requestTransmitControl({TF::TunePower, 20}, TunePowerContext::LiveLocalCarrier)
                   == ReceiveDispatch::Unsupported,
           "HL2 idle TUNE edits are local setpoints, never an unadmitted drive write");
+    const auto recordedChanges = operatingChanges.size();
+    check(hl2.requestTransmitControl({TF::TunePower, 20}) == ReceiveDispatch::LocalOnly
+              && operatingChanges.size() == recordedChanges
+              && hl2.requestTransmitControl({TF::TunePower, 30}, TunePowerContext::UnqualifiedCarrier)
+                  == ReceiveDispatch::Unsupported && Hl2Access::tunePower(hl2) == 20,
+          "identical TUNE setpoints do not resave; an unqualified carrier cannot replace the memory");
     for (const Family& family : kFamilies) {
         if (!family.make || (QLatin1String(family.name) != QLatin1String("sim")
             && QLatin1String(family.name) != QLatin1String("anan")
@@ -801,7 +840,8 @@ void hl2WorkerDispatch()
     check(backend.requestSliceDsp(0, {SliceDspRequest::Feature::Nb, SliceDspRequest::Field::Level, true, 71})
               == ReceiveDispatch::Dispatched, "HL2 accepts its implemented blanker");
     applied = hl2::Hl2DspReadbackTestAccess::applied(backend);
-    check(applied.noiseBlankerEnabled && applied.noiseBlankerLevel == 71,
+    check(applied.noiseBlanker == WdspChannel::NoiseBlanker::Impulse
+              && applied.noiseBlankerLevel == 71,
           "HL2 typed blanker configures the actual DSP worker");
     check(backend.requestSliceDsp(0, {SliceDspRequest::Feature::Apf,
               SliceDspRequest::Field::Enabled, true, 75}) == ReceiveDispatch::Dispatched,

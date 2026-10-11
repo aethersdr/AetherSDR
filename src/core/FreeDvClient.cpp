@@ -462,6 +462,7 @@ void FreeDvClient::onRxReport(const QJsonObject& data)
     spot.spotterCall = receiverCall;
     spot.freqMhz     = freqMhz;
     spot.snr         = static_cast<int>(std::round(snr));
+    spot.hasSnr      = true;
     spot.source      = "FreeDV";
     spot.comment     = mode;
     if (!grid.isEmpty())

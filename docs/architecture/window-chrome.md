@@ -26,6 +26,13 @@ which is why `supportsExpandedClientArea()` keys off the platform name.
 `View → Frameless Window` turns the whole policy off on every platform and
 returns the window to system decorations.
 
+This policy is the **main window's**. Windows built on `CanonWindow` (the
+visual canon, RFC #6226) are a deliberate split from it: frameless and
+translucent on all three platforms, with no `FramelessWindow` opt-out. See
+[`../style/aethersdr-style-guide.md`](../style/aethersdr-style-guide.md) and
+the `CanonWindow` section of
+[`../style/dialog-patterns.md`](../style/dialog-patterns.md).
+
 `TitleBar` draws the same 52-logical-pixel content everywhere. It opts out of
 QWidget's automatic top-level safe-area margin and instead reserves horizontal
 control gutters from `QWindow::safeAreaMargins()` and, on macOS, the measured
@@ -77,6 +84,26 @@ item (`syncMenuCheckColumn()`, refreshed before each show).
   taskbar minimize, Win+Up and snap-to-maximize need them. **The Snap Layouts
   hover flyout does not appear** (nothing returns `HTMAXBUTTON` on hover);
   that is tracked in #6224.
+  Qt keeps a resize-border inset on the left, right and bottom as non-client.
+  Windows 11 draws it invisibly, but Windows 10 paints it as a light strip
+  (#6266), so on Windows 10 only `MainWindow::nativeEvent` answers
+  `WM_NCCALCSIZE` with the whole window as client area (inset on all four
+  sides while maximized).
+  `MainWindow::nativeEvent` also answers `WM_NCHITTEST` itself on Windows 10
+  and 11: the resize codes on a band at the window edges
+  (`SM_CXSIZEFRAME` / `SM_CYSIZEFRAME` + `SM_CXPADDEDBORDER` for the
+  left/right and top/bottom edges; none while maximized or fullscreen),
+  `HTCLIENT` everywhere else (`WindowChrome::expandedFrameHit`). Qt 6.12's own
+  answer for these flags turns the live button state into synthetic mouse
+  presses, which doubled real clicks and closed menus as they opened (#6272).
+  Edge resize rests on that handler; `FramelessResizer` is off on this path.
+  The top band also covers the top few pixels of the bar, as Qt's did. Snap
+  Layouts (#6224) is therefore fixed in that handler too: return
+  `HTMAXBUTTON` over the bar's maximize button, from `expandedFrameHit`, not a
+  Qt change. Popped-out panadapters use plain `FramelessWindowHint` and keep
+  Qt's hit test.
+  On Windows 11 `MainWindow::applyWindowsFrameColor()` sets the DWM
+  border to `color.background.app`, with Frameless Window on or off.
 - **Linux:** Qt's desktop Linux backends do not advertise expanded client
   areas. The fallback uses the shared caption cluster and `FramelessResizer`
   (6 px edge band; no top-edge resize under the bar, #4886). Title dragging
@@ -87,7 +114,7 @@ item (`syncMenuCheckColumn()`, refreshed before each show).
   preference negotiation is not implemented. Wayland/X11 snap and
   fractional-scale resize are native test items.
 
-The previous custom Windows `nativeEvent`/DWM frame and the macOS corner and
+The previous full custom Windows `nativeEvent`/DWM frame and the macOS corner and
 shadow shim are gone. The window is **opaque** (`WA_TranslucentBackground`
 off): cheaper to composite, and it avoids the earlier disappearing header and
 status-bar regressions. There is no system-blur promise and no custom corner
@@ -118,12 +145,14 @@ window resize.
 
 Each tab shows the radio's name on line one and `[model ·] status [· detail]`
 on line two — the model only when a nickname hides it, the state always in
-words (WCAG 1.4.1; the dot's colour is never the only carrier). The active
+words (WCAG 1.4.1; the dot's colour is never the only carrier), in sentence
+case: "Connected", "Available", "In use". The automation bridge's `status`
+field keeps the lower-case token those labels are rendered from. The active
 tab's dot is also the radio-link indicator: it swells once per discovery
 heartbeat, turns amber while discovering and red after three missed beats
 (blinking, or solid when the operator has blinking off). An operator
 disconnect stops the miss timer and clears the alarm; an unexpected loss
-raises it. While the alarm is up the tab says "link lost" in words too, and the
+raises it. While the alarm is up the tab says "Link lost" in words too, and the
 alarm stays on the radio that dropped (not on whichever tab comes first) until
 a different session starts. The strip takes the bar's free width and scrolls
 only once that runs out; then a vertical mouse wheel scrolls it, and dragging

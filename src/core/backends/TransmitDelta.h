@@ -31,7 +31,7 @@ struct TransmitDelta {
     std::optional<int>     micLevel;         // 0..100
     std::optional<bool>    micAcc;
     std::optional<bool>    speechProcEnable;
-    std::optional<int>     speechProcLevel;  // 0..100
+    std::optional<int>     speechProcLevel;  // 0..SpeechProcessorControl::levelMaximum
     // compander / dexp are aliased on the wire: `compander` (or `dexp` when
     // compander is absent) drives BOTH the compander (mic) and dexp (phone)
     // member pairs; likewise compander_level / noise_gate_level.

@@ -10,7 +10,8 @@ which). Six deliverables, in this order:
 
 1. **A commit-to-PR mapping** of everything since the previous tag, saved.
 2. **The six release files edited** — version spots, a new CHANGELOG section
-   written from the PR bodies, and a README/ROADMAP content refresh.
+   written from the PR bodies, and a README/ROADMAP content refresh — and
+   the user docs' Stable snapshot taken (step 4).
 3. **The validation list run and printed** — all of it, every time.
 4. **The prep PR**, on a `release/vX.Y.Z` branch of the org repo, kept current
    with `main` until it merges.
@@ -84,9 +85,10 @@ The bar is: *would a different answer have changed the work?* If yes, ask.
 - **Dropping or merging an entry that already sits in `[Unreleased]`.** Fold
   the block in whole; if an entry cannot be placed, ask. v26.8.1 claimed
   "everything folded in" and dropped #4687.
-- **Any file beyond the six.** A README split like #5673's `docs/BUILDING.md`,
-  a regenerated touchpoint manifest like #4872's — each is a decision with a
-  reason that goes in the scope table.
+- **Any file beyond the six and the docs snapshot.** A README split like
+  #5673's `docs/BUILDING.md`, a regenerated touchpoint manifest like #4872's —
+  each is a decision with a reason that goes in the scope table. The snapshot
+  (step 4) is part of every prep, not a question.
 - **An ambiguous contributor identity** — a login the API cannot resolve for a
   direct commit, or a display name that matches no login.
 - **The month-rollover text** for "Recently shipped" (the intro names the
@@ -333,6 +335,27 @@ time:
 - **Re-read a file after applying a GitHub suggestion.** A suggestion on a
   block of a different line count left a duplicated fragment in the README
   that shipped in v26.8.2 and was only removed by the next prep.
+- **The Stable docs snapshot.** docs.aethersdr.com serves two versions:
+  **Stable** at `/` from `docs/user/versioned_docs/version-stable/`, and
+  **Next (main)** at `/next/` from `docs/user/docs/`. The release makes
+  today's Next the new Stable, so run, after `git merge origin/main` brings
+  the docs current:
+
+  ```sh
+  python3 tools/docs/snapshot_stable.py X.Y.Z
+  (cd docs/user && npm ci && npm run build)
+  ```
+
+  It replaces the snapshot, its sidebar and the version label
+  (`docs/user/stable-version.json`), and rewrites the Log Analyzer's `/next/`
+  rule links in `docs/user/src/components/LogAnalyzer/rules.json` to Stable
+  for every page the snapshot now has; the build and
+  `node tools/docs/test_log_rules.mjs` are its checks. It is its own
+  commit (`docs(user): Stable docs snapshot for vX.Y.Z. Principle VIII.`),
+  and its paths show up as `WARN` extras in step 5: list them in the scope
+  table as "docs snapshot". Re-run it when you fold in a PR that changed
+  `docs/user/docs/`. A hotfix snapshots too: its tag's docs are what Stable
+  should describe.
 - **Anchors.** A heading removed from README or ROADMAP may be linked from
   another doc; #5673 removed `## Windows 11` and left
   `docs/first-contribution-cheatsheet.md` pointing at it. The validator greps
@@ -380,8 +403,8 @@ one. Never claim a build, test or hardware result the pass did not produce.
 
 - **Commit** as `release: prep vX.Y.Z — <what the notes lead with>. Principle
   VIII.` (or `docs(release): prep vX.Y.Z`), signed, one commit for the six
-  files; a README split or any seventh file is its own commit with its own
-  subject (#5673 precedent).
+  files; the docs snapshot, a README split or any seventh file is its own
+  commit with its own subject (#5673 precedent).
 - **Body** per `references/pr-body-template.md`: Summary (cutoff SHA, counts,
   first-timers), Changelog (how the range was mapped, what the notes lead
   with, any off-main exclusion), Docs refresh, **Judgment calls flagged for
@@ -445,7 +468,8 @@ comes back here as a second prep PR; do not pre-empt it.
 ## 8. Post-tag verification — done by `/tag-release`
 
 Step 4 of `/tag-release` (`scripts/check_release_assets.py`) verifies the
-fifteen-asset set (fourteen for a hotfix), the `.asc` timing, the
+seventeen-asset set (sixteen for a hotfix, the PDF manual and its `.asc`
+included), the `.asc` timing, the
 `.msixupload` version, `SHA256SUMS.txt` coverage, the downloaded signatures
 and the Store step, and its report carries the result. Nothing here
 duplicates it.

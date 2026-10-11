@@ -1,4 +1,5 @@
 #include "core/backends/sim/SimBackend.h"
+#include "core/AppActivity.h"
 
 #include <QtEndian>
 #include <QThread>
@@ -23,7 +24,7 @@ SimBackend::SimBackend(QObject* parent) : IRadioBackend(parent)
     m_signalThread->setObjectName("SimSignalSource");
     m_signalSource = new SimSignalSource;   // no parent — moved to thread
     m_signalSource->moveToThread(m_signalThread);
-    m_signalThread->start();
+    AetherSDR::startStreamThread(m_signalThread);   // High QoS; see AppActivity.h
 
     // Gated on m_connected, not plain signal-to-signal: stop() reaches the
     // worker QUEUED, so frames it emitted before stopping can deliver here
@@ -247,6 +248,7 @@ QString SimBackend::familyName()    { return QStringLiteral("sim"); }
 RadioCapabilities SimBackend::capabilities() const
 {
     RadioCapabilities caps;
+    caps.broadcastFmReceive = std::nullopt;
     // Synthetic receiver: this is the API's bounded numeric domain, not an
     // advertised hardware tuning range. Off-scene signals simply become silent.
     caps.sliceFrequencyControl = {SliceFrequencyControl::Authority::Engine,
@@ -315,6 +317,7 @@ RadioCapabilities SimBackend::capabilities() const
     // `band_zoom=`/`segment_zoom=`, so it declares absence explicitly -- the
     // case a bare hasCommandPlane() test would have got wrong.
     caps.panZoomModes = std::nullopt;
+    caps.panFrameRateShaping = std::nullopt;  // demo; no client owner is declared for FFT FPS
     // The synthesised stream has no impulse noise in it, and the demo has no IQ
     // path this host demodulates — there is nothing to blank.
     caps.hasHostNoiseBlanker = false;
@@ -369,6 +372,7 @@ RadioCapabilities SimBackend::capabilities() const
     caps.speechProcessorControl = std::nullopt;
     caps.voxControl = std::nullopt;
     caps.txMonitorControl = std::nullopt;
+    caps.lineoutControl = std::nullopt;
     caps.hasMainFanTelemetry = false;         // synthetic scene; no hardware fan
     // The demo radio regenerates its synthetic scene on every connect; there
     // is no operating state worth resurrecting across sessions.

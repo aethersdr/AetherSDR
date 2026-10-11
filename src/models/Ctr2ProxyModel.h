@@ -10,6 +10,7 @@
 #include <QStringList>
 
 #include <functional>
+#include <vector>
 
 class QTimer;
 
@@ -91,6 +92,21 @@ public:
     QString radioEndpoint() const;
     TcpByteProxy::Stats stats() const;
 
+    // True while the USB relay is up with a device that negotiated the
+    // AudioSpectrum link extension (AetherKnob; never a stock CTR2).
+    bool audioSpectrumWanted() const;
+    // One AudioSpectrum frame: bars in dBFS, log-spaced from lowHz to spanHz
+    // (a non-finite bar reads as silence). False if not wanted now or the
+    // link is busy.
+    bool sendAudioSpectrum(int lowHz, int spanHz, const std::vector<float>& barsDb);
+    // The span to send for a passband: its width, rounded up to a clean
+    // scale step, capped at the audio's Nyquist frequency.
+    static int audioSpectrumSpanHz(int filterLo, int filterHi, double sampleRate);
+    // The low edge of the log frequency axis for a span.
+    static int audioSpectrumLowHz(int spanHz);
+    // Lower edge of bar i of n on that axis (i == n gives spanHz).
+    static double audioSpectrumBandEdgeHz(int lowHz, int spanHz, int n, int i);
+
 signals:
     void configurationChanged();
     void listenAddressesChanged();   // also covers the USB device list
@@ -98,6 +114,7 @@ signals:
     void endpointsChanged();
     void statsChanged();      // coalesced for display
     void lastErrorChanged();
+    void extensionsChanged();   // the USB device's link extensions; audioSpectrumWanted() may move
 
 private:
     static bool parsePort(const QString& text, quint16* port);

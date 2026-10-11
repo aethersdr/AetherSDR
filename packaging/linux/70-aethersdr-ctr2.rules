@@ -5,5 +5,5 @@
 #
 # Installed by the build on Linux hidapi builds, and also installed on demand
 # by the CTR2 Proxy applet (via pkexec) for builds that did not ship it.
-ACTION!="remove", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="303a", ATTRS{idProduct}=="1001", ATTRS{product}=="ESP32S3_DEV|M5STACK_DIAL|STAMP-S3", TAG+="uaccess"
+ACTION!="remove", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="303a", ATTRS{idProduct}=="1001", ATTRS{product}=="ESP32S3_DEV|M5STACK_DIAL|STAMP-S3|AETHER_KNOB", TAG+="uaccess"
 ACTION!="remove", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="2886", ATTRS{idProduct}=="0056", ATTRS{product}=="XIAO_ESP32S3", TAG+="uaccess"

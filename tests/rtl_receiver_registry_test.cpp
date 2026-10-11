@@ -14,6 +14,7 @@
 #include <new>
 #include <stdexcept>
 #include <thread>
+#include <type_traits>
 #include <vector>
 
 using Registry = AetherSDR::rtl::RtlReceiverRegistry;
@@ -691,6 +692,58 @@ void retainedRfHistoryAndAdoption()
     check(stats->callbackDestruction == 0, "reused receiver never destructs on callback");
 }
 
+void actualExtractionFailure()
+{
+    static_assert(std::is_trivially_copyable_v<Registry::ProcessingFailure>);
+    static_assert(std::is_trivially_copyable_v<std::optional<Registry::ProcessingFailure>>);
+    Registry registry({1, 1, 2});
+    const std::uint64_t session = registry.beginSession(capture());
+    const auto handle = registry.reserveSlot();
+    if (!handle) { check(false, "extraction failure handle"); return; }
+    Registry::ReceiverSpec desired = spec(*handle);
+    desired.extractRf = true;
+    auto reader = registry.attachReader();
+    check(registry.submit(capture(), std::span(&desired, 1)) == Registry::Result::Accepted,
+        "real extraction failure fixture admitted");
+    check(ready(registry, 1), "real extraction failure fixture prepared");
+    struct FailureProbe final : Registry::BlockProcessor, Registry::AudioSink {
+        bool valid = false;
+        int audioCalls = 0;
+        void audioBlock(const Registry::ReceiverSpec&, std::uint64_t, std::span<const float>,
+                        std::span<const float>, bool) noexcept override { ++audioCalls; }
+        void process(const Registry::SampleBlock& value, std::span<const Registry::ReceiverView> views) noexcept override
+        {
+            if (views.size() != 1) { return; }
+            Registry::Receiver& receiver = *views[0].receiver;
+            if (receiver.processingFailure() || !receiver.processCapture(value, *this)) { return; }
+            Registry::SampleBlock gap = value;
+            gap.firstSample = 90;
+            gap.discontinuity = false;
+            if (receiver.processCapture(gap, *this)) { return; }
+            const auto failure = receiver.processingFailure();
+            if (!failure || failure->reason != Registry::ProcessingFailureReason::Extraction
+                || !failure->extraction
+                || failure->extraction->reason != AetherSDR::rtl::RtlRfExtractor::FailureReason::CapturePositionMismatch
+                || !failure->hasExpectedCaptureFirst || failure->expectedCaptureFirst != 89
+                || failure->captureFirst != 90 || failure->captureFrames != 64
+                || !failure->hasIqFirst || failure->iqFirst != 1 || failure->iqFrames != 0) { return; }
+            gap.firstSample = 89;
+            if (receiver.processCapture(gap, *this)) { return; }
+            // A different later failure must not replace the original cause.
+            if (receiver.processIq({}, {}) != WdspChannel::ProcessResult::InvalidBuffer) { return; }
+            valid = receiver.processingFailure() == failure && audioCalls == 0;
+        }
+    } probe;
+    Registry::SampleBlock delivery = block(capture(), 25);
+    delivery.session = session;
+    check(countedProcessBlock(reader, probe, delivery) && probe.valid,
+        "production receiver retains exact extraction failure across withdrawal and a different later error");
+    check(totalCallbackAllocations == 0, "failure observation is allocation-free on acquisition");
+    reader.stop();
+    check(until(registry, [](const auto& status) { return status.residentReceivers == 0; }),
+        "failed extraction receiver retires off acquisition");
+}
+
 void actualPreparedDsp()
 {
     Registry registry({1, 1, 2}); // production factory, real reserved WDSP channel
@@ -707,11 +760,17 @@ void actualPreparedDsp()
         {
             std::array<float, 1024> silence {};
             if (views.size() != 1) { return; }
+            if (views[0].receiver->processingFailure()) { return; }
             if (views[0].receiver->processIq({}, silence) !=
                 WdspChannel::ProcessResult::InvalidBuffer) { return; }
+            const auto failure = views[0].receiver->processingFailure();
+            if (!failure || failure->reason != Registry::ProcessingFailureReason::DspProcess
+                || failure->processResult != WdspChannel::ProcessResult::InvalidBuffer
+                || failure->hasIqFirst || failure->hasExpectedCaptureFirst || failure->extraction) { return; }
             const WdspChannel::ProcessResult result = views[0].receiver->processIq(silence, silence);
             valid = (result == WdspChannel::ProcessResult::Ok || result == WdspChannel::ProcessResult::Underrun) &&
-                views[0].receiver->left().size() == 1024 && views[0].receiver->right().size() == 1024;
+                views[0].receiver->left().size() == 1024 && views[0].receiver->right().size() == 1024
+                && views[0].receiver->processingFailure() == failure;
         }
     } probe;
     Registry::SampleBlock delivery = block();
@@ -747,6 +806,7 @@ int main(int argc, char** argv)
     reconnectAndRegistryBound(); drain();
     retainedRfHistoryAndAdoption(); drain();
     actualPreparedDsp(); drain();
+    actualExtractionFailure(); drain();
     check(totalCallbackAllocations == 0, "all acquisition callback paths remained free of ordinary C++ allocations");
     std::cout << "RTL receiver registry: " << checks << " checks, " << failures << " failures\n";
     return failures == 0 ? 0 : 1;

@@ -90,17 +90,25 @@ blocks to the backend thread, which constructs revocable typed PCM. Queue gaps
 are marked discontinuous. `AudioEngine::DEFAULT_SAMPLE_RATE` remains 24000 and
 the audio device's output rate remains independently negotiated.
 
-WFM and the other existing non-FM modes retain their exclusive legacy DDC and
-24 kHz format. Their demodulation is unchanged; monitor mute continues to clock
-an independent pre-monitor tap. They cannot join a multi-FM bank. Selecting FM
-with an incompatible inherited wide/sideband filter chooses a 16 kHz passband;
-ordinary filter requests and saved restores are never resized. This mode
-transition was approved in [the #5924 maintainer ruling](https://github.com/aethersdr/AetherSDR/pull/5924#issuecomment-5787852269). WFM stereo and normalization qualification
-remain S1/S2; no replacement WFM claim is made here.
+WFM uses an explicitly qualified 384 kHz IQ / 192 kHz WDSP / 48 kHz paired
+stereo recipe with independently prepared RF filtering, 50/75 µs de-emphasis
+and completed-block stereo observation. Its RF and audio limits, generated
+reference results and remaining validation boundaries are documented in
+[`rtl-wfm.md`](rtl-wfm.md). Manual WFM squelch remains unavailable with a stated
+reason; WDSP's internal automatic squelch remains in use. Saved sessions use a
+muted legacy bootstrap before adopting the original receiver recipe and ID.
+
+The other non-FM modes retain their exclusive legacy DDC and 24 kHz format.
+Monitor mute continues to clock an independent pre-monitor tap. Production
+admission remains one receiver. Selecting FM with an incompatible inherited
+wide/sideband filter chooses a 16 kHz passband; ordinary filter requests and
+saved restores are never resized. This mode transition was approved in
+[the #5924 maintainer ruling](https://github.com/aethersdr/AetherSDR/pull/5924#issuecomment-5787852269).
 The desktop FM/FM-N presets use the existing DFM width ladder intersected with
 the backend's declared filter range; FMN and NFM share symmetric edge rules.
-Fixed radio filter lists retain precedence. WFM filter and squelch controls
-are unavailable with accessible reasons, and the backend refuses those edits.
+WFM presets use the declared broadcast RF range. Fixed radio filter lists retain
+precedence. WFM control placement and recipe choices remain subject to
+maintainer review.
 
 ## FM squelch
 

@@ -31,7 +31,8 @@ struct Edges {
 const QVector<int>& widthsForMode(const QString& mode);
 
 // FM defaults above describe fixed radio filters. A receiver which declares
-// adjustable FM edges can use the existing DFM ladder within those bounds.
+// adjustable FM edges can use the DFM ladder, or the broadcast-width ladder
+// for WFM/WBFM, intersected with its declared bounds.
 // The conservative headless record does not gate unrelated desktop modes.
 QVector<int> widthsForMode(const QString& mode, const ReceiveFilterControl* control);
 // Analog FM spellings. DFM retains its existing separate preset behavior.

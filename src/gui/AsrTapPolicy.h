@@ -9,12 +9,110 @@
 
 namespace AetherSDR {
 
+// Where in the RX chain Copy Assist listens.
+//
+// PostDsp is the historical behaviour and the default: the recogniser hears
+// what the speaker plays, after client NR and the RX effects chain. PreDsp
+// takes each block before any of that, for operators who find that NR's
+// artifacts confuse the speech model more than the noise NR removes. Neither
+// undoes processing the radio itself applied.
+enum class AsrTapPoint {
+    PostDsp,
+    PreDsp,
+};
+
+// Persisted as a name rather than a bool so a third point (after NR but before
+// the effects chain, say) is an added value instead of a migration.
+inline QString asrTapPointToSetting(AsrTapPoint point)
+{
+    return point == AsrTapPoint::PreDsp ? QStringLiteral("PreDsp")
+                                        : QStringLiteral("PostDsp");
+}
+
+// Anything unrecognised — a hand-edited profile, a value from a build that
+// knows a point this one does not — reads as PostDsp, which is what every
+// build before this setting did. The dialog then shows the box unchecked, so
+// what the operator sees still matches what is being transcribed.
+inline AsrTapPoint asrTapPointFromSetting(const QString& value)
+{
+    return value == QLatin1String("PreDsp") ? AsrTapPoint::PreDsp
+                                            : AsrTapPoint::PostDsp;
+}
+
+// Small-signal gain of the engine's soft boost, tanh(2x) ~= 2x for small x
+// (AudioEngine's RX boost stage). The segmenter's gate decides whether QUIET
+// audio is speech, which is exactly that regime, so the linear factor is the
+// right one here — the compression tanh applies to loud passages is not
+// replicated.
+inline constexpr float kRxBoostSmallSignalGain = 2.0f;
+
+// Keep a saved Sensitivity meaning the same thing on both sides of the tap-point
+// toggle (RFC #4861, ten9876's "Sensitivity must stay calibrated across the
+// toggle").
+//
+// AsrSegmenter's default gate is an ABSOLUTE RMS threshold driven by the
+// Sensitivity slider. The post-DSP feed carries gain the pre-DSP feed does not,
+// so it arrives quieter by that amount, and an operator who tuned Sensitivity
+// against their post-DSP level would have speech fall under the gate the moment
+// they switched to the unprocessed feed. Measured on the real engine with the
+// chain at defaults: +0.00 dB, +6.01 dB with boost on, +18.01 dB with boost and
+// +12 dB trim.
+//
+// `rxStaticChainMakeupDb` covers the rest of that gain: AudioEngine sums the RX
+// chain stages whose contribution is one number no matter what the audio does
+// (EQ master gain, compressor makeup, tube output gain). What NO scalar can
+// describe, and what this therefore does not correct for, is the
+// signal-dependent part of the chain — EQ band shaping, the gate, compressor
+// gain reduction, tube drive and pudu — along with each NR mode's own speech
+// attenuation, which already leaves Sensitivity unanchored across NR modes
+// (pre-existing, out of scope).
+//
+// One scalar is left out on purpose: the output pan. It runs before the post-DSP
+// emit, and because toMono() averages L+R a hard-panned source reads ~6 dB
+// quieter there, so a PreDsp threshold is ~6 dB lower than ideal. It is excluded
+// because it applies ONLY to external Kiwi sources (applyKiwiOutputPan), its per-
+// source value lives behind an m_dspMutex-guarded lookup, and this function is
+// called per audio block — taking the DSP lock at that rate to chase it would put
+// GUI-thread contention on the audio path. The error direction is permissive:
+// a lower threshold admits more, so no speech is lost to it.
+//
+// So scale the THRESHOLD rather than the audio: the unprocessed feed stays
+// bit-exact (which is the point of the feature, and what the WER evidence was
+// gathered on), nothing can clip, and the adjustment is one observable number.
+// Returns the rms the segmenter should use for `point`.
+//
+// NOT a fix for discrimination: on a noisy band the unprocessed feed has little
+// level difference between speech and the noise floor, so no threshold
+// separates them. Silero VAD is the answer there, and the checkbox's tooltip
+// says so.
+inline float asrSpeechRmsForTapPoint(float baseRms, AsrTapPoint point,
+                                     bool rxBoostOn, float rxOutputTrimDb,
+                                     float rxStaticChainMakeupDb = 0.0f)
+{
+    if (point == AsrTapPoint::PostDsp) {
+        return baseRms;   // the level the operator tuned against
+    }
+    const float boost = rxBoostOn ? kRxBoostSmallSignalGain : 1.0f;
+    const float trim = std::pow(10.0f, rxOutputTrimDb / 20.0f);
+    const float chain = std::pow(10.0f, rxStaticChainMakeupDb / 20.0f);
+    const float makeup = boost * trim * chain;
+    // A non-finite or non-positive gain means a corrupt trim value, or an EQ
+    // master gain of zero (-inf dB) that silences the post-DSP feed entirely.
+    // Neither leaves a threshold worth deriving; the tuned value is the safe
+    // reading.
+    if (!std::isfinite(makeup) || makeup <= 0.0f) {
+        return baseRms;
+    }
+    return baseRms / makeup;
+}
+
 // AsrAudioTap's two decisions: which receiver's blocks to follow, and how to
-// turn a post-DSP block into mono float32. Qt-object-free and header-only so it
-// is testable without an AudioEngine (which needs a live QAudioSink).
-// Source lock: receivePresentationPostDspAudioReady fires once per RX source
-// (Flex, applet Kiwi, each external Kiwi), and interleaved receivers are noise
-// to a recogniser; Copy Assist has no selector, so the tap picks one and stays.
+// turn a block — post-DSP or pre-DSP, per AsrTapPoint — into mono float32.
+// Qt-object-free and header-only so it is testable without an AudioEngine
+// (which needs a live QAudioSink).
+// Source lock: both presentation signals fire once per RX source (Flex, applet
+// Kiwi, each external Kiwi), and interleaved receivers are noise to a
+// recogniser; Copy Assist has no selector, so the tap picks one and stays.
 class AsrTapPolicy {
 public:
     // A source that has stopped producing blocks for this long has released its

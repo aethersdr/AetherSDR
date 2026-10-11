@@ -1,4 +1,5 @@
 #include "DaxIqModel.h"
+#include "core/AppActivity.h"
 #include "core/LogManager.h"
 #include "core/ShutdownTrace.h"
 
@@ -94,11 +95,12 @@ DaxIqModel::DaxIqModel(QObject* parent)
         m_streams[i].channel = i + 1;
 
     m_worker = new DaxIqWorker;
+    m_workerThread.setObjectName(QStringLiteral("DaxIq"));
     m_worker->moveToThread(&m_workerThread);
     connect(&m_workerThread, &QThread::finished, m_worker, &QObject::deleteLater);
     connect(m_worker, &DaxIqWorker::levelReady,   this, &DaxIqModel::iqLevelReady);
     connect(m_worker, &DaxIqWorker::samplesReady, this, &DaxIqModel::relayIqSamples);
-    m_workerThread.start();
+    AetherSDR::startStreamThread(&m_workerThread);   // High QoS; see AppActivity.h
 }
 
 DaxIqModel::~DaxIqModel()

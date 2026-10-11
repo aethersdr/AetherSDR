@@ -1,6 +1,8 @@
 #include "gui/AgcCalibrationDialog.h"
 
+#include "gui/CanonIndicators.h"
 #include "core/AudioEngine.h"
+#include "core/ThemeManager.h"
 #include "models/MeterModel.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -21,6 +23,66 @@
 
 namespace AetherSDR {
 
+namespace {
+
+// The style guide's canon vocabulary (RFC #6226), as the RX and TX Settings
+// dialogs and AetherGPS use it: transparent over CanonWindow's ground, the
+// mode line in ink, the hint muted, buttons and the target field on control.
+constexpr const char* kAgcCalibrationStyle = R"(
+QWidget {
+    color: {{color.canon.inkSoft}};
+    background: transparent;
+}
+QLabel {
+    background: transparent;
+}
+QLabel[agcRole='mode'] {
+    color: {{color.canon.ink}};
+    font-weight: 600;
+}
+QLabel[agcRole='result'] {
+    color: {{color.canon.cyan}};
+    font-weight: 600;
+}
+QLabel[agcRole='hint'] {
+    color: {{color.canon.muted}};
+}
+QPushButton {
+    color: {{color.canon.cyan}};
+    background: {{color.canon.control}};
+    border: 1px solid {{color.canon.lineHi}};
+    border-radius: 4px;
+    padding: 5px 12px;
+    font-weight: 600;
+}
+QPushButton:hover {
+    background: {{color.canon.nested}};
+    color: {{color.canon.aqua}};
+}
+QPushButton:focus {
+    border-color: {{color.canon.aqua}};
+}
+QPushButton:disabled {
+    color: {{color.canon.muted}};
+    border-color: {{color.canon.line}};
+    background: transparent;
+}
+QAbstractSpinBox {
+    color: {{color.canon.ink}};
+    background: {{color.canon.control}};
+    border: 1px solid {{color.canon.lineHi}};
+    border-radius: 4px;
+    padding: 3px 6px;
+    selection-background-color: {{color.canon.cyan}};
+    selection-color: {{color.canon.onAccent}};
+}
+QAbstractSpinBox:focus {
+    border-color: {{color.canon.aqua}};
+}
+)";
+
+} // namespace
+
 // ===========================================================================
 // AgcCurveWidget
 // ===========================================================================
@@ -29,7 +91,8 @@ AgcCurveWidget::AgcCurveWidget(QWidget* parent)
     : QWidget(parent)
 {
     setMinimumSize(360, 200);
-    setAttribute(Qt::WA_StyledBackground, true);
+    connect(&ThemeManager::instance(), &ThemeManager::themeChanged,
+            this, qOverload<>(&QWidget::update));
 }
 
 void AgcCurveWidget::setCurve(const QVector<AgcTCalibrator::Point>& pts)
@@ -80,13 +143,21 @@ void AgcCurveWidget::paintEvent(QPaintEvent*)
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing, true);
 
+    const ThemeManager& tm = ThemeManager::instance();
+    const auto canon = [&](const char* name) {
+        return tm.color(this, QStringLiteral("color.canon.") + QLatin1String(name));
+    };
+
     const QRectF full = rect();
     const qreal padL = 8.0, padR = 8.0, padT = 8.0, padB = 18.0;
     const QRectF plot(full.left() + padL, full.top() + padT,
                       full.width() - padL - padR, full.height() - padT - padB);
 
-    p.fillRect(full, QColor(18, 20, 24));
-    p.setPen(QPen(QColor(70, 76, 86), 1.0));
+    p.setPen(QPen(canon("line"), 1.0));
+    p.setBrush(canon("nested"));
+    p.drawRoundedRect(full.adjusted(0.5, 0.5, -0.5, -0.5), 7.0, 7.0);
+    p.setPen(QPen(canon("grid"), 1.0));
+    p.setBrush(Qt::NoBrush);
     p.drawRect(plot);
 
     auto xForValue = [&](int v) {
@@ -113,7 +184,7 @@ void AgcCurveWidget::paintEvent(QPaintEvent*)
     // AGC-off target line.
     if (m_strategy == AgcTCalibrator::Strategy::TargetLevel
         && m_targetDb >= yMin && m_targetDb <= yMax) {
-        p.setPen(QPen(QColor(90, 150, 220), 1.0, Qt::DashLine));
+        p.setPen(QPen(canon("aqua"), 1.0, Qt::DashLine));
         const qreal y = yForDb(m_targetDb);
         p.drawLine(QPointF(plot.left(), y), QPointF(plot.right(), y));
     }
@@ -125,11 +196,11 @@ void AgcCurveWidget::paintEvent(QPaintEvent*)
         for (int i = 1; i < m_pts.size(); ++i) {
             path.lineTo(xForValue(m_pts[i].value), yForDb(m_pts[i].rmsDb));
         }
-        p.setPen(QPen(QColor(120, 210, 140), 2.0));
+        p.setPen(QPen(canon("cyan"), 2.0));
         p.drawPath(path);
     }
     p.setPen(Qt::NoPen);
-    p.setBrush(QColor(150, 230, 170));
+    p.setBrush(canon("aqua"));
     for (const auto& pt : m_pts) {
         p.drawEllipse(QPointF(xForValue(pt.value), yForDb(pt.rmsDb)), 2.0, 2.0);
     }
@@ -137,9 +208,10 @@ void AgcCurveWidget::paintEvent(QPaintEvent*)
     // Recommended / knee marker.
     if (m_recommended >= 0) {
         const qreal x = xForValue(m_recommended);
-        p.setPen(QPen(QColor(245, 200, 90), 2.0));
+        const QColor knee = canon("sparkGold");
+        p.setPen(QPen(knee, 2.0));
         p.drawLine(QPointF(x, plot.top()), QPointF(x, plot.bottom()));
-        p.setPen(QColor(245, 200, 90));
+        p.setPen(knee);
         p.drawText(QPointF(std::min(x + 4, plot.right() - 70), plot.top() + 12),
                    m_recIsKnee ? QStringLiteral("knee %1").arg(m_recommended)
                                : QStringLiteral("target %1").arg(m_recommended));
@@ -148,12 +220,12 @@ void AgcCurveWidget::paintEvent(QPaintEvent*)
     // Current value marker.
     if (m_current >= 0) {
         const qreal x = xForValue(m_current);
-        p.setPen(QPen(QColor(220, 220, 230), 1.0, Qt::DotLine));
+        p.setPen(QPen(canon("ink"), 1.0, Qt::DotLine));
         p.drawLine(QPointF(x, plot.top()), QPointF(x, plot.bottom()));
     }
 
     // X axis labels.
-    p.setPen(QColor(150, 156, 166));
+    p.setPen(canon("muted"));
     p.drawText(QPointF(plot.left(), plot.bottom() + 14), QStringLiteral("0"));
     p.drawText(QPointF(plot.right() - 24, plot.bottom() + 14), QStringLiteral("100"));
     p.drawText(QPointF(plot.center().x() - 30, plot.bottom() + 14),
@@ -168,19 +240,28 @@ AgcCalibrationDialog::AgcCalibrationDialog(RadioModel* radio,
                                            AudioEngine* audio,
                                            NoiseFloorFn noiseFloorFn,
                                            QWidget* parent)
-    : PersistentDialog(QStringLiteral("AGC-T Calibration"),
-                       QStringLiteral("AgcCalibrationDialogGeometry"), parent),
+    : CanonWindow(QStringLiteral("AGC-T Calibration"), parent),
       m_radio(radio), m_audio(audio), m_noiseFloorFn(std::move(noiseFloorFn))
 {
-    setMinimumSize(420, 360);
-    resize(460, 420);
+    setObjectName(QStringLiteral("agcCalibrationDialog"));
+    theme::setContainer(this, QStringLiteral("canon/agcCalibration"));
+    // The canon header adds about 40 px to the old 460x420.
+    setMinimumSize(420, 400);
+    resize(460, 460);
+    applyCanonSheet(bodyWidget(), [] {
+        return QString::fromLatin1(kAgcCalibrationStyle);
+    });
 
     auto* body = new QVBoxLayout(bodyWidget());
-    body->setContentsMargins(10, 10, 10, 10);
+    body->setContentsMargins(14, 12, 14, 14);
     body->setSpacing(8);
+    body->addWidget(makeCanonHeader(QStringLiteral("AGC-T Calibration")));
 
     m_modeLabel = new QLabel(this);
+    m_modeLabel->setProperty("agcRole", QStringLiteral("mode"));
+    m_modeLabel->setWordWrap(true);
     m_quietLabel = new QLabel(this);
+    m_quietLabel->setWordWrap(true);
     body->addWidget(m_modeLabel);
     body->addWidget(m_quietLabel);
 
@@ -188,6 +269,7 @@ AgcCalibrationDialog::AgcCalibrationDialog(RadioModel* radio,
     body->addWidget(m_curve, 1);
 
     m_recLabel = new QLabel(this);
+    m_recLabel->setProperty("agcRole", QStringLiteral("result"));
     body->addWidget(m_recLabel);
 
     // AGC-off advanced: comfortable-noise target.
@@ -219,6 +301,7 @@ AgcCalibrationDialog::AgcCalibrationDialog(RadioModel* radio,
     m_hintLabel = new QLabel(
         QStringLiteral("Tune to a clear spot, then Auto Sweep — or move the AGC-T "
                        "slider and watch where the noise bends."), this);
+    m_hintLabel->setProperty("agcRole", QStringLiteral("hint"));
     m_hintLabel->setWordWrap(true);
     body->addWidget(m_hintLabel);
 
@@ -250,6 +333,22 @@ AgcCalibrationDialog::AgcCalibrationDialog(RadioModel* radio,
     m_floorTimer->start();
 
     updateModeUi();
+}
+
+AgcCalibrationDialog::~AgcCalibrationDialog()
+{
+    // Destroyed without a close (the app quitting): put the AGC-T back too.
+    if (m_engine.isRunning()) {
+        m_engine.stop();
+    }
+}
+
+void AgcCalibrationDialog::done(int result)
+{
+    if (m_engine.isRunning()) {
+        m_engine.stop(); // restores the original value
+    }
+    CanonWindow::done(result);
 }
 
 void AgcCalibrationDialog::setSlice(SliceModel* slice)

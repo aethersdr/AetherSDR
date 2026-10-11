@@ -1701,8 +1701,8 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
         "QListWidget::item { background: {{color.background.1}}; padding: 8px 7px; margin-right: 6px; "
         "border: 1px solid {{color.background.2}}; border-radius: 0px; }"
         "QListWidget::item:alternate { background: {{color.background.2}}; }"
-        "QListWidget::item:selected, QListWidget::item:alternate:selected { background: {{color.accent}}; "
-        "color: {{color.background.0}}; }");
+        "QListWidget::item:selected, QListWidget::item:alternate:selected { background: palette(highlight); "
+        "color: palette(highlighted-text); }");
     deviceList->setMinimumHeight(200);
     deviceList->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     listLayout->addWidget(deviceList);

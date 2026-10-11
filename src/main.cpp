@@ -18,7 +18,9 @@
 #include "core/ShutdownTrace.h"
 #include "core/SystemInventory.h"
 #include "core/MacMicPermission.h"
+#include "core/AppActivity.h"
 #include "core/AutomationServer.h"
+#include "QtPlatformChoice.h"
 
 #ifdef Q_OS_MAC
 #include "MacStartupAbortGuard.h"
@@ -27,8 +29,11 @@
 #include "core/backends/hl2/Hl2EmergencyStop.h"
 
 #include <QApplication>
+#include <QGuiApplication>
+#include <QStringList>
 #include <QSurfaceFormat>
 #include <memory>
+#include <optional>
 #include <QStyleFactory>
 #include <QDir>
 #include <QDebug>
@@ -238,6 +243,12 @@ static int runConfigCli(int argc, char* argv[])
 // QT_QPA_PLATFORM already). The presence itself lives in DisplayPresence.h's
 // accessor (setDetectedDisplayPresence) so SpectrumWidget can read it too.
 static const char* g_qpaPlatformChoice = nullptr;
+// Whether the user's environment set QT_QPA_PLATFORM, read before main() may set
+// it, so the start-up platform line can say who chose the value Qt started with.
+static bool g_qpaPlatformUserSet = false;
+// The -platform argument, which Qt prefers to QT_QPA_PLATFORM; read before
+// QApplication removes it from argv.
+static std::optional<QString> g_qpaPlatformArgument;
 
 static const char* displayPresenceName(AetherSDR::DisplayPresence p)
 {
@@ -266,7 +277,8 @@ int main(int argc, char* argv[])
 
     // NOTE ON ORDER: the QT_QPA_PLATFORM block runs BEFORE
     // GpuSelector::applyAtStartup() below. GpuSelector::willUseWayland() reads
-    // QT_QPA_PLATFORM to decide whether to apply the X11/GLX NVIDIA vendor hint
+    // the -platform argument (passed in) or else QT_QPA_PLATFORM to decide
+    // whether to apply the X11/GLX NVIDIA vendor hint
     // (__GLX_VENDOR_LIBRARY_NAME), so our platform choice must be in the
     // environment before it runs — otherwise a headless box that we route to
     // XWayland/GLX would be mistaken for EGL/Wayland and lose PRIME offload.
@@ -278,8 +290,11 @@ int main(int argc, char* argv[])
     // "wayland;xcb" is an ordered fallback list, so a host without the Wayland
     // plugin lands on xcb instead of failing to start (#1389); appimage.yml deploys
     // the Wayland plugin. Skipped when the user sets QT_QPA_PLATFORM (xcb is the
-    // documented escape hatch, README next to AETHER_NO_GPU).
-    if (!qEnvironmentVariableIsSet("QT_QPA_PLATFORM")) {
+    // documented escape hatch, README next to AETHER_NO_GPU), and when the user
+    // passes -platform, which Qt prefers to QT_QPA_PLATFORM anyway.
+    g_qpaPlatformUserSet = qEnvironmentVariableIsSet("QT_QPA_PLATFORM");
+    g_qpaPlatformArgument = AetherSDR::QtPlatformChoice::platformArgument(argc, argv);
+    if (!g_qpaPlatformUserSet && !g_qpaPlatformArgument) {
         const QByteArray session = qgetenv("XDG_SESSION_TYPE");
         if (session == "wayland" && qEnvironmentVariableIsSet("WAYLAND_DISPLAY")) {
             // Override to xcb only when the session is affirmatively headless (DRM
@@ -307,7 +322,7 @@ int main(int argc, char* argv[])
     // or QT_D3D_ADAPTER_INDEX (Windows) from the persisted Display-menu choice.
     // Runs AFTER the QT_QPA_PLATFORM block above so GpuSelector::willUseWayland()
     // reads the platform we actually chose (see the ORDER note above).
-    AetherSDR::GpuSelector::applyAtStartup();
+    AetherSDR::GpuSelector::applyAtStartup(g_qpaPlatformArgument.value_or(QString()));
 
     // Qt 6.12's QtMultimedia defaults to its PipeWire audio backend and
     // segfaults enumerating devices when it cannot create a PipeWire context
@@ -480,6 +495,11 @@ int main(int argc, char* argv[])
     // Shows the system prompt on first launch so it's ready before PTT.
     requestMicrophonePermission();
 
+    // For the life of the app: no App Nap (macOS), no power throttling
+    // (Windows), so audio/DAX/TCI keep flowing while the window is hidden or
+    // muted. Sleep stays with "Prevent system sleep while connected".
+    AetherSDR::keepAppActive();
+
     // One-shot migration from the double-nested AppConfigLocation
     // (~/.config/AetherSDR/AetherSDR/, because org and app name are both
     // "AetherSDR") to GenericConfigLocation + "/AetherSDR", where AppSettings lives.
@@ -583,9 +603,17 @@ int main(int argc, char* argv[])
     static_cast<void>(AetherSDR::Nr2SettingsModel::instance());
     AetherSDR::AppSettings::instance().initializeGuiClientIdentity();
     {
+        // Retired keys nothing reads any more. AboutDialogGeometry went when
+        // About moved to CanonWindow, which opens centred (RFC #6226).
         auto& s = AetherSDR::AppSettings::instance();
-        if (s.contains("SHistorySoftEdgeDb")) {
-            s.remove("SHistorySoftEdgeDb");
+        bool removed = false;
+        for (const char* key : {"SHistorySoftEdgeDb", "AboutDialogGeometry"}) {
+            if (s.contains(key)) {
+                s.remove(key);
+                removed = true;
+            }
+        }
+        if (removed) {
             s.save();
         }
     }
@@ -619,6 +647,22 @@ int main(int argc, char* argv[])
                 << "Platform: Wayland session, display presence"
                 << displayPresenceName(AetherSDR::detectedDisplayPresence())
                 << "-> QT_QPA_PLATFORM" << g_qpaPlatformChoice;
+        }
+        {
+            using AetherSDR::QpaRequestSource;
+            const QpaRequestSource source = g_qpaPlatformArgument ? QpaRequestSource::CommandLine
+                : g_qpaPlatformUserSet                            ? QpaRequestSource::User
+                : g_qpaPlatformChoice                             ? QpaRequestSource::AetherSDR
+                                                                  : QpaRequestSource::Unset;
+            const QString requested = g_qpaPlatformArgument
+                ? *g_qpaPlatformArgument
+                : qEnvironmentVariable("QT_QPA_PLATFORM");
+            const QStringList lines = AetherSDR::QtPlatformChoice::logLines(
+                requested, source, QGuiApplication::platformName());
+            qInfo().noquote() << lines.value(0);
+            if (lines.size() > 1) {
+                qWarning().noquote() << lines.at(1);
+            }
         }
 
         // Symlink aethersdr.log → latest timestamped file (for Support dialog)

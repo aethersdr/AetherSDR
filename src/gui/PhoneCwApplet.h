@@ -157,10 +157,11 @@ private:
     QPushButton* m_accBtn{nullptr};
 
     QPushButton* m_procBtn{nullptr};
-    QSlider*     m_procSlider{nullptr};   // capability-shaped: presets or 0..100
+    QSlider*     m_procSlider{nullptr};   // capability-shaped: presets or 0..maximum
     QLabel*      m_procLowLabel{nullptr};
     QLabel*      m_procMidLabel{nullptr};
     QLabel*      m_procHighLabel{nullptr};
+    QLabel*      m_procValueLabel{nullptr};  // continuous COMP only
     QPushButton* m_daxBtn{nullptr};
 
     QPushButton* m_monBtn{nullptr};

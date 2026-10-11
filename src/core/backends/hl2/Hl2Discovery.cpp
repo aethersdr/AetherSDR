@@ -1,14 +1,19 @@
 #include "core/backends/hl2/Hl2Discovery.h"
 
 #include "core/AppSettings.h"
+#include "core/LogManager.h"   // lcDiscovery
 
 #include <QJsonObject>
 #include "core/backends/hl2/MetisProtocol.h"
 
 #include <QNetworkDatagram>
+#include <QNetworkInterface>
+#include <QNetworkAddressEntry>
 #include <QRegularExpression>
 #include <QTimer>
 #include <QUdpSocket>
+
+#include <utility>
 
 #ifdef Q_OS_WIN
 // winsock2.h pulls in windows.h, whose min/max function-like macros otherwise
@@ -42,6 +47,74 @@ void enableBroadcast(QUdpSocket& s) noexcept
 }
 
 }  // namespace
+
+void DiscoveryNotices::bindFailed(const QString& interfaceName,
+                                  const QHostAddress& address,
+                                  const QString& error)
+{
+    const QString key = interfaceName + QLatin1Char(' ') + address.toString();
+    if (m_bindFailures.contains(key))
+        return;   // already reported, and it has not bound since
+    m_bindFailures.insert(key);
+    qCWarning(lcDiscovery).noquote()
+        << QStringLiteral("HL2 discovery: cannot bind %1 %2: %3")
+               .arg(interfaceName, address.toString(), error);
+}
+
+void DiscoveryNotices::bindSucceeded(const QString& interfaceName,
+                                     const QHostAddress& address)
+{
+    m_bindFailures.remove(interfaceName + QLatin1Char(' ') + address.toString());
+}
+
+void DiscoveryNotices::endRefresh(int socketCount, int interfaceCount)
+{
+    m_interfaceCount = interfaceCount;
+    if (socketCount > 0) {
+        m_noSocketReported = false;
+    } else if (!m_noSocketReported) {
+        m_noSocketReported = true;
+        qCWarning(lcDiscovery).noquote()
+            << QStringLiteral("HL2 discovery: no usable IPv4 interface; no probe can be sent");
+    }
+}
+
+void DiscoveryNotices::sendFailed(const QHostAddress& local, const QString& error)
+{
+    const QString key = local.toString();
+    if (m_sendFailures.contains(key))
+        return;   // already reported, and nothing has left this address since
+    m_sendFailures.insert(key);
+    qCWarning(lcDiscovery).noquote()
+        << QStringLiteral("HL2 discovery: cannot send a probe from %1: %2").arg(key, error);
+}
+
+void DiscoveryNotices::sendSucceeded(const QHostAddress& local)
+{
+    m_sendFailures.remove(local.toString());
+}
+
+void DiscoveryNotices::sweepClosed(bool answered)
+{
+    if (answered) {
+        m_silentSweeps = 0;
+        return;
+    }
+    if (++m_silentSweeps != kSilentSweepsBeforeWarning)
+        return;
+    // Info, not a warning: an install without an HL2 is silent by design.
+    qCInfo(lcDiscovery).noquote()
+        << QStringLiteral("HL2 discovery: no Hermes-Lite 2 answered %1 sweeps on %2 %3")
+               .arg(kSilentSweepsBeforeWarning)
+               .arg(m_interfaceCount)
+               .arg(m_interfaceCount == 1 ? QStringLiteral("interface")
+                                          : QStringLiteral("interfaces"));
+}
+
+void DiscoveryNotices::reset()
+{
+    *this = DiscoveryNotices{};
+}
 
 QString Hl2Discovery::macToSerial(const std::array<std::uint8_t, 6>& mac)
 {
@@ -151,16 +224,6 @@ bool Hl2Discovery::isRunning() const noexcept
 
 void Hl2Discovery::start(int intervalMs)
 {
-    if (!m_socket) {
-        m_socket = new QUdpSocket(this);
-        if (!m_socket->bind(QHostAddress::AnyIPv4, 0)) {
-            m_socket->deleteLater();
-            m_socket = nullptr;
-            return;   // no socket: stay silent rather than half-running
-        }
-        enableBroadcast(*m_socket);
-        connect(m_socket, &QUdpSocket::readyRead, this, &Hl2Discovery::onReadyRead);
-    }
     m_timer->start(intervalMs);
     sweepNow();   // don't make the operator wait a full interval for the first sweep
 }
@@ -169,25 +232,118 @@ void Hl2Discovery::stop()
 {
     if (m_timer)
         m_timer->stop();
-    if (m_socket) {
-        m_socket->deleteLater();
-        m_socket = nullptr;
+    for (QUdpSocket* socket : std::as_const(m_sockets)) {
+        socket->close();
+        socket->deleteLater();
     }
+    m_sockets.clear();
     m_seen.clear();
+    m_notices.reset();
+    m_probeSent = false;
+    m_answered = false;
 }
 
 void Hl2Discovery::sweepNow()
 {
-    if (!m_socket)
+    // Interfaces can come up after the application starts (common with a
+    // directly attached HL2 link). Refreshing here also mirrors Thetis's
+    // per-sweep NIC walk instead of freezing the initial adapter list.
+    refreshSockets();
+    m_probeSent = !m_sockets.isEmpty();
+    if (!m_probeSent)
         return;
     const auto pkt = discoveryRequest();
-    m_socket->writeDatagram(reinterpret_cast<const char*>(pkt.data()),
-                            static_cast<qint64>(pkt.size()),
-                            QHostAddress::Broadcast, kMetisPort);
+    for (QUdpSocket* socket : std::as_const(m_sockets)) {
+        const QHostAddress local = socket->localAddress();
+        QHostAddress directedBroadcast;
+        for (const QNetworkInterface& iface : QNetworkInterface::allInterfaces()) {
+            for (const QNetworkAddressEntry& entry : iface.addressEntries()) {
+                if (entry.ip() == local) {
+                    directedBroadcast = entry.broadcast();
+                    break;
+                }
+            }
+            if (!directedBroadcast.isNull())
+                break;
+        }
+
+        bool sent = false;
+        QString error;
+        const auto probe = [&](const QHostAddress& to) {
+            if (socket->writeDatagram(reinterpret_cast<const char*>(pkt.data()),
+                                      static_cast<qint64>(pkt.size()),
+                                      to, kMetisPort) >= 0) {
+                sent = true;
+            } else {
+                error = socket->errorString();
+            }
+        };
+        if (!directedBroadcast.isNull()) {
+            probe(directedBroadcast);
+        }
+        // Keep the global broadcast as a compatibility fallback for networks
+        // whose interface does not expose a usable directed broadcast.
+        if (directedBroadcast != QHostAddress::Broadcast) {
+            probe(QHostAddress::Broadcast);
+        }
+        // One of the two reaching the wire is a sent probe.
+        if (sent) {
+            m_notices.sendSucceeded(local);
+        } else {
+            m_notices.sendFailed(local, error);
+        }
+    }
+}
+
+void Hl2Discovery::refreshSockets()
+{
+    for (QUdpSocket* socket : std::as_const(m_sockets)) {
+        socket->close();
+        socket->deleteLater();
+    }
+    m_sockets.clear();
+    QSet<QString> boundInterfaces;
+
+    for (const QNetworkInterface& iface : QNetworkInterface::allInterfaces()) {
+        const auto flags = iface.flags();
+        if (!flags.testFlag(QNetworkInterface::IsUp)
+            || !flags.testFlag(QNetworkInterface::IsRunning)
+            || flags.testFlag(QNetworkInterface::IsLoopBack)) {
+            continue;
+        }
+
+        for (const QNetworkAddressEntry& entry : iface.addressEntries()) {
+            const QHostAddress local = entry.ip();
+            if (local.protocol() != QAbstractSocket::IPv4Protocol)
+                continue;
+
+            auto* socket = new QUdpSocket(this);
+            if (!socket->bind(local, 0)) {
+                m_notices.bindFailed(iface.humanReadableName(), local,
+                                     socket->errorString());
+                socket->deleteLater();
+                continue;
+            }
+            enableBroadcast(*socket);
+            connect(socket, &QUdpSocket::readyRead,
+                    this, &Hl2Discovery::onReadyRead);
+            m_sockets.append(socket);
+            m_notices.bindSucceeded(iface.humanReadableName(), local);
+            boundInterfaces.insert(iface.humanReadableName());
+        }
+    }
+    m_notices.endRefresh(static_cast<int>(m_sockets.size()),
+                         static_cast<int>(boundInterfaces.size()));
 }
 
 void Hl2Discovery::onSweepTimer()
 {
+    // The previous sweep's reply window ends here. A sweep with no socket to
+    // send on is not counted: the no-interface warning covers it.
+    if (m_probeSent)
+        m_notices.sweepClosed(m_answered);
+    m_answered = false;
+
     // Age out anything that missed too many consecutive sweeps before probing
     // again, so a radio that is unplugged disappears from the picker.
     for (auto it = m_seen.begin(); it != m_seen.end();) {
@@ -204,14 +360,19 @@ void Hl2Discovery::onSweepTimer()
 
 void Hl2Discovery::onReadyRead()
 {
-    while (m_socket && m_socket->hasPendingDatagrams()) {
-        const QNetworkDatagram dg = m_socket->receiveDatagram();
+    auto* socket = qobject_cast<QUdpSocket*>(sender());
+    if (!socket)
+        return;
+
+    while (socket->hasPendingDatagrams()) {
+        const QNetworkDatagram dg = socket->receiveDatagram();
         const QByteArray data = dg.data();
         const auto reply = parseDiscoveryReply(
             {reinterpret_cast<const std::uint8_t*>(data.constData()),
              static_cast<std::size_t>(data.size())});
         if (!reply || !reply->isHermesLite2())
             continue;   // not an HL2 (or not a discovery reply at all)
+        m_answered = true;
 
         RadioInfo info;
         info.family   = QStringLiteral("hl2");

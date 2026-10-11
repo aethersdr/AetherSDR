@@ -13,6 +13,7 @@
 #include <QList>
 #include <QPointF>
 #include <QRect>
+#include <QUrl>
 #include <QVariant>
 #include <QVector>
 
@@ -346,6 +347,8 @@ public:
     //   "name" (else file stem), copies it into ~/.config/AetherSDR/themes/,
     //   registers and activates it. Returns the display name, or empty with
     //   `errorMessage` set.
+    // True for a local .aethertheme / .json path — the files a drop may import.
+    static bool isImportableThemeFile(const QUrl& url);
     bool    exportThemeToFile(const QString& themeName,
                               const QString& filePath,
                               QString* errorMessage = nullptr) const;
@@ -543,6 +546,16 @@ namespace theme {
 inline QColor withAlpha(const QString& token, int alpha)
 {
     QColor c = ThemeManager::instance().color(token);
+    c.setAlpha(alpha);
+    return c;
+}
+
+// The same, resolved through `widget`'s container scope, for paint code in a
+// widget that can sit inside a scoped window (the canon scope's AetherRX and
+// AetherTX). Outside any scope it returns what the bare-token form does.
+inline QColor withAlpha(const QWidget* widget, const QString& token, int alpha)
+{
+    QColor c = ThemeManager::instance().color(widget, token);
     c.setAlpha(alpha);
     return c;
 }

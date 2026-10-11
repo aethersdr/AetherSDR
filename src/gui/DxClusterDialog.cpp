@@ -8,6 +8,8 @@
 #include "GuardedSlider.h"
 #include "SpotAutoScroll.h"
 #include "core/DxClusterClient.h"
+#include "core/DxSpotLineParser.h"
+#include "core/GoClusterSettings.h"
 #include "core/AppSettings.h"
 #include "core/N1MMSpotParser.h"
 #include "core/SpotCommandPolicy.h"
@@ -135,6 +137,24 @@ static const QString kSpotHubToggle =
     "QPushButton:checked { background: #1a6030; color: #ffffff;"
     " border: 1px solid #20a040; }"
     "QPushButton:hover { border: 1px solid #0090e0; }";
+
+// The first lines of a spot log: its session header and, for a GoCluster
+// node, the marker DxClusterClient writes right after the banner.
+static QStringList headFile(const QString& path, int maxLines = 200)
+{
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        return {};
+    }
+    QStringList lines;
+    while (lines.size() < maxLines && !f.atEnd()) {
+        const QString line = QString::fromUtf8(f.readLine()).trimmed();
+        if (!line.isEmpty()) {
+            lines.append(line);
+        }
+    }
+    return lines;
+}
 
 // Read the last N lines of a file without loading the entire thing.
 static QStringList tailFile(const QString& path, int maxLines = 500)
@@ -758,6 +778,14 @@ void DxClusterDialog::truncateLogFile(const QString& path)
 {
     if (path.isEmpty())
         return;
+    // The cluster and RBN clients hold their log open on the SpotClients
+    // thread; truncating it through a second handle races their writes.
+    for (DxClusterClient* client : {m_client, m_rbnClient}) {
+        if (client && path == client->logFilePath()) {
+            QMetaObject::invokeMethod(client, &DxClusterClient::clearLog);
+            return;
+        }
+    }
     QFile f(path);
     if (f.exists())
         f.resize(0);
@@ -785,27 +813,15 @@ void DxClusterDialog::loadLogFiles(const QString& clusterLog, const QString& rbn
                                     const QString& wsjtxLog, const QString& potaLog,
                                     const QString& freedvLog)
 {
-    static const QRegularExpression rx(
-        R"(^DX\s+de\s+(\S+?):\s+(\d+\.?\d*)\s+(\S+)\s+(.*?)\s+(\d{4})Z)",
-        QRegularExpression::CaseInsensitiveOption);
-
-    auto parseSpots = [&](const QStringList& lines, const QString& source) {
-        QVector<DxSpot> spots;
-        for (const auto& line : lines) {
-            auto match = rx.match(line);
-            if (match.hasMatch()) {
-                DxSpot spot;
-                spot.spotterCall = match.captured(1);
-                spot.freqMhz = match.captured(2).toDouble() / 1000.0;
-                spot.dxCall = match.captured(3);
-                spot.comment = match.captured(4).trimmed();
-                QString timeStr = match.captured(5);
-                spot.utcTime = QTime(timeStr.left(2).toInt(), timeStr.mid(2, 2).toInt());
-                if (spot.freqMhz > 0.0 && !spot.dxCall.isEmpty()) {
-                    spot.source = source;
-                    spots.append(spot);
-                }
-            }
+    // Same parser and filter as DxClusterClient. Provenance comes from the
+    // session header and GoCluster marker the client logs, read from the
+    // file's head, since the banner scrolls out of the bounded tail.
+    auto parseSpots = [](const QString& path, const QStringList& tail,
+                         const QString& source, const QString& goClusterFeed) {
+        QVector<DxSpot> spots = DxSpotLineParser::replayLog(
+            headFile(path), tail, GoClusterSettings::hideUnverified(goClusterFeed));
+        for (DxSpot& spot : spots) {
+            spot.source = source;
         }
         return spots;
     };
@@ -820,12 +836,12 @@ void DxClusterDialog::loadLogFiles(const QString& clusterLog, const QString& rbn
     // Cluster log — parse spots + display in console
     auto clusterLines = tailFile(clusterLog);
     loadConsole(m_console, clusterLines);
-    auto clusterSpots = parseSpots(clusterLines, "Cluster");
+    auto clusterSpots = parseSpots(clusterLog, clusterLines, "Cluster", GoClusterSettings::kFeedCluster);
 
     // RBN log — parse spots + display in console
     auto rbnLines = tailFile(rbnLog);
     loadConsole(m_rbnConsole, rbnLines);
-    auto rbnSpots = parseSpots(rbnLines, "RBN");
+    auto rbnSpots = parseSpots(rbnLog, rbnLines, "RBN", GoClusterSettings::kFeedRbn);
 
     // WSJT-X log — display only (no DX de format)
     loadConsole(m_wsjtxConsole, tailFile(wsjtxLog));
@@ -852,6 +868,27 @@ void DxClusterDialog::loadLogFiles(const QString& clusterLog, const QString& rbn
     // Newest-first is the top, not the bottom — same reasoning as the
     // constructor's initial scroll (#4889).
     m_spotTable->scrollToTop();
+}
+
+QPushButton* DxClusterDialog::makeHideUnverifiedButton(const QString& feed)
+{
+    // Read by DxClusterClient on every '?' spot, so it applies to the next
+    // spot without a reconnect. Spots already listed are left alone.
+    const bool on = GoClusterSettings::hideUnverified(feed);
+    auto* btn = new QPushButton(on ? "Hide Unverified: ON" : "Hide Unverified: OFF");
+    btn->setCheckable(true);
+    btn->setChecked(on);
+    btn->setToolTip(
+        "GoCluster nodes only: hide new spots whose callsign GoCluster tags '?'\n"
+        "(little supporting evidence — often a busted call). Applies to spots\n"
+        "that arrive after you switch it on; spots already listed stay.\n"
+        "Other cluster servers send no confidence tag and are unaffected.");
+    ThemeManager::instance().applyStyleSheet(btn, kSpotHubToggle);
+    connect(btn, &QPushButton::toggled, this, [btn, feed](bool checked) {
+        btn->setText(checked ? "Hide Unverified: ON" : "Hide Unverified: OFF");
+        GoClusterSettings::setHideUnverified(feed, checked);
+    });
+    return btn;
 }
 
 void DxClusterDialog::buildClusterTab(QTabWidget* tabs)
@@ -925,6 +962,8 @@ void DxClusterDialog::buildClusterTab(QTabWidget* tabs)
             "DxClusterStartupCommands", this);
     });
     btnRow->addWidget(startupBtn);
+
+    btnRow->addWidget(makeHideUnverifiedButton(GoClusterSettings::kFeedCluster));
     btnRow->addStretch();
 
     m_statusLabel = new QLabel("Disconnected");
@@ -1127,6 +1166,7 @@ void DxClusterDialog::buildRbnTab(QTabWidget* tabs)
             "RbnStartupCommands", this);
     });
     btnRow->addWidget(rbnStartupBtn);
+    btnRow->addWidget(makeHideUnverifiedButton(GoClusterSettings::kFeedRbn));
     btnRow->addStretch();
 
     m_rbnStatusLabel = new QLabel("Disconnected");

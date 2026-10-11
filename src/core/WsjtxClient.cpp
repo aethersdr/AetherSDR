@@ -207,6 +207,7 @@ void WsjtxClient::parseDecode(QDataStream& ds)
     spot.utcTime = QTime::fromMSecsSinceStartOfDay(static_cast<int>(timeMs));
     spot.source = "WSJT-X";
     spot.snr = snr;
+    spot.hasSnr = true;
 
     // Log the decode
     QString logLine = QString("%1  %2  %3 kHz  %4 dB  %5")

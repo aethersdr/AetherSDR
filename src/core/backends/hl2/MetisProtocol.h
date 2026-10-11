@@ -26,6 +26,10 @@ inline constexpr std::uint16_t kMetisPort = 1024;
 // reference rather than 0.0000001 dB adrift.
 inline constexpr int kFullScale = (1 << 23) - 1;
 
+// Host-generated CW and TUNE carriers use the same full-scale normalized IQ
+// amplitude. The TX drive register remains the operator's power control.
+inline constexpr double kHl2CarrierAmplitude = 1.0;
+
 // EP2 (host->radio) and EP6 (radio->host) are both 1032-byte USB-over-IP frames:
 //   EF FE 01 <ep> | seq[4] | frame512 | frame512
 // each 512-byte frame: 7F 7F 7F | C0 C1 C2 C3 C4 | 504 payload bytes
@@ -456,12 +460,16 @@ struct Hl2Telemetry {
     int adcOverloadSamples = 0;
     int adcWindowMs = 0;
 
-    // Maximum of the publish window's non-ACK RADDR-1 DATA[15:0] (the radio
-    // re-samples forward power every other EP6 response, control.v:261, so the
-    // last value alone misses speech peaks); nullopt when the window saw none.
-    // `forwardPowerSamples` counts them; the window length is `adcWindowMs`.
+    // Maximum of the publish window's non-ACK RADDR-1 DATA[15:0] over responses
+    // that carry a measurement (ForwardPowerWindow::observe skips the rest; the
+    // radio re-samples forward power every other EP6 response, control.v:261, so
+    // the last value alone misses speech peaks); nullopt when the window saw none.
+    // `forwardPowerSamples` counts the ones kept; the window length is `adcWindowMs`.
     std::optional<int> forwardPowerPeakRaw;
     int forwardPowerSamples = 0;
+    // The window's RADDR-1 responses skipped as isNonMeasurementRaddr1(). A unit
+    // whose temperature word is always 0 has every response here and no peak.
+    int forwardPowerSkipped = 0;
 
     // Merge a decoded response in, leaving untouched fields alone. ACK
     // responses contribute only PTT: their raddr is the command address and
@@ -469,16 +477,33 @@ struct Hl2Telemetry {
     void apply(const Ep6Response& r) noexcept;
 };
 
+// A non-ACK RADDR-1 response whose temperature word, DATA[31:16], is 0 is not a
+// measurement. hl2TemperatureCelsius puts 0 C at 0.5 V, so 0 counts is 0 V,
+// which no working sensor reads. Gateware 74.2 sends a few such responses just
+// after the T/R switch-over, and their forward word can be far above the carrier.
+[[nodiscard]] constexpr bool isNonMeasurementRaddr1(const Ep6Response& r) noexcept
+{
+    return !r.ack && r.raddr == 0x01 && (r.data >> 16) == 0;
+}
+
 // Accumulator for Hl2Telemetry::forwardPowerPeakRaw: the maximum of DATA[15:0]
-// over non-ACK RADDR-1 responses. Kept here so the rule is testable without a socket.
+// over non-ACK RADDR-1 responses that carry a measurement. Kept here so the
+// rule is testable without a socket.
 struct ForwardPowerWindow {
     std::optional<int> peak;
     int samples = 0;
+    int skipped = 0;
 
     void observe(const Ep6Response& r) noexcept
     {
         if (r.ack || r.raddr != 0x01)
             return;
+        // Only this window skips it: Hl2Telemetry::apply() still takes both
+        // halves of the word as last values.
+        if (isNonMeasurementRaddr1(r)) {
+            ++skipped;
+            return;
+        }
         const int v = static_cast<int>(r.data & 0xFFFF);
         if (!peak || v > *peak)
             peak = v;
@@ -488,6 +513,7 @@ struct ForwardPowerWindow {
     {
         peak.reset();
         samples = 0;
+        skipped = 0;
     }
 };
 

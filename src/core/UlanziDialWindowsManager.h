@@ -18,10 +18,11 @@ namespace AetherSDR {
 //   buttonEvent(sig, action)     — see EvdevEncoderManager for signature
 //   connectionChanged(bool, name)
 // The dial enumerates as several HID interfaces (Keyboard for Ctrl+chords,
-// Consumer Control for media keys, maybe Mouse); every device whose
-// product_string contains "Ulanzi Dial" is opened and polled, and report diffs
-// feed the shared chord decoder. No exclusive grab on Windows, so keystrokes
-// still reach the focused window (RawInput design: #3232).
+// Consumer Control for media keys, maybe Mouse); every interface with the
+// dial's VID/PID whose product_string contains "Ulanzi Dial" is opened and
+// polled, and report diffs feed the shared chord decoder. No exclusive grab
+// on Windows, so keystrokes still reach the focused window (RawInput design:
+// #3232).
 class UlanziDialWindowsManager : public QObject {
     Q_OBJECT
 public:

@@ -851,24 +851,55 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
         toggleConnectionDialog();
         return true;
     }
+    // Status-bar indicators: a press and the keyboard (StatusIndicator's
+    // Return/Enter/Space and the accessible Press action) run one action.
+    if (event->type() == QEvent::MouseButtonPress && isStatusIndicator(obj)) {
+        if (obj == m_txIndicator
+            && static_cast<QMouseEvent*>(event)->button() != Qt::LeftButton) {
+            return true;
+        }
+        activateStatusIndicator(obj);
+        return true;
+    }
+    return QMainWindow::eventFilter(obj, event);
+}
+
+bool MainWindow::isStatusIndicator(const QObject* obj) const
+{
+    if (!obj) {
+        return false;
+    }
 #ifdef AETHER_ASR_ENABLED
-    if (obj == m_asrIndicator && event->type() == QEvent::MouseButtonPress) {
-        if (!m_asrIndicator->isEnabled()) return true;
-        showCopyAssist();           // toggles the docked Copy Assist panel
-        updateKeyerAvailability();  // refresh the indicator's active/available style
+    if (obj == m_asrIndicator) {
         return true;
     }
 #endif
-    if (obj == m_cwxIndicator && event->type() == QEvent::MouseButtonPress) {
-        if (!m_cwxIndicator->isEnabled()) return true;
+    return obj == m_cwxIndicator || obj == m_tnfIndicator
+        || obj == m_fdxIndicator || obj == m_bandStackIndicator || obj == m_tgxlContainer
+        || obj == m_pgxlContainer || obj == m_txIndicator || obj == m_addPanLabel
+        || obj == m_dvkIndicator;
+}
+
+void MainWindow::activateStatusIndicator(QObject* obj)
+{
+#ifdef AETHER_ASR_ENABLED
+    if (obj == m_asrIndicator) {
+        if (!m_asrIndicator->isEnabled()) return;
+        showCopyAssist();           // toggles the docked Copy Assist panel
+        updateKeyerAvailability();  // refresh the indicator's active/available style
+        return;
+    }
+#endif
+    if (obj == m_cwxIndicator) {
+        if (!m_cwxIndicator->isEnabled()) return;
         toggleCwKeyerPanel();
-        return true;
+        return;
     }
-    if (obj == m_tnfIndicator && event->type() == QEvent::MouseButtonPress) {
+    if (obj == m_tnfIndicator) {
         m_radioModel.tnfModel().requestGlobalTnfEnabled(!m_radioModel.tnfModel().globalEnabled());
-        return true;
+        return;
     }
-    if (obj == m_fdxIndicator && event->type() == QEvent::MouseButtonPress) {
+    if (obj == m_fdxIndicator) {
         bool on = !m_radioModel.fullDuplexEnabled();
         m_radioModel.sendCmdPublic(
             QString("radio set full_duplex_enabled=%1").arg(on ? 1 : 0),
@@ -882,15 +913,15 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
                 // Radio accepted; no status echo follows, so apply manually.
                 m_radioModel.setFullDuplex(on);
             });
-        return true;
+        return;
     }
-    if (obj == m_bandStackIndicator && event->type() == QEvent::MouseButtonPress) {
+    if (obj == m_bandStackIndicator) {
         bool show = !m_panStack->bandStackPanel()->isVisible();
         setBandStackPanelVisible(show);
         updateBandStackIndicator();
-        return true;
+        return;
     }
-    if (obj == m_tgxlContainer && event->type() == QEvent::MouseButtonPress) {
+    if (obj == m_tgxlContainer) {
         auto& t = m_radioModel.tunerModel();
         // Cycle: OPERATE → BYPASS → STANDBY → OPERATE
         if (t.isOperate() && !t.isBypass())
@@ -901,29 +932,26 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
             t.setBypass(false);
             t.setOperate(true);
         }
-        return true;
+        return;
     }
-    if (obj == m_pgxlContainer && event->type() == QEvent::MouseButtonPress) {
+    if (obj == m_pgxlContainer) {
         // Simple toggle: OPERATE ↔ STANDBY (PGXL has no BYPASS)
         m_radioModel.amplifier().setOperate(!m_radioModel.amplifier().operate());
-        return true;
+        return;
     }
-    if (obj == m_txIndicator && event->type() == QEvent::MouseButtonPress) {
-        auto* mouseEvent = static_cast<QMouseEvent*>(event);
-        if (mouseEvent->button() == Qt::LeftButton)
-            cancelTransmitFromIndicator();
-        return true;
+    if (obj == m_txIndicator) {
+        cancelTransmitFromIndicator();
+        return;
     }
-    if (obj == m_addPanLabel && event->type() == QEvent::MouseButtonPress) {
+    if (obj == m_addPanLabel) {
         showAddPanadapterDialog();
-        return true;
+        return;
     }
-    if (obj == m_dvkIndicator && event->type() == QEvent::MouseButtonPress) {
-        if (!m_dvkIndicator->isEnabled()) return true;
+    if (obj == m_dvkIndicator) {
+        if (!m_dvkIndicator->isEnabled()) return;
         toggleVoiceKeyerPanel();
-        return true;
+        return;
     }
-    return QMainWindow::eventFilter(obj, event);
 }
 
 // Shared by the status-bar +PAN affordance and Tools ▸ Add Panadapter… so both
@@ -1046,12 +1074,19 @@ void MainWindow::registerShortcutActions()
         if (!sw) return;
         static const int steps[] = {10, 50, 100, 250, 500, 1000, 2500, 5000, 10000};
         int cur = sw->stepSize();
+        // A deliberate step change, so it reaches the slice and the applet too.
+        // Clamped at both ends, unlike RxApplet::cycleStepUp(), which wraps.
+        const auto applyCycled = [this](int hz) {
+            if (auto* applet = m_appletPanel ? m_appletPanel->rxApplet() : nullptr)
+                applet->setInitialStepSize(hz);   // label + index only, no re-entry
+            applyOperatorTuningStep(hz);
+        };
         if (dir > 0) {
             for (int i = 0; i < static_cast<int>(std::size(steps)); ++i)
-                if (steps[i] > cur) { sw->setStepSize(steps[i]); return; }
+                if (steps[i] > cur) { sw->setStepSize(steps[i]); applyCycled(steps[i]); return; }
         } else {
             for (int i = static_cast<int>(std::size(steps)) - 1; i >= 0; --i)
-                if (steps[i] < cur) { sw->setStepSize(steps[i]); return; }
+                if (steps[i] < cur) { sw->setStepSize(steps[i]); applyCycled(steps[i]); return; }
         }
     };
 
@@ -1148,8 +1183,7 @@ void MainWindow::registerShortcutActions()
     }
 
     // ── Mode ────────────────────────────────────────────────────────────
-    const QStringList modes = filterUnavailableDigitalVoiceModes(
-        {"USB", "LSB", "CW", "CWL", "AM", "SAM", "FM", "NFM", "DFM", "DSTR", "DIGU", "DIGL", "RTTY"});
+    const QStringList modes = modeActionModes();
     for (const QString& m : modes) {
         m_shortcutManager.registerAction(
             QString("mode_%1").arg(m.toLower()), m, "Mode",
@@ -1288,14 +1322,14 @@ void MainWindow::registerShortcutActions()
     m_shortcutManager.registerAction("master_volume_up", "Master Volume Up", "Audio",
         QKeySequence(), [this]() {
             const int next = std::clamp(
-                AppSettings::instance().value("MasterVolume", "100").toInt() + 5, 0, 100);
+                m_radioModel.activeOutputVolumePercent() + 5, 0, 100);
             if (m_titleBar) m_titleBar->setMasterVolume(next);
             applyMasterVolume(next);
         }, /*autoRepeat=*/true);
     m_shortcutManager.registerAction("master_volume_down", "Master Volume Down", "Audio",
         QKeySequence(), [this]() {
             const int next = std::clamp(
-                AppSettings::instance().value("MasterVolume", "100").toInt() - 5, 0, 100);
+                m_radioModel.activeOutputVolumePercent() - 5, 0, 100);
             if (m_titleBar) m_titleBar->setMasterVolume(next);
             applyMasterVolume(next);
         }, /*autoRepeat=*/true);

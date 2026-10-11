@@ -81,10 +81,12 @@ void build_channel (int channel)
 	post_main_build (channel);
 }
 
-PORT
-void OpenChannel (int channel, int in_size, int dsp_size, int input_samplerate, int dsp_rate, int output_samplerate, 
-	int type, int state, double tdelayup, double tslewup, double tdelaydown, double tslewdown, int bfo)
+// AetherSDR patch 15: one construction path. The depth is prepared before
+// allocating either ring and survives the existing size/rate rebuilds.
+static void open_channel (int channel, int in_size, int dsp_size, int input_samplerate, int dsp_rate, int output_samplerate,
+	int type, int state, double tdelayup, double tslewup, double tdelaydown, double tslewdown, int bfo, int exchangeDepth)
 {
+	ch[channel].exchangeDepth = exchangeDepth;
 	ch[channel].in_size = in_size;
 	ch[channel].dsp_size = dsp_size;
 	ch[channel].in_rate = input_samplerate;
@@ -107,6 +109,28 @@ void OpenChannel (int channel, int in_size, int dsp_size, int input_samplerate, 
 		InterlockedBitTestAndSet (&ch[channel].exchange, 0);
 	}
 	_MM_SET_FLUSH_ZERO_MODE (_MM_FLUSH_ZERO_ON);
+}
+
+PORT
+void OpenChannel (int channel, int in_size, int dsp_size, int input_samplerate, int dsp_rate, int output_samplerate,
+	int type, int state, double tdelayup, double tslewup, double tdelaydown, double tslewdown, int bfo)
+{
+	// Explicit on EVERY legacy open, including a slot previously used at depth 8.
+	open_channel (channel, in_size, dsp_size, input_samplerate, dsp_rate, output_samplerate,
+		type, state, tdelayup, tslewup, tdelaydown, tslewdown, bfo, DSP_MULT);
+}
+
+PORT
+int OpenChannelWithExchangeDepth (int channel, int in_size, int dsp_size, int input_samplerate, int dsp_rate, int output_samplerate,
+	int type, int state, double tdelayup, double tslewup, double tdelaydown, double tslewdown, int bfo, int exchangeDepth)
+{
+	if (channel < 0 || channel >= MAX_CHANNELS || exchangeDepth < 2 || exchangeDepth > 8)
+	{
+		return 0;
+	}
+	open_channel (channel, in_size, dsp_size, input_samplerate, dsp_rate, output_samplerate,
+		type, state, tdelayup, tslewup, tdelaydown, tslewdown, bfo, exchangeDepth);
+	return 1;
 }
 
 void pre_main_destroy (int channel)

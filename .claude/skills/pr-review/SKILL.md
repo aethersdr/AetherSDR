@@ -475,10 +475,11 @@ shrink a test binary roughly twentyfold. The app then loads the core as a
 shared library, which is not how it ships. That is fine for driving
 behaviour, but name it if a finding could depend on link mode. Both are for
 Linux and macOS: on Windows, drop the shared core (it is a configure error)
-and the GCC/Clang flags. A test that calls WDSP directly cannot rely on the
-shared core exporting it, because WDSP is a private, hidden-visibility
-dependency; link `aether_wdsp` explicitly, as the existing direct-call tests
-do, or go through `core/dsp/WdspChannel.h`. Add
+and the GCC/Clang flags. A test cannot call WDSP directly: the shared core does
+not export it (a private, hidden-visibility dependency), and linking
+`aether_wdsp` gives the test a second WDSP the core never touches. It goes
+through a `*ForTest` hook in `core/dsp/WdspChannel.h`;
+`tools/check_wdsp_test_links.py` enforces that in Static checks. Add
 `-DCMAKE_{C,CXX}_COMPILER_LAUNCHER=ccache` when ccache is installed.
 
 Pick the tests from the diff: the ones the PR adds or modifies, the ones its

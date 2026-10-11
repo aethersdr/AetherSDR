@@ -3,11 +3,14 @@
 #ifdef HAVE_NVIDIA_AFX
 
 #include <QByteArray>
+#include <QLoggingCategory>
 #include <QString>
 #include <array>
 #include <atomic>
 #include <memory>
 #include <vector>
+
+Q_DECLARE_LOGGING_CATEGORY(lcNvAfx)
 
 namespace AetherSDR {
 

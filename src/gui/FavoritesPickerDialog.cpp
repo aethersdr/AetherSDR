@@ -20,7 +20,8 @@ constexpr const char* kListStyleTemplate =
     "border: 1px solid {{color.border.strong}}; border-radius: 3px; "
     "color: {{color.text.primary}}; }"
     "QListWidget::item { padding: 4px 6px; }"
-    "QListWidget::item:selected { background: {{color.accent}}; color: #000; }"
+    // No ::item:selected rule: selection comes from the palette, as for the
+    // app-wide lists, so it stays readable whatever the theme's accent.
     "QListWidget::item:hover { background: {{color.background.1}}; }"
     // Canonical dark scrollbar — matches WhatsNewDialog / PanadapterApplet etc.
     "QScrollBar:vertical { background: {{color.background.0}}; width: 10px; margin: 0; }"

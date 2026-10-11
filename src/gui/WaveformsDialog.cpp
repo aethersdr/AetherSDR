@@ -1,9 +1,17 @@
 #include "WaveformsDialog.h"
+#include "CanonIndicators.h"
 #include "core/DigitalVoiceWaveformProcess.h"
 #include "core/DigitalVoiceWaveformSettings.h"
 #include "core/DigitalVoiceFeature.h"
 #include "core/ThemeManager.h"
 #include "core/WaveformInstaller.h"
+#include "core/TailnetShimClient.h"
+#include "core/TailnetShimRelease.h"
+#include "core/TailnetShimDownloader.h"
+#include "TailnetShimDialog.h"
+#include "FramelessResizer.h"
+#include "PersistentDialog.h"   // its small pop-up dialogs keep the persistent pattern
+#include "RoundedMenu.h"
 #include "models/FlexWaveformModel.h"
 #include "models/RadioModel.h"
 #include "gui/WaveformInstallGate.h"   // #4210 pure Docker-install gate policy
@@ -29,6 +37,8 @@
 #include <QPixmap>
 #include <QProgressBar>
 #include <QPointer>
+#include <QTimer>
+#include <memory>
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QRegularExpressionValidator>
@@ -218,10 +228,17 @@ QString legacyWaveformDialogInitialPath()
     return QDir::homePath();
 }
 
+// AetherSDR style guide (docs/style/aethersdr-style-guide.md, RFC #6226):
+// the Waveforms window is a CanonWindow, so the ground is painted for it and
+// every colour here is a color.canon.* token. Top-level panels sit on the
+// raised surface, cards inside them on the nested surface, with hairlines;
+// titles in ink, labels in muted, values in ink-soft; controls on the canon
+// secondary recipe with cyan as the single accent. Rules are scoped by object
+// name, so a panel rule never reaches the QLabels inside it.
 constexpr const char* kWaveformsDialogStyle = R"(
 QWidget#waveformsBody {
-    color: #aeb9cc;
-    background: #07101c;
+    color: {{color.canon.inkSoft}};
+    background: transparent;
     font-size: 14px;
 }
 QWidget#StatusColumn,
@@ -236,35 +253,44 @@ QWidget#DStarExecutableRow {
 QLabel {
     background: transparent;
 }
+QLabel#WaveformsWindowTitle {
+    color: {{color.canon.ink}};
+    font-size: 20px;
+    font-weight: 700;
+}
+QFrame#WaveformsHeaderRule {
+    background: {{color.canon.line}};
+    border: none;
+    min-height: 1px;
+    max-height: 1px;
+}
 QFrame#WaveformsStatusFrame,
 QFrame#localDigitalVoicePanel,
 QFrame#installedWaveformsPanel {
-    background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
-        stop:0 #111d2c, stop:1 #0a1421);
-    border: 1px solid #233246;
-    border-radius: 7px;
+    background: {{color.canon.raised}};
+    border: 1px solid {{color.canon.line}};
+    border-radius: 12px;
 }
 QFrame#LocalWaveformServiceCard {
-    background: #0b1625;
-    border-color: #26374e;
-    border: 1px solid #26374e;
-    border-radius: 7px;
+    background: {{color.canon.nested}};
+    border: 1px solid {{color.canon.line}};
+    border-radius: 12px;
 }
 QFrame#ActiveServiceStrip {
-    background: #8294a8;
+    background: {{color.canon.muted}};
     border: none;
     border-radius: 2px;
     min-width: 4px;
     max-width: 4px;
 }
 QFrame#PanelSeparator {
-    background: #26374e;
+    background: {{color.canon.line}};
     border: none;
     min-height: 1px;
     max-height: 1px;
 }
 QFrame#StatusSegmentDivider {
-    background: #26374e;
+    background: {{color.canon.line}};
     border: none;
     min-width: 1px;
     max-width: 1px;
@@ -272,65 +298,58 @@ QFrame#StatusSegmentDivider {
 QLabel#StatusStripTitle,
 QLabel#SectionLabel,
 QLabel#StatusColumnTitle {
-    color: #8d99ad;
+    color: {{color.canon.muted}};
     font-size: 11px;
     font-weight: 700;
 }
 QLabel#PanelTitle {
-    color: #d4deea;
+    color: {{color.canon.ink}};
     font-size: 15px;
     font-weight: 700;
 }
 QLabel#ConnectedRadioName {
-    color: #e1e8f1;
+    color: {{color.canon.ink}};
     font-size: 15px;
     font-weight: 700;
 }
 QLabel#ConnectedRadioSerial,
 QLabel#ServiceSubtitle,
 QLabel#EmptyStateSubtext {
-    color: #8d99ad;
+    color: {{color.canon.muted}};
 }
 QLabel#ServiceSubtitle {
     min-height: 18px;
 }
 QLabel#digitalVoiceWaveformDetail {
-    color: #9fb0c6;
+    color: {{color.canon.inkSoft}};
     font-size: 12px;
 }
 QLabel#ServiceTitle {
-    color: #e1e8f1;
+    color: {{color.canon.ink}};
     font-size: 15px;
     font-weight: 700;
 }
 QLabel#StatusPill,
 QLabel#digitalVoiceWaveformStatus,
-QLabel#ValuePill {
-    color: #c8d8e8;
-    background: #0b1625;
-    border: 1px solid #26374e;
-    border-radius: 5px;
-    padding: 4px 9px;
-    font-weight: 600;
-}
+QLabel#ValuePill,
 QLabel#CapabilityPill {
-    color: #c8d8e8;
-    background: #0b1625;
-    border: 1px solid #26374e;
+    color: {{color.canon.inkSoft}};
+    background: {{color.canon.nested}};
+    border: 1px solid {{color.canon.lineHi}};
     border-radius: 5px;
     padding: 4px 9px;
     font-weight: 600;
 }
 QLabel#ValuePill {
-    color: #d4deea;
-    background: #0c1b28;
+    color: {{color.canon.ink}};
+    background: {{color.canon.control}};
 }
 QLabel#MutedLabel,
 QLabel#EmptyStateText {
-    color: #8d99ad;
+    color: {{color.canon.muted}};
 }
 QLabel#EmptyStateText {
-    color: #9bb0c4;
+    color: {{color.canon.inkSoft}};
     font-size: 14px;
     font-weight: 700;
 }
@@ -351,19 +370,32 @@ QLabel#ProtocolIcon {
     max-height: 56px;
 }
 QFrame#WaveformListFrame {
-    background: #07101c;
-    border: 1px dashed #31455c;
-    border-radius: 7px;
+    background: transparent;
+    border: 1px dashed {{color.canon.lineHi}};
+    border-radius: 12px;
 }
 QFrame#RadioWaveformRow {
-    background: #0b1625;
-    border: 1px solid #1d2a3c;
-    border-radius: 6px;
+    background: {{color.canon.nested}};
+    border: 1px solid {{color.canon.line}};
+    border-radius: 8px;
+}
+QFrame#RadioWaveformRow:hover {
+    border-color: {{color.canon.lineHi}};
+}
+QLabel#RowNotice {
+    color: {{color.canon.muted}};
+    font-size: 12px;
+}
+QLabel#RowNotice[tone="ok"] {
+    color: {{color.accent.success}};
+}
+QLabel#RowNotice[tone="error"] {
+    color: {{color.accent.danger}};
 }
 QLabel#WaveformTypeBadge {
-    color: #9ab2c8;
-    background: #0d1c20;
-    border: 1px solid #26374e;
+    color: {{color.canon.cyan}};
+    background: {{color.canon.control}};
+    border: 1px solid {{color.canon.lineHi}};
     border-radius: 5px;
     padding: 3px 8px;
     font-size: 12px;
@@ -371,120 +403,92 @@ QLabel#WaveformTypeBadge {
 }
 QCheckBox {
     background: transparent;
-    color: #aeb9cc;
+    color: {{color.canon.inkSoft}};
     spacing: 9px;
-}
-QCheckBox::indicator {
-    width: 20px;
-    height: 20px;
-    border-radius: 4px;
-    border: 1px solid #34533c;
-    background: #0d1a18;
-}
-QCheckBox::indicator:checked {
-    background: #5ebd69;
-    border-color: #65d379;
-}
-QCheckBox::indicator:disabled {
-    border-color: #26374e;
-    background: #08111d;
 }
 QPushButton,
 QToolButton {
-    color: #c8d8e8;
-    background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
-        stop:0 #17314a, stop:1 #0d2134);
-    border: 1px solid #2d4d66;
-    border-radius: 6px;
+    color: {{color.canon.cyan}};
+    background: {{color.canon.control}};
+    border: 1px solid {{color.canon.lineHi}};
+    border-radius: 4px;
     padding: 7px 14px;
     font-weight: 600;
 }
 QPushButton:hover,
 QToolButton:hover {
-    border-color: #4f7390;
-    color: #e2edf7;
+    background: {{color.canon.nested}};
+    color: {{color.canon.aqua}};
+}
+QPushButton:focus,
+QToolButton:focus {
+    border-color: {{color.canon.aqua}};
 }
 QPushButton:disabled,
 QToolButton:disabled {
-    color: #68778a;
-    border-color: #1d2a3c;
-    background: #0b1522;
+    color: {{color.canon.muted}};
+    border-color: {{color.canon.line}};
+    background: transparent;
 }
 QToolButton#DStarAdvancedButton {
-    color: #aeb9cc;
+    color: {{color.canon.inkSoft}};
     background: transparent;
     border: 1px solid transparent;
     padding: 3px 6px;
     text-align: left;
 }
 QToolButton#DStarAdvancedButton:hover {
-    border-color: #26374e;
-    background: #0b1625;
+    border-color: {{color.canon.line}};
+    background: {{color.canon.nested}};
 }
 QToolButton#ThumbDvDeviceMenu {
     padding: 0;
 }
 QComboBox {
-    color: #c4cedd;
-    background: #0b1625;
-    border: 1px solid #26374e;
-    border-radius: 5px;
+    color: {{color.canon.ink}};
+    background: {{color.canon.control}};
+    border: 1px solid {{color.canon.lineHi}};
+    border-radius: 4px;
     padding: 6px 28px 6px 10px;
-    selection-background-color: #1b3650;
+    selection-background-color: {{color.canon.cyan}};
+    selection-color: {{color.canon.onAccent}};
 }
 QComboBox:focus {
-    border-color: #54c768;
+    border-color: {{color.canon.aqua}};
 }
 QLineEdit {
-    color: #c4cedd;
-    background: #050b13;
-    border: 1px solid #26374e;
-    border-radius: 6px;
+    color: {{color.canon.ink}};
+    background: {{color.canon.control}};
+    border: 1px solid {{color.canon.lineHi}};
+    border-radius: 4px;
     padding: 6px 10px;
     min-height: 20px;
-    selection-background-color: #1b3650;
+    selection-background-color: {{color.canon.cyan}};
+    selection-color: {{color.canon.onAccent}};
     font-family: "SF Mono", "Menlo", "Consolas", monospace;
     font-size: 13px;
 }
 QLineEdit:focus {
-    border-color: #54c768;
+    border-color: {{color.canon.aqua}};
 }
 QScrollArea {
     background: transparent;
     border: none;
 }
 QScrollBar:vertical {
-    background: #07101c;
+    background: transparent;
     width: 12px;
     margin: 8px 2px 8px 2px;
     border-radius: 6px;
 }
 QScrollBar::handle:vertical {
-    background: #25364d;
+    background: {{color.canon.lineHi}};
     border-radius: 5px;
     min-height: 34px;
 }
 QScrollBar::add-line:vertical,
 QScrollBar::sub-line:vertical {
     height: 0px;
-}
-)";
-
-constexpr const char* kWaveformsInstallMenuStyle = R"(
-QMenu {
-    color: #c8d8e8;
-    background: #07101c;
-    border: 1px solid #26374e;
-}
-QMenu::item {
-    padding: 6px 28px 6px 14px;
-}
-QMenu::item:selected:enabled {
-    color: #e2edf7;
-    background: #17314a;
-}
-QMenu::item:disabled {
-    color: #596779;
 }
 )";
 
@@ -725,6 +729,22 @@ int installedWaveformActionButtonWidth(const QPushButton* first,
     });
 }
 
+// Width a row action button needs once kWaveformsDialogStyle applies (bold
+// text, 14 px side padding, 1 px border). Rows are sized while detached, so
+// sizeHint() still measures the unstyled button and clips longer labels.
+int styledWaveformActionButtonWidth(const QPushButton* button)
+{
+    if (!button) {
+        return 0;
+    }
+    QFont font = button->font();
+    font.setWeight(QFont::DemiBold);
+    constexpr int kStylePaddingAndBorder = (14 + 1) * 2;
+    constexpr int kSlack = 6;
+    return QFontMetrics(font).horizontalAdvance(button->text())
+        + kStylePaddingAndBorder + kSlack;
+}
+
 int installedWaveformTypeBadgeWidth(const QLabel* label,
                                     const QString& first,
                                     const QString& second)
@@ -894,17 +914,34 @@ void showWaveformInstallResultDialog(QWidget* parent,
 } // namespace
 
 WaveformsDialog::WaveformsDialog(RadioModel* model, QWidget* parent)
-    : PersistentDialog(tr("Waveforms"), QStringLiteral("WaveformsDialogGeometry"), parent)
+    : CanonWindow(tr("Waveforms"), parent)
     , m_radioModel(model)
 {
     theme::setContainer(this, QStringLiteral("dialog/waveforms"));
-    setMinimumSize(900, 620);
+    setMinimumSize(900, 660);
+    resize(980, 720);
+    // A tool window that holds lists: keep it resizable from every edge, as
+    // the frameless main window is (CanonWindow itself only moves).
+    FramelessResizer::install(this);
     bodyWidget()->setObjectName(QStringLiteral("waveformsBody"));
-    bodyWidget()->setStyleSheet(QString::fromLatin1(kWaveformsDialogStyle));
+    applyCanonSheet(bodyWidget(), [] {
+        return QString::fromLatin1(kWaveformsDialogStyle) + canonIndicatorRules();
+    });
 
     auto* root = new QVBoxLayout(bodyWidget());
-    root->setSpacing(10);
-    root->setContentsMargins(12, 10, 12, 12);
+    root->setSpacing(12);
+    root->setContentsMargins(22, 18, 22, 20);
+
+    // Canon header in place of a title bar: the title in ink over a hairline.
+    // The right margin keeps it clear of CanonWindow's corner close button.
+    auto* windowTitleLabel = new QLabel(tr("Waveforms"), bodyWidget());
+    windowTitleLabel->setObjectName(QStringLiteral("WaveformsWindowTitle"));
+    windowTitleLabel->setAccessibleName(tr("Waveforms"));
+    windowTitleLabel->setContentsMargins(0, 0, 40, 0);
+    root->addWidget(windowTitleLabel);
+    auto* headerRule = new QFrame(bodyWidget());
+    headerRule->setObjectName(QStringLiteral("WaveformsHeaderRule"));
+    root->addWidget(headerRule);
 
     // Radio and WFP capability/status strip.
     auto* statusFrame = makePanel(QStringLiteral("WaveformsStatusFrame"), bodyWidget());
@@ -1349,12 +1386,21 @@ WaveformsDialog::WaveformsDialog(RadioModel* model, QWidget* parent)
     m_installBtn->setFixedWidth(104);
     m_installBtn->setEnabled(false);  // updated after installer state is known
     auto* installMenu = new QMenu(m_installBtn);
-    installMenu->setStyleSheet(QString::fromLatin1(kWaveformsInstallMenuStyle));
+    // The title bar's rounded menu, as every menu in the canon; disabled
+    // items (a blocked Docker install) take canon.muted.
+    ThemeManager::instance().applyStyleSheet(installMenu,
+        kRoundedMenuRules + QStringLiteral("QMenu::item:disabled { color: {{color.canon.muted}}; }"));
+    roundMenuTree(installMenu);
     // updateInstallButtonState() puts dockerInstallBlockerText()'s per-blocker
     // reason on the Docker entry's tooltip when it greys the entry out, and
     // that string has no other outlet in the UI.  Qt drops per-action tooltips
     // unless the menu opts in (#5546).
     installMenu->setToolTipsVisible(true);
+    // RFC #6271 D2: the remote-access container, downloaded from the release
+    // this AetherSDR pins and verified by SHA-256 before it is installed.
+    m_installRemoteAccessAction = installMenu->addAction(
+        tr("Remote Access (Tailscale)"), this, &WaveformsDialog::onInstallRemoteAccessClicked);
+    installMenu->addSeparator();
     installMenu->addAction(tr("Legacy Waveform (.ssdr_waveform)..."),
                            this, &WaveformsDialog::onInstallLegacyClicked);
     m_installDockerAction = installMenu->addAction(tr("Docker Waveform Image..."),
@@ -1392,6 +1438,8 @@ WaveformsDialog::WaveformsDialog(RadioModel* model, QWidget* parent)
             this, &WaveformsDialog::updateInstallButtonState);
     connect(&wfModel, &FlexWaveformModel::waveformsChanged,
             this, &WaveformsDialog::refreshWaveformList);
+    connect(&wfModel, &FlexWaveformModel::commandFinished,
+            this, &WaveformsDialog::onWaveformCommandFinished);
     connect(&ThemeManager::instance(), &ThemeManager::themeChanged,
             this, &WaveformsDialog::refreshStatus);
     connect(&ThemeManager::instance(), &ThemeManager::themeChanged,
@@ -1457,6 +1505,17 @@ void WaveformsDialog::updateInstallButtonState()
         : tr("Connect to a radio before installing Docker waveform images.");
     const bool dockerReady = connected && dockerBlocker.isEmpty();
     m_installDockerAction->setEnabled(!busy && dockerReady);
+    if (m_installRemoteAccessAction) {
+        const bool downloading = m_shimDownloader && m_shimDownloader->isRunning();
+        m_installRemoteAccessAction->setEnabled(!busy && !downloading && dockerReady);
+        // The reason goes on the accessible channel too, not just the tooltip (#4896).
+        const QString remoteTip = dockerReady
+            ? tr("Download the remote-access container (version %1), verify it, and install it.")
+                  .arg(QString::fromLatin1(TailnetShimRelease::kVersion))
+            : (busy ? tr("A waveform install is already in progress.") : dockerBlocker);
+        m_installRemoteAccessAction->setToolTip(remoteTip);
+        m_installRemoteAccessAction->setStatusTip(remoteTip);
+    }
     if (busy) {
         m_installDockerAction->setToolTip(tr("A waveform install is already in progress."));
     } else if (dockerReady) {
@@ -1493,6 +1552,85 @@ void WaveformsDialog::onInstallDockerClicked()
         true);
 }
 
+void WaveformsDialog::onInstallRemoteAccessClicked()
+{
+    if (!m_radioModel || !m_radioModel->isConnected()) {
+        return;
+    }
+    const QString blocker = dockerInstallBlockerText(m_radioModel, m_radioModel->flexWaveformModel());
+    if (!blocker.isEmpty()) {
+        showDockerWfpNotReadyDialog(this, blocker);
+        return;
+    }
+    if (!m_shimDownloader) {
+        m_shimDownloader = new TailnetShimDownloader(this);
+    }
+    if (m_shimDownloader->isRunning()) {
+        return;
+    }
+
+    auto* progress = new PersistentDialog(tr("Downloading Remote Access"), QString(), this);
+    theme::setContainer(progress, QStringLiteral("dialog/waveforms/installProgress"));
+    progress->setWindowModality(Qt::WindowModal);
+    progress->setMinimumWidth(420);
+    auto* root = new QVBoxLayout(progress->bodyWidget());
+    root->setSpacing(10);
+    auto* label = new QLabel(tr("Downloading the remote-access container %1 and checking it "
+                                "against the release this AetherSDR expects...")
+                                 .arg(QString::fromLatin1(TailnetShimRelease::kVersion)));
+    label->setWordWrap(true);
+    label->setAccessibleName(tr("Remote access download progress"));
+    root->addWidget(label);
+    auto* bar = new QProgressBar;
+    bar->setRange(0, 100);
+    bar->setAccessibleName(tr("Remote access download progress value"));
+    root->addWidget(bar);
+    auto* buttons = new QHBoxLayout;
+    buttons->addStretch();
+    auto* cancel = new QPushButton(tr("Cancel"));
+    cancel->setAccessibleName(tr("Cancel remote access download"));
+    buttons->addWidget(cancel);
+    root->addLayout(buttons);
+    connect(cancel, &QPushButton::clicked, progress, &QDialog::reject);
+    connect(progress, &QDialog::rejected, m_shimDownloader, &TailnetShimDownloader::cancel);
+    connect(m_shimDownloader, &TailnetShimDownloader::progress, progress,
+            [bar](qint64 got, qint64 total) {
+        bar->setValue(total > 0 ? int(got * 100 / total) : 0);
+    });
+
+    const QPointer<RadioModel> modelGuard(m_radioModel);
+    // Each signal fires once per attempt; whichever fires first closes the
+    // window and disconnects the other.
+    auto finish = [progress]() {
+        progress->close();
+        progress->deleteLater();
+    };
+    auto readyConn = std::make_shared<QMetaObject::Connection>();
+    auto failConn = std::make_shared<QMetaObject::Connection>();
+    *readyConn = connect(m_shimDownloader, &TailnetShimDownloader::ready, this,
+                         [this, finish, modelGuard, readyConn, failConn](const QString& path) {
+        disconnect(*readyConn);
+        disconnect(*failConn);
+        finish();
+        updateInstallButtonState();
+        if (modelGuard) {
+            installWaveformPath(true, path, modelGuard);
+        }
+    });
+    *failConn = connect(m_shimDownloader, &TailnetShimDownloader::failed, this,
+                        [this, finish, readyConn, failConn](const QString& message) {
+        disconnect(*readyConn);
+        disconnect(*failConn);
+        finish();
+        updateInstallButtonState();
+        showWaveformInstallResultDialog(this, tr("Download Failed"), message);
+    });
+
+    progress->show();
+    m_shimDownloader->start();
+    updateInstallButtonState();
+}
+
 void WaveformsDialog::installWaveformFile(const QString& title,
                                           const QString& filter,
                                           bool docker,
@@ -1511,6 +1649,16 @@ void WaveformsDialog::installWaveformFile(const QString& title,
         filter);
 
     if (!self || !modelGuard || self->m_radioModel != modelGuard.data() || path.isEmpty()) {
+        return;
+    }
+
+    installWaveformPath(docker, path, modelGuard);
+}
+
+void WaveformsDialog::installWaveformPath(bool docker, const QString& path, RadioModel* model)
+{
+    const QPointer<RadioModel> modelGuard(model);
+    if (!modelGuard || m_radioModel != modelGuard.data() || !modelGuard->isConnected()) {
         return;
     }
 
@@ -1965,6 +2113,18 @@ void WaveformsDialog::refreshWaveformList()
         nameLabel->setToolTip(QStringLiteral("%1 %2").arg(name, entry.version).trimmed());
         rowLayout->addWidget(nameLabel, 1);
 
+        const auto notice = m_rowNotices.constFind(name);
+        const bool rowPending = notice != m_rowNotices.constEnd() && notice->pending;
+        if (notice != m_rowNotices.constEnd()) {
+            auto* noticeLabel = new QLabel(notice->text, row);
+            noticeLabel->setObjectName(QStringLiteral("RowNotice"));
+            noticeLabel->setProperty("tone", notice->tone);
+            noticeLabel->setTextFormat(Qt::PlainText);
+            noticeLabel->setAccessibleName(tr("Waveform %1 status: %2").arg(name, notice->text));
+            noticeLabel->setToolTip(notice->text);
+            rowLayout->addWidget(noticeLabel, 0, Qt::AlignVCenter);
+        }
+
         // Type badge
         const QString dockerBadgeText = tr("Docker");
         const QString legacyBadgeText = tr("Legacy");
@@ -1985,9 +2145,31 @@ void WaveformsDialog::refreshWaveformList()
         actionLayout->setContentsMargins(0, 0, 0, 0);
         actionLayout->setSpacing(kInstalledWaveformActionButtonSpacing);
 
+        // The remote-access container gets a Configure… button that opens its
+        // Tailscale settings; every other waveform keeps Restart / Remove only.
+        QPushButton* configureBtn = nullptr;
+        if (isContainer && name == QLatin1String(kTailnetShimContainerName)) {
+            configureBtn = new QPushButton(tr("Configure…"), actionWidget);
+            configureBtn->setAccessibleName(tr("Configure remote access for waveform %1").arg(name));
+            connect(configureBtn, &QPushButton::clicked, this, [this]() {
+                // A CanonWindow: one at a time; a second click raises it.
+                static QPointer<TailnetShimDialog> open;
+                if (open) {
+                    open->raise();
+                    open->activateWindow();
+                    return;
+                }
+                auto* dialog = new TailnetShimDialog(m_radioModel, this);
+                dialog->setAttribute(Qt::WA_DeleteOnClose);
+                open = dialog;
+                dialog->show();
+            });
+        }
+
         auto* restartBtn = new QPushButton(tr("Restart"), actionWidget);
         restartBtn->setAccessibleName(tr("Restart waveform %1").arg(name));
         connect(restartBtn, &QPushButton::clicked, this, [this, name]() {
+            setRowNotice(name, tr("Restarting…"), QStringLiteral("pending"), true);
             m_radioModel->flexWaveformModel().requestRestart(name);
         });
 
@@ -1999,6 +2181,8 @@ void WaveformsDialog::refreshWaveformList()
             if (!confirmRadioWaveformRemoval(this, name, isContainer)) {
                 return;
             }
+            setRowNotice(name, isContainer ? tr("Removing…") : tr("Uninstalling…"),
+                         QStringLiteral("pending"), true);
             if (isContainer) {
                 m_radioModel->flexWaveformModel().requestRemoveContainer(name);
             } else {
@@ -2006,17 +2190,64 @@ void WaveformsDialog::refreshWaveformList()
             }
         });
 
-        const int actionButtonWidth = installedWaveformActionButtonWidth(restartBtn, removeBtn);
+        restartBtn->setEnabled(!rowPending);
+        removeBtn->setEnabled(!rowPending);
+        const int actionButtonWidth = std::max({
+            installedWaveformActionButtonWidth(restartBtn, removeBtn),
+            styledWaveformActionButtonWidth(restartBtn),
+            styledWaveformActionButtonWidth(removeBtn),
+            styledWaveformActionButtonWidth(configureBtn)});
+        const int actionButtonCount = configureBtn ? 3 : 2;
+        if (configureBtn) {
+            configureBtn->setFixedWidth(actionButtonWidth);
+            configureBtn->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+            actionLayout->addWidget(configureBtn);
+        }
         restartBtn->setFixedWidth(actionButtonWidth);
         restartBtn->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
         removeBtn->setFixedWidth(actionButtonWidth);
         removeBtn->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
-        actionWidget->setFixedWidth((actionButtonWidth * 2) + kInstalledWaveformActionButtonSpacing);
+        actionWidget->setFixedWidth((actionButtonWidth * actionButtonCount)
+                                    + (kInstalledWaveformActionButtonSpacing * (actionButtonCount - 1)));
         actionLayout->addWidget(restartBtn);
         actionLayout->addWidget(removeBtn);
         rowLayout->addWidget(actionWidget, 0, Qt::AlignRight | Qt::AlignVCenter);
 
         m_listLayout->insertWidget(m_listLayout->count() - 1, row);
+    }
+}
+
+void WaveformsDialog::setRowNotice(const QString& name, const QString& text,
+                                   const QString& tone, bool pending)
+{
+    const quint64 serial = ++m_rowNoticeSerial;
+    m_rowNotices.insert(name, RowNotice{text, tone, pending, serial});
+    refreshWaveformList();
+    if (!pending) {
+        // A finished outcome stays long enough to read, then clears.
+        QTimer::singleShot(8000, this, [this, name, serial] {
+            const auto it = m_rowNotices.constFind(name);
+            if (it != m_rowNotices.constEnd() && it->serial == serial) {
+                m_rowNotices.remove(name);
+                refreshWaveformList();
+            }
+        });
+    }
+}
+
+void WaveformsDialog::onWaveformCommandFinished(const QString& action, const QString& name,
+                                                bool ok, const QString& message)
+{
+    const QString why = message.isEmpty() ? tr("the radio refused it") : message;
+    if (action == QLatin1String("restart")) {
+        setRowNotice(name, ok ? tr("Restarted") : tr("Restart failed: %1").arg(why),
+                     ok ? QStringLiteral("ok") : QStringLiteral("error"), false);
+    } else if (!ok) {
+        // A successful removal takes the row away; only a failure needs words.
+        setRowNotice(name, tr("Remove failed: %1").arg(why), QStringLiteral("error"), false);
+    } else {
+        m_rowNotices.remove(name);
+        refreshWaveformList();
     }
 }
 

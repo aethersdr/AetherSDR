@@ -1,6 +1,6 @@
 #pragma once
 
-#include "gui/PersistentDialog.h"
+#include "gui/CanonWindow.h"
 #include "core/AgcTCalibrator.h"
 
 #include <QPointer>
@@ -23,10 +23,7 @@ class AudioEngine;
 // AgcCurveWidget — lightweight 2D plot of post-AGC audio noise (y, dB) versus
 // the AGC-T value (x, 0..100). Markers: current value, detected knee /
 // recommended value, and (AGC-off) the comfortable-noise target line.
-//
-// Visual styling here is deliberately plain — final visual design is the
-// maintainer's call (CLAUDE.md). This draws the data correctly; colors/fonts
-// are placeholders.
+// Painted in the canon palette (color.canon.*), so it follows the theme.
 class AgcCurveWidget : public QWidget {
     Q_OBJECT
 public:
@@ -51,11 +48,11 @@ private:
     AgcTCalibrator::Strategy m_strategy{AgcTCalibrator::Strategy::Knee};
 };
 
-// AgcCalibrationDialog — the calibration surface. Auto-sweep first (one click),
-// with the live curve always visible so the operator can fine-tune by hand.
-// Operates on the active slice; the radio stays authoritative (we only set the
-// value through SliceModel).
-class AgcCalibrationDialog : public PersistentDialog {
+// AgcCalibrationDialog — the calibration surface, a canon dialog. Auto-sweep
+// first (one click), with the live curve always visible so the operator can
+// fine-tune by hand. Operates on the active slice; the radio stays
+// authoritative (we only set the value through SliceModel).
+class AgcCalibrationDialog : public CanonWindow {
     Q_OBJECT
 public:
     using NoiseFloorFn = std::function<float(SliceModel*)>;
@@ -64,6 +61,11 @@ public:
                          AudioEngine* audio,
                          NoiseFloorFn noiseFloorFn,
                          QWidget* parent = nullptr);
+    ~AgcCalibrationDialog() override;
+
+    // Every close path (the close button, Escape, Ctrl+W) ends here: a running
+    // sweep stops and the AGC-T it found goes back, as Stop does.
+    void done(int result) override;
 
     // Point the panel at a slice (called on show and on active-slice change).
     void setSlice(SliceModel* slice);

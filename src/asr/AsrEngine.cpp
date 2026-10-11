@@ -462,6 +462,13 @@ void AsrWorker::reset()
     m_resamplerSrcRate = 0;
 }
 
+void AsrWorker::resumeAfterCancel()
+{
+    // Runs on the worker thread, behind everything restartSession() meant to
+    // discard, so clearing here cannot let an old-chain block through.
+    m_cancelPending.store(false, std::memory_order_relaxed);
+}
+
 // ---- AsrEngine -------------------------------------------------------------
 
 AsrEngine::AsrEngine(AsrBackendFactory factory, QObject* parent)
@@ -510,6 +517,8 @@ void AsrEngine::startThread(AsrBackendFactory factory, const AsrSegmenter::Confi
     connect(this, &AsrEngine::requestClearContext, m_worker, &AsrWorker::clearContext);
     connect(this, &AsrEngine::requestMarkDiscontinuity, m_worker, &AsrWorker::markDiscontinuity);
     connect(this, &AsrEngine::requestReset, m_worker, &AsrWorker::reset);
+    connect(this, &AsrEngine::requestResumeAfterCancel, m_worker,
+            &AsrWorker::resumeAfterCancel);
 
     // Worker -> engine (queued back to the main thread).
     connect(m_worker, &AsrWorker::loaded, this, [this] {
@@ -739,6 +748,19 @@ void AsrEngine::reset()
     m_droppedAtEntryMs = 0.0;
     updateDropped();
     emit requestReset();
+}
+
+void AsrEngine::restartSession()
+{
+    if (m_worker != nullptr) {
+        // Direct, not queued: the whole point is to take effect ahead of the
+        // processAudio() calls already sitting in the worker's queue.
+        m_worker->setCancelPending(true);
+    }
+    reset();   // queued behind them
+    // Queued behind the reset, so the flag clears only once the old-chain
+    // backlog has been discarded.
+    emit requestResumeAfterCancel();
 }
 
 } // namespace AetherSDR

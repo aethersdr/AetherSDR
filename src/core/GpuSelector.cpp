@@ -127,26 +127,22 @@ QVector<GpuInfo> enumeratePlatform() { return {}; }
 QString s_appliedSummary = QStringLiteral("not run");
 
 #if defined(Q_OS_LINUX)
-// Will the app run on a Wayland (EGL) platform rather than X11 (GLX)?  main.cpp
-// sets QT_QPA_PLATFORM (including the headless->xcb case) before applyAtStartup()
-// runs, so we read that decision directly, falling back to the session type only
-// when it is unset.  GLX vendor selection only applies under X11 — under Wayland
+// Will the app run on a Wayland (EGL) platform rather than X11 (GLX)?  Qt prefers
+// a -platform argument to QT_QPA_PLATFORM, so main.cpp passes it in; otherwise
+// main.cpp sets QT_QPA_PLATFORM (including the headless->xcb case) before
+// applyAtStartup() runs, so we read that decision directly, falling back to the
+// session type only when it is unset.  GLX vendor selection only applies under X11 — under Wayland
 // it is useless and __GLX_VENDOR_LIBRARY_NAME=nvidia can even raise a GLX
 // BadValue.
-bool willUseWayland()
+bool willUseWayland(const QString& platformArgument)
 {
-    const QByteArray plat = qgetenv("QT_QPA_PLATFORM");
-    if (!plat.isEmpty()) {
-        // QT_QPA_PLATFORM is an ordered list ("wayland;xcb" / "xcb;wayland"); Qt
-        // loads the first entry it can, so only the first decides. Match it, not
-        // a substring of the whole value — "xcb;wayland" contains "wayland" but
-        // runs on xcb.
-        const QByteArray first = plat.split(';').constFirst().trimmed();
-        if (first.contains("wayland")) return true;
-        if (first.contains("xcb"))     return false;
-    }
-    return qEnvironmentVariableIsSet("WAYLAND_DISPLAY")
-        || qgetenv("XDG_SESSION_TYPE") == QByteArrayLiteral("wayland");
+    const QByteArray request = platformArgument.isEmpty()
+        ? qgetenv("QT_QPA_PLATFORM")
+        : platformArgument.toLocal8Bit();
+    return GpuSelector::requestPicksWayland(
+        request,
+        qEnvironmentVariableIsSet("WAYLAND_DISPLAY")
+            || qgetenv("XDG_SESSION_TYPE") == QByteArrayLiteral("wayland"));
 }
 #endif
 
@@ -207,8 +203,11 @@ void GpuSelector::saveChoiceId(const QString& id)
     s.save();
 }
 
-void GpuSelector::applyAtStartup()
+void GpuSelector::applyAtStartup(const QString& platformArgument)
 {
+#if !defined(Q_OS_LINUX)
+    Q_UNUSED(platformArgument);   // only the Linux GLX/EGL choice depends on it
+#endif
     // Runs in main() BEFORE QApplication.  Read the persisted choice straight
     // from the settings file — constructing AppSettings::instance() here would
     // run its path migration before setApplicationName() and break it for
@@ -242,7 +241,7 @@ void GpuSelector::applyAtStartup()
     // applies under X11/XWayland (GLX).  Under Wayland the app uses EGL, where it
     // is useless and =nvidia can raise GLX BadValue, so set only the
     // windowing-agnostic offload hints.
-    const bool wayland = willUseWayland();
+    const bool wayland = willUseWayland(platformArgument);
 
     // Honour an explicit GPU-selection env override, but only one that applies to
     // the windowing system in use. __GLX_VENDOR_LIBRARY_NAME is widely exported and
@@ -254,8 +253,8 @@ void GpuSelector::applyAtStartup()
     } else if (qEnvironmentVariableIsSet("DRI_PRIME")) {
         vetoedBy = "DRI_PRIME";
     } else if (!wayland && qEnvironmentVariableIsSet("__GLX_VENDOR_LIBRARY_NAME")) {
-        // `wayland` is predicted from the environment before QApplication parses argv;
-        // `-platform xcb` or a failed Wayland plugin can still land on GLX. Being wrong
+        // `wayland` is predicted before QApplication starts (from -platform, else
+        // QT_QPA_PLATFORM); a failed Wayland plugin can still land on GLX. Being wrong
         // only mislabels the summary line: the Wayland branch never sets
         // __GLX_VENDOR_LIBRARY_NAME, so it can't re-arm the GLX BadValue.
         vetoedBy = "__GLX_VENDOR_LIBRARY_NAME";

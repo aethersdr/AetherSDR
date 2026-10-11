@@ -1,4 +1,5 @@
 #include "core/backends/flex/FlexBackend.h"
+#include "core/AppActivity.h"
 
 #include <algorithm>
 #include <limits>
@@ -47,7 +48,7 @@ FlexBackend::FlexBackend(QObject* parent)
     m_panStream = new PanadapterStream;   // no parent — moved to thread
     m_panStream->moveToThread(m_networkThread);
     connect(m_networkThread, &QThread::started, m_panStream, &PanadapterStream::init);
-    m_networkThread->start();
+    AetherSDR::startStreamThread(m_networkThread);   // High QoS; see AppActivity.h
 
     m_connThread = new QThread(this);
     m_connThread->setObjectName("RadioConnection");
@@ -194,6 +195,7 @@ void FlexBackend::setRadioReportedCapacity(int maxSlices, int maxPanadapters)
 RadioCapabilities FlexBackend::capabilities() const
 {
     RadioCapabilities caps;
+    caps.broadcastFmReceive = std::nullopt;
     // FlexLib 4.2.18 Slice.Freq delegates range refusal to firmware; its old
     // bounds are commented out. Do not guess coverage (including transverters).
     caps.sliceFrequencyControl = {SliceFrequencyControl::Authority::Radio, 0, 0};
@@ -266,6 +268,8 @@ RadioCapabilities FlexBackend::capabilities() const
     // engaged (gui/PanZoomModeGate.h).
     caps.panZoomModes = RadioCapabilities::PanZoomModes{
         QStringLiteral("display pan set")};
+    // The radio stores a pan's FFT frame rate and reports it on connect.
+    caps.panFrameRateShaping = std::nullopt;
     // A Flex blanks impulses in its OWN DDC, so NB is already the radio's under
     // hasRadioSideDsp above and the host has nothing to add. This flag says
     // where the blanker runs, not whether the radio has one.
@@ -318,6 +322,7 @@ RadioCapabilities FlexBackend::capabilities() const
     caps.hasAmCarrierLevel = true;
     caps.voxControl = RadioCapabilities::VoxControl{/*hasDelay*/ true};
     caps.txMonitorControl = RadioCapabilities::TxMonitorControl{};
+    caps.lineoutControl = RadioCapabilities::LineoutControl{};
 
     // FALSE, and stated rather than left to the default. A Flex modulates on
     // the radio AND takes its transmit audio over DAX/VITA-49, so it is the one
@@ -501,6 +506,12 @@ ReceiveDispatch FlexBackend::requestSliceDsp(int sliceId, const SliceDspRequest&
     case SliceDspRequest::Feature::Anfl: key = QStringLiteral("lms_anf"); break;
     case SliceDspRequest::Feature::Anft: key = QStringLiteral("anft"); break;
     case SliceDspRequest::Feature::Mn: return ReceiveDispatch::Unsupported;
+    }
+    // The blanker fill belongs to a host-side blanker; a Flex has no command
+    // for it. (A change of blanker arrives as Enabled, which a Flex reads as
+    // its one blanker on or off.)
+    if (request.field == SliceDspRequest::Field::Fill) {
+        return ReceiveDispatch::Unsupported;
     }
     if (request.field == SliceDspRequest::Field::Level) {
         if (request.feature == SliceDspRequest::Feature::Rnn

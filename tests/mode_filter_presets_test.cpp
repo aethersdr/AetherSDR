@@ -24,6 +24,7 @@ private slots:
     void unknownModesGetTheSsbLadder();
     void fmLaddersRequireDeclaredControl();
     void fmPresetsRespectDeclaredEdges();
+    void broadcastFmPresetsRespectDeclaredEdges();
 };
 
 void ModeFilterPresetsTest::ssbPinsItsLowCutAndDerivesTheHigh()
@@ -156,6 +157,26 @@ void ModeFilterPresetsTest::fmPresetsRespectDeclaredEdges()
     QVERIFY(!acceptsFmEdges(QStringLiteral("FMN"), &control, {-8000, 8000}));
     QVERIFY(!acceptsFmEdges(QStringLiteral("FMN"), &control, {1000, -1000}));
     QVERIFY(acceptsFmEdges(QStringLiteral("FMN"), &control, {-4000, 6000}));
+}
+
+void ModeFilterPresetsTest::broadcastFmPresetsRespectDeclaredEdges()
+{
+    const AetherSDR::ReceiveFilterControl control{
+        AetherSDR::SliceFrequencyControl::Authority::Engine,
+        {{QStringLiteral("WFM"), -90000, -15000, 15000, 80000, 120000, 180000}}};
+    const QVector<int> expected{120000, 140000, 160000};
+    for (const char* spelling : {"WFM", "WBFM"}) {
+        const QString mode = QString::fromLatin1(spelling);
+        QVERIFY(widthsForMode(mode).isEmpty());
+        QVERIFY(widthsForMode(mode, nullptr).isEmpty());
+        QCOMPARE(widthsForMode(mode, &control), expected);
+        for (int width : expected) {
+            QVERIFY(acceptsFmEdges(mode, &control, edgesForWidth(mode, width, {})));
+        }
+        QVERIFY(acceptsFmEdges(mode, &control, {-90000, 80000}));
+        QVERIFY(!acceptsFmEdges(mode, &control, {-90000, 90000}));
+    }
+    QVERIFY(widthsForMode(QStringLiteral("FM"), &control).isEmpty());
 }
 
 QTEST_MAIN(ModeFilterPresetsTest)

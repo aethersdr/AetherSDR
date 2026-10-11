@@ -1,5 +1,7 @@
 # Configuring Data Modes
 
+Full documentation: [docs.aethersdr.com/wsjt-x-integration](https://docs.aethersdr.com/wsjt-x-integration)
+
 ## Why Digital Operation Feels More Complicated
 
 Voice operation can often be understood as "microphone in, speaker out." Digital operation adds more moving parts:

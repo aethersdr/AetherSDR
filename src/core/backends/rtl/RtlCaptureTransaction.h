@@ -31,6 +31,8 @@ public:
         bool audioMute = false;
         bool squelchEnabled = false;
         int squelchLevel = 20;
+        int wfmDeemphasisUs = 75; // broadcast standard; validated 50 or 75 only
+        bool wfmForceMono = false; // selected decoder matrix policy, not observed pilot
         bool operator==(const Receiver&) const = default;
     };
     struct Desired {

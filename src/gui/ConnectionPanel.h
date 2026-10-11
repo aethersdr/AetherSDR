@@ -1,5 +1,6 @@
 #pragma once
 
+#include "CanonWindow.h"
 #include "core/RadioDiscovery.h"
 #include "core/backends/flex/SmartLinkClient.h"
 #include "core/IConnectionAutomation.h"
@@ -27,8 +28,10 @@ class QSpinBox;
 
 namespace AetherSDR {
 
-// Novice-first dialog for local, SmartLink, and manual/VPN radio connections.
-class ConnectionPanel : public QWidget, public IConnectionAutomation {
+// Novice-first dialog for local, SmartLink, and manual/VPN radio connections:
+// a CanonWindow dialog (style guide, RFC #6226) that MainWindow places itself,
+// above the status bar.
+class ConnectionPanel : public CanonWindow, public IConnectionAutomation {
     Q_OBJECT
 
 public:
@@ -39,7 +42,6 @@ public:
     static constexpr int kPreferredWidth = 760;
     static constexpr int kPreferredHeight = 660;
 
-    void setFramelessMode(bool on);
     bool selectRadio(const QString& serial);
     void selectManualConnection();
     bool canRenameRadio(const QString& serial) const;
@@ -54,7 +56,7 @@ public:
     // Fit, then pull the frame back inside the work area without otherwise
     // moving the window. The placement-preserving counterpart to
     // MainWindow::showConnectionDialog(), for the show paths this class owns
-    // (the frameless toggle, the automation bridge) and for the screen/DPI/font
+    // (the automation bridge) and for the screen/DPI/font
     // changes that can invalidate a fit made earlier (#4515).
     void fitAndClampToScreen(QScreen* preferredScreen = nullptr);
     QMargins screenFitFrameMargins() const;
@@ -110,7 +112,6 @@ public:
     QObject* asQObject() override { return this; }
 
 protected:
-    void paintEvent(QPaintEvent* event) override;
     bool event(QEvent* e) override;
 
 public slots:
@@ -170,6 +171,12 @@ private:
     void setCurrentMode(ConnectionMode mode);
     void updateLocalPageState();
     void updateSmartLinkUi();
+    // The SmartLink account line: a sign-in hint, the signed-in account, or a
+    // sign-in error. Its tone is kept here, not read back from the label's
+    // stylesheet, which holds the theme-resolved colors.
+    enum class AccountTone { Hint, Info, Error };
+    void setAccountLine(const QString& text, AccountTone tone);
+    friend struct ConnectionPanelSmartLinkTestAccess;
     // Right-click menu on a discovered radio row: set/clear a client-side
     // nickname (non-Flex families only). pos is in m_radioList viewport coords.
     void showRadioContextMenu(const QPoint& pos);
@@ -243,7 +250,6 @@ private:
     QString formatLocalRadioLabel(const RadioInfo& radio) const;
     QString formatWanRadioLabel(const WanRadioInfo& radio) const;
 
-    QWidget*     m_titleBar{nullptr};
     QVBoxLayout* m_rootLayout{nullptr};
     QScrollArea* m_bodyScroll{nullptr};
     QWidget*     m_bodyContent{nullptr};
@@ -278,6 +284,7 @@ private:
     QPushButton* m_loginBtn{nullptr};
     QPushButton* m_logoutBtn{nullptr};
     QLabel*      m_slUserLabel{nullptr};
+    AccountTone  m_slUserTone{AccountTone::Hint};
     QListWidget* m_wanList{nullptr};
     QLabel*      m_smartLinkEmptyLabel{nullptr};
     QPushButton* m_wanDisconnectClientsBtn{nullptr};

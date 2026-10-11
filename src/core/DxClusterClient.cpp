@@ -1,8 +1,8 @@
 #include "DxClusterClient.h"
+#include "DxSpotLineParser.h"
 #include "AppSettings.h"
 #include "LogManager.h"
 
-#include <QRegularExpression>
 #include <QStandardPaths>
 #include <QDateTime>
 #include <QDir>
@@ -68,6 +68,7 @@ void DxClusterClient::connectToCluster(const QString& host, quint16 port, const 
     m_port = port;
     m_callsign = callsign;
     m_loggedIn = false;
+    m_goCluster = false;
     m_intentionalDisconnect = false;
     m_readBuffer.clear();
 
@@ -103,10 +104,7 @@ void DxClusterClient::sendCommand(const QString& cmd)
 {
     if (!m_connected) return;
     qCDebug(lcDxCluster) << "DxClusterClient TX:" << cmd;
-    if (m_logFile.isOpen()) {
-        m_logFile.write(("> " + cmd + "\n").toUtf8());
-        m_logFile.flush();
-    }
+    appendLog("> " + cmd);
     m_socket->write((cmd + "\r\n").toLatin1());
 }
 
@@ -122,12 +120,10 @@ void DxClusterClient::onConnected()
     m_logFile.close();
     m_logFile.setFileName(logFilePath());
     QDir().mkpath(QFileInfo(m_logFile).absolutePath());
+    m_connectedAtUtc = QDateTime::currentDateTimeUtc().toString("yyyy-MM-dd HH:mm:ss UTC");
+    m_logNeedsHeader = false;
     if (m_logFile.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
-        m_logFile.write(QString("--- Connected to %1:%2 at %3 ---\n")
-            .arg(m_host).arg(m_port)
-            .arg(QDateTime::currentDateTimeUtc().toString("yyyy-MM-dd HH:mm:ss UTC"))
-            .toUtf8());
-        m_logFile.flush();
+        writeLogSessionHeader();
     }
 
     emit connected();
@@ -248,16 +244,14 @@ void DxClusterClient::onReadyRead()
                 if (!isControl(c))
                     cleaned.append(c);
             }
-            line = cleaned;
+            // Trim again: "…1830Z <BEL>" leaves "…1830Z " once BEL is gone.
+            line = cleaned.trimmed();
         }
 
         if (line.isEmpty()) continue;
 
         // Write to log file
-        if (m_logFile.isOpen()) {
-            m_logFile.write((line + "\n").toUtf8());
-            m_logFile.flush();
-        }
+        appendLog(line);
 
         emit rawLineReceived(line);
         handleLine(line);
@@ -266,6 +260,12 @@ void DxClusterClient::onReadyRead()
 
 void DxClusterClient::handleLine(const QString& line)
 {
+    if (!m_loggedIn && !m_goCluster && DxSpotLineParser::isGoClusterBanner(line)) {
+        qCDebug(lcDxCluster) << "DxClusterClient: GoCluster node, parsing its spot tail";
+        m_goCluster = true;
+        appendLog(DxSpotLineParser::logGoClusterMarker());
+    }
+
     // Login prompt detection (line-based)
     if (!m_loggedIn && isLoginPrompt(line)) {
         qCDebug(lcDxCluster) << "DxClusterClient: login prompt:" << line;
@@ -278,11 +278,56 @@ void DxClusterClient::handleLine(const QString& line)
 
     // Try to parse as a DX spot
     DxSpot spot;
-    if (parseDxSpotLine(line, spot)) {
+    if (DxSpotLineParser::parseSpotLine(line, spot, m_goCluster)) {
+        if (spot.confidence == QLatin1Char('?')
+                && GoClusterSettings::hideUnverified(m_goClusterFeed)) {
+            qCDebug(lcDxCluster) << "DxClusterClient: hiding unverified spot" << spot.dxCall;
+            return;
+        }
         qCDebug(lcDxCluster) << "DxClusterClient: spot" << spot.dxCall
                  << spot.freqMhz << "MHz de" << spot.spotterCall;
         emit spotReceived(spot);
     }
+}
+
+// ── Spot log ────────────────────────────────────────────────────────────────
+
+void DxClusterClient::writeLogSessionHeader()
+{
+    m_logFile.write(QString("--- Connected to %1:%2 at %3 ---\n")
+                        .arg(m_host).arg(m_port).arg(m_connectedAtUtc)
+                        .toUtf8());
+    if (m_goCluster) {
+        m_logFile.write((DxSpotLineParser::logGoClusterMarker() + "\n").toUtf8());
+    }
+    m_logFile.flush();
+}
+
+void DxClusterClient::appendLog(const QString& line)
+{
+    if (!m_logFile.isOpen()) {
+        return;
+    }
+    if (m_logNeedsHeader) {
+        m_logNeedsHeader = false;
+        writeLogSessionHeader();
+    }
+    m_logFile.write((line + "\n").toUtf8());
+    m_logFile.flush();
+}
+
+void DxClusterClient::clearLog()
+{
+    if (!m_logFile.isOpen()) {
+        QFile f(logFilePath());
+        if (f.exists()) {
+            f.resize(0);
+        }
+        return;
+    }
+    m_logFile.resize(0);
+    m_logFile.seek(0);
+    m_logNeedsHeader = true;
 }
 
 // ── Startup commands replay ─────────────────────────────────────────────────
@@ -311,34 +356,6 @@ bool DxClusterClient::isLoginPrompt(const QString& line) const
     if (lower.contains("enter your call") || lower.contains("your call"))
         return true;
     return false;
-}
-
-// ── DX spot line parser ─────────────────────────────────────────────────────
-
-bool DxClusterClient::parseDxSpotLine(const QString& line, DxSpot& spot) const
-{
-    // Standard format: DX de W3LPL:     14025.0  JA1ABC       CW big signal       1824Z
-    // Z is the terminator — ignore any trailing chars (some nodes append BEL/NUL)
-    static const QRegularExpression rx(
-        R"(^DX\s+de\s+(\S+?):\s+(\d+\.?\d*)\s+(\S+)\s+(.*?)\s+(\d{4})Z)",
-        QRegularExpression::CaseInsensitiveOption);
-
-    auto match = rx.match(line);
-    if (!match.hasMatch())
-        return false;
-
-    spot.spotterCall = match.captured(1);
-    double freqKhz   = match.captured(2).toDouble();
-    spot.freqMhz     = freqKhz / 1000.0;
-    spot.dxCall       = match.captured(3);
-    spot.comment      = match.captured(4).trimmed();
-
-    QString timeStr = match.captured(5);
-    int hh = timeStr.left(2).toInt();
-    int mm = timeStr.mid(2, 2).toInt();
-    spot.utcTime = QTime(hh, mm);
-
-    return spot.freqMhz > 0.0 && !spot.dxCall.isEmpty();
 }
 
 } // namespace AetherSDR

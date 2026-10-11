@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdint.h>
+#include "aether_wbfm_observation.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -27,6 +28,13 @@ void OpenChannel(int channel, int inputSize, int dspSize, int inputSampleRate,
                  int dspSampleRate, int outputSampleRate, int type, int state,
                  double delayUp, double slewUp, double delayDown,
                  double slewDown, int blockForOutput);
+// Prepared ring depth, fixed for this channel lifetime and its rebuilds.
+// Returns 0 before touching the channel for an invalid channel/depth; otherwise
+// the ordinary OpenChannel parameter/lifetime contract applies. Depth is 2..8.
+int OpenChannelWithExchangeDepth(int channel, int inputSize, int dspSize,
+    int inputSampleRate, int dspSampleRate, int outputSampleRate, int type,
+    int state, double delayUp, double slewUp, double delayDown, double slewDown,
+    int blockForOutput, int exchangeDepth);
 void CloseChannel(int channel);
 // Channel run state. state 1 = running, 0 = stopped. dmode 1 makes a stop
 // BLOCK until the channel has flushed (bounded by WDSP's own 100 ms timeout),
@@ -44,6 +52,32 @@ void fexchange2(int channel, float* inputI, float* inputQ,
 // must pace a burst of input blocks against the worker.
 int GetChannelOutputReady(int channel);
 void SetRXAMode(int channel, int mode);
+// Broadcast decoder controls, WDSP Guide section 5.3.10. The local patch
+// applies deemphasis to both live filters; indicator readback is an atomic
+// latest-completed-block observation. The caller must own channel lifetime.
+// Opt-in 192 kHz phase-difference response correction and paired post-matrix
+// DC removal. Existing owners default off and keep legacy MPX DC placement.
+void SetRXAWBFMDiscriminatorCompensation(int channel, int enabled);
+void SetRXAWBFMdmph(int channel, int run, int continent);
+int GetRXAWBFMStereoIndicator(int channel);
+// Construction/control only; actual matrix output becomes paired L+R in mono.
+void SetRXAWBFMForceMono(int channel, int forceMono);
+// Fixed four-attempt atomic snapshot; 0 means retry later, never wait on DSP.
+int GetRXAWBFMReception(int channel, AetherWdspWbfmObservation* observation);
+
+// Host-owned WFM RF prefilter. WBFM intentionally disables RXA's internal
+// RF filters, so this existing overlap-save stage runs at the input rate
+// BEFORE the channel's decimator. Prepare/destroy/setFreqs only under the
+// planner/control fence. xbps allocates and locks nothing. Input is `size`
+// interleaved-double complex frames; output must hold 2*size complex frames,
+// of which the first size are valid. The host keeps a fixed unity gain.
+typedef struct _bps* AetherWdspBandpass;
+AetherWdspBandpass create_bps(int run, int position, int size, double* in,
+    double* out, double lowHz, double highHz, int sampleRate, int window, double gain);
+void destroy_bps(AetherWdspBandpass filter);
+void flush_bps(AetherWdspBandpass filter);
+void xbps(AetherWdspBandpass filter, int position);
+void setFreqs_bps(AetherWdspBandpass filter, double lowHz, double highHz);
 // Receive FM construction/control only: these take WDSP's DSP lock and the
 // limiter gain setter rebuilds its state. Never call from acquisition/audio.
 void SetRXAFMDeviation(int channel, double deviationHz);
@@ -136,6 +170,56 @@ void SetEXTANBHangtime(int id, double time);
 void SetEXTANBAdvtime(int id, double time);
 void SetEXTANBBacktau(int id, double tau);
 void SetEXTANBThreshold(int id, double thresh);
+
+// ── The second impulse blanker (NOB, nobII.c) ──────────────────────────────
+//
+// Everything said above about the ANB holds here — not in the RXA chain, its
+// own table of 32 ids, interleaved-double buffers, in-place safe, handedness
+// irrelevant, the same threshold/times meaning, the same arming delay after a
+// flush. This is what deskHPSDR, pihpsdr and Thetis all label NB2.
+//
+// THE DIFFERENCE IS WHAT FILLS THE BLANKED WINDOW. The ANB gates it to zero;
+// the NOB runs two filters over the samples either side of the impulse and can
+// fill the hole with a reconstruction. `mode` chooses which (nobII.c, the switch
+// on a->mode):
+//
+//   0 zero            same as the ANB
+//   1 sample-and-hold hold the filtered sample from BEFORE the impulse
+//   2 mean-hold       the mean of the filtered samples either side of it
+//   3 hold-sample     hold the filtered sample from AFTER the impulse
+//   4 interpolate     a straight line from the one before to the one after
+//
+// That makes it the better instrument when the impulse lands ON a wanted signal,
+// because the window keeps carrying something signal-shaped, and the worse one
+// when noise is dense enough that the "clean" samples either side are not clean.
+// Which is why every reference client offers both and replaces neither.
+//
+// ONE MORE TIME CONSTANT, hidden: create_nob() takes a max_imp_seq_time, fixed
+// at 0.025 s by create_nobEXT, that caps how long a single impulse sequence may
+// be before the stage declares an overflow and stops reconstructing it. Not
+// exposed by the EXT API, so not ours to move.
+//
+// RUNNING BOTH BLANKERS AT ONCE IS MEANINGLESS. They share a detector and a
+// window: the second would reconstruct, or zero, what the first already
+// blanked. A host with both created must keep at most one running.
+void create_nobEXT(int id, int run, int mode, int buffsize, double samplerate,
+                   double slewtime, double hangtime, double advtime,
+                   double backtau, double threshold);
+void destroy_nobEXT(int id);
+// Resets the state machine and the delay line, and re-arms as described above.
+void flush_nobEXT(int id);
+// In-place safe: pass the same pointer for both.
+void xnobEXT(int id, double* in, double* out);
+void SetEXTNOBRun(int id, int run);
+// 0..4, per the table above. Stored under the stage's lock; nothing is resized.
+void SetEXTNOBMode(int id, int mode);
+void SetEXTNOBBuffsize(int id, int size);
+void SetEXTNOBSamplerate(int id, int rate);
+void SetEXTNOBTau(int id, double tau);
+void SetEXTNOBHangtime(int id, double time);
+void SetEXTNOBAdvtime(int id, double time);
+void SetEXTNOBBacktau(int id, double tau);
+void SetEXTNOBThreshold(int id, double thresh);
 
 // ── Manual notch filters (the notched-bandpass stage, nbp0) ────────────────
 //
@@ -429,6 +513,23 @@ uint64_t wdspPortOutstandingAllocations(void);
 // which is the window in which #5734's input overwrite happened. 0 (the
 // default) is a single relaxed load and no sleep. Process-global.
 void wdspPortSetHandoffPauseForTest(unsigned microseconds);
+// TEST ONLY: arm the next worker at that same handoff; only the claiming worker
+// waits. Poll the acknowledgement outside acquisition. Serialize fixtures and
+// release (enabled=0) before retiring/closing that worker or arming another.
+void wdspPortSetHandoffHoldForTest(int enabled);
+int wdspPortHandoffHeldForTest(void);
+// Same lifetime/serialization contract, but immediately BEFORE output memcpy.
+void wdspPortSetOutputCopyHoldForTest(int enabled);
+int wdspPortOutputCopyHeldForTest(void);
+// Locks existing exchange then ring-count sections. Test/control only; caller owns
+// an open channel and excludes destruction. Never an acquisition readiness API.
+int GetChannelOutputSamplesForTest(int channel);
+// After count readiness, wait for the previous handoff hook/DSP to finish.
+// Test/control only; never call with either worker hold armed or entered.
+void SynchronizeChannelWorkerForTest(int channel);
+// Queues a correction-file restore on a TX channel's PureSignal correction
+// thread. AetherSDR calls it only from wdsp_calcc_teardown_test (patch 22).
+void PSRestoreCorr(int channel, char* filename);
 
 #ifdef __cplusplus
 }

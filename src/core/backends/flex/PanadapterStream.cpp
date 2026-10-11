@@ -26,6 +26,19 @@ constexpr float kMinSpectrumDbm = -180.0f;
 constexpr int kAudioSampleRate = AudioEngine::DEFAULT_SAMPLE_RATE;
 constexpr int kOpusFramesPerPacket = 240;
 
+QString streamCategoryName(PanadapterStream::StreamCategory cat)
+{
+    switch (cat) {
+        case PanadapterStream::CatAudio:     return QStringLiteral("audio");
+        case PanadapterStream::CatFFT:       return QStringLiteral("FFT");
+        case PanadapterStream::CatWaterfall: return QStringLiteral("waterfall");
+        case PanadapterStream::CatMeter:     return QStringLiteral("meter");
+        case PanadapterStream::CatDAX:       return QStringLiteral("DAX");
+        case PanadapterStream::CatCount:     break;
+    }
+    return QStringLiteral("other");
+}
+
 QHostAddress chooseLanBindAddress(RadioConnection* conn,
                                   QString* chosenReason,
                                   QHostAddress* chosenAddress,
@@ -435,18 +448,44 @@ void PanadapterStream::registerWfStream(quint32 streamId)
 
 void PanadapterStream::unregisterPanStream(quint32 streamId)
 {
-    QMutexLocker lock(&m_streamMutex);
-    m_knownPanStreams.remove(streamId);
-    m_frames.remove(streamId);
-    m_dbmRanges.remove(streamId);
-    m_pendingDbmRanges.remove(streamId);
+    {
+        QMutexLocker lock(&m_streamMutex);
+        m_knownPanStreams.remove(streamId);
+        m_frames.remove(streamId);
+        m_dbmRanges.remove(streamId);
+        m_dbmRangeGenerations.remove(streamId);
+        m_pendingDbmRanges.remove(streamId);
+    }
+    restartStreamSequence(streamId);
 }
 
 void PanadapterStream::unregisterWfStream(quint32 streamId)
 {
-    QMutexLocker lock(&m_streamMutex);
-    m_knownWfStreams.remove(streamId);
-    m_wfFrames.remove(streamId);
+    {
+        QMutexLocker lock(&m_streamMutex);
+        m_knownWfStreams.remove(streamId);
+        m_wfFrames.remove(streamId);
+    }
+    restartStreamSequence(streamId);
+}
+
+void PanadapterStream::restartStreamSequence(quint32 streamId)
+{
+    QMutexLocker statsLock(&m_statsMutex);
+    const auto it = m_streamStats.find(streamId);
+    if (it != m_streamStats.end()) {
+        it->lastSeq = -1;
+        it->started = false;
+    }
+}
+
+void PanadapterStream::restartAllStreamSequences()
+{
+    QMutexLocker statsLock(&m_statsMutex);
+    for (auto it = m_streamStats.begin(); it != m_streamStats.end(); ++it) {
+        it->lastSeq = -1;
+        it->started = false;
+    }
 }
 
 void PanadapterStream::clearRegisteredStreams()
@@ -457,6 +496,7 @@ void PanadapterStream::clearRegisteredStreams()
     m_frames.clear();
     m_wfFrames.clear();
     m_dbmRanges.clear();
+    m_dbmRangeGenerations.clear();
     m_pendingDbmRanges.clear();
     m_daxPcm.clear();
     m_daxStreamIds.clear();
@@ -471,6 +511,10 @@ void PanadapterStream::clearRegisteredStreams()
     m_everRegisteredPanStreams.clear();   // new session — re-arm from scratch (#3856)
     m_everRegisteredWfStreams.clear();
     resetAudioStreamStats();
+    // Sequence tracking is keyed by stream id too, and a reconnect can reuse
+    // an id: without this, its first packet is measured against the previous
+    // session's last count and logged as a sequence error.
+    restartAllStreamSequences();
     qCDebug(lcVita49) << "PanadapterStream: cleared all registered streams";
 }
 
@@ -504,18 +548,29 @@ void PanadapterStream::resetOrphanStreams()
     m_orphanStreams.clear();
 }
 
-void PanadapterStream::setDbmRange(quint32 streamId, float minDbm, float maxDbm, bool waitForEcho)
+SpectrumDecodeScale PanadapterStream::setDbmRange(quint32 streamId, float minDbm, float maxDbm, bool waitForEcho)
 {
     minDbm = std::max(minDbm, kMinSpectrumDbm);
     maxDbm = std::max(maxDbm, minDbm + 10.0f);
 
     QMutexLocker lock(&m_streamMutex);
+    const auto currentScale = [&]() {
+        const QPair<float, float> range = m_dbmRanges.value(streamId, {-130.0f, -40.0f});
+        return SpectrumDecodeScale{range.first, range.second, m_dbmRangeGenerations.value(streamId)};
+    };
+    const auto applyScale = [&]() {
+        if (!m_dbmRanges.contains(streamId)
+            || m_dbmRanges.value(streamId) != QPair<float, float>{minDbm, maxDbm}) {
+            m_dbmRangeGenerations[streamId] = ++m_nextDbmRangeGeneration;
+        }
+        m_dbmRanges[streamId] = {minDbm, maxDbm};
+    };
     if (waitForEcho) {
         m_pendingDbmRanges[streamId] = {minDbm, maxDbm};
-        m_dbmRanges[streamId] = {minDbm, maxDbm};
+        applyScale();
         qCDebug(lcVita49) << "PanadapterStream: pending dBm range for 0x" + QString::number(streamId, 16)
                  << minDbm << "->" << maxDbm;
-        return;
+        return currentScale();
     } else {
         const auto pendingIt = m_pendingDbmRanges.constFind(streamId);
         if (pendingIt != m_pendingDbmRanges.constEnd()) {
@@ -525,14 +580,15 @@ void PanadapterStream::setDbmRange(quint32 streamId, float minDbm, float maxDbm,
                 qCDebug(lcVita49) << "PanadapterStream: ignored stale dBm range for 0x"
                          + QString::number(streamId, 16)
                          << minDbm << "->" << maxDbm;
-                return;
+                return currentScale();
             }
             m_pendingDbmRanges.remove(streamId);
         }
     }
-    m_dbmRanges[streamId] = {minDbm, maxDbm};
+    applyScale();
     qCDebug(lcVita49) << "PanadapterStream: dBm range for 0x" + QString::number(streamId, 16)
              << minDbm << "->" << maxDbm;
+    return currentScale();
 }
 
 bool PanadapterStream::cancelPendingDbmRange(quint32 streamId)
@@ -730,12 +786,28 @@ void PanadapterStream::processDatagram(const QByteArray& data)
     // Only track owned/routed streams — skip uncategorized packets. (#455)
     bool sequenceError = false;
     int  audioMissedThisPacket = 0;
+    // Filled under the stats lock; formatted and logged after it is released.
+    bool reportSequenceLoss = false;
+    int lossHeldBackErrors = 0;
+    int lossErrors = 0;
+    qint64 lossWindowMs = 0;
+    int lossStreamErrors = 0;
+    int lossStreamPackets = 0;
     if (cat != CatCount) {
         QMutexLocker statsLock(&m_statsMutex);
         m_catStats[cat].bytes += data.size();
         m_catStats[cat].packets++;
         auto& stats = m_streamStats[streamId];
         stats.totalCount++;
+        if (!stats.started) {
+            stats.started = true;
+            stats.startErrorCount = stats.errorCount;
+            stats.startTotalCount = stats.totalCount - 1;
+            if (!m_seqLossClock.isValid()) {
+                m_seqLossClock.start();
+            }
+            stats.lossLog.start(m_seqLossClock.elapsed());
+        }
         if (stats.lastSeq >= 0) {
             const int expected = (stats.lastSeq + 1) & 0x0F;
             if (vitaSeq != expected) {
@@ -746,6 +818,19 @@ void PanadapterStream::processDatagram(const QByteArray& data)
                     // 4-bit modular distance, minus the one packet we just got. (#2731)
                     audioMissedThisPacket =
                         ((vitaSeq - stats.lastSeq - 1) & 0x0F);
+                }
+                // The shared budget is asked only when this stream's line is
+                // due; when it says no, the error stays held for the next line.
+                const qint64 nowMs = m_seqLossClock.elapsed();
+                const bool mayReport =
+                    !stats.lossLog.due(nowMs) || m_seqLossBudget.allow(nowMs);
+                if (stats.lossLog.recordError(nowMs, mayReport)) {
+                    reportSequenceLoss = true;
+                    lossHeldBackErrors = m_seqLossBudget.takeSuppressed();
+                    lossErrors = stats.lossLog.reportErrors();
+                    lossWindowMs = stats.lossLog.reportWindowMs();
+                    lossStreamErrors = stats.errorCount - stats.startErrorCount;
+                    lossStreamPackets = stats.totalCount - stats.startTotalCount;
                 }
             }
         }
@@ -771,6 +856,14 @@ void PanadapterStream::processDatagram(const QByteArray& data)
                 m_audioPacketTimerStarted = true;
             }
         }
+    }
+    if (reportSequenceLoss) {
+        if (lossHeldBackErrors > 0) {
+            qCWarning(lcVita49).noquote() << formatVitaSequenceLossSuppressed(lossHeldBackErrors);
+        }
+        qCWarning(lcVita49).noquote()
+            << formatVitaSequenceLoss(streamCategoryName(cat), streamId, lossErrors,
+                                      lossWindowMs, lossStreamErrors, lossStreamPackets);
     }
     if ((cat == CatFFT || cat == CatWaterfall) && PerfTelemetry::instance().enabled()) {
         PerfTelemetry::instance().recordStreamPacket(
@@ -953,10 +1046,19 @@ void PanadapterStream::decodeFFT(const uchar* raw, int totalBytes, bool hasTrail
 
     // Convert to dBm using per-stream range
     QPair<float,float> dbmRange;
+    SpectrumDecodeScale decodeScale;
     int yPixVal;
     {
         QMutexLocker lock(&m_streamMutex);
         dbmRange = m_dbmRanges.value(streamId, {-130.0f, -40.0f});
+        // A stream whose range was never written (status matched the -130/-40
+        // default) still needs a nonzero generation, or its frames can't be told
+        // apart from a later write's and the release guard is bypassed.
+        quint64& generation = m_dbmRangeGenerations[streamId];
+        if (generation == 0) {
+            generation = ++m_nextDbmRangeGeneration;
+        }
+        decodeScale = {dbmRange.first, dbmRange.second, generation};
         yPixVal = m_yPixels.value(streamId, 700);
     }
     auto [minDbm, maxDbm] = dbmRange;
@@ -988,7 +1090,7 @@ void PanadapterStream::decodeFFT(const uchar* raw, int totalBytes, bool hasTrail
     }
 
     const qint64 emittedNs = PerfTelemetry::instance().enabled() ? PerfTelemetry::nowNs() : 0;
-    emit spectrumReady(streamId, bins, emittedNs);
+    emit spectrumReady(streamId, bins, emittedNs, decodeScale);
 }
 
 // Waterfall tile sub-header (36 bytes, big-endian, at byte 28):
@@ -1556,6 +1658,7 @@ void PanadapterStream::unregisterDaxStream(quint32 streamId)
         }
         qCDebug(lcVita49) << "PanadapterStream: unregistered DAX stream" << Qt::hex << streamId;
     }
+    restartStreamSequence(streamId);
     if (channel)
         emit daxStreamUnregistered(channel, streamId);
 }
@@ -1807,10 +1910,13 @@ void PanadapterStream::registerIqStream(quint32 streamId, int channel)
 
 void PanadapterStream::unregisterIqStream(quint32 streamId)
 {
-    QMutexLocker lock(&m_streamMutex);
-    m_iqStreamIds.remove(streamId);
-    m_loggedIqPacketStreams.remove(streamId);
-    qCDebug(lcVita49) << "PanadapterStream: unregistered IQ stream" << Qt::hex << streamId;
+    {
+        QMutexLocker lock(&m_streamMutex);
+        m_iqStreamIds.remove(streamId);
+        m_loggedIqPacketStreams.remove(streamId);
+        qCDebug(lcVita49) << "PanadapterStream: unregistered IQ stream" << Qt::hex << streamId;
+    }
+    restartStreamSequence(streamId);
 }
 
 void PanadapterStream::sendToRadio(const QByteArray& packet)

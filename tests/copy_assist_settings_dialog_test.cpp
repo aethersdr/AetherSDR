@@ -12,8 +12,12 @@
 #include "asr/AsrCrashMarker.h"    // fault-record decision (header-inline, whisper-free)
 #include "asr/WhisperAsrBackend.h" // asrLanguageOrDefault (header-inline, whisper-free)
 #include "gui/CopyAssistSettings.h" // foldLegacyKeys + value/setValue
+#include "gui/AsrTapPolicy.h"       // AsrTapPoint setting encoding (header-only)
 
 #include <QApplication>
+#include <QCheckBox>
+#include <QFormLayout>
+#include <QLabel>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QComboBox>
@@ -82,6 +86,36 @@ int main(int argc, char** argv)
         expect(CopyAssistSettings::value(QStringLiteral("AsrLanguage")).toString()
                    == QStringLiteral("fr"),
                "setValue then value round-trips through the nested object");
+    }
+
+    // ---- Tap point survives a restart -------------------------------------
+    // Operator requirement: choosing the unprocessed tap point must still be
+    // chosen after a restart. The toggle moves where ASR listens; NR keeps
+    // running for the operator either way, so this is not an NR on/off switch.
+    // AppSettings::load() drops every in-memory value and re-reads the settings
+    // database, so a value that only lived in memory would read back as the
+    // PostDsp default here — exactly the failure a restart would show.
+    {
+        expect(asrTapPointFromSetting(
+                   CopyAssistSettings::value(QStringLiteral("AsrTapPoint")).toString())
+                   == AsrTapPoint::PostDsp,
+               "a profile that never set a tap point reads as PostDsp");
+
+        CopyAssistSettings::setValue(QStringLiteral("AsrTapPoint"),
+                                     asrTapPointToSetting(AsrTapPoint::PreDsp));
+        AppSettings::instance().load(); // simulate a restart
+        expect(asrTapPointFromSetting(
+                   CopyAssistSettings::value(QStringLiteral("AsrTapPoint")).toString())
+                   == AsrTapPoint::PreDsp,
+               "PreDsp is still set after settings are reloaded from disk");
+
+        CopyAssistSettings::setValue(QStringLiteral("AsrTapPoint"),
+                                     asrTapPointToSetting(AsrTapPoint::PostDsp));
+        AppSettings::instance().load();
+        expect(asrTapPointFromSetting(
+                   CopyAssistSettings::value(QStringLiteral("AsrTapPoint")).toString())
+                   == AsrTapPoint::PostDsp,
+               "turning NR back on also survives a reload");
     }
 
     // Frameless-window behavior (from #4414) shares this offscreen harness.
@@ -575,6 +609,90 @@ int main(int argc, char** argv)
             dlg.clearFaultStandDown();
             expect(!dlg.faultStandDownVisible() && reason->text().isEmpty(),
                    "clearFaultStandDown hides the row and drops the reason");
+        }
+    }
+
+    // ---- Tap point: "unprocessed audio" checkbox (RFC #4861) --------------
+    // The one control for the tap point: the name the RFC thread agreed on,
+    // and OFF by default so a fresh profile transcribes after NR exactly as
+    // every build before this did.
+    {
+        CopyAssistSettingsDialog fresh;
+        expect(!fresh.isRawAudio(),
+               "unprocessed-audio is OFF by default (transcribe after NR, as before)");
+
+        auto* box = dlg.findChild<QCheckBox*>(QStringLiteral("CopyAssistRawAudio"));
+        expect(box != nullptr, "the unprocessed-audio checkbox exists");
+        if (box != nullptr) {
+            expect(box->text().contains(QStringLiteral("unprocessed"))
+                       && box->text().contains(QStringLiteral("RX effects")),
+                   "the label names what is bypassed, not just NR");
+            // The tooltip must address the gate, because on a noisy band the
+            // unprocessed feed has almost no speech-vs-noise level contrast
+            // (measured 0.2 dB) and the energy gate admits nearly everything.
+            //
+            // It must NOT send the operator to Silero for that case. An earlier
+            // revision did, reasoning that a content VAD beats a level one on a
+            // feed with no level contrast. Measured on an off-air 40 m SSB
+            // ragchew the opposite holds: 28.3% WER with the energy gate wide
+            // open against 87.6% with Silero at its default threshold, which
+            // admitted 44 s of 402. The second check pins that regression, since
+            // the advice reads as plausible and would be easy to reinstate.
+            expect(box->toolTip().contains(QStringLiteral("Sensitivity")),
+                   "the tooltip explains the Sensitivity gate");
+            expect(!box->toolTip().contains(QStringLiteral("Enable Silero")),
+                   "the tooltip does not recommend Silero for the noisy-band case");
+
+            // Placement, not just presence. Every option in this dialog is
+            // followed by its own detail row, so this checkbox must sit ABOVE
+            // "Use Silero VAD" rather than between Silero and its VAD model
+            // row — which is also what makes the tooltip's "Silero VAD below"
+            // true. Found in a running build, so pin it here.
+            auto* form = dlg.findChild<QFormLayout*>();
+            expect(form != nullptr, "the dialog lays its options out in a form");
+            if (form != nullptr) {
+                int rawRow = -1;
+                QFormLayout::ItemRole rawRole = QFormLayout::SpanningRole;
+                form->getWidgetPosition(box, &rawRow, &rawRole);
+                int sileroRow = -1;
+                int vadModelRow = -1;
+                for (int r = 0; r < form->rowCount(); ++r) {
+                    auto* field = form->itemAt(r, QFormLayout::FieldRole);
+                    auto* spanning = form->itemAt(r, QFormLayout::SpanningRole);
+                    if (spanning != nullptr && spanning->widget() != nullptr) {
+                        auto* cb = qobject_cast<QCheckBox*>(spanning->widget());
+                        if (cb != nullptr && cb->text().contains(QStringLiteral("Silero"))) {
+                            sileroRow = r;
+                        }
+                    }
+                    auto* label = form->itemAt(r, QFormLayout::LabelRole);
+                    if (label != nullptr && label->widget() != nullptr) {
+                        auto* text = qobject_cast<QLabel*>(label->widget());
+                        if (text != nullptr
+                            && text->text().contains(QStringLiteral("VAD model"))) {
+                            vadModelRow = r;
+                        }
+                    }
+                    Q_UNUSED(field);
+                }
+                expect(rawRow >= 0 && sileroRow >= 0 && vadModelRow >= 0,
+                       "the unprocessed-audio, Silero and VAD-model rows are all found");
+                expect(rawRow >= 0 && sileroRow >= 0 && rawRow < sileroRow,
+                       "unprocessed-audio sits above Use Silero VAD");
+                expect(sileroRow >= 0 && vadModelRow == sileroRow + 1,
+                       "Silero keeps its VAD model row directly beneath it");
+            }
+
+            QSignalSpy rawSpy(&dlg, &CopyAssistSettingsDialog::rawAudioToggled);
+            dlg.setRawAudio(true);
+            expect(dlg.isRawAudio(), "setRawAudio reflects state");
+            expect(rawSpy.isEmpty(), "seeding from the store does not emit");
+
+            box->click();
+            expect(!dlg.isRawAudio(), "clicking toggles it");
+            expect(!rawSpy.isEmpty() && rawSpy.last().at(0).toBool() == false,
+                   "rawAudioToggled carries the operator's new state");
+            dlg.setRawAudio(false);
         }
     }
 

@@ -39,12 +39,17 @@
 #include <QFocusEvent>
 #include <QFrame>
 #include <QImage>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
 #include <QMouseEvent>
 #include <QMenuBar>
+#include <QOperatingSystemVersion>
+#include <QPoint>
 #include <QPointer>
+#include <QRect>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QScrollBar>
@@ -135,6 +140,143 @@ int main(int argc, char** argv)
         check(linuxOn.testFlag(Qt::FramelessWindowHint)
                   && !WindowChrome::usesNativeCaption(linuxOn, QStringLiteral("wayland")),
               "Linux frameless draws the bar's caption buttons");
+    }
+
+    // ── Windows 10 whole-window client area (#6266) ──
+    {
+        using OSV = QOperatingSystemVersion;
+        const Qt::WindowFlags expanded = WindowChrome::chromeFlags({}, true, QStringLiteral("windows"));
+        const Qt::WindowFlags system = WindowChrome::chromeFlags({}, false, QStringLiteral("windows"));
+        const OSV win10(OSV::Windows, 10, 0, 19045);
+        check(WindowChrome::claimsWholeWindowAsClient(expanded, win10),
+              "Windows 10 under the expanded chrome claims the whole window as client");
+        check(!WindowChrome::claimsWholeWindowAsClient(expanded, OSV(OSV::Windows, 10, 0, 22000)),
+              "Windows 11's first build keeps Qt's non-client border");
+        check(!WindowChrome::claimsWholeWindowAsClient(system, win10),
+              "Frameless Window off keeps the system frame on Windows 10");
+        // With the whole window as client the frame is zero, so restoring a
+        // client rect sets the window to exactly that rect (#6303 over #6266).
+        const QRect whole(157, 44, 1115, 348);
+        check(WindowChrome::windowRectForClient(QRect(300, 200, 1000, 300), whole, whole)
+                  == QRect(300, 200, 1000, 300),
+              "a zero frame restores the client rect as the window rect");
+    }
+
+    // ── The main window's own WM_NCHITTEST under the expanded frame (#6272) ──
+    {
+        using Hit = WindowChrome::FrameHit;
+        // A 1000x600 window at (100,50), 8 px resize band (96 dpi on Windows 10).
+        const QRect win(100, 50, 1000, 600);
+        const int band = 8;
+        // Where the title bar's controls, menus and the panadapter sit: client,
+        // so Windows delivers the click to the app untouched.
+        check(WindowChrome::expandedFrameHit(QPoint(120, 70), win, band, band) == Hit::Client,
+              "the hamburger's corner of the title bar is client area");
+        check(WindowChrome::expandedFrameHit(QPoint(600, 350), win, band, band) == Hit::Client,
+              "the middle of the window is client area");
+        check(WindowChrome::expandedFrameHit(QPoint(108, 350), win, band, band) == Hit::Client,
+              "the first pixel past the band is client area");
+        // The band resizes from every edge and corner.
+        check(WindowChrome::expandedFrameHit(QPoint(100, 350), win, band, band) == Hit::Left
+                  && WindowChrome::expandedFrameHit(QPoint(107, 350), win, band, band) == Hit::Left,
+              "the left band is 8 px wide");
+        check(WindowChrome::expandedFrameHit(QPoint(1099, 350), win, band, band) == Hit::Right,
+              "the right edge resizes");
+        check(WindowChrome::expandedFrameHit(QPoint(600, 50), win, band, band) == Hit::Top,
+              "the top edge resizes");
+        check(WindowChrome::expandedFrameHit(QPoint(600, 649), win, band, band) == Hit::Bottom,
+              "the bottom edge resizes");
+        check(WindowChrome::expandedFrameHit(QPoint(101, 51), win, band, band) == Hit::TopLeft
+                  && WindowChrome::expandedFrameHit(QPoint(1098, 51), win, band, band) == Hit::TopRight
+                  && WindowChrome::expandedFrameHit(QPoint(101, 648), win, band, band) == Hit::BottomLeft
+                  && WindowChrome::expandedFrameHit(QPoint(1098, 648), win, band, band) == Hit::BottomRight,
+              "the corners resize diagonally");
+        // Maximized or fullscreen: no band, all client.
+        check(WindowChrome::expandedFrameHit(QPoint(100, 50), win, 0, 0) == Hit::Client,
+              "no resize band while maximized");
+        check(WindowChrome::expandedFrameHit(QPoint(20, 20), win, band, band) == Hit::Client,
+              "a point outside the window is not an edge");
+        // Horizontal and vertical bands are separate metrics (SM_CX/SM_CYSIZEFRAME).
+        check(WindowChrome::expandedFrameHit(QPoint(105, 350), win, 8, 4) == Hit::Left
+                  && WindowChrome::expandedFrameHit(QPoint(600, 53), win, 8, 4) == Hit::Top
+                  && WindowChrome::expandedFrameHit(QPoint(600, 55), win, 8, 4) == Hit::Client,
+              "the left/right band and the top/bottom band follow their own widths");
+    }
+
+    // ── Native client-rect save/restore for the Windows expanded frame (#6303) ──
+    {
+        // Rects measured on Windows 10: the expanded frame keeps an 8 px resize
+        // border left, right and bottom, none on top.
+        const QRect expandedWindow(157, 44, 1115, 348);
+        const QRect expandedClient(165, 44, 1099, 340);
+        check(WindowChrome::windowRectForClient(expandedClient, expandedWindow, expandedClient)
+                  == expandedWindow,
+              "the current client rect maps back to the current window rect");
+        check(WindowChrome::windowRectForClient(QRect(300, 200, 1000, 300),
+                                                expandedWindow, expandedClient)
+                  == QRect(292, 200, 1016, 308),
+              "a new client rect keeps the expanded frame's uneven borders");
+        // System decorations: 8 px sides and bottom, 31 px caption.
+        check(WindowChrome::windowRectForClient(expandedClient, QRect(157, 13, 1115, 379),
+                                                QRect(165, 44, 1099, 340))
+                  == QRect(157, 13, 1115, 379),
+              "the caption height goes above the client rect");
+        // Left 3 px, right 11 px: swapping the two sides moves the window.
+        check(WindowChrome::windowRectForClient(QRect(100, 100, 500, 300),
+                                                QRect(0, 0, 614, 308), QRect(3, 0, 600, 300))
+                  == QRect(97, 100, 514, 308),
+              "the left and right borders are kept apart");
+
+        const qreal dpr = 0.85;
+        const QJsonObject doc = WindowChrome::withNativeClientRect({}, QStringLiteral("main"),
+                                                                   expandedClient, dpr);
+        // Through the store's compact JSON, as AppSettings round-trips it.
+        const QJsonObject stored = QJsonDocument::fromJson(
+            QJsonDocument(doc).toJson(QJsonDocument::Compact)).object();
+        check(WindowChrome::savedNativeClientRect(stored, QStringLiteral("main"), dpr)
+                  == expandedClient,
+              "a saved native client rect reads back at the same scale");
+        check(!WindowChrome::savedNativeClientRect(stored, QStringLiteral("fullMode"), dpr).isValid(),
+              "another window role is not read from this one");
+        check(!WindowChrome::savedNativeClientRect(stored, QStringLiteral("main"), 1.0).isValid(),
+              "a different scale falls back to Qt's restore");
+        check(!WindowChrome::savedNativeClientRect({}, QStringLiteral("main"), dpr).isValid(),
+              "nothing saved gives no rect");
+
+        // A custom 110 DPI under a 0.85 UI scale needs more than six digits.
+        const qreal oddDpr = 110.0 / 96.0 * 0.85;
+        const QJsonObject oddStored = QJsonDocument::fromJson(QJsonDocument(
+            WindowChrome::withNativeClientRect({}, QStringLiteral("main"), expandedClient, oddDpr))
+            .toJson(QJsonDocument::Compact)).object();
+        check(WindowChrome::savedNativeClientRect(oddStored, QStringLiteral("main"), oddDpr)
+                  == expandedClient,
+              "the scale survives storage at full precision");
+
+        const auto withMain = [&](const QJsonObject& rect) {
+            QJsonObject d = doc;
+            d.insert(QStringLiteral("main"), rect);
+            return WindowChrome::savedNativeClientRect(d, QStringLiteral("main"), dpr);
+        };
+        const QJsonObject good = doc.value(QStringLiteral("main")).toObject();
+        QJsonObject huge = good;
+        huge.insert(QStringLiteral("width"), 100000);
+        check(!withMain(huge).isValid(), "a width past the Win32 coordinate range gives no rect");
+        QJsonObject far = good;
+        far.insert(QStringLiteral("x"), -40000);
+        check(!withMain(far).isValid(), "a position past the Win32 coordinate range gives no rect");
+        QJsonObject text = good;
+        text.insert(QStringLiteral("y"), QStringLiteral("44"));
+        check(!withMain(text).isValid(), "a malformed value gives no rect");
+        QJsonObject fractional = good;
+        fractional.insert(QStringLiteral("height"), 340.5);
+        check(!withMain(fractional).isValid(), "a fractional pixel gives no rect");
+        QJsonObject future = doc;
+        future.insert(QStringLiteral("schemaVersion"), 2);
+        check(!WindowChrome::savedNativeClientRect(future, QStringLiteral("main"), dpr).isValid(),
+              "a document from a newer schema is not read");
+        QJsonObject empty = good;
+        empty.insert(QStringLiteral("width"), 0);
+        check(!withMain(empty).isValid(), "an empty rect gives no rect");
     }
 
     WindowChrome::configure(&host, true);
@@ -314,23 +456,61 @@ int main(int argc, char** argv)
         check(connectedTab->focusPolicy() != Qt::NoFocus,
               "radio tabs are keyboard-reachable");
 
-        // Status in words, not just in the dot's colour.
+        // Status in words, not just in the dot's colour — and in sentence case
+        // (#6280): what the tab renders is prose, so only the first letter is
+        // capitalized, even for the two-word state.
         check(connectedTab->accessibleDescription().contains(
-                  QLatin1String("connected")),
+                  QLatin1String("Connected")),
               "connected tab spells its state on the rendered status line");
-        check(connectedTab->accessibleName().contains(QLatin1String("connected")),
+        check(connectedTab->accessibleName().contains(QLatin1String("Connected")),
               "connected tab spells its state in its accessible name");
-        check(inUseTab->accessibleDescription().contains(QLatin1String("in use")),
+        check(inUseTab->accessibleDescription().contains(QLatin1String("In use")),
               "in-use tab spells its state on the rendered status line");
+        check(!inUseTab->accessibleDescription().contains(QLatin1String("In Use")),
+              "only the first letter of a multiword state is capitalized");
 
         // Line two is the state, not the name again: the name is line one, and
         // repeating it pushed the state off the end of every narrow tab.
         check(!connectedTab->statusLine().contains(connected.name),
               "rendered status line does not repeat the tab's name");
-        check(connectedTab->statusLine() == QLatin1String("connected"),
+        check(connectedTab->statusLine() == QLatin1String("Connected"),
               "status line with no model or detail is just the state");
         check(connectedTab->accessibleDescription().contains(connected.name),
               "accessible description still carries the name");
+
+        // #6280: the display casing changed, the bridge token did not.  Drivers
+        // match on `status`, which docs/automation-bridge.md pins to the
+        // lower-case spelling, so the two must be allowed to disagree.
+        if (RadioTabBar* strip = bar->radioTabBar()) {
+            const QVariantList stateTabs =
+                strip->state().value(QStringLiteral("tabs")).toList();
+            bool sawConnected = false;
+            for (const QVariant& entry : stateTabs) {
+                const QVariantMap tab = entry.toMap();
+                if (tab.value(QStringLiteral("id")).toString() != connected.id) {
+                    continue;
+                }
+                sawConnected = true;
+                check(tab.value(QStringLiteral("status")).toString()
+                          == QLatin1String("connected"),
+                      "the bridge status token stays lower-case");
+                check(tab.value(QStringLiteral("statusLine")).toString()
+                          == QLatin1String("Connected"),
+                      "the rendered status line is sentence case");
+                check(tab.value(QStringLiteral("accessibleName")).toString()
+                          == QStringLiteral("Radio %1, Connected").arg(connected.name),
+                      "the accessible name uses the display casing");
+            }
+            check(sawConnected, "the bridge reports the connected tab");
+            for (const QVariant& entry : stateTabs) {
+                const QVariantMap tab = entry.toMap();
+                if (tab.value(QStringLiteral("id")).toString() == inUse.id) {
+                    check(tab.value(QStringLiteral("status")).toString()
+                              == QLatin1String("in use"),
+                          "the two-word bridge token is unchanged");
+                }
+            }
+        }
 
         // Keep tabs 8 px clear of the bar's edges: Qt's Windows frame keeps a
         // ~8 px top resize border, and a tab there would start a resize.
@@ -400,7 +580,7 @@ int main(int argc, char** argv)
     check(tabWithId(*bar, connected.id) == connectedTab,
           "a status-only change reuses the tab widget");
     if (connectedTab) {
-        check(connectedTab->accessibleName().contains(QLatin1String("available")),
+        check(connectedTab->accessibleName().contains(QLatin1String("Available")),
               "the tab re-announces its new state");
     }
 
@@ -745,15 +925,19 @@ int main(int argc, char** argv)
             if (firstTab && droppedTab) {
                 check(droppedTab->isLinkCarrier(), "after a drop the link stays on the radio that dropped");
                 check(!firstTab->isLinkCarrier(), "the first tab does not inherit another radio's link");
-                check(droppedTab->statusLine().contains(QLatin1String("link lost")),
+                // Sentence case here too (#6280): the alarm speaks over the
+                // radio's own status, so it is the same kind of prose.
+                check(droppedTab->statusLine().contains(QLatin1String("Link lost")),
                       "a lost link is spelled out on the dropped radio's tab");
-                check(droppedTab->accessibleName().contains(QLatin1String("link lost")),
+                check(droppedTab->accessibleName().contains(QLatin1String("Link lost")),
                       "a lost link is in the dropped radio's accessible name");
-                check(!firstTab->statusLine().contains(QLatin1String("link lost")),
+                check(!firstTab->statusLine().contains(QLatin1String("Link lost")),
                       "an idle radio's tab never claims a lost link");
                 bar->clearLinkAlarm();
-                check(!droppedTab->statusLine().contains(QLatin1String("link lost")),
+                check(!droppedTab->statusLine().contains(QLatin1String("Link lost")),
                       "clearing the alarm restores the radio's own status word");
+                check(droppedTab->statusLine() == QLatin1String("Available"),
+                      "the restored status word is sentence case as well");
             }
         }
 
