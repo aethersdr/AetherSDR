@@ -348,9 +348,16 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
             // lowest free number) and on an empty map reproduces positional numbering.
             // The added slice is already in the list here.
             if (s) {
+                // A recreate inside the settle window still holds its binding;
+                // only a slice that gets a new receiver is announced (#6352).
+                const bool newReceiver = m_trxMap.trxForSliceId(s->sliceId()) < 0;
                 for (SliceModel* live : m_model->slices()) {
                     if (live)
                         m_trxMap.acquire(live->sliceId());
+                }
+                if (newReceiver) {
+                    broadcast(QStringLiteral("rx_enable:%1,true;")
+                                  .arg(m_trxMap.trxForSliceId(s->sliceId())));
                 }
             }
             for (const auto& cs : m_clients) {
@@ -411,9 +418,15 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
             // The timer also fires during teardown after m_trxMap.clear() —
             // intentional no-op: release() of an absent key does nothing and
             // the liveness guard holds.
+            // The close is announced here, not synchronously, so a recreate
+            // never tells clients the receiver went away (#6352).
             QTimer::singleShot(500, this, [this, sliceId]() {
                 if (m_model && !m_model->slice(sliceId)) {
+                    const int trx = m_trxMap.trxForSliceId(sliceId);
                     m_trxMap.release(sliceId);
+                    if (trx >= 0 && !m_trxMap.trxHasLiveSlice(m_model, trx)) {
+                        broadcast(QStringLiteral("rx_enable:%1,false;").arg(trx));
+                    }
                 }
             });
 

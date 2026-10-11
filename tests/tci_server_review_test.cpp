@@ -1104,6 +1104,90 @@ public:
             && server.m_trxMap.sliceForTrx(&model, 1) == b;
     }
 
+    // #6352 — clients learn about receivers opening and closing. A new slice
+    // is announced at once; a genuine close is announced after the 500 ms
+    // settle window; a band-change recreate (same slice id re-added inside
+    // that window) says nothing in either direction.
+    static bool rxEnableFollowsSliceLifecycle()
+    {
+        RadioModel model;
+        TciServer server(&model);
+
+        QStringList sent;
+        QObject::connect(&server, &TciServer::tciMessage,
+                         [&sent](const QString& dir, const QString& msg) {
+            if (dir == QLatin1String("tx")
+                && msg.startsWith(QLatin1String("rx_enable:")))
+                sent << msg.trimmed();
+        });
+
+        QString error;
+        if (!model.automationApplySliceFixture(0, QStringLiteral("A"), &error)
+            || !model.automationApplySliceFixture(1, QStringLiteral("B"),
+                                                  &error)) {
+            std::fprintf(stderr, "rx_enable fixtures failed: %s\n",
+                         error.toUtf8().constData());
+            return false;
+        }
+        const QStringList opened{QStringLiteral("rx_enable:0,true;"),
+                                 QStringLiteral("rx_enable:1,true;")};
+        if (sent != opened) {
+            std::fprintf(stderr, "open: expected '%s', got '%s'\n",
+                         opened.join(' ').toUtf8().constData(),
+                         sent.join(' ').toUtf8().constData());
+            return false;
+        }
+
+        // Band-change recreate of A: no close, no re-open.
+        sent.clear();
+        if (!model.automationRemoveSliceFixture(0, &error)
+            || !model.automationApplySliceFixture(0, QStringLiteral("A"),
+                                                  &error)) {
+            std::fprintf(stderr, "recreate cycle failed: %s\n",
+                         error.toUtf8().constData());
+            return false;
+        }
+        spin(600);
+        if (!sent.isEmpty()) {
+            std::fprintf(stderr, "recreate announced '%s'\n",
+                         sent.join(' ').toUtf8().constData());
+            return false;
+        }
+
+        // Genuine close of B: silent until the settle window passes, then
+        // announced on B's receiver.
+        if (!model.automationRemoveSliceFixture(1, &error)) {
+            std::fprintf(stderr, "remove B failed: %s\n",
+                         error.toUtf8().constData());
+            return false;
+        }
+        if (!sent.isEmpty()) {
+            std::fprintf(stderr, "close announced before the settle window: '%s'\n",
+                         sent.join(' ').toUtf8().constData());
+            return false;
+        }
+        spin(600);
+        if (sent != QStringList{QStringLiteral("rx_enable:1,false;")}) {
+            std::fprintf(stderr, "close: expected 'rx_enable:1,false;', got '%s'\n",
+                         sent.join(' ').toUtf8().constData());
+            return false;
+        }
+
+        // Reopening reuses the freed receiver and announces it.
+        sent.clear();
+        if (!model.automationApplySliceFixture(1, QStringLiteral("B"), &error)) {
+            std::fprintf(stderr, "reopen B failed: %s\n",
+                         error.toUtf8().constData());
+            return false;
+        }
+        if (sent != QStringList{QStringLiteral("rx_enable:1,true;")}) {
+            std::fprintf(stderr, "reopen: expected 'rx_enable:1,true;', got '%s'\n",
+                         sent.join(' ').toUtf8().constData());
+            return false;
+        }
+        return true;
+    }
+
     // #4577 review — the reconnect hole: stageSessionModelsForReconnect()
     // reclaims the previous session's slices without sliceAdded (RadioModel's
     // !reclaimed guard) while the map was cleared at disconnect, so every
@@ -2184,6 +2268,8 @@ int main(int argc, char** argv)
         = AetherSDR::TciServerReviewTest::activeSliceSeedsFromCurrentState();
     const bool activeSliceRemoval
         = AetherSDR::TciServerReviewTest::activeSliceFollowsSliceRemoval();
+    const bool rxEnableLifecycle
+        = AetherSDR::TciServerReviewTest::rxEnableFollowsSliceLifecycle();
     const bool trxStableRecreate
         = AetherSDR::TciServerReviewTest::trxStableAcrossSliceRecreate();
     const bool trxDistinctReconnect
@@ -2247,6 +2333,8 @@ int main(int argc, char** argv)
                 activeSliceRemoval ? "PASS" : "FAIL");
     std::printf("%s  receiver numbers stable across slice recreate (#4567)\n",
                 trxStableRecreate ? "PASS" : "FAIL");
+    std::printf("%s  rx_enable follows slice open/close, not recreate (#6352)\n",
+                rxEnableLifecycle ? "PASS" : "FAIL");
     std::printf("%s  live slices keep distinct trx after reconnect (#4577)\n",
                 trxDistinctReconnect ? "PASS" : "FAIL");
     std::printf("%s  held trx refuses instead of re-pointing in the settle "
@@ -2300,6 +2388,7 @@ int main(int argc, char** argv)
         && powerRateLimits && trxCacheHolds && cacheResets && flagSeedsDeDups
         && flagSeedSettled && txTrxResets
         && activeSliceSeed && activeSliceRemoval && trxStableRecreate
+        && rxEnableLifecycle
         && trxDistinctReconnect && heldTrxRefuses
         && vfoConfirmsAccepted && vfoConfirmsRefusal && vfoAcksNoOp
         && vfoChannelZeroOnce
