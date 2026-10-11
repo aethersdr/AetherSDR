@@ -672,6 +672,9 @@ public:
     // propagation, MQTT values) stay at the very top, riding over the header.
     void setTopInset(int px);
     int topInset() const { return m_topInset; }
+    // Under a host's header the slice flags (and the marks drawn with them)
+    // sit 2 px below the top edge rather than flush against it.
+    int flagTopPad() const { return m_topInset > 0 ? 2 : 0; }
 
     // Width at the top right taken by the host's controls (the pan header's
     // buttons): the top-right text ends left of it when it is wider than the
