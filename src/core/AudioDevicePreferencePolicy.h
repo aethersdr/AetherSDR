@@ -28,6 +28,9 @@ struct AudioDeviceListChange {
     // churn; addedIds leaves those out.
     QList<QByteArray> presentIds;
     QList<QByteArray> addedIds;    // enumerable now, not at the previous check
+    // The enumerable ids, churn left out: the next check's knownArrivalIds.
+    // Set by audioDeviceListChange(); decideAudioDeviceChange() does not read it.
+    QList<QByteArray> arrivalIds;
     bool anyRemoved{false};        // some id from the previous check is gone
     bool defaultChanged{false};    // the system default id moved
     QByteArray liveId;             // engine's device; empty = system default
@@ -97,14 +100,14 @@ inline AudioDeviceListChange audioDeviceListChange(
 {
     AudioDeviceListChange change;
     change.presentIds = now.enumeratedIds;
-    const QList<QByteArray> arrivalIds = arrivalAudioDeviceIds(now.enumeratedIds, rule);
-    for (const QByteArray& id : arrivalIds) {
+    change.arrivalIds = arrivalAudioDeviceIds(now.enumeratedIds, rule);
+    for (const QByteArray& id : change.arrivalIds) {
         if (!now.knownArrivalIds.contains(id)) {
             change.addedIds.append(id);
         }
     }
     for (const QByteArray& id : now.knownArrivalIds) {
-        if (!arrivalIds.contains(id)) {
+        if (!change.arrivalIds.contains(id)) {
             change.anyRemoved = true;
         }
     }

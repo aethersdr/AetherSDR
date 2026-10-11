@@ -5295,8 +5295,8 @@ void MainWindow::handleAudioDeviceListChanged()
         .preferredId = preferredOutputId});
     const QList<QByteArray>& addedInputIds = inputChange.addedIds;
     const QList<QByteArray>& addedOutputIds = outputChange.addedIds;
-    m_knownAudioInputIds = arrivalAudioDeviceIds(presentInputIds);
-    m_knownAudioOutputIds = arrivalAudioDeviceIds(presentOutputIds);
+    m_knownAudioInputIds = inputChange.arrivalIds;
+    m_knownAudioOutputIds = outputChange.arrivalIds;
     m_knownDefaultAudioInputId = currentDefaultInputId;
     m_knownDefaultAudioOutputId = currentDefaultOutputId;
 

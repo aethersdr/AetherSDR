@@ -219,9 +219,10 @@ int main()
 #else
         const bool hostFilters = false;
 #endif
-        expect(isTransientAudioDeviceId("echo-cancel-source") == hostFilters
-                   && (arrivalAudioDeviceIds(enumerated) != enumerated) == hostFilters,
-               "this platform's default rule filters on Linux and nowhere else");
+        expect(isTransientAudioDeviceId("echo-cancel-source") == hostFilters,
+               "this platform's default rule calls an echo-cancel id churn on Linux only");
+        expect((arrivalAudioDeviceIds(enumerated) != enumerated) == hostFilters,
+               "this platform's default arrival list leaves ids out on Linux only");
     }
 
     // ── Presence reads every enumerable id; arrivals skip the churn ─────────
@@ -241,8 +242,9 @@ int main()
             linuxRule);
         expect(arrival.presentIds.contains(kEchoCancel),
                "the presence list contains a live churn id");
-        expect(arrival.addedIds == QList<QByteArray>{kUsb} && !arrival.anyRemoved,
+        expect(arrival.addedIds == QList<QByteArray>{kUsb},
                "the arrival list reports the ordinary device only");
+        expect(!arrival.anyRemoved, "and an arrival beside a live churn id is no removal");
         const AudioDeviceDecision kept = decideAudioDeviceChange(arrival);
         expect(kept.action == AudioDeviceAction::Keep && !kept.liveMissing,
                "a live churn device is not missing when another device arrives");
@@ -284,6 +286,45 @@ int main()
                    && swapped.defaultChanged && swapped.liveId == kBuiltIn
                    && swapped.preferredId == kUsb,
                "one device leaving as another arrives is one arrival and a removal");
+    }
+
+    // ── The change carries the arrival list the next check is judged against ─
+    // The handler stores change.arrivalIds as the next knownArrivalIds, so the
+    // rule that built the change is the rule the stored list was filtered by.
+    {
+        const QByteArray kEchoCancel("echo-cancel-source");
+        const QList<QByteArray> enumerated{kBuiltIn, kEchoCancel, kUsb};
+        const auto changeUnder = [&](AudioDeviceChurnRule rule,
+                                     const QList<QByteArray>& known) {
+            return audioDeviceListChange({.enumeratedIds = enumerated,
+                                          .knownArrivalIds = known,
+                                          .defaultChanged = false,
+                                          .liveId = {},
+                                          .preferredId = {}},
+                                         rule);
+        };
+
+        const AudioDeviceListChange linuxFirst =
+            changeUnder(AudioDeviceChurnRule::Linux, {kBuiltIn});
+        expect(linuxFirst.arrivalIds == QList<QByteArray>{kBuiltIn, kUsb},
+               "Linux rule: the change's arrival list is the filtered ids");
+        const AudioDeviceListChange linuxSecond =
+            changeUnder(AudioDeviceChurnRule::Linux, linuxFirst.arrivalIds);
+        expect(linuxSecond.addedIds.isEmpty(),
+               "Linux rule: an unchanged list reports no arrival at the next check (#2864)");
+        expect(!linuxSecond.anyRemoved,
+               "Linux rule: an unchanged list reports no removal at the next check");
+
+        const AudioDeviceListChange noneFirst =
+            changeUnder(AudioDeviceChurnRule::None, {kBuiltIn});
+        expect(noneFirst.arrivalIds == enumerated,
+               "no rule: the change's arrival list is every enumerable id");
+        const AudioDeviceListChange noneSecond =
+            changeUnder(AudioDeviceChurnRule::None, noneFirst.arrivalIds);
+        expect(noneSecond.addedIds.isEmpty(),
+               "no rule: an unchanged list reports no arrival at the next check");
+        expect(!noneSecond.anyRemoved,
+               "no rule: an unchanged list reports no removal at the next check");
     }
 
     // ── Removed while a different device is selected ────────────────────────
