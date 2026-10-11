@@ -135,6 +135,15 @@ surface is, not by what it looks like today: the three are separate types
 so each can grow its own chrome. Surfaces move to them one at a time, each
 in its own PR.
 
+The panadapter (`PanadapterApplet`) is the first `CanonPan`. The GPU
+`SpectrumWidget` sits in its body unchanged (spectrum black, trace and
+waterfall stay as they are); the pan carries a 32 px canon header (grip,
+slice title in `color.canon.ink`, pop-out, maximize) over a
+`color.canon.line` rule, and moves the close button into that header with
+`placeCloseButtonIn()` rather than the corner, so it never covers the
+spectrum. The close button shows with more than one pan, and on a floating
+pan.
+
 ### Motion
 
 The spark is the only animation in the canon: a point of light circling a

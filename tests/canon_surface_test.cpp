@@ -10,12 +10,14 @@
 #include "gui/CanonWindow.h"
 
 #include <QApplication>
+#include <QHBoxLayout>
 #include <QImage>
 #include <QKeyEvent>
 #include <QKeySequence>
 #include <QPixmap>
 #include <QTest>
 #include <QToolButton>
+#include <QVBoxLayout>
 #include <QWidget>
 #include <cstdio>
 
@@ -118,6 +120,43 @@ int main(int argc, char** argv)
     checkSurface(new CanonApplet, "CanonApplet");
     checkSurface(new CanonPan, "CanonPan");
     checkSurface(new CanonCanvas, "CanonCanvas");
+
+    // An owner's header can take the close button (the panadapter's): it
+    // joins the row's layout and a resize no longer pulls it to the corner.
+    {
+        std::fprintf(stderr, "-- close button in a header row\n");
+        QWidget host;
+        host.resize(kSize + QSize(40, 40));
+        auto* pan = new CanonPan(&host);
+        pan->setGeometry(QRect(QPoint(20, 20), kSize));
+        auto* body = new QVBoxLayout(pan->bodyWidget());
+        body->setContentsMargins(0, 0, 0, 0);
+        auto* header = new QWidget(pan->bodyWidget());
+        header->setFixedHeight(32);
+        auto* row = new QHBoxLayout(header);
+        row->setContentsMargins(8, 3, 4, 3);
+        row->addStretch();
+        body->addWidget(header);
+        body->addStretch();
+        pan->placeCloseButtonIn(row);
+        host.show();
+        EXPECT_TRUE(QTest::qWaitForWindowExposed(&host));
+
+        QToolButton* close = pan->closeButton();
+        EXPECT_TRUE(close->parentWidget() == header);
+        EXPECT_TRUE(row->indexOf(close) == row->count() - 1);
+        pan->resize(kSize + QSize(100, 0));
+        QApplication::processEvents();
+        EXPECT_TRUE(close->geometry().right() == header->width() - 1 - 4);
+        EXPECT_TRUE(close->geometry().top() == 3);
+
+        int requested = 0;
+        QObject::connect(pan, &CanonSurface::closeRequested, [&] { ++requested; });
+        QTest::mouseClick(close, Qt::LeftButton);
+        EXPECT_TRUE(requested == 1);
+        pan->setCloseButtonVisible(false);
+        EXPECT_TRUE(!close->isVisible());
+    }
 
     // The shared ground still rounds CanonWindow: its corners stay clear.
     {

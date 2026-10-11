@@ -39,6 +39,12 @@ void CanonSurface::setCloseButtonVisible(bool visible)
     m_close->setVisible(visible);
 }
 
+void CanonSurface::placeCloseButtonIn(QBoxLayout* row)
+{
+    m_closeInCorner = false;
+    row->addWidget(m_close);
+}
+
 bool CanonSurface::isCloseButtonVisible() const
 {
     return !m_close->isHidden();
@@ -48,7 +54,9 @@ void CanonSurface::resizeEvent(QResizeEvent* event)
 {
     QWidget::resizeEvent(event);
     m_ground = QPixmap();
-    placeCanonCloseButton(m_close);
+    if (m_closeInCorner) {
+        placeCanonCloseButton(m_close);
+    }
 }
 
 void CanonSurface::paintEvent(QPaintEvent*)

@@ -3,6 +3,7 @@
 #include <QPixmap>
 #include <QWidget>
 
+class QBoxLayout;
 class QToolButton;
 
 namespace AetherSDR {
@@ -31,6 +32,11 @@ public:
     bool isCloseButtonVisible() const;
     QToolButton* closeButton() const { return m_close; }
 
+    // Moves the close button out of the corner into the owner's own header
+    // row (a panadapter's title strip), at the end of `row`. Visibility and
+    // closeRequested() are unchanged.
+    void placeCloseButtonIn(QBoxLayout* row);
+
     static constexpr int kInset = 1;   // hairline border; the body sits inside it
 
 signals:
@@ -45,6 +51,7 @@ protected:
 private:
     QWidget*     m_body{nullptr};
     QToolButton* m_close{nullptr};
+    bool         m_closeInCorner{true};
     QPixmap      m_ground;   // the painted ground, rebuilt on resize, DPR or theme change
 };
 

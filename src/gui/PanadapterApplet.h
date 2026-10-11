@@ -1,5 +1,7 @@
 #pragma once
 
+#include "CanonSurface.h"
+
 #include <QPoint>
 #include <QWidget>
 
@@ -20,10 +22,11 @@ class CopyAssistPanel;
 #endif
 
 // Container for a single panadapter display (FFT spectrum + waterfall).
-// Adds a title bar with placeholder min/max/close buttons above the
-// SpectrumWidget.  Prepares for future multi-slice stacking where each
-// slice gets its own PanadapterApplet in a vertical splitter.
-class PanadapterApplet : public QWidget {
+// A CanonPan: the canon ground and hairline around a canon header (grip,
+// slice title, pop-out, maximize and the canon close button) above the
+// SpectrumWidget, which keeps its own GPU-drawn look. Each pan in the stack
+// is one PanadapterApplet.
+class PanadapterApplet : public CanonPan {
     Q_OBJECT
     // Expose panId via the meta-object so the automation bridge (core/, no GUI
     // include) can map a pan back to its radio stream id without depending on
@@ -158,7 +161,6 @@ private:
     int             m_titleSliceId{-1};
     QPushButton*    m_popOutBtn{nullptr};
     QPushButton*    m_maxBtn{nullptr};
-    QPushButton*    m_closeBtn{nullptr};
     bool            m_isFloating{false};
 
     // Canvas-item state (RFC #4887 phase 4).
