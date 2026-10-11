@@ -1,6 +1,5 @@
 #pragma once
 
-#include <QImage>
 #include <QPixmap>
 #include <QWidget>
 
@@ -38,11 +37,6 @@ public:
     // closeRequested() are unchanged.
     void placeCloseButtonIn(QBoxLayout* row);
 
-    // The painted ground at the surface's current size and device pixel
-    // ratio, for content that continues it (a panadapter's spectrum fading
-    // out of the header).
-    const QPixmap& ground();
-
     static constexpr int kInset = 1;   // hairline border; the body sits inside it
 
 signals:
@@ -60,14 +54,6 @@ private:
     bool         m_closeInCorner{true};
     QPixmap      m_ground;   // the painted ground, rebuilt on resize, DPR or theme change
 };
-
-// A row of canon ground (`strip`, usually one pixel tall) stretched to
-// `devicePx` and faded from opaque at the top to clear at the bottom: what a
-// surface's content draws over its top edge to continue the ground above it
-// (the panadapter's spectrum under its header). Built in device pixels, so a
-// strip carrying a device pixel ratio fades over exactly `devicePx`. The
-// result has a device pixel ratio of 1; the caller sets its own.
-QImage canonFadeStrip(const QImage& strip, const QSize& devicePx);
 
 // An applet in the applet panel.
 class CanonApplet : public CanonSurface {

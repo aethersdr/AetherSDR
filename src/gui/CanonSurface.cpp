@@ -4,7 +4,6 @@
 
 #include "core/ThemeManager.h"
 
-#include <QLinearGradient>
 #include <QPainter>
 #include <QToolButton>
 #include <QVBoxLayout>
@@ -64,11 +63,6 @@ void CanonSurface::paintEvent(QPaintEvent*)
 {
     // As in CanonWindow: the ground only changes with size, DPR or theme, so
     // paint it once into a pixmap and blit that.
-    QPainter(this).drawPixmap(0, 0, ground());
-}
-
-const QPixmap& CanonSurface::ground()
-{
     const qreal dpr = devicePixelRatioF();
     if (m_ground.isNull() || m_ground.size() != size() * dpr
         || !qFuzzyCompare(m_ground.devicePixelRatio(), dpr)) {
@@ -78,26 +72,7 @@ const QPixmap& CanonSurface::ground()
         QPainter p(&m_ground);
         paintCanonGround(p, this, size(), 0);
     }
-    return m_ground;
-}
-
-QImage canonFadeStrip(const QImage& strip, const QSize& devicePx)
-{
-    if (strip.isNull() || devicePx.isEmpty()) {
-        return {};
-    }
-    QImage fade = strip.scaled(devicePx, Qt::IgnoreAspectRatio, Qt::SmoothTransformation)
-                      .convertToFormat(QImage::Format_ARGB32_Premultiplied);
-    // The strip's device pixel ratio would turn the gradient below into
-    // logical coordinates and stretch it past the bottom edge.
-    fade.setDevicePixelRatio(1.0);
-    QPainter mask(&fade);
-    mask.setCompositionMode(QPainter::CompositionMode_DestinationIn);
-    QLinearGradient ramp(0, 0, 0, devicePx.height());
-    ramp.setColorAt(0.0, QColor(0, 0, 0, 255));
-    ramp.setColorAt(1.0, QColor(0, 0, 0, 0));
-    mask.fillRect(QRect(QPoint(0, 0), devicePx), ramp);
-    return fade;
+    QPainter(this).drawPixmap(0, 0, m_ground);
 }
 
 } // namespace AetherSDR

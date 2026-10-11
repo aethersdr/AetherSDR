@@ -137,16 +137,18 @@ in its own PR.
 
 The panadapter (`PanadapterApplet`) is the first `CanonPan`. The GPU
 `SpectrumWidget` sits in its body unchanged (spectrum black, trace and
-waterfall stay as they are); the pan carries a 16 px canon header (grip,
-slice title in `color.canon.ink`, and pop-out, maximize and close as 16 px
-round canon buttons) with no rule under it:
-the spectrum draws the header's bottom row of ground over its top 14 px,
-fading to clear (`SpectrumWidget::setTopFade()`), so the header runs into
-the spectrum without an edge on every platform, including macOS, where the
-spectrum is a native view nothing else can draw over. The pan moves the
-close button into that header with `placeCloseButtonIn()` rather than the
-corner, so it never covers the spectrum. The close button shows with more than one pan, and on a floating
-pan.
+waterfall stay as they are) and runs to the top of the pan. The pan's
+22 px canon header lies over the spectrum with a transparent background, so
+the spectrum renders underneath it: the grip and slice title (in
+`color.canon.ink`) at the left, and pop-out, maximize and close as 18 px
+round canon buttons at the right, the close button moved there with
+`placeCloseButtonIn()`. The empty middle belongs to the spectrum, so clicks
+there tune as anywhere else. `SpectrumWidget::setTopInset()` moves the
+spectrum's own top-anchored controls (overlay menu and its panels, slice
+flags and marker labels, dBm arrows, top-right indicators) below the
+header. The close button shows with more than one pan, and on a floating
+pan. These rules are the pan's own; `CanonApplet` and `CanonCanvas` keep
+the plain `CanonSurface` chrome.
 
 ### Motion
 

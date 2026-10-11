@@ -146,9 +146,9 @@ protected:
     bool eventFilter(QObject* obj, QEvent* ev) override;
 
 private:
-    // Hands the spectrum the header's bottom row of canon ground to fade
-    // down from, after anything that moves or repaints that row.
-    void refreshTopFade();
+    // Places the header's two pieces over the top of the spectrum: the grip
+    // and title at the left, the buttons at the right.
+    void layoutHeader();
     // Re-apply the decoded-text stylesheet at the current font size (#3628).
     void applyCwFont();
     // Change the decoded-text font size by `delta` px, clamp, and persist (#3628).
@@ -158,7 +158,8 @@ private:
 
     QString         m_panId;
     SpectrumWidget* m_spectrum{nullptr};
-    QWidget*        m_titleBar{nullptr};
+    QWidget*        m_titleBar{nullptr};        // header, left: grip and title
+    QWidget*        m_headerButtons{nullptr};   // header, right: pop-out, maximize, close
     QLabel*         m_titleLabel{nullptr};
     QString         m_sliceTitle;
     int             m_titleSliceId{-1};

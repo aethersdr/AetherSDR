@@ -663,12 +663,13 @@ public:
     int backgroundOpacity() const { return m_bgOpacity; }
     void setBackgroundFillColor(const QColor& c);
 
-    // A host's ground fading into the top of the spectrum (a CanonPan's
-    // header): `strip` is the host's row of pixels just above the spectrum,
-    // stretched down `depth` logical px and faded to clear. It is drawn above
-    // the trace and grid and below the scales and markers. A null strip
-    // turns it off.
-    void setTopFade(const QImage& strip, int depth);
+    // Space at the top of the spectrum covered by the host's header (a
+    // CanonPan's transparent canon header). The background, grid, trace and
+    // band plan still render under it; the controls anchored to the top edge
+    // (overlay menu, slice flags, dBm arrows, top-right indicators) start
+    // below it.
+    void setTopInset(int px);
+    int topInset() const { return m_topInset; }
     QColor backgroundFillColor() const { return m_bgFillColor; }
     bool showBandPlan() const { return m_bandPlanFontSize > 0; }
     int  bandPlanFontSize() const { return m_bandPlanFontSize; }
@@ -2068,12 +2069,7 @@ private:
     // MQTT device status overlay
     QMap<QString, QString> m_mqttDisplayValues;
 
-    // Host fade over the top of the spectrum (setTopFade()); m_topFade is the
-    // faded strip at its drawn size, rebuilt when the width changes.
-    QImage  m_topFadeStrip;
-    int     m_topFadeDepth{0};
-    QImage  m_topFade;
-    void drawTopFade(QPainter& p, int width);
+    int     m_topInset{0};   // setTopInset()
 
     // Background image
     QImage  m_bgImage;

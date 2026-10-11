@@ -158,27 +158,6 @@ int main(int argc, char** argv)
         EXPECT_TRUE(!close->isVisible());
     }
 
-    // The fade a surface's content draws under a header (the spectrum under
-    // the panadapter's): opaque at the top, clear at the bottom, over exactly
-    // the requested device pixels even when the strip carries a fractional
-    // device pixel ratio (a 1.67 strip once stopped the fade at 40%).
-    {
-        std::fprintf(stderr, "-- canonFadeStrip\n");
-        QImage strip(4, 1, QImage::Format_ARGB32);
-        strip.fill(QColor(40, 80, 120));
-        strip.setDevicePixelRatio(5.0 / 3.0);
-        const QSize px(40, 23);
-        const QImage fade = canonFadeStrip(strip, px)
-                                .convertToFormat(QImage::Format_ARGB32);
-        EXPECT_TRUE(fade.size() == px);
-        EXPECT_TRUE(qFuzzyCompare(fade.devicePixelRatio(), 1.0));
-        EXPECT_TRUE(qAlpha(fade.pixel(20, 0)) >= 240);
-        EXPECT_TRUE(qAlpha(fade.pixel(20, px.height() - 1)) <= 16);
-        const int mid = qAlpha(fade.pixel(20, px.height() / 2));
-        EXPECT_TRUE(mid > 100 && mid < 160);
-        EXPECT_TRUE(canonFadeStrip(QImage(), px).isNull());
-    }
-
     // The shared ground still rounds CanonWindow: its corners stay clear.
     {
         std::fprintf(stderr, "-- CanonWindow corners\n");

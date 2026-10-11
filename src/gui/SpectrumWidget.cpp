@@ -1,5 +1,4 @@
 #include "SpectrumWidget.h"
-#include "CanonSurface.h"
 #include "SpectrumSquelchLogic.h"
 #include "ScopedChildWidget.h"
 
@@ -9836,7 +9835,7 @@ bool SpectrumWidget::sliceCursorShapeAt(const QPoint& localPos,
             return true;
         }
 
-        if ((mx >= sliceX - 8 && mx <= sliceX + 35 && y <= 25)
+        if ((mx >= sliceX - 8 && mx <= sliceX + 35 && y <= m_topInset + 25)
             || std::abs(mx - sliceX) <= 8) {
             shape = Qt::PointingHandCursor;
             return true;
@@ -10148,7 +10147,7 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
 
             if (primaryClick) {
                 // Arrow row (side by side: left = up, right = down)
-                if (y < DBM_ARROW_H) {
+                if (y >= m_topInset && y < m_topInset + DBM_ARROW_H) {
                     const float bottom =
                         clampDbmBottom(m_refLevel - m_dynamicRange);
                     const float oldRefLevel = m_refLevel;
@@ -10695,7 +10694,7 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
                 return;
             }
             // Slice badge area in top 25px
-            if (mx >= sliceX - 8 && mx <= sliceX + 35 && y <= 25) {
+            if (mx >= sliceX - 8 && mx <= sliceX + 35 && y <= m_topInset + 25) {
                 emit sliceClicked(so.sliceId);
                 ev->accept();
                 return;
@@ -11384,7 +11383,7 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
 
             // Hovering over dBm scale strip
             if (mx >= stripX) {
-                if (y < DBM_ARROW_H)
+                if (y >= m_topInset && y < m_topInset + DBM_ARROW_H)
                     setSpectrumCursor(Qt::PointingHandCursor);
                 else
                     setSpectrumCursor(Qt::SizeVerCursor);
@@ -14567,7 +14566,6 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
             m_overlayStatic.fill(Qt::transparent);
             QPainter p(&m_overlayStatic);
             p.setRenderHint(QPainter::Antialiasing, false);
-            drawTopFade(p, w);
 
             // Edge crop (panEdgeCropActive()) happens upstream now, at the
             // bin/coordinate level (croppedBinsForDisplay(), and
@@ -14605,7 +14603,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
                     const QColor indicatorColor(0xc8, 0xd8, 0xe8, 180);
                     const QColor wnbDimColor(0xc8, 0xd8, 0xe8, 84);
                     const QFontMetrics fm(indFont);
-                    const int y = specRect.top() + fm.ascent() + 4;
+                    const int y = specRect.top() + m_topInset + fm.ascent() + 4;
                     const int rightEdge = specRect.right() - DBM_STRIP_W - 8;
                     int x = rightEdge;
                     int leftEdge = rightEdge;
@@ -14670,7 +14668,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
                         mqttLabel += it.key() + QStringLiteral(": ") + it.value();
                     }
                     int mx = specRect.right() - DBM_STRIP_W - 8 - fm2.horizontalAdvance(mqttLabel);
-                    int my = specRect.top() + fm2.ascent() + 22;
+                    int my = specRect.top() + m_topInset + fm2.ascent() + 22;
                     p.drawText(mx, my, mqttLabel);
                 }
             }
@@ -14699,7 +14697,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
                 // Flip at the content edge — the strip is opaque now (#3482).
                 if (lx + tw > w - DBM_STRIP_W) lx = m_cursorPos.x() - tw - 4;
                 int ly = m_cursorPos.y() - th - 4;
-                if (ly < 0) ly = m_cursorPos.y() + 16;
+                if (ly < m_topInset) ly = m_cursorPos.y() + 16;
                 p.fillRect(lx, ly, tw, th, AetherSDR::theme::withAlpha("color.background.0", 200));
                 p.setPen(AetherSDR::ThemeManager::instance().color("color.text.primary"));
                 p.drawText(lx + 4, ly + fm.ascent() + 2, label);
@@ -14730,7 +14728,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
                 int lx = cx + 12;
                 if (lx + tw > w - DBM_STRIP_W) { lx = cx - tw - 4; }  // content edge (#3482)
                 int ly = m_cursorPos.y() - th - 4;
-                if (ly < 0) { ly = m_cursorPos.y() + 16; }
+                if (ly < m_topInset) { ly = m_cursorPos.y() + 16; }
                 p.fillRect(lx, ly, tw, th, AetherSDR::theme::withAlpha("color.background.0", 200));
                 p.setPen(AetherSDR::ThemeManager::instance().color("color.text.primary"));
                 p.drawText(lx + 4, ly + fm.ascent() + 2, label);
@@ -15723,8 +15721,6 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
         recordRenderedTrace(estimateNoiseFloorDbm(displaySpectrumBins()));
     }
 
-    drawTopFade(p, specRect.width());
-
     if (m_bandPlanFontSize > 0) drawBandPlan(p, specRect);
 
     p.fillRect(divRect, AetherSDR::ThemeManager::instance().color("color.background.1"));
@@ -15787,7 +15783,7 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
 
             const QFontMetrics fm(indFont);
             const int rightEdge = specRect.right() - DBM_STRIP_W - 6;
-            const int topY = specRect.top() + fm.ascent() + 2;
+            const int topY = specRect.top() + m_topInset + fm.ascent() + 2;
 
             int x = rightEdge;
             int leftEdge = rightEdge;
@@ -15872,7 +15868,7 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
         // Flip at the content edge — the strip is opaque now (#3482).
         if (lx + tw > contentWidth()) lx = m_cursorPos.x() - tw - 4;
         int ly = m_cursorPos.y() - th - 4;
-        if (ly < 0) ly = m_cursorPos.y() + 16;
+        if (ly < m_topInset) ly = m_cursorPos.y() + 16;
         p.fillRect(lx, ly, tw, th, AetherSDR::theme::withAlpha("color.background.0", 200));
         p.setPen(AetherSDR::ThemeManager::instance().color("color.text.primary"));
         p.drawText(lx + 4, ly + fm.ascent() + 2, label);
@@ -15903,7 +15899,7 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
         int lx = cx + 12;
         if (lx + tw > contentWidth()) { lx = cx - tw - 4; }  // content edge (#3482)
         int ly = m_cursorPos.y() - th - 4;
-        if (ly < 0) { ly = m_cursorPos.y() + 16; }
+        if (ly < m_topInset) { ly = m_cursorPos.y() + 16; }
         p.fillRect(lx, ly, tw, th, AetherSDR::theme::withAlpha("color.background.0", 200));
         p.setPen(AetherSDR::ThemeManager::instance().color("color.text.primary"));
         p.drawText(lx + 4, ly + fm.ascent() + 2, label);
@@ -15966,7 +15962,7 @@ void SpectrumWidget::repositionVfoFlags(const QRect& specRect)
                 *vfos[0].overlay, vfos[0].w, vfos[0].x, specW);
         }
         vfos[0].w->updatePosition(
-            vfos[0].x, specRect.top(), direction);
+            vfos[0].x, specRect.top() + m_topInset, direction);
         return;
     }
 
@@ -15979,7 +15975,7 @@ void SpectrumWidget::repositionVfoFlags(const QRect& specRect)
                 deconflictedVfoFlagDirection(vfos, index, panelW, specW);
         }
         vfos[index].w->updatePosition(
-            vfos[index].x, specRect.top(), direction);
+            vfos[index].x, specRect.top() + m_topInset, direction);
     }
 }
 
@@ -16546,7 +16542,7 @@ void SpectrumWidget::updateTnfHoverPopup()
         left = m_cursorPos.x() - boxSize.width() - 4;
     }
     int top = m_cursorPos.y() - boxSize.height() - 4;
-    if (top < 0) {
+    if (top < m_topInset) {
         top = std::min(height() - boxSize.height(), m_cursorPos.y() + 16);
     }
     m_tnfHoverPopup->move(left, top);
@@ -16918,7 +16914,7 @@ void SpectrumWidget::drawSwrSweep(QPainter& p, const QRect& specRect)
     const int plotLeft = specRect.left() + 8;
     const int plotHeight = qBound(42, specRect.height() / 5, 64);
 
-    int wantedTop = specRect.top() + 6;
+    int wantedTop = specRect.top() + m_topInset + 6;
     bool sawVfo = false;
     for (auto it = m_vfoWidgets.cbegin(); it != m_vfoWidgets.cend(); ++it) {
         auto* vfo = it.value();
@@ -16928,9 +16924,9 @@ void SpectrumWidget::drawSwrSweep(QPainter& p, const QRect& specRect)
         wantedTop = qMax(wantedTop, vfo->geometry().bottom() + 8);
     }
     if (!sawVfo && !m_sliceOverlays.isEmpty())
-        wantedTop = specRect.top() + 96;
+        wantedTop = specRect.top() + m_topInset + 96;
 
-    const int minTop = specRect.top() + 6;
+    const int minTop = specRect.top() + m_topInset + 6;
     const int maxTop = qMax(minTop, specRect.bottom() - plotHeight - 8);
     const int plotTop = qBound(minTop, wantedTop, maxTop);
     const QRect plotRect(plotLeft, plotTop,
@@ -17207,7 +17203,7 @@ void SpectrumWidget::drawSwrSweep(QPainter& p, const QRect& specRect)
     const int labelH = fm.lineSpacing() * labelLines.size() + 4;
     int labelX = plotRect.left() + 4;
     int labelY = plotRect.top() - labelH - 3;
-    if (labelY < specRect.top() + 3)
+    if (labelY < specRect.top() + m_topInset + 3)
         labelY = plotRect.top() + 3;
 
     QRect labelRect(labelX, labelY, labelW, labelH);
@@ -17769,7 +17765,7 @@ void SpectrumWidget::drawSliceMarkers(QPainter& p, const QRect& specRect, const 
         // visible affordance stays attached to the locked slice rather than
         // adding another mouse control to the pan chrome.
         if (so.sliceId == m_centerLockSliceId) {
-            const QPoint targetCenter(vfoX, specRect.top() + 18);
+            const QPoint targetCenter(vfoX, specRect.top() + m_topInset + 18);
             p.setBrush(AetherSDR::theme::withAlpha("color.background.0", 190));
             p.setPen(QPen(QColor(col.red(), col.green(), col.blue(), 240), 2));
             p.drawEllipse(targetCenter, 6, 6);
@@ -17809,7 +17805,7 @@ void SpectrumWidget::drawSliceMarkers(QPainter& p, const QRect& specRect, const 
             p.setPen(sliceLink->suspended
                          ? QColor(0x80, 0x80, 0x80, 220)
                          : QColor(col.red(), col.green(), col.blue(), 220));
-            p.drawText(vfoX + 12, specRect.top() + 24,
+            p.drawText(vfoX + 12, specRect.top() + m_topInset + 24,
                        QStringLiteral("⇄ %1").arg(peerName));
         }
 
@@ -17859,9 +17855,9 @@ void SpectrumWidget::drawSliceMarkers(QPainter& p, const QRect& specRect, const 
             f.setBold(true);
             p.setFont(f);
             p.setPen(AetherSDR::theme::withAlpha("color.accent.success", 240));
-            p.drawText(markX + 2, specRect.top() + 12, "M");
+            p.drawText(markX + 2, specRect.top() + m_topInset + 12, "M");
             p.setPen(AetherSDR::theme::withAlpha("color.accent.danger", 240));
-            p.drawText(spaceX + 2, specRect.top() + 12, "S");
+            p.drawText(spaceX + 2, specRect.top() + m_topInset + 12, "S");
         } else if (so.markerWidth > 0) {
             // ── Standard VFO center line ─────────────────────────────────
             // Skipped entirely when markerWidth == 0 (user chose
@@ -17879,9 +17875,9 @@ void SpectrumWidget::drawSliceMarkers(QPainter& p, const QRect& specRect, const 
             p.setPen(Qt::NoPen);
             p.setBrush(col);
             QPolygon tri;
-            tri << QPoint(markerX - triHalf, specRect.top())
-                << QPoint(markerX + triHalf, specRect.top())
-                << QPoint(markerX, specRect.top() + triH);
+            tri << QPoint(markerX - triHalf, specRect.top() + m_topInset)
+                << QPoint(markerX + triHalf, specRect.top() + m_topInset)
+                << QPoint(markerX, specRect.top() + m_topInset + triH);
             p.drawPolygon(tri);
         }
 
@@ -17896,7 +17892,7 @@ void SpectrumWidget::drawSliceMarkers(QPainter& p, const QRect& specRect, const 
             f.setBold(true);
             p.setFont(f);
             p.setPen(QColor(col.red(), col.green(), col.blue(), 200));
-            p.drawText(ritX + 2, specRect.top() + 12, "R");
+            p.drawText(ritX + 2, specRect.top() + m_topInset + 12, "R");
         }
         if (so.xitOn && so.xitFreq != 0) {
             const int xitX = mhzToX(so.freqMhz + so.xitFreq / 1.0e6);
@@ -17908,7 +17904,7 @@ void SpectrumWidget::drawSliceMarkers(QPainter& p, const QRect& specRect, const 
             f.setBold(true);
             p.setFont(f);
             p.setPen(AetherSDR::theme::withAlpha("color.accent.danger", 220));
-            p.drawText(xitX + 2, specRect.top() + 12, "X");
+            p.drawText(xitX + 2, specRect.top() + m_topInset + 12, "X");
         }
 
         // ── Adaptive RX filter edge markers (RFC #3878) ──────────────────
@@ -18070,29 +18066,19 @@ void SpectrumWidget::drawFreqScale(QPainter& p, const QRect& r)
 
 // ─── dBm scale strip (right edge of FFT area) ────────────────────────────────
 
-void SpectrumWidget::setTopFade(const QImage& strip, int depth)
+void SpectrumWidget::setTopInset(int px)
 {
-    if (strip == m_topFadeStrip && depth == m_topFadeDepth) {
+    px = std::max(0, px);
+    if (px == m_topInset) {
         return;
     }
-    m_topFadeStrip = strip;
-    m_topFadeDepth = depth;
-    m_topFade = QImage();
-    markOverlayDirty("topFade");
-}
-
-void SpectrumWidget::drawTopFade(QPainter& p, int width)
-{
-    if (m_topFadeStrip.isNull() || m_topFadeDepth <= 0 || width <= 0) {
-        return;
+    m_topInset = px;
+    if (m_overlayMenu) {
+        m_overlayMenu->move(m_overlayMenu->x(), px);
+        m_overlayMenu->setTopLimit(px);
     }
-    const qreal dpr = p.device()->devicePixelRatioF();
-    const QSize px(qRound(width * dpr), qRound(m_topFadeDepth * dpr));
-    if (m_topFade.size() != px) {
-        m_topFade = canonFadeStrip(m_topFadeStrip, px);
-        m_topFade.setDevicePixelRatio(dpr);
-    }
-    p.drawImage(QPointF(0, 0), m_topFade);
+    markOverlayDirty("topInset");
+    update();
 }
 
 void SpectrumWidget::drawDbmScaleChrome(QPainter& p, const QRect& specRect)
@@ -18114,8 +18100,8 @@ void SpectrumWidget::drawDbmScaleChrome(QPainter& p, const QRect& specRect)
     const int halfW = DBM_STRIP_W / 2;
     const int upCx  = stripX + halfW / 2;       // left half center
     const int dnCx  = stripX + halfW + halfW / 2; // right half center
-    const int arrowTop = specRect.top() + 2;
-    const int arrowBot = specRect.top() + DBM_ARROW_H - 2;
+    const int arrowTop = specRect.top() + m_topInset + 2;
+    const int arrowBot = specRect.top() + m_topInset + DBM_ARROW_H - 2;
 
     p.setPen(Qt::NoPen);
     p.setBrush(AetherSDR::ThemeManager::instance().color("color.text.secondary"));
@@ -18150,7 +18136,7 @@ void SpectrumWidget::drawDbmScaleLabels(QPainter& p, const QRect& specRect,
     p.setFont(f);
     const QFontMetrics fm(f);
 
-    const int labelTop = specRect.top() + DBM_ARROW_H + 4;
+    const int labelTop = specRect.top() + m_topInset + DBM_ARROW_H + 4;
 
     // Use adaptive step: aim for ~4-6 labels
     float rawStep = rangeDb / 5.0f;
@@ -18334,7 +18320,7 @@ void SpectrumWidget::drawOffScreenSlices(QPainter& p, const QRect& specRect)
     const double endMhz   = m_centerMhz + effectiveBandwidthMhz() / 2.0;
 
     m_offScreenRects.resize(m_sliceOverlays.size());
-    int leftNextY = specRect.top() + 20;
+    int leftNextY = specRect.top() + m_topInset + 20;
     int rightNextY = leftNextY;
 
     for (int oi = 0; oi < m_sliceOverlays.size(); ++oi) {
