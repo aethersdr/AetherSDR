@@ -136,12 +136,15 @@ int main(int argc, char** argv)
           "TX allowed: the disarm reaches TransmitModel and the button follows");
     check(nameMatchWarnings == 0, "TX allowed: no name-fallback warning for VOX");
 
-    for (const char* spelling : {"0", "off", "no", " FALSE "}) {
+    // "unchecked" is what the bridge reads back for an unchecked button.
+    for (const char* spelling : {"0", "off", "no", " FALSE ", "unchecked"}) {
         tx.setVoxEnable(true);
         const bool accepted = ok(invoke(server, QStringLiteral("setChecked"),
                                         QString::fromLatin1(spelling)));
         const bool landed = AetherTest::waitFor([&] { return !tx.voxEnable(); }, 2000);
-        check(accepted && landed, "TX allowed: every 'off' spelling disarms");
+        const QByteArray what = QByteArray("TX allowed: setChecked '") + spelling
+                                + "' disarms";
+        check(accepted && landed, what.constData());
     }
 
     // The model is the subject: armed model, button reading off.

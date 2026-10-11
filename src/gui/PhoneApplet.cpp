@@ -177,7 +177,8 @@ void PhoneApplet::buildUI()
             const QString v = value.trimmed().toLower();
             const bool disarm = action == QLatin1String("setChecked")
                 && (v == QLatin1String("false") || v == QLatin1String("0")
-                    || v == QLatin1String("off") || v == QLatin1String("no"));
+                    || v == QLatin1String("off") || v == QLatin1String("no")
+                    || v == QLatin1String("unchecked"));
             if (!disarm) {
                 return {};
             }
