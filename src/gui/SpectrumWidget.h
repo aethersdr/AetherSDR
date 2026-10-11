@@ -666,8 +666,9 @@ public:
     // Space at the top of the spectrum covered by the host's header (a
     // CanonPan's transparent canon header). The background, grid, trace and
     // band plan still render under it; the controls anchored to the top edge
-    // (overlay menu, slice flags, dBm arrows, top-right indicators) start
-    // below it.
+    // (overlay menu, dBm arrows, top-right indicators) start below it. The
+    // slice flags and the marks drawn with them (VFO triangle, center-lock
+    // target, slice-link label) stay at the very top, riding over the header.
     void setTopInset(int px);
     int topInset() const { return m_topInset; }
     QColor backgroundFillColor() const { return m_bgFillColor; }

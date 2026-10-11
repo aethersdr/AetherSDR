@@ -1037,9 +1037,9 @@ void PanadapterApplet::layoutHeader()
     m_titleBar->setGeometry(0, 0, titleW, kPanHeaderHeight);
     const int buttonsW = m_headerButtons->sizeHint().width();
     m_headerButtons->setGeometry(w - buttonsW, 0, buttonsW, kPanHeaderHeight);
-    // Above the spectrum's own overlays, which may be created later.
-    m_titleBar->raise();
-    m_headerButtons->raise();
+    // Not raised: built after the spectrum's overlay menu, the header sits
+    // above it, while the slice flags, created and raised later, ride over
+    // the header at the top of the pan.
 }
 
 bool PanadapterApplet::eventFilter(QObject* obj, QEvent* ev)

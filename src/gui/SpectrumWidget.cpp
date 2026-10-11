@@ -9835,7 +9835,7 @@ bool SpectrumWidget::sliceCursorShapeAt(const QPoint& localPos,
             return true;
         }
 
-        if ((mx >= sliceX - 8 && mx <= sliceX + 35 && y <= m_topInset + 25)
+        if ((mx >= sliceX - 8 && mx <= sliceX + 35 && y <= 25)
             || std::abs(mx - sliceX) <= 8) {
             shape = Qt::PointingHandCursor;
             return true;
@@ -10694,7 +10694,7 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
                 return;
             }
             // Slice badge area in top 25px
-            if (mx >= sliceX - 8 && mx <= sliceX + 35 && y <= m_topInset + 25) {
+            if (mx >= sliceX - 8 && mx <= sliceX + 35 && y <= 25) {
                 emit sliceClicked(so.sliceId);
                 ev->accept();
                 return;
@@ -15962,7 +15962,7 @@ void SpectrumWidget::repositionVfoFlags(const QRect& specRect)
                 *vfos[0].overlay, vfos[0].w, vfos[0].x, specW);
         }
         vfos[0].w->updatePosition(
-            vfos[0].x, specRect.top() + m_topInset, direction);
+            vfos[0].x, specRect.top(), direction);
         return;
     }
 
@@ -15975,7 +15975,7 @@ void SpectrumWidget::repositionVfoFlags(const QRect& specRect)
                 deconflictedVfoFlagDirection(vfos, index, panelW, specW);
         }
         vfos[index].w->updatePosition(
-            vfos[index].x, specRect.top() + m_topInset, direction);
+            vfos[index].x, specRect.top(), direction);
     }
 }
 
@@ -17765,7 +17765,7 @@ void SpectrumWidget::drawSliceMarkers(QPainter& p, const QRect& specRect, const 
         // visible affordance stays attached to the locked slice rather than
         // adding another mouse control to the pan chrome.
         if (so.sliceId == m_centerLockSliceId) {
-            const QPoint targetCenter(vfoX, specRect.top() + m_topInset + 18);
+            const QPoint targetCenter(vfoX, specRect.top() + 18);
             p.setBrush(AetherSDR::theme::withAlpha("color.background.0", 190));
             p.setPen(QPen(QColor(col.red(), col.green(), col.blue(), 240), 2));
             p.drawEllipse(targetCenter, 6, 6);
@@ -17805,7 +17805,7 @@ void SpectrumWidget::drawSliceMarkers(QPainter& p, const QRect& specRect, const 
             p.setPen(sliceLink->suspended
                          ? QColor(0x80, 0x80, 0x80, 220)
                          : QColor(col.red(), col.green(), col.blue(), 220));
-            p.drawText(vfoX + 12, specRect.top() + m_topInset + 24,
+            p.drawText(vfoX + 12, specRect.top() + 24,
                        QStringLiteral("⇄ %1").arg(peerName));
         }
 
@@ -17875,9 +17875,9 @@ void SpectrumWidget::drawSliceMarkers(QPainter& p, const QRect& specRect, const 
             p.setPen(Qt::NoPen);
             p.setBrush(col);
             QPolygon tri;
-            tri << QPoint(markerX - triHalf, specRect.top() + m_topInset)
-                << QPoint(markerX + triHalf, specRect.top() + m_topInset)
-                << QPoint(markerX, specRect.top() + m_topInset + triH);
+            tri << QPoint(markerX - triHalf, specRect.top())
+                << QPoint(markerX + triHalf, specRect.top())
+                << QPoint(markerX, specRect.top() + triH);
             p.drawPolygon(tri);
         }
 
