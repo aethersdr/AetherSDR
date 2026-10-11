@@ -39,8 +39,9 @@ third_party/onnxruntime-*.tgz
 third_party/onnxruntime-*.zip
 # Extraction tree; only survives a run that failed partway.
 third_party/onnxruntime-tmp/
+third_party/onnxruntime-temp/
 
-# Downloaded sherpa-onnx prebuilt (staged by scripts/setup/setup-sherpa-onnx.sh)
+# Downloaded sherpa-onnx prebuilt (staged by scripts/setup/setup-sherpa-onnx.{sh,ps1})
 third_party/sherpa-onnx/
 third_party/sherpa-onnx-*.tar.bz2
 # Extraction tree (setup-sherpa-onnx.{sh,ps1}); only survives a failed run.
