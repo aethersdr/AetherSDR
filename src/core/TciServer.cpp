@@ -377,6 +377,14 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
             // receiver/pan instead of silently following list position.
             reconcileIqStreams();
         });
+        // A slice taken back after a reconnect emits no sliceAdded, only this edge.
+        // Bind it quietly: the client already knows it, but its close needs a trx (#6352).
+        connect(m_model, &RadioModel::slotOccupancyChanged, this, [this](int) {
+            for (SliceModel* live : m_model->slices()) {
+                if (live)
+                    m_trxMap.acquire(live->sliceId());
+            }
+        });
         // A removed slice never fires daxChannelChanged, so without this the
         // Tci hold on its channel stays set forever and the dax_rx stream
         // lingers until the TCI client disconnects (pre-existing orphan,

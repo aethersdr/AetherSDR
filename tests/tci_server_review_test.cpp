@@ -1188,6 +1188,62 @@ public:
         return true;
     }
 
+    // #6352 — a slice reclaimed after a reconnect emits slotOccupancyChanged
+    // but no sliceAdded, so the disconnect-cleared map left it unbound and its
+    // close was never announced. The occupancy edge must rebind it quietly.
+    static bool closeAnnouncedForSliceReclaimedAfterReconnect()
+    {
+        RadioModel model;
+        TciServer server(&model);
+
+        QStringList sent;
+        QObject::connect(&server, &TciServer::tciMessage,
+                         [&sent](const QString& dir, const QString& msg) {
+            if (dir == QLatin1String("tx")
+                && msg.startsWith(QLatin1String("rx_enable:")))
+                sent << msg.trimmed();
+        });
+
+        QString error;
+        if (!model.automationApplySliceFixture(0, QStringLiteral("A"), &error)
+            || !model.automationApplySliceFixture(1, QStringLiteral("B"),
+                                                  &error)) {
+            std::fprintf(stderr, "reclaim fixtures failed: %s\n",
+                         error.toUtf8().constData());
+            return false;
+        }
+
+        // The reconnect end state: slices live, bindings cleared at disconnect.
+        server.m_trxMap.clear();
+        sent.clear();
+        model.slotOccupancyChanged(1);
+        if (server.m_trxMap.trxForSliceId(0) != 0
+            || server.m_trxMap.trxForSliceId(1) != 1) {
+            std::fprintf(stderr, "reclaimed slices not rebound: %d/%d\n",
+                         server.m_trxMap.trxForSliceId(0),
+                         server.m_trxMap.trxForSliceId(1));
+            return false;
+        }
+        if (!sent.isEmpty()) {
+            std::fprintf(stderr, "rebind announced '%s'\n",
+                         sent.join(' ').toUtf8().constData());
+            return false;
+        }
+
+        if (!model.automationRemoveSliceFixture(1, &error)) {
+            std::fprintf(stderr, "remove B failed: %s\n",
+                         error.toUtf8().constData());
+            return false;
+        }
+        spin(600);
+        if (sent != QStringList{QStringLiteral("rx_enable:1,false;")}) {
+            std::fprintf(stderr, "close: expected 'rx_enable:1,false;', got '%s'\n",
+                         sent.join(' ').toUtf8().constData());
+            return false;
+        }
+        return true;
+    }
+
     // #4577 review — the reconnect hole: stageSessionModelsForReconnect()
     // reclaims the previous session's slices without sliceAdded (RadioModel's
     // !reclaimed guard) while the map was cleared at disconnect, so every
@@ -2270,6 +2326,8 @@ int main(int argc, char** argv)
         = AetherSDR::TciServerReviewTest::activeSliceFollowsSliceRemoval();
     const bool rxEnableLifecycle
         = AetherSDR::TciServerReviewTest::rxEnableFollowsSliceLifecycle();
+    const bool reclaimCloseAnnounced
+        = AetherSDR::TciServerReviewTest::closeAnnouncedForSliceReclaimedAfterReconnect();
     const bool trxStableRecreate
         = AetherSDR::TciServerReviewTest::trxStableAcrossSliceRecreate();
     const bool trxDistinctReconnect
@@ -2335,6 +2393,8 @@ int main(int argc, char** argv)
                 trxStableRecreate ? "PASS" : "FAIL");
     std::printf("%s  rx_enable follows slice open/close, not recreate (#6352)\n",
                 rxEnableLifecycle ? "PASS" : "FAIL");
+    std::printf("%s  close of a slice reclaimed after reconnect is announced (#6352)\n",
+                reclaimCloseAnnounced ? "PASS" : "FAIL");
     std::printf("%s  live slices keep distinct trx after reconnect (#4577)\n",
                 trxDistinctReconnect ? "PASS" : "FAIL");
     std::printf("%s  held trx refuses instead of re-pointing in the settle "
@@ -2388,7 +2448,7 @@ int main(int argc, char** argv)
         && powerRateLimits && trxCacheHolds && cacheResets && flagSeedsDeDups
         && flagSeedSettled && txTrxResets
         && activeSliceSeed && activeSliceRemoval && trxStableRecreate
-        && rxEnableLifecycle
+        && rxEnableLifecycle && reclaimCloseAnnounced
         && trxDistinctReconnect && heldTrxRefuses
         && vfoConfirmsAccepted && vfoConfirmsRefusal && vfoAcksNoOp
         && vfoChannelZeroOnce
