@@ -37,15 +37,24 @@ __pycache__/
 third_party/onnxruntime/
 third_party/onnxruntime-*.tgz
 third_party/onnxruntime-*.zip
+# Extraction tree; only survives a run that failed partway.
+third_party/onnxruntime-tmp/
 
 # Downloaded sherpa-onnx prebuilt (staged by scripts/setup/setup-sherpa-onnx.sh)
 third_party/sherpa-onnx/
 third_party/sherpa-onnx-*.tar.bz2
+# Extraction tree (setup-sherpa-onnx.{sh,ps1}); only survives a failed run.
+third_party/_sherpa_extract/
 
 # Built by scripts/setup/setup-portaudio.ps1 on Windows (#5200); the tarball
 # only survives a run that failed partway.
 third_party/portaudio/
 third_party/portaudio-*.tar.gz
+
+# Built by scripts/setup/setup-macos-deps.sh for the release DMG, and cached by
+# macos-dmg.yml; the .macos-deps-build work tree only survives a failed run.
+third_party/macos-deps/
+.macos-deps-build/
 
 # Built by scripts/setup/setup-qtkeychain.{sh,ps1}, which setup-qt.sh runs for
 # every source builder; the -src/-build trees only survive a failed run.
