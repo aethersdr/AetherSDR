@@ -30,6 +30,11 @@ struct SquelchLevelScale {
     // threshold rather than sending a margin. False keeps the #2504 mode rule
     // and the radio-owned squelch state every other family has.
     bool modesExclusive = false;
+    // Auto is computed by the receiver, through requestSliceSquelch, rather
+    // than from the display FFT. Observed state returns in SliceDelta.
+    bool automaticInEngine = false;
+    // False when detector and display use different measurement bandwidths.
+    bool spectrumComparable = true;
 
     bool operator==(const SquelchLevelScale&) const = default;
 
@@ -68,7 +73,7 @@ struct SquelchLevelScale {
 [[nodiscard]] inline std::optional<SquelchLevelScale> squelchScaleForMode(
     const std::optional<SquelchLevelScale>& published, const QString& mode)
 {
-    if (!published || !published->appliesTo(mode)) {
+    if (!published || !published->spectrumComparable || !published->appliesTo(mode)) {
         return std::nullopt;
     }
     return published;

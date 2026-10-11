@@ -242,7 +242,7 @@ void testDoubleClickOpensOneViewer()
     SettingsBrowserDialog dlg;
     dlg.resize(900, 600);
     dlg.show();
-    QTest::qWaitForWindowExposed(&dlg);
+    expect(QTest::qWaitForWindowExposed(&dlg), "the settings browser window is exposed");
 
     QTreeWidget* tree = treeOf(dlg);
     QTableWidget* table = tableOf(dlg);
@@ -287,7 +287,7 @@ void testCorruptDocumentIsNotEditable()
     SettingsBrowserDialog dlg;
     dlg.resize(900, 600);
     dlg.show();
-    QTest::qWaitForWindowExposed(&dlg);
+    expect(QTest::qWaitForWindowExposed(&dlg), "the settings browser window is exposed");
     QTreeWidget* tree = treeOf(dlg);
     QTableWidget* table = tableOf(dlg);
     if (tree == nullptr || table == nullptr
@@ -352,7 +352,7 @@ void testArrayDocumentIsTreatedAsCorrupt()
     SettingsBrowserDialog dlg;
     dlg.resize(900, 600);
     dlg.show();
-    QTest::qWaitForWindowExposed(&dlg);
+    expect(QTest::qWaitForWindowExposed(&dlg), "the settings browser window is exposed");
     QTreeWidget* tree = treeOf(dlg);
     QTableWidget* table = tableOf(dlg);
     if (tree == nullptr || table == nullptr

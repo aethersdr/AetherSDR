@@ -23,6 +23,7 @@ struct MeterDef {
     double  low{0.0};
     double  high{0.0};
     QString description;
+    QString unavailableReason; // Empty unless measurement is explicitly unavailable.
 };
 
 }  // namespace AetherSDR

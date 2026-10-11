@@ -255,7 +255,7 @@ void SupportDialog::resetSettings(QWidget* parent)
         xmlPath + ".corrupt",
         AudioEngine::wisdomFilePath()
     };
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
     resetPaths << (QDir::homePath() + "/Library/Preferences/com.aethersdr.AetherSDR.plist");
 #endif
 
@@ -365,7 +365,7 @@ void SupportDialog::fileIssue(QWidget* parent, RadioModel* radioModel)
     QString version = QCoreApplication::applicationVersion();
     QString qt = qVersion();
     QString os;
-#if defined(Q_OS_MAC)
+#if defined(Q_OS_MACOS)
     os = "macOS";
 #elif defined(Q_OS_WIN)
     os = "Windows";

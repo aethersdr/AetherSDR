@@ -54,7 +54,7 @@ the must-knows that fit in Gemini's chat context efficiently.
 
 - C++20, Qt6, no `QSettings`, no naked `new`/`delete`, no `goto`,
   braces on all control flow.
-- Platform guards prefer `Q_OS_WIN` / `Q_OS_MAC` / `Q_OS_LINUX`.
+- Platform guards prefer `Q_OS_WIN` / `Q_OS_MACOS` / `Q_OS_LINUX`.
 - Naming: classes `PascalCase`, methods `camelCase`, member vars
   `m_camelCase`, constants `kPascalCase`.
 

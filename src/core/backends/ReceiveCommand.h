@@ -116,8 +116,16 @@ struct SliceSquelchRequest {
     int level{0};
     bool enabledChanged{false};
     bool levelChanged{false};
+    enum class Kind { Manual, Automatic };
+    Kind kind{Kind::Manual};
+    int marginDb{10};
 
-    bool valid() const { return level >= 0 && level <= 100; }
+    bool valid() const
+    {
+        return level >= 0 && level <= 100
+            && (kind == Kind::Manual
+                || (kind == Kind::Automatic && marginDb >= 5 && marginDb <= 20));
+    }
 };
 
 } // namespace AetherSDR

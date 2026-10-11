@@ -257,6 +257,7 @@
 #include <QToolTip>
 #include <QMediaDevices>
 #include "core/AppSettings.h"
+#include "core/AudioDevicePreferencePolicy.h"
 #include "core/NnrSettings.h"
 #include "core/AutomationServer.h"
 #include "core/SpotCommandPolicy.h"
@@ -271,7 +272,7 @@
 #include "core/backends/sim/SimBackend.h"  // dynamic_cast for demo noise controls
 #include "workspace/WorkspaceController.h"  // prepareShutdown (phase 7 canvas windows)
 #include "workspace/WorkspaceWindow.h"      // shutdown sweep of hidden windows (M1)
-#if defined(Q_OS_MAC)
+#if defined(Q_OS_MACOS)
 #include "core/VirtualAudioBridge.h"
 #include <QFileInfo>
 #elif defined(HAVE_PIPEWIRE)
@@ -289,7 +290,7 @@
 #include <QOperatingSystemVersion>
 #else
 #include <sys/resource.h>
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
 #include <mach/mach.h>
 #include <mach/task.h>
 #include <mach/task_info.h>
@@ -553,6 +554,17 @@ QList<QByteArray> audioDeviceIds(const QList<QAudioDevice>& devices)
     return ids;
 }
 
+// Every enumerable id, the churn audioDeviceIds() skips included: what is
+// PRESENT, as opposed to what counts as a new arrival.
+QList<QByteArray> enumeratedAudioDeviceIds(const QList<QAudioDevice>& devices)
+{
+    QList<QByteArray> ids;
+    ids.reserve(devices.size());
+    for (const QAudioDevice& device : devices)
+        ids.append(device.id());
+    return ids;
+}
+
 bool containsAudioDeviceId(const QList<QByteArray>& ids, const QByteArray& id)
 {
     return std::any_of(ids.cbegin(), ids.cend(),
@@ -585,16 +597,17 @@ QList<QByteArray> removedAudioDeviceIds(const QList<QByteArray>& knownIds,
     return removed;
 }
 
-bool audioDevicePresent(const QList<QAudioDevice>& devices,
-                        const QAudioDevice& target)
+// Null when `id` is empty or not in `devices`.
+QAudioDevice audioDeviceById(const QList<QAudioDevice>& devices,
+                             const QByteArray& id)
 {
-    if (target.isNull())
-        return true;
-
-    return std::any_of(devices.cbegin(), devices.cend(),
-                       [&target](const QAudioDevice& device) {
-                           return device.id() == target.id();
-                       });
+    if (id.isEmpty())
+        return {};
+    for (const QAudioDevice& device : devices) {
+        if (device.id() == id)
+            return device;
+    }
+    return {};
 }
 
 bool sameAudioDeviceSelection(const QAudioDevice& lhs, const QAudioDevice& rhs)
@@ -4200,7 +4213,7 @@ void MainWindow::closeEvent(QCloseEvent* event)
 {
     m_pendingDisplayWrites.flush();
     ShutdownTrace closeEventTrace("main_window.close_event");
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
     // Shared Ulanzi access temporarily remaps only the dial's system key
     // events. Restore that mapping while the macOS HID event system and Qt
     // event loop are still live; ~MainWindow runs only after app.exec().
@@ -4733,10 +4746,17 @@ void MainWindow::showAgcCalibrationDialog(int sliceId)
         SpectrumWidget* sw = s ? spectrumForSlice(s) : nullptr;
         return sw ? sw->noiseFloorDbm() : std::numeric_limits<float>::quiet_NaN();
     };
-    showOrRaisePersistent(m_agcCalibrationDialog, &m_radioModel, m_audio, floorFn);
-    if (m_agcCalibrationDialog) {
-        m_agcCalibrationDialog->setSlice(slice);
+    // A canon dialog, so not showOrRaisePersistent(): that applies View →
+    // Frameless Window, which a CanonWindow does not follow.
+    if (!m_agcCalibrationDialog) {
+        auto* dlg = new AgcCalibrationDialog(&m_radioModel, m_audio, floorFn, this);
+        dlg->setAttribute(Qt::WA_DeleteOnClose);
+        m_agcCalibrationDialog = dlg;
     }
+    m_agcCalibrationDialog->setSlice(slice);
+    m_agcCalibrationDialog->show();
+    m_agcCalibrationDialog->raise();
+    m_agcCalibrationDialog->activateWindow();
 }
 
 // AX.25 dialog + KISS TNC startup live in MainWindow_DigitalModes.cpp (#3351 Phase 1e).
@@ -5327,33 +5347,56 @@ void MainWindow::handleAudioDeviceListChanged()
 
     const QAudioDevice currentInput = m_audio->inputDevice();
     const QAudioDevice currentOutput = m_audio->outputDevice();
-    const bool resetInputToDefault =
-        !currentInput.isNull() && !audioDevicePresent(inputDevices, currentInput);
-    const bool resetOutputToDefault =
-        !currentOutput.isNull() && !audioDevicePresent(outputDevices, currentOutput);
-    const bool defaultInputNeedsRestart =
-        currentInput.isNull() && (!removedInputIds.isEmpty() || defaultInputChanged);
-    const bool defaultOutputNeedsRestart =
-        currentOutput.isNull() && (!removedOutputIds.isEmpty() || defaultOutputChanged);
-    const bool resetInput = resetInputToDefault || defaultInputNeedsRestart;
-    const bool resetOutput = resetOutputToDefault || defaultOutputNeedsRestart;
-    const bool reinitializePcInput = resetInput
-        && m_radioModel.isConnected()
+    // The saved ids are the operator's preference; the engine's devices are
+    // what this run plays on. A missing device re-points the engine only.
+    const AppSettings& savedChoice = AppSettings::instance();
+    const QByteArray preferredInputId =
+        savedChoice.value("AudioInputDeviceId", "").toByteArray();
+    const QByteArray preferredOutputId =
+        savedChoice.value("AudioOutputDeviceId", "").toByteArray();
+    // Presence is asked of every enumerable id; only arrivals skip the churn.
+    const QList<QByteArray> presentInputIds = enumeratedAudioDeviceIds(inputDevices);
+    const QList<QByteArray> presentOutputIds = enumeratedAudioDeviceIds(outputDevices);
+    const AudioDeviceDecision inputDecision = decideAudioDeviceChange({
+        .presentIds = presentInputIds,
+        .addedIds = addedInputIds,
+        .anyRemoved = !removedInputIds.isEmpty(),
+        .defaultChanged = defaultInputChanged,
+        .liveId = currentInput.id(),
+        .preferredId = preferredInputId});
+    const AudioDeviceDecision outputDecision = decideAudioDeviceChange({
+        .presentIds = presentOutputIds,
+        .addedIds = addedOutputIds,
+        .anyRemoved = !removedOutputIds.isEmpty(),
+        .defaultChanged = defaultOutputChanged,
+        .liveId = currentOutput.id(),
+        .preferredId = preferredOutputId});
+    const bool resetInput =
+        inputDecision.action == AudioDeviceAction::FollowDefault;
+    const bool resetOutput =
+        outputDecision.action == AudioDeviceAction::FollowDefault;
+    const QAudioDevice restoreInput =
+        inputDecision.action == AudioDeviceAction::RestorePreferred
+            ? audioDeviceById(inputDevices, preferredInputId)
+            : QAudioDevice{};
+    const QAudioDevice restoreOutput =
+        outputDecision.action == AudioDeviceAction::RestorePreferred
+            ? audioDeviceById(outputDevices, preferredOutputId)
+            : QAudioDevice{};
+    const bool pcMicInUse = m_radioModel.isConnected()
         && m_radioModel.transmitModel().micSelection() == "PC";
+    const auto applyFallback = [&]() {
+        resetMissingAudioDevicesToDefault(resetInput,
+                                          resetOutput,
+                                          resetInput && pcMicInUse);
+        restorePreferredAudioDevices(restoreInput,
+                                     restoreOutput,
+                                     !restoreInput.isNull() && pcMicInUse);
+    };
 
     const bool deviceAdded = !addedInputIds.isEmpty() || !addedOutputIds.isEmpty();
-    // Only prompt when the user's existing selection is no longer usable;
-    // a new arrival while both selections still work is platform-audio
-    // churn, not an actionable change (issue #2864).
-    const bool currentSelectionStillValid =
-        audioDevicePresent(inputDevices, currentInput)
-        && audioDevicePresent(outputDevices, currentOutput);
-    const bool userChoiceRequired = deviceAdded && !currentSelectionStillValid;
-    if (!userChoiceRequired) {
-        if (resetInput || resetOutput)
-            resetMissingAudioDevicesToDefault(resetInput,
-                                              resetOutput,
-                                              reinitializePcInput);
+    if (!audioDeviceChoiceRequired(deviceAdded, inputDecision, outputDecision)) {
+        applyFallback();
         return;
     }
 
@@ -5362,18 +5405,15 @@ void MainWindow::handleAudioDeviceListChanged()
             .value(kSuppressAudioDeviceNotificationsKey, "False")
             .toString() == "True";
     if (suppressAudioDeviceNotifications) {
-        if (resetInput || resetOutput)
-            resetMissingAudioDevicesToDefault(resetInput,
-                                              resetOutput,
-                                              reinitializePcInput);
+        applyFallback();
         return;
     }
 
     m_audioDeviceDialogOpen = true;
     AudioDeviceChangeDialog dialog(inputDevices,
                                    outputDevices,
-                                   currentInput,
-                                   currentOutput,
+                                   restoreInput.isNull() ? currentInput : restoreInput,
+                                   restoreOutput.isNull() ? currentOutput : restoreOutput,
                                    addedInputIds,
                                    addedOutputIds,
                                    this);
@@ -5394,18 +5434,24 @@ void MainWindow::handleAudioDeviceListChanged()
         const bool reinitializePcInput = inputChanged
             && m_radioModel.isConnected()
             && m_radioModel.transmitModel().micSelection() == "PC";
-        applyAudioDeviceSelection(selectedInput,
-                                  selectedOutput,
-                                  reinitializePcInput);
-    } else if (resetInput || resetOutput) {
-        resetMissingAudioDevicesToDefault(resetInput,
-                                          resetOutput,
-                                          reinitializePcInput);
+        // "System default" beside an absent saved device keeps the saved id.
+        applyAudioDeviceSelection(
+            selectedInput,
+            selectedOutput,
+            acceptedAudioDeviceSelection(selectedInput.id(), preferredInputId,
+                                         presentInputIds),
+            acceptedAudioDeviceSelection(selectedOutput.id(), preferredOutputId,
+                                         presentOutputIds),
+            reinitializePcInput);
+    } else {
+        applyFallback();
     }
 }
 
 void MainWindow::applyAudioDeviceSelection(const QAudioDevice& inputDevice,
                                            const QAudioDevice& outputDevice,
+                                           AudioDeviceSelection inputSelection,
+                                           AudioDeviceSelection outputSelection,
                                            bool reinitializePcInput)
 {
     if (!m_audio)
@@ -5417,12 +5463,14 @@ void MainWindow::applyAudioDeviceSelection(const QAudioDevice& inputDevice,
     QMetaObject::invokeMethod(m_audio, [audio,
                                         inputDevice,
                                         outputDevice,
+                                        inputSelection,
+                                        outputSelection,
                                         restartCapture,
                                         radioAddress]() {
         if (!audio)
             return;
-        audio->setInputDevice(inputDevice);
-        audio->setOutputDevice(outputDevice);
+        audio->setInputDevice(inputDevice, inputSelection);
+        audio->setOutputDevice(outputDevice, outputSelection);
         if (restartCapture && !audio->isTxStreaming())
             audio->startTxStream(radioAddress, 4991);
     }, Qt::QueuedConnection);
@@ -5446,9 +5494,38 @@ void MainWindow::resetMissingAudioDevicesToDefault(bool resetInput,
         if (!audio)
             return;
         if (resetInput)
-            audio->setInputDevice(QAudioDevice{});
+            audio->setInputDevice(QAudioDevice{}, AudioDeviceSelection::Fallback);
         if (resetOutput)
-            audio->setOutputDevice(QAudioDevice{});
+            audio->setOutputDevice(QAudioDevice{}, AudioDeviceSelection::Fallback);
+        if (restartCapture && !audio->isTxStreaming())
+            audio->startTxStream(radioAddress, 4991);
+    }, Qt::QueuedConnection);
+}
+
+// Re-points the engine at the saved device that came back. A null device
+// leaves that direction alone; the saved id already names it, so nothing is
+// written.
+void MainWindow::restorePreferredAudioDevices(const QAudioDevice& inputDevice,
+                                              const QAudioDevice& outputDevice,
+                                              bool reinitializePcInput)
+{
+    if (!m_audio || (inputDevice.isNull() && outputDevice.isNull()))
+        return;
+
+    QPointer<AudioEngine> audio = m_audio;
+    const QHostAddress radioAddress = m_radioModel.radioAddress();
+    const bool restartCapture = reinitializePcInput && !radioAddress.isNull();
+    QMetaObject::invokeMethod(m_audio, [audio,
+                                        inputDevice,
+                                        outputDevice,
+                                        restartCapture,
+                                        radioAddress]() {
+        if (!audio)
+            return;
+        if (!inputDevice.isNull())
+            audio->setInputDevice(inputDevice, AudioDeviceSelection::Fallback);
+        if (!outputDevice.isNull())
+            audio->setOutputDevice(outputDevice, AudioDeviceSelection::Fallback);
         if (restartCapture && !audio->isTxStreaming())
             audio->startTxStream(radioAddress, 4991);
     }, Qt::QueuedConnection);
@@ -6149,7 +6226,7 @@ void MainWindow::buildUI()
     gpsStack->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Preferred);
     gpsStack->setCursor(Qt::PointingHandCursor);
     gpsStack->setFocusPolicy(Qt::TabFocus);
-    gpsStack->setToolTip(QStringLiteral("Open GPS & Station Location"));
+    gpsStack->setToolTip(QStringLiteral("Open AetherGPS"));
     gpsStack->setAccessibleName(QStringLiteral("GPS and station location"));
     gpsStack->setAccessibleDescription(
         QStringLiteral("Open the live GPS, map, satellite reception, and time dashboard"));
@@ -6211,7 +6288,7 @@ void MainWindow::buildUI()
         m_memLabel->setAlignment(Qt::AlignCenter);
 #if defined(Q_OS_WIN)
         m_memLabel->setToolTip("AetherSDR process working set (matches Task Manager)");
-#elif defined(Q_OS_MAC)
+#elif defined(Q_OS_MACOS)
         m_memLabel->setToolTip("AetherSDR process physical footprint (matches Activity Monitor)");
 #else
         m_memLabel->setToolTip("AetherSDR process resident set (VmRSS from /proc/self/status)");
@@ -6282,7 +6359,7 @@ void MainWindow::buildUI()
             if (GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc))) {
                 memBytes = pmc.WorkingSetSize;
             }
-#elif defined(Q_OS_MAC)
+#elif defined(Q_OS_MACOS)
             task_vm_info_data_t info{};
             mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
             if (task_info(mach_task_self(), TASK_VM_INFO,
@@ -6869,7 +6946,7 @@ void MainWindow::onConnectionStateChanged(bool connected)
         // Apply saved display settings after panadapter is created
         m_displaySettingsPushed = false;
 
-#if defined(Q_OS_MAC) || defined(HAVE_PIPEWIRE)
+#if defined(Q_OS_MACOS) || defined(HAVE_PIPEWIRE)
         // Delay DAX bridge start until RadioModel's SmartConnect sequence
         // is fully complete (streams created, UDP bound, slices discovered).
         // Auto-start DAX bridge if enabled in settings.
@@ -7104,7 +7181,7 @@ void MainWindow::onConnectionStateChanged(bool connected)
         }
         updateTMate2Status();
 #endif
-#if defined(Q_OS_MAC) || defined(HAVE_PIPEWIRE)
+#if defined(Q_OS_MACOS) || defined(HAVE_PIPEWIRE)
         stopDax();
 #endif
         audioStopRx();
@@ -8002,18 +8079,17 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
 
     // ── DAX: the DAX and DAX-IQ applets, and the autostart toggle ──────────
     //
-    // VISIBILITY ONLY. startDax()'s null-check on panStream() is a separate
-    // crash guard and stays exactly where it is — the two are not merged. This
-    // stops the operator being offered the controls; that stops a session that
-    // somehow reaches the bridge anyway from segfaulting on a null stream.
     const bool dax = !connected || caps.hasDaxStreams;
+    bool nativeDax = false;
+#if defined(HAVE_WEBSOCKETS) && (defined(Q_OS_MACOS) || defined(HAVE_PIPEWIRE))
+    nativeDax = connected && caps.receiveAudioExport.has_value();
+#endif
     if (m_appletPanel) {
-        m_appletPanel->setDaxStreamsVisible(dax);
+        m_appletPanel->setDaxStreamsVisible(dax,nativeDax);
+        m_appletPanel->daxApplet()->setNativeReceiveRouting(nativeDax);
     }
-    for (VfoWidget* vfo : findChildren<VfoWidget*>())
+    for (VfoWidget* vfo : findChildren<VfoWidget*>()) {
         vfo->setDaxVisible(dax);
-    if (m_autoDaxAction) {
-        m_autoDaxAction->setVisible(dax);
     }
 
     // Extended DSP (NRS / RNN / NRF): read via hasExtendedDspFilters(), which
@@ -9113,7 +9189,8 @@ void MainWindow::feedMiniPanFromPanFrame(const PanadapterModel* pan,
     // properties ("display pan set … average=", requestPanDisplayRates), so
     // re-slicing this pan's frames already carries them.
     auto* scope = applet->scope();
-    if (auto* sw = m_panStack ? m_panStack->spectrum(pan->panId()) : nullptr) {
+    auto* sw = m_panStack ? m_panStack->spectrum(pan->panId()) : nullptr;
+    if (sw) {
         // The vertical window is the WIDGET's refLevel/dynamicRange, not the
         // pan's min_dbm/max_dbm. FFT Floor slides refLevel client-side
         // (applyNoiseFloorAutoAdjust) and only pushes a damped, thresholded
@@ -9143,9 +9220,16 @@ void MainWindow::feedMiniPanFromPanFrame(const PanadapterModel* pan,
         + AetherSDR::MiniPan::passbandCenterOffsetHz(s->filterLow(),
                                                      s->filterHigh()) / 1.0e6;
 
+    // FFT Smooth and De-comb, shaped on the whole frame exactly as the main
+    // trace is, so the magnifier shows the same trace the main pan draws.
+    QVector<float> shaped = bins;
+    if (sw) {
+        sw->shapeFftTraceForMirror(shaped, panBw * 1.0e6);
+    }
+
     scope->updateSpectrum(
         AetherSDR::MiniPan::resliceWindow(
-            bins,
+            shaped,
             pan->centerMhz() - panBw / 2.0, panBw,
             centerMhz - span / 2.0, span,
             AetherSDR::MiniPan::kResliceOutputBins, floorDbm));
@@ -9650,7 +9734,7 @@ void MainWindow::enableNr2WithWisdom()
         // when the operator clicks back to the main UI.
         dlg->setWindowFlag(Qt::Tool, true);
         dlg->setAttribute(Qt::WA_ShowWithoutActivating, true);
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
         // Qt maps Qt::Tool to an NSPanel, which AppKit hides whenever the
         // application deactivates — fatal for a dialog that is modeless by
         // design and lives for minutes.  This attribute is what turns that
@@ -9912,7 +9996,7 @@ void MainWindow::applyUiScale(int pct)
         QString("UI scale changed to %1%. Restart AetherSDR now to apply?").arg(pct),
         QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
     if (answer == QMessageBox::Yes) {
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
         // On macOS, relaunch via 'open -n' so the .app bundle is activated through
         // Launch Services — direct binary exec bypasses the bundle, causing dock
         // duplication and incorrect activation policy in notarized builds.

@@ -251,6 +251,16 @@ QString formatWatts(double w)
 
 const MeterConfig& meterConfig(MeterKind kind)
 {
+    static const MeterConfig relativeCfg = [] {
+        MeterConfig cfg; cfg.valueToPosition = mapLinear;
+        for (int db = -120; db <= 0; db += 20) {
+            ScaleMarker marker;
+            marker.position = mapLinear(db, -120, 0);
+            marker.size = MarkerSize::Large; marker.label = QString::number(db);
+            cfg.markers.push_back(marker);
+        }
+        return cfg;
+    }();
     static const MeterConfig signalCfg = buildSignalConfig();
     static const MeterConfig micCfg = buildMicConfig();
     static const MeterConfig swrCfg = buildSwrConfig();
@@ -260,6 +270,8 @@ const MeterConfig& meterConfig(MeterKind kind)
     // valueToPosition for indicatorPosition(). A barefoot default scale is fine.
     static const MeterConfig powerCfg = buildPowerConfig(120.0);
     switch (kind) {
+    case MeterKind::RelativeSignal:
+        return relativeCfg;
     case MeterKind::MicLevel:
         return micCfg;
     case MeterKind::SWR:

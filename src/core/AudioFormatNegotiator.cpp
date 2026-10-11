@@ -295,7 +295,7 @@ TargetOs hostTargetOs()
 {
 #if defined(Q_OS_WIN)
     return TargetOs::Windows;
-#elif defined(Q_OS_MAC)
+#elif defined(Q_OS_MACOS)
     return TargetOs::MacOS;
 #else
     return TargetOs::Linux;

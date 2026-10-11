@@ -36,12 +36,13 @@ QSize constrainedDisplayPanelSize(const QSize& contentHint, int hostHeight,
     return panelSize;
 }
 
-int constrainedDisplayPanelTop(int menuBottom, int panelHeight, int hostHeight)
+int constrainedDisplayPanelTop(int menuBottom, int panelHeight, int hostHeight,
+                               int topLimit)
 {
     // Never push the bottom edge past the host: a child is clipped by its
     // parent, so any overhang is dead space the scroll area cannot reveal.
-    const int lowestTop = std::max(0, hostHeight - panelHeight);
-    return std::clamp(menuBottom - panelHeight, 0, lowestTop);
+    const int lowestTop = std::max(topLimit, hostHeight - panelHeight);
+    return std::clamp(menuBottom - panelHeight, topLimit, lowestTop);
 }
 
 SpectrumOverlayWheelGuard::SpectrumOverlayWheelGuard(QObject* parent)

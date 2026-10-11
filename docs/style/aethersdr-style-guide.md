@@ -88,6 +88,7 @@ The canon does not change control geometry.
 | You want | Use |
 |---|---|
 | A window in the canon (no title bar, 16 px rounded corners, ambient ground, round close button, drag to move, Escape or ⌘W / Ctrl+W to close) | `CanonWindow`; put content in `bodyWidget()` |
+| A surface in the canon inside the main window: an applet, a panadapter, a canvas (the same ground, hairline and round close button, square corners) | `CanonApplet`, `CanonPan` or `CanonCanvas` from `gui/CanonSurface.h`; put content in `bodyWidget()` |
 | A logo or avatar with a contrast ring and a cyan spark | `SparkRing` |
 | A recognition control (gold spark around a button) | `SparkBorder` |
 | The "AetherSDR" wordmark ("Aether" in ink, "SDR" in the gradient) | `BrandMark::paintWordmark` |
@@ -112,11 +113,46 @@ windows" lists what it keeps (the `FramelessMoveHelper` drag, Escape and
 Which windows the canon covers: short-lived, informational windows (About,
 Remote Access, and the candidates listed on #6239, once the maintainer picks
 them), and the tool windows the maintainer has moved to it (Waveforms,
-Network Diagnostics, AetherRX, AetherTX, AetherModem, AetherMap, Connect to Radio). Other tool and workspace dialogs keep
+Network Diagnostics, AetherRX, AetherTX, AetherModem, AetherMap, AetherGPS, Connect to Radio, AGC-T Calibration). Other tool and workspace dialogs keep
 `PersistentDialog` and `FramelessWindowTitleBar` as `docs/agents/gui.md`
 describes. For windows the canon covers,
 `FramelessWindowTitleBar` is deprecated: those dialogs move to
 `CanonWindow` one at a time, each in its own PR.
+
+### `CanonApplet`, `CanonPan` and `CanonCanvas`: the canon inside the main window
+
+Applets, panadapters and canvases live inside the main window's frame, so
+they are not windows. They share one base, `CanonSurface`, which paints the
+same ground as `CanonWindow` (`paintCanonGround()`: fill, blooms, fading
+grid, `color.canon.lineHi` hairline) with **square corners**, and carries
+the same round close button. What stays with `CanonWindow` is window
+behavior: a surface does not move when dragged, and Escape and ⌘W / Ctrl+W
+do not close it. Its close button only emits `closeRequested()`; the owner
+decides what closing means and hides the button with
+`setCloseButtonVisible(false)` where closing is not allowed, as the
+container and panadapter title bars do today. Pick the class by what the
+surface is, not by what it looks like today: the three are separate types
+so each can grow its own chrome. Surfaces move to them one at a time, each
+in its own PR.
+
+The panadapter (`PanadapterApplet`) is the first `CanonPan`. The GPU
+`SpectrumWidget` sits in its body unchanged (spectrum black, trace and
+waterfall stay as they are) and runs to the top of the pan. The pan's
+22 px canon header lies over the spectrum with a transparent background, so
+the spectrum renders underneath it: the grip and slice title (in
+`color.canon.ink`) at the left, and pop-out, maximize and close as 18 px
+round canon buttons at the right, the close button moved there with
+`placeCloseButtonIn()`. The empty middle belongs to the spectrum, so clicks
+there tune as anywhere else; the grip, title and buttons keep their own
+input (`PanadapterHeader`), so clicking them never tunes. `SpectrumWidget::setTopInset()` moves the
+spectrum's own top-anchored controls (overlay menu and its panels, CW and
+RIT/XIT marker labels, dBm arrows) below the header. The slice flags, the
+marks drawn with them (VFO triangle, center-lock target, slice-link label)
+and the top-right text (WNB, RF gain, propagation, MQTT values) stay at the
+very top and ride over the header; `setTopRightReserve()` ends that text
+left of the header's buttons when they show. The close button shows with more than one pan, and on a floating
+pan. These rules are the pan's own; `CanonApplet` and `CanonCanvas` keep
+the plain `CanonSurface` chrome.
 
 ### Motion
 

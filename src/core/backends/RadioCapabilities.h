@@ -63,6 +63,12 @@ struct ReceiveAudioControl {
     SliceFrequencyControl::Authority authority{SliceFrequencyControl::Authority::Unknown};
     // Both gain (0..100) and mute must act on the shared slice's RX audio.
 };
+// Typed pre-monitor sliceAudioFrameReady export; grants no TX, IQ or control verb.
+struct ReceiveAudioExport {
+    QVector<int> sampleRatesHz;
+    int maximumReceivers = 0;
+};
+
 // Broadcast FM controls are available only when their typed request is supported.
 struct BroadcastFmReceive {
     QVector<int> deemphasisUs;
@@ -327,6 +333,7 @@ struct RadioCapabilities {
     std::optional<ReceiveModeControl> receiveModeControl;
     std::optional<ReceiveFilterControl> receiveFilterControl;
     std::optional<ReceiveAudioControl> receiveAudioControl;
+    std::optional<ReceiveAudioExport> receiveAudioExport;
     std::optional<BroadcastFmReceive> broadcastFmReceive;
     std::optional<ReceivePanRangeControl> receivePanCenterControl;
     std::optional<ReceivePanRangeControl> receivePanBandwidthControl;

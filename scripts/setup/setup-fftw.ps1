@@ -49,8 +49,18 @@ if (-not $VsVars) {
     }
 }
 
+# Matching FFTW source travels with packages, including cache hits.
+$pins = Get-Content "$PSScriptRoot\rtl-dependencies.json" -Raw | ConvertFrom-Json
+$sourcePin = $pins.fftwWindowsSource
+$sourceDir = "$OutDir\share\aethersdr-rtl-sources"
+New-Item -ItemType Directory -Force $sourceDir | Out-Null
+$sourceArchive = Join-Path $sourceDir $sourcePin.archive
+if (-not (Test-Path $sourceArchive)) { Invoke-WebRequest $sourcePin.url -OutFile $sourceArchive }
+Confirm-Sha256 $sourceArchive $sourcePin.sha256
+Copy-Item "$PSScriptRoot\setup-fftw.ps1","$PSScriptRoot\rtl-dependencies.json","$PSScriptRoot\_verify_sha256.ps1" "$sourceDir\"
+
 # ── Check if already set up ──────────────────────────────────────────────
-if ((Test-Path "$OutDir\lib\fftw3.lib") -and (Test-Path "$OutDir\lib\fftw3f.lib")) {
+if ((Test-Path "$OutDir\lib\fftw3.lib") -and (Test-Path "$OutDir\lib\fftw3f.lib") -and (Test-Path "$OutDir\bin\libfftw3f-3.dll") -and (Test-Path "$OutDir\bin\libfftw3-3.dll") -and (Test-Path "$OutDir\include\fftw3.h")) {
     Write-Host "FFTW3 already set up in $OutDir (double + float)" -ForegroundColor Green
     exit 0
 }
@@ -66,8 +76,8 @@ New-Item -ItemType Directory -Force -Path "$OutDir\bin" | Out-Null
 if (-not (Test-Path $ZipFile)) {
     Write-Host "Downloading FFTW3 prebuilt DLLs..." -ForegroundColor Cyan
     Invoke-WebRequest -Uri $FftwUrl -OutFile $ZipFile
-    Confirm-Sha256 -Path $ZipFile -Expected $FftwSha256
 }
+Confirm-Sha256 -Path $ZipFile -Expected $FftwSha256
 
 # ── Extract ──────────────────────────────────────────────────────────────
 Write-Host "Extracting..." -ForegroundColor Cyan
@@ -80,8 +90,8 @@ Copy-Item "$tempDir\fftw3.h" "$OutDir\include\"
 Copy-Item "$tempDir\libfftw3-3.dll" "$OutDir\bin\"
 Copy-Item "$tempDir\libfftw3-3.def" "$OutDir\lib\"
 # Float precision (fftw3f) — needed by libspecbleach (NR4)
-Copy-Item "$tempDir\libfftw3f-3.dll" "$OutDir\bin\" -ErrorAction SilentlyContinue
-Copy-Item "$tempDir\libfftw3f-3.def" "$OutDir\lib\" -ErrorAction SilentlyContinue
+Copy-Item "$tempDir\libfftw3f-3.dll" "$OutDir\bin\"
+Copy-Item "$tempDir\libfftw3f-3.def" "$OutDir\lib\"
 
 # ── Ensure the MSVC environment, then generate .lib ──────────────────────
 Write-Host "Generating MSVC import library..." -ForegroundColor Cyan
@@ -105,12 +115,14 @@ if (-not (Get-Command lib.exe -ErrorAction SilentlyContinue)) {
 # Generate .lib from .def (double and float precision)
 Push-Location "$OutDir\lib"
 & lib.exe /machine:x64 /def:libfftw3-3.def /out:fftw3.lib 2>&1 | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "FFTW double import library failed" }
 if (Test-Path "libfftw3f-3.def") {
     & lib.exe /machine:x64 /def:libfftw3f-3.def /out:fftw3f.lib 2>&1 | Out-Null
 }
+if ($LASTEXITCODE -ne 0) { throw "FFTW float import library failed" }
 Pop-Location
 
-if (-not (Test-Path "$OutDir\lib\fftw3.lib")) {
+if (-not (Test-Path "$OutDir\lib\fftw3.lib") -or -not (Test-Path "$OutDir\lib\fftw3f.lib")) {
     Write-Error "Failed to generate fftw3.lib"
     exit 1
 }

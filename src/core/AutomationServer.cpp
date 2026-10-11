@@ -1619,6 +1619,8 @@ QJsonObject sliceSnapshot(const SliceModel* s, int linkedTo,
                                      s->externalReceiveReplacementActive()},
         {QStringLiteral("squelch"),    s->squelchOn()},
         {QStringLiteral("squelchLevel"), s->squelchLevel()},
+        {QStringLiteral("automaticSquelch"), s->automaticSquelch()},
+        {QStringLiteral("automaticSquelchMarginDb"), s->automaticSquelchMarginDb()},
         {QStringLiteral("receiveSquelch"), s->receiveSquelchOn()},
         {QStringLiteral("receiveSquelchLevel"), s->receiveSquelchLevel()},
         {QStringLiteral("flexSquelch"), s->flexSquelchOn()},
@@ -2013,7 +2015,7 @@ QJsonObject dspEngineSnapshot(const AudioEngine* a)
                                    false},
 #endif
         {"MNR",  a->mnrEnabled(),
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
                                    true},
 #else
                                    false},

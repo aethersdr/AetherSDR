@@ -21,6 +21,7 @@
 #include "AppletPanel.h"
 #include "DaxApplet.h"
 #include "DocsLinks.h"
+#include "ControlAvailabilityRegistry.h"
 #include "PanadapterApplet.h"
 #include "PanadapterStack.h"
 #include "RadioSetupDialog.h"
@@ -197,7 +198,7 @@ void populateWindowMenu(QMenu* menu, QWidget* primaryWindow,
         }
     });
 
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
     const QString maximizeLabel = QObject::tr("Zoom");
 #else
     const QString maximizeLabel = target && target->isMaximized()
@@ -973,7 +974,7 @@ void MainWindow::buildMenuBar()
 #endif
     });
 
-#if !defined(Q_OS_MAC) && !defined(HAVE_PIPEWIRE)
+#if !defined(Q_OS_MACOS) && !defined(HAVE_PIPEWIRE)
     // DAX audio bridge requires macOS CoreAudio or Linux with PipeWire.
     // Force off and omit the menu entry on platforms without a bridge (#1556).
     {
@@ -985,8 +986,16 @@ void MainWindow::buildMenuBar()
     }
 #else
     auto* autoDaxAction = settingsMenu->addAction("Autostart DAX with AetherSDR");
-    m_autoDaxAction = autoDaxAction;   // hidden by applyCapabilitiesToUi() on a
-                                       // radio that reports no DAX streams
+    m_autoDaxAction = autoDaxAction;
+    auto* daxAvailability = new ControlAvailabilityRegistry(m_radioModel, this);
+    daxAvailability->registerAction(autoDaxAction, tr("DAX audio export is unavailable for this receiver in this build."),
+        [](bool connected, const RadioCapabilities& caps) {
+            bool nativeReceive = false;
+#ifdef HAVE_WEBSOCKETS
+            nativeReceive = caps.receiveAudioExport.has_value();
+#endif
+            return !connected || caps.hasDaxStreams || nativeReceive;
+        });
     autoDaxAction->setCheckable(true);
     autoDaxAction->setChecked(
         AppSettings::instance().value("AutoStartDAX", "False").toString() == "True");
@@ -1608,7 +1617,7 @@ void MainWindow::buildMenuBar()
         dlg->raise();
         dlg->activateWindow();
     });
-    auto* gpsDashboardAction = toolsMenu->addAction("GPS Dashboard...", this, [this] {
+    auto* gpsDashboardAction = toolsMenu->addAction("AetherGPS...", this, [this] {
         showGpsLocationDialog();
     });
     toolsMenu->addAction(networkAction);

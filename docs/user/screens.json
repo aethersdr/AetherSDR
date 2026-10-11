@@ -4061,7 +4061,7 @@
         }
       ],
       "caption": "The Tools menu, connected to a FLEX-8600.",
-      "alt": "Tools menu: Add Panadapter..., AetherTX..., CW Keyer, Copy Assist, AetherModem..., Configure KiwiSDR...; Start SWR Scan..., Pre-tune ATU Bands..., Clear ATU Memories..., Calibrate AGC-T...; Callsign Lookup... (Ctrl+Shift+L), AetherMap..., FreeDV Reporter...; Net Scheduler..., Memory..., Waveforms..., Wideband Bandscope...; Radio Health..., GPS Dashboard..., Network Diagnostics... and Runtime Monitor...."
+      "alt": "Tools menu: Add Panadapter..., AetherTX..., CW Keyer, Copy Assist, AetherModem..., Configure KiwiSDR...; Start SWR Scan..., Pre-tune ATU Bands..., Clear ATU Memories..., Calibrate AGC-T...; Callsign Lookup... (Ctrl+Shift+L), AetherMap..., FreeDV Reporter...; Net Scheduler..., Memory..., Waveforms..., Wideband Bandscope...; Radio Health..., AetherGPS..., Network Diagnostics... and Runtime Monitor...."
     },
     {
       "id": "menu-help",

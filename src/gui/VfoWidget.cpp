@@ -4055,6 +4055,17 @@ void VfoWidget::paintEvent(QPaintEvent* event)
     const int scaleY = barY + barH + 2;
     const int tickH  = 3;
 
+    if (m_relativeSignal) {
+        p.setPen(ThemeManager::instance().color(this, "color.text.secondary"));
+        p.drawLine(barX, scaleY, barX + barW, scaleY);
+        QFont font = p.font(); font.setPixelSize(7); p.setFont(font);
+        for (int db = -120; db <= 0; db += 30) {
+            const int x = barX + (db + 120) * barW / 120;
+            p.drawLine(x, scaleY, x, scaleY + tickH);
+            p.drawText(x - (db == 0 ? 4 : 8), scaleY + tickH + 7, QString::number(db));
+        }
+        return;
+    }
     // Horizontal line: blue from start to S9, red from S9 to end.
     p.setPen(QColor(0x30, 0x80, 0xff));
     p.drawLine(barX, scaleY, s9X, scaleY);
@@ -4131,6 +4142,7 @@ QRect VfoWidget::meterBarRect() const
 void VfoWidget::applyMeterView(bool smartMtr)
 {
     m_smartMtr = smartMtr;
+    updateSignalMeterTarget();
     if (m_meterStack) {
         m_meterStack->setCurrentIndex(smartMtr ? 1 : 0);
     }
@@ -4280,11 +4292,33 @@ void VfoWidget::syncSmartMtrSettingsControls()
 
 void VfoWidget::setSignalLevel(float dbm)
 {
+    if (m_relativeSignal) { m_dbmLabel->setAccessibleDescription({}); }
+    m_relativeSignal = false;
     m_receiveMeterReadingActive = false;
     m_signalDbm = dbm;
     m_signalHasDbm = true; // FLEX always delivers a calibrated dBm reading
     m_dbmLabel->setText(QString("%1 dBm").arg(static_cast<int>(dbm)));
     m_dbmLabel->setAccessibleName("Signal level dBm");
+    updateSignalMeterTarget();
+    pushSmartMtrInput();
+}
+
+void VfoWidget::setRelativeSignalLevel(std::optional<float> dbfs, const QString& unavailableReason)
+{
+    const bool valid = unavailableReason.isEmpty() && dbfs && std::isfinite(*dbfs);
+    if (m_relativeSignal && !m_relativeSignalValid && !valid
+        && m_relativeUnavailableReason == unavailableReason) { return; }
+    m_relativeUnavailableReason = unavailableReason;
+    m_relativeSignal = true;
+    m_relativeSignalValid = valid;
+    m_receiveMeterReadingActive = false;
+    m_signalHasDbm = false;
+    m_signalDbm = m_relativeSignalValid ? *dbfs : -120.0f;
+    m_dbmLabel->setText(m_relativeSignalValid
+        ? tr("%1 dBFS").arg(m_signalDbm, 0, 'f', 0) : (unavailableReason.isEmpty() ? tr("— dBFS") : tr("Meters off")));
+    m_dbmLabel->setAccessibleName(tr("Relative RF level dBFS"));
+    m_dbmLabel->setAccessibleDescription(unavailableReason.isEmpty()
+        ? tr("Peak FFT bin in the receive passband, uncalibrated; not dBm or audio level") : unavailableReason);
     updateSignalMeterTarget();
     pushSmartMtrInput();
 }
@@ -4356,7 +4390,7 @@ void VfoWidget::pushSmartMtrInput()
         }
         in.hasValue = true;
     } else {
-        in.kind = MeterKind::Signal;
+        in.kind = m_relativeSignal ? MeterKind::RelativeSignal : MeterKind::Signal;
         in.value = m_signalDbm;
         in.min = -127.0; // dBm: S0
         in.max = -13.0;  // dBm: S9+60
@@ -4365,8 +4399,11 @@ void VfoWidget::pushSmartMtrInput()
         // The widget parks/fades the indicator and suppresses the value labels
         // when hasValue is false, matching the "Meter ---" dBm label.
         in.hasValue = m_signalHasDbm;
+        if (m_relativeSignal) {
+            in.min = -120; in.max = 0; in.hasValue = m_relativeSignalValid;
+        }
     }
-    m_smartMtrWidget->setMeterInput(in);
+    m_smartMtrWidget->setMeterInput(in, m_relativeSignal ? m_relativeUnavailableReason : QString());
 }
 
 void VfoWidget::pushSmartMtrOptions()
@@ -4407,6 +4444,19 @@ void VfoWidget::pushSmartMtrOptions()
 
 void VfoWidget::onSmartMtrRepainted()
 {
+    // The animated bar is painted inside the flag, independently of the
+    // spectrum's optional value-label overlay. An empty overlay needs no
+    // rebuild on each bar frame. Do erase its last labels immediately when a
+    // reading disappears, even inside the normal animation throttle window.
+    if (m_smartMtrWidget->extremeLabels().isEmpty()) {
+        if (m_smartMtrLabelsVisible) {
+            m_smartMtrLabelsVisible = false;
+            m_lastLabelDirtyMs = -1;
+            emit smartMtrLabelsChanged();
+        }
+        return;
+    }
+
     // The meter repaints up to ~120 Hz while markers move; the spectrum's
     // static-overlay redraw (which draws the value labels) is comparatively
     // costly, so throttle the refresh requests to ~20 Hz.
@@ -4414,6 +4464,7 @@ void VfoWidget::onSmartMtrRepainted()
     if (m_lastLabelDirtyMs >= 0 && now - m_lastLabelDirtyMs < 50)
         return;
     m_lastLabelDirtyMs = now;
+    m_smartMtrLabelsVisible = true;
     emit smartMtrLabelsChanged();
 }
 
@@ -4584,6 +4635,8 @@ void VfoWidget::setTransmitting(bool tx)
 void VfoWidget::setReceiveMeterReading(
     const KiwiSdrProtocol::MeterReading& reading)
 {
+    if (m_relativeSignal) { m_dbmLabel->setAccessibleDescription({}); }
+    m_relativeSignal = false;
     m_receiveMeterReading = reading;
     m_receiveMeterReadingActive = true;
     const bool hasDisplayDbm =
@@ -4629,10 +4682,22 @@ float VfoWidget::signalDbmToMeterFraction(float dbm)
 
 void VfoWidget::updateSignalMeterTarget()
 {
-    if (usesUnavailableSignalMeter()) {
+    if (m_relativeSignal) {
+        m_targetSignalMeterFraction = m_relativeSignalValid
+            ? std::clamp((m_signalDbm + 120.0f) / 120.0f, 0.0f, 1.0f) : 0.0f;
+    } else if (usesUnavailableSignalMeter()) {
         m_targetSignalMeterFraction = 0.0f;
     } else {
         m_targetSignalMeterFraction = signalDbmToMeterFraction(m_signalDbm);
+    }
+
+    // Only the selected meter needs animation. Keep the standard bar seeded
+    // for switching back, without repainting the whole flag behind SmartMTR.
+    if (m_smartMtr || (m_relativeSignal && !m_relativeSignalValid)) {
+        m_signalMeterAnimation.stop();
+        m_signalMeterFraction = m_targetSignalMeterFraction;
+        if (!m_smartMtr) { update(); }
+        return;
     }
 
     if (qAbs(m_targetSignalMeterFraction - m_signalMeterFraction) <= kSignalMeterSnapEpsilon) {

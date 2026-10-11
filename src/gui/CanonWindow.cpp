@@ -69,17 +69,8 @@ CanonWindow::CanonWindow(const QString& title, QWidget* parent, Kind kind)
     outer->addWidget(m_body);
 
     auto& tm = ThemeManager::instance();
-    m_close = new QToolButton(this);
-    m_close->setText(QStringLiteral("✕"));
-    m_close->setAccessibleName(QStringLiteral("Close"));
+    m_close = makeCanonCloseButton(this);
     m_close->setToolTip(QStringLiteral("Close (Esc)"));
-    m_close->setFixedSize(kCloseSize, kCloseSize);
-    m_close->setCursor(Qt::PointingHandCursor);
-    tm.applyStyleSheet(m_close,
-        "QToolButton { background: transparent; color: {{color.canon.muted}}; border: 1px solid transparent; "
-        "border-radius: 13px; font-size: 12px; }"
-        "QToolButton:hover { background: {{color.canon.nested}}; color: {{color.canon.ink}}; border-color: {{color.canon.lineHi}}; }"
-        "QToolButton:focus { border: 2px solid {{color.canon.cyan}}; }");
     connect(m_close, &QToolButton::clicked, this, &QDialog::close);
 
     // QDialog handles Escape itself; a caption-less window gets no Close
@@ -98,8 +89,7 @@ void CanonWindow::resizeEvent(QResizeEvent* event)
 {
     QDialog::resizeEvent(event);
     m_ground = QPixmap();
-    m_close->move(width() - kCloseSize - kCloseMargin, kCloseMargin);
-    m_close->raise();
+    placeCanonCloseButton(m_close);
     // Native-window creation on first show() delivers move and resize events
     // before showEvent(); saving those would overwrite the last session's
     // geometry with the default one, so nothing is saved until placed.
@@ -274,29 +264,43 @@ void CanonWindow::paintEvent(QPaintEvent*)
         m_ground = QPixmap(size() * dpr);
         m_ground.setDevicePixelRatio(dpr);
         m_ground.fill(Qt::transparent);
-        paintGround(m_ground);
+        QPainter p(&m_ground);
+        paintCanonGround(p, this, size(), kRadius);
     }
     QPainter(this).drawPixmap(0, 0, m_ground);
 }
 
-void CanonWindow::paintGround(QPaintDevice& device) const
+void paintCanonGround(QPainter& p, const QWidget* scope, const QSize& size, qreal radius)
 {
     auto& tm = ThemeManager::instance();
-    QPainter p(&device);
+    p.save();
     p.setRenderHint(QPainter::Antialiasing, true);
 
-    const QRectF r = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
+    // The hairline is stroked on the half-pixel line so it lands on whole
+    // pixels. A rounded ground is clipped to that line too; a square one
+    // fills to the edge, so an embedded surface has no half-covered rim for
+    // its parent to show through.
+    const QRectF bounds(QPointF(0, 0), QSizeF(size));
+    const QRectF line = bounds.adjusted(0.5, 0.5, -0.5, -0.5);
     QPainterPath shape;
-    shape.addRoundedRect(r, kRadius, kRadius);
+    QPainterPath outline;
+    if (radius > 0) {
+        shape.addRoundedRect(line, radius, radius);
+        outline = shape;
+    } else {
+        shape.addRect(bounds);
+        outline.addRect(line);
+    }
+    const QRectF r = shape.boundingRect();
     p.setClipPath(shape);
 
-    p.fillRect(r, tm.color(this, QStringLiteral("color.canon.ground")));
+    p.fillRect(r, tm.color(scope, QStringLiteral("color.canon.ground")));
 
-    auto bloom = [&](const QPointF& centre, qreal radius, const QString& token) {
-        QColor c = tm.color(this, token);
+    auto bloom = [&](const QPointF& centre, qreal reach, const QString& token) {
+        QColor c = tm.color(scope, token);
         QColor clear = c;
         clear.setAlpha(0);
-        QRadialGradient g(centre, radius);
+        QRadialGradient g(centre, reach);
         g.setColorAt(0.0, c);
         g.setColorAt(0.6, clear);
         p.fillRect(r, g);
@@ -307,7 +311,7 @@ void CanonWindow::paintGround(QPaintDevice& device) const
           QStringLiteral("color.canon.bloom.teal"));
 
     // Grid: full strength at the top, gone three quarters of the way down.
-    const QColor grid = tm.color(this, QStringLiteral("color.canon.grid"));
+    const QColor grid = tm.color(scope, QStringLiteral("color.canon.grid"));
     const qreal fadeTo = r.height() * 0.75;
     for (int y = kGridStep; y < fadeTo; y += kGridStep) {
         QColor c = grid;
@@ -326,9 +330,33 @@ void CanonWindow::paintGround(QPaintDevice& device) const
     }
 
     p.setClipping(false);
-    p.setPen(QPen(tm.color(this, QStringLiteral("color.canon.lineHi")), 1));
+    p.setPen(QPen(tm.color(scope, QStringLiteral("color.canon.lineHi")), 1));
     p.setBrush(Qt::NoBrush);
-    p.drawPath(shape);
+    p.drawPath(outline);
+    p.restore();
+}
+
+QToolButton* makeCanonCloseButton(QWidget* parent)
+{
+    auto* close = new QToolButton(parent);
+    close->setText(QStringLiteral("✕"));
+    close->setAccessibleName(QStringLiteral("Close"));
+    close->setToolTip(QStringLiteral("Close"));
+    close->setFixedSize(kCloseSize, kCloseSize);
+    close->setCursor(Qt::PointingHandCursor);
+    ThemeManager::instance().applyStyleSheet(close,
+        "QToolButton { background: transparent; color: {{color.canon.muted}}; border: 1px solid transparent; "
+        "border-radius: 13px; font-size: 12px; }"
+        "QToolButton:hover { background: {{color.canon.nested}}; color: {{color.canon.ink}}; border-color: {{color.canon.lineHi}}; }"
+        "QToolButton:focus { border: 2px solid {{color.canon.cyan}}; }");
+    return close;
+}
+
+void placeCanonCloseButton(QToolButton* close)
+{
+    const QWidget* host = close->parentWidget();
+    close->move(host->width() - kCloseSize - kCloseMargin, kCloseMargin);
+    close->raise();
 }
 
 SparkWidget::SparkWidget(int lapMs, QWidget* parent)

@@ -41,7 +41,7 @@ slice alone: the central hold requests the radio stream, and speaker mix, gain
 and mute do not reach it. It does not require the operating-system DAX audio
 bridge or PC-audio monitoring.
 
-With no channel assigned, CW (both GGMorse and DeepFist) and RTTY fall back to
+With no channel assigned, CW (both GGMorse and DeepFist), RTTY and AX.25 fall back to
 the radio's shared receive stream — the pre-A5 decoder input. That stream mixes
 every audible slice and follows speaker gain and mute, so other slices can
 interfere and muting stops decoding; the panel discloses it as `RX: shared
@@ -84,6 +84,41 @@ only the selected backend runs. Closing the panel releases the CW DAX hold.
 TX sidetone remains a separate fixed24 GGMorse instance. Both decoders' legacy
 byte inputs retain the existing trim-oldest backlog behavior on overflow; typed
 RX overflow retires detector state instead.
+
+## AX.25 receive worker
+
+`Ax25ReceiveModel` binds the same selected-source policy with its own AX.25 DAX
+hold and owns the existing modem worker previously hosted by the dialog. Native
+RTL FM at 48 kHz is converted continuously to mono24 before the unchanged modem
+rate guard. HL2/Icom mono24 conversion and Flex DAX/shared fallback retain their
+existing producer contracts. No sound device or PC-audio monitoring is required
+for a native or assigned-DAX route. Receive squelch remains upstream of the tap.
+A producer-declared gap or discontinuity still resets decoding, including one
+associated with a capture revision during monitor-control changes; this does not
+promise uninterrupted packet recovery across such a boundary.
+
+The worker inbox is bounded to 65,536 mono samples and 256 blocks; the owner
+outbox is bounded to 256 output blocks, with one pending drain event for each queue.
+Overflow retires the generation, drops the backlog and resets detector state.
+Input/configuration/reset operations and output publication share generation
+retirement. Results retain the original source lease and generation through
+worker callbacks; they cannot acquire a newer context after decoding.
+
+`Ax25ReceiveContext::current()` is checked before every result and each dialog
+fanout operation, including display, MQTT, KISS and existing packet consumers.
+A synchronous listener that disables, rebinds or destroys the model makes the
+remaining consumers reject that result. Identical configuration and diagnostics
+logging changes preserve receive continuity. Changed configuration, reset,
+selection, disconnect and revoked sources retire queued PCM and decoded results.
+The receive model owns no transmit API or external service; existing packet/TX
+policy is unchanged. Closing it releases only its own DAX hold and joins its worker.
+
+The focused model test covers exact independent AX.25/FCS recovery from 24/48 kHz
+mono/stereo, awkward chunk boundaries, route isolation, DAX coexistence and
+retirement after worker decode but before owner delivery. The RTL test injects
+independently generated CU8 FM into real device callbacks and traverses the
+production RTL worker, native 48 kHz selected-slice seam, converter and modem.
+Both are offline receive proofs, not hardware, antenna or on-air qualification.
 
 ## Clock time mapping
 
