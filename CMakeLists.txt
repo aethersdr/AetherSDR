@@ -1354,6 +1354,8 @@ set(GUI_SOURCES
     src/gui/HealthApplet.cpp
     src/gui/PersistentDialog.cpp
     src/gui/CanonWindow.cpp
+    src/gui/CanonSurface.cpp
+    src/gui/PanadapterHeader.cpp
     src/gui/FramelessMessageBox.cpp
     src/gui/ProfileManagerDialog.cpp
     src/gui/SettingsBrowserDialog.cpp

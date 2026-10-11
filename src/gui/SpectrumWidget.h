@@ -662,6 +662,24 @@ public:
     void setBackgroundOpacity(int pct) { m_bgOpacity = qBound(0, pct, 100); markOverlayDirty(); }
     int backgroundOpacity() const { return m_bgOpacity; }
     void setBackgroundFillColor(const QColor& c);
+
+    // Space at the top of the spectrum covered by the host's header (a
+    // CanonPan's transparent canon header). The background, grid, trace and
+    // band plan still render under it; the controls anchored to the top edge
+    // (overlay menu, dBm arrows, CW / RIT / XIT labels) start below it. The
+    // slice flags and the marks drawn with them (VFO triangle, center-lock
+    // target, slice-link label) and the top-right text (WNB, RF gain,
+    // propagation, MQTT values) stay at the very top, riding over the header.
+    void setTopInset(int px);
+    int topInset() const { return m_topInset; }
+    // Under a host's header the slice flags (and the marks drawn with them)
+    // sit 2 px below the top edge rather than flush against it.
+    int flagTopPad() const { return m_topInset > 0 ? 2 : 0; }
+
+    // Width at the top right taken by the host's controls (the pan header's
+    // buttons): the top-right text ends left of it when it is wider than the
+    // dBm strip.
+    void setTopRightReserve(int px);
     QColor backgroundFillColor() const { return m_bgFillColor; }
     bool showBandPlan() const { return m_bandPlanFontSize > 0; }
     int  bandPlanFontSize() const { return m_bandPlanFontSize; }
@@ -2060,6 +2078,9 @@ private:
 
     // MQTT device status overlay
     QMap<QString, QString> m_mqttDisplayValues;
+
+    int     m_topInset{0};   // setTopInset()
+    int     m_topRightReserve{0};   // setTopRightReserve()
 
     // Background image
     QImage  m_bgImage;

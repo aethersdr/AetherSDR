@@ -3,6 +3,7 @@
 #include <QDialog>
 #include <QPixmap>
 
+class QPainter;
 class QTimer;
 class QToolButton;
 
@@ -80,7 +81,6 @@ protected:
     void keyPressEvent(QKeyEvent* event) override;
 
 private:
-    void paintGround(QPaintDevice& device) const;
     void saveGeometryToSettings();
     enum class Restored { Nothing, SizeOnly, SizeAndPosition };
     Restored restoreGeometryFromSettings();
@@ -95,6 +95,20 @@ private:
     bool         m_restoringGeometry{false};
     QPixmap      m_ground;   // the painted ground, rebuilt on resize, DPR or theme change
 };
+
+// The guide's ambient ground, shared by CanonWindow and the embedded canon
+// surfaces (CanonSurface): color.canon.ground with a blue and a teal bloom, a
+// 64 px grid that fades out three quarters of the way down, and a hairline
+// color.canon.lineHi border, all clipped to a `radius` rounded rectangle (0
+// for square corners). Colors resolve through ThemeManager in `scope`'s theme
+// container.
+void paintCanonGround(QPainter& p, const QWidget* scope, const QSize& size, qreal radius);
+
+// The round close button in a canon surface's top-right corner, styled from
+// color.canon.* tokens. The caller connects clicked() and keeps it placed with
+// placeCanonCloseButton() from its resizeEvent().
+QToolButton* makeCanonCloseButton(QWidget* parent);
+void placeCanonCloseButton(QToolButton* close);
 
 // The canon header a CanonWindow carries in place of a title bar: the title in
 // canon ink over a hairline, with a right margin that keeps it clear of the

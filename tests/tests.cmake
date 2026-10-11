@@ -2178,6 +2178,45 @@ add_test(NAME canon_window_test COMMAND canon_window_test)
 set_tests_properties(canon_window_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# CanonApplet, CanonPan and CanonCanvas (RFC #6226): the canon ground with
+# square corners inside the main window; the close button only requests.
+add_executable(canon_surface_test
+    tests/canon_surface_test.cpp
+    src/gui/CanonSurface.cpp
+    src/gui/CanonWindow.cpp
+    src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
+    $<TARGET_OBJECTS:aether_test_settings>
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
+    ${THEME_TEST_RESOURCES}
+)
+target_include_directories(canon_surface_test PRIVATE src)
+target_link_libraries(canon_surface_test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
+set_target_properties(canon_surface_test PROPERTIES AUTOMOC ON)
+add_test(NAME canon_surface_test COMMAND canon_surface_test)
+set_tests_properties(canon_surface_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# The panadapter's canon header (#6386): input on the title, grip and button
+# strip stays in the header, the empty middle reaches the spectrum, and the
+# dBm arrow row stays inside a short FFT area.
+add_executable(panadapter_header_test
+    tests/panadapter_header_test.cpp
+    src/gui/PanadapterHeader.cpp
+    src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
+    $<TARGET_OBJECTS:aether_test_settings>
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
+    ${THEME_TEST_RESOURCES}
+)
+target_include_directories(panadapter_header_test PRIVATE src)
+target_link_libraries(panadapter_header_test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
+add_test(NAME panadapter_header_test COMMAND panadapter_header_test)
+set_tests_properties(panadapter_header_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # Compiled-in theme seed (#3184).  DELIBERATELY has no ${THEME_TEST_RESOURCES}:
 # with the theme resource linked, the ThemeManager constructor loads Default
 # Dark straight after seeding and the JSON hides whatever the seed actually
@@ -8448,6 +8487,8 @@ set(AETHER_SETTINGS_CONSUMERS
     aether_rx_profiles_test
     theme_manager_test
     canon_window_test
+    canon_surface_test
+    panadapter_header_test
     theme_seed_test
     panadapter_message_overlay_test
     app_settings_safety_test

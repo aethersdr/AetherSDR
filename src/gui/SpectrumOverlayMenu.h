@@ -71,6 +71,9 @@ public:
     // image fallback ignores rowSpanFactor entirely, so the control would move,
     // label, and persist while nothing on screen changed.
     void setDssRowSpanSupported(bool supported);
+    // The spectrum's top inset (a header lying over it): sub-panels opened
+    // beside the menu never rise above it.
+    void setTopLimit(int px) { m_topLimit = px; }
 
     void syncPanProcessingSettings(int avg, int fps, bool weightedAvg);
     void syncWfLineDuration(int rate);
@@ -320,6 +323,7 @@ signals:
 private:
     QString m_panId;
     int m_panSlotIndex{-1};
+    int m_topLimit{0};   // setTopLimit()
     QPointer<PanadapterModel> m_panadapter;
     QMetaObject::Connection m_panRxAntennaConnection;
     QMetaObject::Connection m_panLoopConnection;
