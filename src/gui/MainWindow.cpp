@@ -257,6 +257,7 @@
 #include <QToolTip>
 #include <QMediaDevices>
 #include "core/AppSettings.h"
+#include "core/AudioDevicePreferencePolicy.h"
 #include "core/NnrSettings.h"
 #include "core/AutomationServer.h"
 #include "core/SpotCommandPolicy.h"
@@ -553,6 +554,17 @@ QList<QByteArray> audioDeviceIds(const QList<QAudioDevice>& devices)
     return ids;
 }
 
+// Every enumerable id, the churn audioDeviceIds() skips included: what is
+// PRESENT, as opposed to what counts as a new arrival.
+QList<QByteArray> enumeratedAudioDeviceIds(const QList<QAudioDevice>& devices)
+{
+    QList<QByteArray> ids;
+    ids.reserve(devices.size());
+    for (const QAudioDevice& device : devices)
+        ids.append(device.id());
+    return ids;
+}
+
 bool containsAudioDeviceId(const QList<QByteArray>& ids, const QByteArray& id)
 {
     return std::any_of(ids.cbegin(), ids.cend(),
@@ -585,16 +597,17 @@ QList<QByteArray> removedAudioDeviceIds(const QList<QByteArray>& knownIds,
     return removed;
 }
 
-bool audioDevicePresent(const QList<QAudioDevice>& devices,
-                        const QAudioDevice& target)
+// Null when `id` is empty or not in `devices`.
+QAudioDevice audioDeviceById(const QList<QAudioDevice>& devices,
+                             const QByteArray& id)
 {
-    if (target.isNull())
-        return true;
-
-    return std::any_of(devices.cbegin(), devices.cend(),
-                       [&target](const QAudioDevice& device) {
-                           return device.id() == target.id();
-                       });
+    if (id.isEmpty())
+        return {};
+    for (const QAudioDevice& device : devices) {
+        if (device.id() == id)
+            return device;
+    }
+    return {};
 }
 
 bool sameAudioDeviceSelection(const QAudioDevice& lhs, const QAudioDevice& rhs)
@@ -5334,33 +5347,56 @@ void MainWindow::handleAudioDeviceListChanged()
 
     const QAudioDevice currentInput = m_audio->inputDevice();
     const QAudioDevice currentOutput = m_audio->outputDevice();
-    const bool resetInputToDefault =
-        !currentInput.isNull() && !audioDevicePresent(inputDevices, currentInput);
-    const bool resetOutputToDefault =
-        !currentOutput.isNull() && !audioDevicePresent(outputDevices, currentOutput);
-    const bool defaultInputNeedsRestart =
-        currentInput.isNull() && (!removedInputIds.isEmpty() || defaultInputChanged);
-    const bool defaultOutputNeedsRestart =
-        currentOutput.isNull() && (!removedOutputIds.isEmpty() || defaultOutputChanged);
-    const bool resetInput = resetInputToDefault || defaultInputNeedsRestart;
-    const bool resetOutput = resetOutputToDefault || defaultOutputNeedsRestart;
-    const bool reinitializePcInput = resetInput
-        && m_radioModel.isConnected()
+    // The saved ids are the operator's preference; the engine's devices are
+    // what this run plays on. A missing device re-points the engine only.
+    const AppSettings& savedChoice = AppSettings::instance();
+    const QByteArray preferredInputId =
+        savedChoice.value("AudioInputDeviceId", "").toByteArray();
+    const QByteArray preferredOutputId =
+        savedChoice.value("AudioOutputDeviceId", "").toByteArray();
+    // Presence is asked of every enumerable id; only arrivals skip the churn.
+    const QList<QByteArray> presentInputIds = enumeratedAudioDeviceIds(inputDevices);
+    const QList<QByteArray> presentOutputIds = enumeratedAudioDeviceIds(outputDevices);
+    const AudioDeviceDecision inputDecision = decideAudioDeviceChange({
+        .presentIds = presentInputIds,
+        .addedIds = addedInputIds,
+        .anyRemoved = !removedInputIds.isEmpty(),
+        .defaultChanged = defaultInputChanged,
+        .liveId = currentInput.id(),
+        .preferredId = preferredInputId});
+    const AudioDeviceDecision outputDecision = decideAudioDeviceChange({
+        .presentIds = presentOutputIds,
+        .addedIds = addedOutputIds,
+        .anyRemoved = !removedOutputIds.isEmpty(),
+        .defaultChanged = defaultOutputChanged,
+        .liveId = currentOutput.id(),
+        .preferredId = preferredOutputId});
+    const bool resetInput =
+        inputDecision.action == AudioDeviceAction::FollowDefault;
+    const bool resetOutput =
+        outputDecision.action == AudioDeviceAction::FollowDefault;
+    const QAudioDevice restoreInput =
+        inputDecision.action == AudioDeviceAction::RestorePreferred
+            ? audioDeviceById(inputDevices, preferredInputId)
+            : QAudioDevice{};
+    const QAudioDevice restoreOutput =
+        outputDecision.action == AudioDeviceAction::RestorePreferred
+            ? audioDeviceById(outputDevices, preferredOutputId)
+            : QAudioDevice{};
+    const bool pcMicInUse = m_radioModel.isConnected()
         && m_radioModel.transmitModel().micSelection() == "PC";
+    const auto applyFallback = [&]() {
+        resetMissingAudioDevicesToDefault(resetInput,
+                                          resetOutput,
+                                          resetInput && pcMicInUse);
+        restorePreferredAudioDevices(restoreInput,
+                                     restoreOutput,
+                                     !restoreInput.isNull() && pcMicInUse);
+    };
 
     const bool deviceAdded = !addedInputIds.isEmpty() || !addedOutputIds.isEmpty();
-    // Only prompt when the user's existing selection is no longer usable;
-    // a new arrival while both selections still work is platform-audio
-    // churn, not an actionable change (issue #2864).
-    const bool currentSelectionStillValid =
-        audioDevicePresent(inputDevices, currentInput)
-        && audioDevicePresent(outputDevices, currentOutput);
-    const bool userChoiceRequired = deviceAdded && !currentSelectionStillValid;
-    if (!userChoiceRequired) {
-        if (resetInput || resetOutput)
-            resetMissingAudioDevicesToDefault(resetInput,
-                                              resetOutput,
-                                              reinitializePcInput);
+    if (!audioDeviceChoiceRequired(deviceAdded, inputDecision, outputDecision)) {
+        applyFallback();
         return;
     }
 
@@ -5369,18 +5405,15 @@ void MainWindow::handleAudioDeviceListChanged()
             .value(kSuppressAudioDeviceNotificationsKey, "False")
             .toString() == "True";
     if (suppressAudioDeviceNotifications) {
-        if (resetInput || resetOutput)
-            resetMissingAudioDevicesToDefault(resetInput,
-                                              resetOutput,
-                                              reinitializePcInput);
+        applyFallback();
         return;
     }
 
     m_audioDeviceDialogOpen = true;
     AudioDeviceChangeDialog dialog(inputDevices,
                                    outputDevices,
-                                   currentInput,
-                                   currentOutput,
+                                   restoreInput.isNull() ? currentInput : restoreInput,
+                                   restoreOutput.isNull() ? currentOutput : restoreOutput,
                                    addedInputIds,
                                    addedOutputIds,
                                    this);
@@ -5401,18 +5434,24 @@ void MainWindow::handleAudioDeviceListChanged()
         const bool reinitializePcInput = inputChanged
             && m_radioModel.isConnected()
             && m_radioModel.transmitModel().micSelection() == "PC";
-        applyAudioDeviceSelection(selectedInput,
-                                  selectedOutput,
-                                  reinitializePcInput);
-    } else if (resetInput || resetOutput) {
-        resetMissingAudioDevicesToDefault(resetInput,
-                                          resetOutput,
-                                          reinitializePcInput);
+        // "System default" beside an absent saved device keeps the saved id.
+        applyAudioDeviceSelection(
+            selectedInput,
+            selectedOutput,
+            acceptedAudioDeviceSelection(selectedInput.id(), preferredInputId,
+                                         presentInputIds),
+            acceptedAudioDeviceSelection(selectedOutput.id(), preferredOutputId,
+                                         presentOutputIds),
+            reinitializePcInput);
+    } else {
+        applyFallback();
     }
 }
 
 void MainWindow::applyAudioDeviceSelection(const QAudioDevice& inputDevice,
                                            const QAudioDevice& outputDevice,
+                                           AudioDeviceSelection inputSelection,
+                                           AudioDeviceSelection outputSelection,
                                            bool reinitializePcInput)
 {
     if (!m_audio)
@@ -5424,12 +5463,14 @@ void MainWindow::applyAudioDeviceSelection(const QAudioDevice& inputDevice,
     QMetaObject::invokeMethod(m_audio, [audio,
                                         inputDevice,
                                         outputDevice,
+                                        inputSelection,
+                                        outputSelection,
                                         restartCapture,
                                         radioAddress]() {
         if (!audio)
             return;
-        audio->setInputDevice(inputDevice);
-        audio->setOutputDevice(outputDevice);
+        audio->setInputDevice(inputDevice, inputSelection);
+        audio->setOutputDevice(outputDevice, outputSelection);
         if (restartCapture && !audio->isTxStreaming())
             audio->startTxStream(radioAddress, 4991);
     }, Qt::QueuedConnection);
@@ -5453,9 +5494,38 @@ void MainWindow::resetMissingAudioDevicesToDefault(bool resetInput,
         if (!audio)
             return;
         if (resetInput)
-            audio->setInputDevice(QAudioDevice{});
+            audio->setInputDevice(QAudioDevice{}, AudioDeviceSelection::Fallback);
         if (resetOutput)
-            audio->setOutputDevice(QAudioDevice{});
+            audio->setOutputDevice(QAudioDevice{}, AudioDeviceSelection::Fallback);
+        if (restartCapture && !audio->isTxStreaming())
+            audio->startTxStream(radioAddress, 4991);
+    }, Qt::QueuedConnection);
+}
+
+// Re-points the engine at the saved device that came back. A null device
+// leaves that direction alone; the saved id already names it, so nothing is
+// written.
+void MainWindow::restorePreferredAudioDevices(const QAudioDevice& inputDevice,
+                                              const QAudioDevice& outputDevice,
+                                              bool reinitializePcInput)
+{
+    if (!m_audio || (inputDevice.isNull() && outputDevice.isNull()))
+        return;
+
+    QPointer<AudioEngine> audio = m_audio;
+    const QHostAddress radioAddress = m_radioModel.radioAddress();
+    const bool restartCapture = reinitializePcInput && !radioAddress.isNull();
+    QMetaObject::invokeMethod(m_audio, [audio,
+                                        inputDevice,
+                                        outputDevice,
+                                        restartCapture,
+                                        radioAddress]() {
+        if (!audio)
+            return;
+        if (!inputDevice.isNull())
+            audio->setInputDevice(inputDevice, AudioDeviceSelection::Fallback);
+        if (!outputDevice.isNull())
+            audio->setOutputDevice(outputDevice, AudioDeviceSelection::Fallback);
         if (restartCapture && !audio->isTxStreaming())
             audio->startTxStream(radioAddress, 4991);
     }, Qt::QueuedConnection);

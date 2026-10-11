@@ -4334,7 +4334,7 @@ QWidget* RadioSetupDialog::buildHl2HardwareTab()
         static quint64 nextHwId = kHwRequestIdBase;
         const quint64 requestId = nextHwId++;
         auto* guard = new QObject(this);
-        auto fill = [=](const QVariantMap& m) {
+        auto fill = [=, this](const QVariantMap& m) {
             const QSignalBlocker b1(codecCombo);
             const QSignalBlocker b2(ditherChk);
             const QSignalBlocker b3(randomChk);

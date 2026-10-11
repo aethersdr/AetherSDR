@@ -41,6 +41,7 @@
 #include <QImage>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QKeySequence>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
@@ -979,7 +980,7 @@ int main(int argc, char** argv)
         QMenu* helpMenu = menuBar->addMenu(QStringLiteral("&Help"));   // added after the hand-off
         menuHost.resize(1400, 200);
         menuHost.show();
-        QApplication::setActiveWindow(&menuHost);
+        menuHost.activateWindow();
         app.processEvents();
 
         auto* menuBtn = menuBarHost->findChild<QPushButton*>(QStringLiteral("titleBarAppMenuButton"));
@@ -1050,9 +1051,17 @@ int main(int argc, char** argv)
         QMenu* lateSubmenu = fileMenu->addMenu(QStringLiteral("Recent"));
         check(!rounded(lateSubmenu), "a submenu added later is not rounded until its parent opens");
 
-        QTest::keyClick(&menuHost, Qt::Key_F, Qt::AltModifier);
-        check(QApplication::activePopupWidget() == fileMenu,
-              "Alt+F still opens the File menu with the menu bar hidden");
+        // Qt has no menu mnemonics on macOS, so there the menu is opened directly.
+        if (!QKeySequence::mnemonic(fileMenu->menuAction()->text()).isEmpty()) {
+            QTest::keyClick(&menuHost, Qt::Key_F, Qt::AltModifier);
+            check(QApplication::activePopupWidget() == fileMenu,
+                  "Alt+F still opens the File menu with the menu bar hidden");
+        } else {
+            std::fprintf(stderr, "  mnemonics are off on this platform: Alt+F check skipped\n");
+            fileMenu->popup(menuBtn ? menuBtn->mapToGlobal(QPoint(0, menuBtn->height())) : QPoint());
+            check(QApplication::activePopupWidget() == fileMenu,
+                  "the File menu opens where mnemonics are unavailable");
+        }
         check(rounded(lateSubmenu), "opening a menu rounds the submenus added to it since");
         fileMenu->close();
         app.processEvents();

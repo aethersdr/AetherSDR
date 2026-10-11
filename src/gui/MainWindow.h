@@ -451,10 +451,15 @@ private:
     void handleAudioDeviceListChanged();
     void applyAudioDeviceSelection(const QAudioDevice& inputDevice,
                                    const QAudioDevice& outputDevice,
+                                   AudioDeviceSelection inputSelection,
+                                   AudioDeviceSelection outputSelection,
                                    bool reinitializePcInput);
     void resetMissingAudioDevicesToDefault(bool resetInput,
                                            bool resetOutput,
                                            bool reinitializePcInput);
+    void restorePreferredAudioDevices(const QAudioDevice& inputDevice,
+                                      const QAudioDevice& outputDevice,
+                                      bool reinitializePcInput);
     SliceModel* activeSlice() const;
 
     // Push the connected backend's reported tuning range into one overlay
