@@ -93,7 +93,7 @@ Prefer paper? Download the [printable manual](pathname:///AetherSDR-Manual.pdf) 
 - [AetherMap](./psk-reporter-map.md) — Who hears you: 2D map or 3D globe, weather radar, night lights
 - [AetherSweep](./aethersweep.md) — In-panadapter SWR analyzer with CSV export
 - [Net Scheduler](./net-scheduler.md) — Recurring net reminders with one-click Tune Now
-- [AetherClock and GPS](./aetherclock-and-gps.md) — WWV/WWVB time-signal decoder and the GPS & Station Location dashboard
+- [AetherClock and GPS](./aetherclock-and-gps.md) — WWV/WWVB time-signal decoder and the AetherGPS dashboard
 - [Callsign Lookup](./callsign-lookup.md) — QRZ.com lookups, cache and CW-decoder contact cards
 
 ## Station Accessories

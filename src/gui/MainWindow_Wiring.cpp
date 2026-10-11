@@ -217,7 +217,14 @@ double quantizeIncrementalFollowDelta(double overshootMhz, double stepMhz)
 
 void MainWindow::showGpsLocationDialog()
 {
-    showOrRaisePersistent(m_gpsLocationDialog, &m_radioModel);
+    if (!m_gpsLocationDialog) {
+        auto* dlg = new GpsLocationDialog(&m_radioModel, this);
+        dlg->setAttribute(Qt::WA_DeleteOnClose);
+        m_gpsLocationDialog = dlg;
+    }
+    m_gpsLocationDialog->show();
+    m_gpsLocationDialog->raise();
+    m_gpsLocationDialog->activateWindow();
 }
 
 void MainWindow::noteBandRecallForPan(const QString& panId)
@@ -3410,6 +3417,8 @@ int MainWindow::cloneDisplaySettingsToAllPans(PanadapterApplet* source)
         dst->setFftHeatMap(src->fftHeatMap());
         dst->setShowGrid(src->showGrid());
         dst->setFftLineWidth(src->fftLineWidth());
+        dst->setFftSmoothing(src->fftSmoothing());
+        dst->setFftDecombHz(src->fftDecombHz());
         dst->setFftLineColor(src->fftLineColor());
         dst->setFftFillAlpha(src->fftFillAlpha());
         dst->setFftFillColor(src->fftFillColor());
@@ -3562,7 +3571,8 @@ int MainWindow::cloneDisplaySettingsToAllPans(PanadapterApplet* source)
             dstMenu->syncExtraDisplaySettings(
                 dst->wfBlankerEnabled(), dst->wfBlankerThreshold(),
                 dst->backgroundOpacity(), dst->freqGridSpacing(),
-                dst->backgroundFillColor(), dst->freqScaleFontPt());
+                dst->backgroundFillColor(), dst->freqScaleFontPt(),
+                dst->fftSmoothing(), dst->fftDecombHz());
         }
         ++cloned;
     }
@@ -4597,6 +4607,12 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     connect(menu, &SpectrumOverlayMenu::fftLineWidthChanged,
             sw, &SpectrumWidget::setFftLineWidth,
             Qt::UniqueConnection);
+    connect(menu, &SpectrumOverlayMenu::fftSmoothingChanged,
+            sw, &SpectrumWidget::setFftSmoothing,
+            Qt::UniqueConnection);
+    connect(menu, &SpectrumOverlayMenu::fftDecombHzChanged,
+            sw, &SpectrumWidget::setFftDecombHz,
+            Qt::UniqueConnection);
     connect(menu, &SpectrumOverlayMenu::noiseFloorPositionChanged,
             sw, &SpectrumWidget::setNoiseFloorPosition,
             Qt::UniqueConnection);
@@ -5013,7 +5029,8 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         // waiting for the next syncExtraDisplaySettings round.
         menu->syncExtraDisplaySettings(sw->wfBlankerEnabled(),
             sw->wfBlankerThreshold(), sw->backgroundOpacity(),
-            sw->freqGridSpacing(), c, sw->freqScaleFontPt());
+            sw->freqGridSpacing(), c, sw->freqScaleFontPt(), sw->fftSmoothing(),
+            sw->fftDecombHz());
     });
     connect(menu, &SpectrumOverlayMenu::displaySettingsReset,
             this, [this, applet, sw, menu] {
@@ -5024,6 +5041,8 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         sw->setFftFillColor(QColor(0x00, 0xe5, 0xff));
         sw->setFftLineColor(QColor(0x00, 0xe5, 0xff));
         sw->setFftLineWidth(1.0f);
+        sw->setFftSmoothing(0);
+        sw->setFftDecombHz(0);
         sw->setFftWeightedAvg(false);
         sw->setFftHeatMap(true);
         sw->setWfColorScheme(0);
@@ -5126,7 +5145,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
                                   true, 1.0f, false, 0, 6, 70,
                                   QColor(0x00, 0xe5, 0xff), 100);
         menu->syncExtraDisplaySettings(false, 1.15f, 80, 0,
-                                       QColor(0x0a, 0x0a, 0x14));
+                                       QColor(0x0a, 0x0a, 0x14), 8, 0, 0);
     });
     connect(menu, &SpectrumOverlayMenu::displaySettingsCloneRequested,
             this, [this, applet, sw] {

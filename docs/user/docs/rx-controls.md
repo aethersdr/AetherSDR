@@ -118,6 +118,8 @@ The **SQL** button cycles through three states:
 **AGC-T calibration:** right-click the AGC-T slider, or use
 **Tools → Calibrate AGC-T...**, to calibrate the threshold against the
 measured noise floor on the active slice. It does not transmit.
+Close the window with the corner ✕, Esc or Ctrl+W; closing it during
+an Auto Sweep stops the sweep and puts back the AGC-T it started from.
 
 On the Hermes-Lite 2, AGC runs on the computer: with AGC **Off**, the AGC-T
 slider sets a fixed gain (4–64 dB, default 10 dB) remembered per receiver, and
