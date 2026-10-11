@@ -5,6 +5,8 @@
 
 #include "MainWindow.h"
 #include "StatusIndicator.h"
+
+#include "WfmBroadcastOverlay.h"
 #include "models/CwDecodeSettings.h"
 #include "PeripheralAuthStore.h"
 #include "core/backends/AutoRfGainControl.h"
@@ -3718,6 +3720,16 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     auto* sw = applet->spectrumWidget();
     auto* menu = sw->overlayMenu();
     const quint64 rangeWiringEpoch = sw->advanceDbmRangeWireEpoch();
+
+    auto* broadcast = sw->findChild<WfmBroadcastOverlay*>(QStringLiteral("wfmBroadcastOverlay"),
+        Qt::FindDirectChildrenOnly);
+    if (!broadcast) {
+        broadcast = new WfmBroadcastOverlay(sw);
+        broadcast->setObjectName(QStringLiteral("wfmBroadcastOverlay"));
+        connect(broadcast, &WfmBroadcastOverlay::overlaysChanged,
+            sw, &SpectrumWidget::setBroadcastOverlays);
+    }
+    broadcast->bind(&m_radioModel, applet->panId());
     if (!sw->capturePlacementAction()) {
         sw->setCapturePlacementAction(new ReceiveCaptureAction(m_radioModel,
             [applet] { return applet->panId(); }, sw));

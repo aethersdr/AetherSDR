@@ -29,7 +29,7 @@ std::vector<Policy::SliceDescriptor> passbands(const std::vector<T::Receiver>& r
     std::vector<Policy::SliceDescriptor> result;
     result.reserve(receivers.size());
     for (const T::Receiver& receiver : receivers) {
-        result.push_back(receiver.passband);
+        result.push_back(T::effectivePassband(receiver));
     }
     return result;
 }
@@ -50,7 +50,9 @@ Policy::Error validateConfigured(const std::vector<T::Receiver>& receivers,
         }
         if (used[id]) { return Policy::Error::DuplicateId; }
         used[id] = true;
-        const auto occupied = Policy::occupiedInterval(receiver.passband);
+        const auto configured = Policy::occupiedInterval(receiver.passband);
+        if (!configured.interval) { return configured.error; }
+        const auto occupied = Policy::occupiedInterval(T::effectivePassband(receiver));
         if (!occupied.interval) { return occupied.error; }
         if ((receiver.mode == T::Mode::Fm || receiver.mode == T::Mode::Fmn)
             && (receiver.passband.filterLowHz < -21600
@@ -99,7 +101,7 @@ std::vector<Policy::SliceDescriptor> receivingPassbands(const T::State& state)
         const auto receiver = std::ranges::find_if(state.receivers, [id](const T::Receiver& value) {
             return value.passband.stableId == id;
         });
-        if (receiver != state.receivers.end()) { result.push_back(receiver->passband); }
+        if (receiver != state.receivers.end()) { result.push_back(T::effectivePassband(*receiver)); }
     }
     return result;
 }
@@ -244,6 +246,7 @@ RtlCaptureTransaction::Submission RtlCaptureTransaction::submit(const Desired& d
             || receiver.squelchLevel < 0 || receiver.squelchLevel > 100
             || receiver.automaticSquelchMarginDb < 5 || receiver.automaticSquelchMarginDb > 20
             || (receiver.automaticSquelch && !receiver.squelchEnabled)
+            || receiver.hdProgram < 0 || receiver.hdProgram > 7
             || (receiver.wfmDeemphasisUs != 50 && receiver.wfmDeemphasisUs != 75)
             || (receiver.squelchEnabled && receiver.mode != Mode::Fm && receiver.mode != Mode::Fmn)) {
             return {{}, Policy::Error::InvalidNumber};
@@ -281,7 +284,7 @@ RtlCaptureTransaction::Submission RtlCaptureTransaction::submit(const Desired& d
         if (!followed) { return {{}, Policy::Error::NoLegalCenter}; }
     }
     const std::vector<Policy::SliceDescriptor> required = followed
-        ? std::vector<Policy::SliceDescriptor>{followed->passband}
+        ? std::vector<Policy::SliceDescriptor>{effectivePassband(*followed)}
         : std::vector<Policy::SliceDescriptor>{};
     // Operator-requested free RF browsing intentionally parks receivers that
     // leave capture. The earlier all-active/refuse RFC policy needs maintainer
@@ -469,4 +472,15 @@ RtlCaptureTransaction::Result RtlCaptureTransaction::execute(const Work& work,
     }
     return {work.token, ResultCode::Invalid, {}, work.operation};
 }
+SharedCapturePolicy::SliceDescriptor RtlCaptureTransaction::effectivePassband(const Receiver& receiver)
+{
+    auto result = receiver.passband;
+    if (receiver.mode == Mode::Wfm && receiver.wfmHdStereo) {
+        result.filterLowHz = -225000; result.filterHighHz = 225000;
+        result.guardLowHz = std::max(result.guardLowHz, 3000.0);
+        result.guardHighHz = std::max(result.guardHighHz, 3000.0);
+    }
+    return result;
+}
+
 } // namespace AetherSDR::rtl

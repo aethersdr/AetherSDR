@@ -57,6 +57,12 @@ semantics see [local frequency control](../aetherd-local-slice-frequency-control
 
 ### Broadcast FM receiver controls
 
+The experimental Digital FM build extends this record with `hdStereo`. Only
+RTL with `AETHER_ENABLE_NRSC5` declares it; all other builds and families leave
+it false. `requestSliceWfm` carries audio-mode and discovered-program intents
+through the same identity/capability/refusal path. A program change additionally
+requires current synchronized service metadata and backend freshness checks.
+
 | Record | Flex | HL2 | Sim | Icom | ANAN | RTL-SDR | Consumers |
 |---|---|---|---|---|---|---|---|
 | `broadcastFmReceive` | absent | absent | absent | absent | absent | de-emphasis 50/75 µs, force Mono, measured reception diagnostics | `WfmApplet` availability; `RadioModel::dispatchSliceWfm` validates the capability and routes `requestSliceWfm`, with explicit refusal reporting |

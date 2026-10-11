@@ -2,6 +2,7 @@
 
 #include <optional>
 #include "core/WfmReceptionDiagnostics.h"
+#include "core/HdFmReception.h"
 
 #include "core/backends/NoiseBlankerKind.h"
 
@@ -111,6 +112,9 @@ struct SliceDelta {
     std::optional<int>         automaticSquelchMarginDb;
     std::optional<int>         wfmDeemphasisUs;
     std::optional<bool>        wfmForceMono;
+    std::optional<WfmAudioMode> wfmAudioMode;
+    std::optional<int> hdProgram;
+    std::optional<HdFmReception> hdFmReception;
     std::optional<WfmReceptionDiagnostics> wfmReceptionDiagnostics;
     std::optional<WfmStereoStatus> wfmStereoStatus;
     std::optional<bool>        ritOn;

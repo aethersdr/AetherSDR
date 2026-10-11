@@ -93,11 +93,14 @@ Start with [AGENTS.md](https://github.com/aethersdr/AetherSDR/blob/main/AGENTS.m
 | `AETHER_GPU_SPECTRUM` | ON | QRhi GPU spectrum and waterfall. Needs Qt's private GUI headers; without them the CPU renderer is built. |
 | `ENABLE_RTL` | ON | Experimental receive-only RTL-SDR backend, when `librtlsdr` and single-precision FFTW are found |
 | `REQUIRE_RTL` | OFF | Fail configure if the RTL backend cannot be built. Official release packages set this and `ENABLE_RTL` to ON. |
+| `ENABLE_HD_FM` | OFF | Experimental embedded Digital FM. Requires RTL, float FFTW and a supported evaluation toolchain; official release builds leave it OFF. |
 | `ENABLE_ASR` | ON | Copy Assist on-device speech-to-text |
 | `ENABLE_NVIDIA_AFX` | ON | BNR NVIDIA GPU noise removal (x86-64 Linux and Windows) |
 | `AETHER_FETCH_QT` | OFF | Run the Qt setup script during configure if the pinned Qt is missing |
 | `USE_SYSTEM_*` | OFF | For distribution packagers: use system zlib, libmspack, libmosquitto, RtMidi, libwhisper or SQLite instead of the bundled copies |
 | `LOWER_CASE_BINARY_NAME` | OFF | Lower-case executable name on Linux |
+
+Digital FM evaluation supports Linux/GNU C, macOS/AppleClang and Windows x64/MSVC with installed `clang-cl` and matching LLVM compiler-rt builtins. Other toolchains fail configure when the option is ON. Dependencies are pinned in the source tree; configure does not download a decoder or toolchain. See the [experimental build guide](https://github.com/aethersdr/AetherSDR/blob/main/docs/rtl-hd-fm-experimental.md).
 
 Builds honour `SOURCE_DATE_EPOCH` for reproducible output.
 

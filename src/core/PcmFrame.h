@@ -26,9 +26,13 @@ struct PcmFormat {
     int channels() const { return layout == PcmLayout::Mono ? 1 : 2; }
     bool valid() const
     {
-        return (sampleRateHz == 24000 || sampleRateHz == 48000)
+        return (sampleRateHz == 24000 || sampleRateHz == 44100 || sampleRateHz == 48000)
             && (layout == PcmLayout::Mono || layout == PcmLayout::Stereo);
     }
+    // HD supplies a real 44.1 kHz slice tap. Speaker and auxiliary domains
+    // remain 24/48 kHz; the HD receiver explicitly converts its speaker path.
+    bool validFor(PcmPurpose purpose) const
+    { return valid() && (sampleRateHz != 44100 || purpose == PcmPurpose::Slice); }
     bool operator==(const PcmFormat&) const = default;
 };
 
@@ -138,7 +142,7 @@ public:
                PcmFormat format = {}, quint64 session = 0,
                quint64 receiverInstance = 0)
     {
-        if (!format.valid() || m_source == 0 || (session != 0 && session <= m_session)
+        if (!format.validFor(purpose) || m_source == 0 || (session != 0 && session <= m_session)
             || (purpose != PcmPurpose::Speaker && purpose != PcmPurpose::Slice
                 && purpose != PcmPurpose::Auxiliary)
             || (purpose == PcmPurpose::Slice ? sliceId < 0 : sliceId != -1)
@@ -160,7 +164,7 @@ public:
     bool setFormat(PcmFormat format)
     {
         if (!m_epoch || !m_epoch->active.load(std::memory_order_acquire)
-            || !format.valid() || m_generation == std::numeric_limits<quint64>::max()) {
+            || !format.validFor(m_epoch->descriptor.purpose) || m_generation == std::numeric_limits<quint64>::max()) {
             return false;
         }
         if (format == m_epoch->descriptor.format) {

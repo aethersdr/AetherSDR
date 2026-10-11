@@ -84,7 +84,7 @@ class InjectedBackend final : public IRadioBackend {
 public:
     RadioCapabilities capabilities() const override {
         RadioCapabilities caps;
-        if (exportAvailable) { caps.receiveAudioExport = ReceiveAudioExport{{24000,48000},8}; }
+        if (exportAvailable) { caps.receiveAudioExport = ReceiveAudioExport{{24000,44100,48000},8}; }
         return caps;
     }
     bool exportAvailable = true;
@@ -186,7 +186,7 @@ public:
     {
         // Catches forced 24k producer interpretation,
         // stereo downmix, unbounded packets and last-client-only accounting.
-        for (int sourceRate : {24000,48000}) {
+        for (int sourceRate : {24000,44100,48000}) {
             Fixture f;
             f.backend->add(3);
             PcmProducer producer;
@@ -846,7 +846,7 @@ public:
     {
         const std::array<int,8> ids{3,17,29,41,57,63,80,99};
         const std::array<int,8> rates{8000,12000,24000,48000,8000,12000,24000,48000};
-        for (int sourceRate : {24000,48000}) {
+        for (int sourceRate : {24000,44100,48000}) {
             Fixture f;
             DaxReceiveModel dax(f.model, f.server);
             std::array<QByteArray,8> received;
@@ -966,14 +966,14 @@ public:
         f.feed(17,frame(producer,128,0.8f,0.8f));
         check(audio.isEmpty(),"DAX conversion retains a bounded partial source block");
         const PcmFrame stale=frame(producer,128,0.8f,0.8f);
-        producer.setFormat({24000,PcmLayout::Stereo});
+        producer.setFormat({44100,PcmLayout::Stereo});
         f.feed(17,stale);
         check(audio.isEmpty(),"revoked queued epoch cannot complete old DAX converter staging");
         f.feed(17,frame(producer,4096,0,0));
         check(!audio.isEmpty() && std::all_of(audio.cbegin(),audio.cend(),[](char byte) {return byte==0;}),
-              "24k epoch starts silent with no retained 48k signal history");
+              "44.1k epoch starts silent with no retained 48k signal history");
         const qsizetype beforeCompeting=audio.size();
-        competing.start(PcmPurpose::Slice,17,{24000,PcmLayout::Stereo});
+        competing.start(PcmPurpose::Slice,17,{44100,PcmLayout::Stereo});
         f.feed(17,frame(competing,4096));
         check(audio.size()==beforeCompeting,"a competing live producer cannot replace a pinned native DAX source");
         audio.clear();

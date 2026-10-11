@@ -6,6 +6,8 @@
 #include "gui/MainWindowHelpers.h"
 #include "RtlInjectedDevice.h"
 #include "core/backends/flex/FlexBackend.h"
+#include "core/ThemeManager.h"
+#include <QDir>
 #include "core/backends/hl2/Hl2Backend.h"
 #include "core/backends/rtl/RtlSdrBackend.h"
 #include "models/SliceModel.h"
@@ -52,6 +54,30 @@ struct SpectrumOffscreenTestAccess {
     static int freshFrames(const SpectrumWidget& widget) { return widget.m_noiseFloorFreshFrameCount; }
     static float baseline(const SpectrumWidget& widget) { return widget.m_noiseFloorBaselineDbm; }
     static bool baselineValid(const SpectrumWidget& widget) { return widget.m_noiseFloorBaselineValid; }
+
+    static QImage broadcast(SpectrumWidget& widget, const QColor& field, const QBrush& inherited,
+                            bool& brushRestored, QPoint& backgroundSample, QRect* paintedBounds = nullptr) {
+        widget.updateBroadcastOverlayTicker(QRect(0, 0, widget.width(), widget.height()));
+        QImage image(widget.size(), QImage::Format_ARGB32_Premultiplied);
+        image.fill(field);
+        QPainter painter(&image);
+        painter.setBrush(inherited); // Same state left by the real slice marker.
+        widget.drawBroadcastOverlays(painter, QRect(0, 0, widget.width(), widget.height()));
+        brushRestored = painter.brush() == inherited;
+        painter.end();
+        QRect bounds;
+        for (int y = 0; y < image.height(); ++y) {
+            for (int x = 0; x < image.width(); ++x) {
+                if (image.pixelColor(x, y) != field) {
+                    bounds = bounds.united(QRect(x, y, 1, 1));
+                }
+            }
+        }
+        backgroundSample = QPoint(bounds.left() + 2, bounds.center().y());
+        if (paintedBounds) { *paintedBounds = bounds; }
+        return image;
+    }
+
     static const QVector<float>& trace(const SpectrumWidget& widget) { return widget.displaySpectrumBins(); }
     static QVector<float> supplemental(const SpectrumWidget& widget, const QVector<float>& bins,
                                        double low, double high, bool sameScale) {
@@ -382,6 +408,73 @@ int main(int argc, char** argv)
         trace.updateSpectrum(clipped);
         check(requests == 0 && SpectrumOffscreenTestAccess::baselineValid(trace),
               "a floor already at -180 dBm is not held for a recovery that cannot come");
+    }
+    {
+        ThemeManager& theme = ThemeManager::instance();
+        const QString originalTheme = theme.activeTheme();
+        SpectrumWidget broadcast;
+        broadcast.resize(800, 200);
+        broadcast.observeFrequencyRange(100.3, 2.4);
+        const WfmBroadcastOverlayRecord record{3, 11, 22, 33, 100300000, 0,
+            QStringLiteral("Station"), QStringLiteral("A complete broadcast title"), QStringLiteral("Artist")};
+        broadcast.setBroadcastOverlays({record});
+        check(broadcast.accessibleDescription().contains(record.displayText()),
+              "broadcast paging retains full metadata in the composed accessible description");
+        for (const QString& name : {QStringLiteral("Default Dark"), QStringLiteral("Default Light")}) {
+            check(theme.setActiveTheme(name), "bundled broadcast contrast theme loads");
+            for (const QString& fieldToken : {QStringLiteral("color.background.0"), QStringLiteral("color.text.primary")}) {
+                const QBrush inherited(theme.color(QStringLiteral("color.slice.a")));
+                bool restored = false; QPoint sample;
+                const QImage image = SpectrumOffscreenTestAccess::broadcast(
+                    broadcast, theme.color(fieldToken), inherited, restored, sample);
+                check(image.pixelColor(sample) == theme.color(QStringLiteral("color.background.0")),
+                      "broadcast border does not repaint themed background with inherited slice brush");
+                check(restored, "broadcast painting restores the caller brush");
+                const QString output = qEnvironmentVariable("AETHER_WFM_APPLET_SCREENSHOT_DIR");
+                if (!output.isEmpty()) {
+                    const QString file = QStringLiteral("broadcast-fixture-%1-%2.png")
+                        .arg(name.endsWith(QStringLiteral("Dark")) ? QStringLiteral("dark") : QStringLiteral("light"))
+                        .arg(fieldToken.endsWith(QStringLiteral("primary")) ? QStringLiteral("bright-field") : QStringLiteral("dark-field"));
+                    check(image.save(QDir(output).filePath(file)), "broadcast contrast fixture image saved");
+                }
+            }
+        }
+        // Real expanded/collapsed flags must never cover the station label.
+        broadcast.resize(800, 600);
+        broadcast.setSpotStartPct(10);
+        broadcast.show();
+        VfoWidget* flag = broadcast.addVfoWidget(3);
+        flag->setCollapsed(true);
+        flag->setCollapsed(false);
+        flag->move(250, 20);
+        QApplication::processEvents();
+        bool restored = false; QPoint sample; QRect bounds;
+        const QColor field = theme.color(QStringLiteral("color.text.primary"));
+        QImage expanded = SpectrumOffscreenTestAccess::broadcast(
+            broadcast, field, Qt::NoBrush, restored, sample, &bounds);
+        check(!bounds.isEmpty() && !bounds.intersects(flag->geometry())
+                  && bounds.top() > flag->geometry().bottom(),
+              "Digital station label clears the real expanded slice flag");
+        const QString output = qEnvironmentVariable("AETHER_WFM_APPLET_SCREENSHOT_DIR");
+        if (!output.isEmpty()) {
+            QPainter painter(&expanded);
+            flag->render(&painter, flag->pos());
+            painter.end();
+            check(expanded.save(QDir(output).filePath(QStringLiteral("broadcast-expanded-flag.png"))),
+                  "expanded flag placement fixture image saved");
+        }
+        flag->setCollapsed(true);
+        broadcast.setSpotStartPct(25);
+        SpectrumOffscreenTestAccess::broadcast(broadcast, field, Qt::NoBrush, restored, sample, &bounds);
+        check(bounds.top() == 150, "Digital label follows the ordinary spot start percentage");
+        broadcast.setSpotStartPct(70);
+        SpectrumOffscreenTestAccess::broadcast(broadcast, field, Qt::NoBrush, restored, sample, &bounds);
+        check(bounds.top() == 420, "Digital label follows spot placement changes");
+        broadcast.hide();
+        check(theme.setActiveTheme(originalTheme), "original isolated theme restored after broadcast fixture");
+        broadcast.setBroadcastOverlays({});
+        check(!broadcast.accessibleDescription().contains(record.displayText()),
+              "overlay off removes full metadata from accessible presentation");
     }
     {
         SpectrumWidget trace;

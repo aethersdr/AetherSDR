@@ -2,13 +2,13 @@
 
 This checkpoint implements the analog multi-receiver path from RFC #5468.
 It does not raise the qualified default capacity, enable multiple digital decoders,
-or establish release qualification. The free-pan amendment remains subject to maintainer review. Optional
-Digital FM is separate RFC #6079 and is absent from this analog branch. Native qualification results belong to the exact
+or establish release qualification. The free-pan amendment and separate Digital RFC #6079 remain
+subject to maintainer review. Native qualification results belong to the exact
 tested revision; component or injected-USB tests do not establish live RF proof.
 
 ## Evaluation admission
 
-On Linux x86_64, Windows x64 and macOS arm64, start an explicitly isolated evaluation process with
+On Linux x86_64 only, start an explicitly isolated evaluation process with
 `AETHER_AUTOMATION=1` and `AETHER_RTL_EVALUATION_RECEIVERS=2`, `4` or `8`.
 This chooses the same capacity for the transaction and private worker at
 construction. It cannot resize a running session, is never persisted, and
@@ -18,9 +18,11 @@ authorization and TX exclusion. Use a separate `AETHER_SETTINGS_DIR` and
 preserve the normal launcher/profile before hardware testing.
 
 FM, FM-N and native analog WFM can coexist. Each receiver owns its exact RF
-filter, Mono/Stereo choice, deemphasis and monitor gain/pan/mute. AM/SAM/SSB/CW remain singleton legacy configurations, including when a
-configured sibling is parked. A refusal reports the unsupported combination
-without adopting a partial recipe. Digital FM is outside this branch.
+filter, Mono/Stereo choice, deemphasis and monitor gain/pan/mute. AM/SAM/SSB/CW
+and digital remain singleton configurations, including when a configured sibling
+is parked. A refusal reports the unsupported combination without adopting a
+partial recipe. Changing back from a remembered digital recipe to analog remains
+an explicit operator action.
 
 ## Selection and presentation
 
@@ -35,7 +37,8 @@ One WFM applet shows the selected receiver's letter and accepted frequency.
 Queued status callbacks and controls retain their originating model binding;
 an old popup or held button cannot command a new selection or reused slot.
 Parking clears reception observations while retaining configured controls.
-Digital station/program metadata and overlays are deferred with RFC #6079.
+Passive broadcast overlays retain each originating receiver's station/service
+identity independently of focus and display visibility.
 
 ## Measurements and interpretation
 
@@ -51,7 +54,7 @@ bounds are conservative; the final bucket is unbounded.
 `rtlReceiverRecipes` reports each last-published accepted receiver recipe,
 including its `stableId`, current `selected` identity, `receiving`/`parked`
 membership, `carrierHz`, `mode`, `filterLowHz`/`filterHighHz`, `wfmForceMono`,
-`wfmDeemphasisUs`, and `audioGain`/`audioPan`/`audioMute`.
+`wfmHdStereo`, `wfmDeemphasisUs`, and `audioGain`/`audioPan`/`audioMute`.
 An observer can freeze every receiver's accepted settings without moving
 selection to inspect an applet. These are accepted control recipes, not an
 independent measurement of the demodulated signal or observed stereo lock.
@@ -59,7 +62,8 @@ independent measurement of the demodulated signal or observed stereo lock.
 `rtlPcmStreams` contains eight stable receiver slots followed by the speaker
 mix. Frames, nonzero samples, nonfinite input samples, delivered discontinuities,
 left/right energy, peak, queue residence and delivery gaps are cumulative
-owner-thread observations. Queue residence uses a separate enqueue clock. Counts and
+owner-thread observations. Queue residence uses a separate enqueue clock and
+does not replace the digital decoder's original production-age fence. Counts and
 energies can be differenced across a frozen workload. Lifetime maxima and
 delivery gaps can include intentional parking/reconfiguration; they must not
 be called steady-state dropouts without checking that interval. Finite,

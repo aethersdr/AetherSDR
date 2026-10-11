@@ -44,6 +44,16 @@ Normal launches admit **one receiver**, even though the capture is wide.
 
 Select **WFM** to use the **Broadcast FM** applet. It shows the selected slice letter and confirmed frequency. **Mono / Auto Stereo**, **De-emphasis** (50 or 75 µs) and **Bandwidth** belong to that receiver. **Auto Stereo** falls back to mono without a detected stereo pilot. The observed pilot status is separate from your selected audio mode; parking clears observations while retaining the controls.
 
+### Optional Digital FM evaluation
+
+Digital FM is an experimental, opt-in build feature under [RFC #6079](https://github.com/aethersdr/AetherSDR/issues/6079). Official release builds leave it off. It requires `ENABLE_HD_FM=ON` and the existing RTL dependencies; see [Building from Source](./building-from-source.md).
+
+In an enabled build, the **Broadcast FM** audio-mode button cycles **Mono → Auto Stereo → Digital**. **Digital program** lists discovered audio services as **P1** through **P8**; it does not invent program names. **Digital acquiring**, **Digital synced · awaiting audio** and **Digital audio valid** describe separate observed states. Selection alone does not establish decoded audio. There is no automatic analog/Digital blending.
+
+The applet displays current Digital station and now-playing text. **SpotHub → Display → WFM RDS** toggles the local panadapter metadata overlay without stopping the decoder or applet text. This overlay shows Digital metadata; analog RDS/RBDS decoding is not provided. Stale metadata clears on loss, retune, parking or disconnect, and nothing is published to the DX cluster.
+
+Digital reception admits one active wide receiver and does not raise the multi-receiver evaluation limit. Its full RF footprint must fit the capture. Native decoded audio is stereo at 44.1 kHz and is converted for speaker, DAX and TCI output; TCI still negotiates only 8, 12, 24 or 48 kHz. A successful build or startup does not qualify sustained reception on a platform.
+
 ### Receive meters
 
 The RTL receive meter reports relative RF peak-bin level in **dBFS**, not calibrated antenna dBm or audio level. **Settings → Radio Setup... → RTL Receiver → Enable receive meters** turns these updates on or off. Turning them off clears the readout; reception, squelch and audio continue.

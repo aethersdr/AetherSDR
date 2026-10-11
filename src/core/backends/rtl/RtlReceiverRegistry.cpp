@@ -1,5 +1,7 @@
 #include "core/backends/rtl/RtlReceiverRegistry.h"
 #include "core/backends/rtl/RtlRfExtractor.h"
+#include "HdFmReceiver.h"
+#include "RtlCaptureTransaction.h"
 
 #include <QThreadPool>
 
@@ -214,6 +216,13 @@ private:
 std::unique_ptr<Registry::Receiver> prepareWdsp(const Registry::ReceiverSpec& spec,
     WdspChannel::Reservation& reservation, std::string& error)
 {
+    // The existing reservation conservatively bounds all prepared receivers.
+    // HD additionally reserves one of two process-wide worker/session leases.
+    if (spec.hdFm) {
+        // Admission permits one HD receiver, so this is the complete one-slot
+        // reservation. It must follow the receiver across reused banks.
+        return prepareHdFmReceiver(spec, error, {}, std::move(reservation));
+    }
     std::unique_ptr<WdspChannel> channel = WdspChannel::create(spec.dsp, reservation, &error);
     if (!channel) {
         return nullptr;
@@ -661,6 +670,8 @@ RtlReceiverRegistry::Result RtlReceiverRegistry::submitImpl(const Capture& captu
         if (slot < 0 || static_cast<std::size_t>(slot) >= state.limits.slotCount || used[slot] ||
             spec.handle.session != state.session.load() || state.reservations[slot] != spec.handle ||
             spec.passband.stableId != slot || !boundedDsp(spec.dsp)
+            || (spec.hdFm && (desired.size() != 1 || !spec.extractRf || !spec.dsp.wbfmReceive
+                || spec.hdFm->program < 0 || spec.hdFm->program >= 8))
             || (spec.dsp.wbfmReceive
                 && (spec.passband.guardLowHz < WdspChannel::WbfmReceive::kRfTransitionGuardHz
                     || spec.passband.guardHighHz < WdspChannel::WbfmReceive::kRfTransitionGuardHz))
@@ -676,6 +687,11 @@ RtlReceiverRegistry::Result RtlReceiverRegistry::submitImpl(const Capture& captu
         }
         used[slot] = true;
         passbands[i] = spec.passband;
+        if (spec.hdFm) {
+            RtlCaptureTransaction::Receiver receiver{spec.passband, RtlCaptureTransaction::Mode::Wfm};
+            receiver.wfmHdStereo = true;
+            passbands[i] = RtlCaptureTransaction::effectivePassband(receiver);
+        }
     }
     // The capture is fixed here: this singleton domain checks passband fit,
     // not tuner legality. M1 must validate the hardware domain/readback first.

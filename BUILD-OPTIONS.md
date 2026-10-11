@@ -60,6 +60,7 @@ alone. MSVC flags and `Release` builds are unaffected.
 |---|---|---|
 | `ENABLE_DEEPFIST_EXPERIMENT` | OFF | Build the experimental DeepFist CW receive decoder. Requires ONNX Runtime at configure time (configuration fails without it) and a separate verified model bundle at runtime; see below. |
 | `ENABLE_RTL` | ON | Build the experimental receive-only RTL-SDR USB backend when both `librtlsdr` and single-precision FFTW (`fftw3f`) are found. Missing either disables the backend unless `REQUIRE_RTL=ON`. |
+| `ENABLE_HD_FM` | OFF | Build experimental embedded Digital FM using the pinned nrsc5 and FAAD HDC sources. Requires the RTL backend, librtlsdr and float FFTW; qualified build paths are Linux/GNU, macOS/AppleClang and Windows/MSVC x64 (with LLVM compiler-rt builtins). Official release workflows explicitly keep it OFF. See [the experimental guide](docs/rtl-hd-fm-experimental.md). |
 | `AETHER_HL2_TX_TXA` | ON | Select WDSP's TXA chain for the Hermes-Lite 2 SSB transmit modulator. OFF builds the in-tree phasing modulator. This choice has no runtime toggle. |
 
 **DeepFist:** enabling `-DENABLE_DEEPFIST_EXPERIMENT=ON` alone does not supply its

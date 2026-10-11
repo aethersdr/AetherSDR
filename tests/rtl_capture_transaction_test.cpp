@@ -453,6 +453,90 @@ int main()
               "DC placement does not switch automatic front-end mode across 24 MHz");
         check(job->target.receivers == next.receivers, "band-edge placement never rewrites RF or filters");
     }
+    // HD admission uses the complete digital sidebands, without rewriting the
+    // analog passband that the operator will recover on returning to Stereo.
+    {
+        T tx({8, 1}); Device usb; if (!establish(tx, usb)) { return 1; }
+        auto next = desired();
+        next.receivers[0].passband.carrierHz = 100'900'000;
+        check(bool(tx.submit(next)), "analog edge receiver fits the current capture");
+        auto job = tx.takeWork();
+        if (job) { tx.complete(T::execute(*job, usb)); }
+        check(tx.confirmed()->receivingIds == std::vector<int>{0}, "analog edge receiver is receiving");
+        const auto analog = tx.confirmed()->receivers[0].passband;
+        const int writesBefore = usb.writes;
+        next.receivers[0].wfmHdStereo = true;
+        next.receivers[0].hdProgram = 7;
+        check(bool(tx.submit(next)), "HD edge receiver remains configured while parked");
+        job = tx.takeWork();
+        check(job && !job->hardwareChanged && job->target.receivingIds.empty(),
+              "digital sidebands that do not fit are parked even though analog audio would fit");
+        check(!tx.confirmed()->receivers[0].wfmHdStereo && tx.confirmed()->receivers[0].hdProgram == 0,
+              "HD policy and program remain unaccepted before decoder acknowledgment");
+        if (job) {
+            check(tx.complete(T::execute(*job, usb)) == T::Completion::Published,
+                  "parked HD selection is accepted only with its matching acknowledgment");
+        }
+        check(usb.writes == writesBefore && tx.confirmed()->receivers[0].passband == analog,
+              "parking HD preserves USB center and the saved analog passband");
+        next.followReceiverId = 0;
+        check(bool(tx.submit(next)), "explicit HD selection can follow its full RF sidebands");
+        job = tx.takeWork();
+        check(job && job->hardwareChanged && job->target.receivingIds == std::vector<int>{0},
+              "HD follow recenters capture to admit the complete digital receiver");
+        if (job) {
+            check(tx.complete(T::execute(*job, usb)) == T::Completion::Published,
+                  "HD follow publishes after verified readback");
+        }
+        check(tx.confirmed()->receivers[0].passband == analog
+            && tx.confirmed()->receivers[0].wfmHdStereo && tx.confirmed()->receivers[0].hdProgram == 7,
+            "HD capture relocation preserves receiver identity and independent settings");
+        next.followReceiverId.reset(); next.hardware.centerHz = 105'000'000;
+        check(bool(tx.submit(next)), "free RF pan can leave an HD receiver behind");
+        job = tx.takeWork();
+        check(job && job->target.receivingIds.empty() && job->target.receivers == next.receivers,
+              "free pan parks HD without deleting or changing its configured recipe");
+        if (job) { tx.complete(T::execute(*job, usb)); }
+    }
+    for (double carrier : {100'852'000.0, 100'852'001.0}) {
+        T tx({8, 1}); Device usb; if (!establish(tx, usb)) { return 1; }
+        auto next = desired(); next.receivers[0].wfmHdStereo = true;
+        next.receivers[0].passband.carrierHz = carrier;
+        check(bool(tx.submit(next)), "HD capture-edge configuration admitted");
+        const auto job = tx.takeWork();
+        check(job && (job->target.receivingIds == std::vector<int>{0}) == (carrier == 100'852'000.0),
+              "HD admission includes exactly the 225 kHz sideband plus 3 kHz guard");
+    }
+    {
+        T tx({8, 1}); Device usb; tx.beginSession();
+        auto next = desired(); next.hardware.sampleRateHz = 225'001;
+        check(bool(tx.submit(next)), "narrow capture accommodates the saved analog passband");
+        auto job = tx.takeWork();
+        if (job) { tx.complete(T::execute(*job, usb)); }
+        const auto before = *tx.confirmed(); const int writesBefore = usb.writes;
+        next.receivers[0].wfmHdStereo = true; next.followReceiverId = 0;
+        check(!tx.submit(next) && !tx.takeWork() && usb.writes == writesBefore
+            && tx.confirmed()->token == before.token && tx.confirmed()->receivers == before.receivers,
+            "capture too narrow for HD refuses the request and retains accepted analog state");
+    }
+    for (int invalid : {-1, 8}) {
+        T tx({8, 1}); Device usb; if (!establish(tx, usb)) { return 1; }
+        auto next = desired(); next.receivers[0].wfmHdStereo = true;
+        next.receivers[0].hdProgram = invalid;
+        const auto before = tx.confirmed()->token;
+        check(!tx.submit(next) && !tx.takeWork() && tx.confirmed()->token == before,
+              "out-of-range HD program never enters a receiver transaction");
+    }
+    for (int invalid = 0; invalid < 3; ++invalid) {
+        T tx({8, 1}); Device usb; if (!establish(tx, usb)) { return 1; }
+        auto next = desired(); next.receivers[0].wfmHdStereo = true;
+        auto& band = next.receivers[0].passband;
+        if (invalid == 0) { band.filterLowHz = std::numeric_limits<double>::quiet_NaN(); }
+        if (invalid == 1) { band.filterLowHz = band.filterHighHz; }
+        if (invalid == 2) { band.guardLowHz = -1; }
+        check(!tx.submit(next) && !tx.takeWork(),
+              "HD effective width cannot hide malformed saved analog filters or guards");
+    }
     std::fprintf(stderr, "rtl_capture_transaction_test: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }
