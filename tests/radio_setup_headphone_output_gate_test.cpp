@@ -10,7 +10,10 @@
 //   4. ANAN (its real capabilities): the Headphone row is dimmed while Line
 //      Out, which that backend declares (lineoutControl), stays live with no
 //      reason: the two rows are gated separately;
-//   5. a connected radio with a command plane (the Demo) is unchanged.
+//   5. a connected radio with a command plane (the Demo) is unchanged;
+//   6. a dimmed row LOOKS dimmed: label, value and Mute of the Headphone and
+//      Line Out rows render differently on the HL2 than on the Demo, in the
+//      unavailable token's colour, under Default Dark and Default Light.
 //
 // No hardware and no transport: the no-command-plane radios are an injected
 // backend reporting connected with the capabilities the real backend declares;
@@ -19,8 +22,10 @@
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
 #include "core/RadioDiscovery.h"
+#include "core/ThemeManager.h"
 #include "core/backends/IRadioBackend.h"
 #include "core/backends/sim/SimBackend.h"
+#include "gui/MixerControlAvailability.h"
 #include "gui/RadioSetupDialog.h"
 #include "models/RadioModel.h"
 
@@ -28,6 +33,7 @@
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QHostAddress>
+#include <QImage>
 #include <QLabel>
 #include <QPushButton>
 #include <QSignalSpy>
@@ -130,13 +136,10 @@ bool rowHasNoReason(const OutputRow& r)
     return true;
 }
 
-// The title bar's two sentences (TitleBar::setHeadphoneAvailable), verbatim.
-const QString kLevelReason = QStringLiteral(
-    "Unavailable: this radio has no headphone output. Its audio plays on "
-    "this computer; set its level with the master volume slider.");
-const QString kMuteReason = QStringLiteral(
-    "Unavailable: this radio has no headphone output. Its audio plays on "
-    "this computer; mute it with the speaker button.");
+// The two sentences every site reads (MixerControlAvailability.h); the title
+// bar's use of them is pinned in mixer_control_availability_test.
+const QString kLevelReason = QString::fromLatin1(kHeadphoneLevelUnavailableReason);
+const QString kMuteReason = QString::fromLatin1(kHeadphoneMuteUnavailableReason);
 
 bool announces(QWidget* w, const QString& reason)
 {
@@ -148,6 +151,39 @@ bool rowAnnouncesItsReasons(const OutputRow& r)
 {
     return announces(r.label, kLevelReason) && announces(r.slider, kLevelReason)
         && announces(r.value, kLevelReason) && announces(r.mute, kMuteReason);
+}
+
+void connectDemo(RadioModel& model)
+{
+    RadioInfo demo;
+    demo.name = QStringLiteral("FLEX-6700");
+    demo.model = SimBackend::demoModelName();
+    demo.serial = SimBackend::demoSerial();
+    demo.family = SimBackend::familyName();
+    demo.address = QHostAddress(QHostAddress::LocalHost);  // never dialled
+    demo.port = 4992;
+    model.connectToRadio(demo);
+}
+
+// The widget's own region, as the platform paints it.
+QImage rendered(QWidget* w)
+{
+    return w->grab().toImage().convertToFormat(QImage::Format_ARGB32);
+}
+
+// Exact comparison, no tolerance; -1 when the two regions differ in size.
+int differingPixels(const QImage& a, const QImage& b)
+{
+    if (a.size() != b.size() || a.isNull())
+        return -1;
+    int n = 0;
+    for (int y = 0; y < a.height(); ++y) {
+        for (int x = 0; x < a.width(); ++x) {
+            if (a.pixel(x, y) != b.pixel(x, y))
+                ++n;
+        }
+    }
+    return n;
 }
 
 } // namespace
@@ -220,14 +256,7 @@ private slots:
     void connectedCommandPlaneUnchanged()
     {
         RadioModel model;
-        RadioInfo demo;
-        demo.name = QStringLiteral("FLEX-6700");
-        demo.model = SimBackend::demoModelName();
-        demo.serial = SimBackend::demoSerial();
-        demo.family = SimBackend::familyName();
-        demo.address = QHostAddress(QHostAddress::LocalHost);  // never dialled
-        demo.port = 4992;
-        model.connectToRadio(demo);
+        connectDemo(model);
         QTRY_VERIFY_WITH_TIMEOUT(model.isConnected(), 5000);
         QVERIFY2(model.hasCommandPlane(), "the Demo has a command plane");
 
@@ -239,6 +268,95 @@ private slots:
         QVERIFY2(hp.slider && hp.mute && line.slider, "rows found");
         QVERIFY2(rowLive(hp) && rowLive(line), "command plane: both rows live");
         QVERIFY2(rowHasNoReason(hp) && rowHasNoReason(line), "command plane: no reason");
+    }
+
+    // Same caption, same value text, same mute state, same size: the only
+    // difference between the two renders of a widget is its enabled state.
+    // CONTROLS: a second render of the same widget differs in 0 pixels, and
+    // the dimmed row re-enabled by a disconnect renders as the Demo's does.
+    void dimmedRowsLookUnavailableInBothThemes()
+    {
+        auto& tm = ThemeManager::instance();
+        const QString startTheme = tm.activeTheme();
+        QStringList failures;
+        for (const char* theme : {"Default Dark", "Default Light"}) {
+            QVERIFY2(tm.setActiveTheme(QLatin1String(theme)), theme);
+            const QString unavailable =
+                tm.color(QStringLiteral("color.control.unavailable")).name();
+
+            RadioModel hl2;
+            NoCommandPlaneBackend* backend = installConnected(hl2, QStringLiteral("hl2"));
+            RadioSetupDialog dimmedDialog(&hl2);
+            dimmedDialog.show();
+            dimmedDialog.selectTab(QStringLiteral("Audio"));
+
+            RadioModel demo;
+            connectDemo(demo);
+            QTRY_VERIFY_WITH_TIMEOUT(demo.isConnected(), 5000);
+            RadioSetupDialog liveDialog(&demo);
+            liveDialog.show();
+            liveDialog.selectTab(QStringLiteral("Audio"));
+            QCoreApplication::processEvents();
+
+            struct Part { const char* name; QWidget* dimmed; QWidget* live; };
+            QList<Part> parts;
+            QList<QImage> dimmedImages;
+            for (const char* caption : {"Headphone:", "Line Out:"}) {
+                const OutputRow dim = findRow(dimmedDialog, QLatin1String(caption));
+                const OutputRow live = findRow(liveDialog, QLatin1String(caption));
+                QVERIFY2(dim.label && dim.value && dim.mute && live.label && live.value
+                         && live.mute, caption);
+                QVERIFY2(rowDimmed(dim), caption);
+                QVERIFY2(rowLive(live), caption);
+                QCOMPARE(dim.value->text(), live.value->text());
+                QCOMPARE(dim.mute->isChecked(), live.mute->isChecked());
+                parts.append({caption, dim.label, live.label});
+                parts.append({caption, dim.value, live.value});
+                parts.append({caption, dim.mute, live.mute});
+            }
+            const char* const kinds[] = {"label", "value", "mute"};
+            for (int i = 0; i < parts.size(); ++i) {
+                const Part& p = parts.at(i);
+                const QString where = QStringLiteral("%1 | %2 %3")
+                    .arg(QLatin1String(theme), QLatin1String(p.name), QLatin1String(kinds[i % 3]));
+                const QImage dimmed = rendered(p.dimmed);
+                const QImage live = rendered(p.live);
+                dimmedImages.append(dimmed);
+                const int total = dimmed.width() * dimmed.height();
+                const int repeat = differingPixels(dimmed, rendered(p.dimmed));
+                const int diff = differingPixels(dimmed, live);
+                qInfo().noquote() << QStringLiteral(
+                    "PIXELS %1: dimmed vs live %2 / %3 (same widget twice: %4)")
+                    .arg(where).arg(diff).arg(total).arg(repeat);
+                if (total <= 0 || repeat != 0)
+                    failures << where + QStringLiteral(": render is not repeatable");
+                if (diff <= 0)
+                    failures << where + QStringLiteral(": dimmed renders as live");
+                if (!p.dimmed->styleSheet().contains(unavailable, Qt::CaseInsensitive))
+                    failures << where + QStringLiteral(": not the unavailable token ")
+                                    + unavailable;
+            }
+
+            // Disconnect: the same widgets, live again, render as the Demo's.
+            backend->connected = false;
+            emit hl2.connectionStateChanged(false);
+            QCoreApplication::processEvents();
+            for (int i = 0; i < parts.size(); ++i) {
+                const Part& p = parts.at(i);
+                const QString where = QStringLiteral("%1 | %2 %3")
+                    .arg(QLatin1String(theme), QLatin1String(p.name), QLatin1String(kinds[i % 3]));
+                QVERIFY2(p.dimmed->isEnabled(), qPrintable(where));
+                const int vsDemo = differingPixels(rendered(p.dimmed), rendered(p.live));
+                const int vsDimmed = differingPixels(rendered(p.dimmed), dimmedImages.at(i));
+                if (vsDemo != 0)
+                    failures << where + QStringLiteral(": re-enabled differs from the Demo by %1")
+                                    .arg(vsDemo);
+                if (vsDimmed <= 0)
+                    failures << where + QStringLiteral(": re-enabled renders as dimmed");
+            }
+        }
+        QVERIFY(tm.setActiveTheme(startTheme));
+        QVERIFY2(failures.isEmpty(), qPrintable(failures.join(QStringLiteral("\n"))));
     }
 };
 

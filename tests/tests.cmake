@@ -3727,7 +3727,8 @@ set_tests_properties(radio_setup_recording_mode_dim_test PROPERTIES
 
 # Radio Setup's Headphone row on a connected radio with no command plane:
 # dimmed with an announced reason on the real HL2 and ANAN capabilities, Line
-# Out live on ANAN (it declares one), Flex (Demo) unchanged. Injected backend;
+# Out live on ANAN (it declares one), Flex (Demo) unchanged, and the dimmed
+# rows rendered in the unavailable token under both themes. Injected backend;
 # no socket.
 add_executable(radio_setup_headphone_output_gate_test
     tests/radio_setup_headphone_output_gate_test.cpp

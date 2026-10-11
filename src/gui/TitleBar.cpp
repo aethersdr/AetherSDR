@@ -5,6 +5,7 @@
 #include "FramelessMoveHelper.h"
 #include "WindowChrome.h"
 #include "GuardedSlider.h"
+#include "MixerControlAvailability.h"
 #include "PersistentDialog.h"
 #include "RadioTabBar.h"
 #include "WindowCaptionButtons.h"
@@ -1294,12 +1295,8 @@ void TitleBar::setHeadphoneAvailable(bool available)
             QStringLiteral("Headphone volume level, 0 to 100 percent"));
         return;
     }
-    const QString muteReason = QStringLiteral(
-        "Unavailable: this radio has no headphone output. Its audio plays on "
-        "this computer; mute it with the speaker button.");
-    const QString volumeReason = QStringLiteral(
-        "Unavailable: this radio has no headphone output. Its audio plays on "
-        "this computer; set its level with the master volume slider.");
+    const QString muteReason = QString::fromLatin1(kHeadphoneMuteUnavailableReason);
+    const QString volumeReason = QString::fromLatin1(kHeadphoneLevelUnavailableReason);
     m_headphoneBtn->setToolTip(muteReason);
     m_headphoneBtn->setAccessibleDescription(muteReason);
     m_hpSlider->setToolTip(volumeReason);
