@@ -4733,10 +4733,17 @@ void MainWindow::showAgcCalibrationDialog(int sliceId)
         SpectrumWidget* sw = s ? spectrumForSlice(s) : nullptr;
         return sw ? sw->noiseFloorDbm() : std::numeric_limits<float>::quiet_NaN();
     };
-    showOrRaisePersistent(m_agcCalibrationDialog, &m_radioModel, m_audio, floorFn);
-    if (m_agcCalibrationDialog) {
-        m_agcCalibrationDialog->setSlice(slice);
+    // A canon dialog, so not showOrRaisePersistent(): that applies View →
+    // Frameless Window, which a CanonWindow does not follow.
+    if (!m_agcCalibrationDialog) {
+        auto* dlg = new AgcCalibrationDialog(&m_radioModel, m_audio, floorFn, this);
+        dlg->setAttribute(Qt::WA_DeleteOnClose);
+        m_agcCalibrationDialog = dlg;
     }
+    m_agcCalibrationDialog->setSlice(slice);
+    m_agcCalibrationDialog->show();
+    m_agcCalibrationDialog->raise();
+    m_agcCalibrationDialog->activateWindow();
 }
 
 // AX.25 dialog + KISS TNC startup live in MainWindow_DigitalModes.cpp (#3351 Phase 1e).
