@@ -451,6 +451,8 @@ private:
     void handleAudioDeviceListChanged();
     void applyAudioDeviceSelection(const QAudioDevice& inputDevice,
                                    const QAudioDevice& outputDevice,
+                                   AudioDeviceSelection inputSelection,
+                                   AudioDeviceSelection outputSelection,
                                    bool reinitializePcInput);
     void resetMissingAudioDevicesToDefault(bool resetInput,
                                            bool resetOutput,

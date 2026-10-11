@@ -13,7 +13,7 @@ namespace AetherSDR {
 // Why the engine's device is being set. A fallback changes the live device for
 // this run and leaves the saved id alone.
 enum class AudioDeviceSelection {
-    OperatorChoice,  // picked in Radio Setup or accepted in the hot-plug prompt
+    OperatorChoice,  // picked in Radio Setup or in the hot-plug prompt
     Fallback,        // the app re-pointing itself: device gone, or back again
 };
 
@@ -72,6 +72,20 @@ inline bool audioDeviceChoiceRequired(bool anyDeviceAdded,
                                       const AudioDeviceDecision& output)
 {
     return anyDeviceAdded && (input.liveMissing || output.liveMissing);
+}
+
+// How one direction's selection in the accepted hot-plug prompt is applied.
+// The prompt lists present devices only, so with the saved device absent
+// "System default" is all it can show there: that follows the default for
+// this run and keeps the saved id. Every other selection is the operator's.
+inline AudioDeviceSelection acceptedAudioDeviceSelection(const QByteArray& selectedId,
+                                                         const QByteArray& preferredId,
+                                                         const QList<QByteArray>& presentIds)
+{
+    const bool preferredAbsent =
+        !preferredId.isEmpty() && !presentIds.contains(preferredId);
+    return selectedId.isEmpty() && preferredAbsent ? AudioDeviceSelection::Fallback
+                                                   : AudioDeviceSelection::OperatorChoice;
 }
 
 } // namespace AetherSDR

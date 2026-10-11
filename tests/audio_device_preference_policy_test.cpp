@@ -64,6 +64,13 @@ struct Session {
         }
     }
 
+    // The operator accepts the hot-plug prompt with `selectedId` in this
+    // direction's list (empty = "System default").
+    void acceptPrompt(const QByteArray& selectedId)
+    {
+        setLive(selectedId, acceptedAudioDeviceSelection(selectedId, saved, known));
+    }
+
     // One debounced device-list change, handled without the prompt.
     void devicesChange(const QList<QByteArray>& present, bool defaultChanged)
     {
@@ -204,6 +211,42 @@ int main()
                "a live input vanishing as another device arrives prompts");
         expect(audioDeviceChoiceRequired(true, fine, missing),
                "a live output vanishing as another device arrives prompts");
+    }
+
+    // ── Accepting the prompt beside an absent saved device ──────────────────
+    {
+        // The saved output is unplugged as a new input arrives: the prompt
+        // opens, and its output list has only "System default" to show.
+        Session output = Session::launch(kHeadphones, {kBuiltIn, kHeadphones});
+        Session input = Session::launch(kBuiltIn, {kBuiltIn});
+        output.devicesChange({kBuiltIn}, /*defaultChanged*/ true);
+        input.devicesChange({kBuiltIn, kUsb}, /*defaultChanged*/ false);
+        expect(audioDeviceChoiceRequired(true, input.last, output.last),
+               "saved output unplugged as a new input arrives prompts");
+
+        input.acceptPrompt(kUsb);
+        output.acceptPrompt(QByteArray{});
+        expect(output.saved == kHeadphones && output.live.isEmpty(),
+               "accepting for the input keeps the absent output's saved id");
+        expect(input.saved == kUsb && input.live == kUsb,
+               "the input picked in the prompt is saved");
+    }
+    {
+        Session s = Session::launch(kHeadphones, {kBuiltIn, kHeadphones});
+        s.acceptPrompt(QByteArray{});
+        expect(s.saved.isEmpty() && s.live.isEmpty(),
+               "System default accepted with the saved device present clears the saved id");
+    }
+    {
+        expect(acceptedAudioDeviceSelection(QByteArray{}, QByteArray{}, {kBuiltIn})
+                   == AudioDeviceSelection::OperatorChoice,
+               "System default accepted with nothing saved is the operator's choice");
+    }
+    {
+        Session s = Session::launch(kHeadphones, {kBuiltIn, kUsb});
+        s.acceptPrompt(kUsb);
+        expect(s.saved == kUsb && s.live == kUsb,
+               "a device picked while the saved one is absent replaces the saved id");
     }
 
     std::printf("\n%d checks, %d failures\n", g_checks, g_failures);
