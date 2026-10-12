@@ -477,7 +477,9 @@ void Ctr2UsbRelay::releasePort(const std::vector<ctr2hid::Report>& finalReports)
     m_port = nullptr;
     QObject::disconnect(port, nullptr, this, nullptr);
     // Asynchronous: the port finishes its writes on its own thread and then
-    // deletes itself, so neither Stop nor app exit waits on the device.
+    // deletes itself, so neither Stop nor app exit waits on the device. It
+    // leaves this relay first, which may itself be deleted before then.
+    port->setParent(nullptr);
     port->shutdown(finalReports);
     m_reportCosts.clear();
     m_unsentPayload = 0;

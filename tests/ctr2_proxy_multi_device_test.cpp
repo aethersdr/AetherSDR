@@ -238,6 +238,7 @@ void testSeveralDevicesAtOnce()
     model.stop();
     // Checked before the event loop runs: the released port deletes itself.
     check(b->shutDown && b->closedOnShutdown, "Stop releases the device and tells it CLOSED");
+    check(!b->parent(), "the released port no longer belongs to the relay being deleted");
     check(waitUntil([&] { return radio.conns[1]->disconnected; }), "Stop closes the radio connection");
     check(!model.isRunning() && model.links().isEmpty(), "nothing runs after Stop");
     QCoreApplication::processEvents();
