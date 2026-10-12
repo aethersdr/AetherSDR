@@ -1901,7 +1901,7 @@ int checkInteraction(QApplication& app)
     LpMeterConnection meter;
     RadioSetupDialog dialog(&model, nullptr, &tgxl, &pgxl, &ag, nullptr,
                             &acom, &spe, &vkamp, &meter);
-    dialog.resize(960, 680);
+    dialog.resize(960, 720);
     dialog.show();
     dialog.selectTab(QStringLiteral("Peripherals"));
     QCoreApplication::processEvents();
@@ -1963,7 +1963,7 @@ int checkInteraction(QApplication& app)
         return false;
     };
     QCoreApplication::processEvents();
-    if (dialog.size() != QSize(960, 680) || !fitsViewport(clearButton) || !fitsViewport(status)) {
+    if (dialog.size() != QSize(960, 720) || !fitsViewport(clearButton) || !fitsViewport(status)) {
         std::fprintf(stderr, "Clear code or Status is clipped at the default dialog size\n");
         // The page's width depends on the host: each serial-port combo is as
         // wide as its longest "port — description" label. Name the widest one.

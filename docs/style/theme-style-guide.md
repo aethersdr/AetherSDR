@@ -42,12 +42,22 @@ a widget subtree (for example, the `applet/tx` scope turns the
 checked-toggle accent red where the root theme has it blue — scope
 paths are slash-joined, and a widget opts in by carrying the path in
 its `themeContainer` property). The `canon` scope does the same for
-whole windows: AetherRX, AetherTX, AetherModem, AetherMap, AetherGPS, SpotHub, Connect to
-Radio and AGC-T Calibration sit under `canon/aetherRx`, `canon/aetherTx`, `canon/aetherModem`,
-`canon/aetherMap`, `canon/aetherGps`, `canon/spotHub`, `canon/connection` and `canon/agcCalibration`, and it maps the base tokens onto the canon palette
+whole windows: AetherRX, AetherTX, AetherModem, AetherMap, AetherGPS, SpotHub, Radio Setup,
+Connect to Radio and AGC-T Calibration sit under `canon/aetherRx`, `canon/aetherTx`, `canon/aetherModem`,
+`canon/aetherMap`, `canon/aetherGps`, `canon/spotHub`, `canon/radioSetup`, `canon/connection` and `canon/agcCalibration`, and it maps the base tokens onto the canon palette
 there (see [`aethersdr-style-guide.md`](aethersdr-style-guide.md)). The
 widget-aware accessors below resolve scope automatically — prefer them
 inside applets and anything painted inside a scoped window.
+
+A large canon window styles its pages from one sheet on its body rather than
+a sheet per widget. Radio Setup's widgets carry a role the sheet selects on
+(`RadioSetupDialogCommon.h`): a label's tone (`rsTone`: caption, value, hint,
+heading, title, accent for a status in progress, and ok, warn, error), a status chip (`rsChip`) and a button role
+(`rsButton`: select, mute, danger, success). A plain checkable button is an
+on/off toggle, filled `color.toggle.success.*` when on; a Select button is one
+of a set, filled canon cyan when chosen. A disabled control takes
+`color.control.unavailable`, checked or not. Changing a role on a live widget
+re-polishes it, so a status that turns to an error restyles at once.
 
 ### Consuming tokens
 

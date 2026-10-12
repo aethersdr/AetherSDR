@@ -3589,11 +3589,20 @@ RadioSetupDialog* MainWindow::openRadioSetupPage(const QString& page)
 {
     const QString prevComp = m_radioModel.audioCompressionParam();
     const bool wasFresh = !m_radioSetupDialog;
-    showOrRaisePersistent(m_radioSetupDialog,
-                          &m_radioModel, m_audio,
-                          &m_tgxlConn, &m_pgxlConn, &m_antennaGenius,
-                          m_kiwiSdrManager, &m_acomConn, &m_speConn, &m_vkampConn,
-                          &m_lpMeterConn, &m_kpa1500Conn);
+    // A canon workspace window: created directly rather than through
+    // showOrRaisePersistent(), which would apply View → Frameless Window.
+    if (wasFresh) {
+        auto* dlg = new RadioSetupDialog(&m_radioModel, m_audio,
+                                         &m_tgxlConn, &m_pgxlConn, &m_antennaGenius,
+                                         m_kiwiSdrManager, &m_acomConn, &m_speConn,
+                                         &m_vkampConn, &m_lpMeterConn, &m_kpa1500Conn,
+                                         this);
+        dlg->setAttribute(Qt::WA_DeleteOnClose);
+        m_radioSetupDialog = dlg;
+    }
+    m_radioSetupDialog->show();
+    m_radioSetupDialog->raise();
+    m_radioSetupDialog->activateWindow();
     if (wasFresh && m_radioSetupDialog)
         wireRadioSetupDialogSignals(m_radioSetupDialog, prevComp);
     if (m_radioSetupDialog && !page.isEmpty())

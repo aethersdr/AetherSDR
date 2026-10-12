@@ -3557,6 +3557,7 @@ add_executable(firmware_close_dialog_test
     tests/firmware_close_dialog_test.cpp
     src/gui/DragValuePopup.cpp
     src/gui/RadioSetupDialog.cpp
+    src/gui/CanonWindow.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
@@ -3580,6 +3581,7 @@ add_executable(flex_control_visibility_test
     tests/flex_control_visibility_test.cpp
     src/gui/DragValuePopup.cpp
     src/gui/RadioSetupDialog.cpp
+    src/gui/CanonWindow.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
@@ -3614,6 +3616,7 @@ add_executable(radio_setup_region_field_test
     tests/radio_setup_region_field_test.cpp
     src/gui/DragValuePopup.cpp
     src/gui/RadioSetupDialog.cpp
+    src/gui/CanonWindow.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
@@ -3642,6 +3645,7 @@ add_executable(radio_setup_label_theme_token_test
     tests/radio_setup_label_theme_token_test.cpp
     src/gui/DragValuePopup.cpp
     src/gui/RadioSetupDialog.cpp
+    src/gui/CanonWindow.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
@@ -3670,6 +3674,7 @@ add_executable(radio_setup_max_power_field_test
     tests/radio_setup_max_power_field_test.cpp
     src/gui/DragValuePopup.cpp
     src/gui/RadioSetupDialog.cpp
+    src/gui/CanonWindow.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
@@ -3695,6 +3700,7 @@ add_executable(radio_setup_tx_timing_fields_test
     tests/radio_setup_tx_timing_fields_test.cpp
     src/gui/DragValuePopup.cpp
     src/gui/RadioSetupDialog.cpp
+    src/gui/CanonWindow.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
@@ -3721,6 +3727,7 @@ add_executable(radio_setup_recording_mode_dim_test
     tests/radio_setup_recording_mode_dim_test.cpp
     src/gui/DragValuePopup.cpp
     src/gui/RadioSetupDialog.cpp
+    src/gui/CanonWindow.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
@@ -3748,6 +3755,7 @@ add_executable(radio_setup_headphone_output_gate_test
     tests/radio_setup_headphone_output_gate_test.cpp
     src/gui/DragValuePopup.cpp
     src/gui/RadioSetupDialog.cpp
+    src/gui/CanonWindow.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
@@ -4912,6 +4920,7 @@ add_executable(peripheral_auth_dialog_test
     tests/fakes/PeripheralAuthStoreFake.cpp
     src/gui/DragValuePopup.cpp
     src/gui/RadioSetupDialog.cpp
+    src/gui/CanonWindow.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp

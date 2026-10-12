@@ -25,6 +25,10 @@ Several menu items open Radio Setup straight at the right page:
 - **Settings → USB Cables...** → USB Cables
 - **Tools → Configure KiwiSDR...** → Antennas
 
+The window has no title bar. Drag any empty part of it to move it, and drag an edge or corner to resize it; it reopens at the size and place you left it. Close it with the round **✕** in the top-right corner, **Esc** or **Ctrl+W** (**⌘W** on macOS). It's a window of its own, with its own taskbar entry, so you can minimize it from the taskbar or park it on another monitor. **View → Frameless Window** does not apply to it.
+
+On/off buttons (**Enabled** / **Disabled**) fill green when on. Where you pick one of a set (**DHCP** / **Static**, **Radio Side** / **Client Side**, **CWU** / **CWL**), the chosen one fills cyan. A control the connected radio cannot use is dimmed, never hidden.
+
 ## Finding a setting
 
 Radio Setup is a searchable browser: a categorised tree of pages on the left and the selected page on the right.

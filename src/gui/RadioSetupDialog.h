@@ -1,6 +1,6 @@
 #pragma once
 
-#include "PersistentDialog.h"
+#include "CanonWindow.h"
 #include "PeripheralConnectionSource.h"
 #include "RadioSetupIpConfigPresentation.h"
 
@@ -42,8 +42,9 @@ class Kpa1500Connection;
 class LpMeterConnection;
 struct PeripheralDeviceUi;
 
-// Radio Setup dialog — searchable, category-based configuration window.
-class RadioSetupDialog : public PersistentDialog {
+// Radio Setup: the searchable, category-based configuration window, a canon
+// workspace window styled by one sheet (see RadioSetupDialogCommon.h).
+class RadioSetupDialog : public CanonWindow {
     Q_OBJECT
 
 public:

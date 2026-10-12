@@ -174,25 +174,6 @@ struct PeripheralDeviceUi {
 
 namespace {
 
-const QString kButtonStyle =
-    "QPushButton { background: {{color.background.1}}; "
-    "border: 1px solid {{color.background.2}}; border-radius: 3px; "
-    "color: {{color.text.primary}}; font-size: 11px; font-weight: bold; "
-    "padding: 3px 10px; }"
-    "QPushButton:hover { background: {{color.background.2}}; }";
-const QString kComboStyle =
-    "QComboBox { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
-    "border-radius: 3px; color: {{color.text.primary}}; font-size: 12px; padding: 2px 4px; }"
-    "QComboBox::drop-down { border: none; }";
-const QString kSpinStyle =
-    "QSpinBox { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
-    "border-radius: 3px; color: {{color.text.primary}}; font-size: 12px; padding: 2px 4px; }";
-const QString kGroupBoxStyle =
-    "QGroupBox { border: 1px solid {{color.background.2}}; border-radius: 4px; "
-    "margin-top: 8px; padding-top: 12px; color: {{color.text.secondary}}; "
-    "font-weight: bold; } QGroupBox::title { subcontrol-origin: margin; "
-    "left: 10px; padding: 0 4px; }";
-
 QString peripheralTr(const char* text)
 {
     return RadioSetupDialog::tr(text);
@@ -257,25 +238,24 @@ QString statusAccessibleName(const PeripheralDeviceUi& ui)
         ui.state.source, ui.shortName, !ui.radioRelay).accessibleName;
 }
 
-const char* statusColorToken(const PeripheralDeviceUi& ui)
+Tone statusTone(const PeripheralDeviceUi& ui)
 {
     switch (ui.state.attention) {
     case Attention::InvalidCode:
     case Attention::AuthBlocked:
     case Attention::ConnectError:
     case Attention::CredentialError:
-        return "{{color.accent.danger}}";
+        return Tone::Error;
     case Attention::CredentialWarning:
     case Attention::RemovalPending:
-        return "{{color.accent.warning}}";
+        return Tone::Warn;
     case Attention::None:
         break;
     }
     if (!ui.state.note.isEmpty() || ui.state.discardedAuthCode || ui.state.codeNotSaved) {
-        return "{{color.accent.warning}}";
+        return Tone::Warn;
     }
-    return ui.state.source == Source::Direct ? "{{color.accent.success}}"
-                                             : "{{color.text.secondary}}";
+    return ui.state.source == Source::Direct ? Tone::Ok : Tone::Hint;
 }
 
 // Name and description follow the visible state, and assistive technology is
@@ -288,15 +268,10 @@ void applyStatusLabel(PeripheralDeviceUi& ui)
     }
     const QString text = statusText(ui);
     const QString name = statusAccessibleName(ui);
-    const QString color = QString::fromLatin1(statusColorToken(ui));
     const bool textChanged = label->text() != text;
     const bool nameChanged = label->accessibleName() != name;
     const bool descriptionChanged = label->accessibleDescription() != text;
-    if (label->property("peripheralStatusColor").toString() != color) {
-        label->setProperty("peripheralStatusColor", color);
-        ThemeManager::instance().applyStyleSheet(label,
-            QStringLiteral("QLabel { color: %1; font-size: 11px; }").arg(color));
-    }
+    setTone(label, statusTone(ui));
     if (!textChanged && !nameChanged && !descriptionChanged) {
         return;
     }
@@ -376,17 +351,13 @@ DetailPage beginDetailPage(PeripheralDeviceUi& ui, QWidget* stackParent)
     DetailPage detail;
     detail.page = new QWidget(stackParent);
     detail.page->setObjectName(QStringLiteral("peripheralDetail_%1").arg(ui.id));
-    ThemeManager::instance().applyStyleSheet(detail.page,
-        QStringLiteral("QWidget#%1 { background: {{color.background.0}}; }")
-            .arg(detail.page->objectName()));
     detail.layout = new QVBoxLayout(detail.page);
     detail.layout->setContentsMargins(8, 12, 0, 0);
     detail.layout->setSpacing(10);
 
     auto* heading = new QHBoxLayout;
     auto* title = new QLabel(ui.label, detail.page);
-    ThemeManager::instance().applyStyleSheet(title,
-        "QLabel { color: {{color.text.primary}}; font-size: 15px; font-weight: bold; }");
+    setTone(title, Tone::Title);
     heading->addWidget(title);
     heading->addStretch();
     detail.layout->addLayout(heading);
@@ -399,7 +370,6 @@ DetailPage beginDetailPage(PeripheralDeviceUi& ui, QWidget* stackParent)
     detail.layout->addWidget(ui.statusLabel);
 
     detail.group = new QGroupBox(RadioSetupDialog::tr("Connection Settings"), detail.page);
-    ThemeManager::instance().applyStyleSheet(detail.group, kGroupBoxStyle);
     detail.form = new QGridLayout(detail.group);
     detail.form->setHorizontalSpacing(12);
     detail.form->setVerticalSpacing(10);
@@ -447,9 +417,6 @@ void finishDetailPage(DetailPage& detail, PeripheralDeviceUi& ui,
             : RadioSetupDialog::tr(
                   "Connect to %1 on startup, when discovery reports it, and after a drop. "
                   "Turn off to connect only when you click Connect.").arg(ui.label));
-        ThemeManager::instance().applyStyleSheet(autoConnect,
-            "QCheckBox { color: {{color.text.primary}}; font-size: 11px; spacing: 8px; }"
-            + kCheckBoxIndicator);
         autoConnect->setChecked(PeripheralSettings::autoConnect(ui.id));
         // Written at once. The connections read it when they decide to
         // reconnect, so nothing needs to be pushed to them here.
@@ -462,8 +429,7 @@ void finishDetailPage(DetailPage& detail, PeripheralDeviceUi& ui,
     ui.editHint = new QLabel(detail.page);
     ui.editHint->setObjectName(QStringLiteral("peripheralEditHint_%1").arg(ui.id));
     ui.editHint->setWordWrap(true);
-    ThemeManager::instance().applyStyleSheet(ui.editHint,
-        "QLabel { color: {{color.text.secondary}}; font-size: 11px; }");
+    setTone(ui.editHint, Tone::Hint);
 
     auto* buttonRow = new QHBoxLayout;
     buttonRow->addWidget(ui.connectButton);
@@ -492,7 +458,6 @@ QPushButton* makeConnectButton(PeripheralDeviceUi& ui)
                                                     : QStringLiteral("Connect"));
     button->setObjectName(QStringLiteral("peripheralConnect_%1").arg(ui.id));
     button->setAccessibleName(RadioSetupDialog::tr("Connect or disconnect %1").arg(ui.label));
-    ThemeManager::instance().applyStyleSheet(button, kButtonStyle);
     return button;
 }
 
@@ -501,7 +466,6 @@ QSpinBox* makePortSpin(const PeripheralDeviceUi& ui)
     auto* spin = new QSpinBox;
     spin->setObjectName(QStringLiteral("peripheralPort_%1").arg(ui.id));
     spin->setRange(1, 65535);
-    ThemeManager::instance().applyStyleSheet(spin, kSpinStyle);
     spin->setAccessibleName(RadioSetupDialog::tr("%1 port").arg(ui.label));
     return spin;
 }
@@ -648,7 +612,6 @@ void RadioSetupDialog::buildAuthNetworkDevice(PeripheralDeviceUi& ui, QWidget* s
     ui.addressEdit->setObjectName(QStringLiteral("peripheralAddress_%1").arg(ui.id));
     ui.addressEdit->setPlaceholderText(QStringLiteral("e.g. 192.168.1.100"));
     ui.addressEdit->setAccessibleName(tr("%1 address").arg(ui.label));
-    applyEditStyle(ui.addressEdit);
     ui.addressEdit->setMinimumWidth(140);
     const QString savedIp = settings.value(ui.ipKey, "").toString();
     if (!savedIp.isEmpty()) {
@@ -770,12 +733,10 @@ void RadioSetupDialog::buildAuthNetworkDevice(PeripheralDeviceUi& ui, QWidget* s
                 ? edit->property("authBlankDescription").toString()
                 : RadioSetupDialog::tr("A code has been entered. It replaces the saved code only after the device accepts it."));
         });
-        applyEditStyle(edit);
 
         auto* show = new QPushButton(tr("Show"));
         ui.showButton = show;
         show->setObjectName(QStringLiteral("peripheralAuth_%1_5").arg(ui.id));
-        ThemeManager::instance().applyStyleSheet(show, kButtonStyle);
         show->setAccessibleName(tr("%1 show authorization code").arg(label));
         auto concealSavedCode = [edit, show, label]() {
             edit->setProperty("authRevealGeneration",
@@ -854,7 +815,6 @@ void RadioSetupDialog::buildAuthNetworkDevice(PeripheralDeviceUi& ui, QWidget* s
         auto* clear = new QPushButton(tr("Clear code"));
         ui.clearButton = clear;
         clear->setObjectName(QStringLiteral("peripheralAuth_%1_6").arg(ui.id));
-        ThemeManager::instance().applyStyleSheet(clear, kButtonStyle);
         clear->setAccessibleName(tr("%1 clear saved authorization code").arg(label));
         connect(clear, &QPushButton::clicked, edit, concealSavedCode);
         connect(clear, &QPushButton::clicked, this, [this, u, edit, authDevice, refresh]() {
@@ -901,7 +861,6 @@ void RadioSetupDialog::buildAuthNetworkDevice(PeripheralDeviceUi& ui, QWidget* s
         ui.webUiButton = new QPushButton(QStringLiteral("⚙ Web UI"));
         ui.webUiButton->setObjectName(QStringLiteral("peripheralWebUi_%1").arg(ui.id));
         ui.webUiButton->setAccessibleName(tr("Open the %1 web interface").arg(ui.label));
-        ThemeManager::instance().applyStyleSheet(ui.webUiButton, kButtonStyle);
         ui.webUiButton->setToolTip(tr("Open ShackSwitch web interface"));
         connect(ui.webUiButton, &QPushButton::clicked, this, [u]() { u->openWebUi(); });
         extras.append(ui.webUiButton);
@@ -921,7 +880,6 @@ void RadioSetupDialog::buildSerialNetworkDevice(PeripheralDeviceUi& ui, QWidget*
 
     ui.modeCombo = new QComboBox;
     ui.modeCombo->setObjectName(QStringLiteral("peripheralMode_%1").arg(ui.id));
-    ThemeManager::instance().applyStyleSheet(ui.modeCombo, kComboStyle);
     ui.modeCombo->setAccessibleName(tr("%1 connection type").arg(ui.label));
 #ifdef HAVE_SERIALPORT
     ui.modeCombo->addItem("Serial", "Serial");
@@ -945,12 +903,10 @@ void RadioSetupDialog::buildSerialNetworkDevice(PeripheralDeviceUi& ui, QWidget*
         auto* lay = new QHBoxLayout(serialPage);
         lay->setContentsMargins(0, 0, 0, 0);
         serialCombo = new QComboBox;
-        ThemeManager::instance().applyStyleSheet(serialCombo, kComboStyle);
         serialCombo->setAccessibleName(tr("%1 serial port").arg(ui.label));
         serialCustomEdit = new QLineEdit;
         serialCustomEdit->setPlaceholderText("/dev/ttyUSB0");
         serialCustomEdit->setAccessibleName(tr("%1 custom serial port").arg(ui.label));
-        applyEditStyle(serialCustomEdit);
         populateSerialPortCombo(serialCombo, serialCustomEdit,
                                 PeripheralSettings::deviceString(group, "SerialPort"));
         serialCustomEdit->setVisible(serialCombo->currentData().toString() == "__custom__");
@@ -982,7 +938,6 @@ void RadioSetupDialog::buildSerialNetworkDevice(PeripheralDeviceUi& ui, QWidget*
     netIpEdit->setPlaceholderText(ui.networkPlaceholder);
     netIpEdit->setAccessibleName(tr("%1 network address").arg(ui.label));
     netIpEdit->setAccessibleDescription(ui.networkDescription);
-    applyEditStyle(netIpEdit);
     netIpEdit->setText(PeripheralSettings::deviceString(group, "ManualIp"));
     if (!ui.networkTooltip.isEmpty()) {
         netIpEdit->setToolTip(ui.networkTooltip);
@@ -998,8 +953,7 @@ void RadioSetupDialog::buildSerialNetworkDevice(PeripheralDeviceUi& ui, QWidget*
 #ifdef HAVE_SERIALPORT
     {
         auto* fixedLbl = new QLabel(ui.fixedBaud);
-        ThemeManager::instance().applyStyleSheet(fixedLbl,
-            "QLabel { color: {{color.text.secondary}}; font-size: 11px; }");
+        setTone(fixedLbl, Tone::Hint);
         serialBaudIdx = ui.portStack->addWidget(fixedLbl);
     }
 #endif
@@ -1007,7 +961,6 @@ void RadioSetupDialog::buildSerialNetworkDevice(PeripheralDeviceUi& ui, QWidget*
     netPortSpin->setRange(1, 65535);
     netPortSpin->setValue(PeripheralSettings::deviceInt(group, "ManualPort", ui.defaultPort));
     netPortSpin->setAccessibleName(tr("%1 network port").arg(ui.label));
-    ThemeManager::instance().applyStyleSheet(netPortSpin, kSpinStyle);
     const int netPortIdx = ui.portStack->addWidget(netPortSpin);
 
     auto applyMode = [stack = ui.addressStack, ports = ui.portStack,
@@ -1097,7 +1050,6 @@ void RadioSetupDialog::buildSerialNetworkDevice(PeripheralDeviceUi& ui, QWidget*
     ui.serialRefreshButton->setObjectName(QStringLiteral("peripheralSerialRefresh_%1").arg(ui.id));
     ui.serialRefreshButton->setAutoDefault(false);
     ui.serialRefreshButton->setAccessibleName(tr("%1 refresh serial ports").arg(ui.label));
-    ThemeManager::instance().applyStyleSheet(ui.serialRefreshButton, kButtonStyle);
     connect(ui.serialRefreshButton, &QPushButton::clicked, this, [pageReseeds]() {
         for (const auto& reseed : *pageReseeds) {
             reseed();
@@ -1123,7 +1075,6 @@ void RadioSetupDialog::buildVkampDevice(PeripheralDeviceUi& ui, QWidget* stackPa
     ui.addressEdit = new QLineEdit;
     ui.addressEdit->setObjectName(QStringLiteral("peripheralAddress_%1").arg(ui.id));
     ui.addressEdit->setPlaceholderText(QStringLiteral("e.g. 192.168.1.50"));
-    applyEditStyle(ui.addressEdit);
     ui.addressEdit->setText(PeripheralSettings::deviceString("Vkamp", "ManualIp"));
     // Name answers "what is this?", description answers "what do I type?"
     // (docs/a11y.md section 2).
@@ -1169,7 +1120,6 @@ void RadioSetupDialog::buildVkampDevice(PeripheralDeviceUi& ui, QWidget* stackPa
     // defaults to W2000 (the originally-confirmed unit) rather than blocking.
     ui.modelCombo = new QComboBox;
     ui.modelCombo->setObjectName(QStringLiteral("peripheralAmplifierModel"));
-    ThemeManager::instance().applyStyleSheet(ui.modelCombo, kComboStyle);
     ui.modelCombo->setAccessibleName(tr("VK3AMP amplifier model"));
     ui.modelCombo->setAccessibleDescription(
         tr("Rated output of your unit. Sets the power meter's full scale; it does not change "
@@ -1219,7 +1169,6 @@ void RadioSetupDialog::buildKpa1500Device(PeripheralDeviceUi& ui, QWidget* stack
     ui.addressEdit = new QLineEdit;
     ui.addressEdit->setObjectName(QStringLiteral("peripheralAddress_%1").arg(ui.id));
     ui.addressEdit->setPlaceholderText(QStringLiteral("e.g. 192.168.1.60"));
-    applyEditStyle(ui.addressEdit);
     ui.addressEdit->setText(PeripheralSettings::deviceString("Kpa1500", "ManualIp"));
     ui.addressEdit->setAccessibleName(tr("KPA1500 address"));
     ui.addressEdit->setAccessibleDescription(
@@ -1301,8 +1250,6 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
 {
     auto* page = new QWidget;
     page->setObjectName(QStringLiteral("peripheralsPage"));
-    ThemeManager::instance().applyStyleSheet(page,
-        "QWidget#peripheralsPage { background: {{color.background.0}}; }");
     auto* vbox = new QVBoxLayout(page);
     vbox->setSpacing(8);
 
@@ -1341,8 +1288,6 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
 
     auto* content = new QWidget(page);
     content->setObjectName(QStringLiteral("peripheralContent"));
-    ThemeManager::instance().applyStyleSheet(content,
-        "QWidget#peripheralContent { background: {{color.background.0}}; }");
     auto* columns = new QHBoxLayout(content);
     columns->setContentsMargins(0, 0, 0, 0);
     columns->setSpacing(12);
@@ -1354,8 +1299,7 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
     auto* emptyText = new QLabel(
         tr("No peripherals added.\n\nChoose Add to configure a device."), emptyPage);
     emptyText->setAlignment(Qt::AlignCenter);
-    ThemeManager::instance().applyStyleSheet(emptyText,
-        "QLabel { color: {{color.text.secondary}}; font-size: 12px; }");
+    setTone(emptyText, Tone::Hint);
     emptyLayout->addWidget(emptyText);
     detailStack->addWidget(emptyPage);
 
@@ -1652,9 +1596,6 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
     auto* reconnectCheck = new QCheckBox(tr("Reconnect automatically"));
     reconnectCheck->setObjectName(QStringLiteral("peripheralAutoReconnect"));
     reconnectCheck->setAccessibleDescription(tr("Reconnect peripherals after a connection drops."));
-    ThemeManager::instance().applyStyleSheet(reconnectCheck,
-        "QCheckBox { color: {{color.text.primary}}; font-size: 11px; spacing: 8px; }"
-        + kCheckBoxIndicator);
     reconnectCheck->setChecked(PeripheralSettings::autoReconnect());
     connect(reconnectCheck, &QCheckBox::toggled, this, [this](bool on) {
         PeripheralSettings::setAutoReconnect(on);
@@ -1687,42 +1628,22 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
     auto* listGroup = new QGroupBox(tr("Devices"), content);
     listGroup->setMinimumWidth(250);
     listGroup->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
-    ThemeManager::instance().applyStyleSheet(listGroup, kGroupBoxStyle);
     auto* listLayout = new QVBoxLayout(listGroup);
     auto* deviceList = new QListWidget(listGroup);
     deviceList->setObjectName(QStringLiteral("peripheralDeviceList"));
     deviceList->setAccessibleName(tr("Configured peripherals"));
     deviceList->setAlternatingRowColors(true);
     deviceList->setSpacing(3);
-    ThemeManager::instance().applyStyleSheet(deviceList,
-        "QListWidget { background: {{color.background.0}}; alternate-background-color: {{color.background.0}}; "
-        "color: {{color.text.primary}}; "
-        "border: 1px solid {{color.background.1}}; font-size: 11px; }"
-        "QListWidget::item { background: {{color.background.1}}; padding: 8px 7px; margin-right: 6px; "
-        "border: 1px solid {{color.background.2}}; border-radius: 0px; }"
-        "QListWidget::item:alternate { background: {{color.background.2}}; }"
-        "QListWidget::item:selected, QListWidget::item:alternate:selected { background: palette(highlight); "
-        "color: palette(highlighted-text); }");
     deviceList->setMinimumHeight(200);
     deviceList->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     listLayout->addWidget(deviceList);
 
-    const QString actionStyle =
-        "QPushButton { background: {{color.background.1}}; "
-        "border: 1px solid {{color.background.2}}; border-radius: 3px; "
-        "color: {{color.text.primary}}; font-size: 11px; font-weight: bold; "
-        "padding: 5px 8px; }"
-        "QPushButton:hover { background: {{color.background.2}}; }"
-        "QPushButton:disabled { color: {{color.text.disabled}}; }";
     auto* listActions = new QHBoxLayout;
     auto* addButton = new QPushButton(tr("Add"), listGroup);
     addButton->setObjectName(QStringLiteral("peripheralAddButton"));
     addButton->setAccessibleName(tr("Add peripheral device"));
     addButton->setAccessibleDescription(tr("Choose a device type to configure"));
-    ThemeManager::instance().applyStyleSheet(addButton, actionStyle);
     auto* addMenu = new QMenu(addButton);
-    ThemeManager::instance().applyStyleSheet(addMenu,
-        "QMenu::item:disabled { color: {{color.text.disabled}}; }");
     addButton->setMenu(addMenu);
     auto* removeButton = new QPushButton(tr("Remove"), listGroup);
     removeButton->setObjectName(QStringLiteral("peripheralRemoveButton"));
@@ -1730,7 +1651,6 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
     removeButton->setAccessibleDescription(tr("Select a configured peripheral to remove it"));
     removeButton->setToolTip(tr("Remove this device and clear its saved connection details"));
     removeButton->setEnabled(false);
-    ThemeManager::instance().applyStyleSheet(removeButton, actionStyle);
     listActions->addWidget(addButton, 1);
     listActions->addWidget(removeButton, 1);
     listLayout->addLayout(listActions);
@@ -1739,8 +1659,7 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
     removalNotice->setAccessibleName(tr("Peripheral removal status"));
     removalNotice->setWordWrap(true);
     removalNotice->hide();
-    ThemeManager::instance().applyStyleSheet(removalNotice,
-        "QLabel { color: {{color.accent.warning}}; font-size: 11px; }");
+    setTone(removalNotice, Tone::Warn);
     listLayout->addWidget(removalNotice);
     listLayout->addSpacing(8);
     listLayout->addWidget(reconnectCheck);
@@ -1749,7 +1668,6 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
     helpButton->setObjectName(QStringLiteral("peripheralConnectionHelp"));
     helpButton->setAutoDefault(false);
     helpButton->setAccessibleDescription(tr("Explain local and remote peripheral connections."));
-    ThemeManager::instance().applyStyleSheet(helpButton, actionStyle);
     connect(helpButton, &QPushButton::clicked, this, [this]() {
         QMessageBox::information(this, tr("Peripheral connections"),
             tr("Add a device and enter its address for a direct connection. "
