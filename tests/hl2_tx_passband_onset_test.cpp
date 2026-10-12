@@ -253,7 +253,9 @@ Onset analyseOnset(const char* what, const std::vector<std::complex<float>>& iq,
     if (iq.size() < settledFrom + kSettledMin) {
         o.tooShort = true;
         o.halfMs = 1e9;
+        o.rise1090Ms = 1e9;
         o.leadMs = 1e9;
+        o.envDb.fill(-400.0);
         return o;
     }
     double steady = 0.0;
@@ -265,6 +267,7 @@ Onset analyseOnset(const char* what, const std::vector<std::complex<float>>& iq,
     // read as a 0 ms onset: no signal is no onset.
     if (steady == 0.0) {
         o.halfMs = 1e9;
+        o.rise1090Ms = 1e9;
         o.leadMs = 1e9;
         o.envDb.fill(-400.0);
         std::fprintf(stderr, "%s: the settled level is zero; no onset to read\n", what);
@@ -282,7 +285,11 @@ Onset analyseOnset(const char* what, const std::vector<std::complex<float>>& iq,
     o.firstMs = firstAbove(-60.0);
     o.halfMs = firstAbove(-6.0206);
     o.rise1090Ms = firstAbove(-0.9151) - firstAbove(-20.0);
-    // A 50 % point never reached is no lead time: it must fail its bound too.
+    // A 50 % point never reached is no rise and no lead time: both must fail
+    // their bounds too.
+    if (o.halfMs >= 1e9) {
+        o.rise1090Ms = 1e9;
+    }
     o.leadMs = o.halfMs >= 1e9 ? 1e9 : o.halfMs - o.firstMs;
     const double halfAt = static_cast<double>(t0) + o.halfMs / kMsPerOut;
     // Floor outside the capture: a level never reached puts halfAt far past it.
@@ -358,7 +365,8 @@ void checkMidOver(const Onset& o)
 // The analysis on injected captures, with no modulator run, at the key-up and
 // the mid-over t0. A step is the control. A level is never reached only when
 // the settled level is not finite, so that capture ends in a NaN; the last is
-// one sample too short to read. Both come back as 1e9 and fail every bound.
+// one sample too short to read. Each comes back with halfMs, rise1090Ms and
+// leadMs at 1e9, so every bound fails on the sentinel.
 void checkInjectedCaptures()
 {
     for (const std::size_t t0 : {std::size_t{0}, 2 * kWarmStartIn}) {
@@ -372,13 +380,13 @@ void checkInjectedCaptures()
         const Onset s = analyseOnset(("injected step" + at).c_str(), step, t0);
         check(!s.tooShort && std::abs(s.halfMs - 10.0) < 1e-6 && s.leadMs == 0.0
                   && midHalfOk(s) && midLeadOk(s),
-              ("injected step" + at + ": the 50 % point reads 10 ms and passes").c_str());
+              ("injected step" + at + ": the 50 % point reads 10 ms and passes the mid-over bounds").c_str());
 
         std::vector<std::complex<float>> never(readable, on);
         never.back() = {std::numeric_limits<float>::quiet_NaN(), 0.0f};
         const Onset n = analyseOnset(("injected, level never reached" + at).c_str(), never, t0);
-        check(!n.tooShort && n.halfMs >= 1e9 && n.leadMs >= 1e9,
-              ("level never reached" + at + ": halfMs and leadMs are the sentinel").c_str());
+        check(!n.tooShort && n.halfMs >= 1e9 && n.rise1090Ms >= 1e9 && n.leadMs >= 1e9,
+              ("level never reached" + at + ": halfMs, rise1090Ms and leadMs are the sentinel").c_str());
         check(std::all_of(n.envDb.begin(), n.envDb.end(), [](double v) { return v == -400.0; }),
               ("level never reached" + at + ": every envelope read is the floor").c_str());
         check(!keyUpHalfOk(n) && !keyUpRiseOk(n) && !midHalfOk(n) && !midLeadOk(n),
@@ -386,15 +394,15 @@ void checkInjectedCaptures()
 
         const std::vector<std::complex<float>> silent(readable);
         const Onset z = analyseOnset(("injected, silent" + at).c_str(), silent, t0);
-        check(!z.tooShort && z.halfMs >= 1e9 && z.leadMs >= 1e9,
-              ("silent" + at + ": halfMs and leadMs are the sentinel").c_str());
+        check(!z.tooShort && z.halfMs >= 1e9 && z.rise1090Ms >= 1e9 && z.leadMs >= 1e9,
+              ("silent" + at + ": halfMs, rise1090Ms and leadMs are the sentinel").c_str());
         check(!keyUpHalfOk(z) && !keyUpRiseOk(z) && !midHalfOk(z) && !midLeadOk(z),
               ("silent" + at + ": every onset bound fails").c_str());
 
         const std::vector<std::complex<float>> brief(readable - 1, on);
         const Onset b = analyseOnset(("injected, too short" + at).c_str(), brief, t0);
-        check(b.tooShort && b.halfMs >= 1e9 && b.leadMs >= 1e9,
-              ("too short" + at + ": halfMs and leadMs are the sentinel").c_str());
+        check(b.tooShort && b.halfMs >= 1e9 && b.rise1090Ms >= 1e9 && b.leadMs >= 1e9,
+              ("too short" + at + ": halfMs, rise1090Ms and leadMs are the sentinel").c_str());
         check(!keyUpHalfOk(b) && !keyUpRiseOk(b) && !midHalfOk(b) && !midLeadOk(b),
               ("too short" + at + ": every onset bound fails").c_str());
     }
@@ -405,13 +413,13 @@ void checkInjectedCaptures()
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
+    checkInjectedCaptures();   // no modulator runs: valid in every build
+
     std::fprintf(stderr, "modulator: %s\n", Hl2TxDsp::modulatorName());
     if (std::string(Hl2TxDsp::modulatorName()) != "wdsp-txa") {
         std::fprintf(stderr, "SKIP: these figures are the TXA modulator's\n");
-        return 77;
+        return g_failures == 0 ? 77 : 1;
     }
-
-    checkInjectedCaptures();
 
     // The passband per mode, as Hl2Backend pushes it.
     const std::pair<int, int> usb = defaultTxPassbandForModeName("USB");
