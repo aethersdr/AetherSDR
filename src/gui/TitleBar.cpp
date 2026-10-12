@@ -5,8 +5,10 @@
 #include "FramelessMoveHelper.h"
 #include "WindowChrome.h"
 #include "GuardedSlider.h"
+#include "MixerControlAvailability.h"
 #include "PersistentDialog.h"
 #include "RadioTabBar.h"
+#include "ReleaseTagText.h"
 #include "WindowCaptionButtons.h"
 #include "core/NetworkDiagnostics.h"
 #include "core/AppSettings.h"
@@ -1294,12 +1296,8 @@ void TitleBar::setHeadphoneAvailable(bool available)
             QStringLiteral("Headphone volume level, 0 to 100 percent"));
         return;
     }
-    const QString muteReason = QStringLiteral(
-        "Unavailable: this radio has no headphone output. Its audio plays on "
-        "this computer; mute it with the speaker button.");
-    const QString volumeReason = QStringLiteral(
-        "Unavailable: this radio has no headphone output. Its audio plays on "
-        "this computer; set its level with the master volume slider.");
+    const QString muteReason = QString::fromLatin1(kHeadphoneMuteUnavailableReason);
+    const QString volumeReason = QString::fromLatin1(kHeadphoneLevelUnavailableReason);
     m_headphoneBtn->setToolTip(muteReason);
     m_headphoneBtn->setAccessibleDescription(muteReason);
     m_hpSlider->setToolTip(volumeReason);
@@ -1448,11 +1446,7 @@ void TitleBar::showFeatureRequestDialog()
             auto currentVer = VersionNumber::parse(QCoreApplication::applicationVersion());
             if (!latestVer.isNull() && currentVer < latestVer) {
                 auto answer = FramelessMessageBox::warning(this, "Outdated Version",
-                    QString("<p>You are running <b>v%1</b> but <b>v%2</b> is available.</p>"
-                            "<p>Your issue may already be fixed in the latest release. "
-                            "Please update before filing a bug report.</p>"
-                            "<p>Continue anyway?</p>")
-                        .arg(QCoreApplication::applicationVersion(), latest),
+                    outdatedVersionPromptHtml(QCoreApplication::applicationVersion(), latest),
                     QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
                 if (answer != QMessageBox::Yes) return;
             }

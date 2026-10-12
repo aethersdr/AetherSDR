@@ -2216,8 +2216,12 @@ alike through `RadioCapabilities::clientPersistsPanFrameRate()` and
 `clientPersistsDbmRange()`. The HL2 declares both and no other family does;
 another family opts in with one declaration in its own backend. The range
 declaration counts only with absolute bins, because the client writes the range
-into the pan model. The waterfall rate keeps its own gate,
-`RadioModel::shapesDisplayRatesLocally()`.
+into the pan model. The waterfall rate has a declared owner too,
+`PanWaterfallRateShaping::clientPersistsWaterfallRate`, read by its save and its
+restore through `RadioCapabilities::clientPersistsPanWaterfallRate()`, together
+with `RadioModel::shapesDisplayRatesLocally()`: both must hold. The HL2,
+ANAN, Icom, RTL and demo backends each declare it, a Flex does not, and a family
+stops storing the rate with one edit in its own backend.
 
 ### 15.2.3 There is no hardware black level to select
 

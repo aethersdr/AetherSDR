@@ -3743,7 +3743,8 @@ set_tests_properties(radio_setup_recording_mode_dim_test PROPERTIES
 
 # Radio Setup's Headphone row on a connected radio with no command plane:
 # dimmed with an announced reason on the real HL2 and ANAN capabilities, Line
-# Out live on ANAN (it declares one), Flex (Demo) unchanged. Injected backend;
+# Out live on ANAN (it declares one), Flex (Demo) unchanged, and the dimmed
+# rows rendered in the unavailable token under both themes. Injected backend;
 # no socket.
 add_executable(radio_setup_headphone_output_gate_test
     tests/radio_setup_headphone_output_gate_test.cpp
@@ -5350,6 +5351,17 @@ target_include_directories(qrz_callsign_test PRIVATE src)
 target_link_libraries(qrz_callsign_test PRIVATE Qt6::Core Qt6::Network Qt6::Test)
 add_test(NAME qrz_callsign_test COMMAND qrz_callsign_test)
 
+# #4411: AdifParser::extractField's length guard must not overflow int on a
+# crafted <FIELD:len> token. Socket-free; real files through parseFile().
+add_executable(adif_parser_test
+    tests/adif_parser_test.cpp
+    src/core/AdifParser.cpp
+    src/core/CtyDatParser.cpp
+)
+target_include_directories(adif_parser_test PRIVATE src)
+target_link_libraries(adif_parser_test PRIVATE Qt6::Core)
+add_test(NAME adif_parser_test COMMAND adif_parser_test)
+
 add_executable(shortcut_manager_test
     tests/shortcut_manager_test.cpp
     src/core/ShortcutManager.cpp
@@ -6462,6 +6474,19 @@ target_compile_definitions(pan_dimension_routing_test PRIVATE
 target_link_libraries(pan_dimension_routing_test PRIVATE aethercore Qt6::Core)
 add_test(NAME pan_dimension_routing_test COMMAND pan_dimension_routing_test)
 
+# A panadapter display control the client applied itself raises no drop
+# notice: WtrFall Gain, Black Level, Clone to all Pans and Reset display
+# defaults on an injected backend carrying each real backend's capabilities()
+# (executed), the wire text with a command sink on an unopened RadioConnection
+# (executed), and the four MainWindow sites read as text. No sockets, no radio.
+add_executable(pan_display_drop_notice_test tests/pan_display_drop_notice_test.cpp)
+target_include_directories(pan_display_drop_notice_test PRIVATE src tests)
+target_compile_definitions(pan_display_drop_notice_test PRIVATE
+    AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(pan_display_drop_notice_test PRIVATE
+    aethercore Qt6::Core Qt6::Network)
+add_test(NAME pan_display_drop_notice_test COMMAND pan_display_drop_notice_test)
+
 add_executable(hl2_family_transition_test tests/hl2_family_transition_test.cpp)
 target_include_directories(hl2_family_transition_test PRIVATE src)
 target_link_libraries(hl2_family_transition_test PRIVATE aethercore Qt6::Core Qt6::Test)
@@ -7118,6 +7143,16 @@ target_link_libraries(frameless_resizer_test PRIVATE
 set_target_properties(frameless_resizer_test PROPERTIES AUTOMOC ON)
 add_test(NAME frameless_resizer_test COMMAND frameless_resizer_test)
 set_tests_properties(frameless_resizer_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# The two prompts that show a GitHub release tag (#6405): the tag is escaped
+# in the rich-text "Outdated Version" body and the "Update Available" box is
+# plain text. The tag is passed in; no network, no sockets.
+add_executable(release_tag_text_test tests/release_tag_text_test.cpp)
+target_include_directories(release_tag_text_test PRIVATE src)
+target_link_libraries(release_tag_text_test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets)
+add_test(NAME release_tag_text_test COMMAND release_tag_text_test)
+set_tests_properties(release_tag_text_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # FlexControl port-loss recovery (#4574). Guarded on SERIALPORT for the same
@@ -8414,6 +8449,7 @@ set(AETHER_SETTINGS_CONSUMERS
     atu_seam_gate_test
     transmit_seam_drop_notice_test
     model_control_routing_test
+    pan_display_drop_notice_test
     backend_capability_revision_test
     icom_panadapter_capacity_test
     backend_receive_contract_test
@@ -8729,6 +8765,23 @@ if (NOT _aether_ggml_baseline_str STREQUAL "")
         AETHER_GGML_CPU_BASELINE="${_aether_ggml_baseline_str}")
 endif()
 add_test(NAME system_inventory_test COMMAND system_inventory_test)
+
+# RADE V1 receive phase accumulators (#6398): the BPF mixer phase and the
+# frequency-offset phase must be renormalized or float32 rounding shrinks them
+# without bound. Socket-free DSP assertions on the vendored C directly, seeding
+# the drift rather than waiting hours for it. Needs the vendored RADE tree, so
+# it is declared only where aethercore carries it (ENABLE_RADE, default ON);
+# it links aethercore for the RADE objects and Opus include paths.
+if(RADE_FOUND)
+    add_executable(rade_phase_renorm_test tests/rade_phase_renorm_test.cpp)
+    target_include_directories(rade_phase_renorm_test PRIVATE ${RADE_DIR}/src)
+    target_link_libraries(rade_phase_renorm_test PRIVATE aethercore Qt6::Core)
+    if(NOT MSVC)
+        # Opus nnet.h #warns about the baseline SSE level for any includer.
+        target_compile_options(rade_phase_renorm_test PRIVATE -Wno-cpp)
+    endif()
+    add_test(NAME rade_phase_renorm_test COMMAND rade_phase_renorm_test)
+endif()
 
 # ── Deferred retrofits: applied after the LAST test, wherever it is declared ──
 #

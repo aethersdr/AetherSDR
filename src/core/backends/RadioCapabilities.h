@@ -119,6 +119,15 @@ struct PanFrameRateShaping {
     bool clientPersistsFrameRate;
 };
 
+// The waterfall rate of a pan whose rows this engine paces (Display, Rate).
+// Absent: no owner is declared for it and the client stores nothing (a Flex
+// stores and reports its own line duration).
+struct PanWaterfallRateShaping {
+    // Explicit client persistence owner for the waterfall rate. No default: an
+    // engaging backend must state its own value.
+    bool clientPersistsWaterfallRate;
+};
+
 // Engaged when the backend averages its own pan frames per the operator's FFT
 // AVG (ANAN: WDSP's display analyzer, AnanPanAnalyzer). The widget then skips
 // its client-side EMA (SpectrumWidget::SMOOTH_ALPHA), which would add ~90 ms of
@@ -274,6 +283,8 @@ struct RadioCapabilities {
     std::optional<BackendPanAveraging> backendPanAveraging;
     // See PanFrameRateShaping. Absent = the client keeps no FFT frame rate.
     std::optional<PanFrameRateShaping> panFrameRateShaping;
+    // See PanWaterfallRateShaping. Absent = the client keeps no waterfall rate.
+    std::optional<PanWaterfallRateShaping> panWaterfallRateShaping;
 
     // A backend nobody has read labelled its axis dBm and was consumed as
     // though it meant it. ABSENT KEEPS THAT CLAIM, so this is the legacy shape
@@ -298,6 +309,14 @@ struct RadioCapabilities {
     [[nodiscard]] bool clientPersistsPanFrameRate() const
     {
         return panFrameRateShaping && panFrameRateShaping->clientPersistsFrameRate;
+    }
+
+    // The one predicate for storing and for restoring the waterfall rate.
+    // Absent is "not declared", and an undeclared backend owns nothing here.
+    [[nodiscard]] bool clientPersistsPanWaterfallRate() const
+    {
+        return panWaterfallRateShaping
+            && panWaterfallRateShaping->clientPersistsWaterfallRate;
     }
 
     // The one predicate for storing and for restoring the pan's dBm range. The

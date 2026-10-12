@@ -163,6 +163,12 @@ int main(int argc, char** argv)
           "slider's accessibleDescription names the master volume as this computer's level");
     check(slider->toolTip() == slider->accessibleDescription(),
           "slider's tooltip and accessibleDescription say the same thing");
+    check(mute->accessibleDescription()
+              == QString::fromLatin1(kHeadphoneMuteUnavailableReason),
+          "mute's reason is the header's mute sentence");
+    check(slider->accessibleDescription()
+              == QString::fromLatin1(kHeadphoneLevelUnavailableReason),
+          "slider's reason is the header's level sentence");
     check(slider->value() == 37 && mute->isChecked(),
           "dimming leaves the slider value and the mute state alone");
     check(emitted == 0, "dimming emits no command");

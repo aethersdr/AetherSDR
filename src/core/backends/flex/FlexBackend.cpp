@@ -271,6 +271,8 @@ RadioCapabilities FlexBackend::capabilities() const
         QStringLiteral("display pan set")};
     // The radio stores a pan's FFT frame rate and reports it on connect.
     caps.panFrameRateShaping = std::nullopt;
+    // Likewise the waterfall line duration: the radio's, never the client's.
+    caps.panWaterfallRateShaping = std::nullopt;
     // A Flex blanks impulses in its OWN DDC, so NB is already the radio's under
     // hasRadioSideDsp above and the host has nothing to add. This flag says
     // where the blanker runs, not whether the radio has one.

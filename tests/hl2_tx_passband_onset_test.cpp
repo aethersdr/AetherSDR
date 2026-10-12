@@ -14,11 +14,13 @@
 #include <QObject>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <complex>
 #include <cstddef>
 #include <cstdio>
+#include <limits>
 #include <string>
 #include <thread>
 #include <utility>
@@ -118,7 +120,7 @@ Capture run(const char* what, const std::vector<float>& audio, WdspChannel::Mode
             return c;
         }
         if (c.faults > c.stallDrops) {
-            check(false, (std::string(what) + ": no fault but a stall drop").c_str());
+            check(false, (std::string(what) + ": every modulator fault is a stall drop").c_str());
             return c;
         }
         std::fprintf(stderr, "starved in %s: %llu blocks missed the wire (attempt %d of 3)\n",
@@ -231,16 +233,88 @@ struct Onset {
     double halfMs = 0.0;     // first at -6 dB: the onset's 50 % point
     double rise1090Ms = 0.0;
     double leadMs = 0.0;     // from -60 dB to the 50 % point
+    bool tooShort = false;   // nothing was read: halfMs and leadMs are 1e9
+    // The envelope 1, 2, 4, 6, 10 and 12 ms before the 50 % point, in dB.
+    std::array<double, 6> envDb{};
 };
 
-// A 1 kHz tone onset at input sample `startIn`. Times are on the IQ stream's
-// own clock (output sample n is n / 48 kHz), from the onset's first audio
-// sample. `warm` puts a 200 ms burst and 300 ms of silence before it, so the
-// channel's mute envelope has already run (WDSP starts it at the over's
-// first non-zero input sample) and the onset is the chain's own.
+// The mid-over onset's first audio sample, and the settled tail the analysis
+// averages: from kSettledAfter output samples past the onset, kSettledMin long.
+constexpr std::size_t kWarmStartIn = static_cast<std::size_t>(0.5 * kFsIn);
+constexpr std::size_t kSettledAfter = 8192;
+constexpr std::size_t kSettledMin = 4 * kPeriod;
+
+// The onset in `iq` whose first audio sample is output sample `t0`. Times are
+// on the IQ stream's own clock (output sample n is n / 48 kHz), from t0.
+Onset analyseOnset(const char* what, const std::vector<std::complex<float>>& iq, std::size_t t0)
+{
+    Onset o;
+    const std::size_t settledFrom = t0 + kSettledAfter;
+    if (iq.size() < settledFrom + kSettledMin) {
+        o.tooShort = true;
+        o.halfMs = 1e9;
+        o.rise1090Ms = 1e9;
+        o.leadMs = 1e9;
+        o.envDb.fill(-400.0);
+        return o;
+    }
+    double steady = 0.0;
+    for (std::size_t n = settledFrom; n < iq.size(); ++n) {
+        steady += std::abs(iq[n]);
+    }
+    steady /= static_cast<double>(iq.size() - settledFrom);
+    // A silent settled tail reaches every level at the first sample and would
+    // read as a 0 ms onset: no signal is no onset.
+    if (steady == 0.0) {
+        o.halfMs = 1e9;
+        o.rise1090Ms = 1e9;
+        o.leadMs = 1e9;
+        o.envDb.fill(-400.0);
+        std::fprintf(stderr, "%s: the settled level is zero; no onset to read\n", what);
+        return o;
+    }
+    const auto firstAbove = [&](double dbRel) {
+        const double level = steady * std::pow(10.0, dbRel / 20.0);
+        for (std::size_t n = t0; n < iq.size(); ++n) {
+            if (std::abs(iq[n]) >= level) {
+                return static_cast<double>(n - t0) * kMsPerOut;
+            }
+        }
+        return 1e9;
+    };
+    o.firstMs = firstAbove(-60.0);
+    o.halfMs = firstAbove(-6.0206);
+    o.rise1090Ms = firstAbove(-0.9151) - firstAbove(-20.0);
+    // A 50 % point never reached is no rise and no lead time: both must fail
+    // their bounds too.
+    if (o.halfMs >= 1e9) {
+        o.rise1090Ms = 1e9;
+    }
+    o.leadMs = o.halfMs >= 1e9 ? 1e9 : o.halfMs - o.firstMs;
+    const double halfAt = static_cast<double>(t0) + o.halfMs / kMsPerOut;
+    // Floor outside the capture: a level never reached puts halfAt far past it.
+    const auto envDb = [&](double ms) {
+        const double at = halfAt - ms / kMsPerOut;
+        return at < static_cast<double>(t0) || at >= static_cast<double>(iq.size())
+                   ? -400.0
+                   : db(std::abs(iq[static_cast<std::size_t>(at)]) / steady);
+    };
+    o.envDb = {envDb(1.0), envDb(2.0), envDb(4.0), envDb(6.0), envDb(10.0), envDb(12.0)};
+    std::fprintf(stderr, "%s: -60 dB at %.2f ms, 50 %% at %.2f ms; rise 10-90 %% %.2f ms, "
+                 "-40..-3 dB %.2f ms; envelope before the 50 %% point: -1 ms %.1f dB, "
+                 "-2 ms %.1f dB, -4 ms %.1f dB, -6 ms %.1f dB, -10 ms %.1f dB, -12 ms %.1f dB\n",
+                 what, o.firstMs, o.halfMs, o.rise1090Ms, firstAbove(-3.0) - firstAbove(-40.0),
+                 o.envDb[0], o.envDb[1], o.envDb[2], o.envDb[3], o.envDb[4], o.envDb[5]);
+    return o;
+}
+
+// A 1 kHz tone onset at input sample `startIn`, through the modulator. `warm`
+// puts a 200 ms burst and 300 ms of silence before it, so the channel's mute
+// envelope has already run (WDSP starts it at the over's first non-zero input
+// sample) and the onset is the chain's own.
 Onset onset(const char* what, bool warm)
 {
-    const std::size_t startIn = warm ? static_cast<std::size_t>(0.5 * kFsIn) : 0;
+    const std::size_t startIn = warm ? kWarmStartIn : 0;
     const std::size_t total = startIn + static_cast<std::size_t>(0.4 * kFsIn);
     const std::size_t burstEnd = static_cast<std::size_t>(0.2 * kFsIn);
     std::vector<float> audio(total, 0.0f);
@@ -250,44 +324,10 @@ Onset onset(const char* what, bool warm)
         }
     }
     const Capture c = run(what, audio, WdspChannel::Mode::Usb, defaultTxPassbandForModeName("USB"));
-    Onset o;
-    const std::size_t t0 = 2 * startIn;
-    const std::size_t settledFrom = t0 + 8192;
-    if (c.iq.size() < settledFrom + 4 * kPeriod) {
+    const Onset o = analyseOnset(what, c.iq, 2 * startIn);
+    if (o.tooShort) {
         check(false, "the onset capture is long enough to read");
-        o.halfMs = 1e9;
-        return o;
     }
-    double steady = 0.0;
-    for (std::size_t n = settledFrom; n < c.iq.size(); ++n) {
-        steady += std::abs(c.iq[n]);
-    }
-    steady /= static_cast<double>(c.iq.size() - settledFrom);
-    const auto firstAbove = [&](double dbRel) {
-        const double level = steady * std::pow(10.0, dbRel / 20.0);
-        for (std::size_t n = t0; n < c.iq.size(); ++n) {
-            if (std::abs(c.iq[n]) >= level) {
-                return static_cast<double>(n - t0) * kMsPerOut;
-            }
-        }
-        return 1e9;
-    };
-    o.firstMs = firstAbove(-60.0);
-    o.halfMs = firstAbove(-6.0206);
-    o.rise1090Ms = firstAbove(-0.9151) - firstAbove(-20.0);
-    o.leadMs = o.halfMs - o.firstMs;
-    const double halfAt = static_cast<double>(t0) + o.halfMs / kMsPerOut;
-    const auto envDb = [&](double ms) {
-        const double at = halfAt - ms / kMsPerOut;
-        return at < static_cast<double>(t0)
-                   ? -400.0
-                   : db(std::abs(c.iq[static_cast<std::size_t>(at)]) / steady);
-    };
-    std::fprintf(stderr, "%s: -60 dB at %.2f ms, 50 %% at %.2f ms; rise 10-90 %% %.2f ms, "
-                 "-40..-3 dB %.2f ms; envelope before the 50 %% point: -1 ms %.1f dB, "
-                 "-2 ms %.1f dB, -4 ms %.1f dB, -6 ms %.1f dB, -10 ms %.1f dB, -12 ms %.1f dB\n",
-                 what, o.firstMs, o.halfMs, o.rise1090Ms, firstAbove(-3.0) - firstAbove(-40.0),
-                 envDb(1.0), envDb(2.0), envDb(4.0), envDb(6.0), envDb(10.0), envDb(12.0));
     return o;
 }
 
@@ -302,17 +342,70 @@ constexpr double kMaxKeyUpRiseMs = 20.0;
 constexpr double kMaxMidHalfMs = 84.0;
 constexpr double kMaxMidLeadMs = 12.0;
 
+bool keyUpHalfOk(const Onset& o) { return o.halfMs <= kMaxKeyUpHalfMs; }
+bool keyUpRiseOk(const Onset& o)
+{
+    return o.rise1090Ms >= kMinKeyUpRiseMs && o.rise1090Ms <= kMaxKeyUpRiseMs;
+}
+bool midHalfOk(const Onset& o) { return o.halfMs <= kMaxMidHalfMs; }
+bool midLeadOk(const Onset& o) { return o.leadMs <= kMaxMidLeadMs; }
+
 void checkKeyUp(const Onset& o)
 {
-    check(o.halfMs <= kMaxKeyUpHalfMs, "key-up: the 50 % point is at most 106 ms after the first audio");
-    check(o.rise1090Ms >= kMinKeyUpRiseMs && o.rise1090Ms <= kMaxKeyUpRiseMs,
-          "key-up: the 10-90 % rise is the 10..20 ms anti-click ramp");
+    check(keyUpHalfOk(o), "key-up: the 50 % point is at most 106 ms after the first audio");
+    check(keyUpRiseOk(o), "key-up: the 10-90 % rise is the 10..20 ms anti-click ramp");
 }
 
 void checkMidOver(const Onset& o)
 {
-    check(o.halfMs <= kMaxMidHalfMs, "mid-over: the 50 % point is at most 84 ms after the audio");
-    check(o.leadMs <= kMaxMidLeadMs, "mid-over: -60 dB to the 50 % point is at most 12 ms");
+    check(midHalfOk(o), "mid-over: the 50 % point is at most 84 ms after the audio");
+    check(midLeadOk(o), "mid-over: -60 dB to the 50 % point is at most 12 ms");
+}
+
+// The analysis on injected captures, with no modulator run, at the key-up and
+// the mid-over t0. A step is the control. A level is never reached only when
+// the settled level is not finite, so that capture ends in a NaN; the last is
+// one sample too short to read. Each comes back with halfMs, rise1090Ms and
+// leadMs at 1e9, so every bound fails on the sentinel.
+void checkInjectedCaptures()
+{
+    for (const std::size_t t0 : {std::size_t{0}, 2 * kWarmStartIn}) {
+        const std::string at = ", t0 " + std::to_string(t0);
+        const std::size_t readable = t0 + kSettledAfter + kSettledMin;
+        const std::complex<float> on{0.1f, 0.0f};
+
+        std::vector<std::complex<float>> step(readable, on);
+        std::fill(step.begin(), step.begin() + static_cast<std::ptrdiff_t>(t0 + 480),
+                  std::complex<float>{});
+        const Onset s = analyseOnset(("injected step" + at).c_str(), step, t0);
+        check(!s.tooShort && std::abs(s.halfMs - 10.0) < 1e-6 && s.leadMs == 0.0
+                  && midHalfOk(s) && midLeadOk(s),
+              ("injected step" + at + ": the 50 % point reads 10 ms and passes the mid-over bounds").c_str());
+
+        std::vector<std::complex<float>> never(readable, on);
+        never.back() = {std::numeric_limits<float>::quiet_NaN(), 0.0f};
+        const Onset n = analyseOnset(("injected, level never reached" + at).c_str(), never, t0);
+        check(!n.tooShort && n.halfMs >= 1e9 && n.rise1090Ms >= 1e9 && n.leadMs >= 1e9,
+              ("level never reached" + at + ": halfMs, rise1090Ms and leadMs are the sentinel").c_str());
+        check(std::all_of(n.envDb.begin(), n.envDb.end(), [](double v) { return v == -400.0; }),
+              ("level never reached" + at + ": every envelope read is the floor").c_str());
+        check(!keyUpHalfOk(n) && !keyUpRiseOk(n) && !midHalfOk(n) && !midLeadOk(n),
+              ("level never reached" + at + ": every onset bound fails").c_str());
+
+        const std::vector<std::complex<float>> silent(readable);
+        const Onset z = analyseOnset(("injected, silent" + at).c_str(), silent, t0);
+        check(!z.tooShort && z.halfMs >= 1e9 && z.rise1090Ms >= 1e9 && z.leadMs >= 1e9,
+              ("silent" + at + ": halfMs, rise1090Ms and leadMs are the sentinel").c_str());
+        check(!keyUpHalfOk(z) && !keyUpRiseOk(z) && !midHalfOk(z) && !midLeadOk(z),
+              ("silent" + at + ": every onset bound fails").c_str());
+
+        const std::vector<std::complex<float>> brief(readable - 1, on);
+        const Onset b = analyseOnset(("injected, too short" + at).c_str(), brief, t0);
+        check(b.tooShort && b.halfMs >= 1e9 && b.rise1090Ms >= 1e9 && b.leadMs >= 1e9,
+              ("too short" + at + ": halfMs, rise1090Ms and leadMs are the sentinel").c_str());
+        check(!keyUpHalfOk(b) && !keyUpRiseOk(b) && !midHalfOk(b) && !midLeadOk(b),
+              ("too short" + at + ": every onset bound fails").c_str());
+    }
 }
 
 }  // namespace
@@ -320,10 +413,12 @@ void checkMidOver(const Onset& o)
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
+    checkInjectedCaptures();   // no modulator runs: valid in every build
+
     std::fprintf(stderr, "modulator: %s\n", Hl2TxDsp::modulatorName());
     if (std::string(Hl2TxDsp::modulatorName()) != "wdsp-txa") {
         std::fprintf(stderr, "SKIP: these figures are the TXA modulator's\n");
-        return 77;
+        return g_failures == 0 ? 77 : 1;
     }
 
     // The passband per mode, as Hl2Backend pushes it.

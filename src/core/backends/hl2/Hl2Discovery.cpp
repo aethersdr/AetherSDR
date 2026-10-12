@@ -65,11 +65,11 @@ void DiscoveryNotices::bindSucceeded(const QString& interfaceName,
                                      const QHostAddress& address)
 {
     m_bindFailures.remove(interfaceName + QLatin1Char(' ') + address.toString());
+    m_interfaceOf.insert(address.toString(), interfaceName);
 }
 
-void DiscoveryNotices::endRefresh(int socketCount, int interfaceCount)
+void DiscoveryNotices::endRefresh(int socketCount)
 {
-    m_interfaceCount = interfaceCount;
     if (socketCount > 0) {
         m_noSocketReported = false;
     } else if (!m_noSocketReported) {
@@ -91,24 +91,30 @@ void DiscoveryNotices::sendFailed(const QHostAddress& local, const QString& erro
 
 void DiscoveryNotices::sendSucceeded(const QHostAddress& local)
 {
-    m_sendFailures.remove(local.toString());
+    const QString key = local.toString();
+    m_sendFailures.remove(key);
+    // An address no refresh bound stands for itself.
+    m_sentInterfaces.insert(m_interfaceOf.value(key, key));
 }
 
 void DiscoveryNotices::sweepClosed(bool answered)
 {
+    const int sentFrom = static_cast<int>(std::exchange(m_sentInterfaces, {}).size());
     if (answered) {
         m_silentSweeps = 0;
         return;
     }
+    if (sentFrom == 0)
+        return;   // nothing was asked, so nothing went unanswered
     if (++m_silentSweeps != kSilentSweepsBeforeWarning)
         return;
     // Info, not a warning: an install without an HL2 is silent by design.
     qCInfo(lcDiscovery).noquote()
         << QStringLiteral("HL2 discovery: no Hermes-Lite 2 answered %1 sweeps on %2 %3")
                .arg(kSilentSweepsBeforeWarning)
-               .arg(m_interfaceCount)
-               .arg(m_interfaceCount == 1 ? QStringLiteral("interface")
-                                          : QStringLiteral("interfaces"));
+               .arg(sentFrom)
+               .arg(sentFrom == 1 ? QStringLiteral("interface")
+                                  : QStringLiteral("interfaces"));
 }
 
 void DiscoveryNotices::reset()
@@ -239,7 +245,6 @@ void Hl2Discovery::stop()
     m_sockets.clear();
     m_seen.clear();
     m_notices.reset();
-    m_probeSent = false;
     m_answered = false;
 }
 
@@ -249,8 +254,7 @@ void Hl2Discovery::sweepNow()
     // directly attached HL2 link). Refreshing here also mirrors Thetis's
     // per-sweep NIC walk instead of freezing the initial adapter list.
     refreshSockets();
-    m_probeSent = !m_sockets.isEmpty();
-    if (!m_probeSent)
+    if (m_sockets.isEmpty())
         return;
     const auto pkt = discoveryRequest();
     for (QUdpSocket* socket : std::as_const(m_sockets)) {
@@ -302,7 +306,6 @@ void Hl2Discovery::refreshSockets()
         socket->deleteLater();
     }
     m_sockets.clear();
-    QSet<QString> boundInterfaces;
 
     for (const QNetworkInterface& iface : QNetworkInterface::allInterfaces()) {
         const auto flags = iface.flags();
@@ -329,19 +332,16 @@ void Hl2Discovery::refreshSockets()
                     this, &Hl2Discovery::onReadyRead);
             m_sockets.append(socket);
             m_notices.bindSucceeded(iface.humanReadableName(), local);
-            boundInterfaces.insert(iface.humanReadableName());
         }
     }
-    m_notices.endRefresh(static_cast<int>(m_sockets.size()),
-                         static_cast<int>(boundInterfaces.size()));
+    m_notices.endRefresh(static_cast<int>(m_sockets.size()));
 }
 
 void Hl2Discovery::onSweepTimer()
 {
-    // The previous sweep's reply window ends here. A sweep with no socket to
-    // send on is not counted: the no-interface warning covers it.
-    if (m_probeSent)
-        m_notices.sweepClosed(m_answered);
+    // The previous sweep's reply window ends here. DiscoveryNotices does not
+    // count a sweep no probe left: no socket, or every send failed.
+    m_notices.sweepClosed(m_answered);
     m_answered = false;
 
     // Age out anything that missed too many consecutive sweeps before probing

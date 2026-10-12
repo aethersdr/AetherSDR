@@ -1,5 +1,5 @@
-// FFT FPS and the dBm range in the per-radio ClientDisplay document, against
-// the real settings store: round trip, declared ownership read off real
+// FFT FPS, the dBm range and the waterfall rate's declared owner in the
+// per-radio ClientDisplay document, against the real settings store: round trip, declared ownership read off real
 // backends, refusals, schema, coexistence with other tables, the pending-write
 // key.
 // SOURCE TEXT, last block only: the order and presence of the save and restore
@@ -13,6 +13,10 @@
 #include "core/backends/flex/FlexBackend.h"
 #include "core/backends/hl2/Hl2Backend.h"
 #include "core/backends/icom/IcomCivBackend.h"
+#include "core/backends/sim/SimBackend.h"
+#ifdef AETHER_BACKEND_RTL
+#include "core/backends/rtl/RtlSdrBackend.h"
+#endif
 #include "gui/DeferredSettingsWrites.h"
 
 #include <QCoreApplication>
@@ -72,7 +76,7 @@ static bool sameRange(const std::optional<CDS::DbmRange>& got, float min, float 
 // reads back; an opt-out family neither writes nor reads, and a document already
 // under its identity comes through byte for byte.
 static void checkDeclaredOwner(const RadioCapabilities& caps, const char* family,
-                               bool expectFps, bool expectRange)
+                               bool expectFps, bool expectRange, bool expectRate)
 {
     const QString feature = QStringLiteral("ClientDisplay");
     const QByteArray name(family);
@@ -83,6 +87,9 @@ static void checkDeclaredOwner(const RadioCapabilities& caps, const char* family
     const bool ownsRange = caps.clientPersistsDbmRange();
     check(ownsFps == expectFps, label("FFT FPS owner as declared").constData());
     check(ownsRange == expectRange, label("dBm range owner as declared").constData());
+    const bool ownsRate = caps.clientPersistsPanWaterfallRate();
+    check(ownsRate == expectRate, label("waterfall rate owner as declared").constData());
+    const bool ownsNothing = !expectFps && !expectRange && !expectRate;
 
     const RadioSettingsScope fresh(QString::fromLatin1(family), QStringLiteral("OWNER"));
     CDS::saveFftFps(fresh, 0, ownsFps, 12);
@@ -91,16 +98,20 @@ static void checkDeclaredOwner(const RadioCapabilities& caps, const char* family
           label("FFT FPS is stored and restored only by its owner").constData());
     check(sameRange(CDS::dbmRange(fresh, 0, ownsRange), -122.19f, -2.19f) == expectRange,
           label("the dBm range is stored and restored only by its owner").constData());
-    if (!expectFps && !expectRange) {
+    CDS::saveWaterfallRate(fresh, 0, ownsRate, 63);
+    check((CDS::waterfallRate(fresh, 0, ownsRate) == 63) == expectRate,
+          label("the waterfall rate is stored and restored only by its owner").constData());
+    if (ownsNothing) {
         check(fresh.featureExact(feature).isEmpty(),
               label("no document is created").constData());
     }
     fresh.removeFeature(feature);
 
-    // A document that already holds both rows (another build, another owner).
+    // A document that already holds all three rows (another build, another owner).
     const RadioSettingsScope held(QString::fromLatin1(family), QStringLiteral("HELD"));
     const QJsonObject before{
         {QStringLiteral("fftFps"), QJsonObject{{QStringLiteral("0"), 30}}},
+        {QStringLiteral("waterfallRates"), QJsonObject{{QStringLiteral("0"), 41}}},
         {QStringLiteral("dbmRanges"),
          QJsonObject{{QStringLiteral("0"), QJsonObject{{QStringLiteral("min"), -110.0},
                                                        {QStringLiteral("max"), -20.0}}}}}};
@@ -109,9 +120,14 @@ static void checkDeclaredOwner(const RadioCapabilities& caps, const char* family
           label("a held FFT FPS is read only by its owner").constData());
     check(sameRange(CDS::dbmRange(held, 0, ownsRange), -110.0f, -20.0f) == expectRange,
           label("a held dBm range is read only by its owner").constData());
+    check((CDS::waterfallRate(held, 0, ownsRate) == 41) == expectRate,
+          label("a held waterfall rate is read only by its owner").constData());
     CDS::saveFftFps(held, 0, ownsFps, 12);
     CDS::saveDbmRange(held, 0, ownsRange, -122.19f, -2.19f);
-    check((held.featureExact(feature) == before) == (!expectFps && !expectRange),
+    CDS::saveWaterfallRate(held, 0, ownsRate, 63);
+    check((CDS::waterfallRate(held, 0, true) == 63) == expectRate,
+          label("a held waterfall rate is rewritten only by its owner").constData());
+    check((held.featureExact(feature) == before) == ownsNothing,
           label("a held document is rewritten only by its owner").constData());
     check(held.removeFeature(feature), label("held fixture removed").constData());
 }
@@ -167,19 +183,40 @@ int main(int argc, char** argv)
     check(unknown.featureExact(feature).isEmpty(),
           "an unknown identity never writes the family default");
 
-    // 3. Who owns FFT FPS and the dBm range: each backend's own declaration,
-    // read through the accessors the wiring calls. The HL2 opts in to both,
-    // the ANAN to the range only.
+    // 3. Who owns FFT FPS, the dBm range and the waterfall rate: each backend's
+    // own declaration, read through the accessors the wiring calls. The HL2
+    // opts in to all three, the ANAN to the range and the rate; every backend
+    // with no radio-side display engine owns the rate, and a Flex owns none.
     {
         hl2::Hl2Backend hl2Backend;
-        checkDeclaredOwner(hl2Backend.capabilities(), "hl2", true, true);
+        checkDeclaredOwner(hl2Backend.capabilities(), "hl2", true, true, true);
         icom::IcomCivBackend icomBackend;
-        checkDeclaredOwner(icomBackend.capabilities(), "icom", false, false);
+        const RadioCapabilities icomCaps = icomBackend.capabilities();
+        checkDeclaredOwner(icomCaps, "icom", false, false, true);
         anan::AnanBackend ananBackend;
-        checkDeclaredOwner(ananBackend.capabilities(), "anan", false, true);
+        checkDeclaredOwner(ananBackend.capabilities(), "anan", false, true, true);
+        SimBackend simBackend;
+        checkDeclaredOwner(simBackend.capabilities(), "sim", false, false, true);
+#ifdef AETHER_BACKEND_RTL
+        rtl::RtlSdrBackend rtlBackend;
+        checkDeclaredOwner(rtlBackend.capabilities(), "rtl", false, false, true);
+#endif
         FlexBackend flexBackend;
-        checkDeclaredOwner(flexBackend.capabilities(), "flex", false, false);
-        checkDeclaredOwner(RadioCapabilities{}, "undeclared", false, false);
+        checkDeclaredOwner(flexBackend.capabilities(), "flex", false, false, false);
+        checkDeclaredOwner(RadioCapabilities{}, "undeclared", false, false, false);
+
+        // Engaged with false is a stated "no": nothing stored, nothing restored.
+        RadioCapabilities declinedRate;
+        declinedRate.panWaterfallRateShaping = PanWaterfallRateShaping{false};
+        checkDeclaredOwner(declinedRate, "rate-declined", false, false, false);
+        RadioCapabilities ownedRate;
+        ownedRate.panWaterfallRateShaping = PanWaterfallRateShaping{true};
+        checkDeclaredOwner(ownedRate, "rate-owned", false, false, true);
+
+        // The rate has its own record: owning it leaves FFT FPS undeclared.
+        check(icomCaps.panWaterfallRateShaping.has_value()
+                  && !icomCaps.panFrameRateShaping.has_value(),
+              "the waterfall rate owner does not engage the FFT FPS record");
 
         // Absolute bins and no declaration own nothing: bins are not the
         // declaration.
@@ -397,6 +434,30 @@ int main(int argc, char** argv)
         check(followsWithin(wiring, "if (clientPersistsFftFps()) {",
                             "sw->setFftFps(*savedFps);", 220),
               "and so does the FFT FPS restore");
+        check(followsWithin(wiring, "bool MainWindow::clientPersistsWaterfallRate() const",
+                            "return m_radioModel.shapesDisplayRatesLocally()\n"
+                            "        && m_radioModel.backendCapabilities()"
+                            ".clientPersistsPanWaterfallRate();",
+                            70),
+              "the waterfall rate predicate reads the backend's declaration");
+        check(wiring.contains(QStringLiteral(
+                  "const bool clientOwns = clientPersistsWaterfallRate();\n"
+                  "    if (!clientOwns || !scope.hasRadioIdentity() || panIndex < 0) {")),
+              "the waterfall rate save asks that predicate");
+        check(wiring.contains(QStringLiteral(
+                  "ClientDisplaySettings::saveWaterfallRate(scope, panIndex, clientOwns, rate);")),
+              "and hands the store that answer");
+        check(followsWithin(wiring, "if (clientPersistsWaterfallRate()) {",
+                            "sw->setWfLineDuration(*savedRate);", 220),
+              "and so does the waterfall rate restore");
+        check(wiring.count(QStringLiteral("ClientDisplaySettings::waterfallRate(")) == 1
+                  && wiring.count(QStringLiteral("ClientDisplaySettings::saveWaterfallRate(")) == 1,
+              "the waterfall rate has one stored read and one stored write");
+        // Every build, also one without librtlsdr: the RTL declaration as text.
+        check(readSource("src/core/backends/rtl/RtlSdrBackend.cpp").contains(QStringLiteral(
+                  "c.panWaterfallRateShaping =\n"
+                  "        PanWaterfallRateShaping{/*clientPersistsWaterfallRate*/ true};")),
+              "the RTL backend declares the client the waterfall rate owner");
         check(followsWithin(wiring, "bool MainWindow::clientOwnsPanDbmRange() const",
                             "m_radioModel.backendCapabilities().clientPersistsDbmRange();",
                             160),

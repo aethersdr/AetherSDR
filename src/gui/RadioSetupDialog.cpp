@@ -133,12 +133,23 @@ static const QString kValueStyleTemplate =
 // this dialog goes through here so they are identical (#5507, #5857).
 // kValueStyleTemplate should have exactly one reference, the call below.
 // Also retires setStyleSheet() call sites counted by tools/audit_colours.py.
-static QLabel* makeValueLabel(const QString& text)
+static QLabel* makeValueLabel(const QString& text, const QString& extraRules = {})
 {
     auto* label = new QLabel(text);
-    ThemeManager::instance().applyStyleSheet(label, kValueStyleTemplate);
+    ThemeManager::instance().applyStyleSheet(label, kValueStyleTemplate + extraRules);
     return label;
 }
+
+// The unavailable look of a Radio Audio Outputs row (theme-style-guide.md,
+// Three-state controls): a disabled label, value or Mute button takes the
+// unavailable token; the enabled look is unchanged. An engaged Mute that is
+// unavailable keeps the row's unchecked background, not the engaged red.
+static const QString kUnavailableLabelRule =
+    "QLabel:disabled { color: {{color.control.unavailable}}; }";
+static const QString kUnavailableButtonRule =
+    "QPushButton:disabled { color: {{color.control.unavailable}}; }"
+    "QPushButton:checked:disabled { background: {{color.background.1}}; "
+    "color: {{color.control.unavailable}}; }";
 
 static const QString kKiwiRowStyle =
     "QFrame#kiwiAntennaRow { background: #101622; border: 1px solid #203040; "
@@ -4737,12 +4748,14 @@ QWidget* RadioSetupDialog::buildAudioTab()
     // Line Out
     auto* lineoutRow = new QHBoxLayout;
     auto* lineoutLabel = new QLabel("Line Out:");
-    applyLabelStyle(lineoutLabel);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(
+        lineoutLabel, kLabelStyleTemplate + kUnavailableLabelRule);
     lineoutLabel->setFixedWidth(90);
     auto* lineoutSlider = new GuardedSlider(Qt::Horizontal);
     lineoutSlider->setRange(0, 100);
     lineoutSlider->setValue(m_model->lineoutGain());
-    auto* lineoutValue = makeValueLabel(QString::number(m_model->lineoutGain()));
+    auto* lineoutValue = makeValueLabel(QString::number(m_model->lineoutGain()),
+                                        kUnavailableLabelRule);
     lineoutValue->setFixedWidth(30);
     auto* lineoutMute = new QPushButton("Mute");
     lineoutMute->setCheckable(true);
@@ -4750,7 +4763,8 @@ QWidget* RadioSetupDialog::buildAudioTab()
     lineoutMute->setFixedWidth(50);
     AetherSDR::ThemeManager::instance().applyStyleSheet(lineoutMute, "QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
         "border-radius: 3px; color: {{color.text.primary}}; font-size: 11px; padding: 2px; }"
-        "QPushButton:checked { background: #8b0000; color: {{color.text.primary}}; }");
+        "QPushButton:checked { background: #8b0000; color: {{color.text.primary}}; }"
+        + kUnavailableButtonRule);
     lineoutRow->addWidget(lineoutLabel);
     lineoutRow->addWidget(lineoutSlider, 1);
     lineoutRow->addWidget(lineoutValue);
@@ -4791,12 +4805,14 @@ QWidget* RadioSetupDialog::buildAudioTab()
     // Headphone
     auto* hpRow = new QHBoxLayout;
     auto* hpLabel = new QLabel("Headphone:");
-    applyLabelStyle(hpLabel);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(
+        hpLabel, kLabelStyleTemplate + kUnavailableLabelRule);
     hpLabel->setFixedWidth(90);
     auto* hpSlider = new GuardedSlider(Qt::Horizontal);
     hpSlider->setRange(0, 100);
     hpSlider->setValue(m_model->headphoneGain());
-    auto* hpValue = makeValueLabel(QString::number(m_model->headphoneGain()));
+    auto* hpValue = makeValueLabel(QString::number(m_model->headphoneGain()),
+                                   kUnavailableLabelRule);
     hpValue->setFixedWidth(30);
     auto* hpMute = new QPushButton("Mute");
     hpMute->setCheckable(true);
@@ -4804,7 +4820,8 @@ QWidget* RadioSetupDialog::buildAudioTab()
     hpMute->setFixedWidth(50);
     AetherSDR::ThemeManager::instance().applyStyleSheet(hpMute, "QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
         "border-radius: 3px; color: {{color.text.primary}}; font-size: 11px; padding: 2px; }"
-        "QPushButton:checked { background: #8b0000; color: {{color.text.primary}}; }");
+        "QPushButton:checked { background: #8b0000; color: {{color.text.primary}}; }"
+        + kUnavailableButtonRule);
     hpRow->addWidget(hpLabel);
     hpRow->addWidget(hpSlider, 1);
     hpRow->addWidget(hpValue);
@@ -4818,20 +4835,17 @@ QWidget* RadioSetupDialog::buildAudioTab()
     connect(hpMute, &QPushButton::toggled, m_model, &RadioModel::setHeadphoneMute);
 
     // Dimmed, never hidden, on a radio with no headphone output: the title
-    // bar's predicate (MixerControlAvailability.h) and its two reasons, one
+    // bar's predicate and its two reasons (MixerControlAvailability.h), one
     // for the level and one for the mute.
     auto applyHeadphoneAvailability = [this, hpLabel, hpSlider, hpValue, hpMute] {
         const bool available = AetherSDR::headphoneControlsAvailable(
             m_model->isConnected(), m_model->hasCommandPlane());
-        const QString prefix = QStringLiteral(
-            "Unavailable: this radio has no headphone output. "
-            "Its audio plays on this computer; ");
         const QString levelReason = available
             ? QString()
-            : prefix + QStringLiteral("set its level with the master volume slider.");
+            : QString::fromLatin1(AetherSDR::kHeadphoneLevelUnavailableReason);
         const QString muteReason = available
             ? QString()
-            : prefix + QStringLiteral("mute it with the speaker button.");
+            : QString::fromLatin1(AetherSDR::kHeadphoneMuteUnavailableReason);
         for (QWidget* w : {static_cast<QWidget*>(hpLabel),
                            static_cast<QWidget*>(hpSlider),
                            static_cast<QWidget*>(hpValue)}) {

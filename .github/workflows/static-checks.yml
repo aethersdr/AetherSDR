@@ -364,6 +364,20 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/check_qsettings.py --strict
 
+      # Qt 6.12 deprecates Q_OS_MAC (#6354); Q_OS_MACOS is the spelling for
+      # macOS-only code. Only a macOS build warns, so without this a re-added
+      # Q_OS_MAC goes unseen by the Linux and Windows lanes. Source files only.
+      - name: No deprecated Q_OS_MAC
+        if: ${{ !cancelled() }}
+        run: |
+          rc=0
+          hits=$(git grep -nw Q_OS_MAC -- '*.cpp' '*.h' '*.hpp' '*.mm' '*.m' ':!third_party') || rc=$?
+          if [ "$rc" -eq 0 ]; then
+            echo "$hits" | awk -F: '{print "::error file="$1",line="$2"::Q_OS_MAC is deprecated in Qt 6.12; use Q_OS_MACOS"}'
+            exit 1
+          fi
+          [ "$rc" -eq 1 ] || { echo "::error::git grep failed (exit $rc)"; exit "$rc"; }
+
       # ── ThemeManager::seedBuiltinDefaults() compiles a copy of the default
       # theme into the binary. It is GENERATED (tools/gen_theme_seed.py emits
       # src/core/ThemeSeedGenerated.cpp from resources/themes/default-dark.json),

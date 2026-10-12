@@ -515,6 +515,9 @@ RadioCapabilities AnanBackend::capabilities() const
     c.hasDdcPanEdgeRolloff = true; // see RadioCapabilities.h's own comment
     c.backendPanAveraging = BackendPanAveraging{kMsPerAverageStep, false, {}, {}}; // AnanPanAnalyzer
     c.panFrameRateShaping = std::nullopt;  // no client owner is declared for FFT FPS
+    // No protocol field holds a waterfall rate: the client keeps it.
+    c.panWaterfallRateShaping =
+        PanWaterfallRateShaping{/*clientPersistsWaterfallRate*/ true};
     // No band/segment zoom: the protocol carries no per-pan zoom flag.
     c.panZoomModes = std::nullopt;
     c.persistsMemories = false;    // default; stated explicitly

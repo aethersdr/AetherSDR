@@ -862,6 +862,8 @@ private:
     // same commands the live sliders send). Returns how many pans were written.
     int cloneDisplaySettingsToAllPans(PanadapterApplet* source);
     AetherSDR::DeferredSettingsWrites m_pendingDisplayWrites;
+    // The waterfall rate, only where the backend declares the client the owner.
+    bool clientPersistsWaterfallRate() const;
     void scheduleClientWaterfallRateSave(int panIndex, int rate);
     // FFT FPS and the dBm scale, which a Flex stores for a pan and a radio
     // with no display engine does not. Same store and deferral as the

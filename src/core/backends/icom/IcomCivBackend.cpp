@@ -466,6 +466,9 @@ RadioCapabilities IcomCivBackend::capabilities() const
     // directly, not by a radio-owned flag.
     c.panZoomModes = std::nullopt;
     c.panFrameRateShaping = std::nullopt;  // no client owner is declared for FFT FPS
+    // CI-V carries no waterfall rate: the client is the only memory it has.
+    c.panWaterfallRateShaping =
+        PanWaterfallRateShaping{/*clientPersistsWaterfallRate*/ true};
 
     // NO IQ, on any networked Icom. Not deferred — absent. See icom-oracle §8.1.
     c.hasDaxStreams = false;

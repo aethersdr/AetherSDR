@@ -64,7 +64,9 @@ struct SquelchLevelScale {
 // line and Auto SQL keep the behaviour they always had (#6127).
 [[nodiscard]] inline SquelchLevelScale legacyDbmSquelchScale()
 {
-    return SquelchLevelScale{-160.0, 1.0, {}, true};
+    // Explicitly initialize unit: omitting it repeats a Clang warning in
+    // translation units built with -Wextra.
+    return SquelchLevelScale{-160.0, 1.0, {}, true, {}, false};
 }
 
 // The published record as it applies to a slice in `mode`: nullopt when the
