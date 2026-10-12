@@ -128,6 +128,7 @@ RIT and XIT work per receiver, ±9999 Hz. When transmit passes to another receiv
 - **Data:** WSJT-X and similar programs work over the [TCI Server](./tci-server.md). Their power slider changes RF output, and the speech ALC does not raise client audio. The WSPR beacon defaults to −3 dBFS and is not moved by the mic slider.
 - **CW** is keyed with host-timed edges, with sidetone. CW settings are restored after a restart.
 - **TUNE** keys at **Tune Power**, and moving Tune Power during a tune changes the carrier.
+- **Show TX in Waterfall:** **Settings → Radio Setup... → Transmit → Show TX in Waterfall** lets the waterfall draw spectrum rows over the TX passband while transmitting. It starts off, and AetherSDR remembers your choice separately for each HL2 across reconnects and restarts. The control does not key the radio.
 - **Max Power:** **Settings → Radio Setup... → Transmit → Max Power** shows the HL2's rated watts, read-only. The power gauge uses a 5 W scale, and forward power reads near PEP on speech.
 - **RF power slider:** the radio has 16 drive steps, so several slider positions do nothing and then one position adds about 1.25 dB.
 - **Modes that refuse to transmit:** AM, SAM, DSB, FM, NFM, WBFM and DRM refuse MOX and TUNE, because the HL2 modulator is SSB only. A mode the HL2 cannot demodulate is refused everywhere.
