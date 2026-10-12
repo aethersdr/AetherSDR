@@ -30,39 +30,26 @@ constexpr int kStatsRefreshMs = 250;
 Ctr2ProxyModel::Ctr2ProxyModel(QObject* parent)
     : QObject(parent)
     , m_proxy(new TcpByteProxy(this))
-    , m_usb(new Ctr2UsbRelay(this))
     , m_aetherRadioReason(tr("Connect AetherSDR to a radio first"))
 {
     m_statsTimer = new QTimer(this);
     m_statsTimer->setSingleShot(true);
     m_statsTimer->setInterval(kStatsRefreshMs);
     connect(m_statsTimer, &QTimer::timeout, this, &Ctr2ProxyModel::statsChanged);
-    const auto coalesceStats = [this] {
-        if (!m_statsTimer->isActive()) {
-            m_statsTimer->start();
-        }
-    };
-    const auto stateMoved = [this] {
-        emit stateChanged();
-        emit statsChanged();
-    };
-    connect(m_proxy, &TcpByteProxy::statsChanged, this, coalesceStats);
-    connect(m_proxy, &TcpByteProxy::stateChanged, this, stateMoved);
+    TcpByteProxy::Tuning tuning;
+    tuning.maxClients = kMaxWifiClients;
+    m_proxy->setTuning(tuning);
+    connect(m_proxy, &TcpByteProxy::statsChanged, this, &Ctr2ProxyModel::coalesceStats);
+    connect(m_proxy, &TcpByteProxy::stateChanged, this, &Ctr2ProxyModel::stateMoved);
     connect(m_proxy, &TcpByteProxy::endpointsChanged, this, &Ctr2ProxyModel::endpointsChanged);
     connect(m_proxy, &TcpByteProxy::lastErrorChanged, this, &Ctr2ProxyModel::lastErrorChanged);
-    connect(m_usb, &Ctr2UsbRelay::statsChanged, this, coalesceStats);
-    connect(m_usb, &Ctr2UsbRelay::stateChanged, this, stateMoved);
-    connect(m_usb, &Ctr2UsbRelay::endpointsChanged, this, &Ctr2ProxyModel::endpointsChanged);
-    connect(m_usb, &Ctr2UsbRelay::lastErrorChanged, this, &Ctr2ProxyModel::lastErrorChanged);
-    connect(m_usb, &Ctr2UsbRelay::extensionsChanged, this, &Ctr2ProxyModel::extensionsChanged);
 #ifdef HAVE_HIDAPI
     m_usbDevices = [] { return Ctr2HidapiPort::enumerate(); };
     m_usbOpener = [](const Ctr2HidPort::DeviceInfo& device, QString* error) -> Ctr2HidPort* {
         return Ctr2HidapiPort::open(device, error);
     };
     // USB is the default whenever this build can open a CTR2.
-    m_transport = Transport::Usb;
-    m_activeTransport = Transport::Usb;
+    m_wifiEnabled = false;
 #endif
     refreshDevices();
 }
@@ -72,11 +59,25 @@ Ctr2ProxyModel::~Ctr2ProxyModel()
     stop();
 }
 
+void Ctr2ProxyModel::coalesceStats()
+{
+    if (!m_statsTimer->isActive()) {
+        m_statsTimer->start();
+    }
+}
+
+void Ctr2ProxyModel::stateMoved()
+{
+    emit stateChanged();
+    emit statsChanged();
+}
+
 void Ctr2ProxyModel::setUsbBackend(UsbDeviceSource devices, UsbPortOpener opener)
 {
     m_usbDevices = std::move(devices);
     m_usbOpener = std::move(opener);
     m_usbChoices.clear();
+    m_usbSelected.clear();
     refreshDevices();
     emit configurationChanged();
 }
@@ -110,37 +111,35 @@ void Ctr2ProxyModel::refreshDevices()
         return;
     }
     m_listenChoices = choices;
-    m_usbChoices = usb;
-    // Default to the first recognized CTR2 while nothing is selected or the
-    // selected device has gone; an existing choice stands.
-    if (!isRunning() && !selectedUsbDevice()) {
-        m_usbDevicePath.clear();
+    if (usbChanged) {
+        // Check each recognized CTR2 the first time it appears; a choice the
+        // operator made for a device still present stands. Running links
+        // keep their own devices, so this never touches a live relay.
+        QSet<QString> seen;
         for (const Ctr2HidPort::DeviceInfo& d : std::as_const(m_usbChoices)) {
-            if (!d.ctr2Model().isEmpty()) {
-                m_usbDevicePath = d.path;
-                break;
+            seen.insert(d.path);
+        }
+        QSet<QString> selected;
+        for (const Ctr2HidPort::DeviceInfo& d : usb) {
+            if (seen.contains(d.path) ? m_usbSelected.contains(d.path) : !d.ctr2Model().isEmpty()) {
+                selected.insert(d.path);
             }
         }
+        m_usbSelected = selected;
     }
+    m_usbChoices = usb;
     emit listenAddressesChanged();
     emit configurationChanged();
 }
 
-bool Ctr2ProxyModel::setTransport(Transport transport)
+bool Ctr2ProxyModel::setWifiEnabled(bool enabled)
 {
     if (isRunning()) {
         return false;
     }
-    if (m_transport != transport) {
-        m_transport = transport;
-        m_activeTransport = transport;
-        m_usbStartError.clear();
-        m_stopReason.clear();
+    if (m_wifiEnabled != enabled) {
+        m_wifiEnabled = enabled;
         emit configurationChanged();
-        emit stateChanged();
-        emit endpointsChanged();
-        emit lastErrorChanged();
-        emit statsChanged();
     }
     return true;
 }
@@ -169,13 +168,31 @@ bool Ctr2ProxyModel::setListenPortText(const QString& port)
     return true;
 }
 
-bool Ctr2ProxyModel::setUsbDevicePath(const QString& path)
+QStringList Ctr2ProxyModel::selectedUsbDevices() const
+{
+    QStringList paths;
+    for (const Ctr2HidPort::DeviceInfo& d : m_usbChoices) {
+        if (m_usbSelected.contains(d.path)) {
+            paths.append(d.path);
+        }
+    }
+    return paths;
+}
+
+bool Ctr2ProxyModel::setUsbDeviceSelected(const QString& path, bool selected)
 {
     if (isRunning()) {
         return false;
     }
-    if (m_usbDevicePath != path) {
-        m_usbDevicePath = path;
+    if (selected && !usbDevice(path)) {
+        return false;
+    }
+    if (m_usbSelected.contains(path) != selected) {
+        if (selected) {
+            m_usbSelected.insert(path);
+        } else {
+            m_usbSelected.remove(path);
+        }
         emit configurationChanged();
     }
     return true;
@@ -278,10 +295,10 @@ bool Ctr2ProxyModel::buildConfig(TcpByteProxy::Config* config, QString* problem)
     return true;
 }
 
-const Ctr2HidPort::DeviceInfo* Ctr2ProxyModel::selectedUsbDevice() const
+const Ctr2HidPort::DeviceInfo* Ctr2ProxyModel::usbDevice(const QString& path) const
 {
     for (const Ctr2HidPort::DeviceInfo& d : m_usbChoices) {
-        if (d.path == m_usbDevicePath) {
+        if (d.path == path) {
             return &d;
         }
     }
@@ -291,45 +308,93 @@ const Ctr2HidPort::DeviceInfo* Ctr2ProxyModel::selectedUsbDevice() const
 QString Ctr2ProxyModel::configurationProblem() const
 {
     QString problem;
-    if (m_transport == Transport::Usb) {
-        if (!usbAvailable()) {
-            return tr("This build has no USB HID support (hidapi)");
-        }
-        if (radioProblem(&problem)) {
-            return problem;
-        }
-        if (m_usbDevicePath.isEmpty()) {
-            return tr("Select the CTR2 USB device");
-        }
-        if (!selectedUsbDevice()) {
-            return tr("The selected USB device is no longer connected; rescan");
-        }
-        return {};
+    if (radioProblem(&problem)) {
+        return problem;
     }
-    TcpByteProxy::Config config;
-    buildConfig(&config, &problem);
+    if (!m_wifiEnabled && m_usbSelected.isEmpty()) {
+        return usbAvailable() ? tr("Check a CTR2 USB device or enable Wi-Fi")
+                              : tr("Enable Wi-Fi (this build has no USB HID support)");
+    }
+    if (!m_usbSelected.isEmpty() && !usbAvailable()) {
+        return tr("This build has no USB HID support (hidapi)");
+    }
+    for (const QString& path : m_usbSelected) {
+        if (!usbDevice(path)) {
+            return tr("A checked USB device is no longer connected; rescan");
+        }
+    }
+    if (m_wifiEnabled) {
+        TcpByteProxy::Config config;
+        buildConfig(&config, &problem);
+    }
     return problem;
 }
 
 bool Ctr2ProxyModel::isRunning() const
 {
-    const TcpByteProxy::State s = state();
-    return s != TcpByteProxy::State::Stopped && s != TcpByteProxy::State::Error;
+    const auto live = [](TcpByteProxy::State s) {
+        return s != TcpByteProxy::State::Stopped && s != TcpByteProxy::State::Error;
+    };
+    if (live(m_proxy->state())) {
+        return true;
+    }
+    for (const UsbLink& link : m_usbLinks) {
+        if (link.relay && link.startError.isEmpty() && live(link.relay->state())) {
+            return true;
+        }
+    }
+    return false;
 }
 
 bool Ctr2ProxyModel::usbDeviceNeedsAccessRule() const
 {
 #ifdef Q_OS_LINUX
-    if (m_transport != Transport::Usb || m_usbDevicePath.isEmpty()) {
-        return false;
-    }
     // hidraw nodes are root-only until the rule grants the session user an
     // ACL; access() honours that ACL. A missing node (ENOENT) is not ours to fix.
-    const QByteArray path = m_usbDevicePath.toLocal8Bit();
-    return ::access(path.constData(), R_OK | W_OK) != 0 && errno == EACCES;
-#else
-    return false;
+    for (const QString& path : m_usbSelected) {
+        const QByteArray node = path.toLocal8Bit();
+        if (::access(node.constData(), R_OK | W_OK) != 0 && errno == EACCES) {
+            return true;
+        }
+    }
 #endif
+    return false;
+}
+
+void Ctr2ProxyModel::clearUsbLinks()
+{
+    for (UsbLink& link : m_usbLinks) {
+        if (!link.relay) {
+            continue;
+        }
+        QObject::disconnect(link.relay, nullptr, this, nullptr);
+        link.relay->stop();
+        // Deferred: a relay may be mid-signal when the operator stops.
+        link.relay->deleteLater();
+    }
+    m_usbLinks.clear();
+}
+
+void Ctr2ProxyModel::startUsb(const Ctr2HidPort::DeviceInfo& device)
+{
+    UsbLink link;
+    link.path = device.path;
+    link.label = device.label();
+    link.relay = new Ctr2UsbRelay(this);
+    connect(link.relay, &Ctr2UsbRelay::statsChanged, this, &Ctr2ProxyModel::coalesceStats);
+    connect(link.relay, &Ctr2UsbRelay::stateChanged, this, &Ctr2ProxyModel::stateMoved);
+    connect(link.relay, &Ctr2UsbRelay::endpointsChanged, this, &Ctr2ProxyModel::endpointsChanged);
+    connect(link.relay, &Ctr2UsbRelay::lastErrorChanged, this, &Ctr2ProxyModel::lastErrorChanged);
+    connect(link.relay, &Ctr2UsbRelay::extensionsChanged, this, &Ctr2ProxyModel::extensionsChanged);
+    QString error;
+    Ctr2HidPort* hid = m_usbOpener(device, &error);
+    if (!hid) {
+        link.startError = error.isEmpty() ? tr("Could not open the device") : error;
+        qCWarning(lcDevices) << "CTR2 USB:" << link.label << link.startError;
+    } else if (!link.relay->start(hid, m_runningRadioAddress, m_runningRadioPort)) {
+        hid->shutdown({});  // never blocks; the port deletes itself
+    }
+    m_usbLinks.push_back(link);
 }
 
 bool Ctr2ProxyModel::start()
@@ -337,34 +402,34 @@ bool Ctr2ProxyModel::start()
     if (isRunning() || !configurationProblem().isEmpty()) {
         return false;
     }
-    m_activeTransport = m_transport;
-    m_usbStartError.clear();
+    if (m_proxy->state() != TcpByteProxy::State::Stopped) {
+        m_proxy->stop();   // clear a previous run's error
+    }
+    clearUsbLinks();
     m_stopReason.clear();
     m_runningRadioAddress = m_aetherRadioAddress;
     m_runningRadioPort = m_aetherRadioPort;
     m_runningRadioLabel = m_aetherRadioLabel;
-    bool ok = false;
-    if (m_transport == Transport::Usb) {
-        QString error;
-        Ctr2HidPort* hid = m_usbOpener(*selectedUsbDevice(), &error);
-        if (!hid) {
-            m_usbStartError = error;
-            emit lastErrorChanged();
-            emit stateChanged();
-        } else {
-            ok = m_usb->start(hid, m_aetherRadioAddress, m_aetherRadioPort);
-            if (!ok) {
-                hid->shutdown({});  // never blocks; the port deletes itself
-            }
-        }
-    } else {
+    m_wifiActive = m_wifiEnabled;
+    if (m_wifiEnabled) {
         TcpByteProxy::Config config;
         QString problem;
         buildConfig(&config, &problem);
-        ok = m_proxy->start(config);
+        m_proxy->start(config);
+    }
+    for (const QString& path : selectedUsbDevices()) {
+        startUsb(*usbDevice(path));
+    }
+    const bool running = isRunning();
+    if (!running) {
+        m_runningRadioAddress = QHostAddress();
     }
     emit configurationChanged();
-    return ok;
+    emit stateChanged();
+    emit endpointsChanged();
+    emit lastErrorChanged();
+    emit statsChanged();
+    return running;
 }
 
 void Ctr2ProxyModel::stop()
@@ -372,31 +437,67 @@ void Ctr2ProxyModel::stop()
     if (m_proxy->state() != TcpByteProxy::State::Stopped) {
         m_proxy->stop();
     }
-    if (m_usb->state() != TcpByteProxy::State::Stopped) {
-        m_usb->stop();
-    }
-    m_usbStartError.clear();
+    clearUsbLinks();
+    m_wifiActive = false;
     m_stopReason.clear();
     m_runningRadioAddress = QHostAddress();
     emit configurationChanged();
+    emit stateChanged();
+    emit endpointsChanged();
     emit lastErrorChanged();
+    emit statsChanged();
 }
 
-TcpByteProxy::State Ctr2ProxyModel::state() const
+QList<Ctr2ProxyModel::Link> Ctr2ProxyModel::links() const
 {
-    if (usbActive()) {
-        return m_usbStartError.isEmpty() ? m_usb->state() : TcpByteProxy::State::Error;
+    QList<Link> out;
+    if (m_wifiActive) {
+        const QList<TcpByteProxy::Client> clients = m_proxy->clients();
+        Link listener;
+        listener.kind = Link::Kind::WifiListener;
+        const QString endpoint = m_proxy->listenerDescription();
+        listener.name = tr("Wi-Fi %1").arg(endpoint.isEmpty()
+            ? QStringLiteral("%1:%2").arg(m_listenAddress, m_listenPort.trimmed()) : endpoint);
+        const TcpByteProxy::State s = m_proxy->state();
+        listener.state = s;
+        if (s == TcpByteProxy::State::Stopped || s == TcpByteProxy::State::Error) {
+            listener.stateText = TcpByteProxy::stateName(s);
+        } else if (clients.isEmpty()) {
+            listener.stateText = tr("Listening");
+        } else {
+            listener.stateText = tr("Listening, %1 of %2 connected")
+                                     .arg(clients.size()).arg(kMaxWifiClients);
+        }
+        listener.stats.rejectedClients = m_proxy->stats().rejectedClients;
+        listener.error = m_proxy->lastError();
+        out.append(listener);
+        for (const TcpByteProxy::Client& c : clients) {
+            Link client;
+            client.kind = Link::Kind::WifiClient;
+            client.name = tr("CTR2 %1").arg(c.peer);
+            client.state = c.state;
+            client.stateText = TcpByteProxy::stateName(c.state);
+            client.stats = c.stats;
+            out.append(client);
+        }
     }
-    return m_proxy->state();
-}
-
-QString Ctr2ProxyModel::stateText() const
-{
-    const TcpByteProxy::State s = state();
-    if (usbActive() && s == TcpByteProxy::State::Listening) {
-        return tr("Waiting for CTR2");
+    for (const UsbLink& usb : m_usbLinks) {
+        Link link;
+        link.kind = Link::Kind::Usb;
+        link.name = usb.label;
+        if (!usb.startError.isEmpty() || !usb.relay) {
+            link.state = TcpByteProxy::State::Error;
+            link.error = usb.startError;
+        } else {
+            link.state = usb.relay->state();
+            link.stats = usb.relay->stats();
+            link.error = usb.relay->lastError();
+        }
+        link.stateText = link.state == TcpByteProxy::State::Listening
+            ? tr("Waiting for CTR2") : TcpByteProxy::stateName(link.state);
+        out.append(link);
     }
-    return TcpByteProxy::stateName(s);
+    return out;
 }
 
 QString Ctr2ProxyModel::lastError() const
@@ -404,45 +505,49 @@ QString Ctr2ProxyModel::lastError() const
     if (!m_stopReason.isEmpty()) {
         return m_stopReason;
     }
-    if (usbActive()) {
-        return m_usbStartError.isEmpty() ? m_usb->lastError() : m_usbStartError;
-    }
-    return m_proxy->lastError();
-}
-
-QString Ctr2ProxyModel::listenerEndpoint() const
-{
-    return usbActive() ? QString() : m_proxy->listenerDescription();
-}
-
-QString Ctr2ProxyModel::peerEndpoint() const
-{
-    if (usbActive()) {
-        return isRunning() ? m_usb->deviceDescription() : QString();
-    }
-    const TcpByteProxy::State s = state();
-    if (s == TcpByteProxy::State::Connecting || s == TcpByteProxy::State::Relaying
-        || s == TcpByteProxy::State::Closing) {
-        return m_proxy->peerDescription();
+    for (const Link& link : links()) {
+        if (!link.error.isEmpty()) {
+            return link.error;
+        }
     }
     return {};
 }
 
 QString Ctr2ProxyModel::radioEndpoint() const
 {
-    return usbActive() ? m_usb->radioDescription() : m_proxy->upstreamDescription();
+    if (m_runningRadioAddress.isNull()) {
+        return {};
+    }
+    return QStringLiteral("%1:%2").arg(m_runningRadioAddress.toString()).arg(m_runningRadioPort);
 }
 
 bool Ctr2ProxyModel::audioSpectrumWanted() const
 {
-    return usbActive() && m_usb->state() == TcpByteProxy::State::Relaying
-        && (m_usb->extensions() & ctr2hid::capabilityBit(ctr2hid::MessageType::AudioSpectrum));
+    const quint32 bit = ctr2hid::capabilityBit(ctr2hid::MessageType::AudioSpectrum);
+    for (const UsbLink& link : m_usbLinks) {
+        if (link.relay && link.startError.isEmpty()
+            && link.relay->state() == TcpByteProxy::State::Relaying
+            && (link.relay->extensions() & bit)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 bool Ctr2ProxyModel::sendAudioSpectrum(int lowHz, int spanHz, const std::vector<float>& barsDb)
 {
-    return audioSpectrumWanted()
-        && m_usb->sendAudioSpectrum(ctr2hid::spectrum::encode(lowHz, spanHz, barsDb));
+    if (!audioSpectrumWanted()) {
+        return false;
+    }
+    const QByteArray payload = ctr2hid::spectrum::encode(lowHz, spanHz, barsDb);
+    bool sent = false;
+    for (const UsbLink& link : m_usbLinks) {
+        // Each relay sends only to a device that negotiated the extension.
+        if (link.relay && link.startError.isEmpty()) {
+            sent = link.relay->sendAudioSpectrum(payload) || sent;
+        }
+    }
+    return sent;
 }
 
 int Ctr2ProxyModel::audioSpectrumLowHz(int spanHz)
@@ -458,11 +563,6 @@ double Ctr2ProxyModel::audioSpectrumBandEdgeHz(int lowHz, int spanHz, int n, int
 int Ctr2ProxyModel::audioSpectrumSpanHz(int filterLo, int filterHi, double sampleRate)
 {
     return ctr2hid::spectrum::displaySpanHz(filterLo, filterHi, sampleRate);
-}
-
-TcpByteProxy::Stats Ctr2ProxyModel::stats() const
-{
-    return usbActive() ? m_usb->stats() : m_proxy->stats();
 }
 
 } // namespace AetherSDR

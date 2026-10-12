@@ -18,15 +18,18 @@ AetherSDR forwards every byte unchanged in both directions over its own
 network route to the radio, including a VPN or tailnet route the CTR2 could
 not reach by itself.
 
-The CTR2 stays an independent radio client. The relay never passes through
-AetherSDR's own command or transmit paths.
+It can relay several controllers at once: CTR2s on Wi-Fi and CTR2s on USB,
+in any mix. Each one stays an independent radio client with its own
+connection to the radio, so the radio's own limit on connected clients
+applies. The relay never passes through AetherSDR's own command or transmit
+paths.
 
 ## Requirements
 
 - AetherSDR connected to a radio that accepts more than one client, over the
   LAN or a VPN. The proxy is unavailable on SmartLink connections.
-- **Wi-Fi (TCP) mode** works with current CTR2 firmware.
-- **USB mode** needs CTR2 firmware with USB mode, which has not been released
+- **Wi-Fi (TCP)** works with current CTR2 firmware.
+- **USB** needs CTR2 firmware with USB mode, which has not been released
   yet, and a build with USB HID support (hidapi).
 
 ## Setup
@@ -35,43 +38,50 @@ The applet's button is **CTR2**, in the **Integration** category. It is not in
 the default applet bar; right-click any applet button to open the picker and
 add it.
 
-The proxy is **off at every launch** and nothing about it is saved: mode,
-address and device are chosen again each session, and it only starts when you
-press **Start**.
+The proxy is **off at every launch** and nothing about it is saved: Wi-Fi,
+the listen address and the USB devices are chosen again each session, and it
+only starts when you press **Start**.
 
-The **Mode** selector offers **Wi-Fi (TCP)** and **USB**.
+The applet has a **Wi-Fi** checkbox with its listen address and port, and a
+**USB** list with a checkbox for each USB HID device. **Start** relays
+everything that is checked, all at once; **Stop** stops all of it.
 
-<img src="/img/screens/ctr2-applet.png" width="248" alt="CTR2 Proxy applet. Mode is set to USB with a Rescan button, the USB selector reads Select CTR2 USB device, and the Radio row (blacked out here) sits beside a dimmed Start button. An amber hint reads Select the CTR2 USB device, followed by State: Stopped and traffic counters of 0 B to the radio and to the CTR2." />
+<img src="/img/screens/ctr2-applet.png" width="248" alt="CTR2 Proxy applet. An unchecked Wi-Fi checkbox sits beside a dimmed listen address selector, port 4992 and a Rescan button. Below, the USB list has checkboxes for a CTR2-Max, an AetherKnob (both checked) and an unchecked touchpad. The Radio row reads Not connected beside a dimmed Start button, an amber hint reads Connect AetherSDR to a radio first, and the state reads Stopped." />
 
-*The CTR2 Proxy applet before a CTR2 is selected. The radio's address is blacked out.*
+*The CTR2 Proxy applet with two USB controllers checked, before AetherSDR connects to a radio.*
 
-> **Check the mode every time.** On builds with USB support, USB is the
-> default and the choice is not saved. USB mode waits on a CTR2 USB firmware
-> release, so with current CTR2 firmware pick **Wi-Fi (TCP)** at every launch.
+> **Check Wi-Fi every time.** On builds with USB support, Wi-Fi starts
+> unchecked and every recognized CTR2 on USB starts checked; the choices are
+> not saved. USB waits on a CTR2 USB firmware release, so with current CTR2
+> firmware check **Wi-Fi** at every launch.
 
-## Using Wi-Fi (TCP) mode
+## Using Wi-Fi (TCP)
 
-1. On the CTR2, set the radio IP address to **this PC's LAN address**.
-2. In the applet, pick the **Listen** address: one of this PC's local IPv4
-   addresses. The listen port is 4992; it can be changed while stopped.
+1. On each CTR2, set the radio IP address to **this PC's LAN address**.
+2. In the applet, check **Wi-Fi** and pick the listen address: one of this
+   PC's local IPv4 addresses. The listen port is 4992; it can be changed
+   while stopped.
 3. Press **Start**.
 
-Each CTR2 connection gets a fresh connection to the radio. Only one CTR2
-connection is active at a time; extra ones are closed and counted as
-rejected. Wi-Fi mode relays TCP only (no UDP discovery or UDP streams), so
-features of the CTR2 that rely on UDP may not work this way.
+Every CTR2 that connects gets its own fresh connection to the radio, and its
+bytes never reach any other CTR2's connection. Up to eight CTR2s can be
+connected over Wi-Fi at once; more are closed and counted as rejected.
+Wi-Fi relays TCP only (no UDP discovery or UDP streams), so features of the
+CTR2 that rely on UDP may not work this way.
 
-## Using USB mode
+## Using USB
 
 The host side is complete: the CTR2's traffic travels in USB HID reports, and
 AetherSDR starts the link, so you only pick the device and press **Start**. It
 needs CTR2 firmware with USB mode, which has not been released yet.
 
-- The **USB** device list shows candidate HID devices, with known CTR2 boards
-  named and listed first. **Rescan** refreshes the list (and the local
-  addresses).
-- **Linux:** a udev rule for the CTR2 ships with the build. If the device
-  cannot be opened, **Start** offers to install the rule
+- The **USB** list shows candidate HID devices, with known CTR2 boards named
+  and listed first. Every recognized CTR2 is checked when it first appears;
+  uncheck any you do not want relayed. Each checked device gets its own
+  connection to the radio, and one that fails (or is unplugged) does not stop
+  the others. **Rescan** refreshes the list (and the local addresses).
+- **Linux:** a udev rule for the CTR2 ships with the build. If a checked
+  device cannot be opened, **Start** offers to install the rule
   (`/etc/udev/rules.d/70-aethersdr-ctr2.rules`) through `pkexec`, asking for
   your administrator password once. The rule only opens CTR2 controllers to
   whoever is logged in at the computer.
@@ -84,19 +94,25 @@ needs CTR2 firmware with USB mode, which has not been released yet.
   example 20–600 Hz for a 600 Hz CW filter. While transmitting it shows your
   transmit audio across the TX filter width. Either way it reaches at most
   12 kHz, and the bars are spaced logarithmically in frequency, as on an
-  audio analyser, so the low end gets more detail. A CTR2 never receives this.
+  audio analyzer, so the low end gets more detail. Every relaying AetherKnob
+  receives it; a CTR2 never does.
 
 ## Reference
 
 ### Status
 
-While running, the applet shows:
+While running, the applet shows **State**: Stopped, or Running with the number
+of controllers relaying. Below it is one row per link:
 
-- **State:** Stopped, Listening, Connecting, Relaying, Closing or Error.
-- The endpoints: the listener, the connected CTR2, and the radio.
-- Byte counters in each direction (`↑ Radio`, `↓ CTR2`) with queued bytes, and
-  in USB mode a UDP counter.
-- The last error, kept apart from the relayed data.
+- **Wi-Fi** with the listen address: Listening (with how many CTR2s are
+  connected) or Error, and the number of rejected connections.
+- **CTR2** with each connected Wi-Fi CTR2's address.
+- Each checked **USB** device: Waiting for CTR2, Connecting, Relaying,
+  Closing or Error.
+
+Each CTR2 row has byte counters in each direction (`↑ Radio`, `↓ CTR2`) with
+queued bytes, USB rows add a UDP counter, and every row shows its last error,
+kept apart from the relayed data.
 
 Stop the proxy to change its settings.
 
@@ -131,25 +147,34 @@ The relay needs a direct LAN or VPN connection to the radio.
 The connected radio has no multi-client sessions, so the CTR2 cannot join as a
 second client. The proxy cannot be used with this radio.
 
-### USB mode is dimmed: "This build has no USB HID support (hidapi)"
+### The USB list reads "This build has no USB HID support (hidapi)"
 
 The build was made without hidapi.
 
-1. Pick **Wi-Fi (TCP)** mode instead.
+1. Check **Wi-Fi** instead.
+
+### One link shows Error while the others relay
+
+Each controller runs on its own, so one failure leaves the rest running. The
+row shows why (for example, a USB device that was unplugged or could not be
+opened).
+
+1. Fix the cause, for example plug the device back in.
+2. Press **Stop**, then **Start** to bring every checked link up again.
 
 ### The proxy stopped on its own
 
 It stops when AetherSDR disconnects or switches radios.
 
 1. Reconnect AetherSDR to the radio.
-2. Check the mode and settings again, then press **Start**.
+2. Check Wi-Fi and the USB devices again, then press **Start**.
 
 ### Settings are locked: "Stop the proxy to change its settings"
 
 The proxy is running.
 
 1. Press **Stop**.
-2. Change the mode, address or device, then press **Start**.
+2. Change Wi-Fi, the address or the USB devices, then press **Start**.
 
 ## See also
 

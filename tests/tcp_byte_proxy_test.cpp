@@ -400,6 +400,99 @@ void testReconnectIsolation()
     proxy.stop();
 }
 
+
+// Concurrent clients each get their own upstream connection; no byte of one
+// pair reaches another, one pair ending leaves the rest relaying, the client
+// past the cap is closed without a byte, and Stop closes everything.
+void testConcurrentClientsIsolated()
+{
+    UpstreamPeer up;
+    if (!up.listen()) {
+        std::exit(kSkip);
+    }
+    TcpByteProxy proxy;
+    TcpByteProxy::Tuning tuning;
+    tuning.maxClients = 2;
+    proxy.setTuning(tuning);
+    startOrSkip(proxy, loopbackConfig(up.port()));
+    const quint16 port = proxy.listeningPort();
+
+    Client a;
+    check(a.connectTo(port), "client A connects");
+    check(waitUntil([&] { return up.conns.size() == 1; }), "A gets an upstream connection");
+    Client b;
+    check(b.connectTo(port), "client B connects");
+    check(waitUntil([&] { return up.conns.size() == 2; }), "B gets its own upstream connection");
+    check(waitUntil([&] {
+              const auto clients = proxy.clients();
+              return clients.size() == 2
+                  && clients[0].state == TcpByteProxy::State::Relaying
+                  && clients[1].state == TcpByteProxy::State::Relaying;
+          }),
+          "both clients relay at once");
+    check(proxy.state() == TcpByteProxy::State::Relaying, "aggregate state is Relaying");
+    check(proxy.peerDescription().count(QLatin1Char(',')) == 1, "both peers are described");
+
+    const QByteArray fromA = randomBytes(300000, 11);
+    const QByteArray fromB = randomBytes(300000, 12);
+    a.socket.write(fromA);
+    b.socket.write(fromB);
+    // Which upstream belongs to whom follows accept order: A connected first.
+    const QByteArray toA = randomBytes(200000, 13);
+    const QByteArray toB = randomBytes(200000, 14);
+    up.conns[0]->socket->write(toA);
+    up.conns[1]->socket->write(toB);
+    check(waitUntil([&] {
+              return up.conns[0]->received.size() >= fromA.size()
+                  && up.conns[1]->received.size() >= fromB.size()
+                  && a.received.size() >= toA.size() && b.received.size() >= toB.size();
+          }, 20000),
+          "both pairs complete in both directions");
+    check(up.conns[0]->received == fromA && up.conns[1]->received == fromB,
+          "each client's bytes reach only its own upstream, unchanged");
+    check(a.received == toA && b.received == toB,
+          "each upstream's bytes reach only its own client, unchanged");
+    const TcpByteProxy::Stats sum = proxy.stats();
+    check(sum.toUpstream == static_cast<quint64>(fromA.size() + fromB.size()),
+          "aggregate toUpstream sums both clients");
+    const auto clients = proxy.clients();
+    check(clients.size() == 2 && clients[0].stats.toUpstream == static_cast<quint64>(fromA.size())
+              && clients[1].stats.toDownstream == static_cast<quint64>(toB.size()),
+          "per-client counters are kept apart");
+
+    Client c;
+    c.socket.connectToHost(QHostAddress::LocalHost, port);
+    check(waitUntil([&] { return c.disconnected; }), "the client past the cap is closed");
+    check(c.received.isEmpty(), "nothing is written to the client past the cap");
+    check(proxy.stats().rejectedClients == 1 && up.conns.size() == 2,
+          "it is counted and never opens an upstream connection");
+
+    a.socket.disconnectFromHost();
+    check(waitUntil([&] { return up.conns[0]->disconnected && proxy.clients().size() == 1; }),
+          "A's close ends only A's pair");
+    b.socket.write("still");
+    up.conns[1]->socket->write("here");
+    check(waitUntil([&] {
+              return up.conns[1]->received == fromB + "still" && b.received == toB + "here";
+          }),
+          "B keeps relaying after A leaves");
+    check(proxy.state() == TcpByteProxy::State::Relaying, "still Relaying with one client left");
+
+    Client d;
+    check(d.connectTo(port), "a freed slot accepts a new client");
+    check(waitUntil([&] { return up.conns.size() == 3 && proxy.clients().size() == 2; }),
+          "the new client gets a fresh upstream connection");
+
+    proxy.stop();
+    check(waitUntil([&] {
+              return b.disconnected && d.disconnected && up.conns[1]->disconnected
+                  && up.conns[2]->disconnected;
+          }),
+          "Stop closes every pair");
+    check(proxy.clients().isEmpty() && proxy.state() == TcpByteProxy::State::Stopped,
+          "no clients remain after Stop");
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -413,6 +506,7 @@ int main(int argc, char** argv)
     testConnectTimeout();
     testNormalEofBothDirections();
     testReconnectIsolation();
+    testConcurrentClientsIsolated();
     if (g_failures) {
         std::fprintf(stderr, "%d check(s) failed\n", g_failures);
         return 1;

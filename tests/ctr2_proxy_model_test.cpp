@@ -1,6 +1,8 @@
-// Ctr2ProxyModel destination handling: the relay targets only the radio its
-// owner pushes in, and every unusable case keeps Start disabled with the
-// pushed reason. Socket-free: nothing is started or bound.
+// Ctr2ProxyModel destination handling and device selection: the relay targets
+// only the radio its owner pushes in, every unusable case keeps Start
+// disabled with its reason, and each checked USB device gets its own relay.
+// Socket-free: USB ports are injected, nothing is bound, and the radio is
+// never reached (no CTR2 answers the host's call).
 
 #include "core/Ctr2HidFraming.h"
 #include "core/Ctr2HidPort.h"
@@ -77,8 +79,8 @@ void testRelayFollowsAetherSdrsRadio()
                         [log](const AetherSDR::Ctr2HidPort::DeviceInfo&, QString*) {
                             return static_cast<AetherSDR::Ctr2HidPort*>(new FakePort(log));
                         });
-    model.setTransport(Ctr2ProxyModel::Transport::Usb);
-    model.setUsbDevicePath(ctr2.path);
+    model.setWifiEnabled(false);
+    check(model.isUsbDeviceSelected(ctr2.path), "the recognized CTR2 is checked");
     const QHostAddress radioA(QStringLiteral("192.0.2.10"));
     const QHostAddress radioB(QStringLiteral("192.0.2.11"));
     model.setAetherRadio(radioA, 4992, QStringLiteral("FLEX-8600 \"Shack\"  192.0.2.10"), {});
@@ -163,13 +165,13 @@ void testUdevRuleMatchesKnownCtr2s()
     check(granted == known, "the udev rule grants exactly the recognised CTR2 devices");
 }
 
-// USB is the default mode when the build can open a CTR2, and the first
-// recognized CTR2 is preselected; an explicit choice survives a rescan.
+// USB is the default when the build can open a CTR2: Wi-Fi starts unchecked
+// and every recognized CTR2 is checked. A rescan keeps the operator's choices.
 void testUsbDefaults()
 {
     Ctr2ProxyModel fresh;
-    check((fresh.transport() == Ctr2ProxyModel::Transport::Usb) == fresh.usbAvailable(),
-          "USB is the default mode exactly when USB HID is available");
+    check(fresh.wifiEnabled() != fresh.usbAvailable(),
+          "Wi-Fi starts checked exactly when USB HID is unavailable");
 
     using Info = AetherSDR::Ctr2HidPort::DeviceInfo;
     const Info other{QStringLiteral("other"), 0x1234, 0x5678, {}, QStringLiteral("Keyboard"), {}};
@@ -179,20 +181,90 @@ void testUsbDefaults()
     Ctr2ProxyModel model;
     model.setUsbBackend([devices] { return *devices; },
                         [](const Info&, QString*) { return static_cast<AetherSDR::Ctr2HidPort*>(nullptr); });
-    check(model.usbDevicePath() == first.path, "the first recognized CTR2 is preselected");
+    check(model.selectedUsbDevices() == QStringList({first.path, second.path}),
+          "every recognized CTR2 is checked, in device order");
+    check(!model.isUsbDeviceSelected(other.path), "an unrecognized device is never checked");
 
-    model.setUsbDevicePath(second.path);
-    devices->append(Info{QStringLiteral("ctr2-c"), 0x303A, 0x1001, {}, QStringLiteral("ESP32S3_DEV"), {}});
+    check(model.setUsbDeviceSelected(second.path, false), "a device can be unchecked");
+    check(model.setUsbDeviceSelected(other.path, true), "an unrecognized device can be checked by hand");
+    check(!model.setUsbDeviceSelected(QStringLiteral("absent"), true), "an absent device cannot be checked");
+    const Info third{QStringLiteral("ctr2-c"), 0x303A, 0x1001, {}, QStringLiteral("ESP32S3_DEV"), {}};
+    devices->append(third);
     model.refreshDevices();
-    check(model.usbDevicePath() == second.path, "a rescan keeps the operator's choice");
+    check(model.selectedUsbDevices() == QStringList({other.path, first.path, third.path}),
+          "a rescan keeps the operator's choices and checks the new CTR2");
 
-    devices->removeIf([&](const Info& d) { return d.path == second.path; });
+    devices->removeIf([&](const Info& d) { return d.path == first.path; });
     model.refreshDevices();
-    check(model.usbDevicePath() == first.path, "a vanished choice falls back to the first CTR2");
+    check(model.selectedUsbDevices() == QStringList({other.path, third.path}),
+          "a vanished device leaves the selection");
 
-    *devices = {other};
-    model.refreshDevices();
-    check(model.usbDevicePath().isEmpty(), "an unrecognized device is never preselected");
+    for (const QString& path : model.selectedUsbDevices()) {
+        model.setUsbDeviceSelected(path, false);
+    }
+    model.setWifiEnabled(false);
+    model.setAetherRadio(QHostAddress(QStringLiteral("192.0.2.10")), 4992, QStringLiteral("radio"), {});
+    check(model.configurationProblem().contains(QStringLiteral("enable Wi-Fi")),
+          "with nothing checked, Start asks for a device or Wi-Fi");
+}
+
+// Each checked device gets its own relay: one that cannot be opened keeps its
+// error and does not hold back the others, and Stop tears every one down.
+void testMultipleUsbDevices()
+{
+    using Info = AetherSDR::Ctr2HidPort::DeviceInfo;
+    const Info a{QStringLiteral("ctr2-a"), 0x303A, 0x1001, {}, QStringLiteral("ESP32S3_DEV"), {}};
+    const Info b{QStringLiteral("ctr2-b"), 0x303A, 0x1001, {}, QStringLiteral("M5STACK_DIAL"), {}};
+    const Info broken{QStringLiteral("ctr2-broken"), 0x303A, 0x1001, {}, QStringLiteral("ESP32S3_DEV"), {}};
+    auto logA = std::make_shared<PortLog>();
+    auto logB = std::make_shared<PortLog>();
+    Ctr2ProxyModel model;
+    model.setUsbBackend([=] { return QList<Info>{a, b, broken}; },
+                        [=](const Info& d, QString* error) -> AetherSDR::Ctr2HidPort* {
+                            if (d.path == a.path) {
+                                return new FakePort(logA);
+                            }
+                            if (d.path == b.path) {
+                                return new FakePort(logB);
+                            }
+                            *error = QStringLiteral("Permission denied");
+                            return nullptr;
+                        });
+    model.setWifiEnabled(false);
+    model.setAetherRadio(QHostAddress(QStringLiteral("192.0.2.10")), 4992, QStringLiteral("radio"), {});
+    check(model.selectedUsbDevices().size() == 3, "all three CTR2s are checked");
+    check(model.links().isEmpty(), "no links before Start");
+
+    check(model.start() && model.isRunning(), "Start succeeds while any device starts");
+    check(logA->opened == 1 && logB->opened == 1, "every openable device is opened once");
+    const auto links = model.links();
+    check(links.size() == 3, "one link per checked device");
+    int waiting = 0;
+    int failed = 0;
+    for (const auto& link : links) {
+        check(link.kind == Ctr2ProxyModel::Link::Kind::Usb, "USB links only");
+        waiting += link.state == AetherSDR::TcpByteProxy::State::Listening ? 1 : 0;
+        if (link.state == AetherSDR::TcpByteProxy::State::Error) {
+            ++failed;
+            check(link.error == QStringLiteral("Permission denied"), "the open error stays on its link");
+        }
+    }
+    check(waiting == 2 && failed == 1, "two devices are called, one failed to open");
+    check(model.lastError() == QStringLiteral("Permission denied"),
+          "the model surfaces the first link error");
+    check(!model.setWifiEnabled(true) && !model.setUsbDeviceSelected(a.path, false),
+          "configuration is frozen while running");
+
+    model.stop();
+    check(!model.isRunning() && model.links().isEmpty(), "Stop clears every link");
+    check(logA->shutdowns == 1 && logB->shutdowns == 1 && logA->closedWithClosed
+              && logB->closedWithClosed,
+          "every device is released and told CLOSED");
+    QCoreApplication::processEvents();
+
+    model.setAetherRadio({}, 0, {}, {});
+    check(model.configurationProblem() == QStringLiteral("Connect AetherSDR to a radio first"),
+          "the radio comes before any device problem");
 }
 
 // The Start-time udev prompt keys off this: a node the user may not open
@@ -224,17 +296,17 @@ void testUsbAccessRuleDetection()
                         [](const AetherSDR::Ctr2HidPort::DeviceInfo&, QString*) {
                             return static_cast<AetherSDR::Ctr2HidPort*>(nullptr);
                         });
-    model.setTransport(Ctr2ProxyModel::Transport::Usb);
-    model.setUsbDevicePath(QString());
-    check(!model.usbDeviceNeedsAccessRule(), "no device selected needs no rule");
-    model.setUsbDevicePath(locked);
+    for (const QString& path : {locked, open, missing}) {
+        model.setUsbDeviceSelected(path, false);
+    }
+    check(!model.usbDeviceNeedsAccessRule(), "no device checked needs no rule");
+    model.setUsbDeviceSelected(locked, true);
     check(model.usbDeviceNeedsAccessRule(), "a node the user cannot open needs the rule");
-    model.setTransport(Ctr2ProxyModel::Transport::Wifi);
-    check(!model.usbDeviceNeedsAccessRule(), "Wi-Fi mode never asks for the USB rule");
-    model.setTransport(Ctr2ProxyModel::Transport::Usb);
-    model.setUsbDevicePath(open);
+    model.setUsbDeviceSelected(open, true);
+    check(model.usbDeviceNeedsAccessRule(), "one locked node among several still needs the rule");
+    model.setUsbDeviceSelected(locked, false);
     check(!model.usbDeviceNeedsAccessRule(), "an openable node needs no rule");
-    model.setUsbDevicePath(missing);
+    model.setUsbDeviceSelected(missing, true);
     check(!model.usbDeviceNeedsAccessRule(), "a vanished node is not a permissions problem");
 #endif
 }
@@ -253,10 +325,7 @@ int main(int argc, char** argv)
     const QString smartLink = QStringLiteral("AetherSDR is connected through SmartLink");
     model.setAetherRadio({}, 0, {}, smartLink);
     check(model.configurationProblem() == smartLink, "the pushed reason is shown as-is");
-    model.setTransport(Ctr2ProxyModel::Transport::Usb);
-    check(model.configurationProblem() == smartLink || !model.usbAvailable(),
-          "USB mode also needs the radio");
-    model.setTransport(Ctr2ProxyModel::Transport::Wifi);
+    model.setWifiEnabled(true);
 
     model.setAetherRadio(QHostAddress(QStringLiteral("0.0.0.0")), 4992, QStringLiteral("bogus"), {});
     check(!model.configurationProblem().isEmpty() && !model.start(),
@@ -276,19 +345,18 @@ int main(int argc, char** argv)
           "the radio label is exposed for display");
     const QString wifi = model.configurationProblem();
     check(!wifi.contains(QStringLiteral("radio"), Qt::CaseInsensitive),
-          "with a radio pushed, Wi-Fi mode only asks for its own settings");
-    model.setTransport(Ctr2ProxyModel::Transport::Usb);
-    const QString usb = model.configurationProblem();
-    check(!usb.contains(QStringLiteral("Connect AetherSDR")), "USB mode accepts the pushed radio");
+          "with a radio pushed, Wi-Fi only asks for its own settings");
+    check(wifi == QStringLiteral("Select the local address the CTR2 will connect to"),
+          "Wi-Fi needs an explicit listen address");
 
     model.setAetherRadio({}, 0, {}, {});
-    model.setTransport(Ctr2ProxyModel::Transport::Wifi);
     check(model.configurationProblem() == QStringLiteral("Connect AetherSDR to a radio first"),
           "losing the radio falls back to the default reason");
 
     testRelayFollowsAetherSdrsRadio();
     testUsbAccessRuleDetection();
     testUsbDefaults();
+    testMultipleUsbDevices();
     testUdevRuleMatchesKnownCtr2s();
 
     if (g_failures) {

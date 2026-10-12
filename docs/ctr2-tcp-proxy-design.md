@@ -82,9 +82,9 @@ Add a small CTR2 Proxy applet using existing applet patterns:
 | Listen address | Explicit local IPv4 LAN address selected by operator |
 | Listen port | 4992, editable while stopped |
 | Radio | The radio AetherSDR is connected to (port 4992), captured at Start; unavailable when AetherSDR is disconnected, on SmartLink, or on a radio without multi-client sessions |
-| Start and Stop | Start listening or close listener and current connection |
+| Start and Stop | Start listening, or close the listener and every connection |
 | State | Stopped, Listening, Connecting, Relaying, Closing, or Error |
-| Endpoints | Actual listener, connected CTR2 peer, and upstream destination |
+| Endpoints | Actual listener and each connected CTR2 peer, one status row each |
 | Traffic | Directional byte counters and queued bytes |
 | Error | Last local socket/configuration error, separate from payload |
 
@@ -94,9 +94,12 @@ operator action and is off on every application launch. Do not silently
 fall back to another port or bind all interfaces when a selected address is
 unavailable. If multiple windows attempt port 4992, report the bind conflict.
 
-Use a single active CTR2 connection for the prototype. Close additional
-accepted connections without sending a banner and without disturbing the
-active connection. Validate port ranges and reject destinations resolving to
+Up to eight CTR2 connections are active at once (`Ctr2ProxyModel::kMaxWifiClients`,
+a resource bound rather than a protocol limit). Each gets its own upstream
+connection and its own relay, and no byte of one pair reaches another, so
+every CTR2 is a separate client on the radio and the radio's own client limit
+applies. Close connections beyond the cap without sending a banner and
+without disturbing the active ones. Validate port ranges and reject destinations resolving to
 the proxy's own local listener, including another local interface with the
 same listening endpoint. IPv6 and hostnames can remain future scope.
 
@@ -258,7 +261,7 @@ Code map:
 | Piece | File |
 | --- | --- |
 | Transport-agnostic two-pump relay, budgets, timeouts, drain | `src/core/ByteRelay.{h,cpp}` |
-| Listener, single client, per-connection upstream, generations | `src/core/TcpByteProxy.{h,cpp}` |
+| Listener, up to `Tuning::maxClients` clients, per-connection upstream, generations | `src/core/TcpByteProxy.{h,cpp}` |
 | Config validation, frozen-while-running, throttled stats | `src/models/Ctr2ProxyModel.{h,cpp}` |
 | Applet (`CTR2`, Integration, off by default, not in default order) | `src/gui/Ctr2ProxyApplet.{h,cpp}` |
 | Lifetime wiring; stop on close | `MainWindow_Controllers.cpp` `setupCtr2Proxy()`, `MainWindow::closeEvent` |
@@ -270,7 +273,8 @@ only while bytes are queued; 10 s drain after orderly EOF. On EOF the closing
 side's buffered bytes are forwarded, the reverse direction is dropped and
 counted (no long-lived half-close), and both sockets close gracefully. A CTR2
 that disconnects before the upstream connect completes has its buffered bytes
-discarded, not forwarded. Additional clients are closed without a byte. Errors
+discarded, not forwarded. One client ending leaves the others relaying; clients
+beyond the cap are closed without a byte. Errors
 and discard counts go to the applet and the `aether.devices` log only.
 
 ### Validation actually run (Linux only, 2026-10-02)

@@ -435,6 +435,17 @@ target_compile_definitions(ctr2_proxy_model_test PRIVATE
     AETHER_CTR2_UDEV_RULES="${CMAKE_CURRENT_LIST_DIR}/../packaging/linux/70-aethersdr-ctr2.rules")
 add_test(NAME ctr2_proxy_model_test COMMAND ctr2_proxy_model_test)
 
+# CTR2 relay model with several USB devices at once: injected HID ports, each
+# device on its own radio connection. Binds one ephemeral 127.0.0.1 TCP port
+# (a generic byte peer standing in for the radio) and each relay's own
+# ephemeral loopback UDP socket. No radio protocol or firmware stand-in.
+# Exit 77 when loopback cannot be bound.
+add_executable(ctr2_proxy_multi_device_test tests/ctr2_proxy_multi_device_test.cpp)
+target_include_directories(ctr2_proxy_multi_device_test PRIVATE src)
+target_link_libraries(ctr2_proxy_multi_device_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME ctr2_proxy_multi_device_test COMMAND ctr2_proxy_multi_device_test)
+set_tests_properties(ctr2_proxy_multi_device_test PROPERTIES SKIP_RETURN_CODE 77)
+
 # Socket-free CLOSED retention: injected HID output and an inert QTcpSocket
 # whose connectToHost() only queues an injected refusal; no socket is opened.
 add_executable(ctr2_usb_closed_retention_test tests/ctr2_usb_closed_retention_test.cpp)

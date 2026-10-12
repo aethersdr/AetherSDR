@@ -3,7 +3,11 @@
 #include <QPointer>
 #include <QWidget>
 
+#include <vector>
+
+class QCheckBox;
 class QLabel;
+class QVBoxLayout;
 class QLineEdit;
 class QPushButton;
 class GuardedComboBox;
@@ -12,9 +16,10 @@ namespace AetherSDR {
 
 class Ctr2ProxyModel;
 
-// CTR2 Proxy applet: Wi-Fi or USB mode, explicit endpoints, Start/Stop, and the
-// relay's state, endpoints, byte counters and last local error. All behavior
-// lives in Ctr2ProxyModel; hiding the applet does not stop the proxy.
+// CTR2 Proxy applet: a Wi-Fi listener and a checklist of USB devices, relayed
+// together by one Start/Stop, with a status row per link (state, byte
+// counters, last local error). All behavior lives in Ctr2ProxyModel; hiding
+// the applet does not stop the proxy.
 class Ctr2ProxyApplet : public QWidget {
     Q_OBJECT
 
@@ -24,11 +29,18 @@ public:
     void setModel(Ctr2ProxyModel* model);
 
 private:
+    struct LinkRow {
+        QWidget* row{nullptr};
+        QLabel* title{nullptr};
+        QLabel* traffic{nullptr};
+        QLabel* error{nullptr};
+    };
+
     void buildUi();
+    LinkRow& linkRow(int index);
     void syncAddresses();
     void syncConfiguration();
     void syncStatus();
-    void syncStats();
     void onStartClicked();
 #ifdef Q_OS_LINUX
     void offerUsbAccessRule();
@@ -38,18 +50,20 @@ private:
 #endif
 
     QPointer<Ctr2ProxyModel> m_model;
-    GuardedComboBox* m_modeCombo{nullptr};
+    QCheckBox* m_wifiCheck{nullptr};
     GuardedComboBox* m_listenCombo{nullptr};
-    GuardedComboBox* m_usbCombo{nullptr};
-    QLabel* m_listenRowLabel{nullptr};
-    QLabel* m_usbRowLabel{nullptr};
+    QWidget* m_usbList{nullptr};
+    QVBoxLayout* m_usbListLayout{nullptr};
+    QLabel* m_usbEmptyLabel{nullptr};
+    std::vector<QCheckBox*> m_usbChecks;
     QPushButton* m_refreshBtn{nullptr};
     QLineEdit* m_listenPortEdit{nullptr};
     QLabel* m_radioLabel{nullptr};
     QPushButton* m_startBtn{nullptr};
     QLabel* m_stateLabel{nullptr};
-    QLabel* m_endpointsLabel{nullptr};
-    QLabel* m_trafficLabel{nullptr};
+    QWidget* m_linksPane{nullptr};
+    QVBoxLayout* m_linksLayout{nullptr};
+    std::vector<LinkRow> m_linkRows;
     QLabel* m_problemLabel{nullptr};
     QLabel* m_errorLabel{nullptr};
     bool m_installingRule{false};  // pkexec rule install in flight

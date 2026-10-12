@@ -5,6 +5,7 @@
 
 #include <QAbstractSocket>
 #include <QNetworkInterface>
+#include <QStringList>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QTimer>
@@ -52,11 +53,12 @@ QString endReasonText(ByteRelay::EndReason reason)
 // a newer one.
 class TcpByteProxy::Session : public QObject {
 public:
-    Session(TcpByteProxy* proxy, quint64 generation, QTcpSocket* downstream,
-            QTcpSocket* upstream, const Tuning& tuning)
+    Session(TcpByteProxy* proxy, quint64 generation, const QString& peer,
+            QTcpSocket* downstream, QTcpSocket* upstream, const Tuning& tuning)
         : QObject(proxy)
         , m_proxy(proxy)
         , m_generation(generation)
+        , m_peer(peer)
         , m_down(downstream)
         , m_up(upstream)
         , m_downEp(downstream)
@@ -157,6 +159,8 @@ public:
     }
 
     bool ended() const { return m_ended; }
+    quint64 generation() const { return m_generation; }
+    QString peer() const { return m_peer; }
 
 private:
     void onUpstreamConnected()
@@ -247,10 +251,12 @@ private:
 
 public:
     Stats m_finalStats;
+    State m_phase{State::Connecting};   // set by the proxy
 
 private:
     TcpByteProxy* m_proxy;
     quint64 m_generation;
+    QString m_peer;
     QTcpSocket* m_down;
     QTcpSocket* m_up;
     TcpSocketEndpoint m_downEp;
@@ -269,10 +275,11 @@ TcpByteProxy::TcpByteProxy(QObject* parent)
 
 TcpByteProxy::~TcpByteProxy()
 {
-    if (m_session) {
-        m_session->terminate();
+    m_stopping = true;
+    for (Session* session : std::vector<Session*>(m_sessions)) {
+        session->terminate();
+        teardownSession(session);
     }
-    teardownSession();
     delete m_server;
     m_server = nullptr;
 }
@@ -334,7 +341,6 @@ bool TcpByteProxy::start(const Config& config)
     m_config.upstreamAddress = QHostAddress(config.upstreamAddress.toIPv4Address());
     m_lastSessionStats = {};
     m_rejectedClients = 0;
-    m_peerDescription.clear();
 
     delete m_server;
     m_server = new QTcpServer(this);
@@ -378,11 +384,12 @@ bool TcpByteProxy::start(const Config& config)
 void TcpByteProxy::stop()
 {
     m_stopping = true;
-    if (m_session) {
-        m_session->terminate();
+    // A copy: a session that ends inside terminate() leaves m_sessions.
+    for (Session* session : std::vector<Session*>(m_sessions)) {
+        session->terminate();
+        teardownSession(session);
     }
     m_stopping = false;
-    teardownSession();
     ++m_generation;
     if (m_server) {
         m_server->close();
@@ -390,7 +397,6 @@ void TcpByteProxy::stop()
         m_server = nullptr;
         qCInfo(lcDevices) << "CTR2 proxy: stopped";
     }
-    m_peerDescription.clear();
     setState(State::Stopped);
     emit endpointsChanged();
     emit statsChanged();
@@ -403,11 +409,12 @@ void TcpByteProxy::onNewConnection()
         if (!socket) {
             break;
         }
-        if (m_session) {
-            // One active client: close the newcomer without writing anything.
+        if (static_cast<int>(m_sessions.size()) >= std::max(1, m_tuning.maxClients)) {
+            // At the cap: close the newcomer without writing anything.
             ++m_rejectedClients;
             qCInfo(lcDevices) << "CTR2 proxy: rejected additional client"
-                              << endpointText(socket->peerAddress(), socket->peerPort());
+                              << endpointText(socket->peerAddress(), socket->peerPort())
+                              << "(" << m_sessions.size() << "already connected)";
             socket->close();
             socket->deleteLater();
             emit statsChanged();
@@ -418,66 +425,101 @@ void TcpByteProxy::onNewConnection()
 
         ++m_generation;
         m_lastSessionStats = {};
-        m_peerDescription = endpointText(QHostAddress(socket->peerAddress().toIPv4Address()),
-                                         socket->peerPort());
+        const QString peer = endpointText(QHostAddress(socket->peerAddress().toIPv4Address()),
+                                          socket->peerPort());
         QTcpSocket* upstream = m_socketFactory();
-        m_session = new Session(this, m_generation, socket, upstream, m_tuning);
-        qCInfo(lcDevices) << "CTR2 proxy: client" << m_peerDescription
+        auto* session = new Session(this, m_generation, peer, socket, upstream, m_tuning);
+        m_sessions.push_back(session);
+        qCInfo(lcDevices) << "CTR2 proxy: client" << peer
                           << "connected; opening" << upstreamDescription();
-        setState(State::Connecting);
+        updateState();
         emit endpointsChanged();
-        m_session->begin(m_config.upstreamAddress, m_config.upstreamPort);
+        session->begin(m_config.upstreamAddress, m_config.upstreamPort);
     }
+}
+
+TcpByteProxy::Session* TcpByteProxy::findSession(quint64 generation) const
+{
+    for (Session* session : m_sessions) {
+        if (session->generation() == generation) {
+            return session;
+        }
+    }
+    return nullptr;
 }
 
 void TcpByteProxy::sessionConnected(quint64 generation)
 {
-    if (generation != m_generation) {
+    Session* session = findSession(generation);
+    if (!session) {
         return;
     }
-    qCInfo(lcDevices) << "CTR2 proxy: relaying" << m_peerDescription
+    qCInfo(lcDevices) << "CTR2 proxy: relaying" << session->peer()
                       << "<->" << upstreamDescription();
-    setState(State::Relaying);
+    session->m_phase = State::Relaying;
+    updateState();
 }
 
 void TcpByteProxy::sessionDraining(quint64 generation)
 {
-    if (generation != m_generation) {
+    Session* session = findSession(generation);
+    if (!session) {
         return;
     }
-    setState(State::Closing);
+    session->m_phase = State::Closing;
+    updateState();
 }
 
 void TcpByteProxy::sessionEnded(quint64 generation, const QString& message, bool error)
 {
-    if (generation != m_generation || !m_session) {
+    Session* session = findSession(generation);
+    if (!session) {
         return;
     }
-    m_lastSessionStats = m_session->m_finalStats;
+    m_lastSessionStats = session->m_finalStats;
+    const QString text = QStringLiteral("CTR2 %1: %2").arg(session->peer(), message);
     if (error) {
-        qCWarning(lcDevices) << "CTR2 proxy:" << message;
-        setLastError(message);
+        qCWarning(lcDevices) << "CTR2 proxy:" << text;
+        setLastError(text);
     } else {
-        qCInfo(lcDevices) << "CTR2 proxy:" << message;
+        qCInfo(lcDevices) << "CTR2 proxy:" << text;
     }
-    teardownSession();
+    teardownSession(session);
     if (m_server && !m_stopping) {
-        setState(State::Listening);
+        updateState();
     }
     emit endpointsChanged();
     emit statsChanged();
 }
 
-void TcpByteProxy::teardownSession()
+void TcpByteProxy::teardownSession(Session* session)
 {
-    if (!m_session) {
+    const auto it = std::find(m_sessions.begin(), m_sessions.end(), session);
+    if (it == m_sessions.end()) {
         return;
     }
-    Session* session = m_session;
-    m_session = nullptr;
+    m_sessions.erase(it);
     // Deferred: this may run inside one of the session's own socket signals.
     QObject::disconnect(session, nullptr, this, nullptr);
     session->deleteLater();
+}
+
+void TcpByteProxy::updateState()
+{
+    if (!m_server) {
+        return;
+    }
+    State state = State::Listening;
+    for (const Session* session : m_sessions) {
+        if (session->m_phase == State::Relaying) {
+            state = State::Relaying;
+            break;
+        }
+        if (session->m_phase == State::Connecting || state == State::Listening) {
+            state = session->m_phase;
+        }
+    }
+    setState(state);
 }
 
 QString TcpByteProxy::listenerDescription() const
@@ -501,9 +543,43 @@ quint16 TcpByteProxy::listeningPort() const
     return m_server && m_server->isListening() ? m_server->serverPort() : 0;
 }
 
+QString TcpByteProxy::peerDescription() const
+{
+    QStringList peers;
+    for (const Session* session : m_sessions) {
+        peers << session->peer();
+    }
+    return peers.join(QStringLiteral(", "));
+}
+
+QList<TcpByteProxy::Client> TcpByteProxy::clients() const
+{
+    QList<Client> out;
+    for (const Session* session : m_sessions) {
+        out.append({session->generation(), session->peer(), session->m_phase,
+                    session->ended() ? session->m_finalStats : session->stats()});
+    }
+    return out;
+}
+
 TcpByteProxy::Stats TcpByteProxy::stats() const
 {
-    Stats s = (m_session && !m_session->ended()) ? m_session->stats() : m_lastSessionStats;
+    Stats s;
+    bool live = false;
+    for (const Session* session : m_sessions) {
+        if (session->ended()) {
+            continue;
+        }
+        const Stats one = session->stats();
+        s.toUpstream += one.toUpstream;
+        s.toDownstream += one.toDownstream;
+        s.queuedToUpstream += one.queuedToUpstream;
+        s.queuedToDownstream += one.queuedToDownstream;
+        live = true;
+    }
+    if (!live) {
+        s = m_lastSessionStats;
+    }
     s.rejectedClients = m_rejectedClients;
     return s;
 }

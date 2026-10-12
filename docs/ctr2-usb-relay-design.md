@@ -385,7 +385,7 @@ USB a complete replacement for Wi-Fi.
 | Link codec (v0) | `src/core/Ctr2HidFraming.{h,cpp}` |
 | HID device access on its own I/O thread (hidapi) | `src/core/Ctr2HidPort.{h,cpp}` |
 | Link state machine, radio TCP connection and per-link UDP socket | `src/core/Ctr2UsbRelay.{h,cpp}` |
-| Applet: Wi-Fi or USB, device list; radio follows AetherSDR's connection | `src/models/Ctr2ProxyModel`, `src/gui/Ctr2ProxyApplet` |
+| Applet: Wi-Fi and a USB device checklist, relayed together; radio follows AetherSDR's connection | `src/models/Ctr2ProxyModel`, `src/gui/Ctr2ProxyApplet` |
 | Extension negotiation (Feature report `0x02`), on the HID I/O thread | `src/core/Ctr2HidThreadPort.cpp`, `src/core/Ctr2HidapiPort.cpp` |
 | AUDIO_SPECTRUM producer: the Client EQ RX tap (post-EQ), or the TX EQ tap while transmitting, its own 2048-point analyzer (reset on each RX/TX switch), 32 bars at 20 Hz, floor-level bars while the tap in use is not being written, only while a negotiating device is relaying | `src/gui/Ctr2AudioSpectrumFeeder` |
 
@@ -400,10 +400,12 @@ port has closed it, so the old CLOSED cannot overtake the new link. The per-link
 socket is bound to the interface that reaches the radio, and only that
 radio's datagrams are relayed back. Each direction's relay budget is 16 KiB
 in USB mode (256 KiB over Wi-Fi) so a drain fits the link's ~7 KB/s. Everything else runs on the GUI event loop, as the TCP relay
-does. hidapi is an existing optional dependency; a build without it shows
-USB mode dimmed with the reason. The device list shows every HID interface
-on usage page `0xFF00`, usage `0x01`, and the operator picks one explicitly;
-the CTR2's USB vendor and product IDs will narrow it once known.
+does. hidapi is an existing optional dependency; a build without it says so
+in place of the USB list. The list shows every HID interface on usage page
+`0xFF00`, usage `0x01`, each with a checkbox. Every checked device gets its
+own `Ctr2UsbRelay`, HID link and radio connection, beside any Wi-Fi CTR2s;
+one device failing or being unplugged leaves the others relaying. The audio
+spectrum goes to each relaying device that negotiated the extension.
 
 RFC #6091 (approved) covers this design and the independent-client transmit
 boundary: the relay runs only after the operator enables it, it relays only
@@ -420,8 +422,8 @@ implementing it, Output report included.
 
 The CTR2 runs on three ESP32-S3 boards, each enumerating with its board's
 own USB IDs. AetherSDR names these in its device list, sorts them first and
-preselects the first one (USB is the applet's default mode). The operator
-can still pick another device, since `303A:1001` is Espressif's
+checks each one when it first appears (Wi-Fi starts unchecked). The operator
+can still check any other device, since `303A:1001` is Espressif's
 default for any ESP32-S3 and only the product string tells them apart:
 
 | VID:PID | Product string | CTR2 model |
