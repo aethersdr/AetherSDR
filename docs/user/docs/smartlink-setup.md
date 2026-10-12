@@ -61,10 +61,10 @@ AetherSDR pins each SmartLink radio's TLS certificate on first use, to protect y
 
 ### Managing pins
 
-**Settings → Radio Setup... → SmartLink → Pinned SmartLink Certificates** lists each pinned radio with its **Host**, **SHA-256 fingerprint** and the date it was **Pinned**.
+**Settings → Radio Setup... → SmartLink → Pinned SmartLink Certificates** lists each pinned radio with its **Host**, **SHA-256 Fingerprint** and the date it was **Pinned**.
 
-- **Forget selected** removes one pin.
-- **Forget all** clears every pin after confirmation. Each radio is pinned again, silently, on its next connection.
+- **Forget Selected** removes one pin.
+- **Forget All** clears every pin after confirmation. Each radio is pinned again, silently, on its next connection.
 
 Forget a pin only when you have deliberately changed a radio's certificate.
 

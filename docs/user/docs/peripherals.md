@@ -110,7 +110,7 @@ device accepts it.
   ("Code for this session only").
 - The code is hidden unless you click **Show**, is concealed again when you
   change page, and is kept out of logs, the automation bridge and widget
-  grabs. **Clear code** deletes the saved code.
+  grabs. **Clear Code** deletes the saved code.
 - After repeated failures with a saved code, the device is blocked:
   "Authorization blocked; enter a code and click Connect to retry".
 - If direct authentication fails, a TGXL or PGXL falls back to the radio

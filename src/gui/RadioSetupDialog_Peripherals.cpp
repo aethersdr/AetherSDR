@@ -881,7 +881,7 @@ void RadioSetupDialog::buildAuthNetworkDevice(PeripheralDeviceUi& ui, QWidget* s
         connect(ui.addressEdit, &QLineEdit::textChanged, edit, concealSavedCode);
         connect(ui.portSpin, &QSpinBox::valueChanged, edit, concealSavedCode);
 
-        auto* clear = new QPushButton(tr("Clear code"));
+        auto* clear = new QPushButton(tr("Clear Code"));
         ui.clearButton = clear;
         clear->setObjectName(QStringLiteral("peripheralAuth_%1_6").arg(ui.id));
         clear->setAccessibleName(tr("%1 clear saved authorization code").arg(label));

@@ -947,19 +947,24 @@ QTreeWidget#radioSetupNavigation::item:hover:!selected {
     color: {{color.canon.ink}};
     background: {{color.canon.control}};
 }
+/* A group's title is a heading on its own line above the box, in line with
+   the box's left edge and a few pixels clear of it, as a section heading
+   (Add Receiver) is above its box; not a label cut into the top border. */
 QGroupBox {
     color: {{color.canon.cyan}};
     background: {{color.canon.raised}};
     border: 1px solid {{color.canon.line}};
     border-radius: 8px;
-    margin-top: 14px;
-    padding-top: 10px;
+    margin-top: 24px;
+    padding-top: 0px;
     font-weight: 700;
 }
 QGroupBox::title {
     subcontrol-origin: margin;
-    left: 10px;
-    padding: 0 4px;
+    subcontrol-position: top left;
+    left: 1px;
+    top: 0px;
+    padding: 0;
 }
 QGroupBox QGroupBox {
     background: {{color.canon.nested}};
@@ -4150,7 +4155,7 @@ QWidget* RadioSetupDialog::buildCalibrationTab()
     // ── Calibrate from the current VFO ───────────────────────────────────────
     auto* calRow = new QHBoxLayout;
     calRow->setSpacing(8);
-    auto* calBtn = new QPushButton("Calibrate from current VFO");
+    auto* calBtn = new QPushButton("Calibrate from Current VFO");
     calBtn->setObjectName(QStringLiteral("hl2FreqCalCapture"));
     auto* calStatus = new QLabel;
     calStatus->setWordWrap(true);
@@ -6218,7 +6223,7 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
             grid->addWidget(lbl, 0, col);
         };
         addHeader("Port", 0);
-        addHeader("Custom name", 1);
+        addHeader("Custom Name", 1);
         addHeader("Preview", 2);
 
         const QStringList tokens = m_model->knownAntennaTokens();
@@ -6425,7 +6430,7 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
                 return QString();
             };
 
-            addSectionHeader("CONFIGURED RECEIVERS");
+            addSectionHeader("Configured Receivers");
             if (profiles.isEmpty()) {
                 auto* empty = new QLabel("No KiwiSDR receivers configured.");
                 empty->setAccessibleName("No configured KiwiSDR receivers");
@@ -6473,10 +6478,10 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
                 status->setToolTip(status->text());
                 rowLayout->addWidget(status, 0, 2, 1, 2);
 
-                addFieldLabel(rowLayout, "NAME", 0);
-                addFieldLabel(rowLayout, "SERVER", 1);
-                addFieldLabel(rowLayout, "PASSWORD", 2);
-                addFieldLabel(rowLayout, "TYPE", 3);
+                addFieldLabel(rowLayout, "Name", 0);
+                addFieldLabel(rowLayout, "Server", 1);
+                addFieldLabel(rowLayout, "Password", 2);
+                addFieldLabel(rowLayout, "Type", 3);
 
                 auto* nameEdit = new QLineEdit(profile.name);
                 nameEdit->setMaxLength(16);
@@ -6693,7 +6698,7 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
                 });
             }
 
-            addSectionHeader("ADD RECEIVER");
+            addSectionHeader("Add Receiver");
             auto* rowFrame = new QFrame;
             rowFrame->setObjectName("kiwiAntennaRow");
             auto* rowLayout = new QGridLayout(rowFrame);
@@ -6704,10 +6709,10 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
             rowLayout->setColumnStretch(1, 1);
             rowLayout->setColumnStretch(2, 1);
 
-            addFieldLabel(rowLayout, "NAME", 0);
-            addFieldLabel(rowLayout, "SERVER", 1);
-            addFieldLabel(rowLayout, "PASSWORD", 2);
-            addFieldLabel(rowLayout, "TYPE", 3);
+            addFieldLabel(rowLayout, "Name", 0);
+            addFieldLabel(rowLayout, "Server", 1);
+            addFieldLabel(rowLayout, "Password", 2);
+            addFieldLabel(rowLayout, "Type", 3);
 
             auto* nameEdit = new QLineEdit;
             nameEdit->setMaxLength(16);
@@ -6781,7 +6786,7 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
             // Browse the public KiwiSDR directory to fill in a receiver. Only
             // API-permitting receivers are listed (web-only operators honored).
             // Picking one fills the fields; Add receiver commits the profile.
-            auto* browseButton = new QPushButton("Browse public…");
+            auto* browseButton = new QPushButton("Browse Public…");
             browseButton->setAccessibleName("Browse public KiwiSDR receivers");
             browseButton->setAccessibleDescription(
                 "Choose from the public KiwiSDR directory; receivers whose "
@@ -6813,7 +6818,7 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
                 }
             });
 
-            auto* addButton = new QPushButton("Add receiver");
+            auto* addButton = new QPushButton("Add Receiver");
             addButton->setAccessibleName("Add KiwiSDR receiver");
             styleKiwiButton(addButton);
             rowLayout->addWidget(addButton, 3, 2);
@@ -8287,9 +8292,10 @@ QWidget* RadioSetupDialog::buildSerialTab()
         auto* headerPin = new QLabel("Pin");
         auto* headerFn  = new QLabel("Function");
         auto* headerPol = new QLabel("Polarity");
-        setTone(headerPin, Tone::Hint);
-        setTone(headerFn, Tone::Hint);
-        setTone(headerPol, Tone::Hint);
+        // Column headings in the heading tone, as on the Antennas page.
+        setTone(headerPin, Tone::Heading);
+        setTone(headerFn, Tone::Heading);
+        setTone(headerPol, Tone::Heading);
         grid->addWidget(headerPin, 0, 0);
         grid->addWidget(headerFn,  0, 1);
         grid->addWidget(headerPol, 0, 2);
@@ -9607,7 +9613,7 @@ QWidget* RadioSetupDialog::buildSmartLinkTab()
 
     auto* table = new QTableWidget(0, 3, grp);
     m_pinnedCertsTable = table;
-    table->setHorizontalHeaderLabels({"Host", "SHA-256 fingerprint", "Pinned"});
+    table->setHorizontalHeaderLabels({"Host", "SHA-256 Fingerprint", "Pinned"});
     table->horizontalHeader()->setStretchLastSection(false);
     table->horizontalHeader()->setSectionResizeMode(
         0, QHeaderView::ResizeToContents);
@@ -9624,8 +9630,8 @@ QWidget* RadioSetupDialog::buildSmartLinkTab()
 
     auto* btnRow = new QHBoxLayout;
     btnRow->setSpacing(8);
-    auto* forgetSel = new QPushButton("Forget selected");
-    auto* forgetAll = new QPushButton("Forget all");
+    auto* forgetSel = new QPushButton("Forget Selected");
+    auto* forgetAll = new QPushButton("Forget All");
     btnRow->addWidget(forgetSel);
     btnRow->addStretch();
     btnRow->addWidget(forgetAll);

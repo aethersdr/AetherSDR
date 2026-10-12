@@ -58,7 +58,7 @@ The HL2 IO board's amplifier control follows the band.
 
 1. Let the radio warm up for 15 minutes.
 2. Pick a **Reference:** (WWV/WWVH 2.5–25 MHz, CHU 3.330 / 7.850 / 14.670 MHz, or **GPSDO / signal generator (custom)** with its frequency). Attenuate a GPSDO by at least 30 dB.
-3. Zero-beat the reference with normal tuning, then click **Calibrate from current VFO**.
+3. Zero-beat the reference with normal tuning, then click **Calibrate from Current VFO**.
 4. Fine-tune with **Trim:** − / + (steps of 0.1, 1 or 10 Hz at 10 MHz), or type the **Error:** in ppb (±50,000 ppb). **Reset** returns to 0.
 
 One value corrects every band, receive and transmit. It is stored per radio (by MAC), so a second HL2 does not inherit it. While **External 10 MHz reference at CL1** is on, the manual calibration is zeroed and disabled.
