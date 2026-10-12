@@ -1040,6 +1040,12 @@ public:
     // Display controls — Waterfall (display panafall set)
     void setWaterfallColorGain(int gain);
     void setWaterfallBlackLevel(int level);
+    // The same two for one named pan, for a control the operator moved after
+    // the widget applied the value; autoBlack is that pan's widget state. A
+    // backend with no command plane is sent nothing, and the value is reported
+    // as dropped unless the client draws it.
+    void setWaterfallColorGainFor(const QString& panId, int gain, bool autoBlack);
+    void setWaterfallBlackLevelFor(const QString& panId, int level);
     void setWaterfallAutoBlack(bool on);
     // Auto-black source: false = client-side estimate (radio auto_black off),
     // true = radio's per-tile level (radio auto_black on). The radio only
@@ -1463,6 +1469,11 @@ private:
     // Sends the radio auto_black flag from the combined auto-black on/off +
     // client/radio-source state (auto_black=1 only when both select radio-side).
     void applyWaterfallAutoBlack();
+    // The one wire site per key. Without a command plane the text reaches
+    // sendCmd(), which reports it as dropped, only when reportDrop is set: an
+    // operator moved the control and the client did not draw it.
+    void sendWaterfallColorGain(const QString& panId, int gain, bool reportDrop);
+    void sendWaterfallBlackLevel(const QString& panId, int level, bool reportDrop);
     bool m_wfAutoBlackOn{true};         // mirrors the client auto-black on/off
     bool m_wfAutoBlackRadioSide{false}; // false = client-side, true = radio-side
     bool profileLoadRadioStateWritesHeld() const;

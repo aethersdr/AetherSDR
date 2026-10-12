@@ -28,11 +28,94 @@ struct AudioDeviceListChange {
     // churn; addedIds leaves those out.
     QList<QByteArray> presentIds;
     QList<QByteArray> addedIds;    // enumerable now, not at the previous check
+    // The enumerable ids, churn left out: the next check's knownArrivalIds.
+    // Set by audioDeviceListChange(); decideAudioDeviceChange() does not read it.
+    QList<QByteArray> arrivalIds;
     bool anyRemoved{false};        // some id from the previous check is gone
     bool defaultChanged{false};    // the system default id moved
     QByteArray liveId;             // engine's device; empty = system default
     QByteArray preferredId;        // saved id; empty = none saved
 };
+
+// Which enumerable ids the hot-plug monitor ignores as audio-server churn.
+enum class AudioDeviceChurnRule {
+    None,   // macOS, Windows: every id counts
+    Linux,  // PipeWire / PulseAudio virtual devices are left out
+};
+
+#ifdef Q_OS_LINUX
+inline constexpr AudioDeviceChurnRule kHostAudioDeviceChurnRule = AudioDeviceChurnRule::Linux;
+#else
+inline constexpr AudioDeviceChurnRule kHostAudioDeviceChurnRule = AudioDeviceChurnRule::None;
+#endif
+
+// Monitor sources, per-app loopbacks, the auto-null sink and the echo-cancel /
+// combine virtuals come and go constantly and are never a new mic or speaker
+// to offer (#2864). Compiled on every platform so each CI lane tests it.
+inline bool isLinuxTransientAudioDeviceId(const QByteArray& id)
+{
+    return id.contains(".monitor")
+        || id.startsWith("pulse_input_loopback")
+        || id.contains("auto_null")
+        || id.contains("echo-cancel")
+        || id.contains("combined");
+}
+
+inline bool isTransientAudioDeviceId(const QByteArray& id,
+                                     AudioDeviceChurnRule rule = kHostAudioDeviceChurnRule)
+{
+    return rule == AudioDeviceChurnRule::Linux && isLinuxTransientAudioDeviceId(id);
+}
+
+// The ids that count as arrivals and removals: the enumerable ids, churn left
+// out. Never the answer to "is this device present".
+inline QList<QByteArray> arrivalAudioDeviceIds(
+    const QList<QByteArray>& enumeratedIds,
+    AudioDeviceChurnRule rule = kHostAudioDeviceChurnRule)
+{
+    QList<QByteArray> ids;
+    ids.reserve(enumeratedIds.size());
+    for (const QByteArray& id : enumeratedIds) {
+        if (!isTransientAudioDeviceId(id, rule)) {
+            ids.append(id);
+        }
+    }
+    return ids;
+}
+
+// One direction's change, from every enumerable id now and the arrival list of
+// the previous check. Presence reads the enumerable ids; arrivals and removals
+// read the arrival lists.
+struct AudioDeviceListSnapshot {
+    QList<QByteArray> enumeratedIds;    // every enumerable id now
+    QList<QByteArray> knownArrivalIds;  // the arrival list of the previous check
+    bool defaultChanged{false};
+    QByteArray liveId;
+    QByteArray preferredId;
+};
+
+inline AudioDeviceListChange audioDeviceListChange(
+    const AudioDeviceListSnapshot& now,
+    AudioDeviceChurnRule rule = kHostAudioDeviceChurnRule)
+{
+    AudioDeviceListChange change;
+    change.presentIds = now.enumeratedIds;
+    change.arrivalIds = arrivalAudioDeviceIds(now.enumeratedIds, rule);
+    for (const QByteArray& id : change.arrivalIds) {
+        if (!now.knownArrivalIds.contains(id)) {
+            change.addedIds.append(id);
+        }
+    }
+    for (const QByteArray& id : now.knownArrivalIds) {
+        if (!change.arrivalIds.contains(id)) {
+            change.anyRemoved = true;
+        }
+    }
+    change.defaultChanged = now.defaultChanged;
+    change.liveId = now.liveId;
+    change.preferredId = now.preferredId;
+    return change;
+}
 
 enum class AudioDeviceAction {
     Keep,              // leave the engine's device alone
