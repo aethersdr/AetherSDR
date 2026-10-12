@@ -45,7 +45,9 @@ public:
     // NUM_CHANNELS stays the compile-time array bound; this only bounds the
     // open loop so the device list follows the radio (#4854). Dynamic resize
     // after connect is a follow-up (issue #4935).
-    bool open(int activeChannels = NUM_CHANNELS);
+    // receiveOnly opens no TX endpoint and never polls application TX audio.
+    bool open(int activeChannels = NUM_CHANNELS, bool receiveOnly = false);
+    bool isReceiveOnly() const { return m_receiveOnly; }
     void close();
     bool isOpen() const { return m_open.load(std::memory_order_acquire); }
 
@@ -67,11 +69,12 @@ public:
 
 public slots:
     // Feed decoded DAX audio for a channel (1-8).
-    // pcm format: int16 stereo, 24 kHz, little-endian.
+    // pcm format: native float32 stereo, 24 kHz.
     void feedDaxAudio(int channel, const QByteArray& pcm);
 
     // When transmitting, feed silence to all RX channels so apps don't starve.
     void setTransmitting(bool tx);
+    void resetRxChannel(int channel);
 
 signals:
     void txAudioReady(const QByteArray& pcm, const AetherSDR::TxCoordinator::Context& context);
@@ -98,6 +101,7 @@ private:
     // Teardown loops still walk the full NUM_CHANNELS bound — closing an
     // unopened slot is a no-op. (#4854)
     int m_activeChannels{NUM_CHANNELS};
+    bool m_receiveOnly{false};
     float m_gain{0.5f};  // -6 dB default — GUI-only
     std::atomic<float> m_channelGain[NUM_CHANNELS]{0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f};
     float m_txGain{0.5f};

@@ -1667,7 +1667,7 @@ void MainWindow::registerShortcutActions()
         QKeySequence(Qt::Key_Minus), [this]() { zoomActivePanadapter(kPanZoomFactor); });
     m_shortcutManager.registerAction("open_memories", "Open Memories Dialog", "Display",
         QKeySequence(Qt::Key_Slash), [this]() { showMemoryDialog(); });
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
     const QKeySequence windowMinimizeKey(QStringLiteral("Ctrl+M"));
     const QKeySequence windowFullScreenKey(QStringLiteral("Ctrl+Meta+F"));
 #else

@@ -86,9 +86,11 @@ static bool openShmSegment(const char* name, int& fd, DaxShmBlock*& block)
     return true;
 }
 
-bool VirtualAudioBridge::open(int activeChannels)
+bool VirtualAudioBridge::open(int activeChannels, bool receiveOnly)
 {
     if (m_open.load(std::memory_order_acquire)) return true;
+
+    m_receiveOnly = receiveOnly;
 
     // Open only as many RX shm segments as the radio has slices (the device
     // list follows the radio — product decision, #4854). open() is reached
@@ -109,52 +111,54 @@ bool VirtualAudioBridge::open(int activeChannels)
         m_blocks[i]->active = 1;
     }
 
-    // Open TX shared memory segment
-    if (!openShmSegment("/aethersdr-dax-tx", m_txShmFd, m_txBlock)) {
-        close();
-        return false;
+    if (!receiveOnly) {
+        // Open TX shared memory segment
+        if (!openShmSegment("/aethersdr-dax-tx", m_txShmFd, m_txBlock)) {
+            close();
+            return false;
+        }
+        m_txBlock->active = 0;  // HAL plugin sets this to 1 when apps write
+
+        // Poll TX shared memory for incoming audio.
+        // Use a short interval and fixed-size reads so TX stays close to real-time.
+        m_txPollTimer = new QTimer(this);
+        m_txPollTimer->setInterval(2);
+        connect(m_txPollTimer, &QTimer::timeout, this, [this]() {
+            static int pollNum = 0;
+            ++pollNum;
+
+            // Diagnostic: log shm state every second regardless of data
+            if (m_txBlock && pollNum % 500 == 0) {
+                uint32_t wp = m_txBlock->writePos.load(std::memory_order_relaxed);
+                uint32_t rp = m_txBlock->readPos.load(std::memory_order_relaxed);
+                qCDebug(lcDax) << "TX shm poll#" << pollNum
+                         << "wp=" << wp << "rp=" << rp
+                         << "avail=" << (wp - rp) << "active=" << m_txBlock->active;
+            }
+
+            // Drain multiple small chunks each tick to avoid stale backlog.
+            constexpr int FRAMES_PER_READ = 128;   // ~5.3ms @ 24kHz
+            constexpr int MAX_CHUNKS_PER_TICK = 8; // keep UI responsive under load
+            for (int i = 0; i < MAX_CHUNKS_PER_TICK; ++i) {
+                const TxCoordinator::Context context = m_txContext;
+                QByteArray audio = readTxAudio(FRAMES_PER_READ);
+                if (audio.isEmpty()) break;
+
+                static int txPollCount = 0;
+                ++txPollCount;
+                if (txPollCount <= 10 || txPollCount % 200 == 0)
+                    qCDebug(lcDax) << "VirtualAudioBridge: TX audio from shm, bytes=" << audio.size()
+                             << "(chunk #" << txPollCount << ")"
+                             << "wp=" << m_txBlock->writePos.load(std::memory_order_relaxed)
+                             << "active=" << m_txBlock->active;
+                emit txAudioReady(audio, context);
+            }
+        });
+        m_txPollTimer->start();
     }
-    m_txBlock->active = 0;  // HAL plugin sets this to 1 when apps write
-
-    // Poll TX shared memory for incoming audio.
-    // Use a short interval and fixed-size reads so TX stays close to real-time.
-    m_txPollTimer = new QTimer(this);
-    m_txPollTimer->setInterval(2);
-    connect(m_txPollTimer, &QTimer::timeout, this, [this]() {
-        static int pollNum = 0;
-        ++pollNum;
-
-        // Diagnostic: log shm state every second regardless of data
-        if (m_txBlock && pollNum % 500 == 0) {
-            uint32_t wp = m_txBlock->writePos.load(std::memory_order_relaxed);
-            uint32_t rp = m_txBlock->readPos.load(std::memory_order_relaxed);
-            qCDebug(lcDax) << "TX shm poll#" << pollNum
-                     << "wp=" << wp << "rp=" << rp
-                     << "avail=" << (wp - rp) << "active=" << m_txBlock->active;
-        }
-
-        // Drain multiple small chunks each tick to avoid stale backlog.
-        constexpr int FRAMES_PER_READ = 128;   // ~5.3ms @ 24kHz
-        constexpr int MAX_CHUNKS_PER_TICK = 8; // keep UI responsive under load
-        for (int i = 0; i < MAX_CHUNKS_PER_TICK; ++i) {
-            const TxCoordinator::Context context = m_txContext;
-            QByteArray audio = readTxAudio(FRAMES_PER_READ);
-            if (audio.isEmpty()) break;
-
-            static int txPollCount = 0;
-            ++txPollCount;
-            if (txPollCount <= 10 || txPollCount % 200 == 0)
-                qCDebug(lcDax) << "VirtualAudioBridge: TX audio from shm, bytes=" << audio.size()
-                         << "(chunk #" << txPollCount << ")"
-                         << "wp=" << m_txBlock->writePos.load(std::memory_order_relaxed)
-                         << "active=" << m_txBlock->active;
-            emit txAudioReady(audio, context);
-        }
-    });
-    m_txPollTimer->start();
 
     m_open.store(true, std::memory_order_release);
-    qCInfo(lcDax) << "VirtualAudioBridge: opened" << NUM_CHANNELS << "RX + 1 TX shared memory segments";
+    qCInfo(lcDax) << "VirtualAudioBridge: opened" << m_activeChannels << "RX shared memory segments, TX:" << !receiveOnly;
     return true;
 }
 
@@ -214,6 +218,7 @@ void VirtualAudioBridge::close()
 
 void VirtualAudioBridge::setTransmitting(bool tx)
 {
+    if (m_receiveOnly) { return; }
     m_transmitting.store(tx, std::memory_order_release);
 
     if (tx) {
@@ -287,8 +292,19 @@ void VirtualAudioBridge::feedSilenceToAllChannels()
     }
 }
 
+void VirtualAudioBridge::resetRxChannel(int channel)
+{
+    if (channel < 1 || channel > NUM_CHANNELS) { return; }
+    DaxShmBlock* block = m_blocks[channel-1];
+    if (block) {
+        block->readPos.store(block->writePos.load(std::memory_order_acquire),std::memory_order_release);
+    }
+    emit daxRxLevel(channel,0);
+}
+
 void VirtualAudioBridge::feedDaxAudio(int channel, const QByteArray& pcm)
 {
+    if (!m_open.load(std::memory_order_acquire)) { return; }
     // This slot may run on PanadapterStream's network thread via
     // Qt::DirectConnection — keep it lock-free and free of Qt-thread-affine
     // calls.  The silence-timer stop and ring-buffer readPos snap that used

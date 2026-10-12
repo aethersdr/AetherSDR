@@ -1,4 +1,6 @@
 #include "DxClusterDialog.h"
+#include "CanonIndicators.h"
+#include "FramelessResizer.h"
 #include "ScopedChildWidget.h"
 #include "DxClusterStartupCommandsDialog.h"
 #include "FlowLayout.h"
@@ -125,18 +127,6 @@ public:
         return QObject::eventFilter(watched, event);
     }
 };
-
-// Shared DSP-style toggle for every checkable button in SpotHub
-// (matches kDspToggle in VfoWidget.cpp so the chrome reads the same as
-// the NB / NR / ANF buttons in the VFO panel).  Dark inset by default,
-// green fill when checked, cyan hover-border accent.
-static const QString kSpotHubToggle =
-    "QPushButton { background: #1a2a3a; border: 1px solid #304050;"
-    " border-radius: 2px; color: #c8d8e8; font-size: 13px;"
-    " font-weight: bold; padding: 2px 8px; }"
-    "QPushButton:checked { background: #1a6030; color: #ffffff;"
-    " border: 1px solid #20a040; }"
-    "QPushButton:hover { border: 1px solid #0090e0; }";
 
 // The first lines of a spot log: its session header and, for a GoCluster
 // node, the marker DxClusterClient writes right after the banner.
@@ -350,6 +340,199 @@ bool BandFilterProxy::filterAcceptsRow(int sourceRow, const QModelIndex& sourceP
 
 // ── DxClusterDialog ─────────────────────────────────────────────────────────
 
+// The style guide's canon vocabulary (RFC #6226), as AetherMap and Network
+// Diagnostics use it: transparent over CanonWindow's ground except the
+// surfaces that carry content. The tab pages and group boxes are raised cards,
+// the consoles and the spot list sit nested, and fields sit on control. The
+// selected tab, group titles and focus are cyan. A checked toggle keeps
+// SpotHub's green fill (as the VFO's DSP toggles), since its state is the
+// only on/off signal, and each source's Connect / Start button is the filled
+// cyan primary.
+static constexpr const char* kSpotHubStyle = R"(
+QWidget {
+    color: {{color.canon.inkSoft}};
+    background: transparent;
+}
+QLabel {
+    background: transparent;
+}
+QTabWidget::pane {
+    background: {{color.canon.raised}};
+    border: 1px solid {{color.canon.line}};
+    border-radius: 10px;
+    top: -1px;
+}
+QTabBar::tab {
+    color: {{color.canon.muted}};
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    padding: 6px 12px;
+    font-weight: 600;
+}
+QTabBar::tab:hover {
+    color: {{color.canon.ink}};
+}
+QTabBar::tab:selected {
+    color: {{color.canon.cyan}};
+    border-bottom-color: {{color.canon.cyan}};
+}
+QGroupBox {
+    background: {{color.canon.nested}};
+    border: 1px solid {{color.canon.line}};
+    border-radius: 8px;
+    margin-top: 14px;
+    padding-top: 6px;
+    font-weight: 700;
+}
+QGroupBox::title {
+    subcontrol-origin: margin;
+    left: 10px;
+    padding: 0 4px;
+    color: {{color.canon.cyan}};
+}
+QPushButton {
+    color: {{color.canon.cyan}};
+    background: {{color.canon.control}};
+    border: 1px solid {{color.canon.lineHi}};
+    border-radius: 4px;
+    padding: 3px 6px;
+    font-weight: 600;
+}
+QPushButton:hover {
+    background: {{color.canon.nested}};
+    color: {{color.canon.aqua}};
+}
+QPushButton:focus {
+    border-color: {{color.canon.aqua}};
+}
+QPushButton:checked {
+    color: {{color.canon.ink}};
+    border-color: {{color.toggle.success.border.checked}};
+    background: {{color.toggle.success.background.checked}};
+}
+QPushButton:disabled {
+    color: {{color.canon.muted}};
+    border-color: {{color.canon.line}};
+    background: transparent;
+}
+QPushButton[spotHubPrimary="true"] {
+    color: {{color.canon.onAccent}};
+    background: {{color.canon.cyan}};
+    border-color: {{color.canon.cyan}};
+}
+QPushButton[spotHubPrimary="true"]:hover {
+    color: {{color.canon.onAccent}};
+    background: {{color.canon.aqua}};
+}
+QPushButton[spotHubPrimary="true"]:disabled {
+    color: {{color.canon.muted}};
+    background: {{color.canon.control}};
+    border-color: {{color.canon.line}};
+}
+QLineEdit,
+QSpinBox,
+QComboBox {
+    color: {{color.canon.ink}};
+    background: {{color.canon.control}};
+    border: 1px solid {{color.canon.lineHi}};
+    border-radius: 4px;
+    padding: 3px 6px;
+    selection-background-color: {{color.canon.cyan}};
+    selection-color: {{color.canon.onAccent}};
+}
+QLineEdit:focus,
+QSpinBox:focus,
+QComboBox:focus {
+    border-color: {{color.canon.aqua}};
+}
+QLineEdit:disabled,
+QSpinBox:disabled,
+QComboBox:disabled {
+    color: {{color.canon.muted}};
+    border-color: {{color.canon.line}};
+}
+QComboBox QAbstractItemView {
+    color: {{color.canon.inkSoft}};
+    background: {{color.canon.nested}};
+    border: 1px solid {{color.canon.lineHi}};
+    selection-background-color: {{color.canon.cyan}};
+    selection-color: {{color.canon.onAccent}};
+}
+QCheckBox {
+    background: transparent;
+    color: {{color.canon.inkSoft}};
+    spacing: 8px;
+}
+QPlainTextEdit {
+    color: {{color.canon.inkSoft}};
+    background: {{color.canon.nested}};
+    border: 1px solid {{color.canon.line}};
+    border-radius: 6px;
+    padding: 4px;
+    font-family: monospace;
+    font-size: 11px;
+    selection-background-color: {{color.canon.control}};
+    selection-color: {{color.canon.ink}};
+}
+QTableView {
+    color: {{color.canon.ink}};
+    background: {{color.canon.nested}};
+    alternate-background-color: {{color.canon.raised}};
+    border: 1px solid {{color.canon.line}};
+    border-radius: 6px;
+    gridline-color: {{color.canon.line}};
+    font-size: 11px;
+}
+QTableView::item:selected {
+    color: {{color.canon.ink}};
+    background: {{color.canon.control}};
+}
+QHeaderView::section {
+    color: {{color.canon.cyan}};
+    background: {{color.canon.raised}};
+    border: none;
+    border-bottom: 1px solid {{color.canon.line}};
+    padding: 3px 6px;
+    font-weight: 700;
+    font-size: 11px;
+}
+QScrollArea {
+    background: transparent;
+    border: none;
+}
+QScrollBar:vertical {
+    background: transparent;
+    width: 12px;
+    margin: 8px 2px 8px 2px;
+    border-radius: 6px;
+}
+QScrollBar::handle:vertical {
+    background: {{color.canon.lineHi}};
+    border-radius: 5px;
+    min-height: 34px;
+}
+QScrollBar::add-line:vertical,
+QScrollBar::sub-line:vertical {
+    height: 0px;
+}
+QScrollBar:horizontal {
+    background: transparent;
+    height: 12px;
+    margin: 2px 8px 2px 8px;
+    border-radius: 6px;
+}
+QScrollBar::handle:horizontal {
+    background: {{color.canon.lineHi}};
+    border-radius: 5px;
+    min-width: 34px;
+}
+QScrollBar::add-line:horizontal,
+QScrollBar::sub-line:horizontal {
+    width: 0px;
+}
+)";
+
 DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient* rbnClient,
                                    WsjtxClient* wsjtxClient, SpotCollectorClient* spotCollectorClient,
                                    PotaClient* potaClient, EibiClient* eibiClient,
@@ -360,7 +543,7 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
                                    RadioModel* radioModel,
                                    DxccColorProvider* dxccProvider,
                                    QWidget* parent)
-    : PersistentDialog("SpotHub", "DxClusterDialogGeometry", parent),
+    : CanonWindow(QStringLiteral("SpotHub"), parent, Kind::Workspace),
       m_client(clusterClient), m_rbnClient(rbnClient),
       m_wsjtxClient(wsjtxClient), m_spotCollectorClient(spotCollectorClient),
       m_potaClient(potaClient), m_eibiClient(eibiClient),
@@ -370,13 +553,23 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
 #endif
       m_radioModel(radioModel), m_dxccProvider(dxccProvider)
 {
-    theme::setContainer(this, QStringLiteral("dialog/dxCluster"));
+    // The canon scope maps the theme tokens the tabs' own sheets use (status
+    // colors, labels) onto the canon palette.
+    theme::setContainer(this, QStringLiteral("canon/spotHub"));
+    // Size and position persist under the key it used as a PersistentDialog,
+    // so saved geometry carries over; it resizes from every edge.
+    setGeometryKey(QStringLiteral("DxClusterDialogGeometry"));
     // Width floor lowered from 680 (#4157) so SpotHub can be dragged down
     // toward the Spot List tab's visible-column width once columns are
     // hidden; the other tabs' own layouts still enforce their own wider
-    // minimums via Qt's normal layout-constraint sizing.
-    setMinimumSize(360, 560);
-    resize(760, 640);
+    // minimums via Qt's normal layout-constraint sizing. 40 px taller than
+    // before for the canon header.
+    setMinimumSize(360, 600);
+    resize(760, 680);
+    FramelessResizer::install(this);
+    applyCanonSheet(bodyWidget(), [] {
+        return QString::fromLatin1(kSpotHubStyle) + canonIndicatorRules();
+    });
 
     // Capture source log paths up front so the per-tab Clear handlers (built
     // below) can zero them on click. (#2022)
@@ -391,14 +584,11 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
 #endif
 
     auto* root = new QVBoxLayout(bodyWidget());
-    root->setSpacing(0);
-    root->setContentsMargins(4, 4, 4, 4);
+    root->setSpacing(8);
+    root->setContentsMargins(14, 12, 14, 14);
+    root->addWidget(makeCanonHeader(QStringLiteral("SpotHub")));
 
     auto* tabs = new QTabWidget;
-    AetherSDR::ThemeManager::instance().applyStyleSheet(tabs, "QTabWidget::pane { border: 1px solid {{color.background.1}}; }"
-        "QTabBar::tab { background: {{color.background.0}}; color: #808890; border: 1px solid {{color.background.1}}; "
-        "  padding: 6px 16px; margin-right: 2px; }"
-        "QTabBar::tab:selected { background: {{color.background.0}}; color: {{color.accent}}; border-bottom: none; }");
 
     buildClusterTab(tabs);
     buildRbnTab(tabs);
@@ -883,7 +1073,6 @@ QPushButton* DxClusterDialog::makeHideUnverifiedButton(const QString& feed)
         "(little supporting evidence — often a busted call). Applies to spots\n"
         "that arrive after you switch it on; spots already listed stay.\n"
         "Other cluster servers send no confidence tag and are unaffected.");
-    ThemeManager::instance().applyStyleSheet(btn, kSpotHubToggle);
     connect(btn, &QPushButton::toggled, this, [btn, feed](bool checked) {
         btn->setText(checked ? "Hide Unverified: ON" : "Hide Unverified: OFF");
         GoClusterSettings::setHideUnverified(feed, checked);
@@ -911,7 +1100,6 @@ void DxClusterDialog::buildClusterTab(QTabWidget* tabs)
     grid->addWidget(new QLabel("Server:"), row, 0);
     m_hostEdit = new QLineEdit(s.value("DxClusterHost", "dxc.nc7j.com").toString());
     m_hostEdit->setPlaceholderText("dxc.nc7j.com");
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_hostEdit, "QLineEdit { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.1}}; padding: 3px; }");
     grid->addWidget(m_hostEdit, row, 1);
     row++;
 
@@ -919,14 +1107,12 @@ void DxClusterDialog::buildClusterTab(QTabWidget* tabs)
     m_portSpin = new QSpinBox;
     m_portSpin->setRange(1, 65535);
     m_portSpin->setValue(s.value("DxClusterPort", 7300).toInt());
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_portSpin, "QSpinBox { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.1}}; padding: 3px; }");
     grid->addWidget(m_portSpin, row, 1);
     row++;
 
     grid->addWidget(new QLabel("Callsign:"), row, 0);
     m_callEdit = new QLineEdit(s.value("DxClusterCallsign").toString());
     m_callEdit->setPlaceholderText("your callsign");
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_callEdit, "QLineEdit { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.1}}; padding: 3px; }");
     grid->addWidget(m_callEdit, row, 1);
     row++;
 
@@ -938,8 +1124,6 @@ void DxClusterDialog::buildClusterTab(QTabWidget* tabs)
         s.value("DxClusterAutoConnect", "False").toString() == "True" ? "Auto-Connect: ON" : "Auto-Connect: OFF");
     m_autoConnectBtn->setCheckable(true);
     m_autoConnectBtn->setChecked(s.value("DxClusterAutoConnect", "False").toString() == "True");
-    m_autoConnectBtn->setStyleSheet(
-        kSpotHubToggle);
     connect(m_autoConnectBtn, &QPushButton::toggled, this, [this](bool on) {
         m_autoConnectBtn->setText(on ? "Auto-Connect: ON" : "Auto-Connect: OFF");
         auto& s = AppSettings::instance();
@@ -955,7 +1139,6 @@ void DxClusterDialog::buildClusterTab(QTabWidget* tabs)
     startupBtn->setToolTip(
         "Edit cluster commands sent automatically after every login.\n"
         "One command per line — e.g. SET/NAME, SET/QTH, ACCEPT/SPOT.");
-    startupBtn->setStyleSheet(kSpotHubToggle);
     connect(startupBtn, &QPushButton::clicked, this, [this] {
         DxClusterStartupCommandsDialog::edit(
             "DX Cluster Startup Commands",
@@ -973,10 +1156,7 @@ void DxClusterDialog::buildClusterTab(QTabWidget* tabs)
 
     m_connectBtn = new QPushButton(m_client->isConnected() ? "Disconnect" : "Connect");
     m_connectBtn->setFixedWidth(100);
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_connectBtn, "QPushButton { background: {{color.accent}}; color: {{color.background.0}}; font-weight: bold; "
-        "border: 1px solid {{color.accent.dim}}; padding: 4px; border-radius: 3px; }"
-        "QPushButton:hover { background: {{color.accent.bright}}; }"
-        "QPushButton:disabled { background: #404060; color: {{color.text.label}}; }");
+    m_connectBtn->setProperty("spotHubPrimary", true);
     connect(m_connectBtn, &QPushButton::clicked, this, [this] {
         if (m_client->isConnected()) {
             emit disconnectRequested();
@@ -1016,17 +1196,17 @@ void DxClusterDialog::buildClusterTab(QTabWidget* tabs)
     QColor dxcColor(s.value("DxClusterSpotColor", "#D2B48C").toString());
     auto* dxcColorBtn = new QPushButton;
     dxcColorBtn->setFixedSize(18, 18);
-    dxcColorBtn->setStyleSheet(QString(
-        "QPushButton { background: %1; border: 2px solid #405060; border-radius: 3px; }"
-        "QPushButton:hover { border-color: #c8d8e8; }").arg(dxcColor.name()));
+    ThemeManager::instance().applyStyleSheet(dxcColorBtn, QString(
+        "QPushButton { background: %1; border: 2px solid {{color.canon.lineHi}}; border-radius: 3px; }"
+        "QPushButton:hover { border-color: {{color.canon.ink}}; }").arg(dxcColor.name()));
     connect(dxcColorBtn, &QPushButton::clicked, this, [this, dxcColorBtn] {
         QColor c = getColorForLiveParent(
             QColor(AppSettings::instance().value("DxClusterSpotColor", "#D2B48C").toString()),
             this, "DX Cluster Spot Color");
         if (c.isValid()) {
-            dxcColorBtn->setStyleSheet(QString(
-                "QPushButton { background: %1; border: 2px solid #405060; border-radius: 3px; }"
-                "QPushButton:hover { border-color: #c8d8e8; }").arg(c.name()));
+            ThemeManager::instance().applyStyleSheet(dxcColorBtn, QString(
+                "QPushButton { background: %1; border: 2px solid {{color.canon.lineHi}}; border-radius: 3px; }"
+                "QPushButton:hover { border-color: {{color.canon.ink}}; }").arg(c.name()));
             AppSettings::instance().setValue("DxClusterSpotColor", c.name());
             AppSettings::instance().save();
         }
@@ -1037,21 +1217,12 @@ void DxClusterDialog::buildClusterTab(QTabWidget* tabs)
     m_console = new QPlainTextEdit;
     m_console->setReadOnly(true);
     m_console->setMaximumBlockCount(2000);
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_console, "QPlainTextEdit {"
-        "  background: {{color.background.0}};"
-        "  color: {{color.text.secondary}};"
-        "  font-family: monospace;"
-        "  font-size: 11px;"
-        "  border: 1px solid {{color.background.1}};"
-        "  padding: 4px;"
-        "}");
     layout->addWidget(m_console, 1);
 
     // Command input row
     auto* cmdRow = new QHBoxLayout;
     m_cmdEdit = new QLineEdit;
     m_cmdEdit->setPlaceholderText("Type a cluster command (e.g. sh/dx 20, set/filter, bye)");
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_cmdEdit, "QLineEdit { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.1}}; padding: 3px; font-family: monospace; }");
     m_cmdEdit->setEnabled(m_client->isConnected());
     connect(m_cmdEdit, &QLineEdit::returnPressed, this, [this] {
         QString cmd = m_cmdEdit->text().trimmed();
@@ -1097,7 +1268,6 @@ void DxClusterDialog::buildRbnTab(QTabWidget* tabs)
     grid->addWidget(new QLabel("Server:"), row, 0);
     m_rbnHostEdit = new QLineEdit(s.value("RbnHost", "telnet.reversebeacon.net").toString());
     m_rbnHostEdit->setPlaceholderText("telnet.reversebeacon.net");
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_rbnHostEdit, "QLineEdit { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.1}}; padding: 3px; }");
     grid->addWidget(m_rbnHostEdit, row, 1);
     row++;
 
@@ -1105,14 +1275,12 @@ void DxClusterDialog::buildRbnTab(QTabWidget* tabs)
     m_rbnPortSpin = new QSpinBox;
     m_rbnPortSpin->setRange(1, 65535);
     m_rbnPortSpin->setValue(s.value("RbnPort", 7000).toInt());
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_rbnPortSpin, "QSpinBox { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.1}}; padding: 3px; }");
     grid->addWidget(m_rbnPortSpin, row, 1);
     row++;
 
     grid->addWidget(new QLabel("Callsign:"), row, 0);
     m_rbnCallEdit = new QLineEdit(defaultCall);
     m_rbnCallEdit->setPlaceholderText("your callsign");
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_rbnCallEdit, "QLineEdit { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.1}}; padding: 3px; }");
     grid->addWidget(m_rbnCallEdit, row, 1);
     row++;
 
@@ -1123,7 +1291,6 @@ void DxClusterDialog::buildRbnTab(QTabWidget* tabs)
     rateSpin->setRange(1, 100);
     rateSpin->setValue(s.value("RbnRateLimit", 10).toInt());
     rateSpin->setSuffix(" spots/sec");
-    AetherSDR::ThemeManager::instance().applyStyleSheet(rateSpin, "QSpinBox { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.1}}; padding: 3px; }");
     connect(rateSpin, &QSpinBox::valueChanged, this, [](int v) {
         auto& s = AppSettings::instance();
         s.setValue("RbnRateLimit", v);
@@ -1142,8 +1309,6 @@ void DxClusterDialog::buildRbnTab(QTabWidget* tabs)
         s.value("RbnAutoConnect", "False").toString() == "True" ? "Auto-Connect: ON" : "Auto-Connect: OFF");
     m_rbnAutoConnectBtn->setCheckable(true);
     m_rbnAutoConnectBtn->setChecked(s.value("RbnAutoConnect", "False").toString() == "True");
-    m_rbnAutoConnectBtn->setStyleSheet(
-        kSpotHubToggle);
     connect(m_rbnAutoConnectBtn, &QPushButton::toggled, this, [this](bool on) {
         m_rbnAutoConnectBtn->setText(on ? "Auto-Connect: ON" : "Auto-Connect: OFF");
         auto& s = AppSettings::instance();
@@ -1159,7 +1324,6 @@ void DxClusterDialog::buildRbnTab(QTabWidget* tabs)
     rbnStartupBtn->setToolTip(
         "Edit RBN cluster commands sent automatically after every login.\n"
         "One command per line — e.g. SET/NAME, SET/QTH, ACCEPT/SPOT.");
-    rbnStartupBtn->setStyleSheet(kSpotHubToggle);
     connect(rbnStartupBtn, &QPushButton::clicked, this, [this] {
         DxClusterStartupCommandsDialog::edit(
             "RBN Startup Commands",
@@ -1176,10 +1340,7 @@ void DxClusterDialog::buildRbnTab(QTabWidget* tabs)
 
     m_rbnConnectBtn = new QPushButton(m_rbnClient->isConnected() ? "Disconnect" : "Connect");
     m_rbnConnectBtn->setFixedWidth(100);
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_rbnConnectBtn, "QPushButton { background: {{color.accent}}; color: {{color.background.0}}; font-weight: bold; "
-        "border: 1px solid {{color.accent.dim}}; padding: 4px; border-radius: 3px; }"
-        "QPushButton:hover { background: {{color.accent.bright}}; }"
-        "QPushButton:disabled { background: #404060; color: {{color.text.label}}; }");
+    m_rbnConnectBtn->setProperty("spotHubPrimary", true);
     connect(m_rbnConnectBtn, &QPushButton::clicked, this, [this] {
         if (m_rbnClient->isConnected()) {
             emit rbnDisconnectRequested();
@@ -1219,17 +1380,17 @@ void DxClusterDialog::buildRbnTab(QTabWidget* tabs)
     QColor rbnColor(s.value("RbnSpotColor", "#4488FF").toString());
     auto* rbnColorBtn = new QPushButton;
     rbnColorBtn->setFixedSize(18, 18);
-    rbnColorBtn->setStyleSheet(QString(
-        "QPushButton { background: %1; border: 2px solid #405060; border-radius: 3px; }"
-        "QPushButton:hover { border-color: #c8d8e8; }").arg(rbnColor.name()));
+    ThemeManager::instance().applyStyleSheet(rbnColorBtn, QString(
+        "QPushButton { background: %1; border: 2px solid {{color.canon.lineHi}}; border-radius: 3px; }"
+        "QPushButton:hover { border-color: {{color.canon.ink}}; }").arg(rbnColor.name()));
     connect(rbnColorBtn, &QPushButton::clicked, this, [this, rbnColorBtn] {
         QColor c = getColorForLiveParent(
             QColor(AppSettings::instance().value("RbnSpotColor", "#4488FF").toString()),
             this, "RBN Spot Color");
         if (c.isValid()) {
-            rbnColorBtn->setStyleSheet(QString(
-                "QPushButton { background: %1; border: 2px solid #405060; border-radius: 3px; }"
-                "QPushButton:hover { border-color: #c8d8e8; }").arg(c.name()));
+            ThemeManager::instance().applyStyleSheet(rbnColorBtn, QString(
+                "QPushButton { background: %1; border: 2px solid {{color.canon.lineHi}}; border-radius: 3px; }"
+                "QPushButton:hover { border-color: {{color.canon.ink}}; }").arg(c.name()));
             AppSettings::instance().setValue("RbnSpotColor", c.name());
             AppSettings::instance().save();
         }
@@ -1240,21 +1401,12 @@ void DxClusterDialog::buildRbnTab(QTabWidget* tabs)
     m_rbnConsole = new QPlainTextEdit;
     m_rbnConsole->setReadOnly(true);
     m_rbnConsole->setMaximumBlockCount(2000);
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_rbnConsole, "QPlainTextEdit {"
-        "  background: {{color.background.0}};"
-        "  color: {{color.text.secondary}};"
-        "  font-family: monospace;"
-        "  font-size: 11px;"
-        "  border: 1px solid {{color.background.1}};"
-        "  padding: 4px;"
-        "}");
     layout->addWidget(m_rbnConsole, 1);
 
     // Command input row
     auto* cmdRow = new QHBoxLayout;
     m_rbnCmdEdit = new QLineEdit;
     m_rbnCmdEdit->setPlaceholderText("Type an RBN command (e.g. set/skimmer, set/ft8, bye)");
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_rbnCmdEdit, "QLineEdit { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.1}}; padding: 3px; font-family: monospace; }");
     m_rbnCmdEdit->setEnabled(m_rbnClient->isConnected());
     connect(m_rbnCmdEdit, &QLineEdit::returnPressed, this, [this] {
         QString cmd = m_rbnCmdEdit->text().trimmed();
@@ -1297,7 +1449,6 @@ void DxClusterDialog::buildWsjtxTab(QTabWidget* tabs)
     grid->addWidget(new QLabel("Address:"), row, 0);
     m_wsjtxAddrEdit = new QLineEdit(s.value("WsjtxAddress", "224.0.0.1").toString());
     m_wsjtxAddrEdit->setPlaceholderText("224.0.0.1 (multicast) or 0.0.0.0 (any)");
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_wsjtxAddrEdit, "QLineEdit { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.1}}; padding: 3px; }");
     grid->addWidget(m_wsjtxAddrEdit, row, 1);
     row++;
 
@@ -1305,7 +1456,6 @@ void DxClusterDialog::buildWsjtxTab(QTabWidget* tabs)
     m_wsjtxPortSpin = new QSpinBox;
     m_wsjtxPortSpin->setRange(1, 65535);
     m_wsjtxPortSpin->setValue(s.value("WsjtxPort", 2237).toInt());
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_wsjtxPortSpin, "QSpinBox { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.1}}; padding: 3px; }");
     grid->addWidget(m_wsjtxPortSpin, row, 1);
     row++;
 
@@ -1317,8 +1467,6 @@ void DxClusterDialog::buildWsjtxTab(QTabWidget* tabs)
         s.value("WsjtxAutoStart", "False").toString() == "True" ? "Auto-Start: ON" : "Auto-Start: OFF");
     m_wsjtxAutoStartBtn->setCheckable(true);
     m_wsjtxAutoStartBtn->setChecked(s.value("WsjtxAutoStart", "False").toString() == "True");
-    m_wsjtxAutoStartBtn->setStyleSheet(
-        kSpotHubToggle);
     connect(m_wsjtxAutoStartBtn, &QPushButton::toggled, this, [this](bool on) {
         m_wsjtxAutoStartBtn->setText(on ? "Auto-Start: ON" : "Auto-Start: OFF");
         auto& s = AppSettings::instance();
@@ -1335,10 +1483,7 @@ void DxClusterDialog::buildWsjtxTab(QTabWidget* tabs)
 
     m_wsjtxStartBtn = new QPushButton(m_wsjtxClient->isListening() ? "Stop" : "Start");
     m_wsjtxStartBtn->setFixedWidth(100);
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_wsjtxStartBtn, "QPushButton { background: {{color.accent}}; color: {{color.background.0}}; font-weight: bold; "
-        "border: 1px solid {{color.accent.dim}}; padding: 4px; border-radius: 3px; }"
-        "QPushButton:hover { background: {{color.accent.bright}}; }"
-        "QPushButton:disabled { background: #404060; color: {{color.text.label}}; }");
+    m_wsjtxStartBtn->setProperty("spotHubPrimary", true);
     connect(m_wsjtxStartBtn, &QPushButton::clicked, this, [this] {
         if (m_wsjtxClient->isListening()) {
             emit wsjtxStopRequested();
@@ -1366,23 +1511,20 @@ void DxClusterDialog::buildWsjtxTab(QTabWidget* tabs)
     AetherSDR::ThemeManager::instance().applyStyleSheet(filterLabel, "QLabel { color: {{color.text.label}}; font-size: 14px; }");
     filterRow->addWidget(filterLabel);
 
-    const QString cbStyle =
-        "QCheckBox { color: {{color.text.secondary}}; font-size: 14px; spacing: 3px; }"
-        + ThemeManager::checkBoxIndicatorStyle();
     auto swatchStyle = [](const QColor& c) {
-        return QString("QPushButton { background: %1; border: 2px solid #405060; border-radius: 3px; }"
-                       "QPushButton:hover { border-color: #c8d8e8; }").arg(c.name());
+        return QString("QPushButton { background: %1; border: 2px solid {{color.canon.lineHi}}; border-radius: 3px; }"
+                       "QPushButton:hover { border-color: {{color.canon.ink}}; }").arg(c.name());
     };
 
     // CQ color + checkbox
     QColor cqColor(s.value("WsjtxColorCQ", "#00FF00").toString());
     m_wsjtxColorCQ = new QPushButton;
     m_wsjtxColorCQ->setFixedSize(18, 18);
-    m_wsjtxColorCQ->setStyleSheet(swatchStyle(cqColor));
+    ThemeManager::instance().applyStyleSheet(m_wsjtxColorCQ, swatchStyle(cqColor));
     connect(m_wsjtxColorCQ, &QPushButton::clicked, this, [this, swatchStyle] {
         QColor c = getColorForLiveParent(QColor(AppSettings::instance().value("WsjtxColorCQ", "#00FF00").toString()), this, "CQ Spot Color");
         if (c.isValid()) {
-            m_wsjtxColorCQ->setStyleSheet(swatchStyle(c));
+            ThemeManager::instance().applyStyleSheet(m_wsjtxColorCQ, swatchStyle(c));
             AppSettings::instance().setValue("WsjtxColorCQ", c.name());
             AppSettings::instance().save();
         }
@@ -1391,7 +1533,6 @@ void DxClusterDialog::buildWsjtxTab(QTabWidget* tabs)
 
     m_wsjtxFilterCQ = new QCheckBox("CQ");
     m_wsjtxFilterCQ->setChecked(s.value("WsjtxFilterCQ", "True").toString() == "True");
-    ThemeManager::instance().applyStyleSheet(m_wsjtxFilterCQ, cbStyle);
     connect(m_wsjtxFilterCQ, &QCheckBox::toggled, this, [this](bool on) {
         if (on) m_wsjtxFilterPOTA->setChecked(false);
         auto& s = AppSettings::instance();
@@ -1404,11 +1545,11 @@ void DxClusterDialog::buildWsjtxTab(QTabWidget* tabs)
     QColor potaColor(s.value("WsjtxColorPOTA", "#00FFFF").toString());
     m_wsjtxColorPOTA = new QPushButton;
     m_wsjtxColorPOTA->setFixedSize(18, 18);
-    m_wsjtxColorPOTA->setStyleSheet(swatchStyle(potaColor));
+    ThemeManager::instance().applyStyleSheet(m_wsjtxColorPOTA, swatchStyle(potaColor));
     connect(m_wsjtxColorPOTA, &QPushButton::clicked, this, [this, swatchStyle] {
         QColor c = getColorForLiveParent(QColor(AppSettings::instance().value("WsjtxColorPOTA", "#00FFFF").toString()), this, "CQ POTA Spot Color");
         if (c.isValid()) {
-            m_wsjtxColorPOTA->setStyleSheet(swatchStyle(c));
+            ThemeManager::instance().applyStyleSheet(m_wsjtxColorPOTA, swatchStyle(c));
             AppSettings::instance().setValue("WsjtxColorPOTA", c.name());
             AppSettings::instance().save();
         }
@@ -1417,7 +1558,6 @@ void DxClusterDialog::buildWsjtxTab(QTabWidget* tabs)
 
     m_wsjtxFilterPOTA = new QCheckBox("CQ POTA");
     m_wsjtxFilterPOTA->setChecked(s.value("WsjtxFilterPOTA", "True").toString() == "True");
-    ThemeManager::instance().applyStyleSheet(m_wsjtxFilterPOTA, cbStyle);
     connect(m_wsjtxFilterPOTA, &QCheckBox::toggled, this, [this](bool on) {
         if (on) m_wsjtxFilterCQ->setChecked(false);
         auto& s = AppSettings::instance();
@@ -1430,11 +1570,11 @@ void DxClusterDialog::buildWsjtxTab(QTabWidget* tabs)
     QColor callingMeColor(s.value("WsjtxColorCallingMe", "#FF0000").toString());
     m_wsjtxColorCallingMe = new QPushButton;
     m_wsjtxColorCallingMe->setFixedSize(18, 18);
-    m_wsjtxColorCallingMe->setStyleSheet(swatchStyle(callingMeColor));
+    ThemeManager::instance().applyStyleSheet(m_wsjtxColorCallingMe, swatchStyle(callingMeColor));
     connect(m_wsjtxColorCallingMe, &QPushButton::clicked, this, [this, swatchStyle] {
         QColor c = getColorForLiveParent(QColor(AppSettings::instance().value("WsjtxColorCallingMe", "#FF0000").toString()), this, "Calling Me Spot Color");
         if (c.isValid()) {
-            m_wsjtxColorCallingMe->setStyleSheet(swatchStyle(c));
+            ThemeManager::instance().applyStyleSheet(m_wsjtxColorCallingMe, swatchStyle(c));
             AppSettings::instance().setValue("WsjtxColorCallingMe", c.name());
             AppSettings::instance().save();
         }
@@ -1443,7 +1583,6 @@ void DxClusterDialog::buildWsjtxTab(QTabWidget* tabs)
 
     m_wsjtxFilterCallingMe = new QCheckBox("Calling Me");
     m_wsjtxFilterCallingMe->setChecked(s.value("WsjtxFilterCallingMe", "True").toString() == "True");
-    ThemeManager::instance().applyStyleSheet(m_wsjtxFilterCallingMe, cbStyle);
     connect(m_wsjtxFilterCallingMe, &QCheckBox::toggled, this, [](bool on) {
         auto& s = AppSettings::instance();
         s.setValue("WsjtxFilterCallingMe", on ? "True" : "False");
@@ -1455,11 +1594,11 @@ void DxClusterDialog::buildWsjtxTab(QTabWidget* tabs)
     QColor defaultColor(s.value("WsjtxColorDefault", "#FFFFFF").toString());
     m_wsjtxColorDefault = new QPushButton;
     m_wsjtxColorDefault->setFixedSize(18, 18);
-    m_wsjtxColorDefault->setStyleSheet(swatchStyle(defaultColor));
+    ThemeManager::instance().applyStyleSheet(m_wsjtxColorDefault, swatchStyle(defaultColor));
     connect(m_wsjtxColorDefault, &QPushButton::clicked, this, [this, swatchStyle] {
         QColor c = getColorForLiveParent(QColor(AppSettings::instance().value("WsjtxColorDefault", "#FFFFFF").toString()), this, "Default Spot Color");
         if (c.isValid()) {
-            m_wsjtxColorDefault->setStyleSheet(swatchStyle(c));
+            ThemeManager::instance().applyStyleSheet(m_wsjtxColorDefault, swatchStyle(c));
             AppSettings::instance().setValue("WsjtxColorDefault", c.name());
             AppSettings::instance().save();
         }
@@ -1507,14 +1646,6 @@ void DxClusterDialog::buildWsjtxTab(QTabWidget* tabs)
     m_wsjtxConsole = new QPlainTextEdit;
     m_wsjtxConsole->setReadOnly(true);
     m_wsjtxConsole->setMaximumBlockCount(2000);
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_wsjtxConsole, "QPlainTextEdit {"
-        "  background: {{color.background.0}};"
-        "  color: {{color.text.secondary}};"
-        "  font-family: monospace;"
-        "  font-size: 11px;"
-        "  border: 1px solid {{color.background.1}};"
-        "  padding: 4px;"
-        "}");
     layout->addWidget(m_wsjtxConsole, 1);
 
     auto* wsjtxBtnRow = new QHBoxLayout;
@@ -1545,7 +1676,6 @@ void DxClusterDialog::buildSpotCollectorTab(QTabWidget* tabs)
     m_scPortSpin = new QSpinBox;
     m_scPortSpin->setRange(1, 65535);
     m_scPortSpin->setValue(s.value("SpotCollectorPort", 9999).toInt());
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_scPortSpin, "QSpinBox { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.1}}; padding: 3px; }");
     grid->addWidget(m_scPortSpin, 0, 1);
 
     connLayout->addLayout(grid);
@@ -1564,8 +1694,6 @@ void DxClusterDialog::buildSpotCollectorTab(QTabWidget* tabs)
         s.value("SpotCollectorAutoStart", "False").toString() == "True" ? "Auto-Start: ON" : "Auto-Start: OFF");
     m_scAutoStartBtn->setCheckable(true);
     m_scAutoStartBtn->setChecked(s.value("SpotCollectorAutoStart", "False").toString() == "True");
-    m_scAutoStartBtn->setStyleSheet(
-        kSpotHubToggle);
     connect(m_scAutoStartBtn, &QPushButton::toggled, this, [this](bool on) {
         m_scAutoStartBtn->setText(on ? "Auto-Start: ON" : "Auto-Start: OFF");
         auto& s = AppSettings::instance();
@@ -1582,10 +1710,7 @@ void DxClusterDialog::buildSpotCollectorTab(QTabWidget* tabs)
 
     m_scStartBtn = new QPushButton(m_spotCollectorClient->isListening() ? "Stop" : "Start");
     m_scStartBtn->setFixedWidth(100);
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_scStartBtn, "QPushButton { background: {{color.accent}}; color: {{color.background.0}}; font-weight: bold; "
-        "border: 1px solid {{color.accent.dim}}; padding: 4px; border-radius: 3px; }"
-        "QPushButton:hover { background: {{color.accent.bright}}; }"
-        "QPushButton:disabled { background: #404060; color: {{color.text.label}}; }");
+    m_scStartBtn->setProperty("spotHubPrimary", true);
     connect(m_scStartBtn, &QPushButton::clicked, this, [this] {
         if (m_spotCollectorClient->isListening()) {
             emit spotCollectorStopRequested();
@@ -1610,14 +1735,6 @@ void DxClusterDialog::buildSpotCollectorTab(QTabWidget* tabs)
     m_scConsole = new QPlainTextEdit;
     m_scConsole->setReadOnly(true);
     m_scConsole->setMaximumBlockCount(2000);
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_scConsole, "QPlainTextEdit {"
-        "  background: {{color.background.0}};"
-        "  color: {{color.text.secondary}};"
-        "  font-family: monospace;"
-        "  font-size: 11px;"
-        "  border: 1px solid {{color.background.1}};"
-        "  padding: 4px;"
-        "}");
     layout->addWidget(m_scConsole, 1);
 
     auto* scBtnRow = new QHBoxLayout;
@@ -1654,7 +1771,7 @@ void DxClusterDialog::buildPotaTab(QTabWidget* tabs)
 
     grid->addWidget(new QLabel("Server:"), row, 0);
     auto* serverLabel = new QLabel("api.pota.app (HTTP polling)");
-    serverLabel->setStyleSheet("QLabel { color: #808890; }");
+    ThemeManager::instance().applyStyleSheet(serverLabel, "QLabel { color: {{color.canon.muted}}; }");
     grid->addWidget(serverLabel, row, 1);
     row++;
 
@@ -1663,7 +1780,6 @@ void DxClusterDialog::buildPotaTab(QTabWidget* tabs)
     m_potaIntervalSpin->setRange(15, 300);
     m_potaIntervalSpin->setValue(s.value("PotaPollInterval", 60).toInt());
     m_potaIntervalSpin->setSuffix(" sec");
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_potaIntervalSpin, "QSpinBox { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.1}}; padding: 3px; }");
     connect(m_potaIntervalSpin, &QSpinBox::valueChanged, this, [](int v) {
         auto& s = AppSettings::instance();
         s.setValue("PotaPollInterval", v);
@@ -1680,8 +1796,6 @@ void DxClusterDialog::buildPotaTab(QTabWidget* tabs)
         s.value("PotaAutoStart", "False").toString() == "True" ? "Auto-Start: ON" : "Auto-Start: OFF");
     m_potaAutoStartBtn->setCheckable(true);
     m_potaAutoStartBtn->setChecked(s.value("PotaAutoStart", "False").toString() == "True");
-    m_potaAutoStartBtn->setStyleSheet(
-        kSpotHubToggle);
     connect(m_potaAutoStartBtn, &QPushButton::toggled, this, [this](bool on) {
         m_potaAutoStartBtn->setText(on ? "Auto-Start: ON" : "Auto-Start: OFF");
         auto& s = AppSettings::instance();
@@ -1698,10 +1812,7 @@ void DxClusterDialog::buildPotaTab(QTabWidget* tabs)
 
     m_potaStartBtn = new QPushButton(m_potaClient->isPolling() ? "Stop" : "Start");
     m_potaStartBtn->setFixedWidth(100);
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_potaStartBtn, "QPushButton { background: {{color.accent}}; color: {{color.background.0}}; font-weight: bold; "
-        "border: 1px solid {{color.accent.dim}}; padding: 4px; border-radius: 3px; }"
-        "QPushButton:hover { background: {{color.accent.bright}}; }"
-        "QPushButton:disabled { background: #404060; color: {{color.text.label}}; }");
+    m_potaStartBtn->setProperty("spotHubPrimary", true);
     connect(m_potaStartBtn, &QPushButton::clicked, this, [this] {
         if (m_potaClient->isPolling()) {
             emit potaStopRequested();
@@ -1732,17 +1843,17 @@ void DxClusterDialog::buildPotaTab(QTabWidget* tabs)
     QColor potaColor(s.value("PotaSpotColor", "#FFFF00").toString());
     auto* potaColorBtn = new QPushButton;
     potaColorBtn->setFixedSize(18, 18);
-    potaColorBtn->setStyleSheet(QString(
-        "QPushButton { background: %1; border: 2px solid #405060; border-radius: 3px; }"
-        "QPushButton:hover { border-color: #c8d8e8; }").arg(potaColor.name()));
+    ThemeManager::instance().applyStyleSheet(potaColorBtn, QString(
+        "QPushButton { background: %1; border: 2px solid {{color.canon.lineHi}}; border-radius: 3px; }"
+        "QPushButton:hover { border-color: {{color.canon.ink}}; }").arg(potaColor.name()));
     connect(potaColorBtn, &QPushButton::clicked, this, [this, potaColorBtn] {
         QColor c = getColorForLiveParent(
             QColor(AppSettings::instance().value("PotaSpotColor", "#FFFF00").toString()),
             this, "POTA Spot Color");
         if (c.isValid()) {
-            potaColorBtn->setStyleSheet(QString(
-                "QPushButton { background: %1; border: 2px solid #405060; border-radius: 3px; }"
-                "QPushButton:hover { border-color: #c8d8e8; }").arg(c.name()));
+            ThemeManager::instance().applyStyleSheet(potaColorBtn, QString(
+                "QPushButton { background: %1; border: 2px solid {{color.canon.lineHi}}; border-radius: 3px; }"
+                "QPushButton:hover { border-color: {{color.canon.ink}}; }").arg(c.name()));
             AppSettings::instance().setValue("PotaSpotColor", c.name());
             AppSettings::instance().save();
         }
@@ -1753,14 +1864,6 @@ void DxClusterDialog::buildPotaTab(QTabWidget* tabs)
     m_potaConsole = new QPlainTextEdit;
     m_potaConsole->setReadOnly(true);
     m_potaConsole->setMaximumBlockCount(2000);
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_potaConsole, "QPlainTextEdit {"
-        "  background: {{color.background.0}};"
-        "  color: {{color.text.secondary}};"
-        "  font-family: monospace;"
-        "  font-size: 11px;"
-        "  border: 1px solid {{color.background.1}};"
-        "  padding: 4px;"
-        "}");
     layout->addWidget(m_potaConsole, 1);
 
     auto* potaBtnRow = new QHBoxLayout;
@@ -1841,7 +1944,6 @@ void DxClusterDialog::buildEiBiTab(QTabWidget* tabs)
     m_eibiAutoStartBtn = new QPushButton(autoStartOn ? "Auto-Start: ON" : "Auto-Start: OFF");
     m_eibiAutoStartBtn->setCheckable(true);
     m_eibiAutoStartBtn->setChecked(autoStartOn);
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_eibiAutoStartBtn, kSpotHubToggle);
     connect(m_eibiAutoStartBtn, &QPushButton::toggled, this, [](bool on) {
         auto& s = AppSettings::instance();
         s.setValue("EiBiAutoStart", on ? "True" : "False");
@@ -1859,9 +1961,6 @@ void DxClusterDialog::buildEiBiTab(QTabWidget* tabs)
 
     m_eibiUpdateBtn = new QPushButton("Update Now");
     m_eibiUpdateBtn->setFixedWidth(100);
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_eibiUpdateBtn, "QPushButton { background: {{color.background.1}}; color: {{color.text.primary}}; "
-        "border: 1px solid {{color.background.2}}; padding: 4px; border-radius: 3px; }"
-        "QPushButton:hover { background: {{color.background.2}}; }");
     connect(m_eibiUpdateBtn, &QPushButton::clicked, this, [this] {
         m_eibiStatusLabel->setText("Downloading schedule...");
         m_eibiStartBtn->setText("Stop");
@@ -1871,10 +1970,7 @@ void DxClusterDialog::buildEiBiTab(QTabWidget* tabs)
 
     m_eibiStartBtn = new QPushButton(isEnabled ? "Stop" : "Start");
     m_eibiStartBtn->setFixedWidth(100);
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_eibiStartBtn, "QPushButton { background: {{color.accent}}; color: {{color.background.0}}; font-weight: bold; "
-        "border: 1px solid {{color.accent.dim}}; padding: 4px; border-radius: 3px; }"
-        "QPushButton:hover { background: {{color.accent.bright}}; }"
-        "QPushButton:disabled { background: {{color.background.2}}; color: {{color.text.label}}; }");
+    m_eibiStartBtn->setProperty("spotHubPrimary", true);
     connect(m_eibiStartBtn, &QPushButton::clicked, this, [this] {
         const bool active = m_eibiClient && m_eibiClient->isEnabled();
         if (active) {
@@ -1908,8 +2004,8 @@ void DxClusterDialog::buildEiBiTab(QTabWidget* tabs)
     eibiColorBtn->setFixedSize(18, 18);
     auto updateColorBtnStyle = [eibiColorBtn](const QString& hex) {
         AetherSDR::ThemeManager::instance().applyStyleSheet(eibiColorBtn, QString(
-            "QPushButton { background: %1; border: 2px solid {{color.background.2}}; border-radius: 3px; }"
-            "QPushButton:hover { border-color: {{color.text.secondary}}; }").arg(hex));
+            "QPushButton { background: %1; border: 2px solid {{color.canon.lineHi}}; border-radius: 3px; }"
+            "QPushButton:hover { border-color: {{color.canon.ink}}; }").arg(hex));
     };
     updateColorBtnStyle(eibiColor.name());
     connect(eibiColorBtn, &QPushButton::clicked, this, [this, updateColorBtnStyle] {
@@ -1929,14 +2025,6 @@ void DxClusterDialog::buildEiBiTab(QTabWidget* tabs)
     m_eibiConsole = new QPlainTextEdit;
     m_eibiConsole->setReadOnly(true);
     m_eibiConsole->setMaximumBlockCount(2000);
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_eibiConsole, "QPlainTextEdit {"
-        "  background: {{color.background.0}};"
-        "  color: {{color.text.secondary}};"
-        "  font-family: monospace;"
-        "  font-size: 11px;"
-        "  border: 1px solid {{color.background.1}};"
-        "  padding: 4px;"
-        "}");
     layout->addWidget(m_eibiConsole, 1);
 
     if (m_eibiClient) {
@@ -1998,7 +2086,6 @@ void DxClusterDialog::buildN1mmTab(QTabWidget* tabs)
     m_n1mmPortSpin = new QSpinBox;
     m_n1mmPortSpin->setRange(1, 65535);
     m_n1mmPortSpin->setValue(s.value("N1MMSpotPort", 12060).toInt());
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_n1mmPortSpin, "QSpinBox { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.1}}; padding: 3px; }");
     grid->addWidget(m_n1mmPortSpin, 0, 1);
 
     // Contest spots are long-lived compared with the other feeds (a station
@@ -2011,7 +2098,6 @@ void DxClusterDialog::buildN1mmTab(QTabWidget* tabs)
     m_n1mmLifetimeSpin->setValue(s.value("N1MMSpotLifetimeSec", 10800).toInt() / 60);
     m_n1mmLifetimeSpin->setSuffix(" min");
     m_n1mmLifetimeSpin->setSpecialValueText("Never expire");
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_n1mmLifetimeSpin, "QSpinBox { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.1}}; padding: 3px; }");
     connect(m_n1mmLifetimeSpin, &QSpinBox::valueChanged, this, [](int minutes) {
         auto& s = AppSettings::instance();
         s.setValue("N1MMSpotLifetimeSec", minutes * 60);
@@ -2038,7 +2124,6 @@ void DxClusterDialog::buildN1mmTab(QTabWidget* tabs)
         s.value("N1MMSpotAutoStart", "False").toString() == "True" ? "Auto-Start: ON" : "Auto-Start: OFF");
     m_n1mmAutoStartBtn->setCheckable(true);
     m_n1mmAutoStartBtn->setChecked(s.value("N1MMSpotAutoStart", "False").toString() == "True");
-    ThemeManager::instance().applyStyleSheet(m_n1mmAutoStartBtn, kSpotHubToggle);
     connect(m_n1mmAutoStartBtn, &QPushButton::toggled, this, [this](bool on) {
         m_n1mmAutoStartBtn->setText(on ? "Auto-Start: ON" : "Auto-Start: OFF");
         auto& s = AppSettings::instance();
@@ -2055,10 +2140,7 @@ void DxClusterDialog::buildN1mmTab(QTabWidget* tabs)
 
     m_n1mmStartBtn = new QPushButton(m_n1mmSpotClient->isListening() ? "Stop" : "Start");
     m_n1mmStartBtn->setFixedWidth(100);
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_n1mmStartBtn, "QPushButton { background: {{color.accent}}; color: {{color.background.0}}; font-weight: bold; "
-        "border: 1px solid {{color.accent.dim}}; padding: 4px; border-radius: 3px; }"
-        "QPushButton:hover { background: {{color.accent.bright}}; }"
-        "QPushButton:disabled { background: {{color.background.2}}; color: {{color.text.label}}; }");
+    m_n1mmStartBtn->setProperty("spotHubPrimary", true);
     connect(m_n1mmStartBtn, &QPushButton::clicked, this, [this] {
         if (m_n1mmSpotClient->isListening()) {
             emit n1mmStopRequested();
@@ -2085,9 +2167,9 @@ void DxClusterDialog::buildN1mmTab(QTabWidget* tabs)
     // Swatch chrome comes from tokens so the picker matches the active theme;
     // only the swatch fill (%1) is the operator's chosen spot colour.
     const QString swatchTemplate =
-        "QPushButton { background: %1; border: 2px solid {{color.background.2}};"
+        "QPushButton { background: %1; border: 2px solid {{color.canon.lineHi}};"
         " border-radius: 3px; }"
-        "QPushButton:hover { border-color: {{color.text.primary}}; }";
+        "QPushButton:hover { border-color: {{color.canon.ink}}; }";
 
     // Each flag falls back to its theme token until the operator overrides it.
     auto statusColor = [](const N1MMSpotParser::StatusColorSpec& spec) {
@@ -2134,14 +2216,6 @@ void DxClusterDialog::buildN1mmTab(QTabWidget* tabs)
     m_n1mmConsole = new QPlainTextEdit;
     m_n1mmConsole->setReadOnly(true);
     m_n1mmConsole->setMaximumBlockCount(2000);
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_n1mmConsole, "QPlainTextEdit {"
-        "  background: {{color.background.0}};"
-        "  color: {{color.text.secondary}};"
-        "  font-family: monospace;"
-        "  font-size: 11px;"
-        "  border: 1px solid {{color.background.1}};"
-        "  padding: 4px;"
-        "}");
     layout->addWidget(m_n1mmConsole, 1);
 
     auto* n1mmBtnRow = new QHBoxLayout;
@@ -2179,7 +2253,7 @@ void DxClusterDialog::buildFreeDvTab(QTabWidget* tabs)
 
     grid->addWidget(new QLabel("Server:"), row, 0);
     auto* serverLabel = new QLabel("qso.freedv.org (WebSocket)");
-    serverLabel->setStyleSheet("QLabel { color: #808890; }");
+    ThemeManager::instance().applyStyleSheet(serverLabel, "QLabel { color: {{color.canon.muted}}; }");
     grid->addWidget(serverLabel, row, 1);
     row++;
 
@@ -2191,8 +2265,6 @@ void DxClusterDialog::buildFreeDvTab(QTabWidget* tabs)
         s.value("FreeDvAutoStart", "False").toString() == "True" ? "Auto-Start: ON" : "Auto-Start: OFF");
     m_freedvAutoStartBtn->setCheckable(true);
     m_freedvAutoStartBtn->setChecked(s.value("FreeDvAutoStart", "False").toString() == "True");
-    m_freedvAutoStartBtn->setStyleSheet(
-        kSpotHubToggle);
     connect(m_freedvAutoStartBtn, &QPushButton::toggled, this, [this](bool on) {
         m_freedvAutoStartBtn->setText(on ? "Auto-Start: ON" : "Auto-Start: OFF");
         auto& s = AppSettings::instance();
@@ -2209,10 +2281,7 @@ void DxClusterDialog::buildFreeDvTab(QTabWidget* tabs)
 
     m_freedvStartBtn = new QPushButton(m_freedvClient->isConnected() ? "Stop" : "Start");
     m_freedvStartBtn->setFixedWidth(100);
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_freedvStartBtn, "QPushButton { background: {{color.accent}}; color: {{color.background.0}}; font-weight: bold; "
-        "border: 1px solid {{color.accent.dim}}; padding: 4px; border-radius: 3px; }"
-        "QPushButton:hover { background: {{color.accent.bright}}; }"
-        "QPushButton:disabled { background: #404060; color: {{color.text.label}}; }");
+    m_freedvStartBtn->setProperty("spotHubPrimary", true);
     connect(m_freedvStartBtn, &QPushButton::clicked, this, [this] {
         if (m_freedvClient->isConnected()) {
             emit freedvStopRequested();
@@ -2232,15 +2301,10 @@ void DxClusterDialog::buildFreeDvTab(QTabWidget* tabs)
     reportLayout->setColumnStretch(1, 1);
     int frow = 0;
 
-    const QString fdvCheckStyle =
-        "QCheckBox { color: {{color.text.primary}}; spacing: 8px; background: transparent; border: none; }"
-        + ThemeManager::checkBoxIndicatorStyle();
-
     // Enable checkbox spans all columns so it sits reliably inside the grid,
     // not above it (avoids group-box title margin clipping on dark themes).
     m_fdvReportCheck = new QCheckBox("Enable FreeDV Reporter reporting when RADE is active");
     m_fdvReportCheck->setChecked(s.value("FreeDvAutoReport", "False").toString() == "True");
-    ThemeManager::instance().applyStyleSheet(m_fdvReportCheck, fdvCheckStyle);
     connect(m_fdvReportCheck, &QCheckBox::toggled, this, [this](bool on) {
         if (on) {
             // Resolve the effective callsign and grid the same way
@@ -2320,7 +2384,6 @@ void DxClusterDialog::buildFreeDvTab(QTabWidget* tabs)
     m_fdvUseRadioCallsignCheck = new QCheckBox("Use radio");
     m_fdvUseRadioCallsignCheck->setChecked(
         s.value("FreeDvUseRadioCallsign", "True").toString() == "True");
-    ThemeManager::instance().applyStyleSheet(m_fdvUseRadioCallsignCheck, fdvCheckStyle);
     connect(m_fdvUseRadioCallsignCheck, &QCheckBox::toggled, this, [this](bool on) {
         auto& as = AppSettings::instance();
         as.setValue("FreeDvUseRadioCallsign", on ? "True" : "False");
@@ -2355,7 +2418,6 @@ void DxClusterDialog::buildFreeDvTab(QTabWidget* tabs)
     // GPS checkbox — only on FLEX-8000 class and Aurora, which have GPS hardware
     if (m_radioModel->hasGpsHardware()) {
         m_fdvUseGpsCheck = new QCheckBox("Use GPS");
-        ThemeManager::instance().applyStyleSheet(m_fdvUseGpsCheck, fdvCheckStyle);
         bool useGps = s.value("FreeDvUseGpsGrid", "True").toString() == "True";
         m_fdvUseGpsCheck->setChecked(useGps);
         m_fdvGridEdit->setReadOnly(useGps);
@@ -2390,7 +2452,6 @@ void DxClusterDialog::buildFreeDvTab(QTabWidget* tabs)
     // it displays relative to what is actually being broadcast (#4231 review).
     m_fdvMessageEdit->setMaxLength(FreeDvReporterDialog::MessageMaxLength);
     m_fdvMessageEdit->setText(s.value("FreeDvMyMessage", "").toString());
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_fdvMessageEdit, "QLineEdit { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.1}}; padding: 3px; }");
     connect(m_fdvMessageEdit, &QLineEdit::editingFinished, this, [this] {
         // Focus-out without an edit must not write: this dialog is a
         // persistent singleton whose copy of FreeDvMyMessage can be stale
@@ -2425,17 +2486,17 @@ void DxClusterDialog::buildFreeDvTab(QTabWidget* tabs)
     QColor freedvColor(s.value("FreeDvSpotColor", "#FF8C00").toString());
     auto* freedvColorBtn = new QPushButton;
     freedvColorBtn->setFixedSize(18, 18);
-    freedvColorBtn->setStyleSheet(QString(
-        "QPushButton { background: %1; border: 2px solid #405060; border-radius: 3px; }"
-        "QPushButton:hover { border-color: #c8d8e8; }").arg(freedvColor.name()));
+    ThemeManager::instance().applyStyleSheet(freedvColorBtn, QString(
+        "QPushButton { background: %1; border: 2px solid {{color.canon.lineHi}}; border-radius: 3px; }"
+        "QPushButton:hover { border-color: {{color.canon.ink}}; }").arg(freedvColor.name()));
     connect(freedvColorBtn, &QPushButton::clicked, this, [this, freedvColorBtn] {
         QColor c = getColorForLiveParent(
             QColor(AppSettings::instance().value("FreeDvSpotColor", "#FF8C00").toString()),
             this, "FreeDV Spot Color");
         if (c.isValid()) {
-            freedvColorBtn->setStyleSheet(QString(
-                "QPushButton { background: %1; border: 2px solid #405060; border-radius: 3px; }"
-                "QPushButton:hover { border-color: #c8d8e8; }").arg(c.name()));
+            ThemeManager::instance().applyStyleSheet(freedvColorBtn, QString(
+                "QPushButton { background: %1; border: 2px solid {{color.canon.lineHi}}; border-radius: 3px; }"
+                "QPushButton:hover { border-color: {{color.canon.ink}}; }").arg(c.name()));
             AppSettings::instance().setValue("FreeDvSpotColor", c.name());
             AppSettings::instance().save();
         }
@@ -2446,14 +2507,6 @@ void DxClusterDialog::buildFreeDvTab(QTabWidget* tabs)
     m_freedvConsole = new QPlainTextEdit;
     m_freedvConsole->setReadOnly(true);
     m_freedvConsole->setMaximumBlockCount(2000);
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_freedvConsole, "QPlainTextEdit {"
-        "  background: {{color.background.0}};"
-        "  color: {{color.text.secondary}};"
-        "  font-family: monospace;"
-        "  font-size: 11px;"
-        "  border: 1px solid {{color.background.1}};"
-        "  padding: 4px;"
-        "}");
     layout->addWidget(m_freedvConsole, 1);
 
     auto* freedvBtnRow = new QHBoxLayout;
@@ -2487,9 +2540,6 @@ void DxClusterDialog::buildSpotListTab(QTabWidget* tabs)
     static constexpr const char* bands[] = {
         "160m", "80m", "60m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m"
     };
-    const QString cbStyle =
-        "QCheckBox { color: {{color.text.secondary}}; font-size: 12px; spacing: 3px; }"
-        + ThemeManager::checkBoxIndicatorStyle();
     auto& sf = AppSettings::instance();
     for (const char* band : bands) {
         auto* cb = new QCheckBox(band);
@@ -2498,7 +2548,6 @@ void DxClusterDialog::buildSpotListTab(QTabWidget* tabs)
         cb->setChecked(on);
         if (!on)
             m_proxyModel->setBandVisible(QString(band), false);
-        ThemeManager::instance().applyStyleSheet(cb, cbStyle);
         connect(cb, &QCheckBox::toggled, this, [this, b = QString(band), key](bool on) {
             m_proxyModel->setBandVisible(b, on);
             auto& s = AppSettings::instance();
@@ -2518,26 +2567,6 @@ void DxClusterDialog::buildSpotListTab(QTabWidget* tabs)
     m_spotTable->verticalHeader()->setVisible(false);
     m_spotTable->verticalHeader()->setDefaultSectionSize(20);
     m_spotTable->horizontalHeader()->setStretchLastSection(true);
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_spotTable, "QTableView {"
-        "  background: {{color.background.0}};"
-        "  alternate-background-color: #0f0f1e;"
-        "  color: {{color.text.primary}};"
-        "  gridline-color: {{color.background.1}};"
-        "  border: 1px solid {{color.background.1}};"
-        "  font-size: 11px;"
-        "}"
-        "QTableView::item:selected {"
-        "  background: {{color.background.2}};"
-        "  color: {{color.text.primary}};"
-        "}"
-        "QHeaderView::section {"
-        "  background: {{color.background.0}};"
-        "  color: {{color.accent}};"
-        "  border: 1px solid {{color.background.1}};"
-        "  padding: 3px 6px;"
-        "  font-weight: bold;"
-        "  font-size: 11px;"
-        "}");
 
     // Column widths
     m_spotTable->setColumnWidth(SpotTableModel::ColTime, 50);
@@ -2644,7 +2673,6 @@ void DxClusterDialog::buildSpotListTab(QTabWidget* tabs)
     freezeBtn->setObjectName("spotListFreezeBtn");
     freezeBtn->setCheckable(true);
     freezeBtn->setFixedWidth(60);
-    freezeBtn->setStyleSheet(kSpotHubToggle);
     freezeBtn->setToolTip("Pause the spot list so new spots stop shifting\n"
                           "rows while you're clicking one. Spots keep\n"
                           "arriving in the background and appear once\n"
@@ -2715,18 +2743,17 @@ void DxClusterDialog::buildDisplayTab(QTabWidget* tabs)
     };
 
     auto updateSwatch = [](QPushButton* btn, const QColor& color) {
-        btn->setStyleSheet(QString(
-            "QPushButton { background: %1; border: 2px solid #405060; border-radius: 3px; }"
-            "QPushButton:hover { border-color: #c8d8e8; }").arg(color.name()));
+        ThemeManager::instance().applyStyleSheet(btn, QString(
+            "QPushButton { background: %1; border: 2px solid {{color.canon.lineHi}}; border-radius: 3px; }"
+            "QPushButton:hover { border-color: {{color.canon.ink}}; }").arg(color.name()));
     };
 
     // ── Compact toggle cluster: Spots / Passive / Memories / Auto ─────
     // One row of name-on-button toggles replaces four label+button rows.
-    // Visual state (green checked / red unchecked) carries the on/off
-    // signal — no separate "Enabled"/"Disabled" text needed.
+    // The checked state carries the on/off signal — no separate
+    // "Enabled"/"Disabled" text needed.
     {
-        // Use the shared kSpotHubToggle style (matches VfoWidget's
-        // kDspToggle) — see top of this file.
+        // Styled by the window's canon sheet (QPushButton:checked).
         auto makeToggle = [](const QString& label, bool checked,
                              const QString& tooltip = {}) {
             auto* btn = new QPushButton(label);
@@ -2736,7 +2763,6 @@ void DxClusterDialog::buildDisplayTab(QTabWidget* tabs)
             btn->setFixedHeight(26);
             if (!tooltip.isEmpty())
                 btn->setToolTip(tooltip);
-            btn->setStyleSheet(kSpotHubToggle);
             return btn;
         };
 
@@ -2809,7 +2835,6 @@ void DxClusterDialog::buildDisplayTab(QTabWidget* tabs)
             "and QRM history markers from the spectrum, empty every console,\n"
             "delete the stored source logs, and send a clear command to the\n"
             "radio. The spot list stays empty after you reopen SpotHub.");
-        clearAllBtn->setStyleSheet(kSpotHubToggle);
         connect(clearAllBtn, &QPushButton::clicked, this, [this] {
             m_radioModel->sendCommand("spot clear");
             m_spotModel->clear();  // modelReset → m_spotCountLabel updates itself
@@ -2937,8 +2962,6 @@ void DxClusterDialog::buildDisplayTab(QTabWidget* tabs)
     overrideToggle->setCheckable(true);
     overrideToggle->setChecked(overrideColors);
     overrideToggle->setFixedWidth(80);
-    overrideToggle->setStyleSheet(
-        kSpotHubToggle);
     connect(overrideToggle, &QPushButton::toggled, this, [save, overrideToggle](bool on) {
         overrideToggle->setText(on ? "Enabled" : "Disabled");
         save("IsSpotsOverrideColorsEnabled", on ? "True" : "False");
@@ -2963,17 +2986,14 @@ void DxClusterDialog::buildDisplayTab(QTabWidget* tabs)
     // ── Override Background + Auto + color picker ───────────────────────
     grid->addWidget(new QLabel("Override Background:"), row, 0);
     auto* bgRow = new QHBoxLayout;
-    const QString& bgStyle = kSpotHubToggle;
     auto* bgEnabledBtn = new QPushButton(overrideBg ? "Enabled" : "Disabled");
     bgEnabledBtn->setCheckable(true);
     bgEnabledBtn->setChecked(overrideBg);
     bgEnabledBtn->setFixedWidth(76);
-    bgEnabledBtn->setStyleSheet(bgStyle);
     auto* bgAutoBtn = new QPushButton("Auto");
     bgAutoBtn->setCheckable(true);
     bgAutoBtn->setChecked(overrideBgAuto);
     bgAutoBtn->setFixedWidth(50);
-    bgAutoBtn->setStyleSheet(bgStyle);
     connect(bgEnabledBtn, &QPushButton::toggled, this, [save, bgEnabledBtn](bool on) {
         bgEnabledBtn->setText(on ? "Enabled" : "Disabled");
         save("IsSpotsOverrideBackgroundColorsEnabled", on ? "True" : "False");
@@ -3023,8 +3043,6 @@ void DxClusterDialog::buildDisplayTab(QTabWidget* tabs)
     spotLinesBtn->setChecked(spotLines);
     spotLinesBtn->setFixedWidth(80);
     spotLinesBtn->setToolTip("Show vertical lines from the spectrum up to each spot label.\nDisable during contests to reduce clutter.");
-    spotLinesBtn->setStyleSheet(
-        kSpotHubToggle);
     connect(spotLinesBtn, &QPushButton::toggled, this, [save, spotLinesBtn](bool on) {
         spotLinesBtn->setText(on ? "Enabled" : "Disabled");
         save("IsSpotsLinesEnabled", on ? "True" : "False");
@@ -3054,7 +3072,7 @@ void DxClusterDialog::buildDisplayTab(QTabWidget* tabs)
     {
         auto* dxccTitle = new QLabel("DXCC Coloring");
         dxccTitle->setAlignment(Qt::AlignCenter);
-        AetherSDR::ThemeManager::instance().applyStyleSheet(dxccTitle, "QLabel { font-size: 13px; font-weight: bold; color: #80b0d0; "
+        AetherSDR::ThemeManager::instance().applyStyleSheet(dxccTitle, "QLabel { font-size: 13px; font-weight: bold; color: {{color.canon.cyan}}; "
             "border-top: 1px solid {{color.background.2}}; padding-top: 8px; margin-top: 6px; }");
         leftCol->addWidget(dxccTitle);
 
@@ -3067,8 +3085,6 @@ void DxClusterDialog::buildDisplayTab(QTabWidget* tabs)
         dxccToggle->setCheckable(true);
         dxccToggle->setChecked(dxccEnabled);
         dxccToggle->setFixedWidth(80);
-        dxccToggle->setStyleSheet(
-            kSpotHubToggle);
         connect(dxccToggle, &QPushButton::toggled, this, [this, save, dxccToggle](bool on) {
             dxccToggle->setText(on ? "Enabled" : "Disabled");
             save("IsDxccColoringEnabled", on ? "True" : "False");
@@ -3080,7 +3096,7 @@ void DxClusterDialog::buildDisplayTab(QTabWidget* tabs)
         // ADIF file picker
         const QString savedAdif = AppSettings::instance().value("DxccAdifFilePath", "").toString();
         auto* adifPathLabel = new QLabel(savedAdif.isEmpty() ? "(none)" : QFileInfo(savedAdif).fileName());
-        adifPathLabel->setStyleSheet("QLabel { color: #90a8b8; font-size: 11px; }");
+        ThemeManager::instance().applyStyleSheet(adifPathLabel, "QLabel { color: {{color.canon.muted}}; font-size: 11px; }");
         adifPathLabel->setMaximumWidth(200);
         auto* browseBtn = new QPushButton("Browse\xe2\x80\xa6");
         browseBtn->setFixedWidth(80);
@@ -3095,7 +3111,7 @@ void DxClusterDialog::buildDisplayTab(QTabWidget* tabs)
         m_dxccStatsLabel = new QLabel(m_dxccProvider && m_dxccProvider->qsoCount() > 0
             ? QString("%1 QSOs / %2 entities").arg(m_dxccProvider->qsoCount()).arg(m_dxccProvider->entityCount())
             : "(no log loaded)");
-        m_dxccStatsLabel->setStyleSheet("QLabel { color: #90c890; font-size: 11px; }");
+        ThemeManager::instance().applyStyleSheet(m_dxccStatsLabel, "QLabel { color: {{color.accent.success}}; font-size: 11px; }");
         dxccGrid->addWidget(new QLabel("Imported:"), drow, 0);
         dxccGrid->addWidget(m_dxccStatsLabel, drow++, 1);
 
@@ -3112,7 +3128,7 @@ void DxClusterDialog::buildDisplayTab(QTabWidget* tabs)
             auto* col = new QVBoxLayout;
             auto* lbl = new QLabel(sw.tip);
             lbl->setAlignment(Qt::AlignCenter);
-            lbl->setStyleSheet("QLabel { color: #809090; font-size: 10px; }");
+            ThemeManager::instance().applyStyleSheet(lbl, "QLabel { color: {{color.canon.muted}}; font-size: 10px; }");
             auto* btn = new QPushButton;
             btn->setFixedSize(28, 22);
             const QColor initCol = sw.colPtr ? *sw.colPtr : QColor(Qt::gray);
@@ -3179,7 +3195,7 @@ void DxClusterDialog::buildDisplayTab(QTabWidget* tabs)
     {
         auto* shTitle = new QLabel("Signal History");
         shTitle->setAlignment(Qt::AlignCenter);
-        AetherSDR::ThemeManager::instance().applyStyleSheet(shTitle, "QLabel { font-size: 13px; font-weight: bold; color: #80b0d0; "
+        AetherSDR::ThemeManager::instance().applyStyleSheet(shTitle, "QLabel { font-size: 13px; font-weight: bold; color: {{color.canon.cyan}}; "
             "border-top: 1px solid {{color.background.2}}; padding-top: 8px; margin-top: 6px; }");
         rightCol->addWidget(shTitle);
 
@@ -3250,7 +3266,7 @@ void DxClusterDialog::buildDisplayTab(QTabWidget* tabs)
             auto* col = new QVBoxLayout;
             auto* lbl = new QLabel(sw.label);
             lbl->setAlignment(Qt::AlignCenter);
-            lbl->setStyleSheet("QLabel { color: #809090; font-size: 10px; }");
+            ThemeManager::instance().applyStyleSheet(lbl, "QLabel { color: {{color.canon.muted}}; font-size: 10px; }");
             auto* btn = new QPushButton;
             btn->setFixedSize(28, 22);
             updateSwatch(btn, *sw.colPtr);
@@ -3282,7 +3298,6 @@ void DxClusterDialog::buildDisplayTab(QTabWidget* tabs)
         snapToggle->setCheckable(true);
         snapToggle->setChecked(snapEnabled);
         snapToggle->setFixedWidth(80);
-        snapToggle->setStyleSheet(kSpotHubToggle);
         snapToggle->setToolTip(
             "Round SHistory click-to-tune to the nearest multiple of the\n"
             "active slice's step size.  Hides the small carrier offset that\n"

@@ -428,7 +428,8 @@ int main(int argc, char** argv)
         LogManager::instance().startLogging(logPath, false);
         {
             QFile seed(logPath);
-            seed.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text);
+            report("the seed log file opens",
+                   seed.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text));
             seed.write("[00:00:00.000] WRN aether.perf: before the reset\n");
         }
 
@@ -462,7 +463,8 @@ int main(int argc, char** argv)
         // the handle's position is now past its end.
         {
             QFile rotated(logPath);
-            rotated.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text);
+            report("the rotated log file opens",
+                   rotated.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text));
             rotated.write("[00:00:01.000] WRN aether.perf: after the reset\n");
         }
         QMetaObject::invokeMethod(&tailing, "pollLog", Qt::DirectConnection);

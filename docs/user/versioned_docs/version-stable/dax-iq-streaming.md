@@ -61,6 +61,10 @@ WFM needs a radio with DAX IQ; on other radios it is refused with a notice.
 
 The applet has one row per channel, **IQ 1** to **IQ 4**:
 
+<img src="/img/screens/dax-iq-applet.png" width="248" alt="DAX IQ applet. Four rows, IQ 1 to IQ 4, each with a sample-rate selector set to 48k, an empty level bar and an Off button." />
+
+*The DAX IQ applet: four IQ channels, each with a sample rate and an on/off button.*
+
 | Control | What it does |
 |---|---|
 | Rate | 24k, 48k, 96k or 192k |

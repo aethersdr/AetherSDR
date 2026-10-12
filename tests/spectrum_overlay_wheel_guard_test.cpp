@@ -211,6 +211,15 @@ void testDisplayPanelStaysInsideHost()
     report("Display pane bottom stays inside a tall host",
            anchored.bottom() < tallHost);
 
+    // Under a pan header lying over the spectrum's top (topLimit 22) the
+    // pane never rises above it, and still keeps its bottom inside the host.
+    constexpr int topLimit = 22;
+    const int insetTop = constrainedDisplayPanelTop(60, 300, tallHost, topLimit);
+    report("Display pane stays below the spectrum's top inset", insetTop == topLimit);
+    report("Display pane top inset keeps the bottom inside the host",
+           constrainedDisplayPanelTop(700, 300, 310, topLimit) == topLimit
+               && constrainedDisplayPanelTop(700, 200, 310, topLimit) == 110);
+
     // A pane taller than the menu's bottom edge is flush to the top rather
     // than pushed off-screen (the pre-existing max(0, ...) behaviour).
     const QRect topFlush = displayPanelGeometry(

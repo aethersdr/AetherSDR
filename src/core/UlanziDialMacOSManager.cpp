@@ -1,5 +1,5 @@
 #include <QtGlobal>
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
 
 #include "UlanziDialMacOSManager.h"
 #include "core/LogManager.h"
@@ -769,4 +769,4 @@ void UlanziDialMacOSManager::emitKeyTransition(int linuxKey, int value)
 
 } // namespace AetherSDR
 
-#endif // Q_OS_MAC
+#endif // Q_OS_MACOS

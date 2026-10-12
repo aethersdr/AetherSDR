@@ -61,7 +61,7 @@ See [Profile Management](./profile-management.md).
 
 ## Tools
 
-<img src="/img/screens/menu-tools.png" width="285" alt="Tools menu: Add Panadapter..., AetherTX..., CW Keyer, Copy Assist, AetherModem..., Configure KiwiSDR...; Start SWR Scan..., Pre-tune ATU Bands..., Clear ATU Memories..., Calibrate AGC-T...; Callsign Lookup... (Ctrl+Shift+L), AetherMap..., FreeDV Reporter...; Net Scheduler..., Memory..., Waveforms..., Wideband Bandscope...; Radio Health..., GPS Dashboard..., Network Diagnostics... and Runtime Monitor...." />
+<img src="/img/screens/menu-tools.png" width="285" alt="Tools menu: Add Panadapter..., AetherTX..., CW Keyer, Copy Assist, AetherModem..., Configure KiwiSDR...; Start SWR Scan..., Pre-tune ATU Bands..., Clear ATU Memories..., Calibrate AGC-T...; Callsign Lookup... (Ctrl+Shift+L), AetherMap..., FreeDV Reporter...; Net Scheduler..., Memory..., Waveforms..., Wideband Bandscope...; Radio Health..., AetherGPS..., Network Diagnostics... and Runtime Monitor...." />
 
 *The Tools menu, connected to a FLEX-8600.*
 
@@ -85,7 +85,7 @@ See [Profile Management](./profile-management.md).
 | **Waveforms...** | Install and manage radio waveforms (radios with installable waveforms only). |
 | **Wideband Bandscope...** | The radio's converter view before tuning; dimmed on radios without one. See [Hermes-Lite 2](./hermes-lite-2.md). |
 | **Radio Health...** | Reachability, other clients holding the radio, PA temperature — works even with no session. |
-| **GPS Dashboard...** | See [AetherClock and GPS](./aetherclock-and-gps.md). |
+| **AetherGPS...** | See [AetherClock and GPS](./aetherclock-and-gps.md). |
 | **Network Diagnostics...** | Link quality, trends and logs. See [Troubleshooting](./troubleshooting.md). |
 | **Runtime Monitor...** | CPU, memory, threads and logs for the app itself. See [Runtime Monitor](./runtime-monitor.md). |
 

@@ -19,7 +19,7 @@ TCI was created by Expert Electronics for ExpertSDR3 and is now widely supported
 | Spots | Separate DX cluster connection | Same WebSocket |
 | CW keying | Serial DTR/RTS or rigctld | Same WebSocket |
 
-![TCI Server applet. RX1 and TX level bars sit above the port field set to 50001, marked stopped, and a Disabled button that starts the server.](/img/screens/tci-applet.png)
+<img src="/img/screens/tci-applet.png" width="248" alt="TCI Server applet. Level bars for RX1, assigned to Slice A, RX2 to RX4, unassigned, and TX, assigned to Slice A, sit above the port field set to 50001, marked stopped, and a Disabled button that starts the server." />
 
 *The TCI Server applet in the applet panel.*
 
@@ -127,6 +127,7 @@ TCI audio is sent and received as binary frames on the same WebSocket.
 
 - **Audio doesn't flow until the client asks for it** with `audio_start:<receiver>;`.
 - **PC Audio does not need to be on.** On a FlexRadio, TCI receive audio comes from DAX channels that the TCI server claims for itself; your speaker volume and mute don't affect it. On other radios it comes straight from the slice.
+- RTL-SDR receive audio follows the stable receiver map and remains independent of speaker gain and mute; receiver squelch still applies. Normal launches offer one RTL receiver. Extra receivers belong to the [process-only evaluation](./rtl-sdr.md#multi-receiver-evaluation), not a higher production limit. RTL has no transmit or IQ export.
 - If a client reconnects more than 10 seconds later, its receive audio is re-bound to the right DAX channels automatically.
 - TX audio from a client is resampled from the rate the client declares, so 8, 12 and 24 kHz programs are not mis-pitched.
 
@@ -188,6 +189,7 @@ Notes:
 
 - `volume` is in dB, as the spec defines it; the older percent form is still accepted. `mic_level` is a global 0–100 %.
 - The server also broadcasts which slice has focus in the GUI, plus DSP, squelch, RIT/XIT and TX power when they change.
+- Opening a slice announces its receiver with `rx_enable:<trx>,true;`. Closing a slice announces `rx_enable:<trx>,false;` after approximately 500 ms. A band-change recreation that returns the same slice within that window keeps its receiver and sends neither notification; surviving receivers keep their numbers. `trx_count` is not re-sent.
 - Malformed arguments (for example to `volume:` or `modulation:`) are rejected, never applied to slice 0.
 - A `vfo:` confirmation reports the frequency the radio actually reached.
 - **Panadapter spectrum forwarding:** subscribed clients receive the panadapter's FFT rows.

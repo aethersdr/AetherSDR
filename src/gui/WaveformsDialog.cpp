@@ -1142,7 +1142,7 @@ WaveformsDialog::WaveformsDialog(RadioModel* model, QWidget* parent)
     m_dstarSerialLabel->setBuddy(m_dstarSerialCombo);
 #if defined(Q_OS_WIN)
     m_dstarSerialCombo->lineEdit()->setPlaceholderText(tr("COM3"));
-#elif defined(Q_OS_MAC)
+#elif defined(Q_OS_MACOS)
     m_dstarSerialCombo->lineEdit()->setPlaceholderText(tr("/dev/cu.usbserial-*"));
 #else
     m_dstarSerialCombo->lineEdit()->setPlaceholderText(tr("/dev/ttyUSB0"));

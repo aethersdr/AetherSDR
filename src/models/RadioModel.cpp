@@ -6764,16 +6764,51 @@ void RadioModel::setPanWeightedAverage(bool on)
 
 void RadioModel::setWaterfallColorGain(int gain)
 {
-    if (activeWfId().isEmpty() || !hasCommandPlane()) return;
-    sendCmd(
-        QString("display panafall set %1 color_gain=%2").arg(activeWfId()).arg(gain));
+    // The connect-time replay of the stored value: no operator moved a control.
+    sendWaterfallColorGain(m_activePanId, gain, /*reportDrop=*/false);
+}
+
+void RadioModel::setWaterfallColorGainFor(const QString& panId, int gain, bool autoBlack)
+{
+    // Colour gain widens the range above the black point, so the client draws
+    // it wherever the black point is in the row's unit: auto black, estimated
+    // from the row, or manual black on absolute-dB rows (WaterfallLevelMap).
+    // With manual black on any other row every row is black and gain is not.
+    const bool clientDraws = autoBlack || backendCapabilities().panBinsAbsolute();
+    sendWaterfallColorGain(panId, gain, /*reportDrop=*/!clientDraws);
 }
 
 void RadioModel::setWaterfallBlackLevel(int level)
 {
-    if (activeWfId().isEmpty() || !hasCommandPlane()) return;
+    // The connect-time replay of the stored level: no operator moved a control.
+    sendWaterfallBlackLevel(m_activePanId, level, /*reportDrop=*/false);
+}
+
+void RadioModel::setWaterfallBlackLevelFor(const QString& panId, int level)
+{
+    // Without a command plane the client draws the manual black point only on
+    // absolute-dB rows (WaterfallLevelMap). There the control has acted; on any
+    // other row it has not, and sendCmd() reports the drop. An undeclared
+    // panAmplitude reads as "not absolute", so a mistake here is a false notice.
+    sendWaterfallBlackLevel(panId, level, !backendCapabilities().panBinsAbsolute());
+}
+
+void RadioModel::sendWaterfallColorGain(const QString& panId, int gain, bool reportDrop)
+{
+    const PanadapterModel* pan = panadapter(panId);
+    if (!pan || pan->waterfallId().isEmpty()) return;
+    if (!hasCommandPlane() && !reportDrop) return;
     sendCmd(
-        QString("display panafall set %1 black_level=%2").arg(activeWfId()).arg(level));
+        QString("display panafall set %1 color_gain=%2").arg(pan->waterfallId()).arg(gain));
+}
+
+void RadioModel::sendWaterfallBlackLevel(const QString& panId, int level, bool reportDrop)
+{
+    const PanadapterModel* pan = panadapter(panId);
+    if (!pan || pan->waterfallId().isEmpty()) return;
+    if (!hasCommandPlane() && !reportDrop) return;
+    sendCmd(
+        QString("display panafall set %1 black_level=%2").arg(pan->waterfallId()).arg(level));
 }
 
 void RadioModel::setWaterfallAutoBlack(bool on)
@@ -10110,8 +10145,13 @@ void RadioModel::dispatchSliceWfm(const SliceWfmRequest& request)
 void RadioModel::dispatchSliceSquelch(const SliceSquelchRequest& request)
 {
     if (SliceModel* source = receiveCommandSource()) {
-        reportReceiveDispatch(m_backend->requestSliceSquelch(source->sliceId(), request),
-                              QStringLiteral("receive squelch"));
+        const std::optional<SquelchLevelScale> sql = m_backend->capabilities().squelchLevelScale;
+        const bool automaticAllowed = request.kind != SliceSquelchRequest::Kind::Automatic
+            || (sql && sql->automaticInEngine && sql->appliesTo(source->mode())
+                && !source->externalReceiveReplacementActive());
+        reportReceiveDispatch(automaticAllowed
+            ? m_backend->requestSliceSquelch(source->sliceId(), request)
+            : ReceiveDispatch::Unsupported, QStringLiteral("receive squelch"));
     }
 }
 
@@ -10163,8 +10203,8 @@ void RadioModel::wireSliceObservationsAndTxIntentToBackend(SliceModel* s)
     // a Flex arrives as a status echo and here has no other way of happening.
     connect(s, &SliceModel::activeSliceCommandIssued, this,
             [this, s]() {
-        if (m_backend) m_backend->setActiveSlice(s->sliceId());
-    });
+        if (receiveCommandSource() == s) { m_backend->setActiveSlice(s->sliceId()); }
+    }, Qt::DirectConnection);
 }
 
 void RadioModel::setBackendForTest(std::unique_ptr<IRadioBackend> backend,

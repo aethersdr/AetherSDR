@@ -19,6 +19,10 @@ See [Supported Radios](./supported-radios.md).
 
 ### Adding a slice
 
+<img src="/img/screens/multi-slice-two-slices.png" width="1340" alt="Panadapter with two VFO flags. Slice B in magenta sits on an SSB signal near 14.2185 MHz, and slice A in cyan at 14.250.000 carries the TX badge. Each has its own passband marker in the spectrum." />
+
+*Two slices on one panadapter, each with its own coloured VFO flag.*
+
 - Click **+RX** in the panadapter's overlay menu
 - Or right-click an empty part of the panadapter → **Add Slice at X MHz**
 - Clicking an empty panadapter also creates a new slice there instead of

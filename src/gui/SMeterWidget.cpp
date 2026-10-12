@@ -161,6 +161,7 @@ QString SMeterWidget::accessibleValueText() const
     }
     const float displayDbm =
         m_rxMode == RxMode::SMeterPeak ? m_peakDbm : m_levelDbm;
+    if (m_relativeLevel) { return tr("Relative RF, %1 dBFS, uncalibrated").arg(displayDbm, 0, 'f', 0); }
     return tr("%1, %2 dBm")
         .arg(sUnitsTextFor(displayDbm))
         .arg(static_cast<int>(displayDbm));
@@ -179,7 +180,17 @@ void SMeterWidget::setFaceTheme(AnalogMeterFaceTheme theme)
 
 void SMeterWidget::setLevel(float dbm) // a11y-check: skip -- settled update is timer-throttled
 {
+    if (m_relativeLevel) {
+        setAccessibleDescription(tr("Signal strength meter, shows S-units or TX power"));
+    }
+    m_relativeLevel = false;
+    if (!m_peakReset.isActive()) { m_peakReset.start(); }
     m_receiveMeterReadingActive = false;
+    updateReceiveLevel(dbm);
+}
+
+void SMeterWidget::updateReceiveLevel(float dbm)
+{
     m_levelDbm = dbm;
 
     // Peak hold (existing needle/triangle behavior)
@@ -207,9 +218,38 @@ void SMeterWidget::setLevel(float dbm) // a11y-check: skip -- settled update is 
     }
 }
 
+void SMeterWidget::setRelativeLevel(std::optional<float> dbfs, int receiverId, const QString& unavailableReason)
+{
+    const bool valid = unavailableReason.isEmpty() && dbfs && std::isfinite(*dbfs);
+    if (m_relativeLevel && !m_relativeValid && !valid && receiverId == m_relativeReceiver
+        && unavailableReason == m_relativeUnavailableReason) { return; }
+    m_relativeUnavailableReason = unavailableReason;
+    const bool reset = !m_relativeLevel || receiverId != m_relativeReceiver || !valid;
+    const float value = valid ? *dbfs : -120.0f;
+    if (reset) { m_peakDbm = value; m_peakHoldDbm = value; m_peakHoldTimerRunning = false; }
+    setAccessibleDescription(unavailableReason.isEmpty()
+        ? tr("Relative RF peak FFT bin in dBFS; uncalibrated, not dBm or audio level") : unavailableReason);
+    m_relativeLevel = true; m_relativeValid = valid; m_relativeReceiver = receiverId;
+    m_receiveMeterReadingActive = false;
+    if (!valid) {
+        m_levelDbm = value;
+        m_needleFraction = m_targetNeedleFraction = 0;
+        m_needleAnimation.stop(); m_peakDecay.stop(); m_peakReset.stop();
+        update(); scheduleAccessibleValue();
+        return;
+    }
+    if (!m_peakReset.isActive()) { m_peakReset.start(); }
+    updateReceiveLevel(value);
+}
+
 void SMeterWidget::setReceiveMeterReading(
     const KiwiSdrProtocol::MeterReading& reading)
 {
+    if (m_relativeLevel) {
+        setAccessibleDescription(tr("Signal strength meter, shows S-units or TX power"));
+    }
+    m_relativeLevel = false;
+    if (!m_peakReset.isActive()) { m_peakReset.start(); }
     m_receiveMeterReading = reading;
     m_receiveMeterReadingActive = true;
 
@@ -436,6 +476,7 @@ void SMeterWidget::animateNeedle()
 
 bool SMeterWidget::usesUnavailableRxMeter() const
 {
+    if (m_relativeLevel) { return !m_relativeValid; }
     return m_receiveMeterReadingActive
         && !(m_receiveMeterReading.valid
             && (m_receiveMeterReading.capability
@@ -447,6 +488,8 @@ bool SMeterWidget::usesUnavailableRxMeter() const
 
 QString SMeterWidget::unavailableRxMeterLabel() const
 {
+    if (m_relativeLevel) { return m_relativeUnavailableReason.isEmpty()
+        ? tr("Relative RF — unavailable") : m_relativeUnavailableReason; }
     if (!m_receiveMeterReadingActive) {
         return QStringLiteral("Meter unavailable");
     }
@@ -509,6 +552,7 @@ QString SMeterWidget::sUnitsText() const
 
 QString SMeterWidget::sUnitsTextFor(float dbm) const
 {
+    if (m_relativeLevel) { return tr("Relative RF"); }
     const SMeterGeometry::RxScale& scale = m_geometry.rxScale;
     if (dbm <= scale.minimumDbm) {
         return QStringLiteral("S0");
@@ -524,6 +568,7 @@ QString SMeterWidget::sUnitsTextFor(float dbm) const
 
 float SMeterWidget::dbmToFraction(float dbm) const
 {
+    if (m_relativeLevel) { return std::clamp((dbm + 120.0f) / 120.0f, 0.0f, 1.0f); }
     return static_cast<float>(m_geometry.rxFraction(dbm));
 }
 
@@ -843,9 +888,15 @@ void SMeterWidget::paintEvent(QPaintEvent*)
     const QColor labelColor = physicalTheme ? physicalPalette->text : whiteColor;
 
     // -- Outside ticks (RX) ---------------------------------------------------
-    for (const SMeterGeometry::Tick& tick : m_geometry.rxScale.ticks) {
-        const QColor& color = (tick.value > m_geometry.rxScale.s9Dbm) ? redColor : whiteColor;
-        drawOutsideTick(dbmToFraction(static_cast<float>(tick.value)), tick.label, color, true);
+    if (m_relativeLevel) {
+        for (int db = -120; db <= 0; db += 20) {
+            drawOutsideTick((db + 120.0f) / 120.0f, QString::number(db), whiteColor, true);
+        }
+    } else {
+        for (const SMeterGeometry::Tick& tick : m_geometry.rxScale.ticks) {
+            const QColor& color = (tick.value > m_geometry.rxScale.s9Dbm) ? redColor : whiteColor;
+            drawOutsideTick(dbmToFraction(static_cast<float>(tick.value)), tick.label, color, true);
+        }
     }
 
     // -- Inside ticks (TX): scale depends on TX mode --------------------------
@@ -1105,8 +1156,9 @@ void SMeterWidget::paintEvent(QPaintEvent*)
 
         p.setFont(srcFont);
         p.setPen(sourceColor);
-        p.drawText(qRound(faceCenterX - sfm.horizontalAdvance(m_source) / 2.0),
-                   sourceBaseline, m_source);
+        const QString source = m_relativeLevel ? tr("RF peak bin") : m_source;
+        p.drawText(qRound(faceCenterX - sfm.horizontalAdvance(source) / 2.0),
+                   sourceBaseline, source);
 
         const float displayDbm = (m_rxMode == RxMode::SMeterPeak) ? m_peakDbm : m_levelDbm;
 
@@ -1117,7 +1169,7 @@ void SMeterWidget::paintEvent(QPaintEvent*)
         p.drawText(qRound(faceLeft) + m_geometry.readout.sideMarginPixels,
                    valueBaseline, sText);
 
-        const QString dbmText = QString("%1 dBm").arg(displayDbm, 0, 'f', 0);
+        const QString dbmText = QString(m_relativeLevel ? "%1 dBFS" : "%1 dBm").arg(displayDbm, 0, 'f', 0);
         p.setPen(valueColor);
         p.drawText(qRound(faceRight) - vfm.horizontalAdvance(dbmText)
                        - m_geometry.readout.sideMarginPixels,

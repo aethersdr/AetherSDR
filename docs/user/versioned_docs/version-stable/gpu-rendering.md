@@ -117,6 +117,13 @@ The graphics adapter AetherSDR found is a software rasteriser (llvmpipe, WARP, S
 1. If your computer has more than one adapter, open **Display** and pick the real GPU under **SYSTEM → GPU:**.
 2. Restart AetherSDR; the choice takes effect on the next launch.
 
+### AetherSDR runs on XWayland in a Wayland session
+
+Qt could not load its Wayland platform plugin, so it fell back to the next plugin in `QT_QPA_PLATFORM`, usually `xcb` (XWayland). The log shows `Platform: Qt fell back from "wayland" to "xcb"`; the line before it names the plugin in use.
+
+1. If you built AetherSDR yourself, install your distribution's Qt 6 Wayland package. The AppImage includes the plugin.
+2. Start AetherSDR from a terminal: Qt prints why the plugin did not load there, not in AetherSDR's log.
+
 ## See also
 
 - [Panadapter Controls](./panadapter-controls.md)

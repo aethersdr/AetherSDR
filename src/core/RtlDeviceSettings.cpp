@@ -30,6 +30,9 @@ bool RtlDeviceSettings::decode(const QJsonObject& object, Values& values)
     }
     parsed.ppm = static_cast<int>(number);
     parsed.dcSuppression = dc.toBool();
+    const QJsonValue meters = object.value(QStringLiteral("receiveMetersEnabled"));
+    if (!meters.isUndefined() && !meters.isBool()) { return false; }
+    parsed.receiveMetersEnabled = meters.toBool(true);
     values = parsed;
     return true;
 }
@@ -85,6 +88,7 @@ bool RtlDeviceSettings::saveAccepted(const Values& values, QString& reason) cons
     }
     object.insert(QStringLiteral("ppm"), values.ppm);
     object.insert(QStringLiteral("dcSuppression"), values.dcSuppression);
+    object.insert(QStringLiteral("receiveMetersEnabled"), values.receiveMetersEnabled);
     if (!m_scope.setFeature(featureName(), kSchemaVersion, object)) {
         reason = QStringLiteral("Applied for this session; saving device settings failed.");
         qCWarning(lcRtlDeviceSettings) << reason;

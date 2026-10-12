@@ -19,7 +19,7 @@
 #include <fcntl.h>
 #include <termios.h>
 #include <sys/stat.h>
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
 #include <util.h>
 #else
 #include <pty.h>

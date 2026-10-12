@@ -11,7 +11,7 @@
 #include <QWindow>
 #include <QtMath>
 
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
 #include "mac/NativeWindowTitle.h"
 #endif
 
@@ -186,7 +186,7 @@ inline QMargins contentInsets(const QWidget* window)
     if (window->isFullScreen()) {
         return safe;
     }
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
     if (QGuiApplication::platformName() == QStringLiteral("cocoa")) {
         const QRectF controls = mac::nativeCaptionBounds(window);
         return QMargins(qMax(safe.left(), qCeil(controls.right())), 0, safe.right(), safe.bottom());

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "CanonSurface.h"
+
 #include <QPoint>
 #include <QWidget>
 
@@ -20,10 +22,11 @@ class CopyAssistPanel;
 #endif
 
 // Container for a single panadapter display (FFT spectrum + waterfall).
-// Adds a title bar with placeholder min/max/close buttons above the
-// SpectrumWidget.  Prepares for future multi-slice stacking where each
-// slice gets its own PanadapterApplet in a vertical splitter.
-class PanadapterApplet : public QWidget {
+// A CanonPan: the canon ground and hairline around a canon header (grip,
+// slice title, pop-out, maximize and the canon close button) above the
+// SpectrumWidget, which keeps its own GPU-drawn look. Each pan in the stack
+// is one PanadapterApplet.
+class PanadapterApplet : public CanonPan {
     Q_OBJECT
     // Expose panId via the meta-object so the automation bridge (core/, no GUI
     // include) can map a pan back to its radio stream id without depending on
@@ -143,6 +146,9 @@ protected:
     bool eventFilter(QObject* obj, QEvent* ev) override;
 
 private:
+    // Places the header's two pieces over the top of the spectrum: the grip
+    // and title at the left, the buttons at the right.
+    void layoutHeader();
     // Re-apply the decoded-text stylesheet at the current font size (#3628).
     void applyCwFont();
     // Change the decoded-text font size by `delta` px, clamp, and persist (#3628).
@@ -152,13 +158,13 @@ private:
 
     QString         m_panId;
     SpectrumWidget* m_spectrum{nullptr};
-    QWidget*        m_titleBar{nullptr};
+    QWidget*        m_titleBar{nullptr};        // header, left: grip and title
+    QWidget*        m_headerButtons{nullptr};   // header, right: pop-out, maximize, close
     QLabel*         m_titleLabel{nullptr};
     QString         m_sliceTitle;
     int             m_titleSliceId{-1};
     QPushButton*    m_popOutBtn{nullptr};
     QPushButton*    m_maxBtn{nullptr};
-    QPushButton*    m_closeBtn{nullptr};
     bool            m_isFloating{false};
 
     // Canvas-item state (RFC #4887 phase 4).

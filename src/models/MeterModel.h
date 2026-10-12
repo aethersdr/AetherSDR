@@ -115,6 +115,8 @@ public:
     // (Flex: the manifest's `num`; HL2: the receiver number; Icom: 0), so
     // RigctlProtocol can pass slice->sliceId().
     std::optional<float> sLevelForSlice(int sliceIndex) const;
+    // ADC-relative RF only. Never usable as calibrated dBm/S units.
+    std::optional<float> relativeLevelForSlice(int sliceIndex) const;
 
     // The radio-wide S-meter reading — what `get meters` publishes as a scalar
     // — WHEN THERE IS ONE. Exactly one slice declaring a LEVEL meter is the
@@ -232,10 +234,10 @@ public:
     // Legacy normalized ALC for TCI compatibility. Native percent meters are
     // mapped to -20..0 here; this is not a physical dBFS measurement on Icom.
     float swAlc() const { return m_swAlc; }
-    // Gain the TX ALC is applying, in dB (0 = unity, positive = makeup, negative =
-    // reduction). A different measurement from swAlc(), which is the post-ALC level
-    // and sits near target regardless. Not unit-converted: every radio reports it
-    // in dB.
+    // Gain the TX ALC is applying, in dB (0 = unity, negative = reduction). Only
+    // the HL2 publishes this meter, and its ALC caps at unity, so it is never
+    // positive. A different measurement from swAlc(), which is the post-ALC level
+    // and sits near target regardless. Not unit-converted: it arrives in dB.
     float alcGainDb() const { return m_alcGainDb; }
     // Whether a SAMPLE has landed, not merely whether the meter is defined.
     // Load-bearing here in a way it is not for a level: 0 dB is a real and

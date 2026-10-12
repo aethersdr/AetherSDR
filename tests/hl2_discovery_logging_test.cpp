@@ -1,6 +1,6 @@
 // What HL2 discovery writes to the log when it cannot find a radio (#6285
 // item 3): a failed bind, no usable interface, a probe that could not be sent,
-// and a run of unanswered sweeps.
+// and a run of unanswered sweeps. A sweep no probe left is not unanswered.
 //
 // Socket-free. DiscoveryNotices is the policy Hl2Discovery feeds from its
 // sweeps; the lines are captured off the real "aether.discovery" category,
@@ -60,13 +60,29 @@ QStringList logged(const std::function<void()>& step)
 const QHostAddress kAddrA(QStringLiteral("192.168.8.20"));
 const QHostAddress kAddrB(QStringLiteral("169.254.1.5"));
 
+// One sweep as Hl2Discovery reports it: a probe left kAddrA, then the reply
+// window closed.
+void sentSweep(DiscoveryNotices& n, bool answered)
+{
+    n.sendSucceeded(kAddrA);
+    n.sweepClosed(answered);
+}
+
+// One socket refresh as Hl2Discovery reports it: en0 bound kAddrA, en7 kAddrB.
+void bindBoth(DiscoveryNotices& n)
+{
+    n.bindSucceeded(QStringLiteral("en0"), kAddrA);
+    n.bindSucceeded(QStringLiteral("en7"), kAddrB);
+    n.endRefresh(2);
+}
+
 void bindFailureIsLoggedOncePerCondition()
 {
     DiscoveryNotices n;
     const auto refreshWithFailure = [&n] {
         n.bindFailed(QStringLiteral("en0"), kAddrA,
                      QStringLiteral("The address is not available"));
-        n.endRefresh(1, 1);
+        n.endRefresh(1);
     };
 
     const QStringList first = logged(refreshWithFailure);
@@ -82,19 +98,19 @@ void bindFailureIsLoggedOncePerCondition()
     const QStringList other = logged([&n] {
         n.bindFailed(QStringLiteral("en0"), kAddrA, QStringLiteral("x"));
         n.bindFailed(QStringLiteral("en7"), kAddrB, QStringLiteral("x"));
-        n.endRefresh(1, 1);
+        n.endRefresh(1);
     });
     check(other.size() == 1 && other.first().contains(QStringLiteral("en7 169.254.1.5")),
           "bind failure: a second address fails -> only that one is logged");
 
-    logged([&n] { n.endRefresh(1, 1); });   // en0 not enumerated
+    logged([&n] { n.endRefresh(1); });   // en0 not enumerated
     check(logged(refreshWithFailure).isEmpty(),
           "bind failure: an interface absent for one refresh does not re-log on return");
 
     logged([&n] {
         n.bindSucceeded(QStringLiteral("en0"), kAddrA);
         n.bindSucceeded(QStringLiteral("en7"), kAddrB);
-        n.endRefresh(2, 2);
+        n.endRefresh(2);
     });
     check(logged(refreshWithFailure).size() == 1,
           "bind failure: a failure that bound and came back is logged again");
@@ -103,9 +119,9 @@ void bindFailureIsLoggedOncePerCondition()
 void noSocketIsLoggedOncePerCondition()
 {
     DiscoveryNotices n;
-    const auto emptyRefresh = [&n] { n.endRefresh(0, 0); };
+    const auto emptyRefresh = [&n] { n.endRefresh(0); };
 
-    check(logged([&n] { n.endRefresh(1, 1); }).isEmpty(),
+    check(logged([&n] { n.endRefresh(1); }).isEmpty(),
           "no socket: a refresh that bound a socket logs nothing");
 
     check(logged(emptyRefresh) == QStringList{QStringLiteral(
@@ -114,7 +130,7 @@ void noSocketIsLoggedOncePerCondition()
     check(logged(emptyRefresh).isEmpty() && logged(emptyRefresh).isEmpty(),
           "no socket: later empty refreshes log nothing while it persists");
 
-    logged([&n] { n.endRefresh(1, 1); });
+    logged([&n] { n.endRefresh(1); });
     check(logged(emptyRefresh).size() == 1,
           "no socket: logged again after it recovered and recurred");
 }
@@ -124,37 +140,124 @@ void silenceIsLoggedOnceAfterThreshold()
     static_assert(DiscoveryNotices::kSilentSweepsBeforeWarning == 3,
                   "the strings below spell out the threshold");
     DiscoveryNotices n;
-    logged([&n] { n.endRefresh(2, 2); });
+    logged([&n] { bindBoth(n); });
+    const auto sentFromBoth = [&n] {
+        n.sendSucceeded(kAddrB);
+        sentSweep(n, false);
+    };
 
-    check(logged([&n] { n.sweepClosed(false); n.sweepClosed(false); }).isEmpty(),
+    check(logged([&] {
+              sentFromBoth();
+              sentFromBoth();
+          }).isEmpty(),
           "no reply: two silent sweeps log nothing");
-    check(logged([&n] { n.sweepClosed(false); }) == QStringList{QStringLiteral(
+    check(logged(sentFromBoth) == QStringList{QStringLiteral(
               "I|HL2 discovery: no Hermes-Lite 2 answered 3 sweeps on 2 interfaces")},
           "no reply: the third silent sweep logs one Info line with the interface count");
     check(logged([&n] {
               for (int i = 0; i < 20; ++i)
-                  n.sweepClosed(false);
+                  sentSweep(n, false);
           }).isEmpty(),
           "no reply: continued silence logs nothing more");
 
     check(logged([&n] {
-              n.sweepClosed(true);
-              n.sweepClosed(false);
-              n.sweepClosed(false);
+              sentSweep(n, true);
+              sentSweep(n, false);
+              sentSweep(n, false);
           }).isEmpty(),
           "no reply: an answer resets the count; two new silent sweeps log nothing");
-    logged([&n] { n.endRefresh(1, 1); });
-    check(logged([&n] { n.sweepClosed(false); }) == QStringList{QStringLiteral(
+    logged([&n] { n.endRefresh(1); });
+    check(logged([&n] { sentSweep(n, false); }) == QStringList{QStringLiteral(
               "I|HL2 discovery: no Hermes-Lite 2 answered 3 sweeps on 1 interface")},
           "no reply: silence after an answer is logged again (singular interface)");
 
     check(logged([&n] {
-              n.sweepClosed(false);
-              n.sweepClosed(true);
-              n.sweepClosed(false);
-              n.sweepClosed(true);
+              sentSweep(n, false);
+              sentSweep(n, true);
+              sentSweep(n, false);
+              sentSweep(n, true);
           }).isEmpty(),
           "no reply: an intermittent answer never reaches the threshold");
+}
+
+// The silence line means "asked and not answered". A sweep whose every send
+// failed asked nothing; the send-failure warning is its whole report.
+void sweepWithNoProbeSentIsNotSilence()
+{
+    const QString silence = QStringLiteral("no Hermes-Lite 2 answered");
+    const auto failedSweep = [](DiscoveryNotices& n) {
+        n.sendFailed(kAddrA, QStringLiteral("Network unreachable"));
+        n.sendFailed(kAddrB, QStringLiteral("Network unreachable"));
+        n.sweepClosed(false);
+    };
+
+    DiscoveryNotices allFail;
+    logged([&allFail] { allFail.endRefresh(2); });
+    const QStringList failed = logged([&] {
+        for (int i = 0; i < 3; ++i)
+            failedSweep(allFail);
+    });
+    check(failed.filter(QStringLiteral("cannot send a probe from 192.168.8.20")).size() == 1
+              && failed.filter(QStringLiteral("cannot send a probe from 169.254.1.5")).size() == 1,
+          "no probe sent: three all-failed sweeps log each address's send warning once");
+    check(failed.filter(silence).isEmpty() && failed.size() == 2,
+          "no probe sent: three all-failed sweeps log no 'no Hermes-Lite 2 answered' line");
+    check(logged([&] {
+              for (int i = 0; i < 20; ++i)
+                  failedSweep(allFail);
+          }).isEmpty(),
+          "no probe sent: continued all-failed sweeps log nothing more");
+
+    DiscoveryNotices mixed;
+    logged([&mixed] { bindBoth(mixed); });
+    const QStringList partial = logged([&mixed] {
+        for (int i = 0; i < 3; ++i) {
+            mixed.sendSucceeded(kAddrA);
+            mixed.sendFailed(kAddrB, QStringLiteral("Network unreachable"));
+            mixed.sweepClosed(false);
+        }
+    });
+    check(partial.filter(silence).size() == 1 && partial.size() == 2,
+          "no probe sent: one socket sent, one failed -> the sweep counts as sent");
+    check(partial.filter(silence).value(0).endsWith(
+              QStringLiteral("answered 3 sweeps on 1 interface")),
+          "no probe sent: two bound, one sent -> the silence line counts the one that sent");
+
+    // The count is interfaces, not addresses.
+    DiscoveryNotices twoAddresses;
+    logged([&twoAddresses] {
+        twoAddresses.bindSucceeded(QStringLiteral("en0"), kAddrA);
+        twoAddresses.bindSucceeded(QStringLiteral("en0"), kAddrB);
+        twoAddresses.endRefresh(2);
+    });
+    check(logged([&twoAddresses] {
+              for (int i = 0; i < 3; ++i) {
+                  twoAddresses.sendSucceeded(kAddrA);
+                  twoAddresses.sendSucceeded(kAddrB);
+                  twoAddresses.sweepClosed(false);
+              }
+          }).filter(silence).value(0).endsWith(
+              QStringLiteral("answered 3 sweeps on 1 interface")),
+          "no probe sent: two addresses of one interface sent -> 'on 1 interface'");
+
+    // The mark belongs to one sweep: a probe that left sweep 1 does not make
+    // the failed sweeps after it count.
+    DiscoveryNotices stale;
+    logged([&stale] { stale.endRefresh(1); });
+    check(logged([&stale] {
+              stale.sendSucceeded(kAddrA);
+              stale.sweepClosed(false);
+              for (int i = 0; i < 5; ++i) {
+                  stale.sendFailed(kAddrA, QStringLiteral("x"));
+                  stale.sweepClosed(false);
+              }
+          }).filter(silence).isEmpty(),
+          "no probe sent: one sent sweep then failed ones never reach the threshold");
+    check(logged([&stale] {
+              sentSweep(stale, false);
+              sentSweep(stale, false);
+          }).filter(silence).size() == 1,
+          "no probe sent: failed sweeps do not clear the count; two more sent ones log it");
 }
 
 void sendFailureIsLoggedOncePerCondition()
@@ -181,18 +284,18 @@ void resetForgetsEverything()
     DiscoveryNotices n;
     logged([&n] {
         n.bindFailed(QStringLiteral("en0"), kAddrA, QStringLiteral("x"));
-        n.endRefresh(0, 0);
+        n.endRefresh(0);
         n.sendFailed(kAddrB, QStringLiteral("x"));
         for (int i = 0; i < 3; ++i)
-            n.sweepClosed(false);
+            sentSweep(n, false);
     });
     n.reset();
     const QStringList again = logged([&n] {
         n.bindFailed(QStringLiteral("en0"), kAddrA, QStringLiteral("x"));
-        n.endRefresh(0, 0);
+        n.endRefresh(0);
         n.sendFailed(kAddrB, QStringLiteral("x"));
         for (int i = 0; i < 3; ++i)
-            n.sweepClosed(false);
+            sentSweep(n, false);
     });
     check(again.size() == 4,
           "reset (Hl2Discovery::stop): all four conditions are logged again");
@@ -219,6 +322,7 @@ int main(int argc, char** argv)
     bindFailureIsLoggedOncePerCondition();
     noSocketIsLoggedOncePerCondition();
     silenceIsLoggedOnceAfterThreshold();
+    sweepWithNoProbeSentIsNotSilence();
     sendFailureIsLoggedOncePerCondition();
     resetForgetsEverything();
 

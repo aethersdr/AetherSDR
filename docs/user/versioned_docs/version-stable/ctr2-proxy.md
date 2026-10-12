@@ -41,6 +41,10 @@ press **Start**.
 
 The **Mode** selector offers **Wi-Fi (TCP)** and **USB**.
 
+<img src="/img/screens/ctr2-applet.png" width="248" alt="CTR2 Proxy applet. Mode is set to USB with a Rescan button, the USB selector reads Select CTR2 USB device, and the Radio row (blacked out here) sits beside a dimmed Start button. An amber hint reads Select the CTR2 USB device, followed by State: Stopped and traffic counters of 0 B to the radio and to the CTR2." />
+
+*The CTR2 Proxy applet before a CTR2 is selected. The radio's address is blacked out.*
+
 > **Check the mode every time.** On builds with USB support, USB is the
 > default and the choice is not saved. USB mode waits on a CTR2 USB firmware
 > release, so with current CTR2 firmware pick **Wi-Fi (TCP)** at every launch.
@@ -71,6 +75,16 @@ needs CTR2 firmware with USB mode, which has not been released yet.
   (`/etc/udev/rules.d/70-aethersdr-ctr2.rules`) through `pkexec`, asking for
   your administrator password once. The rule only opens CTR2 controllers to
   whoever is logged in at the computer.
+- **AetherKnob** (an AetherSDR controller on the Elecrow CrowPanel 2.1"
+  rotary display) uses USB mode the same way. It appears in the list as
+  **AetherKnob**. While it is relaying, AetherSDR also sends it a 32-bar
+  spectrum for its centre display. While receiving it shows the audio you
+  are hearing (after the radio's DSP, AetherSDR's noise reduction and the
+  RX chain up to the EQ) across the active slice's filter width, for
+  example 20–600 Hz for a 600 Hz CW filter. While transmitting it shows your
+  transmit audio across the TX filter width. Either way it reaches at most
+  12 kHz, and the bars are spaced logarithmically in frequency, as on an
+  audio analyser, so the low end gets more detail. A CTR2 never receives this.
 
 ## Reference
 

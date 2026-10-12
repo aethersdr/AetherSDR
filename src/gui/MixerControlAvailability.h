@@ -40,6 +40,17 @@ namespace AetherSDR {
     return !connected || hasCommandPlane;
 }
 
+// What an unavailable headphone control announces, on its tooltip and its
+// accessibleDescription: one sentence for the level, one for the mute. Every
+// site that dims the pair, and the tests, read them from here. ASCII. The Line
+// Out reason is not one of them: it has one site, in Radio Setup.
+inline constexpr char kHeadphoneLevelUnavailableReason[] =
+    "Unavailable: this radio has no headphone output. Its audio plays on "
+    "this computer; set its level with the master volume slider.";
+inline constexpr char kHeadphoneMuteUnavailableReason[] =
+    "Unavailable: this radio has no headphone output. Its audio plays on "
+    "this computer; mute it with the speaker button.";
+
 [[nodiscard]] constexpr bool lineoutControlsAvailable(
     bool connected, bool hasCommandPlane, bool declaresLineout) noexcept
 {

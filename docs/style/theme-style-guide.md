@@ -42,9 +42,9 @@ a widget subtree (for example, the `applet/tx` scope turns the
 checked-toggle accent red where the root theme has it blue — scope
 paths are slash-joined, and a widget opts in by carrying the path in
 its `themeContainer` property). The `canon` scope does the same for
-whole windows: AetherRX, AetherTX, AetherModem, AetherMap and Connect to
-Radio sit under `canon/aetherRx`, `canon/aetherTx`, `canon/aetherModem`,
-`canon/aetherMap` and `canon/connection`, and it maps the base tokens onto the canon palette
+whole windows: AetherRX, AetherTX, AetherModem, AetherMap, AetherGPS, SpotHub, Connect to
+Radio and AGC-T Calibration sit under `canon/aetherRx`, `canon/aetherTx`, `canon/aetherModem`,
+`canon/aetherMap`, `canon/aetherGps`, `canon/spotHub`, `canon/connection` and `canon/agcCalibration`, and it maps the base tokens onto the canon palette
 there (see [`aethersdr-style-guide.md`](aethersdr-style-guide.md)). The
 widget-aware accessors below resolve scope automatically — prefer them
 inside applets and anything painted inside a scoped window.
@@ -186,6 +186,10 @@ a radio-specific cluster moves to its own applet, which hides wholesale.
 | **unavailable** | this radio lacks the capability | `color.control.unavailable` | the reason, verbatim |
 | **inactive** | supported here, not engaged now | `color.control.inactive` | "Available, not currently active" |
 | **active** | engaged | normal text colour | nothing extra |
+
+The reason replaces a control's own tooltip and description only while it is
+unavailable; the control's own texts come back when it is available again. The
+inactive announcement is appended to the control's own description.
 
 ### Why dim rather than hide
 

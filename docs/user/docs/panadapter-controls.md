@@ -30,6 +30,15 @@ The panadapter is the main display: the FFT spectrum on top and the scrolling wa
 - If the wheel tunes the wrong way for your mouse or trackball, turn on **Radio Setup → Appearance & Behavior → Reverse mouse-wheel tuning direction**.
 - Dragging any slider shows its value in a small popup.
 
+### The header
+
+A thin header runs across the top of each panadapter, drawn over the spectrum so the trace and grid show through it.
+
+- **At the left:** the **⋮⋮** grip and the pan's name (its slice, or the pan's ID when it has no slice). On a popped-out pan, drag the grip or the name to move the window. Clicking them never tunes.
+- **At the right:** **⬈ Pop out** (**↩ Dock** on a popped-out pan), **□ Maximize** and **✕ Close**, which closes that pan. They show when more than one pan is open, and always on a popped-out pan.
+- **In between,** the header is part of the spectrum: click, double-click to tune, drag and scroll there as anywhere else.
+- The overlay menu (←, +RX, Band…) and the dBm scale's ▲▼ arrows start just below the header. The VFO flags and the readouts at the top right (WNB, RF gain, propagation) sit at the very top, over it.
+
 ### Right-click menu
 
 Right-click the spectrum or waterfall:
@@ -123,7 +132,7 @@ It re-uses the main panadapter's data, so it uses no extra radio panadapter or s
 ### Multiple and detached panadapters
 
 - **Tools → Add Panadapter...** or the **+PAN** icon in the status bar opens a layout picker and adds a pan if the radio has room.
-- **Right-click → ↗ Pop out** moves a pan into its own window; **↩ Dock** puts it back.
+- **Right-click → ↗ Pop out**, or the header's **⬈** button, moves a pan into its own window; **↩ Dock** puts it back.
 - Pan layouts, including floating pans, are restored when you reconnect.
 - With the [Workspace Canvas](./workspace-canvas.md) on, **Import pop-outs onto canvas** places floating pans on the canvas.
 
@@ -200,6 +209,8 @@ Click **Display** in the overlay menu. The panel is divided into sections and sc
 | **Wt Avg** | Off by default | Weighted averaging that favours recent frames. |
 | **FFT AVG** | 0–100 | Frame averaging. Higher is smoother but slower to react; 0 is unaveraged. |
 | **FFT FPS** | 5–60, default 25 | Spectrum frame rate. |
+| **FFT Smooth** | Off–16 px, default Off | Smooths the trace across frequency by averaging each point with its neighbors this many pixels either side, in linear power, so a dB average doesn't drag the noise floor down; the smoothed floor reads its true average power, about 1–1.5 dB above the middle of the unsmoothed noise. FFT AVG smooths over time; this smooths across the band. Only the trace is affected, not the waterfall. |
+| **De-comb Hz** | Off–600 Hz, default Off | Zoomed in on SSB, the trace and waterfall show each voice as a comb of its pitch harmonics, 100–250 Hz apart. De-comb draws a smooth curve over that comb (a cepstral envelope), keeping the signal's outline and peak level. The value is the widest harmonic spacing it removes: about 300 Hz covers most voices; raise it if a high voice still shows a comb. It rounds a signal's steep edges by about half this width, and carriers closer together than it blur into one. It works on signals more than about 8 dB above the noise; the noise floor itself is left as drawn, and the waterfall is not changed. At wide spans, where the comb isn't resolved, it does nothing. |
 | **FFT Line** | Off–5.0 px, default 1.0 px | Trace thickness, with its own colour button. |
 | **FFT Fill** | 0–100, default 70 | Fill opacity under the trace, with its own colour button. |
 | **FFT Floor** + **Auto** | 1–99, default 75 | With **Auto** on, the dBm scale follows the noise floor and keeps it at this height (% from top). Off by default. |
