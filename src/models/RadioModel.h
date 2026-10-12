@@ -991,6 +991,18 @@ public:
     // model takes it here and it is remembered per radio. Returns false
     // elsewhere, where the caller sends the wire command. Never keys anything.
     bool requestLocalShowTxInWaterfall(bool on);
+    ReceiveDispatch requestRadioSetup(const RadioSetupRequest& request,
+                                     QObject* replyContext = nullptr,
+                                     const RadioSetupCompletion& completion = {});
+    ReceiveDispatch requestTxBand(const TxBandRequest& request,
+                                 std::optional<RadioControlSession> expectedSession = {});
+    ReceiveDispatch requestUsbCable(const UsbCableRequest& request);
+    ReceiveDispatch requestTransverter(const TransverterRequest& request,
+                                      QObject* replyContext = nullptr,
+                                      const RadioSetupCompletion& completion = {},
+                                      std::optional<RadioControlSession> expectedSession = {});
+    RadioControlSession controlSession() const;
+    bool controlSessionCurrent(const RadioControlSession& session) const;
     // Panel width in spectrum points for a backend that shapes its own
     // spectrum: straight down to that backend. Returns false on Flex, where
     // the caller sends the xpixels= wire command itself.
@@ -1784,6 +1796,7 @@ private:
     friend class TxOperationIntegrationTestAccess;
     friend class RerouteDeadControlsTestAccess;
     friend class VoiceKeyerTxRouteTestAccess;
+    friend class RadioSetupControlTestAccess;
     void expirePendingCallbacks(const QString& reason);
 
     // True only while expirePendingCallbacks() is invoking the drained
@@ -1823,6 +1836,9 @@ private:
     void dispatchTransmitControl(const TransmitControlRequest& request);
     void reportReceiveDispatch(ReceiveDispatch result, const QString& operation,
                                bool operatorOrigin = true);
+    RadioSetupCompletion fencedSetupCompletion(QObject* context,
+                                               const RadioSetupCompletion& completion,
+                                               bool requiresLiveSession = true);
     // Translate a MODEL pan id to the backend's own id for a command going down
     // the seam. The inverse of resolveBackendPan(); both are needed or the
     // mapping is one-way and every pan command addresses a pan the backend

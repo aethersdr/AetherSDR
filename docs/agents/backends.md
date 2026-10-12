@@ -172,6 +172,15 @@ TX controls. RTL active-slice selection validates accepted membership and
 publishes confirmed focus; other RX-only backends inherit local selection.
 These are desktop intents,
 not new daemon methods or TX permissions.
+`RadioSetupDialog`, `TxBandDialog` and `UsbCableModel` also have no raw command
+emitters. Their configuration requests use `RadioModel` and `FlexSetupControls`;
+unsupported families explicitly refuse vendor operations. `radioSetupControl`
+is a desktop-only field-set record, consumed at dispatch and by timing/power
+availability, not serialized into the daemon catalogue. Reply contexts and
+connection/backend generations fence calibration and transverter creation;
+acceptance does not confirm completion. Entity editors retain their original
+session, and USB inventory is retired at disconnect/replacement. Preserve the
+client-owned TX-waterfall flag and station settings separately from radio state.
 MOX, TUNE and ATU start/stop still use the existing operation-fenced TX path;
 host TUNE-power edits additionally require a live locally admitted carrier.
 HL2 host-keyer, sidetone and compressor settings return local-only receipts;

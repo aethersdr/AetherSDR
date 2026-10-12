@@ -55,6 +55,17 @@ semantics see [local frequency control](../aetherd-local-slice-frequency-control
 
 ## Wired and consumed
 
+### Desktop Radio Setup controls
+
+`radioSetupControl` is an optional field-set record for implemented desktop
+configuration operations. Flex declares the fields backed by `requestRadioSetup`;
+other backends leave it absent. `RadioModel::requestRadioSetup` checks it at action
+time, and Radio Setup uses it for timing and maximum-power availability. Station
+identity and the explicitly client-owned TX-waterfall preference retain their
+local consumers. This record adds no daemon methods, remote permissions or
+`welcome` fields. Calibration acceptance and radio-confirmed completion remain
+distinct; unsupported vendor operations return refusal, not local success.
+
 ### Broadcast FM receiver controls
 
 | Record | Flex | HL2 | Sim | Icom | ANAN | RTL-SDR | Consumers |

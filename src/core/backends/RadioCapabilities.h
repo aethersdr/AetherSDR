@@ -1,4 +1,5 @@
 #pragma once
+#include "RadioSetupRequest.h"
 
 #include <QFlags>
 #include <QList>
@@ -625,6 +626,7 @@ struct RadioCapabilities {
     bool hasFlexControlIntegration = false; // FlexControl/AetherControl verbs are supported
     bool hasAudioCompression = false; // selectable compressed radio-audio transport
     bool hasSharpFilters = false;    // radio implements the sharp-filter settings page
+    std::optional<RadioSetupControl> radioSetupControl;
     // The radio's streaming data plane uses VITA-49. This currently gates the
     // receive-socket buffer and network MTU controls; it describes the transport,
     // not the vendor or only one stream direction.

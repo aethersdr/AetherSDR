@@ -51,6 +51,8 @@ public:
         std::function<void(const QString&, std::function<void(bool applied)>)>;
     void setAnsweredCommandSink(AnsweredCommandSink sink) { m_answeredSink = std::move(sink); }
     bool answersTransmitControl() const override { return bool(m_answeredSink); }
+    // Configuration writes share LAN/WAN sequencing and report actual dispatch.
+    void setSetupCommandSink(std::function<bool(const QString&, const RadioSetupCompletion&)> sink);
     // Primary keying verbs use an operation-fenced writer, never the generic
     // command sink. The bool distinguishes key-on from cleanup, not authority.
     // Trusted engine composition supplies the original operation at dispatch.
@@ -88,6 +90,13 @@ public:
     ReceiveDispatch requestSliceControl(int sliceId, const SliceControlRequest& request) override;
     ReceiveDispatch requestTransmitControl(const TransmitControlRequest& request,
         TunePowerContext context = TunePowerContext::Deferred) override;
+    ReceiveDispatch requestRadioSetup(const RadioSetupRequest& request,
+                                      const RadioSetupCompletion& completion = {},
+                                      const RadioControlFence& current = {}) override;
+    ReceiveDispatch requestTxBand(const TxBandRequest& request) override;
+    ReceiveDispatch requestUsbCable(const UsbCableRequest& request) override;
+    ReceiveDispatch requestTransverter(const TransverterRequest& request,
+                                       const RadioSetupCompletion& completion = {}) override;
     void requestSliceTune(int sliceId, const SliceTuneRequest& request) override;
     void requestSliceFilter(int sliceId, const SliceFilterRequest& request) override;
     void requestSliceAgc(int sliceId, const SliceAgcRequest& request) override;
@@ -221,6 +230,7 @@ private:
     QThread*          m_networkThread{nullptr}; // owned (this-parented)
     std::function<void(const QString&)> m_sink;
     AnsweredCommandSink m_answeredSink;
+    std::function<bool(const QString&, const RadioSetupCompletion&)> m_setupSink;
     std::function<void(const QString&, const TxCoordinator::Command&)> m_txSink;
     std::function<void(const QString&)> m_sliceSink;
     std::function<QString()> m_modelProvider;

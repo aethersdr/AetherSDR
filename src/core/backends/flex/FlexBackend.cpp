@@ -173,6 +173,12 @@ ReceiveDispatch FlexBackend::requestRadioNickname(const QString& nickname)
     return ReceiveDispatch::Dispatched;
 }
 
+void FlexBackend::setSetupCommandSink(
+    std::function<bool(const QString&, const RadioSetupCompletion&)> sink)
+{
+    m_setupSink = std::move(sink);
+}
+
 void FlexBackend::setTxCommandSink(std::function<void(const QString&, const TxCoordinator::Command&)> sink)
 {
     m_txSink = std::move(sink);
@@ -505,6 +511,11 @@ RadioCapabilities FlexBackend::capabilities() const
     caps.hasFlexControlIntegration = true;
     caps.hasAudioCompression = true;
     caps.hasSharpFilters = true;
+    RadioSetupControl setup;
+    for (int field = 0; field < int(RadioSetupRequest::Field::Count); ++field) {
+        setup.fields.insert(static_cast<RadioSetupRequest::Field>(field));
+    }
+    caps.radioSetupControl = setup;
     caps.usesVita49Transport = true;
     caps.hasNetworkConfigurationReadback = true;
     caps.hasPrivateIpConnectionPolicy = true;

@@ -677,6 +677,11 @@ target_include_directories(model_control_routing_test PRIVATE src tests)
 target_link_libraries(model_control_routing_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME model_control_routing_test COMMAND model_control_routing_test)
 
+add_executable(radio_setup_control_routing_test tests/radio_setup_control_routing_test.cpp)
+target_include_directories(radio_setup_control_routing_test PRIVATE src tests)
+target_link_libraries(radio_setup_control_routing_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME radio_setup_control_routing_test COMMAND radio_setup_control_routing_test)
+
 # Socket-free frequency control: a recording engine backend and normalized
 # observations exercise the production target/service. LocalControlServer
 # instances only test startup binding; neither listens or opens an endpoint.
@@ -3750,6 +3755,31 @@ target_link_libraries(radio_setup_region_field_test PRIVATE
     aetherdesktop_support Qt6::Widgets Qt6::Test)
 add_test(NAME radio_setup_region_field_test COMMAND radio_setup_region_field_test)
 set_tests_properties(radio_setup_region_field_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
+
+add_executable(radio_setup_operations_test
+    tests/radio_setup_operations_test.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/FirmwareReleasesDialog.cpp
+    src/gui/RadioSetupDialog.cpp
+    src/gui/TxBandDialog.cpp
+    src/gui/CanonWindow.cpp
+    src/gui/RtlReceiverSettingsWidget.cpp
+    src/gui/ControlAvailabilityRegistry.cpp
+    src/gui/RadioSetupDialog_Peripherals.cpp
+    src/gui/PersistentDialog.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+    src/gui/SliceColorManager.cpp
+    src/gui/KiwiPublicReceiverPicker.cpp
+    src/gui/GuardedSlider.h
+    ${THEME_TEST_RESOURCES}
+)
+target_include_directories(radio_setup_operations_test PRIVATE src tests)
+target_link_libraries(radio_setup_operations_test PRIVATE
+    aetherdesktop_support Qt6::Widgets Qt6::Test)
+add_test(NAME radio_setup_operations_test COMMAND radio_setup_operations_test)
+set_tests_properties(radio_setup_operations_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
 
 # #5896: RadioSetupDialog's caption labels and line edits across a LIVE theme
@@ -7175,7 +7205,7 @@ add_executable(usb_cable_model_test
     src/models/UsbCableModel.cpp
 )
 target_include_directories(usb_cable_model_test PRIVATE src)
-target_link_libraries(usb_cable_model_test PRIVATE Qt6::Core Qt6::Test)
+target_link_libraries(usb_cable_model_test PRIVATE Qt6::Core Qt6::Network Qt6::Test)
 set_target_properties(usb_cable_model_test PROPERTIES AUTOMOC ON)
 add_test(NAME usb_cable_model_test COMMAND usb_cable_model_test)
 
@@ -8978,6 +9008,8 @@ set(AETHER_SETTINGS_CONSUMERS
     transmit_seam_drop_notice_test
     model_control_routing_test
     radio_nickname_test
+    radio_setup_control_routing_test
+    radio_setup_operations_test
     pan_display_drop_notice_test
     backend_capability_revision_test
     icom_panadapter_capacity_test

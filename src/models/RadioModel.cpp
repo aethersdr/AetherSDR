@@ -887,6 +887,19 @@ void RadioModel::setupBackend(const QString& family)
                     answered(false);   // dropped before the wire: nothing will answer
                 }
             });
+            flex->setSetupCommandSink([this, generation](const QString& cmd,
+                                                        const RadioSetupCompletion& completion) {
+                if (generation != m_backendReceiverGeneration || !isConnected()
+                    || m_txSessionClosing || m_expiringPendingCallbacks) { return false; }
+                ResponseCallback reply;
+                if (completion) {
+                    reply = [completion](int code, const QString& body) {
+                        completion({code == 0 ? RadioSetupReply::Kind::Accepted
+                                              : RadioSetupReply::Kind::Failed, code, body});
+                    };
+                }
+                return sendCmdPublic(cmd, std::move(reply));
+            });
             flex->setTxCommandSink([this](const QString& cmd, const TxCoordinator::Command& fence) {
                 sendTxKeyingCommand(cmd, fence);
             });
@@ -1713,6 +1726,10 @@ void RadioModel::teardownBackend()
     resetTxOperations();
     ++m_backendReceiverGeneration;
     m_backendObservedTransmit = false;   // an observation dies with its backend
+    const QPointer<RadioModel> setupOwner(this);
+    const RadioControlSession setupSession = controlSession();
+    m_usbCableModel.clear();
+    if (!setupOwner || setupSession != controlSession()) { return; }
     if (m_backend) {
         m_backend->retirePcmStreams();
     }
@@ -1951,6 +1968,11 @@ RadioModel::RadioModel(QObject* parent)
     qRegisterMetaType<SliceDelta>();
     qRegisterMetaType<SliceControlRequest>();
     qRegisterMetaType<TransmitControlRequest>();
+    qRegisterMetaType<RadioSetupRequest>();
+    qRegisterMetaType<TxBandRequest>();
+    qRegisterMetaType<TransverterRequest>();
+    qRegisterMetaType<RadioSetupReply>();
+    qRegisterMetaType<UsbCableRequest>();
     connect(&m_transmitModel, &TransmitModel::controlRequested,
             this, &RadioModel::dispatchTransmitControl, Qt::DirectConnection);
     qRegisterMetaType<WfmStereoStatus>();
@@ -2383,8 +2405,8 @@ RadioModel::RadioModel(QObject* parent)
             m_navtexModel.handleSendResponse(seq, static_cast<uint>(respVal), body);
         });
     });
-    connect(&m_usbCableModel, &UsbCableModel::commandReady, this, [this](const QString& cmd){
-        sendCmd(cmd);
+    connect(&m_usbCableModel, &UsbCableModel::controlRequested, this, [this](const UsbCableRequest& request){
+        requestUsbCable(request);
     });
 
     // Tune PA inhibit: restore TX outputs when tune completes
@@ -7915,6 +7937,10 @@ void RadioModel::onDisconnected()
     // dropping the continuation makes sure a reconnect starts from a fresh
     // peek rather than resuming a half-finished one. (#5653 review)
     ++m_sessionGeneration;
+    const QPointer<RadioModel> setupOwner(this);
+    const RadioControlSession setupSession = controlSession();
+    m_usbCableModel.clear();
+    if (!setupOwner || setupSession != controlSession()) { return; }
     m_multiFlexContinuation = nullptr;
 
     // #4142 — void any pan centers deferred during a profile load. The session

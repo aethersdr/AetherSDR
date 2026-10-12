@@ -14,6 +14,7 @@
 #include <algorithm>
 
 namespace AetherSDR {
+using BandField = TxBandRequest::Field;
 
 TxBandDialog::TxBandDialog(RadioModel* model, QWidget* parent)
     : PersistentDialog(
@@ -55,6 +56,7 @@ TxBandDialog::TxBandDialog(RadioModel* model, QWidget* parent)
     }
 
     const auto& bands = m_model->txBandSettings();
+    const RadioControlSession session = m_model->controlSession();
     QList<int> sortedIds = bands.keys();
     std::sort(sortedIds.begin(), sortedIds.end());
 
@@ -82,9 +84,12 @@ TxBandDialog::TxBandDialog(RadioModel* model, QWidget* parent)
         rfEdit->setFixedWidth(50);
         rfEdit->setAlignment(Qt::AlignCenter);
         int bandId = id;
-        connect(rfEdit, &QLineEdit::editingFinished, this, [this, rfEdit, bandId] {
-            m_model->sendCommand(
-                QStringLiteral("transmit bandset %1 rfpower=%2").arg(bandId).arg(rfEdit->text()));
+        connect(rfEdit, &QLineEdit::editingFinished, this, [this, rfEdit, bandId, session] {
+            bool valid = false;
+            const int percent = rfEdit->text().toInt(&valid);
+            if (valid && percent >= 0 && percent <= 100) {
+                m_model->requestTxBand({bandId, BandField::RfPowerPercent, percent}, session);
+            }
         });
         headerGrid->addWidget(rfEdit, row, col++);
 
@@ -92,22 +97,25 @@ TxBandDialog::TxBandDialog(RadioModel* model, QWidget* parent)
         tuneEdit->setStyleSheet(kEditStyle);
         tuneEdit->setFixedWidth(50);
         tuneEdit->setAlignment(Qt::AlignCenter);
-        connect(tuneEdit, &QLineEdit::editingFinished, this, [this, tuneEdit, bandId] {
-            m_model->sendCommand(
-                QStringLiteral("transmit bandset %1 tunepower=%2").arg(bandId).arg(tuneEdit->text()));
+        connect(tuneEdit, &QLineEdit::editingFinished, this, [this, tuneEdit, bandId, session] {
+            bool valid = false;
+            const int percent = tuneEdit->text().toInt(&valid);
+            if (valid && percent >= 0 && percent <= 100) {
+                m_model->requestTxBand({bandId, BandField::TunePowerPercent, percent}, session);
+            }
         });
         headerGrid->addWidget(tuneEdit, row, col++);
 
-        struct CbDef { bool val; const char* txCmd; const char* ilCmd; };
+        struct CbDef { bool val; BandField field; };
         CbDef cbs[] = {
-            {b.inhibit, "inhibit", nullptr},
-            {b.accTx,   nullptr, "acc_tx_enabled"},
-            {b.rcaTxReq,nullptr, "rca_txreq_enable"},
-            {b.accTxReq,nullptr, "acc_txreq_enable"},
-            {b.tx1,     nullptr, "tx1_enabled"},
-            {b.tx2,     nullptr, "tx2_enabled"},
-            {b.tx3,     nullptr, "tx3_enabled"},
-            {b.hwAlc,   "hwalc_enabled", nullptr},
+            {b.inhibit, BandField::Inhibit},
+            {b.accTx, BandField::AccessoryTx},
+            {b.rcaTxReq, BandField::RcaTxRequest},
+            {b.accTxReq, BandField::AccessoryTxRequest},
+            {b.tx1, BandField::Tx1},
+            {b.tx2, BandField::Tx2},
+            {b.tx3, BandField::Tx3},
+            {b.hwAlc, BandField::HardwareAlc},
         };
 
         for (const auto& cb : cbs) {
@@ -120,15 +128,9 @@ TxBandDialog::TxBandDialog(RadioModel* model, QWidget* parent)
             hb->setContentsMargins(0, 0, 0, 0);
             hb->setAlignment(Qt::AlignCenter);
             hb->addWidget(chk);
-            const char* txC = cb.txCmd;
-            const char* ilC = cb.ilCmd;
-            connect(chk, &QCheckBox::toggled, this, [this, bandId, txC, ilC](bool on) {
-                if (txC)
-                    m_model->sendCommand(
-                        QStringLiteral("transmit bandset %1 %2=%3").arg(bandId).arg(txC).arg(on ? 1 : 0));
-                if (ilC)
-                    m_model->sendCommand(
-                        QStringLiteral("interlock bandset %1 %2=%3").arg(bandId).arg(ilC).arg(on ? 1 : 0));
+            const BandField field = cb.field;
+            connect(chk, &QCheckBox::toggled, this, [this, bandId, field, session](bool on) {
+                m_model->requestTxBand({bandId, field, on}, session);
             });
             headerGrid->addWidget(w, row, col++);
         }

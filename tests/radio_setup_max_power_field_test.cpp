@@ -25,6 +25,7 @@
 // rebuildBackendForTest() and never connected.
 
 #include "TestSettingsProfile.h"
+#include "RadioSetupControlFixture.h"
 #include "gui/RadioSetupDialog.h"
 #include "models/RadioModel.h"
 #include "models/TransmitModel.h"
@@ -199,8 +200,9 @@ private slots:
     // not settled here, and this test must not freeze either answer.
     void flexPathUnchangedFromMain()
     {
-        RadioModel model;  // a bare model is on the Flex backend
-        QVERIFY2(model.hasCommandPlane(), "Flex has a command plane");
+        RadioModel model;
+        RadioSetupTestBackend* backend = installRadioSetupBackend(model);
+        QVERIFY(model.isConnected());
         QVERIFY(model.backendCapabilities().txPowerBands.isEmpty());
 
         RadioSetupDialog dialog(&model);
@@ -213,11 +215,14 @@ private slots:
                  QString::number(model.transmitModel().maxPowerLevel()));
         QVERIFY2(!field.edit->isReadOnly(), "Flex max_power_level stays writable");
 
-        ScopedCommandLog log;
+        backend->commands.clear();
         field.edit->setText(QStringLiteral("80"));
         emit field.edit->editingFinished();
-        QVERIFY2(log.contains(QStringLiteral("transmit set max_power_level=80")),
-                 "the edit still reaches RadioModel::sendCommand");
+        QCOMPARE(backend->commands, QStringList{QStringLiteral("transmit set max_power_level=80")});
+        backend->commands.clear();
+        field.edit->setText(QStringLiteral("invalid"));
+        emit field.edit->editingFinished();
+        QVERIFY(backend->commands.isEmpty());
     }
 };
 

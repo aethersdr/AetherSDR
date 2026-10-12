@@ -634,8 +634,12 @@ HL2 host-consumed CW/sidetone settings return local-only receipts, suppressing
 the false unsupported notice (#6153); Icom's CW capability gate stays unchanged
 pending #6110. Local active-slice selection also remains available on RX-only
 backends. HL2 RIT/XIT commits each enabled/offset pair before publishing readback.
-Dialogs, controllers and the remaining `RadioModel` command-plane sites are
-still follow-up work. This does not complete M4 or the UI/engine split.
+Radio Setup, TX Band settings and USB-cable configuration now use typed desktop
+requests with backend-owned encoding. Radio-owned state still arrives through
+existing observations; calibration and creation replies are lifetime/session
+fenced, not optimistic state. Other dialogs, controllers and the remaining
+`RadioModel` command-plane sites are still follow-up work. This does not
+complete M4 or the UI/engine split.
 The desktop adapter has not landed; UI code still consumes models directly, and that
 remains correct. New resource fields belong in the adapter and the versioned
 catalogue, never in a transport or via QObject reflection. No protocol TX

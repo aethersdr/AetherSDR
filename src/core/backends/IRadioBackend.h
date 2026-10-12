@@ -30,6 +30,7 @@
 #include "core/backends/RadioCapabilities.h"
 #include "core/backends/ReceiveCommand.h"
 #include "core/backends/ModelControlRequest.h"
+#include "core/backends/RadioSetupRequest.h"
 #include "core/backends/RestoredRadioState.h"
 #include "core/backends/RadioDelta.h"
 #include "core/backends/SliceDelta.h"
@@ -152,6 +153,23 @@ public:
     // hear the radio's reply leaves it to RadioModel, which reports it as not
     // confirmed rather than assume the radio agreed.
     virtual bool answersTransmitControl() const { return false; }
+    virtual ReceiveDispatch requestRadioSetup(const RadioSetupRequest& request,
+                                              const RadioSetupCompletion& = {},
+                                              const RadioControlFence& current = {})
+    {
+        // The station identity is consumed by the desktop even on families
+        // with no radio-side copy. This is not a fabricated hardware write.
+        return (!current || current()) && request.valid() && (request.field == RadioSetupRequest::Field::Callsign
+            || request.field == RadioSetupRequest::Field::ClientStation)
+            ? ReceiveDispatch::LocalOnly : ReceiveDispatch::Unsupported;
+    }
+    virtual ReceiveDispatch requestTxBand(const TxBandRequest&)
+    { return ReceiveDispatch::Unsupported; }
+    virtual ReceiveDispatch requestUsbCable(const UsbCableRequest&)
+    { return ReceiveDispatch::Unsupported; }
+    virtual ReceiveDispatch requestTransverter(const TransverterRequest&,
+                                               const RadioSetupCompletion& = {})
+    { return ReceiveDispatch::Unsupported; }
     explicit IRadioBackend(QObject* parent = nullptr) : QObject(parent)
     {
         connect(this, &IRadioBackend::connected, this, [this] {
