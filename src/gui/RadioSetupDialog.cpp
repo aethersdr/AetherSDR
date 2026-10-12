@@ -56,6 +56,7 @@
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QGridLayout>
+#include <QSpacerItem>
 #include <QGroupBox>
 #include <QFrame>
 #include <QHeaderView>
@@ -283,8 +284,153 @@ static void settleNavigationLayout(QTreeWidget* tree, bool changed)
 // past the screen edge (#3345). setWidgetResizable(true) keeps horizontal
 // expansion intact and hides the scrollbar when content already fits — users
 // on wide screens see no visual change.
+// A push button takes the width its text needs, never its row's. Qt's default
+// horizontal policy (Minimum) lets a button grow to fill a grid cell or a
+// stretched row; this turns that default to Fixed on every button of a page,
+// including buttons added later (a KiwiSDR row, a transverter tab), by
+// re-running on each layout request. A button given any other policy, or a
+// fixed width, is left alone.
+class ButtonsFitContent : public QObject {
+public:
+    explicit ButtonsFitContent(QWidget* page) : QObject(page), m_page(page)
+    {
+        fit();
+        page->installEventFilter(this);
+    }
+
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override
+    {
+        if (watched == m_page && event->type() == QEvent::LayoutRequest) {
+            fit();
+        }
+        return QObject::eventFilter(watched, event);
+    }
+
+private:
+    void fit()
+    {
+        fitButtons();
+        // With buttons at their own width, a grid or a row with nothing left
+        // that can grow would spread its spare width between its columns and
+        // push related buttons apart. Give that width to the end instead, so
+        // the contents pack to the left as they read. A layout that can grow
+        // (a field, a slider), or that already has its own stretch, is left
+        // as it was.
+        packLayout(m_page->layout());
+        for (QWidget* child : m_page->findChildren<QWidget*>()) {
+            packLayout(child->layout());
+        }
+    }
+
+    void packLayout(QLayout* layout)
+    {
+        if (!layout || layout->property("rsPacked").toBool()) {
+            return;
+        }
+        for (int i = 0; i < layout->count(); ++i) {
+            packLayout(layout->itemAt(i)->layout());
+        }
+        if (canGrowHorizontally(layout)) {
+            return;
+        }
+        if (auto* grid = qobject_cast<QGridLayout*>(layout)) {
+            for (int c = 0; c < grid->columnCount(); ++c) {
+                if (grid->columnStretch(c) > 0) {
+                    return;
+                }
+            }
+            layout->setProperty("rsPacked", true);
+            // A real spacer, not a stretch on an empty column: QGridLayout
+            // gives no width to a column with nothing in it.
+            grid->addItem(new QSpacerItem(0, 0, QSizePolicy::Expanding, QSizePolicy::Minimum),
+                          0, grid->columnCount());
+        } else if (auto* box = qobject_cast<QBoxLayout*>(layout)) {
+            if (box->direction() != QBoxLayout::LeftToRight) {
+                return;
+            }
+            for (int i = 0; i < box->count(); ++i) {
+                if (box->stretch(i) > 0) {
+                    return;
+                }
+            }
+            layout->setProperty("rsPacked", true);
+            box->addStretch(1);
+        }
+    }
+
+    // Whether anything in `layout` really takes more width: an expanding
+    // widget that is not held to one width (a field given setFixedWidth keeps
+    // its Expanding policy), or an expanding spacer.
+    static bool canGrowHorizontally(QLayout* layout)
+    {
+        for (int i = 0; i < layout->count(); ++i) {
+            QLayoutItem* item = layout->itemAt(i);
+            if (QWidget* w = item->widget()) {
+                if (w->isHidden() || w->maximumWidth() <= w->minimumWidth()) {
+                    continue;
+                }
+                // A plain container (a field with its buttons) grows when
+                // what it holds does.
+                if ((w->sizePolicy().expandingDirections() & Qt::Horizontal)
+                    || (w->layout() && !qobject_cast<QGroupBox*>(w)
+                        && canGrowHorizontally(w->layout()))) {
+                    return true;
+                }
+            } else if (QLayout* inner = item->layout()) {
+                if (canGrowHorizontally(inner)) {
+                    return true;
+                }
+            } else if (item->expandingDirections() & Qt::Horizontal) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    void fitButtons()
+    {
+        for (QPushButton* button : m_page->findChildren<QPushButton*>()) {
+            QSizePolicy policy = button->sizePolicy();
+            if (policy.horizontalPolicy() == QSizePolicy::Minimum) {
+                policy.setHorizontalPolicy(QSizePolicy::Fixed);
+                button->setSizePolicy(policy);
+                // A fixed button in a wider cell would centre; it starts at
+                // the cell's left edge like the field beside it would.
+                if (QWidget* parent = button->parentWidget()) {
+                    alignLeftIfUnset(parent->layout(), button);
+                }
+            }
+        }
+    }
+
+    static bool alignLeftIfUnset(QLayout* layout, QWidget* widget)
+    {
+        if (!layout) {
+            return false;
+        }
+        for (int i = 0; i < layout->count(); ++i) {
+            QLayoutItem* item = layout->itemAt(i);
+            if (item->widget() == widget) {
+                if (!(item->alignment() & Qt::AlignHorizontal_Mask)) {
+                    item->setAlignment(item->alignment() | Qt::AlignLeft);
+                    layout->invalidate();
+                }
+                return true;
+            }
+            if (alignLeftIfUnset(item->layout(), widget)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    QWidget* m_page;
+};
+
 static QWidget* wrapTabInScrollArea(QWidget* content)
 {
+    new ButtonsFitContent(content);
     auto* scroll = new QScrollArea;
     scroll->setWidgetResizable(true);
     scroll->setFrameShape(QFrame::NoFrame);
@@ -504,6 +650,12 @@ static QWidget* makeInfoField(const QString& labelText, QWidget* valueWidget,
     applyLabelStyle(label);
     label->setFixedWidth(labelWidth);
     layout->addWidget(label);
+    if (qobject_cast<QAbstractButton*>(valueWidget) || valueWidget->property("rsChip").isValid()) {
+        // A button or a status chip takes its text's width, at the left.
+        layout->addWidget(valueWidget);
+        layout->addStretch(1);
+        return wrapper;
+    }
     QSizePolicy policy = valueWidget->sizePolicy();
     if (policy.horizontalPolicy() != QSizePolicy::Fixed) {
         policy.setHorizontalPolicy(QSizePolicy::Expanding);
@@ -3135,7 +3287,12 @@ QWidget* RadioSetupDialog::buildPhoneCwTab()
             iamBtn->setText(on ? "Enabled" : "Disabled");
             m_model->transmitModel().setCwIambic(on);
         });
-        grid->addWidget(iamBtn, 0, 1);
+        // Each row's related buttons share one cell, so they sit together
+        // whatever their widths; the second label column starts after them.
+        auto* iambicRow = new QHBoxLayout;
+        iambicRow->setSpacing(6);
+        iambicRow->addWidget(iamBtn);
+        grid->addLayout(iambicRow, 0, 1);
         auto* modeA = mkTogBtn("A", tx.cwIambicMode() == 0);
         auto* modeB = mkTogBtn("B", tx.cwIambicMode() == 1);
         connect(modeA, &QPushButton::clicked, this, [this, modeA, modeB] {
@@ -3146,18 +3303,18 @@ QWidget* RadioSetupDialog::buildPhoneCwTab()
             modeA->setChecked(false); modeB->setChecked(true);
             m_model->transmitModel().setCwIambicMode(1);
         });
-        grid->addWidget(modeA, 0, 2);
-        grid->addWidget(modeB, 0, 3);
+        iambicRow->addWidget(modeA);
+        iambicRow->addWidget(modeB);
 
         // Swap: Dot/Dash button
         auto* swapLbl = new QLabel("Swap:");
         applyLabelStyle(swapLbl);
-        grid->addWidget(swapLbl, 0, 4);
+        grid->addWidget(swapLbl, 0, 2);
         auto* swapBtn = mkTogBtn("Dot/Dash", tx.cwSwapPaddles());
         connect(swapBtn, &QPushButton::toggled, this, [this](bool on) {
             m_model->transmitModel().setCwSwapPaddles(on);
         });
-        grid->addWidget(swapBtn, 0, 5);
+        grid->addWidget(swapBtn, 0, 3);
 
         // Sideband: CWU | CWL
         auto* sbLbl = new QLabel("Sideband:");
@@ -3173,18 +3330,21 @@ QWidget* RadioSetupDialog::buildPhoneCwTab()
             cwuBtn->setChecked(false); cwlBtn->setChecked(true);
             m_model->transmitModel().setCwlEnabled(true);
         });
-        grid->addWidget(cwuBtn, 1, 1);
-        grid->addWidget(cwlBtn, 1, 2);
+        auto* sidebandRow = new QHBoxLayout;
+        sidebandRow->setSpacing(6);
+        sidebandRow->addWidget(cwuBtn);
+        sidebandRow->addWidget(cwlBtn);
+        grid->addLayout(sidebandRow, 1, 1);
 
         // CWX: Sync
         auto* cwxLbl = new QLabel("CWX:");
         applyLabelStyle(cwxLbl);
-        grid->addWidget(cwxLbl, 1, 4);
+        grid->addWidget(cwxLbl, 1, 2);
         auto* syncBtn = mkTogBtn("Sync", tx.syncCwx());
         connect(syncBtn, &QPushButton::toggled, this, [this](bool on) {
             m_model->sendCommand(QString("cw synccwx %1").arg(on ? 1 : 0));
         });
-        grid->addWidget(syncBtn, 1, 5);
+        grid->addWidget(syncBtn, 1, 3);
 
         // CW Decode — independent RX / TX toggles (#2417).  RX keeps the
         // legacy behaviour of decoding the received CW slice; TX decodes
@@ -3194,7 +3354,7 @@ QWidget* RadioSetupDialog::buildPhoneCwTab()
         // dialog close via refreshCwDecodeState().
         auto* decodeLbl = new QLabel("Decode:");
         applyLabelStyle(decodeLbl);
-        grid->addWidget(decodeLbl, 2, 4);
+        grid->addWidget(decodeLbl, 2, 2);
         auto* rxDecodeBtn = mkTogBtn("RX", CwDecodeSettings::rxEnabled());
         auto* txDecodeBtn = mkTogBtn("TX", CwDecodeSettings::txEnabled());
         connect(rxDecodeBtn, &QPushButton::toggled, this, [](bool on) {
@@ -3203,8 +3363,11 @@ QWidget* RadioSetupDialog::buildPhoneCwTab()
         connect(txDecodeBtn, &QPushButton::toggled, this, [](bool on) {
             CwDecodeSettings::setTxEnabled(on);
         });
-        grid->addWidget(rxDecodeBtn, 2, 5);
-        grid->addWidget(txDecodeBtn, 2, 6);
+        auto* decodeRow = new QHBoxLayout;
+        decodeRow->setSpacing(6);
+        decodeRow->addWidget(rxDecodeBtn);
+        decodeRow->addWidget(txDecodeBtn);
+        grid->addLayout(decodeRow, 2, 3);
 
 
 

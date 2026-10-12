@@ -34,6 +34,9 @@
 #include "models/TunerModel.h"
 
 #include <QAccessible>
+#include <QApplication>
+#include <QPainter>
+#include <QStyledItemDelegate>
 #include <QAction>
 #include <QCheckBox>
 #include <QComboBox>
@@ -173,6 +176,72 @@ struct PeripheralDeviceUi {
 };
 
 namespace {
+
+// The device list's line three starts with the connection-source dot. The item
+// carries its source under kSourceRole (-1 while connecting, when there is no
+// dot), and this delegate paints that dot in the source's colour token; the
+// rest of the line keeps the list's text colour.
+constexpr int kSourceRole = Qt::UserRole + 1;
+
+class PeripheralListDelegate : public QStyledItemDelegate {
+public:
+    using QStyledItemDelegate::QStyledItemDelegate;
+
+    void paint(QPainter* painter, const QStyleOptionViewItem& option,
+               const QModelIndex& index) const override
+    {
+        QStyleOptionViewItem opt(option);
+        initStyleOption(&opt, index);
+        const QString text = opt.text;
+        const QVariant source = index.data(kSourceRole);
+        const QString dot = QStringLiteral("● ");
+        // initStyleOption() has turned the item's '\n' breaks into line
+        // separators (U+2028), which is what the style lays out.
+        auto isBreak = [](QChar c) {
+            return c == QLatin1Char('\n') || c == QChar(QChar::LineSeparator);
+        };
+        int lineStart = 0;
+        int lines = 1;
+        for (int i = 0; i < text.size(); ++i) {
+            if (isBreak(text.at(i))) {
+                lineStart = i + 1;
+                ++lines;
+            }
+        }
+        if (!source.isValid() || source.toInt() < 0
+            || text.mid(lineStart, dot.size()) != dot) {
+            QStyledItemDelegate::paint(painter, option, index);
+            return;
+        }
+        // The item as usual with the dot's glyph blanked to a space of the
+        // same advance, then the dot drawn in its colour at that position.
+        QString blanked = text;
+        blanked[lineStart] = QChar(0x2007);   // figure space
+        opt.text = blanked;
+        const QWidget* widget = opt.widget;
+        QStyle* style = widget ? widget->style() : QApplication::style();
+        style->drawControl(QStyle::CE_ItemViewItem, &opt, painter, widget);
+
+        const QRect textRect = style->subElementRect(QStyle::SE_ItemViewItemText, &opt, widget);
+        const QFontMetrics fm(opt.font);
+        const int blockHeight = lines * fm.lineSpacing();
+        int top = textRect.top();
+        if (opt.displayAlignment & Qt::AlignVCenter) {
+            top += (textRect.height() - blockHeight) / 2;
+        }
+        const int margin = style->pixelMetric(QStyle::PM_FocusFrameHMargin, nullptr, widget) + 1;
+        const QPoint at(textRect.left() + margin,
+                        top + (lines - 1) * fm.lineSpacing() + fm.ascent());
+        using PeripheralConnectionSource::Source;
+        const QColor colour = ThemeManager::instance().color(
+            PeripheralConnectionSource::colorToken(static_cast<Source>(source.toInt())));
+        painter->save();
+        painter->setFont(opt.font);
+        painter->setPen(colour);
+        painter->drawText(at, QStringLiteral("●"));
+        painter->restore();
+    }
+};
 
 QString peripheralTr(const char* text)
 {
@@ -1634,6 +1703,7 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
     deviceList->setAccessibleName(tr("Configured peripherals"));
     deviceList->setAlternatingRowColors(true);
     deviceList->setSpacing(3);
+    deviceList->setItemDelegate(new PeripheralListDelegate(deviceList));
     deviceList->setMinimumHeight(200);
     deviceList->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     listLayout->addWidget(deviceList);
@@ -1651,8 +1721,9 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
     removeButton->setAccessibleDescription(tr("Select a configured peripheral to remove it"));
     removeButton->setToolTip(tr("Remove this device and clear its saved connection details"));
     removeButton->setEnabled(false);
-    listActions->addWidget(addButton, 1);
-    listActions->addWidget(removeButton, 1);
+    listActions->addWidget(addButton);
+    listActions->addWidget(removeButton);
+    listActions->addStretch(1);
     listLayout->addLayout(listActions);
     auto* removalNotice = new QLabel(listGroup);
     removalNotice->setObjectName(QStringLiteral("peripheralRemovalNotice"));
@@ -2197,6 +2268,7 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
                     continue;
                 }
                 item->setText(ui.label + QLatin1Char('\n') + address + QLatin1Char('\n') + stateWord);
+                item->setData(kSourceRole, connecting ? -1 : static_cast<int>(ui.state.source));
                 item->setToolTip(address + QLatin1Char('\n') + statusText(ui));
                 item->setData(Qt::AccessibleTextRole,
                               ui.label + QStringLiteral(": ") + address + QStringLiteral(", ") + spokenWord);

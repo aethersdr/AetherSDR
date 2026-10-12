@@ -8,6 +8,8 @@
 #include "core/LpMeterConnection.h"
 #include "core/AppSettings.h"
 #include "core/PeripheralSettings.h"
+#include "core/ThemeManager.h"
+#include "gui/PeripheralConnectionSource.h"
 #include "gui/RadioSetupDialog.h"
 #include "gui/AntennaGeniusApplet.h"
 #include "gui/ShackSwitchApplet.h"
@@ -1809,6 +1811,23 @@ bool checkConnectAutomaticallyGates()
 
 // What Setup shows follows the device's explicit status, never text, and the
 // page is signal-driven (no presentation timer).
+// Pixels of exactly the colour a theme token resolves to, in the list as
+// painted: the connection-source dot is drawn in its token, solid at its core.
+int pixelsOfToken(QWidget* widget, const char* token)
+{
+    const QColor colour = AetherSDR::ThemeManager::instance().color(QString::fromLatin1(token));
+    const QImage image = widget->grab().toImage().convertToFormat(QImage::Format_ARGB32);
+    int n = 0;
+    for (int y = 0; y < image.height(); ++y) {
+        for (int x = 0; x < image.width(); ++x) {
+            if (image.pixel(x, y) == colour.rgb()) {
+                ++n;
+            }
+        }
+    }
+    return n;
+}
+
 bool checkStatusPresentation()
 {
     AppSettings::instance().remove(QStringLiteral("Peripherals"));
@@ -1834,6 +1853,33 @@ bool checkStatusPresentation()
         || list->item(0)->text().contains(QStringLiteral("Needs attention"))) {
         std::fprintf(stderr, "Idle status not shown on the detail page\n");
         return false;
+    }
+    // The dot before the source word follows the connection: OFFLINE red,
+    // RADIO yellow, DIRECT green. Each state is read against the other two.
+    {
+        using PeripheralConnectionSource::Source;
+        struct Expect { Source source; const char* on; const char* off1; const char* off2; };
+        for (const Expect e : {Expect{Source::Offline, "color.accent.danger",
+                                      "color.accent.success", "color.accent.warning"},
+                               Expect{Source::Radio, "color.accent.warning",
+                                      "color.accent.success", "color.accent.danger"},
+                               Expect{Source::Direct, "color.accent.success",
+                                      "color.accent.warning", "color.accent.danger"}}) {
+            // The refresh derives the source from the live connection, which a
+            // bare model has none of: OFFLINE arrives that way, and the other
+            // two are set on the item the refresh writes them to.
+            if (e.source != Source::Offline) {
+                list->item(0)->setData(Qt::UserRole + 1, static_cast<int>(e.source));
+            }
+            QCoreApplication::processEvents();
+            const int on = pixelsOfToken(list, e.on);
+            if (on <= 0 || pixelsOfToken(list, e.off1) != 0 || pixelsOfToken(list, e.off2) != 0) {
+                std::fprintf(stderr, "Source dot not drawn in %s (%d pixels): %s\n",
+                             e.on, on, qPrintable(list->item(0)->text()));
+                return false;
+            }
+        }
+        pokeRefresh(model);
     }
     // A message that happens to start with "Error:" or hold a dash changes nothing
     // by itself; only the explicit attention does.

@@ -303,9 +303,9 @@ void AntennaGeniusApplet::setConnectionSource(bool connected)
     m_sourceLabel->setAccessibleName(text.accessibleName);
     m_sourceLabel->setAccessibleDescription(text.description);
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_sourceLabel,
-        QStringLiteral("QLabel { color: %1; font-size: 9px; }")
-            .arg(connected ? QStringLiteral("{{color.accent.success}}")
-                           : QStringLiteral("{{color.text.disabled}}")));
+        QStringLiteral("QLabel { color: {{%1}}; font-size: 9px; }")
+            .arg(PeripheralConnectionSource::colorToken(
+                connected ? Source::Direct : Source::Offline)));
 }
 
 void AntennaGeniusApplet::setModel(AntennaGeniusModel* model)

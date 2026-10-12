@@ -965,10 +965,11 @@ void AmpApplet::applyTelemetryStyles(qreal scale)
     }
 
     theme.applyStyleSheet(m_sourceLabel, QStringLiteral(
-        "QLabel { color: %1; font-size: %2px; }")
-        .arg(m_directConnected ? QStringLiteral("{{color.accent.success}}")
-             : hasRadioRelay() ? QStringLiteral("{{color.accent.warning}}")
-                                : QStringLiteral("{{color.text.disabled}}"))
+        "QLabel { color: {{%1}}; font-size: %2px; }")
+        .arg(PeripheralConnectionSource::colorToken(
+            m_directConnected ? PeripheralConnectionSource::Source::Direct
+            : hasRadioRelay() ? PeripheralConnectionSource::Source::Radio
+                              : PeripheralConnectionSource::Source::Offline))
         .arg(f ? px(11) : 9));
 
     // Docked, the indicator shares a row with Vdd, both centred. Its smaller

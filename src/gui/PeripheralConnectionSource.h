@@ -53,6 +53,18 @@ inline Text describe(Source source, const QString& device, bool directOnly = fal
     return out;
 }
 
+// The indicator dot's colour token: a direct connection is green, the radio
+// relay yellow, no connection red.
+inline QString colorToken(Source source)
+{
+    switch (source) {
+    case Source::Direct: return QStringLiteral("color.accent.success");
+    case Source::Radio:  return QStringLiteral("color.accent.warning");
+    case Source::Offline: break;
+    }
+    return QStringLiteral("color.accent.danger");
+}
+
 } // namespace PeripheralConnectionSource
 
 // What Setup shows for one peripheral. Carried explicitly: nothing reads the
