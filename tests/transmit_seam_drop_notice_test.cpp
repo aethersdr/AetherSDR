@@ -265,6 +265,21 @@ void icomMicReadbackWindow()
           "after LAN readback, the routed slider dispatches the actual LAN MOD write");
 }
 }
+void txSliceSelectionNotice()
+{
+    Fixture receiveOnly;
+    receiveOnly.backend->caps.canTransmit = false;
+    SliceModel* slice = receiveOnly.radio.slice(0);
+    check(slice != nullptr, "receive-only fixture has a routed slice");
+    if (!slice) { return; }
+    slice->setTxSlice(true);
+    check(receiveOnly.dropped.isEmpty(),
+          "choosing a TX slice on a radio that cannot transmit spends no notice");
+    Fixture transmitting;
+    if (SliceModel* txSlice = transmitting.radio.slice(0)) { txSlice->setTxSlice(true); }
+    check(transmitting.dropped == QStringList{QStringLiteral("tx slice")},
+          "a transmit-capable radio that refuses TX-slice selection still reports it");
+}
 int main(int argc, char** argv)
 {
     TestSettingsProfile profile(QStringLiteral("transmit-control-receipts"));
@@ -279,5 +294,6 @@ int main(int argc, char** argv)
     filterWarningReentrancy();
     cwPitchBackendLifetime();
     icomMicReadbackWindow();
+    txSliceSelectionNotice();
     return failures ? 1 : 0;
 }

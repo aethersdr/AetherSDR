@@ -902,6 +902,7 @@ void SliceModel::setRit(bool on, int hz)
 {
     if (refuseOffThread(__func__)) { return; }
     const auto field = SliceControlRequest::Field::Rit;
+    hz = std::clamp(hz, -kIncrementalTuningMaxHz, kIncrementalTuningMaxHz);
     const auto current = captureControlIntent(field);
     m_ritOn   = on;
     m_ritFreq = hz;
@@ -923,6 +924,7 @@ void SliceModel::setXit(bool on, int hz)
 {
     if (refuseOffThread(__func__)) { return; }
     const auto field = SliceControlRequest::Field::Xit;
+    hz = std::clamp(hz, -kIncrementalTuningMaxHz, kIncrementalTuningMaxHz);
     const auto current = captureControlIntent(field);
     m_xitOn   = on;
     m_xitFreq = hz;

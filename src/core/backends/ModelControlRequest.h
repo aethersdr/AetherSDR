@@ -3,6 +3,7 @@
 #include <QMetaType>
 #include <QString>
 #include <cmath>
+#include <cstdlib>
 #include <variant>
 
 namespace AetherSDR {
@@ -10,6 +11,8 @@ namespace AetherSDR {
 // Desktop requests, not observations or daemon permissions. A field identifies
 // the one register being edited; companion values are for paired host controls.
 struct IncrementalTuning { bool enabled; int hz; };
+// FlexLib Slice.RITFreq/XITFreq accept only this offset range.
+inline constexpr int kIncrementalTuningMaxHz = 99999;
 struct DtcsSetting { int code; bool txReverse; bool rxReverse; };
 struct RepeaterSetting { QString direction; double offsetHz; QString toneMode; double toneHz; };
 struct ProcessorSetting { bool enabled; int level; };
@@ -79,7 +82,7 @@ inline bool SliceControlRequest::valid() const
     switch (field) {
     case Field::Rit: case Field::Xit: {
         const auto* tuning = std::get_if<IncrementalTuning>(&value);
-        return tuning && tuning->hz >= -99999 && tuning->hz <= 99999;
+        return tuning && std::abs(tuning->hz) <= kIncrementalTuningMaxHz;
     }
     case Field::DaxChannel: return integer && *integer >= 0 && *integer <= 8;
     case Field::RttyMark: case Field::RttyShift: case Field::DiglOffset:

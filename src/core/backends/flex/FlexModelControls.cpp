@@ -44,7 +44,7 @@ ReceiveDispatch FlexBackend::requestSliceControl(int sliceId, const SliceControl
     case Field::FmToneMode:
         key = QStringLiteral("fm_tone_mode"); value = std::get<QString>(request.value); break;
     case Field::FmToneValue:
-        key = QStringLiteral("fm_tone_value"); value = QString::number(std::get<double>(request.value), 'g', 12); break;
+        key = QStringLiteral("fm_tone_value"); value = QString::number(std::get<double>(request.value), 'f', 1); break;
     case Field::RepeaterDirection:
         key = QStringLiteral("repeater_offset_dir"); value = std::get<QString>(request.value); break;
     case Field::RepeaterOffset:

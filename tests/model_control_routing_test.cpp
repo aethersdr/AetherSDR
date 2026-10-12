@@ -123,6 +123,8 @@ void sliceEncoding()
         {"setTxAntenna", [](SliceModel& model) { model.setTxAntenna(QStringLiteral("ANT2")); }, {QStringLiteral("slice set 7 txant=ANT2")}},
         {"setRit", [](SliceModel& model) { model.setRit(true, 123); }, {QStringLiteral("slice set 7 rit_on=1 rit_freq=123")}},
         {"setXit", [](SliceModel& model) { model.setXit(true, -321); }, {QStringLiteral("slice set 7 xit_on=1 xit_freq=-321")}},
+        {"setRit clamps to the FlexLib range", [](SliceModel& model) { model.setRit(true, 120000); }, {QStringLiteral("slice set 7 rit_on=1 rit_freq=99999")}},
+        {"setXit clamps to the FlexLib range", [](SliceModel& model) { model.setXit(true, -120000); }, {QStringLiteral("slice set 7 xit_on=1 xit_freq=-99999")}},
         {"setDaxChannel", [](SliceModel& model) { model.setDaxChannel(3); }, {QStringLiteral("slice set 7 dax=3")}},
         {"setRttyMark", [](SliceModel& model) { model.setRttyMark(2100); }, {QStringLiteral("slice set 7 rtty_mark=2100")}},
         {"setRttyShift", [](SliceModel& model) { model.setRttyShift(250); }, {QStringLiteral("slice set 7 rtty_shift=250")}},
@@ -134,6 +136,7 @@ void sliceEncoding()
         {"setPlayOn", [](SliceModel& model) { model.setPlayOn(true); }, {QStringLiteral("slice set 7 play=1")}},
         {"setFmToneMode", [](SliceModel& model) { model.setFmToneMode(QStringLiteral("ctcss_tx")); }, {QStringLiteral("slice set 7 fm_tone_mode=ctcss_tx")}},
         {"setFmToneValue", [](SliceModel& model) { model.setFmToneValue(QStringLiteral("88.5")); }, {QStringLiteral("slice set 7 fm_tone_value=88.5")}},
+        {"setFmToneValue keeps the tenths digit", [](SliceModel& model) { model.setFmToneValue(QStringLiteral("67.0")); }, {QStringLiteral("slice set 7 fm_tone_value=67.0")}},
         {"setRepeaterOffsetDir", [](SliceModel& model) { model.setRepeaterOffsetDir(QStringLiteral("up")); }, {QStringLiteral("slice set 7 repeater_offset_dir=up")}},
         {"setFmRepeaterOffsetFreq", [](SliceModel& model) { model.setFmRepeaterOffsetFreq(0.6); }, {QStringLiteral("slice set 7 fm_repeater_offset_freq=0.600000")}},
         {"setTxOffsetFreq", [](SliceModel& model) { model.setTxOffsetFreq(-0.6); }, {QStringLiteral("slice set 7 tx_offset_freq=-0.600000")}},
@@ -172,6 +175,13 @@ void sliceEncoding()
               QStringLiteral("name\"\ntransmit mox 1")}) == ReceiveDispatch::Unsupported,
           "profile value cannot escape its quoting");
     check(commands.isEmpty(), "invalid requests produce no output");
+    SliceModel clamped(7);
+    QSignalSpy ritChanged(&clamped, &SliceModel::ritChanged);
+    clamped.setRit(true, 120000);
+    clamped.setXit(true, -120000);
+    check(clamped.ritFreq() == 99999 && clamped.xitFreq() == -99999 && ritChanged.size() == 1
+              && ritChanged.at(0).at(1).toInt() == 99999,
+          "an out-of-range RIT/XIT offset is stored and published at its limit");
 }
 
 class ConnectedBackend final : public FlexBackend {

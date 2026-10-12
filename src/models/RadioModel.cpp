@@ -1684,9 +1684,7 @@ void RadioModel::wireBackendReceiverState()
 void RadioModel::teardownBackend()
 {
     m_transmitModel.invalidateControlIntents();
-    for (SliceModel* source : m_slices) {
-        for (quint64& revision : source->m_controlIntentRevisions) { ++revision; }
-    }
+    for (SliceModel* source : m_slices) { source->invalidateControlIntents(); }
     resetTxOperations();
     ++m_backendReceiverGeneration;
     if (m_backend) {
@@ -7811,9 +7809,7 @@ void RadioModel::restoreTuneInhibit()
 void RadioModel::onDisconnected()
 {
     m_transmitModel.invalidateControlIntents();
-    for (SliceModel* source : m_slices) {
-        for (quint64& revision : source->m_controlIntentRevisions) { ++revision; }
-    }
+    for (SliceModel* source : m_slices) { source->invalidateControlIntents(); }
     resetTxOperations();
     acknowledgeTxTransportTeardown(m_txOperation);
     expirePendingCallbacks(QStringLiteral("the radio connection was disconnected"));
@@ -9853,8 +9849,8 @@ void RadioModel::reportReceiveDispatch(ReceiveDispatch result, const QString& op
                                        bool operatorOrigin)
 {
     if (result == ReceiveDispatch::Unsupported) {
-        qCWarning(lcProtocol).noquote() << "Backend refused receive operation" << operation
-            << (operatorOrigin ? QStringLiteral("(operator)") : QStringLiteral("(compatibility origin)"));
+        qCWarning(lcProtocol).noquote() << "Backend refused operation" << operation
+            << (operatorOrigin ? QStringLiteral("(announced)") : QStringLiteral("(not announced)"));
         // The notice answers a control the operator just moved. A Kiwi
         // suppression mute or a profile restore is not one, and must not spend
         // the once-per-session notice on a refusal nobody asked for.
@@ -9945,12 +9941,16 @@ void RadioModel::dispatchSliceControl(const SliceControlRequest& request)
     if (!source) { return; }
     const QPointer<RadioModel> alive(this);
     const quint64 generation = m_backendReceiverGeneration;
+    // A radio that cannot transmit has no TX slice to move, so choosing one is
+    // refused without spending the once-per-session unsupported-control notice.
+    const bool noticeEligible = request.origin == SliceControlRequest::Origin::Operator
+        && !(request.field == SliceControlRequest::Field::TxSlice
+             && !backendCapabilities().canTransmit);
     const ReceiveDispatch result = request.valid()
         ? m_backend->requestSliceControl(source->sliceId(), request)
         : ReceiveDispatch::Unsupported;
     if (!alive || m_backendReceiverGeneration != generation) { return; }
-    reportReceiveDispatch(result, request.label(),
-                          request.origin == SliceControlRequest::Origin::Operator);
+    reportReceiveDispatch(result, request.label(), noticeEligible);
 }
 
 void RadioModel::dispatchTransmitControl(const TransmitControlRequest& request)

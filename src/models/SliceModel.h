@@ -586,6 +586,10 @@ private:
             return alive && alive->m_controlIntentRevisions[static_cast<size_t>(field)] == revision;
         };
     }
+    void invalidateControlIntents()
+    {
+        for (quint64& revision : m_controlIntentRevisions) { ++revision; }
+    }
     friend class RadioModel;
     bool refuseOffThread(const char* setter) const;
     void setControlPolicy(ReceiveControlPolicy policy) { m_controlPolicy = policy; }
