@@ -755,8 +755,9 @@ TOOLS = [
             "widget verbs (hover, tooltip, hitTest, clickAt, doubleClick, "
             "doubleClickAt, rightClick, "
             "contextMenu, close, scrollTo, drag, showMenu), the "
-            "transmit-keying verbs (key, txtest, atu, cwx, testtone, "
-            "txwaterfall — gated by AETHER_AUTOMATION_ALLOW_TX), and the "
+            "transmit-keying verbs (key, txtest, atu, cwx, testtone — "
+            "gated by AETHER_AUTOMATION_ALLOW_TX), the non-keying "
+            "txwaterfall display toggle, and the "
             "niche ones (dss deterministic spectrum injection, resize, "
             "scale, layout, panmessage, tci, station, qrz). Full verb "
             "reference: src/core/AutomationServer.h header comment."),
