@@ -52,7 +52,7 @@ The DVK panel and the [CWX Panel](./cwx-panel.md) share the same space — openi
 - The progress bar fills cyan.
 - The status line reads `Previewing · slot 3 · 0.4s of 4.2s`.
 
-Only one operation runs at a time. STOP is enabled only while something is running, PLAY and PREV are disabled on an empty slot, and the start controls stay disabled while a recording, playback, preview or WAV transfer is in progress. A refused operation shows in the status line as, for example, `Play failed (slot 3): DVK requires an active SmartSDR+ subscription`.
+Only one operation runs at a time. STOP is enabled only while something is running, PLAY and PREV are disabled on an empty slot, and while a recording, playback, preview or WAV transfer is in progress the other start controls stay disabled. The button of the running recording, playback or preview stays enabled, so clicking it again stops it. A refused operation shows in the status line as, for example, `Play failed (slot 3): DVK requires an active SmartSDR+ subscription`.
 
 ### Managing slots
 

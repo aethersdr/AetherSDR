@@ -40,7 +40,7 @@ Select **RADE** from the mode dropdown in either the RX applet or the VFO widget
 
 RADE stays active across PTT cycles. It switches itself off if the radio or another client changes the slice to a mode other than DIGU/DIGL. If the RADE engine fails to start, the slice's previous mode, filter and TX assignment are restored.
 
-You can also start RADE from **View → FreeDV Reporter...**: double-clicking a station tunes to it and switches the slice to RADE.
+You can also start RADE from **Tools → FreeDV Reporter...**: double-clicking a station tunes to it and switches the slice to RADE.
 
 A MIDI controller or [Ulanzi Dial](./ulanzi-dial.md) button mapped to **RADE Modem** turns RADE on and off on the active slice. Turning it off leaves the slice in DIGU/DIGL. See [MIDI Controller Mapping](./midi-controller-mapping.md).
 
@@ -71,7 +71,7 @@ At the end of each over, RADE sends an **end-of-over (EOO)** frame that carries 
 FreeDV Reporter is the FreeDV community's live view of who is on the air.
 
 - Turn on reporting in **SpotHub → FreeDV** with **Enable FreeDV Reporter reporting when RADE is active**, and set **Callsign** (or **Use radio**), **Grid Square** (or **Use GPS**) and **Station Msg**.
-- **View → FreeDV Reporter...** opens the reporter panel. Its **Message** field is the same setting as SpotHub's **Station Msg** — the two stay in sync, and changes go out live. The field is disabled while reporting is off.
+- **Tools → FreeDV Reporter...** opens the reporter panel. Its **Message** field is the same setting as SpotHub's **Station Msg** — the two stay in sync, and changes go out live. The field is disabled while reporting is off.
 - Double-click a station in the panel to tune to it and force RADE.
 
 See [SpotHub](./spothub.md) for the FreeDV spot feed.

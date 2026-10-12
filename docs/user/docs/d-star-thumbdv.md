@@ -51,7 +51,7 @@ Only one digital-voice slice can be active at a time.
 
 ### The D-STAR tab in AetherModem
 
-Open **View → AetherModem...** and select the **D-STAR** tab. The header shows the service state, which slice is in DSTR (or **No DSTR slice**), and a **Start / Stop** button for the service.
+Open **Tools → AetherModem...** and select the **D-STAR** tab. The header shows the service state, which slice is in DSTR (or **No DSTR slice**), and a **Start / Stop** button for the service.
 
 **Station & Route**
 

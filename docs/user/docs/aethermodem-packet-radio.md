@@ -18,7 +18,7 @@ AetherModem works on FlexRadio, on the [Hermes-Lite 2](./hermes-lite-2.md) and o
 
 ## Setup
 
-Open it from **View → AetherModem...**
+Open it from **Tools → AetherModem...**
 
 ### Window layout
 

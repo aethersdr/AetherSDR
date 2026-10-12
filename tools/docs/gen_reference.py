@@ -1233,11 +1233,11 @@ def parse_tci():
 
 def render_tci(commands, session, sources) -> str:
     intro = [
-        "These are the command names the TCI server recognises from a client. "
-        "Names are case-insensitive. A command the server does not recognise "
-        "is ignored, as the TCI specification requires. Recognising a command "
+        "These are the command names the TCI server recognizes from a client. "
+        "Names are case-insensitive. A command the server does not recognize "
+        "is ignored, as the TCI specification requires. Recognizing a command "
         "does not mean every radio supports every value of it; see the TCI "
-        "Server page for behaviour.",
+        "Server page for behavior.",
     ]
     std = [c for c, ext in commands if not ext]
     ext = [c for c, ext in commands if ext]
@@ -1252,7 +1252,7 @@ def render_tci(commands, session, sources) -> str:
     body += table(["Command"], [[code(c)] for c in ext]) + [""]
     return page(
         "TCI Commands",
-        "The TCI command names AetherSDR's TCI server recognises, generated "
+        "The TCI command names AetherSDR's TCI server recognizes, generated "
         "from the source.",
         sources, intro, body, 8,
     )
@@ -1276,7 +1276,7 @@ PAGES = [
     ("log-categories.md", "Log Categories",
      "logging categories for support logs"),
     ("tci-commands.md", "TCI Commands",
-     "command names the TCI server recognises"),
+     "command names the TCI server recognizes"),
 ]
 
 

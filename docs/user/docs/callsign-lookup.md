@@ -37,7 +37,7 @@ Looked-up callsigns are cached for **7 days**, together with station photos, so 
 
 ### The Callsign Lookup window
 
-Open it from **View → Callsign Lookup...** or press **Ctrl+Shift+L**.
+Open it from **Tools → Callsign Lookup...** or press **Ctrl+Shift+L**.
 
 Type a callsign and press **Lookup**. The card shows the callsign, license class, name, location, grid, county, QSL methods (LoTW, eQSL, QSL) and the distance and bearing from your station, plus the station photo. Click the callsign to open its QRZ.com page.
 

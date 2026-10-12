@@ -65,7 +65,7 @@ The decoder follows the **selected slice**, independently of speaker volume or m
 
 ### Reading the confidence colors
 
-Received characters are color-coded by decode confidence (see [Confidence colors](#confidence-colors)). Green text can be trusted. Yellow is usually correct. Orange and red should be read sceptically — they often appear during QSB, QRM, or with operators who have irregular spacing.
+Received characters are color-coded by decode confidence (see [Confidence colors](#confidence-colors)). Green text can be trusted. Yellow is usually correct. Orange and red should be read skeptically — they often appear during QSB, QRM, or with operators who have irregular spacing.
 
 ### Callsign lookup
 
