@@ -50,7 +50,7 @@ To reach it across a VPN or another subnet, use **Connect by IP** with **Radio t
 
 The panadapter is not dBm-calibrated: its levels are relative.
 
-> **Upgrading from an older version:** **AGC-T** covers −20 to 120 dB, so a given slider position gives more gain than before (at 100, 120 dB instead of 60 dB). Band-stack bookmarks saved earlier replay their slider position on this scale, so they come back louder.
+> **Upgrading from an older version:** **AGC-T** covers −20 to 120 dB, so a given slider position gives more gain than before (at 100, 120 dB instead of 60 dB). Band-stack bookmarks saved earlier replay their slider position on this scale, so they come back louder. Lower **AGC-T** on each one and save it again.
 
 ## Droop Correction
 

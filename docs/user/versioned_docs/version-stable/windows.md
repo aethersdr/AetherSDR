@@ -106,7 +106,7 @@ A firewall rule is blocking AetherSDR. A dismissed firewall prompt can leave a b
 1. Open **Tools → Network Diagnostics...** and choose **Windows Firewall**.
 2. If it reports a blocking or missing rule, click **Fix…** and accept the Windows permission prompt.
 3. If it names another security product, allow AetherSDR in that product.
-4. A failed request to an external service is logged once per session under **External Services** (`aether.network`), with the error. See [Support and Logging](./support-and-logging.md).
+4. A failed request to an external service is logged once per service, host, error and HTTP status under **External Services** (`aether.network`), with the error. See [Support and Logging](./support-and-logging.md).
 
 ### WSJT-X or another digital-mode program gets no audio
 
