@@ -118,7 +118,7 @@ Connects to the FreeDV QSO Reporter (`qso.freedv.org`) and spots active FreeDV s
 - **Station Reporting** group:
   - **Enable FreeDV Reporter reporting when RADE is active** — reports your own station while you run RADE. Reporting needs a callsign and a grid square, because FreeDV Reporter is a public map.
   - **Callsign** (with **Use radio**), **Grid Square** (with **Use GPS**)
-  - **Station Msg:** — the same message as the **Message** field in **View → FreeDV Reporter...**; the two stay in sync.
+  - **Station Msg:** — the same message as the **Message** field in **Tools → FreeDV Reporter...**; the two stay in sync.
 
 See also [RADE Digital Voice](./rade-digital-voice.md).
 
