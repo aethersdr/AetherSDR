@@ -341,6 +341,24 @@ private:
                 }
             }
             layout->setProperty("rsPacked", true);
+            // Side-by-side caption: value pairs share the width: each value
+            // column takes an equal part of it, so every pair starts its own
+            // column across the page and a caption stays beside its value.
+            if (isPairGrid(grid)) {
+                for (int c = 1; c < grid->columnCount(); c += 2) {
+                    grid->setColumnStretch(c, 1);
+                }
+                // A value keeps its own width at the left of its wider cell.
+                for (int i = 0; i < grid->count(); ++i) {
+                    QLayoutItem* item = grid->itemAt(i);
+                    if (!qobject_cast<QLabel*>(item->widget())
+                        && !(item->alignment() & Qt::AlignHorizontal_Mask)) {
+                        item->setAlignment(item->alignment() | Qt::AlignLeft);
+                    }
+                }
+                grid->invalidate();
+                return;
+            }
             // A real spacer, not a stretch on an empty column: QGridLayout
             // gives no width to a column with nothing in it.
             grid->addItem(new QSpacerItem(0, 0, QSizePolicy::Expanding, QSizePolicy::Minimum),
@@ -357,6 +375,26 @@ private:
             layout->setProperty("rsPacked", true);
             box->addStretch(1);
         }
+    }
+
+    // Two or more caption: value pairs side by side: an even number of
+    // columns, at least four, and at the start of every even column a caption
+    // (a QLabel), nothing, or a value spanning the caption's place as well.
+    static bool isPairGrid(QGridLayout* grid)
+    {
+        const int columns = grid->columnCount();
+        if (columns < 4 || columns % 2 != 0) {
+            return false;
+        }
+        for (int i = 0; i < grid->count(); ++i) {
+            int row = 0, column = 0, rowSpan = 0, columnSpan = 0;
+            grid->getItemPosition(i, &row, &column, &rowSpan, &columnSpan);
+            QLayoutItem* item = grid->itemAt(i);
+            if (column % 2 == 0 && columnSpan < 2 && !qobject_cast<QLabel*>(item->widget())) {
+                return false;
+            }
+        }
+        return true;
     }
 
     // Whether anything in `layout` really takes more width: an expanding
@@ -8019,13 +8057,19 @@ QWidget* RadioSetupDialog::buildSerialTab()
         auto* customEdit = new QLineEdit;
         customEdit->setPlaceholderText("/dev/ttyr0");
         bool isCustom = populateSerialPortCombo(portCombo, customEdit, savedPort);
-        grid->addWidget(portCombo, 0, 1);
+        // Refresh sits beside the port it rescans. The row keeps its own
+        // width (rsPacked: no trailing stretch), so the grid still spreads
+        // its caption: value pairs.
+        auto* portRow = new QHBoxLayout;
+        portRow->setProperty("rsPacked", true);
+        portRow->addWidget(portCombo);
+        grid->addLayout(portRow, 0, 1, 1, 3);
 
         auto* refreshBtn = new QPushButton("Refresh");
         // Let native style (notably macOS) drive the button height; a fixed
         // 24 px clipped the macOS button bezel and label baseline.
         refreshBtn->setMinimumHeight(24);
-        grid->addWidget(refreshBtn, 0, 3);
+        portRow->addWidget(refreshBtn);
 
         // Custom port row — hidden unless "Custom..." selected or saved port is custom
         auto* customLabel = new QLabel("Path:");
