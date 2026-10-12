@@ -4,6 +4,8 @@
 #include "models/RadioModel.h"
 
 #include <QAction>
+#include <QEvent>
+#include <QSignalBlocker>
 #include <QStringList>
 #include <QVariant>
 
@@ -45,7 +47,7 @@ void applyText(QObject* control, const char* key, const QString& current,
     const bool fromHold = held && current == hold.at(1);
     QString own = fromHold ? hold.at(0) : current;
     const QString want = wanted(own);
-    if (!fromHold && ownOf && !want.isEmpty()) {
+    if (!fromHold && ownOf && (held || !want.isEmpty())) {
         own = ownOf();
     }
     if (want.isEmpty()) {
@@ -78,17 +80,39 @@ QString withInactivePhrase(const QString& own)
     return base + (closed ? QStringLiteral(" ") : QStringLiteral(". ")) + phrase;
 }
 
-// The tooltip an action set itself; null when it reports its text instead, so
-// that releasing the hold makes it follow its text again.
+class ActionChangeProbe final : public QObject {
+public:
+    bool changed() const { return m_changed; }
+
+protected:
+    bool eventFilter(QObject*, QEvent* event) override
+    {
+        if (event->type() == QEvent::ActionChanged) {
+            m_changed = true;
+            return true;
+        }
+        return false;
+    }
+
+private:
+    bool m_changed = false;
+};
+
+// Clearing an explicit tooltip sends ActionChanged even when it matches the
+// text-derived default. Suppress the probe's events and signals so consumers
+// see only the registry's final text, including when signals were already blocked.
 QString explicitToolTip(QAction* action)
 {
     const QString shown = action->toolTip();
+    const QSignalBlocker blocker(action);
+    ActionChangeProbe probe;
+    action->installEventFilter(&probe);
     action->setToolTip(QString());
-    if (action->toolTip() == shown) {
-        return QString();
+    if (probe.changed()) {
+        action->setToolTip(shown);
+        return shown;
     }
-    action->setToolTip(shown);
-    return shown;
+    return QString();
 }
 
 constexpr char kToolTipHold[] = "aetherAvailabilityToolTip";

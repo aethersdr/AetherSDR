@@ -30,6 +30,8 @@
 #include <QApplication>
 #include <QLabel>
 #include <QPushButton>
+#include <QSignalBlocker>
+#include <QSignalSpy>
 #include <QLineEdit>
 #include <QImage>
 #include <QWidget>
@@ -405,6 +407,60 @@ int main(int argc, char** argv)
         renamed.setText(QStringLiteral("&Go"));
         check(renamed.toolTip() == QStringLiteral("Go"),
               "and it keeps following its text afterwards");
+
+        QAction explicitMatching(QStringLiteral("&Tune"));
+        explicitMatching.setToolTip(QStringLiteral("Tune"));
+        registry.registerAction(&explicitMatching, reason, when);
+        supported = false;
+        registry.refreshEngaged();
+        explicitMatching.setText(QStringLiteral("&Stop"));
+        supported = true;
+        registry.refreshEngaged();
+        check(explicitMatching.toolTip() == QStringLiteral("Tune"),
+              "an explicit tooltip equal to the original label stays explicit");
+        explicitMatching.setText(QStringLiteral("&Go"));
+        check(explicitMatching.toolTip() == QStringLiteral("Tune"),
+              "the restored explicit tooltip does not follow later renames");
+
+        QAction cleared(QStringLiteral("&Tune"));
+        registry.registerAction(&cleared, reason, when);
+        supported = false;
+        registry.refreshEngaged();
+        cleared.setToolTip(QString());
+        cleared.setText(QStringLiteral("&Stop"));
+        supported = true;
+        registry.refreshEngaged();
+        cleared.setText(QStringLiteral("&Go"));
+        check(cleared.toolTip() == QStringLiteral("Go"),
+              "clearing a held tooltip releases to the live text-derived default");
+
+        QAction blockedExplicit(QStringLiteral("&Tune"));
+        blockedExplicit.setToolTip(QStringLiteral("Tune"));
+        registry.registerAction(&blockedExplicit, reason, when);
+        {
+            const QSignalBlocker blocker(&blockedExplicit);
+            supported = false;
+            registry.refreshEngaged();
+            blockedExplicit.setText(QStringLiteral("&Stop"));
+            supported = true;
+            registry.refreshEngaged();
+            check(blockedExplicit.signalsBlocked()
+                      && blockedExplicit.toolTip() == QStringLiteral("Tune"),
+                  "tooltip ownership and signal blocking survive the probe");
+        }
+
+        QAction quietProbe(QStringLiteral("&Tune"));
+        quietProbe.setToolTip(QStringLiteral("Tune"));
+        // Use the same text as the reason so only enabled/status changes notify.
+        ControlAvailabilityRegistry quietRegistry(model);
+        quietRegistry.registerAction(&quietProbe, QStringLiteral("Tune"), when);
+        QSignalSpy changes(&quietProbe, &QAction::changed);
+        supported = false;
+        quietRegistry.refreshEngaged();
+        check(changes.count() == 2,
+              "probing tooltip ownership emits no transient changed signals");
+        supported = true;
+        quietRegistry.refreshEngaged();
 
         // An empty reason is no reason: the own texts stay.
         QPushButton blank(QStringLiteral("Blank"));
