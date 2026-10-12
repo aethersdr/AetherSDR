@@ -261,6 +261,15 @@ Onset analyseOnset(const char* what, const std::vector<std::complex<float>>& iq,
         steady += std::abs(iq[n]);
     }
     steady /= static_cast<double>(iq.size() - settledFrom);
+    // A silent settled tail reaches every level at the first sample and would
+    // read as a 0 ms onset: no signal is no onset.
+    if (steady == 0.0) {
+        o.halfMs = 1e9;
+        o.leadMs = 1e9;
+        o.envDb.fill(-400.0);
+        std::fprintf(stderr, "%s: the settled level is zero; no onset to read\n", what);
+        return o;
+    }
     const auto firstAbove = [&](double dbRel) {
         const double level = steady * std::pow(10.0, dbRel / 20.0);
         for (std::size_t n = t0; n < iq.size(); ++n) {
@@ -374,6 +383,13 @@ void checkInjectedCaptures()
               ("level never reached" + at + ": every envelope read is the floor").c_str());
         check(!keyUpHalfOk(n) && !keyUpRiseOk(n) && !midHalfOk(n) && !midLeadOk(n),
               ("level never reached" + at + ": every onset bound fails").c_str());
+
+        const std::vector<std::complex<float>> silent(readable);
+        const Onset z = analyseOnset(("injected, silent" + at).c_str(), silent, t0);
+        check(!z.tooShort && z.halfMs >= 1e9 && z.leadMs >= 1e9,
+              ("silent" + at + ": halfMs and leadMs are the sentinel").c_str());
+        check(!keyUpHalfOk(z) && !keyUpRiseOk(z) && !midHalfOk(z) && !midLeadOk(z),
+              ("silent" + at + ": every onset bound fails").c_str());
 
         const std::vector<std::complex<float>> brief(readable - 1, on);
         const Onset b = analyseOnset(("injected, too short" + at).c_str(), brief, t0);
