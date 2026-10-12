@@ -3770,6 +3770,7 @@ set_tests_properties(radio_setup_headphone_output_gate_test PROPERTIES
 # sends the wire text everywhere else. Real backends, never connected; no socket.
 add_executable(radio_setup_show_tx_waterfall_test
     tests/radio_setup_show_tx_waterfall_test.cpp
+    src/gui/CanonWindow.cpp
     src/gui/DragValuePopup.cpp
     src/gui/RadioSetupDialog.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
