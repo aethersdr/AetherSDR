@@ -97,6 +97,7 @@ a token for a role it does not name.
 |---|---|
 | **Error / fault / danger / destructive action** | `color.accent.danger` (foreground); `color.button.danger.*.disabled` for a destructive button's disabled state — enabled-state button colours are not tokenised yet, so an enabled destructive button takes its colour from `color.accent.danger` |
 | **Warning / caution / approaching a limit** | `color.accent.warning` (foreground); `color.background.warning` (panel tint); `color.toggle.warning.*` (checked warning toggles) |
+| **A link that is down, not failed (a peripheral OFFLINE)** | `color.accent.offline` — orange, apart from the warning amber and from red, which reads as transmit |
 | **Success / OK / enabled-and-healthy** | `color.accent.success` (foreground); `color.background.success` (panel tint); `color.toggle.success.*` (checked success toggles) |
 | **Notification / message / attention ping** | `color.highlight.message`, with `color.highlight.fg` for text drawn on top |
 | **Transmit-active** | `color.background.tx` + `color.border.tx` (panel), `color.highlight.tx` (marker), `color.slice.tx` (slice flag), `color.tx.mox.*` (MOX button) |

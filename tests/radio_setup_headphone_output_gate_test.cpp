@@ -373,7 +373,7 @@ private slots:
                 else if (diff == 0)
                     failures << where + QStringLiteral(": dimmed renders as live");
                 // The window's canon sheet paints a disabled label, value and
-                // Mute in the unavailable token: its colour is in the render.
+                // Mute in the unavailable token: its color is in the render.
                 if (pixelsOfColour(dimmed, QColor(unavailable)) <= 0)
                     failures << where + QStringLiteral(": not the unavailable token ")
                                     + unavailable;

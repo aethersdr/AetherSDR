@@ -28,8 +28,8 @@
 // colour back rather than only inspecting the freshly built dialog.
 //
 // Radio Setup is now a canon window: a value label carries the Value tone
-// (`rsTone`) and the window's one sheet colours it with color.canon.ink, so
-// the colour is read back from the label's polished palette, not from a sheet
+// (`rsTone`) and the window's one sheet colors it with color.canon.ink, so
+// the color is read back from the label's polished palette, not from a sheet
 // of its own (it has none).
 //
 // No hardware and no transport: the model is constructed bare and never
@@ -120,7 +120,7 @@ bool isValueLabel(const QLabel* label)
     return label->property("rsTone").toByteArray() == "value";
 }
 
-// The colour the window's sheet gave the label, as polished into its palette.
+// The color the window's sheet gave the label, as polished into its palette.
 QColor renderedColour(QLabel* label)
 {
     label->ensurePolished();
@@ -533,7 +533,7 @@ private slots:
 
         // Under Default Dark every one of them carries the token's value, and
         // takes it from the window's sheet: no label has a sheet of its own
-        // that could pin a colour against the switch below.
+        // that could pin a color against the switch below.
         for (QLabel* l : values) {
             QVERIFY2(renderedColour(l) == dark.ink,
                      qPrintable(QStringLiteral("expected %1 under %2: %3")

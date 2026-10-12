@@ -36,6 +36,7 @@
 #include <QAccessible>
 #include <QApplication>
 #include <QPainter>
+#include <QRegion>
 #include <QStyledItemDelegate>
 #include <QAction>
 #include <QCheckBox>
@@ -179,8 +180,8 @@ namespace {
 
 // The device list's line three starts with the connection-source dot. The item
 // carries its source under kSourceRole (-1 while connecting, when there is no
-// dot), and this delegate paints that dot in the source's colour token; the
-// rest of the line keeps the list's text colour.
+// dot), and this delegate paints that dot in the source's color token; the
+// rest of the line keeps the list's text color.
 constexpr int kSourceRole = Qt::UserRole + 1;
 
 class PeripheralListDelegate : public QStyledItemDelegate {
@@ -213,15 +214,12 @@ public:
             QStyledItemDelegate::paint(painter, option, index);
             return;
         }
-        // The item as usual with the dot's glyph blanked to a space of the
-        // same advance, then the dot drawn in its colour at that position.
-        QString blanked = text;
-        blanked[lineStart] = QChar(0x2007);   // figure space
-        opt.text = blanked;
+        // The item as usual, except in the dot's own cell, which keeps only
+        // the item's fill and selection; the dot is drawn there in its color.
+        // Each pixel is painted once, so a translucent selection is not
+        // blended twice.
         const QWidget* widget = opt.widget;
         QStyle* style = widget ? widget->style() : QApplication::style();
-        style->drawControl(QStyle::CE_ItemViewItem, &opt, painter, widget);
-
         const QRect textRect = style->subElementRect(QStyle::SE_ItemViewItemText, &opt, widget);
         const QFontMetrics fm(opt.font);
         const int blockHeight = lines * fm.lineSpacing();
@@ -232,12 +230,27 @@ public:
         const int margin = style->pixelMetric(QStyle::PM_FocusFrameHMargin, nullptr, widget) + 1;
         const QPoint at(textRect.left() + margin,
                         top + (lines - 1) * fm.lineSpacing() + fm.ascent());
+        const QRegion dotCell(at.x(), at.y() - fm.ascent(),
+                              fm.horizontalAdvance(dot.left(1)), fm.height());
+
+        painter->save();
+        painter->setClipRegion(QRegion(opt.rect).subtracted(dotCell), Qt::IntersectClip);
+        style->drawControl(QStyle::CE_ItemViewItem, &opt, painter, widget);
+        painter->restore();
+
+        QStyleOptionViewItem ground = opt;
+        ground.text.clear();
+        painter->save();
+        painter->setClipRegion(dotCell, Qt::IntersectClip);
+        style->drawControl(QStyle::CE_ItemViewItem, &ground, painter, widget);
+        painter->restore();
+
         using PeripheralConnectionSource::Source;
-        const QColor colour = ThemeManager::instance().color(
+        const QColor color = ThemeManager::instance().color(
             PeripheralConnectionSource::colorToken(static_cast<Source>(source.toInt())));
         painter->save();
         painter->setFont(opt.font);
-        painter->setPen(colour);
+        painter->setPen(color);
         painter->drawText(at, QStringLiteral("●"));
         painter->restore();
     }
@@ -667,6 +680,18 @@ void RadioSetupDialog::editPeripheralStatusForTest(
     if (PeripheralDeviceUi* ui = peripheralDevice(id)) {
         edit(ui->state);
     }
+}
+
+RadioSetupDialog::PeripheralLinkProbes RadioSetupDialog::swapPeripheralLinkForTest(
+    const QString& id, PeripheralLinkProbes probes)
+{
+    PeripheralDeviceUi* ui = peripheralDevice(id);
+    if (!ui) {
+        return probes;
+    }
+    std::swap(ui->isConnected, probes.isConnected);
+    std::swap(ui->hasRadioRelay, probes.hasRadioRelay);
+    return probes;
 }
 
 void RadioSetupDialog::buildAuthNetworkDevice(PeripheralDeviceUi& ui, QWidget* stackParent,

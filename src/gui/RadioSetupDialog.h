@@ -120,6 +120,14 @@ public:
     PeripheralDeviceStatus peripheralStatusForTest(const QString& id) const;
     void editPeripheralStatusForTest(const QString& id,
                                      const std::function<void(PeripheralDeviceStatus&)>& edit);
+    // Test seam: replaces a peripheral's link probes (connected directly,
+    // relayed by the radio) and returns the ones it had, so the next refresh
+    // derives the source as it would from a live link.
+    struct PeripheralLinkProbes {
+        std::function<bool()> isConnected;
+        std::function<bool()> hasRadioRelay;
+    };
+    PeripheralLinkProbes swapPeripheralLinkForTest(const QString& id, PeripheralLinkProbes probes);
     static void setRemovalConfirmationHookForTest(
         std::function<bool(const QString& label, const QString& text)> hook);
 

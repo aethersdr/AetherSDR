@@ -41,7 +41,7 @@ coming from:
 |---|---|
 | `● DIRECT` | Connected directly to the device (green dot) |
 | `● RADIO` | Not connected directly, but the radio relays the device (TGXL and PGXL only; yellow dot) |
-| `● OFFLINE` | No connection (red dot) |
+| `● OFFLINE` | No connection (orange dot) |
 | `Connecting…` | A connection attempt is in progress |
 
 The TGXL, PGXL and Antenna Genius applets use the same words. A device that

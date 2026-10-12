@@ -18,7 +18,7 @@ using with an indicator at the end of its readout row:
 |---|---|
 | `● DIRECT` | A direct TCP connection to the tuner on port 9010 (green) |
 | `● RADIO` | Through the FlexRadio, which relays the tuner's status and commands (yellow) |
-| `● OFFLINE` | Neither is available (red) |
+| `● OFFLINE` | Neither is available (orange) |
 
 When a TGXL is connected to your FlexRadio, the radio reports its address and
 AetherSDR opens the direct connection automatically. For a tuner the radio

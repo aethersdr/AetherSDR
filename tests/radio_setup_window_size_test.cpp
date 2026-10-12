@@ -5,7 +5,8 @@
 //      720 up;
 //   2. a resize asking for another width keeps 960 and takes the height;
 //   3. a geometry saved at another width (before the width was fixed) is
-//      restored at 960, with its height.
+//      restored at 960, with its height, in both saved forms: "x,y,w,h" and
+//      the base64 saveGeometry() blob a PersistentDialog wrote.
 //
 // No hardware and no transport: a bare RadioModel, never connected.
 
@@ -61,6 +62,34 @@ private slots:
         // CONTROL: the restore ran (the saved height arrived), so the width
         // below is the clamp, not a restore that never happened.
         QTRY_COMPARE(dialog.height(), 850);
+        QCOMPARE(dialog.width(), 960);
+        dialog.hide();
+        settings.remove(QLatin1String(kGeometryKey));
+    }
+
+    void aWiderLegacyBlobRestoresAt960()
+    {
+        auto& settings = AppSettings::instance();
+        // What the PersistentDialog saved before the move: saveGeometry() as
+        // base64, here from a free-width window at 1400x750. (restoreGeometry()
+        // fits a blob to the screen, so the height is one the offscreen
+        // screen holds.)
+        QByteArray blob;
+        {
+            QWidget wide;
+            wide.setGeometry(100, 100, 1400, 750);
+            wide.show();
+            QVERIFY(QTest::qWaitForWindowExposed(&wide));
+            QCOMPARE(wide.width(), 1400);   // CONTROL: the blob is wider than 960
+            blob = wide.saveGeometry();
+        }
+        settings.setValue(QLatin1String(kGeometryKey), QString::fromLatin1(blob.toBase64()));
+        RadioModel model;
+        RadioSetupDialog dialog(&model);
+        dialog.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&dialog));
+        // CONTROL: the blob was applied (its height arrived).
+        QTRY_COMPARE(dialog.height(), 750);
         QCOMPARE(dialog.width(), 960);
         dialog.hide();
         settings.remove(QLatin1String(kGeometryKey));

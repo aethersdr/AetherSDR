@@ -4,13 +4,13 @@
 // color.canon.* tokens, re-applied on themeChanged (applyCanonSheet), and a
 // caption is a QLabel with the Caption tone (`rsTone`) and no sheet of its
 // own. A widget that kept its own sheet — a literal, or a token template that
-// pins a colour — would override the window's and could survive View ▸ Theme
+// pins a color — would override the window's and could survive View ▸ Theme
 // unchanged, which is the defect: under Default Light the captions once
 // rendered Default Dark's text on a light ground, and the line edits kept a
 // near-black fill.
 //
 // THE SWITCH IS THE ONLY DISCRIMINATOR. A freshly built dialog under Default
-// Dark looks right whether or not its colours can move, so every colour here is
+// Dark looks right whether or not its colors can move, so every color here is
 // read back from the polished palette ACROSS a theme switch, and the
 // dark→light→dark round trip is asserted rather than a single reading.
 //
@@ -33,6 +33,8 @@
 #include <QApplication>
 #include <QLabel>
 #include <QLineEdit>
+#include <QListWidget>
+#include <QPushButton>
 #include <QtTest>
 
 using namespace AetherSDR;
@@ -140,7 +142,7 @@ private slots:
     }
 
     // No caption and no field carries a sheet of its own: one would override
-    // the window's, and a colour it pinned would not follow the switch.
+    // the window's, and a color it pinned would not follow the switch.
     void captionsAndFieldsTakeTheWindowSheet()
     {
         auto& tm = ThemeManager::instance();
@@ -195,7 +197,7 @@ private slots:
 
     // A status line changes tone while the window is open (an upload that
     // fails, a calibration that settles). setTone re-polishes the live widget,
-    // so the new colour is painted at once rather than on the next theme
+    // so the new color is painted at once rather than on the next theme
     // change or reopen.
     void aToneChangedOnAShownLabelRepaints()
     {
@@ -213,7 +215,7 @@ private slots:
         const QColor caption = tm.color(QStringLiteral("color.canon.inkSoft"));
         const QColor error   = tm.color(QStringLiteral("color.accent.danger"));
         const QColor ok      = tm.color(QStringLiteral("color.accent.success"));
-        // CONTROL: the three colours are distinguishable.
+        // CONTROL: the three colors are distinguishable.
         QVERIFY(caption != error && error != ok && caption != ok);
         QCOMPARE(polished(label, QPalette::WindowText), caption);
 
@@ -265,6 +267,56 @@ private slots:
         assertPainted(kDarkTheme);
 
         QVERIFY(tm.setActiveTheme(QLatin1String(kDarkTheme)));
+    }
+
+    // A USB cable's list color is a resolved token, so it is re-resolved on a
+    // switch rather than kept from the theme the list was filled under.
+    void usbCableColorsFollowAThemeSwitch()
+    {
+        auto& tm = ThemeManager::instance();
+        QVERIFY(tm.setActiveTheme(QLatin1String(kDarkTheme)));
+
+        RadioModel model;
+        // A disabled CAT cable, injected as the radio's status would report it.
+        model.usbCableModel().applyStatus(QStringLiteral("SNTHEME1"),
+                                          {{QStringLiteral("type"), QStringLiteral("cat")},
+                                           {QStringLiteral("enable"), QStringLiteral("0")},
+                                           {QStringLiteral("plugged_in"), QStringLiteral("1")}});
+        RadioSetupDialog dialog(&model);
+        dialog.selectTab(QStringLiteral("USB Cables"));
+        dialog.show();
+
+        QListWidgetItem* cable = nullptr;
+        for (QListWidget* list : dialog.findChildren<QListWidget*>()) {
+            for (int i = 0; i < list->count() && !cable; ++i) {
+                if (list->item(i)->data(Qt::UserRole).toString() == QLatin1String("SNTHEME1"))
+                    cable = list->item(i);
+            }
+        }
+        QVERIFY(cable);
+
+        for (const char* theme : {kDarkTheme, kLightTheme, kDarkTheme}) {
+            QVERIFY(tm.setActiveTheme(QLatin1String(theme)));
+            QCOMPARE(cable->foreground().color(), tm.color(QStringLiteral("color.canon.muted")));
+        }
+    }
+
+    // Radio Side and Client Side are one choice between two: both take the
+    // Select role, so whichever is chosen reads the same.
+    void recordModeButtonsAreOneSelectSet()
+    {
+        RadioModel model;
+        RadioSetupDialog dialog(&model);
+        dialog.selectTab(QStringLiteral("Audio"));
+
+        QStringList roles;
+        for (QPushButton* b : dialog.findChildren<QPushButton*>()) {
+            if (b->text() == QLatin1String("Radio Side") || b->text() == QLatin1String("Client Side"))
+                roles << b->text() + QLatin1Char('=') + b->property("rsButton").toString();
+        }
+        roles.sort();
+        QCOMPARE(roles, QStringList({QStringLiteral("Client Side=select"),
+                                     QStringLiteral("Radio Side=select")}));
     }
 };
 

@@ -436,7 +436,7 @@ private:
             if (policy.horizontalPolicy() == QSizePolicy::Minimum) {
                 policy.setHorizontalPolicy(QSizePolicy::Fixed);
                 button->setSizePolicy(policy);
-                // A fixed button in a wider cell would centre; it starts at
+                // A fixed button in a wider cell would center; it starts at
                 // the cell's left edge like the field beside it would.
                 if (QWidget* parent = button->parentWidget()) {
                     alignLeftIfUnset(parent->layout(), button);
@@ -1865,6 +1865,10 @@ void RadioSetupDialog::done(int result)
     // closeEvent. Keep those paths behind the same confirmation without
     // redirecting reject() to close() (which recurses during Qt's close path).
     if (!m_peripheralRemovalPending && confirmFirmwareClose()) {
+        // Escape is a close like the corner button: it keeps the
+        // uncommitted Peripherals edits too.
+        for (const auto& saver : m_peripheralRowSavers)
+            saver();
         CanonWindow::done(result);
     }
 }
@@ -5642,6 +5646,7 @@ QWidget* RadioSetupDialog::buildAudioTab()
 
         auto* radioSideBtn = new QPushButton("Radio Side");
         radioSideBtn->setCheckable(true);
+        setButtonRole(radioSideBtn, ButtonRole::Select);
         auto* clientSideBtn = new QPushButton("Client Side");
         clientSideBtn->setCheckable(true);
         setButtonRole(clientSideBtn, ButtonRole::Select);
@@ -7731,7 +7736,22 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
     hbox->addWidget(stack, 1);
 
     // ── Populate cable list from model ──────────────────────────────────
-    auto refreshList = [cableList, cableModel]() {
+    // A cable's color says whether it is enabled and plugged in.
+    auto colorItem = [cableModel](QListWidgetItem* item) {
+        const auto& cables = cableModel->cables();
+        const auto it = cables.constFind(item->data(Qt::UserRole).toString());
+        if (it == cables.constEnd()) {
+            return;
+        }
+        const auto& theme = ThemeManager::instance();
+        if (it->enabled && it->present)
+            item->setForeground(theme.color(QStringLiteral("color.accent.success")));
+        else if (it->enabled)
+            item->setForeground(theme.color(QStringLiteral("color.accent.warning")));
+        else
+            item->setForeground(theme.color(QStringLiteral("color.canon.muted")));
+    };
+    auto refreshList = [cableList, cableModel, colorItem]() {
         QString prevSn;
         if (cableList->currentItem())
             prevSn = cableList->currentItem()->data(Qt::UserRole).toString();
@@ -7744,13 +7764,7 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
                 label += " (unplugged)";
             auto* item = new QListWidgetItem(label);
             item->setData(Qt::UserRole, cable.serialNumber);
-            const auto& theme = ThemeManager::instance();
-            if (cable.enabled && cable.present)
-                item->setForeground(theme.color(QStringLiteral("color.accent.success")));
-            else if (cable.enabled)
-                item->setForeground(theme.color(QStringLiteral("color.accent.warning")));
-            else
-                item->setForeground(theme.color(QStringLiteral("color.canon.muted")));
+            colorItem(item);
             cableList->addItem(item);
             if (cable.serialNumber == prevSn)
                 cableList->setCurrentItem(item);
@@ -8100,6 +8114,13 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
 
     // Initial populate
     refreshList();
+    // The item colors are resolved tokens: re-resolve them on a theme switch,
+    // leaving the list and the cable being edited as they are.
+    connect(&ThemeManager::instance(), &ThemeManager::themeChanged, cableList,
+            [cableList, colorItem]() {
+        for (int i = 0; i < cableList->count(); ++i)
+            colorItem(cableList->item(i));
+    });
 
     return page;
 }
