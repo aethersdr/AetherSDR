@@ -21,6 +21,7 @@ These are host devices: they plug into your computer, not the radio, so the page
 | Icom RC-28 remote encoder | USB HID | **Settings → Icom RC-28 Remote Encoder...** |
 | Griffin PowerMate | USB HID | Serial & Controllers → HID encoder groups |
 | Contour ShuttleXpress / ShuttlePro v2 | USB HID | Serial & Controllers → HID encoder groups |
+| ELAD / WoodBoxRadio TMate 2 | USB HID | Serial & Controllers → TMate 2 groups |
 | Elgato Stream Deck+ | USB HID | [StreamDeck](./streamdeck.md) |
 | Ulanzi Dial | USB input device | [Ulanzi Dial](./ulanzi-dial.md) |
 | MIDI controllers | USB MIDI | [MIDI Controller Mapping](./midi-controller-mapping.md) |
@@ -45,7 +46,7 @@ HID encoders are off by default because, on macOS, the first time AetherSDR open
 
 ### Linux permissions
 
-On Linux, HID devices are root-only until a udev rule grants access. AetherSDR ships one in the source tree at `packaging/linux/60-hid-encoders.rules` (RC-28, PowerMate, ShuttleXpress, ShuttlePro v2 and Stream Deck+):
+On Linux, HID devices are root-only until a udev rule grants access. AetherSDR ships one in the source tree at `packaging/linux/60-hid-encoders.rules` (RC-28, PowerMate, ShuttleXpress, ShuttlePro v2, Stream Deck+ and TMate 2):
 
 ```bash
 sudo cp 60-hid-encoders.rules /etc/udev/rules.d/
@@ -53,6 +54,8 @@ sudo udevadm control --reload-rules && sudo udevadm trigger
 ```
 
 Then unplug and replug the device.
+
+The rule deliberately leaves out the `aether-pad` RC-28 emulator: it uses the Arduino Giga R1's stock USB identity, so a shipped rule would open every Giga on the machine. Add your own rule for it.
 
 ## Using encoder and button actions
 
@@ -66,7 +69,7 @@ The full action lists are under [Reference](#reference).
 
 ## Using the Icom RC-28
 
-The RC-28 is a weighted tuning knob with **F1**, **F2** and a **TX** bar. A community Arduino emulator (`aether-pad`) that speaks the same protocol is also recognised.
+The RC-28 is a weighted tuning knob with **F1**, **F2** and a **TX** bar. A community Arduino emulator (`aether-pad`) that speaks the same protocol is also recognized.
 
 1. Tick **Enable HID encoders / StreamDeck+** (see [Setup](#setup)).
 2. Open **Settings → Icom RC-28 Remote Encoder...** ("Icom RC-28 Button Mapping").
@@ -121,7 +124,7 @@ The DCD input suits interfaces such as the HaliKey Serial, whose ring contact is
 |----------------|--------------------|
 | Tune Slice | Tunes the active slice (Encoder 1 default) |
 | RIT / XIT | RIT or XIT offset (Encoder 2 / 3 defaults) |
-| Master Volume | Master volume (Encoder 4 default) |
+| Master Volume | The level you are hearing: this computer's audio with PC Audio on, the radio's line out with it off (Encoder 4 default) |
 | Slice Audio Volume | Active slice's audio level |
 | Headphone Volume | Headphone level |
 | AGC Threshold | AGC-T |
@@ -136,11 +139,11 @@ The DCD input suits interfaces such as the HaliKey Serial, whose ring contact is
 
 **Key actions:** Toggle TX (MOX), Toggle Tune, Toggle RIT/XIT on/off, Clear RIT/XIT offset, Step Size Up/Down, Toggle Mute, Toggle Slice Lock, Toggle APF, Cycle AGC Mode, Toggle Band Zoom, Toggle Segment Zoom, Next/Previous Slice, Volume Up/Down (±5), Toggle Split, Monitor TX Frequency.
 
+Volume Up/Down, here and on the RC-28, step the same level as the **Master Volume** encoder action.
+
 ## Known issues
 
-- On Windows, the RC-28 can take several seconds to move the tuned frequency, then jump ([#6225](https://github.com/aethersdr/AetherSDR/issues/6225)).
 - After an upgrade, a Griffin PowerMate can stop working until **Enable HID encoders / StreamDeck+** is ticked ([#3357](https://github.com/aethersdr/AetherSDR/issues/3357)).
-- Volume up/down and volume-wheel actions start from the saved master volume, not the level of the audio path you are hearing, so the first step can jump ([#6132](https://github.com/aethersdr/AetherSDR/issues/6132)).
 - A USB-serial PTT switch can stop working after a while until the port is closed and opened again ([#5124](https://github.com/aethersdr/AetherSDR/issues/5124)).
 
 ## Troubleshooting

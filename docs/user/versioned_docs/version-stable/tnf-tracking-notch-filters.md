@@ -73,7 +73,7 @@ lengthens the receive filter slightly, which adds a little audio delay. See
 
 ### Permanent vs temporary
 
-| Type | Colour | Survives reboot | Default |
+| Type | Color | Survives reboot | Default |
 |------|-------|-----------------|---------|
 | Temporary | Yellow | No | Yes |
 | Permanent | Green | Yes | No |

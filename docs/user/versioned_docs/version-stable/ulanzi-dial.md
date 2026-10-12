@@ -38,7 +38,7 @@ Windows cannot take exclusive control of the dial, so each key press also still 
 
 Open **Settings → Ulanzi Dial Mapping...** ("Ulanzi Dial — Control Mapping"). The dialog shows a picture of the dial with a drop-down "pill" on each physical control, plus:
 
-<img src="/img/screens/ulanzi-mapper.png" width="640" alt="Ulanzi Dial Control Mapping window. A picture of the dial sits in the centre with a label beside each of its controls: three top buttons (unassigned, RIT/XIT toggle, unassigned), two side buttons on each side (unassigned and Next Slice), the Tuning knob set to Frequency Tune Slice and its Single tap set to Audio Mute Toggle. The status at the bottom left reads Disconnected, beside Last event, Reset to Defaults and Close." />
+<img src="/img/screens/ulanzi-mapper.png" width="640" alt="Ulanzi Dial Control Mapping window. A picture of the dial sits in the center with a label beside each of its controls: three top buttons (unassigned, RIT/XIT toggle, unassigned), two side buttons on each side (unassigned and Next Slice), the Tuning knob set to Frequency Tune Slice and its Single tap set to Audio Mute Toggle. The status at the bottom left reads Disconnected, beside Last event, Reset to Defaults and Close." />
 
 *The Ulanzi Dial mapping window with no dial connected.*
 
@@ -54,13 +54,13 @@ Each key pill, and the knob press (**Single tap:**), offers:
 
 - **(unassigned)**;
 - every keyboard-shortcut action, listed as `[Category] Name`: the same list as **Settings → Configure Shortcuts...** (see [Keyboard Shortcuts](./keyboard-shortcuts.md));
-- MIDI button actions (toggles, triggers and press-and-hold "gate" actions), listed as `[MIDI Category] Name`, in builds with MIDI support.
+- MIDI button actions (toggles, triggers and press-and-hold "gate" actions, such as `[MIDI Global] RADE Modem`), listed as `[MIDI Category] Name`, in builds with MIDI support.
 
 No default keys the transmitter. MOX, TUNE, PTT and CW keying are only ever bound by you.
 
 ### Press-and-hold transmit and CW keying
 
-Keys bound to **PTT (Hold)**, the straight key, either paddle, or a held MIDI action work press-and-hold: press to key, release to un-key. Releases are honoured even when two keys are held together or arrive out of order, and if the dial is unplugged while it is holding the transmitter, everything it was holding is released immediately ([#4611](https://github.com/aethersdr/AetherSDR/issues/4611)).
+Keys bound to **PTT (Hold)**, the straight key, either paddle, or a held MIDI action work press-and-hold: press to key, release to un-key. Releases are honored even when two keys are held together or arrive out of order, and if the dial is unplugged while it is holding the transmitter, everything it was holding is released immediately ([#4611](https://github.com/aethersdr/AetherSDR/issues/4611)).
 
 ## Reference
 
@@ -71,7 +71,7 @@ Keys bound to **PTT (Hold)**, the straight key, either paddle, or a held MIDI ac
 | [Frequency] Tune Slice | Tunes the active slice (default) |
 | [Filter] Filter Bandwidth | Steps the filter width; a faster turn moves further |
 | [Audio] Slice Audio Volume | Active slice's audio level |
-| [Audio] Master Volume | Master volume |
+| [Audio] Master Volume | The level you are hearing: this computer's audio with PC Audio on, the radio's line out with it off |
 | [Audio] Headphone Volume | Headphone level |
 | [Display] Panadapter Zoom | Zooms the panadapter (1.25× per detent) |
 | [Display] Band Zoom | Band zoom |

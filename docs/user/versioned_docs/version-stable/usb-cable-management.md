@@ -8,7 +8,7 @@ description: "AetherSDR can configure USB-serial adapters plugged into the FlexR
 
 AetherSDR can configure USB-serial adapters plugged into the FlexRadio's rear-panel USB ports. These cables provide CAT control, band decoder output, per-bit switching, LDPA amplifier control and raw serial passthrough to external devices, all managed remotely over the network.
 
-The radio detects USB-serial adapters on its rear USB ports and reports them in status messages. AetherSDR lists them on the **USB Cables** page of Radio Setup, where you set each cable's type, serial parameters and behaviour.
+The radio detects USB-serial adapters on its rear USB ports and reports them in status messages. AetherSDR lists them on the **USB Cables** page of Radio Setup, where you set each cable's type, serial parameters and behavior.
 
 These are the **radio's** USB ports, not your computer's. For USB-serial PTT/CW keying on your computer, see **Settings → Radio Setup... → Serial & Controllers** ([USB Control Surfaces](./usb-control-surfaces.md)). For accessories AetherSDR talks to directly, see [Peripherals](./peripherals.md).
 
@@ -27,11 +27,11 @@ The **Cables** list on the left shows every cable the radio reports, with its ty
 
 *Radio Setup, USB Cables page, on a radio with no USB cable plugged in.*
 
-| Colour | Meaning |
+| Color | Meaning |
 |-------|---------|
 | **Green** | Enabled and plugged in |
 | **Yellow** | Enabled but unplugged |
-| **Grey** | Disabled |
+| **Gray** | Disabled |
 
 Cables appear and disappear automatically as the radio reports them. Click a cable to edit it on the right. Every cable page starts with its name, an **Enabled** checkbox, its plugged-in status, and the **Cable Type** selector.
 

@@ -47,7 +47,7 @@ To transmit a radio-side recording as a voice keyer, press MOX first, then ▶.
 
 ### Badges
 
-- **TX** — red when this slice is the transmit slice; grey otherwise. Click a grey TX badge to move transmit to this slice.
+- **TX** — red when this slice is the transmit slice; gray otherwise. Click a gray TX badge to move transmit to this slice.
 - **SPLIT** / **SWAP** — split operation. Click **SPLIT** to create a transmit slice; on the transmit slice the badge reads **SWAP**. Right-click for the split menu. See [Split Operation](./split-operation.md).
 - **⇄** — this slice is linked to another with **Link Slice**. See [Multi-Slice Operation](./multi-slice-operation.md).
 
@@ -68,7 +68,7 @@ Click a label along the bottom of the flag to open its tab. Controls the slice's
 *The VFO flag with the audio tab open.*
 
 - **AF** slider with mute
-- **Pan** (left/right) with a centre marker
+- **Pan** (left/right) with a center marker
 - **SQL** — squelch on/off and level
 - **AGC-T** — AGC mode (Off / Slow / Med / Fast) and threshold
 
@@ -76,9 +76,15 @@ Click a label along the bottom of the flag to open its tab. Controls the slice's
 
 The radio's own noise-reduction and filter toggles for the current mode, with level sliders where they apply: **NR**, **NB**, **ANF**, **NRL**, **NRS**, **RNN**, **NRF**, **ANFL**, **ANFT**, plus **APF** in CW and **MN** (manual notch) on radios that have it. Right-click a button for a quick parameter popup.
 
+On radios whose noise blanker runs in AetherSDR (Hermes-Lite 2 and ANAN-G2),
+**NB** cycles Off → **NB** → **NB2** → Off. NB2 rebuilds the blanked stretch
+from the samples on either side instead of silencing it, and while it runs an
+**NB2** fill row appears: **Zero**, **Sample hold**, **Mean hold**,
+**Hold sample** or **Interpolate**.
+
 The same tab has the **AetherRX** and **AetherTX** launchers, always the same width, which open AetherSDR's own receive and transmit audio chains. The client-side noise reduction methods (NR2, RN2, NR4, NNR, DFNR, BNR, MNR) live in **AetherRX**, not on this tab; see [Aetherial Audio](./aetherial-audio.md) and [DSP Noise Mitigation](./dsp-noise-mitigation.md).
 
-The **DSP** tab label is colour-coded: green when any radio DSP or client noise reduction is active, grey when everything is off, cyan while the tab is open.
+The **DSP** tab label is color-coded: green when any radio DSP or client noise reduction is active, gray when everything is off, cyan while the tab is open.
 
 On FM, NFM, DFM and DSTR the tab becomes **OPT** (repeater offset and direction, simplex and reverse; CTCSS tones on FM, NFM and DFM only).
 
@@ -88,7 +94,7 @@ On FM, NFM, DFM and DSTR the tab becomes **OPT** (repeater offset and direction,
 
 #### Mode tab
 
-Labelled with the current mode (for example **USB**):
+Labeled with the current mode (for example **USB**):
 
 <img src="/img/screens/vfo-mode-tab.png" width="316" alt="VFO flag with the USB tab open below the frequency. It shows a mode drop-down set to USB, quick mode buttons USB (lit), CW and AM, filter presets 1.8K, 2.1K, 2.4K, 2.7K (lit), 2.9K, 3.3K, 4K and 6K, a Marker: 3px button, a lit Filter Edge button and an Adaptive RX filter checkbox, unticked." />
 
@@ -146,10 +152,10 @@ The slice's radio can't use that control.
 
 **Adaptive RX filter** is on and is fitting the passband to the signal (USB and LSB only).
 
-1. Open the mode tab (labelled with the current mode).
+1. Open the mode tab (labeled with the current mode).
 2. Turn **Adaptive RX filter** off to set the filter yourself.
 
-### ▶ (play) is greyed out
+### ▶ (play) is grayed out
 
 There is no recording for this slice yet.
 

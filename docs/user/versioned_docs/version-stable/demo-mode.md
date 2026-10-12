@@ -20,7 +20,7 @@ Demo mode runs the full AetherSDR interface against a built-in simulator, so you
 ## Setup
 
 1. Open the **Connect to Radio** window (**File → Connect to Radio...**).
-2. On **On This Network**, the list includes **AetherSDR Demo**, labelled **"Simulator (not on the air)"**.
+2. On **On This Network**, the list includes **AetherSDR Demo**, labeled **"Simulator (not on the air)"**.
 3. Select it and click **Connect Selected Radio**.
 
 The demo always sorts below real radios and is never chosen over one. There is no menu item or command-line flag; you connect to it like any radio.
@@ -32,7 +32,7 @@ The demo's name is its "not on the air" safety label, so it cannot be renamed.
 ## Using the Demo
 
 - One slice on one panadapter, with synthetic receive audio and spectrum.
-- The panadapter title bar, adaptive RX filter, auto-squelch, centre lock and band recall work as they do on a radio.
+- The panadapter header, adaptive RX filter, auto-squelch, center lock and band recall work as they do on a radio.
 - Simulated CW is proper Morse at 18 WPM and 700 Hz.
 - Memory channels are stored on this computer, in the bank shared with other radios that have no memory slots of their own.
 

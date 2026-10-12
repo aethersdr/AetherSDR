@@ -65,7 +65,7 @@ What appears depends on the radio:
 - **FlexRadio:** Flex radios do not publish health registers through this window, so it reads "This radio reports no health registers." Use the **MTR** (Radio Vitals) applet for PA temperature, fan speed and supply voltage. See [Meters](./meters.md).
 - **[Hermes-Lite 2](./hermes-lite-2.md):** link, temperature, supply, PA current and gateware, a transmit voice-chain section (mic level and gain, ALC, forward power) and converter (ADC) rows. Some rows, such as whether another client is holding the radio, whether it is reachable and its PA temperature, are available even before you connect.
 - **[Networked Icom](./networked-icom.md):** includes the DATA OFF MOD and DATA MOD input selections and the MIC/USB/ACC/WLAN/LAN levels.
-- **[RTL-SDR](./rtl-sdr.md):** the capture window (centre, rate and edges) and receive-pipeline counters such as queue drops and late frames.
+- **[RTL-SDR](./rtl-sdr.md):** the capture window (center, rate and edges) and receive-pipeline counters such as queue drops and late frames.
 
 Radio Health is a different thing from the **HLTH** (Antenna Health) applet, which trends SWR and forward power for your antenna system.
 
@@ -81,7 +81,7 @@ Pages are grouped in a tree on the left:
 
 | Group | Pages |
 |-------|-------|
-| **STATUS** | **Overview** (status, latency, packet loss and audio-buffer cards with summary charts), **Connection Details** |
+| **STATUS** | **Overview** (status, latency, packet loss and audio-buffer cards with summary charts), **Connection Details** (with a **Remote Link (Tailscale)** section when the radio is reached through the in-radio Tailscale container; see [Tailscale Remote Access](./tailscale-remote-access.md#network-diagnostics)), **Windows Firewall** (Windows only: whether the firewall allows AetherSDR, with **Fix…**; see [Windows](./windows.md#windows-firewall)) |
 | **TRENDS** | **Latency & Jitter**, **Stream Rates** (including the *Adaptive Throttle — FPS Cap* chart when the throttle is on), **Packet Loss**, **Audio Health** (RX audio buffer and timing, per-stream delivery table), **Digital Voice** (when a digital-voice waveform is active) |
 | **SUPPORT** | **Application Logs** (category filters, Live/Paused), **TCI Clients** (when the TCI server is running: connected clients, their likely role, and a TCI message monitor you can pause, clear, filter and save) |
 

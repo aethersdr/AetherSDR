@@ -6,20 +6,20 @@ description: "Work through this checklist before you key up with AetherSDR for t
 
 Work through this checklist before you key up with AetherSDR for the first time, and again after a big change to your station, your computer or AetherSDR's settings. Each item says what to check and links to the page that explains it. Items marked **(FlexRadio)** apply only to a FlexRadio; the rest apply to every radio AetherSDR can transmit on.
 
-The checks are written so you can do them without putting a signal on the air. Where you do need to transmit to check something, use low power into a dummy load or a clear frequency, and identify as your licence requires.
+The checks are written so you can do them without putting a signal on the air. Where you do need to transmit to check something, use low power into a dummy load or a clear frequency, and identify as your license requires.
 
 ## Requirements
 
-- A radio that can transmit: a FlexRadio, a Hermes-Lite 2 or a recognised networked Icom. The ANAN-G2, RTL-SDR dongles, KiwiSDR/Web-888 receivers and the demo are receive-only. See [Supported Radios](./supported-radios.md).
+- A radio that can transmit: a FlexRadio, a Hermes-Lite 2 or a recognized networked Icom. The ANAN-G2, RTL-SDR dongles, KiwiSDR/Web-888 receivers and the demo are receive-only. See [Supported Radios](./supported-radios.md).
 - AetherSDR connected to it. See [First Connection](./first-connection.md).
-- A licence that covers the bands and modes you plan to use.
+- A license that covers the bands and modes you plan to use.
 
 ## The checklist
 
 ### The radio and the transmit slice
 
 - [ ] **The right radio is connected.** Its tab is active in the title bar, and it is not the demo ("Simulator (not on the air)"). See [First Connection](./first-connection.md).
-- [ ] **You know which slice transmits.** The transmit slice has the **red TX badge** on its VFO. Switching the active slice does not move transmit; click a grey **TX** badge to move it. See [Multi-Slice Operation](./multi-slice-operation.md) and [VFO Widget](./vfo-widget.md).
+- [ ] **You know which slice transmits.** The transmit slice has the **red TX badge** on its VFO. Switching the active slice does not move transmit; click a gray **TX** badge to move it. See [Multi-Slice Operation](./multi-slice-operation.md) and [VFO Widget](./vfo-widget.md).
 - [ ] **The transmit slice is on a frequency and mode you are licensed for.** Check the band plan strip along the bottom of the panadapter. See [Panadapter Controls](./panadapter-controls.md).
 - [ ] **Split is what you expect.** If a red **SPLIT** badge shows, you transmit on the second slice, not where you are listening. Click the red **SPLIT** badge to end the split. See [Split Operation](./split-operation.md).
 
@@ -28,7 +28,7 @@ The checks are written so you can do them without putting a signal on the air. W
 - [ ] **Your callsign is set** in **Settings → Radio Setup... → Radio → Callsign:** (on macOS, **AetherSDR → Preferences... → Radio**). AetherSDR uses it for PSK Reporter, WSPR and spotting; on a FlexRadio it is also stored on the radio. See [Radio Setup](./radio-setup.md).
 - [ ] **Your callsign and grid are set wherever a feature transmits them.** AetherSDR has no single station grid; each feature that sends one has its own fields:
   - [RADE Digital Voice](./rade-digital-voice.md) end-of-over frames and FreeDV Reporter: **SpotHub → FreeDV**, **Callsign** (or **Use radio**) and **Grid Square** (or **Use GPS**). See [SpotHub](./spothub.md).
-  - The WSPR beacon in **Tools → AetherMap...**: **TX call:** and **Grid:**. See [AetherMap](./psk-reporter-map.md).
+  - The WSPR beacon in **View → AetherMap...**: **TX call:** and **Grid:**. See [AetherMap](./psk-reporter-map.md).
   - APRS in [AetherModem Packet Radio](./aethermodem-packet-radio.md): **MY CALLSIGN**, and **GRID** when the radio has no GPS fix.
   - D-STAR: **MYCALL**, which defaults to the radio's callsign. See [D-STAR (ThumbDV)](./d-star-thumbdv.md).
   - Digital-mode programs such as WSJT-X use the callsign and grid in their own settings.
@@ -54,7 +54,7 @@ The checks are written so you can do them without putting a signal on the air. W
 - [ ] **The program's audio route works.** On Linux and macOS with a FlexRadio, [DAX Virtual Audio](./dax-virtual-audio.md) gives each slice a virtual audio device. On Windows, and on radios without DAX, use the [TCI Server](./tci-server.md). See [WSJT-X Integration](./wsjt-x-integration.md).
 - [ ] **CAT or TCI control works before you transmit.** Changing frequency and mode in the program should move the transmit slice in AetherSDR, and the program should key the slice you expect. See [CAT Control](./cat-control.md) and [TCI Server](./tci-server.md).
 - [ ] **(FlexRadio)** **The TX filter passes your tones.** If AetherSDR shows a TX filter card on the panadapter when you transmit, widen **TX Filter** in the **Phone** applet. See [TX Controls](./tx-controls.md).
-- [ ] **Your computer's clock is accurate.** FT8 and similar modes fail when the clock is off by more than about a second. Keep the computer synchronised with NTP. [AetherClock and GPS](./aetherclock-and-gps.md) shows how far the computer's clock is from WWV/WWVB or the radio's GPS.
+- [ ] **Your computer's clock is accurate.** FT8 and similar modes fail when the clock is off by more than about a second. Keep the computer synchronized with NTP. [AetherClock and GPS](./aetherclock-and-gps.md) shows how far the computer's clock is from WWV/WWVB or the radio's GPS.
 
 ### Keying paths and timers
 

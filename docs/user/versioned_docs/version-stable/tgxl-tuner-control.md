@@ -67,6 +67,11 @@ shows them: after a successful tune it shows the SWR it settled on
 
 Meters update at about 60 Hz while transmitting and 4 Hz while receiving.
 
+While a TGXL is present, the **TUN** indicator in the status bar shows its
+state and cycles it OPERATE → BYPASS → STANDBY, like the applet's
+**OPERATE** key. Click it, or Tab to it and press Return or Enter. Screen
+readers announce it as a button with its state.
+
 ### Popped out or on the canvas
 
 Popped out into its own window, or placed on the [Workspace Canvas](./workspace-canvas.md), the

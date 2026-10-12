@@ -128,11 +128,11 @@ The **Profile** filter is showing one profile's memories, or the search box is f
 1. Set **Profile** to "All Memories".
 2. Clear the **Search** box.
 
-### Add, Import and editing are greyed out on my Icom
+### Add, Import and editing are grayed out on my Icom
 
 The radio's memories are read-only.
 
-1. Hover over the greyed control; the tooltip gives the reason.
+1. Hover over the grayed control; the tooltip gives the reason.
 2. Where the dialog has a **Sync Memories** button, use it to read the radio's channels into the list, then recall them as usual.
 
 ### Memories don't appear as markers on the panadapter

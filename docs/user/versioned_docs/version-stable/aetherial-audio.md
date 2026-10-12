@@ -74,7 +74,7 @@ AetherTX and AetherRX share one layout:
   part of it to move it, and drag an edge or corner to resize it. Close it
   with the round **✕** in the top-right corner, **Esc**, or **Ctrl+W**
   (**⌘W** on macOS). Each is a window of its own, with its own taskbar entry,
-  so you can minimise it from the taskbar or park it on another monitor.
+  so you can minimize it from the taskbar or park it on another monitor.
   **View → Frameless Window** does not apply to them. Pressing **Return** in
   a knob's value field only commits the value.
 - Both windows open at the same size every time. Where you leave them is
@@ -222,10 +222,10 @@ them with **Settings → Settings Browser...** (see [Settings and Backups](./set
 
 ## Using the docked applet
 
-The **Aetherial Audio** applet in the applet panel (button **TXDSP**) is the
+The **Aetherial Audio** applet in the applet panel (button **VUDU**) is the
 compact companion to the two windows:
 
-<img src="/img/screens/txdsp-docked-applet.png" width="248" alt="Aetherial Audio applet. The top row has TX (selected), RX, a record button, a play button and BYPASS. Below, the transmit chain is drawn as connected boxes: an unlabelled green input stage, GATE, EQ, DESS, COMP, TUBE, EVO, VERB and TX, with the hint Click to bypass, Double click to edit, Drag to reorder. Under the strip is the Aetherial TX Gate tile with its transfer curve and knobs for Thresh, Ratio, Return, Release and Floor." />
+<img src="/img/screens/txdsp-docked-applet.png" width="248" alt="Aetherial Audio applet. The top row has TX (selected), RX, a record button, a play button and BYPASS. Below, the transmit chain is drawn as connected boxes: an unlabeled green input stage, GATE, EQ, DESS, COMP, TUBE, EVO, VERB and TX, with the hint Click to bypass, Double click to edit, Drag to reorder. Under the strip is the Aetherial TX Gate tile with its transfer curve and knobs for Thresh, Ratio, Return, Release and Floor." />
 
 *The docked Aetherial Audio applet (button VUDU) on the TX side: the chain strip, with the first stage tile below it.*
 
@@ -292,9 +292,9 @@ Toolbar controls:
 - **Ref:** overlays an amber reference target curve: Off, AT&T 1959, Heil DX,
   Astatic D-104, Shure 444 or Heil HC-5. It is a visual guide only; it does
   not change the audio.
-- **Smoothing:** fractional-octave smoothing of the analyser trace (display
+- **Smoothing:** fractional-octave smoothing of the analyzer trace (display
   only).
-- **Peak Hold:** freezes the analyser's peak trace.
+- **Peak Hold:** freezes the analyzer's peak trace.
 - Filter family for the high-pass and low-pass slopes: **Butterworth**,
   **Chebyshev**, **Bessel** or **Elliptic**.
 - **Reset** returns every band to its default.
@@ -316,7 +316,7 @@ average power does not drop.
 
 | Control | Range | What it does |
 |---|---|---|
-| **Freq** | 1 to 12 kHz | Centre of the sibilant band |
+| **Freq** | 1 to 12 kHz | Center of the sibilant band |
 | **Q** | 0.5 to 5 | Width of the band (higher = narrower) |
 | **Threshold** | −60 to 0 dB | Sidechain level where reduction begins |
 | **Amount** | −24 to 0 dB | Maximum reduction of the sibilant band |
@@ -333,7 +333,7 @@ low a threshold leaves the de-esser working all the time and dulls the voice.
 
 Levels the signal: brings quiet syllables up and holds loud ones back.
 
-<img src="/img/screens/aethertx-compressor.png" width="720" alt="AetherTX window with Compressor selected in the stage column. A Limiter button and a Ceiling slider sit at the top. The compressor's transfer curve fills the centre, between an input meter with a threshold marker on the left and gain-reduction and output meters on the right. Six knobs along the bottom read Ratio, Attack, Release, Knee, Drive and Phase." />
+<img src="/img/screens/aethertx-compressor.png" width="720" alt="AetherTX window with Compressor selected in the stage column. A Limiter button and a Ceiling slider sit at the top. The compressor's transfer curve fills the center, between an input meter with a threshold marker on the left and gain-reduction and output meters on the right. Six knobs along the bottom read Ratio, Attack, Release, Knee, Drive and Phase." />
 
 *AetherTX with the Compressor stage selected.*
 
@@ -366,7 +366,7 @@ that suits contests better than rag-chews.
 
 ### Tube
 
-Analog-style saturation for warmth and harmonic colour.
+Analog-style saturation for warmth and harmonic color.
 
 **Model:** **A** (symmetric, neutral warmth), **B** (hard clip into soft
 saturation, edgier) or **C** (asymmetric, even harmonics, warmest).

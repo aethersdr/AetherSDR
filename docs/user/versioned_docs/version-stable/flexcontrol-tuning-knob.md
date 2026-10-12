@@ -39,6 +39,8 @@ The encoder reports its own acceleration (1–6 steps per detent depending on ho
 
 Actions whose name starts with **Wheel** do not fire once: they change what the knob does. Tap a button bound to, say, `WheelRit`, and turning the knob now adjusts RIT; the button's LED shows which mode is active. Press the knob, or tap a button bound to an ordinary action, to return the knob to tuning.
 
+**Master Volume** is the level you are hearing: with PC Audio on it is this computer's audio level, and with PC Audio off it is the radio's own output (line out). `WheelVolume`, `VolumeUp` and `VolumeDown` step from that level, the same one the title-bar master slider shows.
+
 > **Upgrading from an older version:** the FlexControl volume action drives **Master Volume**, not the active slice's volume. The older `WheelMasterAf` action has been merged into it, and saved bindings that use it keep working as Master Volume. Use `WheelSliceAudio` for per-slice volume ([#2925](https://github.com/aethersdr/AetherSDR/issues/2925), [#2986](https://github.com/aethersdr/AetherSDR/issues/2986)).
 
 ## Using AetherControl (virtual FlexControl)
@@ -85,7 +87,7 @@ Radio Setup lists actions by their internal names:
 | SplitMonitorTx | Monitor the TX frequency |
 | ToggleAgc | Cycle AGC mode |
 | ToggleApf | APF on/off |
-| VolumeUp / VolumeDown | Slice audio up / down |
+| VolumeUp / VolumeDown | **Master Volume** up / down by 5 |
 | ClearRit / ClearXit | Zero the RIT / XIT offset |
 | CwxF1 … CwxF12 | CWX macro 1–12; follows the active slice's mode, so in voice modes it fires the matching DVK slot |
 | WheelFrequency | Knob tunes the slice |
@@ -102,7 +104,6 @@ Radio Setup lists actions by their internal names:
 
 - Pressing the knob always returns it to tuning, even when the knob button is bound to another action such as MOX ([#2350](https://github.com/aethersdr/AetherSDR/issues/2350)).
 - On Windows the FlexControl is sometimes not detected until it is unplugged and plugged back in ([#4276](https://github.com/aethersdr/AetherSDR/issues/4276)).
-- Volume up/down and the volume wheel start from the saved master volume, not the level of the audio path you are hearing, so the first step can jump ([#6132](https://github.com/aethersdr/AetherSDR/issues/6132)).
 
 ## Troubleshooting
 

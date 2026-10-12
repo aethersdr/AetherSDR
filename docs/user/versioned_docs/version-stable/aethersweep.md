@@ -42,16 +42,16 @@ bandwidth marked.
    put back as they were.
 6. **Save CSV** exports the result; **Clear Sweep** removes the overlay.
 
-The sweep can also be started from **Tools → Start SWR Scan…**, which sweeps
+The sweep can also be started from **Tools → Start SWR Scan...**, which sweeps
 the whole band on the TX slice.
 
-### Licence confirmation
+### License confirmation
 
 Before a sweep transmits, a modal "Antenna SWR Sweep — License Confirmation"
 explains that it sends a 1 W tune carrier at several frequencies across the
 band, and that you are responsible for checking the band is clear and for
-complying with your licence. Tick **Remember my answer** to skip it next time
-from the ANT panel. **Tools → Start SWR Scan…** always shows it.
+complying with your license. Tick **Remember my answer** to skip it next time
+from the ANT panel. **Tools → Start SWR Scan...** always shows it.
 
 ### What gets swept
 
@@ -110,7 +110,7 @@ transmitting.
 
 | Key | Description |
 |---|---|
-| `SwrSweepLicenseConfirmed` | Set when you accept the licence confirmation with **Remember my answer** |
+| `SwrSweepLicenseConfirmed` | Set when you accept the license confirmation with **Remember my answer** |
 
 ## Troubleshooting
 

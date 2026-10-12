@@ -60,7 +60,7 @@ Position source, **Grid square**, **Latitude**, **Longitude**, the coordinates i
 
 ### Station Map
 
-A map of the radio's position. Use the arrow keys to pan, plus and minus to zoom, and Home to re-centre.
+A map of the radio's position. Use the arrow keys to pan, plus and minus to zoom, and Home to re-center.
 
 ### Satellite Reception and Frequency Reference
 
@@ -68,7 +68,7 @@ Satellites **Tracked** and **Visible**, the tracking ratio, the GPS **Frequency 
 
 ### Satellite Time
 
-UTC, local time and time zone, the radio's GPS UTC, and **Clock agreement** between the radio's GPS time and your computer. The radio's GPS supplies the time of day but not the date, so dates come from your computer. Use Clock agreement as a rough guide when looking at FT8 DT, and keep the computer synchronised with NTP for precise work.
+UTC, local time and time zone, the radio's GPS UTC, and **Clock agreement** between the radio's GPS time and your computer. The radio's GPS supplies the time of day but not the date, so dates come from your computer. Use Clock agreement as a rough guide when looking at FT8 DT, and keep the computer synchronized with NTP for precise work.
 
 ### Radio Clock Synchronization
 

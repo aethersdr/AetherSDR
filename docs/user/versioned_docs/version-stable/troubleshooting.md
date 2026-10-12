@@ -22,6 +22,7 @@ Discovery broadcasts are not reaching AetherSDR. The radio may be on a different
 1. Check the radio is reachable: `ping <radio-ip>`.
 2. Allow discovery through the firewall, for example `sudo ufw allow 4992/udp`.
 3. Use **Connect by IP**: choose the **Radio type**, enter the radio's address and click **Connect by IP**. See [Manual Connection](./manual-connection.md).
+4. **Windows:** open **Tools → Network Diagnostics...** → **Windows Firewall**. If a rule blocks AetherSDR, click **Fix…**. See [Windows](./windows.md#windows-firewall).
 
 ### The radio refuses the connection
 
@@ -50,6 +51,14 @@ The radio is not registered with SmartLink, or port forwarding is not set up.
 The radio's certificate does not match the one AetherSDR pinned.
 
 1. Read the [certificate pinning](./smartlink-setup.md#certificate-pinning) section of [SmartLink Setup](./smartlink-setup.md) before accepting the new certificate.
+
+### QRZ, maps, the update check or the KiwiSDR list stop working
+
+A request to an external service is failing, often because a firewall or security product blocks it.
+
+1. Open the log in **Help → Support & Diagnostics...** and look for an **External Services** (`aether.network`) line naming the service and the error.
+2. **Windows:** check **Tools → Network Diagnostics...** → **Windows Firewall**. See [Windows](./windows.md#discovery-qrz-maps-or-the-update-check-stop-working-after-an-update).
+3. If another security product manages the firewall, allow AetherSDR in it.
 
 ## Audio
 

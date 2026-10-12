@@ -88,7 +88,7 @@ Start with the defaults. See [Troubleshooting](#troubleshooting) if you hear mus
 
 ## Known issues
 
-- NR2 can sound scratchy or produce clicks and artefacts on voice ([#632](https://github.com/aethersdr/AetherSDR/issues/632)).
+- NR2 can sound scratchy or produce clicks and artifacts on voice ([#632](https://github.com/aethersdr/AetherSDR/issues/632)).
 
 ## Troubleshooting
 

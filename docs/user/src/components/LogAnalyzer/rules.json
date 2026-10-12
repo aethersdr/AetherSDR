@@ -726,7 +726,7 @@
       "match": {
         "substring": "NvAFX_Load() failed (GPU unsupported or model incompatible)"
       },
-      "docs": "/bnr-gpu-noise-removal#bnr-is-greyed-out-bnr-requires-an-nvidia-rtx-40-series-or-later-gpu",
+      "docs": "/bnr-gpu-noise-removal#bnr-is-grayed-out-bnr-requires-an-nvidia-rtx-40-series-or-later-gpu",
       "source": [
         {
           "file": "src/core/NvidiaAfxFilter.cpp",
@@ -743,7 +743,7 @@
       "match": {
         "regex": "AFX pack directory not found: |denoiser model \\(sm_\\w+/denoiser_48k\\.trtpkg\\) not found"
       },
-      "docs": "/bnr-gpu-noise-removal#bnr-is-greyed-out-no-bnr-pack-for-your-gpu--yet",
+      "docs": "/bnr-gpu-noise-removal#bnr-is-grayed-out-no-bnr-pack-for-your-gpu--yet",
       "source": [
         {
           "file": "src/core/NvidiaAfxFilter.cpp",

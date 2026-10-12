@@ -57,9 +57,9 @@ The **✎** button on any row opens the same form filled in, so you can fix a bi
 
 ## Using relative encoders
 
-Endless encoders send small "turned up / turned down" deltas instead of an absolute position. Tick **Relative** on the binding. AetherSDR recognises both common relative encodings (two's-complement 1/127 and centre-64 65/63) from the first detents and re-checks if the values stop making sense, so a mis-detected knob corrects itself. Fast turns are smoothed so a burst of deltas does not overshoot.
+Endless encoders send small "turned up / turned down" deltas instead of an absolute position. Tick **Relative** on the binding. AetherSDR recognizes both common relative encodings (two's-complement 1/127 and center-64 65/63) from the first detents and re-checks if the values stop making sense, so a mis-detected knob corrects itself. Fast turns are smoothed so a burst of deltas does not overshoot.
 
-The **VFO Tune Knob** parameter is meant for an endless encoder bound as **Relative**; as an absolute control it treats 64 as centre.
+The **VFO Tune Knob** parameter is meant for an endless encoder bound as **Relative**; as an absolute control it treats 64 as center.
 
 ## Using profiles
 
@@ -73,6 +73,8 @@ Save your bindings as named profiles to switch between controllers or layouts.
 ## Using MIDI with non-Flex radios
 
 On Hermes-Lite 2, Icom, ANAN-G2 and RTL-SDR, bindings for features the radio does not have (for example CWL, NR/ANF on, split or CWX) refuse with a warning and a once-per-session notice instead of silently doing nothing. On these radios **NR Cycle** goes straight to NR2.
+
+**Master Volume** sets a FlexRadio's line-out gain. On the other radios it moves the title-bar master volume while PC Audio is on, and is refused while PC Audio is off. **Headphone Volume** is refused on radios without a headphone output.
 
 ## Reference
 
@@ -102,7 +104,7 @@ On Hermes-Lite 2, Icom, ANAN-G2 and RTL-SDR, bindings for features the radio doe
 | Squelch Level | Slider | 0–100 |
 | AGC Threshold | Slider | 0–100 |
 | Audio Pan | Slider | 0–100 |
-| VFO Tune Knob | Slider | 0–127 (relative, centre 64) |
+| VFO Tune Knob | Slider | 0–127 (relative, center 64) |
 | Noise Blanker, Adaptive RX Filter, Noise Reduction, Auto Notch | Toggle | on/off |
 | NR2 (Spectral), RN2 (RNNoise), NR4 (Spectral Bleach), DFNR (DeepFilter) | Toggle | on/off |
 | Squelch Enable, Audio Mute, Tune Lock, Center Lock | Toggle | on/off |
@@ -148,6 +150,7 @@ Gate parameters follow the button: press to key, release to un-key.
 | Master Volume | Slider | 0–100 |
 | Headphone Volume | Slider | 0–100 |
 | Master Mute, TX Button, TNF Global | Toggle | on/off |
+| RADE Modem | Toggle | on/off |
 | QSO Record, QSO Playback | Toggle | on/off |
 | Band Up, Band Down | Trigger | momentary |
 | Mode Up, Mode Down | Trigger | momentary |
@@ -156,14 +159,16 @@ Gate parameters follow the button: press to key, release to un-key.
 #### Mode, Band, Filter, Slice, Display, Frequency
 | Category | Parameters (all triggers) |
 |----------|---------------------------|
-| Mode | Mode USB, LSB, CW, CWL, AM, SAM, FM, NFM, DFM, DSTR, DIGU, DIGL, RTTY |
+| Mode | Mode USB, LSB, CW, CWL, AM, SAM, FM, NFM, DFM, DSTR, DIGU, DIGL, RTTY, FDVU, FDVL |
 | Band | Band 160m, 80m, 60m, 40m, 30m, 20m, 17m, 15m, 12m, 10m, 6m, 2m |
 | Filter | Filter Widen, Filter Narrow |
 | Slice | Split Toggle |
 | Display | Band Zoom, Segment Zoom, Panadapter Zoom In, Panadapter Zoom Out, Open Memories |
 | Frequency | Tune Up 1 MHz, Tune Down 1 MHz |
 
-Digital-voice modes that need a helper (such as DSTR) are only offered when that helper is available, and **Mode Up / Mode Down** skip DSTR while the D-STAR helper is not running.
+Digital-voice modes that need a helper (such as DSTR) are only offered when that helper is available. **Mode Up / Mode Down** step only through the modes the radio reports, in the order above, so a mode the radio lacks (CWL on some FlexRadio models, for example) is skipped. On a radio that reports no mode list, they step through the whole list except FDVU and FDVL. Either way they skip DSTR while the D-STAR helper is not running.
+
+**RADE Modem** turns the RADE modem on or off on the active slice. Turning it on switches the slice to DIGU or DIGL and makes it the TX slice; if RADE is running on another slice, it moves to the active one. Turning it off leaves the slice in DIGU/DIGL. RADE needs DAX audio, so on a radio without it the press is ignored. The parameter is present in builds with RADE support.
 
 ### Settings files
 
@@ -182,9 +187,9 @@ midi/<name>.xml    — saved profiles
 
 ### No MIDI ports shown
 
-The controller is not recognised, or the port list is out of date.
+The controller is not recognized, or the port list is out of date.
 
-1. Check that your controller is plugged in and recognised (on Linux, `amidi -l` should list it).
+1. Check that your controller is plugged in and recognized (on Linux, `amidi -l` should list it).
 2. Click **Refresh** to re-scan. Selections follow the device, not its position in the list, so a refresh does not swap your port.
 
 ### A knob moves but the parameter doesn't change

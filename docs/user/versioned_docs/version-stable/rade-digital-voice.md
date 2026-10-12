@@ -40,7 +40,9 @@ Select **RADE** from the mode dropdown in either the RX applet or the VFO widget
 
 RADE stays active across PTT cycles. It switches itself off if the radio or another client changes the slice to a mode other than DIGU/DIGL. If the RADE engine fails to start, the slice's previous mode, filter and TX assignment are restored.
 
-You can also start RADE from **Tools → FreeDV Reporter...**: double-clicking a station tunes to it and switches the slice to RADE.
+You can also start RADE from **View → FreeDV Reporter...**: double-clicking a station tunes to it and switches the slice to RADE.
+
+A MIDI controller or [Ulanzi Dial](./ulanzi-dial.md) button mapped to **RADE Modem** turns RADE on and off on the active slice. Turning it off leaves the slice in DIGU/DIGL. See [MIDI Controller Mapping](./midi-controller-mapping.md).
 
 ### Read sync and SNR
 
@@ -50,12 +52,12 @@ While RADE is active, the VFO flag shows:
 
 *A slice in RADE, before any RADE signal is decoded: the sync dot is hollow and the SNR reads ---.*
 
-- a **RADE** badge with a sync LED next to the frequency — **green ●** when the modem is synchronised, grey ○ when it is not;
+- a **RADE** badge with a sync LED next to the frequency — **green ●** when the modem is synchronized, gray ○ when it is not;
 - a **RADE info row** below the frequency with the far-end **callsign** (when received), the decoded **SNR** and the **frequency offset**.
 
 The same readouts are in the **RADE Status** applet (button **RADE**, in the applet drawer, closed by default), which shows "RADE inactive" when RADE is off.
 
-The RADE modem uses pilot symbols for synchronisation and can acquire signals down to approximately 0 dB SNR.
+The RADE modem uses pilot symbols for synchronization and can acquire signals down to approximately 0 dB SNR.
 
 ### End-of-over callsign
 
@@ -69,7 +71,7 @@ At the end of each over, RADE sends an **end-of-over (EOO)** frame that carries 
 FreeDV Reporter is the FreeDV community's live view of who is on the air.
 
 - Turn on reporting in **SpotHub → FreeDV** with **Enable FreeDV Reporter reporting when RADE is active**, and set **Callsign** (or **Use radio**), **Grid Square** (or **Use GPS**) and **Station Msg**.
-- **Tools → FreeDV Reporter...** opens the reporter panel. Its **Message** field is the same setting as SpotHub's **Station Msg** — the two stay in sync, and changes go out live. The field is disabled while reporting is off.
+- **View → FreeDV Reporter...** opens the reporter panel. Its **Message** field is the same setting as SpotHub's **Station Msg** — the two stay in sync, and changes go out live. The field is disabled while reporting is off.
 - Double-click a station in the panel to tune to it and force RADE.
 
 See [SpotHub](./spothub.md) for the FreeDV spot feed.

@@ -12,11 +12,11 @@ applies_to: ["FlexRadio", "IC-7300MK2", "IC-705 (early)"]
 
 :::
 
-The CWX (CW Transmit) panel sends Morse code typed on your keyboard or stored in macros, keyed by the radio's own CW text keyer. On a FlexRadio it uses the radio's CWX keyer; on a supported [Networked Icom](./networked-icom.md) radio the same panel drives the radio's CI-V text keyer and is labelled **CWK**.
+The CWX (CW Transmit) panel sends Morse code typed on your keyboard or stored in macros, keyed by the radio's own CW text keyer. On a FlexRadio it uses the radio's CWX keyer; on a supported [Networked Icom](./networked-icom.md) radio the same panel drives the radio's CI-V text keyer and is labeled **CWK**.
 
 ## Requirements
 
-- **Mode:** CWX keys the **transmit slice**, so it is available when the TX slice is in **CW** or **CWL**. The indicator is greyed out otherwise, and switching the TX slice out of CW closes the panel.
+- **Mode:** CWX keys the **transmit slice**, so it is available when the TX slice is in **CW** or **CWL**. The indicator is grayed out otherwise, and switching the TX slice out of CW closes the panel.
 - **Radio support:** the indicator is **hidden** on radios without a radio-side CW text keyer (for example the [Hermes-Lite 2](./hermes-lite-2.md)), and the panel closes with it.
 - **On Icom (CWK):** supported on the IC-705 and IC-7300MK2. The speed range follows the radio, and the **Live** and **Setup** views are hidden because the CI-V keyer has no live keying or stored macros.
 
@@ -24,7 +24,7 @@ The CWX (CW Transmit) panel sends Morse code typed on your keyboard or stored in
 
 ### Opening CWX
 
-Click the **CWX** indicator in the status bar at the bottom of the screen (or use **Tools → CW Keyer**). The panel opens beside the panadapter.
+Click the **CWX** indicator in the status bar at the bottom of the screen, or Tab to it and press Enter (or use **Tools → CW Keyer**). The panel opens beside the panadapter.
 
 The CWX panel and the [DVK Panel](./dvk-panel.md) share the same space — opening one closes the other.
 
@@ -110,7 +110,7 @@ On FLEX firmware v4.2.18, a CWX break-in delay of 0 makes the radio mute all rec
 
 1. Update the radio to firmware v4.2.20 or later. See [Firmware Update](./firmware-update.md).
 
-### The CWX indicator is greyed out
+### The CWX indicator is grayed out
 
 The transmit slice is not in a CW mode.
 

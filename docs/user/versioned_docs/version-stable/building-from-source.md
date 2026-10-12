@@ -69,7 +69,7 @@ See [docs/BUILDING.md § Windows 11](https://github.com/aethersdr/AetherSDR/blob
 sudo cmake --install build
 ```
 
-This installs the binary, a desktop entry and the icon.
+This installs the binary, a desktop entry and the icon. The installed binary keeps using the Qt it was built with. `setup-qt.sh` keeps older Qt installs until you run it with `--prune`, so rebuild and reinstall AetherSDR before pruning.
 
 ## Developing AetherSDR
 
@@ -99,7 +99,7 @@ Start with [AGENTS.md](https://github.com/aethersdr/AetherSDR/blob/main/AGENTS.m
 | `USE_SYSTEM_*` | OFF | For distribution packagers: use system zlib, libmspack, libmosquitto, RtMidi, libwhisper or SQLite instead of the bundled copies |
 | `LOWER_CASE_BINARY_NAME` | OFF | Lower-case executable name on Linux |
 
-Builds honour `SOURCE_DATE_EPOCH` for reproducible output.
+Builds honor `SOURCE_DATE_EPOCH` for reproducible output.
 
 ## Troubleshooting
 

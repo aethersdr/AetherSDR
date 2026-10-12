@@ -109,7 +109,7 @@ The VK3AMP reads **Reconnect automatically** only at startup.
 > physical amplifier ([#4097](https://github.com/aethersdr/AetherSDR/issues/4097)).
 > Reports from owners are welcome.
 
-The **Elecraft KPA1500** applet:
+The **Elecraft KPA1500** applet (button **KPA1500**):
 
 - A status pill, **PWR**, **REF** and **SWR** gauges.
 - An info grid with PA temperature, band and the ATU state.
@@ -120,8 +120,9 @@ The **Elecraft KPA1500** applet:
   `TUNING` while a tune runs; press it again to cancel. A full-search tune
   needs RF, so key the radio's own TUNE: nothing in this applet keys the
   radio.
-- **ANT 1** / **ANT 2**. An `ANT n` label appears when an external antenna
-  switch reports an antenna number from 3 to 32.
+- **ANT** **1** / **2**, the amplifier's two antenna connectors. An `ANT n`
+  label appears when an external antenna switch reports an antenna number
+  from 3 to 32.
 
 There is no network PTT and no lost-link TX inhibit.
 

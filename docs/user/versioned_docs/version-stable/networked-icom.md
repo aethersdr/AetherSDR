@@ -70,7 +70,7 @@ Click **Connect by IP**. The model is identified over the wire, not from the rad
 AetherSDR treats an Icom differently from a FlexRadio:
 
 - **The radio is authoritative.** It remembers its own frequency, mode and filter. AetherSDR reads the radio's state and levels when it connects and never pushes saved state onto it.
-- **Unknown models fail closed.** Each verified model has its own command profile. A control that has not been proven on a model is hidden, and a radio AetherSDR does not recognise gets no panadapter and no transmit, rather than guessed defaults.
+- **Unknown models fail closed.** Each verified model has its own command profile. A control that has not been proven on a model is hidden, and a radio AetherSDR does not recognize gets no panadapter and no transmit, rather than guessed defaults.
 
 What you can do:
 
@@ -111,13 +111,15 @@ The Icom RC-28 remote encoder is supported (**Settings → Icom RC-28 Remote Enc
 ### IC-7300MK2
 
 - TX bandwidth table; CW speed 6–48 WPM; CW pitch in 5 Hz steps.
-- Squelch works in CW and data modes. The panadapter squelch line uses the MK2's own measured scale, and **Auto SQL is not available** on the MK2.
+- The speech processor button reads **COMP**, and its slider is the radio's own COMP level, 0–10, with a numeric readout.
+- Squelch works in CW and data modes. The panadapter squelch line uses the MK2's own measured scale in SSB, CW, AM and data modes; FM, DFM and WFM have no squelch line. **Auto SQL is not available** on the MK2.
 - AGC threshold, AGC Off, AM carrier, VOX delay and repeater offset are disabled. TUNE is refused in CW and CW-R.
-- The preamp and ATT buttons update about 0.2 s after a change.
+- The preamp and ATT buttons update about 0.2 s after a change, including the one the radio switches by itself: engaging ATT drops the preamp, and engaging the preamp drops ATT.
 
 ### IC-705
 
 - 2 m and 70 cm are available alongside HF.
+- The speech processor button reads **COMP**, with a 0–10 slider and a numeric readout, as on the MK2.
 - **WFM** (broadcast FM) is receive-only.
 - GPS location and NTP time controls. The power gauge uses a QRP scale.
 - AetherSDR warns if the radio's MOD Input is not WLAN.
@@ -125,9 +127,9 @@ The Icom RC-28 remote encoder is supported (**Settings → Icom RC-28 Remote Enc
 ### IC-9700
 
 - Three bands with their own power ceilings (100 / 75 / 10 W).
-- CTCSS (TX and RX), DTCS, dial-lock sync, supply voltage, PA drain current, continuous compression and LAN MOD level.
+- CTCSS (TX and RX), DTCS, dial-lock sync, supply voltage, PA drain current, continuous compression and LAN MOD level. The **COMP** slider runs 0–100, with a numeric readout.
 - If CI-V stalls, AetherSDR tries a bounded automatic recovery before a full reconnect.
-- Its MAIN/SUB dual-receiver layout is not modelled.
+- Its MAIN/SUB dual-receiver layout is not modeled.
 
 ### Not available on a networked Icom
 
@@ -138,11 +140,8 @@ The Icom RC-28 remote encoder is supported (**Settings → Icom RC-28 Remote Enc
 ## Known issues
 
 - On the IC-7300MK2, transmit audio drops out for about a third of a second roughly every 1.2 seconds while the radio stays keyed ([#6169](https://github.com/aethersdr/AetherSDR/issues/6169)).
-- Squelch can stick off: once its level reaches 0, SQL cannot be turned back on from AetherSDR (IC-7300MK2, IC-705, IC-9700) ([#6172](https://github.com/aethersdr/AetherSDR/issues/6172)).
-- The speech processor (PROC) slider snaps back to DX+ after you move it (IC-7300MK2, IC-705) ([#6171](https://github.com/aethersdr/AetherSDR/issues/6171)).
 - CW speed, break-in and pitch do nothing on models without a CW text keyer, such as the IC-9700 ([#6110](https://github.com/aethersdr/AetherSDR/issues/6110)).
 - On the IC-9700, the panadapter trace can sit on the bottom line and look blank on a quiet band with the preamp off ([#4814](https://github.com/aethersdr/AetherSDR/issues/4814)).
-- On the IC-9700, the waterfall rate returns to 100 after you restart AetherSDR ([#5996](https://github.com/aethersdr/AetherSDR/issues/5996)).
 
 ## Troubleshooting
 

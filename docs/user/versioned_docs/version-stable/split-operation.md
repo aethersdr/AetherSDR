@@ -113,7 +113,7 @@ comes back the same way, and keeps doing so until you change it.
 - Only your own edits teach it: the VFO flag, applets, keyboard and
   controllers. Changes arriving over CAT, TCI or from the radio do not.
 - If you mute the transmit slice yourself before ending a split, the remembered
-  arrangement is cleared, so muting it once returns to the original behaviour.
+  arrangement is cleared, so muting it once returns to the original behavior.
 - Splits started by a logging program or another client over CAT, Hamlib or
   TCI are left alone.
 

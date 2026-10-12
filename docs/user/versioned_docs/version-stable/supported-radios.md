@@ -4,7 +4,7 @@ slug: "/supported-radios"
 description: "AetherSDR is a client for FlexRadio transceivers, and FlexRadio is the supported target."
 ---
 
-AetherSDR is a client for **FlexRadio** transceivers, and FlexRadio is the supported target. It also drives several other radio families through a vendor-neutral backend layer. Those families are newer, and each is labelled with its status below.
+AetherSDR is a client for **FlexRadio** transceivers, and FlexRadio is the supported target. It also drives several other radio families through a vendor-neutral backend layer. Those families are newer, and each is labeled with its status below.
 
 ## Where to go next
 
@@ -56,7 +56,7 @@ This table lists only what has been confirmed for each family. A **?** means not
 
 | | FlexRadio | Hermes-Lite 2 | Networked Icom | ANAN-G2 | RTL-SDR | Demo |
 |---|---|---|---|---|---|---|
-| **Transmit** | Yes | Yes (SSB voice, CW, data) | Yes on recognised models; none on an unrecognised model | No | No | No |
+| **Transmit** | Yes | Yes (SSB voice, CW, data) | Yes on recognized models; none on an unrecognized model | No | No | No |
 | **Receivers / slices** | As reported by the radio | Up to 4 (A–D) | Per model | 1 | 1 | 1 |
 | **Panadapters** | As reported by the radio | One per receiver | 1 | 1 | 1 | ? |
 | **DAX virtual audio and IQ** | Yes | No | No | No | No | No |
@@ -87,7 +87,7 @@ Radio Setup gains a page for some families: **Calibration** and **HL2 Hardware**
 
 ### Peripherals
 
-Supported external devices include the 4O3A/FlexRadio PGXL power amplifier and TGXL tuner, plus ACOM S-series, SPE Expert and VK3AMP amplifiers. See [Peripherals](./peripherals.md) and [Amplifiers](./amplifiers.md).
+Supported external devices include the 4O3A/FlexRadio PGXL power amplifier and TGXL tuner, plus ACOM S-series, SPE Expert, VK3AMP and Elecraft KPA1500 amplifiers. See [Peripherals](./peripherals.md) and [Amplifiers](./amplifiers.md).
 
 ## See also
 

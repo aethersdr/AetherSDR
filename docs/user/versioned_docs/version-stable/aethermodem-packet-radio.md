@@ -18,13 +18,13 @@ AetherModem works on FlexRadio, on the [Hermes-Lite 2](./hermes-lite-2.md) and o
 
 ## Setup
 
-Open it from **Tools → AetherModem…**
+Open it from **View → AetherModem...**
 
 ### Window layout
 
 The window has six tabs: **APRS**, **Digipeater**, **KISS TNC**, **Terminal**, **Mailbox** and **D-STAR** (the D-STAR tab is covered on [D-STAR (ThumbDV)](./d-star-thumbdv.md) and is hidden on radios without waveform support). A slim status bar along the bottom shows the modem state, the receive gain and a packet-activity strip.
 
-The window has no title bar. Drag any empty part of it to move it, and drag an edge or corner to resize it. Close it with the round **✕** in the top-right corner, **Esc** or **Ctrl+W** (**⌘W** on macOS). It's a window of its own, with its own taskbar entry, so you can minimise it from the taskbar or park it on another monitor. **View → Frameless Window** does not apply to it. Closing only hides it: the KISS TNC, the mailbox and the APRS modem keep running, and reopening brings back the same window.
+The window has no title bar. Drag any empty part of it to move it, and drag an edge or corner to resize it. Close it with the round **✕** in the top-right corner, **Esc** or **Ctrl+W** (**⌘W** on macOS). It's a window of its own, with its own taskbar entry, so you can minimize it from the taskbar or park it on another monitor. **View → Frameless Window** does not apply to it. Closing only hides it: the KISS TNC, the mailbox and the APRS modem keep running, and reopening brings back the same window.
 
 All AetherModem transmissions share one queue and key the radio one at a time, so the APRS client, digipeater, KISS clients, terminal and mailbox never talk over each other.
 

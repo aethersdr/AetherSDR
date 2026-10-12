@@ -22,12 +22,14 @@ The in-app guide **Help → Understanding Noise Cancellation...** covers the sam
 
 ## Using the radio-side filters (FPGA)
 
-These run on the radio's FPGA — zero CPU cost to your PC. All use preset, optimized parameters with no user adjustments required — just toggle on/off. We did, however, add "amount" sliders in the DSP slide bar menu if you're feeling adventurous.
+On a FlexRadio these run on the radio's FPGA — zero CPU cost to your PC (the noise blanker on the Hermes-Lite 2 and ANAN-G2 is the exception; see [NB](#nb--noise-blanker)). All use preset, optimized parameters with no user adjustments required — just toggle on/off. We did, however, add "amount" sliders in the DSP slide bar menu if you're feeling adventurous.
 
 The radio-side buttons are on the VFO flag's **DSP** tab: NR, NB, ANF and APF on the first row; NRL, NRS, RNN and NRF on the second.
 
 ### NB — Noise Blanker
 Blanks short impulse noise (ignition interference, switching power supplies). Has an adjustable level (0-100) in the DSP side panel.
+
+On the [Hermes-Lite 2](./hermes-lite-2.md) and the [ANAN-G2](./anan-g2.md), AetherSDR runs the noise blanker on the computer, and the NB button cycles **Off → NB → NB2 → Off**; its label shows which blanker is running. NB blanks each impulse to silence. NB2 instead reconstructs the blanked window from the samples either side, which sounds better when the impulse lands on a signal and worse when the noise is dense. While NB2 runs, an **NB2** fill row appears under the DSP buttons: **Zero** (silence, as NB does), **Sample hold**, **Mean hold**, **Hold sample** or **Interpolate**. On other radios the blanker is the radio's own and NB is a plain on/off toggle.
 
 ### NR — Noise Reduction
 General-purpose noise reduction. Adjustable level (0-100). Good starting point for noisy bands.
@@ -136,7 +138,7 @@ RN2 is also available on the transmit side, in AetherTX's Gate toolbar; the Nois
 ### NR4 — SpecBleach Spectral Denoiser
 **Purpose:** Advanced spectral noise reduction with psychoacoustic masking and a learned noise profile.
 
-NR4 is powered by Luciano Dato's open-source `libspecbleach` library. It spends about one second learning a noise profile (passing audio through untouched meanwhile), then uses spectral masking to suppress the noise without the "musical" artefacts classical spectral subtraction can produce.
+NR4 is powered by Luciano Dato's open-source `libspecbleach` library. It spends about one second learning a noise profile (passing audio through untouched meanwhile), then uses spectral masking to suppress the noise without the "musical" artifacts classical spectral subtraction can produce.
 
 **Settings:** Reduction Amount (0–40 dB), Smoothing, Whitening, Adaptive Noise, Noise Estimation method (SPP-MMSE, Brandt or Martin), Masking Depth and Suppression Strength.
 
@@ -249,7 +251,7 @@ The seven client-side methods are voice-only: they switch themselves off in CW, 
 
 ## Known issues
 
-- NR2 can sound scratchy or produce clicks and artefacts on voice ([#632](https://github.com/aethersdr/AetherSDR/issues/632)).
+- NR2 can sound scratchy or produce clicks and artifacts on voice ([#632](https://github.com/aethersdr/AetherSDR/issues/632)).
 - NNR's **Premium** model makes receive audio choppy and broken up; the **Standard** model does not ([#5989](https://github.com/aethersdr/AetherSDR/issues/5989)).
 - DFNR can switch itself back on in every profile after you turn it off and save the profile ([#4018](https://github.com/aethersdr/AetherSDR/issues/4018)).
 - The client-side methods stay on in the digital-voice and data modes DSTR, FDV, FDVU and DRM, where they can corrupt the decoder's input ([#5701](https://github.com/aethersdr/AetherSDR/issues/5701)).
