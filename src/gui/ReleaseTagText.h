@@ -9,7 +9,7 @@ namespace AetherSDR {
 // the leading digits of each part, so a tag that passes the newer-version
 // test can still carry markup. Each prompt neutralises the tag itself.
 
-// Rich text by design (<p>, <b>), so the tag is HTML-escaped.
+// Rich text by design (<p>, <b>), so both versions are HTML-escaped.
 inline QString outdatedVersionPromptHtml(const QString& current, const QString& latestTag)
 {
     return QStringLiteral(
@@ -17,7 +17,7 @@ inline QString outdatedVersionPromptHtml(const QString& current, const QString& 
                "<p>Your issue may already be fixed in the latest release. "
                "Please update before filing a bug report.</p>"
                "<p>Continue anyway?</p>")
-        .arg(current, latestTag.toHtmlEscaped());
+        .arg(current.toHtmlEscaped(), latestTag.toHtmlEscaped());
 }
 
 // Neither line carries markup, so the box is plain text and shows the tag

@@ -61,6 +61,13 @@ void testOutdatedVersionBody()
            crafted);
     report("outdated: the body is rich text", Qt::mightBeRichText(crafted), crafted);
 
+    const QString markedCurrent =
+        outdatedVersionPromptHtml(QStringLiteral("1.0<i>x</i>"), kPlainTag);
+    report("outdated: the running version is escaped too",
+           markedCurrent.contains(QStringLiteral("<b>v1.0&lt;i&gt;x&lt;/i&gt;</b>"))
+               && !markedCurrent.contains(QStringLiteral("<i>")),
+           markedCurrent);
+
     const QString plain = outdatedVersionPromptHtml(kCurrent, kPlainTag);
     report("outdated: a plain tag is shown unchanged",
            plain.contains(QStringLiteral("but <b>v26.10.3</b> is available.")), plain);
