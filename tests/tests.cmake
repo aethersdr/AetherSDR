@@ -7152,6 +7152,16 @@ add_test(NAME frameless_resizer_test COMMAND frameless_resizer_test)
 set_tests_properties(frameless_resizer_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# The two prompts that show a GitHub release tag (#6405): the tag is escaped
+# in the rich-text "Outdated Version" body and the "Update Available" box is
+# plain text. The tag is passed in; no network, no sockets.
+add_executable(release_tag_text_test tests/release_tag_text_test.cpp)
+target_include_directories(release_tag_text_test PRIVATE src)
+target_link_libraries(release_tag_text_test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets)
+add_test(NAME release_tag_text_test COMMAND release_tag_text_test)
+set_tests_properties(release_tag_text_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # FlexControl port-loss recovery (#4574). Guarded on SERIALPORT for the same
 # reason FlexControlManager itself is: the whole class is inside
 # #ifdef HAVE_SERIALPORT, so without Qt SerialPort there is nothing to test.

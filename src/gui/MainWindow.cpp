@@ -115,6 +115,7 @@
 #include "AntennaGeniusApplet.h"
 #include "ShackSwitchApplet.h"
 #include "RadioSetupDialog.h"
+#include "ReleaseTagText.h"
 #include "AgcCalibrationDialog.h"
 #include "AudioDeviceChangeDialog.h"
 #include "NetworkDiagnosticsDialog.h"
@@ -1426,8 +1427,7 @@ MainWindow::MainWindow(QWidget* parent)
         FramelessMessageBox box(this);
         box.setWindowTitle("AetherSDR Update Available");
         box.setIcon(QMessageBox::Information);
-        box.setText(QString("AetherSDR v%1 is available.").arg(ver));
-        box.setInformativeText(QString("You are running v%1.").arg(current));
+        setUpdateAvailableText(box, current, ver);
         QPushButton* viewBtn = box.addButton("View Latest Release", QMessageBox::ActionRole);
         viewBtn->setAutoDefault(false);
         QPushButton* closeBtn = box.addButton(QMessageBox::Close);
