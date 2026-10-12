@@ -51,7 +51,8 @@ inline constexpr AudioDeviceChurnRule kHostAudioDeviceChurnRule = AudioDeviceChu
 
 // Monitor sources, per-app loopbacks, the auto-null sink and the echo-cancel /
 // combine virtuals come and go constantly and are never a new mic or speaker
-// to offer (#2864). Compiled on every platform so each CI lane tests it.
+// to offer (#2864). Compiled on every platform so tests can exercise the Linux
+// rule on any host.
 inline bool isLinuxTransientAudioDeviceId(const QByteArray& id)
 {
     return id.contains(".monitor")

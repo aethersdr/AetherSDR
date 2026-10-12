@@ -32,14 +32,19 @@
 #include "models/RadioModel.h"
 
 #include <QApplication>
+#include <QColor>
+#include <QCoreApplication>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QHostAddress>
 #include <QImage>
 #include <QLabel>
+#include <QList>
 #include <QPushButton>
+#include <QSignalBlocker>
 #include <QSignalSpy>
 #include <QSlider>
+#include <QStringList>
 #include <QtTest>
 
 #include <memory>
