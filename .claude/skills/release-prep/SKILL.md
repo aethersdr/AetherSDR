@@ -412,8 +412,8 @@ one. Never claim a build, test or hardware result the pass did not produce.
   reason), Validation (the step-5 output), `After merge: tag the resulting
   **main** commit, not this branch.`, then the Claude Code attribution line.
 - **Ready or draft** is a gate question. Request review from
-  `@aethersdr/infrastructure`; the author cannot approve. Assign yourself
-  (`AGENTS.md` § "Issue / PR Claim Protocol").
+  `@aethersdr/infrastructure`; the author cannot approve. Do not claim
+  your own prep PR (`AGENTS.md` § "Issue / PR Claim Protocol").
 - **While the PR is open, watch `main`.** Every merge after the cutoff must
   be folded in before the tag: v26.7.2 missed #4211 and nobody caught it;
   v26.8.1's reviewer caught #4718; #5673 folded #5595 in mid-review with a

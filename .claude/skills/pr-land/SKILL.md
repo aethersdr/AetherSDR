@@ -155,10 +155,17 @@ push.
 
 Do all of this before touching code. Each item has cost a real merge.
 
-- **Claim the PR.** `gh pr view <PR> --json assignees`; if unassigned or
-  assigned only to `@aethersdr-agent`, `gh pr edit <PR> --add-assignee @me`.
-  If another non-AetherClaude agent holds it, leave a coordination comment and
-  stop (AGENTS.md § Issue / PR Claim Protocol, Principle X).
+- **Check the claim, then claim the PR unless it is your own.**
+  `gh pr view <PR> --json assignees`. If another non-AetherClaude agent holds
+  it, leave a coordination comment and stop (AGENTS.md § Issue / PR Claim
+  Protocol, Principle X), even when you authored the PR. Otherwise, on someone
+  else's PR, `gh pr edit <PR> --add-assignee @me`. On your own PR add nothing:
+  the author is assumed to be still working on it, and a claim announces that
+  another project member is now involved. Claim even when the pass may push
+  nothing: the claim is the landing lock, keeping other agents from pushing
+  under you mid-flight. Hold it until the merge fires, through the
+  armed-and-waiting window; unassign only if the pass stops short of arming
+  auto-merge.
 - **Anchor to the head SHA.** `gh pr view <PR> --json headRefOid` — record it.
   Everything you read, build and prove is against this SHA, and you re-check
   it before posting anything (steps 9, 10).
