@@ -51,6 +51,9 @@
 #include "TunerApplet.h"
 #include "TxApplet.h"
 #include "core/PeripheralSettings.h"
+#include "core/SpeConnection.h"
+#include "core/SpeLegacyProtocol.h"
+#include "core/SpeProtocol.h"
 #include "core/PeripheralEndpointFallback.h"
 #include "core/KiwiSdrManager.h"
 #include "core/KiwiSdrProtocol.h"
@@ -7055,8 +7058,9 @@ void MainWindow::wireMeters()
         // switch never leaves the previous model's state behind.
         const bool legacy =
             m_speConn.activeVariant() == AetherSDR::Spe::Variant::Legacy1k;
-        const auto& spec = AetherSDR::Spe::modelSpec(legacy
-            ? QString::fromLatin1(AetherSDR::Spe::Legacy::kModelId) : QString());
+        const QString modelId = legacy
+            ? QString::fromLatin1(AetherSDR::Spe::Legacy::kModelId) : QString();
+        const AetherSDR::Spe::ModelSpec& spec = AetherSDR::Spe::modelSpec(modelId);
         if (legacy) {
             spe->setModelName(spec.displayName);
         }

@@ -208,11 +208,21 @@ void SpeConnection::connectSerial(const QString& portName)
         connect(m_serialPort, &QSerialPort::readyRead, this, &SpeConnection::onReadyRead);
         connect(m_serialPort, &QSerialPort::errorOccurred, this,
                 [this](QSerialPort::SerialPortError err) {
-            if (err == QSerialPort::NoError) { return; }
+            // TimeoutError is a bounded wait (drainWrites) running out, not a
+            // transport failure. Errors raised while teardownDevice() is
+            // already releasing and closing the port must not re-enter it.
+            if (err == QSerialPort::NoError || err == QSerialPort::TimeoutError
+                || m_inTeardown) {
+                return;
+            }
             const QString msg = m_serialPort->errorString();
             qCWarning(lcTuner) << "SpeConnection: serial error" << err << msg;
             onTransportError(msg);
             if (m_connected) { onTransportDown(); }
+            // A lost link releases DTR now (line policy, design note §12)
+            // rather than leaving the port open with the line held until a
+            // reconnect or Disconnect gets to it.
+            teardownDevice();
         });
     }
 
@@ -292,12 +302,14 @@ void SpeConnection::disconnect()
     // asymmetry left AcomConnection's applet stuck at "Connected" on a
     // user-initiated serial disconnect until it was made self-contained.
     const bool wasConnected = m_connected;
+    // Set before draining: an error raised by the drain must read as part
+    // of this deliberate disconnect, not as a link failure.
+    m_deliberateDisconnect = true;
     if (wasConnected && isLegacy()) {
         // Stop the Status stream so the amp is quiet for the next client.
         sendRaw(Spe::Legacy::buildRcuOff());
         drainWrites();
     }
-    m_deliberateDisconnect = true;
     m_reconnectTimer.stop();
     m_pollTimer.stop();
     m_lcdScheduler.reset();
@@ -327,6 +339,14 @@ void SpeConnection::teardownDevice()
     // the platform: what close() does to DTR differs between Windows (DCB
     // restore, then the driver) and Linux/macOS (HUPCL), so only an explicit
     // release behaves the same everywhere.
+    m_inTeardown = true;
+    if (isLegacy() && m_legacyDtrRaised && m_responding && m_lastStatus.transmitting) {
+        // No TX guard yet (a TX inhibit is tracked separately, #6231): say so
+        // when the release lands while the amplifier reports transmitting.
+        qCWarning(lcTuner) << "SpeConnection: releasing DTR while the 1K-FA"
+                              " reports TRANSMIT — the amplifier powers off"
+                              " mid-transmission.";
+    }
     if (m_device == &m_socket && m_socket.state() != QAbstractSocket::UnconnectedState) {
         if (isLegacy() && m_legacyDtrRaised
             && m_socket.state() == QAbstractSocket::ConnectedState) {
@@ -338,17 +358,25 @@ void SpeConnection::teardownDevice()
     }
 #ifdef HAVE_SERIALPORT
     if (m_serialPort && m_device == m_serialPort && m_serialPort->isOpen()) {
-        // A port in error (adapter unplugged) has no line left to release,
-        // and touching it would only raise errorOccurred again.
-        if (isLegacy() && m_serialPort->error() == QSerialPort::NoError) {
+        // Only a port whose device is gone (adapter unplugged, access lost)
+        // has no line left to release. Any other error must not cancel the
+        // release: QSerialPort::error() stays set until clearError(), so a
+        // single earlier glitch would otherwise skip it for good — and with
+        // setSettingsRestoredOnClose(false) nothing else lowers the line on
+        // Windows.
+        const QSerialPort::SerialPortError err = m_serialPort->error();
+        if (isLegacy() && err != QSerialPort::ResourceError
+            && err != QSerialPort::PermissionError) {
             m_serialPort->setDataTerminalReady(false);
             m_serialPort->setRequestToSend(false);
         }
+        m_serialPort->clearError();
         m_serialPort->close();
     }
 #endif
     m_device = nullptr;
     m_legacyDtrRaised = false;
+    m_inTeardown = false;
 }
 
 void SpeConnection::drainWrites()
@@ -548,6 +576,19 @@ void SpeConnection::onLegacyFrameReceived(const Spe::Legacy::Frame& f)
         }
         return;
     }
+    // A warning context the decoder has no text for would otherwise be
+    // invisible; logged once per change, the stream repeats it 5-8 times a
+    // second.
+    const std::optional<quint8> unmapped = Spe::Legacy::unmappedWarningContext(f.data);
+    const int ctx = unmapped ? *unmapped : -1;
+    if (ctx != m_lastUnmappedWarningCtx) {
+        m_lastUnmappedWarningCtx = ctx;
+        if (unmapped) {
+            qCDebug(lcTuner) << "SpeConnection: 1K-FA display context"
+                             << QString::number(ctx, 16)
+                             << "is in the warning range but has no text";
+        }
+    }
     if (const auto status = Spe::Legacy::parseStatus(f.data)) {
         acceptStatus(*status);
     }
@@ -578,7 +619,13 @@ void SpeConnection::sendKey(Spe::Key key)
         sendRaw(Spe::buildKeyCommand(key));
         return;
     }
-    sendRaw(Spe::Legacy::buildKeyCommand(key));
+    const QByteArray command = Spe::Legacy::buildKeyCommand(key);
+    if (command.isEmpty()) {
+        qCWarning(lcTuner) << "SpeConnection: the 1K-FA has no code for key"
+                           << static_cast<int>(key) << "— not sent";
+        return;
+    }
+    sendRaw(command);
     // On the 1K-FA a held-high DTR keeps the amp powered and locks out its
     // own power key, so SWITCH OFF also releases the line — over ser2net via
     // RFC 2217, like powerOn(). The key goes first; the line follows once

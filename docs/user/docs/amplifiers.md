@@ -1,12 +1,12 @@
 ---
 title: "Amplifiers"
 slug: "/amplifiers"
-description: "AetherSDR controls several linear amplifiers directly, independent of the radio: the ACOM S-series, the SPE Expert 1.3K-FA / 1.5K-FA / 2K-FA, the VK3AMP 600 / 1000 / 2000 W, and the Elecraft KPA500 / KPA1500."
+description: "AetherSDR controls several linear amplifiers directly, independent of the radio: the ACOM S-series, the SPE Expert 1.3K-FA / 1.5K-FA / 2K-FA and the original 1K-FA, the VK3AMP 600 / 1000 / 2000 W, and the Elecraft KPA500 / KPA1500."
 ---
 
 AetherSDR controls several linear amplifiers directly, independent of the
-radio: the ACOM S-series, the SPE Expert 1.3K-FA / 1.5K-FA / 2K-FA, the VK3AMP
-600 / 1000 / 2000 W, and the Elecraft KPA500 / KPA1500. Each is configured in
+radio: the ACOM S-series, the SPE Expert 1.3K-FA / 1.5K-FA / 2K-FA and the
+original 1K-FA, the VK3AMP 600 / 1000 / 2000 W, and the Elecraft KPA500 / KPA1500. Each is configured in
 [Peripherals](./peripherals.md) and gets its own applet in the **Amplifiers** category. Any
 combination can be connected at once, alongside a PGXL.
 
@@ -51,9 +51,13 @@ The **ACOM Amplifier** applet shows:
 
 ## Using the SPE Expert 1.3K-FA / 1.5K-FA / 2K-FA
 
+In Peripherals, leave the **Amplifier Model** on **1.3K / 1.5K / 2K-FA** (the
+default). For the original 1K-FA, see
+[Using the original SPE Expert 1K-FA](#using-the-original-spe-expert-1k-fa).
+
 The amplifier only answers when polled, so AetherSDR polls it every 100 ms.
-The model is identified from its status. If the amplifier goes silent behind a
-live ser2net link, the applet reports it as off.
+The exact model is identified from its status. If the amplifier goes silent
+behind a live ser2net link, the applet reports it as off.
 
 **ser2net:** monitoring and control work with the proxy port in raw or telnet
 mode. Powering the amplifier **on** over the network drives the proxy's
@@ -66,7 +70,8 @@ The **SPE Expert Amplifier** applet (button **SPE**):
 - Gauges for output power (rescaled with the LOW / MID / HIGH level), antenna
   SWR, and the SWR seen before the ATU.
 - Temperature, voltage and current readouts, and a warning / alarm banner.
-- **ON** (a DTR/RTS power pulse; works over the network with RFC 2217),
+- **ON** (a DTR/RTS power pulse; works over the network with RFC 2217; if the
+  network bridge cannot switch the lines, a note under the buttons says so),
   **OFF**, **OPER / STBY**, the power level (click to cycle LOW / MID / HIGH),
   **TUNE** (the ATU), **INPUT** 1/2, **ANT** (cycles the antenna for the
   current band), and drive up / down.
@@ -76,6 +81,54 @@ amplifier's LCD and a **FRONT PANEL** key group: **BAND −** / **BAND +**,
 **SET**, and the manual ATU steps **L −** / **L +** / **C −** / **C +**. These
 keys work only while the LCD mirror is current; if its data goes stale they
 are dimmed, and the display stays visible.
+
+## Using the original SPE Expert 1K-FA
+
+The original 1K-FA (the model with only an RS-232 port, not the newer 1K-FA
+"Taurus") speaks an older protocol at **9600 8N1** and cannot be detected, so
+you choose it: in Peripherals, set **Amplifier Model** to **1K-FA (original,
+RS-232)**. The fixed serial settings shown next to it change to 9600 8N1. For
+a ser2net proxy, set the proxy's serial side to 9600 baud; raw mode is
+preferred, because the 1K-FA's binary status loses an occasional frame in
+telnet mode.
+
+The **SPE Expert Amplifier** applet works as for the newer models, with these
+differences:
+
+- The amplifier streams its status on its own, 5–8 times a second, once
+  AetherSDR connects.
+- The power level reads **HALF** / **FULL**; clicking it toggles between them.
+- The antenna SWR is estimated from forward and reflected power while the
+  amplifier is in OPERATE, and is shown as **SWR ≈**. In STANDBY it is the
+  value the amplifier reports.
+- There is no SWR before the ATU and no LCD mirror, so that gauge row is
+  dimmed, the popped-out display says so, and the **FRONT PANEL** keys stay
+  dimmed. Hover over a dimmed control for the reason.
+
+### Power on and off
+
+The 1K-FA stays powered while the serial port's DTR line is held high, and
+AetherSDR holds it only while it is connected:
+
+- **ON** raises DTR. The amplifier boots in a few seconds.
+- **OFF** sends the amplifier's OFF key and then releases DTR.
+- **Disconnect**, quitting AetherSDR, or losing the serial link releases DTR,
+  and an amplifier that **ON** switched on powers off. Reconnecting, by hand
+  or with **Reconnect automatically**, does not switch it back on; press
+  **ON** again.
+- An amplifier switched on at its own front panel is not affected by
+  connecting or disconnecting.
+- While AetherSDR holds DTR, the amplifier refuses its own front-panel power
+  switch. Use **OFF** in the applet.
+
+Avoid disconnecting or quitting while transmitting: the amplifier then powers
+off mid-transmission.
+
+Over the network, **ON** and **OFF** need ser2net with RFC 2217
+(`accepter: telnet(rfc2217=true),<port>`) and a serial adapter that has a DTR
+line. A plain serial-to-Ethernet converter only passes data: monitoring and
+the keys work, but **ON** cannot, so switch the amplifier on at its front
+panel.
 
 ## Using the VK3AMP 600 / 1000 / 2000 W
 
@@ -322,13 +375,15 @@ The **LP-100A Meter** applet is in the **Metering** category and is
 | Amplifier | Connection | Defaults |
 |---|---|---|
 | ACOM Amplifier | Serial, or network through a ser2net proxy in raw mode | 9600 8N1; TCP 7000 |
-| SPE Expert Amplifier | Serial, or network through ser2net (raw or telnet) | 115200 8N1; TCP 7000 |
+| SPE Expert Amplifier | Serial, or network through ser2net (raw or telnet) | 115200 8N1 (original 1K-FA: 9600 8N1); TCP 7000 |
 | VK3AMP Amplifier | Network only: TCP control, UDP telemetry | TCP 5005; UDP 5010 |
 | Elecraft KPA500 | Serial, or network through a raw TCP ser2net proxy | 4800 8N1; selectable locally, configured on the server for TCP; TCP 2000 |
 | Elecraft KPA1500 | Network only: TCP | TCP 1500 |
 | LP-100A Meter | Serial, or network through a ser2net proxy in raw mode | 115200 8N1; TCP 2000 |
 
 ## Known issues
+
+- The original 1K-FA briefly disconnects the radio's antenna path while it powers up, and AetherSDR does not yet hold off transmitting during that time ([#6231](https://github.com/aethersdr/AetherSDR/issues/6231)).
 
 - An SPE amplifier set to connect at startup shows connected but no data until you disconnect and reconnect it ([#4893](https://github.com/aethersdr/AetherSDR/issues/4893)).
 
@@ -344,6 +399,25 @@ telnet port cannot do.
    field has a sample configuration.
 2. Reconnect the amplifier in **Peripherals** and press **ON**.
 
+### The original 1K-FA will not power on over the network
+
+The network bridge cannot switch the serial port's DTR line. A note under the
+applet's buttons says so when you press **ON**.
+
+1. If the bridge is a plain serial-to-Ethernet converter, switch the
+   amplifier on at its front panel; monitoring and the keys still work.
+2. For remote power on, use ser2net with `accepter: telnet(rfc2217=true),<port>`
+   and a serial adapter that has a DTR line, then reconnect and press **ON**.
+
+### The original 1K-FA switches off when I disconnect
+
+AetherSDR holds the 1K-FA's power line only while it is connected, so an
+amplifier that **ON** switched on powers off on **Disconnect**, when you quit
+AetherSDR, or when the serial link drops.
+
+1. To keep the amplifier on without AetherSDR, switch it on at its front panel
+   instead of with **ON**.
+
 ### The VK3AMP takes a long time to connect on Windows
 
 After the amplifier has been idle, the first connection can take 9–12
@@ -354,7 +428,8 @@ seconds, because the amplifier answers only broadcast ARP.
 ### The SPE front-panel keys are dimmed
 
 The popped-out **FRONT PANEL** keys work only while the LCD mirror is current.
-Its data has gone stale.
+Its data has gone stale, or the amplifier is an original 1K-FA, which has no
+LCD mirror; on the 1K-FA the keys stay dimmed.
 
 1. Check the amplifier's connection in **Peripherals**.
 2. Wait for the LCD mirror to update; the keys come back with it.

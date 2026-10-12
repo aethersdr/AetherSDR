@@ -42,8 +42,10 @@ QByteArray buildRcuOn();
 QByteArray buildRcuOff();
 // Translates the shared Spe::Key to the 1K-FA's own key code. POWER maps to
 // the 1K-FA's MODE key, which toggles HALF/FULL output.
+// An empty QByteArray (sent as nothing) for a key the 1K-FA has no code
+// for, so a future Spe::Key never goes out as a valid-looking key 0.
 QByteArray buildKeyCommand(Key key);
-quint8 keyCode(Key key);
+std::optional<quint8> keyCode(Key key);
 
 // One amplifier->host frame; `data` excludes sync, CNT and checksum.
 struct Frame {
@@ -71,12 +73,20 @@ private:
 //   - id is kModelId; powerLevel is 'H' for FULL, 'L' for HALF.
 //   - bandIndex is translated to the newer family's table (no 60m here).
 //   - txAntenna is 1..4 (0 = none); atuState is not reported (null).
+//   - input is 1 or 2 for an input nibble of 0 or 1; anything else reads 0
+//     (unknown) rather than a confident IN2.
 //   - STANDBY reports SWR directly; OPERATE reports PA gain instead, so
 //     swrAnt is derived from forward/reverse power there and flagged
 //     swrEstimated. swrAtu stays 0.
 //   - Warnings come from the display context; alarmDetail flags the ALARM bit.
 // Returns nullopt for a payload of the wrong size.
 std::optional<Status> parseStatus(const QByteArray& payload);
+
+// The display-context byte of a Status payload when it lies in the warning
+// range (0x11 and up) but has no text in the decoder's table — such a
+// warning would otherwise be invisible. nullopt for a mapped or non-warning
+// context, or a payload of the wrong size. For logging only.
+std::optional<quint8> unmappedWarningContext(const QByteArray& payload);
 
 // VSWR from forward/reverse power; 0 when there is no forward power, and
 // capped at 99.9 for a reflection at or above the forward power.

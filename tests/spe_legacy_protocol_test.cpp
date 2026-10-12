@@ -3,6 +3,7 @@
 
 #include <QByteArray>
 #include <QList>
+#include <QPair>
 
 #include <cmath>
 #include <cstdio>
@@ -86,11 +87,29 @@ int main()
     {
         bool allMapped = true;
         for (int k = static_cast<int>(Key::Input); k <= static_cast<int>(Key::Set); ++k) {
-            if (Legacy::keyCode(static_cast<Key>(k)) == 0x00) {
+            if (!Legacy::keyCode(static_cast<Key>(k)).has_value()) {
                 allMapped = false;
             }
         }
         report("every shared key has a 1K-FA code", allMapped);
+    }
+    {
+        // The full key table from SPE's Rev 2.0 document, so an edit to any
+        // single code fails here (only Operate/Tune/MODE/ANT are live-tested).
+        const QList<QPair<Key, quint8>> table = {
+            {Key::Input, 0x28},   {Key::BandDown, 0x29},   {Key::BandUp, 0x2A},
+            {Key::Antenna, 0x2B}, {Key::Cat, 0x2C},        {Key::LeftArrow, 0x2D},
+            {Key::RightArrow, 0x2E}, {Key::Set, 0x2F},     {Key::LMinus, 0x30},
+            {Key::LPlus, 0x31},   {Key::CMinus, 0x32},     {Key::CPlus, 0x33},
+            {Key::Tune, 0x34},    {Key::SwitchOff, 0x18},  {Key::Power, 0x1A},
+            {Key::Display, 0x1B}, {Key::Operate, 0x1C}};
+        bool allMatch = true;
+        for (const auto& [key, code] : table) {
+            if (Legacy::keyCode(key) != code) {
+                allMatch = false;
+            }
+        }
+        report("all 17 key codes match the Rev 2.0 key table", allMatch);
     }
 
     // ── Amp -> host parsing ──────────────────────────────────────────────
@@ -171,6 +190,20 @@ int main()
                    s->warningDetail == QLatin1String("Temperature high"));
             report("ALARM bit sets alarm text", !s->alarmDetail.isEmpty());
         }
+        report("a mapped warning context is not reported as unmapped",
+               !Legacy::unmappedWarningContext(tx).has_value());
+    }
+    {
+        // Input nibble outside 0/1 (unpinned by a capture) reads as unknown.
+        const QByteArray odd = statusPayload(0x80, 0x19, 0x47, 0x00, 0, 30, 0, 0, 480, 0);
+        const auto s = Legacy::parseStatus(odd);
+        report("an input nibble other than 0/1 reads as unknown (0), not IN2",
+               s && s->input == 0);
+        report("an unmapped warning context (0x19) shows no text but is reported",
+               s && s->warningDetail.isEmpty()
+                   && Legacy::unmappedWarningContext(odd) == quint8(0x19));
+        report("a normal display context (0x01) is not a warning",
+               !Legacy::unmappedWarningContext(standby).has_value());
     }
     {
         const QByteArray inf = statusPayload(0x00, 0x01, 0x90, 0x04, 9999, 30, 50, 0, 480, 0);

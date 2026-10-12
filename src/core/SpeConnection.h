@@ -179,6 +179,11 @@ private:
     // so the key is on the wire (~7 ms at 9600 baud) before the line drops.
     QTimer m_offReleaseTimer;
     static constexpr int kLegacyOffReleaseMs = 150;
+    // Set while teardownDevice() releases and closes the port, so an error
+    // it raises does not re-enter teardown through errorOccurred.
+    bool m_inTeardown{false};
+    // Last unmapped warning context logged (-1 = none), to log changes only.
+    int m_lastUnmappedWarningCtx{-1};
 
     Mode      m_mode{Mode::None};
     QString   m_lastSerialPort;

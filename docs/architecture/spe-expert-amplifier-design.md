@@ -496,6 +496,21 @@ wiring are reused. Mapping choices:
   re-raising the line after the release. Over the network the release is
   an RFC 2217 SET-CONTROL before the socket closes, sent only if ON raised
   the line on that connection.
+- The release is skipped only when the device itself is gone
+  (`ResourceError`, `PermissionError`): `QSerialPort::error()` stays set
+  until `clearError()`, so gating on "no error" would let one earlier
+  glitch cancel every later release. teardownDevice() clears the error after
+  each close, a fatal serial error tears the port down at once (releasing
+  the line where it still can), and the bounded drain's `TimeoutError` is
+  not treated as a link failure.
+- No TX guard yet: a release while the amplifier reports TRANSMIT is logged
+  as a warning, and the user guide says not to disconnect or quit while
+  transmitting. A TX inhibit around the 1K-FA's power transitions is the
+  follow-up #6231.
+- SWITCH OFF's key-first order assumes the amplifier honours the remote OFF
+  key while DTR is held. Its front-panel power switch is refused in that
+  state; whether the remote key is too is a pending bench row. If it is,
+  the 150 ms release is what actually powers the amp off.
 - Not controllable in software: the OS asserts DTR inside open() itself.
   Measured on macOS 27 (Apple Silicon) with an FTDI FT2232H dual-port
   RS-232 adapter, port A's DTR wired to port B's DSR and port B polled at
@@ -543,7 +558,14 @@ Status decode, key table, variant persistence). The fixture is built from
 the same offset table as the decoder, so the hardware evidence is a bench
 test on a real 1K-FA: readings matched the amp's own display, the keys and
 DTR power-ON worked. Two live Status captures (OPERATE + FULL, ANT1:
-receiving on 160 m, keyed on 80 m) are pinned as fixtures; STANDBY, HALF,
-ANT≠1 and IN2 captures are still to come (#6162), so the direct-SWR field,
-the HALF polarity, the antenna/input nibbles beyond 1, the display-context
-warning texts and the ALARM bit rest on the spec table until then.
+receiving on 160 m, keyed on 80 m) are pinned as fixtures. Only the keyed
+capture discriminates the band offset (its band nibble is 1; the receive
+capture's band, input and antenna fields are all zero) and the four 16-bit
+power and supply fields. STANDBY, HALF, ANT≠1 and IN2 captures are still to
+come (#6162), so the direct-SWR field, the HALF polarity, the antenna/input
+nibbles beyond 0/1, the display-context warning texts and the ALARM bit rest
+on the spec table until then. An input nibble other than 0/1 decodes as 0
+(unknown), and a warning-range display context without text is logged, so
+an unpinned value shows up instead of reading as a confident IN2 or
+nothing. The key table is asserted code by code against the Rev 2.0
+document; four keys (Operate, Tune, HALF/FULL, ANT) are live-tested.

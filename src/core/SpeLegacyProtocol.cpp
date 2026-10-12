@@ -94,7 +94,7 @@ QByteArray buildRcuOff()
     return buildPacket(QByteArray(1, static_cast<char>(kRcuOff)));
 }
 
-quint8 keyCode(Key key)
+std::optional<quint8> keyCode(Key key)
 {
     switch (key) {
         case Key::Input:      return 0x28;
@@ -115,14 +115,18 @@ quint8 keyCode(Key key)
         case Key::Display:    return 0x1B;
         case Key::Operate:    return 0x1C;
     }
-    return 0x00;
+    return std::nullopt;
 }
 
 QByteArray buildKeyCommand(Key key)
 {
+    const std::optional<quint8> code = keyCode(key);
+    if (!code) {
+        return QByteArray();
+    }
     QByteArray data;
     data.append(static_cast<char>(kKeyOn));
-    data.append(static_cast<char>(keyCode(key)));
+    data.append(static_cast<char>(*code));
     return buildPacket(data);
 }
 
@@ -195,7 +199,8 @@ std::optional<Status> parseStatus(const QByteArray& d)
     const quint8 bandInput = static_cast<quint8>(d.at(kBandInput));
     const int band = (bandInput >> 4) & 0x0F;
     s.bandIndex = band <= 9 ? sharedBandIndex(band) : -1;
-    s.input = (bandInput & 0x0F) == 0 ? 1 : 2;
+    const int inputNibble = bandInput & 0x0F;
+    s.input = inputNibble <= 1 ? inputNibble + 1 : 0;
 
     const int ant = static_cast<quint8>(d.at(kCatAntenna)) & 0x0F;
     s.txAntenna = ant <= 3 ? ant + 1 : 0;
@@ -222,6 +227,18 @@ std::optional<Status> parseStatus(const QByteArray& d)
         s.alarmDetail = QStringLiteral("Alarm active — see the amplifier display");
     }
     return s;
+}
+
+std::optional<quint8> unmappedWarningContext(const QByteArray& payload)
+{
+    if (payload.size() != kStatusDataLength) {
+        return std::nullopt;
+    }
+    const quint8 ctx = static_cast<quint8>(payload.at(kDisplayCtx));
+    if (ctx < 0x11 || !displayContextWarning(ctx).isEmpty()) {
+        return std::nullopt;
+    }
+    return ctx;
 }
 
 }  // namespace Legacy
