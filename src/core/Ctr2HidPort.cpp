@@ -22,8 +22,9 @@ const std::vector<Ctr2HidPort::KnownCtr2>& Ctr2HidPort::knownCtr2Devices()
 
 namespace {
 
-// A self-named device's product string is untrusted input shown in the UI:
-// accept it only as a short, printable ASCII name that extends the prefix.
+// A self-named device's product string is untrusted input that becomes its
+// model name: accept it only as a short, printable ASCII name that extends
+// the prefix.
 QString selfNamedModel(const QString& product, QLatin1String prefix)
 {
     constexpr qsizetype kMaxName = 32;

@@ -86,8 +86,10 @@ needs CTR2 firmware with USB mode, which has not been released yet.
   12 kHz, and the bars are spaced logarithmically in frequency, as on an
   audio analyser, so the low end gets more detail. A CTR2 never receives this.
 - Other controller firmware that speaks the same USB link can name itself:
-  a device whose USB product name starts with **Aether** appears in the list
-  under that name, as long as it is a short plain-text name.
+  a `303A:1001` device whose USB product name starts with **Aether** (that
+  exact case) and continues with at least one more character appears in the
+  list under that name, as long as the whole name is printable ASCII and at
+  most 32 characters long.
 
 ## Reference
 

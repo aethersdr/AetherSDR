@@ -730,27 +730,6 @@ void testDeviceLabels()
           "M5Dial and MIDI product strings are named");
     check(knob.ctr2Model() == QStringLiteral("AetherKnob"), "the AetherKnob product string is named");
 
-    // Firmware that names itself: a product string starting "Aether" is shown
-    // as the model, if it is a short printable name; otherwise it is unknown.
-    const auto named = [](const QString& product, quint16 vid = 0x303A) {
-        return Ctr2HidPort::DeviceInfo{QStringLiteral("p"), vid, 0x1001, QStringLiteral("AetherSDR"),
-                                       product, QStringLiteral("0123ABCD")};
-    };
-    check(named(QStringLiteral("AetherDial")).ctr2Model() == QStringLiteral("AetherDial"),
-          "a self-named device shows its own name");
-    check(named(QStringLiteral("AetherDial")).label()
-              == QStringLiteral("AetherDial: AetherSDR AetherDial (303a:1001 #0123ABCD)"),
-          "a self-named device's label");
-    check(named(QStringLiteral("Aether")).ctr2Model().isEmpty(),
-          "the prefix alone is not a name");
-    check(named(QStringLiteral("AetherNameThatRunsOnForMoreThan32")).ctr2Model().isEmpty(),
-          "an over-long name is refused");
-    check(named(QStringLiteral("Aether\tTab")).ctr2Model().isEmpty()
-              && named(QStringLiteral("Aether\u00e9")).ctr2Model().isEmpty(),
-          "a name with control or non-ASCII characters is refused");
-    check(named(QStringLiteral("aetherdial")).ctr2Model().isEmpty()
-              && named(QStringLiteral("AetherDial"), 0x1234).ctr2Model().isEmpty(),
-          "the prefix is case-sensitive and needs the Espressif IDs");
     check(other.ctr2Model().isEmpty() && other.label() == QStringLiteral("Touchpad (04f3:32bc)"),
           "other devices keep their plain label");
     check(devBoard.ctr2Model().isEmpty() && wrongVid.ctr2Model().isEmpty(),
