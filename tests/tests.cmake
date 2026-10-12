@@ -5348,6 +5348,17 @@ target_include_directories(qrz_callsign_test PRIVATE src)
 target_link_libraries(qrz_callsign_test PRIVATE Qt6::Core Qt6::Network Qt6::Test)
 add_test(NAME qrz_callsign_test COMMAND qrz_callsign_test)
 
+# #4411: AdifParser::extractField's length guard must not overflow int on a
+# crafted <FIELD:len> token. Socket-free; real files through parseFile().
+add_executable(adif_parser_test
+    tests/adif_parser_test.cpp
+    src/core/AdifParser.cpp
+    src/core/CtyDatParser.cpp
+)
+target_include_directories(adif_parser_test PRIVATE src)
+target_link_libraries(adif_parser_test PRIVATE Qt6::Core)
+add_test(NAME adif_parser_test COMMAND adif_parser_test)
+
 add_executable(shortcut_manager_test
     tests/shortcut_manager_test.cpp
     src/core/ShortcutManager.cpp
