@@ -34,7 +34,10 @@ public:
     };
 
     // Every USB identity recognised as a CTR2. 303A:1001 is Espressif's
-    // default for any ESP32-S3, so the product string decides.
+    // default for any ESP32-S3, so the product string decides. A product
+    // ending in '*' is a prefix (a udev glob): a device that matches it names
+    // itself, and its product string is shown as its model, once it passes
+    // selfNamedModel()'s checks; such an entry's model is nullptr.
     // packaging/linux/70-aethersdr-ctr2.rules must grant exactly this set.
     struct KnownCtr2 {
         quint16 vendorId;
