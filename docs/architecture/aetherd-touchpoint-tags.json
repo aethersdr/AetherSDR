@@ -1391,6 +1391,12 @@
   "split": "",
   "confidence": "high"
  },
+ "core/SpeLegacyProtocol.h": {
+  "tag": "peripheral(spe)",
+  "note": "Wire codec for the original SPE Expert 1K-FA (Rev 2.0 legacy protocol) over serial/ser2net. Same standalone-accessory precedent as core/SpeProtocol.h; not radio-family wire and not behind IRadioBackend. See docs/architecture/spe-expert-amplifier-design.md §12.",
+  "split": "",
+  "confidence": "high"
+ },
  "core/backends/hl2/Hl2Backend.h": {
   "tag": "vendor(hl2)",
   "note": "Concrete Hermes-Lite 2 IRadioBackend implementation: HPSDR/Metis transport plus HL2-owned RX/TX DSP. Family-specific implementation belongs below the radio seam.",

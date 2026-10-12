@@ -4,7 +4,7 @@
 
 Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine-design.md) §2, §10). One row per engine header the UI includes; converting a touchpoint means the UI reaches that surface through the versioned protocol instead of the header.
 
-**Totals:** 260 touchpoint headers (218 core, 42 models) — 260/260 tagged, 0/260 converted.
+**Totals:** 261 touchpoint headers (219 core, 42 models) — 261/261 tagged, 0/261 converted.
 
 | Header | Includers | Tag | Status |
 |---|---:|---|---|
@@ -147,8 +147,9 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/ShortcutManager.h` | 5 | ui-support — Keyboard shortcut registry: QShortcut bindings, persistence, conflict checks — client input plumbing, no radio state. | unconverted |
 | `core/ShutdownTrace.h` | 2 | ui-support — Process-local shutdown diagnostics and support-log breadcrumbs; lifecycle plumbing, not radio state. | unconverted |
 | `core/SignalClassifier.h` | 1 | universal — ONNX CNN voice/carrier classifier over spectrogram patches; radio-agnostic engine DSP/analysis feature | unconverted |
-| `core/SpeConnection.h` | 3 | peripheral(spe) — Direct serial/ser2net client for the SPE Expert amplifier line (1.5K-FA primary target, protocol shared across 1.3K-FA/2K-FA) — a standalone USB/RS-232 accessory with no FlexRadio awareness at all, same precedent as core/AcomConnection.h. Not radio-family wire; a peripheral accessory, NOT behind the IRadioBackend radio seam. See docs/architecture/spe-expert-amplifier-design.md. | unconverted |
-| `core/SpeProtocol.h` | 2 | peripheral(spe) — Wire codec for standalone SPE Expert amplifiers over serial/ser2net. The accessory connects independently of the radio and stays outside IRadioBackend, matching the ACOM/VKAMP peripheral precedent. | unconverted |
+| `core/SpeConnection.h` | 4 | peripheral(spe) — Direct serial/ser2net client for the SPE Expert amplifier line (1.5K-FA primary target, protocol shared across 1.3K-FA/2K-FA) — a standalone USB/RS-232 accessory with no FlexRadio awareness at all, same precedent as core/AcomConnection.h. Not radio-family wire; a peripheral accessory, NOT behind the IRadioBackend radio seam. See docs/architecture/spe-expert-amplifier-design.md. | unconverted |
+| `core/SpeLegacyProtocol.h` | 1 | peripheral(spe) — Wire codec for the original SPE Expert 1K-FA (Rev 2.0 legacy protocol) over serial/ser2net. Same standalone-accessory precedent as core/SpeProtocol.h; not radio-family wire and not behind IRadioBackend. See docs/architecture/spe-expert-amplifier-design.md §12. | unconverted |
+| `core/SpeProtocol.h` | 3 | peripheral(spe) — Wire codec for standalone SPE Expert amplifiers over serial/ser2net. The accessory connects independently of the radio and stays outside IRadioBackend, matching the ACOM/VKAMP peripheral precedent. | unconverted |
 | `core/SpectrogramBuffer.h` | 1 | universal — Ring buffer of FFT frames per panadapter feeding CNN classifier patches; pure spectrum data, radio-agnostic. | unconverted |
 | `core/SpectrumDecodeScale.h` | 1 | universal — Immutable sample decode aperture and local generation carried through the existing spectrum feed. No commands, vendor types or backend access; queued observations retain the scale that produced their levels. | unconverted |
 | `core/SpotCollectorClient.h` | 2 | ui-support — UDP listener for DXLab SpotCollector desktop app; external integration feeding DxSpot, not radio state | unconverted |
