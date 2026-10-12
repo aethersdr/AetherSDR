@@ -59,8 +59,8 @@ struct SquelchLevelScale {
 // line and Auto SQL keep the behaviour they always had (#6127).
 [[nodiscard]] inline SquelchLevelScale legacyDbmSquelchScale()
 {
-    // offsetDb, dbPerStep, modes, autoSquelch, unit, modesExclusive: every
-    // member is listed, since a shorter list warns in each includer.
+    // Explicitly initialize unit: omitting it triggers a Clang warning in
+    // every translation unit that includes this header.
     return SquelchLevelScale{-160.0, 1.0, {}, true, {}, false};
 }
 
