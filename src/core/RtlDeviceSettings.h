@@ -16,6 +16,7 @@ public:
     struct Values {
         int ppm = 0;
         bool dcSuppression = false;
+        bool receiveMetersEnabled = true;
         bool operator==(const Values&) const = default;
     };
     enum class ReadStatus { Missing, Ready, Refused };

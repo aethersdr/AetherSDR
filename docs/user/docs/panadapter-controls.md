@@ -30,6 +30,15 @@ The panadapter is the main display: the FFT spectrum on top and the scrolling wa
 - If the wheel tunes the wrong way for your mouse or trackball, turn on **Radio Setup → Appearance & Behavior → Reverse mouse-wheel tuning direction**.
 - Dragging any slider shows its value in a small popup.
 
+### The header
+
+A thin header runs across the top of each panadapter, drawn over the spectrum so the trace and grid show through it.
+
+- **At the left:** the **⋮⋮** grip and the pan's name (its slice, or the pan's ID when it has no slice). On a popped-out pan, drag the grip or the name to move the window. Clicking them never tunes.
+- **At the right:** **⬈ Pop out** (**↩ Dock** on a popped-out pan), **□ Maximize** and **✕ Close**, which closes that pan. They show when more than one pan is open, and always on a popped-out pan.
+- **In between,** the header is part of the spectrum: click, double-click to tune, drag and scroll there as anywhere else.
+- The overlay menu (←, +RX, Band…) and the dBm scale's ▲▼ arrows start just below the header. The VFO flags and the readouts at the top right (WNB, RF gain, propagation) sit at the very top, over it.
+
 ### Right-click menu
 
 Right-click the spectrum or waterfall:
@@ -123,7 +132,7 @@ It re-uses the main panadapter's data, so it uses no extra radio panadapter or s
 ### Multiple and detached panadapters
 
 - **Tools → Add Panadapter...** or the **+PAN** icon in the status bar opens a layout picker and adds a pan if the radio has room.
-- **Right-click → ↗ Pop out** moves a pan into its own window; **↩ Dock** puts it back.
+- **Right-click → ↗ Pop out**, or the header's **⬈** button, moves a pan into its own window; **↩ Dock** puts it back.
 - Pan layouts, including floating pans, are restored when you reconnect.
 - With the [Workspace Canvas](./workspace-canvas.md) on, **Import pop-outs onto canvas** places floating pans on the canvas.
 

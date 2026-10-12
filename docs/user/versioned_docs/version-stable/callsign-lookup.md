@@ -19,6 +19,10 @@ Open **Radio Setup → QRZ & Callsigns** (in the **ONLINE & APPEARANCE** group).
 
 ### QRZ.com Account
 
+<img src="/img/screens/radio-setup-qrz.png" width="679" alt="QRZ &amp; Callsigns page. The QRZ.com Account group explains what an account adds, with Enable QRZ callsign lookups ticked, empty Username (callsign) and Password fields and a Test Login button. The Lookup Cache group explains that looked-up callsigns are cached for 7 days and shows 0 cached callsign(s) with a Clear Cache button." />
+
+*Radio Setup, QRZ & Callsigns page, with no account entered.*
+
 - **Enable QRZ callsign lookups**
 - **Username (callsign):** and **Password:**
 - **Test Login** checks the credentials and reports "Login OK" or why it failed.
@@ -40,6 +44,10 @@ Type a callsign and press **Lookup**. The card shows the callsign, licence class
 The status line says where the answer came from: "Fetched from QRZ.com", or "From cache — fetched *n* day(s) ago". **Refresh** fetches fresh data from QRZ.com even if the callsign is cached.
 
 If QRZ.com is not configured or doesn't answer, the card shows **prefix** data instead (country, continent and CQ zone) and says so.
+
+<img src="/img/screens/callsign-lookup-prefix.png" width="420" alt="Callsign Lookup window with N0CALL in the search field beside Lookup and Refresh buttons. The result card shows a placeholder silhouette, N0CALL marked prefix, United States, and NA, CQ 5 with a distance and bearing. A note below reads QRZ.com unavailable, showing country-level prefix data (cty.dat); full details will replace this if QRZ answers." />
+
+*The Callsign Lookup window without a QRZ account: the card shows country-level prefix data.*
 
 ### Contact card in the CW decoder
 

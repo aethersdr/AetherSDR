@@ -55,8 +55,8 @@ const pw_stream_events kStreamEvents = {
 
 } // namespace
 
-PipeWireNativeRxSource::PipeWireNativeRxSource(int channel)
-    : m_channel(channel)
+PipeWireNativeRxSource::PipeWireNativeRxSource(int channel, bool nativePcm)
+    : m_ringSize(nativePcm ? kMaximumRingSize : 2048), m_ringMask(m_ringSize-1), m_channel(channel)
 {}
 
 PipeWireNativeRxSource::~PipeWireNativeRxSource()
@@ -176,6 +176,17 @@ void PipeWireNativeRxSource::close()
     }
 }
 
+void PipeWireNativeRxSource::reset()
+{
+    if (!m_stream) { return; }
+    auto& context = PipeWireNativeContext::instance();
+    context.lock();
+    // The RT callback is excluded here; no lock is acquired inside it.
+    m_readIdx.store(m_writeIdx.load(std::memory_order_acquire),std::memory_order_release);
+    pw_stream_flush(m_stream,false);
+    context.unlock();
+}
+
 void PipeWireNativeRxSource::feedAudio(const float* samples, uint32_t count)
 {
     if (!m_stream || count == 0) {
@@ -185,7 +196,7 @@ void PipeWireNativeRxSource::feedAudio(const float* samples, uint32_t count)
     const uint32_t writeIdx = m_writeIdx.load(std::memory_order_relaxed);
     const uint32_t readIdx  = m_readIdx.load(std::memory_order_acquire);
     const uint32_t pending  = writeIdx - readIdx;
-    const uint32_t space    = RING_SIZE - pending;
+    const uint32_t space    = m_ringSize - pending;
 
     // SPSC invariant: only the producer touches m_writeIdx, only the consumer
     // touches m_readIdx.  On overflow, drop the *newest* incoming samples that
@@ -201,8 +212,8 @@ void PipeWireNativeRxSource::feedAudio(const float* samples, uint32_t count)
     }
 
     // Copy in up to two contiguous spans (handles wraparound).
-    const uint32_t startMasked = writeIdx & RING_MASK;
-    const uint32_t firstSpan   = std::min(toCopy, RING_SIZE - startMasked);
+    const uint32_t startMasked = writeIdx & m_ringMask;
+    const uint32_t firstSpan   = std::min(toCopy, m_ringSize - startMasked);
     std::memcpy(&m_ring[startMasked], samples, firstSpan * sizeof(float));
     if (toCopy > firstSpan) {
         std::memcpy(&m_ring[0], samples + firstSpan, (toCopy - firstSpan) * sizeof(float));
@@ -248,8 +259,8 @@ void PipeWireNativeRxSource::onProcess(void* userdata)
     const uint32_t toRead   = std::min(frames, pending);
 
     if (toRead > 0) {
-        const uint32_t startMasked = readIdx & RING_MASK;
-        const uint32_t firstSpan   = std::min(toRead, RING_SIZE - startMasked);
+        const uint32_t startMasked = readIdx & self->m_ringMask;
+        const uint32_t firstSpan   = std::min(toRead, self->m_ringSize - startMasked);
         std::memcpy(dst, &self->m_ring[startMasked], firstSpan * sizeof(float));
         if (toRead > firstSpan) {
             std::memcpy(dst + firstSpan, &self->m_ring[0], (toRead - firstSpan) * sizeof(float));

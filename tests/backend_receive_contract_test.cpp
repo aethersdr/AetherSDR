@@ -695,11 +695,13 @@ void remainingModelControls()
             && QLatin1String(family.name) != QLatin1String("anan")
             && QLatin1String(family.name) != QLatin1String("rtl"))) { continue; }
         const auto backend = family.make();
-        check(backend->requestSliceControl(0, {SF::ActiveSlice, true}) == ReceiveDispatch::LocalOnly
+        const ReceiveDispatch coldSelection = backend->receiveControlPolicy() == ReceiveControlPolicy::Confirmed
+            ? ReceiveDispatch::Unsupported : ReceiveDispatch::LocalOnly;
+        check(backend->requestSliceControl(0, {SF::ActiveSlice, true}) == coldSelection
                   && backend->requestSliceControl(0, {SF::ActiveSlice, false}) == ReceiveDispatch::LocalOnly
                   && backend->requestSliceControl(-1, {SF::ActiveSlice, true}) == ReceiveDispatch::Unsupported
                   && backend->requestSliceControl(0, {SF::ActiveSlice, 1}) == ReceiveDispatch::Unsupported,
-              "RX-only backends accept local selection but reject malformed requests");
+              "RX-only selection honors confirmation admission and rejects malformed requests");
         check(backend->requestTransmitControl({TF::RfPower, 50}) == ReceiveDispatch::Unsupported
                   && backend->requestSliceControl(0, {SF::TxSlice, true}) == ReceiveDispatch::Unsupported,
               "RX-only production backends refuse new TX-related settings without connecting");

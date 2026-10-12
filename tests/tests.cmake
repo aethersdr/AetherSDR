@@ -162,6 +162,12 @@ target_link_libraries(decoder_audio_routing_test PRIVATE aethercore Qt6::Core)
 add_test(NAME decoder_audio_routing_test COMMAND decoder_audio_routing_test)
 set_tests_properties(decoder_audio_routing_test PROPERTIES TIMEOUT 30)
 
+# Injected typed PCM and the real modem worker; no sockets, sound device or RF.
+add_executable(ax25_receive_model_test tests/ax25_receive_model_test.cpp)
+target_link_libraries(ax25_receive_model_test PRIVATE aethercore Qt6::Core)
+add_test(NAME ax25_receive_model_test COMMAND ax25_receive_model_test)
+set_tests_properties(ax25_receive_model_test PROPERTIES TIMEOUT 60)
+
 # CW waveform at the selected pre-monitor boundary; no decoder, socket or TX.
 add_executable(cw_pcm_consumer_test tests/cw_pcm_consumer_test.cpp)
 target_link_libraries(cw_pcm_consumer_test PRIVATE aethercore Qt6::Core)
@@ -1809,6 +1815,14 @@ if(AETHER_BACKEND_RTL)
     set_tests_properties(rtl_capture_worker_slow_device_test PROPERTIES
         TIMEOUT 60 ENVIRONMENT "AETHER_TEST_RTL_CALLBACK_DELAY_MS=30")
 
+    # Independent AX25/Bell202 CU8 fixture through actual RTL worker and model.
+    # USB device operations are injected; no sockets, USB enumeration or RF.
+    add_executable(rtl_aprs_receive_test tests/rtl_aprs_receive_test.cpp)
+    target_include_directories(rtl_aprs_receive_test PRIVATE src tests)
+    target_link_libraries(rtl_aprs_receive_test PRIVATE aethercore Qt6::Core)
+    add_test(NAME rtl_aprs_receive_test COMMAND rtl_aprs_receive_test)
+    set_tests_properties(rtl_aprs_receive_test PROPERTIES TIMEOUT 60)
+
     # Generated IQ only: genuine resolution, continuity, gain and detector independence.
     add_executable(rtl_spectrum_resolution_test tests/rtl_spectrum_resolution_test.cpp)
     target_include_directories(rtl_spectrum_resolution_test PRIVATE src)
@@ -2164,6 +2178,45 @@ target_link_libraries(canon_window_test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets 
 set_target_properties(canon_window_test PROPERTIES AUTOMOC ON)
 add_test(NAME canon_window_test COMMAND canon_window_test)
 set_tests_properties(canon_window_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# CanonApplet, CanonPan and CanonCanvas (RFC #6226): the canon ground with
+# square corners inside the main window; the close button only requests.
+add_executable(canon_surface_test
+    tests/canon_surface_test.cpp
+    src/gui/CanonSurface.cpp
+    src/gui/CanonWindow.cpp
+    src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
+    $<TARGET_OBJECTS:aether_test_settings>
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
+    ${THEME_TEST_RESOURCES}
+)
+target_include_directories(canon_surface_test PRIVATE src)
+target_link_libraries(canon_surface_test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
+set_target_properties(canon_surface_test PROPERTIES AUTOMOC ON)
+add_test(NAME canon_surface_test COMMAND canon_surface_test)
+set_tests_properties(canon_surface_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# The panadapter's canon header (#6386): input on the title, grip and button
+# strip stays in the header, the empty middle reaches the spectrum, and the
+# dBm arrow row stays inside a short FFT area.
+add_executable(panadapter_header_test
+    tests/panadapter_header_test.cpp
+    src/gui/PanadapterHeader.cpp
+    src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
+    $<TARGET_OBJECTS:aether_test_settings>
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
+    ${THEME_TEST_RESOURCES}
+)
+target_include_directories(panadapter_header_test PRIVATE src)
+target_link_libraries(panadapter_header_test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
+add_test(NAME panadapter_header_test COMMAND panadapter_header_test)
+set_tests_properties(panadapter_header_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # Compiled-in theme seed (#3184).  DELIBERATELY has no ${THEME_TEST_RESOURCES}:
@@ -3097,6 +3150,15 @@ target_include_directories(audio_output_router_test PRIVATE src)
 target_link_libraries(audio_output_router_test PRIVATE Qt6::Core Qt6::Multimedia)
 add_test(NAME audio_output_router_test COMMAND audio_output_router_test)
 
+# Saved PC audio device vs. the live one (#6040): a pure policy over device
+# ids. No QtMultimedia and no audio device, so it runs on every runner.
+add_executable(audio_device_preference_policy_test
+    tests/audio_device_preference_policy_test.cpp
+)
+target_include_directories(audio_device_preference_policy_test PRIVATE src)
+target_link_libraries(audio_device_preference_policy_test PRIVATE Qt6::Core)
+add_test(NAME audio_device_preference_policy_test COMMAND audio_device_preference_policy_test)
+
 # QtAudioBackendGuard: Qt 6.12's QtMultimedia segfaults enumerating audio
 # devices when its PipeWire backend cannot create a client context. One
 # executable, two scenarios, each in its own process. PipeWire is pointed at an
@@ -3677,6 +3739,32 @@ target_link_libraries(radio_setup_recording_mode_dim_test PRIVATE
     aetherdesktop_support Qt6::Widgets Qt6::Test)
 add_test(NAME radio_setup_recording_mode_dim_test COMMAND radio_setup_recording_mode_dim_test)
 set_tests_properties(radio_setup_recording_mode_dim_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
+
+# Radio Setup's Headphone row on a connected radio with no command plane:
+# dimmed with an announced reason on the real HL2 and ANAN capabilities, Line
+# Out live on ANAN (it declares one), Flex (Demo) unchanged. Injected backend;
+# no socket.
+add_executable(radio_setup_headphone_output_gate_test
+    tests/radio_setup_headphone_output_gate_test.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/RadioSetupDialog.cpp
+    src/gui/RtlReceiverSettingsWidget.cpp
+    src/gui/ControlAvailabilityRegistry.cpp
+    src/gui/RadioSetupDialog_Peripherals.cpp
+    src/gui/PersistentDialog.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+    src/gui/SliceColorManager.cpp
+    src/gui/KiwiPublicReceiverPicker.cpp
+    src/gui/GuardedSlider.h
+    ${THEME_TEST_RESOURCES}
+)
+target_include_directories(radio_setup_headphone_output_gate_test PRIVATE src tests)
+target_link_libraries(radio_setup_headphone_output_gate_test PRIVATE
+    aetherdesktop_support Qt6::Widgets Qt6::Test)
+add_test(NAME radio_setup_headphone_output_gate_test COMMAND radio_setup_headphone_output_gate_test)
+set_tests_properties(radio_setup_headphone_output_gate_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
 
 
@@ -5053,6 +5141,9 @@ if(PYTHON3_EXECUTABLE)
     # next bool from the count, and a bool added after one was never seen at
     # all. Running the checker against the real header cannot see either —
     # which is how the bug survived two review rounds on #5619.
+    add_test(NAME rtl_package_closure_test
+             COMMAND ${PYTHON3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_check_rtl_package.py)
     add_test(NAME capability_record_parser
              COMMAND ${PYTHON3_EXECUTABLE}
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_check_capability_records.py)
@@ -7898,6 +7989,35 @@ add_test(NAME rx_applet_squelch_reconciliation_test
 set_tests_properties(rx_applet_squelch_reconciliation_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# Socket-free real VFO/SmartMTR paint and label invalidation regression.
+add_executable(vfo_meter_overlay_invalidation_test
+    tests/vfo_meter_overlay_invalidation_test.cpp
+    src/gui/RxApplet.cpp
+    src/gui/ControlAvailabilityRegistry.cpp
+    src/gui/VfoWidget.cpp
+    src/gui/ModeFilterPresets.cpp
+    src/gui/VfoDisplayDefaults.cpp
+    src/gui/FrequencyEntryParser.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/FilterPassbandWidget.cpp
+    src/gui/SliceColorManager.cpp
+    src/gui/SliceLabel.cpp
+    src/gui/PhaseKnob.cpp
+    src/gui/SmartMtrWidget.cpp
+    src/gui/SmartMtrConfig.cpp
+    src/gui/MeterViewController.cpp
+    src/gui/AdaptiveFilterControls.cpp
+    src/gui/GuardedSlider.h
+)
+target_include_directories(vfo_meter_overlay_invalidation_test PRIVATE src)
+target_link_libraries(vfo_meter_overlay_invalidation_test PRIVATE
+    aethercore Qt6::Widgets Qt6::Test
+)
+add_test(NAME vfo_meter_overlay_invalidation_test
+         COMMAND vfo_meter_overlay_invalidation_test)
+set_tests_properties(vfo_meter_overlay_invalidation_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # FM filter capability and edge routing through the real RX and VFO widgets.
 # Injects capability data; no socket, USB access or synthetic firmware peer.
 add_executable(fm_filter_controls_test
@@ -8242,7 +8362,20 @@ target_link_libraries(CAT_Flex_test PRIVATE Qt6::Core Qt6::Network)
 # Every standalone test/tool target that takes $<TARGET_OBJECTS:aether_test_settings>
 # (rather than linking aethercore) needs the vendored SQLite engine.
 # Conditional targets are guarded with if(TARGET ...).
+# Real applet with injected receive capabilities; no sockets/audio devices.
+if(NOT WIN32)
+    add_executable(dax_receive_applet_test tests/dax_receive_applet_test.cpp
+        src/gui/DaxApplet.cpp src/gui/MeterSlider.h src/gui/DragValuePopup.cpp
+        src/gui/SliceLabel.cpp src/gui/SliceColorManager.cpp
+        src/gui/ControlAvailabilityRegistry.cpp)
+    target_include_directories(dax_receive_applet_test PRIVATE src tests)
+    target_link_libraries(dax_receive_applet_test PRIVATE aetherdesktop_support Qt6::Widgets)
+    add_test(NAME dax_receive_applet_test COMMAND dax_receive_applet_test)
+    set_tests_properties(dax_receive_applet_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endif()
+
 set(AETHER_SETTINGS_CONSUMERS
+    dax_receive_applet_test
     hl2_discovery_logging_test
     reroute_dead_controls_test
     hl2_bandstack_digital_agc_test
@@ -8257,6 +8390,8 @@ set(AETHER_SETTINGS_CONSUMERS
     tci_rx_audio_test
     bandscope_trace_render_test
     decoder_audio_routing_test
+    ax25_receive_model_test
+    rtl_aprs_receive_test
     cw_pcm_consumer_test
     noise_floor_auto_adjust_gate_test
     qso_recorder_rates_test
@@ -8275,6 +8410,7 @@ set(AETHER_SETTINGS_CONSUMERS
     radio_setup_label_theme_token_test
     radio_setup_max_power_field_test
     radio_setup_recording_mode_dim_test
+    radio_setup_headphone_output_gate_test
     atu_seam_gate_test
     transmit_seam_drop_notice_test
     model_control_routing_test
@@ -8296,6 +8432,7 @@ set(AETHER_SETTINGS_CONSUMERS
     spectrum_overlay_fft_fps_bounds_test
     gui_nested_lifetime_test
     rx_applet_squelch_reconciliation_test
+    vfo_meter_overlay_invalidation_test
     fm_filter_controls_test
     wfm_controls_test
     spectrum_confirmed_geometry_test
@@ -8339,6 +8476,8 @@ set(AETHER_SETTINGS_CONSUMERS
     aether_rx_profiles_test
     theme_manager_test
     canon_window_test
+    canon_surface_test
+    panadapter_header_test
     theme_seed_test
     panadapter_message_overlay_test
     app_settings_safety_test
@@ -9039,3 +9178,11 @@ if(APPLE)
     target_link_libraries(sleep_inhibitor_backend_test PRIVATE "-framework IOKit" "-framework CoreFoundation")
 endif()
 add_test(NAME sleep_inhibitor_backend_test COMMAND sleep_inhibitor_backend_test)
+
+# Anonymous-pipe output injection: no sockets, audio devices or helper processes.
+if(HAVE_PIPEWIRE)
+    add_executable(pipewire_rx_bridge_test tests/pipewire_rx_bridge_test.cpp)
+    target_include_directories(pipewire_rx_bridge_test PRIVATE src)
+    target_link_libraries(pipewire_rx_bridge_test PRIVATE aethercore Qt6::Core)
+    add_test(NAME pipewire_rx_bridge_test COMMAND pipewire_rx_bridge_test)
+endif()

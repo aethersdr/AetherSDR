@@ -4334,7 +4334,7 @@ QWidget* RadioSetupDialog::buildHl2HardwareTab()
         static quint64 nextHwId = kHwRequestIdBase;
         const quint64 requestId = nextHwId++;
         auto* guard = new QObject(this);
-        auto fill = [=](const QVariantMap& m) {
+        auto fill = [=, this](const QVariantMap& m) {
             const QSignalBlocker b1(codecCombo);
             const QSignalBlocker b2(ditherChk);
             const QSignalBlocker b3(randomChk);
@@ -4816,6 +4816,36 @@ QWidget* RadioSetupDialog::buildAudioTab()
         m_model->setHeadphoneGain(v);
     });
     connect(hpMute, &QPushButton::toggled, m_model, &RadioModel::setHeadphoneMute);
+
+    // Dimmed, never hidden, on a radio with no headphone output: the title
+    // bar's predicate (MixerControlAvailability.h) and its two reasons, one
+    // for the level and one for the mute.
+    auto applyHeadphoneAvailability = [this, hpLabel, hpSlider, hpValue, hpMute] {
+        const bool available = AetherSDR::headphoneControlsAvailable(
+            m_model->isConnected(), m_model->hasCommandPlane());
+        const QString prefix = QStringLiteral(
+            "Unavailable: this radio has no headphone output. "
+            "Its audio plays on this computer; ");
+        const QString levelReason = available
+            ? QString()
+            : prefix + QStringLiteral("set its level with the master volume slider.");
+        const QString muteReason = available
+            ? QString()
+            : prefix + QStringLiteral("mute it with the speaker button.");
+        for (QWidget* w : {static_cast<QWidget*>(hpLabel),
+                           static_cast<QWidget*>(hpSlider),
+                           static_cast<QWidget*>(hpValue)}) {
+            w->setEnabled(available);
+            w->setToolTip(levelReason);
+            w->setAccessibleDescription(levelReason);
+        }
+        hpMute->setEnabled(available);
+        hpMute->setToolTip(muteReason);
+        hpMute->setAccessibleDescription(muteReason);
+    };
+    applyHeadphoneAvailability();
+    connect(m_model, &RadioModel::connectionStateChanged, hpMute,
+            applyHeadphoneAvailability);
 
     // Front Speaker (mute only) — only on M-suffix models with built-in speaker
     // M-suffix models have a built-in front speaker (6400M, 6600M, 8400M, 8600M, AU-510M, AU-520M)

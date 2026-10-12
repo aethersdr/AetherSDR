@@ -44,6 +44,7 @@ private:
     QSpinBox* m_ppm;
     QTimer* m_ppmTimer;
     QCheckBox* m_dc;
+    QCheckBox* m_meters;
     QLabel* m_applied;
     QLabel* m_status;
     QLabel* m_identity;
@@ -56,5 +57,6 @@ private:
     quint64 m_queryRequest = 0;
     quint64 m_ppmRequest = 0;
     quint64 m_dcRequest = 0;
+    quint64 m_metersRequest = 0;
 };
 } // namespace AetherSDR

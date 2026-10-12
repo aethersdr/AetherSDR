@@ -10,7 +10,7 @@
 #include <QCoreApplication>
 #include <QFile>
 #include <QStringList>
-#include <QTemporaryFile>
+#include <QTemporaryDir>
 #include <QVector>
 
 #include <algorithm>
@@ -839,14 +839,12 @@ void testReplayWavLoaderFeedsShim()
     const auto bits = lm::ax25::encode_bitstream(frameBytes, 0, 80, 8);
     const auto audio = afskPcmFromBits(bits, cfg);
 
-    QTemporaryFile file;
-    file.setFileTemplate(QStringLiteral("aether-ax25-capture-XXXXXX.wav"));
-    const bool opened = file.open();
-    report("temporary replay WAV opened", opened);
+    QTemporaryDir directory;
+    const bool opened = directory.isValid();
+    report("temporary replay WAV directory created", opened);
     if (!opened)
         return;
-    const QString path = file.fileName();
-    file.close();
+    const QString path = directory.filePath(QStringLiteral("capture.wav"));
 
     const QByteArray pcm(reinterpret_cast<const char*>(audio.data()),
                          static_cast<qsizetype>(audio.size() * sizeof(float)));
@@ -887,15 +885,13 @@ void testCaptureWriterSupportsTxStages()
            ax25AudioCapturePath(Ax25AudioCaptureStage::TxGenerated,
                                 captureId, 0).isEmpty());
 
-    QTemporaryFile file;
-    file.setFileTemplate(QStringLiteral("aether-ax25-tx-capture-XXXXXX.wav"));
-    const bool opened = file.open();
-    report("temporary TX capture WAV opened", opened);
+    QTemporaryDir directory;
+    const bool opened = directory.isValid();
+    report("temporary TX capture WAV directory created", opened);
     if (!opened) {
         return;
     }
-    const QString path = file.fileName();
-    file.close();
+    const QString path = directory.filePath(QStringLiteral("capture.wav"));
 
     const float stereoFrames[] = {
         0.25f, 0.25f,

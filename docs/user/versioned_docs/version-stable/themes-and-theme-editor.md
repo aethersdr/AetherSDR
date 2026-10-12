@@ -10,6 +10,10 @@ Every colour, font and size in AetherSDR comes from the active **theme**. You ca
 
 **View → Theme** lists every installed theme, with a check mark on the active one:
 
+<img src="/img/screens/default-light-theme.png" width="1600" alt="AetherSDR main window in the Default Light theme: a light title bar and status bar, with the panadapter, waterfall and applets." />
+
+*The main window in the Default Light theme.*
+
 - **Default Dark**: the standard look, and the default.
 - **Default Light**: a light theme for bright rooms.
 - Any themes you have created or imported.
@@ -21,6 +25,10 @@ The change applies immediately across the whole application.
 **View → Theme Editor…** opens the editor for the active theme. It is a normal window, so you can keep it open while you look at the result. The controls are listed under [Reference](#reference).
 
 Edits are saved as you make them.
+
+<img src="/img/screens/theme-editor.png" width="622" alt="Theme Editor window for Profile: Default Dark. A colour picker with Flat color and Gradient types, a hue strip, RGB and hex fields and recent colours fills the top, beside a gradient stops preview. Font controls sit below, then a Scope selector with Inspect and Reset to default, a token filter, and a list of colour tokens with their values, such as color.accent #00b4d8. Theme actions, Save As… and Close buttons run along the bottom." />
+
+*The Theme Editor, editing the built-in Default Dark theme.*
 
 ### Built-in themes are protected
 

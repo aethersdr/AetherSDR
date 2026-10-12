@@ -9875,8 +9875,13 @@ void RadioModel::dispatchSliceWfm(const SliceWfmRequest& request)
 void RadioModel::dispatchSliceSquelch(const SliceSquelchRequest& request)
 {
     if (SliceModel* source = receiveCommandSource()) {
-        reportReceiveDispatch(m_backend->requestSliceSquelch(source->sliceId(), request),
-                              QStringLiteral("receive squelch"));
+        const std::optional<SquelchLevelScale> sql = m_backend->capabilities().squelchLevelScale;
+        const bool automaticAllowed = request.kind != SliceSquelchRequest::Kind::Automatic
+            || (sql && sql->automaticInEngine && sql->appliesTo(source->mode())
+                && !source->externalReceiveReplacementActive());
+        reportReceiveDispatch(automaticAllowed
+            ? m_backend->requestSliceSquelch(source->sliceId(), request)
+            : ReceiveDispatch::Unsupported, QStringLiteral("receive squelch"));
     }
 }
 

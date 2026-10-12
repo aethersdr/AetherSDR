@@ -1,5 +1,6 @@
 #include "PanadapterApplet.h"
 #include "PanSliceTitle.h"
+#include "PanadapterHeader.h"
 #include "models/CwRxModel.h"
 #include "RttyDecodeSettings.h"
 #include "RttyDecoderSensitivity.h"
@@ -17,6 +18,7 @@
 #include "gui/CopyAssistSettings.h"
 #include "core/SettingsHelpers.h"
 
+#include <QToolButton>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QComboBox>
@@ -71,56 +73,40 @@ void setDecoderInputHint(QLabel* label, const QString& hint, const QString& reas
 } // namespace
 
 PanadapterApplet::PanadapterApplet(QWidget* parent)
-    : QWidget(parent)
+    : CanonPan(parent)
 {
     theme::setContainer(this, QStringLiteral("applet/panadapter"));
-    auto* layout = new QVBoxLayout(this);
+    // Everything lives in the canon body, inside the hairline. Children are
+    // created there rather than reparented into it: the GPU SpectrumWidget
+    // (QRhiWidget) must never change parents.
+    QWidget* body = bodyWidget();
+    auto* layout = new QVBoxLayout(body);
     m_mainLayout = layout;
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
 
-    // ── Title bar (16px gradient, matching applet style) ─────────────────
-    m_titleBar = new QWidget;
-    m_titleBar->setFixedHeight(16);
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_titleBar, "QWidget { background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
-        "stop:0 {{color.text.disabled}}, stop:0.5 {{color.background.1}}, stop:1 #1a2a38); "
-        "border-bottom: 1px solid #0a1a28; }");
-    m_titleBar->installEventFilter(this);  // drag-to-move when floating
-    // Addressable for the automation bridge (#3646/#4864 pattern): the
-    // canvas live-move stream starts here, and a drag the bridge cannot
-    // aim at is a drag no smoke can regress-test.
-    m_titleBar->setAccessibleName(QStringLiteral("panTitleBar"));
-    auto* titleBar = m_titleBar;
+    // ── Spectrum widget (FFT + waterfall) ────────────────────────────────
+    // It runs to the top of the pan: the header below lies over its top
+    // PanadapterHeader::kHeight px, and the spectrum moves the overlay menu,
+    // dBm arrows and CW / RIT / XIT labels below it. The slice flags and the
+    // top-right readouts stay at the top and ride over the header.
+    m_spectrum = new SpectrumWidget(body);
+    m_spectrum->installEventFilter(this);  // pan activation; header placement
+    m_spectrum->setTopInset(PanadapterHeader::kHeight);
+    layout->addWidget(m_spectrum, 1);
 
-    auto* barLayout = new QHBoxLayout(titleBar);
-    barLayout->setContentsMargins(6, 1, 4, 1);
-    barLayout->setSpacing(2);
+    // ── Canon header over the spectrum: grip, slice title, pop-out, ─────
+    // ── maximize, close ──────────────────────────────────────────────────
+    // Transparent, so the spectrum renders underneath; see PanadapterHeader.
+    const PanadapterHeader header = PanadapterHeader::build(m_spectrum);
+    m_titleBar = header.titleBar;
+    m_titleBar->installEventFilter(this);  // drag-to-move when floating; placement
+    m_titleLabel = header.title;
+    m_headerButtons = header.buttons;
+    m_headerButtons->installEventFilter(this);  // placement
+    auto* buttonLayout = header.buttonRow;
 
-    // Drag grip dots (matching applet title bar style)
-    auto* grip = new QLabel(QString::fromUtf8("\xe2\x8b\xae\xe2\x8b\xae"));
-    AetherSDR::ThemeManager::instance().applyStyleSheet(grip, "QLabel { background: transparent; color: {{color.text.label}}; font-size: 10px; }");
-    barLayout->addWidget(grip);
-
-    m_titleLabel = new QLabel;
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_titleLabel, "QLabel { background: transparent; color: {{color.text.secondary}}; "
-                                "font-size: 10px; font-weight: bold; }");
-    m_titleLabel->setTextFormat(Qt::RichText);  // slice letter may be HTML (#2606)
-    barLayout->addWidget(m_titleLabel);
-    barLayout->addStretch();
-
-    const QString btnStyle = QStringLiteral(
-        "QPushButton { background: transparent; color: #6a8090; "
-        "border: none; font-size: 9px; padding: 0; }"
-        "QPushButton:hover { color: #c8d8e8; }");
-
-    // Pop-out / Dock button (⬈ when docked, ↩ when floating)
-    m_popOutBtn = new QPushButton("\u2b08");  // ⬈
-    m_popOutBtn->setObjectName(QStringLiteral("panFloatToggle"));
-    m_popOutBtn->setAccessibleName(tr("Pop out panadapter"));
-    m_popOutBtn->setFixedSize(16, 14);
-    m_popOutBtn->setStyleSheet(btnStyle + "QPushButton { font-size: 11px; }");
-    m_popOutBtn->setToolTip(tr("Pop out panadapter"));
-    m_popOutBtn->hide();  // hidden in single-pan mode
+    m_popOutBtn = header.popOut;  // hidden in single-pan mode
     connect(m_popOutBtn, &QPushButton::clicked, this, [this]() {
         if (m_isFloating) {
             emit dockClicked();
@@ -128,36 +114,24 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
             emit popOutClicked();
         }
     });
-    barLayout->addWidget(m_popOutBtn);
-
-    // Maximize button (□)
-    m_maxBtn = new QPushButton("\u25a1");  // □
-    m_maxBtn->setFixedSize(16, 14);
-    m_maxBtn->setStyleSheet(btnStyle + "QPushButton { font-size: 11px; }");
-    m_maxBtn->setToolTip("Maximize panadapter");
-    m_maxBtn->hide();  // hidden in single-pan mode
+    m_maxBtn = header.maximize;   // hidden in single-pan mode
     connect(m_maxBtn, &QPushButton::clicked, this, [this]() {
         emit maximizeRequested(m_panId);
     });
-    barLayout->addWidget(m_maxBtn);
 
-    // Close button (×)
-    m_closeBtn = new QPushButton("\u00D7");
-    m_closeBtn->setFixedSize(16, 14);
-    m_closeBtn->setStyleSheet(btnStyle + "QPushButton { font-size: 11px; } QPushButton:hover { color: #ff4040; }");
-    m_closeBtn->setToolTip("Close panadapter");
-    m_closeBtn->hide();  // hidden in single-pan mode
-    connect(m_closeBtn, &QPushButton::clicked, this, [this]() {
+    // The canon close button, moved into the header at its 18 px (it is
+    // 26 px in a corner); hidden in single-pan mode.
+    placeCloseButtonIn(buttonLayout);
+    closeButton()->setFixedSize(18, 18);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(closeButton(),
+                                                        PanadapterHeader::styleSheet());
+    closeButton()->setAccessibleName(tr("Close panadapter"));
+    closeButton()->setToolTip(tr("Close panadapter"));
+    setCloseButtonVisible(false);
+    connect(this, &CanonSurface::closeRequested, this, [this]() {
         emit closeRequested(m_panId);
     });
-    barLayout->addWidget(m_closeBtn);
-
-    layout->addWidget(titleBar);
-
-    // ── Spectrum widget (FFT + waterfall) ────────────────────────────────
-    m_spectrum = new SpectrumWidget(this);
-    m_spectrum->installEventFilter(this);  // detect clicks for pan activation
-    layout->addWidget(m_spectrum, 1);
+    layoutHeader();
 
     // ── CW decode panel (hidden by default, shown in CW mode) ─────────
     // Restore persisted display preferences (#3628): font size and panel
@@ -165,7 +139,7 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
     m_cwFontPx     = std::clamp(CwDecodeSettings::fontPx(), 8, 32);
     m_cwPanelHeight = std::clamp(CwDecodeSettings::panelHeight(), 60, 600);
 
-    m_cwPanel = new QWidget(this);
+    m_cwPanel = new QWidget(body);
     m_cwPanel->setObjectName("cwDecodePanel");  // addressable for automation (#3628/#3646)
     m_cwPanel->setCursor(Qt::ArrowCursor);  // prevent invisible cursor from native-window parent (#1096)
     m_cwPanel->setFixedHeight(m_cwPanelHeight);
@@ -376,7 +350,7 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
     layout->addWidget(m_cwPanel);
 
     // ── RTTY decode panel (hidden by default, shown in RTTY/DIGL mode) ───
-    m_rttyPanel = new QWidget(this);
+    m_rttyPanel = new QWidget(bodyWidget());
     m_rttyPanel->setCursor(Qt::ArrowCursor);
     m_rttyPanel->setFixedHeight(90);
     m_rttyPanel->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
@@ -624,7 +598,7 @@ void PanadapterApplet::setMultiPanMode(bool multi)
     // In single-pan mode, hide all decorations — nothing to pop out, maximize, or close
     if (m_popOutBtn) m_popOutBtn->setVisible(multi);
     if (m_maxBtn) m_maxBtn->setVisible(multi);
-    if (m_closeBtn) m_closeBtn->setVisible(multi);
+    setCloseButtonVisible(multi);
 }
 
 void PanadapterApplet::setOnCanvas(bool on)
@@ -653,7 +627,7 @@ void PanadapterApplet::setFloatingState(bool floating)
         m_popOutBtn->setVisible(true);  // always visible when floating
     }
     // When floating, always show close (to dock via window close)
-    if (m_closeBtn && floating) m_closeBtn->setVisible(true);
+    if (floating) setCloseButtonVisible(true);
 }
 
 void PanadapterApplet::setSliceId(int id, const QString& perClientLetter)
@@ -716,7 +690,7 @@ CopyAssistPanel* PanadapterApplet::copyAssistPanel()
 
     // Dock container styled like the CW decode panel — a top border separating
     // it from the waterfall, fixed height, resizable via a top grip.
-    m_copyAssistDock = new QWidget(this);
+    m_copyAssistDock = new QWidget(bodyWidget());
     m_copyAssistDock->setObjectName("copyAssistDock");
     m_copyAssistDock->setCursor(Qt::ArrowCursor);
     m_copyAssistDock->setFixedHeight(m_copyAssistHeight);
@@ -997,8 +971,31 @@ void PanadapterApplet::clearCwText()
     m_lastCwTextSource = CwTextSource::None;
 }
 
+void PanadapterApplet::layoutHeader()
+{
+    if (!m_titleBar || !m_headerButtons) {
+        return;
+    }
+    const PanadapterHeader header{m_titleBar, m_titleLabel, m_headerButtons,
+                                  static_cast<QHBoxLayout*>(m_headerButtons->layout()),
+                                  m_popOutBtn, m_maxBtn};
+    // The spectrum's top-right readouts ride the top beside the buttons, so
+    // they end where the visible buttons begin. Not raised: built after the
+    // spectrum's overlay menu, the header sits above it, while the slice
+    // flags, created and raised later, ride over the header.
+    m_spectrum->setTopRightReserve(header.place(m_spectrum->width()));
+}
+
 bool PanadapterApplet::eventFilter(QObject* obj, QEvent* ev)
 {
+    // The header pieces size themselves to their content: a new title, or a
+    // button shown or hidden, asks for a layout, and the spectrum's width
+    // places the buttons.
+    if ((obj == m_spectrum && ev->type() == QEvent::Resize)
+        || ((obj == m_titleBar || obj == m_headerButtons)
+            && ev->type() == QEvent::LayoutRequest)) {
+        layoutHeader();
+    }
     // CW panel resize grip — drag the top edge to grow/shrink the decode
     // panel (and reveal more decoded-text history) (#3628).
     if (obj == m_cwGrip) {
@@ -1113,7 +1110,7 @@ bool PanadapterApplet::eventFilter(QObject* obj, QEvent* ev)
     }
     if (ev->type() == QEvent::MouseButtonPress)
         emit activated(m_panId);
-    return QWidget::eventFilter(obj, ev);
+    return CanonPan::eventFilter(obj, ev);
 }
 
 // ── RTTY panel ───────────────────────────────────────────────────────────────

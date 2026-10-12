@@ -9,7 +9,7 @@ AetherSDR has two kinds of keyboard shortcut:
 - **Operating shortcuts** drive the radio: tuning, MOX, push-to-talk, AF gain, band and mode changes and so on. They are **off by default**.
 - **Application shortcuts** belong to menus and windows (Minimal Mode, UI scale, Full Screen). They always work.
 
-![Keyboard shortcuts editor. A full keyboard map fills the top half, with bound keys coloured by category, for example T for MOX toggle and Space for PTT in red, G for go to frequency in blue, and the arrow keys for tuning and AF gain. A colour legend lists the categories. Below are Key and Action fields with Clear and Reset to Default buttons, a filter box and category selector, and a table of actions with their category, current key and default key, starting with Tune Up (1 step) on Right.](/img/screens/keyboard-shortcuts.png)
+<img src="/img/screens/keyboard-shortcuts.png" width="1100" alt="Keyboard shortcuts editor. A full keyboard map fills the top half, with bound keys coloured by category, for example T for MOX and Space for PTT in red, G for go to frequency, and the arrow keys for tuning. A colour legend lists the categories. Below are Key and Action fields with Clear and Reset to Default buttons, a filter box and category selector, and a table of actions with their category, current key and default key, starting with Tune Up (1 step) on Right, and Import…, Export…, Reset All to Defaults and Close buttons." />
 
 *The keyboard shortcuts editor. Bound keys are coloured by category on the keyboard map; the table below lists every action.*
 
@@ -45,6 +45,10 @@ The editor works one key at a time, so it is easiest for single-key bindings. Cl
 ### Minimal Mode
 
 **Minimal Mode** (Ctrl+Shift+M, or **View → Minimal Mode**) shrinks the main window to a narrow strip holding the applet panel. The panadapters are hidden and their rendering paused (floating panadapters stay open), the status bar and menus are hidden, and the title bar keeps only the active radio tab and status badges. Press Ctrl+Shift+M again, or the title bar's maximize button, to return. Minimal Mode is also a bindable action for controllers. The Mini-Pan applet (see [Panadapter Controls](./panadapter-controls.md)) is useful here because it shows a narrow spectrum without a full panadapter.
+
+<img src="/img/screens/minimal-mode.png" width="260" alt="AetherSDR in Minimal Mode, a narrow window holding a compact radio tab and the applet column: the button bar, S-Meter, RX Controls, TX Controls, Phone and Phone/CW." />
+
+*Minimal Mode: the window shrinks to the applet column.*
 
 > **Upgrading from an older version:** Minimal Mode was Ctrl+M on Windows. It is now Ctrl+Shift+M everywhere, so Cmd+M is free for Minimize on macOS.
 

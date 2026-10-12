@@ -1467,7 +1467,7 @@ void SpectrumOverlayMenu::toggleDaxPanel()
         m_daxPanelVisible = true;
         int btnCenterY = m_menuBtns[kBtnDax]->y() + m_menuBtns[kBtnDax]->height() / 2;
         int panelY = y() + btnCenterY - m_daxPanel->sizeHint().height() / 2;
-        m_daxPanel->move(x() + width(), std::max(0, panelY));
+        m_daxPanel->move(x() + width(), std::max(m_topLimit, panelY));
         m_daxPanel->raise();
         m_daxPanel->show();
         m_menuBtns[kBtnDax]->setStyleSheet(kMenuBtnActive);
@@ -1498,9 +1498,10 @@ void SpectrumOverlayMenu::toggleMemoryPanel()
         const int panelH = m_memoryPanel->sizeHint().height();
         int panelY = y();
         if (auto* parent = parentWidget())
-            panelY = std::clamp(panelY, 0, qMax(0, parent->height() - panelH));
+            panelY = std::clamp(panelY, m_topLimit,
+                                qMax(m_topLimit, parent->height() - panelH));
         else
-            panelY = std::max(0, panelY);
+            panelY = std::max(m_topLimit, panelY);
         m_memoryPanel->move(x() + width(), panelY);
         m_memoryPanel->raise();
         m_memoryPanel->show();
@@ -1562,7 +1563,7 @@ void SpectrumOverlayMenu::toggleAntPanel()
         m_antPanelVisible = true;
         int antBtnCenterY = m_menuBtns[kBtnAnt]->y() + m_menuBtns[kBtnAnt]->height() / 2;
         int panelY = y() + antBtnCenterY - m_antPanel->sizeHint().height() / 2;
-        m_antPanel->move(x() + width(), std::max(0, panelY));
+        m_antPanel->move(x() + width(), std::max(m_topLimit, panelY));
         m_antPanel->raise();
         m_antPanel->show();
         m_menuBtns[kBtnAnt]->setStyleSheet(kMenuBtnActive);
@@ -2978,12 +2979,12 @@ void SpectrumOverlayMenu::layoutDisplayPanel()
     const int scrollBarExtent = m_displayPanel->style()->pixelMetric(
         QStyle::PM_ScrollBarExtent, nullptr, m_displayScroll);
     const QSize panelSize = constrainedDisplayPanelSize(
-        contentHint, hostHeight, scrollBarExtent);
+        contentHint, hostHeight - m_topLimit, scrollBarExtent);
 
     m_displayPanel->resize(panelSize);
     const int menuBottom = y() + height();
     const int panelY = constrainedDisplayPanelTop(
-        menuBottom, panelSize.height(), hostHeight);
+        menuBottom, panelSize.height(), hostHeight, m_topLimit);
     m_displayPanel->move(x() + width(), panelY);
 }
 

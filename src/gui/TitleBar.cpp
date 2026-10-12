@@ -706,7 +706,7 @@ void TitleBar::updateChromeLayout()
     }
     const QScopedValueRollback<bool> updating(m_updatingChromeLayout, true);
     QWidget* host = window();
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
     mac::updateNativeTitleVisibility(host);
 #endif
     const QMargins insets = WindowChrome::contentInsets(host);
@@ -761,7 +761,7 @@ QVariantMap TitleBar::barState() const
     if (m_captionButtons) {
         chrome.insert(QStringLiteral("captionButtons"), m_captionButtons->state());
     }
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
     const QRectF nativeBounds = mac::nativeCaptionBounds(window());
     chrome.insert(QStringLiteral("nativeCaptionRect"),
                   QVariantList{nativeBounds.x(), nativeBounds.y(), nativeBounds.width(), nativeBounds.height()});

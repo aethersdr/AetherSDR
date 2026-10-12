@@ -50,6 +50,10 @@ the `FramelessWindow` setting, and it centres itself on its parent on first
 show (once it has a valid size), because it has no saved geometry to
 restore. See the `CanonWindow` section of `dialog-patterns.md` and
 [`docs/style/aethersdr-style-guide.md`](../style/aethersdr-style-guide.md).
+An applet, panadapter or canvas in the canon lives inside the main window,
+so it is built on `CanonApplet`, `CanonPan` or `CanonCanvas`
+(`gui/CanonSurface.h`) instead: the same ground and close button with square
+corners, no drag, no Escape.
 
 Any new popout window, floating tool window, or `QDialog` must respect the
 global `FramelessWindow` setting unless there is a specific reason not to:

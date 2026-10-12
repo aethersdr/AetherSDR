@@ -1134,7 +1134,7 @@ private slots:
 
     void flatControllerLoopRetainsEveryPaint()
     {
-#if defined(Q_OS_MAC) && defined(AETHER_GPU_SPECTRUM)
+#if defined(Q_OS_MACOS) && defined(AETHER_GPU_SPECTRUM)
         // MapDisplayWidget::flatMapViewportMode() deliberately keeps the flat
         // map on QGraphicsView's raster viewport in this configuration, so
         // m_flatView owns no QOpenGLWidget for this case to sample. The target

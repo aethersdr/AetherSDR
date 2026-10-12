@@ -167,8 +167,10 @@ baseline warn; a new violation or a grown baseline errors.
 desktop setters emit validated `SliceControlRequest` / `TransmitControlRequest`
 values through the identity-guarded `RadioModel` route. `FlexModelControls.cpp`
 owns the encoding; HL2 and Icom adapt only implemented controls and return
-explicit dispatch, local-only, or unsupported receipts. RX-only backends inherit
-local active-slice selection and refuse TX controls. These are desktop intents,
+explicit dispatch, local-only, or unsupported receipts. RX-only backends refuse
+TX controls. RTL active-slice selection validates accepted membership and
+publishes confirmed focus; other RX-only backends inherit local selection.
+These are desktop intents,
 not new daemon methods or TX permissions.
 MOX, TUNE and ATU start/stop still use the existing operation-fenced TX path;
 host TUNE-power edits additionally require a live locally admitted carrier.

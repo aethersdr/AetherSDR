@@ -869,6 +869,14 @@ void SliceModel::setSquelch(bool on, int level)
     });
 }
 
+void SliceModel::setAutomaticSquelch(bool enabled, int marginDb)
+{
+    if (refuseOffThread(__func__) || marginDb < 5 || marginDb > 20
+        || externalReceiveReplacementActive()) { return; }
+    emit receiveSquelchRequested({enabled, m_squelchLevel, false, false,
+        SliceSquelchRequest::Kind::Automatic, marginDb});
+}
+
 void SliceModel::setManualSquelch(bool on, int level)
 {
     const QPointer<SliceModel> alive(this);
@@ -1015,6 +1023,17 @@ void SliceModel::setActive(bool on)
 {
     if (refuseOffThread(__func__)) { return; }
     const auto field = SliceControlRequest::Field::ActiveSlice;
+    if (confirmsControls()) {
+        // Confirmed selection follows live-object admission before any UI edge;
+        // a retired model must not select a reused numeric slot optimistically.
+        if (on) {
+            const auto current = captureControlIntent(field);
+            emit controlRequested({field, true});
+            if (!current()) { return; }
+            emit activeSliceCommandIssued();
+        }
+        return;
+    }
     if (on) {
         const auto current = captureControlIntent(field);
         // Optimistic (#3854 review): activeSlice() prefers the radio's active
@@ -2011,7 +2030,13 @@ void SliceModel::applyChanges(const SliceDelta& d)
             emit wfmReceptionDiagnosticsChanged(value);
         }
     }
-    if (d.squelchOn.has_value() || d.squelchLevel.has_value()) {
+    if (d.automaticSquelch) { m_automaticSquelch = *d.automaticSquelch; }
+    if (d.automaticSquelchMarginDb && *d.automaticSquelchMarginDb >= 5
+        && *d.automaticSquelchMarginDb <= 20) {
+        m_automaticSquelchMarginDb = *d.automaticSquelchMarginDb;
+    }
+    if (d.squelchOn.has_value() || d.squelchLevel.has_value()
+        || d.automaticSquelch || d.automaticSquelchMarginDb) {
         m_squelchOnKnown |= d.squelchOn.has_value();
         m_squelchLevelKnown |= d.squelchLevel.has_value();
         if (d.squelchOn.has_value())
@@ -2026,8 +2051,13 @@ void SliceModel::applyChanges(const SliceDelta& d)
             // External-receive (Kiwi) slices keep their level in
             // m_externalReceiveSquelchLevel and never read the Flex manual
             // memory, so exclude them here exactly as setManualSquelch does.
-            if (m_squelchEchoIsManual && !m_externalReceiveAudioReplacement)
+            // Engine-owned Auto publishes its retained manual threshold,
+            // not a computed Auto level. Restore that memory even if the
+            // attached applet already marked its echo surface Off/Auto.
+            if ((m_squelchEchoIsManual || d.automaticSquelch.has_value())
+                && !m_externalReceiveAudioReplacement) {
                 setManualSquelchLevel(*d.squelchLevel);
+            }
         }
         emit squelchChanged(m_squelchOn, m_squelchLevel);
     }

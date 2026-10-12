@@ -657,16 +657,18 @@ void productionCapabilityContracts()
             && rtlFilters->modes[2].mode == QStringLiteral("WFM")
             && rtlFilters->modes[2].minimumLowHz == -100000
             && rtlFilters->modes[2].maximumHighHz == 100000
+            && rtlFilters->modes[2].minimumWidthHz == 30000
+            && rtlFilters->modes[2].maximumWidthHz == 200000
             && rtlCaps.broadcastFmReceive),
         "qualified WFM declares its own filter range and the broadcast-FM controls");
     check(qualifiedWfm || !rtlCaps.broadcastFmReceive,
         "without qualified WFM, RTL offers no broadcast-FM controls");
     check(rtlCaps.squelchLevelScale && rtlCaps.squelchLevelScale->modesExclusive
-        && rtlCaps.squelchLevelScale->autoSquelch
+        && rtlCaps.squelchLevelScale->automaticInEngine && !rtlCaps.squelchLevelScale->spectrumComparable
         && rtlCaps.squelchLevelScale->modes == QStringList{"FM", "FMN"}
         && rtlCaps.squelchLevelScale->offsetDb == -120
         && rtlCaps.squelchLevelScale->dbPerStep == 1.2
-        && rtlCaps.squelchLevelScale->unit == QStringLiteral("dBFS/bin"),
+        && rtlCaps.squelchLevelScale->unit == QStringLiteral("dBFS/2048-bin"),
         "RTL desktop squelch declares the implemented detector's modes and units");
 #endif
 }

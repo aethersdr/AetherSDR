@@ -47,6 +47,10 @@ Enable network (remote) control and create a network user name and password. Aet
 
 Networked Icoms are not discovered automatically. Open **File → Connect to Radio...**, choose **Connect by IP** and set **Radio type:** to **Icom (network)**. The form gains these rows:
 
+<img src="/img/screens/connect-icom-rows.png" width="734" alt="Radio IP address group with Radio type: Icom (network), Radio IP: 192.0.2.30, empty Icom user and Icom password fields, Icom ports: Standard (50001–50003), Icom CI-V: Auto-detect (recommended), Network Diagnostics and Connect by IP buttons, and an Advanced: choose the VPN source path expander." />
+
+*Connect by IP with Radio type set to Icom (network): the Icom user, password, ports and CI-V rows appear.*
+
 | Row | What to enter |
 |-----|---------------|
 | **Radio IP:** | The radio's IP address or host name. |

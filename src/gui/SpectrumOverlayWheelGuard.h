@@ -20,7 +20,9 @@ QSize constrainedDisplayPanelSize(const QSize& contentHint, int hostHeight,
 // hostHeight and the pane's tail lands below the host's bottom edge, where the
 // parent clips it and no scroll offset can reach it (the height clamp in
 // constrainedDisplayPanelSize does not move the panel back up).
-int constrainedDisplayPanelTop(int menuBottom, int panelHeight, int hostHeight);
+// `topLimit` is the highest the panel may sit (the spectrum's top inset).
+int constrainedDisplayPanelTop(int menuBottom, int panelHeight, int hostHeight,
+                               int topLimit = 0);
 
 // Owns wheel routing at the boundary between SpectrumOverlayMenu's floating
 // widgets and the SpectrumWidget beneath them. Interactive controls that

@@ -29,7 +29,7 @@
 #include "core/CwxLocalKeyer.h"
 #include "core/IambicKeyer.h"
 #include "core/PerfTelemetry.h"
-#if defined(Q_OS_MAC)
+#if defined(Q_OS_MACOS)
 #include "core/UlanziDialMacOSManager.h"
 #include "core/VirtualAudioBridge.h"
 #elif defined(HAVE_PIPEWIRE)
@@ -1363,7 +1363,7 @@ void MainWindow::wireRadioModel()
     // Start/stop PC audio TX when mic_selection changes
     connect(&m_radioModel.transmitModel(), &TransmitModel::micStateChanged,
             this, [this]() {
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
         const bool allowBluetoothTelephonyOutput =
             m_radioModel.transmitModel().micSelection() == "PC";
         QMetaObject::invokeMethod(m_audio, [this, allowBluetoothTelephonyOutput]() {
@@ -1415,7 +1415,7 @@ void MainWindow::wireRadioModel()
             }
         }
     });
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
     const bool allowBluetoothTelephonyOutput =
         m_radioModel.transmitModel().micSelection() == "PC";
     QMetaObject::invokeMethod(m_audio, [this, allowBluetoothTelephonyOutput]() {
@@ -1634,7 +1634,7 @@ void MainWindow::wireRadioModel()
             m_audio->setTransmitting(tx);
 #endif
         }
-#if defined(Q_OS_MAC) || defined(HAVE_PIPEWIRE)
+#if defined(Q_OS_MACOS) || defined(HAVE_PIPEWIRE)
         if (m_daxBridge)
             m_daxBridge->setTransmitting(tx);
 #endif
@@ -1665,7 +1665,7 @@ void MainWindow::wireRadioModel()
                 m_audio->setTransmitting(false);
 #endif
             }
-#if defined(Q_OS_MAC) || defined(HAVE_PIPEWIRE)
+#if defined(Q_OS_MACOS) || defined(HAVE_PIPEWIRE)
             if (m_daxBridge)
                 m_daxBridge->setTransmitting(false);
 #endif
@@ -2382,7 +2382,7 @@ void MainWindow::wirePanLifecycle()
         }
     });
 
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
     auto repushPanDimensions = [this]() {
         QTimer::singleShot(200, this, [this]() {
             if (m_shuttingDown || !m_panStack) {
@@ -2817,7 +2817,7 @@ void MainWindow::wireDaxIq()
                 &m_radioModel.daxIqModel(), &DaxIqModel::setSampleRate);
     }
 
-#if defined(Q_OS_MAC) || defined(HAVE_PIPEWIRE)
+#if defined(Q_OS_MACOS) || defined(HAVE_PIPEWIRE)
     // DAX enable button in DaxApplet → start/stop DAX bridge
     connect(m_appletPanel->daxApplet(), &DaxApplet::daxToggled,
             this, [this](bool on) {
@@ -3011,7 +3011,7 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
         QThread* backendThread = m_dialBackend->thread();
         bool queued = false;
         if (lifecycle) {
-#if !defined(Q_OS_LINUX) && !defined(Q_OS_MAC) && !(defined(Q_OS_WIN) && defined(HAVE_HIDAPI))
+#if !defined(Q_OS_LINUX) && !defined(Q_OS_MACOS) && !(defined(Q_OS_WIN) && defined(HAVE_HIDAPI))
             return QJsonObject{
                 {QStringLiteral("ok"), false},
                 {QStringLiteral("supported"), false},
@@ -3045,7 +3045,7 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
         // queued means accepted for delivery, not completed. A later thread
         // shutdown can still prevent delivery; do not report device state from
         // before an asynchronous lifecycle request as its outcome.
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
         QJsonObject snapshot = m_dialBackend->diagnostics();
         snapshot[QStringLiteral("operation")] = diagnostic;
         snapshot[QStringLiteral("enabled")] = dialEnabled();

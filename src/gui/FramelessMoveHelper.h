@@ -61,7 +61,7 @@ inline bool start(QWidget* handle, QMouseEvent* ev)
         return false;
     }
 
-#ifndef Q_OS_MAC
+#ifndef Q_OS_MACOS
     if (!systemMoveResizeUnreliable(window)) {
         if (QWindow* windowHandle = window->windowHandle()) {
             if (windowHandle->startSystemMove()) {

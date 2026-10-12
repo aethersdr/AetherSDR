@@ -49,6 +49,10 @@ Mic input settings: source, gain, bias, boost and compander level. Useful when y
 
 On each profile tab:
 
+<img src="/img/screens/profile-manager.png" width="460" alt="Profile Manager window with tabs Global, Transmit, Microphone and Auto-Save, on Global. A New Profile Name field sits above Load, Save and Delete buttons, and a list of the radio's global profiles: 20m CW, 20m Phone, 40m Phone, 80m Phone, BCSO, macOS_default_Profile, NIRG, SO2RDefault and VHF. A Close button sits at the bottom." />
+
+*The Profile Manager, listing the global profiles stored in the radio.*
+
 - **New Profile Name**: type a name for a new profile
 - **Load** (or double-click): apply the selected profile
 - **Save** (Global tab): save the current state to the selected profile, or to a new one using the name field
@@ -68,6 +72,10 @@ The **PROF** applet ("Profile Switcher", in the Station group of the applet butt
 ## Importing and exporting profiles (`.ssdr_cfg`)
 
 **Profiles → Import/Export Profiles...** moves profile libraries between radios, and between SmartSDR for Windows and AetherSDR, using SmartSDR-compatible `.ssdr_cfg` backup packages. **Both directions are carried out by the radio**; AetherSDR transfers the package but never edits its contents.
+
+<img src="/img/screens/profile-import-export.png" width="560" alt="Import/Export Profiles window on the Export tab. A note explains that export is radio-driven. Radio Database Categories has Select All and checkboxes for Global Profiles, TX Profiles and MIC Profiles (ticked), and Memories, Preferences, TNF, XVTR and USB Cables. The Destination field is blacked out beside Browse…, with an Export button below, a status line, a 0% progress bar and Cancel and Close buttons." />
+
+*The Import/Export Profiles window, on the Export tab. The destination path is blacked out.*
 
 ### Export
 

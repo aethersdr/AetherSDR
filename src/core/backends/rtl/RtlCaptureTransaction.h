@@ -33,6 +33,8 @@ public:
         int squelchLevel = 20;
         int wfmDeemphasisUs = 75; // broadcast standard; validated 50 or 75 only
         bool wfmForceMono = false; // selected decoder matrix policy, not observed pilot
+        bool automaticSquelch = false;
+        int automaticSquelchMarginDb = 10;
         bool operator==(const Receiver&) const = default;
     };
     struct Desired {

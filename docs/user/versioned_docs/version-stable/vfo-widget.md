@@ -6,9 +6,9 @@ description: "Every slice has a VFO widget (the \"flag\") floating on the spectr
 
 Every slice has a VFO widget (the "flag") floating on the spectrum next to its frequency marker. It shows the frequency and a signal meter, and its tabs give quick access to the slice's audio, DSP, mode, RIT/XIT and DAX settings.
 
-![VFO flag for slice A on the panadapter. The top row shows the RX antenna ANT1, the TX antenna ANT1, the filter width 2.8K, SPLIT, TX and the slice letter A. The large frequency readout reads 14.100.000, above a signal meter. The bottom row has audio, DSP, USB and X/RIT tabs. A column of small close, lock, record and play buttons sits to the left of the flag.](/img/screens/vfo-flag.png)
+<img src="/img/screens/vfo-flag.png" width="316" alt="VFO flag for slice A. The top row shows the RX antenna ANT1, the TX antenna ANT1, the filter width 2.7K, SPLIT, a red TX badge and the slice letter A. The large frequency readout reads 14.250.000, above a signal meter with a dBm reading. The bottom row has the speaker, DSP, USB, X/RIT and DAX tabs. A column of small close, lock, record and play buttons sits to the left of the flag." />
 
-*The VFO flag for slice A, with its close, lock and record buttons on the left edge.*
+*The VFO flag for slice A, with its close, lock, record and play buttons on the left edge.*
 
 ## Using the VFO flag
 
@@ -22,6 +22,10 @@ Every slice has a VFO widget (the "flag") floating on the spectrum next to its f
 ### Meter
 
 Below the frequency is the signal meter. **Click it** to choose between the classic **S-Meter** bar and **SmartMTR**, which adds min/max extremes markers, numeric values and a transmit meter (Mic Level, SWR, Power or Compression). The choice applies to every flag. Full details are on [Meters](./meters.md).
+
+<img src="/img/screens/vfo-meter-selector.png" width="316" alt="VFO flag with the meter selector open below the tab row: S-Meter (selected) and SmartMTR buttons, a Show extremes checkbox, Extremes speed Medium, Show values None, TX meter None and a Show meter type checkbox." />
+
+*Clicking the meter under the frequency opens the meter selector on the flag.*
 
 ### Slice buttons
 
@@ -59,6 +63,10 @@ Click a label along the bottom of the flag to open its tab. Controls the slice's
 
 #### 🔊 Audio
 
+<img src="/img/screens/vfo-audio-tab.png" width="316" alt="VFO flag with the speaker tab open below the frequency. It holds an AF slider at 50, a SQL slider at 20, an AGC mode selector set to Med with its threshold slider at 65, and a DIV button next to a left-right pan slider." />
+
+*The VFO flag with the audio tab open.*
+
 - **AF** slider with mute
 - **Pan** (left/right) with a centre marker
 - **SQL** — squelch on/off and level
@@ -74,9 +82,17 @@ The **DSP** tab label is colour-coded: green when any radio DSP or client noise 
 
 On FM, NFM, DFM and DSTR the tab becomes **OPT** (repeater offset and direction, simplex and reverse; CTCSS tones on FM, NFM and DFM only).
 
+<img src="/img/screens/vfo-dsp-tab.png" width="316" alt="VFO flag with the DSP tab open below the frequency. A grid of toggle buttons reads NR, NB, ANF, NRL, NRS, RNN, NRF, ANFL, ANFT, and two launcher buttons, AetherRX and AetherTX." />
+
+*The VFO flag with the DSP tab open on a FlexRadio: the radio's noise filters plus the AetherRX and AetherTX launchers.*
+
 #### Mode tab
 
 Labelled with the current mode (for example **USB**):
+
+<img src="/img/screens/vfo-mode-tab.png" width="316" alt="VFO flag with the USB tab open below the frequency. It shows a mode drop-down set to USB, quick mode buttons USB (lit), CW and AM, filter presets 1.8K, 2.1K, 2.4K, 2.7K (lit), 2.9K, 3.3K, 4K and 6K, a Marker: 3px button, a lit Filter Edge button and an Adaptive RX filter checkbox, unticked." />
+
+*The VFO flag with the mode tab (USB) open: mode selector, mode buttons, filter presets and the Adaptive RX filter switch.*
 
 - mode selector and quick mode buttons;
 - per-mode filter preset grid;

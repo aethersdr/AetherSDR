@@ -40,6 +40,10 @@ When you switch to RTTY mode, AetherSDR displays two dashed vertical lines on th
 
 When you tune to an RTTY signal, position the two dashed lines so that the Mark line sits on the higher-frequency tone and the Space line sits on the lower-frequency tone. When both tones fall on their respective lines, the signal is properly tuned and can be decoded.
 
+<img src="/img/screens/rtty-ms-lines.png" width="680" alt="Panadapter zoomed to a few kilohertz in RTTY mode. A shaded passband holds a dashed red line marked S and a dashed green line marked M, 170 Hz apart, beside the VFO flag reading 14.083.500 in RTTY mode." />
+
+*RTTY mode on a narrow span: the red S (space) and green M (mark) lines sit inside the passband.*
+
 ```
 Panadapter view (RTTY mode):
 
@@ -63,6 +67,10 @@ The M/S lines appear only in **RTTY** mode. A DIGL slice shows the normal carrie
 When the selected slice is in **RTTY**, a decoder pane opens below the waterfall and shows the decoded text (Baudot/ITA2, with LTRS/FIGS shift tracking). Its controls are listed under [Decoder controls](#decoder-controls).
 
 The stats bar updates about twice a second with the mark and space levels, the SNR and **LOCKED** / **UNLOCK**. Mark, Shift, Baud, REV and Sens are remembered.
+
+<img src="/img/screens/rtty-decoder-pane.png" width="1331" alt="The bottom of a zoomed panadapter in RTTY mode. Under the waterfall, the decoder pane's control row reads RTTY, (selected slice), Mark: Auto, Shift: 170, Baud: 45.45, a REV button, a Sens slider, a green tuning bar with a lock status, and CPY ALL, CLR and close buttons, above an empty text area." />
+
+*The RTTY decoder pane under the waterfall.*
 
 #### Which audio is decoded
 
