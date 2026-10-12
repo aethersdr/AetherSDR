@@ -729,7 +729,6 @@ void testDeviceLabels()
     check(dial.ctr2Model() == QStringLiteral("CTR2 (M5Dial)") && midi.ctr2Model() == QStringLiteral("CTR2-MIDI"),
           "M5Dial and MIDI product strings are named");
     check(knob.ctr2Model() == QStringLiteral("AetherKnob"), "the AetherKnob product string is named");
-
     check(other.ctr2Model().isEmpty() && other.label() == QStringLiteral("Touchpad (04f3:32bc)"),
           "other devices keep their plain label");
     check(devBoard.ctr2Model().isEmpty() && wrongVid.ctr2Model().isEmpty(),

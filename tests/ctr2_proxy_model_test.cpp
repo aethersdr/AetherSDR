@@ -177,7 +177,8 @@ void testUdevRuleMatchesKnownCtr2s()
                 g.mid(prefix.size()), QRegularExpression::NonPathWildcardConversion));
             covered = covered || (g.startsWith(prefix) && glob.match(probe).hasMatch());
         }
-        check(!info.ctr2Model().isEmpty() && covered, "a recognized self-named product is granted by the rule's glob");
+        check(!info.ctr2Model().isEmpty(), "a self-named probe is recognized");
+        check(covered, "a recognized self-named product is granted by the rule's glob");
     }
 }
 
