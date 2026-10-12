@@ -973,6 +973,12 @@ void RadioSetupDialog::buildSerialNetworkDevice(PeripheralDeviceUi& ui, QWidget*
         lay->setContentsMargins(0, 0, 0, 0);
         serialCombo = new QComboBox;
         serialCombo->setAccessibleName(tr("%1 serial port").arg(ui.label));
+        // A port's description can be long ("ttyACM1 — USB JTAG serial debug
+        // unit"); sized by its content, one plugged-in device would widen the
+        // page past the window. The open list still shows the whole name.
+        serialCombo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+        serialCombo->setMinimumContentsLength(14);
+        serialCombo->view()->setTextElideMode(Qt::ElideNone);
         serialCustomEdit = new QLineEdit;
         serialCustomEdit->setPlaceholderText("/dev/ttyUSB0");
         serialCustomEdit->setAccessibleName(tr("%1 custom serial port").arg(ui.label));

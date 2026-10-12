@@ -208,7 +208,7 @@ when you reconnect, so the slice keeps the mute state the radio reports.
 The single-click delay is set to 0, which disables double-click actions.
 
 1. Open **Settings → Radio Setup... → Appearance & Behavior**.
-2. Raise **Single-click delay** above 0, or press **Reset** for the platform
+2. Raise **Single-Click Delay** above 0, or press **Reset** for the platform
    default.
 
 ### Squelch switched off when you changed to RTTY

@@ -122,6 +122,7 @@
 #include "RadioSetupDialogCommon.h"
 #include "CanonIndicators.h"
 #include "FramelessResizer.h"
+#include "ThemedImageCache.h"
 
 namespace AetherSDR {
 
@@ -136,7 +137,9 @@ static QLabel* makeValueLabel(const QString& text)
 }
 
 static constexpr int kInfoLeftLabelWidth = 112;
-static constexpr int kInfoRightLabelWidth = 160;
+// Room for the right column's longest caption ("Licensed version:") and no
+// more, so its fields keep their width.
+static constexpr int kInfoRightLabelWidth = 128;
 
 static QString kiwiSetupApiPolicyText(KiwiSdrProtocol::ApiPolicy policy)
 {
@@ -529,6 +532,8 @@ static QString radioOptionsText(const RadioModel* model)
 
 static void showCopiedPopup(QWidget* anchor);
 
+static constexpr int kCopyButtonSize = 20;
+
 class CopyValueButton final : public QToolButton {
 public:
     explicit CopyValueButton(QString fieldName,
@@ -541,7 +546,7 @@ public:
         setAutoRaise(true);
         setCursor(Qt::PointingHandCursor);
         setFocusPolicy(Qt::TabFocus);
-        setFixedSize(20, 20);
+        setFixedSize(kCopyButtonSize, kCopyButtonSize);
         setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
         setStyleSheet(
             "QToolButton { background: transparent; border: 0; padding: 0; margin: 0; }"
@@ -676,6 +681,13 @@ static void showCopiedPopup(QWidget* anchor)
     QTimer::singleShot(1000, popup, &QLabel::close);
 }
 
+// A status line that takes no room while it has nothing to say.
+static void setShownText(QLabel* label, const QString& text)
+{
+    label->setText(text);
+    label->setVisible(!text.isEmpty());
+}
+
 static QWidget* makeInfoField(const QString& labelText, QWidget* valueWidget,
                               int labelWidth = kInfoLeftLabelWidth)
 {
@@ -700,6 +712,9 @@ static QWidget* makeInfoField(const QString& labelText, QWidget* valueWidget,
         valueWidget->setSizePolicy(policy);
     }
     layout->addWidget(valueWidget, 1);
+    // The copy column of the fields above and below: a field ends where their
+    // values do, rather than running under their copy buttons.
+    layout->addSpacing(kCopyButtonSize);
 
     return wrapper;
 }
@@ -883,9 +898,8 @@ QLabel[rsChip="on"] {
     background: {{color.canon.control}};
     border: 1px solid {{color.canon.lineHi}};
     border-radius: 4px;
-    padding: 3px 10px;
-    font-size: 11px;
-    font-weight: 700;
+    padding: 4px 10px;
+    font-weight: 600;
 }
 QLabel[rsChip="on"] {
     color: {{color.canon.ink}};
@@ -1176,6 +1190,56 @@ QScrollBar::sub-line:horizontal {
 }
 )";
 
+// A spin box with a styled frame draws its steppers from the sheet or not at
+// all: without these rules Qt falls back to two specks. Each stepper is a
+// column at the field's right with a painted triangle in the canon ink,
+// regenerated per theme like the combo arrow (ComboStyle.h). Left out if an
+// arrow could not be written, so the field keeps Qt's own.
+static QString spinArrowRules()
+{
+    const QColor color = ThemeManager::instance().color(QStringLiteral("color.canon.inkSoft"));
+    const QString key = color.name(QColor::HexRgb).remove(QLatin1Char('#'));
+    auto arrow = [&](const QString& name, bool up) {
+        return themedImagePath(QStringLiteral("spin-arrows"), name, key, QSize(8, 5), 1,
+                               [color, up](QPainter& p) {
+            p.setRenderHint(QPainter::Antialiasing);
+            p.setPen(Qt::NoPen);
+            p.setBrush(color);
+            const QPointF upTri[] = {{0, 5}, {8, 5}, {4, 0}};
+            const QPointF downTri[] = {{0, 0}, {8, 0}, {4, 5}};
+            p.drawPolygon(up ? upTri : downTri, 3);
+        });
+    };
+    const QString up = arrow(QStringLiteral("up"), true);
+    const QString down = arrow(QStringLiteral("down"), false);
+    if (up.isEmpty() || down.isEmpty()) {
+        return {};
+    }
+    return QStringLiteral(
+        "QSpinBox, QDoubleSpinBox { padding-right: 16px; }"
+        "QSpinBox::up-button, QDoubleSpinBox::up-button,"
+        " QSpinBox::down-button, QDoubleSpinBox::down-button {"
+        " subcontrol-origin: border; width: 16px; border: none;"
+        " border-left: 1px solid {{color.canon.line}}; background: transparent; }"
+        "QSpinBox::up-button, QDoubleSpinBox::up-button {"
+        " subcontrol-position: top right; border-top-right-radius: 4px; }"
+        "QSpinBox::down-button, QDoubleSpinBox::down-button {"
+        " subcontrol-position: bottom right; border-bottom-right-radius: 4px; }"
+        "QSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover,"
+        " QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover {"
+        " background: {{color.canon.nested}}; }"
+        "QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {"
+        " image: url(\"%1\"); width: 8px; height: 5px; }"
+        "QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {"
+        " image: url(\"%2\"); width: 8px; height: 5px; }"
+        "QSpinBox::up-arrow:disabled, QDoubleSpinBox::up-arrow:disabled,"
+        " QSpinBox::down-arrow:disabled, QDoubleSpinBox::down-arrow:disabled,"
+        " QSpinBox::up-arrow:off, QDoubleSpinBox::up-arrow:off,"
+        " QSpinBox::down-arrow:off, QDoubleSpinBox::down-arrow:off { image: none; }")
+        .arg(up, down);
+}
+
+
 RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
                                    TgxlConnection* tgxl, PgxlConnection* pgxl,
                                    AntennaGeniusModel* ag,
@@ -1204,7 +1268,7 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
     FramelessResizer::install(this);
     bodyWidget()->setObjectName(QStringLiteral("radioSetupBody"));
     applyCanonSheet(bodyWidget(), [] {
-        return QString::fromLatin1(kRadioSetupStyle) + canonIndicatorRules();
+        return QString::fromLatin1(kRadioSetupStyle) + spinArrowRules() + canonIndicatorRules();
     });
 
     auto* layout = new QVBoxLayout(bodyWidget());
@@ -2016,6 +2080,9 @@ QWidget* RadioSetupDialog::buildRadioTab()
         m_callsignEdit->setAccessibleDescription(
             tr("Your callsign, used for PSK Reporter, WSPR and spotting"));
         m_nicknameEdit->setAccessibleName(tr("Radio nickname"));
+        // Read from the start, not scrolled to the cursor at the end.
+        m_nicknameEdit->setCursorPosition(0);
+        m_callsignEdit->setCursorPosition(0);
         grid->addWidget(makeInfoField(QStringLiteral("Callsign:"), m_callsignEdit),
                         1, 0);
 
@@ -2068,6 +2135,7 @@ QWidget* RadioSetupDialog::buildRadioTab()
         QString stationVal = AppSettings::instance().value("StationName", "").toString();
         auto* stationEdit = new QLineEdit(
             stationVal.isEmpty() ? QSysInfo::machineHostName() : stationVal);
+        stationEdit->setCursorPosition(0);
         stationEdit->setToolTip("Identifies this client to other Multi-Flex stations.\n"
                                 "Defaults to OS hostname if empty.");
         grid->addWidget(makeInfoField(QStringLiteral("Station Name:"), stationEdit,
@@ -2157,10 +2225,15 @@ QWidget* RadioSetupDialog::buildRadioTab()
         vlay->setSpacing(6);
 
         // Current version row
-        auto* infoRow = new QHBoxLayout;
-        infoRow->addWidget(new QLabel("FW Version:"));
+        // Laid out like the info fields above it, so its value lines up
+        // with theirs; half the group's width, as theirs are.
+        auto* infoRow = new QGridLayout;
+        infoRow->setSpacing(6);
+        infoRow->setColumnStretch(0, 1);
+        infoRow->setColumnStretch(1, 1);
         auto* curFw = makeValueLabel(displayOrDash(m_model->softwareVersion()));
-        infoRow->addWidget(makeCopyableValueLabel(QStringLiteral("FW Version"), curFw), 1);
+        infoRow->addWidget(makeCopyableInfoField(QStringLiteral("FW Version"),
+                                                 QStringLiteral("FW Version:"), curFw), 0, 0);
         vlay->addLayout(infoRow);
 
         connect(m_model, &RadioModel::infoChanged, this, [this, curFw] {
@@ -2180,6 +2253,9 @@ QWidget* RadioSetupDialog::buildRadioTab()
         m_fwStatusLabel = new QLabel("");
         setTone(m_fwStatusLabel, Tone::Hint);
         m_fwStatusLabel->setWordWrap(true);
+        // Hidden until there is something to say, so an idle group has no
+        // blank line between the version and the buttons.
+        m_fwStatusLabel->hide();
         vlay->addWidget(m_fwStatusLabel);
 
         // Button row
@@ -2194,7 +2270,17 @@ QWidget* RadioSetupDialog::buildRadioTab()
         m_fwUploadBtn->setEnabled(false);
         setButtonRole(m_fwUploadBtn, ButtonRole::Success);
         btnRow->addWidget(m_fwUploadBtn);
+        btnRow->addStretch(1);
         vlay->addLayout(btnRow);
+
+        auto* disclaimer = new QLabel(
+            "⚠ CAUTION: Firmware update is currently a highly experimental feature. "
+            "Use at your own risk. At this time we still recommend updating "
+            "via the SmartSDR Windows application.");
+        disclaimer->setWordWrap(true);
+        m_firmwareDisclaimer = disclaimer;
+        setTone(disclaimer, Tone::Warn);
+        vlay->addWidget(disclaimer);
 
         // ── Stager wiring ─────────────────────────────────────────────
         m_stager = new FirmwareStager(this);
@@ -2210,13 +2296,13 @@ QWidget* RadioSetupDialog::buildRadioTab()
             checkBtn->setEnabled(true);
             if (avail) {
                 setTone(m_fwStatusLabel, Tone::Warn);
-                m_fwStatusLabel->setText(QString(
+                setShownText(m_fwStatusLabel, QString(
                     "Update available: v%1\n"
                     "Download the SmartSDR installer from flexradio.com,\n"
                     "then click 'Select Installer...' to stage it.").arg(latest));
             } else {
                 setTone(m_fwStatusLabel, Tone::Ok);
-                m_fwStatusLabel->setText("Firmware is up to date (v" + latest + ").");
+                setShownText(m_fwStatusLabel, "Firmware is up to date (v" + latest + ").");
             }
         });
 
@@ -2224,14 +2310,14 @@ QWidget* RadioSetupDialog::buildRadioTab()
             [this, checkBtn](const QString& err) {
             checkBtn->setEnabled(true);
             setTone(m_fwStatusLabel, Tone::Error);
-            m_fwStatusLabel->setText(err);
+            setShownText(m_fwStatusLabel, err);
         });
 
         connect(m_stager, &FirmwareStager::stageProgress, this,
             [this](int pct, const QString& status) {
             m_fwProgress->setValue(pct);
             setTone(m_fwStatusLabel, Tone::Hint);
-            m_fwStatusLabel->setText(status);
+            setShownText(m_fwStatusLabel, status);
         });
 
         connect(m_stager, &FirmwareStager::stageComplete, this,
@@ -2245,7 +2331,7 @@ QWidget* RadioSetupDialog::buildRadioTab()
             [this](const QString& err) {
             m_fwProgress->hide();
             setTone(m_fwStatusLabel, Tone::Error);
-            m_fwStatusLabel->setText(err);
+            setShownText(m_fwStatusLabel, err);
         });
 
         // ── Browse / select installer manually ────────────────────────
@@ -2271,7 +2357,7 @@ QWidget* RadioSetupDialog::buildRadioTab()
             m_fwProgress->show();
             m_fwProgress->setValue(0);
             setTone(m_fwStatusLabel, Tone::Hint);
-            m_fwStatusLabel->setText("Preparing firmware from " + QFileInfo(path).fileName() + "...");
+            setShownText(m_fwStatusLabel, "Preparing firmware from " + QFileInfo(path).fileName() + "...");
 
             // The stager emits stageProgress / stageComplete / stageFailed.
             // Existing slots wire to those (set above) so we just kick it off.
@@ -2307,7 +2393,7 @@ QWidget* RadioSetupDialog::buildRadioTab()
                 connect(m_uploader, &FirmwareUploader::progressChanged, this,
                     [this](int pct, const QString& status) {
                         m_fwProgress->setValue(pct);
-                        m_fwStatusLabel->setText(status);
+                        setShownText(m_fwStatusLabel, status);
                         m_fwStatusLabel->setAccessibleDescription(status);
                     });
                 connect(m_uploader, &FirmwareUploader::finished, this,
@@ -2318,7 +2404,7 @@ QWidget* RadioSetupDialog::buildRadioTab()
                         // radio's own `file update failed=` settles it. The
                         // message carries the distinction in words as well as in
                         // colour — colour alone never states it (docs/a11y.md).
-                        m_fwStatusLabel->setText(msg);
+                        setShownText(m_fwStatusLabel, msg);
                         m_fwStatusLabel->setAccessibleDescription(msg);
                         Tone tone = Tone::Hint;
                         switch (outcome) {
@@ -2361,16 +2447,6 @@ QWidget* RadioSetupDialog::buildRadioTab()
 
         vbox->addWidget(group);
     }
-
-    // Firmware disclaimer
-    auto* disclaimer = new QLabel(
-        "⚠ CAUTION: Firmware update is currently a highly experimental feature. "
-        "Use at your own risk. At this time we still recommend updating "
-        "via the SmartSDR Windows application.");
-    disclaimer->setWordWrap(true);
-    m_firmwareDisclaimer = disclaimer;
-    setTone(disclaimer, Tone::Warn);
-    vbox->addWidget(disclaimer);
 
     vbox->addStretch(1);
     return page;
@@ -2420,8 +2496,9 @@ QWidget* RadioSetupDialog::buildNetworkTab()
 
         grid->addWidget(new QLabel("Network Name:"), 2, 0);
         auto* networkNameLbl = makeValueLabel(displayOrDash(m_model->networkName()));
+        // In the left pair's column, so its copy button lines up with theirs.
         grid->addWidget(makeCopyableValueLabel(QStringLiteral("Network Name"), networkNameLbl),
-                        2, 1, 1, 3);
+                        2, 1);
 
         connect(m_model, &RadioModel::infoChanged, this,
                 [this, ipLbl, maskLbl, macLbl, gatewayLbl, networkNameLbl] {
@@ -2709,7 +2786,9 @@ QWidget* RadioSetupDialog::buildNetworkTab()
                                      .arg(m_model->networkMtuParam(val)));
         });
         m_networkMtuControl = mtuSpin;
-        grid->addWidget(mtuSpin, 5, 1);
+        // A four-digit value: its own width, not the token field's.
+        mtuSpin->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+        grid->addWidget(mtuSpin, 5, 1, Qt::AlignLeft);
 
         // VITA-49 UDP receive buffer (SO_RCVBUF). Snap-to-preset slider; the
         // kernel clamps the grant at net.core.rmem_max, so we show the granted
@@ -2841,33 +2920,38 @@ QGroupBox* RadioSetupDialog::buildIpConfigGroup()
     btnRow->addWidget(staticBtn);
 
     btnRow->addStretch(1);
-    gvbox->addLayout(btnRow);
 
+    // Mode, then the three addresses, captioned in one column like every
+    // other group; an address field is sized for 255.255.255.255.
     auto* fieldsGrid = new QGridLayout;
-    fieldsGrid->setSpacing(4);
+    fieldsGrid->setHorizontalSpacing(8);
+    fieldsGrid->setVerticalSpacing(6);
+    fieldsGrid->addWidget(new QLabel("Mode:"), 0, 0);
+    fieldsGrid->addLayout(btnRow, 0, 1);
 
-    fieldsGrid->addWidget(new QLabel("IP Address:"), 0, 0);
+    fieldsGrid->addWidget(new QLabel("IP Address:"), 1, 0);
     auto* staticIp = new QLineEdit(isStatic ? m_model->staticIp() : m_model->ip());
     m_staticIpEdit = staticIp;
     staticIp->setEnabled(canConfigure && isStatic);
-    fieldsGrid->addWidget(staticIp, 0, 1);
+    fieldsGrid->addWidget(staticIp, 1, 1);
 
-    fieldsGrid->addWidget(new QLabel("Mask:"), 1, 0);
+    fieldsGrid->addWidget(new QLabel("Mask:"), 2, 0);
     auto* staticMask = new QLineEdit(isStatic ? m_model->staticNetmask() : m_model->netmask());
     m_staticMaskEdit = staticMask;
     staticMask->setEnabled(canConfigure && isStatic);
-    fieldsGrid->addWidget(staticMask, 1, 1);
+    fieldsGrid->addWidget(staticMask, 2, 1);
 
-    fieldsGrid->addWidget(new QLabel("Gateway:"), 2, 0);
+    fieldsGrid->addWidget(new QLabel("Gateway:"), 3, 0);
     auto* staticGw = new QLineEdit(isStatic ? m_model->staticGateway() : m_model->gateway());
     m_staticGatewayEdit = staticGw;
     staticGw->setEnabled(canConfigure && isStatic);
-    fieldsGrid->addWidget(staticGw, 2, 1);
-
-    for (auto* lbl : group->findChildren<QLabel*>())
-        if (!hasTone(lbl)) applyLabelStyle(lbl);
+    fieldsGrid->addWidget(staticGw, 3, 1);
+    for (QLineEdit* edit : {staticIp, staticMask, staticGw})
+        edit->setFixedWidth(180);
 
     gvbox->addLayout(fieldsGrid);
+    for (auto* lbl : group->findChildren<QLabel*>())
+        if (!hasTone(lbl)) applyLabelStyle(lbl);
 
     auto* applyBtn = new QPushButton("Apply");
     m_ipApplyButton = applyBtn;
@@ -2878,7 +2962,7 @@ QGroupBox* RadioSetupDialog::buildIpConfigGroup()
     applyBtn->setEnabled(false);
     applyBtn->setToolTip(canConfigure ? QString() : unavailableTip);
     applyBtn->setAccessibleDescription(applyBtn->toolTip());
-    gvbox->addWidget(applyBtn, 0, Qt::AlignLeft);
+    fieldsGrid->addWidget(applyBtn, 4, 1, Qt::AlignLeft);
 
     connect(dhcpBtn, &QPushButton::clicked, this,
             [dhcpBtn, staticBtn, staticIp, staticMask, staticGw, applyBtn] {
@@ -2987,6 +3071,11 @@ QWidget* RadioSetupDialog::buildTxTab()
         vbox->addLayout(hdr);
     }
 
+    // The TX profile and the band settings are not timings: built with the
+    // Timings group as before, but laid out in Options below.
+    QComboBox* profCmb = nullptr;
+    QPushButton* bandSetBtn = nullptr;
+
     // Timings group
     {
         auto* group = new QGroupBox("Timings (in ms)");
@@ -3045,11 +3134,10 @@ QWidget* RadioSetupDialog::buildTxTab()
         connectTimingField(tx2Edit,     "tx2_delay");
 
         // TX Profile dropdown (below Timeout, right column)
-        auto* profCmb = new QComboBox;
+        profCmb = new QComboBox;
         profCmb->addItems(tx.profileList());
         profCmb->setCurrentText(tx.activeProfile());
         AetherSDR::applyComboStyle(profCmb);
-        grid->addWidget(profCmb, 2, 2, 1, 2);
         connect(profCmb, &QComboBox::currentTextChanged, this, [this](const QString& name) {
             m_model->transmitModel().loadProfile(name);
         });
@@ -3058,11 +3146,10 @@ QWidget* RadioSetupDialog::buildTxTab()
         connectTimingField(tx3Edit, "tx3_delay");
 
         // TX Band Settings button
-        auto* bandSetBtn = new QPushButton("TX Band Settings");
+        bandSetBtn = new QPushButton("TX Band Settings");
         connect(bandSetBtn, &QPushButton::clicked, this, [this] {
             emit txBandSettingsRequested();
         });
-        grid->addWidget(bandSetBtn, 3, 2, 1, 2);
 
         for (auto* lbl : group->findChildren<QLabel*>())
             if (!hasTone(lbl)) applyLabelStyle(lbl);
@@ -3236,7 +3323,17 @@ QWidget* RadioSetupDialog::buildTxTab()
             s.save();
         });
 
-        vbox->addLayout(grid);
+        auto* profLbl = new QLabel("TX Profile:");
+        applyLabelStyle(profLbl);
+        grid->addWidget(profLbl, 3, 0);
+        profCmb->setAccessibleName(QStringLiteral("TX profile"));
+        profCmb->setMinimumWidth(180);
+        grid->addWidget(profCmb, 3, 1, Qt::AlignLeft);
+        grid->addWidget(bandSetBtn, 4, 1, Qt::AlignLeft);
+
+        auto* optionsGroup = new QGroupBox("Options");
+        optionsGroup->setLayout(grid);
+        vbox->addWidget(optionsGroup);
     }
 
     vbox->addStretch(1);
@@ -3280,7 +3377,7 @@ QWidget* RadioSetupDialog::buildPhoneCwTab()
         auto addMicRow = [&](int row, const QString& labelText, QPushButton* button) {
             auto* label = new QLabel(labelText);
             applyLabelStyle(label);
-            label->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+            label->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
             button->setMinimumWidth(kMicControlButtonWidth);
             button->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
             grid->addWidget(label, row, 0);
@@ -3603,7 +3700,7 @@ QWidget* RadioSetupDialog::buildRxTab()
         offsetGrid->addWidget(calStatus, 0, 3);
 
         // Freq Error PPB row
-        auto* ppbLbl = new QLabel("Freq Offset (ppb):");
+        auto* ppbLbl = new QLabel("Freq Offset:");
         applyLabelStyle(ppbLbl);
         offsetGrid->addWidget(ppbLbl, 1, 0);
         auto* ppbEdit = new QLineEdit(QString::number(m_model->freqErrorPpb()));
@@ -3612,10 +3709,16 @@ QWidget* RadioSetupDialog::buildRxTab()
             m_model->sendCommand(
                 "radio set freq_error_ppb=" + ppbEdit->text());
         });
-        offsetGrid->addWidget(ppbEdit, 1, 1);
+        ppbEdit->setAccessibleName(QStringLiteral("Frequency offset in ppb"));
+        // The unit follows the field, as "ms" does on the Audio page.
+        auto* ppbRow = new QHBoxLayout;
+        ppbRow->setProperty("rsPacked", true);
+        ppbRow->setSpacing(6);
+        ppbRow->addWidget(ppbEdit);
         auto* ppbUnitLbl = new QLabel("ppb");
         applyLabelStyle(ppbUnitLbl);
-        offsetGrid->addWidget(ppbUnitLbl, 1, 2);
+        ppbRow->addWidget(ppbUnitLbl);
+        offsetGrid->addLayout(ppbRow, 1, 1, Qt::AlignLeft);
         offsetGrid->setColumnStretch(3, 1);
         gvb->addLayout(offsetGrid);
 
@@ -3742,7 +3845,9 @@ QWidget* RadioSetupDialog::buildRxTab()
         addToggle(1, "Binaural audio:", m_model->binauralRx(),
                   "radio set binaural_rx");
 
-        vbox->addLayout(grid);
+        auto* audioGroup = new QGroupBox("Audio");
+        audioGroup->setLayout(grid);
+        vbox->addWidget(audioGroup);
     }
 
     vbox->addStretch(1);
@@ -5245,6 +5350,13 @@ QWidget* RadioSetupDialog::buildAudioTab()
         vbox->addWidget(compGroup);
     }
 
+    // The two connection-wide switches share a group rather than sitting
+    // loose between groups.
+    auto* connectionGroup = new QGroupBox("Connection");
+    auto* connectionBox = new QVBoxLayout(connectionGroup);
+    connectionBox->setSpacing(6);
+    vbox->addWidget(connectionGroup);
+
     // ── Packet-Loss Concealment ─────────────────────────────────────────
     // Fades dropped VITA-49 audio packets to silence (uncompressed) or
     // calls libopus native PLC (Opus) instead of splicing the next packet
@@ -5278,7 +5390,7 @@ QWidget* RadioSetupDialog::buildAudioTab()
                     Qt::QueuedConnection);
             }
         });
-        vbox->addWidget(plcCheck);
+        connectionBox->addWidget(plcCheck);
     }
 
     // ── Prevent Sleep ───────────────────────────────────────────────────
@@ -5294,7 +5406,7 @@ QWidget* RadioSetupDialog::buildAudioTab()
         connect(sleepCheck, &QCheckBox::toggled, this, [this](bool on) {
             m_model->setSleepInhibitWhileConnected(on);
         });
-        vbox->addWidget(sleepCheck);
+        connectionBox->addWidget(sleepCheck);
     }
 
     // ── PC Audio Devices ────────────────────────────────────────────────
@@ -5679,15 +5791,19 @@ QWidget* RadioSetupDialog::buildFiltersTab()
         auto* group = new QGroupBox("Filter Options");
         auto* grid = new QGridLayout(group);
         grid->setSpacing(8);
+        // The sliders take the width; the two headings sit at their ends.
+        grid->setColumnStretch(1, 1);
+        grid->setColumnStretch(2, 1);
 
         // Column headers
         auto* lowLbl = new QLabel("Low Latency");
         applyLabelStyle(lowLbl);
-        lowLbl->setAlignment(Qt::AlignCenter);
+        // Over the slider's two ends, which they name.
+        lowLbl->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
         grid->addWidget(lowLbl, 0, 1);
         auto* sharpLbl = new QLabel("Sharp Filters");
         applyLabelStyle(sharpLbl);
-        sharpLbl->setAlignment(Qt::AlignCenter);
+        sharpLbl->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         grid->addWidget(sharpLbl, 0, 2);
 
         struct FilterRow {
@@ -5734,21 +5850,15 @@ QWidget* RadioSetupDialog::buildFiltersTab()
             });
         }
 
-        vbox->addWidget(group);
-    }
-
-    // Low Latency Digital checkbox
-    {
-        auto* group = new QGroupBox;
-        auto* hb = new QHBoxLayout(group);
-
+        // Low Latency Digital checkbox: a filter option, in its group
+        // rather than a box of its own with no title.
         auto* chk = new QCheckBox("Use Low Latency Filters for Digital Modes");
         chk->setChecked(m_model->lowLatencyDigital());
         connect(chk, &QCheckBox::toggled, this, [this](bool on) {
             m_model->sendCommand(
                 QString("radio set low_latency_digital_modes=%1").arg(on ? 1 : 0));
         });
-        hb->addWidget(chk);
+        grid->addWidget(chk, 4, 0, 1, 4);
 
         vbox->addWidget(group);
     }
@@ -5981,8 +6091,11 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
     scroll->setWidgetResizable(true);
     scroll->setFrameShape(QFrame::NoFrame);
     scroll->setWidget(rowsWidget);
+    // As tall as its rows (a scroll area caps that), not the rest of the
+    // page: one antenna is one row, not a box down to the window's foot.
+    scroll->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Maximum);
     groupLayout->addWidget(scroll);
-    vbox->addWidget(group, 1);
+    vbox->addWidget(group, 0);
 
     QVBoxLayout* kiwiRowsLayout = nullptr;
     QVBoxLayout* kiwiLayout = nullptr;
@@ -6051,7 +6164,7 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
         kiwiScroll->setWidgetResizable(true);
         kiwiScroll->setFrameShape(QFrame::NoFrame);
         kiwiScroll->setMinimumHeight(190);
-        kiwiScroll->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::MinimumExpanding);
+        kiwiScroll->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Maximum);
         kiwiScroll->setAccessibleName("KiwiSDR RX antennas");
         kiwiScroll->setAccessibleDescription(
             "Configured KiwiSDR receive-only antenna endpoints.");
@@ -6880,6 +6993,7 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
         kiwiLayout->addLayout(kiwiTransferRow);
     }
 
+    vbox->addStretch(1);
     (*refresh)();
     if (refreshKiwi && *refreshKiwi) {
         (*refreshKiwi)();
@@ -8328,7 +8442,13 @@ QWidget* RadioSetupDialog::buildSerialTab()
         });
 
         updatePortStatus();
-        vbox->addLayout(row);
+        // In a group like everything else on the page, not loose between
+        // Pin Assignment and the FlexControl knob.
+        auto* connectionGroup = new QGroupBox("Connection");
+        auto* connectionBox = new QVBoxLayout(connectionGroup);
+        connectionBox->setSpacing(6);
+        connectionBox->addLayout(row);
+        vbox->addWidget(connectionGroup);
 
         auto* autoOpen = new QCheckBox("Auto-open serial port on startup");
         autoOpen->setChecked(settings.value("SerialAutoOpen", "False").toString() == "True");
@@ -8337,7 +8457,7 @@ QWidget* RadioSetupDialog::buildSerialTab()
             s.setValue("SerialAutoOpen", on ? "True" : "False");
             s.save();
         });
-        vbox->addWidget(autoOpen);
+        connectionBox->addWidget(autoOpen);
     }
 
     // ── FlexControl tuning knob ────────────────────────────────────────
@@ -8845,7 +8965,7 @@ QWidget* RadioSetupDialog::buildSerialTab()
         grid->setSpacing(6);
 
         auto* note = new QLabel(
-            "Backlight colours and temporary display feedback. "
+            "Backlight colors and temporary display feedback. "
             "Overlay duration controls how long changed values are shown on the TMate 2 LCD.");
         note->setWordWrap(true);
         setTone(note, Tone::Hint);
@@ -8866,18 +8986,20 @@ QWidget* RadioSetupDialog::buildSerialTab()
         static const char* kLabels[3] = {"R:", "G:", "B:"};
         for (int row = 0; row < 2; ++row) {
             auto* rowLbl = new QLabel(QString::fromLatin1(kRows[row].rowLabel));
-            setTone(rowLbl, Tone::Hint);
+            applyLabelStyle(rowLbl);
             grid->addWidget(rowLbl, row + 1, 0);
             const char* keys[3] = {kRows[row].rKey, kRows[row].gKey, kRows[row].bKey};
             const char* dflts[3] = {kRows[row].rDflt, kRows[row].gDflt, kRows[row].bDflt};
             for (int ch = 0; ch < 3; ++ch) {
                 auto* lbl = new QLabel(QString::fromLatin1(kLabels[ch]));
-                setTone(lbl, Tone::Hint);
+                applyLabelStyle(lbl);
                 grid->addWidget(lbl, row + 1, 1 + ch * 2);
 
                 auto* spin = new QSpinBox;
                 spin->setRange(0, 255);
                 spin->setValue(settings.value(keys[ch], dflts[ch]).toInt());
+                // 0–255: three digits and the steppers.
+                spin->setFixedWidth(76);
                 grid->addWidget(spin, row + 1, 2 + ch * 2);
                 m_tmate2BacklightSpins[kRows[row].spinOffset + ch] = spin;
 
@@ -8895,7 +9017,7 @@ QWidget* RadioSetupDialog::buildSerialTab()
         auto addTimingSpin = [&](int row, const QString& label, const QString& key,
                                  int dflt, int min, int max, int step) -> QSpinBox* {
             auto* lbl = new QLabel(label);
-            setTone(lbl, Tone::Hint);
+            applyLabelStyle(lbl);
             grid->addWidget(lbl, row, 0, 1, 2);
 
             auto* spin = new QSpinBox;
@@ -8903,7 +9025,8 @@ QWidget* RadioSetupDialog::buildSerialTab()
             spin->setSingleStep(step);
             spin->setSuffix(" ms");
             spin->setValue(settings.value(key, QString::number(dflt)).toInt());
-            grid->addWidget(spin, row, 2, 1, 2);
+            spin->setFixedWidth(120);
+            grid->addWidget(spin, row, 2, 1, 2, Qt::AlignLeft);
 
             connect(spin, QOverload<int>::of(&QSpinBox::valueChanged),
                     this, [this, key](int val) {
@@ -8920,8 +9043,8 @@ QWidget* RadioSetupDialog::buildSerialTab()
         m_tmate2UserInteractionTimeoutSpin = addTimingSpin(
             4, "User interaction timeout:", "TMate2UserInteractionTimeoutMs", 2000, 0, 60000, 100);
 
-        for (int col = 2; col <= 6; col += 2)
-            grid->setColumnStretch(col, 1);
+        // The fields keep their widths; the group's spare width is at its end.
+        grid->setColumnStretch(7, 1);
 
         vbox->addWidget(group);
     }
@@ -9179,7 +9302,7 @@ QWidget* RadioSetupDialog::buildUiEnhancementsTab()
         auto* letterDesc = new QLabel(
             "Choose how slice letters are rendered in badges, faders, and "
             "applet labels. Multi-Flex sessions with multiple clients only: "
-            "Radio-assigned letters match SmartSDR's behaviour; the global "
+            "Radio-assigned letters match SmartSDR's behavior; the global "
             "subscript preserves which physical slot you're on.");
         setTone(letterDesc, Tone::Hint);
         letterDesc->setWordWrap(true);
@@ -9240,15 +9363,11 @@ QWidget* RadioSetupDialog::buildUiEnhancementsTab()
         auto* col = new QVBoxLayout;
         col->setSpacing(4);
 
-        auto* lbl = new QLabel(QString(kLetters[i]));
-        lbl->setAlignment(Qt::AlignCenter);
-        setTone(lbl, Tone::Hint);
-
+        // The swatch carries its own letter; no caption above it.
         auto* btn = new QPushButton(QString(kLetters[i]));
         ThemeManager::instance().applyStyleSheet(btn, kBtnBase);
         colorBtns.append(btn);
 
-        col->addWidget(lbl);
         col->addWidget(btn);
         colorGrid->addLayout(col);
     }
@@ -9263,7 +9382,6 @@ QWidget* RadioSetupDialog::buildUiEnhancementsTab()
     grpLayout->addLayout(resetRow);
 
     vbox->addWidget(grp);
-    vbox->addStretch();
 
     // ── Helpers (capture manager by pointer, buttons by value) ────────────────
     SliceColorManager* pMgr = &SliceColorManager::instance();
@@ -9356,7 +9474,7 @@ QWidget* RadioSetupDialog::buildUiEnhancementsTab()
     // double-click affordances become unreachable in that case but the
     // mute-all keyboard shortcut still works for the most common use.
     {
-        auto* clickGrp = new QGroupBox("Single-click delay");
+        auto* clickGrp = new QGroupBox("Single-Click Delay");
         auto* clickLayout = new QVBoxLayout(clickGrp);
         clickLayout->setSpacing(8);
 
@@ -9421,7 +9539,7 @@ QWidget* RadioSetupDialog::buildUiEnhancementsTab()
     // effect immediately with no signal plumbing.  The Ctrl+wheel bandwidth
     // zoom on the panadapter is intentionally not reversed.
     {
-        auto* wheelGrp = new QGroupBox("Mouse wheel");
+        auto* wheelGrp = new QGroupBox("Mouse Wheel");
         auto* wheelLayout = new QVBoxLayout(wheelGrp);
         wheelLayout->setSpacing(8);
 
@@ -9451,6 +9569,8 @@ QWidget* RadioSetupDialog::buildUiEnhancementsTab()
         vbox->addWidget(wheelGrp);
     }
 
+    // The page's slack goes under its last group, not between two of them.
+    vbox->addStretch();
     return page;
 }
 
@@ -9496,6 +9616,8 @@ QWidget* RadioSetupDialog::buildSmartLinkTab()
     table->horizontalHeader()->setSectionResizeMode(
         2, QHeaderView::ResizeToContents);
     table->verticalHeader()->setVisible(false);
+    // Headings sit over the start of their column, as the cells do.
+    table->horizontalHeader()->setDefaultAlignment(Qt::AlignLeft | Qt::AlignVCenter);
     table->setEditTriggers(QAbstractItemView::NoEditTriggers);
     table->setSelectionBehavior(QAbstractItemView::SelectRows);
     grpLay->addWidget(table);
@@ -9620,7 +9742,10 @@ QWidget* RadioSetupDialog::buildQrzTab()
     passEdit->setEchoMode(QLineEdit::Password);
     passEdit->setMaxLength(128);
     grid->addWidget(passEdit, 1, 1);
-    grid->setColumnStretch(1, 1);
+    // A callsign and a password: fields sized for them, not the page.
+    userEdit->setFixedWidth(260);
+    passEdit->setFixedWidth(260);
+    grid->setColumnStretch(2, 1);
     acctLay->addLayout(grid);
 
     // Populate the password field from the keychain (async).
@@ -9656,7 +9781,8 @@ QWidget* RadioSetupDialog::buildQrzTab()
     setTone(testStatus, Tone::Hint);
     testStatus->setWordWrap(true);
     testRow->addWidget(testStatus, 1);
-    acctLay->addLayout(testRow);
+    // Under the fields it tests, not under their captions.
+    grid->addLayout(testRow, 2, 1, 1, 2);
 
     connect(testBtn, &QPushButton::clicked, this,
             [testBtn, testStatus, userEdit, passEdit] {

@@ -79,7 +79,7 @@ Radio Setup is a searchable browser: a categorised tree of pages on the left and
 
 | Page | What it covers |
 |------|----------------|
-| **Appearance & Behavior** | Slice Letter Display (see [Multi-Flex](./multi-flex.md)), slice colours (see [Slice Colors](./slice-colors.md)), Single-click delay and mouse-wheel behaviour. Themes are under **View → Theme**. See [Themes and Theme Editor](./themes-and-theme-editor.md). |
+| **Appearance & Behavior** | Slice Letter Display (see [Multi-Flex](./multi-flex.md)), slice colors (see [Slice Colors](./slice-colors.md)), Single-Click Delay and mouse-wheel behavior. Themes are under **View → Theme**. See [Themes and Theme Editor](./themes-and-theme-editor.md). |
 | **SmartLink** | Pinned SmartLink certificates. See [SmartLink Setup](./smartlink-setup.md). |
 | **QRZ & Callsigns** | QRZ.com account and lookup cache. See [Callsign Lookup](./callsign-lookup.md). |
 

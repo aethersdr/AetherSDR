@@ -44,7 +44,7 @@ When the operating system adds or removes an audio device, an **Audio Device Det
 ## Volume and mute
 
 - **AF slider** (VFO flag or RX applet): the slice's audio level, 0–100.
-- **Mute button:** single-click mutes or unmutes this slice; double-click mutes or unmutes all of your slices. **Radio Setup → Appearance & Behavior → Single-click delay** sets how long AetherSDR waits to tell a single click from a double click (0 makes single clicks instant and turns off the double-click action).
+- **Mute button:** single-click mutes or unmutes this slice; double-click mutes or unmutes all of your slices. **Radio Setup → Appearance & Behavior → Single-Click Delay** sets how long AetherSDR waits to tell a single click from a double click (0 makes single clicks instant and turns off the double-click action).
 - Slice mute belongs to the radio, so it is not restored by AetherSDR on reconnect.
 - **Title-bar speaker icon and master slider** always show the path you are actually hearing. With **PC Audio** on, they show and control the computer's mute and level. With PC Audio off, they show the radio's Line Out mute and level, including changes made by another Multi-Flex client.
 - The title-bar headphone controls follow the radio's headphone output, and are dimmed on radios that have none.
