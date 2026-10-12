@@ -293,6 +293,131 @@ int main(int argc, char** argv)
               "unavailable line edits use the Text role");
     }
 
+    // ---- a control's own texts survive the reason (#5859) ----
+    //
+    // Restored, not merely preserved across registration: the defect wrote an
+    // empty tooltip whenever the control was not Unavailable.
+    {
+        bool supported = true;
+        bool engaged = true;
+        const auto when = [&supported](bool, const RadioCapabilities&) { return supported; };
+        const auto on = [&engaged] { return engaged; };
+        const QString ownTip = QStringLiteral("Start or stop tune carrier");
+        const QString ownDescription = QStringLiteral("Keys a carrier for tuning");
+        const QString inactive = QStringLiteral("Available, not currently active");
+        QPushButton tune(QStringLiteral("TUNE"));
+        tune.setToolTip(ownTip);
+        tune.setAccessibleDescription(ownDescription);
+        registry.registerWidget(&tune, reason, when, on);
+        check(tune.toolTip() == ownTip && tune.accessibleDescription() == ownDescription,
+              "registering an active control keeps its own tooltip and description");
+
+        // Inactive appends the announcement to the own description, verbatim.
+        engaged = false;
+        registry.refreshEngaged();
+        check(tune.toolTip() == ownTip
+                  && tune.accessibleDescription() == ownDescription + QStringLiteral(". ") + inactive,
+              "inactive appends its announcement to the control's own description");
+        const QString rewritten = QStringLiteral("Keys a carrier for tuning at 10 W.");
+        tune.setAccessibleDescription(rewritten);
+        registry.refreshEngaged();
+        check(tune.accessibleDescription() == rewritten + QStringLiteral(" ") + inactive,
+              "an owner write while inactive gets the announcement appended once");
+        engaged = true;
+        registry.refreshEngaged();
+        check(tune.accessibleDescription() == rewritten,
+              "active again restores the own description without the announcement");
+        tune.setAccessibleDescription(ownDescription);
+        registry.refreshEngaged();
+        supported = false;
+        registry.refreshEngaged();
+        check(tune.toolTip() == reason && tune.accessibleDescription() == reason,
+              "the reason replaces both only while the control is unavailable");
+        supported = true;
+        registry.refreshEngaged();
+        check(tune.toolTip() == ownTip && tune.accessibleDescription() == ownDescription,
+              "available again restores the control's own tooltip and description");
+
+        // The owner's text is whatever it wrote last, also while the reason showed.
+        const QString later = QStringLiteral("Tune carrier at 10 W");
+        tune.setToolTip(later);
+        registry.refreshEngaged();
+        check(tune.toolTip() == later, "an available control's later tooltip is left alone");
+        supported = false;
+        registry.refreshEngaged();
+        const QString meanwhile = QStringLiteral("Tune carrier at 5 W");
+        tune.setToolTip(meanwhile);
+        registry.refreshEngaged();
+        check(tune.toolTip() == reason, "the next apply puts the reason back over an owner write");
+        supported = true;
+        registry.refreshEngaged();
+        check(tune.toolTip() == meanwhile,
+              "and the text written while unavailable is what comes back");
+
+        // A registry re-created while the reason shows still restores the own text.
+        supported = false;
+        registry.refreshEngaged();
+        {
+            ControlAvailabilityRegistry second(model);
+            second.registerWidget(&tune, reason, when, on);
+            supported = true;
+            second.refreshEngaged();
+            check(tune.toolTip() == meanwhile && tune.accessibleDescription() == ownDescription,
+                  "a new registry restores the own text, not the old reason");
+        }
+
+        QAction action(QStringLiteral("&Tune"));
+        const QString actionTip = QStringLiteral("Start or stop tune carrier");
+        const QString actionStatus = QStringLiteral("Tune the antenna");
+        action.setToolTip(actionTip);
+        action.setStatusTip(actionStatus);
+        registry.registerAction(&action, reason, when);
+        supported = false;
+        registry.refreshEngaged();
+        check(action.toolTip() == reason && action.statusTip() == reason,
+              "an unavailable action shows the reason on both channels");
+        supported = true;
+        registry.refreshEngaged();
+        check(action.toolTip() == actionTip && action.statusTip() == actionStatus,
+              "available again restores the action's own tooltip and status tip");
+
+        QAction plain(QStringLiteral("Plain"));
+        registry.registerAction(&plain, reason, when);
+        supported = false;
+        registry.refreshEngaged();
+        supported = true;
+        registry.refreshEngaged();
+        plain.setText(QStringLiteral("Renamed"));
+        check(plain.toolTip() == QStringLiteral("Renamed"),
+              "an action without its own tooltip keeps following its text");
+
+        // Renamed while the reason shows: it must not freeze the old text.
+        QAction renamed(QStringLiteral("&Tune"));
+        registry.registerAction(&renamed, reason, when);
+        supported = false;
+        registry.refreshEngaged();
+        renamed.setText(QStringLiteral("&Stop"));
+        check(renamed.toolTip() == reason, "a renamed unavailable action still shows the reason");
+        supported = true;
+        registry.refreshEngaged();
+        check(renamed.toolTip() == QStringLiteral("Stop"),
+              "an action renamed while unavailable reports its new text");
+        renamed.setText(QStringLiteral("&Go"));
+        check(renamed.toolTip() == QStringLiteral("Go"),
+              "and it keeps following its text afterwards");
+
+        // An empty reason is no reason: the own texts stay.
+        QPushButton blank(QStringLiteral("Blank"));
+        blank.setToolTip(ownTip);
+        registry.registerWidget(&blank, QStringLiteral(""), when, on);
+        supported = false;
+        registry.refreshEngaged();
+        check(blank.toolTip() == ownTip && !blank.isEnabled(),
+              "an empty reason does not blank the own tooltip");
+        supported = true;
+        registry.refreshEngaged();
+    }
+
     if (g_failures == 0) {
         std::printf("control_availability_registry_test: all checks passed\n");
     }
