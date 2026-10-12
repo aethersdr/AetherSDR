@@ -34,6 +34,7 @@
 #include <QApplication>
 #include <QColor>
 #include <QCoreApplication>
+#include <QFont>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QHostAddress>
@@ -461,6 +462,13 @@ int main(int argc, char** argv)
     TestSettingsProfile profile(QStringLiteral("radio-setup-headphone-output-gate"));
     QApplication app(argc, argv);
     app.setQuitOnLastWindowClosed(false);
+    // Text without antialiasing: every glyph pixel is the label's color, so
+    // "the unavailable token is in the render" holds under any fontconfig. With
+    // subpixel antialiasing (the Ubuntu CI image) no pixel of "Headphone:" is
+    // fully covered, and the token's exact color never appears.
+    QFont font = QApplication::font();
+    font.setStyleStrategy(QFont::NoAntialias);
+    QApplication::setFont(font);
     AppSettings::instance().load();
     RadioSetupHeadphoneOutputGateTest test;
     return QTest::qExec(&test, argc, argv);
