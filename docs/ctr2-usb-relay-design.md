@@ -430,6 +430,7 @@ default for any ESP32-S3 and only the product string tells them apart:
 | `303A:1001` (Espressif) | `M5STACK_DIAL` | CTR2 units based on the M5Stack M5Dial |
 | `2886:0056` (Seeed) | `XIAO_ESP32S3` | CTR2-MIDI (Seeed XIAO) |
 | `303A:1001` (Espressif) | `AETHER_KNOB` | AetherKnob (Elecrow CrowPanel 2.1" rotary display) |
+| `303A:1001` (Espressif) | `Aether*` | Other controller firmware on the same link, named by its product string (case-sensitive prefix plus at least one character; printable ASCII, at most 32 characters) |
 
 UDP registration is settled on hardware: the radio ignores a registration
 datagram on a LAN, so a device registers with `client udpport` naming the

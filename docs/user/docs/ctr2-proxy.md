@@ -87,6 +87,11 @@ needs CTR2 firmware with USB mode, which has not been released yet.
   spaced logarithmically in frequency, as on an audio analyzer, so the low
   end gets more detail. AetherSDR also tells it the UDP port the relay uses,
   so its meters update. A CTR2 never receives either.
+- Other controller firmware that speaks the same USB link can name itself:
+  a `303A:1001` device whose USB product name starts with **Aether** (that
+  exact case) and continues with at least one more character appears in the
+  list under that name, as long as the whole name is printable ASCII and at
+  most 32 characters long.
 
 ## Reference
 

@@ -621,13 +621,23 @@ void MainWindow::buildMenuBar()
 
     auto* spotsAction = settingsMenu->addAction("SpotHub...");
     connect(spotsAction, &QAction::triggered, this, [this] {
+        // A canon workspace window: created directly rather than through
+        // showOrRaisePersistent(), which would apply View → Frameless Window.
         const bool wasFresh = !m_spotHubDialog;
-        showOrRaisePersistent(m_spotHubDialog, m_dxCluster, m_rbnClient, m_wsjtxClient,
-                              m_spotCollectorClient, m_potaClient, m_eibiClient, m_n1mmSpotClient,
+        if (wasFresh) {
+            auto* hub = new DxClusterDialog(m_dxCluster, m_rbnClient, m_wsjtxClient,
+                                            m_spotCollectorClient, m_potaClient, m_eibiClient,
+                                            m_n1mmSpotClient,
 #ifdef HAVE_WEBSOCKETS
-                              m_freedvClient,
+                                            m_freedvClient,
 #endif
-                              &m_radioModel, &m_dxccProvider);
+                                            &m_radioModel, &m_dxccProvider, this);
+            hub->setAttribute(Qt::WA_DeleteOnClose);
+            m_spotHubDialog = hub;
+        }
+        m_spotHubDialog->show();
+        m_spotHubDialog->raise();
+        m_spotHubDialog->activateWindow();
 #ifdef HAVE_WEBSOCKETS
         // Every open, not just the first: this dialog is a persistent
         // singleton, so without this the field would only ever show

@@ -147,7 +147,7 @@ int main(int argc, char** argv)
     // Capability changes clamp the editor without sending unsolicited writes.
     AetherSDR::TransmitModel tx;
     applet.setTransmitModel(&tx);
-    QSignalSpy cwCommands(&tx, &AetherSDR::TransmitModel::commandReady);
+    QSignalSpy cwCommands(&tx, &AetherSDR::TransmitModel::controlRequested);
     QSlider* speed = nullptr;
     QLineEdit* pitch = nullptr;
     QLineEdit* speedText = nullptr;

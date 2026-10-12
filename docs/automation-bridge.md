@@ -168,8 +168,9 @@ The verbs kept behind `bridge_command` on purpose: the low-level widget
 primitives (`close`, `hover`, `tooltip`, `scrollTo`, `drag`, `showMenu`,
 `contextMenu`, `rightClick`, `hitTest`, `clickAt`, `doubleClick`,
 `doubleClickAt` — `invoke`/`grab` cover the common cases), the transmit-keying verbs (`key`, `txtest`,
-`atu`, `cwx`, `testtone`, `txwaterfall`, `transmit` — gated by
-`AETHER_AUTOMATION_ALLOW_TX`, deliberately less convenient), and the
+`atu`, `cwx`, `testtone`, `transmit` — gated by
+`AETHER_AUTOMATION_ALLOW_TX`, deliberately less convenient), the non-keying
+`txwaterfall` display toggle, and the
 niche/complex ones (`dss`, `layout`, `scale`, `panmessage`, `tci`,
 `station`, `resize`, `qrz`).
 
@@ -3067,11 +3068,9 @@ failure and preserved in `tuneEvents` rather than being silently ignored.
 The MCP server exposes the same surface as `memory_profile`.
 
 ### `txwaterfall`
-Toggle the radio's **show-TX-in-waterfall** display flag (`transmit set
-show_tx_in_waterfall`), which gates whether keyed-up TX renders FFT-derived rows
-in the waterfall. Off by default; enable it so a test can confirm CWX / tune /
-ATU energy appears in the waterfall, not just in the FFT trace. This is a display
-toggle — it does **not** key the transmitter.
+Toggle **Show TX in Waterfall**, which lets keyed-up TX render FFT-derived rows
+where spectrum frames are available. It is off by default. This display toggle
+does **not** key the transmitter.
 
 ```json
 → {"cmd":"txwaterfall","value":"on"}
@@ -3080,6 +3079,23 @@ toggle — it does **not** key the transmitter.
 
 Accepts `on`/`off` (also `1`/`0`, `true`/`false`, `enable`/`disable`). The radio
 echoes the change asynchronously — re-read with `get transmit showTxInWaterfall`.
+
+Where the backend declares the client the owner of the flag
+(`RadioCapabilities::txWaterfallClientFlag`: the **Hermes-Lite 2 only**) there
+is no radio-side display engine and no echo. The verb applies the flag at once
+through `RadioModel::requestLocalShowTxInWaterfall`, remembers it per radio,
+and the note says so:
+
+```json
+← {"ok":true,"txwaterfall":true,"note":"client-side flag on this radio, applied now; get transmit showTxInWaterfall reads it"}
+```
+
+Flex owns the flag in the radio. ANAN, Icom, RTL-SDR and the **demo simulator**
+declare no owner: there the verb sends the wire text and answers with the first
+note above, nothing echoes, `get transmit showTxInWaterfall` stays `false`, and
+nothing is stored. A `true` flag only says keyed rows are allowed: the demo,
+ANAN and RTL-SDR cannot key, and on a Hermes-Lite 2 what those rows show while
+keyed has not been measured.
 
 ### `get dax`
 Read the centralized DAX RX channel-ownership table (#3305): which consumers

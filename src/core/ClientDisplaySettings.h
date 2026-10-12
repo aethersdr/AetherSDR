@@ -108,6 +108,47 @@ public:
         return rate;
     }
 
+    // "Show TX in Waterfall", one flag per radio. `clientOwns` is the backend's
+    // declaration (RadioCapabilities::clientPersistsShowTxInWaterfall()); false
+    // reads and writes nothing, so no copy can fight a radio's own.
+    static std::optional<bool> showTxInWaterfall(const RadioSettingsScope& scope,
+                                                 bool clientOwns)
+    {
+        if (!clientOwns || !scope.hasRadioIdentity()) {
+            return std::nullopt;
+        }
+        int version = 0;
+        const QJsonObject doc = scope.featureExact(QStringLiteral("ClientDisplay"), &version);
+        if (version != 1) {
+            return std::nullopt;
+        }
+        const QJsonValue value = doc.value(QStringLiteral("showTxInWaterfall"));
+        if (!value.isBool()) {
+            return std::nullopt;
+        }
+        return value.toBool();
+    }
+
+    static void saveShowTxInWaterfall(const RadioSettingsScope& scope,
+                                      bool clientOwns, bool on)
+    {
+        if (!clientOwns || !scope.hasRadioIdentity()) {
+            return;
+        }
+        int version = 0;
+        AppSettings::FeatureReadStatus status;
+        QJsonObject doc = scope.featureExact(QStringLiteral("ClientDisplay"), &version, &status);
+        if (version > 1 || status == AppSettings::FeatureReadStatus::Corrupt
+            || status == AppSettings::FeatureReadStatus::Unavailable) {
+            qWarning() << "ClientDisplay: refusing to replace unreadable or newer settings";
+            return;
+        }
+        doc.insert(QStringLiteral("showTxInWaterfall"), on);
+        if (!scope.setFeature(QStringLiteral("ClientDisplay"), 1, doc)) {
+            qWarning() << "ClientDisplay: settings write did not persist";
+        }
+    }
+
     static void saveWaterfallRate(const RadioSettingsScope& scope, int panIndex,
                                   bool shapedLocally, int rate)
     {

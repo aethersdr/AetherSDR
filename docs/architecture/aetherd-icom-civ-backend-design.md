@@ -245,16 +245,18 @@ and cancels the saved Auto intent. Scope changes clear pending restoration, and
 newer/unreadable documents are neither interpreted nor overwritten. Flex and
 external Kiwi receive keep their existing SQL ownership paths.
 
-When `RadioModel::shapesDisplayRatesLocally()` is true, waterfall cadence is a
-client display preference, stored in schema-1 `ClientDisplay.waterfallRates`
-under the exact radio scope, indexed by pan slot. Slider/scroll, clone and reset
+When `RadioModel::shapesDisplayRatesLocally()` is true and the backend declares
+the client its persistence owner
+(`RadioCapabilities::clientPersistsPanWaterfallRate()`, which an Icom does),
+waterfall cadence is a client display preference, stored in schema-1
+`ClientDisplay.waterfallRates` under the exact radio scope, indexed by pan slot. Slider/scroll, clone and reset
 intents save it; pan wiring restores it before seeding the local rate shaper.
 Radio publications and adaptive throttle caps never write that document. Flex
 radio-owned cadence continues to use readback and is never restored from this
 client feature. FFT FPS (`fftFps`) and the pan's dBm range (`dbmRanges`) live in
 the same document, each only where the backend declares the client its
 persistence owner (`RadioCapabilities::clientPersistsPanFrameRate()`,
-`clientPersistsDbmRange()`). An Icom declares neither: its FFT FPS is not
+`clientPersistsDbmRange()`). An Icom declares neither of those two: its FFT FPS is not
 stored, and its range is published from the scope calibration
 (`panRangeChanged`), which a stored copy would fight. The two tables were added without a schema
 bump; each is optional and every writer is read-modify-write on the whole

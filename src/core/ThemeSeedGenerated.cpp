@@ -26,6 +26,7 @@ void ThemeManager::seedGeneratedDefaults()
     m_tokens.insert("color.accent.bright", QString("#00c8f0"));
     m_tokens.insert("color.accent.danger", QString("#ff4d4d"));
     m_tokens.insert("color.accent.dim", QString("#0070c0"));
+    m_tokens.insert("color.accent.offline", QString("#ff7a1a"));
     m_tokens.insert("color.accent.success", QString("#4dd87a"));
     m_tokens.insert("color.accent.warning", QString("#ffb84d"));
     m_tokens.insert("color.accessory.dial.face", QString("#0070c0"));

@@ -1862,7 +1862,7 @@ void MainWindow::onSliceAdded(SliceModel* s)
             QPointer<SliceModel> sp(s);
             QTimer::singleShot(300, this, [this, sp, savedDax, key]() {
                 if (sp && !profileLoadRadioStateWritesHeld()) {
-                    // The send path below (SliceModel::commandReady) has no
+                    // The send path below (SliceModel::controlRequested) has no
                     // logging of its own; without this line the restore is
                     // invisible in any capture (#4558).
                     qCDebug(lcDax) << "MainWindow: restoring last-session DAX"
@@ -3166,17 +3166,27 @@ void MainWindow::runProfileLoadRecoveryPass(const QString& profileType,
     }
 }
 
+// May the client store and restore the waterfall rate for this radio? Only
+// where the engine paces the rows and the backend declares the client the
+// owner (RadioCapabilities::clientPersistsPanWaterfallRate). Read by the save
+// and by the restore, so the two cannot disagree.
+bool MainWindow::clientPersistsWaterfallRate() const
+{
+    return m_radioModel.shapesDisplayRatesLocally()
+        && m_radioModel.backendCapabilities().clientPersistsPanWaterfallRate();
+}
+
 void MainWindow::scheduleClientWaterfallRateSave(int panIndex, int rate)
 {
     const RadioSettingsScope scope = m_radioModel.settingsScope();
-    const bool shapedLocally = m_radioModel.shapesDisplayRatesLocally();
-    if (!shapedLocally || !scope.hasRadioIdentity() || panIndex < 0) {
+    const bool clientOwns = clientPersistsWaterfallRate();
+    if (!clientOwns || !scope.hasRadioIdentity() || panIndex < 0) {
         return;
     }
     // Include scope in the key so a radio switch cannot overwrite a pending edit.
     const QString key = ClientDisplaySettings::pendingWriteKey(scope, panIndex, "waterfallRate");
-    m_pendingDisplayWrites.schedule(key, [scope, panIndex, shapedLocally, rate] {
-        ClientDisplaySettings::saveWaterfallRate(scope, panIndex, shapedLocally, rate);
+    m_pendingDisplayWrites.schedule(key, [scope, panIndex, clientOwns, rate] {
+        ClientDisplaySettings::saveWaterfallRate(scope, panIndex, clientOwns, rate);
     });
 }
 
@@ -3354,9 +3364,12 @@ void MainWindow::wirePanDisplayStatus(PanadapterApplet* applet,
                 sw->setFftWeightedAvg(saved->weighted);
             }
         }
-        if (const auto savedRate = ClientDisplaySettings::waterfallRate(
-                m_radioModel.settingsScope(), sw->panIndex(), true)) {
-            sw->setWfLineDuration(*savedRate);
+        // The waterfall rate where the client is its declared owner.
+        if (clientPersistsWaterfallRate()) {
+            if (const auto savedRate = ClientDisplaySettings::waterfallRate(
+                    m_radioModel.settingsScope(), sw->panIndex(), true)) {
+                sw->setWfLineDuration(*savedRate);
+            }
         }
         // FFT FPS where the client is its declared owner. Restored into the
         // widget BEFORE the request below, which seeds the shaper and the pan
@@ -3533,17 +3546,9 @@ int MainWindow::cloneDisplaySettingsToAllPans(PanadapterApplet* source)
             // Re-sending them once per target would be the same write N times.
             dst->setWfColorGain(src->wfColorGain());
             dst->setWfBlackLevel(src->wfBlackLevel());
-            if (auto* pan = m_radioModel.panadapter(targetPanId);
-                pan && !pan->waterfallId().isEmpty()) {
-                m_radioModel.sendCommand(
-                    QString("display panafall set %1 color_gain=%2")
-                        .arg(pan->waterfallId())
-                        .arg(src->wfColorGain()));
-                m_radioModel.sendCommand(
-                    QString("display panafall set %1 black_level=%2")
-                        .arg(pan->waterfallId())
-                        .arg(src->wfBlackLevel()));
-            }
+            m_radioModel.setWaterfallColorGainFor(targetPanId, src->wfColorGain(),
+                                                 dst->wfAutoBlack());
+            m_radioModel.setWaterfallBlackLevelFor(targetPanId, src->wfBlackLevel());
             // Clamp like the slider path does (applyWaterfallLineDuration).
             // The source value came through the same clamp today, so this is
             // belt-and-braces — but the two paths should not disagree about
@@ -4832,10 +4837,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             return;
         }
         sw->setWfColorGain(v);
-        auto* pan = m_radioModel.panadapter(applet->panId());
-        if (pan && !pan->waterfallId().isEmpty())
-            m_radioModel.sendCommand(
-                QString("display panafall set %1 color_gain=%2").arg(pan->waterfallId()).arg(v));
+        m_radioModel.setWaterfallColorGainFor(applet->panId(), v, sw->wfAutoBlack());
     });
     connect(menu, &SpectrumOverlayMenu::wfBlackLevelChanged,
             this, [this, applet, sw](int v) {
@@ -4843,10 +4845,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             return;
         }
         sw->setWfBlackLevel(v);
-        auto* pan = m_radioModel.panadapter(applet->panId());
-        if (pan && !pan->waterfallId().isEmpty())
-            m_radioModel.sendCommand(
-                QString("display panafall set %1 black_level=%2").arg(pan->waterfallId()).arg(v));
+        m_radioModel.setWaterfallBlackLevelFor(applet->panId(), v);
     });
     connect(menu, &SpectrumOverlayMenu::wfAutoBlackChanged,
             this, [this, applet, sw](bool on) {
@@ -5105,13 +5104,8 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         // not reset the rate. (#4470)
         if (!m_adaptiveThrottleActive)
             m_radioModel.requestPanDisplayRates(applet->panId(), 25, 100);
-        auto* pan = m_radioModel.panadapter(applet->panId());
-        if (pan && !pan->waterfallId().isEmpty()) {
-            m_radioModel.sendCommand(
-                QString("display panafall set %1 color_gain=50").arg(pan->waterfallId()));
-            m_radioModel.sendCommand(
-                QString("display panafall set %1 black_level=15").arg(pan->waterfallId()));
-        }
+        m_radioModel.setWaterfallColorGainFor(applet->panId(), 50, sw->wfAutoBlack());
+        m_radioModel.setWaterfallBlackLevelFor(applet->panId(), 15);
 
         // Persist all defaults to AppSettings
         auto& s = AppSettings::instance();

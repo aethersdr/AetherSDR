@@ -26,6 +26,7 @@
 #include <QRect>
 #include <QSize>
 #include <QWindow>
+#include <QWidget>
 
 #include <cstdio>
 #include <string>
@@ -226,6 +227,29 @@ void testComputeEdges()
                == Qt::Edges{});
 }
 
+// A window with a fixed width (Radio Setup) resizes only vertically: its side
+// edges and the horizontal half of each corner are not resize zones.
+void testWithoutLockedAxes()
+{
+    const Qt::Edges all = Qt::LeftEdge | Qt::RightEdge | Qt::TopEdge | Qt::BottomEdge;
+    const QSize unbounded(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
+    report("withoutLockedAxes: a free window keeps every edge",
+           FramelessResizer::withoutLockedAxes(all, QSize(100, 100), unbounded) == all);
+    report("withoutLockedAxes: fixed width drops Left and Right",
+           FramelessResizer::withoutLockedAxes(all, QSize(960, 720),
+                                               QSize(960, QWIDGETSIZE_MAX))
+               == (Qt::TopEdge | Qt::BottomEdge));
+    report("withoutLockedAxes: fixed width turns the bottom-right corner vertical",
+           FramelessResizer::withoutLockedAxes(Qt::BottomEdge | Qt::RightEdge,
+                                               QSize(960, 720),
+                                               QSize(960, QWIDGETSIZE_MAX))
+               == Qt::BottomEdge);
+    report("withoutLockedAxes: fixed height drops Top and Bottom",
+           FramelessResizer::withoutLockedAxes(all, QSize(100, 300),
+                                               QSize(QWIDGETSIZE_MAX, 300))
+               == (Qt::LeftEdge | Qt::RightEdge));
+}
+
 // The decision behind the #4829 review-round-3 fix: an active manual resize
 // with no real grab must end itself on Leave, or it strands m_manualResizeActive
 // true until (at best) a buttonless move eventually arrives.
@@ -279,6 +303,7 @@ int main(int argc, char** argv)
     testCeilingClamp();
     testNoEdges();
     testComputeEdges();
+    testWithoutLockedAxes();
     testShouldEndOnUngrabbedLeave();
     testWindowOwnsChain();
 

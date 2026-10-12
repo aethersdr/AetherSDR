@@ -10,6 +10,7 @@
 #include "core/AppSettings.h"
 #include "core/RadioSettingsScope.h"
 #include "core/RadioStateMemory.h"
+#include "core/backends/ModelControlRequest.h"
 #include "core/backends/NotchDelta.h"
 #include "core/backends/SliceDelta.h"
 #include "core/backends/TransmitDelta.h"
@@ -160,10 +161,12 @@ void receiverSetpointsRoundTrip()
     backend.setSliceNoiseBlanker(0, NoiseBlankerKind::Advanced, 70, NoiseBlankerFill::MeanHold);
     backend.setSliceApf(0, true, 35);
     backend.setSliceSquelch(0, true, 44);
-    backend.setSliceRitEnabled(0, true);
-    backend.setSliceRitOffset(0, 120);
-    backend.setSliceXitEnabled(0, true);
-    backend.setSliceXitOffset(0, -80);
+    check(backend.requestSliceControl(0, {SliceControlRequest::Field::Rit,
+              IncrementalTuning{true, 120}}) == ReceiveDispatch::Dispatched,
+          "the typed RIT pair is applied");
+    check(backend.requestSliceControl(0, {SliceControlRequest::Field::Xit,
+              IncrementalTuning{true, -80}}) == ReceiveDispatch::Dispatched,
+          "the typed XIT pair is applied");
     backend.setSliceAudioGain(0, 60);
     backend.setSliceAudioPan(0, 20);
 
@@ -460,10 +463,12 @@ void tunePowerIsRememberedPerBand()
                          if (d.tunePower) echoed << *d.tunePower;
                      });
     backend.setSliceFrequency(0, 7'100'000.0);
-    backend.setTunePower(30);
+    check(backend.requestTransmitControl({TransmitControlRequest::Field::TunePower, 30})
+              == ReceiveDispatch::LocalOnly, "idle typed TUNE power is remembered locally");
     backend.setSliceFrequency(0, 14'200'000.0);
     check(echoed.isEmpty(), "a new band starts on the first-set baseline, which is the value already held");
-    backend.setTunePower(55);
+    check(backend.requestTransmitControl({TransmitControlRequest::Field::TunePower, 55})
+              == ReceiveDispatch::LocalOnly, "the second band's typed TUNE power is remembered locally");
     backend.setSliceFrequency(0, 7'150'000.0);
     check(!echoed.isEmpty() && echoed.last() == 30, "back on 40 m, its own TUNE power is echoed");
 

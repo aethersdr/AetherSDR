@@ -181,6 +181,8 @@ void Ctr2ProxyApplet::buildUi()
     statusBox->addLayout(statusRow);
     m_errorLabel = makeLabel(QString(), QStringLiteral("color.accent.danger"), statusPane, true);
     m_errorLabel->setObjectName(QStringLiteral("ctr2ProxyError"));
+    // The error can carry a device's own product string; never render it as rich text.
+    m_errorLabel->setTextFormat(Qt::PlainText);
     statusBox->addWidget(m_errorLabel);
     statusBox->addStretch(1);
     vbox->addWidget(statusPane, 1);

@@ -99,30 +99,55 @@ When helping with AetherSDR:
 
 ### Issue / PR Claim Protocol — Assign Yourself
 
-When an AI agent is **actively reviewing an issue or PR — for comment, for
-merge recommendation, or to implement a fix** — the agent MUST assign itself
-using GitHub's `assignees` feature **before** posting the review, comment, or
-merge action. This is the visible claim mechanism for multi-agent
-coordination (Principle X: Claims Are Atomic And Mortal); it stops two agents
-spending tokens on the same PR and posting conflicting recommendations.
+A claim is a lock on **writing to the work**, and only two things take one:
 
-1. **Before** posting a review, comment, or merge action, check the current
-   assignees:
+- **Implementing a fix**: writing the change for an issue, or pushing
+  commits to someone else's PR.
+- **Landing a PR** (`/pr-land`): the pass that remediates, approves and arms
+  auto-merge. It holds the PR from its first step until the merge fires,
+  whether or not it ends up pushing anything, so nobody pushes commits
+  under it mid-flight and turns the approval it is about to post into a
+  review of a tree it never read.
+
+An AI agent about to do either MUST assign itself using GitHub's `assignees`
+feature **before** starting. This is the visible claim mechanism for
+multi-agent coordination (Principle X: Claims Are Atomic And Mortal); it stops
+two agents producing competing patches for the same issue, or racing each
+other's pushes on the same branch.
+
+**A claim announces that another project member is now involved**, so it is
+never taken on your own PR. The author of a PR is assumed to be still working
+on it; assigning yourself there says nothing. Claim the issue you are
+implementing, and claim someone else's PR when you push to it or land it.
+Skipping the claim on your own PR does not skip the check: if another member
+already holds a claim on it, honor that claim like anyone else's.
+
+**Reviewing does not claim.** Reviews, review comments, triage, merge
+recommendations and read-only work (summarizing, listing, counting) take no
+assignment and check none. Anyone can review any PR, and several reviews of
+the same PR can run in parallel. Another agent's assignment is never a reason
+to skip or delay a review.
+
+1. **Before** implementing or landing, check the current assignees:
    - **Unassigned, or assigned ONLY to AetherClaude (`@aethersdr-agent`)**:
      add yourself alongside. AetherClaude auto-triages every new issue and PR,
      so its assignment is a triage signal, NOT a claim on active work.
    - **Already assigned to another human or AI agent** (not AetherClaude):
-     leave a coordination comment instead of double-assigning, and do not
-     proceed with overlapping work.
-2. **While** working: stay assigned.
-3. **After** finishing: the assignment can stay (GitHub clears it on
-   close/merge). Unassign if you concluded but the issue/PR remains open.
+     an implementation or a landing is in flight. Leave a coordination
+     comment instead of double-assigning, and do not write an overlapping
+     fix or push to the PR.
+2. **While** implementing or landing: stay assigned. The fix PR you open for
+   an issue is still the implementation, so the issue stays claimed until
+   that PR merges or you abandon it. A landing stays claimed until the merge
+   fires, including the wait while auto-merge is armed: a push in that window
+   dismisses the approval.
+3. **When you stop**, release the lock. Unassign once your fix push to
+   someone else's PR is done, when you conclude without a fix, or when a
+   landing stops short of arming auto-merge. GitHub clears the assignment on
+   close/merge.
 4. **If your work is interrupted** (token limit, context loss, model failure):
    leave a brief comment ("Stepping away; unassigning so another agent can
    pick up") and unassign. The claim dies with the agent that held it.
-5. **Quick read-only actions don't require assignment** (summarizing,
-   listing, counting). Assignment is for engagement that produces a comment,
-   review, or merge.
 
 ```bash
 gh issue edit NNNN --add-assignee @me      # or: gh pr edit NNNN --add-assignee @me

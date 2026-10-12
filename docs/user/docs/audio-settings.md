@@ -25,7 +25,7 @@ See [Radio Setup](./radio-setup.md).
 
 Choose the computer's microphone (**Input**) and speaker (**Output**) devices. The selection is saved and restored at startup, and you can switch devices while connected.
 
-If the saved device is not connected, AetherSDR uses the system default device and keeps your saved choice. It switches back to the saved device when that device connects, without asking.
+If the saved device is not connected, AetherSDR uses the system default device and keeps your saved choice. It switches back to the saved device when that device connects, without asking. On Linux, saved devices with IDs containing `.monitor`, `auto_null`, `echo-cancel`, or `combined`, or starting with `pulse_input_loopback`, are used again at the next launch rather than automatically restored when they reappear.
 
 AetherSDR handles sample-rate conversion itself. The microphone is captured at whatever rate the device offers, processed at 48 kHz, and converted once to the radio's transport rate. The PC microphone is used for transmit when the radio's mic source is **PC** (see [Choosing the mic source](#choosing-the-mic-source)).
 
@@ -44,7 +44,7 @@ When the operating system adds or removes an audio device, an **Audio Device Det
 ## Volume and mute
 
 - **AF slider** (VFO flag or RX applet): the slice's audio level, 0–100.
-- **Mute button:** single-click mutes or unmutes this slice; double-click mutes or unmutes all of your slices. **Radio Setup → Appearance & Behavior → Single-click delay** sets how long AetherSDR waits to tell a single click from a double click (0 makes single clicks instant and turns off the double-click action).
+- **Mute button:** single-click mutes or unmutes this slice; double-click mutes or unmutes all of your slices. **Radio Setup → Appearance & Behavior → Single-Click Delay** sets how long AetherSDR waits to tell a single click from a double click (0 makes single clicks instant and turns off the double-click action).
 - Slice mute belongs to the radio, so it is not restored by AetherSDR on reconnect.
 - **Title-bar speaker icon and master slider** always show the path you are actually hearing. With **PC Audio** on, they show and control the computer's mute and level. With PC Audio off, they show the radio's Line Out mute and level, including changes made by another Multi-Flex client.
 - **Clicking the title-bar speaker** mutes or unmutes this computer's output and, on a radio with a line out AetherSDR can control, the radio's Line Out as well. On a radio with no such line out and PC Audio off, there is nothing to mute: the click is refused and the icon stays as it was.

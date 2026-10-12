@@ -39,9 +39,9 @@ coming from:
 
 | Word | Meaning |
 |---|---|
-| `● DIRECT` | Connected directly to the device |
-| `● RADIO` | Not connected directly, but the radio relays the device (TGXL and PGXL only) |
-| `● OFFLINE` | No connection |
+| `● DIRECT` | Connected directly to the device (green dot) |
+| `● RADIO` | Not connected directly, but the radio relays the device (TGXL and PGXL only; yellow dot) |
+| `● OFFLINE` | No connection (orange dot) |
 | `Connecting…` | A connection attempt is in progress |
 
 The TGXL, PGXL and Antenna Genius applets use the same words. A device that
@@ -110,7 +110,7 @@ device accepts it.
   ("Code for this session only").
 - The code is hidden unless you click **Show**, is concealed again when you
   change page, and is kept out of logs, the automation bridge and widget
-  grabs. **Clear code** deletes the saved code.
+  grabs. **Clear Code** deletes the saved code.
 - After repeated failures with a saved code, the device is blocked:
   "Authorization blocked; enter a code and click Connect to retry".
 - If direct authentication fails, a TGXL or PGXL falls back to the radio

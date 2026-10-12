@@ -20,6 +20,7 @@
 #include "models/AntennaGeniusModel.h"
 #include "models/SliceLinkPolicy.h"
 #include "core/AppSettings.h"
+#include "core/FirmwareCurrency.h"
 #include "core/AetherDspModePolicy.h"
 #include "core/KiwiSdrTxMutePolicy.h"  // optimistic-unkey Kiwi mute latch
 #include "core/RadioMessageTypes.h"   // MessageSeverity for onRadioMessage slot
@@ -862,6 +863,8 @@ private:
     // same commands the live sliders send). Returns how many pans were written.
     int cloneDisplaySettingsToAllPans(PanadapterApplet* source);
     AetherSDR::DeferredSettingsWrites m_pendingDisplayWrites;
+    // The waterfall rate, only where the backend declares the client the owner.
+    bool clientPersistsWaterfallRate() const;
     void scheduleClientWaterfallRateSave(int panIndex, int rate);
     // FFT FPS and the dBm scale, which a Flex stores for a pan and a radio
     // with no display engine does not. Same store and deferral as the
@@ -1788,7 +1791,20 @@ private:
     // capabilitiesChanged while the model and version arrive on infoChanged,
     // and every one of those edges has to repaint the same three labels.
     QString m_radioManufacturer;
+    // Verdict last painted onto m_radioVersionLabel. Cached so the click
+    // handler does not have to re-derive it: the label is only a link to the
+    // release notes while it is actually showing an out-of-date firmware, and
+    // the handler must agree with what the operator can see.
+    AetherSDR::FirmwareCurrency::Status m_radioFirmwareCurrency{
+        AetherSDR::FirmwareCurrency::Status::Unknown};
     void refreshRadioIdentityLabels();
+    // Recomputes m_radioFirmwareCurrency and repaints the version row from it.
+    // Called only by refreshRadioIdentityLabels(), which owns the whole
+    // identity stack. Lives in MainWindow_Session.cpp.
+    void applyFirmwareCurrencyToVersionLabel();
+    // The version row's StatusIndicator action: opens the release notes of the
+    // radio's own line while the firmware is out of date, otherwise nothing.
+    void openFirmwareReleaseNotes();
     QLabel* m_stationLabel{nullptr};
     QLabel* m_stationNickLabel{nullptr};
     QLabel* m_automationChip{nullptr};    // shown only under AETHER_AUTOMATION (#3646)

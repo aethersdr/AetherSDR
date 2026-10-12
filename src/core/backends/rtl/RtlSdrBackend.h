@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/backends/IRadioBackend.h"
+#include "core/backends/ModelControlRequest.h"
 #include "core/backends/RestoredRadioState.h"
 #include "core/RtlSliceSettings.h"
 #include "core/RtlDeviceSettings.h"
@@ -62,6 +63,7 @@ public:
     bool createSlice(const QString& panId, double frequencyHz) override;
     bool removeSlice(int sliceId) override;
     void setActiveSlice(int sliceId) override;
+    ReceiveDispatch requestSliceControl(int sliceId, const SliceControlRequest& request) override;
     void setSliceFrequency(int sliceId, double hz) override;
     bool requestReceiveTune(int sliceId, double hz, ReceiveTuneView view) override;
     bool recenterReceiveCapture(const QString& panId) override;

@@ -1,10 +1,12 @@
 #pragma once
 
-#include "PersistentDialog.h"
+#include "CanonWindow.h"
 #include "PeripheralConnectionSource.h"
 #include "RadioSetupIpConfigPresentation.h"
 
 #include <QHash>
+#include <QPointer>
+#include <QStringList>
 #include <QVector>
 #include <array>
 #include <functional>
@@ -42,8 +44,9 @@ class Kpa1500Connection;
 class LpMeterConnection;
 struct PeripheralDeviceUi;
 
-// Radio Setup dialog — searchable, category-based configuration window.
-class RadioSetupDialog : public PersistentDialog {
+// Radio Setup: the searchable, category-based configuration window, a canon
+// workspace window styled by one sheet (see RadioSetupDialogCommon.h).
+class RadioSetupDialog : public CanonWindow {
     Q_OBJECT
 
 public:
@@ -119,6 +122,14 @@ public:
     PeripheralDeviceStatus peripheralStatusForTest(const QString& id) const;
     void editPeripheralStatusForTest(const QString& id,
                                      const std::function<void(PeripheralDeviceStatus&)>& edit);
+    // Test seam: replaces a peripheral's link probes (connected directly,
+    // relayed by the radio) and returns the ones it had, so the next refresh
+    // derives the source as it would from a live link.
+    struct PeripheralLinkProbes {
+        std::function<bool()> isConnected;
+        std::function<bool()> hasRadioRelay;
+    };
+    PeripheralLinkProbes swapPeripheralLinkForTest(const QString& id, PeripheralLinkProbes probes);
     static void setRemovalConfirmationHookForTest(
         std::function<bool(const QString& label, const QString& text)> hook);
 
@@ -128,6 +139,12 @@ protected:
 
 private:
     friend class RadioSetupDialogTestAccess;
+    // Opens (or re-raises) the list of published releases returned by the
+    // "Check for Update" button. Lazy-constructed and non-modal per
+    // docs/style/dialog-patterns.md, so the operator can keep it open while
+    // staging an installer.
+    void showFirmwareReleases(const QStringList& releases);
+    QPointer<class FirmwareReleasesDialog> m_firmwareReleasesDialog;
     bool confirmFirmwareClose();
     bool m_firmwareClosePromptOpen{false};
     bool isFlexOnlyPage(const QTreeWidgetItem* item) const;

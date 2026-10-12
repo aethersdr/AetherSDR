@@ -29,6 +29,7 @@
 #include "core/backends/FrontEndOverload.h"
 #include "core/backends/RadioCapabilities.h"
 #include "core/backends/ReceiveCommand.h"
+#include "core/backends/ModelControlRequest.h"
 #include "core/backends/RestoredRadioState.h"
 #include "core/backends/RadioDelta.h"
 #include "core/backends/SliceDelta.h"
@@ -130,6 +131,19 @@ class IRadioBackend : public QObject {
     Q_OBJECT
 
 public:
+    // Desktop control routing only: these do not extend the daemon registry.
+    virtual ReceiveDispatch requestSliceControl(int sliceId, const SliceControlRequest& request)
+    {
+        // Selecting a local receiver is not a radio or TX operation.
+        if (sliceId >= 0 && request.valid()
+            && request.field == SliceControlRequest::Field::ActiveSlice) {
+            return ReceiveDispatch::LocalOnly;
+        }
+        return ReceiveDispatch::Unsupported;
+    }
+    virtual ReceiveDispatch requestTransmitControl(const TransmitControlRequest&,
+                                                    TunePowerContext = TunePowerContext::Deferred)
+    { return ReceiveDispatch::Unsupported; }
     explicit IRadioBackend(QObject* parent = nullptr) : QObject(parent)
     {
         connect(this, &IRadioBackend::connected, this, [this] {
@@ -202,6 +216,21 @@ public:
     virtual RestoredRadioState currentOperatingState() const { return {}; }
     virtual void disconnectRadio() = 0;
     virtual bool isConnected() const = 0;
+
+    // A session with the radio is up, WHATEVER TRANSPORT CARRIED IT.
+    //
+    // Exists because "connected" is not observable inside a backend on every
+    // path: a Flex LAN session runs through the RadioConnection the backend
+    // owns, but a SmartLink session is driven by RadioModel against a
+    // WanConnection the backend never sees, and connectRadio() is skipped for
+    // that family entirely. A backend with per-session work to do therefore had
+    // no edge to hang it on that covered both.
+    //
+    // Default is a no-op, so a backend that needs nothing is unaffected. It
+    // carries no argument on purpose: a backend that wants to know WHICH radio
+    // already has its own channels for that, and widening this verb would make
+    // every backend care about the transport it was told to ignore.
+    virtual void onRadioSessionEstablished() {}
 
     // ---- intents DOWN: canonical core-profile verbs (grow per burndown) ----
     // The backend translates each to its vendor wire protocol.

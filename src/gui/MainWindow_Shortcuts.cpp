@@ -14,6 +14,7 @@
 
 #include <QApplication>
 #include <QKeyEvent>
+#include <QMouseEvent>
 
 #include "MainWindowHelpers.h"
 #include "VoiceModeGate.h"   // isCwMode() — one CW-mode list, not thirteen
@@ -854,7 +855,10 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
     // Status-bar indicators: a press and the keyboard (StatusIndicator's
     // Return/Enter/Space and the accessible Press action) run one action.
     if (event->type() == QEvent::MouseButtonPress && isStatusIndicator(obj)) {
-        if (obj == m_txIndicator
+        // Left button only for these two: TX must not key from a stray
+        // right-click, and the firmware row must not open a browser out from
+        // under a context menu.
+        if ((obj == m_txIndicator || obj == m_radioVersionLabel)
             && static_cast<QMouseEvent*>(event)->button() != Qt::LeftButton) {
             return true;
         }
@@ -877,7 +881,7 @@ bool MainWindow::isStatusIndicator(const QObject* obj) const
     return obj == m_cwxIndicator || obj == m_tnfIndicator
         || obj == m_fdxIndicator || obj == m_bandStackIndicator || obj == m_tgxlContainer
         || obj == m_pgxlContainer || obj == m_txIndicator || obj == m_addPanLabel
-        || obj == m_dvkIndicator;
+        || obj == m_dvkIndicator || obj == m_radioVersionLabel;
 }
 
 void MainWindow::activateStatusIndicator(QObject* obj)
@@ -890,6 +894,10 @@ void MainWindow::activateStatusIndicator(QObject* obj)
         return;
     }
 #endif
+    if (obj == m_radioVersionLabel) {
+        openFirmwareReleaseNotes();   // no-op unless the row shows out-of-date firmware
+        return;
+    }
     if (obj == m_cwxIndicator) {
         if (!m_cwxIndicator->isEnabled()) return;
         toggleCwKeyerPanel();

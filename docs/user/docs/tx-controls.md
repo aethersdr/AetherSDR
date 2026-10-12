@@ -138,9 +138,12 @@ CW is excluded, and the card is not available on the Hermes-Lite 2.
 
 - Press **MOX** (or use PTT) to transmit
 - The VFO marker turns orange/red during TX
-- The waterfall switches to FFT-derived rows during TX, scrolling at the same
-  rate as on receive, masks the TX passband on every overlapping panadapter,
-  and holds its dBm range until you return to receive
+- With **Show TX in Waterfall** enabled in **Settings → Radio Setup... → Transmit**,
+  the waterfall draws FFT-derived rows during TX at the receive scroll rate
+  and masks the TX passband on every overlapping panadapter. With it disabled,
+  those panes hold their waterfall rows until receive resumes. The dBm range
+  stays fixed during TX. On a Hermes-Lite 2, AetherSDR remembers the choice per
+  radio; on a FlexRadio, the radio owns and reports it
 - Interlock problems that block transmit (amplifier warming up, ATU busy, band
   not allowed) appear as notifications, only when transmit is actually
   blocked

@@ -982,6 +982,11 @@ public:
     // straight down to that backend. Returns false on Flex, where the caller
     // sends the weighted_average= wire command itself.
     bool requestLocalPanWeightedAverage(const QString& panId, bool on);
+    // "Show TX in Waterfall" where the backend declares the client owns it
+    // (RadioCapabilities::clientPersistsShowTxInWaterfall()): the transmit
+    // model takes it here and it is remembered per radio. Returns false
+    // elsewhere, where the caller sends the wire command. Never keys anything.
+    bool requestLocalShowTxInWaterfall(bool on);
     // Panel width in spectrum points for a backend that shapes its own
     // spectrum: straight down to that backend. Returns false on Flex, where
     // the caller sends the xpixels= wire command itself.
@@ -1040,6 +1045,12 @@ public:
     // Display controls — Waterfall (display panafall set)
     void setWaterfallColorGain(int gain);
     void setWaterfallBlackLevel(int level);
+    // The same two for one named pan, for a control the operator moved after
+    // the widget applied the value; autoBlack is that pan's widget state. A
+    // backend with no command plane is sent nothing, and the value is reported
+    // as dropped unless the client draws it.
+    void setWaterfallColorGainFor(const QString& panId, int gain, bool autoBlack);
+    void setWaterfallBlackLevelFor(const QString& panId, int level);
     void setWaterfallAutoBlack(bool on);
     // Auto-black source: false = client-side estimate (radio auto_black off),
     // true = radio's per-tile level (radio auto_black on). The radio only
@@ -1463,6 +1474,11 @@ private:
     // Sends the radio auto_black flag from the combined auto-black on/off +
     // client/radio-source state (auto_black=1 only when both select radio-side).
     void applyWaterfallAutoBlack();
+    // The one wire site per key. Without a command plane the text reaches
+    // sendCmd(), which reports it as dropped, only when reportDrop is set: an
+    // operator moved the control and the client did not draw it.
+    void sendWaterfallColorGain(const QString& panId, int gain, bool reportDrop);
+    void sendWaterfallBlackLevel(const QString& panId, int level, bool reportDrop);
     bool m_wfAutoBlackOn{true};         // mirrors the client auto-black on/off
     bool m_wfAutoBlackRadioSide{false}; // false = client-side, true = radio-side
     bool profileLoadRadioStateWritesHeld() const;
@@ -1564,6 +1580,9 @@ private:
     // in the ctor, so a non-Flex backend simply skips it.
     static std::unique_ptr<IRadioBackend> makeBackend(const QString& family);
     void handRestoredStateToBackend();  // RFC #4603
+    // Put the remembered "Show TX in Waterfall" back into the transmit model
+    // on connect, where the backend declares the client its owner.
+    void restoreClientShowTxInWaterfall();
     void persistOperatingState(bool force = false);          // RFC #4603 PR 3
     void scheduleOperatingStateSave();
     // Build the offline health source for `family` on first need, or return
@@ -1786,6 +1805,8 @@ private:
     void dispatchSliceSquelch(const SliceSquelchRequest& request);
     void dispatchSliceRxAntenna(const QString& antenna);
     void dispatchSliceLock(bool locked);
+    void dispatchSliceControl(const SliceControlRequest& request);
+    void dispatchTransmitControl(const TransmitControlRequest& request);
     void reportReceiveDispatch(ReceiveDispatch result, const QString& operation,
                                bool operatorOrigin = true);
     // Translate a MODEL pan id to the backend's own id for a command going down

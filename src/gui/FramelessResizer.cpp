@@ -109,10 +109,23 @@ bool FramelessResizer::shouldEndOnUngrabbedLeave(bool manualResizeActive,
     return manualResizeActive && !manualResizeGrabbed;
 }
 
+// static
+Qt::Edges FramelessResizer::withoutLockedAxes(Qt::Edges edges, const QSize& minimum,
+                                               const QSize& maximum)
+{
+    if (minimum.width() == maximum.width())
+        edges &= ~(Qt::LeftEdge | Qt::RightEdge);
+    if (minimum.height() == maximum.height())
+        edges &= ~(Qt::TopEdge | Qt::BottomEdge);
+    return edges;
+}
+
 Qt::Edges FramelessResizer::edgesAt(const QPoint& p) const
 {
-    return computeEdges(m_window->rect(), p, m_margin, m_topMoveReserve,
-                         m_window->isMaximized() || m_window->isFullScreen());
+    return withoutLockedAxes(
+        computeEdges(m_window->rect(), p, m_margin, m_topMoveReserve,
+                     m_window->isMaximized() || m_window->isFullScreen()),
+        m_window->minimumSize(), m_window->maximumSize());
 }
 
 // Known limitation: setOverrideCursor()/restoreOverrideCursor() is one global

@@ -5,6 +5,7 @@
 // setter and wire text. Socket-free: injected stub backend or the real Flex
 // backend built without dialling; nothing is opened and nothing is keyed.
 
+#include "ModelControlWireSpy.h"
 #include "TestSettingsProfile.h"
 #include "core/RigctlProtocol.h"
 #include "core/backends/IRadioBackend.h"
@@ -291,7 +292,7 @@ void testCommandPlaneKeepsTheSliceSetter()
     pan->setRfGain(-8);
 
     QStringList wire;
-    QObject::connect(slice, &SliceModel::commandReady, [&wire](const QString& cmd) {
+    const auto wireEncoder = modelControlEncoder(slice, [&wire](const QString& cmd) {
         wire << cmd;
     });
     RigctlProtocol port(&radio);

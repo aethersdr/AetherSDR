@@ -233,8 +233,8 @@ int rade_rx_process(rade_rx_state *rx, float *features_out, float *eoo_out, cons
         rx->rx_phase = rx_phase;
 
         /* Normalize phase to prevent drift */
-        //float phase_mag = rade_cabs(rx->rx_phase);
-        //rx->rx_phase = rade_cscale(rx->rx_phase, 1.0f / phase_mag);
+        float phase_mag = rade_cabs(rx->rx_phase);
+        rx->rx_phase = rade_cscale(rx->rx_phase, 1.0f / phase_mag);
 
         /* Demodulate OFDM frame */
         float z_hat[RADE_NZMF * RADE_LATENT_DIM];

@@ -115,6 +115,7 @@
 #include "AntennaGeniusApplet.h"
 #include "ShackSwitchApplet.h"
 #include "RadioSetupDialog.h"
+#include "ReleaseTagText.h"
 #include "AgcCalibrationDialog.h"
 #include "AudioDeviceChangeDialog.h"
 #include "NetworkDiagnosticsDialog.h"
@@ -316,24 +317,8 @@ constexpr int kPanadapterSliceCapacityStatusMs = 4000;
 // shared between the constructor timer setup here and MainWindow_SwrSweep.cpp.
 constexpr const char* kSuppressAudioDeviceNotificationsKey =
     "SuppressAudioDeviceNotifications";
-constexpr const char* kStatusBarCompactLabelObjectName = "statusBarCompactLabel";
-
-QString statusBarCompactLabelStyle(const QString& color)
-{
-    return QStringLiteral(
-        "QLabel#statusBarCompactLabel { color: %1; font-size: 12px; background: transparent; }")
-        .arg(color);
-}
-
-void applyStatusBarCompactLabelStyle(QLabel* label, const QString& color)
-{
-    if (!label) {
-        return;
-    }
-
-    label->setObjectName(kStatusBarCompactLabelObjectName);
-    AetherSDR::ThemeManager::instance().applyStyleSheet(label, statusBarCompactLabelStyle(color));
-}
+// statusBarCompactLabelStyle()/applyStatusBarCompactLabelStyle() live in
+// MainWindowHelpers, shared with MainWindow_Session.cpp's firmware verdict.
 
 int statusBarCompactTextWidth(const QStringList& samples, int horizontalPadding)
 {
@@ -524,38 +509,7 @@ QString vfoFrequencyText(double mhz)
 // tmate2*DefaultAction helpers moved to MainWindow_Controllers.cpp (#3351 Phase 2a).
 #endif
 
-bool isTransientAudioDeviceId(const QByteArray& id)
-{
-#ifdef Q_OS_LINUX
-    // PipeWire/pulse-shim churns these constantly (monitor sources, per-app
-    // loopbacks, fallback auto-null sink, echo-cancel/combine virtuals).
-    // They are never useful as a PC mic or local speaker target; treating
-    // them as "new devices" is what re-fires the dialog in #2864.
-    if (id.contains(".monitor"))               return true;
-    if (id.startsWith("pulse_input_loopback")) return true;
-    if (id.contains("auto_null"))              return true;
-    if (id.contains("echo-cancel"))            return true;
-    if (id.contains("combined"))               return true;
-#else
-    Q_UNUSED(id);
-#endif
-    return false;
-}
-
-QList<QByteArray> audioDeviceIds(const QList<QAudioDevice>& devices)
-{
-    QList<QByteArray> ids;
-    ids.reserve(devices.size());
-    for (const QAudioDevice& device : devices) {
-        if (isTransientAudioDeviceId(device.id()))
-            continue;
-        ids.append(device.id());
-    }
-    return ids;
-}
-
-// Every enumerable id, the churn audioDeviceIds() skips included: what is
-// PRESENT, as opposed to what counts as a new arrival.
+// Every enumerable id; the policy header derives the arrival list from it.
 QList<QByteArray> enumeratedAudioDeviceIds(const QList<QAudioDevice>& devices)
 {
     QList<QByteArray> ids;
@@ -563,38 +517,6 @@ QList<QByteArray> enumeratedAudioDeviceIds(const QList<QAudioDevice>& devices)
     for (const QAudioDevice& device : devices)
         ids.append(device.id());
     return ids;
-}
-
-bool containsAudioDeviceId(const QList<QByteArray>& ids, const QByteArray& id)
-{
-    return std::any_of(ids.cbegin(), ids.cend(),
-                       [&id](const QByteArray& candidate) {
-                           return candidate == id;
-                       });
-}
-
-QList<QByteArray> newlyAddedAudioDeviceIds(const QList<QAudioDevice>& devices,
-                                           const QList<QByteArray>& knownIds)
-{
-    QList<QByteArray> added;
-    for (const QAudioDevice& device : devices) {
-        if (isTransientAudioDeviceId(device.id()))
-            continue;
-        if (!containsAudioDeviceId(knownIds, device.id()))
-            added.append(device.id());
-    }
-    return added;
-}
-
-QList<QByteArray> removedAudioDeviceIds(const QList<QByteArray>& knownIds,
-                                        const QList<QByteArray>& currentIds)
-{
-    QList<QByteArray> removed;
-    for (const QByteArray& id : knownIds) {
-        if (!containsAudioDeviceId(currentIds, id))
-            removed.append(id);
-    }
-    return removed;
 }
 
 // Null when `id` is empty or not in `devices`.
@@ -1489,8 +1411,7 @@ MainWindow::MainWindow(QWidget* parent)
         FramelessMessageBox box(this);
         box.setWindowTitle("AetherSDR Update Available");
         box.setIcon(QMessageBox::Information);
-        box.setText(QString("AetherSDR v%1 is available.").arg(ver));
-        box.setInformativeText(QString("You are running v%1.").arg(current));
+        setUpdateAvailableText(box, current, ver);
         QPushButton* viewBtn = box.addButton("View Latest Release", QMessageBox::ActionRole);
         viewBtn->setAutoDefault(false);
         QPushButton* closeBtn = box.addButton(QMessageBox::Close);
@@ -3652,11 +3573,20 @@ RadioSetupDialog* MainWindow::openRadioSetupPage(const QString& page)
 {
     const QString prevComp = m_radioModel.audioCompressionParam();
     const bool wasFresh = !m_radioSetupDialog;
-    showOrRaisePersistent(m_radioSetupDialog,
-                          &m_radioModel, m_audio,
-                          &m_tgxlConn, &m_pgxlConn, &m_antennaGenius,
-                          m_kiwiSdrManager, &m_acomConn, &m_speConn, &m_vkampConn,
-                          &m_lpMeterConn, &m_kpa1500Conn);
+    // A canon workspace window: created directly rather than through
+    // showOrRaisePersistent(), which would apply View → Frameless Window.
+    if (wasFresh) {
+        auto* dlg = new RadioSetupDialog(&m_radioModel, m_audio,
+                                         &m_tgxlConn, &m_pgxlConn, &m_antennaGenius,
+                                         m_kiwiSdrManager, &m_acomConn, &m_speConn,
+                                         &m_vkampConn, &m_lpMeterConn, &m_kpa1500Conn,
+                                         this);
+        dlg->setAttribute(Qt::WA_DeleteOnClose);
+        m_radioSetupDialog = dlg;
+    }
+    m_radioSetupDialog->show();
+    m_radioSetupDialog->raise();
+    m_radioSetupDialog->activateWindow();
     if (wasFresh && m_radioSetupDialog)
         wireRadioSetupDialogSignals(m_radioSetupDialog, prevComp);
     if (m_radioSetupDialog && !page.isEmpty())
@@ -5285,8 +5215,10 @@ void MainWindow::audioStopTx()
 
 void MainWindow::setupAudioDeviceChangeMonitor()
 {
-    m_knownAudioInputIds = audioDeviceIds(QMediaDevices::audioInputs());
-    m_knownAudioOutputIds = audioDeviceIds(QMediaDevices::audioOutputs());
+    m_knownAudioInputIds =
+        arrivalAudioDeviceIds(enumeratedAudioDeviceIds(QMediaDevices::audioInputs()));
+    m_knownAudioOutputIds =
+        arrivalAudioDeviceIds(enumeratedAudioDeviceIds(QMediaDevices::audioOutputs()));
     m_knownDefaultAudioInputId = QMediaDevices::defaultAudioInput().id();
     m_knownDefaultAudioOutputId = QMediaDevices::defaultAudioOutput().id();
 
@@ -5325,25 +5257,12 @@ void MainWindow::handleAudioDeviceListChanged()
     const QAudioDevice defaultOutput = QMediaDevices::defaultAudioOutput();
     const QByteArray currentDefaultInputId = defaultInput.id();
     const QByteArray currentDefaultOutputId = defaultOutput.id();
-    const QList<QByteArray> currentInputIds = audioDeviceIds(inputDevices);
-    const QList<QByteArray> currentOutputIds = audioDeviceIds(outputDevices);
-    const QList<QByteArray> addedInputIds =
-        newlyAddedAudioDeviceIds(inputDevices, m_knownAudioInputIds);
-    const QList<QByteArray> addedOutputIds =
-        newlyAddedAudioDeviceIds(outputDevices, m_knownAudioOutputIds);
-    const QList<QByteArray> removedInputIds =
-        removedAudioDeviceIds(m_knownAudioInputIds, currentInputIds);
-    const QList<QByteArray> removedOutputIds =
-        removedAudioDeviceIds(m_knownAudioOutputIds, currentOutputIds);
-
-    m_knownAudioInputIds = currentInputIds;
-    m_knownAudioOutputIds = currentOutputIds;
+    const QList<QByteArray> presentInputIds = enumeratedAudioDeviceIds(inputDevices);
+    const QList<QByteArray> presentOutputIds = enumeratedAudioDeviceIds(outputDevices);
     const bool defaultInputChanged =
         currentDefaultInputId != m_knownDefaultAudioInputId;
     const bool defaultOutputChanged =
         currentDefaultOutputId != m_knownDefaultAudioOutputId;
-    m_knownDefaultAudioInputId = currentDefaultInputId;
-    m_knownDefaultAudioOutputId = currentDefaultOutputId;
 
     const QAudioDevice currentInput = m_audio->inputDevice();
     const QAudioDevice currentOutput = m_audio->outputDevice();
@@ -5355,22 +5274,27 @@ void MainWindow::handleAudioDeviceListChanged()
     const QByteArray preferredOutputId =
         savedChoice.value("AudioOutputDeviceId", "").toByteArray();
     // Presence is asked of every enumerable id; only arrivals skip the churn.
-    const QList<QByteArray> presentInputIds = enumeratedAudioDeviceIds(inputDevices);
-    const QList<QByteArray> presentOutputIds = enumeratedAudioDeviceIds(outputDevices);
-    const AudioDeviceDecision inputDecision = decideAudioDeviceChange({
-        .presentIds = presentInputIds,
-        .addedIds = addedInputIds,
-        .anyRemoved = !removedInputIds.isEmpty(),
+    const AudioDeviceListChange inputChange = audioDeviceListChange({
+        .enumeratedIds = presentInputIds,
+        .knownArrivalIds = m_knownAudioInputIds,
         .defaultChanged = defaultInputChanged,
         .liveId = currentInput.id(),
         .preferredId = preferredInputId});
-    const AudioDeviceDecision outputDecision = decideAudioDeviceChange({
-        .presentIds = presentOutputIds,
-        .addedIds = addedOutputIds,
-        .anyRemoved = !removedOutputIds.isEmpty(),
+    const AudioDeviceListChange outputChange = audioDeviceListChange({
+        .enumeratedIds = presentOutputIds,
+        .knownArrivalIds = m_knownAudioOutputIds,
         .defaultChanged = defaultOutputChanged,
         .liveId = currentOutput.id(),
         .preferredId = preferredOutputId});
+    const QList<QByteArray>& addedInputIds = inputChange.addedIds;
+    const QList<QByteArray>& addedOutputIds = outputChange.addedIds;
+    m_knownAudioInputIds = inputChange.arrivalIds;
+    m_knownAudioOutputIds = outputChange.arrivalIds;
+    m_knownDefaultAudioInputId = currentDefaultInputId;
+    m_knownDefaultAudioOutputId = currentDefaultOutputId;
+
+    const AudioDeviceDecision inputDecision = decideAudioDeviceChange(inputChange);
+    const AudioDeviceDecision outputDecision = decideAudioDeviceChange(outputChange);
     const bool resetInput =
         inputDecision.action == AudioDeviceAction::FollowDefault;
     const bool resetOutput =
@@ -6188,6 +6112,12 @@ void MainWindow::buildUI()
     m_radioVersionLabel = new QLabel("");
     applyStatusBarCompactLabelStyle(m_radioVersionLabel, QStringLiteral("{{color.text.secondary}}"));
     m_radioVersionLabel->setAlignment(Qt::AlignCenter);
+    // Only out-of-date firmware is actionable, but the row is wired once here
+    // rather than as the verdict changes: openFirmwareReleaseNotes() checks
+    // m_radioFirmwareCurrency and does nothing otherwise, and
+    // applyFirmwareCurrencyToVersionLabel() drops the tab stop it does not need.
+    m_radioVersionLabel->installEventFilter(this);
+    keyboardOperable(m_radioVersionLabel);
     radioVbox->addWidget(m_radioInfoLabel);
     radioVbox->addWidget(m_radioVersionLabel);
     hbox->addWidget(radioStack);
@@ -7970,6 +7900,7 @@ void MainWindow::refreshRadioIdentityLabels()
     m_radioMakeLabel->setVisible(showMake);
     m_radioInfoLabel->setVisible(!model.isEmpty());
     m_radioVersionLabel->setVisible(!m_radioVersionLabel->text().isEmpty());
+    applyFirmwareCurrencyToVersionLabel();
     updateStatusBarMinimumWidth();
 }
 
