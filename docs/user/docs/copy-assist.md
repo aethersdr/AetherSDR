@@ -73,7 +73,7 @@ Choose **Remote server…** in the model picker and enter the endpoint URL (for 
 
 *The Copy Assist panel under the waterfall, before it is enabled.*
 
-- Click the **ASR** toggle in the status bar (between **CWX** and **DVK**), or
+- Click the **ASR** toggle in the status bar (between **CWX** and **DVK**), or Tab to it and press Enter, or
 - **Tools → Copy Assist**.
 
 Either one shows or hides the panel, which docks under the waterfall of the active panadapter. Drag the panel's grip to resize it; the height is remembered.
@@ -92,16 +92,16 @@ Either one shows or hides the panel, which docks under the waterfall of the acti
 2. The first time, the selected model downloads, is verified and loads. A loading indicator shows progress.
 3. Transcribed text streams into the panel.
 
-Text is **coloured by recognition confidence**, the same way as the [CW Decoder](./cw-decoder.md):
+Text is **colored by recognition confidence**, the same way as the [CW Decoder](./cw-decoder.md):
 
-| Colour | Confidence |
+| Color | Confidence |
 |---|---|
 | Green | High |
 | Yellow | Medium |
 | Orange | Questionable |
 | Red | Low |
 
-Copy Assist hears the audio after client-side noise reduction, so a suitable [DSP Noise Mitigation](./dsp-noise-mitigation.md) setting can improve the transcript as well as your own listening.
+By default Copy Assist hears the audio after AetherSDR's noise reduction and RX effects, as you hear it, so a suitable [DSP Noise Mitigation](./dsp-noise-mitigation.md) setting can improve the transcript as well as your own listening. Noise-reduction artifacts can also confuse the speech model more than the noise does; to transcribe the audio before them, turn on **Transcribe from unprocessed audio (bypasses NR and RX effects)** in Copy Assist Settings. What you hear is unchanged.
 
 ### Context
 
@@ -109,7 +109,7 @@ Copy Assist hears the audio after client-side noise reduction, so a suitable [DS
 
 - A low-confidence segment is not carried forward, so one garbled over cannot poison the next.
 - A real pause, **Clear**, or a retune starts fresh.
-- Context works with the whisper models only. It is greyed out on the sherpa-onnx and remote backends.
+- Context works with the whisper models only. It is grayed out on the sherpa-onnx and remote backends.
 
 ### The Queue readout
 
@@ -145,15 +145,12 @@ The ⚙ button opens a small modeless settings window that can stay open while y
 | **Compute** | Which device runs the model: a GPU or the CPU. Shows **Detecting…** while GPU discovery runs in the background. |
 | **Language** | The spoken language to transcribe (multilingual models only). |
 | **Save transcript to a file** | Appends each finished utterance as a timestamped line. A date is inserted before the extension, so `net.txt` writes to `net-2026-07-21.txt` and rolls over daily. A frequency marker line is written when ASR starts, on every retune, and at the top of each day's file. |
+| **Transcribe from unprocessed audio (bypasses NR and RX effects)** | Off by default. Transcribes the receive audio before AetherSDR's noise reduction and RX effects instead of after them. What you hear is unchanged, and processing done by the radio itself still applies. On a noisy band the unprocessed audio has little level difference between speech and noise, so leave **Sens** high; Silero VAD rejects most real speech on a noisy HF signal. Switching starts the transcription over. |
 | **Use Silero VAD (ONNX)** | Replaces the built-in energy detector with the small Silero neural voice-activity model, which segments real speech far better in HF noise. Downloads on demand; **Browse…** lets you use your own `.onnx`. |
 | **Label speakers (A/B/C…)** | Tags each utterance with a speaker label (`[A] …`, `[B] …`) using a downloaded speaker-embedding model. **Match threshold** (0.00–1.00) sets how strict the matching is: higher splits voices more finely, lower merges them. Labels reset on retune or re-enable. |
 | **Boundary overlap** | 0–2000 ms, **Off** by default. When a long over is cut at the Buffer limit, the last N ms carry into the next segment so a word split at the cut is decoded whole, and the repeated words are removed. A few hundred ms is the practical setting. It does nothing useful for languages written without spaces (Chinese, Japanese, Thai). |
 
 Silero VAD and speaker labels need an ONNX Runtime build; the release builds include it.
-
-## Known issues
-
-- On Apple Silicon, transcribing in heavy noise can freeze the whole app for several seconds at a time, worse with MNR on ([#5107](https://github.com/aethersdr/AetherSDR/issues/5107)).
 
 ## Troubleshooting
 
@@ -203,7 +200,7 @@ The computer has no internet access, for example in an air-gapped shack.
 
 ## See also
 
-- [DSP Noise Mitigation](./dsp-noise-mitigation.md) — clean up the audio Copy Assist hears
+- [DSP Noise Mitigation](./dsp-noise-mitigation.md) — clean up the audio you and Copy Assist hear
 - [CW Decoder](./cw-decoder.md)
 - [Accessibility](./accessibility.md)
 - Primary reference: [docs/asr-copy-assist.md](https://github.com/aethersdr/AetherSDR/blob/main/docs/asr-copy-assist.md)

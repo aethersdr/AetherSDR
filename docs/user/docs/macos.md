@@ -40,12 +40,13 @@ This applies to the [Ulanzi Dial](./ulanzi-dial.md), the Stream Deck+ ([StreamDe
 
 - **Menus** are in the system menu bar at the top of the screen. See [Menu Reference](./menu-reference.md).
 - **Radio Setup** is **AetherSDR → Preferences...** (Settings → Radio Setup... on the other platforms). Search in it with ⌘F.
-- **Window:** a native window with the standard traffic-light buttons, the tiling menu, Stage Manager and native full screen (Cmd+Ctrl+F). Cmd+M minimises the window.
+- **Window:** a native window with the standard traffic-light buttons, the tiling menu, Stage Manager and native full screen (Cmd+Ctrl+F). Cmd+M minimizes the window.
 - **DAX virtual audio** is built in through the DAX Virtual Audio Driver (above). See [DAX Virtual Audio](./dax-virtual-audio.md).
 - **CAT virtual serial ports** (PTY) are available as well as TCP ports, at `~/Library/Caches/AetherSDR/cat-A` … `cat-H`. See [CAT Control](./cat-control.md).
 - **Noise reduction:** **MNR**, Apple's MMSE-Wiener spectral noise reduction on the vDSP/Accelerate framework, is available only on macOS. **BNR** (NVIDIA) is not available; use **DFNR** instead, which runs on any CPU. See [DSP Noise Mitigation](./dsp-noise-mitigation.md).
 - **Copy Assist** uses the **Metal** GPU on Apple Silicon. It is not in the Intel DMG. See [Copy Assist](./copy-assist.md).
 - **Credentials** are kept in the macOS Keychain, never in the settings database.
+- **App Nap** is turned off while AetherSDR runs, so audio, DAX and TCI keep streaming while the window is hidden or covered. Idle sleep is still allowed, except while a radio is connected. See [Audio Settings](./audio-settings.md#prevent-system-sleep).
 - **ThumbDV** appears as `/dev/cu.usbserial-*`. See [D-STAR (ThumbDV)](./d-star-thumbdv.md).
 - **Screen reader:** VoiceOver. AetherSDR holds animations still when **Reduce motion** is on. See [Accessibility](./accessibility.md).
 
@@ -70,7 +71,6 @@ To use the settings command line, run the program inside the app bundle, for exa
 - Without Input Monitoring permission, a Ulanzi Dial shows only "Disconnected", with no hint that a permission is missing ([#5247](https://github.com/aethersdr/AetherSDR/issues/5247)).
 - DAX transmit through the macOS DAX driver can send audio in bursts, and can stop sending until AetherSDR is restarted; TCI is not affected ([#5870](https://github.com/aethersdr/AetherSDR/issues/5870)).
 - Receive audio can become distorted after several minutes on some external audio interfaces until **PC Audio** is toggled ([#6160](https://github.com/aethersdr/AetherSDR/issues/6160)).
-- Copy Assist can freeze the whole application for 15–20 seconds at a time on recent Apple Silicon Macs ([#5107](https://github.com/aethersdr/AetherSDR/issues/5107)).
 - An RTL-SDR Blog V4 dongle shows only noise, with no signals ([#6016](https://github.com/aethersdr/AetherSDR/issues/6016)).
 
 ## Troubleshooting

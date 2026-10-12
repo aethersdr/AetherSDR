@@ -51,7 +51,7 @@ Only one digital-voice slice can be active at a time.
 
 ### The D-STAR tab in AetherModem
 
-Open **Tools → AetherModem...** and select the **D-STAR** tab. The header shows the service state, which slice is in DSTR (or **No DSTR slice**), and a **Start / Stop** button for the service.
+Open **View → AetherModem...** and select the **D-STAR** tab. The header shows the service state, which slice is in DSTR (or **No DSTR slice**), and a **Start / Stop** button for the service.
 
 **Station & Route**
 
@@ -81,7 +81,7 @@ DSTR is available as a mode shortcut and as a MIDI mode action. While the D-STAR
 
 ## Known issues
 
-- Received D-STAR audio is silent or stops after a short time, and transmissions are not recognised as D-STAR by the far station ([#4277](https://github.com/aethersdr/AetherSDR/issues/4277)).
+- Received D-STAR audio is silent or stops after a short time, and transmissions are not recognized as D-STAR by the far station ([#4277](https://github.com/aethersdr/AetherSDR/issues/4277)).
 - A DV3000U ThumbDV is not detected on macOS ([#5780](https://github.com/aethersdr/AetherSDR/issues/5780)).
 
 ## Troubleshooting

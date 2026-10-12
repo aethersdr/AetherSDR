@@ -1,17 +1,17 @@
 ---
 title: "RX Controls"
 slug: "/rx-controls"
-description: "The RX applet in the applet panel is the slice-centred receive control surface."
+description: "The RX applet in the applet panel is the slice-centered receive control surface."
 ---
 
-The **RX** applet in the applet panel is the slice-centred receive control
+The **RX** applet in the applet panel is the slice-centered receive control
 surface. It repeats the slice's identity at the top and gives you step size,
 filter, audio, squelch, AGC and RIT/XIT for the selected slice, with more room
 than the compact VFO flag. Radio-side DSP buttons (NR, NB, ANF, APF, NRL, NRS,
 RNN, NRF, ANFL, ANFT) are on the VFO flag's DSP tab; see [VFO Widget](./vfo-widget.md).
 
 Most of this page describes a FlexRadio. On other radio families, controls the
-radio cannot honour are dimmed with the reason in their tooltip, or refuse
+radio cannot honor are dimmed with the reason in their tooltip, or refuse
 with a notice; see [Using the controls on other radios](#using-the-controls-on-other-radios) below.
 
 <img src="/img/screens/rx-applet.png" width="248" alt="RX Controls applet. The top row shows the slice buttons A (lit), B, C and D, a lock button, RX antenna ANT1, TX antenna ANT1 and filter width 2.7K. Below are a red TX badge, the mode selector set to USB and the frequency 14.250.000, then the tuning step selector at 500 and the AF gain and pan sliders, filter preset buttons 1.8K, 2.1K, 2.4K, 2.7K (lit), 2.9K and 3.3K beside the SQL and AGC (Med) controls, a passband graphic reading 100, 2.7K and 2800, and RIT and XIT offsets of +0 Hz." />
@@ -22,7 +22,7 @@ with a notice; see [Using the controls on other radios](#using-the-controls-on-o
 
 ### Header row
 
-- **Slice badge** — the slice letter, in the slice's colour (see
+- **Slice badge** — the slice letter, in the slice's color (see
   [Slice Colors](./slice-colors.md))
 - **Lock icon** — tune lock
 - **Antenna** — RX and TX antenna buttons. They show the local display names
@@ -65,7 +65,7 @@ manual filter change takes back control. See [VFO Widget](./vfo-widget.md).
 ### AF gain, pan and mute
 
 - **AF slider** (0–100) — slice audio volume
-- **Pan slider** (L/R) — stereo balance with a centre marker
+- **Pan slider** (L/R) — stereo balance with a center marker
 - **Mute** (speaker icon):
   - **single-click** mutes or unmutes this slice;
   - **double-click** mutes or unmutes **all** your slices.
@@ -86,7 +86,7 @@ The **SQL** button cycles through three states:
 |---|---|---|
 | **Off** | plain | — |
 | **SQL** (manual) | lit | The squelch level |
-| **AUTO** | amber, labelled AUTO | A margin of **5–20 dB** above the measured panadapter noise floor (default 10 dB) |
+| **AUTO** | amber, labeled AUTO | A margin of **5–20 dB** above the measured panadapter noise floor (default 10 dB) |
 
 - In **AUTO**, squelch tracks the band's noise floor as it changes, opening
   only for signals that stand the margin above it.
@@ -108,7 +108,7 @@ On RTL-SDR FM/FM-N, **AUTO** uses each receiver's own detector noise estimate, i
 
 ### AGC
 
-<img src="/img/screens/rx-agc-calibration.png" width="460" alt="AGC-T Calibration window. The heading reads AGC: MED, finding the knee (agc_threshold) just above the noise floor, with a warning that a signal is in the passband and you should tune to a clear spot. An empty plot with an AGC-T axis from 0 to 100 and a dashed marker fills the centre, above Auto Sweep and Apply buttons and a hint: tune to a clear spot, then Auto Sweep, or move the AGC-T slider and watch where the noise bends." />
+<img src="/img/screens/rx-agc-calibration.png" width="460" alt="AGC-T Calibration window. The heading reads AGC: MED, finding the knee (agc_threshold) just above the noise floor, with a warning that a signal is in the passband and you should tune to a clear spot. An empty plot with an AGC-T axis from 0 to 100 and a dashed marker fills the center, above Auto Sweep and Apply buttons and a hint: tune to a clear spot, then Auto Sweep, or move the AGC-T slider and watch where the noise bends." />
 
 *The AGC-T Calibration window.*
 
@@ -124,6 +124,11 @@ an Auto Sweep stops the sweep and puts back the AGC-T it started from.
 On the Hermes-Lite 2, AGC runs on the computer: with AGC **Off**, the AGC-T
 slider sets a fixed gain (4–64 dB, default 10 dB) remembered per receiver, and
 **DIGU/DIGL open with AGC off**. See [Hermes-Lite 2](./hermes-lite-2.md).
+
+On the ANAN-G2, AGC also runs on the computer. The AGC-T slider's 0–100
+covers −20 to 120 dB of gain (default 71, about 79 dB), and with AGC **Off**
+it sets the fixed gain instead. The slider always shows the setting the DSP is
+using. See [ANAN-G2](./anan-g2.md).
 
 ### RIT / XIT
 
@@ -190,7 +195,6 @@ the client NR2 method, because the radio has no NR of its own. See [Supported Ra
 
 - The squelch line, or Auto squelch, can appear in CW, RTTY and digital modes, where the SQL control is disabled ([#6276](https://github.com/aethersdr/AetherSDR/issues/6276)).
 - Switching a slice from DIGU to USB can turn squelch on, silencing the audio until you switch it off ([#3505](https://github.com/aethersdr/AetherSDR/issues/3505)).
-- On networked Icom radios, squelch can get stuck off once its level reaches 0, and only a non-zero change on the radio's front panel clears it ([#6172](https://github.com/aethersdr/AetherSDR/issues/6172)).
 
 ## Troubleshooting
 

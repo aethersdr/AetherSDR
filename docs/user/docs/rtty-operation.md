@@ -36,7 +36,7 @@ The shift is set per slice via `rtty_shift` in the radio's slice status.
 
 RTTY transmits binary data by switching between two audio frequencies, Mark and Space (see [Mark and Space tones](#mark-and-space-tones)). The difference between them is the **Shift** — by default 170 Hz, the standard amateur RTTY shift.
 
-When you switch to RTTY mode, AetherSDR displays two dashed vertical lines on the panadapter labelled **M** (Mark) and **S** (Space). These lines show exactly where the two RTTY tones sit in the audio passband, and they move with your VFO frequency.
+When you switch to RTTY mode, AetherSDR displays two dashed vertical lines on the panadapter labeled **M** (Mark) and **S** (Space). These lines show exactly where the two RTTY tones sit in the audio passband, and they move with your VFO frequency.
 
 When you tune to an RTTY signal, position the two dashed lines so that the Mark line sits on the higher-frequency tone and the Space line sits on the lower-frequency tone. When both tones fall on their respective lines, the signal is properly tuned and can be decoded.
 
@@ -134,9 +134,9 @@ See [DAX Virtual Audio](./dax-virtual-audio.md) and [CAT Control](./cat-control.
 | Band | Frequency range | Notes |
 |------|----------------|-------|
 | 80m | 3.580 – 3.600 MHz | RTTY/Data segment |
-| 40m | 7.040 – 7.080 MHz | RTTY activity centre ~7.080 |
+| 40m | 7.040 – 7.080 MHz | RTTY activity center ~7.080 |
 | 30m | 10.130 – 10.150 MHz | RTTY ~10.143 |
-| 20m | 14.080 – 14.100 MHz | RTTY activity centre ~14.085 |
+| 20m | 14.080 – 14.100 MHz | RTTY activity center ~14.085 |
 | 15m | 21.080 – 21.100 MHz | RTTY ~21.085 |
 | 10m | 28.080 – 28.100 MHz | RTTY ~28.085 |
 

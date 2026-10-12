@@ -24,7 +24,7 @@ Where AGENTS.md or the developer guide appears to conflict with CONSTITUTION.md 
 
 ## Contributing code
 
-1. Browse [open issues](https://github.com/aethersdr/AetherSDR/issues). Issues labelled `good first issue` are good starting points.
+1. Browse [open issues](https://github.com/aethersdr/AetherSDR/issues). Issues labeled `good first issue` are good starting points.
 2. Fork the repository and create a feature branch from `main`.
 3. Build it. **Qt 6.12 is required**; `scripts/setup/setup-qt.sh` installs it. See [Building from Source](./building-from-source.md).
 4. Implement the fix or feature (one issue per PR).
@@ -38,13 +38,13 @@ Most AetherSDR development is done with AI coding tools. See [AI-Assisted Develo
 ### Key rules
 
 - **Use `AppSettings`, never `QSettings`.** Settings live in the SQLite store; credentials go to the OS keychain, never into settings.
-- **Every colour is a theme token.** Take colours from ThemeManager tokens, never hard-coded hex values, so the Default Light theme and user themes work. See `docs/theming/` and `docs/style/` in the repository.
+- **Every color is a theme token.** Take colors from ThemeManager tokens, never hard-coded hex values, so the Default Light theme and user themes work. See `docs/theming/` and `docs/style/` in the repository.
 - **Dim, don't hide.** A control the connected radio cannot use stays visible but dimmed, with the reason in its tooltip.
 - **Accessible names.** New widgets need accessible names so screen readers can use them (see `docs/a11y.md`).
 - **No feedback loops.** Use `QSignalBlocker` when updating the UI from model signals.
 - **Multi-Flex safety.** Filter radio data by `client_handle`.
-- **The radio is authoritative** for its own live state; FlexLib is the reference for protocol behaviour.
-- **Cite the principle** your change honours at the end of the commit subject, for example `Principle V.`
+- **The radio is authoritative** for its own live state; FlexLib is the reference for protocol behavior.
+- **Cite the principle** your change honors at the end of the commit subject, for example `Principle V.`
 - **One PR per issue.** Keep changes focused, and don't reformat code you are not changing.
 - **Test the RX chain.** Discovery → connect → FFT → audio must still work.
 - **Open an `[RFC]` issue first** for any UX, visual or architecture change.
@@ -55,7 +55,7 @@ Most AetherSDR development is done with AI coding tools. See [AI-Assisted Develo
 These docs live in the AetherSDR repository under [`docs/user/docs/`](https://github.com/aethersdr/AetherSDR/tree/main/docs/user/docs), one Markdown file per page, and change through an ordinary pull request. Every page follows a standard skeleton, status front matter and set of writing rules, described in the [Docs Style Guide](./docs-style-guide.md). Read it before adding or restructuring a page.
 
 - **Fixing a page:** use the **Edit this page** link at the bottom of it, or edit the file in your fork, and open a pull request against `main`.
-- **Changing behaviour:** a pull request that changes what users see or do updates the matching page in the same pull request.
+- **Changing behavior:** a pull request that changes what users see or do updates the matching page in the same pull request.
 - **Checking your change:** `npm run build` in `docs/user` fails on any link to a page or heading that does not exist. [`docs/user/README.md`](https://github.com/aethersdr/AetherSDR/blob/main/docs/user/README.md) covers previewing, screenshots and the generated reference pages.
 - **Translating:** see [Translating the Docs](./translating-the-docs.md).
 
@@ -74,7 +74,7 @@ If you'd rather file by hand, use the [bug report template](https://github.com/a
 
 Use **Help → Submit your Idea... 💡**. It copies a structured prompt into Claude, ChatGPT, Gemini, Grok or Perplexity, so you can describe your idea in plain English and have the AI write the issue body, then opens the right GitHub template.
 
-To file by hand, use the [feature request template](https://github.com/aethersdr/AetherSDR/issues/new?template=feature_request.yml). Describe the problem you are solving, reference SmartSDR behaviour where it helps (screenshots are welcome), and keep to one feature per issue.
+To file by hand, use the [feature request template](https://github.com/aethersdr/AetherSDR/issues/new?template=feature_request.yml). Describe the problem you are solving, reference SmartSDR behavior where it helps (screenshots are welcome), and keep to one feature per issue.
 
 ## See also
 

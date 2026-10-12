@@ -31,7 +31,7 @@ On a home LAN this is fine. Over a cellular or VPN link the combined 2–3 Mbit/
 
 **Location:** **Settings → Radio Setup... → Audio → Audio Compression (SmartLink / tailnet)**
 
-| Setting | Behaviour |
+| Setting | Behavior |
 |---------|-----------|
 | **Uncompressed** (default) | Uncompressed on every connection |
 | **Auto** | Opus on SmartLink and on a radio reached over a tailnet, uncompressed on the local network |

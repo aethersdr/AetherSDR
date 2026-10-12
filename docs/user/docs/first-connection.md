@@ -42,7 +42,7 @@ If no radio appears, the window shows "No local radios found yet" with **Retry D
 
 The list can also include:
 - **Hermes-Lite 2** and **ANAN-G2** radios on the same LAN, and RTL-SDR dongles plugged into this computer (on builds with the RTL-SDR backend).
-- **AetherSDR Demo**, labelled "Simulator (not on the air)". It always sorts below real radios. Untick **Show the AetherSDR demo simulator** to hide it.
+- **AetherSDR Demo**, labeled "Simulator (not on the air)". It always sorts below real radios. Untick **Show the AetherSDR demo simulator** to hide it.
 
 ## What to Expect
 
@@ -50,7 +50,7 @@ After connecting, you'll see:
 - **Spectrum** (top) showing the RF environment
 - **Waterfall** (bottom) scrolling in real time
 - **VFO widget** with frequency, S-meter and controls
-- **Title bar** with a tab for the radio; its dot pulses with each heartbeat and turns red with "link lost" if the connection drops
+- **Title bar** with a tab for the radio; its dot pulses with each heartbeat and turns red with "Link lost" if the connection drops
 - **Applet panel** (right) with the RX, TX, P/CW and other applets
 
 Controls that the connected radio cannot use are hidden or dimmed with a reason. Continue with [Your First Session](./your-first-session.md).

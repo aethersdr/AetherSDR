@@ -31,22 +31,26 @@ To reach it across a VPN or another subnet, use **Connect by IP** with **Radio t
 |--------|---------|--------------|
 | **Sample rate:** | 48 ksps | DDC0 sample rate: 48, 96, 192, 384, 768 or 1536 ksps. It is also the starting width of the panadapter. Higher rates use more of the radio's Ethernet link. |
 | **Select ADC:** | ADC0 (ANT1/2/3) | Which receive chain feeds the receiver: **ADC0 (ANT1/2/3)**, behind the switched antenna relays, or **ADC1 (RX2)**, wired straight to the RX2 jack. |
-| **Dither** / **Random** | On | The ADC's linearisation bits. Leave them on unless you are testing. |
+| **Dither** / **Random** | On | The ADC's linearization bits. Leave them on unless you are testing. |
 | **ADC0 RF filter bypass** / **ADC1 RF filter bypass** | On | Routes the antenna around the front-end filter bank. **Leave these checked:** no band filter is selected in this version, so unchecked means nothing reaches the ADC. |
 | **Send RX audio to the radio's speaker** | Off | Also plays receive audio through the G2's own speaker and headphone jack. Takes effect on the next connect. |
 
 ## Receiving with the G2
 
 - **Receive** with live tuning and zoom. Changing the zoom changes the DDC rate live, without rebuilding the session.
-- **Panadapter** computed by WDSP's display analyser: a ≥16384-point windowed FFT at one point per screen pixel. **FFT AVG** and **Weighted** averaging drive it, and noise-floor auto-adjust works.
+- **Panadapter** computed by WDSP's display analyzer: a ≥16384-point windowed FFT at one point per screen pixel. **FFT AVG** and **Wt Avg** drive it, and noise-floor auto-adjust works.
 - **S-meter.**
-- **NB** (noise blanker): WDSP's impulse blanker, run on this computer before the demodulator.
+- **NB** cycles Off → **NB** → **NB2** → Off: WDSP's two impulse blankers, run on this computer before the demodulator. **NB** silences each impulse; **NB2** reconstructs the blanked window from the samples either side, and shows an **NB2** fill selector (**Zero**, **Sample hold**, **Mean hold**, **Hold sample** or **Interpolate**) while it runs. Neither is offered in FM.
+- **AGC-T** sets the AGC's maximum gain from −20 to 120 dB, 1.4 dB per slider step, starting at 71 (79.4 dB). With AGC off it sets the fixed gain instead, starting at 29 (20.6 dB). AGC-T and the AGC-off level are not remembered across launches; each launch starts at 71 and 29.
 - **RF Gain** from −31 to 0 dB drives the G2's ADC step attenuator, and is restored per radio.
 - **AF gain, mute and balance** apply. With **Send RX audio to the radio's speaker** on, the receiver's mute and volume apply to both the computer and the radio's speaker, and the title-bar speaker button mutes the radio's speaker too.
 - Manual **Black Level** and waterfall **NB Blank**. See [Panadapter Controls](./panadapter-controls.md).
+- **Status bar:** the **Network:** indicator follows the G2's link (received data and packet loss; round-trip time and jitter are not measured on this radio). The G2's supply voltage is shown in the status bar and the Meter applet. The G2 reports no PA temperature, so that reading is not shown.
 - **Tools → Radio Health...**
 
 The panadapter is not dBm-calibrated: its levels are relative.
+
+> **Upgrading from an older version:** **AGC-T** covers −20 to 120 dB, so a given slider position gives more gain than before (at 100, 120 dB instead of 60 dB). Band-stack bookmarks saved earlier replay their slider position on this scale, so they come back louder.
 
 ## Droop Correction
 
@@ -62,17 +66,21 @@ To measure your own radio instead, open **Settings → Radio Setup... → Droop 
 
 ## Reference
 
+### What is remembered
+
+The G2 stores none of its settings, so AetherSDR keeps these per radio: frequency and mode (14.175 MHz USB on a first connect), tuning step, **RF Gain**, the radio's own output level (what the volume slider sets with PC Audio off) and the panadapter dBm range. The span always starts at the connect form's **Sample rate:**. AGC settings and FFT averaging start from their defaults.
+
 ### Not available on the G2
 
 - **Transmit.** Keying is refused; transmit is a future phase.
 - DAX, SmartLink or Multi-Flex.
 - More than one receiver or panadapter.
+- A headphone level control: the **Headphone:** row under **Settings → Radio Setup... → Audio → Radio Audio Outputs** is dimmed; **Line Out:** stays available.
 
-Controls the G2 cannot honour are dimmed with a reason, or refuse with a notice; see [Supported Radios](./supported-radios.md).
+Controls the G2 cannot honor are dimmed with a reason, or refuse with a notice; see [Supported Radios](./supported-radios.md).
 
 ## Known issues
 
-- Weak signals sound quieter than in Thetis on the same radio unless the **AGC-T** slider is near the top ([#5988](https://github.com/aethersdr/AetherSDR/issues/5988)).
 - DX cluster, RBN, WSJT-X, POTA and manual spots are never drawn on the panadapter ([#6039](https://github.com/aethersdr/AetherSDR/issues/6039)).
 
 ## Troubleshooting

@@ -6,7 +6,7 @@ description: "AetherSDR is an open-source client for FlexRadio transceivers with
 
 *Native. Open. Yours.*
 
-AetherSDR is an open-source client for **FlexRadio** transceivers with native builds for Linux, macOS and Windows, including an aarch64 build for the Raspberry Pi. FlexRadio is the supported target; the Hermes-Lite 2, networked Icom radios, the ANAN-G2 and RTL-SDR dongles are also supported at an earlier stage, each labelled with its status. No radio? [Demo Mode](./demo-mode.md) runs the full interface against a built-in simulator.
+AetherSDR is an open-source client for **FlexRadio** transceivers with native builds for Linux, macOS and Windows, including an aarch64 build for the Raspberry Pi. FlexRadio is the supported target; the Hermes-Lite 2, networked Icom radios, the ANAN-G2 and RTL-SDR dongles are also supported at an earlier stage, each labeled with its status. No radio? [Demo Mode](./demo-mode.md) runs the full interface against a built-in simulator.
 
 These docs come in two versions, chosen from the version menu at the top of every page. **Stable**, the default, describes the latest release. **Next (main)** tracks `main`: it describes what has landed since that release and will ship in the next one. Release notes for every version are in the [CHANGELOG](https://github.com/aethersdr/AetherSDR/blob/main/CHANGELOG.md).
 
@@ -94,7 +94,7 @@ Prefer paper? Download the [printable manual](pathname:///AetherSDR-Manual.pdf) 
 - [AetherSweep](./aethersweep.md) — In-panadapter SWR analyzer with CSV export
 - [Net Scheduler](./net-scheduler.md) — Recurring net reminders with one-click Tune Now
 - [AetherClock and GPS](./aetherclock-and-gps.md) — WWV/WWVB time-signal decoder and the AetherGPS dashboard
-- [Callsign Lookup](./callsign-lookup.md) — QRZ.com lookups, cache and CW-decoder contact cards
+- [Callsign Lookup](./callsign-lookup.md) — QRZ.com lookups, cache and the live CW contacts window
 
 ## Station Accessories
 
@@ -129,7 +129,7 @@ Prefer paper? Download the [printable manual](pathname:///AetherSDR-Manual.pdf) 
 - [Settings and Backups](./settings-and-backups.md) — Where settings live, keychain credentials, backups, `--config`, resetting properly
 - [Keyboard Shortcuts](./keyboard-shortcuts.md) — Operating shortcuts (off by default), PTT hold, editor, Minimal Mode
 - [Themes and Theme Editor](./themes-and-theme-editor.md) — Switch themes live, edit tokens, import and export `.aethertheme` files
-- [Slice Colors](./slice-colors.md) — Per-slice colours for VFOs, panadapter overlays and meters
+- [Slice Colors](./slice-colors.md) — Per-slice colors for VFOs, panadapter overlays and meters
 - [Accessibility](./accessibility.md) — Screen readers, keyboard navigation, announced reasons for dimmed controls
 - [Firmware Update](./firmware-update.md) — Upload FlexRadio firmware from AetherSDR
 

@@ -55,7 +55,7 @@ that is always visible.
 ### Adding a device
 
 1. Click **Add** and pick a device type. A type already in the list stays in
-   the menu, greyed, marked "(already added)".
+   the menu, grayed, marked "(already added)".
 2. Add only creates the entry and selects it. Nothing connects yet.
 3. Enter the address (and port, or serial port) and click **Connect**.
 
@@ -156,9 +156,9 @@ Docked in the applet panel it is a compact tile:
 
 Popped out, or placed on the [Workspace Canvas](./workspace-canvas.md), the applet lays itself out
 like the amplifier's front panel: larger meters, a status strip for each RF
-port showing its band, bias profile and the radio feeding it, a **STBY** key,
-and a fan key that cycles `S` / `C` / `B`. The port carrying transmit is
-outlined. In standby a single banner replaces both strips. A port with no band
+port showing its band, bias profile and the radio feeding it, **STBY** and
+**MEffA** keys, and a fan key that cycles `S` / `C` / `B`. The port carrying
+transmit is outlined. In standby a single banner replaces both strips. A port with no band
 reads `N/A`, meaning nothing is driving it.
 
 The fan control, MEffA, port detail and the voltages need the **direct**
@@ -167,7 +167,12 @@ operate state. Meters update at about 60 Hz while transmitting and 4 Hz while
 receiving.
 
 **MEffA** is the amplifier's Maximum Efficiency Algorithm: lit while it is
-optimising, shown in a standby style while the PA idles in class AAB.
+optimizing, shown in a standby style while the PA idles in class AAB.
+
+While a PGXL is present, the **AMP** indicator in the status bar shows its
+state and switches it between OPERATE and STANDBY. Click it, or Tab to it and
+press Return or Enter. Screen readers announce it as a button with its
+state.
 
 ## Using the Antenna Genius applet (AG)
 
@@ -214,7 +219,6 @@ live only in the OS keychain. See [Settings and Backups](./settings-and-backups.
 ## Known issues
 
 - The AMP applet stays hidden for a PGXL connected directly by its IP address unless the radio also reports the amplifier ([#6010](https://github.com/aethersdr/AetherSDR/issues/6010)).
-- With a PGXL and TGXL on the local network, the AMP applet can show no PWR or SWR while transmitting, although Id is shown ([#4805](https://github.com/aethersdr/AetherSDR/issues/4805)).
 - A PGXL reached directly over the internet accepts its access code, shows Connected, then drops straight away ([#6222](https://github.com/aethersdr/AetherSDR/issues/6222)).
 - TUNE can fail on a remote FLEX-8600 while the Genius peripherals are connected in AetherSDR ([#6001](https://github.com/aethersdr/AetherSDR/issues/6001)).
 - MEffA is not restored when AetherSDR starts; turn it on again each session ([#5956](https://github.com/aethersdr/AetherSDR/issues/5956)).

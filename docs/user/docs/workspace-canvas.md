@@ -40,7 +40,7 @@ In edit posture:
 
 - **Move** an item by dragging its title bar; it follows the cursor.
 - **Resize** with the eight grips on the item's 8 px border. The contents stay clickable.
-- **Snapping:** edges and centres snap to other items and to the canvas edges within 8 px, with guide lines drawn while you drag. **Snap to grid** adds an optional 96 × 54 grid with a gentler pull; edges of other items win over the grid.
+- **Snapping:** edges and centers snap to other items and to the canvas edges within 8 px, with guide lines drawn while you drag. **Snap to grid** adds an optional 96 × 54 grid with a gentler pull; edges of other items win over the grid.
 
 Positions are stored as fractions of the canvas, so a layout made on a 3840 × 1600 screen comes back in proportion on 1920 × 1080.
 
@@ -84,7 +84,7 @@ Right-click an empty part of the canvas:
 |------|------|-------------|
 | **Edit layout** | Always | Toggles edit posture. |
 | **Workspace ▸** | More than one workspace | Switch workspace. |
-| **Add widget ▸** | Always | Every applet, grouped by category. Applets already on the canvas are shown checked. Applets for hardware that isn't detected (tuner, amplifiers, Antenna Genius, ShackSwitch, Demo Noise) are greyed rather than hidden. |
+| **Add widget ▸** | Always | Every applet, grouped by category. Applets already on the canvas are shown checked. Applets for hardware that isn't detected (tuner, amplifiers, Antenna Genius, ShackSwitch, Demo Noise) are grayed rather than hidden. |
 | **Snap to grid** | Edit | Turns the 96 × 54 grid on or off. |
 | **Undo last placement** | Edit | Undoes the most recent placement. |
 | **Tidy layout** | Edit | Tidies up the current arrangement. |

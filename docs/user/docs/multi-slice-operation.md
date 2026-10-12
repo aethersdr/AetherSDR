@@ -21,13 +21,13 @@ See [Supported Radios](./supported-radios.md).
 
 <img src="/img/screens/multi-slice-two-slices.png" width="1340" alt="Panadapter with two VFO flags. Slice B in magenta sits on an SSB signal near 14.2185 MHz, and slice A in cyan at 14.250.000 carries the TX badge. Each has its own passband marker in the spectrum." />
 
-*Two slices on one panadapter, each with its own coloured VFO flag.*
+*Two slices on one panadapter, each with its own colored VFO flag.*
 
 - Click **+RX** in the panadapter's overlay menu
 - Or right-click an empty part of the panadapter → **Add Slice at X MHz**
 - Clicking an empty panadapter also creates a new slice there instead of
   moving the active one
-- A new slice appears with its own coloured VFO marker (see [Slice Colors](./slice-colors.md))
+- A new slice appears with its own colored VFO marker (see [Slice Colors](./slice-colors.md))
 
 To add another panadapter, use **Tools → Add Panadapter...**
 
@@ -41,7 +41,7 @@ To add another panadapter, use **Tools → Add Panadapter...**
 
 - TX stays on its assigned slice until you move it
 - **Red TX badge** — active TX slice
-- **Grey TX badge** (in the VFO widget) — click to move TX to this slice
+- **Gray TX badge** (in the VFO widget) — click to move TX to this slice
 - Switching the active slice does **not** move TX
 - The **Cycle TX Slice** keyboard and controller action steps TX through your
   slices
@@ -66,7 +66,7 @@ to unlink) and **Available Links** (choose a pair to link).
 ### Center Lock
 
 Right-click a panadapter → **Center Lock Slice A** (or the **Center Lock**
-submenu when there are several slices) keeps that panadapter centred on the
+submenu when there are several slices) keeps that panadapter centered on the
 chosen slice as it tunes. Each panadapter locks independently, and the lock
 survives band changes. See [Panadapter Controls](./panadapter-controls.md).
 
@@ -92,8 +92,7 @@ reason. See [Hermes-Lite 2](./hermes-lite-2.md).
 ## Known issues
 
 - Adding a panadapter or a slice can make a loud pop in the speakers for about a second ([#4973](https://github.com/aethersdr/AetherSDR/issues/4973)).
-- Clicking an off-screen slice's arrow brings the slice to the edge of the panadapter rather than the centre ([#2371](https://github.com/aethersdr/AetherSDR/issues/2371)).
-- On the Hermes-Lite 2, receivers B, C and D don't come back after AetherSDR restarts; only one receiver appears ([#5777](https://github.com/aethersdr/AetherSDR/issues/5777)).
+- Clicking an off-screen slice's arrow brings the slice to the edge of the panadapter rather than the center ([#2371](https://github.com/aethersdr/AetherSDR/issues/2371)).
 
 ## Troubleshooting
 
@@ -107,7 +106,7 @@ It is the last slice; AetherSDR always keeps one. The status bar says "Cannot cl
 
 Switching the active slice does not move TX.
 
-1. Click the grey **TX** badge on the slice you want to transmit on.
+1. Click the gray **TX** badge on the slice you want to transmit on.
 
 ### Linked slices stopped tuning together
 

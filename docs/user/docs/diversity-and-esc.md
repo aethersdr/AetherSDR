@@ -72,7 +72,7 @@ The vertical gain slider adjusts the amplitude balance between antennas:
 
 - **Range:** 0.0 to 2.0
 - **Default:** 1.0 (equal balance)
-- **Effect:** Values below 1.0 favour the primary antenna, above 1.0 favours the secondary
+- **Effect:** Values below 1.0 favor the primary antenna, above 1.0 favors the secondary
 - **Use case:** When one antenna picks up more noise than signal, reduce its contribution
 
 #### Polar Display
@@ -80,7 +80,7 @@ The vertical gain slider adjusts the amplitude balance between antennas:
 The circular display shows the current phase and gain as a dot on a polar plot:
 
 - **Angle** = phase (0° at top, clockwise)
-- **Distance from centre** = gain (centre = 0.0, edge = 2.0)
+- **Distance from center** = gain (center = 0.0, edge = 2.0)
 - **Crosshairs** mark 0°/90°/180°/270° and the mid-gain reference circle (gain = 1.0)
 
 As you adjust the phase and gain sliders, the dot moves in real time. You can also **click anywhere on the polar plot** to set phase and gain directly at that point.
@@ -100,8 +100,8 @@ The goal is usually to find the phase angle where the ESC meter shows the most i
 2. Listen to the signal with interference
 3. Slowly sweep the phase slider from 0° to 360°
 4. Watch the ESC meter — you'll hear interference peak and null as you rotate
-5. Stop at the phase angle where interference is minimised
-6. Fine-tune the gain slider to optimise further
+5. Stop at the phase angle where interference is minimized
+6. Fine-tune the gain slider to optimize further
 
 ### Band Noise Reduction
 

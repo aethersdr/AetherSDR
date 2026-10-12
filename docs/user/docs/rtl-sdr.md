@@ -64,14 +64,13 @@ FM, FM-N and analog WFM can share the capture in this evaluation. Each receiver 
 
 ### RTL Receiver settings
 
-**Settings → Radio Setup... → RTL Receiver** (shown while a dongle is connected) has a **Receiver corrections** group:
+**Settings → Radio Setup... → RTL Receiver** (shown while a dongle is connected) shows the dongle's **Device serial:** and a **Receiver settings** group:
 
 | Control | Use |
 |---------|-----|
-| **Frequency correction:** | Your dongle's crystal error in ppm (−1000 to +1000). Click **Apply frequency correction** to send it. |
-| **Suppress IQ DC** | Removes the spike at the centre of the capture. Off by default. |
+| **Frequency correction:** | Your dongle's crystal error in whole ppm (−1000 to +1000). It applies on its own shortly after an arrow step or a completed entry (Enter or moving focus); **Apply frequency correction** sends it at once. Reception briefly reacquires after each correction. Closing or leaving the page discards an edit that has not been sent yet. |
+| **Suppress IQ DC** | Removes the spike at the center of the capture. It also affects a signal right at the capture center, especially an AM or CW carrier. Off by default. |
 | **Enable receive meters** | Enables relative RF meter updates. On by default. |
-| **Device serial** | The serial number the dongle reports. |
 
 The page shows the values the dongle actually applied and whether they were saved. Corrections are saved per dongle serial number. A dongle that reports no serial keeps its corrections for the current session only.
 
@@ -107,7 +106,7 @@ The slice has fallen outside the usable capture, so it is parked.
 
 1. Pan back until the slice is inside the capture again; it resumes on its own.
 
-### A spike sits at the centre of the capture
+### A spike sits at the center of the capture
 
 This is the dongle's IQ DC offset.
 
@@ -119,8 +118,7 @@ This is the dongle's IQ DC offset.
 The dongle's crystal is off.
 
 1. Open **Settings → Radio Setup... → RTL Receiver**.
-2. Enter the error in ppm in **Frequency correction:**.
-3. Click **Apply frequency correction**.
+2. Adjust **Frequency correction:** with the arrows, or type the error in ppm and press Enter; it applies on its own. **Apply frequency correction** sends it at once.
 
 ## See also
 

@@ -95,7 +95,7 @@ WSJT-X takes CAT, PTT **and audio** over TCI, so there are no sound-card devices
 
 ### CW Skimmer and SDC
 
-Point SDC or CW Skimmer at AetherSDR's TCI port. IQ flows as DAX IQ at 24, 48, 96 or 192 kHz (SDC negotiates 96 kHz), and `dds:` follows the panadapter centre. Up to **four** IQ subscriptions can run at once, so several skimmers can share one server. Receivers on the same panadapter share its IQ stream, so four independent bands need four panadapters. IQ is not offered as int16 or over `wss`.
+Point SDC or CW Skimmer at AetherSDR's TCI port. IQ flows as DAX IQ at 24, 48, 96 or 192 kHz (SDC negotiates 96 kHz), and `dds:` follows the panadapter center. Up to **four** IQ subscriptions can run at once, so several skimmers can share one server. Receivers on the same panadapter share its IQ stream, so four independent bands need four panadapters. IQ is not offered as int16 or over `wss`.
 
 ### JTDX
 
@@ -152,7 +152,7 @@ audio_stream_channels:1;
 
 Right-click the **TX** meter in the TCI Server applet to choose how transmit samples beyond ±1.0 are treated:
 
-| Mode | Behaviour |
+| Mode | Behavior |
 |---|---|
 | **Clip (saturating ±1.0)** | Default. Hard-clamps overshoots to ±1.0. |
 | **NaN guard (zero NaN/Inf only)** | Passes samples through bit-exact, only zeroing NaN/Inf. Best for digital-mode tone fidelity. |
@@ -187,7 +187,7 @@ AetherSDR implements the TCI 2.0 command set, including:
 
 Notes:
 
-- `volume` is in dB, as the spec defines it; the older percent form is still accepted. `mic_level` is a global 0–100 %.
+- `volume` is in dB, as the spec defines it; the older percent form is still accepted. It is the same master level as the title-bar slider: the computer's level with PC Audio on, the radio's Line Out level with it off. `mic_level` is a global 0–100 %.
 - The server also broadcasts which slice has focus in the GUI, plus DSP, squelch, RIT/XIT and TX power when they change.
 - Opening a slice announces its receiver with `rx_enable:<trx>,true;`. Closing a slice announces `rx_enable:<trx>,false;` after approximately 500 ms. A band-change recreation that returns the same slice within that window keeps its receiver and sends neither notification; surviving receivers keep their numbers. `trx_count` is not re-sent.
 - Malformed arguments (for example to `volume:` or `modulation:`) are rejected, never applied to slice 0.
@@ -196,7 +196,7 @@ Notes:
 
 ### Tune notifications
 
-`tune:<trx>,true|false;` is broadcast to **every** client on every tune edge, whether the tune came from the TX applet, any TCI client or the radio, and it follows the matching `trx:`. A `tune:` SET always gets an answer, and the init burst includes the current `tune:` state. A tune that a TCI client started stops when that client disconnects or the server stops. `tune:-1,true` keys nothing (#6200).
+`tune:<trx>,true|false;` is broadcast to **every** client on every tune edge, whether the tune came from the TX applet, any TCI client or the radio, and it follows the matching `trx:`. A `tune:` SET always gets an answer, and the init burst includes the current `tune:` state. A tune that a TCI client started stops when that client disconnects or the server stops. `tune:-1,true` keys nothing.
 
 ### Sensor telemetry
 
@@ -227,14 +227,13 @@ keyer:0,false;                    # key up
 
 - If a client that holds PTT dies without closing its connection (power loss, a pulled cable, a dropped Wi-Fi link), the radio stays keyed until the operating system gives up on the TCP connection ([#5985](https://github.com/aethersdr/AetherSDR/issues/5985)).
 - Transmit audio from a TCI client passes through the Phone/CW microphone chain, so the mic profile, **MIC** level and **PROC** change what a digital-mode client puts on the air ([#5844](https://github.com/aethersdr/AetherSDR/issues/5844)).
-- TCI receive audio can stop after moving to a voice frequency with DAX off and back to a data frequency with DAX on, while CAT keeps working ([#4824](https://github.com/aethersdr/AetherSDR/issues/4824)).
 - After a TCI voice keyer (for example OpsLog) transmits, DAX stays on, so the next microphone transmission has no audio until you turn DAX off ([#5524](https://github.com/aethersdr/AetherSDR/issues/5524)).
 - A cross-band tune from a TCI client does not recall the radio's band stack, so the per-band antenna, mode and filters are not restored ([#3543](https://github.com/aethersdr/AetherSDR/issues/3543)).
 - The TCI port listens on every network interface with no password, so any machine that can reach it can tune and key the radio ([#5296](https://github.com/aethersdr/AetherSDR/issues/5296)).
 
 ## Troubleshooting
 
-The **TCI / CAT / rigctld** category in **Help → Support & Diagnostics…** logs the TCI server. See [Support and Logging](./support-and-logging.md).
+The **TCI / CAT / rigctld** category in **Help → Support & Diagnostics...** logs the TCI server. See [Support and Logging](./support-and-logging.md).
 
 ### The server won't start because port 50001 is in use
 

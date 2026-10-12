@@ -9,9 +9,9 @@ AetherSDR has two kinds of keyboard shortcut:
 - **Operating shortcuts** drive the radio: tuning, MOX, push-to-talk, AF gain, band and mode changes and so on. They are **off by default**.
 - **Application shortcuts** belong to menus and windows (Minimal Mode, UI scale, Full Screen). They always work.
 
-<img src="/img/screens/keyboard-shortcuts.png" width="1100" alt="Keyboard shortcuts editor. A full keyboard map fills the top half, with bound keys coloured by category, for example T for MOX and Space for PTT in red, G for go to frequency, and the arrow keys for tuning. A colour legend lists the categories. Below are Key and Action fields with Clear and Reset to Default buttons, a filter box and category selector, and a table of actions with their category, current key and default key, starting with Tune Up (1 step) on Right, and Import…, Export…, Reset All to Defaults and Close buttons." />
+<img src="/img/screens/keyboard-shortcuts.png" width="1100" alt="Keyboard shortcuts editor. A full keyboard map fills the top half, with bound keys colored by category, for example T for MOX and Space for PTT in red, G for go to frequency, and the arrow keys for tuning. A color legend lists the categories. Below are Key and Action fields with Clear and Reset to Default buttons, a filter box and category selector, and a table of actions with their category, current key and default key, starting with Tune Up (1 step) on Right, and Import…, Export…, Reset All to Defaults and Close buttons." />
 
-*The keyboard shortcuts editor. Bound keys are coloured by category on the keyboard map; the table below lists every action.*
+*The keyboard shortcuts editor. Bound keys are colored by category on the keyboard map; the table below lists every action.*
 
 ## Setup
 
@@ -82,7 +82,7 @@ The editor lists many more actions that ship **unbound**. They are grouped by ca
 | Tuning | Step size, Tune Lock, **Center Lock Active Slice** |
 | Slice | Next / Previous Slice, Cycle TX Slice, Split Toggle, Split Up 1 kHz / 5 kHz / 10 kHz |
 | Bands and modes | Band jumps (160 m to 2 m); USB, LSB, CW, CWL, AM, SAM, FM, NFM, DFM, DIGU, DIGL, RTTY |
-| Audio | Master Volume Up / Down (±5, auto-repeat), Master Mute, Mute All Slices, Squelch |
+| Audio | Master Volume Up / Down (±5 from the level of the path you are hearing, auto-repeat), Master Mute, Mute All Slices, Squelch |
 | AGC | AGC mode cycle, AGC-T up/down, RF Gain up/down |
 | DSP | NB, ANF, NR2, NR4, RN2, DFNR, NR Cycle, TNF global toggle |
 | Filter | Filter Widen / Narrow (±100 Hz, in the right direction for the mode) |
@@ -112,10 +112,6 @@ These work whether or not operating shortcuts are on:
 | **Cmd+M** (macOS) | Minimize; no default elsewhere |
 
 The Full Screen and Minimize keys can be rebound in Configure Shortcuts, and they also work in secondary windows and while a text field or slider has focus. On macOS, Ctrl in these shortcuts is the Command key.
-
-## Known issues
-
-- **Master Volume Up / Down** steps from the last saved master level rather than the level of the path you are hearing, so after switching PC Audio on or off the first press can jump the volume ([#6132](https://github.com/aethersdr/AetherSDR/issues/6132)).
 
 ## Troubleshooting
 

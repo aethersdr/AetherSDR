@@ -34,7 +34,7 @@ Decoding is controlled in **Settings → Radio Setup... → Phone & CW**, next t
 | **RX** | On | The received CW on the selected slice |
 | **TX** | Off | Your own keying, from AetherSDR's sidetone — useful for checking paddle or bug timing |
 
-Both appear in the same panel. Your own sending is shown in **cyan**, so it stands apart from the confidence-coloured received text.
+Both appear in the same panel. Your own sending is shown in **cyan**, so it stands apart from the confidence-colored received text.
 
 ## Using the CW decoder
 
@@ -52,7 +52,7 @@ The decoder processes the received audio on a separate worker thread. It detects
 
 - **Auto pitch detection** within the pitch search range
 - **Auto speed detection** within the speed search range
-- **Cost function**: measures how well the detected on/off timing matches ideal Morse ratios; this drives the confidence colours
+- **Cost function**: measures how well the detected on/off timing matches ideal Morse ratios; this drives the confidence colors
 
 Retuning resets the decoder state; pitch and speed locks survive a retune.
 
@@ -63,13 +63,13 @@ The decoder follows the **selected slice**, independently of speaker volume or m
 - **On a FlexRadio, assign a DAX RX channel to the selected slice** (1–8). The decoder then reads that slice's audio alone, regardless of speaker gain, mute, or other audible slices.
 - Without a DAX channel, it uses the shared receive audio, which mixes every audible slice and follows speaker gain and mute. The panel shows **RX: shared audio**; hover it for the explanation.
 
-### Reading the confidence colours
+### Reading the confidence colors
 
-Received characters are colour-coded by decode confidence (see [Confidence colours](#confidence-colours)). Green text can be trusted. Yellow is usually correct. Orange and red should be read sceptically — they often appear during QSB, QRM, or with operators who have irregular spacing.
+Received characters are color-coded by decode confidence (see [Confidence colors](#confidence-colors)). Green text can be trusted. Yellow is usually correct. Orange and red should be read sceptically — they often appear during QSB, QRM, or with operators who have irregular spacing.
 
 ### Callsign lookup
 
-When the decoder copies a station identifying itself (`DE <call>`), and QRZ.com lookups are enabled, a **contact card** for that station appears beside the decoded text. Click the callsign to open its QRZ.com page. See [Callsign Lookup](./callsign-lookup.md).
+Turn on **View → Show live CW contacts** to see the station the decoder copies identifying itself (`DE <call>`) in a separate **Live CW contacts** window, with its QRZ.com details when lookups are enabled. It is off by default and never covers the decoded text; closing the window turns it off. See [Live CW contacts](./callsign-lookup.md#live-cw-contacts).
 
 ### MQTT
 
@@ -77,7 +77,7 @@ Decoded text is published to the MQTT topic `aethersdr/cw/decode`, one JSON mess
 
 ### Tips for best results
 
-- **Tune accurately**: Centre the CW signal in your filter passband. The decoder auto-detects the pitch, but a clean signal helps.
+- **Tune accurately**: Center the CW signal in your filter passband. The decoder auto-detects the pitch, but a clean signal helps.
 - **Use narrow filters**: CW filter widths of 200–500 Hz reduce noise and competing signals that confuse the decoder.
 - **APF helps**: The Audio Peaking Filter (APF) narrows the audio around the CW pitch, giving the decoder a cleaner signal.
 - **Give it a DAX channel**: On a FlexRadio, a DAX RX channel on the selected slice keeps other slices and your speaker settings out of the decode.
@@ -102,11 +102,11 @@ Decoded text is published to the MQTT topic `aethersdr/cw/decode`, one JSON mess
 | **CLR** | Clear the decoded text |
 | **✕** | Close the decoder panel |
 
-### Confidence colours
+### Confidence colors
 
-Colours are based on ggmorse's cost function:
+Colors are based on ggmorse's cost function:
 
-| Colour | Confidence | Cost range | Meaning |
+| Color | Confidence | Cost range | Meaning |
 |-------|-----------|------------|---------|
 | Green | High | < 0.15 | Clean, well-timed CW |
 | Yellow | Medium | 0.15–0.35 | Slightly imperfect timing |
@@ -124,7 +124,6 @@ Colours are based on ggmorse's cost function:
 
 - The decoder shows no text on some FLEX-8600 setups ([#6158](https://github.com/aethersdr/AetherSDR/issues/6158)).
 - The pitch search range is not kept when a slice is reopened, even with both range locks engaged ([#5921](https://github.com/aethersdr/AetherSDR/issues/5921)).
-- There is no setting to stop the automatic QRZ contact card from appearing for decoded callsigns ([#5454](https://github.com/aethersdr/AetherSDR/issues/5454)).
 - The squelch threshold line can appear on the panadapter in CW, although squelch is unavailable there ([#6276](https://github.com/aethersdr/AetherSDR/issues/6276)).
 
 ## Troubleshooting
@@ -156,7 +155,7 @@ Another signal inside the pitch or speed search range is pulling the decoder awa
 
 The signal is weak, poorly tuned or irregularly sent.
 
-1. Centre the signal in the filter passband.
+1. Center the signal in the filter passband.
 2. Narrow the filter or turn on APF.
 3. Raise **Sens** to hide low-confidence characters.
 

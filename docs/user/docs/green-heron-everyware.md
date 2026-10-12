@@ -45,7 +45,7 @@ antennas, one row per port:
 | Row | Meaning |
 |---|---|
 | `Beam-20  ·  ON` (lit) | The antenna the **device** reports this switch is on |
-| `Beam-15  ·  in use by AS-84F-3` (greyed) | Held by another switch; an antenna feeds one switch at a time, so the device would refuse it |
+| `Beam-15  ·  in use by AS-84F-3` (grayed) | Held by another switch; an antenna feeds one switch at a time, so the device would refuse it |
 | `EFHW-40` | Free: click to select it |
 
 Nothing is assumed from a click. The row lights only when the device reports
@@ -72,7 +72,7 @@ Rotor            62.9° · asked 64.3° · Δ1.4°
   and the difference. It never says "on target": the measured sensor noise at
   rest is about ±3.8°, larger than any useful arrival threshold.
 - There is no stop or park command in the protocol, so a rotation that has
-  started cannot be cancelled from AetherSDR. Use the rotator controller.
+  started cannot be canceled from AetherSDR. Use the rotator controller.
 - If the server reports more than one rotator, a **Rotator** selector picks
   which one this applet drives.
 - The section disappears when the rotator stops reporting ("The rotator has
@@ -96,7 +96,7 @@ nothing.
 1. Type a slightly different heading.
 2. Press **Turn**.
 
-### The antenna rows are greyed out and marked stale
+### The antenna rows are grayed out and marked stale
 
 The link to the Everyware server has dropped. The applet shows "Reconnecting —
 state is stale" and keeps the last known state on screen.

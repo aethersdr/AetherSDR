@@ -38,7 +38,7 @@ Open **Settings → Radio Setup... → Network** and find the **Advanced** group
 | **Allow TX via MCP:** "Enable transmit control" | Lets bridge clients key the transmitter. Off by default; turning it on asks for a one-time confirmation. |
 | **Observe only:** "Read-only (block all driving)" | Blocks every action that changes anything; reads still work. |
 
-You can also start the bridge for a single run by launching with `AETHER_AUTOMATION=1`. In that case the Enabled/Disabled button is greyed out, because the environment variable wins.
+You can also start the bridge for a single run by launching with `AETHER_AUTOMATION=1`. In that case the Enabled/Disabled button is grayed out, because the environment variable wins.
 
 ### Access token
 
@@ -89,7 +89,7 @@ Tick **Observe only** to hand a client visibility without control. The bridge th
 
 | Variable | Effect |
 |----------|--------|
-| `AETHER_AUTOMATION=1` | Starts the bridge for this run; greys out the Enabled/Disabled button |
+| `AETHER_AUTOMATION=1` | Starts the bridge for this run; grays out the Enabled/Disabled button |
 | `AETHER_MCP_TOKEN` | The access token for an MCP client; passed to AetherSDR itself, it overrides the keychain |
 | `AETHER_AUTOMATION_ALLOW_TX=1` | Allows the dedicated transmit verbs |
 | `AETHER_AUTOMATION_NO_TX=1` | Pins TX off for the process |
@@ -99,7 +99,7 @@ Tick **Observe only** to hand a client visibility without control. The bridge th
 
 ## Known issues
 
-- The VOX button refuses every bridge action, including switching VOX off, while the `vox_toggle` shortcut can still switch it on ([#6053](https://github.com/aethersdr/AetherSDR/issues/6053)).
+- Without **Allow TX via MCP**, the bridge cannot switch VOX off with the VOX button, and it cannot switch VOX on with the button at all, while the `vox_toggle` shortcut can still switch it on ([#6053](https://github.com/aethersdr/AetherSDR/issues/6053)).
 - `key ptt off` and `key mox off` report success without checking that the transmitter actually unkeyed ([#5252](https://github.com/aethersdr/AetherSDR/issues/5252)).
 
 ## Troubleshooting
@@ -126,7 +126,7 @@ Observe-only mode is on.
 1. Untick **Observe only** in **Settings → Radio Setup... → Network → Advanced**.
 2. If it stays on, the process was launched with `AETHER_AUTOMATION_READONLY=1`; relaunch without it.
 
-### The Enabled/Disabled button is greyed out
+### The Enabled/Disabled button is grayed out
 
 AetherSDR was launched with `AETHER_AUTOMATION=1`, and the environment variable wins.
 

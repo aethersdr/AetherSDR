@@ -14,7 +14,7 @@ AetherSDR has several ways to read signal strength, power, SWR and the radio's h
 | **HLTH** | Antenna Health | SWR and power trend with a health score (in *Antennas & Switching*) |
 | **LP100** | LP-100A Meter | TelePost LP-100A wattmeter readings (see [Peripherals](./peripherals.md)) |
 
-To add an applet to the bar or move it into the favourites row, right-click the button bar and choose **Customize Button Bar** (see [Panadapter Controls](./panadapter-controls.md)).
+To add an applet to the bar or move it into the favorites row, right-click the button bar and choose **Customize Button Bar** (see [Panadapter Controls](./panadapter-controls.md)).
 
 ## Using the meters
 
@@ -62,7 +62,7 @@ The choice applies to every flag and is remembered. See [VFO Widget](./vfo-widge
 
 A classic cross-needle wattmeter: separate **forward** and **reflected** needles, with printed SWR curves (1.1, 1.2, 1.3, 1.4, 1.5, 1.7, 2, 2.5, 3, 4, 8, ∞). Read SWR where the needles cross. The applet is off by default; open it from the **PWR** button.
 
-<img src="/img/screens/pwr-cross-needle.png" width="248" alt="Power &amp; SWR applet: an analogue cross-needle meter face in amber, with a FORWARD power scale on the left, a REFLECTED power scale on the right and curved SWR lines where the needles cross, labelled SWR at the bottom. Both needles rest at zero." />
+<img src="/img/screens/pwr-cross-needle.png" width="248" alt="Power &amp; SWR applet: an analogue cross-needle meter face in amber, with a FORWARD power scale on the left, a REFLECTED power scale on the right and curved SWR lines where the needles cross, labeled SWR at the bottom. Both needles rest at zero." />
 
 *The Power & SWR cross-needle meter.*
 
@@ -90,7 +90,7 @@ Gauges for the radio's hardware: **PA Temp**, **Supply Voltage** and **Main Fan*
 
 A scrolling trend of **SWR**, **RL** (return loss, computed from SWR) and **PWR** (smoothed forward power) while you transmit, with incident markers.
 
-<img src="/img/screens/antenna-health.png" width="248" alt="Antenna Health applet. A green OK badge, SRC TUN and a score of 100 sit at the top. Below, a chart has three flat trend lanes labelled SWR, RL and PWR, and a footer reads SWR 1.00, RL 45dB, PWR 1.00 W and VAR 0.00." />
+<img src="/img/screens/antenna-health.png" width="248" alt="Antenna Health applet. A green OK badge, SRC TUN and a score of 100 sit at the top. Below, a chart has three flat trend lanes labeled SWR, RL and PWR, and a footer reads SWR 1.00, RL 45dB, PWR 1.00 W and VAR 0.00." />
 
 *The Antenna Health applet on receive: the trend lines fill in when you transmit.*
 
