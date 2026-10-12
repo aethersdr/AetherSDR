@@ -8767,6 +8767,23 @@ if (NOT _aether_ggml_baseline_str STREQUAL "")
 endif()
 add_test(NAME system_inventory_test COMMAND system_inventory_test)
 
+# RADE V1 receive phase accumulators (#6398): the BPF mixer phase and the
+# frequency-offset phase must be renormalized or float32 rounding shrinks them
+# without bound. Socket-free DSP assertions on the vendored C directly, seeding
+# the drift rather than waiting hours for it. Needs the vendored RADE tree, so
+# it is declared only where aethercore carries it (ENABLE_RADE, default ON);
+# it links aethercore for the RADE objects and Opus include paths.
+if(RADE_FOUND)
+    add_executable(rade_phase_renorm_test tests/rade_phase_renorm_test.cpp)
+    target_include_directories(rade_phase_renorm_test PRIVATE ${RADE_DIR}/src)
+    target_link_libraries(rade_phase_renorm_test PRIVATE aethercore Qt6::Core)
+    if(NOT MSVC)
+        # Opus nnet.h #warns about the baseline SSE level for any includer.
+        target_compile_options(rade_phase_renorm_test PRIVATE -Wno-cpp)
+    endif()
+    add_test(NAME rade_phase_renorm_test COMMAND rade_phase_renorm_test)
+endif()
+
 # ── Deferred retrofits: applied after the LAST test, wherever it is declared ──
 #
 # Three things have to hold for every test in this file: GUI harnesses get

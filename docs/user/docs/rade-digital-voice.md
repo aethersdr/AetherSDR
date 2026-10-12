@@ -55,7 +55,7 @@ While RADE is active, the VFO flag shows:
 
 The same readouts are in the **RADE Status** applet (button **RADE**, in the applet drawer, closed by default), which shows "RADE inactive" when RADE is off.
 
-The RADE modem uses pilot symbols for synchronisation and can acquire signals down to approximately 0 dB SNR.
+The RADE modem uses pilot symbols for synchronisation and can acquire signals down to approximately 0 dB SNR. Its receive filter and frequency tracking hold their level for as long as RADE runs, so the SNR readout does not fall away over a long session.
 
 ### End-of-over callsign
 
