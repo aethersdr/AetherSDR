@@ -36,6 +36,7 @@
 #include <QCoreApplication>
 #include <QGroupBox>
 #include <QHBoxLayout>
+#include <QHash>
 #include <QHostAddress>
 #include <QImage>
 #include <QLabel>
@@ -47,6 +48,8 @@
 #include <QStringList>
 #include <QtTest>
 
+#include <algorithm>
+#include <cstdlib>
 #include <memory>
 
 using namespace AetherSDR;
@@ -204,6 +207,53 @@ int pixelsOfColour(const QImage& image, const QColor& colour)
             if (image.pixel(x, y) == colour.rgb())
                 ++n;
         }
+    }
+    return n;
+}
+
+// Pixels drawn in `ink` over the image's background (its most common pixel):
+// every channel lies on the way from the background to the ink, and on
+// average at least 60% of the way. Text is anti-aliased, and LCD filtering
+// gives each channel its own coverage, so whether any pixel reaches the ink
+// exactly depends on the font and the rasterizer (#6418); a blend toward it
+// does not. -1 for a null image.
+int pixelsInkedIn(const QImage& image, const QColor& ink)
+{
+    if (image.isNull())
+        return -1;
+    QHash<QRgb, int> counts;
+    for (int y = 0; y < image.height(); ++y) {
+        for (int x = 0; x < image.width(); ++x)
+            ++counts[image.pixel(x, y)];
+    }
+    QRgb background = 0;
+    int most = 0;
+    for (auto it = counts.cbegin(); it != counts.cend(); ++it) {
+        if (it.value() > most) {
+            most = it.value();
+            background = it.key();
+        }
+    }
+    const int bg[3] = {qRed(background), qGreen(background), qBlue(background)};
+    const int to[3] = {ink.red(), ink.green(), ink.blue()};
+    constexpr int kSlack = 2;  // rounding in the blend
+    int n = 0;
+    for (auto it = counts.cbegin(); it != counts.cend(); ++it) {
+        const int px[3] = {qRed(it.key()), qGreen(it.key()), qBlue(it.key())};
+        double coverage = 0.0;
+        int weighed = 0;
+        bool onTheWay = true;
+        for (int c = 0; c < 3 && onTheWay; ++c) {
+            const int lo = std::min(bg[c], to[c]) - kSlack;
+            const int hi = std::max(bg[c], to[c]) + kSlack;
+            onTheWay = px[c] >= lo && px[c] <= hi;
+            if (std::abs(to[c] - bg[c]) > 8) {
+                coverage += double(px[c] - bg[c]) / double(to[c] - bg[c]);
+                ++weighed;
+            }
+        }
+        if (onTheWay && weighed > 0 && coverage / weighed >= 0.6)
+            n += it.value();
     }
     return n;
 }
@@ -379,9 +429,18 @@ private slots:
                     failures << where + QStringLiteral(": dimmed renders as live");
                 // The window's canon sheet paints a disabled label, value and
                 // Mute in the unavailable token: its color is in the render.
-                if (pixelsOfColour(dimmed, QColor(unavailable)) <= 0)
+                const int inkedDimmed = pixelsInkedIn(dimmed, QColor(unavailable));
+                const int inkedLive = pixelsInkedIn(live, QColor(unavailable));
+                qInfo().noquote() << QStringLiteral(
+                    "INK %1: unavailable dimmed %2, live %3 (exact %4)")
+                    .arg(where).arg(inkedDimmed).arg(inkedLive)
+                    .arg(pixelsOfColour(dimmed, QColor(unavailable)));
+                if (inkedDimmed <= 0)
                     failures << where + QStringLiteral(": not the unavailable token ")
                                     + unavailable;
+                // CONTROL: the live widget is not drawn in it.
+                if (inkedLive >= inkedDimmed)
+                    failures << where + QStringLiteral(": live is as much the unavailable token");
             }
 
             // An engaged Mute on a dimmed row. Only the two buttons' checked
