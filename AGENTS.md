@@ -119,6 +119,8 @@ other's pushes on the same branch.
 never taken on your own PR. The author of a PR is assumed to be still working
 on it; assigning yourself there says nothing. Claim the issue you are
 implementing, and claim someone else's PR when you push to it or land it.
+Skipping the claim on your own PR does not skip the check: if another member
+already holds a claim on it, honor that claim like anyone else's.
 
 **Reviewing does not claim.** Reviews, review comments, triage, merge
 recommendations and read-only work (summarizing, listing, counting) take no
