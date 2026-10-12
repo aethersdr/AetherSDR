@@ -649,6 +649,18 @@ static void testSeamBackendCannotWedgeOnVfoB()
           "a refused VFO-B tune leaves no route transition in flight");
 }
 
+namespace hl2 {
+// Reuses an existing friend rather than adding a production test hook.
+struct Hl2TxGateTestAccess {
+    // Link state only; no Metis client is started. Typed model controls
+    // dispatch only while the radio is up.
+    static void setConnected(Hl2Backend& backend, bool connected)
+    {
+        backend.m_connected = connected;
+    }
+};
+}  // namespace hl2
+
 // promoteTxSliceAndContinue() has the same shape of trap: `slice set N tx=1` is
 // Flex text with no seam counterpart, and every caller opens a route transition
 // around it. A continuation that never runs strands that transition, so the
@@ -665,6 +677,12 @@ static void testSeamBackendPromoteAlwaysAnswers()
     }
     check(!model.slice(0)->isTxSlice(),
           "fixture precondition: the FIXTURE seeded tx=0 on this slice");
+
+    auto* hl2 = dynamic_cast<hl2::Hl2Backend*>(model.backend());
+    check(hl2 != nullptr, "fixture precondition: the HL2 backend is live");
+    if (!hl2) { return; }
+    // A TCI client promotes a slice on a connected radio.
+    hl2::Hl2TxGateTestAccess::setConnected(*hl2, true);
 
     TciServer server(&model);
     bool answered = false, selected = false;
@@ -691,6 +709,7 @@ static void testSeamBackendPromoteAlwaysAnswers()
     Hl2TciSignalingTest::promote(server, 0, &answered, &selected);
     check(answered && selected,
           "an already-TX slice is selected with no command at all");
+    hl2::Hl2TxGateTestAccess::setConnected(*hl2, false);
 }
 #endif
 
