@@ -8158,6 +8158,7 @@ void RadioModel::onDisconnected()
         m_licenseFeatures.clear();
         emit licenseFeaturesChanged();
     }
+    m_memorySlotRetirements.clear();
     if (!m_memories.isEmpty()) {
         m_memories.clear();
         m_memorySlotRevisions.clear();
@@ -9009,6 +9010,7 @@ void RadioModel::syncMemoryStoreForSession()
     // cache pretending to be the radio's slot 0 until the dump overwrote it —
     // and any local slot the radio doesn't have would never be overwritten at
     // all.
+    m_memorySlotRetirements.clear();
     if (!m_memories.isEmpty()) {
         m_memories.clear();
         m_memorySlotRevisions.clear();
@@ -9188,6 +9190,7 @@ void RadioModel::applyMemoryChanges(const MemoryDelta& d)
         if (d.removed) {
             if (targetIndex >= 0) {
                 ++m_memorySlotRevisions[targetIndex];
+                ++m_memorySlotRetirements[targetIndex];
                 m_localMemories.forget(targetIndex);
                 if (m_memories.remove(targetIndex) > 0) {
                     emit memoryRemoved(targetIndex);
@@ -9213,6 +9216,7 @@ void RadioModel::applyMemoryChanges(const MemoryDelta& d)
 
     if (d.removed) {
         ++m_memorySlotRevisions[targetIndex];
+        ++m_memorySlotRetirements[targetIndex];
         if (m_memories.remove(targetIndex) > 0) {
             emit memoryRemoved(targetIndex);
         }

@@ -2267,6 +2267,7 @@ private:
     quint32 m_ownSessionHandle{0};   // this session's handle, set at registration
     QMap<int, MemoryEntry> m_memories;
     QMap<int, quint64> m_memorySlotRevisions;
+    QMap<int, quint64> m_memorySlotRetirements;
     QMap<int, quint64> m_memoryWriteIntents;
     // Backing store for m_memories when the radio has no memory slots of its
     // own. It is always constructed but only read/written on that path, so a

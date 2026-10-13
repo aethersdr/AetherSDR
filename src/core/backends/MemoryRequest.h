@@ -13,6 +13,7 @@ namespace AetherSDR {
 
 // Present fields only: editing a name must not overwrite native channel metadata.
 struct MemoryPatch {
+    static constexpr int kMaxStoredFilterEdgeHz = 100000;
     std::optional<QString> group, owner, name, mode, offsetDir, toneMode;
     std::optional<double> freq, repeaterOffset, toneValue;
     std::optional<int> step, squelchLevel, rxFilterLow, rxFilterHigh;
@@ -33,7 +34,7 @@ struct MemoryPatch {
                 || MemoryFields::sanitizeText(**text) != **text)) { return false; }
         }
         return !empty()
-            && (!mode || MemoryFields::isKnownMode(*mode))
+            && (!mode || MemoryFields::isStorableMode(*mode))
             && (!offsetDir || !MemoryFields::offsetDirToWire(*offsetDir).isEmpty())
             && (!toneMode || !MemoryFields::toneModeToWire(*toneMode).isEmpty())
             && (!freq || (std::isfinite(*freq) && *freq > 0.0))
@@ -41,8 +42,10 @@ struct MemoryPatch {
             && (!toneValue || (std::isfinite(*toneValue) && *toneValue >= 0.0))
             && (!step || *step > 0)
             && (!squelchLevel || (*squelchLevel >= 0 && *squelchLevel <= 100))
-            && (!rxFilterLow || (*rxFilterLow >= -12000 && *rxFilterLow <= 12000))
-            && (!rxFilterHigh || (*rxFilterHigh >= -12000 && *rxFilterHigh <= 12000))
+            // Storage covers the existing WFM +/-100 kHz envelope; applying
+            // filters is still constrained by the receiving backend.
+            && (!rxFilterLow || (*rxFilterLow >= -kMaxStoredFilterEdgeHz && *rxFilterLow <= kMaxStoredFilterEdgeHz))
+            && (!rxFilterHigh || (*rxFilterHigh >= -kMaxStoredFilterEdgeHz && *rxFilterHigh <= kMaxStoredFilterEdgeHz))
             && (!rttyMark || (*rttyMark >= 100 && *rttyMark <= 4000))
             && (!rttyShift || (*rttyShift >= 0 && *rttyShift <= 4000))
             && (!diglOffset || (*diglOffset >= -12000 && *diglOffset <= 12000))

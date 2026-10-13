@@ -186,6 +186,11 @@ through `RadioModel`; `FlexStoredControls` owns encoding, including recall
 corrections. Local memories consume neutral patches directly and retain their
 existing shared-bank persistence. Create/populate/rollback is engine-owned;
 session fences, bounded completions and slot revisions reject stale work.
+Slot retirement is tracked even before a create reply or initial slot status;
+retired/reused slots must not be populated or rolled back. Reply owners and
+sessions are rechecked after cache signals, which can synchronously retire them.
+Neutral storage validation covers supported backend modes and wide FM filters;
+the legacy Flex editor dropdown is not the storage vocabulary.
 These desktop operations add no daemon catalogue methods or TX authority.
 MOX, TUNE and ATU start/stop still use the existing operation-fenced TX path;
 host TUNE-power edits additionally require a live locally admitted carrier.

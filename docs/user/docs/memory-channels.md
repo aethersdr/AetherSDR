@@ -101,7 +101,7 @@ Sortable columns:
 |---|---|
 | **Import...** | Import memories from a CSV file (see below) |
 | **Export...** | Export the displayed memories to CSV |
-| **Add** | Create a new memory from the active slice |
+| **Add** | Create a new memory from the active slice, preserving its mode and receive-filter edges |
 | **Tune** | Tune the active slice to the selected memory (also: double-click any row) |
 | **Select All** | Select every visible row |
 | **Remove** | Delete the selected memory or memories |

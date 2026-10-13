@@ -1,7 +1,6 @@
 #include "models/RadioModel.h"
 
 #include <QList>
-#include <QMetaObject>
 #include <QPointer>
 #include <QThread>
 #include <QTimer>
@@ -51,13 +50,14 @@ ReceiveDispatch RadioModel::requestMemory(const MemoryRequest& request,
 {
     if (QThread::currentThread() != thread()) { return ReceiveDispatch::Unsupported; }
     const QPointer<RadioModel> alive(this);
+    const QPointer<QObject> owner(replyContext ? replyContext : this);
     const RadioControlSession session = controlSession();
     const bool local = usesLocalMemoryBank();
     const MemoryEntry original = m_memories.value(request.index);
     const quint64 revision = m_memorySlotRevisions.value(request.index);
     const auto intent = std::make_shared<quint64>(0);
     const RadioControlCompletion reply = fencedSetupCompletion(replyContext,
-        [alive, local, request, original, revision, intent, completion](const RadioControlReply& result) {
+        [alive, owner, session, local, request, original, revision, intent, completion](const RadioControlReply& result) {
         if (!alive) { return; }
         if (alive->usesLocalMemoryBank() != local) {
             if (completion) { completion({RadioControlReply::Kind::Cancelled, -1, QStringLiteral("Original memory store ended.")}); }
@@ -74,10 +74,18 @@ ReceiveDispatch RadioModel::requestMemory(const MemoryRequest& request,
             } else if (request.action == MemoryRequest::Action::Remove) {
                 alive->m_memories.remove(request.index);
                 ++alive->m_memorySlotRevisions[request.index];
+                ++alive->m_memorySlotRetirements[request.index];
                 emit alive->memoryRemoved(request.index);
             }
         }
-        if (alive && completion) { completion(result); }
+        // Cache observers can synchronously retire the reply owner or the session.
+        if (!alive || !owner || !completion) { return; }
+        if (alive->controlSession() != session || alive->usesLocalMemoryBank() != local
+            || (!local && !alive->controlSessionCurrent(session))) {
+            completion({RadioControlReply::Kind::Cancelled, -1, QStringLiteral("Original memory session ended.")});
+        } else {
+            completion(result);
+        }
     }, !local);
     const auto refuse = [&](const QString& message) {
         if (reply) { reply({RadioControlReply::Kind::Refused, -1, message}); }
@@ -109,6 +117,7 @@ ReceiveDispatch RadioModel::requestMemory(const MemoryRequest& request,
         ++m_memorySlotRevisions[result.index];
         if (request.action == MemoryRequest::Action::Remove) {
             m_memories.remove(result.index);
+            ++m_memorySlotRetirements[result.index];
             emit memoryRemoved(result.index);
         } else {
             m_memories.insert(result.index, m_localMemories.entries().value(result.index));
@@ -188,8 +197,9 @@ void RadioModel::createMemory(const MemoryEntry& entry, QObject* replyContext,
         return model && owner && model->controlSessionCurrent(session) && !model->usesLocalMemoryBank();
     };
     const QList<int> existingIndices = m_memories.keys();
+    const QMap<int, quint64> retirements = m_memorySlotRetirements;
     requestMemory({MemoryRequest::Action::Create, -1, {}}, this,
-        [model, current, session, patch, existingIndices, notify](const RadioControlReply& created) {
+        [model, current, session, patch, existingIndices, retirements, notify](const RadioControlReply& created) {
         if (!current()) { notify({RadioControlReply::Kind::Cancelled, -1, QStringLiteral("Original memory session ended.")}, -1); return; }
         if (created.kind != RadioControlReply::Kind::Accepted) { notify(created, -1); return; }
         bool ok = false;
@@ -198,40 +208,38 @@ void RadioModel::createMemory(const MemoryEntry& entry, QObject* replyContext,
             notify({RadioControlReply::Kind::Failed, -1, QStringLiteral("The radio returned an invalid memory id.")}, -1);
             return;
         }
+        const quint64 retirement = retirements.value(index);
+        if (model->m_memorySlotRetirements.value(index) != retirement) {
+            notify({RadioControlReply::Kind::Cancelled, -1,
+                    QStringLiteral("Original slot ended; population was not attempted.")}, index);
+            return;
+        }
         // A create response can precede the new slot's status; reserve it for the update.
         if (!model->m_memories.contains(index)) {
             MemoryEntry placeholder; placeholder.index = index;
             model->m_memories.insert(index, placeholder);
         }
         const MemoryEntry allocated = model->m_memories.value(index);
-        const auto retired = std::make_shared<bool>(false);
-        const auto retirement = std::make_shared<QMetaObject::Connection>();
-        *retirement = QObject::connect(model, &RadioModel::memoryRemoved, model,
-            [index, retired](int removed) { if (removed == index) { *retired = true; } });
         model->requestMemory({MemoryRequest::Action::Update, index, patch}, model,
-            [model, current, session, index, allocated, retired, retirement, notify](const RadioControlReply& updated) {
+            [model, current, session, index, allocated, retirement, notify](const RadioControlReply& updated) {
             if (!model) { return; }
-            if (!current() || *retired) {
-                QObject::disconnect(*retirement);
+            if (!current() || model->m_memorySlotRetirements.value(index) != retirement) {
                 notify({RadioControlReply::Kind::Cancelled, -1,
                         QStringLiteral("Original slot ended; partial cleanup was not attempted.")}, index);
                 return;
             }
             if (updated.kind == RadioControlReply::Kind::Accepted) {
-                QObject::disconnect(*retirement);
                 notify(updated, index);
                 return;
             }
             if (model->m_memories.value(index) != allocated
                 || updated.kind == RadioControlReply::Kind::Cancelled
                 || updated.code == -1) {
-                QObject::disconnect(*retirement);
                 notify({updated.kind, updated.code, updated.message + QStringLiteral(" Partial slot cleanup was not attempted.")}, index);
                 return;
             }
             model->requestMemory({MemoryRequest::Action::Remove, index, {}}, model,
-                [retirement, notify, index, updated](const RadioControlReply& removed) {
-                QObject::disconnect(*retirement);
+                [notify, index, updated](const RadioControlReply& removed) {
                 RadioControlReply failure = updated;
                 if (removed.kind != RadioControlReply::Kind::Accepted) {
                     failure.message += QStringLiteral(" Cleanup also failed: ") + removed.message;

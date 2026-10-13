@@ -109,6 +109,31 @@ void encoders()
     check(!update.valid(), "control bytes refused in typed memory");
     update.patch = {}; update.patch.diglOffset = -100;
     check(update.valid(), "negative digital offsets retain CSV compatibility");
+    for (const QString& mode : {QStringLiteral("FDVU"), QStringLiteral("FDVL"),
+             QStringLiteral("FMN"), QStringLiteral("WFM"), QStringLiteral("WBFM"),
+             QStringLiteral("CWR"), QStringLiteral("CWU"), QStringLiteral("CWL"),
+             QStringLiteral("NT"), QStringLiteral("DRM"), QStringLiteral("DV"), QStringLiteral("DSTAR")}) {
+        update.patch = {}; update.patch.mode = mode;
+        check(update.valid() && update.patch.appliedTo({}).mode == mode,
+              "neutral memories preserve supported modes and aliases");
+    }
+    update.patch = {}; update.patch.mode = QStringLiteral("WFM");
+    update.patch.rxFilterLow = -100000; update.patch.rxFilterHigh = 100000;
+    check(update.valid(), "wide FM snapshot fits the storage envelope");
+    update.patch.mode = QStringLiteral("FMN");
+    update.patch.rxFilterLow = -21600; update.patch.rxFilterHigh = 21600;
+    check(update.valid(), "narrow FM snapshot fits the storage envelope");
+    for (const QString& mode : {QStringLiteral("NOT_A_MODE"), QStringLiteral("USB\n"),
+             QStringLiteral("WFM extra=1"), QStringLiteral("FDV|U")}) {
+        update.patch = {}; update.patch.mode = mode;
+        check(!update.valid(), "unknown or malformed memory modes remain refused");
+    }
+    for (const int edge : {-100001, 100001, std::numeric_limits<int>::max(), std::numeric_limits<int>::min()}) {
+        update.patch = {}; update.patch.rxFilterLow = edge;
+        check(!update.valid(), "out-of-envelope low filter remains refused");
+        update.patch = {}; update.patch.rxFilterHigh = edge;
+        check(!update.valid(), "out-of-envelope high filter remains refused");
+    }
 }
 void localBank()
 {
@@ -138,6 +163,105 @@ void localBank()
           "typed mode edits preserve provenance and update native DATA flag");
     model.requestMemory({MemoryRequest::Action::Remove, index, {}}, &model);
     check(!model.memories().contains(index), "typed local remove publishes removal");
+
+    for (const QString& mode : {QStringLiteral("FDVU"), QStringLiteral("FDVL"), QStringLiteral("WFM"), QStringLiteral("FMN")}) {
+        MemoryEntry snapshot = channel(); snapshot.mode = mode;
+        snapshot.rxFilterLow = mode == QLatin1String("WFM") ? -100000 : -21600;
+        snapshot.rxFilterHigh = -snapshot.rxFilterLow;
+        int added = -1;
+        model.createMemory(snapshot, &model, [&](const RadioControlReply& result, int slot) {
+            check(result.kind == RadioControlReply::Kind::Accepted, "supported slice snapshot creates a local memory");
+            added = slot;
+        });
+        QCoreApplication::processEvents();
+        const MemoryEntry stored = model.memories().value(added);
+        check(added >= 0 && stored.mode == mode && stored.rxFilterLow == snapshot.rxFilterLow
+            && stored.rxFilterHigh == snapshot.rxFilterHigh, "typed snapshot preserves mode and filter edges");
+    }
+    check(StoredControlTestAccess::flush(model), "wide-filter snapshots persist");
+    const auto snapshots = LocalMemoryStore::parse(QJsonDocument(AppSettings::instance().radioFeatureExact("local", "", "MemoryBank")).toJson());
+    check(snapshots.memories == model.memories(), "stored snapshots survive database serialization");
+}
+
+void earlySlotReuse()
+{
+    for (const bool observed : {false, true}) {
+        RadioModel model;
+        RadioSetupTestBackend* backend = installRadioSetupBackend(model);
+        int completions = 0;
+        model.createMemory(channel(), &model, [&](const RadioControlReply& result, int index) {
+            ++completions;
+            check(result.kind == RadioControlReply::Kind::Cancelled && index == 50,
+                  "retirement before create reply cancels the population");
+        });
+        const RadioControlCompletion created = backend->replies.at(0);
+        if (observed) {
+            MemoryDelta allocated; allocated.index = 50; allocated.name = "Allocated slot";
+            StoredControlTestAccess::memory(model, allocated);
+        }
+        MemoryDelta removed; removed.index = 50; removed.removed = true;
+        StoredControlTestAccess::memory(model, removed);
+        MemoryDelta replacement; replacement.index = 50; replacement.name = "Another client's important slot";
+        replacement.freq = 146.52; replacement.mode = "FM";
+        StoredControlTestAccess::memory(model, replacement);
+        const MemoryEntry foreign = model.memories().value(50);
+        created({RadioControlReply::Kind::Accepted, 0, "50"});
+        check(backend->commands == QStringList{"memory create"} && completions == 1,
+              "even an uncached retirement fences the delayed create reply");
+        if (backend->replies.size() > 1) {
+            const RadioControlCompletion populated = backend->replies.at(1);
+            populated({RadioControlReply::Kind::Failed, 17, "field refused"});
+            if (backend->replies.size() > 2) {
+                const RadioControlCompletion cleanup = backend->replies.at(2);
+                cleanup({RadioControlReply::Kind::Accepted, 0, {}});
+            }
+        }
+        check(model.memories().value(50) == foreign && backend->commands.size() == 1,
+              "early slot reuse never populates or deletes the replacement memory");
+        created({RadioControlReply::Kind::Accepted, 0, "50"});
+        check(completions == 1, "retired create completion remains once-only");
+    }
+}
+
+void reentrantPublication()
+{
+    for (const MemoryRequest::Action action : {MemoryRequest::Action::Update, MemoryRequest::Action::Remove}) {
+        RadioModel model;
+        RadioSetupTestBackend* backend = installRadioSetupBackend(model);
+        MemoryDelta initial; initial.index = 7; initial.name = "Original";
+        StoredControlTestAccess::memory(model, initial);
+        auto owner = std::make_unique<QObject>();
+        int completions = 0;
+        const auto retireOwner = [&](int index) { if (index == 7) { owner.reset(); } };
+        QObject::connect(&model, &RadioModel::memoryChanged, &model, retireOwner);
+        QObject::connect(&model, &RadioModel::memoryRemoved, &model, retireOwner);
+        MemoryPatch patch;
+        if (action == MemoryRequest::Action::Update) { patch.name = "Changed"; }
+        model.requestMemory({action, 7, patch}, owner.get(), [&](const RadioControlReply&) { ++completions; });
+        const RadioControlCompletion accepted = backend->replies.at(0);
+        accepted({RadioControlReply::Kind::Accepted, 0, {}});
+        accepted({RadioControlReply::Kind::Accepted, 0, {}});
+        check(!owner && completions == 0, "cache publication cannot complete through a destroyed reply owner");
+        check(action == MemoryRequest::Action::Update ? model.memories().value(7).name == "Changed"
+              : !model.memories().contains(7), "owner retirement does not undo the accepted cache publication");
+    }
+    RadioModel model;
+    RadioSetupTestBackend* backend = installRadioSetupBackend(model);
+    MemoryDelta initial; initial.index = 7; initial.name = "Original";
+    StoredControlTestAccess::memory(model, initial);
+    QObject::connect(&model, &RadioModel::memoryChanged, &model, [&](int) {
+        RadioSetupControlTestAccess::replaceConnectionGeneration(model);
+    });
+    MemoryPatch patch; patch.name = "Changed";
+    int completions = 0;
+    model.requestMemory({MemoryRequest::Action::Update, 7, patch}, &model, [&](const RadioControlReply& result) {
+        ++completions;
+        check(result.kind == RadioControlReply::Kind::Cancelled, "reentrant session replacement cancels the external completion");
+    });
+    const RadioControlCompletion accepted = backend->replies.at(0);
+    accepted({RadioControlReply::Kind::Accepted, 0, {}});
+    accepted({RadioControlReply::Kind::Accepted, 0, {}});
+    check(completions == 1, "reentrant cancellation completes once");
 }
 void asynchronous()
 {
@@ -268,6 +392,6 @@ int main(int argc, char** argv)
     QCoreApplication app(argc, argv);
     if (!profile.isValid()) { return 2; }
     AppSettings::instance().load();
-    encoders(); localBank(); unreadableBank(); asynchronous();
+    encoders(); localBank(); unreadableBank(); earlySlotReuse(); reentrantPublication(); asynchronous();
     return failures == 0 ? 0 : 1;
 }
