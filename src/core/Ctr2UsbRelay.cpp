@@ -580,6 +580,7 @@ void Ctr2UsbRelay::onMessage(const Message& message)
         return;
     case MessageType::AudioSpectrum:
     case MessageType::AudioSpectrumLinear:
+    case MessageType::CwText:
     case MessageType::RelayUdpPort:
         // Host-to-device only; a device has nothing to tell the host with these.
         return;
@@ -761,6 +762,23 @@ bool Ctr2UsbRelay::sendAudioSpectrum(const QByteArray& payload, MessageType type
     }
     std::vector<ctr2hid::Report> reports;
     if (!m_tx.encodeExtension(type, payload, &reports)) {
+        return false;
+    }
+    for (size_t i = 0; i < reports.size(); ++i) {
+        m_reportCosts.push_back({});
+    }
+    m_port->send(reports);
+    return true;
+}
+
+bool Ctr2UsbRelay::sendCwText(const QByteArray& payload)
+{
+    const quint32 bit = ctr2hid::capabilityBit(MessageType::CwText);
+    if (!m_port || m_state != State::Relaying || !(m_port->extensions() & bit)) {
+        return false;
+    }
+    std::vector<ctr2hid::Report> reports;
+    if (!m_tx.encodeExtension(MessageType::CwText, payload, &reports)) {
         return false;
     }
     for (size_t i = 0; i < reports.size(); ++i) {

@@ -97,6 +97,11 @@ public:
     bool audioSpectrumWanted() const;
     // And it also negotiated AudioSpectrumLinear: windows not starting at 0.
     bool audioSpectrumLinearWanted() const;
+    // True while the USB relay is up with a device that negotiated CwText.
+    bool cwTextWanted() const;
+    // Decoded CW text for the device, with the decoder's cost (lower is
+    // better). False if not wanted now or nothing printable is left.
+    bool sendCwText(const QString& text, float cost);
     // One AudioSpectrum frame: bars in dBFS, log-spaced from lowHz to spanHz
     // (a non-finite bar reads as silence). False if not wanted now or the
     // link is busy.

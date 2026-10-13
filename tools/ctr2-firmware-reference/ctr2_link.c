@@ -150,6 +150,8 @@ uint16_t ctr2_ext_max_length(uint8_t type)
         return (uint16_t)(CTR2_SPECTRUM_HEADER + CTR2_SPECTRUM_MAX_BARS);
     case CTR2_EXT_RELAY_UDP_PORT:
         return 2u;
+    case CTR2_EXT_CW_TEXT:
+        return (uint16_t)(1u + CTR2_CW_TEXT_MAX);
     default:
         return 0;
     }

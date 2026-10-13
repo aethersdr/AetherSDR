@@ -473,6 +473,22 @@ void testDisplaySpan()
         check(kHostCapabilities & capabilityBit(MessageType::AudioSpectrumLinear),
               "AetherSDR offers the linear spectrum");
     }
+    // CwText: a confidence byte, then printable ASCII.
+    {
+        check(cwtext::confidence(0.1f) == 0 && cwtext::confidence(0.2f) == 1
+                  && cwtext::confidence(0.5f) == 2 && cwtext::confidence(0.9f) == 3,
+              "the CW panel's confidence bands");
+        check(cwtext::encode(QStringLiteral("CQ"), 0.1f) == QByteArray("\x00" "CQ", 3),
+              "text after its confidence");
+        check(cwtext::encode(QStringLiteral("A\nB\u00e9"), 0.5f) == QByteArray("\x02" "A B", 4),
+              "a newline is a space; non-ASCII is dropped");
+        check(cwtext::encode(QStringLiteral("\u00e9"), 0.1f).isEmpty(), "nothing printable: nothing");
+        check(cwtext::encode(QString(40, QLatin1Char('E')), 0.1f).size() == 1 + cwtext::kMaxChars,
+              "long text is cut to fit");
+        check(extensionMaxLength(MessageType::CwText) == 1 + cwtext::kMaxChars
+                  && (kHostCapabilities & capabilityBit(MessageType::CwText)),
+              "CwText: 0x43, offered, up to 33 bytes");
+    }
 }
 
 int main()

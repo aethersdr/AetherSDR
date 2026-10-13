@@ -82,6 +82,13 @@ extern "C" {
  * receiving CW, centered on the CW pitch, to show zero beat. */
 #define CTR2_EXT_AUDIO_SPECTRUM_LINEAR 0x42u
 
+/* CW_TEXT, host -> device: CW decoded by the host from the active slice, as
+ * it arrives (about a character at a time; word gaps are spaces). Payload:
+ *   [confidence 0..3][1..CTR2_CW_TEXT_MAX printable ASCII bytes]
+ * Confidence 0 is the most certain, 3 the least. */
+#define CTR2_EXT_CW_TEXT        0x43u
+#define CTR2_CW_TEXT_MAX        32u
+
 /* Lower edge in Hz of bar i of n (i == n gives span_hz, the top edge). */
 float ctr2_spectrum_band_edge(uint16_t low_hz, uint16_t span_hz, uint8_t n, uint8_t i);
 /* Lower edge in Hz of bar i of n for AUDIO_SPECTRUM_LINEAR. */

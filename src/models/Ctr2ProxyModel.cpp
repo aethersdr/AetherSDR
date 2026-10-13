@@ -446,6 +446,21 @@ bool Ctr2ProxyModel::audioSpectrumLinearWanted() const
             & ctr2hid::capabilityBit(ctr2hid::MessageType::AudioSpectrumLinear));
 }
 
+bool Ctr2ProxyModel::cwTextWanted() const
+{
+    return usbActive() && m_usb->state() == TcpByteProxy::State::Relaying
+        && (m_usb->extensions() & ctr2hid::capabilityBit(ctr2hid::MessageType::CwText));
+}
+
+bool Ctr2ProxyModel::sendCwText(const QString& text, float cost)
+{
+    if (!cwTextWanted()) {
+        return false;
+    }
+    const QByteArray payload = ctr2hid::cwtext::encode(text, cost);
+    return !payload.isEmpty() && m_usb->sendCwText(payload);
+}
+
 bool Ctr2ProxyModel::sendAudioSpectrum(int lowHz, int spanHz, const std::vector<float>& barsDb,
                                        bool linear)
 {

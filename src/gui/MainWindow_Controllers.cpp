@@ -22,6 +22,7 @@
 #include "core/UlanziDialMappings.h"
 #include "AppletPanel.h"
 #include "core/IambicKeyer.h"
+#include "PanadapterApplet.h"
 #include "PanadapterStack.h"
 #include "RC28MappingDialog.h"
 #include "RadioSetupDialog.h"
@@ -2650,6 +2651,15 @@ void MainWindow::setupCtr2Proxy()
         }
         return src;
     }, this);
+    // Controllers that negotiate it get the decoded CW, filtered as the CW
+    // panel filters it (its sensitivity threshold).
+    connect(&m_cwDecoder, &CwRxModel::textDecoded, m_ctr2ProxyModel,
+            [this](const QString& text, float cost) {
+        const float threshold = m_cwDecoderApplet ? m_cwDecoderApplet->cwCostThreshold() : 0.70f;
+        if (cost < threshold) {
+            m_ctr2ProxyModel->sendCwText(text, cost);
+        }
+    });
     if (m_appletPanel) {
         if (auto* applet = m_appletPanel->ctr2ProxyApplet()) {
             applet->setModel(m_ctr2ProxyModel);

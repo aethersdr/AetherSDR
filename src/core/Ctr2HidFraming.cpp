@@ -57,6 +57,8 @@ int extensionMaxLength(MessageType type)
         return 2;
     case MessageType::AudioSpectrumLinear:
         return spectrum::kHeaderBytes + spectrum::kMaxBars;
+    case MessageType::CwText:
+        return 1 + cwtext::kMaxChars;
     default:
         return 0;
     }
@@ -133,6 +135,28 @@ double spectrum::bandEdgeHz(int lowHz, int spanHz, int n, int i)
 int spectrum::displayLowHz(int spanHz)
 {
     return std::clamp(spanHz / 60, 20, 100);
+}
+
+int cwtext::confidence(float cost)
+{
+    return cost < 0.15f ? 0 : cost < 0.35f ? 1 : cost < 0.60f ? 2 : 3;
+}
+
+QByteArray cwtext::encode(const QString& text, float cost)
+{
+    QByteArray out(1, char(confidence(cost)));
+    for (const QChar c : text) {
+        if (out.size() > kMaxChars) {
+            break;
+        }
+        const ushort u = c.unicode();
+        if (u == '\n' || u == '\r') {
+            out.append(' ');
+        } else if (u >= 0x20 && u <= 0x7E) {
+            out.append(char(u));
+        }
+    }
+    return out.size() > 1 ? out : QByteArray();
 }
 
 double spectrum::linearEdgeHz(int lowHz, int spanHz, int n, int i)

@@ -1033,6 +1033,28 @@ void testAudioSpectrumExtension()
         check(!rig.relay.sendAudioSpectrum(window, MessageType::RelayUdpPort),
               "only spectrum types go through sendAudioSpectrum");
     }
+    {
+        // CwText goes only to a device that negotiated it.
+        Rig rig;
+        rig.port->negotiate(bit);
+        rig.dev.rx.setExtensions(bit);
+        rig.start();
+        check(rig.linkUp(), "link up (spectrum only)");
+        const QByteArray text = cwtext::encode(QStringLiteral("CQ"), 0.1f);
+        check(!rig.relay.sendCwText(text), "no CW text without its extension");
+    }
+    {
+        const quint32 cw = capabilityBit(MessageType::CwText);
+        Rig rig;
+        rig.port->negotiate(cw);
+        rig.dev.rx.setExtensions(cw);
+        rig.start();
+        check(rig.linkUp(), "link up (CW text)");
+        const QByteArray text = cwtext::encode(QStringLiteral("CQ"), 0.1f);
+        check(rig.relay.sendCwText(text), "CW text is sent when negotiated");
+        check(waitUntil([&] { return rig.dev.count(MessageType::CwText) == 1; }),
+              "the device receives one CwText message");
+    }
 }
 
 // A device that negotiated RelayUdpPort is told the relay's UDP port right
