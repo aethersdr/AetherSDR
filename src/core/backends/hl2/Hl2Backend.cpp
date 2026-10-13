@@ -548,8 +548,8 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         if (m_keyed)
             m_txMicPeakMaxDbfs = std::max(m_txMicPeakMaxDbfs, dbfs);
     });
-    // The post-ALC transmit peak — the level the modulator is actually handing
-    // to the wire.
+    // The post-ALC audio peak — the level handed to the modulator, not the
+    // envelope it puts on the wire.
     //
     // MeterModel's TX:ALC is a LEVEL in dBFS, not a gain, which is why this is
     // fed from alcPeak() and not from the alcGain() signal sitting next to it.
@@ -8119,12 +8119,12 @@ void Hl2Backend::defineMeters()
         0.0, 100.0,    QStringLiteral("PA temperature"));
     def(6, QStringLiteral("TX"),  QStringLiteral("MICPEAK"), QStringLiteral("dBFS"),
         -100.0, 0.0,   QStringLiteral("Microphone peak"));
-    // The post-ALC transmit level. Named ALC because that is the name MeterModel
-    // binds to its swAlc() accessor, which is what the Phone/CW applet's ALC
-    // gauges read — the meter is defined by what consumes it, not by which stage
-    // happens to produce it.
+    // The post-ALC audio peak, before the modulator. Named ALC because that is
+    // the name MeterModel binds to its swAlc() accessor, which the Phone/CW
+    // applet's ALC gauges read: the meter is defined by what consumes it, not
+    // by which stage produces it.
     def(7, QStringLiteral("TX"),  QStringLiteral("ALC"),     QStringLiteral("dBFS"),
-        -100.0, 0.0,   QStringLiteral("Post-ALC transmit peak"));
+        -100.0, 0.0,   QStringLiteral("Post-ALC audio peak, before the modulator"));
     // Speech-processor gain reduction, as a POSITIVE amount of compression in
     // dB — the sign convention MeterModel's COMPPEAK path already expects, and
     // the opposite of ClientComp::gainReductionDb()'s own (which is <= 0).

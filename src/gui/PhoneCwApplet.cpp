@@ -299,7 +299,7 @@ void PhoneCwApplet::buildPhonePanel()
         {{-20, "-20"}, {-15, "-15"}, {-10, "-10"}, {-5, "-5"}, {0, "0"}});
     m_alcGaugePhone->setValueImmediate(kAlcGaugeFloorDbfs);
     m_alcGaugePhone->setAccessibleName("ALC gauge (Phone)");
-    m_alcGaugePhone->setAccessibleDescription("Automatic level control — post-software-ALC SSB peak (dBFS)");
+    m_alcGaugePhone->setAccessibleDescription("Automatic level control — post-software-ALC peak (dBFS)");
     m_alcGaugePhone->setHoverValueFormatter(alcHoverFormatter());
     m_alcGaugePhone->setHoverValuePopupEnabled(true);
     vbox->addWidget(m_alcGaugePhone);
@@ -669,7 +669,7 @@ void PhoneCwApplet::buildCwPanel()
         {{-20, "-20"}, {-15, "-15"}, {-10, "-10"}, {-5, "-5"}, {0, "0"}});
     m_alcGaugeCw->setValueImmediate(kAlcGaugeFloorDbfs);
     m_alcGaugeCw->setAccessibleName("ALC gauge (CW)");
-    m_alcGaugeCw->setAccessibleDescription("Automatic level control — post-software-ALC SSB peak (dBFS)");
+    m_alcGaugeCw->setAccessibleDescription("Automatic level control — post-software-ALC peak (dBFS)");
     m_alcGaugeCw->setHoverValueFormatter(alcHoverFormatter());
     m_alcGaugeCw->setHoverValuePopupEnabled(true);
     vbox->addWidget(m_alcGaugeCw);
@@ -1525,7 +1525,7 @@ void PhoneCwApplet::setAlcMeterUnit(const QString& unit)
                         percent ? 85.0f : -3.0f, ticks);
         gauge->setAccessibleDescription(percent
             ? tr("Automatic level control — radio-reported percent")
-            : tr("Automatic level control — post-software-ALC SSB peak (dBFS)"));
+            : tr("Automatic level control — post-software-ALC peak (dBFS)"));
         gauge->setHoverValueFormatter(percent
             ? std::function<QString(float)>([](float value) {
                 return QStringLiteral("%1 %").arg(QString::number(value, 'f', 1));
