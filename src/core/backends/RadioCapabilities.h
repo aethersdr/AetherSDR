@@ -1,5 +1,5 @@
 #pragma once
-#include "RadioSetupRequest.h"
+#include "RadioSetupControl.h"
 
 #include <QFlags>
 #include <QList>

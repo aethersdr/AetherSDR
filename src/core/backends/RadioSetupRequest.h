@@ -1,11 +1,11 @@
 #pragma once
 
+#include "RadioSetupControl.h"
 #include "core/NetworkMtuPolicy.h"
 
 #include <QHostAddress>
 #include <QAbstractSocket>
 #include <QMetaType>
-#include <QSet>
 #include <QString>
 #include <cmath>
 #include <functional>
@@ -46,15 +46,7 @@ inline bool setupTextValid(const QString& value)
 }
 
 struct RadioSetupRequest {
-    enum class Field {
-        Nickname, Callsign, ClientStation, PrivateIpPolicy, NetworkMtu,
-        Dhcp, StaticNetwork, AccTxDelayMs, TxDelayMs, Tx1DelayMs,
-        Tx2DelayMs, Tx3DelayMs, TimeoutMs, MaximumPowerPercent,
-        ShowTxInWaterfall, MeterDuringReceive, SyncCwx, RttyMarkDefaultHz,
-        CalibrationFrequencyMhz, FrequencyCorrectionPpb, ReferenceSource,
-        MuteLocalWhenRemote, BinauralReceive, SharpnessLevel, SharpnessAuto,
-        LowLatencyDigital, StartFrequencyCalibration, Count
-    };
+    using Field = RadioSetupField;
     Field field;
     std::variant<std::monostate, bool, int, double, QString,
                  AetherSDR::StaticNetwork, AetherSDR::ReferenceSource,
@@ -137,11 +129,6 @@ struct TxBandRequest {
         }
         return std::holds_alternative<bool>(value);
     }
-};
-
-struct RadioSetupControl {
-    QSet<RadioSetupRequest::Field> fields;
-    bool supports(RadioSetupRequest::Field field) const { return fields.contains(field); }
 };
 
 struct TransverterRequest {
