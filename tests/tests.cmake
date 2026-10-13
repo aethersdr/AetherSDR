@@ -7163,9 +7163,8 @@ endif()
 add_executable(flex_control_dialog_size_test
     tests/flex_control_dialog_size_test.cpp
     src/gui/FlexControlDialog.cpp
-    src/gui/PersistentDialog.cpp
+    src/gui/CanonWindow.cpp
     src/gui/FramelessResizer.cpp
-    src/gui/FramelessWindowTitleBar.cpp
     src/gui/SliceLabel.cpp
     src/gui/DragValuePopup.cpp
     src/models/SliceModel.cpp
@@ -7184,6 +7183,35 @@ target_link_libraries(flex_control_dialog_size_test PRIVATE
 set_target_properties(flex_control_dialog_size_test PROPERTIES AUTOMOC ON)
 add_test(NAME flex_control_dialog_size_test COMMAND flex_control_dialog_size_test)
 set_tests_properties(flex_control_dialog_size_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# AetherControl is a canon workspace (#6239): geometry under its old key,
+# Escape releases a captured knob before it closes the window, and the
+# captured ring is the success token in both themes.
+add_executable(aethercontrol_window_test
+    tests/aethercontrol_window_test.cpp
+    src/gui/FlexControlDialog.cpp
+    src/gui/CanonWindow.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/SliceLabel.cpp
+    src/gui/DragValuePopup.cpp
+    src/models/SliceModel.cpp
+    src/core/DigitalVoiceModeRegistry.cpp
+    src/core/KiwiSdrProtocol.cpp
+    src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
+    $<TARGET_OBJECTS:aether_test_settings>
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
+    ${THEME_TEST_RESOURCES}
+)
+target_include_directories(aethercontrol_window_test PRIVATE src)
+target_link_libraries(aethercontrol_window_test PRIVATE
+    Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test
+)
+set_target_properties(aethercontrol_window_test PROPERTIES AUTOMOC ON)
+add_test(NAME aethercontrol_window_test COMMAND aethercontrol_window_test)
+set_tests_properties(aethercontrol_window_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 add_executable(connection_panel_size_test
@@ -8681,6 +8709,7 @@ set(AETHER_SETTINGS_CONSUMERS
     transmit_model_apd_test
     help_dialog_test
     flex_control_dialog_size_test
+    aethercontrol_window_test
     pan_layout_dialog_size_test
     transmit_model_test
     container_widget_test

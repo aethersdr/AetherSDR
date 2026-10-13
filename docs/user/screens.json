@@ -2090,7 +2090,7 @@
         "target": "FlexControlDialog"
       },
       "caption": "AetherControl, the on-screen FlexControl knob.",
-      "alt": "AetherControl window headed Virtual Tuning Controller, with Detect, Settings… and Compact buttons. MODE, ON/OFF and TOGGLE indicators sit above three buttons Aux1, Aux2 and Aux3, with their Single Tap actions Step Up, MOX and Toggle Mute and Double Tap actions Step Down, Toggle Tune and Toggle Lock. A large tuning knob fills the bottom."
+      "alt": "AetherControl window with Detect, Settings… and Compact buttons under its header. MODE, ON/OFF and TOGGLE indicators sit above three buttons Aux1, Aux2 and Aux3, with their Single Tap actions Step Up, MOX and Toggle Mute and Double Tap actions Step Down, Toggle Tune and Toggle Lock. A large tuning knob fills the bottom."
     },
     {
       "id": "ulanzi-mapper",
