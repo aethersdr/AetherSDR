@@ -9,6 +9,7 @@
 #include "core/backends/flex/FlexBackend.h"
 #include "core/backends/hl2/Hl2Backend.h"
 #include "core/backends/hl2/Hl2RxDsp.h"
+#include "core/backends/hl2/Hl2TxDsp.h"
 #include "core/backends/hl2/MetisClient.h"
 #include "core/backends/hl2/MetisProtocol.h"
 #include "core/backends/icom/IcomCivBackend.h"
@@ -74,6 +75,20 @@ struct Hl2HardwarePttTestAccess {
         dsp->moveToThread(backend.m_ioThread);
         backend.m_rx[0].dsp = dsp;
         backend.publishIoDsps();
+    }
+    static bool configureTxDsp(Hl2Backend& backend)
+    {
+        bool configured = false;
+        onIo(backend, [&backend, &configured](MetisClient&) {
+            configured = backend.m_txDsp->configure(Hl2TxDsp::Config{});
+        });
+        return configured;
+    }
+    static void drainTxAudio(Hl2Backend& backend)
+    {
+        // The barrier follows submitTxAudio's queued call on the same I/O thread.
+        onIo(backend, [](MetisClient&) {});
+        drain(backend);
     }
     // One EP6 datagram whose two status frames carry ptt_resp in C0 bit 0.
     static void radioPtt(Hl2Backend& backend, bool ptt)
@@ -232,10 +247,23 @@ void testRadioPttWithHostIdle()
     TxTestAuthority tx;
     Hl2Backend backend;
     Access::prepare(backend);
+    check(Access::configureTxDsp(backend), "the transmit DSP is configured");
+    int processedAudioBlocks = 0;
+    const QMetaObject::Connection audioProbe = QObject::connect(
+        &backend, &IRadioBackend::meterUpdate, &backend,
+        [&processedAudioBlocks](const QString& name, float) {
+            if (name == QStringLiteral("TX:MICPEAK")) {
+                ++processedAudioBlocks;
+            }
+        });
+    const QByteArray microphoneAudio(512 * 4, '\x40');
     // An earlier host transmission, so the backend holds a live TX operation: a
     // radio edge that keyed with it would reach the wire.
     backend.setKeying(true, tx.operation, {});
     check(Access::hostMoxOnWire(backend), "control: a host key reaches MetisClient");
+    backend.submitTxAudio(microphoneAudio, 24000, TxAudioSource::Microphone, tx.context);
+    Access::drainTxAudio(backend);
+    check(processedAudioBlocks == 1, "control: host keying sends microphone audio through the DSP");
     backend.setKeying(false, tx.operation, {});
     pumpUntilUnmuted(backend, 10 * Access::holdMs(backend));
     check(!Access::hostMoxOnWire(backend) && !Access::mixerGateClosed(backend),
@@ -258,9 +286,12 @@ void testRadioPttWithHostIdle()
     check(Access::dspMuted(backend), "the demodulator is muted on radio PTT");
     check(!Access::hostMoxOnWire(backend), "the host does not assert MOX");
 
-    backend.submitTxAudio(QByteArray(1920, '\x40'), 48000, TxAudioSource::Microphone, tx.context);
-    QCoreApplication::processEvents();
-    check(Access::txQueued(backend) == 0, "transmit audio starts no modulator");
+    const int blocksBeforeRadioAudio = processedAudioBlocks;
+    backend.submitTxAudio(microphoneAudio, 24000, TxAudioSource::Microphone, tx.context);
+    Access::drainTxAudio(backend);
+    check(processedAudioBlocks == blocksBeforeRadioAudio,
+          "radio PTT admits no microphone audio to the configured DSP");
+    check(Access::txQueued(backend) == 0, "radio PTT queues no transmit samples");
     const Access::Wire during = Access::wire(backend);
     check(!during.mox, "no control packet carries the MOX bit");
     check(!during.txSamples, "no control packet carries transmit samples");
@@ -276,6 +307,7 @@ void testRadioPttWithHostIdle()
     check(!Access::mixerGateClosed(backend) && !Access::dspMuted(backend),
           "receive is released when the hold expires");
     check(!Access::hostMoxOnWire(backend), "the host stays unkeyed after release");
+    QObject::disconnect(audioProbe);
     Access::tearDown(backend);
 }
 
