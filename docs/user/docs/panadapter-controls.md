@@ -190,7 +190,7 @@ Drag an applet by its title bar (⋮⋮ grip) to reorder it. The order is rememb
 - **Frequency scale** — between spectrum and waterfall, in MHz
 - **Waterfall** — scrolling time-versus-frequency history
 - **dBm scale** — right edge of the spectrum
-- **Time scale** — right edge of the waterfall
+- **Time scale** — right edge of the waterfall. It is measured from the rows as they arrive and then held steady, so jitter between rows does not move the labels. If the rows settle at a different pace for a sustained stretch (after a slow start, or a change of **FPS** on a radio whose rows follow it), the scale recalibrates once to the new pace. At slow **WtrFall Rate** settings that takes longer, up to most of a minute at one row per second.
 - **Band plan** — colored strip along the bottom of the spectrum
 - **Overlay menu** — the button column at the left: **+RX**, **+TNF**, **Band**, **ANT**, **Display**, **Memory**, **DAX** (the DAX flyout holds the **IQ Ch** selector and the **WFM** demodulator, and only appears on radios with DAX)
 
