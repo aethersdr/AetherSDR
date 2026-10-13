@@ -46,6 +46,7 @@ void transmitEncoding()
         {"setVoxDelay", [](TransmitModel& model) { model.setVoxDelay(27); }, {QStringLiteral("transmit set vox_delay=27")}},
         {"setMicBoost", [](TransmitModel& model) { model.setMicBoost(true); }, {QStringLiteral("mic boost 1")}},
         {"setMicBias", [](TransmitModel& model) { model.setMicBias(true); }, {QStringLiteral("mic bias 1")}},
+        {"setPttMicOverride", [](TransmitModel& model) { model.setPttMicOverride(true); }, {QStringLiteral("transmit set ptt_mic_override=1")}},
         {"setAmCarrierLevel", [](TransmitModel& model) { model.setAmCarrierLevel(28); }, {QStringLiteral("transmit set am_carrier=28")}},
         {"setDexp", [](TransmitModel& model) { model.setDexp(true); }, {QStringLiteral("transmit set compander=1")}},
         {"setDexpLevel", [](TransmitModel& model) { model.setDexpLevel(29); }, {QStringLiteral("transmit set compander_level=29")}},

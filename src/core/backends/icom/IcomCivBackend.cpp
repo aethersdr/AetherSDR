@@ -4520,7 +4520,8 @@ ReceiveDispatch IcomCivBackend::requestTransmitControl(const TransmitControlRequ
     case Field::CwIambicMode: case Field::CwSwap: case Field::CwlEnabled:
     case Field::CwMonitorGain: case Field::CwMonitorPan: case Field::TxProfile:
     case Field::MicProfile: case Field::ApdEnabled: case Field::ApdSampler:
-    case Field::ApdReset: case Field::AtuMemories: case Field::AtuClear: case Field::Count:
+    case Field::ApdReset: case Field::AtuMemories: case Field::AtuClear:
+    case Field::PttMicOverride: case Field::Count:
         return ReceiveDispatch::Unsupported;
     }
     return ReceiveDispatch::Dispatched;

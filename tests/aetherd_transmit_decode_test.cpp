@@ -53,6 +53,18 @@ int main(int argc, char** argv)
         CHECK(d.cwIambicMode.has_value() && *d.cwIambicMode == 1);
     }
 
+    // ---- ptt_mic_override (v4.3 firmware, #6442) ----
+    {
+        const TransmitDelta d = decode(b, [](FlexBackend& fb){
+            fb.decodeTransmitStatus({{QStringLiteral("ptt_mic_override"), QStringLiteral("1")}});
+        });
+        CHECK(d.pttMicOverride.has_value() && *d.pttMicOverride == true);
+        const TransmitDelta absent = decode(b, [](FlexBackend& fb){
+            fb.decodeTransmitStatus({{QStringLiteral("rfpower"), QStringLiteral("50")}});
+        });
+        CHECK(!absent.pttMicOverride.has_value());   // pre-4.3 firmware: never reported
+    }
+
     // ---- ok-guard: malformed present numeric is dropped ----
     {
         const TransmitDelta d = decode(b, [](FlexBackend& fb){

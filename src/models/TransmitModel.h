@@ -175,6 +175,11 @@ public:
     int     interlockTimeout() const { return m_interlockTimeout; }
     int     accTxReqPolarity() const { return m_accTxReqPolarity; }
     int     rcaTxReqPolarity() const { return m_rcaTxReqPolarity; }
+    // Hardware PTT (RCA/ACC/mic jack) forces the analog mic even while DAX or
+    // remote audio is the TX source. Radio-wide; firmware v4.3+ only, so
+    // havePttMicOverride() says whether this radio has reported it (#6442).
+    bool    pttMicOverride() const { return m_pttMicOverride; }
+    bool    havePttMicOverride() const { return m_havePttMicOverride; }
     int     maxPowerLevel()  const { return m_maxPowerLevel; }
     // Latches haveMaxPowerLevel() on PRESENCE, not on change: a radio reporting
     // 100 into a model already at the 100 default must still count as reported,
@@ -393,6 +398,7 @@ public:
     void setVoxDelay(int delay);
     void setMicBoost(bool on);
     void setMicBias(bool on);
+    void setPttMicOverride(bool on);
     void setAmCarrierLevel(int level);
     void setDexp(bool on);
     void setDexpLevel(int level);
@@ -646,6 +652,8 @@ private:
     int     m_interlockTimeout{0};
     int     m_accTxReqPolarity{0};
     int     m_rcaTxReqPolarity{0};
+    bool    m_pttMicOverride{false};      // v4.3 firmware default
+    bool    m_havePttMicOverride{false};
     int     m_maxPowerLevel{100};
     QString m_tuneMode{"single_tone"};
     bool m_tuneAvailable = true;

@@ -3238,6 +3238,45 @@ QWidget* RadioSetupDialog::buildTxTab()
         AetherSDR::applyComboStyle(accCmb);
         grid->addWidget(accCmb, 0, 3);
 
+        // PTT Mic Override (SmartSDR v4.3, SMART-9340): from 4.3 a hardware
+        // PTT transmits the selected TX source, DAX and remote audio included;
+        // on, it forces the analog mic as firmware before 4.3 always did.
+        // Radio-wide, and only a 4.3 radio reports it (#6442).
+        auto* pttOvrLbl = new QLabel("PTT Mic Override:");
+        applyLabelStyle(pttOvrLbl);
+        grid->addWidget(pttOvrLbl, 1, 0);
+        auto* pttOvrBtn = new QPushButton;
+        pttOvrBtn->setCheckable(true);
+        setButtonRole(pttOvrBtn, ButtonRole::Select);
+        pttOvrBtn->setAccessibleName(tr("PTT Mic Override"));
+        grid->addWidget(pttOvrBtn, 1, 1, Qt::AlignLeft);
+        const auto syncPttOverride = [this, pttOvrBtn]() {
+            const auto& t = m_model->transmitModel();
+            const bool reported = t.havePttMicOverride();
+            QSignalBlocker block(pttOvrBtn);
+            pttOvrBtn->setChecked(t.pttMicOverride());
+            pttOvrBtn->setText(t.pttMicOverride() ? "Enabled" : "Disabled");
+            pttOvrBtn->setEnabled(reported);
+            const QString tip = reported
+                ? tr("Enabled: a footswitch, ACC or mic-jack PTT always transmits "
+                     "the analog mic, even when DAX or PC audio is the TX source.\n"
+                     "Disabled (firmware 4.3 default): a hardware PTT transmits the "
+                     "selected TX source, as MOX does.\n"
+                     "This setting is shared by every client on the radio.")
+                : tr("Requires SmartSDR v4.3 firmware or later. Earlier firmware "
+                     "always transmits the analog mic on a hardware PTT.");
+            pttOvrBtn->setToolTip(tip);
+            pttOvrBtn->setAccessibleDescription(tip);
+        };
+        syncPttOverride();
+        // The button shows the radio's value: a click only requests the change
+        // and snaps back, and the transmit-status echo moves it.
+        connect(pttOvrBtn, &QPushButton::toggled, this, [this, syncPttOverride](bool on) {
+            m_model->transmitModel().setPttMicOverride(on);
+            syncPttOverride();
+        });
+        connect(&tx, &TransmitModel::stateChanged, pttOvrBtn, syncPttOverride);
+
         vbox->addWidget(group);
     }
 

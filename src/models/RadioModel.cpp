@@ -12997,6 +12997,8 @@ QJsonObject RadioModel::troubleshootingSnapshot() const
     mic["mic_boost"] = m_transmitModel.micBoost();
     mic["mic_bias"] = m_transmitModel.micBias();
     mic["met_in_rx"] = m_transmitModel.metInRx();
+    if (m_transmitModel.havePttMicOverride())
+        mic["ptt_mic_override"] = m_transmitModel.pttMicOverride();
     mic["sync_cwx"] = m_transmitModel.syncCwx();
     mic["am_carrier_level"] = m_transmitModel.amCarrierLevel();
     mic["dexp_on"] = m_transmitModel.dexpOn();
