@@ -7940,6 +7940,16 @@ add_executable(host_voice_chain_policy_test
 )
 target_include_directories(host_voice_chain_policy_test PRIVATE src)
 add_test(NAME host_voice_chain_policy_test COMMAND host_voice_chain_policy_test)
+
+# #5611: the graphic EQ's own state round-trips through the EqApplet settings
+# object, restores without a command, and derives ClientEq ownership. Model and
+# a private settings profile only; no socket, no radio.
+add_executable(graphic_eq_persistence_test tests/graphic_eq_persistence_test.cpp)
+target_include_directories(graphic_eq_persistence_test PRIVATE src tests)
+target_link_libraries(graphic_eq_persistence_test PRIVATE
+    aethercore Qt6::Core Qt6::Test)
+add_test(NAME graphic_eq_persistence_test COMMAND graphic_eq_persistence_test)
+
 add_executable(connect_state_policy_test
     tests/connect_state_policy_test.cpp
 )
@@ -8936,6 +8946,7 @@ endif()
 set(AETHER_SETTINGS_CONSUMERS
     cw_rx_model_test
     dax_receive_applet_test
+    graphic_eq_persistence_test
     hl2_discovery_logging_test
     reroute_dead_controls_test
     hl2_bandstack_digital_agc_test

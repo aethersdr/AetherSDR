@@ -1,21 +1,23 @@
 // When the Flex-shaped voice controls may write into the SHARED client DSP.
 //
 // PROC and the 8-band graphic EQ drive the same ClientComp/ClientEq the Aetherial
-// strip edits (#4609). The strip's state PERSISTS; the models behind the
-// Flex-shaped controls do not. So a connection edge that pushes the models
-// unconditionally writes construction defaults over the operator's saved audio
-// chain, and a family-swap unwind that fires unconditionally switches off a chain
-// this code never touched.
+// strip edits (#4609), and the strip's state persists under its own keys. So a
+// connection edge that pushes the models unconditionally writes defaults over the
+// operator's saved audio chain, and a family-swap unwind that fires
+// unconditionally switches off a chain this code never touched.
 //
-// Both failures were live in review and both are one term of the predicates in
-// core/HostVoiceChainPolicy.h, which is what this suite exercises directly —
-// MainWindow evaluates the same functions, and the GUI link is not a test target
-// (same limitation tests/radio_capability_gating_test.cpp documents).
+// Each failure is one term of the predicates in core/HostVoiceChainPolicy.h,
+// which this suite exercises directly: MainWindow evaluates the same functions,
+// and the GUI link is not a test target (the limitation
+// tests/radio_capability_gating_test.cpp documents). The graphic EQ's own
+// persistence is in tests/graphic_eq_persistence_test.cpp.
 
 #include "core/HostVoiceChainPolicy.h"
 
 #include <cstdio>
 
+using AetherSDR::graphicEqPersistAllowed;
+using AetherSDR::hostVoiceChainOwnedByRestoredEq;
 using AetherSDR::hostVoiceChainRepushAllowed;
 using AetherSDR::hostVoiceChainUnwindRequired;
 
@@ -113,6 +115,25 @@ int main()
         }
     }
     check(true, "no input both re-pushes and unwinds");
+
+    // ── Ownership from a restored graphic EQ ───────────────────────────────
+    //
+    // An all-default restore is an operator who never used the applet: claiming
+    // the shared objects for them re-pushes eight flat bands over their strip.
+    check(!hostVoiceChainOwnedByRestoredEq(false, false),
+          "restored EQ: all bands 0 dB and both enables off claims nothing");
+    check(hostVoiceChainOwnedByRestoredEq(true, false),
+          "restored EQ: a band off 0 dB claims the shared objects");
+    check(hostVoiceChainOwnedByRestoredEq(false, true),
+          "restored EQ: an enable alone claims the shared objects");
+
+    // ── Writing the graphic EQ to settings ─────────────────────────────────
+    check(graphicEqPersistAllowed(kConnected, kHostModulates),
+          "persist: saved while connected to a host-modulating backend");
+    check(!graphicEqPersistAllowed(kConnected, kRadioModulates),
+          "persist: never saved from a radio that keeps its own EQ");
+    check(!graphicEqPersistAllowed(kDisconnected, kHostModulates),
+          "persist: never saved while disconnected");
 
     if (g_failures == 0)
         std::printf("host_voice_chain_policy_test: all checks passed\n");

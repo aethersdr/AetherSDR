@@ -924,6 +924,17 @@ void MainWindow::applyGraphicEqToClientEq(bool transmit)
 
 void MainWindow::wireHostModulatedVoiceChain()
 {
+    // The persisted graphic EQ comes back BEFORE the ClientEq binding below, so
+    // restoring writes nothing into the shared objects; the connect-edge re-push
+    // does, and only on a host-modulating backend. Ownership is derived from what
+    // came back (core/HostVoiceChainPolicy.h), so an untouched EQ claims nothing.
+    {
+        const EqualizerModel::State restored = EqualizerModel::loadPersistedState();
+        m_radioModel.equalizerModel().restoreState(restored);
+        m_hostVoiceChainOwned = hostVoiceChainOwnedByRestoredEq(
+            restored.anyBandNonZero(), restored.anyEnabled());
+    }
+
     // The graphic EQ. Bound on BOTH state signals rather than on a capability
     // check at wiring time, because the capability is not known until a backend
     // attaches; applyGraphicEqToClientEq() re-checks on every call.
@@ -931,6 +942,16 @@ void MainWindow::wireHostModulatedVoiceChain()
             this, [this] { applyGraphicEqToClientEq(true); });
     connect(&m_radioModel.equalizerModel(), &EqualizerModel::rxStateChanged,
             this, [this] { applyGraphicEqToClientEq(false); });
+
+    // Operator -> settings, in the EqApplet object and never in the strip's
+    // ClientEq keys. Not on a Flex, whose EQ the radio keeps.
+    connect(&m_radioModel.equalizerModel(), &EqualizerModel::operatorEdited,
+            this, [this] {
+        if (graphicEqPersistAllowed(m_radioModel.isConnected(),
+                                    hostModulatesTxAudio())) {
+            EqualizerModel::savePersistedState(m_radioModel.equalizerModel().state());
+        }
+    });
 
     // Operator -> DSP.
     //
@@ -952,11 +973,10 @@ void MainWindow::wireHostModulatedVoiceChain()
 
         if (connected && hostModulates) {
             // Re-push on connect, since the capability was unknown before. Only
-            // what the operator moved (hostVoiceChainRepushAllowed; see
-            // core/HostVoiceChainPolicy.h): EqualizerModel/TransmitModel do not
-            // persist, ClientEq/ClientComp do, so an unconditional push would
-            // overwrite the saved strip with defaults. The cache is reset so the
-            // preset re-applies.
+            // what the operator set or what was restored
+            // (hostVoiceChainRepushAllowed; core/HostVoiceChainPolicy.h): an
+            // unconditional push would overwrite the saved strip with defaults.
+            // The cache is reset so the preset re-applies.
             if (hostVoiceChainRepushAllowed(connected, hostModulates,
                                             m_hostVoiceChainOwned)) {
                 m_lastAppliedProcLevel = -1;
@@ -964,6 +984,9 @@ void MainWindow::wireHostModulatedVoiceChain()
                 applySpeechProcessorToClientComp(true);
                 applyGraphicEqToClientEq(true);
                 applyGraphicEqToClientEq(false);
+                // Sliders moved while disconnected are saved once they apply.
+                EqualizerModel::savePersistedState(
+                    m_radioModel.equalizerModel().state());
             }
             m_hostVoiceChainTimer.start();
             return;
