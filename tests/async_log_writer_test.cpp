@@ -706,6 +706,16 @@ void testNegativeCorpus(const QString& dir)
         {"peer 2001:db8::dead:beef established",                          "2001:db8"},
         {"QRZ session for auditor@example.com failed",                   "auditor@example.com"},
         {"rotator disconnected from audit-rotator.lan",                  "audit-rotator"},
+        // PanadapterStream's default-level VITA lines (#6285 review): the
+        // address is a field value with no host keyword; the IPv4 and IPv6
+        // shape rules cover it. An IPv4 port stays readable; an unbracketed
+        // IPv6 "addr:port" is masked whole.
+        {"PanadapterStream: LAN VITA UDP bind addr=192.168.50.37 port=4993 flags=DontShareAddress",
+                                                                         "192.168.50.37"},
+        {"PanadapterStream: first UDP packet received after_ms=12 local_port=4993 from=192.168.50.121:4991",
+                                                                         "192.168.50.121"},
+        {"PanadapterStream: first UDP packet received after_ms=12 local_port=4993 from=fd12:3456:789a::5:4991",
+                                                                         "fd12:3456"},
     };
     bool allClean = true;
     int index = 0;

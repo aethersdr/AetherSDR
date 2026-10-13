@@ -1,24 +1,35 @@
 #pragma once
 
+#include "RadioTabBar.h"
+
+#include <QColor>
 #include <QElapsedTimer>
+#include <QHash>
+#include <QList>
 #include <QPointer>
 #include <QString>
 #include <QVariantMap>
 #include <QWidget>
 
 class QPushButton;
+class QShortcut;
+class QAction;
 class QSlider;
 class QLabel;
 class QFrame;
+class QMenu;
 class QMenuBar;
 class QHBoxLayout;
 class QTimer;
+class QWindow;
 class QGraphicsOpacityEffect;
 class QPropertyAnimation;
 
 namespace AetherSDR {
 
+class BrandMark;
 class PersistentDialog;
+class WindowCaptionButtons;
 
 class TitleBar : public QWidget {
     Q_OBJECT
@@ -29,7 +40,8 @@ public:
     // duplicating the literal — the two must stay in lockstep, or the edge-
     // resize margin either overlaps the title bar (#4886) or leaves a dead
     // strip below it.
-    static constexpr int kHeight = 32;
+    static constexpr int kHeight = 52;
+    static constexpr int kUnifiedBarHeight = kHeight;
 
     explicit TitleBar(QWidget* parent = nullptr);
 
@@ -39,7 +51,9 @@ public:
     // shell invites arrangements the mode cannot honor.
     void setAppletPanelControlsVisible(bool visible);
 
-    // Embed the menu bar into the left side of the title bar
+    // Take over the window's menu bar.  A native (system) menu bar is left
+    // where the platform puts it; otherwise its menus move into a hamburger
+    // button that leads the bar, ahead of the brand.
     void setMenuBar(QMenuBar* mb);
 
     void setPcAudioEnabled(bool on);
@@ -79,8 +93,13 @@ public:
     void setMultiFlexStatus(int clientCount, const QStringList& names);
     void onHeartbeat();       // Call when a discovery packet arrives
     void onHeartbeatLost();   // Call when radio lost from discovery
+    // The operator disconnected on purpose: that is not a lost link, so drop
+    // any missed-beat count rather than letting it raise the red alarm on an
+    // idle tab.  An unexpected loss never calls this and keeps its alarm.
+    void clearLinkAlarm();
     void setDiscovering(bool active); // Solid amber while discovering / not yet connected
     void setMinimalMode(bool on);
+    bool isMinimalMode() const { return m_minimalMode; }
     void setBlinkEnabled(bool enabled); // Toggle heartbeat animation on/off
     // Set the flash color used while adaptive throttle is active (empty = restore green).
     // Ignored while the disconnected-alarm blink is running.
@@ -95,9 +114,21 @@ public:
     // own Qt::Window.
     void setAppletFloating(bool floating);
 
-    // Windows native hit-testing uses this to expose custom title-bar gaps
-    // as caption drag zones while keeping controls interactive.
     bool isSystemMoveAreaAt(const QPoint& globalPos) const;
+
+    // ── Radio tabs ──────────────────────────────────────────────────────────
+    // The strip of per-radio tabs plus the "+" discovered-radios popover.
+    // MainWindow feeds these from discovery + the active connection.
+    void setRadioTabs(const QList<RadioTabEntry>& radios);
+    void setActiveRadio(const QString& id);
+    void setDiscoveredRadios(const QList<RadioTabEntry>& radios);
+    RadioTabBar* radioTabBar() const { return m_radioTabs; }
+
+    WindowCaptionButtons* captionButtons() const { return m_captionButtons; }
+
+    // Introspection for the automation bridge (`titlebar` model): the whole
+    // bar — geometry, brand, tabs, audio cluster, window controls.
+    QVariantMap barState() const;
 
 signals:
     void pcAudioToggled(bool on);
@@ -116,6 +147,10 @@ signals:
     void dockAppletRightRequested();
     // Toggle applet panel between docked and floating-window mode.
     void popOutAppletRequested();
+    // A radio tab was activated, or the popover's "Connect manually…" row
+    // was chosen.  MainWindow owns what those mean.
+    void radioTabActivated(const QString& radioId);
+    void connectManuallyRequested();
 
 public:
     // Open the feature-request dialog.  Wired from Help → Submit your idea…
@@ -125,15 +160,43 @@ public:
 private:
     void markDragHandle(QWidget* widget);
     bool isDragHandle(QObject* obj) const;
-    bool startWindowMove(QMouseEvent* ev, bool useSystemMove = true);
+    bool startWindowMove(QMouseEvent* ev);
     bool continueWindowMove(QMouseEvent* ev);
     bool finishWindowMove(QMouseEvent* ev);
+    // Manual-move state for the xcb fallback (#4827); unused while the
+    // system move owns the drag.
+    bool         m_windowMoveActive{false};
+    bool         m_windowMoveUsesSystem{false};
+    QPoint       m_windowMovePressGlobal;
+    QPoint       m_windowMoveStartPos;
+    void updateChromeLayout();
+    bool m_updatingChromeLayout{false};
     void handleTitleDoubleClick(QMouseEvent* ev);
     void showFeatureRequestDialogImpl();
     void updatePcAudioToolTip();
+    void applyPcAudioStyle();
+    void applyBarStyle();
+    // Bar fill pre-composited over the window background, so the bar can be
+    // WA_OpaquePaintEvent: a tab repaint then stops here instead of also
+    // repainting MainWindow underneath it.
+    QColor       m_barFill;
+    QColor       m_barBorder;
+    QPointer<QWindow> m_chromeWindow;
     QHBoxLayout* m_hbox{nullptr};
     QMenuBar*    m_menuBar{nullptr};
-    QLabel*      m_appNameLabel{nullptr};
+    // Hamburger that carries the menu bar's menus where there is no native
+    // menu bar.  The QMenuBar itself stays as a hidden child: the automation
+    // bridge walks it, and it remains the single place menus are built.
+    QPushButton* m_appMenuBtn{nullptr};
+    QElapsedTimer m_appMenuClosed;   // when the menu last hid; see setMenuBar()
+    QMenu*       m_appMenu{nullptr};
+    // Alt+<letter> for each top-level menu.  The hidden bar's own mnemonics
+    // never match, so these keep the menus reachable from the keyboard.
+    QHash<QAction*, QShortcut*> m_appMenuMnemonics;
+    void addAppMenuMnemonic(QAction* menuAction);
+    void removeAppMenuMnemonic(QAction* menuAction);
+    BrandMark*   m_brand{nullptr};
+    RadioTabBar* m_radioTabs{nullptr};
     QLabel*      m_experimentalRadioLabel{nullptr};
     QLabel*      m_otherTxLabel{nullptr};
     QPushButton* m_mfBtn{nullptr};
@@ -146,28 +209,33 @@ private:
     QLabel*      m_hpLabel{nullptr};
     bool         m_headphoneAvailable{true};
 
-    // Window-control trio (frameless mode): minimize, maximize/restore, close.
-    // QLabels (not buttons) for a flat look; click is wired via eventFilter.
-    QLabel*      m_minimizeLbl{nullptr};
-    QLabel*      m_maximizeLbl{nullptr};
-    QLabel*      m_closeLbl{nullptr};
+    // Fallback caption controls.  Shown only where Qt has no expanded client
+    // area (Linux/X11/Wayland); on Cocoa and Windows the native controls draw
+    // over the bar and these stay hidden — see WindowChrome::usesNativeCaption.
+    WindowCaptionButtons* m_captionButtons{nullptr};
+    // Index the menu bar is inserted at by setMenuBar() — after the brand mark
+    // rather than at 0, so the brand always leads the bar.
+    int          m_menuBarSlot{0};
     QLabel*      m_dockLeftLbl{nullptr};
     QLabel*      m_dockRightLbl{nullptr};
     QLabel*      m_popOutLbl{nullptr};
+    bool         m_appletPanelVisible{true};
+    bool         m_appletPanelDockedLeft{false};
+    bool         m_appletPanelFloating{false};
     QPointer<PersistentDialog> m_issueReporterDialog;
     QFrame*      m_dockSep{nullptr};
     bool         m_minimalMode{false};
-    bool         m_windowMoveActive{false};
-    bool         m_windowMoveUsesSystem{false};
-    QPoint       m_windowMovePressGlobal;
-    QPoint       m_windowMoveStartPos;
-
-    // Heartbeat indicator
-    QLabel*      m_heartbeat{nullptr};
-    QTimer*      m_heartbeatOffTimer{nullptr};   // 100ms green→grey
-    QTimer*      m_heartbeatAlarmTimer{nullptr}; // 500ms red/grey blink
+    // ── Radio-link (discovery heartbeat) state ──────────────────────────────
+    // Rendered by the active radio tab's status dot; there is no separate
+    // heartbeat lamp.  The animation lives in RadioTabBar, the state machine
+    // here.  linkOverrideColor() turns the state into the dot's colour and
+    // pushLinkIndicator() hands it over.
+    QColor       linkOverrideColor() const;
+    void         pushLinkIndicator();
+    // Three consecutive misses is the alarm threshold, unchanged from the
+    // standalone lamp: one missed discovery sweep is routine on a busy LAN.
+    static constexpr int kHeartbeatAlarmThreshold = 3;
     int          m_missedBeats{0};
-    bool         m_alarmRed{false};
     bool         m_blinkEnabled{true};  // persisted via AppSettings "HeartbeatBlinkEnabled"
     bool         m_discovering{false};  // solid amber while waiting for connection
     QString      m_throttleFlashColor; // empty = default green; set while adaptive throttle is active
@@ -196,10 +264,11 @@ protected:
     void mouseDoubleClickEvent(QMouseEvent* ev) override;
     bool eventFilter(QObject* obj, QEvent* ev) override;
     void showEvent(QShowEvent* ev) override;
+    void paintEvent(QPaintEvent* ev) override;
 
 private:
     void updateMaximizeIcon();
-    QString currentBeatColor() const;  // #20c060 or throttle color
+    QColor currentBeatColor() const;
 };
 
 } // namespace AetherSDR

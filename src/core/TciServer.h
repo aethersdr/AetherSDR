@@ -20,6 +20,7 @@
 #include <QJsonObject>
 #include <QList>
 #include <QMap>
+#include <QPair>
 #include <QSet>
 #include <QString>
 #include <QVector>
@@ -91,6 +92,10 @@ public:
     // local automation bridge's `tci routes` action.
     QJsonObject routingSnapshot() const;
 
+    // Owner-thread projection of the live native receive route. Valid while
+    // its revocation token is current, independently of listener state.
+    TciRxBinding sliceRxBinding(int sliceId) const;
+
     // (ownsDaxChannel() and the cross-consumer peeking it existed for were
     // replaced by per-consumer holds in PanadapterStream's centralized DAX
     // channel manager — see acquireDaxChannel/releaseDaxChannel. #3305)
@@ -161,6 +166,7 @@ public slots:
 
 signals:
     void clientCountChanged(int count);
+    void rxBindingsChanged();
     // Fired whenever the client list or any client's subscriptions change
     // (connect, disconnect, audio start/stop). The TCI tab repopulates on
     // this signal.
@@ -263,6 +269,10 @@ private:
     void onRadioTransmittingChanged(bool transmitting);
     void onRadioTransmitConfirmed(bool transmitting);
     void broadcastActualTxState(bool transmitting);
+    void handleTuneRequest(TciClient* client, const TciProtocol::TuneRequest& request);
+    void scheduleTuneBroadcast();
+    void broadcastTuneState();
+    void stopTciOwnedTune();
     void teardownTciRoute();
     QJsonObject txChronoStallSnapshot() const;
     ClientState* clientStateFor(TciClient* socket);
@@ -386,6 +396,9 @@ private:
     // released 500 ms after a genuine slice close (recreates reclaim their
     // number), cleared on disconnect. Injected into every TciProtocol.
     TciTrxMap m_trxMap;
+    // #6352: the newest removal per slice id. A close timer that finds a newer
+    // removal of the same id belongs to an earlier absence and stands down.
+    QHash<int, quint64> m_closeGeneration;
     struct PendingVfoBCreate
     {
         QPointer<TciClient> client;
@@ -477,6 +490,11 @@ private:
     OverflowMode      m_overflowMode{OverflowMode::Clip};
     float             m_rxChannelGain[8]{1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f};
     bool m_lastRadioTx { false };
+    bool m_lastTuneSent { false };   // tune state as last broadcast (#3327)
+    QPointer<TciClient> m_tuneClient;  // the TCI client whose request started the tune
+    int m_tuneClientTrx { 0 };
+    bool m_tuneBroadcastQueued { false };
+    QList<QPair<QPointer<TciClient>, int>> m_tuneRequesters;  // owed an answer
     float             m_cachedSLevel[8]{-130,-130,-130,-130,-130,-130,-130,-130};
     float             m_cachedFwdPower{0};
     float             m_cachedSwr{1.0f};

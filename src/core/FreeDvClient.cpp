@@ -184,7 +184,7 @@ void FreeDvClient::handleEngineIO(const QString& raw)
             auth["rx_only"]          = false;
 #if defined(Q_OS_WIN)
             auth["os"]               = QString("windows");
-#elif defined(Q_OS_MAC)
+#elif defined(Q_OS_MACOS)
             auth["os"]               = QString("macos");
 #else
             auth["os"]               = QString("linux");
@@ -462,6 +462,7 @@ void FreeDvClient::onRxReport(const QJsonObject& data)
     spot.spotterCall = receiverCall;
     spot.freqMhz     = freqMhz;
     spot.snr         = static_cast<int>(std::round(snr));
+    spot.hasSnr      = true;
     spot.source      = "FreeDV";
     spot.comment     = mode;
     if (!grid.isEmpty())

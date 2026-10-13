@@ -1,4 +1,5 @@
 #pragma once
+#include "core/backends/ModelControlRequest.h"
 
 #include <QObject>
 #include <QString>
@@ -8,6 +9,7 @@
 #include <QPointer>
 #include <array>
 
+#include "core/backends/NoiseBlankerKind.h"
 #include "core/backends/SliceDelta.h"
 #include "core/backends/ReceiveCommand.h"
 
@@ -104,7 +106,12 @@ public:
     QStringList txAntennaList() const { return m_txAntennaList; }
     bool    isLocked()    const { return m_locked; }
     bool    qskOn()       const { return m_qsk; }
-    bool    nbOn()        const { return m_nb; }
+    // WHETHER a blanker is running, for the many callers that only ask that:
+    // rigctl's NB, SmartCat's NB, TCI's rx_nb_enable, `get slice`, the MIDI
+    // mapping and the keyboard shortcut. nbKind() is WHICH one — see setNbKind().
+    bool    nbOn()        const { return m_nbKind != AetherSDR::NoiseBlankerKind::Off; }
+    AetherSDR::NoiseBlankerKind nbKind() const { return m_nbKind; }
+    AetherSDR::NoiseBlankerFill nbFill() const { return m_nbFill; }
     bool    nrOn()        const { return m_nr; }
     bool    anfOn()       const { return m_anf; }
     bool    nrlOn()       const { return m_nrl; }
@@ -163,6 +170,9 @@ public:
                                       : m_audioMute; }
     bool    flexAudioMute() const { return m_audioMute; }
     // Only inbound reports establish current-session truth; local setters do not.
+    bool automaticSquelch() const { return m_automaticSquelch; }
+    int automaticSquelchMarginDb() const { return m_automaticSquelchMarginDb; }
+    void setAutomaticSquelch(bool enabled, int marginDb);
     bool squelchStateKnown() const { return m_squelchOnKnown && m_squelchLevelKnown; }
     void invalidateSquelchState() { m_squelchOnKnown = false; m_squelchLevelKnown = false; }
     bool    squelchOn()   const { return m_squelchOn; }
@@ -175,6 +185,11 @@ public:
         return m_externalReceiveAutoSquelch;
     }
     int     squelchLevel()const { return m_squelchLevel; }
+    // Zero means not observed; never present a default as adopted DSP state.
+    int wfmDeemphasisUs() const { return m_wfmDeemphasisUs; }
+    bool wfmForceMono() const { return m_wfmForceMono; }
+    const WfmReceptionDiagnostics& wfmReceptionDiagnostics() const { return m_wfmReceptionDiagnostics; }
+    WfmStereoStatus wfmStereoStatus() const { return m_wfmStereoStatus; }
     int     flexSquelchLevel() const { return m_squelchLevel; }
     int     receiveSquelchLevel() const { return m_externalReceiveAudioReplacement
                                               ? m_externalReceiveSquelchLevel
@@ -291,7 +306,18 @@ public:
     bool isLockedFeedbackActive() const { return m_lockedFeedbackActive; }
     static constexpr int kLockedFeedbackMs = 500;
     void setQsk(bool on);
+    // The bool door, kept because most callers have only one: true means the
+    // FIRST blanker (Impulse), which is what every one of them meant before a
+    // second existed. A caller that wants NB2 uses setNbKind().
     void setNb(bool on);
+    // WHICH blanker. Off/Impulse/Advanced; Advanced is reachable only on a radio
+    // that runs the blanker on this host (RadioCapabilities::
+    // hasHostNoiseBlanker), because it is WDSP's second stage and a radio-side
+    // blanker has nothing to map it onto but its one blanker.
+    void setNbKind(AetherSDR::NoiseBlankerKind kind);
+    // What Advanced puts in the blanked window. Remembered while another kind
+    // runs, so switching to NB2 and back does not reset the operator's choice.
+    void setNbFill(AetherSDR::NoiseBlankerFill fill);
     void setNr(bool on);
     void setAnf(bool on);
     void setNrl(bool on);
@@ -312,9 +338,14 @@ public:
     void setAnflLevel(int v);
     void setMnLevel(int v);
     void setAgcMode(const QString& mode);
+    // A stored AGC mode replayed by a bookmark recall; the backend decides
+    // whether it overrides the mode's own AGC default.
+    void recallAgcMode(const QString& mode);
     void setAgcThreshold(int value);
     void setAgcOffLevel(int value);
     void setSquelch(bool on, int level);
+    void setWfmDeemphasis(int microseconds);
+    void setWfmForceMono(bool forceMono);
     // For genuine operator-driven manual squelch input only (a VFO flag's
     // own SQL controls, a controller-mapped squelch knob) — setSquelch()
     // plus recording the level as the operator's manual choice, in one
@@ -417,17 +448,16 @@ signals:
     void receiveSquelchRequested(const AetherSDR::SliceSquelchRequest& request);
     void receiveRxAntennaRequested(const QString& antenna);
     void receiveLockRequested(bool locked);
+    void controlRequested(const AetherSDR::SliceControlRequest& request);
 
-    // Receive and transmit incremental tuning.
+    // Compatibility intent signals for test observers; production backend
+    // dispatch uses controlRequested. Radio observations never emit these.
     void ritCommandIssued(bool on, int hz);
     void xitCommandIssued(bool on, int hz);
-    // Operator asked for THIS slice to own transmit. A radio with one
-    // transmitter and several receivers has to move it rather than set a flag.
+    // Test notification that the operator asked for this slice to own TX.
     void txSliceCommandIssued();
-    // Operator selected THIS slice as the one the shared controls act on.
-    // Separate from activeChanged, which also fires when radio status is
-    // applied — driving a command off that would echo the radio's own state
-    // back as a request (Principle II).
+    // Test notification of operator selection, separate from activeChanged,
+    // which also fires for radio observations.
     void activeSliceCommandIssued();
     void panIdChanged(const QString& panId);
     void modeChanged(const QString& mode);
@@ -453,7 +483,12 @@ signals:
     void tuneBlockedByLock();
     void lockedFeedbackActiveChanged(bool active);
     void qskChanged(bool on);
+    // Stays a bool: every consumer of it (TCI's rx_nb_enable broadcast, the
+    // VFO button's checked state) asks whether a blanker is on. nbKindChanged
+    // follows for the one that also needs to know which.
     void nbChanged(bool on);
+    void nbKindChanged(AetherSDR::NoiseBlankerKind kind);
+    void nbFillChanged(AetherSDR::NoiseBlankerFill fill);
     void nrChanged(bool on);
     void anfChanged(bool on);
     void nrlChanged(bool on);
@@ -486,7 +521,14 @@ signals:
     void externalReceiveAgcThresholdChanged(int value);
     void externalReceiveAgcOffLevelChanged(int value);
     void externalReceiveAutoSquelchChanged(bool on);
+    void externalReceiveReplacementChanged(bool active);
     void squelchChanged(bool on, int level);
+    void wfmDeemphasisChanged(int microseconds);
+    void wfmForceMonoChanged(bool forceMono);
+    void wfmForceMonoRequested(bool forceMono);
+    void wfmReceptionDiagnosticsChanged(const AetherSDR::WfmReceptionDiagnostics& diagnostics);
+    void wfmStereoStatusChanged(AetherSDR::WfmStereoStatus status);
+    void wfmDeemphasisRequested(int microseconds);
     void externalReceiveSquelchChanged(bool on, int level);
     void stepChanged(int hz, const QVector<int>& stepList);
     void ritChanged(bool on, int hz);
@@ -519,7 +561,8 @@ signals:
     void recordOnChanged(bool on);
     void playOnChanged(bool on);
     void playEnabledChanged(bool enabled);
-    void commandReady(const QString& cmd);  // ready to send to radio
+    // Legacy no-raw-command regression probe; no setter emits this signal.
+    void commandReady(const QString& cmd);
     // Mode dispatch precedes polarity normalization so synchronous backend
     // defaults win. RadioModel routes it through IRadioBackend::setSliceMode.
     void modeChangeRequested(const QString& mode);
@@ -535,6 +578,18 @@ public:
     static bool filterCarrierStraddlingFamily(const QString& mode);
 
 private:
+    auto captureControlIntent(SliceControlRequest::Field field)
+    {
+        const QPointer<SliceModel> alive(this);
+        const quint64 revision = ++m_controlIntentRevisions[static_cast<size_t>(field)];
+        return [alive, field, revision] {
+            return alive && alive->m_controlIntentRevisions[static_cast<size_t>(field)] == revision;
+        };
+    }
+    void invalidateControlIntents()
+    {
+        for (quint64& revision : m_controlIntentRevisions) { ++revision; }
+    }
     friend class RadioModel;
     bool refuseOffThread(const char* setter) const;
     void setControlPolicy(ReceiveControlPolicy policy) { m_controlPolicy = policy; }
@@ -549,7 +604,7 @@ private:
     quint64 m_agcModeIntentRevision{0};
     quint64 m_agcThresholdIntentRevision{0};
     quint64 m_agcOffLevelIntentRevision{0};
-    std::array<std::array<quint64, 2>,
+    std::array<std::array<quint64, 3>,
         static_cast<std::size_t>(SliceDspRequest::Feature::Anft) + 1> m_dspIntentRevisions{};
     std::array<quint64, 3> m_audioIntentRevisions{};
     quint64 m_squelchIntentRevision{0};
@@ -557,6 +612,7 @@ private:
     bool m_squelchLevelIntentPending{false};
     quint64 m_rxAntennaIntentRevision{0};
     quint64 m_lockIntentRevision{0};
+    std::array<quint64, static_cast<size_t>(SliceControlRequest::Field::Count)> m_controlIntentRevisions{};
     template<class Notify, class Dispatch>
     void publishReceiveIntent(quint64& epoch, Notify notify, Dispatch dispatch)
     {
@@ -581,6 +637,7 @@ private:
         });
     }
     void notifyReceiveFilterIntent(SliceFilterRequest::Origin origin);
+    void applyAgcMode(const QString& mode, SliceAgcRequest::Origin origin);
     // Sign-guarded, idempotent (lo,hi)→(-hi,-lo) mirror of the stored filter
     // when its polarity is wrong for m_mode; true if it changed anything.
     bool normalizeFilterPolarity();
@@ -644,7 +701,8 @@ private:
     bool    m_escEnabled{false};
     float   m_escGain{1.0f};
     float   m_escPhaseShift{0.0f};
-    bool    m_nb{false};
+    AetherSDR::NoiseBlankerKind m_nbKind{AetherSDR::NoiseBlankerKind::Off};
+    AetherSDR::NoiseBlankerFill m_nbFill{AetherSDR::kDefaultNoiseBlankerFill};
     bool    m_nr{false};
     bool    m_anf{false};
     bool    m_nrl{false};
@@ -669,10 +727,16 @@ private:
     QString m_agcMode{"med"};
     int     m_agcThreshold{65};
     int     m_agcOffLevel{10};
+    bool m_automaticSquelch{false};
+    int m_automaticSquelchMarginDb{10};
     bool m_squelchOnKnown{false};
     bool m_squelchLevelKnown{false};
     bool    m_squelchOn{false};
     int     m_squelchLevel{20};
+    int m_wfmDeemphasisUs{0};
+    bool m_wfmForceMono{false};
+    WfmReceptionDiagnostics m_wfmReceptionDiagnostics;
+    WfmStereoStatus m_wfmStereoStatus{WfmStereoStatus::Unavailable};
     int     m_manualSquelchLevel{20};
     bool    m_squelchEchoIsManual{true};
     int     m_stepHz{100};
@@ -727,7 +791,6 @@ private:
 
     void setLockedFeedbackActive(bool on);
 
-    void sendCommand(const QString& cmd);
 
     QStringList m_pendingCommands;
 };

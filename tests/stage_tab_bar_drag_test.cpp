@@ -67,7 +67,7 @@ bool deliverDrop(StageTabBar& bar, const QString& mime, int payload)
     data.setData(mime, QByteArray::number(payload));
 
     const QPoint pos(bar.width() / 2, bar.height() - 10);
-    QDragEnterEvent enter(pos, Qt::MoveAction, &data,
+    QDragEnterEvent enter(QPointF(pos), Qt::MoveAction, &data,
                           Qt::LeftButton, Qt::NoModifier);
     QApplication::sendEvent(&bar, &enter);
 

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "RadioTabBar.h"
 #include "DeferredSettingsWrites.h"
 #include "TxAudioPathPolicy.h"
 
@@ -19,6 +20,7 @@
 #include "models/AntennaGeniusModel.h"
 #include "models/SliceLinkPolicy.h"
 #include "core/AppSettings.h"
+#include "core/FirmwareCurrency.h"
 #include "core/AetherDspModePolicy.h"
 #include "core/KiwiSdrTxMutePolicy.h"  // optimistic-unkey Kiwi mute latch
 #include "core/RadioMessageTypes.h"   // MessageSeverity for onRadioMessage slot
@@ -89,6 +91,7 @@
 #include "core/LpMeterConnection.h"
 #include "core/SpeConnection.h"
 #include "core/VkampConnection.h"
+#include "core/Kpa1500Connection.h"
 #include "core/DxccColorProvider.h"
 
 #include <QMainWindow>
@@ -130,9 +133,9 @@ class AetherClockApplet;
 class AetherClockEngine;
 class AetherClockModel;
 class AutomationServer;
+class CanonWindow;
 class ConnectionPanel;
 class Ctr2ProxyModel;
-class ContributeDialog;
 class TitleBar;
 class KiwiSdrManager;
 struct KiwiSdrAntennaProfile;
@@ -176,6 +179,7 @@ class MqttSettingsDialog;
 class WaveformsDialog;
 class DxClusterDialog;
 class CallsignLookupDialog;
+class LiveCwContactsDialog;
 class Ax25HfPacketDecodeDialog;
 class PskReporterMapDialog;
 class GpsLocationDialog;
@@ -192,7 +196,7 @@ class UlanziDialMapperDialog;
 class EvdevEncoderManager;
 #elif defined(Q_OS_WIN) && defined(HAVE_HIDAPI)
 class UlanziDialWindowsManager;
-#elif defined(Q_OS_MAC)
+#elif defined(Q_OS_MACOS)
 class UlanziDialMacOSManager;
 #else
 class UlanziDialBackend;
@@ -202,7 +206,7 @@ class DvkPanel;
 #ifdef HAVE_RADE
 class RADEEngine;
 #endif
-#if defined(Q_OS_MAC)
+#if defined(Q_OS_MACOS)
 class VirtualAudioBridge;
 using DaxBridge = VirtualAudioBridge;
 #elif defined(HAVE_PIPEWIRE)
@@ -298,6 +302,16 @@ public:
     QJsonObject automationKiwiSdrSnapshot() const;
     // Status-bar TX-timer state for the bridge `get txtimer` verb.
     QJsonObject automationTxTimerSnapshot() const;
+    // Unified-title-bar introspection + drive-the-real-control actions for the
+    // agent automation bridge (`titlebar` model / `titlebar` verb).
+    QJsonObject automationAppletPanelSnapshot() const;
+    // Validate synchronously; on success *activate holds the change for the
+    // bridge to run on a clean main-loop turn (see AutomationServer).
+    bool automationAppletPanelAction(const QString& action, const QString& value,
+                                     QString* error, std::function<void()>* activate);
+    QJsonObject automationTitleBarSnapshot() const;
+    bool automationTitleBarAction(const QString& action, const QString& target,
+                                  QString* error, std::function<void()>* activate);
 
     // Agent automation bridge (#3646) lifecycle. Construction + full
     // handler wiring lives in startAutomationBridge() so it can be driven
@@ -336,6 +350,25 @@ signals:
 
 protected:
     void showEvent(QShowEvent* event) override;
+#ifdef Q_OS_WIN
+    // Restore WS_MINIMIZEBOX / WS_MAXIMIZEBOX on the HWND under the expanded
+    // client area, where WindowChrome drops Qt's caption-button hints.
+    void applyWindowsCaptionStyles();
+    // The HWND's client rect in physical pixels, read and set through Windows
+    // rather than Qt's frame margins, which are wrong under the expanded
+    // client area (#6303).
+    QRect nativeClientRect() const;
+    void setNativeClientRect(const QRect& client);
+    // Per window role ("main", "fullMode", "minimalMode") through the
+    // WindowChrome::kNativeGeometryKey document; only in the normal state
+    // under the expanded client area, the only place Qt's margins are wrong.
+    bool nativeClientRectRestorable() const;
+    void saveNativeClientRect(const QString& role);
+    void restoreNativeClientRect(const QString& role);
+    // Windows 11: colour the DWM window border to color.background.app.
+    void applyWindowsFrameColor();
+    bool nativeEvent(const QByteArray& eventType, void* message, qintptr* result) override;
+#endif
     void closeEvent(QCloseEvent* event) override;
     void changeEvent(QEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
@@ -343,10 +376,6 @@ protected:
     void keyPressEvent(QKeyEvent* event) override;
     void keyReleaseEvent(QKeyEvent* event) override;
     bool eventFilter(QObject* obj, QEvent* event) override;
-#if defined(Q_OS_WIN)
-    bool nativeEvent(const QByteArray& eventType, void* message, qintptr* result) override;
-    void applyWindowsCustomFrame();
-#endif
 
 private slots:
     // Radio/connection events
@@ -376,6 +405,10 @@ private slots:
     // See issue #1764.
     void applyMasterVolume(int pct);
     void syncTitleBarOutput();
+
+    // A deliberate operator step change from the STEP buttons or the cycle
+    // shortcuts. Radio-driven syncs must not come here; see the connect site.
+    void applyOperatorTuningStep(int stepHz);
 
 private:
     enum class TuneIntent {
@@ -419,10 +452,15 @@ private:
     void handleAudioDeviceListChanged();
     void applyAudioDeviceSelection(const QAudioDevice& inputDevice,
                                    const QAudioDevice& outputDevice,
+                                   AudioDeviceSelection inputSelection,
+                                   AudioDeviceSelection outputSelection,
                                    bool reinitializePcInput);
     void resetMissingAudioDevicesToDefault(bool resetInput,
                                            bool resetOutput,
                                            bool reinitializePcInput);
+    void restorePreferredAudioDevices(const QAudioDevice& inputDevice,
+                                      const QAudioDevice& outputDevice,
+                                      bool reinitializePcInput);
     SliceModel* activeSlice() const;
 
     // Push the connected backend's reported tuning range into one overlay
@@ -523,6 +561,7 @@ private:
     void centerActiveSliceInPanadapter(bool forceRadioCenter, double centerMhz = -1.0);
     void pushSliceOverlay(SliceModel* s);
     bool reattachSliceVisualsToPanadapter(SliceModel* s);
+    void refreshPanSliceTitle(PanadapterApplet* applet);
     void syncTxWaterfallSliceToSpectrums();
     // #5750: on a radio whose span is one register for the whole board, keep
     // the -/+ span pair live on ONE pane (the TX slice's, else the first
@@ -596,6 +635,12 @@ private:
     void wirePanLifecycle();
     void wireCatPorts();            // MainWindow_Session.cpp
     void wireDaxIq();               // MainWindow_Session.cpp
+    // Push the current radio picture (discovered LAN + SmartLink radios, which
+    // one this client owns) into the title bar's radio tabs.  Coalesced onto
+    // the event loop: discovery re-announces every radio every 5 s and each
+    // announcement would otherwise rebuild the strip.
+    void scheduleRadioTabRefresh();      // MainWindow_Session.cpp
+    void refreshRadioTabs();             // MainWindow_Session.cpp
     // Re-establish the connections bound to the backend's PanadapterStream after
     // RadioModel swapped backends for a different radio family.
     void rewirePanStreamAfterBackendSwap();   // MainWindow_Session.cpp
@@ -818,7 +863,18 @@ private:
     // same commands the live sliders send). Returns how many pans were written.
     int cloneDisplaySettingsToAllPans(PanadapterApplet* source);
     AetherSDR::DeferredSettingsWrites m_pendingDisplayWrites;
+    // The waterfall rate, only where the backend declares the client the owner.
+    bool clientPersistsWaterfallRate() const;
     void scheduleClientWaterfallRateSave(int panIndex, int rate);
+    // FFT FPS and the dBm scale, which a Flex stores for a pan and a radio
+    // with no display engine does not. Same store and deferral as the
+    // waterfall rate, only where the backend declares the client the owner.
+    bool clientPersistsFftFps() const;
+    void scheduleClientFftFpsSave(int panIndex, int fps);
+    bool clientOwnsPanDbmRange() const;
+    void adoptClientOwnedDbmRange(const QString& panId, int panIndex,
+                                  float minDbm, float maxDbm);
+    void restoreClientOwnedDbmRange(PanadapterModel* pan, int panIndex);
     void scheduleClientFftAverageSave(int panIndex, int average, bool weighted);
     void wirePanDisplayStatus(PanadapterApplet* applet, PanadapterModel* pan);
     void reassertUnmutedSliceAudioForPan(const QString& panId);
@@ -840,10 +896,12 @@ private:
     void refreshCwInputStatus();
     void stopCwRx();
     // QRZ callsign lookup (MainWindow_Callsign.cpp): CW-spotter → lookup
-    // service → contact card on the CW decode panel + lookup dialog.
+    // service → opt-in live contacts window + manual lookup dialog.
     void wireCallsignLookup();
     void onCwCallsignSpotted(const QString& call);
     void showCallsignLookupDialog(const QString& call = QString());
+    void setLiveCwContactsVisible(bool visible);
+    void clearLiveCwContact();
     void showGpsLocationDialog();
     void routeRttyDecoderOutput();
     void refreshRttyDecodeState();
@@ -863,12 +921,6 @@ private:
     void applyUiScale(int pct);
     void stepUiScale(int direction);  // +1 = zoom in, -1 = zoom out
     void reapplyStartupGeometryAfterShow();
-    // Undo Qt's caption-reserving restore clamp for the Windows custom frame,
-    // which has no caption to reserve for.  Call after every successful
-    // restoreGeometry() on this window, passing the same blob; a no-op off
-    // Windows, without the custom frame, or for a maximized/fullscreen blob.
-    // (#4328 — see src/gui/WindowGeometryRestore.h.)
-    void reanchorCustomFrameGeometry(const QByteArray& geometryBlob);
     void toggleMinimalModeFromAction();
     void toggleMinimalMode(bool on);
     // Toggle the Aetherial Audio Channel Strip — unified TX DSP window.
@@ -879,6 +931,10 @@ private:
     // keyer panels mutually exclusive and restore the splitter identically.
     void toggleCwKeyerPanel();
     void toggleVoiceKeyerPanel();
+    // Status-bar indicators are click-handled labels and containers; a mouse
+    // press (eventFilter) and the keyboard (StatusIndicator) share one action.
+    bool isStatusIndicator(const QObject* obj) const;
+    void activateStatusIndicator(QObject* obj);
     // Shared by the status-bar +PAN affordance and Tools ▸ Add Panadapter… so
     // both route through PanLayoutDialog and the layout machinery.
     void showAddPanadapterDialog();
@@ -979,6 +1035,19 @@ private:
     // its own Qt::Window.  Persists "AppletPanelFloating" and updates the
     // title-bar pop-out icon highlight.
     void toggleAppletPanelFloating(bool floating);
+
+    // The one entry point for applet-panel layout changes.  Floating, dock
+    // side and visibility are three fields of ONE state; the three title-bar
+    // controls, Ctrl+Shift+S and the bridge all express a complete desired
+    // state here rather than each toggling a field of their own.  Routing
+    // them separately is what let the fields disagree — a dock-side click
+    // while floating used to dock the panel and then immediately hide it,
+    // stranding an invisible panel that took two more clicks to recover.
+    void applyAppletPanelState(bool floating, bool dockedLeft, bool visible);
+
+    // Current applet-panel state, read off the real widgets rather than the
+    // settings store so a caller sees what is actually on screen.
+    void appletPanelState(bool* floating, bool* dockedLeft, bool* visible) const;
 
     void showMemoryDialog();
     void showQuickAddMemoryDialog(const QString& preferredPanId = {});
@@ -1248,12 +1317,14 @@ private:
     LpMeterConnection m_lpMeterConn;    // TelePost LP-100A wattmeter, serial or ser2net
     SpeConnection     m_speConn;         // SPE Expert amplifier, serial or ser2net
     VkampConnection   m_vkampConn;       // VK3AMP amplifier, TCP control/status + UDP telemetry
+    Kpa1500Connection m_kpa1500Conn;     // Elecraft KPA1500 amplifier, TCP control/status on port 1500 (#4097)
     BandPlanManager*  m_bandPlanMgr{nullptr};
 #ifdef HAVE_DEEPFIST
     void selectCwRxBackend(const QString& backend);
     void cwRxModelAction();
     void refreshCwRxStatus();
     void appendUnscoredCwText(const QString& text);
+    void appendColoredCwText(const QString& text, float cost);
     void refreshCwRxBackend();
 #endif
     CwRxModel         m_cwDecoder;
@@ -1458,7 +1529,7 @@ private:
     EvdevEncoderManager*       m_dialBackend{nullptr};
 #elif defined(Q_OS_WIN) && defined(HAVE_HIDAPI)
     UlanziDialWindowsManager*  m_dialBackend{nullptr};
-#elif defined(Q_OS_MAC)
+#elif defined(Q_OS_MACOS)
     UlanziDialMacOSManager*    m_dialBackend{nullptr};
 #else
     UlanziDialBackend*         m_dialBackend{nullptr};
@@ -1597,6 +1668,9 @@ private:
     // Modeless dialogs
     QPointer<DxClusterDialog> m_spotHubDialog;
     QPointer<CallsignLookupDialog> m_callsignLookupDialog;
+    QPointer<LiveCwContactsDialog> m_liveCwContactsDialog;
+    QAction* m_liveCwContactsAction{nullptr};
+    QString m_lastCwContactCall;
     QPointer<RadioSetupDialog> m_radioSetupDialog;
     QPointer<NetworkDiagnosticsDialog> m_networkDiagnosticsDialog;
     QPointer<SystemInfoDialog> m_systemInfoDialog;
@@ -1622,9 +1696,13 @@ private:
     QPointer<GpsLocationDialog> m_gpsLocationDialog;
     QPointer<FlexControlDialog> m_flexControlDialog;
     QPointer<WhatsNewDialog> m_whatsNewDialog;
-    QPointer<ContributeDialog> m_contributeDialog;
+    QPointer<CanonWindow> m_aboutWindow;
     QPointer<AetherRxDialog> m_rxDialog;
     QPointer<QDialog> m_nr2WisdomDialog;
+    // The running NR2 wisdom worker and its cancel flag, so shutdown can stop
+    // it before AudioEngine teardown needs the FFTW planner lock (#6287).
+    QPointer<QThread> m_nr2WisdomThread;
+    std::shared_ptr<std::atomic_bool> m_nr2WisdomCancel;
 #ifdef HAVE_MQTT
     QPointer<MqttSettingsDialog> m_mqttSettingsDialog;
 #endif
@@ -1713,7 +1791,20 @@ private:
     // capabilitiesChanged while the model and version arrive on infoChanged,
     // and every one of those edges has to repaint the same three labels.
     QString m_radioManufacturer;
+    // Verdict last painted onto m_radioVersionLabel. Cached so the click
+    // handler does not have to re-derive it: the label is only a link to the
+    // release notes while it is actually showing an out-of-date firmware, and
+    // the handler must agree with what the operator can see.
+    AetherSDR::FirmwareCurrency::Status m_radioFirmwareCurrency{
+        AetherSDR::FirmwareCurrency::Status::Unknown};
     void refreshRadioIdentityLabels();
+    // Recomputes m_radioFirmwareCurrency and repaints the version row from it.
+    // Called only by refreshRadioIdentityLabels(), which owns the whole
+    // identity stack. Lives in MainWindow_Session.cpp.
+    void applyFirmwareCurrencyToVersionLabel();
+    // The version row's StatusIndicator action: opens the release notes of the
+    // radio's own line while the firmware is out of date, otherwise nothing.
+    void openFirmwareReleaseNotes();
     QLabel* m_stationLabel{nullptr};
     QLabel* m_stationNickLabel{nullptr};
     QLabel* m_automationChip{nullptr};    // shown only under AETHER_AUTOMATION (#3646)
@@ -1725,6 +1816,13 @@ private:
     QTimer* m_cpuTimer{nullptr};
     QLabel* m_paTempLabel{nullptr};
     QLabel* m_supplyVoltLabel{nullptr};
+    // The container holding the two labels above. Held so the whole stack can
+    // come down when BOTH its rows are withdrawn: reserveTelemetryStack() pins
+    // its minimum width, so hiding only the children would leave a reserved
+    // empty gap between two separators. The separator after it hides with it,
+    // or the two would sit back to back.
+    QWidget* m_paStack{nullptr};
+    QLabel*  m_paSeparator{nullptr};
     QLabel* m_networkLabel{nullptr};
     QTimer m_networkTooltipRefreshTimer;
     QTimer m_perfHeartbeatTimer;
@@ -1823,6 +1921,18 @@ private:
     // forever.
     QString m_autoConnectSerial;                 // an auto-connect is in flight for this serial
     QHash<QString, int> m_autoConnectAttempts;   // consecutive failed auto-connects, per serial
+    // Title-bar radio tabs.  The refresh is coalesced through this flag rather
+    // than a timer object so the pending state is visible to the automation
+    // bridge's own state dump.
+    bool m_radioTabRefreshPending{false};
+    // Last SmartLink radio list, cached because the title bar has to redraw the
+    // tabs on LAN discovery events too and SmartLink only pushes on change.
+    QList<WanRadioInfo> m_smartLinkRadios;
+    // The last session's radio, as its tab read while connected.  It keeps a
+    // visible tab after an unexpected drop, so the "Link lost" alarm always has
+    // somewhere to show; cleared when the operator disconnects on purpose or
+    // removes that tab.
+    RadioTabEntry m_lastSessionTab;
     static constexpr int kMaxAutoConnectAttempts = 3;
     QDialog* m_reconnectDlg{nullptr}; // shown on unexpected disconnect, dismissed on reconnect
     QString m_terminalConnectionError; // preserved until the next explicit connect
@@ -1871,6 +1981,7 @@ private:
     class ClientTubeEditor* m_clientTubeEditor{nullptr}; // lazy — created on first Edit… click
     class ClientPuduEditor* m_clientPuduEditor{nullptr}; // lazy — created on first Edit… click
     class AetherialAudioStrip* m_aetherialStrip{nullptr};    // lazy — created on first egg-nub click (#2301)
+    bool m_restoreAetherialStripOnShow{false};   // reopen AetherTX on first show
 
     // Applet-panel pop-out support (#1713 Phase 6).  When floating,
     // the panel lives inside m_appletPanelFloatWindow and its splitter
@@ -2150,7 +2261,7 @@ private:
     // mode change) toggled it.
     void reflectWfmButtons(bool on, int sliceId);
 
-#if defined(Q_OS_MAC) || defined(HAVE_PIPEWIRE)
+#if defined(Q_OS_MACOS) || defined(HAVE_PIPEWIRE)
     DaxBridge* m_daxBridge{nullptr};
     QString m_savedMicSelection;  // restore on stopDax
     bool startDax();

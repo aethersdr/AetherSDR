@@ -33,36 +33,18 @@ constexpr int kDefaultWidth  = 720;
 constexpr int kDefaultHeight = 360;
 
 constexpr const char* kWindowStyle =
-    "QWidget { background: #08121d; color: #d7e7f2; }"
-    "QLabel  { background: transparent; color: #8aa8c0; font-size: 11px; }";
-
-const QString kBypassStyle = QStringLiteral(
-    "QPushButton {"
-    "  background: #0e1b28;"
-    "  color: #8aa8c0;"
-    "  border: 1px solid #243a4e;"
-    "  border-radius: 3px;"
-    "  font-size: 11px;"
-    "  font-weight: bold;"
-    "  padding: 3px 12px;"
-    "}"
-    "QPushButton:hover { background: #1a2a3a; }"
-    "QPushButton:checked {"
-    "  background: #3a2a0e;"
-    "  color: #f2c14e;"
-    "  border: 1px solid #f2c14e;"
-    "}"
-    "QPushButton:checked:hover { background: #4a3a1e; }");
+    "QWidget { background: {{color.background.0}}; color: {{color.text.primary}}; }"
+    "QLabel  { background: transparent; color: {{color.text.secondary}}; font-size: 11px; }";
 
 const QString kModelStyle = QStringLiteral(
     "QPushButton {"
-    "  background: #1a2a3a; border: 1px solid #2a4458; border-radius: 3px;"
-    "  color: #8aa8c0; font-size: 11px; font-weight: bold;"
+    "  background: {{color.background.1}}; border: 1px solid {{color.border.strong}}; border-radius: 3px;"
+    "  color: {{color.text.secondary}}; font-size: 11px; font-weight: bold;"
     "  padding: 3px 10px; min-width: 26px;"
     "}"
-    "QPushButton:hover { background: #24384e; }"
+    "QPushButton:hover { background: {{color.background.2}}; }"
     "QPushButton:checked {"
-    "  background: #3a2a0e; color: #f2c14e; border: 1px solid #f2c14e;"
+    "  background: {{color.background.tx}}; color: {{color.meter.gainReduction}}; border: 1px solid {{color.meter.gainReduction}};"
     "}");
 
 } // namespace
@@ -72,7 +54,7 @@ StripTubePanel::StripTubePanel(AudioEngine* engine, QWidget* parent)
     , m_audio(engine)
 {
     setWindowTitle("Aetherial Dynamic Tube Pre-Amp");
-    setStyleSheet(kWindowStyle);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(this, kWindowStyle);
     resize(kDefaultWidth, kDefaultHeight);
 
     auto* root = new QVBoxLayout(this);
@@ -109,7 +91,7 @@ StripTubePanel::StripTubePanel(AudioEngine* engine, QWidget* parent)
             auto* btn = new QPushButton(label);
             btn->setObjectName(QStringLiteral("tubeModel") + label);
             btn->setCheckable(true);
-            btn->setStyleSheet(kModelStyle);
+            AetherSDR::ThemeManager::instance().applyStyleSheet(btn, kModelStyle);
             btn->setFixedHeight(22);
             m_modelGroup->addButton(btn, idx);
             toolbar->addWidget(btn);

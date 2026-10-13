@@ -5,6 +5,17 @@ device format remains independent: `m_rxProducerRate` describes main input;
 `m_rxOutputRate` describes device output. `DEFAULT_SAMPLE_RATE` stays 24000.
 Legacy byte input and every Kiwi auxiliary route retain 24 kHz stereo.
 
+An accepted 48 kHz main producer asks the running RX speaker to prefer 48 kHz,
+then 44.1 kHz, then 24 kHz through the consolidated `PreservePan` ladder. The
+actual device rate remains separately reported; a 24 kHz fallback cannot retain
+15 kHz audio. Default 24 kHz producer policy and the input/sidetone ladders are
+unchanged. Requests are coalesced on the existing owner thread and checked
+against the current producer lease and sink generation before opening. A
+stopped speaker stays stopped. A brief retirement gap or same-rate replacement
+retains the sink, including an already-negotiated fallback; real replacement
+24 kHz PCM restores the legacy policy. Only the RX speaker reopens, preserving
+the dedicated CW/Quindar sinks and producer-domain queues and processing state.
+
 ## Queues and processing
 
 Raw queues and whole NR2 packets count time in their producer domain. Each
@@ -70,10 +81,10 @@ fixed-rate contracts. RADE output converts from 24 kHz to the device rate,
 independently of the main producer. TX admission, cancellation and deferred
 release continue through the inherited #5591 coordinator and wiring.
 
-The new RTL 48 kHz producer and multi-receiver runtime remain disabled.
-Recording/container changes (A3), TCI conversion (A4), and decoder/clock
-conversion (A5) remain separate; accepting test-injected speaker48 PCM does
-not qualify those consumers for a live 48 kHz producer.
+The single-receiver RTL WFM candidate now produces native 48 kHz stereo; its
+scope and qualification limits are documented in [rtl-wfm.md](rtl-wfm.md).
+Multi-receiver admission remains disabled. Recording/container, TCI and
+decoder/clock consumers keep their separately defined conversion contracts.
 
 ## Software evidence
 

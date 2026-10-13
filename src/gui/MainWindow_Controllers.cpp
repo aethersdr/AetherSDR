@@ -22,6 +22,7 @@
 #include "core/UlanziDialMappings.h"
 #include "AppletPanel.h"
 #include "core/IambicKeyer.h"
+#include "PanadapterApplet.h"
 #include "PanadapterStack.h"
 #include "RC28MappingDialog.h"
 #include "RadioSetupDialog.h"
@@ -32,6 +33,7 @@
 #include "TitleBar.h"
 #include "models/SliceModel.h"
 #include "Ctr2ProxyApplet.h"
+#include "Ctr2AudioSpectrumFeeder.h"
 #include "models/Ctr2ProxyModel.h"
 
 #include <QHostAddress>
@@ -560,13 +562,13 @@ void MainWindow::handleFlexControlButton(int button, int action,
         }
     } else if (actionName == "VolumeUp") {
         // Route to master volume to match SmartSDR behavior (#2921).
-        const int current = AppSettings::instance().value("MasterVolume", "100").toInt();
+        const int current = m_radioModel.activeOutputVolumePercent();
         const int next = std::clamp(current + 5, 0, 100);
         if (m_titleBar)
             m_titleBar->setMasterVolume(next);
         applyMasterVolume(next);
     } else if (actionName == "VolumeDown") {
-        const int current = AppSettings::instance().value("MasterVolume", "100").toInt();
+        const int current = m_radioModel.activeOutputVolumePercent();
         const int next = std::clamp(current - 5, 0, 100);
         if (m_titleBar)
             m_titleBar->setMasterVolume(next);
@@ -1103,12 +1105,12 @@ void MainWindow::dispatchHidAction(const QString& actionName,
         }
     } else if (actionName == "VolumeUp") {
         const int next = std::clamp(
-            AppSettings::instance().value("MasterVolume","100").toInt() + 5, 0, 100);
+            m_radioModel.activeOutputVolumePercent() + 5, 0, 100);
         if (m_titleBar) m_titleBar->setMasterVolume(next);
         applyMasterVolume(next);
     } else if (actionName == "VolumeDown") {
         const int next = std::clamp(
-            AppSettings::instance().value("MasterVolume","100").toInt() - 5, 0, 100);
+            m_radioModel.activeOutputVolumePercent() - 5, 0, 100);
         if (m_titleBar) m_titleBar->setMasterVolume(next);
         applyMasterVolume(next);
     } else if (actionName == "SplitMonitorTx") {
@@ -1520,7 +1522,7 @@ void MainWindow::applyFlexControlWheelAction(const QString& actionId, int steps)
         // "WheelMasterAf" is the legacy action name from #2888; accepted
         // here for back-compat with saved FlexControl bindings made
         // before the #2986 consolidation but routes to the same code path.
-        const int current = AppSettings::instance().value("MasterVolume", "100").toInt();
+        const int current = m_radioModel.activeOutputVolumePercent();
         const int next = std::clamp(current + steps * 2, 0, 100);
         if (m_titleBar)
             m_titleBar->setMasterVolume(next);
@@ -2331,7 +2333,7 @@ void MainWindow::registerMidiParams()
                                             m_radioModel.hasCommandPlane(),
                                             pcAudioEnabledSetting())) {
                 return std::clamp(
-                    AppSettings::instance().value("MasterVolume", "100").toInt(), 0, 100);
+                    m_radioModel.activeOutputVolumePercent(), 0, 100);
             }
             return m_radioModel.lineoutGain();
         });
@@ -2362,6 +2364,37 @@ void MainWindow::registerMidiParams()
         [this](float v) { m_radioModel.setTransmit(v > 0.5f); },
         [this]() -> float { return m_radioModel.transmitModel().isTransmitting() ? 1 : 0; });
 
+#ifdef HAVE_RADE
+    // RADE is a modem switched on a DIGU/DIGL slice, not a radio mode, so it
+    // has no place in the mode triggers below (#6024). This calls the same
+    // activateRADE()/deactivateRADE() the dropdown's RADE entry reaches, scoped
+    // to the active slice: a press there while RADE runs on another slice moves
+    // it (activateRADE() tears the old one down first) instead of stopping RADE
+    // on a slice the operator is not looking at.
+    reg("global.rade", "RADE Modem", "Global", P::Toggle, 0, 1,
+        [this](float v) {
+            auto* s = activeSlice();
+            if (!s) { return; }
+            if (v > 0.5f) {
+                // Same pre-check as the FreeDV Reporter path: without DAX audio
+                // activateRADE() declines with a modal, which a controller
+                // press must not raise.
+                if (!m_radioModel.panStream()) {
+                    qCWarning(lcRade) << "global.rade ignored: RADE needs DAX audio,"
+                                      << "which this radio does not provide";
+                    return;
+                }
+                activateRADE(s->sliceId());
+            } else if (s->sliceId() == m_radeSliceId) {
+                deactivateRADE();
+            }
+        },
+        [this]() -> float {
+            const auto* s = activeSlice();
+            return (s && s->sliceId() == m_radeSliceId) ? 1 : 0;
+        });
+#endif
+
     // Through the model, not sendCommand: the raw string only ever reached a
     // Flex, so this MIDI binding silently did nothing on any other radio.
     reg("global.tnfEnable", "TNF Global", "Global", P::Toggle, 0, 1,
@@ -2378,9 +2411,7 @@ void MainWindow::registerMidiParams()
     };
 
     // ── Mode triggers (mirror Mode/* keyboard shortcuts) ───────────────
-    const QStringList modes = filterUnavailableDigitalVoiceModes(
-        {"USB", "LSB", "CW", "CWL", "AM", "SAM", "FM", "NFM",
-         "DFM", "DSTR", "DIGU", "DIGL", "RTTY"});
+    const QStringList modes = modeActionModes();
     for (const QString& m : modes) {
         const QString idShort = QString("mode_%1").arg(m.toLower());
         const QString idMidi  = QString("global.mode%1").arg(m);
@@ -2449,7 +2480,8 @@ void MainWindow::registerMidiParams()
     // ── Mode Up / Down (cycle through the mode list above) ───────────
     auto cycleMode = [this, fireShortcut, modes](int direction) {
         auto* s = activeSlice();
-        const QString next = nextCycledMode(modes, s ? s->mode() : QString(), direction);
+        const QString next = nextCycledMode(modes, s ? s->mode() : QString(), direction,
+                                            s ? s->modeList() : QStringList());
         if (next.isEmpty()) {
             return;
         }
@@ -2600,6 +2632,33 @@ void MainWindow::setupCtr2Proxy()
             [pushRadio](bool) { pushRadio(); });
     connect(&m_radioModel, &RadioModel::infoChanged, m_ctr2ProxyModel, pushRadio);
     pushRadio();
+    // Controllers that negotiate it get the audio spectrum: the TX audio over
+    // the TX filter while transmitting, else the RX audio over the active
+    // slice's passband (in CW, centered on the pitch to show zero beat).
+    new Ctr2AudioSpectrumFeeder(m_ctr2ProxyModel, m_audio, [this] {
+        Ctr2AudioSpectrumFeeder::Source src;
+        const TransmitModel& tx = m_radioModel.transmitModel();
+        if (tx.isTransmitting()) {
+            src.transmitting = true;
+            src.filterLow = tx.txFilterLow();
+            src.filterHigh = tx.txFilterHigh();
+        } else if (const SliceModel* s = activeSlice()) {
+            src.filterLow = s->filterLow();
+            src.filterHigh = s->filterHigh();
+            if (isCwMode(s->mode())) {
+                src.cwPitch = tx.cwPitch();
+            }
+        }
+        return src;
+    }, this);
+    // Controllers that negotiate it get the decoded CW, filtered as the CW
+    // panel filters it (its sensitivity threshold); no panel, nothing shown.
+    connect(&m_cwDecoder, &CwRxModel::textDecoded, m_ctr2ProxyModel,
+            [this](const QString& text, float cost) {
+        if (m_cwDecoderApplet && cost < m_cwDecoderApplet->cwCostThreshold()) {
+            m_ctr2ProxyModel->sendCwText(text, cost);
+        }
+    });
     if (m_appletPanel) {
         if (auto* applet = m_appletPanel->ctr2ProxyApplet()) {
             applet->setModel(m_ctr2ProxyModel);
@@ -3114,7 +3173,7 @@ void MainWindow::wireExternalControllers()
     m_dialBackend = new UlanziDialBackend;
     const auto dialController = TxController::forNativeDevice(&m_radioModel, m_dialBackend);
     fenceDeviceDisconnect(m_dialBackend, &UlanziDialBackend::connectionChanged, this, dialController);
-#ifndef Q_OS_MAC
+#ifndef Q_OS_MACOS
     // macOS keeps the backend on the main thread: IOHIDManager schedules
     // its callbacks on a CFRunLoop, and only the main thread has one
     // integrated with Qt's event loop on macOS.  Linux + Windows

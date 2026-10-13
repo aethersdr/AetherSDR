@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/TxGrantManager.h"
+#include "core/SpectrumDecodeScale.h"
 #include "core/backends/IndependentTxControl.h"
 
 #include "core/backends/flex/CommandParser.h"   // MessageSeverity for radioMessageReceived
@@ -21,6 +22,7 @@
 #include "core/backends/flex/PanadapterStream.h"
 #include "core/SleepInhibitor.h"
 #include "core/DaxTxPolicy.h"
+#include "core/NetworkMtuPolicy.h"  // networkMtuParam(); Radio Setup's MTU range
 #include "core/LocalMemoryBank.h"   // memory channels for a radio that has none
 #include "core/DigitalVoiceWaveformTelemetry.h"
 #include <QThread>
@@ -168,6 +170,12 @@ public:
     QString versionLabel() const { return m_versionLabel; }
     bool isConnected() const;
 
+    // "Prevent system sleep while connected" (#1420), on unless the operator
+    // turned it off (#6192). Setting it takes or drops the sleep block on the
+    // session already connected, not only from the next connect.
+    static bool sleepInhibitWhileConnected();
+    void setSleepInhibitWhileConnected(bool on);
+
     // Firmware-upload retry barrier (#5572). A dispatched firmware upload has
     // no attempt identifier in the `file update` status, so a late failure from
     // a previous attempt cannot be told apart from a fresh one on the same
@@ -246,6 +254,10 @@ public:
     QString licenseSubscription()   const { return m_licenseSubscription; }
     LicenseFeatureState licenseFeature(const QString& name) const;
     bool licenseFeatureSeen(const QString& name) const;
+    // The radio refused a dvk command as unlicensed (50004001); the reliable
+    // DVK entitlement signal, since `dvk … enabled=` is always 1. Changes emit
+    // licenseFeaturesChanged() like the other entitlement inputs.
+    bool dvkLicenseRefused() const { return m_dvkModel.licenseRefused(); }
     bool licenseFeatureEnabled(const QString& name) const;
     QString licenseFeatureReason(const QString& name) const;
 
@@ -561,6 +573,9 @@ public:
 
     // Audio output
     int     lineoutGain()    const { return m_lineoutGain; }
+    // The level of the output the operator hears, on every family: the PC sink's
+    // MasterVolume with PC Audio on, this model's line-out gain with it off.
+    [[nodiscard]] int activeOutputVolumePercent() const;
     bool    lineoutMute()    const { return m_lineoutMute; }
     int     headphoneGain()  const { return m_headphoneGain; }
     bool    headphoneMute()  const { return m_headphoneMute; }
@@ -591,6 +606,9 @@ public:
     // other family that takes typed intents through the IRadioBackend seam) —
     // there, Flex wire text has nowhere to go and is dropped at the sink.
     bool hasCommandPlane() const { return m_wanConn != nullptr || m_connection != nullptr; }
+    // A non-Flex backend that declares RadioCapabilities::lineoutControl, which
+    // takes setLineoutGain()/setLineoutMute() typed instead of as wire text.
+    bool lineoutThroughSeam() const;
 
     // The slice's tuning step, applied on the client when the radio has no
     // command plane to carry `slice set <n> step=`. Returns false, doing
@@ -898,6 +916,15 @@ public:
     void cancelLocalTransmit();
     void setDigitalVoiceTxSlice(int sliceId);
     QString audioCompressionParam() const;        // "none" or "opus" based on settings
+    // The network_mtu to send for this session: the NetworkMtu setting (or
+    // `requested`), out-of-range values replaced by the default, capped at
+    // 1200 when the path to the radio runs over Tailscale (NetworkMtuPolicy.h,
+    // #5949). The no-argument form logs when it caps or repairs the setting.
+    int networkMtuParam() const;
+    int networkMtuParam(int requested) const;
+    // The NetworkMtu setting as Radio Setup should show it: an out-of-range
+    // stored value reads as the default it is sent as.
+    int networkMtuSetting() const;
     void sendCwKey(bool down, const QString& debugSource = {},
                    quint64 debugTraceId = 0, quint64 debugSourceMs = 0); // straight key via netcw stream
     void sendCwPaddle(bool dit, bool dah, const QString& debugSource = {},
@@ -955,6 +982,11 @@ public:
     // straight down to that backend. Returns false on Flex, where the caller
     // sends the weighted_average= wire command itself.
     bool requestLocalPanWeightedAverage(const QString& panId, bool on);
+    // "Show TX in Waterfall" where the backend declares the client owns it
+    // (RadioCapabilities::clientPersistsShowTxInWaterfall()): the transmit
+    // model takes it here and it is remembered per radio. Returns false
+    // elsewhere, where the caller sends the wire command. Never keys anything.
+    bool requestLocalShowTxInWaterfall(bool on);
     // Panel width in spectrum points for a backend that shapes its own
     // spectrum: straight down to that backend. Returns false on Flex, where
     // the caller sends the xpixels= wire command itself.
@@ -1013,6 +1045,12 @@ public:
     // Display controls — Waterfall (display panafall set)
     void setWaterfallColorGain(int gain);
     void setWaterfallBlackLevel(int level);
+    // The same two for one named pan, for a control the operator moved after
+    // the widget applied the value; autoBlack is that pan's widget state. A
+    // backend with no command plane is sent nothing, and the value is reported
+    // as dropped unless the client draws it.
+    void setWaterfallColorGainFor(const QString& panId, int gain, bool autoBlack);
+    void setWaterfallBlackLevelFor(const QString& panId, int level);
     void setWaterfallAutoBlack(bool on);
     // Auto-black source: false = client-side estimate (radio auto_black off),
     // true = radio's per-tile level (radio auto_black on). The radio only
@@ -1085,7 +1123,8 @@ signals:
     // Coherent coverage declares final same-scale samples, avoiding repeated
     // intensity calibration and smoothing in the renderer.
     void panFeedSpectrumReady(quint32 streamId, const QVector<float>& binsDbm,
-                              qint64 emittedNs);
+                              qint64 emittedNs,
+                              const AetherSDR::SpectrumDecodeScale& decodeScale = {});
     void panFeedWaterfallRowReady(quint32 streamId, const QVector<float>& binsDbm,
                                   double lowFreqMhz, double highFreqMhz,
                                   quint32 timecode, qint64 emittedNs,
@@ -1372,8 +1411,8 @@ public:
     void createRxAudioStream();
     void removeRxAudioStream();
 
-    // Send a command with a response callback (for firmware uploader, etc.)
-    void sendCmdPublic(const QString& cmd, std::function<void(int code, const QString& body)> cb);
+    // True only when dispatched; the callback reports the later radio reply.
+    bool sendCmdPublic(const QString& cmd, std::function<void(int code, const QString& body)> cb);
     void requestFileUploadPort(qint64 size, const QString& uploadKind,
                                std::function<void(int code, const QString& body)> cb);
     void requestFileDownloadPort(const QString& downloadKind,
@@ -1435,6 +1474,11 @@ private:
     // Sends the radio auto_black flag from the combined auto-black on/off +
     // client/radio-source state (auto_black=1 only when both select radio-side).
     void applyWaterfallAutoBlack();
+    // The one wire site per key. Without a command plane the text reaches
+    // sendCmd(), which reports it as dropped, only when reportDrop is set: an
+    // operator moved the control and the client did not draw it.
+    void sendWaterfallColorGain(const QString& panId, int gain, bool reportDrop);
+    void sendWaterfallBlackLevel(const QString& panId, int level, bool reportDrop);
     bool m_wfAutoBlackOn{true};         // mirrors the client auto-black on/off
     bool m_wfAutoBlackRadioSide{false}; // false = client-side, true = radio-side
     bool profileLoadRadioStateWritesHeld() const;
@@ -1536,6 +1580,9 @@ private:
     // in the ctor, so a non-Flex backend simply skips it.
     static std::unique_ptr<IRadioBackend> makeBackend(const QString& family);
     void handRestoredStateToBackend();  // RFC #4603
+    // Put the remembered "Show TX in Waterfall" back into the transmit model
+    // on connect, where the backend declares the client its owner.
+    void restoreClientShowTxInWaterfall();
     void persistOperatingState(bool force = false);          // RFC #4603 PR 3
     void scheduleOperatingStateSave();
     // Build the offline health source for `family` on first need, or return
@@ -1552,6 +1599,9 @@ private:
     void releaseOfflineHealth();
     void captureClientOwnedCwState(RestoredRadioState& state) const;
     void restoreClientOwnedCwState(const RestoredRadioState& state);
+    // The step rides the Tuning domain only where no command plane carries it.
+    bool clientOwnsSliceStep() const;
+    void restoreClientOwnedStep(const RestoredRadioState& state);
 
     // aetherd Gap B: build/destroy the backend for a radio family. The backend
     // follows the radio the operator picks in the connection manager, so these
@@ -1731,6 +1781,9 @@ private:
     // callbacks. sendCmd() refuses for the duration so an expiring callback
     // cannot repopulate the map being drained. (#5653 review)
     bool m_expiringPendingCallbacks{false};
+    // Whether this session's path to the radio runs over Tailscale, decided
+    // once at GUI-client registration on this thread (networkMtuParam).
+    bool m_pathOverTailnet{false};
     // Bumped at every session end. Captured by deferred work (the multiFLEX
     // peek window) so a timer armed in one session cannot fire into the next.
     quint64 m_sessionGeneration{0};
@@ -1751,9 +1804,14 @@ private:
     void dispatchSliceAgc(const SliceAgcRequest& request);
     void dispatchSliceDsp(const SliceDspRequest& request);
     void dispatchSliceAudio(const SliceAudioRequest& request);
+    void dispatchSliceWfmForceMono(bool forceMono);
+    void dispatchSliceWfmDeemphasis(int microseconds);
+    void dispatchSliceWfm(const SliceWfmRequest& request);
     void dispatchSliceSquelch(const SliceSquelchRequest& request);
     void dispatchSliceRxAntenna(const QString& antenna);
     void dispatchSliceLock(bool locked);
+    void dispatchSliceControl(const SliceControlRequest& request);
+    void dispatchTransmitControl(const TransmitControlRequest& request);
     void reportReceiveDispatch(ReceiveDispatch result, const QString& operation,
                                bool operatorOrigin = true);
     // Translate a MODEL pan id to the backend's own id for a command going down
@@ -1915,6 +1973,9 @@ private:
     bool        m_muteLocalWhenRemote{false};
     bool        m_autoSave{true};
     int         m_lineoutGain{50};
+    // This radio's client-owned tuning step: restored at connect, seeded into
+    // each new slice, and updated by any slice's step change. 0 = none.
+    int         m_clientStepHz{0};
     bool        m_lineoutMute{false};
     int         m_headphoneGain{50};
     bool        m_headphoneMute{false};

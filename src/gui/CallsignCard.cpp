@@ -3,6 +3,7 @@
 #include "core/ThemeManager.h"
 
 #include <QDesktopServices>
+#include <QAccessible>
 #include <QHBoxLayout>
 #include <QKeyEvent>
 #include <QLabel>
@@ -15,6 +16,8 @@
 #include <QPushButton>
 #include <QUrl>
 #include <QVBoxLayout>
+
+#include <algorithm>
 
 namespace AetherSDR {
 
@@ -92,9 +95,10 @@ QPixmap roundedPhoto(const QPixmap& src, int edge, int radius)
 CallsignCard::CallsignCard(Variant variant, QWidget* parent)
     : QFrame(parent), m_variant(variant)
 {
-    const bool large = (m_variant == Variant::Large);
-    setObjectName(large ? QStringLiteral("callsignCardLarge")
-                        : QStringLiteral("callsignCard"));
+    const bool large = (m_variant != Variant::Compact);
+    setObjectName(m_variant == Variant::LiveCw ? QStringLiteral("liveCwContactCard")
+                  : large ? QStringLiteral("callsignCardLarge")
+                          : QStringLiteral("callsignCard"));
     setAccessibleName(QStringLiteral("Station contact card"));
     setAccessibleDescription(
         QStringLiteral("Callsign, name, and location of the looked-up station"));
@@ -169,6 +173,12 @@ CallsignCard::CallsignCard(Variant variant, QWidget* parent)
     m_metaLabel->setAccessibleName(QStringLiteral("Grid and details"));
     details->addWidget(m_metaLabel);
 
+    if (m_variant == Variant::LiveCw) {
+        m_nameLabel->setWordWrap(true);
+        m_locationLabel->setWordWrap(true);
+        m_metaLabel->setWordWrap(true);
+    }
+
     details->addStretch();
 
     applyTheme();
@@ -180,11 +190,33 @@ CallsignCard::CallsignCard(Variant variant, QWidget* parent)
 
 int CallsignCard::photoEdge() const
 {
-    return m_variant == Variant::Large ? 96 : 56;
+    return m_variant != Variant::Compact ? 96 : 56;
 }
 
 void CallsignCard::applyTheme()
 {
+    if (m_variant == Variant::LiveCw) {
+        auto& tm = ThemeManager::instance();
+        tm.applyStyleSheet(this,
+            "QFrame#liveCwContactCard { background: {{color.canon.nested}};"
+            " border: 1px solid {{color.canon.line}}; border-radius: 12px; }");
+        m_accentBar->hide();
+        tm.applyStyleSheet(m_callLabel,
+            QStringLiteral("QLabel { color: {{color.canon.cyan}}; font-size: %1px;"
+                           " font-weight: bold; background: transparent; border: none; }"
+                           "QLabel:focus { text-decoration: underline; }").arg(m_textFontPx + 8));
+        const QString textStyle = QStringLiteral(
+            "QLabel { color: {{color.canon.inkSoft}}; font-size: %1px;"
+            " background: transparent; border: none; }").arg(m_textFontPx);
+        for (QLabel* label : {m_classChip, m_cacheHint, m_nameLabel,
+                             m_locationLabel, m_metaLabel}) {
+            tm.applyStyleSheet(label, textStyle);
+        }
+        tm.applyStyleSheet(m_photoLabel,
+            "QLabel { background: {{color.canon.control}}; border: none;"
+            " border-radius: 6px; color: {{color.canon.muted}}; font-size: 36px; }");
+        return;
+    }
     const bool large = (m_variant == Variant::Large);
     auto& tm = ThemeManager::instance();
 
@@ -229,6 +261,11 @@ void CallsignCard::applyTheme()
 
 void CallsignCard::setPlaceholderPhoto()
 {
+    if (m_variant == Variant::LiveCw) {
+        m_photoLabel->clear();
+        m_photoLabel->hide();
+        return;
+    }
     // Person-silhouette glyph on the themed placeholder background.
     m_photoLabel->setPixmap(QPixmap());
     m_photoLabel->setText(QStringLiteral("\U0001F464"));  // 👤
@@ -237,6 +274,12 @@ void CallsignCard::setPlaceholderPhoto()
 void CallsignCard::setCloseButtonVisible(bool visible)
 {
     m_closeBtn->setVisible(visible);
+}
+
+void CallsignCard::setTextFontPx(int px)
+{
+    m_textFontPx = std::clamp(px, 18, 32);
+    applyTheme();
 }
 
 void CallsignCard::clearCard()
@@ -280,6 +323,10 @@ void CallsignCard::showInfo(const CallsignInfo& info, bool fromCache)
                          : fromCache     ? QStringLiteral("cached")
                                          : QString());
     m_cacheHint->setVisible(info.prefixOnly || fromCache);
+    if (m_variant == Variant::LiveCw) {
+        m_classChip->hide();
+        m_cacheHint->hide();
+    }
 
     // A prefix card has no operator name; the country line carries it.
     m_nameLabel->setText(info.prefixOnly ? QString() : info.displayName());
@@ -288,6 +335,14 @@ void CallsignCard::showInfo(const CallsignInfo& info, bool fromCache)
     QStringList meta;
     if (!info.grid.isEmpty())   meta << info.grid;
     if (!info.county.isEmpty()) meta << info.county;
+    if (m_variant == Variant::LiveCw) {
+        if (!info.licenseClass.isEmpty()) {
+            meta << info.licenseClass;
+        }
+        if (info.prefixOnly) {
+            meta << tr("Country information only");
+        }
+    }
     if (info.prefixOnly) {
         if (!info.continent.isEmpty()) meta << info.continent;
         if (info.cqZone > 0) meta << QStringLiteral("CQ %1").arg(info.cqZone);
@@ -305,6 +360,11 @@ void CallsignCard::showInfo(const CallsignInfo& info, bool fromCache)
     m_metaLabel->setText(meta.join(QStringLiteral(" · ")));
 
     setPlaceholderPhoto();
+    if (m_variant == Variant::LiveCw) {
+        setAccessibleName(tr("Station contact card for %1").arg(info.call));
+        QAccessibleEvent event(this, QAccessible::NameChanged);
+        QAccessible::updateAccessibility(&event);
+    }
 }
 
 void CallsignCard::setPhotoPath(const QString& imagePath)
@@ -325,6 +385,7 @@ void CallsignCard::setPhotoPath(const QString& imagePath)
     }
     m_photoLabel->setText({});
     m_photoLabel->setPixmap(roundedPhoto(QPixmap::fromImage(img), photoEdge(), 6));
+    m_photoLabel->show();
 }
 
 } // namespace AetherSDR

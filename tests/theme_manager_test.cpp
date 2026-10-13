@@ -6,10 +6,17 @@
 #include "gui/Theme.h"
 
 #include <QApplication>
+#include <QBrush>
+#include <QGradient>
+#include <QHeaderView>
 #include <QHoverEvent>
+#include <QImage>
 #include <QLabel>
+#include <QRegularExpression>
 #include <QSlider>
 #include <QStackedWidget>
+#include <QTreeWidget>
+#include <QTreeWidgetItem>
 #include <QVBoxLayout>
 #include <QSignalSpy>
 #include <QStandardPaths>
@@ -20,6 +27,8 @@
 #include <QJsonObject>
 #include <QJsonValue>
 #include <QStringList>
+#include <algorithm>
+#include <cmath>
 #include <cstdio>
 
 using namespace AetherSDR;
@@ -1393,6 +1402,122 @@ int main(int argc, char** argv)
                   QString("#0f0f1a"));
     }
 
+    // ---- the color.canon.* group (RFC #6226) resolves in BOTH bundled
+    //      themes, and its text and focus pairs meet docs/a11y.md ----
+    //
+    // The theme seed covers default-dark.json only, so a typo'd alias in
+    // default-light.json would otherwise ship unnoticed. The pairs are the
+    // ones the About window draws: link text on the ground, the Logbook
+    // button's text on its fill and hover fill, card keys on the nested card,
+    // and the gold focus ring on the button fill.
+    {
+        const QStringList canonTokens = {
+            "ground", "raised", "nested", "control", "ink", "inkSoft", "muted",
+            "line", "lineHi", "cyan", "aqua", "onAccent", "sparkHot", "sparkGold",
+            "sparkGoldHot", "bloom.blue", "bloom.teal", "grid",
+        };
+        auto contrast = [](const QColor& a, const QColor& b) {
+            auto lum = [](const QColor& c) {
+                auto lin = [](double v) {
+                    return v <= 0.04045 ? v / 12.92 : std::pow((v + 0.055) / 1.055, 2.4);
+                };
+                return 0.2126 * lin(c.redF()) + 0.7152 * lin(c.greenF()) + 0.0722 * lin(c.blueF());
+            };
+            const double la = lum(a), lb = lum(b);
+            return (std::max(la, lb) + 0.05) / (std::min(la, lb) + 0.05);
+        };
+        for (const QString theme : {QStringLiteral("Default Dark"), QStringLiteral("Default Light")}) {
+            EXPECT_TRUE(tm.setActiveTheme(theme));
+            for (const QString& t : canonTokens) {
+                const QColor c = tm.factoryColor("color.canon." + t);
+                if (!c.isValid()) {
+                    std::fprintf(stderr, "  %s: color.canon.%s does not resolve\n",
+                                 qPrintable(theme), qPrintable(t));
+                }
+                EXPECT_TRUE(c.isValid());
+            }
+            auto canon = [&](const char* t) { return tm.factoryColor(QStringLiteral("color.canon.") + t); };
+            EXPECT_TRUE(canon("ink") != canon("inkSoft"));
+            const struct { const char* fg; const char* bg; double floor; } pairs[] = {
+                {"cyan", "ground", 4.5},      // footer links; close button focus ring
+                {"cyan", "control", 4.5},     // Logbook button text
+                {"aqua", "nested", 4.5},      // Logbook button text, hovered
+                {"muted", "nested", 4.5},     // build-card keys
+                {"inkSoft", "nested", 4.5},   // build-card values
+                {"muted", "ground", 4.5},     // version line, close button
+                {"sparkGold", "control", 3.0},  // Logbook button focus ring
+            };
+            for (const auto& pr : pairs) {
+                const double r = contrast(canon(pr.fg), canon(pr.bg));
+                if (r < pr.floor) {
+                    std::fprintf(stderr, "  %s: canon.%s on canon.%s is %.2f:1, floor %.1f:1\n",
+                                 qPrintable(theme), pr.fg, pr.bg, r, pr.floor);
+                }
+                EXPECT_TRUE(r >= pr.floor);
+            }
+
+            // The primary action: onAccent text on every brand-gradient
+            // stop. Dark clears the 4.5:1 text floor. Light does not (white
+            // measures 3.7 and 3.3:1 on the middle and teal stops), which
+            // RFC #6226 accepts for About's OK pending a brand-gradient
+            // ruling (#6239); 3.0:1 records that, so neither side drifts
+            // without this test noticing.
+            const QBrush gradient = tm.brush(QStringLiteral("color.brand.gradient"),
+                                             QRect(0, 0, 100, 10));
+            EXPECT_TRUE(gradient.gradient() != nullptr);
+            if (const QGradient* g = gradient.gradient()) {
+                const double floor = theme == QStringLiteral("Default Dark") ? 4.5 : 3.0;
+                EXPECT_TRUE(g->stops().size() >= 2);
+                for (const QGradientStop& stop : g->stops()) {
+                    const double r = contrast(canon("onAccent"), stop.second);
+                    if (r < floor) {
+                        std::fprintf(stderr, "  %s: canon.onAccent on gradient stop %s is %.2f:1, floor %.1f:1\n",
+                                     qPrintable(theme), qPrintable(stop.second.name()), r, floor);
+                    }
+                    EXPECT_TRUE(r >= floor);
+                }
+            }
+        }
+        EXPECT_TRUE(tm.setActiveTheme("Default Dark"));
+    }
+
+    // ---- the canon scope maps the base tokens onto color.canon.* in BOTH
+    //      bundled themes, for the windows under it (AetherRX, AetherTX) ----
+    //
+    // A scope value can alias only a primitive, so default-dark.json repeats
+    // the canon hex values there: this is what notices if one side moves.
+    {
+        const struct { const char* token; const char* canon; } mapped[] = {
+            {"color.background.0", "raised"},  {"color.background.1", "nested"},
+            {"color.background.2", "control"}, {"color.background.3", "lineHi"},
+            {"color.text.primary", "ink"},     {"color.text.secondary", "inkSoft"},
+            {"color.text.label", "muted"},     {"color.border.subtle", "line"},
+            {"color.border.strong", "lineHi"}, {"color.accent", "cyan"},
+            {"color.accent.bright", "aqua"},   {"color.knob.background", "control"},
+            {"color.knob.foreground", "cyan"}, {"color.slider.background", "control"},
+            {"color.slider.foreground", "cyan"},
+        };
+        for (const QString theme : {QStringLiteral("Default Dark"), QStringLiteral("Default Light")}) {
+            EXPECT_TRUE(tm.setActiveTheme(theme));
+            // The windows declare child containers; they inherit the scope.
+            tm.registerDeclaredContainer(QStringLiteral("canon/aetherRx"));
+            for (const auto& m : mapped) {
+                const QColor want = tm.color(QStringLiteral("color.canon.") + m.canon);
+                const QColor got = tm.colorAt(QStringLiteral("canon/aetherRx"), m.token);
+                if (got.rgba() != want.rgba()) {
+                    std::fprintf(stderr, "  %s: %s under canon/aetherRx is %s, color.canon.%s is %s\n",
+                                 qPrintable(theme), m.token, qPrintable(got.name(QColor::HexArgb)),
+                                 m.canon, qPrintable(want.name(QColor::HexArgb)));
+                }
+                EXPECT_TRUE(got.rgba() == want.rgba());
+            }
+            // Outside the scope nothing moves.
+            EXPECT_TRUE(tm.colorAt(QString(), "color.background.0").rgba()
+                        == tm.color("color.background.0").rgba());
+        }
+        EXPECT_TRUE(tm.setActiveTheme("Default Dark"));
+    }
+
     // ---- a USER theme resets to the base it descends from, and keeps
     //      doing so after the operator edits the discriminating token ----
     //
@@ -1570,6 +1695,80 @@ int main(int argc, char** argv)
         sendHoverEnter(styled);
         EXPECT_TRUE(styled->hoverEventsSeen == 0);
         tm.setActiveTheme("Default Dark");
+    }
+
+    // ── App stylesheet: tree-view rows use the theme's backgrounds (#5934) ──
+    // Without alternate-background-color, every other row kept the native
+    // AlternateBase (near-white) under the theme's light text.
+    {
+        auto& tm = ThemeManager::instance();
+        QWidget host;
+        applyAppTheme(&host);
+        auto* tree = new QTreeWidget(&host);
+        tree->setAlternatingRowColors(true);
+        tree->setHeaderHidden(true);
+        for (int i = 0; i < 4; ++i) {
+            new QTreeWidgetItem(tree, {QStringLiteral("row %1").arg(i)});
+        }
+        tree->setGeometry(0, 0, 240, 140);
+        host.resize(240, 140);
+        host.show();
+        QApplication::processEvents();
+
+        const QImage rows = tree->viewport()->grab().toImage();
+        // Rows 2 and 3, not 0 and 1: row 0 is the current item and carries
+        // the style's focus tint. Sample the right end, clear of the text.
+        const QRect row2 = tree->visualItemRect(tree->topLevelItem(2));
+        const QRect row3 = tree->visualItemRect(tree->topLevelItem(3));
+        const QColor base = rows.pixelColor(row2.right() - 4, row2.center().y());
+        const QColor alternate = rows.pixelColor(row3.right() - 4, row3.center().y());
+        EXPECT_TRUE(base.rgb() == tm.color(QStringLiteral("color.background.0")).rgb());
+        EXPECT_TRUE(alternate.rgb() == tm.color(QStringLiteral("color.background.1")).rgb());
+        // Selection stays with the palette: a fixed text colour on the accent
+        // is unreadable when a custom theme's accent is dark.
+        EXPECT_TRUE(!appStylesheetTemplate().contains(QRegularExpression(
+            QStringLiteral(R"((QTreeView|QTreeWidget|QListView|QListWidget)[^{]*::item[^{]*:selected)"))));
+    }
+
+    // ── Theme drops: only local .aethertheme / .json files are importable ──
+    // dropEvent re-checks this, since a drop need not follow an accepted
+    // dragEnter.
+    {
+        const QString dir = QDir::tempPath();
+        EXPECT_TRUE(ThemeManager::isImportableThemeFile(QUrl::fromLocalFile(dir + "/a.aethertheme")));
+        EXPECT_TRUE(ThemeManager::isImportableThemeFile(QUrl::fromLocalFile(dir + "/a.JSON")));
+        EXPECT_TRUE(!ThemeManager::isImportableThemeFile(QUrl::fromLocalFile(dir + "/a.png")));
+        EXPECT_TRUE(!ThemeManager::isImportableThemeFile(QUrl::fromLocalFile(dir + "/aethertheme")));
+        EXPECT_TRUE(!ThemeManager::isImportableThemeFile(QUrl(QStringLiteral("https://example.com/a.aethertheme"))));
+    }
+
+    // ── App stylesheet: tree-view header sections keep their separators ──
+    // The header shares color.background.1 with the alternate rows, so the
+    // right and bottom section borders are what set it apart.
+    {
+        auto& tm = ThemeManager::instance();
+        QWidget host;
+        applyAppTheme(&host);
+        auto* tree = new QTreeWidget(&host);
+        tree->setColumnCount(2);
+        tree->setHeaderLabels({QStringLiteral("Object"), QStringLiteral("Value")});
+        tree->header()->setStretchLastSection(false);
+        tree->header()->resizeSection(0, 100);
+        tree->header()->resizeSection(1, 100);
+        tree->setGeometry(0, 0, 240, 140);
+        host.resize(240, 140);
+        host.show();
+        QApplication::processEvents();
+
+        const QImage header = tree->header()->grab().toImage();
+        const QRgb border = tm.color(QStringLiteral("color.border.strong")).rgb();
+        const int midY = header.height() / 2;
+        const int sectionRight = tree->header()->sectionViewportPosition(0)
+                               + tree->header()->sectionSize(0) - 1;
+        EXPECT_TRUE(header.pixelColor(sectionRight, midY).rgb() == border);
+        EXPECT_TRUE(header.pixelColor(50, header.height() - 1).rgb() == border);
+        EXPECT_TRUE(header.pixelColor(sectionRight - 3, 1).rgb()
+                    == tm.color(QStringLiteral("color.background.1")).rgb());
     }
 
     if (g_failures == 0) {

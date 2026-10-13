@@ -34,12 +34,32 @@ vendored-library options. This guide lists AetherSDR's own selectable options
 and additional project cache values. Changing them requires a source rebuild;
 they are not runtime settings for a downloaded binary.
 
+## Build type and debug info
+
+With no `CMAKE_BUILD_TYPE`, the build is `RelWithDebInfo`. On GCC and Clang,
+`RelWithDebInfo` uses `-O2 -g1 -DNDEBUG` rather than CMake's `-g`. That keeps
+line tables and function names, so backtraces and core dumps still symbolize,
+and keeps each test binary a fraction of the size. When you need local
+variables and types in a debugger, build `Debug`, or ask for full debug info
+explicitly:
+
+```bash
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+  "-DCMAKE_C_FLAGS_RELWITHDEBINFO=-O2 -g2 -DNDEBUG" \
+  "-DCMAKE_CXX_FLAGS_RELWITHDEBINFO=-O2 -g2 -DNDEBUG"
+```
+
+Spell it `-g2`. A value identical to CMake's default (`-O2 -g -DNDEBUG`) cannot
+be told apart from no choice, so it is lowered too. A debug level already in
+`CFLAGS`/`CXXFLAGS` (for example `-g3` for a sanitizer run) leaves the default
+alone. MSVC flags and `Release` builds are unaffected.
+
 ## Radio backends and decoder experiments
 
 | Option | Default | Purpose and prerequisites |
 |---|---|---|
 | `ENABLE_DEEPFIST_EXPERIMENT` | OFF | Build the experimental DeepFist CW receive decoder. Requires ONNX Runtime at configure time (configuration fails without it) and a separate verified model bundle at runtime; see below. |
-| `ENABLE_RTL` | ON | Build the experimental receive-only RTL-SDR USB backend when both `librtlsdr` and single-precision FFTW (`fftw3f`) are found. Missing either disables the backend. |
+| `ENABLE_RTL` | ON | Build the experimental receive-only RTL-SDR USB backend when both `librtlsdr` and single-precision FFTW (`fftw3f`) are found. Missing either disables the backend unless `REQUIRE_RTL=ON`. |
 | `AETHER_HL2_TX_TXA` | ON | Select WDSP's TXA chain for the Hermes-Lite 2 SSB transmit modulator. OFF builds the in-tree phasing modulator. This choice has no runtime toggle. |
 
 **DeepFist:** enabling `-DENABLE_DEEPFIST_EXPERIMENT=ON` alone does not supply its
@@ -101,6 +121,7 @@ are useful for release builds that must include those capabilities.
 
 | Option | Default | Fail configuration when… |
 |---|---|---|
+| `REQUIRE_RTL` | OFF | RTL is disabled, or `librtlsdr` or single-precision FFTW (`fftw3f`) is missing. Official release workflows set this ON together with `ENABLE_RTL=ON`. |
 | `REQUIRE_SERIALPORT` | OFF | Qt SerialPort is missing. |
 | `REQUIRE_KEYCHAIN` | OFF | QtKeychain is missing. |
 | `REQUIRE_ASR_ONNX` | OFF | ONNX Runtime is missing for Silero VAD, speaker labeling and the signal classifier. |
@@ -149,7 +170,7 @@ These options are for development and qualification.
 | `AETHER_ENABLE_HL2_SIGNAL_STOP_TEST` | OFF | Build the HL2 signal-stop child process. The loopback-UDP process test is registered on non-Windows hosts with Python 3. |
 | `AETHER_ENABLE_RADAR_GL_TEST` | OFF | Build/register the native-GPU weather-radar texture test. Needs a real OpenGL 3.2 context. |
 | `AETHER_BUILD_SPECTRUM_GESTURE_TEST` | OFF | Build/register `spectrum_confirmed_geometry_test`, which compiles the desktop application sources into a test binary to exercise the real `SpectrumWidget` gestures offscreen. |
-| `AETHER_SHARED_CORE` | OFF | Build `libaethercore` as a shared library so the sanitizer lane's test binaries fit on a hosted runner. Sanitizer CI only, never for releases; configuration fails on Windows. |
+| `AETHER_SHARED_CORE` | OFF | Build `libaethercore` as a shared library so the sanitizer lane's test binaries fit on a hosted runner. For the sanitizer lane and local review builds (`/pr-review` step 7), never for releases; configuration fails on Windows. |
 
 Additional cache values accept a value rather than ON/OFF:
 
@@ -159,6 +180,7 @@ Additional cache values accept a value rather than ON/OFF:
 | `DEEPFIST_MODEL_BASE_URL` | Empty | Published, versioned HTTPS directory for the exact DeepFist assets. See the distribution prerequisite in [the DeepFist guide](docs/deepfist-cw-backend.md). |
 | `RADE_TAP_DIR` | `<build-directory>/rade_taps` | Directory for RADE WAV diagnostics; available when RADE and its taps are enabled. |
 | `AETHER_TEST_FFTW_TIMELIMIT` | `0.001` | Seconds FFTW may spend measuring each plan under test; an empty value allows unbounded measurement. |
+| `AETHER_SANITIZER_TIMEOUT_SCALE` | `4` | Positive integer. Multiplier applied to every test `TIMEOUT` when the build is sanitizer-instrumented (`AETHERSDR_SANITIZER` set, or `-fsanitize=` in the global C/C++ flags or in any configuration's `CMAKE_<LANG>_FLAGS_<CONFIG>`). An uninstrumented build keeps every limit exactly as written. |
 
 ## Keeping this reference current
 

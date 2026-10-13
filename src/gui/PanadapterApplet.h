@@ -1,5 +1,7 @@
 #pragma once
 
+#include "CanonSurface.h"
+
 #include <QPoint>
 #include <QWidget>
 
@@ -15,16 +17,16 @@ class QVBoxLayout;
 namespace AetherSDR {
 
 class SpectrumWidget;
-class CallsignCard;
 #ifdef AETHER_ASR_ENABLED
 class CopyAssistPanel;
 #endif
 
 // Container for a single panadapter display (FFT spectrum + waterfall).
-// Adds a title bar with placeholder min/max/close buttons above the
-// SpectrumWidget.  Prepares for future multi-slice stacking where each
-// slice gets its own PanadapterApplet in a vertical splitter.
-class PanadapterApplet : public QWidget {
+// A CanonPan: the canon ground and hairline around a canon header (grip,
+// slice title, pop-out, maximize and the canon close button) above the
+// SpectrumWidget, which keeps its own GPU-drawn look. Each pan in the stack
+// is one PanadapterApplet.
+class PanadapterApplet : public CanonPan {
     Q_OBJECT
     // Expose panId via the meta-object so the automation bridge (core/, no GUI
     // include) can map a pan back to its radio stream id without depending on
@@ -37,11 +39,14 @@ public:
     SpectrumWidget* spectrumWidget() const { return m_spectrum; }
 
     QString panId() const { return m_panId; }
-    void setPanId(const QString& id) { m_panId = id; }
+    void setPanId(const QString& id);
 
     void setSliceId(int id, const QString& perClientLetter = QString());
     void clearSliceTitle();
+    // Plain text ("Slice A₁"), for window titles; the header label is HTML.
     QString sliceTitle() const;
+    // The slice the title names, or -1 when it names none.
+    int titleSliceId() const { return m_titleSliceId; }
 
     void setMultiPanMode(bool multi);
     void setFloatingState(bool floating);
@@ -66,6 +71,8 @@ public:
 
     // CW decode panel
     void setCwPanelVisible(bool visible);
+    // The four CW confidence colors, lowest cost (green) to highest (red).
+    static QString cwCostColor(float cost);
     void appendCwText(const QString& text, float cost = 0.0f);
     void appendCwTextTx(const QString& text, float cost = 0.0f);
     void setCwStats(float pitchHz, float speedWpm);
@@ -76,13 +83,12 @@ public:
     void setCwBackendState(const QString& key, bool tuning, const QString& status, bool preparing,
                          bool canRetry, const QString& detail);
     void appendUnscoredCwText(const QString& text);
+    // Colored like appendCwText, but never dropped by the Sens threshold.
+    void appendColoredCwText(const QString& text, float cost);
 #endif
     QPushButton* lockPitchButton()  const { return m_lockPitchBtn; }
     QPushButton* lockSpeedButton()  const { return m_lockSpeedBtn; }
     float        cwCostThreshold()  const { return m_cwCostThreshold; }
-    // Contact card beside the decoded text — MainWindow's QRZ wiring
-    // fills it when the CW stream identifies a station (hidden until then).
-    CallsignCard* cwCallsignCard() const { return m_cwCallsignCard; }
     int speedRangeLow()   const;
     int speedRangeHigh()  const;
     int pitchRangeLow()   const;
@@ -118,6 +124,7 @@ signals:
     void closeRequested(const QString& panId);
     void popOutClicked();
     void dockClicked();
+    void sliceTitleChanged();
     void maximizeRequested(const QString& panId);
 
     // CW
@@ -139,6 +146,9 @@ protected:
     bool eventFilter(QObject* obj, QEvent* ev) override;
 
 private:
+    // Places the header's two pieces over the top of the spectrum: the grip
+    // and title at the left, the buttons at the right.
+    void layoutHeader();
     // Re-apply the decoded-text stylesheet at the current font size (#3628).
     void applyCwFont();
     // Change the decoded-text font size by `delta` px, clamp, and persist (#3628).
@@ -148,11 +158,13 @@ private:
 
     QString         m_panId;
     SpectrumWidget* m_spectrum{nullptr};
-    QWidget*        m_titleBar{nullptr};
+    QWidget*        m_titleBar{nullptr};        // header, left: grip and title
+    QWidget*        m_headerButtons{nullptr};   // header, right: pop-out, maximize, close
     QLabel*         m_titleLabel{nullptr};
+    QString         m_sliceTitle;
+    int             m_titleSliceId{-1};
     QPushButton*    m_popOutBtn{nullptr};
     QPushButton*    m_maxBtn{nullptr};
-    QPushButton*    m_closeBtn{nullptr};
     bool            m_isFloating{false};
 
     // Canvas-item state (RFC #4887 phase 4).
@@ -185,7 +197,6 @@ private:
     QWidget*      m_cwPanel{nullptr};
     QWidget*      m_cwGrip{nullptr};
     QTextEdit*    m_cwText{nullptr};
-    CallsignCard* m_cwCallsignCard{nullptr};
     QLabel*       m_cwStatsLabel{nullptr};
     QLabel*       m_cwInputHint{nullptr};
     QSlider*      m_cwSensSlider{nullptr};

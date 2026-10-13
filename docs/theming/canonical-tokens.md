@@ -11,6 +11,11 @@ set.
 > add-a-token path for new UX — live in
 > [`docs/style/theme-style-guide.md`](../style/theme-style-guide.md).
 > This file is the migration inventory behind them.
+>
+> The **visual canon** — where these tokens' values are heading, the
+> `color.canon.*` group, and the order surfaces migrate in — is
+> [`docs/style/aethersdr-style-guide.md`](../style/aethersdr-style-guide.md)
+> (RFC #6226).
 
 ## Methodology
 
@@ -84,6 +89,46 @@ single-use colours snap to the nearest canonical neighbour.
 | `color.border.accent` | `#00b4d8` | active / selected border highlight |
 | `color.border.tx` | `#5a4a28` | TX-active border (matches `background.tx` family) |
 
+### Title bar + brand (unified 52 px bar)
+
+Added with the frameless-window chrome. The bar is the app's only title bar on
+every platform, so it needs its own surface tokens rather than borrowing
+`background.0` — the two used to be the same colour, which silently hid a 32 px
+band of reserved-but-empty space above the old strip for as long as they matched.
+
+| Token | Canonical (dark) | Refs |
+|---|---|---|
+| `color.titlebar.background` | `#eb0d1624` | the 52 px bar's surface (0.92 alpha, pre-composited over `background.app` — the window is opaque) |
+| `color.titlebar.border` | `#2978bee6` | 1 px rule under the bar (0.16 alpha) |
+| `color.titlebar.tab.hover` | `#12ffffff` | inactive radio tab, hovered |
+| `color.titlebar.tab.active.background` | `#1a00b4d8` | active radio tab fill |
+| `color.titlebar.tab.active.border` | `#7300b4d8` | active radio tab border |
+| `color.titlebar.status.connected` | `{color.green.500}` | radio-link dot: this client owns the session |
+| `color.titlebar.status.available` | `{color.gray.500}` | radio-link dot: discovered, idle |
+| `color.titlebar.status.inUse` | `{color.amber.500}` | radio-link dot: another station has it |
+| `color.titlebar.menu.background` | `#eb0f0f1a` | application (☰) menu panels: `background.0` at 0.92 alpha over the see-through rounded menu window |
+| `color.titlebar.otherTx.background` | `#ffffff` | "other station transmitting" badge fill, under `color.accent.danger` text |
+| `color.titlebar.caption.glyph` | `{color.gray.400}` | window-control glyph, at rest |
+| `color.titlebar.caption.glyph.hover` | `{color.gray.50}` | window-control glyph, hovered |
+| `color.titlebar.caption.hover` | `#14ffffff` | window-control hover wash |
+| `color.titlebar.caption.close.hover` | `#c42b1c` | close control hover fill |
+| `color.titlebar.caption.close.glyph` | `#ffffff` | close glyph on that fill |
+| `color.titlebar.caption.semantic.close` | `#ff5f57` | macOS close light and Linux close-chip hover |
+| `color.titlebar.caption.semantic.minimize` | `#febc2e` | macOS minimize light and Linux minimize-chip hover |
+| `color.titlebar.caption.semantic.maximize` | `#28c840` | macOS zoom light and Linux maximize-chip hover |
+| `color.titlebar.caption.semantic.inactive` | `#565a60` | inactive macOS traffic-light cluster |
+| `color.titlebar.caption.semantic.glyph` | `#a0000000` | dark glyph on semantic caption fills |
+| `color.brand.wordmark` | `#eaf2fb` | the "Aether" half of the wordmark |
+| `color.brand.gradient` | linear 100° | the "SDR" half (`#3aa7ff → #5de3ff → #8ef7e6`) |
+
+The `status.*` triple is a **redundant** encoding: every radio tab also spells
+its state out in words, on the rendered status line and in its accessible name.
+Nothing in the bar may depend on the dot's colour alone (WCAG 1.4.1).
+
+The traffic-light / caption-chip fills retain the platform semantic values in
+both bundled themes, but still resolve through tokens so custom and future light
+themes can preserve contrast without bypassing the theme system.
+
 ### Meter colours (specialised — paint code only)
 
 | Token | Canonical | Refs |
@@ -94,6 +139,18 @@ single-use colours snap to the nearest canonical neighbour.
 | `color.meter.peak` | `#e6f0fa` | peak-hold tick |
 | `color.meter.gainReduction` | `#f2c14e` | GR meter bar |
 | `color.meter.bar.fill` | `#405060` | meter bar inactive fill (~31 refs) |
+
+### CW decoder confidence (specialised — paint code only)
+
+DeepFist letters, by cost = 1 − the model's posterior (< 0.15 / < 0.35 / < 0.60 / else). Light values are at least
+4.5 : 1 on `color.background.0`.
+
+| Token | Dark | Light |
+|---|---|---|
+| `color.cw.confidence.high` | `#00ff88` | `{color.green.500}` (`#1a8040`) |
+| `color.cw.confidence.medium` | `#e0e040` | `#737313` |
+| `color.cw.confidence.fair` | `#ff9020` | `#ae5700` |
+| `color.cw.confidence.low` | `#ff4040` | `{color.red.500}` (`#c02020`) |
 
 ### Spectrum / waterfall (specialised — paint code only)
 
@@ -226,13 +283,15 @@ six tokens so the footer stays editable and follows theme changes.
 - Text: **4**
 - Accents: **6** (3 cyan family + 3 status)
 - Borders: **4**
+- Title bar + brand: **20** (19 scalar + 1 gradient)
 - Meters: **6**
 - Spectrum / waterfall: **5** (4 scalar + 1 gradient)
 - Slice: **9** (A–H + TX)
 - Font: **6**
 - Sizing: **5**
 
-**Total: 51 tokens** — comfortably inside the 50-80 envelope from the RFC.
+**Total: 71 tokens** — still inside the 50-80 envelope from the RFC.
+(51 at the Phase 1 migration; +20 for the unified title bar and brand mark.)
 
 ## Migration risks
 

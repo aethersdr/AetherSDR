@@ -2,6 +2,7 @@
 
 #include "PersistentDialog.h"
 
+#include <QColor>
 #include <QPointer>
 
 class QDragEnterEvent;
@@ -94,6 +95,8 @@ private:
     // still holding a pointer to and segfault during the post-edit
     // updateRow()).
     QString m_lastRenderedTheme;
+    // color.text.secondary as last painted into the "inherited" cells.
+    QColor m_inheritedCellColor;
 };
 
 } // namespace AetherSDR

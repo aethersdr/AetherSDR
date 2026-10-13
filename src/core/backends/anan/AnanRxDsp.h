@@ -79,17 +79,22 @@ public:
         // default; AnanBackend (commit 4) owns the operator-facing mapping.
         int agcMode = 3;
         double maximumAgcGainDb = 39.0;
+        // The gain with AGC off (WDSP's fixed gain). WdspChannel's default;
+        // AnanBackend supplies the operator's.
+        double agcFixedGainDb = 10.0;
         // false (live): processIq is non-blocking. true: waits for each
         // output block (deterministic for an offline/burst feed -- what the
         // handedness test uses).
         bool blockForOutput = false;
-        // WDSP's impulse noise blanker (ANB), run on the raw IQ ahead of the
-        // channel -- see WdspChannel::setNoiseBlanker(). In Config so a
+        // WDSP's impulse noise blankers (ANB and NOB), run on the raw IQ ahead
+        // of the channel -- see WdspChannel::setNoiseBlanker(). In Config so a
         // rate-change rebuild opens the new channel with the operator's
         // blanker, the same way it carries mode, filter and AGC. Level is
-        // 0..100 in the slice model's units.
-        bool noiseBlankerEnabled = false;
+        // 0..100 in the slice model's units; the fill applies to Advanced.
+        WdspChannel::NoiseBlanker noiseBlanker = WdspChannel::NoiseBlanker::Off;
         int noiseBlankerLevel = 50;
+        WdspChannel::NoiseBlankerFill noiseBlankerFill =
+            WdspChannel::NoiseBlankerFill::Zero;
     };
 
     // Synchronous convenience used by deterministic tests. Production first
@@ -128,10 +133,10 @@ public:
     // made while the build is running still update m_config and win at install.
     Q_INVOKABLE void beginInitialBuild(const Config& config);
 
-    // Marks a rebuild in flight: setMode()/setFilter()/setAgc()/setShift() still
-    // update m_config/m_shiftHz but skip m_channel, because WDSP control calls take
-    // the setup mutex (WdspChannel.cpp's g_setupMutex) the background build holds
-    // for its FFTW planning -- pushing would block this thread.
+    // Marks a rebuild in flight: setMode()/setFilter()/setAgc()/setAgcFixedGain()/
+    // setShift() still update m_config/m_shiftHz but skip m_channel, because WDSP
+    // control calls take the setup mutex (WdspChannel.cpp's g_setupMutex) the
+    // background build holds for its FFTW planning -- pushing would block this thread.
     Q_INVOKABLE void beginRebuild();
 
     // Installs a built RebuildResult on this object's thread. Not Q_INVOKABLE: moc's
@@ -146,16 +151,26 @@ public:
     Q_INVOKABLE void setMode(WdspChannel::Mode mode);
     Q_INVOKABLE void setFilter(double lowHz, double highHz);
     Q_INVOKABLE void setAgc(int agcMode, double maximumGainDb);
+    // The gain with AGC off, in dB. Deferred like setAgc() while a rebuild is
+    // in flight; installChannel() re-applies it at the swap.
+    Q_INVOKABLE void setAgcFixedGain(double fixedGainDb);
     // RX frequency shift in Hz relative to the NCO -- how a single-DDC
     // backend tunes the slice inside the passband without moving the DDC.
     Q_INVOKABLE void setShift(double shiftHz);
-    // Noise blanker on/off and level (0..100). Deferred like setMode() while a
-    // rebuild is in flight; installChannel() re-applies it at the swap.
-    Q_INVOKABLE void setNoiseBlanker(bool on, int level);
+    // Which blanker, its level (0..100) and Advanced's fill. Deferred like
+    // setMode() while a rebuild is in flight; installChannel() re-applies it at
+    // the swap.
+    Q_INVOKABLE void setNoiseBlanker(WdspChannel::NoiseBlanker kind, int level,
+                                     WdspChannel::NoiseBlankerFill fill);
     struct NoiseBlankerState {
         bool hasChain = false;
-        bool on = false;
+        WdspChannel::NoiseBlanker kind = WdspChannel::NoiseBlanker::Off;
         int level = 0;
+        WdspChannel::NoiseBlankerFill fill = WdspChannel::NoiseBlankerFill::Zero;
+        [[nodiscard]] bool on() const noexcept
+        {
+            return kind != WdspChannel::NoiseBlanker::Off;
+        }
     };
     // One atomic snapshot of the installed channel, safe to query from the
     // backend's thread. Deferred or refused requests do not change this value.
@@ -165,7 +180,12 @@ public:
         if (state < 0) {
             return {};
         }
-        return {true, state >= kNbEnabledOffset, state % kNbEnabledOffset};
+        return {true,
+                static_cast<WdspChannel::NoiseBlanker>(
+                    (state / kNbLevelStride) % kNbKindStride),
+                state % kNbLevelStride,
+                static_cast<WdspChannel::NoiseBlankerFill>(
+                    state / (kNbLevelStride * kNbKindStride))};
     }
     // Cap how often a panadapter frame is produced, in frames per second.
     // Also re-sizes the analyzer's overlap and averaging weights for the new
@@ -293,8 +313,14 @@ signals:
 
 private:
     void publishNoiseBlankerState();
-    static constexpr int kNbEnabledOffset = 128; // levels occupy 0..100
-    std::atomic<int> m_nbAppliedState{-1};       // -1: no installed channel
+    // The applied blanker in ONE int, so the backend's thread reads a coherent
+    // snapshot from a single relaxed load rather than three that can tear:
+    // level + stride * kind + stride * kinds * fill. Strides are powers of two
+    // and larger than the ranges they carry (levels 0..100, three kinds, five
+    // fills), so each field stays legible in a debugger.
+    static constexpr int kNbLevelStride = 128; // levels occupy 0..100
+    static constexpr int kNbKindStride = 8;    // three kinds today
+    std::atomic<int> m_nbAppliedState{-1};     // -1: no installed channel
     PcmProducer m_pcmProducer;
     bool spectrumFrameDue();
 

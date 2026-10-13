@@ -1,6 +1,7 @@
 #ifdef HAVE_NVIDIA_AFX
 
 #include "NvidiaAfxPack.h"
+#include "NvidiaAfxFilter.h"
 
 #include <QCryptographicHash>
 #include <QDir>
@@ -61,6 +62,24 @@ QString humanRate(double bps)
     if (v >= 1024.0) { v /= 1024.0; unit = "MB/s"; }
     if (v >= 1024.0) { v /= 1024.0; unit = "GB/s"; }
     return QStringLiteral("%1 %2").arg(v, 0, 'f', v < 10.0 ? 1 : 0).arg(QLatin1String(unit));
+}
+
+// Network failures get their own line: the user-facing message omits the
+// cause for lookups. Qt 6.12 reports the transfer timeout as TimeoutError.
+// OperationCanceledError counts as one too: cancel() disconnects before it
+// aborts, and the write-failure abort is handled before this is called.
+void logTransferFailure(const QString& label, QNetworkReply::NetworkError err,
+                        const QString& errorString)
+{
+    if (err == QNetworkReply::TimeoutError || err == QNetworkReply::OperationCanceledError) {
+        qCWarning(lcNvAfx).noquote()
+            << QStringLiteral("NvidiaAfxPack: transfer timed out (stall limit %1 s): %2")
+                   .arg(kTransferTimeoutMs / 1000).arg(label);
+        return;
+    }
+    qCWarning(lcNvAfx).noquote()
+        << QStringLiteral("NvidiaAfxPack: transfer failed: %1: %2")
+               .arg(label, NvidiaAfxPack::withoutUrlQueries(errorString));
 }
 
 // "8s" / "1m 05s" / "1h 02m" from a seconds count.
@@ -310,6 +329,17 @@ QList<NvidiaAfxPack::Component> NvidiaAfxPack::manifest(const QString& arch) con
 #endif
 }
 
+QString NvidiaAfxPack::withoutUrlQueries(const QString& text)
+{
+    // The query runs to the next whitespace, less any closing punctuation that
+    // ends it: "(https://h/x?sig=1)." keeps its ")." and loses "?sig=1".
+    static const QRegularExpression re(QStringLiteral(
+        "(\\bhttps?://[^\\s?#]+)[?#]\\S*?([)\\]}>\"',.;:]*)(?=\\s|$)"),
+        QRegularExpression::CaseInsensitiveOption);
+    QString out = text;
+    return out.replace(re, QStringLiteral("\\1\\2"));
+}
+
 // ─── Lifecycle ───────────────────────────────────────────────────────────────
 NvidiaAfxPack::NvidiaAfxPack(QObject* parent)
     : QObject(parent), m_nam(new QNetworkAccessManager(this))
@@ -349,7 +379,15 @@ void NvidiaAfxPack::fail(const QString& msg)
     if (m_dlFile) { m_dlFile->close(); delete m_dlFile; m_dlFile = nullptr; }
     if (!m_tmpFile.isEmpty()) { QFile::remove(m_tmpFile); m_tmpFile.clear(); }
     m_busy = false;
-    emit finished(false, msg);
+    // Stripped for the panel's "Failed:" text as well as for the log: a message
+    // can carry a URL (a redirected download, an index URL) with a signed query.
+    const QString shown = withoutUrlQueries(msg);
+    if (shown == QLatin1String("cancelled")) {
+        qCInfo(lcNvAfx) << "NvidiaAfxPack: install cancelled";
+    } else {
+        qCWarning(lcNvAfx).noquote() << "NvidiaAfxPack: install failed:" << shown;
+    }
+    emit finished(false, shown);
 }
 
 QList<NvidiaAfxPack::ComponentInfo> NvidiaAfxPack::plannedComponents() const
@@ -439,7 +477,7 @@ void NvidiaAfxPack::install()
 {
     if (m_busy) { return; }
     m_arch = detectArch();
-    if (m_arch.isEmpty()) { emit finished(false, QStringLiteral("no supported NVIDIA GPU found")); return; }
+    if (m_arch.isEmpty()) { fail(QStringLiteral("no supported NVIDIA GPU found")); return; }
     m_busy = true; m_cancelled = false;
     QDir().mkpath(cacheRoot());
     m_staging = stagingPath();
@@ -544,8 +582,13 @@ void NvidiaAfxPack::resolveWheelUrl(const Component& c)
             if (!m_reply) { return; }
             const QByteArray body = m_reply->readAll();
             const auto err = m_reply->error();
+            const QString es = m_reply->errorString();
             m_reply->deleteLater(); m_reply = nullptr;
-            if (err != QNetworkReply::NoError) { fail(QStringLiteral("simple-index lookup failed for %1").arg(name)); return; }
+            if (err != QNetworkReply::NoError) {
+                logTransferFailure(name, err, es);
+                fail(QStringLiteral("simple-index lookup failed for %1").arg(name));
+                return;
+            }
             // Match anchors: href="<filename-with-version>#sha256=<hex>"
             // We pin a specific version, so embed it in the regex to skip others fast.
             // The version appears between the package name and the next dash, e.g.
@@ -587,8 +630,13 @@ void NvidiaAfxPack::resolveWheelUrl(const Component& c)
         if (!m_reply) { return; }
         const QByteArray body = m_reply->readAll();
         const auto err = m_reply->error();
+        const QString es = m_reply->errorString();
         m_reply->deleteLater(); m_reply = nullptr;
-        if (err != QNetworkReply::NoError) { fail(QStringLiteral("PyPI lookup failed for %1").arg(name)); return; }
+        if (err != QNetworkReply::NoError) {
+            logTransferFailure(name, err, es);
+            fail(QStringLiteral("PyPI lookup failed for %1").arg(name));
+            return;
+        }
         const QJsonObject root = QJsonDocument::fromJson(body).object();
         for (const QJsonValue v : root.value(QStringLiteral("urls")).toArray()) {
             const QJsonObject u = v.toObject();
@@ -663,7 +711,11 @@ void NvidiaAfxPack::downloadTo(const QUrl& url, const QString& sha256,
         // Checked before the network-error branch: abort() above also sets an
         // error, but the disk-full cause is the one worth reporting.
         if (m_dlWriteFailed) { fail(QStringLiteral("write failed for %1 (disk full?)").arg(label)); return; }
-        if (err != QNetworkReply::NoError) { fail(QStringLiteral("download failed (%1): %2").arg(label, es)); return; }
+        if (err != QNetworkReply::NoError) {
+            logTransferFailure(label, err, es);
+            fail(QStringLiteral("download failed (%1): %2").arg(label, es));
+            return;
+        }
         if (!sha256.isEmpty()
             && m_dlHash.result().toHex() != sha256.toLatin1()) {
             // A mismatch is not transient (the bytes are pinned) — say so rather
@@ -801,7 +853,7 @@ void NvidiaAfxPack::assembleAndCommit()
     writeReceipt(current);
 
     m_busy = false;
-    if (installedPackDir().isEmpty()) { emit finished(false, QStringLiteral("install verification failed")); return; }
+    if (installedPackDir().isEmpty()) { fail(QStringLiteral("install verification failed")); return; }
     emit finished(true, statusText());
 }
 
@@ -825,7 +877,7 @@ QList<NvidiaAfxPack::ComponentInfo> NvidiaAfxPack::installedComponents()
 void NvidiaAfxPack::installFromFile(const QString& archivePath)
 {
     if (m_busy) { return; }
-    if (!QFile::exists(archivePath)) { emit finished(false, QStringLiteral("archive not found")); return; }
+    if (!QFile::exists(archivePath)) { fail(QStringLiteral("archive not found")); return; }
     m_busy = true; m_cancelled = false;
     m_idx = 0;
     m_done.clear();   // offline import is always a fresh, single-archive install

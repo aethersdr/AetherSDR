@@ -8,6 +8,7 @@
 #include "Theme.h"
 #include "core/AppSettings.h"
 
+#include <algorithm>
 #include <cmath>
 #include <QPushButton>
 #include <QAccessible>
@@ -30,12 +31,10 @@
 namespace AetherSDR {
 
 // The ALC Gain gauge's face, named because two places need the SAME numbers
-// and one of them is "no reading".
-//
-// Not a display preference: the top is the HL2 modulator's makeup ceiling
-// (Hl2TxDsp::Config::alcMaxGainDb), so a reading pressed against it means the
-// ALC has run out of gain rather than that the face has run out of scale.
-// -20 covers the reductions this chain produces.
+// and one of them is "no reading" (resetAlcGain()). The HL2 ALC only reduces
+// (Hl2TxAlc caps its target at unity), so readings stay at or below 0 dB and
+// the face above 0 is never reached; Hl2Backend declares TX:ALCGAIN -20..0.
+// -20 is a presentation floor: a deeper reduction clamps to it.
 static constexpr float kAlcGainGaugeMinDb = -20.0f;
 static constexpr float kAlcGainGaugeMaxDb = 40.0f;
 
@@ -301,12 +300,10 @@ void PhoneCwApplet::buildPhonePanel()
     m_compGauge->setHoverValuePopupEnabled(true);
     vbox->addWidget(m_compGauge);
 
-    // ALC Gain gauge (-20..+40 dB), beside Compression: both show how much the
-    // chain changes the audio, while a post-ALC level meter sits near target
-    // even with a mic 30 dB too quiet. +40 is the HL2 modulator's makeup ceiling
-    // (Hl2TxDsp::Config::alcMaxGainDb), so top-of-scale means the ALC is out of
-    // gain. Yellow at +20 = half the makeup spent, red at +30 = three quarters
-    // (fix at the gain control); the reduction side is uncoloured.
+    // ALC Gain gauge, beside Compression: both show how much the chain changes
+    // the audio, while a post-ALC level meter sits near target. Readings stay
+    // at or below 0 dB (see kAlcGainGaugeMaxDb), so the yellow (+20) and red
+    // (+30) zones are not reached; the reduction side is uncoloured.
     m_alcGainGauge = new HGauge(kAlcGainGaugeMinDb, kAlcGainGaugeMaxDb, 30.0f,
         "ALC Gain", "dB",
         {{-20, "-20dB"}, {-10, "-10"}, {0, "0"}, {10, "+10"}, {20, "+20"},
@@ -319,8 +316,7 @@ void PhoneCwApplet::buildPhonePanel()
     m_alcGainGauge->setAccessibleDescription(
         "Gain the transmit ALC is applying, in dB; 0 is unity");
     m_alcGainGauge->setHoverValueFormatter([](float v) {
-        // Signed, unlike Compression's face below, because both directions are
-        // real here: the ALC both adds makeup and takes level away.
+        // Signed, unlike Compression's face: a reduction reads negative.
         return QStringLiteral("%1%2 dB")
             .arg(v > 0.0f ? QStringLiteral("+") : QString())
             .arg(QString::number(v, 'f', 1));
@@ -338,7 +334,6 @@ void PhoneCwApplet::buildPhonePanel()
     // operators use to verify clean keying envelope shape.
     m_alcGaugePhone = new HGauge(kAlcGaugeFloorDbfs, 0.0f, -3.0f, "ALC", "dBFS",
         {{-20, "-20"}, {-15, "-15"}, {-10, "-10"}, {-5, "-5"}, {0, "0"}});
-    m_alcGaugePhone->setFillFromRight(true);  // empty at -20, fills leftward toward 0
     m_alcGaugePhone->setValueImmediate(kAlcGaugeFloorDbfs);
     m_alcGaugePhone->setAccessibleName("ALC gauge (Phone)");
     m_alcGaugePhone->setAccessibleDescription("Automatic level control — post-software-ALC SSB peak (dBFS)");
@@ -459,10 +454,13 @@ void PhoneCwApplet::buildPhonePanel()
         m_procLowLabel = new QLabel("NOR");
         m_procMidLabel = new QLabel("DX");
         m_procHighLabel = new QLabel("DX+");
+        m_procLowLabel->setObjectName("procTickLow");
+        m_procMidLabel->setObjectName("procTickMid");
+        m_procHighLabel->setObjectName("procTickHigh");
         const QString tickLabelStyle = "QLabel { color: #c8d8e8; font-size: 8px; }";
-        m_procLowLabel->setStyleSheet(tickLabelStyle);
-        m_procMidLabel->setStyleSheet(tickLabelStyle);
-        m_procHighLabel->setStyleSheet(tickLabelStyle);
+        for (QLabel* tick : {m_procLowLabel, m_procMidLabel, m_procHighLabel}) {
+            tick->setStyleSheet(tickLabelStyle);
+        }
         m_procLowLabel->setAlignment(Qt::AlignLeft | Qt::AlignBottom);
         m_procMidLabel->setAlignment(Qt::AlignCenter | Qt::AlignBottom);
         m_procHighLabel->setAlignment(Qt::AlignRight | Qt::AlignBottom);
@@ -484,6 +482,17 @@ void PhoneCwApplet::buildPhonePanel()
 
         row->addWidget(procGroup, 1);
 
+        // The radio's own COMP number, as its front panel shows it. The
+        // presets name themselves in the tick labels, so this stays hidden
+        // until a continuous presentation is selected.
+        m_procValueLabel = new QLabel("0");
+        m_procValueLabel->setStyleSheet(kLabelStyle);
+        m_procValueLabel->setFixedWidth(22);
+        m_procValueLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        m_procValueLabel->setAccessibleName("Compressor level value");
+        m_procValueLabel->setVisible(false);
+        row->addWidget(m_procValueLabel, 0, Qt::AlignBottom);
+
         m_daxBtn = new QPushButton("DAX");
         m_daxBtn->setCheckable(true);
         m_daxBtn->setFixedHeight(22);
@@ -499,6 +508,7 @@ void PhoneCwApplet::buildPhonePanel()
         });
 
         connect(m_procSlider, &QSlider::valueChanged, this, [this](int pos) {
+            m_procValueLabel->setText(QString::number(pos));
             if (!m_updatingFromModel && m_model) {
                 m_model->setSpeechProcessorLevel(pos);
             }
@@ -590,15 +600,21 @@ void PhoneCwApplet::setSpeechProcessorPresentation(const QString& label, int max
         }
     }
     const QSignalBlocker blocker(m_procSlider);
+    // A tenth of the range per page: one COMP step on the MK2's 0..10, ten
+    // percent on the IC-9700's 0..100, one preset on NOR/DX/DX+.
+    const int pageStep = std::max(1, maximum / 10);
     m_procSlider->setRange(0, maximum);
-    m_procSlider->setPageStep(maximum == 2 ? 1 : 10);
-    m_procSlider->setTickInterval(maximum == 2 ? 1 : 10);
+    m_procSlider->setPageStep(pageStep);
+    m_procSlider->setTickInterval(pageStep);
     m_procLowLabel->setText(maximum == 2 ? QStringLiteral("NOR") : QStringLiteral("0"));
-    m_procMidLabel->setText(maximum == 2 ? QStringLiteral("DX") : QStringLiteral("50"));
-    m_procHighLabel->setText(maximum == 2 ? QStringLiteral("DX+") : QStringLiteral("100"));
+    m_procMidLabel->setText(maximum == 2 ? QStringLiteral("DX")
+                                         : QString::number(maximum / 2));
+    m_procHighLabel->setText(maximum == 2 ? QStringLiteral("DX+")
+                                          : QString::number(maximum));
     const QString sliderDescription = maximum == 2
         ? tr("Speech processor level: Normal, DX, or DX+")
-        : tr("Speech compressor level from 0 to 100 percent");
+        : (maximum == 100 ? tr("Speech compressor level from 0 to 100 percent")
+                          : tr("Speech compressor level from 0 to %1").arg(maximum));
     if (m_procSlider->accessibleDescription() != sliderDescription) {
         m_procSlider->setAccessibleDescription(sliderDescription);
         if (QAccessible::isActive()) {
@@ -609,6 +625,9 @@ void PhoneCwApplet::setSpeechProcessorPresentation(const QString& label, int max
     if (m_model) {
         m_procSlider->setValue(m_model->speechProcessorLevel());
     }
+    // The blocker above swallowed valueChanged, so the readout follows here.
+    m_procValueLabel->setText(QString::number(m_procSlider->value()));
+    m_procValueLabel->setVisible(continuousCompressor);
 }
 
 // ── CW sub-panel ─────────────────────────────────────────────────────────────
@@ -653,7 +672,6 @@ void PhoneCwApplet::buildCwPanel()
     // window by default (-20…0 dBFS); capabilities select native percent.
     m_alcGaugeCw = new HGauge(kAlcGaugeFloorDbfs, 0.0f, -3.0f, "ALC", "dBFS",
         {{-20, "-20"}, {-15, "-15"}, {-10, "-10"}, {-5, "-5"}, {0, "0"}});
-    m_alcGaugeCw->setFillFromRight(true);  // empty at -20, fills leftward toward 0
     m_alcGaugeCw->setValueImmediate(kAlcGaugeFloorDbfs);
     m_alcGaugeCw->setAccessibleName("ALC gauge (CW)");
     m_alcGaugeCw->setAccessibleDescription("Automatic level control — post-software-ALC SSB peak (dBFS)");
@@ -1427,10 +1445,8 @@ void PhoneCwApplet::updateAlcGain(float gainDb)
     if (!m_alcGainGauge) {
         return;
     }
-    // No clamp here: HGauge clamps to its own range, and clamping twice would
-    // hide the case worth seeing — a gain pressed against the modulator's
-    // ceiling, which reads as "the ALC has nothing left" rather than as a
-    // meter at the end of its travel.
+    // No clamp here: HGauge clamps to its own range, so a reduction deeper
+    // than the -20 dB floor renders as an empty bar.
     m_alcGainGauge->setValue(gainDb);
 }
 

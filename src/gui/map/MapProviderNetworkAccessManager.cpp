@@ -1,4 +1,5 @@
 #include "MapProviderNetworkAccessManager.h"
+#include "core/NetworkDiagnostics.h"
 
 #include <QMutexLocker>
 #include <QCoreApplication>
@@ -182,7 +183,9 @@ MapProviderNetworkAccessManager::MapProviderNetworkAccessManager(QObject* parent
 QNetworkReply* MapProviderNetworkAccessManager::sendRequest(Operation operation,
     const QNetworkRequest& request, QIODevice* outgoingData)
 {
-    return QNetworkAccessManager::createRequest(operation, request, outgoingData);
+    QNetworkReply* reply = QNetworkAccessManager::createRequest(operation, request, outgoingData);
+    NetworkDiagnostics::watch(reply, "map/radar");
+    return reply;
 }
 
 QNetworkReply* MapProviderNetworkAccessManager::createRequest(Operation operation,

@@ -155,10 +155,17 @@ push.
 
 Do all of this before touching code. Each item has cost a real merge.
 
-- **Claim the PR.** `gh pr view <PR> --json assignees`; if unassigned or
-  assigned only to `@aethersdr-agent`, `gh pr edit <PR> --add-assignee @me`.
-  If another non-AetherClaude agent holds it, leave a coordination comment and
-  stop (AGENTS.md § Issue / PR Claim Protocol, Principle X).
+- **Check the claim, then claim the PR unless it is your own.**
+  `gh pr view <PR> --json assignees`. If another non-AetherClaude agent holds
+  it, leave a coordination comment and stop (AGENTS.md § Issue / PR Claim
+  Protocol, Principle X), even when you authored the PR. Otherwise, on someone
+  else's PR, `gh pr edit <PR> --add-assignee @me`. On your own PR add nothing:
+  the author is assumed to be still working on it, and a claim announces that
+  another project member is now involved. Claim even when the pass may push
+  nothing: the claim is the landing lock, keeping other agents from pushing
+  under you mid-flight. Hold it until the merge fires, through the
+  armed-and-waiting window; unassign only if the pass stops short of arming
+  auto-merge.
 - **Anchor to the head SHA.** `gh pr view <PR> --json headRefOid` — record it.
   Everything you read, build and prove is against this SHA, and you re-check
   it before posting anything (steps 9, 10).
@@ -440,9 +447,18 @@ A fix without evidence is not landable, and the evidence is what you paste
 into the thread reply and the dismissal. Per item:
 
 - **Build and run the tests** in your worktree — every commit, not just the
-  last. `cmake --build build --parallel`, which is portable; drop to an
-  explicit lower job count when `pgrep -lf ninja` shows another build already
-  running.
+  last. Configure the lean build from `/pr-review` step 7 (shared core and
+  `-g1` on Linux/macOS), then build named targets, never the default `all`:
+  `cmake --build build --parallel --target AetherSDR <test_a> <test_b>`, then
+  `ctest --test-dir build -R '^(test_a|test_b)$' --no-tests=error`. The tests
+  are the ones the PR adds or modifies, the ones covering the findings you
+  fixed, and the ones selected from the files the branch touches, chosen as
+  `/pr-review` step 7 describes (including its `OBJECT`-library and
+  `add_test` name caveats). The full tree is several hundred test
+  executables, each with its own debug info — tens of gigabytes for binaries
+  the landing never runs; build it only when the fix is to the CMake or link
+  contract itself. Drop to an explicit lower job count when `pgrep -lf ninja`
+  shows another build already running.
 - **Run the static gates before the push**, merge base versus head (step 2).
   A boundary regression caught here costs a rebuild; caught by `Static checks`
   it costs a CI cycle; inside a tracked baseline it is not caught at all.

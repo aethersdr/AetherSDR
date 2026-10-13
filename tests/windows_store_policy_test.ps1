@@ -113,7 +113,8 @@ try {
     # through to create-msix.ps1's project-version default.
     $workflow = Get-Content -Raw (Join-Path $RepositoryRoot '.github/workflows/windows-installer.yml')
     Assert-True ($workflow -match "@\('releaseArtifacts', 'productionDraft', 'publishFlight', 'storeEligible'\)") 'Workflow exports storeEligible'
-    Assert-True ($workflow -match "- name: Create MSIX package\s+if: steps\.store-plan\.outputs\.storeEligible == 'true'") 'Workflow gates MSIX creation on storeEligible'
+    Assert-True ($workflow -match "store-eligible: \$\{\{ steps\.store-plan\.outputs\.storeEligible \}\}") 'Workflow passes storeEligible to the packaging job'
+    Assert-True ($workflow -match "- name: Create MSIX package\s+if: needs\.build-windows\.outputs\.store-eligible == 'true'") 'Workflow gates MSIX creation on storeEligible'
     Assert-True ($workflow -match 'storeSkipReason') 'Workflow surfaces the Store skip reason'
     $inputs.EventName = 'workflow_dispatch'; $inputs.FlightId = 'FLIGHT'
     foreach ($valid in @(1, 65535)) {

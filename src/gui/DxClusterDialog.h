@@ -1,6 +1,6 @@
 #pragma once
 
-#include "PersistentDialog.h"
+#include "CanonWindow.h"
 
 #include <QAbstractTableModel>
 #include <QSortFilterProxyModel>
@@ -81,7 +81,10 @@ private:
 
 // ── Dialog ──────────────────────────────────────────────────────────────────
 
-class DxClusterDialog : public PersistentDialog {
+// SpotHub: every spot source (DX cluster, RBN, WSJT-X, SpotCollector, POTA,
+// EiBi, N1MM/DXLog, FreeDV), the spot list and the spot display settings, in a
+// canon workspace window.
+class DxClusterDialog : public CanonWindow {
     Q_OBJECT
 
 public:
@@ -101,9 +104,9 @@ public:
 #ifdef HAVE_WEBSOCKETS
     // Re-reads FreeDvMyMessage from AppSettings. Called on each SpotHub open
     // so an edit made in the FreeDV Reporter panel (same setting) is
-    // reflected here — this dialog is a persistent singleton
-    // (showOrRaisePersistent), so without this the field would only ever
-    // show whatever it was at first construction (#4231 review).
+    // reflected here — MainWindow keeps one SpotHub window and raises it
+    // again, so without this the field would only ever show whatever it
+    // was at first construction (#4231 review).
     void reloadFreedvMessage();
 #endif
 
@@ -170,6 +173,8 @@ private:
     // A right-aligned "Clear" button that wipes a console and zeroes the
     // matching log file. logPath points at one of the m_*LogPath members,
     // read at click time (members are assigned before any click). (#2022)
+    // Cluster/RBN "Hide Unverified" toggle for one GoClusterSettings feed.
+    QPushButton* makeHideUnverifiedButton(const QString& feed);
     QPushButton* makeConsoleClearButton(QPlainTextEdit* console,
                                         const QString* logPath,
                                         const QString& objectName);

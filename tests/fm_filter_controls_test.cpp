@@ -11,6 +11,7 @@
 #include "models/SliceModel.h"
 
 #include <QApplication>
+#include <QComboBox>
 #include <QImage>
 #include <QPushButton>
 #include <QSignalSpy>
@@ -364,6 +365,38 @@ private slots:
         setMode(slice, QStringLiteral("CW"));
         QVERIFY(button(rx, QStringLiteral("500")));
         QVERIFY(button(vfo, QStringLiteral("500")));
+    }
+
+    void nb2FillRowLeavesWithTheNbButtonInFm()
+    {
+        // The NB button hides in FM, so NB2's fill row must too: on a live mode
+        // change (modeChanged) and on attaching a slice already in FM (sync).
+        RadioModel model;
+        model.setBackendForTest(std::make_unique<FilterBackend>(), QStringLiteral("test"));
+        SliceModel slice(0);
+        setMode(slice, QStringLiteral("USB"));
+        slice.setNbKind(NoiseBlankerKind::Advanced);
+        VfoWidget vfo;
+        vfo.setRadioModel(&model);
+        vfo.setHasHostNoiseBlanker(true);
+        vfo.setSlice(&slice);
+        auto* fill = vfo.findChild<QComboBox*>(QStringLiteral("dspNB2FillCombo"));
+        QVERIFY(fill && fill->parentWidget());
+        QWidget* row = fill->parentWidget();
+        QVERIFY(!row->isHidden());
+        setMode(slice, QStringLiteral("FM"));
+        QVERIFY(row->isHidden());
+        setMode(slice, QStringLiteral("USB"));
+        QVERIFY(!row->isHidden());
+
+        setMode(slice, QStringLiteral("FM"));
+        VfoWidget attached;
+        attached.setRadioModel(&model);
+        attached.setHasHostNoiseBlanker(true);
+        attached.setSlice(&slice);
+        auto* attachedFill = attached.findChild<QComboBox*>(QStringLiteral("dspNB2FillCombo"));
+        QVERIFY(attachedFill && attachedFill->parentWidget());
+        QVERIFY(attachedFill->parentWidget()->isHidden());
     }
 
     void fixedRadioLadderStillWins()

@@ -16,6 +16,8 @@
 #include <QHostAddress>
 #include <QJsonObject>
 #include <QLoggingCategory>
+#include <QMutex>
+#include <QMutexLocker>
 #include <QSet>
 #include <QStringList>
 #include <QTimer>
@@ -33,10 +35,23 @@ namespace AetherSDR
 namespace
 {
 
+// Qt calls the message handler on whichever thread logs, and TciServer,
+// RadioConnection and the audio workers all log off the main thread while the
+// test reads the capture on it. One mutex guards the sink pointer AND the list
+// it points at, so a worker can neither append while the test reads nor append
+// into a list the test has already detached (TSan, #6156).
+QMutex       g_logSinkMutex;
 QStringList* g_logSink = nullptr;
+
+void setLogSink(QStringList* sink)
+{
+    QMutexLocker lock(&g_logSinkMutex);
+    g_logSink = sink;
+}
 
 void captureLogHandler(QtMsgType, const QMessageLogContext&, const QString& msg)
 {
+    QMutexLocker lock(&g_logSinkMutex);
     if (g_logSink) {
         *g_logSink << msg;
     }
@@ -52,7 +67,7 @@ class ScopedCommandLog
 public:
     ScopedCommandLog()
     {
-        g_logSink = &m_lines;
+        setLogSink(&m_lines);
         m_previous = qInstallMessageHandler(captureLogHandler);
         QLoggingCategory::setFilterRules(QStringLiteral("aether.protocol.debug=true"));
     }
@@ -60,13 +75,14 @@ public:
     {
         QLoggingCategory::setFilterRules(QString());
         qInstallMessageHandler(m_previous);
-        g_logSink = nullptr;
+        setLogSink(nullptr);
     }
     ScopedCommandLog(const ScopedCommandLog&) = delete;
     ScopedCommandLog& operator=(const ScopedCommandLog&) = delete;
 
     bool contains(const QString& fragment) const
     {
+        QMutexLocker lock(&g_logSinkMutex);
         for (const QString& line : m_lines) {
             if (line.contains(fragment)) {
                 return true;
@@ -74,7 +90,11 @@ public:
         }
         return false;
     }
-    void clear() { m_lines.clear(); }
+    void clear()
+    {
+        QMutexLocker lock(&g_logSinkMutex);
+        m_lines.clear();
+    }
 
 private:
     QStringList      m_lines;
@@ -88,7 +108,7 @@ template <typename Body>
 QStringList captureCatLog(Body body)
 {
     QStringList captured;
-    g_logSink = &captured;
+    setLogSink(&captured);
     const QtMessageHandler previous = qInstallMessageHandler(captureLogHandler);
     QLoggingCategory::setFilterRules(QStringLiteral("aether.cat.info=true"));
 
@@ -96,7 +116,7 @@ QStringList captureCatLog(Body body)
 
     QLoggingCategory::setFilterRules(QString());
     qInstallMessageHandler(previous);
-    g_logSink = nullptr;
+    setLogSink(nullptr);
     return captured;
 }
 
@@ -1082,6 +1102,231 @@ public:
         }
         return server.m_trxMap.sliceForTrx(&model, 0) == newA
             && server.m_trxMap.sliceForTrx(&model, 1) == b;
+    }
+
+    // #6352 — clients learn about receivers opening and closing. A new slice
+    // is announced at once; a genuine close is announced after the 500 ms
+    // settle window; a band-change recreate (same slice id re-added inside
+    // that window) says nothing in either direction.
+    static bool rxEnableFollowsSliceLifecycle()
+    {
+        RadioModel model;
+        TciServer server(&model);
+
+        QStringList sent;
+        QObject::connect(&server, &TciServer::tciMessage,
+                         [&sent](const QString& dir, const QString& msg) {
+            if (dir == QLatin1String("tx")
+                && msg.startsWith(QLatin1String("rx_enable:")))
+                sent << msg.trimmed();
+        });
+
+        QString error;
+        if (!model.automationApplySliceFixture(0, QStringLiteral("A"), &error)
+            || !model.automationApplySliceFixture(1, QStringLiteral("B"),
+                                                  &error)) {
+            std::fprintf(stderr, "rx_enable fixtures failed: %s\n",
+                         error.toUtf8().constData());
+            return false;
+        }
+        const QStringList opened{QStringLiteral("rx_enable:0,true;"),
+                                 QStringLiteral("rx_enable:1,true;")};
+        if (sent != opened) {
+            std::fprintf(stderr, "open: expected '%s', got '%s'\n",
+                         opened.join(' ').toUtf8().constData(),
+                         sent.join(' ').toUtf8().constData());
+            return false;
+        }
+
+        // Band-change recreate of A: no close, no re-open.
+        sent.clear();
+        if (!model.automationRemoveSliceFixture(0, &error)
+            || !model.automationApplySliceFixture(0, QStringLiteral("A"),
+                                                  &error)) {
+            std::fprintf(stderr, "recreate cycle failed: %s\n",
+                         error.toUtf8().constData());
+            return false;
+        }
+        spin(600);
+        if (!sent.isEmpty()) {
+            std::fprintf(stderr, "recreate announced '%s'\n",
+                         sent.join(' ').toUtf8().constData());
+            return false;
+        }
+
+        // Genuine close of B: silent until the settle window passes, then
+        // announced on B's receiver.
+        if (!model.automationRemoveSliceFixture(1, &error)) {
+            std::fprintf(stderr, "remove B failed: %s\n",
+                         error.toUtf8().constData());
+            return false;
+        }
+        if (!sent.isEmpty()) {
+            std::fprintf(stderr, "close announced before the settle window: '%s'\n",
+                         sent.join(' ').toUtf8().constData());
+            return false;
+        }
+        spin(600);
+        if (sent != QStringList{QStringLiteral("rx_enable:1,false;")}) {
+            std::fprintf(stderr, "close: expected 'rx_enable:1,false;', got '%s'\n",
+                         sent.join(' ').toUtf8().constData());
+            return false;
+        }
+
+        // Reopening reuses the freed receiver and announces it.
+        sent.clear();
+        if (!model.automationApplySliceFixture(1, QStringLiteral("B"), &error)) {
+            std::fprintf(stderr, "reopen B failed: %s\n",
+                         error.toUtf8().constData());
+            return false;
+        }
+        if (sent != QStringList{QStringLiteral("rx_enable:1,true;")}) {
+            std::fprintf(stderr, "reopen: expected 'rx_enable:1,true;', got '%s'\n",
+                         sent.join(' ').toUtf8().constData());
+            return false;
+        }
+        return true;
+    }
+
+    // #6352 — two recreates of one slice in a row, each inside the 500 ms
+    // window, must stay silent. The first removal's timer ends while the second
+    // gap is open and used to announce a close the second recreate then undid.
+    static bool overlappingRecreatesStaySilent()
+    {
+        RadioModel model;
+        TciServer server(&model);
+
+        QStringList sent;
+        QObject::connect(&server, &TciServer::tciMessage,
+                         [&sent](const QString& dir, const QString& msg) {
+            if (dir == QLatin1String("tx")
+                && msg.startsWith(QLatin1String("rx_enable:")))
+                sent << msg.trimmed();
+        });
+
+        QString error;
+        if (!model.automationApplySliceFixture(0, QStringLiteral("A"), &error)
+            || !model.automationApplySliceFixture(1, QStringLiteral("B"),
+                                                  &error)) {
+            std::fprintf(stderr, "overlap fixtures failed: %s\n",
+                         error.toUtf8().constData());
+            return false;
+        }
+        sent.clear();
+
+        // remove 0 ms, add 200 ms, remove 400 ms, add 700 ms: the first timer
+        // fires at 500 ms inside the second gap.
+        if (!model.automationRemoveSliceFixture(0, &error)) {
+            std::fprintf(stderr, "first remove failed: %s\n",
+                         error.toUtf8().constData());
+            return false;
+        }
+        spin(200);
+        if (!model.automationApplySliceFixture(0, QStringLiteral("A"), &error)) {
+            std::fprintf(stderr, "first re-add failed: %s\n",
+                         error.toUtf8().constData());
+            return false;
+        }
+        spin(200);
+        if (!model.automationRemoveSliceFixture(0, &error)) {
+            std::fprintf(stderr, "second remove failed: %s\n",
+                         error.toUtf8().constData());
+            return false;
+        }
+        spin(300);
+        if (!sent.isEmpty()) {
+            std::fprintf(stderr, "stale timer announced '%s'\n",
+                         sent.join(' ').toUtf8().constData());
+            return false;
+        }
+        if (!model.automationApplySliceFixture(0, QStringLiteral("A"), &error)) {
+            std::fprintf(stderr, "second re-add failed: %s\n",
+                         error.toUtf8().constData());
+            return false;
+        }
+        spin(700);
+        if (!sent.isEmpty()) {
+            std::fprintf(stderr, "overlapping recreates announced '%s'\n",
+                         sent.join(' ').toUtf8().constData());
+            return false;
+        }
+        if (server.m_trxMap.trxForSliceId(0) != 0
+            || server.m_trxMap.trxForSliceId(1) != 1) {
+            std::fprintf(stderr, "bindings moved: %d/%d\n",
+                         server.m_trxMap.trxForSliceId(0),
+                         server.m_trxMap.trxForSliceId(1));
+            return false;
+        }
+
+        // A genuine close after the recreates is still announced.
+        if (!model.automationRemoveSliceFixture(0, &error)) {
+            std::fprintf(stderr, "final remove failed: %s\n",
+                         error.toUtf8().constData());
+            return false;
+        }
+        spin(600);
+        if (sent != QStringList{QStringLiteral("rx_enable:0,false;")}) {
+            std::fprintf(stderr, "final close: expected 'rx_enable:0,false;', got '%s'\n",
+                         sent.join(' ').toUtf8().constData());
+            return false;
+        }
+        return true;
+    }
+
+    // #6352 — a slice reclaimed after a reconnect emits slotOccupancyChanged
+    // but no sliceAdded, so the disconnect-cleared map left it unbound and its
+    // close was never announced. The occupancy edge must rebind it quietly.
+    static bool closeAnnouncedForSliceReclaimedAfterReconnect()
+    {
+        RadioModel model;
+        TciServer server(&model);
+
+        QStringList sent;
+        QObject::connect(&server, &TciServer::tciMessage,
+                         [&sent](const QString& dir, const QString& msg) {
+            if (dir == QLatin1String("tx")
+                && msg.startsWith(QLatin1String("rx_enable:")))
+                sent << msg.trimmed();
+        });
+
+        QString error;
+        if (!model.automationApplySliceFixture(0, QStringLiteral("A"), &error)
+            || !model.automationApplySliceFixture(1, QStringLiteral("B"),
+                                                  &error)) {
+            std::fprintf(stderr, "reclaim fixtures failed: %s\n",
+                         error.toUtf8().constData());
+            return false;
+        }
+
+        // The reconnect end state: slices live, bindings cleared at disconnect.
+        server.m_trxMap.clear();
+        sent.clear();
+        model.slotOccupancyChanged(1);
+        if (server.m_trxMap.trxForSliceId(0) != 0
+            || server.m_trxMap.trxForSliceId(1) != 1) {
+            std::fprintf(stderr, "reclaimed slices not rebound: %d/%d\n",
+                         server.m_trxMap.trxForSliceId(0),
+                         server.m_trxMap.trxForSliceId(1));
+            return false;
+        }
+        if (!sent.isEmpty()) {
+            std::fprintf(stderr, "rebind announced '%s'\n",
+                         sent.join(' ').toUtf8().constData());
+            return false;
+        }
+
+        if (!model.automationRemoveSliceFixture(1, &error)) {
+            std::fprintf(stderr, "remove B failed: %s\n",
+                         error.toUtf8().constData());
+            return false;
+        }
+        spin(600);
+        if (sent != QStringList{QStringLiteral("rx_enable:1,false;")}) {
+            std::fprintf(stderr, "close: expected 'rx_enable:1,false;', got '%s'\n",
+                         sent.join(' ').toUtf8().constData());
+            return false;
+        }
+        return true;
     }
 
     // #4577 review — the reconnect hole: stageSessionModelsForReconnect()
@@ -2164,6 +2409,12 @@ int main(int argc, char** argv)
         = AetherSDR::TciServerReviewTest::activeSliceSeedsFromCurrentState();
     const bool activeSliceRemoval
         = AetherSDR::TciServerReviewTest::activeSliceFollowsSliceRemoval();
+    const bool rxEnableLifecycle
+        = AetherSDR::TciServerReviewTest::rxEnableFollowsSliceLifecycle();
+    const bool overlapSilent
+        = AetherSDR::TciServerReviewTest::overlappingRecreatesStaySilent();
+    const bool reclaimCloseAnnounced
+        = AetherSDR::TciServerReviewTest::closeAnnouncedForSliceReclaimedAfterReconnect();
     const bool trxStableRecreate
         = AetherSDR::TciServerReviewTest::trxStableAcrossSliceRecreate();
     const bool trxDistinctReconnect
@@ -2227,6 +2478,12 @@ int main(int argc, char** argv)
                 activeSliceRemoval ? "PASS" : "FAIL");
     std::printf("%s  receiver numbers stable across slice recreate (#4567)\n",
                 trxStableRecreate ? "PASS" : "FAIL");
+    std::printf("%s  rx_enable follows slice open/close, not recreate (#6352)\n",
+                rxEnableLifecycle ? "PASS" : "FAIL");
+    std::printf("%s  overlapping recreates stay silent (#6352)\n",
+                overlapSilent ? "PASS" : "FAIL");
+    std::printf("%s  close of a slice reclaimed after reconnect is announced (#6352)\n",
+                reclaimCloseAnnounced ? "PASS" : "FAIL");
     std::printf("%s  live slices keep distinct trx after reconnect (#4577)\n",
                 trxDistinctReconnect ? "PASS" : "FAIL");
     std::printf("%s  held trx refuses instead of re-pointing in the settle "
@@ -2280,6 +2537,7 @@ int main(int argc, char** argv)
         && powerRateLimits && trxCacheHolds && cacheResets && flagSeedsDeDups
         && flagSeedSettled && txTrxResets
         && activeSliceSeed && activeSliceRemoval && trxStableRecreate
+        && rxEnableLifecycle && overlapSilent && reclaimCloseAnnounced
         && trxDistinctReconnect && heldTrxRefuses
         && vfoConfirmsAccepted && vfoConfirmsRefusal && vfoAcksNoOp
         && vfoChannelZeroOnce

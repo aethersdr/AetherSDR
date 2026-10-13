@@ -32,6 +32,11 @@ public:
     // Drops every binding (disconnect: slices die with the connection).
     void clear();
 
+    // The trx bound to sliceId, or -1 when it has none. Unlike trxForSlice()
+    // it never falls back to position, so it still answers for a removed slice
+    // whose binding is held through the settle window.
+    int trxForSliceId(int sliceId) const;
+
     // Map-first lookups; positional fallback when the slice has no binding.
     int trxForSlice(RadioModel* model, const SliceModel* slice) const;
     SliceModel* sliceForTrx(RadioModel* model, int trx) const;

@@ -1,0 +1,37 @@
+{
+  "rtl": {
+    "version": "aed0ea19f3a273370a13c9009b96313c75d54c7b",
+    "url": "https://github.com/rtlsdrblog/rtl-sdr-blog/archive/aed0ea19f3a273370a13c9009b96313c75d54c7b.tar.gz",
+    "sha256": "53d070b234507bd0eaa25ee2ec7b4e69d93a038ccf970c1390ad84162d3da5e1",
+    "archive": "rtl-sdr-blog.tar.gz",
+    "directory": "rtl-sdr-blog-aed0ea19f3a273370a13c9009b96313c75d54c7b"
+  },
+  "libusb": {
+    "version": "1.0.30",
+    "url": "https://github.com/libusb/libusb/releases/download/v1.0.30/libusb-1.0.30.tar.bz2",
+    "sha256": "fea36f34f9156400209595e300840767ab1a385ede1dc7ee893015aea9c6dbaf",
+    "archive": "libusb-1.0.30.tar.bz2",
+    "directory": "libusb-1.0.30"
+  },
+  "pthreads": {
+    "version": "2.9.1",
+    "url": "https://sourceware.org/pub/pthreads-win32/pthreads-w32-2-9-1-release.tar.gz",
+    "sha256": "e6aca7aea8de33d9c8580bcb3a0ea3ec0a7ace4ba3f4e263ac7c7b66bc95fb4d",
+    "archive": "pthreads-w32-2-9-1-release.tar.gz",
+    "directory": "pthreads-w32-2-9-1-release"
+  },
+  "fftw": {
+    "version": "3.3.11",
+    "url": "https://fftw.org/fftw-3.3.11.tar.gz",
+    "sha256": "5630c24cdeb33b131612f7eb4b1a9934234754f9f388ff8617458d0be6f239a1",
+    "archive": "fftw-3.3.11.tar.gz",
+    "directory": "fftw-3.3.11"
+  },
+  "fftwWindowsSource": {
+    "version": "3.3.5",
+    "url": "https://fftw.org/fftw-3.3.5.tar.gz",
+    "sha256": "8ecfe1b04732ec3f5b7d279fdb8efcad536d555f9d1e8fabd027037d45ea8bcf",
+    "archive": "fftw-3.3.5.tar.gz",
+    "directory": "fftw-3.3.5"
+  }
+}

@@ -1,9 +1,10 @@
 #include <QtGlobal>
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
 
 #include "UlanziDialMacOSManager.h"
 #include "core/LogManager.h"
 #include "core/UlanziChordDecoder.h"
+#include "core/UlanziDialIds.h"
 
 #include <QDebug>
 #include <QJsonArray>
@@ -23,11 +24,6 @@
 namespace AetherSDR {
 
 namespace {
-
-// Reporter's Bluetooth LE descriptor dump in #5126 records VendorID 65521
-// (0xFFF1) and ProductID 130 (0x0082); the bench device reports the same pair.
-constexpr int kUlanziVendorId = 0xFFF1;
-constexpr int kUlanziProductId = 0x0082;
 
 struct HidUsage {
     uint32_t page;
@@ -773,4 +769,4 @@ void UlanziDialMacOSManager::emitKeyTransition(int linuxKey, int value)
 
 } // namespace AetherSDR
 
-#endif // Q_OS_MAC
+#endif // Q_OS_MACOS

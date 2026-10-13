@@ -1,6 +1,7 @@
 #include "SmartMtrWidget.h"
 
 #include "SmartMtrStyle.h"
+#include "core/ThemeManager.h"
 
 #include <QEvent>
 #include <QFont>
@@ -111,8 +112,10 @@ void SmartMtrWidget::applyBallistics(MeterKind kind)
     m_smooth.setBallistics(b);
 }
 
-void SmartMtrWidget::setMeterInput(const MeterInput& input)
+void SmartMtrWidget::setMeterInput(const MeterInput& input, const QString& unavailableReason)
 {
+    m_unavailableReason = unavailableReason;
+    setAccessibleDescription(unavailableReason);
     // A non-finite value (NaN/Inf) would survive std::clamp (both comparisons
     // false), stick in the bar smoother so needsAnimation() never clears, and
     // poison the extremes running sum permanently. Drop it; the last good frame
@@ -168,6 +171,13 @@ void SmartMtrWidget::setMeterInput(const MeterInput& input)
         span > 0.0 ? float((posUnits - kScaleMin) / span) : 0.0f;
 
     m_smooth.setTarget(targetFrac);
+    if (!input.hasValue && input.kind == MeterKind::RelativeSignal) {
+        m_animTimer.stop();
+        m_extremes.reset();
+        m_smooth.snapToTarget();
+        update();
+        return;
+    }
     if (kindChanged)
         m_smooth.snapToTarget(); // snap across the discontinuity, don't glide
 
@@ -254,6 +264,13 @@ void SmartMtrWidget::paintEvent(QPaintEvent*)
     drawIndicator(p, g);
     p.drawPixmap(0, 0, m_aboveBar);
     drawExtremes(p, g);
+    if (!m_unavailableReason.isEmpty()) {
+        p.setPen(ThemeManager::instance().color(this, "color.text.secondary"));
+        QFont labelFont = font();
+        labelFont.setPixelSize(10);
+        p.setFont(labelFont);
+        p.drawText(rect(), Qt::AlignCenter, tr("Meters off"));
+    }
 
     // Let the parent's value-label overlay repaint in lockstep with the markers.
     emit repainted();
@@ -502,7 +519,7 @@ void SmartMtrWidget::drawMarkers(QPainter& p, const SmartMtrGeometry& g) const
 void SmartMtrWidget::drawTypeLabel(QPainter& p, const SmartMtrGeometry& g) const
 {
     // TX meters only — the RX signal meter shows no type label.
-    if (!m_showTypeLabel || m_kind == MeterKind::Signal)
+    if ((!m_showTypeLabel && m_kind != MeterKind::RelativeSignal) || m_kind == MeterKind::Signal)
         return;
 
     QString text;
@@ -511,6 +528,7 @@ void SmartMtrWidget::drawTypeLabel(QPainter& p, const SmartMtrGeometry& g) const
     case MeterKind::SWR:         text = QStringLiteral("SWR");  break;
     case MeterKind::Power:       text = QStringLiteral("PWR");  break;
     case MeterKind::Compression: text = QStringLiteral("COMP"); break;
+    case MeterKind::RelativeSignal: text = QStringLiteral("dBFS"); break;
     case MeterKind::Signal:      return;
     }
 
@@ -641,6 +659,7 @@ QString SmartMtrWidget::extremeSUnit(double raw) const
 QString SmartMtrWidget::extremeDbm(double raw) const
 {
     const int v = qRound(raw);
+    if (m_kind == MeterKind::RelativeSignal) { return QStringLiteral("%1dBFS").arg(v); }
     return m_kind == MeterKind::MicLevel ? QStringLiteral("%1dB").arg(v)
                                          : QStringLiteral("%1dBm").arg(v);
 }
@@ -693,7 +712,7 @@ QVector<SmartMtrWidget::ExtremeMarker> SmartMtrWidget::extremeLabels() const
 
     // Numeric value labels are a signal-meter feature only; other kinds (mic/TX)
     // show no value text (the peak marker itself still draws).
-    if (m_kind != MeterKind::Signal)
+    if (m_kind != MeterKind::Signal && m_kind != MeterKind::RelativeSignal)
         return out;
 
     // Two lines for signal (S-unit over dBm); a single top line for mic (no

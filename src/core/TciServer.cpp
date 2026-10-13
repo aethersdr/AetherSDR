@@ -1,5 +1,6 @@
 #ifdef HAVE_WEBSOCKETS
 #include "TciServer.h"
+#include "AppActivity.h"
 #include "TciProtocol.h"
 #include "StreamStatus.h"
 #include "AudioEngine.h"
@@ -22,6 +23,7 @@
 #include <QHostAddress>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QList>
 #include <QStringList>
 #include <QTimer>
 #include <QPointer>
@@ -269,6 +271,12 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
                 this, [this](int) { m_drivePending = true; queuePowerBroadcast(); });
         connect(&m_model->transmitModel(), &TransmitModel::tunePowerChanged,
                 this, [this](int) { m_tuneDrivePending = true; queuePowerBroadcast(); });
+
+        // `tune:` follows the model whatever started the tune: the TX applet,
+        // a TCI client, or the radio's own status (#3327).
+        m_lastTuneSent = m_model->transmitModel().isTuning();
+        connect(&m_model->transmitModel(), &TransmitModel::tuneChanged,
+                this, &TciServer::scheduleTuneBroadcast);
     }
 
     // Capture DAX RX stream creation responses so we can register them
@@ -341,10 +349,19 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
             // lowest free number) and on an empty map reproduces positional numbering.
             // The added slice is already in the list here.
             if (s) {
+                // Only newly acquired bindings are announced: a recreate inside
+                // the settle window still holds its binding and stays silent (#6352).
+                QList<int> acquired;
                 for (SliceModel* live : m_model->slices()) {
-                    if (live)
-                        m_trxMap.acquire(live->sliceId());
+                    if (!live)
+                        continue;
+                    const bool wasBound = m_trxMap.trxForSliceId(live->sliceId()) >= 0;
+                    const int trx = m_trxMap.acquire(live->sliceId());
+                    if (!wasBound)
+                        acquired.append(trx);
                 }
+                for (int trx : acquired)
+                    broadcast(QStringLiteral("rx_enable:%1,true;").arg(trx));
             }
             for (const auto& cs : m_clients) {
                 if (cs.audioEnabled) {
@@ -359,6 +376,14 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
             // trx map has been rebound so every stream returns to the same
             // receiver/pan instead of silently following list position.
             reconcileIqStreams();
+        });
+        // A slice taken back after a reconnect emits no sliceAdded, only this edge.
+        // Bind it quietly: the client already knows it, but its close needs a trx (#6352).
+        connect(m_model, &RadioModel::slotOccupancyChanged, this, [this](int) {
+            for (SliceModel* live : m_model->slices()) {
+                if (live)
+                    m_trxMap.acquire(live->sliceId());
+            }
         });
         // A removed slice never fires daxChannelChanged, so without this the
         // Tci hold on its channel stays set forever and the dax_rx stream
@@ -403,9 +428,21 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
             // close leaves the id dead and frees the number for reuse.
             // The timer also fires during teardown after m_trxMap.clear() —
             // intentional no-op: release() of an absent key does nothing and
-            // the liveness guard holds.
-            QTimer::singleShot(500, this, [this, sliceId]() {
+            // the liveness guard holds. The close is announced here, not
+            // synchronously, so a recreate never reports the receiver gone;
+            // the trx is read while the binding is still held (#6352).
+            const quint64 generation = ++m_closeGeneration[sliceId];
+            QTimer::singleShot(500, this, [this, sliceId, generation]() {
+                // A later removal of this id started its own window; this one
+                // would end inside it and report a live recreate as a close.
+                if (m_closeGeneration.value(sliceId) != generation)
+                    return;
+                m_closeGeneration.remove(sliceId);
                 if (m_model && !m_model->slice(sliceId)) {
+                    const int trx = m_trxMap.trxForSliceId(sliceId);
+                    if (trx >= 0 && !m_trxMap.trxHasLiveSlice(m_model, trx)) {
+                        broadcast(QStringLiteral("rx_enable:%1,false;").arg(trx));
+                    }
                     m_trxMap.release(sliceId);
                 }
             });
@@ -543,6 +580,12 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         connect(m_model, &RadioModel::sliceAdded, this, bindSlice);
         connect(m_model, &RadioModel::sliceRemoved, this,
                 [this] { refreshRxBindings(); });
+        // A session can create TCI after the backend restored its slices.
+        // Seed the sticky map before publishing any audio bindings; positional
+        // fallback would silently renumber survivors on the first removal.
+        for (SliceModel* slice : m_model->slices()) {
+            m_trxMap.acquire(slice->sliceId());
+        }
         for (SliceModel* slice : m_model->slices()) { bindSlice(slice); }
     }
     for (int ch = 1; ch <= 8; ++ch) { m_io->setRxGain(ch, m_rxChannelGain[ch - 1]); }
@@ -564,7 +607,7 @@ bool TciServer::start(quint16 requestedPort)
     m_ioThread = std::make_unique<QThread>();
     m_ioThread->setObjectName(QStringLiteral("TciIo"));
     m_io->moveToThread(m_ioThread.get());
-    m_ioThread->start();
+    AetherSDR::startStreamThread(m_ioThread.get());   // High QoS; see AppActivity.h
     bool started = false;
     quint16 bound = 0;
     QMetaObject::invokeMethod(m_io.get(), [&] {
@@ -627,6 +670,7 @@ void TciServer::stop()
     Q_ASSERT(QThread::currentThread() == thread());
     const bool hadResources = isRunning() || !m_clients.isEmpty() || !m_tciDaxSlices.isEmpty();
     abortTciPtt();
+    stopTciOwnedTune();
     teardownTciRoute();
     releaseAllIqStreams();
     stopIo();
@@ -942,6 +986,9 @@ void TciServer::onClientDisconnected()
             if (ws == m_tciPttClient || ws == m_txChronoClient) {
                 abortTciPtt();
             }
+            if (ws == m_tuneClient) {
+                stopTciOwnedTune();
+            }
             // Drop every receiver this client subscribed, independently. The
             // stream survives when another client still consumes that receiver.
             // Clearing the set BEFORE the release loop is load-bearing: it is
@@ -1126,14 +1173,12 @@ QJsonObject TciServer::routingSnapshot() const
 
     QJsonArray endpoints;
     if (m_model) {
-        const auto slices = m_model->slices();
-        for (int trx = 0; trx < slices.size(); ++trx) {
-            const SliceModel* slice = slices.at(trx);
+        for (const SliceModel* slice : m_model->slices()) {
             if (!slice) {
                 continue;
             }
             endpoints.append(QJsonObject{
-                {QStringLiteral("trx"), trx},
+                {QStringLiteral("trx"), m_trxMap.trxForSlice(m_model, slice)},
                 {QStringLiteral("sliceId"), slice->sliceId()},
                 {QStringLiteral("panId"), slice->panId()},
                 {QStringLiteral("frequencyHz"),
@@ -1538,6 +1583,9 @@ void TciServer::onTextMessage(const QString& msg)
         if (const auto request = client.protocol->takeTrxRequest()) {
             notePttRequest(*request);
             handleTrxRequest(ws, *request);
+        }
+        if (const auto request = client.protocol->takeTuneRequest()) {
+            handleTuneRequest(ws, *request);
         }
 
         // If the command changed radio state, broadcast to all other clients
@@ -2673,6 +2721,15 @@ void TciServer::resetClientRx(ClientState& client)
     syncClient(client);
 }
 
+TciRxBinding TciServer::sliceRxBinding(int sliceId) const
+{
+    const quint64 key = TciIoWorker::rxRouteKey(false,sliceId);
+    const TciRxBinding binding = m_rxBindings.value(key);
+    const QPointer<SliceModel> owner = m_rxBindingOwners.value(key);
+    if (!m_model || !owner || m_model->slice(sliceId) != owner || !binding.current()) { return {}; }
+    return binding;
+}
+
 void TciServer::refreshRxBindings()
 {
     QHash<quint64, TciRxBinding> next;
@@ -2715,6 +2772,7 @@ void TciServer::refreshRxBindings()
     m_rxBindings = next;
     m_rxBindingOwners = owners;
     m_io->post([io = m_io.get(), next] { io->setRxBindings(next); });
+    emit rxBindingsChanged();
 }
 
 void TciServer::retireAllRxRoutes()
@@ -3103,18 +3161,31 @@ void TciServer::sendInitBurst(TciClient* client)
         << "TCI: receiver map"
         << (receiverMap.isEmpty() ? QStringLiteral("(none)") : receiverMap.join(QLatin1Char(' ')));
 
-    // TCI protocol requires one command per WebSocket message.
-    // Split the concatenated burst into individual messages.
-    QString burst = protocol->generateInitBurst();
-    const auto commands = burst.split(';', Qt::SkipEmptyParts);
-    for (const auto& cmd : commands) {
+    // Preserve one command per WebSocket message, but admit the bounded init
+    // snapshot as one worker job. Eight receivers times eight simultaneous
+    // clients otherwise exceed the 256-job mailbox during their handshakes.
+    const QString burst = protocol->generateInitBurst();
+    const QStringList commands = burst.split(';', Qt::SkipEmptyParts);
+    QStringList messages;
+    qsizetype bytes = 0;
+    for (const QString& cmd : commands) {
         // DIAG: log each init-burst command — the startup vfo:/dds: here is what
         // WSJT-X reconciles against on connect; a wrong/late one explains the
         // "TCI failed set rxfreq" some users hit right at WSJT-X startup.
         qCDebug(lcCat).noquote() << "TCI tx→init:" << (cmd + QLatin1Char(';'));
         const QString message = cmd + QLatin1Char(';');
-        sendClientText(client, message);
+        noteClientTextTx(client, message);
+        messages.append(message);
+        bytes += message.size() * sizeof(QChar);
     }
+    TciIoWorker* io = m_io.get();
+    const quint64 id = client->id();
+    io->post([io, id, messages = std::move(messages)] {
+        for (const QString& message : messages) {
+            // sendText rechecks client lifetime and socket backlog each time.
+            io->sendText(id, message);
+        }
+    }, bytes);
     qCDebug(lcCat) << "TCI: sent init burst," << commands.size() << "commands";
 }
 
@@ -3319,6 +3390,96 @@ void TciServer::broadcastActualTxState(bool transmitting)
     if (transmitting && txSlice) {
         broadcast(
             QStringLiteral("tx_frequency:%1;").arg(TciProtocol::mhzToHz(txSlice->frequency())));
+    }
+}
+
+void TciServer::handleTuneRequest(TciClient* client, const TciProtocol::TuneRequest& request)
+{
+    if (!m_model) {
+        return;
+    }
+    QMetaObject::invokeMethod(this, [this, client = QPointer<TciClient>(client), request]() {
+        if (!m_model) {
+            return;
+        }
+        // Never key for a client that has gone away; a stop always applies.
+        if (request.tune && !(client && client->live())) {
+            return;
+        }
+        TransmitModel& tx = m_model->transmitModel();
+        if (request.tune) {
+            // Owned before the call, so the edge carries the requester's trx;
+            // kept only if this request started the tune.
+            const bool joining = tx.isTuning();
+            if (!joining) {
+                m_tuneClient = client;
+                m_tuneClientTrx = request.trx;
+            }
+            tx.startTune(TransmitModel::PttSource::Dax);
+            if (!joining && !tx.isTuning()) {
+                m_tuneClient.clear();
+            }
+        } else {
+            tx.stopTune();
+        }
+        m_tuneRequesters.append({client, request.trx});
+        scheduleTuneBroadcast();
+    }, Qt::QueuedConnection);
+}
+
+// A TCI-started tune has no TxCoordinator producer, so nothing else ends it
+// when its client or this server goes away.
+void TciServer::stopTciOwnedTune()
+{
+    if (!m_tuneClient) {
+        return;
+    }
+    m_tuneClient.clear();
+    if (m_model && m_model->transmitModel().isTuning()) {
+        m_model->transmitModel().stopTune();
+    }
+}
+
+// One event-loop turn late, so tune: follows the trx: edge the same command
+// produced. A TCI tuner controller (ICOM AH-4 type) must learn the carrier is
+// already up: the AH-4 does not tune when its START comes after the carrier,
+// and over a network an SDR-started tune always does.
+void TciServer::scheduleTuneBroadcast()
+{
+    if (m_tuneBroadcastQueued) {
+        return;
+    }
+    m_tuneBroadcastQueued = true;
+    QMetaObject::invokeMethod(this, &TciServer::broadcastTuneState, Qt::QueuedConnection);
+}
+
+void TciServer::broadcastTuneState()
+{
+    m_tuneBroadcastQueued = false;
+    const auto requesters = std::exchange(m_tuneRequesters, {});
+    if (!m_model) {
+        return;
+    }
+    const bool tuning = m_model->transmitModel().isTuning();
+    if (tuning != m_lastTuneSent) {
+        m_lastTuneSent = tuning;
+        const int trx = m_tuneClient ? m_tuneClientTrx
+            : m_tciPttClient ? m_tciPttTrx
+            : m_trxMap.trxForSlice(m_model, m_model->txSlice());
+        if (!tuning) {
+            m_tuneClient.clear();
+        }
+        // Reaches every requester too, so none is answered twice.
+        broadcast(QStringLiteral("tune:%1,%2;").arg(trx).arg(tuning ? "true" : "false"));
+        return;
+    }
+    // Nothing moved: a refused start, or a stop with no tune running. The
+    // requester still gets the state, or a client that repeats its stop until
+    // confirmed never hears one.
+    for (const auto& [client, trx] : requesters) {
+        if (client && client->live()) {
+            replyText(client, QStringLiteral("tune:%1,%2;").arg(trx).arg(tuning ? "true" : "false"));
+        }
     }
 }
 

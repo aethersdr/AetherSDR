@@ -1,6 +1,6 @@
 // Socket-free bridge boundary checks: JSON id rules, the MHz contract, memory
 // activation, deferred connect failures, FM repeater and transmit verbs, and
-// DEXP omission on the sim backend. Requests go straight to handleLine; no
+// DEXP omission on the sim backend, and the titlebar/applet deferral contract. Requests go straight to handleLine; no
 // listener, socket, network peer or real radio is involved, and TX permission
 // is only granted on a model with no transport behind it.
 #include "TestSettingsProfile.h"
@@ -442,6 +442,64 @@ void dexpOmittedOnSim()
     radio.disconnectFromRadio();
 }
 
+
+// titlebar / applet (#6198 review): validate synchronously, activate on the
+// next main-loop turn — never inside the socket read callback, where a tab
+// click can raise a window and `close` runs closeEvent (#3646). The reply
+// carries "deferred" and the state from BEFORE the action.
+void titleBarAndAppletDeferral()
+{
+    AutomationServer server;
+    int state = 0;      // stands in for the window: actions bump it
+    int ran = 0;
+    auto handler = [&](const QString& action, const QString&, QString* why,
+                       AutomationServer::DeferredUiAction* activate) {
+        if (action != QLatin1String("go")) {
+            if (why) *why = QStringLiteral("unknown action");
+            return false;
+        }
+        if (activate) *activate = [&] { ++ran; ++state; };
+        return true;
+    };
+    server.setTitleBarSnapshotHandler([&] { return QJsonObject{{QStringLiteral("state"), state}}; });
+    server.setTitleBarActionHandler(handler);
+    server.setAppletPanelSnapshotHandler([&] { return QJsonObject{{QStringLiteral("state"), state}}; });
+    server.setAppletPanelActionHandler(handler);
+
+    QJsonObject reply = Access::request(server, QByteArray("titlebar go"));
+    check(ok(reply) && reply.value(QStringLiteral("deferred")).toBool(),
+          "titlebar acknowledges a valid action as deferred", reply);
+    check(ran == 0, "titlebar does not act inside the request");
+    check(reply.value(QStringLiteral("titlebar")).toObject().value(QStringLiteral("state")).toInt() == 0,
+          "titlebar echoes the state from before the action", reply);
+    check(pumpUntil([&] { return ran == 1; }), "titlebar action runs on the next turn");
+
+    reply = Access::request(server, QByteArray("titlebar nope"));
+    check(!ok(reply) && errorOf(reply) == QStringLiteral("unknown action"),
+          "an invalid titlebar action still fails synchronously", reply);
+
+    reply = Access::request(server, QByteArray("applet go"));
+    check(ok(reply) && reply.value(QStringLiteral("deferred")).toBool()
+              && reply.value(QStringLiteral("applet")).toObject().value(QStringLiteral("state")).toInt() == 1
+              && ran == 1,
+          "applet action is deferred and echoes the pre-action state", reply);
+    check(pumpUntil([&] { return ran == 2; }), "applet action runs on the next turn");
+
+    reply = Access::request(server, QByteArray("applet state"));
+    check(ok(reply) && !reply.contains(QStringLiteral("deferred")) && ran == 2,
+          "applet state is a pure read", reply);
+
+    // Observe-only: the read stays available, the actions do not.
+    server.setReadOnly(true);
+    reply = Access::request(server, QByteArray("applet state"));
+    check(ok(reply), "applet state is allowed in observe-only mode", reply);
+    reply = Access::request(server, QByteArray("applet go"));
+    check(!ok(reply), "applet actions are refused in observe-only mode", reply);
+    reply = Access::request(server, QByteArray("titlebar go"));
+    check(!ok(reply), "titlebar actions are refused in observe-only mode", reply);
+    QCoreApplication::processEvents();
+    check(ran == 2, "a refused action never runs");
+}
 } // namespace
 
 int main(int argc, char** argv)
@@ -458,6 +516,7 @@ int main(int argc, char** argv)
     deferredConnectFailures();
     fmRepeaterAndTransmit();
     dexpOmittedOnSim();
+    titleBarAndAppletDeferral();
     std::printf("\n%s\n", failures == 0 ? "ALL PASS" : "FAILURES PRESENT");
     return failures == 0 ? 0 : 1;
 }

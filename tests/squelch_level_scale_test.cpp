@@ -6,7 +6,9 @@
 //      carrier brackets on every LNA row he ran (+20, +8, -4, -12).
 //   2. Each backend's RadioCapabilities::squelchLevelScale: Flex -160 + 1*L in
 //      every mode with Auto SQL; HL2 its exact pan-axis map in amsq's modes
-//      only, without Auto SQL; Icom, demo, ANAN and RTL keep Flex's scale.
+//      only, without Auto SQL; an unidentified Icom, demo, ANAN and RTL keep
+//      Flex's scale (the IC-7300MK2's measured map is in
+//      icom_control_profile_test, #6180).
 //   3. The line: a carrier exactly at the amsq gate reads on the HL2 pan at
 //      the record's threshold, at any LNA gain. Flex's line and Auto SQL level
 //      are what the old -160 + level code produced.
@@ -142,20 +144,24 @@ void recordsPerBackend()
     const SquelchLevelScale legacy{-160.0, 1.0, {}, true};
     check(legacyDbmSquelchScale() == legacy, "the legacy scale is -160 + 1*level with Auto SQL");
     check(icom::IcomCivBackend().capabilities().squelchLevelScale == legacy,
-          "Icom: Flex's -160 + 1*level, every mode, with Auto SQL");
+          "unidentified Icom: Flex's -160 + 1*level, every mode, with Auto SQL");
     check(SimBackend().capabilities().squelchLevelScale == legacy,
           "Demo: Flex's -160 + 1*level, every mode, with Auto SQL");
     check(anan::AnanBackend().capabilities().squelchLevelScale == legacy,
           "ANAN: Flex's -160 + 1*level, every mode, with Auto SQL");
 #ifdef AETHER_BACKEND_RTL
     {
-        // RtlSquelchGate is the receiver's own gate: its map, FM/FMN only, Auto
-        // SQL (the gate reads the pan's FFT), and SQL nowhere else.
+        // RTL owns its FM/FMN gate and engine Auto. Its detector bandwidth
+        // differs from the display, so no pan-level mapping is available.
         const SquelchLevelScale rtlScale{rtl::RtlSquelchGate::kReferenceDb,
             rtl::RtlSquelchGate::kStepDb, {QStringLiteral("FM"), QStringLiteral("FMN")},
-            true, QStringLiteral("dBFS/bin"), true};
+            false, QStringLiteral("dBFS/2048-bin"), true, true, false};
         check(rtl::RtlSdrBackend().capabilities().squelchLevelScale == rtlScale,
-              "RTL-SDR: RtlSquelchGate's -120 + 1.2*level dBFS/bin, FM/FMN, exclusive");
+              "RTL-SDR: RtlSquelchGate's -120 + 1.2*level dBFS/2048-bin, FM/FMN, engine Auto");
+        check(!squelchScaleForMode(rtlScale, QStringLiteral("FMN")),
+              "RTL detector bandwidth does not create a false display SQL line");
+        check(rtlScale.automaticInEngine && rtlScale.appliesTo(QStringLiteral("FMN")),
+              "RTL engine Auto remains available without display-driven Auto");
     }
     // Only RTL owns its gate; every other family keeps the #2504 mode rule.
     check(!legacy.modesExclusive && !exclusiveSquelchScale(std::optional(legacy)),

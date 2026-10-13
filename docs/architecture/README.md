@@ -25,6 +25,10 @@ context that would otherwise live in tribal knowledge.
   lessons learned from the multi-panadapter rollout.
 - [`recenter-policy.md`](recenter-policy.md) — when AetherSDR re-centers
   the panadapter view on a slice change.
+- [`window-chrome.md`](window-chrome.md) — the unified 52 px title bar:
+  which window hints each platform uses, what Qt owns versus what we paint,
+  and the radio switcher's behaviour. Read before touching `WindowChrome.h`,
+  `TitleBar` or `RadioTabBar`.
 - [`mainwindow-decomposition.md`](mainwindow-decomposition.md) — the
   `MainWindow_*.cpp` TU map and a decision guide for where new
   `MainWindow` code belongs (read before touching anything `MainWindow*`).

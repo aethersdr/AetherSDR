@@ -76,7 +76,7 @@ as a public visual reference; no implementation code was inspected or copied.
 The larger export budget improves Retina detail; full-world/date-line exports
 remain less detailed than regional views and are not a tiled renderer.
 
-Warmth is a saved display preference (default 25 percent). Zero preserves the
+Warmth is a saved display preference (default 0 percent). Zero preserves the
 grayscale NASA lights; increasing it adds a warm-white to golden tint without
 changing opacity. It does not represent measured lamp color. The globe applies
 warmth as a shader uniform without uploading a new image; the flat map applies

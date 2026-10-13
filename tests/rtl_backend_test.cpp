@@ -21,6 +21,7 @@
 #include <functional>
 #include <memory>
 #include <numbers>
+#include <vector>
 #include <cmath>
 
 using namespace AetherSDR;
@@ -65,6 +66,11 @@ struct RtlSdrBackendTestAccess {
         backend.m_connected = false;
     }
     static inline RtlCaptureTransaction::Token workerToken;
+    static std::vector<int> staleRfMeterIds(const RtlCaptureTransaction::State& prior,
+                                            const RtlCaptureTransaction::State& next)
+    {
+        return RtlSdrBackend::staleRfMeterIds(prior, next);
+    }
 };
 
 }  // namespace AetherSDR::rtl
@@ -127,11 +133,39 @@ int main(int argc, char** argv)
     check(!caps.canCreateSlices, "RTL-SDR retains its fixed single receiver in P01");
     check(caps.family == "rtl", "capabilities.family is rtl");
     check(!caps.canTransmit, "RTL-SDR cannot transmit");
+    check(caps.receiveAudioExport && caps.receiveAudioExport->maximumReceivers == caps.maxSlices
+              && caps.receiveAudioExport->sampleRatesHz.contains(24000)
+              && caps.receiveAudioExport->sampleRatesHz.contains(48000),
+          "RTL declares its typed native receive audio export independently of TX/IQ");
+    check(!caps.hasDaxStreams,"native receive export does not advertise Flex DAX/IQ streams");
+
     check(caps.txPowerMaxWatts == 0.0, "RTL-SDR max TX power is 0");
     check(!caps.hostModulates, "RTL-SDR does not modulate on host");
     check(caps.maxSlices == 1, "RTL-SDR maxSlices is 1");
     check(caps.maxPanadapters == 1, "RTL-SDR maxPanadapters is 1");
     check(!caps.persistsMemories, "RTL-SDR does not persist memories on device");
+
+#if (defined(Q_OS_LINUX) && defined(Q_PROCESSOR_X86_64)) \
+    || (defined(Q_OS_MACOS) && defined(Q_PROCESSOR_ARM_64)) \
+    || (defined(Q_OS_WIN) && defined(Q_PROCESSOR_X86_64))
+    qputenv("AETHER_RTL_EVALUATION_RECEIVERS", "8");
+    qunsetenv("AETHER_AUTOMATION");
+    { rtl::RtlSdrBackend normal; check(normal.capabilities().maxSlices == 1, "eight requires explicit evaluation environment"); }
+    qputenv("AETHER_AUTOMATION", "1");
+    {
+        rtl::RtlSdrBackend eight;
+        const auto evaluationCaps = eight.capabilities();
+        check(evaluationCaps.maxSlices == 8 && evaluationCaps.canCreateSlices,
+              "eight-receiver evaluation is advertised");
+        check(evaluationCaps.receiveAudioExport && evaluationCaps.receiveAudioExport->maximumReceivers == 8,
+              "eight-receiver native DAX export is advertised");
+        check(!evaluationCaps.canTransmit, "eight-receiver evaluation remains receive-only");
+    }
+    qputenv("AETHER_RTL_EVALUATION_RECEIVERS", "9");
+    { rtl::RtlSdrBackend invalid; check(invalid.capabilities().maxSlices == 1, "unsupported evaluation capacity is refused"); }
+    qunsetenv("AETHER_RTL_EVALUATION_RECEIVERS");
+    qunsetenv("AETHER_AUTOMATION");
+#endif
 
     // Check ClientSettingsDomains
     check(caps.clientSettingsDomains.testFlag(RadioCapabilities::ClientSettingsDomain::Tuning),
@@ -323,6 +357,74 @@ int main(int argc, char** argv)
 
         worker->release = true;
         check(worker->wait(2000), "the unconnected worker's thread finishes");
+    }
+
+    // 9. An accepted revision retires only the RF level samples it changes.
+    // Monitor-only edits keep them, so the meter does not blank during an AF
+    // gain drag; anything that moves the detector bins retires them.
+    {
+        using T = rtl::RtlCaptureTransaction;
+        using Access = rtl::RtlSdrBackendTestAccess;
+        T::State prior;
+        prior.token = {1, 1};
+        prior.capture = {1, 1, 145'000'000, 2'400'000, 1'080'000, 1'080'000};
+        prior.receivers = {{{0, 145'500'000, -8000, 8000, 0, 3000, 3000}, T::Mode::Fm},
+                           {{1, 144'800'000, -8000, 8000, 0, 3000, 3000}, T::Mode::Fm}};
+        prior.receivingIds = {0, 1};
+
+        auto monitor = prior;
+        monitor.token.revision = 2;
+        monitor.receivers[0].audioGain = 40;
+        monitor.receivers[0].audioPan = 10;
+        monitor.receivers[0].audioMute = true;
+        monitor.receivers[1].squelchEnabled = true;
+        monitor.receivers[1].squelchLevel = 55;
+        monitor.receivers[1].automaticSquelch = true;
+        check(Access::staleRfMeterIds(prior, monitor).empty(),
+              "monitor gain/pan/mute and squelch revisions keep RF level samples");
+
+        auto retune = prior;
+        retune.token.revision = 2;
+        retune.receivers[1].passband.carrierHz += 12'500;
+        check(Access::staleRfMeterIds(prior, retune) == std::vector<int>{1},
+              "a retune retires only the retuned receiver's sample");
+
+        auto mode = prior;
+        mode.receivers[0].mode = T::Mode::Fmn;
+        check(Access::staleRfMeterIds(prior, mode) == std::vector<int>{0},
+              "a mode change retires that receiver's sample");
+
+        auto parked = prior;
+        parked.receivingIds = {0};
+        check(Access::staleRfMeterIds(prior, parked) == std::vector<int>{1},
+              "parking a receiver retires its sample");
+
+        auto removed = prior;
+        removed.receivers.pop_back();
+        removed.receivingIds = {0};
+        check(Access::staleRfMeterIds(prior, removed) == std::vector<int>{1},
+              "removing a receiver retires its sample");
+
+        auto gain = prior;
+        gain.hardware.gainTenths += 10;
+        check(Access::staleRfMeterIds(prior, gain) == std::vector<int>({0, 1}),
+              "an RF gain change retires every sample");
+
+        auto moved = prior;
+        moved.capture.centerHz += 100'000;
+        moved.capture.generation = 2;
+        check(Access::staleRfMeterIds(prior, moved) == std::vector<int>({0, 1}),
+              "a capture move retires every sample");
+
+        auto dc = prior;
+        dc.dcSuppression = true;
+        check(Access::staleRfMeterIds(prior, dc) == std::vector<int>({0, 1}),
+              "a DC suppression change retires every sample");
+
+        auto session = prior;
+        session.token = {2, 1};
+        check(Access::staleRfMeterIds(prior, session) == std::vector<int>({0, 1}),
+              "a new capture session retires every sample");
     }
 #else
 

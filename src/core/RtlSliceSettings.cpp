@@ -49,10 +49,14 @@ QJsonObject encodeSlice(const RtlSliceSettings::Slice& slice, QJsonObject previo
     QJsonObject squelch = previous.value(QStringLiteral("squelch")).toObject();
     squelch.insert(QStringLiteral("enabled"), slice.squelchEnabled);
     squelch.insert(QStringLiteral("level"), slice.squelchLevel);
+    squelch.insert(QStringLiteral("automatic"), slice.automaticSquelch);
+    squelch.insert(QStringLiteral("marginDb"), slice.automaticSquelchMarginDb);
     previous.insert(QStringLiteral("squelch"), squelch);
     previous.insert(QStringLiteral("audioGain"), slice.audioGain);
     previous.insert(QStringLiteral("audioMute"), slice.audioMute);
     previous.insert(QStringLiteral("audioPan"), slice.audioPan);
+    previous.insert(QStringLiteral("wfmDeemphasisUs"), slice.wfmDeemphasisUs);
+    previous.insert(QStringLiteral("wfmForceMono"), slice.wfmForceMono);
     return previous;
 }
 
@@ -112,12 +116,32 @@ bool RtlSliceSettings::decode(const QJsonObject& object, Document& output, QStri
             || !entry.value(QStringLiteral("squelch")).isObject()) {
             return false;
         }
+        if (entry.contains(QStringLiteral("wfmDeemphasisUs"))) {
+            double microseconds = 0;
+            if (!number(entry, QStringLiteral("wfmDeemphasisUs"), 50, 75, microseconds, true)
+                || (microseconds != 50 && microseconds != 75)) { return false; }
+            slice.wfmDeemphasisUs = static_cast<int>(microseconds);
+        }
+        if (entry.contains(QStringLiteral("wfmForceMono"))) {
+            if (!entry.value(QStringLiteral("wfmForceMono")).isBool()) { return false; }
+            slice.wfmForceMono = entry.value(QStringLiteral("wfmForceMono")).toBool();
+        }
         const QJsonObject squelch = entry.value(QStringLiteral("squelch")).toObject();
         if (!squelch.value(QStringLiteral("enabled")).isBool()
             || !percent(squelch, QStringLiteral("level"), slice.squelchLevel)) {
             return false;
         }
         slice.squelchEnabled = squelch.value(QStringLiteral("enabled")).toBool();
+        if (squelch.contains(QStringLiteral("automatic"))) {
+            if (!squelch.value(QStringLiteral("automatic")).isBool()) { return false; }
+            slice.automaticSquelch = squelch.value(QStringLiteral("automatic")).toBool();
+        }
+        if (squelch.contains(QStringLiteral("marginDb"))) {
+            double margin = 0;
+            if (!number(squelch, QStringLiteral("marginDb"), 5, 20, margin, true)) { return false; }
+            slice.automaticSquelchMarginDb = static_cast<int>(margin);
+        }
+        if (slice.automaticSquelch && !slice.squelchEnabled) { return false; }
         slice.audioMute = entry.value(QStringLiteral("audioMute")).toBool();
         parsed.slices.insert(slice.id, slice);
     }

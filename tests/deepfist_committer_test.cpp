@@ -1,4 +1,5 @@
 #include "core/deepfist/DeepFistCommitter.h"
+#include <cmath>
 #include <cstdio>
 using AetherSDR::DeepFistCommitter;
 namespace {
@@ -91,5 +92,48 @@ int main()
     if (!delayedExpiry.process({}, true, 6.8, 4.6, true).isEmpty()) { return 19; }
     expiry += delayedExpiry.process({{6, 5.0, "E"}}, false, 7.2, 5.0, true);
     if (!expectText(expiry, "A E", "active word after expiry")) { return 20; }
-    std::puts("committer: carry mutation, expiry, repeated tokens, reset, delayed separators passed");
+    // Confidence (CONSTRUCTED values, arithmetic only): a published letter
+    // carries the mean over its sightings, one per window; the separator is
+    // shown as certain; a carried letter averages the sightings it had.
+    using Piece = DeepFistCommitter::Piece;
+    const auto near = [](float a, float b) { return std::abs(a - b) < 1e-4f; };
+    DeepFistCommitter scored;
+    std::vector<Piece> pieces;
+    scored.process({{2, 2.8, "A", 0.9f}, {21, 3.60, "T", 0.2f}}, false, 4.0, 2.7, true, &pieces);
+    scored.process({{2, 2.81, "A", 0.6f}, {21, 3.61, "T", 0.4f}}, false, 4.4, 2.7, true, &pieces);
+    if (!pieces.empty()) { return 21; }
+    scored.process({{2, 2.8, "A", 0.3f}, {21, 3.62, "T", 0.6f}}, false, 4.8, 3.0, true, &pieces);
+    if (pieces.size() != 1 || pieces[0].text != "A" || !near(pieces[0].confidence, 0.6f)) { return 22; }
+    pieces.clear();
+    scored.process({}, true, 5.2, 3.9, true, &pieces);
+    if (pieces.size() != 2 || pieces[0].text != "T" || !near(pieces[0].confidence, 0.4f)
+        || pieces[1].text != " " || !near(pieces[1].confidence, 1.f)) { return 23; }
+    // A repeated letter inside the 0.12 s tolerance keeps its own score (CONSTRUCTED,
+    // the review's case): two E 80 ms apart, seen identically in two windows.
+    DeepFistCommitter closePair;
+    pieces.clear();
+    closePair.process({{6, 2.80, "E", 0.9f}, {6, 2.88, "E", 0.1f}}, false, 4.0, 2.0, false, &pieces);
+    closePair.process({{6, 2.80, "E", 0.9f}, {6, 2.88, "E", 0.1f}}, false, 4.4, 3.0, false, &pieces);
+    if (pieces.size() != 2 || !near(pieces[0].confidence, 0.9f) || !near(pieces[1].confidence, 0.1f)) {
+        return 24;
+    }
+    // The same pair with the later window's times shifted 50 ms: matched by order,
+    // since the closest earlier sighting of the first E is now the second E's.
+    DeepFistCommitter shiftedPair;
+    pieces.clear();
+    shiftedPair.process({{6, 2.80, "E", 0.9f}, {6, 2.88, "E", 0.1f}}, false, 4.0, 2.0, false, &pieces);
+    shiftedPair.process({{6, 2.85, "E", 0.9f}, {6, 2.93, "E", 0.1f}}, false, 4.4, 3.0, false, &pieces);
+    if (pieces.size() != 2 || !near(pieces[0].confidence, 0.9f) || !near(pieces[1].confidence, 0.1f)) {
+        return 25;
+    }
+    // Counts differ (the earlier window saw one E): each letter takes the closest
+    // sighting, so both average in the earlier 0.9.
+    DeepFistCommitter unevenPair;
+    pieces.clear();
+    unevenPair.process({{6, 2.80, "E", 0.9f}}, false, 4.0, 2.0, false, &pieces);
+    unevenPair.process({{6, 2.80, "E", 0.9f}, {6, 2.88, "E", 0.1f}}, false, 4.4, 3.0, false, &pieces);
+    if (pieces.size() != 2 || !near(pieces[0].confidence, 0.9f) || !near(pieces[1].confidence, 0.5f)) {
+        return 26;
+    }
+    std::puts("committer: carry mutation, expiry, repeated tokens, reset, delayed separators, confidence passed");
 }

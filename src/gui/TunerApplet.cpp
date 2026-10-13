@@ -701,10 +701,11 @@ void TunerApplet::applyDensityAtScale(qreal scale)
 void TunerApplet::applySourceIndicatorStyle(qreal scale)
 {
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_sourceLabel,
-        QStringLiteral("QLabel { color: %1; font-size: %2px; }")
-            .arg(m_directConnected ? QStringLiteral("{{color.accent.success}}")
-                 : hasRadioRelay() ? QStringLiteral("{{color.accent.warning}}")
-                                    : QStringLiteral("{{color.text.disabled}}"))
+        QStringLiteral("QLabel { color: {{%1}}; font-size: %2px; }")
+            .arg(PeripheralConnectionSource::colorToken(
+                m_directConnected ? PeripheralConnectionSource::Source::Direct
+                : hasRadioRelay() ? PeripheralConnectionSource::Source::Radio
+                                  : PeripheralConnectionSource::Source::Offline))
             .arg(m_floating ? qMax(1, qRound(11 * scale)) : 9));
 }
 

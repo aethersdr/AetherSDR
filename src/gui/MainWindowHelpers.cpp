@@ -10,9 +10,11 @@
 #include "models/SliceModel.h"
 #include "models/XvtrPolicy.h"
 #include "models/TnfModel.h"
+#include "core/ThemeManager.h"
 
 #include <QFileInfo>
 #include <QKeyEvent>
+#include <QLabel>
 #include <QLocale>
 #include <QMap>
 #include <QPainter>
@@ -41,7 +43,7 @@ bool requestSlicePanCenter(RadioModel& model, int sliceId, double centerMhz)
 
 bool macDaxDriverInstalled()
 {
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
     const QFileInfo driverBundle("/Library/Audio/Plug-Ins/HAL/AetherSDRDAX.driver");
     if (!driverBundle.exists() || !driverBundle.isDir())
         return false;
@@ -634,6 +636,26 @@ QString clientConnectionStatusMessage(quint32 handle,
         return QObject::tr("New client connection from %1 (%2)").arg(from, detail);
 
     return QObject::tr("New client connection from %1").arg(from);
+}
+
+// ─── Status-bar compact labels ──────────────────────────────────────────────
+
+QString statusBarCompactLabelStyle(const QString& color, bool bold)
+{
+    return QStringLiteral(
+        "QLabel#statusBarCompactLabel { color: %1; font-size: 12px; font-weight: %2; "
+        "background: transparent; }")
+        .arg(color, bold ? QStringLiteral("bold") : QStringLiteral("normal"));
+}
+
+void applyStatusBarCompactLabelStyle(QLabel* label, const QString& color, bool bold)
+{
+    if (!label) {
+        return;
+    }
+
+    label->setObjectName(QStringLiteral("statusBarCompactLabel"));
+    ThemeManager::instance().applyStyleSheet(label, statusBarCompactLabelStyle(color, bold));
 }
 
 } // namespace AetherSDR

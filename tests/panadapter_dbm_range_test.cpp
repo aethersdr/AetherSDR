@@ -1,12 +1,33 @@
 #include "core/backends/flex/PanadapterStream.h"
 #include "core/VitaBinCoverage.h"
 #include "gui/DbmRangeTransition.h"
+#include "models/RadioModel.h"
+#include "models/PanadapterModel.h"
+#include "TestSettingsProfile.h"
 
 #include <QCoreApplication>
+#include <QtEndian>
 
 #include <cstdio>
 
 using namespace AetherSDR;
+
+namespace AetherSDR {
+struct PanadapterDbmRangeTestAccess {
+    static void fft(PanadapterStream& stream, quint32 id) {
+        QByteArray frame(48, '\0');
+        auto* raw = reinterpret_cast<uchar*>(frame.data());
+        qToBigEndian<quint16>(4, raw + 30);
+        qToBigEndian<quint16>(2, raw + 32);
+        qToBigEndian<quint16>(4, raw + 34);
+        qToBigEndian<quint32>(1, raw + 36);
+        for (int i = 0; i < 4; ++i) {
+            qToBigEndian<quint16>(350, raw + 40 + 2 * i);
+        }
+        stream.decodeFFT(raw, frame.size(), false, id);
+    }
+};
+}
 
 static int g_failures = 0;
 
@@ -19,7 +40,42 @@ static int g_failures = 0;
 
 int main(int argc, char** argv)
 {
+    TestSettingsProfile profile(QStringLiteral("panadapter-dbm-range"));
     QCoreApplication app(argc, argv);
+
+    {
+        RadioModel radio;
+        const QString panId = QStringLiteral("0x40000011");
+        radio.handleStatusForTest(QStringLiteral("display pan ") + panId,
+            {{"client_handle", "0x0"}, {"min_dbm", "-130"}, {"max_dbm", "-40"}});
+        radio.handleStatusForTest(QStringLiteral("display pan ") + panId,
+            {{"client_handle", "0xdeadbeef"}, {"min_dbm", "-130"}, {"max_dbm", "-40"}});
+        const PanadapterModel* foreign = radio.panadapter(panId);
+        CHECK(foreign && !foreign->ownedByClient(radio.ourClientHandle()));
+        bool replied = false;
+        CHECK(!radio.sendCmdPublic(QStringLiteral("display pan set ") + panId
+                + QStringLiteral(" min_dbm=-154 max_dbm=-40"),
+            [&](int, const QString&) { replied = true; }));
+        CHECK(!replied);
+        CHECK(!radio.sendCommand(QStringLiteral("display pan set ") + panId
+                + QStringLiteral(" min_dbm=-154 max_dbm=-40")));
+    }
+
+    int dispatches = 0;
+    int commits = 0;
+    const auto dispatch = [&]() { ++dispatches; return true; };
+    const auto commit = [&]() { ++commits; };
+    CHECK(!DbmRangeTransition::dispatchValidatedRange(
+        {-202.0f, -112.0f}, dispatch, commit));
+    CHECK(!DbmRangeTransition::dispatchValidatedRange(
+        {std::nanf(""), -40.0f}, dispatch, commit));
+    CHECK(dispatches == 0 && commits == 0);
+    CHECK(!DbmRangeTransition::dispatchValidatedRange(
+        {-135.0f, -40.0f}, []() { return false; }, commit));
+    CHECK(commits == 0);
+    CHECK(DbmRangeTransition::dispatchValidatedRange(
+        {-135.0f, -40.0f}, dispatch, commit));
+    CHECK(dispatches == 1 && commits == 1);
 
     VitaBinCoverage fragmentCoverage;
     fragmentCoverage.reset(8);
@@ -98,10 +154,128 @@ int main(int argc, char** argv)
     stream.setDbmRange(kStreamId, -130.0f, -30.0f);
     CHECK(!stream.cancelPendingDbmRange(kStreamId));
 
+    // The queued payload owns its decoder aperture even if the GUI changes
+    // the stream range before delivering the observation. No socket is used.
+    {
+        const SpectrumDecodeScale old = stream.setDbmRange(kStreamId, -165, -35);
+        CHECK(old.valid());
+        SpectrumDecodeScale queued;
+        QVector<float> queuedBins;
+        QObject receiver;
+        QObject::connect(&stream, &PanadapterStream::spectrumReady, &receiver,
+            [&](quint32 id, const QVector<float>& bins, qint64,
+                const SpectrumDecodeScale& scale) {
+                CHECK(id == kStreamId);
+                queued = scale;
+                queuedBins = bins;
+            }, Qt::QueuedConnection);
+        PanadapterDbmRangeTestAccess::fft(stream, kStreamId);
+        const SpectrumDecodeScale requested = stream.setDbmRange(kStreamId, -127.5f, 2.5f, true);
+        CHECK(requested.generation > old.generation);
+        const SpectrumDecodeScale staleEcho = stream.setDbmRange(kStreamId, -165, -35);
+        CHECK(staleEcho.generation == requested.generation);
+        const SpectrumDecodeScale matchingEcho = stream.setDbmRange(kStreamId, -127.5f, 2.5f);
+        CHECK(matchingEcho.generation == requested.generation);
+        app.processEvents();
+        CHECK(queued.generation == old.generation);
+        CHECK(queued.minDbm == -165 && queued.maxDbm == -35);
+        CHECK(queuedBins.size() == 4);
+        CHECK(std::abs(queuedBins.front() - (-35 - 350.0f / 699 * 130)) < 0.001f);
+    }
+
+    // A stream that never took a range write (its status matched the -130/-40
+    // default) still decodes with a valid generation, and the first real write
+    // supersedes it.
+    {
+        constexpr quint32 kFreshStreamId = kStreamId + 1;
+        stream.registerPanStream(kFreshStreamId);
+        SpectrumDecodeScale first;
+        QObject receiver;
+        QObject::connect(&stream, &PanadapterStream::spectrumReady, &receiver,
+            [&](quint32 id, const QVector<float>&, qint64, const SpectrumDecodeScale& scale) {
+                if (id == kFreshStreamId) {
+                    first = scale;
+                }
+            }, Qt::QueuedConnection);
+        PanadapterDbmRangeTestAccess::fft(stream, kFreshStreamId);
+        app.processEvents();
+        CHECK(first.valid());
+        CHECK(first.minDbm == -130.0f && first.maxDbm == -40.0f);
+        const SpectrumDecodeScale written = stream.setDbmRange(kFreshStreamId, -100.0f, -10.0f);
+        CHECK(written.generation > first.generation);
+        stream.unregisterPanStream(kFreshStreamId);
+    }
+
+    {
+        DbmRangeTransition::FrameGuard frames;
+        const DbmRangeTransition::Range first{-165, -35}, middle{-127.5f, 2.5f};
+        const QVector<float> physical(256, -104);
+        frames.arm(first, middle, 1000, 2000);
+        frames.setTargetScale({middle.minDbm, middle.maxDbm, 2});
+        CHECK(!frames.evaluate(physical, physical, {-165, -35, 1}, 1001).newEncodingObserved);
+        const QVector<float> wrong(256, -66.5f);
+        const auto corrected = frames.evaluate(wrong, physical, {-127.5f, 2.5f, 2}, 1002);
+        CHECK(corrected.useRebasedBins && !corrected.newEncodingObserved);
+        CHECK(std::abs(corrected.rebasedBins.front() + 104) < 0.001f);
+        CHECK(frames.evaluate(physical, physical, {-127.5f, 2.5f, 2}, 1100).newEncodingObserved);
+        CHECK(frames.evaluate(wrong, physical, {-127.5f, 2.5f, 2}, 1101).useRebasedBins);
+        frames.arm(middle, first, 1200, 2000);
+        frames.setTargetScale({-165, -35, 3});
+        CHECK(!frames.evaluate(physical, physical, {-165, -35, 1}, 1201).newEncodingObserved);
+        const QVector<float> intermediateWire(256, -141.5f);
+        const auto reversed = frames.evaluate(intermediateWire, physical, {-165, -35, 3}, 1202);
+        CHECK(reversed.useRebasedBins && !reversed.newEncodingObserved);
+        CHECK(std::abs(reversed.rebasedBins.front() + 104) < 0.001f);
+        for (const DbmRangeTransition::Range intermediate : {
+                 DbmRangeTransition::Range{-165, 2.5f}, {-127.5f, -35}}) {
+            QVector<float> decoded = physical;
+            for (float& bin : decoded) {
+                const float fraction = (intermediate.maxDbm - bin)
+                    / (intermediate.maxDbm - intermediate.minDbm);
+                bin = -35 - fraction * 130;
+            }
+            const auto partial = frames.evaluate(decoded, physical, {-165, -35, 3}, 1250);
+            CHECK(partial.useRebasedBins && !partial.newEncodingObserved);
+            CHECK(std::abs(partial.rebasedBins.front() + 104) < 0.001f);
+        }
+        CHECK(!frames.evaluate(wrong, physical, {-127.5f, 2.5f, 2}, 3201).useRebasedBins);
+        frames.clear();
+        CHECK(!frames.evaluate(wrong, physical, {-127.5f, 2.5f, 2}, 1203).useRebasedBins);
+    }
+
     // A single radio-authoritative mismatch must survive until the timeout.
     // PanadapterModel emits levelChanged only when the values change, so there
     // may be no second status available to repair the decoder afterward.
     DbmRangeTransition::Handshake handshake;
+    const DbmRangeTransition::Range previousRange{-80.0f, -10.0f};
+    const quint64 acceptedGeneration = handshake.arm(-104.0f, -10.0f, 500);
+    const DbmRangeTransition::HandshakeDecision acceptedReply =
+        handshake.completeReply(acceptedGeneration, true, previousRange);
+    CHECK(acceptedReply.action == DbmRangeTransition::HandshakeAction::ReconcileRadioRange);
+    CHECK(acceptedReply.range.minDbm == -104.0f && acceptedReply.range.maxDbm == -10.0f);
+    CHECK(!handshake.active());
+    CHECK(handshake.finish(acceptedGeneration).action == DbmRangeTransition::HandshakeAction::Ignore);
+    const quint64 rejectedGeneration = handshake.arm(-104.0f, -10.0f, 600);
+    const DbmRangeTransition::HandshakeDecision rejectedReply =
+        handshake.completeReply(rejectedGeneration, false, previousRange);
+    CHECK(rejectedReply.range.minDbm == -80.0f && rejectedReply.range.maxDbm == -10.0f);
+    const quint64 supersededGeneration = handshake.arm(-104.0f, -10.0f, 700);
+    const quint64 supersedingGeneration = handshake.arm(-128.0f, -10.0f, 750);
+    CHECK(handshake.completeReply(supersededGeneration, true, previousRange).action
+          == DbmRangeTransition::HandshakeAction::Ignore);
+    handshake.observeRadioRange(-130.0f, -20.0f, 800, 2000);
+    const DbmRangeTransition::HandshakeDecision reportedReply =
+        handshake.completeReply(supersedingGeneration, true, previousRange);
+    // Principle II: status received after the write wins over the accepted request.
+    CHECK(reportedReply.range.minDbm == -130.0f && reportedReply.range.maxDbm == -20.0f);
+    const DbmRangeTransition::HandshakeDecision laterStatus =
+        handshake.observeRadioRange(-130.0f, -20.0f, 850, 2000);
+    CHECK(laterStatus.action == DbmRangeTransition::HandshakeAction::ApplyRadioRange);
+    const quint64 rejectionAfterStatus = handshake.arm(-128.0f, -10.0f, 900);
+    handshake.observeRadioRange(-130.0f, -20.0f, 920, 2000);
+    const DbmRangeTransition::HandshakeDecision rejectedAfterStatus =
+        handshake.completeReply(rejectionAfterStatus, false, previousRange);
+    CHECK(rejectedAfterStatus.range.minDbm == -130.0f && rejectedAfterStatus.range.maxDbm == -20.0f);
     const quint64 mismatchGeneration = handshake.arm(-138.0f, -95.0f, 1000);
     const DbmRangeTransition::HandshakeDecision heldMismatch =
         handshake.observeRadioRange(-130.0f, -30.0f, 1100, 2000);
@@ -250,18 +424,35 @@ int main(int argc, char** argv)
         movedFloorRange, {-123.48f, -113.48f}));
 
     // A clipped frame cannot estimate the real floor. Recovery must add
-    // headroom while preserving the radio encoder span, then verify again.
+    // lower headroom without sacrificing the existing peak ceiling.
     const DbmRangeTransition::Range clippedRecoveryRange =
         DbmRangeTransition::clippedFloorRecoveryRange(-110.5f, -15.5f);
     CHECK(std::abs(clippedRecoveryRange.minDbm - -116.5f) < 0.01f);
-    CHECK(std::abs(clippedRecoveryRange.maxDbm - -21.5f) < 0.01f);
+    CHECK(std::abs(clippedRecoveryRange.maxDbm - -15.5f) < 0.01f);
     CHECK(std::abs((clippedRecoveryRange.maxDbm
-                    - clippedRecoveryRange.minDbm) - 95.0f) < 0.01f);
+                    - clippedRecoveryRange.minDbm) - 101.0f) < 0.01f);
     const DbmRangeTransition::Range oneShotRecoveryRange =
         DbmRangeTransition::clippedFloorRecoveryRange(
             -111.0f, -16.0f, 24.0f);
     CHECK(std::abs(oneShotRecoveryRange.minDbm - -135.0f) < 0.01f);
-    CHECK(std::abs(oneShotRecoveryRange.maxDbm - -40.0f) < 0.01f);
+    CHECK(std::abs(oneShotRecoveryRange.maxDbm - -16.0f) < 0.01f);
+
+    const DbmRangeTransition::Range boundedFloor =
+        DbmRangeTransition::clippedFloorRecoveryRange(-178.0f, -88.0f, 24.0f);
+    CHECK(boundedFloor.minDbm == -180.0f && boundedFloor.maxDbm == -88.0f);
+    CHECK(!DbmRangeTransition::materiallyDifferent(boundedFloor,
+        DbmRangeTransition::clippedFloorRecoveryRange(-180.0f, -88.0f, 24.0f)));
+    const DbmRangeTransition::Range expandedPeak =
+        DbmRangeTransition::clippedPeakRecoveryRange(-178.0f, -88.0f, 24.0f);
+    CHECK(expandedPeak.minDbm == -178.0f && expandedPeak.maxDbm == -64.0f);
+    const DbmRangeTransition::Range spanLimited =
+        DbmRangeTransition::clippedPeakRecoveryRange(-180.0f, -10.0f, 24.0f);
+    CHECK(spanLimited.minDbm == -180.0f && spanLimited.maxDbm == 0.0f);
+    const DbmRangeTransition::Range ceilingLimited =
+        DbmRangeTransition::clippedPeakRecoveryRange(-130.0f, 10.0f, 24.0f);
+    CHECK(ceilingLimited.minDbm == -130.0f && ceilingLimited.maxDbm == 20.0f);
+    CHECK(!DbmRangeTransition::materiallyDifferent({-180.0f, 0.0f},
+        DbmRangeTransition::clippedFloorRecoveryRange(-180.0f, 0.0f, 24.0f)));
 
     const DbmRangeTransition::Range flex2dRange =
         DbmRangeTransition::manualRequestRange(

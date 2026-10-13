@@ -46,8 +46,27 @@ bool DeepFistStream::hasCompletedMark(const float* samples, int count)
     }
     return false;
 }
+float DeepFistStream::spanConfidence(const float* logProbs, int frames, int classes, int frame, int id)
+{
+    if (!logProbs || frames <= 0 || classes <= 0 || frame < 0 || frame >= frames || id < 0 || id >= classes) {
+        return 0.f;
+    }
+    double sum = 0;
+    int count = 0;
+    for (int t = frame; t < frames; ++t) {
+        const float* row = logProbs + static_cast<std::size_t>(t) * classes;
+        const float* best = std::max_element(row, row + classes);
+        if (t > frame && best - row != id) { break; }
+        double total = 0;
+        for (int c = 0; c < classes; ++c) { total += std::exp(double(row[c]) - *best); }
+        sum += std::exp(double(row[id]) - *best) / total;
+        ++count;
+    }
+    return static_cast<float>(sum / count);
+}
 QString DeepFistStream::process(const float* samples, int count, lyra::dsp::DeepFistModel& model,
-                                std::vector<Observation>* observations)
+                                std::vector<Observation>* observations,
+                                std::vector<DeepFistCommitter::Piece>* pieces)
 {
     if (m_failed) { return {}; }
     QString result;
@@ -117,7 +136,8 @@ QString DeepFistStream::process(const float* samples, int count, lyra::dsp::Deep
                 }
                 const double time = end - 6.0 + decoded.frames[j] * 6.0 / frames;
                 const QString token = QString::fromStdString(model.tokens()[decoded.ids[j]]);
-                tokens.push_back({decoded.ids[j], time, token});
+                tokens.push_back({decoded.ids[j], time, token,
+                    spanConfidence(m_logits.data(), frames, classes, decoded.frames[j], decoded.ids[j])});
                 if (observations) {
                     const QString decision = gated ? QStringLiteral("activity_gate")
                         : time <= m_committer.committed() ? QStringLiteral("past_boundary")
@@ -126,7 +146,7 @@ QString DeepFistStream::process(const float* samples, int count, lyra::dsp::Deep
                 }
             }
         }
-        const QString publication = m_committer.process(tokens, gated, end, settled, m_parameters.carryPending);
+        const QString publication = m_committer.process(tokens, gated, end, settled, m_parameters.carryPending, pieces);
         result += publication;
         if (observations) {
             observation.publication = publication;

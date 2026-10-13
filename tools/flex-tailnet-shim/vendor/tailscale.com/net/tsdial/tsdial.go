@@ -1,0 +1,756 @@
+// Copyright (c) Tailscale Inc & contributors
+// SPDX-License-Identifier: BSD-3-Clause
+
+// Package tsdial provides a Dialer type that can dial out of tailscaled.
+package tsdial
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net"
+	"net/http"
+	"net/netip"
+	"runtime"
+	"slices"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"syscall"
+	"time"
+
+	"github.com/gaissmai/bart"
+	"tailscale.com/envknob"
+	"tailscale.com/feature"
+	"tailscale.com/feature/buildfeatures"
+	"tailscale.com/net/dnscache"
+	"tailscale.com/net/netknob"
+	"tailscale.com/net/netmon"
+	"tailscale.com/net/netns"
+	"tailscale.com/net/netutil"
+	"tailscale.com/net/netx"
+	"tailscale.com/net/tsaddr"
+	"tailscale.com/syncs"
+	"tailscale.com/types/logger"
+	"tailscale.com/types/nettype"
+	"tailscale.com/util/clientmetric"
+	"tailscale.com/util/eventbus"
+	"tailscale.com/util/mak"
+	"tailscale.com/util/testenv"
+	"tailscale.com/version"
+)
+
+// NewDialer returns a new Dialer that can dial out of tailscaled.
+// Its exported fields should be set before use, if any.
+func NewDialer(netMon *netmon.Monitor) *Dialer {
+	if netMon == nil {
+		panic("NewDialer: netMon is nil")
+	}
+	d := &Dialer{}
+	d.SetNetMon(netMon)
+	return d
+}
+
+// NewFromFuncForDebug is like NewDialer but takes a netx.DialFunc
+// and no netMon. It's meant exclusively for the "tailscale debug ts2021"
+// debug command, and perhaps tests.
+func NewFromFuncForDebug(logf logger.Logf, dial netx.DialFunc) *Dialer {
+	return &Dialer{sysDialForTest: dial, Logf: logf}
+}
+
+// Dialer dials out of tailscaled, while taking care of details while
+// handling the dozens of edge cases depending on the server mode
+// (TUN, netstack), the OS network sandboxing style (macOS/iOS
+// Extension, none), user-selected route acceptance prefs, etc.
+//
+// Before use, SetNetMon should be called with a netmon.Monitor.
+type Dialer struct {
+	Logf logger.Logf
+	// UseNetstackForIP if non-nil is whether NetstackDialTCP (if
+	// it's non-nil) should be used to dial the provided IP.
+	UseNetstackForIP func(netip.Addr) bool
+
+	// NetstackDialTCP dials the provided IPPort using netstack.
+	// If nil, it's not used.
+	NetstackDialTCP func(context.Context, netip.AddrPort) (net.Conn, error)
+
+	// NetstackDialUDP dials the provided IPPort using netstack.
+	// If nil, it's not used.
+	NetstackDialUDP func(context.Context, netip.AddrPort) (net.Conn, error)
+
+	peerClientOnce sync.Once
+	peerClient     *http.Client
+
+	peerDialerOnce sync.Once
+	peerDialer     *net.Dialer
+
+	netnsDialerOnce sync.Once
+	netnsDialer     netns.Dialer
+	sysDialForTest  netx.DialFunc // or nil
+
+	routes atomic.Pointer[bart.Table[bool]] // or nil if UserDial should not use routes. `true` indicates routes that point into the Tailscale interface
+
+	// resolveMagicDNS, if non-nil, resolves a MagicDNS hostname (short
+	// name or FQDN, without trailing dot, lowercased) to an IP address.
+	// The network parameter ("tcp", "tcp4", "tcp6", "udp", "udp4",
+	// "udp6") constrains the address family of the result. The normal
+	// implementation is [ipnlocal.LocalBackend.resolveMagicDNS],
+	// installed at construction time. It is read without holding mu.
+	resolveMagicDNS atomic.Pointer[func(hostname, network string) (_ netip.Addr, ok bool)]
+
+	mu               syncs.Mutex
+	closed           bool
+	tunName          string // tun device name
+	netMon           *netmon.Monitor
+	netMonUnregister func()
+	exitDNSDoHBase   string                 // non-empty if DoH-proxying exit node in use; base URL+path (without '?')
+	dnsCache         *dnscache.MessageCache // nil until first non-empty SetExitDNSDoH
+	nextSysConnID    int
+	activeSysConns   map[int]net.Conn // active connections not yet closed
+	bus              *eventbus.Bus    // only used for comparison with already set bus.
+	eventClient      *eventbus.Client
+	eventBusSubs     eventbus.Monitor
+}
+
+// sysConn wraps a net.Conn that was created using d.SystemDial.
+// It exists to track which connections are still open, and should be
+// closed on major link changes.
+type sysConn struct {
+	net.Conn
+	id int
+	d  *Dialer
+}
+
+func (c sysConn) Close() error {
+	c.d.closeSysConn(c.id)
+	return nil
+}
+
+// CloseRead implements [nettype.HalfCloser], allowing the underlying Conn
+// to be half-closed if possible. Otherwise, this is a no-op.
+func (c sysConn) CloseRead() error {
+	if hc, ok := c.Conn.(nettype.HalfCloser); ok {
+		return hc.CloseRead()
+	}
+	return nil
+}
+
+// CloseWrite implements [nettype.HalfCloser], allowing the underlying Conn
+// to be half-closed if possible. Otherwise, this is a no-op.
+func (c sysConn) CloseWrite() error {
+	if hc, ok := c.Conn.(nettype.HalfCloser); ok {
+		return hc.CloseWrite()
+	}
+	return nil
+}
+
+// SetTUNName sets the name of the tun device in use ("tailscale0", "utun6",
+// etc). This is needed on some platforms to set sockopts to bind
+// to the same interface index.
+func (d *Dialer) SetTUNName(name string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.tunName = name
+}
+
+// TUNName returns the name of the tun device in use, if any.
+// Example format ("tailscale0", "utun6").
+func (d *Dialer) TUNName() string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.tunName
+}
+
+// ProbeLocks acquires and releases the dialer's internal mutex.
+func (d *Dialer) ProbeLocks() {
+	d.mu.Lock()
+	d.mu.Unlock()
+}
+
+// SetExitDNSDoH sets (or clears) the exit node DNS DoH server base URL to use.
+// The doh URL should contain the scheme, authority, and path, but without
+// a '?' and/or query parameters.
+//
+// For example, "http://100.68.82.120:47830/dns-query".
+func (d *Dialer) SetExitDNSDoH(doh string) {
+	if !buildfeatures.HasUseExitNode {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.exitDNSDoHBase == doh {
+		return
+	}
+	d.exitDNSDoHBase = doh
+	if doh != "" && d.dnsCache == nil {
+		d.dnsCache = new(dnscache.MessageCache)
+	}
+	if d.dnsCache != nil {
+		d.dnsCache.Flush()
+	}
+}
+
+// SetRoutes configures the dialer to dial the specified routes via Tailscale,
+// and the specified localRoutes using the default interface.
+func (d *Dialer) SetRoutes(routes, localRoutes []netip.Prefix) {
+	var rt *bart.Table[bool]
+	if len(routes) > 0 || len(localRoutes) > 0 {
+		rt = &bart.Table[bool]{}
+		for _, r := range routes {
+			rt.Insert(r, true)
+		}
+		for _, r := range localRoutes {
+			rt.Insert(r, false)
+		}
+		d.logf("tsdial: bart table size: %d", rt.Size())
+	}
+
+	d.routes.Store(rt)
+}
+
+func (d *Dialer) Close() error {
+	if d.eventClient != nil {
+		d.eventBusSubs.Close()
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.closed = true
+	if d.netMonUnregister != nil {
+		d.netMonUnregister()
+		d.netMonUnregister = nil
+	}
+	for _, c := range d.activeSysConns {
+		c.Close()
+	}
+	d.activeSysConns = nil
+	if buildfeatures.HasPeerAPIClient {
+		d.PeerAPITransport().CloseIdleConnections()
+	}
+	return nil
+}
+
+// SetNetMon sets d's network monitor to netMon.
+// It is a no-op to call SetNetMon with the same netMon as the current one.
+func (d *Dialer) SetNetMon(netMon *netmon.Monitor) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.netMon == netMon {
+		return
+	}
+	if d.netMonUnregister != nil {
+		go d.netMonUnregister()
+		d.netMonUnregister = nil
+	}
+	d.netMon = netMon
+	// Having multiple watchers could lead to problems,
+	// so remove the eventClient if it exists.
+	// This should really not happen, but better checking for it than not.
+	// TODO(cmol): Should this just be a panic?
+	if d.eventClient != nil {
+		d.eventBusSubs.Close()
+		d.eventClient = nil
+	}
+	d.netMonUnregister = d.netMon.RegisterChangeCallback(d.linkChanged)
+}
+
+// NetMon returns the Dialer's network monitor.
+// It returns nil if SetNetMon has not been called.
+func (d *Dialer) NetMon() *netmon.Monitor {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.netMon
+}
+
+func (d *Dialer) SetBus(bus *eventbus.Bus) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.bus == bus {
+		return
+	} else if d.bus != nil {
+		panic("different eventbus has already been set")
+	}
+	// Having multiple watchers could lead to problems,
+	// so unregister the callback if it exists.
+	if d.netMonUnregister != nil {
+		d.netMonUnregister()
+	}
+	d.bus = bus
+	d.eventClient = bus.Client("tsdial.Dialer")
+	d.eventBusSubs = d.eventClient.Monitor(d.linkChangeWatcher(d.eventClient))
+}
+
+func (d *Dialer) linkChangeWatcher(ec *eventbus.Client) func(*eventbus.Client) {
+	linkChangeSub := eventbus.Subscribe[netmon.ChangeDelta](ec)
+	return func(ec *eventbus.Client) {
+		for {
+			select {
+			case <-ec.Done():
+				return
+			case cd := <-linkChangeSub.Events():
+				d.linkChanged(&cd)
+			}
+		}
+	}
+}
+
+var (
+	metricLinkChangeConnClosed      = clientmetric.NewCounter("tsdial_linkchange_closes")
+	metricChangeDeltaNoDefaultRoute = clientmetric.NewCounter("tsdial_changedelta_no_default_route")
+)
+
+func (d *Dialer) linkChanged(delta *netmon.ChangeDelta) {
+	// Track how often we see ChangeDeltas with no DefaultRouteInterface.
+	if delta.DefaultRouteInterface == "" {
+		metricChangeDeltaNoDefaultRoute.Add(1)
+	}
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	var anyClosed bool
+	for id, c := range d.activeSysConns {
+		if changeAffectsConn(delta, c) {
+			anyClosed = true
+			d.logf("tsdial: closing system connection %v->%v due to link change", c.LocalAddr(), c.RemoteAddr())
+			go c.Close()
+			delete(d.activeSysConns, id)
+		}
+	}
+	if anyClosed {
+		metricLinkChangeConnClosed.Add(1)
+	}
+}
+
+// changeAffectsConn reports whether the network change delta affects
+// the provided connection.
+func changeAffectsConn(delta *netmon.ChangeDelta, conn net.Conn) bool {
+	la, _ := conn.LocalAddr().(*net.TCPAddr)
+	ra, _ := conn.RemoteAddr().(*net.TCPAddr)
+	if la == nil || ra == nil {
+		return false // not TCP
+	}
+	lip, rip := la.AddrPort().Addr(), ra.AddrPort().Addr()
+
+	if delta.IsInitialState {
+		return false
+	}
+
+	if delta.DefaultInterfaceChanged ||
+		delta.HasPACOrProxyConfigChanged {
+		return true
+	}
+
+	// In a few cases, we don't have a new DefaultRouteInterface (e.g. on
+	// Android and macOS/iOS; see tailscale/corp#19124); if so, pessimistically assume
+	// that all connections are affected.
+	if delta.DefaultRouteInterface == "" && runtime.GOOS != "plan9" {
+		return true
+	}
+
+	if delta.InterfaceIPDisappeared(lip) {
+		// Our interface with this source IP went away.
+		return true
+	}
+	_ = rip // TODO(bradfitz): use the remote IP?
+	return false
+}
+
+func (d *Dialer) closeSysConn(id int) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	c, ok := d.activeSysConns[id]
+	if !ok {
+		return
+	}
+	delete(d.activeSysConns, id)
+	go c.Close() // ignore the error
+}
+
+// peerDialControlFunc is non-nil on platforms that require a way to
+// bind to dial out to other peers.
+var peerDialControlFunc func(*Dialer) func(network, address string, c syscall.RawConn) error
+
+// PeerDialControlFunc returns a function
+// that can assigned to net.Dialer.Control to set sockopts or whatnot
+// to make a dial escape the current platform's network sandbox.
+//
+// On many platforms the returned func will be nil.
+//
+// Notably, this is non-nil on iOS and macOS when run as a Network or
+// System Extension (the GUI variants).
+func (d *Dialer) PeerDialControlFunc() func(network, address string, c syscall.RawConn) error {
+	if peerDialControlFunc == nil {
+		return nil
+	}
+	return peerDialControlFunc(d)
+}
+
+// SetResolveMagicDNS installs a callback that resolves MagicDNS hostnames
+// to IP addresses for UserDial.
+func (d *Dialer) SetResolveMagicDNS(fn func(hostname, network string) (_ netip.Addr, ok bool)) {
+	if fn == nil {
+		d.resolveMagicDNS.Store(nil)
+		return
+	}
+	d.resolveMagicDNS.Store(&fn)
+}
+
+// resolveAddr tries to resolve addr (a "host:port" string) via MagicDNS.
+// The network parameter ("tcp", "tcp4", "tcp6", etc.) constrains the
+// address family. It returns errUnresolved if the hostname is not a
+// known MagicDNS name.
+func (d *Dialer) resolveAddr(_ context.Context, network, addr string) (netip.AddrPort, error) {
+	host, port, err := splitHostPort(addr)
+	if err != nil {
+		return netip.AddrPort{}, err
+	}
+	if ip, err := netip.ParseAddr(host); err == nil {
+		return netip.AddrPortFrom(ip, port), nil
+	}
+	if fn := d.resolveMagicDNS.Load(); fn != nil {
+		if ip, ok := (*fn)(canonMapKey(host), network); ok {
+			return netip.AddrPortFrom(ip, port), nil
+		}
+	}
+	return netip.AddrPort{}, errUnresolved
+}
+
+// userDialResolveAll resolves addr as if a user initiating the dial.
+// (e.g. from a SOCKS or HTTP outbound proxy.)
+//
+// It returns all candidate addresses so that the caller can apply
+// happy eyeballs across address families. The returned slice is
+// non-empty on a nil-error return.
+func (d *Dialer) userDialResolveAll(ctx context.Context, network, addr string) ([]netip.AddrPort, error) {
+	d.mu.Lock()
+	exitDNSDoH := d.exitDNSDoHBase
+	d.mu.Unlock()
+
+	// MagicDNS or otherwise baked into the NetworkMap? Try that first.
+	// Tailnet names have one IP each, so there's nothing to race.
+	ipp, err := d.resolveAddr(ctx, network, addr)
+	if err != errUnresolved {
+		if err != nil {
+			return nil, err
+		}
+		return []netip.AddrPort{ipp}, nil
+	}
+
+	// Otherwise, hit the network.
+
+	// TODO(bradfitz): wire up net/dnscache too.
+
+	host, port, err := splitHostPort(addr)
+	if err != nil {
+		// addr is malformed.
+		return nil, err
+	}
+
+	var r net.Resolver
+	if buildfeatures.HasUseExitNode && buildfeatures.HasPeerAPIClient && exitDNSDoH != "" {
+		r.PreferGo = true
+		r.Dial = func(ctx context.Context, network, address string) (net.Conn, error) {
+			return &dohConn{
+				ctx:      ctx,
+				baseURL:  exitDNSDoH,
+				hc:       d.PeerAPIHTTPClient(),
+				dnsCache: d.dnsCache,
+			}, nil
+		}
+	}
+
+	ips, err := r.LookupIP(ctx, ipNetOfNetwork(network), host)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]netip.AddrPort, 0, len(ips))
+	for _, stdIP := range ips {
+		ip, ok := netip.AddrFromSlice(stdIP)
+		if !ok {
+			continue
+		}
+		out = append(out, netip.AddrPortFrom(ip.Unmap(), port))
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("DNS lookup returned no results for %q", host)
+	}
+	if debugPreferIPv6() {
+		slices.SortStableFunc(out, func(a, b netip.AddrPort) int {
+			a6 := a.Addr().Is6()
+			b6 := b.Addr().Is6()
+			if a6 == b6 {
+				return 0
+			}
+			if a6 {
+				return -1
+			}
+			return 1
+		})
+	}
+	return out, nil
+}
+
+// userDialResolve resolves addr and returns the first candidate.
+// It is for callers that don't perform happy-eyeballs (notably
+// [Dialer.UserDialPlan], which only needs to classify one IP).
+func (d *Dialer) userDialResolve(ctx context.Context, network, addr string) (netip.AddrPort, error) {
+	ipps, err := d.userDialResolveAll(ctx, network, addr)
+	if err != nil {
+		return netip.AddrPort{}, err
+	}
+	return ipps[0], nil
+}
+
+// debugPreferIPv6 forces userDialResolveAll to sort AAAA results before
+// A results, reproducing the failure mode where a client on an IPv6-capable
+// host picks an unreachable AAAA address through an IPv4-only exit node.
+// Used by TestExitNodeV4Only to exercise the happy-eyeballs fallback.
+var debugPreferIPv6 = envknob.RegisterBool("TS_DEBUG_PREFER_IPV6_USERDIAL")
+
+// ipNetOfNetwork returns "ip", "ip4", or "ip6" corresponding
+// to the input value of "tcp", "tcp4", "udp6" etc network
+// names.
+func ipNetOfNetwork(n string) string {
+	if strings.HasSuffix(n, "4") {
+		return "ip4"
+	}
+	if strings.HasSuffix(n, "6") {
+		return "ip6"
+	}
+	return "ip"
+}
+
+func (d *Dialer) logf(format string, args ...any) {
+	if d.Logf != nil {
+		d.Logf(format, args...)
+	}
+}
+
+// SetSystemDialerForTest sets an alternate function to use for SystemDial
+// instead of netns.Dialer. This is intended for use with nettest.MemoryNetwork.
+func (d *Dialer) SetSystemDialerForTest(fn netx.DialFunc) {
+	testenv.AssertInTest()
+	d.sysDialForTest = fn
+}
+
+// SystemDial connects to the provided network address without going over
+// Tailscale. It prefers going over the default interface and closes existing
+// connections if the default interface changes. It is used to connect to
+// Control and (in the future, as of 2022-04-27) DERPs..
+func (d *Dialer) SystemDial(ctx context.Context, network, addr string) (net.Conn, error) {
+	d.mu.Lock()
+	if d.netMon == nil && d.sysDialForTest == nil {
+		d.mu.Unlock()
+		if testenv.InTest() {
+			panic("SystemDial requires a netmon.Monitor; call SetNetMon first")
+		}
+		return nil, errors.New("SystemDial requires a netmon.Monitor; call SetNetMon first")
+	}
+	closed := d.closed
+	d.mu.Unlock()
+	if closed {
+		return nil, net.ErrClosed
+	}
+
+	var c net.Conn
+	var err error
+	if d.sysDialForTest != nil {
+		c, err = d.sysDialForTest(ctx, network, addr)
+	} else {
+		d.netnsDialerOnce.Do(func() {
+			d.netnsDialer = netns.NewDialer(d.logf, d.netMon)
+		})
+		c, err = d.netnsDialer.DialContext(ctx, network, addr)
+	}
+	if err != nil {
+		return nil, err
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	id := d.nextSysConnID
+	d.nextSysConnID++
+	mak.Set(&d.activeSysConns, id, c)
+
+	return sysConn{
+		id:   id,
+		d:    d,
+		Conn: c,
+	}, nil
+}
+
+// UserDial connects to the provided network address as if a user were
+// initiating the dial. (e.g. from a SOCKS or HTTP outbound proxy)
+//
+// For TCP, if the name resolves to multiple addresses, UserDial races
+// connect attempts across address families with a happy-eyeballs delay
+// and returns the first one that succeeds. This lets dual-stack names
+// work via an exit node whose egress is single-family without the
+// caller needing to know which family the exit node can reach.
+func (d *Dialer) UserDial(ctx context.Context, network, addr string) (net.Conn, error) {
+	ipps, err := d.userDialResolveAll(ctx, network, addr)
+	if err != nil {
+		return nil, err
+	}
+
+	// Happy eyeballs is a no-op (and undefined) for UDP; there's no
+	// connect to race.
+	if len(ipps) == 1 || strings.HasPrefix(network, "udp") {
+		return d.dialOneUser(ctx, network, ipps[0])
+	}
+	// Family filtering for "tcp4"/"tcp6" is already handled by
+	// userDialResolveAll (via ipNetOfNetwork), so ipps only contains
+	// addresses of the requested family by this point.
+	return d.raceDialUser(ctx, ipps)
+}
+
+// dialOneUser dials ipp using the appropriate transport for a user
+// dial (netstack, peer dialer, system dialer, or std dialer) based
+// on what kind of address ipp is.
+func (d *Dialer) dialOneUser(ctx context.Context, network string, ipp netip.AddrPort) (net.Conn, error) {
+	if d.UseNetstackForIP != nil && d.UseNetstackForIP(ipp.Addr()) {
+		if d.NetstackDialTCP == nil || d.NetstackDialUDP == nil {
+			return nil, errors.New("Dialer not initialized correctly")
+		}
+		if strings.HasPrefix(network, "udp") {
+			return d.NetstackDialUDP(ctx, ipp)
+		}
+		return d.NetstackDialTCP(ctx, ipp)
+	}
+
+	if routes := d.routes.Load(); routes != nil {
+		if isTailscaleRoute, _ := routes.Lookup(ipp.Addr()); isTailscaleRoute {
+			return d.getPeerDialer().DialContext(ctx, network, ipp.String())
+		}
+
+		return d.SystemDial(ctx, network, ipp.String())
+	}
+
+	// Workaround for macOS for now: dial Tailscale IPs with peer dialer.
+	// TODO(bradfitz): fix dialing subnet routers, public IPs via exit nodes,
+	// etc. This is a temporary partial for macOS. We need to plumb ART tables &
+	// prefs & host routing table updates around in more places. We just don't
+	// know from the limited context here how to dial properly.
+	if version.IsMacGUIVariant() && tsaddr.IsTailscaleIP(ipp.Addr()) {
+		return d.getPeerDialer().DialContext(ctx, network, ipp.String())
+	}
+	// TODO(bradfitz): netns, etc
+	var stdDialer net.Dialer
+	return stdDialer.DialContext(ctx, network, ipp.String())
+}
+
+// userDialFallbackDelay is the happy-eyeballs gap between starting
+// successive connect attempts. 300ms matches Go's net.Dialer default
+// and the value used by net/dnscache.
+const userDialFallbackDelay = 300 * time.Millisecond
+
+// raceDialUser races connect attempts across ipps with a happy-eyeballs
+// fallback delay, returning the first to succeed. Losers are cancelled
+// and any conns they produce are closed. If all fail, the first error
+// is returned.
+func (d *Dialer) raceDialUser(ctx context.Context, ipps []netip.AddrPort) (net.Conn, error) {
+	return netx.RaceDial(ctx, ipps,
+		func(ctx context.Context, network, address string) (net.Conn, error) {
+			return d.dialOneUser(ctx, network, netip.MustParseAddrPort(address))
+		},
+		userDialFallbackDelay,
+	)
+}
+
+// UserDialPlan resolves addr and reports whether the dialer would
+// handle it via Tailscale. If viaTailscale is false, the resolved
+// address is not a Tailscale route and the caller may dial it directly.
+//
+// Warning: there is a TOCTOU race if addr contains a DNS name and the
+// caller subsequently passes the same DNS name to [Dialer.UserDial], as DNS
+// may resolve differently the second time. Callers who want to only
+// dial over Tailscale should call [Dialer.UserDial] with the returned
+// ipp.String() (an IP:port) rather than the original DNS name.
+func (d *Dialer) UserDialPlan(ctx context.Context, network, addr string) (ipp netip.AddrPort, viaTailscale bool, err error) {
+	ipp, err = d.userDialResolve(ctx, network, addr)
+	if err != nil {
+		return netip.AddrPort{}, false, err
+	}
+	if d.UseNetstackForIP != nil && d.UseNetstackForIP(ipp.Addr()) {
+		return ipp, true, nil
+	}
+	if routes := d.routes.Load(); routes != nil {
+		isTailscaleRoute, _ := routes.Lookup(ipp.Addr())
+		return ipp, isTailscaleRoute, nil
+	}
+	if version.IsMacGUIVariant() && tsaddr.IsTailscaleIP(ipp.Addr()) {
+		return ipp, true, nil
+	}
+	return ipp, false, nil
+}
+
+// dialPeerAPI connects to a Tailscale peer's peerapi over TCP.
+//
+// network must a "tcp" type, and addr must be an ip:port. Name resolution
+// is not supported.
+func (d *Dialer) dialPeerAPI(ctx context.Context, network, addr string) (net.Conn, error) {
+	if !buildfeatures.HasPeerAPIClient {
+		return nil, feature.ErrUnavailable
+	}
+	switch network {
+	case "tcp", "tcp6", "tcp4":
+	default:
+		return nil, fmt.Errorf("peerAPI dial requires tcp; %q not supported", network)
+	}
+	ipp, err := netip.ParseAddrPort(addr)
+	if err != nil {
+		return nil, fmt.Errorf("peerAPI dial requires ip:port, not name resolution: %w", err)
+	}
+	if d.UseNetstackForIP != nil && d.UseNetstackForIP(ipp.Addr()) {
+		if d.NetstackDialTCP == nil {
+			return nil, errors.New("Dialer not initialized correctly")
+		}
+		return d.NetstackDialTCP(ctx, ipp)
+	}
+	return d.getPeerDialer().DialContext(ctx, network, addr)
+}
+
+// getPeerDialer returns the *net.Dialer to use to dial peers (e.g. for peerapi,
+// "tailscale nc", or querying internal DNS servers over Tailscale)
+//
+// This is not used in netstack mode.
+//
+// The primary function of this is to work on macOS & iOS's in the
+// Network/System Extension so it can mark the dialer as staying within the
+// network namespace/sandbox.
+func (d *Dialer) getPeerDialer() *net.Dialer {
+	d.peerDialerOnce.Do(func() {
+		d.peerDialer = &net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: netknob.PlatformTCPKeepAlive(),
+			Control:   d.PeerDialControlFunc(),
+		}
+	})
+	return d.peerDialer
+}
+
+// PeerAPIHTTPClient returns an HTTP Client to call peers' peerapi
+// endpoints.                                                                                                                                                                                                                      //
+// The returned Client must not be mutated; it's owned by the Dialer
+// and shared by callers.
+func (d *Dialer) PeerAPIHTTPClient() *http.Client {
+	if !buildfeatures.HasPeerAPIClient {
+		panic("unreachable")
+	}
+	d.peerClientOnce.Do(func() {
+		t := netutil.NewDefaultTransport()
+		t.Dial = nil
+		t.DialContext = d.dialPeerAPI
+		// Do not use the environment proxy for PeerAPI.
+		t.Proxy = nil
+		d.peerClient = &http.Client{Transport: t}
+	})
+	return d.peerClient
+}
+
+// PeerAPITransport returns a Transport to call peers' peerapi
+// endpoints.
+//
+// The returned value must not be mutated; it's owned by the Dialer
+// and shared by callers.
+func (d *Dialer) PeerAPITransport() *http.Transport {
+	return d.PeerAPIHTTPClient().Transport.(*http.Transport)
+}

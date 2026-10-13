@@ -81,7 +81,7 @@ public:
         setMinimumWidth(70);
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
         setCursor(Qt::PointingHandCursor);
-        // The strip's open `QWidget { background: #08121d }` rule
+        // The host panel's open `QWidget { background }` rule
         // would otherwise paint a dark fill across the whole column,
         // bleeding upward over the canvas's band-plan strip.  Make
         // the column itself transparent so only the labels show.
@@ -355,7 +355,7 @@ ClientEqParamRow::ClientEqParamRow(QWidget* parent) : QWidget(parent)
     // Matches ClientEqIconRow spacing so param column i sits directly
     // beneath icon column i (a single visual strip across the editor).
     m_layout->setSpacing(10);
-    // Transparent so the strip's wide `QWidget { background: #08121d }`
+    // Transparent so the host panel's wide `QWidget { background }`
     // rule doesn't bleed dark fill over the canvas's band-plan strip
     // sitting just above this row.
     setAttribute(Qt::WA_StyledBackground, false);

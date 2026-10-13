@@ -1,3 +1,4 @@
+#include "ModelControlWireSpy.h"
 // Unit tests for External APD plumbing on TransmitModel — covers status
 // parsing, sampler-port commands, equalizer reset, and idempotency.
 
@@ -72,7 +73,7 @@ void testSelectedFallbackWhenNotInValidList()
 void testSetSamplerPortEmitsCommand()
 {
     TransmitModel tx;
-    QSignalSpy cmds(&tx, &TransmitModel::commandReady);
+    ModelControlWireSpy cmds(&tx);
 
     tx.setApdSamplerPort("ANT2", "RX_B");
     report("setApdSamplerPort emits one command", cmds.count() == 1);
@@ -94,7 +95,7 @@ void testSetSamplerPortEmitsCommand()
 void testResetEqualizerEmitsCommand()
 {
     TransmitModel tx;
-    QSignalSpy cmds(&tx, &TransmitModel::commandReady);
+    ModelControlWireSpy cmds(&tx);
 
     tx.resetApdEqualizer();
     report("resetApdEqualizer emits one command", cmds.count() == 1);

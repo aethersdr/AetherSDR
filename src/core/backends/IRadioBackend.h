@@ -12,6 +12,7 @@
 #include <QByteArray>
 #include <QLoggingCategory>
 #include <QMap>
+#include <QHostAddress>
 #include <QObject>
 #include <QString>
 #include <QStringList>
@@ -22,11 +23,13 @@
 #include "core/backends/GpsDelta.h"
 #include "core/backends/MemoryDelta.h"
 #include "core/backends/MeterDef.h"
+#include "core/backends/NoiseBlankerKind.h"
 #include "core/backends/NotchDelta.h"
 #include "core/backends/ProfileDelta.h"
 #include "core/backends/FrontEndOverload.h"
 #include "core/backends/RadioCapabilities.h"
 #include "core/backends/ReceiveCommand.h"
+#include "core/backends/ModelControlRequest.h"
 #include "core/backends/RestoredRadioState.h"
 #include "core/backends/RadioDelta.h"
 #include "core/backends/SliceDelta.h"
@@ -49,6 +52,8 @@ struct RadioConnectRequest {
     QString serial;         // when a family identifies radios by serial
     QVariantMap params;     // family-specific extras (namespaced by the backend)
     RadioSerialIdentity serialIdentity;
+    // Local IPv4 address that reached the radio; null lets the OS choose.
+    QHostAddress localBindAddress;
 };
 
 // Complete radio-owned memory state applied after the common frequency/mode
@@ -126,6 +131,19 @@ class IRadioBackend : public QObject {
     Q_OBJECT
 
 public:
+    // Desktop control routing only: these do not extend the daemon registry.
+    virtual ReceiveDispatch requestSliceControl(int sliceId, const SliceControlRequest& request)
+    {
+        // Selecting a local receiver is not a radio or TX operation.
+        if (sliceId >= 0 && request.valid()
+            && request.field == SliceControlRequest::Field::ActiveSlice) {
+            return ReceiveDispatch::LocalOnly;
+        }
+        return ReceiveDispatch::Unsupported;
+    }
+    virtual ReceiveDispatch requestTransmitControl(const TransmitControlRequest&,
+                                                    TunePowerContext = TunePowerContext::Deferred)
+    { return ReceiveDispatch::Unsupported; }
     explicit IRadioBackend(QObject* parent = nullptr) : QObject(parent)
     {
         connect(this, &IRadioBackend::connected, this, [this] {
@@ -199,6 +217,21 @@ public:
     virtual void disconnectRadio() = 0;
     virtual bool isConnected() const = 0;
 
+    // A session with the radio is up, WHATEVER TRANSPORT CARRIED IT.
+    //
+    // Exists because "connected" is not observable inside a backend on every
+    // path: a Flex LAN session runs through the RadioConnection the backend
+    // owns, but a SmartLink session is driven by RadioModel against a
+    // WanConnection the backend never sees, and connectRadio() is skipped for
+    // that family entirely. A backend with per-session work to do therefore had
+    // no edge to hang it on that covered both.
+    //
+    // Default is a no-op, so a backend that needs nothing is unaffected. It
+    // carries no argument on purpose: a backend that wants to know WHICH radio
+    // already has its own channels for that, and widening this verb would make
+    // every backend care about the transport it was told to ignore.
+    virtual void onRadioSessionEstablished() {}
+
     // ---- intents DOWN: canonical core-profile verbs (grow per burndown) ----
     // The backend translates each to its vendor wire protocol.
     // Opt-in for slice frequency/mode/filter, monitor gain/pan/mute and pan
@@ -232,6 +265,8 @@ public:
     virtual ReceiveDispatch requestSliceDsp(int, const SliceDspRequest&)
     { return ReceiveDispatch::Unsupported; }
     virtual ReceiveDispatch requestSliceAudio(int, const SliceAudioRequest&)
+    { return ReceiveDispatch::Unsupported; }
+    virtual ReceiveDispatch requestSliceWfm(int, const SliceWfmRequest&)
     { return ReceiveDispatch::Unsupported; }
     virtual ReceiveDispatch requestSliceSquelch(int, const SliceSquelchRequest&)
     { return ReceiveDispatch::Unsupported; }
@@ -584,9 +619,10 @@ public:
     // rfpower drop notice.
     virtual void setTxPower(int percent) { Q_UNUSED(percent); }
 
-    // TUNE power (0..100) changed while the TUNE carrier may be up. NEVER keys:
-    // a backend generating its own carrier re-applies drive to one in progress
-    // and otherwise does nothing, since the next setTune() carries the value.
+    // TUNE power (0..100) changed: unkeyed, or on a carrier this client keyed.
+    // NEVER keys: a backend generating its own carrier re-applies drive to one in
+    // progress; otherwise it may only record the value (HL2 keeps it per band),
+    // since the next setTune() carries it.
     // Owner thread, like setTxPower(). Declaring
     // TransmitDriveControl::tunePowerAppliesLive promises it is implemented.
     virtual void setTunePower(int percent) { Q_UNUSED(percent); }
@@ -653,9 +689,14 @@ public:
     {
         Q_UNUSED(sliceId); Q_UNUSED(on); Q_UNUSED(level);
     }
-    virtual void setSliceNoiseBlanker(int sliceId, bool on, int level)
+    // Three-state: WDSP has two impulse blankers. Kind, level and fill arrive
+    // together so no ordering between them exists; `fill` is Advanced's only.
+    // A radio with its own single blanker treats anything but Off as on, since
+    // Advanced is reachable only where hasHostNoiseBlanker is published.
+    virtual void setSliceNoiseBlanker(int sliceId, AetherSDR::NoiseBlankerKind kind,
+                                      int level, AetherSDR::NoiseBlankerFill fill)
     {
-        Q_UNUSED(sliceId); Q_UNUSED(on); Q_UNUSED(level);
+        Q_UNUSED(sliceId); Q_UNUSED(kind); Q_UNUSED(level); Q_UNUSED(fill);
     }
     virtual void setSliceAutoNotch(int sliceId, bool on)
     {
@@ -673,6 +714,16 @@ public:
     virtual void setSliceSquelch(int sliceId, bool on, int level)
     {
         Q_UNUSED(sliceId); Q_UNUSED(on); Q_UNUSED(level);
+    }
+    virtual void setSliceAutoSquelch(int sliceId, bool enabled, int marginDb)
+    { Q_UNUSED(sliceId); Q_UNUSED(enabled); Q_UNUSED(marginDb); }
+    // BroadcastFmReceive declares supported values; accepted state returns in
+    // SliceDelta only after the receiver adopts the requested configuration.
+    virtual void setSliceWfmForceMono(int sliceId, bool forceMono)
+    { Q_UNUSED(sliceId); Q_UNUSED(forceMono); }
+    virtual void setSliceWfmDeemphasis(int sliceId, int microseconds)
+    {
+        Q_UNUSED(sliceId); Q_UNUSED(microseconds);
     }
     // CW audio peaking filter (capabilities().hasAudioPeakingFilter): the slice's
     // enable and 0..100 apf_level together; the backend owns the centre (its CW

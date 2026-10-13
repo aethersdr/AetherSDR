@@ -38,7 +38,10 @@ The decoder follows the same pattern as `CwDecoder`:
 
 ## UI Panel
 
-Appears automatically when the active slice enters RTTY or DIGL mode; hides on exit.
+Appears automatically when the active slice enters RTTY mode, unless the
+operator has turned the decoder off (the persisted enable flag, default on,
+#5353); hides on exit. DIGL does not open it — DIGL also carries PSK31, FT8,
+SSTV and other modes.
 
 | Control | Options |
 |---|---|
@@ -58,11 +61,12 @@ see bug #4 below); Sens persists as one nested JSON object under the root key
 
 ## "Auto" Mark Frequency
 
-When Mark combo = "Auto" (value 0):
-- RTTY mode → decoder uses `SliceModel::rttyMark()` (radio's mark setting)
-- DIGL mode → decoder uses `SliceModel::diglOffset()`
+When Mark combo = "Auto" (value 0), the decoder uses `SliceModel::rttyMark()`
+(the radio's mark setting).
 
-The decoder re-reads these live on `rttyMarkChanged`, `rttyShiftChanged`, and `diglOffsetChanged` signals, so tuning the radio's mark tone while decoding works without a mode cycle.
+The decoder re-reads it live on the `rttyMarkChanged` and `rttyShiftChanged`
+signals, so tuning the radio's mark tone while decoding works without a mode
+cycle.
 
 ---
 

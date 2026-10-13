@@ -36,12 +36,17 @@ namespace AetherSDR {
 // exports it).
 
 // DOUBLE PRECISION (fftw_*). Held by WdspChannel (open/close and control calls
-// that re-plan: RXASetNC, RXASetMP), Hl2Spectrum, AnanPanAnalyzer, SpectralNR.
+// that re-plan: RXASetNC, RXASetMP), Hl2Spectrum, AnanPanAnalyzer, SpectralNR,
+// and NnrFilter across create_nnr/destroy_nnr (#6287; plans only: WDSP's
+// malloc0 is its own aligned allocator, not fftw_malloc).
 // Hold it over allocations as well as plans (#5424's frames were memalign and
 // free). Never around fftw_execute(): thread-safe and on the real-time path.
-// Holds are long (#5895): hundreds of ms for SpectralNR construction, tens of
-// seconds for a cold WdspChannel::open(), 38.5 s for the worst FFTW_PATIENT
-// plan in generateWisdom(); every other FFTW user waits.
+// Holds are long (#5895): hundreds of ms for SpectralNR construction, ~0.6 s
+// for a cold NnrFilter (one hold over both channels' create_nnr, spanning
+// calc_nnr's allocations and every model slot it builds, not just the plans),
+// tens of seconds for a cold WdspChannel::open(),
+// 38.5 s for the worst FFTW_PATIENT plan in generateWisdom(); every other FFTW
+// user waits.
 [[nodiscard]] std::unique_lock<std::mutex> fftwPlannerLock();
 
 // The same mutex, unwrapped, for call sites that already own a scoped_lock or

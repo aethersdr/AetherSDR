@@ -110,8 +110,8 @@ private:
     // Auto sweep.
     QTimer m_stepTimer;
     int    m_sweepValue{100};
-    int    m_sweepStart{100};
-    static constexpr int kSweepStep = 4; // coarse step (100 -> 0)
+    bool   m_sweepUp{false};             // AGC off: 0 -> target; AGC on: 100 -> 0
+    static constexpr int kSweepStep = 4; // coarse step
     int    m_settleMs{280};
 
     // Manual record (settle after the user moves the slider).

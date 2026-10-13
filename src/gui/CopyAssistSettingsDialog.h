@@ -74,6 +74,10 @@ public:
     // Learned Silero VAD (ONNX) in place of the energy VAD: a checkbox + an
     // .onnx path. The controller owns the file picker and rebuilds the engine.
     void setUseSileroVad(bool on);
+    // Tap point for the ASR feed: unchecked = after client NR and the RX
+    // effects chain (what every build before this did), checked = before them.
+    void setRawAudio(bool on);
+    bool isRawAudio() const;
     bool useSileroVad() const;
     void setVadModelPath(const QString& path);
     QString vadModelPath() const;
@@ -105,6 +109,7 @@ signals:
     void logToFileToggled(bool on);
     void browseLogFileRequested();
     void useSileroVadToggled(bool on);
+    void rawAudioToggled(bool on);
     void browseVadModelRequested();
     void labelSpeakersToggled(bool on);
     void browseSpeakerModelRequested();
@@ -124,6 +129,7 @@ private:
     QLineEdit* m_logPath = nullptr; // read-only display of the chosen path
     QPushButton* m_logBrowse = nullptr;
     QCheckBox* m_useSilero = nullptr;
+    QCheckBox* m_rawAudio = nullptr;
     QLineEdit* m_vadPath = nullptr;
     QPushButton* m_vadBrowse = nullptr;
     QCheckBox* m_labelSpeakers = nullptr;

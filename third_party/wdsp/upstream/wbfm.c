@@ -25,6 +25,7 @@ warren@pratt.one
 
 #define _CRT_SECURE_NO_WARNINGS
 #include "comm.h"
+#include "../include/aether_wbfm_observation.h"
 
 /********************************************************************************************************
 *																										*
@@ -494,6 +495,35 @@ static void flush_sdelay(SDELAY a)
 *																										*
 ********************************************************************************************************/
 
+// AetherSDR: adjacent phase differences average instantaneous frequency over
+// one sample, giving sinc(omega/2) droop. At 192 kHz the 38 kHz stereo channel
+// is attenuated enough to limit separation to about 30 dB. This linear-phase
+// FIR approximates the reciprocal through 53 kHz with <0.005 dB residual error.
+// Reproducible polynomial: sum(k=0..6) C(2k,k)/(4^k*(2k+1))*s^k,
+// s=(2-z-z^-1)/4. Unity DC; six samples common delay; maximum gain <1.357.
+// It is OFF for existing owners and enabled only by the opt-in RX recipe.
+static double compensate_discriminator(WBFM a, double value)
+{
+	static const double coefficients[13] = {
+		 0.0000042365147517277646, -0.000072685988632949079,
+		 0.00061676756022230263,  -0.0035621651746758562,
+		 0.016914605226325121,    -0.085469246778679744,
+		 1.1431369772813784,
+		-0.085469246778679744,     0.016914605226325121,
+		-0.0035621651746758562,    0.00061676756022230263,
+		-0.000072685988632949079,  0.0000042365147517277646
+	};
+	a->disc_history[a->disc_history_index] = value;
+	double result = 0.0;
+	int index = a->disc_history_index;
+	for (int tap = 0; tap < 13; ++tap) {
+		result += coefficients[tap] * a->disc_history[index];
+		if (--index < 0) index = 12;
+	}
+	if (++a->disc_history_index == 13) a->disc_history_index = 0;
+	return result;
+}
+
 static void discriminator (WBFM a)
 {
 	double Inew = 0.0;
@@ -510,6 +540,7 @@ static void discriminator (WBFM a)
 		Qold = a->discSave_Q;
 		phase_diff = atan2(Iold * Qnew - Inew * Qold, Inew * Iold + Qnew * Qold);
 		out_val = a->disc_gain_comp * phase_diff;
+		if (a->disc_compensate) out_val = compensate_discriminator(a, out_val);
 		a->discSave_I = Inew;
 		a->discSave_Q = Qnew;
 		a->disc_out[2 * i + 0] = 2.0 * out_val;
@@ -568,6 +599,23 @@ static void mx(int size, int stereo, double* LpR_in, double* LmR_in, double* L, 
 		}
 }
 
+// AetherSDR: the legacy MPX DC blocker rotates low-frequency L+R while
+// barely rotating 38 kHz L-R. Identical filters after the matrix preserve
+// stereo separation and the same 0.9995 pole for the opt-in receive recipe.
+static void audio_dc_block(WBFM a)
+{
+	double* channels[2] = { a->L, a->R };
+	for (int channel = 0; channel < 2; ++channel) {
+		for (int i = 0; i < a->size; ++i) {
+			double x = channels[channel][i];
+			double y = x - a->audio_dcb_x[channel] + 0.9995 * a->audio_dcb_y[channel];
+			a->audio_dcb_x[channel] = x;
+			a->audio_dcb_y[channel] = y;
+			channels[channel][i] = y;
+		}
+	}
+}
+
 static void combine (int size, double* L, double* R, double* out)
 {
 	for (int i = 0; i < size; i++)
@@ -593,6 +641,10 @@ static void calc_wbfm (WBFM a)
 	// discriminator & dcb
 	a->discSave_I = 0.0;
 	a->discSave_Q = 0.0;
+	memset(a->disc_history, 0, sizeof(a->disc_history));
+	a->disc_history_index = 0;
+	memset(a->audio_dcb_x, 0, sizeof(a->audio_dcb_x));
+	memset(a->audio_dcb_y, 0, sizeof(a->audio_dcb_y));
 	a->dcbSave_x  = 0.0;
 	a->dcbSave_y  = 0.0;
 	a->disc_gain_comp = a->rate / (TWOPI * 75000.0);
@@ -693,6 +745,72 @@ static void decalc_wbfm (WBFM a)
 	_aligned_free(a->disc_out);
 }
 
+// Counters measure decoder work, independent of GUI sampling and audio-ring
+// latency. Publishing all words atomically avoids a C data race during retry.
+static uint32_t reception_ms(uint64_t samples, double rate)
+{
+    double value = 1000.0 * (double)samples / rate;
+    return value >= INT_MAX ? INT_MAX : (uint32_t)value;
+}
+
+static void publish_reception(WBFM a, int valid)
+{
+    uint32_t words[17] = {0};
+    double values[3] = {a->mag19, a->pIndy->low_thresh, a->pIndy->high_thresh};
+    words[0] = valid;
+    words[1] = a->stereo;
+    words[2] = reception_ms(a->lockedSamples, a->rate);
+    words[3] = a->lockLossCount;
+    words[4] = a->reacquisitionCount;
+    words[5] = reception_ms(a->receptionSamples, a->rate);
+    words[6] = min(5000U, reception_ms(a->stableSamples, a->rate));
+    words[7] = a->pIndy->consecutive_high_frames;
+    words[8] = a->pIndy->consecutive_low_frames;
+    words[9] = a->pIndy->on_delay_frames;
+    words[10] = a->pIndy->off_delay_frames;
+    memcpy(&words[11], values, sizeof(values));
+    // Stay within signed 32-bit long on Windows; wrap only the sequence.
+    long sequence = InterlockedAnd(&a->receptionPublished[0], ~0L);
+    long next = (long)(((unsigned long)sequence + 2UL) & 0x7ffffffeUL);
+    InterlockedExchange(&a->receptionPublished[0], sequence + 1);
+    for (int i = 0; i < 17; ++i) {
+        InterlockedExchange(&a->receptionPublished[i + 1], (long)words[i]);
+    }
+    InterlockedExchange(&a->receptionPublished[0], next);
+}
+
+static void reset_reception(WBFM a)
+{
+    a->stereo = 0; a->mag19 = 0.0;
+    InterlockedExchange(&a->stereoPublished, 0);
+    a->receptionSamples = a->lockedSamples = a->stableSamples = 0;
+    a->lockLossCount = a->reacquisitionCount = 0;
+    a->receptionPreviousStereo = a->receptionHadPilot = 0;
+    publish_reception(a, 0);
+}
+
+static void observe_reception(WBFM a)
+{
+    // Saturation in samples prevents all long-session arithmetic overflow.
+    const uint64_t maximum = (uint64_t)INT_MAX * (uint64_t)a->rate / 1000;
+    a->receptionSamples = min(maximum, a->receptionSamples + (uint64_t)a->size);
+    if (a->stereo != a->receptionPreviousStereo) {
+        a->stableSamples = 0;
+        a->lockedSamples = 0;
+        if (a->stereo) {
+            if (a->receptionHadPilot && a->reacquisitionCount < INT_MAX) { ++a->reacquisitionCount; }
+            a->receptionHadPilot = 1;
+        } else if (a->lockLossCount < INT_MAX) { ++a->lockLossCount; }
+    } else {
+        a->stableSamples = min(maximum, a->stableSamples + (uint64_t)a->size);
+    }
+    if (a->stereo && a->receptionPreviousStereo) {
+        a->lockedSamples = min(maximum, a->lockedSamples + (uint64_t)a->size);
+    } else { a->lockedSamples = 0; }
+    a->receptionPreviousStereo = a->stereo;
+    publish_reception(a, 1);
+}
+
 WBFM create_wbfm (int run, int size, double* in, double* out, double rate)
 {
 	WBFM a = (WBFM)malloc0(sizeof(wbfm));
@@ -703,10 +821,12 @@ WBFM create_wbfm (int run, int size, double* in, double* out, double rate)
 	a->out = out;
 	a->rate = rate;
 	a->stereo = 0;
+	InterlockedExchange(&a->stereoPublished, 0);
 	a->sqgain = 0.0;
 	a->dmph = 1;
 	a->dmph_type = 0;
 	calc_wbfm(a);
+	reset_reception(a);
 	return a;
 }
 
@@ -731,6 +851,10 @@ void flush_wbfm(WBFM a)
 	flush_sdelay(a->del53);
 	a->discSave_I = 0.0;
 	a->discSave_Q = 0.0;
+	memset(a->disc_history, 0, sizeof(a->disc_history));
+	a->disc_history_index = 0;
+	memset(a->audio_dcb_x, 0, sizeof(a->audio_dcb_x));
+	memset(a->audio_dcb_y, 0, sizeof(a->audio_dcb_y));
 	a->dcbSave_x  = 0.0;
 	a->dcbSave_y  = 0.0;
 	flush_fircore(a->pfil0_15);
@@ -738,6 +862,21 @@ void flush_wbfm(WBFM a)
 	flush_fircore(a->pfil23_53);
 	flush_wcpagc(a->pAGC_Pilot);
 	flush_indy(a->pIndy);
+	// AetherSDR: a completed flush must not report the previous station.
+	a->stereo = 0;
+	a->mag19 = 0.0;
+	a->sqgain = a->psql->gain_min;
+	a->psql->gain = a->psql->gain_min;
+	a->psql->sqstate = 0;
+	a->psql->npwr.pwr = 0.0;
+	for (int section = 0; section < 2; ++section) {
+		a->psql->npwr.bqsec[section].x_z1 = 0.0;
+		a->psql->npwr.bqsec[section].x_z2 = 0.0;
+		a->psql->npwr.bqsec[section].y_z1 = 0.0;
+		a->psql->npwr.bqsec[section].y_z2 = 0.0;
+	}
+	InterlockedExchange(&a->stereoPublished, 0);
+	reset_reception(a);
 }
 
 void xwbfm(WBFM a)
@@ -745,7 +884,7 @@ void xwbfm(WBFM a)
 	if (a->run)
 	{
 		discriminator(a);
-		dc_block(a);
+		if (!a->disc_compensate) dc_block(a);
 		xfircore(a->pfil0_15);
 		xfircore(a->pfil19);
 		xfircore(a->pfil23_53);
@@ -755,10 +894,13 @@ void xwbfm(WBFM a)
 		xsdelay(a->del15);
 		xsdelay(a->del53);
 		dsb_demod(a->size, a->fil19_out, a->fil53_out, a->LmR);
-		mx(a->size, a->stereo, a->LpR, a->LmR, a->L, a->R, a->sqgain);
+		mx(a->size, a->stereo && !a->force_mono, a->LpR, a->LmR, a->L, a->R, a->sqgain);
+		if (a->disc_compensate) audio_dc_block(a);
 		xdmph(a->dmphL);
 		xdmph(a->dmphR);
 		combine(a->size, a->L, a->R, a->out);
+		InterlockedExchange(&a->stereoPublished, a->stereo);
+		observe_reception(a);
 	}
 	else if (a->in != a->out)
 		memcpy(a->out, a->in, a->size * sizeof(complex));
@@ -775,6 +917,7 @@ void setSamplerate_wbfm(WBFM a, int rate)
 	decalc_wbfm(a);
 	a->rate = rate;
 	calc_wbfm(a);
+	reset_reception(a);
 }
 
 void setSize_wbfm(WBFM a, int size)
@@ -782,6 +925,7 @@ void setSize_wbfm(WBFM a, int size)
 	decalc_wbfm(a);
 	a->size = size;
 	calc_wbfm(a);
+	reset_reception(a);
 }
 
 
@@ -793,25 +937,80 @@ void setSize_wbfm(WBFM a, int size)
 
 
 PORT
+void SetRXAWBFMDiscriminatorCompensation(int channel, int enabled)
+{
+	WBFM a = rxa[channel].wbfm.p;
+	EnterCriticalSection(&ch[channel].csDSP);
+	a->disc_compensate = enabled && a->rate == 192000.0;
+	memset(a->disc_history, 0, sizeof(a->disc_history));
+	a->disc_history_index = 0;
+	memset(a->audio_dcb_x, 0, sizeof(a->audio_dcb_x));
+	memset(a->audio_dcb_y, 0, sizeof(a->audio_dcb_y));
+	LeaveCriticalSection(&ch[channel].csDSP);
+}
+
+PORT
 void SetRXAWBFMdmph(int channel, int dmph_run, int dmph_continent)
 {
 	WBFM a = rxa[channel].wbfm.p;
+	EnterCriticalSection(&ch[channel].csDSP);
 	if ((a->dmph != dmph_run) || (a->dmph_type != dmph_continent))
 	{
-		EnterCriticalSection(&ch[channel].csDSP);
 		a->dmph = dmph_run;
 		a->dmph_type = dmph_continent;
-		LeaveCriticalSection(&ch[channel].csDSP);
+		// AetherSDR: the parent fields are construction inputs. Update the
+		// active left/right filters too; otherwise this setter is a no-op.
+		a->dmphL->run = a->dmphR->run = dmph_run;
+		a->dmphL->tau = a->dmphR->tau = dmph_continent ? 50.0e-6 : 75.0e-6;
+		calc_dmph(a->dmphL);
+		calc_dmph(a->dmphR);
 	}
+	LeaveCriticalSection(&ch[channel].csDSP);
+}
+
+PORT
+void SetRXAWBFMForceMono(int channel, int forceMono)
+{
+    EnterCriticalSection(&ch[channel].csDSP);
+    rxa[channel].wbfm.p->force_mono = forceMono != 0;
+    LeaveCriticalSection(&ch[channel].csDSP);
+}
+
+PORT
+int GetRXAWBFMReception(int channel, AetherWdspWbfmObservation* observation)
+{
+    if (!observation) { return 0; }
+    WBFM a = rxa[channel].wbfm.p;
+    for (int attempt = 0; attempt < 4; ++attempt) {
+        long sequence = InterlockedAnd(&a->receptionPublished[0], ~0L);
+        if (sequence & 1) { continue; }
+        uint32_t words[17];
+        for (int i = 0; i < 17; ++i) {
+            words[i] = (uint32_t)InterlockedAnd(&a->receptionPublished[i + 1], ~0L);
+        }
+        if (sequence != InterlockedAnd(&a->receptionPublished[0], ~0L)) { continue; }
+        AetherWdspWbfmObservation result = {0};
+        result.observationSequence = (uint32_t)sequence;
+        result.valid = words[0]; result.pilotLocked = words[1];
+        result.lockDurationMs = words[2]; result.lockLossCount = words[3];
+        result.reacquisitionCount = words[4]; result.observationDurationMs = words[5];
+        result.stableDurationMs = words[6]; result.consecutiveHighBlocks = words[7];
+        result.consecutiveLowBlocks = words[8]; result.engageBlocks = words[9];
+        result.releaseBlocks = words[10];
+        double values[3]; memcpy(values, &words[11], sizeof(values));
+        result.pilotMagnitude = values[0]; result.pilotReleaseThreshold = values[1];
+        result.pilotEngageThreshold = values[2];
+        *observation = result;
+        return 1;
+    }
+    return 0;
 }
 
 PORT
 int GetRXAWBFMStereoIndicator(int channel)
 {
 	WBFM a = rxa[channel].wbfm.p;
-	int stereo = 0;
-	EnterCriticalSection(&ch[channel].csDSP);
-	stereo = a->stereo;
-	LeaveCriticalSection(&ch[channel].csDSP);
-	return stereo;
+	// AetherSDR: readback is used on the acquisition path. InterlockedAnd
+	// with an all-ones mask is the existing portable atomic-load idiom.
+	return (int)InterlockedAnd(&a->stereoPublished, ~0L);
 }

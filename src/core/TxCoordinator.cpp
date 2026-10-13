@@ -1,6 +1,7 @@
 #include "TxCoordinator.h"
 
 #include <QScopeGuard>
+#include <QtGlobal>
 
 #include <algorithm>
 #include <chrono>
@@ -119,7 +120,13 @@ TxCoordinator::Operation TxCoordinator::Operation::heldActivities(unsigned activ
         if (!operation) {
             return false;
         }
+        // #6368: libc++ has no std::atomic<std::shared_ptr> (P0718R2), so the free
+        // functions stay; libstdc++ deprecates them, hence the suppression. Drop the
+        // push/pop once libc++ implements it.
+QT_WARNING_PUSH
+QT_WARNING_DISABLE_DEPRECATED
         const auto holds = std::atomic_load_explicit(&operation->holds, std::memory_order_acquire);
+QT_WARNING_POP
         if (!holds) {
             return false;
         }
@@ -818,9 +825,15 @@ TxCoordinator::Intent TxCoordinator::beginIntent(const Operation& operation,
             holds->push_back(entry);
         }
     }
+    // #6368: libc++ has no std::atomic<std::shared_ptr> (P0718R2), so the free
+    // functions stay; libstdc++ deprecates them, hence the suppression. Drop the
+    // push/pop once libc++ implements it.
+QT_WARNING_PUSH
+QT_WARNING_DISABLE_DEPRECATED
     std::atomic_store_explicit(&operation.m_state->holds,
         std::shared_ptr<const std::vector<std::weak_ptr<IntentState>>>(std::move(holds)),
         std::memory_order_release);
+QT_WARNING_POP
     return intent;
 }
 
@@ -871,6 +884,25 @@ unsigned TxCoordinator::activeActivities(const Operation& operation) const
         }
     }
     return activities;
+}
+
+std::vector<TxCoordinator::Intent> TxCoordinator::intents(const Operation& operation,
+                                                          unsigned activities) const
+{
+    std::vector<Intent> found;
+    if (!onThread()) {
+        return found;
+    }
+    for (const std::shared_ptr<IntentState>& state : m_intents) {
+        if (state->operation.sameOperation(operation)
+            && (activities & static_cast<unsigned>(state->activity))
+            && !state->ended.load(std::memory_order_acquire)) {
+            Intent intent;
+            intent.m_state = state;
+            found.push_back(intent);
+        }
+    }
+    return found;
 }
 
 void TxCoordinator::endIntents(const Operation& operation)

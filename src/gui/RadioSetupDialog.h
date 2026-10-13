@@ -1,10 +1,12 @@
 #pragma once
 
-#include "PersistentDialog.h"
+#include "CanonWindow.h"
 #include "PeripheralConnectionSource.h"
 #include "RadioSetupIpConfigPresentation.h"
 
 #include <QHash>
+#include <QPointer>
+#include <QStringList>
 #include <QVector>
 #include <array>
 #include <functional>
@@ -38,11 +40,13 @@ class KiwiSdrManager;
 class AcomConnection;
 class SpeConnection;
 class VkampConnection;
+class Kpa1500Connection;
 class LpMeterConnection;
 struct PeripheralDeviceUi;
 
-// Radio Setup dialog — searchable, category-based configuration window.
-class RadioSetupDialog : public PersistentDialog {
+// Radio Setup: the searchable, category-based configuration window, a canon
+// workspace window styled by one sheet (see RadioSetupDialogCommon.h).
+class RadioSetupDialog : public CanonWindow {
     Q_OBJECT
 
 public:
@@ -55,6 +59,7 @@ public:
                               SpeConnection* spe = nullptr,
                               VkampConnection* vkamp = nullptr,
                               LpMeterConnection* lpMeter = nullptr,
+                              Kpa1500Connection* kpa1500 = nullptr,
                               QWidget* parent = nullptr);
     void selectTab(const QString& tabName);
     void done(int result) override;
@@ -117,6 +122,14 @@ public:
     PeripheralDeviceStatus peripheralStatusForTest(const QString& id) const;
     void editPeripheralStatusForTest(const QString& id,
                                      const std::function<void(PeripheralDeviceStatus&)>& edit);
+    // Test seam: replaces a peripheral's link probes (connected directly,
+    // relayed by the radio) and returns the ones it had, so the next refresh
+    // derives the source as it would from a live link.
+    struct PeripheralLinkProbes {
+        std::function<bool()> isConnected;
+        std::function<bool()> hasRadioRelay;
+    };
+    PeripheralLinkProbes swapPeripheralLinkForTest(const QString& id, PeripheralLinkProbes probes);
     static void setRemovalConfirmationHookForTest(
         std::function<bool(const QString& label, const QString& text)> hook);
 
@@ -126,6 +139,12 @@ protected:
 
 private:
     friend class RadioSetupDialogTestAccess;
+    // Opens (or re-raises) the list of published releases returned by the
+    // "Check for Update" button. Lazy-constructed and non-modal per
+    // docs/style/dialog-patterns.md, so the operator can keep it open while
+    // staging an installer.
+    void showFirmwareReleases(const QStringList& releases);
+    QPointer<class FirmwareReleasesDialog> m_firmwareReleasesDialog;
     bool confirmFirmwareClose();
     bool m_firmwareClosePromptOpen{false};
     bool isFlexOnlyPage(const QTreeWidgetItem* item) const;
@@ -178,6 +197,8 @@ private:
                                   const std::shared_ptr<QVector<std::function<void()>>>& pageReseeds);
     void buildVkampDevice(PeripheralDeviceUi& ui, QWidget* stackParent,
                           const std::function<void()>& refresh);
+    void buildKpa1500Device(PeripheralDeviceUi& ui, QWidget* stackParent,
+                            const std::function<void()>& refresh);
     PeripheralDeviceUi* peripheralDevice(const QString& id) const;
     QWidget* buildUiEnhancementsTab();
     // Phase 2 of GHSA-wfx7-w6p8-4jr2 (#2951) — Pinned Certificates list
@@ -217,6 +238,7 @@ private:
     SpeConnection* m_spe{nullptr};
     VkampConnection* m_vkamp{nullptr};
     LpMeterConnection* m_lpMeter{nullptr};
+    Kpa1500Connection* m_kpa1500{nullptr};
     QTreeWidget* m_navigation{nullptr};
     QStackedWidget* m_pages{nullptr};
     QLabel* m_pageTitle{nullptr};

@@ -7,7 +7,7 @@ if(POLICY CMP0156)
     cmake_policy(SET CMP0156 NEW)
 endif()
 
-project(AetherSDR VERSION 26.10.1 LANGUAGES C CXX)
+project(AetherSDR VERSION 26.10.2 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -146,18 +146,18 @@ endif()
 # Build libaethercore as one shared library instead of a static archive. The
 # ~250 test executables that link the core each absorb a full static copy
 # (~200 MB in a Debug ASan build), which exhausts a hosted runner's disk;
-# shared, they average ~13 MB. For the sanitizer lane only, never for releases:
-# the shipped app links the core statically.
-option(AETHER_SHARED_CORE "Build libaethercore as a shared library (sanitizer CI only)" OFF)
+# shared, they average ~13 MB. For the sanitizer lane and local review builds,
+# never for releases: the shipped app links the core statically.
+option(AETHER_SHARED_CORE "Build libaethercore as a shared library (sanitizer and review builds only)" OFF)
 if(AETHER_SHARED_CORE)
     if(WIN32)
         message(FATAL_ERROR "AETHER_SHARED_CORE is not supported on Windows")
     endif()
-    # Vendored static libraries end up inside the shared core. Their symbols
-    # do not reach the core's consumers: a PRIVATE dependency stops at a
-    # shared library, and aether_wdsp is built with hidden visibility. A test
-    # that calls WDSP directly while linking only aethercore links against
-    # the static core and fails here; go through core/dsp/WdspChannel.h.
+    # Vendored static libraries end up inside the shared core, and their
+    # symbols do not reach its consumers (PRIVATE dependency, hidden
+    # visibility). A test goes through core/dsp/WdspChannel.h: linking
+    # aether_wdsp instead would give it a second WDSP the core never touches.
+    # tools/check_wdsp_test_links.py enforces that.
     set(CMAKE_POSITION_INDEPENDENT_CODE ON)
     set(_aether_core_library_type SHARED)
     message(STATUS "AetherSDR: libaethercore built SHARED (AETHER_SHARED_CORE)")
@@ -165,6 +165,7 @@ else()
     set(_aether_core_library_type STATIC)
 endif()
 option(ENABLE_RTL "Enable the experimental receive-only RTL-SDR backend" ON)
+option(REQUIRE_RTL "Fail configuration unless the RTL backend and float FFTW are available" OFF)
 # Which SSB modulator the Hermes-Lite 2 transmit path is BUILT with. There is
 # no runtime switch and there must not be one: two silent transmit paths are
 # worse than one, and Hl2TxDsp.cpp records that the prior TXA attempt failed
@@ -270,6 +271,44 @@ endif()
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE RelWithDebInfo)
 endif()
+
+# RelWithDebInfo uses -g1 on GCC/Clang: line tables and function names, so
+# backtraces and core dumps still symbolize, without the full DWARF that made
+# test binaries 100-400 MB each (#6214). Only CMake's untouched default is
+# replaced, and only while CFLAGS/CXXFLAGS (or CMAKE_<LANG>_FLAGS) set no debug
+# level of their own: the TSan lane injects -g3, which RelWithDebInfo's flags
+# would otherwise override. The value is cached, so _AETHER_<LANG>_RWD_G1
+# records that this block wrote it; when a later reconfigure adds a -g, the
+# block puts CMake's default back rather than leave its -g1 overriding it. An
+# explicit -DCMAKE_<LANG>_FLAGS_RELWITHDEBINFO wins, MSVC's /Zi flags never
+# match, and Release builds are unaffected. For locals and types in a
+# debugger, build Debug.
+set(_aether_rwd_cmake "-O2 -g -DNDEBUG")
+set(_aether_rwd_g1 "-O2 -g1 -DNDEBUG")
+foreach(_lang C CXX)
+    if(NOT CMAKE_${_lang}_COMPILER_ID MATCHES "GNU|Clang")
+        continue()
+    endif()
+    set(_rwd CMAKE_${_lang}_FLAGS_RELWITHDEBINFO)
+    if(NOT "${${_rwd}}" STREQUAL "${_aether_rwd_g1}")
+        # Someone else set the value since; it is theirs now.
+        set(_AETHER_${_lang}_RWD_G1 OFF CACHE INTERNAL "")
+    endif()
+    if(CMAKE_${_lang}_FLAGS MATCHES "(^|[ \t])-g")
+        if(_AETHER_${_lang}_RWD_G1)
+            set(${_rwd} "${_aether_rwd_cmake}" CACHE STRING
+                "Flags used by the compiler during RELWITHDEBINFO builds." FORCE)
+            set(_AETHER_${_lang}_RWD_G1 OFF CACHE INTERNAL "")
+        endif()
+    elseif("${${_rwd}}" STREQUAL "${_aether_rwd_cmake}")
+        set(${_rwd} "${_aether_rwd_g1}" CACHE STRING
+            "Flags used by the compiler during RELWITHDEBINFO builds." FORCE)
+        set(_AETHER_${_lang}_RWD_G1 ON CACHE INTERNAL "")
+    endif()
+endforeach()
+unset(_aether_rwd_cmake)
+unset(_aether_rwd_g1)
+unset(_rwd)
 
 # Qt6 components
 # Qt 6.12 minimum: the same Qt every release artifact and every CI leg builds
@@ -426,6 +465,10 @@ else()
     find_package(PkgConfig QUIET)
     if(PkgConfig_FOUND)
         pkg_check_modules(PORTAUDIO portaudio-2.0)
+        if(PORTAUDIO_FOUND)
+            # Preserve the resolved prefix; bare -l names can select Homebrew first.
+            set(PORTAUDIO_LIBRARIES ${PORTAUDIO_LINK_LIBRARIES})
+        endif()
     endif()
 endif()
 
@@ -444,6 +487,10 @@ if(WIN32)
 else()
     if(PkgConfig_FOUND)
         pkg_check_modules(FFTW3 fftw3)
+        if(FFTW3_FOUND)
+            # Preserve the resolved prefix; bare -l names can select Homebrew first.
+            set(FFTW3_LIBRARIES ${FFTW3_LINK_LIBRARIES})
+        endif()
     endif()
     if(NOT FFTW3_FOUND)
         find_library(FFTW3_LIB fftw3)
@@ -843,6 +890,7 @@ set(CORE_SOURCES
     src/core/backends/LocalRadioDiscoverySource.cpp  # native discovery below the vendor seam
     src/core/backends/MemoryWireCodec.cpp    # memory kv-set decode, shared by Flex + local bank
     src/core/backends/flex/FlexBackend.cpp   # aetherd RFC step 2.2 (§5.5)
+    src/core/backends/flex/FlexModelControls.cpp
     src/core/backends/flex/FlexPttStopTracker.cpp # operation-bound LAN PTT evidence
     src/core/backends/flex/FlexPttWireSession.cpp
     src/core/backends/flex/RadioConnection.cpp  # SmartSDR TCP command/reply/status wire
@@ -895,6 +943,7 @@ set(CORE_SOURCES
     src/core/backends/icom/IcomSettings.cpp  # owned config, "Icom" root key (Principle V)
     src/core/backends/icom/IcomCredentials.cpp # password -> keychain, NEVER settings
     src/core/dsp/FftwPlannerLock.cpp # the one process-global FFTW planner lock (#5895)
+    src/core/dsp/SpectralEnvelope.cpp # FFT De-comb (cepstral true envelope)
     src/core/dsp/WdspChannel.cpp
     src/core/backends/rtl/RtlCaptureTransaction.cpp
     src/core/backends/rtl/RtlReceivePipeline.cpp
@@ -981,6 +1030,8 @@ set(CORE_SOURCES
     src/core/ReceivePresentationSync.cpp
     src/core/KiwiPublicDirectory.cpp
     src/core/DxClusterClient.cpp
+    src/core/DxSpotLineParser.cpp
+    src/core/GoClusterSettings.cpp
     src/core/WsjtxClient.cpp
     src/core/SpotCollectorClient.cpp
     src/core/PotaClient.cpp
@@ -1000,6 +1051,7 @@ set(CORE_SOURCES
     src/core/TciIoWorker.cpp
     src/core/TciClient.h
     src/core/TciServer.cpp
+    src/models/DaxReceiveModel.cpp
     src/core/TciRxConverter.cpp
     src/core/TciPeerProcess.cpp
     src/core/TciProtocol.cpp
@@ -1014,15 +1066,22 @@ set(CORE_SOURCES
     src/core/SpeConnection.cpp
     src/core/VkampProtocol.cpp
     src/core/VkampConnection.cpp
+    src/core/Kpa1500Protocol.cpp
+    src/core/Kpa1500Connection.cpp
     src/core/LpMeterProtocol.cpp
     src/core/LpMeterConnection.cpp
     src/core/FirmwareUploader.cpp
     src/core/WaveformInstaller.cpp
+    src/core/TailnetShimClient.cpp    # in-radio tailnet shim provisioning API (prototype)
+    src/core/TailnetShimTokenStore.cpp
+    src/core/TailnetShimDownloader.cpp  # pinned, SHA-256-verified image download (RFC #6271 D2)
+    src/core/TailnetLinkTelemetry.cpp   # link telemetry from the shim, for Network Diagnostics
     src/core/WaveformUploadState.cpp
     src/core/LegacyWaveformPackage.cpp
     src/core/DigitalVoiceModeRegistry.cpp
     src/core/DigitalVoiceWaveformTelemetry.cpp
     src/core/DigitalVoiceWaveformProcess.cpp
+    src/core/DvkWavConverter.cpp
     src/core/DvkWavTransfer.cpp
     src/core/weather/OperaRadarImage.cpp
     src/core/ZipArchive.cpp
@@ -1033,6 +1092,8 @@ set(CORE_SOURCES
     src/core/QsoWavPlayback.cpp
     src/core/FirmwareStager.cpp
     src/core/UpdateChecker.cpp
+    src/core/NetworkDiagnostics.cpp
+    src/core/WindowsFirewall.cpp
     src/core/OleCompoundFile.cpp
     src/core/CabExtractor.cpp
     src/core/RNNoiseFilter.cpp
@@ -1102,7 +1163,8 @@ set(CORE_SOURCES
 )
 
 if(APPLE)
-    list(APPEND CORE_SOURCES src/core/VirtualAudioBridge.cpp src/core/MacMicPermission.mm)
+    list(APPEND CORE_SOURCES src/core/VirtualAudioBridge.cpp src/core/MacMicPermission.mm
+                             src/core/AppActivity.mm)
 elseif(UNIX)
     # Linux DAX uses PulseAudio pipe modules via pactl (works with PipeWire too).
     # When libpipewire-0.3 dev headers are present we additionally compile a
@@ -1118,9 +1180,13 @@ elseif(UNIX)
         set(HAVE_PIPEWIRE_NATIVE TRUE)
     endif()
 endif()
+if(WIN32)
+    list(APPEND CORE_SOURCES src/core/AppActivity_win.cpp)
+endif()
 
 set(MODEL_SOURCES
     src/models/DecoderAudioModel.cpp
+    src/models/Ax25ReceiveModel.cpp
     src/models/AprsDigipeaterModel.cpp
     src/models/Nr2SettingsModel.cpp
     src/models/Rn2SettingsModel.cpp
@@ -1164,7 +1230,6 @@ set(MODEL_SOURCES
 add_subdirectory(third_party/QGeoView/lib EXCLUDE_FROM_ALL)
 
 set(GUI_SOURCES
-    src/gui/Contribute.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/MainWindow.cpp
     src/gui/MainWindowHelpers.cpp
@@ -1230,6 +1295,7 @@ set(GUI_SOURCES
     src/gui/SmartMtrWidget.cpp
     src/gui/SmartMtrConfig.cpp
     src/gui/MeterViewController.cpp
+    src/gui/FirmwareReleasesDialog.cpp
     src/gui/RadioSetupDialog.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
@@ -1261,6 +1327,7 @@ set(GUI_SOURCES
     src/gui/ModemChrome.cpp
     src/gui/NrGainStrip.cpp
     src/gui/WaveformsDialog.cpp
+    src/gui/TailnetShimDialog.cpp
     src/gui/ClientRxDspApplet.cpp
     src/gui/DragValuePopup.cpp
     src/gui/DspParamPopup.cpp
@@ -1280,6 +1347,7 @@ set(GUI_SOURCES
     src/gui/SpeApplet.cpp
     src/gui/SpeLcdWidget.cpp
     src/gui/VkampApplet.cpp
+    src/gui/Kpa1500Applet.cpp
     src/gui/LpMeterApplet.cpp
     src/gui/Ctr2ProxyApplet.cpp
     src/gui/MeterApplet.cpp
@@ -1287,6 +1355,9 @@ set(GUI_SOURCES
     src/gui/RadeApplet.cpp
     src/gui/HealthApplet.cpp
     src/gui/PersistentDialog.cpp
+    src/gui/CanonWindow.cpp
+    src/gui/CanonSurface.cpp
+    src/gui/PanadapterHeader.cpp
     src/gui/FramelessMessageBox.cpp
     src/gui/ProfileManagerDialog.cpp
     src/gui/SettingsBrowserDialog.cpp
@@ -1326,6 +1397,8 @@ set(GUI_SOURCES
     src/gui/WaveformScopeModel.cpp
     src/gui/WaveformWidget.cpp
     src/gui/AetherClockApplet.cpp
+    src/gui/WfmApplet.cpp
+    src/gui/WfmLockScope.cpp
     src/gui/ClockAlignmentWidget.cpp
     src/gui/ClientEqApplet.cpp
     src/gui/ClientEqCurveWidget.cpp
@@ -1333,6 +1406,7 @@ set(GUI_SOURCES
     src/gui/ClientEqEditorCanvas.cpp
     src/gui/StripEqPanel.cpp
     src/gui/ClientEqFftAnalyzer.cpp
+    src/gui/Ctr2AudioSpectrumFeeder.cpp
     src/gui/ClientEqIconRow.cpp
     src/gui/ClientEqOutputFader.cpp
     src/gui/ClientLevelMeter.cpp
@@ -1401,6 +1475,11 @@ set(GUI_SOURCES
     src/gui/ShackSwitchApplet.cpp
     src/gui/GreenHeronApplet.cpp
     src/gui/TitleBar.cpp
+    src/gui/RoundedMenu.cpp
+    src/gui/StatusIndicator.cpp
+    src/gui/BrandMark.cpp
+    src/gui/RadioTabBar.cpp
+    src/gui/WindowCaptionButtons.cpp
     src/gui/SupportDialog.cpp
     src/gui/SliceTroubleshootingDialog.cpp
     src/gui/RadioHealthDialog.cpp
@@ -1632,6 +1711,7 @@ target_link_libraries(aetherdesktop_support PUBLIC
 
 add_executable(AetherSDR
     src/main.cpp
+    src/QtPlatformChoice.cpp  # start-up log lines: the Qt platform plugin and any fallback
     ${GUI_SOURCES}
     ${RESOURCES}
     ${DFNR_RESOURCES}
@@ -1651,7 +1731,9 @@ target_link_libraries(aetherd PRIVATE
     Qt6::Network
 )
 if(WIN32)
-    target_link_libraries(aethercore PRIVATE advapi32)
+    # ole32/oleaut32: WindowsFirewall reads the firewall policy over COM;
+    # shell32: its Fix runs netsh through a UAC prompt.
+    target_link_libraries(aethercore PRIVATE advapi32 ole32 oleaut32 shell32)
 endif()
 
 # --- ASR engine: vendored whisper.cpp (RFC #4333, Phase 1) -------------------
@@ -2297,11 +2379,15 @@ endif()
 # Windows: GUI app (no console window) + icon resource
 if(WIN32)
     set_target_properties(AetherSDR PROPERTIES WIN32_EXECUTABLE TRUE)
+    # MainWindow::applyWindowsFrameColor (DwmSetWindowAttribute).
+    target_link_libraries(AetherSDR PRIVATE dwmapi)
 endif()
 
 # macOS app bundle
 if(APPLE)
     target_sources(AetherSDR PRIVATE src/MacStartupAbortGuard.cpp)
+    target_sources(AetherSDR PRIVATE src/gui/mac/NativeWindowTitle.mm)
+    target_link_libraries(AetherSDR PRIVATE "-framework AppKit")
     set_target_properties(AetherSDR PROPERTIES
         MACOSX_BUNDLE TRUE
         MACOSX_BUNDLE_GUI_IDENTIFIER "com.aethersdr.AetherSDR"
@@ -2311,7 +2397,7 @@ if(APPLE)
         MACOSX_BUNDLE_ICON_FILE "AetherSDR.icns"
         MACOSX_BUNDLE_INFO_PLIST "${CMAKE_SOURCE_DIR}/packaging/macos/Info.plist.in"
     )
-    target_link_libraries(aethercore PRIVATE "-framework AVFoundation" "-framework Accelerate") # core: MacNRFilter/VirtualAudioBridge
+    target_link_libraries(aethercore PRIVATE "-framework AVFoundation" "-framework Accelerate" "-framework Foundation") # core: MacNRFilter/VirtualAudioBridge/AppActivity
     target_sources(aethercore PRIVATE src/core/MacNRFilter.cpp)
 
     # Generate AetherSDR.icns at build time from docs/assets/logo-circle.png so local
@@ -2674,6 +2760,9 @@ else()
         if(NOT HIDAPI_FOUND)
             pkg_check_modules(HIDAPI hidapi)
         endif()
+        if(HIDAPI_FOUND)
+            set(HIDAPI_LIBRARIES ${HIDAPI_LINK_LIBRARIES})
+        endif()
     endif()
 endif()
 
@@ -2687,8 +2776,8 @@ endif()
 # plain header+library probe so the switch below is reachable on every
 # platform, not only the pkg-config ones.
 if(ENABLE_RTL AND NOT RTLSDR_FOUND)
-    find_path(RTLSDR_INCLUDE_DIR rtl-sdr.h)
-    find_library(RTLSDR_LIBRARY NAMES rtlsdr librtlsdr)
+    find_path(RTLSDR_INCLUDE_DIR rtl-sdr.h HINTS "${CMAKE_SOURCE_DIR}/third_party/rtl-deps/include")
+    find_library(RTLSDR_LIBRARY NAMES rtlsdr librtlsdr HINTS "${CMAKE_SOURCE_DIR}/third_party/rtl-deps/lib")
     if(RTLSDR_INCLUDE_DIR AND RTLSDR_LIBRARY)
         add_library(RtlSdr::RtlSdr UNKNOWN IMPORTED)
         set_target_properties(RtlSdr::RtlSdr PROPERTIES
@@ -2702,8 +2791,8 @@ else()
 endif()
 
 if(ENABLE_RTL AND NOT RTL_FFTW3F_FOUND)
-    find_path(RTL_FFTW3F_INCLUDE_DIR fftw3.h)
-    find_library(RTL_FFTW3F_LIBRARY NAMES fftw3f libfftw3f libfftw3f-3)
+    find_path(RTL_FFTW3F_INCLUDE_DIR fftw3.h HINTS "${CMAKE_SOURCE_DIR}/third_party/fftw3/include")
+    find_library(RTL_FFTW3F_LIBRARY NAMES fftw3f libfftw3f libfftw3f-3 HINTS "${CMAKE_SOURCE_DIR}/third_party/fftw3/lib")
     if(RTL_FFTW3F_INCLUDE_DIR AND RTL_FFTW3F_LIBRARY)
         add_library(RtlFftw3f::RtlFftw3f UNKNOWN IMPORTED)
         set_target_properties(RtlFftw3f::RtlFftw3f PROPERTIES
@@ -2734,6 +2823,27 @@ elseif(RTLSDR_FOUND AND NOT RTL_FFTW3F_FOUND)
     message(STATUS "RTL-SDR ... disabled — librtlsdr found but fftw3f missing. Install fftw3f (e.g. libfftw3-dev), or configure with -DENABLE_RTL=OFF.")
 else()
     message(STATUS "RTL-SDR ... disabled — librtlsdr not found")
+endif()
+
+include(cmake/AetherRequireRtl.cmake)
+aether_require_rtl()
+
+# Stage RTL independently of the optional NR4 feature.
+if(WIN32 AND AETHER_BACKEND_RTL)
+    foreach(_rtl_dll
+            "${CMAKE_SOURCE_DIR}/third_party/rtl-deps/bin/rtlsdr.dll"
+            "${CMAKE_SOURCE_DIR}/third_party/rtl-deps/bin/libusb-1.0.dll"
+            "${CMAKE_SOURCE_DIR}/third_party/fftw3/bin/libfftw3f-3.dll")
+        if(EXISTS "${_rtl_dll}")
+            foreach(_rtl_app AetherSDR aetherd)
+                add_custom_command(TARGET ${_rtl_app} POST_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${_rtl_dll}" "$<TARGET_FILE_DIR:${_rtl_app}>")
+            endforeach()
+        elseif(REQUIRE_RTL)
+            message(FATAL_ERROR "Required RTL runtime missing: ${_rtl_dll}; run scripts/setup/setup-rtl-deps.ps1 and setup-fftw.ps1")
+        endif()
+    endforeach()
 endif()
 
 # Ulanzi Dial backend — one per platform.  All three implementations
@@ -3102,7 +3212,12 @@ if(ENABLE_SPECBLEACH)
             endif()
         endif()
         # libspecbleach uses fftwf (float precision FFTW3)
-        find_library(FFTW3F_LIB fftw3f HINTS /opt/homebrew/lib /usr/local/lib ${CMAKE_SOURCE_DIR}/third_party/fftw3/lib)
+        if(RTL_FFTW3F_TARGET AND TARGET "${RTL_FFTW3F_TARGET}")
+            # NR4 and RTL must use the same float FFTW, including its prefix.
+            set(FFTW3F_LIB "${RTL_FFTW3F_TARGET}")
+        else()
+            find_library(FFTW3F_LIB fftw3f HINTS /opt/homebrew/lib /usr/local/lib ${CMAKE_SOURCE_DIR}/third_party/fftw3/lib)
+        endif()
         if(FFTW3F_LIB)
             target_link_libraries(aethercore PRIVATE ${FFTW3F_LIB})
         else()
@@ -3325,6 +3440,11 @@ include(tests/tests.cmake)
 
 # ── Install rules ────────────────────────────────────────────────────────────
 include(GNUInstallDirs)
+
+if(LINUX AND NOT DEFINED CMAKE_INSTALL_RPATH_USE_LINK_PATH)
+    # Keep pinned or non-system Qt loadable after install; explicit builder overrides win.
+    set_property(TARGET AetherSDR PROPERTY INSTALL_RPATH_USE_LINK_PATH TRUE)
+endif()
 
 if(APPLE)
     install(TARGETS AetherSDR

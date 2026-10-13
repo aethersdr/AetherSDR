@@ -65,6 +65,13 @@ public:
     static Qt::Edges computeEdges(const QRect& rect, const QPoint& p, int margin,
                                    int topMoveReserve, bool maximizedOrFullscreen);
 
+    // `edges` without the ones on an axis the window cannot resize along: a
+    // fixed width (minimum == maximum) drops Left/Right, a fixed height drops
+    // Top/Bottom. Without it a fixed-width window still shows a horizontal
+    // resize cursor at its sides and starts a drag that cannot move.
+    static Qt::Edges withoutLockedAxes(Qt::Edges edges, const QSize& minimum,
+                                        const QSize& maximum);
+
     // The decision QEvent::Leave applies when a manual resize is active but
     // never got a real mouse grab: true means end the drag right there,
     // because without a grab we stop receiving any further events for it —

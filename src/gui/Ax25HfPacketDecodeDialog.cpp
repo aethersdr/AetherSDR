@@ -18,6 +18,8 @@
 #include "core/aprs/AprsSettings.h"
 #include "core/aprs/AprsStationList.h"
 #include "gui/AprsMessagesDialog.h"
+#include "gui/CanonIndicators.h"
+#include "gui/FramelessResizer.h"
 #include "gui/AprsRateGraph.h"
 #include "gui/AprsSymbolIcons.h"
 #include "core/tnc/Ax25.h"
@@ -166,47 +168,53 @@ constexpr int kTxLeadBufferMs = 120;
 // which silently drops the command does not strand the TX queue.
 constexpr int kTxStreamWaitTimeoutMs = 5000;
 
+// The style guide's canon vocabulary (RFC #6226), as Network Diagnostics uses
+// it: everything is transparent over CanonWindow's ground except the surfaces
+// that hold content, which sit on canon raised / nested / control. Selection
+// and focus are canon cyan; status keeps its green / amber / red meaning.
 constexpr const char* kAetherModemStyle = R"(
 QWidget {
-    color: #aeb9cc;
-    background: #07101c;
+    color: {{color.canon.inkSoft}};
+    background: transparent;
     font-size: 14px;
 }
 QLabel {
     background: transparent;
+}
+QMenu {
+    background: {{color.canon.raised}};
 }
 QFrame#TabsFrame,
 QFrame#ControlsFrame,
 QFrame#LogFrame,
 QFrame#ActionFrame,
 QFrame#StatusFrame {
-    background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
-        stop:0 #111d2c, stop:1 #0a1421);
-    border: 1px solid #233246;
+    background: {{color.canon.raised}};
+    border: 1px solid {{color.canon.line}};
     border-radius: 7px;
 }
 QFrame#TabCell {
     background: transparent;
-    border-right: 1px solid #233246;
+    border-right: 1px solid {{color.canon.line}};
 }
 QFrame#ControlCell {
     background: transparent;
-    border-right: 1px solid #1c2a3b;
+    border-right: 1px solid {{color.canon.line}};
 }
 QLabel#SectionLabel {
     background: transparent;
-    color: #8d99ad;
+    color: {{color.canon.muted}};
     font-size: 11px;
     font-weight: 700;
 }
 QLabel#StatusValue {
     background: transparent;
-    color: #b9c4d7;
+    color: {{color.canon.ink}};
     font-size: 14px;
     font-weight: 600;
 }
 QLabel#StatusDot {
-    background: #64d36e;
+    background: {{color.accent.success}};
     border-radius: 6px;
     min-width: 12px;
     max-width: 12px;
@@ -216,53 +224,31 @@ QLabel#StatusDot {
 QRadioButton,
 QCheckBox {
     background: transparent;
-    color: #aeb9cc;
+    color: {{color.canon.inkSoft}};
     spacing: 9px;
 }
-QRadioButton::indicator {
-    width: 20px;
-    height: 20px;
-    border-radius: 10px;
-    border: 2px solid #26374e;
-    background: #08111d;
-}
-QRadioButton::indicator:checked {
-    border: 2px solid #65d379;
-    background: #132d26;
-}
-QRadioButton::indicator:checked:hover {
-    border-color: #80ed91;
-}
-QCheckBox::indicator {
-    width: 20px;
-    height: 20px;
-    border-radius: 4px;
-    border: 1px solid #34533c;
-    background: #0d1a18;
-}
-QCheckBox::indicator:checked {
-    background: #5ebd69;
-    border-color: #65d379;
-}
 QPushButton {
-    color: #aeb9cc;
-    background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
-        stop:0 #142235, stop:1 #0b1625);
-    border: 1px solid #26374e;
+    color: {{color.canon.cyan}};
+    background: {{color.canon.control}};
+    border: 1px solid {{color.canon.lineHi}};
     border-radius: 7px;
     padding: 10px 18px;
     font-weight: 600;
 }
 QPushButton:hover {
-    border-color: #3c526d;
-    color: #d6dfeb;
+    background: {{color.canon.nested}};
+    color: {{color.canon.aqua}};
+}
+QPushButton:focus {
+    border-color: {{color.canon.aqua}};
 }
 QPushButton:disabled {
-    color: #6e7a8d;
-    border-color: #1d2a3c;
-    background: #0b1522;
+    color: {{color.canon.muted}};
+    border-color: {{color.canon.line}};
+    background: transparent;
 }
 QPushButton#TabButton {
+    color: {{color.canon.inkSoft}};
     border-radius: 5px;
     border: 1px solid transparent;
     background: transparent;
@@ -270,50 +256,66 @@ QPushButton#TabButton {
     padding: 4px 12px;
     font-size: 13px;
 }
+QPushButton#TabButton:hover {
+    color: {{color.canon.ink}};
+    background: {{color.canon.control}};
+}
 QPushButton#TabButton:checked {
-    color: #d4deea;
-    border-color: #54c768;
-    background: #0d1c20;
+    color: {{color.canon.aqua}};
+    border-color: {{color.canon.cyan}};
+    background: {{color.canon.nested}};
 }
 QPushButton#TabButton:disabled {
-    color: #7f8b9e;
+    color: {{color.canon.muted}};
 }
 QComboBox {
-    color: #aeb9cc;
-    background: #0b1625;
-    border: 1px solid #26374e;
+    color: {{color.canon.ink}};
+    background: {{color.canon.control}};
+    border: 1px solid {{color.canon.lineHi}};
     border-radius: 5px;
     padding: 6px 28px 6px 10px;
 }
+QComboBox:focus {
+    border-color: {{color.canon.aqua}};
+}
+QComboBox QAbstractItemView {
+    color: {{color.canon.inkSoft}};
+    background: {{color.canon.nested}};
+    border: 1px solid {{color.canon.lineHi}};
+    selection-background-color: {{color.canon.cyan}};
+    selection-color: {{color.canon.onAccent}};
+}
 QLineEdit {
-    color: #c4cedd;
-    background: #050b13;
-    border: 1px solid #26374e;
+    color: {{color.canon.ink}};
+    background: {{color.canon.control}};
+    border: 1px solid {{color.canon.lineHi}};
     border-radius: 7px;
     padding: 10px 12px;
-    selection-background-color: #1b3650;
+    selection-background-color: {{color.canon.cyan}};
+    selection-color: {{color.canon.onAccent}};
     font-family: "SF Mono", "Menlo", "Consolas", monospace;
     font-size: 13px;
 }
 QLineEdit:focus {
-    border-color: #54c768;
+    border-color: {{color.canon.aqua}};
 }
 QTextEdit {
-    color: #c2ccdb;
-    background: #050b13;
+    color: {{color.canon.inkSoft}};
+    background: {{color.canon.nested}};
     border: none;
-    selection-background-color: #1b3650;
+    selection-background-color: {{color.canon.cyan}};
+    selection-color: {{color.canon.onAccent}};
     font-family: "SF Mono", "Menlo", "Consolas", monospace;
     font-size: 13px;
 }
 QScrollBar:vertical {
-    background: #07101c;
+    background: transparent;
     width: 12px;
     margin: 8px 2px 8px 2px;
     border-radius: 6px;
 }
 QScrollBar::handle:vertical {
-    background: #25364d;
+    background: {{color.canon.lineHi}};
     border-radius: 5px;
     min-height: 34px;
 }
@@ -321,52 +323,95 @@ QScrollBar::add-line:vertical,
 QScrollBar::sub-line:vertical {
     height: 0px;
 }
+QScrollBar:horizontal {
+    background: transparent;
+    height: 12px;
+    margin: 2px 8px 2px 8px;
+    border-radius: 6px;
+}
+QScrollBar::handle:horizontal {
+    background: {{color.canon.lineHi}};
+    border-radius: 5px;
+    min-width: 34px;
+}
+QScrollBar::add-line:horizontal,
+QScrollBar::sub-line:horizontal {
+    width: 0px;
+}
 QLabel#ExperimentalBanner {
-    background: #3a2a14;
-    color: #e8b977;
-    border: 1px solid #6b4a1f;
+    background: {{color.background.warning}};
+    color: {{color.accent.warning}};
+    border: 1px solid {{color.accent.warning}};
     border-radius: 6px;
     padding: 8px 12px;
     font-size: 13px;
 }
 QTableWidget {
-    color: #c2ccdb;
-    background: #050b13;
-    alternate-background-color: #081220;
+    color: {{color.canon.inkSoft}};
+    background: {{color.canon.nested}};
+    alternate-background-color: {{color.canon.raised}};
     border: none;
-    gridline-color: #14202f;
+    gridline-color: {{color.canon.line}};
     font-family: "SF Mono", "Menlo", "Consolas", monospace;
     font-size: 13px;
-    selection-background-color: #1b3650;
+    selection-background-color: {{color.canon.control}};
+    selection-color: {{color.canon.ink}};
 }
 QTableWidget::item {
     padding: 2px 10px;
 }
 QHeaderView::section {
-    color: #8d99ad;
-    background: #0d1825;
+    color: {{color.canon.muted}};
+    background: {{color.canon.raised}};
     border: none;
-    border-bottom: 1px solid #233246;
+    border-bottom: 1px solid {{color.canon.line}};
     padding: 5px 8px;
     font-size: 11px;
     font-weight: 700;
 }
 QTableCornerButton::section {
-    background: #0d1825;
+    background: {{color.canon.raised}};
     border: none;
 }
 QSpinBox {
-    color: #c4cedd;
-    background: #0b1625;
-    border: 1px solid #26374e;
+    color: {{color.canon.ink}};
+    background: {{color.canon.control}};
+    border: 1px solid {{color.canon.lineHi}};
     border-radius: 5px;
     padding: 6px 8px;
 }
+QSpinBox:focus {
+    border-color: {{color.canon.aqua}};
+}
 QPushButton#EnvelopeButton[hasUnread="true"] {
-    color: #80ed91;
-    border-color: #54c768;
+    color: {{color.canon.aqua}};
+    border-color: {{color.canon.cyan}};
 }
 )";
+
+// A theme colour as a "#rrggbb" string for the log's rich text, which a
+// stylesheet token cannot reach; resolved through the window's canon scope.
+QString themeHex(const QWidget* w, const QString& token)
+{
+    return ThemeManager::instance().color(w, token).name();
+}
+
+// One log line: the time, a kind tag, then an optional route and the text.
+// Every argument except the colours is plain text and is escaped here.
+QString logLineHtml(const QWidget* w, const QString& time, const QString& kind,
+                    const QString& kindToken, const QString& route, const QString& text)
+{
+    const auto span = [w](const QString& token, const QString& body) {
+        return QStringLiteral("<span style=\"color:%1;\">%2</span>")
+            .arg(themeHex(w, token), body.toHtmlEscaped());
+    };
+    const QString gap = QStringLiteral("&nbsp;&nbsp;");
+    QString html = span(QStringLiteral("color.canon.muted"), time) + gap
+        + span(kindToken, kind) + gap;
+    if (!route.isEmpty())
+        html += span(QStringLiteral("color.canon.ink"), route + QLatin1Char(':')) + gap;
+    return html + span(QStringLiteral("color.canon.inkSoft"), text);
+}
 
 QString profileSettingsValue(Ax25ModemProfile profile)
 {
@@ -836,19 +881,22 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
                                                    RadioModel* radio,
                                                    SliceModel* initialSlice,
                                                    QWidget* parent)
-    : PersistentDialog(QStringLiteral("AetherModem"),
-                       QStringLiteral("Ax25HfPacketDecodeDialogGeometry"),
-                       parent)
+    : CanonWindow(QStringLiteral("AetherModem"), parent, Kind::Workspace)
     , m_audio(audio)
     , m_radio(radio)
 {
-    theme::setContainer(this, QStringLiteral("dialog/ax25Decode"));
-    setMinimumSize(1080, 680);
+    theme::setContainer(this, QStringLiteral("canon/aetherModem"));
+    // Size and position persist under the key it used as a PersistentDialog,
+    // so saved geometry carries over; it resizes from every edge.
+    setGeometryKey(QStringLiteral("Ax25HfPacketDecodeDialogGeometry"));
+    // 680 was the content's minimum under a title bar; the canon header in
+    // its place is about 40 px taller.
+    setMinimumSize(1080, 720);
+    FramelessResizer::install(this);
 
-    m_shim = new AetherAx25LibmodemShim();
-    m_shim->moveToThread(&m_shimThread);
-    connect(&m_shimThread, &QThread::finished, m_shim, &QObject::deleteLater);
-    m_shimThread.start();
+    if (m_radio) {
+        m_receive = std::make_unique<Ax25ReceiveModel>(*m_radio);
+    }
     m_kissServer = new KissTncServer(this);
     configureTncAuthority(true);
     m_heard = new HeardList(this);
@@ -908,10 +956,14 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
     m_heartbeatTimer->start();
     m_txPaceTimer = new QTimer(this);
     m_txPaceTimer->setInterval(kTxChunkMs);
-    bodyWidget()->setStyleSheet(QString::fromLatin1(kAetherModemStyle));
+    applyCanonSheet(bodyWidget(), [] {
+        return QString::fromLatin1(kAetherModemStyle) + canonIndicatorRules();
+    });
 
     auto* root = new QVBoxLayout(bodyWidget());
+    root->setContentsMargins(14, 12, 14, 14);
     root->setSpacing(10);
+    root->addWidget(makeCanonHeader(QStringLiteral("AetherModem")));
 
     auto* tabsFrame = panel(QStringLiteral("TabsFrame"), bodyWidget());
     auto* tabs = new QHBoxLayout(tabsFrame);
@@ -1076,7 +1128,7 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
 
     auto statusBarSeparator = [&]() -> QLabel* {
         auto* sep = new QLabel(QStringLiteral("│"), statusBar);
-        sep->setStyleSheet(QStringLiteral("color:#233246;"));
+        ThemeManager::instance().applyStyleSheet(sep, QStringLiteral("color: {{color.canon.line}};"));
         return sep;
     };
 
@@ -1163,51 +1215,35 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
             this, &Ax25HfPacketDecodeDialog::startTransmitFromUi);
     connect(m_txPaceTimer, &QTimer::timeout,
             this, &Ax25HfPacketDecodeDialog::paceTransmitAudio);
-    connect(m_shim, &AetherAx25LibmodemShim::frameDecoded,
-            this, &Ax25HfPacketDecodeDialog::appendFrame);
-#ifdef HAVE_MQTT
-    connect(m_shim, &AetherAx25LibmodemShim::frameDecoded,
-            this, &Ax25HfPacketDecodeDialog::publishFrameMqtt);
-#endif
-    // RX -> KISS clients: forward every decoded frame to connected hosts.
-    connect(m_shim, &AetherAx25LibmodemShim::frameDecoded, this,
-            [this](const Ax25DecodedFrame& frame) {
-        if (m_kissServer && m_kissServer->isListening() && !frame.ax25FrameNoFcs.isEmpty()) {
-            m_kissServer->broadcastAx25Frame(frame.ax25FrameNoFcs);
-            ++m_kissRxCount;
-            refreshTncStatus();
-        }
-    });
-    // RX -> Mailbox: feed every decoded frame to the PMS (heard list always;
-    // connected-mode handling only for frames addressed to our PMS callsign).
-    connect(m_shim, &AetherAx25LibmodemShim::frameDecoded, this,
-            [this](const Ax25DecodedFrame& frame) {
-        if (frame.ax25FrameNoFcs.isEmpty())
-            return;
-        // Record into the shared heard log once (drives MHEARD + quick-connect),
-        // then through the APRS parser into the station roster + messenger.
-        if (auto decoded = ax25::Frame::decode(frame.ax25FrameNoFcs)) {
-            if (m_heard)
-                m_heard->record(*decoded);
-            if (auto packet = aprs::parseFrame(*decoded)) {
-                if (m_aprsStations)
-                    m_aprsStations->record(*packet);
-                if (m_aprsMessenger)
-                    m_aprsMessenger->onPacket(*packet);
-            }
-            if (frame.fcsOk && m_enableDecode && m_enableDecode->isChecked()) {
-                m_digi->receiveFrame(frame.ax25FrameNoFcs);
-            }
-        }
-        if (m_pms)
-            m_pms->onAirFrame(frame.ax25FrameNoFcs);
-        if (m_terminal)
-            m_terminal->onAirFrame(frame.ax25FrameNoFcs);
-    });
-    connect(m_shim, &AetherAx25LibmodemShim::diagnosticsUpdated,
-            this, &Ax25HfPacketDecodeDialog::updateDiagnostics);
-    connect(m_shim, &AetherAx25LibmodemShim::statusChanged,
-            this, &Ax25HfPacketDecodeDialog::refreshStatus);
+    if (m_receive) {
+        connect(m_receive.get(), &Ax25ReceiveModel::frameDecoded,
+                this, &Ax25HfPacketDecodeDialog::handleDecodedFrame);
+        connect(m_receive.get(), &Ax25ReceiveModel::diagnosticsUpdated, this,
+            [this](const Ax25DecoderDiagnostics& diagnostics, const Ax25ReceiveContext& context) {
+                updateDiagnostics(diagnostics, context);
+            });
+        connect(m_receive.get(), &Ax25ReceiveModel::statusChanged,
+                this, &Ax25HfPacketDecodeDialog::refreshStatus);
+        connect(m_receive.get(), &Ax25ReceiveModel::routeStatusChanged,
+                this, &Ax25HfPacketDecodeDialog::refreshStatus);
+        connect(m_receive.get(), &Ax25ReceiveModel::sourceReset, this, [this] {
+            const QPointer<Ax25HfPacketDecodeDialog> guard(this);
+            m_lastDiagnostics = {};
+            m_lastDiagnosticsUtc = {};
+            m_lastActivityHdlc = 0;
+            m_lastActivityAccepted = 0;
+            if (m_captureActive) { finishAudioCapture(false); }
+            if (!guard) { return; }
+            refreshStatus();
+        });
+        connect(m_receive.get(), &Ax25ReceiveModel::pcmReady, this,
+            [this](const DecoderPcmBlock& block, const Ax25ReceiveContext& context) {
+                if (!context.current()) { return; }
+                handleRxAudio(QByteArray(reinterpret_cast<const char*>(block.samples.constData()),
+                    block.samples.size() * static_cast<qsizetype>(sizeof(float))),
+                    DecoderPcmBlock::kSampleRateHz, context);
+            });
+    }
     connect(m_heartbeatTimer, &QTimer::timeout,
             this, &Ax25HfPacketDecodeDialog::updateHeartbeat);
 
@@ -1226,12 +1262,6 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
             if (m_txActive || m_txPendingStream)
                 finishTransmit(true, QStringLiteral("PTT blocked: %1").arg(message));
         });
-    }
-
-    if (m_audio) {
-        connect(m_audio, &AudioEngine::tncRxAudioReady,
-                this, &Ax25HfPacketDecodeDialog::handleRxAudio,
-                Qt::QueuedConnection);
     }
 
     // KISS TNC server wiring.
@@ -1419,15 +1449,6 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
     if (AprsSettings::modemAutostart() && m_enableDecode)
         m_enableDecode->setChecked(true);
 
-    // No control button may be the dialog's default button — otherwise pressing
-    // Return in a text field would trigger it (Connect, Transmit, ...). Combined
-    // with the title-bar fix, this guarantees Enter never does anything unwanted
-    // in any AetherModem field; each field's own returnPressed still works.
-    for (QPushButton* button : bodyWidget()->findChildren<QPushButton*>()) {
-        button->setAutoDefault(false);
-        button->setDefault(false);
-    }
-
     // Apply the per-tab chrome (hide the shared log on the Terminal tab) now that
     // the layout is fully built.
     updateTabChrome(m_tabStack->currentIndex());
@@ -1457,14 +1478,14 @@ Ax25HfPacketDecodeDialog::~Ax25HfPacketDecodeDialog()
         finishAudioCapture(false);
     if (m_kissServer)
         m_kissServer->stop();
-    if (m_audio)
-        m_audio->setTncRxTapEnabled(false);
-    m_shimThread.quit();
-    m_shimThread.wait();
+    m_receive.reset();
 }
 
 void Ax25HfPacketDecodeDialog::setAttachedSlice(SliceModel* slice)
 {
+    const QPointer<Ax25HfPacketDecodeDialog> guard(this);
+    if (m_receive) { m_receive->setSlice(slice); }
+    if (!guard) { return; }
     if (m_attachedSlice == slice) {
         logAttachedSliceState(QStringLiteral("slice state refresh"));
         refreshStatus();
@@ -1505,6 +1526,7 @@ void Ax25HfPacketDecodeDialog::setAttachedSlice(SliceModel* slice)
 
 void Ax25HfPacketDecodeDialog::setModemProfile(Ax25ModemProfile profile, bool persist)
 {
+    const QPointer<Ax25HfPacketDecodeDialog> guard(this);
     m_shimConfig = ax25DemodConfigForProfile(profile, Ax25TonePolarity::Normal);
     if (m_digi) { m_digi->setBaud(m_shimConfig.baud); }
     if (m_digiEnable) { m_digiEnable->setEnabled(m_shimConfig.baud == 1200); }
@@ -1513,9 +1535,8 @@ void Ax25HfPacketDecodeDialog::setModemProfile(Ax25ModemProfile profile, bool pe
     // mid-sweep — and the sweep would be measuring the wrong preamble.
     if (m_terminalTxPreamble)
         m_shimConfig.txPreambleFlags = m_terminalTxPreamble->value();
-    QMetaObject::invokeMethod(m_shim, [shim = m_shim, cfg = m_shimConfig]() {
-        shim->configure(cfg);
-    }, Qt::QueuedConnection);
+    if (m_receive) { m_receive->configure(m_shimConfig); }
+    if (!guard) { return; }
     m_lastDiagnostics = {};
     m_lastDiagnosticsUtc = {};
 
@@ -2066,6 +2087,10 @@ void Ax25HfPacketDecodeDialog::enableDecodeForProgram(TxProgram kind)
 
 void Ax25HfPacketDecodeDialog::applyDecodeEnabled(bool enabled)
 {
+    const QPointer<Ax25HfPacketDecodeDialog> guard(this);
+    // Retire receive work before any callback from shutdown/control cleanup.
+    if (m_receive) { m_receive->setEnabled(enabled); }
+    if (!guard) { return; }
     if (!enabled) {
         for (std::size_t i = 0; i < m_txPrograms.size(); ++i) {
             (void)setTxProgram(static_cast<TxProgram>(i), false);
@@ -2074,17 +2099,14 @@ void Ax25HfPacketDecodeDialog::applyDecodeEnabled(bool enabled)
     }
     if (!enabled && m_digi) { m_digi->setEnabled(false); }
     if (enabled) {
-        QMetaObject::invokeMethod(m_shim, &AetherAx25LibmodemShim::reset, Qt::QueuedConnection);
         m_lastDiagnostics = {};
         m_enabledUtc = QDateTime::currentDateTimeUtc();
         m_lastDiagnosticsUtc = {};
         m_lastNoAudioNoticeUtc = {};
         m_lastActivityHdlc = 0;
         m_lastActivityAccepted = 0;
-        if (m_audio)
-            m_audio->setTncRxTapEnabled(true);
         appendSystemLine(QStringLiteral(
-            "Modem enabled. RX tap requested; waiting for 24 kHz PC RX audio."));
+            "Modem enabled. Waiting for selected receive audio converted to 24 kHz mono."));
     } else {
         if (m_captureActive)
             finishAudioCapture(false);
@@ -2115,9 +2137,6 @@ void Ax25HfPacketDecodeDialog::applyDecodeEnabled(bool enabled)
         if (m_pms)
             m_pms->dropLink();
 
-        if (m_audio)
-            m_audio->setTncRxTapEnabled(false);
-        QMetaObject::invokeMethod(m_shim, &AetherAx25LibmodemShim::reset, Qt::QueuedConnection);
         m_lastDiagnostics = {};
         m_lastDiagnosticsUtc = {};
         m_lastActivityHdlc = 0;
@@ -2130,8 +2149,51 @@ void Ax25HfPacketDecodeDialog::applyDecodeEnabled(bool enabled)
     refreshPmsStatus();
 }
 
-void Ax25HfPacketDecodeDialog::handleRxAudio(const QByteArray& monoFloat32Pcm, int sampleRate)
+void Ax25HfPacketDecodeDialog::handleDecodedFrame(
+    const Ax25DecodedFrame& frame, const Ax25ReceiveContext& context)
 {
+    const QPointer<Ax25HfPacketDecodeDialog> guard(this);
+    const auto current = [&] { return guard && context.current(); };
+    if (!current()) { return; }
+    appendFrame(frame, context);
+    if (!current()) { return; }
+#ifdef HAVE_MQTT
+    publishFrameMqtt(frame);
+    if (!current()) { return; }
+#endif
+    if (m_kissServer && m_kissServer->isListening() && !frame.ax25FrameNoFcs.isEmpty()) {
+        m_kissServer->broadcastAx25Frame(frame.ax25FrameNoFcs);
+        if (!current()) { return; }
+        ++m_kissRxCount;
+        refreshTncStatus();
+        if (!current()) { return; }
+    }
+    if (frame.ax25FrameNoFcs.isEmpty()) { return; }
+    if (auto decoded = ax25::Frame::decode(frame.ax25FrameNoFcs)) {
+        if (m_heard) { m_heard->record(*decoded); }
+        if (!current()) { return; }
+        if (auto packet = aprs::parseFrame(*decoded)) {
+            if (m_aprsStations) { m_aprsStations->record(*packet); }
+            if (!current()) { return; }
+            if (m_aprsMessenger) { m_aprsMessenger->onPacket(*packet); }
+            if (!current()) { return; }
+        }
+        if (frame.fcsOk && m_enableDecode && m_enableDecode->isChecked()) {
+            m_digi->receiveFrame(frame.ax25FrameNoFcs);
+            if (!current()) { return; }
+        }
+    }
+    if (m_pms) { m_pms->onAirFrame(frame.ax25FrameNoFcs); }
+    if (!current()) { return; }
+    if (m_terminal) { m_terminal->onAirFrame(frame.ax25FrameNoFcs); }
+}
+
+void Ax25HfPacketDecodeDialog::handleRxAudio(
+    const QByteArray& monoFloat32Pcm, int sampleRate, const Ax25ReceiveContext& context)
+{
+    const QPointer<Ax25HfPacketDecodeDialog> guard(this);
+    const auto current = [&] { return guard && context.current(); };
+    if (!current()) { return; }
     if (m_captureActive && !monoFloat32Pcm.isEmpty()) {
         if (m_captureSampleRate == 0) {
             m_captureSampleRate = sampleRate;
@@ -2141,12 +2203,14 @@ void Ax25HfPacketDecodeDialog::handleRxAudio(const QByteArray& monoFloat32Pcm, i
             appendSystemLine(QStringLiteral("Audio capture armed: %1 seconds at %2 Hz.")
                 .arg(kAudioCaptureSeconds)
                 .arg(sampleRate));
+            if (!current() || !m_captureActive) { return; }
         }
 
         if (sampleRate != m_captureSampleRate) {
             appendSystemLine(QStringLiteral("Audio capture cancelled: sample rate changed from %1 to %2 Hz.")
                 .arg(m_captureSampleRate)
                 .arg(sampleRate));
+            if (!current() || !m_captureActive) { return; }
             finishAudioCapture(false);
         } else {
             const qsizetype remaining = m_captureTargetBytes - m_capturePcm.size();
@@ -2158,9 +2222,6 @@ void Ax25HfPacketDecodeDialog::handleRxAudio(const QByteArray& monoFloat32Pcm, i
         }
     }
 
-    QMetaObject::invokeMethod(m_shim, [shim = m_shim, pcm = monoFloat32Pcm, sr = sampleRate]() {
-        shim->feedAudio(pcm, sr);
-    }, Qt::QueuedConnection);
 }
 
 void Ax25HfPacketDecodeDialog::startAudioCapture()
@@ -2170,6 +2231,9 @@ void Ax25HfPacketDecodeDialog::startAudioCapture()
         return;
     }
 
+    const QPointer<Ax25HfPacketDecodeDialog> guard(this);
+    if (m_receive) { m_receive->reset(); }
+    if (!guard) { return; }
     m_capturePcm.clear();
     m_captureId = makeAx25AudioCaptureId();
     m_captureSampleRate = 0;
@@ -2177,7 +2241,6 @@ void Ax25HfPacketDecodeDialog::startAudioCapture()
     m_captureTxSequence = 0;
     m_captureIcomPostResampleActive = false;
     m_captureActive = true;
-    QMetaObject::invokeMethod(m_shim, &AetherAx25LibmodemShim::reset, Qt::QueuedConnection);
     m_lastDiagnostics = {};
     m_lastDiagnosticsUtc = {};
     m_lastActivityHdlc = 0;
@@ -2187,6 +2250,7 @@ void Ax25HfPacketDecodeDialog::startAudioCapture()
     if (m_captureButton)
         m_captureButton->setText(QStringLiteral("Cancel Capture"));
     appendSystemLine(QStringLiteral("Decoder state reset for RX audio capture."));
+    if (!guard) { return; }
     appendSystemLine(QStringLiteral(
         "Starting %1 second RX/TX audio capture (%2); transmit several packets now.")
         .arg(kAudioCaptureSeconds)
@@ -2195,7 +2259,9 @@ void Ax25HfPacketDecodeDialog::startAudioCapture()
 
 void Ax25HfPacketDecodeDialog::finishAudioCapture(bool save)
 {
+    const QPointer<Ax25HfPacketDecodeDialog> guard(this);
     finishIcomPostResampleCapture();
+    if (!guard) { return; }
     const QByteArray capture = m_capturePcm;
     const QString captureId = m_captureId;
     const int sampleRate = m_captureSampleRate;
@@ -3099,21 +3165,32 @@ void Ax25HfPacketDecodeDialog::finishTransmit(bool aborted, const QString& reaso
     }
 }
 
-void Ax25HfPacketDecodeDialog::appendFrame(const Ax25DecodedFrame& frame)
+void Ax25HfPacketDecodeDialog::appendFrame(
+    const Ax25DecodedFrame& frame, const Ax25ReceiveContext& context)
 {
-    if (!frame.fcsOk)
+    const QPointer<Ax25HfPacketDecodeDialog> guard(this);
+    const auto current = [&] { return guard && context.current(); };
+    if (!current() || !frame.fcsOk)
         return;
     ++m_frameCount;
     m_lastDecodeUtc = frame.timestampUtc;
     m_log->append(formatTerminalLine(frame));
+    if (!current()) { return; }
     m_log->verticalScrollBar()->setValue(m_log->verticalScrollBar()->maximum());
-    if (m_packetActivity)
+    if (!current()) { return; }
+    if (m_packetActivity) {
         m_packetActivity->recordFrame();
+    }
+    if (!current()) { return; }
     refreshStatus();
 }
 
-void Ax25HfPacketDecodeDialog::updateDiagnostics(const Ax25DecoderDiagnostics& diagnostics)
+void Ax25HfPacketDecodeDialog::updateDiagnostics(
+    const Ax25DecoderDiagnostics& diagnostics, const Ax25ReceiveContext& context)
 {
+    const QPointer<Ax25HfPacketDecodeDialog> guard(this);
+    const auto current = [&] { return guard && context.current(); };
+    if (!current()) { return; }
     const bool firstAudio = !m_lastDiagnosticsUtc.isValid();
     m_lastDiagnostics = diagnostics;
     m_lastDiagnosticsUtc = QDateTime::currentDateTimeUtc();
@@ -3121,9 +3198,12 @@ void Ax25HfPacketDecodeDialog::updateDiagnostics(const Ax25DecoderDiagnostics& d
         appendSystemLine(QStringLiteral("RX audio stream detected: %1 Hz, %2 samples/window.")
             .arg(diagnostics.sampleRate)
             .arg(diagnostics.audioSamples));
+        if (!current()) { return; }
     }
-    if (m_diagnosticsDebugEnabled)
-        appendDiagnosticsLine(diagnostics);
+    if (m_diagnosticsDebugEnabled) {
+        appendDiagnosticsLine(diagnostics, context);
+        if (!current()) { return; }
+    }
     refreshStatus();
 }
 
@@ -3165,13 +3245,13 @@ void Ax25HfPacketDecodeDialog::updateHeartbeat()
         if (waited >= 2
             && (!m_lastNoAudioNoticeUtc.isValid() || m_lastNoAudioNoticeUtc.secsTo(now) >= 5)) {
             appendSystemLine(QStringLiteral(
-                "Waiting for RX audio blocks. Confirm PC Audio is enabled, a slice is active, and AetherSDR is receiving the packet audio stream."));
+                "Waiting for RX audio blocks. Check the selected receiver and receive source shown in modem status."));
             m_lastNoAudioNoticeUtc = now;
         }
     } else if (m_lastDiagnosticsUtc.secsTo(now) >= 4
                && (!m_lastNoAudioNoticeUtc.isValid() || m_lastNoAudioNoticeUtc.secsTo(now) >= 5)) {
         appendSystemLine(QStringLiteral(
-            "No fresh RX audio diagnostics for %1 s. The tap is enabled, but audio may be paused or PC Audio may be off.")
+            "No fresh RX audio diagnostics for %1 s. The selected receive source may be paused or unavailable.")
             .arg(m_lastDiagnosticsUtc.secsTo(now)));
         m_lastNoAudioNoticeUtc = now;
     }
@@ -3200,7 +3280,31 @@ void Ax25HfPacketDecodeDialog::refreshStatus()
         status = m_attachedSliceId >= 0 ? QStringLiteral("Standby") : QStringLiteral("No slice attached");
     }
 
+    QString sourceText = QStringLiteral("RX: unavailable");
+    if (m_receive) {
+        switch (m_receive->routeStatus()) {
+        case DecoderAudioModel::RouteStatus::Bound:
+            sourceText = QStringLiteral("RX: selected slice");
+            break;
+        case DecoderAudioModel::RouteStatus::SharedRxAudio:
+            sourceText = QStringLiteral("RX: shared audio (audible slice mix; gain and mute apply)");
+            break;
+        case DecoderAudioModel::RouteStatus::DaxTransportUnavailable:
+            sourceText = QStringLiteral("RX: assigned DAX transport unavailable");
+            break;
+        case DecoderAudioModel::RouteStatus::Inactive:
+            sourceText = QStringLiteral("RX: inactive");
+            break;
+        }
+    }
+    status += QStringLiteral(" | ") + sourceText;
     if (m_modemStatusValue) {
+        QString sourceDescription = sourceText;
+        if (m_receive && (m_receive->routeStatus() == DecoderAudioModel::RouteStatus::SharedRxAudio
+            || m_receive->routeStatus() == DecoderAudioModel::RouteStatus::DaxTransportUnavailable)) {
+            sourceDescription += QStringLiteral(". Assign a DAX RX channel to isolate a Flex slice; no channel is assigned automatically.");
+        }
+        m_modemStatusValue->setAccessibleDescription(sourceDescription);
         const QString stateText = m_lastDiagnostics.inFrame
             ? QStringLiteral("frame")
             : m_lastDiagnostics.inPreamble ? QStringLiteral("preamble") : QStringLiteral("search");
@@ -3241,9 +3345,9 @@ void Ax25HfPacketDecodeDialog::refreshStatus()
     }
     if (m_modemStatusDot) {
         const QString color = enabled && haveAudio && audioAge < 4
-            ? QStringLiteral("#64d36e")
-            : enabled ? QStringLiteral("#d2a448") : QStringLiteral("#506174");
-        m_modemStatusDot->setStyleSheet(
+            ? QStringLiteral("{{color.accent.success}}")
+            : enabled ? QStringLiteral("{{color.accent.warning}}") : QStringLiteral("{{color.canon.muted}}");
+        ThemeManager::instance().applyStyleSheet(m_modemStatusDot,
             QStringLiteral("QLabel#StatusDot { background: %1; border-radius: 6px; "
                            "min-width: 12px; max-width: 12px; min-height: 12px; max-height: 12px; }")
                 .arg(color));
@@ -3288,10 +3392,7 @@ void Ax25HfPacketDecodeDialog::setDiagnosticsDebugEnabled(bool enabled, bool per
         return;
 
     m_diagnosticsDebugEnabled = enabled;
-    if (m_shim)
-        QMetaObject::invokeMethod(m_shim, [shim = m_shim, enabled]() {
-            shim->setDiagnosticsLoggingEnabled(enabled);
-        }, Qt::QueuedConnection);
+    if (m_receive) { m_receive->setDiagnosticsLoggingEnabled(enabled); }
     if (m_terminal)
         m_terminal->setVerbose(enabled); // echo protocol detail inline in the terminal
     if (m_packetActivity)
@@ -3341,14 +3442,13 @@ void Ax25HfPacketDecodeDialog::logAttachedSliceState(const QString& reason)
 
 void Ax25HfPacketDecodeDialog::appendSystemLine(const QString& text)
 {
+    const QPointer<Ax25HfPacketDecodeDialog> guard(this);
     if (!m_log)
         return;
     qCDebug(lcAx25).noquote() << text;
-    m_log->append(QStringLiteral(
-        "<span style=\"color:#63d47a;\">%1</span>&nbsp;&nbsp;"
-        "<span style=\"color:#8190a3;\">MODEM</span>&nbsp;&nbsp;"
-        "<span style=\"color:#9aa7ba;\">%2</span>")
-        .arg(utcClock().toHtmlEscaped(), text.toHtmlEscaped()));
+    m_log->append(logLineHtml(this, utcClock(), QStringLiteral("MODEM"),
+                              QStringLiteral("color.canon.muted"), QString(), text));
+    if (!guard) { return; }
     m_log->verticalScrollBar()->setValue(m_log->verticalScrollBar()->maximum());
 }
 
@@ -3364,20 +3464,16 @@ void Ax25HfPacketDecodeDialog::appendTransmitLine(const Ax25TransmitFrame& frame
         ? QStringLiteral("[%1]").arg(frame.payloadHex)
         : frame.payloadText;
 
-    m_log->append(QStringLiteral(
-        "<span style=\"color:#63d47a;\">%1</span>&nbsp;&nbsp;"
-        "<span style=\"color:#74df87;\">TX</span>&nbsp;&nbsp;"
-        "<span style=\"color:#c9d3e2;\">%2:</span>&nbsp;&nbsp;"
-        "<span style=\"color:#b5bfce;\">%3</span>")
-        .arg(utcClock().toHtmlEscaped(),
-             route.toHtmlEscaped(),
-             payload.toHtmlEscaped()));
+    m_log->append(logLineHtml(this, utcClock(), QStringLiteral("TX"),
+                              QStringLiteral("color.canon.aqua"), route, payload));
     m_log->verticalScrollBar()->setValue(m_log->verticalScrollBar()->maximum());
 }
 
-void Ax25HfPacketDecodeDialog::appendDiagnosticsLine(const Ax25DecoderDiagnostics& diagnostics)
+void Ax25HfPacketDecodeDialog::appendDiagnosticsLine(
+    const Ax25DecoderDiagnostics& diagnostics, const Ax25ReceiveContext& context)
 {
-    if (!m_log || !m_diagnosticsDebugEnabled)
+    const QPointer<Ax25HfPacketDecodeDialog> guard(this);
+    if (!context.current() || !m_log || !m_diagnosticsDebugEnabled)
         return;
 
     const QString state = diagnostics.inFrame
@@ -3429,11 +3525,9 @@ void Ax25HfPacketDecodeDialog::appendDiagnosticsLine(const Ax25DecoderDiagnostic
             .arg(diagnostics.lastRejectPreviewHex);
     }
     qCDebug(lcAx25).noquote() << line;
-    m_log->append(QStringLiteral(
-        "<span style=\"color:#63d47a;\">%1</span>&nbsp;&nbsp;"
-        "<span style=\"color:#8ea0b8;\">DIAG</span>&nbsp;&nbsp;"
-        "<span style=\"color:#9aa7ba;\">%2</span>")
-        .arg(utcClock().toHtmlEscaped(), line.toHtmlEscaped()));
+    m_log->append(logLineHtml(this, utcClock(), QStringLiteral("DIAG"),
+                              QStringLiteral("color.canon.muted"), QString(), line));
+    if (!guard || !context.current()) { return; }
     m_log->verticalScrollBar()->setValue(m_log->verticalScrollBar()->maximum());
 }
 
@@ -3480,14 +3574,8 @@ QString Ax25HfPacketDecodeDialog::formatTerminalLine(const Ax25DecodedFrame& fra
         ? QStringLiteral("[%1]").arg(frame.payloadHex)
         : frame.payloadText;
 
-    return QStringLiteral(
-        "<span style=\"color:#63d47a;\">%1</span>&nbsp;&nbsp;"
-        "<span style=\"color:#9dd6dc;\">RX</span>&nbsp;&nbsp;"
-        "<span style=\"color:#c9d3e2;\">%2:</span>&nbsp;&nbsp;"
-        "<span style=\"color:#b5bfce;\">%3</span>")
-        .arg(time.toHtmlEscaped(),
-             route.toHtmlEscaped(),
-             payload.toHtmlEscaped());
+    return logLineHtml(this, time, QStringLiteral("RX"),
+                       QStringLiteral("color.canon.cyan"), route, payload);
 }
 
 QWidget* Ax25HfPacketDecodeDialog::buildKissTncPage()
@@ -3699,9 +3787,9 @@ void Ax25HfPacketDecodeDialog::refreshTncStatus()
     }
     if (m_tncStatusDot) {
         m_tncStatusDot->setFixedSize(12, 12);
-        m_tncStatusDot->setStyleSheet(listening
-            ? QStringLiteral("background:#5fce66;border-radius:6px;")
-            : QStringLiteral("background:#8190a3;border-radius:6px;"));
+        ThemeManager::instance().applyStyleSheet(m_tncStatusDot, listening
+            ? QStringLiteral("background: {{color.accent.success}}; border-radius: 6px;")
+            : QStringLiteral("background: {{color.canon.muted}}; border-radius: 6px;"));
     }
 }
 
@@ -4054,10 +4142,10 @@ void Ax25HfPacketDecodeDialog::refreshTerminalStatus()
         .arg(m_terminal->statusSummary(), m_terminal->linkStats()));
     if (m_terminalStatusDot) {
         m_terminalStatusDot->setFixedSize(12, 12);
-        const QString color = connected ? QStringLiteral("#5fce66")
-            : (connecting ? QStringLiteral("#e0b341") : QStringLiteral("#8190a3"));
-        m_terminalStatusDot->setStyleSheet(
-            QStringLiteral("background:%1;border-radius:6px;").arg(color));
+        const QString color = connected ? QStringLiteral("{{color.accent.success}}")
+            : (connecting ? QStringLiteral("{{color.accent.warning}}") : QStringLiteral("{{color.canon.muted}}"));
+        ThemeManager::instance().applyStyleSheet(m_terminalStatusDot,
+            QStringLiteral("background: %1; border-radius: 6px;").arg(color));
     }
     if (m_terminalConnectButton)
         m_terminalConnectButton->setEnabled(!connected && !connecting);
@@ -4538,11 +4626,11 @@ void Ax25HfPacketDecodeDialog::buildAprsUi(QWidget* page, QVBoxLayout* pageLayou
             return;
         double lat = 0.0, lon = 0.0;
         if (!MaidenheadLocator::toLatLon(grid, lat, lon)) {
-            m_aprsManualGrid->setStyleSheet(
-                QStringLiteral("QLineEdit { color: #c04040; }"));
+            ThemeManager::instance().applyStyleSheet(m_aprsManualGrid,
+                QStringLiteral("QLineEdit { color: {{color.accent.danger}}; }"));
             return;
         }
-        m_aprsManualGrid->setStyleSheet(QString());
+        ThemeManager::instance().applyStyleSheet(m_aprsManualGrid, QString());
         m_aprsManualLat->setText(QString::number(lat, 'f', 4));
         m_aprsManualLon->setText(QString::number(lon, 'f', 4));
         applyAprsConfigFromUi(true);
@@ -5593,9 +5681,9 @@ void Ax25HfPacketDecodeDialog::refreshPmsStatus()
     m_pmsStatusValue->setText(status);
     if (m_pmsStatusDot) {
         m_pmsStatusDot->setFixedSize(12, 12);
-        m_pmsStatusDot->setStyleSheet(enabled
-            ? QStringLiteral("background:#5fce66;border-radius:6px;")
-            : QStringLiteral("background:#8190a3;border-radius:6px;"));
+        ThemeManager::instance().applyStyleSheet(m_pmsStatusDot, enabled
+            ? QStringLiteral("background: {{color.accent.success}}; border-radius: 6px;")
+            : QStringLiteral("background: {{color.canon.muted}}; border-radius: 6px;"));
     }
 
     if (m_pmsCallersValue) {
@@ -5647,7 +5735,7 @@ bool Ax25HfPacketDecodeDialog::eventFilter(QObject* watched, QEvent* event)
             return true;
         }
     }
-    return PersistentDialog::eventFilter(watched, event);
+    return CanonWindow::eventFilter(watched, event);
 }
 
 } // namespace AetherSDR

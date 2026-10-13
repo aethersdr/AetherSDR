@@ -78,6 +78,10 @@ public slots:
     // gap. Narrower than reset() — speaker labels and the resampler survive.
     void markDiscontinuity();
     void reset();
+    // Clear the cancel flag that restartSession() raised. A separate slot, not
+    // part of reset(), so this only ever runs for a tap-point switch: the
+    // ASR-disable and shutdown paths keep the flag latched as they always did.
+    void resumeAfterCancel();
 
 signals:
     void loaded();
@@ -180,6 +184,17 @@ public:
 
     void reset();
 
+    // Copy Assist's tap point changed: drop the audio already queued to the
+    // worker, because it came from the other chain, then carry on. reset()
+    // alone cannot do this — it is a queued signal, so it would sit BEHIND the
+    // very backlog it is meant to clear (the same reason setEnabled(false)
+    // pairs it with the worker's cancel flag). Ordering here relies on the
+    // worker's queue being FIFO: the cancel flag is raised directly, so every
+    // already-queued processAudio() no-ops, then reset() runs, then
+    // resumeAfterCancel() clears the flag — so the no-op window ends exactly
+    // at the backlog boundary and new-chain audio is never dropped.
+    void restartSession();
+
 signals:
     void ready();
     void loadFailed(const QString& error);
@@ -208,6 +223,7 @@ signals:
     void requestClearContext();
     void requestMarkDiscontinuity();
     void requestReset();
+    void requestResumeAfterCancel();
 
 private:
     void startThread(AsrBackendFactory factory, const AsrSegmenter::Config& segConfig,

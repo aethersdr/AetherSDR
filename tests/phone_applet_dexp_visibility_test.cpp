@@ -1,3 +1,4 @@
+#include "ModelControlWireSpy.h"
 // DEXP is a radio-side compander control, so the Phone applet may surface it
 // only when the connected backend declares an authoritative command path.
 
@@ -56,7 +57,7 @@ int main(int argc, char** argv)
 
     TransmitModel tx;
     applet.setTransmitModel(&tx);
-    QSignalSpy commands(&tx, &TransmitModel::commandReady);
+    ModelControlWireSpy commands(&tx);
     QSlider* carrier = nullptr;
     QSlider* delay = nullptr;
     for (QSlider* slider : applet.findChildren<QSlider*>()) {

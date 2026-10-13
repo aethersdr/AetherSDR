@@ -30,6 +30,11 @@ struct SquelchLevelScale {
     // threshold rather than sending a margin. False keeps the #2504 mode rule
     // and the radio-owned squelch state every other family has.
     bool modesExclusive = false;
+    // Auto is computed by the receiver, through requestSliceSquelch, rather
+    // than from the display FFT. Observed state returns in SliceDelta.
+    bool automaticInEngine = false;
+    // False when detector and display use different measurement bandwidths.
+    bool spectrumComparable = true;
 
     bool operator==(const SquelchLevelScale&) const = default;
 
@@ -59,7 +64,9 @@ struct SquelchLevelScale {
 // line and Auto SQL keep the behaviour they always had (#6127).
 [[nodiscard]] inline SquelchLevelScale legacyDbmSquelchScale()
 {
-    return SquelchLevelScale{-160.0, 1.0, {}, true};
+    // Explicitly initialize unit: omitting it repeats a Clang warning in
+    // translation units built with -Wextra.
+    return SquelchLevelScale{-160.0, 1.0, {}, true, {}, false};
 }
 
 // The published record as it applies to a slice in `mode`: nullopt when the
@@ -68,7 +75,7 @@ struct SquelchLevelScale {
 [[nodiscard]] inline std::optional<SquelchLevelScale> squelchScaleForMode(
     const std::optional<SquelchLevelScale>& published, const QString& mode)
 {
-    if (!published || !published->appliesTo(mode)) {
+    if (!published || !published->spectrumComparable || !published->appliesTo(mode)) {
         return std::nullopt;
     }
     return published;

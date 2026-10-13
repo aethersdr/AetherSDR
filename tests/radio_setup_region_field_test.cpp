@@ -27,6 +27,11 @@
 // fails a post-switch one, so the slot below switches the theme and reads the
 // colour back rather than only inspecting the freshly built dialog.
 //
+// Radio Setup is now a canon window: a value label carries the Value tone
+// (`rsTone`) and the window's one sheet colors it with color.canon.ink, so
+// the color is read back from the label's polished palette, not from a sheet
+// of its own (it has none).
+//
 // No hardware and no transport: the model is constructed bare and never
 // connected, and the region arrives the way a Flex's does — as a RadioDelta over
 // IRadioBackend::radioChanged, the seam RadioModel::setupBackend wires to
@@ -82,7 +87,7 @@ namespace {
 // wrong.
 struct ThemeProbe {
     QString name;
-    QColor  accentBright;
+    QColor  ink;
 };
 
 ThemeProbe readThemeFile(const QString& path)
@@ -93,42 +98,40 @@ ThemeProbe readThemeFile(const QString& path)
     const QJsonObject root = QJsonDocument::fromJson(f.readAll()).object();
     probe.name = root.value(QStringLiteral("name")).toString();
 
-    // scopes.root.tokens.color["accent.bright"], then one {primitive} hop.
+    // scopes.root.tokens.color.canon.ink, then one {primitive} hop.
     QString value = root.value(QStringLiteral("scopes")).toObject()
                         .value(QStringLiteral("root")).toObject()
                         .value(QStringLiteral("tokens")).toObject()
                         .value(QStringLiteral("color")).toObject()
-                        .value(QStringLiteral("accent.bright")).toString();
+                        .value(QStringLiteral("canon")).toObject()
+                        .value(QStringLiteral("ink")).toString();
     if (value.startsWith(QLatin1Char('{')) && value.endsWith(QLatin1Char('}'))) {
         value = root.value(QStringLiteral("primitives")).toObject()
                     .value(value.mid(1, value.size() - 2)).toString();
     }
-    probe.accentBright = QColor(value);
+    probe.ink = QColor(value);
     return probe;
 }
 
-// The value style's SHAPE, with the colour left open. Matching on shape rather
-// than on a colour is what lets the set be collected before anything is
-// asserted about it: a label that kept a literal is still in the set, and is
-// then caught by the colour assertion instead of quietly dropping out of it.
-const QRegularExpression& valueSheetPattern()
+// A value label is one carrying the Value tone; collecting by the role rather
+// than by a list of names keeps the set in step with the file.
+bool isValueLabel(const QLabel* label)
 {
-    static const QRegularExpression re(
-        QStringLiteral("^QLabel \\{ color: ([^;]+); font-size: 12px; font-weight: bold; \\}$"));
-    return re;
+    return label->property("rsTone").toByteArray() == "value";
 }
 
-QColor valueSheetColour(const QLabel* label)
+// The color the window's sheet gave the label, as polished into its palette.
+QColor renderedColour(QLabel* label)
 {
-    const auto m = valueSheetPattern().match(label->styleSheet());
-    return m.hasMatch() ? QColor(m.captured(1).trimmed()) : QColor();
+    label->ensurePolished();
+    return label->palette().color(QPalette::WindowText);
 }
 
 QList<QLabel*> collectValueLabels(QWidget& dialog)
 {
     QList<QLabel*> out;
     for (QLabel* l : dialog.findChildren<QLabel*>()) {
-        if (valueSheetPattern().match(l->styleSheet()).hasMatch()) out.append(l);
+        if (isValueLabel(l)) out.append(l);
     }
     return out;
 }
@@ -147,7 +150,7 @@ QString describe(const QLabel* label)
         }
     }
     parts << QStringLiteral("text=\"%1\"").arg(label->text());
-    parts << QStringLiteral("qss=%1").arg(label->styleSheet());
+    parts << QStringLiteral("tone=%1").arg(QString::fromLatin1(label->property("rsTone").toByteArray()));
     return parts.join(QStringLiteral(" | "));
 }
 
@@ -340,14 +343,12 @@ private slots:
         QVERIFY(region);
         QVERIFY(hwVersion);
 
-        // CONTROL: the peer carries a real stylesheet, so the comparison below
-        // is between two set stylesheets and not two empty strings. (The group
-        // sweeps kLabelStyle onto any label left with an empty stylesheet, so
-        // "empty" would not even survive construction — but an assertion that
-        // depends on that sweep to be non-vacuous is not one worth having.)
-        QVERIFY(!hwVersion->styleSheet().isEmpty());
+        // CONTROL: the peer carries a real role, so the comparison below is
+        // between two set roles and not two empty ones.
+        QVERIFY(isValueLabel(hwVersion));
 
-        QCOMPARE(region->styleSheet(), hwVersion->styleSheet());
+        QCOMPARE(region->property("rsTone"), hwVersion->property("rsTone"));
+        QCOMPARE(renderedColour(region), renderedColour(hwVersion));
         // Centre alignment was the other half of the control look.
         QCOMPARE(region->alignment(), hwVersion->alignment());
     }
@@ -411,17 +412,15 @@ private slots:
         QVERIFY(hwVersion);
 
         const QColor token =
-            ThemeManager::instance().color(region, QStringLiteral("color.accent.bright"));
+            ThemeManager::instance().color(region, QStringLiteral("color.canon.ink"));
         QVERIFY(token.isValid());
         // CONTROL: the token does not resolve to the retired literal, so the
         // assertion below can tell a tokenised label from a hardcoded one. If
         // these ever converge this fails loudly rather than passing vacuously.
         QVERIFY(token.name().compare(QStringLiteral("#00c8ff"), Qt::CaseInsensitive) != 0);
 
-        QVERIFY2(region->styleSheet().contains(token.name(), Qt::CaseInsensitive),
-                 qPrintable(region->styleSheet()));
-        QVERIFY2(hwVersion->styleSheet().contains(token.name(), Qt::CaseInsensitive),
-                 qPrintable(hwVersion->styleSheet()));
+        QCOMPARE(renderedColour(region).name(), token.name());
+        QCOMPARE(renderedColour(hwVersion).name(), token.name());
     }
 
     // #5857 — the rest of this dialog's value labels, and the only assertion
@@ -447,8 +446,8 @@ private slots:
     {
         const ThemeProbe dark  = readThemeFile(QStringLiteral(":/themes/default-dark.json"));
         const ThemeProbe light = readThemeFile(QStringLiteral(":/themes/default-light.json"));
-        QVERIFY2(dark.accentBright.isValid(),  "default-dark.json: color.accent.bright unreadable");
-        QVERIFY2(light.accentBright.isValid(), "default-light.json: color.accent.bright unreadable");
+        QVERIFY2(dark.ink.isValid(),  "default-dark.json: color.canon.ink unreadable");
+        QVERIFY2(light.ink.isValid(), "default-light.json: color.canon.ink unreadable");
         QVERIFY(!dark.name.isEmpty());
         QVERIFY(!light.name.isEmpty());
 
@@ -457,10 +456,10 @@ private slots:
         // assertion below would pass on a label that never re-resolved; and if
         // the dark value were the old literal, a label that had not been
         // converted at all would pass the first pass.
-        QVERIFY2(dark.accentBright != light.accentBright,
-                 qPrintable(QStringLiteral("themes agree on color.accent.bright: %1")
-                                .arg(dark.accentBright.name())));
-        QVERIFY(dark.accentBright.name().compare(QStringLiteral("#00c8ff"),
+        QVERIFY2(dark.ink != light.ink,
+                 qPrintable(QStringLiteral("themes agree on color.canon.ink: %1")
+                                .arg(dark.ink.name())));
+        QVERIFY(dark.ink.name().compare(QStringLiteral("#00c8ff"),
                                                  Qt::CaseInsensitive) != 0);
 
         ThemeManager& tm = ThemeManager::instance();
@@ -532,17 +531,15 @@ private slots:
                      qPrintable(QStringLiteral("no value label matching %1").arg(field)));
         }
 
-        // Under Default Dark every one of them carries the token's value — not
-        // the literal, which is one step off it in the blue channel — and is
-        // registered against the token, which is what makes the switch below
-        // capable of moving it.
+        // Under Default Dark every one of them carries the token's value, and
+        // takes it from the window's sheet: no label has a sheet of its own
+        // that could pin a color against the switch below.
         for (QLabel* l : values) {
-            QVERIFY2(valueSheetColour(l) == dark.accentBright,
+            QVERIFY2(renderedColour(l) == dark.ink,
                      qPrintable(QStringLiteral("expected %1 under %2: %3")
-                                    .arg(dark.accentBright.name(), dark.name, describe(l))));
-            QVERIFY2(tm.tokensForWidget(l).contains(QStringLiteral("color.accent.bright")),
-                     qPrintable(QStringLiteral("not registered against the token: %1")
-                                    .arg(describe(l))));
+                                    .arg(dark.ink.name(), dark.name, describe(l))));
+            QVERIFY2(l->styleSheet().isEmpty(),
+                     qPrintable(QStringLiteral("carries its own sheet: %1").arg(describe(l))));
         }
 
         // THE SWITCH. This is the assertion the construction-time one cannot
@@ -550,18 +547,18 @@ private slots:
         // unchanged.
         QVERIFY2(tm.setActiveTheme(light.name), qPrintable(light.name));
         for (QLabel* l : values) {
-            QVERIFY2(valueSheetColour(l) == light.accentBright,
+            QVERIFY2(renderedColour(l) == light.ink,
                      qPrintable(QStringLiteral("expected %1 under %2: %3")
-                                    .arg(light.accentBright.name(), light.name, describe(l))));
+                                    .arg(light.ink.name(), light.name, describe(l))));
         }
 
         // And back, so the slot pins a colour that FOLLOWS the theme rather
         // than one that changed once in one direction.
         QVERIFY2(tm.setActiveTheme(dark.name), qPrintable(dark.name));
         for (QLabel* l : values) {
-            QVERIFY2(valueSheetColour(l) == dark.accentBright,
+            QVERIFY2(renderedColour(l) == dark.ink,
                      qPrintable(QStringLiteral("expected %1 back under %2: %3")
-                                    .arg(dark.accentBright.name(), dark.name, describe(l))));
+                                    .arg(dark.ink.name(), dark.name, describe(l))));
         }
     }
 };

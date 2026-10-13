@@ -6,6 +6,12 @@
 > **Every colour in AetherSDR resolves through a ThemeManager token.
 > A contribution never introduces a new hardcoded colour literal.**
 
+For *what the result should look like* on a new or reworked surface — the
+canon's principles, the `color.canon.*` tokens and `CanonWindow` — read
+[`aethersdr-style-guide.md`](aethersdr-style-guide.md) alongside this
+guide; the token inventory behind both is
+[`../theming/canonical-tokens.md`](../theming/canonical-tokens.md).
+
 This guide is the semantic map from *what you are trying to say* on
 screen (error, warning, success, notification, transmit, selection,
 plain text…) to *the token that says it*. If you follow the map, your
@@ -35,8 +41,23 @@ Tokens can also be **scoped**: the theme JSON can override a token for
 a widget subtree (for example, the `applet/tx` scope turns the
 checked-toggle accent red where the root theme has it blue — scope
 paths are slash-joined, and a widget opts in by carrying the path in
-its `themeContainer` property). The widget-aware accessors below
-resolve scope automatically — prefer them inside applets.
+its `themeContainer` property). The `canon` scope does the same for
+whole windows: AetherRX, AetherTX, AetherModem, AetherMap, AetherGPS, SpotHub, Radio Setup,
+Connect to Radio and AGC-T Calibration sit under `canon/aetherRx`, `canon/aetherTx`, `canon/aetherModem`,
+`canon/aetherMap`, `canon/aetherGps`, `canon/spotHub`, `canon/radioSetup`, `canon/connection` and `canon/agcCalibration`, and it maps the base tokens onto the canon palette
+there (see [`aethersdr-style-guide.md`](aethersdr-style-guide.md)). The
+widget-aware accessors below resolve scope automatically — prefer them
+inside applets and anything painted inside a scoped window.
+
+A large canon window styles its pages from one sheet on its body rather than
+a sheet per widget. Radio Setup's widgets carry a role the sheet selects on
+(`RadioSetupDialogCommon.h`): a label's tone (`rsTone`: caption, value, hint,
+heading, title, accent for a status in progress, and ok, warn, error), a status chip (`rsChip`) and a button role
+(`rsButton`: select, mute, danger, success). A plain checkable button is an
+on/off toggle, filled `color.toggle.success.*` when on; a Select button is one
+of a set, filled canon cyan when chosen. A disabled control takes
+`color.control.unavailable`, checked or not. Changing a role on a live widget
+re-polishes it, so a status that turns to an error restyles at once.
 
 ### Consuming tokens
 
@@ -76,6 +97,7 @@ a token for a role it does not name.
 |---|---|
 | **Error / fault / danger / destructive action** | `color.accent.danger` (foreground); `color.button.danger.*.disabled` for a destructive button's disabled state — enabled-state button colours are not tokenised yet, so an enabled destructive button takes its colour from `color.accent.danger` |
 | **Warning / caution / approaching a limit** | `color.accent.warning` (foreground); `color.background.warning` (panel tint); `color.toggle.warning.*` (checked warning toggles) |
+| **A link that is down, not failed (a peripheral OFFLINE)** | `color.accent.offline` — orange, apart from the warning amber and from red, which reads as transmit |
 | **Success / OK / enabled-and-healthy** | `color.accent.success` (foreground); `color.background.success` (panel tint); `color.toggle.success.*` (checked success toggles) |
 | **Notification / message / attention ping** | `color.highlight.message`, with `color.highlight.fg` for text drawn on top |
 | **Transmit-active** | `color.background.tx` + `color.border.tx` (panel), `color.highlight.tx` (marker), `color.slice.tx` (slice flag), `color.tx.mox.*` (MOX button) |
@@ -175,6 +197,10 @@ a radio-specific cluster moves to its own applet, which hides wholesale.
 | **unavailable** | this radio lacks the capability | `color.control.unavailable` | the reason, verbatim |
 | **inactive** | supported here, not engaged now | `color.control.inactive` | "Available, not currently active" |
 | **active** | engaged | normal text colour | nothing extra |
+
+The reason replaces a control's own tooltip and description only while it is
+unavailable; the control's own texts come back when it is available again. The
+inactive announcement is appended to the control's own description.
 
 ### Why dim rather than hide
 

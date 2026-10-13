@@ -68,7 +68,12 @@ When helping with AetherSDR:
   exposed to the UI through models — never via a new gui→core header include.
 - **Adding or changing UI?** Every colour is a ThemeManager token, and a
   control the radio lacks is dimmed with a stated reason, never hidden — see
-  [`docs/agents/gui.md`](docs/agents/gui.md).
+  [`docs/agents/gui.md`](docs/agents/gui.md). New or reworked surfaces follow
+  the visual canon in
+  [`docs/style/aethersdr-style-guide.md`](docs/style/aethersdr-style-guide.md);
+  apply it only to UI your issue already changes.
+- **Every user-visible change updates the user docs in the same PR** — see
+  [User documentation](#user-documentation) below.
 - **Read `CONTRIBUTING.md`** for contribution policy (what we accept, who
   reviews what) and `docs/DEVELOPER-GUIDE.md` for the contributor-facing
   coding conventions and the AI-to-AI debugging protocol (open a GitHub issue
@@ -94,30 +99,55 @@ When helping with AetherSDR:
 
 ### Issue / PR Claim Protocol — Assign Yourself
 
-When an AI agent is **actively reviewing an issue or PR — for comment, for
-merge recommendation, or to implement a fix** — the agent MUST assign itself
-using GitHub's `assignees` feature **before** posting the review, comment, or
-merge action. This is the visible claim mechanism for multi-agent
-coordination (Principle X: Claims Are Atomic And Mortal); it stops two agents
-spending tokens on the same PR and posting conflicting recommendations.
+A claim is a lock on **writing to the work**, and only two things take one:
 
-1. **Before** posting a review, comment, or merge action, check the current
-   assignees:
+- **Implementing a fix**: writing the change for an issue, or pushing
+  commits to someone else's PR.
+- **Landing a PR** (`/pr-land`): the pass that remediates, approves and arms
+  auto-merge. It holds the PR from its first step until the merge fires,
+  whether or not it ends up pushing anything, so nobody pushes commits
+  under it mid-flight and turns the approval it is about to post into a
+  review of a tree it never read.
+
+An AI agent about to do either MUST assign itself using GitHub's `assignees`
+feature **before** starting. This is the visible claim mechanism for
+multi-agent coordination (Principle X: Claims Are Atomic And Mortal); it stops
+two agents producing competing patches for the same issue, or racing each
+other's pushes on the same branch.
+
+**A claim announces that another project member is now involved**, so it is
+never taken on your own PR. The author of a PR is assumed to be still working
+on it; assigning yourself there says nothing. Claim the issue you are
+implementing, and claim someone else's PR when you push to it or land it.
+Skipping the claim on your own PR does not skip the check: if another member
+already holds a claim on it, honor that claim like anyone else's.
+
+**Reviewing does not claim.** Reviews, review comments, triage, merge
+recommendations and read-only work (summarizing, listing, counting) take no
+assignment and check none. Anyone can review any PR, and several reviews of
+the same PR can run in parallel. Another agent's assignment is never a reason
+to skip or delay a review.
+
+1. **Before** implementing or landing, check the current assignees:
    - **Unassigned, or assigned ONLY to AetherClaude (`@aethersdr-agent`)**:
      add yourself alongside. AetherClaude auto-triages every new issue and PR,
      so its assignment is a triage signal, NOT a claim on active work.
    - **Already assigned to another human or AI agent** (not AetherClaude):
-     leave a coordination comment instead of double-assigning, and do not
-     proceed with overlapping work.
-2. **While** working: stay assigned.
-3. **After** finishing: the assignment can stay (GitHub clears it on
-   close/merge). Unassign if you concluded but the issue/PR remains open.
+     an implementation or a landing is in flight. Leave a coordination
+     comment instead of double-assigning, and do not write an overlapping
+     fix or push to the PR.
+2. **While** implementing or landing: stay assigned. The fix PR you open for
+   an issue is still the implementation, so the issue stays claimed until
+   that PR merges or you abandon it. A landing stays claimed until the merge
+   fires, including the wait while auto-merge is armed: a push in that window
+   dismisses the approval.
+3. **When you stop**, release the lock. Unassign once your fix push to
+   someone else's PR is done, when you conclude without a fix, or when a
+   landing stops short of arming auto-merge. GitHub clears the assignment on
+   close/merge.
 4. **If your work is interrupted** (token limit, context loss, model failure):
    leave a brief comment ("Stepping away; unassigning so another agent can
    pick up") and unassign. The claim dies with the agent that held it.
-5. **Quick read-only actions don't require assignment** (summarizing,
-   listing, counting). Assignment is for engagement that produces a comment,
-   review, or merge.
 
 ```bash
 gh issue edit NNNN --add-assignee @me      # or: gh pr edit NNNN --add-assignee @me
@@ -150,6 +180,42 @@ When in doubt, the agent should implement the fix and note in the PR that
 design decisions need maintainer review. The project maintainer (Jeremy/KK7GWY)
 is the sole authority on visual design and UX direction.
 
+## User documentation
+
+The user guide is docs-as-code in `docs/user/` (Docusaurus, served at
+docs.aethersdr.com); [`docs/user/README.md`](docs/user/README.md) is the full
+workflow. Most feature and fix PRs touch it: a PR that changes what a user sees
+or does updates the matching page **in the same PR**, never in a follow-up.
+Test, CI and internal-refactor PRs usually don't. The rest of `docs/` is for
+contributors.
+
+- **Never hand-edit `versioned_docs/`.** It is the Stable snapshot, replaced
+  wholesale by `tools/docs/snapshot_stable.py`, which `/release-prep` runs;
+  page edits go in `docs/user/docs/`.
+- **Follow the Docs Style Guide** (`docs/user/docs/docs-style-guide.md`): fixed
+  section order; where support varies by radio, the `status` / `applies_to`
+  front matter and the `:::info[Status]` callout, kept in step; *Known issues*
+  citing open GitHub issues; *Troubleshooting* as symptom → fix. State current
+  behaviour, never history. Use exact UI labels and menu paths from the source.
+- **New page?** Add it to `docs/user/sidebars.js`; link pages with relative
+  `./slug.md` links.
+- **Generated pages** (`docs/user/docs/generated/`: shortcuts, MIDI and
+  controller actions, log categories, TCI commands) come from source. After
+  touching those registries, run `python3 tools/docs/gen_reference.py` and
+  commit the output.
+- **Log messages** cited by the Log Analyzer
+  (`docs/user/src/components/LogAnalyzer/rules.json`): rewording one means
+  updating its rule; moved lines refresh with
+  `node tools/docs/test_log_rules.mjs --update`.
+- **Screenshots** (`docs/user/screens.json`): if your UI change makes a shot
+  stale, re-shoot it with `tools/docs/capture_screenshots.py --only <id>`
+  (never transmit; IP/MAC/serial are redacted), then place it with
+  `tools/docs/embed_screenshots.py` (`--check` reports a page out of step), or
+  say in the PR which shot is stale.
+- **Before pushing:** `cd docs/user && npm ci && npm run build` — the build is
+  the link and anchor check. Static checks run `gen_reference.py --check` and
+  `test_log_rules.mjs` on every PR.
+
 ## C++ Style Guide
 
 - **No `goto`** — use early returns, break, or restructure the logic
@@ -158,7 +224,7 @@ is the sole authority on visual design and UX direction.
 - **Braces on all control flow** — even single-line `if`/`else`/`for`/`while`
 - **`auto` sparingly** — use explicit types unless the type is obvious from context (e.g. `auto* ptr = new Foo` is fine, `auto x = foo()` is not)
 - **Naming**: classes `PascalCase`, methods/variables `camelCase`, constants `kPascalCase`, member variables `m_camelCase`
-- **Platform guards**: prefer `Q_OS_WIN` / `Q_OS_MAC` / `Q_OS_LINUX` for new code. Existing `_WIN32`/`__APPLE__` guards can be migrated opportunistically — don't do a blanket rewrite.
+- **Platform guards**: prefer `Q_OS_WIN` / `Q_OS_MACOS` / `Q_OS_LINUX` for new code. Existing `_WIN32`/`__APPLE__` guards can be migrated opportunistically — don't do a blanket rewrite.
 - **Don't remove code you didn't add** — if rebasing, ensure upstream changes are preserved. Review the diff before submitting.
 - **Atomic parameters for cross-thread DSP** — main thread writes via `std::atomic`, audio thread reads. Never hold a mutex in the audio callback for parameter updates.
 - **Error handling**: log with `qCWarning(lcCategory)`, don't throw exceptions
@@ -208,7 +274,7 @@ Full dependency list is in `README.md`. Adding a test: declare it in
 
 ### Version and release files
 
-Current version: **26.10.1**.
+Current version: **26.10.2**.
 Versioning scheme is **CalVer** (`YY.M.patch[.hotfix]`) starting from v26.5.1,
 the 1.0-equivalent. Hotfix sub-patches use a 4th component (e.g. 26.5.2.1).
 Earlier tags used semver through v0.9.8.

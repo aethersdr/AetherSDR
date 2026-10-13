@@ -31,9 +31,10 @@ void report(const char* label, bool ok)
     }
 }
 
-B gate(bool txModeIsVoice, bool licenseSeen, bool licenseEnabled)
+B gate(bool txModeIsVoice, bool licenseSeen, bool licenseEnabled,
+       bool radioRefused = false)
 {
-    return dvkIndicatorBlocker(txModeIsVoice, licenseSeen, licenseEnabled);
+    return dvkIndicatorBlocker(txModeIsVoice, licenseSeen, licenseEnabled, radioRefused);
 }
 
 }  // namespace
@@ -66,6 +67,16 @@ int main()
     // a default-constructed LicenseFeatureState; it must still fail open.
     report("entitlement unseen but enabled flag set -> None",
            gate(true, false, true) == B::None);
+
+    // ── A 50004001 refusal is the radio saying no (#6244) ───────────────────
+    // `dvk … enabled=` is always 1, so the wiki names the refusal code as the
+    // license signal. It blocks even before any license status has arrived.
+    report("radio refused + entitlement unseen -> NotLicensed",
+           gate(true, false, false, true) == B::NotLicensed);
+    report("radio refused overrides a license status that said enabled",
+           gate(true, true, true, true) == B::NotLicensed);
+    report("radio refused + non-voice -> NotLicensed (entitlement wins)",
+           gate(false, false, false, true) == B::NotLicensed);
 
     // ── Tooltip names the missing subscription ──────────────────────────────
     // The whole point of the gate: a dimmed button has to say what it needs, or

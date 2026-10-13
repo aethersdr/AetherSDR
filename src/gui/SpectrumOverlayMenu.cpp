@@ -10,6 +10,8 @@
 #include "SpectrumOverlayWheelGuard.h"
 #include "AutoBlackMode.h"
 #include "GuardedSlider.h"
+#include "FftTraceDecomb.h"
+#include "FftTraceSmoothing.h"
 #include "ComboStyle.h"
 #include "Theme.h"
 #include "core/GpuSelector.h"
@@ -81,6 +83,12 @@ SliceModel* antennaTargetSliceForPan(RadioModel* radioModel,
     }
 
     return currentSlice;
+}
+
+// FFT Smooth / De-comb value label: 0 is "Off", anything else the number.
+static QString offOrValueText(int value)
+{
+    return value == 0 ? SpectrumOverlayMenu::tr("Off") : QString::number(value);
 }
 
 static QString rateSliderLabelText(int sliderValue)
@@ -1459,7 +1467,7 @@ void SpectrumOverlayMenu::toggleDaxPanel()
         m_daxPanelVisible = true;
         int btnCenterY = m_menuBtns[kBtnDax]->y() + m_menuBtns[kBtnDax]->height() / 2;
         int panelY = y() + btnCenterY - m_daxPanel->sizeHint().height() / 2;
-        m_daxPanel->move(x() + width(), std::max(0, panelY));
+        m_daxPanel->move(x() + width(), std::max(m_topLimit, panelY));
         m_daxPanel->raise();
         m_daxPanel->show();
         m_menuBtns[kBtnDax]->setStyleSheet(kMenuBtnActive);
@@ -1490,9 +1498,10 @@ void SpectrumOverlayMenu::toggleMemoryPanel()
         const int panelH = m_memoryPanel->sizeHint().height();
         int panelY = y();
         if (auto* parent = parentWidget())
-            panelY = std::clamp(panelY, 0, qMax(0, parent->height() - panelH));
+            panelY = std::clamp(panelY, m_topLimit,
+                                qMax(m_topLimit, parent->height() - panelH));
         else
-            panelY = std::max(0, panelY);
+            panelY = std::max(m_topLimit, panelY);
         m_memoryPanel->move(x() + width(), panelY);
         m_memoryPanel->raise();
         m_memoryPanel->show();
@@ -1554,7 +1563,7 @@ void SpectrumOverlayMenu::toggleAntPanel()
         m_antPanelVisible = true;
         int antBtnCenterY = m_menuBtns[kBtnAnt]->y() + m_menuBtns[kBtnAnt]->height() / 2;
         int panelY = y() + antBtnCenterY - m_antPanel->sizeHint().height() / 2;
-        m_antPanel->move(x() + width(), std::max(0, panelY));
+        m_antPanel->move(x() + width(), std::max(m_topLimit, panelY));
         m_antPanel->raise();
         m_antPanel->show();
         m_menuBtns[kBtnAnt]->setStyleSheet(kMenuBtnActive);
@@ -1821,6 +1830,55 @@ void SpectrumOverlayMenu::buildDisplayPanel()
     connect(m_fpsSlider, &QSlider::valueChanged, this, [this](int v) {
         m_fpsLabel->setText(QString::number(v));
         emit fftFpsChanged(v);
+    });
+
+    // Smooth — display-only smoothing across frequency, in linear power (the
+    // panadapter's counterpart of the AetherRX/TX EQ's Smoothing). The value
+    // is the half-width in pixels; the client applies it to every radio.
+    makeRow("FFT Smooth:", 0, AetherSDR::kFftSmoothingMaxHalfWidthPx, 0,
+            m_smoothSlider, m_smoothLabel);
+    m_smoothSlider->setObjectName("displayFftSmoothSlider");
+    m_smoothSlider->setAccessibleName(tr("FFT smoothing"));
+    m_smoothSlider->setToolTip(
+        tr("Smooths the spectrum trace across frequency, averaging each point "
+           "with its neighbors up to this many pixels either side.\n"
+           "Averages in linear power, so the floor reads its true average "
+           "power, about 1-1.5 dB above the unsmoothed trace's middle. "
+           "Waterfall and noise-floor readings are not affected. 0 = off."));
+    m_smoothSlider->setAccessibleDescription(
+        tr("Averages the spectrum trace across this many pixels either side. "
+           "Zero is off. The waterfall is not affected."));
+    m_smoothLabel->setText(offOrValueText(0));
+    connect(m_smoothSlider, &QSlider::valueChanged, this, [this](int v) {
+        m_smoothLabel->setText(offOrValueText(v));
+        emit fftSmoothingChanged(v);
+    });
+
+    // De-comb — replaces the trace with its cepstral true envelope, a smooth
+    // curve over the comb a zoomed-in pan draws across SSB voice (the
+    // speaker's pitch harmonics), keeping the signal's outline and peak level.
+    // The value is the widest harmonic spacing removed, in Hz; 0 is off.
+    makeRow("De-comb Hz:", 0, AetherSDR::kFftDecombMaxHz, 0,
+            m_decombHzSlider, m_decombHzLabel);
+    m_decombHzSlider->setObjectName("displayFftDecombHzSlider");
+    m_decombHzSlider->setSingleStep(10);
+    m_decombHzSlider->setPageStep(50);
+    m_decombHzSlider->setAccessibleName(tr("FFT de-comb width in hertz"));
+    m_decombHzSlider->setToolTip(
+        tr("Removes the comb of voice harmonics a zoomed-in panadapter draws "
+           "across an SSB signal, drawing a smooth curve over the harmonic peaks "
+           "so the signal keeps its outline and peak level.\n"
+           "The value is the widest harmonic spacing removed, in Hz. Voices are "
+           "about 100-250 Hz; 300 covers most. 0 = off.\n"
+           "Rounds a signal's steep edges by about half this width. "
+           "The noise floor and the waterfall are not changed."));
+    m_decombHzSlider->setAccessibleDescription(
+        tr("Removes the comb of voice harmonics from the spectrum trace, up to "
+           "this spacing in hertz. Zero is off. The waterfall is not changed."));
+    m_decombHzLabel->setText(offOrValueText(0));
+    connect(m_decombHzSlider, &QSlider::valueChanged, this, [this](int v) {
+        m_decombHzLabel->setText(offOrValueText(v));
+        emit fftDecombHzChanged(v);
     });
 
     // Line Width
@@ -2841,8 +2899,22 @@ void SpectrumOverlayMenu::syncExtraDisplaySettings(bool blankerOn, float blanker
                                                     int bgOpacity,
                                                     int freqGridSpacingKhz,
                                                     const QColor& bgFillColor,
-                                                    int freqScaleFontPt)
+                                                    int freqScaleFontPt,
+                                                    int fftSmoothing,
+                                                    int fftDecombHz)
 {
+    if (m_decombHzSlider) {
+        QSignalBlocker b(m_decombHzSlider);
+        m_decombHzSlider->setValue(fftDecombHz);
+        if (m_decombHzLabel)
+            m_decombHzLabel->setText(offOrValueText(m_decombHzSlider->value()));
+    }
+    if (m_smoothSlider) {
+        QSignalBlocker b(m_smoothSlider);
+        m_smoothSlider->setValue(fftSmoothing);
+        if (m_smoothLabel)
+            m_smoothLabel->setText(offOrValueText(m_smoothSlider->value()));
+    }
     if (m_freqGridSpacingCmb) {
         QSignalBlocker b(m_freqGridSpacingCmb);
         int idx = m_freqGridSpacingCmb->findData(freqGridSpacingKhz);
@@ -2907,12 +2979,12 @@ void SpectrumOverlayMenu::layoutDisplayPanel()
     const int scrollBarExtent = m_displayPanel->style()->pixelMetric(
         QStyle::PM_ScrollBarExtent, nullptr, m_displayScroll);
     const QSize panelSize = constrainedDisplayPanelSize(
-        contentHint, hostHeight, scrollBarExtent);
+        contentHint, hostHeight - m_topLimit, scrollBarExtent);
 
     m_displayPanel->resize(panelSize);
     const int menuBottom = y() + height();
     const int panelY = constrainedDisplayPanelTop(
-        menuBottom, panelSize.height(), hostHeight);
+        menuBottom, panelSize.height(), hostHeight, m_topLimit);
     m_displayPanel->move(x() + width(), panelY);
 }
 

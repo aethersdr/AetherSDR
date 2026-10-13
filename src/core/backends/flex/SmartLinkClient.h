@@ -101,6 +101,7 @@ private slots:
     void onPingTimer();
 
 private:
+    friend struct SmartLinkClientTestAccess;
     void connectToServer();
     void parseMessage(const QString& msg);
     void parseRadioList(const QString& msg);

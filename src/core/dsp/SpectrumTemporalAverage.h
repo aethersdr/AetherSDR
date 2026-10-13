@@ -73,12 +73,32 @@ public:
             m_originHz = originHz;
             m_stepHz = stepHz;
         }
-        std::copy(values.begin(), values.end(), m_observation.begin());
         const double exponent = -elapsedSeconds / (average * kMsPerStep / 1000.0);
         const double retained = std::exp(exponent);
         const double alpha = -std::expm1(exponent);
         const double offset = (originHz - m_originHz) / stepHz;
         std::size_t reused = 0;
+        if (offset == 0.0) {
+            // Aligned observations only read their own old RF bin, so display
+            // and history can advance together without copying or resampling.
+            // Use old validity for output before retiring newly excluded bins.
+            for (std::size_t i = 0; i < values.size(); ++i) {
+                const float observed = values[i];
+                const bool previous = m_valid[i];
+                const float estimate = previous ? float(retained * m_state[i] + alpha * observed)
+                                                : observed;
+                values[i] = logarithmic ? estimate : decibels(estimate);
+                const bool usable = i >= firstUsable && i < endUsable;
+                if (usable) {
+                    m_state[i] = estimate;
+                    if (previous) { ++reused; }
+                }
+                m_valid[i] = usable;
+            }
+            m_haveAverage = true;
+            return reused;
+        }
+        std::copy(values.begin(), values.end(), m_observation.begin());
         for (std::size_t i = 0; i < values.size(); ++i) {
             const auto previous = sample(m_state, double(i) + offset, 0, values.size(), true);
             const float estimate = previous ? float(retained * *previous + alpha * m_observation[i])

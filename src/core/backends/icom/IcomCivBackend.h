@@ -79,6 +79,9 @@ public:
     void setPanAttenuator(const QString& panId, int step) override;
     void setSliceRxAntenna(int sliceId, const QString& antenna) override;
     ReceiveDispatch requestSliceDsp(int sliceId, const SliceDspRequest& request) override;
+    ReceiveDispatch requestSliceControl(int sliceId, const SliceControlRequest& request) override;
+    ReceiveDispatch requestTransmitControl(const TransmitControlRequest& request,
+        TunePowerContext context = TunePowerContext::Deferred) override;
     ReceiveDispatch requestSliceAudio(int sliceId, const SliceAudioRequest& request) override;
     ReceiveDispatch requestSliceSquelch(int sliceId, const SliceSquelchRequest& request) override;
     ReceiveDispatch requestSliceRxAntenna(int sliceId, const QString& antenna) override;
@@ -98,7 +101,8 @@ public:
     void setTxAudioMonitor(bool on) override;
     void setTxMonitor(bool on, int level) override;
     void setSliceNoiseReduction(int sliceId, bool on, int level) override;
-    void setSliceNoiseBlanker(int sliceId, bool on, int level) override;
+    void setSliceNoiseBlanker(int sliceId, AetherSDR::NoiseBlankerKind kind,
+                              int level, AetherSDR::NoiseBlankerFill fill) override;
     void setSliceAutoNotch(int sliceId, bool on) override;
     void setSliceManualNotch(int sliceId, bool on, int position) override;
     void setSliceSquelch(int sliceId, bool on, int level) override;
@@ -181,6 +185,9 @@ private:
     // otherwise. See the definition for why neither alone is right.
     [[nodiscard]] bool txAudioGateOpen() const;
     void reassertPanPreampWireStep(int step);
+    // Reads the other receive front-end stage after a preamp/ATT write; the
+    // radio interlocks the two without reporting it.
+    void queueFrontEndInterlockRead(const std::vector<std::uint8_t>& read);
     [[nodiscard]] bool tunerSupported() const;
     bool sendTunerCommandIfSupported(bool start, const TxCoordinator::Operation& operation,
                                      const TxCoordinator::Completion& completion);
@@ -267,7 +274,7 @@ private:
     void applyKeying(bool key, const std::optional<TxCoordinator::Command>& command);
     void queueRead(const std::vector<std::uint8_t>& frame, const std::string& key,
                    IcomCivScheduler::Priority priority, qint64 notBeforeMs = 0,
-                   std::vector<std::uint8_t> replyDataPrefix = {});
+                   std::vector<std::uint8_t> replyDataPrefix = {}, bool coalesce = true);
     void queueWrite(const std::vector<std::uint8_t>& frame, const std::string& key,
                     IcomCivScheduler::Priority priority, bool supersedes = true,
                     bool coalesce = true, const std::optional<TxCoordinator::Command>& command = {});
@@ -518,8 +525,14 @@ private:
     int     m_nbLevelPercent = 0;
     int     m_notchPosPercent = 50;
     int     m_squelchPercent = 0;
+    // Our last 14 03 write was "on" at threshold 0. Icom has no squelch
+    // enable, so only this tells that write's own 0 readback from an Off.
+    bool    m_squelchOnAtZero = false;
+    // The on/off the last 14 03 readback published; the controls scrub
+    // re-asserts exactly this rather than re-deriving it.
+    bool    m_squelchOn = false;
     int     m_micGainPercent = 0;
-    int     m_compLevelPercent = 0;
+    int     m_compLevel = 0;
     bool    m_compEnable = false;
     bool    m_monitorOn = false;
     int     m_monitorLevelPercent = 0;

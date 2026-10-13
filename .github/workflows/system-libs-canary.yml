@@ -87,8 +87,8 @@ jobs:
         # The X11/xcb/GL/PulseAudio -dev packages are the ones the distro Qt
         # used to pull in and the release Qt's CMake config and libraries
         # still need — the same set .github/docker/Dockerfile installs.
-        # python3-venv, curl and git are setup-qt.sh's; ninja-build is
-        # setup-qtkeychain.sh's.
+        # python3-venv, curl and git are setup-qt.sh's; ninja-build and
+        # libsecret-1-dev are setup-qtkeychain.sh's.
         run: |
           apt -U install -y --no-install-recommends \
             build-essential \
@@ -128,7 +128,8 @@ jobs:
             libxcb-util1 \
             libxcb-xfixes0 \
             libxcb-xinerama0 \
-            libxcb-xkb1
+            libxcb-xkb1 \
+            libsecret-1-dev
 
       - name: Install the release Qt and qtkeychain
         run: bash scripts/setup/setup-qt.sh

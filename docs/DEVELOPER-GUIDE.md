@@ -153,8 +153,13 @@ Key files: `Slice.cs`, `Radio.cs`, `Panadapter.cs`, `Transmit.cs`,
 
 ### Widget Guidelines
 
-- All GUI follows the dark theme: `#0f0f1a` background, `#c8d8e8` text,
-  `#00b4d8` accent, `#203040` borders.
+- Every colour resolves through a `ThemeManager` token; never hard-code a
+  colour literal. Read
+  [`docs/style/theme-style-guide.md`](style/theme-style-guide.md) first —
+  CI's hardcoded-colour ratchet fails a PR that raises the count above its
+  base branch. New or reworked surfaces follow the visual canon in
+  [`docs/style/aethersdr-style-guide.md`](style/aethersdr-style-guide.md).
+  The full rule set is in [`docs/agents/gui.md`](agents/gui.md).
 - Use `GuardedSlider` (from `GuardedSlider.h`) instead of `QSlider` — it
   prevents wheel events from leaking to parent widgets.
 - Use `GuardedComboBox` for combo boxes in scrollable areas.

@@ -206,7 +206,7 @@ bool exitOrderHolds(const QByteArray& branchSource, std::string* why = nullptr)
     const qsizetype hold = at("sw->hide();");
     const qsizetype splitterShow = at("m_splitter->show();");
     const qsizetype firstResize = at("setFixedWidth(QWIDGETSIZE_MAX);");
-    const qsizetype reanchor = at("reanchorCustomFrameGeometry(geom);");
+    const qsizetype settle = at("restoreGeometry(geom);");
     const qsizetype deferred = at("QTimer::singleShot(0, this, [this, heldSpectra]");
     const qsizetype release = at("sw->show();");
     const qsizetype resume = at("setUpdatesEnabled(true)");
@@ -218,8 +218,8 @@ bool exitOrderHolds(const QByteArray& branchSource, std::string* why = nullptr)
         {"spectra held before the splitter is shown", hold >= 0 && splitterShow > hold},
         {"held before the first geometry step", firstResize > splitterShow},
         {"the whole splitter is not hidden (empty-window flash)", at("m_splitter->hide()") < 0},
-        {"released in a deferred turn after the re-anchor",
-         reanchor > firstResize && deferred > reanchor && release > deferred},
+        {"released in a deferred turn after the geometry restore",
+         settle > firstResize && deferred > settle && release > deferred},
         {"rendering resumes inside that deferred turn", resume > deferred},
         // QRhiWidget draws its first frame from the resize the show delivers; a
         // render-to-texture widget shown with updates still off drops that frame

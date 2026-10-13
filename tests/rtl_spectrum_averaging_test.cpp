@@ -2,6 +2,7 @@
 #include "core/backends/rtl/RtlSdrBackend.h"
 #include <QCoreApplication>
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -119,30 +120,45 @@ void cadenceAndReceiverIndependence()
 
 void noiseStatistics()
 {
+    constexpr int kFrameCount = 96;
+    constexpr int kWarmupFrames = 64;
+    constexpr int kBinsPerFrame = 64;
+    constexpr int kFirstBin = 1000;
+    constexpr int kBinStride = 16;
+    constexpr int kMeasurements = (kFrameCount - kWarmupFrames) * kBinsPerFrame;
     Probe raw(0,false), low(5,false), high(100,false);
     std::mt19937 generator(5782);
     std::normal_distribution<float> noise(0,.05f);
     QVector<std::complex<float>> iq(96000);
     double sum[3]{},squares[3]{};
-    for(int frame=0;frame<500;++frame) {
+    for(int frame=0;frame<kFrameCount;++frame) {
         for(auto& sample:iq) { sample={noise(generator),noise(generator)}; }
         raw.ddc.processIqData(iq,false);low.ddc.processIqData(iq,false);high.ddc.processIqData(iq,false);
-        if(frame<100) { continue; }
+        if(frame<kWarmupFrames) { continue; }
         const Probe* probes[]={&raw,&low,&high};
+        // Well-separated bins avoid the window's main-lobe correlation. Pooling
+        // them after warmup preserves variance evidence with fewer FFT windows.
         for(int i=0;i<3;++i) {
-            float db=0;std::memcpy(&db,probes[i]->last.constData()+1000*sizeof(float),sizeof(db));
-            const double power=std::pow(10.,db/10.);
-            sum[i]+=power;squares[i]+=power*power;
+            for (int bin = 0; bin < kBinsPerFrame; ++bin) {
+                float db = 0;
+                const int binIndex = kFirstBin + bin * kBinStride;
+                std::memcpy(&db, probes[i]->last.constData() + binIndex * int(sizeof(float)), sizeof(db));
+                const double power = std::pow(10., db / 10.);
+                sum[i] += power;
+                squares[i] += power * power;
+            }
         }
     }
     double variance[3]{};
-    for(int i=0;i<3;++i) { variance[i]=squares[i]/400-std::pow(sum[i]/400,2); }
+    for(int i=0;i<3;++i) {
+        variance[i] = squares[i] / kMeasurements - std::pow(sum[i] / kMeasurements, 2);
+    }
     check(variance[1]<variance[0]*.7 && variance[2]<variance[1]*.3,
         "generated Gaussian-noise FFT bins become progressively less variable");
     check(std::abs(sum[2]/sum[0]-1)<.2,
         "strong power averaging preserves measured mean noise power within fixture sampling tolerance");
-    std::printf("noise_variance_ratio low=%.6f high=%.6f mean_power_ratio=%.6f\n",
-        variance[1]/variance[0],variance[2]/variance[0],sum[2]/sum[0]);
+    std::printf("noise_variance_ratio low=%.6f high=%.6f mean_power_ratio=%.6f samples=%d\n",
+        variance[1]/variance[0],variance[2]/variance[0],sum[2]/sum[0],kMeasurements);
 }
 
 void partitionContinuity()
@@ -310,6 +326,41 @@ void fixedRfGridDoesNotDiffuse()
               "invalidated converter evidence seeds measured RF rather than erasing current bins");
     }
 }
+
+void alignedGridValidityAndReuse()
+{
+    for (bool logarithmic : {false, true}) {
+        SpectrumTemporalAverage average(6);
+        // With a 500 ms time constant, this interval retains exactly half.
+        const double halfLife = .5 * std::log(2.);
+        const auto matches = [logarithmic](const std::array<float, 6>& actual,
+                                          const std::array<float, 6>& expectedDomain) {
+            for (std::size_t i = 0; i < actual.size(); ++i) {
+                const double expected = logarithmic ? expectedDomain[i]
+                    : 10 * std::log10(expectedDomain[i]);
+                if (!(std::abs(actual[i] - expected) < .00001)) { return false; }
+            }
+            return true;
+        };
+        std::array<float, 6> values{2, 4, 6, 8, 10, 12};
+        check(average.processFrame(values, 50, logarithmic, halfLife, 1000, 1, 1, 5) == 0
+              && matches(values, {2, 4, 6, 8, 10, 12}),
+              "aligned first frame displays actual observations with no reused history");
+
+        average.invalidate(1002, 1002);
+        values = {20, 40, 60, 80, 100, 120};
+        check(average.processFrame(values, 50, logarithmic, halfLife, 1000, 1, 2, 4) == 1,
+              "aligned reuse counts only old-valid bins inside the current usable interval");
+        check(matches(values, {20, 22, 60, 44, 55, 120}),
+              "narrowing usable RF retains old-valid output for this frame while invalidated bins seed current observations");
+
+        values = {200, 400, 600, 800, 1000, 1200};
+        check(average.processFrame(values, 50, logarithmic, halfLife, 1000, 1, 1, 5) == 2,
+              "aligned widening reuses only the two bins retained inside the previous usable interval");
+        check(matches(values, {200, 400, 330, 422, 1000, 1200}),
+              "newly exposed aligned bins seed observations instead of resurrecting excluded history");
+    }
+}
 }
 int main(int argc, char** argv)
 {
@@ -353,5 +404,6 @@ int main(int argc, char** argv)
     amountChangeContinuity();
     captureTransitionContinuity();
     fixedRfGridDoesNotDiffuse();
+    alignedGridValidityAndReuse();
     return failures ? 1 : 0;
 }

@@ -47,6 +47,14 @@ struct IcomCivBackendTestAccess {
         return backend.m_civScheduler.stats().dispatched;
     }
 
+    static bool dispatched(const IcomCivBackend& backend, const QString& hex)
+    {
+        for (const IcomCivBackend::CivTraceEntry& entry : backend.m_civTrace) {
+            if (entry.outbound && entry.hex == hex) { return true; }
+        }
+        return false;
+    }
+
     static std::uint64_t queuedCount(const IcomCivBackend& backend)
     {
         return backend.m_civScheduler.stats().queued;

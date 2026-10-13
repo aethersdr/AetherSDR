@@ -608,7 +608,7 @@ DWORD WINAPI spectra (void *pargs)
 	int LO = ((int)(uintptr_t)pargs) & 15;
 	DP a = pdisp[disp];
 
-	if (a->stop)
+	if (InterlockedAnd(&a->stop, 1))
 	{
 		InterlockedDecrement(a->pnum_threads);
 		return 0;
@@ -623,14 +623,14 @@ DWORD WINAPI spectra (void *pargs)
 				 a->IQO_idx[ss][LO] -= a->bsize;
 		}
 
-		if (a->stop)
+		if (InterlockedAnd(&a->stop, 1))
 		{
 			InterlockedDecrement(a->pnum_threads);
 			return 0;
 		}
 		fftw_execute (a->plan[ss][LO]);
 	}
-	if (a->stop)
+	if (InterlockedAnd(&a->stop, 1))
 	{
 		InterlockedDecrement(a->pnum_threads);
 		return 0;
@@ -653,10 +653,14 @@ DWORD WINAPI spectra (void *pargs)
 		{
 			a->stitch_flag = 0;
 			LeaveCriticalSection(&a->StitchSection);
+			// AetherSDR patch 17: stitch BEFORE releasing input_busy. Upstream
+			// released first, so sendbuf() could dispatch the next frame's
+			// workers while this stitch was still reading result[]/ss_bins --
+			// a torn panadapter frame, and two stitch() calls overlapping.
+			stitch(disp);
 			for (j = 0; j < dMAX_STITCH; j++)
 				for (i = 0; i < dMAX_NUM_FFT; i++)
 					InterlockedBitTestAndReset(&(a->input_busy[j][i]), 0);
-			stitch(disp);
 		}
 		else
 			LeaveCriticalSection(&a->StitchSection);
@@ -843,7 +847,7 @@ DWORD WINAPI Cspectra (void *pargs)
 	DP a = pdisp[disp];
 	int trans_size = a->size * sizeof(double);
 
-	if (a->stop)
+	if (InterlockedAnd(&a->stop, 1))
 	{
 		InterlockedDecrement(a->pnum_threads);
 		return 0;
@@ -859,7 +863,7 @@ DWORD WINAPI Cspectra (void *pargs)
 				 a->IQO_idx[ss][LO] -= a->bsize;
 		}
 
-		if (a->stop)
+		if (InterlockedAnd(&a->stop, 1))
 		{
 			InterlockedDecrement(a->pnum_threads);
 			return 0;
@@ -872,7 +876,7 @@ DWORD WINAPI Cspectra (void *pargs)
 
 	}
 
-	if (a->stop)
+	if (InterlockedAnd(&a->stop, 1))
 	{
 		InterlockedDecrement(a->pnum_threads);
 		return 0;
@@ -902,10 +906,14 @@ DWORD WINAPI Cspectra (void *pargs)
 		{
 			a->stitch_flag = 0;
 			LeaveCriticalSection(&a->StitchSection);
+			// AetherSDR patch 17: stitch BEFORE releasing input_busy. Upstream
+			// released first, so sendbuf() could dispatch the next frame's
+			// workers while this stitch was still reading result[]/ss_bins --
+			// a torn panadapter frame, and two stitch() calls overlapping.
+			stitch(disp);
 			for (j = 0; j < dMAX_STITCH; j++)
 				for (i = 0; i < dMAX_NUM_FFT; i++)
 					InterlockedBitTestAndReset(&(a->input_busy[j][i]), 0);
-			stitch(disp);
 		}
 		else
 			LeaveCriticalSection(&a->StitchSection);
@@ -1058,7 +1066,7 @@ int build_interpolants(int disp, int set, int n, int m, double *x, double (*y)[d
 void __cdecl sendbuf(void *arg)
 {
 	DP a = pdisp[(int)(uintptr_t)arg];
-	while(!a->end_dispatcher)
+	while(!InterlockedAnd(&a->end_dispatcher, 1))
 	{
 		for (a->ss = 0; a->ss < a->num_stitch; a->ss++)
 			for (a->LO = 0; a->LO < a->num_fft; a->LO++)
@@ -1067,21 +1075,24 @@ void __cdecl sendbuf(void *arg)
 				{
 					InterlockedBitTestAndSet(&(a->input_busy[a->ss][a->LO]), 0);
 
+					// AetherSDR patch 17: take the worker's read index and advance
+					// IQout_index under BufferControlSection. Spectrum0() moves
+					// IQout_index under that lock on an overrun; upstream read and
+					// advanced it here unlocked, a lost update that points one FFT
+					// at the wrong span of the ring.
+					EnterCriticalSection(&(a->BufferControlSection[a->ss][a->LO]));
 					a->IQO_idx[a->ss][a->LO] = a->IQout_index[a->ss][a->LO];
-					
+					if((a->IQout_index[a->ss][a->LO] += a->incr) >= a->bsize)
+						a->IQout_index[a->ss][a->LO] -= a->bsize;
+					if ((a->have_samples[a->ss][a->LO] -= a->incr) < a->size)
+						InterlockedBitTestAndReset(&(a->buff_ready[a->ss][a->LO]), 0);
+					LeaveCriticalSection(&(a->BufferControlSection[a->ss][a->LO]));
+
 					InterlockedIncrement(a->pnum_threads);
 					if (a->type == 0)
 						QueueUserWorkItem(spectra, (void *)(((uintptr_t)arg << 12) + (a->ss << 4) + a->LO), 0);
 					else
 						QueueUserWorkItem(Cspectra, (void *)(((uintptr_t)arg << 12) + (a->ss << 4) + a->LO), 0);
-
-					if((a->IQout_index[a->ss][a->LO] += a->incr) >= a->bsize)
-						a->IQout_index[a->ss][a->LO] -= a->bsize;
-
-					EnterCriticalSection(&(a->BufferControlSection[a->ss][a->LO]));
-					if ((a->have_samples[a->ss][a->LO] -= a->incr) < a->size)
-						InterlockedBitTestAndReset(&(a->buff_ready[a->ss][a->LO]), 0);
-					LeaveCriticalSection(&(a->BufferControlSection[a->ss][a->LO]));
 				}
 			}
 		Sleep(1);
@@ -1195,10 +1206,10 @@ void SetAnalyzer (	int disp,			// display identifier
 	int i, j;
 
 	EnterCriticalSection(&a->SetAnalyzerSection);
-	a->end_dispatcher = 1;
+	InterlockedExchange(&a->end_dispatcher, 1);
 	while (InterlockedAnd(&a->dispatcher, 1))
 		Sleep(1);
-	a->stop = 1;
+	InterlockedExchange(&a->stop, 1);
 	while (_InterlockedAnd(a->pnum_threads, 1023))
 		Sleep(1);
 	a->num_pixout = n_pixout;
@@ -1310,8 +1321,8 @@ void SetAnalyzer (	int disp,			// display identifier
 			a->IQout_index[i][j] = 0;
 		}
 
-	a->stop = 0;
-	a->end_dispatcher = 0;
+	InterlockedExchange(&a->stop, 0);
+	InterlockedExchange(&a->end_dispatcher, 0);
 	LeaveCriticalSection(&a->SetAnalyzerSection);
 }
 
@@ -1427,7 +1438,7 @@ void DestroyAnalyzer(int disp)
 	DP a = pdisp[disp];
 	int i, j;
 
-	a->end_dispatcher = 1;
+	InterlockedExchange(&a->end_dispatcher, 1);
 	while (InterlockedAnd(&a->dispatcher, 1))
 		Sleep(1);
 

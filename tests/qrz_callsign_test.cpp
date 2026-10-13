@@ -186,7 +186,7 @@ int main(int argc, char** argv)
         // Two entities in AD1C cty.dat format.  NOTE: the file stores
         // longitude WEST-positive; the parser must flip it east-positive.
         QTemporaryFile f;
-        f.open();
+        check(f.open(), "temporary cty.dat file opens");
         f.write("United States:            5:  8:  NA:   37.53:    91.67:     5.0:  K:\n"
                 "    K,W,N,AA,AB,KI6,=W1AW;\n"
                 "England:                 14: 27:  EU:   52.77:     1.47:     0.0:  G:\n"

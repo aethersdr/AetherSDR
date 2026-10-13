@@ -53,27 +53,54 @@ void FloatingContainerWindow::takeContainer(ContainerWidget* container)
     if (m_container == container) return;
 
     if (m_container) {
-        m_layout->removeWidget(m_container);
-        m_container->setParent(nullptr);
+        releaseContainer();
     }
     m_container = container;
     if (m_container) {
+        m_presentationConnection = connect(m_container,
+            &ContainerWidget::presentationAvailabilityChanged, this,
+            [this](bool) { applyPresentation(); });
+        m_containerVisibilityConnection = connect(m_container,
+            &ContainerWidget::visibilityChanged, this, [this](bool visible) {
+                if (m_container && m_container->isPresentationManaged()) {
+                    setVisible(visible);
+                }
+            });
+        m_containerDestroyedConnection = connect(m_container, &QObject::destroyed,
+            this, [this] { m_container = nullptr; });
         m_container->setParent(this);
         m_layout->addWidget(m_container, 1);
-        m_container->show();
         m_container->setDockMode(ContainerWidget::DockMode::Floating);
+        m_container->show();
         setWindowTitle(m_container->title());
     }
+    applyPresentation();
+}
+
+void FloatingContainerWindow::setVisible(bool visible)
+{
+    m_requestedVisible = visible;
+    applyPresentation();
+}
+
+void FloatingContainerWindow::applyPresentation()
+{
+    QWidget::setVisible(m_requestedVisible && (!m_container
+        || (m_container->isPresentationAvailable()
+            && (!m_container->isPresentationManaged() || m_container->isContainerVisible()))));
 }
 
 ContainerWidget* FloatingContainerWindow::releaseContainer()
 {
     ContainerWidget* c = m_container;
     if (c) {
+        QObject::disconnect(m_presentationConnection);
+        QObject::disconnect(m_containerVisibilityConnection);
+        QObject::disconnect(m_containerDestroyedConnection);
+        m_container = nullptr;
         m_layout->removeWidget(c);
         c->setParent(nullptr);
         c->setDockMode(ContainerWidget::DockMode::PanelDocked);
-        m_container = nullptr;
     }
     return c;
 }
@@ -153,6 +180,7 @@ void FloatingContainerWindow::prepareShutdown()
 void FloatingContainerWindow::setFramelessMode(bool on)
 {
     const bool wasVisible = isVisible();
+    const bool requestedVisible = m_requestedVisible;
     const QRect geom = geometry();
     Qt::WindowFlags flags = windowFlags();
     if (on) {
@@ -161,6 +189,7 @@ void FloatingContainerWindow::setFramelessMode(bool on)
         flags &= ~Qt::FramelessWindowHint;
     }
     setWindowFlags(flags);
+    m_requestedVisible = requestedVisible;
     if (wasVisible) setGeometry(geom);
     if (wasVisible) show();
 }
@@ -170,6 +199,7 @@ void FloatingContainerWindow::setAlwaysOnTop(bool on)
     if (m_alwaysOnTop == on) return;
     m_alwaysOnTop = on;
     const bool wasVisible = isVisible();
+    const bool requestedVisible = m_requestedVisible;
     const QRect geom = geometry();
     Qt::WindowFlags flags = windowFlags();
     if (on) {
@@ -178,6 +208,7 @@ void FloatingContainerWindow::setAlwaysOnTop(bool on)
         flags &= ~Qt::WindowStaysOnTopHint;
     }
     setWindowFlags(flags);
+    m_requestedVisible = requestedVisible;
     if (wasVisible) setGeometry(geom);
     if (wasVisible) show();
 }

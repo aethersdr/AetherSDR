@@ -22,6 +22,8 @@ public:
     explicit DaxApplet(QWidget* parent = nullptr);
 
     void setRadioModel(RadioModel* model);
+    void setNativeReceiveRouting(bool native);
+    void setReceiveChannelSlice(int channel, SliceModel* slice);
 
     // Bound the operator-facing RX row count to the radio's slice capacity
     // (Principle I): a 6300 exposes 2, a 6700 eight. Rows above n are HIDDEN,
@@ -43,6 +45,7 @@ private:
     void buildUI();
 
     RadioModel* m_model{nullptr};
+    bool m_nativeReceiveRouting{false};
     int m_maxDaxChannels{kChannels};  // radio slice capacity (FlexLib table)
 
     QPushButton*  m_daxEnable{nullptr};

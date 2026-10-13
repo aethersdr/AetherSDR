@@ -121,9 +121,11 @@ void testRelayFollowsAetherSdrsRadio()
     QCoreApplication::processEvents();
 }
 
-// The packaged udev rule grants exactly the USB identities the app labels as
+// The packaged udev rule lists exactly the product patterns the app labels as
 // a CTR2: a recognised device the rule misses would loop forever on the
 // install prompt, and an extra one would open an unrelated ESP32-S3 board.
+// This compares the patterns, not the devices they match: udev's "Aether*"
+// also matches names the app refuses, which testSelfNamedDevices() pins.
 void testUdevRuleMatchesKnownCtr2s()
 {
     QFile file(QStringLiteral(AETHER_CTR2_UDEV_RULES));
@@ -160,7 +162,56 @@ void testUdevRuleMatchesKnownCtr2s()
     for (const QString& k : granted - known) {
         std::fprintf(stderr, "  granted but not recognised: %s\n", qPrintable(k));
     }
-    check(granted == known, "the udev rule grants exactly the recognised CTR2 devices");
+    check(granted == known, "the udev rule lists exactly the recognized CTR2 product patterns");
+
+    // Every name the app recognizes must be one the rule's glob grants, or a
+    // self-named device would loop on the install prompt.
+    const QStringList probes{QStringLiteral("AetherX"), QStringLiteral("AetherDial"), QStringLiteral("Aether ~"),
+                             QStringLiteral("Aether") + QString(26, QLatin1Char('x'))};
+    for (const QString& probe : probes) {
+        const AetherSDR::Ctr2HidPort::DeviceInfo info{QStringLiteral("p"), 0x303A, 0x1001, {}, probe, {}};
+        bool covered = false;
+        for (const QString& g : granted) {
+            const QString prefix = key(0x303A, 0x1001, QString());
+            const QRegularExpression glob(QRegularExpression::wildcardToRegularExpression(
+                g.mid(prefix.size()), QRegularExpression::NonPathWildcardConversion));
+            covered = covered || (g.startsWith(prefix) && glob.match(probe).hasMatch());
+        }
+        check(!info.ctr2Model().isEmpty(), "a self-named probe is recognized");
+        check(covered, "a recognized self-named product is granted by the rule's glob");
+    }
+}
+
+// Firmware that names itself: a 303A:1001 product string starting "Aether" is
+// shown as the model if it is a short printable name; otherwise it is unknown.
+void testSelfNamedDevices()
+{
+    const auto named = [](const QString& product, quint16 vid = 0x303A) {
+        return AetherSDR::Ctr2HidPort::DeviceInfo{QStringLiteral("p"), vid, 0x1001, QStringLiteral("AetherSDR"),
+                                                  product, QStringLiteral("0123ABCD")};
+    };
+    check(named(QStringLiteral("AetherDial")).ctr2Model() == QStringLiteral("AetherDial"),
+          "a self-named device shows its own name");
+    check(named(QStringLiteral("AetherDial")).label()
+              == QStringLiteral("AetherDial: AetherSDR AetherDial (303a:1001 #0123ABCD)"),
+          "a self-named device's label");
+    check(named(QStringLiteral("AETHER_KNOB")).ctr2Model() == QStringLiteral("AetherKnob"),
+          "the fixed AetherKnob entry is not shadowed by the prefix");
+    const QString longest = QStringLiteral("Aether") + QString(26, QLatin1Char('x'));
+    check(named(longest).ctr2Model() == longest, "a 32-character name is accepted");
+    check(named(longest + QLatin1Char('x')).ctr2Model().isEmpty(), "a 33-character name is refused");
+    check(named(QStringLiteral("Aether")).ctr2Model().isEmpty(), "the prefix alone is not a name");
+    check(named(QStringLiteral("AetherX")).ctr2Model() == QStringLiteral("AetherX"),
+          "one character past the prefix is a name");
+    check(named(QStringLiteral("Aether\tTab")).ctr2Model().isEmpty()
+              && named(QStringLiteral("Aether\u00e9")).ctr2Model().isEmpty()
+              && named(QStringLiteral("Aether\x7f")).ctr2Model().isEmpty(),
+          "a name with control or non-ASCII characters is refused");
+    check(named(QStringLiteral("Aether ~")).ctr2Model() == QStringLiteral("Aether ~"),
+          "space and tilde bound the accepted range");
+    check(named(QStringLiteral("aetherdial")).ctr2Model().isEmpty()
+              && named(QStringLiteral("AetherDial"), 0x1234).ctr2Model().isEmpty(),
+          "the prefix is case-sensitive and needs the Espressif IDs");
 }
 
 // USB is the default mode when the build can open a CTR2, and the first
@@ -290,6 +341,7 @@ int main(int argc, char** argv)
     testUsbAccessRuleDetection();
     testUsbDefaults();
     testUdevRuleMatchesKnownCtr2s();
+    testSelfNamedDevices();
 
     if (g_failures) {
         std::fprintf(stderr, "%d check(s) failed\n", g_failures);

@@ -90,17 +90,25 @@ blocks to the backend thread, which constructs revocable typed PCM. Queue gaps
 are marked discontinuous. `AudioEngine::DEFAULT_SAMPLE_RATE` remains 24000 and
 the audio device's output rate remains independently negotiated.
 
-WFM and the other existing non-FM modes retain their exclusive legacy DDC and
-24 kHz format. Their demodulation is unchanged; monitor mute continues to clock
-an independent pre-monitor tap. They cannot join a multi-FM bank. Selecting FM
-with an incompatible inherited wide/sideband filter chooses a 16 kHz passband;
-ordinary filter requests and saved restores are never resized. This mode
-transition was approved in [the #5924 maintainer ruling](https://github.com/aethersdr/AetherSDR/pull/5924#issuecomment-5787852269). WFM stereo and normalization qualification
-remain S1/S2; no replacement WFM claim is made here.
+WFM uses an explicitly qualified 384 kHz IQ / 192 kHz WDSP / 48 kHz paired
+stereo recipe with independently prepared RF filtering, 50/75 µs de-emphasis
+and completed-block stereo observation. Its RF and audio limits, generated
+reference results and remaining validation boundaries are documented in
+[`rtl-wfm.md`](rtl-wfm.md). Manual WFM squelch remains unavailable with a stated
+reason; WDSP's internal automatic squelch remains in use. Saved sessions use a
+muted legacy bootstrap before adopting the original receiver recipe and ID.
+
+The other non-FM modes retain their exclusive legacy DDC and 24 kHz format.
+Monitor mute continues to clock an independent pre-monitor tap. Production
+admission remains one receiver. Selecting FM with an incompatible inherited
+wide/sideband filter chooses a 16 kHz passband; ordinary filter requests and
+saved restores are never resized. This mode transition was approved in
+[the #5924 maintainer ruling](https://github.com/aethersdr/AetherSDR/pull/5924#issuecomment-5787852269).
 The desktop FM/FM-N presets use the existing DFM width ladder intersected with
 the backend's declared filter range; FMN and NFM share symmetric edge rules.
-Fixed radio filter lists retain precedence. WFM filter and squelch controls
-are unavailable with accessible reasons, and the backend refuses those edits.
+WFM presets use the declared broadcast RF range. Fixed radio filter lists retain
+precedence. WFM control placement and recipe choices remain subject to
+maintainer review.
 
 ## FM squelch
 
@@ -625,3 +633,48 @@ two close peaks, asymmetric/outside capture limits, queued stale deliveries,
 reentrant disconnect, history movement/wrapping, and per-retune RF frames.
 Native GPU presentation, bounded performance observations and receive liveness
 are recorded separately for the exact delivered revision in the stage report.
+
+### Relative receive metering
+
+RTL publishes one `SLC<stable ID>:LEVEL` meter per configured receiver, with
+unit `dBFS`. It reports the strongest windowed FFT bin intersecting that
+receiver's accepted passband, using the existing unaveraged 2048-bin ADC
+spectrum detector (about 30 observations/second). This is an uncalibrated
+relative RF measurement, not dBm, S-units, integrated channel power, or audio
+peak/RMS. Tuner gain and DC content affect it; no guessed RF calibration offset
+is applied. Display FFT averaging, speaker mute/gain and SQL do not change its
+measurement path.
+
+The acquisition mailbox is bounded and carries the accepted session/revision;
+observations older than 500 ms are discarded at delivery. Every accepted
+capture revision withdraws the prior samples before defining current meters,
+including parked receivers. Parked/removed/disconnected or unfed receivers
+therefore cannot retain a live reading. The UI checks the model's existing
+freshness window at 100 ms intervals and displays unavailable when unfed or
+stale. Relative readings never enter the calibrated `sLevelChanged` signal or
+`sLevelForSlice` accessor. Slice bars, SmartMTR and the selected analog meter
+use a labeled -120..0 dBFS scale; other radios retain their calibrated scale.
+
+
+### Private evaluation: optional receive meters
+
+RTL Receiver settings exposes **Enable receive meters**, default enabled.
+Its accepted boolean is stored as `receiveMetersEnabled` in the same per-serial
+`RtlDevice` schema-1 document; missing fields in older documents mean enabled.
+The `rtl/receive_meters.set` extension requires a boolean and a connected,
+accepted receiver state. `receiveMetersControl` advertises that verb.
+
+Disabling stops the independent RF-passband measurement/publication, clears
+cached readings, and stops relative-meter animation. The existing typed meter
+catalogue carries an unavailable reason so both the VFO and selected analog
+meter identify the disabled state instead of freezing a reading. A generation
+stamp rejects queued/in-flight readings across disable/re-enable. The shared
+spectrum needed for squelch and the receiver/audio paths remain active. This
+control does not retune or rebuild the capture graph. Enabling requires a fresh
+observation before any meter becomes live. Settings are unchanged on other
+radio families, and anonymous or mismatched serials remain session-only.
+
+This is an interim operator choice for the private eight-receiver evaluation.
+The enabled display still has measurable CPU overhead; bounded redraw fixes
+alone did not recover the earlier pre-meter baseline. Exact performance and
+hardware-validation evidence belongs to the sealed evaluation package.

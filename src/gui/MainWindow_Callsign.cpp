@@ -1,7 +1,7 @@
 // MainWindow_Callsign.cpp — QRZ callsign-lookup wiring: CwCallsignSpotter (fed
 // by the CW decode text; fires on "DE <call>"), CallsignLookupService (QRZ XML
-// + 7-day disk cache), CallsignCard screen-pop, and the Tools → Callsign Lookup
-// dialog. The service is surface-agnostic.
+// + 7-day disk cache), the opt-in live contacts window, and manual callsign
+// lookup. The service is surface-agnostic.
 
 #include "MainWindow.h"
 
@@ -12,6 +12,13 @@
 #include "core/LogManager.h"
 #include "core/MaidenheadLocator.h"
 #include "models/RadioModel.h"
+#include "models/CwDecodeSettings.h"
+
+#include <QAction>
+#include <QList>
+#include <QPoint>
+#include <QRect>
+#include <QScreen>
 
 namespace AetherSDR {
 
@@ -69,16 +76,19 @@ void MainWindow::wireCallsignLookup()
 
     auto& svc = CallsignLookupService::instance();
 
-    // Results → the CW decode panel's card.  Match on the card's current
+    // Results → the live contacts window. Match on the card's current
     // call so a dialog-initiated lookup for a different station doesn't
     // repaint the decoder card (and vice versa — the dialog filters too).
     connect(&svc, &CallsignLookupService::infoReady, this,
             [this](const CallsignInfo& info, bool fromCache) {
-        if (!m_cwDecoderApplet)
+        if (!m_liveCwContactsAction->isChecked() || !m_liveCwContactsDialog
+            || !m_liveCwContactsDialog->isVisible()) {
             return;
-        auto* card = m_cwDecoderApplet->cwCallsignCard();
-        if (!card || !card->isVisible() || card->currentCall() != info.call)
+        }
+        CallsignCard* card = m_liveCwContactsDialog->card();
+        if (!card->isVisible() || card->currentCall() != info.call) {
             return;
+        }
         card->showInfo(info, fromCache);
         const QString photo = CallsignLookupService::instance().photoPathFor(info.call);
         if (!photo.isEmpty())
@@ -86,39 +96,103 @@ void MainWindow::wireCallsignLookup()
     });
     connect(&svc, &CallsignLookupService::photoReady, this,
             [this](const QString& call, const QString& imagePath) {
-        if (!m_cwDecoderApplet)
-            return;
-        auto* card = m_cwDecoderApplet->cwCallsignCard();
-        if (card && card->isVisible() && card->currentCall() == call)
-            card->setPhotoPath(imagePath);
+        if (m_liveCwContactsAction->isChecked() && m_liveCwContactsDialog
+            && m_liveCwContactsDialog->isVisible()) {
+            CallsignCard* card = m_liveCwContactsDialog->card();
+            if (card->isVisible() && card->currentCall() == call) {
+                card->setPhotoPath(imagePath);
+            }
+        }
     });
     connect(&svc, &CallsignLookupService::lookupFailed, this,
             [this](const QString& call, const QString& message) {
-        if (!m_cwDecoderApplet)
-            return;
-        auto* card = m_cwDecoderApplet->cwCallsignCard();
-        if (card && card->isVisible() && card->currentCall() == call)
-            card->showError(call, message);
+        if (m_liveCwContactsAction->isChecked() && m_liveCwContactsDialog
+            && m_liveCwContactsDialog->isVisible()) {
+            CallsignCard* card = m_liveCwContactsDialog->card();
+            if (card->isVisible() && card->currentCall() == call) {
+                card->showError(call, message);
+            }
+        }
     });
+
+    if (m_liveCwContactsAction->isChecked()) {
+        setLiveCwContactsVisible(true);
+    }
 }
 
 void MainWindow::onCwCallsignSpotted(const QString& call)
 {
-    auto& svc = CallsignLookupService::instance();
-    // Only pop a card that can actually fill in: QRZ credentials, a cache
-    // entry, or at least cty.dat prefix data (country-level fallback card).
-    if (!svc.enabled() || !svc.canResolve(call))
+    m_lastCwContactCall = call;
+    if (!m_liveCwContactsAction->isChecked() || !m_liveCwContactsDialog
+        || !m_liveCwContactsDialog->isVisible()) {
         return;
-    if (!m_cwDecoderApplet)
-        return;
-    auto* card = m_cwDecoderApplet->cwCallsignCard();
-    if (!card)
-        return;
-
+    }
     qCDebug(lcQrz) << "CW station identified:" << call;
-    card->showPending(call);
-    card->setVisible(true);
-    svc.lookup(call);
+    m_liveCwContactsDialog->showCallsign(call);
+    CallsignLookupService::instance().lookup(call);
+}
+
+void MainWindow::setLiveCwContactsVisible(bool visible)
+{
+    const QByteArray geometry = m_liveCwContactsDialog
+        ? m_liveCwContactsDialog->saveGeometry() : QByteArray();
+    CwDecodeSettings::setLiveContactsEnabled(visible, geometry);
+    if (!visible) {
+        if (m_liveCwContactsDialog && m_liveCwContactsDialog->isVisible()) {
+            m_liveCwContactsDialog->close();
+        }
+        return;
+    }
+
+    const bool firstShow = !m_liveCwContactsDialog;
+    showOrRaisePersistent(m_liveCwContactsDialog, CwDecodeSettings::fontPx());
+    if (firstShow) {
+        LiveCwContactsDialog* dialog = m_liveCwContactsDialog;
+        connect(dialog, &QDialog::finished, this, [this, dialog] {
+            if (m_liveCwContactsDialog != dialog) {
+                return;
+            }
+            CwDecodeSettings::setLiveContactsEnabled(false, dialog->saveGeometry());
+            m_liveCwContactsDialog.clear();
+            m_liveCwContactsAction->setChecked(false);
+        });
+        const QByteArray savedGeometry = CwDecodeSettings::liveContactsGeometry();
+        if (!savedGeometry.isEmpty()) {
+            m_liveCwContactsDialog->restoreGeometry(savedGeometry);
+        } else if (m_cwDecoderApplet) {
+            QWidget* decoder = m_cwDecoderApplet->findChild<QWidget*>(QStringLiteral("cwDecodePanel"));
+            QScreen* display = screen();
+            if (decoder && display) {
+                const QRect textRect(decoder->mapToGlobal(QPoint()), decoder->size());
+                const QRect available = display->availableGeometry();
+                const QSize windowSize = m_liveCwContactsDialog->size();
+                const QList<QPoint> candidates{
+                    QPoint(available.right() - windowSize.width() + 1, available.top()),
+                    available.topLeft(),
+                    QPoint(available.left(), available.bottom() - windowSize.height() + 1),
+                    QPoint(available.right() - windowSize.width() + 1,
+                           available.bottom() - windowSize.height() + 1)};
+                for (const QPoint& position : candidates) {
+                    const QRect windowRect(position, windowSize);
+                    if (available.contains(windowRect) && !textRect.intersects(windowRect)) {
+                        m_liveCwContactsDialog->move(position);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    if (!m_lastCwContactCall.isEmpty()) {
+        onCwCallsignSpotted(m_lastCwContactCall);
+    }
+}
+
+void MainWindow::clearLiveCwContact()
+{
+    m_lastCwContactCall.clear();
+    if (m_liveCwContactsDialog) {
+        m_liveCwContactsDialog->clearContact();
+    }
 }
 
 void MainWindow::showCallsignLookupDialog(const QString& call)

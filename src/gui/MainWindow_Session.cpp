@@ -17,6 +17,7 @@
 #include "FramelessMessageBox.h"
 #include "MixerControlAvailability.h"
 #include "PhoneCwApplet.h"
+#include "PersistentDialog.h"
 #include "SpectrumOverlayMenu.h"
 #include "RfGainPresentation.h"
 #include "RfGainRestore.h"
@@ -28,7 +29,7 @@
 #include "core/CwxLocalKeyer.h"
 #include "core/IambicKeyer.h"
 #include "core/PerfTelemetry.h"
-#if defined(Q_OS_MAC)
+#if defined(Q_OS_MACOS)
 #include "core/UlanziDialMacOSManager.h"
 #include "core/VirtualAudioBridge.h"
 #elif defined(HAVE_PIPEWIRE)
@@ -52,6 +53,7 @@
 #include "TciApplet.h"
 #include "PanadapterStack.h"
 #include "PanSpanControlGate.h"
+#include "PanSliceTitle.h"
 #include "workspace/WorkspaceController.h"
 #include "gui/MiniPanApplet.h"
 #include "gui/MiniPanScope.h"
@@ -64,7 +66,16 @@
 #include "core/AutomationBridgeSettings.h"
 #include "core/AutomationServer.h"
 
+#include <QDesktopServices>
+#include <QDialogButtonBox>
+#include <QLabel>
+#include <QLineEdit>
+#include <QPushButton>
+#include <QVBoxLayout>
 #include <QStatusBar>
+#include <QUrl>
+#include <QJsonArray>
+#include <QJsonDocument>
 #include "core/LogManager.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -179,6 +190,128 @@ void logXvtrWaterfallDecision(quint32 streamId,
 }
 
 } // namespace
+
+void MainWindow::scheduleRadioTabRefresh()
+{
+    if (m_radioTabRefreshPending) {
+        return;
+    }
+    m_radioTabRefreshPending = true;
+    QTimer::singleShot(0, this, [this]() {
+        m_radioTabRefreshPending = false;
+        refreshRadioTabs();
+    });
+}
+
+void MainWindow::refreshRadioTabs()
+{
+    if (!m_titleBar || !m_connPanel) {
+        return;
+    }
+
+    const bool connected = m_radioModel.isConnected();
+    const QString activeSerial = connected ? m_radioModel.serial() : QString();
+    const QJsonObject switcher = QJsonDocument::fromJson(AppSettings::instance()
+        .value("RadioSwitcher", "{}").toString().toUtf8()).object();
+    const QJsonArray hidden = switcher.value(QStringLiteral("hiddenRadios")).toArray();
+
+    QList<RadioTabEntry> tabs;
+    QSet<QString> seen;
+
+    auto statusFor = [&](const QString& serial, bool inUse) {
+        if (connected && serial == activeSerial) {
+            return RadioTabStatus::Connected;
+        }
+        return inUse ? RadioTabStatus::InUse : RadioTabStatus::Available;
+    };
+
+    // LAN radios — the picker's own list, so the strip and the picker can never
+    // disagree about what is on the network.
+    for (const RadioInfo& info : m_connPanel->automationLocalRadios()) {
+        if (info.serial.isEmpty() || seen.contains(info.serial)) {
+            continue;
+        }
+        seen.insert(info.serial);
+        RadioTabEntry entry;
+        entry.id = info.serial;
+        entry.name = info.nickname.isEmpty() ? info.model : info.nickname;
+        if (entry.name.isEmpty()) {
+            entry.name = info.name;
+        }
+        entry.model = info.model;
+        entry.detail = info.callsign;
+        entry.transport = info.address.isNull() ? QStringLiteral("LAN")
+                                                : info.address.toString();
+        entry.status = statusFor(info.serial, info.inUse);
+        tabs.append(entry);
+    }
+
+    // SmartLink radios — same treatment, tagged by transport so the popover can
+    // tell a WAN radio from one on this LAN.
+    for (const WanRadioInfo& wan : std::as_const(m_smartLinkRadios)) {
+        if (wan.serial.isEmpty() || seen.contains(wan.serial)) {
+            continue;
+        }
+        seen.insert(wan.serial);
+        RadioTabEntry entry;
+        entry.id = wan.serial;
+        entry.name = wan.nickname.isEmpty() ? wan.model : wan.nickname;
+        entry.model = wan.model;
+        entry.detail = wan.callsign;
+        entry.transport = QStringLiteral("SmartLink");
+        // "In Use" is a claim that another station has the radio, so make it
+        // only when SmartLink says so ("In Use" / "In_Use").  An empty or
+        // unrecognised status reads as available rather than as taken.
+        QString wanStatus = wan.status;
+        wanStatus.replace(QLatin1Char('_'), QLatin1Char(' '));
+        entry.status = statusFor(wan.serial,
+                                 wanStatus.trimmed().compare(QStringLiteral("In Use"),
+                                                             Qt::CaseInsensitive) == 0);
+        tabs.append(entry);
+    }
+
+    // A radio reached over a routed/VPN address never shows up in discovery, so
+    // without this the operator would be connected with no tab to show for it.
+    if (connected && !activeSerial.isEmpty() && !seen.contains(activeSerial)) {
+        RadioTabEntry entry;
+        entry.id = activeSerial;
+        entry.name = m_radioModel.nickname().isEmpty() ? m_radioModel.model()
+                                                       : m_radioModel.nickname();
+        entry.name = m_connPanel->radioDisplayName(m_radioModel.lastRadioInfo(), entry.name);
+        entry.model = m_radioModel.model();
+        entry.transport = QStringLiteral("Manual");
+        entry.status = RadioTabStatus::Connected;
+        tabs.prepend(entry);
+    }
+
+    if (connected) {
+        for (const RadioTabEntry& entry : std::as_const(tabs)) {
+            if (entry.id == activeSerial) {
+                m_lastSessionTab = entry;
+                break;
+            }
+        }
+    } else if (!m_lastSessionTab.id.isEmpty() && !seen.contains(m_lastSessionTab.id)) {
+        // Dropped and no longer discovered (or never was: a routed radio).
+        RadioTabEntry entry = m_lastSessionTab;
+        entry.status = RadioTabStatus::Available;
+        tabs.prepend(entry);
+    }
+
+    for (RadioTabEntry& entry : tabs) {
+        // The demo's name is its "not on the air" safety label — never offer
+        // to replace it, not even through Radio Setup while connected.
+        entry.canRename = entry.id != SimBackend::demoSerial()
+            && (entry.status == RadioTabStatus::Connected
+                || m_connPanel->canRenameRadio(entry.id));
+        entry.visibleInTabs = entry.status == RadioTabStatus::Connected
+            || entry.id == m_lastSessionTab.id
+            || !hidden.contains(entry.id);
+    }
+    m_titleBar->setRadioTabs(tabs);
+    m_titleBar->setDiscoveredRadios(tabs);
+    m_titleBar->setActiveRadio(activeSerial);
+}
 
 void MainWindow::wireDiscovery()
 {
@@ -365,6 +498,174 @@ void MainWindow::wireDiscovery()
     // "Auto-reconnect to last radio" setting.
     connect(&m_discovery, &RadioDiscovery::radioDiscovered,
             this, &MainWindow::maybeAutoConnectToDiscoveredRadio);
+
+    // ── Title-bar radio tabs ───────────────────────────────────────────────
+    // The strip mirrors the picker: every radio the app can see gets a tab, and
+    // whichever one this client owns is the active one.  Refreshes are
+    // coalesced, so the six signals below cost one rebuild per event-loop turn
+    // no matter how many of them fire together.
+    for (auto signal : {&RadioDiscovery::radioDiscovered,
+                        &RadioDiscovery::radioUpdated}) {
+        connect(&m_discovery, signal, this,
+                [this](const RadioInfo&) { scheduleRadioTabRefresh(); });
+    }
+    connect(&m_discovery, &RadioDiscovery::radioLost, this,
+            [this](const QString&) { scheduleRadioTabRefresh(); });
+    for (auto signal : {&hl2::Hl2Discovery::radioDiscovered,
+                        &hl2::Hl2Discovery::radioUpdated}) {
+        connect(&m_hl2Discovery, signal, this,
+                [this](const RadioInfo&) { scheduleRadioTabRefresh(); });
+    }
+    connect(&m_hl2Discovery, &hl2::Hl2Discovery::radioLost, this,
+            [this](const QString&) { scheduleRadioTabRefresh(); });
+    connect(&m_radioModel, &RadioModel::connectionStateChanged, this,
+            [this](bool) { scheduleRadioTabRefresh(); });
+    connect(&m_smartLink, &SmartLinkClient::radioListReceived, this,
+            [this](const QList<WanRadioInfo>& radios) {
+        m_smartLinkRadios = radios;
+        scheduleRadioTabRefresh();
+    });
+    // Signed out: the picker drops its SmartLink rows, so the strip must too,
+    // or it keeps showing those radios as "available".  A server drop while
+    // still signed in keeps them — that is a transient, not a sign-out.
+    auto dropSmartLinkTabs = [this]() {
+        if (m_smartLinkRadios.isEmpty()) return;
+        m_smartLinkRadios.clear();
+        scheduleRadioTabRefresh();
+    };
+    connect(m_connPanel, &ConnectionPanel::smartLinkSignedOut, this, dropSmartLinkTabs);
+    connect(&m_smartLink, &SmartLinkClient::serverDisconnected, this,
+            [this, dropSmartLinkTabs]() {
+        if (!m_smartLink.isAuthenticated()) dropSmartLinkTabs();
+    });
+
+    if (m_titleBar) {
+        // Clicking a tab means "make that the radio I'm using".  Connecting to
+        // a different radio while one is live would drop the current session
+        // without asking, so route through the picker instead and let the
+        // operator confirm — the tab is a selector, not a disconnect button.
+        connect(m_titleBar, &TitleBar::radioTabActivated, this,
+                [this](const QString& radioId) {
+            if (m_radioModel.isConnected() && m_radioModel.serial() == radioId) {
+                return;   // already the active session — nothing to do
+            }
+            showConnectionDialog();
+            if (!m_connPanel->selectRadio(radioId)) {
+                // The tab outlived the picker's row (a SmartLink radio after
+                // logging out, or one discovery has not re-announced yet).
+                // Say so instead of opening on whatever page was last used.
+                m_connPanel->setStatusText(
+                    tr("That radio isn't in the current radio list — rescan, "
+                       "log in to SmartLink, or connect by IP."));
+            }
+        });
+        connect(m_titleBar, &TitleBar::connectManuallyRequested,
+                this, [this]() {
+            showConnectionDialog();
+            m_connPanel->selectManualConnection();
+        });
+        connect(m_connPanel, &ConnectionPanel::radioNicknameChanged,
+                this, &MainWindow::scheduleRadioTabRefresh);
+        connect(m_connPanel, &ConnectionPanel::radioRenameRequested,
+                this, [this](const RadioInfo& radio, const QString& currentNickname) {
+            auto* dialog = new PersistentDialog(tr("Rename radio"),
+                QStringLiteral("RadioNicknameDialogGeometry"), m_connPanel);
+            dialog->setAttribute(Qt::WA_DeleteOnClose);
+            dialog->setObjectName(QStringLiteral("radioNicknameDialog"));
+            // Follows View → Frameless Window while it is open, like every
+            // other PersistentDialog this window owns.
+            trackPersistentDialog(dialog);
+            auto* form = new QVBoxLayout(dialog->bodyWidget());
+            auto* label = new QLabel(tr("Nickname for %1 (leave blank to reset):").arg(radio.model),
+                                     dialog->bodyWidget());
+            auto* editor = new QLineEdit(dialog->bodyWidget());
+            editor->setObjectName(QStringLiteral("radioNicknameEditor"));
+            editor->setAccessibleName(tr("Radio nickname"));
+            editor->setText(currentNickname);
+            editor->selectAll();
+            label->setBuddy(editor);
+            form->addWidget(label);
+            form->addWidget(editor);
+            auto* buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel,
+                                                 dialog->bodyWidget());
+            buttons->button(QDialogButtonBox::Save)->setAccessibleName(tr("Save radio nickname"));
+            buttons->button(QDialogButtonBox::Save)->setObjectName(QStringLiteral("saveRadioNickname"));
+            form->addWidget(buttons);
+            ThemeManager::instance().applyStyleSheet(dialog, QStringLiteral(
+                "QDialog, QLabel { background: {{color.background.1}}; color: {{color.text.primary}}; }"
+                "QLineEdit { background: {{color.background.0}}; color: {{color.text.primary}};"
+                " border: 1px solid {{color.border.strong}}; padding: 6px; }"
+                "QPushButton { background: {{color.background.2}}; color: {{color.text.primary}}; padding: 6px 14px; }"
+                "QPushButton:focus, QLineEdit:focus { border: 1px solid {{color.border.accent}}; }"));
+            connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::reject);
+            connect(buttons, &QDialogButtonBox::accepted, dialog, &QDialog::accept);
+            connect(dialog, &QDialog::accepted, this, [this, radio, editor]() {
+                m_connPanel->setRadioNickname(radio, editor->text());
+            });
+            dialog->show();
+            editor->setFocus(Qt::OtherFocusReason);
+        });
+        connect(m_titleBar->radioTabBar(), &RadioTabBar::rescanRequested,
+                m_connPanel, &ConnectionPanel::retryDiscoveryRequested);
+        connect(m_titleBar->radioTabBar(), &RadioTabBar::radioActionRequested,
+                this, [this](const QString& radioId, const QString& action) {
+            const bool active = m_radioModel.isConnected() && m_radioModel.serial() == radioId;
+            if (action == QStringLiteral("disconnect")) {
+                if (active) {
+                    emit m_connPanel->disconnectRequested();
+                }
+            } else if (action == QStringLiteral("rename")) {
+                if (m_connPanel->canRenameRadio(radioId)) {
+                    m_connPanel->renameRadio(radioId);
+                } else if (active && m_connPanel->canRenameRadio(m_radioModel.lastRadioInfo())) {
+                    m_connPanel->renameRadio(m_radioModel.lastRadioInfo());
+                } else if (active) {
+                    openRadioSetupPage(QStringLiteral("Radio"));
+                }
+            } else if (action == QStringLiteral("setup")) {
+                if (active) {
+                    openRadioSetupPage();
+                }
+            } else if (action == QStringLiteral("remove") || action == QStringLiteral("restore")) {
+                if (active && action == QStringLiteral("remove")) {
+                    return;
+                }
+                auto& settings = AppSettings::instance();
+                QJsonObject document = QJsonDocument::fromJson(settings
+                    .value("RadioSwitcher", "{}").toString().toUtf8()).object();
+                QJsonArray hidden = document.value(QStringLiteral("hiddenRadios")).toArray();
+                QJsonArray updated;
+                for (const QJsonValue& serial : hidden) {
+                    if (serial.toString() != radioId) {
+                        updated.append(serial);
+                    }
+                }
+                if (action == QStringLiteral("remove")) {
+                    updated.append(radioId);
+                    // Removing the dropped radio's tab dismisses its alarm, as
+                    // a deliberate disconnect would.
+                    if (radioId == m_lastSessionTab.id) {
+                        m_lastSessionTab = {};
+                        if (m_heartbeatMissTimer) m_heartbeatMissTimer->stop();
+                        if (m_titleBar) m_titleBar->clearLinkAlarm();
+                        scheduleRadioTabRefresh();   // it may already be hidden
+                    }
+                }
+                if (updated == hidden) {
+                    return;
+                }
+                document.insert(QStringLiteral("hiddenRadios"), updated);
+                // App-global UI state, one JSON object per feature; versioned so
+                // a later schema change can migrate instead of guessing.
+                document.insert(QStringLiteral("version"), 1);
+                settings.setValue("RadioSwitcher", QString::fromUtf8(
+                    QJsonDocument(document).toJson(QJsonDocument::Compact)));
+                settings.save();
+                scheduleRadioTabRefresh();
+            }
+        });
+    }
+    scheduleRadioTabRefresh();
     connect(m_connPanel, &ConnectionPanel::disconnectRequested,
             this, &MainWindow::disconnectFromRadioByUser);
 
@@ -1064,7 +1365,7 @@ void MainWindow::wireRadioModel()
     // Start/stop PC audio TX when mic_selection changes
     connect(&m_radioModel.transmitModel(), &TransmitModel::micStateChanged,
             this, [this]() {
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
         const bool allowBluetoothTelephonyOutput =
             m_radioModel.transmitModel().micSelection() == "PC";
         QMetaObject::invokeMethod(m_audio, [this, allowBluetoothTelephonyOutput]() {
@@ -1116,7 +1417,7 @@ void MainWindow::wireRadioModel()
             }
         }
     });
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
     const bool allowBluetoothTelephonyOutput =
         m_radioModel.transmitModel().micSelection() == "PC";
     QMetaObject::invokeMethod(m_audio, [this, allowBluetoothTelephonyOutput]() {
@@ -1335,7 +1636,7 @@ void MainWindow::wireRadioModel()
             m_audio->setTransmitting(tx);
 #endif
         }
-#if defined(Q_OS_MAC) || defined(HAVE_PIPEWIRE)
+#if defined(Q_OS_MACOS) || defined(HAVE_PIPEWIRE)
         if (m_daxBridge)
             m_daxBridge->setTransmitting(tx);
 #endif
@@ -1366,7 +1667,7 @@ void MainWindow::wireRadioModel()
                 m_audio->setTransmitting(false);
 #endif
             }
-#if defined(Q_OS_MAC) || defined(HAVE_PIPEWIRE)
+#if defined(Q_OS_MACOS) || defined(HAVE_PIPEWIRE)
             if (m_daxBridge)
                 m_daxBridge->setTransmitting(false);
 #endif
@@ -1500,7 +1801,8 @@ void MainWindow::wirePanLifecycle()
     connect(&m_radioModel, &RadioModel::panFeedSpectrumReady,
             this, [this, profileLoadFrameReady, capturePanFrame](quint32 streamId,
                                                 const QVector<float>& bins,
-                                                qint64 emittedNs) {
+                                                qint64 emittedNs,
+                                                const SpectrumDecodeScale& decodeScale) {
         if (m_shuttingDown || !m_panStack) {
             return;
         }
@@ -1513,7 +1815,7 @@ void MainWindow::wirePanLifecycle()
         deferReceivePresentation(
             ReceivePresentationSource::Flex,
             ReceivePresentationSurface::Spectrum,
-            [this, profileLoadFrameReady, streamId, bins, frameGuard]() {
+            [this, profileLoadFrameReady, streamId, bins, decodeScale, frameGuard]() {
                 if (m_shuttingDown || !m_panStack || !frameGuard.isCurrent()) {
                     return;
                 }
@@ -1524,7 +1826,7 @@ void MainWindow::wirePanLifecycle()
                                                        bins.size())) {
                                 return;
                             }
-                            sw->updateSpectrum(bins);
+                            sw->updateSpectrum(bins, decodeScale);
                             finishPanadapterConnectionAnimation();
                         }
                         return;
@@ -1538,7 +1840,7 @@ void MainWindow::wirePanLifecycle()
                 if (m_radioModel.panadapters().isEmpty()
                     && !profileLoadRadioStateWritesHeld()) {
                     if (auto* sw = spectrum()) {
-                        sw->updateSpectrum(bins);
+                        sw->updateSpectrum(bins, decodeScale);
                         finishPanadapterConnectionAnimation();
                     }
                 } else {
@@ -1849,6 +2151,9 @@ void MainWindow::wirePanLifecycle()
                 // Prime the spectrum widget with the pan's current dBm range on
                 // reconnect so the noise-floor auto-adjust starts from the correct
                 // position. (#3034)
+                // A radio that stores no range hands back a model at its
+                // built-in -130..-40 here; the remembered one goes in first.
+                restoreClientOwnedDbmRange(pan, sw->panIndex());
                 sw->setDbmRange(pan->minDbm(), pan->maxDbm());
             }
             for (SliceModel* slice : m_radioModel.slices()) {
@@ -1866,10 +2171,10 @@ void MainWindow::wirePanLifecycle()
             applet = m_panStack->panadapter(pan->panId());
         }
         // Reuse the "default" placeholder for the first real pan
-        else if (m_panStack->panadapter("default")) {
-            applet = m_panStack->panadapter("default");
+        else if (m_panStack->panadapter(PanSliceTitle::kPlaceholderPanId)) {
+            applet = m_panStack->panadapter(PanSliceTitle::kPlaceholderPanId);
             applet->setPanId(pan->panId());
-            m_panStack->rekey("default", pan->panId());
+            m_panStack->rekey(PanSliceTitle::kPlaceholderPanId, pan->panId());
         } else {
             applet = m_panStack->addPanadapter(pan->panId());
         }
@@ -2075,10 +2380,11 @@ void MainWindow::wirePanLifecycle()
         markProfileLoadPanDimensionsReady(panId, yPixels);
         if (auto* sw = m_panStack->spectrum(panId)) {
             sw->prepareForFftPixelScaleChange();
+            sw->setEncoderYPixels(yPixels);
         }
     });
 
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
     auto repushPanDimensions = [this]() {
         QTimer::singleShot(200, this, [this]() {
             if (m_shuttingDown || !m_panStack) {
@@ -2362,6 +2668,8 @@ void MainWindow::wireRxDemodAudioSinks()
             &m_cwDecoder, &CwRxModel::reset);
     connect(m_cwAudio.get(), &DecoderAudioModel::sourceReset,
             &m_cwCallsignSpotter, &CwCallsignSpotter::clear);
+    connect(m_cwAudio.get(), &DecoderAudioModel::sourceReset,
+            this, &MainWindow::clearLiveCwContact);
 
     // RFC #5468 A5: selected receiver/DAX tap, before speaker gain/mute/mix.
     m_rttyAudio = std::make_unique<DecoderAudioModel>(
@@ -2511,7 +2819,7 @@ void MainWindow::wireDaxIq()
                 &m_radioModel.daxIqModel(), &DaxIqModel::setSampleRate);
     }
 
-#if defined(Q_OS_MAC) || defined(HAVE_PIPEWIRE)
+#if defined(Q_OS_MACOS) || defined(HAVE_PIPEWIRE)
     // DAX enable button in DaxApplet → start/stop DAX bridge
     connect(m_appletPanel->daxApplet(), &DaxApplet::daxToggled,
             this, [this](bool on) {
@@ -2658,6 +2966,20 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
         [this]() { return automationKiwiSdrSnapshot(); });
     m_automation->setTxTimerSnapshotHandler(
         [this]() { return automationTxTimerSnapshot(); });
+    m_automation->setTitleBarSnapshotHandler(
+        [this]() { return automationTitleBarSnapshot(); });
+    m_automation->setTitleBarActionHandler(
+        [this](const QString& action, const QString& target, QString* error,
+               std::function<void()>* activate) {
+            return automationTitleBarAction(action, target, error, activate);
+        });
+    m_automation->setAppletPanelSnapshotHandler(
+        [this]() { return automationAppletPanelSnapshot(); });
+    m_automation->setAppletPanelActionHandler(
+        [this](const QString& action, const QString& value, QString* error,
+               std::function<void()>* activate) {
+            return automationAppletPanelAction(action, value, error, activate);
+        });
     m_automation->setTciRouteSnapshotHandler([this]() {
         if (!tciServer()) {
             return QJsonObject{
@@ -2691,7 +3013,7 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
         QThread* backendThread = m_dialBackend->thread();
         bool queued = false;
         if (lifecycle) {
-#if !defined(Q_OS_LINUX) && !defined(Q_OS_MAC) && !(defined(Q_OS_WIN) && defined(HAVE_HIDAPI))
+#if !defined(Q_OS_LINUX) && !defined(Q_OS_MACOS) && !(defined(Q_OS_WIN) && defined(HAVE_HIDAPI))
             return QJsonObject{
                 {QStringLiteral("ok"), false},
                 {QStringLiteral("supported"), false},
@@ -2725,7 +3047,7 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
         // queued means accepted for delivery, not completed. A later thread
         // shutdown can still prevent delivery; do not report device state from
         // before an asynchronous lifecycle request as its outcome.
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
         QJsonObject snapshot = m_dialBackend->diagnostics();
         snapshot[QStringLiteral("operation")] = diagnostic;
         snapshot[QStringLiteral("enabled")] = dialEnabled();
@@ -2983,6 +3305,93 @@ void MainWindow::syncPanSpanControlPlacement()
         sw->setSpanControlPlacement(
             spanControlLiveOnPan(radioWide, panIds, txPanId, panId), radioWide);
     }
+}
+
+// Color the version row by how current the firmware is, and make it a link to
+// the release notes when it is not.
+//
+// Runs from refreshRadioIdentityLabels(), the single owner of this stack, so
+// it repaints on exactly the edges the text does: connect, the late-arriving
+// infoChanged, a capabilities update, and disconnect. It reads the LABEL's
+// text rather than the model's, which is what makes disconnect correct for
+// free: the label is cleared first, an empty string parses to nothing, and the
+// verdict falls back to Unknown instead of stranding the last radio's color
+// on a blank row.
+//
+// Bold is applied through the stylesheet rather than QFont so the width
+// recalculation that follows sees the wider text; setting it after
+// updateStatusBarMinimumWidth() would clip the row on a narrow window.
+//
+// The verdict comes entirely from the backend's declared FirmwareUpdateSource,
+// with no test of which family it is (see FirmwareCurrency.h). A radio whose
+// backend declares no source, and any station whose backend could not find out
+// what is published, keep the plain secondary color of the model row above.
+void MainWindow::applyFirmwareCurrencyToVersionLabel()
+{
+    using AetherSDR::FirmwareCurrency::Status;
+
+    // Two things have to be true before a verdict exists: the backend must have
+    // declared that its firmware versions are published somewhere, and it must
+    // have found out what the newest one is. Either missing leaves Unknown.
+    const auto& source = m_radioModel.backendCapabilities().firmwareUpdateSource;
+    m_radioFirmwareCurrency =
+        source.has_value()
+            ? AetherSDR::FirmwareCurrency::evaluate(source->publishedReleases,
+                                                    m_radioVersionLabel->text())
+            : Status::Unknown;
+
+    QString color = QStringLiteral("{{color.text.secondary}}");
+    bool bold = false;
+    switch (m_radioFirmwareCurrency) {
+    case Status::Current:
+        color = QStringLiteral("{{color.accent.success}}");
+        break;
+    case Status::Outdated:
+        color = QStringLiteral("{{color.accent.warning}}");
+        bold = true;
+        break;
+    case Status::Unknown:
+        // Deliberately identical to the model row directly above it: no verdict
+        // must look like no opinion, not like a third verdict of its own.
+        break;
+    }
+
+    applyStatusBarCompactLabelStyle(m_radioVersionLabel, color, bold);
+    const QString verdict = AetherSDR::FirmwareCurrency::tooltip(m_radioFirmwareCurrency);
+    m_radioVersionLabel->setToolTip(verdict);
+    // The verdict must not live only in color and a hover: a screen reader
+    // would otherwise hear "4.2.18.41174" and nothing about it being behind
+    // (#4896). Same string as the tooltip, on the accessible channel.
+    m_radioVersionLabel->setAccessibleDescription(verdict);
+    // Reachable by keyboard only while it actually does something. StatusIndicator
+    // gives the row TabFocus when attached; a row that kept it in every state
+    // would add a dead tab stop to the status bar.
+    m_radioVersionLabel->setFocusPolicy(m_radioFirmwareCurrency == Status::Outdated
+                                            ? Qt::TabFocus
+                                            : Qt::NoFocus);
+    m_radioVersionLabel->setCursor(m_radioFirmwareCurrency == Status::Outdated
+                                       ? Qt::PointingHandCursor
+                                       : Qt::ArrowCursor);
+}
+
+// The version row's action (click, Return/Enter, or the accessible Press):
+// open the release notes, but ONLY while it shows an out-of-date version,
+// which is the state the tooltip invites a click in. Otherwise it does nothing.
+void MainWindow::openFirmwareReleaseNotes()
+{
+    if (m_radioFirmwareCurrency != AetherSDR::FirmwareCurrency::Status::Outdated)
+        return;
+    const auto& source = m_radioModel.backendCapabilities().firmwareUpdateSource;
+    if (!source.has_value())
+        return;
+    // The newest release OF THE RADIO'S OWN LINE, never the newest overall: an
+    // operator on v3 must not be handed v4's notes.
+    const QString url = AetherSDR::FirmwareCurrency::releaseNotesUrl(
+        source->releaseNotesUrlTemplate,
+        AetherSDR::FirmwareCurrency::upgradeTargetFor(
+            source->publishedReleases, m_radioVersionLabel->text()));
+    if (!url.isEmpty())
+        QDesktopServices::openUrl(QUrl(url));
 }
 
 } // namespace AetherSDR

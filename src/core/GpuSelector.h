@@ -1,5 +1,7 @@
 #pragma once
 
+#include <QByteArray>
+#include <QList>
 #include <QString>
 #include <QVector>
 
@@ -48,8 +50,30 @@ public:
     // Called from main() BEFORE QApplication.  Reads the saved choice and sets
     // the adapter-selection env for the active backend.  No-op for Auto, when
     // the saved GPU is no longer present, or when the user already set the
-    // relevant environment variable explicitly.
-    static void applyAtStartup();
+    // relevant environment variable explicitly.  `platformArgument` is the
+    // -platform argument, which Qt prefers to QT_QPA_PLATFORM; empty when there
+    // is none.
+    static void applyAtStartup(const QString& platformArgument = QString());
+
+    // Whether the platform request Qt will use picks Wayland (EGL) rather than
+    // X11 (GLX). `request` is the -platform argument when there is one, else
+    // QT_QPA_PLATFORM. It is an ordered list ("wayland;xcb" / "xcb;wayland")
+    // and Qt loads the first entry it can, so only the first decides; match
+    // it, not a substring of the whole value ("xcb;wayland" runs on xcb). When
+    // it names neither, the session decides.
+    static bool requestPicksWayland(const QByteArray& request, bool waylandSession)
+    {
+        if (!request.isEmpty()) {
+            const QByteArray first = request.split(';').constFirst().trimmed();
+            if (first.contains("wayland")) {
+                return true;
+            }
+            if (first.contains("xcb")) {
+                return false;
+            }
+        }
+        return waylandSession;
+    }
 
     // One-line description of what applyAtStartup() did, for logging once the
     // log handler is up (applyAtStartup itself runs before logging exists).

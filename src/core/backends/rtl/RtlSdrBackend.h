@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/backends/IRadioBackend.h"
+#include "core/backends/ModelControlRequest.h"
 #include "core/backends/RestoredRadioState.h"
 #include "core/RtlSliceSettings.h"
 #include "core/RtlDeviceSettings.h"
@@ -13,6 +14,7 @@
 #include <QHash>
 #include <QString>
 #include <QTimer>
+#include <QElapsedTimer>
 #include <QVector>
 
 // librtlsdr forward
@@ -60,6 +62,8 @@ public:
 
     bool createSlice(const QString& panId, double frequencyHz) override;
     bool removeSlice(int sliceId) override;
+    void setActiveSlice(int sliceId) override;
+    ReceiveDispatch requestSliceControl(int sliceId, const SliceControlRequest& request) override;
     void setSliceFrequency(int sliceId, double hz) override;
     bool requestReceiveTune(int sliceId, double hz, ReceiveTuneView view) override;
     bool recenterReceiveCapture(const QString& panId) override;
@@ -74,10 +78,14 @@ public:
     void setPanWeightedAverage(const QString& panId, bool on) override;
     void setSliceAudioMute(int sliceId, bool mute) override;
     ReceiveDispatch requestSliceAudio(int sliceId, const SliceAudioRequest& request) override;
+    ReceiveDispatch requestSliceWfm(int sliceId, const SliceWfmRequest& request) override;
     ReceiveDispatch requestSliceSquelch(int sliceId, const SliceSquelchRequest& request) override;
     void setSliceAudioGain(int sliceId, int gainPercent) override;
     void setSliceAudioPan(int sliceId, int panPercent) override;
     void setSliceSquelch(int sliceId, bool enabled, int level) override;
+    void setSliceAutoSquelch(int sliceId, bool enabled, int marginDb) override;
+    void setSliceWfmDeemphasis(int sliceId, int microseconds) override;
+    void setSliceWfmForceMono(int sliceId, bool forceMono) override;
     void setKeying(bool key, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {}) override;
     void invokeExtension(const QString& ns, const QString& verb,
                          quint64 requestId, const QVariant& arg = {}) override;
@@ -114,6 +122,7 @@ private:
     int deviceIndexFromParams(const QVariantMap& params) const;
     QString serialFromParams(const QVariantMap& params) const;
     friend struct RtlCaptureBackendTestAccess;
+    RtlCaptureTransaction::Receiver initialReceiver() const;
     void startCapture(std::unique_ptr<RtlSdrWorker> worker);
     void serviceCapture();
     bool requestCapture(const RtlCaptureTransaction::Desired& desired,
@@ -121,6 +130,8 @@ private:
                         bool fromDrag = false);
     void publishCapture();
     void drainAudio();
+    void observeWfm(const RtlReceivePipeline::Packet& packet);
+    void expireWfmObservations();
     void publishLegacyPcm(const QByteArray& pcm, const QByteArray& preMonitor);
     void retireNativeAudio();
     void emitSliceState(const RtlCaptureTransaction::Receiver& receiver);
@@ -130,6 +141,14 @@ private:
     QVector<RtlSliceSettings::Slice> acceptedSettings() const;
     void finishExtensions(bool success, RtlCaptureTransaction::Token token = {});
     QVariantMap deviceSettingsStatus() const;
+    void publishRfMeterDefinitions(bool retireValues = false);
+    // Receivers whose SLC:LEVEL sample no longer describes them once `next`
+    // replaces `prior`: the level is the peak detector bin in the receiver's
+    // passband, so it depends on the session, front end, capture placement, DC
+    // suppression, and that receiver's passband, mode and membership. Monitor
+    // gain/pan/mute and squelch move none of these.
+    static std::vector<int> staleRfMeterIds(const RtlCaptureTransaction::State& prior,
+                                            const RtlCaptureTransaction::State& next);
     void saveAcceptedDeviceSettings();
     void verifyDeviceSettingsIdentity(const QString& serial);
     bool acceptsFrame(quint64 session, quint64 revision) const;
@@ -171,6 +190,7 @@ private:
     int m_panRfGainDb{kDefaultRfGainDb};
     int m_ppmCorrection{0};
     bool m_dcSuppression = false;
+    bool m_receiveMetersEnabled = true;
     RtlDeviceSettings::ReadResult m_savedDeviceSettings;
     bool m_deviceSettingsAllowed = false;
     bool m_deviceSettingsSaved = false;
@@ -187,6 +207,9 @@ private:
     int m_receiverCapacity = kQualifiedReceiverCapacity;
     RtlCaptureTransaction m_capture{{8, kQualifiedReceiverCapacity}};
     std::optional<RtlCaptureTransaction::State> m_lastPublished;
+    // Focus belongs to a configured stable identity, including parked receivers.
+    // It does not change the capture or demodulator bank.
+    int m_activeSliceId = -1;
     struct Monitor { int gain = 100; int pan = 50; bool mute = false; };
     std::array<Monitor, 8> m_monitors;
     struct NativeAudio {
@@ -218,7 +241,28 @@ private:
 
     // Worker thread (owns async USB reader & RtlSdrDdc engine)
     std::unique_ptr<RtlSdrWorker> m_worker;
+    std::shared_ptr<RtlStartupTrace> m_startupTrace;
+    void markStartup(RtlStartupTrace::Kind kind, int slot = -1);
+    std::array<WfmStereoStatus, 8> m_wfmStatus{};
+    std::array<QElapsedTimer, 8> m_wfmObservationAge;
+    std::array<QElapsedTimer, 8> m_wfmPublicationAge;
+    std::array<WfmReceptionDiagnostics, 8> m_wfmReception;
+    struct WfmObservationIdentity {
+        std::uint64_t instance = 0;
+        std::uint64_t epoch = 0;
+        std::uint32_t sequence = 0;
+        bool operator==(const WfmObservationIdentity&) const = default;
+    };
+    std::array<std::optional<WfmObservationIdentity>, 8> m_wfmLastObservation;
     RtlReceivePipeline::Diagnostics m_diagnostics; // owner-thread health cache
+    struct PcmDiagnostics {
+        quint64 packets = 0, frames = 0, nonzeroSamples = 0, nonfiniteSamples = 0;
+        quint64 discontinuities = 0, queueAgeTotalNs = 0, queueAgeMaxNs = 0;
+        quint64 lastDeliveryMs = 0, maxDeliveryGapMs = 0;
+        double peak = 0, sumSquaresLeft = 0, sumSquaresRight = 0;
+    };
+    // Slots 0..7 are independent pre-monitor taps; slot 8 is the speaker mix.
+    std::array<PcmDiagnostics, 9> m_pcmDiagnostics{};
     RtlSdrDdc* ddc();
 };
 

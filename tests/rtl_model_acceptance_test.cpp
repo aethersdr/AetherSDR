@@ -12,9 +12,12 @@
 #include <QElapsedTimer>
 #include <QPointer>
 #include <cstdio>
+#include <algorithm>
 #include <cmath>
 #include <limits>
+#include <memory>
 #include <thread>
+#include <utility>
 
 using namespace AetherSDR;
 using T = rtl::RtlCaptureTransaction;
@@ -38,15 +41,44 @@ struct RtlCaptureBackendTestAccess {
     {
         backend.m_receiverCapacity = capacity;
         backend.m_capture = T({8, static_cast<std::size_t>(capacity)});
-        backend.m_requested.hardware = {100'000'000, 2'400'000, 0, 0, 0, 240};
-        backend.m_requested.receivers = {{{0, 100'000'000, -100'000, 100'000, 0, 0, 0}, T::Mode::Wfm}};
+        backend.m_requested = {};
+        backend.m_requested.hardware = {static_cast<std::uint32_t>(backend.m_panCenterHz),
+            backend.m_sampleRateHz, 0, 0, backend.m_ppmCorrection, 240};
+        backend.m_requested.dcSuppression = backend.m_dcSuppression;
+        // Keep the production bootstrap selected by handRestoredStateToBackend;
+        // replace only the USB entry point. In particular, do not inject a
+        // different WFM graph or discard the provisional monitor mute here.
+        backend.m_requested.receivers = {backend.initialReceiver()};
         if (capacity > 1) {
+            // The separate membership fixture deliberately admits several FM
+            // receivers; it has no saved receiver state or production capacity.
+            backend.m_requested.hardware = {100'000'000, 2'400'000, 0, 0, 0, 240};
             backend.m_requested.receivers = {{{0, 100'000'000, -8000, 8000, 0, 3000, 3000}, T::Mode::Fm}};
         }
         backend.startCapture(std::make_unique<RtlSdrWorker>(std::move(device), nullptr, capacity));
     }
     static bool idle(const RtlSdrBackend& backend) { return !backend.m_capture.busy() && !backend.m_pendingDrag; }
     static T::State state(const RtlSdrBackend& backend) { return *backend.m_capture.confirmed(); }
+    static void pilot(RtlSdrBackend& backend, int id, T::Token token, bool stereo,
+                      std::uint32_t sequence = 2, double magnitude = 0.1)
+    {
+        RtlReceivePipeline::Packet packet;
+        const auto& receivers = backend.m_lastPublished->receivers;
+        const auto receiver = std::ranges::find_if(receivers,
+            [id](const auto& value) { return value.passband.stableId == id; });
+        packet.slot = id; packet.token = token;
+        packet.wfmStereoDetected = stereo && !receiver->wfmForceMono;
+        packet.wfmReception = WfmReceptionDiagnostics{true, magnitude, stereo,
+            stereo ? 5000U : 0U, 0, 0, 6000, 5000, 0.06, 0.03, 100, 0, 93, 187, sequence};
+        backend.observeWfm(packet);
+    }
+    static void expirePilot(RtlSdrBackend& backend, int id)
+    {
+        backend.m_wfmObservationAge[id] = QElapsedTimer();
+        backend.m_wfmObservationAge[id].start();
+        QThread::msleep(510);
+        backend.expireWfmObservations();
+    }
     static void spectrum(RtlSdrBackend& backend, const QByteArray& frame, T::Token token)
     { emit backend.m_worker->spectrumFrameReady(token.session, token.revision, 0, frame); }
 };
@@ -64,11 +96,261 @@ template<class F> static bool waitFor(F predicate)
     }
     return predicate();
 }
+// This fixture's capture remains 2.4 MS/s with 8192 complex frames per
+// callback. Queue at most one callback at a time and no faster than real time.
+// Accumulating callbacks during off-thread planning would replay a burst into
+// nonblocking WDSP and test artificial output underruns instead of adoption.
+class CaptureClock {
+public:
+    explicit CaptureClock(std::shared_ptr<test::DeviceState> device)
+        : m_device(std::move(device))
+    { m_clock.start(); }
+    void advance()
+    {
+        const qint64 now = m_clock.elapsed();
+        if (m_device->starts.load() == 0 || m_device->callbacks.load() < m_queued
+            || now < m_nextBlockMs) { return; }
+        m_device->block();
+        ++m_queued;
+        m_nextBlockMs = now + 4;
+    }
+private:
+    std::shared_ptr<test::DeviceState> m_device;
+    QElapsedTimer m_clock;
+    int m_queued = 0;
+    qint64 m_nextBlockMs = 0;
+};
+
+static std::uint64_t monotonicMs()
+{
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+static void analogBankRestoreAndSharedCapture()
+{
+    using Access = rtl::RtlCaptureBackendTestAccess;
+    const RadioSettingsScope scope("rtl", "analog-bank-restore");
+    QVector<RtlSliceSettings::Slice> saved;
+    for (int id = 0; id < 8; ++id) {
+        RtlSliceSettings::Slice receiver;
+        receiver.id = id;
+        receiver.frequencyHz = 99'400'000 + id * 200'000;
+        receiver.mode = id < 2 ? QStringLiteral("WFM") : QStringLiteral("FMN");
+        receiver.filterLowHz = id < 2 ? -90000 : -8000;
+        receiver.filterHighHz = -receiver.filterLowHz;
+        receiver.wfmDeemphasisUs = id == 0 ? 50 : 75;
+        receiver.wfmForceMono = id == 0;
+        receiver.audioGain = 40 + id * 5;
+        receiver.audioPan = id * 12;
+        receiver.audioMute = id == 3;
+        receiver.squelchEnabled = id >= 2;
+        receiver.automaticSquelch = id >= 2;
+        receiver.automaticSquelchMarginDb = 5 + id;
+        saved.append(receiver);
+    }
+    check(RtlSliceSettings(scope).patch(100'000'000, 2'400'000, saved), "eight analog saved recipes seeded");
+    RadioModel model;
+    check(model.rebuildBackendForTest("rtl"), "restore bank model initialized");
+    RadioModelSliceLifecycleTestAccess::restore(model, "analog-bank-restore");
+    auto& backend = *static_cast<rtl::RtlSdrBackend*>(model.backend());
+    auto device = std::make_shared<test::DeviceState>();
+    CaptureClock clock(device);
+    Access::start(backend, std::make_unique<test::InjectedDevice>(device), 8);
+    device->releaseReadback();
+    const auto settled = [&] { clock.advance(); return Access::idle(backend); };
+    check(waitFor([&] { return settled() && model.slice(7); }), "eight analog saved receivers adopted");
+    if (!model.slice(7)) { backend.disconnectRadio(); return; }
+    for (int id = 0; id < 8; ++id) {
+        const auto* slice = model.slice(id);
+        check(slice && slice->mode() == saved[id].mode && slice->frequency() * 1e6 == saved[id].frequencyHz
+            && slice->audioGain() == saved[id].audioGain && slice->audioPan() == saved[id].audioPan
+            && slice->audioMute() == saved[id].audioMute && slice->filterLow() == saved[id].filterLowHz
+            && slice->automaticSquelch() == saved[id].automaticSquelch
+            && slice->automaticSquelchMarginDb() == saved[id].automaticSquelchMarginDb,
+            "restore retains each stable receiver recipe and monitor settings");
+    }
+    check(model.slice(0)->wfmForceMono() && model.slice(0)->wfmDeemphasisUs() == 50
+        && !model.slice(1)->wfmForceMono() && model.slice(1)->wfmDeemphasisUs() == 75,
+        "restore retains distinct analog stereo and deemphasis policies");
+    model.slice(2)->setActive(true);
+    const auto before = Access::state(backend);
+    backend.invokeExtension("rtl", "ppm.set", 800, -16);
+    backend.invokeExtension("rtl", "ppm.set", 801, -17);
+    check(waitFor([&] { return settled() && Access::state(backend).hardware.ppm == -17; }),
+        "coalesced PPM edit reaches the entire eight-receiver capture");
+    check(Access::state(backend).receivers == before.receivers && model.slice(2)->isActive(),
+        "shared PPM changes preserve every recipe and selection");
+    const auto valid = Access::state(backend);
+    backend.invokeExtension("rtl", "sample_rate.set", 802, 0);
+    check(Access::idle(backend) && Access::state(backend).token == valid.token,
+        "invalid capture rate refuses without altering eight receivers");
+    device->failWriteAt = device->writes + 1;
+    backend.invokeExtension("rtl", "ppm.set", 803, -18);
+    check(waitFor([&] { return settled(); }) && backend.isConnected()
+        && Access::state(backend).hardware.ppm == -17
+        && Access::state(backend).receivers == before.receivers && model.slice(2)->isActive(),
+        "failed PPM application compensates all eight recipes without moving focus");
+    backend.disconnectRadio();
+}
+
+static void analogBankSelection(int capacity = 4)
+{
+    using Access = rtl::RtlCaptureBackendTestAccess;
+    RadioModel model;
+    check(model.rebuildBackendForTest("rtl"), "analog bank model initialized");
+    auto& backend = *static_cast<rtl::RtlSdrBackend*>(model.backend());
+    auto device = std::make_shared<test::DeviceState>();
+    CaptureClock clock(device);
+    Access::start(backend, std::make_unique<test::InjectedDevice>(device), capacity);
+    device->releaseReadback();
+    const auto settled = [&] { clock.advance(); return Access::idle(backend); };
+    check(waitFor([&] { return settled() && model.slice(0); }), "analog bank initial receiver adopted");
+    if (!model.slice(0)) { backend.disconnectRadio(); return; }
+    const auto selected = [&](int id) {
+        int count = 0;
+        for (int slot = 0; slot < 8; ++slot) {
+            if (const auto* slice = model.slice(slot); slice && slice->isActive()) {
+                ++count;
+                if (slot != id) { return false; }
+            }
+        }
+        return count == 1;
+    };
+    check(selected(0), "bootstrap selects exactly one stable receiver");
+    for (int id = 1; id < capacity; ++id) {
+        check(backend.createSlice({}, 99'500'000 + id * 200'000), "analog sibling creation admitted");
+        check(waitFor([&] { return settled() && model.slice(id); }), "analog sibling creation adopted");
+        if (!model.slice(id)) { backend.disconnectRadio(); return; }
+        model.slice(id)->setActive(true);
+        check(selected(id), "selection clears every previous active model");
+    }
+    check(!backend.createSlice({}, 100'650'000), "receiver above configured capacity refused at evaluation capacity");
+    check(waitFor([&] {
+        clock.advance();
+        for (int id = 0; id < capacity; ++id) {
+            if (!model.meterModel().relativeLevelForSlice(id)) { return false; }
+        }
+        return true;
+    }), "real injected IQ reaches relative RF meters for every stable receiver ID");
+    for (int id = 0; id < capacity; ++id) {
+        check(!model.meterModel().sLevelForSlice(id), "RTL never claims a calibrated S reading");
+    }
+
+    for (int id = 0; id < capacity; ++id) {
+        model.slice(id)->setAutomaticSquelch(true, 5 + id);
+        model.slice(id)->setAudioMute(id % 2);
+    }
+    check(waitFor([&] { return settled() && model.slice(capacity - 1)->automaticSquelch(); }),
+        "all receiver Auto requests adopt");
+    for (int id = 0; id < capacity; ++id) {
+        check(model.slice(id)->automaticSquelchMarginDb() == 5 + id
+            && model.slice(id)->audioMute() == bool(id % 2), "SQL and mute stay per receiver");
+    }
+    const auto beforeFocus = Access::state(backend);
+    const int beforeFocusWrites = device->writes;
+    for (int iteration = 0; iteration < 32; ++iteration) {
+        const int id = iteration % capacity;
+        model.slice(id)->setActive(true);
+        check(selected(id), "rapid focus retains one exact model identity");
+    }
+    check(Access::state(backend).token == beforeFocus.token && device->writes == beforeFocusWrites
+        && Access::state(backend).receivers == beforeFocus.receivers,
+        "focus changes no capture revision, hardware, monitor or receiver recipe");
+    model.slice(3)->setActive(true); // start the reentrant scenario on its observed source
+    bool redirected = false;
+    const auto redirect = QObject::connect(model.slice(3), &SliceModel::activeChanged, &model,
+        [&](bool active) {
+            if (!active && !redirected) { redirected = true; model.slice(2)->setActive(true); }
+        });
+    model.slice(1)->setActive(true);
+    check(redirected && selected(2), "reentrant newer selection supersedes the old publication tail");
+    QObject::disconnect(redirect);
+    model.slice(3)->setActive(true);
+    model.slice(1)->setMode("WFM");
+    check(waitFor([&] { return settled() && model.slice(1)->mode() == "WFM"; }),
+        "WFM admitted beside three native analog receivers");
+    model.slice(2)->setMode("WFM");
+    check(waitFor([&] { return settled() && model.slice(2)->mode() == "WFM"; }),
+        "second WFM receiver independently adopted");
+    model.slice(1)->setWfmForceMono(true);
+    model.slice(1)->setWfmDeemphasis(50);
+    model.slice(1)->setFilterWidth(-90000, 90000);
+    model.slice(2)->setWfmForceMono(false);
+    model.slice(2)->setWfmDeemphasis(75);
+    model.slice(2)->setFilterWidth(-80000, 80000);
+    check(waitFor([&] { return settled() && model.slice(1)->filterLow() == -90000
+        && model.slice(2)->filterLow() == -80000; }), "two independent WFM recipes adopt");
+    check(model.slice(1)->wfmForceMono()
+        && model.slice(1)->wfmDeemphasisUs() == 50
+        && !model.slice(2)->wfmForceMono()
+        && model.slice(2)->wfmDeemphasisUs() == 75 && selected(3),
+        "WFM recipes and focus survive sibling publications");
+    const auto beforeRefusal = Access::state(backend);
+    int warnings = 0;
+    QObject::connect(&backend, &IRadioBackend::configurationWarning, &model, [&](const QString&) { ++warnings; });
+    model.slice(0)->setMode("AM");
+    check(Access::idle(backend) && Access::state(backend).token == beforeRefusal.token
+        && model.slice(0)->mode() == "FM" && model.slice(1)->wfmForceMono()
+        && warnings >= 1, "unsupported legacy combinations refuse without altering recipes");
+    model.slice(2)->setActive(true);
+    auto* pan = model.panadapter(model.slice(2)->panId());
+    check(pan != nullptr, "multi receiver pan materialized");
+    if (pan) {
+        model.requestPanCenter(pan->panId(), 105.0, -1.0, IRadioBackend::PanCenterIntent::Drag);
+        check(waitFor([&] { return settled() && Access::state(backend).receivingIds.empty(); }),
+            "all configured analog receivers can park together");
+        for (int id = 0; id < capacity; ++id) {
+            check(!model.meterModel().relativeLevelForSlice(id), "parking withdraws live RF meter samples");
+        }
+
+        check(selected(2) && model.slice(1)->wfmDeemphasisUs() == 50
+            && !model.slice(1)->wfmReceptionDiagnostics().valid,
+            "parked selection and recipe survive while reception clears");
+        model.requestPanCenter(pan->panId(), 100.0, -1.0, IRadioBackend::PanCenterIntent::Drag);
+        check(waitFor([&] { return settled() && Access::state(backend).receivingIds.size() == static_cast<std::size_t>(capacity); }),
+            "all configured analog receivers resume at their configured RF");
+    }
+    QPointer<SliceModel> retired = model.slice(2);
+    QObject::connect(&backend, &IRadioBackend::sliceRemoved, &model, [&](int id) {
+        if (id == 2 && retired) { QCoreApplication::removePostedEvents(retired, QEvent::DeferredDelete); }
+    });
+    check(backend.removeSlice(2), "selected middle slot removal admitted");
+    check(waitFor([&] { return settled() && !model.slice(2); }), "selected middle slot removal adopted");
+    check(selected(0), "removed selection resolves deterministically to a surviving identity");
+    check(model.meterModel().findMeter("SLC", "LEVEL", 2) == -1,
+        "removed receiver withdraws its meter definition");
+
+    check(backend.createSlice({}, 100'200'000), "middle stable slot reuse admitted");
+    check(waitFor([&] { return settled() && model.slice(2); }), "middle stable slot replacement adopted");
+    check(retired && model.slice(2) != retired && selected(0), "replacement never inherits retired selection");
+    if (retired) {
+        int staleFocusEdges = 0;
+        QObject::connect(retired, &SliceModel::activeChanged, &model,
+            [&](bool) { ++staleFocusEdges; });
+        retired->setActive(true);
+        check(selected(0) && staleFocusEdges == 0,
+            "retired selection cannot emit a UI focus edge or target a reused numeric slot");
+        retired->deleteLater();
+    }
+    const auto disconnectDuringSelect = QObject::connect(model.slice(0), &SliceModel::activeChanged,
+        &model, [&](bool active) { if (!active) { backend.disconnectRadio(); } });
+    model.slice(1)->setActive(true);
+    check(!backend.isConnected() && !model.slice(1)->isActive(),
+        "reentrant disconnect cancels the unaccepted selection tail");
+    check(!model.meterModel().relativeLevelForSlice(0), "disconnect clears relative meter samples");
+    QObject::disconnect(disconnectDuringSelect);
+    backend.disconnectRadio();
+}
+
 int main(int argc, char** argv)
 {
     TestSettingsProfile profile(QStringLiteral("rtl-model-acceptance"));
     if (!profile.isValid()) { return 1; }
     QCoreApplication app(argc, argv); AppSettings::instance().load();
+    analogBankSelection();
+    analogBankSelection(8);
+    analogBankRestoreAndSharedCapture();
     const RadioSettingsScope scope("rtl", "model-accepted");
     RtlSliceSettings::Slice saved;
     saved.id = 3; saved.frequencyHz = 99'900'000; saved.mode = "FM";
@@ -83,10 +365,11 @@ int main(int argc, char** argv)
     RadioModelSliceLifecycleTestAccess::restore(model, "model-accepted");
     auto& backend = *static_cast<rtl::RtlSdrBackend*>(model.backend());
     auto device = std::make_shared<test::DeviceState>();
+    CaptureClock captureClock(device);
     rtl::RtlCaptureBackendTestAccess::start(backend, std::make_unique<test::InjectedDevice>(device));
     device->releaseReadback();
     check(waitFor([&] {
-        device->block();
+        captureClock.advance();
         return model.slice(3) && !model.slice(0) && rtl::RtlCaptureBackendTestAccess::idle(backend);
     }), "capacity-one restore materializes stable ID 3 instead of zero");
     QPointer<SliceModel> slice = model.slice(3);
@@ -131,7 +414,7 @@ int main(int argc, char** argv)
     RadioModelSliceLifecycleTestAccess::flush(model);
     check(scope.featureExact("RtlSlices") == initial, "forced pending flush preserves accepted document");
     check(waitFor([&] {
-        device->block();
+        captureClock.advance();
         return rtl::RtlCaptureBackendTestAccess::idle(backend) && slice->frequency() == 100.1
             && slice->filterLow() == -7000 && slice->audioGain() == 37 && slice->audioMute()
             && slice->audioPan() == 73 && slice->squelchLevel() == 61;
@@ -142,6 +425,23 @@ int main(int argc, char** argv)
     check(RtlSliceSettings(scope).load().document.slices[3].squelchEnabled
         && RtlSliceSettings(scope).load().document.slices[3].squelchLevel == 61,
           "only accepted squelch threshold reaches persistence");
+    slice->setAutomaticSquelch(true, 12);
+    check(!slice->automaticSquelch(), "pending Auto intent is not published optimistically");
+    check(waitFor([&] { captureClock.advance(); return rtl::RtlCaptureBackendTestAccess::idle(backend)
+        && slice->automaticSquelch(); }), "Auto command adopts on sparse stable receiver");
+    check(slice->automaticSquelchMarginDb() == 12 && slice->squelchLevel() == 61,
+        "Auto margin is distinct from preserved manual threshold");
+    RadioModelSliceLifecycleTestAccess::flush(model);
+    const auto sqlSaved = RtlSliceSettings(scope).load().document.slices[3];
+    check(sqlSaved.automaticSquelch && sqlSaved.automaticSquelchMarginDb == 12,
+        "accepted per-receiver Auto persists");
+    slice->setAutomaticSquelch(true, 100);
+    check(rtl::RtlCaptureBackendTestAccess::idle(backend) && slice->automaticSquelchMarginDb() == 12,
+        "invalid Auto margin is refused");
+    slice->setSquelch(true, 61);
+    check(waitFor([&] { captureClock.advance(); return rtl::RtlCaptureBackendTestAccess::idle(backend)
+        && !slice->automaticSquelch(); }), "same manual threshold still exits Auto");
+    RadioModelSliceLifecycleTestAccess::flush(model);
     const auto accepted = scope.featureExact("RtlSlices");
     const int refusedBefore = observed;
     slice->setFilterWidth(9000, -9000); slice->setMode("not-a-mode");
@@ -151,14 +451,14 @@ int main(int argc, char** argv)
     check(scope.featureExact("RtlSlices") == accepted, "refused edits never persist");
     // A return to the already observed value must still supersede pending intent.
     slice->setFrequency(100.2); slice->setFrequency(100.1);
-    check(waitFor([&] { device->block(); return rtl::RtlCaptureBackendTestAccess::idle(backend); }),
+    check(waitFor([&] { captureClock.advance(); return rtl::RtlCaptureBackendTestAccess::idle(backend); }),
           "observed-value request cancels a pending different value");
     check(slice->frequency() == 100.1 && !frequencies.contains(100.2),
           "superseded receiver-only value never becomes observable");
     const int modeBefore = observed;
     slice->setMode("FMN");
     check(slice->mode() == "FM" && observed == modeBefore, "mode waits for adopted DSP");
-    check(waitFor([&] { device->block(); return slice->mode() == "FMN" && rtl::RtlCaptureBackendTestAccess::idle(backend); }),
+    check(waitFor([&] { captureClock.advance(); return slice->mode() == "FMN" && rtl::RtlCaptureBackendTestAccess::idle(backend); }),
           "accepted mode reaches model through backend status");
     // Fail the center write, then hold the verified compensation readback.
     {
@@ -183,7 +483,7 @@ int main(int argc, char** argv)
     slice->setFrequency(107.0);
     check(slice->frequency() == 100.1, "both hardware requests remain invisible while pending");
     device->releaseReadback();
-    check(waitFor([&] { device->block(); return rtl::RtlCaptureBackendTestAccess::idle(backend) && slice->frequency() == 107.0; }),
+    check(waitFor([&] { captureClock.advance(); return rtl::RtlCaptureBackendTestAccess::idle(backend) && slice->frequency() == 107.0; }),
           "latest hardware state publishes after compensation");
     check(!frequencies.contains(106.0), "superseded hardware state never publishes");
     // Display geometry must never become a hardware/sample-rate/slice command.
@@ -213,14 +513,14 @@ int main(int argc, char** argv)
         slice->setFrequency(107.05);
         model.requestPanCenter(pan->panId(), 107.05);
         check(slice->frequency() == 107.0, "typed frequency waits for receiver adoption");
-        check(waitFor([&] { device->block(); return slice->frequency() == 107.05
+        check(waitFor([&] { captureClock.advance(); return slice->frequency() == 107.05
             && rtl::RtlCaptureBackendTestAccess::idle(backend); }), "typed in-window tune adopted");
         check(std::abs(pan->centerMhz() - 107.05) < 0.002 && device->writes == beforeWrites,
               "typed centering moves only the view when capture already fits");
         check(model.requestConfirmedReceiveTune(3, 107.08, IRadioBackend::ReceiveTuneView::Center),
               "confirmed GUI tune admits receiver and view as one intent");
         check(slice->frequency() == 107.05, "joint typed intent remains unobserved until adoption");
-        check(waitFor([&] { device->block(); return slice->frequency() == 107.08
+        check(waitFor([&] { captureClock.advance(); return slice->frequency() == 107.08
             && rtl::RtlCaptureBackendTestAccess::idle(backend); }), "joint typed intent adopted");
         check(std::abs(pan->centerMhz() - 107.08) < 0.002 && device->writes == beforeWrites,
               "joint in-window typed intent centers display without USB writes");
@@ -228,7 +528,7 @@ int main(int argc, char** argv)
         check(model.requestConfirmedReceiveTune(3, 107.2, IRadioBackend::ReceiveTuneView::Center)
             && model.requestConfirmedReceiveTune(3, 107.08, IRadioBackend::ReceiveTuneView::Preserve),
               "newer preserve-view tune supersedes an unadopted centering intent");
-        check(waitFor([&] { device->block(); return rtl::RtlCaptureBackendTestAccess::idle(backend); })
+        check(waitFor([&] { captureClock.advance(); return rtl::RtlCaptureBackendTestAccess::idle(backend); })
             && slice->frequency() == 107.08 && pan->centerMhz() == acceptedView,
               "superseded frequency and centering never become observations");
         check(!model.requestConfirmedReceiveTune(3, 3000.0, IRadioBackend::ReceiveTuneView::Center)
@@ -252,12 +552,12 @@ int main(int argc, char** argv)
         const auto captured = rtl::RtlCaptureBackendTestAccess::state(backend);
         check(model.requestConfirmedReceiveTune(3, captured.capture.centerHz / 1e6,
             IRadioBackend::ReceiveTuneView::Center), "operator can tune onto DC without an implicit capture retune");
-        check(waitFor([&] { device->block(); return rtl::RtlCaptureBackendTestAccess::idle(backend); }),
+        check(waitFor([&] { captureClock.advance(); return rtl::RtlCaptureBackendTestAccess::idle(backend); }),
               "on-DC receiver tune adopted");
         check(!backend.healthSnapshot().values.value("rtlCaptureDcClear").toBool(),
               "DC overlap is operator-visible rather than hidden by a removed bin");
         check(model.requestReceiveCaptureRecenter(pan->panId()), "explicit DC placement admitted");
-        check(waitFor([&] { device->block(); return rtl::RtlCaptureBackendTestAccess::idle(backend); }),
+        check(waitFor([&] { captureClock.advance(); return rtl::RtlCaptureBackendTestAccess::idle(backend); }),
               "explicit DC placement adopted");
         const auto displaced = rtl::RtlCaptureBackendTestAccess::state(backend);
         check(displaced.hardware.centerHz != captured.hardware.centerHz
@@ -322,7 +622,7 @@ int main(int argc, char** argv)
         QObject::disconnect(frameConnection);
         QObject::disconnect(waterfallConnection);
         slice->setFrequency(107.0);
-        check(waitFor([&] { device->block(); return slice->frequency() == 107.0
+        check(waitFor([&] { captureClock.advance(); return slice->frequency() == 107.0
             && rtl::RtlCaptureBackendTestAccess::idle(backend); }), "test receiver returned after viewport checks");
     }
     // A staged object cannot control an otherwise-connected backend.
@@ -339,33 +639,102 @@ int main(int argc, char** argv)
         if (value == 107.1) { ++reentrantEdits; slice->setAudioGain(41); }
     });
     backend.setSliceFrequency(3, 107'100'000);
-    check(waitFor([&] { device->block(); return model.slice(3) == slice && slice->frequency() == 107.1
+    check(waitFor([&] { captureClock.advance(); return model.slice(3) == slice && slice->frequency() == 107.1
         && slice->audioGain() == 41 && rtl::RtlCaptureBackendTestAccess::idle(backend); }),
           "accepted state reclaims the staged object and adopts a reentrant edit");
     check(reentrantEdits == 1, "reclaimed binding publishes the accepted tune once");
     QObject::disconnect(reentrant);
     slice->setMode("WFM");
-    check(waitFor([&] { device->block(); return slice->mode() == "WFM"
+    check(waitFor([&] { captureClock.advance(); return slice->mode() == "WFM"
         && rtl::RtlCaptureBackendTestAccess::idle(backend); }),
-          "legacy WFM mode adopted before unsupported filter request");
-    const int wfmLow = slice->filterLow();
-    const int wfmHigh = slice->filterHigh();
-    const int wfmObserved = observed;
-    RadioModelSliceLifecycleTestAccess::flush(model);
-    const auto wfmSettings = scope.featureExact("RtlSlices");
-    slice->setFilterWidth(-90'000, 90'000);
-    slice->setSquelch(true, 75);
-    check(rtl::RtlCaptureBackendTestAccess::idle(backend)
-        && slice->filterLow() == wfmLow && slice->filterHigh() == wfmHigh
-        && observed == wfmObserved && !slice->squelchOn(),
-          "unsupported WFM filter neither queues work nor changes observed state");
-    RadioModelSliceLifecycleTestAccess::flush(model);
-    check(scope.featureExact("RtlSlices") == wfmSettings,
-          "unsupported WFM filter does not persist a cosmetic passband");
+          "WFM mode adopted before control checks");
+    if constexpr (rtl::RtlReceivePipeline::kQualifiedWfmEnabled) {
+        check(slice->filterLow() == -100000 && slice->filterHigh() == 100000,
+              "entering native WFM selects the established broadcast RF width");
+        RadioModelSliceLifecycleTestAccess::flush(model);
+        const auto acceptedWfmSettings = scope.featureExact("RtlSlices");
+        slice->setFilterWidth(-90000, 90000);
+        slice->setWfmDeemphasis(50);
+        slice->setWfmForceMono(true);
+        check(!slice->wfmForceMono(), "forced Mono request is not optimistic accepted state");
+        check(slice->filterLow() == -100000 && slice->wfmDeemphasisUs() == 75
+            && scope.featureExact("RtlSlices") == acceptedWfmSettings,
+            "WFM filter and deemphasis requests remain intent until adopted");
+        check(waitFor([&] { captureClock.advance(); return rtl::RtlCaptureBackendTestAccess::idle(backend)
+            && slice->filterLow() == -90000 && slice->filterHigh() == 90000
+            && slice->wfmDeemphasisUs() == 50 && slice->wfmForceMono(); }),
+            "WFM filter, deemphasis and forced Mono adopt together");
+        slice->setSquelch(true, 75);
+        slice->setWfmDeemphasis(60);
+        check(rtl::RtlCaptureBackendTestAccess::idle(backend) && !slice->squelchOn()
+            && slice->wfmDeemphasisUs() == 50,
+            "manual WFM squelch and unsupported deemphasis remain refused");
+        RadioModelSliceLifecycleTestAccess::flush(model);
+        check(RtlSliceSettings(scope).load().document.slices.value(3).wfmDeemphasisUs == 50,
+              "only accepted WFM deemphasis reaches persisted receiver state");
+        check(RtlSliceSettings(scope).load().document.slices.value(3).wfmForceMono,
+              "only adopted forced Mono reaches persisted settings");
+        const auto token = rtl::RtlCaptureBackendTestAccess::state(backend).token;
+        rtl::RtlCaptureBackendTestAccess::pilot(backend, 3, token, true);
+        check(slice->wfmStereoStatus() == WfmStereoStatus::Mono,
+              "current forced Mono output is reported independently of acquired pilot");
+        check(slice->wfmForceMono() && slice->wfmReceptionDiagnostics().valid
+            && slice->wfmReceptionDiagnostics().pilotLocked,
+            "actual pilot observation is distinct from selected forced Mono");
+        rtl::RtlCaptureBackendTestAccess::pilot(backend, 3, {token.session, token.revision - 1}, false);
+        rtl::RtlCaptureBackendTestAccess::pilot(backend, 3, {token.session + 1, token.revision}, false);
+        check(slice->wfmStereoStatus() == WfmStereoStatus::Mono
+            && slice->wfmReceptionDiagnostics().pilotLocked,
+              "old revision and foreign session cannot change WFM observation");
+        rtl::RtlCaptureBackendTestAccess::expirePilot(backend, 3);
+        check(slice->wfmStereoStatus() == WfmStereoStatus::Acquiring
+            && !slice->wfmReceptionDiagnostics().valid,
+              "stopped decoder observations expire rather than retaining stereo");
+        rtl::RtlCaptureBackendTestAccess::pilot(backend, 3, token, true);
+        check(!slice->wfmReceptionDiagnostics().valid,
+              "cached decoder sequence cannot refresh expired reception");
+        rtl::RtlCaptureBackendTestAccess::pilot(backend, 3, token, true, 4,
+            std::numeric_limits<double>::quiet_NaN());
+        check(!slice->wfmReceptionDiagnostics().valid, "invalid magnitude cannot refresh reception");
+        rtl::RtlCaptureBackendTestAccess::pilot(backend, 3, token, false, 4);
+        check(slice->wfmStereoStatus() == WfmStereoStatus::Mono,
+              "current no-pilot observation reports mono");
+        slice->setWfmForceMono(false);
+        check(slice->wfmForceMono(), "Auto Stereo remains intent until decoder adoption");
+        check(waitFor([&] { captureClock.advance(); return rtl::RtlCaptureBackendTestAccess::idle(backend)
+            && !slice->wfmForceMono(); }), "Auto Stereo adoption confirms the selection");
+        check(!slice->wfmReceptionDiagnostics().valid
+            || slice->wfmReceptionDiagnostics().observationDurationMs < 6000,
+            "new decoder revision cannot retain the old reception history");
+        RadioModelSliceLifecycleTestAccess::flush(model);
+        check(!RtlSliceSettings(scope).load().document.slices.value(3).wfmForceMono,
+              "accepted Auto Stereo replaces only the chosen persistent policy");
+    } else {
+        const int wfmLow = slice->filterLow();
+        const int wfmHigh = slice->filterHigh();
+        const int wfmObserved = observed;
+        RadioModelSliceLifecycleTestAccess::flush(model);
+        const auto wfmSettings = scope.featureExact("RtlSlices");
+        slice->setFilterWidth(-90'000, 90'000);
+        slice->setSquelch(true, 75);
+        check(rtl::RtlCaptureBackendTestAccess::idle(backend)
+            && slice->filterLow() == wfmLow && slice->filterHigh() == wfmHigh
+            && observed == wfmObserved && !slice->squelchOn(),
+              "unsupported WFM filter neither queues work nor changes observed state");
+        RadioModelSliceLifecycleTestAccess::flush(model);
+        check(scope.featureExact("RtlSlices") == wfmSettings,
+              "unsupported WFM filter does not persist a cosmetic passband");
+    }
     slice->setMode("FMN");
-    check(waitFor([&] { device->block(); return slice->mode() == "FMN"
+    check(waitFor([&] { captureClock.advance(); return slice->mode() == "FMN"
         && rtl::RtlCaptureBackendTestAccess::idle(backend); }),
-          "FMN restored after legacy WFM refusal check");
+          "FMN restored after WFM control checks");
+    check(slice->wfmStereoStatus() == WfmStereoStatus::Unavailable,
+          "leaving WFM invalidates the pilot observation");
+    if constexpr (rtl::RtlReceivePipeline::kQualifiedWfmEnabled) {
+        check(slice->wfmDeemphasisUs() == 50,
+              "mode changes retain the selected broadcast deemphasis");
+    }
     RadioModelSliceLifecycleTestAccess::flush(model);
     const auto beforeDisconnect = scope.featureExact("RtlSlices");
     slice->setFrequency(107.2); slice->setAudioGain(80);

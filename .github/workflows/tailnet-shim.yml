@@ -1,0 +1,60 @@
+name: Tailnet shim
+
+# Go tests for tools/flex-tailnet-shim, the in-radio Tailscale node (RFC
+# #6271). The shim carries the remote-access authorization logic: the
+# allowlist on the radio, station devices and side channels, the radio-only
+# UDP filter and the provisioning token. Its tests are the only evidence for
+# that code, so they run on every change to it (#6318).
+#
+# Not a required check, so the paths filter can't strand a PR on a check it
+# never triggers. The tests bind loopback TCP/UDP sockets, including
+# 127.0.0.2 and 127.0.0.3, which a Linux runner provides. Modules are
+# vendored, so nothing is downloaded beyond the Go toolchain go.mod names.
+
+on:
+  pull_request:
+    paths:
+      - "tools/flex-tailnet-shim/**"
+      - ".github/workflows/tailnet-shim.yml"
+  push:
+    branches: [main]
+    paths:
+      - "tools/flex-tailnet-shim/**"
+      - ".github/workflows/tailnet-shim.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}${{ github.ref == 'refs/heads/main' && format('-{0}', github.run_id) || '' }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  go-test:
+    name: Tailnet shim Go tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: tools/flex-tailnet-shim
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: tools/flex-tailnet-shim/go.mod
+          cache: false
+
+      - name: gofmt
+        run: |
+          unformatted=$(git ls-files -z '*.go' ':!:vendor/' | xargs -0 gofmt -l)
+          if [ -n "$unformatted" ]; then
+            echo "::error::not gofmt-formatted: $unformatted"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test -race
+        run: go test -race -count=1 ./...

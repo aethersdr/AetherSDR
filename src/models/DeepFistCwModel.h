@@ -38,8 +38,13 @@ public:
     bool isRunning() const { return m_running; }
     QString status() const { return m_status; }
     static QString modelDirectory();
+    // The parameters the application runs DeepFist with (the default constructors use them).
+    static DeepFistStream::Parameters appParameters();
 signals:
     void textDecoded(const QString& text);
+    // The same text in runs, each with the cost it is coloured by
+    // (1 - the letter's confidence; lower is better, as for ggmorse).
+    void scoredTextDecoded(const QString& text, float cost);
     void statusChanged(const QString& status);
 private:
     struct Item { PcmFrame frame; quint64 generation; };

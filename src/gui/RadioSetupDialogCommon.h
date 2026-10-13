@@ -12,52 +12,80 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QString>
+#include <QStyle>
+#include <QWidget>
 #ifdef HAVE_SERIALPORT
 #include <QSerialPortInfo>
 #endif
 
 namespace AetherSDR {
 
-inline const QString kGroupStyle =
-    "QGroupBox { border: 1px solid #304050; border-radius: 4px; "
-    "margin-top: 8px; padding-top: 12px; font-weight: bold; color: #8aa8c0; }"
-    "QGroupBox::title { subcontrol-origin: margin; left: 10px; "
-    "padding: 0 4px; }";
+// Radio Setup is a canon window: one sheet on its body (kRadioSetupStyle in
+// RadioSetupDialog.cpp) styles every page. Widgets carry a role for it rather
+// than a sheet of their own.
 
-// Caption label style (#5896): tokens, applied only through
-// ThemeManager::applyStyleSheet, which tracks widgets for re-resolution on
-// themeChanged. Named *Template because a {{token}} string must never reach
-// setStyleSheet(), which does not expand it.
-inline const QString kLabelStyleTemplate =
-    "QLabel { color: {{color.text.primary}}; font-size: 12px; }";
+// Text tones, styled by QLabel[rsTone="..."]:
+//   Caption  a field's name ("Callsign:")       Value    a radio-reported value
+//   Hint     help and secondary text            Heading  a section or sub-group title
+//   Title    a page's device name               Accent   a status in progress
+//   Ok / Warn / Error  a settled status
+enum class Tone { Caption, Value, Hint, Heading, Title, Ok, Warn, Error, Accent };
 
-// Line-edit style as tokens; each literal it replaced was that token's Default
-// Dark value (resources/themes/default-dark.json), so only Light changes.
-inline const QString kEditStyleTemplate =
-    "QLineEdit { background: {{color.background.1}}; "
-    "border: 1px solid {{color.background.2}}; border-radius: 3px; "
-    "color: {{color.text.primary}}; font-size: 12px; padding: 2px 4px; }";
+// A status chip: a small bordered label that reads on (green) or off.
+enum class Chip { Off, On };
 
-// One call shape for every caption label and line edit routed through the two
-// templates above, so the widget is tracked for re-resolution as well as styled.
+// Button roles, styled by QPushButton[rsButton="..."]. A plain checkable
+// button is an on/off toggle (green when on); Select is one of a set (cyan
+// when chosen); Mute reads red when engaged; Danger and Success are actions
+// with consequences (reboot, remove, upload firmware).
+enum class ButtonRole { Select, Mute, Danger, Success };
+
+namespace detail {
+inline void setRoleProperty(QWidget* widget, const char* name, const char* value)
+{
+    if (widget->property(name).toByteArray() == value) {
+        return;
+    }
+    widget->setProperty(name, QByteArray(value));
+    // A property selector is matched at polish time: re-polish so a role
+    // changed on a live widget (a status that turns to an error) restyles.
+    if (widget->style()) {
+        widget->style()->unpolish(widget);
+        widget->style()->polish(widget);
+    }
+    widget->update();
+}
+} // namespace detail
+
+inline void setTone(QWidget* widget, Tone tone)
+{
+    static constexpr const char* kNames[] = {
+        "caption", "value", "hint", "heading", "title", "ok", "warn", "error", "accent"};
+    detail::setRoleProperty(widget, "rsTone", kNames[static_cast<int>(tone)]);
+}
+
+inline void setChip(QWidget* widget, Chip chip)
+{
+    detail::setRoleProperty(widget, "rsChip", chip == Chip::On ? "on" : "off");
+}
+
+inline void setButtonRole(QWidget* button, ButtonRole role)
+{
+    static constexpr const char* kNames[] = {"select", "mute", "danger", "success"};
+    detail::setRoleProperty(button, "rsButton", kNames[static_cast<int>(role)]);
+}
+
+// Whether a label already has a tone; the groups' caption sweeps leave those.
+inline bool hasTone(const QWidget* widget)
+{
+    return widget->property("rsTone").isValid() || widget->property("rsChip").isValid();
+}
+
+// The caption every label beside a field takes.
 inline void applyLabelStyle(QWidget* widget)
 {
-    ThemeManager::instance().applyStyleSheet(widget, kLabelStyleTemplate);
+    setTone(widget, Tone::Caption);
 }
-
-inline void applyEditStyle(QWidget* widget)
-{
-    ThemeManager::instance().applyStyleSheet(widget, kEditStyleTemplate);
-}
-
-// Uses ThemeManager tokens (Low Latency architecture) with hover + disabled
-// pseudo-states (FreeDV Reporter pattern) so boxes are visible in dark mode.
-inline const QString kCheckBoxIndicator =
-    "QCheckBox::indicator { width: 14px; height: 14px; "
-    "border: 2px solid {{color.background.3}}; border-radius: 3px; background: {{color.background.0}}; }"
-    "QCheckBox::indicator:hover { border-color: {{color.accent}}; background: {{color.background.1}}; }"
-    "QCheckBox::indicator:checked { border: 2px solid {{color.accent}}; background: {{color.background.2}}; }"
-    "QCheckBox::indicator:disabled { border-color: {{color.background.2}}; background: {{color.background.0}}; }";
 
 // The control port the ShackSwitch connect path connects on and saves its
 // credential under. Removal derives its endpoint from the same value.

@@ -34,8 +34,13 @@ public:
     };
 
     // Every USB identity recognised as a CTR2. 303A:1001 is Espressif's
-    // default for any ESP32-S3, so the product string decides.
-    // packaging/linux/70-aethersdr-ctr2.rules must grant exactly this set.
+    // default for any ESP32-S3, so the product string decides. A product
+    // ending in '*' is a prefix (a udev glob): a device that matches it names
+    // itself, and its product string is shown as its model, once it passes
+    // selfNamedModel()'s checks; such an entry's model is nullptr.
+    // packaging/linux/70-aethersdr-ctr2.rules must list exactly these
+    // product patterns. udev's '*' matches any suffix, so for a '*' entry the
+    // rule grants access to a superset that selfNamedModel() then narrows.
     struct KnownCtr2 {
         quint16 vendorId;
         quint16 productId;
@@ -60,12 +65,28 @@ public:
     virtual void shutdown(const std::vector<ctr2hid::Report>& finalReports) = 0;
     virtual QString description() const = 0;
 
+    // Link extensions negotiated with the device (ctr2hid::capabilityBit
+    // mask); 0 for plain link version 0, and until negotiation finishes.
+    quint32 extensions() const { return m_extensions; }
+
 signals:
     // A whole number of 8-byte reports, in arrival order.
     void reportsReceived(const QByteArray& reports);
     void reportsSent(int count);
     // The device is gone or unusable; the port is closed.
     void failed(const QString& message);
+    // Negotiation finished; delivered before any report arrives.
+    void extensionsNegotiated(quint32 extensions);
+
+protected:
+    void setExtensions(quint32 extensions)
+    {
+        m_extensions = extensions;
+        emit extensionsNegotiated(extensions);
+    }
+
+private:
+    quint32 m_extensions{0};
 };
 
 } // namespace AetherSDR
