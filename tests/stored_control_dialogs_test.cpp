@@ -1,15 +1,27 @@
 #include "TestSettingsProfile.h"
 #include "RadioSetupControlFixture.h"
 #include "core/AppSettings.h"
+#include "core/MemoryCsvCompat.h"
 #include "gui/ProfileManagerDialog.h"
 #include "gui/MemoryDialog.h"
 
 #include <QApplication>
+#include <QByteArray>
+#include <QDialog>
+#include <QDir>
+#include <QFileDialog>
 #include <QLabel>
+#include <QList>
 #include <QLineEdit>
+#include <QMessageBox>
+#include <QMetaObject>
 #include <QPushButton>
+#include <QString>
 #include <QTableWidget>
+#include <QTemporaryFile>
+#include <QTest>
 #include <QTimer>
+#include <QWidget>
 #include <cstdio>
 
 using namespace AetherSDR;
@@ -25,6 +37,7 @@ public:
     static QTableWidget* table(MemoryDialog& dialog) { return dialog.m_table; }
     static void populate(MemoryDialog& dialog) { dialog.populateTable(); }
     static void submit(MemoryDialog& dialog, int row, int column) { dialog.submitCellEdit(row, column); }
+    static void importRows(MemoryDialog& dialog) { dialog.onImport(); }
 };
 }
 
@@ -86,14 +99,65 @@ void memoryDialog()
     check(backend->commands.size() == 1 && model.memories().value(7).freq == 146.52,
           "malformed cell cannot reach transport or change memory");
 }
+void stoppedImport()
+{
+    RadioModel model;
+    RadioSetupTestBackend* backend = installRadioSetupBackend(model);
+    MemoryDialog dialog(&model);
+    QList<MemoryCsvRecord> records;
+    for (const QString& name : {QStringLiteral("First row"), QStringLiteral("Second row"), QStringLiteral("Third row")}) {
+        MemoryEntry entry; entry.name = name; entry.freq = 14.1; entry.mode = "USB"; entry.step = 1000;
+        records.append(MemoryCsvCompat::fromMemoryEntry(entry));
+    }
+    QTemporaryFile csv(QDir::tempPath() + QStringLiteral("/aether-stored-import-XXXXXX.csv"));
+    if (!csv.open()) { check(false, "temporary import CSV opens"); return; }
+    const QByteArray bytes = MemoryCsvCompat::serialize(records);
+    if (csv.write(bytes) != bytes.size() || !csv.flush()) { check(false, "temporary import CSV writes"); return; }
+    QString summary;
+    QString details;
+    QTimer driver;
+    QObject::connect(&driver, &QTimer::timeout, &dialog, [&] {
+        for (QWidget* widget : QApplication::topLevelWidgets()) {
+            if (QFileDialog* chooser = qobject_cast<QFileDialog*>(widget); chooser && chooser->isVisible()) {
+                chooser->selectFile(csv.fileName());
+                QMetaObject::invokeMethod(chooser, "accept");
+            }
+            if (QMessageBox* box = qobject_cast<QMessageBox*>(widget); box && box->isVisible()) {
+                summary = box->informativeText(); details = box->detailedText(); box->accept();
+            }
+        }
+    });
+    driver.start(20);
+    QTimer::singleShot(10000, &dialog, [] {
+        for (QWidget* widget : QApplication::topLevelWidgets()) {
+            if (QDialog* modal = qobject_cast<QDialog*>(widget); modal && modal->isModal()) { modal->reject(); }
+        }
+    });
+    StoredDialogsTestAccess::importRows(dialog);
+    if (backend->commands.size() != 1 || backend->replies.empty()) { check(false, "import starts first typed create"); return; }
+    const RadioControlCompletion created = backend->replies.at(0);
+    created({RadioControlReply::Kind::Accepted, 0, "9"});
+    if (backend->replies.size() != 2) { check(false, "import populates first created slot"); return; }
+    const RadioControlCompletion populated = backend->replies.at(1);
+    populated({RadioControlReply::Kind::Accepted, 0, {}});
+    RadioSetupControlTestAccess::replaceConnectionGeneration(model);
+    QTest::qWait(100);
+    check(backend->commands.size() == 2, "queued import never writes to a replacement session");
+    if (!summary.startsWith("2 rows were skipped") || !details.contains("Second row") || !details.contains("Third row")) {
+        std::fprintf(stderr, "Import summary: %s\nImport details: %s\n", qPrintable(summary), qPrintable(details));
+    }
+    check(summary.startsWith("2 rows were skipped") && details.contains("Second row") && details.contains("Third row"),
+          "queued import reports every unattempted row after session replacement");
+}
 }
 
 int main(int argc, char** argv)
 {
     TestSettingsProfile profile(QStringLiteral("stored-control-dialogs-test"));
+    QApplication::setAttribute(Qt::AA_DontUseNativeDialogs);
     QApplication app(argc, argv);
     if (!profile.isValid()) { return 2; }
     AppSettings::instance().load();
-    profileDialog(); memoryDialog();
+    profileDialog(); memoryDialog(); stoppedImport();
     return failures == 0 ? 0 : 1;
 }

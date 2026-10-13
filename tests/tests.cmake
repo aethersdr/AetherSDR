@@ -7398,7 +7398,7 @@ target_include_directories(stored_control_dialogs_test PRIVATE src tests)
 target_link_libraries(stored_control_dialogs_test PRIVATE aethercore Qt6::Core Qt6::Widgets Qt6::Test)
 set_target_properties(stored_control_dialogs_test PROPERTIES AUTOMOC ON)
 add_test(NAME stored_control_dialogs_test COMMAND stored_control_dialogs_test)
-set_tests_properties(stored_control_dialogs_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+set_tests_properties(stored_control_dialogs_test PROPERTIES TIMEOUT 30 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 add_executable(memory_import_test tests/memory_import_test.cpp)
 target_include_directories(memory_import_test PRIVATE src tests)

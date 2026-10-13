@@ -1141,7 +1141,10 @@ void MemoryDialog::onImport()
             return;
         }
         if (model->controlSession() != session || model->usesLocalMemoryBank() != localStore) {
-            state->issues << QStringLiteral("Import stopped because the original memory session ended.");
+            for (int row = state->nextRecord; row < state->records.size(); ++row) {
+                state->issues << formatImportIssue(describeImportedMemory(state->records.at(row).memory),
+                    "not attempted because the original memory session ended", {});
+            }
             state->nextRecord = state->records.size();
         }
 
