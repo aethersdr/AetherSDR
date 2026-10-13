@@ -261,8 +261,8 @@ int main()
 
     // ---- 9b. The age gate's edges ------------------------------------------
     //
-    // Hl2RxDsp forms the age with slicePeakAgeMs() and Hl2Backend gates the
-    // pairing with slicePeakIsCurrent(), so these are the product's expressions.
+    // Hl2Backend forms the age with slicePeakAgeMs() and gates the pairing
+    // with slicePeakIsCurrent(), so these are the product's expressions.
     // Stamps and instants are plain numbers: no clock is read.
     {
         constexpr std::int64_t kNsPerMs = 1'000'000;

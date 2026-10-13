@@ -7666,6 +7666,14 @@ add_executable(hl2_auto_gain_law_test tests/hl2_auto_gain_law_test.cpp)
 target_include_directories(hl2_auto_gain_law_test PRIVATE src tests)
 target_link_libraries(hl2_auto_gain_law_test PRIVATE aethercore Qt6::Core Qt6::Network)
 add_test(NAME hl2_auto_gain_law_test COMMAND hl2_auto_gain_law_test)
+# The age gate of the ADC pairing as Hl2Backend::healthSnapshot() applies it:
+# a held slice peak on either side of kSliceStaleMs. Socket-free: the link edge
+# and telemetry go in through MetisClient's own signals, receiver 0 gets a real
+# Hl2RxDsp fed by hand, and the snapshot is read at a chosen instant.
+add_executable(hl2_adc_age_gate_test tests/hl2_adc_age_gate_test.cpp)
+target_include_directories(hl2_adc_age_gate_test PRIVATE src tests)
+target_link_libraries(hl2_adc_age_gate_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME hl2_adc_age_gate_test COMMAND hl2_adc_age_gate_test)
 # Socket-free HL2 panadapter-limit DECLARATIONS: the span shape, the four
 # discrete rates and the dBm axis. NOT radioOwnsDbmScale -- the HL2 deliberately
 # leaves that undeclared and this target asserts only its DEFAULT, which is a
@@ -8616,6 +8624,7 @@ set(AETHER_SETTINGS_CONSUMERS
     hl2_client_side_spots_declaration_test
     hl2_gain_split_test
     hl2_auto_gain_law_test
+    hl2_adc_age_gate_test
     icom_identity_test
     icom_control_profile_test
     control_resource_service_test

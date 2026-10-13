@@ -6022,6 +6022,11 @@ void Hl2Backend::publishFrontEndOverload()
 
 IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
 {
+    return healthSnapshot(hl2::steadyNowNs());
+}
+
+IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot(std::int64_t nowNs) const
+{
     HealthSnapshot h;
     auto put = [&h](const char* key, const QString& label, const QVariant& v) {
         const QString k = QString::fromLatin1(key);
@@ -6099,9 +6104,10 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
         // it stops advancing again if the IQ stream stalls. Without an age on
         // it, a frozen number reads as a current one. The pairing row below
         // does not merely display this age, it is GATED on it: see
-        // kSliceStaleMs.
+        // kSliceStaleMs. Row and gate share this one value, taken at `nowNs`.
         const std::optional<std::int64_t> ago =
-            r->dsp ? r->dsp->adcPeakObservedAgoMs() : std::nullopt;
+            r->dsp ? hl2::slicePeakAgeMs(r->dsp->adcPeakObservedAtNs(), nowNs)
+                   : std::nullopt;
         put(QStringLiteral("adcSliceObservedAgoMs%1").arg(ids.uiNumber).toUtf8().constData(),
             QStringLiteral("Post-DDC slice peak observed (ms ago)") + suffix,
             ago ? QVariant(static_cast<qulonglong>(*ago)) : QVariant());
