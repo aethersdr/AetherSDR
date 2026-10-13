@@ -1,15 +1,14 @@
 #pragma once
 
 // When the Flex-shaped voice controls (PROC, 8-band graphic EQ) may write the
-// SHARED ClientComp / ClientEq objects the Aetherial strip also edits (one object,
-// two surfaces, so nothing is double-processed; #4609). The predicates turn on
-// `chainOwned`: do those controls hold a layout of the operator's own, so the
-// shared objects are OURS to write? Pure so tests exercise what MainWindow uses.
-//
-// Ownership has two sources. The operator moves a Flex-shaped control in this
-// process; or a graphic EQ comes back from settings (EqualizerModel::State) with
-// something in it. TransmitModel's PROC state does not persist; ClientEq and
-// ClientComp persist under the strip's own keys, which the graphic EQ never writes.
+// SHARED ClientComp / ClientEq objects the Aetherial strip also edits (#4609).
+// `chainOwned`: has such a control written them in this process, so they hold
+// OUR layout? Pure so tests exercise what MainWindow uses.
+
+// A graphic EQ restored from settings (EqualizerModel::State) is not ownership:
+// nothing is written until a host-modulating connect re-pushes it. The strip
+// persists ClientEq/ClientComp under its own keys, which the graphic EQ never
+// writes; PROC state does not persist.
 
 namespace AetherSDR {
 
@@ -28,8 +27,8 @@ constexpr bool hostVoiceChainRepushAllowed(bool connected, bool hostModulates,
 }
 
 // Must this connection edge take our layout out of circuit? Case: a graphic EQ
-// set on an HL2, in this process or restored from an earlier one, then a Flex
-// connects; ClientEq would hold the eight filters on top of the radio's EQ.
+// written on an HL2 in this process, moved or re-pushed from settings, then a
+// Flex connects; ClientEq would hold the eight filters on top of the radio's EQ.
 // `chainOwned` limits it to that: plain Flex connects/disconnects must not disable
 // the Aetherial RX/TX EQ and compressor, family-agnostic by design
 // (docs/architecture/radio-capabilities-map.md).
@@ -44,11 +43,11 @@ constexpr bool hostVoiceChainUnwindRequired(bool connected, bool hostModulates,
     return chainOwned && usesFlexCommandPlane;
 }
 
-// Does a graphic EQ restored from settings claim the shared objects at startup?
-// Only when it holds something: any band off 0 dB, or either enable on. An
-// all-default restore is an operator who never used the applet, and their strip
-// layout must not be re-pushed over or unwound.
-constexpr bool hostVoiceChainOwnedByRestoredEq(bool anyBandNonZero,
+// Does a graphic EQ restored from settings hold a layout the next
+// host-modulating connect should re-push? Only when it holds something: any band
+// off 0 dB, or either enable on. An all-default restore is an operator who never
+// used the applet, and their strip layout must not be re-pushed over.
+constexpr bool restoredGraphicEqHoldsLayout(bool anyBandNonZero,
                                                bool anyEnabled) noexcept
 {
     return anyBandNonZero || anyEnabled;

@@ -1,14 +1,7 @@
 // The 8-band graphic EQ survives a restart on a radio whose EQ runs on this host
-// (#5611).
-//
-// What is pinned: EqualizerModel::State round-trips through the "EqApplet"
-// settings object; restoreState() moves the model without issuing a command;
-// ownership of the shared ClientEq is derived from what was restored; an EQ the
-// operator never touched writes nothing and claims nothing; and a damaged
-// settings value restores to defaults.
-//
-// MainWindow composes these (wireHostModulatedVoiceChain) and is not a test
-// target, so the call order there is read, not run.
+// (#5611): State round-trips through the "EqApplet" settings object, a restore
+// issues no command, a restored EQ holds a layout to re-push only when something
+// is in it, an untouched EQ writes nothing, and damaged settings give defaults.
 
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
@@ -55,9 +48,9 @@ QJsonObject storedObject()
         AppSettings::instance().value(kKey, "{}").toString().toUtf8()).object();
 }
 
-bool ownedAfterRestore(const EqualizerModel::State& s)
+bool holdsLayout(const EqualizerModel::State& s)
 {
-    return hostVoiceChainOwnedByRestoredEq(s.anyBandNonZero(), s.anyEnabled());
+    return restoredGraphicEqHoldsLayout(s.anyBandNonZero(), s.anyEnabled());
 }
 
 // Sixteen distinct band values, so a dropped or swapped band cannot hide.
@@ -155,35 +148,35 @@ void restoreIsSilent()
 }
 
 // (iii) Ownership follows what was restored, one term at a time.
-void ownershipIsDerived()
+void layoutIsDerived()
 {
-    check(!ownedAfterRestore(EqualizerModel::State{}),
-          "ownership: all bands 0 dB and both enables off is NOT owned");
+    check(!holdsLayout(EqualizerModel::State{}),
+          "layout: all bands 0 dB and both enables off holds none");
 
     for (int i = 0; i < EqualizerModel::BandCount; ++i) {
         EqualizerModel::State tx;
         tx.txBands[i] = (i % 2 == 0) ? 1 : -1;
         EqualizerModel::State rx;
         rx.rxBands[i] = (i % 2 == 0) ? -1 : 1;
-        if (!ownedAfterRestore(tx) || !ownedAfterRestore(rx)) {
-            std::printf("[FAIL] ownership: band %d alone off 0 dB is not owned\n", i);
+        if (!holdsLayout(tx) || !holdsLayout(rx)) {
+            std::printf("[FAIL] layout: band %d alone off 0 dB holds none\n", i);
             ++g_failures;
         }
     }
-    check(true, "ownership: every single band was tried on both sides");
+    check(true, "layout: every single band was tried on both sides");
 
     EqualizerModel::State txOn;
     txOn.txEnabled = true;
-    check(ownedAfterRestore(txOn), "ownership: TX enable alone IS owned");
+    check(holdsLayout(txOn), "layout: TX enable alone holds one");
     EqualizerModel::State rxOn;
     rxOn.rxEnabled = true;
-    check(ownedAfterRestore(rxOn), "ownership: RX enable alone IS owned");
+    check(holdsLayout(rxOn), "layout: RX enable alone holds one");
 
     // Through the store, as MainWindow reads it.
     clearStored();
     EqualizerModel::savePersistedState(distinctState());
-    check(ownedAfterRestore(EqualizerModel::loadPersistedState()),
-          "ownership: a saved EQ with bands set IS owned on the next start");
+    check(holdsLayout(EqualizerModel::loadPersistedState()),
+          "layout: a saved EQ with bands set holds one on the next start");
 }
 
 // (iv) An operator who never touched the graphic EQ keeps their strip.
@@ -199,7 +192,7 @@ void untouchedWritesNothing()
     model.restoreState(restored);
     check(txState.isEmpty() && rxState.isEmpty(),
           "untouched: restoring defaults emits no state change (no ClientEq write)");
-    check(!ownedAfterRestore(restored), "untouched: ownership stays false");
+    check(!holdsLayout(restored), "untouched: no layout is held");
 
     check(!EqualizerModel::savePersistedState(model.state()),
           "untouched: saving the default state reports no write");
@@ -215,8 +208,8 @@ void untouchedWritesNothing()
     EqualizerModel::savePersistedState(distinctState());
     check(EqualizerModel::savePersistedState(EqualizerModel::State{}),
           "flat again: defaults ARE written over a stored non-default EQ");
-    check(!ownedAfterRestore(EqualizerModel::loadPersistedState()),
-          "flat again: ownership is false on the next start");
+    check(!holdsLayout(EqualizerModel::loadPersistedState()),
+          "flat again: no layout is held on the next start");
 }
 
 // (v) Whatever is in the store, loading yields a usable state.
@@ -280,7 +273,7 @@ int main(int argc, char** argv)
     roundTrip();
     sharedObjectIsPreserved();
     restoreIsSilent();
-    ownershipIsDerived();
+    layoutIsDerived();
     untouchedWritesNothing();
     damagedSettingsRestoreDefaults();
 

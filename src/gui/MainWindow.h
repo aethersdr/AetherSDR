@@ -2122,12 +2122,15 @@ private:
     // the Aetherial strip's compressor settings, which share the object).
     bool m_lastAppliedProcEnable{false};
     int  m_lastAppliedProcLevel{-1};
-    // True when the Flex-shaped voice controls hold a layout for the shared
-    // ClientEq/ClientComp: one wrote into them in this process, or a graphic EQ
-    // with something in it was restored from settings. Gates the connect-time
-    // re-push and the family-swap unwind (core/HostVoiceChainPolicy.h), so
-    // neither touches a strip whose operator never used those controls.
+    // True once a Flex-shaped voice control has written into the shared
+    // ClientEq/ClientComp in this process, so they hold OUR layout. Gates the
+    // connect-time re-push and the family-swap unwind
+    // (core/HostVoiceChainPolicy.h), so neither touches an untouched strip.
     bool m_hostVoiceChainOwned{false};
+    // True while a graphic EQ restored from settings waits for its first
+    // host-modulating connect. It licenses the re-push only; a Flex connect
+    // clears it, because the radio then writes the model.
+    bool m_restoredGraphicEqPending{false};
     bool m_minimalMode{false};             // true when spectrum is hidden (#208)
     bool m_canvasWasOnBeforeMinimal{false}; // minimal exit restores canvas mode
     bool m_exitingMinimalMode{false};      // re-entry guard for changeEvent → toggleMinimalMode(false)

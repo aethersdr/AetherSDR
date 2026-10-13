@@ -926,12 +926,12 @@ void MainWindow::wireHostModulatedVoiceChain()
 {
     // The persisted graphic EQ comes back BEFORE the ClientEq binding below, so
     // restoring writes nothing into the shared objects; the connect-edge re-push
-    // does, and only on a host-modulating backend. Ownership is derived from what
-    // came back (core/HostVoiceChainPolicy.h), so an untouched EQ claims nothing.
+    // does, and only on a host-modulating backend. A restored layout licenses
+    // that re-push and is not ownership, so a Flex connected first unwinds nothing.
     {
         const EqualizerModel::State restored = EqualizerModel::loadPersistedState();
         m_radioModel.equalizerModel().restoreState(restored);
-        m_hostVoiceChainOwned = hostVoiceChainOwnedByRestoredEq(
+        m_restoredGraphicEqPending = restoredGraphicEqHoldsLayout(
             restored.anyBandNonZero(), restored.anyEnabled());
     }
 
@@ -976,12 +976,19 @@ void MainWindow::wireHostModulatedVoiceChain()
             // what the operator set or what was restored
             // (hostVoiceChainRepushAllowed; core/HostVoiceChainPolicy.h): an
             // unconditional push would overwrite the saved strip with defaults.
-            // The cache is reset so the preset re-applies.
+            const bool restoredEq = m_restoredGraphicEqPending;
+            m_restoredGraphicEqPending = false;
+            // PROC does not persist: a restored graphic EQ alone must leave the
+            // strip's compressor as the operator saved it.
             if (hostVoiceChainRepushAllowed(connected, hostModulates,
                                             m_hostVoiceChainOwned)) {
+                // The cache is reset so the preset re-applies.
                 m_lastAppliedProcLevel = -1;
                 m_lastAppliedProcEnable = false;
                 applySpeechProcessorToClientComp(true);
+            }
+            if (hostVoiceChainRepushAllowed(connected, hostModulates,
+                                            m_hostVoiceChainOwned || restoredEq)) {
                 applyGraphicEqToClientEq(true);
                 applyGraphicEqToClientEq(false);
                 // Sliders moved while disconnected are saved once they apply.
@@ -993,6 +1000,12 @@ void MainWindow::wireHostModulatedVoiceChain()
         }
 
         m_hostVoiceChainTimer.stop();
+
+        // A Flex writes its own EQ into the model, so the layout restored from
+        // settings is no longer what the model holds: it must not be re-pushed.
+        if (connected && m_radioModel.usesFlexCommandPlane()) {
+            m_restoredGraphicEqPending = false;
+        }
 
         // Unwind on a family swap: after host-modulated EQ/PROC on an HL2, a
         // later Flex session's applies all return early, but ClientEq/ClientComp

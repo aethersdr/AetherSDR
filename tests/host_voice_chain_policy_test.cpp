@@ -17,7 +17,7 @@
 #include <cstdio>
 
 using AetherSDR::graphicEqPersistAllowed;
-using AetherSDR::hostVoiceChainOwnedByRestoredEq;
+using AetherSDR::restoredGraphicEqHoldsLayout;
 using AetherSDR::hostVoiceChainRepushAllowed;
 using AetherSDR::hostVoiceChainUnwindRequired;
 
@@ -116,16 +116,16 @@ int main()
     }
     check(true, "no input both re-pushes and unwinds");
 
-    // ── Ownership from a restored graphic EQ ───────────────────────────────
+    // ── A layout from a restored graphic EQ ─ ───────────────────────────────
     //
-    // An all-default restore is an operator who never used the applet: claiming
-    // the shared objects for them re-pushes eight flat bands over their strip.
-    check(!hostVoiceChainOwnedByRestoredEq(false, false),
-          "restored EQ: all bands 0 dB and both enables off claims nothing");
-    check(hostVoiceChainOwnedByRestoredEq(true, false),
-          "restored EQ: a band off 0 dB claims the shared objects");
-    check(hostVoiceChainOwnedByRestoredEq(false, true),
-          "restored EQ: an enable alone claims the shared objects");
+    // An all-default restore is an operator who never used the applet:
+    // re-pushing it writes eight flat bands over their strip.
+    check(!restoredGraphicEqHoldsLayout(false, false),
+          "restored EQ: all bands 0 dB and both enables off holds no layout");
+    check(restoredGraphicEqHoldsLayout(true, false),
+          "restored EQ: a band off 0 dB holds a layout");
+    check(restoredGraphicEqHoldsLayout(false, true),
+          "restored EQ: an enable alone holds a layout");
 
     // ── Writing the graphic EQ to settings ─────────────────────────────────
     check(graphicEqPersistAllowed(kConnected, kHostModulates),
