@@ -467,6 +467,11 @@ void testDisplaySpan()
         check(low.lowHz == 0 && low.highHz == 600, "a window reaching below 0 Hz shrinks, centered");
         const auto narrow = spectrum::cwWindow(-25, 25, 600, 24000);
         check(narrow.lowHz == 550 && narrow.highHz == 650, "a 50 Hz filter shows +/-50 Hz");
+        for (double fs : {1.0, 150.0, 300.0, 399.0}) {
+            const auto tiny = spectrum::cwWindow(-250, 250, 600, fs);
+            check(tiny.lowHz >= 0 && tiny.lowHz <= tiny.highHz,
+                  "a sample rate below 400 Hz still gives an ordered window");
+        }
         check(extensionMaxLength(MessageType::AudioSpectrumLinear)
                   == extensionMaxLength(MessageType::AudioSpectrum),
               "the linear spectrum has the same payload");

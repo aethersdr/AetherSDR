@@ -173,10 +173,10 @@ double spectrum::linearEdgeHz(int lowHz, int spanHz, int n, int i)
 spectrum::Window spectrum::cwWindow(int filterLo, int filterHi, int pitchHz, double sampleRate)
 {
     const int nyquist = sampleRate > 0 ? static_cast<int>(sampleRate / 2) : 12000;
-    const int pitch = std::clamp(pitchHz, 100, nyquist / 2);
+    const int pitch = std::clamp(pitchHz, 100, std::max(nyquist / 2, 100));
     const int width = std::max(filterHi - filterLo, 50);
     int half = std::max(std::abs(filterLo), std::abs(filterHi)) + width / 2;
-    half = std::min({half, pitch, nyquist - pitch});
+    half = std::max(0, std::min({half, pitch, nyquist - pitch}));
     return {pitch - half, pitch + half};
 }
 

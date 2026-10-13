@@ -774,7 +774,10 @@ bool Ctr2UsbRelay::sendAudioSpectrum(const QByteArray& payload, MessageType type
 bool Ctr2UsbRelay::sendCwText(const QByteArray& payload)
 {
     const quint32 bit = ctr2hid::capabilityBit(MessageType::CwText);
-    if (!m_port || m_state != State::Relaying || !(m_port->extensions() & bit)) {
+    // Text waits behind a busy link rather than being dropped like a spectrum
+    // frame, but a stalled device must not grow the queue without bound.
+    if (!m_port || m_state != State::Relaying || !(m_port->extensions() & bit)
+        || m_reportCosts.size() >= static_cast<size_t>(kMaxQueuedReports)) {
         return false;
     }
     std::vector<ctr2hid::Report> reports;

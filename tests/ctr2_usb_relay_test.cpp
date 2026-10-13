@@ -1054,6 +1054,19 @@ void testAudioSpectrumExtension()
         check(rig.relay.sendCwText(text), "CW text is sent when negotiated");
         check(waitUntil([&] { return rig.dev.count(MessageType::CwText) == 1; }),
               "the device receives one CwText message");
+
+        // A stalled device holds text back, but only up to the hard cap.
+        rig.port->autoAck = false;
+        int accepted = 0;
+        for (int i = 0; i < 10000; ++i) {
+            accepted += rig.relay.sendCwText(text) ? 1 : 0;
+        }
+        check(accepted > 100 && accepted < 10000, "a stalled device stops taking CW text at the cap");
+        check(rig.port->pending() <= 8192, "the queued text stays within the report cap");
+        rig.port->autoAck = true;
+        rig.port->ack(rig.port->pending());
+        check(waitUntil([&] { return rig.relay.sendCwText(text); }),
+              "CW text resumes once the link drains");
     }
 }
 

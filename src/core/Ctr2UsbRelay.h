@@ -79,7 +79,8 @@ public:
                            ctr2hid::MessageType type = ctr2hid::MessageType::AudioSpectrum);
     // Sends one CwText message while relaying, if the device took that
     // extension. Text is not dropped for a busy link the way a spectrum frame
-    // is; false only when it cannot be sent at all.
+    // is; false only when it cannot be sent at all, or when a stalled device
+    // has left kMaxQueuedReports unsent.
     bool sendCwText(const QByteArray& payload);
 
 signals:

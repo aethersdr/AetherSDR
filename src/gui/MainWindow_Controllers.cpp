@@ -2645,18 +2645,17 @@ void MainWindow::setupCtr2Proxy()
         } else if (const SliceModel* s = activeSlice()) {
             src.filterLow = s->filterLow();
             src.filterHigh = s->filterHigh();
-            if (s->mode() == QLatin1String("CW")) {
+            if (isCwMode(s->mode())) {
                 src.cwPitch = tx.cwPitch();
             }
         }
         return src;
     }, this);
     // Controllers that negotiate it get the decoded CW, filtered as the CW
-    // panel filters it (its sensitivity threshold).
+    // panel filters it (its sensitivity threshold); no panel, nothing shown.
     connect(&m_cwDecoder, &CwRxModel::textDecoded, m_ctr2ProxyModel,
             [this](const QString& text, float cost) {
-        const float threshold = m_cwDecoderApplet ? m_cwDecoderApplet->cwCostThreshold() : 0.70f;
-        if (cost < threshold) {
+        if (m_cwDecoderApplet && cost < m_cwDecoderApplet->cwCostThreshold()) {
             m_ctr2ProxyModel->sendCwText(text, cost);
         }
     });
