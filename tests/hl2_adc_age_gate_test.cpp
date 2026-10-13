@@ -23,6 +23,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <memory>
 #include <optional>
 #include <string>
 #include <utility>
@@ -38,7 +39,7 @@ struct Hl2AdcAgeTestAccess {
         if (backend.m_rx.empty()) {
             return nullptr;
         }
-        auto* dsp = new Hl2RxDsp(nullptr);
+        auto dsp = std::make_unique<Hl2RxDsp>(nullptr);
         Hl2RxDsp::Config cfg;
         cfg.inputSampleRateHz = 48000;
         cfg.audioSampleRateHz = 48000;
@@ -48,11 +49,10 @@ struct Hl2AdcAgeTestAccess {
         std::string err;
         if (!dsp->configure(cfg, &err)) {
             std::fprintf(stderr, "configure failed: %s\n", err.c_str());
-            delete dsp;
             return nullptr;
         }
-        backend.m_rx[0].dsp = dsp;
-        return dsp;
+        backend.m_rx[0].dsp = dsp.release();
+        return backend.m_rx[0].dsp;
     }
     // The handlers are queued onto the backend's thread, and this test never
     // returns to an event loop to service them.
