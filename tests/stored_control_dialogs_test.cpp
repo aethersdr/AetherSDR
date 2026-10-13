@@ -8,17 +8,13 @@
 #include <QApplication>
 #include <QByteArray>
 #include <QDialog>
-#include <QDir>
-#include <QFileDialog>
 #include <QLabel>
 #include <QList>
 #include <QLineEdit>
 #include <QMessageBox>
-#include <QMetaObject>
 #include <QPushButton>
 #include <QString>
 #include <QTableWidget>
-#include <QTemporaryFile>
 #include <QTest>
 #include <QTimer>
 #include <QWidget>
@@ -37,7 +33,8 @@ public:
     static QTableWidget* table(MemoryDialog& dialog) { return dialog.m_table; }
     static void populate(MemoryDialog& dialog) { dialog.populateTable(); }
     static void submit(MemoryDialog& dialog, int row, int column) { dialog.submitCellEdit(row, column); }
-    static void importRows(MemoryDialog& dialog) { dialog.onImport(); }
+    static void importRows(MemoryDialog& dialog, const MemoryCsvParseResult& parsed)
+    { dialog.startImport(parsed, QStringLiteral("test.csv"), dialog.m_model->controlSession(), dialog.m_model->usesLocalMemoryBank()); }
 };
 }
 
@@ -109,19 +106,14 @@ void stoppedImport()
         MemoryEntry entry; entry.name = name; entry.freq = 14.1; entry.mode = "USB"; entry.step = 1000;
         records.append(MemoryCsvCompat::fromMemoryEntry(entry));
     }
-    QTemporaryFile csv(QDir::tempPath() + QStringLiteral("/aether-stored-import-XXXXXX.csv"));
-    if (!csv.open()) { check(false, "temporary import CSV opens"); return; }
     const QByteArray bytes = MemoryCsvCompat::serialize(records);
-    if (csv.write(bytes) != bytes.size() || !csv.flush()) { check(false, "temporary import CSV writes"); return; }
+    const MemoryCsvParseResult parsed = MemoryCsvCompat::parse(bytes);
+    if (parsed.records.size() != 3 || !parsed.errors.isEmpty()) { check(false, "three synthetic CSV records parse"); return; }
     QString summary;
     QString details;
     QTimer driver;
     QObject::connect(&driver, &QTimer::timeout, &dialog, [&] {
         for (QWidget* widget : QApplication::topLevelWidgets()) {
-            if (QFileDialog* chooser = qobject_cast<QFileDialog*>(widget); chooser && chooser->isVisible()) {
-                chooser->selectFile(csv.fileName());
-                QMetaObject::invokeMethod(chooser, "accept");
-            }
             if (QMessageBox* box = qobject_cast<QMessageBox*>(widget); box && box->isVisible()) {
                 summary = box->informativeText(); details = box->detailedText(); box->accept();
             }
@@ -133,7 +125,7 @@ void stoppedImport()
             if (QDialog* modal = qobject_cast<QDialog*>(widget); modal && modal->isModal()) { modal->reject(); }
         }
     });
-    StoredDialogsTestAccess::importRows(dialog);
+    StoredDialogsTestAccess::importRows(dialog, parsed);
     if (backend->commands.size() != 1 || backend->replies.empty()) { check(false, "import starts first typed create"); return; }
     const RadioControlCompletion created = backend->replies.at(0);
     created({RadioControlReply::Kind::Accepted, 0, "9"});

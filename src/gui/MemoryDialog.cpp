@@ -1058,6 +1058,12 @@ void MemoryDialog::onImport()
     }
 
     const MemoryCsvParseResult parsed = MemoryCsvCompat::parse(file.readAll());
+    startImport(parsed, QFileInfo(path).fileName(), session, localStore);
+}
+
+void MemoryDialog::startImport(const MemoryCsvParseResult& parsed, const QString& fileName,
+                               const RadioControlSession& session, bool localStore)
+{
 
     struct ImportState {
         QList<MemoryCsvRecord> records;
@@ -1072,7 +1078,7 @@ void MemoryDialog::onImport()
     const auto state = QSharedPointer<ImportState>::create();
     state->records = parsed.records;
     state->issues = parsed.errors;
-    state->fileName = QFileInfo(path).fileName();
+    state->fileName = fileName;
     state->format = parsed.format;
 
     const QPointer<MemoryDialog> dialogGuard(this);
