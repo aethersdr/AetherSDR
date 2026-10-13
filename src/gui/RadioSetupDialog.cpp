@@ -3276,6 +3276,9 @@ QWidget* RadioSetupDialog::buildTxTab()
             syncPttOverride();
         });
         connect(&tx, &TransmitModel::stateChanged, pttOvrBtn, syncPttOverride);
+        // resetState() on disconnect announces through micStateChanged, not
+        // stateChanged; without this the page keeps the last session's value.
+        connect(&tx, &TransmitModel::micStateChanged, pttOvrBtn, syncPttOverride);
 
         vbox->addWidget(group);
     }

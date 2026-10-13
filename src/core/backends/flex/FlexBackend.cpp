@@ -1334,7 +1334,10 @@ void FlexBackend::decodeTransmitStatus(const QMap<QString, QString>& kvs)
     carry(kvs, "mic_boost", d.micBoost);
     carry(kvs, "mic_bias", d.micBias);
     carry(kvs, "met_in_rx", d.metInRx);
-    carry(kvs, "ptt_mic_override", d.pttMicOverride);
+    // FlexLib rejects anything but 0/1 (Radio.cs:11151-11163): a malformed value
+    // must not confirm "off" or mark the key as reported.
+    if (const std::optional<int> v = parseInt(kvs, "ptt_mic_override"); v && (*v == 0 || *v == 1))
+        d.pttMicOverride = (*v == 1);
     carry(kvs, "synccwx", d.syncCwx);
     carryClamp(kvs, "am_carrier_level", d.amCarrierLevel, 0, 100);
     // dexp / noise_gate_level alias compander / compander_level, but only when

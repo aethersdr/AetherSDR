@@ -924,7 +924,7 @@ void TransmitModel::setPttMicOverride(bool on)
     const auto field = TransmitControlRequest::Field::PttMicOverride;
     captureControlIntent(field);
     // Not optimistic: the setting is radio-wide and the radio echoes it in
-    // transmit status, so the model changes only on that echo (Principle II).
+    // transmit status, so the model changes only on that echo.
     emit controlRequested({field, on});
 }
 
