@@ -6,6 +6,7 @@
 
 #include <cmath>
 #include <algorithm>
+#include <functional>
 #include <optional>
 
 namespace AetherSDR {

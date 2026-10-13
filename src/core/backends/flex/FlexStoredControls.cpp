@@ -2,6 +2,8 @@
 
 #include <QStringList>
 #include <QPointer>
+#include <cmath>
+#include <optional>
 
 namespace AetherSDR {
 

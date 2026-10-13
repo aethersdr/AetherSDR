@@ -1,11 +1,8 @@
 #include "MemoryCommands.h"
 
-#include "core/MemoryFieldValues.h"
 #include "models/SliceModel.h"
 
 namespace AetherSDR {
-
-
 
 MemoryEntry captureMemoryFromSlice(const RadioModel& model,
                                    const SliceModel& slice,

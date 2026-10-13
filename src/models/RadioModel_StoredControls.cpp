@@ -1,9 +1,12 @@
 #include "models/RadioModel.h"
 
+#include <QList>
+#include <QMetaObject>
 #include <QPointer>
 #include <QThread>
 #include <QTimer>
 #include <memory>
+#include <optional>
 
 namespace AetherSDR {
 
@@ -219,7 +222,7 @@ void RadioModel::createMemory(const MemoryEntry& entry, QObject* replyContext,
                 notify(updated, index);
                 return;
             }
-            if (!current() || *retired || model->m_memories.value(index) != allocated
+            if (model->m_memories.value(index) != allocated
                 || updated.kind == RadioControlReply::Kind::Cancelled
                 || updated.code == -1) {
                 QObject::disconnect(*retirement);
@@ -241,8 +244,6 @@ void RadioModel::createMemory(const MemoryEntry& entry, QObject* replyContext,
 
 ReceiveDispatch RadioModel::recallMemory(int index, int sliceId)
 {
-    const RadioControlSession session = controlSession();
-    const QPointer<RadioModel> model(this);
     const QPointer<SliceModel> target(slice(sliceId));
     if (!target || !m_memories.contains(index) || !m_memories.value(index).recallable) {
         return ReceiveDispatch::Unsupported;
@@ -250,10 +251,7 @@ ReceiveDispatch RadioModel::recallMemory(int index, int sliceId)
     MemoryRequest request{MemoryRequest::Action::Recall, index, {}};
     request.sliceId = sliceId;
     request.recall = m_memories.value(index);
-    const ReceiveDispatch result = requestMemory(request, this);
-    if (result == ReceiveDispatch::Unsupported || !model || !target
-        || !controlSessionCurrent(session) || slice(sliceId) != target) { return result; }
-    return result;
+    return requestMemory(request, this);
 }
 
 } // namespace AetherSDR
