@@ -33,6 +33,46 @@ int main(int argc, char** argv)
     qRegisterMetaType<SliceDelta>();
     FlexBackend b;
 
+    // ---- DSP level status names (#6447): the radio reports nrl_level /
+    // nrs_level / anfl_level, not the lms_nr_level / speex_nr_level /
+    // lms_anf_level command names; those stay as a fallback ----
+    {
+        const SliceDelta d = decode(b, {
+            {QStringLiteral("nrl_level"), QStringLiteral("41")},
+            {QStringLiteral("nrs_level"), QStringLiteral("50")},
+            {QStringLiteral("anfl_level"), QStringLiteral("17")},
+        });
+        CHECK(d.nrlLevel.has_value() && *d.nrlLevel == 41);
+        CHECK(d.nrsLevel.has_value() && *d.nrsLevel == 50);
+        CHECK(d.anflLevel.has_value() && *d.anflLevel == 17);
+    }
+    {
+        const SliceDelta d = decode(b, {
+            {QStringLiteral("lms_nr_level"), QStringLiteral("12")},
+            {QStringLiteral("speex_nr_level"), QStringLiteral("13")},
+            {QStringLiteral("lms_anf_level"), QStringLiteral("14")},
+        });
+        CHECK(d.nrlLevel.has_value() && *d.nrlLevel == 12);
+        CHECK(d.nrsLevel.has_value() && *d.nrsLevel == 13);
+        CHECK(d.anflLevel.has_value() && *d.anflLevel == 14);
+    }
+    {
+        // Both present: the status name wins.
+        const SliceDelta d = decode(b, {
+            {QStringLiteral("nrl_level"), QStringLiteral("30")},
+            {QStringLiteral("lms_nr_level"), QStringLiteral("99")},
+        });
+        CHECK(d.nrlLevel.has_value() && *d.nrlLevel == 30);
+    }
+    {
+        // Malformed: dropped, never applied as 0.
+        const SliceDelta d = decode(b, {
+            {QStringLiteral("nrs_level"), QStringLiteral("junk")},
+            {QStringLiteral("nr"), QStringLiteral("1")},
+        });
+        CHECK(!d.nrsLevel.has_value());
+    }
+
     // ---- key renames + typed values ----
     {
         const SliceDelta d = decode(b, {
