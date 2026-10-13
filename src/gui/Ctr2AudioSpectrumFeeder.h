@@ -47,6 +47,7 @@ public:
         bool transmitting{false};
         int filterLow{0};
         int filterHigh{0};
+        int cwPitch{0};   // receiving CW: the pitch, so the bars center on it
     };
     using SourceFn = std::function<Source()>;
 
@@ -54,11 +55,13 @@ public:
                             QObject* parent = nullptr);
 
     // Bars in dBFS from FFT magnitudes (dB, bin i at i * sampleRate / 2048),
-    // one per log-spaced band from lowHz to spanHz: the strongest bin in the
-    // band, or, for a band narrower than a bin, the magnitude interpolated at
-    // its centre, so the low bars do not repeat one bin as flat steps.
+    // one per log-spaced band from lowHz to spanHz (evenly split with
+    // linear): the strongest bin in the band, or, for a band narrower than a
+    // bin, the magnitude interpolated at its centre, so the low bars do not
+    // repeat one bin as flat steps.
     static std::vector<float> barsFromBins(const std::vector<float>& binsDb, double sampleRate,
-                                           int lowHz, int spanHz, float correctionDb);
+                                           int lowHz, int spanHz, float correctionDb,
+                                           bool linear = false);
 
 private:
     void follow();

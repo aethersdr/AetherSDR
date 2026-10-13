@@ -992,6 +992,8 @@ void testAudioSpectrumExtension()
             same = same || (m.type == MessageType::AudioSpectrum && m.payload == payload);
         }
         check(same && !rig.dev.rxError, "its payload arrives unchanged, in valid framing");
+        check(!rig.relay.sendAudioSpectrum(payload, MessageType::AudioSpectrumLinear),
+              "a linear spectrum needs its own extension");
 
         // A device-sent extension of a negotiated type is accepted and ignored.
         std::vector<Report> r;
@@ -1014,6 +1016,22 @@ void testAudioSpectrumExtension()
         rig.port->ack(rig.port->pending());  // acknowledged asynchronously, like the real port
         check(waitUntil([&] { return rig.relay.sendAudioSpectrum(payload); }),
               "frames resume once the link drains");
+    }
+    {
+        // A device that also takes AudioSpectrumLinear gets it as its own type.
+        const quint32 both = bit | capabilityBit(MessageType::AudioSpectrumLinear);
+        Rig rig;
+        rig.port->negotiate(both);
+        rig.dev.rx.setExtensions(both);
+        rig.start();
+        check(rig.linkUp(), "link up (both spectra negotiated)");
+        const QByteArray window = spectrum::encode(200, 1000, std::vector<float>(32, -40.0f));
+        check(rig.relay.sendAudioSpectrum(window, MessageType::AudioSpectrumLinear),
+              "a linear spectrum is sent when negotiated");
+        check(waitUntil([&] { return rig.dev.count(MessageType::AudioSpectrumLinear) == 1; }),
+              "the device receives one AudioSpectrumLinear message");
+        check(!rig.relay.sendAudioSpectrum(window, MessageType::RelayUdpPort),
+              "only spectrum types go through sendAudioSpectrum");
     }
 }
 

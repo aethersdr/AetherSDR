@@ -2633,7 +2633,7 @@ void MainWindow::setupCtr2Proxy()
     pushRadio();
     // Controllers that negotiate it get the audio spectrum: the TX audio over
     // the TX filter while transmitting, else the RX audio over the active
-    // slice's passband.
+    // slice's passband (in CW, centered on the pitch to show zero beat).
     new Ctr2AudioSpectrumFeeder(m_ctr2ProxyModel, m_audio, [this] {
         Ctr2AudioSpectrumFeeder::Source src;
         const TransmitModel& tx = m_radioModel.transmitModel();
@@ -2644,6 +2644,9 @@ void MainWindow::setupCtr2Proxy()
         } else if (const SliceModel* s = activeSlice()) {
             src.filterLow = s->filterLow();
             src.filterHigh = s->filterHigh();
+            if (s->mode() == QLatin1String("CW")) {
+                src.cwPitch = tx.cwPitch();
+            }
         }
         return src;
     }, this);
