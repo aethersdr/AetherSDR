@@ -86,10 +86,11 @@ TxBandDialog::TxBandDialog(RadioModel* model, QWidget* parent)
         int bandId = id;
         connect(rfEdit, &QLineEdit::editingFinished, this, [this, rfEdit, bandId, session] {
             bool valid = false;
-            const int percent = rfEdit->text().toInt(&valid);
-            if (valid && percent >= 0 && percent <= 100) {
-                m_model->requestTxBand({bandId, BandField::RfPowerPercent, percent}, session);
-            }
+            const int parsed = rfEdit->text().toInt(&valid);
+            if (!valid) { rfEdit->setText(QString::number(m_model->txBandSettings().value(bandId).rfPower)); return; }
+            const int percent = qBound(0, parsed, 100);
+            rfEdit->setText(QString::number(percent));
+            m_model->requestTxBand({bandId, BandField::RfPowerPercent, percent}, session);
         });
         headerGrid->addWidget(rfEdit, row, col++);
 
@@ -99,10 +100,11 @@ TxBandDialog::TxBandDialog(RadioModel* model, QWidget* parent)
         tuneEdit->setAlignment(Qt::AlignCenter);
         connect(tuneEdit, &QLineEdit::editingFinished, this, [this, tuneEdit, bandId, session] {
             bool valid = false;
-            const int percent = tuneEdit->text().toInt(&valid);
-            if (valid && percent >= 0 && percent <= 100) {
-                m_model->requestTxBand({bandId, BandField::TunePowerPercent, percent}, session);
-            }
+            const int parsed = tuneEdit->text().toInt(&valid);
+            if (!valid) { tuneEdit->setText(QString::number(m_model->txBandSettings().value(bandId).tunePower)); return; }
+            const int percent = qBound(0, parsed, 100);
+            tuneEdit->setText(QString::number(percent));
+            m_model->requestTxBand({bandId, BandField::TunePowerPercent, percent}, session);
         });
         headerGrid->addWidget(tuneEdit, row, col++);
 

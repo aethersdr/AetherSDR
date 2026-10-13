@@ -11,6 +11,8 @@
 
 #include <QCoreApplication>
 #include <QSignalSpy>
+#include <QEventLoop>
+#include <QTimer>
 #include <cstdio>
 #include <limits>
 #include <set>
@@ -62,7 +64,10 @@ void radioEncoding()
     std::set<Field> covered;
     for (const Case& item : cases) {
         backend.commands.clear();
-        check(backend.requestRadioSetup(item.request) == ReceiveDispatch::Dispatched
+        backend.replies.clear();
+        const ReceiveDispatch result = backend.requestRadioSetup(item.request);
+        if (item.request.field == Field::StartFrequencyCalibration) { backend.acceptCalibrationPrelude(); }
+        check(result == ReceiveDispatch::Dispatched
             && backend.commands == item.expected, "radio setup dispatch has exact wire output");
         covered.insert(item.request.field);
     }
@@ -107,7 +112,7 @@ void radioEncoding()
     check(backend.commands.isEmpty(), "invalid settings produce no wire effects");
     backend.accept = false;
     check(backend.requestRadioSetup({Field::StartFrequencyCalibration, 10.0}) == ReceiveDispatch::Unsupported
-        && backend.commands.isEmpty(), "a refused prelude never starts calibration");
+        && backend.commands.isEmpty(), "an undispatched prelude never starts calibration");
 }
 
 void bandAndTransverterEncoding()
@@ -218,6 +223,8 @@ void usbEncoding()
         check(backend.requestUsbCable(request) == ReceiveDispatch::Unsupported, "malformed cable input is refused");
     }
     check(backend.commands.isEmpty(), "invalid cable input produces no wire output");
+    check(backend.requestUsbCable({QStringLiteral("FTDI01"), 2, F::Band, QString()}) == ReceiveDispatch::Dispatched
+        && backend.commands == QStringList{"usb_cable setbit FTDI01 2 band="}, "empty USB bit band retains the SDK clearing operation");
 }
 
 void routingAndReplies()
@@ -270,6 +277,8 @@ void routingAndReplies()
     const RadioSetupCompletion completion = [&](const RadioSetupReply& reply) { ++completions; last = reply; };
     backend->commands.clear();
     radio.requestRadioSetup({F::StartFrequencyCalibration, 10.0}, &context, completion);
+    check(backend->commands.size() == 1, "calibration waits for the reference acknowledgement");
+    backend->acceptCalibrationPrelude();
     check(backend->commands.size() == 3 && completions == 0, "calibration start remains response-bearing");
     const RadioSetupCompletion accepted = backend->replies.back();
     accepted({RadioSetupReply::Kind::Accepted, 0, QStringLiteral("ok")});
@@ -325,13 +334,14 @@ void reentrantCalibrationAndLocalSettings()
     RadioModel radio;
     RadioSetupTestBackend* backend = installRadioSetupBackend(radio);
     QStringList writes;
-    backend->setSetupCommandSink([&](const QString& command, const RadioSetupCompletion&) {
+    backend->setSetupCommandSink([&](const QString& command, const RadioSetupCompletion& reply) {
         writes.append(command);
         if (writes.size() == 1) { RadioSetupControlTestAccess::replaceConnectionGeneration(radio); }
+        if (reply) { reply({RadioSetupReply::Kind::Accepted}); }
         return true;
     });
     check(radio.requestRadioSetup({RadioSetupRequest::Field::StartFrequencyCalibration, 10.0})
-        == ReceiveDispatch::Unsupported && writes == QStringList{"radio set cal_freq=10.000000"},
+        == ReceiveDispatch::Dispatched && writes == QStringList{"radio set cal_freq=10.000000"},
         "a same-backend reconnect between calibration writes cannot reset or start the next session");
     backend->live = false;
     int replies = 0;
@@ -353,6 +363,133 @@ void reentrantCalibrationAndLocalSettings()
         [&](const RadioSetupReply& result) { ++replies; last = result; });
     check(replies == 2 && last.kind == RadioSetupReply::Kind::Accepted
         && radio.transmitModel().showTxInWaterfall(), "offline local display preference has an honest local receipt");
+}
+
+void calibrationAcknowledgements()
+{
+    using Field = RadioSetupRequest::Field;
+    for (const int rejectedStep : {0, 1}) {
+        RadioModel radio;
+        RadioSetupTestBackend* backend = installRadioSetupBackend(radio);
+        int completions = 0;
+        RadioSetupReply last{RadioSetupReply::Kind::Accepted};
+        radio.requestRadioSetup({Field::StartFrequencyCalibration, 10.0}, &radio,
+            [&](const RadioSetupReply& reply) { ++completions; last = reply; });
+        check(backend->commands == QStringList{"radio set cal_freq=10.000000"}, "start cannot precede a reference reply");
+        if (rejectedStep == 1) {
+            backend->replyLast({RadioSetupReply::Kind::Accepted});
+            check(backend->commands.size() == 2 && backend->commands.last() == "radio set freq_error_ppb=0",
+                  "accepted reference starts only the correction reset");
+        }
+        const RadioSetupCompletion rejected = backend->replies.back();
+        rejected({RadioSetupReply::Kind::Failed, 0x50000015, "refused"});
+        rejected({RadioSetupReply::Kind::Accepted});
+        check(completions == 1 && last.kind == RadioSetupReply::Kind::Failed && last.code == 0x50000015
+            && backend->commands.size() == rejectedStep + 1, "a negative prelude reply ends calibration exactly once without PLL start");
+    }
+    RadioModel radio;
+    RadioSetupTestBackend* backend = installRadioSetupBackend(radio);
+    auto context = std::make_unique<QObject>();
+    radio.requestRadioSetup({Field::StartFrequencyCalibration, 10.0}, context.get(), [](const RadioSetupReply&) {});
+    const RadioSetupCompletion abandoned = backend->replies.back();
+    context.reset();
+    abandoned({RadioSetupReply::Kind::Accepted});
+    check(backend->commands.size() == 1, "closing the calibration owner stops every later write");
+
+    backend->commands.clear(); backend->replies.clear();
+    int completions = 0;
+    radio.requestRadioSetup({Field::StartFrequencyCalibration, 10.0}, &radio, [&](const RadioSetupReply& reply) {
+        ++completions;
+        check(reply.kind == RadioSetupReply::Kind::Failed && reply.code == -1, "unanswered prelude has a bounded failure");
+    });
+    const RadioSetupCompletion late = backend->replies.back();
+    QEventLoop wait;
+    QTimer::singleShot(31000, &wait, &QEventLoop::quit);
+    wait.exec();
+    late({RadioSetupReply::Kind::Accepted});
+    check(completions == 1 && backend->commands.size() == 1, "a timed-out prelude can never reset or start calibration later");
+}
+
+void productionSinkAndLocalReceipts()
+{
+    RadioModel radio;
+    RadioSetupTestBackend* backend = installRadioSetupBackend(radio);
+    QStringList writes;
+    std::vector<RadioConnection::ResponseCallback> responses;
+    const auto sink = RadioSetupControlTestAccess::productionSetupSink(radio,
+        [&](const QString& command, RadioConnection::ResponseCallback reply) {
+            writes.append(command); responses.push_back(reply); return true;
+        });
+    int completions = 0;
+    RadioSetupReply last{RadioSetupReply::Kind::Refused};
+    const RadioSetupCompletion completed = [&](const RadioSetupReply& reply) { ++completions; last = reply; };
+    check(sink("test", completed), "production sink reaches its injected lower writer");
+    responses.back()(0, "accepted");
+    check(completions == 1 && last.kind == RadioSetupReply::Kind::Accepted && last.message == "accepted",
+          "production sink maps a zero radio code to acceptance");
+    responses.back()(17, "failed");
+    check(completions == 2 && last.kind == RadioSetupReply::Kind::Failed && last.code == 17 && last.message == "failed",
+          "production sink retains negative response codes and bodies");
+    RadioSetupControlTestAccess::closing(radio, true);
+    check(!sink("closing", completed), "production sink refuses closing sessions");
+    RadioSetupControlTestAccess::closing(radio, false);
+    RadioSetupControlTestAccess::expiring(radio, true);
+    check(!sink("expiring", completed), "production sink refuses callback-drain writes");
+    RadioSetupControlTestAccess::expiring(radio, false);
+    backend->live = false;
+    check(!sink("disconnected", completed), "production sink refuses disconnected writes");
+    backend->live = true;
+    backend = installRadioSetupBackend(radio);
+    check(!sink("replaced", completed) && writes == QStringList{"test"}, "production sink refuses retired backend generations before reaching the writer");
+
+    backend->accept = false;
+    QSignalSpy dropped(&radio, &RadioModel::commandDropped);
+    for (const RadioSetupRequest& request : {RadioSetupRequest{RadioSetupRequest::Field::Callsign, QStringLiteral("N0CALL")},
+             RadioSetupRequest{RadioSetupRequest::Field::ClientStation, QStringLiteral("Test Station")}}) {
+        const ReceiveDispatch result = radio.requestRadioSetup(request, &radio, completed);
+        check(result == ReceiveDispatch::LocalOnly && last.kind == RadioSetupReply::Kind::Accepted,
+              "a refused radio copy retains an honest saved-locally identity receipt");
+    }
+    check(dropped.isEmpty() && radio.callsign() == "N0CALL"
+        && AppSettings::instance().value("StationName").toString() == "Test Station",
+          "radio-copy failure neither loses client identity nor spends the unsupported notice");
+
+    const RadioControlSession old = radio.controlSession();
+    RadioSetupControlTestAccess::replaceConnectionGeneration(radio);
+    radio.requestTxBand({9, TxBandRequest::Field::RfPowerPercent, 37}, old);
+    radio.requestTransverter({2, TransverterRequest::Field::RxOnly, true}, &radio, completed, old);
+    check(dropped.isEmpty() && last.kind == RadioSetupReply::Kind::Cancelled, "stale editors cancel without blaming radio capability");
+    RadioSetupControlTestAccess::retireBackend(radio);
+    const ReceiveDispatch offline = radio.requestRadioSetup(
+        {RadioSetupRequest::Field::ClientStation, QStringLiteral("Offline Station")}, &radio, completed);
+    check(offline == ReceiveDispatch::LocalOnly && last.kind == RadioSetupReply::Kind::Accepted
+        && dropped.isEmpty() && AppSettings::instance().value("StationName").toString() == "Offline Station",
+        "client identity remains editable with no backend installed");
+}
+
+void usbRetirementCompletesBeforePublication()
+{
+    RadioModel radio;
+    RadioSetupTestBackend* backend = installRadioSetupBackend(radio);
+    const auto retired = std::make_shared<bool>(false);
+    backend->retired = retired;
+    radio.usbCableModel().applyStatus("FTDI01", {{"type", "bit"}});
+    const QMetaObject::Connection teardownObserver = QObject::connect(&radio.usbCableModel(), &UsbCableModel::cableRemoved, &radio, [&](const QString&) {
+        check(*retired && !radio.backend(), "USB retirement observers see an already-retired backend");
+        RadioSetupControlTestAccess::replaceConnectionGeneration(radio);
+    });
+    RadioSetupControlTestAccess::retireBackend(radio);
+    check(*retired && !radio.backend(), "reentrant USB listeners cannot skip backend teardown");
+    installRadioSetupBackend(radio);
+    radio.usbCableModel().applyStatus("FTDI02", {{"type", "bit"}});
+    RadioSetupControlTestAccess::pendingDisconnectState(radio);
+    QObject::disconnect(teardownObserver);
+    QObject::connect(&radio.usbCableModel(), &UsbCableModel::cableRemoved, &radio, [&](const QString&) {
+        check(RadioSetupControlTestAccess::disconnectStateRetired(radio), "USB disconnect observers see cleared continuations and deferred pan writes");
+        RadioSetupControlTestAccess::replaceConnectionGeneration(radio);
+    });
+    RadioSetupControlTestAccess::disconnected(radio);
+    check(RadioSetupControlTestAccess::disconnectStateRetired(radio), "reentrant USB listeners cannot skip disconnect cleanup");
 }
 
 void invalidCallsignPreservesIdentity()
@@ -409,5 +546,8 @@ int main(int argc, char** argv)
     backendRefusals();
     reentrantCalibrationAndLocalSettings();
     invalidCallsignPreservesIdentity();
+    calibrationAcknowledgements();
+    productionSinkAndLocalReceipts();
+    usbRetirementCompletesBeforePublication();
     return failures ? 1 : 0;
 }

@@ -1,6 +1,8 @@
 #pragma once
 
 #include "RadioSetupControl.h"
+#include "core/backends/SetupTextPolicy.h"
+#include "core/backends/UsbCableRequest.h"
 #include "core/NetworkMtuPolicy.h"
 
 #include <QHostAddress>
@@ -33,17 +35,6 @@ struct StaticNetwork {
         return mask != 0 && (host & (host + 1)) == 0;
     }
 };
-
-// Text stays human-readable above the seam. Family-specific escaping belongs
-// to the encoder; framing characters must never become a second command.
-inline bool setupTextValid(const QString& value)
-{
-    if (value.size() > 256) { return false; }
-    for (const QChar ch : value) {
-        if (!ch.isPrint()) { return false; }
-    }
-    return true;
-}
 
 struct RadioSetupRequest {
     using Field = RadioSetupField;
@@ -183,45 +174,6 @@ struct RadioSetupReply {
     QString message;
 };
 
-struct UsbCableRequest {
-    enum class Field {
-        Type, Name, Enabled, AutoReport, Source, SerialSpeed, DataBits,
-        Parity, StopBits, FlowControl, ActiveHigh, Band, Preamp,
-        SourceRxAntenna, SourceTxAntenna, SourceSlice, Output,
-        LowFrequencyMhz, HighFrequencyMhz, PttDependent,
-        PttDelayMs, TxDelayMs, Remove, Count
-    };
-    QString serial;
-    int bit{-1}; // -1 is the cable, 0..7 is one independent bit.
-    Field field;
-    std::variant<std::monostate, bool, int, double, QString> value;
-    bool valid() const
-    {
-        if (serial.isEmpty() || serial.size() > 128 || bit < -1 || bit > 7
-            || field < Field::Type || field >= Field::Count) { return false; }
-        for (const QChar ch : serial) {
-            if (!ch.isPrint() || ch.isSpace() || ch == QLatin1Char('=') || ch == QLatin1Char('|')) { return false; }
-        }
-        switch (field) {
-        case Field::Remove: return bit == -1 && std::holds_alternative<std::monostate>(value);
-        case Field::Enabled: case Field::AutoReport: case Field::ActiveHigh:
-        case Field::Preamp: case Field::PttDependent: return std::holds_alternative<bool>(value);
-        case Field::SerialSpeed: case Field::DataBits: case Field::StopBits:
-        case Field::PttDelayMs: case Field::TxDelayMs: {
-            const int* number = std::get_if<int>(&value);
-            return number && *number >= 0;
-        }
-        case Field::LowFrequencyMhz: case Field::HighFrequencyMhz: {
-            const double* mhz = std::get_if<double>(&value);
-            return mhz && std::isfinite(*mhz) && *mhz >= 0;
-        }
-        default: {
-            const QString* text = std::get_if<QString>(&value);
-            return text && setupTextValid(*text);
-        }
-        }
-    }
-};
 using RadioSetupCompletion = std::function<void(const RadioSetupReply&)>;
 // Trusted composition fences multi-write configuration to its original session.
 // This predicate conveys no permission to key a transmitter.
@@ -241,4 +193,3 @@ Q_DECLARE_METATYPE(AetherSDR::RadioSetupRequest)
 Q_DECLARE_METATYPE(AetherSDR::TxBandRequest)
 Q_DECLARE_METATYPE(AetherSDR::TransverterRequest)
 Q_DECLARE_METATYPE(AetherSDR::RadioSetupReply)
-Q_DECLARE_METATYPE(AetherSDR::UsbCableRequest)

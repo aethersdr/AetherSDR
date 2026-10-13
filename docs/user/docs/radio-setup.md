@@ -47,7 +47,13 @@ characters: letters, digits, `.`, `,`, `/` and `-`. Spaces and other characters
 are removed; callsigns are uppercased. Blank or symbol-only callsign edits keep
 the previous callsign rather than replacing it. **Station Name** keeps spaces
 but removes characters the radio cannot accept. The locally saved station name
-is unchanged.
+is unchanged. Your callsign and station name are saved locally even if the radio
+copy cannot be dispatched.
+
+**Network → Static** requires complete IPv4 addresses and a nonzero contiguous
+subnet mask. **Apply** stays disabled while a field is invalid; hover the field
+to see the reason. **TX Band Settings** limits RF and tune power to 0–100 percent
+and restores the radio's reported value for malformed entries.
 
 ### RADIO
 
@@ -131,13 +137,15 @@ timings are entered in milliseconds. The Demo does not implement these settings.
 
 1. Connect to your radio before editing a timing.
 2. Enter a whole number. Negative delays are treated as zero; invalid or
-   excessively large entries are not sent.
+   excessively large entries are not sent and restore the radio's reported value.
 
 ### Calibration is interrupted by a disconnect
 
 On **Receive → Frequency Offset**, **Start** begins radio-side calibration.
 An accepted request is not a completed calibration; completion comes from the
-radio's status. If the connection ends, the operation stops waiting and shows
+radio's status. The reference frequency and correction reset must each be
+accepted before calibration starts. A rejected or unanswered step stops the
+operation. If the connection ends, the operation stops waiting and shows
 **Disconnected**.
 
 1. Reconnect to the radio.

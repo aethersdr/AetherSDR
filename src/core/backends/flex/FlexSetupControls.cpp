@@ -5,6 +5,7 @@
 #include <QStringList>
 #include <array>
 #include <algorithm>
+#include <memory>
 
 namespace AetherSDR {
 namespace {
@@ -104,18 +105,46 @@ ReceiveDispatch FlexBackend::requestRadioSetup(const RadioSetupRequest& request,
     }
     case Field::LowLatencyDigital: command = QStringLiteral("radio set low_latency_digital_modes=") + boolean(); break;
     case Field::StartFrequencyCalibration: {
-        // Keep the ordered reference/reset/start sequence. Acceptance of start
-        // is not completion; pll_done status owns the calibration result.
+        // Each prelude must be acknowledged before the next write. Start's
+        // acknowledgement is not completion; pll_done owns the result.
         const QPointer<FlexBackend> alive(this);
         const auto sink = m_setupSink;
-        if (!sink(QStringLiteral("radio set cal_freq=")
-                      + QString::number(std::get<double>(request.value), 'f', 6), {}) || !alive
-            || (current && !current())
-            || !sink(QStringLiteral("radio set freq_error_ppb=0"), {}) || !alive
-            || (current && !current())) {
-            return ReceiveDispatch::Unsupported;
-        }
-        return sink(QStringLiteral("radio pll_start"), completion)
+        const auto finished = std::make_shared<bool>(false);
+        const auto complete = [finished, completion](const RadioSetupReply& reply) {
+            if (*finished) { return; }
+            *finished = true;
+            if (completion) { completion(reply); }
+        };
+        const auto referenceReplied = std::make_shared<bool>(false);
+        const RadioSetupCompletion referenceReply =
+            [alive, sink, current, complete, referenceReplied](const RadioSetupReply& reference) {
+            if (*referenceReplied) { return; }
+            *referenceReplied = true;
+            if (!alive || (current && !current())) {
+                complete({RadioSetupReply::Kind::Cancelled, -1, QStringLiteral("Original calibration session ended.")});
+                return;
+            }
+            if (reference.kind != RadioSetupReply::Kind::Accepted) { complete(reference); return; }
+            const auto resetReplied = std::make_shared<bool>(false);
+            const RadioSetupCompletion resetReply =
+                [alive, sink, current, complete, resetReplied](const RadioSetupReply& reset) {
+                if (*resetReplied) { return; }
+                *resetReplied = true;
+                if (!alive || (current && !current())) {
+                    complete({RadioSetupReply::Kind::Cancelled, -1, QStringLiteral("Original calibration session ended.")});
+                    return;
+                }
+                if (reset.kind != RadioSetupReply::Kind::Accepted) { complete(reset); return; }
+                if (!sink(QStringLiteral("radio pll_start"), complete)) {
+                    complete({RadioSetupReply::Kind::Refused, -1, QStringLiteral("Calibration start not dispatched.")});
+                }
+            };
+            if (!sink(QStringLiteral("radio set freq_error_ppb=0"), resetReply)) {
+                complete({RadioSetupReply::Kind::Refused, -1, QStringLiteral("Calibration reset not dispatched.")});
+            }
+        };
+        return sink(QStringLiteral("radio set cal_freq=")
+                        + QString::number(std::get<double>(request.value), 'f', 6), referenceReply)
             ? ReceiveDispatch::Dispatched : ReceiveDispatch::Unsupported;
     }
     case Field::Count: return ReceiveDispatch::Unsupported;
@@ -263,7 +292,10 @@ ReceiveDispatch FlexBackend::requestUsbCable(const UsbCableRequest& request)
     case Field::ActiveHigh:
         key = QStringLiteral("polarity"); value = std::get<bool>(request.value)
             ? QStringLiteral("active_high") : QStringLiteral("active_low"); break;
-    case Field::Band: key = QStringLiteral("band"); value = std::get<QString>(request.value); break;
+    case Field::Band:
+        key = QStringLiteral("band"); value = std::get<QString>(request.value);
+        if (!value.isEmpty() && !token(value)) { return ReceiveDispatch::Unsupported; }
+        break;
     case Field::Preamp: key = QStringLiteral("preamp"); value = boolean(); break;
     case Field::SourceRxAntenna: key = QStringLiteral("source_rx_ant"); value = std::get<QString>(request.value); break;
     case Field::SourceTxAntenna: key = QStringLiteral("source_tx_ant"); value = std::get<QString>(request.value); break;
@@ -280,7 +312,8 @@ ReceiveDispatch FlexBackend::requestUsbCable(const UsbCableRequest& request)
     case Field::Remove: case Field::Count: return ReceiveDispatch::Unsupported;
     }
     if (std::holds_alternative<QString>(request.value)
-        && request.field != Field::Name && !token(value)) { return ReceiveDispatch::Unsupported; }
+        && request.field != Field::Name && request.field != Field::Band
+        && !token(value)) { return ReceiveDispatch::Unsupported; }
     const QString command = request.bit < 0
         ? QStringLiteral("usb_cable set %1 %2=%3").arg(request.serial, key, value)
         : QStringLiteral("usb_cable setbit %1 %2 %3=%4").arg(request.serial).arg(request.bit).arg(key, value);

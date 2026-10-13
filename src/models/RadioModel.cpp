@@ -820,6 +820,23 @@ std::unique_ptr<IRadioBackend> RadioModel::makeBackend(const QString& family)
     return std::make_unique<FlexBackend>();
 }
 
+RadioModel::SetupCommandSink RadioModel::setupCommandSink(const SetupCommandWriter& writer)
+{
+    const QPointer<RadioModel> model(this);
+    const quint64 generation = m_backendReceiverGeneration;
+    return [model, generation, writer](const QString& command, const RadioSetupCompletion& completion) {
+        if (!model || generation != model->m_backendReceiverGeneration || !model->isConnected()
+            || model->m_txSessionClosing || model->m_expiringPendingCallbacks) { return false; }
+        ResponseCallback reply;
+        if (completion) {
+            reply = [completion](int code, const QString& body) {
+                completion({code == 0 ? RadioSetupReply::Kind::Accepted : RadioSetupReply::Kind::Failed, code, body});
+            };
+        }
+        return writer ? writer(command, std::move(reply)) : model->sendCmdPublic(command, std::move(reply));
+    };
+}
+
 void RadioModel::setupBackend(const QString& family)
 {
     // Rerunnable on every family switch. Every connection made here must have the
@@ -887,19 +904,7 @@ void RadioModel::setupBackend(const QString& family)
                     answered(false);   // dropped before the wire: nothing will answer
                 }
             });
-            flex->setSetupCommandSink([this, generation](const QString& cmd,
-                                                        const RadioSetupCompletion& completion) {
-                if (generation != m_backendReceiverGeneration || !isConnected()
-                    || m_txSessionClosing || m_expiringPendingCallbacks) { return false; }
-                ResponseCallback reply;
-                if (completion) {
-                    reply = [completion](int code, const QString& body) {
-                        completion({code == 0 ? RadioSetupReply::Kind::Accepted
-                                              : RadioSetupReply::Kind::Failed, code, body});
-                    };
-                }
-                return sendCmdPublic(cmd, std::move(reply));
-            });
+            flex->setSetupCommandSink(setupCommandSink());
             flex->setTxCommandSink([this](const QString& cmd, const TxCoordinator::Command& fence) {
                 sendTxKeyingCommand(cmd, fence);
             });
@@ -1726,10 +1731,6 @@ void RadioModel::teardownBackend()
     resetTxOperations();
     ++m_backendReceiverGeneration;
     m_backendObservedTransmit = false;   // an observation dies with its backend
-    const QPointer<RadioModel> setupOwner(this);
-    const RadioControlSession setupSession = controlSession();
-    m_usbCableModel.clear();
-    if (!setupOwner || setupSession != controlSession()) { return; }
     if (m_backend) {
         m_backend->retirePcmStreams();
     }
@@ -1755,6 +1756,7 @@ void RadioModel::teardownBackend()
         // which is precisely why the acknowledgment is owed immediately rather
         // than after the m_backend.reset() below.
         acknowledgeTxTransportTeardown(m_txOperation);
+        m_usbCableModel.clear();
         return;
     }
     if (m_connection)
@@ -1794,6 +1796,8 @@ void RadioModel::teardownBackend()
     // died, not about the app. A Flex arriving after an HL2 must not inherit
     // "this wire has no round trip to time".
     m_backendLinkShape = {};
+    // Publish inventory retirement only after the old backend and state are gone.
+    m_usbCableModel.clear();
 }
 
 void RadioModel::expirePendingCallbacks(const QString& reason)
@@ -7937,10 +7941,7 @@ void RadioModel::onDisconnected()
     // dropping the continuation makes sure a reconnect starts from a fresh
     // peek rather than resuming a half-finished one. (#5653 review)
     ++m_sessionGeneration;
-    const QPointer<RadioModel> setupOwner(this);
-    const RadioControlSession setupSession = controlSession();
-    m_usbCableModel.clear();
-    if (!setupOwner || setupSession != controlSession()) { return; }
+    const RadioControlSession retiringSetupSession = controlSession();
     m_multiFlexContinuation = nullptr;
 
     // #4142 — void any pan centers deferred during a profile load. The session
@@ -8218,6 +8219,9 @@ void RadioModel::onDisconnected()
     // back, which is the same state the app starts in.
     if (m_intentionalDisconnect || m_lastInfo.address.isNull())
         m_sessionRadioOwnsMemories = false;
+    if (retiringSetupSession == controlSession()) {
+        m_usbCableModel.clear();
+    }
 }
 
 void RadioModel::onConnectionError(const QString& msg)

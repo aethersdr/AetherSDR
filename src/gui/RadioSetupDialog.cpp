@@ -31,6 +31,8 @@
 #include "core/PeripheralSettings.h"
 #include <QApplication>
 #include <QHash>
+#include <QHostAddress>
+#include <QAbstractSocket>
 #include <QPair>
 #include <QAbstractItemView>
 #include <QLocale>
@@ -1791,6 +1793,7 @@ void RadioSetupDialog::updateRadioCapabilityVisibility()
             isStatic ? m_model->staticGateway() : m_model->gateway(),
             m_ipDhcpButton, m_ipStaticButton, m_staticIpEdit,
             m_staticMaskEdit, m_staticGatewayEdit, m_ipApplyButton, tip);
+        if (m_validateIpConfig) { m_validateIpConfig(false); }
     }
     if (m_audioCompressionGroup) {
         m_audioCompressionGroup->setVisible(!connected || caps.hasAudioCompression);
@@ -3031,26 +3034,60 @@ QGroupBox* RadioSetupDialog::buildIpConfigGroup()
     applyBtn->setAccessibleDescription(applyBtn->toolTip());
     fieldsGrid->addWidget(applyBtn, 4, 1, Qt::AlignLeft);
 
+    const auto validateInputs = [this, dhcpBtn, staticIp, staticMask, staticGw, applyBtn](bool edited) {
+        if (!m_ipConfigPresentation.canConfigure) { applyBtn->setEnabled(false); return; }
+        QString firstError;
+        const auto explain = [&firstError](QLineEdit* edit, const QString& error) {
+            edit->setToolTip(error);
+            edit->setAccessibleDescription(error.isEmpty() ? QStringLiteral("Complete IPv4 address.") : error);
+            if (firstError.isEmpty()) { firstError = error; }
+        };
+        if (!dhcpBtn->isChecked()) {
+            const QHostAddress address(staticIp->text());
+            const QHostAddress gateway(staticGw->text());
+            const QHostAddress mask(staticMask->text());
+            explain(staticIp, staticIp->text().count(QLatin1Char('.')) == 3 && address.protocol() == QAbstractSocket::IPv4Protocol
+                ? QString() : QStringLiteral("Enter a complete IPv4 address."));
+            explain(staticGw, staticGw->text().count(QLatin1Char('.')) == 3 && gateway.protocol() == QAbstractSocket::IPv4Protocol
+                ? QString() : QStringLiteral("Enter a complete IPv4 gateway address."));
+            const quint32 host = ~mask.toIPv4Address();
+            const bool validMask = staticMask->text().count(QLatin1Char('.')) == 3 && mask.protocol() == QAbstractSocket::IPv4Protocol
+                && mask.toIPv4Address() != 0 && (host & (host + 1)) == 0;
+            explain(staticMask, validMask ? QString() : QStringLiteral("Enter a nonzero contiguous IPv4 subnet mask."));
+        } else {
+            for (QLineEdit* edit : {staticIp, staticMask, staticGw}) { explain(edit, {}); }
+        }
+        if (edited || !firstError.isEmpty()) { applyBtn->setEnabled(firstError.isEmpty()); }
+        applyBtn->setToolTip(firstError);
+        applyBtn->setAccessibleDescription(firstError);
+    };
+    m_validateIpConfig = validateInputs;
+    for (QLineEdit* edit : {staticIp, staticMask, staticGw}) {
+        connect(edit, &QLineEdit::textChanged, this, [validateInputs](const QString&) { validateInputs(true); });
+    }
+
     connect(dhcpBtn, &QPushButton::clicked, this,
-            [dhcpBtn, staticBtn, staticIp, staticMask, staticGw, applyBtn] {
+            [dhcpBtn, staticBtn, staticIp, staticMask, staticGw, validateInputs] {
         dhcpBtn->setChecked(true);
         staticBtn->setChecked(false);
         staticIp->setEnabled(false);
         staticMask->setEnabled(false);
         staticGw->setEnabled(false);
-        applyBtn->setEnabled(true);
+        validateInputs(true);
     });
     connect(staticBtn, &QPushButton::clicked, this,
-            [dhcpBtn, staticBtn, staticIp, staticMask, staticGw, applyBtn] {
+            [dhcpBtn, staticBtn, staticIp, staticMask, staticGw, validateInputs] {
         dhcpBtn->setChecked(false);
         staticBtn->setChecked(true);
         staticIp->setEnabled(true);
         staticMask->setEnabled(true);
         staticGw->setEnabled(true);
-        applyBtn->setEnabled(true);
+        validateInputs(true);
     });
     connect(applyBtn, &QPushButton::clicked, this,
-            [this, dhcpBtn, staticIp, staticMask, staticGw, applyBtn] {
+            [this, dhcpBtn, staticIp, staticMask, staticGw, applyBtn, validateInputs] {
+        validateInputs(false);
+        if (!applyBtn->isEnabled()) { return; }
         if (dhcpBtn->isChecked()) {
             m_model->requestRadioSetup({SetupField::Dhcp, std::monostate{}});
             qDebug() << "RadioSetupDialog: network set to DHCP";
@@ -3058,7 +3095,8 @@ QGroupBox* RadioSetupDialog::buildIpConfigGroup()
             const StaticNetwork network{QHostAddress(staticIp->text()),
                                         QHostAddress(staticGw->text()),
                                         QHostAddress(staticMask->text())};
-            if (m_model->requestRadioSetup({SetupField::StaticNetwork, network})
+            const RadioSetupRequest request{SetupField::StaticNetwork, network};
+            if (!request.valid() || m_model->requestRadioSetup(request)
                 == ReceiveDispatch::Unsupported) { return; }
             qDebug() << "RadioSetupDialog: static IP requested";
         }
@@ -3188,7 +3226,16 @@ QWidget* RadioSetupDialog::buildTxTab()
                 }
                 bool valid = false;
                 const int parsed = edit->text().toInt(&valid);
-                if (!valid || parsed > std::numeric_limits<int>::max() / scale) { return; }
+                if (!valid || parsed > std::numeric_limits<int>::max() / scale) {
+                    const TransmitModel& tx = m_model->transmitModel();
+                    const int observed = field == SetupField::AccTxDelayMs ? tx.accTxDelay()
+                        : field == SetupField::TxDelayMs ? tx.txDelay()
+                        : field == SetupField::Tx1DelayMs ? tx.tx1Delay()
+                        : field == SetupField::Tx2DelayMs ? tx.tx2Delay()
+                        : field == SetupField::Tx3DelayMs ? tx.tx3Delay() : tx.interlockTimeout();
+                    edit->setText(QString::number(observed / scale));
+                    return;
+                }
                 const int val = qMax(0, parsed);
                 edit->setText(QString::number(val));
                 m_model->requestRadioSetup({field, val * scale});
@@ -3799,6 +3846,19 @@ QWidget* RadioSetupDialog::buildRxTab()
                     setTone(statusGuard, Tone::Accent);
                     qCDebug(lcProtocol)
                         << "RadioSetupDialog: radio pll_start accepted";
+                    QTimer::singleShot(20000, dialog,
+                        [startGuard, statusGuard, calibrationActive, calibrationRun, runId] {
+                        if (!startGuard || !statusGuard || !*calibrationActive
+                            || *calibrationRun != runId) { return; }
+                        *calibrationActive = false;
+                        startGuard->setEnabled(true);
+                        startGuard->setText("Start");
+                        statusGuard->setText("No response");
+                        setTone(statusGuard, Tone::Error);
+                        qCWarning(lcProtocol)
+                            << "RadioSetupDialog: frequency calibration timed out waiting for pll_done=1"
+                            << "run_id=" << runId;
+                    });
                     return;
                 }
 
@@ -3811,24 +3871,10 @@ QWidget* RadioSetupDialog::buildRxTab()
                     : QString("Error 0x%1").arg(code, 0, 16).toUpper());
                 setTone(statusGuard, Tone::Error);
                 qCWarning(lcProtocol)
-                    << "RadioSetupDialog: radio pll_start failed: code"
+                    << "RadioSetupDialog: frequency calibration request failed: code"
                     << Qt::hex << code << "body:" << body;
             });
 
-            QTimer::singleShot(20000, this,
-                [startGuard, statusGuard, calibrationActive, calibrationRun, runId] {
-                if (!startGuard || !statusGuard || !*calibrationActive
-                    || *calibrationRun != runId)
-                    return;
-                *calibrationActive = false;
-                startGuard->setEnabled(true);
-                startGuard->setText("Start");
-                statusGuard->setText("No response");
-                setTone(statusGuard, Tone::Error);
-                qCWarning(lcProtocol)
-                    << "RadioSetupDialog: frequency calibration timed out waiting for pll_done=1"
-                    << "run_id=" << runId;
-            });
         });
         offsetGrid->addWidget(startBtn, 0, 2);
         offsetGrid->addWidget(calStatus, 0, 3);
@@ -6287,6 +6333,8 @@ QWidget* RadioSetupDialog::buildXvtrTab()
         };
 
         auto* nameEdit   = addField(0, 0, "Name:", x.name);
+        nameEdit->setMaxLength(4);
+        nameEdit->setAccessibleDescription(QStringLiteral("Transverter name, up to four characters."));
         auto* validLbl   = new QLabel(x.isValid ? "Valid" : "Invalid");
         setTone(validLbl, x.isValid ? Tone::Ok : Tone::Error);
         grid->addWidget(validLbl, 0, 3);

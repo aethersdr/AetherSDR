@@ -1839,6 +1839,9 @@ private:
     RadioSetupCompletion fencedSetupCompletion(QObject* context,
                                                const RadioSetupCompletion& completion,
                                                bool requiresLiveSession = true);
+    using SetupCommandWriter = std::function<bool(const QString&, ResponseCallback)>;
+    using SetupCommandSink = std::function<bool(const QString&, const RadioSetupCompletion&)>;
+    SetupCommandSink setupCommandSink(const SetupCommandWriter& writer = {});
     // Translate a MODEL pan id to the backend's own id for a command going down
     // the seam. The inverse of resolveBackendPan(); both are needed or the
     // mapping is one-way and every pan command addresses a pan the backend

@@ -65,6 +65,12 @@ identity and the explicitly client-owned TX-waterfall preference retain their
 local consumers. This record adds no daemon methods, remote permissions or
 `welcome` fields. Calibration acceptance and radio-confirmed completion remain
 distinct; unsupported vendor operations return refusal, not local success.
+Saving client-owned station identity locally does not require dispatching a
+radio copy.
+
+| Record | Flex | HL2 | Sim | Icom | ANAN | RTL-SDR | Consumers |
+|---|---|---|---|---|---|---|---|
+| `radioSetupControl` | All implemented `RadioSetupRequest` fields | absent | absent | absent | absent | absent | `RadioModel::requestRadioSetup` admission; Radio Setup timing and maximum-power availability |
 
 ### Broadcast FM receiver controls
 

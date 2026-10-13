@@ -288,6 +288,7 @@ private:
     QLineEdit* m_staticGatewayEdit{nullptr};
     QPushButton* m_ipApplyButton{nullptr};
     IpConfigPresentationState m_ipConfigPresentation;
+    std::function<void(bool)> m_validateIpConfig;
     QGroupBox* m_audioCompressionGroup{nullptr};
     QHash<QString, QComboBox*> m_flexControlActionCombos;
     QHash<QString, QString> m_flexControlActionDefaults;

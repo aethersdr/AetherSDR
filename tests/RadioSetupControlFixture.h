@@ -27,6 +27,18 @@ public:
     }
     static void disconnected(RadioModel& radio) { radio.onDisconnected(); }
     static void replaceConnectionGeneration(RadioModel& radio) { ++radio.m_sessionGeneration; }
+    static auto productionSetupSink(RadioModel& radio, const RadioModel::SetupCommandWriter& writer)
+    { return radio.setupCommandSink(writer); }
+    static void closing(RadioModel& radio, bool value) { radio.m_txSessionClosing = value; }
+    static void expiring(RadioModel& radio, bool value) { radio.m_expiringPendingCallbacks = value; }
+    static void retireBackend(RadioModel& radio) { radio.teardownBackend(); }
+    static void pendingDisconnectState(RadioModel& radio)
+    {
+        radio.m_multiFlexContinuation = [] {};
+        radio.m_pendingProfileLoadPanWrites.deferCenter(QStringLiteral("0x40000000"), 14.1);
+    }
+    static bool disconnectStateRetired(const RadioModel& radio)
+    { return !radio.m_multiFlexContinuation && radio.m_pendingProfileLoadPanWrites.isEmpty(); }
 };
 
 // Recording injection, never a radio peer or an opened transport.
@@ -36,7 +48,23 @@ public:
     bool accept{true};
     QStringList commands;
     std::vector<RadioSetupCompletion> replies;
+    std::shared_ptr<bool> retired;
     bool isConnected() const override { return live; }
+    ~RadioSetupTestBackend() override
+    {
+        if (retired) { *retired = true; }
+    }
+    void replyLast(const RadioSetupReply& reply)
+    {
+        if (replies.empty()) { return; }
+        const RadioSetupCompletion callback = replies.back();
+        callback(reply);
+    }
+    void acceptCalibrationPrelude()
+    {
+        replyLast({RadioSetupReply::Kind::Accepted, 0, {}});
+        replyLast({RadioSetupReply::Kind::Accepted, 0, {}});
+    }
     RadioSetupTestBackend()
     {
         setModelProvider([] { return QStringLiteral("FLEX-6700"); });

@@ -100,10 +100,12 @@ private slots:
         QVERIFY(frequency && start);
         frequency->setText(QStringLiteral("10.000000"));
         start->click();
+        QCOMPARE(backend->commands, QStringList{"radio set cal_freq=10.000000"});
+        backend->acceptCalibrationPrelude();
         QCOMPARE(backend->commands, QStringList({"radio set cal_freq=10.000000",
                                                 "radio set freq_error_ppb=0", "radio pll_start"}));
         QVERIFY(!start->isEnabled());
-        backend->replies.back()({RadioSetupReply::Kind::Accepted});
+        backend->replyLast({RadioSetupReply::Kind::Accepted});
         QVERIFY(!start->isEnabled());
         emit radio.statusReceived(QStringLiteral("radio"), {{QStringLiteral("pll_done"), QStringLiteral("1")}});
         QVERIFY(!start->isEnabled());
@@ -136,11 +138,18 @@ private slots:
         QVERIFY(frequency && start);
         frequency->setText(QStringLiteral("10"));
         start->click();
-        backend->replies.back()({RadioSetupReply::Kind::Failed, 9, QStringLiteral("rejected")});
+        backend->replyLast({RadioSetupReply::Kind::Failed, 9, QStringLiteral("rejected")});
+        QVERIFY(start->isEnabled());
+        QCOMPARE(backend->commands.size(), 1);
+        backend->commands.clear();
+        start->click();
+        backend->replyLast({RadioSetupReply::Kind::Accepted});
+        backend->replyLast({RadioSetupReply::Kind::Failed, 10, QStringLiteral("reset rejected")});
+        QCOMPARE(backend->commands.size(), 2);
         QVERIFY(start->isEnabled());
         start->click();
-        const RadioSetupCompletion trailing = backend->replies.back();
-        trailing({RadioSetupReply::Kind::Accepted});
+        backend->acceptCalibrationPrelude();
+        backend->replyLast({RadioSetupReply::Kind::Accepted});
         backend->live = false;
         emit radio.connectionStateChanged(false);
         QVERIFY(start->isEnabled());
@@ -155,9 +164,35 @@ private slots:
         emit radio.connectionStateChanged(true);
         start->click();
         const RadioSetupCompletion closed = backend->replies.back();
+        const qsizetype dispatched = backend->commands.size();
         dialog.reset();
         closed({RadioSetupReply::Kind::Accepted});
+        QCOMPARE(backend->commands.size(), dispatched);
         QCoreApplication::processEvents();
+    }
+
+    void calibrationCompletionDeadlineStartsAfterAcceptance()
+    {
+        RadioModel radio;
+        RadioSetupTestBackend* backend = installRadioSetupBackend(radio);
+        RadioSetupDialog dialog(&radio);
+        dialog.selectTab(QStringLiteral("Receive"));
+        QGroupBox* group = groupNamed(dialog, QStringLiteral("Frequency Offset"));
+        QVERIFY(group);
+        QLineEdit* frequency = editNextTo(*group, QStringLiteral("Cal Frequency (MHz):"));
+        QPushButton* start = buttonNamed(*group, QStringLiteral("Start"));
+        QVERIFY(frequency && start);
+        frequency->setText(QStringLiteral("10"));
+        start->click();
+        QTest::qWait(21000);
+        QVERIFY(!start->isEnabled());
+        QCOMPARE(backend->commands, QStringList{"radio set cal_freq=10.000000"});
+        backend->acceptCalibrationPrelude();
+        backend->replyLast({RadioSetupReply::Kind::Accepted});
+        QVERIFY(!start->isEnabled());
+        emit radio.statusReceived(QStringLiteral("radio"), {{QStringLiteral("pll_done"), QStringLiteral("0")}});
+        emit radio.statusReceived(QStringLiteral("radio"), {{QStringLiteral("pll_done"), QStringLiteral("1")}});
+        QVERIFY(start->isEnabled());
     }
 
     void transverterCreationIsLifetimeAndSessionFenced()
@@ -185,7 +220,21 @@ private slots:
         QTest::qWait(350);
     }
 
-    void bandDialogUsesTypedRequestsAndRejectsInvalidNumbers()
+    void transverterNameUsesTheRadioLimit()
+    {
+        RadioModel radio;
+        installRadioSetupBackend(radio);
+        RadioSetupControlTestAccess::transverter(radio, 2);
+        RadioSetupDialog dialog(&radio);
+        dialog.selectTab(QStringLiteral("Transverters"));
+        QLineEdit* name = editNextTo(dialog, QStringLiteral("Name:"));
+        QVERIFY(name);
+        QCOMPARE(name->maxLength(), 4);
+        name->setText(QStringLiteral("abcdefgh"));
+        QCOMPARE(name->text(), QStringLiteral("abcd"));
+    }
+
+    void bandDialogUsesTypedRequestsAndNormalizesNumbers()
     {
         RadioModel radio;
         RadioSetupTestBackend* backend = installRadioSetupBackend(radio);
@@ -201,8 +250,16 @@ private slots:
         backend->commands.clear();
         editors[0]->setText(QStringLiteral("42 inhibit=0"));
         emit editors[0]->editingFinished();
+        QCOMPARE(editors[0]->text(), QStringLiteral("37"));
+        QVERIFY(backend->commands.isEmpty());
         editors[1]->setText(QStringLiteral("101"));
         emit editors[1]->editingFinished();
+        QCOMPARE(editors[1]->text(), QStringLiteral("100"));
+        QCOMPARE(backend->commands, QStringList{"transmit bandset 9 tunepower=100"});
+        backend->commands.clear();
+        editors[0]->setText(QStringLiteral("999999999999999999999"));
+        emit editors[0]->editingFinished();
+        QCOMPARE(editors[0]->text(), QStringLiteral("37"));
         QVERIFY(backend->commands.isEmpty());
         const QList<QCheckBox*> toggles = dialog.findChildren<QCheckBox*>();
         QCOMPARE(toggles.size(), 8);
@@ -210,8 +267,67 @@ private slots:
         QCOMPARE(backend->commands, QStringList{"transmit bandset 9 inhibit=1"});
         backend = installRadioSetupBackend(radio);
         RadioSetupControlTestAccess::band(radio, 9);
+        QSignalSpy dropped(&radio, &RadioModel::commandDropped);
         editors[0]->setText(QStringLiteral("55"));
         emit editors[0]->editingFinished();
+        QVERIFY(backend->commands.isEmpty());
+        QVERIFY(dropped.isEmpty());
+    }
+
+    void staticNetworkExplainsInvalidFieldsWithoutDispatch()
+    {
+        RadioModel radio;
+        RadioSetupTestBackend* backend = installRadioSetupBackend(radio);
+        RadioSetupDialog dialog(&radio);
+        dialog.selectTab(QStringLiteral("Network"));
+        QGroupBox* group = groupNamed(dialog, QStringLiteral("IP Configuration"));
+        QVERIFY(group);
+        QLineEdit* address = editNextTo(*group, QStringLiteral("IP Address:"));
+        QLineEdit* mask = editNextTo(*group, QStringLiteral("Mask:"));
+        QLineEdit* gateway = editNextTo(*group, QStringLiteral("Gateway:"));
+        QPushButton* apply = buttonNamed(*group, QStringLiteral("Apply"));
+        QPushButton* staticMode = buttonNamed(*group, QStringLiteral("Static"));
+        QVERIFY(address && mask && gateway && apply && staticMode);
+        QSignalSpy dropped(&radio, &RadioModel::commandDropped);
+        staticMode->click();
+        address->setText(QStringLiteral("192.0."));
+        gateway->setText(QStringLiteral("192.0.2.1"));
+        mask->setText(QStringLiteral("255.0.255.0"));
+        QVERIFY(!apply->isEnabled());
+        QVERIFY(!address->toolTip().isEmpty());
+        QVERIFY(!mask->accessibleDescription().isEmpty());
+        emit backend->capabilitiesChanged();
+        QVERIFY(!apply->toolTip().isEmpty());
+        emit apply->clicked();
+        QVERIFY(backend->commands.isEmpty());
+        address->setText(QStringLiteral("192.0.2.2"));
+        mask->setText(QStringLiteral("255.255.255.0"));
+        QVERIFY(apply->isEnabled());
+        QVERIFY(address->toolTip().isEmpty());
+        apply->click();
+        QCOMPARE(backend->commands, QStringList{"radio static_net_params ip=192.0.2.2 gateway=192.0.2.1 netmask=255.255.255.0"});
+        QVERIFY(dropped.isEmpty());
+    }
+
+    void malformedTimingsRestoreObservedValues()
+    {
+        RadioModel radio;
+        RadioSetupTestBackend* backend = installRadioSetupBackend(radio);
+        RadioSetupDialog dialog(&radio);
+        dialog.selectTab(QStringLiteral("Transmit"));
+        QLineEdit* delay = editNextTo(dialog, QStringLiteral("TX Delay:"));
+        QLineEdit* timeout = editNextTo(dialog, QStringLiteral("Timeout (sec):"));
+        QVERIFY(delay && timeout);
+        const QString observedDelay = delay->text();
+        const QString observedTimeout = timeout->text();
+        for (const QString& input : {QStringLiteral("oops"), QStringLiteral("999999999999999999999")}) {
+            delay->setText(input);
+            emit delay->editingFinished();
+            QCOMPARE(delay->text(), observedDelay);
+        }
+        timeout->setText(QStringLiteral("2147484"));
+        emit timeout->editingFinished();
+        QCOMPARE(timeout->text(), observedTimeout);
         QVERIFY(backend->commands.isEmpty());
     }
 };

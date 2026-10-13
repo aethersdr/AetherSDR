@@ -4,7 +4,7 @@
 #include <QMap>
 #include <QString>
 #include <QVariantMap>
-#include "core/backends/RadioSetupRequest.h"
+#include "core/backends/UsbCableRequest.h"
 
 namespace AetherSDR {
 

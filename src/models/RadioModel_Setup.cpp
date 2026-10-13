@@ -63,11 +63,19 @@ ReceiveDispatch RadioModel::requestRadioSetup(const RadioSetupRequest& request,
     using Field = RadioSetupRequest::Field;
     if (QThread::currentThread() != thread()) { return ReceiveDispatch::Unsupported; }
     const QPointer<RadioModel> alive(this);
+    const QPointer<QObject> owner(replyContext ? replyContext : this);
     const RadioControlSession session = controlSession();
     const bool identity = request.field == Field::Callsign || request.field == Field::ClientStation;
     const bool localDisplay = request.field == Field::ShowTxInWaterfall
         && backendCapabilities().clientPersistsShowTxInWaterfall();
-    const RadioSetupCompletion reply = fencedSetupCompletion(replyContext, completion, !identity && !localDisplay);
+    const bool calibration = request.field == Field::StartFrequencyCalibration;
+    const auto pending = std::make_shared<bool>(true);
+    const RadioSetupCompletion completed = [pending, completion](const RadioSetupReply& result) {
+        *pending = false;
+        if (completion) { completion(result); }
+    };
+    const RadioSetupCompletion reply = fencedSetupCompletion(replyContext,
+        calibration ? completed : completion, !identity && !localDisplay);
     const auto persistIdentity = [&] {
         if (request.field == Field::Callsign) {
             setStationCallsign(std::get<QString>(request.value));
@@ -76,19 +84,19 @@ ReceiveDispatch RadioModel::requestRadioSetup(const RadioSetupRequest& request,
             AppSettings::instance().save();
         }
     };
-    const auto refuse = [&] {
+    const auto refuse = [&](bool announce = true) {
         if (reply) { reply({RadioSetupReply::Kind::Refused, -1, QStringLiteral("configuration not dispatched")}); }
-        if (alive) { reportReceiveDispatch(ReceiveDispatch::Unsupported, QStringLiteral("radio setup")); }
+        if (alive && announce) { reportReceiveDispatch(ReceiveDispatch::Unsupported, QStringLiteral("radio setup")); }
         return ReceiveDispatch::Unsupported;
     };
-    if (!m_backend || !request.valid()) { return refuse(); }
+    if (!request.valid()) { return refuse(false); }
     // Client-owned display preferences remain editable without a radio link.
     if (request.field == Field::ShowTxInWaterfall
         && requestLocalShowTxInWaterfall(std::get<bool>(request.value))) {
         if (reply) { reply({RadioSetupReply::Kind::Accepted, 0, {}}); }
         return ReceiveDispatch::LocalOnly;
     }
-    if (!controlSessionCurrent(session)) {
+    if (!m_backend || !controlSessionCurrent(session)) {
         if (identity) {
             persistIdentity();
             if (reply) { reply({RadioSetupReply::Kind::Accepted, 0, {}}); }
@@ -111,14 +119,18 @@ ReceiveDispatch RadioModel::requestRadioSetup(const RadioSetupRequest& request,
     if (effective.field == Field::NetworkMtu) {
         effective.value = networkMtuParam(std::get<int>(effective.value));
     }
-    const RadioControlFence current = [alive, session] {
-        return alive && alive->controlSessionCurrent(session);
+    const RadioControlFence current = [alive, owner, session, pending, calibration] {
+        return alive && alive->controlSessionCurrent(session) && (!calibration || (owner && *pending));
     };
     const ReceiveDispatch result = m_backend->requestRadioSetup(effective, reply, current);
     if (!alive) { return result; }
     if (identity) {
         persistIdentity();
         if (!alive) { return result; }
+        if (result == ReceiveDispatch::Unsupported) {
+            if (reply) { reply({RadioSetupReply::Kind::Accepted, 0, QStringLiteral("Station identity saved locally; radio copy not dispatched.")}); }
+            return ReceiveDispatch::LocalOnly;
+        }
     }
     if (!controlSessionCurrent(session)) {
         if (reply) { reply({RadioSetupReply::Kind::Cancelled, -1, QStringLiteral("the original radio session ended")}); }
@@ -137,8 +149,8 @@ ReceiveDispatch RadioModel::requestTxBand(const TxBandRequest& request,
     if (QThread::currentThread() != thread()) { return ReceiveDispatch::Unsupported; }
     const QPointer<RadioModel> alive(this);
     const RadioControlSession session = controlSession();
+    if (expectedSession && *expectedSession != session) { return ReceiveDispatch::Unsupported; }
     const ReceiveDispatch result = m_backend && controlSessionCurrent(session)
-        && (!expectedSession || *expectedSession == session)
         && request.valid() && m_txBandSettings.contains(request.bandId)
         ? m_backend->requestTxBand(request) : ReceiveDispatch::Unsupported;
     if (alive && session == controlSession()) {
@@ -171,8 +183,11 @@ ReceiveDispatch RadioModel::requestTransverter(const TransverterRequest& request
     const QPointer<RadioModel> alive(this);
     const RadioControlSession session = controlSession();
     const RadioSetupCompletion reply = fencedSetupCompletion(replyContext, completion);
+    if (expectedSession && *expectedSession != session) {
+        if (reply) { reply({RadioSetupReply::Kind::Cancelled, -1, QStringLiteral("Original transverter editor session ended.")}); }
+        return ReceiveDispatch::Unsupported;
+    }
     const ReceiveDispatch result = m_backend && controlSessionCurrent(session) && request.valid()
-        && (!expectedSession || *expectedSession == session)
         && (request.field == TransverterRequest::Field::Create || m_xvtrList.contains(request.id))
         ? m_backend->requestTransverter(request, reply) : ReceiveDispatch::Unsupported;
     if (alive && session == controlSession()) {

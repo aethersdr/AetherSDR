@@ -681,6 +681,7 @@ add_executable(radio_setup_control_routing_test tests/radio_setup_control_routin
 target_include_directories(radio_setup_control_routing_test PRIVATE src tests)
 target_link_libraries(radio_setup_control_routing_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME radio_setup_control_routing_test COMMAND radio_setup_control_routing_test)
+set_tests_properties(radio_setup_control_routing_test PROPERTIES TIMEOUT 45)
 
 # Socket-free frequency control: a recording engine backend and normalized
 # observations exercise the production target/service. LocalControlServer
@@ -7205,7 +7206,7 @@ add_executable(usb_cable_model_test
     src/models/UsbCableModel.cpp
 )
 target_include_directories(usb_cable_model_test PRIVATE src)
-target_link_libraries(usb_cable_model_test PRIVATE Qt6::Core Qt6::Network Qt6::Test)
+target_link_libraries(usb_cable_model_test PRIVATE Qt6::Core Qt6::Test)
 set_target_properties(usb_cable_model_test PROPERTIES AUTOMOC ON)
 add_test(NAME usb_cable_model_test COMMAND usb_cable_model_test)
 
