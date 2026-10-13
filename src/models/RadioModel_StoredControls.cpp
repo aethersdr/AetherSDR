@@ -1,6 +1,7 @@
 #include "models/RadioModel.h"
 
 #include <QList>
+#include <QMap>
 #include <QPointer>
 #include <QThread>
 #include <QTimer>
