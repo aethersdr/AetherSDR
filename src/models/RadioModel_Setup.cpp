@@ -4,6 +4,7 @@
 #include <QPointer>
 #include <QTimer>
 #include <QThread>
+#include <memory>
 
 namespace AetherSDR {
 
