@@ -1,23 +1,7 @@
-// Waterfall time scale: the lock on ms-per-row, and when it may be replaced.
-// Header-only, pure logic: no widget, no clock, no socket.
-//
-// Two claims are pinned, and they pull against each other.
-//
-// 1. THE LOCK HOLDS. #106 was a time scale that jumped a line up and down
-//    because it followed a cadence measured on every row. Steady rows with
-//    arrival jitter, a stalled GUI thread that delivers its queued rows in a
-//    bunch, and a pause in the rows must each leave the visible value alone.
-//
-// 2. THE LOCK IS NOT FINAL. The visible value used to be written once, on the
-//    third sample after a reset. A bad start (rows back to back at start-up, a
-//    stall inside the first window) was then the scale for the whole session:
-//    observed as ms-per-row 21.1 where the rows were 40.1 ms apart, a "1s"
-//    label on an event 2.00 s old. The estimate behind the scale converged;
-//    the scale never read it again.
-//
-// The rows here are synthetic timestamps. The window measurement is the
-// widget's own arithmetic (newest minus older, over the rows between), with
-// the span, the smoothing and the decision taken from the header under test.
+// Waterfall time scale: the lock on ms-per-row, and when it is replaced.
+// The lock holds against jitter, a stalled GUI thread and a pause (#106); it
+// is not final, so a bad start converges on the real cadence. Synthetic row
+// timestamps through the widget's own window arithmetic; no widget, no clock.
 
 #include "gui/WaterfallTimeScaleLock.h"
 
