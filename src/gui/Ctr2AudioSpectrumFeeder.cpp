@@ -2,7 +2,6 @@
 
 #include "core/AudioEngine.h"
 #include "core/ClientEq.h"
-#include "core/Ctr2HidFraming.h"
 #include "models/Ctr2ProxyModel.h"
 
 #include <QTimer>
@@ -109,9 +108,8 @@ void Ctr2AudioSpectrumFeeder::tick()
     // beat. Others keep the log axis from near 0.
     const bool linear = src.cwPitch > 0 && !src.transmitting && m_model->audioSpectrumLinearWanted();
     if (linear) {
-        const auto w = ctr2hid::spectrum::cwWindow(src.filterLow, src.filterHigh, src.cwPitch, fs);
-        low = w.lowHz;
-        span = w.highHz;
+        Ctr2ProxyModel::audioSpectrumCwWindow(src.filterLow, src.filterHigh, src.cwPitch, fs,
+                                              &low, &span);
     }
     // An unchanged block means the tap is not being written: nothing new.
     std::vector<float>& last = src.transmitting ? m_lastTxBlock : m_lastRxBlock;

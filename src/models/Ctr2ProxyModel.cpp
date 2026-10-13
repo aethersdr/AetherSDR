@@ -484,6 +484,14 @@ double Ctr2ProxyModel::audioSpectrumBandEdgeHz(int lowHz, int spanHz, int n, int
                   : ctr2hid::spectrum::bandEdgeHz(lowHz, spanHz, n, i);
 }
 
+void Ctr2ProxyModel::audioSpectrumCwWindow(int filterLo, int filterHi, int pitchHz,
+                                           double sampleRate, int* lowHz, int* highHz)
+{
+    const auto w = ctr2hid::spectrum::cwWindow(filterLo, filterHi, pitchHz, sampleRate);
+    *lowHz = w.lowHz;
+    *highHz = w.highHz;
+}
+
 int Ctr2ProxyModel::audioSpectrumSpanHz(int filterLo, int filterHi, double sampleRate)
 {
     return ctr2hid::spectrum::displaySpanHz(filterLo, filterHi, sampleRate);

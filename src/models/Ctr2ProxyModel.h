@@ -116,6 +116,9 @@ public:
     static int audioSpectrumLowHz(int spanHz);
     // Lower edge of bar i of n on that axis (i == n gives spanHz).
     static double audioSpectrumBandEdgeHz(int lowHz, int spanHz, int n, int i, bool linear = false);
+    // CW: the linear window centered on the pitch (AudioSpectrumLinear).
+    static void audioSpectrumCwWindow(int filterLo, int filterHi, int pitchHz, double sampleRate,
+                                      int* lowHz, int* highHz);
 
 signals:
     void configurationChanged();
