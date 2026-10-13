@@ -154,6 +154,13 @@ tier simply means changes to the repo's own scaffolding (dependency bumps,
 issue templates, CI config, build config) need an infrastructure owner rather
 than a maintainer.
 
+One gate is not by path. A PR whose code reaches the transmit surface listed
+in `.github/tx-surface.txt` (wire keying commands, keying entry points, TX
+permission guards) must add `.github/tx-acks/<PR number>.md` saying what
+changes on the TX path and how it was verified; Static checks fails until it
+does, and any code owner can approve it. See
+[`GOVERNANCE.md`](GOVERNANCE.md) §Transmit-path changes.
+
 For the mechanics around this gate — draft-PR conventions, the stale-branch
 policy, and how to recover a red `main` — see
 [`docs/PR-WORKFLOW.md`](docs/PR-WORKFLOW.md).
