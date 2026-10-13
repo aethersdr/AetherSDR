@@ -182,6 +182,25 @@ int main(int argc, char** argv)
     CDS::saveDbmRange(unknown, 0, true, -122.19f, -2.19f);
     check(unknown.featureExact(feature).isEmpty(),
           "an unknown identity never writes the family default");
+    // An anonymous scope addresses that same family row: session-only.
+    {
+        const RadioSettingsScope anonymous = RadioSettingsScope::anonymousRadio("hl2");
+        CDS::saveFftFps(anonymous, 0, true, 12);
+        CDS::saveDbmRange(anonymous, 0, true, -122.19f, -2.19f);
+        check(unknown.featureExact(feature).isEmpty(),
+              "an anonymous radio's FFT FPS and dBm range write no family-wide row");
+        const QJsonObject older{
+            {QStringLiteral("fftFps"), QJsonObject{{QStringLiteral("0"), 30}}},
+            {QStringLiteral("dbmRanges"),
+             QJsonObject{{QStringLiteral("0"), QJsonObject{{QStringLiteral("min"), -110.0},
+                                                           {QStringLiteral("max"), -20.0}}}}}};
+        check(unknown.setFeature(feature, 1, older), "family-wide fixture stored");
+        check(!CDS::fftFps(anonymous, 0, true) && !CDS::dbmRange(anonymous, 0, true),
+              "an existing family-wide FFT FPS and dBm range are not applied to it");
+        check(unknown.featureExact(feature) == older,
+              "and that row is left as it was");
+        check(unknown.removeFeature(feature), "family-wide fixture removed");
+    }
 
     // 3. Who owns FFT FPS, the dBm range and the waterfall rate: each backend's
     // own declaration, read through the accessors the wiring calls. The HL2
@@ -429,7 +448,7 @@ int main(int argc, char** argv)
                             160),
               "the FFT FPS predicate reads the backend's declaration");
         check(wiring.contains(QStringLiteral(
-                  "if (!clientPersistsFftFps() || !scope.hasRadioIdentity() || panIndex < 0) {")),
+                  "if (!clientPersistsFftFps() || !ClientDisplaySettings::keepsFor(scope) || panIndex < 0) {")),
               "the FFT FPS save asks that predicate");
         check(followsWithin(wiring, "if (clientPersistsFftFps()) {",
                             "sw->setFftFps(*savedFps);", 220),
@@ -442,7 +461,7 @@ int main(int argc, char** argv)
               "the waterfall rate predicate reads the backend's declaration");
         check(wiring.contains(QStringLiteral(
                   "const bool clientOwns = clientPersistsWaterfallRate();\n"
-                  "    if (!clientOwns || !scope.hasRadioIdentity() || panIndex < 0) {")),
+                  "    if (!clientOwns || !ClientDisplaySettings::keepsFor(scope) || panIndex < 0) {")),
               "the waterfall rate save asks that predicate");
         check(wiring.contains(QStringLiteral(
                   "ClientDisplaySettings::saveWaterfallRate(scope, panIndex, clientOwns, rate);")),

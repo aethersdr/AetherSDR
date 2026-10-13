@@ -3180,7 +3180,7 @@ void MainWindow::scheduleClientWaterfallRateSave(int panIndex, int rate)
 {
     const RadioSettingsScope scope = m_radioModel.settingsScope();
     const bool clientOwns = clientPersistsWaterfallRate();
-    if (!clientOwns || !scope.hasRadioIdentity() || panIndex < 0) {
+    if (!clientOwns || !ClientDisplaySettings::keepsFor(scope) || panIndex < 0) {
         return;
     }
     // Include scope in the key so a radio switch cannot overwrite a pending edit.
@@ -3203,7 +3203,7 @@ bool MainWindow::clientPersistsFftFps() const
 void MainWindow::scheduleClientFftFpsSave(int panIndex, int fps)
 {
     const RadioSettingsScope scope = m_radioModel.settingsScope();
-    if (!clientPersistsFftFps() || !scope.hasRadioIdentity() || panIndex < 0) {
+    if (!clientPersistsFftFps() || !ClientDisplaySettings::keepsFor(scope) || panIndex < 0) {
         return;
     }
     m_pendingDisplayWrites.schedule(
@@ -3235,7 +3235,7 @@ void MainWindow::adoptClientOwnedDbmRange(const QString& panId, int panIndex,
         pan->setRange(minDbm, maxDbm);
     }
     const RadioSettingsScope scope = m_radioModel.settingsScope();
-    if (!scope.hasRadioIdentity() || panIndex < 0) {
+    if (!ClientDisplaySettings::keepsFor(scope) || panIndex < 0) {
         return;
     }
     m_pendingDisplayWrites.schedule(
@@ -3267,7 +3267,8 @@ void MainWindow::scheduleClientFftAverageSave(int panIndex, int average, bool we
     const auto averaging = m_radioModel.backendCapabilities().backendPanAveraging;
     const RadioSettingsScope scope = m_radioModel.settingsScope();
     if (!m_radioModel.shapesDisplayRatesLocally() || !averaging
-        || !averaging->clientPersistsAveraging || scope.radioId().isEmpty() || panIndex < 0) {
+        || !averaging->clientPersistsAveraging || !ClientDisplaySettings::keepsFor(scope)
+        || panIndex < 0) {
         return;
     }
     // Distinct from waterfall cadence; edits to either feature must survive

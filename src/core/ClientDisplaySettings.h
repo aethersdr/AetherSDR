@@ -39,6 +39,14 @@ public:
             + QLatin1Char(':') + QLatin1String(field);
     }
 
+    // Every table here is kept per exact radio. An anonymous scope addresses
+    // the family-wide row, which is another radio's row too, so its choices
+    // last for the session: never written there, never read from there.
+    static bool keepsFor(const RadioSettingsScope& scope)
+    {
+        return !scope.radioId().isEmpty();
+    }
+
     struct FftAverage {
         int average = 0;
         bool weighted = false;
@@ -48,7 +56,7 @@ public:
     static std::optional<FftAverage> fftAverage(const RadioSettingsScope& scope,
                                                int panIndex, bool clientOwns)
     {
-        if (!clientOwns || scope.radioId().isEmpty() || panIndex < 0) { return std::nullopt; }
+        if (!clientOwns || !keepsFor(scope) || panIndex < 0) { return std::nullopt; }
         int version = 0;
         const QJsonObject doc = scope.featureExact(QStringLiteral("ClientDisplay"), &version);
         if (version != 1) { return std::nullopt; }
@@ -59,7 +67,7 @@ public:
     static bool saveFftAverage(const RadioSettingsScope& scope, int panIndex,
                                bool clientOwns, const FftAverage& value)
     {
-        if (!clientOwns || scope.radioId().isEmpty() || panIndex < 0
+        if (!clientOwns || !keepsFor(scope) || panIndex < 0
             || value.average < 0 || value.average > 100) { return false; }
         int version = 0;
         AppSettings::FeatureReadStatus status;
@@ -87,10 +95,12 @@ public:
         return true;
     }
 
+    // `clientOwns`: the caller's answer to "does the client keep this radio's
+    // waterfall rate" (RadioCapabilities::clientPersistsPanWaterfallRate()).
     static std::optional<int> waterfallRate(const RadioSettingsScope& scope,
-                                             int panIndex, bool shapedLocally)
+                                             int panIndex, bool clientOwns)
     {
-        if (!shapedLocally || !scope.hasRadioIdentity() || panIndex < 0) {
+        if (!clientOwns || !keepsFor(scope) || panIndex < 0) {
             return std::nullopt;
         }
         int version = 0;
@@ -150,9 +160,9 @@ public:
     }
 
     static void saveWaterfallRate(const RadioSettingsScope& scope, int panIndex,
-                                  bool shapedLocally, int rate)
+                                  bool clientOwns, int rate)
     {
-        if (!shapedLocally || !scope.hasRadioIdentity() || panIndex < 0
+        if (!clientOwns || !keepsFor(scope) || panIndex < 0
             || rate < WaterfallRate::kMin || rate > WaterfallRate::kMax) {
             return;
         }
@@ -238,7 +248,7 @@ private:
     static QJsonValue readEntry(const RadioSettingsScope& scope, int panIndex,
                                 bool clientOwned, const QString& table)
     {
-        if (!clientOwned || !scope.hasRadioIdentity() || panIndex < 0) {
+        if (!clientOwned || !keepsFor(scope) || panIndex < 0) {
             return QJsonValue(QJsonValue::Undefined);
         }
         int version = 0;
@@ -267,7 +277,7 @@ private:
                            bool clientOwned, const QString& table,
                            const QJsonValue& value)
     {
-        if (!clientOwned || !scope.hasRadioIdentity() || panIndex < 0) {
+        if (!clientOwned || !keepsFor(scope) || panIndex < 0) {
             return;
         }
         int version = 0;
