@@ -9561,6 +9561,10 @@ target_include_directories(deepfist_committer_test PRIVATE src)
 target_link_libraries(deepfist_committer_test PRIVATE Qt6::Core)
 add_test(NAME deepfist_committer_test COMMAND deepfist_committer_test)
 set_tests_properties(deepfist_committer_test PROPERTIES TIMEOUT 20)
+add_executable(deepcw_ctc_test tests/deepcw_ctc_test.cpp src/core/DeepCwEngine.cpp)
+target_include_directories(deepcw_ctc_test PRIVATE src)
+add_test(NAME deepcw_ctc_test COMMAND deepcw_ctc_test)
+set_tests_properties(deepcw_ctc_test PROPERTIES TIMEOUT 20)
 add_executable(deepfist_model_assets_test
     tests/deepfist_model_assets_test.cpp
     src/core/deepfist/DeepFistModelAssets.cpp src/core/deepfist/DeepFistModelAssets.h src/core/NetworkDiagnostics.cpp)
