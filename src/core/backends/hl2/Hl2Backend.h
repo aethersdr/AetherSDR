@@ -303,6 +303,13 @@ private:
     void onRadioPttChanged(bool keyed);
     // Emit transmitChanged{mox} when m_keyed || m_radioPtt changes, and only then.
     void publishTransmitState();
+    // Reads the snapshot at a chosen instant, so hl2_adc_age_gate_test puts a
+    // held slice peak on either side of kSliceStaleMs without waiting.
+    friend struct Hl2AdcAgeTestAccess;
+    // The snapshot at `nowNs`, on steadyNowNs()'s timeline. The converter rows
+    // take their age from it and read no clock, so the age row and the pairing
+    // gate describe one instant.
+    HealthSnapshot healthSnapshot(std::int64_t nowNs) const;
     void applyKeying(bool key, const TxCoordinator::Operation& operation,
                      const TxCoordinator::Completion& completion, bool cwBreakIn);
     void invalidateTxDspConfiguration();

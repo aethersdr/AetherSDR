@@ -362,21 +362,14 @@ public:
         }
         return static_cast<double>(v);
     }
-    // Raw steady_clock stamp of the adcPeakDbfs() reading, for
-    // SliceSamplingGate, which must compare it against its resume request.
-    // Stored only on the unmuted path of processIqBlock(), so a stamp later than
-    // the request proves the unmute was applied. 0 = never processed.
+    // Raw steady_clock stamp of the adcPeakDbfs() reading. healthSnapshot()
+    // ages it (kSliceStaleMs) and SliceSamplingGate compares it against its
+    // resume request. Stored only on the unmuted path of processIqBlock(), so a
+    // stamp later than the request proves the unmute was applied. 0 = never
+    // processed.
     [[nodiscard]] std::int64_t adcPeakObservedAtNs() const noexcept
     {
         return m_adcPeakAtNs.load(std::memory_order_relaxed);
-    }
-    // Age of the adcPeakDbfs() reading; it stops advancing when IQ stops or the
-    // chain is muted for TX. Feeds Hl2AdcPairing.h's freshness input
-    // (kSliceStaleMs) so a held slice peak isn't paired with a live flag.
-    [[nodiscard]] std::optional<std::int64_t> adcPeakObservedAgoMs() const
-    {
-        const std::int64_t at = m_adcPeakAtNs.load(std::memory_order_relaxed);
-        return slicePeakAgeMs(at, steadyNowNs());
     }
 
     // Every processIq() outcome, counted since construction (WdspProcessTally.h).
