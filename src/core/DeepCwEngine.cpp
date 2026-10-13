@@ -1,7 +1,8 @@
 // Provenance: ported from decode_morse.py in e04/deepcw-engine (AGPL-3.0).
 // See the header and THIRD_PARTY_LICENSES for the attribution.
 // Modified for AetherSDR, 2026-09: per-character emissions with frame timing
-// (inferLogProbs, greedyEmissions); decode() is unchanged.
+// (inferLogProbs, greedyEmissions); 2026-10: both inference paths validate the
+// output tensor before reading it.
 #include "DeepCwEngine.h"
 
 #include <algorithm>
@@ -9,6 +10,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <limits>
 #include <utility>
 #ifdef _WIN32
 #include <filesystem>
@@ -57,6 +59,28 @@ static void fftRadix2(float* re, float* im, int n)
         }
     }
 }
+
+#ifdef HAVE_ONNX
+// The model contract's output is float32 [1, frames > 0, kNumClasses], fully
+// populated. Returns frames, or 0 after one stderr line for any other tensor,
+// before a single element is read.
+static int checkedOutputFrames(const Ort::Value& out)
+{
+    if (out.IsTensor()) {
+        const auto info = out.GetTensorTypeAndShapeInfo();
+        const auto shape = info.GetShape();
+        if (info.GetElementType() == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT
+            && shape.size() == 3 && shape[0] == 1 && shape[2] == DeepCwEngine::kNumClasses
+            && shape[1] > 0 && shape[1] <= std::numeric_limits<int>::max() / DeepCwEngine::kNumClasses
+            && info.GetElementCount() == static_cast<size_t>(shape[1]) * DeepCwEngine::kNumClasses) {
+            return static_cast<int>(shape[1]);
+        }
+    }
+    std::fprintf(stderr, "DeepCwEngine: inference error: log_probs is not float32 [1, frames, %d]\n",
+                 DeepCwEngine::kNumClasses);
+    return 0;
+}
+#endif
 
 DeepCwEngine::DeepCwEngine()
 #ifdef HAVE_ONNX
@@ -226,10 +250,9 @@ std::vector<float> DeepCwEngine::inferLogProbs(const std::vector<float>& audio32
         const char* outputNames[] = {"log_probs"};
         auto outputs = m_session->Run(Ort::RunOptions{nullptr},
                                       inputNames, &input, 1, outputNames, 1);
+        const int outFrames = checkedOutputFrames(outputs[0]);
+        if (outFrames == 0) { return {}; }
         const float* lp = outputs[0].GetTensorData<float>();
-        const auto outShape = outputs[0].GetTensorTypeAndShapeInfo().GetShape();
-        const int outFrames = outShape.size() >= 2
-            ? static_cast<int>(outShape[outShape.size() - 2]) : specFrames;
         *frames = outFrames;
         return std::vector<float>(lp, lp + static_cast<size_t>(outFrames) * kNumClasses);
     } catch (const Ort::Exception& ex) {
@@ -328,13 +351,9 @@ std::string DeepCwEngine::decode(const std::vector<float>& audio, int sampleRate
                                       inputNames, &input, 1,
                                       outputNames, 1);
 
-        const float* logProbs = outputs[0].GetTensorData<float>();
-        // Output shape [1, frames, kNumClasses]; frames may be re-derived from
-        // the tensor, but the model's time dim tracks our input frame count.
-        const auto info = outputs[0].GetTensorTypeAndShapeInfo();
-        const auto outShape = info.GetShape();
-        const int outFrames = outShape.size() >= 2 ? static_cast<int>(outShape[outShape.size() - 2]) : frames;
-        return ctcDecode(logProbs, outFrames, avgConfidence);
+        const int outFrames = checkedOutputFrames(outputs[0]);
+        if (outFrames == 0) { return {}; }
+        return ctcDecode(outputs[0].GetTensorData<float>(), outFrames, avgConfidence);
     } catch (const Ort::Exception& ex) {
         std::fprintf(stderr, "DeepCwEngine: inference error: %s\n", ex.what());
         return {};

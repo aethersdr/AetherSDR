@@ -6,7 +6,8 @@
 // The ported code ships in the binary; the trained weights do not (download-on-
 // demand, SHA-256 pinned). See THIRD_PARTY_LICENSES for the AGPL-3.0 entry.
 // Modified for AetherSDR, 2026-09: per-character emissions with frame timing
-// (inferLogProbs, greedyEmissions); decode() is unchanged.
+// (inferLogProbs, greedyEmissions); 2026-10: both inference paths validate the
+// output tensor before reading it.
 
 #include <string>
 #include <vector>

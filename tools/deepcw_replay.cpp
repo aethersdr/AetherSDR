@@ -44,20 +44,23 @@ constexpr size_t kDrain = 4800;   // 200 ms of 24 kHz, the worker's drain cadenc
 
 bool readWav(const char* path, std::vector<float>& mono24k)
 {
-    std::ifstream f(path, std::ios::binary);
+    std::ifstream f(path, std::ios::binary | std::ios::ate);
+    const std::streamoff fileSize = f ? static_cast<std::streamoff>(f.tellg()) : -1;
+    if (fileSize < 12) return false;
+    f.seekg(0);
     char riff[12];
     if (!f.read(riff, 12) || std::memcmp(riff, "RIFF", 4) || std::memcmp(riff + 8, "WAVE", 4)) return false;
     uint16_t channels = 0, bits = 0, fmt = 0;
     uint32_t rate = 0;
-    while (f) {
-        char id[4];
-        uint32_t len = 0;
-        f.read(id, 4);
-        f.read(reinterpret_cast<char*>(&len), 4);
-        if (!f) break;
+    char id[4];
+    uint32_t len = 0;
+    while (f.read(id, 4) && f.read(reinterpret_cast<char*>(&len), 4)) {
+        // A chunk can claim no more than the file still holds: fail closed.
+        if (static_cast<std::streamoff>(len) > fileSize - static_cast<std::streamoff>(f.tellg())) return false;
         if (!std::memcmp(id, "fmt ", 4)) {
+            if (len < 16) return false;
             std::vector<char> b(len);
-            f.read(b.data(), len);
+            if (!f.read(b.data(), len)) return false;
             std::memcpy(&fmt, b.data(), 2);
             std::memcpy(&channels, b.data() + 2, 2);
             std::memcpy(&rate, b.data() + 4, 4);
@@ -68,7 +71,7 @@ bool readWav(const char* path, std::vector<float>& mono24k)
                 return false;
             }
             std::vector<int16_t> s(len / 2);
-            f.read(reinterpret_cast<char*>(s.data()), static_cast<std::streamsize>(s.size() * 2));
+            if (!f.read(reinterpret_cast<char*>(s.data()), static_cast<std::streamsize>(s.size() * 2))) return false;
             const size_t n = s.size() / channels;
             mono24k.resize(n);
             for (size_t i = 0; i < n; ++i) {   // same downmix as CwDecoder::feedAudio
