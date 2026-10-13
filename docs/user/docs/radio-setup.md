@@ -44,8 +44,10 @@ Radio Setup is a searchable browser: a categorized tree of pages on the left and
 
 On Flex radios, **Nickname** and **Callsign** use the radio display's supported
 characters: letters, digits, `.`, `,`, `/` and `-`. Spaces and other characters
-are removed; callsigns are uppercased. **Station Name** keeps spaces but removes
-characters the radio cannot accept. The locally saved station name is unchanged.
+are removed; callsigns are uppercased. Blank or symbol-only callsign edits keep
+the previous callsign rather than replacing it. **Station Name** keeps spaces
+but removes characters the radio cannot accept. The locally saved station name
+is unchanged.
 
 ### RADIO
 

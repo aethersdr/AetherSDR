@@ -1,5 +1,6 @@
 #include "TestSettingsProfile.h"
 #include "RadioSetupControlFixture.h"
+#include "core/AppSettings.h"
 #include "gui/RadioSetupDialog.h"
 #include "gui/TxBandDialog.h"
 
@@ -49,6 +50,43 @@ QGroupBox* groupNamed(QWidget& root, const QString& title)
 class RadioSetupOperationsTest : public QObject {
     Q_OBJECT
 private slots:
+    void invalidCallsignEditPreservesSavedIdentity()
+    {
+        RadioModel radio;
+        RadioSetupTestBackend* backend = installRadioSetupBackend(radio);
+        radio.setStationCallsign(QStringLiteral("N0CALL"));
+        RadioSetupDialog dialog(&radio);
+        dialog.selectTab(QStringLiteral("Radio"));
+        QLineEdit* callsign = nullptr;
+        for (QLineEdit* edit : dialog.findChildren<QLineEdit*>()) {
+            if (edit->accessibleName() == QStringLiteral("Station callsign")) {
+                callsign = edit;
+                break;
+            }
+        }
+        QVERIFY(callsign);
+        QSignalSpy dropped(&radio, &RadioModel::commandDropped);
+        for (const QString& input : {QStringLiteral("#"), QStringLiteral("@_!"),
+                                    QString::fromUtf8("雪"), QStringLiteral(" ")}) {
+            backend->commands.clear();
+            callsign->setText(input);
+            emit callsign->editingFinished();
+            QCOMPARE(callsign->text(), QStringLiteral("N0CALL"));
+            QVERIFY(backend->commands.isEmpty());
+            QString persisted;
+            QVERIFY(AppSettings::instance().readAppRowFromDisk(QStringLiteral("StationCallsign"), persisted));
+            QCOMPARE(persisted, QStringLiteral("N0CALL"));
+        }
+        QVERIFY(dropped.isEmpty());
+        callsign->setText(QStringLiteral("ki4ttz/p"));
+        emit callsign->editingFinished();
+        QCOMPARE(backend->commands, QStringList{QStringLiteral("radio callsign KI4TTZ/P")});
+        QCOMPARE(callsign->text(), QStringLiteral("KI4TTZ/P"));
+        QString persisted;
+        QVERIFY(AppSettings::instance().readAppRowFromDisk(QStringLiteral("StationCallsign"), persisted));
+        QCOMPARE(persisted, QStringLiteral("KI4TTZ/P"));
+    }
+
     void calibrationSeparatesAcceptanceFromCompletion()
     {
         RadioModel radio;
@@ -183,6 +221,7 @@ int main(int argc, char** argv)
     TestSettingsProfile profile(QStringLiteral("radio-setup-operations"));
     QApplication app(argc, argv);
     app.setQuitOnLastWindowClosed(false);
+    AppSettings::instance().load();
     RadioSetupOperationsTest test;
     return QTest::qExec(&test, argc, argv);
 }

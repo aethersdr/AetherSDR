@@ -2181,12 +2181,13 @@ QWidget* RadioSetupDialog::buildRadioTab()
             // The typed route sends any radio copy before persisting client
             // identity; callsignChanged listeners must not restart on old state.
             const QString entered = m_callsignEdit->text().trimmed().toUpper();
-            // Empty is "no change", never erase a persisted station identity.
-            if (entered.isEmpty()) {
+            const RadioSetupRequest request{SetupField::Callsign, entered};
+            // Blank or symbol-only edits never erase a station identity.
+            if (!request.valid()) {
                 m_callsignEdit->setText(m_model->callsign());
                 return;
             }
-            m_model->requestRadioSetup({SetupField::Callsign, entered});
+            m_model->requestRadioSetup(request);
             m_callsignEdit->setText(entered);
         });
 

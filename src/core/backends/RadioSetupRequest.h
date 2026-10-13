@@ -57,7 +57,17 @@ struct RadioSetupRequest {
         switch (field) {
         case Field::Callsign: {
             const QString* text = std::get_if<QString>(&value);
-            return text && !text->trimmed().isEmpty() && setupTextValid(*text);
+            if (!text || !setupTextValid(*text)) { return false; }
+            // A station identity needs an ASCII letter or digit, not only
+            // symbols that a radio display may discard entirely.
+            for (const QChar ch : *text) {
+                if ((ch >= QLatin1Char('a') && ch <= QLatin1Char('z'))
+                    || (ch >= QLatin1Char('A') && ch <= QLatin1Char('Z'))
+                    || (ch >= QLatin1Char('0') && ch <= QLatin1Char('9'))) {
+                    return true;
+                }
+            }
+            return false;
         }
         case Field::Nickname: case Field::ClientStation: {
             const QString* text = std::get_if<QString>(&value);

@@ -226,8 +226,8 @@ private slots:
     // POSITIVE CONTROL, the wire text: each field is enabled and sends its
     // `interlock` text exactly once, so the assertions above cannot be
     // passed by fields dimmed, or disconnected from their write, on every radio.
-    // The model is NOT connected, so the gate opens on its disconnected arm;
-    // connectedCommandPlaneStaysLive() covers the command-plane arm.
+    // The injected Flex backend is connected and advertises the implemented
+    // timing fields; unsupported connected backends are checked separately.
     void commandPlaneSendsTheSameWireText()
     {
         RadioModel model;

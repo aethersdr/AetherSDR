@@ -354,17 +354,60 @@ void reentrantCalibrationAndLocalSettings()
     check(replies == 2 && last.kind == RadioSetupReply::Kind::Accepted
         && radio.transmitModel().showTxInWaterfall(), "offline local display preference has an honest local receipt");
 }
+
+void invalidCallsignPreservesIdentity()
+{
+    using Field = RadioSetupRequest::Field;
+    RadioModel radio;
+    RadioSetupTestBackend* backend = installRadioSetupBackend(radio);
+    radio.setStationCallsign(QStringLiteral("N0CALL"));
+    const QStringList invalid{QString(), QStringLiteral(" "), QStringLiteral("#"),
+        QStringLiteral("@_!"), QStringLiteral(".,/-"), QString::fromUtf8("雪"),
+        QStringLiteral("N0CALL\ntransmit mox 1")};
+    for (const bool connected : {true, false}) {
+        backend->live = connected;
+        for (const QString& input : invalid) {
+            const RadioSetupRequest request{Field::Callsign, input};
+            backend->commands.clear();
+            check(!request.valid()
+                && backend->requestRadioSetup(request) == ReceiveDispatch::Unsupported,
+                "empty or symbol-only identity cannot reach the encoder");
+            int replies = 0;
+            RadioSetupReply last{RadioSetupReply::Kind::Accepted};
+            const ReceiveDispatch result = radio.requestRadioSetup(request, &radio,
+                [&](const RadioSetupReply& reply) { ++replies; last = reply; });
+            QString persisted;
+            check(result == ReceiveDispatch::Unsupported && replies == 1
+                && last.kind == RadioSetupReply::Kind::Refused && backend->commands.isEmpty()
+                && AppSettings::instance().readAppRowFromDisk(QStringLiteral("StationCallsign"), persisted)
+                && persisted == QLatin1String("N0CALL")
+                && radio.callsign() == QLatin1String("N0CALL"),
+                "invalid connected or disconnected callsign preserves the database and emits no wire write");
+        }
+    }
+    backend->live = true;
+    backend->commands.clear();
+    check(radio.requestRadioSetup({Field::Callsign, QStringLiteral("ki4ttz/p")})
+        == ReceiveDispatch::Dispatched
+        && backend->commands == QStringList{QStringLiteral("radio callsign KI4TTZ/P")},
+        "a valid portable callsign still has its normal wire route");
+    QString persisted;
+    check(AppSettings::instance().readAppRowFromDisk(QStringLiteral("StationCallsign"), persisted)
+        && persisted == QLatin1String("KI4TTZ/P"), "valid identity changes still persist");
+}
 } // namespace
 
 int main(int argc, char** argv)
 {
     TestSettingsProfile profile(QStringLiteral("radio-setup-control-routing"));
     QCoreApplication app(argc, argv);
+    AppSettings::instance().load();
     radioEncoding();
     bandAndTransverterEncoding();
     usbEncoding();
     routingAndReplies();
     backendRefusals();
     reentrantCalibrationAndLocalSettings();
+    invalidCallsignPreservesIdentity();
     return failures ? 1 : 0;
 }
