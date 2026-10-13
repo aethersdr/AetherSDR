@@ -61,6 +61,8 @@ On each profile tab:
 
 A status line reports what the radio did: `Saving "<name>"…`, `Saved profile "<name>".`, "Radio refused save of …", "Not connected — cannot save …", or "No response from the radio …". A blank name field never overwrites the highlighted profile.
 
+Profile names must contain printable text, at most 256 characters, without double quotes, backslashes or `|`. An invalid name is not sent to the radio. If the connection changes during a save or confirmation, the operation is cancelled; your name remains available to retry. A successful save reply does not replace the radio's active-profile status.
+
 ### Auto-Save
 
 With **Auto-save profile changes** enabled on the Auto-Save tab, changes you make to TX and Mic settings are saved to the active TX and Mic profiles as you go.

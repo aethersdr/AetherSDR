@@ -7368,6 +7368,7 @@ add_executable(local_memory_bank_test
     tests/local_memory_bank_test.cpp
     src/core/LocalMemoryBank.cpp
     src/core/LocalMemoryStore.cpp
+    src/core/MemoryFieldValues.cpp
     src/core/backends/MemoryWireCodec.cpp
     $<TARGET_OBJECTS:aether_test_async_log_writer>
     $<TARGET_OBJECTS:aether_test_log_manager>
@@ -7378,6 +7379,27 @@ target_link_libraries(local_memory_bank_test PRIVATE Qt6::Core)
 add_test(NAME local_memory_bank_test COMMAND local_memory_bank_test)
 
 # Socket-free injection of backend memory deltas; no radio connection or peer.
+add_executable(stored_control_routing_test tests/stored_control_routing_test.cpp)
+target_include_directories(stored_control_routing_test PRIVATE src tests)
+target_link_libraries(stored_control_routing_test PRIVATE aethercore Qt6::Core)
+add_test(NAME stored_control_routing_test COMMAND stored_control_routing_test)
+set_tests_properties(stored_control_routing_test PROPERTIES TIMEOUT 45)
+
+add_executable(stored_control_dialogs_test
+    tests/stored_control_dialogs_test.cpp
+    src/gui/ProfileManagerDialog.cpp
+    src/gui/MemoryDialog.cpp
+    src/gui/MemoryCommands.cpp
+    src/gui/PersistentDialog.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+)
+target_include_directories(stored_control_dialogs_test PRIVATE src tests)
+target_link_libraries(stored_control_dialogs_test PRIVATE aethercore Qt6::Core Qt6::Widgets Qt6::Test)
+set_target_properties(stored_control_dialogs_test PROPERTIES AUTOMOC ON)
+add_test(NAME stored_control_dialogs_test COMMAND stored_control_dialogs_test)
+set_tests_properties(stored_control_dialogs_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(memory_import_test tests/memory_import_test.cpp)
 target_include_directories(memory_import_test PRIVATE src tests)
 target_link_libraries(memory_import_test PRIVATE aethercore Qt6::Core)
@@ -9029,6 +9051,8 @@ set(AETHER_SETTINGS_CONSUMERS
     radio_nickname_test
     radio_setup_control_routing_test
     radio_setup_operations_test
+    stored_control_routing_test
+    stored_control_dialogs_test
     pan_display_drop_notice_test
     backend_capability_revision_test
     icom_panadapter_capacity_test

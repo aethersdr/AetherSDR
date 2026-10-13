@@ -1003,6 +1003,19 @@ public:
                                       std::optional<RadioControlSession> expectedSession = {});
     RadioControlSession controlSession() const;
     bool controlSessionCurrent(const RadioControlSession& session) const;
+    ReceiveDispatch requestProfile(const ProfileRequest& request,
+                                   QObject* replyContext = nullptr,
+                                   const RadioControlCompletion& completion = {},
+                                   std::optional<RadioControlSession> expectedSession = {});
+    ReceiveDispatch requestMemory(const MemoryRequest& request,
+                                  QObject* replyContext = nullptr,
+                                  const RadioControlCompletion& completion = {},
+                                  std::optional<RadioControlSession> expectedSession = {});
+    void createMemory(const MemoryEntry& entry, QObject* replyContext,
+                      const MemoryCreateCompletion& completion,
+                      std::optional<RadioControlSession> expectedSession = {});
+    ReceiveDispatch recallMemory(int index, int sliceId);
+    quint64 memorySlotRevision(int index) const { return m_memorySlotRevisions.value(index); }
     // Panel width in spectrum points for a backend that shapes its own
     // spectrum: straight down to that backend. Returns false on Flex, where
     // the caller sends the xpixels= wire command itself.
@@ -1797,6 +1810,7 @@ private:
     friend class RerouteDeadControlsTestAccess;
     friend class VoiceKeyerTxRouteTestAccess;
     friend class RadioSetupControlTestAccess;
+    friend class StoredControlTestAccess;
     void expirePendingCallbacks(const QString& reason);
 
     // True only while expirePendingCallbacks() is invoking the drained
@@ -2252,6 +2266,8 @@ private:
     quint32 m_staleSessionOwnHandle{0};
     quint32 m_ownSessionHandle{0};   // this session's handle, set at registration
     QMap<int, MemoryEntry> m_memories;
+    QMap<int, quint64> m_memorySlotRevisions;
+    QMap<int, quint64> m_memoryWriteIntents;
     // Backing store for m_memories when the radio has no memory slots of its
     // own. It is always constructed but only read/written on that path, so a
     // Flex session never touches the file.

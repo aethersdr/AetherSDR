@@ -31,6 +31,8 @@
 #include "core/backends/ReceiveCommand.h"
 #include "core/backends/ModelControlRequest.h"
 #include "core/backends/RadioSetupRequest.h"
+#include "core/backends/ProfileRequest.h"
+#include "core/backends/MemoryRequest.h"
 #include "core/backends/RestoredRadioState.h"
 #include "core/backends/RadioDelta.h"
 #include "core/backends/SliceDelta.h"
@@ -164,6 +166,14 @@ public:
             ? ReceiveDispatch::LocalOnly : ReceiveDispatch::Unsupported;
     }
     virtual ReceiveDispatch requestTxBand(const TxBandRequest&)
+    { return ReceiveDispatch::Unsupported; }
+    virtual ReceiveDispatch requestProfile(const ProfileRequest&,
+                                           const RadioControlCompletion& = {},
+                                           const RadioControlFence& = {})
+    { return ReceiveDispatch::Unsupported; }
+    virtual ReceiveDispatch requestMemory(const MemoryRequest&,
+                                          const RadioControlCompletion& = {},
+                                          const RadioControlFence& = {})
     { return ReceiveDispatch::Unsupported; }
     virtual ReceiveDispatch requestUsbCable(const UsbCableRequest&)
     { return ReceiveDispatch::Unsupported; }

@@ -33,6 +33,7 @@ protected:
     void showEvent(QShowEvent* event) override;
 
 private:
+    friend class StoredDialogsTestAccess;
     void activateMemoryRow(int row);
     void beginEditingMemoryName(int memoryIndex);
     void focusTableOnCurrentRow();

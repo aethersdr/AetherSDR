@@ -167,7 +167,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 8393,
+          "line": 8395,
           "text": "consecutive pings unanswered — forcing disconnect"
         }
       ]
@@ -474,7 +474,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 12723,
+          "line": 12731,
           "text": "RadioModel: DAX TX create failed"
         }
       ]
@@ -547,7 +547,7 @@
       "source": [
         {
           "file": "src/gui/SpectrumWidget.cpp",
-          "line": 13176,
+          "line": 13181,
           "text": "\"SpectrumWidget: QRhi failure:\""
         },
         {

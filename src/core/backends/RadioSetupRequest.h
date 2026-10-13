@@ -1,6 +1,7 @@
 #pragma once
 
 #include "RadioSetupControl.h"
+#include "core/backends/RadioControlTypes.h"
 #include "core/backends/SetupTextPolicy.h"
 #include "core/backends/UsbCableRequest.h"
 #include "core/NetworkMtuPolicy.h"
@@ -167,29 +168,11 @@ struct TransverterRequest {
     }
 };
 
-struct RadioSetupReply {
-    enum class Kind { Accepted, Refused, Failed, Cancelled };
-    Kind kind;
-    int code{0};
-    QString message;
-};
-
-using RadioSetupCompletion = std::function<void(const RadioSetupReply&)>;
-// Trusted composition fences multi-write configuration to its original session.
-// This predicate conveys no permission to key a transmitter.
-using RadioControlFence = std::function<bool()>;
-// Completions run on the backend owner's thread. Accepted is a command reply,
-// never a radio-state observation or a completed calibration.
-
-struct RadioControlSession {
-    quint64 backendGeneration;
-    quint64 connectionGeneration;
-    bool operator==(const RadioControlSession&) const = default;
-};
+using RadioSetupReply = RadioControlReply;
+using RadioSetupCompletion = RadioControlCompletion;
 
 } // namespace AetherSDR
 
 Q_DECLARE_METATYPE(AetherSDR::RadioSetupRequest)
 Q_DECLARE_METATYPE(AetherSDR::TxBandRequest)
 Q_DECLARE_METATYPE(AetherSDR::TransverterRequest)
-Q_DECLARE_METATYPE(AetherSDR::RadioSetupReply)

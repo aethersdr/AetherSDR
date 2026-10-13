@@ -637,7 +637,11 @@ backends. HL2 RIT/XIT commits each enabled/offset pair before publishing readbac
 Radio Setup, TX Band settings and USB-cable configuration now use typed desktop
 requests with backend-owned encoding. Radio-owned state still arrives through
 existing observations; calibration and creation replies are lifetime/session
-fenced, not optimistic state. Other dialogs, controllers and the remaining
+fenced, not optimistic state. Profiles and memory management now use typed
+desktop requests, with direct neutral edits for the host bank and engine-owned
+create/populate/rollback. Slot revisions protect edits and confirmations;
+late replies cannot overwrite newer memory observations. Other dialogs,
+controllers and the remaining
 `RadioModel` command-plane sites are still follow-up work. This does not
 complete M4 or the UI/engine split.
 The desktop adapter has not landed; UI code still consumes models directly, and that

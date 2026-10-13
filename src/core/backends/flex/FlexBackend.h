@@ -94,6 +94,12 @@ public:
                                       const RadioSetupCompletion& completion = {},
                                       const RadioControlFence& current = {}) override;
     ReceiveDispatch requestTxBand(const TxBandRequest& request) override;
+    ReceiveDispatch requestProfile(const ProfileRequest& request,
+                                   const RadioControlCompletion& completion = {},
+                                   const RadioControlFence& current = {}) override;
+    ReceiveDispatch requestMemory(const MemoryRequest& request,
+                                  const RadioControlCompletion& completion = {},
+                                  const RadioControlFence& current = {}) override;
     ReceiveDispatch requestUsbCable(const UsbCableRequest& request) override;
     ReceiveDispatch requestTransverter(const TransverterRequest& request,
                                        const RadioSetupCompletion& completion = {}) override;

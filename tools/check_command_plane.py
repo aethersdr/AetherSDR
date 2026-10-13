@@ -75,20 +75,17 @@ from pathlib import Path
 # drop the number here in the same commit. When a file reaches 0, delete its row.
 BASELINE = {
     # ---- models ----
-    "src/models/RadioModel.cpp": 134,
+    "src/models/RadioModel.cpp": 130,
     "src/models/CwxModel.cpp": 9,
     "src/models/DaxIqModel.cpp": 4,
     "src/models/EqualizerModel.cpp": 4,
     "src/models/FlexWaveformModel.cpp": 3,
     # ---- gui ----
-    "src/gui/MainWindow.cpp": 16,
+    "src/gui/MainWindow.cpp": 12,
     "src/gui/MainWindow_Wiring.cpp": 14,
-    "src/gui/ProfileManagerDialog.cpp": 12,
-    "src/gui/MemoryDialog.cpp": 5,
     "src/gui/MainWindow_Controllers.cpp": 4,
     "src/gui/MainWindow_Shortcuts.cpp": 4,
     "src/gui/MainWindow_Nets.cpp": 2,
-    "src/gui/MemoryCommands.cpp": 3,
     "src/gui/MainWindow_DigitalModes.cpp": 2,
     "src/gui/DxClusterDialog.cpp": 1,
     "src/gui/MainWindow_Spots.cpp": 1,

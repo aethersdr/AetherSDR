@@ -181,6 +181,12 @@ connection/backend generations fence calibration and transverter creation;
 acceptance does not confirm completion. Entity editors retain their original
 session, and USB inventory is retired at disconnect/replacement. Preserve the
 client-owned TX-waterfall flag and station settings separately from radio state.
+Profile and memory dialogs use typed `ProfileRequest` / `MemoryRequest` values
+through `RadioModel`; `FlexStoredControls` owns encoding, including recall
+corrections. Local memories consume neutral patches directly and retain their
+existing shared-bank persistence. Create/populate/rollback is engine-owned;
+session fences, bounded completions and slot revisions reject stale work.
+These desktop operations add no daemon catalogue methods or TX authority.
 MOX, TUNE and ATU start/stop still use the existing operation-fenced TX path;
 host TUNE-power edits additionally require a live locally admitted carrier.
 HL2 host-keyer, sidetone and compressor settings return local-only receipts;

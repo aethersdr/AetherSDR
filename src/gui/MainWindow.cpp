@@ -7733,11 +7733,11 @@ bool MainWindow::activateMemorySpot(int memoryIndex, const QString& preferredPan
 
     m_pendingMemoryRevealSliceId = sliceId;
     m_pendingMemoryRevealTargetMhz = hasMemoryFrequency ? memoryFreqMhz : 0.0;
-    m_radioModel.sendCommand(QString("memory apply %1").arg(memoryIndex));
-    const QString retuneCommand =
-        AetherSDR::buildMemoryRecallRetuneCommand(sliceId, it.value());
-    if (!retuneCommand.isEmpty())
-        m_radioModel.sendCommand(retuneCommand);
+    if (m_radioModel.recallMemory(memoryIndex, sliceId) == ReceiveDispatch::Unsupported) {
+        m_pendingMemoryRevealSliceId = -1;
+        m_pendingMemoryRevealTargetMhz = 0.0;
+        return false;
+    }
     QTimer::singleShot(750, this, [this, sliceId]() {
         if (m_pendingMemoryRevealSliceId != sliceId)
             return;
@@ -7756,15 +7756,6 @@ bool MainWindow::activateMemorySpot(int memoryIndex, const QString& preferredPan
         }
     });
 
-    // The radio should push the rest of the applied memory state, but keep the
-    // local tuning step in sync immediately so wheel/click snap follows along.
-    if (it->step > 0)
-        m_radioModel.sendCommand(QString("slice set %1 step=%2")
-            .arg(sliceId).arg(it->step));
-    const QString repeaterFixup =
-        AetherSDR::buildMemoryRecallSliceFixupCommand(sliceId, it.value());
-    if (!repeaterFixup.isEmpty())
-        m_radioModel.sendCommand(repeaterFixup);
     return true;
 }
 
