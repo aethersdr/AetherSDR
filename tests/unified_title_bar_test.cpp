@@ -1119,6 +1119,54 @@ int main(int argc, char** argv)
         }
     }
 
+    // #6455: hiding the transmit timer (or the other-client TX label) must not
+    // flick PC Audio left for a frame.  Hide directly to skip the 15 s hold and
+    // 800 ms fade, pump exactly one layout pass, and compare against the shown
+    // position.
+    {
+        QWidget layoutHost;
+        auto* layoutBar = new TitleBar(&layoutHost);
+        layoutHost.resize(1400, 200);
+        layoutHost.show();
+        app.processEvents();
+
+        auto* pcBtn = layoutBar->findChild<QPushButton*>(QStringLiteral("pcAudioBtn"));
+        auto* timer = layoutBar->findChild<QLabel*>(QStringLiteral("txTimerLabel"));
+        check(pcBtn && timer, "layout probe finds PC Audio and the transmit timer");
+        if (pcBtn && timer) {
+            auto pcX = [&]() { return pcBtn->mapTo(layoutBar, QPoint(0, 0)).x(); };
+            auto onePass = []() {
+                QCoreApplication::sendPostedEvents(nullptr, QEvent::LayoutRequest);
+            };
+
+            layoutBar->setOperatorTransmitting(true);
+            app.processEvents();
+            check(timer->isVisible(), "timer shows while the operator transmits");
+            const int shownX = pcX();
+            timer->setVisible(false);
+            onePass();
+            checkEqual(pcX(), shownX, "hiding the timer does not move PC Audio in the first layout pass");
+            layoutBar->setOperatorTransmitting(false);
+
+            layoutBar->setOtherClientTx(true, QStringLiteral("X"));
+            app.processEvents();
+            const int otherShownX = pcX();
+            layoutBar->setOtherClientTx(false, QString());
+            onePass();
+            checkEqual(pcX(), otherShownX,
+                       "clearing the other-client TX label does not move PC Audio in the first layout pass");
+
+            layoutBar->setMinimalMode(true);
+            app.processEvents();
+            check(!timer->sizePolicy().retainSizeWhenHidden(),
+                  "minimal mode does not reserve the idle timer's slot");
+            layoutBar->setMinimalMode(false);
+            app.processEvents();
+            check(timer->sizePolicy().retainSizeWhenHidden(),
+                  "leaving minimal mode reserves the timer's slot again");
+        }
+    }
+
     if (g_failures == 0) {
         std::fprintf(stderr, "unified_title_bar_test: all checks passed\n");
     }

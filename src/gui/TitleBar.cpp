@@ -277,6 +277,7 @@ TitleBar::TitleBar(QWidget* parent)
     auto* audio = new QHBoxLayout(audioCluster);
     audio->setContentsMargins(0, 0, 0, 0);
     audio->setSpacing(8);
+    markDragHandle(audioCluster);   // the reserved timer band keeps the open-hand cursor
 
     m_otherTxLabel = new QLabel();
     ThemeManager::instance().applyStyleSheet(
@@ -320,9 +321,11 @@ TitleBar::TitleBar(QWidget* parent)
     m_txTimerOpacity = new QGraphicsOpacityEffect(m_txTimerLabel);
     m_txTimerOpacity->setOpacity(1.0);
     m_txTimerLabel->setGraphicsEffect(m_txTimerOpacity);
-    // Keep the slot reserved while idle so hiding the label after the fade
-    // doesn't reflow the row (PC Audio / volume / headphone would otherwise
-    // jump left on expiry and right on the next key-up).
+    // Keep the slot reserved while idle so the cluster's size hint never
+    // changes.  The settled row does not move (the drag gutter absorbs the
+    // 52+8 px), but hiding the label made the nested cluster re-lay its
+    // children inside its old rect for one pass, flicking PC Audio and
+    // everything right of it left for a frame before m_hbox caught up (#6455).
     {
         QSizePolicy sp = m_txTimerLabel->sizePolicy();
         sp.setRetainSizeWhenHidden(true);
@@ -356,8 +359,12 @@ TitleBar::TitleBar(QWidget* parent)
     m_txTimerFade = new QPropertyAnimation(m_txTimerOpacity, "opacity", this);
     m_txTimerFade->setDuration(800);
     connect(m_txTimerFade, &QPropertyAnimation::finished, this, [this]() {
-        if (m_txTimerOpacity->opacity() <= 0.01)
+        if (m_txTimerOpacity->opacity() <= 0.01) {
             m_txTimerLabel->setVisible(false);
+            // Reset so the retained slot returns to its normal width after an
+            // over longer than an hour (H:MM:SS).
+            m_txTimerLabel->setText(QStringLiteral("0:00"));
+        }
     });
 
     // PC Audio pill
@@ -1696,6 +1703,13 @@ void TitleBar::setMinimalMode(bool on)
     if (m_dockRightLbl) m_dockRightLbl->setVisible(!on);
     if (m_popOutLbl)    m_popOutLbl->setVisible(!on);
     if (m_dockSep)      m_dockSep->setVisible(!on);
+    // Minimal mode hides the audio row to free the strip; don't let the idle
+    // timer's retained slot hold 52 px of it.
+    if (m_txTimerLabel) {
+        QSizePolicy sp = m_txTimerLabel->sizePolicy();
+        sp.setRetainSizeWhenHidden(!on);
+        m_txTimerLabel->setSizePolicy(sp);
+    }
     // Don't touch m_otherTxLabel or m_mfBtn — their visibility is
     // managed by setOtherClientTx() and setMultiFlexStatus() respectively
     updateMaximizeIcon();
