@@ -3090,6 +3090,29 @@ if(ENABLE_NVIDIA_AFX AND ((UNIX AND NOT APPLE) OR WIN32) AND CMAKE_SYSTEM_PROCES
     add_test(NAME nvidia_afx_pack_log_test COMMAND nvidia_afx_pack_log_test)
 endif()
 
+# Exact qWAVE DSCP request/rollback, with injected native operations; no sockets.
+add_executable(vita_dscp_flow_test tests/vita_dscp_flow_test.cpp)
+target_include_directories(vita_dscp_flow_test PRIVATE src)
+add_test(NAME vita_dscp_flow_test COMMAND vita_dscp_flow_test)
+
+# SOCKETS: two ephemeral IPv4 UDP sockets on 127.0.0.1, our own sender/sink.
+# Tests the native marker across close/rebind; no firmware peer or RF.
+add_executable(vita_dscp_socket_test tests/vita_dscp_socket_test.cpp
+    src/core/backends/flex/VitaDscpMarker.cpp)
+target_include_directories(vita_dscp_socket_test PRIVATE src)
+target_link_libraries(vita_dscp_socket_test PRIVATE Qt6::Core Qt6::Network)
+add_test(NAME vita_dscp_socket_test COMMAND vita_dscp_socket_test)
+set_tests_properties(vita_dscp_socket_test PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 10)
+
+# SOCKETS: production ephemeral IPv4 VITA socket (LAN uses AnyIPv4, WAN too)
+# plus our own ephemeral loopback sink. Cold RadioConnection never dials;
+# no radio/firmware peer. Injected QoS denial must leave all bind paths usable.
+add_executable(vita_dscp_stream_test tests/vita_dscp_stream_test.cpp)
+target_include_directories(vita_dscp_stream_test PRIVATE src tests)
+target_link_libraries(vita_dscp_stream_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME vita_dscp_stream_test COMMAND vita_dscp_stream_test)
+set_tests_properties(vita_dscp_stream_test PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 10)
+
 # PanadapterStream's rate-limited VITA-49 sequence-error line and its text, which
 # the docs Log Analyzer matches (#6285). Socket-free: meter packets are fed to
 # processDatagram() on a stream that never binds.
@@ -6265,6 +6288,15 @@ target_include_directories(hl2_unkey_hold_test PRIVATE src)
 target_link_libraries(hl2_unkey_hold_test PRIVATE aethercore Qt6::Core Qt6::Network)
 add_test(NAME hl2_unkey_hold_test COMMAND hl2_unkey_hold_test)
 
+# #5998: the HL2's own PTT/key input is an observation: transmit state and receive
+# mute, never a key. Socket-free; EP6 status frames are fed to the backend's own
+# MetisClient. One leg waits out the 2 s silence timeout.
+add_executable(hl2_hardware_ptt_state_test tests/hl2_hardware_ptt_state_test.cpp)
+target_include_directories(hl2_hardware_ptt_state_test PRIVATE src tests)
+target_link_libraries(hl2_hardware_ptt_state_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME hl2_hardware_ptt_state_test COMMAND hl2_hardware_ptt_state_test)
+set_tests_properties(hl2_hardware_ptt_state_test PROPERTIES TIMEOUT 60)
+
 # HL2 RQST/ACK state machine (docs/HERMES.md §13 item 13, oracle §5) — pure
 # policy, standalone (no Qt, no socket, no radio). The clock is EP6 frames.
 add_executable(hl2_rqst_ack_test
@@ -7666,6 +7698,14 @@ add_executable(hl2_auto_gain_law_test tests/hl2_auto_gain_law_test.cpp)
 target_include_directories(hl2_auto_gain_law_test PRIVATE src tests)
 target_link_libraries(hl2_auto_gain_law_test PRIVATE aethercore Qt6::Core Qt6::Network)
 add_test(NAME hl2_auto_gain_law_test COMMAND hl2_auto_gain_law_test)
+# The age gate of the ADC pairing as Hl2Backend::healthSnapshot() applies it:
+# a held slice peak on either side of kSliceStaleMs. Socket-free: the link edge
+# and telemetry go in through MetisClient's own signals, receiver 0 gets a real
+# Hl2RxDsp fed by hand, and the snapshot is read at a chosen instant.
+add_executable(hl2_adc_age_gate_test tests/hl2_adc_age_gate_test.cpp)
+target_include_directories(hl2_adc_age_gate_test PRIVATE src tests)
+target_link_libraries(hl2_adc_age_gate_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME hl2_adc_age_gate_test COMMAND hl2_adc_age_gate_test)
 # Socket-free HL2 panadapter-limit DECLARATIONS: the span shape, the four
 # discrete rates and the dBm axis. NOT radioOwnsDbmScale -- the HL2 deliberately
 # leaves that undeclared and this target asserts only its DEFAULT, which is a
@@ -8616,6 +8656,7 @@ set(AETHER_SETTINGS_CONSUMERS
     hl2_client_side_spots_declaration_test
     hl2_gain_split_test
     hl2_auto_gain_law_test
+    hl2_adc_age_gate_test
     icom_identity_test
     icom_control_profile_test
     control_resource_service_test

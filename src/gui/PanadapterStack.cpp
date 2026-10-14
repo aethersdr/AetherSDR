@@ -33,7 +33,8 @@ static void refreshAfterReparent(AetherSDR::SpectrumWidget* sw)
 {
     if (!sw) return;
 #if defined(Q_OS_MACOS) && defined(AETHER_GPU_SPECTRUM)
-    const bool wasVisible = sw->isVisible();
+    // Preserve explicit hide state; effective visibility also depends on ancestors.
+    const bool wasHidden = sw->isHidden();
     sw->hide();
     sw->resetGpuResources();
     if (QWindow* windowHandle = sw->windowHandle()) {
@@ -43,7 +44,7 @@ static void refreshAfterReparent(AetherSDR::SpectrumWidget* sw)
     // reasserts WA_NativeWindow *and* WA_DontCreateNativeAncestors as a pair, so a
     // reparent can't promote ancestors to native (redundant backing stores, #4339).
     sw->applyNativeWindowIsolationPolicy();
-    if (wasVisible) {
+    if (!wasHidden) {
         sw->show();
     }
     QTimer::singleShot(50, sw, [sw]() { sw->update(); });
@@ -355,6 +356,10 @@ void PanadapterStack::equalizeSizes()
 void PanadapterStack::refreshAfterLayoutShift()
 {
 #if defined(Q_OS_MACOS) && defined(AETHER_GPU_SPECTRUM)
+    // No existing swapchain needs refreshing before the top-level window is shown.
+    if (!window()->isVisible()) {
+        return;
+    }
     // Re-realize each spectrum's NATIVE window, not just its GPU pipelines.
     // Measured on Metal: after the flip the native surface keeps its pre-flip
     // width (short by the panel's 260 px), so re-rendering into it — even

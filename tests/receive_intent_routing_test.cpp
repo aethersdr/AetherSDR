@@ -417,25 +417,17 @@ void receiveReentrancyAndLifecycle()
     check(requests == 0, "deletion during receive notification cancels dispatch safely");
 }
 
-void profileRestore()
+// Radio status is the truth for the NRS level, as for every DSP level: a
+// reported 50 after an operator 72 is adopted and asks for nothing (#6447).
+void nrsReadbackIsPassive()
 {
     SliceModel slice(0);
     QSignalSpy requests(&slice, &SliceModel::receiveDspRequested);
-    QSignalSpy raw(&slice, &SliceModel::commandReady);
     slice.setNrsLevel(72);
-    SliceDelta recalled; recalled.nrsLevel = 50;
-    slice.applyChanges(recalled);
-    check(requests.size() == 2 && slice.nrsLevel() == 72
-              && qvariant_cast<SliceDspRequest>(requests.last().at(0)).origin == SliceDspRequest::Origin::ProfileRestore,
-          "NRS firmware-default recall preserves explicit operator level with tagged restore intent");
-    recalled.nrsLevel = 63;
-    slice.applyChanges(recalled);
-    check(requests.size() == 2 && slice.nrsLevel() == 63, "ordinary NRS readback is passive");
-    slice.setNrsLevel(50);
-    recalled.nrsLevel = 50;
-    slice.applyChanges(recalled);
-    check(requests.size() == 3 && slice.nrsLevel() == 50 && raw.isEmpty(),
-          "explicit operator default disables NRS reassertion and no path emits raw wire text");
+    check(requests.size() == 1, "an operator NRS level is one request");
+    SliceDelta reported; reported.nrsLevel = 50;
+    slice.applyChanges(reported);
+    check(requests.size() == 1 && slice.nrsLevel() == 50, "a reported NRS level of 50 is adopted, not overridden");
 }
 
 void synchronousObservations()
@@ -681,7 +673,7 @@ int main(int argc, char** argv)
     externalReceiveHandoffOrdering();
     receiveControls();
     receiveReentrancyAndLifecycle();
-    profileRestore();
+    nrsReadbackIsPassive();
     synchronousObservations();
     modeReentrancy();
     lifetimeAndReentrancy();

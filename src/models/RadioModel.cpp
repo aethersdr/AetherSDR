@@ -1688,6 +1688,7 @@ void RadioModel::teardownBackend()
     for (SliceModel* source : m_slices) { source->invalidateControlIntents(); }
     resetTxOperations();
     ++m_backendReceiverGeneration;
+    m_backendObservedTransmit = false;   // an observation dies with its backend
     if (m_backend) {
         m_backend->retirePcmStreams();
     }
@@ -4538,6 +4539,10 @@ void RadioModel::applyBackendTransmitDelta(const TransmitDelta& delta)
     // Backend MOX is radio state, not local intent; don't echo it into the
     // signal that drives this client's audio, DAX, recorder and serial PTT.
     if (delta.mox) {
+        // Remembered only for a backend whose mox also carries the radio's own
+        // keying, so a host unkey cannot clear a PTT the radio still reports.
+        m_backendObservedTransmit = *delta.mox && m_backend
+            && m_backend->capabilities().radioPttObservation.has_value();
         publishBackendTransmitEdge(*delta.mox);
     }
     m_transmitModel.applyChanges(delta);
@@ -4778,7 +4783,7 @@ void RadioModel::publishCommandedBackendTransmitEdge(bool tx)
     if (m_backend && m_backend->capabilities().hasRadioPttReadback) {
         return;
     }
-    publishBackendTransmitEdge(tx);
+    publishBackendTransmitEdge(tx || m_backendObservedTransmit);
 }
 
 // Publish the TX edge for a backend with no interlock status plane; otherwise
@@ -7916,6 +7921,7 @@ void RadioModel::onDisconnected()
         m_txAudioGate = false;
         emit txAudioGateChanged(false);
     }
+    m_backendObservedTransmit = false;
     m_radioTransmitting = false;
     emit radioTransmittingChanged(false);
     if (m_profileDatabaseImporting) {
@@ -9902,7 +9908,7 @@ void RadioModel::reportReceiveDispatch(ReceiveDispatch result, const QString& op
         qCWarning(lcProtocol).noquote() << "Backend refused operation" << operation
             << (operatorOrigin ? QStringLiteral("(announced)") : QStringLiteral("(not announced)"));
         // The notice answers a control the operator just moved. A Kiwi
-        // suppression mute or a profile restore is not one, and must not spend
+        // suppression mute is not one, and must not spend
         // the once-per-session notice on a refusal nobody asked for.
         if (operatorOrigin) {
             emit commandDropped(operation);
@@ -9914,8 +9920,7 @@ void RadioModel::dispatchSliceDsp(const SliceDspRequest& request)
 {
     if (SliceModel* source = receiveCommandSource()) {
         reportReceiveDispatch(m_backend->requestSliceDsp(source->sliceId(), request),
-                              QStringLiteral("receive DSP"),
-                              request.origin == SliceDspRequest::Origin::Operator);
+                              QStringLiteral("receive DSP"), true);
     }
 }
 

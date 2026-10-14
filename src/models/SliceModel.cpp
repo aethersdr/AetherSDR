@@ -638,10 +638,6 @@ void SliceModel::setNrlLevel(int v)
 void SliceModel::setNrsLevel(int v)
 {
     v = std::clamp(v, 0, 100);
-    // Record any explicit user choice (including a deliberate 50) so the
-    // applyChanges() re-push won't fight a value the user picked themselves.
-    m_nrsLevelUser = v;
-    m_nrsLevelUserOverride = true;
     if (m_nrsLevel == v) return;
     m_nrsLevel = v;
     notifyReceiveDspIntent(SliceDspRequest::Feature::Nrs, SliceDspRequest::Field::Level,
@@ -1541,8 +1537,6 @@ void SliceModel::emitLetterRefresh()
 void SliceModel::applyChanges(const SliceDelta& d)
 {
     const QPointer<SliceModel> alive(this);
-    std::optional<SliceDspRequest> profileRestore;
-    const quint64 nrsLevelRevision = m_dspIntentRevisions[static_cast<size_t>(SliceDspRequest::Feature::Nrs)][1];
     const ReceiveObservation previousObservation = m_receiveObservation;
     if (d.mode) {
         // A mode change invalidates the old mode's passband. Partial filter
@@ -1949,16 +1943,6 @@ void SliceModel::applyChanges(const SliceDelta& d)
     }
     if (d.nrsLevel.has_value()) {
         int v = *d.nrsLevel;
-        // The radio's `profile global` snapshot does not persist
-        // speex_nr_level. On recall the firmware reports its default of 50
-        // even when the user previously set a different value. If we have a
-        // cached user choice that differs, push it back. Same precedent as
-        // the rtty_mark workaround below.
-        if (v == 50 && m_nrsLevelUserOverride && m_nrsLevelUser != 50) {
-            v = m_nrsLevelUser;
-            profileRestore = SliceDspRequest{SliceDspRequest::Feature::Nrs,
-                SliceDspRequest::Field::Level, m_nrs, v, SliceDspRequest::Origin::ProfileRestore};
-        }
         if (m_nrsLevel != v) { m_nrsLevel = v; emit nrsLevelChanged(v); }
     }
     if (d.nrfLevel.has_value()) {
@@ -2216,11 +2200,6 @@ void SliceModel::applyChanges(const SliceDelta& d)
     }
     if (d.mode) {
         emit receiveModeReported();
-    }
-    if (alive && profileRestore
-        && nrsLevelRevision == m_dspIntentRevisions[static_cast<size_t>(SliceDspRequest::Feature::Nrs)][1]
-        && m_nrsLevelUser == profileRestore->level) {
-        emit receiveDspRequested(*profileRestore);
     }
 }
 

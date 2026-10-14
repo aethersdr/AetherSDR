@@ -341,6 +341,7 @@ RadioCapabilities SimBackend::capabilities() const
     // The demo has no transmitter and no radio to ship audio to.
     caps.takesTxAudioOverSeam = false;
     caps.hasRadioPttReadback = false;
+    caps.radioPttObservation = std::nullopt;
     // Continuous/unknown — the operator keeps their own width list.
     caps.rxFilterWidthsHz = {};
     caps.hasTxFilterControls = false;   // RX-only; no transmit passband exists

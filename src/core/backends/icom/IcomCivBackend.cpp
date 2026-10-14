@@ -330,6 +330,7 @@ RadioCapabilities IcomCivBackend::capabilities() const
     // state. AetherModem waits for that edge before releasing sample zero, and
     // RadioModel does not synthesise a command-edge fallback here.
     c.hasRadioPttReadback = true;
+    c.radioPttObservation = std::nullopt;   // the full readback above covers it
     // Official CI-V guides for both network targets define command 17 text
     // keying and 17 FF abort. Keep other model profiles dark until verified.
     c.hasRadioSideCwKeyer = profile.cwTextKeyer.has_value();
@@ -4528,8 +4529,7 @@ ReceiveDispatch IcomCivBackend::requestTransmitControl(const TransmitControlRequ
 
 ReceiveDispatch IcomCivBackend::requestSliceDsp(int sliceId, const SliceDspRequest& request)
 {
-    if (!m_connected || !m_session || !m_model || sliceId != 0 || !request.valid()
-        || request.origin != SliceDspRequest::Origin::Operator) {
+    if (!m_connected || !m_session || !m_model || sliceId != 0 || !request.valid()) {
         return ReceiveDispatch::Unsupported;
     }
     switch (request.feature) {
