@@ -5,6 +5,8 @@
 #include "core/RadioDiscovery.h"
 #include "core/TciServer.h"
 #include "core/TciTrxMap.h"
+#include "core/backends/IRadioBackend.h"
+#include "core/backends/RadioCapabilities.h"
 #include "core/backends/sim/SimBackend.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -28,6 +30,8 @@
 
 #include <cstring>
 #include <cstdio>
+#include <memory>
+#include <utility>
 
 namespace AetherSDR
 {
@@ -129,6 +133,33 @@ QString findLine(const QStringList& lines, const char* prefix)
     }
     return QString();
 }
+
+// An injected live TX-capable state source, not a radio peer. It gives this
+// socket-free TCI test the normal backend capability and connection contract.
+class TxCapableBackend final : public IRadioBackend
+{
+public:
+    explicit TxCapableBackend(bool canTransmit = true) { caps.canTransmit = canTransmit; }
+    RadioCapabilities caps;
+    int txSelections{0};
+    RadioCapabilities capabilities() const override { return caps; }
+    void setTxSlice(int) override { ++txSelections; }
+    bool isConnected() const override { return m_connected; }
+    void setConnected(bool connected) { m_connected = connected; }
+    void connectRadio(const RadioConnectRequest&) override {}
+    void disconnectRadio() override {}
+    void setSliceFrequency(int, double) override {}
+    void setSliceMode(int, const QString&) override {}
+    void setSliceFilter(int, int, int) override {}
+    void setSliceAgc(int, const QString&, int) override {}
+    void setPanCenter(const QString&, double, PanCenterIntent) override {}
+    void setKeying(bool, const TxCoordinator::Operation&,
+                   const TxCoordinator::Completion&) override {}
+    void invokeExtension(const QString&, const QString&, quint64, const QVariant&) override {}
+
+private:
+    bool m_connected{true};
+};
 
 } // namespace
 
@@ -2359,6 +2390,267 @@ public:
         return server.m_pendingIqRemovals.contains(1)
             && server.m_iqPanChannel.isEmpty();
     }
+
+    static bool txPermissionFollowsModesAndCapabilities()
+    {
+        QStringList sent;
+        RadioModel model;
+        auto backendOwner = std::make_unique<TxCapableBackend>();
+        TxCapableBackend* backend = backendOwner.get();
+        backend->caps.receiveOnlyModes = QStringList{QStringLiteral("WFM")};
+        model.setBackendForTest(std::move(backendOwner), QStringLiteral("test"));
+        TciServer server(&model);
+        SliceDelta usb;
+        usb.mode = QStringLiteral("USB");
+        usb.txSlice = true;
+        SliceDelta wfm;
+        wfm.mode = QStringLiteral("wfm");
+        model.emitBackendSliceChangedForTest(0, usb);
+        model.emitBackendSliceChangedForTest(1, wfm);
+        server.wireSlice(0, model.slice(0));
+        server.wireSlice(1, model.slice(1));
+        TciProtocol protocol(&model, &server.m_routingState, &server.m_trxMap);
+        const QString init = protocol.generateInitBurst();
+        if (!init.contains(QStringLiteral("tx_enable:0,true;"))
+            || !init.contains(QStringLiteral("tx_enable:1,false;"))) {
+            return false;
+        }
+        bool called = false;
+        bool permitted = true;
+        server.promoteTxSliceAndContinue(1, [&](bool accepted) {
+            called = true;
+            permitted = accepted;
+        });
+        if (!called || permitted || backend->txSelections != 0) {
+            return false;
+        }
+
+        TciClient socket;
+        TciServer::ClientState client;
+        client.socket = &socket;
+        server.m_clients.append(client);
+        QObject::connect(&server, &TciServer::tciMessage,
+                         [&sent](const QString& direction, const QString& text) {
+            if (direction == QLatin1String("tx")) {
+                sent.append(text.trimmed());
+            }
+        });
+        SliceDelta mode;
+        mode.mode = QStringLiteral("USB");
+        model.emitBackendSliceChangedForTest(1, mode);
+        if (!sent.contains(QStringLiteral("tx_enable:1,true;"))) {
+            return false;
+        }
+        sent.clear();
+        mode.mode = QStringLiteral("WFM");
+        model.emitBackendSliceChangedForTest(1, mode);
+        if (!sent.contains(QStringLiteral("tx_enable:1,false;"))
+            || sent.contains(QStringLiteral("tx_enable:0,false;"))) {
+            return false;
+        }
+        sent.clear();
+        backend->caps.canTransmit = false;
+        emit model.capabilitiesChanged(true, backend->caps);
+        if (!sent.contains(QStringLiteral("tx_enable:0,false;"))
+            || !sent.contains(QStringLiteral("tx_enable:1,false;"))) {
+            return false;
+        }
+        sent.clear();
+        backend->caps.canTransmit = true;
+        emit model.capabilitiesChanged(true, backend->caps);
+        if (!sent.contains(QStringLiteral("tx_enable:0,true;"))
+            || !sent.contains(QStringLiteral("tx_enable:1,false;"))) {
+            return false;
+        }
+        sent.clear();
+        backend->caps.receiveOnlyModes.clear();
+        emit model.capabilitiesChanged(true, backend->caps);
+        return sent.contains(QStringLiteral("tx_enable:0,true;"))
+            && sent.contains(QStringLiteral("tx_enable:1,true;"));
+    }
+
+    // #6438: tx_enable advertises permission to request PTT for each receiver,
+    // not the single receiver that currently owns TX. A pan inhibit is the
+    // dynamic exception, and must reach existing clients as well as new ones.
+    static bool txPermissionIsIndependentOfTxOwnership()
+    {
+        QStringList sent;
+        RadioModel model;
+        auto backendOwner = std::make_unique<TxCapableBackend>();
+        TxCapableBackend* backend = backendOwner.get();
+        model.setBackendForTest(std::move(backendOwner), QStringLiteral("test"));
+        TciServer server(&model);
+
+        const QMap<QString, QString> sliceStatus{
+            {QStringLiteral("in_use"), QStringLiteral("1")},
+        };
+        model.handleSliceStatusForTest(0, sliceStatus);
+        model.handleSliceStatusForTest(1, sliceStatus);
+        model.handleSliceStatusForTest(2, sliceStatus);
+        SliceDelta first;
+        first.panId = QStringLiteral("pan-a");
+        first.frequency = 14.074;
+        first.txSlice = true;
+        SliceDelta second;
+        second.panId = QStringLiteral("pan-a");
+        second.frequency = 14.076;
+        SliceDelta otherPan;
+        otherPan.panId = QStringLiteral("pan-b");
+        otherPan.frequency = 7.074;
+        model.emitBackendSliceChangedForTest(0, first);
+        model.emitBackendSliceChangedForTest(1, second);
+        model.emitBackendSliceChangedForTest(2, otherPan);
+        SliceModel* sliceA = model.slice(0);
+        SliceModel* sliceB = model.slice(1);
+        SliceModel* sliceC = model.slice(2);
+        if (!sliceA || !sliceB || !sliceC) {
+            return false;
+        }
+        const QString panA = sliceA->panId();
+        const QString panB = sliceC->panId();
+        if (panA.isEmpty() || panA != sliceB->panId() || panA == panB) {
+            return false;
+        }
+        server.wireSlice(0, sliceA);
+        server.wireSlice(1, sliceB);
+        server.wireSlice(2, sliceC);
+
+        TciProtocol protocol(&model, &server.m_routingState, &server.m_trxMap);
+        const QString init = protocol.generateInitBurst();
+        if (!init.contains(QStringLiteral("tx_enable:0,true;"))
+            || !init.contains(QStringLiteral("tx_enable:1,true;"))
+            || !init.contains(QStringLiteral("tx_enable:2,true;"))) {
+            std::printf("      init did not grant all receivers: %s\n",
+                        init.toUtf8().constData());
+            return false;
+        }
+
+        TciClient socket;
+        TciServer::ClientState client;
+        client.socket = &socket;
+        server.m_clients.append(client);
+        QObject::connect(&server, &TciServer::tciMessage,
+                         [&sent](const QString& direction, const QString& text) {
+            if (direction == QLatin1String("tx")) {
+                sent.append(text.trimmed());
+            }
+        });
+
+        // The reconnect lifecycle clears the stable map while the old slices
+        // are staged. A reclaimed slice reports slot occupancy, not sliceAdded.
+        // Exercise that server-side seam directly: the backend's connection
+        // answer changes first, as it does before RadioModel emits each edge.
+        backend->setConnected(false);
+        emit model.connectionStateChanged(false);
+        if (!sent.contains(QStringLiteral("tx_enable:0,false;"))
+            || !sent.contains(QStringLiteral("tx_enable:1,false;"))
+            || !sent.contains(QStringLiteral("tx_enable:2,false;"))) {
+            return false;
+        }
+        sent.clear();
+        model.stageSessionModelsForReconnectForTest();
+        backend->setConnected(true);
+        emit model.connectionStateChanged(true);
+        emit model.capabilitiesChanged(true, backend->caps);
+        // capabilitiesChanged runs on this edge, but the staged model has no
+        // live slices. Reclaim below is the only path allowed to restore the
+        // per-receiver permission advertisement.
+        if (!sent.isEmpty()) {
+            std::printf("      reconnect announced permission before reclaim: %s\n",
+                        sent.join(QLatin1Char(' ')).toUtf8().constData());
+            return false;
+        }
+        model.emitBackendSliceChangedForTest(0, first);
+        model.emitBackendSliceChangedForTest(1, second);
+        model.emitBackendSliceChangedForTest(2, otherPan);
+        if (!sent.contains(QStringLiteral("tx_enable:0,true;"))
+            || !sent.contains(QStringLiteral("tx_enable:1,true;"))
+            || !sent.contains(QStringLiteral("tx_enable:2,true;"))) {
+            std::printf("      reclaim did not restore TX permission: %s\n",
+                        sent.join(QLatin1Char(' ')).toUtf8().constData());
+            return false;
+        }
+        sent.clear();
+
+        SliceDelta moveTx;
+        moveTx.txSlice = true;
+        model.emitBackendSliceChangedForTest(1, moveTx);
+        moveTx.txSlice = false;
+        model.emitBackendSliceChangedForTest(0, moveTx);
+        if (sent.contains(QStringLiteral("tx_enable:0,false;"))
+            || sent.contains(QStringLiteral("tx_enable:1,false;"))) {
+            std::printf("      TX ownership change withdrew permission: %s\n",
+                        sent.join(QLatin1Char(' ')).toUtf8().constData());
+            return false;
+        }
+
+        model.setPanTransmitInhibited(panA, true,
+                                      QStringLiteral("test inhibit"));
+        if (!sent.contains(QStringLiteral("tx_enable:0,false;"))
+            || !sent.contains(QStringLiteral("tx_enable:1,false;"))
+            || sent.contains(QStringLiteral("tx_enable:2,false;"))) {
+            return false;
+        }
+        sent.clear();
+        SliceDelta moveToOtherPan;
+        moveToOtherPan.panId = QStringLiteral("pan-b");
+        model.emitBackendSliceChangedForTest(1, moveToOtherPan);
+        if (!sent.contains(QStringLiteral("tx_enable:1,true;"))) {
+            return false;
+        }
+        sent.clear();
+        SliceDelta moveBackToInhibitedPan;
+        moveBackToInhibitedPan.panId = QStringLiteral("pan-a");
+        model.emitBackendSliceChangedForTest(1, moveBackToInhibitedPan);
+        if (!sent.contains(QStringLiteral("tx_enable:1,false;"))) {
+            return false;
+        }
+        sent.clear();
+        model.setPanTransmitInhibited(panA, false);
+        if (!sent.contains(QStringLiteral("tx_enable:0,true;"))
+            || !sent.contains(QStringLiteral("tx_enable:1,true;"))) {
+            return false;
+        }
+
+        // A band-change recreation retains its receiver and permission, but
+        // a genuine close must revoke permission before that receiver is reused.
+        sent.clear();
+        model.handleSliceStatusForTest(1, {}, true);
+        model.emitBackendSliceChangedForTest(1, second);
+        spin(600);
+        if (sent.contains(QStringLiteral("tx_enable:1,false;"))) {
+            std::printf("      recreation withdrew TX permission\n");
+            return false;
+        }
+        sent.clear();
+        model.handleSliceStatusForTest(1, {}, true);
+        spin(600);
+        if (!sent.contains(QStringLiteral("tx_enable:1,false;"))
+            || sent.contains(QStringLiteral("tx_enable:0,false;"))
+            || sent.contains(QStringLiteral("tx_enable:2,false;"))) {
+            std::printf("      close did not revoke only receiver 1: %s\n",
+                        sent.join(QLatin1Char(' ')).toUtf8().constData());
+            return false;
+        }
+        sent.clear();
+        model.emitBackendSliceChangedForTest(3, second);
+        if (server.m_trxMap.trxForSliceId(3) != 1
+            || !sent.contains(QStringLiteral("tx_enable:1,true;"))) {
+            std::printf("      reused receiver did not regain TX permission\n");
+            return false;
+        }
+
+        RadioModel receiveOnly;
+        receiveOnly.setBackendForTest(std::make_unique<TxCapableBackend>(false),
+                                      QStringLiteral("test"));
+        receiveOnly.handleSliceStatusForTest(0, sliceStatus);
+        SliceDelta receiveOnlySlice;
+        receiveOnlySlice.panId = QStringLiteral("pan-a");
+        receiveOnly.emitBackendSliceChangedForTest(0, receiveOnlySlice);
+        TciProtocol receiveOnlyProtocol(&receiveOnly);
+        return receiveOnlyProtocol.generateInitBurst()
+            .contains(QStringLiteral("tx_enable:0,false;"));
+    }
 };
 
 } // namespace AetherSDR
@@ -2439,6 +2731,10 @@ int main(int argc, char** argv)
         = AetherSDR::TciServerReviewTest::iqStreamRearmsAfterStopStartCycle();
     const bool iqClientScoped
         = AetherSDR::TciServerReviewTest::sharedIqSubscriptionIsClientScoped();
+    const bool modePermission
+        = AetherSDR::TciServerReviewTest::txPermissionFollowsModesAndCapabilities();
+    const bool txPermission
+        = AetherSDR::TciServerReviewTest::txPermissionIsIndependentOfTxOwnership();
     const bool chronoIdle
         = AetherSDR::TciServerReviewTest::chronoStallSnapshotIsIdle();
     const bool chronoCatchUp
@@ -2519,6 +2815,10 @@ int main(int argc, char** argv)
                 iqRearms ? "PASS" : "FAIL");
     std::printf("%s  shared IQ subscriptions are client-scoped\n",
                 iqClientScoped ? "PASS" : "FAIL");
+    std::printf("%s  TCI TX permission follows modes and live capabilities (#6438)\n",
+                modePermission ? "PASS" : "FAIL");
+    std::printf("%s  TCI TX permission is independent of TX ownership (#6438)\n",
+                txPermission ? "PASS" : "FAIL");
     std::printf("%s  TX_CHRONO stall snapshot is idle before TX\n",
                 chronoIdle ? "PASS" : "FAIL");
     std::printf("%s  TX_CHRONO stall counts late polls and catch-up bursts\n",
@@ -2543,7 +2843,7 @@ int main(int argc, char** argv)
         && vfoChannelZeroOnce
         && routeLogStaleCache && routeLogSampleOrder && routeLogSanitizes
         && native24kPayload && fourIqStreams && sharedPanChannel
-        && borrowRefused && iqRearms && iqClientScoped
+        && borrowRefused && iqRearms && iqClientScoped && txPermission && modePermission
         && chronoIdle && chronoCatchUp
         ? 0 : 1;
 }

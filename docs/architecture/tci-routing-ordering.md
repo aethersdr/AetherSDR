@@ -64,7 +64,7 @@ uses the resulting stable Flex slice IDs.
 | `split_enable:<trx>` | Shared TCI split-request state, echoed under the requested receiver |
 | `trx:<trx>` | Explicit PTT intent for the route; acknowledgement is actual interlock state |
 | `tx_frequency` | Frequency of the radio-authoritative TX slice |
-| `tx_enable` | Radio-authoritative TX-slice availability/selection notification |
+| `tx_enable` | Per-receiver permission to request PTT, requiring a connected TX-capable backend, local receiver ownership, a transmit-capable mode, and no panadapter TX inhibit; independent of current TX-slice selection |
 
 `channels_count:2` is advertised because both channels are addressable. A
 physical TX slice may also appear as another contiguous receiver in the

@@ -726,6 +726,9 @@ public:
     quint32 txClientHandle() const { return m_txClientHandle; }
     quint32 ourClientHandle() const;
     bool sliceMayBelongToUs(int sliceId) const;
+    // TX requires confirmed ownership on multi-client radios; early RX state
+    // may still be visible through sliceMayBelongToUs() before owners arrive.
+    bool sliceOwnedByUs(int sliceId) const;
 
     struct ClientInfo {
         QString clientId;
@@ -1074,6 +1077,9 @@ signals:
     void infoChanged();
     void licenseFeaturesChanged();
     void connectionStateChanged(bool connected);
+    // Per-pan transmit permission changed. Consumers use the pan id to update
+    // each slice sharing that pan without inferring anything from TX ownership.
+    void panTransmitInhibitChanged(const QString& panId);
     void transmitSessionInvalidated();
     // The backend's RadioCapabilities changed, or a connect/disconnect edge
     // changed which backend answers; this one signal covers both. `connected`

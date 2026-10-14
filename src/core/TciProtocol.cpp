@@ -4,6 +4,7 @@
 #include "LogManager.h"
 #include "TciRoutingState.h"
 #include "TciTrxMap.h"
+#include "core/backends/RadioCapabilities.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/PanadapterModel.h"
@@ -40,6 +41,14 @@ int TciProtocol::tciTrxForSlice(RadioModel* model, const SliceModel* slice)
     const auto slices = model->slices();
     const int index = slices.indexOf(const_cast<SliceModel*>(slice));
     return index >= 0 ? index : slice->sliceId();
+}
+
+bool TciProtocol::transmitPermitted(const RadioModel* model, const SliceModel* slice)
+{
+    return model && slice && model->isConnected() && model->backendCanTransmit()
+        && model->sliceOwnedByUs(slice->sliceId())
+        && !modeIsReceiveOnly(model->backendCapabilities(), slice->mode())
+        && model->panTransmitInhibitReason(slice->panId()).isEmpty();
 }
 
 QString TciProtocol::sanitizeSliceLetter(const QString& letter)
@@ -396,7 +405,7 @@ QString TciProtocol::generateInitBurst()
 
             // TX
             burst += QStringLiteral("tx_enable:%1,%2;")
-                         .arg(trx).arg(s->isTxSlice() ? "true" : "false");
+                         .arg(trx).arg(transmitPermitted(m_model, s) ? "true" : "false");
         }
 
         // Global TX state
