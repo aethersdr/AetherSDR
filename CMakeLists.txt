@@ -1017,6 +1017,8 @@ set(CORE_SOURCES
     src/core/ByteRelay.cpp
     src/core/TcpByteProxy.cpp
     src/core/Ctr2FirmwareUpdater.cpp
+    src/core/EspFirmwareInstaller.cpp
+    src/core/EspFirmwareManifest.cpp
     src/core/Ctr2HidFraming.cpp
     src/core/Ctr2HidPort.cpp
     src/core/Ctr2HidThreadPort.cpp
@@ -1575,6 +1577,42 @@ if(MSVC)
     set_source_files_properties(${GGMORSE_SOURCES} PROPERTIES COMPILE_FLAGS "/w")
 else()
     set_source_files_properties(${GGMORSE_SOURCES} PROPERTIES COMPILE_FLAGS "-w")
+endif()
+
+# Bundled esp-serial-flasher (Apache-2.0; its flasher stubs Apache-2.0 OR MIT):
+# Espressif's protocol for an ESP32-family chip's ROM bootloader, used to
+# install firmware on ESP32-based controllers in download mode. AetherSDR
+# supplies the serial port (EspFlasher.cpp).
+set(ESP_FLASHER_DIR ${CMAKE_SOURCE_DIR}/third_party/esp-serial-flasher)
+file(GLOB ESP_FLASHER_STUBS ${ESP_FLASHER_DIR}/src/stubs/*.c)
+add_library(aether_esp_flasher STATIC
+    ${ESP_FLASHER_DIR}/src/esp_loader.c
+    ${ESP_FLASHER_DIR}/src/esp_targets.c
+    ${ESP_FLASHER_DIR}/src/md5_hash.c
+    ${ESP_FLASHER_DIR}/src/protocol_serial.c
+    ${ESP_FLASHER_DIR}/src/protocol_uart.c
+    ${ESP_FLASHER_DIR}/src/protocol_spi.c
+    ${ESP_FLASHER_DIR}/src/protocol_sdio.c
+    ${ESP_FLASHER_DIR}/src/slip.c
+    ${ESP_FLASHER_STUBS}
+)
+target_include_directories(aether_esp_flasher
+    PUBLIC ${ESP_FLASHER_DIR}/include
+    PRIVATE ${ESP_FLASHER_DIR}/private_include
+)
+target_compile_definitions(aether_esp_flasher PUBLIC
+    SERIAL_FLASHER_LOG_LEVEL=1
+    SERIAL_FLASHER_WRITE_BLOCK_RETRIES=3
+    SERIAL_FLASHER_RESET_HOLD_TIME_MS=100
+    SERIAL_FLASHER_BOOT_HOLD_TIME_MS=50
+    SERIAL_FLASHER_RESET_INVERT=false
+    SERIAL_FLASHER_BOOT_INVERT=false
+)
+set_target_properties(aether_esp_flasher PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON)
+if(MSVC)
+    target_compile_options(aether_esp_flasher PRIVATE /w)
+else()
+    target_compile_options(aether_esp_flasher PRIVATE -w)
 endif()
 
 add_library(aether_libmodem_core STATIC
@@ -2505,6 +2543,8 @@ if(Qt6SerialPort_FOUND)
     # #ifdef HAVE_SERIALPORT directly.
     target_compile_definitions(aethercore PUBLIC HAVE_SERIALPORT)
     target_link_libraries(aethercore PUBLIC Qt6::SerialPort)
+    target_sources(aethercore PRIVATE src/core/EspFlasher.cpp)
+    target_link_libraries(aethercore PRIVATE aether_esp_flasher)
 endif()
 
 if(Qt6WebSockets_FOUND)

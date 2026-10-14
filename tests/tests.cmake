@@ -479,6 +479,14 @@ target_link_libraries(ctr2_firmware_updater_test PRIVATE aethercore Qt6::Core)
 add_test(NAME ctr2_firmware_updater_test COMMAND ctr2_firmware_updater_test)
 set_tests_properties(ctr2_firmware_updater_test PROPERTIES TIMEOUT 120)
 
+# EspFirmwareManifest and EspFirmwareInstaller against an in-memory flash:
+# protected regions are never written, a device that is not the manifest's is
+# left untouched, start rewrites only the boot selection, backups restore.
+add_executable(esp_firmware_installer_test tests/esp_firmware_installer_test.cpp)
+target_include_directories(esp_firmware_installer_test PRIVATE src)
+target_link_libraries(esp_firmware_installer_test PRIVATE aethercore Qt6::Core)
+add_test(NAME esp_firmware_installer_test COMMAND esp_firmware_installer_test)
+
 # CTR2 HID I/O thread with injected device operations (no hidapi, no device,
 # no sockets): shutdown never blocks the owner on slow writes, discardQueued()
 # fences queued output and late acknowledgements, reads and failures surface.

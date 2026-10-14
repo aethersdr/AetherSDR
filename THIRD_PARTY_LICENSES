@@ -726,3 +726,18 @@ tools/docs/pdf/fonts/OFL.txt.
   Copyright: Copyright 2022 The Noto Project Authors
   License:   SIL Open Font License, Version 1.1
   Source:    https://github.com/notofonts/symbols
+
+
+29. esp-serial-flasher and esp-flasher-stub — ESP32 ROM bootloader protocol
+-------------------------------------------------------------------------------
+Bundled at third_party/esp-serial-flasher/ (library v2.0.0; the flasher
+stubs in src/stubs/ regenerated from esp-flasher-stub v1.4.1 with the
+library's cmake/gen_stub_sources.py, see COMMIT). Used to install firmware
+on ESP32-family controllers held in their ROM download mode; the stubs are
+uploaded to the device's RAM, not run on the host. The full license text is
+in third_party/esp-serial-flasher/LICENSE.
+
+  Copyright: Copyright 2020-2026 Espressif Systems (Shanghai) CO LTD
+  License:   Apache License 2.0 (library); Apache-2.0 OR MIT (stubs)
+  Source:    https://github.com/espressif/esp-serial-flasher
+             https://github.com/espressif/esp-flasher-stub
