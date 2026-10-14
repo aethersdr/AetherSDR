@@ -42,6 +42,8 @@ public:
     // Every table here is kept per exact radio. An anonymous scope addresses
     // the family-wide row, which is another radio's row too, so its choices
     // last for the session: never written there, never read from there.
+    // showTxInWaterfall is the exception: it gates on hasRadioIdentity(), and
+    // only the HL2 declares it, whose scope is never anonymous.
     static bool keepsFor(const RadioSettingsScope& scope)
     {
         return !scope.radioId().isEmpty();

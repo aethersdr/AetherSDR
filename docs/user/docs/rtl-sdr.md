@@ -80,6 +80,8 @@ Frequency, mode, passband, sample rate and RF gain are saved per dongle, keyed b
 
 The Display panel's **WtrFall Rate**, **FFT AVG** and **Wt Avg** are saved per dongle serial number and per panadapter. A dongle that reports no serial keeps them for the current session only.
 
+> **Upgrading from an older version:** a dongle that reports no serial used to save its WtrFall Rate in the family-wide entry. After upgrading it starts every session from the default rate; the old entry is left in place but no longer read.
+
 > **Upgrading from an older version:** saved RTL-SDR state used to be keyed by USB position. On the first connection after upgrading, a dongle whose only saved state is under the old key may start from defaults once. It then saves under its serial number (or the family-wide entry). The old entries are left in place but no longer read.
 
 ### Not available on an RTL-SDR

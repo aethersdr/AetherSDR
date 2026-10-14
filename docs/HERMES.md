@@ -2226,7 +2226,10 @@ stops storing the rate with one edit in its own backend.
 Every table in the document is kept per exact radio, through the one predicate
 `ClientDisplaySettings::keepsFor()`. An anonymous scope (a connected RTL dongle
 that reports no serial) addresses the family-wide row, so its display choices
-last for the session: never written there, never read from there.
+last for the session: never written there, never read from there. The one
+exception is the scalar `showTxInWaterfall`, which still gates on
+`hasRadioIdentity()`; only the HL2 declares it, and an HL2 scope is never
+anonymous.
 
 ### 15.2.3 There is no hardware black level to select
 
