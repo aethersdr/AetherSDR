@@ -12,6 +12,8 @@
 #include "core/RadioDiscovery.h"
 #include "core/backends/sim/SimBackend.h"
 #include "models/RadioModel.h"
+#include "models/SliceModel.h"
+#include "core/backends/SliceDelta.h"
 
 #include <QCoreApplication>
 #include <QElapsedTimer>
@@ -109,6 +111,64 @@ QJsonObject tuneWithId(const QJsonValue& id)
         request.insert(QStringLiteral("id"), id);
     }
     return request;
+}
+
+void sliceDspSnapshot()
+{
+    qputenv("AETHER_AUTOMATION", "1");
+    RadioModel radio;
+    AutomationServer server;
+    server.setRadioModel(&radio);
+    check(radio.automationApplySliceFixture(0, QStringLiteral("A")),
+          "disconnected slice fixture is available");
+    SliceModel* slice = radio.slice(0);
+    if (!slice) {
+        return;
+    }
+    server.setReadOnly(true);
+    const auto verify = [&](bool enabled) {
+        SliceDelta delta;
+        delta.anf = enabled;
+        delta.nrl = enabled;
+        delta.nrs = enabled;
+        delta.nrf = enabled;
+        delta.anfl = enabled;
+        delta.mn = enabled;
+        delta.rnn = enabled;
+        delta.anft = enabled;
+        delta.anfLevel = 11;
+        delta.nrlLevel = 22;
+        delta.nrsLevel = 33;
+        delta.nrfLevel = 44;
+        delta.anflLevel = 55;
+        delta.mnLevel = 66;
+        slice->applyChanges(delta);
+        const QJsonObject expected{
+            {QStringLiteral("anf"), enabled}, {QStringLiteral("anfLevel"), 11},
+            {QStringLiteral("nrl"), enabled}, {QStringLiteral("nrlLevel"), 22},
+            {QStringLiteral("nrs"), enabled}, {QStringLiteral("nrsLevel"), 33},
+            {QStringLiteral("nrf"), enabled}, {QStringLiteral("nrfLevel"), 44},
+            {QStringLiteral("anfl"), enabled}, {QStringLiteral("anflLevel"), 55},
+            {QStringLiteral("mn"), enabled}, {QStringLiteral("mnLevel"), 66},
+            {QStringLiteral("rnn"), enabled}, {QStringLiteral("anft"), enabled}};
+        const QJsonObject whole = Access::request(server, QByteArray("get slice 0"));
+        const QJsonObject snapshot = whole.value(QStringLiteral("slice")).toObject();
+        const QJsonObject all = Access::request(server, QByteArray("get slices"));
+        const QJsonObject first = all.value(QStringLiteral("slices")).toArray().first().toObject();
+        for (auto it = expected.constBegin(); it != expected.constEnd(); ++it) {
+            const QJsonObject narrowed = Access::request(
+                server, QStringLiteral("get slice 0 %1").arg(it.key()).toUtf8());
+            check(ok(whole) && snapshot.value(it.key()) == it.value()
+                      && ok(all) && first.value(it.key()) == it.value()
+                      && ok(narrowed) && narrowed.value(QStringLiteral("value")) == it.value(),
+                  QStringLiteral("slice DSP snapshot and property: %1 (%2)")
+                      .arg(it.key(), enabled ? QStringLiteral("on") : QStringLiteral("off")),
+                  narrowed);
+        }
+    };
+    verify(true);
+    verify(false);
+    qunsetenv("AETHER_AUTOMATION");
 }
 
 void jsonIdAndMhzContract()
@@ -511,6 +571,7 @@ int main(int argc, char** argv)
     }
     qunsetenv("AETHER_AUTOMATION_ALLOW_TX");
     QCoreApplication app(argc, argv);
+    sliceDspSnapshot();
     jsonIdAndMhzContract();
     memoryActivate();
     deferredConnectFailures();

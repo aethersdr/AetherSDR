@@ -16,6 +16,9 @@
 
 #include "TestSettingsProfile.h"
 #include "core/RadioDiscovery.h"
+#include "core/AudioEngine.h"
+#include "core/QsoRecorder.h"
+#include "core/AutomationServer.h"
 #include "core/backends/IRadioBackend.h"
 #include "core/backends/sim/SimBackend.h"
 #include "gui/RadioSetupDialog.h"
@@ -24,6 +27,9 @@
 #include "models/TransmitModel.h"
 
 #include <QApplication>
+#include <QCoreApplication>
+#include <QEventLoop>
+#include <QJsonObject>
 #include <QGridLayout>
 #include <QHostAddress>
 #include <QLabel>
@@ -38,6 +44,18 @@
 #include <QtTest>
 
 #include <memory>
+#include <variant>
+
+namespace AetherSDR {
+class AutomationServerTestAccess
+{
+public:
+    static QJsonObject request(AutomationServer& server, const QByteArray& line)
+    {
+        return server.handleLine(line, nullptr);
+    }
+};
+}
 
 using namespace AetherSDR;
 
@@ -308,6 +326,80 @@ private slots:
     // PTT Mic Override (#6442) shows the RADIO's value: unreported (firmware
     // before 4.3) it is dimmed with a reason; a click sends the request but
     // snaps back until the echo; and a session reset clears an open page.
+    void bridgePttMicOverrideUsesGatedConfigurationAction()
+    {
+        RadioModel model; // No connection or transport is started.
+        RadioSetupDialog dialog(&model);
+        dialog.show();
+        dialog.selectTab(QStringLiteral("Transmit"));
+        QPushButton* button = dialog.findChild<QPushButton*>(QStringLiteral("pttMicOverrideButton"));
+        QVERIFY(button);
+        TransmitModel& tx = model.transmitModel();
+        TransmitDelta off;
+        off.pttMicOverride = false;
+        tx.applyChanges(off);
+        QSignalSpy requests(&tx, &TransmitModel::controlRequested);
+        AutomationServer bridge;
+        bridge.setRadioModel(&model);
+        const auto send = [&](const QByteArray& action) {
+            return AutomationServerTestAccess::request(bridge,
+                QByteArray("invoke pttMicOverrideButton ") + action);
+        };
+        const auto settle = [] {
+            for (int i = 0; i < 8; ++i) {
+                QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
+            }
+        };
+        QVERIFY(!send("click").value(QStringLiteral("ok")).toBool());
+        settle();
+        QCOMPARE(requests.count(), 0);
+        bridge.setTxAllowed(true);
+        QVERIFY(send("click").value(QStringLiteral("ok")).toBool());
+        settle();
+        QCOMPARE(requests.count(), 1);
+        const TransmitControlRequest onRequest = requests.takeFirst().at(0).value<TransmitControlRequest>();
+        QVERIFY(onRequest.field == TransmitControlRequest::Field::PttMicOverride);
+        QVERIFY(std::get<bool>(onRequest.value));
+        QVERIFY(!tx.pttMicOverride() && !button->isChecked());
+        QVERIFY(!tx.isTransmitting());
+
+        TransmitDelta on;
+        on.pttMicOverride = true;
+        tx.applyChanges(on);
+        QVERIFY(button->isChecked());
+        QVERIFY(send("setChecked false").value(QStringLiteral("ok")).toBool());
+        settle();
+        QCOMPARE(requests.count(), 1);
+        QVERIFY(!std::get<bool>(requests.takeFirst().at(0).value<TransmitControlRequest>().value));
+        QVERIFY(tx.pttMicOverride() && button->isChecked());
+        QVERIFY(AutomationServerTestAccess::request(bridge,
+            QByteArray("clickAt pttMicOverrideButton 5 5")).value(QStringLiteral("ok")).toBool());
+        settle();
+        QCOMPARE(requests.count(), 1);
+        QVERIFY(!std::get<bool>(requests.takeFirst().at(0).value<TransmitControlRequest>().value));
+        QVERIFY(!tx.isTransmitting());
+        QVERIFY(!send("setChecked garbage").value(QStringLiteral("ok")).toBool());
+        QVERIFY(!send("setValue 1").value(QStringLiteral("ok")).toBool());
+        settle();
+        QCOMPARE(requests.count(), 0);
+
+        QVERIFY(send("toggle").value(QStringLiteral("ok")).toBool());
+        bridge.setTxAllowed(false);
+        settle();
+        QCOMPARE(requests.count(), 0); // Revocation fences queued configuration writes.
+        bridge.setTxAllowed(true);
+        bridge.setReadOnly(true);
+        QVERIFY(!send("click").value(QStringLiteral("ok")).toBool());
+        settle();
+        QCOMPARE(requests.count(), 0);
+        bridge.setReadOnly(false);
+        QVERIFY(send("click").value(QStringLiteral("ok")).toBool());
+        tx.resetState();
+        settle();
+        QCOMPARE(requests.count(), 0); // The newly disabled control cannot run queued work.
+        QVERIFY(!tx.isTransmitting());
+    }
+
     void pttMicOverrideFollowsTheRadioAndResets()
     {
         RadioModel model;  // a bare model is on the Flex backend

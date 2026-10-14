@@ -12,6 +12,7 @@
 
 #include <QApplication>
 #include <QPushButton>
+#include <QSlider>
 #include <QtTest>
 
 #include <algorithm>
@@ -96,6 +97,37 @@ private:
     }
 
 private slots:
+    void dspSliderKeepsIdentityWhileItsTargetChanges()
+    {
+        SliceModel slice(0);
+        setMode(slice, QStringLiteral("USB"));
+        VfoWidget vfo;
+        vfo.setSlice(&slice);
+        QSlider* slider = vfo.findChild<QSlider*>(QStringLiteral("dspLevelSlider"));
+        QVERIFY(slider);
+        SliceDelta nr;
+        nr.nr = true;
+        nr.nrLevel = 37;
+        slice.applyChanges(nr);
+        QCOMPARE(slider->accessibleName(), QStringLiteral("NR level"));
+        QCOMPARE(slider->value(), 37);
+        SliceDelta anfl;
+        anfl.nr = false;
+        anfl.anfl = true;
+        anfl.anflLevel = 63;
+        slice.applyChanges(anfl);
+        QCOMPARE(vfo.findChild<QSlider*>(QStringLiteral("dspLevelSlider")), slider);
+        QCOMPARE(slider->accessibleName(), QStringLiteral("ANFL level"));
+        QCOMPARE(slider->value(), 63);
+        SliceDelta mn;
+        mn.anfl = false;
+        mn.mn = true;
+        mn.mnLevel = 21;
+        slice.applyChanges(mn);
+        QCOMPARE(slider->accessibleName(), QStringLiteral("POS level"));
+        QCOMPARE(slider->value(), 21);
+    }
+
     // USB shows ANF/ANFL/ANFT, so the launchers share their row with ANFT.
     void sameWidthInUsb() { checkSameWidth(QStringLiteral("USB"), true); }
     // CW hides the notch trio and shows APF, which changes what is left on

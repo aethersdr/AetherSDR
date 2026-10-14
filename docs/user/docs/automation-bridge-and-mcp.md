@@ -79,6 +79,16 @@ You remain responsible for every emission the bridge makes on your behalf. See [
 
 Tick **Observe only** to hand a client visibility without control. The bridge then answers only pure reads (`ping`, `get`, the widget tree, screenshots, logs and similar) and refuses everything else. It is enforced inside AetherSDR, so a client cannot switch it off, and it takes effect immediately on a running bridge. `ping` and `whoami` report it as `readOnly`. Launching with `AETHER_AUTOMATION_READONLY=1` pins it on.
 
+## Reading DSP state and selecting controls
+
+`get slice` reports each slice's radio-side DSP switches and levels, including NRL, NRS, NRF, ANFL and the manual notch. `mnLevel` is the manual notch's position from 0 to 100 across the passband. Unsupported features keep their model defaults; the fields alone do not indicate radio support.
+
+Use `invoke radioSetupNavigation setCurrentText Transmit` to select a child page of Radio Setup by label. An unavailable page can redirect to **Radio**. Flat row numbers address only the current root's rows.
+
+The shared DSP slider has the stable target `dspLevelSlider`; its accessible name follows the selected DSP, such as **NR level** or **ANFL level**. With several VFOs visible, use a scoped target such as `pan 0/dspLevelSlider`. `interlocksTxReqGroup` frames the **Interlocks - TX REQ** group for screenshots. Its polarity controls are named `rcaTxReqPolarityCombo` and `accTxReqPolarityCombo`.
+
+**PTT Mic Override** accepts `click`, `toggle` and `setChecked` through its registered configuration action, only with **Allow TX via MCP** enabled. This changes the TX source configuration without keying the transmitter, and the button continues to show the radio's reported value.
+
 ## Checking which build you are talking to
 
 `ping` needs no token and returns the app version plus the **build identity**: the `git describe` string, commit SHA, the release tag it is based on, commits since that tag, and whether the build had local changes. It is the same identity **Help → About** shows, so a test build can be told apart from a release with the same version number.

@@ -653,7 +653,7 @@ the no-op is an explicit, assertable signal.
 | `wheel` | any visible widget | one wheel notch: `-1` or `1` |
 | `setText` | `QLineEdit` | the text (side-effect-free — does **not** submit) |
 | `submit` | `QLineEdit` | optional text, then fires `returnPressed` (retune / login / send) |
-| `setCurrentText` | `QComboBox` (item text) / `QTabBar` (tab label, case-insensitive — reaches deferred setup-dialog tabs) | text |
+| `setCurrentText` | `QComboBox` (item text) / `QTabBar` (tab label, case-insensitive — reaches deferred setup-dialog tabs) / `QAbstractItemView` (first selectable `DisplayRole` label, case-insensitive, including descendants) | text |
 | `setCurrentIndex` | `QComboBox` / `QTabBar` | integer index |
 | `selectRow` | `QAbstractItemView` (`QTableWidget`/`QTreeWidget`/`QListWidget`) | integer row index |
 | `showPopup` / `hidePopup` | `QComboBox` — holds the drop-down open under bridge control (deferred to a clean main-loop turn, like `showMenu`); the open container is named `aetherComboPopup` so a follow-up `grab_widget aetherComboPopup` / `dump_tree` lands on it instead of a hidden sibling. The name is valid **only while the popup is open** — it is cleared on `hidePopup` and when the list closes on its own (item pick, Esc, click-away) — so grab before hiding; a stale name is never left behind | — |
@@ -661,6 +661,15 @@ the no-op is an explicit, assertable signal.
 | `setChecked` | checkable visible `QMenu` `QAction` | `true`/`false`/`on`/`off`/`1`/`0` |
 
 Combo selection refuses disabled items. `setCurrentIndex` also rejects invalid or out-of-range combo indices (`-1` still clears the selection); `setCurrentText` rejects missing items on non-editable combos. Editable combos still accept free text. These boundary checks report unreachable requests instead of claiming success and keep automation from bypassing capability-disabled choices.
+
+For an item view, `setCurrentText` searches the whole model depth-first and
+selects the first matching **selectable** item. Enabled category headings that
+are not selectable are skipped, and a missing label is refused. This makes
+navigation trees addressable by page name even when the page is a descendant.
+Model selection is distinct from visible layout: hidden pages remain model
+selectable, and Radio Setup redirects a capability-unavailable page back to
+its Radio page. Re-read the resulting current page after an invoke when
+availability can change.
 
 **`submit` vs `setText`.** `setText` only sets the field — deliberately
 side-effect-free, because several bridge-reachable fields wire irreversible
@@ -676,6 +685,10 @@ drivable; plain `invoke click` on those buttons is a no-op until a row is
 selected. The reply echoes `selectedRow` and `selectedRowText` (first-column
 text) as the round-trip confirmation. Row index is **order-sensitive**:
 re-`dumpTree` (or re-read) after any sort, filter, or insert.
+
+`selectRow` is intentionally flat: its row index addresses only the rows under
+the view's current `rootIndex`; it does not descend into tree children. Use
+`setCurrentText` to select a named descendant in a tree.
 
 ```json
 → {"cmd":"invoke","target":"Scheduled nets","action":"selectRow","value":"0"}
@@ -762,7 +775,7 @@ connects).
 | `equalizer` (or `eq`) | — | 8-band RX+TX graphic EQ: `rxEnabled`/`txEnabled` and `rx`/`tx` band maps keyed by label (`63`…`8k`). Validate EQ-applet slider changes. |
 | `meters` | — | `{all:[…]}` — every radio meter with `name`, `value`, `unit`, `low`/`high`, `description`, and **`age_ms`** (staleness): a meter that updates has small `age_ms` and a tracking `value`. The reply also carries a few scalars beside `all`. **`sLevel`** (S-meter, dBm) is **null** in three distinct cases and a client cannot tell them apart from the value: no receiver declares a LEVEL meter; **two or more do**, in which case the scalar has no single answer and `all` is where you name the receiver you mean; or the newest sample is older than the vitals window, which is **1500 ms** and is NOT the 2000 ms window `txMetersFresh` two keys away reports on. If you need a specific receiver's S-meter, read `all` — the scalar is a convenience for the single-receiver case and declines rather than guessing. |
 | `slices` | — | array of all slice snapshots |
-| `slice` | `active` (default) / `tx` / `<sliceId>` | one slice (sliceId, letter, frequency, mode, filterLow/High, **filterPresetId/filterPreset** for a radio-owned FIL slot, rxAntenna, nb/nr/anf + levels, **squelch/squelchLevel, agcMode/agcThreshold, apf/apfLevel**, **adaptiveFilterEnabled/adaptiveMinLowCut/adaptiveMaxHighCut/adaptiveMinSnr/adaptiveResponse/adaptiveSplatter/adaptiveActive** (SSB adaptive RX filter — `adaptiveActive` is the live AUTO-fit state), **linkedTo** (Slice Link peer id, `-1` when unlinked), active, **inCapture** (full guarded passband is receiving; false means parked at its saved RF), txSlice, …) |
+| `slice` | `active` (default) / `tx` / `<sliceId>` | one slice (sliceId, letter, frequency, mode, filterLow/High, **filterPresetId/filterPreset** for a radio-owned FIL slot, rxAntenna, nb/nr/anf + levels, **anfLevel**, **nrl/nrlLevel**, **nrs/nrsLevel**, **nrf/nrfLevel**, **anfl/anflLevel**, **mn/mnLevel**, **rnn**, **anft**, **squelch/squelchLevel, agcMode/agcThreshold, apf/apfLevel**, **adaptiveFilterEnabled/adaptiveMinLowCut/adaptiveMaxHighCut/adaptiveMinSnr/adaptiveResponse/adaptiveSplatter/adaptiveActive** (SSB adaptive RX filter — `adaptiveActive` is the live AUTO-fit state), **linkedTo** (Slice Link peer id, `-1` when unlinked), active, **inCapture** (full guarded passband is receiving; false means parked at its saved RF), txSlice, …) |
 | `hostnb` | — (optional property) | HOST-SIDE noise blanker, read from the DSP: `{receivers:[{ddc,panId,on,level,threshold,requestedOn,requestedLevel,hasChain}]}`. **Distinct from `get slice nb`** — that reports the slice model, which is set the instant the button is clicked and stays true even if the intent never reached the DSP. `on`/`level` here are what the WDSP stage actually has; `requestedOn`/`requestedLevel` are what the backend was asked for, reported alongside so the two can be COMPARED. Errors on a radio that does not declare `hasHostNoiseBlanker` rather than returning an empty success. |
 | `clock` | — | AetherClock snapshot: `state`/`stateName` (NoSignal/Acquiring/Locked), `station`/`stationName` (WWV/WWVH/WWVB), `decodedUtc` (ISO-8601, empty until a decode), `offsetMs` (decoded − host at the second edge; positive = host behind broadcast), `lockQuality` (0–100), `sliceId` (bound slice, −1 when stopped), `gpsTimeAvailable`. Validate applet Start/Tune/station-switch actions and lock progress without pixels. |
 | `pans` | — | array of all panadapter snapshots |
@@ -776,6 +789,10 @@ connects).
 | `clients` | — | connected-client roster, per-pan ownership, foreign dBm-write counters and evictions — see [`get clients`](#get-clients) |
 | `dax` | — | DAX RX channel-ownership table — see [`get dax`](#get-dax) |
 | `waveforms` | — | installed legacy/Docker waveforms, WFP state, local Digital Voice service/mode configuration and delivery metrics, raw radio `mode_list` values, duplicate counts, last maintenance response, and recent `waveform status` reports |
+
+The DSP booleans report whether their corresponding filter is on. Their `*Level`
+fields are 0–100 amounts, except `mnLevel`: it is the manual notch **position**
+from 0 to 100 across the passband, not a depth. `rnn` and `anft` are toggle-only.
 
 Add a trailing **property** name to any single-object form to get just that
 field: `get slice active mode` → `{"value":"LSB"}`.
@@ -4677,6 +4694,26 @@ To find a target: run `dumpTree`, search the JSON for the `accessibleName` or
 backlog (see [`docs/a11y.md`](a11y.md), enforced by
 [`tools/check_a11y.py`](../tools/check_a11y.py)) directly improves what you can
 target here.
+
+The shared VFO DSP slider has the stable object name `dspLevelSlider`. Its
+accessible name follows its active target (`NR level`, `ANF level`, `POS level`
+for the manual-notch position, and so on), so use the object name when the
+control identity must remain stable and read the accessible name to identify the
+current target. When several VFOs are visible, scope the slider to its pan,
+for example `pan 0/dspLevelSlider`, to avoid choosing the first visible match.
+In Radio Setup's TX page,
+`interlocksTxReqGroup`, `rcaTxReqPolarityCombo`, and
+`accTxReqPolarityCombo` are stable targets for grabbing or reading the
+Interlocks – TX REQ controls; the two combos also expose `RCA TX REQ polarity`
+and `Accessory TX REQ polarity` as accessible names.
+The `pttMicOverrideButton` target accepts `click`, `toggle`, and `setChecked`
+through a registered TX-configuration action. It retains the TX permission and
+observe-only gates, captures the requested value before deferred delivery, and
+never keys the transmitter. Its checked state follows the radio's status echo.
+Configuration controls use `registerTxConfigurationAction()` at creation;
+keying controls keep `registerTxKeyingAction()`. Neither bypasses the name
+fallback or TX permission gate.
+
 
 ---
 

@@ -174,6 +174,29 @@ int main(int argc, char** argv)
     check(request("cell tree 0 0").value("text") == "child",
           "cell is relative to the view displayed root");
 
+    QStandardItemModel navigationModel;
+    auto* category = new QStandardItem(QStringLiteral("Receive"));
+    category->setFlags(Qt::ItemIsEnabled); // A grouping heading, not a destination.
+    auto* firstPage = new QStandardItem(QStringLiteral("DSP"));
+    auto* duplicatePage = new QStandardItem(QStringLiteral("DSP"));
+    category->appendRow(firstPage);
+    navigationModel.appendRow(category);
+    navigationModel.appendRow(duplicatePage);
+    QTreeView navigation;
+    navigation.setObjectName(QStringLiteral("navigation"));
+    navigation.setModel(&navigationModel);
+    navigation.show();
+    QApplication::processEvents();
+    check(request("invoke navigation setCurrentText dsp").value("ok").toBool()
+              && navigation.currentIndex() == navigationModel.index(0, 0, category->index()),
+          "setCurrentText selects the first selectable nested tree item by label");
+    check(error("invoke navigation setCurrentText absent", "no item labeled"),
+          "setCurrentText refuses a missing tree label");
+    server.setReadOnly(true);
+    check(error("invoke navigation setCurrentText DSP", "read-only"),
+          "observe-only refuses tree selection");
+    server.setReadOnly(false);
+
     QSortFilterProxyModel proxy;
     QStandardItemModel flat;
     flat.appendRow(new QStandardItem(QStringLiteral("zebra")));

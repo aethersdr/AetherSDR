@@ -56,6 +56,12 @@ inline void registerTxKeyingAction(QObject* object, TxKeyingAction::Prepare prep
         QVariant::fromValue(std::make_shared<const TxKeyingAction>(TxKeyingAction{std::move(prepare)})));
 }
 
+// TX configuration never keys, but still requires the bridge's TX grant.
+inline void registerTxConfigurationAction(QObject* object, TxKeyingAction::Prepare prepare)
+{
+    registerTxKeyingAction(object, std::move(prepare));
+}
+
 inline void registerReceiveControlAction(QObject* object, TxKeyingAction::Prepare prepare)
 {
     if (!object) { return; }

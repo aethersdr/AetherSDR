@@ -1434,7 +1434,7 @@ bool parseBool(const QString& v)
 // AETHER_AUTOMATION_ALLOW_TX is set. Authoritative: the "aetherTxKeying" property
 // set by markTxKeying() at creation (MOX/PTT, TUNE, ATU, CWX send, packet send).
 // Fallback: a button-scoped name heuristic (sliders never key) for an unmarked
-// control; it logs a warning so the control gets markTxKeying().
+// control; it logs a warning so the control gets a registered scoped action.
 bool isTransmitControl(const QWidget* w)
 {
     // Shared with the keyboard TX activation guard.
@@ -1442,7 +1442,7 @@ bool isTransmitControl(const QWidget* w)
     if (match == TransmitControlMatch::NameFallback) {
         qCWarning(lcAutomation).noquote()
             << "TX guard fell back to name match on" << w->property("text").toString()
-            << "— add markTxKeying() at its creation site if it keys TX";
+            << "— register a scoped keying or TX-configuration action at its creation site";
     }
     return match != TransmitControlMatch::None;
 }
@@ -1613,6 +1613,19 @@ QJsonObject sliceSnapshot(const SliceModel* s, int linkedTo,
         {QStringLiteral("nr"),         s->nrOn()},
         {QStringLiteral("nrLevel"),    s->nrLevel()},
         {QStringLiteral("anf"),        s->anfOn()},
+        {QStringLiteral("anfLevel"),   s->anfLevel()},
+        {QStringLiteral("nrl"),        s->nrlOn()},
+        {QStringLiteral("nrlLevel"),   s->nrlLevel()},
+        {QStringLiteral("nrs"),        s->nrsOn()},
+        {QStringLiteral("nrsLevel"),   s->nrsLevel()},
+        {QStringLiteral("nrf"),        s->nrfOn()},
+        {QStringLiteral("nrfLevel"),   s->nrfLevel()},
+        {QStringLiteral("anfl"),       s->anflOn()},
+        {QStringLiteral("anflLevel"),  s->anflLevel()},
+        {QStringLiteral("mn"),         s->mnOn()},
+        {QStringLiteral("mnLevel"),    s->mnLevel()},
+        {QStringLiteral("rnn"),        s->rnnOn()},
+        {QStringLiteral("anft"),       s->anftOn()},
         {QStringLiteral("apf"),        s->apfOn()},
         {QStringLiteral("apfLevel"),   s->apfLevel()},
         {QStringLiteral("externalReceiveReplacement"),

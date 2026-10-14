@@ -1,3 +1,4 @@
+#include "core/TxKeyingMarker.h"
 #include "core/DroopCalibration.h"
 #include "RadioSetupDialog.h"
 #include "FirmwareReleasesDialog.h"
@@ -3217,6 +3218,7 @@ QWidget* RadioSetupDialog::buildTxTab()
     // Interlocks group
     {
         auto* group = new QGroupBox("Interlocks - TX REQ");
+        group->setObjectName(QStringLiteral("interlocksTxReqGroup"));
         auto* grid = new QGridLayout(group);
         grid->setSpacing(6);
 
@@ -3224,6 +3226,8 @@ QWidget* RadioSetupDialog::buildTxTab()
         applyLabelStyle(rcaLbl);
         grid->addWidget(rcaLbl, 0, 0);
         auto* rcaCmb = new QComboBox;
+        rcaCmb->setObjectName(QStringLiteral("rcaTxReqPolarityCombo"));
+        rcaCmb->setAccessibleName(tr("RCA TX REQ polarity"));
         rcaCmb->addItems({"Active Low", "Active High"});
         rcaCmb->setCurrentIndex(tx.rcaTxReqPolarity());
         AetherSDR::applyComboStyle(rcaCmb);
@@ -3233,6 +3237,8 @@ QWidget* RadioSetupDialog::buildTxTab()
         applyLabelStyle(accLbl);
         grid->addWidget(accLbl, 0, 2);
         auto* accCmb = new QComboBox;
+        accCmb->setObjectName(QStringLiteral("accTxReqPolarityCombo"));
+        accCmb->setAccessibleName(tr("Accessory TX REQ polarity"));
         accCmb->addItems({"Active Low", "Active High"});
         accCmb->setCurrentIndex(tx.accTxReqPolarity());
         AetherSDR::applyComboStyle(accCmb);
@@ -3246,6 +3252,7 @@ QWidget* RadioSetupDialog::buildTxTab()
         applyLabelStyle(pttOvrLbl);
         grid->addWidget(pttOvrLbl, 1, 0);
         auto* pttOvrBtn = new QPushButton;
+        pttOvrBtn->setObjectName(QStringLiteral("pttMicOverrideButton"));
         pttOvrBtn->setCheckable(true);
         setButtonRole(pttOvrBtn, ButtonRole::Select);
         pttOvrBtn->setAccessibleName(tr("PTT Mic Override"));
@@ -3275,6 +3282,29 @@ QWidget* RadioSetupDialog::buildTxTab()
             m_model->transmitModel().setPttMicOverride(on);
             syncPttOverride();
         });
+        registerTxConfigurationAction(pttOvrBtn,
+            [this, pttOvrBtn, syncPttOverride](const std::shared_ptr<TxController>&,
+                const QString& action, const QString& value) -> TxKeyingAction::Prepared {
+                bool enabled = !pttOvrBtn->isChecked();
+                if (action == QLatin1String("setChecked")) {
+                    const QString normalized = value.trimmed().toLower();
+                    if (normalized == QLatin1String("true") || normalized == QLatin1String("1")
+                        || normalized == QLatin1String("on") || normalized == QLatin1String("yes")) {
+                        enabled = true;
+                    } else if (normalized == QLatin1String("false") || normalized == QLatin1String("0")
+                        || normalized == QLatin1String("off") || normalized == QLatin1String("no")) {
+                        enabled = false;
+                    } else {
+                        return {};
+                    }
+                } else if (action != QLatin1String("click") && action != QLatin1String("toggle")) {
+                    return {};
+                }
+                return [this, enabled, syncPttOverride] {
+                    m_model->transmitModel().setPttMicOverride(enabled);
+                    syncPttOverride();
+                };
+            });
         connect(&tx, &TransmitModel::stateChanged, pttOvrBtn, syncPttOverride);
         // resetState() on disconnect announces through micStateChanged, not
         // stateChanged; without this the page keeps the last session's value.

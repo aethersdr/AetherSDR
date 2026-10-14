@@ -2094,6 +2094,8 @@ void VfoWidget::buildTabContent()
             lvlHb->addWidget(m_dspLevelLabel);
 
             m_dspLevelSlider = new GuardedSlider(Qt::Horizontal);
+            m_dspLevelSlider->setObjectName(QStringLiteral("dspLevelSlider"));
+            m_dspLevelSlider->setAccessibleName(tr("DSP level"));
             m_dspLevelSlider->setRange(0, 100);
             applyPrimarySliderStyle(m_dspLevelSlider);
             lvlHb->addWidget(m_dspLevelSlider, 1);
@@ -5769,6 +5771,7 @@ void VfoWidget::setDspLevelTarget(DspLevelTarget t)
         case LvlNone: return;
     }
     m_dspLevelLabel->setText(name);
+    m_dspLevelSlider->setAccessibleName(tr("%1 level").arg(name));
     {
         QSignalBlocker b(m_dspLevelSlider);
         m_dspLevelSlider->setValue(level);
