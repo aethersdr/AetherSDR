@@ -2164,6 +2164,8 @@ QWidget* RadioSetupDialog::buildRadioTab()
             if (!m_nicknameEdit->isModified()) {
                 return;
             }
+            const QString entered = m_nicknameEdit->text();
+            m_nicknameEdit->setModified(false);
             const RadioInfo info = m_model->lastRadioInfo();
             // Only FlexRadio has an on-radio name store ("radio name" command).
             // Every other family (HL2, the sim demo, any future non-Flex backend)
@@ -2172,16 +2174,27 @@ QWidget* RadioSetupDialog::buildRadioTab()
             // keyed by the radio's stable serial, so discovery shows it in the
             // picker on the next sweep and RadioSetup reads it back on reopen.
             if (hl2::Hl2Discovery::nicknameLivesOnRadio(info)) {
-                if (m_model->requestRadioNickname(m_nicknameEdit->text())
+                m_nicknamePending = true;
+                const quint64 generation = ++m_nicknameEditGeneration;
+                const QPointer<RadioSetupDialog> self(this);
+                if (m_model->requestRadioNickname(entered, [self, generation](bool) {
+                    if (!self || generation != self->m_nicknameEditGeneration) {
+                        return;
+                    }
+                    self->m_nicknamePending = false;
+                    if (!self->m_nicknameEdit->isModified()) {
+                        self->m_nicknameEdit->setText(self->m_model->nickname());
+                    }
+                })
                     == ReceiveDispatch::Unsupported) {
+                    m_nicknamePending = false;
                     m_nicknameEdit->setText(m_model->nickname());
                 }
             } else {
                 // Commits eagerly inside; don't rely on the shutdown save.
                 hl2::Hl2Discovery::setNickname(info.family, info.serial,
-                                               m_nicknameEdit->text());
+                                               entered);
             }
-            m_nicknameEdit->setModified(false);
         });
         connect(m_callsignEdit, &QLineEdit::editingFinished, this, [this] {
             // The typed route sends any radio copy before persisting client
@@ -2201,9 +2214,20 @@ QWidget* RadioSetupDialog::buildRadioTab()
             if (m_modelLabel) {
                 m_modelLabel->setText(displayOrDash(m_model->model()));
             }
-            if (m_nicknameEdit && !m_nicknameEdit->isModified()
+            if (m_nicknameEdit && !m_nicknamePending && !m_nicknameEdit->isModified()
                 && hl2::Hl2Discovery::nicknameLivesOnRadio(m_model->lastRadioInfo())) {
                 m_nicknameEdit->setText(m_model->nickname());
+            }
+        });
+        connect(m_model, &RadioModel::connectionStateChanged, this, [this](bool connected) {
+            if (!connected) {
+                // SmartLink discards pending replies when its session ends.
+                m_nicknamePending = false;
+                ++m_nicknameEditGeneration;
+                if (!m_nicknameEdit->isModified()
+                    && hl2::Hl2Discovery::nicknameLivesOnRadio(m_model->lastRadioInfo())) {
+                    m_nicknameEdit->setText(m_model->nickname());
+                }
             }
         });
 

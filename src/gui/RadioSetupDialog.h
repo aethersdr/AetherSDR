@@ -318,6 +318,8 @@ private:
     QLabel* m_remoteOnLabel{nullptr};
     QLabel* m_modelLabel{nullptr};
     QLineEdit* m_nicknameEdit{nullptr};
+    bool m_nicknamePending{false};
+    quint64 m_nicknameEditGeneration{0};
     QLineEdit* m_callsignEdit{nullptr};
     QPushButton* m_remoteOnBtn{nullptr};
     // Network tab → Agent Automation (MCP) toggle. Held so the async start

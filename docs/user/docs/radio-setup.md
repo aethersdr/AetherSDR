@@ -60,7 +60,10 @@ and restores the radio's reported value for malformed entries.
 On a FlexRadio, edit **Nickname** under **Settings → Radio Setup... → Radio**
 and press Enter or leave the field to save an edit on the radio. An untouched
 field follows the radio's current nickname and does not rename or clear it.
-A confirmed clear also empties the nickname in the status bar. On **SmartSDR 4.3
+When the radio accepts the edit, the nickname in the station label and status
+bar updates without reconnecting. If the radio rejects it, the field returns
+to the confirmed nickname. A confirmed clear also empties the nickname in the
+status bar. On **SmartSDR 4.3
 or later**, leave the field empty to clear the saved nickname. The radio accepts
 letters, digits, `.`, `,`, `/` and `-`; spaces and other characters are removed.
 If no supported characters remain, SmartSDR 4.3 or later clears the nickname.

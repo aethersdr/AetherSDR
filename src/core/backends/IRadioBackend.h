@@ -8,6 +8,7 @@
 #include "core/PcmFrame.h"
 
 #include <map>
+#include <functional>
 
 #include <QByteArray>
 #include <QLoggingCategory>
@@ -148,7 +149,8 @@ public:
                                                     TunePowerContext = TunePowerContext::Deferred)
     { return ReceiveDispatch::Unsupported; }
     // Radio-owned identity; client-owned nicknames retain their local store.
-    virtual ReceiveDispatch requestRadioNickname(const QString&)
+    using NicknameCompletion = std::function<void(bool accepted)>;
+    virtual ReceiveDispatch requestRadioNickname(const QString&, NicknameCompletion = {})
     { return ReceiveDispatch::Unsupported; }
     // Whether a Dispatched request carrying an answerTicket will be answered
     // through transmitControlAnswered(). False by default: a backend that cannot

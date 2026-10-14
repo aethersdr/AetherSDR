@@ -100,7 +100,10 @@ void encoding()
     QString version = QStringLiteral("4.3.16.42034");
     check(backend.requestRadioNickname(QString()) == ReceiveDispatch::Unsupported,
           "no command sink refuses the request");
-    backend.setCommandSink([&](const QString& command) { commands.append(command); });
+    backend.setNicknameCommandSink([&](const QString& command, FlexBackend::CommandReply) {
+        commands.append(command);
+        return true;
+    });
     backend.setFirmwareVersionProvider([&] { return version; });
 
     check(backend.requestRadioNickname(QStringLiteral("Desk 8600_#.,/-"))
@@ -151,7 +154,12 @@ void modelAndDialog()
     auto owned = std::make_unique<ConnectedFlex>();
     ConnectedFlex* backend = owned.get();
     QStringList commands;
-    backend->setCommandSink([&](const QString& command) { commands.append(command); });
+    QList<FlexBackend::CommandReply> replies;
+    backend->setNicknameCommandSink([&](const QString& command, FlexBackend::CommandReply reply) {
+        commands.append(command);
+        replies.append(std::move(reply));
+        return true;
+    });
     backend->setFirmwareVersionProvider([&] { return radio.softwareVersion(); });
     radio.setBackendForTest(std::move(owned), QStringLiteral("flex"));
     RadioNicknameTestAccess::identity(radio, QStringLiteral("flex"),
@@ -212,6 +220,13 @@ void modelAndDialog()
         check(commands.size() == 1, "repeated editingFinished cannot dispatch the same clear twice");
         backend->decodeRadioStatus({{QStringLiteral("model"), QStringLiteral("FLEX-8600")}});
         check(radio.nickname() == QStringLiteral("Original"), "absent status keeps nickname");
+        check(edit->text().isEmpty() && !edit->isModified(),
+              "unrelated identity refresh cannot replace a pending clear with the old name");
+        QSignalSpy identityChanged(&radio, &RadioModel::infoChanged);
+        replies.takeFirst()(0, QString());
+        check(radio.nickname().isEmpty() && edit->text().isEmpty()
+                  && identityChanged.size() == 1,
+              "R|0 alone clears model and field and notifies identity consumers");
         backend->decodeRadioStatus({{QStringLiteral("nickname"), QString()}});
         check(radio.nickname().isEmpty() && edit->text().isEmpty(),
               "present empty status clears model and open dialog nickname");
@@ -219,6 +234,50 @@ void modelAndDialog()
         finishEdit(*edit, QStringLiteral("NewName"));
         check(commands == QStringList{QStringLiteral("radio name NewName")},
               "ordinary dialog naming still uses the backend");
+        replies.takeFirst()(1, QStringLiteral("refused"));
+        check(radio.nickname().isEmpty() && edit->text().isEmpty(),
+              "nonzero reply restores the confirmed field and leaves the model unchanged");
+
+        dialog.show();
+        edit->setFocus();
+        QTest::keyClicks(edit, "Desk Name_");
+        QTest::keyClick(edit, Qt::Key_Return);
+        check(commands.last() == QStringLiteral("radio name DeskName"),
+              "real typed Return dispatches sanitized nickname");
+        const qsizetype sent = commands.size();
+        backend->decodeRadioStatus({{QStringLiteral("model"), QStringLiteral("FLEX-8600")}});
+        replies.takeFirst()(0, QString());
+        check(radio.nickname() == QStringLiteral("DeskName")
+                  && edit->text() == QStringLiteral("DeskName") && !edit->isModified(),
+              "successful rename applies the sanitized value without a nickname status");
+        QTest::keyClick(edit, Qt::Key_Return);
+        edit->clearFocus();
+        QCoreApplication::processEvents();
+        check(commands.size() == sent,
+              "Return again and focus loss after an acknowledged edit send no second command");
+        finishEdit(*edit, QStringLiteral("Accepted"));
+        edit->setText(QStringLiteral("Next edit"));
+        edit->setModified(true);
+        replies.takeFirst()(0, QString());
+        check(radio.nickname() == QStringLiteral("Accepted")
+                  && edit->text() == QStringLiteral("Next edit") && edit->isModified(),
+              "reply updates model without erasing a newer uncommitted edit");
+        finishEdit(*edit, QStringLiteral("LostReply"));
+        replies.clear();
+        backend->connected = false;
+        emit radio.connectionStateChanged(false);
+        backend->connected = true;
+        emit radio.connectionStateChanged(true);
+        backend->decodeRadioStatus({{QStringLiteral("nickname"), QStringLiteral("Reconnected")}});
+        check(edit->text() == QStringLiteral("Reconnected") && !edit->isModified(),
+              "disconnect with a discarded reply releases pending field refresh on reconnect");
+        finishEdit(*edit, QStringLiteral("AnotherLostReply"));
+        replies.clear();
+        edit->setText(QStringLiteral("KeepTyping"));
+        edit->setModified(true);
+        emit radio.connectionStateChanged(false);
+        check(edit->text() == QStringLiteral("KeepTyping") && edit->isModified(),
+              "disconnect preserves a newer uncommitted operator edit");
         backend->connected = false;
         commands.clear();
         finishEdit(*edit, QString());
@@ -227,6 +286,7 @@ void modelAndDialog()
         finishEdit(*edit, QString());
         check(commands == QStringList{QStringLiteral("radio clear_name")},
               "reconnected dialog can dispatch again after a refused edit");
+        replies.takeFirst()(0, QString());
     }
     {
         RadioSetupDialog reopened(&radio);
@@ -243,6 +303,41 @@ void modelAndDialog()
           "backend replacement cannot reuse the old Flex nickname command sink");
 }
 
+void replyOrdering()
+{
+    auto backend = std::make_unique<FlexBackend>();
+    QList<FlexBackend::CommandReply> replies;
+    backend->setNicknameCommandSink([&](const QString&, FlexBackend::CommandReply reply) {
+        replies.append(std::move(reply));
+        return true;
+    });
+    QSignalSpy changes(backend.get(), &IRadioBackend::radioChanged);
+    backend->requestRadioNickname(QStringLiteral("First"));
+    backend->requestRadioNickname(QStringLiteral("Second"));
+    replies[1](0, QString());
+    replies[0](0, QString());
+    check(changes.size() == 1
+              && qvariant_cast<RadioDelta>(changes.first().first()).nickname == QStringLiteral("Second"),
+          "an older success cannot overwrite a newer successful nickname reply");
+    changes.clear();
+    backend->requestRadioNickname(QStringLiteral("Pending"));
+    backend->decodeRadioStatus({{QStringLiteral("nickname"), QStringLiteral("OtherClient")}});
+    replies.last()(0, QString());
+    check(changes.size() == 1
+              && qvariant_cast<RadioDelta>(changes.first().first()).nickname == QStringLiteral("OtherClient"),
+          "nickname status after dispatch supersedes the command reply");
+    changes.clear();
+    bool accepted = true;
+    backend->requestRadioNickname(QStringLiteral("OldSession"), [&](bool ok) { accepted = ok; });
+    backend->clearExtensionHandles();
+    replies.last()(0, QString());
+    check(changes.isEmpty() && !accepted, "a late reply from an ended session cannot publish identity");
+    backend->requestRadioNickname(QStringLiteral("Destroyed"), [&](bool ok) { accepted = ok; });
+    backend.reset();
+    replies.last()(0, QString());
+    check(!accepted, "retained reply callback survives backend destruction without applying state");
+}
+
 void productionFirmwareProvider()
 {
     RadioModel radio;
@@ -256,7 +351,10 @@ void productionFirmwareProvider()
         return;
     }
     QStringList commands;
-    backend->setCommandSink([&](const QString& command) { commands.append(command); });
+    backend->setNicknameCommandSink([&](const QString& command, FlexBackend::CommandReply) {
+        commands.append(command);
+        return true;
+    });
     check(backend->requestRadioNickname(QString()) == ReceiveDispatch::Dispatched
               && commands == QStringList{QStringLiteral("radio clear_name")},
           "production setup wires the radio model firmware provider");
@@ -320,6 +418,9 @@ void localNicknames()
         check(hl2::Hl2Discovery::effectiveNickname(info.family, info.serial, QString())
                   == QStringLiteral("Local Desk"),
               "non-Flex nickname retains local storage and spaces");
+        emit radio.connectionStateChanged(false);
+        check(edit->text() == QStringLiteral("Local Desk"),
+              "disconnect does not replace a locally stored nickname with radio identity");
         finishEdit(*edit, QString());
         check(!hl2::Hl2Discovery::hasCustomNickname(info.family, info.serial),
               "non-Flex clear removes the local nickname");
@@ -334,6 +435,7 @@ int main(int argc, char** argv)
     AppSettings::instance().load();
     encoding();
     modelAndDialog();
+    replyOrdering();
     productionFirmwareProvider();
     statusBarNicknameWiring();
     localNicknames();

@@ -53,6 +53,8 @@ public:
     bool answersTransmitControl() const override { return bool(m_answeredSink); }
     // Configuration writes share LAN/WAN sequencing and report actual dispatch.
     void setSetupCommandSink(std::function<bool(const QString&, const RadioSetupCompletion&)> sink);
+    using CommandReply = std::function<void(int, const QString&)>;
+    void setNicknameCommandSink(std::function<bool(const QString&, CommandReply)> sink);
     // Primary keying verbs use an operation-fenced writer, never the generic
     // command sink. The bool distinguishes key-on from cleanup, not authority.
     // Trusted engine composition supplies the original operation at dispatch.
@@ -86,7 +88,8 @@ public:
     void connectRadio(const RadioConnectRequest& request) override;
     void disconnectRadio() override;
     bool isConnected() const override;
-    ReceiveDispatch requestRadioNickname(const QString& nickname) override;
+    ReceiveDispatch requestRadioNickname(const QString& nickname,
+                                         NicknameCompletion completion = {}) override;
     ReceiveDispatch requestSliceControl(int sliceId, const SliceControlRequest& request) override;
     ReceiveDispatch requestTransmitControl(const TransmitControlRequest& request,
         TunePowerContext context = TunePowerContext::Deferred) override;
@@ -237,6 +240,11 @@ private:
     std::function<void(const QString&)> m_sink;
     AnsweredCommandSink m_answeredSink;
     std::function<bool(const QString&, const RadioSetupCompletion&)> m_setupSink;
+    std::function<bool(const QString&, CommandReply)> m_nicknameSink;
+    quint64 m_nicknameSession{0};
+    quint64 m_nicknameRequest{0};
+    quint64 m_nicknameAppliedRequest{0};
+    quint64 m_nicknameStatusRevision{0};
     std::function<void(const QString&, const TxCoordinator::Command&)> m_txSink;
     std::function<void(const QString&)> m_sliceSink;
     std::function<QString()> m_modelProvider;

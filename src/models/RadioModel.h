@@ -242,7 +242,8 @@ public:
     // sending `radio callsign` so the radio's own copy stays in step.
     void setStationCallsign(const QString& callsign);
     QString nickname()     const { return m_nickname; }
-    ReceiveDispatch requestRadioNickname(const QString& nickname);
+    ReceiveDispatch requestRadioNickname(const QString& nickname,
+                                         IRadioBackend::NicknameCompletion completion = {});
     QString region()       const { return m_region; }
     int     rttyMarkDefault() const { return m_rttyMarkDefault; }
     QString radioOptions() const { return m_radioOptions; }
