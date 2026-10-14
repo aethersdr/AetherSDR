@@ -42,8 +42,7 @@ public:
     PanadapterStream* panStream()  const { return m_panStream; }
 
     // Where the core verbs emit their SmartSDR command strings — RadioModel's
-    // existing sendCommand() funnel, so verbs reuse the one wire-write path.
-    void setCommandSink(std::function<void(const QString&)> sink);
+    // existing guarded command funnel, so verbs reuse the one wire-write path.
     // The same funnel for a write whose caller waits on the radio's answer
     // (TransmitControlRequest::answerTicket). The sink reports the reply code;
     // with none installed, such a request goes out unanswered.
@@ -54,7 +53,9 @@ public:
     // Configuration writes share LAN/WAN sequencing and report actual dispatch.
     void setSetupCommandSink(std::function<bool(const QString&, const RadioSetupCompletion&)> sink);
     using CommandReply = std::function<void(int, const QString&)>;
-    void setNicknameCommandSink(std::function<bool(const QString&, CommandReply)> sink);
+    void setCommandSink(std::function<bool(const QString&, CommandReply)> sink);
+    // Encoding-only observers cannot dispatch requests that need a radio reply.
+    void setCommandSink(std::function<void(const QString&)> sink);
     // Primary keying verbs use an operation-fenced writer, never the generic
     // command sink. The bool distinguishes key-on from cleanup, not authority.
     // Trusted engine composition supplies the original operation at dispatch.
@@ -237,10 +238,9 @@ private:
     QThread*          m_connThread{nullptr};    // owned (this-parented)
     PanadapterStream* m_panStream{nullptr};     // owned; lives on m_networkThread
     QThread*          m_networkThread{nullptr}; // owned (this-parented)
-    std::function<void(const QString&)> m_sink;
+    std::function<bool(const QString&, CommandReply)> m_sink;
     AnsweredCommandSink m_answeredSink;
     std::function<bool(const QString&, const RadioSetupCompletion&)> m_setupSink;
-    std::function<bool(const QString&, CommandReply)> m_nicknameSink;
     quint64 m_nicknameSession{0};
     quint64 m_nicknameRequest{0};
     quint64 m_nicknameAppliedRequest{0};

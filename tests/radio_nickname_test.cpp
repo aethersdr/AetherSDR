@@ -100,7 +100,11 @@ void encoding()
     QString version = QStringLiteral("4.3.16.42034");
     check(backend.requestRadioNickname(QString()) == ReceiveDispatch::Unsupported,
           "no command sink refuses the request");
-    backend.setNicknameCommandSink([&](const QString& command, FlexBackend::CommandReply) {
+    backend.setCommandSink([&](const QString& command) { commands.append(command); });
+    check(backend.requestRadioNickname(QStringLiteral("Unconfirmed")) == ReceiveDispatch::Unsupported
+              && commands.isEmpty(),
+          "encoding-only command sink cannot dispatch a write requiring confirmation");
+    backend.setCommandSink([&](const QString& command, FlexBackend::CommandReply) {
         commands.append(command);
         return true;
     });
@@ -155,7 +159,7 @@ void modelAndDialog()
     ConnectedFlex* backend = owned.get();
     QStringList commands;
     QList<FlexBackend::CommandReply> replies;
-    backend->setNicknameCommandSink([&](const QString& command, FlexBackend::CommandReply reply) {
+    backend->setCommandSink([&](const QString& command, FlexBackend::CommandReply reply) {
         commands.append(command);
         replies.append(std::move(reply));
         return true;
@@ -307,7 +311,7 @@ void replyOrdering()
 {
     auto backend = std::make_unique<FlexBackend>();
     QList<FlexBackend::CommandReply> replies;
-    backend->setNicknameCommandSink([&](const QString&, FlexBackend::CommandReply reply) {
+    backend->setCommandSink([&](const QString&, FlexBackend::CommandReply reply) {
         replies.append(std::move(reply));
         return true;
     });
@@ -351,7 +355,7 @@ void productionFirmwareProvider()
         return;
     }
     QStringList commands;
-    backend->setNicknameCommandSink([&](const QString& command, FlexBackend::CommandReply) {
+    backend->setCommandSink([&](const QString& command, FlexBackend::CommandReply) {
         commands.append(command);
         return true;
     });

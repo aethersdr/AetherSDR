@@ -130,6 +130,21 @@ FlexBackend::~FlexBackend()
 
 void FlexBackend::setCommandSink(std::function<void(const QString&)> sink)
 {
+    if (!sink) {
+        m_sink = {};
+        return;
+    }
+    m_sink = [sink = std::move(sink)](const QString& command, CommandReply reply) {
+        if (reply) {
+            return false;
+        }
+        sink(command);
+        return true;
+    };
+}
+
+void FlexBackend::setCommandSink(std::function<bool(const QString&, CommandReply)> sink)
+{
     m_sink = std::move(sink);
 }
 
@@ -138,15 +153,10 @@ void FlexBackend::setFirmwareVersionProvider(std::function<QString()> provider)
     m_firmwareVersionProvider = std::move(provider);
 }
 
-void FlexBackend::setNicknameCommandSink(std::function<bool(const QString&, CommandReply)> sink)
-{
-    m_nicknameSink = std::move(sink);
-}
-
 ReceiveDispatch FlexBackend::requestRadioNickname(const QString& nickname,
                                                  NicknameCompletion completion)
 {
-    if (!m_nicknameSink) {
+    if (!m_sink) {
         return ReceiveDispatch::Unsupported;
     }
     // FlexLib Nickname uses StringHelper.Sanitize: drop unsupported characters,
@@ -182,7 +192,7 @@ ReceiveDispatch FlexBackend::requestRadioNickname(const QString& nickname,
     const quint64 session = m_nicknameSession;
     const quint64 request = ++m_nicknameRequest;
     const quint64 statusRevision = m_nicknameStatusRevision;
-    const bool dispatched = m_nicknameSink(command,
+    const bool dispatched = m_sink(command,
         [self, session, request, statusRevision, sanitized, completion = std::move(completion)]
         (int code, const QString&) {
             const bool current = self && session == self->m_nicknameSession;
@@ -1835,7 +1845,7 @@ void FlexBackend::decodeProfileFlags(const QMap<QString, QString>& kvs)
 void FlexBackend::send(const QString& cmd)
 {
     if (m_sink) {
-        m_sink(cmd);
+        m_sink(cmd, {});
     }
 }
 
@@ -1844,7 +1854,7 @@ void FlexBackend::sendSlice(const QString& cmd)
     if (m_sliceSink) {
         m_sliceSink(cmd);
     } else if (m_sink) {
-        m_sink(cmd);
+        m_sink(cmd, {});
     }
 }
 

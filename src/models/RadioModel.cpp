@@ -897,7 +897,9 @@ void RadioModel::setupBackend(const QString& family)
             const auto write = [this](const QString& cmd, ResponseCallback cb) {
                 return sendCmdPublic(cmd, std::move(cb));
             };
-            flex->setCommandSink([write](const QString& cmd){ write(cmd, nullptr); });
+            flex->setCommandSink([write](const QString& cmd, FlexBackend::CommandReply reply) {
+                return write(cmd, std::move(reply));
+            });
             flex->setAnsweredCommandSink([write](const QString& cmd,
                                                  std::function<void(bool)> answered) {
                 if (!write(cmd, [answered](int code, const QString&) { answered(code == 0); })) {
@@ -905,9 +907,6 @@ void RadioModel::setupBackend(const QString& family)
                 }
             });
             flex->setSetupCommandSink(setupCommandSink());
-            flex->setNicknameCommandSink([write](const QString& cmd, FlexBackend::CommandReply reply) {
-                return write(cmd, std::move(reply));
-            });
             flex->setTxCommandSink([this](const QString& cmd, const TxCoordinator::Command& fence) {
                 sendTxKeyingCommand(cmd, fence);
             });
