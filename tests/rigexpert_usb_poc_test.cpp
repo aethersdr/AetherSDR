@@ -225,6 +225,25 @@ private slots:
         QCOMPARE(model.state(), AntennaAnalyzerModel::State::Error);
         QVERIFY(model.lastError().contains("deadline"));
     }
+    void frontPanelMeasurementErrorGuidance()
+    {
+        for (const int acknowledgedStages : {0, 1, 2}) {
+            AntennaAnalyzerModel model;
+            InjectedHid* port = install(model);
+            ready(model, port);
+            QVERIFY(model.sweep(14000000, 14350000, 2, true));
+            for (int stage = 0; stage < acknowledgedStages; ++stage) { port->feed("OK\r\n"); }
+            // Captured reply to FQ14175000 with front-panel sampling active.
+            port->feed("ERROR-20\r\n");
+            QCOMPARE(model.state(), AntennaAnalyzerModel::State::Error);
+            QVERIFY(model.lastError().contains("ERROR-20"));
+            QVERIFY(model.lastError().contains("main menu"));
+            QVERIFY(model.lastError().contains("reconnect"));
+            QCOMPARE(model.snapshot().value("receivedRows").toInt(), 0);
+            QCOMPARE(port->final, AntennaAnalyzerModel::commandReport("off\r"));
+            QCOMPARE(port->commands.size(), 3 + acknowledgedStages);
+        }
+    }
     void acknowledgementRequiresWrite()
     {
         AntennaAnalyzerModel model;

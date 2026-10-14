@@ -97,6 +97,17 @@ alone does not authorize analyzer RF. See [Automation Bridge and MCP](./automati
 - **Sweep is disabled:** wait for **ready** and confirm RF isolation. A finished
   sweep requires a fresh **Connect**.
 
+### ERROR-20 when starting a sweep
+
+On the tested Stick Pro 108, active front-panel measurement can cause the
+analyzer to reject USB setup with **ERROR-20**.
+
+1. Stop the front-panel measurement and return to the analyzer's main menu.
+2. Click **Connect** again and wait for **ready**.
+3. Reconfirm RF isolation and click **Sweep**.
+
+The app retains the error and closes USB. It does not retry acquisition automatically.
+
 ## See also
 
 - [Automation Bridge and MCP](./automation-bridge-and-mcp.md)

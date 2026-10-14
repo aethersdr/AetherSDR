@@ -211,6 +211,10 @@ void AntennaAnalyzerModel::receive(const QByteArray& report)
 
 void AntennaAnalyzerModel::lineReceived(const QByteArray& line)
 {
+    if (line == "ERROR-20") {
+        finish(State::Error, QStringLiteral("Stick Pro returned ERROR-20. Stop front-panel measurement and return to the main menu, then reconnect."));
+        return;
+    }
     if (line == "ERROR") { finish(State::Error, QStringLiteral("Stick Pro returned ERROR")); return; }
     if (m_state == State::Identifying) {
         if (m_info.size() < 32) { m_info.append(QString::fromLatin1(line)); }

@@ -3,7 +3,8 @@
 Implementation for [RFC #6471](https://github.com/aethersdr/AetherSDR/issues/6471).
 The operator reported verbal maintainer approval on 2026-10-14; this branch
 implements the USB bring-up step toward the quick-check design. Initial macOS
-USB acquisition is demonstrated below; full hardware qualification is pending. This is an independent instrument, not an
+USB acquisition is demonstrated below; full hardware qualification is pending.
+This is an independent instrument, not an
 `IRadioBackend` or a replacement transceiver session.
 
 ## Scope and authority
@@ -92,6 +93,20 @@ callbacks and obvious premature ACKs; they cannot prove an unlabelled late
 firmware reply belongs to the current command. Fresh USB sessions, initial
 drain and fail-closed setup mitigate that ambiguity. Hardware qualification
 must include late FULLINFO, multiple ACKs in one report, and stop/reopen races.
+
+## Front-panel measurement and ERROR-20
+
+On the tested Stick Pro 108, five USB attempts received `ERROR-20` in response
+to `FQ14175000` while the operator was taking front-panel samples. VER/FULLINFO
+still succeeded. Returning the instrument to its main menu restored USB
+acquisition without changing the requested frequency or report encoding.
+This is an observed recovery for this firmware, not a vendor-wide error-code map.
+
+The app preserves `ERROR-20`, tells the operator to stop front-panel measurement,
+return to the main menu and reconnect, and closes the USB session without an
+automatic retry. The captured error is replayed at the frequency, width and
+measurement stages in the injected protocol test. Physical RF silence remains
+unconfirmed after either an error or stop.
 
 ## Host limits and outputs
 
@@ -188,6 +203,33 @@ bench does not certify all host-supported settings. Calibration provenance,
 full range/count limits, fault/cancellation timing, physical RF silence,
 Windows/Linux, other models and the radio-tab workflow remain unqualified.
 The written `off` and USB close are observable host actions, not RF-off proof.
+
+## Extended transport characterization
+
+The same runtime/device later completed **17 sweeps / 4322 accepted rows** across
+23 connections. Five attempts were the front-panel `ERROR-20` case above; one
+intentional stop retained 181 rows as cancelled. All completed sweeps had N+1
+strictly increasing rows and exact requested endpoints. Counts tested were
+1, 2, 3, 7, 10, 127, 200, 255, 500 and 1000, all within the 20 m region.
+
+For N=127 over 14.000–14.350 MHz, the device returned 126 steps of 2755 Hz and
+one final step of 2870 Hz. N=255 returned 254 steps of 1372 Hz, then 1512 Hz.
+These differ from an ideal evenly spaced grid by up to 114.094 and 139.451 Hz.
+Preserve the returned frequencies; do not reconstruct them from the span.
+A 14.170–14.180 MHz / N=1000 sweep returned 1001 rows at exact 10 Hz steps.
+
+Seven N=200 sweeps, including five consecutive reconnects after cancellation,
+took 5.970–5.975 s from FRX HID write receipt to off write receipt. The narrow
+N=1000 sweep took 29.174 s. Captured FQ/SW ACKs arrived 3–10 ms after host write
+receipts. These are host trace observations on this setup, not timing guarantees.
+The bounded trace and polling do not retain every original frame of every run;
+accepted raw CSV samples remain in the snapshots.
+
+After cancellation, two residual CSV reports appeared during the next identity
+handshake. They were retained in trace rather than accepted as new samples;
+the fresh acquisition completed with the requested endpoints. This is one
+positive recovery observation, not complete stop/unplug-race qualification.
+Calibration provenance, independent accuracy and physical RF silence remain open.
 
 ## macOS hardware qualification
 
