@@ -266,7 +266,7 @@ without letting it change anything — check **"Observe only"** in Radio
 Setup → Network. The bridge then refuses **every** mutating verb and
 answers only pure-introspection reads (`ping`, `verbs`, `whoami`, `get`,
 `dumpTree`, `grab`, `cell`, the read-only `log` actions, `floors`, the inventory-only
-`streams` actions, and `hitTest`). In particular, it blocks `log set/reset`
+`streams` actions, `interlock probe`, and `hitTest`). In particular, it blocks `log set/reset`
 and `streams reset/resync/refresh`; the latter two stream actions clear local
 diagnostics or request a fresh radio inventory. It is
 enforced in the app, not in the MCP server, so no client can flip it
@@ -4834,7 +4834,9 @@ are limited to 128 uppercase ASCII letters, digits, underscores and commas;
 unknown tokens are allowed so exact-token refusal can be tested. Duplicate or
 unknown options are rejected. `owner` is an input to the ownership policy,
 not a claim that a real radio was tested. The diagnostic requires no TX
-permission and cannot create an operator intent or send a command.
+permission and cannot create an operator intent or send a command. It also
+works in **Observe only** mode; the configured access token is still required.
+Other `interlock` actions remain blocked in observe-only mode.
 
 This provides isolated client reconciliation evidence. Status parsing,
 ownership-handle mapping and cached-source lifecycle are covered by the

@@ -38,6 +38,10 @@ Open **Settings → Radio Setup... → Network** and find the **Advanced** group
 | **Allow TX via MCP:** "Enable transmit control" | Lets bridge clients key the transmitter. Off by default; turning it on asks for a one-time confirmation. |
 | **Observe only:** "Read-only (block all driving)" | Blocks every action that changes anything; reads still work. |
 
+The `interlock probe` diagnostic works with **Observe only** enabled. It
+checks transmit-state reconciliation on an isolated model without changing
+your session or keying the radio. It still requires the access token.
+
 You can also start the bridge for a single run by launching with `AETHER_AUTOMATION=1`. In that case the Enabled/Disabled button is grayed out, because the environment variable wins.
 
 ### Access token
