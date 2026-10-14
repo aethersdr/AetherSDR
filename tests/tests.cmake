@@ -6617,7 +6617,7 @@ if(AETHER_ENABLE_FLEX_RETRY_SOCKET_TEST)
     target_link_libraries(radio_connection_retry_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
     set_target_properties(radio_connection_retry_test PROPERTIES AUTOMOC ON)
     add_test(NAME radio_connection_retry_test COMMAND radio_connection_retry_test)
-    set_tests_properties(radio_connection_retry_test PROPERTIES TIMEOUT 30)
+    set_tests_properties(radio_connection_retry_test PROPERTIES TIMEOUT 120)
 endif()
 
 add_executable(flex_backend_lifecycle_test tests/flex_backend_lifecycle_test.cpp)

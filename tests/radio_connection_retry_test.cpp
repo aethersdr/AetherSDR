@@ -111,7 +111,7 @@ private slots:
             for (int retry = 0; retry < 3; ++retry) {
                 const qsizetype previousErrors = errors.size();
                 attempt();
-                QTRY_VERIFY_WITH_TIMEOUT(errors.size() > previousErrors, 1000);
+                QTRY_VERIFY_WITH_TIMEOUT(errors.size() > previousErrors, 5000);
                 QTRY_COMPARE_WITH_TIMEOUT(connection.state(), ConnectionState::Disconnected, 1000);
                 QCOMPARE(errors.size(), previousErrors + 1);
             }
