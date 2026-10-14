@@ -1,4 +1,5 @@
 #include "AetherLabWidget.h"
+#include "CanonIndicators.h"
 
 #include "core/ThemeManager.h"
 #include "models/AntennaAnalyzerModel.h"
@@ -397,7 +398,7 @@ AetherLabWidget::AetherLabWidget(AntennaAnalyzerModel* model, QWidget* parent)
     qualification->setWordWrap(true);
     footer->addWidget(qualification);
     layout->addLayout(footer);
-    ThemeManager::instance().applyStyleSheet(content, QStringLiteral(
+    applyCanonSheet(content, [] { return QStringLiteral(
         "QWidget#aetherLabContent, QWidget[labMetric=true] { background: transparent; }"
         "QLabel, QCheckBox { color: {{color.canon.inkSoft}}; background: transparent; }"
         "QFrame[labCard=true] { background: {{color.canon.nested}}; border: 1px solid {{color.canon.lineHi}}; border-radius: 8px; }"
@@ -411,7 +412,7 @@ AetherLabWidget::AetherLabWidget(AntennaAnalyzerModel* model, QWidget* parent)
         "QPushButton, QComboBox, QDoubleSpinBox, QSpinBox { color: {{color.canon.ink}}; background: {{color.canon.control}}; border: 1px solid {{color.canon.lineHi}}; border-radius: 5px; padding: 6px 8px; }"
         "QPushButton:hover, QPushButton:focus, QComboBox:focus, QDoubleSpinBox:focus, QSpinBox:focus { border-color: {{color.canon.cyan}}; }"
         "QPushButton:disabled { color: {{color.button.foreground.disabled}}; background: {{color.button.background.disabled}}; border-color: {{color.button.border.disabled}}; }"
-        "QPushButton#aetherLabSweep:enabled { color: {{color.canon.cyan}}; border-color: {{color.canon.cyan}}; }"));
+        "QPushButton#aetherLabSweep:enabled { color: {{color.canon.cyan}}; border-color: {{color.canon.cyan}}; }") + canonIndicatorRules(); });
     m_refreshTimer = new QTimer(this);
     m_refreshTimer->setSingleShot(true);
     m_refreshTimer->setInterval(100);
