@@ -2,12 +2,12 @@
 
 #include "ComboStyle.h"
 #include "GuardedSlider.h"
+#include "FirmwareInstallDialog.h"
 #include "ScopedChildWidget.h"
 #include "core/ThemeManager.h"
 #include "models/Ctr2ProxyModel.h"
 
 #include <QFile>
-#include <QFileDialog>
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QIntValidator>
@@ -160,11 +160,6 @@ void Ctr2ProxyApplet::buildUi()
     m_firmwareLabel->setTextFormat(Qt::PlainText);
     m_firmwareLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     grid->addWidget(m_firmwareLabel, 4, 1, 1, 2);
-    m_updateBtn = new QPushButton(tr("Update\u2026"), this);
-    m_updateBtn->setObjectName(QStringLiteral("ctr2ProxyUpdateFirmware"));
-    m_updateBtn->setAccessibleName(tr("Update the CTR2 device's firmware"));
-    ThemeManager::instance().applyStyleSheet(m_updateBtn, kButtonStyle);
-    grid->addWidget(m_updateBtn, 4, 3);
     m_updateBar = new QProgressBar(this);
     m_updateBar->setObjectName(QStringLiteral("ctr2ProxyUpdateProgress"));
     m_updateBar->setAccessibleName(tr("Firmware update progress"));
@@ -177,6 +172,15 @@ void Ctr2ProxyApplet::buildUi()
                        "QProgressBar::chunk { background: {{color.accent}}; }"));
     m_updateBar->hide();
     grid->addWidget(m_updateBar, 5, 1, 1, 3);
+    // USB only: installing firmware, over the link when the controller's
+    // firmware takes updates, otherwise in download mode.
+    m_installBtn = new QPushButton(tr("Install\u2026"), this);
+    m_installBtn->setObjectName(QStringLiteral("ctr2ProxyInstallFirmware"));
+    m_installBtn->setAccessibleName(tr("Install firmware on a controller"));
+    m_installBtn->setToolTip(tr("Install, update, start or restore firmware on an ESP32-based "
+                                "controller."));
+    ThemeManager::instance().applyStyleSheet(m_installBtn, kButtonStyle);
+    grid->addWidget(m_installBtn, 4, 3);
     grid->setColumnStretch(1, 1);
     vbox->addLayout(grid);
 
@@ -245,16 +249,27 @@ void Ctr2ProxyApplet::buildUi()
         }
     });
     connect(m_startBtn, &QPushButton::clicked, this, &Ctr2ProxyApplet::onStartClicked);
-    connect(m_updateBtn, &QPushButton::clicked, this, &Ctr2ProxyApplet::onUpdateClicked);
+    connect(m_installBtn, &QPushButton::clicked, this, &Ctr2ProxyApplet::onInstallClicked);
+}
+
+void Ctr2ProxyApplet::onInstallClicked()
+{
+    if (!m_installDialog) {
+        // The relay holds no serial port, so it can keep running meanwhile.
+        m_installDialog = new FirmwareInstallDialog(m_model, window());
+    }
+    m_installDialog->show();
+    m_installDialog->raise();
+    m_installDialog->activateWindow();
 }
 
 void Ctr2ProxyApplet::syncFirmware()
 {
     const bool usb = m_model && m_model->transport() == Ctr2ProxyModel::Transport::Usb;
+    m_installBtn->setVisible(usb);
     const bool available = usb && m_model->firmwareUpdateAvailable();
     m_firmwareRowLabel->setVisible(available);
     m_firmwareLabel->setVisible(available);
-    m_updateBtn->setVisible(available);
     if (!available) {
         m_updateBar->hide();
         return;
@@ -271,74 +286,6 @@ void Ctr2ProxyApplet::syncFirmware()
     }
     m_firmwareLabel->setText(text);
     m_firmwareLabel->setAccessibleName(tr("Device firmware: %1").arg(text));
-    m_updateBtn->setText(updating ? tr("Cancel") : tr("Update\u2026"));
-    m_updateBtn->setAccessibleName(updating ? tr("Cancel the firmware update")
-                                            : tr("Update the CTR2 device's firmware"));
-    // A device that is checking or restarting into the image cannot be stopped.
-    const bool cancellable = updating && m_updateBar->value() < 100;
-    const bool canStart = !updating && !m_installingRule && !m_model->usbDevicePath().isEmpty();
-    m_updateBtn->setEnabled(cancellable || canStart);
-}
-
-void Ctr2ProxyApplet::onUpdateClicked()
-{
-    if (!m_model) {
-        return;
-    }
-    if (m_model->firmwareUpdateRunning()) {
-        m_model->cancelFirmwareUpdate();
-        return;
-    }
-    const QString path = QFileDialog::getOpenFileName(
-        this, tr("Choose the firmware image"),
-        QStandardPaths::writableLocation(QStandardPaths::DownloadLocation),
-        tr("Firmware image (*.bin)"));
-    if (path.isEmpty() || !m_model) {
-        return;
-    }
-    QFile file(path);
-    Ctr2FirmwareUpdater::Image image;
-    QString problem;
-    if (!file.open(QIODevice::ReadOnly)) {
-        problem = tr("Cannot read %1.").arg(path);
-    } else if (file.size() > Ctr2FirmwareUpdater::kMaxImageBytes) {
-        problem = tr("This file is larger than the device's update slot.");
-    } else {
-        Ctr2FirmwareUpdater::readImage(file.readAll(), &image, &problem);
-    }
-    if (!problem.isEmpty()) {
-        ScopedChildWidget<QMessageBox> box(QMessageBox::Warning, tr("Firmware update"), problem,
-                                           QMessageBox::Ok, this);
-        box.get()->exec();
-        return;
-    }
-
-    const QString current = m_model->usbFirmwareVersion();
-    ScopedChildWidget<QMessageBox> box(
-        QMessageBox::Question, tr("Update the CTR2 firmware?"),
-        current.isEmpty()
-            ? tr("Install %1 %2 on the CTR2?").arg(image.project, image.version)
-            : tr("Replace %1 with %2 %3 on the CTR2?").arg(current, image.project, image.version),
-        QMessageBox::NoButton, this);
-    box.get()->setInformativeText(
-        tr("It takes about three minutes. Keep the USB cable connected. The proxy stops "
-           "during the update and starts again afterwards.\n\nThe device checks that the "
-           "image is signed for it and keeps its current firmware if anything goes wrong."));
-    QPushButton* go = box.get()->addButton(tr("Update"), QMessageBox::AcceptRole);
-    box.get()->addButton(tr("Cancel"), QMessageBox::RejectRole);
-    box.get()->setDefaultButton(go);
-    box.get()->exec();
-    if (!box || box.get()->clickedButton() != go || !m_model) {
-        return;
-    }
-    m_updateStep = tr("Starting");
-    m_updateBar->setValue(0);
-    if (!m_model->startFirmwareUpdate(image, &problem)) {
-        ScopedChildWidget<QMessageBox> err(QMessageBox::Warning, tr("Firmware update"), problem,
-                                           QMessageBox::Ok, this);
-        err.get()->exec();
-    }
-    syncFirmware();
 }
 
 void Ctr2ProxyApplet::onFirmwareProgress(qint64 stored, qint64 total)
@@ -348,16 +295,11 @@ void Ctr2ProxyApplet::onFirmwareProgress(qint64 stored, qint64 total)
     m_updateBar->setAccessibleDescription(tr("%1 percent").arg(pct));
 }
 
-void Ctr2ProxyApplet::onFirmwareFinished(bool ok, const QString& message)
+void Ctr2ProxyApplet::onFirmwareFinished()
 {
+    // The install window reports the outcome.
     m_updateBar->setValue(0);
     syncFirmware();
-    ScopedChildWidget<QMessageBox> box(ok ? QMessageBox::Information : QMessageBox::Warning,
-                                       tr("Firmware update"),
-                                       ok ? tr("Update complete.") : tr("The update did not finish."),
-                                       QMessageBox::Ok, this);
-    box.get()->setInformativeText(message);
-    box.get()->exec();
 }
 
 void Ctr2ProxyApplet::onStartClicked()

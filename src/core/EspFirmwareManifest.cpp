@@ -80,6 +80,7 @@ bool EspFirmwareManifest::parse(const QByteArray& json, EspFirmwareManifest* out
     EspFirmwareManifest m;
     m.product = o.value("product").toString();
     m.version = o.value("version").toString();
+    m.device = o.value("device").toString();
     m.chip = o.value("chip").toString();
     const auto bad = [&](const QString& what) {
         *problem = tr("The firmware manifest is invalid: %1.").arg(what);

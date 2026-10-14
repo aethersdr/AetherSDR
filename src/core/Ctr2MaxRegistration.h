@@ -1,0 +1,24 @@
+#pragma once
+
+#include <QByteArray>
+#include <QString>
+
+namespace AetherSDR {
+
+// Whether a CTR2-Max is registered with its maker's firmware: Reg.txt in the
+// stock firmware's LittleFS volume (the "spiffs" partition). AetherCTR2 is
+// installed only on registered units, as agreed with Lynovation, and checks
+// the same itself at every start. Read-only: see ctr2max_reg.h.
+namespace Ctr2MaxRegistration {
+
+inline constexpr quint32 kOffset = 0x310000;   // the partition, in flash
+inline constexpr quint32 kSize = 0xE0000;
+
+enum class Result { Registered, NotRegistered, Unreadable };
+
+// partition: the volume's bytes (kSize of them, read from kOffset). On
+// Registered, call gets the call sign it is registered to.
+Result check(const QByteArray& partition, QString* call = nullptr);
+
+} // namespace Ctr2MaxRegistration
+} // namespace AetherSDR

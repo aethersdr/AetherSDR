@@ -472,6 +472,38 @@ void testCancel()
     check(dev.version == QStringLiteral("0.9.0"), "the device keeps its firmware after a cancel");
 }
 
+// AetherSDR quitting mid-update destroys the updater: the device must still
+// hear ABORT and CLOSED, not be left waiting for the next chunk.
+void testDestroyedMidUpdate()
+{
+    Device dev;
+    const QByteArray image = makeImage("0.9.1", 40 * firmware::kChunkBytes);
+    auto* updater = new Ctr2FirmwareUpdater(
+        [] { return QList<Ctr2HidPort::DeviceInfo>{simInfo()}; },
+        [&dev](const Ctr2HidPort::DeviceInfo&, QString*) -> Ctr2HidPort* {
+            return new SimPort(&dev, capabilityBit(MessageType::Firmware));
+        });
+    updater->setTiming(fastTiming());
+    updater->setWindow(1);
+    QPointer<Ctr2FirmwareUpdater> alive(updater);
+    bool phaseWasSending = false;
+    QObject::connect(updater, &Ctr2FirmwareUpdater::progress, updater,
+                     [updater, &phaseWasSending](qint64 stored, qint64) {
+                         if (stored >= 3 * firmware::kChunkBytes && !phaseWasSending) {
+                             phaseWasSending = true;
+                             updater->deleteLater();   // as the app's teardown would
+                         }
+                     });
+    Ctr2FirmwareUpdater::Image im;
+    QString problem;
+    check(Ctr2FirmwareUpdater::readImage(image, &im, &problem), "the test image reads");
+    check(updater->start(simInfo(), im), "the update starts");
+    check(waitUntil([&alive] { return alive.isNull(); }), "the updater is destroyed mid-transfer");
+    check(waitUntil([&dev] { return dev.aborts == 1 && dev.closes == 1; }),
+          "destroying the updater mid-transfer sends ABORT and CLOSED");
+    check(dev.version == QStringLiteral("0.9.0"), "the device keeps its firmware");
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -485,6 +517,7 @@ int main(int argc, char** argv)
     testNoAnswer();
     testRollback();
     testCancel();
+    testDestroyedMidUpdate();
     if (g_failures) {
         std::fprintf(stderr, "%d check(s) failed\n", g_failures);
         return 1;

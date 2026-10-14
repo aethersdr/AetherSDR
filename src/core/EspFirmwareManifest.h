@@ -14,7 +14,7 @@ namespace AetherSDR {
 //   {
 //     "format": 1,
 //     "product": "Example", "version": "1.2.3",
-//     "chip": "ESP32-S3", "flashSize": "0x1000000",
+//     "device": "Example Box", "chip": "ESP32-S3", "flashSize": "0x1000000",
 //     "protect": [ { "name": "other app", "offset": "0x10000", "size": "0x300000" } ],
 //     "require": [ { "name": "partition rows", "offset": "0x8000", "size": "0xa0",
 //                    "sha256": "..." } ],
@@ -46,6 +46,7 @@ struct EspFirmwareManifest {
 
     QString product;
     QString version;
+    QString device;   // the hardware it is for, as shown (optional)
     QString chip;
     quint32 flashSize{0};
     QList<Region> protect;

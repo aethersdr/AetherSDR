@@ -85,7 +85,24 @@ Ctr2FirmwareUpdater::Ctr2FirmwareUpdater(DeviceSource devices, PortOpener opener
 
 Ctr2FirmwareUpdater::~Ctr2FirmwareUpdater()
 {
-    closePort();
+    // AetherSDR quitting mid-update: tell the device, so it drops the
+    // partial image and leaves its update screen now.
+    closePort(sessionEndReports());
+}
+
+std::vector<Report> Ctr2FirmwareUpdater::sessionEndReports()
+{
+    std::vector<Report> out;
+    if (!m_port)
+        return out;
+    if (m_phase == Phase::Begin || m_phase == Phase::Sending || m_phase == Phase::Ending) {
+        m_encoder.encodeExtension(MessageType::Firmware, firmware::encodeAbort(), &out);
+        m_encoder.encodeControl(MessageType::Closed, &out);
+    } else if (m_phase == Phase::Calling) {
+        m_encoder.reset();
+        m_encoder.encodeControl(MessageType::Closed, &out);
+    }
+    return out;
 }
 
 bool Ctr2FirmwareUpdater::start(const Ctr2HidPort::DeviceInfo& device, const Image& image)
@@ -421,22 +438,9 @@ void Ctr2FirmwareUpdater::fail(const QString& message)
     }
     m_timeout->stop();
     m_retry->stop();
-    if (m_port && (m_phase == Phase::Begin || m_phase == Phase::Sending
-                   || m_phase == Phase::Ending)) {
-        // End the session so the device drops any partial image now and
-        // leaves its update screen (also after it refused the image at End).
-        std::vector<Report> out;
-        m_encoder.encodeExtension(MessageType::Firmware, firmware::encodeAbort(), &out);
-        m_encoder.encodeControl(MessageType::Closed, &out);
-        closePort(out);
-    } else if (m_port && m_phase == Phase::Calling) {
-        std::vector<Report> out;
-        m_encoder.reset();
-        m_encoder.encodeControl(MessageType::Closed, &out);
-        closePort(out);
-    } else {
-        closePort();
-    }
+    // End the session so the device drops any partial image now and leaves
+    // its update screen (also after it refused the image at End).
+    closePort(sessionEndReports());
     m_phase = Phase::Idle;
     qCWarning(lcDevices) << "CTR2 firmware: update failed:" << message;
     emit finished(false, message, QString());

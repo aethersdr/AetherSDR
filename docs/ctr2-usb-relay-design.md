@@ -392,6 +392,38 @@ bootloader. `Ctr2ProxyModel` stops the relay for the update and starts it
 again afterwards. `tests/ctr2_firmware_updater_test.cpp` holds it to a
 simulated device that runs the reference for its side of the link.
 
+### Installing AetherCTR2 on a CTR2-Max
+
+The CTR2 Proxy applet's **Install** button opens the CTR2-Max Firmware window
+(`FirmwareInstallDialog`). It installs AetherCTR2 beside the CTR2-Max's stock
+firmware, from releases listed in AetherSDR's firmware catalog
+(`EspFirmwareCatalog`, `https://aethersdr.com/firmware/catalog.json`; for
+testing, `AETHER_FIRMWARE_CATALOG` points elsewhere).
+
+- **Trust.** Each release is a manifest (`EspFirmwareManifest`) with an
+  Ed25519 signature (`manifest.json.sig`) by a firmware-release key built
+  into AetherSDR (`AETHER_FIRMWARE_TRUST_KEYS` adds one for testing), and the
+  manifest's SHA-256s cover every image. There is no way to install an image
+  of one's own.
+- **Layout.** The manifest lists the images and where they go, the regions
+  never written (the stock firmware, its settings and its registration), the
+  partition-table rows that must be on the unit and stay, and the app slots
+  the boot selection (otadata) chooses among. `EspFirmwareInstaller` refuses
+  any write over a protected region, at parse time and again when writing,
+  counting whole erased sectors.
+- **Registration.** AetherCTR2 is installed only on a unit its stock firmware
+  has registered: `Reg.txt` in the stock firmware's LittleFS volume
+  (`Ctr2MaxRegistration`, read-only littlefs). The installer checks it before
+  writing anything, and AetherCTR2 checks it again at every start.
+- **Two paths.** A unit running AetherCTR2 is updated over the link
+  (Firmware, above). One running its stock firmware, or held in ROM download
+  mode, is installed through the chip's ROM bootloader (`EspFlasher`, over
+  Espressif's esp-serial-flasher): optionally a whole-flash backup first,
+  then the images and the boot selection. In download mode the window also
+  starts AetherCTR2 (rewriting only the boot selection), and backs up or
+  restores the whole flash; a backup restores only onto the unit it came
+  from.
+
 ### Test vectors
 
 Each line is one 8-byte report (after the report ID), in hex.

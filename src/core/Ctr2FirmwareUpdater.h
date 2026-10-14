@@ -83,6 +83,8 @@ private:
     void setPhase(Phase phase, const QString& step);
     bool openPort(QString* error);
     void closePort(const std::vector<ctr2hid::Report>& finalReports = {});
+    // ABORT and CLOSED for a session in progress, CLOSED while calling.
+    std::vector<ctr2hid::Report> sessionEndReports();
     void onExtensions(quint32 extensions);
     void onReports(const QByteArray& reports);
     void onMessage(const ctr2hid::Message& message);

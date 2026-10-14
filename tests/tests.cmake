@@ -487,6 +487,21 @@ target_include_directories(esp_firmware_installer_test PRIVATE src)
 target_link_libraries(esp_firmware_installer_test PRIVATE aethercore Qt6::Core)
 add_test(NAME esp_firmware_installer_test COMMAND esp_firmware_installer_test)
 
+# Ctr2MaxRegistration (read-only littlefs) against synthetic stock-firmware
+# volumes: registered, not registered, and no volume.
+add_executable(ctr2max_registration_test tests/ctr2max_registration_test.cpp)
+target_include_directories(ctr2max_registration_test PRIVATE src tests)
+target_link_libraries(ctr2max_registration_test PRIVATE aethercore Qt6::Core)
+add_test(NAME ctr2max_registration_test COMMAND ctr2max_registration_test)
+
+# EspFirmwareCatalog and EspFirmwareDownloader over file:// URLs: only a
+# manifest signed by a trusted Ed25519 key, with intact images, is accepted.
+add_executable(esp_firmware_catalog_test tests/esp_firmware_catalog_test.cpp)
+target_include_directories(esp_firmware_catalog_test PRIVATE src)
+target_link_libraries(esp_firmware_catalog_test PRIVATE aethercore aether_monocypher Qt6::Core
+    Qt6::Network)
+add_test(NAME esp_firmware_catalog_test COMMAND esp_firmware_catalog_test)
+
 # CTR2 HID I/O thread with injected device operations (no hidapi, no device,
 # no sockets): shutdown never blocks the owner on slow writes, discardQueued()
 # fences queued output and late acknowledgements, reads and failures surface.

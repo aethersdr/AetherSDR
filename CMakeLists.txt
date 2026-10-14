@@ -1017,7 +1017,10 @@ set(CORE_SOURCES
     src/core/ByteRelay.cpp
     src/core/TcpByteProxy.cpp
     src/core/Ctr2FirmwareUpdater.cpp
+    src/core/Ctr2MaxRegistration.cpp
+    src/core/EspFirmwareCatalog.cpp
     src/core/EspFirmwareInstaller.cpp
+    src/core/EspFirmwareJob.cpp
     src/core/EspFirmwareManifest.cpp
     src/core/Ctr2HidFraming.cpp
     src/core/Ctr2HidPort.cpp
@@ -1354,6 +1357,7 @@ set(GUI_SOURCES
     src/gui/Kpa1500Applet.cpp
     src/gui/LpMeterApplet.cpp
     src/gui/Ctr2ProxyApplet.cpp
+    src/gui/FirmwareInstallDialog.cpp
     src/gui/MeterApplet.cpp
     src/gui/ProfileSwitcherApplet.cpp
     src/gui/RadeApplet.cpp
@@ -1615,6 +1619,42 @@ else()
     target_compile_options(aether_esp_flasher PRIVATE -w)
 endif()
 
+# Bundled Monocypher (CC0-1.0 OR BSD-2-Clause): Ed25519 signature checks on
+# downloaded firmware manifests, without depending on OpenSSL being present.
+add_library(aether_monocypher STATIC
+    ${CMAKE_SOURCE_DIR}/third_party/monocypher/monocypher.c
+    ${CMAKE_SOURCE_DIR}/third_party/monocypher/monocypher-ed25519.c
+)
+target_include_directories(aether_monocypher PUBLIC ${CMAKE_SOURCE_DIR}/third_party/monocypher)
+set_target_properties(aether_monocypher PROPERTIES C_STANDARD 99 C_STANDARD_REQUIRED ON
+    POSITION_INDEPENDENT_CODE ON)
+if(MSVC)
+    target_compile_options(aether_monocypher PRIVATE /w)
+else()
+    target_compile_options(aether_monocypher PRIVATE -w)
+endif()
+
+# CTR2-Max registration check: the stock firmware's LittleFS volume, read
+# with littlefs (BSD-3-Clause) built read-only (LFS_READONLY: no write path is
+# compiled). src/core/ctr2max_reg.c is shared with the AetherCTR2 firmware.
+add_library(aether_ctr2max_reg STATIC
+    ${CMAKE_SOURCE_DIR}/src/core/ctr2max_reg.c
+    ${CMAKE_SOURCE_DIR}/third_party/littlefs/lfs.c
+    ${CMAKE_SOURCE_DIR}/third_party/littlefs/lfs_util.c
+)
+target_include_directories(aether_ctr2max_reg
+    PUBLIC ${CMAKE_SOURCE_DIR}/src/core
+    PRIVATE ${CMAKE_SOURCE_DIR}/third_party/littlefs)
+target_compile_definitions(aether_ctr2max_reg PRIVATE
+    LFS_READONLY LFS_NO_MALLOC LFS_NO_DEBUG LFS_NO_WARN LFS_NO_ERROR LFS_NO_ASSERT)
+set_target_properties(aether_ctr2max_reg PROPERTIES C_STANDARD 99 C_STANDARD_REQUIRED ON
+    POSITION_INDEPENDENT_CODE ON)
+if(MSVC)
+    target_compile_options(aether_ctr2max_reg PRIVATE /w)
+else()
+    target_compile_options(aether_ctr2max_reg PRIVATE -w)
+endif()
+
 add_library(aether_libmodem_core STATIC
     third_party/libmodem_core/bitstream.cpp
     third_party/libmodem_core/demodulator.cpp
@@ -1730,6 +1770,8 @@ add_library(aethercore ${_aether_core_library_type}
     ${SPECBLEACH_SOURCES}
 )
 target_link_libraries(aethercore PRIVATE aether::wdsp)
+target_link_libraries(aethercore PRIVATE aether_monocypher)   # core: EspFirmwareCatalog
+target_link_libraries(aethercore PRIVATE aether_ctr2max_reg)  # core: Ctr2MaxRegistration
 
 # Desktop-only implementations kept out of libaethercore. Their public headers
 # remain temporarily in src/core while call sites migrate. A library keeps the
