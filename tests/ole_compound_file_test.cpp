@@ -119,9 +119,8 @@ int main(int /*argc*/, char** /*argv*/) {
            md5Of(cab2));
 
     // CabExtractor — pull out every file in each cab, then locate the
-    // firmware blob by Salted__ magic. cab1 has multiple files (driver
-    // DLLs, INFs, etc. plus the FLEX-9600 firmware); cab2 has just the
-    // FLEX-6x00 firmware blob.
+    // firmware blob by Salted__ magic. Family selection belongs to the MSI
+    // metadata resolver; these fixture assertions check cabinet decoding only.
     CabExtractor cx;
 
     QList<QPair<QString, QByteArray>> cab1Files;
@@ -132,30 +131,26 @@ int main(int /*argc*/, char** /*argv*/) {
         std::printf("         - %s (%lld bytes)\n",
                     name.toUtf8().constData(), (long long)data.size());
 
-    QByteArray ssdr6x00;
+    QByteArray cab2Firmware;
     report("CabExtractor finds Salted__ blob in cab2",
-           cx.extractFirstMatchingMagic(cab2, "Salted__", ssdr6x00),
+           cx.extractFirstMatchingMagic(cab2, "Salted__", cab2Firmware),
            cx.lastError());
 
-    QByteArray ssdr9600;
+    QByteArray cab1Firmware;
     report("CabExtractor finds Salted__ blob in cab1",
-           cx.extractFirstMatchingMagic(cab1, "Salted__", ssdr9600),
+           cx.extractFirstMatchingMagic(cab1, "Salted__", cab1Firmware),
            cx.lastError());
 
-    // The FLEX-6x00 firmware was the one we flashed to the radio
-    // earlier this session — bit-identical match is required.
-    report("FLEX-6x00 firmware MD5 matches the bytes we flashed",
-           md5Of(ssdr6x00) == "9e8888dc0558ee420ed82f370f805025",
-           md5Of(ssdr6x00));
-    report("FLEX-6x00 firmware size",
-           ssdr6x00.size() == 386289360,
-           QString("got %1").arg(ssdr6x00.size()));
+    report("cab2 firmware MD5 matches the recorded fixture",
+           md5Of(cab2Firmware) == "9e8888dc0558ee420ed82f370f805025",
+           md5Of(cab2Firmware));
+    report("cab2 firmware size",
+           cab2Firmware.size() == 386289360,
+           QString("got %1").arg(cab2Firmware.size()));
 
-    // FLEX-9600 firmware (we don't have an authoritative MD5 — record
-    // observed value as a regression check for future builds).
-    std::printf("       FLEX-9600 firmware: size=%lld md5=%s\n",
-                (long long)ssdr9600.size(),
-                md5Of(ssdr9600).toUtf8().constData());
+    std::printf("       cab1 firmware: size=%lld md5=%s\n",
+                (long long)cab1Firmware.size(),
+                md5Of(cab1Firmware).toUtf8().constData());
 
     if (g_failed == 0)
         std::printf("\nAll OleCompoundFile + CabExtractor tests passed.\n");

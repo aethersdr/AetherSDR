@@ -2,6 +2,10 @@
 #include "LogManager.h"
 
 #include <QtEndian>
+#include <QSet>
+
+#include <limits>
+#include <algorithm>
 
 namespace AetherSDR {
 
@@ -9,6 +13,9 @@ namespace {
 
 // CFB magic at offset 0. [MS-CFB] §2.2.
 constexpr quint8 kCfbMagic[8] = {0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1};
+constexpr quint64 kMaxMiniStreamBytes = 16ULL * 1024ULL * 1024ULL;
+constexpr quint64 kMaxDirectoryBytes = 16ULL * 1024ULL * 1024ULL;
+constexpr quint64 kMaxFatBytes = 16ULL * 1024ULL * 1024ULL;
 
 // Read a little-endian integer from a byte buffer at a given offset.
 template <typename T>
@@ -86,12 +93,21 @@ bool OleCompoundFile::readHeader()
 
     // Sanity bounds — guard against corrupt/malicious headers before
     // we use these values to size other allocations.
-    if (m_header.sectorShift < 7 || m_header.sectorShift > 16) {
-        m_lastError = QString("implausible sector shift %1").arg(m_header.sectorShift);
+    if (m_header.sectorShift != (majorVersion == 3 ? 9 : 12)
+        || m_header.miniSectorShift != 6 || m_header.miniStreamCutoff != 4096
+        || (majorVersion == 3 && m_header.numDirectorySectors != 0)
+        || (majorVersion == 4 && m_header.numDirectorySectors == 0)) {
+        m_lastError = "Unsupported CFB sector layout";
         return false;
     }
-    if (m_header.numFatSectors > 1u << 24) {
-        m_lastError = "implausible FAT-sector count";
+    const quint64 sectorsInFile = static_cast<quint64>(m_file.size()) / sectorSize();
+    const quint64 maxMiniFatSectors = (kMaxMiniStreamBytes / miniSectorSize()
+                                      + sectorSize() / 4 - 1) / (sectorSize() / 4);
+    if (m_header.numFatSectors > sectorsInFile || m_header.numMiniFatSectors > sectorsInFile
+        || m_header.numDifatSectors > sectorsInFile || m_header.numMiniFatSectors > maxMiniFatSectors
+        || static_cast<quint64>(m_header.numFatSectors) * sectorSize() > kMaxFatBytes
+        || static_cast<quint64>(m_header.numDirectorySectors) * sectorSize() > kMaxDirectoryBytes) {
+        m_lastError = "CFB allocation tables exceed file size";
         return false;
     }
 
@@ -100,6 +116,10 @@ bool OleCompoundFile::readHeader()
     for (int i = 0; i < 109; ++i) {
         const quint32 fatSector = readLE<quint32>(hdr, 76 + i * 4);
         if (fatSector == kFatFreeSector) break;
+        if (m_difat.size() >= m_header.numFatSectors) {
+            m_lastError = "CFB FAT entries exceed declared count";
+            return false;
+        }
         m_difat.append(fatSector);
     }
     return true;
@@ -128,6 +148,10 @@ bool OleCompoundFile::readDifat()
         for (quint32 i = 0; i < entriesPerSector; ++i) {
             const quint32 fatSector = readLE<quint32>(sec, i * 4);
             if (fatSector == kFatFreeSector) continue;
+            if (m_difat.size() >= m_header.numFatSectors) {
+                m_lastError = "CFB DIFAT entries exceed declared FAT count";
+                return false;
+            }
             m_difat.append(fatSector);
         }
         // Last 4 bytes of the DIFAT sector point to the next DIFAT sector.
@@ -138,9 +162,19 @@ bool OleCompoundFile::readDifat()
 
 bool OleCompoundFile::readFat()
 {
+    if (m_difat.size() != m_header.numFatSectors) {
+        m_lastError = "CFB FAT count does not match declaration";
+        return false;
+    }
+    QSet<quint32> seen;
     const quint32 entriesPerSector = sectorSize() / 4;
     m_fat.reserve(m_difat.size() * static_cast<int>(entriesPerSector));
     for (quint32 fatSector : m_difat) {
+        if (seen.contains(fatSector)) {
+            m_lastError = "Duplicate CFB FAT sector";
+            return false;
+        }
+        seen.insert(fatSector);
         const QByteArray sec = readSector(fatSector);
         if (sec.size() != static_cast<int>(sectorSize())) {
             m_lastError = "FAT sector read failure";
@@ -180,10 +214,9 @@ bool OleCompoundFile::readMiniFat()
 
 bool OleCompoundFile::readDirectory()
 {
+    // CFB v4 records the sector count; v3 uses the bounded unsized-chain path.
     const QByteArray dirData = readChain(m_header.firstDirSector,
-        // Directory size is technically unbounded; walk the FAT chain
-        // until end and stop. We pass 0 for "until end of chain".
-        0);
+        static_cast<quint64>(m_header.numDirectorySectors) * sectorSize());
     if (dirData.isEmpty()) {
         m_lastError = "empty directory chain";
         return false;
@@ -219,8 +252,12 @@ bool OleCompoundFile::readMiniStream()
     const DirEntry& root = m_entries.first();
     if (root.streamSize == 0)
         return true;
+    if (root.streamSize > kMaxMiniStreamBytes) {
+        m_lastError = "CFB mini stream exceeds size limit";
+        return false;
+    }
     m_miniStream = readChain(root.startSector, root.streamSize);
-    return true;
+    return static_cast<quint64>(m_miniStream.size()) == root.streamSize;
 }
 
 QStringList OleCompoundFile::streamNames() const
@@ -273,16 +310,18 @@ QString OleCompoundFile::decodeMsiName(const QString& encoded)
 
     QString out;
     out.reserve(encoded.size() * 2);
-    for (QChar qc : encoded) {
+    for (qsizetype index = 0; index < encoded.size(); ++index) {
+        const QChar qc = encoded.at(index);
         const ushort cp = qc.unicode();
-        if (cp >= 0x3800 && cp < 0x4840) {
+        if (cp >= 0x3800 && cp < 0x4800) {
             const ushort v = cp - 0x3800;
             out.append(QChar::fromLatin1(kTable[v & 0x3F]));
             const ushort hi = (v >> 6) & 0x3F;
-            if (hi != 0)
-                out.append(QChar::fromLatin1(kTable[hi]));
-        } else if (cp == 0x4840) {
-            // MSI stream-name marker (vs. table-name) — drop silently.
+            out.append(QChar::fromLatin1(kTable[hi]));
+        } else if (cp >= 0x4800 && cp < 0x4840) {
+            out.append(QChar::fromLatin1(kTable[cp - 0x4800]));
+        } else if (cp == 0x4840 && index == 0) {
+            // The leading marker distinguishes tables from binary streams.
             continue;
         } else {
             // ASCII control chars (e.g. \005SummaryInformation) and
@@ -303,17 +342,50 @@ QStringList OleCompoundFile::msiStreamNames() const
     return out;
 }
 
-QByteArray OleCompoundFile::readMsiStream(const QString& decodedName) const
+QByteArray OleCompoundFile::readMsiStream(const QString& decodedName, qint64 maxBytes) const
 {
+    return readMsiEntry(decodedName, maxBytes, false);
+}
+
+QByteArray OleCompoundFile::readMsiTable(const QString& decodedName, qint64 maxBytes) const
+{
+    return readMsiEntry(decodedName, maxBytes, true);
+}
+
+QByteArray OleCompoundFile::readMsiEntry(const QString& decodedName, qint64 maxBytes, bool table) const
+{
+    const DirEntry* match = nullptr;
     for (const auto& e : m_entries) {
         if (e.type != EntryType::Stream) continue;
+        const bool isTable = !e.name.isEmpty() && e.name.front().unicode() == 0x4840;
+        if (isTable != table) continue;
         if (decodeMsiName(e.name) != decodedName) continue;
-        if (e.streamSize < m_header.miniStreamCutoff)
-            return readMiniChain(e.startSector, e.streamSize);
-        return readChain(e.startSector, e.streamSize);
+        if (match) {
+            m_lastError = "Duplicate MSI stream: " + decodedName;
+            return {};
+        }
+        match = &e;
     }
-    m_lastError = "MSI stream not found: " + decodedName;
-    return QByteArray();
+    if (!match) {
+        m_lastError = "MSI stream not found: " + decodedName;
+        return {};
+    }
+    if (match->streamSize == 0) {
+        return {};
+    }
+    if (match->streamSize > static_cast<quint64>(std::numeric_limits<int>::max())
+        || (maxBytes > 0 && match->streamSize > static_cast<quint64>(maxBytes))) {
+        m_lastError = "MSI stream exceeds size limit: " + decodedName;
+        return {};
+    }
+    QByteArray bytes = match->streamSize < m_header.miniStreamCutoff
+        ? readMiniChain(match->startSector, match->streamSize)
+        : readChain(match->startSector, match->streamSize);
+    if (static_cast<quint64>(bytes.size()) != match->streamSize) {
+        m_lastError = "Truncated MSI stream: " + decodedName;
+        return {};
+    }
+    return bytes;
 }
 
 QList<QPair<QString, QByteArray>> OleCompoundFile::readMsiStreamsByPrefixSuffix(
@@ -344,11 +416,18 @@ QByteArray OleCompoundFile::readSector(quint32 sectorIndex) const
 
 QByteArray OleCompoundFile::readChain(quint32 startSector, quint64 totalSize) const
 {
+    if (totalSize > static_cast<quint64>(m_file.size())
+        || totalSize > static_cast<quint64>(std::numeric_limits<int>::max())) {
+        m_lastError = "CFB chain size exceeds file or allocation limit";
+        return {};
+    }
     QByteArray out;
     out.reserve(static_cast<int>(totalSize > 0 ? totalSize : sectorSize()));
     quint32 sector = startSector;
     quint32 hops = 0;
-    const quint32 maxHops = static_cast<quint32>(m_fat.size()) + 4;
+    const quint64 maxHops = totalSize > 0
+        ? (totalSize + sectorSize() - 1) / sectorSize()
+        : std::min(static_cast<quint64>(m_fat.size()), kMaxDirectoryBytes / sectorSize());
     while (sector != kFatEndOfChain && sector != kFatFreeSector) {
         if (++hops > maxHops) {
             m_lastError = "FAT chain loop or runaway";
@@ -358,8 +437,17 @@ QByteArray OleCompoundFile::readChain(quint32 startSector, quint64 totalSize) co
             m_lastError = "FAT sector index out of range";
             return QByteArray();
         }
-        out.append(readSector(sector));
+        const QByteArray bytes = readSector(sector);
+        if (bytes.size() != sectorSize()) {
+            m_lastError = "Truncated CFB sector";
+            return {};
+        }
+        out.append(bytes);
         sector = m_fat.at(sector);
+    }
+    if (totalSize > 0 && static_cast<quint64>(out.size()) < totalSize) {
+        m_lastError = "CFB chain shorter than declared stream";
+        return {};
     }
     if (totalSize > 0 && static_cast<quint64>(out.size()) > totalSize)
         out.truncate(static_cast<int>(totalSize));
@@ -368,12 +456,16 @@ QByteArray OleCompoundFile::readChain(quint32 startSector, quint64 totalSize) co
 
 QByteArray OleCompoundFile::readMiniChain(quint32 startSector, quint64 totalSize) const
 {
+    if (totalSize > static_cast<quint64>(m_miniStream.size())) {
+        m_lastError = "CFB mini chain exceeds root stream size";
+        return {};
+    }
     QByteArray out;
     out.reserve(static_cast<int>(totalSize));
     quint32 sector = startSector;
     quint32 hops = 0;
-    const quint32 maxHops = static_cast<quint32>(m_miniFat.size()) + 4;
     const quint32 mss = miniSectorSize();
+    const quint64 maxHops = (totalSize + mss - 1) / mss;
     while (sector != kFatEndOfChain && sector != kFatFreeSector) {
         if (++hops > maxHops) {
             m_lastError = "mini-FAT chain loop or runaway";
@@ -390,6 +482,10 @@ QByteArray OleCompoundFile::readMiniChain(quint32 startSector, quint64 totalSize
         }
         out.append(m_miniStream.constData() + offset, mss);
         sector = m_miniFat.at(sector);
+    }
+    if (static_cast<quint64>(out.size()) < totalSize) {
+        m_lastError = "CFB mini chain shorter than declared stream";
+        return {};
     }
     if (out.size() > static_cast<int>(totalSize))
         out.truncate(static_cast<int>(totalSize));
