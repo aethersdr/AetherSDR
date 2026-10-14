@@ -8,6 +8,7 @@
 #include <QJsonObject>
 #include <QJsonValue>
 #include <QThread>
+#include <QVersionNumber>
 
 #include "core/AppSettings.h"
 #include "core/FirmwareCurrency.h"  // publishedVersionIsStale() — the one freshness rule
@@ -129,6 +130,47 @@ FlexBackend::~FlexBackend()
 void FlexBackend::setCommandSink(std::function<void(const QString&)> sink)
 {
     m_sink = std::move(sink);
+}
+
+void FlexBackend::setFirmwareVersionProvider(std::function<QString()> provider)
+{
+    m_firmwareVersionProvider = std::move(provider);
+}
+
+ReceiveDispatch FlexBackend::requestRadioNickname(const QString& nickname)
+{
+    if (!m_sink) {
+        return ReceiveDispatch::Unsupported;
+    }
+    // FlexLib Nickname uses StringHelper.Sanitize: drop unsupported characters,
+    // including spaces; sanitized-empty input selects the clear operation.
+    QString sanitized;
+    sanitized.reserve(nickname.size());
+    for (const QChar ch : nickname) {
+        if ((ch >= QLatin1Char('a') && ch <= QLatin1Char('z'))
+            || (ch >= QLatin1Char('A') && ch <= QLatin1Char('Z'))
+            || (ch >= QLatin1Char('0') && ch <= QLatin1Char('9'))
+            || ch == QLatin1Char('.') || ch == QLatin1Char(',')
+            || ch == QLatin1Char('/') || ch == QLatin1Char('-')) {
+            sanitized.append(ch);
+        }
+    }
+    if (sanitized.isEmpty()) {
+        const QString versionText = m_firmwareVersionProvider
+            ? m_firmwareVersionProvider() : QString();
+        qsizetype suffixIndex = 0;
+        const QVersionNumber version = QVersionNumber::fromString(versionText, &suffixIndex);
+        // Older firmware interprets an empty name argument as a query, not a clear.
+        if (suffixIndex != versionText.size() || version < QVersionNumber(4, 3)) {
+            qCWarning(lcProtocol) << "FlexBackend: nickname clear refused:"
+                                 << "firmware 4.3 or later is required";
+            return ReceiveDispatch::Unsupported;
+        }
+        send(QStringLiteral("radio clear_name"));
+    } else {
+        send(QStringLiteral("radio name ") + sanitized);
+    }
+    return ReceiveDispatch::Dispatched;
 }
 
 void FlexBackend::setTxCommandSink(std::function<void(const QString&, const TxCoordinator::Command&)> sink)

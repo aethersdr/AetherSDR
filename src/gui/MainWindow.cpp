@@ -1806,15 +1806,11 @@ MainWindow::MainWindow(QWidget* parent)
             m_radioVersionLabel->setText(statusBarVersionText(
                 m_radioModel.versionLabel(), m_radioModel.version()));
         refreshRadioIdentityLabels();
-        // The station/nickname label is set once in onConnectionStateChanged, but
-        // the nickname can land afterwards via a radio-status delta — for a real
-        // radio the async "info" reply corrects it, and for the demo SimBackend
-        // emits radioChanged ~150ms post-connect, so the box would otherwise stay
-        // stale/blank. Refresh it here on the same late-arrival path. (main's
-        // stale-nickname fix + RFC #4288's empty-demo-box fix — same handler.)
-        if (m_stationLabel && !m_radioModel.nickname().isEmpty()) {
-            if (setStatusBarStationText(m_stationLabel, m_radioModel.nickname()))
+        // Radio-authoritative identity includes an explicitly cleared nickname.
+        if (m_stationLabel) {
+            if (setStatusBarStationText(m_stationLabel, m_radioModel.nickname())) {
                 updateStatusBarMinimumWidth();
+            }
         }
     });
 
@@ -2245,7 +2241,7 @@ MainWindow::MainWindow(QWidget* parent)
 
         // Update station label (nickname arrives via status after connect)
         const QString nick = m_radioModel.nickname();
-        if (!nick.isEmpty() && setStatusBarStationText(m_stationLabel, nick)) {
+        if (setStatusBarStationText(m_stationLabel, nick)) {
             updateStatusBarMinimumWidth();
         }
     });

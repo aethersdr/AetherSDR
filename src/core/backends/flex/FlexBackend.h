@@ -57,6 +57,7 @@ public:
     // where RadioModel lives — capabilities() is not thread-safe (no off-thread
     // caller exists yet; this documents the assumption).
     void setModelProvider(std::function<QString()> provider);
+    void setFirmwareVersionProvider(std::function<QString()> provider);
     void setIndependentTxSequenceProvider(std::function<quint32()> sequence);
     IndependentTxControl independentTxControl() const override;
     bool independentTxReady() const override;
@@ -76,6 +77,7 @@ public:
     void connectRadio(const RadioConnectRequest& request) override;
     void disconnectRadio() override;
     bool isConnected() const override;
+    ReceiveDispatch requestRadioNickname(const QString& nickname) override;
     ReceiveDispatch requestSliceControl(int sliceId, const SliceControlRequest& request) override;
     ReceiveDispatch requestTransmitControl(const TransmitControlRequest& request,
         TunePowerContext context = TunePowerContext::Deferred) override;
@@ -214,6 +216,7 @@ private:
     std::function<void(const QString&, const TxCoordinator::Command&)> m_txSink;
     std::function<void(const QString&)> m_sliceSink;
     std::function<QString()> m_modelProvider;
+    std::function<QString()> m_firmwareVersionProvider;
     std::function<quint32()> m_sequenceProvider;
 
     // Decode-side handle state (#4198). Captured from the amplifier/tgxl status

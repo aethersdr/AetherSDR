@@ -3868,6 +3868,34 @@ add_test(NAME radio_setup_headphone_output_gate_test COMMAND radio_setup_headpho
 set_tests_properties(radio_setup_headphone_output_gate_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
 
+# Socket-free Flex nickname encoding and production Radio Setup editing.
+add_executable(radio_nickname_test
+    tests/radio_nickname_test.cpp
+    src/gui/CanonWindow.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/FirmwareReleasesDialog.cpp
+    src/gui/RadioSetupDialog.cpp
+    src/gui/RtlReceiverSettingsWidget.cpp
+    src/gui/ControlAvailabilityRegistry.cpp
+    src/gui/RadioSetupDialog_Peripherals.cpp
+    src/gui/PersistentDialog.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+    src/gui/SliceColorManager.cpp
+    src/gui/KiwiPublicReceiverPicker.cpp
+    src/gui/GuardedSlider.h
+    ${THEME_TEST_RESOURCES}
+)
+# MainWindow's status-bar consumers have no socket-free construction seam.
+target_compile_definitions(radio_nickname_test PRIVATE
+    AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+target_include_directories(radio_nickname_test PRIVATE src tests)
+target_link_libraries(radio_nickname_test PRIVATE
+    aetherdesktop_support Qt6::Widgets Qt6::Test)
+add_test(NAME radio_nickname_test COMMAND radio_nickname_test)
+set_tests_properties(radio_nickname_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
+
 # Radio Setup's Show TX in Waterfall button on the production dialog: a click
 # sets the model where the backend declares the client owns the flag (HL2) and
 # sends the wire text everywhere else. Real backends, never connected; no socket.
@@ -8610,6 +8638,7 @@ set(AETHER_SETTINGS_CONSUMERS
     atu_seam_gate_test
     transmit_seam_drop_notice_test
     model_control_routing_test
+    radio_nickname_test
     pan_display_drop_notice_test
     backend_capability_revision_test
     icom_panadapter_capacity_test

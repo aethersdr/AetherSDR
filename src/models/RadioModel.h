@@ -242,6 +242,7 @@ public:
     // sending `radio callsign` so the radio's own copy stays in step.
     void setStationCallsign(const QString& callsign);
     QString nickname()     const { return m_nickname; }
+    ReceiveDispatch requestRadioNickname(const QString& nickname);
     QString region()       const { return m_region; }
     int     rttyMarkDefault() const { return m_rttyMarkDefault; }
     QString radioOptions() const { return m_radioOptions; }
@@ -1779,6 +1780,7 @@ public:
 
 private:
     friend class RadioModelSliceLifecycleTestAccess;
+    friend class RadioNicknameTestAccess;
     friend class TxOperationIntegrationTestAccess;
     friend class RerouteDeadControlsTestAccess;
     void expirePendingCallbacks(const QString& reason);
