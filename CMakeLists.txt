@@ -1016,6 +1016,8 @@ set(CORE_SOURCES
     src/core/RigctlProtocol.cpp
     src/core/ByteRelay.cpp
     src/core/TcpByteProxy.cpp
+    src/core/RigExpertHidTransport.cpp
+    src/models/AntennaAnalyzerModel.cpp
     src/core/Ctr2HidFraming.cpp
     src/core/Ctr2HidPort.cpp
     src/core/Ctr2HidThreadPort.cpp
@@ -1356,6 +1358,7 @@ set(GUI_SOURCES
     src/gui/RadeApplet.cpp
     src/gui/HealthApplet.cpp
     src/gui/PersistentDialog.cpp
+    src/gui/AetherLabWindow.cpp
     src/gui/CanonWindow.cpp
     src/gui/CanonSurface.cpp
     src/gui/PanadapterHeader.cpp

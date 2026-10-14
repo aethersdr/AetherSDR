@@ -6,6 +6,7 @@
 // at its original constructor position.
 
 #include "MainWindow.h"
+#include "models/AntennaAnalyzerModel.h"
 #include "MeterApplet.h"
 
 #include "AetherialAudioStrip.h"
@@ -2988,6 +2989,9 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
             };
         }
         return tciServer()->routingSnapshot();
+    });
+    m_automation->setLabHandler([this](const QString& action, const QString& value) {
+        return antennaAnalyzerModel()->automation(action, value);
     });
     m_automation->setDeviceDiagnosticsHandler([this](const QString& diagnostic) {
         if (diagnostic != QLatin1String("ulanzi")

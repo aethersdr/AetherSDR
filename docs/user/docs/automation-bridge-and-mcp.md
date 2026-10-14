@@ -16,6 +16,10 @@ The automation bridge is an opt-in, local command channel into a running AetherS
 
 It is mainly a developer and testing tool, but it is also a supported way for your own control-surface or automation software to drive AetherSDR. The full reference, including every verb, is [docs/automation-bridge.md](https://github.com/aethersdr/AetherSDR/blob/main/docs/automation-bridge.md).
 
+AetherLab analyzer bring-up is available through the `lab` verb and the MCP
+`bridge_command` tool. Analyzer acquisition uses a separate explicit RF
+permission; see [AetherLab](./aetherlab.md).
+
 ## Requirements
 
 - A client on the same computer. The bridge listens on a local socket (a Unix domain socket on macOS and Linux, a named pipe on Windows). There is **no TCP port** and no network exposure.
@@ -36,7 +40,7 @@ Open **Settings → Radio Setup... → Network** and find the **Advanced** group
 | **Agent Automation (MCP):** Enabled / Disabled | Starts or stops the bridge. Off by default. Enabling it with no token creates one. The setting is saved, so the bridge comes back at the next launch. |
 | **Access Token:** with **Copy** and **Rotate** | The shared secret clients must present. **Rotate** creates a new token and applies it immediately, locking out any client still using the old one. |
 | **Allow TX via MCP:** "Enable transmit control" | Lets bridge clients key the transmitter. Off by default; turning it on asks for a one-time confirmation. |
-| **Observe only:** "Read-only (block all driving)" | Blocks every action that changes anything; reads still work. |
+| **Observe only:** "Read-only (block all driving)" | Blocks driving actions; reads and AetherLab stop/disconnect remain available. |
 
 You can also start the bridge for a single run by launching with `AETHER_AUTOMATION=1`. In that case the Enabled/Disabled button is grayed out, because the environment variable wins.
 

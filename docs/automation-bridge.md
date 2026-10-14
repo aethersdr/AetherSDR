@@ -4634,6 +4634,27 @@ Every failure is a one-line object: `{"ok":false,"error":"<message>"}` — e.g.
 
 ---
 
+## Stick Pro analyzer bring-up
+
+`lab status|devices|connect <index>|sweep <startHz> <stopHz> <intervals> isolated|stop|disconnect`
+controls the independent AetherLab USB proof of concept (RFC #6471). `status`
+returns identity, all accepted raw/derived samples, count hypothesis, terminal
+state and the last 128 HID reports. `devices` explicitly scans normal-mode
+Stick Pro interfaces. `connect` queries VER/FULLINFO and never starts RF.
+
+Acquisition requires `AETHER_AUTOMATION_ALLOW_LAB_RF=1` on the app process and
+an explicit `isolated` token. This permission is separate from radio TX.
+Generic invoke/pointer/coordinate automation refuses the Sweep button; use the typed `lab sweep` request. Status, device enumeration and
+stop/disconnect work in observe-only mode; connect and sweep are blocked.
+Every acquisition attempts `off` and closes USB; reconnect explicitly for the
+next sweep. RF-off and station TX interlock remain unproven/unimplemented.
+
+Through MCP, use `bridge_command` with e.g.
+`{"request":{"cmd":"lab","action":"status"}}` or
+`{"request":{"cmd":"lab","action":"sweep","value":"14000000 14350000 200 isolated"}}`.
+The app must be connected to the instrument on the MCP server's host.
+See [the implementation and qualification guide](./rigexpert-usb-poc.md).
+
 ## Targeting a widget
 
 `grab` and `invoke` resolve a `target` string in this order. Within each match
@@ -4810,7 +4831,7 @@ code changes RX audio or keys TX. Physical-radio persistence validation is
 still a separate radiocert task.
 
 <!-- BEGIN GENERATED VERB TABLE (tools/gen_bridge_docs.py) -->
-<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 79 verbs. -->
+<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 80 verbs. -->
 
 | Verb | Aliases | Description |
 |---|---|---|
@@ -4865,6 +4886,7 @@ still a separate radiocert task.
 | `panmessage` | — | panmessage <add\|remove\|clear\|list> <pan> [id timeout [tone=…] title\|detail] |
 | `dss` | — | dss <snapshot\|reset\|inject\|scrollback\|live> [pan] [args] |
 | `streams` | — | streams [radio\|inventory\|resync\|refresh\|reset] — stream diagnostics |
+| `lab` | — | lab <status\|devices\|connect index\|sweep startHz stopHz intervals isolated\|stop\|disconnect> — Stick Pro USB PoC (RF requires AETHER_AUTOMATION_ALLOW_LAB_RF=1) |
 | `devices` | — | devices <list\|ulanzi\|ulanzi-start\|ulanzi-stop> — external-device diagnostics and lifecycle control |
 | `modem` | `aethermodem` | modem <status\|profile hf300\|profile vhf1200\|on\|off\|preamble <flags\|auto>\|digi [status\|on\|off\|beacon]> — AetherModem demod profile, TXDELAY, RX tap, WIDE1-1 fill-in digipeater, and decoder health |
 | `link` | `ax25` | link <status\|connect <call> [via <digi>]\|disconnect\|mycall <call>\|listen <call>\|alias <call>\|pms on\|off> — connected-mode AX.25 terminal + mailbox, with measured RTT vs configured T1 |

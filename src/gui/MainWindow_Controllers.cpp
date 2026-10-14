@@ -5,6 +5,8 @@
 // is in MainWindow.cpp.
 
 #include "MainWindow.h"
+#include "AetherLabWindow.h"
+#include "models/AntennaAnalyzerModel.h"
 
 #include "FlexControlDialog.h"
 #include "MainWindowHelpers.h"
@@ -3399,6 +3401,22 @@ void MainWindow::wireExternalControllers()
         });
     }
 #endif
+}
+
+AntennaAnalyzerModel* MainWindow::antennaAnalyzerModel()
+{
+    if (!m_antennaAnalyzer) { m_antennaAnalyzer = new AntennaAnalyzerModel(this); }
+    return m_antennaAnalyzer;
+}
+
+void MainWindow::showAetherLab()
+{
+    if (!m_aetherLabWindow) {
+        m_aetherLabWindow = new AetherLabWindow(antennaAnalyzerModel(), this);
+    }
+    m_aetherLabWindow->show();
+    m_aetherLabWindow->raise();
+    m_aetherLabWindow->activateWindow();
 }
 
 } // namespace AetherSDR

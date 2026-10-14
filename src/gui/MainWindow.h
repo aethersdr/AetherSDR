@@ -132,6 +132,8 @@ enum class RadioSliceSelectionSource;
 class AetherClockApplet;
 class AetherClockEngine;
 class AetherClockModel;
+class AntennaAnalyzerModel;
+class AetherLabWindow;
 class AutomationServer;
 class CanonWindow;
 class ConnectionPanel;
@@ -1103,6 +1105,8 @@ private:
     void stopDigitalVoiceService(bool waitForExit);
     void showPskReporterMapDialog();
     void startKissTncOnStartupIfConfigured();
+    AntennaAnalyzerModel* antennaAnalyzerModel();
+    void showAetherLab();
     void showFlexControlDialog();
     void handleFlexControlTuneSteps(int steps);
     void handleFlexControlButton(int button, int action);
@@ -1560,6 +1564,8 @@ private:
 #endif
 
     // GUI — left sidebar
+    AntennaAnalyzerModel* m_antennaAnalyzer{nullptr};
+    AetherLabWindow* m_aetherLabWindow{nullptr};
     ConnectionPanel* m_connPanel{nullptr};
 
     // GUI — main area
