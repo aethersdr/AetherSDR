@@ -44,7 +44,7 @@ std::optional<QList<QByteArray>>& keysOverride()
 
 } // namespace
 
-const char* const EspFirmwareCatalog::kCatalogUrl = "https://aethersdr.com/firmware/catalog.json";
+const char* const EspFirmwareCatalog::kCatalogUrl = "https://www.aethersdr.com/firmware/catalog.json";
 
 QUrl EspFirmwareCatalog::catalogUrl()
 {

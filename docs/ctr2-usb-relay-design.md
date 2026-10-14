@@ -398,7 +398,7 @@ simulated device that runs the reference for its side of the link.
 The CTR2 Proxy applet's **Install** button opens the CTR2-Max Firmware window
 (`FirmwareInstallDialog`). It installs AetherCTR2 beside the CTR2-Max's stock
 firmware, from releases listed in AetherSDR's firmware catalog
-(`EspFirmwareCatalog`, `https://aethersdr.com/firmware/catalog.json`; for
+(`EspFirmwareCatalog`, `https://www.aethersdr.com/firmware/catalog.json`; for
 testing, `AETHER_FIRMWARE_CATALOG` points elsewhere).
 
 - **Trust.** Each release is a manifest (`EspFirmwareManifest`) with an
