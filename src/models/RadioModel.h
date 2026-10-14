@@ -830,6 +830,9 @@ public:
                                      QString* error = nullptr);
     bool automationRemoveSliceFixture(int sliceId,
                                       QString* error = nullptr);
+    // Isolated production reconciliation; creates no RadioModel or transport.
+    static QJsonObject automationInterlockProbe(const QString& source,
+                                               bool voxEnabled, bool txOwnedByUs);
     bool automationApplyGpsFixture(const GpsDelta& delta,
                                    const QString& referenceState,
                                    const QString& referenceSetting,

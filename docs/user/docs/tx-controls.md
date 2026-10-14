@@ -189,6 +189,13 @@ shares it with every client connected to it. With several clients connected
 hardware PTT is pressed is also the transmitting client. On firmware before
 v4.3 the control is grayed out.
 
+On SmartSDR v4.3, the radio can report several held PTT sources at once.
+AetherSDR keeps its TX meters and local audio gate in the transmit state
+while the radio confirms your hardware PTT transmission, including when VOX
+is also active. VOX reconciliation requires VOX to be enabled.
+Another client's transmission does not open your local TX audio gate.
+These status reports do not start a transmission or send a PTT command.
+
 ### Transmit timer
 
 While you transmit, a green `M:SS` timer (`H:MM:SS` after an hour) appears in

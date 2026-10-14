@@ -1946,6 +1946,93 @@ void RadioModel::evaluateTxFilterAudioLoss(float scFilt1, float scFilt2)
 }
 
 
+namespace {
+
+// Shared by live interlock status and the isolated automation diagnostic.
+// Only reconciles observed state; this function never issues a TX intent.
+void reconcileInterlockTx(TransmitModel& transmit, bool& audioGate, bool& cwxActive,
+                         const QString& state, bool keepLocalTx,
+                         const std::function<void(bool)>& publishAudioGate)
+{
+    if (!keepLocalTx) {
+        transmit.setTransmitting(false);
+        if (audioGate) {
+            audioGate = false;
+            publishAudioGate(false);
+        }
+    } else if (state == QStringLiteral("TRANSMITTING")) {
+        transmit.setTransmitting(true);
+        if (!audioGate) {
+            audioGate = true;
+            publishAudioGate(true);
+        }
+    } else {
+        const bool transitioningToTx =
+            state.contains(QStringLiteral("REQUESTED")) || state.contains(QStringLiteral("DELAY"));
+        if (!transitioningToTx) {
+            transmit.setTransmitting(false);
+            cwxActive = false;
+        }
+        if (!transitioningToTx && audioGate) {
+            audioGate = false;
+            publishAudioGate(false);
+        }
+    }
+}
+
+} // namespace
+
+QJsonObject RadioModel::automationInterlockProbe(const QString& source,
+                                                bool voxEnabled, bool txOwnedByUs)
+{
+    QJsonArray snapshots;
+    QJsonArray meterEdges;
+    QJsonArray audioEdges;
+    QJsonArray commands;
+    QJsonArray keyingIntents;
+    bool audioGate = false;
+    bool cwxActive = false;
+    // TransmitModel has no hardware, settings, backend or transport. In
+    // particular, do not construct a RadioModel here: it discovers devices.
+    TransmitModel transmit;
+    TransmitDelta delta;
+    delta.voxEnable = voxEnabled;
+    transmit.applyChanges(delta);
+    QObject::connect(&transmit, &TransmitModel::transmittingChanged, &transmit,
+                     [&](bool on) { meterEdges.append(on); });
+    QObject::connect(&transmit, &TransmitModel::commandReady, &transmit,
+                     [&](const QString& command) { commands.append(command); });
+    QObject::connect(&transmit, &TransmitModel::moxCommandIssued, &transmit,
+                     [&](bool on) { keyingIntents.append(QStringLiteral("mox:%1").arg(on)); });
+    QObject::connect(&transmit, &TransmitModel::tuneCommandIssued, &transmit,
+                     [&](bool on) { keyingIntents.append(QStringLiteral("tune:%1").arg(on)); });
+    QObject::connect(&transmit, &TransmitModel::atuCommandIssued, &transmit,
+                     [&](bool on) { keyingIntents.append(QStringLiteral("atu:%1").arg(on)); });
+    QObject::connect(&transmit, &TransmitModel::controlRequested, &transmit,
+                     [&](const TransmitControlRequest&) { keyingIntents.append(QStringLiteral("control")); });
+    const auto step = [&](const QString& phase, const QString& state, const QString& sources) {
+        const bool keepLocalTx = RadioStatusOwnership::interlockKeepsLocalTxOn(
+            txOwnedByUs, false, false, cwxActive, false, sources, transmit.voxEnable());
+        reconcileInterlockTx(transmit, audioGate, cwxActive, state, keepLocalTx,
+                             [&](bool on) { audioEdges.append(on); });
+        snapshots.append(QJsonObject{{QStringLiteral("phase"), phase},
+            {QStringLiteral("state"), state}, {QStringLiteral("source"), sources},
+            {QStringLiteral("transmitting"), transmit.isTransmitting()},
+            {QStringLiteral("txAudioGate"), audioGate}});
+    };
+    step(QStringLiteral("requested"), QStringLiteral("PTT_REQUESTED"), source);
+    step(QStringLiteral("transmitting"), QStringLiteral("TRANSMITTING"), source);
+    step(QStringLiteral("voxOnly"), QStringLiteral("TRANSMITTING"), QStringLiteral("VOX"));
+    step(QStringLiteral("emptySource"), QStringLiteral("TRANSMITTING"), QString());
+    step(QStringLiteral("ready"), QStringLiteral("READY"), QString());
+    return {{QStringLiteral("ok"), true},
+        {QStringLiteral("scope"), QStringLiteral("isolated-production-reconciliation")},
+        {QStringLiteral("source"), source}, {QStringLiteral("voxEnabled"), voxEnabled},
+        {QStringLiteral("txOwnedByUs"), txOwnedByUs}, {QStringLiteral("snapshots"), snapshots},
+        {QStringLiteral("transmittingEdges"), meterEdges}, {QStringLiteral("audioGateEdges"), audioEdges},
+        {QStringLiteral("commands"), commands}, {QStringLiteral("keyingIntents"), keyingIntents}};
+}
+
 RadioModel::RadioModel(QObject* parent)
     : QObject(parent)
     , m_txCoordinator([this](const TxCoordinator::Operation& operation,
@@ -11724,11 +11811,11 @@ void RadioModel::onStatusReceived(const QString& object,
         // Parse interlock timing fields into TransmitModel (#498)
         if (m_flexBackend) m_flexBackend->decodeInterlockStatus(kvs);
 
-        // Track PTT source (#2373). The radio reports source=SW for software
-        // MOX/CAT/xmit, and source=MIC|ACC|RCA for hardware-keyed PTT (mic
-        // PTT line, footswitch via ACC, RCA TXREQ). Field is not always
-        // present on every interlock status update, so persist the last
-        // seen value. Matches FlexLib v4.2.18 ParsePTTSource (Radio.cs:7932).
+        // FlexLib 4.3.16 reports all latched PTT sources as a comma-separated
+        // list, hardware first. VOX has its own token; older firmware uses SW.
+        // Interlock fields are deltas: retain the list when source is absent.
+        // An empty source= replaces it; terminal states below also clear it.
+        // Reconciliation reads tokens without turning status into TX intent.
         if (kvs.contains("source")) {
             m_lastInterlockSource = kvs["source"].toUpper();
         }
@@ -11747,39 +11834,11 @@ void RadioModel::onStatusReceived(const QString& object,
             // (#3861). SW source still requires m_txRequested, so a stale TRANSMITTING after
             // setTransmit(false) falls through to the force-off branch. See
             // RadioStatusOwnership::interlockKeepsLocalTxOn.
-            if (!RadioStatusOwnership::interlockKeepsLocalTxOn(
-                    m_txOwnedByUs, m_txRequested, m_cwKeyActive, m_cwxActive,
-                    m_transmitModel.isTuning(), m_lastInterlockSource,
-                    m_transmitModel.voxEnable())) {
-                // Another client owns TX, or local unkey requested:
-                // force local TX/audio gate off through all interlock states.
-                m_transmitModel.setTransmitting(false);
-                if (m_txAudioGate) {
-                    m_txAudioGate = false;
-                    emit txAudioGateChanged(false);
-                }
-            } else if (state == "TRANSMITTING") {
-                // Radio confirms RF is keyed.
-                m_transmitModel.setTransmitting(true);
-                if (!m_txAudioGate) {
-                    m_txAudioGate = true;
-                    emit txAudioGateChanged(true);
-                }
-            } else {
-                // Local key requested but radio is still in pre-TX transition
-                // (e.g. PTT/TX delay). Keep optimistic TX-on gating for
-                // modem/PTT edge alignment.
-                const bool transitioningToTx =
-                    state.contains("REQUESTED") || state.contains("DELAY");
-                if (!transitioningToTx) {
-                    m_transmitModel.setTransmitting(false);
-                    m_cwxActive = false; // CWX send complete (#2097)
-                }
-                if (!transitioningToTx && m_txAudioGate) {
-                    m_txAudioGate = false;
-                    emit txAudioGateChanged(false);
-                }
-            }
+            const bool keepLocalTx = RadioStatusOwnership::interlockKeepsLocalTxOn(
+                m_txOwnedByUs, m_txRequested, m_cwKeyActive, m_cwxActive,
+                m_transmitModel.isTuning(), m_lastInterlockSource, m_transmitModel.voxEnable());
+            reconcileInterlockTx(m_transmitModel, m_txAudioGate, m_cwxActive, state, keepLocalTx,
+                                 [this](bool on) { emit txAudioGateChanged(on); });
 
             // Clear persisted PTT source once interlock confirms we're fully
             // out of TX, so a stale hardware-PTT source can't outlive the

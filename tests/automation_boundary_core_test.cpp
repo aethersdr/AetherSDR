@@ -111,6 +111,59 @@ QJsonObject tuneWithId(const QJsonValue& id)
     return request;
 }
 
+void interlockProbe()
+{
+    AutomationServer server;
+    for (const QString& source : {QStringLiteral("MIC"), QStringLiteral("MIC,VOX"),
+                                  QStringLiteral("VOX,MIC"), QStringLiteral("SW,RCA")}) {
+        const QJsonObject reply = Access::request(server,
+            QStringLiteral("interlock probe source=%1").arg(source).toUtf8());
+        const QJsonArray samples = reply.value(QStringLiteral("snapshots")).toArray();
+        check(ok(reply) && samples.size() == 5
+                  && !samples.at(0).toObject().value(QStringLiteral("transmitting")).toBool()
+                  && samples.at(1).toObject().value(QStringLiteral("transmitting")).toBool()
+                  && samples.at(1).toObject().value(QStringLiteral("txAudioGate")).toBool()
+                  && !samples.at(2).toObject().value(QStringLiteral("transmitting")).toBool()
+                  && !samples.at(4).toObject().value(QStringLiteral("txAudioGate")).toBool(),
+              "isolated bridge probe runs production hardware reconciliation and release", reply);
+        check(reply.value(QStringLiteral("commands")).toArray().isEmpty()
+                  && reply.value(QStringLiteral("keyingIntents")).toArray().isEmpty(),
+              "probe observes no command or keying intent", reply);
+    }
+    for (const QByteArray& invalid : {QByteArray("interlock"), QByteArray("interlock fixture"),
+            QByteArray("interlock probe"), QByteArray("interlock probe source=MIC source=RCA"),
+            QByteArray("interlock probe source=MIC vox=2"), QByteArray("interlock probe source=MIC owner=us"),
+            QByteArray("interlock probe source=MIC unknown=1"), QByteArray("interlock probe source=MIC;VOX"),
+            QByteArray("interlock probe source=MIC bogus"), QByteArray("interlock probe source=MIC\tVOX"),
+            QByteArray("interlock probe source=") + QByteArray(129, 'M')}) {
+        check(!ok(Access::request(server, invalid)), "malformed probe options fail closed");
+    }
+    const QJsonObject unknown = Access::request(server, QByteArray("interlock probe source=MICROPHONE,RCAX"));
+    check(ok(unknown) && !unknown.value(QStringLiteral("snapshots")).toArray().at(1).toObject()
+              .value(QStringLiteral("transmitting")).toBool(),
+          "unknown substring sources cannot reconcile local TX", unknown);
+    const QJsonObject vox = Access::request(server, QJsonObject{
+        {QStringLiteral("cmd"), QStringLiteral("interlock")}, {QStringLiteral("action"), QStringLiteral("probe")},
+        {QStringLiteral("value"), QStringLiteral("source=VOX vox=1")}});
+    check(ok(vox) && vox.value(QStringLiteral("snapshots")).toArray().at(1).toObject()
+              .value(QStringLiteral("transmitting")).toBool(),
+          "JSON probe preserves enabled legacy VOX reconciliation", vox);
+    const QJsonObject foreign = Access::request(server, QByteArray("interlock probe source=MIC,VOX vox=1 owner=other"));
+    check(ok(foreign) && !foreign.value(QStringLiteral("snapshots")).toArray().at(1).toObject()
+              .value(QStringLiteral("txAudioGate")).toBool(),
+          "foreign ownership wins in isolated probe", foreign);
+    const QJsonObject empty = Access::request(server, QByteArray("interlock probe source="));
+    check(ok(empty) && !empty.value(QStringLiteral("snapshots")).toArray().at(1).toObject()
+              .value(QStringLiteral("transmitting")).toBool(),
+          "explicit empty source is supported without TX intent", empty);
+    RadioModel live;
+    live.transmitModel().setTransmitting(true);
+    server.setRadioModel(&live);
+    Access::request(server, QByteArray("interlock probe source=MIC,VOX"));
+    check(live.transmitModel().isTransmitting() && !live.isRadioTransmitting(),
+          "probe never touches the bridge's attached model");
+}
+
 void jsonIdAndMhzContract()
 {
     RadioModel radio;
@@ -511,6 +564,7 @@ int main(int argc, char** argv)
     }
     qunsetenv("AETHER_AUTOMATION_ALLOW_TX");
     QCoreApplication app(argc, argv);
+    interlockProbe();
     jsonIdAndMhzContract();
     memoryActivate();
     deferredConnectFailures();
