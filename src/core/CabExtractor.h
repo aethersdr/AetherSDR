@@ -22,10 +22,12 @@ public:
     bool extractAll(const QByteArray& cabBytes,
                     QList<QPair<QString, QByteArray>>& out);
 
-    // Convenience: extract every file and return the first whose
-    // payload begins with `magic`. Used by the firmware-update path
-    // to grab the .ssdr blob (magic="Salted__") and ignore the
-    // sibling driver/installer files in the same cab.
+    // Extract exactly one MSI File key, bounded by its recorded FileSize.
+    bool extractFile(const QByteArray& cabBytes, const QString& memberName,
+                     qint64 expectedSize, QByteArray& out);
+
+    // Convenience for archive inspection: return the first file whose
+    // payload begins with `magic`. Firmware selection uses extractFile().
     bool extractFirstMatchingMagic(const QByteArray& cabBytes,
                                    const QByteArray& magic,
                                    QByteArray& out);

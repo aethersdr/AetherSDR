@@ -1134,6 +1134,7 @@ set(CORE_SOURCES
     src/core/QsoWavFormat.cpp
     src/core/QsoWavPlayback.cpp
     src/core/FirmwareStager.cpp
+    src/core/MsiFirmwareMetadata.cpp
     src/core/UpdateChecker.cpp
     src/core/NetworkDiagnostics.cpp
     src/core/WindowsFirewall.cpp

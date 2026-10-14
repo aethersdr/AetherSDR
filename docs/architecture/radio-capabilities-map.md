@@ -185,8 +185,10 @@ because that is the only published list AetherSDR reads. A backend from another
 vendor must not simply declare a template: it needs its own lookup, and this
 record then needs a field naming which list it belongs to. The Flex declaration
 is unconditional across models, which assumes every Flex reports a version on
-the SmartSDR line. `FirmwareStager` routes the FLEX-9600 (RT-2122) to its own
-installer family, and no 9600 has been checked against the index.
+the SmartSDR line. Installer payload routing is separate: Microburst/DeepEddy
+use `FLEX-6x00`, BigBend uses the MSI's `FLEX-9600` entry, and DragonFire
+(RT-2122) has no verified public-installer mapping. No commercial radio has
+been checked against the index.
 
 | Backend | Declares | Why |
 |---|---|---|

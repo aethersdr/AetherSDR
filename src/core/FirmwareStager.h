@@ -76,7 +76,8 @@ public:
     QString stagedVersion()  const { return m_stagedVersion; }
     bool    isStaged()       const { return !m_stagedPath.isEmpty(); }
 
-    // Map radio model string to firmware model family
+    // Map the FlexLib hardware platform to its installer payload name.
+    // BigBend (8000/Aurora) uses "9600"; unverified platforms return empty.
     static QString modelToFamily(const QString& model);
 
     // Staging directory
@@ -98,14 +99,17 @@ signals:
     void stageFailed(const QString& error);
 
 private:
+    friend class FirmwareStagerTestAccess;
+
     void onInstallerDownloadProgress(qint64 received, qint64 total);
     void onInstallerDownloadFinished();
     void verifyAndExtract();
 
-    // Format-specific extractors. Both produce a .ssdr file at outPath and
-    // emit progress/failed signals on the way.
+    // Format-specific extractors emit progress/failed signals on the way.
     bool extractFromInnoSetup(const QByteArray& data, const QString& outPath);
-    bool extractFromMsi(const QString& msiPath, const QString& outPath);
+    // Preserve the MSI FileName and return its staged path after saving.
+    bool extractFromMsi(const QString& msiPath, const QString& outputDirectory,
+                        QString& extractedPath);
 
     // Returns true if the version uses the WiX MSI installer (v4.2+) instead
     // of the older InnoSetup .exe.

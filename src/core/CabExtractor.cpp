@@ -8,6 +8,7 @@ extern "C" {
 #include <cstdarg>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 
 namespace AetherSDR {
 
@@ -19,6 +20,7 @@ struct MemFile {
     const QByteArray* readBuf{nullptr};   // non-null when this file is input
     QByteArray*       writeBuf{nullptr};  // non-null when this file is output
     qint64            offset{0};
+    qint64            maxBytes{0};
 };
 
 // Our mspack_system extension. mspack_system is the first member so a
@@ -27,6 +29,7 @@ struct MemSystem {
     mspack_system base;
     const QByteArray* cabSource{nullptr};  // cab input, set before open()
     QByteArray*       payloadSink{nullptr}; // payload output, set before extract()
+    qint64            maxOutputBytes{0};
 };
 
 // ─── mspack_system callbacks ────────────────────────────────────────────────
@@ -47,6 +50,7 @@ mspack_file* mem_open(mspack_system* self, const char* /*filename*/, int mode)
             return nullptr;
         }
         mf->writeBuf = sys->payloadSink;
+        mf->maxBytes = sys->maxOutputBytes;
     } else {
         // We don't support UPDATE or APPEND — cab extraction never asks for them.
         delete mf;
@@ -77,6 +81,9 @@ int mem_write(mspack_file* file, void* buffer, int bytes)
     auto* mf = reinterpret_cast<MemFile*>(file);
     if (!mf->writeBuf) return -1;
     if (bytes <= 0) return 0;
+    if (mf->maxBytes > 0 && bytes > mf->maxBytes - mf->writeBuf->size()) {
+        return -1;
+    }
     mf->writeBuf->append(static_cast<const char*>(buffer), bytes);
     mf->offset += bytes;
     return bytes;
@@ -129,6 +136,23 @@ void mem_copy(void* src, void* dest, size_t bytes)
     std::memcpy(dest, src, bytes);
 }
 
+MemSystem memorySystem(const QByteArray& source)
+{
+    MemSystem sys{};
+    sys.base.open = &mem_open;
+    sys.base.close = &mem_close;
+    sys.base.read = &mem_read;
+    sys.base.write = &mem_write;
+    sys.base.seek = &mem_seek;
+    sys.base.tell = &mem_tell;
+    sys.base.message = &mem_message;
+    sys.base.alloc = &mem_alloc;
+    sys.base.free = &mem_free;
+    sys.base.copy = &mem_copy;
+    sys.cabSource = &source;
+    return sys;
+}
+
 } // anonymous namespace
 
 bool CabExtractor::extractAll(const QByteArray& cabBytes,
@@ -140,18 +164,7 @@ bool CabExtractor::extractAll(const QByteArray& cabBytes,
         return false;
     }
 
-    MemSystem sys{};
-    sys.base.open    = &mem_open;
-    sys.base.close   = &mem_close;
-    sys.base.read    = &mem_read;
-    sys.base.write   = &mem_write;
-    sys.base.seek    = &mem_seek;
-    sys.base.tell    = &mem_tell;
-    sys.base.message = &mem_message;
-    sys.base.alloc   = &mem_alloc;
-    sys.base.free    = &mem_free;
-    sys.base.copy    = &mem_copy;
-    sys.cabSource    = &cabBytes;
+    MemSystem sys = memorySystem(cabBytes);
     // sys.payloadSink is rebound per-file inside the loop below.
 
     auto* cabd = mspack_create_cab_decompressor(&sys.base);
@@ -193,6 +206,57 @@ bool CabExtractor::extractAll(const QByteArray& cabBytes,
 
     cabd->close(cabd, cab);
     mspack_destroy_cab_decompressor(cabd);
+    return true;
+}
+
+bool CabExtractor::extractFile(const QByteArray& cabBytes, const QString& memberName,
+                              qint64 expectedSize, QByteArray& out)
+{
+    out.clear();
+    m_lastError.clear();
+    if (cabBytes.isEmpty() || memberName.isEmpty() || expectedSize <= 0
+        || expectedSize > 500LL * 1024LL * 1024LL) {
+        m_lastError = "Invalid firmware cabinet request";
+        return false;
+    }
+    MemSystem sys = memorySystem(cabBytes);
+    sys.maxOutputBytes = expectedSize;
+    const auto destroy = [](mscab_decompressor* decoder) { mspack_destroy_cab_decompressor(decoder); };
+    const std::unique_ptr<mscab_decompressor, decltype(destroy)> decoder(
+        mspack_create_cab_decompressor(&sys.base), destroy);
+    if (!decoder) {
+        m_lastError = "Cannot create cabinet decompressor";
+        return false;
+    }
+    const auto close = [&decoder](mscabd_cabinet* cabinet) { decoder->close(decoder.get(), cabinet); };
+    const std::unique_ptr<mscabd_cabinet, decltype(close)> cabinet(
+        decoder->open(decoder.get(), const_cast<char*>("<cab>")), close);
+    if (!cabinet) {
+        m_lastError = "Cannot open firmware cabinet";
+        return false;
+    }
+    mscabd_file* target = nullptr;
+    for (mscabd_file* file = cabinet->files; file; file = file->next) {
+        if (file->filename && QString::fromLatin1(file->filename) == memberName) {
+            if (target) {
+                m_lastError = "Duplicate firmware member in cabinet";
+                return false;
+            }
+            target = file;
+        }
+    }
+    if (!target || target->length != expectedSize) {
+        m_lastError = "Firmware cabinet member is missing or has the wrong size";
+        return false;
+    }
+    QByteArray payload;
+    sys.payloadSink = &payload;
+    const int result = decoder->extract(decoder.get(), target, const_cast<char*>("<out>"));
+    if (result != MSPACK_ERR_OK || payload.size() != expectedSize) {
+        m_lastError = QString("Firmware extraction failed (cabinet error %1)").arg(result);
+        return false;
+    }
+    out = std::move(payload);
     return true;
 }
 

@@ -10,8 +10,8 @@ namespace AetherSDR {
 
 // Read-only reader for Microsoft OLE Compound File Binary ([MS-CFB]), enough to
 // extract `cab*.cab` streams from FlexRadio's WiX MSI installers: stream lookup
-// by name (UTF-16LE -> UTF-8), any size via the FAT chain; mini-stream support
-// included but unexercised. Directory treated as a flat list; no property sets,
+// by name, bounded FAT chains and mini streams. Directory treated as a flat
+// list; no property sets,
 // transactions or encryption.
 class OleCompoundFile {
 public:
@@ -39,12 +39,14 @@ public:
         const QString& prefix, const QString& suffix) const;
 
     // MSI-aware variants. Microsoft Installer (.msi) files store
-    // table and stream names using a 5-bit packed encoding that lives
+    // table and stream names using a 6-bit packed encoding that lives
     // inside Unicode code points 0x3800-0x4840. The plain accessors
     // above return the raw encoded names; the variants below return
     // the decoded human-readable form.
     QStringList msiStreamNames() const;
-    QByteArray  readMsiStream(const QString& decodedName) const;
+    // A positive limit rejects oversized streams before reading their chains.
+    QByteArray  readMsiStream(const QString& decodedName, qint64 maxBytes = 0) const;
+    QByteArray  readMsiTable(const QString& decodedName, qint64 maxBytes) const;
     QList<QPair<QString, QByteArray>> readMsiStreamsByPrefixSuffix(
         const QString& prefix, const QString& suffix) const;
 
@@ -101,6 +103,7 @@ private:
     QByteArray readSector(quint32 sectorIndex) const;
     QByteArray readChain(quint32 startSector, quint64 totalSize) const;
     QByteArray readMiniChain(quint32 startSector, quint64 totalSize) const;
+    QByteArray readMsiEntry(const QString& decodedName, qint64 maxBytes, bool table) const;
 
     quint32 sectorSize() const { return 1u << m_header.sectorShift; }
     quint32 miniSectorSize() const { return 1u << m_header.miniSectorShift; }
