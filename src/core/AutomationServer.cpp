@@ -2756,6 +2756,10 @@ bool isReadOnlyRequest(const QString& name, const QString& action,
     }
 
     const QString normalizedAction = action.trimmed().toLower();
+    // The probe constructs only an isolated TransmitModel and touches no session.
+    if (name == QLatin1String("interlock") && normalizedAction == QLatin1String("probe")) {
+        return true;
+    }
     if (name == QLatin1String("radiocert") && normalizedAction == QLatin1String("persist")) {
         return true;  // snapshot only; the external supervisor owns transitions
     }

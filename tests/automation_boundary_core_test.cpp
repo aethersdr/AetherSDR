@@ -162,6 +162,29 @@ void interlockProbe()
     Access::request(server, QByteArray("interlock probe source=MIC,VOX"));
     check(live.transmitModel().isTransmitting() && !live.isRadioTransmitting(),
           "probe never touches the bridge's attached model");
+
+    server.setReadOnly(true);
+    const QJsonObject observed = Access::request(server, QByteArray("interlock probe source=MIC,VOX"));
+    check(ok(observed) && observed.value(QStringLiteral("snapshots")).toArray().size() == 5,
+          "isolated interlock probe remains available in observe-only mode", observed);
+    const QJsonObject driven = Access::request(server, QByteArray("slice fixture 0 A"));
+    check(!ok(driven) && errorOf(driven).contains(QStringLiteral("read-only mode")),
+          "observe-only interlock exception does not admit model mutations", driven);
+    const QJsonObject unsupported = Access::request(server, QByteArray("interlock fixture source=MIC"));
+    check(!ok(unsupported) && errorOf(unsupported).contains(QStringLiteral("read-only mode")),
+          "only the interlock probe action is classified as read-only", unsupported);
+
+    const QString token = QStringLiteral("interlock-probe-test-token");
+    server.setAuthToken(token);
+    const QJsonObject unauthenticated = Access::request(server, QByteArray("interlock probe source=MIC"));
+    check(!ok(unauthenticated) && errorOf(unauthenticated).startsWith(QStringLiteral("unauthorized")),
+          "observe-only probe still requires the configured authentication token", unauthenticated);
+    const QJsonObject authenticated = Access::request(server, QJsonObject{
+        {QStringLiteral("cmd"), QStringLiteral("interlock")}, {QStringLiteral("action"), QStringLiteral("probe")},
+        {QStringLiteral("value"), QStringLiteral("source=MIC,VOX")}, {QStringLiteral("token"), token}});
+    check(ok(authenticated), "authenticated observe-only probe is admitted", authenticated);
+    check(live.transmitModel().isTransmitting() && !live.isRadioTransmitting(),
+          "observe-only requests leave the attached model unchanged");
 }
 
 void jsonIdAndMhzContract()
