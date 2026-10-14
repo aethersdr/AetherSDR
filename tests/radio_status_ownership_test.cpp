@@ -398,6 +398,23 @@ void testBoundedSliceCapacity()
           "slice capacity does not change before model limit is known");
 }
 
+void testTgxlTuneCycleLatch()
+{
+    using RadioStatusOwnership::tgxlTuneCycleLatched;
+    check(!tgxlTuneCycleLatched(false, false, true, true),
+          "TGXL tune latch is never set while not transmitting");
+    check(tgxlTuneCycleLatched(true, false, false, true),
+          "armed autotune request latches the cycle");
+    check(tgxlTuneCycleLatched(true, false, true, false),
+          "tuner tuning latches the cycle");
+    check(tgxlTuneCycleLatched(true, true, false, false),
+          "latch holds after tuning drops while still transmitting");
+    check(!tgxlTuneCycleLatched(true, false, false, false),
+          "plain operator TX is not latched");
+    check(!tgxlTuneCycleLatched(false, true, false, false),
+          "unkey clears the latch");
+}
+
 } // namespace
 
 int main()
@@ -413,6 +430,7 @@ int main()
     testUdpRegistrationPolicy();
     testCreateResponseParsing();
     testBoundedSliceCapacity();
+    testTgxlTuneCycleLatch();
 
     if (failures) {
         std::printf("\n%d failure(s)\n", failures);

@@ -126,6 +126,17 @@ inline bool operatorTransmitActive(bool transmitting, bool daxTxActive,
            && !sourceIsTuneCarrier && !modeIsCw;
 }
 
+// A TGXL autotune keys the radio over its interlock line, so the PTT source
+// can't identify it. Latch the cycle as a tune carrier when the tuner reports
+// tuning or AetherSDR just sent `tgxl autotune`; hold until unkey.
+inline bool tgxlTuneCycleLatched(bool transmitting, bool wasLatched,
+                                 bool tunerTuning, bool autotuneArmed)
+{
+    if (!transmitting)
+        return false;
+    return wasLatched || tunerTuning || autotuneArmed;
+}
+
 enum class OwnedStatusAction {
     Defer,
     Claim,

@@ -2252,6 +2252,7 @@ RadioModel::RadioModel(QObject* parent)
         // TX interlock gate (was a commandReady string-sniff on "tgxl autotune").
         if (transmitStartBlockedByInhibit(QStringLiteral("tgxl-autotune")))
             return;
+        m_tgxlAutotuneArmedUntilMs = txMonotonicMs() + kTgxlAutotuneKeyWindowMs;
         applyTuneInhibit();
         if (m_backend)
             m_backend->invokeExtension(QStringLiteral("flex"), QStringLiteral("tuner.autotune"), 0);
@@ -2462,6 +2463,20 @@ RadioModel::RadioModel(QObject* parent)
     // extra trigger only emits operatorTransmitChanged on a real edge. (#4131)
     connect(&m_transmitModel, &TransmitModel::txSliceModeChanged, this,
             [this](const QString&) { updateOperatorTransmit(); });
+    // Direct port-9010 autotune bypasses autotuneRequested; arm the same window
+    // so the radio's TRANSMITTING edge can't beat the tuner's tuning=1.
+    connect(&m_tunerModel, &TunerModel::directAutotuneStarted, this, [this]() {
+        m_tgxlAutotuneArmedUntilMs = txMonotonicMs() + kTgxlAutotuneKeyWindowMs;
+    });
+    // A TGXL tune latches the cycle as a tune carrier (tuning=1 may land after
+    // the radio's TRANSMITTING edge).
+    // tuning 1→0 with the radio unkeyed means the tune ended or was refused:
+    // drop the window so a quick operator MOX isn't taken for the tune.
+    connect(&m_tunerModel, &TunerModel::tuningChanged, this, [this](bool tuning) {
+        if (!tuning && !m_transmitModel.isTransmitting())
+            m_tgxlAutotuneArmedUntilMs = 0;
+        updateOperatorTransmit();
+    });
 
     m_reconnectTimer.setInterval(5000);
     // RFC #4603 PR 3: one settings write per burst of operating-state
@@ -4920,6 +4935,17 @@ void RadioModel::updateOperatorTransmit()
     // interlock level; the remembered source disambiguates it. m_daxTxActive is
     // a belt-and-suspenders guard for the optimistic DAX key edge.
     const TransmitModel::PttSource src = m_transmitModel.activePttSource();
+
+    // TGXL autotune keys over the interlock line; latch the whole cycle so the
+    // timer neither starts mid-tune nor at the unkey tail.
+    const bool transmitting = m_transmitModel.isTransmitting();
+    const bool wasTgxlTune = m_tgxlTuneCycle;
+    m_tgxlTuneCycle = RadioStatusOwnership::tgxlTuneCycleLatched(
+        transmitting, wasTgxlTune, m_tunerModel.isTuning(),
+        txMonotonicMs() < m_tgxlAutotuneArmedUntilMs);
+    if (wasTgxlTune && !transmitting)
+        m_tgxlAutotuneArmedUntilMs = 0;  // tune over: a quick MOX after it is the operator's
+
     // CW (incl. any CWU/CWL variant) is excluded — see operatorTransmitActive.
     // Prefer the TX slice's live mode; fall back to the mode the radio echoes in
     // its transmit status when there is no resolvable TX slice.
@@ -4929,7 +4955,8 @@ void RadioModel::updateOperatorTransmit()
     const bool modeIsCw = txMode.startsWith(QStringLiteral("CW"));
     const bool sourceIsTuneCarrier =
         src == TransmitModel::PttSource::Tune
-        || src == TransmitModel::PttSource::Atu;
+        || src == TransmitModel::PttSource::Atu
+        || m_tgxlTuneCycle;
     const bool op = RadioStatusOwnership::operatorTransmitActive(
         m_transmitModel.isTransmitting(),
         m_daxTxActive,
@@ -8040,6 +8067,8 @@ void RadioModel::onDisconnected()
     m_daxStreamDebug.clear();
     m_daxTxStreamId = 0;
     m_daxTxActive = false;
+    m_tgxlAutotuneArmedUntilMs = 0;
+    m_tgxlTuneCycle = false;
     m_daxTxClientHandle = 0;
     m_daxTxCreatePending = false;
     m_wsprTxOwnershipRequested = false;
