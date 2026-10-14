@@ -3113,6 +3113,14 @@ target_link_libraries(vita_dscp_stream_test PRIVATE aethercore Qt6::Core Qt6::Ne
 add_test(NAME vita_dscp_stream_test COMMAND vita_dscp_stream_test)
 set_tests_properties(vita_dscp_stream_test PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 10)
 
+# SOCKETS: production ephemeral IPv4 VITA sender and two own loopback UDP
+# sinks. No firmware peer; registration refusals use the injected boundary.
+add_executable(wan_udp_keepalive_test tests/wan_udp_keepalive_test.cpp)
+target_include_directories(wan_udp_keepalive_test PRIVATE src tests)
+target_link_libraries(wan_udp_keepalive_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME wan_udp_keepalive_test COMMAND wan_udp_keepalive_test)
+set_tests_properties(wan_udp_keepalive_test PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 25)
+
 # PanadapterStream's rate-limited VITA-49 sequence-error line and its text, which
 # the docs Log Analyzer matches (#6285). Socket-free: meter packets are fed to
 # processDatagram() on a stream that never binds.
