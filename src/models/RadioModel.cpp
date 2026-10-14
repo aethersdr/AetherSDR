@@ -9908,7 +9908,7 @@ void RadioModel::reportReceiveDispatch(ReceiveDispatch result, const QString& op
         qCWarning(lcProtocol).noquote() << "Backend refused operation" << operation
             << (operatorOrigin ? QStringLiteral("(announced)") : QStringLiteral("(not announced)"));
         // The notice answers a control the operator just moved. A Kiwi
-        // suppression mute or a profile restore is not one, and must not spend
+        // suppression mute is not one, and must not spend
         // the once-per-session notice on a refusal nobody asked for.
         if (operatorOrigin) {
             emit commandDropped(operation);
@@ -9920,8 +9920,7 @@ void RadioModel::dispatchSliceDsp(const SliceDspRequest& request)
 {
     if (SliceModel* source = receiveCommandSource()) {
         reportReceiveDispatch(m_backend->requestSliceDsp(source->sliceId(), request),
-                              QStringLiteral("receive DSP"),
-                              request.origin == SliceDspRequest::Origin::Operator);
+                              QStringLiteral("receive DSP"), true);
     }
 }
 

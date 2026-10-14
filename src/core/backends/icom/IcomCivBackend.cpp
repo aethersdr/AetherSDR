@@ -4529,8 +4529,7 @@ ReceiveDispatch IcomCivBackend::requestTransmitControl(const TransmitControlRequ
 
 ReceiveDispatch IcomCivBackend::requestSliceDsp(int sliceId, const SliceDspRequest& request)
 {
-    if (!m_connected || !m_session || !m_model || sliceId != 0 || !request.valid()
-        || request.origin != SliceDspRequest::Origin::Operator) {
+    if (!m_connected || !m_session || !m_model || sliceId != 0 || !request.valid()) {
         return ReceiveDispatch::Unsupported;
     }
     switch (request.feature) {
