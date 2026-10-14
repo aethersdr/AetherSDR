@@ -161,7 +161,7 @@ Use the icons at the right of the title bar:
 - **Dock left** / **Dock right** — put the panel on that side of the panadapters. Clicking the side it is already on hides it.
 - **Pop out** — float the panel in its own window (also **Ctrl+Shift+S**). Popped-out applets have a pin for always-on-top.
 
-The dock side is remembered when you restart AetherSDR. On macOS, the primary panadapter's spectrum, waterfall and overlay controls remain visible with the panel saved on either side.
+The dock side is remembered when you restart AetherSDR.
 
 ### The button bar
 
