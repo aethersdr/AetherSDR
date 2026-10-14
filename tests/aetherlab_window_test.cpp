@@ -1,7 +1,12 @@
 #include "gui/AetherLabWidget.h"
 #include "models/AntennaAnalyzerModel.h"
 
+#include <QAbstractSpinBox>
 #include <QAccessible>
+#include <QDoubleSpinBox>
+#include <QFontMetrics>
+#include <QLineEdit>
+#include <QSpinBox>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QJsonArray>
@@ -80,7 +85,10 @@ private slots:
         QVERIFY(accessible);
         QVERIFY(accessible->text(QAccessible::Value).contains("3 measured rows"));
         QVERIFY(!window.grab().isNull());
-        for (const QSize size : {QSize(900, 640), QSize(1600, 1000)}) {
+        window.findChild<QDoubleSpinBox*>("aetherLabStartMHz")->setValue(600.0);
+        window.findChild<QDoubleSpinBox*>("aetherLabStopMHz")->setValue(600.0);
+        window.findChild<QSpinBox*>("aetherLabIntervals")->setValue(1000);
+        for (const QSize size : {QSize(900, 640), QSize(1280, 800), QSize(1440, 960), QSize(1920, 1080)}) {
             window.resize(size);
             QCoreApplication::processEvents();
             QCOMPARE(window.size(), size);
@@ -89,7 +97,36 @@ private slots:
             QVERIFY(content && scroll);
             QVERIFY(content->width() <= scroll->viewport()->width());
             QVERIFY(plot->width() >= 360);
+            for (const char* name : {"aetherLabStartMHz", "aetherLabStopMHz", "aetherLabIntervals"}) {
+                auto* spin = window.findChild<QAbstractSpinBox*>(QLatin1String(name));
+                QVERIFY(spin);
+                auto* editor = spin->findChild<QLineEdit*>();
+                QVERIFY(editor);
+                const QMargins margins = editor->textMargins();
+                const QRect textArea = editor->contentsRect().marginsRemoved(margins);
+                QVERIFY(editor->geometry().left() + margins.left() >= 6);
+                QVERIFY(textArea.width() >= editor->fontMetrics().horizontalAdvance(editor->text()));
+                QVERIFY(textArea.height() >= editor->fontMetrics().height());
+            }
+            const int numberSize = frequency->font().pixelSize();
+            for (const char* key : {"swr", "returnLossDb", "impedanceMagnitudeOhm", "reflectionPhaseDeg", "reflectionMagnitude", "impedancePhaseDeg"}) {
+                auto* value = window.findChild<QLabel*>(QStringLiteral("aetherLabValue_") + QLatin1String(key));
+                QVERIFY(value);
+                QCOMPARE(value->font().pixelSize(), numberSize);
+                QVERIFY(value->width() >= value->fontMetrics().horizontalAdvance(value->text()));
+            }
+            auto* badge = window.findChild<QLabel*>("aetherLabIsolationWarning");
+            auto* back = window.findChild<QPushButton*>("aetherLabReturn");
+            QVERIFY(badge && back);
+            QCOMPARE(badge->text(), QStringLiteral("Radio TX is not inhibited"));
+            const int badgeCenter = badge->mapTo(&window, badge->rect().center()).y();
+            const int backCenter = back->mapTo(&window, back->rect().center()).y();
+            QVERIFY(qAbs(badgeCenter - backCenter) <= 1);
+            QVERIFY(badge->mapTo(&window, QPoint()).x() < back->mapTo(&window, QPoint()).x());
         }
+        QVERIFY(window.findChild<QLabel*>("aetherLabStatus")->text().startsWith("Complete · Stick Pro"));
+        QCOMPARE(window.findChild<QLabel*>("aetherLabSubtitle")->text(), QStringLiteral("Antenna Quick Check"));
+        QCOMPARE(model.snapshot().value("state").toString(), QStringLiteral("complete"));
         QSignalSpy returned(&window, &AetherLabWidget::returnRequested);
         window.findChild<QPushButton*>("aetherLabReturn")->click();
         QCOMPARE(returned.count(), 1);

@@ -40,7 +40,7 @@ close does not confirm RF silence.
 1. Open the **+** radio switcher and choose **AetherLab**, below **Rescan radios**.
    **Tools → AetherLab…** opens the same workspace.
 2. Click **Refresh USB**, select the Stick Pro interface, then **Connect**.
-3. Wait for **ready** and the full Stick Pro identity. Firmware identifying as
+3. Wait for **Ready** and the full Stick Pro identity. Firmware identifying as
    **Stick Pro 108** uses a bounded compatibility path for its FULLINFO metadata.
    Connecting only requests
    device information; it does not start a sweep.
@@ -48,6 +48,12 @@ close does not confirm RF silence.
    is isolated from transmitters**.
 
 ## Using AetherLab
+
+The **Antenna Quick Check** header places the yellow **Radio TX is not
+inhibited** badge beside **Return to radio**. The badge is a warning, not a TX
+interlock. RF-isolation guidance remains in the device group. Device status uses
+capitalized labels such as **Complete · Stick Pro 108**; automation state tokens
+remain lower-case.
 
 Click **Run sweep** to acquire one finite trace. The SWR graph displays 1–5; values
 above 5 are clipped on the graph but remain intact in the readout and saved
@@ -84,7 +90,7 @@ components; undefined values have no finite result at that operating point.
 | Magnitude &#124;S11&#124; / Phase ∠S11 | Reflection magnitude and phase at 50 Ω. Reflection phase is undefined for a perfect match. |
 | Series model | Device R/X and signed equivalents L = X / (2πf), C = −1 / (2πfX). |
 | Parallel model | Equivalent R/X from admittance 1/Z, and their signed L/C equivalents. Engineering units distinguish nH from µH and pF from nF. |
-| Session status | Shows ready, setup, sweeping, complete, cancelled or error and the number of accepted rows. Complete means the host's count and endpoint checks passed. |
+| Session status | Shows Ready, setup, Sweeping, Complete, Cancelled or Error and the number of accepted rows. Complete means the host's count and endpoint checks passed. |
 
 For testing through MCP, the existing `bridge_command` tool accepts `lab`
 commands. Acquisition additionally requires `AETHER_AUTOMATION_ALLOW_LAB_RF=1`
@@ -107,7 +113,7 @@ alone does not authorize analyzer RF. See [Automation Bridge and MCP](./automati
 - **Deadline, count or endpoint error:** save the session trace, reconnect,
   and report the firmware, requested range and returned rows. Partial data is
   retained and never marked complete.
-- **Sweep is disabled:** wait for **ready** and confirm RF isolation. A finished
+- **Sweep is disabled:** wait for **Ready** and confirm RF isolation. A finished
   sweep requires a fresh **Connect**.
 
 ### ERROR-20 when starting a sweep
@@ -116,7 +122,7 @@ On the tested Stick Pro 108, active front-panel measurement can cause the
 analyzer to reject USB setup with **ERROR-20**.
 
 1. Stop the front-panel measurement and return to the analyzer's main menu.
-2. Click **Connect** again and wait for **ready**.
+2. Click **Connect** again and wait for **Ready**.
 3. Reconfirm RF isolation and click **Run sweep**.
 
 The app retains the error and closes USB. It does not retry acquisition automatically.

@@ -4,6 +4,7 @@
 #include "core/ThemeManager.h"
 #include "models/AntennaAnalyzerModel.h"
 
+#include <QAbstractSpinBox>
 #include <QAccessible>
 #include <QAccessibleWidget>
 #include <QCheckBox>
@@ -12,11 +13,13 @@
 #include <QDoubleSpinBox>
 #include <QFileDialog>
 #include <QFrame>
+#include <QFontMetrics>
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QLabel>
+#include <QLineEdit>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPushButton>
@@ -142,6 +145,32 @@ void availability(QWidget* widget, bool enabled, const QString& reason)
     widget->setToolTip(enabled ? QString() : reason);
     widget->setAccessibleDescription(enabled ? QString() : reason);
 }
+QString analyzerStatusLabel(AntennaAnalyzerModel::State state)
+{
+    switch (state) {
+    case AntennaAnalyzerModel::State::Disconnected: return QCoreApplication::translate("AetherLabWidget", "Disconnected");
+    case AntennaAnalyzerModel::State::Identifying: return QCoreApplication::translate("AetherLabWidget", "Identifying");
+    case AntennaAnalyzerModel::State::Ready: return QCoreApplication::translate("AetherLabWidget", "Ready");
+    case AntennaAnalyzerModel::State::SettingFrequency: return QCoreApplication::translate("AetherLabWidget", "Setting frequency");
+    case AntennaAnalyzerModel::State::SettingWidth: return QCoreApplication::translate("AetherLabWidget", "Setting width");
+    case AntennaAnalyzerModel::State::Sweeping: return QCoreApplication::translate("AetherLabWidget", "Sweeping");
+    case AntennaAnalyzerModel::State::Closing: return QCoreApplication::translate("AetherLabWidget", "Closing");
+    case AntennaAnalyzerModel::State::Complete: return QCoreApplication::translate("AetherLabWidget", "Complete");
+    case AntennaAnalyzerModel::State::Cancelled: return QCoreApplication::translate("AetherLabWidget", "Cancelled");
+    case AntennaAnalyzerModel::State::Error: return QCoreApplication::translate("AetherLabWidget", "Error");
+    }
+    return {};
+}
+
+void padSweepEditor(QAbstractSpinBox* spin, const QString& widestText)
+{
+    spin->setMinimumHeight(40);
+    spin->setMinimumWidth(spin->fontMetrics().horizontalAdvance(widestText) + 40);
+    if (QLineEdit* editor = spin->findChild<QLineEdit*>()) {
+        editor->setTextMargins(8, 2, 8, 2);
+    }
+}
+
 QString number(const QJsonObject& sample, const QString& key, int precision)
 {
     const QJsonValue value = sample.value(key);
@@ -193,24 +222,37 @@ AetherLabWidget::AetherLabWidget(AntennaAnalyzerModel* model, QWidget* parent)
     layout->setSpacing(12);
     scroll->setWidget(content);
     outer->addWidget(scroll);
-    auto* heading = new QHBoxLayout;
-    auto* title = new QLabel(tr("AetherLab"), content);
+    m_heading = new QBoxLayout(QBoxLayout::LeftToRight);
+    m_heading->setSpacing(12);
+    auto* identity = new QWidget(content);
+    auto* identityRow = new QHBoxLayout(identity);
+    identityRow->setContentsMargins(0, 0, 0, 0);
+    identityRow->setSpacing(12);
+    auto* title = new QLabel(tr("AetherLab"), identity);
     title->setProperty("labHeading", true);
-    heading->addWidget(title);
-    auto* subtitle = new QLabel(tr("ANTENNA QUICK CHECK"), content);
+    identityRow->addWidget(title);
+    auto* subtitle = new QLabel(tr("Antenna Quick Check"), identity);
+    subtitle->setObjectName(QStringLiteral("aetherLabSubtitle"));
     subtitle->setProperty("labMuted", true);
-    heading->addWidget(subtitle);
-    heading->addStretch();
-    auto* returnButton = new QPushButton(tr("Return to radio"), content);
+    identityRow->addWidget(subtitle);
+    identityRow->addStretch();
+    m_heading->addWidget(identity, 1);
+    auto* actions = new QWidget(content);
+    auto* actionsRow = new QHBoxLayout(actions);
+    actionsRow->setContentsMargins(0, 0, 0, 0);
+    actionsRow->setSpacing(8);
+    auto* warning = new QLabel(tr("Radio TX is not inhibited"), actions);
+    warning->setObjectName(QStringLiteral("aetherLabIsolationWarning"));
+    warning->setAccessibleName(tr("Radio TX is not inhibited"));
+    warning->setAccessibleDescription(tr("Isolate the analyzer RF port from transmitters. USB close does not confirm RF silence."));
+    warning->setToolTip(warning->accessibleDescription());
+    actionsRow->addWidget(warning);
+    auto* returnButton = new QPushButton(tr("Return to radio"), actions);
     returnButton->setObjectName(QStringLiteral("aetherLabReturn"));
     returnButton->setAccessibleName(tr("Return to radio and stop analyzer session"));
-    heading->addWidget(returnButton);
-    layout->addLayout(heading);
-    auto* warning = new QLabel(tr("Radio TX is not inhibited. Isolate the analyzer RF port from transmitters and stop AntScope before connecting."), content);
-    warning->setObjectName(QStringLiteral("aetherLabIsolationWarning"));
-    warning->setWordWrap(true);
-    warning->setAccessibleName(tr("Analyzer RF isolation warning"));
-    layout->addWidget(warning);
+    actionsRow->addWidget(returnButton);
+    m_heading->addWidget(actions, 0, Qt::AlignRight);
+    layout->addLayout(m_heading);
     const auto card = [content](const QString& title) {
         auto* frame = new QFrame(content);
         frame->setProperty("labCard", true);
@@ -249,6 +291,12 @@ AetherLabWidget::AetherLabWidget(AntennaAnalyzerModel* model, QWidget* parent)
     m_status->setAccessibleName(tr("Analyzer session status"));
     m_status->setWordWrap(true);
     connection->layout()->addWidget(m_status);
+    auto* guidance = new QLabel(tr("Isolate the analyzer RF port from transmitters. Stop AntScope before connecting."), connection);
+    guidance->setObjectName(QStringLiteral("aetherLabIsolationGuidance"));
+    guidance->setWordWrap(true);
+    guidance->setAccessibleName(tr("Analyzer RF isolation guidance"));
+    guidance->setProperty("labMuted", true);
+    connection->layout()->addWidget(guidance);
     m_controls->addWidget(connection, 1);
 
     auto* sweepCard = card(tr("SWEEP RANGE"));
@@ -261,6 +309,7 @@ AetherLabWidget::AetherLabWidget(AntennaAnalyzerModel* model, QWidget* parent)
         spin->setRange(0.1, 600.0);
         spin->setValue(value);
         spin->setSuffix(tr(" MHz"));
+        padSweepEditor(spin, QStringLiteral("600.000000 MHz"));
         spin->setAccessibleName(name);
         spin->setAccessibleDescription(tr("Frequency in MHz, 0.1 to 600, with 1 Hz entry resolution"));
         return spin;
@@ -272,6 +321,7 @@ AetherLabWidget::AetherLabWidget(AntennaAnalyzerModel* model, QWidget* parent)
     m_intervals = new QSpinBox(sweepCard);
     m_intervals->setRange(1, 1000);
     m_intervals->setValue(200);
+    padSweepEditor(m_intervals, QStringLiteral("1000"));
     m_intervals->setObjectName(QStringLiteral("aetherLabIntervals"));
     m_intervals->setAccessibleName(tr("FRX sweep intervals"));
     m_intervals->setAccessibleDescription(tr("FRX N count. N plus 1 rows expected. Host cap is 1000."));
@@ -312,7 +362,7 @@ AetherLabWidget::AetherLabWidget(AntennaAnalyzerModel* model, QWidget* parent)
     plotCard->layout()->addWidget(m_marker);
     m_analysis->addWidget(plotCard, 3);
     auto* markerCard = card(tr("MARKER 1"));
-    markerCard->setMinimumWidth(292);
+    markerCard->setMinimumWidth(376);
     markerCard->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
     m_frequency = new QLabel(tr("No measurement"), markerCard);
     m_frequency->setObjectName(QStringLiteral("aetherLabMarkerFrequency"));
@@ -325,7 +375,8 @@ AetherLabWidget::AetherLabWidget(AntennaAnalyzerModel* model, QWidget* parent)
         cell->setProperty("labMetric", true);
         auto* box = new QVBoxLayout(cell);
         box->setContentsMargins(0, 0, 0, 0);
-        box->setSpacing(4);
+        box->setSpacing(6);
+        box->setAlignment(Qt::AlignTop);
         auto* caption = new QLabel(label, cell);
         caption->setProperty("labMuted", true);
         box->addWidget(caption);
@@ -342,7 +393,9 @@ AetherLabWidget::AetherLabWidget(AntennaAnalyzerModel* model, QWidget* parent)
         grid->setColumnStretch(column, 1);
     };
     auto* markerMetrics = new QGridLayout;
-    markerMetrics->setSpacing(16);
+    markerMetrics->setHorizontalSpacing(24);
+    markerMetrics->setVerticalSpacing(28);
+    for (int row = 0; row < 3; ++row) { markerMetrics->setRowStretch(row, 1); }
     metric(markerMetrics, 0, 0, tr("SWR"), QStringLiteral("swr"));
     m_values.value(QStringLiteral("swr"))->setProperty("labPrimary", true);
     metric(markerMetrics, 0, 1, tr("Return loss"), QStringLiteral("returnLossDb"));
@@ -350,13 +403,12 @@ AetherLabWidget::AetherLabWidget(AntennaAnalyzerModel* model, QWidget* parent)
     metric(markerMetrics, 1, 1, tr("Phase ∠S11"), QStringLiteral("reflectionPhaseDeg"), tr("Reflection coefficient phase at 50 Ω; undefined for a perfect match."));
     metric(markerMetrics, 2, 0, tr("Magnitude |S11|"), QStringLiteral("reflectionMagnitude"));
     metric(markerMetrics, 2, 1, tr("Phase ∠Z"), QStringLiteral("impedancePhaseDeg"), tr("Impedance phase, distinct from reflection phase."));
-    static_cast<QVBoxLayout*>(markerCard->layout())->addLayout(markerMetrics);
+    static_cast<QVBoxLayout*>(markerCard->layout())->addLayout(markerMetrics, 1);
     m_quality = new QLabel(tr("Run a sweep to place a marker"), markerCard);
     m_quality->setWordWrap(true);
     m_quality->setObjectName(QStringLiteral("aetherLabMarkerQuality"));
     m_quality->setProperty("labMuted", true);
     markerCard->layout()->addWidget(m_quality);
-    static_cast<QVBoxLayout*>(markerCard->layout())->addStretch();
     m_analysis->addWidget(markerCard, 1);
     layout->addLayout(m_analysis, 1);
 
@@ -405,10 +457,10 @@ AetherLabWidget::AetherLabWidget(AntennaAnalyzerModel* model, QWidget* parent)
         "QLabel[labHeading=true] { font-size: 26px; font-weight: 600; color: {{color.canon.ink}}; }"
         "QLabel[labSection=true] { color: {{color.canon.muted}}; font-size: 11px; font-weight: 600; }"
         "QLabel[labMuted=true] { color: {{color.canon.muted}}; }"
-        "QLabel[labValue=true] { font-family: 'JetBrains Mono', monospace; font-size: 19px; color: {{color.canon.ink}}; }"
-        "QLabel[labFrequency=true] { font-family: 'JetBrains Mono', monospace; font-size: 23px; color: {{color.canon.ink}}; }"
-        "QLabel[labPrimary=true] { font-size: 34px; color: {{color.canon.cyan}}; }"
-        "QLabel#aetherLabIsolationWarning { color: {{color.accent.warning}}; }"
+        "QLabel[labValue=true] { font-family: 'JetBrains Mono', monospace; font-size: 24px; color: {{color.canon.ink}}; }"
+        "QLabel[labFrequency=true] { font-family: 'JetBrains Mono', monospace; font-size: 24px; color: {{color.canon.ink}}; }"
+        "QLabel[labPrimary=true] { color: {{color.canon.cyan}}; }"
+        "QLabel#aetherLabIsolationWarning { color: {{color.toggle.warning.foreground.checked}}; background: {{color.toggle.warning.background.checked}}; border: 1px solid {{color.toggle.warning.border.checked}}; border-radius: 5px; padding: 6px 10px; }"
         "QPushButton, QComboBox, QDoubleSpinBox, QSpinBox { color: {{color.canon.ink}}; background: {{color.canon.control}}; border: 1px solid {{color.canon.lineHi}}; border-radius: 5px; padding: 6px 8px; }"
         "QPushButton:hover, QPushButton:focus, QComboBox:focus, QDoubleSpinBox:focus, QSpinBox:focus { border-color: {{color.canon.cyan}}; }"
         "QPushButton:disabled { color: {{color.button.foreground.disabled}}; background: {{color.button.background.disabled}}; border-color: {{color.button.border.disabled}}; }"
@@ -473,7 +525,7 @@ void AetherLabWidget::refresh()
     availability(m_devices, !active, tr("Disconnect before selecting another interface"));
     availability(m_sweep, status == AntennaAnalyzerModel::State::Ready && m_isolated->isChecked(), tr("Connect and identify the Stick Pro, then confirm RF isolation"));
     availability(m_cancel, active, tr("No open instrument session"));
-    const QString statusText = tr("%1 · %2 · %3 received rows%4").arg(m_model->stateText(),
+    const QString statusText = tr("%1 · %2 · %3 received rows%4").arg(analyzerStatusLabel(status),
         state.value(QStringLiteral("identity")).toString().isEmpty() ? tr("No verified identity") : state.value(QStringLiteral("identity")).toString())
         .arg(state.value(QStringLiteral("receivedRows")).toInt())
         .arg(m_model->lastError().isEmpty() ? QString() : QStringLiteral(" · ") + m_model->lastError());
@@ -536,6 +588,7 @@ void AetherLabWidget::saveSession()
 void AetherLabWidget::resizeEvent(QResizeEvent* event)
 {
     CanonCanvas::resizeEvent(event);
+    m_heading->setDirection(event->size().width() < 1000 ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);
     m_controls->setDirection(event->size().width() < 1280 ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);
     const bool narrow = event->size().width() < 1000;
     m_analysis->setDirection(narrow ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);

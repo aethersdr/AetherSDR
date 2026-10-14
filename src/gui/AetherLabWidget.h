@@ -41,6 +41,7 @@ private:
     QLabel* m_frequency{nullptr};
     QLabel* m_quality{nullptr};
     QHash<QString, QLabel*> m_values;
+    QBoxLayout* m_heading{nullptr};
     QBoxLayout* m_controls{nullptr};
     QBoxLayout* m_analysis{nullptr};
     QBoxLayout* m_models{nullptr};
