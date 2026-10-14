@@ -4733,6 +4733,10 @@ void SpectrumWidget::setSquelchScale(std::optional<SquelchLevelScale> scale)
         return;
     }
     m_squelchScale = std::move(scale);
+    if (!m_squelchScale) {
+        setAutoSquelchEnable(false);
+        setSquelchLine(false, 0);
+    }
     // A new scale can mean new bin units (dBm vs RTL's dBFS/bin): restart the
     // Auto floor rather than blend one unit into the other.
     m_sqlNoiseFloorDbm = -999.0f;
@@ -4806,6 +4810,11 @@ void SpectrumWidget::setAutoSquelchEnable(bool on)
     if (on) {
         m_sqlNoiseFloorDbm = -999.0f;  // cold-start the floor EWMA on enable
         m_lastAutoSquelchLevel = -1;
+    }
+    if (!on) {
+        m_sqlNoiseFloorDbm = -999.0f;
+        setSquelchLine(false, 0);
+        markOverlayDirty();
     }
     if (on && m_squelchLineHideTimer) {
         // Auto pins the line — cancel any pending manual auto-hide.

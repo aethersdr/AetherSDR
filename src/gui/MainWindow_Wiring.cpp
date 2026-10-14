@@ -35,6 +35,7 @@
 #include "RadioSetupDialog.h"
 #include "GpsLocationDialog.h"
 #include "RxApplet.h"
+#include "ModeFilterPresets.h"
 #include "WfmApplet.h"
 #include "AmpApplet.h"
 #include "AcomApplet.h"
@@ -1339,7 +1340,7 @@ void MainWindow::syncActiveSliceSquelchLineToSpectrums()
             return;
         }
         sw->clearKiwiSdrSquelchLine();
-        sw->setSquelchLine(on, level);
+        sw->setSquelchLine(on && activeSliceSquelchScale().has_value(), level);
     };
 
     if (!m_panStack) {
@@ -1361,8 +1362,13 @@ std::optional<SquelchLevelScale> MainWindow::activeSliceSquelchScale() const
     if (!s || !m_radioModel.isConnected()) {
         return std::nullopt;
     }
-    return squelchScaleForMode(m_radioModel.backendCapabilities().squelchLevelScale,
-                               s->mode());
+    const RadioCapabilities caps = m_radioModel.backendCapabilities();
+    if (!ModeFilters::squelchAvailableInMode(s->mode(),
+            caps.squelchLevelScale ? &*caps.squelchLevelScale : nullptr,
+            caps.hasModeIndependentSquelch, s->externalReceiveReplacementActive())) {
+        return std::nullopt;
+    }
+    return squelchScaleForMode(caps.squelchLevelScale, s->mode());
 }
 
 void MainWindow::syncSquelchScaleToUi()
@@ -1385,7 +1391,12 @@ void MainWindow::syncSquelchScaleToUi()
         && published->appliesTo(s->mode());
     if (m_radioModel.isConnected() && s && !engineAuto && !autoSquelchAvailable(scale)) {
         const auto& published = m_radioModel.backendCapabilities().squelchLevelScale;
-        if (!published) {
+        if (!ModeFilters::squelchAvailableInMode(s->mode(),
+                published ? &*published : nullptr,
+                m_radioModel.backendCapabilities().hasModeIndependentSquelch,
+                s->externalReceiveReplacementActive())) {
+            reason = tr("squelch is unavailable in %1.").arg(s->mode());
+        } else if (!published) {
             reason = tr("this radio does not publish where its squelch level "
                         "sits on the panadapter scale.");
         } else if (!published->appliesTo(s->mode())) {
@@ -2163,6 +2174,7 @@ void MainWindow::onSliceAdded(SliceModel* s)
         if (s != activeSlice()) return;
         syncSquelchScaleToUi();
         syncActiveSliceAutoSquelchToSpectrums();
+        syncActiveSliceSquelchLineToSpectrums();
     });
     connect(s, &SliceModel::externalReceiveSquelchChanged,
             this, [this, s](bool on, int level) {
@@ -4677,7 +4689,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             return;
         }
         sw->clearKiwiSdrSquelchLine();
-        sw->setSquelchLine(on, level);
+        sw->setSquelchLine(on && activeSliceSquelchScale().has_value(), level);
     });
     // Spectrum widget → radio + back to overlay: apply level and immediately
     // update the squelch line on sw so the yellow line never depends on the

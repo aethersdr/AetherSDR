@@ -96,8 +96,11 @@ The **SQL** button cycles through three states:
   (applet, VFO flag, MIDI or other controllers, the radio or another client).
   Auto tracking never overwrites it, so switching back from AUTO returns to
   your manual level.
-- Switching a slice to **RTTY** turns squelch off, because squelch breaks the
-  decode.
+- On FlexRadio, SQL and AUTO are unavailable in **DIGU, DIGL, RTTY, NT,
+  DFM and CW**. **RADE** follows its underlying DIGU/DIGL slice. Both panadapter
+  squelch lines disappear and Auto tracking stops in these modes, including
+  after incoming radio status. Data modes turn SQL off; CW retains the radio's
+  own squelch state without client Auto updates.
 - The squelch scale, the panadapter SQL line and Auto SQL follow each radio's
   own scale. On radios where Auto SQL is not available, a slice set to AUTO
   drops to manual at its manual level.
@@ -193,7 +196,9 @@ the client NR2 method, because the radio has no NR of its own. See [Supported Ra
 
 ## Known issues
 
-- The squelch line, or Auto squelch, can appear in CW, RTTY and digital modes, where the SQL control is disabled ([#6276](https://github.com/aethersdr/AetherSDR/issues/6276)).
+- On some Icom profiles, the squelch line or Auto squelch can appear in CW, RTTY
+  and digital modes where the SQL control is disabled
+  ([#6276](https://github.com/aethersdr/AetherSDR/issues/6276)).
 - Switching a slice from DIGU to USB can turn squelch on, silencing the audio until you switch it off ([#3505](https://github.com/aethersdr/AetherSDR/issues/3505)).
 
 ## Troubleshooting

@@ -547,7 +547,7 @@
       "source": [
         {
           "file": "src/gui/SpectrumWidget.cpp",
-          "line": 13176,
+          "line": 13185,
           "text": "\"SpectrumWidget: QRhi failure:\""
         },
         {

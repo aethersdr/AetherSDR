@@ -1497,8 +1497,10 @@ void RxApplet::setAutoSqlAvailability(bool available, const QString& reason)
     m_autoSqlAvailable = available;
     m_autoSqlUnavailableReason = why;
     if (m_sqlMode == SqlMode::Auto && !autoSqlAvailable()) {
-        // Squelch stays on, at the operator's manual threshold.
-        setSqlMode(SqlMode::Manual, /*propagateToRadio=*/true);
+        // Eligible modes fall back to manual; unavailable modes stop client Auto.
+        const bool eligible = !m_slice || squelchAvailableInMode(m_slice->mode());
+        setSqlMode(eligible ? SqlMode::Manual : SqlMode::Off,
+                   /*propagateToRadio=*/eligible);
     }
     applySqlButtonDescription();
     emit sqlAutoAvailabilityChanged();
@@ -1710,7 +1712,11 @@ void RxApplet::saveClientSquelchIntent()
 
 void RxApplet::setSqlMode(SqlMode m, bool propagateToRadio)
 {
-    // Every route into Auto (cycle, restore, slice switch) passes here.
+    // Mode eligibility precedes Auto capability, including saved intent.
+    if (m == SqlMode::Auto && m_slice && !squelchAvailableInMode(m_slice->mode())) {
+        m = SqlMode::Off;
+        propagateToRadio = false;
+    }
     if (m == SqlMode::Auto && !autoSqlAvailable()) {
         m = SqlMode::Manual;
     }
@@ -2139,7 +2145,7 @@ void RxApplet::setRadioModel(RadioModel* radioModel)
                 return !exclusiveSquelchScale(caps.squelchLevelScale);
             }
             return ModeFilters::squelchAvailableInMode(m_slice->mode(),
-                connected ? exclusiveSquelchScale(caps.squelchLevelScale) : nullptr,
+                connected && caps.squelchLevelScale ? &*caps.squelchLevelScale : nullptr,
                 connected && caps.hasModeIndependentSquelch, usingExternalReceiveSquelch());
         };
         m_filterAvailability->registerWidget(m_sqlBtn,
@@ -3221,8 +3227,12 @@ QString RxApplet::formatStepLabel(int hz)
 
 bool RxApplet::squelchAvailableInMode(const QString& mode) const
 {
+    const RadioCapabilities caps = m_radioModel ? m_radioModel->backendCapabilities()
+                                               : RadioCapabilities{};
     return ModeFilters::squelchAvailableInMode(mode,
-        m_exclusiveSquelch ? &*m_exclusiveSquelch : nullptr,
+        m_radioModel && m_radioModel->isConnected()
+                ? (caps.squelchLevelScale ? &*caps.squelchLevelScale : nullptr)
+                : (m_exclusiveSquelch ? &*m_exclusiveSquelch : nullptr),
         m_radioModel && m_radioModel->isConnected()
             && m_radioModel->backendCapabilities().hasModeIndependentSquelch,
         usingExternalReceiveSquelch());
@@ -3320,7 +3330,8 @@ void RxApplet::updateModeSettings(const QString& mode)
         // or the unpaired flag would fabricate a restore on the next mode change
         // (and most visibly across profile-load slice teardown — #3263).
         if ((m_slice->receiveSquelchOn() || m_sqlMode == SqlMode::Auto)
-            && (mode == "DIGU" || mode == "DIGL" || mode == "NT" || mode == "RTTY")) {
+            && (mode == "DIGU" || mode == "DIGL" || mode == "NT" || mode == "RTTY"
+                || mode == "DFM" || mode == "RADE")) {
             m_savedSquelchOn = true;
             m_slice->setSquelch(false, m_slice->receiveSquelchLevel());
             setSqlMode(SqlMode::Off, /*propagateToRadio=*/false);

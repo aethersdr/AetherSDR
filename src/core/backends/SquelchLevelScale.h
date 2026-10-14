@@ -35,6 +35,9 @@ struct SquelchLevelScale {
     bool automaticInEngine = false;
     // False when detector and display use different measurement bandwidths.
     bool spectrumComparable = true;
+    // Modes where the receiver control is unavailable, independently of the
+    // pan-axis mapping. Empty retains the existing family mode policy.
+    QStringList controlUnavailableModes = {};
 
     bool operator==(const SquelchLevelScale&) const = default;
 

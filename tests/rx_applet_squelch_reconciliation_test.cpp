@@ -1,6 +1,7 @@
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
 #include "core/backends/RadioCapabilities.h"
+#include "core/backends/flex/FlexBackend.h"
 #include "core/backends/SquelchLevelScale.h"
 #include "core/backends/SliceDelta.h"
 #include "gui/RxApplet.h"
@@ -19,6 +20,9 @@ using namespace AetherSDR;
 namespace AetherSDR {
 struct RxAppletSquelchTestAccess {
     static QSlider* slider(RxApplet& applet) { return applet.m_sqlSlider; }
+    static void mode(RxApplet& applet, RxApplet::SqlMode mode, bool propagate) {
+        applet.setSqlMode(mode, propagate);
+    }
     static void engineSql(RxApplet& applet) {
         applet.m_exclusiveSquelch = SquelchLevelScale{-120, 1.2, {"FM", "FMN"}, false, "dBFS/2048-bin", true, true, false};
     }
@@ -37,8 +41,10 @@ namespace {
 class EngineSqlBackend final : public IRadioBackend {
 public:
     bool refuse = false;
+    std::optional<RadioCapabilities> published;
     QVector<SliceSquelchRequest> requests;
     RadioCapabilities capabilities() const override {
+        if (published) { return *published; }
         RadioCapabilities caps;
         caps.squelchLevelScale = SquelchLevelScale{-120, 1.2, {"FM", "FMN"}, false,
             "dBFS/2048-bin", true, true, false};
@@ -91,6 +97,64 @@ class RxAppletSquelchReconciliationTest : public QObject
     Q_OBJECT
 
 private slots:
+    void flexUnavailableModes_data()
+    {
+        QTest::addColumn<QString>("mode");
+        for (const QString& mode : QStringList{"DIGU", "DIGL", "RTTY", "NT", "CW", "CWU", "CWL", "DFM", "RADE"}) {
+            QTest::newRow(qPrintable(mode)) << mode;
+        }
+    }
+
+    void flexUnavailableModes()
+    {
+        QFETCH(QString, mode);
+        RadioModel radio;
+        auto backend = std::make_unique<EngineSqlBackend>();
+        backend->published = FlexBackend().capabilities();
+        EngineSqlBackend* source = backend.get();
+        radio.setBackendForTest(std::move(backend), QStringLiteral("test"));
+        SliceDelta initial;
+        initial.mode = QStringLiteral("USB");
+        initial.squelchOn = true;
+        initial.squelchLevel = 54;
+        emit source->sliceChanged(0, initial);
+        SliceModel* slice = radio.slice(0);
+        QVERIFY(slice);
+        RxApplet rx;
+        rx.setRadioModel(&radio);
+        rx.setSlice(slice);
+        VfoWidget vfo;
+        vfo.setRadioModel(&radio);
+        vfo.setSlice(slice);
+        RxAppletSquelchTestAccess::mode(rx, RxApplet::SqlMode::Auto, false);
+        QCOMPARE(rx.sqlMode(), RxApplet::SqlMode::Auto);
+        source->requests.clear();
+        status(*slice, true, 54, mode);
+        QVERIFY(!control<QPushButton>(rx, "Squelch mode")->isEnabled());
+        QVERIFY(!control<QSlider>(rx, "Squelch threshold")->isEnabled());
+        QVERIFY(!control<QPushButton>(vfo, "Squelch")->isEnabled());
+        // The effective display gate demotes Auto without a CW radio write.
+        rx.setAutoSqlAvailability(false, "Unavailable receive mode");
+        QCOMPARE(rx.sqlMode(), RxApplet::SqlMode::Off);
+        for (const SliceSquelchRequest& request : source->requests) {
+            QVERIFY(!request.enabled);
+        }
+        if (mode.startsWith("CW")) {
+            QCOMPARE(source->requests.size(), 0);
+        }
+        source->requests.clear();
+        // Late On readback and saved/programmatic Auto must not restart it.
+        status(*slice, true, 69, mode);
+        rx.setAutoSqlAvailability(true, {});
+        RxAppletSquelchTestAccess::mode(rx, RxApplet::SqlMode::Auto, true);
+        QCOMPARE(rx.sqlMode(), RxApplet::SqlMode::Off);
+        QCOMPARE(source->requests.size(), 0);
+        status(*slice, false, 69, "USB");
+        QVERIFY(control<QPushButton>(rx, "Squelch mode")->isEnabled());
+        RxAppletSquelchTestAccess::mode(rx, RxApplet::SqlMode::Auto, false);
+        QCOMPARE(rx.sqlMode(), RxApplet::SqlMode::Auto);
+    }
+
     void engineSqlPublishesOnlyAcceptedModeAndMargin()
     {
         RadioModel radio;

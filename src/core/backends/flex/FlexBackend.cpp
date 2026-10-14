@@ -388,6 +388,8 @@ RadioCapabilities FlexBackend::capabilities() const
     // squelch_level 0..100 is dBm above -160 on the calibrated pan axis, in
     // every mode, so the pan floor plus a margin is the level to send.
     caps.squelchLevelScale = legacyDbmSquelchScale();
+    caps.squelchLevelScale->controlUnavailableModes = {
+        "DIGU", "DIGL", "RTTY", "NT", "CW", "CWU", "CWL", "DFM", "RADE"};
 
     // Seed from the FlexLib-sourced platform table (Principle I). This is the
     // derived-from-name truth used to *seed* the reported capabilities; a fuller
