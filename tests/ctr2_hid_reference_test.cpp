@@ -297,7 +297,8 @@ void testExtensionsAgree()
     ctr2_rx_set_extensions(&masked, 0xFFFFFFFFu);
     check(masked.extensions
               == (CTR2_CAP(CTR2_EXT_AUDIO_SPECTRUM) | CTR2_CAP(CTR2_EXT_RELAY_UDP_PORT)
-                  | CTR2_CAP(CTR2_EXT_AUDIO_SPECTRUM_LINEAR) | CTR2_CAP(CTR2_EXT_CW_TEXT)),
+                  | CTR2_CAP(CTR2_EXT_AUDIO_SPECTRUM_LINEAR) | CTR2_CAP(CTR2_EXT_CW_TEXT)
+                  | CTR2_CAP(CTR2_EXT_FIRMWARE)),
           "the reference keeps only defined extension types");
     bool linearAgree = CTR2_EXT_AUDIO_SPECTRUM_LINEAR
             == static_cast<int>(MessageType::AudioSpectrumLinear)
@@ -407,10 +408,125 @@ void testExtensionsAgree()
           "the application reassembles the reference's extension unchanged");
 }
 
+// Firmware: the update session and the version report, both directions.
+void testFirmwareAgrees()
+{
+    check(CTR2_EXT_FIRMWARE == static_cast<int>(MessageType::Firmware)
+              && ctr2_ext_max_length(CTR2_EXT_FIRMWARE) == extensionMaxLength(MessageType::Firmware)
+              && CTR2_FW_CHUNK == firmware::kChunkBytes
+              && CTR2_FW_DATA_HEADER == firmware::kDataHeaderBytes
+              && CTR2_FW_BEGIN == firmware::kBegin && CTR2_FW_DATA == firmware::kData
+              && CTR2_FW_END == firmware::kEnd && CTR2_FW_ABORT == firmware::kAbort
+              && CTR2_FW_SWITCH == firmware::kSwitch
+              && CTR2_FW_STATUS == firmware::kStatus
+              && CTR2_FW_REJECTED == static_cast<int>(firmware::Status::Rejected)
+              && CTR2_FW_BAD_MESSAGE == static_cast<int>(firmware::Status::BadMessage)
+              && CTR2_INFO_REPORT_ID == deviceinfo::kReportId && CTR2_INFO_BYTES == deviceinfo::kBytes
+              && CTR2_INFO_PENDING == deviceinfo::kPending && CTR2_INFO_SIGNED == deviceinfo::kSigned,
+          "Firmware agrees: type 0x44, 517 bytes, ops, statuses and the version report");
+
+    const QByteArray sha(32, '\x5A');
+    check(firmware::encodeBegin(0x000F1000, sha).size() == CTR2_FW_BEGIN_LEN,
+          "Begin is 37 bytes");
+    check(firmware::encodeData(0, QByteArray(600, 'x')).size()
+              == CTR2_FW_DATA_HEADER + CTR2_FW_CHUNK,
+          "Data carries at most one chunk");
+
+    // The host opens the session with Begin in place of Ready; the device
+    // starts its receiver at that counter (ctr2_rx_start) and takes it.
+    FrameEncoder enc;
+    std::vector<Report> reports;
+    enc.reset();
+    enc.encodeExtension(MessageType::Firmware, firmware::encodeBegin(1234, sha), &reports);
+    enc.encodeExtension(MessageType::Firmware, firmware::encodeData(0, QByteArray(512, 'a')),
+                        &reports);
+    ctr2_rx rx;
+    ctr2_rx_init(&rx);
+    ctr2_rx_set_extensions(&rx, CTR2_CAP(CTR2_EXT_FIRMWARE));
+    ctr2_rx_reset(&rx);
+    ctr2_rx_start(&rx, reports[0][2]);
+    std::uint8_t type = 0;
+    const std::uint8_t* data = nullptr;
+    std::uint16_t len = 0;
+    int begins = 0, chunks = 0;
+    bool clean = true;
+    for (const Report& r : reports) {
+        const ctr2_rx_result res = ctr2_rx_feed(&rx, r.data(), &type, &data, &len);
+        clean = clean && res != CTR2_RX_ERROR;
+        if (res == CTR2_RX_MESSAGE && type == CTR2_EXT_FIRMWARE) {
+            begins += len == CTR2_FW_BEGIN_LEN && data[0] == CTR2_FW_BEGIN
+                && data[1] == 0 && data[2] == 0 && data[3] == 0x04 && data[4] == 0xD2;
+            chunks += len == CTR2_FW_DATA_HEADER + 512 && data[0] == CTR2_FW_DATA;
+        }
+    }
+    check(clean && begins == 1 && chunks == 1,
+          "the reference takes a session opened by Begin in place of Ready");
+    ctr2_rx cold;
+    ctr2_rx_init(&cold);
+    ctr2_rx_set_extensions(&cold, CTR2_CAP(CTR2_EXT_FIRMWARE));
+    check(ctr2_rx_feed(&cold, reports[0].data(), &type, &data, &len) == CTR2_RX_ERROR
+              && cold.error == CTR2_ERR_NOT_STARTED,
+          "without ctr2_rx_start a session cannot open");
+
+    // Device Status -> application.
+    const std::uint8_t status[CTR2_FW_STATUS_LEN] = {CTR2_FW_STATUS, CTR2_FW_DATA, CTR2_FW_OK,
+                                                     0x00, 0x01, 0x02, 0x00};
+    std::vector<Report> fromC;
+    ctr2_tx tx{};
+    ctr2_tx_send(&tx, CTR2_TYPE_READY, nullptr, 0, collect, &fromC);
+    ctr2_tx_send_extension(&tx, CTR2_EXT_FIRMWARE, status, sizeof status, collect, &fromC);
+    FrameReassembler host;
+    host.setExtensions(capabilityBit(MessageType::Firmware));
+    std::vector<Message> out;
+    bool ok = true;
+    for (const Report& r : fromC) {
+        ok = host.feed(r, &out) && ok;
+    }
+    firmware::Reply reply;
+    check(ok && out.size() == 2 && firmware::decodeStatus(out[1].payload, &reply)
+              && reply.op == firmware::kData && reply.status == firmware::Status::Ok
+              && reply.value == 0x10200,
+          "the application reads the reference's Status");
+
+    // The version report, each way.
+    ctr2_info info{};
+    info.major = 1;
+    info.minor = 2;
+    info.patch = 3;
+    info.flags = CTR2_INFO_PENDING | CTR2_INFO_SIGNED;
+    std::strcpy(info.build, "0a1b2c3d4");
+    std::uint8_t raw[CTR2_INFO_BYTES];
+    ctr2_info_encode(&info, raw);
+    deviceinfo::Info decoded;
+    check(deviceinfo::decode(QByteArray(reinterpret_cast<const char*>(raw), CTR2_INFO_BYTES),
+                             &decoded)
+              && decoded.version() == QStringLiteral("1.2.3") && decoded.pending()
+              && (decoded.flags & deviceinfo::kSigned) && decoded.build == QStringLiteral("0a1b2c3d4"),
+          "the application reads the reference's version report");
+    const QByteArray cppInfo = deviceinfo::encode(decoded);
+    ctr2_info back{};
+    check(ctr2_info_decode(reinterpret_cast<const std::uint8_t*>(cppInfo.constData()),
+                           static_cast<size_t>(cppInfo.size()), &back)
+              && back.major == 1 && back.minor == 2 && back.patch == 3
+              && back.flags == info.flags && std::strcmp(back.build, "0a1b2c3d4") == 0
+              && std::equal(raw, raw + CTR2_INFO_BYTES,
+                            reinterpret_cast<const std::uint8_t*>(cppInfo.constData())),
+          "the version report is byte-identical both ways");
+    raw[10] = 0x07;   // a control character in the build ID
+    check(!ctr2_info_decode(raw, CTR2_INFO_BYTES, &back)
+              && !deviceinfo::decode(QByteArray(reinterpret_cast<const char*>(raw),
+                                                CTR2_INFO_BYTES), &decoded),
+          "both refuse a version report with an unprintable build ID");
+    check(!ctr2_info_decode(raw, CTR2_INFO_BYTES - 1, &back)
+              && !deviceinfo::decode(QByteArray(CTR2_INFO_BYTES - 1, 'F'), &decoded),
+          "both refuse a short version report");
+}
+
 int main()
 {
     testConstantsAgree();
     testExtensionsAgree();
+    testFirmwareAgrees();
     testVectors();
     testCrossInterop();
     testRejectSameInput();

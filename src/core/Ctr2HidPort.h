@@ -7,6 +7,7 @@
 #include <QObject>
 #include <QString>
 
+#include <optional>
 #include <vector>
 
 namespace AetherSDR {
@@ -68,6 +69,9 @@ public:
     // Link extensions negotiated with the device (ctr2hid::capabilityBit
     // mask); 0 for plain link version 0, and until negotiation finishes.
     quint32 extensions() const { return m_extensions; }
+    // The device's firmware version (Feature report 0x03), read during
+    // negotiation; empty for a device without it, and until then.
+    const std::optional<ctr2hid::deviceinfo::Info>& firmwareInfo() const { return m_firmwareInfo; }
 
 signals:
     // A whole number of 8-byte reports, in arrival order.
@@ -79,14 +83,18 @@ signals:
     void extensionsNegotiated(quint32 extensions);
 
 protected:
-    void setExtensions(quint32 extensions)
+    // The firmware version first: extensionsNegotiated() announces both.
+    void setExtensions(quint32 extensions,
+                       std::optional<ctr2hid::deviceinfo::Info> info = std::nullopt)
     {
+        m_firmwareInfo = std::move(info);
         m_extensions = extensions;
         emit extensionsNegotiated(extensions);
     }
 
 private:
     quint32 m_extensions{0};
+    std::optional<ctr2hid::deviceinfo::Info> m_firmwareInfo;
 };
 
 } // namespace AetherSDR

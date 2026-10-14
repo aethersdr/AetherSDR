@@ -463,6 +463,22 @@ target_include_directories(ctr2_hid_reference_test PRIVATE
 target_link_libraries(ctr2_hid_reference_test PRIVATE aethercore Qt6::Core)
 add_test(NAME ctr2_hid_reference_test COMMAND ctr2_hid_reference_test)
 
+# CTR2 firmware updates against a simulated device whose side of the link
+# runs the MIT firmware reference: success (stop-and-wait and windowed), a
+# slow re-enumeration, a rejected image, no Firmware extension, no answer, a
+# rollback to the old image, and cancel mid-transfer. No hidapi, no sockets.
+add_executable(ctr2_firmware_updater_test
+    tests/ctr2_firmware_updater_test.cpp
+    tools/ctr2-firmware-reference/ctr2_link.c)
+set_source_files_properties(tools/ctr2-firmware-reference/ctr2_link.c
+    TARGET_DIRECTORY ctr2_firmware_updater_test PROPERTIES LANGUAGE C)
+set_property(TARGET ctr2_firmware_updater_test PROPERTY C_STANDARD 99)
+target_include_directories(ctr2_firmware_updater_test PRIVATE
+    src tools/ctr2-firmware-reference)
+target_link_libraries(ctr2_firmware_updater_test PRIVATE aethercore Qt6::Core)
+add_test(NAME ctr2_firmware_updater_test COMMAND ctr2_firmware_updater_test)
+set_tests_properties(ctr2_firmware_updater_test PROPERTIES TIMEOUT 120)
+
 # CTR2 HID I/O thread with injected device operations (no hidapi, no device,
 # no sockets): shutdown never blocks the owner on slow writes, discardQueued()
 # fences queued output and late acknowledgements, reads and failures surface.

@@ -314,12 +314,83 @@ counts radio bytes only. Each AUDIO_SPECTRUM frame of 32 bars is 7 reports
 | `0x41` RELAY_UDP_PORT | 1 | host → device | (2 bytes) `[port hi][port lo]`: the host's UDP socket for this link, sent once right after the host's READY. The device registers for UDP with `client udpport <port>` (and a one-byte datagram to radio port 4992). |
 | `0x42` AUDIO_SPECTRUM_LINEAR | 2 | host → device | (69 bytes) The same payload as AUDIO_SPECTRUM, `[bars N][low Hz hi][low Hz lo][span Hz hi][span Hz lo][N levels]`, but the bars always split low..span evenly, bar *i* covering low + (span − low)·i/N to low + (span − low)·(i+1)/N, whatever low is. A device that negotiates it gets it in place of AUDIO_SPECTRUM for windows that do not start at 0. AetherSDR sends it while receiving CW: a window centered on the CW pitch covering the passband (pitch + filter low to pitch + filter high) with half its width to spare on each side, kept within 0 Hz and Nyquist, so a controller can show how far a signal is from zero beat. Requires AUDIO_SPECTRUM. |
 | `0x43` CW_TEXT | 3 | host → device | (2–33 bytes) `[confidence 0..3][1..32 bytes of text]`: CW decoded by AetherSDR's CW decoder from the active slice (while it runs: the slice in CW and RX decoding on), as it arrives, about a character at a time with word gaps as spaces. Filtered by the CW panel's sensitivity threshold; newlines become spaces and only printable ASCII is sent. Confidence 0 is the most certain (decoder cost < 0.15), then 1 (< 0.35), 2 (< 0.60) and 3, the bands the CW panel colors. |
+| `0x44` FIRMWARE | 4 | both | (1–517 bytes) `[op][...]`: replaces the device's application over the link. Never negotiated by the relay; only AetherSDR's firmware updater uses it, on a session of its own. See *Firmware updates* below. |
 
 The reference implementation in `tools/ctr2-firmware-reference` covers the
 Feature report layout (`ctr2_caps_encode` / `ctr2_caps_decode`), sending
 (`ctr2_tx_send_extension`) and the accepted set
 (`ctr2_rx_set_extensions`). AetherSDR's tests cross-check it against the
 application in both directions.
+
+### Firmware updates
+
+A device that can replace its own application offers FIRMWARE (`0x44`), and
+reports its version in HID Feature report `0x03`. Neither is part of
+relaying: the relay never accepts FIRMWARE, and a device without them is
+updated some other way.
+
+**Version report.** Feature report `0x03`, Get only, exactly 24 bytes after
+the report ID, readable at any time without a link:
+
+```text
+['F'] ['W'] [layout 0x01] [major] [minor] [patch] [flags] [0x00]
+[build ID: 16 bytes of printable ASCII, NUL-padded]
+```
+
+Flags: `0x01` PENDING, this image was just installed and has not completed a
+link yet, so the device drops it on its next reset; `0x02` SIGNED, FIRMWARE
+accepts only images signed for this device. AetherSDR reads the report
+whenever it opens the device, and shows the version in the CTR2 Proxy
+applet.
+
+**Session.** The relay must not hold the device. The host accepts only
+FIRMWARE in Feature report `0x02`, sends HELLO and waits for READY as usual,
+then, in place of its own READY, resets its counter and sends FIRMWARE
+BEGIN. No radio connection opens. The device takes that header's counter as
+the start of the sequence (`ctr2_rx_start` in the reference) and sends only
+FIRMWARE messages until the session ends with CLOSED, HELLO or its own
+restart. Integers are big-endian:
+
+| Op | Direction | Payload | Meaning |
+| --- | --- | --- | --- |
+| `0x01` BEGIN | host → device | `[size u32][SHA-256, 32 bytes]` (37 bytes) | an image of `size` bytes follows |
+| `0x02` DATA | host → device | `[offset u32][1..512 bytes]` | the next bytes of the image, in order |
+| `0x03` END | host → device | none | verify the image and its signature, select it, restart into it |
+| `0x04` ABORT | host → device | none | drop the partial image |
+| `0x05` SWITCH | host → device | none | restart into the device's other firmware (its maker's, kept beside this one) |
+| `0x81` STATUS | device → host | `[op][status][value u32]` (7 bytes) | the answer to each host message; for DATA, value is the bytes stored so far |
+
+Status: `0` OK, `1` BAD_STATE (no session, a second BEGIN, or no other
+firmware for SWITCH), `2` BAD_OFFSET, `3` TOO_LARGE, `4` FLASH_ERROR, `5`
+REJECTED (not a valid image signed for this device), `6` HASH_MISMATCH, `7`
+BAD_MESSAGE.
+
+AetherSDR keeps four DATA messages in flight. At the link's rate of about
+7 KB/s (one 8-byte report per millisecond) a 1 MB image takes about two and
+a half minutes; the device erases its flash as the bytes arrive, so the link
+never waits for a whole-slot erase.
+
+**Keeping the new image.** After END answers OK the device leaves the bus
+and restarts on the new image, which reports PENDING. The host opens it
+again, checks the version is the one it sent, and completes a link (HELLO,
+READY, then CLOSED). Only then does the device keep the image; it clears
+PENDING, and the host reads the report once more to confirm. A device that
+resets before that, because the new image crashed or never reached the host,
+returns to its previous image. A device that refuses the image at END keeps
+its firmware, and the host ends the session with ABORT and CLOSED.
+
+**Two firmwares on one device.** A device may keep its maker's firmware
+beside the one AetherSDR updates, in a slot an update never writes, so the
+maker's firmware and its settings survive every update. SWITCH asks the
+device to restart into that firmware; how a device selects its image is its
+own business.
+
+**Host implementation.** `Ctr2FirmwareUpdater` runs the session and checks
+the image before sending anything: an ESP32-S3 application image with an
+application description (`readImage`), not a merged flash image or a
+bootloader. `Ctr2ProxyModel` stops the relay for the update and starts it
+again afterwards. `tests/ctr2_firmware_updater_test.cpp` holds it to a
+simulated device that runs the reference for its side of the link.
 
 ### Test vectors
 

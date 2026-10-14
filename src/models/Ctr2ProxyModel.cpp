@@ -55,10 +55,38 @@ Ctr2ProxyModel::Ctr2ProxyModel(QObject* parent)
     connect(m_usb, &Ctr2UsbRelay::endpointsChanged, this, &Ctr2ProxyModel::endpointsChanged);
     connect(m_usb, &Ctr2UsbRelay::lastErrorChanged, this, &Ctr2ProxyModel::lastErrorChanged);
     connect(m_usb, &Ctr2UsbRelay::extensionsChanged, this, &Ctr2ProxyModel::extensionsChanged);
+    // Through the members, so a backend set later (tests) is the one used.
+    m_firmware = new Ctr2FirmwareUpdater(
+        [this] { return m_usbDevices ? m_usbDevices() : QList<Ctr2HidPort::DeviceInfo>(); },
+        [this](const Ctr2HidPort::DeviceInfo& device, QString* error) -> Ctr2HidPort* {
+            return m_firmwareOpener
+                ? m_firmwareOpener(device, ctr2hid::capabilityBit(ctr2hid::MessageType::Firmware),
+                                   error)
+                : nullptr;
+        },
+        this);
+    connect(m_firmware, &Ctr2FirmwareUpdater::progress, this, &Ctr2ProxyModel::firmwareUpdateProgress);
+    connect(m_firmware, &Ctr2FirmwareUpdater::stepChanged, this, &Ctr2ProxyModel::firmwareUpdateStep);
+    connect(m_firmware, &Ctr2FirmwareUpdater::finished, this,
+            [this](bool ok, const QString& message, const QString&) {
+        refreshDevices();   // the device re-enumerated, perhaps at a new path
+        m_probedPath.clear();
+        if (m_restartAfterFirmware) {
+            m_restartAfterFirmware = false;
+            start();
+        }
+        probeFirmwareVersion();
+        emit configurationChanged();
+        emit firmwareUpdateFinished(ok, message);
+    });
 #ifdef HAVE_HIDAPI
     m_usbDevices = [] { return Ctr2HidapiPort::enumerate(); };
     m_usbOpener = [](const Ctr2HidPort::DeviceInfo& device, QString* error) -> Ctr2HidPort* {
         return Ctr2HidapiPort::open(device, error);
+    };
+    m_firmwareOpener = [](const Ctr2HidPort::DeviceInfo& device, quint32 hostCapabilities,
+                          QString* error) -> Ctr2HidPort* {
+        return Ctr2HidapiPort::open(device, error, nullptr, hostCapabilities);
     };
     // USB is the default whenever this build can open a CTR2.
     m_transport = Transport::Usb;
@@ -72,10 +100,12 @@ Ctr2ProxyModel::~Ctr2ProxyModel()
     stop();
 }
 
-void Ctr2ProxyModel::setUsbBackend(UsbDeviceSource devices, UsbPortOpener opener)
+void Ctr2ProxyModel::setUsbBackend(UsbDeviceSource devices, UsbPortOpener opener,
+                                   UsbCapsPortOpener firmwareOpener)
 {
     m_usbDevices = std::move(devices);
     m_usbOpener = std::move(opener);
+    m_firmwareOpener = std::move(firmwareOpener);
     m_usbChoices.clear();
     refreshDevices();
     emit configurationChanged();
@@ -124,6 +154,48 @@ void Ctr2ProxyModel::refreshDevices()
     }
     emit listenAddressesChanged();
     emit configurationChanged();
+    m_probedPath.clear();   // a device may have been swapped at the same path
+    // From the event loop: a backend set right after construction (tests)
+    // is the one that opens the device.
+    QTimer::singleShot(0, this, &Ctr2ProxyModel::probeFirmwareVersion);
+}
+
+// Opens the selected device just long enough to read its firmware version
+// (Feature report 0x03, read when a port opens), accepting no link
+// extensions so the device's state is untouched. Never while the relay or an
+// update holds the device.
+void Ctr2ProxyModel::probeFirmwareVersion()
+{
+    if (!m_firmwareOpener || m_probe || isRunning() || m_firmware->isRunning()
+        || m_transport != Transport::Usb) {
+        return;
+    }
+    const Ctr2HidPort::DeviceInfo* device = selectedUsbDevice();
+    if (!device || device->path == m_probedPath) {
+        return;
+    }
+    QString error;
+    Ctr2HidPort* port = m_firmwareOpener(*device, 0, &error);
+    if (!port) {
+        return;   // no access yet (Linux rule) or gone; Start reports why
+    }
+    m_probe = port;
+    const QString path = device->path;
+    const auto finish = [this, port, path](const QString& version) {
+        disconnect(port, nullptr, this, nullptr);
+        port->shutdown({});
+        m_probe.clear();
+        m_probedPath = path;
+        if (m_probedVersion != version) {
+            m_probedVersion = version;
+        }
+        emit firmwareVersionChanged();
+    };
+    connect(port, &Ctr2HidPort::extensionsNegotiated, this, [port, finish](quint32) {
+        const std::optional<ctr2hid::deviceinfo::Info>& info = port->firmwareInfo();
+        finish(info ? info->version() : QString());
+    });
+    connect(port, &Ctr2HidPort::failed, this, [finish](const QString&) { finish(QString()); });
 }
 
 bool Ctr2ProxyModel::setTransport(Transport transport)
@@ -141,6 +213,7 @@ bool Ctr2ProxyModel::setTransport(Transport transport)
         emit endpointsChanged();
         emit lastErrorChanged();
         emit statsChanged();
+        probeFirmwareVersion();
     }
     return true;
 }
@@ -177,6 +250,7 @@ bool Ctr2ProxyModel::setUsbDevicePath(const QString& path)
     if (m_usbDevicePath != path) {
         m_usbDevicePath = path;
         emit configurationChanged();
+        probeFirmwareVersion();
     }
     return true;
 }
@@ -295,6 +369,9 @@ QString Ctr2ProxyModel::configurationProblem() const
         if (!usbAvailable()) {
             return tr("This build has no USB HID support (hidapi)");
         }
+        if (m_firmware && m_firmware->isRunning()) {
+            return tr("Updating the device's firmware");
+        }
         if (radioProblem(&problem)) {
             return problem;
         }
@@ -380,6 +457,9 @@ void Ctr2ProxyModel::stop()
     m_runningRadioAddress = QHostAddress();
     emit configurationChanged();
     emit lastErrorChanged();
+    // Keep showing the device's version once the relay has let go of it.
+    m_probedPath.clear();
+    QTimer::singleShot(0, this, &Ctr2ProxyModel::probeFirmwareVersion);
 }
 
 TcpByteProxy::State Ctr2ProxyModel::state() const
@@ -431,6 +511,56 @@ QString Ctr2ProxyModel::peerEndpoint() const
 QString Ctr2ProxyModel::radioEndpoint() const
 {
     return usbActive() ? m_usb->radioDescription() : m_proxy->upstreamDescription();
+}
+
+QString Ctr2ProxyModel::usbFirmwareVersion() const
+{
+    if (usbActive() && isRunning()) {
+        const std::optional<ctr2hid::deviceinfo::Info> info = m_usb->firmwareInfo();
+        return info ? info->version() : QString();
+    }
+    return m_probedPath == m_usbDevicePath ? m_probedVersion : QString();
+}
+
+bool Ctr2ProxyModel::firmwareUpdateRunning() const
+{
+    return m_firmware->isRunning();
+}
+
+bool Ctr2ProxyModel::startFirmwareUpdate(const Ctr2FirmwareUpdater::Image& image, QString* problem)
+{
+    if (!m_firmwareOpener) {
+        *problem = tr("This build of AetherSDR cannot update USB devices");
+        return false;
+    }
+    if (m_firmware->isRunning()) {
+        *problem = tr("An update is already running");
+        return false;
+    }
+    if (m_transport != Transport::Usb) {
+        *problem = tr("Select USB mode and the device to update");
+        return false;
+    }
+    const Ctr2HidPort::DeviceInfo* device = selectedUsbDevice();
+    if (!device) {
+        *problem = tr("Select the USB device to update");
+        return false;
+    }
+    const Ctr2HidPort::DeviceInfo target = *device;
+    // Only one program may drive the link: the relay lets go first, and
+    // comes back afterwards if it was running.
+    m_restartAfterFirmware = isRunning() && usbActive();
+    if (isRunning()) {
+        stop();
+    }
+    m_firmware->start(target, image);
+    emit configurationChanged();
+    return true;
+}
+
+void Ctr2ProxyModel::cancelFirmwareUpdate()
+{
+    m_firmware->cancel();
 }
 
 bool Ctr2ProxyModel::audioSpectrumWanted() const

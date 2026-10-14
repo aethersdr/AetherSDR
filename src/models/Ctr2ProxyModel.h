@@ -1,11 +1,13 @@
 #pragma once
 
+#include "core/Ctr2FirmwareUpdater.h"
 #include "core/Ctr2HidPort.h"
 #include "core/TcpByteProxy.h"
 
 #include <QHostAddress>
 #include <QList>
 #include <QObject>
+#include <QPointer>
 #include <QString>
 #include <QStringList>
 
@@ -43,7 +45,13 @@ public:
     using UsbDeviceSource = std::function<QList<Ctr2HidPort::DeviceInfo>()>;
     using UsbPortOpener =
         std::function<Ctr2HidPort*(const Ctr2HidPort::DeviceInfo&, QString* error)>;
-    void setUsbBackend(UsbDeviceSource devices, UsbPortOpener opener);
+    // Opens a device accepting only the given link extensions: Firmware for
+    // an update, none to read the firmware version. Empty keeps updates and
+    // the idle version readout unavailable.
+    using UsbCapsPortOpener = std::function<Ctr2HidPort*(const Ctr2HidPort::DeviceInfo&,
+                                                         quint32 hostCapabilities, QString* error)>;
+    void setUsbBackend(UsbDeviceSource devices, UsbPortOpener opener,
+                       UsbCapsPortOpener firmwareOpener = {});
     bool usbAvailable() const { return static_cast<bool>(m_usbOpener); }
 
     // Rescans local IPv4 addresses and CTR2-class USB HID devices.
@@ -102,6 +110,21 @@ public:
     // Decoded CW text for the device, with the decoder's cost (lower is
     // better). False if not wanted now or nothing printable is left.
     bool sendCwText(const QString& text, float cost);
+
+    // Firmware version of the selected USB device: from the relay while it
+    // runs, otherwise read when the device is selected or rescanned. Empty
+    // for a device that does not report one (any stock CTR2).
+    QString usbFirmwareVersion() const;
+    bool firmwareUpdateAvailable() const { return static_cast<bool>(m_firmwareOpener); }
+    bool firmwareUpdateRunning() const;
+    // Updates the selected USB device with image (Ctr2FirmwareUpdater::readImage).
+    // Stops the relay first and starts it again afterwards if it was
+    // running. False, with *problem, when it cannot start.
+    bool startFirmwareUpdate(const Ctr2FirmwareUpdater::Image& image, QString* problem);
+    // Before the device starts checking the image; the device keeps its
+    // current firmware. Later the update runs to its end.
+    void cancelFirmwareUpdate();
+    Ctr2FirmwareUpdater* firmwareUpdater() const { return m_firmware; }
     // One AudioSpectrum frame: bars in dBFS, log-spaced from lowHz to spanHz
     // (a non-finite bar reads as silence). False if not wanted now or the
     // link is busy.
@@ -128,6 +151,10 @@ signals:
     void statsChanged();      // coalesced for display
     void lastErrorChanged();
     void extensionsChanged();   // the USB device's link extensions; audioSpectrumWanted() may move
+    void firmwareUpdateProgress(qint64 bytesStored, qint64 imageBytes);
+    void firmwareUpdateStep(const QString& step);
+    void firmwareUpdateFinished(bool ok, const QString& message);
+    void firmwareVersionChanged();
 
 private:
     static bool parsePort(const QString& text, quint16* port);
@@ -158,6 +185,13 @@ private:
     QString m_stopReason;                // why the relay stopped on its own
     UsbDeviceSource m_usbDevices;
     UsbPortOpener m_usbOpener;
+    UsbCapsPortOpener m_firmwareOpener;
+    void probeFirmwareVersion();
+    QPointer<Ctr2HidPort> m_probe;
+    QString m_probedPath;      // the device m_probedVersion was read from
+    QString m_probedVersion;
+    Ctr2FirmwareUpdater* m_firmware{nullptr};
+    bool m_restartAfterFirmware{false};
 };
 
 } // namespace AetherSDR

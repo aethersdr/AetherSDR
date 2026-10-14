@@ -5,6 +5,7 @@
 
 class QLabel;
 class QLineEdit;
+class QProgressBar;
 class QPushButton;
 class GuardedComboBox;
 
@@ -30,6 +31,10 @@ private:
     void syncStatus();
     void syncStats();
     void onStartClicked();
+    void syncFirmware();
+    void onUpdateClicked();
+    void onFirmwareProgress(qint64 stored, qint64 total);
+    void onFirmwareFinished(bool ok, const QString& message);
 #ifdef Q_OS_LINUX
     void offerUsbAccessRule();
     void showManualRuleInstructions(const QString& why);
@@ -52,6 +57,11 @@ private:
     QLabel* m_trafficLabel{nullptr};
     QLabel* m_problemLabel{nullptr};
     QLabel* m_errorLabel{nullptr};
+    QLabel* m_firmwareRowLabel{nullptr};
+    QLabel* m_firmwareLabel{nullptr};
+    QPushButton* m_updateBtn{nullptr};
+    QProgressBar* m_updateBar{nullptr};
+    QString m_updateStep;
     bool m_installingRule{false};  // pkexec rule install in flight
 };
 
