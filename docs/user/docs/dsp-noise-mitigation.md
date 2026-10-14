@@ -26,6 +26,8 @@ On a FlexRadio these run on the radio's FPGA — zero CPU cost to your PC (the n
 
 The radio-side buttons are on the VFO flag's **DSP** tab: NR, NB, ANF and APF on the first row; NRL, NRS, RNN and NRF on the second.
 
+The **NRL**, **NRS** and **ANFL** amount controls show the radio's reported levels. Profile recalls and changes made by another client update the displayed values. AetherSDR accepts the NRS readback without restoring a previously selected amount over it.
+
 ### NB — Noise Blanker
 Blanks short impulse noise (ignition interference, switching power supplies). Has an adjustable level (0-100) in the DSP side panel.
 
