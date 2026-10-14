@@ -244,6 +244,7 @@ private:
     quint64 m_nicknameSession{0};
     quint64 m_nicknameRequest{0};
     quint64 m_nicknameAppliedRequest{0};
+    // Nickname status only; info replies populate RadioModel separately.
     quint64 m_nicknameStatusRevision{0};
     std::function<void(const QString&, const TxCoordinator::Command&)> m_txSink;
     std::function<void(const QString&)> m_sliceSink;

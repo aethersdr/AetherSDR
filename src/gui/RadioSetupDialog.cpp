@@ -2224,7 +2224,7 @@ QWidget* RadioSetupDialog::buildRadioTab()
                 // SmartLink discards pending replies when its session ends.
                 m_nicknamePending = false;
                 ++m_nicknameEditGeneration;
-                if (!m_nicknameEdit->isModified()
+                if (m_nicknameEdit && !m_nicknameEdit->isModified()
                     && hl2::Hl2Discovery::nicknameLivesOnRadio(m_model->lastRadioInfo())) {
                     m_nicknameEdit->setText(m_model->nickname());
                 }

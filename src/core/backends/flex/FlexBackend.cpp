@@ -1627,6 +1627,7 @@ void FlexBackend::decodeTunerStatus(const QString& handle, const QMap<QString, Q
 
 void FlexBackend::clearExtensionHandles()
 {
+    // Identity replies belong to the same session as the cached encode handles.
     ++m_nicknameSession;
     // #4198: forget the amp/tuner encode handles on disconnect/reset so a stale
     // handle can't survive into a reconnect (possibly a different radio).

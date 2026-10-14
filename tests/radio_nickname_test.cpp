@@ -3,6 +3,7 @@
 #include "SeamThreadAffinityProbe.h"
 #include "core/AppSettings.h"
 #include "core/RadioDiscovery.h"
+#include "core/backends/flex/CommandParser.h"
 #include "core/backends/flex/FlexBackend.h"
 #include "core/backends/hl2/Hl2Discovery.h"
 #include "gui/RadioSetupDialog.h"
@@ -336,10 +337,54 @@ void replyOrdering()
     backend->clearExtensionHandles();
     replies.last()(0, QString());
     check(changes.isEmpty() && !accepted, "a late reply from an ended session cannot publish identity");
-    backend->requestRadioNickname(QStringLiteral("Destroyed"), [&](bool ok) { accepted = ok; });
+    accepted = true;
+    int completions = 0;
+    backend->requestRadioNickname(QStringLiteral("Destroyed"), [&](bool ok) {
+        accepted = ok;
+        ++completions;
+    });
     backend.reset();
     replies.last()(0, QString());
-    check(!accepted, "retained reply callback survives backend destruction without applying state");
+    check(!accepted && completions == 1,
+          "retained reply callback reports failure exactly once after backend destruction");
+}
+
+void replyValidation()
+{
+    FlexBackend backend;
+    FlexBackend::CommandReply reply;
+    backend.setCommandSink([&](const QString&, FlexBackend::CommandReply completion) {
+        reply = std::move(completion);
+        return true;
+    });
+    QSignalSpy changes(&backend, &IRadioBackend::radioChanged);
+    for (const QString& line : {QStringLiteral("R123"), QStringLiteral("R123|"),
+                                QStringLiteral("R123||"), QStringLiteral("R123|garbage|"),
+                                QStringLiteral("R123|100000000|"), QStringLiteral("R123|+0|"),
+                                QStringLiteral("R123|0x0|"), QStringLiteral("R123| 0 |"),
+                                QStringLiteral("R123|000000000|")}) {
+        const ParsedMessage parsed = CommandParser::parseLine(line);
+        check(parsed.resultCode != 0, "malformed reply result cannot be parsed as success");
+        bool accepted = true;
+        int completions = 0;
+        backend.requestRadioNickname(QStringLiteral("Unconfirmed"), [&](bool ok) {
+            accepted = ok;
+            ++completions;
+        });
+        reply(parsed.resultCode, parsed.object);
+        check(!accepted && completions == 1 && changes.isEmpty(),
+              "malformed parsed reply rejects nickname without publishing identity");
+    }
+    const ParsedMessage fatal = CommandParser::parseLine(QStringLiteral("R123|F3000001|refused"));
+    check(static_cast<quint32>(fatal.resultCode) == 0xF3000001U,
+          "valid high-bit radio error retains its unsigned wire pattern");
+    const ParsedMessage success = CommandParser::parseLine(QStringLiteral("R123|0|"));
+    bool accepted = false;
+    backend.requestRadioNickname(QStringLiteral("Confirmed"), [&](bool ok) { accepted = ok; });
+    reply(success.resultCode, success.object);
+    check(accepted && changes.size() == 1
+              && qvariant_cast<RadioDelta>(changes.first().first()).nickname == QStringLiteral("Confirmed"),
+          "valid zero result still confirms and publishes nickname");
 }
 
 void productionFirmwareProvider()
@@ -440,6 +485,7 @@ int main(int argc, char** argv)
     encoding();
     modelAndDialog();
     replyOrdering();
+    replyValidation();
     productionFirmwareProvider();
     statusBarNicknameWiring();
     localNicknames();
