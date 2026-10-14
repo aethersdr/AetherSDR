@@ -458,6 +458,7 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
                 if (m_model && !m_model->slice(sliceId)) {
                     const int trx = m_trxMap.trxForSliceId(sliceId);
                     if (trx >= 0 && !m_trxMap.trxHasLiveSlice(m_model, trx)) {
+                        broadcast(QStringLiteral("tx_enable:%1,false;").arg(trx));
                         broadcast(QStringLiteral("rx_enable:%1,false;").arg(trx));
                     }
                     m_trxMap.release(sliceId);

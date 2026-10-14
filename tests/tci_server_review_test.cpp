@@ -2536,6 +2536,34 @@ public:
             return false;
         }
 
+        // A band-change recreation retains its receiver and permission, but
+        // a genuine close must revoke permission before that receiver is reused.
+        sent.clear();
+        model.handleSliceStatusForTest(1, {}, true);
+        model.emitBackendSliceChangedForTest(1, second);
+        spin(600);
+        if (sent.contains(QStringLiteral("tx_enable:1,false;"))) {
+            std::printf("      recreation withdrew TX permission\n");
+            return false;
+        }
+        sent.clear();
+        model.handleSliceStatusForTest(1, {}, true);
+        spin(600);
+        if (!sent.contains(QStringLiteral("tx_enable:1,false;"))
+            || sent.contains(QStringLiteral("tx_enable:0,false;"))
+            || sent.contains(QStringLiteral("tx_enable:2,false;"))) {
+            std::printf("      close did not revoke only receiver 1: %s\n",
+                        sent.join(QLatin1Char(' ')).toUtf8().constData());
+            return false;
+        }
+        sent.clear();
+        model.emitBackendSliceChangedForTest(3, second);
+        if (server.m_trxMap.trxForSliceId(3) != 1
+            || !sent.contains(QStringLiteral("tx_enable:1,true;"))) {
+            std::printf("      reused receiver did not regain TX permission\n");
+            return false;
+        }
+
         RadioModel receiveOnly;
         receiveOnly.setBackendForTest(std::make_unique<TxCapableBackend>(false),
                                       QStringLiteral("test"));
