@@ -6990,6 +6990,19 @@ add_test(NAME control_availability_registry_test COMMAND control_availability_re
 set_tests_properties(control_availability_registry_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# Default CTest is socket-free. Manual --bridge-proof binds the production
+# agent automation bridge local socket, with injected capabilities and no radio.
+# DAX IQ rate requests and applet restore (#6437).
+add_executable(dax_iq_rate_limits_test
+    tests/dax_iq_rate_limits_test.cpp
+    src/gui/DaxIqApplet.cpp
+    src/gui/ControlAvailabilityRegistry.cpp
+    ${THEME_TEST_RESOURCES})
+target_include_directories(dax_iq_rate_limits_test PRIVATE src tests)
+target_link_libraries(dax_iq_rate_limits_test PRIVATE aethercore Qt6::Widgets Qt6::Test)
+add_test(NAME dax_iq_rate_limits_test COMMAND dax_iq_rate_limits_test)
+set_tests_properties(dax_iq_rate_limits_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # #5262 M1: family-specific verbs gate on the declared extension namespace, not
 # on the family string. Socket-free.
 add_executable(extension_namespace_gate_test tests/extension_namespace_gate_test.cpp)
@@ -9268,6 +9281,7 @@ set(AETHER_SETTINGS_CONSUMERS
     radio_capacity_declaration_test
     extension_namespace_gate_test
     control_availability_registry_test
+    dax_iq_rate_limits_test
     offline_health_registry_test
     tx_operation_integration_test
     tx_audio_context_test

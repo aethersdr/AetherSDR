@@ -2350,6 +2350,10 @@ RadioModel::RadioModel(QObject* parent)
             m_backend->invokeExtension(QStringLiteral("flex"), QStringLiteral("tuner.autotune"), 0);
     });
 
+    m_daxIqModel.setSampleRateProvider([this] {
+        return backendCapabilities().daxIqSampleRates;
+    });
+
     // Forward DAX IQ commands to the radio
     connect(&m_daxIqModel, &DaxIqModel::commandReady, this, [this](const QString& cmd){
         sendCmd(cmd);

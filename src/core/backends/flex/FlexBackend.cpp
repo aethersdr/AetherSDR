@@ -498,6 +498,7 @@ RadioCapabilities FlexBackend::capabilities() const
     caps.maxPanadapters =
         m_reportedMaxPanadapters > 0 ? m_reportedMaxPanadapters : mc.maxSlices;
     caps.hasExtendedDsp = mc.hasExtendedDsp();
+    caps.daxIqSampleRates = mc.daxIqSampleRates();
     // The LMS/FFT family is base Flex firmware, not an 8000-series extra —
     // every radio with hasRadioSideDsp below also has NRL/ANFL/ANFT.
     caps.hasLmsNoiseFilters = true;

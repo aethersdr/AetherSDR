@@ -344,6 +344,8 @@ private:
     void releaseAllIqStreams();
     void resetIqStreamBookkeeping();
     int  achievedIqSampleRate() const;
+    int  effectiveIqSampleRate() const;
+    void announceEffectiveIqSampleRate();
 
     void syncClient(const ClientState& client);
     TciClient* clientById(quint64 id) const;
@@ -391,6 +393,7 @@ private:
     QSet<int>          m_iqCreateInFlight;   // create issued, status not yet seen
     QSet<int>          m_pendingIqRemovals;  // awaiting a create status to reap
     QHash<QString,int> m_iqPanChannel;       // panId → TCI-owned DAX IQ channel
+    int                m_announcedIqSampleRate{48000};
     int                m_iqSampleRate{48000};// shared requested rate, all TCI receivers
     QHash<QString, long long> m_lastDdsCenterHz; // panId → last broadcast dds center, gates zoom-only re-emits (#3910)
     TciRoutingState m_routingState;

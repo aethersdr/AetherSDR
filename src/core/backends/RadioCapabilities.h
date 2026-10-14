@@ -874,6 +874,9 @@ struct RadioCapabilities {
     // devices for external decoders (Flex DAX). UI visibility only; the crash guard
     // is the separate panStream() null-check in MainWindow::startDax().
     bool hasDaxStreams = false;
+    // Discrete DAX IQ request rates in Hz. Empty means unsupported or unknown.
+    // Applied by the existing DaxIqModel command path, including stream restore.
+    QList<int> daxIqSampleRates;
 
     // Audio DSP runs inside the radio via command-plane verbs (Flex: NR/NB/ANF/NRL/
     // ANFL/ANFT, APD, wideband NB, 8-band hardware EQ `eq RXsc`/`eq TXsc`). False for
