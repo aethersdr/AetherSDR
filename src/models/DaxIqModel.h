@@ -6,6 +6,8 @@
 #include <QString>
 #include <QThread>
 #include <QVector>
+#include <QList>
+#include <functional>
 
 namespace AetherSDR {
 
@@ -46,6 +48,13 @@ public:
     void removeStream(int channel);               // stream remove 0x<id>
     void setSampleRate(int channel, int rate);     // stream set 0x<id> daxiq_rate=N
 
+    // Queried on the owner thread at request time so model/backend replacement
+    // cannot leave a cached limit from the previous radio.
+    void setSampleRateProvider(std::function<QList<int>()> provider);
+    QList<int> supportedSampleRates() const;
+    bool supportsSampleRate(int rate) const;
+    int sampleRateForPreference(int rate) const;
+
     // State
     const IqStream& stream(int channel) const;    // channel 1-4
     int capacity() const  { return m_capacity; }
@@ -80,6 +89,7 @@ private:
 
     IqStream m_streams[NUM_CHANNELS];  // index 0-3 for channels 1-4
     int      m_desiredRate[NUM_CHANNELS]{48000, 48000, 48000, 48000};  // user-selected rate, applied after (re)create
+    std::function<QList<int>()> m_sampleRateProvider;
     int m_capacity{0};
     int m_available{0};
 

@@ -510,7 +510,11 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         });
 
         connect(m_model, &RadioModel::capabilitiesChanged, this,
-                [this](bool, const RadioCapabilities&) { broadcastTxPermissions(); });
+                [this](bool, const RadioCapabilities&) {
+            broadcastTxPermissions();
+            announceEffectiveIqSampleRate();
+            reconcileIqStreams();
+        });
 
         // Panadapter recenter → dds: broadcast. The DAX IQ stream a skimmer
         // (CW Skimmer / SDC) decodes is centered on the panadapter, not the
@@ -910,7 +914,7 @@ void TciServer::onClientOpened(std::shared_ptr<TciClientLifetime> lifetime,
     protocol->setActiveSlice(m_activeTrx, m_activeLetter);
     // The IQ rate is shared across clients; a client joining after another
     // has moved it must not be told the 48000 default in its init burst.
-    protocol->setIqSampleRate(m_iqSampleRate);
+    protocol->setIqSampleRate(achievedIqSampleRate());
 
     ClientState cs;
     cs.txProducer = ([model = m_model, ws]() {
@@ -1480,13 +1484,15 @@ void TciServer::onTextMessage(const QString& msg)
             const int rate = value.toInt(&ok);
             const bool supported = ok
                 && (rate == 24000 || rate == 48000
-                    || rate == 96000 || rate == 192000);
+                    || rate == 96000 || rate == 192000)
+                && (!m_model || m_model->daxIqModel().supportsSampleRate(rate));
             if (!supported) {
                 replyText(ws, QStringLiteral("iq_samplerate:%1;")
                                   .arg(achievedIqSampleRate()));
                 continue;
             }
             m_iqSampleRate = rate;
+            m_announcedIqSampleRate = rate;
             if (m_model) {
                 for (int channel : std::as_const(m_tciIqChannels)) {
                     m_model->daxIqModel().setSampleRate(channel, rate);
@@ -3878,6 +3884,12 @@ bool TciServer::ensureIqStream(int trx)
     }
     const QString panId = slice->panId();
     DaxIqModel& iq = m_model->daxIqModel();
+    const int rate = effectiveIqSampleRate();
+    if (rate == 0) {
+        return false;
+    }
+
+    announceEffectiveIqSampleRate();
 
     // A DAX IQ stream is inert until a pan owns its channel, and a pan owns
     // exactly one. If this receiver's pan already carries a TCI channel, share
@@ -3885,7 +3897,7 @@ bool TciServer::ensureIqStream(int trx)
     const int shared = m_iqPanChannel.value(panId, 0);
     if (shared != 0) {
         m_pendingIqRemovals.remove(shared);
-        iq.setSampleRate(shared, m_iqSampleRate);
+        iq.setSampleRate(shared, rate);
         if (!iq.stream(shared).exists && !m_iqCreateInFlight.contains(shared)) {
             m_iqCreateInFlight.insert(shared);
             iq.createStream(shared);
@@ -3935,7 +3947,7 @@ bool TciServer::ensureIqStream(int trx)
     m_iqPanChannel.insert(panId, channel);
     m_tciIqChannels.insert(channel);
     m_pendingIqRemovals.remove(channel);
-    iq.setSampleRate(channel, m_iqSampleRate);
+    iq.setSampleRate(channel, rate);
     if (!iq.stream(channel).exists && !m_iqCreateInFlight.contains(channel)) {
         m_iqCreateInFlight.insert(channel);
         iq.createStream(channel);
@@ -4040,7 +4052,29 @@ int TciServer::achievedIqSampleRate() const
             }
         }
     }
-    return m_iqSampleRate;  // nothing up yet: the rate that will be applied
+    const int rate = effectiveIqSampleRate();
+    return rate != 0 ? rate : m_iqSampleRate;
+}
+
+int TciServer::effectiveIqSampleRate() const
+{
+    return m_model ? m_model->daxIqModel().sampleRateForPreference(m_iqSampleRate)
+                   : m_iqSampleRate;
+}
+
+void TciServer::announceEffectiveIqSampleRate()
+{
+    const int rate = effectiveIqSampleRate();
+    if (rate == 0 || rate == m_announcedIqSampleRate) {
+        return;
+    }
+    m_announcedIqSampleRate = rate;
+    for (ClientState& cs : m_clients) {
+        if (cs.protocol) {
+            cs.protocol->setIqSampleRate(rate);
+        }
+    }
+    broadcast(QStringLiteral("iq_samplerate:%1;").arg(rate));
 }
 
 // ── Waterfall row → TCI binary spectrum frames (type=4) ──────────────────────
