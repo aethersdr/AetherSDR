@@ -5,34 +5,11 @@
 
 namespace AetherSDR {
 
-// The waterfall time scale's ms-per-row: how a measured row cadence becomes the
-// value the scale is drawn with. Pure arithmetic, no Qt, so it can be tested
-// without a widget or a clock (tests/waterfall_time_scale_lock_test.cpp).
-//
-// WHY THERE IS A LOCK AT ALL. #106: the scale was redrawn from a cadence
-// measured on every row, and ordinary arrival jitter made the labels jump up
-// and down a line. 6cbf882c fixed that by measuring for a while and then
-// holding the value still; #3104 moved the measurement to row timestamps and a
-// per-rate cache but kept the hold. That purpose stands: per-row jitter must
-// never reach the visible scale.
-//
-// WHAT WAS WRONG WITH IT. The hold was final. The visible value was taken on
-// the third sample after a reset and never written again, while the running
-// estimate behind it kept converging on the truth. Whatever the first rows
-// measured (rows arriving back to back at start-up, a stalled GUI thread) was
-// the scale for the rest of the session: observed as a "1s" label on an event
-// 2.00 s old.
-//
-// WHAT THIS DOES. The first lock is unchanged. After it, the visible value is
-// replaced only when the running estimate has SETTLED somewhere else: it
-// differs from the visible value by more than kWaterfallTimeScaleDriftTolerance
-// and agrees with the newest window measurement within
-// kWaterfallTimeScaleSettledTolerance, for a full sample window of consecutive
-// samples. Jitter never moves the smoothed estimate that far. One interrupted
-// stretch of rows (a stall, a pause) does, but it sits in the sample window for
-// at most one window of samples, and for the first of those the estimate is
-// still catching up with it, so the run cannot complete; once the gap has left
-// the window the estimate is unsettled again until it is back where it started.
+// The waterfall time scale's ms-per-row, as pure arithmetic for a test. The
+// visible value is locked so per-row jitter never moves the labels (#106). After
+// the first lock it is replaced only when the estimate has settled elsewhere:
+// more than the drift tolerance from the visible value and within the settled
+// tolerance of the newest window measurement, for a full window of samples.
 
 // Rows the window measurement spans, and the fewest it accepts.
 inline constexpr int kWaterfallTimeScaleSampleRows = 24;
@@ -85,15 +62,10 @@ struct WaterfallTimeScaleLock {
     int driftSamples{0};
 };
 
-// One sample's decision. Returns true when the visible scale should take
-// estimate.msPerRow now; `lock` is advanced either way.
-//
-// rowsPacedByScale: the rows being measured are emitted on a timer derived
-// from the visible value itself (the FFT-derived fallback and TX rows). Their
-// cadence is that value rounded up to the next FFT frame, so following it
-// would feed the scale its own output and walk it upward one frame at a time.
-// Such rows may complete the first lock, as they always have, and never a
-// re-lock.
+// One sample's decision: true when the visible scale should take
+// estimate.msPerRow now; `lock` is advanced either way. rowsPacedByScale rows
+// (fallback and TX) are timed from the visible value itself, so they may
+// complete the first lock but never a re-lock.
 inline bool waterfallTimeScaleShouldAdopt(
     WaterfallTimeScaleLock& lock,
     float visibleMsPerRow,

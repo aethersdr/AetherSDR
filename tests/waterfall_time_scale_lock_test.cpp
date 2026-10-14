@@ -169,11 +169,11 @@ static void testRelockNeedsAFullRun()
            !adopted && moving.driftSamples == 0);
 
     // Inside the drift tolerance nothing happens, however long.
-    WaterfallTimeScaleLock near{true, 0};
+    WaterfallTimeScaleLock inside{true, 0};
     adopted = false;
     for (int i = 0; i < 1000; ++i) {
         adopted = adopted
-            || waterfallTimeScaleShouldAdopt(near, 40.0f, 43.5f, {43.5f, 500}, false);
+            || waterfallTimeScaleShouldAdopt(inside, 40.0f, 43.5f, {43.5f, 500}, false);
     }
     report("re-lock: 9 % away is inside the tolerance, forever", !adopted);
 
