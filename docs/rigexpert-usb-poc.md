@@ -9,10 +9,17 @@ This is an independent instrument, not an
 
 ## Scope and authority
 
-The first surface is **Tools → AetherLab USB Proof of Concept...**, an
-independent canon workspace window with an SWR plot, keyboard-operated marker,
-R/X and return-loss readouts, and a JSON session export. A station tab, Smith
-chart, comparison/reference traces, bandwidth/resonance analysis, Touchstone,
+The **+ → AetherLab** entry below **Rescan radios** opens an embedded canon
+workspace; **Tools → AetherLab…** opens the same view. Its tab changes the
+central workspace while retaining the transceiver session and heartbeat on the
+radio tab. Return to radio or selecting a radio stops an open analyzer session
+and restores the retained radio splitter. No radio disconnect/reconnect occurs.
+The last trace and lab tab survive returning; reopening never starts RF.
+Minimal mode restores the radio workspace first. Window resizing reflows the
+plot/marker and series/parallel groups, with vertical scrolling when needed.
+The SWR plot, keyboard-operated marker, complete readouts and atomic JSON export
+use the same instrument model. Smith chart, comparison/reference traces,
+bandwidth/resonance analysis, Touchstone,
 BLE, serial models, stored device sweeps, calibration controls, firmware update,
 and a station-wide TX interlock are deferred.
 
@@ -83,7 +90,7 @@ from an overclaimed measurement report.
    and that row count. Completion means this **host cutoff**, not an observed
    firmware end-of-sweep marker. Extra data after cutoff is discarded locally;
    the bounded report trace may retain it while USB closes.
-8. Completion, Stop, Disconnect, window close, malformed data or timeout
+8. Completion, Stop, Disconnect, leaving AetherLab, app close, malformed data or timeout
    cancels queued sends, attempts `off\r`, closes USB, and retains data until the next Connect. A new
    sweep requires an explicit new Connect. No automatic sweep, retry or
    reconnect occurs.
@@ -136,6 +143,19 @@ a quality string (`perfect-match`, `total-reflection`,
 `non-passive-or-singular`, `valid`). The plot clips to SWR 1–5; exported
 measurements and marker readouts are not clamped. A partial/cancelled trace
 remains visibly labelled by its terminal state.
+
+Derived marker values use `|Z| = hypot(R,X)`, `∠Z = arg(Z)` and
+`∠S11 = arg(Γ)`; zero magnitudes have undefined phase. For angular frequency
+`ω = 2πf`, series equivalents are `Ls = X/ω`, `Cs = −1/(ωX)`.
+From admittance `Y = 1/Z = G+jB`, parallel equivalents are `Rp = 1/G`,
+`Xp = −1/B`, `Lp = Xp/ω`, `Cp = B/ω`. These are signed equivalents at one
+frequency; both components are displayed for comparison, not a physical model
+containing both at once. SI units are retained in JSON and engineering prefixes
+are applied only in the UI. Singular results are null/undefined.
+
+The captured `14.175000,51.46,-0.99` fixture gives Ls −11.116 nH,
+Cs 11.341 nF, Lp −30.044 µH and Cp 4.196 pF. The front-panel parallel-L
+unit-label discrepancy does not change wire R/X or host scaling.
 
 ## RF and automation
 

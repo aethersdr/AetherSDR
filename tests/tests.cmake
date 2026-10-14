@@ -5421,7 +5421,8 @@ add_test(NAME rigexpert_usb_poc_test COMMAND rigexpert_usb_poc_test)
 # Socket-free quick-check view over injected reports; no HID access or firmware peer.
 add_executable(aetherlab_window_test
     tests/aetherlab_window_test.cpp
-    src/gui/AetherLabWindow.cpp
+    src/gui/AetherLabWidget.cpp
+    src/gui/CanonSurface.cpp
     src/gui/CanonWindow.cpp
 )
 target_include_directories(aetherlab_window_test PRIVATE src)

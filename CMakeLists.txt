@@ -1358,7 +1358,7 @@ set(GUI_SOURCES
     src/gui/RadeApplet.cpp
     src/gui/HealthApplet.cpp
     src/gui/PersistentDialog.cpp
-    src/gui/AetherLabWindow.cpp
+    src/gui/AetherLabWidget.cpp
     src/gui/CanonWindow.cpp
     src/gui/CanonSurface.cpp
     src/gui/PanadapterHeader.cpp

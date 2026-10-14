@@ -309,9 +309,19 @@ void MainWindow::refreshRadioTabs()
             || entry.id == m_lastSessionTab.id
             || !hidden.contains(entry.id);
     }
-    m_titleBar->setRadioTabs(tabs);
     m_titleBar->setDiscoveredRadios(tabs);
+    if (m_aetherLabWidget) {
+        RadioTabEntry lab;
+        lab.kind = RadioTabEntry::Kind::Workspace;
+        lab.id = QStringLiteral("aetherlab");
+        lab.name = tr("AetherLab");
+        lab.detail = tr("Antenna analyzer · USB");
+        tabs.append(lab);
+    }
+    m_titleBar->setRadioTabs(tabs);
+    // Refresh radio-link ownership even while the lab remains selected.
     m_titleBar->setActiveRadio(activeSerial);
+    if (m_aetherLabActive) { m_titleBar->setActiveRadio(QStringLiteral("aetherlab")); }
 }
 
 void MainWindow::wireDiscovery()
@@ -547,6 +557,8 @@ void MainWindow::wireDiscovery()
         // operator confirm — the tab is a selector, not a disconnect button.
         connect(m_titleBar, &TitleBar::radioTabActivated, this,
                 [this](const QString& radioId) {
+            if (radioId == QLatin1String("aetherlab")) { showAetherLab(); return; }
+            returnFromAetherLab();
             if (m_radioModel.isConnected() && m_radioModel.serial() == radioId) {
                 return;   // already the active session — nothing to do
             }
@@ -606,6 +618,8 @@ void MainWindow::wireDiscovery()
             dialog->show();
             editor->setFocus(Qt::OtherFocusReason);
         });
+        connect(m_titleBar->radioTabBar(), &RadioTabBar::aetherLabRequested,
+                this, &MainWindow::showAetherLab);
         connect(m_titleBar->radioTabBar(), &RadioTabBar::rescanRequested,
                 m_connPanel, &ConnectionPanel::retryDiscoveryRequested);
         connect(m_titleBar->radioTabBar(), &RadioTabBar::radioActionRequested,

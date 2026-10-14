@@ -1,4 +1,4 @@
-#include "gui/AetherLabWindow.h"
+#include "gui/AetherLabWidget.h"
 #include "models/AntennaAnalyzerModel.h"
 
 #include <QAccessible>
@@ -8,6 +8,8 @@
 #include <QLabel>
 #include <QPushButton>
 #include <QSlider>
+#include <QScrollArea>
+#include <QSignalSpy>
 #include <QtTest>
 
 namespace AetherSDR {
@@ -32,7 +34,7 @@ public:
     void feed(const QByteArray& text) { emit reportReceived(AntennaAnalyzerModel::commandReport(text)); }
 };
 
-class AetherLabWindowTest final : public QObject {
+class AetherLabWidgetTest final : public QObject {
     Q_OBJECT
 private slots:
     void measuredMarkerAndClose()
@@ -41,13 +43,15 @@ private slots:
         auto* input = new WindowInput(&model);
         model.setUsbBackend([] { return QList<RigExpertUsbDevice>{{"injected", "460012345", "Stick Pro"}}; },
                             [input](QObject*) { return input; });
-        AetherLabWindow window(&model);
+        AetherLabWidget window(&model);
+        window.resize(1200, 900);
         window.show();
         auto* sweep = window.findChild<QPushButton*>("aetherLabSweep");
         auto* marker = window.findChild<QSlider*>("aetherLabMarker");
-        auto* readout = window.findChild<QLabel*>("aetherLabReadout");
+        auto* frequency = window.findChild<QLabel*>("aetherLabMarkerFrequency");
+        auto* readout = window.findChild<QLabel*>("aetherLabValue_swr");
         auto* isolation = window.findChild<QCheckBox*>("aetherLabIsolated");
-        QVERIFY(sweep && marker && readout && isolation);
+        QVERIFY(sweep && marker && frequency && readout && isolation);
         QVERIFY(!sweep->isEnabled());
         QVERIFY(model.refreshDevices());
         QVERIFY(model.connectDevice(0));
@@ -63,11 +67,12 @@ private slots:
         input->feed("14,100,0\r\n14.175,50,0\r\n14.35,54,0\r\n");
         QTRY_COMPARE(marker->maximum(), 2);
         marker->setValue(2);
-        QVERIFY(readout->text().contains("14.350000 MHz"));
-        QVERIFY(readout->text().contains("SWR  1.080"));
+        QCOMPARE(frequency->text(), QStringLiteral("14.350000 MHz"));
+        QCOMPARE(readout->text(), QStringLiteral("1.080"));
         marker->setValue(1);
-        QVERIFY(readout->text().contains("SWR  1.000"));
-        QVERIFY(readout->text().contains("RL  ∞"));
+        QCOMPARE(readout->text(), QStringLiteral("1.000"));
+        QCOMPARE(window.findChild<QLabel*>("aetherLabValue_returnLossDb")->text(), QStringLiteral("∞ dB"));
+        QCOMPARE(window.findChild<QLabel*>("aetherLabValue_reflectionPhaseDeg")->text(), QStringLiteral("undefined"));
         QVERIFY(!sweep->isEnabled());
         QWidget* plot = window.findChild<QWidget*>("aetherLabPlot");
         QVERIFY(plot);
@@ -75,9 +80,22 @@ private slots:
         QVERIFY(accessible);
         QVERIFY(accessible->text(QAccessible::Value).contains("3 measured rows"));
         QVERIFY(!window.grab().isNull());
+        for (const QSize size : {QSize(900, 640), QSize(1600, 1000)}) {
+            window.resize(size);
+            QCoreApplication::processEvents();
+            QCOMPARE(window.size(), size);
+            auto* content = window.findChild<QWidget*>("aetherLabContent");
+            auto* scroll = window.findChild<QScrollArea*>();
+            QVERIFY(content && scroll);
+            QVERIFY(content->width() <= scroll->viewport()->width());
+            QVERIFY(plot->width() >= 360);
+        }
+        QSignalSpy returned(&window, &AetherLabWidget::returnRequested);
+        window.findChild<QPushButton*>("aetherLabReturn")->click();
+        QCOMPARE(returned.count(), 1);
         window.close();
         QCOMPARE(model.state(), AntennaAnalyzerModel::State::Complete);
     }
 };
-QTEST_MAIN(AetherLabWindowTest)
+QTEST_MAIN(AetherLabWidgetTest)
 #include "aetherlab_window_test.moc"

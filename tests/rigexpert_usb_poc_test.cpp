@@ -155,6 +155,36 @@ private slots:
         QCOMPARE(negative.value("rOhm").toDouble(), -3.0);
         QVERIFY(negative.value("swr").isNull());
     }
+    void derivedReadoutsAndSingularities()
+    {
+        const QJsonObject sample = AntennaAnalyzerModel::impedanceSample("14.175000,51.46,-0.99");
+        const auto near = [&sample](const char* key, double expected, double tolerance) {
+            const QJsonValue value = sample.value(QLatin1String(key));
+            return value.isDouble() && std::abs(value.toDouble() - expected) < tolerance;
+        };
+        QVERIFY(near("impedanceMagnitudeOhm", 51.469522, 1e-6));
+        QVERIFY(near("reflectionPhaseDeg", -33.58144865, 1e-7));
+        QVERIFY(near("impedancePhaseDeg", -1.102134, 1e-6));
+        QVERIFY(near("seriesInductanceH", -11.115583327e-9, 1e-15));
+        QVERIFY(near("seriesCapacitanceF", 11.341274693e-9, 1e-15));
+        QVERIFY(near("parallelResistanceOhm", 51.47904586, 1e-7));
+        QVERIFY(near("parallelReactanceOhm", -2675.870404, 1e-6));
+        QVERIFY(near("parallelInductanceH", -30.044303483e-6, 1e-12));
+        QVERIFY(near("parallelCapacitanceF", 4.195966266e-12, 1e-18));
+        QCOMPARE(sample.value("raw").toString(), QStringLiteral("14.175000,51.46,-0.99"));
+        const QJsonObject match = AntennaAnalyzerModel::impedanceSample("14.175,50,0");
+        QVERIFY(match.value("reflectionPhaseDeg").isNull());
+        QCOMPARE(match.value("impedancePhaseDeg").toDouble(), 0.0);
+        QVERIFY(match.value("seriesCapacitanceF").isNull());
+        QVERIFY(match.value("parallelInductanceH").isNull());
+        QCOMPARE(match.value("parallelCapacitanceF").toDouble(), 0.0);
+        const QJsonObject reactive = AntennaAnalyzerModel::impedanceSample("14.175,0,50");
+        QVERIFY(reactive.value("parallelResistanceOhm").isNull());
+        QCOMPARE(reactive.value("parallelReactanceOhm").toDouble(), 50.0);
+        const QJsonObject shorted = AntennaAnalyzerModel::impedanceSample("14.175,0,0");
+        QVERIFY(shorted.value("impedancePhaseDeg").isNull());
+        QVERIFY(shorted.value("parallelCapacitanceF").isNull());
+    }
     void finiteSweepAndNoAutomaticRf()
     {
         AntennaAnalyzerModel model;

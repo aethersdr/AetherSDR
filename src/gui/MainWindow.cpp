@@ -10325,6 +10325,7 @@ void MainWindow::toggleMinimalModeFromAction()
 
 void MainWindow::toggleMinimalMode(bool on)
 {
+    if (on && m_aetherLabActive) { returnFromAetherLab(); }
     // Canvas mode owns the shell; minimal mode owns the window — they
     // cannot overlap.  Entering minimal from canvas used to reparent an
     // EMPTY applet panel (every applet lent to the canvas, every pan on

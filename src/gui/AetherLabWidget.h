@@ -1,7 +1,10 @@
 #pragma once
 
-#include "CanonWindow.h"
+#include "CanonSurface.h"
+#include <QHash>
 
+class QBoxLayout;
+class QResizeEvent;
 class QCheckBox;
 class QComboBox;
 class QDoubleSpinBox;
@@ -15,12 +18,14 @@ namespace AetherSDR {
 class AntennaAnalyzerModel;
 class AetherLabPlot;
 
-class AetherLabWindow final : public CanonWindow {
+class AetherLabWidget final : public CanonCanvas {
     Q_OBJECT
 public:
-    explicit AetherLabWindow(AntennaAnalyzerModel* model, QWidget* parent = nullptr);
+    explicit AetherLabWidget(AntennaAnalyzerModel* model, QWidget* parent = nullptr);
+signals:
+    void returnRequested();
 protected:
-    void hideEvent(QHideEvent* event) override;
+    void resizeEvent(QResizeEvent* event) override;
 private:
     void refresh();
     void saveSession();
@@ -33,7 +38,12 @@ private:
     QCheckBox* m_isolated{nullptr};
     QSlider* m_marker{nullptr};
     QLabel* m_status{nullptr};
-    QLabel* m_readout{nullptr};
+    QLabel* m_frequency{nullptr};
+    QLabel* m_quality{nullptr};
+    QHash<QString, QLabel*> m_values;
+    QBoxLayout* m_controls{nullptr};
+    QBoxLayout* m_analysis{nullptr};
+    QBoxLayout* m_models{nullptr};
     QPushButton* m_rescan{nullptr};
     QPushButton* m_disconnect{nullptr};
     QPushButton* m_minimum{nullptr};

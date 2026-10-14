@@ -35,6 +35,8 @@ QString radioTabStatusLabel(RadioTabStatus status);
 
 // One entry in the title bar's radio strip.
 struct RadioTabEntry {
+    enum class Kind { Radio, Workspace };
+    Kind           kind{Kind::Radio};
     bool           canRename{false};
     bool           visibleInTabs{true};
     QString        id;         // stable key — serial, or family:address for HL2
@@ -48,7 +50,7 @@ struct RadioTabEntry {
     {
         return id == o.id && name == o.name && model == o.model && detail == o.detail
             && transport == o.transport && status == o.status
-            && canRename == o.canRename && visibleInTabs == o.visibleInTabs;
+            && canRename == o.canRename && visibleInTabs == o.visibleInTabs && kind == o.kind;
     }
 };
 
@@ -184,6 +186,7 @@ signals:
     void radioActivated(const QString& id);
     void radioActionRequested(const QString& id, const QString& action);
     void rescanRequested();
+    void aetherLabRequested();
     void discoveryPopoverRequested();
     void connectManuallyRequested();
 

@@ -7,6 +7,7 @@
 #include <QStringList>
 
 #include <cmath>
+#include <numbers>
 #include <complex>
 #include <utility>
 
@@ -360,12 +361,30 @@ QJsonObject AntennaAnalyzerModel::impedanceSample(const QByteArray& line)
     const bool passive = values[1] >= 0 && std::isfinite(rho) && rho <= 1;
     const double swr = passive ? (1 + rho) / (1 - rho) : NAN;
     const double rl = passive ? -20 * std::log10(rho) : NAN;
+    const double omega = 2 * std::numbers::pi * hz;
+    const double magnitude = std::abs(z);
+    const std::complex<double> admittance = magnitude > 0 ? 1.0 / z
+        : std::complex<double>(NAN, NAN);
+    const double parallelR = 1.0 / admittance.real();
+    const double parallelX = -1.0 / admittance.imag();
+    const double degrees = 180.0 / std::numbers::pi;
+
     return {{QStringLiteral("frequencyHz"), std::round(hz)},
         {QStringLiteral("raw"), QString::fromLatin1(line)},
         {QStringLiteral("rOhm"), values[1]}, {QStringLiteral("xOhm"), values[2]},
         {QStringLiteral("swr"), finiteValue(swr)}, {QStringLiteral("returnLossDb"), finiteValue(rl)},
         {QStringLiteral("gammaReal"), finiteValue(gamma.real())},
         {QStringLiteral("gammaImag"), finiteValue(gamma.imag())},
+        {QStringLiteral("impedanceMagnitudeOhm"), finiteValue(magnitude)},
+        {QStringLiteral("impedancePhaseDeg"), finiteValue(magnitude > 0 ? std::arg(z) * degrees : NAN)},
+        {QStringLiteral("reflectionMagnitude"), finiteValue(rho)},
+        {QStringLiteral("reflectionPhaseDeg"), finiteValue(rho > 0 ? std::arg(gamma) * degrees : NAN)},
+        {QStringLiteral("seriesInductanceH"), finiteValue(values[2] / omega)},
+        {QStringLiteral("seriesCapacitanceF"), finiteValue(-1.0 / (omega * values[2]))},
+        {QStringLiteral("parallelResistanceOhm"), finiteValue(parallelR)},
+        {QStringLiteral("parallelReactanceOhm"), finiteValue(parallelX)},
+        {QStringLiteral("parallelInductanceH"), finiteValue(parallelX / omega)},
+        {QStringLiteral("parallelCapacitanceF"), finiteValue(admittance.imag() / omega)},
         {QStringLiteral("quality"), !passive ? QStringLiteral("non-passive-or-singular")
             : rho == 0 ? QStringLiteral("perfect-match")
             : rho == 1 ? QStringLiteral("total-reflection") : QStringLiteral("valid")}};

@@ -3200,8 +3200,9 @@ Setup instead.
 currently clipping configured radios. `radios.tabs[].visibleInTabs` is the
 retained tab preference and `visible` is current widget visibility (which can
 also change in minimal mode). `radios.tabs[].linkCarrier` identifies
-the one tab carrying discovery/heartbeat state. `radios.tabs[].status` is one of `connected` / `available` /
-`in use` — a lower-case, untranslated token, and the field to match on.
+the one tab carrying discovery/heartbeat state. `radios.tabs[].kind` distinguishes `radio` from `workspace`. Radio `status` is
+one of `connected` / `available` / `in use`, lower-case and untranslated.
+AetherLab has `status: "workspace"` and never carries the radio link indicator.
 The text the tab *renders* is sentence case and translated (`Connected`,
 `Available`, `In use`, and `Link lost` while the link alarm is up), so
 `statusLine` and `accessibleName` deliberately disagree with `status` on
@@ -4637,7 +4638,7 @@ Every failure is a one-line object: `{"ok":false,"error":"<message>"}` — e.g.
 ## Stick Pro analyzer bring-up
 
 `lab status|devices|connect <index>|sweep <startHz> <stopHz> <intervals> isolated|stop|disconnect`
-controls the independent AetherLab USB proof of concept (RFC #6471). `status`
+controls the AetherLab USB proof of concept (RFC #6471). `status`
 returns identity, all accepted raw/derived samples, count hypothesis, terminal
 state and the last 128 HID reports. `devices` explicitly scans normal-mode
 Stick Pro interfaces. `connect` queries VER/FULLINFO and never starts RF.
@@ -4654,6 +4655,22 @@ Through MCP, use `bridge_command` with e.g.
 `{"request":{"cmd":"lab","action":"sweep","value":"14000000 14350000 200 isolated"}}`.
 The app must be connected to the instrument on the MCP server's host.
 See [the implementation and qualification guide](./rigexpert-usb-poc.md).
+
+AetherLab is embedded in the main window. Invoke `aetherLabAction` to open it,
+`radioSwitcherAetherLab` in the open **+** popover, or `radioTab_aetherlab`
+after first use. Invoke `aetherLabReturn` to stop the analyzer session and
+restore the radio workspace. The `titlebar` tab model distinguishes
+`kind: "workspace"` / `status: "workspace"` from radio entries, and the radio
+retains `linkCarrier` while AetherLab is selected. Discovery lists contain only
+radios. Marker labels use stable `aetherLabValue_<sampleField>` object names.
+
+Samples also contain `impedanceMagnitudeOhm`, `impedancePhaseDeg`,
+`reflectionMagnitude`, `reflectionPhaseDeg`, `seriesInductanceH`,
+`seriesCapacitanceF`, `parallelResistanceOhm`, `parallelReactanceOhm`,
+`parallelInductanceH` and `parallelCapacitanceF`. Units are SI in JSON;
+non-finite or undefined results are null. The UI formats engineering prefixes.
+Raw CSV and device R/X are preserved. Reflection phase and impedance phase are
+separate quantities; reflection phase is null at a perfect match.
 
 ## Targeting a widget
 

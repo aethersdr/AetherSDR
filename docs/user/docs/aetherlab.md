@@ -14,10 +14,10 @@ platforms: ["macOS"]
 :::
 
 AetherLab is a USB proof of concept for the **RigExpert Stick Pro**. It opens an
-independent antenna analyzer window with an SWR plot and frequency, resistance,
-reactance and return-loss marker readouts. Basic USB sweeps are verified on
+antenna analyzer workspace in the main window, with an SWR plot, marker
+readouts and separate series/parallel impedance models. Basic USB sweeps are verified on
 one Stick Pro identifying as **Stick Pro 108** on macOS. Broader qualification
-is pending. The window does not change radio settings or inhibit radio TX.
+is pending. The workspace retains your radio session and does not inhibit radio TX.
 
 ## Requirements
 
@@ -37,18 +37,19 @@ close does not confirm RF silence.
 
 ## Setup
 
-1. Open **Tools → AetherLab USB Proof of Concept...**.
+1. Open the **+** radio switcher and choose **AetherLab**, below **Rescan radios**.
+   **Tools → AetherLab…** opens the same workspace.
 2. Click **Refresh USB**, select the Stick Pro interface, then **Connect**.
 3. Wait for **ready** and the full Stick Pro identity. Firmware identifying as
    **Stick Pro 108** uses a bounded compatibility path for its FULLINFO metadata.
    Connecting only requests
    device information; it does not start a sweep.
-4. Set **Start**, **Stop** and **FRX intervals**, and confirm **Analyzer RF port
+4. Set **Start**, **Stop** and **Intervals**, and confirm **Analyzer RF port
    is isolated from transmitters**.
 
 ## Using AetherLab
 
-Click **Sweep** to acquire one finite trace. The SWR graph displays 1–5; values
+Click **Run sweep** to acquire one finite trace. The SWR graph displays 1–5; values
 above 5 are clipped on the graph but remain intact in the readout and saved
 session. Move the marker slider with the keyboard or mouse to inspect each
 returned sample, or click **Minimum SWR marker**.
@@ -60,17 +61,29 @@ samples and protocol trace; save them first if needed.
 
 **Save session…** writes JSON containing raw samples, derived values, status,
 USB identity and a bounded protocol trace. Saved files contain device serial
-and path information. **Return to radio** closes AetherLab and stops an open
-instrument session; it does not issue radio commands.
+and path information. **Return to radio**, or selecting a radio tab, stops an open instrument
+session and restores the radio workspace. The AetherLab tab and last trace
+remain available. Opening the tab again does not reconnect or sweep. The radio
+connection, tuning and audio session are retained; restore the antenna path
+manually before transmitting. Minimal mode returns to the radio workspace.
+
+The layout places the plot beside the marker panel in wide windows and stacks
+them in narrower windows. Scroll vertically when the window is short. L and C
+are signed equivalents at the marker frequency, not simultaneous physical
+components; undefined values have no finite result at that operating point.
 
 ## Reference
 
 | Control | Meaning |
 |---|---|
 | Start / Stop | 0.1–600 MHz, entered to 1 Hz. Use an even positive span in Hz. USB frequency stepping is unqualified. |
-| FRX intervals | Experimental wire count N, 1–1000. The host expects N+1 returned rows. N=1, 2, 10 and 200 are verified over 14.000–14.350 MHz on the tested Stick Pro 108; other settings remain experimental. |
+| Intervals | Experimental wire count N, 1–1000. The host expects N+1 returned rows. N=1, 2, 10 and 200 are verified over 14.000–14.350 MHz on the tested Stick Pro 108; other settings remain experimental. |
 | R / X | Resistance and reactance in ohms returned by the device; no host calibration applied. |
 | SWR / RL | Calculated at 50 Ω. Perfect match gives SWR 1 and infinite return loss; invalid/non-passive derived values are undefined. |
+| &#124;Z&#124; / Phase ∠Z | Impedance magnitude and phase derived from device R/X. |
+| Magnitude &#124;S11&#124; / Phase ∠S11 | Reflection magnitude and phase at 50 Ω. Reflection phase is undefined for a perfect match. |
+| Series model | Device R/X and signed equivalents L = X / (2πf), C = −1 / (2πfX). |
+| Parallel model | Equivalent R/X from admittance 1/Z, and their signed L/C equivalents. Engineering units distinguish nH from µH and pF from nF. |
 | Session status | Shows ready, setup, sweeping, complete, cancelled or error and the number of accepted rows. Complete means the host's count and endpoint checks passed. |
 
 For testing through MCP, the existing `bridge_command` tool accepts `lab`
@@ -82,8 +95,8 @@ alone does not authorize analyzer RF. See [Automation Bridge and MCP](./automati
 
 - [RFC #6471](https://github.com/aethersdr/AetherSDR/issues/6471): broader frequency/count
   coverage, timing, cancellation, calibration provenance and measurement accuracy
-  require qualification. Physical RF shutdown is unverified. The station tab and
-  TX interlock are deferred.
+  require qualification. Physical RF shutdown is unverified; a station TX
+  interlock is not implemented.
 
 ## Troubleshooting
 
@@ -104,7 +117,7 @@ analyzer to reject USB setup with **ERROR-20**.
 
 1. Stop the front-panel measurement and return to the analyzer's main menu.
 2. Click **Connect** again and wait for **ready**.
-3. Reconfirm RF isolation and click **Sweep**.
+3. Reconfirm RF isolation and click **Run sweep**.
 
 The app retains the error and closes USB. It does not retry acquisition automatically.
 
