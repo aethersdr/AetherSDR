@@ -232,7 +232,7 @@
         },
         {
           "file": "src/core/backends/flex/PanadapterStream.cpp",
-          "line": 234,
+          "line": 248,
           "text": "PanadapterStream: failed to bind UDP socket:"
         },
         {
@@ -457,7 +457,7 @@
         },
         {
           "file": "src/core/backends/flex/PanadapterStream.cpp",
-          "line": 1790,
+          "line": 1809,
           "text": "stream create failed/dropped"
         }
       ]
