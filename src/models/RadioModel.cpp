@@ -2470,7 +2470,9 @@ RadioModel::RadioModel(QObject* parent)
     // so the radio's TRANSMITTING edge can't beat the tuner's tuning=1.
     connect(&m_tunerModel, &TunerModel::directAutotuneStarted, this, [this]() {
         // A TGXL in standby refuses the tune and never keys; don't arm for it.
-        if (!m_tunerModel.isOperate())
+        // OPERATE is only known from relayed status, so a direct-only (manual
+        // IP) tuner has no handle and is not gated.
+        if (!m_tunerModel.handle().isEmpty() && !m_tunerModel.isOperate())
             return;
         m_tgxlAutotuneArmedUntilMs = txMonotonicMs() + kTgxlAutotuneKeyWindowMs;
     });
