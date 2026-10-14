@@ -42,6 +42,12 @@ int TciProtocol::tciTrxForSlice(RadioModel* model, const SliceModel* slice)
     return index >= 0 ? index : slice->sliceId();
 }
 
+bool TciProtocol::transmitPermitted(const RadioModel* model, const SliceModel* slice)
+{
+    return model && slice && model->isConnected() && model->backendCanTransmit()
+        && model->panTransmitInhibitReason(slice->panId()).isEmpty();
+}
+
 QString TciProtocol::sanitizeSliceLetter(const QString& letter)
 {
     QString clean;
@@ -396,7 +402,7 @@ QString TciProtocol::generateInitBurst()
 
             // TX
             burst += QStringLiteral("tx_enable:%1,%2;")
-                         .arg(trx).arg(s->isTxSlice() ? "true" : "false");
+                         .arg(trx).arg(transmitPermitted(m_model, s) ? "true" : "false");
         }
 
         // Global TX state

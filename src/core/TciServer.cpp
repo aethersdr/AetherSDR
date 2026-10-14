@@ -297,6 +297,10 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         connect(m_model, &RadioModel::connectionStateChanged,
                 this, [this](bool connected) {
             if (!connected) {
+                // A backend may retain its capabilities while disconnected.
+                // Tell clients that every receiver is unavailable before the
+                // reconnect teardown clears the stable receiver map.
+                broadcastTxPermissions();
                 // Radio dropped: RadioModel resets the DAX channel manager
                 // (the radio reaps our streams server-side, #3305). Drop the
                 // routing cache and the slice-assignment bookkeeping: slices
@@ -362,6 +366,9 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
                 }
                 for (int trx : acquired)
                     broadcast(QStringLiteral("rx_enable:%1,true;").arg(trx));
+                // Bind every live slice before advertising permissions so a
+                // reconnect or multi-slice add keeps the stable trx map.
+                broadcastTxPermissions();
             }
             for (const auto& cs : m_clients) {
                 if (cs.audioEnabled) {
@@ -380,9 +387,19 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         // A slice taken back after a reconnect emits no sliceAdded, only this edge.
         // Bind it quietly: the client already knows it, but its close needs a trx (#6352).
         connect(m_model, &RadioModel::slotOccupancyChanged, this, [this](int) {
+            bool bindingsChanged = false;
             for (SliceModel* live : m_model->slices()) {
-                if (live)
+                if (live && m_trxMap.trxForSliceId(live->sliceId()) < 0) {
                     m_trxMap.acquire(live->sliceId());
+                    bindingsChanged = true;
+                }
+            }
+            // A same-radio reconnect reclaims slices without sliceAdded. The
+            // stable bindings are complete only after this loop, so re-announce
+            // their permission here rather than leaving clients at the
+            // disconnect-time false value.
+            if (bindingsChanged) {
+                broadcastTxPermissions();
             }
         });
         // A removed slice never fires daxChannelChanged, so without this the
@@ -470,6 +487,21 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
                 [this](const QString& panId) {
             m_lastDdsCenterHz.remove(panId);
         });
+
+        connect(m_model, &RadioModel::panTransmitInhibitChanged, this,
+                [this](const QString& panId) {
+            if (!m_model) {
+                return;
+            }
+            for (SliceModel* slice : m_model->slices()) {
+                if (slice && slice->panId() == panId) {
+                    broadcastTxPermission(slice);
+                }
+            }
+        });
+
+        connect(m_model, &RadioModel::capabilitiesChanged, this,
+                [this](bool, const RadioCapabilities&) { broadcastTxPermissions(); });
 
         // Panadapter recenter → dds: broadcast. The DAX IQ stream a skimmer
         // (CW Skimmer / SDC) decodes is centered on the panadapter, not the
@@ -2889,6 +2921,27 @@ void TciServer::broadcastSliceFrequencies(SliceModel* slice)
     }
 }
 
+void TciServer::broadcastTxPermission(SliceModel* slice)
+{
+    if (!slice || m_clients.isEmpty()) {
+        return;
+    }
+    const int trx = m_trxMap.trxForSlice(m_model, slice);
+    broadcast(QStringLiteral("tx_enable:%1,%2;")
+                  .arg(trx)
+                  .arg(TciProtocol::transmitPermitted(m_model, slice) ? "true" : "false"));
+}
+
+void TciServer::broadcastTxPermissions()
+{
+    if (!m_model || m_clients.isEmpty()) {
+        return;
+    }
+    for (SliceModel* slice : m_model->slices()) {
+        broadcastTxPermission(slice);
+    }
+}
+
 void TciServer::wireSlice(int trx, SliceModel* slice)
 {
     if (!slice) return;
@@ -2901,6 +2954,7 @@ void TciServer::wireSlice(int trx, SliceModel* slice)
 
     connect(slice, &SliceModel::panIdChanged, this, [this, slice](const QString&) {
         broadcastSliceFrequencies(slice);
+        broadcastTxPermission(slice);
     });
 
     connect(slice, &SliceModel::modeChanged, this, [this, slice](const QString& mode) {
@@ -2925,9 +2979,6 @@ void TciServer::wireSlice(int trx, SliceModel* slice)
         // leaves the cache pointing at the outgoing slice for the brief
         // band-change gap, which is the value drive should still use.
         if (tx) m_lastTxTrx = trx;
-        if (m_clients.isEmpty()) return;
-        broadcast(QStringLiteral("tx_enable:%1,%2;")
-                      .arg(trx).arg(tx ? "true" : "false"));
     });
 
     // Seed the TX-trx cache from current state — txSliceChanged only fires on

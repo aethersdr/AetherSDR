@@ -192,6 +192,9 @@ Notes:
 - Opening a slice announces its receiver with `rx_enable:<trx>,true;`. Closing a slice announces `rx_enable:<trx>,false;` after approximately 500 ms. A band-change recreation that returns the same slice within that window keeps its receiver and sends neither notification; surviving receivers keep their numbers. `trx_count` is not re-sent.
 - Malformed arguments (for example to `volume:` or `modulation:`) are rejected, never applied to slice 0.
 - A `vfo:` confirmation reports the frequency the radio actually reached.
+- `tx_enable:<trx>,true;` means that receiver may request PTT. It is not the
+  current TX-slice assignment: AetherSDR routes a PTT request when it arrives,
+  and the radio still enforces its own frequency and safety interlocks.
 - **Panadapter spectrum forwarding:** subscribed clients receive the panadapter's FFT rows.
 
 ### Tune notifications

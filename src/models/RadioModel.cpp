@@ -3028,7 +3028,7 @@ void RadioModel::setPanTransmitInhibited(const QString& panId,
     }
 
     if (!inhibited) {
-        m_panTransmitInhibitReasons.remove(trimmedPanId);
+        const bool wasInhibited = m_panTransmitInhibitReasons.remove(trimmedPanId) > 0;
         const bool hadRestoreSlice =
             m_panTransmitInhibitedTxSlices.contains(trimmedPanId);
         const int restoreSliceId = hadRestoreSlice
@@ -3050,6 +3050,9 @@ void RadioModel::setPanTransmitInhibited(const QString& panId,
                                      .arg(restoreSliceId));
             }
         }
+        if (wasInhibited) {
+            emit panTransmitInhibitChanged(trimmedPanId);
+        }
         return;
     }
 
@@ -3068,6 +3071,7 @@ void RadioModel::setPanTransmitInhibited(const QString& panId,
         return;
     }
     m_panTransmitInhibitReasons.insert(trimmedPanId, trimmedReason);
+    emit panTransmitInhibitChanged(trimmedPanId);
     enforceTransmitInhibitForPan(trimmedPanId);
 }
 
