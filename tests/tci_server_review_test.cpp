@@ -2551,6 +2551,7 @@ public:
         model.stageSessionModelsForReconnectForTest();
         backend->setConnected(true);
         emit model.connectionStateChanged(true);
+        emit model.capabilitiesChanged(true, backend->caps);
         // capabilitiesChanged runs on this edge, but the staged model has no
         // live slices. Reclaim below is the only path allowed to restore the
         // per-receiver permission advertisement.
