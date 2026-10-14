@@ -25,6 +25,8 @@ constexpr QAbstractSocket::BindMode kLanVitaBindMode = QAbstractSocket::DontShar
 constexpr float kMinSpectrumDbm = -180.0f;
 constexpr int kAudioSampleRate = AudioEngine::DEFAULT_SAMPLE_RATE;
 constexpr int kOpusFramesPerPacket = 240;
+constexpr int kWanRegisterIntervalMs = 50;
+constexpr int kWanKeepaliveIntervalMs = 5000;
 
 QString streamCategoryName(PanadapterStream::StreamCategory cat)
 {
@@ -102,9 +104,6 @@ void PanadapterStream::init()
     if (!m_wanRegisterTimer) {
         m_wanRegisterTimer = new QTimer(this);
     }
-    if (!m_wanPingTimer) {
-        m_wanPingTimer = new QTimer(this);
-    }
     if (!m_routedPrimeTimer) {
         m_routedPrimeTimer = new QTimer(this);
     }
@@ -122,28 +121,11 @@ void PanadapterStream::init()
     connect(m_socket, &QUdpSocket::readyRead,
             this, &PanadapterStream::onDatagramReady);
 
-    // WAN UDP register: send "client udp_register handle=0x<handle>" every 50ms
-    // until first VITA-49 packet arrives (confirms radio knows our address).
-    connect(m_wanRegisterTimer, &QTimer::timeout, this, [this] {
-        if (m_radioAddress.isNull() || m_wanClientHandle == 0) return;
-        const QString hex = QString::number(m_wanClientHandle, 16).toUpper();
-        const QByteArray cmd = QStringLiteral("client udp_register handle=0x%1").arg(hex).toUtf8();
-        const qint64 sent = m_socket->writeDatagram(cmd, m_radioAddress, m_radioPort);
-        if (sent > 0)
-            m_totalTxBytes.fetch_add(sent);
-    });
-
-    // WAN ping keepalive: send "client ping handle=0x<handle>" every 5s
-    // to maintain NAT pinhole after registration is confirmed.
-    connect(m_wanPingTimer, &QTimer::timeout, this, [this] {
-        if (m_radioAddress.isNull() || m_wanClientHandle == 0) return;
-        const QString hex = QString::number(m_wanClientHandle, 16).toUpper();
-        const QByteArray cmd = QStringLiteral("client ping handle=0x%1").arg(hex).toUtf8();
-        m_socket->writeDatagram(cmd, m_radioAddress, m_radioPort);
-        m_totalTxBytes.fetch_add(cmd.size());
-        qCDebug(lcVita49) << "PanadapterStream: WAN ping keepalive"
-                 << "(totalRx:" << m_totalRxBytes.load() << "bytes)";
-    });
+    // FlexLib 4.3.16 Radio.UdpRegistrationLoop uses the same registration
+    // payload throughout the WAN session, with a slower cadence after VITA.
+    m_wanRegisterTimer->setTimerType(Qt::PreciseTimer);
+    connect(m_wanRegisterTimer, &QTimer::timeout,
+            this, &PanadapterStream::sendWanUdpRegister, Qt::UniqueConnection);
 
     connect(m_routedPrimeTimer, &QTimer::timeout, this, [this] {
         if (m_isWanMode || m_hasReceivedPacket || m_radioAddress.isNull())
@@ -296,6 +278,11 @@ bool PanadapterStream::rebindToEphemeralPort(RadioConnection* conn)
         qCWarning(lcVita49) << "PanadapterStream: cannot rebind UDP socket before init";
         return false;
     }
+    if (m_wanRegisterTimer) {
+        m_wanRegisterTimer->stop();
+    }
+    m_wanClientHandle = 0;
+    m_wanRegistered = false;
     // Rotate the epoch only once the rebind is actually going ahead. Starting
     // above the guard revoked every queued frame and reset continuity on a
     // stream that then kept running unchanged.
@@ -365,7 +352,7 @@ bool PanadapterStream::rebindToEphemeralPort(RadioConnection* conn)
 
 bool PanadapterStream::startWan(const QHostAddress& radioAddr, quint16 radioUdpPort)
 {
-    if (isRunning()) stop();  // clean up previous session before rebinding (#561)
+    stop();
     m_pcmProducer.start();
 
     resetAudioStreamStats();
@@ -398,20 +385,69 @@ bool PanadapterStream::startWan(const QHostAddress& radioAddr, quint16 radioUdpP
 
 void PanadapterStream::startWanUdpRegister(quint32 clientHandle)
 {
+    if (!m_isWanMode || !isRunning()) {
+        return;
+    }
+    m_wanRegisterTimer->stop();
     m_wanClientHandle = clientHandle;
     m_wanRegistered = false;
+    if (clientHandle == 0 || m_radioAddress.isNull() || m_radioPort == 0) {
+        return;
+    }
 
-    const QString hex = QString::number(clientHandle, 16).toUpper();
+    const QString hex = QString::number(clientHandle, 16).toUpper()
+                            .rightJustified(8, QLatin1Char('0'));
     qCDebug(lcVita49) << "PanadapterStream: WAN — starting UDP registration,"
-             << "handle=0x" + hex
-             << "sending to" << m_radioAddress.toString() << ":" << m_radioPort;
+                    << "handle=0x" + hex
+                    << "sending to" << m_radioAddress.toString() << ":" << m_radioPort;
+    sendWanUdpRegister();
+    m_wanRegisterTimer->start(kWanRegisterIntervalMs);
+}
 
-    // Send first registration immediately, then every 50ms until confirmed
-    const QByteArray cmd = QStringLiteral("client udp_register handle=0x%1").arg(hex).toUtf8();
+void PanadapterStream::sendWanUdpRegister()
+{
+    if (!m_isWanMode || !isRunning() || m_radioAddress.isNull()
+        || m_radioPort == 0 || m_wanClientHandle == 0) {
+        return;
+    }
+    // ClientHandleHelper.ToStatusString in published FlexLib 4.3.16.
+    const QString hex = QString::number(m_wanClientHandle, 16).toUpper()
+                            .rightJustified(8, QLatin1Char('0'));
+    const QByteArray cmd = QStringLiteral("client udp_register handle=0x%1").arg(hex).toLatin1();
     const qint64 sent = m_socket->writeDatagram(cmd, m_radioAddress, m_radioPort);
-    if (sent > 0)
+    if (sent > 0) {
         m_totalTxBytes.fetch_add(sent);
-    m_wanRegisterTimer->start(50);
+    }
+}
+
+void PanadapterStream::confirmWanRegistration(const QByteArray& data,
+                                             const QHostAddress& sender, quint16 port)
+{
+    if (!m_isWanMode || !isRunning() || m_wanRegistered || m_wanClientHandle == 0
+        || sender != m_radioAddress || port != m_radioPort || data.size() < 16) {
+        return;
+    }
+    const auto* raw = reinterpret_cast<const uchar*>(data.constData());
+    const quint32 header = qFromBigEndian<quint32>(raw);
+    const quint32 type = header >> 28;
+    const bool hasClass = (header & 0x08000000u) != 0;
+    const bool hasTrailer = (header & 0x04000000u) != 0;
+    const bool hasIntegerTimestamp = (header & 0x00C00000u) != 0;
+    const bool hasFractionalTimestamp = (header & 0x00300000u) != 0;
+    const int headerBytes = 16 + (hasIntegerTimestamp ? 4 : 0)
+                              + (hasFractionalTimestamp ? 8 : 0);
+    // FlexLib qualifies a parsed Flex OUI preamble, before stream dispatch.
+    // Check its declared size and optional fields before accepting it here.
+    if ((type != 1 && type != 3) || !hasClass
+        || (header & 0xFFFFu) * 4 != static_cast<quint32>(data.size())
+        || data.size() < headerBytes + (hasTrailer ? 4 : 0)
+        || (qFromBigEndian<quint32>(raw + 8) & 0x00FFFFFFu) != 0x001C2Du) {
+        return;
+    }
+    m_wanRegistered = true;
+    m_wanRegisterTimer->setInterval(kWanKeepaliveIntervalMs);
+    qCDebug(lcVita49) << "PanadapterStream: WAN — first VITA-49 packet received!"
+                    << data.size() << "bytes — UDP registration confirmed";
 }
 
 void PanadapterStream::stop()
@@ -423,9 +459,6 @@ void PanadapterStream::stop()
     }
     if (m_wanRegisterTimer) {
         m_wanRegisterTimer->stop();
-    }
-    if (m_wanPingTimer) {
-        m_wanPingTimer->stop();
     }
     if (m_routedPrimeTimer) {
         m_routedPrimeTimer->stop();
@@ -657,21 +690,7 @@ void PanadapterStream::onDatagramReady()
                     << QStringLiteral("local_port=%1").arg(m_localPort)
                     << QStringLiteral("from=%1:%2").arg(dg.senderAddress().toString()).arg(dg.senderPort());
             }
-            // On first VITA-49 packet in WAN mode: registration confirmed.
-            // Stop the rapid udp_register timer and switch to ping keepalive.
-            if (m_isWanMode && !m_wanRegistered) {
-                qCDebug(lcVita49) << "PanadapterStream: WAN — first VITA-49 packet received!"
-                         << payloadBytes << "bytes from"
-                         << dg.senderAddress().toString() << ":" << dg.senderPort()
-                         << "— UDP registration confirmed";
-                m_wanRegistered = true;
-                if (m_wanRegisterTimer) {
-                    m_wanRegisterTimer->stop();
-                }
-                if (m_wanPingTimer) {
-                    m_wanPingTimer->start(5000);
-                }
-            }
+            confirmWanRegistration(payload, dg.senderAddress(), dg.senderPort());
             m_totalRxBytes.fetch_add(payloadBytes);
             processDatagram(payload);
         }
