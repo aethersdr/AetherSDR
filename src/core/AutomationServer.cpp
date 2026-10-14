@@ -49,6 +49,7 @@
 #include <QPointer>
 #include <QJsonObject>
 #include <QJsonArray>
+#include <QMap>
 #include <QJsonDocument>
 #include <QJsonValue>
 #include <QImage>
@@ -3311,6 +3312,13 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
                     return err(QStringLiteral(
                         "notch requires an action (list|add|set|remove|enable)"));
                 return s.doNotch(a.action, a.value);
+            });
+
+        add("interlock", {},
+            "interlock probe source=<tokens> [vox=0|1] [owner=local|other] — isolated production TX-state reconciliation; no radio or device access",
+            parseActionRest,
+            [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
+                return s.doInterlock(a.action, a.value);
             });
 
         add("gps", {},
@@ -8121,6 +8129,41 @@ QJsonObject AutomationServer::doSlice(const QString& action, const QString& arg)
 
     return err(QStringLiteral("unknown slice action: ") + action
                + QStringLiteral(" (") + sliceActionList() + QStringLiteral(")"));
+}
+
+QJsonObject AutomationServer::doInterlock(const QString& action, const QString& arguments)
+{
+    if (action != QLatin1String("probe")) {
+        return err(QStringLiteral("interlock requires probe source=<tokens> [vox=0|1] [owner=local|other]"));
+    }
+    if (arguments.size() > 192) {
+        return err(QStringLiteral("interlock probe arguments too long"));
+    }
+    QMap<QString, QString> options;
+    const QStringList fields = arguments.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+    for (const QString& field : fields) {
+        const qsizetype equals = field.indexOf(QLatin1Char('='));
+        if (equals < 0) {
+            return err(QStringLiteral("interlock probe requires key=value options"));
+        }
+        const QString key = field.left(equals);
+        if ((key != QLatin1String("source") && key != QLatin1String("vox")
+             && key != QLatin1String("owner")) || options.contains(key)) {
+            return err(QStringLiteral("unknown or duplicate interlock probe option"));
+        }
+        options.insert(key, field.mid(equals + 1));
+    }
+    static const QRegularExpression sourcePattern(QStringLiteral("\\A[A-Z0-9_,]{0,128}\\z"));
+    const QString source = options.value(QStringLiteral("source"));
+    const QString vox = options.value(QStringLiteral("vox"), QStringLiteral("0"));
+    const QString owner = options.value(QStringLiteral("owner"), QStringLiteral("local"));
+    if (!options.contains(QStringLiteral("source")) || !sourcePattern.match(source).hasMatch()
+        || (vox != QLatin1String("0") && vox != QLatin1String("1"))
+        || (owner != QLatin1String("local") && owner != QLatin1String("other"))) {
+        return err(QStringLiteral("invalid source, vox or owner for interlock probe"));
+    }
+    return RadioModel::automationInterlockProbe(source, vox == QLatin1String("1"),
+                                               owner == QLatin1String("local"));
 }
 
 QJsonObject AutomationServer::doGps(const QString& action, const QString& format)

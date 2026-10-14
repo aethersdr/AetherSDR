@@ -4809,8 +4809,29 @@ stops the sweep without issuing a restoration rate change. No calibration
 code changes RX audio or keys TX. Physical-radio persistence validation is
 still a separate radiocert task.
 
+### `interlock probe`
+
+`interlock probe source=MIC,VOX [vox=0|1] [owner=local|other]` runs the same
+TX-state reconciler used by incoming interlock status, with an isolated
+`TransmitModel`. It constructs no radio model, backend, transport or device,
+and never touches the active session or its GUI/audio/serial outputs.
+
+The result includes snapshots for requested, transmitting, bare VOX, empty
+source and READY phases; local transmit/audio-gate state edges; and captured
+command/keying intents. `source=` explicitly selects an empty source. Sources
+are limited to 128 uppercase ASCII letters, digits, underscores and commas;
+unknown tokens are allowed so exact-token refusal can be tested. Duplicate or
+unknown options are rejected. `owner` is an input to the ownership policy,
+not a claim that a real radio was tested. The diagnostic requires no TX
+permission and cannot create an operator intent or send a command.
+
+This provides isolated client reconciliation evidence. Status parsing,
+ownership-handle mapping and cached-source lifecycle are covered by the
+socket-free production-router tests; live firmware, visible GUI meters and
+audio devices require separate hardware validation.
+
 <!-- BEGIN GENERATED VERB TABLE (tools/gen_bridge_docs.py) -->
-<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 79 verbs. -->
+<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 80 verbs. -->
 
 | Verb | Aliases | Description |
 |---|---|---|
@@ -4846,6 +4867,7 @@ still a separate radiocert task.
 | `atu` | — | atu <bypass\|start> — antenna tuner (start is TX-gated) |
 | `slice` | — | slice <action> [args] — slice lifecycle/config (see doSlice) |
 | `notch` | — | notch <list\|add\|set\|remove\|enable> [args] — manual notch filters (add <freqMhz> [widthHz]; set <id> [freq=<mhz>] [width=<hz>]; remove <id>; enable <0\|1>) |
+| `interlock` | — | interlock probe source=<tokens> [vox=0\|1] [owner=local\|other] — isolated production TX-state reconciliation; no radio or device access |
 | `gps` | — | gps <fixture\|clearfixture> [6000\|8000] — disconnected GPS test data |
 | `waveform` | — | waveform <start\|stop\|unregister\|resync> [args] — digital-voice service |
 | `tune` | — | tune <mhz> [sliceId] — set a slice frequency (default: the active slice) |

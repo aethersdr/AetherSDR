@@ -399,6 +399,7 @@ MAPPERS = {
     "resize": _map_resize,
     "connect": _map_action_value("connect needs <list|show|hide|local|ip|wait> [args]"),
     "slice": _map_action_value("slice needs an action"),
+    "interlock": _map_action_value("interlock needs probe"),
     "memory": _map_action_value("memory needs <activate> <index> [panId]"),
     "waveform": _map_action_value(
         "waveform needs <start|stop|unregister|resync> [args]"),

@@ -84,6 +84,27 @@ void testInterlockTxGate()
     check(interlockKeepsLocalTxOn(true, false, false, false, true,
                                   QString(), false),
           "tune keeps local TX on");
+    for (const QString& source : {QStringLiteral("RCA"), QStringLiteral("MIC,VOX"),
+                                  QStringLiteral("VOX,MIC"), QStringLiteral("ACC,SW"),
+                                  QStringLiteral("SW,RCA"), QStringLiteral("TC2,ACC,DVK"),
+                                  QStringLiteral(",MIC,,")}) {
+        check(interlockKeepsLocalTxOn(true, false, false, false, false, source, false),
+              "exact hardware token anywhere in source list reconciles local TX");
+        check(!interlockKeepsLocalTxOn(false, true, true, true, true, source, true),
+              "foreign owner overrides all sources and local intents");
+    }
+    for (const QString& source : {QString(), QStringLiteral("SW"), QStringLiteral("VOX"),
+                                  QStringLiteral("SW,VOX"), QStringLiteral("TUNE"),
+                                  QStringLiteral("UNKNOWN"), QStringLiteral("MICROPHONE"),
+                                  QStringLiteral("XACC,RCAX,VOXX"), QStringLiteral("MIC;VOX"),
+                                  QStringLiteral(" MIC ")}) {
+        check(!interlockKeepsLocalTxOn(true, false, false, false, false, source, false),
+              "no exact hardware token or local intent keeps VOX-disabled TX off");
+        check(interlockKeepsLocalTxOn(true, false, false, false, false, source, true),
+              "VOX enable preserves legacy source-independent reconciliation");
+    }
+    check(interlockKeepsLocalTxOn(true, false, false, true, false, QString(), false),
+          "CWX intent keeps local TX on without a source");
 }
 
 void testOperatorTransmitGate()
