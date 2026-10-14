@@ -3863,6 +3863,9 @@ add_executable(radio_nickname_test
     src/gui/GuardedSlider.h
     ${THEME_TEST_RESOURCES}
 )
+# MainWindow's status-bar consumers have no socket-free construction seam.
+target_compile_definitions(radio_nickname_test PRIVATE
+    AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 target_include_directories(radio_nickname_test PRIVATE src tests)
 target_link_libraries(radio_nickname_test PRIVATE
     aetherdesktop_support Qt6::Widgets Qt6::Test)

@@ -2115,6 +2115,10 @@ QWidget* RadioSetupDialog::buildRadioTab()
                         1, 0);
 
         connect(m_nicknameEdit, &QLineEdit::editingFinished, this, [this] {
+            // Return on an untouched field must not write radio-persisted identity.
+            if (!m_nicknameEdit->isModified()) {
+                return;
+            }
             const RadioInfo info = m_model->lastRadioInfo();
             // Only FlexRadio has an on-radio name store ("radio name" command).
             // Every other family (HL2, the sim demo, any future non-Flex backend)
@@ -2132,6 +2136,7 @@ QWidget* RadioSetupDialog::buildRadioTab()
                 hl2::Hl2Discovery::setNickname(info.family, info.serial,
                                                m_nicknameEdit->text());
             }
+            m_nicknameEdit->setModified(false);
         });
         connect(m_callsignEdit, &QLineEdit::editingFinished, this, [this] {
             // Persist client-side on every family, then also write the radio's
@@ -2160,6 +2165,10 @@ QWidget* RadioSetupDialog::buildRadioTab()
         connect(m_model, &RadioModel::infoChanged, this, [this] {
             if (m_modelLabel) {
                 m_modelLabel->setText(displayOrDash(m_model->model()));
+            }
+            if (m_nicknameEdit && !m_nicknameEdit->isModified()
+                && hl2::Hl2Discovery::nicknameLivesOnRadio(m_model->lastRadioInfo())) {
+                m_nicknameEdit->setText(m_model->nickname());
             }
         });
 

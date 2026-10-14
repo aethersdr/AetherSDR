@@ -1,5 +1,6 @@
 // Socket-free nickname encoding, model admission and production dialog edits.
 #include "TestSettingsProfile.h"
+#include "SeamThreadAffinityProbe.h"
 #include "core/AppSettings.h"
 #include "core/RadioDiscovery.h"
 #include "core/backends/flex/FlexBackend.h"
@@ -8,11 +9,13 @@
 #include "models/RadioModel.h"
 
 #include <QApplication>
+#include <QFile>
 #include <QLineEdit>
 #include <QMetaObject>
 #include <QObject>
 #include <QSignalSpy>
 #include <QStringList>
+#include <QTest>
 
 #include <cstdio>
 #include <initializer_list>
@@ -85,6 +88,7 @@ QLineEdit* nicknameEdit(RadioSetupDialog& dialog)
 void finishEdit(QLineEdit& edit, const QString& text)
 {
     edit.setText(text);
+    edit.setModified(true);
     check(QMetaObject::invokeMethod(&edit, "editingFinished", Qt::DirectConnection),
           "production editingFinished handler reached");
 }
@@ -153,6 +157,32 @@ void modelAndDialog()
     RadioNicknameTestAccess::identity(radio, QStringLiteral("flex"),
                                       QStringLiteral("4.3.16.42034"));
     RadioNicknameTestAccess::wireStatus(radio, *backend);
+    test::SeamThreadAffinityProbe probe(backend);
+    test::attachAllSeamSignals(probe);
+    {
+        backend->connected = false;
+        RadioSetupDialog early(&radio);
+        QLineEdit* edit = nicknameEdit(early);
+        check(edit && edit->text().isEmpty(), "dialog can open before nickname arrives");
+        if (!edit) {
+            return;
+        }
+        backend->connected = true;
+        QSignalSpy finished(edit, &QLineEdit::editingFinished);
+        QTest::keyClick(edit, Qt::Key_Return);
+        check(finished.size() == 1, "Return finishes an untouched early field");
+        check(commands.isEmpty(), "untouched empty field cannot clear a newly connected radio");
+        backend->decodeRadioStatus({{QStringLiteral("nickname"), QStringLiteral("LateName")}});
+        check(edit->text() == QStringLiteral("LateName") && !edit->isModified(),
+              "late radio identity refreshes untouched field without marking an edit");
+        QTest::keyClick(edit, Qt::Key_Return);
+        check(commands.isEmpty(), "untouched populated field cannot reassert a stale nickname");
+        edit->setText(QStringLiteral("OperatorEdit"));
+        edit->setModified(true);
+        backend->decodeRadioStatus({{QStringLiteral("nickname"), QStringLiteral("OtherClient")}});
+        check(edit->text() == QStringLiteral("OperatorEdit"),
+              "radio status preserves an operator edit in progress");
+    }
     backend->decodeRadioStatus({{QStringLiteral("nickname"), QStringLiteral("Original")}});
     check(radio.nickname() == QStringLiteral("Original"), "radio status seeds nickname");
     QSignalSpy dropped(&radio, &RadioModel::commandDropped);
@@ -177,10 +207,14 @@ void modelAndDialog()
               "dialog clears through backend without a raw model command");
         check(radio.nickname() == QStringLiteral("Original"),
               "request does not overwrite confirmed live state");
+        check(!edit->isModified(), "dispatch consumes the operator edit");
+        QMetaObject::invokeMethod(edit, "editingFinished", Qt::DirectConnection);
+        check(commands.size() == 1, "repeated editingFinished cannot dispatch the same clear twice");
         backend->decodeRadioStatus({{QStringLiteral("model"), QStringLiteral("FLEX-8600")}});
         check(radio.nickname() == QStringLiteral("Original"), "absent status keeps nickname");
         backend->decodeRadioStatus({{QStringLiteral("nickname"), QString()}});
-        check(radio.nickname().isEmpty(), "present empty status clears nickname");
+        check(radio.nickname().isEmpty() && edit->text().isEmpty(),
+              "present empty status clears model and open dialog nickname");
         commands.clear();
         finishEdit(*edit, QStringLiteral("NewName"));
         check(commands == QStringList{QStringLiteral("radio name NewName")},
@@ -200,11 +234,71 @@ void modelAndDialog()
         check(edit && edit->text().isEmpty(),
               "reopened dialog keeps cleared nickname empty instead of discovery fallback");
     }
+    check(probe.violations().isEmpty() && probe.afterDisconnect().isEmpty(),
+          "nickname status follows the backend seam affinity and lifetime contract");
     commands.clear();
     radio.setBackendForTest(std::make_unique<LocalBackend>(), QStringLiteral("hl2"));
     check(radio.requestRadioNickname(QStringLiteral("WrongRadio")) == ReceiveDispatch::Unsupported
               && commands.isEmpty(),
           "backend replacement cannot reuse the old Flex nickname command sink");
+}
+
+void productionFirmwareProvider()
+{
+    RadioModel radio;
+    RadioNicknameTestAccess::identity(radio, QStringLiteral("flex"),
+                                     QStringLiteral("4.3.16.42034"));
+    check(radio.rebuildBackendForTest(QStringLiteral("flex")),
+          "production Flex setup constructs backend without connecting");
+    auto* backend = qobject_cast<FlexBackend*>(radio.backend());
+    check(backend != nullptr, "production setup selects Flex backend");
+    if (!backend) {
+        return;
+    }
+    QStringList commands;
+    backend->setCommandSink([&](const QString& command) { commands.append(command); });
+    check(backend->requestRadioNickname(QString()) == ReceiveDispatch::Dispatched
+              && commands == QStringList{QStringLiteral("radio clear_name")},
+          "production setup wires the radio model firmware provider");
+    RadioNicknameTestAccess::identity(radio, QStringLiteral("flex"),
+                                     QStringLiteral("4.2.20.41343"));
+    commands.clear();
+    check(backend->requestRadioNickname(QString()) == ReceiveDispatch::Unsupported
+              && commands.isEmpty(),
+          "production firmware provider reads later model changes");
+}
+
+void statusBarNicknameWiring()
+{
+    // MainWindow is not linked into socket-free test targets. Pin only the
+    // two production consumers that must pass authoritative empty text through.
+    QFile source(QStringLiteral(AETHER_SOURCE_DIR "/src/gui/MainWindow.cpp"));
+    check(source.open(QIODevice::ReadOnly), "status-bar wiring source is available");
+    const QString text = QString::fromUtf8(source.readAll());
+    const auto consumer = [&text](const QString& signal) {
+        qsizetype begin = text.indexOf(signal);
+        while (begin >= 0) {
+            const qsizetype end = text.indexOf(QStringLiteral("\n    });"), begin);
+            if (end < 0) {
+                return QString();
+            }
+            const QString block = text.mid(begin, end - begin);
+            if (block.contains(QStringLiteral("setStatusBarStationText"))) {
+                return block;
+            }
+            begin = text.indexOf(signal, end);
+        }
+        return QString();
+    };
+    const QString identity = consumer(
+        QStringLiteral("connect(&m_radioModel, &RadioModel::infoChanged"));
+    check(identity.contains(QStringLiteral("setStatusBarStationText"))
+              && !identity.contains(QStringLiteral("nickname().isEmpty()")),
+          "infoChanged status-bar consumer accepts authoritative empty nickname (source pin)");
+    const QString telemetry = consumer(QStringLiteral("&MeterModel::hwTelemetryChanged"));
+    check(telemetry.contains(QStringLiteral("setStatusBarStationText"))
+              && !telemetry.contains(QStringLiteral("nick.isEmpty()")),
+          "telemetry status-bar consumer accepts authoritative empty nickname (source pin)");
 }
 
 void localNicknames()
@@ -240,6 +334,8 @@ int main(int argc, char** argv)
     AppSettings::instance().load();
     encoding();
     modelAndDialog();
+    productionFirmwareProvider();
+    statusBarNicknameWiring();
     localNicknames();
     return failures ? 1 : 0;
 }

@@ -142,7 +142,8 @@ ReceiveDispatch FlexBackend::requestRadioNickname(const QString& nickname)
     if (!m_sink) {
         return ReceiveDispatch::Unsupported;
     }
-    // FlexLib StringHelper.Sanitize: the front-panel font supports this set.
+    // FlexLib Nickname uses StringHelper.Sanitize: drop unsupported characters,
+    // including spaces; sanitized-empty input selects the clear operation.
     QString sanitized;
     sanitized.reserve(nickname.size());
     for (const QChar ch : nickname) {

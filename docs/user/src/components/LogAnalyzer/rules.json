@@ -474,7 +474,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 12641,
+          "line": 12640,
           "text": "RadioModel: DAX TX create failed"
         }
       ]
@@ -890,7 +890,7 @@
       "source": [
         {
           "file": "src/core/backends/hl2/Hl2Backend.cpp",
-          "line": 2789,
+          "line": 2844,
           "text": "HL2: could not open the UDP socket"
         }
       ]
@@ -910,7 +910,7 @@
       "source": [
         {
           "file": "src/core/backends/hl2/MetisClient.cpp",
-          "line": 509,
+          "line": 510,
           "text": "MetisClient: no EP6 for"
         }
       ]
