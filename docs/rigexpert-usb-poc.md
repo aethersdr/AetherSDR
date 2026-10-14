@@ -2,8 +2,8 @@
 
 Implementation for [RFC #6471](https://github.com/aethersdr/AetherSDR/issues/6471).
 The operator reported verbal maintainer approval on 2026-10-14; this branch
-implements the USB bring-up step toward the quick-check design. Hardware
-qualification is pending. This is an independent instrument, not an
+implements the USB bring-up step toward the quick-check design. Initial macOS
+USB acquisition is demonstrated below; full hardware qualification is pending. This is an independent instrument, not an
 `IRadioBackend` or a replacement transceiver session.
 
 ## Scope and authority
@@ -76,7 +76,8 @@ from an overclaimed measurement report.
 5. Require the next exact `OK` after the SW write receipt → `FRX<N>\r`.
 6. Parse strict finite CSV `frequencyMHz,Rohm,Xohm` after the FRX write receipt.
    One initial FRX `OK` is tolerated before rows, without extending deadlines.
-7. The **unqualified** AntScope normal-HID hypothesis is `N + 1` rows. Require
+7. The AntScope normal-HID hypothesis is `N + 1` rows, observed on the tested
+   Stick Pro 108 at the four counts below. Other tuples remain unqualified. Require
    strictly increasing returned frequency, requested first and last endpoints,
    and that row count. Completion means this **host cutoff**, not an observed
    firmware end-of-sweep marker. Extra data after cutoff is discarded locally;
@@ -99,7 +100,7 @@ must include late FULLINFO, multiple ACKs in one report, and stop/reopen races.
 | Sweep frequency | 100,000–600,000,000 Hz inclusive | Manufacturer range; USB stepping unqualified |
 | Span | Positive, even integer Hz; start < stop | Host requirement to represent exact integer center/endpoints |
 | FRX N | 1–1000; span at least N Hz | Host cap, **not** a discovered firmware maximum |
-| Expected rows | N + 1; at most 1001 samples | Source-derived hypothesis; hardware pending |
+| Expected rows | N + 1; at most 1001 samples | Observed for N=1, 2, 10, 200 at 14.000–14.350 MHz on the tested Stick Pro 108; other settings unqualified |
 | Setup ACK | 3 s per command | Host deadline, not a firmware timing specification |
 | Sweep | 15 s without a valid row; 60 s total, starting at FQ | Host deadlines; partial data never labelled complete |
 | Input line | 512 bytes, LF framing, optional single CR before LF | Host parser bound |
@@ -154,6 +155,39 @@ Bridge responses also report `automationRfAllowed` without starting a sweep.
 Authentication uses the existing automation token. The existing MCP
 `bridge_command` tool accepts `{"request":{"cmd":"lab","action":"status"}}`
 and the corresponding action/value fields for the other commands.
+
+## Observed macOS bench result
+
+On 2026-10-14, clean app commit `433d91400b9a9c5eafae6ce53b62f602a73b7d63`
+ran on macOS 27.0.1 arm64 with one USB Stick Pro identifying as **Stick Pro 108**.
+The operator explicitly authorized sweeps into a connected dummy load. An
+isolated app profile had no connected transceiver, authenticated MCP, analyzer
+RF permission enabled, and transceiver TX automation disabled.
+
+All acquisitions used the real MCP `bridge_command` → `lab` → model → USB path,
+with range 14,000,000–14,350,000 Hz:
+
+| FRX intervals | Accepted rows | Result |
+|---:|---:|---|
+| 1 | 2 | Complete; exact endpoints and every grid frequency |
+| 2 | 3 | Complete; exact endpoints and every grid frequency |
+| 10 | 11 | Complete; exact endpoints and every grid frequency |
+| 200 | 201 | Complete; exact endpoints and every grid frequency |
+
+The 201-row sweep returned `14.175000,51.46,-0.99` at its center. Calculated
+at 50 Ω, that is **SWR 1.03539**, **return loss 35.1963 dB**, and
+**|Z| 51.4695 Ω**. This agrees with the operator's rounded front-panel reference
+(SWR 1.04, RL 35.2 dB, |Z| 51.5 Ω, R 51.4 Ω, X −1.02 Ω). It establishes
+protocol/readout agreement on this load, not independent metrology accuracy.
+Each connection recorded three identity-length compatibility reports;
+measurement report lengths remained strict. The actual window and its marker
+were inspected with the completed trace.
+
+The snapshot's `countQualifiedOnHardware: false` remains conservative: this
+bench does not certify all host-supported settings. Calibration provenance,
+full range/count limits, fault/cancellation timing, physical RF silence,
+Windows/Linux, other models and the radio-tab workflow remain unqualified.
+The written `off` and USB close are observable host actions, not RF-off proof.
 
 ## macOS hardware qualification
 

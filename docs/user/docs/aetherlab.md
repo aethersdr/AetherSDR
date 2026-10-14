@@ -15,8 +15,9 @@ platforms: ["macOS"]
 
 AetherLab is a USB proof of concept for the **RigExpert Stick Pro**. It opens an
 independent antenna analyzer window with an SWR plot and frequency, resistance,
-reactance and return-loss marker readouts. Live hardware qualification is
-pending. The window does not change radio settings or inhibit radio TX.
+reactance and return-loss marker readouts. Basic USB sweeps are verified on
+one Stick Pro identifying as **Stick Pro 108** on macOS. Broader qualification
+is pending. The window does not change radio settings or inhibit radio TX.
 
 ## Requirements
 
@@ -67,7 +68,7 @@ instrument session; it does not issue radio commands.
 | Control | Meaning |
 |---|---|
 | Start / Stop | 0.1–600 MHz, entered to 1 Hz. Use an even positive span in Hz. USB frequency stepping is unqualified. |
-| FRX intervals | Experimental wire count N, 1–1000. The host expects N+1 returned rows; this interpretation is unqualified on hardware. |
+| FRX intervals | Experimental wire count N, 1–1000. The host expects N+1 returned rows. N=1, 2, 10 and 200 are verified over 14.000–14.350 MHz on the tested Stick Pro 108; other settings remain experimental. |
 | R / X | Resistance and reactance in ohms returned by the device; no host calibration applied. |
 | SWR / RL | Calculated at 50 Ω. Perfect match gives SWR 1 and infinite return loss; invalid/non-passive derived values are undefined. |
 | Session status | Shows ready, setup, sweeping, complete, cancelled or error and the number of accepted rows. Complete means the host's count and endpoint checks passed. |
@@ -79,9 +80,10 @@ alone does not authorize analyzer RF. See [Automation Bridge and MCP](./automati
 
 ## Known issues
 
-- [RFC #6471](https://github.com/aethersdr/AetherSDR/issues/6471): USB report format,
-  count semantics, timing, cancellation and measurement accuracy await real
-  Stick Pro qualification. The station tab and TX interlock are deferred.
+- [RFC #6471](https://github.com/aethersdr/AetherSDR/issues/6471): broader frequency/count
+  coverage, timing, cancellation, calibration provenance and measurement accuracy
+  require qualification. Physical RF shutdown is unverified. The station tab and
+  TX interlock are deferred.
 
 ## Troubleshooting
 
