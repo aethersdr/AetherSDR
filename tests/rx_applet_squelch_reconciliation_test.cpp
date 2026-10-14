@@ -220,9 +220,12 @@ private slots:
         rx.setSlice(radio.slice(1));
         status(*a, true, 80); // Late Auto readback while the data slice is detached.
         QCOMPARE(a->manualSquelchLevel(), 54);
+        rx.setSlice(a); // Fixed SQL-On data readback must not become Manual on reattach.
+        QCOMPARE(rx.sqlMode(), RxApplet::SqlMode::Off);
+        status(*a, true, 80);
+        QCOMPARE(a->manualSquelchLevel(), 54);
         SliceDelta voice; voice.mode = "USB"; a->applyChanges(voice);
         rx.setAutoSqlAvailability(true, {});
-        rx.setSlice(a);
         source->requests.clear();
         RxAppletSquelchTestAccess::mode(rx, RxApplet::SqlMode::Auto, true);
         QCOMPARE(source->requests.last().level, 54);

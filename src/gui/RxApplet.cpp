@@ -1721,7 +1721,7 @@ void RxApplet::saveClientSquelchIntent()
 void RxApplet::setSqlMode(SqlMode m, bool propagateToRadio)
 {
     // Mode eligibility precedes Auto capability, including saved intent.
-    if (m == SqlMode::Auto && m_slice && !squelchAvailableInMode(m_slice->mode())) {
+    if (m != SqlMode::Off && m_slice && !squelchAvailableInMode(m_slice->mode())) {
         m = SqlMode::Off;
         propagateToRadio = false;
     }
