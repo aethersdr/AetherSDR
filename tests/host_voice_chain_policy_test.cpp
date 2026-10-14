@@ -17,6 +17,7 @@
 #include <cstdio>
 
 using AetherSDR::graphicEqPersistAllowed;
+using AetherSDR::graphicEqReloadRequired;
 using AetherSDR::restoredGraphicEqHoldsLayout;
 using AetherSDR::hostVoiceChainRepushAllowed;
 using AetherSDR::hostVoiceChainUnwindRequired;
@@ -40,6 +41,8 @@ constexpr bool kFlexPlane = true;
 constexpr bool kNoFlexPlane = false;
 constexpr bool kOwned = true;
 constexpr bool kNotOwned = false;
+constexpr bool kRadioModel = true;
+constexpr bool kClientModel = false;
 
 }  // namespace
 
@@ -128,12 +131,37 @@ int main()
           "restored EQ: an enable alone holds a layout");
 
     // ── Writing the graphic EQ to settings ─────────────────────────────────
-    check(graphicEqPersistAllowed(kConnected, kHostModulates),
+    check(graphicEqPersistAllowed(kConnected, kHostModulates, kClientModel),
           "persist: saved while connected to a host-modulating backend");
-    check(!graphicEqPersistAllowed(kConnected, kRadioModulates),
+    check(!graphicEqPersistAllowed(kConnected, kRadioModulates, kClientModel),
           "persist: never saved from a radio that keeps its own EQ");
-    check(!graphicEqPersistAllowed(kDisconnected, kHostModulates),
+    check(!graphicEqPersistAllowed(kDisconnected, kHostModulates, kClientModel),
           "persist: never saved while disconnected");
+    check(!graphicEqPersistAllowed(kConnected, kHostModulates, kRadioModel),
+          "persist: never saved while the model holds a Flex's EQ");
+
+    // ── Reloading the saved layout after a Flex ────────────────────────────
+    check(graphicEqReloadRequired(kConnected, kHostModulates, kRadioModel),
+          "reload: a host-modulating connect after a Flex reloads the saved layout");
+    check(!graphicEqReloadRequired(kConnected, kHostModulates, kClientModel),
+          "reload: not when the model already holds the client's layout");
+    check(!graphicEqReloadRequired(kConnected, kRadioModulates, kRadioModel),
+          "reload: never on a radio that keeps its own EQ");
+    check(!graphicEqReloadRequired(kDisconnected, kHostModulates, kRadioModel),
+          "reload: never on a disconnect");
+
+    // On every input, an edge that may save never needs a reload first.
+    for (int bits = 0; bits < 8; ++bits) {
+        const bool connected = bits & 1;
+        const bool hostModulates = bits & 2;
+        const bool fromRadio = bits & 4;
+        if (graphicEqPersistAllowed(connected, hostModulates, fromRadio)
+            && graphicEqReloadRequired(connected, hostModulates, fromRadio)) {
+            std::printf("[FAIL] persist and reload both true for bits %d\n", bits);
+            ++g_failures;
+        }
+    }
+    check(true, "no input both saves and still needs a reload");
 
     if (g_failures == 0)
         std::printf("host_voice_chain_policy_test: all checks passed\n");

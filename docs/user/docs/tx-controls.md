@@ -141,6 +141,12 @@ CW is excluded, and the card is not available on the Hermes-Lite 2.
 - ±10 dB vertical sliders per band
 - Independent **RX** and **TX** views; the view you chose is remembered
 - **ON** toggle + reset button
+- On a radio whose audio is processed in AetherSDR, such as the Hermes-Lite 2,
+  the bands and both **ON** settings are remembered across restarts. They are
+  saved while you are connected to that radio. A FlexRadio keeps its own EQ in
+  the radio and AetherSDR does not save it; after a FlexRadio session, the
+  saved settings come back when you connect the other radio again. Receive-only
+  radios do not save the EQ.
 
 ## Transmitting
 

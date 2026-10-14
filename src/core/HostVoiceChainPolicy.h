@@ -54,12 +54,22 @@ constexpr bool restoredGraphicEqHoldsLayout(bool anyBandNonZero,
 }
 
 // May the graphic EQ's state be written to settings now? Only while it is the
-// client's to keep: connected to a backend that modulates on this host, the same
-// terms the re-push needs. A Flex's EQ lives in the radio, and a value saved from
-// a Flex session would claim the shared objects on the next start.
-constexpr bool graphicEqPersistAllowed(bool connected, bool hostModulates) noexcept
+// client's to keep: connected to a backend that modulates on this host, and the
+// model not holding a radio's EQ. `modelFromRadio`: a Flex has written its EQ
+// status into EqualizerModel since the saved layout was last loaded into it.
+constexpr bool graphicEqPersistAllowed(bool connected, bool hostModulates,
+                                       bool modelFromRadio) noexcept
 {
-    return connected && hostModulates;
+    return connected && hostModulates && !modelFromRadio;
+}
+
+// Must this connection edge load the saved layout back into the model? On a
+// host-modulating connect after a radio wrote the model, before any edit can
+// save the radio's values over the operator's saved layout.
+constexpr bool graphicEqReloadRequired(bool connected, bool hostModulates,
+                                       bool modelFromRadio) noexcept
+{
+    return connected && hostModulates && modelFromRadio;
 }
 
 }  // namespace AetherSDR

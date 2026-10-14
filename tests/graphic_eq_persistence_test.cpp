@@ -1,7 +1,8 @@
 // The 8-band graphic EQ survives a restart on a radio whose EQ runs on this host
 // (#5611): State round-trips through the "EqApplet" settings object, a restore
 // issues no command, a restored EQ holds a layout to re-push only when something
-// is in it, an untouched EQ writes nothing, and damaged settings give defaults.
+// is in it, an untouched EQ writes nothing, damaged settings give defaults, and
+// a Flex session in between does not save its EQ over the saved layout.
 
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
@@ -48,6 +49,15 @@ QJsonObject storedObject()
         AppSettings::instance().value(kKey, "{}").toString().toUtf8()).object();
 }
 
+// The state as the database file holds it, past AppSettings' in-memory cache.
+EqualizerModel::State onDisk()
+{
+    QString json;
+    if (!AppSettings::instance().readAppRowFromDisk(kKey, json))
+        return {};
+    return EqualizerModel::stateFromJson(QJsonDocument::fromJson(json.toUtf8()).object());
+}
+
 bool holdsLayout(const EqualizerModel::State& s)
 {
     return restoredGraphicEqHoldsLayout(s.anyBandNonZero(), s.anyEnabled());
@@ -81,6 +91,7 @@ void roundTrip()
     check(first.state() == want, "round trip: state() reports what the setters set");
     check(EqualizerModel::savePersistedState(first.state()),
           "round trip: a changed state is written");
+    check(onDisk() == want, "round trip: the saved state is in the database");
 
     EqualizerModel second;
     second.restoreState(EqualizerModel::loadPersistedState());
@@ -258,6 +269,48 @@ void damagedSettingsRestoreDefaults()
     clearStored();
 }
 
+// (vi) HL2, then a Flex, then an HL2 again in one process. The Flex's status
+// fills the model; one HL2 edit must not save those values over the saved
+// layout. Replays MainWindow's connect-edge order through the same policy.
+void flexSessionLeavesSavedLayout()
+{
+    clearStored();
+    const EqualizerModel::State saved = distinctState();
+    EqualizerModel::savePersistedState(saved);
+
+    EqualizerModel model;
+    model.restoreState(EqualizerModel::loadPersistedState());
+
+    // A Flex connects and reports its own EQ.
+    bool fromRadio = true;
+    model.applyTxEqStatus({{"mode", "0"}, {"63Hz", "4"}, {"125Hz", "4"}, {"250Hz", "4"},
+                           {"500Hz", "4"}, {"1000Hz", "4"}, {"2000Hz", "4"},
+                           {"4000Hz", "4"}, {"8000Hz", "4"}});
+    model.applyRxEqStatus({{"mode", "1"}, {"63Hz", "-4"}, {"125Hz", "-4"}, {"250Hz", "-4"},
+                           {"500Hz", "-4"}, {"1000Hz", "-4"}, {"2000Hz", "-4"},
+                           {"4000Hz", "-4"}, {"8000Hz", "-4"}});
+    check(!(model.state() == saved), "flex session: the radio's status replaced the model");
+    check(!graphicEqPersistAllowed(true, false, fromRadio),
+          "flex session: nothing is saved while the Flex is connected");
+
+    // The HL2 connects: the saved layout comes back before any edit.
+    if (graphicEqReloadRequired(true, true, fromRadio)) {
+        model.restoreState(EqualizerModel::loadPersistedState());
+        fromRadio = false;
+    }
+    check(model.state() == saved, "flex session: the HL2 connect reloads the saved layout");
+
+    // One band moved on the HL2 is saved, and only that band changes.
+    model.setTxBand(EqualizerModel::B1k, 7);
+    if (graphicEqPersistAllowed(true, true, fromRadio))
+        EqualizerModel::savePersistedState(model.state());
+    EqualizerModel::State want = saved;
+    want.txBands[EqualizerModel::B1k] = 7;
+    check(onDisk() == want,
+          "flex session: an HL2 edit saves the saved layout plus that band, no Flex value");
+    clearStored();
+}
+
 }  // namespace
 
 int main(int argc, char** argv)
@@ -276,6 +329,7 @@ int main(int argc, char** argv)
     layoutIsDerived();
     untouchedWritesNothing();
     damagedSettingsRestoreDefaults();
+    flexSessionLeavesSavedLayout();
 
     if (g_failures == 0)
         std::printf("graphic_eq_persistence_test: all checks passed\n");

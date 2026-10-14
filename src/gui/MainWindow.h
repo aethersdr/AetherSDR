@@ -2131,7 +2131,12 @@ private:
     // host-modulating connect. It licenses the re-push only; a Flex connect
     // clears it, because the radio then writes the model.
     bool m_restoredGraphicEqPending{false};
-    bool m_minimalMode{false};             // true when spectrum is hidden (#208)
+    // True from a Flex connect until the saved graphic EQ is loaded back into
+    // the model on a host-modulating connect; nothing is saved meanwhile.
+    bool m_graphicEqFromRadio{false};
+    // Set while that reload runs, so it writes nothing into ClientEq itself.
+    bool m_graphicEqReloading{false};
+    bool m_minimalMode{false};            // true when spectrum is hidden (#208)
     bool m_canvasWasOnBeforeMinimal{false}; // minimal exit restores canvas mode
     bool m_exitingMinimalMode{false};      // re-entry guard for changeEvent → toggleMinimalMode(false)
     bool m_enteringMinimalMode{false};     // suppress changeEvent during enter (macOS deferred WindowStateChange, #2365)

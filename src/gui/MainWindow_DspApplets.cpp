@@ -939,16 +939,24 @@ void MainWindow::wireHostModulatedVoiceChain()
     // check at wiring time, because the capability is not known until a backend
     // attaches; applyGraphicEqToClientEq() re-checks on every call.
     connect(&m_radioModel.equalizerModel(), &EqualizerModel::txStateChanged,
-            this, [this] { applyGraphicEqToClientEq(true); });
+            this, [this] {
+        if (!m_graphicEqReloading)
+            applyGraphicEqToClientEq(true);
+    });
     connect(&m_radioModel.equalizerModel(), &EqualizerModel::rxStateChanged,
-            this, [this] { applyGraphicEqToClientEq(false); });
+            this, [this] {
+        if (!m_graphicEqReloading)
+            applyGraphicEqToClientEq(false);
+    });
 
     // Operator -> settings, in the EqApplet object and never in the strip's
-    // ClientEq keys. Not on a Flex, whose EQ the radio keeps.
+    // ClientEq keys. Not on a Flex, whose EQ the radio keeps, nor while the
+    // model still holds a Flex's values.
     connect(&m_radioModel.equalizerModel(), &EqualizerModel::operatorEdited,
             this, [this] {
         if (graphicEqPersistAllowed(m_radioModel.isConnected(),
-                                    hostModulatesTxAudio())) {
+                                    hostModulatesTxAudio(),
+                                    m_graphicEqFromRadio)) {
             EqualizerModel::savePersistedState(m_radioModel.equalizerModel().state());
         }
     });
@@ -972,6 +980,18 @@ void MainWindow::wireHostModulatedVoiceChain()
         const bool hostModulates = hostModulatesTxAudio();
 
         if (connected && hostModulates) {
+            // After a Flex the model holds the radio's EQ: the saved layout comes
+            // back silently first, and licenses the re-push as at startup.
+            if (graphicEqReloadRequired(connected, hostModulates,
+                                        m_graphicEqFromRadio)) {
+                const EqualizerModel::State saved = EqualizerModel::loadPersistedState();
+                m_graphicEqReloading = true;
+                m_radioModel.equalizerModel().restoreState(saved);
+                m_graphicEqReloading = false;
+                m_restoredGraphicEqPending = restoredGraphicEqHoldsLayout(
+                    saved.anyBandNonZero(), saved.anyEnabled());
+                m_graphicEqFromRadio = false;
+            }
             // Re-push on connect, since the capability was unknown before. Only
             // what the operator set or what was restored
             // (hostVoiceChainRepushAllowed; core/HostVoiceChainPolicy.h): an
@@ -1005,6 +1025,7 @@ void MainWindow::wireHostModulatedVoiceChain()
         // settings is no longer what the model holds: it must not be re-pushed.
         if (connected && m_radioModel.usesFlexCommandPlane()) {
             m_restoredGraphicEqPending = false;
+            m_graphicEqFromRadio = true;
         }
 
         // Unwind on a family swap: after host-modulated EQ/PROC on an HL2, a
