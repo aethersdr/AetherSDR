@@ -4,6 +4,7 @@
 #include "LogManager.h"
 #include "TciRoutingState.h"
 #include "TciTrxMap.h"
+#include "core/backends/RadioCapabilities.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/PanadapterModel.h"
@@ -45,6 +46,8 @@ int TciProtocol::tciTrxForSlice(RadioModel* model, const SliceModel* slice)
 bool TciProtocol::transmitPermitted(const RadioModel* model, const SliceModel* slice)
 {
     return model && slice && model->isConnected() && model->backendCanTransmit()
+        && model->sliceOwnedByUs(slice->sliceId())
+        && !modeIsReceiveOnly(model->backendCapabilities(), slice->mode())
         && model->panTransmitInhibitReason(slice->panId()).isEmpty();
 }
 

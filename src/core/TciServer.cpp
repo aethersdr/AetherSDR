@@ -1,5 +1,6 @@
 #ifdef HAVE_WEBSOCKETS
 #include "TciServer.h"
+#include "core/backends/RadioCapabilities.h"
 #include "AppActivity.h"
 #include "TciProtocol.h"
 #include "StreamStatus.h"
@@ -386,7 +387,7 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         });
         // A slice taken back after a reconnect emits no sliceAdded, only this edge.
         // Bind it quietly: the client already knows it, but its close needs a trx (#6352).
-        connect(m_model, &RadioModel::slotOccupancyChanged, this, [this](int) {
+        connect(m_model, &RadioModel::slotOccupancyChanged, this, [this](int sliceId) {
             bool bindingsChanged = false;
             for (SliceModel* live : m_model->slices()) {
                 if (live && m_trxMap.trxForSliceId(live->sliceId()) < 0) {
@@ -394,12 +395,19 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
                     bindingsChanged = true;
                 }
             }
-            // A same-radio reconnect reclaims slices without sliceAdded. The
-            // stable bindings are complete only after this loop, so re-announce
-            // their permission here rather than leaving clients at the
-            // disconnect-time false value.
+            // Reclaim binds slices without sliceAdded; owner confirmation can
+            // also settle an already-bound early slice. Publish only after
+            // every receiver binding is complete.
             if (bindingsChanged) {
                 broadcastTxPermissions();
+            } else if (SliceModel* slice = m_model->slice(sliceId)) {
+                broadcastTxPermission(slice);
+            }
+            if (m_model->isSlotForeign(sliceId)) {
+                const int trx = m_trxMap.trxForSliceId(sliceId);
+                if (trx >= 0) {
+                    broadcast(QStringLiteral("tx_enable:%1,false;").arg(trx));
+                }
             }
         });
         // A removed slice never fires daxChannelChanged, so without this the
@@ -1824,7 +1832,9 @@ void TciServer::promoteTxSliceAndContinue(int sliceId, std::function<void(bool)>
         return;
     }
     SliceModel* slice = m_model->slice(sliceId);
-    if (!slice || !m_model->panTransmitInhibitReason(slice->panId()).isEmpty()) {
+    if (!slice || !m_model->sliceOwnedByUs(sliceId)
+        || modeIsReceiveOnly(m_model->backendCapabilities(), slice->mode())
+        || !m_model->panTransmitInhibitReason(slice->panId()).isEmpty()) {
         continuation(false);
         return;
     }
@@ -1871,7 +1881,8 @@ void TciServer::promoteTxSliceAndContinue(int sliceId, std::function<void(bool)>
                 continuation(false);
                 return;
             }
-            continuation(true);
+            SliceModel* confirmed = self->m_model ? self->m_model->slice(sliceId) : nullptr;
+            continuation(TciProtocol::transmitPermitted(self->m_model, confirmed));
         });
 }
 
@@ -2489,6 +2500,10 @@ void TciServer::handleTrxRequest(TciClient* client, const TciProtocol::TrxReques
         replyText(client, QStringLiteral("trx:%1,false;").arg(request.trx));
         return;
     }
+    if (!m_model->sliceOwnedByUs(rxSlice->sliceId())) {
+        replyText(client, QStringLiteral("trx:%1,false;").arg(request.trx));
+        return;
+    }
     // With the requester: a TX slice another client operates as its receiver
     // is never this client's PTT target, even through a route cached before
     // that client declared it (#5193, the PTT twin of the VFO-B rule above).
@@ -2963,6 +2978,7 @@ void TciServer::wireSlice(int trx, SliceModel* slice)
         const int trx = m_trxMap.trxForSlice(m_model,slice);
         broadcast(QStringLiteral("modulation:%1,%2;")
                       .arg(trx).arg(TciProtocol::smartsdrToTci(mode)));
+        broadcastTxPermission(slice);
     });
 
     connect(slice, &SliceModel::filterChanged, this, [this, slice](int lo, int hi) {

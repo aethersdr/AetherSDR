@@ -726,6 +726,9 @@ public:
     quint32 txClientHandle() const { return m_txClientHandle; }
     quint32 ourClientHandle() const;
     bool sliceMayBelongToUs(int sliceId) const;
+    // TX requires confirmed ownership on multi-client radios; early RX state
+    // may still be visible through sliceMayBelongToUs() before owners arrive.
+    bool sliceOwnedByUs(int sliceId) const;
 
     struct ClientInfo {
         QString clientId;
