@@ -101,15 +101,29 @@ std::vector<Report> Ctr2FirmwareUpdater::sessionEndReports()
     } else if (m_phase == Phase::Calling) {
         m_encoder.reset();
         m_encoder.encodeControl(MessageType::Closed, &out);
+    } else if (m_phase == Phase::Commanding) {
+        m_encoder.encodeControl(MessageType::Closed, &out);
     }
     return out;
 }
 
+bool Ctr2FirmwareUpdater::restartDevice(const Ctr2HidPort::DeviceInfo& device, Restart target)
+{
+    return beginSession(device, Image{}, target);
+}
+
 bool Ctr2FirmwareUpdater::start(const Ctr2HidPort::DeviceInfo& device, const Image& image)
+{
+    return beginSession(device, image, std::nullopt);
+}
+
+bool Ctr2FirmwareUpdater::beginSession(const Ctr2HidPort::DeviceInfo& device, const Image& image,
+                                       std::optional<Restart> restart)
 {
     if (isRunning()) {
         return false;
     }
+    m_restart = restart;
     m_device = device;
     m_image = image;
     m_sha256 = QCryptographicHash::hash(image.bytes, QCryptographicHash::Sha256);
@@ -123,8 +137,14 @@ bool Ctr2FirmwareUpdater::start(const Ctr2HidPort::DeviceInfo& device, const Ima
         return true;
     }
     armTimeout(m_timing.answerTimeoutMs);
-    qCInfo(lcDevices) << "CTR2 firmware: updating" << device.label() << "to" << image.project
-                      << image.version << image.bytes.size() << "bytes";
+    if (restart) {
+        qCInfo(lcDevices) << "CTR2 firmware: restarting" << device.label()
+                          << (*restart == Restart::Bootloader ? "into download mode"
+                                                              : "into its other firmware");
+    } else {
+        qCInfo(lcDevices) << "CTR2 firmware: updating" << device.label() << "to" << image.project
+                          << image.version << image.bytes.size() << "bytes";
+    }
     return true;
 }
 
@@ -272,7 +292,15 @@ void Ctr2FirmwareUpdater::onMessage(const Message& message)
         return;
     }
     if (message.type == MessageType::Ready) {
-        if (m_phase == Phase::Calling) {
+        if (m_phase == Phase::Calling && m_restart) {
+            m_retry->stop();
+            m_encoder.reset();   // the session opens in place of the host's Ready
+            const bool loader = *m_restart == Restart::Bootloader;
+            setPhase(Phase::Commanding, loader ? tr("Restarting into download mode")
+                                               : tr("Restarting into the other firmware"));
+            sendExtension(loader ? firmware::encodeBootloader() : firmware::encodeSwitch());
+            armTimeout(m_timing.answerTimeoutMs);
+        } else if (m_phase == Phase::Calling) {
             m_retry->stop();
             m_encoder.reset();   // the session opens in place of the host's Ready
             setPhase(Phase::Begin, tr("Starting the update"));
@@ -301,6 +329,26 @@ void Ctr2FirmwareUpdater::onMessage(const Message& message)
 
 void Ctr2FirmwareUpdater::onStatus(const firmware::Reply& reply)
 {
+    if (m_phase == Phase::Commanding) {
+        const bool loader = m_restart && *m_restart == Restart::Bootloader;
+        if (reply.op != (loader ? firmware::kBootloader : firmware::kSwitch)) {
+            return;
+        }
+        if (reply.status != firmware::Status::Ok) {
+            fail(loader ? tr("This firmware cannot restart into download mode; update it first, "
+                             "or use the BOOT and RESET buttons.")
+                        : tr("The device has no other firmware to start."));
+            return;
+        }
+        m_timeout->stop();
+        closePort();   // it is leaving the bus
+        m_phase = Phase::Idle;
+        m_restart.reset();
+        emit finished(true, loader ? tr("The device is restarting into download mode.")
+                                   : tr("The device is restarting into its other firmware."),
+                      QString());
+        return;
+    }
     if (reply.status != firmware::Status::Ok) {
         if (reply.op == firmware::kEnd) {
             fail(tr("The device refused the new firmware: %1.").arg(firmware::statusText(reply.status))
@@ -420,6 +468,9 @@ void Ctr2FirmwareUpdater::onTimeout()
                 "it connects, it goes back to %1.").arg(m_previousVersion.isEmpty()
                                                             ? tr("its previous firmware")
                                                             : m_previousVersion));
+        break;
+    case Phase::Commanding:
+        fail(tr("The device did not answer the restart request."));
         break;
     case Phase::Idle:
         break;

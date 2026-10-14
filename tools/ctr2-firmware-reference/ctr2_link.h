@@ -103,6 +103,8 @@ extern "C" {
  *   host SWITCH   [0x05]: restart into the device's other firmware (the
  *                 maker's own, beside this one), keeping both; BAD_STATE if
  *                 there is none
+ *   host BOOTLOADER [0x06]: restart into the chip's ROM download mode, for
+ *                 an install there (a device without one answers BAD_MESSAGE)
  *   device STATUS [0x81][op answered][CTR2_FW_* status][value u32]
  * Every host message gets one STATUS; for DATA, value is the bytes stored so
  * far. After END answers OK the device leaves the bus and restarts on the
@@ -115,6 +117,7 @@ extern "C" {
 #define CTR2_FW_END             0x03u
 #define CTR2_FW_ABORT           0x04u
 #define CTR2_FW_SWITCH          0x05u
+#define CTR2_FW_BOOTLOADER      0x06u   /* restart into the chip's ROM download mode */
 #define CTR2_FW_STATUS          0x81u
 #define CTR2_FW_OK              0x00u
 #define CTR2_FW_BAD_STATE       0x01u   /* no session, or a second BEGIN */

@@ -126,6 +126,11 @@ QByteArray firmware::encodeSwitch()
     return QByteArray(1, static_cast<char>(kSwitch));
 }
 
+QByteArray firmware::encodeBootloader()
+{
+    return QByteArray(1, static_cast<char>(kBootloader));
+}
+
 bool firmware::decodeStatus(const QByteArray& payload, Reply* reply)
 {
     if (payload.size() != 7 || static_cast<std::uint8_t>(payload[0]) != kStatus) {

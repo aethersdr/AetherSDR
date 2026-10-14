@@ -358,6 +358,7 @@ restart. Integers are big-endian:
 | `0x03` END | host → device | none | verify the image and its signature, select it, restart into it |
 | `0x04` ABORT | host → device | none | drop the partial image |
 | `0x05` SWITCH | host → device | none | restart into the device's other firmware (its maker's, kept beside this one) |
+| `0x06` BOOTLOADER | host → device | none | restart into the chip's ROM download mode, for an install there |
 | `0x81` STATUS | device → host | `[op][status][value u32]` (7 bytes) | the answer to each host message; for DATA, value is the bytes stored so far |
 
 Status: `0` OK, `1` BAD_STATE (no session, a second BEGIN, or no other

@@ -68,6 +68,9 @@ struct Device {
     QByteArray stored;
     QString incomingVersion;       // set from the image the session received
     int begins{0}, aborts{0}, closes{0}, hellos{0}, opens{0};
+    bool hasOtherFirmware{true};   // SWITCH has somewhere to go
+    bool hasBootloaderOp{true};    // firmware that answers BOOTLOADER
+    QString restartedInto;         // "other" or "bootloader" after a restart request
 };
 
 void collect(void* ctx, const std::uint8_t report[CTR2_REPORT_BYTES])
@@ -250,6 +253,28 @@ private:
             m_active = false;
             status(CTR2_FW_ABORT, CTR2_FW_OK);
             break;
+        case CTR2_FW_SWITCH:
+        case CTR2_FW_BOOTLOADER: {
+            const bool loader = d[0] == CTR2_FW_BOOTLOADER;
+            if (loader ? !m_dev->hasBootloaderOp : false) {
+                status(d[0], CTR2_FW_BAD_MESSAGE);
+                break;
+            }
+            if (!loader && !m_dev->hasOtherFirmware) {
+                status(d[0], CTR2_FW_BAD_STATE);
+                break;
+            }
+            status(d[0], CTR2_FW_OK);
+            m_dev->restartedInto = loader ? QStringLiteral("bootloader") : QStringLiteral("other");
+            m_dev->gone = true;
+            QTimer::singleShot(5, this, [this] {
+                if (m_open) {
+                    m_open = false;
+                    emit failed(QStringLiteral("device left the bus"));
+                }
+            });
+            break;
+        }
         default:
             status(d[0], CTR2_FW_BAD_MESSAGE);
             break;
@@ -472,6 +497,53 @@ void testCancel()
     check(dev.version == QStringLiteral("0.9.0"), "the device keeps its firmware after a cancel");
 }
 
+Run restart(Device& dev, Ctr2FirmwareUpdater::Restart target)
+{
+    Ctr2FirmwareUpdater updater(
+        [] { return QList<Ctr2HidPort::DeviceInfo>{simInfo()}; },
+        [&dev](const Ctr2HidPort::DeviceInfo&, QString*) -> Ctr2HidPort* {
+            return new SimPort(&dev, capabilityBit(MessageType::Firmware));
+        });
+    updater.setTiming(fastTiming());
+    Run run;
+    QObject::connect(&updater, &Ctr2FirmwareUpdater::finished,
+                     [&run](bool ok, const QString& message, const QString&) {
+                         run.done = true;
+                         run.ok = ok;
+                         run.message = message;
+                     });
+    check(updater.restartDevice(simInfo(), target), "the restart request starts");
+    check(waitUntil([&run] { return run.done; }), "the restart request finishes");
+    return run;
+}
+
+void testRestartRequests()
+{
+    using R = Ctr2FirmwareUpdater::Restart;
+    Device dev;
+    Run run = restart(dev, R::OtherFirmware);
+    check(run.ok && dev.restartedInto == QStringLiteral("other"),
+          "SWITCH restarts the device into its other firmware");
+    check(dev.begins == 0 && dev.stored.isEmpty(), "and sends no image");
+
+    Device loader;
+    run = restart(loader, R::Bootloader);
+    check(run.ok && loader.restartedInto == QStringLiteral("bootloader"),
+          "BOOTLOADER restarts the device into download mode");
+
+    Device old;
+    old.hasBootloaderOp = false;
+    run = restart(old, R::Bootloader);
+    check(!run.ok && run.message.contains(QStringLiteral("BOOT")) && old.restartedInto.isEmpty(),
+          "firmware without BOOTLOADER says to use the buttons");
+
+    Device alone;
+    alone.hasOtherFirmware = false;
+    run = restart(alone, R::OtherFirmware);
+    check(!run.ok && alone.restartedInto.isEmpty(), "SWITCH with no other firmware fails");
+    check(alone.closes == 1, "and the session is closed");
+}
+
 // AetherSDR quitting mid-update destroys the updater: the device must still
 // hear ABORT and CLOSED, not be left waiting for the next chunk.
 void testDestroyedMidUpdate()
@@ -518,6 +590,7 @@ int main(int argc, char** argv)
     testRollback();
     testCancel();
     testDestroyedMidUpdate();
+    testRestartRequests();
     if (g_failures) {
         std::fprintf(stderr, "%d check(s) failed\n", g_failures);
         return 1;

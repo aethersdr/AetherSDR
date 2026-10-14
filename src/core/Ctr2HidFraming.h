@@ -125,6 +125,8 @@ Window cwWindow(int filterLo, int filterHi, int pitchHz, double sampleRate);
 //   host Abort    [0x04]
 //   host Switch   [0x05]: restart into the device's other firmware (the
 //                 maker's own, kept beside this one); BadState if none
+//   host Bootloader [0x06]: restart into the chip's ROM download mode, for
+//                 an install there; BadMessage from firmware without it
 //   device Status [0x81][op answered][Status][value u32]
 // Every host message gets one Status; for Data, value is the bytes stored so
 // far. The new image keeps itself only after it completes a link (answers
@@ -136,6 +138,7 @@ constexpr std::uint8_t kData = 0x02;
 constexpr std::uint8_t kEnd = 0x03;
 constexpr std::uint8_t kAbort = 0x04;
 constexpr std::uint8_t kSwitch = 0x05;
+constexpr std::uint8_t kBootloader = 0x06;
 constexpr std::uint8_t kStatus = 0x81;
 constexpr int kDataHeaderBytes = 5;
 enum class Status : std::uint8_t {
@@ -153,6 +156,7 @@ QByteArray encodeData(quint32 offset, const QByteArray& chunk);
 QByteArray encodeEnd();
 QByteArray encodeAbort();
 QByteArray encodeSwitch();
+QByteArray encodeBootloader();
 struct Reply {
     std::uint8_t op{0};
     Status status{Status::Ok};

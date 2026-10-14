@@ -558,6 +558,27 @@ bool Ctr2ProxyModel::startFirmwareUpdate(const Ctr2FirmwareUpdater::Image& image
     return true;
 }
 
+bool Ctr2ProxyModel::restartUsbDevice(Ctr2FirmwareUpdater::Restart target, QString* problem)
+{
+    if (!m_firmwareOpener || m_firmware->isRunning() || m_transport != Transport::Usb) {
+        *problem = tr("Select USB mode and the device");
+        return false;
+    }
+    const Ctr2HidPort::DeviceInfo* device = selectedUsbDevice();
+    if (!device) {
+        *problem = tr("Select the USB device");
+        return false;
+    }
+    const Ctr2HidPort::DeviceInfo d = *device;
+    m_restartAfterFirmware = false;   // the device leaves the bus
+    if (isRunning()) {
+        stop();
+    }
+    m_firmware->restartDevice(d, target);
+    emit configurationChanged();
+    return true;
+}
+
 void Ctr2ProxyModel::cancelFirmwareUpdate()
 {
     m_firmware->cancel();

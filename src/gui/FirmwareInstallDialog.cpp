@@ -139,6 +139,27 @@ FirmwareInstallDialog::FirmwareInstallDialog(Ctr2ProxyModel* model, QWidget* par
     actions->addStretch(1);
     root->addLayout(actions);
 
+    // A CTR2-Max running AetherCTR2 restarts on request: into its stock
+    // firmware, or into download mode for the actions above.
+    auto* restartRow = new QHBoxLayout;
+    restartRow->setSpacing(6);
+    auto* restartLabel = new QLabel(tr("Restart into"));
+    restartLabel->setObjectName(QStringLiteral("SectionLabel"));
+    restartRow->addWidget(restartLabel);
+    m_toStock = new QPushButton(tr("Stock Firmware"));
+    m_toStock->setObjectName(QStringLiteral("firmwareInstallToStock"));
+    m_toStock->setToolTip(tr("Restart the CTR2-Max into its stock firmware. AetherCTR2 stays "
+                             "installed; to come back, put the CTR2-Max in download mode and "
+                             "press Start."));
+    restartRow->addWidget(m_toStock);
+    m_toBootloader = new QPushButton(tr("Bootloader"));
+    m_toBootloader->setObjectName(QStringLiteral("firmwareInstallToBootloader"));
+    m_toBootloader->setToolTip(tr("Restart the CTR2-Max into download mode, without the BOOT and "
+                                  "RESET buttons, to back it up, restore it or install."));
+    restartRow->addWidget(m_toBootloader);
+    restartRow->addStretch(1);
+    root->addLayout(restartRow);
+
     m_step = wrapped();
     m_step->setObjectName(QStringLiteral("firmwareInstallStep"));
     m_step->setAccessibleName(tr("Install status"));
@@ -169,6 +190,8 @@ FirmwareInstallDialog::FirmwareInstallDialog(Ctr2ProxyModel* model, QWidget* par
     connect(m_start, &QPushButton::clicked, this, &FirmwareInstallDialog::onStart);
     connect(m_backup, &QPushButton::clicked, this, &FirmwareInstallDialog::onBackup);
     connect(m_restore, &QPushButton::clicked, this, &FirmwareInstallDialog::onRestore);
+    connect(m_toStock, &QPushButton::clicked, this, [this] { restartDevice(false); });
+    connect(m_toBootloader, &QPushButton::clicked, this, [this] { restartDevice(true); });
     connect(m_cancel, &QPushButton::clicked, this, &FirmwareInstallDialog::onCancel);
     connect(close, &QPushButton::clicked, this, &QWidget::close);
     connect(m_downloader, &EspFirmwareDownloader::catalogReady, this,
@@ -373,6 +396,8 @@ void FirmwareInstallDialog::sync()
     m_start->setEnabled(!running && loader && m_haveRelease);
     m_backup->setEnabled(!running && loader);
     m_restore->setEnabled(!running && loader);
+    m_toStock->setEnabled(!running && m_overLink);
+    m_toBootloader->setEnabled(!running && m_overLink);
     m_product->setEnabled(!running);
     m_cancel->setVisible(running);
     m_bar->setVisible(running);
@@ -465,6 +490,27 @@ void FirmwareInstallDialog::installOverLink()
         m_step->setText(problem);
         return;
     }
+    m_poll->stop();
+    sync();
+}
+
+void FirmwareInstallDialog::restartDevice(bool bootloader)
+{
+    if (!m_model)
+        return;
+    m_jobDone = bootloader
+                    ? tr("The CTR2-Max is restarting into download mode.")
+                    : tr("The CTR2-Max is restarting into its stock firmware. To come back to "
+                         "AetherCTR2, put it in download mode and press Start.");
+    QString problem;
+    if (!m_model->restartUsbDevice(bootloader ? Ctr2FirmwareUpdater::Restart::Bootloader
+                                              : Ctr2FirmwareUpdater::Restart::OtherFirmware,
+                                   &problem)) {
+        m_jobDone.clear();
+        m_step->setText(problem);
+        return;
+    }
+    m_step->setText(tr("Asking the CTR2-Max to restart…"));
     m_poll->stop();
     sync();
 }

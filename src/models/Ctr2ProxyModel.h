@@ -124,6 +124,10 @@ public:
     // Before the device starts checking the image; the device keeps its
     // current firmware. Later the update runs to its end.
     void cancelFirmwareUpdate();
+    // Restarts the selected USB device into its other firmware or its ROM
+    // download mode (Ctr2FirmwareUpdater::restartDevice); the relay stops
+    // for it and does not come back, as the device leaves.
+    bool restartUsbDevice(Ctr2FirmwareUpdater::Restart target, QString* problem);
     Ctr2FirmwareUpdater* firmwareUpdater() const { return m_firmware; }
     // One AudioSpectrum frame: bars in dBFS, log-spaced from lowHz to spanHz
     // (a non-finite bar reads as silence). False if not wanted now or the

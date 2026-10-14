@@ -56,6 +56,8 @@ private:
     void onStart();
     void onBackup();
     void onRestore();
+    // Over the link: into the stock firmware, or into download mode.
+    void restartDevice(bool bootloader);
     void onCancel();
     void onProgress(const QString& step, qint64 done, qint64 total);
     void onFinished(bool ok, const QString& message);
@@ -79,6 +81,8 @@ private:
     QPushButton* m_start{nullptr};
     QPushButton* m_backup{nullptr};
     QPushButton* m_restore{nullptr};
+    QPushButton* m_toStock{nullptr};
+    QPushButton* m_toBootloader{nullptr};
     QPushButton* m_cancel{nullptr};
 
     EspFirmwareCatalog m_catalog;

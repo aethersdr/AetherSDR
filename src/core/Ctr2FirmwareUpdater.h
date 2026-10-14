@@ -9,6 +9,7 @@
 #include <QString>
 
 #include <functional>
+#include <optional>
 
 class QTimer;
 
@@ -64,6 +65,12 @@ public:
     // Starts updating device with image (from readImage). False if an update
     // is already running.
     bool start(const Ctr2HidPort::DeviceInfo& device, const Image& image);
+    // Instead of an image: asks a device whose firmware takes updates over
+    // the link to restart into its other firmware (the maker's, beside it) or
+    // into its ROM download mode. finished() follows once the device has
+    // agreed and is restarting. False if an update is already running.
+    enum class Restart { OtherFirmware, Bootloader };
+    bool restartDevice(const Ctr2HidPort::DeviceInfo& device, Restart target);
     // Abandons the update; the device keeps its current firmware unless End
     // was already answered. finished() follows.
     void cancel();
@@ -78,8 +85,11 @@ signals:
     void finished(bool ok, const QString& message, const QString& version);
 
 private:
-    enum class Phase { Idle, Calling, Begin, Sending, Ending, Returning, Confirming, Verifying };
+    enum class Phase { Idle, Calling, Begin, Sending, Ending, Returning, Confirming, Verifying,
+                       Commanding };
 
+    bool beginSession(const Ctr2HidPort::DeviceInfo& device, const Image& image,
+                      std::optional<Restart> restart);
     void setPhase(Phase phase, const QString& step);
     bool openPort(QString* error);
     void closePort(const std::vector<ctr2hid::Report>& finalReports = {});
@@ -107,6 +117,7 @@ private:
     Phase m_phase{Phase::Idle};
     Ctr2HidPort::DeviceInfo m_device;
     Image m_image;
+    std::optional<Restart> m_restart;   // a restart request instead of an image
     QByteArray m_sha256;
     QPointer<Ctr2HidPort> m_port;
     ctr2hid::FrameEncoder m_encoder;

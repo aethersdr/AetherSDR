@@ -32,7 +32,8 @@ QString tr(const char* text)
 // hex). A manifest signed by any of them is trusted; keep the old key here
 // for a while after adding a new one.
 const char* const kBuiltInKeys[] = {
-    nullptr,
+    // AetherCTR2 firmware releases (created 2026-10-14).
+    "c5caf07300756c8fa37cc4f47b600a302162635cad5e8e2f85101f2308b1bb19",
 };
 
 std::optional<QList<QByteArray>>& keysOverride()
@@ -92,10 +93,8 @@ QList<QByteArray> EspFirmwareCatalog::trustedKeys()
     if (keysOverride())
         return *keysOverride();
     QList<QByteArray> keys;
-    for (const char* hex : kBuiltInKeys) {
-        if (hex)
-            keys.append(QByteArray::fromHex(hex));
-    }
+    for (const char* hex : kBuiltInKeys)
+        keys.append(QByteArray::fromHex(hex));
     for (const QByteArray& hex : qgetenv("AETHER_FIRMWARE_TRUST_KEYS").split(',')) {
         const QByteArray key = QByteArray::fromHex(hex.trimmed());
         if (key.size() == 32)
