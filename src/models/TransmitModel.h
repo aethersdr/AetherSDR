@@ -91,6 +91,14 @@ public:
         m_haveMaxPowerLevel = false;
         m_rfPowerFromRadio = false;
     }
+    // The radio-reported PTT mic override belongs to the radio that reported it,
+    // so a family switch clears it too (#6442). Non-emitting, like
+    // resetPowerProvenance() and for the same caller (teardownBackend(), from
+    // ~RadioModel()); RadioModel::backendRebuilt tells an open view.
+    void    resetPttMicOverrideReport() {
+        m_pttMicOverride = false;
+        m_havePttMicOverride = false;
+    }
     int     tunePower()     const { return m_tunePower; }
     bool    isTuning()      const { return m_tune; }
     // CW admission while TUNE is active (#5422; FLEX-8400 fw 4.2.20): `cw key 1`

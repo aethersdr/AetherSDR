@@ -3258,8 +3258,8 @@ QWidget* RadioSetupDialog::buildTxTab()
             pttOvrBtn->setText(t.pttMicOverride() ? "Enabled" : "Disabled");
             pttOvrBtn->setEnabled(reported);
             const QString tip = reported
-                ? tr("Enabled: a footswitch, ACC or mic-jack PTT always transmits "
-                     "the analog mic, even when DAX or PC audio is the TX source.\n"
+                ? tr("Enabled: a hardware PTT (RCA PTT jack, ACC or mic-jack PTT) "
+                     "transmits the analog mic, even when DAX or PC audio is the TX source.\n"
                      "Disabled (firmware 4.3 default): a hardware PTT transmits the "
                      "selected TX source, as MOX does.\n"
                      "This setting is shared by every client on the radio.")
@@ -3279,6 +3279,8 @@ QWidget* RadioSetupDialog::buildTxTab()
         // resetState() on disconnect announces through micStateChanged, not
         // stateChanged; without this the page keeps the last session's value.
         connect(&tx, &TransmitModel::micStateChanged, pttOvrBtn, syncPttOverride);
+        // A family switch clears the report without either signal.
+        connect(m_model, &RadioModel::backendRebuilt, pttOvrBtn, syncPttOverride);
 
         vbox->addWidget(group);
     }

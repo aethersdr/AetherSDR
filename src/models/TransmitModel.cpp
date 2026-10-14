@@ -49,8 +49,7 @@ void TransmitModel::resetState()
     m_memoriesEnabled = false;
     m_usingMemory = false;
     m_showTxInWaterfall = false;
-    m_pttMicOverride = false;
-    m_havePttMicOverride = false;
+    resetPttMicOverrideReport();
     // Radio-reported; a new session re-reports it. A radio with no Flex command
     // plane never echoes dax=, so a Flex session's DAX=on must not survive into
     // it and hold the client TX chain's MIC-ready indicator off (#5871).

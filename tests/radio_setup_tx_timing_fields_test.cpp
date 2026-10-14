@@ -348,6 +348,14 @@ private slots:
         QVERIFY(button->isChecked());
         QCOMPARE(button->text(), QStringLiteral("Enabled"));
 
+        // A family switch starts a new radio's session without a disconnect:
+        // the old radio's report must not carry over to it.
+        QVERIFY(model.rebuildBackendForTest(QStringLiteral("sim")));
+        QVERIFY2(!tx.havePttMicOverride() && !tx.pttMicOverride(), "family switch: unreported");
+        QVERIFY2(!button->isChecked() && !button->isEnabled(), "family switch: the open control resets");
+
+        tx.applyChanges(echoOn);
+        QVERIFY(button->isChecked() && button->isEnabled());
         tx.resetState();
         QVERIFY2(!button->isChecked(), "reset: the last session's value is gone");
         QVERIFY2(!button->isEnabled(), "reset: unreported again");

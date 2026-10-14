@@ -1734,6 +1734,7 @@ void RadioModel::teardownBackend()
     // radio's confirmed drive. resetPowerProvenance(), not resetState(): one caller
     // is ~RadioModel(), and resetState() emits TX signals.
     m_transmitModel.resetPowerProvenance();
+    m_transmitModel.resetPttMicOverrideReport();
     m_backend.reset();
     m_cwPitchHandedToBackend = -1;  // the next backend has been handed nothing
     acknowledgeTxTransportTeardown(m_txOperation);
