@@ -5,6 +5,8 @@
 // is in MainWindow.cpp.
 
 #include "MainWindow.h"
+#include "AetherLabWidget.h"
+#include "models/AntennaAnalyzerModel.h"
 
 #include "FlexControlDialog.h"
 #include "MainWindowHelpers.h"
@@ -21,6 +23,10 @@
 #include "core/UlanziDialBackend.h"
 #include "core/UlanziDialMappings.h"
 #include "AppletPanel.h"
+#include "ConnectionPanel.h"
+#include <QStackedWidget>
+#include <QSplitter>
+#include <QVBoxLayout>
 #include "core/IambicKeyer.h"
 #include "PanadapterApplet.h"
 #include "PanadapterStack.h"
@@ -3399,6 +3405,43 @@ void MainWindow::wireExternalControllers()
         });
     }
 #endif
+}
+
+AntennaAnalyzerModel* MainWindow::antennaAnalyzerModel()
+{
+    if (!m_antennaAnalyzer) { m_antennaAnalyzer = new AntennaAnalyzerModel(this); }
+    return m_antennaAnalyzer;
+}
+
+void MainWindow::showAetherLab()
+{
+    if (m_minimalMode) { toggleMinimalMode(false); }
+    if (!m_labWorkspaceStack) {
+        auto* layout = qobject_cast<QVBoxLayout*>(centralWidget()->layout());
+        if (!layout) { return; }
+        m_labWorkspaceStack = new QStackedWidget(centralWidget());
+        m_labWorkspaceStack->setObjectName(QStringLiteral("mainWorkspaceStack"));
+        layout->removeWidget(m_splitter);
+        layout->addWidget(m_labWorkspaceStack, 1);
+        m_labWorkspaceStack->addWidget(m_splitter);
+        m_aetherLabWidget = new AetherLabWidget(antennaAnalyzerModel(), m_labWorkspaceStack);
+        m_labWorkspaceStack->addWidget(m_aetherLabWidget);
+        connect(m_aetherLabWidget, &AetherLabWidget::returnRequested, this, &MainWindow::returnFromAetherLab);
+    }
+    m_aetherLabActive = true;
+    if (m_connPanel) { m_connPanel->hide(); }
+    m_labWorkspaceStack->setCurrentWidget(m_aetherLabWidget);
+    refreshRadioTabs();
+    m_aetherLabWidget->setFocus(Qt::OtherFocusReason);
+}
+
+void MainWindow::returnFromAetherLab()
+{
+    if (!m_aetherLabActive) { return; }
+    if (m_antennaAnalyzer) { m_antennaAnalyzer->stop(); }
+    m_aetherLabActive = false;
+    m_labWorkspaceStack->setCurrentWidget(m_splitter);
+    refreshRadioTabs();
 }
 
 } // namespace AetherSDR

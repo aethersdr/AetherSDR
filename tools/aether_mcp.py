@@ -759,7 +759,8 @@ TOOLS = [
             "gated by AETHER_AUTOMATION_ALLOW_TX), the non-keying "
             "txwaterfall display toggle, and the "
             "niche ones (dss deterministic spectrum injection, resize, "
-            "scale, layout, panmessage, tci, station, qrz). Full verb "
+            "scale, layout, panmessage, tci, station, qrz, lab — Stick Pro USB "
+            "with a separate analyzer RF opt-in). Full verb "
             "reference: src/core/AutomationServer.h header comment."),
         "inputSchema": {"type": "object", "properties": {
             "request": {"type": "object",

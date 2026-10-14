@@ -1535,6 +1535,11 @@ void MainWindow::buildMenuBar()
     });
 
     toolsMenu->addSeparator();
+    auto* labAction = toolsMenu->addAction(tr("AetherLab…"));
+    labAction->setObjectName(QStringLiteral("aetherLabAction"));
+    labAction->setStatusTip(tr("Open the Stick Pro analyzer workspace; RF isolation is required"));
+    connect(labAction, &QAction::triggered, this, &MainWindow::showAetherLab);
+
     auto* swrScanAction = toolsMenu->addAction("Start SWR Scan...");
     m_swrScanAction = swrScanAction;
     swrScanAction->setEnabled(false);

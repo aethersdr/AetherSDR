@@ -295,6 +295,10 @@ public:
     {
         m_tciRouteSnapshotHandler = std::move(handler);
     }
+    void setLabHandler(std::function<QJsonObject(const QString&, const QString&)> handler)
+    {
+        m_labHandler = std::move(handler);
+    }
     void setDeviceDiagnosticsHandler(
         std::function<QJsonObject(const QString&)> handler)
     {
@@ -360,6 +364,7 @@ private:
     static QString verbNamesJoined();
 
     QJsonObject doDumpTree() const;
+    QJsonObject doLab(const QString& action, const QString& value) const;
     QJsonObject doDeviceDiagnostics(const QString& action) const;
     QJsonObject doFloors() const;
     QJsonObject doGrab(const QString& target, const QString& path) const;
@@ -784,6 +789,7 @@ private:
     std::function<bool(const QString&, const QString&, QString*, DeferredUiAction*)>
         m_appletPanelActionHandler;
     std::function<QJsonObject()> m_tciRouteSnapshotHandler;
+    std::function<QJsonObject(const QString&, const QString&)> m_labHandler;
     std::function<QJsonObject(const QString&)> m_deviceDiagnosticsHandler;
     QJsonObject m_lastWaveformCommand;
 

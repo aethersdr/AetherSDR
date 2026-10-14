@@ -4,7 +4,7 @@
 
 Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine-design.md) §2, §10). One row per engine header the UI includes; converting a touchpoint means the UI reaches that surface through the versioned protocol instead of the header.
 
-**Totals:** 255 touchpoint headers (214 core, 41 models) — 255/255 tagged, 0/255 converted.
+**Totals:** 256 touchpoint headers (214 core, 42 models) — 256/256 tagged, 0/256 converted.
 
 | Header | Includers | Tag | Status |
 |---|---:|---|---|
@@ -162,7 +162,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/TailnetShimTokenStore.h` | 1 | peripheral(tailnet-shim) — OS-keychain storage of the tailnet shim's admin token, keyed by the Flex chassis serial (RFC #6271). Not SmartSDR wire: AetherSDR's own HTTP API to a separate service (the shim) that happens to run in the radio's container runtime, so a direct-transport peripheral, NOT behind the IRadioBackend radio seam (same shape as core/PgxlConnection.h). | unconverted |
 | `core/TciServer.h` | 3 | mixed(flex) — TCI WebSocket server for WSJT-X et al: protocol surface is canonical radio state, but audio/IQ rides Flex DAX | unconverted |
 | `core/TgxlConnection.h` | 3 | peripheral(4o3a) — Direct TCP client for the 4O3A Tuner Genius XL (port 9010, relay/autotune), reverse-engineered from the 4O3A management app — a standalone accessory transport, not SmartSDR. Not radio-family wire; a peripheral accessory, NOT behind the IRadioBackend radio seam (reclassified from vendor(flex), #4087 follow-up). | unconverted |
-| `core/ThemeManager.h` | 178 | ui-support — Qt token-based theming singleton (colors/fonts/QSS, theme files, editor hooks) — pure client GUI plumbing, no radio state. | unconverted |
+| `core/ThemeManager.h` | 179 | ui-support — Qt token-based theming singleton (colors/fonts/QSS, theme files, editor hooks) — pure client GUI plumbing, no radio state. | unconverted |
 | `core/ThreadCpuRing.h` | 2 | ui-support — Short host-thread CPU history used by Runtime Monitor peak and sparkline presentation. Diagnostic UI support, not radio state. | unconverted |
 | `core/TimeFrameVoter.h` | 1 | universal — Shared AetherClock time-frame types plus confidence-weighted cross-frame bit voting over a sliding window. Map-agnostic pure DSP/logic — no Qt, no GUI, no vendor ties. | unconverted |
 | `core/TxKeyingMarker.h` | 16 | ui-support — QWidget property marker guarding TX-keying controls from the automation bridge; GUI-shell plumbing, no radio state. | unconverted |
@@ -224,6 +224,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/weather/OperaRadarImage.h` | 2 | ui-support — Bounded OPERA CIRRUS byte decoder placed in aethercore with existing zlib under RFC #5630 condition B; no radio state or widget dependency. | unconverted |
 | `models/AetherClockModel.h` | 2 | universal — Thin first-class AetherClock model with full Q_PROPERTY coverage (protocol-serializable, QML-ready), mirroring engine state over queued connections. Owns no DSP and has no vendor ties — one of only three models already shaped the way the protocol will want them. | unconverted |
 | `models/AmpModel.h` | 2 | mixed(flex) — Power-amplifier state model (PGXL / any non-TGXL amp the radio proxies), extracted from RadioModel (#4094). Like TunerModel: universal amp state (presence/operate/telemetry) fused with a Flex relay — the radio-proxied 'amplifier set … operate=' command (the only path that works remote/SmartLink; the direct PgxlConnection is telemetry-only). | unconverted |
+| `models/AntennaAnalyzerModel.h` | 3 | peripheral(rigexpert) — Independent antenna analyzer state and finite-sweep model, exposed to the GUI and automation bridge. Does not use RadioModel or IRadioBackend. | unconverted |
 | `models/AntennaGeniusModel.h` | 5 | peripheral(4o3a) — 4O3A Antenna Genius switch client — standalone accessory with its own UDP-broadcast discovery (port 9007) + direct TCP; connects by device IP/port independent of the radio, works with any radio. Not radio-family wire; a peripheral accessory, NOT behind the IRadioBackend radio seam (reclassified from vendor(flex), #4087 follow-up). | unconverted |
 | `models/AprsDigipeaterModel.h` | 1 | universal — Session-local APRS fill-in policy and bounded modem queue; no backend-specific commands or transport ownership. | unconverted |
 | `models/Ax25ReceiveModel.h` | 1 | universal — Selected AX.25 receive model over the existing typed decoder route; continuous mono24 conversion and bounded modem worker results retain source leases and generation retirement. Existing transmit ownership is separate. | unconverted |

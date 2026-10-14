@@ -5412,6 +5412,29 @@ target_link_libraries(automation_gauge_verb_test PRIVATE aethercore Qt6::Widgets
 add_test(NAME automation_gauge_verb_test COMMAND automation_gauge_verb_test)
 set_tests_properties(automation_gauge_verb_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# Socket-free Stick Pro framing/session injection: no HID access or firmware peer.
+add_executable(rigexpert_usb_poc_test tests/rigexpert_usb_poc_test.cpp)
+target_include_directories(rigexpert_usb_poc_test PRIVATE src)
+target_link_libraries(rigexpert_usb_poc_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME rigexpert_usb_poc_test COMMAND rigexpert_usb_poc_test)
+
+# Socket-free quick-check view over injected reports; no HID access or firmware peer.
+add_executable(aetherlab_window_test
+    tests/aetherlab_window_test.cpp
+    src/gui/AetherLabWidget.cpp
+    src/gui/CanonSurface.cpp
+    src/gui/CanonWindow.cpp
+)
+target_include_directories(aetherlab_window_test PRIVATE src)
+target_link_libraries(aetherlab_window_test PRIVATE aethercore Qt6::Widgets Qt6::Test)
+add_test(NAME aetherlab_window_test COMMAND aetherlab_window_test)
+
+# Socket-free bridge RF/observe-only guards; inject a model provider and button.
+add_executable(automation_lab_test tests/automation_lab_test.cpp)
+target_include_directories(automation_lab_test PRIVATE src)
+target_link_libraries(automation_lab_test PRIVATE aethercore Qt6::Widgets Qt6::Test)
+add_test(NAME automation_lab_test COMMAND automation_lab_test)
+
 add_executable(automation_device_diagnostics_test
     tests/automation_device_diagnostics_test.cpp
 )
@@ -8822,6 +8845,7 @@ endforeach()
 # library as AetherSDR so moving QtWidgets out of aethercore cannot silently
 # leave these harnesses with unresolved bridge symbols.
 set(AETHER_AUTOMATION_SERVER_TESTS
+    automation_lab_test
     anan_noise_blanker_readback_test
     automation_cell_test
     automation_boundary_core_test
