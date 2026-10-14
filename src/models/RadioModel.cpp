@@ -2252,7 +2252,10 @@ RadioModel::RadioModel(QObject* parent)
         // TX interlock gate (was a commandReady string-sniff on "tgxl autotune").
         if (transmitStartBlockedByInhibit(QStringLiteral("tgxl-autotune")))
             return;
-        m_tgxlAutotuneArmedUntilMs = txMonotonicMs() + kTgxlAutotuneKeyWindowMs;
+        // Arm only for a real start: a TGXL in standby refuses the tune and
+        // never keys, and an abort (sent only while tuning) must not re-arm.
+        if (m_tunerModel.isOperate() && !m_tunerModel.isTuning())
+            m_tgxlAutotuneArmedUntilMs = txMonotonicMs() + kTgxlAutotuneKeyWindowMs;
         applyTuneInhibit();
         if (m_backend)
             m_backend->invokeExtension(QStringLiteral("flex"), QStringLiteral("tuner.autotune"), 0);
@@ -2466,6 +2469,9 @@ RadioModel::RadioModel(QObject* parent)
     // Direct port-9010 autotune bypasses autotuneRequested; arm the same window
     // so the radio's TRANSMITTING edge can't beat the tuner's tuning=1.
     connect(&m_tunerModel, &TunerModel::directAutotuneStarted, this, [this]() {
+        // A TGXL in standby refuses the tune and never keys; don't arm for it.
+        if (!m_tunerModel.isOperate())
+            return;
         m_tgxlAutotuneArmedUntilMs = txMonotonicMs() + kTgxlAutotuneKeyWindowMs;
     });
     // A TGXL tune latches the cycle as a tune carrier (tuning=1 may land after
