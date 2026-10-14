@@ -6305,6 +6305,20 @@ target_include_directories(cwx_drain_watch_test PRIVATE src)
 target_link_libraries(cwx_drain_watch_test PRIVATE Qt6::Core Qt6::Test)
 add_test(NAME cwx_drain_watch_test COMMAND cwx_drain_watch_test)
 
+# Socket-free CWX command bytes and macro status parsing (FlexLib 4.3.16).
+add_executable(cwx_quote_test
+    tests/cwx_quote_test.cpp
+    src/models/CwxModel.cpp
+    src/models/CwxModel.h
+    src/core/backends/flex/CommandParser.cpp
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
+    $<TARGET_OBJECTS:aether_test_settings>
+)
+target_include_directories(cwx_quote_test PRIVATE src)
+target_link_libraries(cwx_quote_test PRIVATE Qt6::Core Qt6::Test)
+add_test(NAME cwx_quote_test COMMAND cwx_quote_test)
+
 add_executable(cwx_panel_test
     tests/cwx_panel_test.cpp
     src/gui/CwxPanel.cpp
@@ -9381,6 +9395,7 @@ set(AETHER_SETTINGS_CONSUMERS
     tnc_terminal_test
     cwx_speed_modifier_test
     cwx_drain_watch_test
+    cwx_quote_test
     cwx_panel_test
     dvk_panel_test
     local_voice_keyer_test

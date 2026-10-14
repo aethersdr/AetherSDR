@@ -18,6 +18,7 @@
 #include "CallsignLookupService.h" // qrz() verb — QRZ lookup cache/service
 #include "CallsignUtils.h"
 #include "models/Nr2SettingsModel.h"
+#include "models/CwxModel.h"
 #include "models/RadioModel.h"   // RadioModel, SliceModel, PanadapterModel (get())
 #include "core/backends/IRadioBackend.h"   // backend()->invokeExtension (sim faults)
 #include "core/backends/HealthSnapshotMerge.h"   // mergeHealthSnapshots — family-neutral
@@ -3399,7 +3400,7 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
                 return s.doMemory(a.action, a.value);
             });
 
-        add("cwx", {}, "cwx <send|speed|stop> [args] — CWX keyer (send is TX-gated)",
+        add("cwx", {}, "cwx <send|speed|stop|preview|preview-status> [args] — keyer or disconnected codec preview",
             parseActionRest,
             [](AutomationServer& s, A& a, QLocalSocket*) {
                 return s.doCwx(a.action, a.value);
@@ -9233,6 +9234,47 @@ QJsonObject AutomationServer::doCwx(const QString& action, const QString& arg)
 {
     if (!m_radioModel)
         return err(QStringLiteral("no radio model available"));
+    const QString a = action.trimmed().toLower();
+    if (a == QLatin1String("preview") || a == QLatin1String("preview-status")) {
+        if (m_radioModel->isConnected()) {
+            return err(QStringLiteral("CWX previews are disconnected-only"));
+        }
+        if (arg.size() > 1024) {
+            return err(QStringLiteral("CWX preview accepts at most 1024 characters"));
+        }
+        // This temporary production model has no transport, audio or TX
+        // coordinator binding. Its signals are captured only into this reply.
+        CwxModel preview;
+        if (a == QLatin1String("preview-status")) {
+            preview.applyStatus({{QStringLiteral("macro1"), arg}});
+            return QJsonObject{{QStringLiteral("ok"), true},
+                               {QStringLiteral("cwx"), a},
+                               {QStringLiteral("isolated"), true},
+                               {QStringLiteral("macro"), preview.macro(0)}};
+        }
+        QJsonArray commands;
+        QString operation;
+        const auto capture = [&commands, &operation](const QString& command, int nChars) {
+            commands.append(QJsonObject{{QStringLiteral("operation"), operation},
+                                        {QStringLiteral("command"), command},
+                                        {QStringLiteral("utf8Hex"), QString::fromLatin1(command.toUtf8().toHex())},
+                                        {QStringLiteral("nChars"), nChars}});
+        };
+        connect(&preview, &CwxModel::commandReady, &preview,
+                [&capture](const QString& command) { capture(command, -1); });
+        connect(&preview, &CwxModel::replyCommandReady, &preview,
+                [&capture](const QString& command, int, int nChars) { capture(command, nChars); });
+        operation = QStringLiteral("send");
+        preview.send(arg);
+        operation = QStringLiteral("live");
+        preview.sendChar(arg);
+        operation = QStringLiteral("save");
+        preview.saveMacro(0, arg);
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("cwx"), a},
+                           {QStringLiteral("isolated"), true},
+                           {QStringLiteral("commands"), commands}};
+    }
     // All three actions below emit a `cwx` verb at the radio — `cwx send`,
     // `cwx wpm`, `cwx clear` — so a backend with no radio-side text buffer
     // swallows every one of them. An honest error beats an ok:true for work
@@ -9242,7 +9284,6 @@ QJsonObject AutomationServer::doCwx(const QString& action, const QString& arg)
         return err(QStringLiteral("cwx unavailable: this radio has no radio-side "
                                   "CW keyer (no `cwx` command plane)"));
     CwxModel& cwx = m_radioModel->cwxModel();
-    const QString a = action.trimmed().toLower();
 
     if (a == QLatin1String("speed") || a == QLatin1String("wpm")) {
         bool ok = false; const int wpm = arg.trimmed().toInt(&ok);
@@ -9284,7 +9325,7 @@ QJsonObject AutomationServer::doCwx(const QString& action, const QString& arg)
                            {QStringLiteral("chars"), text.length()}};
     }
     return err(QStringLiteral("unknown cwx action '") + action
-               + QStringLiteral("' (use: send <text> | speed <wpm> | stop)"));
+               + QStringLiteral("' (use: send <text> | speed <wpm> | stop | preview <text> | preview-status <field>)"));
 }
 
 // ── Per-GUI-client station identity (#3646 fidelity — item 1) ───────────────
