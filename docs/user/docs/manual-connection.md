@@ -58,6 +58,8 @@ For a networked Icom behind NAT, see the **Icom ports:** row on [Networked Icom]
 
 ### Auto-reconnect
 
+If a FlexRadio connection drops unexpectedly, AetherSDR retries every five seconds. During a radio reboot, **Connection refused** can appear until the radio's command service is ready. The same running app reconnects when the service returns. Disconnecting deliberately stops these retries.
+
 Connect by IP remembers the radio type you chose and the addresses you have used. With **Connect to last radio on start up** checked, AetherSDR reconnects to the last radio on the next launch. If startup auto-connect gives up, the Connect to Radio window opens again.
 
 ## Reference
