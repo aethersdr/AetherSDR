@@ -180,6 +180,9 @@ void modelAndDialog()
         if (!edit) {
             return;
         }
+        check(edit->objectName() == QStringLiteral("radioNicknameEdit")
+                  && edit->property("aetherAutomationEditCommit").toBool(),
+              "production nickname field opts into explicit bridge editing and commit");
         backend->connected = true;
         QSignalSpy finished(edit, &QLineEdit::editingFinished);
         QTest::keyClick(edit, Qt::Key_Return);

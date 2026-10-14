@@ -652,6 +652,8 @@ the no-op is an explicit, assertable signal.
 | `setValue` | slider / scrollbar / spinbox | integer (or number for double-spin) |
 | `wheel` | any visible widget | one wheel notch: `-1` or `1` |
 | `setText` | `QLineEdit` | the text (side-effect-free — does **not** submit) |
+| `editText` | opted-in editable `QLineEdit` (currently **Radio nickname** only) | text, including empty; a changed value marks the field modified without committing |
+| `commit` | the same opted-in field | no value; emits `editingFinished` on a later event-loop turn, preserving the modified flag |
 | `submit` | `QLineEdit` | optional text, then fires `returnPressed` (retune / login / send) |
 | `setCurrentText` | `QComboBox` (item text) / `QTabBar` (tab label, case-insensitive — reaches deferred setup-dialog tabs) | text |
 | `setCurrentIndex` | `QComboBox` / `QTabBar` | integer index |
@@ -668,6 +670,15 @@ actions to `returnPressed` (SmartLink login, manual-connect host, DX-cluster
 send). `submit` is the explicit opt-in that sets (optional) then fires
 `returnPressed` — use it to commit a frequency entry, a login, or a cluster
 command.
+
+**Nickname edits.** Use `invoke radioNicknameEdit editText <text>`, then
+`invoke radioNicknameEdit commit`. In JSON, `"value":""` clears the field.
+The production dialog handler sends the request and waits for the radio's
+reply; read `get radio` and `dumpTree` afterward to verify the accepted value.
+Repeating `commit` does not re-arm an unchanged field. These actions require
+the field owner to set `aetherAutomationEditCommit=true`; they refuse other
+fields and read-only edits. Deferred commits recheck visibility, enabled state,
+the opt-in, and observe-only authorization before running.
 
 **`selectRow`** selects a whole row in an item view (sets the current index
 **and** a full-row selection), so a dialog's row-scoped buttons (Tune / Edit /

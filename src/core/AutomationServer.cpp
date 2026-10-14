@@ -4583,6 +4583,50 @@ QJsonObject AutomationServer::doInvoke(const QString& target, const QString& act
         done = true;
     } else if (action == QLatin1String("setText")) {
         if (auto* le = qobject_cast<QLineEdit*>(w)) { le->setText(value); done = true; }
+    } else if (action == QLatin1String("editText") || action == QLatin1String("commit")) {
+        auto* le = qobject_cast<QLineEdit*>(w);
+        if (!le || !le->property("aetherAutomationEditCommit").toBool()) {
+            return err(QStringLiteral("field has not opted into editText/commit"));
+        }
+        if (le->isReadOnly()) {
+            return err(QStringLiteral("field is read-only"));
+        }
+        if (action == QLatin1String("editText")) {
+            // setText resets modified; only an actual edit arms the owner's
+            // editingFinished handler. Empty text is a supported edit.
+            if (le->text() != value) {
+                const QPointer<QLineEdit> edit(le);
+                const QString previous = le->text();
+                const bool modified = le->isModified();
+                le->setText(value);
+                if (!edit) {
+                    return err(QStringLiteral("field was destroyed during edit"));
+                }
+                edit->setModified(modified || edit->text() != previous);
+            }
+        } else {
+            if (!value.isEmpty()) {
+                return err(QStringLiteral("commit takes no value; use editText first"));
+            }
+            if (!le->hasAcceptableInput()) {
+                return err(QStringLiteral("field input is not acceptable"));
+            }
+            QPointer<QLineEdit> edit = le;
+            const QPointer<AutomationServer> self(this);
+            const quint64 epoch = m_txPermissionEpoch;
+            const QString entered = le->text();
+            deferInvokeAction([edit, self, epoch, entered]() {
+                if (self && !self->m_readOnly && epoch == self->m_txPermissionEpoch
+                    && edit && edit->text() == entered
+                    && edit->isVisible() && edit->isEnabled() && !edit->isReadOnly()
+                    && edit->hasAcceptableInput()
+                    && edit->property("aetherAutomationEditCommit").toBool()) {
+                    emit edit->editingFinished();
+                }
+            }, false);
+            deferred = true;
+        }
+        done = true;
     } else if (action == QLatin1String("submit")) {
         // Commit a line edit: optionally set the value, then fire returnPressed —
         // the signal that actually drives the action (a frequency retune, etc.).

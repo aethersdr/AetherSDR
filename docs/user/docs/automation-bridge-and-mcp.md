@@ -66,6 +66,16 @@ The token decides which client you have deliberately let in. It is not a wall ag
 
 It offers typed tools (`bridge_status`, `dump_tree`, `grab_widget`, `get_state`, `get_log`, `invoke`, `tune`, `slice`, `pan`, `record`, `menu`, `connect`, `capture_audio`, `wait_for`, `assert_state` and more), plus a raw `bridge_command` for everything else, a `validate_ui_change` prompt, and read-only state resources. The transmit verbs are deliberately reachable only through `bridge_command`.
 
+### Editing the radio nickname
+
+Open **Settings → Radio Setup... → Radio**. Use `invoke` with target
+`radioNicknameEdit`, action `editText`, and the desired `value` (an empty
+string clears it). Then invoke action `commit` without a value. The dialog
+sends the nickname request; check `get_state` for the radio's accepted nickname.
+Repeated commits of an unchanged field do not send another request. These
+actions currently support only **Radio nickname**; `setText` alone does not
+commit it.
+
 ## Using transmit safety
 
 - The bridge refuses to operate any control that keys the transmitter (MOX/PTT, TUNE, ATU, CWX send, packet/APRS send) through its generic "click this control" path, whoever is asking.

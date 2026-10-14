@@ -2153,6 +2153,8 @@ QWidget* RadioSetupDialog::buildRadioTab()
         m_callsignEdit->setAccessibleDescription(
             tr("Your callsign, used for PSK Reporter, WSPR and spotting"));
         m_nicknameEdit->setAccessibleName(tr("Radio nickname"));
+        m_nicknameEdit->setObjectName(QStringLiteral("radioNicknameEdit"));
+        m_nicknameEdit->setProperty("aetherAutomationEditCommit", true);
         // Read from the start, not scrolled to the cursor at the end.
         m_nicknameEdit->setCursorPosition(0);
         m_callsignEdit->setCursorPosition(0);
