@@ -12,6 +12,7 @@
 #include <QObject>
 #include <QPair>
 #include <QString>
+#include <QStandardPaths>
 #include <QTemporaryDir>
 
 #include <cstdio>
@@ -20,18 +21,6 @@
 using AetherSDR::CabExtractor;
 using AetherSDR::MsiFirmwareMetadata;
 using AetherSDR::MsiFirmwareImage;
-
-namespace AetherSDR {
-class FirmwareStagerTestAccess {
-public:
-    static bool extract(FirmwareStager& stager, const QString& installer,
-                        const QString& directory, const QString& family, QString& path)
-    {
-        stager.m_modelFamily = family;
-        return stager.extractFromMsi(installer, directory, path);
-    }
-};
-} // namespace AetherSDR
 
 namespace {
 int failures = 0;
@@ -181,20 +170,23 @@ void checkMetadata()
           "unverified DragonFire firmware family is refused");
     check(AetherSDR::FirmwareStager::modelToFamily("unknown").isEmpty(),
           "unknown model does not default to a firmware family");
-    AetherSDR::FirmwareStager stager;
-    int refusedUnknown = 0;
-    QObject::connect(&stager, &AetherSDR::FirmwareStager::stageFailed,
-                     [&refusedUnknown](const QString&) { ++refusedUnknown; });
-    stager.stageFromLocalFile("unused", {});
-    stager.downloadAndStage("4.3.16", {});
-    check(refusedUnknown == 2 && !stager.isStaged(),
-          "unknown family is rejected before local file IO or download");
     QTemporaryDir temp;
+    check(temp.isValid(), "isolated local-file staging directory is available");
+    if (!temp.isValid()) { return; }
+    AetherSDR::FirmwareStager stager(nullptr, temp.path());
+    int refusedUnknown = 0;
+    QString unknownReason;
+    QObject::connect(&stager, &AetherSDR::FirmwareStager::stageFailed,
+                     [&](const QString& reason) { ++refusedUnknown; unknownReason = reason; });
     const QString wrongFile = temp.filePath("FLEX-9600_v4.3.16.ssdr");
     QFile input(wrongFile);
     check(input.open(QIODevice::WriteOnly) && input.write("Salted__test", 12) == 12,
           "manual-file mismatch fixture is written");
     input.close();
+    stager.stageFromLocalFile(wrongFile, {});
+    check(refusedUnknown == 1 && !stager.isStaged()
+              && unknownReason == "Cannot determine the firmware family for this radio.",
+          "unknown family is rejected before staging a readable local file");
     QString rejection;
     QObject::connect(&stager, &AetherSDR::FirmwareStager::stageFailed,
                      [&rejection](const QString& reason) { rejection = reason; });
@@ -229,8 +221,10 @@ void checkMetadata()
         }
     }
     Fixture fixture;
-    fixture.files.append({"other-six", "FLEX-6x00_v4.2.20.ssdr", 50, 16});
-    check(refused(fixture.streams()), "multiple matching firmware versions are refused");
+    fixture.files.append({"other-six", "FLEX-6x00_v4.2.20.ssdr", 50, 14});
+    check(!MsiFirmwareMetadata::resolve(fixture.streams(), "6x00", error)
+              && error == "Ambiguous or invalid MSI firmware File entry",
+          "multiple matching firmware versions are refused by the ambiguity guard");
     fixture = Fixture{};
     fixture.files[1].key = fixture.files[0].key;
     check(refused(fixture.streams()), "duplicate CAB member identity is refused");
@@ -346,6 +340,23 @@ void checkCabinet()
           "duplicate CAB member is refused");
     check(!extractor.extractFile(cab.left(cab.size() - 5), "six-key", wanted.size(), extracted)
               && extracted.isEmpty(), "truncated cabinet cannot expose a partial firmware image");
+    QList<QPair<QString, QByteArray>> all;
+    check(extractor.extractAll(cab, all) && all.size() == 2
+              && all.at(0).second == decoy && all.at(1).second == wanted,
+          "bounded archive inspection still extracts ordinary members");
+    QByteArray oversized = cab;
+    write(oversized, 44, 500U * 1024U * 1024U + 1U, 4);
+    check(!extractor.extractAll(oversized, all) && all.isEmpty()
+              && extractor.lastError() == "Cabinet output exceeds size limit",
+          "archive inspection rejects oversized output before decompression");
+    QByteArray aggregate = cab;
+    write(aggregate, 44, 500U * 1024U * 1024U, 4);
+    check(!extractor.extractAll(aggregate, all) && all.isEmpty()
+              && extractor.lastError() == "Cabinet output exceeds size limit",
+          "archive inspection bounds the aggregate of all members");
+    check(extractor.extractAll(cabinet({{"empty", {}}}), all)
+              && all.size() == 1 && all.first().second.isEmpty(),
+          "an empty cabinet member has a zero-byte output bound");
     check(AetherSDR::OleCompoundFile::decodeMsiName(QString(QChar(0x380a))) == "A0",
           "MSI packed stream names preserve a second character of zero");
     check(AetherSDR::OleCompoundFile::decodeMsiName(QString(QChar(0x480a))) == "A",
@@ -521,18 +532,26 @@ void checkStagedFilename()
     check(saved, "synthetic MSI fixture is written");
     if (!saved) { return; }
     for (const QString& family : {QStringLiteral("6x00"), QStringLiteral("9600")}) {
-        AetherSDR::FirmwareStager stager;
+        AetherSDR::FirmwareStager stager(nullptr, temp.path());
         QString error;
         QObject::connect(&stager, &AetherSDR::FirmwareStager::stageFailed,
                          [&error](const QString& reason) { error = reason; });
         const QString expectedName = "FLEX-" + family + "_v4.3.16.42034.ssdr";
         const QString expectedPath = temp.filePath(expectedName);
         QString path;
-        check(AetherSDR::FirmwareStagerTestAccess::extract(
-                  stager, installerPath, temp.path(), family, path) && error.isEmpty(),
-              "production MSI extraction stages each firmware family");
+        QString completedVersion;
+        QObject::connect(&stager, &AetherSDR::FirmwareStager::stageComplete,
+                         [&](const QString& stagedPath, const QString& version) {
+            path = stagedPath;
+            completedVersion = version;
+        });
+        stager.stageFromLocalFile(installerPath, family);
+        check(stager.isStaged() && error.isEmpty(),
+              "public MSI staging flow stages each firmware family in its isolated directory");
         check(path == expectedPath && QFileInfo(path).fileName() == expectedName,
               "returned staging path preserves the MSI filename and build number");
+        check(completedVersion == "4.3.16.42034" && stager.stagedVersion() == completedVersion,
+              "MSI metadata supplies the full completion version rather than the installer filename");
         QFile output(expectedPath);
         check(output.open(QIODevice::ReadOnly) && output.readAll() == (family == "6x00" ? six : bigbend),
               "preserved filename contains the metadata-selected firmware bytes");
@@ -546,6 +565,7 @@ void checkStagedFilename()
 
 int main(int argc, char** argv)
 {
+    QStandardPaths::setTestModeEnabled(true);
     QCoreApplication app(argc, argv);
     checkMetadata();
     checkCabinet();

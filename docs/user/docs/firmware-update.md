@@ -53,6 +53,7 @@ recorded filename and cabinet metadata. It checks that the extracted file's size
 matches that record. A missing or ambiguous firmware entry stops staging.
 The staged file keeps the installer's firmware filename, including its build
 number when present; the upload confirmation and log use that same name.
+The firmware log records the staged filename, byte count, and MD5 for diagnostics.
 For FLEX-8000 and Aurora radios, a note below the staged filename explains:
 "FLEX-8000 and Aurora radios use FLEX-9600 firmware."
 An already extracted **`.ssdr`** file whose name identifies the other firmware

@@ -19,7 +19,8 @@ namespace AetherSDR {
 class FirmwareStager : public QObject {
     Q_OBJECT
 public:
-    explicit FirmwareStager(QObject* parent = nullptr);
+    // An empty directory uses stagingDir(); callers can supply an isolated one.
+    explicit FirmwareStager(QObject* parent = nullptr, const QString& stagingDirectory = {});
 
     // Fetch the SmartSDR releases FlexRadio publishes, and judge nothing.
     // Answers `publishedReleasesKnown` or `latestVersionUnavailable` exactly once.
@@ -99,8 +100,7 @@ signals:
     void stageFailed(const QString& error);
 
 private:
-    friend class FirmwareStagerTestAccess;
-
+    QString stagingDirectory() const;
     void onInstallerDownloadProgress(qint64 received, qint64 total);
     void onInstallerDownloadFinished();
     void verifyAndExtract();
@@ -133,6 +133,7 @@ private:
     static constexpr qint64 kMaxSoftwareIndexBytes = 1 * 1024 * 1024;
 
     QNetworkAccessManager m_nam;
+    QString         m_stagingDirectory;
     QNetworkReply*  m_downloadReply{nullptr};
     QString         m_installerPath;
     QString         m_expectedMd5;

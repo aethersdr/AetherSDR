@@ -5050,6 +5050,7 @@ target_link_libraries(vkamp_connection_test PRIVATE Qt6::Core Qt6::Network Qt6::
 add_test(NAME vkamp_connection_test COMMAND vkamp_connection_test)
 set_tests_properties(vkamp_connection_test PROPERTIES TIMEOUT 120)
 
+# not registered: requires the externally supplied SmartSDR 4.2.18 MSI fixture (AETHERSDR_TEST_MSI).
 add_executable(ole_compound_file_test
     tests/ole_compound_file_test.cpp
     src/core/OleCompoundFile.cpp
