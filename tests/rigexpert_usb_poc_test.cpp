@@ -81,6 +81,56 @@ private slots:
         QCOMPARE(model.state(), AntennaAnalyzerModel::State::Error);
         QCOMPARE(port->final, AntennaAnalyzerModel::commandReport("off\r"));
     }
+    void stickPro108FullInfoLengthConvention()
+    {
+        AntennaAnalyzerModel model;
+        InjectedHid* port = install(model);
+        QVERIFY(port);
+        port->feed("Stick Pro 108\r\n");
+        // Public metadata bytes captured from firmware 108 on macOS. The
+        // descriptor and a 256-byte read both confirm a 64-byte API report.
+        const QByteArray payload("NAME\tStick Pro\r\nFW\tFirmware ver. 1.8 / 5 Feb 2020\r\nHW\tREU.1230");
+        QCOMPARE(payload.size(), 62);
+        QByteArray report = AntennaAnalyzerModel::commandReport(payload);
+        report[1] = 63;
+        emit port->reportReceived(report);
+        port->feed("B.1.5\r\nOK\r\n");
+        AntennaAnalyzerModelTestAccess::identityQuiet(model);
+        QCOMPARE(model.state(), AntennaAnalyzerModel::State::Ready);
+        QCOMPARE(model.snapshot().value("identity").toString(), QStringLiteral("Stick Pro 108"));
+        QVERIFY(model.snapshot().value("fullInfoLines").toArray().contains(
+            QStringLiteral("FW\tFirmware ver. 1.8 / 5 Feb 2020")));
+        QCOMPARE(model.snapshot().value("identityLengthQuirkReports").toInt(), 1);
+        QCOMPARE(port->commands.size(), 2);
+    }
+    void overclaimedMeasurementRemainsMalformed()
+    {
+        AntennaAnalyzerModel model;
+        InjectedHid* port = install(model);
+        ready(model, port);
+        QVERIFY(model.sweep(14000000, 14350000, 2, true));
+        port->feed("OK\r\n");
+        port->feed("OK\r\n");
+        QByteArray payload("14,51.4,-1.02\r\n");
+        payload.append(QByteArray(62 - payload.size(), ' '));
+        QByteArray report = AntennaAnalyzerModel::commandReport(payload);
+        report[1] = 63;
+        emit port->reportReceived(report);
+        QCOMPARE(model.state(), AntennaAnalyzerModel::State::Error);
+        QCOMPARE(model.snapshot().value("receivedRows").toInt(), 0);
+    }
+    void otherFullReportLengthErrorsRemainMalformed()
+    {
+        for (const int length : {64, 255}) {
+            AntennaAnalyzerModel model;
+            InjectedHid* port = install(model);
+            port->feed("Stick Pro 108\r\n");
+            QByteArray report = AntennaAnalyzerModel::commandReport(QByteArray(62, 'x'));
+            report[1] = static_cast<char>(length);
+            emit port->reportReceived(report);
+            QCOMPARE(model.state(), AntennaAnalyzerModel::State::Error);
+        }
+    }
     void mathAndStrictCsv()
     {
         const QJsonObject match = AntennaAnalyzerModel::impedanceSample("14.180,50,0");

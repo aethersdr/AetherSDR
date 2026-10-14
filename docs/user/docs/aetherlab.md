@@ -38,7 +38,9 @@ close does not confirm RF silence.
 
 1. Open **Tools → AetherLab USB Proof of Concept...**.
 2. Click **Refresh USB**, select the Stick Pro interface, then **Connect**.
-3. Wait for **ready** and the full Stick Pro identity. Connecting only requests
+3. Wait for **ready** and the full Stick Pro identity. Firmware identifying as
+   **Stick Pro 108** uses a bounded compatibility path for its FULLINFO metadata.
+   Connecting only requests
    device information; it does not start a sweep.
 4. Set **Start**, **Stop** and **FRX intervals**, and confirm **Analyzer RF port
    is isolated from transmitters**.

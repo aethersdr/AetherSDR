@@ -95,6 +95,7 @@ bool AntennaAnalyzerModel::connectDevice(int index)
     m_intervals = 0;
     ++m_generation;
     m_identity.clear();
+    m_identityLengthQuirkReports = 0;
     m_info = {};
     m_trace = {};
     m_pending.clear();
@@ -168,11 +169,29 @@ void AntennaAnalyzerModel::receive(const QByteArray& report)
 {
     record(QStringLiteral("rx"), report);
     if (m_state == State::Closing) { return; }
-    if (report.size() < 2 || report.size() > 64 || report.at(0) != 0x07
-        || static_cast<unsigned char>(report.at(1)) > report.size() - 2) {
+    if (report.size() < 2 || report.size() > 64 || report.at(0) != 0x07) {
         finish(State::Error, QStringLiteral("Malformed HID report; inspect the protocol trace")); return;
     }
-    m_pending.append(report.mid(2, static_cast<unsigned char>(report.at(1))));
+    const int declared = static_cast<unsigned char>(report.at(1));
+    // Stick Pro VER 108 declares 63 on full 64-byte FULLINFO reports. Its HID
+    // descriptor and a 256-byte read confirm only 62 text bytes are available.
+    // Bound optional identity metadata as AntScope does; never repair CSV data.
+    const bool identityLengthQuirk = report.size() == 64 && declared == 63
+        && (m_state == State::Identifying || m_state == State::Ready);
+    if (declared > report.size() - 2 && !identityLengthQuirk) {
+        finish(State::Error, QStringLiteral("Malformed HID report; inspect the protocol trace")); return;
+    }
+    if (identityLengthQuirk) {
+        ++m_identityLengthQuirkReports;
+        QJsonObject entry = m_trace.last().toObject();
+        entry.insert(QStringLiteral("identityLengthQuirk"), true);
+        entry.insert(QStringLiteral("payloadBytesUsed"), 62);
+        m_trace[m_trace.size() - 1] = entry;
+        if (m_identityLengthQuirkReports == 1) {
+            qCWarning(lcAetherLab) << "Stick Pro FULLINFO length 63 bounded to 62 received bytes";
+        }
+    }
+    m_pending.append(report.mid(2, qMin(declared, static_cast<int>(report.size()) - 2)));
     while (m_pending.contains('\n')) {
         const qsizetype end = m_pending.indexOf('\n');
         QByteArray line = m_pending.left(end);
@@ -360,6 +379,7 @@ QJsonObject AntennaAnalyzerModel::snapshot() const
         {QStringLiteral("usbAvailable"), static_cast<bool>(m_factory)},
         {QStringLiteral("generation"), static_cast<qint64>(m_generation)},
         {QStringLiteral("identity"), m_identity}, {QStringLiteral("serial"), m_selected.serial},
+        {QStringLiteral("identityLengthQuirkReports"), m_identityLengthQuirkReports},
         {QStringLiteral("fullInfoLines"), m_info}, {QStringLiteral("error"), m_error},
         {QStringLiteral("devices"), devices}, {QStringLiteral("samples"), m_samples},
         {QStringLiteral("trace"), m_trace}, {QStringLiteral("startHz"), m_startHz},

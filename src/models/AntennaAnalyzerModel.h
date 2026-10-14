@@ -75,6 +75,7 @@ private:
     qint64 m_startHz{0};
     qint64 m_stopHz{0};
     int m_intervals{0};
+    int m_identityLengthQuirkReports{0};
     quint64 m_generation{0};
 };
 

@@ -47,9 +47,21 @@ The worker drains at most 64 existing reports before issuing a fresh identity
 query. Every normal send uses the source API's 64-byte buffer: `07`, payload
 count, up to 62 ASCII bytes, zero padding. The read buffer is 64 bytes; the
 parser accepts a 2–64 byte source-API report and rejects a payload count beyond
-the bytes actually returned. This format remains unqualified on the macOS
-Stick Pro HID descriptor. Do not silently add a 65th byte or strip the report
-ID when hardware disagrees; capture the discrepancy and update the oracle.
+the bytes actually returned, with one identity-only compatibility exception:
+`VER` **Stick Pro 108** sends full 64-byte FULLINFO reports declaring 63 text
+bytes, although only 62 bytes follow the header. AntScope bounds that count to
+the received capacity. AetherLab does so only during identification/idle identity
+metadata, flags each affected raw report, and exposes
+`identityLengthQuirkReports`. Measurement/setup reports retain strict lengths.
+
+Live macOS qualification on 2026-10-14 confirmed this convention: the device
+report descriptor declares report IDs 1/7/8 with 63 data bytes plus report ID
+(64 total); a separate 256-byte HID read buffer still returned 64-byte reports.
+VER identity succeeded before the old parser rejected the first FULLINFO packet.
+The captured public metadata is replayed in `rigexpert_usb_poc_test`. Optional
+FULLINFO text may be incomplete; it never establishes measurement capabilities
+or calibration state. No 65th byte is invented and no numeric prefix is accepted
+from an overclaimed measurement report.
 
 ## State machine
 
