@@ -3037,7 +3037,7 @@ void RadioModel::setPanTransmitInhibited(const QString& panId,
     }
 
     if (!inhibited) {
-        m_panTransmitInhibitReasons.remove(trimmedPanId);
+        const bool wasInhibited = m_panTransmitInhibitReasons.remove(trimmedPanId) > 0;
         const bool hadRestoreSlice =
             m_panTransmitInhibitedTxSlices.contains(trimmedPanId);
         const int restoreSliceId = hadRestoreSlice
@@ -3059,6 +3059,9 @@ void RadioModel::setPanTransmitInhibited(const QString& panId,
                                      .arg(restoreSliceId));
             }
         }
+        if (wasInhibited) {
+            emit panTransmitInhibitChanged(trimmedPanId);
+        }
         return;
     }
 
@@ -3077,6 +3080,7 @@ void RadioModel::setPanTransmitInhibited(const QString& panId,
         return;
     }
     m_panTransmitInhibitReasons.insert(trimmedPanId, trimmedReason);
+    emit panTransmitInhibitChanged(trimmedPanId);
     enforceTransmitInhibitForPan(trimmedPanId);
 }
 
@@ -10441,6 +10445,12 @@ bool RadioModel::sliceMayBelongToUs(int sliceId) const
     return m_ownedSliceIds.isEmpty() || m_ownedSliceIds.contains(sliceId);
 }
 
+bool RadioModel::sliceOwnedByUs(int sliceId) const
+{
+    return slice(sliceId) && !isSlotForeign(sliceId)
+        && (!backendCapabilities().hasMultiClientSessions || m_ownedSliceIds.contains(sliceId));
+}
+
 void RadioModel::emitOtherClientsChanged()
 {
     quint32 ours = clientHandle();
@@ -11986,10 +11996,13 @@ void RadioModel::handleSliceStatus(int id,
                                     const QMap<QString, QString>& kvs,
                                     bool removed)
 {
-    // Track slice ownership via client_handle (only present in some messages)
+    // Track slice ownership via client_handle (only present in some messages).
+    bool ownershipConfirmed = false;
     if (kvs.contains("client_handle")) {
-        quint32 owner = kvs["client_handle"].toUInt(nullptr, 16);
-        if (owner == clientHandle()) {
+        bool validOwner = false;
+        const quint32 owner = kvs["client_handle"].toUInt(&validOwner, 16);
+        if (validOwner && owner != 0 && owner == clientHandle()) {
+            ownershipConfirmed = !m_ownedSliceIds.contains(id);
             m_ownedSliceIds.insert(id);
             // If this slot was previously foreign (e.g. another client
             // released it and we just got assigned), drop the foreign mark.
@@ -12146,6 +12159,10 @@ void RadioModel::handleSliceStatus(int id,
     m_meterModel.setActiveTxSlice(activeTxSliceNum());
     enforceTransmitInhibitForSlice(s);
     syncDigitalVoiceTxSelection();
+
+    if (ownershipConfirmed) {
+        emit slotOccupancyChanged(id);
+    }
 
     // Aurora/AU-520: max_internal_pa_power in slice status reports the true
     // system power capability (e.g. 500W) while transmit status max_power_level
