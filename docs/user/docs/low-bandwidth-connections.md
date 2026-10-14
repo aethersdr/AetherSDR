@@ -113,6 +113,14 @@ You can reduce traffic further from the panadapter's **Display** panel (right-cl
 
 **Tools → Network Diagnostics...** shows latency, jitter, packet loss by stream, stream rates and audio-buffer health over time, with symptom search. See [Runtime Monitor](./runtime-monitor.md).
 
+### Network priority (DSCP EF)
+
+AetherSDR automatically requests **DSCP EF (46)** for outgoing FlexRadio VITA UDP traffic on macOS, Linux and Windows. This includes transmit audio, UDP registration and keepalives on LAN and SmartLink connections. There is no setting to enable it.
+
+This is best effort: if the operating system does not support or allow marking, the connection and streaming continue. The log reports either `VITA UDP DSCP EF configured` or `VITA UDP DSCP EF unavailable; streaming continues`. Windows uses its native QoS API; requesting the exact EF value may be denied by account privileges or system policy. An administrator can configure a Windows QoS policy for the relevant outgoing UDP traffic if needed.
+
+EF marking can help on a congested network that honors DSCP. Switches, routers, VPNs and Wi-Fi equipment may ignore or rewrite it, and Wi-Fi priority depends on the DSCP-to-WMM mapping. It does not reduce bandwidth or change the markings of incoming radio audio, spectrum or waterfall packets.
+
 ## Reference
 
 ### Recommended settings by connection type
