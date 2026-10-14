@@ -2085,16 +2085,8 @@ QWidget* RadioSetupDialog::buildRadioTab()
                                               m_modelLabel),
                         0, 0);
 
-        // Initial nickname text. For a non-Flex radio the name lives in
-        // AppSettings (keyed by serial/MAC), not on the radio, so read it back
-        // from there — otherwise the field would show the model default even
-        // after the operator set a custom name. Flex keeps its existing
-        // model-sourced behaviour. This must gate on exactly the same
-        // "is it Flex?" test as the editingFinished handler below: gating the
-        // read on family=="hl2" while the write covers every non-Flex family
-        // would persist a name for e.g. kiwi that the field then never shows.
-        QString initialNickname = m_model->nickname().isEmpty()
-            ? m_model->name() : m_model->nickname();
+        // Radio-owned nicknames may be empty. Other radios use the local store.
+        QString initialNickname = m_model->nickname();
         {
             const RadioInfo info = m_model->lastRadioInfo();
             if (!hl2::Hl2Discovery::nicknameLivesOnRadio(info))
@@ -2131,7 +2123,10 @@ QWidget* RadioSetupDialog::buildRadioTab()
             // keyed by the radio's stable serial, so discovery shows it in the
             // picker on the next sweep and RadioSetup reads it back on reopen.
             if (hl2::Hl2Discovery::nicknameLivesOnRadio(info)) {
-                m_model->sendCommand("radio name " + m_nicknameEdit->text());
+                if (m_model->requestRadioNickname(m_nicknameEdit->text())
+                    == ReceiveDispatch::Unsupported) {
+                    m_nicknameEdit->setText(m_model->nickname());
+                }
             } else {
                 // Commits eagerly inside; don't rely on the shutdown save.
                 hl2::Hl2Discovery::setNickname(info.family, info.serial,

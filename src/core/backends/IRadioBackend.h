@@ -144,6 +144,9 @@ public:
     virtual ReceiveDispatch requestTransmitControl(const TransmitControlRequest&,
                                                     TunePowerContext = TunePowerContext::Deferred)
     { return ReceiveDispatch::Unsupported; }
+    // Radio-owned identity; client-owned nicknames retain their local store.
+    virtual ReceiveDispatch requestRadioNickname(const QString&)
+    { return ReceiveDispatch::Unsupported; }
     explicit IRadioBackend(QObject* parent = nullptr) : QObject(parent)
     {
         connect(this, &IRadioBackend::connected, this, [this] {

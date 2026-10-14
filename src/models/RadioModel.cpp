@@ -882,6 +882,7 @@ void RadioModel::setupBackend(const QString& family)
                 sendSliceCommand(nullptr, cmd);   // guard looks up the slice from cmd
             });
             flex->setModelProvider([this]{ return m_model; });
+            flex->setFirmwareVersionProvider([this]{ return softwareVersion(); });
             flex->setIndependentTxSequenceProvider([this] { return m_seqCounter.fetch_add(1); });
             m_connection = flex->connection();   // non-owning; the backend owns it
             m_panStream  = flex->panStream();    // non-owning; the backend owns it
@@ -2869,6 +2870,14 @@ QString RadioModel::callsign() const
         .value(QStringLiteral("StationCallsign"), QString())
         .toString()
         .trimmed();
+}
+
+ReceiveDispatch RadioModel::requestRadioNickname(const QString& nickname)
+{
+    if (!m_backend || !isConnected()) {
+        return ReceiveDispatch::Unsupported;
+    }
+    return m_backend->requestRadioNickname(nickname);
 }
 
 void RadioModel::setStationCallsign(const QString& callsign)
