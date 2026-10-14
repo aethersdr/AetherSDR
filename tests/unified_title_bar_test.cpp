@@ -1156,6 +1156,14 @@ int main(int argc, char** argv)
             checkEqual(pcX(), otherShownX,
                        "clearing the other-client TX label does not move PC Audio in the first layout pass");
 
+            for (const char* name : {"Master volume", "Headphone volume"}) {
+                QSlider* slider = nullptr;
+                for (auto* c : layoutBar->findChildren<QSlider*>())
+                    if (c->accessibleName() == QLatin1String(name)) slider = c;
+                check(slider && slider->cursor().shape() != Qt::OpenHandCursor,
+                      "audio sliders do not inherit the drag-handle cursor");
+            }
+
             layoutBar->setMinimalMode(true);
             app.processEvents();
             check(!timer->sizePolicy().retainSizeWhenHidden(),

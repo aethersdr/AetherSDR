@@ -440,6 +440,7 @@ TitleBar::TitleBar(QWidget* parent)
     m_masterSlider->setValue(savedVol);
     m_masterSlider->setFixedWidth(64);
     m_masterSlider->setFixedHeight(16);
+    m_masterSlider->setCursor(Qt::ArrowCursor);   // not the cluster's drag hand
     m_masterSlider->setAccessibleName("Master volume");
     m_masterSlider->setAccessibleDescription("Line out volume level, 0 to 100 percent");
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_masterSlider, barSliderStyle);
@@ -480,6 +481,7 @@ TitleBar::TitleBar(QWidget* parent)
     m_hpSlider->setValue(50);
     m_hpSlider->setFixedWidth(64);
     m_hpSlider->setFixedHeight(16);
+    m_hpSlider->setCursor(Qt::ArrowCursor);   // not the cluster's drag hand
     m_hpSlider->setAccessibleName("Headphone volume");
     m_hpSlider->setAccessibleDescription("Headphone volume level, 0 to 100 percent");
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_hpSlider, barSliderStyle);
