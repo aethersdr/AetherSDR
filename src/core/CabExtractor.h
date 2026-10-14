@@ -18,7 +18,7 @@ namespace AetherSDR {
 class CabExtractor {
 public:
     // Extract every file in `cabBytes` into `out` as (filename, bytes)
-    // pairs, in cabinet order. Returns true on success.
+    // pairs, in cabinet order, capped at 500 MiB total. Returns true on success.
     bool extractAll(const QByteArray& cabBytes,
                     QList<QPair<QString, QByteArray>>& out);
 

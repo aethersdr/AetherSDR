@@ -9,10 +9,13 @@ extern "C" {
 #include <cstdlib>
 #include <cstring>
 #include <memory>
+#include <utility>
 
 namespace AetherSDR {
 
 namespace {
+
+constexpr qint64 kMaxExtractedBytes = 500LL * 1024LL * 1024LL;
 
 // Per-file state passed back to libmspack callbacks. mspack treats this
 // as opaque — we cast to our concrete type in each callback.
@@ -20,7 +23,7 @@ struct MemFile {
     const QByteArray* readBuf{nullptr};   // non-null when this file is input
     QByteArray*       writeBuf{nullptr};  // non-null when this file is output
     qint64            offset{0};
-    qint64            maxBytes{0};
+    qint64            maxBytes{-1};
 };
 
 // Our mspack_system extension. mspack_system is the first member so a
@@ -29,7 +32,7 @@ struct MemSystem {
     mspack_system base;
     const QByteArray* cabSource{nullptr};  // cab input, set before open()
     QByteArray*       payloadSink{nullptr}; // payload output, set before extract()
-    qint64            maxOutputBytes{0};
+    qint64            maxOutputBytes{-1};
 };
 
 // ─── mspack_system callbacks ────────────────────────────────────────────────
@@ -81,7 +84,7 @@ int mem_write(mspack_file* file, void* buffer, int bytes)
     auto* mf = reinterpret_cast<MemFile*>(file);
     if (!mf->writeBuf) return -1;
     if (bytes <= 0) return 0;
-    if (mf->maxBytes > 0 && bytes > mf->maxBytes - mf->writeBuf->size()) {
+    if (mf->maxBytes >= 0 && bytes > mf->maxBytes - mf->writeBuf->size()) {
         return -1;
     }
     mf->writeBuf->append(static_cast<const char*>(buffer), bytes);
@@ -159,6 +162,7 @@ bool CabExtractor::extractAll(const QByteArray& cabBytes,
                                QList<QPair<QString, QByteArray>>& out)
 {
     out.clear();
+    m_lastError.clear();
     if (cabBytes.isEmpty()) {
         m_lastError = "empty cab buffer";
         return false;
@@ -187,11 +191,22 @@ bool CabExtractor::extractAll(const QByteArray& cabBytes,
         return false;
     }
 
+    qint64 totalBytes = 0;
+    for (auto* file = cab->files; file; file = file->next) {
+        if (file->length > kMaxExtractedBytes - totalBytes) {
+            m_lastError = "Cabinet output exceeds size limit";
+            cabd->close(cabd, cab);
+            mspack_destroy_cab_decompressor(cabd);
+            return false;
+        }
+        totalBytes += file->length;
+    }
     for (auto* file = cab->files; file; file = file->next) {
         QByteArray payload;
         sys.payloadSink = &payload;
+        sys.maxOutputBytes = file->length;
         const int rc = cabd->extract(cabd, file, const_cast<char*>("<out>"));
-        if (rc != MSPACK_ERR_OK) {
+        if (rc != MSPACK_ERR_OK || payload.size() != file->length) {
             m_lastError = QString("cabd->extract(%1): error %2")
                 .arg(QString::fromLocal8Bit(file->filename ? file->filename : "?"))
                 .arg(rc);
@@ -215,7 +230,7 @@ bool CabExtractor::extractFile(const QByteArray& cabBytes, const QString& member
     out.clear();
     m_lastError.clear();
     if (cabBytes.isEmpty() || memberName.isEmpty() || expectedSize <= 0
-        || expectedSize > 500LL * 1024LL * 1024LL) {
+        || expectedSize > kMaxExtractedBytes) {
         m_lastError = "Invalid firmware cabinet request";
         return false;
     }

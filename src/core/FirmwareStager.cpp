@@ -41,8 +41,8 @@ QString stagedFirmwareStatus(const QString& fileName, qint64 fileSize,
 }
 } // namespace
 
-FirmwareStager::FirmwareStager(QObject* parent)
-    : QObject(parent)
+FirmwareStager::FirmwareStager(QObject* parent, const QString& stagingDirectory)
+    : QObject(parent), m_stagingDirectory(stagingDirectory)
 {
     m_nam.setTransferTimeout(kTransferTimeoutMs);
 }
@@ -56,6 +56,15 @@ QString FirmwareStager::stagingDir()
         QStandardPaths::GenericConfigLocation) + "/AetherSDR/firmware";
     QDir().mkpath(dir);
     return dir;
+}
+
+QString FirmwareStager::stagingDirectory() const
+{
+    if (m_stagingDirectory.isEmpty()) {
+        return stagingDir();
+    }
+    QDir().mkpath(m_stagingDirectory);
+    return m_stagingDirectory;
 }
 
 QString FirmwareStager::modelToFamily(const QString& model)
@@ -339,7 +348,7 @@ void FirmwareStager::stageFromLocalFile(const QString& installerPath,
 
         emit stageProgress(60, "Staging firmware...");
         const QString outName = "FLEX-" + m_modelFamily + "_v" + m_targetVersion + ".ssdr";
-        const QString outPath = stagingDir() + "/" + outName;
+        const QString outPath = stagingDirectory() + "/" + outName;
         QFile::remove(outPath);
         if (!QFile::copy(installerPath, outPath)) {
             emit stageFailed("Failed to copy .ssdr into staging directory.");
@@ -359,6 +368,8 @@ void FirmwareStager::stageFromLocalFile(const QString& installerPath,
 
         m_stagedPath = outPath;
         m_stagedVersion = m_targetVersion;
+        qCInfo(lcFirmware) << "FirmwareStager: staged" << outName
+                          << "bytes=" << fwSize << "MD5=" << fwMd5;
         emit stageProgress(100, stagedFirmwareStatus(outName, fwSize, fwMd5, m_modelFamily));
         emit stageComplete(outPath, m_targetVersion);
         return;
@@ -415,7 +426,7 @@ void FirmwareStager::downloadAndStage(const QString& version, const QString& mod
         const QString installerUrl = useMsi
             ? QString(INSTALLER_URL_FMT_MSI).arg(version)
             : QString(INSTALLER_URL_FMT_EXE).arg(version);
-        m_installerPath = stagingDir()
+        m_installerPath = stagingDirectory()
             + (useMsi ? "/SmartSDR_v" + version + "_x64.msi"
                       : "/SmartSDR_v" + version + "_Installer.exe");
 
@@ -549,13 +560,17 @@ void FirmwareStager::verifyAndExtract()
 
     // Legacy installers use a generated name; MSI metadata supplies its name.
     QString targetName = "FLEX-" + m_modelFamily + "_v" + m_targetVersion + ".ssdr";
-    QString outPath = stagingDir() + "/" + targetName;
+    QString outPath = stagingDirectory() + "/" + targetName;
 
     bool ok = false;
     if (isMsi) {
-        ok = extractFromMsi(m_installerPath, stagingDir(), outPath);
+        ok = extractFromMsi(m_installerPath, stagingDirectory(), outPath);
         if (ok) {
             targetName = QFileInfo(outPath).fileName();
+            const QRegularExpression versionPattern(
+                QStringLiteral(R"(_v([0-9]+\.[0-9]+\.[0-9]+(?:\.[0-9]+)?)\.ssdr$)"),
+                QRegularExpression::CaseInsensitiveOption);
+            m_targetVersion = versionPattern.match(targetName).captured(1);
         }
     } else {
         QFile installer(m_installerPath);
@@ -602,6 +617,8 @@ void FirmwareStager::verifyAndExtract()
 
     m_stagedPath = outPath;
     m_stagedVersion = m_targetVersion;
+    qCInfo(lcFirmware) << "FirmwareStager: staged" << targetName
+                      << "bytes=" << fwSize << "MD5=" << fwMd5;
 
     emit stageProgress(100, stagedFirmwareStatus(targetName, fwSize, fwMd5, m_modelFamily));
     emit stageComplete(outPath, m_targetVersion);
