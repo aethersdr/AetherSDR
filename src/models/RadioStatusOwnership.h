@@ -127,15 +127,76 @@ inline bool operatorTransmitActive(bool transmitting, bool daxTxActive,
 }
 
 // A TGXL autotune keys the radio over its interlock line, so the PTT source
-// can't identify it. Latch the cycle as a tune carrier when the tuner reports
-// tuning or AetherSDR just sent `tgxl autotune`; hold until unkey.
-inline bool tgxlTuneCycleLatched(bool transmitting, bool wasLatched,
-                                 bool tunerTuning, bool autotuneArmed)
-{
-    if (!transmitting)
-        return false;
-    return wasLatched || tunerTuning || autotuneArmed;
-}
+// can't identify it. AetherSDR arms a short window when it sends the autotune;
+// a key edge inside the window is a *provisional* tune that the tuner's
+// tuning=1 must confirm within kTgxlTuneConfirmMs, otherwise the tuner refused
+// and the over belongs to the operator. Clock-injected so it is unit-testable.
+inline constexpr qint64 kTgxlAutotuneKeyWindowMs = 5000;
+inline constexpr qint64 kTgxlTuneConfirmMs = 1500;
+
+struct TgxlTuneCycle {
+    qint64 armedUntilMs{0};
+    bool   provisional{false};
+    qint64 confirmByMs{0};
+    bool   latched{false};
+    // tuning was still true when the cycle unkeyed; ignore it until tuning=0
+    // so the late completion can't latch the operator's next over.
+    bool   staleTuning{false};
+    bool   wasTransmitting{false};
+
+    void arm(qint64 nowMs) { armedUntilMs = nowMs + kTgxlAutotuneKeyWindowMs; }
+
+    void reset() { *this = TgxlTuneCycle{}; }
+
+    void onTuningChanged(bool tuning, bool transmitting)
+    {
+        if (tuning)
+            return;
+        staleTuning = false;
+        if (!transmitting)
+            armedUntilMs = 0;  // tune ended/refused unkeyed: a quick MOX is the operator's
+    }
+
+    // Returns true while this cycle is a (possible) TGXL tune carrier.
+    bool update(bool transmitting, bool tunerTuning, qint64 nowMs)
+    {
+        if (!transmitting) {
+            if (latched || provisional) {
+                armedUntilMs = 0;
+                staleTuning = tunerTuning;
+            }
+            latched = false;
+            provisional = false;
+            wasTransmitting = false;
+            return false;
+        }
+
+        const bool liveTuning = tunerTuning && !staleTuning;
+        const bool rising = !wasTransmitting;
+        wasTransmitting = true;
+
+        if (rising) {
+            if (liveTuning) {
+                latched = true;
+                provisional = false;
+            } else if (nowMs < armedUntilMs) {
+                provisional = true;
+                confirmByMs = nowMs + kTgxlTuneConfirmMs;
+            }
+        } else if (provisional) {
+            if (liveTuning) {
+                latched = true;
+                provisional = false;
+            } else if (nowMs >= confirmByMs) {
+                provisional = false;
+                armedUntilMs = 0;
+            }
+        } else if (!latched && liveTuning) {
+            latched = true;  // front-panel tune: no arm, tuning=1 mid-over
+        }
+        return latched || provisional;
+    }
+};
 
 enum class OwnedStatusAction {
     Defer,

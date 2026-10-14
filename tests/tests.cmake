@@ -6972,6 +6972,12 @@ target_include_directories(radiomodel_audio_mute_test PRIVATE src)
 target_link_libraries(radiomodel_audio_mute_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME radiomodel_audio_mute_test COMMAND radiomodel_audio_mute_test)
 
+# TGXL autotune vs operator TX timer orderings (#6458).
+add_executable(radiomodel_tgxl_tune_timer_test tests/radiomodel_tgxl_tune_timer_test.cpp)
+target_include_directories(radiomodel_tgxl_tune_timer_test PRIVATE src)
+target_link_libraries(radiomodel_tgxl_tune_timer_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME radiomodel_tgxl_tune_timer_test COMMAND radiomodel_tgxl_tune_timer_test)
+
 add_executable(demo_backend_swap_test tests/demo_backend_swap_test.cpp)
 target_include_directories(demo_backend_swap_test PRIVATE src)
 target_link_libraries(demo_backend_swap_test PRIVATE aethercore Qt6::Core Qt6::Test)

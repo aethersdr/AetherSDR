@@ -398,21 +398,75 @@ void testBoundedSliceCapacity()
           "slice capacity does not change before model limit is known");
 }
 
-void testTgxlTuneCycleLatch()
+void testTgxlTuneCycle()
 {
-    using RadioStatusOwnership::tgxlTuneCycleLatched;
-    check(!tgxlTuneCycleLatched(false, false, true, true),
-          "TGXL tune latch is never set while not transmitting");
-    check(tgxlTuneCycleLatched(true, false, false, true),
-          "armed autotune request latches the cycle");
-    check(tgxlTuneCycleLatched(true, false, true, false),
-          "tuner tuning latches the cycle");
-    check(tgxlTuneCycleLatched(true, true, false, false),
-          "latch holds after tuning drops while still transmitting");
-    check(!tgxlTuneCycleLatched(true, false, false, false),
-          "plain operator TX is not latched");
-    check(!tgxlTuneCycleLatched(false, true, false, false),
-          "unkey clears the latch");
+    using RadioStatusOwnership::TgxlTuneCycle;
+    using RadioStatusOwnership::kTgxlTuneConfirmMs;
+
+    {   // Normal tune: arm, key, tuning=1, tuning=0, unkey.
+        TgxlTuneCycle c;
+        c.arm(1000);
+        check(c.update(true, false, 1010), "armed key edge is a provisional tune carrier");
+        check(c.provisional && !c.latched, "key edge inside the window is provisional");
+        check(c.update(true, true, 1100) && c.latched && !c.provisional,
+              "tuning=1 confirms the tune");
+        c.onTuningChanged(false, true);
+        check(c.update(true, false, 1500), "latch holds after tuning=0 while keyed");
+        check(!c.update(false, false, 1600), "unkey ends the tune cycle");
+        check(!c.update(true, false, 1700), "quick MOX after the tune is the operator's");
+    }
+    {   // tuning=0 lands before the unkey.
+        TgxlTuneCycle c;
+        c.arm(0);
+        c.update(true, true, 10);
+        c.onTuningChanged(false, true);
+        check(c.update(true, false, 20), "tuning=0 before unkey still holds the cycle");
+        c.update(false, false, 30);
+        check(!c.update(true, false, 40), "re-key after a clean tune is the operator's");
+    }
+    {   // Refused tune, then an operator key inside the window.
+        TgxlTuneCycle c;
+        c.arm(0);
+        check(c.update(true, false, 100), "refused tune: key edge is provisional at first");
+        check(c.update(true, false, 100 + kTgxlTuneConfirmMs - 1),
+              "provisional holds until the deadline");
+        check(!c.update(true, false, 100 + kTgxlTuneConfirmMs),
+              "provisional released at the deadline: the over is the operator's");
+        check(!c.update(true, false, 100 + kTgxlTuneConfirmMs + 500),
+              "released over stays the operator's");
+        c.update(false, false, 9000);
+        check(!c.update(true, false, 9100), "arm window was cleared");
+    }
+    {   // Stale completion: radio unkeys before tuning=0, operator re-keys.
+        TgxlTuneCycle c;
+        c.arm(0);
+        c.update(true, true, 10);
+        check(!c.update(false, true, 20), "unkey ends the cycle while tuning is still true");
+        check(!c.update(true, true, 30),
+              "re-key while the tuner still says tuning is NOT latched");
+        c.onTuningChanged(false, true);
+        check(!c.update(true, false, 40),
+              "late tuning=0 during the operator over leaves it operator-owned");
+        c.update(false, false, 50);
+        check(!c.update(true, false, 60), "next over is the operator's");
+    }
+    {   // Front-panel tune: no arm, tuning=1 mid-over.
+        TgxlTuneCycle c;
+        check(!c.update(true, false, 10), "unarmed key edge is the operator's");
+        check(c.update(true, true, 20), "tuning=1 mid-over latches (front-panel tune)");
+        check(!c.update(false, false, 30), "unkey ends it");
+    }
+    {   // tuning=0 unkeyed clears the window (refused, never keyed).
+        TgxlTuneCycle c;
+        c.arm(0);
+        c.onTuningChanged(false, false);
+        check(!c.update(true, false, 100), "window cleared by unkeyed tuning=0");
+    }
+    {   // Window expiry.
+        TgxlTuneCycle c;
+        c.arm(0);
+        check(!c.update(true, false, 5000), "key after the 5 s window is the operator's");
+    }
 }
 
 } // namespace
@@ -430,7 +484,7 @@ int main()
     testUdpRegistrationPolicy();
     testCreateResponseParsing();
     testBoundedSliceCapacity();
-    testTgxlTuneCycleLatch();
+    testTgxlTuneCycle();
 
     if (failures) {
         std::printf("\n%d failure(s)\n", failures);
