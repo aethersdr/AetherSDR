@@ -28,6 +28,8 @@ int main(int argc, char** argv)
                                                    {sink.localPort()});
         std::printf("cycle %d: EF %s: %s\n", cycle, result.applied ? "configured" : "unavailable",
                     qPrintable(result.detail));
+        // POSIX native acceptance/readback is the assertion of this test; denial
+        // remains a failure. Injected denial is covered by vita_dscp_stream_test.
 #ifndef Q_OS_WIN
         if (!result.applied || sender.socketOption(QAbstractSocket::TypeOfServiceOption).toInt() != kVitaIpTosEf) {
             std::fprintf(stderr, "FAIL: native IPv4 EF marking/readback\n");

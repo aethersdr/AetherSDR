@@ -10,6 +10,8 @@
 #include <vector>
 
 namespace AetherSDR {
+// Injecting apply proves denial handling, not native qWAVE resource teardown.
+// Reset-before-close ordering remains a source-reviewed lifecycle invariant.
 class VitaDscpStreamTestAccess {
 public:
     static void injectDeniedMarker(PanadapterStream& stream, std::vector<std::vector<quint16>>& calls,

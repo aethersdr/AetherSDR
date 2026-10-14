@@ -6,6 +6,8 @@
 using namespace AetherSDR;
 
 namespace {
+// This fake pins the requested DSCP value and rollback sequence. It does not
+// exercise the native QOSTrafficTypeBestEffort constant or OS policy.
 struct FlowApi {
     using FlowId = unsigned long;
     bool allowAdd{true};
@@ -50,8 +52,8 @@ int main()
     check(kVitaDscpEf == 46 && kVitaIpTosEf == 0xB8, "EF uses DSCP 46 and IPv4 TOS 0xB8");
     FlowApi success;
     check(createVitaEfFlow(success) == 73, "accepted EF flow remains owned by the caller");
-    check(success.requestedDscp == 46, "qWAVE receives the six-bit DSCP value, not TOS or the voice default");
-    check(success.calls == std::vector<int>({1, 2}), "start unmarked before requesting exact EF");
+    check(success.requestedDscp == 46, "flow helper requests the six-bit DSCP value, not TOS or the voice default");
+    check(success.calls == std::vector<int>({1, 2}), "add the initial flow before requesting exact EF");
 
     FlowApi denied;
     denied.allowEf = false;
