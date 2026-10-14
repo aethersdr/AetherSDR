@@ -320,8 +320,19 @@ TitleBar::TitleBar(QWidget* parent)
     m_txTimerOpacity = new QGraphicsOpacityEffect(m_txTimerLabel);
     m_txTimerOpacity->setOpacity(1.0);
     m_txTimerLabel->setGraphicsEffect(m_txTimerOpacity);
+    // Keep the slot reserved while idle so hiding the label after the fade
+    // doesn't reflow the row (PC Audio / volume / headphone would otherwise
+    // jump left on expiry and right on the next key-up).
+    {
+        QSizePolicy sp = m_txTimerLabel->sizePolicy();
+        sp.setRetainSizeWhenHidden(true);
+        m_txTimerLabel->setSizePolicy(sp);
+    }
     m_txTimerLabel->setVisible(false);   // idle: not displayed
     audio->addWidget(m_txTimerLabel);
+    // The speaker icon sits inset in its 22 px button, so the gap to its right
+    // reads ~3 px wider than the layout's 8 px; match it on the timer side.
+    audio->addSpacing(3);
 
     // 5 Hz tick that repaints the elapsed time while keyed.
     m_txTimerTick = new QTimer(this);
