@@ -69,10 +69,10 @@ int main(int argc, char** argv)
         CHECK(off.pttMicOverride.has_value() && *off.pttMicOverride == false);
         // FlexLib rejects anything but 0/1: malformed input is dropped, never "off".
         for (const char* bad : {"garbage", "-1", "2", ""}) {
-            const TransmitDelta d = decode(b, [bad](FlexBackend& fb){
+            const TransmitDelta invalid = decode(b, [bad](FlexBackend& fb){
                 fb.decodeTransmitStatus({{QStringLiteral("ptt_mic_override"), QLatin1String(bad)}});
             });
-            CHECK(!d.pttMicOverride.has_value());
+            CHECK(!invalid.pttMicOverride.has_value());
         }
     }
 
