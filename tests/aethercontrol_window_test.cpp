@@ -9,7 +9,8 @@
 //   3. Escape while the knob has the mouse captured releases the capture and
 //      leaves the window open; the next Escape closes it (CanonWindow closes
 //      on Escape, so the release has to win the first press);
-//   4. the captured knob's ring is drawn in color.accent.success, under
+//   4. the platform Close bindings close a captured knob's window;
+//   5. the captured knob's ring is drawn in color.accent.success, under
 //      Default Dark and Default Light.
 //
 // No radio and no serial port: the window is constructed bare, with a
@@ -23,7 +24,10 @@
 #include "models/SliceModel.h"
 
 #include <QApplication>
+#include <QDialog>
+#include <QKeySequence>
 #include <QLabel>
+#include <QList>
 #include <QPushButton>
 #include <QtTest>
 
@@ -106,13 +110,12 @@ private slots:
         // this slot's own close.
         QVERIFY(settings.value(QLatin1String(kGeometryKey)).toString().isEmpty());
 
-        const QSize chosen(640, 700);
+        QSize chosen;
         {
             FlexControlDialog window;
             window.show();
             QVERIFY(QTest::qWaitForWindowExposed(&window));
-            QVERIFY2(window.minimumWidth() < chosen.width(),
-                     qPrintable(QString::number(window.minimumWidth())));
+            chosen = window.minimumSize().expandedTo(QSize(640, 700)) + QSize(40, 0);
             window.resize(chosen);
             QCoreApplication::processEvents();
             QCOMPARE(window.size(), chosen);
@@ -122,7 +125,8 @@ private slots:
             QTRY_VERIFY(!window.isVisible());
         }
         const QString saved = settings.value(QLatin1String(kGeometryKey)).toString();
-        QVERIFY2(saved.endsWith(QLatin1String(",640,700")), qPrintable(saved));
+        const QString suffix = QStringLiteral(",%1,%2").arg(chosen.width()).arg(chosen.height());
+        QVERIFY2(saved.endsWith(suffix), qPrintable(saved));
 
         FlexControlDialog again;
         // CONTROL: a fresh window is not born at the saved size.
@@ -133,8 +137,65 @@ private slots:
         again.hide();
     }
 
+    void legacyBase64GeometryRestores()
+    {
+        auto& settings = AppSettings::instance();
+        settings.remove(QLatin1String(kGeometryKey));
+        FlexControlDialog window;
+        const QSize chosen = window.minimumSize().expandedTo(QSize(640, 700)) + QSize(40, 0);
+        QDialog legacy;
+        legacy.resize(chosen);
+        const QString saved = QString::fromLatin1(legacy.saveGeometry().toBase64());
+        QVERIFY(!saved.contains(QLatin1Char(',')));
+        settings.setValue(QLatin1String(kGeometryKey), saved);
+        QVERIFY(window.size() != chosen);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        QTRY_COMPARE(window.size(), chosen);
+        window.hide();
+        QVERIFY(settings.value(QLatin1String(kGeometryKey)).toString().contains(QLatin1Char(',')));
+    }
+
+    void closeShortcutClosesWhileCaptured_data()
+    {
+        QTest::addColumn<QKeySequence>("sequence");
+        const QList<QKeySequence> bindings = QKeySequence::keyBindings(QKeySequence::Close);
+        QVERIFY(!bindings.isEmpty());
+        for (const QKeySequence& sequence : bindings) {
+            QTest::newRow(qPrintable(sequence.toString())) << sequence;
+        }
+    }
+
+    void closeShortcutClosesWhileCaptured()
+    {
+        QFETCH(QKeySequence, sequence);
+        SliceModel slice(0);
+        FlexControlDialog window;
+        window.setSlice(&slice);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        window.activateWindow();
+        QTRY_VERIFY(window.isActiveWindow());
+        QWidget* knob = findKnob(window);
+        QVERIFY(knob);
+        QTest::mouseDClick(knob, Qt::LeftButton, Qt::NoModifier, knob->rect().center());
+        QTRY_VERIFY(armed(window));
+        QTest::keySequence(knob, sequence);
+        QTRY_VERIFY2(!window.isVisible(), qPrintable(sequence.toString()));
+        QVERIFY(!armed(window));
+    }
+
+    void escapeReleasesTheCaptureBeforeItCloses_data()
+    {
+        QTest::addColumn<QString>("target");
+        QTest::newRow("window") << QStringLiteral("window");
+        QTest::newRow("knob") << QStringLiteral("knob");
+        QTest::newRow("button") << QStringLiteral("button");
+    }
+
     void escapeReleasesTheCaptureBeforeItCloses()
     {
+        QFETCH(QString, target);
         SliceModel slice(0);
         FlexControlDialog window;
         window.setSlice(&slice);
@@ -149,7 +210,15 @@ private slots:
         QTest::mouseDClick(knob, Qt::LeftButton, Qt::NoModifier, knob->rect().center());
         QTRY_VERIFY2(armed(window), "a double-click captures the mouse");
 
-        QTest::keyClick(knob, Qt::Key_Escape);
+        QWidget* recipient = &window;
+        if (target == QLatin1String("knob")) {
+            recipient = knob;
+        } else if (target == QLatin1String("button")) {
+            recipient = window.findChild<QPushButton*>(QStringLiteral("PhysicalButton"));
+            QVERIFY(recipient);
+        }
+        recipient->setFocus();
+        QTest::keyClick(recipient, Qt::Key_Escape);
         QCoreApplication::processEvents();
         QVERIFY2(!armed(window), "the first Escape releases the capture");
         QVERIFY2(window.isVisible(), "the first Escape does not close the window");

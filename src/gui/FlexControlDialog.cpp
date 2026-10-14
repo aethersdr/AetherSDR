@@ -1886,7 +1886,7 @@ void FlexControlDialog::applyCompactWindowSize()
 
 void FlexControlDialog::reject()
 {
-    if (m_ignoreNextReject || (m_wheel && m_wheel->captured())) {
+    if (m_ignoreNextReject) {
         m_ignoreNextReject = false;
         releaseWheelCapture();
         return;
