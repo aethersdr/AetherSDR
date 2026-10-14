@@ -29,7 +29,10 @@ with a notice; see [Using the controls on other radios](#using-the-controls-on-o
   you set in **Settings → Radio Setup... → Antennas** (for example "80m Dipole"), while the
   radio still uses ANT1/ANT2.
 - **Filter width** — current filter bandwidth (reads **AUTO** while the
-  adaptive RX filter is fitting)
+  adaptive RX filter is fitting); grouped at the right of the header
+  beside **QSK**
+- **QSK** — read-only full break-in indicator, controlled by **Breakin**
+  in the P/CW applet
 - **TX badge** — shows whether this slice transmits
 - **Frequency** — double-click to enter directly
 
