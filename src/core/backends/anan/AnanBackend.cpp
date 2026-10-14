@@ -508,6 +508,7 @@ RadioCapabilities AnanBackend::capabilities() const
     c.transmitDriveControl = RadioCapabilities::TransmitDriveControl{
         SliceFrequencyControl::Authority::Engine, /*tunePowerAppliesLive=*/false};
     c.hasRadioPttReadback = false; // no PTT at all, so no readback either
+    c.radioPttObservation = std::nullopt;
     c.hasTuner = false;            // G2 has no internal ATU (Apache Labs spec)
     c.hasTunerMemories = false;    // no internal ATU, so no tuner-memory surface
     c.hasAmplifier = false;

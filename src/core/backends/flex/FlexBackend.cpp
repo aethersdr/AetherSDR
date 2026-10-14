@@ -496,6 +496,7 @@ RadioCapabilities FlexBackend::capabilities() const
     // The keyed edge is decoded from `interlock` status inside RadioModel, not
     // published through this seam — see RadioCapabilities::hasRadioPttReadback.
     caps.hasRadioPttReadback = false;
+    caps.radioPttObservation = std::nullopt;   // same reason: interlock, not this seam
 
     // EMPTY = continuous or unknown, so the RX applet keeps the operator's own
     // configurable width list. A Flex's filters are continuous.
@@ -1255,10 +1256,22 @@ void FlexBackend::decodeSliceStatus(int sliceId, const QMap<QString, QString>& k
     carry(kvs, "nb_level", d.nbLevel);
     carry(kvs, "nr_level", d.nrLevel);
     carry(kvs, "anf_level", d.anfLevel);
-    carry(kvs, "lms_nr_level", d.nrlLevel);
-    carry(kvs, "speex_nr_level", d.nrsLevel);
+    // The radio reports NRL/NRS/ANFL levels under status names that differ
+    // from the command names (FlexLib v4.3.16 Slice.cs:3678,3791,2904); the
+    // command names are kept as a fallback (#6447).
+    carry(kvs, "nrl_level", d.nrlLevel);
+    if (!kvs.contains(QStringLiteral("nrl_level"))) {
+        carry(kvs, "lms_nr_level", d.nrlLevel);
+    }
+    carry(kvs, "nrs_level", d.nrsLevel);
+    if (!kvs.contains(QStringLiteral("nrs_level"))) {
+        carry(kvs, "speex_nr_level", d.nrsLevel);
+    }
     carry(kvs, "nrf_level", d.nrfLevel);
-    carry(kvs, "lms_anf_level", d.anflLevel);
+    carry(kvs, "anfl_level", d.anflLevel);
+    if (!kvs.contains(QStringLiteral("anfl_level"))) {
+        carry(kvs, "lms_anf_level", d.anflLevel);
+    }
 
     // AGC / squelch / RIT / XIT
     carry(kvs, "agc_mode", d.agcMode);

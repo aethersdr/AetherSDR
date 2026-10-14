@@ -192,6 +192,7 @@ RadioCapabilities RtlSdrBackend::capabilities() const
     c.hostModulates = false;  // CRITICAL: must not open mic on connect (#4449)
     // transmitDriveControl absent: no transmitter, so no drive to own (#5518).
     c.hasRadioPttReadback = false;  // receive-only: nothing to key, nothing to read back
+    c.radioPttObservation = std::nullopt;
     c.hasFmRepeaterOffset = false;
     c.hasCwTune = false;
     c.twoToneGenerator = std::nullopt;  // receive only; there is no transmitter.

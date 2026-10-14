@@ -161,6 +161,8 @@ Use the icons at the right of the title bar:
 - **Dock left** / **Dock right** — put the panel on that side of the panadapters. Clicking the side it is already on hides it.
 - **Pop out** — float the panel in its own window (also **Ctrl+Shift+S**). Popped-out applets have a pin for always-on-top.
 
+The dock side is remembered when you restart AetherSDR.
+
 ### The button bar
 
 The top row of the panel holds **five favorite buttons** (by default VU, PWR, RX, TX and P/CW) and a **▼/▲** drawer button that shows the rest. Right-click the bar (or the drawer button) and choose **Customize Button Bar** to pick your favorites and hide buttons you don't use; the first five active entries fill the bar and the rest go in the drawer. Hiding a button also closes its applet. Buttons for accessories you don't have (tuner, amplifier, Antenna Genius and so on) appear only when that hardware is present.
