@@ -25,6 +25,7 @@ struct TransmitDelta {
     std::optional<QString> txSliceMode;
     std::optional<bool>    showTxInWaterfall;
     std::optional<bool>    metInRx;
+    std::optional<bool>    pttMicOverride;   // v4.3+ firmware only
 
     // ── Mic / monitor / processor ──
     std::optional<QString> micSelection;     // uppercased

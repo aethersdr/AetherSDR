@@ -195,6 +195,11 @@ public:
     // slice is not in the model's list.
     static int tciTrxForSlice(RadioModel* model, const SliceModel* slice);
 
+    // TCI's tx_enable is a per-receiver permission advertisement.  It does
+    // not identify the slice which currently owns TX; PTT routing resolves
+    // that separately when a client deliberately keys the radio.
+    static bool transmitPermitted(const RadioModel* model, const SliceModel* slice);
+
     // The single scan for "which trx is the TX slice", returning -1 when none
     // is marked. Both TX-trx resolvers build on this so the scan lives in one
     // place; they differ ONLY in how they map the -1 sentinel (txTrx() below

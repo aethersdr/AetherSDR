@@ -63,6 +63,7 @@ The checks are written so you can do them without putting a signal on the air. W
   - Controller buttons can be bound to PTT, MOX or TUNE: [USB Control Surfaces](./usb-control-surfaces.md) (including serial PTT and foot switches), [MIDI Controller Mapping](./midi-controller-mapping.md), [Ulanzi Dial](./ulanzi-dial.md), [StreamDeck](./streamdeck.md) and the [FlexControl Tuning Knob](./flexcontrol-tuning-knob.md).
   - CAT and TCI clients can key the radio. See [CAT Control](./cat-control.md) and [TCI Server](./tci-server.md).
   - The automation bridge cannot key the transmitter unless **Allow TX via MCP** is ticked, which is off by default. Leave it off unless you need it. See [Automation Bridge and MCP](./automation-bridge-and-mcp.md).
+- [ ] **(FlexRadio, firmware v4.3 and later)** **You know what your footswitch transmits.** A hardware PTT now sends the selected TX source, DAX or PC audio included, unless **PTT Mic Override** is on. See [Hardware PTT and the TX source](./tx-controls.md#hardware-ptt-and-the-tx-source).
 - [ ] **(FlexRadio)** **The radio's transmit time-out and interlocks are set:** **Timeout (sec):** and the **Interlocks - TX REQ** group on the **Transmit** page of Radio Setup. See [Radio Setup](./radio-setup.md).
 - [ ] **You can see when you are transmitting.** A green `M:SS` transmit timer appears in the title bar, just left of **PC Audio**, for each of your own transmissions, and the VFO marker turns orange/red. If an interlock blocks transmit, a notification says why. See [TX Controls](./tx-controls.md).
 

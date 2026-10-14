@@ -55,6 +55,10 @@ int extensionMaxLength(MessageType type)
         return spectrum::kHeaderBytes + spectrum::kMaxBars;
     case MessageType::RelayUdpPort:
         return 2;
+    case MessageType::AudioSpectrumLinear:
+        return spectrum::kHeaderBytes + spectrum::kMaxBars;
+    case MessageType::CwText:
+        return 1 + cwtext::kMaxChars;
     default:
         return 0;
     }
@@ -131,6 +135,49 @@ double spectrum::bandEdgeHz(int lowHz, int spanHz, int n, int i)
 int spectrum::displayLowHz(int spanHz)
 {
     return std::clamp(spanHz / 60, 20, 100);
+}
+
+int cwtext::confidence(float cost)
+{
+    return cost < 0.15f ? 0 : cost < 0.35f ? 1 : cost < 0.60f ? 2 : 3;
+}
+
+QByteArray cwtext::encode(const QString& text, float cost)
+{
+    QByteArray out(1, char(confidence(cost)));
+    for (const QChar c : text) {
+        if (out.size() > kMaxChars) {
+            break;
+        }
+        const ushort u = c.unicode();
+        if (u == '\n' || u == '\r') {
+            out.append(' ');
+        } else if (u >= 0x20 && u <= 0x7E) {
+            out.append(char(u));
+        }
+    }
+    return out.size() > 1 ? out : QByteArray();
+}
+
+double spectrum::linearEdgeHz(int lowHz, int spanHz, int n, int i)
+{
+    if (n <= 0 || i <= 0) {
+        return lowHz;
+    }
+    if (i >= n) {
+        return spanHz;
+    }
+    return lowHz + double(spanHz - lowHz) * i / n;
+}
+
+spectrum::Window spectrum::cwWindow(int filterLo, int filterHi, int pitchHz, double sampleRate)
+{
+    const int nyquist = sampleRate > 0 ? static_cast<int>(sampleRate / 2) : 12000;
+    const int pitch = std::clamp(pitchHz, 100, std::max(nyquist / 2, 100));
+    const int width = std::max(filterHi - filterLo, 50);
+    int half = std::max(std::abs(filterLo), std::abs(filterHi)) + width / 2;
+    half = std::max(0, std::min({half, pitch, nyquist - pitch}));
+    return {pitch - half, pitch + half};
 }
 
 int spectrum::displaySpanHz(int filterLo, int filterHi, double sampleRate)

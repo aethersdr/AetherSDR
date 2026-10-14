@@ -882,6 +882,7 @@ void RadioModel::setupBackend(const QString& family)
                 sendSliceCommand(nullptr, cmd);   // guard looks up the slice from cmd
             });
             flex->setModelProvider([this]{ return m_model; });
+            flex->setFirmwareVersionProvider([this]{ return softwareVersion(); });
             flex->setIndependentTxSequenceProvider([this] { return m_seqCounter.fetch_add(1); });
             m_connection = flex->connection();   // non-owning; the backend owns it
             m_panStream  = flex->panStream();    // non-owning; the backend owns it
@@ -1688,6 +1689,7 @@ void RadioModel::teardownBackend()
     for (SliceModel* source : m_slices) { source->invalidateControlIntents(); }
     resetTxOperations();
     ++m_backendReceiverGeneration;
+    m_backendObservedTransmit = false;   // an observation dies with its backend
     if (m_backend) {
         m_backend->retirePcmStreams();
     }
@@ -1734,6 +1736,7 @@ void RadioModel::teardownBackend()
     // radio's confirmed drive. resetPowerProvenance(), not resetState(): one caller
     // is ~RadioModel(), and resetState() emits TX signals.
     m_transmitModel.resetPowerProvenance();
+    m_transmitModel.resetPttMicOverrideReport();
     m_backend.reset();
     m_cwPitchHandedToBackend = -1;  // the next backend has been handed nothing
     acknowledgeTxTransportTeardown(m_txOperation);
@@ -2870,6 +2873,14 @@ QString RadioModel::callsign() const
         .trimmed();
 }
 
+ReceiveDispatch RadioModel::requestRadioNickname(const QString& nickname)
+{
+    if (!m_backend || !isConnected()) {
+        return ReceiveDispatch::Unsupported;
+    }
+    return m_backend->requestRadioNickname(nickname);
+}
+
 void RadioModel::setStationCallsign(const QString& callsign)
 {
     const QString wanted = callsign.trimmed().toUpper();
@@ -3027,7 +3038,7 @@ void RadioModel::setPanTransmitInhibited(const QString& panId,
     }
 
     if (!inhibited) {
-        m_panTransmitInhibitReasons.remove(trimmedPanId);
+        const bool wasInhibited = m_panTransmitInhibitReasons.remove(trimmedPanId) > 0;
         const bool hadRestoreSlice =
             m_panTransmitInhibitedTxSlices.contains(trimmedPanId);
         const int restoreSliceId = hadRestoreSlice
@@ -3049,6 +3060,9 @@ void RadioModel::setPanTransmitInhibited(const QString& panId,
                                      .arg(restoreSliceId));
             }
         }
+        if (wasInhibited) {
+            emit panTransmitInhibitChanged(trimmedPanId);
+        }
         return;
     }
 
@@ -3067,6 +3081,7 @@ void RadioModel::setPanTransmitInhibited(const QString& panId,
         return;
     }
     m_panTransmitInhibitReasons.insert(trimmedPanId, trimmedReason);
+    emit panTransmitInhibitChanged(trimmedPanId);
     enforceTransmitInhibitForPan(trimmedPanId);
 }
 
@@ -4538,6 +4553,10 @@ void RadioModel::applyBackendTransmitDelta(const TransmitDelta& delta)
     // Backend MOX is radio state, not local intent; don't echo it into the
     // signal that drives this client's audio, DAX, recorder and serial PTT.
     if (delta.mox) {
+        // Remembered only for a backend whose mox also carries the radio's own
+        // keying, so a host unkey cannot clear a PTT the radio still reports.
+        m_backendObservedTransmit = *delta.mox && m_backend
+            && m_backend->capabilities().radioPttObservation.has_value();
         publishBackendTransmitEdge(*delta.mox);
     }
     m_transmitModel.applyChanges(delta);
@@ -4778,7 +4797,7 @@ void RadioModel::publishCommandedBackendTransmitEdge(bool tx)
     if (m_backend && m_backend->capabilities().hasRadioPttReadback) {
         return;
     }
-    publishBackendTransmitEdge(tx);
+    publishBackendTransmitEdge(tx || m_backendObservedTransmit);
 }
 
 // Publish the TX edge for a backend with no interlock status plane; otherwise
@@ -7916,6 +7935,7 @@ void RadioModel::onDisconnected()
         m_txAudioGate = false;
         emit txAudioGateChanged(false);
     }
+    m_backendObservedTransmit = false;
     m_radioTransmitting = false;
     emit radioTransmittingChanged(false);
     if (m_profileDatabaseImporting) {
@@ -9902,7 +9922,7 @@ void RadioModel::reportReceiveDispatch(ReceiveDispatch result, const QString& op
         qCWarning(lcProtocol).noquote() << "Backend refused operation" << operation
             << (operatorOrigin ? QStringLiteral("(announced)") : QStringLiteral("(not announced)"));
         // The notice answers a control the operator just moved. A Kiwi
-        // suppression mute or a profile restore is not one, and must not spend
+        // suppression mute is not one, and must not spend
         // the once-per-session notice on a refusal nobody asked for.
         if (operatorOrigin) {
             emit commandDropped(operation);
@@ -9914,8 +9934,7 @@ void RadioModel::dispatchSliceDsp(const SliceDspRequest& request)
 {
     if (SliceModel* source = receiveCommandSource()) {
         reportReceiveDispatch(m_backend->requestSliceDsp(source->sliceId(), request),
-                              QStringLiteral("receive DSP"),
-                              request.origin == SliceDspRequest::Origin::Operator);
+                              QStringLiteral("receive DSP"), true);
     }
 }
 
@@ -10425,6 +10444,12 @@ bool RadioModel::sliceMayBelongToUs(int sliceId) const
         return false;
     }
     return m_ownedSliceIds.isEmpty() || m_ownedSliceIds.contains(sliceId);
+}
+
+bool RadioModel::sliceOwnedByUs(int sliceId) const
+{
+    return slice(sliceId) && !isSlotForeign(sliceId)
+        && (!backendCapabilities().hasMultiClientSessions || m_ownedSliceIds.contains(sliceId));
 }
 
 void RadioModel::emitOtherClientsChanged()
@@ -11972,10 +11997,13 @@ void RadioModel::handleSliceStatus(int id,
                                     const QMap<QString, QString>& kvs,
                                     bool removed)
 {
-    // Track slice ownership via client_handle (only present in some messages)
+    // Track slice ownership via client_handle (only present in some messages).
+    bool ownershipConfirmed = false;
     if (kvs.contains("client_handle")) {
-        quint32 owner = kvs["client_handle"].toUInt(nullptr, 16);
-        if (owner == clientHandle()) {
+        bool validOwner = false;
+        const quint32 owner = kvs["client_handle"].toUInt(&validOwner, 16);
+        if (validOwner && owner != 0 && owner == clientHandle()) {
+            ownershipConfirmed = !m_ownedSliceIds.contains(id);
             m_ownedSliceIds.insert(id);
             // If this slot was previously foreign (e.g. another client
             // released it and we just got assigned), drop the foreign mark.
@@ -12132,6 +12160,10 @@ void RadioModel::handleSliceStatus(int id,
     m_meterModel.setActiveTxSlice(activeTxSliceNum());
     enforceTransmitInhibitForSlice(s);
     syncDigitalVoiceTxSelection();
+
+    if (ownershipConfirmed) {
+        emit slotOccupancyChanged(id);
+    }
 
     // Aurora/AU-520: max_internal_pa_power in slice status reports the true
     // system power capability (e.g. 500W) while transmit status max_power_level
@@ -12997,6 +13029,9 @@ QJsonObject RadioModel::troubleshootingSnapshot() const
     mic["mic_boost"] = m_transmitModel.micBoost();
     mic["mic_bias"] = m_transmitModel.micBias();
     mic["met_in_rx"] = m_transmitModel.metInRx();
+    if (m_transmitModel.havePttMicOverride()) {
+        mic["ptt_mic_override"] = m_transmitModel.pttMicOverride();
+    }
     mic["sync_cwx"] = m_transmitModel.syncCwx();
     mic["am_carrier_level"] = m_transmitModel.amCarrierLevel();
     mic["dexp_on"] = m_transmitModel.dexpOn();

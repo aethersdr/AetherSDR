@@ -82,7 +82,7 @@ BASELINE = {
     "src/models/FlexWaveformModel.cpp": 3,
     "src/models/UsbCableModel.cpp": 3,
     # ---- gui ----
-    "src/gui/RadioSetupDialog.cpp": 41,
+    "src/gui/RadioSetupDialog.cpp": 40,
     "src/gui/MainWindow.cpp": 16,
     "src/gui/MainWindow_Wiring.cpp": 14,
     "src/gui/ProfileManagerDialog.cpp": 12,

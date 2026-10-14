@@ -434,6 +434,11 @@ signals:
     // bits of the fill level, and no sample count at all. See
     // Hl2Telemetry::apply().
     void telemetryUpdated(const AetherSDR::hl2::Hl2Telemetry& t);
+    // The radio's own keying changed: ptt_resp = cw_on | ext_ptt (control.v:456,
+    // gateware 74), the PTT/key jack or the internal keyer. Host MOX never raises
+    // it. An observation, per edge and unthrottled; false is also emitted when the
+    // stream ends or goes silent with the bit set.
+    void radioPttChanged(bool keyed);
     // One accepted bandscope block: 2048 contiguous converter samples merged from the
     // four in-phase EP4 packets the gate kept (never per packet). Uncalibrated and
     // pre-DDC, on the AD9866's own scale: nothing downstream may treat these as
@@ -502,6 +507,8 @@ private:
     // wire counters; it emits, so it is not noexcept. `drops` is what ep4SeqStep()
     // charged before this packet, since `seq % 4` cannot see a loss of four.
     void onRadioPttEdge(bool keyed);
+    // No stream, no observation: drop a PTT the radio last reported, with its edge.
+    void clearRadioPtt();
     void bandscopeOnPacket(std::uint32_t seq, std::uint32_t drops,
                            std::span<const std::uint8_t> bytes);
     // Begin one arming cycle: raise wide_spectrum, clear the accumulator, arm

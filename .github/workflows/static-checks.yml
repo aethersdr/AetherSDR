@@ -493,13 +493,14 @@ jobs:
         id: a11y
         if: ${{ !cancelled() }}
         run: |
-          FILES=$(cat /tmp/changed_gui_files.txt | tr '\n' ' ')
-          if [ -z "$FILES" ]; then
+          FILES=()
+          while IFS= read -r f; do FILES+=("$f"); done < /tmp/changed_gui_files.txt
+          if [ "${#FILES[@]}" -eq 0 ]; then
             echo "No src/gui/ files changed -- skipping."
             echo "findings=0" >> $GITHUB_OUTPUT
             exit 0
           fi
-          python tools/check_a11y.py $FILES | tee /tmp/a11y_output.txt
+          python tools/check_a11y.py "${FILES[@]}" | tee /tmp/a11y_output.txt
           COUNT=$(grep -c "^::warning" /tmp/a11y_output.txt || true)
           echo "findings=$COUNT" >> $GITHUB_OUTPUT
 

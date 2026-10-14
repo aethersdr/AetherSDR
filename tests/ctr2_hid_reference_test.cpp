@@ -296,8 +296,23 @@ void testExtensionsAgree()
     ctr2_rx masked{};
     ctr2_rx_set_extensions(&masked, 0xFFFFFFFFu);
     check(masked.extensions
-              == (CTR2_CAP(CTR2_EXT_AUDIO_SPECTRUM) | CTR2_CAP(CTR2_EXT_RELAY_UDP_PORT)),
+              == (CTR2_CAP(CTR2_EXT_AUDIO_SPECTRUM) | CTR2_CAP(CTR2_EXT_RELAY_UDP_PORT)
+                  | CTR2_CAP(CTR2_EXT_AUDIO_SPECTRUM_LINEAR) | CTR2_CAP(CTR2_EXT_CW_TEXT)),
           "the reference keeps only defined extension types");
+    bool linearAgree = CTR2_EXT_AUDIO_SPECTRUM_LINEAR
+            == static_cast<int>(MessageType::AudioSpectrumLinear)
+        && ctr2_ext_max_length(CTR2_EXT_AUDIO_SPECTRUM_LINEAR)
+            == extensionMaxLength(MessageType::AudioSpectrumLinear);
+    for (int i = 0; i <= 32; ++i) {
+        linearAgree = linearAgree
+            && std::abs(spectrum::linearEdgeHz(200, 1000, 32, i)
+                        - ctr2_spectrum_linear_edge(200, 1000, 32, std::uint8_t(i))) < 0.01;
+    }
+    check(linearAgree, "AudioSpectrumLinear agrees: type 0x42, same length, same edges");
+    check(CTR2_EXT_CW_TEXT == static_cast<int>(MessageType::CwText)
+              && ctr2_ext_max_length(CTR2_EXT_CW_TEXT) == extensionMaxLength(MessageType::CwText)
+              && CTR2_CW_TEXT_MAX == cwtext::kMaxChars,
+          "CwText agrees: type 0x43, 33 bytes");
     check(CTR2_EXT_RELAY_UDP_PORT == static_cast<int>(MessageType::RelayUdpPort)
               && ctr2_ext_max_length(CTR2_EXT_RELAY_UDP_PORT)
                      == extensionMaxLength(MessageType::RelayUdpPort),

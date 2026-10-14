@@ -242,6 +242,7 @@ public:
     // sending `radio callsign` so the radio's own copy stays in step.
     void setStationCallsign(const QString& callsign);
     QString nickname()     const { return m_nickname; }
+    ReceiveDispatch requestRadioNickname(const QString& nickname);
     QString region()       const { return m_region; }
     int     rttyMarkDefault() const { return m_rttyMarkDefault; }
     QString radioOptions() const { return m_radioOptions; }
@@ -726,6 +727,9 @@ public:
     quint32 txClientHandle() const { return m_txClientHandle; }
     quint32 ourClientHandle() const;
     bool sliceMayBelongToUs(int sliceId) const;
+    // TX requires confirmed ownership on multi-client radios; early RX state
+    // may still be visible through sliceMayBelongToUs() before owners arrive.
+    bool sliceOwnedByUs(int sliceId) const;
 
     struct ClientInfo {
         QString clientId;
@@ -1074,6 +1078,9 @@ signals:
     void infoChanged();
     void licenseFeaturesChanged();
     void connectionStateChanged(bool connected);
+    // Per-pan transmit permission changed. Consumers use the pan id to update
+    // each slice sharing that pan without inferring anything from TX ownership.
+    void panTransmitInhibitChanged(const QString& panId);
     void transmitSessionInvalidated();
     // The backend's RadioCapabilities changed, or a connect/disconnect edge
     // changed which backend answers; this one signal covers both. `connected`
@@ -1738,6 +1745,11 @@ public:
     {
         stageSessionModelsForReconnect();
     }
+    // setBackendForTest() does not connect transmitChanged; this is that handler.
+    void applyBackendTransmitDeltaForTest(const TransmitDelta& delta)
+    {
+        applyBackendTransmitDelta(delta);
+    }
     void emitBackendSliceChangedForTest(int sliceId, const SliceDelta& delta)
     {
         if (m_backend) {
@@ -1768,6 +1780,7 @@ public:
 
 private:
     friend class RadioModelSliceLifecycleTestAccess;
+    friend class RadioNicknameTestAccess;
     friend class TxOperationIntegrationTestAccess;
     friend class RerouteDeadControlsTestAccess;
     void expirePendingCallbacks(const QString& reason);
@@ -1995,6 +2008,9 @@ private:
     bool        m_cwxDrainArmed{false}; // CWX drain-release latch, immune to interlock flicker (#3949)
     bool        m_txAudioGate{false}; // actual TX audio gate state
     bool        m_radioTransmitting{false}; // raw interlock TX state, any owner
+    // Last mox a RadioCapabilities::radioPttObservation backend published; ORed
+    // into the command-edge fallback. Always false for every other backend.
+    bool        m_backendObservedTransmit{false};
     bool        m_operatorTransmitting{false}; // owned MOX/PTT/VOX (not tune/ATU/TCI/DAX)
     int         m_txFilterKillSamples{0};      // consecutive qualifying meter packets (#4649)
     bool        m_txFilterKillReported{false}; // latched, so we speak once per transmission

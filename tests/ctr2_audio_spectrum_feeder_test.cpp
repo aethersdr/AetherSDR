@@ -1,6 +1,7 @@
 // Ctr2AudioSpectrumFeeder::barsFromBins with real FFT data: a pure tone must
-// light the bar whose log band contains it, at any span. No radio, no audio
-// device; the analyzer is the one the feeder uses.
+// light the bar whose band (log, or linear around a CW pitch) contains it, at
+// any span. No radio, no audio device; the analyzer is the one the feeder
+// uses.
 
 #include "gui/ClientEqFftAnalyzer.h"
 #include "gui/Ctr2AudioSpectrumFeeder.h"
@@ -25,7 +26,7 @@ void check(bool condition, const char* message)
     }
 }
 
-int loudestBar(double toneHz, double fs, int low, int span)
+int loudestBar(double toneHz, double fs, int low, int span, bool linear = false)
 {
     std::vector<float> x(ClientEqFftAnalyzer::kFftSize);
     for (size_t i = 0; i < x.size(); ++i) {
@@ -34,7 +35,7 @@ int loudestBar(double toneHz, double fs, int low, int span)
     ClientEqFftAnalyzer fft;
     fft.update(x.data(), static_cast<int>(x.size()));
     const std::vector<float> bars = Ctr2AudioSpectrumFeeder::barsFromBins(
-        fft.magnitudesDb(), fs, low, span, fft.coherentGainCorrectionDb());
+        fft.magnitudesDb(), fs, low, span, fft.coherentGainCorrectionDb(), linear);
     int best = 0;
     for (int i = 1; i < static_cast<int>(bars.size()); ++i) {
         if (bars[i] > bars[best]) {
@@ -61,6 +62,30 @@ void testToneLandsInItsBand()
     }
 }
 
+// CW: in the linear window around the pitch, a tone lands in the evenly split
+// bar that contains it, and a tone at the pitch sits at the middle of the
+// screen.
+void testToneLandsInItsLinearBand()
+{
+    int low = 0;
+    int high = 0;
+    Ctr2ProxyModel::audioSpectrumCwWindow(-200, 200, 600, 24000.0, &low, &high);
+    for (double tone : {250.0, 450.0, 600.0, 750.0, 950.0}) {
+        for (double fs : {24000.0, 48000.0}) {
+            const int bar = loudestBar(tone, fs, low, high, true);
+            const double lo = Ctr2ProxyModel::audioSpectrumBandEdgeHz(low, high, 32, bar, true);
+            const double hi = Ctr2ProxyModel::audioSpectrumBandEdgeHz(low, high, 32, bar + 1, true);
+            char msg[160];
+            std::snprintf(msg, sizeof msg,
+                          "%.0f Hz at %.0f Hz sampling lands in linear bar %d (%.0f-%.0f Hz)",
+                          tone, fs, bar, lo, hi);
+            check(tone >= lo - 15.0 && tone <= hi + 15.0, msg);
+        }
+    }
+    const int pitchBar = loudestBar(600.0, 48000.0, low, high, true);
+    check(pitchBar == 15 || pitchBar == 16, "a tone at the pitch lights a middle bar");
+}
+
 // Too few bins for any band (DC plus one) reads as silence, not a bin
 // repeated across every bar.
 void testTooFewBinsIsSilence()
@@ -81,6 +106,7 @@ void testTooFewBinsIsSilence()
 int main()
 {
     testToneLandsInItsBand();
+    testToneLandsInItsLinearBand();
     testTooFewBinsIsSilence();
     if (g_failures) {
         std::fprintf(stderr, "%d check(s) failed\n", g_failures);

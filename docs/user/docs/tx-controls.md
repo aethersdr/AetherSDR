@@ -148,6 +148,25 @@ CW is excluded, and the card is not available on the Hermes-Lite 2.
   not allowed) appear as notifications, only when transmit is actually
   blocked
 
+### Hardware PTT and the TX source
+
+**(FlexRadio)** A hardware PTT is a footswitch or keying line on the RCA PTT
+jack, the ACC connector or a supported mic-jack PTT input. On firmware before
+SmartSDR v4.3, a hardware PTT always transmits the analog microphone. **From
+v4.3, a hardware PTT transmits whatever TX source is selected**, just as MOX
+does. If DAX is on for a digital-mode program, or the mic source is PC, a
+footswitch press puts that audio on the air, not your microphone.
+
+To restore the old behavior, turn on **PTT Mic Override** in the
+**Interlocks - TX REQ** group of **Settings → Radio Setup... → Transmit**.
+With it on, a hardware PTT transmits the analog mic input you last used, even
+while DAX or PC audio is selected. It changes nothing when an analog input
+(MIC, BAL, LINE or ACC) is already selected. The radio stores the setting and
+shares it with every client connected to it. With several clients connected
+(Multi-Flex), FlexRadio says the override applies when the client whose
+hardware PTT is pressed is also the transmitting client. On firmware before
+v4.3 the control is grayed out.
+
 ### Transmit timer
 
 While you transmit, a green `M:SS` timer (`H:MM:SS` after an hour) appears in

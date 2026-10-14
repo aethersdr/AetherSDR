@@ -992,6 +992,8 @@ void testAudioSpectrumExtension()
             same = same || (m.type == MessageType::AudioSpectrum && m.payload == payload);
         }
         check(same && !rig.dev.rxError, "its payload arrives unchanged, in valid framing");
+        check(!rig.relay.sendAudioSpectrum(payload, MessageType::AudioSpectrumLinear),
+              "a linear spectrum needs its own extension");
 
         // A device-sent extension of a negotiated type is accepted and ignored.
         std::vector<Report> r;
@@ -1014,6 +1016,57 @@ void testAudioSpectrumExtension()
         rig.port->ack(rig.port->pending());  // acknowledged asynchronously, like the real port
         check(waitUntil([&] { return rig.relay.sendAudioSpectrum(payload); }),
               "frames resume once the link drains");
+    }
+    {
+        // A device that also takes AudioSpectrumLinear gets it as its own type.
+        const quint32 both = bit | capabilityBit(MessageType::AudioSpectrumLinear);
+        Rig rig;
+        rig.port->negotiate(both);
+        rig.dev.rx.setExtensions(both);
+        rig.start();
+        check(rig.linkUp(), "link up (both spectra negotiated)");
+        const QByteArray window = spectrum::encode(200, 1000, std::vector<float>(32, -40.0f));
+        check(rig.relay.sendAudioSpectrum(window, MessageType::AudioSpectrumLinear),
+              "a linear spectrum is sent when negotiated");
+        check(waitUntil([&] { return rig.dev.count(MessageType::AudioSpectrumLinear) == 1; }),
+              "the device receives one AudioSpectrumLinear message");
+        check(!rig.relay.sendAudioSpectrum(window, MessageType::RelayUdpPort),
+              "only spectrum types go through sendAudioSpectrum");
+    }
+    {
+        // CwText goes only to a device that negotiated it.
+        Rig rig;
+        rig.port->negotiate(bit);
+        rig.dev.rx.setExtensions(bit);
+        rig.start();
+        check(rig.linkUp(), "link up (spectrum only)");
+        const QByteArray text = cwtext::encode(QStringLiteral("CQ"), 0.1f);
+        check(!rig.relay.sendCwText(text), "no CW text without its extension");
+    }
+    {
+        const quint32 cw = capabilityBit(MessageType::CwText);
+        Rig rig;
+        rig.port->negotiate(cw);
+        rig.dev.rx.setExtensions(cw);
+        rig.start();
+        check(rig.linkUp(), "link up (CW text)");
+        const QByteArray text = cwtext::encode(QStringLiteral("CQ"), 0.1f);
+        check(rig.relay.sendCwText(text), "CW text is sent when negotiated");
+        check(waitUntil([&] { return rig.dev.count(MessageType::CwText) == 1; }),
+              "the device receives one CwText message");
+
+        // A stalled device holds text back, but only up to the hard cap.
+        rig.port->autoAck = false;
+        int accepted = 0;
+        for (int i = 0; i < 10000; ++i) {
+            accepted += rig.relay.sendCwText(text) ? 1 : 0;
+        }
+        check(accepted > 100 && accepted < 10000, "a stalled device stops taking CW text at the cap");
+        check(rig.port->pending() <= 8192, "the queued text stays within the report cap");
+        rig.port->autoAck = true;
+        rig.port->ack(rig.port->pending());
+        check(waitUntil([&] { return rig.relay.sendCwText(text); }),
+              "CW text resumes once the link drains");
     }
 }
 

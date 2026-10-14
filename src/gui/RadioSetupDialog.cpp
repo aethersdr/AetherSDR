@@ -1373,7 +1373,7 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
     addPage(signalCategory, QStringLiteral("Audio"),
         QStringLiteral("speaker microphone device sample rate latency sound dax"), [this] { return buildAudioTab(); });
     addPage(signalCategory, QStringLiteral("Transmit"),
-        QStringLiteral("tx transmit rf power tune ptt band settings"), [this] { return buildTxTab(); });
+        QStringLiteral("tx transmit rf power tune ptt mic override band settings"), [this] { return buildTxTab(); });
     addPage(signalCategory, QStringLiteral("Phone & CW"),
         QStringLiteral("phone cw keyer break-in sidetone microphone voice"), [this] { return buildPhoneCwTab(); });
     addPage(signalCategory, QStringLiteral("Receive"),
@@ -2085,16 +2085,8 @@ QWidget* RadioSetupDialog::buildRadioTab()
                                               m_modelLabel),
                         0, 0);
 
-        // Initial nickname text. For a non-Flex radio the name lives in
-        // AppSettings (keyed by serial/MAC), not on the radio, so read it back
-        // from there — otherwise the field would show the model default even
-        // after the operator set a custom name. Flex keeps its existing
-        // model-sourced behaviour. This must gate on exactly the same
-        // "is it Flex?" test as the editingFinished handler below: gating the
-        // read on family=="hl2" while the write covers every non-Flex family
-        // would persist a name for e.g. kiwi that the field then never shows.
-        QString initialNickname = m_model->nickname().isEmpty()
-            ? m_model->name() : m_model->nickname();
+        // Radio-owned nicknames may be empty. Other radios use the local store.
+        QString initialNickname = m_model->nickname();
         {
             const RadioInfo info = m_model->lastRadioInfo();
             if (!hl2::Hl2Discovery::nicknameLivesOnRadio(info))
@@ -2123,6 +2115,10 @@ QWidget* RadioSetupDialog::buildRadioTab()
                         1, 0);
 
         connect(m_nicknameEdit, &QLineEdit::editingFinished, this, [this] {
+            // Return on an untouched field must not write radio-persisted identity.
+            if (!m_nicknameEdit->isModified()) {
+                return;
+            }
             const RadioInfo info = m_model->lastRadioInfo();
             // Only FlexRadio has an on-radio name store ("radio name" command).
             // Every other family (HL2, the sim demo, any future non-Flex backend)
@@ -2131,12 +2127,16 @@ QWidget* RadioSetupDialog::buildRadioTab()
             // keyed by the radio's stable serial, so discovery shows it in the
             // picker on the next sweep and RadioSetup reads it back on reopen.
             if (hl2::Hl2Discovery::nicknameLivesOnRadio(info)) {
-                m_model->sendCommand("radio name " + m_nicknameEdit->text());
+                if (m_model->requestRadioNickname(m_nicknameEdit->text())
+                    == ReceiveDispatch::Unsupported) {
+                    m_nicknameEdit->setText(m_model->nickname());
+                }
             } else {
                 // Commits eagerly inside; don't rely on the shutdown save.
                 hl2::Hl2Discovery::setNickname(info.family, info.serial,
                                                m_nicknameEdit->text());
             }
+            m_nicknameEdit->setModified(false);
         });
         connect(m_callsignEdit, &QLineEdit::editingFinished, this, [this] {
             // Persist client-side on every family, then also write the radio's
@@ -2165,6 +2165,10 @@ QWidget* RadioSetupDialog::buildRadioTab()
         connect(m_model, &RadioModel::infoChanged, this, [this] {
             if (m_modelLabel) {
                 m_modelLabel->setText(displayOrDash(m_model->model()));
+            }
+            if (m_nicknameEdit && !m_nicknameEdit->isModified()
+                && hl2::Hl2Discovery::nicknameLivesOnRadio(m_model->lastRadioInfo())) {
+                m_nicknameEdit->setText(m_model->nickname());
             }
         });
 
@@ -3237,6 +3241,50 @@ QWidget* RadioSetupDialog::buildTxTab()
         accCmb->setCurrentIndex(tx.accTxReqPolarity());
         AetherSDR::applyComboStyle(accCmb);
         grid->addWidget(accCmb, 0, 3);
+
+        // PTT Mic Override (SmartSDR v4.3, SMART-9340): from 4.3 a hardware
+        // PTT transmits the selected TX source, DAX and remote audio included;
+        // on, it forces the analog mic as firmware before 4.3 always did.
+        // Radio-wide, and only a 4.3 radio reports it (#6442).
+        auto* pttOvrLbl = new QLabel("PTT Mic Override:");
+        applyLabelStyle(pttOvrLbl);
+        grid->addWidget(pttOvrLbl, 1, 0);
+        auto* pttOvrBtn = new QPushButton;
+        pttOvrBtn->setCheckable(true);
+        setButtonRole(pttOvrBtn, ButtonRole::Select);
+        pttOvrBtn->setAccessibleName(tr("PTT Mic Override"));
+        grid->addWidget(pttOvrBtn, 1, 1, Qt::AlignLeft);
+        const auto syncPttOverride = [this, pttOvrBtn]() {
+            const auto& t = m_model->transmitModel();
+            const bool reported = t.havePttMicOverride();
+            QSignalBlocker block(pttOvrBtn);
+            pttOvrBtn->setChecked(t.pttMicOverride());
+            pttOvrBtn->setText(t.pttMicOverride() ? "Enabled" : "Disabled");
+            pttOvrBtn->setEnabled(reported);
+            const QString tip = reported
+                ? tr("Enabled: a hardware PTT (RCA PTT jack, ACC or mic-jack PTT) "
+                     "transmits the analog mic, even when DAX or PC audio is the TX source.\n"
+                     "Disabled (firmware 4.3 default): a hardware PTT transmits the "
+                     "selected TX source, as MOX does.\n"
+                     "This setting is shared by every client on the radio.")
+                : tr("Requires SmartSDR v4.3 firmware or later. Earlier firmware "
+                     "always transmits the analog mic on a hardware PTT.");
+            pttOvrBtn->setToolTip(tip);
+            pttOvrBtn->setAccessibleDescription(tip);
+        };
+        syncPttOverride();
+        // The button shows the radio's value: a click only requests the change
+        // and snaps back, and the transmit-status echo moves it.
+        connect(pttOvrBtn, &QPushButton::toggled, this, [this, syncPttOverride](bool on) {
+            m_model->transmitModel().setPttMicOverride(on);
+            syncPttOverride();
+        });
+        connect(&tx, &TransmitModel::stateChanged, pttOvrBtn, syncPttOverride);
+        // resetState() on disconnect announces through micStateChanged, not
+        // stateChanged; without this the page keeps the last session's value.
+        connect(&tx, &TransmitModel::micStateChanged, pttOvrBtn, syncPttOverride);
+        // A family switch clears the report without either signal.
+        connect(m_model, &RadioModel::backendRebuilt, pttOvrBtn, syncPttOverride);
 
         vbox->addWidget(group);
     }

@@ -131,13 +131,27 @@ float ctr2_spectrum_band_edge(uint16_t low_hz, uint16_t span_hz, uint8_t n, uint
     return (float)low_hz * powf((float)span_hz / (float)low_hz, (float)i / (float)n);
 }
 
+float ctr2_spectrum_linear_edge(uint16_t low_hz, uint16_t span_hz, uint8_t n, uint8_t i)
+{
+    if (n == 0 || i == 0) {
+        return (float)low_hz;
+    }
+    if (i >= n) {
+        return (float)span_hz;
+    }
+    return (float)low_hz + ((float)span_hz - (float)low_hz) * (float)i / (float)n;
+}
+
 uint16_t ctr2_ext_max_length(uint8_t type)
 {
     switch (type) {
     case CTR2_EXT_AUDIO_SPECTRUM:
+    case CTR2_EXT_AUDIO_SPECTRUM_LINEAR:
         return (uint16_t)(CTR2_SPECTRUM_HEADER + CTR2_SPECTRUM_MAX_BARS);
     case CTR2_EXT_RELAY_UDP_PORT:
         return 2u;
+    case CTR2_EXT_CW_TEXT:
+        return (uint16_t)(1u + CTR2_CW_TEXT_MAX);
     default:
         return 0;
     }

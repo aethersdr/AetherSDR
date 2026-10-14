@@ -1033,6 +1033,10 @@ QString SliceTroubleshootingDialog::buildSummary(const QJsonObject& snapshot)
                  .arg(mic["am_carrier_level"].toInt())
                  .arg(mic["tx_filter_low"].toInt())
                  .arg(mic["tx_filter_high"].toInt());
+    if (mic.contains("ptt_mic_override")) {
+        lines << QString("- PTT mic override: `%1`")
+                     .arg(yesNo(mic["ptt_mic_override"].toBool()));
+    }
     lines << QString("- VOX: enabled `%1`, level `%2`, delay `%3`")
                  .arg(yesNo(vox["enabled"].toBool()))
                  .arg(vox["level"].toInt())

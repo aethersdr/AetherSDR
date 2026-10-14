@@ -453,6 +453,47 @@ void testDisplaySpan()
     check(std::abs(spectrum::bandEdgeHz(100, 6000, 32, 16) - 774.6) < 0.1,
           "the middle bar edge is the geometric mean, 775 Hz, not 3 kHz");
     check(spectrum::bandEdgeHz(0, 4000, 32, 8) == 1000, "a low edge of 0 means linear spacing");
+
+    // CW: a linear window centered on the pitch (AudioSpectrumLinear).
+    {
+        const auto w = spectrum::cwWindow(-200, 200, 600, 24000);
+        check(w.lowHz == 200 && w.highHz == 1000, "+/-200 Hz at 600 Hz: 200-1000 Hz");
+        check(spectrum::linearEdgeHz(w.lowHz, w.highHz, 32, 16) == 600, "the pitch is mid-screen");
+        check(spectrum::linearEdgeHz(200, 1000, 32, 0) == 200
+                  && spectrum::linearEdgeHz(200, 1000, 32, 32) == 1000
+                  && spectrum::linearEdgeHz(200, 1000, 32, 8) == 400,
+              "linear edges split low..high evenly");
+        const auto low = spectrum::cwWindow(-500, 500, 300, 24000);
+        check(low.lowHz == 0 && low.highHz == 600, "a window reaching below 0 Hz shrinks, centered");
+        const auto narrow = spectrum::cwWindow(-25, 25, 600, 24000);
+        check(narrow.lowHz == 550 && narrow.highHz == 650, "a 50 Hz filter shows +/-50 Hz");
+        for (double fs : {1.0, 150.0, 300.0, 399.0}) {
+            const auto tiny = spectrum::cwWindow(-250, 250, 600, fs);
+            check(tiny.lowHz >= 0 && tiny.lowHz <= tiny.highHz,
+                  "a sample rate below 400 Hz still gives an ordered window");
+        }
+        check(extensionMaxLength(MessageType::AudioSpectrumLinear)
+                  == extensionMaxLength(MessageType::AudioSpectrum),
+              "the linear spectrum has the same payload");
+        check(kHostCapabilities & capabilityBit(MessageType::AudioSpectrumLinear),
+              "AetherSDR offers the linear spectrum");
+    }
+    // CwText: a confidence byte, then printable ASCII.
+    {
+        check(cwtext::confidence(0.1f) == 0 && cwtext::confidence(0.2f) == 1
+                  && cwtext::confidence(0.5f) == 2 && cwtext::confidence(0.9f) == 3,
+              "the CW panel's confidence bands");
+        check(cwtext::encode(QStringLiteral("CQ"), 0.1f) == QByteArray("\x00" "CQ", 3),
+              "text after its confidence");
+        check(cwtext::encode(QStringLiteral("A\nB\u00e9"), 0.5f) == QByteArray("\x02" "A B", 4),
+              "a newline is a space; non-ASCII is dropped");
+        check(cwtext::encode(QStringLiteral("\u00e9"), 0.1f).isEmpty(), "nothing printable: nothing");
+        check(cwtext::encode(QString(40, QLatin1Char('E')), 0.1f).size() == 1 + cwtext::kMaxChars,
+              "long text is cut to fit");
+        check(extensionMaxLength(MessageType::CwText) == 1 + cwtext::kMaxChars
+                  && (kHostCapabilities & capabilityBit(MessageType::CwText)),
+              "CwText: 0x43, offered, up to 33 bytes");
+    }
 }
 
 int main()

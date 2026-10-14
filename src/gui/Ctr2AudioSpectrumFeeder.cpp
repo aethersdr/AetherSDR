@@ -43,7 +43,7 @@ void Ctr2AudioSpectrumFeeder::follow()
 
 std::vector<float> Ctr2AudioSpectrumFeeder::barsFromBins(const std::vector<float>& binsDb,
                                                          double sampleRate, int lowHz, int spanHz,
-                                                         float correctionDb)
+                                                         float correctionDb, bool linear)
 {
     std::vector<float> bars(kBars, -INFINITY);   // an empty band reads as silence
     const int last = static_cast<int>(binsDb.size()) - 1;
@@ -52,8 +52,9 @@ std::vector<float> Ctr2AudioSpectrumFeeder::barsFromBins(const std::vector<float
     }
     const double binHz = ClientEqFftAnalyzer::binFreq(1, sampleRate);
     for (int b = 0; b < kBars; ++b) {
-        const double lo = Ctr2ProxyModel::audioSpectrumBandEdgeHz(lowHz, spanHz, kBars, b);
-        const double hi = Ctr2ProxyModel::audioSpectrumBandEdgeHz(lowHz, spanHz, kBars, b + 1);
+        const double lo = Ctr2ProxyModel::audioSpectrumBandEdgeHz(lowHz, spanHz, kBars, b, linear);
+        const double hi =
+            Ctr2ProxyModel::audioSpectrumBandEdgeHz(lowHz, spanHz, kBars, b + 1, linear);
         const int first = std::max(1, static_cast<int>(std::ceil(lo / binHz)));
         const int stop = std::min(last, static_cast<int>(std::ceil(hi / binHz)) - 1);
         float db = -INFINITY;
@@ -100,20 +101,28 @@ void Ctr2AudioSpectrumFeeder::tick()
     if (!(fs >= 8000.0)) {
         return;
     }
-    const int span = Ctr2ProxyModel::audioSpectrumSpanHz(src.filterLow, src.filterHigh, fs);
-    const int low = Ctr2ProxyModel::audioSpectrumLowHz(span);
+    int span = Ctr2ProxyModel::audioSpectrumSpanHz(src.filterLow, src.filterHigh, fs);
+    int low = Ctr2ProxyModel::audioSpectrumLowHz(span);
+    // CW, to a device that takes linear windows: the passband around the
+    // pitch, the pitch mid-screen, so it shows how far a signal is from zero
+    // beat. Others keep the log axis from near 0.
+    const bool linear = src.cwPitch > 0 && !src.transmitting && m_model->audioSpectrumLinearWanted();
+    if (linear) {
+        Ctr2ProxyModel::audioSpectrumCwWindow(src.filterLow, src.filterHigh, src.cwPitch, fs,
+                                              &low, &span);
+    }
     // An unchanged block means the tap is not being written: nothing new.
     std::vector<float>& last = src.transmitting ? m_lastTxBlock : m_lastRxBlock;
     if (samples == last) {
         m_fft.reset();
-        m_model->sendAudioSpectrum(low, span, std::vector<float>(kBars, -INFINITY));
+        m_model->sendAudioSpectrum(low, span, std::vector<float>(kBars, -INFINITY), linear);
         return;
     }
     last = samples;
     m_fft.update(samples.data(), ClientEqFftAnalyzer::kFftSize);
     const std::vector<float> bars =
-        barsFromBins(m_fft.magnitudesDb(), fs, low, span, m_fft.coherentGainCorrectionDb());
-    m_model->sendAudioSpectrum(low, span, bars);
+        barsFromBins(m_fft.magnitudesDb(), fs, low, span, m_fft.coherentGainCorrectionDb(), linear);
+    m_model->sendAudioSpectrum(low, span, bars, linear);
 }
 
 } // namespace AetherSDR

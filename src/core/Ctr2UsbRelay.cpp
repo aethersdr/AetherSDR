@@ -579,6 +579,8 @@ void Ctr2UsbRelay::onMessage(const Message& message)
         }
         return;
     case MessageType::AudioSpectrum:
+    case MessageType::AudioSpectrumLinear:
+    case MessageType::CwText:
     case MessageType::RelayUdpPort:
         // Host-to-device only; a device has nothing to tell the host with these.
         return;
@@ -744,9 +746,12 @@ void Ctr2UsbRelay::onExtensionsNegotiated(quint32 extensions)
     emit extensionsChanged(extensions);
 }
 
-bool Ctr2UsbRelay::sendAudioSpectrum(const QByteArray& payload)
+bool Ctr2UsbRelay::sendAudioSpectrum(const QByteArray& payload, MessageType type)
 {
-    const quint32 bit = ctr2hid::capabilityBit(MessageType::AudioSpectrum);
+    if (type != MessageType::AudioSpectrum && type != MessageType::AudioSpectrumLinear) {
+        return false;
+    }
+    const quint32 bit = ctr2hid::capabilityBit(type);
     // The link moves about one report per millisecond. One meter datagram
     // alone can take ~60 reports, so allow that plus headroom (~130 ms);
     // beyond it a frame would be stale on arrival and would crowd the radio.
@@ -756,7 +761,27 @@ bool Ctr2UsbRelay::sendAudioSpectrum(const QByteArray& payload)
         return false;
     }
     std::vector<ctr2hid::Report> reports;
-    if (!m_tx.encodeExtension(MessageType::AudioSpectrum, payload, &reports)) {
+    if (!m_tx.encodeExtension(type, payload, &reports)) {
+        return false;
+    }
+    for (size_t i = 0; i < reports.size(); ++i) {
+        m_reportCosts.push_back({});
+    }
+    m_port->send(reports);
+    return true;
+}
+
+bool Ctr2UsbRelay::sendCwText(const QByteArray& payload)
+{
+    const quint32 bit = ctr2hid::capabilityBit(MessageType::CwText);
+    // Text waits behind a busy link rather than being dropped like a spectrum
+    // frame, but a stalled device must not grow the queue without bound.
+    if (!m_port || m_state != State::Relaying || !(m_port->extensions() & bit)
+        || m_reportCosts.size() >= static_cast<size_t>(kMaxQueuedReports)) {
+        return false;
+    }
+    std::vector<ctr2hid::Report> reports;
+    if (!m_tx.encodeExtension(MessageType::CwText, payload, &reports)) {
         return false;
     }
     for (size_t i = 0; i < reports.size(); ++i) {

@@ -750,5 +750,28 @@ int main(int argc, char** argv)
                      "Initial status FailBypass without InProgress does not emit atuTuneFailed");
     }
 
+    // PTT Mic Override (#6442): v4.3 firmware reports it, earlier firmware never
+    // does. The presence latch is what tells the two apart, so it must fire on
+    // the 0 default even though the value does not change.
+    {
+        TransmitModel pttTx;
+        int stateEdges = 0;
+        QObject::connect(&pttTx, &TransmitModel::stateChanged, [&stateEdges] { ++stateEdges; });
+        ok &= expect(!pttTx.havePttMicOverride() && !pttTx.pttMicOverride(),
+                     "PTT mic override is unreported before any transmit status");
+        pttTx.applyChanges(td([](TransmitDelta& d) { d.rfPower = 50; }));
+        ok &= expect(!pttTx.havePttMicOverride(),
+                     "pre-4.3 transmit status without the key leaves it unreported");
+        stateEdges = 0;
+        pttTx.applyChanges(td([](TransmitDelta& d) { d.pttMicOverride = false; }));
+        ok &= expect(pttTx.havePttMicOverride() && !pttTx.pttMicOverride() && stateEdges == 1,
+                     "a reported 0 default latches the key and announces it");
+        pttTx.applyChanges(td([](TransmitDelta& d) { d.pttMicOverride = true; }));
+        ok &= expect(pttTx.pttMicOverride(), "the radio's echo is adopted");
+        pttTx.resetState();
+        ok &= expect(!pttTx.havePttMicOverride() && !pttTx.pttMicOverride(),
+                     "a session reset forgets the radio's PTT mic override");
+    }
+
     return ok ? 0 : 1;
 }

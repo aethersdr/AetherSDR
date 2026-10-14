@@ -75,8 +75,24 @@ extern "C" {
  * registers for UDP by sending that command with this port. */
 #define CTR2_EXT_RELAY_UDP_PORT 0x41u
 
+/* AUDIO_SPECTRUM_LINEAR, host -> device: the same payload as AUDIO_SPECTRUM,
+ * but the bars always split low..span Hz evenly (ctr2_spectrum_linear_edge),
+ * whatever low is. A device that negotiates it gets it in place of
+ * AUDIO_SPECTRUM for windows that do not start at 0: AetherSDR sends it while
+ * receiving CW, centered on the CW pitch, to show zero beat. */
+#define CTR2_EXT_AUDIO_SPECTRUM_LINEAR 0x42u
+
+/* CW_TEXT, host -> device: CW decoded by the host from the active slice, as
+ * it arrives (about a character at a time; word gaps are spaces). Payload:
+ *   [confidence 0..3][1..CTR2_CW_TEXT_MAX printable ASCII bytes]
+ * Confidence 0 is the most certain, 3 the least. */
+#define CTR2_EXT_CW_TEXT        0x43u
+#define CTR2_CW_TEXT_MAX        32u
+
 /* Lower edge in Hz of bar i of n (i == n gives span_hz, the top edge). */
 float ctr2_spectrum_band_edge(uint16_t low_hz, uint16_t span_hz, uint8_t n, uint8_t i);
+/* Lower edge in Hz of bar i of n for AUDIO_SPECTRUM_LINEAR. */
+float ctr2_spectrum_linear_edge(uint16_t low_hz, uint16_t span_hz, uint8_t n, uint8_t i);
 
 /* Largest payload each extension type may carry; 0 for a type not defined
  * yet. A longer message is a framing error (CTR2_ERR_BAD_LENGTH). */
