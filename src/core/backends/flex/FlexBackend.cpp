@@ -1259,12 +1259,18 @@ void FlexBackend::decodeSliceStatus(int sliceId, const QMap<QString, QString>& k
     // from the command names (FlexLib v4.3.16 Slice.cs:3678,3791,2904); the
     // command names are kept as a fallback (#6447).
     carry(kvs, "nrl_level", d.nrlLevel);
-    if (!d.nrlLevel) carry(kvs, "lms_nr_level", d.nrlLevel);
+    if (!kvs.contains(QStringLiteral("nrl_level"))) {
+        carry(kvs, "lms_nr_level", d.nrlLevel);
+    }
     carry(kvs, "nrs_level", d.nrsLevel);
-    if (!d.nrsLevel) carry(kvs, "speex_nr_level", d.nrsLevel);
+    if (!kvs.contains(QStringLiteral("nrs_level"))) {
+        carry(kvs, "speex_nr_level", d.nrsLevel);
+    }
     carry(kvs, "nrf_level", d.nrfLevel);
     carry(kvs, "anfl_level", d.anflLevel);
-    if (!d.anflLevel) carry(kvs, "lms_anf_level", d.anflLevel);
+    if (!kvs.contains(QStringLiteral("anfl_level"))) {
+        carry(kvs, "lms_anf_level", d.anflLevel);
+    }
 
     // AGC / squelch / RIT / XIT
     carry(kvs, "agc_mode", d.agcMode);
