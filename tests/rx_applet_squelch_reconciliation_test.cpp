@@ -5,6 +5,7 @@
 #include "core/backends/SquelchLevelScale.h"
 #include "core/backends/SliceDelta.h"
 #include "gui/RxApplet.h"
+#include "gui/DisplaySquelchRouting.h"
 #include "gui/VfoWidget.h"
 #include "models/SliceModel.h"
 #include "models/RadioModel.h"
@@ -43,6 +44,7 @@ public:
     bool refuse = false;
     std::optional<RadioCapabilities> published;
     QVector<SliceSquelchRequest> requests;
+    QVector<int> requestIds;
     RadioCapabilities capabilities() const override {
         if (published) { return *published; }
         RadioCapabilities caps;
@@ -52,7 +54,8 @@ public:
     }
     bool isConnected() const override { return true; }
     ReceiveControlPolicy receiveControlPolicy() const override { return ReceiveControlPolicy::Confirmed; }
-    ReceiveDispatch requestSliceSquelch(int, const SliceSquelchRequest& request) override {
+    ReceiveDispatch requestSliceSquelch(int id, const SliceSquelchRequest& request) override {
+        requestIds.append(id);
         requests.append(request);
         return refuse ? ReceiveDispatch::Unsupported : ReceiveDispatch::Dispatched;
     }
@@ -97,6 +100,95 @@ class RxAppletSquelchReconciliationTest : public QObject
     Q_OBJECT
 
 private slots:
+    void flexPerSliceAndPan()
+    {
+        RadioModel radio;
+        auto backend = std::make_unique<EngineSqlBackend>();
+        backend->published = FlexBackend().capabilities();
+        EngineSqlBackend* source = backend.get();
+        radio.setBackendForTest(std::move(backend), QStringLiteral("test"));
+        for (int id = 0; id < 4; ++id) {
+            SliceDelta delta;
+            delta.panId = id < 2 ? "0x40000000" : "0x40000001";
+            delta.mode = "USB";
+            delta.squelchOn = false;
+            delta.squelchLevel = 54 + id;
+            emit source->sliceChanged(id, delta);
+        }
+        SliceModel* a = radio.slice(0);
+        SliceModel* b = radio.slice(1);
+        SliceModel* c = radio.slice(2);
+        SliceModel* d = radio.slice(3);
+        const QString panA = a->panId();
+        const QString panB = c->panId();
+        QCOMPARE(b->panId(), panA);
+        QCOMPARE(d->panId(), panB);
+        QVERIFY(panA != panB);
+        RxApplet rx;
+        rx.setRadioModel(&radio);
+        rx.setSlice(a);
+        RxAppletSquelchTestAccess::mode(rx, RxApplet::SqlMode::Auto, true);
+        QVERIFY(a->displayAutoSquelch());
+        QCOMPARE(source->requestIds.last(), 0);
+        QCOMPARE(source->requests.last().level, 54); // Never the 10 dB margin.
+        status(*a, true, 60);
+        QCOMPARE(a->manualSquelchLevel(), 54);
+        rx.setSqlSliderValueExternal(7);
+        source->requests.clear(); source->requestIds.clear();
+        rx.setSlice(c);
+        QCOMPARE(rx.sqlMode(), RxApplet::SqlMode::Off);
+        QVERIFY(!c->displayAutoSquelch());
+        QVERIFY(source->requests.isEmpty()); // Focus is not Auto activation.
+        QVERIFY(a->displayAutoSquelch());
+        status(*a, true, 61);
+        QCOMPARE(a->manualSquelchLevel(), 54); // Background echoes stay Auto.
+        RxAppletSquelchTestAccess::mode(rx, RxApplet::SqlMode::Auto, true);
+        rx.setSqlSliderValueExternal(17);
+        b->setDisplayAutoSquelchMarginDb(12);
+        b->setDisplayAutoSquelch(true);
+        source->requests.clear(); source->requestIds.clear();
+        DisplaySquelchRouting::applyFloor(radio.slices(), panA, radio, -110);
+        QCOMPARE(source->requestIds, QVector<int>({0, 1}));
+        QCOMPARE(source->requests[0].level, 57);
+        QCOMPARE(source->requests[1].level, 62);
+        DisplaySquelchRouting::applyFloor(radio.slices(), panB, radio, -80);
+        QCOMPARE(source->requestIds, QVector<int>({0, 1, 2}));
+        QCOMPARE(source->requests.last().level, 97);
+        QVERIFY(!d->displayAutoSquelch());
+        DisplaySquelchRouting::applyFloor(radio.slices(), panB, radio, -80);
+        QCOMPARE(source->requests.size(), 3); // Deduplicate per slice.
+        QCOMPARE(DisplaySquelchRouting::displaySlice(radio.slices(), panA, c, 1), b);
+        QCOMPARE(DisplaySquelchRouting::displaySlice(radio.slices(), panA, a, 1), a);
+        rx.setSlice(a);
+        QCOMPARE(rx.sqlMode(), RxApplet::SqlMode::Auto);
+        QCOMPARE(rx.autoSqlMarginDb(), 7);
+        QCOMPARE(c->displayAutoSquelchMarginDb().value(), 17);
+        for (const QString& mode : QStringList{"DIGU", "DIGL", "RTTY", "NT", "CW", "CWU", "CWL", "DFM", "RADE"}) {
+            SliceDelta delta; delta.mode = mode;
+            c->applyChanges(delta);
+            source->requests.clear(); source->requestIds.clear();
+            DisplaySquelchRouting::applyFloor(radio.slices(), panB, radio, -75);
+            QVERIFY(source->requests.isEmpty()); // Includes inactive data/CW.
+            QVERIFY(!DisplaySquelchRouting::scaleForSlice(c, radio));
+        }
+        SliceDelta migrated; migrated.panId = panB;
+        a->applyChanges(migrated);
+        source->requests.clear(); source->requestIds.clear();
+        DisplaySquelchRouting::applyFloor(radio.slices(), panA, radio, -105);
+        QCOMPARE(source->requestIds, QVector<int>({1}));
+        DisplaySquelchRouting::applyFloor(radio.slices(), panB, radio, -85);
+        QCOMPARE(source->requestIds, QVector<int>({1, 0}));
+        status(*a, false, 82);
+        QVERIFY(!a->displayAutoSquelch());
+        source->requests.clear(); source->requestIds.clear();
+        DisplaySquelchRouting::applyFloor(radio.slices(), panB, radio, -80);
+        QVERIFY(source->requests.isEmpty()); // Radio Off wins over client intent.
+        b->invalidateSquelchState();
+        QVERIFY(!b->displayAutoSquelch()); // Reclaimed reconnect state cannot restart Auto.
+        SliceModel reusedId(1);
+        QVERIFY(!reusedId.displayAutoSquelch());
+    }
+
     void flexUnavailableModes_data()
     {
         QTest::addColumn<QString>("mode");

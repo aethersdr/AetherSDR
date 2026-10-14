@@ -818,6 +818,36 @@ void SliceModel::setWfmDeemphasis(int microseconds)
     emit wfmDeemphasisRequested(microseconds);
 }
 
+void SliceModel::setDisplayAutoSquelch(bool enabled)
+{
+    if (refuseOffThread(__func__)) { return; }
+    if (m_displayAutoSquelch == enabled) { return; }
+    m_displayAutoSquelch = enabled;
+    m_displayAutoSquelchLevel.reset();
+    if (enabled) { m_squelchEchoIsManual = false; }
+    emit displayAutoSquelchChanged();
+}
+
+void SliceModel::setDisplayAutoSquelchMarginDb(int marginDb)
+{
+    if (refuseOffThread(__func__)) { return; }
+    marginDb = qBound(5, marginDb, 20);
+    if (m_displayAutoSquelchMarginDb == marginDb) { return; }
+    m_displayAutoSquelchMarginDb = marginDb;
+    m_displayAutoSquelchLevel.reset();
+    emit displayAutoSquelchChanged();
+}
+
+void SliceModel::applyDisplayAutoSquelchLevel(int level)
+{
+    if (refuseOffThread(__func__)) { return; }
+    if (!m_displayAutoSquelch) { return; }
+    level = qBound(1, level, 100);
+    if (m_displayAutoSquelchLevel == level) { return; }
+    m_displayAutoSquelchLevel = level;
+    setSquelch(true, level);
+}
+
 void SliceModel::setSquelch(bool on, int level)
 {
     if (refuseOffThread(__func__)) { return; }
@@ -2041,8 +2071,10 @@ void SliceModel::applyChanges(const SliceDelta& d)
         || d.automaticSquelch || d.automaticSquelchMarginDb) {
         m_squelchOnKnown |= d.squelchOn.has_value();
         m_squelchLevelKnown |= d.squelchLevel.has_value();
-        if (d.squelchOn.has_value())
+        if (d.squelchOn.has_value()) {
             m_squelchOn = *d.squelchOn;
+            if (!m_squelchOn) { setDisplayAutoSquelch(false); }
+        }
         if (d.squelchLevel.has_value()) {
             m_squelchLevel = *d.squelchLevel;
             // Adopt the echoed level as the operator's manual choice only

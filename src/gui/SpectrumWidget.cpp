@@ -4712,7 +4712,7 @@ void SpectrumWidget::drawAutoSqlFloor(QPainter& p, const QRect& specRect)
     const float floorDbm = useKiwiFloor
         ? m_kiwiSdrSquelchLiveFloorDbm
         : m_sqlNoiseFloorDbm;
-    if (!m_autoSquelchEnabled || floorDbm <= -500.0f) { return; }
+    if (!m_autoSquelchEnabled || !m_autoSquelchFloorVisible || floorDbm <= -500.0f) { return; }
     const float norm = (m_refLevel - floorDbm) / m_dynamicRange;
     const int y = specRect.top()
         + static_cast<int>(std::clamp(norm, 0.0f, 1.0f) * specRect.height());
@@ -4800,8 +4800,12 @@ void SpectrumWidget::drawSquelchLine(QPainter& p, const QRect& specRect)
     p.drawText(4, y - 2, label);
 }
 
-void SpectrumWidget::setAutoSquelchEnable(bool on)
+void SpectrumWidget::setAutoSquelchEnable(bool on, bool showFloor)
 {
+    if (m_autoSquelchFloorVisible != showFloor) {
+        m_autoSquelchFloorVisible = showFloor;
+        markOverlayDirty();
+    }
     if (m_autoSquelchEnabled == on) {
         return;
     }
@@ -4853,6 +4857,7 @@ void SpectrumWidget::updateAutoSquelchFromBins(const QVector<float>& binsDbm)
         std::span(binsDbm.constData(), binsDbm.size()), m_sqlNoiseFloorDbm,
         m_squelchScale->offsetDb, m_squelchScale->dbPerStep, m_autoSqlMarginDb);
     if (!suggestion) { return; }
+    emit autoSquelchNoiseFloorChanged(m_sqlNoiseFloorDbm);
     const int level = *suggestion;
     if (level != m_lastAutoSquelchLevel) {
         m_lastAutoSquelchLevel = level;

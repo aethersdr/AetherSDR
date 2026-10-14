@@ -155,6 +155,10 @@ int main(int argc, char** argv)
         check(SpectrumOffscreenTestAccess::sqlImage(sql) != empty,
               "Auto produces visible SQL/floor lines before disable");
         check(suggestions > 0, "eligible Auto produces threshold suggestions");
+        sql.setSquelchLine(false, 0);
+        sql.setAutoSquelchEnable(true, false);
+        check(SpectrumOffscreenTestAccess::sqlImage(sql) == empty,
+              "background same-pan estimator hides floor for selected non-Auto slice");
         sql.setAutoSquelchEnable(false);
         check(SpectrumOffscreenTestAccess::sqlImage(sql) == empty,
               "Auto disable clears both lines immediately without another FFT");

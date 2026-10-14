@@ -1061,9 +1061,8 @@ void RxApplet::buildUI()
                     m_slice->setSquelch(true, level);
             } else if (m_sqlMode == SqlMode::Auto) {
                 // Auto SQL: slider sets the dB margin above the measured
-                // noise floor (5–20 dB).  Persist + broadcast so every
-                // pan's auto-squelch algorithm picks up the new margin
-                // and the suggested level recomputes on the next FFT.
+                // noise floor (5–20 dB). Retain this slice's margin and use
+                // the existing setting only as the seed for new slices.
                 const int margin = std::clamp(v, 5, 20);
                 if (usingEngineAutoSquelch() && m_slice) {
                     m_slice->setAutomaticSquelch(true, margin);
@@ -1071,6 +1070,9 @@ void RxApplet::buildUI()
                     auto& s = AppSettings::instance();
                     s.setValue("AutoSqlMarginDb", QString::number(margin));
                     s.save();
+                    if (m_slice && !usingExternalReceiveSquelch()) {
+                        m_slice->setDisplayAutoSquelchMarginDb(margin);
+                    }
                 }
                 emit autoSqlMarginDbChanged(margin);
             }
@@ -1488,7 +1490,7 @@ QString RxApplet::autoSqlUnavailableReason() const
     return autoSqlAvailable() ? QString() : m_autoSqlUnavailableReason;
 }
 
-void RxApplet::setAutoSqlAvailability(bool available, const QString& reason)
+void RxApplet::setAutoSqlAvailability(bool available, const QString& reason, bool reconcile)
 {
     const QString why = available ? QString() : reason;
     if (available == m_autoSqlAvailable && why == m_autoSqlUnavailableReason) {
@@ -1496,7 +1498,7 @@ void RxApplet::setAutoSqlAvailability(bool available, const QString& reason)
     }
     m_autoSqlAvailable = available;
     m_autoSqlUnavailableReason = why;
-    if (m_sqlMode == SqlMode::Auto && !autoSqlAvailable()) {
+    if (reconcile && m_sqlMode == SqlMode::Auto && !autoSqlAvailable()) {
         // Eligible modes fall back to manual; unavailable modes stop client Auto.
         const bool eligible = !m_slice || squelchAvailableInMode(m_slice->mode());
         setSqlMode(eligible ? SqlMode::Manual : SqlMode::Off,
@@ -1534,6 +1536,9 @@ void RxApplet::cycleSqlModeExternal()
 int RxApplet::autoSqlMarginDb() const
 {
     if (usingEngineAutoSquelch() && m_slice) { return m_slice->automaticSquelchMarginDb(); }
+    if (m_slice && !usingExternalReceiveSquelch() && m_slice->displayAutoSquelchMarginDb()) {
+        return *m_slice->displayAutoSquelchMarginDb();
+    }
     return std::clamp(
         AppSettings::instance().value("AutoSqlMarginDb", "10").toInt(), 5, 20);
 }
@@ -1631,6 +1636,9 @@ void RxApplet::setSqlSliderValueExternal(int v)
             auto& s = AppSettings::instance();
             s.setValue("AutoSqlMarginDb", QString::number(margin));
             s.save();
+            if (m_slice && !usingExternalReceiveSquelch()) {
+                m_slice->setDisplayAutoSquelchMarginDb(margin);
+            }
         }
         emit autoSqlMarginDbChanged(margin);
         if (m_sqlSlider) {
@@ -1736,8 +1744,9 @@ void RxApplet::setSqlMode(SqlMode m, bool propagateToRadio)
     if (m == m_sqlMode) {
         if (m_slice && usingExternalReceiveSquelch()) {
             m_slice->setExternalReceiveAutoSquelch(m == SqlMode::Auto);
-        } else {
-            m_flexSqlMode = m;
+        } else if (m_slice && !usingEngineAutoSquelch()) {
+            if (m == SqlMode::Auto) { m_slice->setDisplayAutoSquelchMarginDb(autoSqlMarginDb()); }
+            m_slice->setDisplayAutoSquelch(m == SqlMode::Auto);
         }
         applySqlModeVisuals();
         return;
@@ -1747,8 +1756,9 @@ void RxApplet::setSqlMode(SqlMode m, bool propagateToRadio)
     m_sqlMode = m;
     if (m_slice && usingExternalReceiveSquelch()) {
         m_slice->setExternalReceiveAutoSquelch(nowAuto);
-    } else {
-        m_flexSqlMode = m;
+    } else if (m_slice && !usingEngineAutoSquelch()) {
+        if (nowAuto) { m_slice->setDisplayAutoSquelchMarginDb(autoSqlMarginDb()); }
+        m_slice->setDisplayAutoSquelch(nowAuto);
     }
     applySqlModeVisuals();
 
@@ -1771,19 +1781,12 @@ void RxApplet::setSqlMode(SqlMode m, bool propagateToRadio)
     // (#4592).
     if (m_slice) m_slice->setSquelchEchoIsManual(m == SqlMode::Manual);
 
-    // Manual / Auto both want the radio squelch ON. Use the same model-backed
-    // value that applySqlModeVisuals() displays so the first Kiwi command
-    // cannot diverge from the slider/overlay before the operator drags it.
-    //
-    // Only Auto sends the dB margin: it is a 5–20 dB offset from the noise
-    // floor, not a 0–100 threshold.  Since #4592 dropped the client-side
-    // copy, the radio's own squelch_level is the only surviving record of
-    // the operator's manual threshold across a reconnect — writing the
-    // margin there on the way to Off would destroy it (Principle II).
+    // Absolute Auto starts at the accepted manual threshold until its own
+    // pan supplies a floor. Only the external relative detector takes a margin.
     if (propagateToRadio && m_slice) {
         saveClientSquelchIntent();
         const bool sqOn = (m != SqlMode::Off);
-        const int level = (m == SqlMode::Auto && !m_exclusiveSquelch)
+        const int level = (m == SqlMode::Auto && usingExternalReceiveSquelch())
             ? autoSqlMarginDb()
             : sqlManualLevel();
         // For an absolute detector Auto starts from the accepted/manual
@@ -2882,9 +2885,8 @@ void RxApplet::connectSlice(SliceModel* s)
     };
 
     // Squelch — derive 3-way mode from the current receive surface's
-    // squelch on/off state. Auto is client-side only: Flex keeps the
-    // applet-wide Auto mode across active Flex slice switches, while Kiwi
-    // replacement receive keeps Auto as per-slice external receive state.
+    // squelch on/off state. Display Auto belongs to this slice; selecting it
+    // never imports another slice's Auto intent.
     {
         QSignalBlocker b1(m_sqlBtn), b2(m_sqlSlider);
         // Do NOT overwrite the Flex manual cache from the slice here. Flex
@@ -2906,10 +2908,8 @@ void RxApplet::connectSlice(SliceModel* s)
             } else {
                 mode = SqlMode::Off;
             }
-        } else if (m_flexSqlMode == SqlMode::Auto) {
+        } else if (s->displayAutoSquelch()) {
             mode = SqlMode::Auto;
-        } else {
-            m_flexSqlMode = mode;
         }
         setSqlMode(mode, /*propagateToRadio=*/false);
     }
@@ -3071,17 +3071,8 @@ void RxApplet::connectSlice(SliceModel* s)
 void RxApplet::disconnectSlice(SliceModel* s)
 {
     s->disconnect(this);
-    if (m_clientSquelchScope.hasRadioIdentity()) {
-        m_flexSqlMode = SqlMode::Off;
-    }
     m_savedSquelchOn = false;
-    // No surface owns this slice's SQL mode once it's detached (review on
-    // #4592), so fall back to the class default: treat echoes as manual.
-    // Leaving the gate closed would permanently deafen a later-reclaimed or
-    // reattached slice to genuine manual changes — the same silent-overwrite
-    // class in the opposite direction, and precisely the non-active-slice
-    // leak #4592 part 1 set out to close.
-    s->setSquelchEchoIsManual(true);
+    s->setSquelchEchoIsManual(!s->displayAutoSquelch());
 }
 
 // ─── Private helpers ──────────────────────────────────────────────────────────

@@ -51,6 +51,25 @@ key=value pairs by locating the last space before the first `=` sign.
 VITA-49 packet format, PCC codes, FFT bin conversion, waterfall tile format,
 audio payload, meter data — see `docs/architecture/vita49-format.md`.
 
+## Display Auto squelch ownership
+
+Flex SQL On/level status and requests belong to a slice ID. Display Auto intent
+and its margin belong to that SliceModel's current receive session; engine-owned
+Auto and external receive Auto remain separate. Selecting a slice does not
+activate its SQL or transfer another slice's Auto intent. Radio SQL Off and
+session invalidation cancel display Auto.
+
+Each pan's FFT floor can drive only eligible Auto slices whose current pan ID
+matches it, including background slices. Multiple Auto slices on one pan share
+the floor estimate but retain independent margins and manual thresholds. The
+pan's single SQL overlay follows its active slice, otherwise its title slice;
+a selected non-Auto slice does not display a background Auto slice's floor.
+Slice migration resets the pan estimator before estimates resume. Flex Auto
+entry preserves the manual absolute threshold until a same-pan estimate arrives;
+relative margins never enter Flex's absolute 0–100 SQL command path. CW stops
+client Auto without a SQL write; unavailable data modes use the existing SQL-Off
+override.
+
 ## GUI↔Radio Sync (No Feedback Loops)
 
 > **The `commandReady` plane is FROZEN and is being removed** (#5262 M4).

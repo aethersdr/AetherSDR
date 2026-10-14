@@ -89,7 +89,13 @@ The **SQL** button cycles through three states:
 | **AUTO** | amber, labeled AUTO | A margin of **5–20 dB** above the measured panadapter noise floor (default 10 dB) |
 
 - In **AUTO**, squelch tracks the band's noise floor as it changes, opening
-  only for signals that stand the margin above it.
+  only for signals that stand the margin above it. On FlexRadio, AUTO and its
+  margin belong to each slice. Selecting another slice does not enable AUTO
+  there or stop a background AUTO slice. Each slice uses only its own
+  panadapter's noise floor; its SQL lines appear only on that panadapter.
+  When multiple slices share a panadapter, the SQL overlay follows the selected
+  slice on that pan, or the slice shown in its title while another pan is selected.
+  AUTO starts at the remembered manual threshold until that pan supplies a floor.
 - In **SQL**, a threshold line shows on the panadapter while you adjust it and
   hides itself 3 seconds after you stop.
 - Your manual level is remembered **per slice**, whichever control changes it

@@ -34,6 +34,16 @@ public:
             emit sliceChanged(id, late);
         });
     }
+    ReceiveDispatch requestSliceControl(int id, const SliceControlRequest& request) override {
+        if (request.field != SliceControlRequest::Field::ActiveSlice || !request.valid()) {
+            return ReceiveDispatch::Unsupported;
+        }
+        for (int sliceId = 0; sliceId < 4; ++sliceId) {
+            SliceDelta delta; delta.active = sliceId == id;
+            emit sliceChanged(sliceId, delta);
+        }
+        return ReceiveDispatch::Dispatched;
+    }
     void setSliceFilter(int, int, int) override {}
     void setSliceAgc(int, const QString&, int) override {}
     void setPanCenter(const QString&, double, PanCenterIntent) override {}
@@ -70,12 +80,25 @@ inline int runFlexSquelchBridgeFixture(QApplication& app)
     initial.squelchOn = false;
     initial.squelchLevel = 60;
     emit source->sliceChanged(0, initial);
+    emit source->panCenterBandwidthChanged(QStringLiteral("0x40000001"), 7.1, 0.1);
+    for (int id = 1; id < 4; ++id) {
+        SliceDelta next = initial;
+        next.panId = id < 2 ? "0x40000000" : "0x40000001";
+        next.letter = QString(QChar('A' + id));
+        next.frequency = id < 2 ? 14.2 : 7.1;
+        next.active = false;
+        next.squelchLevel = 54 + id;
+        emit source->sliceChanged(id, next);
+    }
+    SliceDelta active; active.active = true;
+    emit source->sliceChanged(0, active);
     if (!window.startAutomationBridge()) { return 1; }
     window.show();
     QTimer frames;
     QObject::connect(&frames, &QTimer::timeout, &window, [&window] {
         for (SpectrumWidget* spectrum : window.findChildren<SpectrumWidget*>()) {
-            spectrum->updateSpectrum(QVector<float>(1024, -110.0f));
+            spectrum->updateSpectrum(QVector<float>(1024,
+                spectrum->panIndex() == 0 ? -110.0f : -80.0f));
         }
     });
     frames.start(100);
