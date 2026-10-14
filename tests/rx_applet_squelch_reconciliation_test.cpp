@@ -189,6 +189,45 @@ private slots:
         QVERIFY(!reusedId.displayAutoSquelch());
     }
 
+    void flexLateAutoEchoAfterDataDetachPreservesManual()
+    {
+        RadioModel radio;
+        auto backend = std::make_unique<EngineSqlBackend>();
+        backend->published = FlexBackend().capabilities();
+        EngineSqlBackend* source = backend.get();
+        radio.setBackendForTest(std::move(backend), QStringLiteral("test"));
+        SliceDelta initial; initial.mode = "USB";
+        initial.squelchOn = true; initial.squelchLevel = 54;
+        emit source->sliceChanged(0, initial);
+        initial.squelchOn = false; initial.squelchLevel = 35;
+        emit source->sliceChanged(1, initial);
+        SliceModel* a = radio.slice(0);
+        RxApplet rx; rx.setRadioModel(&radio); rx.setSlice(a);
+        RxAppletSquelchTestAccess::mode(rx, RxApplet::SqlMode::Auto, false);
+        status(*a, true, 80);
+        QCOMPARE(a->manualSquelchLevel(), 54);
+        status(*a, true, 20, "DIGU");
+        rx.setAutoSqlAvailability(false, "DIGU");
+        QCOMPARE(rx.sqlMode(), RxApplet::SqlMode::Off);
+        source->requests.clear();
+        rx.setAutoSqlAvailability(true, {});
+        SliceDelta recovered; recovered.mode = "USB"; a->applyChanges(recovered);
+        QCOMPARE(source->requests.last().level, 54); // Recovery restores manual, not Auto/radio fixed level.
+        RxAppletSquelchTestAccess::mode(rx, RxApplet::SqlMode::Auto, false);
+        status(*a, true, 80);
+        status(*a, true, 20, "DIGU");
+        rx.setAutoSqlAvailability(false, "DIGU");
+        rx.setSlice(radio.slice(1));
+        status(*a, true, 80); // Late Auto readback while the data slice is detached.
+        QCOMPARE(a->manualSquelchLevel(), 54);
+        SliceDelta voice; voice.mode = "USB"; a->applyChanges(voice);
+        rx.setAutoSqlAvailability(true, {});
+        rx.setSlice(a);
+        source->requests.clear();
+        RxAppletSquelchTestAccess::mode(rx, RxApplet::SqlMode::Auto, true);
+        QCOMPARE(source->requests.last().level, 54);
+    }
+
     void flexUnavailableModes_data()
     {
         QTest::addColumn<QString>("mode");

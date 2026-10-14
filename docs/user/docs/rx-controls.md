@@ -105,8 +105,10 @@ The **SQL** button cycles through three states:
 - On FlexRadio, SQL and AUTO are unavailable in **DIGU, DIGL, RTTY, NT,
   DFM and CW**. **RADE** follows its underlying DIGU/DIGL slice. Both panadapter
   squelch lines disappear and Auto tracking stops in these modes, including
-  after incoming radio status. Data modes turn SQL off; CW retains the radio's
-  own squelch state without client Auto updates.
+  after incoming radio status. Data modes request SQL Off; firmware may reject
+  that request and report its fixed native state. The client still stops AUTO
+  and clears both lines. CW retains the radio's own squelch state without
+  client Auto updates.
 - The squelch scale, the panadapter SQL line and Auto SQL follow each radio's
   own scale. On radios where Auto SQL is not available, a slice set to AUTO
   drops to manual at its manual level.

@@ -68,7 +68,8 @@ Slice migration resets the pan estimator before estimates resume. Flex Auto
 entry preserves the manual absolute threshold until a same-pan estimate arrives;
 relative margins never enter Flex's absolute 0–100 SQL command path. CW stops
 client Auto without a SQL write; unavailable data modes use the existing SQL-Off
-override.
+request. Firmware may reject it and report a fixed SQL state; this must not
+restart display Auto or its overlays.
 
 ## GUI↔Radio Sync (No Feedback Loops)
 

@@ -3072,7 +3072,10 @@ void RxApplet::disconnectSlice(SliceModel* s)
 {
     s->disconnect(this);
     m_savedSquelchOn = false;
-    s->setSquelchEchoIsManual(!s->displayAutoSquelch());
+    // Background Auto and unavailable-mode reports cannot become manual
+    // choices. Eligible manual reports still update a detached receiver.
+    s->setSquelchEchoIsManual(!s->displayAutoSquelch()
+        && squelchAvailableInMode(s->mode()));
 }
 
 // ─── Private helpers ──────────────────────────────────────────────────────────
@@ -3329,7 +3332,7 @@ void RxApplet::updateModeSettings(const QString& mode)
         }
     } else if (!sqlDisabled && m_slice && m_savedSquelchOn) {
         m_savedSquelchOn = false;
-        m_slice->setSquelch(true, m_slice->receiveSquelchLevel());
+        m_slice->setSquelch(true, sqlManualLevel());
         setSqlMode(SqlMode::Manual, /*propagateToRadio=*/false);
     }
 
