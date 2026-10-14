@@ -635,7 +635,7 @@ int main(int argc, char** argv)
         lab.kind = RadioTabEntry::Kind::Workspace;
         lab.id = QStringLiteral("aetherlab");
         lab.name = QStringLiteral("AetherLab");
-        lab.detail = QStringLiteral("Antenna analyzer · USB");
+        lab.detail = QStringLiteral("Antenna Analyzer · USB");
         bar->setRadioTabs({connected, inUse, lab});
         bar->setActiveRadio(connected.id);
         bar->setActiveRadio(lab.id);

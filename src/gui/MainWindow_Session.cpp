@@ -315,7 +315,7 @@ void MainWindow::refreshRadioTabs()
         lab.kind = RadioTabEntry::Kind::Workspace;
         lab.id = QStringLiteral("aetherlab");
         lab.name = tr("AetherLab");
-        lab.detail = tr("Antenna analyzer · USB");
+        lab.detail = tr("Antenna Analyzer · USB");
         tabs.append(lab);
     }
     m_titleBar->setRadioTabs(tabs);
