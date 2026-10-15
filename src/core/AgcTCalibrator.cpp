@@ -21,9 +21,15 @@ AgcTCalibrator::AgcTCalibrator(QObject* parent)
     connect(&m_manualTimer, &QTimer::timeout, this, &AgcTCalibrator::onManualSettle);
 }
 
+SliceModel* AgcTCalibrator::slice() const
+{
+    return m_slice.data();
+}
+
 void AgcTCalibrator::setSlice(SliceModel* slice)
 {
-    if (m_slice == slice) {
+    if (m_slice == slice
+        && (!slice || m_sliceGeneration == slice->receiveSessionGeneration())) {
         return;
     }
     // Changing slices invalidates any in-flight calibration.
@@ -32,15 +38,18 @@ void AgcTCalibrator::setSlice(SliceModel* slice)
     }
     if (m_slice) {
         disconnect(m_slice, &SliceModel::agcThresholdModeChanged, this, nullptr);
+        disconnect(m_slice, &SliceModel::externalReceiveReplacementChanged, this, nullptr);
     }
     m_slice = slice;
     m_sliceGeneration = slice ? slice->receiveSessionGeneration() : 0;
     if (slice) {
-        connect(slice, &SliceModel::agcThresholdModeChanged, this, [this] {
+        const auto cancelIfUnavailable = [this] {
             if (!canWrite()) {
                 cancelWithoutRestore();
             }
-        });
+        };
+        connect(slice, &SliceModel::agcThresholdModeChanged, this, cancelIfUnavailable);
+        connect(slice, &SliceModel::externalReceiveReplacementChanged, this, cancelIfUnavailable);
     }
     m_originalValue = -1;
     clear();
@@ -72,7 +81,8 @@ bool AgcTCalibrator::canWrite() const
 
 void AgcTCalibrator::cancelWithoutRestore()
 {
-    const bool running = m_running || m_auto;
+    const bool hadCalibration = m_running || m_auto || m_originalValue >= 0
+        || m_recommended >= 0 || m_pendingManualValue >= 0 || !m_curve.isEmpty();
     m_stepTimer.stop();
     m_manualTimer.stop();
     m_running = false;
@@ -81,7 +91,7 @@ void AgcTCalibrator::cancelWithoutRestore()
     m_recommended = -1;
     m_pendingManualValue = -1;
     m_curve.clear();
-    if (running) {
+    if (hadCalibration) {
         emit finished(false);
     }
 }

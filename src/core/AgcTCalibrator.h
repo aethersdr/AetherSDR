@@ -33,7 +33,7 @@ public:
     explicit AgcTCalibrator(QObject* parent = nullptr);
 
     void setSlice(SliceModel* slice);
-    SliceModel* slice() const { return m_slice.data(); }
+    SliceModel* slice() const;
 
     // Comfortable audio-noise target for the AGC-off solve, in dB (negative).
     void  setTargetLevelDb(float db) { m_targetDb = db; }

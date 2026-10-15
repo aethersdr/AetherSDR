@@ -155,9 +155,11 @@ or manual selection on reconnect.
 measured noise floor on the active slice. It does not transmit.
 Close the window with the corner ✕, Esc or Ctrl+W; closing it during
 an Auto Sweep stops the sweep and puts back the AGC-T it started from.
-Select manual AGC-T before calibrating. If radio Auto AGC-T takes over during
-a sweep, calibration stops without restoring its old threshold or applying a
-recommendation.
+Select manual AGC-T before calibrating. If radio Auto AGC-T or an external
+receiver takes over, or the radio disconnects, calibration discards its curve
+and recommendation without restoring its old threshold. Returning to manual
+AGC-T does not resume the old sweep. After reconnecting, reopen
+**Tools → Calibrate AGC-T...** to record a fresh manual curve.
 
 On the Hermes-Lite 2, AGC runs on the computer: with AGC **Off**, the AGC-T
 slider sets a fixed gain (4–64 dB, default 10 dB) remembered per receiver, and
