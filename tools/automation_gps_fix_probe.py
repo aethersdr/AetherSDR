@@ -64,6 +64,17 @@ def run(bridge, output):
                 assert not labels["gpsClockAgreement"]["value"].startswith("Unavailable"), labels["gpsClockAgreement"]
             evidence.append({"fixture": token, "gps": gps, "readout": readout})
             request(cmd="grab", target="GpsLocationDialog", path=str(output / f"{token.lower()}.png"))
+        # Returning to the same position after either validity veto must resume
+        # address lookup. A previous query must not leave the waiting UI latched.
+        for lost_fix in ["TIME_ONLY", "NO_FIX"]:
+            request(cmd="gps", action="fixfixture", value=lost_fix)
+            request(cmd="gps", action="fixfixture", value="3D")
+            tree = request(cmd="dumpTree")
+            labels = {n.get("objectName"): n for n in nodes(tree) if n.get("objectName")}
+            address = labels["gpsMappedAddress"]["value"]
+            assert address != "Waiting for a valid GPS fix", (lost_fix, address)
+            evidence.append({"fixture": f"3D after {lost_fix}", "address": address,
+                             "refreshEnabled": labels["gpsRefreshAddress"]["enabled"]})
         # Fixture cleanup must remove both fix and legacy validity. A fix label
         # alone after cleanup cannot make the position valid again.
         request(cmd="gps", action="clearfixture")

@@ -782,7 +782,7 @@ void GpsLocationDialog::refreshGps(bool reportArrived)
     m_fixStatusLabel->setToolTip(fixDescription);
     m_fixStatusLabel->setAccessibleDescription(fixDescription);
     if (fixChanged) {
-        QAccessibleEvent event(m_fixStatusLabel, QAccessible::NameChanged);
+        QAccessibleEvent event(m_fixStatusLabel, QAccessible::DescriptionChanged);
         QAccessible::updateAccessibility(&event);
     }
     m_sourceLabel->setText(displayValue(m_radioModel->gpsSource()));
@@ -845,6 +845,10 @@ void GpsLocationDialog::refreshGps(bool reportArrived)
         }
         requestAddress(latitude, longitude, false);
     } else {
+        // Reacquisition at the same coordinates must restore the address too.
+        // The resolver can reuse its cache, but the displayed query is retired.
+        m_hasAddressQueryPosition = false;
+        m_resolvedAddress.clear();
         m_latitudeLabel->setText(QStringLiteral("—"));
         m_longitudeLabel->setText(QStringLiteral("—"));
         m_addressLabel->setText(tr("Waiting for a valid GPS fix"));
