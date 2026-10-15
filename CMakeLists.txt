@@ -236,6 +236,13 @@ option(REQUIRE_RTL "Fail configuration unless the RTL backend and float FFTW are
 option(AETHER_HL2_TX_TXA
        "Hermes-Lite 2 SSB transmit modulator: ON (default) uses WDSP's TXA chain, OFF the in-tree phasing modulator"
        ON)
+# Lets AETHER_FIRMWARE_CATALOG and AETHER_FIRMWARE_TRUST_KEYS replace the
+# firmware catalog and add firmware-signing keys, for testing a publisher's own
+# builds. Off by default and never for release: a release build installs only
+# firmware from aethersdr.com signed by a key built into it.
+option(AETHER_FIRMWARE_DEV_OVERRIDES
+       "Honor the AETHER_FIRMWARE_CATALOG and AETHER_FIRMWARE_TRUST_KEYS environment overrides (testing only)"
+       OFF)
 option(MQTT_TLS "Enable MQTT TLS via OpenSSL (disable for AppImage)" ON)
 option(LOWER_CASE_BINARY_NAME "Make the output binary lower case. Only affects Linux" OFF)
 if(WIN32)
@@ -1771,6 +1778,8 @@ add_library(aethercore ${_aether_core_library_type}
 )
 target_link_libraries(aethercore PRIVATE aether::wdsp)
 target_link_libraries(aethercore PRIVATE aether_monocypher)   # core: EspFirmwareCatalog
+target_compile_definitions(aethercore PRIVATE
+    AETHER_FIRMWARE_DEV_OVERRIDES=$<BOOL:${AETHER_FIRMWARE_DEV_OVERRIDES}>)
 target_link_libraries(aethercore PRIVATE aether_ctr2max_reg)  # core: Ctr2MaxRegistration
 
 # Desktop-only implementations kept out of libaethercore. Their public headers

@@ -3,6 +3,7 @@
 #include "LogManager.h"
 
 #include <QCryptographicHash>
+#include <QRegularExpression>
 #include <QTimer>
 
 #include <utility>
@@ -59,8 +60,23 @@ bool Ctr2FirmwareUpdater::readImage(const QByteArray& file, Image* image, QStrin
         *problem = tr("This image is larger than the device's update slot.");
         return false;
     }
-    image->bytes = file;
     image->version = cString(file, kVersionOffset, 32);
+    // The device reports its version as three bytes it reads from the front
+    // of this string (sscanf "%u.%u.%u"); what it will report is what the
+    // update is checked against.
+    static const QRegularExpression kTriple(QStringLiteral("^(\\d+)\\.(\\d+)\\.(\\d+)"));
+    const QRegularExpressionMatch m = kTriple.match(image->version);
+    if (!m.hasMatch() || m.captured(1).toUInt() > 255 || m.captured(2).toUInt() > 255
+        || m.captured(3).toUInt() > 255) {
+        *problem = tr("This image's version (%1) is not major.minor.patch, so the device could "
+                      "not report it.").arg(image->version);
+        return false;
+    }
+    image->bytes = file;
+    image->reportedVersion = QStringLiteral("%1.%2.%3")
+                                 .arg(m.captured(1).toUInt())
+                                 .arg(m.captured(2).toUInt())
+                                 .arg(m.captured(3).toUInt());
     image->project = cString(file, kProjectOffset, 32);
     return true;
 }
@@ -219,9 +235,9 @@ void Ctr2FirmwareUpdater::onExtensions(quint32 extensions)
             fail(tr("The device came back without reporting its firmware version."));
             return;
         }
-        if (info->version() != m_image.version) {
+        if (info->version() != m_image.reportedVersion) {
             fail(tr("The device came back running %1, not %2: it did not keep the update.")
-                     .arg(info->version(), m_image.version));
+                     .arg(info->version(), m_image.reportedVersion));
             return;
         }
         sendHello();   // the new image keeps itself once it answers
@@ -229,7 +245,7 @@ void Ctr2FirmwareUpdater::onExtensions(quint32 extensions)
         armTimeout(m_timing.answerTimeoutMs);
         break;
     case Phase::Verifying:
-        if (!info || info->version() != m_image.version) {
+        if (!info || info->version() != m_image.reportedVersion) {
             fail(tr("The device is not running the new firmware."));
         } else if (info->pending()) {
             fail(tr("The device runs %1 but has not kept it; it will go back to %2 "
@@ -432,7 +448,10 @@ void Ctr2FirmwareUpdater::onPortFailed(const QString& message)
     switch (m_phase) {
     case Phase::Returning:
     case Phase::Verifying:
-        break;   // expected while the device restarts; keep looking
+        // Expected while the device restarts. lookForDevice() stopped the
+        // poll when it opened the port: look again.
+        m_retry->start(m_timing.pollMs);
+        break;
     case Phase::Confirming:
         setPhase(Phase::Returning, QString());
         m_retry->start(m_timing.pollMs);

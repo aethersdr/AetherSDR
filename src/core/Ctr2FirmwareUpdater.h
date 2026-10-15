@@ -38,6 +38,9 @@ public:
         QByteArray bytes;
         QString project;   // esp_app_desc project_name
         QString version;   // esp_app_desc version
+        // version as the device reports it: "major.minor.patch" from the
+        // front of version, each 0-255.
+        QString reportedVersion;
     };
     // Checks that file is an ESP32-S3 application image (not a merged flash
     // image or a bootloader) with an app description, small enough for one

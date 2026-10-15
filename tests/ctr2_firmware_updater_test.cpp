@@ -71,6 +71,7 @@ struct Device {
     bool hasOtherFirmware{true};   // SWITCH has somewhere to go
     bool hasBootloaderOp{true};    // firmware that answers BOOTLOADER
     QString restartedInto;         // "other" or "bootloader" after a restart request
+    int dropsOnOpen{0};            // this open (1 = the first) fails before it negotiates
 };
 
 void collect(void* ctx, const std::uint8_t report[CTR2_REPORT_BYTES])
@@ -86,12 +87,17 @@ public:
     SimPort(Device* device, quint32 hostCaps)
         : m_dev(device)
     {
-        ++m_dev->opens;
+        const int open = ++m_dev->opens;
         ctr2_rx_init(&m_rx);
         const quint32 offered = m_dev->offersFirmware ? CTR2_CAP(CTR2_EXT_FIRMWARE) : 0;
         m_caps = offered & hostCaps;
         ctr2_rx_set_extensions(&m_rx, m_caps);
-        QTimer::singleShot(0, this, [this] {
+        QTimer::singleShot(0, this, [this, open] {
+            if (open == m_dev->dropsOnOpen) {
+                m_open = false;
+                emit failed(QStringLiteral("device left the bus"));
+                return;
+            }
             std::optional<deviceinfo::Info> info;
             if (m_dev->reportsVersion) {
                 deviceinfo::Info i;
@@ -234,7 +240,7 @@ private:
                 QString problem;
                 Ctr2FirmwareUpdater::readImage(m_dev->stored, &im, &problem);
                 if (!m_dev->rollsBack) {
-                    m_dev->version = im.version;
+                    m_dev->version = im.reportedVersion;   // as its sscanf reads it
                     m_dev->pending = true;
                 }
                 m_dev->gone = true;
@@ -407,6 +413,15 @@ void testReadImage()
     otherChip[12] = 0;   // ESP32
     check(!Ctr2FirmwareUpdater::readImage(otherChip, &im, &problem),
           "readImage refuses an image for another chip");
+    check(Ctr2FirmwareUpdater::readImage(makeImage("1.2.3-rc1"), &im, &problem)
+              && im.version == QStringLiteral("1.2.3-rc1")
+              && im.reportedVersion == QStringLiteral("1.2.3"),
+          "a decorated version is checked as the device reports it");
+    check(!Ctr2FirmwareUpdater::readImage(makeImage("v1.2.3"), &im, &problem)
+              && problem.contains(QStringLiteral("major.minor.patch")),
+          "readImage refuses a version the device could not report");
+    check(!Ctr2FirmwareUpdater::readImage(makeImage("1.256.0"), &im, &problem),
+          "readImage refuses a version part over 255");
     check(!Ctr2FirmwareUpdater::readImage(makeImage("1.0.0", Ctr2FirmwareUpdater::kMaxImageBytes + 1),
                                           &im, &problem),
           "readImage refuses an image larger than a slot");
@@ -430,6 +445,14 @@ void testSuccess()
     }
 }
 
+void testDecoratedVersion()
+{
+    Device dev;
+    const Run run = update(dev, makeImage("0.9.3-rc1"));
+    check(run.ok && run.version == QStringLiteral("0.9.3"),
+          "an image whose version has a suffix updates and is confirmed");
+}
+
 void testDeviceComesBackLater()
 {
     Device dev;
@@ -437,6 +460,18 @@ void testDeviceComesBackLater()
     const Run run = update(dev, makeImage("0.9.2"));
     check(run.ok && dev.version == QStringLiteral("0.9.2") && !dev.pending,
           "the updater waits for the device to come back");
+}
+
+// The device drops off the bus while the new firmware is being checked (the
+// new image bouncing USB): the updater keeps looking and still reports success.
+void testDropWhileVerifying()
+{
+    Device dev;
+    dev.dropsOnOpen = 3;   // the session, after the restart, then this check
+    const Run run = update(dev, makeImage("0.9.2"));
+    check(run.ok && run.version == QStringLiteral("0.9.2"),
+          "a drop while verifying does not turn a kept update into a failure");
+    check(dev.opens == 4, "the updater opened the device again to verify");
 }
 
 void testRejected()
@@ -584,6 +619,8 @@ int main(int argc, char** argv)
     testReadImage();
     testSuccess();
     testDeviceComesBackLater();
+    testDecoratedVersion();
+    testDropWhileVerifying();
     testRejected();
     testNoFirmwareExtension();
     testNoAnswer();

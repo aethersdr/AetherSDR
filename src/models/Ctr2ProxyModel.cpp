@@ -98,6 +98,10 @@ Ctr2ProxyModel::Ctr2ProxyModel(QObject* parent)
 Ctr2ProxyModel::~Ctr2ProxyModel()
 {
     stop();
+    if (m_probe) {
+        disconnect(m_probe, nullptr, this, nullptr);
+        m_probe->shutdown({});
+    }
 }
 
 void Ctr2ProxyModel::setUsbBackend(UsbDeviceSource devices, UsbPortOpener opener,
@@ -190,6 +194,9 @@ void Ctr2ProxyModel::probeFirmwareVersion()
             m_probedVersion = version;
         }
         emit firmwareVersionChanged();
+        // The selection may have changed while this probe ran; probing again
+        // does nothing when it is still this device.
+        QTimer::singleShot(0, this, &Ctr2ProxyModel::probeFirmwareVersion);
     };
     connect(port, &Ctr2HidPort::extensionsNegotiated, this, [port, finish](quint32) {
         const std::optional<ctr2hid::deviceinfo::Info>& info = port->firmwareInfo();

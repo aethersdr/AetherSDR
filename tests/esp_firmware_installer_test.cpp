@@ -49,6 +49,8 @@ public:
     quint32 size = kFlash;
     int writes = 0;
     QList<quint32> written;   // write addresses
+    // A write here erases its sectors, then fails: power lost mid-write.
+    quint32 failAt = 0xFFFFFFFFu;
 
     QString chipName() const override { return chip; }
     QByteArray mac() const override { return QByteArray::fromHex("0102030405AA"); }
@@ -69,6 +71,10 @@ public:
         }
         const quint32 end = (address + data.size() + kSector - 1) / kSector * kSector;
         flash.replace(address, end - address, QByteArray(end - address, '\xFF'));
+        if (address == failAt) {
+            *error = QStringLiteral("Interrupted after erase");
+            return false;
+        }
         flash.replace(address, data.size(), data);
         ++writes;
         written.append(address);
@@ -388,7 +394,8 @@ void testStart()
     check(installer.start(m, &problem), "start succeeds");
     check(EspFirmwareInstaller::newestOf(d.flash.mid(kOtadata, 0x2000), {0, 1, 2}, 3) == 2,
           "start selects the firmware's current slot, not the first");
-    check(d.writes - writes == 1 && d.written.last() == kOtadata, "and writes only the boot selection");
+    check(d.writes - writes == 1 && (d.written.last() & ~(kSector * 2 - 1)) == kOtadata,
+          "and writes only the boot selection");
     check(vendorIntact(d, before) && d.flash.mid(kSlot1, 0x600000) == before.flash.mid(kSlot1, 0x600000),
           "everything else is as it was");
 }
@@ -411,6 +418,73 @@ void testBackupRestore()
           "a backup of another size is refused");
 }
 
+// A boot selection interrupted after its erase leaves the entry the device
+// started from in place.
+void testInterruptedBootSelection()
+{
+    const QHash<QString, QByteArray> f = files();
+    const EspFirmwareManifest m = parsed(manifestJson(f));
+    QString problem;
+    FakeFlash d = vendorDevice();
+    EspFirmwareInstaller installer(&d, {});
+    check(installer.install(m, f, &problem), "install");
+
+    // The vendor's entry is sequence 1 in the first sector, the install's is
+    // sequence 2 in the second; the next selection replaces the first.
+    int interrupted = 0;
+    for (quint32 at : {kOtadata, kOtadata + kSector}) {
+        FakeFlash e = d;
+        e.failAt = at;
+        EspFirmwareInstaller i(&e, {});
+        problem.clear();
+        const bool ok = i.start(m, &problem);
+        const QList<EspFirmwareInstaller::OtaEntry> entries =
+            EspFirmwareInstaller::readOtadata(e.flash.mid(kOtadata, 0x2000));
+        const int valid = int(entries[0].valid) + int(entries[1].valid);
+        if (ok)
+            continue;   // that sector was not the one to replace
+        ++interrupted;
+        check(!ok && problem.contains(QStringLiteral("Interrupted")),
+              "an interrupted boot selection reports the failure");
+        check(valid >= 1, "an interrupted boot selection leaves a valid entry");
+        check(EspFirmwareInstaller::newestOf(e.flash.mid(kOtadata, 0x2000), {0, 1, 2}, 3) == 1,
+              "and the device still starts what it started before");
+    }
+    check(interrupted == 1, "exactly one otadata sector is written");
+}
+
+// Cancelling before a write starts writes nothing.
+void testCancelBeforeWrite()
+{
+    const QHash<QString, QByteArray> f = files();
+    const EspFirmwareManifest m = parsed(manifestJson(f));
+    QString problem;
+    const auto refuse = [](const QString&, qint64, qint64) { return false; };
+    problem.clear();
+
+    FakeFlash d = vendorDevice();
+    QByteArray saved = d.flash;
+    saved[0] = 'R';
+    EspFirmwareInstaller restore(&d, refuse);
+    check(!restore.restore(saved, &problem) && d.writes == 0 && !problem.isEmpty(),
+          "a cancelled restore writes nothing, not even its first chunk");
+
+    d = vendorDevice();
+    EspFirmwareInstaller ok(&d, {});
+    check(ok.install(m, f, &problem), "install");
+    const int writes = d.writes;
+    problem.clear();
+    EspFirmwareInstaller start(&d, refuse);
+    check(!start.start(m, &problem) && d.writes == writes && !problem.isEmpty(),
+          "a cancelled start leaves the boot selection alone");
+
+    d = vendorDevice();
+    problem.clear();
+    EspFirmwareInstaller install(&d, refuse);
+    check(!install.install(m, f, &problem) && d.writes == 0 && !problem.isEmpty(),
+          "a cancelled install writes nothing");
+}
+
 } // namespace
 
 int main()
@@ -421,6 +495,8 @@ int main()
     testInstallRefusals();
     testStart();
     testBackupRestore();
+    testInterruptedBootSelection();
+    testCancelBeforeWrite();
     if (g_failures) {
         std::fprintf(stderr, "%d check(s) failed\n", g_failures);
         return 1;

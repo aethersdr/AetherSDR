@@ -398,14 +398,26 @@ simulated device that runs the reference for its side of the link.
 The CTR2 Proxy applet's **Install** button opens the CTR2-Max Firmware window
 (`FirmwareInstallDialog`). It installs AetherCTR2 beside the CTR2-Max's stock
 firmware, from releases listed in AetherSDR's firmware catalog
-(`EspFirmwareCatalog`, `https://www.aethersdr.com/firmware/catalog.json`; for
-testing, `AETHER_FIRMWARE_CATALOG` points elsewhere).
+(`EspFirmwareCatalog`, `https://www.aethersdr.com/firmware/catalog.json`).
 
 - **Trust.** Each release is a manifest (`EspFirmwareManifest`) with an
   Ed25519 signature (`manifest.json.sig`) by a firmware-release key built
-  into AetherSDR (`AETHER_FIRMWARE_TRUST_KEYS` adds one for testing), and the
-  manifest's SHA-256s cover every image. There is no way to install an image
-  of one's own.
+  into AetherSDR, and the manifest's SHA-256s cover every image. There is no
+  way to install an image of one's own. The signature is the whole trust
+  chain: the catalog is unsigned and only says where releases are, so a
+  wrong catalog can at most offer a different validly signed release. Older
+  releases are listed on purpose, so an operator can go back to one; the
+  version an operator picks is the one installed (the signed manifest must
+  name it), and an update over the cable names the version the unit runs
+  before it starts.
+- **Testing a publisher's builds.** A build configured with
+  `-DAETHER_FIRMWARE_DEV_OVERRIDES=ON` (off by default, never for release)
+  honors `AETHER_FIRMWARE_CATALOG` (another catalog URL) and
+  `AETHER_FIRMWARE_TRUST_KEYS` (extra keys, hex), and logs each override it
+  uses. A release build has neither.
+- **Downloads** are capped as they arrive: the catalog at 256 KiB, a
+  manifest at 64 KiB, a signature at 1 KiB and an image at the size its
+  signed manifest gives (16 MiB at most).
 - **Layout.** The manifest lists the images and where they go, the regions
   never written (the stock firmware, its settings and its registration), the
   partition-table rows that must be on the unit and stay, and the app slots
@@ -415,7 +427,21 @@ testing, `AETHER_FIRMWARE_CATALOG` points elsewhere).
 - **Registration.** AetherCTR2 is installed only on a unit its stock firmware
   has registered: `Reg.txt` in the stock firmware's LittleFS volume
   (`Ctr2MaxRegistration`, read-only littlefs). The installer checks it before
-  writing anything, and AetherCTR2 checks it again at every start.
+  writing anything, and AetherCTR2 checks it again at every start. This
+  honors the agreement with Lynovation by checking that the stock firmware
+  registered the unit. It looks for `Reg.txt` (the firmware also reads the
+  call sign in it), never for a registration key, and is not itself a
+  copy-protection mechanism.
+- **Versions.** The unit reports its version as three bytes, read from the
+  front of its `esp_app_desc` version string (`%u.%u.%u`). A release's
+  version must therefore start with `major.minor.patch`, each 0–255; a suffix
+  (`0.9.3-rc1`) is allowed and ignored by the check. `Ctr2FirmwareUpdater`
+  refuses an image whose version does not, and compares the unit's report
+  against the same three numbers.
+- **Boot selection.** The boot selection (otadata) has two entries, one per
+  sector. Selecting a slot rewrites only the entry not in use, as its own
+  sector, so an interrupted write always leaves the entry the unit started
+  from.
 - **Two paths.** A unit running AetherCTR2 is updated over the link
   (Firmware, above). One running its stock firmware, or held in ROM download
   mode, is installed through the chip's ROM bootloader (`EspFlasher`, over

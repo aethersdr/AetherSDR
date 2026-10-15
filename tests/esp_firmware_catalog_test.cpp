@@ -224,6 +224,51 @@ void testDownload()
     check(!r.ok && r.message.contains(QStringLiteral("manifest")), "a broken manifest is refused");
 }
 
+// Every download is capped as it arrives: more than the limit is refused,
+// whatever its content.
+void testLimits()
+{
+    const Key trusted('a');
+    EspFirmwareCatalog::setTrustedKeysForTesting({trusted.pub});
+    QTemporaryDir dir;
+    const QDir d(dir.path());
+    QByteArray app(5000, 'x');
+    app[0] = static_cast<char>(0xE9);
+    const QByteArray manifest = manifestFor(app);
+    const QUrl url = QUrl::fromLocalFile(d.filePath("manifest.json"));
+
+    // A manifest of 32 MiB: the manifest cap is 64 KiB.
+    write(d.filePath("manifest.json"), manifest + QByteArray(32 * 1024 * 1024, ' '));
+    Result r = fetch(url);
+    check(!r.ok && r.message.contains(QStringLiteral("too large")), "an oversized manifest is refused");
+
+    write(d.filePath("manifest.json"), manifest);
+    write(d.filePath("manifest.json.sig"), trusted.sign(manifest).toBase64() + QByteArray(4096, '\n'));
+    r = fetch(url);
+    check(!r.ok && r.message.contains(QStringLiteral("too large")), "an oversized signature is refused");
+
+    write(d.filePath("manifest.json.sig"), trusted.sign(manifest).toBase64());
+    write(d.filePath("app.bin"), app + QByteArray(1024 * 1024, 'z'));
+    r = fetch(url);
+    check(!r.ok && r.message.contains(QStringLiteral("intact")),
+          "an image longer than its manifest says is refused");
+
+    write(d.filePath("catalog.json"), QByteArray(R"({"format":1,"products":[]})")
+                                          + QByteArray(1024 * 1024, ' '));
+    EspFirmwareDownloader cd;
+    bool done = false;
+    QString message;
+    QObject::connect(&cd, &EspFirmwareDownloader::catalogReady,
+                     [&](const EspFirmwareCatalog&) { done = true; });
+    QObject::connect(&cd, &EspFirmwareDownloader::failed, [&](const QString& m) {
+        done = true;
+        message = m;
+    });
+    cd.fetchCatalog(QUrl::fromLocalFile(d.filePath("catalog.json")));
+    waitUntil([&] { return done; });
+    check(message.contains(QStringLiteral("too large")), "an oversized catalog is refused");
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -232,6 +277,7 @@ int main(int argc, char** argv)
     testVerify();
     testCatalog();
     testDownload();
+    testLimits();
     if (g_failures) {
         std::fprintf(stderr, "%d check(s) failed\n", g_failures);
         return 1;

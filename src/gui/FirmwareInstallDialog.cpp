@@ -459,14 +459,20 @@ void FirmwareInstallDialog::onInstall()
 void FirmwareInstallDialog::installOverLink()
 {
     // The application image is the one the manifest puts in one of the
-    // firmware's own slots; the device picks the slot itself.
+    // firmware's own slots; the device picks the slot itself. A release with
+    // more than one is not one the link can install.
     QByteArray app;
+    int apps = 0;
     for (const EspFirmwareManifest::Image& image : m_manifest.images) {
         for (int slot : m_manifest.ownSlots) {
-            if (image.offset == m_manifest.appSlots.value(slot))
+            if (image.offset == m_manifest.appSlots.value(slot)) {
                 app = m_files.value(image.file);
+                ++apps;
+            }
         }
     }
+    if (apps != 1)
+        app.clear();
     Ctr2FirmwareUpdater::Image image;
     QString problem;
     if (app.isEmpty())
@@ -500,7 +506,10 @@ void FirmwareInstallDialog::installOverLink()
         m_step->setText(problem);
         return;
     }
-    m_poll->stop();
+    // An update that could not even open the device has already finished,
+    // and onFinished() restarted the poll.
+    if (m_model->firmwareUpdateRunning())
+        m_poll->stop();
     sync();
 }
 
@@ -520,8 +529,10 @@ void FirmwareInstallDialog::restartDevice(bool bootloader)
         m_step->setText(problem);
         return;
     }
-    m_step->setText(tr("Asking the CTR2-Max to restart…"));
-    m_poll->stop();
+    if (m_model->firmwareUpdateRunning()) {
+        m_step->setText(tr("Asking the CTR2-Max to restart…"));
+        m_poll->stop();
+    }
     sync();
 }
 

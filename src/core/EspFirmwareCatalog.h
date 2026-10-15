@@ -43,7 +43,9 @@ struct EspFirmwareCatalog {
     QList<Product> products;
 
     static const char* const kCatalogUrl;
-    // kCatalogUrl, or AETHER_FIRMWARE_CATALOG from the environment.
+    // kCatalogUrl. A build configured with AETHER_FIRMWARE_DEV_OVERRIDES
+    // (off by default, never for release) takes AETHER_FIRMWARE_CATALOG from
+    // the environment instead, and logs that it did.
     static QUrl catalogUrl();
 
     static bool parse(const QByteArray& json, const QUrl& base, EspFirmwareCatalog* out,
@@ -52,9 +54,10 @@ struct EspFirmwareCatalog {
     // Whether signature (64 bytes, or their base64) is a trusted key's
     // Ed25519 signature of manifest.
     static bool verify(const QByteArray& manifest, const QByteArray& signature);
-    // The firmware-release public keys (32 bytes each): those built in, and
-    // any given as hex in AETHER_FIRMWARE_TRUST_KEYS (comma-separated), for
-    // testing a publisher's own builds.
+    // The firmware-release public keys (32 bytes each): those built in. A
+    // build configured with AETHER_FIRMWARE_DEV_OVERRIDES also trusts any
+    // given as hex in AETHER_FIRMWARE_TRUST_KEYS (comma-separated), for
+    // testing a publisher's own builds, and logs each one.
     static QList<QByteArray> trustedKeys();
     // Replaces the trusted keys (tests).
     static void setTrustedKeysForTesting(const QList<QByteArray>& keys);
@@ -62,7 +65,8 @@ struct EspFirmwareCatalog {
 
 // Fetches the catalog, or a release: a manifest, its signature and its
 // images, every one checked. Works for http(s) and file URLs alike, so a
-// release unpacked on disk installs the same way.
+// release unpacked on disk installs the same way. Each download is capped as
+// it arrives (an image at its manifest's size), whatever the server claims.
 class EspFirmwareDownloader : public QObject {
     Q_OBJECT
 
@@ -86,6 +90,8 @@ private:
     enum class Stage { Idle, Catalog, Manifest, Signature, Image };
 
     void get(const QUrl& url, Stage stage);
+    bool readBody();
+    void refuse();
     void onFinished();
     void nextImage();
     void fail(const QString& message);
@@ -94,6 +100,8 @@ private:
     QNetworkReply* m_reply{nullptr};
     Stage m_stage{Stage::Idle};
     QUrl m_url;
+    qint64 m_limit{0};
+    QByteArray m_body;
     QString m_expectedVersion;
     QByteArray m_manifestBytes;
     EspFirmwareManifest m_manifest;

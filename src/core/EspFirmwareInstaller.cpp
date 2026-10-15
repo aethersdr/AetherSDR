@@ -134,8 +134,11 @@ bool EspFirmwareInstaller::check(const EspFirmwareManifest& manifest, QString* p
     }
     for (const EspFirmwareManifest::Region& r : manifest.require) {
         QByteArray bytes;
-        if (!step(tr("Checking the device"), 0, r.size)
-            || !m_target->read(r.offset, r.size, &bytes, {}, problem))
+        if (!step(tr("Checking the device"), 0, r.size)) {
+            *problem = tr("Cancelled.");
+            return false;
+        }
+        if (!m_target->read(r.offset, r.size, &bytes, {}, problem))
             return false;
         if (QCryptographicHash::hash(bytes, QCryptographicHash::Sha256) != r.sha256) {
             *problem = tr("This device is not the one this firmware is for: its %1 is not as "
@@ -171,6 +174,12 @@ bool EspFirmwareInstaller::writeRegion(quint32 offset, const QByteArray& data, c
     }
     const qint64 total = data.size();
     for (qint64 done = 0; done < total;) {
+        // A cancel is honored before each write starts, never in the middle
+        // of one.
+        if (!step(name, done, total)) {
+            *problem = done ? tr("Cancelled part way through.") : tr("Cancelled.");
+            return false;
+        }
         const QByteArray chunk = data.mid(done, kWriteChunk);
         const quint32 at = offset + static_cast<quint32>(done);
         if (!m_target->matches(at, chunk)) {
@@ -178,10 +187,10 @@ bool EspFirmwareInstaller::writeRegion(quint32 offset, const QByteArray& data, c
                 return false;
         }
         done += chunk.size();
-        if (!step(name, done, total)) {
-            *problem = tr("Cancelled part way through.");
-            return false;
-        }
+    }
+    if (!step(name, total, total)) {
+        *problem = tr("Cancelled.");
+        return false;
     }
     return true;
 }
@@ -193,7 +202,19 @@ bool EspFirmwareInstaller::writeOtadata(const EspFirmwareManifest& manifest, int
     if (!m_target->read(manifest.otadata, kOtadataSize, &otadata, {}, problem))
         return false;
     const QByteArray next = selectSlot(otadata, slot, manifest.appSlots.size());
-    return writeRegion(manifest.otadata, next, tr("Selecting the firmware to start"), problem);
+    // Only the entry selectSlot replaced is written, one sector on its own:
+    // the other entry, the one the device starts from now, stays intact
+    // until the new one is in place, so an interrupted write never leaves
+    // the device without a valid boot selection.
+    for (quint32 at = 0; at < kOtadataSize; at += kSector) {
+        const QByteArray sector = next.mid(at, kSector);
+        if (sector == otadata.mid(at, kSector))
+            continue;
+        if (!writeRegion(manifest.otadata + at, sector, tr("Selecting the firmware to start"),
+                         problem))
+            return false;
+    }
+    return true;
 }
 
 bool EspFirmwareInstaller::install(const EspFirmwareManifest& manifest,
@@ -219,12 +240,12 @@ bool EspFirmwareInstaller::install(const EspFirmwareManifest& manifest,
             return false;
         const quint64 rEnd = quint64(r.offset) + r.size;
         for (const EspFirmwareManifest::Image& image : manifest.images) {
+            const QByteArray bytes = files.value(image.file);
             const quint64 iEnd = quint64(image.offset) + image.size;
             const quint64 eEnd = sectorCeil(iEnd);
             for (quint64 a = qMax<quint64>(r.offset, image.offset); a < qMin(rEnd, eEnd); ++a) {
                 after[static_cast<qsizetype>(a - r.offset)] =
-                    a < iEnd ? files.value(image.file)[static_cast<qsizetype>(a - image.offset)]
-                             : '\xFF';
+                    a < iEnd ? bytes.at(static_cast<qsizetype>(a - image.offset)) : '\xFF';
             }
         }
         if (QCryptographicHash::hash(after, QCryptographicHash::Sha256) != r.sha256) {

@@ -1,5 +1,8 @@
 #include "Ctr2MaxRegistration.h"
 
+#include <QMutex>
+#include <QMutexLocker>
+
 #include <cstring>
 
 extern "C" {
@@ -23,6 +26,10 @@ int readBytes(void* ctx, uint32_t offset, void* buf, uint32_t len)
 
 Result check(const QByteArray& partition, QString* call)
 {
+    // ctr2max_registration() keeps its state in statics (it is shared with
+    // the firmware, which has little stack): one check at a time.
+    static QMutex lock;
+    const QMutexLocker locker(&lock);
     char buf[32] = {};
     // The reader only reads through its context.
     void* ctx = const_cast<QByteArray*>(&partition);

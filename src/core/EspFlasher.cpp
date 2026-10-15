@@ -153,6 +153,8 @@ esp_loader_error_t portWrite(esp_loader_port_t* port, const uint8_t* data, uint1
         const qint64 n = serial->write(reinterpret_cast<const char*>(data) + sent, size - sent);
         if (n < 0)
             return ESP_LOADER_ERROR_FAIL;
+        if (n == 0 && deadline.hasExpired())
+            return ESP_LOADER_ERROR_TIMEOUT;
         sent += n;
     }
     while (serial->bytesToWrite() > 0) {

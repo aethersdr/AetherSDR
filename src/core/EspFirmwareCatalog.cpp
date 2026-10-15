@@ -1,5 +1,7 @@
 #include "EspFirmwareCatalog.h"
 
+#include "LogManager.h"
+
 #include <QCoreApplication>
 #include <QCryptographicHash>
 #include <QJsonArray>
@@ -10,6 +12,7 @@
 #include <QNetworkRequest>
 
 #include <optional>
+#include <utility>
 
 extern "C" {
 #include "monocypher-ed25519.h"
@@ -20,7 +23,11 @@ namespace AetherSDR {
 namespace {
 
 constexpr int kFormat = 1;
+// What each download may be, at most; more is refused as it arrives, before
+// it is buffered. An image must be exactly its manifest's size.
+constexpr qint64 kMaxCatalogBytes = 256 * 1024;
 constexpr qint64 kMaxManifestBytes = 64 * 1024;
+constexpr qint64 kMaxSignatureBytes = 1024;
 constexpr qint64 kMaxImageBytes = 16 * 1024 * 1024;
 
 QString tr(const char* text)
@@ -48,8 +55,16 @@ const char* const EspFirmwareCatalog::kCatalogUrl = "https://www.aethersdr.com/f
 
 QUrl EspFirmwareCatalog::catalogUrl()
 {
+#if AETHER_FIRMWARE_DEV_OVERRIDES
     const QByteArray env = qgetenv("AETHER_FIRMWARE_CATALOG");
-    return QUrl::fromUserInput(QString::fromUtf8(env.isEmpty() ? QByteArray(kCatalogUrl) : env));
+    if (!env.isEmpty()) {
+        const QUrl url = QUrl::fromUserInput(QString::fromUtf8(env));
+        qCWarning(lcFirmware) << "AETHER_FIRMWARE_CATALOG: using the firmware catalog at"
+                              << url.toString() << "instead of" << kCatalogUrl;
+        return url;
+    }
+#endif
+    return QUrl(QString::fromLatin1(kCatalogUrl));
 }
 
 bool EspFirmwareCatalog::parse(const QByteArray& json, const QUrl& base, EspFirmwareCatalog* out,
@@ -95,11 +110,16 @@ QList<QByteArray> EspFirmwareCatalog::trustedKeys()
     QList<QByteArray> keys;
     for (const char* hex : kBuiltInKeys)
         keys.append(QByteArray::fromHex(hex));
+#if AETHER_FIRMWARE_DEV_OVERRIDES
     for (const QByteArray& hex : qgetenv("AETHER_FIRMWARE_TRUST_KEYS").split(',')) {
         const QByteArray key = QByteArray::fromHex(hex.trimmed());
-        if (key.size() == 32)
+        if (key.size() == 32) {
+            qCWarning(lcFirmware) << "AETHER_FIRMWARE_TRUST_KEYS: also trusting firmware signed by"
+                                  << key.toHex();
             keys.append(key);
+        }
     }
+#endif
     return keys;
 }
 
@@ -170,7 +190,24 @@ void EspFirmwareDownloader::get(const QUrl& url, Stage stage)
     QNetworkRequest request(url);
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
                          QNetworkRequest::NoLessSafeRedirectPolicy);
+    switch (stage) {
+    case Stage::Catalog: m_limit = kMaxCatalogBytes; break;
+    case Stage::Manifest: m_limit = kMaxManifestBytes; break;
+    case Stage::Signature: m_limit = kMaxSignatureBytes; break;
+    case Stage::Image: m_limit = m_manifest.images[m_image].size; break;
+    case Stage::Idle: m_limit = 0; break;
+    }
+    m_body.clear();
     m_reply = m_nam->get(request);
+    m_reply->setReadBufferSize(64 * 1024);
+    connect(m_reply, &QNetworkReply::metaDataChanged, this, [this] {
+        bool known = false;
+        const qint64 length =
+            m_reply ? m_reply->header(QNetworkRequest::ContentLengthHeader).toLongLong(&known) : 0;
+        if (known && length > m_limit)
+            refuse();
+    });
+    connect(m_reply, &QNetworkReply::readyRead, this, &EspFirmwareDownloader::readBody);
     connect(m_reply, &QNetworkReply::finished, this, &EspFirmwareDownloader::onFinished);
     if (stage == Stage::Image) {
         const QString file = m_manifest.images[m_image].file;
@@ -178,6 +215,32 @@ void EspFirmwareDownloader::get(const QUrl& url, Stage stage)
                 [this, file](qint64 done, qint64 total) {
                     emit progress(tr("Downloading %1").arg(file), done, total);
                 });
+    }
+}
+
+bool EspFirmwareDownloader::readBody()
+{
+    // Never holds more than the limit: one byte past it is enough to refuse.
+    if (m_reply)
+        m_body += m_reply->read(m_limit + 1 - m_body.size());
+    if (m_body.size() <= m_limit)
+        return true;
+    refuse();
+    return false;
+}
+
+void EspFirmwareDownloader::refuse()
+{
+    const QUrl url = m_reply ? m_reply->url() : m_url;
+    const Stage stage = m_stage;
+    const QString file = stage == Stage::Image ? m_manifest.images[m_image].file : url.fileName();
+    cancel();
+    m_body.clear();
+    switch (stage) {
+    case Stage::Catalog: fail(tr("The firmware catalog is too large.")); break;
+    case Stage::Manifest: fail(tr("The firmware manifest is too large.")); break;
+    case Stage::Image: fail(tr("%1 did not download intact.").arg(file)); break;
+    default: fail(tr("%1 is too large.").arg(file)); break;
     }
 }
 
@@ -192,6 +255,8 @@ void EspFirmwareDownloader::onFinished()
     QNetworkReply* reply = m_reply;
     if (!reply)
         return;
+    if (reply->error() == QNetworkReply::NoError && !readBody())
+        return;   // refused: too large
     m_reply = nullptr;
     reply->deleteLater();
     const QUrl url = reply->url();
@@ -199,7 +264,7 @@ void EspFirmwareDownloader::onFinished()
         fail(tr("Could not download %1: %2").arg(url.fileName(), reply->errorString()));
         return;
     }
-    const QByteArray body = reply->readAll();
+    const QByteArray body = std::exchange(m_body, {});
     QString problem;
 
     switch (m_stage) {
@@ -214,10 +279,6 @@ void EspFirmwareDownloader::onFinished()
         return;
     }
     case Stage::Manifest:
-        if (body.size() > kMaxManifestBytes) {
-            fail(tr("The firmware manifest is too large."));
-            return;
-        }
         m_manifestBytes = body;
         get(QUrl(m_url.toString() + QStringLiteral(".sig")), Stage::Signature);
         return;

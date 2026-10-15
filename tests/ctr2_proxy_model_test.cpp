@@ -9,6 +9,7 @@
 #include <QCoreApplication>
 #include <QFile>
 #include <QHostAddress>
+#include <QPointer>
 #include <QRegularExpression>
 #include <QSet>
 #include <QTemporaryDir>
@@ -65,6 +66,36 @@ public:
 private:
     std::shared_ptr<PortLog> m_log;
     bool m_open{true};
+};
+
+// Injected firmware-probe port: the test decides when negotiation finishes.
+class ProbePort : public AetherSDR::Ctr2HidPort {
+public:
+    explicit ProbePort(QString path, std::shared_ptr<PortLog> log)
+        : m_path(std::move(path)), m_log(std::move(log))
+    {
+        ++m_log->opened;
+    }
+    bool isOpen() const override { return true; }
+    void send(const std::vector<AetherSDR::ctr2hid::Report>&) override {}
+    void discardQueued() override {}
+    void shutdown(const std::vector<AetherSDR::ctr2hid::Report>&) override
+    {
+        ++m_log->shutdowns;
+        deleteLater();
+    }
+    QString description() const override { return m_path; }
+    void negotiate(int major)
+    {
+        AetherSDR::ctr2hid::deviceinfo::Info info;
+        info.major = major;
+        setExtensions(0, info);
+    }
+    QString path() const { return m_path; }
+
+private:
+    QString m_path;
+    std::shared_ptr<PortLog> m_log;
 };
 
 void testRelayFollowsAetherSdrsRadio()
@@ -214,6 +245,59 @@ void testSelfNamedDevices()
           "the prefix is case-sensitive and needs the Espressif IDs");
 }
 
+// Selecting another CTR2 while the first one's version probe is still
+// pending probes the new one once the first finishes; a model destroyed
+// mid-probe closes the probe's port.
+void testProbeFollowsSelection()
+{
+    using Info = AetherSDR::Ctr2HidPort::DeviceInfo;
+    const Info a{QStringLiteral("ctr2-a"), 0x303A, 0x1001, {}, QStringLiteral("ESP32S3_DEV"), {}};
+    const Info b{QStringLiteral("ctr2-b"), 0x303A, 0x1001, {}, QStringLiteral("M5STACK_DIAL"), {}};
+    auto log = std::make_shared<PortLog>();
+    auto probes = std::make_shared<std::vector<QPointer<ProbePort>>>();
+    const auto settle = [] {
+        for (int i = 0; i < 5; ++i)
+            QCoreApplication::processEvents();
+    };
+    {
+        Ctr2ProxyModel model;
+        model.setTransport(Ctr2ProxyModel::Transport::Usb);
+        model.setUsbBackend(
+            [a, b] { return QList<Info>{a, b}; },
+            [](const Info&, QString*) { return static_cast<AetherSDR::Ctr2HidPort*>(nullptr); },
+            [log, probes](const Info& d, quint32, QString*) -> AetherSDR::Ctr2HidPort* {
+                auto* port = new ProbePort(d.path, log);
+                probes->push_back(port);
+                return port;
+            });
+        settle();
+        check(probes->size() == 1 && probes->back() && probes->back()->path() == a.path,
+              "the preselected CTR2 is probed");
+
+        model.setUsbDevicePath(b.path);
+        settle();
+        check(probes->size() == 1, "one probe at a time");
+        (*probes)[0]->negotiate(1);
+        settle();
+        check(probes->size() == 2 && (*probes)[1] && (*probes)[1]->path() == b.path,
+              "the newly selected CTR2 is probed once the first probe finishes");
+        if (probes->size() == 2 && (*probes)[1]) {
+            (*probes)[1]->negotiate(2);
+            settle();
+        }
+        check(model.usbFirmwareVersion() == QStringLiteral("2.0.0"),
+              "the selected CTR2's own version is reported");
+        check(probes->size() == 2, "and nothing is probed again");
+
+        // Back to the first: probed again, and the model goes before it answers.
+        model.setUsbDevicePath(a.path);
+        settle();
+        check(probes->size() == 3, "selecting another CTR2 probes it");
+    }
+    settle();
+    check(log->shutdowns == log->opened, "every probe port is closed, including one mid-probe");
+}
+
 // USB is the default mode when the build can open a CTR2, and the first
 // recognized CTR2 is preselected; an explicit choice survives a rescan.
 void testUsbDefaults()
@@ -340,6 +424,7 @@ int main(int argc, char** argv)
     testRelayFollowsAetherSdrsRadio();
     testUsbAccessRuleDetection();
     testUsbDefaults();
+    testProbeFollowsSelection();
     testUdevRuleMatchesKnownCtr2s();
     testSelfNamedDevices();
 

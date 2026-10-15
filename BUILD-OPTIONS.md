@@ -171,6 +171,7 @@ These options are for development and qualification.
 | `AETHER_ENABLE_RADAR_GL_TEST` | OFF | Build/register the native-GPU weather-radar texture test. Needs a real OpenGL 3.2 context. |
 | `AETHER_BUILD_SPECTRUM_GESTURE_TEST` | OFF | Build/register `spectrum_confirmed_geometry_test`, which compiles the desktop application sources into a test binary to exercise the real `SpectrumWidget` gestures offscreen. |
 | `AETHER_SHARED_CORE` | OFF | Build `libaethercore` as a shared library so the sanitizer lane's test binaries fit on a hosted runner. For the sanitizer lane and local review builds (`/pr-review` step 7), never for releases; configuration fails on Windows. |
+| `AETHER_FIRMWARE_DEV_OVERRIDES` | OFF | Honor the `AETHER_FIRMWARE_CATALOG` (another firmware catalog URL) and `AETHER_FIRMWARE_TRUST_KEYS` (extra Ed25519 firmware-signing keys, hex, comma-separated) environment variables, for testing a firmware publisher's own builds. Each override is logged when used. Never for releases: a release build installs only firmware listed at aethersdr.com and signed by a key built into it. |
 
 Additional cache values accept a value rather than ON/OFF:
 

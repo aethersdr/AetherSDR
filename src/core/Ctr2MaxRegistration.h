@@ -17,7 +17,8 @@ inline constexpr quint32 kSize = 0xE0000;
 enum class Result { Registered, NotRegistered, Unreadable };
 
 // partition: the volume's bytes (kSize of them, read from kOffset). On
-// Registered, call gets the call sign it is registered to.
+// Registered, call gets the call sign it is registered to. Safe from any
+// thread; calls are serialized, because the C reader's state is static.
 Result check(const QByteArray& partition, QString* call = nullptr);
 
 } // namespace Ctr2MaxRegistration
