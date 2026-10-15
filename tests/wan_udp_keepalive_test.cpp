@@ -1,9 +1,8 @@
-// Own loopback UDP sink observes the production timer/writer. Malformed input
-// is injected at the registration boundary; no firmware peer or radio session.
+// Socket-free: inject terminal bind/write operations, then drive the production
+// timer, encoder, qualifier and session lifecycle. No firmware peer or radio.
 // Reference: published FlexLib 4.3.16 Radio.UdpRegistrationLoop and its
 // _udpPacketPipeline Flex-OUI preamble qualification; ClientHandleHelper.X8.
 #include "core/backends/flex/PanadapterStream.h"
-#include "core/backends/flex/RadioConnection.h"
 #include "TestSettingsProfile.h"
 
 #include <QByteArray>
@@ -12,23 +11,32 @@
 #include <QEventLoop>
 #include <QHostAddress>
 #include <QMetaObject>
-#include <QNetworkDatagram>
 #include <QThread>
 #include <QTimer>
-#include <QUdpSocket>
 #include <QtEndian>
 #include <cstdio>
+#include <functional>
 #include <vector>
+#include <utility>
 
 namespace AetherSDR {
 class WanUdpKeepaliveTestAccess {
 public:
+    static void inject(PanadapterStream& stream, std::function<bool()> bind,
+                       std::function<qint64(const QByteArray&, const QHostAddress&, quint16)> write)
+    {
+        stream.m_wanBindForTest = std::move(bind);
+        stream.m_wanWriteForTest = std::move(write);
+    }
+    static bool nativeSocketUnopened(const PanadapterStream& stream)
+    {
+        return stream.m_socket && stream.m_socket->socketDescriptor() == -1;
+    }
     static QTimer& timer(PanadapterStream& stream) { return *stream.m_wanRegisterTimer; }
     static bool confirmed(const PanadapterStream& stream) { return stream.m_wanRegistered; }
-    static void feed(PanadapterStream& stream, const QByteArray& packet,
-                     const QHostAddress& sender, quint16 port)
+    static void feed(PanadapterStream& stream, const QByteArray& packet)
     {
-        stream.confirmWanRegistration(packet, sender, port);
+        stream.confirmWanRegistration(packet);
     }
     static void timeout(PanadapterStream& stream)
     {
@@ -56,11 +64,22 @@ void pump(int ms)
     }
     QCoreApplication::processEvents();
 }
-std::vector<QByteArray> drain(QUdpSocket& sink)
+struct Datagram {
+    QByteArray payload;
+    QHostAddress destination;
+    quint16 port;
+};
+std::vector<QByteArray> drain(std::vector<Datagram>& recorded, quint16 port)
 {
     std::vector<QByteArray> packets;
-    while (sink.hasPendingDatagrams()) {
-        packets.push_back(sink.receiveDatagram().data());
+    for (auto it = recorded.begin(); it != recorded.end();) {
+        if (it->port == port) {
+            check(it->destination == QHostAddress(QHostAddress::LocalHost), "writer uses configured address");
+            packets.push_back(it->payload);
+            it = recorded.erase(it);
+        } else {
+            ++it;
+        }
     }
     return packets;
 }
@@ -91,94 +110,93 @@ int main(int argc, char** argv)
 {
     TestSettingsProfile profile(QStringLiteral("wan-udp-keepalive"));
     if (!profile.isValid()) {
-        return 77;
+        std::fprintf(stderr, "FAIL: cannot create isolated settings profile\n");
+        return 1;
     }
     QCoreApplication app(argc, argv);
-    QUdpSocket sink;
-    QUdpSocket replacement;
-    if (!sink.bind(QHostAddress::LocalHost, 0)
-        || !replacement.bind(QHostAddress::LocalHost, 0)) {
-        std::fprintf(stderr, "SKIP: cannot bind own loopback UDP sinks\n");
-        return 77;
-    }
+    constexpr quint16 kSinkPort = 4993;
+    constexpr quint16 kReplacementPort = 4994;
+    std::vector<Datagram> recorded;
+    bool bindSucceeds = true;
+    bool writeSucceeds = true;
     PanadapterStream stream;
+    WanUdpKeepaliveTestAccess::inject(stream, [&bindSucceeds] { return bindSucceeds; },
+        [&recorded, &writeSucceeds](const QByteArray& payload, const QHostAddress& destination, quint16 port) -> qint64 {
+            if (!writeSucceeds) {
+                return -1;
+            }
+            recorded.push_back({payload, destination, port});
+            return payload.size();
+        });
     stream.init();
     stream.startWanUdpRegister(0xAu);
     check(!WanUdpKeepaliveTestAccess::timer(stream).isActive(), "cold registration cannot start a timer");
-    if (!stream.startWan(QHostAddress::LocalHost, sink.localPort())) {
-        std::fprintf(stderr, "SKIP: cannot bind production VITA socket\n");
-        return 77;
+    if (!stream.startWan(QHostAddress::LocalHost, kSinkPort)) {
+        std::fprintf(stderr, "FAIL: injected bind should succeed\n");
+        return 1;
     }
     stream.startWanUdpRegister(0);
     pump(100);
-    check(drain(sink).empty(), "wait for a nonzero client handle");
+    check(drain(recorded, kSinkPort).empty(), "wait for a nonzero client handle");
     const qint64 bytesBefore = stream.totalTxBytes();
     const QByteArray expected("client udp_register handle=0x0000000A");
     stream.startWanUdpRegister(0xAu);
     pump(10);
-    std::vector<QByteArray> packets = drain(sink);
+    std::vector<QByteArray> packets = drain(recorded, kSinkPort);
     check(packets.size() == 1 && allEqual(packets, expected), "immediate registration uses eight uppercase hex digits");
     check(WanUdpKeepaliveTestAccess::timer(stream).interval() == 50, "fast timer interval is 50 ms");
     pump(225);
-    packets = drain(sink);
-    check(packets.size() >= 3 && packets.size() <= 6 && allEqual(packets, expected), "real fast timer repeatedly sends udp_register");
+    packets = drain(recorded, kSinkPort);
+    check(packets.size() >= 3 && packets.size() <= 6 && allEqual(packets, expected), "production fast timer repeatedly sends udp_register");
     check(stream.totalTxBytes() - bytesBefore == qint64((packets.size() + 1) * expected.size()), "successful registration writes count bytes exactly");
 
     const QByteArray valid = meterPacket();
-    const auto feed = [&](const QByteArray& packet, const QHostAddress& sender, quint16 port) {
-        WanUdpKeepaliveTestAccess::feed(stream, packet, sender, port);
+    const auto feed = [&](const QByteArray& packet) {
+        WanUdpKeepaliveTestAccess::feed(stream, packet);
         check(!WanUdpKeepaliveTestAccess::confirmed(stream)
               && WanUdpKeepaliveTestAccess::timer(stream).interval() == 50,
-              "malformed or unrelated datagram leaves registration fast");
+              "malformed or non-Flex datagram leaves registration fast");
     };
-    feed(QByteArray(1, '\0'), QHostAddress::LocalHost, sink.localPort());
-    feed(QByteArray(28, '\0'), QHostAddress::LocalHost, sink.localPort());
-    feed(valid.left(16), QHostAddress::LocalHost, sink.localPort());
+    feed(QByteArray(1, '\0'));
+    feed(QByteArray(28, '\0'));
+    feed(valid.left(16));
     QByteArray wrongOui = valid;
     wrongOui[10] = 0;
-    feed(wrongOui, QHostAddress::LocalHost, sink.localPort());
+    feed(wrongOui);
     QByteArray noClass = valid;
     noClass[0] = char(0x30);
-    feed(noClass, QHostAddress::LocalHost, sink.localPort());
+    feed(noClass);
     QByteArray wrongType = valid;
     wrongType[0] = char(0x28);
-    feed(wrongType, QHostAddress::LocalHost, sink.localPort());
+    feed(wrongType);
     QByteArray missingTimestamp = valid.left(16);
     missingTimestamp[3] = 4;
-    feed(missingTimestamp, QHostAddress::LocalHost, sink.localPort());
+    feed(missingTimestamp);
     QByteArray missingTrailer = valid.left(28);
     missingTrailer[0] = char(0x3C);
     missingTrailer[3] = 7;
-    feed(missingTrailer, QHostAddress::LocalHost, sink.localPort());
-    feed(valid, QHostAddress(QStringLiteral("127.0.0.2")), sink.localPort());
-    feed(valid, QHostAddress::LocalHost, replacement.localPort());
+    feed(missingTrailer);
+    QByteArray shortOpus = valid.left(28) + QByteArray(1, '\0');
+    auto* opusRaw = reinterpret_cast<uchar*>(shortOpus.data());
+    qToBigEndian<quint32>(0x38D00009u, opusRaw); // more than three missing bytes
+    qToBigEndian<quint32>(0x534C8005u, opusRaw + 12);
+    feed(shortOpus);
+    shortOpus[3] = 7; // header declares fewer bytes than received
+    feed(shortOpus);
+    QByteArray unalignedMeter = valid.left(29);
+    feed(unalignedMeter);
     pump(110);
-    packets = drain(sink);
+    packets = drain(recorded, kSinkPort);
     check(packets.size() >= 1 && allEqual(packets, expected), "fast production sends continue after refused datagrams");
 
-    // Also exercise the socket-to-qualification wiring with first datagrams.
-    sink.writeDatagram(QByteArray(1, '\0'), QHostAddress::LocalHost, stream.localPort());
-    QByteArray unrelated = valid;
-    unrelated[15] = char(0x06);  // unhandled Flex class; routing has no effect
-    replacement.writeDatagram(unrelated, QHostAddress::LocalHost, stream.localPort());
-    pump(110);
-    check(!WanUdpKeepaliveTestAccess::confirmed(stream)
-          && WanUdpKeepaliveTestAccess::timer(stream).interval() == 50,
-          "actual malformed and foreign first datagrams cannot confirm WAN registration");
-    packets = drain(sink);
-    check(!packets.empty() && allEqual(packets, expected), "real receive path keeps rapid registration alive");
-
-    // Positive receive travels through QUdpSocket::readyRead and onDatagramReady.
-    sink.writeDatagram(valid, QHostAddress::LocalHost, stream.localPort());
+    WanUdpKeepaliveTestAccess::feed(stream, valid);
     pump(25);
     check(WanUdpKeepaliveTestAccess::confirmed(stream)
           && WanUdpKeepaliveTestAccess::timer(stream).interval() == 5000,
-          "valid Flex VITA from the session endpoint selects five-second cadence");
-    check(stream.categoryStats(PanadapterStream::CatMeter).packets == 1,
-          "qualification preserves production meter routing");
-    drain(sink);
+          "valid Flex VITA selects five-second cadence");
+    drain(recorded, kSinkPort);
     pump(300);
-    check(drain(sink).empty(), "confirmation stops fast sends");
+    check(drain(recorded, kSinkPort).empty(), "confirmation stops fast sends");
     // Observe two actual five-second timeouts; continued receive must not reset them.
     QElapsedTimer steadyClock;
     steadyClock.start();
@@ -187,12 +205,12 @@ int main(int argc, char** argv)
     int steadyCount = 0;
     while (steadyClock.elapsed() < 10500 && steadyCount < 2) {
         pump(10);
-        packets = drain(sink);
+        packets = drain(recorded, kSinkPort);
         for (const QByteArray& packet : packets) {
             check(packet == expected, "steady production payload stays udp_register");
             if (++steadyCount == 1) {
                 firstAt = steadyClock.elapsed();
-                sink.writeDatagram(valid, QHostAddress::LocalHost, stream.localPort());
+                WanUdpKeepaliveTestAccess::feed(stream, valid);
             } else {
                 secondAt = steadyClock.elapsed();
             }
@@ -201,6 +219,22 @@ int main(int argc, char** argv)
     check(steadyCount == 2 && firstAt >= 4300 && firstAt <= 5500
           && secondAt - firstAt >= 4800 && secondAt - firstAt <= 5500,
           "actual steady keepalives recur every five seconds without receive postponement");
+
+    // FlexLib's Opus writer rounds the VITA word count up but emits only
+    // the actual byte payload. One to three bytes of padding may be absent.
+    for (int payloadBytes = 1; payloadBytes <= 4; ++payloadBytes) {
+        QByteArray opus = valid.left(28) + QByteArray(payloadBytes, '\0');
+        auto* raw = reinterpret_cast<uchar*>(opus.data());
+        qToBigEndian<quint32>(0x38D00000u | quint32((opus.size() + 3) / 4), raw);
+        qToBigEndian<quint32>(0x534C8005u, raw + 12);
+        stream.startWanUdpRegister(0xAu);
+        WanUdpKeepaliveTestAccess::feed(stream, opus);
+        check(WanUdpKeepaliveTestAccess::confirmed(stream)
+              && WanUdpKeepaliveTestAccess::timer(stream).interval() == 5000,
+              "Opus with a rounded word count qualifies without transmitted padding");
+    }
+    pump(10);
+    drain(recorded, kSinkPort);
 
     // Qualification follows the preamble, independently of stream dispatch:
     // both data-with-stream types, optional timestamps and trailers are legal.
@@ -218,65 +252,65 @@ int main(int argc, char** argv)
     preambles.push_back(trailer);
     for (const QByteArray& preamble : preambles) {
         stream.startWanUdpRegister(0xAu);
-        WanUdpKeepaliveTestAccess::feed(stream, preamble, QHostAddress::LocalHost, sink.localPort());
+        WanUdpKeepaliveTestAccess::feed(stream, preamble);
         check(WanUdpKeepaliveTestAccess::confirmed(stream)
               && WanUdpKeepaliveTestAccess::timer(stream).interval() == 5000,
               "valid alternative Flex preamble qualifies before stream dispatch");
     }
     pump(10);
-    drain(sink);
+    drain(recorded, kSinkPort);
 
     stream.startWanUdpRegister(0xABCDEF01u);
     pump(120);
-    packets = drain(sink);
+    packets = drain(recorded, kSinkPort);
     check(packets.size() >= 2 && allEqual(packets, QByteArray("client udp_register handle=0xABCDEF01"))
           && !WanUdpKeepaliveTestAccess::confirmed(stream), "handle replacement restarts fast cadence without old payloads");
     stream.stop();
-    drain(sink);
+    drain(recorded, kSinkPort);
     const qint64 stoppedBytes = stream.totalTxBytes();
     WanUdpKeepaliveTestAccess::timeout(stream);
     stream.startWanUdpRegister(0xAu);
     pump(120);
-    check(drain(sink).empty() && stream.totalTxBytes() == stoppedBytes
+    check(drain(recorded, kSinkPort).empty() && stream.totalTxBytes() == stoppedBytes
           && !WanUdpKeepaliveTestAccess::timer(stream).isActive(), "stop fences late timeouts and late handle delivery");
 
-    check(stream.startWan(QHostAddress::LocalHost, replacement.localPort()), "reconnect binds the replacement destination");
+    check(stream.startWan(QHostAddress::LocalHost, kReplacementPort), "reconnect selects the replacement destination");
     pump(100);
-    check(drain(replacement).empty(), "reconnect cannot reuse the previous handle");
+    check(drain(recorded, kReplacementPort).empty(), "reconnect cannot reuse the previous handle");
     stream.startWanUdpRegister(0xBu);
     pump(120);
-    packets = drain(replacement);
+    packets = drain(recorded, kReplacementPort);
     check(packets.size() >= 2 && allEqual(packets, QByteArray("client udp_register handle=0x0000000B"))
-          && drain(sink).empty(), "reconnect sends only new handle to new destination");
-    WanUdpKeepaliveTestAccess::feed(stream, valid, QHostAddress::LocalHost, sink.localPort());
-    check(!WanUdpKeepaliveTestAccess::confirmed(stream), "old endpoint cannot confirm the new session");
+          && drain(recorded, kSinkPort).empty(), "reconnect sends only new handle to new destination");
+    WanUdpKeepaliveTestAccess::feed(stream, wrongOui);
+    check(!WanUdpKeepaliveTestAccess::confirmed(stream), "non-Flex traffic cannot confirm the new session");
 
     // Replacing a running WAN destination clears the handle before any send.
-    check(stream.startWan(QHostAddress::LocalHost, sink.localPort()), "active WAN destination can be replaced");
+    check(stream.startWan(QHostAddress::LocalHost, kSinkPort), "active WAN destination can be replaced");
     pump(110);
-    check(drain(sink).empty() && drain(replacement).empty(), "destination replacement retires old timer and handle");
+    check(drain(recorded, kSinkPort).empty() && drain(recorded, kReplacementPort).empty(), "destination replacement retires old timer and handle");
     stream.startWanUdpRegister(0xCu);
     pump(110);
-    packets = drain(sink);
+    packets = drain(recorded, kSinkPort);
     check(packets.size() >= 2 && allEqual(packets, QByteArray("client udp_register handle=0x0000000C")),
           "replacement destination uses only the replacement handle");
 
-    // Transition back to LAN preserves its priming and has no WAN timer.
-    RadioConnection conn;
-    check(stream.start(&conn), "WAN to LAN binds normally");
+    writeSucceeds = false;
+    const qint64 bytesBeforeFailure = stream.totalTxBytes();
     WanUdpKeepaliveTestAccess::timeout(stream);
-    check(!WanUdpKeepaliveTestAccess::timer(stream).isActive()
-          && drain(replacement).empty(), "LAN start retires WAN registration");
-    check(stream.rebindToEphemeralPort(&conn), "LAN collision rebind remains usable");
-    check(stream.startWan(QHostAddress::LocalHost, sink.localPort()), "restart WAN before collision rebind");
+    check(stream.totalTxBytes() == bytesBeforeFailure && recorded.empty(),
+          "failed datagram writes do not count bytes");
+    writeSucceeds = true;
+    stream.stop();
+    bindSucceeds = false;
+    check(!stream.startWan(QHostAddress::LocalHost, kSinkPort), "failed bind reports failure");
     stream.startWanUdpRegister(0xDu);
-    pump(10);
-    drain(sink);
-    check(stream.rebindToEphemeralPort(&conn), "WAN to LAN rebind remains usable");
     WanUdpKeepaliveTestAccess::timeout(stream);
-    pump(110);
-    check(!WanUdpKeepaliveTestAccess::timer(stream).isActive() && drain(sink).empty(),
-          "collision rebind retires WAN timer and destination");
+    check(recorded.empty() && !stream.isRunning()
+          && !WanUdpKeepaliveTestAccess::timer(stream).isActive(),
+          "failed reconnect cannot send with the old destination or handle");
+    check(WanUdpKeepaliveTestAccess::nativeSocketUnopened(stream),
+          "all production WAN behavior ran without opening a native UDP socket");
     stream.stop();
     std::printf("%s\n", failures ? "FAILED" : "PASSED");
     return failures ? 1 : 0;

@@ -42,6 +42,7 @@ class PanadapterStream : public QObject {
     friend class TxOperationIntegrationTestAccess;
     friend class VitaDscpStreamTestAccess;
     friend class WanUdpKeepaliveTestAccess;
+    friend class WanUdpKeepaliveSocketTestAccess;
     // Inject the terminal transport in socket-free queue/cancellation tests.
     std::function<void(const QByteArray&)> m_packetSinkForTest;
 
@@ -239,7 +240,7 @@ private:
     void publishLegacyDaxAudio(quint32 streamId, int channel, const QByteArray& pcm);
     void publishLegacyAudio(const QByteArray& pcm);
     void processDatagram(const QByteArray& data);
-    void confirmWanRegistration(const QByteArray& data, const QHostAddress& sender, quint16 port);
+    void confirmWanRegistration(const QByteArray& data);
     // Raise the kernel receive buffer (SO_RCVBUF) on the bound VITA-49 socket so
     // bursts / brief drain stalls don't overflow it and surface as false
     // sequence-loss (which the adaptive throttle would react to). Logs the
@@ -480,6 +481,11 @@ private:
     // hasReceivedPackets() (the connect health watchdog). Atomic for the same
     // reason RadioConnection::m_syntheticDemo is.
     std::atomic<bool> m_hasReceivedPacket{false};
+
+    // Inject only the terminal WAN bind/write in socket-free lifecycle tests.
+    std::function<bool()> m_wanBindForTest;
+    std::function<qint64(const QByteArray&, const QHostAddress&, quint16)> m_wanWriteForTest;
+    bool m_wanBoundForTest{false};
 
     // WAN UDP registration and keepalive
     QTimer*  m_wanRegisterTimer{nullptr};   // udp_register: 50 ms until VITA, then 5 s

@@ -145,7 +145,8 @@ bool PanadapterStream::isRunning() const
 {
     // Truthful for the demo too: a demo stream binds no socket and runs no timer
     // (SimBackend produces the demo's audio and spectrum), so it is not running.
-    return m_socket && m_socket->state() == QAbstractSocket::BoundState;
+    return m_wanBindForTest ? m_wanBoundForTest
+                            : (m_socket && m_socket->state() == QAbstractSocket::BoundState);
 }
 
 void PanadapterStream::applyReceiveBufferSize()
@@ -359,17 +360,21 @@ bool PanadapterStream::startWan(const QHostAddress& radioAddr, quint16 radioUdpP
 
     // For WAN: bind to any port. The actual UDP registration happens later
     // in startWanUdpRegister() once the client handle is known.
-    bool bound = m_socket->bind(QHostAddress::AnyIPv4, 0);
+    const bool bound = m_wanBindForTest ? m_wanBindForTest()
+                                      : m_socket->bind(QHostAddress::AnyIPv4, 0);
+    m_wanBoundForTest = m_wanBindForTest && bound;
     if (!bound) {
         qCWarning(lcVita49) << "PanadapterStream: WAN — failed to bind UDP socket:"
                    << m_socket->errorString();
         return false;
     }
 
-    applyReceiveBufferSize();   // #3810 — absorb VITA-49 bursts so they don't drop
-    applyDscpEf(radioAddr, {radioUdpPort});
-    m_localPort = m_socket->localPort();
-    m_localAddress = m_socket->localAddress();
+    if (!m_wanBindForTest) {
+        applyReceiveBufferSize();   // #3810 — absorb VITA-49 bursts so they don't drop
+        applyDscpEf(radioAddr, {radioUdpPort});
+        m_localPort = m_socket->localPort();
+        m_localAddress = m_socket->localAddress();
+    }
     m_radioAddress = radioAddr;
     m_radioPort = radioUdpPort;
     m_isWanMode = true;
@@ -414,17 +419,18 @@ void PanadapterStream::sendWanUdpRegister()
     const QString hex = QString::number(m_wanClientHandle, 16).toUpper()
                             .rightJustified(8, QLatin1Char('0'));
     const QByteArray cmd = QStringLiteral("client udp_register handle=0x%1").arg(hex).toLatin1();
-    const qint64 sent = m_socket->writeDatagram(cmd, m_radioAddress, m_radioPort);
+    const qint64 sent = m_wanWriteForTest
+        ? m_wanWriteForTest(cmd, m_radioAddress, m_radioPort)
+        : m_socket->writeDatagram(cmd, m_radioAddress, m_radioPort);
     if (sent > 0) {
         m_totalTxBytes.fetch_add(sent);
     }
 }
 
-void PanadapterStream::confirmWanRegistration(const QByteArray& data,
-                                             const QHostAddress& sender, quint16 port)
+void PanadapterStream::confirmWanRegistration(const QByteArray& data)
 {
     if (!m_isWanMode || !isRunning() || m_wanRegistered || m_wanClientHandle == 0
-        || sender != m_radioAddress || port != m_radioPort || data.size() < 16) {
+        || data.size() < 16) {
         return;
     }
     const auto* raw = reinterpret_cast<const uchar*>(data.constData());
@@ -436,10 +442,17 @@ void PanadapterStream::confirmWanRegistration(const QByteArray& data,
     const bool hasFractionalTimestamp = (header & 0x00300000u) != 0;
     const int headerBytes = 16 + (hasIntegerTimestamp ? 4 : 0)
                               + (hasFractionalTimestamp ? 8 : 0);
-    // FlexLib qualifies a parsed Flex OUI preamble, before stream dispatch.
-    // Check its declared size and optional fields before accepting it here.
+    const quint32 packetBytes = (header & 0xFFFFu) * 4;
+    const quint32 datagramBytes = static_cast<quint32>(data.size());
+    const quint16 pcc = static_cast<quint16>(qFromBigEndian<quint32>(raw + 12));
+    // FlexLib's byte-oriented Opus payload omits up to three padding bytes;
+    // its VITA word count still rounds up (TXRemoteAudioStream, 4.3.16).
+    const bool unpaddedOpus = pcc == PCC_OPUS && packetBytes >= datagramBytes
+                             && packetBytes - datagramBytes < 4;
+    // FlexLib qualifies by preamble/OUI, without matching the incoming source
+    // to the outgoing registration endpoint (VitaSocket.ReceiveLoop, 4.3.16).
     if ((type != 1 && type != 3) || !hasClass
-        || (header & 0xFFFFu) * 4 != static_cast<quint32>(data.size())
+        || (packetBytes != datagramBytes && !unpaddedOpus)
         || data.size() < headerBytes + (hasTrailer ? 4 : 0)
         || (qFromBigEndian<quint32>(raw + 8) & 0x00FFFFFFu) != 0x001C2Du) {
         return;
@@ -463,6 +476,7 @@ void PanadapterStream::stop()
     if (m_routedPrimeTimer) {
         m_routedPrimeTimer->stop();
     }
+    m_wanBoundForTest = false;
     m_isWanMode = false;
     m_wanRegistered = false;
     m_wanClientHandle = 0;
@@ -690,7 +704,7 @@ void PanadapterStream::onDatagramReady()
                     << QStringLiteral("local_port=%1").arg(m_localPort)
                     << QStringLiteral("from=%1:%2").arg(dg.senderAddress().toString()).arg(dg.senderPort());
             }
-            confirmWanRegistration(payload, dg.senderAddress(), dg.senderPort());
+            confirmWanRegistration(payload);
             m_totalRxBytes.fetch_add(payloadBytes);
             processDatagram(payload);
         }
