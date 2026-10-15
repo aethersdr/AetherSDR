@@ -8990,9 +8990,11 @@ add_test(NAME vfo_dsp_launcher_width_test
 set_tests_properties(vfo_dsp_launcher_width_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
-# Firmware-dependent NRS request bounds and passive production-widget readback.
+# Socket-free NRS requests/readback through the production bridge dispatcher,
+# model, Flex encoder and VFO. Firmware/status/transport are injected; no listener.
 add_executable(nrs_level_range_test
     tests/nrs_level_range_test.cpp
+    ${THEME_TEST_RESOURCES}
     src/gui/RxApplet.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/VfoWidget.cpp
