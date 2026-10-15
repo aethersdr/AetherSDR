@@ -129,7 +129,7 @@ void DaxIqApplet::buildUI()
         m_iqEnable[i]->setFixedWidth(36);
         m_iqEnable[i]->setObjectName(QStringLiteral("daxIqEnable%1").arg(i + 1));
         m_iqEnable[i]->setAccessibleName(tr("IQ %1 stream").arg(i + 1));
-        m_iqEnable[i]->setStyleSheet(kIqBtnOff);
+        ThemeManager::instance().applyStyleSheet(m_iqEnable[i], kIqBtnOff);
         connect(m_iqEnable[i], &QPushButton::clicked, this, [this, i]() {
             if (!m_model || m_model->daxIqModel().supportedSampleRates().isEmpty()) {
                 return;
@@ -139,7 +139,7 @@ void DaxIqApplet::buildUI()
             if (wasOn) {
                 emit iqDisableRequested(i + 1);
                 m_iqEnable[i]->setText("Off");
-                m_iqEnable[i]->setStyleSheet(kIqBtnOff);
+                ThemeManager::instance().applyStyleSheet(m_iqEnable[i], kIqBtnOff);
                 m_iqMeter[i]->setValue(0);
                 ss.setValue(QStringLiteral("DaxIqEnabled%1").arg(i + 1), "False");
             } else {
@@ -149,7 +149,7 @@ void DaxIqApplet::buildUI()
                 emit iqRateChanged(i + 1, m_iqRateCombo[i]->currentData().toInt());
                 emit iqEnableRequested(i + 1);
                 m_iqEnable[i]->setText("On");
-                m_iqEnable[i]->setStyleSheet(kIqBtnOn);
+                ThemeManager::instance().applyStyleSheet(m_iqEnable[i], kIqBtnOn);
                 ss.setValue(QStringLiteral("DaxIqEnabled%1").arg(i + 1), "True");
             }
             ss.save();
@@ -221,7 +221,7 @@ void DaxIqApplet::setRadioModel(RadioModel* model)
             }
             if (!connected) {
                 m_iqEnable[i]->setText("Off");
-                m_iqEnable[i]->setStyleSheet(kIqBtnOff);
+                ThemeManager::instance().applyStyleSheet(m_iqEnable[i], kIqBtnOff);
                 if (m_iqMeter[i]) {
                     m_iqMeter[i]->setValue(0);
                 }
@@ -229,7 +229,7 @@ void DaxIqApplet::setRadioModel(RadioModel* model)
             }
             // Reset to Off; stream requests follow after session setup settles.
             m_iqEnable[i]->setText("Off");
-            m_iqEnable[i]->setStyleSheet(kIqBtnOff);
+            ThemeManager::instance().applyStyleSheet(m_iqEnable[i], kIqBtnOff);
             if (m_iqMeter[i]) {
                 m_iqMeter[i]->setValue(0);
             }
@@ -265,7 +265,7 @@ void DaxIqApplet::syncStreamState(int ch)
     int idx = ch - 1;
     const bool exists = m_model && m_model->daxIqModel().stream(ch).exists;
     m_iqEnable[idx]->setText(exists ? "On" : "Off");
-    m_iqEnable[idx]->setStyleSheet(exists ? kIqBtnOn : kIqBtnOff);
+    ThemeManager::instance().applyStyleSheet(m_iqEnable[idx], exists ? kIqBtnOn : kIqBtnOff);
     // Zero the meter whenever the channel is not actively bound to a pan: it
     // may be Off (exists==false) OR enabled-but-unbound (pan==0x0, e.g. the
     // pan's daxiq_channel was moved to another IQ channel). No IQ data flows
@@ -338,6 +338,12 @@ void DaxIqApplet::refreshRateChoices()
     const QList<int> rates = m_model ? m_model->daxIqModel().supportedSampleRates()
                                     : QList<int>{};
     QStringList reasons;
+    for (int i = 0; i < m_iqRateCombo[0]->count(); ++i) {
+        const int rate = m_iqRateCombo[0]->itemData(i).toInt();
+        if (!rates.contains(rate)) {
+            reasons.append(tr("%1 kHz is unavailable on this radio model.").arg(rate / 1000));
+        }
+    }
     for (int ch = 0; ch < kChannels; ++ch) {
         auto* combo = m_iqRateCombo[ch];
         auto* items = qobject_cast<QStandardItemModel*>(combo->model());
@@ -354,10 +360,9 @@ void DaxIqApplet::refreshRateChoices()
             }
             combo->setItemData(i, reason, Qt::ToolTipRole);
             combo->setItemData(i, reason, Qt::AccessibleDescriptionRole);
-            if (ch == 0 && !reason.isEmpty()) {
-                reasons.append(reason);
-            }
         }
+        // Supply the per-rate description first; the registry then composes its
+        // availability/engagement text without losing this owned description.
         combo->setAccessibleDescription(reasons.join(QLatin1Char(' ')));
         int effective = m_model
             ? m_model->daxIqModel().sampleRateForPreference(m_preferredRate[ch]) : 0;
@@ -373,6 +378,9 @@ void DaxIqApplet::refreshRateChoices()
             const QSignalBlocker blocker(combo);
             combo->setCurrentIndex(combo->findData(effective));
         }
+    }
+    if (m_model && m_availability) {
+        m_availability->refreshEngaged();
     }
 }
 
