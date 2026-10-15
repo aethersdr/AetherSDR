@@ -72,6 +72,8 @@ Spectral subtraction estimates and removes broadband noise from each frequency b
 
 Spectral subtraction combined with Voice Activity Detection (VAD). Best for SSB/AM voice operation in consistent noise environments.
 
+The **NRS** amount slider ranges from **0 to 50** on SmartSDR **4.3.16 and later**, and **0 to 100** on older firmware. AetherSDR updates the range when the radio identifies its firmware. Radio-reported levels remain authoritative; a range update does not change the radio's level.
+
 *Available on FLEX-8000 (BigBend) and Aurora series only.*
 
 ### RNN — Recurrent Neural Network Suppression

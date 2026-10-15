@@ -883,6 +883,8 @@ void RadioModel::setupBackend(const QString& family)
             });
             flex->setModelProvider([this]{ return m_model; });
             flex->setFirmwareVersionProvider([this]{ return softwareVersion(); });
+            connect(this, &RadioModel::infoChanged,
+                    flex, &FlexBackend::refreshFirmwareCapabilities);
             flex->setIndependentTxSequenceProvider([this] { return m_seqCounter.fetch_add(1); });
             m_connection = flex->connection();   // non-owning; the backend owns it
             m_panStream  = flex->panStream();    // non-owning; the backend owns it
@@ -1621,6 +1623,8 @@ void RadioModel::wireBackendReceiverState()
                                     << sliceId << "from previous session";
                 m_slices.append(s);
                 s->setControlPolicy(m_backend->receiveControlPolicy());
+                s->setNrsLevelMaximum(backendCapabilities().nrsLevelControl
+                    .value_or(RadioCapabilities::NrsLevelControl{}).levelMaximum);
                 s->applyChanges(mapped);
                 m_meterModel.setActiveTxSlice(activeTxSliceNum());
                 refreshTxPowerLimit();
@@ -4319,6 +4323,11 @@ void RadioModel::updateTuneAvailability()
 void RadioModel::publishCapabilities(bool connected)
 {
     const RadioCapabilities caps = backendCapabilities();
+    const int nrsMaximum = connected && caps.nrsLevelControl
+        ? caps.nrsLevelControl->levelMaximum : 100;
+    for (SliceModel* slice : m_slices) {
+        slice->setNrsLevelMaximum(nrsMaximum);
+    }
     m_meterModel.setCompressionMaximumDb(connected ? caps.compressionMaximumDb : 25.0f);
     m_cwxModel.setSpeedModifiersEnabled(!connected
                                         || caps.cwTextSupportsSpeedModifiers);
@@ -10067,6 +10076,8 @@ void RadioModel::wireSliceObservationsAndTxIntentToBackend(SliceModel* s)
         return;
 
     s->setControlPolicy(m_backend ? m_backend->receiveControlPolicy() : ReceiveControlPolicy::Optimistic);
+    s->setNrsLevelMaximum(backendCapabilities().nrsLevelControl
+        .value_or(RadioCapabilities::NrsLevelControl{}).levelMaximum);
     if (m_radioDialLocked && backendCapabilities().hasRadioDialLock) {
         SliceDelta delta;
         delta.locked = *m_radioDialLocked;
@@ -12127,6 +12138,8 @@ void RadioModel::handleSliceStatus(int id,
                 m_meterModel.setActiveTxSlice(activeTxSliceNum());
             });
         }
+        s->setNrsLevelMaximum(backendCapabilities().nrsLevelControl
+            .value_or(RadioCapabilities::NrsLevelControl{}).levelMaximum);
         s->setRttyMarkDefault(m_rttyMarkDefault);
         m_slices.append(s);
         // aetherd RFC 2.3: decode Flex slice status behind the seam → the

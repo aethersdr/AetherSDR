@@ -635,9 +635,19 @@ void SliceModel::setNrlLevel(int v)
                            [this, v] { emit nrlLevelChanged(v); });
 }
 
+void SliceModel::setNrsLevelMaximum(int maximum)
+{
+    if (m_nrsLevelMaximum == maximum) {
+        return;
+    }
+    m_nrsLevelMaximum = maximum;
+    // A request limit never changes radio-authoritative readback or sends intent.
+    emit nrsLevelMaximumChanged(maximum);
+}
+
 void SliceModel::setNrsLevel(int v)
 {
-    v = std::clamp(v, 0, 100);
+    v = std::clamp(v, 0, m_nrsLevelMaximum);
     if (m_nrsLevel == v) return;
     m_nrsLevel = v;
     notifyReceiveDspIntent(SliceDspRequest::Feature::Nrs, SliceDspRequest::Field::Level,

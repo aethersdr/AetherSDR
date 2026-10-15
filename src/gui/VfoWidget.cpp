@@ -2094,6 +2094,7 @@ void VfoWidget::buildTabContent()
             lvlHb->addWidget(m_dspLevelLabel);
 
             m_dspLevelSlider = new GuardedSlider(Qt::Horizontal);
+            m_dspLevelSlider->setObjectName(QStringLiteral("dspLevelSlider"));
             m_dspLevelSlider->setRange(0, 100);
             applyPrimarySliderStyle(m_dspLevelSlider);
             lvlHb->addWidget(m_dspLevelSlider, 1);
@@ -4813,6 +4814,11 @@ void VfoWidget::setSlice(SliceModel* slice)
     wireLevelEcho(&SliceModel::anfLevelChanged,  LvlAnf);
     wireLevelEcho(&SliceModel::nrlLevelChanged,  LvlNrl);
     wireLevelEcho(&SliceModel::nrsLevelChanged,  LvlNrs);
+    connect(m_slice, &SliceModel::nrsLevelMaximumChanged, this, [this](int) {
+        if (m_dspLevelTarget == LvlNrs) {
+            setDspLevelTarget(LvlNrs);
+        }
+    });
     wireLevelEcho(&SliceModel::nrfLevelChanged,  LvlNrf);
     wireLevelEcho(&SliceModel::anflLevelChanged, LvlAnfl);
     wireLevelEcho(&SliceModel::mnLevelChanged,   LvlMn);
@@ -5769,8 +5775,10 @@ void VfoWidget::setDspLevelTarget(DspLevelTarget t)
         case LvlNone: return;
     }
     m_dspLevelLabel->setText(name);
+    m_dspLevelSlider->setAccessibleName(name + tr(" level"));
     {
         QSignalBlocker b(m_dspLevelSlider);
+        m_dspLevelSlider->setRange(0, t == LvlNrs ? m_slice->nrsLevelMaximum() : 100);
         m_dspLevelSlider->setValue(level);
     }
     m_dspLevelValue->setText(QString::number(level));
