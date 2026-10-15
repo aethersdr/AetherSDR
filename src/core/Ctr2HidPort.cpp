@@ -12,10 +12,10 @@ const std::vector<Ctr2HidPort::KnownCtr2>& Ctr2HidPort::knownCtr2Devices()
         {0x2886, 0x0056, "XIAO_ESP32S3", "CTR2-MIDI"},
         // Elecrow CrowPanel 2.1" rotary display running AetherKnob firmware;
         // it speaks the same link and radio protocol as a CTR2.
-        {0x303A, 0x1001, "AETHER_KNOB", "AetherKnob"},
+        {0x303A, 0x1001, "AETHER_KNOB", "AetherKnob", true},
         // Other controller firmware that speaks the same link: it names
         // itself with a product string starting "Aether".
-        {0x303A, 0x1001, "Aether*", nullptr},
+        {0x303A, 0x1001, "Aether*", nullptr, true},
     };
     return kDevices;
 }
@@ -41,6 +41,19 @@ QString selfNamedModel(const QString& product, QLatin1String prefix)
 }
 
 } // namespace
+
+bool Ctr2HidPort::DeviceInfo::usbLink() const
+{
+    for (const KnownCtr2& known : knownCtr2Devices()) {
+        if (vendorId != known.vendorId || productId != known.productId)
+            continue;
+        const QLatin1String pattern(known.product);
+        if (pattern.endsWith(QLatin1Char('*')) ? !selfNamedModel(product, pattern.chopped(1)).isEmpty()
+                                               : product == pattern)
+            return known.usbLink;
+    }
+    return false;
+}
 
 QString Ctr2HidPort::DeviceInfo::ctr2Model() const
 {

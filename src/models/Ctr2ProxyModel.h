@@ -99,8 +99,8 @@ public:
     // Starts the relay by itself whenever AetherSDR is connected to a radio,
     // with the setup it last started with (Ctr2RelaySettings, saved), and
     // keeps trying while the device is missing. In USB mode only a device
-    // whose firmware names itself (AetherCTR2, AetherKnob) is started: stock
-    // CTR2 firmware has no USB mode.
+    // whose firmware relays over USB (AetherCTR2, AetherKnob; usbLink()) is
+    // started: stock CTR2 firmware has no USB mode.
     bool autoStart() const { return m_settings.autoStart; }
     void setAutoStart(bool on);
     static constexpr int kAutoStartRetryMs = 5000;

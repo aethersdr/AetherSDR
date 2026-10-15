@@ -64,6 +64,44 @@ bool overlaps(quint64 a, quint64 aEnd, quint64 b, quint64 bEnd)
 
 } // namespace
 
+bool EspFirmwareManifest::checkPlan(const EspFirmwareManifest& m, QString* problem)
+{
+    // No two writes may share a sector (writing erases whole sectors): an
+    // image erased by the next one, or one under the boot selection, would
+    // install a broken plan with every hash intact.
+    struct Write {
+        quint64 start, end;
+        QString what;
+    };
+    QList<Write> writes;
+    for (const Image& image : m.images)
+        writes.append({sectorFloor(image.offset), sectorCeil(quint64(image.offset) + image.size),
+                       image.file});
+    writes.append({m.otadata, quint64(m.otadata) + kOtadataSize, QStringLiteral("boot.otadata")});
+    for (int a = 0; a < writes.size(); ++a) {
+        for (int b = a + 1; b < writes.size(); ++b) {
+            if (overlaps(writes[a].start, writes[a].end, writes[b].start, writes[b].end)) {
+                *problem = tr("The firmware manifest is invalid: %1 and %2 overlap.")
+                               .arg(writes[a].what, writes[b].what);
+                return false;
+            }
+        }
+    }
+    // A required region must stay as it is, so nothing that is always
+    // rewritten may cover it: the boot selection changes on every install
+    // and start. (Images are checked against the bytes they would leave.)
+    for (const Region& r : m.require) {
+        if (overlaps(r.offset, quint64(r.offset) + r.size, m.otadata,
+                     quint64(m.otadata) + kOtadataSize)) {
+            *problem = tr("The firmware manifest is invalid: %1 must stay as it is, but the "
+                          "boot selection is rewritten.")
+                           .arg(r.name.isEmpty() ? tr("a required region") : r.name);
+            return false;
+        }
+    }
+    return true;
+}
+
 bool EspFirmwareManifest::parse(const QByteArray& json, EspFirmwareManifest* out, QString* problem)
 {
     QJsonParseError err{};
@@ -171,6 +209,9 @@ bool EspFirmwareManifest::parse(const QByteArray& json, EspFirmwareManifest* out
         if (!clear(m.appSlots[i], quint64(m.appSlots[i]) + 1, QStringLiteral("own slot %1").arg(i)))
             return false;
     }
+
+    if (!checkPlan(m, problem))
+        return false;
     *out = m;
     return true;
 }

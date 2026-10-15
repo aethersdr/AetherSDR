@@ -5,15 +5,8 @@
 #include "Ctr2ProxyPanel.h"
 #include "ModemChrome.h"
 #include "ScopedChildWidget.h"
-#include "core/Ctr2FirmwareUpdater.h"
-#include "core/EspFirmwareJob.h"
 #include "models/Ctr2ProxyModel.h"
-#ifdef HAVE_SERIALPORT
-#include "core/EspFlasher.h"
-#endif
-#ifdef HAVE_HIDAPI
-#include "core/Ctr2HidapiPort.h"
-#endif
+#include "models/FirmwareInstallModel.h"
 
 #include <QCloseEvent>
 #include <QListWidget>
@@ -29,14 +22,11 @@
 #include <QPushButton>
 #include <QStandardPaths>
 #include <QStyle>
-#include <QTimer>
 #include <QVBoxLayout>
 
 namespace AetherSDR {
 
 namespace {
-
-constexpr int kPollMs = 1000;
 
 QLabel* section(const QString& text)
 {
@@ -58,9 +48,7 @@ QLabel* wrapped(const QString& text = {})
 FirmwareInstallDialog::FirmwareInstallDialog(Ctr2ProxyModel* model, QWidget* parent)
     : CanonWindow(tr("CTR2"), parent, Kind::Workspace)
     , m_model(model)
-    , m_downloader(new EspFirmwareDownloader(this))
-    , m_job(new EspFirmwareJob(this))
-    , m_poll(new QTimer(this))
+    , m_fw(new FirmwareInstallModel(model, this))
 {
     setObjectName(QStringLiteral("firmwareInstallDialog"));
     setAttribute(Qt::WA_DeleteOnClose);
@@ -222,28 +210,26 @@ FirmwareInstallDialog::FirmwareInstallDialog(Ctr2ProxyModel* model, QWidget* par
     closeRow->addWidget(close);
     root->addLayout(closeRow);
 
-    connect(m_product, &QListWidget::currentRowChanged, this, &FirmwareInstallDialog::onProductChosen);
+    connect(m_product, &QListWidget::currentRowChanged, m_fw, &FirmwareInstallModel::chooseRelease);
     connect(m_install, &QPushButton::clicked, this, &FirmwareInstallDialog::onInstall);
     connect(m_start, &QPushButton::clicked, this, &FirmwareInstallDialog::onStart);
     connect(m_backup, &QPushButton::clicked, this, &FirmwareInstallDialog::onBackup);
     connect(m_restore, &QPushButton::clicked, this, &FirmwareInstallDialog::onRestore);
     connect(m_toStock, &QPushButton::clicked, this, [this] { restartDevice(false); });
     connect(m_toBootloader, &QPushButton::clicked, this, [this] { restartDevice(true); });
-    connect(m_cancel, &QPushButton::clicked, this, &FirmwareInstallDialog::onCancel);
+    connect(m_cancel, &QPushButton::clicked, this, [this] {
+        m_fw->cancel();
+        m_step->setText(tr("Stopping…"));
+    });
     connect(close, &QPushButton::clicked, this, &QWidget::close);
-    connect(m_downloader, &EspFirmwareDownloader::catalogReady, this,
-            &FirmwareInstallDialog::onCatalogReady);
-    connect(m_downloader, &EspFirmwareDownloader::releaseReady, this,
-            &FirmwareInstallDialog::onReleaseReady);
-    connect(m_downloader, &EspFirmwareDownloader::progress, this,
-            [this](const QString& step, qint64, qint64) { m_release->setText(step); });
-    connect(m_downloader, &EspFirmwareDownloader::failed, this, [this](const QString& message) {
-        if (m_catalog.products.isEmpty() && !m_haveRelease)
-            showPlaceholder(tr("No firmware list"));
-        m_release->setText(message);
+    connect(m_fw, &FirmwareInstallModel::releasesChanged, this, &FirmwareInstallDialog::syncReleases);
+    connect(m_fw, &FirmwareInstallModel::releaseTextChanged, this, [this] {
+        m_release->setText(m_fw->releaseText());
         sync();
     });
-    connect(m_job, &EspFirmwareJob::connected, this,
+    connect(m_fw, &FirmwareInstallModel::deviceChanged, this, &FirmwareInstallDialog::syncDevice);
+    connect(m_fw, &FirmwareInstallModel::busyChanged, this, &FirmwareInstallDialog::sync);
+    connect(m_fw, &FirmwareInstallModel::connected, this,
             [this](const QString& chip, const QByteArray& mac, quint32 flashSize) {
                 showStatus(tr("Bootloader"), "aqua",
                            tr("Connected: %1, %2 MB flash, %3")
@@ -251,50 +237,28 @@ FirmwareInstallDialog::FirmwareInstallDialog(Ctr2ProxyModel* model, QWidget* par
                                .arg(flashSize >> 20)
                                .arg(QString::fromLatin1(mac.toHex(':')).toUpper()));
             });
-    connect(m_job, &EspFirmwareJob::progress, this, &FirmwareInstallDialog::onProgress);
-    connect(m_job, &EspFirmwareJob::finished, this, &FirmwareInstallDialog::onFinished);
-    connect(m_poll, &QTimer::timeout, this, &FirmwareInstallDialog::pollDevices);
-    if (m_model) {
-        connect(m_model, &Ctr2ProxyModel::firmwareUpdateStep, this,
-                [this](const QString& step) { m_step->setText(step); });
-        connect(m_model, &Ctr2ProxyModel::firmwareUpdateProgress, this,
-                [this](qint64 stored, qint64 total) {
-                    m_bar->setValue(total > 0 ? int(stored * 100 / total) : 0);
-                });
-        connect(m_model, &Ctr2ProxyModel::firmwareUpdateFinished, this,
-                [this](bool ok, const QString& message) {
-                    if (!m_jobDone.isEmpty())   // started here
-                        onFinished(ok, message);
-                });
-    }
+    connect(m_fw, &FirmwareInstallModel::stepChanged, m_step, &QLabel::setText);
+    connect(m_fw, &FirmwareInstallModel::progress, this,
+            [this](const QString& step, qint64 done, qint64 total) {
+                if (!step.isEmpty())
+                    m_step->setText(step);
+                m_bar->setValue(total > 0 ? int(done * 100 / total) : 0);
+            });
+    connect(m_fw, &FirmwareInstallModel::finished, this, &FirmwareInstallDialog::onFinished);
+    // The relay's version readout decides whether a link update is offered.
+    if (m_model)
+        connect(m_model, &Ctr2ProxyModel::firmwareVersionChanged, this,
+                &FirmwareInstallDialog::syncDevice);
 
-    m_downloader->fetchCatalog();
-    m_poll->start(kPollMs);
-    pollDevices();
+    syncDevice();
+    m_fw->begin();
 }
 
-FirmwareInstallDialog::~FirmwareInstallDialog()
-{
-    m_job->cancel();
-}
-
-bool FirmwareInstallDialog::busy() const
-{
-    return m_job->isRunning() || (m_model && m_model->firmwareUpdateRunning());
-}
-
-bool FirmwareInstallDialog::linkUpdateAvailable() const
-{
-    // The relay's USB device reports a firmware version only when it takes
-    // updates over the link.
-    return m_model && m_model->transport() == Ctr2ProxyModel::Transport::Usb
-           && m_model->firmwareUpdateAvailable() && !m_model->usbDevicePath().isEmpty()
-           && !m_model->usbFirmwareVersion().isEmpty();
-}
+FirmwareInstallDialog::~FirmwareInstallDialog() = default;
 
 void FirmwareInstallDialog::closeEvent(QCloseEvent* event)
 {
-    if (busy()) {
+    if (m_fw->busy()) {
         m_step->setText(tr("Wait for this step to finish, or press Cancel, before closing."));
         event->ignore();
         return;
@@ -304,7 +268,7 @@ void FirmwareInstallDialog::closeEvent(QCloseEvent* event)
 
 void FirmwareInstallDialog::reject()
 {
-    if (busy()) {
+    if (m_fw->busy()) {
         m_step->setText(tr("Wait for this step to finish, or press Cancel, before closing."));
         return;
     }
@@ -319,42 +283,16 @@ void FirmwareInstallDialog::showPlaceholder(const QString& text)
     item->setFlags(Qt::NoItemFlags);   // not a choice
 }
 
-void FirmwareInstallDialog::onCatalogReady(const EspFirmwareCatalog& catalog)
+void FirmwareInstallDialog::syncReleases()
 {
-    m_catalog = catalog;
-    const QSignalBlocker block(m_product);
-    m_product->clear();
-    for (const EspFirmwareCatalog::Product& p : catalog.products) {
-        // The hardware it is for, else the chip.
-        const QString target = p.device.isEmpty() ? p.chip : p.device;
-        m_product->addItem(target.isEmpty() ? tr("%1 %2").arg(p.name, p.version)
-                                            : tr("%1 %2 for %3").arg(p.name, p.version, target));
+    if (m_fw->releases().isEmpty()) {
+        showPlaceholder(m_fw->catalogProblem().isEmpty() ? tr("Looking for firmware…")
+                                                         : m_fw->catalogProblem());
+    } else {
+        const QSignalBlocker block(m_product);
+        m_product->clear();
+        m_product->addItems(m_fw->releases());
     }
-    if (catalog.products.isEmpty())
-        showPlaceholder(tr("No firmware available"));
-    sync();
-}
-
-void FirmwareInstallDialog::onProductChosen(int index)
-{
-    if (index < 0 || index >= m_catalog.products.size())
-        return;
-    m_haveRelease = false;
-    m_release->setText(m_catalog.products[index].description);
-    m_downloader->fetchRelease(m_catalog.products[index].package,
-                               m_catalog.products[index].version);
-    sync();
-}
-
-void FirmwareInstallDialog::onReleaseReady(const EspFirmwareManifest& manifest,
-                                           const QHash<QString, QByteArray>& files)
-{
-    m_manifest = manifest;
-    m_files = files;
-    m_haveRelease = true;
-    m_release->setText(tr("Ready: %1 %2 for %3.")
-                           .arg(manifest.product, manifest.version,
-                                manifest.device.isEmpty() ? manifest.chip : manifest.device));
     sync();
 }
 
@@ -374,67 +312,73 @@ void FirmwareInstallDialog::showStatus(const QString& state, const char* colorTo
     m_badge->setAccessibleDescription(detail);
 }
 
-void FirmwareInstallDialog::pollDevices()
+void FirmwareInstallDialog::syncDevice()
 {
-    if (busy())
-        return;
-    m_port.clear();
-    m_deviceMac.clear();
-    m_overLink = false;
-#ifdef HAVE_SERIALPORT
-    const QList<EspFlasher::Device> loaders = EspFlasher::listDevices();
-    if (!loaders.isEmpty()) {
-        m_port = loaders.first().portName;
-        m_deviceMac = loaders.first().serialNumber;
-        QString detail = tr("%1. Its screen stays dark until it restarts; that is normal.")
-                             .arg(m_deviceMac);
-        if (loaders.size() > 1)
+    const QString mac = m_fw->deviceMac();
+    switch (m_fw->device()) {
+    case FirmwareInstallModel::Device::Bootloader: {
+        QString detail = tr("%1. Its screen stays dark until it restarts; that is normal.").arg(mac);
+        if (m_fw->loaderCount() > 1)
             detail += QLatin1Char(' ')
                       + tr("%1 devices are in download mode; connect only the one to install.")
-                            .arg(loaders.size());
+                            .arg(m_fw->loaderCount());
         showStatus(tr("Bootloader"), "aqua", detail);
-        sync();
-        return;
+        break;
     }
-#endif
-#ifdef HAVE_HIDAPI
-    // A controller running firmware. Firmware installed beside the device's
-    // own names itself (a self-named CTR2 device: its product string is its
-    // name); a device reporting one of the fixed CTR2 product strings runs
-    // its maker's firmware.
-    for (const Ctr2HidPort::DeviceInfo& d : Ctr2HidapiPort::enumerate()) {
-        const QString model = d.ctr2Model();
-        if (model.isEmpty())
-            continue;
-        const bool selfNamed = model == d.product;
-        m_overLink = selfNamed && linkUpdateAvailable();
-        QString detail;
-        if (d.serial.size() == 12)
-            detail = QString::fromLatin1(QByteArray::fromHex(d.serial.toLatin1()).toHex(':')).toUpper()
-                     + QStringLiteral(". ");
-        detail += m_overLink ? tr("Running %1; Install updates it over the USB cable.")
-                                   .arg(m_model->usbFirmwareVersion())
-                             : tr("Put it in download mode to install.");
-        showStatus(selfNamed ? model : tr("Stock firmware"), selfNamed ? "cyan" : "sparkGold",
-                   detail);
-        sync();
-        return;
+    case FirmwareInstallModel::Device::LinkFirmware: {
+        const QString version = m_fw->linkVersion();
+        QString detail = mac.isEmpty() ? QString() : mac + QStringLiteral(". ");
+        detail += version.isEmpty() ? tr("Put it in download mode to install.")
+                                    : tr("Running %1; Install updates it over the USB cable.")
+                                          .arg(version);
+        showStatus(m_fw->deviceName(), "cyan", detail);
+        break;
     }
-#endif
-    showStatus(tr("No CTR2-Max"), "muted", tr("Connect the CTR2-Max with a USB cable."));
+    case FirmwareInstallModel::Device::Stock:
+        showStatus(tr("Stock firmware"), "sparkGold",
+                   (mac.isEmpty() ? QString() : mac + QStringLiteral(". "))
+                       + tr("Put it in download mode to install."));
+        break;
+    case FirmwareInstallModel::Device::None:
+        showStatus(tr("No CTR2-Max"), "muted", tr("Connect the CTR2-Max with a USB cable."));
+        break;
+    }
     sync();
 }
 
+namespace {
+
+// Enables a button, and when it is not, says why to assistive technology.
+void offer(QPushButton* b, bool enabled, const QString& why)
+{
+    b->setEnabled(enabled);
+    b->setAccessibleDescription(enabled ? QString() : why);
+}
+
+} // namespace
+
 void FirmwareInstallDialog::sync()
 {
-    const bool running = busy();
-    const bool loader = !m_port.isEmpty();
-    m_install->setEnabled(!running && (loader || m_overLink) && m_haveRelease);
-    m_start->setEnabled(!running && loader && m_haveRelease);
-    m_backup->setEnabled(!running && loader);
-    m_restore->setEnabled(!running && loader);
-    m_toStock->setEnabled(!running && m_overLink);
-    m_toBootloader->setEnabled(!running && m_overLink);
+    using Device = FirmwareInstallModel::Device;
+    const bool running = m_fw->busy();
+    const Device device = m_fw->device();
+    const bool loader = device == Device::Bootloader;
+    // Over the link: firmware that updates itself and reports its version.
+    const bool link = device == Device::LinkFirmware && !m_fw->linkVersion().isEmpty();
+    const bool release = m_fw->haveRelease();
+    const QString busy = tr("Unavailable while the current step runs.");
+    const QString noDevice = device == Device::None ? tr("No CTR2-Max is connected.")
+                                                    : tr("Put the CTR2-Max in download mode first.");
+    const QString noRelease = tr("Choose a release first.");
+    offer(m_install, !running && (loader || link) && release,
+          running ? busy : !release ? noRelease : noDevice);
+    offer(m_start, !running && loader && release,
+          running ? busy : !release ? noRelease : noDevice);
+    offer(m_backup, !running && loader, running ? busy : noDevice);
+    offer(m_restore, !running && loader, running ? busy : noDevice);
+    const QString notAetherCtr2 = tr("The CTR2-Max is not running AetherCTR2.");
+    offer(m_toStock, !running && link, running ? busy : notAetherCtr2);
+    offer(m_toBootloader, !running && link, running ? busy : notAetherCtr2);
     m_product->setEnabled(!running);
     m_cancel->setVisible(running);
     m_bar->setVisible(running);
@@ -443,20 +387,42 @@ void FirmwareInstallDialog::sync()
 QString FirmwareInstallDialog::suggestBackupPath() const
 {
     const QString dir = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
-    const QString mac = QString(m_deviceMac).remove(QLatin1Char(':'));
+    const QString mac = QString(m_fw->deviceMac()).remove(QLatin1Char(':'));
     return QDir(dir).filePath(QStringLiteral("flash-backup-%1-%2.bin")
                                   .arg(mac, QDate::currentDate().toString(Qt::ISODate)));
 }
 
+void FirmwareInstallDialog::started(bool ok, const QString& problem, const QString& doneText)
+{
+    if (!ok) {
+        m_jobDone.clear();
+        m_step->setText(problem);
+        sync();
+        return;
+    }
+    // An action that finished at once (a device that could not be opened)
+    // has already reported through onFinished().
+    if (m_fw->busy()) {
+        m_jobDone = doneText;
+        m_bar->setValue(0);
+    }
+    sync();
+}
+
 void FirmwareInstallDialog::onInstall()
 {
-    if (m_port.isEmpty() && m_overLink) {
+    // The device is the one shown now; the model refuses if it changes
+    // while the questions below are open.
+    const FirmwareInstallModel::Target target = m_fw->target();
+    if (target.device == FirmwareInstallModel::Device::LinkFirmware) {
         installOverLink();
         return;
     }
+    const QString product = m_fw->releaseProduct();
+    const QString version = m_fw->releaseVersion();
     ScopedChildWidget<QMessageBox> ask(
-        QMessageBox::Question, tr("Install %1?").arg(m_manifest.product),
-        tr("Install %1 %2 on the CTR2-Max %3?").arg(m_manifest.product, m_manifest.version, m_deviceMac),
+        QMessageBox::Question, tr("Install %1?").arg(product),
+        tr("Install %1 %2 on the CTR2-Max %3?").arg(product, version, target.mac),
         QMessageBox::Cancel, this);
     ask.get()->setInformativeText(
         tr("A backup saves the device's whole flash to a file first, so it can be put back exactly "
@@ -468,54 +434,39 @@ void FirmwareInstallDialog::onInstall()
     ask.get()->setDefaultButton(withBackup);
     ask.get()->exec();
     QString path;
+    QString done;
     if (ask.get()->clickedButton() == withBackup) {
         path = QFileDialog::getSaveFileName(this, tr("Save the backup"), suggestBackupPath(),
                                             tr("Flash backup (*.bin)"));
         if (path.isEmpty())
             return;
-        m_jobDone = tr("%1 %2 is installed and starting. The backup is in %3.")
-                        .arg(m_manifest.product, m_manifest.version, path);
+        done = tr("%1 %2 is installed and starting. The backup is in %3.").arg(product, version, path);
     } else if (ask.get()->clickedButton() == without) {
-        m_jobDone = tr("%1 %2 is installed and starting.").arg(m_manifest.product, m_manifest.version);
+        done = tr("%1 %2 is installed and starting.").arg(product, version);
     } else {
         return;
     }
-    runJob(int(EspFirmwareJob::Action::Install), path, {});
+    m_step->setText(tr("Connecting…"));
+    QString problem;
+    m_jobDone = done;
+    const bool ok = m_fw->install(target, path, &problem);
+    started(ok, problem, done);
 }
 
 void FirmwareInstallDialog::installOverLink()
 {
-    // The application image is the one the manifest puts in one of the
-    // firmware's own slots; the device picks the slot itself. A release with
-    // more than one is not one the link can install.
-    QByteArray app;
-    int apps = 0;
-    for (const EspFirmwareManifest::Image& image : m_manifest.images) {
-        for (int slot : m_manifest.ownSlots) {
-            if (image.offset == m_manifest.appSlots.value(slot)) {
-                app = m_files.value(image.file);
-                ++apps;
-            }
-        }
-    }
-    if (apps != 1)
-        app.clear();
-    Ctr2FirmwareUpdater::Image image;
+    const FirmwareInstallModel::Target target = m_fw->target();
     QString problem;
-    if (app.isEmpty())
-        problem = tr("This release cannot be installed over the USB cable. Put the device in "
-                     "download mode to install it.");
-    else
-        Ctr2FirmwareUpdater::readImage(app, &image, &problem);
-    if (!problem.isEmpty()) {
+    if (!m_fw->canInstallOverLink(&problem)) {
         m_step->setText(problem);
         return;
     }
-    const QString current = m_model->usbFirmwareVersion();
+    const QString product = m_fw->releaseProduct();
+    const QString version = m_fw->releaseVersion();
     ScopedChildWidget<QMessageBox> ask(
-        QMessageBox::Question, tr("Install %1?").arg(m_manifest.product),
+        QMessageBox::Question, tr("Install %1?").arg(product),
         tr("Install %1 %2 over the USB cable? The device runs %3 now.")
-            .arg(m_manifest.product, m_manifest.version, current),
+            .arg(product, version, m_fw->linkVersion()),
         QMessageBox::Cancel, this);
     ask.get()->setInformativeText(
         tr("It takes about three minutes. The device checks the firmware's signature, and keeps "
@@ -523,71 +474,65 @@ void FirmwareInstallDialog::installOverLink()
     QPushButton* go = ask.get()->addButton(tr("Install"), QMessageBox::AcceptRole);
     ask.get()->setDefaultButton(go);
     ask.get()->exec();
-    if (ask.get()->clickedButton() != go || !m_model)
+    if (ask.get()->clickedButton() != go)
         return;
-    m_jobDone = tr("%1 %2 is installed and running.").arg(m_manifest.product, m_manifest.version);
-    m_bar->setValue(0);
+    const QString done = tr("%1 %2 is installed and running.").arg(product, version);
     m_step->setText(tr("Starting the update…"));
-    if (!m_model->startFirmwareUpdate(image, &problem)) {
-        m_jobDone.clear();
-        m_step->setText(problem);
-        return;
-    }
-    // An update that could not even open the device has already finished,
-    // and onFinished() restarted the poll.
-    if (m_model->firmwareUpdateRunning())
-        m_poll->stop();
-    sync();
+    m_jobDone = done;
+    const bool ok = m_fw->installOverLink(target, &problem);
+    started(ok, problem, done);
 }
 
 void FirmwareInstallDialog::restartDevice(bool bootloader)
 {
-    if (!m_model)
-        return;
-    m_jobDone = bootloader
-                    ? tr("The CTR2-Max is restarting into download mode.")
-                    : tr("The CTR2-Max is restarting into its stock firmware. To come back to "
-                         "AetherCTR2, put it in download mode and press Start.");
+    const QString done =
+        bootloader ? tr("The CTR2-Max is restarting into download mode.")
+                   : tr("The CTR2-Max is restarting into its stock firmware. To come back to "
+                        "AetherCTR2, choose Run AetherCTR2 in its Settings menu, or put it in "
+                        "download mode and press Start.");
+    m_step->setText(tr("Asking the CTR2-Max to restart…"));
+    m_jobDone = done;
     QString problem;
-    if (!m_model->restartUsbDevice(bootloader ? Ctr2FirmwareUpdater::Restart::Bootloader
-                                              : Ctr2FirmwareUpdater::Restart::OtherFirmware,
-                                   &problem)) {
-        m_jobDone.clear();
-        m_step->setText(problem);
-        return;
-    }
-    if (m_model->firmwareUpdateRunning()) {
-        m_step->setText(tr("Asking the CTR2-Max to restart…"));
-        m_poll->stop();
-    }
-    sync();
+    const bool ok = m_fw->restart(m_fw->target(), bootloader, &problem);
+    started(ok, problem, done);
 }
 
 void FirmwareInstallDialog::onStart()
 {
-    m_jobDone = tr("The device is starting %1.").arg(m_manifest.product);
-    runJob(int(EspFirmwareJob::Action::Start), {}, {});
+    const FirmwareInstallModel::Target target = m_fw->target();
+    const QString done = tr("The device is starting %1.").arg(m_fw->releaseProduct());
+    m_step->setText(tr("Connecting…"));
+    m_jobDone = done;
+    QString problem;
+    const bool ok = m_fw->startFirmware(target, &problem);
+    started(ok, problem, done);
 }
 
 void FirmwareInstallDialog::onBackup()
 {
+    const FirmwareInstallModel::Target target = m_fw->target();
     const QString path = QFileDialog::getSaveFileName(this, tr("Save the backup"), suggestBackupPath(),
                                                       tr("Flash backup (*.bin)"));
     if (path.isEmpty())
         return;
-    m_jobDone = tr("Backed up to %1. The device is restarting.").arg(path);
-    runJob(int(EspFirmwareJob::Action::Backup), path, {});
+    const QString done = tr("Backed up to %1. The device is restarting.").arg(path);
+    m_step->setText(tr("Connecting…"));
+    m_jobDone = done;
+    QString problem;
+    const bool ok = m_fw->backup(target, path, &problem);
+    started(ok, problem, done);
 }
 
 void FirmwareInstallDialog::onRestore()
 {
+    const FirmwareInstallModel::Target target = m_fw->target();
     const QString path = QFileDialog::getOpenFileName(this, tr("Choose a backup"), suggestBackupPath(),
                                                       tr("Flash backup (*.bin)"));
     if (path.isEmpty())
         return;
     ScopedChildWidget<QMessageBox> ask(
         QMessageBox::Warning, tr("Restore the backup?"),
-        tr("Write %1 back onto the device %2?").arg(QFileInfo(path).fileName(), m_deviceMac),
+        tr("Write %1 back onto the device %2?").arg(QFileInfo(path).fileName(), target.mac),
         QMessageBox::Cancel, this);
     ask.get()->setInformativeText(
         tr("The device's flash becomes exactly what it was when the backup was made: its firmware, "
@@ -596,44 +541,21 @@ void FirmwareInstallDialog::onRestore()
     ask.get()->exec();
     if (ask.get()->clickedButton() != go)
         return;
-    m_jobDone = tr("The backup is restored and the device is restarting.");
-    runJob(int(EspFirmwareJob::Action::Restore), {}, path);
-}
-
-void FirmwareInstallDialog::runJob(int action, const QString& backupPath, const QString& restoreFrom)
-{
-    EspFirmwareJob::Request r;
-    r.portName = m_port;
-    r.action = static_cast<EspFirmwareJob::Action>(action);
-    r.manifest = m_manifest;
-    r.files = m_files;
-    r.backupPath = backupPath;
-    r.restoreFrom = restoreFrom;
-    r.requireCtr2MaxRegistration = true;   // this window installs AetherCTR2 on CTR2-Max units
-    m_bar->setValue(0);
+    const QString done = tr("The backup is restored and the device is restarting.");
     m_step->setText(tr("Connecting…"));
-    if (m_job->start(r))
-        m_poll->stop();
-    sync();
-}
-
-void FirmwareInstallDialog::onCancel()
-{
-    if (m_model && m_model->firmwareUpdateRunning())
-        m_model->cancelFirmwareUpdate();
-    m_job->cancel();
-    m_step->setText(tr("Stopping…"));
-}
-
-void FirmwareInstallDialog::onProgress(const QString& step, qint64 done, qint64 total)
-{
-    m_step->setText(step);
-    m_bar->setValue(total > 0 ? int(done * 100 / total) : 0);
+    m_jobDone = done;
+    QString problem;
+    const bool ok = m_fw->restore(target, path, &problem);
+    started(ok, problem, done);
 }
 
 void FirmwareInstallDialog::onFinished(bool ok, const QString& message)
 {
     QString text = ok ? m_jobDone : message;
+    // Done, but the device did not restart by itself: say so, with what to do.
+    if (ok && !message.isEmpty())
+        text += QLatin1Char(' ')
+                + tr("It did not restart by itself (%1): press RESET on the CTR2-Max.").arg(message);
     m_jobDone.clear();
 #ifdef Q_OS_LINUX
     if (!ok && message.contains(QStringLiteral("Permission")))
@@ -642,8 +564,6 @@ void FirmwareInstallDialog::onFinished(bool ok, const QString& message)
                      "the distribution) and log in again.");
 #endif
     m_step->setText(text);
-    m_port.clear();
-    m_poll->start(kPollMs);
     sync();
 }
 

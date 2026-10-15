@@ -4,7 +4,7 @@
 
 Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine-design.md) §2, §10). One row per engine header the UI includes; converting a touchpoint means the UI reaches that surface through the versioned protocol instead of the header.
 
-**Totals:** 261 touchpoint headers (220 core, 41 models) — 261/261 tagged, 0/261 converted.
+**Totals:** 256 touchpoint headers (214 core, 42 models) — 256/256 tagged, 0/256 converted.
 
 | Header | Includers | Tag | Status |
 |---|---:|---|---|
@@ -44,8 +44,6 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/ClockAlignmentFrame.h` | 1 | universal — Frozen per-second alignment contract emitted by the AetherClock engine (cross-PR contract, PRD-A §5). Radio-agnostic decode output. | unconverted |
 | `core/ClockDiagnostics.h` | 1 | universal — AetherClock ~1 Hz acquisition-telemetry snapshot (pre-lock funnel, verdict line, debug pane). Measured decode-chain quantities only, parallel to the frozen alignment contract; no vendor ties. | unconverted |
 | `core/CtcssTones.h` | 1 | universal — Canonical CTCSS tone vocabulary shared by operator controls and automation validation. Radio-family-neutral state and validation data. | unconverted |
-| `core/Ctr2FirmwareUpdater.h` | 1 | peripheral(ctr2) — Updates a CTR2-class controller's firmware over its USB HID link (Firmware extension), or asks it to restart into its other firmware or ROM download mode; controller transport, no radio state. | unconverted |
-| `core/Ctr2HidapiPort.h` | 1 | peripheral(ctr2) — hidapi enumeration and I/O for CTR2 controllers' USB HID link; the CTR2-Max Firmware window lists running controllers with it. Controller transport, no radio state. | unconverted |
 | `core/CwCallsignSpotter.h` | 1 | universal — Spots callsigns from the client-side CW decoder stream; radio-agnostic engine feature. | unconverted |
 | `core/CwDecoder.h` | 1 | universal — Client-side CW/Morse decoder (ggmorse) over generic 24kHz PCM; radio-agnostic engine DSP feature. | unconverted |
 | `core/CwRecordGate.h` | 1 | universal — Pure predicates for Client-Side QSO-recorder TX-slot ownership during a CW over; radio-agnostic policy, no vendor wire. | unconverted |
@@ -66,10 +64,6 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/DxSpotLineParser.h` | 1 | universal — Parses DX-cluster `DX de` lines (DXSpider/AR/CC/RBN/GoCluster) into DxSpot, including the GoCluster fixed-column tail and SNR report, and replays saved spot logs with per-session provenance. Pure line-to-value logic; no vendor radio ties. | unconverted |
 | `core/DxccColorProvider.h` | 2 | universal — DXCC worked-status from ADIF log, colors cluster spots by call/freq/mode; radio-agnostic spot/logging feature | unconverted |
 | `core/EibiClient.h` | 3 | universal — Radio-agnostic EiBi shortwave schedule downloader/parser that emits canonical DX spots; engine data service with no vendor protocol coupling. | unconverted |
-| `core/EspFirmwareCatalog.h` | 1 | peripheral(ctr2) — Fetches the CTR2-Max firmware catalog and signed releases (Ed25519-checked manifests, SHA-256-checked images); no radio state. | unconverted |
-| `core/EspFirmwareJob.h` | 1 | peripheral(ctr2) — One ROM-bootloader session with an ESP32 controller on a worker thread (backup, install, start, restore); controller firmware tooling, no radio state. | unconverted |
-| `core/EspFirmwareManifest.h` | 1 | peripheral(ctr2) — Parses and checks a signed controller-firmware manifest (images, protected regions, boot selection); data only, no radio state. | unconverted |
-| `core/EspFlasher.h` | 1 | peripheral(ctr2) — esp-serial-flasher over QSerialPort: the ROM download mode of an ESP32 controller (flash read and write, MD5, watchdog restart); controller transport, no radio state. | unconverted |
 | `core/FirmwareCurrency.h` | 2 | universal — Pure release comparison and its operator-facing wording; names no family and holds no wire types — the published version and release-notes template both arrive from the backend's declared capability. | unconverted |
 | `core/FirmwareStager.h` | 1 | vendor(flex) — Downloads SmartSDR installers from flexradio.com, extracts .ssdr firmware for 6x00/9600 upload — pure Flex | unconverted |
 | `core/FirmwareUploader.h` | 1 | vendor(flex) — SmartSDR firmware upload: 'file upload' cmd, .ssdr files, Flex TCP ports 4995/42607 — pure Flex protocol | unconverted |
@@ -247,6 +241,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `models/DigitalVoiceWaveformHistory.h` | 1 | mixed(flex) — Rolling health history for the DV waveform path (sample rate, turnaround, deficits). Generic rate/latency telemetry fused with Flex VITA sequence-gap counters. | unconverted |
 | `models/DvkModel.h` | 1 | mixed(flex) — Voice keyer slots/commands are core-profile; status parsing + FlexLib SsdrErrors mapping are flex. | unconverted |
 | `models/EqualizerModel.h` | 3 | universal — 8-band TX/RX audio EQ state (enable + band gains) — core capability; SmartSDR wire parsing/cmds move to flex adapter | unconverted |
+| `models/FirmwareInstallModel.h` | 1 | peripheral(ctr2) — CTR2-Max firmware installer model behind the CTR2 window: the signed release catalog, which controller is connected and in what mode, and actions on it (EspFirmwareJob in ROM download mode, or Ctr2ProxyModel's updater over the USB link), each checked against the device the operator confirmed. Controller firmware tooling, no radio state; a peripheral, NOT behind the radio seam. | unconverted |
 | `models/FlexWaveformModel.h` | 1 | vendor(flex) — FlexLib waveform/WFP container management: parses SmartSDR waveform status, emits Flex protocol commands | unconverted |
 | `models/GreenHeronModel.h` | 1 | peripheral(greenheron) — Green Heron "Everyware" client — antenna switches and rotator on one connection to a standalone accessory served by a PC-side Everyware server over direct TCP (default port 10000), reached by an operator-entered address with no discovery and no radio awareness at all; works with any radio or none. Same precedent as models/AntennaGeniusModel.h and core/AcomConnection.h. Not radio-family wire; a peripheral accessory, NOT behind the IRadioBackend radio seam. Protocol determined by observing traffic on the wire (Principle IV); see docs/green-heron-everyware.md. | unconverted |
 | `models/MemoryEntry.h` | 1 | universal — POD memory-channel record (freq/mode/offset/tone/squelch/filter/digital offsets) — canonical memories surface | unconverted |

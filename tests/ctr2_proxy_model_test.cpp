@@ -270,13 +270,13 @@ bool waitUntil(const std::function<bool()>& predicate, int timeoutMs)
 // until the device is plugged in, stays stopped after the operator's Stop
 // until the next connection, remembers its device, and never starts a stock
 // CTR2 (no USB mode).
-void testAutoStart()
+void testAutoStart(const QString& product)
 {
     using Info = AetherSDR::Ctr2HidPort::DeviceInfo;
     AetherSDR::Ctr2RelaySettings{}.save();
     const Info stock{QStringLiteral("stock"), 0x303A, 0x1001, {}, QStringLiteral("ESP32S3_DEV"),
                      QStringLiteral("000000000001")};
-    const Info aether{QStringLiteral("aether"), 0x303A, 0x1001, {}, QStringLiteral("AetherCTR2"),
+    const Info aether{QStringLiteral("aether"), 0x303A, 0x1001, {}, product,
                       QStringLiteral("B81F3FC45888")};
     auto devices = std::make_shared<QList<Info>>();
     auto log = std::make_shared<PortLog>();
@@ -543,7 +543,8 @@ int main(int argc, char** argv)
     testProbeFollowsSelection();
     testUdevRuleMatchesKnownCtr2s();
     testSelfNamedDevices();
-    testAutoStart();
+    testAutoStart(QStringLiteral("AetherCTR2"));   // names itself
+    testAutoStart(QStringLiteral("AETHER_KNOB"));  // the fixed AetherKnob identity
     testDevicesRescanByThemselves();
 
     if (g_failures) {

@@ -37,6 +37,9 @@ public:
         QString label() const;
         // Just the name: the model, else the product.
         QString shortName() const;
+        // A recognized device whose firmware relays over USB: AetherKnob,
+        // or firmware that names itself (AetherCTR2). Never a stock CTR2.
+        bool usbLink() const;
     };
 
     // Every USB identity recognised as a CTR2. 303A:1001 is Espressif's
@@ -52,6 +55,9 @@ public:
         quint16 productId;
         const char* product;
         const char* model;
+        // Its firmware relays over USB (the link this relay speaks). A stock
+        // CTR2's does not: it has no USB mode.
+        bool usbLink{false};
     };
     static const std::vector<KnownCtr2>& knownCtr2Devices();
 

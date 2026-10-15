@@ -396,8 +396,10 @@ simulated device that runs the reference for its side of the link.
 ### Installing AetherCTR2 on a CTR2-Max
 
 The CTR2 window (**Settings → Controllers → CTR2...**, `FirmwareInstallDialog`)
-holds the relay's controls (`Ctr2ProxyPanel`) and, below them, the CTR2-Max
-firmware installer. It installs AetherCTR2 beside the CTR2-Max's stock
+holds the relay's controls (`Ctr2ProxyPanel`, over `Ctr2ProxyModel`) and, below
+them, the CTR2-Max firmware installer (over `FirmwareInstallModel`, which owns
+the catalog download, the device watch and the install job; the window
+includes no core headers). It installs AetherCTR2 beside the CTR2-Max's stock
 firmware, from releases listed in AetherSDR's firmware catalog
 (`EspFirmwareCatalog`, `https://www.aethersdr.com/firmware/catalog.json`).
 
@@ -446,6 +448,16 @@ firmware, from releases listed in AetherSDR's firmware catalog
   (`0.9.3-rc1`) is allowed and ignored by the check. `Ctr2FirmwareUpdater`
   refuses an image whose version does not, and compares the unit's report
   against the same three numbers.
+- **The device confirmed.** An action is taken on the device the operator
+  confirmed: the window captures it when the action begins, the model refuses
+  the action if another device is there by the time it is confirmed, and the
+  job compares the MAC of the device it opened before writing anything (a
+  port name can be reused). A device whose MAC cannot be read is refused.
+- **A plan that holds together.** Besides the protected regions, no two
+  writes may share a sector (images, and the boot selection), and no required
+  region may lie under the boot selection, which every install and start
+  rewrites. Parsing checks this, and the installer checks it again before the
+  first write (`EspFirmwareManifest::checkPlan`).
 - **Boot selection.** The boot selection (otadata) has two entries, one per
   sector. Selecting a slot rewrites only the entry not in use, as its own
   sector, so an interrupted write always leaves the entry the unit started

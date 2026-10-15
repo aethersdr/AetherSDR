@@ -66,17 +66,19 @@ bool Ctr2FirmwareUpdater::readImage(const QByteArray& file, Image* image, QStrin
     // update is checked against.
     static const QRegularExpression kTriple(QStringLiteral("^(\\d+)\\.(\\d+)\\.(\\d+)"));
     const QRegularExpressionMatch m = kTriple.match(image->version);
-    if (!m.hasMatch() || m.captured(1).toUInt() > 255 || m.captured(2).toUInt() > 255
-        || m.captured(3).toUInt() > 255) {
+    // Each part 0-255, and a number at all: toUInt() gives 0 on overflow.
+    const auto part = [&m](int i) {
+        bool ok = false;
+        const uint v = m.captured(i).toUInt(&ok);
+        return ok && v <= 255 ? int(v) : -1;
+    };
+    if (!m.hasMatch() || part(1) < 0 || part(2) < 0 || part(3) < 0) {
         *problem = tr("This image's version (%1) is not major.minor.patch, so the device could "
                       "not report it.").arg(image->version);
         return false;
     }
     image->bytes = file;
-    image->reportedVersion = QStringLiteral("%1.%2.%3")
-                                 .arg(m.captured(1).toUInt())
-                                 .arg(m.captured(2).toUInt())
-                                 .arg(m.captured(3).toUInt());
+    image->reportedVersion = QStringLiteral("%1.%2.%3").arg(part(1)).arg(part(2)).arg(part(3));
     image->project = cString(file, kProjectOffset, 32);
     return true;
 }

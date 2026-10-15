@@ -58,9 +58,14 @@ struct EspFirmwareManifest {
 
     // Parses and checks a manifest: every image, the boot selection and the
     // own slots stay clear of protected regions (by whole sectors, as flash is
-    // erased), and everything fits in the flash. On failure returns false and
-    // says why.
+    // erased), everything fits in the flash, and the plan holds together
+    // (checkPlan). On failure returns false and says why.
     static bool parse(const QByteArray& json, EspFirmwareManifest* out, QString* problem);
+    // The writes a manifest plans, as a whole: no two images, nor an image and
+    // the boot selection, share a sector, and no required region lies under
+    // the boot selection (which every install and start rewrites). parse()
+    // checks it; the installer checks again before writing anything.
+    static bool checkPlan(const EspFirmwareManifest& m, QString* problem);
 };
 
 } // namespace AetherSDR

@@ -418,6 +418,75 @@ void testBackupRestore()
           "a backup of another size is refused");
 }
 
+// A plan that does not hold together is refused before anything is written,
+// even with every image's hash intact: writes that share a sector, and a
+// required region under the boot selection (rewritten by install and start).
+void testPlanRefusals()
+{
+    const QHash<QString, QByteArray> f = files();
+    QString problem;
+
+    // A second image one sector into the app: it would erase part of it.
+    QHash<QString, QByteArray> two = f;
+    two[QStringLiteral("extra.bin")] = pattern(0x100, 'e');
+    QJsonObject j = manifestJson(two);
+    QJsonArray images = j["images"].toArray();
+    images.append(QJsonObject{{"file", "extra.bin"},
+                              {"offset", hex(kSlot1 + kSector)},
+                              {"size", two.value("extra.bin").size()},
+                              {"sha256", QString::fromLatin1(sha256(two.value("extra.bin")).toHex())}});
+    j["images"] = images;
+    check(!parses(j, &problem) && problem.contains(QStringLiteral("overlap")),
+          "overlapping images are refused when parsed");
+    {
+        EspFirmwareManifest unchecked = parsed(manifestJson(f));
+        EspFirmwareManifest::Image extra;
+        extra.file = QStringLiteral("extra.bin");
+        extra.offset = kSlot1 + kSector;
+        extra.size = 0x100;
+        extra.sha256 = sha256(two.value("extra.bin"));
+        unchecked.images.append(extra);
+        FakeFlash d = vendorDevice();
+        EspFirmwareInstaller i(&d, {});
+        check(!i.install(unchecked, two, &problem) && d.writes == 0,
+              "and an unchecked manifest with them writes nothing");
+    }
+
+    // An image in the boot selection's sectors.
+    j = manifestJson(f);
+    images = j["images"].toArray();
+    QJsonObject table = images[0].toObject();
+    table["offset"] = hex(kOtadata + kSector);
+    images[0] = table;
+    j["images"] = images;
+    check(!parses(j, &problem) && problem.contains(QStringLiteral("boot.otadata")),
+          "an image under the boot selection is refused");
+
+    // A required region over the boot selection.
+    j = manifestJson(f);
+    QJsonArray require = j["require"].toArray();
+    QJsonObject boot = region(QStringLiteral("boot selection"), kOtadata, 0x20);
+    boot["sha256"] = QString::fromLatin1(sha256(vendorDevice().flash.mid(kOtadata, 0x20)).toHex());
+    require.append(boot);
+    j["require"] = require;
+    check(!parses(j, &problem) && problem.contains(QStringLiteral("boot selection")),
+          "a required region under the boot selection is refused");
+    {
+        EspFirmwareManifest unchecked = parsed(manifestJson(f));
+        EspFirmwareManifest::Region r;
+        r.name = QStringLiteral("boot selection");
+        r.offset = kOtadata;
+        r.size = 0x20;
+        FakeFlash d = vendorDevice();
+        r.sha256 = sha256(d.flash.mid(kOtadata, 0x20));
+        unchecked.require.append(r);
+        EspFirmwareInstaller i(&d, {});
+        check(!i.install(unchecked, f, &problem) && d.writes == 0,
+              "and an unchecked manifest with one installs nothing");
+        check(!i.start(unchecked, &problem) && d.writes == 0, "nor starts");
+    }
+}
+
 // A boot selection interrupted after its erase leaves the entry the device
 // started from in place.
 void testInterruptedBootSelection()
@@ -495,6 +564,7 @@ int main()
     testInstallRefusals();
     testStart();
     testBackupRestore();
+    testPlanRefusals();
     testInterruptedBootSelection();
     testCancelBeforeWrite();
     if (g_failures) {

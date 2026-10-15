@@ -360,7 +360,7 @@ void Ctr2ProxyModel::tryAutoStart()
         return;
     if (m_transport == Transport::Usb) {
         const Ctr2HidPort::DeviceInfo* device = selectedUsbDevice();
-        if (!device || device->ctr2Model() != device->product)
+        if (!device || !device->usbLink())
             return;   // a stock CTR2 has no USB mode
         if (usbDeviceNeedsAccessRule())
             return;   // Start offers to install the rule; nothing to retry

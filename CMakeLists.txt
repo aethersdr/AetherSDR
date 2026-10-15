@@ -1237,6 +1237,7 @@ set(MODEL_SOURCES
     src/models/GreenHeronModel.cpp
     src/models/AetherClockModel.cpp
     src/models/Ctr2ProxyModel.cpp
+    src/models/FirmwareInstallModel.cpp
 )
 
 # Vendored QGeoView (LGPL-3.0) — slippy-map widget for the common

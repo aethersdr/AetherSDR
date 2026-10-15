@@ -983,45 +983,15 @@
   "split": "",
   "confidence": "high"
  },
- "core/Ctr2FirmwareUpdater.h": {
-  "tag": "peripheral(ctr2)",
-  "note": "Updates a CTR2-class controller's firmware over its USB HID link (Firmware extension), or asks it to restart into its other firmware or ROM download mode; controller transport, no radio state.",
-  "split": "",
-  "confidence": "high"
- },
- "core/Ctr2HidapiPort.h": {
-  "tag": "peripheral(ctr2)",
-  "note": "hidapi enumeration and I/O for CTR2 controllers' USB HID link; the CTR2-Max Firmware window lists running controllers with it. Controller transport, no radio state.",
-  "split": "",
-  "confidence": "high"
- },
- "core/EspFirmwareCatalog.h": {
-  "tag": "peripheral(ctr2)",
-  "note": "Fetches the CTR2-Max firmware catalog and signed releases (Ed25519-checked manifests, SHA-256-checked images); no radio state.",
-  "split": "",
-  "confidence": "high"
- },
- "core/EspFirmwareJob.h": {
-  "tag": "peripheral(ctr2)",
-  "note": "One ROM-bootloader session with an ESP32 controller on a worker thread (backup, install, start, restore); controller firmware tooling, no radio state.",
-  "split": "",
-  "confidence": "high"
- },
- "core/EspFirmwareManifest.h": {
-  "tag": "peripheral(ctr2)",
-  "note": "Parses and checks a signed controller-firmware manifest (images, protected regions, boot selection); data only, no radio state.",
-  "split": "",
-  "confidence": "high"
- },
- "core/EspFlasher.h": {
-  "tag": "peripheral(ctr2)",
-  "note": "esp-serial-flasher over QSerialPort: the ROM download mode of an ESP32 controller (flash read and write, MD5, watchdog restart); controller transport, no radio state.",
-  "split": "",
-  "confidence": "high"
- },
  "models/Ctr2ProxyModel.h": {
   "tag": "peripheral(ctr2)",
   "note": "CTR2-Max controller relay: an operator-enabled opaque byte relay between the controller (TCP listener in Wi-Fi mode, USB HID link in USB mode) and a dedicated radio TCP connection. The CTR2 is an independent radio client; nothing passes RadioModel, a backend socket or IRadioBackend. A device that negotiates link extensions (HID Feature report 0x02; never a stock CTR2) also receives AetherSDR's own audio spectrum, from the GUI's Ctr2AudioSpectrumFeeder, beside the relayed stream. A peripheral accessory transport, NOT behind the radio seam. See docs/ctr2-tcp-proxy-design.md and docs/ctr2-usb-relay-design.md (RFC #6091).",
+  "split": "",
+  "confidence": "high"
+ },
+ "models/FirmwareInstallModel.h": {
+  "tag": "peripheral(ctr2)",
+  "note": "CTR2-Max firmware installer model behind the CTR2 window: the signed release catalog, which controller is connected and in what mode, and actions on it (EspFirmwareJob in ROM download mode, or Ctr2ProxyModel's updater over the USB link), each checked against the device the operator confirmed. Controller firmware tooling, no radio state; a peripheral, NOT behind the radio seam.",
   "split": "",
   "confidence": "high"
  },

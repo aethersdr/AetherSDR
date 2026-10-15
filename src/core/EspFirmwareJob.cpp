@@ -94,14 +94,34 @@ void EspFirmwareJob::run(const Request& request)
         m_ok = ok;
         m_message = message;
     };
-#ifndef HAVE_SERIALPORT
-    Q_UNUSED(request);
-    finish(false, tr("This build of AetherSDR has no serial port support."));
-#else
-    EspFlasher flasher;
     QString problem;
-    if (!flasher.open(request.portName, &problem)) {
+    std::unique_ptr<EspFlashTarget> target;
+    if (m_opener) {
+        target = m_opener(request.portName, &problem);
+    } else {
+#ifdef HAVE_SERIALPORT
+        auto flasher = std::make_unique<EspFlasher>();
+        if (flasher->open(request.portName, &problem))
+            target = std::move(flasher);
+#else
+        problem = tr("This build of AetherSDR has no serial port support.");
+#endif
+    }
+    if (!target) {
         finish(false, problem);
+        return;
+    }
+    EspFlashTarget& flasher = *target;
+    // The device the operator confirmed, and no other: a port name can be
+    // reused by another device, and enumeration can change while a prompt
+    // is open. Nothing has been written yet.
+    if (flasher.mac().size() != 6
+        || (!request.expectedMac.isEmpty() && flasher.mac() != request.expectedMac)) {
+        finish(false, flasher.mac().size() != 6
+                          ? tr("The device's MAC address could not be read. Nothing was written.")
+                          : tr("The device in download mode is %1, not %2, the one you chose. "
+                               "Nothing was written.")
+                                .arg(macText(flasher.mac()), macText(request.expectedMac)));
         return;
     }
     {
@@ -225,7 +245,6 @@ void EspFirmwareJob::run(const Request& request)
         return;
     }
     finish(ok, problem);
-#endif
 }
 
 } // namespace AetherSDR

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "EspFirmwareManifest.h"
+#include "EspFlashTarget.h"
 
 #include <QByteArray>
 #include <QHash>
@@ -8,6 +9,8 @@
 #include <QString>
 
 #include <atomic>
+#include <functional>
+#include <memory>
 
 class QThread;
 
@@ -28,6 +31,9 @@ public:
     };
     struct Request {
         QString portName;
+        // The device the operator confirmed (6-byte MAC). The job checks the
+        // device it opened is that one before anything else; empty skips.
+        QByteArray expectedMac;
         Action action{Action::Install};
         EspFirmwareManifest manifest;
         QHash<QString, QByteArray> files;
@@ -53,6 +59,12 @@ public:
 
     // False if a job is already running.
     bool start(const Request& request);
+
+    // Opens the device on a port; by default an EspFlasher (tests: a flash
+    // in memory). Called on the job's thread.
+    using TargetOpener =
+        std::function<std::unique_ptr<EspFlashTarget>(const QString& portName, QString* problem)>;
+    void setTargetOpener(TargetOpener opener) { m_opener = std::move(opener); }
     // The device is left as the current step leaves it; a restore or install
     // stopped part way leaves its region incomplete.
     void cancel();
@@ -66,6 +78,7 @@ signals:
 private:
     void run(const Request& request);
 
+    TargetOpener m_opener;
     QThread* m_thread{nullptr};
     std::atomic<bool> m_cancel{false};
     bool m_ok{false};        // written by the job's thread before it finishes

@@ -487,6 +487,20 @@ target_include_directories(esp_firmware_installer_test PRIVATE src)
 target_link_libraries(esp_firmware_installer_test PRIVATE aethercore Qt6::Core)
 add_test(NAME esp_firmware_installer_test COMMAND esp_firmware_installer_test)
 
+# EspFirmwareJob against a flash in memory: it acts only on the device the
+# operator confirmed (by MAC, before any write), and refuses an unreadable MAC.
+add_executable(esp_firmware_job_test tests/esp_firmware_job_test.cpp)
+target_include_directories(esp_firmware_job_test PRIVATE src)
+target_link_libraries(esp_firmware_job_test PRIVATE aethercore Qt6::Core)
+add_test(NAME esp_firmware_job_test COMMAND esp_firmware_job_test)
+
+# FirmwareInstallModel acts only on the device the operator confirmed:
+# injected device lists and an in-memory flash; no serial port, no network.
+add_executable(firmware_install_model_test tests/firmware_install_model_test.cpp)
+target_include_directories(firmware_install_model_test PRIVATE src)
+target_link_libraries(firmware_install_model_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME firmware_install_model_test COMMAND firmware_install_model_test)
+
 # Ctr2MaxRegistration (read-only littlefs) against synthetic stock-firmware
 # volumes: registered, not registered, and no volume.
 add_executable(ctr2max_registration_test tests/ctr2max_registration_test.cpp)

@@ -422,6 +422,8 @@ void testReadImage()
           "readImage refuses a version the device could not report");
     check(!Ctr2FirmwareUpdater::readImage(makeImage("1.256.0"), &im, &problem),
           "readImage refuses a version part over 255");
+    check(!Ctr2FirmwareUpdater::readImage(makeImage("4294967296.1.2"), &im, &problem),
+          "readImage refuses a version part too large to be a number");
     check(!Ctr2FirmwareUpdater::readImage(makeImage("1.0.0", Ctr2FirmwareUpdater::kMaxImageBytes + 1),
                                           &im, &problem),
           "readImage refuses an image larger than a slot");

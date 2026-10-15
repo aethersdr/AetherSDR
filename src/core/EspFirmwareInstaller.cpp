@@ -121,6 +121,8 @@ int EspFirmwareInstaller::newestOf(const QByteArray& otadata, const QList<int>& 
 bool EspFirmwareInstaller::check(const EspFirmwareManifest& manifest, QString* problem)
 {
     m_protect = manifest.protect;
+    if (!EspFirmwareManifest::checkPlan(manifest, problem))
+        return false;   // a manifest built in code, never parsed
     if (m_target->chipName().compare(manifest.chip, Qt::CaseInsensitive) != 0) {
         *problem = tr("This firmware is for an %1; the device is an %2.")
                        .arg(manifest.chip, m_target->chipName());

@@ -259,9 +259,17 @@ bool EspFlasher::open(const QString& portName, QString* error)
         return false;
     }
     s->chip = esp_loader_get_target(&s->loader);
+    // The MAC is the device's identity: backups are matched to it, and an
+    // action is checked against the device the operator confirmed.
     uint8_t mac[6] = {};
-    if (esp_loader_read_mac(&s->loader, mac) == ESP_LOADER_SUCCESS)
-        s->mac = QByteArray(reinterpret_cast<const char*>(mac), sizeof mac);
+    err = esp_loader_read_mac(&s->loader, mac);
+    if (err != ESP_LOADER_SUCCESS) {
+        *error = QCoreApplication::translate("EspFlasher",
+                                             "Could not read the chip's MAC address (%1).")
+                     .arg(describe(err));
+        return false;
+    }
+    s->mac = QByteArray(reinterpret_cast<const char*>(mac), sizeof mac);
     uint32_t size = 0;
     err = esp_loader_flash_detect_size(&s->loader, &size);
     if (err != ESP_LOADER_SUCCESS || size == 0) {

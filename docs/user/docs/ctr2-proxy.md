@@ -172,7 +172,10 @@ CTR2...**) has three steps:
 
 - **From the stock firmware:** hold **BOOT** (through the hole in the back),
   press and release **RESET**, then release **BOOT**. The screen goes dark.
-- **From AetherCTR2:** press **Restart into → Bootloader**. No buttons needed.
+- **From AetherCTR2:** press **Restart into → Bootloader** in the CTR2
+  window. No buttons needed.
+- **To leave it** without installing anything, press **RESET**: the unit
+  starts the firmware it was running.
 
 ### First install (download mode)
 
@@ -192,16 +195,35 @@ is written.
 ### Updating AetherCTR2 (over the USB cable)
 
 With **Status** reading **AetherCTR2**, pick the release and press
-**Install…**. The relay stops for the update and starts again afterwards. The update takes about three minutes. The CTR2-Max checks the
-firmware's signature, restarts into it and keeps it only once it has
-connected again; if anything goes wrong it goes back to the version it had.
+**Install…**. The relay stops for the update and starts again afterwards.
+The update takes about three minutes. The CTR2-Max checks the firmware's
+signature, restarts into it and keeps it only once it has connected again; if
+anything goes wrong it goes back to the version it had.
 
 ### Switching between AetherCTR2 and the stock firmware
 
-- **Restart into → Stock Firmware** restarts a unit running AetherCTR2 into
-  its stock firmware. AetherCTR2 stays installed.
-- To go back, put the unit in download mode and press **Start**. Start only
-  changes which firmware the unit starts; nothing else is written.
+Both firmwares stay installed; switching only changes which one the CTR2-Max
+starts.
+
+**To the stock firmware**, from AetherCTR2, either:
+
+- press **Restart into → Stock Firmware** in the CTR2 window, or
+- on the CTR2-Max, tap **CTR2-Max firmware** on AetherCTR2's status screen,
+  then tap it again (**Tap again to restart**) to confirm.
+
+**Back to AetherCTR2**, from the stock firmware, either:
+
+- with CTR2-Max firmware v1.02.00 or later, choose **Run AetherCTR2** at the
+  bottom of page 1 of the CTR2-Max's **Settings** menu (it reads
+  **AetherCTR2 n/a** when AetherCTR2 is not installed), or
+- with any version, put the unit in download mode and press **Start** in the
+  CTR2 window. Start only changes which firmware the unit starts; nothing
+  else is written.
+
+The CTR2 window notices the switch by itself: the device list and **Status**
+follow within a couple of seconds, with no **Rescan** needed. With **Start
+automatically** ticked, the relay starts again once the CTR2-Max is back in
+AetherCTR2.
 
 ### Backing up and restoring
 
