@@ -39,8 +39,9 @@ Click **Add…** and fill in (a new net starts as Weekly on today's weekday):
   frequency, mode and filter (it needs an open slice on a connected radio).
 - **Mode** and **Filter**. FreeDV presets can use **FDVU** (upper sideband)
   or **FDVL** (lower sideband); **FDV** is also available for existing presets.
-  Capturing or editing a preset preserves its FreeDV mode. The connected
-  radio must support that mode to tune to it.
+  Capturing or editing a preset also preserves a mode name outside the common
+  choices, such as a radio waveform. The connected radio must support that
+  mode to tune to it.
 - **Notes:** net control, NetLogger name and anything else you want to keep
   with it.
 

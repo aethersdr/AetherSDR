@@ -38,7 +38,8 @@ QVector<int> widthsForMode(const QString& mode, const ReceiveFilterControl* cont
 // Analog FM spellings. DFM retains its existing separate preset behavior.
 bool isFmMode(const QString& mode);
 
-// The passband a labelled width means in this mode.
+// The passband a labelled width means in this mode. Invalid modern FreeDV
+// widths return empty edges, which acceptsFilterEdges rejects.
 Edges edgesForWidth(const QString& mode, int widthHz, const SliceContext& ctx);
 bool acceptsFmEdges(const QString& mode, const ReceiveFilterControl* control, Edges edges);
 

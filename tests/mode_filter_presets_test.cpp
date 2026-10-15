@@ -8,6 +8,8 @@
 
 #include <QtTest>
 
+#include <limits>
+
 using namespace AetherSDR::ModeFilters;
 
 class ModeFilterPresetsTest : public QObject {
@@ -20,6 +22,7 @@ private slots:
     void amAndFmStraddleIt();
     void diguCentresOnItsOffsetAndClampsAt95();
     void freeDvUsesDigitalLadderAndPreservesSideband();
+    void freeDvRejectsUnrepresentableWidths();
     void rttyStraddlesMarkAndSpace();
     void laddersAreNarrowToWide();
     void unknownModesGetTheSsbLadder();
@@ -129,6 +132,24 @@ void ModeFilterPresetsTest::freeDvUsesDigitalLadderAndPreservesSideband()
     const Edges legacy = edgesForWidth(QStringLiteral("FDV"), 2400, {});
     QCOMPARE(legacy.lo, 95);
     QCOMPARE(legacy.hi, 2400);
+}
+
+void ModeFilterPresetsTest::freeDvRejectsUnrepresentableWidths()
+{
+    constexpr int kMaximumWidth = std::numeric_limits<int>::max() - 95;
+    for (const QString& mode : {QStringLiteral("FDVU"), QStringLiteral("FDVL")}) {
+        for (int width : {std::numeric_limits<int>::max(), kMaximumWidth + 1,
+                          0, -1, std::numeric_limits<int>::min()}) {
+            const Edges edges = edgesForWidth(mode, width, {});
+            QCOMPARE(edges.lo, 0);
+            QCOMPARE(edges.hi, 0);
+            QVERIFY(!acceptsFilterEdges(mode, nullptr, false, edges));
+            QVERIFY(!acceptsFilterEdges(mode, nullptr, true, edges));
+        }
+        const Edges edges = edgesForWidth(mode, kMaximumWidth, {});
+        QVERIFY(edges.lo < edges.hi);
+        QCOMPARE(qint64(edges.hi) - edges.lo, qint64(kMaximumWidth));
+    }
 }
 
 void ModeFilterPresetsTest::laddersAreNarrowToWide()

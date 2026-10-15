@@ -7,8 +7,10 @@
 #include <QByteArray>
 #include <QComboBox>
 #include <QDialog>
+#include <QDialogButtonBox>
 #include <QPushButton>
 #include <QTableWidget>
+#include <QStringList>
 #include <QTimer>
 #include <QtTest>
 
@@ -44,11 +46,41 @@ class NetSchedulerModesTest : public QObject
     Q_OBJECT
 
 private slots:
-    void freeDvRoundTrip_data()
+    void modernChoicesWithoutCapture()
+    {
+        NetSchedulerDialog dialog({}, {});
+        QStringList choices;
+        QString selected;
+        QTimer::singleShot(0, &dialog, [&] {
+            auto* editor = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+            if (!editor) {
+                return;
+            }
+            if (QComboBox* combo = modeCombo(*editor)) {
+                selected = combo->currentText();
+                for (int index = 0; index < combo->count(); ++index) {
+                    choices.append(combo->itemText(index));
+                }
+            }
+            editor->reject();
+        });
+        QPushButton* add = buttonByText(dialog, QStringLiteral("Add…"));
+        QVERIFY(add);
+        add->click();
+        QCOMPARE(selected, QStringLiteral("FM"));
+        for (const QString& mode : {QStringLiteral("FDVU"), QStringLiteral("FDVL"),
+                                    QStringLiteral("FDV")}) {
+            QVERIFY(choices.contains(mode));
+        }
+        QVERIFY(!choices.contains(QStringLiteral("CUSTOM-WF")));
+        QVERIFY(dialog.entries().isEmpty());
+    }
+
+    void presetModesRoundTrip_data()
     {
         QTest::addColumn<QString>("mode");
         QTest::addColumn<int>("source");
-        for (const char* mode : {"FDVU", "FDVL", "FDV"}) {
+        for (const char* mode : {"FDVU", "FDVL", "FDV", "NT", "CUSTOM-WF", "fdvu"}) {
             // 0: Add's automatic VFO seed; 1: explicit Capture current VFO;
             // 2: reopen a serialized preset without capturing the live VFO.
             for (int source = 0; source < 3; ++source) {
@@ -58,7 +90,7 @@ private slots:
         }
     }
 
-    void freeDvRoundTrip()
+    void presetModesRoundTrip()
     {
         QFETCH(QString, mode);
         QFETCH(int, source);
@@ -126,7 +158,12 @@ private slots:
             if (QComboBox* combo = modeCombo(*editor)) {
                 displayedMode = combo->currentText();
             }
-            editor->accept();
+            auto* buttons = editor->findChild<QDialogButtonBox*>();
+            if (buttons && buttons->button(QDialogButtonBox::Ok)) {
+                buttons->button(QDialogButtonBox::Ok)->click();
+            } else {
+                editor->reject();
+            }
         });
         open->click();
 

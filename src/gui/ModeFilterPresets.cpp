@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <limits>
 
 namespace AetherSDR::ModeFilters {
 
@@ -71,6 +72,9 @@ bool fmFilterAdjustable(const QString& mode, const ReceiveFilterControl* control
 bool acceptsFilterEdges(const QString& mode, const ReceiveFilterControl* control,
                         bool radioPublishesWidths, Edges edges)
 {
+    if (edges.lo >= edges.hi) {
+        return false;
+    }
     if (!isFmMode(mode) || radioPublishesWidths) {
         return true;
     }
@@ -137,6 +141,10 @@ const QVector<int>& widthsForMode(const QString& mode)
 
 Edges edgesForWidth(const QString& mode, int widthHz, const SliceContext& ctx)
 {
+    if ((mode == "FDVU" || mode == "FDVL")
+        && (widthHz <= 0 || widthHz > std::numeric_limits<int>::max() - 95)) {
+        return {};
+    }
     int lo = 0, hi = 0;
 
     if (mode == "DIGU") {
