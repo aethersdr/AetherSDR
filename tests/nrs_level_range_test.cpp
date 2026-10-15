@@ -2,6 +2,9 @@
 // production model/backend/widget bindings. No peer, socket dial or radio.
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
+#include "core/AudioEngine.h"
+#include "core/AutomationServer.h"
+#include "core/QsoRecorder.h"
 #include "core/backends/flex/FlexBackend.h"
 #include "core/backends/flex/RadioConnection.h"
 #include "gui/VfoWidget.h"
@@ -9,6 +12,15 @@
 #include "models/SliceModel.h"
 
 #include <QApplication>
+#include <QCoreApplication>
+#include <QDebug>
+#include <QDir>
+#include <QEventLoop>
+#include <QFile>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonValue>
 #include <QLabel>
 #include <QLayout>
 #include <QMap>
@@ -16,6 +28,7 @@
 #include <QSignalSpy>
 #include <QSlider>
 #include <QStringList>
+#include <QTemporaryDir>
 #include <QTest>
 #include <QWidget>
 
@@ -23,6 +36,14 @@
 #include <utility>
 
 namespace AetherSDR {
+class AutomationServerTestAccess {
+public:
+    static QJsonObject request(AutomationServer& server, const QJsonObject& request)
+    {
+        return server.handleLine(QJsonDocument(request).toJson(QJsonDocument::Compact), nullptr);
+    }
+};
+
 class RadioNicknameTestAccess {
 public:
     static void firmware(RadioModel& radio, const QString& version)
@@ -100,6 +121,28 @@ QLabel* valueLabel(QSlider& slider)
     const int index = layout->indexOf(&slider);
     return index >= 0 && index + 1 < layout->count()
         ? qobject_cast<QLabel*>(layout->itemAt(index + 1)->widget()) : nullptr;
+}
+QJsonObject findWidget(const QJsonObject& node, const QString& name)
+{
+    if (node.value(QStringLiteral("objectName")).toString() == name) {
+        return node;
+    }
+    for (const QString& key : {QStringLiteral("roots"), QStringLiteral("children")}) {
+        for (const QJsonValue& child : node.value(key).toArray()) {
+            const QJsonObject match = findWidget(child.toObject(), name);
+            if (!match.isEmpty()) {
+                return match;
+            }
+        }
+    }
+    return {};
+}
+
+bool writeEvidence(const QString& path, const QJsonObject& data)
+{
+    QFile file(path);
+    const QByteArray bytes = QJsonDocument(data).toJson();
+    return file.open(QIODevice::WriteOnly) && file.write(bytes) == bytes.size();
 }
 } // namespace
 
@@ -223,6 +266,116 @@ private slots:
         QCOMPARE(slice->nrsLevel(), 49);
         QVERIFY(requests.isEmpty());
         QVERIFY(f.commands.isEmpty());
+    }
+
+    void simulatedBridgeProof()
+    {
+        // Real production bridge dispatch, widgets, model and Flex encoder;
+        // only firmware identity/status and the command transport are injected.
+        // start() is never called: there is no listener, peer or radio traffic.
+        Fixture f;
+        QVERIFY(f.init(QStringLiteral("4.3.16.42034")));
+        SliceModel* slice = f.radio.slice(0);
+        VfoWidget vfo;
+        vfo.setHasExtendedDsp(true);
+        vfo.setRadioModel(&f.radio);
+        vfo.setSlice(slice);
+        vfo.show();
+        AutomationServer bridge;
+        bridge.setRadioModel(&f.radio);
+        QVERIFY(!bridge.isRunning());
+        QVERIFY(!bridge.txAllowed());
+
+        QTemporaryDir temporary;
+        QVERIFY(temporary.isValid());
+        const QString configured = qEnvironmentVariable("AETHER_NRS_PROOF_DIR");
+        const QDir proofDir(configured.isEmpty() ? temporary.path() : configured);
+        QVERIFY(QDir().mkpath(proofDir.absolutePath()));
+        QJsonArray transcript;
+        const auto request = [&](const QJsonObject& command) {
+            const QJsonObject reply = AutomationServerTestAccess::request(bridge, command);
+            transcript.append(QJsonObject{{QStringLiteral("request"), command},
+                                          {QStringLiteral("reply"), reply}});
+            for (int i = 0; i < 8; ++i) {
+                QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
+            }
+            if (!reply.value(QStringLiteral("ok")).toBool()) {
+                qWarning().noquote() << QJsonDocument(reply).toJson(QJsonDocument::Compact);
+            }
+            return reply;
+        };
+        const auto invoke = [&](const QString& target, const QString& action,
+                                const QString& value = QString()) {
+            return request({{QStringLiteral("cmd"), QStringLiteral("invoke")},
+                            {QStringLiteral("target"), target},
+                            {QStringLiteral("action"), action},
+                            {QStringLiteral("value"), value}});
+        };
+        const auto capture = [&](const QString& name) {
+            const QJsonObject tree = request({{QStringLiteral("cmd"), QStringLiteral("dumpTree")}});
+            const QJsonObject screenshot = request({{QStringLiteral("cmd"), QStringLiteral("grab")},
+                {QStringLiteral("target"), QStringLiteral("VfoWidgetRoot")},
+                {QStringLiteral("path"), proofDir.filePath(name + QStringLiteral(".png"))}});
+            const QJsonObject slider = findWidget(tree, QStringLiteral("dspLevelSlider"));
+            const QJsonObject evidence{
+                {QStringLiteral("kind"), QStringLiteral("in-process simulation; no radio or socket")},
+                {QStringLiteral("firmware"), f.radio.softwareVersion()},
+                {QStringLiteral("slider"), slider},
+                {QStringLiteral("modelLevel"), slice->nrsLevel()},
+                {QStringLiteral("encodedCommands"), QJsonArray::fromStringList(f.commands)},
+                {QStringLiteral("screenshot"), screenshot},
+                {QStringLiteral("transcript"), transcript}};
+            const bool saved = writeEvidence(proofDir.filePath(name + QStringLiteral(".json")), evidence);
+            return saved && tree.value(QStringLiteral("ok")).toBool()
+                && screenshot.value(QStringLiteral("ok")).toBool() ? slider : QJsonObject{};
+        };
+
+        QVERIFY(invoke(QStringLiteral("DSP settings (DSP active)"), QStringLiteral("click"))
+                    .value(QStringLiteral("ok")).toBool());
+        QVERIFY(invoke(QStringLiteral("dspLevelSlider"), QStringLiteral("setValue"), QStringLiteral("25"))
+                    .value(QStringLiteral("ok")).toBool());
+        f.commands.clear();
+        QVERIFY(invoke(QStringLiteral("dspLevelSlider"), QStringLiteral("setValue"), QStringLiteral("100"))
+                    .value(QStringLiteral("ok")).toBool());
+        const QJsonObject modern = capture(QStringLiteral("modern"));
+        QVERIFY(!modern.isEmpty());
+        QVERIFY(modern.value(QStringLiteral("visible")).toBool());
+        QCOMPARE(modern.value(QStringLiteral("range")).toObject().value(QStringLiteral("max")).toInt(), 50);
+        QCOMPARE(modern.value(QStringLiteral("value")).toString(), QStringLiteral("50"));
+        QCOMPARE(f.commands, QStringList{QStringLiteral("slice set 0 speex_nr_level=50")});
+
+        f.commands.clear();
+        f.backend->decodeSliceStatus(0, sliceStatus(17));
+        const QJsonObject readback = capture(QStringLiteral("readback"));
+        QVERIFY(!readback.isEmpty());
+        QCOMPARE(readback.value(QStringLiteral("value")).toString(), QStringLiteral("17"));
+        QCOMPARE(slice->nrsLevel(), 17);
+        QVERIFY(f.commands.isEmpty());
+        f.backend->decodeSliceStatus(0, sliceStatus(50));
+        QCOMPARE(slice->nrsLevel(), 50);
+        QVERIFY(f.commands.isEmpty());
+
+        RadioNicknameTestAccess::firmware(f.radio, QStringLiteral("4.2.20.41343"));
+        QVERIFY(f.commands.isEmpty());
+        QVERIFY(invoke(QStringLiteral("dspLevelSlider"), QStringLiteral("setValue"), QStringLiteral("100"))
+                    .value(QStringLiteral("ok")).toBool());
+        const QJsonObject legacy = capture(QStringLiteral("legacy"));
+        QVERIFY(!legacy.isEmpty());
+        QCOMPARE(legacy.value(QStringLiteral("range")).toObject().value(QStringLiteral("max")).toInt(), 100);
+        QCOMPARE(legacy.value(QStringLiteral("value")).toString(), QStringLiteral("100"));
+        QCOMPARE(f.commands, QStringList{QStringLiteral("slice set 0 speex_nr_level=100")});
+        f.commands.clear();
+        f.backend->decodeSliceStatus(0, sliceStatus(80));
+        QVERIFY(f.commands.isEmpty());
+        RadioNicknameTestAccess::firmware(f.radio, QStringLiteral("4.3.16.42034"));
+        const QJsonObject changed = capture(QStringLiteral("range-change"));
+        QVERIFY(!changed.isEmpty());
+        QCOMPARE(changed.value(QStringLiteral("range")).toObject().value(QStringLiteral("max")).toInt(), 50);
+        QCOMPARE(changed.value(QStringLiteral("value")).toString(), QStringLiteral("50"));
+        QCOMPARE(slice->nrsLevel(), 80);
+        QVERIFY(f.commands.isEmpty());
+        QVERIFY(!bridge.isRunning());
+        QVERIFY(!bridge.txAllowed());
     }
 
     void reconnectReclaimsWithCurrentRange()
