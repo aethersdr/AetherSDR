@@ -2569,6 +2569,11 @@ add_executable(display_status_gate_test tests/display_status_gate_test.cpp)
 target_include_directories(display_status_gate_test PRIVATE src)
 add_test(NAME display_status_gate_test COMMAND display_status_gate_test)
 
+add_executable(whats_new_links_test tests/whats_new_links_test.cpp)
+target_include_directories(whats_new_links_test PRIVATE src)
+target_link_libraries(whats_new_links_test PRIVATE Qt6::Core)
+add_test(NAME whats_new_links_test COMMAND whats_new_links_test)
+
 # Slippy-map cylindrical-world math plus QGraphicsView camera constraints.
 # Drives a real QGVMap, so it needs the offscreen platform; never touches the
 # tile network.
