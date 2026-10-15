@@ -8389,6 +8389,22 @@ add_test(NAME gui_nested_lifetime_test COMMAND gui_nested_lifetime_test)
 set_tests_properties(gui_nested_lifetime_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# Socket-free capture, editor and saved-preset round trips in the real dialog.
+add_executable(net_scheduler_modes_test
+    tests/net_scheduler_modes_test.cpp
+    src/gui/NetSchedulerDialog.cpp
+    src/gui/PersistentDialog.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+)
+target_include_directories(net_scheduler_modes_test PRIVATE src tests)
+target_link_libraries(net_scheduler_modes_test PRIVATE
+    aethercore Qt6::Widgets Qt6::Test
+)
+add_test(NAME net_scheduler_modes_test COMMAND net_scheduler_modes_test)
+set_tests_properties(net_scheduler_modes_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(tx_applet_power_reconciliation_test
     tests/tx_applet_power_reconciliation_test.cpp
     src/gui/TxApplet.cpp
@@ -8685,6 +8701,7 @@ set(AETHER_SETTINGS_CONSUMERS
     client_display_pan_settings_test
     spectrum_overlay_fft_fps_bounds_test
     gui_nested_lifetime_test
+    net_scheduler_modes_test
     rx_applet_squelch_reconciliation_test
     vfo_meter_overlay_invalidation_test
     fm_filter_controls_test

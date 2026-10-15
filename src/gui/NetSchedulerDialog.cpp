@@ -46,7 +46,7 @@ QStringList commonModes()
 {
     return filterUnavailableDigitalVoiceModes(
         {"LSB", "USB", "CW", "CWL", "CWU", "AM", "SAM",
-         "FM", "NFM", "DFM", "DSTR", "DIGL", "DIGU", "RTTY", "FDV"});
+         "FM", "NFM", "DFM", "DSTR", "DIGL", "DIGU", "RTTY", "FDVU", "FDVL", "FDV"});
 }
 
 // Friendly one-line preview of the next firing, e.g.

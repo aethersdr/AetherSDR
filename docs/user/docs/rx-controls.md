@@ -45,10 +45,13 @@ Mode-dependent filter width buttons (FlexRadio):
 - **USB/LSB**: 1.8K, 2.1K, 2.4K, 2.7K, 2.9K, 3.3K, 4K, 6K
 - **CW**: 50, 100, 250, 400, 500, 600, 800, 1K
 - **AM/SAM**: 5.6K, 6K, 8K, 10K, 12K, 14K, 16K, 20K
-- **DIGU/DIGL**: 100, 300, 600, 1K, 1.5K, 2K, 3K, 6K
+- **DIGU/DIGL**, **FDVU/FDVL**: 100, 300, 600, 1K, 1.5K, 2K, 3K, 6K
 - **RTTY**: 250, 300, 350, 400, 500, 1K, 1.5K, 3K
 - **DFM**: 6K to 20K in 2K steps
 - **FM/NFM**: fixed by the radio
+
+FreeDV width presets keep a 95 Hz carrier rejection edge and mirror the
+passband for FDVL. The selected width is the distance between the two edges.
 
 Radios that publish their own filter widths (such as networked Icom) show
 those instead.

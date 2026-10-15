@@ -123,7 +123,10 @@ const QVector<int>& widthsForMode(const QString& mode)
     if (mode == "USB" || mode == "LSB") return usb;
     if (mode == "AM" || mode == "SAM") return am;
     if (isCwMode(mode)) return cw;
-    if (mode == "DIGU" || mode == "DIGL" || mode == "NT") return dig;
+    if (mode == "DIGU" || mode == "DIGL" || mode == "NT"
+        || mode == "FDVU" || mode == "FDVL") {
+        return dig;
+    }
     if (mode == "RTTY") return rtty;
     if (mode == "DFM") return dfm;
     if (isFmMode(mode)) {
@@ -198,7 +201,11 @@ Edges edgesForWidth(const QString& mode, int widthHz, const SliceContext& ctx)
                || isFmMode(mode) || mode == "DFM") {
         lo = -(widthHz / 2); hi = (widthHz / 2);
     } else if (mode == "FDVL") {
-        lo = -widthHz; hi = -95;
+        lo = -95 - widthHz; hi = -95;
+    } else if (mode == "FDVU") {
+        // Preset labels are passband spans; keep the carrier rejection edge
+        // fixed so even the 100 Hz digital preset delivers its labeled width.
+        lo = 95; hi = 95 + widthHz;
     } else if (mode == "USB") {
         // SSB low cut is a fixed 100 Hz (matches SmartSDR for every SSB
         // filter); the high cut is derived as lo + width so the effective
@@ -208,7 +215,7 @@ Edges edgesForWidth(const QString& mode, int widthHz, const SliceContext& ctx)
         // matcher comparing against off-by-95 widths. (#3292)
         lo = 100; hi = 100 + widthHz;
     } else {
-        // FDVU/FDV/etc: low cut at 95 Hz to reject carrier/hum
+        // Legacy FDV and unknown modes retain their high-cut convention.
         lo = 95; hi = widthHz;
     }
     return {lo, hi};
