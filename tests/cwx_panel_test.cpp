@@ -7,6 +7,7 @@
 #include "models/CwxModel.h"
 
 #include <QApplication>
+#include <QByteArray>
 #include <QCoreApplication>
 #include <QDir>
 #include <QFontMetrics>
@@ -120,13 +121,6 @@ bool requireSendWidgets(Fixture& fixture, QPushButton*& send, QPushButton*& live
     return ok;
 }
 
-QString sendCommand(const QString& text, int block)
-{
-    QString encoded = text;
-    encoded.replace(' ', QChar(0x7f));
-    return QString("cwx send \"%1\" %2").arg(encoded).arg(block);
-}
-
 void testLiveButtonTogglesOff()
 {
     Fixture f;
@@ -190,13 +184,32 @@ void testSendButtonSendsWhenLiveOff()
     if (!requireSendWidgets(f, send, live, setup, input))
         return;
 
-    input->setPlainText("CQ TEST");
+    input->setPlainText("CQ \"DX\"");
     send->click();
 
     report("Send button sends current input",
-           f.commands == QStringList{sendCommand("CQ TEST", 1)});
+           f.commands == QStringList{QString::fromLatin1(QByteArray::fromHex(
+               "6377782073656e64202243517f1e44581e222031"))});
     report("Send button clears input after send",
            input->toPlainText().isEmpty());
+}
+
+void testLiveQuotePreservesEditorText()
+{
+    Fixture f;
+    QPushButton *send = nullptr, *live = nullptr, *setup = nullptr;
+    QTextEdit* input = nullptr;
+    if (!requireSendWidgets(f, send, live, setup, input)) {
+        return;
+    }
+    live->click();
+    QKeyEvent quote(QEvent::KeyPress, Qt::Key_QuoteDbl, Qt::NoModifier, "\"");
+    QCoreApplication::sendEvent(input, &quote);
+    report("Live quote uses the protocol stand-in",
+           f.commands == QStringList{QString::fromLatin1(QByteArray::fromHex(
+               "6377782073656e6420221e222031"))});
+    report("Live editor preserves the literal quotation mark",
+           input->toPlainText() == QLatin1String("\""));
 }
 
 void testEnterStillSendsWhenLiveOff()
@@ -212,7 +225,7 @@ void testEnterStillSendsWhenLiveOff()
     QCoreApplication::sendEvent(input, &enter);
 
     report("Enter key still sends current input",
-           f.commands == QStringList{sendCommand("73", 1)});
+           f.commands == QStringList{QStringLiteral("cwx send \"73\" 1")});
 }
 
 void testSendButtonTurnsLiveOffWithoutDuplicateSend()
@@ -318,19 +331,19 @@ void testMacroEditAndFKeyClickStillWorkThroughScrollArea()
     report("F1 macro row and its F-key button are both reachable through the scroll area", ok);
     if (!ok) return;
 
-    // No spaces — emitExpandedSend() wire-encodes them as 0x7f (matching
-    // sendCommand() above), which would make a literal-text contains()
-    // check fail for reasons that have nothing to do with this fix.
-    f1->setPlainText("TESTDEOH6NEQ");
+    f1->setPlainText("CQ \"DX\"");
     QCoreApplication::processEvents();
-    report("typing into the macro row still saves to the model",
-           f.model.macro(0) == QLatin1String("TESTDEOH6NEQ"));
+    report("typing into the macro row preserves literal quotes in the model",
+           f.model.macro(0) == QLatin1String("CQ \"DX\""));
+    report("macro edit saves the quote-encoded wire text",
+           f.commands == QStringList{QString::fromLatin1(QByteArray::fromHex(
+               "637778206d6163726f20736176652031202243517f1e44581e22"))});
 
     f.commands.clear();
     f1Button->click();
-    const bool sent = std::any_of(f.commands.begin(), f.commands.end(),
-        [](const QString& c) { return c.contains(QLatin1String("TESTDEOH6NEQ")); });
-    report("clicking the F1 button still sends the saved macro text", sent);
+    report("clicking F1 sends the saved quoted macro text",
+           f.commands == QStringList{QString::fromLatin1(QByteArray::fromHex(
+               "6377782073656e64202243517f1e44581e222031"))});
 }
 
 // #4945 fix, zero-visual-change check: the QScrollArea wrap must not
@@ -504,6 +517,7 @@ int main(int argc, char** argv)
     testDisplayNameCanFollowTheRadioFamily();
     testSimpleKeyerDoesNotExpandSpeedModifiers();
     testSendButtonSendsWhenLiveOff();
+    testLiveQuotePreservesEditorText();
     testEnterStillSendsWhenLiveOff();
     testSendButtonTurnsLiveOffWithoutDuplicateSend();
     testSetupTurnsLiveOff();
