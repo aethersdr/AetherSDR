@@ -250,7 +250,7 @@ void RadioConnection::connectToHost(const QHostAddress& address,
     m_localAddr = QHostAddress();
     m_localPort = 0;
     m_socket->abort();
-    // Qt 6.12 can retain a bound transport after a refused connect while
+    // Qt 6.11/6.12 can retain a bound transport after a refused connect while
     // reporting UnconnectedState. abort()/close() leave that engine intact;
     // discard it before the next bind or connect instead of reusing its error.
     if (m_socket->socketDescriptor() != -1) {
@@ -274,6 +274,8 @@ void RadioConnection::connectToHost(const QHostAddress& address,
                 m_socket->close();
                 setState(ConnectionState::Error);
                 emit errorOccurred(msg);
+                // The selected source remains mandatory, but the attempt can be retried.
+                setState(ConnectionState::Disconnected);
                 return;
             }
 

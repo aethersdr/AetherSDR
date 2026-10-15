@@ -2,11 +2,13 @@
 // radio firmware; the peer sends only the parser's documented V/H greeting.
 #include "core/backends/flex/RadioConnection.h"
 
+#include <QList>
 #include <QNetworkProxy>
 #include <QSignalSpy>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QtTest>
+#include <algorithm>
 #include <memory>
 
 using namespace AetherSDR;
@@ -14,10 +16,18 @@ using namespace AetherSDR;
 class RadioConnectionRetryTest final : public QObject {
     Q_OBJECT
     QNetworkProxy m_previousProxy;
+    static bool usesNoProxy(const RadioConnection& connection)
+    {
+        const QList<QTcpSocket*> sockets = connection.findChildren<QTcpSocket*>();
+        return !sockets.isEmpty() && std::ranges::all_of(sockets, [](QTcpSocket* socket) {
+            return socket->proxy().type() == QNetworkProxy::NoProxy;
+        });
+    }
 private slots:
     void initTestCase()
     {
         m_previousProxy = QNetworkProxy::applicationProxy();
+        // A configured application proxy must never affect Flex LAN sockets.
         QNetworkProxy::setApplicationProxy(QNetworkProxy(
             QNetworkProxy::Socks5Proxy, QStringLiteral("127.0.0.1"), 1));
     }
@@ -41,14 +51,41 @@ private slots:
         QVERIFY2(server.listen(QHostAddress::LocalHost, 0), qPrintable(server.errorString()));
         RadioConnection connection;
         connection.init();
+        QVERIFY(usesNoProxy(connection));
         QSignalSpy errors(&connection, &RadioConnection::errorOccurred);
         const QHostAddress unavailable(QStringLiteral("192.0.2.1"));
         connection.connectToHost(QHostAddress(QHostAddress::LocalHost), server.serverPort(),
             RadioBindMode(bindMode), unavailable, unavailable);
         QVERIFY(!errors.isEmpty());
         if (RadioBindMode(bindMode) == RadioBindMode::Explicit) {
-            QCOMPARE(connection.state(), ConnectionState::Error);
+            QCOMPARE(connection.state(), ConnectionState::Disconnected);
+            QVERIFY(errors.last().at(0).toString().startsWith(
+                QStringLiteral("Failed to bind local TCP source address")));
             QVERIFY(!server.hasPendingConnections());
+            for (int retry = 0; retry < 2; ++retry) {
+                const qsizetype previousErrors = errors.size();
+                connection.connectToHost(QHostAddress(QHostAddress::LocalHost), server.serverPort(),
+                    RadioBindMode::Explicit, unavailable, unavailable);
+                QCOMPARE(connection.state(), ConnectionState::Disconnected);
+                QVERIFY(errors.size() > previousErrors);
+                QVERIFY(errors.last().at(0).toString().startsWith(
+                    QStringLiteral("Failed to bind local TCP source address")));
+                QVERIFY(usesNoProxy(connection));
+                QVERIFY(!server.hasPendingConnections());
+            }
+            const QHostAddress available(QHostAddress::LocalHost);
+            connection.connectToHost(available, server.serverPort(),
+                RadioBindMode::Explicit, available, available);
+            QTRY_VERIFY_WITH_TIMEOUT(server.hasPendingConnections(), 1000);
+            std::unique_ptr<QTcpSocket> peer(server.nextPendingConnection());
+            QVERIFY(peer);
+            QSignalSpy connected(&connection, &RadioConnection::connected);
+            peer->write("V1.4.0.0\nH00000001\n");
+            peer->flush();
+            QTRY_COMPARE_WITH_TIMEOUT(connected.size(), 1, 1000);
+            QCOMPARE(connection.localAddress(), available);
+            peer->abort();
+            QTRY_COMPARE_WITH_TIMEOUT(connection.state(), ConnectionState::Disconnected, 1000);
         } else {
             QTRY_VERIFY_WITH_TIMEOUT(server.hasPendingConnections(), 1000);
             std::unique_ptr<QTcpSocket> peer(server.nextPendingConnection());
@@ -81,6 +118,7 @@ private slots:
         const QHostAddress source = bindSource ? QHostAddress(QHostAddress::LocalHost) : QHostAddress();
         RadioConnection connection;
         connection.init();
+        QVERIFY(usesNoProxy(connection));
         QSignalSpy connected(&connection, &RadioConnection::connected);
         QSignalSpy errors(&connection, &RadioConnection::errorOccurred);
         const auto attempt = [&] {
@@ -114,6 +152,7 @@ private slots:
                 QTRY_VERIFY_WITH_TIMEOUT(errors.size() > previousErrors, 5000);
                 QTRY_COMPARE_WITH_TIMEOUT(connection.state(), ConnectionState::Disconnected, 1000);
                 QCOMPARE(errors.size(), previousErrors + 1);
+                QVERIFY(usesNoProxy(connection));
             }
             QVERIFY2(server.listen(QHostAddress::LocalHost, port), qPrintable(server.errorString()));
             // Independent new socket proves the destination is reachable before
@@ -127,6 +166,7 @@ private slots:
             probe.abort();
             probePeer->abort();
             attempt();
+            QVERIFY(usesNoProxy(connection));
             QTRY_VERIFY_WITH_TIMEOUT(server.hasPendingConnections(), 1000);
             peer = accept();
             QVERIFY(peer);
