@@ -122,6 +122,8 @@ void testRelayFollowsAetherSdrsRadio()
     check(model.configurationProblem().isEmpty(), "USB relay is ready with a radio and a device");
     check(model.start() && model.isRunning() && log->opened == 1, "relay starts on the pushed radio");
     check(model.radioEndpoint() == QStringLiteral("192.0.2.10:4992"), "it targets that radio on 4992");
+    check(model.peerEndpoint() == ctr2.shortName() && !model.peerEndpoint().contains(QLatin1Char('(')),
+          "the status names the device, without the IDs the list shows");
 
     model.setAetherRadio(radioA, 4992, QStringLiteral("FLEX-8600 \"Renamed\"  192.0.2.10"), {});
     check(model.isRunning(), "an info update about the same radio keeps the relay running");
@@ -230,8 +232,10 @@ void testSelfNamedDevices()
     check(named(QStringLiteral("AetherDial")).ctr2Model() == QStringLiteral("AetherDial"),
           "a self-named device shows its own name");
     check(named(QStringLiteral("AetherDial")).label()
-              == QStringLiteral("AetherDial: AetherSDR AetherDial (303a:1001 #0123ABCD)"),
-          "a self-named device's label");
+              == QStringLiteral("AetherDial (303a:1001 #0123ABCD)"),
+          "a self-named device's label names it once");
+    check(named(QStringLiteral("AetherDial")).shortName() == QStringLiteral("AetherDial"),
+          "and its short name is just the name");
     check(named(QStringLiteral("AETHER_KNOB")).ctr2Model() == QStringLiteral("AetherKnob"),
           "the fixed AetherKnob entry is not shadowed by the prefix");
     const QString longest = QStringLiteral("Aether") + QString(26, QLatin1Char('x'));
@@ -330,6 +334,26 @@ void testAutoStart()
               "a stock CTR2, which has no USB mode, is never started automatically");
     }
     AetherSDR::Ctr2RelaySettings{}.save();
+}
+
+// A controller that switches firmware changes its USB identity; while the
+// relay is stopped the list follows without a Rescan.
+void testDevicesRescanByThemselves()
+{
+    using Info = AetherSDR::Ctr2HidPort::DeviceInfo;
+    const Info aether{QStringLiteral("aether"), 0x303A, 0x1001, {}, QStringLiteral("AetherCTR2"),
+                      QStringLiteral("B81F3FC45888")};
+    const Info stock{QStringLiteral("stock"), 0x303A, 0x1001, {}, QStringLiteral("ESP32S3_DEV"),
+                     QStringLiteral("B81F3FC45888")};
+    auto devices = std::make_shared<QList<Info>>(QList<Info>{stock});
+    Ctr2ProxyModel model;
+    model.setUsbBackend([devices] { return *devices; },
+                        [](const Info&, QString*) { return static_cast<AetherSDR::Ctr2HidPort*>(nullptr); });
+    check(model.usbDevicePath() == stock.path, "the stock firmware's device is listed");
+    *devices = {aether};
+    check(waitUntil([&] { return model.usbDevicePath() == aether.path; },
+                    Ctr2ProxyModel::kDeviceRescanMs + 2000),
+          "after a firmware switch the new device is found without a Rescan");
 }
 
 // Selecting another CTR2 while the first one's version probe is still
@@ -520,6 +544,7 @@ int main(int argc, char** argv)
     testUdevRuleMatchesKnownCtr2s();
     testSelfNamedDevices();
     testAutoStart();
+    testDevicesRescanByThemselves();
 
     if (g_failures) {
         std::fprintf(stderr, "%d check(s) failed\n", g_failures);

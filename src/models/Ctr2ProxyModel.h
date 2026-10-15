@@ -104,6 +104,10 @@ public:
     bool autoStart() const { return m_settings.autoStart; }
     void setAutoStart(bool on);
     static constexpr int kAutoStartRetryMs = 5000;
+    // While the relay is stopped, USB devices are rescanned this often, so a
+    // controller that switched firmware (and so changed its USB identity)
+    // appears without pressing Rescan.
+    static constexpr int kDeviceRescanMs = 2000;
 
     TcpByteProxy::State state() const;
     QString stateText() const;
@@ -214,6 +218,7 @@ private:
     bool m_restartAfterFirmware{false};
     Ctr2RelaySettings m_settings;
     QTimer* m_autoStartTimer{nullptr};
+    QTimer* m_deviceRescan{nullptr};
     bool m_autoStartHeld{false};   // the operator stopped it this connection
 };
 

@@ -110,6 +110,13 @@ Ctr2ProxyModel::Ctr2ProxyModel(QObject* parent)
     connect(m_autoStartTimer, &QTimer::timeout, this, &Ctr2ProxyModel::tryAutoStart);
     if (m_settings.autoStart)
         m_autoStartTimer->start();
+    m_deviceRescan = new QTimer(this);
+    m_deviceRescan->setInterval(kDeviceRescanMs);
+    connect(m_deviceRescan, &QTimer::timeout, this, [this] {
+        if (m_usbDevices && !isRunning() && !m_firmware->isRunning())
+            refreshDevices();
+    });
+    m_deviceRescan->start();
     refreshDevices();
 }
 
@@ -597,7 +604,11 @@ QString Ctr2ProxyModel::listenerEndpoint() const
 QString Ctr2ProxyModel::peerEndpoint() const
 {
     if (usbActive()) {
-        return isRunning() ? m_usb->deviceDescription() : QString();
+        if (!isRunning())
+            return {};
+        // Just the device's name: the list above has its full identity.
+        const Ctr2HidPort::DeviceInfo* device = selectedUsbDevice();
+        return device ? device->shortName() : m_usb->deviceDescription();
     }
     const TcpByteProxy::State s = state();
     if (s == TcpByteProxy::State::Connecting || s == TcpByteProxy::State::Relaying

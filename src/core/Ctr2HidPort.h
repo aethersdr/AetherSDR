@@ -31,7 +31,12 @@ public:
         // ESP32-S3 boards' own IDs, so a match is a strong hint, not proof;
         // the first match is preselected and the operator may pick another.
         QString ctr2Model() const;
+        // For the device list: the model, the maker and product, and the
+        // USB IDs and serial. A device that names itself (its product is its
+        // model) is named once.
         QString label() const;
+        // Just the name: the model, else the product.
+        QString shortName() const;
     };
 
     // Every USB identity recognised as a CTR2. 303A:1001 is Espressif's

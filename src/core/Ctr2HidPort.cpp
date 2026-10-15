@@ -74,8 +74,18 @@ QString Ctr2HidPort::DeviceInfo::label() const
         id += QStringLiteral(" #") + serial;
     }
     const QString model = ctr2Model();
+    if (!model.isEmpty() && model == product)
+        return QStringLiteral("%1 (%2)").arg(model, id);
     const QString base = QStringLiteral("%1 (%2)").arg(name, id);
     return model.isEmpty() ? base : model + QStringLiteral(": ") + base;
+}
+
+QString Ctr2HidPort::DeviceInfo::shortName() const
+{
+    const QString model = ctr2Model();
+    if (!model.isEmpty())
+        return model;
+    return product.isEmpty() ? QStringLiteral("HID device") : product;
 }
 
 } // namespace AetherSDR

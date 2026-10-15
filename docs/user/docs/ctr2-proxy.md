@@ -87,8 +87,10 @@ so you only pick the device and press **Start**. It needs a CTR2-Max running
 AetherCTR2 (see below) or an AetherKnob.
 
 - The **USB** device list shows candidate HID devices, with known CTR2 boards
-  and the AetherKnob named and listed first. **Rescan** refreshes the list
-  (and the local addresses).
+  and the AetherKnob named and listed first. While the relay is stopped the
+  list refreshes itself every 2 seconds, so a CTR2-Max that switches between
+  its stock firmware and AetherCTR2 shows up as it is now; **Rescan** refreshes
+  it (and the local addresses) at once.
 - **Linux:** a udev rule for the CTR2 ships with the build. If the device
   cannot be opened, **Start** offers to install the rule
   (`/etc/udev/rules.d/70-aethersdr-ctr2.rules`) through `pkexec`, asking for
