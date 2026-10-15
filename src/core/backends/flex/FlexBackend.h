@@ -8,6 +8,7 @@
 #include "core/backends/IRadioBackend.h"
 
 class QThread;
+class QVersionNumber;
 
 namespace AetherSDR {
 
@@ -247,6 +248,7 @@ private:
     std::function<void(const QString&, const TxCoordinator::Command&)> m_txSink;
     std::function<void(const QString&)> m_sliceSink;
     std::function<QString()> m_modelProvider;
+    bool firmwareAtLeast(const QVersionNumber& minimum) const;
     int nrsLevelMaximum() const;
     int m_announcedNrsLevelMaximum = 100;
     std::function<QString()> m_firmwareVersionProvider;

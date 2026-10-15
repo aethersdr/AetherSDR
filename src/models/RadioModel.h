@@ -1489,6 +1489,7 @@ private slots:
 private:
     friend struct RadioModelWakeTestAccess;
     void handleRadioStatus(const QMap<QString, QString>& kvs);
+    void adoptSoftwareVersion(const QString& version);
     // Apply a normalized radio-global delta from the backend
     // (IRadioBackend::radioChanged). aetherd RFC 2.3 — RadioModel residual.
     void applyRadioChanges(const RadioDelta& delta);

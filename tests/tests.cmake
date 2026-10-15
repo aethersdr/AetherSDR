@@ -9521,6 +9521,7 @@ endforeach()
 # library as AetherSDR so moving QtWidgets out of aethercore cannot silently
 # leave these harnesses with unresolved bridge symbols.
 set(AETHER_AUTOMATION_SERVER_TESTS
+    nrs_level_range_test
     anan_noise_blanker_readback_test
     automation_cell_test
     automation_boundary_core_test
