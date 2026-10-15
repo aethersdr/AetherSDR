@@ -4,6 +4,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+/* AetherSDR patch (MSVC): packed with #pragma pack there; see protocol.h. */
+#if defined(_MSC_VER) && !defined(__clang__)
+#pragma pack(push, 1)
+#define SIP_PACKED
+#else
+#define SIP_PACKED __attribute__((packed))
+#endif
+
 #define SIP_HDR_F_SYNC 0x4
 #define SIP_IFIDX_MASK 0xf0
 #define SIP_IFIDX_S 4
@@ -23,7 +31,7 @@ typedef enum {
     SIP_CMD_ID_BOOTUP = 5,
 } sip_cmd_id_t;
 
-typedef struct __attribute__((packed))
+typedef struct SIP_PACKED
 {
     uint8_t tid;
     uint8_t ac;
@@ -32,7 +40,7 @@ typedef struct __attribute__((packed))
     uint8_t hw_kid;
 } sip_tx_data_info_t;
 
-typedef struct __attribute__((packed))
+typedef struct SIP_PACKED
 {
     union {
         uint32_t cmdid;
@@ -40,7 +48,7 @@ typedef struct __attribute__((packed))
     } u;
 } sip_tx_info_t;
 
-typedef struct __attribute__((packed))
+typedef struct SIP_PACKED
 {
     uint8_t fc[2];
     uint16_t len; // Length of packet, including the header itself, must align to 4
@@ -51,14 +59,18 @@ typedef struct __attribute__((packed))
     uint32_t sequence_num;
 } sip_header_t;
 
-typedef struct __attribute__((packed))
+typedef struct SIP_PACKED
 {
     uint32_t addr;
     uint32_t len;
 } sip_cmd_write_memory;
 
-typedef struct __attribute__((packed))
+typedef struct SIP_PACKED
 {
     uint32_t boot_addr;
     uint32_t discard_link;
 } sip_cmd_bootup;
+
+#if defined(_MSC_VER) && !defined(__clang__)
+#pragma pack(pop)
+#endif

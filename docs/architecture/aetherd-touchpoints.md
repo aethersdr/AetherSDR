@@ -4,7 +4,7 @@
 
 Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine-design.md) §2, §10). One row per engine header the UI includes; converting a touchpoint means the UI reaches that surface through the versioned protocol instead of the header.
 
-**Totals:** 255 touchpoint headers (214 core, 41 models) — 255/255 tagged, 0/255 converted.
+**Totals:** 261 touchpoint headers (220 core, 41 models) — 261/261 tagged, 0/261 converted.
 
 | Header | Includers | Tag | Status |
 |---|---:|---|---|
@@ -44,6 +44,8 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/ClockAlignmentFrame.h` | 1 | universal — Frozen per-second alignment contract emitted by the AetherClock engine (cross-PR contract, PRD-A §5). Radio-agnostic decode output. | unconverted |
 | `core/ClockDiagnostics.h` | 1 | universal — AetherClock ~1 Hz acquisition-telemetry snapshot (pre-lock funnel, verdict line, debug pane). Measured decode-chain quantities only, parallel to the frozen alignment contract; no vendor ties. | unconverted |
 | `core/CtcssTones.h` | 1 | universal — Canonical CTCSS tone vocabulary shared by operator controls and automation validation. Radio-family-neutral state and validation data. | unconverted |
+| `core/Ctr2FirmwareUpdater.h` | 1 | peripheral(ctr2) — Updates a CTR2-class controller's firmware over its USB HID link (Firmware extension), or asks it to restart into its other firmware or ROM download mode; controller transport, no radio state. | unconverted |
+| `core/Ctr2HidapiPort.h` | 1 | peripheral(ctr2) — hidapi enumeration and I/O for CTR2 controllers' USB HID link; the CTR2-Max Firmware window lists running controllers with it. Controller transport, no radio state. | unconverted |
 | `core/CwCallsignSpotter.h` | 1 | universal — Spots callsigns from the client-side CW decoder stream; radio-agnostic engine feature. | unconverted |
 | `core/CwDecoder.h` | 1 | universal — Client-side CW/Morse decoder (ggmorse) over generic 24kHz PCM; radio-agnostic engine DSP feature. | unconverted |
 | `core/CwRecordGate.h` | 1 | universal — Pure predicates for Client-Side QSO-recorder TX-slot ownership during a CW over; radio-agnostic policy, no vendor wire. | unconverted |
@@ -64,6 +66,10 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/DxSpotLineParser.h` | 1 | universal — Parses DX-cluster `DX de` lines (DXSpider/AR/CC/RBN/GoCluster) into DxSpot, including the GoCluster fixed-column tail and SNR report, and replays saved spot logs with per-session provenance. Pure line-to-value logic; no vendor radio ties. | unconverted |
 | `core/DxccColorProvider.h` | 2 | universal — DXCC worked-status from ADIF log, colors cluster spots by call/freq/mode; radio-agnostic spot/logging feature | unconverted |
 | `core/EibiClient.h` | 3 | universal — Radio-agnostic EiBi shortwave schedule downloader/parser that emits canonical DX spots; engine data service with no vendor protocol coupling. | unconverted |
+| `core/EspFirmwareCatalog.h` | 1 | peripheral(ctr2) — Fetches the CTR2-Max firmware catalog and signed releases (Ed25519-checked manifests, SHA-256-checked images); no radio state. | unconverted |
+| `core/EspFirmwareJob.h` | 1 | peripheral(ctr2) — One ROM-bootloader session with an ESP32 controller on a worker thread (backup, install, start, restore); controller firmware tooling, no radio state. | unconverted |
+| `core/EspFirmwareManifest.h` | 1 | peripheral(ctr2) — Parses and checks a signed controller-firmware manifest (images, protected regions, boot selection); data only, no radio state. | unconverted |
+| `core/EspFlasher.h` | 1 | peripheral(ctr2) — esp-serial-flasher over QSerialPort: the ROM download mode of an ESP32 controller (flash read and write, MD5, watchdog restart); controller transport, no radio state. | unconverted |
 | `core/FirmwareCurrency.h` | 2 | universal — Pure release comparison and its operator-facing wording; names no family and holds no wire types — the published version and release-notes template both arrive from the backend's declared capability. | unconverted |
 | `core/FirmwareStager.h` | 1 | vendor(flex) — Downloads SmartSDR installers from flexradio.com, extracts .ssdr firmware for 6x00/9600 upload — pure Flex | unconverted |
 | `core/FirmwareUploader.h` | 1 | vendor(flex) — SmartSDR firmware upload: 'file upload' cmd, .ssdr files, Flex TCP ports 4995/42607 — pure Flex protocol | unconverted |
@@ -162,7 +168,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/TailnetShimTokenStore.h` | 1 | peripheral(tailnet-shim) — OS-keychain storage of the tailnet shim's admin token, keyed by the Flex chassis serial (RFC #6271). Not SmartSDR wire: AetherSDR's own HTTP API to a separate service (the shim) that happens to run in the radio's container runtime, so a direct-transport peripheral, NOT behind the IRadioBackend radio seam (same shape as core/PgxlConnection.h). | unconverted |
 | `core/TciServer.h` | 3 | mixed(flex) — TCI WebSocket server for WSJT-X et al: protocol surface is canonical radio state, but audio/IQ rides Flex DAX | unconverted |
 | `core/TgxlConnection.h` | 3 | peripheral(4o3a) — Direct TCP client for the 4O3A Tuner Genius XL (port 9010, relay/autotune), reverse-engineered from the 4O3A management app — a standalone accessory transport, not SmartSDR. Not radio-family wire; a peripheral accessory, NOT behind the IRadioBackend radio seam (reclassified from vendor(flex), #4087 follow-up). | unconverted |
-| `core/ThemeManager.h` | 178 | ui-support — Qt token-based theming singleton (colors/fonts/QSS, theme files, editor hooks) — pure client GUI plumbing, no radio state. | unconverted |
+| `core/ThemeManager.h` | 179 | ui-support — Qt token-based theming singleton (colors/fonts/QSS, theme files, editor hooks) — pure client GUI plumbing, no radio state. | unconverted |
 | `core/ThreadCpuRing.h` | 2 | ui-support — Short host-thread CPU history used by Runtime Monitor peak and sparkline presentation. Diagnostic UI support, not radio state. | unconverted |
 | `core/TimeFrameVoter.h` | 1 | universal — Shared AetherClock time-frame types plus confidence-weighted cross-frame bit voting over a sliding window. Map-agnostic pure DSP/logic — no Qt, no GUI, no vendor ties. | unconverted |
 | `core/TxKeyingMarker.h` | 16 | ui-support — QWidget property marker guarding TX-keying controls from the automation bridge; GUI-shell plumbing, no radio state. | unconverted |
@@ -230,7 +236,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `models/BandDefs.h` | 5 | universal — Static ARRL band plan table (edges, default freq/mode, GEN/WWV); canonical band-plan data, no vendor ties. | unconverted |
 | `models/BandPlanManager.h` | 9 | universal — Band-plan overlay data (segments/spots/license classes, region merge) from JSON; radio-agnostic canon | unconverted |
 | `models/BandSettings.h` | 6 | universal — Per-band save/restore of canonical state (freq/mode/filter/AGC/WNB/display range) — band memories, no vendor fields | unconverted |
-| `models/Ctr2ProxyModel.h` | 4 | peripheral(ctr2) — CTR2-Max controller relay: an operator-enabled opaque byte relay between the controller (TCP listener in Wi-Fi mode, USB HID link in USB mode) and a dedicated radio TCP connection. The CTR2 is an independent radio client; nothing passes RadioModel, a backend socket or IRadioBackend. A device that negotiates link extensions (HID Feature report 0x02; never a stock CTR2) also receives AetherSDR's own audio spectrum, from the GUI's Ctr2AudioSpectrumFeeder, beside the relayed stream. A peripheral accessory transport, NOT behind the radio seam. See docs/ctr2-tcp-proxy-design.md and docs/ctr2-usb-relay-design.md (RFC #6091). | unconverted |
+| `models/Ctr2ProxyModel.h` | 5 | peripheral(ctr2) — CTR2-Max controller relay: an operator-enabled opaque byte relay between the controller (TCP listener in Wi-Fi mode, USB HID link in USB mode) and a dedicated radio TCP connection. The CTR2 is an independent radio client; nothing passes RadioModel, a backend socket or IRadioBackend. A device that negotiates link extensions (HID Feature report 0x02; never a stock CTR2) also receives AetherSDR's own audio spectrum, from the GUI's Ctr2AudioSpectrumFeeder, beside the relayed stream. A peripheral accessory transport, NOT behind the radio seam. See docs/ctr2-tcp-proxy-design.md and docs/ctr2-usb-relay-design.md (RFC #6091). | unconverted |
 | `models/CwDecodeSettings.h` | 9 | ui-support — CW receive backend selection and display preferences in the existing feature-owned settings blob; no radio state. | unconverted |
 | `models/CwRxModel.h` | 2 | universal — Receive CW backend catalog and lifecycle over typed PCM; decoder workers remain private and TX is separate. | unconverted |
 | `models/CwxModel.h` | 1 | universal — CW keyer intent: WPM/delay/QSK, 12 macros, send/erase, sent-index progress. Generic despite Flex 'CWX' name. | unconverted |

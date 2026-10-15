@@ -131,6 +131,8 @@ EspFirmwareDownloader::EspFirmwareDownloader(QObject* parent)
     : QObject(parent)
     , m_nam(new QNetworkAccessManager(this))
 {
+    // A stalled connection fails instead of hanging the install window.
+    m_nam->setTransferTimeout(30000);
 }
 
 void EspFirmwareDownloader::fetchCatalog(const QUrl& url)

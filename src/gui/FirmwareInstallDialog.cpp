@@ -3,7 +3,6 @@
 #include "CanonIndicators.h"
 #include "ModemChrome.h"
 #include "ScopedChildWidget.h"
-#include "core/ThemeManager.h"
 #include "core/Ctr2FirmwareUpdater.h"
 #include "core/EspFirmwareJob.h"
 #include "models/Ctr2ProxyModel.h"
@@ -27,6 +26,7 @@
 #include <QProgressBar>
 #include <QPushButton>
 #include <QStandardPaths>
+#include <QStyle>
 #include <QTimer>
 #include <QVBoxLayout>
 
@@ -72,7 +72,17 @@ FirmwareInstallDialog::FirmwareInstallDialog(Ctr2ProxyModel* model, QWidget* par
                    "QListWidget#firmwareInstallProduct::item { padding: 5px 8px; border-radius: 4px; }"
                    "QListWidget#firmwareInstallProduct::item:hover { background: {{color.canon.raised}}; }"
                    "QListWidget#firmwareInstallProduct::item:selected {"
-                   " background: {{color.canon.control}}; color: {{color.canon.cyan}}; }");
+                   " background: {{color.canon.control}}; color: {{color.canon.cyan}}; }"
+                   // The status badge; showStatus() picks its tone.
+                   "QLabel#firmwareInstallStatus { background: {{color.canon.nested}};"
+                   " border: 1px solid {{color.canon.muted}}; color: {{color.canon.muted}};"
+                   " border-radius: 11px; padding: 3px 12px; font-weight: 600; }"
+                   "QLabel#firmwareInstallStatus[tone=\"cyan\"] { color: {{color.canon.cyan}};"
+                   " border-color: {{color.canon.cyan}}; }"
+                   "QLabel#firmwareInstallStatus[tone=\"sparkGold\"] {"
+                   " color: {{color.canon.sparkGold}}; border-color: {{color.canon.sparkGold}}; }"
+                   "QLabel#firmwareInstallStatus[tone=\"aqua\"] { color: {{color.canon.aqua}};"
+                   " border-color: {{color.canon.aqua}}; }");
     });
 
     auto* root = new QVBoxLayout(bodyWidget());
@@ -324,14 +334,14 @@ void FirmwareInstallDialog::onReleaseReady(const EspFirmwareManifest& manifest,
 void FirmwareInstallDialog::showStatus(const QString& state, const char* colorToken,
                                        const QString& detail)
 {
-    const QString color = ThemeManager::instance()
-                              .color(QStringLiteral("color.canon.") + QLatin1String(colorToken))
-                              .name();
-    const QString ground =
-        ThemeManager::instance().color(QStringLiteral("color.canon.nested")).name();
-    m_badge->setStyleSheet(QStringLiteral("QLabel { color: %1; background: %2; border: 1px solid %1; "
-                                          "border-radius: 11px; padding: 3px 12px; font-weight: 600; }")
-                               .arg(color, ground));
+    // The tone selects a rule in the dialog's sheet (cyan, sparkGold, aqua,
+    // or the muted default).
+    const QString tone = QString::fromLatin1(colorToken);
+    if (m_badge->property("tone").toString() != tone) {
+        m_badge->setProperty("tone", tone);
+        m_badge->style()->unpolish(m_badge);
+        m_badge->style()->polish(m_badge);
+    }
     m_badge->setText(state);
     m_badge->setToolTip(detail);
     m_badge->setAccessibleDescription(detail);

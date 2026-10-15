@@ -34,12 +34,18 @@ static esp_loader_error_t spi_read(esp_loader_t *loader, uint8_t *data, uint16_t
     return err;
 }
 
-typedef struct __attribute__((packed))
+#ifdef ESP_LOADER_MSVC_PACK
+#pragma pack(push, 1)
+#endif
+typedef struct ESP_LOADER_PACKED
 {
     uint8_t cmd;
     uint8_t addr;
     uint8_t dummy;
 } transaction_preamble_t;
+#ifdef ESP_LOADER_MSVC_PACK
+#pragma pack(pop)
+#endif
 
 typedef enum {
     TRANS_CMD_WRBUF = 0x01,
@@ -94,7 +100,7 @@ static esp_loader_error_t spi_initialize_conn(esp_loader_t *loader, esp_loader_c
 {
 
     for (uint8_t trial = 0; trial < connect_args->trials; trial++) {
-        uint8_t slave_ready_flag __attribute__((aligned(4)));
+        uint8_t slave_ready_flag ESP_LOADER_ALIGNED4;
         RETURN_ON_ERROR(read_slave_reg(loader, &slave_ready_flag, SLAVE_REGISTER_CMD,
                                        sizeof(slave_ready_flag)));
 
@@ -110,7 +116,7 @@ static esp_loader_error_t spi_initialize_conn(esp_loader_t *loader, esp_loader_c
     RETURN_ON_ERROR(write_slave_reg(loader, &reg_val, SLAVE_REGISTER_CMD, sizeof(reg_val)));
 
     for (uint8_t trial = 0; trial < connect_args->trials; trial++) {
-        uint8_t slave_ready_flag __attribute__((aligned(4)));
+        uint8_t slave_ready_flag ESP_LOADER_ALIGNED4;
         RETURN_ON_ERROR(read_slave_reg(loader, &slave_ready_flag, SLAVE_REGISTER_CMD,
                                        sizeof(slave_ready_flag)));
 
@@ -239,7 +245,7 @@ static esp_loader_error_t handle_slave_state(esp_loader_t *loader, const uint32_
 
 static esp_loader_error_t spi_check_response(esp_loader_t *loader, const command_t cmd, uint32_t *reg_value)
 {
-    uint8_t buf[sizeof(common_response_t) + sizeof(response_status_t)] __attribute__((aligned(4)));
+    uint8_t buf[sizeof(common_response_t) + sizeof(response_status_t)] ESP_LOADER_ALIGNED4;
 
     uint32_t target_buf_size;
     bool slave_ready = false;
