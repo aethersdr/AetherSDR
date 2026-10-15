@@ -153,6 +153,11 @@ void FlexBackend::setFirmwareVersionProvider(std::function<QString()> provider)
     m_firmwareVersionProvider = std::move(provider);
 }
 
+void FlexBackend::setAutoAgcThresholdLicenseProvider(std::function<bool()> provider)
+{
+    m_autoAgcThresholdLicenseProvider = std::move(provider);
+}
+
 bool FlexBackend::firmwareAtLeast(const QVersionNumber& minimum) const
 {
     const QString text = m_firmwareVersionProvider ? m_firmwareVersionProvider() : QString();
@@ -595,6 +600,14 @@ RadioCapabilities FlexBackend::capabilities() const
     // TransmitModel::setDexp/setDexpLevel.
     caps.hasDownwardExpander = true;
     caps.hasAgcThreshold = true;
+    const QString firmware = m_firmwareVersionProvider ? m_firmwareVersionProvider() : QString();
+    qsizetype versionEnd = 0;
+    const QVersionNumber firmwareVersion = QVersionNumber::fromString(firmware, &versionEnd);
+    if (!firmware.isEmpty() && versionEnd == firmware.size()
+        && firmwareVersion >= QVersionNumber(4, 3, 16)) {
+        caps.autoAgcThresholdControl = RadioCapabilities::AutoAgcThresholdControl{
+            QStringLiteral("auto_agc_t")};
+    }
     caps.hasAmCarrierLevel = true;
     caps.voxControl = RadioCapabilities::VoxControl{/*hasDelay*/ true};
     caps.txMonitorControl = RadioCapabilities::TxMonitorControl{};
@@ -747,6 +760,19 @@ void FlexBackend::requestSliceFilter(int sliceId, const SliceFilterRequest& requ
     if (request.origin != SliceFilterRequest::Origin::ModeNormalization) {
         setSliceFilter(sliceId, request.lowHz, request.highHz);
     }
+}
+
+ReceiveDispatch FlexBackend::requestSliceAgcThresholdMode(int sliceId, AgcThresholdMode mode)
+{
+    if (sliceId < 0 || (mode != AgcThresholdMode::Manual && mode != AgcThresholdMode::Automatic)
+        || !capabilities().autoAgcThresholdControl || !m_autoAgcThresholdLicenseProvider
+        || !m_autoAgcThresholdLicenseProvider() || (!m_sliceSink && !m_sink)) {
+        return ReceiveDispatch::Unsupported;
+    }
+    // FlexLib 4.3.16 Slice.AGCThresholdMode writes only the selected mode.
+    sendSlice(QStringLiteral("slice set %1 agc_threshold_mode=%2").arg(sliceId).arg(
+        mode == AgcThresholdMode::Automatic ? QStringLiteral("auto") : QStringLiteral("manual")));
+    return ReceiveDispatch::Dispatched;
 }
 
 void FlexBackend::requestSliceAgc(int sliceId, const SliceAgcRequest& request)
@@ -1398,6 +1424,13 @@ void FlexBackend::decodeSliceStatus(int sliceId, const QMap<QString, QString>& k
     // AGC / squelch / RIT / XIT
     carry(kvs, "agc_mode", d.agcMode);
     carry(kvs, "agc_threshold", d.agcThreshold);
+    // FlexLib 4.3.16 accepts exactly these case-sensitive status values.
+    const QString thresholdMode = kvs.value(QStringLiteral("agc_threshold_mode"));
+    if (thresholdMode == QLatin1String("auto")) {
+        d.agcThresholdMode = AgcThresholdMode::Automatic;
+    } else if (thresholdMode == QLatin1String("manual")) {
+        d.agcThresholdMode = AgcThresholdMode::Manual;
+    }
     carry(kvs, "agc_off_level", d.agcOffLevel);
     carry(kvs, "squelch", d.squelchOn);
     carry(kvs, "squelch_level", d.squelchLevel);

@@ -8,6 +8,8 @@
 #include <QTimer>
 #include <QPointer>
 #include <array>
+#include <functional>
+#include <optional>
 
 #include "core/backends/NoiseBlankerKind.h"
 #include "core/backends/SliceDelta.h"
@@ -141,6 +143,13 @@ public:
     QString receiveAgcMode() const { return m_externalReceiveAudioReplacement
                                           ? m_externalReceiveAgcMode
                                           : m_agcMode; }
+    std::optional<AgcThresholdMode> agcThresholdMode() const { return m_agcThresholdMode; }
+    void requestAgcThresholdMode(AgcThresholdMode mode);
+    bool automaticAgcThresholdActiveOrPending() const;
+    bool agcCalibrationAllowed() const;
+    quint64 receiveSessionGeneration() const { return m_receiveSessionGeneration; }
+    void setAgcThresholdFromCalibration(int value);
+    void recallAgcThreshold(int value);
     int     agcThreshold() const { return m_agcThreshold; }
     int     flexAgcThreshold() const { return m_agcThreshold; }
     int     receiveAgcThreshold() const { return m_externalReceiveAudioReplacement
@@ -456,6 +465,7 @@ signals:
     void receiveTuneRequested(const AetherSDR::SliceTuneRequest& request);
     void receiveFilterRequested(const AetherSDR::SliceFilterRequest& request);
     void receiveAgcRequested(const AetherSDR::SliceAgcRequest& request);
+    void receiveAgcThresholdModeRequested(AetherSDR::AgcThresholdMode mode);
     void receiveDspRequested(const AetherSDR::SliceDspRequest& request);
     void receiveAudioRequested(const AetherSDR::SliceAudioRequest& request);
     void receiveSquelchRequested(const AetherSDR::SliceSquelchRequest& request);
@@ -524,6 +534,7 @@ signals:
     void mnLevelChanged(int v);
     void agcModeChanged(const QString& mode);
     void agcThresholdChanged(int value);
+    void agcThresholdModeChanged();
     void agcOffLevelChanged(int value);
     void audioMuteChanged(bool mute);
     void diversityChanged(bool on);
@@ -618,6 +629,12 @@ private:
     quint64 m_tuneIntentRevision{0};
     quint64 m_modeIntentRevision{0};
     quint64 m_filterIntentRevision{0};
+    std::optional<AgcThresholdMode> m_agcThresholdMode;
+    bool m_automaticAgcThresholdPending{false};
+    bool m_autoAgcThresholdSupported{false};
+    quint64 m_receiveSessionGeneration{0};
+    std::function<bool()> m_agcCalibrationAuthority;
+    void setAutomaticAgcThresholdPending(bool pending);
     quint64 m_agcModeIntentRevision{0};
     quint64 m_agcThresholdIntentRevision{0};
     quint64 m_agcOffLevelIntentRevision{0};

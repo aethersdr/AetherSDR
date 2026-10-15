@@ -137,12 +137,27 @@ On RTL-SDR FM/FM-N, **AUTO** uses each receiver's own detector noise estimate, i
 
 - **Mode** — Off, Slow, Med, Fast
 - **AGC-T slider** — the AGC threshold
+- **Auto AGC-T** below the AGC slider — requests radio Auto AGC-T. A lit button means
+  the radio reports automatic threshold control; an unlit button means manual.
+  This requires SmartSDR 4.3.16 or later and the radio's enabled **Auto AGC-T**
+  entitlement (SmartSDR+ Early Access). Until support, entitlement and slice
+  status are confirmed, the button is dimmed with the reason in its tooltip
+  and screen-reader description. Other radio families keep it dimmed.
+
+In radio Auto AGC-T, the threshold slider follows the radio. Moving it by hand
+requests a manual threshold; the **Auto AGC-T** indicator follows the mode the radio
+reports afterward. Click **Auto AGC-T** again to request manual mode without changing
+the current threshold. AetherSDR does not save or reapply the radio's automatic
+or manual selection on reconnect.
 
 **AGC-T calibration:** right-click the AGC-T slider, or use
 **Tools → Calibrate AGC-T...**, to calibrate the threshold against the
 measured noise floor on the active slice. It does not transmit.
 Close the window with the corner ✕, Esc or Ctrl+W; closing it during
 an Auto Sweep stops the sweep and puts back the AGC-T it started from.
+Select manual AGC-T before calibrating. If radio Auto AGC-T takes over during
+a sweep, calibration stops without restoring its old threshold or applying a
+recommendation.
 
 On the Hermes-Lite 2, AGC runs on the computer: with AGC **Off**, the AGC-T
 slider sets a fixed gain (4–64 dB, default 10 dB) remembered per receiver, and

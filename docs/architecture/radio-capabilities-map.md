@@ -72,6 +72,17 @@ radio copy.
 |---|---|---|---|---|---|---|---|
 | `radioSetupControl` | All implemented `RadioSetupRequest` fields | absent | absent | absent | absent | absent | `RadioModel::requestRadioSetup` admission; Radio Setup timing and maximum-power availability |
 
+### Radio automatic AGC threshold
+
+`autoAgcThresholdControl` declares the implemented `requestSliceAgcThresholdMode`
+verb and its required license feature. Flex declares it only for a fully parsed
+SmartSDR version of 4.3.16 or later, with `requiredLicenseFeature=auto_agc_t`.
+Other backends leave it absent and refuse the verb. `RadioModel` admits a
+request only for the current connected slice with confirmed mode status and
+an explicitly enabled entitlement. The RX applet consumes the same admission
+reason through its control availability registry; absent data leaves it dimmed.
+This desktop capability adds no daemon method or persistence ownership.
+
 ### Broadcast FM receiver controls
 
 | Record | Flex | HL2 | Sim | Icom | ANAN | RTL-SDR | Consumers |

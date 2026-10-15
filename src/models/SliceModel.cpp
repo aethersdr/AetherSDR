@@ -914,6 +914,50 @@ void SliceModel::setAgcTKnobLevel(int value)
     }
 }
 
+bool SliceModel::automaticAgcThresholdActiveOrPending() const
+{
+    return m_automaticAgcThresholdPending
+        || m_agcThresholdMode == AgcThresholdMode::Automatic;
+}
+
+bool SliceModel::agcCalibrationAllowed() const
+{
+    return !m_externalReceiveAudioReplacement && !automaticAgcThresholdActiveOrPending()
+        && (!m_autoAgcThresholdSupported || m_agcThresholdMode.has_value())
+        && (!m_agcCalibrationAuthority || m_agcCalibrationAuthority());
+}
+
+void SliceModel::recallAgcThreshold(int value)
+{
+    if (agcCalibrationAllowed()) {
+        setAgcThreshold(value);
+    }
+}
+
+void SliceModel::setAgcThresholdFromCalibration(int value)
+{
+    if (agcCalibrationAllowed()) {
+        setAgcThreshold(value);
+    }
+}
+
+void SliceModel::requestAgcThresholdMode(AgcThresholdMode mode)
+{
+    if (refuseOffThread("requestAgcThresholdMode")
+        || (mode != AgcThresholdMode::Manual && mode != AgcThresholdMode::Automatic)) {
+        return;
+    }
+    emit receiveAgcThresholdModeRequested(mode);
+}
+
+void SliceModel::setAutomaticAgcThresholdPending(bool pending)
+{
+    if (m_automaticAgcThresholdPending != pending) {
+        m_automaticAgcThresholdPending = pending;
+        emit agcThresholdModeChanged();
+    }
+}
+
 void SliceModel::setAgcThreshold(int value)
 {
     if (refuseOffThread(__func__)) { return; }
@@ -929,17 +973,22 @@ void SliceModel::setAgcThreshold(int value)
     }
 
     value = qBound(0, value, 100);
+    const bool manualOverride = automaticAgcThresholdActiveOrPending();
+    if (!confirmsControls() && m_agcThreshold == value && !manualOverride) {
+        return;
+    }
+    const QPointer<SliceModel> alive(this);
+    const quint64 revision = ++m_agcThresholdIntentRevision;
+    setAutomaticAgcThresholdPending(false);
+    if (!alive || revision != m_agcThresholdIntentRevision) {
+        return;
+    }
     if (confirmsControls()) {
         emit receiveAgcRequested({SliceAgcRequest::Field::Threshold, m_agcMode,
             value, m_agcOffLevel, SliceAgcRequest::Origin::Operator});
         return;
     }
-    if (m_agcThreshold == value) {
-        return;
-    }
     m_agcThreshold = value;
-    const QPointer<SliceModel> alive(this);
-    const quint64 revision = ++m_agcThresholdIntentRevision;
     emit agcThresholdChanged(value);
     if (!alive || revision != m_agcThresholdIntentRevision) {
         return;
@@ -2217,6 +2266,20 @@ void SliceModel::applyChanges(const SliceDelta& d)
     // emitSliceState(), and an unchanged-value agcThresholdChanged drives
     // AgcTCalibrator::onValueChanged, whose settle timer would overwrite a
     // calibration point with a mid-tune RMS reading.
+    if (d.agcThresholdMode.has_value()
+        && (*d.agcThresholdMode == AgcThresholdMode::Manual
+            || *d.agcThresholdMode == AgcThresholdMode::Automatic)) {
+        const bool clearsPending = *d.agcThresholdMode == AgcThresholdMode::Automatic;
+        const bool changed = m_agcThresholdMode != d.agcThresholdMode
+            || (clearsPending && m_automaticAgcThresholdPending);
+        m_agcThresholdMode = d.agcThresholdMode;
+        if (clearsPending) {
+            m_automaticAgcThresholdPending = false;
+        }
+        if (changed) {
+            emit agcThresholdModeChanged();
+        }
+    }
     if (d.agcMode.has_value()) {
         const QString v = *d.agcMode;
         if (m_agcMode != v) { m_agcMode = v; emit agcModeChanged(v); }
@@ -2475,6 +2538,10 @@ void SliceModel::applyChanges(const SliceDelta& d)
 
 void SliceModel::invalidateFrequencyObservation()
 {
+    ++m_receiveSessionGeneration;
+    m_agcThresholdMode.reset();
+    m_automaticAgcThresholdPending = false;
+    emit agcThresholdModeChanged();
     for (auto& feature : m_dspIntentRevisions) {
         for (quint64& revision : feature) {
             ++revision;

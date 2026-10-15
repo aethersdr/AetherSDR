@@ -5684,7 +5684,8 @@ void MainWindow::buildUI()
             if (!e.agcMode.isEmpty() && e.agcMode != slice->agcMode()) {
                 m_radioModel.sendCommand(QString("slice set %1 agc_mode=%2").arg(id).arg(e.agcMode));
             }
-            if (e.agcThreshold != slice->agcThreshold()) {
+            if (!slice->automaticAgcThresholdActiveOrPending()
+                && e.agcThreshold != slice->agcThreshold()) {
                 m_radioModel.sendCommand(QString("slice set %1 agc_threshold=%2").arg(id).arg(e.agcThreshold));
             }
         }
@@ -11519,7 +11520,7 @@ void MainWindow::restoreBandState(const BandSnapshot& snap)
         s->setFilterWidth(snap.filterLow, snap.filterHigh);
         if (!snap.agcMode.isEmpty())
             s->setAgcMode(snap.agcMode);
-        s->setAgcThreshold(snap.agcThreshold);
+        s->recallAgcThreshold(snap.agcThreshold);
     }
     if (auto* pan = m_radioModel.activePanadapter()) {
         // Don't push center or bandwidth — slice tune recenters the pan and

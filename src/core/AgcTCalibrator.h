@@ -86,6 +86,9 @@ private:
     // QPointer so slice removal / disconnect mid-calibration doesn't dangle.
     // All call sites null-check before use.
     QPointer<SliceModel> m_slice;
+    quint64 m_sliceGeneration{0};
+    bool canWrite() const;
+    void cancelWithoutRestore();
 
     bool   m_running{false};
     bool   m_auto{false};

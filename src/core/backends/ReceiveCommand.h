@@ -25,6 +25,8 @@ struct SliceFilterRequest {
     Origin origin{Origin::Operator};
 };
 
+enum class AgcThresholdMode { Manual, Automatic };
+
 struct SliceAgcRequest {
     // Preserve which field the operator changed: Flex has three independent
     // fields, whereas optimistic host DSP uses the pair for either edit.
@@ -131,6 +133,7 @@ struct SliceSquelchRequest {
 
 Q_DECLARE_METATYPE(AetherSDR::SliceTuneRequest)
 Q_DECLARE_METATYPE(AetherSDR::SliceFilterRequest)
+Q_DECLARE_METATYPE(AetherSDR::AgcThresholdMode)
 Q_DECLARE_METATYPE(AetherSDR::SliceAgcRequest)
 Q_DECLARE_METATYPE(AetherSDR::SliceDspRequest)
 Q_DECLARE_METATYPE(AetherSDR::SliceAudioRequest)

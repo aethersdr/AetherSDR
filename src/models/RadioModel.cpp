@@ -925,6 +925,9 @@ void RadioModel::setupBackend(const QString& family)
                     flex->refreshFirmwareCapabilities();
                 }
             });
+            flex->setAutoAgcThresholdLicenseProvider([this] {
+                return isConnected() && licenseFeatureEnabled(QStringLiteral("auto_agc_t"));
+            });
             flex->setIndependentTxSequenceProvider([this] { return m_seqCounter.fetch_add(1); });
             m_connection = flex->connection();   // non-owning; the backend owns it
             m_panStream  = flex->panStream();    // non-owning; the backend owns it
@@ -1748,6 +1751,10 @@ void RadioModel::wireBackendReceiverState()
 
 void RadioModel::teardownBackend()
 {
+    if (!m_licenseFeatures.isEmpty()) {
+        m_licenseFeatures.clear();
+        emit licenseFeaturesChanged();
+    }
     m_transmitModel.invalidateControlIntents();
     for (SliceModel* source : m_slices) { source->invalidateControlIntents(); }
     resetTxOperations();
@@ -2095,6 +2102,13 @@ RadioModel::RadioModel(QObject* parent)
     qRegisterMetaType<SliceTuneRequest>();
     qRegisterMetaType<SliceFilterRequest>();
     qRegisterMetaType<SliceAgcRequest>();
+    qRegisterMetaType<AgcThresholdMode>();
+    connect(this, &RadioModel::infoChanged,
+            this, &RadioModel::refreshAutoAgcThresholdAvailability);
+    connect(this, &RadioModel::licenseFeaturesChanged,
+            this, &RadioModel::refreshAutoAgcThresholdAvailability);
+    connect(this, &RadioModel::capabilitiesChanged,
+            this, &RadioModel::refreshAutoAgcThresholdAvailability);
     qRegisterMetaType<SliceDspRequest>();
     qRegisterMetaType<SliceAudioRequest>();
     qRegisterMetaType<SliceSquelchRequest>();
@@ -4294,7 +4308,7 @@ void RadioModel::recallBandStackReceiveDsp(SliceModel* slice,
             slice->recallAgcMode(entry.agcMode);
         }
         if (entry.agcThreshold != slice->agcThreshold()) {
-            slice->setAgcThreshold(entry.agcThreshold);
+            slice->recallAgcThreshold(entry.agcThreshold);
         }
     }
     if (entry.nbOn != slice->nbOn()) {
@@ -7077,6 +7091,10 @@ void RadioModel::onConnected()
     // would otherwise be staged below and "reclaimed" by the real status
     // replay — with the fixture set staying poisoned for the session.
     clearAutomationSliceFixtures();
+    if (!m_licenseFeatures.isEmpty()) {
+        m_licenseFeatures.clear();
+        emit licenseFeaturesChanged();
+    }
     stageSessionModelsForReconnect();
     // The selected discovery serial names the non-Flex session that actually
     // reached Connected. Keep it separate from m_lastInfo: a same-family radio
@@ -10081,6 +10099,16 @@ void RadioModel::wireSliceReceiveIntentsToBackend(SliceModel* s)
     if (!s) {
         return;
     }
+    const QPointer<RadioModel> owner(this);
+    const QPointer<SliceModel> source(s);
+    s->m_autoAgcThresholdSupported = backendCapabilities().autoAgcThresholdControl.has_value();
+    s->m_agcCalibrationAuthority = [owner, source] {
+        return owner && source && owner->isConnected() && !owner->m_stagingReceiveModels
+            && owner->slice(source->sliceId()) == source.data();
+    };
+    connect(s, &SliceModel::receiveAgcThresholdModeRequested,
+            this, &RadioModel::dispatchSliceAgcThresholdMode,
+            Qt::ConnectionType(Qt::DirectConnection | Qt::UniqueConnection));
     // Member-function connections make UniqueConnection effective. These
     // bindings belong to the slice/model, not one backend generation, so a
     // reclaimed slice continues to work without accumulating duplicate sinks.
@@ -10162,6 +10190,77 @@ void RadioModel::dispatchSliceAgc(const SliceAgcRequest& request)
 {
     if (SliceModel* source = receiveCommandSource()) {
         m_backend->requestSliceAgc(source->sliceId(), request);
+    }
+}
+
+QString RadioModel::autoAgcThresholdUnavailableReason(const SliceModel* source) const
+{
+    if (!isConnected()) {
+        return tr("Connect to a radio to use Auto AGC-T.");
+    }
+    if (!source || m_stagingReceiveModels || slice(source->sliceId()) != source) {
+        return tr("Select a current receive slice to use Auto AGC-T.");
+    }
+    if (source->externalReceiveReplacementActive()) {
+        return tr("Auto AGC-T is unavailable during external receive replacement.");
+    }
+    const auto control = backendCapabilities().autoAgcThresholdControl;
+    if (!control) {
+        return tr("Auto AGC-T requires radio firmware 4.3.16 or later with Auto AGC-T support.");
+    }
+    if (!control->requiredLicenseFeature.isEmpty()) {
+        const LicenseFeatureState feature = licenseFeature(control->requiredLicenseFeature);
+        if (!feature.seen) {
+            return tr("Waiting for the radio to confirm the Auto AGC-T license.");
+        }
+        if (!feature.enabled) {
+            return tr("Auto AGC-T requires an enabled radio license (%1).").arg(feature.reason);
+        }
+    }
+    if (!source->agcThresholdMode()) {
+        return tr("Waiting for the radio to report the AGC-T mode.");
+    }
+    return {};
+}
+
+void RadioModel::refreshAutoAgcThresholdAvailability()
+{
+    const bool supported = backendCapabilities().autoAgcThresholdControl.has_value();
+    QList<QPointer<SliceModel>> sources;
+    sources.reserve(m_slices.size());
+    for (SliceModel* source : m_slices) {
+        sources.append(source);
+    }
+    for (const QPointer<SliceModel>& source : sources) {
+        if (source && source->m_autoAgcThresholdSupported != supported) {
+            source->m_autoAgcThresholdSupported = supported;
+            emit source->agcThresholdModeChanged();
+        }
+    }
+    emit autoAgcThresholdAvailabilityChanged();
+}
+
+void RadioModel::dispatchSliceAgcThresholdMode(AgcThresholdMode mode)
+{
+    const QPointer<SliceModel> source(receiveCommandSource());
+    if (!source || !autoAgcThresholdUnavailableReason(source).isEmpty()
+        || (mode != AgcThresholdMode::Manual && mode != AgcThresholdMode::Automatic)) {
+        return;
+    }
+    const quint64 generation = source->receiveSessionGeneration();
+    const quint64 revision = ++source->m_agcThresholdIntentRevision;
+    source->setAutomaticAgcThresholdPending(mode == AgcThresholdMode::Automatic);
+    // Cancelling a sweep notifies consumers synchronously. Recheck ownership
+    // before writing through a backend that a notification may have replaced.
+    if (!source || generation != source->receiveSessionGeneration()
+        || revision != source->m_agcThresholdIntentRevision
+        || !autoAgcThresholdUnavailableReason(source).isEmpty()) {
+        return;
+    }
+    const ReceiveDispatch result = m_backend->requestSliceAgcThresholdMode(source->sliceId(), mode);
+    if (result == ReceiveDispatch::Unsupported && source
+        && generation == source->receiveSessionGeneration()) {
+        source->setAutomaticAgcThresholdPending(false);
     }
 }
 

@@ -1628,6 +1628,12 @@ QJsonObject sliceSnapshot(const SliceModel* s, int linkedTo,
         {QStringLiteral("flexSquelchLevel"), s->flexSquelchLevel()},
         {QStringLiteral("agcMode"),    s->agcMode()},
         {QStringLiteral("agcThreshold"), s->agcThreshold()},
+        {QStringLiteral("agcThresholdMode"), s->agcThresholdMode()
+            ? QJsonValue(*s->agcThresholdMode() == AgcThresholdMode::Automatic
+                ? QStringLiteral("auto") : QStringLiteral("manual"))
+            : QJsonValue(QJsonValue::Null)},
+        {QStringLiteral("automaticAgcThresholdActiveOrPending"),
+            s->automaticAgcThresholdActiveOrPending()},
         // FM / repeater duplex — readable so an automated FM session can assert
         // the repeater setup it just applied, not just fire and hope.
         {QStringLiteral("fmToneMode"),  s->fmToneMode()},

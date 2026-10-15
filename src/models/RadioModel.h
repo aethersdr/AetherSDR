@@ -262,6 +262,7 @@ public:
     bool dvkLicenseRefused() const { return m_dvkModel.licenseRefused(); }
     bool licenseFeatureEnabled(const QString& name) const;
     QString licenseFeatureReason(const QString& name) const;
+    QString autoAgcThresholdUnavailableReason(const SliceModel* slice) const;
 
     QString ip()          const { return m_ip; }
     QString netmask()     const { return m_netmask; }
@@ -1116,6 +1117,7 @@ signals:
 
     void infoChanged();
     void licenseFeaturesChanged();
+    void autoAgcThresholdAvailabilityChanged();
     void connectionStateChanged(bool connected);
     // Per-pan transmit permission changed. Consumers use the pan id to update
     // each slice sharing that pan without inferring anything from TX ownership.
@@ -1855,6 +1857,8 @@ private:
     void dispatchSliceMode(const QString& mode);
     void dispatchSliceFilter(const SliceFilterRequest& request);
     void dispatchSliceAgc(const SliceAgcRequest& request);
+    void dispatchSliceAgcThresholdMode(AgcThresholdMode mode);
+    void refreshAutoAgcThresholdAvailability();
     void dispatchSliceDsp(const SliceDspRequest& request);
     void dispatchSliceAudio(const SliceAudioRequest& request);
     void dispatchSliceWfmForceMono(bool forceMono);
