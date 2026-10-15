@@ -664,6 +664,13 @@ struct RadioCapabilities {
     bool hasTuner = false;         // antenna tuner / ATU matching control
     bool hasTunerMemories = false; // radio-side ATU memory recall/database
     bool hasAmplifier = false;     // integrated or controllable PA
+    // Shape of the existing desktop NRS level verb. Absent preserves the
+    // legacy 0..100 request range; this grants no additional daemon method.
+    struct NrsLevelControl {
+        int levelMaximum = 100;
+    };
+    std::optional<NrsLevelControl> nrsLevelControl;
+
     bool hasExtendedDsp = false;   // extended firmware DSP filters (NRS/RNN/NRF)
 
     // WDSP LMS/FFT filter family: NRL, ANFL, ANFT. Narrower than hasRadioSideDsp and

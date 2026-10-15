@@ -132,6 +132,7 @@ public:
     int     anfLevel()    const { return m_anfLevel; }
     int     nrlLevel()    const { return m_nrlLevel; }
     int     nrsLevel()    const { return m_nrsLevel; }
+    int     nrsLevelMaximum() const { return m_nrsLevelMaximum; }
     int     nrfLevel()    const { return m_nrfLevel; }
     int     anflLevel()   const { return m_anflLevel; }
     int     mnLevel()     const { return m_mnLevel; }
@@ -450,8 +451,8 @@ signals:
     // Canonical receive dispatch. Emitted after local notifications so a
     // synchronous backend observation cannot be overwritten by an optimistic
     // notification. RadioModel wires these once for every slice lifecycle.
-    // Explicit compatibility origins preserve Kiwi suppression and NRS profile
-    // restoration; routine status updates do not create operator intents.
+    // Compatibility origins preserve Kiwi suppression; routine status updates
+    // do not create operator intents.
     void receiveTuneRequested(const AetherSDR::SliceTuneRequest& request);
     void receiveFilterRequested(const AetherSDR::SliceFilterRequest& request);
     void receiveAgcRequested(const AetherSDR::SliceAgcRequest& request);
@@ -517,6 +518,7 @@ signals:
     void anfLevelChanged(int v);
     void nrlLevelChanged(int v);
     void nrsLevelChanged(int v);
+    void nrsLevelMaximumChanged(int maximum);
     void nrfLevelChanged(int v);
     void anflLevelChanged(int v);
     void mnLevelChanged(int v);
@@ -605,6 +607,8 @@ private:
     }
     friend class RadioModel;
     bool refuseOffThread(const char* setter) const;
+    void setNrsLevelMaximum(int maximum);
+    int m_nrsLevelMaximum = 100;
     void setControlPolicy(ReceiveControlPolicy policy) { m_controlPolicy = policy; }
     bool confirmsControls() const { return m_controlPolicy == ReceiveControlPolicy::Confirmed; }
     ReceiveControlPolicy m_controlPolicy = ReceiveControlPolicy::Optimistic;

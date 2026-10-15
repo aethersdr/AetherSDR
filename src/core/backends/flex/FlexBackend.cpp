@@ -153,6 +153,25 @@ void FlexBackend::setFirmwareVersionProvider(std::function<QString()> provider)
     m_firmwareVersionProvider = std::move(provider);
 }
 
+int FlexBackend::nrsLevelMaximum() const
+{
+    const QString text = m_firmwareVersionProvider ? m_firmwareVersionProvider() : QString();
+    qsizetype suffixIndex = 0;
+    const QVersionNumber version = QVersionNumber::fromString(text, &suffixIndex);
+    // Published FlexLib 4.3.16 Slice.NRSLevel reduces the maximum from 100 to 50.
+    return suffixIndex == text.size() && version >= QVersionNumber(4, 3, 16) ? 50 : 100;
+}
+
+void FlexBackend::refreshFirmwareCapabilities()
+{
+    const int maximum = nrsLevelMaximum();
+    if (maximum == m_announcedNrsLevelMaximum) {
+        return;
+    }
+    m_announcedNrsLevelMaximum = maximum;
+    emit capabilitiesChanged();
+}
+
 ReceiveDispatch FlexBackend::requestRadioNickname(const QString& nickname,
                                                  NicknameCompletion completion)
 {
@@ -499,6 +518,7 @@ RadioCapabilities FlexBackend::capabilities() const
         m_reportedMaxPanadapters > 0 ? m_reportedMaxPanadapters : mc.maxSlices;
     caps.hasExtendedDsp = mc.hasExtendedDsp();
     caps.daxIqSampleRates = mc.daxIqSampleRates();
+    caps.nrsLevelControl = RadioCapabilities::NrsLevelControl{nrsLevelMaximum()};
     // The LMS/FFT family is base Flex firmware, not an 8000-series extra —
     // every radio with hasRadioSideDsp below also has NRL/ANFL/ANFT.
     caps.hasLmsNoiseFilters = true;
@@ -778,9 +798,11 @@ ReceiveDispatch FlexBackend::requestSliceDsp(int sliceId, const SliceDspRequest&
         }
         key += QStringLiteral("_level");
     }
+    const int level = request.feature == SliceDspRequest::Feature::Nrs
+        ? std::min(request.level, nrsLevelMaximum()) : request.level;
     sendSlice(QStringLiteral("slice set %1 %2=%3").arg(sliceId).arg(key)
                   .arg(request.field == SliceDspRequest::Field::Enabled
-                           ? int(request.enabled) : request.level));
+                           ? int(request.enabled) : level));
     return ReceiveDispatch::Dispatched;
 }
 
