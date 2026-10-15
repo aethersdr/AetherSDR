@@ -1995,9 +1995,6 @@ QJsonObject RadioModel::automationInterlockProbe(const QString& source,
     // TransmitModel has no hardware, settings, backend or transport. In
     // particular, do not construct a RadioModel here: it discovers devices.
     TransmitModel transmit;
-    TransmitDelta delta;
-    delta.voxEnable = voxEnabled;
-    transmit.applyChanges(delta);
     QObject::connect(&transmit, &TransmitModel::transmittingChanged, &transmit,
                      [&](bool on) { meterEdges.append(on); });
     QObject::connect(&transmit, &TransmitModel::commandReady, &transmit,
@@ -2010,6 +2007,9 @@ QJsonObject RadioModel::automationInterlockProbe(const QString& source,
                      [&](bool on) { keyingIntents.append(QStringLiteral("atu:%1").arg(on)); });
     QObject::connect(&transmit, &TransmitModel::controlRequested, &transmit,
                      [&](const TransmitControlRequest&) { keyingIntents.append(QStringLiteral("control")); });
+    TransmitDelta delta;
+    delta.voxEnable = voxEnabled;
+    transmit.applyChanges(delta);
     const auto step = [&](const QString& phase, const QString& state, const QString& sources) {
         const bool keepLocalTx = RadioStatusOwnership::interlockKeepsLocalTxOn(
             txOwnedByUs, false, false, cwxActive, false, sources, transmit.voxEnable());
